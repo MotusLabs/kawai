@@ -9,6 +9,7 @@ CI and release builds consume GitHub-hosted runner minutes and queue on shared h
 - Add a `setup-bun` composite action (`.github/actions/`) that installs Bun, points installs at the cluster-local npm proxy (Verdaccio), and falls back to the public registry when the proxy is down.
 - Collapse the release build matrix: all four targets (`darwin-arm64`, `darwin-x64`, `linux-x64`, `linux-arm64`) cross-compile on one Linux runner, since every build is already `bun build --compile --target <triple>`. No macOS hosted runner is needed.
 - The e2e job moves to the local runner too; it must make tmux and Playwright Chromium system dependencies work on the runner image (install, or verify pre-installed).
+- Publishing shrinks to this repository's GitHub Releases: drop the four npm platform packages, the main npm package, and the Homebrew tap update (scope change requested during apply — no remote registries except repo-specific GitHub ones).
 - Add a `local-runner-test.yml` workflow (manual dispatch) that verifies the runner pool serves agentboard's needs: runner isolation (no docker socket, no k8s service account token) and Bun availability.
 
 Confirmed decisions:
@@ -31,5 +32,5 @@ Assumptions (from the working reference configuration):
 
 - `.github/workflows/ci.yml`, `.github/workflows/create-release-tag.yml`, `.github/workflows/release.yml` — runner labels, timeouts, concurrency, release matrix reshaped.
 - `.github/actions/setup-bun/` (new composite action), `.github/workflows/local-runner-test.yml` (new).
-- No product code changes. Release artifacts (tarballs, npm packages, Homebrew tap) must remain byte-for-byte usable — the risk surface is the cross-compiled darwin binaries, verified by smoke-testing each artifact in the apply phase.
+- No product code changes. Release artifacts become GitHub Release tarballs/binaries only; npm publishing and the Homebrew tap update are removed from CI (repo scaffolding for them — `npm/` packages, `scripts/update-optional-deps.js` — becomes inert and is proposed as follow-up cleanup). The risk surface is the cross-compiled darwin binaries, verified by sanity checks in the apply phase plus a real-Mac check of the first canary release.
 - GitHub-hosted runner minutes drop to zero for this repo; macOS image pin caveats in `ci.yml` (the ubuntu-22.04 Bun-spawn note) become obsolete and are removed.

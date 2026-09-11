@@ -18,8 +18,9 @@ See proposal.md — Why. Current state:
 **Non-Goals:**
 - Runner deployment itself (cluster-side ARC setup exists and serves tg-assistant).
 - Adding security scanning (Trivy/CodeQL/Sonar) — tg-assistant concerns, not requested here.
-- Changes to dependabot, CODEOWNERS, or any release publishing logic (npm provenance/OIDC, tap formula generation stay as-is).
+- Changes to dependabot, CODEOWNERS, or branch protection.
 - Docker/BuildKit integration — agentboard has no container builds.
+- Deleting the now-inert npm scaffolding (`npm/` platform packages, `bin/agentboard` launcher, `scripts/update-optional-deps.js`, README install instructions) — repository cleanup beyond the workflows, proposed as a follow-up change.
 
 ## Decisions
 
@@ -41,6 +42,9 @@ Adapts the reference's isolation checks (no k8s service-account token, no docker
 **6. Delete the `ubuntu-22.04` pin and its comment.**
 The pinned regression was specific to the GitHub 24.04 image. The k8s runner has its own image/kernel; the same symptom (child `bun` spawns under `--coverage` never becoming healthy) is re-tested by the first real CI run there. Keeping the pin would be meaningless on a custom image.
 
+**7. Publish to GitHub Releases only — drop npm and the Homebrew tap.**
+Scope change requested 2026-09-12 during apply, after the original spec froze the publish chain as unchanged: no publishing to any remote registry except this repo's GitHub Releases. Concretely: the publish job drops `setup-node`, the four platform `npm publish` calls, the main-package publish (and with them the OIDC `id-token: write` and `packages: write` permissions), and the entire Homebrew tap step; it keeps checkout, artifact download, tarball collection, and `softprops/action-gh-release` under `contents: write` alone. `scripts/update-optional-deps.js` becomes unreferenced by CI. Consequence accepted: versions past the last npm-published one are installable only via GitHub Release tarballs; already-published npm versions and the tap's existing formula keep working, pinned to old versions. Alternative considered — publish to GitHub Packages (`npm.pkg.github.com`) instead — rejected: installing public packages from GitHub Packages still requires consumers to authenticate with a PAT, so it preserves npm ergonomics for no one.
+
 ## Risks / Trade-offs
 
 - [Runner image lacks tmux, Chromium system libs, or sudo] → Decision 4 turns this into a named, logged failure; image prep (add packages to the runner image) is a cluster-side follow-up, and `local-runner-test.yml` catches it before real CI depends on it.
@@ -48,12 +52,13 @@ The pinned regression was specific to the GitHub 24.04 image. The k8s runner has
 - [Bun spawn-under-coverage regression reappears on the k8s image/kernel (e.g. sandboxed syscall filtering)] → CI keeps using `test:ci` (skips real tmux); if it reproduces, investigate the runner image rather than reverting runner selection.
 - [Pool capacity: reference notes ~one runner at a time; CI + e2e + a concurrent release could queue] → timeouts + cancel-in-progress bound the damage; jobs are independent so queuing degrades latency, not correctness. Release build (~single job) + CI (~2 jobs) fit a 3-runner pool.
 - [Verdaccio proxy cache misses make installs slower than hosted runners' warm caches] → proxy persists across runs/jobs on a PVC (reference); first fetch of a new package is the only slow path.
+- [npm/Homebrew consumers are stranded on the last published versions] → intentional consequence of the GitHub-Releases-only decision; the release notes and README should carry the GitHub Release tarball as the install path. Repo cleanup of the inert npm scaffolding is a proposed follow-up change, not part of this one.
 
 ## Migration Plan
 
 1. Dispatch `local-runner-test.yml`; fix image gaps it names (cluster-side) until green.
 2. Land workflow changes; open a throwaway PR to watch `ci.yml` + e2e run on the pool end to end.
-3. Cut a canary tag (patch bump) to exercise the cross-compiled release chain; verify the darwin artifacts on a real Mac and the Homebrew install before announcing.
+3. Cut a canary tag (patch bump) to exercise the cross-compiled release chain; verify the GitHub Release carries the four tarballs and the darwin binaries run on a real Mac before announcing.
 4. Rollback: revert the single workflows commit — hosted runners resume exactly as before; no cluster-side state is affected.
 
 ## Open Questions

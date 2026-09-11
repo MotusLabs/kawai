@@ -77,9 +77,13 @@ A workflow SHALL exist that, on manual dispatch, verifies the local runner pool:
 - **WHEN** the operator dispatches the self-test workflow
 - **THEN** the job reports runner isolation status and a working Bun installation, and fails with a named violation if any isolation check trips
 
-### Requirement: Release publication chain is unchanged
-The release workflow SHALL still publish the four npm platform packages and the main package via OIDC trusted publishing, create the GitHub Release with binary tarballs, and update the Homebrew tap with correct SHA256s — reading from the artifacts the cross-compiled build job uploads.
+### Requirement: Release publishes only to GitHub Releases
+The release workflow SHALL publish release artifacts exclusively to this repository's GitHub Releases — the four platform tarballs and binaries — and MUST NOT publish to npmjs.org, GitHub Packages, or any external registry or tap. The publish job SHALL need no registry credentials beyond the repository's own `contents: write` permission.
 
-#### Scenario: Tag push publishes a release
+#### Scenario: Tag push creates a GitHub Release
 - **WHEN** a `v*` tag is pushed and the build job succeeds
-- **THEN** npm receives the main package and all four platform packages at the tagged version, the GitHub Release carries the four tarballs, and the Homebrew formula is updated with matching URLs and SHA256s
+- **THEN** the repository's GitHub Release carries the four platform tarballs and binaries, and nothing is published to any npm registry
+
+#### Scenario: No external registry is contacted
+- **WHEN** the publish job runs
+- **THEN** it contains no `npm publish`, no Homebrew tap update, and requests only `contents: write` permissions

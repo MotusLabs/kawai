@@ -18,10 +18,12 @@
 
 - [x] 3.3 In `.github/workflows/create-release-tag.yml`: switch to `runs-on: local-k8s`, add `timeout-minutes: 5`, keep `RELEASE_PAT` checkout logic untouched. Verify: `actionlint` passes and the `if: github.event.pull_request.merged == true` gate is unchanged.
 
+- [ ] 3.4 Remove non-GitHub publishing from the release job: drop `setup-node`, both npm publish steps (`Publish platform packages`, `Publish main package`), `Update main package optionalDependencies`, and the entire `Update Homebrew tap` step; trim job permissions to `contents: write`. Verify: the release job contains no `npm publish`, no tap clone, and no `id-token`/`packages` permissions; YAML parses.
+
 ## 4. Validation
 
 - [x] 4.1 Run `actionlint` (or equivalent YAML/action validation) over all workflow and action files. Verify: zero errors.
 
 - [ ] 4.2 Open a throwaway PR and watch `ci.yml` run on the pool end to end: quality gates green, e2e green with Chromium + tmux resolved on the image, proxy hit or fallback warning visible in the install step logs. Verify: run page shows both jobs on `local-k8s` runners with all steps green.
 
-- [ ] 4.3 Cut a canary patch tag and verify the release chain: four npm packages published at the version, GitHub Release with four tarballs, Homebrew formula updated with matching SHA256s. Verify: `npm view @gbasin/agentboard-linux-x64@<version>` resolves; a real Mac runs the darwin binary (`agentboard --version`); `brew install` from the tap succeeds.
+- [ ] 4.3 Cut a canary patch tag and verify the release chain: GitHub Release created with the four platform tarballs and binaries, nothing published to npm or the Homebrew tap. Verify: the release page lists all four tarballs; `npm view @gbasin/agentboard@<version>` shows nothing newer than the last pre-change version; a real Mac runs the darwin binary from the tarball.
