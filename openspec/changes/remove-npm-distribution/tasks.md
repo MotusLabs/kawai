@@ -20,4 +20,4 @@
 
 - [x] 4.1 Run `bun run lint && bun run typecheck && bun run test:ci`. Verify: all green — proves nothing in the app or tooling depended on the deleted scaffolding.
 
-- [ ] 4.2 Manual (repo settings, outside the tree): delete the `HOMEBREW_TAP_TOKEN` secret from github.com/gbasin/agentboard settings. Verify: the secret is absent from Settings → Secrets → Actions.
+- [x] 4.2 Manual (repo settings, outside the tree): delete the `HOMEBREW_TAP_TOKEN` secret from github.com/gbasin/agentboard settings. Verify: the secret is absent from Settings → Secrets → Actions.
