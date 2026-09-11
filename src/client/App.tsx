@@ -14,10 +14,12 @@ import {
   SIDEBAR_MIN_WIDTH,
 } from './stores/settingsStore'
 import { useThemeStore } from './stores/themeStore'
+import { useWorkspaceStore } from './stores/workspaceStore'
 import { useWebSocket } from './hooks/useWebSocket'
 import { invalidateSnapshotCache } from './hooks/useTerminal'
 import { useVisualViewport } from './hooks/useVisualViewport'
 import { sortSessions } from './utils/sessions'
+import { buildWorkspaceView } from './utils/workspaceView'
 import { flushSync } from 'react-dom'
 import { setClientLogLevel } from './utils/clientLog'
 import { getEffectiveModifier, matchesModifier } from './utils/device'
@@ -287,6 +289,14 @@ export default function App() {
       }
       if (message.type === 'host-status') {
         setHostStatuses(message.hosts)
+      }
+      if (message.type === 'workspace-snapshot') {
+        // Malformed snapshots keep the last valid one (stale retention);
+        // reconnects resupply the latest snapshot on open.
+        useWorkspaceStore.getState().applySnapshot(message.snapshot)
+      }
+      if (message.type === 'workspace-operation-result') {
+        useWorkspaceStore.getState().recordOperationResult(message.result)
       }
       if (message.type === 'server-config') {
         setRemoteAllowControl(message.remoteAllowControl)
@@ -569,6 +579,52 @@ export default function App() {
     return next
   }, [sortedSessions, projectFilters, hostFilters])
 
+  // Grouped workspace view: sessions partitioned by deepest worktree with
+  // explicit local-ungrouped and remote fallbacks. Built when a successful
+  // workspace snapshot exists; navigation falls back to the flat order
+  // otherwise (older server or before the first snapshot).
+  const workspaceSnapshot = useWorkspaceStore((state) => state.snapshot)
+  const collapsedWorktreeIds = useWorkspaceStore((state) => state.collapsedWorktreeIds)
+  const workspaceView = useMemo(
+    () =>
+      buildWorkspaceView(
+        workspaceSnapshot,
+        sortedSessions,
+        hibernatingAgentSessions,
+        historyAgentSessions,
+        {
+          filter: { projectFilters, hostFilters },
+          collapsedWorktreeIds,
+        }
+      ),
+    [
+      workspaceSnapshot,
+      sortedSessions,
+      hibernatingAgentSessions,
+      historyAgentSessions,
+      projectFilters,
+      hostFilters,
+      collapsedWorktreeIds,
+    ]
+  )
+
+  // Flattened visible order across expanded groups drives keyboard and
+  // terminal navigation; falls back to the flat filtered order when no
+  // workspace snapshot is available.
+  const navigationLiveSessions = useMemo(() => {
+    if (!workspaceSnapshot) return filteredSortedSessions
+    return workspaceView.visibleEntries.flatMap((entry) =>
+      entry.kind === 'live' && entry.liveSession ? [entry.liveSession] : []
+    )
+  }, [workspaceSnapshot, workspaceView, filteredSortedSessions])
+
+  const navigationHibernatingSessions = useMemo(() => {
+    if (!workspaceSnapshot) return filteredHibernatingSessions
+    return workspaceView.visibleEntries.flatMap((entry) =>
+      entry.kind === 'hibernating' && entry.agentSession ? [entry.agentSession] : []
+    )
+  }, [workspaceSnapshot, workspaceView, filteredHibernatingSessions])
+
   const lastSelectedHibernatingSessionIdRef = useRef<string | null>(
     selectedHibernatingSessionId
   )
@@ -577,18 +633,18 @@ export default function App() {
   const lastConnectionEpochRef = useRef(connectionEpoch)
 
   const selectFirstVisibleTarget = useCallback(() => {
-    if (filteredSortedSessions.length > 0) {
-      setSelectedSessionId(filteredSortedSessions[0].id)
+    if (navigationLiveSessions.length > 0) {
+      setSelectedSessionId(navigationLiveSessions[0].id)
       return true
     }
-    if (filteredHibernatingSessions.length > 0) {
-      setSelectedHibernatingSessionId(filteredHibernatingSessions[0].sessionId)
+    if (navigationHibernatingSessions.length > 0) {
+      setSelectedHibernatingSessionId(navigationHibernatingSessions[0].sessionId)
       return true
     }
     return false
   }, [
-    filteredSortedSessions,
-    filteredHibernatingSessions,
+    navigationLiveSessions,
+    navigationHibernatingSessions,
     setSelectedSessionId,
     setSelectedHibernatingSessionId,
   ])
@@ -633,7 +689,7 @@ export default function App() {
     if (!hasLoaded) return
     if (selectedHibernatingSessionId) return
     if (!selectedSessionId) return
-    if (filteredSortedSessions.some((session) => session.id === selectedSessionId)) {
+    if (navigationLiveSessions.some((session) => session.id === selectedSessionId)) {
       return
     }
     if (selectFirstVisibleTarget()) return
@@ -642,6 +698,7 @@ export default function App() {
     hasLoaded,
     selectedSessionId,
     selectedHibernatingSessionId,
+    navigationLiveSessions,
     selectFirstVisibleTarget,
     setSelectedSessionId,
   ])
@@ -655,14 +712,14 @@ export default function App() {
       return
     }
     if (
-      filteredHibernatingSessions.some(
+      navigationHibernatingSessions.some(
         (session) => session.sessionId === selectedHibernatingSessionId
       )
     ) {
       return
     }
 
-    const matchingLiveSession = filteredSortedSessions.find(
+    const matchingLiveSession = navigationLiveSessions.find(
       (session) => session.agentSessionId?.trim() === selectedHibernatingSessionId
     )
     if (matchingLiveSession) {
@@ -673,8 +730,8 @@ export default function App() {
     if (selectFirstVisibleTarget()) return
     setSelectedHibernatingSessionId(null)
   }, [
-    filteredHibernatingSessions,
-    filteredSortedSessions,
+    navigationHibernatingSessions,
+    navigationLiveSessions,
     agentSessionsEpoch,
     pendingHibernatingSession,
     selectedHibernatingSessionId,
@@ -692,7 +749,7 @@ export default function App() {
       return
     }
 
-    const matchingLiveSession = filteredSortedSessions.find(
+    const matchingLiveSession = navigationLiveSessions.find(
       (session) => session.agentSessionId?.trim() === pendingWakeSelectionId
     )
     if (matchingLiveSession) {
@@ -710,7 +767,7 @@ export default function App() {
       pendingWakeSelectionRef.current = null
     }
   }, [
-    filteredSortedSessions,
+    navigationLiveSessions,
     selectedSessionId,
     selectedHibernatingSessionId,
     selectFirstVisibleTarget,
@@ -725,13 +782,13 @@ export default function App() {
       hasLoaded &&
       selectedSessionId === null &&
       selectedHibernatingSessionId === null &&
-      (filteredSortedSessions.length > 0 || filteredHibernatingSessions.length > 0)
+      (navigationLiveSessions.length > 0 || navigationHibernatingSessions.length > 0)
     ) {
       selectFirstVisibleTarget()
     }
   }, [
-    filteredHibernatingSessions.length,
-    filteredSortedSessions.length,
+    navigationHibernatingSessions.length,
+    navigationLiveSessions.length,
     hasLoaded,
     selectFirstVisibleTarget,
     selectedSessionId,
@@ -783,12 +840,14 @@ export default function App() {
       // Bracket navigation: [mod]+[ / ]
       // When only hibernating sessions are visible, fall back to navigating
       // within the hibernating bucket so the keyboard shortcut keeps working.
+      // The order is the flattened grouped order when a workspace snapshot
+      // exists, crossing expanded worktree groups.
       if (isShortcut && (code === 'BracketLeft' || code === 'BracketRight')) {
         event.preventDefault()
         const delta = code === 'BracketLeft' ? -1 : 1
-        const activeNav = filteredSortedSessions
+        const activeNav = navigationLiveSessions
         if (activeNav.length === 0) {
-          const hibernatingNav = filteredHibernatingSessions
+          const hibernatingNav = navigationHibernatingSessions
           if (hibernatingNav.length === 0) return
           const currentIndex = hibernatingNav.findIndex(
             s => s.sessionId === selectedHibernatingSessionId
@@ -818,15 +877,15 @@ export default function App() {
       // unhandled so the browser/terminal keeps the key event.
       if (isShortcut && /^Digit[1-9]$/.test(code)) {
         const index = Number(code.slice('Digit'.length)) - 1
-        if (filteredSortedSessions.length > 0) {
-          const target = filteredSortedSessions[index]
+        if (navigationLiveSessions.length > 0) {
+          const target = navigationLiveSessions[index]
           if (!target) return
           event.preventDefault()
           setSelectedSessionId(target.id)
           return
         }
 
-        const target = filteredHibernatingSessions[index]
+        const target = navigationHibernatingSessions[index]
         if (!target) return
         event.preventDefault()
         setSelectedHibernatingSessionId(target.sessionId)
@@ -860,8 +919,8 @@ export default function App() {
     selectedHibernatingSessionId,
     setSelectedSessionId,
     setSelectedHibernatingSessionId,
-    filteredSortedSessions,
-    filteredHibernatingSessions,
+    navigationLiveSessions,
+    navigationHibernatingSessions,
     handleKillSession,
     shortcutModifier,
     settingsHydrated,
@@ -974,7 +1033,7 @@ export default function App() {
       {/* Terminal - full height on desktop */}
       <Terminal
         session={selectedSession}
-        sessions={filteredSortedSessions}
+        sessions={navigationLiveSessions}
         hibernatingSession={selectedHibernatingSession}
         hibernatingSessions={hibernatingAgentSessions}
         connectionStatus={connectionStatus}

@@ -6,6 +6,7 @@ import NewSessionModal from '../components/NewSessionModal'
 import { useSessionStore } from '../stores/sessionStore'
 import { useSettingsStore } from '../stores/settingsStore'
 import { useThemeStore } from '../stores/themeStore'
+import { useWorkspaceStore } from '../stores/workspaceStore'
 
 const globalAny = globalThis as typeof globalThis & {
   window?: Window & typeof globalThis
@@ -169,6 +170,13 @@ beforeEach(() => {
     connectionStatus: 'connected',
     connectionEpoch: 0,
     connectionError: null,
+  })
+
+  useWorkspaceStore.setState({
+    snapshot: null,
+    lastError: null,
+    operationResults: [],
+    collapsedWorktreeIds: [],
   })
 
   useSettingsStore.setState({
@@ -1572,5 +1580,171 @@ describe('App', () => {
     expect(sessions).toHaveLength(1)
     expect(sessions[0]?.id).toBe('session-2')
     expect(sessions[0]?.status).toBe('permission')
+  })
+
+  test('workspace snapshots store and keyboard navigation follows grouped order', () => {
+    // Grouped order (repositories by id, worktrees by path) intentionally
+    // differs from the flat created-sort order:
+    //   grouped: [other(s3), proj/feat(s2), proj/main(s1), ungrouped(s4)]
+    //   flat asc: [s1, s2, s3, s4]
+    const sessions: Session[] = [
+      { ...baseSession, id: 's1', projectPath: '/proj/main', createdAt: '2024-01-01T00:00:00.000Z' },
+      { ...baseSession, id: 's2', projectPath: '/proj/feat', createdAt: '2024-01-02T00:00:00.000Z' },
+      { ...baseSession, id: 's3', projectPath: '/other', createdAt: '2024-01-03T00:00:00.000Z' },
+      { ...baseSession, id: 's4', projectPath: '/plain', createdAt: '2024-01-04T00:00:00.000Z' },
+    ]
+    useSessionStore.setState({ sessions, selectedSessionId: 's1', hasLoaded: true })
+
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => {
+      renderer = TestRenderer.create(<App />)
+    })
+    activeRenderer = renderer
+
+    if (!subscribeListener) {
+      throw new Error('Expected websocket subscription')
+    }
+
+    act(() => {
+      subscribeListener({
+        type: 'workspace-snapshot',
+        snapshot: {
+          repositories: [
+            {
+              id: '/other/.git',
+              name: 'other',
+              commonDir: '/other/.git',
+              stale: false,
+              worktrees: [
+                {
+                  id: '/other/.git::/other',
+                  repositoryId: '/other/.git',
+                  path: '/other',
+                  branch: 'main',
+                  headRevision: 'ccccccc',
+                  detached: false,
+                  isMain: true,
+                  dirty: false,
+                  openspec: { changes: [], stale: false },
+                },
+              ],
+              branches: [],
+            },
+            {
+              id: '/proj/.git',
+              name: 'proj',
+              commonDir: '/proj/.git',
+              stale: false,
+              worktrees: [
+                {
+                  id: '/proj/.git::/proj/feat',
+                  repositoryId: '/proj/.git',
+                  path: '/proj/feat',
+                  branch: 'feat',
+                  headRevision: 'bbbbbbb',
+                  detached: false,
+                  isMain: false,
+                  dirty: false,
+                  openspec: { changes: [], stale: false },
+                },
+                {
+                  id: '/proj/.git::/proj/main',
+                  repositoryId: '/proj/.git',
+                  path: '/proj/main',
+                  branch: 'main',
+                  headRevision: 'aaaaaaa',
+                  detached: false,
+                  isMain: true,
+                  dirty: false,
+                  openspec: { changes: [], stale: false },
+                },
+              ],
+              branches: [],
+            },
+          ],
+          generatedAt: '2026-01-01T00:00:00.000Z',
+        },
+      })
+    })
+
+    expect(useWorkspaceStore.getState().snapshot?.repositories).toHaveLength(2)
+
+    // Digit 1 selects the first entry in the flattened grouped order (s3),
+    // not the flat-sort first (s1).
+    const keyHandler = getKeyHandler()
+    act(() => {
+      keyHandler({
+        key: '1', code: 'Digit1',
+        ctrlKey: true, shiftKey: true, altKey: false, metaKey: false,
+        defaultPrevented: false, preventDefault: () => {},
+      } as KeyboardEvent)
+    })
+    expect(useSessionStore.getState().selectedSessionId).toBe('s3')
+
+    // Bracket navigation follows grouped order: s1 -> s4 (skipping nothing),
+    // where the flat order would have gone s1 -> s2.
+    act(() => {
+      useSessionStore.setState({ selectedSessionId: 's1' })
+    })
+    const keyHandler2 = getKeyHandler()
+    act(() => {
+      keyHandler2({
+        key: ']', code: 'BracketRight',
+        ctrlKey: true, shiftKey: true, altKey: false, metaKey: false,
+        defaultPrevented: false, preventDefault: () => {},
+      } as KeyboardEvent)
+    })
+    expect(useSessionStore.getState().selectedSessionId).toBe('s4')
+
+    // Collapsing a worktree group removes its rows from navigation order.
+    act(() => {
+      useWorkspaceStore.getState().toggleWorktreeCollapsed('/proj/.git::/proj/feat')
+    })
+    act(() => {
+      useSessionStore.setState({ selectedSessionId: 's1' })
+    })
+    const keyHandler3 = getKeyHandler()
+    act(() => {
+      keyHandler3({
+        key: '[', code: 'BracketLeft',
+        ctrlKey: true, shiftKey: true, altKey: false, metaKey: false,
+        defaultPrevented: false, preventDefault: () => {},
+      } as KeyboardEvent)
+    })
+    // Grouped visible order is now [s3, s1, s4]; previous of s1 is s3 — the
+    // collapsed s2 row is skipped.
+    expect(useSessionStore.getState().selectedSessionId).toBe('s3')
+  })
+
+  test('workspace operation results are recorded from server messages', () => {
+    useSessionStore.setState({ sessions: [baseSession], selectedSessionId: baseSession.id, hasLoaded: true })
+
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => {
+      renderer = TestRenderer.create(<App />)
+    })
+    activeRenderer = renderer
+
+    if (!subscribeListener) {
+      throw new Error('Expected websocket subscription')
+    }
+
+    act(() => {
+      subscribeListener({
+        type: 'workspace-operation-result',
+        result: {
+          operation: 'create-worktree',
+          ok: false,
+          repositoryId: '/proj/.git',
+          branch: 'feat',
+          error: 'Destination already exists',
+        },
+      })
+    })
+
+    const results = useWorkspaceStore.getState().operationResults
+    expect(results).toHaveLength(1)
+    expect(results[0].operation).toBe('create-worktree')
+    expect(results[0].ok).toBe(false)
   })
 })

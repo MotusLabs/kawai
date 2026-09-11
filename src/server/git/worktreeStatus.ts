@@ -2,7 +2,7 @@
 // path matching. Dirty state reports tracked and untracked changes without
 // offering any destructive operation (see workspace-navigation spec).
 
-import path from 'node:path'
+import { deepestPathMatch } from '../../shared/workspace'
 import { runGit } from './gitCommand'
 
 // Only the first byte matters for the dirty flag; keep the bound small so a
@@ -31,13 +31,5 @@ export function deepestWorktreeMatch(
   target: string,
   worktreePaths: Iterable<string>
 ): string | null {
-  let best: string | null = null
-  for (const worktreePath of worktreePaths) {
-    if (worktreePath === target || target.startsWith(worktreePath + path.sep)) {
-      if (best === null || worktreePath.length > best.length) {
-        best = worktreePath
-      }
-    }
-  }
-  return best
+  return deepestPathMatch(target, worktreePaths)
 }

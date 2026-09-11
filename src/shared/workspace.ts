@@ -122,3 +122,24 @@ export function repositoryId(commonDir: string): string {
 export function shortRevision(revision: string): string {
   return revision.slice(0, 7)
 }
+
+/**
+ * Return the container path that contains `target`, choosing the deepest
+ * (longest) match on path boundaries so nested worktrees win over their
+ * ancestors. `/repo` never matches `/repo-x`. Pure string matching — paths
+ * are expected to be canonical on the server and plain on the client.
+ */
+export function deepestPathMatch(
+  target: string,
+  containers: Iterable<string>
+): string | null {
+  let best: string | null = null
+  for (const container of containers) {
+    if (container === target || target.startsWith(container + '/')) {
+      if (best === null || container.length > best.length) {
+        best = container
+      }
+    }
+  }
+  return best
+}

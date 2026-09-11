@@ -23,9 +23,9 @@
 
 ## 5. Client Workspace State and View Model
 
-- [ ] 5.1 Add a Zustand workspace store for snapshots, per-worktree errors, operation state, and persisted collapse state; verify store tests cover reconnects, stale snapshots, collapse persistence, and operation results.
-- [ ] 5.2 Build pure selectors that associate active, hibernating, and historical sessions with the deepest worktree and produce repository groups, local-ungrouped groups, remote groups, attention counts, and flattened visible navigation order; verify comprehensive selector tests cover filters and collapsed groups.
-- [ ] 5.3 Integrate workspace messages into `App.tsx` without changing existing session snapshot semantics and use the flattened grouped order for keyboard/terminal navigation; verify existing app, keyboard, filter, and selection tests remain green with new grouped cases.
+- [x] 5.1 Add a Zustand workspace store for snapshots, per-worktree errors, operation state, and persisted collapse state; verify store tests cover reconnects, stale snapshots, collapse persistence, and operation results.
+- [x] 5.2 Build pure selectors that associate active, hibernating, and historical sessions with the deepest worktree and produce repository groups, local-ungrouped groups, remote groups, attention counts, and flattened visible navigation order; verify comprehensive selector tests cover filters and collapsed groups.
+- [x] 5.3 Integrate workspace messages into `App.tsx` without changing existing session snapshot semantics and use the flattened grouped order for keyboard/terminal navigation; verify existing app, keyboard, filter, and selection tests remain green with new grouped cases.
 
 ## 6. Grouped Workspace Navigator
 
