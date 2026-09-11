@@ -20,9 +20,16 @@ export const WORKSPACE_MAX_CHANGES = 256
 
 // Simplified git check-ref-format: rejects ref names git would refuse, plus
 // anything that could be mistaken for an option by downstream tooling.
-const GIT_REF_NAME_PATTERN = /^(?!\/|\.|-)(?!.*(?:\/\.|\/\/|\.\.|@{|[\~^:?*\\]))[^\s\0-\x1f~^:?*\\[]+(?<!\.lock|\/|\.)$/
+// Control characters (incl. NUL) are rejected separately by hasControlChars.
+const GIT_REF_NAME_PATTERN = /^(?!\/|\.|-)(?!.*(?:\/\.|\/\/|\.\.|@{|[~^:?*\\]))[^\s~^:?*\\[]+(?<!\.lock|\/|\.)$/
 
-const ABSOLUTE_PATH_PATTERN = /^\/[^\0]*$/
+function hasControlChars(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index)
+    if (code < 0x20 || code === 0x7f) return true
+  }
+  return false
+}
 
 export interface CreateWorktreePayload {
   repositoryId: string
@@ -54,7 +61,11 @@ function boundedString(value: unknown, maxLength: number): string | null {
 
 /** True when the value is a plausible local git ref (branch) name. */
 export function isValidGitRefName(name: string): boolean {
-  return name.length <= WORKSPACE_MAX_FIELD_LENGTH && GIT_REF_NAME_PATTERN.test(name)
+  return (
+    name.length <= WORKSPACE_MAX_FIELD_LENGTH &&
+    !hasControlChars(name) &&
+    GIT_REF_NAME_PATTERN.test(name)
+  )
 }
 
 /** True when the value is a plausible absolute filesystem path. */
@@ -62,7 +73,8 @@ export function isAbsoluteLocalPath(value: string): boolean {
   return (
     value.length > 1 &&
     value.length <= WORKSPACE_MAX_FIELD_LENGTH &&
-    ABSOLUTE_PATH_PATTERN.test(value)
+    !value.includes('\0') &&
+    value.startsWith('/')
   )
 }
 
