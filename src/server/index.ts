@@ -1,5 +1,6 @@
 import type { Server, ServerWebSocket } from 'bun'
 import { createReadStream } from 'node:fs'
+import fsSync from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import fs from 'node:fs/promises'
@@ -65,6 +66,8 @@ import {
   isValidTmuxTarget,
 } from './validators'
 import { parseCreateWorktreePayload } from '../shared/workspaceValidation'
+import { WorkspaceCoordinator } from './workspace/workspaceCoordinator'
+import { WorkspaceWatcher, createNodeWatcherHost } from './workspace/workspaceWatcher'
 import { RemoteSessionPoller, splitSshOptions, buildRemoteSessionId } from './remoteSessions'
 import { normalizePaneStartCommand } from './agentDetection'
 import { generateSessionName } from './nameGenerator'
@@ -1400,6 +1403,66 @@ registry.on('agent-sessions-active', (active) => {
   broadcast({ type: 'agent-sessions-active', active })
 })
 
+// Workspace discovery seeds: live local session paths plus persisted active,
+// hibernating, and history agent-session paths. Remote sessions never seed
+// local Git discovery (see design.md non-goals).
+function collectWorkspaceSeeds(): string[] {
+  const seeds = new Set<string>()
+  for (const session of registry.getAll()) {
+    if (session.remote || !session.projectPath) continue
+    seeds.add(session.projectPath)
+  }
+  const agentSessions = registry.getAgentSessions()
+  for (const group of [agentSessions.active, agentSessions.hibernating, agentSessions.history]) {
+    for (const agentSession of group) {
+      if (agentSession.host || !agentSession.projectPath) continue
+      seeds.add(agentSession.projectPath)
+    }
+  }
+  return [...seeds]
+}
+
+// Workspace discovery coordinator hook. handleMessage routes workspace
+// messages through this; declared before first use to avoid TDZ access.
+export interface WorkspaceCoordinatorHook {
+  requestRefresh(projectPath?: string): Promise<void>
+}
+
+let workspaceCoordinator: WorkspaceCoordinatorHook | null = null
+
+export function attachWorkspaceCoordinator(coordinator: WorkspaceCoordinatorHook | null): void {
+  workspaceCoordinator = coordinator
+}
+
+const workspaceCoordinatorInstance = new WorkspaceCoordinator({
+  getSeeds: () => collectWorkspaceSeeds(),
+  broadcast: (snapshot) => {
+    broadcast({ type: 'workspace-snapshot', snapshot })
+    workspaceWatcherInstance?.updateTargets(snapshot)
+  },
+})
+
+// Filesystem watches for Git/OpenSpec metadata plus periodic reconciliation;
+// watches are latency optimization, reconciliation is correctness (§4.3).
+const workspaceWatcherInstance = new WorkspaceWatcher({
+  host: createNodeWatcherHost(fsSync),
+  onPathsChanged: (paths) => {
+    fireAndForget(workspaceCoordinatorInstance.refreshPaths(paths), 'workspaceWatchRefresh')
+  },
+  onReconcile: () => {
+    fireAndForget(workspaceCoordinatorInstance.reconcile(), 'workspaceReconcile')
+  },
+})
+attachWorkspaceCoordinator(workspaceCoordinatorInstance)
+
+function refreshWorkspaceSeeds(): void {
+  fireAndForget(workspaceCoordinatorInstance.requestRefresh(), 'workspaceSeedRefresh')
+}
+
+registry.on('sessions', () => refreshWorkspaceSeeds())
+registry.on('agent-sessions', () => refreshWorkspaceSeeds())
+refreshWorkspaceSeeds()
+
 app.post('/api/client-log', async (c) => {
   try {
     const body = await c.req.json() as { level?: string; event: string; data?: Record<string, unknown> }
@@ -2028,6 +2091,10 @@ const websocketHandlers = {
       hibernating: agentSessions.hibernating,
       history: agentSessions.history,
     })
+    const workspaceSnapshot = workspaceCoordinatorInstance.getSnapshot()
+    if (workspaceSnapshot) {
+      send(ws, { type: 'workspace-snapshot', snapshot: workspaceSnapshot })
+    }
     initializePersistentTerminal(ws)
   },
   message(ws: ServerWebSocket<WSData>, message: string | BufferSource) {
@@ -2086,6 +2153,7 @@ logger.info('server_started', {
 if (config.logPollIntervalMs > 0) {
   logPoller.start(config.logPollIntervalMs, config.logWatchMode)
 }
+workspaceWatcherInstance.start()
 void completeStartupVerification()
 
 // Cleanup all terminals on server shutdown
@@ -2102,6 +2170,7 @@ async function cleanupAllTerminals() {
     clearAttachDedup(ws)
   }
   await Promise.allSettled(disposePromises)
+  workspaceWatcherInstance.stop()
   logPoller.stop()
   remotePoller?.stop()
   db.close()
@@ -2400,18 +2469,6 @@ function fireAndForget(promise: Promise<unknown>, context: string): void {
       error: err instanceof Error ? err.message : String(err),
     })
   })
-}
-
-// Workspace discovery coordinator hook. Populated once the coordinator is
-// constructed (§4); until then workspace messages are recognized but inert.
-export interface WorkspaceCoordinatorHook {
-  requestRefresh(projectPath?: string): Promise<void>
-}
-
-let workspaceCoordinator: WorkspaceCoordinatorHook | null = null
-
-export function attachWorkspaceCoordinator(coordinator: WorkspaceCoordinatorHook | null): void {
-  workspaceCoordinator = coordinator
 }
 
 async function handleCreateWorktree(

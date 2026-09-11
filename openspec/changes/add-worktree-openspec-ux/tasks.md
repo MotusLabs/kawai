@@ -17,9 +17,9 @@
 
 ## 4. Live Workspace Coordination
 
-- [ ] 4.1 Add a workspace discovery coordinator that caches snapshots, limits subprocess concurrency, refreshes affected repositories, and broadcasts only structural changes; verify coordinator tests cover deduplication, concurrent requests, error isolation, and unchanged snapshots.
-- [ ] 4.2 Seed the coordinator from registry and agent-session path changes and send the latest workspace snapshot to newly connected clients; verify isolated WebSocket handler tests cover initial connection, new repository discovery, and path removal.
-- [ ] 4.3 Add safe, debounced filesystem watches for Git and OpenSpec metadata plus periodic full reconciliation and lifecycle cleanup; verify fake-watcher/timer tests cover burst coalescing, missed-event recovery, newly created directories, and shutdown.
+- [x] 4.1 Add a workspace discovery coordinator that caches snapshots, limits subprocess concurrency, refreshes affected repositories, and broadcasts only structural changes; verify coordinator tests cover deduplication, concurrent requests, error isolation, and unchanged snapshots.
+- [x] 4.2 Seed the coordinator from registry and agent-session path changes and send the latest workspace snapshot to newly connected clients; verify isolated WebSocket handler tests cover initial connection, new repository discovery, and path removal.
+- [x] 4.3 Add safe, debounced filesystem watches for Git and OpenSpec metadata plus periodic full reconciliation and lifecycle cleanup; verify fake-watcher/timer tests cover burst coalescing, missed-event recovery, newly created directories, and shutdown.
 
 ## 5. Client Workspace State and View Model
 

@@ -6,6 +6,7 @@
 import type {
   OpenSpecChangeSummary,
   WorktreeOpenSpecState,
+  WorkspaceRepository,
   WorkspaceSnapshot,
 } from '../../shared/workspace'
 
@@ -154,6 +155,43 @@ export function discoverWorktreeOpenSpec(
 }
 
 /**
+ * Refresh OpenSpec state for every worktree in one repository. `previous`
+ * holds last-known repositories (any snapshot) for last-valid retention.
+ * State is never copied between worktrees.
+ */
+export function refreshRepositoryOpenSpec(
+  repository: WorkspaceRepository,
+  previous: WorkspaceRepository[] | undefined,
+  options: { runner?: OpenspecCommandRunner; timeoutMs?: number } = {}
+): WorkspaceRepository {
+  const previousOpenSpecByWorktreeId = new Map<string, WorktreeOpenSpecState>()
+  for (const previousRepository of previous ?? []) {
+    if (previousRepository.id !== repository.id) continue
+    for (const worktree of previousRepository.worktrees) {
+      previousOpenSpecByWorktreeId.set(worktree.id, worktree.openspec)
+    }
+  }
+
+  return {
+    ...repository,
+    worktrees: repository.worktrees.map((worktree) => {
+      const discovered = discoverWorktreeOpenSpec(worktree.path, options)
+      if (discovered.stale) {
+        const lastValid = previousOpenSpecByWorktreeId.get(worktree.id)
+        if (lastValid && !lastValid.stale) {
+          // Retain this worktree's own last-valid values, marked stale.
+          return {
+            ...worktree,
+            openspec: { ...lastValid, stale: true, ...(discovered.error !== undefined ? { error: discovered.error } : {}) },
+          }
+        }
+      }
+      return { ...worktree, openspec: discovered }
+    }),
+  }
+}
+
+/**
  * Refresh OpenSpec state for every worktree in a snapshot. Results are
  * merged only into the worktree whose filesystem produced them — state is
  * never copied between worktrees, so two worktrees of one repository keep
@@ -165,31 +203,10 @@ export function refreshSnapshotOpenSpec(
   previous: WorkspaceSnapshot | null | undefined,
   options: { runner?: OpenspecCommandRunner; timeoutMs?: number } = {}
 ): WorkspaceSnapshot {
-  const previousOpenSpecByWorktreeId = new Map<string, WorktreeOpenSpecState>()
-  for (const repository of previous?.repositories ?? []) {
-    for (const worktree of repository.worktrees) {
-      previousOpenSpecByWorktreeId.set(worktree.id, worktree.openspec)
-    }
-  }
-
   return {
     ...snapshot,
-    repositories: snapshot.repositories.map((repository) => ({
-      ...repository,
-      worktrees: repository.worktrees.map((worktree) => {
-        const discovered = discoverWorktreeOpenSpec(worktree.path, options)
-        if (discovered.stale) {
-          const lastValid = previousOpenSpecByWorktreeId.get(worktree.id)
-          if (lastValid && !lastValid.stale) {
-            // Retain this worktree's own last-valid values, marked stale.
-            return {
-              ...worktree,
-              openspec: { ...lastValid, stale: true, ...(discovered.error !== undefined ? { error: discovered.error } : {}) },
-            }
-          }
-        }
-        return { ...worktree, openspec: discovered }
-      }),
-    })),
+    repositories: snapshot.repositories.map((repository) =>
+      refreshRepositoryOpenSpec(repository, previous?.repositories, options)
+    ),
   }
 }

@@ -27,26 +27,25 @@ export function runGit(args: string[], options: GitCommandOptions = {}): GitComm
     maxOutputBytes = GIT_MAX_OUTPUT_BYTES,
     env,
   } = options
-  let result: ReturnType<typeof Bun.spawnSync>
   try {
-    result = Bun.spawnSync(['git', ...args], {
+    const result = Bun.spawnSync(['git', ...args], {
       ...(cwd !== undefined ? { cwd } : {}),
       timeout: timeoutMs,
       env: env ? { ...process.env, ...env } : process.env,
       stdout: 'pipe',
       stderr: 'pipe',
     })
+    const stdout = result.stdout ? result.stdout.toString('utf8') : ''
+    const stderr = result.stderr ? result.stderr.toString('utf8') : ''
+    return {
+      ok: result.exitCode === 0,
+      exitCode: result.exitCode,
+      stdout: stdout.length > maxOutputBytes ? stdout.slice(0, maxOutputBytes) : stdout,
+      stderr: stderr.length > maxOutputBytes ? stderr.slice(0, maxOutputBytes) : stderr,
+    }
   } catch {
     // Missing cwd, git not installed, or spawn failure — treat as non-success.
     return { ok: false, exitCode: null, stdout: '', stderr: '' }
-  }
-  const stdout = result.stdout ? result.stdout.toString('utf8') : ''
-  const stderr = result.stderr ? result.stderr.toString('utf8') : ''
-  return {
-    ok: result.exitCode === 0,
-    exitCode: result.exitCode,
-    stdout: stdout.length > maxOutputBytes ? stdout.slice(0, maxOutputBytes) : stdout,
-    stderr: stderr.length > maxOutputBytes ? stderr.slice(0, maxOutputBytes) : stderr,
   }
 }
 

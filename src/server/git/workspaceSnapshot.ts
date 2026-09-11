@@ -46,9 +46,9 @@ export function buildWorkspaceSnapshot(
   return { repositories: ordered, generatedAt: new Date().toISOString() }
 }
 
-function buildRepositorySnapshot(
+export function buildRepositorySnapshot(
   commonDir: string,
-  dirs: ResolvedGitDirs,
+  dirs: ResolvedGitDirs | null,
   previous?: WorkspaceSnapshot | null
 ): WorkspaceRepository {
   const id = repositoryId(commonDir)
@@ -67,7 +67,7 @@ function buildRepositorySnapshot(
     }
     return {
       id,
-      name: path.basename(dirs.toplevel) || dirs.toplevel,
+      name: dirs ? path.basename(dirs.toplevel) || dirs.toplevel : commonDir,
       commonDir,
       worktrees: [],
       branches: [],

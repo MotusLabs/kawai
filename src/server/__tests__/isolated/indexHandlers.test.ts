@@ -849,6 +849,117 @@ describe('server message handlers', () => {
     expect(sent.length).toBe(sentBefore)
   })
 
+  test('workspace snapshots reach clients on connect, discovery, and removal', async () => {
+    // Fake git plumbing for one repository at /wstest/repo on branch main.
+    const repoCommonDir = '/wstest/repo/.git'
+    spawnSyncImpl = ((command: string[], options?: { cwd?: string }) => {
+      const cmd = Array.isArray(command) ? command : [String(command)]
+      if (cmd[0] === 'git') {
+        const gitArgs = cmd.slice(1).filter((arg) => arg !== '--git-dir')
+        const cwd = options?.cwd ?? ''
+        if (gitArgs.includes('rev-parse')) {
+          if (cwd === '/wstest/repo' || cwd.startsWith('/wstest/repo/')) {
+            return {
+              exitCode: 0,
+              stdout: Buffer.from([repoCommonDir, repoCommonDir, '/wstest/repo'].join('\n')),
+              stderr: Buffer.from(''),
+            }
+          }
+          return { exitCode: 128, stdout: Buffer.from(''), stderr: Buffer.from('not a repo') }
+        }
+        if (gitArgs.includes('worktree')) {
+          return {
+            exitCode: 0,
+            stdout: Buffer.from(
+              ['worktree /wstest/repo', 'HEAD aaa1111', 'branch refs/heads/main', ''].join('\n')
+            ),
+            stderr: Buffer.from(''),
+          }
+        }
+        if (gitArgs.includes('for-each-ref')) {
+          return { exitCode: 0, stdout: Buffer.from('aaa1111 main'), stderr: Buffer.from('') }
+        }
+        if (gitArgs.includes('status')) {
+          return { exitCode: 0, stdout: Buffer.from(''), stderr: Buffer.from('') }
+        }
+      }
+      if (cmd[0] === 'openspec') {
+        return {
+          exitCode: 1,
+          stdout: Buffer.from(
+            JSON.stringify({
+              changes: [],
+              root: null,
+              status: [{ code: 'no_openspec_root' }],
+            })
+          ),
+          stderr: Buffer.from(''),
+        }
+      }
+      return { exitCode: 0, stdout: Buffer.from(''), stderr: Buffer.from('') }
+    }) as unknown as typeof Bun.spawnSync
+
+    const { serveOptions, registryInstance } = await loadIndex()
+    const websocket = serveOptions.websocket
+    if (!websocket) {
+      throw new Error('WebSocket handlers not configured')
+    }
+
+    // Initial connection: registry is empty, so the client receives the
+    // (empty) workspace snapshot captured on open.
+    const { ws: firstWs, sent: firstSent } = createWs()
+    websocket.open?.(firstWs as never)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    const initialSnapshot = firstSent.find(
+      (message) => message.type === 'workspace-snapshot'
+    )
+    expect(initialSnapshot).toBeTruthy()
+    if (initialSnapshot?.type === 'workspace-snapshot') {
+      expect(initialSnapshot.snapshot.repositories).toEqual([])
+    }
+
+    // New repository discovery: a local session path seeds /wstest/repo.
+    registryInstance.replaceSessions([
+      { ...baseSession, id: 'ws-1', projectPath: '/wstest/repo' },
+    ])
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    const discovered = firstSent
+      .filter((message) => message.type === 'workspace-snapshot')
+      .at(-1)
+    expect(discovered).toBeTruthy()
+    if (discovered?.type === 'workspace-snapshot') {
+      expect(discovered.snapshot.repositories).toHaveLength(1)
+      const repository = discovered.snapshot.repositories[0]
+      expect(repository.id).toBe(repoCommonDir)
+      expect(repository.worktrees[0].path).toBe('/wstest/repo')
+      expect(repository.worktrees[0].branch).toBe('main')
+      expect(repository.branches.map((branch) => branch.name)).toEqual(['main'])
+    }
+
+    // A newly connected client after discovery receives the latest snapshot.
+    const { ws: secondWs, sent: secondSent } = createWs()
+    websocket.open?.(secondWs as never)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    const onConnect = secondSent.find(
+      (message) => message.type === 'workspace-snapshot'
+    )
+    expect(onConnect).toBeTruthy()
+    if (onConnect?.type === 'workspace-snapshot') {
+      expect(onConnect.snapshot.repositories).toHaveLength(1)
+    }
+
+    // Path removal: the session disappears, so its repository is dropped.
+    registryInstance.replaceSessions([])
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    const afterRemoval = secondSent
+      .filter((message) => message.type === 'workspace-snapshot')
+      .at(-1)
+    expect(afterRemoval).toBeTruthy()
+    if (afterRemoval?.type === 'workspace-snapshot') {
+      expect(afterRemoval.snapshot.repositories).toEqual([])
+    }
+  })
+
   test('refreshes sessions and creates new sessions', async () => {
     const createdSession = { ...baseSession, id: 'created', name: 'new' }
     let listCalls = 0

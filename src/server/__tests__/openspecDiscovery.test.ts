@@ -168,14 +168,14 @@ describe('discoverWorktreeOpenSpec', () => {
   })
 
   test('runner receives the worktree cwd and configured timeout', () => {
-    let seen: { cwd: string; timeoutMs: number } | null = null
+    const seen: { value?: { cwd: string; timeoutMs: number } } = {}
     discoverWorktreeOpenSpec('/repo-wt', {
       runner: (options) => {
-        seen = options
+        seen.value = options
         return { ok: true, exitCode: 0, stdout: '{"changes":[]}', stderr: '' }
       },
       timeoutMs: 1234,
     })
-    expect(seen).toEqual({ cwd: '/repo-wt', timeoutMs: 1234 })
+    expect(seen.value).toEqual({ cwd: '/repo-wt', timeoutMs: 1234 })
   })
 })
