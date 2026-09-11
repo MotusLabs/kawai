@@ -6,21 +6,20 @@ on:
   pull_request:
     branches: [master, main]
 
+# The local runner pool is small: a second push to the same branch supersedes
+# the first run instead of queueing behind it.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   ci:
-    # Pinned to 22.04 — the May 18 ubuntu-24.04 runner image regresses child
-    # Bun spawns under `bun test --coverage`: the server boot via Bun.spawn in
-    # integration tests never becomes healthy regardless of timeout (verified
-    # at 60s+ wrappers). Investigating root cause separately; the e2e job
-    # below stays on ubuntu-latest because Playwright's own webServer launch
-    # is unaffected.
-    runs-on: ubuntu-22.04
+    runs-on: local-k8s
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6  # v2.2.0
-        with:
-          bun-version-file: .bun-version
+      - uses: ./.github/actions/setup-bun
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
@@ -51,22 +50,48 @@ jobs:
         run: bun run build
 
   e2e:
-    runs-on: ubuntu-latest
+    runs-on: local-k8s
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6  # v2.2.0
-        with:
-          bun-version-file: .bun-version
+      - uses: ./.github/actions/setup-bun
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Install tmux
-        run: sudo apt-get update && sudo apt-get install -y tmux
+      - name: Ensure tmux is available
+        run: |
+          if command -v tmux >/dev/null 2>&1; then
+            echo "tmux $(tmux -V) already present"
+            exit 0
+          fi
+          if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
+            sudo apt-get update && sudo apt-get install -y tmux
+            if ! command -v tmux >/dev/null 2>&1; then
+              echo "::error::tmux install reported success but tmux is not on PATH"
+              exit 1
+            fi
+            echo "installed $(tmux -V)"
+          else
+            echo "::error::tmux is not installed on this runner and cannot be installed (no passwordless sudo). Add tmux to the runner image."
+            exit 1
+          fi
 
-      - name: Install Playwright browsers
-        run: bunx playwright install --with-deps chromium
+      - name: Install Playwright Chromium
+        run: bunx playwright install chromium
+
+      - name: Verify Chromium launches, installing system deps only if needed
+        run: |
+          if bun scripts/playwright-launch-check.ts; then
+            exit 0
+          fi
+          echo "Chromium failed to launch; installing its system dependencies"
+          bunx playwright install-deps chromium
+          if ! bun scripts/playwright-launch-check.ts; then
+            echo "::error::Chromium cannot launch: system dependencies are missing and could not be installed (no passwordless sudo?). Add Playwright's chromium deps to the runner image."
+            exit 1
+          fi
 
       - name: Build
         run: bun run build
