@@ -1,0 +1,209 @@
+// workspaceValidation.ts - Defensive parsing/validation for workspace payloads.
+// Used by the server to validate inbound client messages and by the client to
+// tolerate snapshots produced by newer servers (extra/optional fields) and
+// corrupted ones (malformed entries are dropped, never fabricated).
+
+import type {
+  OpenSpecChangeSummary,
+  WorkspaceBranch,
+  WorkspaceRepository,
+  WorkspaceSnapshot,
+  WorkspaceWorktree,
+  WorktreeOpenSpecState,
+} from './workspace'
+
+export const WORKSPACE_MAX_FIELD_LENGTH = 4096
+export const WORKSPACE_MAX_REPOSITORIES = 256
+export const WORKSPACE_MAX_WORKTREES = 256
+export const WORKSPACE_MAX_BRANCHES = 4096
+export const WORKSPACE_MAX_CHANGES = 256
+
+// Simplified git check-ref-format: rejects ref names git would refuse, plus
+// anything that could be mistaken for an option by downstream tooling.
+const GIT_REF_NAME_PATTERN = /^(?!\/|\.|-)(?!.*(?:\/\.|\/\/|\.\.|@{|[\~^:?*\\]))[^\s\0-\x1f~^:?*\\[]+(?<!\.lock|\/|\.)$/
+
+const ABSOLUTE_PATH_PATTERN = /^\/[^\0]*$/
+
+export interface CreateWorktreePayload {
+  repositoryId: string
+  branch: string
+  destination: string
+  launchSession?: boolean
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function optionalString(value: unknown): string | undefined {
+  return typeof value === 'string' ? value : undefined
+}
+
+function optionalNonNegativeInteger(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+    ? value
+    : undefined
+}
+
+function boundedString(value: unknown, maxLength: number): string | null {
+  if (typeof value !== 'string' || value.length === 0 || value.length > maxLength) {
+    return null
+  }
+  return value
+}
+
+/** True when the value is a plausible local git ref (branch) name. */
+export function isValidGitRefName(name: string): boolean {
+  return name.length <= WORKSPACE_MAX_FIELD_LENGTH && GIT_REF_NAME_PATTERN.test(name)
+}
+
+/** True when the value is a plausible absolute filesystem path. */
+export function isAbsoluteLocalPath(value: string): boolean {
+  return (
+    value.length > 1 &&
+    value.length <= WORKSPACE_MAX_FIELD_LENGTH &&
+    ABSOLUTE_PATH_PATTERN.test(value)
+  )
+}
+
+function parseOpenSpecChange(value: unknown): OpenSpecChangeSummary | null {
+  if (!isRecord(value)) return null
+  const name = boundedString(value.name, WORKSPACE_MAX_FIELD_LENGTH)
+  if (name === null) return null
+  const change: OpenSpecChangeSummary = { name }
+  const status = optionalString(value.status)
+  if (status !== undefined) change.status = status
+  const completedTasks = optionalNonNegativeInteger(value.completedTasks)
+  if (completedTasks !== undefined) change.completedTasks = completedTasks
+  const totalTasks = optionalNonNegativeInteger(value.totalTasks)
+  if (totalTasks !== undefined) change.totalTasks = totalTasks
+  const lastModified = optionalString(value.lastModified)
+  if (lastModified !== undefined) change.lastModified = lastModified
+  return change
+}
+
+function parseOpenSpecState(value: unknown): WorktreeOpenSpecState {
+  if (!isRecord(value)) return { changes: [], stale: false }
+  const changes: OpenSpecChangeSummary[] = []
+  if (Array.isArray(value.changes)) {
+    for (const rawChange of value.changes.slice(0, WORKSPACE_MAX_CHANGES)) {
+      const change = parseOpenSpecChange(rawChange)
+      if (change) changes.push(change)
+    }
+  }
+  const state: WorktreeOpenSpecState = {
+    changes,
+    stale: value.stale === true,
+  }
+  const rootPath = optionalString(value.rootPath)
+  if (rootPath !== undefined) state.rootPath = rootPath
+  const error = optionalString(value.error)
+  if (error !== undefined) state.error = error
+  return state
+}
+
+function parseWorktree(value: unknown): WorkspaceWorktree | null {
+  if (!isRecord(value)) return null
+  const id = boundedString(value.id, WORKSPACE_MAX_FIELD_LENGTH)
+  const repositoryId = boundedString(value.repositoryId, WORKSPACE_MAX_FIELD_LENGTH)
+  const path = boundedString(value.path, WORKSPACE_MAX_FIELD_LENGTH)
+  const headRevision = boundedString(value.headRevision, 512)
+  if (id === null || repositoryId === null || path === null || headRevision === null) {
+    return null
+  }
+  const worktree: WorkspaceWorktree = {
+    id,
+    repositoryId,
+    path,
+    headRevision,
+    detached: value.detached === true,
+    isMain: value.isMain === true,
+    dirty: value.dirty === true,
+    openspec: parseOpenSpecState(value.openspec),
+  }
+  const branch = optionalString(value.branch)
+  if (branch !== undefined) worktree.branch = branch
+  return worktree
+}
+
+function parseBranch(value: unknown): WorkspaceBranch | null {
+  if (!isRecord(value)) return null
+  const name = boundedString(value.name, WORKSPACE_MAX_FIELD_LENGTH)
+  const revision = boundedString(value.revision, 512)
+  if (name === null || revision === null) return null
+  const branch: WorkspaceBranch = { name, revision }
+  const assignedWorktreeId = optionalString(value.assignedWorktreeId)
+  if (assignedWorktreeId !== undefined) branch.assignedWorktreeId = assignedWorktreeId
+  return branch
+}
+
+function parseRepository(value: unknown): WorkspaceRepository | null {
+  if (!isRecord(value)) return null
+  const id = boundedString(value.id, WORKSPACE_MAX_FIELD_LENGTH)
+  const name = boundedString(value.name, WORKSPACE_MAX_FIELD_LENGTH)
+  const commonDir = boundedString(value.commonDir, WORKSPACE_MAX_FIELD_LENGTH)
+  if (id === null || name === null || commonDir === null) return null
+  if (
+    !Array.isArray(value.worktrees) ||
+    !Array.isArray(value.branches)
+  ) {
+    return null
+  }
+  const worktrees: WorkspaceWorktree[] = []
+  for (const rawWorktree of value.worktrees.slice(0, WORKSPACE_MAX_WORKTREES)) {
+    const worktree = parseWorktree(rawWorktree)
+    if (worktree) worktrees.push(worktree)
+  }
+  const branches: WorkspaceBranch[] = []
+  for (const rawBranch of value.branches.slice(0, WORKSPACE_MAX_BRANCHES)) {
+    const branch = parseBranch(rawBranch)
+    if (branch) branches.push(branch)
+  }
+  const repository: WorkspaceRepository = {
+    id,
+    name,
+    commonDir,
+    worktrees,
+    branches,
+    stale: value.stale === true,
+  }
+  const error = optionalString(value.error)
+  if (error !== undefined) repository.error = error
+  return repository
+}
+
+/**
+ * Parse an unknown value as a workspace snapshot. Returns null when the
+ * top-level shape is malformed. Individual malformed repositories, worktrees,
+ * branches, and changes are dropped; optional fields absent from older or
+ * newer payload revisions are tolerated.
+ */
+export function parseWorkspaceSnapshot(value: unknown): WorkspaceSnapshot | null {
+  if (!isRecord(value) || !Array.isArray(value.repositories)) return null
+  const generatedAt = boundedString(value.generatedAt, 128)
+  if (generatedAt === null) return null
+  const repositories: WorkspaceRepository[] = []
+  for (const rawRepository of value.repositories.slice(0, WORKSPACE_MAX_REPOSITORIES)) {
+    const repository = parseRepository(rawRepository)
+    if (repository) repositories.push(repository)
+  }
+  return { repositories, generatedAt }
+}
+
+/**
+ * Parse an unknown value as a create-worktree request payload. Returns null
+ * when required fields are missing, malformed, or unsafe (relative path,
+ * invalid ref name, oversized values).
+ */
+export function parseCreateWorktreePayload(value: unknown): CreateWorktreePayload | null {
+  if (!isRecord(value)) return null
+  const repositoryId = boundedString(value.repositoryId, WORKSPACE_MAX_FIELD_LENGTH)
+  const branch = boundedString(value.branch, WORKSPACE_MAX_FIELD_LENGTH)
+  const destination = boundedString(value.destination, WORKSPACE_MAX_FIELD_LENGTH)
+  if (repositoryId === null || branch === null || destination === null) return null
+  if (!isAbsoluteLocalPath(destination)) return null
+  if (!isValidGitRefName(branch)) return null
+  const payload: CreateWorktreePayload = { repositoryId, branch, destination }
+  if (value.launchSession === true) payload.launchSession = true
+  return payload
+}

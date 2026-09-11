@@ -2,6 +2,21 @@
 export const HISTORY_MAX_AGE_MIN_HOURS = 1
 export const HISTORY_MAX_AGE_MAX_HOURS = 168 // 7 days
 
+import type {
+  WorkspaceOperationResult,
+  WorkspaceSnapshot,
+} from './workspace'
+
+export type {
+  WorkspaceBranch,
+  WorkspaceRepository,
+  WorkspaceSnapshot,
+  WorkspaceWorktree,
+  WorktreeOpenSpecState,
+  OpenSpecChangeSummary,
+  WorkspaceOperationResult,
+} from './workspace'
+
 export type SessionStatus = 'working' | 'waiting' | 'permission' | 'unknown'
 
 export type SessionSource = 'managed' | 'external'
@@ -12,6 +27,12 @@ export type SessionKillSource =
   | 'session_list_context_menu'
   | 'terminal_confirm_modal'
   | 'unknown'
+export type WorkspaceErrorCode =
+  | 'ERR_WORKSPACE_UNKNOWN_REPOSITORY'
+  | 'ERR_WORKTREE_BRANCH_ASSIGNED'
+  | 'ERR_WORKTREE_DESTINATION_EXISTS'
+  | 'ERR_WORKTREE_INVALID_DESTINATION'
+  | 'ERR_WORKTREE_CREATE_FAILED'
 export type TerminalErrorCode =
   | 'ERR_INVALID_WINDOW'
   | 'ERR_SESSION_CREATE_FAILED'
@@ -100,6 +121,10 @@ export type ServerMessage =
       error?: string
     }
   | { type: 'session-move-to-history-result'; sessionId: string; ok: boolean; session?: AgentSession; error?: string }
+  // Workspace messages are additive: older clients can ignore them and all
+  // existing session messages/fields are unchanged.
+  | { type: 'workspace-snapshot'; snapshot: WorkspaceSnapshot }
+  | { type: 'workspace-operation-result'; result: WorkspaceOperationResult }
   | { type: 'terminal-output'; sessionId: string; data: string }
   | {
       type: 'terminal-error'
@@ -160,6 +185,15 @@ export type ClientMessage =
   | { type: 'session-wake'; sessionId: string }
   | { type: 'session-hibernate'; sessionId: string }
   | { type: 'session-move-to-history'; sessionId: string }
+  // Workspace messages are additive; existing clients never send them.
+  | { type: 'workspace-refresh'; projectPath?: string }
+  | {
+      type: 'create-worktree'
+      repositoryId: string
+      branch: string
+      destination: string
+      launchSession?: boolean
+    }
   | { type: 'ping'; seq?: number }
 
 /** Diagnostic metadata attached to parsed ServerMessages by useWebSocket. */

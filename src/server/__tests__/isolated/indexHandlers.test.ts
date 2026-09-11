@@ -785,6 +785,70 @@ describe('server message handlers', () => {
     })
   })
 
+  test('validates workspace create-worktree messages', async () => {
+    const { serveOptions } = await loadIndex()
+    const { ws, sent } = createWs()
+    const websocket = serveOptions.websocket
+    if (!websocket) {
+      throw new Error('WebSocket handlers not configured')
+    }
+
+    // Missing required fields.
+    websocket.message?.(
+      ws as never,
+      JSON.stringify({ type: 'create-worktree', branch: 'feat' })
+    )
+    // Relative destinations are rejected.
+    websocket.message?.(
+      ws as never,
+      JSON.stringify({
+        type: 'create-worktree',
+        repositoryId: '/repo/.git',
+        branch: 'feat',
+        destination: 'repo-feat',
+      })
+    )
+    // Invalid ref names are rejected.
+    websocket.message?.(
+      ws as never,
+      JSON.stringify({
+        type: 'create-worktree',
+        repositoryId: '/repo/.git',
+        branch: 'bad..name',
+        destination: '/repo-feat',
+      })
+    )
+    expect(sent.slice(0, 3)).toEqual([
+      { type: 'error', message: 'Invalid create-worktree payload' },
+      { type: 'error', message: 'Invalid create-worktree payload' },
+      { type: 'error', message: 'Invalid create-worktree payload' },
+    ])
+
+    // A valid payload reaches the operation path and replies with an
+    // operation result rather than a generic error.
+    websocket.message?.(
+      ws as never,
+      JSON.stringify({
+        type: 'create-worktree',
+        repositoryId: '/repo/.git',
+        branch: 'feat/x',
+        destination: '/repo-feat',
+      })
+    )
+    const resultIndex = sent.findIndex(
+      (message) => message.type === 'workspace-operation-result'
+    )
+    expect(resultIndex).toBeGreaterThan(-1)
+    expect(
+      sent.slice(resultIndex).some((message) => message.type === 'error')
+    ).toBe(false)
+
+    // workspace-refresh is recognized (no unknown-type error, no reply yet).
+    const sentBefore = sent.length
+    websocket.message?.(ws as never, JSON.stringify({ type: 'workspace-refresh' }))
+    expect(sent.length).toBe(sentBefore)
+  })
+
   test('refreshes sessions and creates new sessions', async () => {
     const createdSession = { ...baseSession, id: 'created', name: 'new' }
     let listCalls = 0

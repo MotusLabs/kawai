@@ -64,6 +64,7 @@ import {
   isValidSessionId,
   isValidTmuxTarget,
 } from './validators'
+import { parseCreateWorktreePayload } from '../shared/workspaceValidation'
 import { RemoteSessionPoller, splitSshOptions, buildRemoteSessionId } from './remoteSessions'
 import { normalizePaneStartCommand } from './agentDetection'
 import { generateSessionName } from './nameGenerator'
@@ -2401,6 +2402,35 @@ function fireAndForget(promise: Promise<unknown>, context: string): void {
   })
 }
 
+// Workspace discovery coordinator hook. Populated once the coordinator is
+// constructed (§4); until then workspace messages are recognized but inert.
+export interface WorkspaceCoordinatorHook {
+  requestRefresh(projectPath?: string): Promise<void>
+}
+
+let workspaceCoordinator: WorkspaceCoordinatorHook | null = null
+
+export function attachWorkspaceCoordinator(coordinator: WorkspaceCoordinatorHook | null): void {
+  workspaceCoordinator = coordinator
+}
+
+async function handleCreateWorktree(
+  ws: ServerWebSocket<WSData>,
+  payload: { repositoryId: string; branch: string; destination: string; launchSession?: boolean }
+): Promise<void> {
+  // Replaced by the real git operation in §8.3.
+  send(ws, {
+    type: 'workspace-operation-result',
+    result: {
+      operation: 'create-worktree',
+      ok: false,
+      repositoryId: payload.repositoryId,
+      branch: payload.branch,
+      error: 'Worktree creation is not available',
+    },
+  })
+}
+
 function handleMessage(
   ws: ServerWebSocket<WSData>,
   rawMessage: string | BufferSource
@@ -2493,6 +2523,22 @@ function handleMessage(
     case 'session-move-to-history':
       handleMoveToHistory(message.sessionId, ws)
       return
+    case 'workspace-refresh':
+      // Workspace discovery coordinator is attached in §4; until then the
+      // message is recognized (no unknown-type error) but ignored.
+      if (workspaceCoordinator) {
+        fireAndForget(workspaceCoordinator.requestRefresh(message.projectPath), 'workspaceRefresh')
+      }
+      return
+    case 'create-worktree': {
+      const payload = parseCreateWorktreePayload(message)
+      if (!payload) {
+        send(ws, { type: 'error', message: 'Invalid create-worktree payload' })
+        return
+      }
+      fireAndForget(handleCreateWorktree(ws, payload), 'handleCreateWorktree')
+      return
+    }
     default:
       send(ws, { type: 'error', message: 'Unknown message type' })
   }
