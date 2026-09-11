@@ -51,12 +51,6 @@
         "vite": "^8.0.6",
         "vite-plugin-pwa": "^1.2.0",
       },
-      "optionalDependencies": {
-        "@gbasin/agentboard-darwin-arm64": "0.4.4",
-        "@gbasin/agentboard-darwin-x64": "0.4.4",
-        "@gbasin/agentboard-linux-arm64": "0.4.4",
-        "@gbasin/agentboard-linux-x64": "0.4.4",
-      },
     },
   },
   "overrides": {
