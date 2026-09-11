@@ -12,8 +12,8 @@
 
 ## 3. OpenSpec Discovery
 
-- [ ] 3.1 Add per-worktree `openspec list --json` discovery with timeouts, bounded output, missing-root handling, and defensive parsing of optional fields; verify tests cover active, archived, missing-progress, malformed, and failed results.
-- [ ] 3.2 Merge OpenSpec results into their originating worktree snapshots without copying state between worktrees, retaining last-valid values on failure; verify tests use two worktrees with divergent change lists and progress.
+- [x] 3.1 Add per-worktree `openspec list --json` discovery with timeouts, bounded output, missing-root handling, and defensive parsing of optional fields; verify tests cover active, archived, missing-progress, malformed, and failed results.
+- [x] 3.2 Merge OpenSpec results into their originating worktree snapshots without copying state between worktrees, retaining last-valid values on failure; verify tests use two worktrees with divergent change lists and progress.
 
 ## 4. Live Workspace Coordination
 
