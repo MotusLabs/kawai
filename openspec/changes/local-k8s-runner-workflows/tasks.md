@@ -18,7 +18,7 @@
 
 - [x] 3.3 In `.github/workflows/create-release-tag.yml`: switch to `runs-on: local-k8s`, add `timeout-minutes: 5`, keep `RELEASE_PAT` checkout logic untouched. Verify: `actionlint` passes and the `if: github.event.pull_request.merged == true` gate is unchanged.
 
-- [ ] 3.4 Remove non-GitHub publishing from the release job: drop `setup-node`, both npm publish steps (`Publish platform packages`, `Publish main package`), `Update main package optionalDependencies`, and the entire `Update Homebrew tap` step; trim job permissions to `contents: write`. Verify: the release job contains no `npm publish`, no tap clone, and no `id-token`/`packages` permissions; YAML parses.
+- [x] 3.4 Remove non-GitHub publishing from the release job: drop `setup-node`, both npm publish steps (`Publish platform packages`, `Publish main package`), `Update main package optionalDependencies`, and the entire `Update Homebrew tap` step; trim job permissions to `contents: write`. Verify: the release job contains no `npm publish`, no tap clone, and no `id-token`/`packages` permissions; YAML parses.
 
 ## 4. Validation
 
