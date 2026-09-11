@@ -32,13 +32,13 @@ jobs:
           exit "$status"
 
       # Warn-only: these are the tools agentboard's workflows invoke directly
-      # (tmux for e2e, shasum/tar for the release publish, od/timeout for the
-      # binary smoke test). A missing tool is an image gap to fix before the
+      # (tmux for e2e, tar for the release tarballs, od/timeout for the binary
+      # smoke test). A missing tool is an image gap to fix before the
       # migration, not a broken check.
       - name: Report runner tooling
         run: |
           missing=""
-          for tool in tmux git shasum sha256sum tar od timeout curl; do
+          for tool in tmux git tar od timeout curl; do
             if command -v "$tool" >/dev/null 2>&1; then
               echo "ok: $tool at $(command -v "$tool")"
             else
