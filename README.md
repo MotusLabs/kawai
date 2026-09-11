@@ -1,11 +1,13 @@
-# Agentboard
+# Kawai
 
 [![CI](https://img.shields.io/github/actions/workflow/status/gbasin/agentboard/ci.yml?branch=master&logo=github)](https://github.com/gbasin/agentboard/actions)
 [![License: MIT](https://img.shields.io/github/license/gbasin/agentboard)](https://github.com/gbasin/agentboard/blob/master/LICENSE)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178c6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/gbasin/agentboard)
 
-Agentboard is a Web GUI for `tmux` that's optimized for agent TUI's (`claude`, `codex`, etc). A lighter-weight, agent-optimized alternative to Blink, Termux, etc.
+Kawai is a Web GUI for `tmux` that's optimized for agent TUI's (`claude`, `codex`, etc). A lighter-weight, agent-optimized alternative to Blink, Termux, etc.
+
+Kawai is built on top of [Agentboard](https://github.com/gbasin/agentboard), keeping its core session discovery, status inference, and live terminal streaming, while extending it toward more autonomous, spec-driven agent operation — see [Roadmap](#roadmap) below.
 
 Run your desktop/server, then connect from your phone or laptop over Tailscale/LAN. You get a shared workspace across devices.
 
@@ -51,6 +53,14 @@ Run your desktop/server, then connect from your phone or laptop over Tailscale/L
 | Terminal | Controls |
 | :---: | :---: |
 | <img src="assets/mobile.jpeg" alt="Terminal" height="400"/> | <img src="assets/mobile-controls.jpeg" alt="Controls" height="400"/> |
+
+## Roadmap
+
+Kawai extends Agentboard's session board with agent-native workflow tooling. These are planned/in-progress, not yet shipped:
+
+- **OpenSpec support** — surface an OpenSpec change's proposal/spec/tasks alongside its session, and track task-level progress as the agent works through it.
+- **Worktrees** — run each session (or each OpenSpec change) in its own git worktree, so parallel agents don't collide on a single working directory.
+- **Automatic workflows** — chain propose → apply → review → archive steps for an OpenSpec change without manual hand-off between agent sessions.
 
 ## Requirements
 
