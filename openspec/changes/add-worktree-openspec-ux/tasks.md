@@ -5,10 +5,10 @@
 
 ## 2. Git Repository Discovery
 
-- [ ] 2.1 Create a focused server module that canonicalizes known local project paths, resolves their worktree/common Git directories, and deduplicates repositories; verify unit tests cover symlinks, deleted paths, nested repositories, non-Git paths, and duplicate seeds.
-- [ ] 2.2 Parse Git porcelain output into repository, worktree, local-branch, detached-HEAD, main-worktree, revision, and branch-assignment metadata; verify fixture-based unit tests cover linked and detached worktrees plus packed/local refs.
-- [ ] 2.3 Add bounded dirty-state discovery and deepest-worktree path matching; verify tests cover tracked/untracked changes, clean worktrees, path-boundary safety, and nested matches.
-- [ ] 2.4 Assemble deterministic repository snapshots from live, hibernating, recent-history, and on-demand project-path seeds while isolating per-repository failures; verify server discovery tests cover empty worktrees and last-valid stale results.
+- [x] 2.1 Create a focused server module that canonicalizes known local project paths, resolves their worktree/common Git directories, and deduplicates repositories; verify unit tests cover symlinks, deleted paths, nested repositories, non-Git paths, and duplicate seeds.
+- [x] 2.2 Parse Git porcelain output into repository, worktree, local-branch, detached-HEAD, main-worktree, revision, and branch-assignment metadata; verify fixture-based unit tests cover linked and detached worktrees plus packed/local refs.
+- [x] 2.3 Add bounded dirty-state discovery and deepest-worktree path matching; verify tests cover tracked/untracked changes, clean worktrees, path-boundary safety, and nested matches.
+- [x] 2.4 Assemble deterministic repository snapshots from live, hibernating, recent-history, and on-demand project-path seeds while isolating per-repository failures; verify server discovery tests cover empty worktrees and last-valid stale results.
 
 ## 3. OpenSpec Discovery
 
