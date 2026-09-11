@@ -35,8 +35,8 @@ export default defineConfig(({ mode }) => {
       VitePWA({
         registerType: 'autoUpdate',
         manifest: {
-          name: 'Agentboard',
-          short_name: 'Agentboard',
+          name: 'Kawai',
+          short_name: 'Kawai',
           description: 'Web GUI for tmux optimized for AI agent TUIs',
           theme_color: '#0f172a',
           background_color: '#0f172a',

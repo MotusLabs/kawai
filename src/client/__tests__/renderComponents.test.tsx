@@ -252,14 +252,14 @@ function renderMarkup(element: JSX.Element): string {
 describe('component rendering', () => {
   test('renders app shell', () => {
     const html = renderMarkup(<App />)
-    expect(html).toContain('AGENTBOARD')
+    expect(html).toContain('KAWAI')
   })
 
   test('renders header', () => {
     const html = renderMarkup(
       <Header connectionStatus="connected" onNewSession={() => {}} onOpenSettings={() => {}} tailscaleIp={null} />
     )
-    expect(html).toContain('AGENTBOARD')
+    expect(html).toContain('KAWAI')
   })
 
   test('renders session list', () => {

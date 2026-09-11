@@ -42,7 +42,7 @@ export default function Header({
     <header className="flex h-10 shrink-0 items-center justify-between border-b border-border bg-elevated px-3">
       <div className="flex items-center gap-2">
         <h1 className="text-sm font-semibold tracking-tight text-primary text-balance">
-          AGENTBOARD
+          KAWAI
         </h1>
         <div className="flex items-center gap-1.5 text-xs text-muted">
           <span className={`h-2 w-2 rounded-full ${statusDot[connectionStatus]}`} />
