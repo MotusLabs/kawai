@@ -1,7 +1,6 @@
 # Agentboard
 
 [![CI](https://img.shields.io/github/actions/workflow/status/gbasin/agentboard/ci.yml?branch=master&logo=github)](https://github.com/gbasin/agentboard/actions)
-[![npm](https://img.shields.io/npm/v/@gbasin/agentboard?logo=npm)](https://www.npmjs.com/package/@gbasin/agentboard)
 [![License: MIT](https://img.shields.io/github/license/gbasin/agentboard)](https://github.com/gbasin/agentboard/blob/master/LICENSE)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178c6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/gbasin/agentboard)
@@ -60,28 +59,27 @@ Run your desktop/server, then connect from your phone or laptop over Tailscale/L
 
 ## Install
 
-### Homebrew
+### GitHub Releases
+
+Download the tarball for your platform from the [releases page](https://github.com/gbasin/agentboard/releases), extract it, and run the binary from the extracted directory — the server serves its UI from `./dist/client` relative to the working directory:
+
+| Platform | Tarball |
+| --- | --- |
+| macOS (Apple Silicon) | `agentboard-darwin-arm64.tar.gz` |
+| macOS (Intel) | `agentboard-darwin-x64.tar.gz` |
+| Linux (x64) | `agentboard-linux-x64.tar.gz` |
+| Linux (arm64) | `agentboard-linux-arm64.tar.gz` |
+
+One-liner (macOS Apple Silicon — swap the platform for your machine):
 
 ```bash
-brew tap gbasin/tap
-brew install agentboard
-agentboard
-```
-
-### npm
-
-```bash
-npm install -g @gbasin/agentboard
-agentboard
-```
-
-Or run directly:
-
-```bash
-npx @gbasin/agentboard
+curl -fsSL https://github.com/gbasin/agentboard/releases/latest/download/agentboard-darwin-arm64.tar.gz | tar -xz
+./bin/agentboard
 ```
 
 Then open `http://localhost:4040` (or `http://<your-machine>:4040` from another device).
+
+> Previously distributed via npm and Homebrew — those channels are frozen at v0.5.x and will not receive further updates.
 
 For persistent deployment, see [systemd/README.md](systemd/README.md) (Linux) or [launchd/README.md](launchd/README.md) (macOS).
 
