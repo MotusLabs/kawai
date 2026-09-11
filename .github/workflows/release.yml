@@ -7,30 +7,16 @@ on:
 
 jobs:
   build:
-    strategy:
-      matrix:
-        include:
-          - os: macos-latest
-            target: bun-darwin-arm64
-            artifact: agentboard-darwin-arm64
-          - os: macos-latest
-            target: bun-darwin-x64
-            artifact: agentboard-darwin-x64
-          - os: ubuntu-latest
-            target: bun-linux-x64
-            artifact: agentboard-linux-x64
-          - os: ubuntu-24.04-arm
-            target: bun-linux-arm64
-            artifact: agentboard-linux-arm64
-
-    runs-on: ${{ matrix.os }}
+    # Every target is a `bun build --compile` cross-compile, so all four
+    # platforms build on one Linux runner: the frontend is built once and the
+    # loop below only swaps the compile target.
+    runs-on: local-k8s
+    timeout-minutes: 20
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6  # v2.2.0
-        with:
-          bun-version-file: .bun-version
+      - uses: ./.github/actions/setup-bun
 
       - name: Install dependencies
         run: bun install
@@ -38,25 +24,125 @@ jobs:
       - name: Build frontend
         run: bun run build
 
-      - name: Build server binary
-        run: bun build src/server/index.ts src/server/sessionRefreshWorker.ts src/server/logMatchWorker.ts --compile --target ${{ matrix.target }} --outfile ${{ matrix.artifact }}
-
-      - name: Package binary and frontend
+      - name: Build and package all platform binaries
         run: |
-          mkdir -p package/bin package/dist
-          mv ${{ matrix.artifact }} package/bin/agentboard
-          cp -r dist/client package/dist/client
-          chmod +x package/bin/agentboard
+          set -euo pipefail
+          for target in bun-darwin-arm64 bun-darwin-x64 bun-linux-x64 bun-linux-arm64; do
+            artifact="agentboard-${target#bun-}"
+            echo "Building $target -> $artifact"
+            bun build src/server/index.ts src/server/sessionRefreshWorker.ts src/server/logMatchWorker.ts \
+              --compile --target "$target" --outfile "$artifact"
+            mkdir -p "package/$artifact/bin" "package/$artifact/dist"
+            mv "$artifact" "package/$artifact/bin/agentboard"
+            cp -r dist/client "package/$artifact/dist/client"
+            chmod +x "package/$artifact/bin/agentboard"
+          done
 
-      - name: Upload artifact
+      # Magic bytes via od rather than `file`: the runner image may not ship
+      # file(1). Mach-O 64-bit is 0xfeedfacf little-endian (cf fa ed fe); a
+      # universal binary would start with the fat-header cafebabe.
+      - name: Sanity-check binary formats and sizes
+        run: |
+          set -euo pipefail
+          for artifact in agentboard-darwin-arm64 agentboard-darwin-x64 agentboard-linux-x64 agentboard-linux-arm64; do
+            bin="package/$artifact/bin/agentboard"
+            magic="$(od -An -tx1 -N4 "$bin" | tr -d ' \n')"
+            case "$magic" in
+              cffaedfe|cafebabe) echo "$artifact: Mach-O ok" ;;
+              7f454c46) echo "$artifact: ELF ok" ;;
+              *)
+                echo "::error::$artifact: unexpected magic bytes '$magic', not a Mach-O/ELF binary"
+                exit 1
+                ;;
+            esac
+            size="$(stat -c%s "$bin")"
+            if [ "$size" -lt $((20 * 1024 * 1024)) ]; then
+              echo "::error::$artifact is only $size bytes; a compiled binary embeds the Bun runtime and is far larger — the build is truncated or corrupt"
+              exit 1
+            fi
+            echo "$artifact: $size bytes"
+          done
+
+      # The linux binary for this runner's architecture runs here: boot it and
+      # wait for the server's own startup_state log line, then kill it. The
+      # other architecture's binary and the darwin binaries cannot execute on
+      # this runner — the magic-byte and size checks above are their
+      # verification, plus a real-Mac check of the first canary release.
+      #
+      # The copy to $RUNNER_TEMP and the cd matter: run from the workspace
+      # (which has node_modules after bun install), Bun resolves the embedded
+      # logger's worker_threads file against the sibling node_modules and the
+      # binary crashes — users never run it next to a node_modules, and the
+      # smoke test must not either.
+      - name: Boot-test the native linux binary
+        run: |
+          set -euo pipefail
+          case "$(uname -m)" in
+            x86_64) native="agentboard-linux-x64" ;;
+            aarch64|arm64) native="agentboard-linux-arm64" ;;
+            *)
+              echo "::error::Unknown runner architecture $(uname -m); cannot pick a binary to boot-test"
+              exit 1
+              ;;
+          esac
+          cp "package/$native/bin/agentboard" "$RUNNER_TEMP/agentboard"
+          cd "$RUNNER_TEMP"
+          log="$RUNNER_TEMP/$native-boot.log"
+          # A random port: the smoke instance must never contend with
+          # whatever the runner environment itself may be serving.
+          PORT=$((41000 + RANDOM % 20000)) ./agentboard >"$log" 2>&1 &
+          pid=$!
+          booted=""
+          for _ in $(seq 1 30); do
+            # Read the log before the liveness check: a binary that logs
+            # startup_state and then dies must still be reported as having
+            # reached startup, not as "did not reach startup".
+            if grep -q "startup_state" "$log" 2>/dev/null; then
+              booted=yes
+              break
+            fi
+            if ! kill -0 "$pid" 2>/dev/null; then
+              break
+            fi
+            sleep 0.5
+          done
+          kill "$pid" 2>/dev/null || true
+          wait "$pid" 2>/dev/null || true
+          if [ -z "$booted" ]; then
+            echo "::error::$native did not reach startup within 15s"
+            cat "$log"
+            exit 1
+          fi
+          echo "$native: booted"
+
+      - name: Upload agentboard-darwin-arm64
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
-          name: ${{ matrix.artifact }}
-          path: package/
+          name: agentboard-darwin-arm64
+          path: package/agentboard-darwin-arm64/
+
+      - name: Upload agentboard-darwin-x64
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: agentboard-darwin-x64
+          path: package/agentboard-darwin-x64/
+
+      - name: Upload agentboard-linux-x64
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: agentboard-linux-x64
+          path: package/agentboard-linux-x64/
+
+      - name: Upload agentboard-linux-arm64
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: agentboard-linux-arm64
+          path: package/agentboard-linux-arm64/
 
   release:
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: local-k8s
+    timeout-minutes: 15
     permissions:
       contents: write
       packages: write
