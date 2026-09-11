@@ -1,0 +1,58 @@
+name: Local Kubernetes runner test
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: local-k8s
+    timeout-minutes: 5
+
+    steps:
+      - name: Verify isolation
+        run: |
+          set -u
+          status=0
+          check() {
+            label="$1"; shift
+            if "$@"; then
+              echo "ok: $label"
+            else
+              echo "::error::isolation violated: $label"
+              status=1
+            fi
+          }
+          check "no Kubernetes service-account token" test ! -e /var/run/secrets/kubernetes.io/serviceaccount/token
+          check "no Docker socket" test ! -S /var/run/docker.sock
+          check "no containerd socket" test ! -S /run/containerd/containerd.sock
+          id
+          exit "$status"
+
+      # Warn-only: these are the tools agentboard's workflows invoke directly
+      # (tmux for e2e, shasum/tar for the release publish, od/timeout for the
+      # binary smoke test). A missing tool is an image gap to fix before the
+      # migration, not a broken check.
+      - name: Report runner tooling
+        run: |
+          missing=""
+          for tool in tmux git shasum sha256sum tar od timeout curl; do
+            if command -v "$tool" >/dev/null 2>&1; then
+              echo "ok: $tool at $(command -v "$tool")"
+            else
+              echo "::warning::runner image is missing '$tool'; any workflow step that calls it will fail"
+              missing="$missing $tool"
+            fi
+          done
+          if [ -n "$missing" ]; then
+            echo "Missing tools:$missing"
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - uses: ./.github/actions/setup-bun
+
+      - name: Run bun
+        run: bun --version

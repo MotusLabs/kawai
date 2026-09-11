@@ -1,0 +1,46 @@
+name: Set up Bun
+description: Install Bun from .bun-version, then point installs at the cluster-local npm proxy, falling back to the public registry if it is down
+
+inputs:
+  registry:
+    description: Base URL of the npm proxy, with no trailing slash
+    required: false
+    default: http://verdaccio.ci-npm.svc.cluster.local:4873
+
+runs:
+  using: composite
+  steps:
+    - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6  # v2.2.0
+      with:
+        bun-version-file: .bun-version
+
+    # bun.lock records integrity hashes but no registry hosts, so the proxy is
+    # selected entirely through the environment. Both spellings are exported:
+    # npm tools read the upper-case variable, bun reads the lower-case one.
+    #
+    # COREPACK_NPM_REGISTRY is exported for symmetry with the tg-assistant
+    # setup actions; nothing in this repo currently runs corepack.
+    #
+    # If the proxy does not answer, the job installs from the public registry
+    # instead. A cache being down must not be able to take CI with it.
+    - name: Select npm registry
+      id: registry
+      shell: bash
+      env:
+        REGISTRY: ${{ inputs.registry }}
+      run: |
+        if curl -fsS --max-time 5 "$REGISTRY/-/ping" >/dev/null 2>&1; then
+          {
+            echo "NPM_CONFIG_REGISTRY=$REGISTRY/"
+            echo "npm_config_registry=$REGISTRY/"
+            echo "COREPACK_NPM_REGISTRY=$REGISTRY"
+          } >> "$GITHUB_ENV"
+          echo "Installing through the npm proxy at $REGISTRY"
+        else
+          {
+            echo "NPM_CONFIG_REGISTRY=https://registry.npmjs.org/"
+            echo "npm_config_registry=https://registry.npmjs.org/"
+            echo "COREPACK_NPM_REGISTRY=https://registry.npmjs.org"
+          } >> "$GITHUB_ENV"
+          echo "::warning::npm proxy $REGISTRY did not answer; falling back to the public registry"
+        fi
