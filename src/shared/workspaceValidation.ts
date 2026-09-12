@@ -254,3 +254,34 @@ export function parseCreateWorktreePayload(value: unknown): CreateWorktreePayloa
   if (value.launchSession === true) payload.launchSession = true
   return payload
 }
+
+export interface CreateChangeWorktreePayload {
+  repositoryId: string
+  change: string
+}
+
+/**
+ * True when the value is a valid OpenSpec change name for worktree seeding:
+ * a single path segment (no `/`, not `.` or `..`) that is also a valid git
+ * ref name, since the change name doubles as the branch name and one path
+ * component of `.worktrees/<change-name>`.
+ */
+export function isValidChangeName(name: string): boolean {
+  if (name === '.' || name === '..' || name.includes('/')) return false
+  return isValidGitRefName(name)
+}
+
+/**
+ * Parse an unknown value as a create-change-worktree request payload.
+ * Returns null when required fields are missing, malformed, or unsafe
+ * (invalid change name, oversized values).
+ */
+export function parseCreateChangeWorktreePayload(value: unknown): CreateChangeWorktreePayload | null {
+  if (!isRecord(value)) return null
+  const repositoryId = boundedString(value.repositoryId, WORKSPACE_MAX_FIELD_LENGTH)
+  const change = boundedString(value.change, WORKSPACE_MAX_FIELD_LENGTH)
+  if (repositoryId === null || change === null) return null
+  if (!isAbsoluteLocalPath(repositoryId)) return null
+  if (!isValidChangeName(change)) return null
+  return { repositoryId, change }
+}

@@ -128,11 +128,15 @@ export interface WorkspaceSnapshot {
 /** Machine-readable failure codes for workspace operations. */
 export type WorkspaceErrorCode =
   | 'ERR_WORKSPACE_UNKNOWN_REPOSITORY'
+  | 'ERR_WORKSPACE_NO_MAIN_WORKTREE'
   | 'ERR_WORKTREE_UNKNOWN_BRANCH'
   | 'ERR_WORKTREE_BRANCH_ASSIGNED'
   | 'ERR_WORKTREE_DESTINATION_EXISTS'
   | 'ERR_WORKTREE_INVALID_DESTINATION'
   | 'ERR_WORKTREE_CREATE_FAILED'
+  | 'ERR_CHANGE_INVALID_NAME'
+  | 'ERR_CHANGE_MISSING_ARTIFACTS'
+  | 'ERR_CHANGE_SEED_FAILED'
 
 /** Result of a client-requested workspace mutation. */
 export type WorkspaceOperationResult =
@@ -149,6 +153,31 @@ export type WorkspaceOperationResult =
       ok: false
       repositoryId?: string
       branch?: string
+      /** Machine-readable failure category when known. */
+      code?: WorkspaceErrorCode
+      /** Actionable error message shown to the user. */
+      error: string
+    }
+  | {
+      operation: 'create-change-worktree'
+      ok: true
+      repositoryId: string
+      /** Change name the worktree was seeded from. */
+      change: string
+      /** Branch checked out in the new worktree (always the change name). */
+      branch: string
+      /** Canonical path of the created worktree. */
+      path: string
+      /** Revision of the seed commit on the new branch. */
+      commit: string
+      /** True when `.worktrees/` was appended to the worktree's .gitignore. */
+      gitignoreUpdated: boolean
+    }
+  | {
+      operation: 'create-change-worktree'
+      ok: false
+      repositoryId?: string
+      change?: string
       /** Machine-readable failure category when known. */
       code?: WorkspaceErrorCode
       /** Actionable error message shown to the user. */

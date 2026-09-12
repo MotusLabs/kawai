@@ -1,7 +1,9 @@
 import { describe, expect, test } from 'bun:test'
 import {
   isAbsoluteLocalPath,
+  isValidChangeName,
   isValidGitRefName,
+  parseCreateChangeWorktreePayload,
   parseCreateWorktreePayload,
   parseWorkspaceSnapshot,
 } from '../workspaceValidation'
@@ -233,6 +235,42 @@ describe('parseCreateWorktreePayload', () => {
     // Invalid ref names are rejected.
     expect(parseCreateWorktreePayload({ repositoryId: '/r/.git', branch: 'bad..name', destination: '/w' })).toBeNull()
     expect(parseCreateWorktreePayload({ repositoryId: '/r/.git', branch: 'main', destination: '' })).toBeNull()
+  })
+})
+
+describe('parseCreateChangeWorktreePayload', () => {
+  test('parses a valid request', () => {
+    expect(
+      parseCreateChangeWorktreePayload({ repositoryId: '/repo/.git', change: 'add-auth' })
+    ).toEqual({ repositoryId: '/repo/.git', change: 'add-auth' })
+  })
+
+  test('rejects malformed and unsafe payloads', () => {
+    expect(parseCreateChangeWorktreePayload(null)).toBeNull()
+    expect(parseCreateChangeWorktreePayload('nope')).toBeNull()
+    expect(parseCreateChangeWorktreePayload({})).toBeNull()
+    expect(parseCreateChangeWorktreePayload({ repositoryId: '', change: 'add-auth' })).toBeNull()
+    expect(parseCreateChangeWorktreePayload({ repositoryId: '/repo/.git', change: '' })).toBeNull()
+    // The change name becomes a single path segment under .worktrees/.
+    expect(parseCreateChangeWorktreePayload({ repositoryId: '/repo/.git', change: 'a/b' })).toBeNull()
+    expect(parseCreateChangeWorktreePayload({ repositoryId: '/repo/.git', change: '..' })).toBeNull()
+    expect(parseCreateChangeWorktreePayload({ repositoryId: '/repo/.git', change: '.' })).toBeNull()
+    // Option-like and otherwise-invalid ref names never reach git.
+    expect(parseCreateChangeWorktreePayload({ repositoryId: '/repo/.git', change: '--force' })).toBeNull()
+    expect(parseCreateChangeWorktreePayload({ repositoryId: '/repo/.git', change: 'bad..name' })).toBeNull()
+    expect(parseCreateChangeWorktreePayload({ repositoryId: '/repo/.git', change: 'a b' })).toBeNull()
+    // Relative repository ids are rejected.
+    expect(parseCreateChangeWorktreePayload({ repositoryId: 'repo/.git', change: 'add-auth' })).toBeNull()
+  })
+
+  test('isValidChangeName accepts single-segment ref names only', () => {
+    expect(isValidChangeName('add-auth')).toBe(true)
+    expect(isValidChangeName('add_auth.v2')).toBe(true)
+    expect(isValidChangeName('nested/change')).toBe(false)
+    expect(isValidChangeName('.')).toBe(false)
+    expect(isValidChangeName('..')).toBe(false)
+    expect(isValidChangeName('.hidden')).toBe(false)
+    expect(isValidChangeName('-leading-dash')).toBe(false)
   })
 })
 

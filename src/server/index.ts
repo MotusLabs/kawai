@@ -65,10 +65,14 @@ import {
   isValidSessionId,
   isValidTmuxTarget,
 } from './validators'
-import { parseCreateWorktreePayload } from '../shared/workspaceValidation'
+import {
+  parseCreateChangeWorktreePayload,
+  parseCreateWorktreePayload,
+} from '../shared/workspaceValidation'
 import { deepestPathMatch, type WorkspaceSnapshot } from '../shared/workspace'
 import { canonicalizePath } from './git/repositoryResolution'
 import { createWorktree } from './git/createWorktree'
+import { createChangeWorktree } from './git/createChangeWorktree'
 import { WorkspaceCoordinator } from './workspace/workspaceCoordinator'
 import { WorkspaceWatcher, createNodeWatcherHost } from './workspace/workspaceWatcher'
 import { RemoteSessionPoller, splitSshOptions, buildRemoteSessionId } from './remoteSessions'
@@ -2513,6 +2517,28 @@ async function handleCreateWorktree(
   }
 }
 
+async function handleCreateChangeWorktree(
+  ws: ServerWebSocket<WSData>,
+  payload: { repositoryId: string; change: string }
+): Promise<void> {
+  // Seeded creation (§7.2) with immediate revalidation inside the operation
+  // (§7.3): repository identity, destination nonexistence, and branch
+  // assignment are re-read from Git right before the non-forced
+  // `git worktree add`. The snapshot refreshes after every result — success
+  // or failure — so the navigator never shows stale sections.
+  const result = createChangeWorktree({
+    repositoryId: payload.repositoryId,
+    change: payload.change,
+  })
+  send(ws, { type: 'workspace-operation-result', result })
+  if (workspaceCoordinator) {
+    fireAndForget(
+      workspaceCoordinator.requestRefresh(result.ok ? result.path : payload.repositoryId),
+      'workspaceRefreshAfterChangeOperation'
+    )
+  }
+}
+
 function handleMessage(
   ws: ServerWebSocket<WSData>,
   rawMessage: string | BufferSource
@@ -2634,6 +2660,15 @@ function handleMessage(
         return
       }
       fireAndForget(handleCreateWorktree(ws, payload), 'handleCreateWorktree')
+      return
+    }
+    case 'create-change-worktree': {
+      const payload = parseCreateChangeWorktreePayload(message)
+      if (!payload) {
+        send(ws, { type: 'error', message: 'Invalid create-change-worktree payload' })
+        return
+      }
+      fireAndForget(handleCreateChangeWorktree(ws, payload), 'handleCreateChangeWorktree')
       return
     }
     default:

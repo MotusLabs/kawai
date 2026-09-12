@@ -189,6 +189,11 @@ export type ClientMessage =
       destination: string
       launchSession?: boolean
     }
+  | {
+      type: 'create-change-worktree'
+      repositoryId: string
+      change: string
+    }
   | { type: 'ping'; seq?: number }
 
 /** Diagnostic metadata attached to parsed ServerMessages by useWebSocket. */
