@@ -1747,4 +1747,206 @@ describe('App', () => {
     expect(results[0].operation).toBe('create-worktree')
     expect(results[0].ok).toBe(false)
   })
+
+  test('create-worktree launch routes through the session form on success', () => {
+    useSessionStore.setState({ sessions: [baseSession], selectedSessionId: baseSession.id, hasLoaded: true })
+    sendCalls = []
+
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => {
+      renderer = TestRenderer.create(<App />)
+    })
+    activeRenderer = renderer
+
+    if (!subscribeListener) {
+      throw new Error('Expected websocket subscription')
+    }
+
+    act(() => {
+      subscribeListener?.({
+        type: 'workspace-snapshot',
+        snapshot: {
+          repositories: [
+            {
+              id: '/proj/.git',
+              name: 'proj',
+              commonDir: '/proj/.git',
+              stale: false,
+              worktrees: [
+                {
+                  id: '/proj/.git::/proj/main',
+                  repositoryId: '/proj/.git',
+                  path: '/proj/main',
+                  branch: 'main',
+                  headRevision: 'aaaaaaa',
+                  detached: false,
+                  isMain: true,
+                  dirty: false,
+                  openspec: { changes: [], stale: false },
+                },
+              ],
+              branches: [
+                { name: 'main', revision: 'aaaaaaa', assignedWorktreeId: '/proj/.git::/proj/main' },
+                { name: 'spare', revision: 'bbbbbbb' },
+              ],
+            },
+          ],
+          generatedAt: '2026-01-01T00:00:00.000Z',
+        },
+      })
+    })
+
+    // Open the branch browser from a worktree header and pick the unassigned
+    // branch.
+    const browseButton = renderer.root.findAllByProps({ 'data-testid': 'worktree-branch-browser' })[0]
+    act(() => {
+      browseButton.props.onClick()
+    })
+    const spareRow = renderer.root
+      .findAllByProps({ 'data-testid': 'branch-row' })
+      .find((row) => row.props['data-branch'] === 'spare')
+    if (!spareRow) throw new Error('Expected spare branch row')
+    act(() => {
+      spareRow.findByProps({ 'data-testid': 'branch-create' }).props.onClick()
+    })
+
+    // Confirm the create-worktree form with the follow-up launch checked.
+    const form = renderer.root.findByProps({ 'data-testid': 'create-worktree-form' })
+    act(() => {
+      form.findByProps({ 'data-testid': 'create-worktree-destination' }).props.onChange({
+        target: { value: '/proj/spare-wt' },
+      })
+    })
+    act(() => {
+      form.findByProps({ 'data-testid': 'create-worktree-launch' }).props.onChange({
+        target: { checked: true },
+      })
+    })
+    act(() => {
+      form.props.onSubmit({ preventDefault: () => {} })
+    })
+
+    expect(sendCalls).toContainEqual({
+      type: 'create-worktree',
+      repositoryId: '/proj/.git',
+      branch: 'spare',
+      destination: '/proj/spare-wt',
+      launchSession: true,
+    })
+
+    // A successful result with launch pending opens the normal session form
+    // preselected with the created worktree root.
+    act(() => {
+      subscribeListener?.({
+        type: 'workspace-operation-result',
+        result: {
+          operation: 'create-worktree',
+          ok: true,
+          repositoryId: '/proj/.git',
+          branch: 'spare',
+          path: '/proj/spare-wt',
+        },
+      })
+    })
+    const modal = renderer.root.findAllByProps({ 'aria-labelledby': 'new-session-title' })
+    expect(modal).toHaveLength(1)
+    expect(
+      modal[0].findAllByProps({ className: 'input flex-1 text-sm' })[0].props.value
+    ).toBe('/proj/spare-wt')
+
+    act(() => renderer.unmount())
+  })
+
+  test('create-worktree failure surfaces the actionable error without the session form', () => {
+    useSessionStore.setState({ sessions: [baseSession], selectedSessionId: baseSession.id, hasLoaded: true })
+    sendCalls = []
+
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => {
+      renderer = TestRenderer.create(<App />)
+    })
+    activeRenderer = renderer
+
+    if (!subscribeListener) {
+      throw new Error('Expected websocket subscription')
+    }
+
+    act(() => {
+      subscribeListener?.({
+        type: 'workspace-snapshot',
+        snapshot: {
+          repositories: [
+            {
+              id: '/proj/.git',
+              name: 'proj',
+              commonDir: '/proj/.git',
+              stale: false,
+              worktrees: [
+                {
+                  id: '/proj/.git::/proj/main',
+                  repositoryId: '/proj/.git',
+                  path: '/proj/main',
+                  branch: 'main',
+                  headRevision: 'aaaaaaa',
+                  detached: false,
+                  isMain: true,
+                  dirty: false,
+                  openspec: { changes: [], stale: false },
+                },
+              ],
+              branches: [
+                { name: 'main', revision: 'aaaaaaa', assignedWorktreeId: '/proj/.git::/proj/main' },
+                { name: 'spare', revision: 'bbbbbbb' },
+              ],
+            },
+          ],
+          generatedAt: '2026-01-01T00:00:00.000Z',
+        },
+      })
+    })
+
+    const browseButton = renderer.root.findAllByProps({ 'data-testid': 'worktree-branch-browser' })[0]
+    act(() => {
+      browseButton.props.onClick()
+    })
+    const spareRow = renderer.root
+      .findAllByProps({ 'data-testid': 'branch-row' })
+      .find((row) => row.props['data-branch'] === 'spare')
+    if (!spareRow) throw new Error('Expected spare branch row')
+    act(() => {
+      spareRow.findByProps({ 'data-testid': 'branch-create' }).props.onClick()
+    })
+    const form = renderer.root.findByProps({ 'data-testid': 'create-worktree-form' })
+    act(() => {
+      form.findByProps({ 'data-testid': 'create-worktree-launch' }).props.onChange({
+        target: { checked: true },
+      })
+    })
+    act(() => {
+      form.props.onSubmit({ preventDefault: () => {} })
+    })
+
+    act(() => {
+      subscribeListener?.({
+        type: 'workspace-operation-result',
+        result: {
+          operation: 'create-worktree',
+          ok: false,
+          repositoryId: '/proj/.git',
+          branch: 'spare',
+          code: 'ERR_WORKTREE_BRANCH_ASSIGNED',
+          error: 'Branch spare is already checked out at /proj/other',
+        },
+      })
+    })
+
+    // No session form opens; the actionable error reaches the list surface.
+    expect(
+      renderer.root.findAllByProps({ 'aria-labelledby': 'new-session-title' })
+    ).toHaveLength(0)
+    const sessionListProps = renderer.root.findAllByType(SessionList)[0]?.props
+    expect(sessionListProps.error).toContain('already checked out')
+
+    act(() => renderer.unmount())
+  })
 })

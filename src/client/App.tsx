@@ -302,6 +302,30 @@ export default function App() {
       }
       if (message.type === 'workspace-operation-result') {
         useWorkspaceStore.getState().recordOperationResult(message.result)
+        const result = message.result
+        if (result.operation === 'create-worktree') {
+          const pending = pendingWorktreeLaunchRef.current
+          if (result.ok) {
+            // Route a successful launch request through the normal session
+            // form — presets, names, and hosts stay in play (§8.4).
+            if (
+              pending &&
+              pending.repositoryId === result.repositoryId &&
+              pending.branch === result.branch
+            ) {
+              pendingWorktreeLaunchRef.current = null
+              setNewSessionInitialHost(undefined)
+              setNewSessionInitialPath(result.path)
+              setNewSessionInitialCommand(undefined)
+              setIsModalOpen(true)
+            }
+          } else {
+            // Every operation failure surfaces an actionable error.
+            if (pending) pendingWorktreeLaunchRef.current = null
+            setServerError(result.error)
+            window.setTimeout(() => setServerError(null), 6000)
+          }
+        }
       }
       if (message.type === 'server-config') {
         setRemoteAllowControl(message.remoteAllowControl)
@@ -668,6 +692,8 @@ export default function App() {
   )
   const pendingHibernateSelectionRef = useRef<string | null>(null)
   const pendingWakeSelectionRef = useRef<string | null>(null)
+  /** Create-worktree request awaiting its result to open the session form. */
+  const pendingWorktreeLaunchRef = useRef<{ repositoryId: string; branch: string } | null>(null)
   const lastConnectionEpochRef = useRef(connectionEpoch)
 
   const selectFirstVisibleTarget = useCallback(() => {
@@ -1008,6 +1034,12 @@ export default function App() {
       setBranchBrowserRepositoryId(null)
       setCreateWorktreeBranch(null)
       if (!branch || repositoryId === null) return
+      if (launchSession) {
+        pendingWorktreeLaunchRef.current = {
+          repositoryId,
+          branch: branch.name,
+        }
+      }
       sendMessage({
         type: 'create-worktree',
         repositoryId,
