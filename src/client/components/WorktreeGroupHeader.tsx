@@ -80,7 +80,7 @@ export default function WorktreeGroupHeader({
         )}
         <span className="truncate font-semibold">{group.repositoryName}</span>
         <span
-          className={`shrink-0 font-mono text-[11px] ${
+          className={`min-w-0 shrink truncate font-mono text-[11px] ${
             isDetached ? 'text-amber-500' : 'text-accent'
           }`}
           title={identityTitle}
