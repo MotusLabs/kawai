@@ -8,6 +8,7 @@ import { useEffect, useRef } from 'react'
 import { useReducedMotion } from 'motion/react'
 import type { AgentSession, Session } from '@shared/types'
 import SessionList from './SessionList'
+import type { WorkspaceView } from '../utils/workspaceView'
 
 interface SessionDrawerProps {
   isOpen: boolean
@@ -26,6 +27,9 @@ interface SessionDrawerProps {
   onNewSession: () => boolean | void
   loading: boolean
   error: string | null
+  /** Same grouped navigator as the desktop sidebar. */
+  workspaceView?: WorkspaceView | null
+  onToggleWorktreeCollapse?: (worktreeId: string) => void
 }
 
 export default function SessionDrawer({
@@ -45,6 +49,8 @@ export default function SessionDrawer({
   onNewSession,
   loading,
   error,
+  workspaceView = null,
+  onToggleWorktreeCollapse,
 }: SessionDrawerProps) {
   const prefersReducedMotion = useReducedMotion()
   const drawerRef = useRef<HTMLDivElement>(null)
@@ -172,6 +178,8 @@ export default function SessionDrawer({
           }}
           loading={loading}
           error={error}
+          workspaceView={workspaceView}
+          onToggleWorktreeCollapse={onToggleWorktreeCollapse}
         />
 
         {/* New session button at bottom */}

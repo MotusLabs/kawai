@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process'
 test('dashboard loads and terminal attaches', async ({ page }) => {
   await page.goto('/')
 
-  await expect(page.getByRole('heading', { name: 'Agentboard' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Kawai' })).toBeVisible()
 
   const card = page.getByTestId('session-card').first()
   await expect(card).toBeVisible()

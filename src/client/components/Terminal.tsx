@@ -24,6 +24,7 @@ import PasteStatus from './PasteStatus'
 import { useBrowserPaste, type BrowserPaste } from '../hooks/useBrowserPaste'
 import { clipboardFiles } from '../utils/browserFiles'
 import SessionDrawer from './SessionDrawer'
+import type { WorkspaceView } from '../utils/workspaceView'
 import SessionPreviewContent from './SessionPreviewContent'
 import { PlusIcon, XCloseIcon, DotsVerticalIcon, Menu01Icon } from '@untitledui-icons/react/line'
 import AlertTriangleIcon from '@untitledui-icons/react/line/esm/AlertTriangleIcon'
@@ -54,6 +55,9 @@ interface TerminalProps {
   onOpenSettings: () => void
   loading?: boolean
   error?: string | null
+  /** Grouped workspace view forwarded to the mobile session drawer. */
+  workspaceView?: WorkspaceView | null
+  onToggleWorktreeCollapse?: (worktreeId: string) => void
 }
 
 type IOSResumeInputState = 'idle' | 'focused' | 'interrupted' | 'armed'
@@ -114,6 +118,8 @@ export default function Terminal({
   onOpenSettings,
   loading = false,
   error = null,
+  workspaceView = null,
+  onToggleWorktreeCollapse,
 }: TerminalProps) {
   void _onClose // Keep for interface compatibility
   const theme = useThemeStore((state) => state.theme)
@@ -1677,6 +1683,8 @@ export default function Terminal({
           onNewSession={onNewSession}
           loading={loading}
           error={error}
+          workspaceView={workspaceView}
+          onToggleWorktreeCollapse={onToggleWorktreeCollapse}
         />
       )}
 

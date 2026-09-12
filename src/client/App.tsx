@@ -1056,6 +1056,8 @@ export default function App() {
         historySessions={historyAgentSessions}
         loading={!hasLoaded}
         error={connectionError || serverError}
+        workspaceView={workspaceSnapshot ? workspaceView : null}
+        onToggleWorktreeCollapse={toggleWorktreeCollapsed}
       />
 
       <NewSessionModal

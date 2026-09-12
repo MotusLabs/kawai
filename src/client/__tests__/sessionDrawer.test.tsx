@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import TestRenderer, { act } from 'react-test-renderer'
 import type { Session } from '@shared/types'
+import type { WorkspaceSnapshot } from '@shared/workspace'
 import { useSettingsStore } from '../stores/settingsStore'
+import { buildWorkspaceView } from '../utils/workspaceView'
 
 const globalAny = globalThis as typeof globalThis & {
   document?: Document
@@ -330,6 +332,81 @@ describe('SessionDrawer', () => {
     expect(selectCalls).toEqual(['session-1'])
     expect(newSessionCalls).toHaveLength(1)
     expect(closeCalls).toHaveLength(2)
+
+    act(() => {
+      renderer!.unmount()
+    })
+  })
+
+  test('renders the grouped navigator and closes on in-group selection', () => {
+    const closeCalls: number[] = []
+    const selectCalls: string[] = []
+    const collapseCalls: string[] = []
+    const { createNodeMock } = createDrawerMock()
+
+    const snapshot: WorkspaceSnapshot = {
+      repositories: [
+        {
+          id: '/repo/.git',
+          name: 'repo',
+          commonDir: '/repo/.git',
+          stale: false,
+          worktrees: [
+            {
+              id: '/repo/.git::/repo',
+              repositoryId: '/repo/.git',
+              path: '/repo',
+              branch: 'main',
+              headRevision: 'aaaaaaa1',
+              detached: false,
+              isMain: true,
+              dirty: false,
+              openspec: { changes: [], stale: false },
+            },
+          ],
+          branches: [],
+        },
+      ],
+      generatedAt: '2024-01-01T00:00:00.000Z',
+    }
+    const inRepoSession: Session = { ...baseSession, projectPath: '/repo/src' }
+    const view = buildWorkspaceView(snapshot, [inRepoSession], [], [])
+
+    let renderer: TestRenderer.ReactTestRenderer
+    act(() => {
+      renderer = TestRenderer.create(
+        <SessionDrawer
+          isOpen
+          onClose={() => closeCalls.push(1)}
+          sessions={[inRepoSession]}
+          selectedSessionId={null}
+          onSelect={(sessionId) => selectCalls.push(sessionId)}
+          onRename={() => {}}
+          onNewSession={() => true}
+          loading={false}
+          error={null}
+          workspaceView={view}
+          onToggleWorktreeCollapse={(worktreeId) => collapseCalls.push(worktreeId)}
+        />,
+        { createNodeMock }
+      )
+    })
+
+    // The drawer shows the same worktree grouping as the desktop sidebar.
+    const group = renderer!.root.findByProps({ 'data-testid': 'worktree-group' })
+    const card = group.findByProps({ 'data-testid': 'session-card' })
+    act(() => {
+      card.props.onClick()
+    })
+    expect(selectCalls).toEqual(['session-1'])
+    expect(closeCalls).toHaveLength(1)
+
+    // Collapse control routes to the workspace store callback.
+    const header = group.findByProps({ 'data-testid': 'worktree-group-header' })
+    act(() => {
+      header.findByProps({ 'aria-expanded': true }).props.onClick()
+    })
+    expect(collapseCalls).toEqual(['/repo/.git::/repo'])
 
     act(() => {
       renderer!.unmount()
