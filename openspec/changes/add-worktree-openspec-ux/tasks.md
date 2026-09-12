@@ -49,9 +49,9 @@
 
 ## 8. Auto-Start Apply
 
-- [ ] 8.1 Store the pending auto-start command server-side, keyed to the new session, with a per-agent-type command map (Claude `/opsx:apply <change>`, Codex equivalent); verify unit tests cover mapping, persistence across client reloads, and discard with the session.
-- [ ] 8.2 Inject the pending command through the terminal-input path exactly once, the first time the session reports an idle status after creation; verify handler tests cover early idle, never-idle sessions, and double-trigger protection.
-- [ ] 8.3 Send nothing when the option is off or the agent type is unrecognized; verify tests cover option-off and unknown-agent sessions.
+- [x] 8.1 Store the pending auto-start command server-side, keyed to the new session, with a per-agent-type command map (Claude `/opsx:apply <change>`, Codex equivalent); verify unit tests cover mapping, persistence across client reloads, and discard with the session.
+- [x] 8.2 Inject the pending command through the terminal-input path exactly once, the first time the session reports an idle status after creation; verify handler tests cover early idle, never-idle sessions, and double-trigger protection.
+- [x] 8.3 Send nothing when the option is off or the agent type is unrecognized; verify tests cover option-off and unknown-agent sessions.
 
 ## 9. Regression and Acceptance Verification
 
