@@ -44,7 +44,7 @@
 ## 8. Branch Browser and Worktree Creation
 
 - [x] 8.1 Add a repository branch browser that shows local branches, their assigned worktrees, and only enables creation for unassigned branches; verify accessible component tests cover assigned, unassigned, detached, empty, and filtered branch lists.
-- [ ] 8.2 Add a create-worktree form with a collision-resistant sibling-path suggestion, editable absolute destination, exact confirmation summary, and optional follow-up session launch; verify form tests cover path editing, validation, cancellation, and launch choice.
+- [x] 8.2 Add a create-worktree form with a collision-resistant sibling-path suggestion, editable absolute destination, exact confirmation summary, and optional follow-up session launch; verify form tests cover path editing, validation, cancellation, and launch choice.
 - [ ] 8.3 Implement the server create-worktree operation using argument-array Git invocation and immediate revalidation of repository identity, local branch assignment, and destination nonexistence, with no force flags; verify integration tests cover success, existing paths, concurrent assignment, invalid repositories, command failure, and injection-like inputs.
 - [ ] 8.4 Refresh and broadcast repository state after each operation result and route successful optional launch through the normal session form/creation flow; verify an end-to-end test creates a worktree, observes its group, and starts a tmux session at its root.
 

@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { AgentSession, ServerMessage, Session, SessionKillSource } from '@shared/types'
+import type { WorkspaceBranch } from '@shared/workspace'
 import Header from './components/Header'
 import SessionList from './components/SessionList'
 import Terminal from './components/Terminal'
 import NewSessionModal from './components/NewSessionModal'
 import BranchBrowserModal from './components/BranchBrowserModal'
+import CreateWorktreeModal from './components/CreateWorktreeModal'
 import SettingsModal from './components/SettingsModal'
 import { ToastViewport } from './components/Toast'
 import { useSessionStore } from './stores/sessionStore'
@@ -54,6 +56,7 @@ export default function App() {
   const [newSessionInitialCommand, setNewSessionInitialCommand] = useState<string | undefined>(undefined)
   const [isSettingsOpen, setIsSettingsOpen] = useState(false)
   const [branchBrowserRepositoryId, setBranchBrowserRepositoryId] = useState<string | null>(null)
+  const [createWorktreeBranch, setCreateWorktreeBranch] = useState<WorkspaceBranch | null>(null)
   const [serverError, setServerError] = useState<string | null>(null)
   const [serverInfo, setServerInfo] = useState<ServerInfo | null>(null)
   const [pendingHibernatingSession, setPendingHibernatingSession] =
@@ -612,6 +615,14 @@ export default function App() {
           ) ?? null,
     [branchBrowserRepositoryId, workspaceSnapshot]
   )
+  // Every known worktree path, for create-worktree destination de-confliction.
+  const allWorktreePaths = useMemo(
+    () =>
+      workspaceSnapshot?.repositories.flatMap((repository) =>
+        repository.worktrees.map((worktree) => worktree.path)
+      ) ?? [],
+    [workspaceSnapshot]
+  )
   const workspaceView = useMemo(
     () =>
       buildWorkspaceView(
@@ -977,14 +988,36 @@ export default function App() {
   // Repository branch browser entry from a worktree header (§8.1).
   const handleBrowseBranches = useCallback((repositoryId: string) => {
     setBranchBrowserRepositoryId(repositoryId)
+    setCreateWorktreeBranch(null)
   }, [])
   const handleCloseBranchBrowser = useCallback(() => {
     setBranchBrowserRepositoryId(null)
+    setCreateWorktreeBranch(null)
   }, [])
-  const handleCreateWorktreeFromBranch = useCallback(() => {
-    // Replaced by the create-worktree form in §8.2.
-    setBranchBrowserRepositoryId(null)
+  // Create-worktree form (§8.2): branch chosen in the browser.
+  const handleCreateWorktreeFromBranch = useCallback((branch: WorkspaceBranch) => {
+    setCreateWorktreeBranch(branch)
   }, [])
+  const handleCancelCreateWorktree = useCallback(() => {
+    setCreateWorktreeBranch(null)
+  }, [])
+  const handleConfirmCreateWorktree = useCallback(
+    (destination: string, launchSession: boolean) => {
+      const branch = createWorktreeBranch
+      const repositoryId = branchBrowserRepositoryId
+      setBranchBrowserRepositoryId(null)
+      setCreateWorktreeBranch(null)
+      if (!branch || repositoryId === null) return
+      sendMessage({
+        type: 'create-worktree',
+        repositoryId,
+        branch: branch.name,
+        destination,
+        ...(launchSession ? { launchSession: true } : {}),
+      })
+    },
+    [createWorktreeBranch, branchBrowserRepositoryId, sendMessage]
+  )
   const handleOpenSettings = () => setIsSettingsOpen(true)
 
   const handleCreateSession = (
@@ -1136,11 +1169,21 @@ export default function App() {
         onClose={() => setIsSettingsOpen(false)}
       />
 
-      {branchBrowserRepository && (
+      {branchBrowserRepository && createWorktreeBranch === null && (
         <BranchBrowserModal
           repository={branchBrowserRepository}
           onClose={handleCloseBranchBrowser}
           onCreateWorktree={handleCreateWorktreeFromBranch}
+        />
+      )}
+
+      {branchBrowserRepository && createWorktreeBranch !== null && (
+        <CreateWorktreeModal
+          repository={branchBrowserRepository}
+          branch={createWorktreeBranch}
+          existingWorktreePaths={allWorktreePaths}
+          onConfirm={handleConfirmCreateWorktree}
+          onCancel={handleCancelCreateWorktree}
         />
       )}
 
