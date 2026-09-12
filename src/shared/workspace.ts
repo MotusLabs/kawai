@@ -89,6 +89,15 @@ export interface WorkspaceSnapshot {
   generatedAt: string
 }
 
+/** Machine-readable failure codes for workspace operations. */
+export type WorkspaceErrorCode =
+  | 'ERR_WORKSPACE_UNKNOWN_REPOSITORY'
+  | 'ERR_WORKTREE_UNKNOWN_BRANCH'
+  | 'ERR_WORKTREE_BRANCH_ASSIGNED'
+  | 'ERR_WORKTREE_DESTINATION_EXISTS'
+  | 'ERR_WORKTREE_INVALID_DESTINATION'
+  | 'ERR_WORKTREE_CREATE_FAILED'
+
 /** Result of a client-requested workspace mutation. */
 export type WorkspaceOperationResult =
   | {
@@ -104,6 +113,8 @@ export type WorkspaceOperationResult =
       ok: false
       repositoryId?: string
       branch?: string
+      /** Machine-readable failure category when known. */
+      code?: WorkspaceErrorCode
       /** Actionable error message shown to the user. */
       error: string
     }

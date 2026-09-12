@@ -15,6 +15,7 @@ export type {
   WorktreeOpenSpecState,
   OpenSpecChangeSummary,
   WorkspaceOperationResult,
+  WorkspaceErrorCode,
 } from './workspace'
 
 export type SessionStatus = 'working' | 'waiting' | 'permission' | 'unknown'
@@ -27,12 +28,6 @@ export type SessionKillSource =
   | 'session_list_context_menu'
   | 'terminal_confirm_modal'
   | 'unknown'
-export type WorkspaceErrorCode =
-  | 'ERR_WORKSPACE_UNKNOWN_REPOSITORY'
-  | 'ERR_WORKTREE_BRANCH_ASSIGNED'
-  | 'ERR_WORKTREE_DESTINATION_EXISTS'
-  | 'ERR_WORKTREE_INVALID_DESTINATION'
-  | 'ERR_WORKTREE_CREATE_FAILED'
 export type TerminalErrorCode =
   | 'ERR_INVALID_WINDOW'
   | 'ERR_SESSION_CREATE_FAILED'

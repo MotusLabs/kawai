@@ -68,6 +68,7 @@ import {
 import { parseCreateWorktreePayload } from '../shared/workspaceValidation'
 import { deepestPathMatch, type WorkspaceSnapshot } from '../shared/workspace'
 import { canonicalizePath } from './git/repositoryResolution'
+import { createWorktree } from './git/createWorktree'
 import { WorkspaceCoordinator } from './workspace/workspaceCoordinator'
 import { WorkspaceWatcher, createNodeWatcherHost } from './workspace/workspaceWatcher'
 import { RemoteSessionPoller, splitSshOptions, buildRemoteSessionId } from './remoteSessions'
@@ -2496,17 +2497,20 @@ async function handleCreateWorktree(
   ws: ServerWebSocket<WSData>,
   payload: { repositoryId: string; branch: string; destination: string; launchSession?: boolean }
 ): Promise<void> {
-  // Replaced by the real git operation in §8.3.
-  send(ws, {
-    type: 'workspace-operation-result',
-    result: {
-      operation: 'create-worktree',
-      ok: false,
-      repositoryId: payload.repositoryId,
-      branch: payload.branch,
-      error: 'Worktree creation is not available',
-    },
+  // Validated, non-forced git worktree add (§8.3). Refresh + broadcast of the
+  // affected repository and launch routing happen in §8.4.
+  const result = createWorktree({
+    repositoryId: payload.repositoryId,
+    branch: payload.branch,
+    destination: payload.destination,
   })
+  send(ws, { type: 'workspace-operation-result', result })
+  if (workspaceCoordinator) {
+    fireAndForget(
+      workspaceCoordinator.requestRefresh(result.ok ? result.path : payload.destination),
+      'workspaceRefreshAfterOperation'
+    )
+  }
 }
 
 function handleMessage(
