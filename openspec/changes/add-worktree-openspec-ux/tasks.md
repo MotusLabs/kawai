@@ -29,7 +29,7 @@
 
 ## 6. Grouped Workspace Navigator
 
-- [ ] 6.1 Extract repository and worktree header components showing branch or detached revision, path, dirty/stale state, counts, collapse control, and accessible labels; verify component tests cover clean, dirty, detached, stale, collapsed, and hidden-permission states.
+- [x] 6.1 Extract repository and worktree header components showing branch or detached revision, path, dirty/stale state, counts, collapse control, and accessible labels; verify component tests cover clean, dirty, detached, stale, collapsed, and hidden-permission states.
 - [ ] 6.2 Refactor `SessionList` to render live, hibernating, and historical rows inside worktree groups with explicit local-ungrouped and remote fallbacks; verify component tests cover grouping, lifecycle actions, animations, filters, and empty groups.
 - [ ] 6.3 Constrain manual drag ordering to a worktree group and preserve flattened cross-group keyboard navigation; verify drag and keyboard tests reject cross-group moves and retain current within-group behavior.
 - [ ] 6.4 Render compact OpenSpec change rows and progress within each worktree, including optional values and isolated stale/error presentation; verify accessible component tests cover progress, no-root, collapsed-count, and discovery-failure cases.

@@ -163,7 +163,7 @@ export class WorkspaceCoordinator {
     // Group resolved seed paths by repository and carry unresolved seeds to
     // their previous owners (stale carry-forward semantics from §2.4).
     const seedPathsByCommonDir = new Map<string, string[]>()
-    for (const [commonDir, dirs] of resolved.repositories) {
+    for (const commonDir of resolved.repositories.keys()) {
       seedPathsByCommonDir.set(commonDir, [])
     }
     const previousWorktreeOwners = new Map<string, string>()

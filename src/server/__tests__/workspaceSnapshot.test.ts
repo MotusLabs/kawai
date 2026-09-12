@@ -8,7 +8,7 @@ import path from 'node:path'
 import { runGit } from '../git/gitCommand'
 import { buildWorkspaceSnapshot } from '../git/workspaceSnapshot'
 import { canonicalizePath } from '../git/repositoryResolution'
-import type { WorkspaceRepository, WorkspaceSnapshot } from '../../shared/workspace'
+import type { WorkspaceSnapshot } from '../../shared/workspace'
 
 const COMMIT_ENV = {
   GIT_AUTHOR_NAME: 'test',
@@ -21,11 +21,20 @@ let tempRoot: string
 
 function gitInit(dir: string): void {
   fs.mkdirSync(dir, { recursive: true })
-  runGit(['init', '--initial-branch=main', dir], { timeoutMs: 5000 })
-  runGit(['-C', dir, 'commit', '--allow-empty', '-m', 'init'], {
+  const init = runGit(['init', '--initial-branch=main', dir], { timeoutMs: 5000 })
+  // Fail loudly when the fixture repo cannot be created: a silent failure
+  // makes later rev-parse calls resolve the ambient repository and produces
+  // misleading snapshot assertions far from the root cause.
+  if (!init.ok) {
+    throw new Error(`git init failed for ${dir}: ${init.stderr.trim()}`)
+  }
+  const commit = runGit(['-C', dir, 'commit', '--allow-empty', '-m', 'init'], {
     timeoutMs: 5000,
     env: COMMIT_ENV,
   })
+  if (!commit.ok) {
+    throw new Error(`git commit failed for ${dir}: ${commit.stderr.trim()}`)
+  }
 }
 
 beforeAll(() => {

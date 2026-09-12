@@ -1606,7 +1606,7 @@ describe('App', () => {
     }
 
     act(() => {
-      subscribeListener({
+      subscribeListener?.({
         type: 'workspace-snapshot',
         snapshot: {
           repositories: [
@@ -1730,7 +1730,7 @@ describe('App', () => {
     }
 
     act(() => {
-      subscribeListener({
+      subscribeListener?.({
         type: 'workspace-operation-result',
         result: {
           operation: 'create-worktree',
