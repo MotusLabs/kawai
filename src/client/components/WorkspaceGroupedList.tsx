@@ -27,6 +27,7 @@ import ChevronRightIcon from '@untitledui-icons/react/line/esm/ChevronRightIcon'
 import type { AgentSession, Session } from '@shared/types'
 import type { GroupedSessionEntry, WorkspaceView } from '../utils/workspaceView'
 import WorktreeGroupHeader from './WorktreeGroupHeader'
+import WorktreeOpenSpecRows from './WorktreeOpenSpecRows'
 import HibernatingSessionItem from './HibernatingSessionItem'
 import HistorySessionItem from './HistorySessionItem'
 import { SortableSessionItem } from './SessionRow'
@@ -153,6 +154,7 @@ export default function WorkspaceGroupedList(props: WorkspaceGroupedListProps) {
           {!group.collapsed && (
             <>
               <GroupedLiveRows entries={group.entries} ctx={rowContext} remountKey={remountKey} />
+              <WorktreeOpenSpecRows openspec={group.openspec} />
               {showHibernating && (
                 <GroupedDormantRows
                   entries={group.entries}
