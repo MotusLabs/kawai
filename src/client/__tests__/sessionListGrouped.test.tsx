@@ -450,3 +450,103 @@ describe('SessionList grouped rendering', () => {
     act(() => renderer.unmount())
   })
 })
+
+describe('SessionList grouped drag constraints', () => {
+  const liveA1: Session = { ...baseSession, id: 'live-a1', projectPath: '/repo/main' }
+  const liveA2: Session = { ...baseSession, id: 'live-a2', projectPath: '/repo/main/src' }
+  const liveB1: Session = { ...baseSession, id: 'live-b1', projectPath: '/repo/feat' }
+
+  function resetManualOrder() {
+    useSettingsStore.setState({
+      manualSessionOrder: [],
+      sessionSortMode: 'created',
+      sessionSortDirection: 'asc',
+      projectFilters: [],
+      hostFilters: [],
+    })
+  }
+
+  function groupDragContext(renderer: TestRenderer.ReactTestRenderer, worktreeId: string) {
+    const group = renderer.root
+      .findAllByProps({ 'data-testid': 'worktree-group' })
+      .find((section) => section.props['data-worktree-id'] === worktreeId)
+    if (!group) throw new Error(`Expected group ${worktreeId}`)
+    const contexts = group.findAll(
+      (instance) =>
+        typeof instance.props?.onDragEnd === 'function' &&
+        typeof instance.props?.onDragCancel === 'function'
+    )
+    if (contexts.length !== 1) throw new Error(`Expected one drag context in ${worktreeId}`)
+    return contexts[0]
+  }
+
+  test('within-group drop reorders only that group in the manual order', () => {
+    resetManualOrder()
+    const sessions = [liveA1, liveA2, liveB1]
+    const view = makeView(sessions, [], [])
+    const { renderer } = renderList({ sessions, workspaceView: view })
+
+    // The main group's context owns live-a1/live-a2; drag a2 above a1.
+    const mainContext = groupDragContext(renderer, '/repo/.git::/repo/main')
+    act(() => {
+      mainContext.props.onDragEnd({ active: { id: 'live-a2' }, over: { id: 'live-a1' } })
+    })
+
+    const { manualSessionOrder, sessionSortMode } = useSettingsStore.getState()
+    expect(sessionSortMode).toBe('manual')
+    // Group keys reordered within the group; the other group's key keeps its
+    // relative position in the global spine.
+    expect(manualSessionOrder).toEqual(['live-a2', 'live-a1', 'live-b1'])
+
+    act(() => renderer.unmount())
+  })
+
+  test('cross-group drop is rejected without touching the manual order', () => {
+    resetManualOrder()
+    const sessions = [liveA1, liveA2, liveB1]
+    const view = makeView(sessions, [], [])
+    const { renderer } = renderList({ sessions, workspaceView: view })
+
+    const contexts = renderer.root.findAll(
+      (instance) =>
+        typeof instance.props?.onDragEnd === 'function' &&
+        typeof instance.props?.onDragCancel === 'function'
+    )
+    expect(contexts).toHaveLength(2)
+
+    // The main group's drag context resolves over-ids against its own rows
+    // only: a feat-group session id is unknown there, so nothing applies.
+    const mainContext = groupDragContext(renderer, '/repo/.git::/repo/main')
+    act(() => {
+      mainContext.props.onDragEnd({ active: { id: 'live-a1' }, over: { id: 'live-b1' } })
+    })
+
+    const { manualSessionOrder, sessionSortMode } = useSettingsStore.getState()
+    expect(manualSessionOrder).toEqual([])
+    expect(sessionSortMode).not.toBe('manual')
+
+    act(() => renderer.unmount())
+  })
+
+  test('cross-group keyboard navigation follows the flattened visible order', () => {
+    // Mirrors the App-level guarantee at the component boundary: visible
+    // entries flatten expanded groups in render order, so selection can walk
+    // from one group into the next and skips collapsed groups.
+    const sessions = [
+      liveA1,
+      { ...baseSession, id: 'live-a2', projectPath: '/repo/main/src' },
+      liveB1,
+    ]
+    const collapsedFeat = makeView(sessions, [], [], { collapsed: ['/repo/.git::/repo/feat'] })
+    expect(
+      collapsedFeat.visibleEntries.map((entry) => entry.key)
+    ).toEqual(['live-a1', 'live-a2'])
+
+    const expanded = makeView(sessions, [], [])
+    expect(expanded.visibleEntries.map((entry) => entry.key)).toEqual([
+      'live-a1',
+      'live-a2',
+      'live-b1',
+    ])
+  })
+})
