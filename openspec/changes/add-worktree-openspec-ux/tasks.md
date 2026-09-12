@@ -39,7 +39,7 @@
 
 - [x] 7.1 Extend the new-session modal with a compact discovered-worktree picker while retaining manual path entry, recent paths, directory browsing, command presets, names, hosts, and focus behavior; verify modal and directory-browser regression tests pass.
 - [x] 7.2 Add contextual new-session actions to worktree headers that preselect the worktree root and pass through the existing session creation path; verify component and WebSocket handler tests assert the exact project path and existing session options.
-- [ ] 7.3 Refresh workspace metadata and show an actionable error when a selected worktree disappears before session creation; verify the server rejects the stale path and the client requests or receives a refreshed snapshot.
+- [x] 7.3 Refresh workspace metadata and show an actionable error when a selected worktree disappears before session creation; verify the server rejects the stale path and the client requests or receives a refreshed snapshot.
 
 ## 8. Branch Browser and Worktree Creation
 

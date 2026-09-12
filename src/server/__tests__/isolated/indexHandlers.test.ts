@@ -1002,11 +1002,13 @@ describe('server message handlers', () => {
       throw new Error('explode')
     }
 
+    // Use an existing directory: a missing path now takes the stale-worktree
+    // branch (§7.3) instead of surfacing the raw createWindow error.
     websocket.message?.(
       ws as never,
       JSON.stringify({
         type: 'session-create',
-        projectPath: '/tmp/new',
+        projectPath: '/tmp',
       })
     )
 
@@ -1065,6 +1067,118 @@ describe('server message handlers', () => {
       })
     )
     expect(createCalls[1]).toEqual({ projectPath: '/repo/main', name: undefined, command: undefined })
+  })
+
+  test('session-create at a disappeared worktree rejects with an actionable error and refreshes workspace', async () => {
+    // Task 7.3: the selected worktree vanished between discovery and
+    // submission. The handler must reject with an error naming the stale
+    // worktree and request a scoped workspace refresh of that exact path.
+    const repoCommonDir = '/wstest/repo/.git'
+    const revParseCwds: string[] = []
+    spawnSyncImpl = ((command: string[], options?: { cwd?: string }) => {
+      const cmd = Array.isArray(command) ? command : [String(command)]
+      if (cmd[0] === 'git') {
+        const gitArgs = cmd.slice(1).filter((arg) => arg !== '--git-dir')
+        const cwd = options?.cwd ?? ''
+        if (gitArgs.includes('rev-parse')) {
+          revParseCwds.push(cwd)
+          if (cwd === '/wstest/repo' || cwd.startsWith('/wstest/repo/')) {
+            return {
+              exitCode: 0,
+              stdout: Buffer.from([repoCommonDir, repoCommonDir, '/wstest/repo'].join('\n')),
+              stderr: Buffer.from(''),
+            }
+          }
+          return { exitCode: 128, stdout: Buffer.from(''), stderr: Buffer.from('not a repo') }
+        }
+        if (gitArgs.includes('worktree')) {
+          return {
+            exitCode: 0,
+            stdout: Buffer.from(
+              ['worktree /wstest/repo', 'HEAD aaa1111', 'branch refs/heads/main', ''].join('\n')
+            ),
+            stderr: Buffer.from(''),
+          }
+        }
+        if (gitArgs.includes('for-each-ref')) {
+          return { exitCode: 0, stdout: Buffer.from('aaa1111 main'), stderr: Buffer.from('') }
+        }
+        if (gitArgs.includes('status')) {
+          return { exitCode: 0, stdout: Buffer.from(''), stderr: Buffer.from('') }
+        }
+      }
+      if (cmd[0] === 'openspec') {
+        return {
+          exitCode: 1,
+          stdout: Buffer.from(
+            JSON.stringify({
+              changes: [],
+              root: null,
+              status: [{ code: 'no_openspec_root' }],
+            })
+          ),
+          stderr: Buffer.from(''),
+        }
+      }
+      return { exitCode: 0, stdout: Buffer.from(''), stderr: Buffer.from('') }
+    }) as unknown as typeof Bun.spawnSync
+
+    // Mimic the real SessionManager's missing-path rejection.
+    sessionManagerState.createWindow = (projectPath: string) => {
+      throw new Error(`Project path does not exist: ${projectPath}`)
+    }
+
+    const { serveOptions, registryInstance } = await loadIndex()
+    const websocket = serveOptions.websocket
+    if (!websocket) {
+      throw new Error('WebSocket handlers not configured')
+    }
+
+    // Seed discovery so the snapshot knows the /wstest/repo worktree.
+    const { ws, sent } = createWs()
+    websocket.open?.(ws as never)
+    registryInstance.replaceSessions([
+      { ...baseSession, id: 'ws-stale', projectPath: '/wstest/repo' },
+    ])
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    const revParseBefore = revParseCwds.length
+    websocket.message?.(
+      ws as never,
+      JSON.stringify({
+        type: 'session-create',
+        projectPath: '/wstest/repo/gone',
+        name: 'stale-agent',
+      })
+    )
+
+    // Rejected with the worktree-aware, actionable message; no session created.
+    expect(sent.find((message) => message.type === 'session-created')).toBeUndefined()
+    expect(sent.find((message) => message.type === 'error')).toMatchObject({
+      type: 'error',
+      message:
+        'Worktree no longer exists: /wstest/repo. It may have been removed outside Agentboard; workspace metadata is refreshing.',
+    })
+
+    // A scoped workspace refresh of the missing path was requested (its seed
+    // resolution re-runs git against exactly that directory).
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(revParseCwds.slice(revParseBefore)).toContain('/wstest/repo/gone')
+
+    // A missing path outside any known worktree keeps the generic message.
+    const sentBefore = sent.length
+    websocket.message?.(
+      ws as never,
+      JSON.stringify({
+        type: 'session-create',
+        projectPath: '/definitely/not/a/repo',
+      })
+    )
+    expect(sent[sent.length - 1]).toEqual({
+      type: 'error',
+      message: 'Project path does not exist: /definitely/not/a/repo',
+    })
+    expect(sent.length).toBe(sentBefore + 1)
   })
 
   test('returns errors for kill and rename when sessions are missing', async () => {

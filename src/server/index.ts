@@ -66,6 +66,8 @@ import {
   isValidTmuxTarget,
 } from './validators'
 import { parseCreateWorktreePayload } from '../shared/workspaceValidation'
+import { deepestPathMatch, type WorkspaceSnapshot } from '../shared/workspace'
+import { canonicalizePath } from './git/repositoryResolution'
 import { WorkspaceCoordinator } from './workspace/workspaceCoordinator'
 import { WorkspaceWatcher, createNodeWatcherHost } from './workspace/workspaceWatcher'
 import { RemoteSessionPoller, splitSshOptions, buildRemoteSessionId } from './remoteSessions'
@@ -1426,6 +1428,8 @@ function collectWorkspaceSeeds(): string[] {
 // messages through this; declared before first use to avoid TDZ access.
 export interface WorkspaceCoordinatorHook {
   requestRefresh(projectPath?: string): Promise<void>
+  /** Latest snapshot; used to name the stale worktree in session-create errors. */
+  getSnapshot(): WorkspaceSnapshot | null
 }
 
 let workspaceCoordinator: WorkspaceCoordinatorHook | null = null
@@ -2471,6 +2475,23 @@ function fireAndForget(promise: Promise<unknown>, context: string): void {
   })
 }
 
+/**
+ * Actionable error for a project path that disappeared between discovery
+ * and submission. Names the owning worktree when one is known from the
+ * latest snapshot so the user can tell which group went stale.
+ */
+function staleProjectPathError(missingPath: string): string {
+  const worktreePaths =
+    workspaceCoordinator?.getSnapshot()?.repositories.flatMap((repository) =>
+      repository.worktrees.map((worktree) => worktree.path)
+    ) ?? []
+  const owner = deepestPathMatch(canonicalizePath(missingPath), worktreePaths)
+  if (owner) {
+    return `Worktree no longer exists: ${owner}. It may have been removed outside Agentboard; workspace metadata is refreshing.`
+  }
+  return `Project path does not exist: ${missingPath}`
+}
+
 async function handleCreateWorktree(
   ws: ServerWebSocket<WSData>,
   payload: { repositoryId: string; branch: string; destination: string; launchSession?: boolean }
@@ -2529,11 +2550,26 @@ function handleMessage(
           refreshSessions()
           send(ws, { type: 'session-created', session: created })
         } catch (error) {
-          send(ws, {
-            type: 'error',
-            message:
-              error instanceof Error ? error.message : 'Unable to create session',
-          })
+          // A directory that vanished between discovery and submission —
+          // typically a worktree removed outside Agentboard — gets an
+          // actionable, worktree-aware error plus a scoped workspace refresh
+          // so the stale group reconciles without a page reload (§7.3).
+          const resolvedPath = resolveProjectPath(message.projectPath)
+          if (resolvedPath && !fsSync.existsSync(resolvedPath)) {
+            send(ws, { type: 'error', message: staleProjectPathError(resolvedPath) })
+            if (workspaceCoordinator) {
+              fireAndForget(
+                workspaceCoordinator.requestRefresh(resolvedPath),
+                'workspaceRefreshMissingPath'
+              )
+            }
+          } else {
+            send(ws, {
+              type: 'error',
+              message:
+                error instanceof Error ? error.message : 'Unable to create session',
+            })
+          }
         }
       }
       return
