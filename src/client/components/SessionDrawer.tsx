@@ -30,6 +30,8 @@ interface SessionDrawerProps {
   /** Same grouped navigator as the desktop sidebar. */
   workspaceView?: WorkspaceView | null
   onToggleWorktreeCollapse?: (worktreeId: string) => void
+  /** Contextual new-session action on worktree group headers. */
+  onNewSessionInWorktree?: (worktreePath: string) => void
 }
 
 export default function SessionDrawer({
@@ -51,6 +53,7 @@ export default function SessionDrawer({
   error,
   workspaceView = null,
   onToggleWorktreeCollapse,
+  onNewSessionInWorktree,
 }: SessionDrawerProps) {
   const prefersReducedMotion = useReducedMotion()
   const drawerRef = useRef<HTMLDivElement>(null)
@@ -180,6 +183,14 @@ export default function SessionDrawer({
           error={error}
           workspaceView={workspaceView}
           onToggleWorktreeCollapse={onToggleWorktreeCollapse}
+          onNewSessionInWorktree={
+            onNewSessionInWorktree
+              ? (worktreePath) => {
+                  onNewSessionInWorktree(worktreePath)
+                  onClose()
+                }
+              : undefined
+          }
         />
 
         {/* New session button at bottom */}

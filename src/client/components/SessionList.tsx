@@ -59,6 +59,8 @@ interface SessionListProps {
    */
   workspaceView?: WorkspaceView | null
   onToggleWorktreeCollapse?: (worktreeId: string) => void
+  /** Contextual new-session action on worktree group headers. */
+  onNewSessionInWorktree?: (worktreePath: string) => void
 }
 
 function useTimestampRefresh() {
@@ -88,6 +90,7 @@ export default function SessionList({
   onNewSession,
   workspaceView = null,
   onToggleWorktreeCollapse,
+  onNewSessionInWorktree,
 }: SessionListProps) {
   useTimestampRefresh()
   const isSafari = useMemo(() => {
@@ -524,6 +527,7 @@ export default function SessionList({
             historyLimit={historyLimit}
             onShowMoreHistory={() => setHistoryLimit((prev) => prev + 20)}
             onNewSession={onNewSession}
+            onNewSessionInWorktree={onNewSessionInWorktree}
             selectedSessionId={selectedSessionId}
             selectedHibernatingSessionId={selectedHibernatingSessionId}
             editingSessionId={editingSessionId}

@@ -949,6 +949,19 @@ export default function App() {
     setIsModalOpen(true)
     return true
   }
+
+  // Contextual new-session from a worktree header: preselect the worktree
+  // root; command presets, names, and hosts flow through the normal form.
+  const handleNewSessionInWorktree = useCallback(
+    (worktreePath: string) => {
+      if (!settingsHydrated) return
+      setNewSessionInitialHost(undefined)
+      setNewSessionInitialPath(worktreePath)
+      setNewSessionInitialCommand(undefined)
+      setIsModalOpen(true)
+    },
+    [settingsHydrated]
+  )
   const handleOpenSettings = () => setIsSettingsOpen(true)
 
   const handleCreateSession = (
@@ -1038,6 +1051,7 @@ export default function App() {
           error={connectionError || serverError}
           workspaceView={workspaceSnapshot ? workspaceView : null}
           onToggleWorktreeCollapse={toggleWorktreeCollapsed}
+          onNewSessionInWorktree={handleNewSessionInWorktree}
         />
       </div>
 
@@ -1072,6 +1086,7 @@ export default function App() {
         error={connectionError || serverError}
         workspaceView={workspaceSnapshot ? workspaceView : null}
         onToggleWorktreeCollapse={toggleWorktreeCollapsed}
+        onNewSessionInWorktree={handleNewSessionInWorktree}
       />
 
       <NewSessionModal

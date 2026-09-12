@@ -58,6 +58,8 @@ interface TerminalProps {
   /** Grouped workspace view forwarded to the mobile session drawer. */
   workspaceView?: WorkspaceView | null
   onToggleWorktreeCollapse?: (worktreeId: string) => void
+  /** Contextual new-session action on worktree group headers (mobile drawer). */
+  onNewSessionInWorktree?: (worktreePath: string) => void
 }
 
 type IOSResumeInputState = 'idle' | 'focused' | 'interrupted' | 'armed'
@@ -120,6 +122,7 @@ export default function Terminal({
   error = null,
   workspaceView = null,
   onToggleWorktreeCollapse,
+  onNewSessionInWorktree,
 }: TerminalProps) {
   void _onClose // Keep for interface compatibility
   const theme = useThemeStore((state) => state.theme)
@@ -1685,6 +1688,7 @@ export default function Terminal({
           error={error}
           workspaceView={workspaceView}
           onToggleWorktreeCollapse={onToggleWorktreeCollapse}
+          onNewSessionInWorktree={onNewSessionInWorktree}
         />
       )}
 

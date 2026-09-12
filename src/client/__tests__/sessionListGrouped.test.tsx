@@ -441,6 +441,75 @@ describe('SessionList grouped rendering', () => {
     act(() => renderer.unmount())
   })
 
+  test('worktree header new-session action reports the exact worktree root', () => {
+    const sessions: Session[] = [
+      baseSession,
+      { ...baseSession, id: 'live-plain', projectPath: '/plain/project' },
+      {
+        ...baseSession,
+        id: 'live-remote',
+        projectPath: '/remote/path',
+        remote: true,
+        host: 'box.example',
+      },
+    ]
+    const view = makeView(sessions, [], [])
+    const requestedPaths: string[] = []
+
+    const { renderer } = renderList({
+      sessions,
+      workspaceView: view,
+      onNewSessionInWorktree: (worktreePath) => requestedPaths.push(worktreePath),
+    })
+
+    // One action per worktree group (including empty worktrees), firing with
+    // the group's exact root path.
+    const buttons = renderer.root.findAllByProps({ 'data-testid': 'worktree-new-session' })
+    expect(buttons).toHaveLength(3)
+    act(() => {
+      buttons.forEach((button) => button.props.onClick())
+    })
+    expect(requestedPaths).toEqual(['/repo/main', '/repo/feat', '/repo/empty'])
+
+    // The accessible label names the repository and the exact path.
+    expect(buttons[0].props['aria-label']).toBe('New session in repo worktree /repo/main')
+
+    // Fallback sections never receive the contextual action.
+    const ungrouped = renderer.root.findByProps({ 'data-testid': 'local-ungrouped-section' })
+    expect(ungrouped.findAllByProps({ 'data-testid': 'worktree-new-session' })).toHaveLength(0)
+    const remote = renderer.root.findByProps({ 'data-testid': 'remote-section' })
+    expect(remote.findAllByProps({ 'data-testid': 'worktree-new-session' })).toHaveLength(0)
+
+    // Without the callback prop, no action buttons render at all.
+    const { renderer: plain } = renderList({ sessions: [baseSession], workspaceView: view })
+    expect(plain.root.findAllByProps({ 'data-testid': 'worktree-new-session' })).toHaveLength(0)
+
+    act(() => renderer.unmount())
+    act(() => plain.unmount())
+  })
+
+  test('collapsed worktree keeps its header new-session action', () => {
+    const collapsed = ['/repo/.git::/repo/main']
+    const view = makeView([baseSession], [], [], { collapsed })
+    const requestedPaths: string[] = []
+
+    const { renderer } = renderList({
+      sessions: [baseSession],
+      workspaceView: view,
+      onNewSessionInWorktree: (worktreePath) => requestedPaths.push(worktreePath),
+    })
+
+    const mainGroup = renderer.root.findAllByProps({ 'data-testid': 'worktree-group' })[0]
+    expect(mainGroup.props['data-collapsed']).toBe('true')
+    const button = mainGroup.findByProps({ 'data-testid': 'worktree-new-session' })
+    act(() => {
+      button.props.onClick()
+    })
+    expect(requestedPaths).toEqual(['/repo/main'])
+
+    act(() => renderer.unmount())
+  })
+
   test('falls back to the flat list when no workspace snapshot exists', () => {
     const { renderer } = renderList({ sessions: [baseSession], workspaceView: null })
 

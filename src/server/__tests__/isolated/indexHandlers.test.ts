@@ -1016,6 +1016,57 @@ describe('server message handlers', () => {
     })
   })
 
+  test('session-create at a worktree root passes the exact path and options through', async () => {
+    // Task 7.2/7.3 contract: the contextual worktree action opens the normal
+    // session form, so the handler must forward the exact project path plus
+    // the existing session options (name, command) to createWindow.
+    const createdSession = { ...baseSession, id: 'created-wt', name: 'worktree-agent' }
+    const createCalls: Array<{ projectPath: string; name?: string; command?: string }> = []
+    sessionManagerState.createWindow = (projectPath: string, name?: string, command?: string) => {
+      createCalls.push({ projectPath, name, command })
+      return createdSession
+    }
+    sessionManagerState.listWindows = () => [createdSession]
+
+    const { serveOptions } = await loadIndex()
+    const { ws, sent } = createWs()
+    const websocket = serveOptions.websocket
+    if (!websocket) {
+      throw new Error('WebSocket handlers not configured')
+    }
+
+    websocket.message?.(
+      ws as never,
+      JSON.stringify({
+        type: 'session-create',
+        projectPath: '/repo/worktrees/feat-x',
+        name: 'feat-x agent',
+        command: 'claude --resume abc',
+      })
+    )
+
+    expect(createCalls).toEqual([
+      {
+        projectPath: '/repo/worktrees/feat-x',
+        name: 'feat-x agent',
+        command: 'claude --resume abc',
+      },
+    ])
+    expect(
+      sent.find((message) => message.type === 'session-created')
+    ).toBeTruthy()
+
+    // Omitted optional fields stay undefined (no fabrication).
+    websocket.message?.(
+      ws as never,
+      JSON.stringify({
+        type: 'session-create',
+        projectPath: '/repo/main',
+      })
+    )
+    expect(createCalls[1]).toEqual({ projectPath: '/repo/main', name: undefined, command: undefined })
+  })
+
   test('returns errors for kill and rename when sessions are missing', async () => {
     const externalSession = {
       ...baseSession,

@@ -24,6 +24,7 @@ import {
 } from '@dnd-kit/sortable'
 import ChevronDownIcon from '@untitledui-icons/react/line/esm/ChevronDownIcon'
 import ChevronRightIcon from '@untitledui-icons/react/line/esm/ChevronRightIcon'
+import PlusIcon from '@untitledui-icons/react/line/esm/PlusIcon'
 import type { AgentSession, Session } from '@shared/types'
 import type { GroupedSessionEntry, WorkspaceView } from '../utils/workspaceView'
 import WorktreeGroupHeader from './WorktreeGroupHeader'
@@ -82,6 +83,8 @@ interface WorkspaceGroupedListProps extends GroupedRowContext {
   historyLimit: number
   onShowMoreHistory: () => void
   onNewSession?: () => void
+  /** Contextual new-session action on worktree headers. */
+  onNewSessionInWorktree?: (worktreePath: string) => void
 }
 
 export default function WorkspaceGroupedList(props: WorkspaceGroupedListProps) {
@@ -98,6 +101,7 @@ export default function WorkspaceGroupedList(props: WorkspaceGroupedListProps) {
     historyLimit,
     onShowMoreHistory,
     onNewSession,
+    onNewSessionInWorktree,
     ...rowContext
   } = props
 
@@ -150,7 +154,24 @@ export default function WorkspaceGroupedList(props: WorkspaceGroupedListProps) {
           data-worktree-id={group.worktreeId}
           data-collapsed={group.collapsed ? 'true' : 'false'}
         >
-          <WorktreeGroupHeader group={group} onToggleCollapse={onToggleCollapse} />
+          <WorktreeGroupHeader
+            group={group}
+            onToggleCollapse={onToggleCollapse}
+            actions={
+              onNewSessionInWorktree ? (
+                <button
+                  type="button"
+                  className="flex shrink-0 items-center justify-center rounded p-1 text-muted hover:bg-hover hover:text-accent"
+                  title={`New session in ${group.worktreePath}`}
+                  aria-label={`New session in ${group.repositoryName} worktree ${group.worktreePath}`}
+                  data-testid="worktree-new-session"
+                  onClick={() => onNewSessionInWorktree(group.worktreePath)}
+                >
+                  <PlusIcon className="h-3.5 w-3.5" />
+                </button>
+              ) : undefined
+            }
+          />
           {!group.collapsed && (
             <>
               <GroupedLiveRows entries={group.entries} ctx={rowContext} remountKey={remountKey} />
