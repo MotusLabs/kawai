@@ -61,6 +61,8 @@ interface SessionListProps {
   onToggleWorktreeCollapse?: (worktreeId: string) => void
   /** Contextual new-session action on worktree group headers. */
   onNewSessionInWorktree?: (worktreePath: string) => void
+  /** Opens the repository branch browser from a worktree header. */
+  onBrowseBranches?: (repositoryId: string) => void
 }
 
 function useTimestampRefresh() {
@@ -91,6 +93,7 @@ export default function SessionList({
   workspaceView = null,
   onToggleWorktreeCollapse,
   onNewSessionInWorktree,
+  onBrowseBranches,
 }: SessionListProps) {
   useTimestampRefresh()
   const isSafari = useMemo(() => {
@@ -528,6 +531,7 @@ export default function SessionList({
             onShowMoreHistory={() => setHistoryLimit((prev) => prev + 20)}
             onNewSession={onNewSession}
             onNewSessionInWorktree={onNewSessionInWorktree}
+            onBrowseBranches={onBrowseBranches}
             selectedSessionId={selectedSessionId}
             selectedHibernatingSessionId={selectedHibernatingSessionId}
             editingSessionId={editingSessionId}

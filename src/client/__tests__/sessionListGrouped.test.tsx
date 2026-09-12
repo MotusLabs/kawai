@@ -510,6 +510,32 @@ describe('SessionList grouped rendering', () => {
     act(() => renderer.unmount())
   })
 
+  test('worktree header branch-browser action reports the repository id', () => {
+    const view = makeView([baseSession], [], [])
+    const browsedRepositoryIds: string[] = []
+
+    const { renderer } = renderList({
+      sessions: [baseSession],
+      workspaceView: view,
+      onBrowseBranches: (repositoryId) => browsedRepositoryIds.push(repositoryId),
+    })
+
+    const buttons = renderer.root.findAllByProps({ 'data-testid': 'worktree-branch-browser' })
+    expect(buttons).toHaveLength(3)
+    act(() => {
+      buttons[0].props.onClick()
+    })
+    expect(browsedRepositoryIds).toEqual(['/repo/.git'])
+    expect(buttons[0].props['aria-label']).toBe('Browse branches in repo')
+
+    // Without the callback prop, no browse buttons render.
+    const { renderer: plain } = renderList({ sessions: [baseSession], workspaceView: view })
+    expect(plain.root.findAllByProps({ 'data-testid': 'worktree-branch-browser' })).toHaveLength(0)
+
+    act(() => renderer.unmount())
+    act(() => plain.unmount())
+  })
+
   test('falls back to the flat list when no workspace snapshot exists', () => {
     const { renderer } = renderList({ sessions: [baseSession], workspaceView: null })
 

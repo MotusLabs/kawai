@@ -60,6 +60,8 @@ interface TerminalProps {
   onToggleWorktreeCollapse?: (worktreeId: string) => void
   /** Contextual new-session action on worktree group headers (mobile drawer). */
   onNewSessionInWorktree?: (worktreePath: string) => void
+  /** Opens the repository branch browser (mobile drawer). */
+  onBrowseBranches?: (repositoryId: string) => void
 }
 
 type IOSResumeInputState = 'idle' | 'focused' | 'interrupted' | 'armed'
@@ -123,6 +125,7 @@ export default function Terminal({
   workspaceView = null,
   onToggleWorktreeCollapse,
   onNewSessionInWorktree,
+  onBrowseBranches,
 }: TerminalProps) {
   void _onClose // Keep for interface compatibility
   const theme = useThemeStore((state) => state.theme)
@@ -1689,6 +1692,7 @@ export default function Terminal({
           workspaceView={workspaceView}
           onToggleWorktreeCollapse={onToggleWorktreeCollapse}
           onNewSessionInWorktree={onNewSessionInWorktree}
+          onBrowseBranches={onBrowseBranches}
         />
       )}
 

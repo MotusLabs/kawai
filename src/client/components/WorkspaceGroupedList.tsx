@@ -24,6 +24,7 @@ import {
 } from '@dnd-kit/sortable'
 import ChevronDownIcon from '@untitledui-icons/react/line/esm/ChevronDownIcon'
 import ChevronRightIcon from '@untitledui-icons/react/line/esm/ChevronRightIcon'
+import GitBranch01Icon from '@untitledui-icons/react/line/esm/GitBranch01Icon'
 import PlusIcon from '@untitledui-icons/react/line/esm/PlusIcon'
 import type { AgentSession, Session } from '@shared/types'
 import type { GroupedSessionEntry, WorkspaceView } from '../utils/workspaceView'
@@ -85,6 +86,8 @@ interface WorkspaceGroupedListProps extends GroupedRowContext {
   onNewSession?: () => void
   /** Contextual new-session action on worktree headers. */
   onNewSessionInWorktree?: (worktreePath: string) => void
+  /** Opens the repository branch browser from a worktree header. */
+  onBrowseBranches?: (repositoryId: string) => void
 }
 
 export default function WorkspaceGroupedList(props: WorkspaceGroupedListProps) {
@@ -102,6 +105,7 @@ export default function WorkspaceGroupedList(props: WorkspaceGroupedListProps) {
     onShowMoreHistory,
     onNewSession,
     onNewSessionInWorktree,
+    onBrowseBranches,
     ...rowContext
   } = props
 
@@ -158,17 +162,33 @@ export default function WorkspaceGroupedList(props: WorkspaceGroupedListProps) {
             group={group}
             onToggleCollapse={onToggleCollapse}
             actions={
-              onNewSessionInWorktree ? (
-                <button
-                  type="button"
-                  className="flex shrink-0 items-center justify-center rounded p-1 text-muted hover:bg-hover hover:text-accent"
-                  title={`New session in ${group.worktreePath}`}
-                  aria-label={`New session in ${group.repositoryName} worktree ${group.worktreePath}`}
-                  data-testid="worktree-new-session"
-                  onClick={() => onNewSessionInWorktree(group.worktreePath)}
-                >
-                  <PlusIcon className="h-3.5 w-3.5" />
-                </button>
+              onNewSessionInWorktree || onBrowseBranches ? (
+                <div className="flex shrink-0 items-center gap-0.5">
+                  {onBrowseBranches && (
+                    <button
+                      type="button"
+                      className="flex shrink-0 items-center justify-center rounded p-1 text-muted hover:bg-hover hover:text-accent"
+                      title={`Browse branches in ${group.repositoryName}`}
+                      aria-label={`Browse branches in ${group.repositoryName}`}
+                      data-testid="worktree-branch-browser"
+                      onClick={() => onBrowseBranches(group.repositoryId)}
+                    >
+                      <GitBranch01Icon className="h-3.5 w-3.5" />
+                    </button>
+                  )}
+                  {onNewSessionInWorktree && (
+                    <button
+                      type="button"
+                      className="flex shrink-0 items-center justify-center rounded p-1 text-muted hover:bg-hover hover:text-accent"
+                      title={`New session in ${group.worktreePath}`}
+                      aria-label={`New session in ${group.repositoryName} worktree ${group.worktreePath}`}
+                      data-testid="worktree-new-session"
+                      onClick={() => onNewSessionInWorktree(group.worktreePath)}
+                    >
+                      <PlusIcon className="h-3.5 w-3.5" />
+                    </button>
+                  )}
+                </div>
               ) : undefined
             }
           />

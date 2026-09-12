@@ -32,6 +32,8 @@ interface SessionDrawerProps {
   onToggleWorktreeCollapse?: (worktreeId: string) => void
   /** Contextual new-session action on worktree group headers. */
   onNewSessionInWorktree?: (worktreePath: string) => void
+  /** Opens the repository branch browser from a worktree header. */
+  onBrowseBranches?: (repositoryId: string) => void
 }
 
 export default function SessionDrawer({
@@ -54,6 +56,7 @@ export default function SessionDrawer({
   workspaceView = null,
   onToggleWorktreeCollapse,
   onNewSessionInWorktree,
+  onBrowseBranches,
 }: SessionDrawerProps) {
   const prefersReducedMotion = useReducedMotion()
   const drawerRef = useRef<HTMLDivElement>(null)
@@ -187,6 +190,14 @@ export default function SessionDrawer({
             onNewSessionInWorktree
               ? (worktreePath) => {
                   onNewSessionInWorktree(worktreePath)
+                  onClose()
+                }
+              : undefined
+          }
+          onBrowseBranches={
+            onBrowseBranches
+              ? (repositoryId) => {
+                  onBrowseBranches(repositoryId)
                   onClose()
                 }
               : undefined

@@ -4,6 +4,7 @@ import Header from './components/Header'
 import SessionList from './components/SessionList'
 import Terminal from './components/Terminal'
 import NewSessionModal from './components/NewSessionModal'
+import BranchBrowserModal from './components/BranchBrowserModal'
 import SettingsModal from './components/SettingsModal'
 import { ToastViewport } from './components/Toast'
 import { useSessionStore } from './stores/sessionStore'
@@ -52,6 +53,7 @@ export default function App() {
   const [newSessionInitialPath, setNewSessionInitialPath] = useState<string | undefined>(undefined)
   const [newSessionInitialCommand, setNewSessionInitialCommand] = useState<string | undefined>(undefined)
   const [isSettingsOpen, setIsSettingsOpen] = useState(false)
+  const [branchBrowserRepositoryId, setBranchBrowserRepositoryId] = useState<string | null>(null)
   const [serverError, setServerError] = useState<string | null>(null)
   const [serverInfo, setServerInfo] = useState<ServerInfo | null>(null)
   const [pendingHibernatingSession, setPendingHibernatingSession] =
@@ -600,6 +602,16 @@ export default function App() {
       }))
     )
   }, [workspaceSnapshot])
+  // Repository whose branches the branch browser is showing, when open.
+  const branchBrowserRepository = useMemo(
+    () =>
+      branchBrowserRepositoryId === null
+        ? null
+        : workspaceSnapshot?.repositories.find(
+            (repository) => repository.id === branchBrowserRepositoryId
+          ) ?? null,
+    [branchBrowserRepositoryId, workspaceSnapshot]
+  )
   const workspaceView = useMemo(
     () =>
       buildWorkspaceView(
@@ -962,6 +974,17 @@ export default function App() {
     },
     [settingsHydrated]
   )
+  // Repository branch browser entry from a worktree header (§8.1).
+  const handleBrowseBranches = useCallback((repositoryId: string) => {
+    setBranchBrowserRepositoryId(repositoryId)
+  }, [])
+  const handleCloseBranchBrowser = useCallback(() => {
+    setBranchBrowserRepositoryId(null)
+  }, [])
+  const handleCreateWorktreeFromBranch = useCallback(() => {
+    // Replaced by the create-worktree form in §8.2.
+    setBranchBrowserRepositoryId(null)
+  }, [])
   const handleOpenSettings = () => setIsSettingsOpen(true)
 
   const handleCreateSession = (
@@ -1052,6 +1075,7 @@ export default function App() {
           workspaceView={workspaceSnapshot ? workspaceView : null}
           onToggleWorktreeCollapse={toggleWorktreeCollapsed}
           onNewSessionInWorktree={handleNewSessionInWorktree}
+          onBrowseBranches={handleBrowseBranches}
         />
       </div>
 
@@ -1087,6 +1111,7 @@ export default function App() {
         workspaceView={workspaceSnapshot ? workspaceView : null}
         onToggleWorktreeCollapse={toggleWorktreeCollapsed}
         onNewSessionInWorktree={handleNewSessionInWorktree}
+        onBrowseBranches={handleBrowseBranches}
       />
 
       <NewSessionModal
@@ -1110,6 +1135,14 @@ export default function App() {
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
       />
+
+      {branchBrowserRepository && (
+        <BranchBrowserModal
+          repository={branchBrowserRepository}
+          onClose={handleCloseBranchBrowser}
+          onCreateWorktree={handleCreateWorktreeFromBranch}
+        />
+      )}
 
       <ToastViewport />
     </div>
