@@ -586,6 +586,20 @@ export default function App() {
   const workspaceSnapshot = useWorkspaceStore((state) => state.snapshot)
   const collapsedWorktreeIds = useWorkspaceStore((state) => state.collapsedWorktreeIds)
   const toggleWorktreeCollapsed = useWorkspaceStore((state) => state.toggleWorktreeCollapsed)
+  // Compact worktree options for the new-session picker.
+  const worktreeOptions = useMemo(() => {
+    if (!workspaceSnapshot) return []
+    return workspaceSnapshot.repositories.flatMap((repository) =>
+      repository.worktrees.map((worktree) => ({
+        worktreeId: worktree.id,
+        repositoryName: repository.name,
+        path: worktree.path,
+        ...(worktree.branch !== undefined ? { branch: worktree.branch } : {}),
+        detached: worktree.detached,
+        headRevision: worktree.headRevision,
+      }))
+    )
+  }, [workspaceSnapshot])
   const workspaceView = useMemo(
     () =>
       buildWorkspaceView(
@@ -1074,6 +1088,7 @@ export default function App() {
         initialHost={newSessionInitialHost}
         initialPath={newSessionInitialPath}
         initialCommand={newSessionInitialCommand}
+        worktrees={worktreeOptions}
       />
 
       <SettingsModal

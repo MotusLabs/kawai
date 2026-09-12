@@ -201,4 +201,141 @@ describe('NewSessionModal component', () => {
       renderer.unmount()
     })
   })
+
+  test('discovered-worktree picker fills the path and submits the worktree root', () => {
+    setupDom()
+
+    const created: Array<{ path: string; host?: string }> = []
+    let renderer!: TestRenderer.ReactTestRenderer
+
+    act(() => {
+      renderer = TestRenderer.create(
+        <NewSessionModal
+          isOpen
+          onClose={() => {}}
+          onCreate={(path, _name, _command, host) => {
+            created.push({ path, host })
+          }}
+          defaultProjectDir="/base"
+          commandPresets={DEFAULT_PRESETS}
+          defaultPresetId="claude"
+          worktrees={[
+            {
+              worktreeId: '/repo/.git::/repo',
+              repositoryName: 'repo',
+              path: '/repo',
+              branch: 'main',
+              detached: false,
+              headRevision: 'aaaaaaa1',
+            },
+            {
+              worktreeId: '/repo/.git::/repo-feat',
+              repositoryName: 'repo',
+              path: '/repo-feat',
+              detached: true,
+              headRevision: 'bbbbbbb2',
+            },
+          ]}
+        />
+      )
+    })
+
+    const picker = renderer.root.findByProps({ 'data-testid': 'worktree-picker' })
+    const options = picker.findAllByType('option')
+    expect(options.map((option) => option.props.value)).toEqual([
+      '',
+      '/repo/.git::/repo',
+      '/repo/.git::/repo-feat',
+    ])
+    expect(JSON.stringify(renderer.toJSON())).toContain('repo · main')
+    expect(JSON.stringify(renderer.toJSON())).toContain('@bbbbbbb')
+
+    act(() => {
+      picker.props.onChange({ target: { value: '/repo/.git::/repo-feat' } })
+    })
+
+    // Project path input (index 1) reflects the picked worktree root.
+    const projectInput = renderer.root.findAllByType('input')[1]
+    expect(projectInput.props.value).toBe('/repo-feat')
+
+    // The picker keeps showing the matching worktree.
+    expect(renderer.root.findByProps({ 'data-testid': 'worktree-picker' }).props.value).toBe(
+      '/repo/.git::/repo-feat'
+    )
+
+    act(() => {
+      renderer.root.findByType('form').props.onSubmit({ preventDefault: () => {} })
+    })
+    expect(created).toEqual([{ path: '/repo-feat', host: undefined }])
+
+    act(() => {
+      renderer.unmount()
+    })
+  })
+
+  test('manual path edits reset the picker and the picker stays hidden without worktrees', () => {
+    setupDom()
+
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => {
+      renderer = TestRenderer.create(
+        <NewSessionModal
+          isOpen
+          onClose={() => {}}
+          onCreate={() => {}}
+          defaultProjectDir="/base"
+          commandPresets={DEFAULT_PRESETS}
+          defaultPresetId="claude"
+          lastProjectPath="/repo"
+          worktrees={[
+            {
+              worktreeId: '/repo/.git::/repo',
+              repositoryName: 'repo',
+              path: '/repo',
+              branch: 'main',
+              detached: false,
+              headRevision: 'aaaaaaa1',
+            },
+          ]}
+        />
+      )
+    })
+
+    // lastProjectPath matches a discovered worktree: the picker shows it.
+    const picker = renderer.root.findByProps({ 'data-testid': 'worktree-picker' })
+    expect(picker.props.value).toBe('/repo/.git::/repo')
+
+    // Editing the path manually falls back to the placeholder.
+    const projectInput = renderer.root.findAllByType('input')[1]
+    act(() => {
+      projectInput.props.onChange({ target: { value: '/somewhere/else' } })
+    })
+    expect(renderer.root.findByProps({ 'data-testid': 'worktree-picker' }).props.value).toBe('')
+
+    act(() => {
+      renderer.unmount()
+    })
+
+    // No discovered worktrees: no picker at all, manual entry untouched.
+    act(() => {
+      renderer = TestRenderer.create(
+        <NewSessionModal
+          isOpen
+          onClose={() => {}}
+          onCreate={() => {}}
+          defaultProjectDir="/base"
+          commandPresets={DEFAULT_PRESETS}
+          defaultPresetId="claude"
+        />
+      )
+    })
+    expect(
+      renderer.root.findAllByProps({ 'data-testid': 'worktree-picker' })
+    ).toHaveLength(0)
+    expect(renderer.root.findAllByType('input')).toHaveLength(3)
+
+    act(() => {
+      renderer.unmount()
+    })
+  })
 })

@@ -2,7 +2,27 @@ import { useEffect, useRef, useState } from 'react'
 import { type CommandPreset, getFullCommand } from '../stores/settingsStore'
 import { DirectoryBrowser } from './DirectoryBrowser'
 import AgentIcon from './AgentIcon'
+import { shortRevision } from '@shared/workspace'
+import { getPathLeaf } from '../utils/sessionLabel'
 import type { HostStatus } from '@shared/types'
+
+/** A discovered local worktree offered by the picker. */
+export interface NewSessionWorktreeOption {
+  worktreeId: string
+  repositoryName: string
+  path: string
+  branch?: string
+  detached: boolean
+  headRevision: string
+}
+
+function worktreeOptionLabel(worktree: NewSessionWorktreeOption): string {
+  const revision = worktree.detached || !worktree.branch
+    ? `@${shortRevision(worktree.headRevision)}`
+    : worktree.branch
+  const leaf = getPathLeaf(worktree.path)
+  return `${worktree.repositoryName} · ${revision}${leaf ? ` (${leaf})` : ''}`
+}
 
 interface NewSessionModalProps {
   isOpen: boolean
@@ -15,6 +35,8 @@ interface NewSessionModalProps {
   activeProjectPath?: string
   remoteHosts?: HostStatus[]
   remoteAllowControl?: boolean
+  /** Discovered local worktrees for the compact picker. */
+  worktrees?: NewSessionWorktreeOption[]
   /** Pre-fill host for duplicate of remote session */
   initialHost?: string
   /** Pre-fill path (e.g. when duplicating an existing session) */
@@ -34,6 +56,7 @@ export default function NewSessionModal({
   activeProjectPath,
   remoteHosts = [],
   remoteAllowControl = false,
+  worktrees = [],
   initialHost,
   initialPath,
   initialCommand,
@@ -237,6 +260,13 @@ export default function NewSessionModal({
 
   const browserInitialPath = projectPath.trim() || '~'
 
+  // The picker mirrors the path input: it shows the worktree whose path the
+  // input currently holds (e.g. preselected from a worktree header action)
+  // and falls back to the placeholder for manual or edited paths.
+  const showWorktreePicker = worktrees.length > 0 && !isRemoteHost
+  const selectedWorktreeId =
+    worktrees.find((worktree) => worktree.path === projectPath.trim())?.worktreeId ?? ''
+
   return (
     <div
       role="dialog"
@@ -402,6 +432,27 @@ export default function NewSessionModal({
                 </button>
               )}
             </div>
+            {showWorktreePicker && (
+              <select
+                data-testid="worktree-picker"
+                aria-label="Discovered worktrees"
+                className="input mt-2 text-xs"
+                value={selectedWorktreeId}
+                onChange={(event) => {
+                  const worktree = worktrees.find(
+                    (option) => option.worktreeId === event.target.value
+                  )
+                  if (worktree) setProjectPath(worktree.path)
+                }}
+              >
+                <option value="">Discovered worktrees…</option>
+                {worktrees.map((worktree) => (
+                  <option key={worktree.worktreeId} value={worktree.worktreeId}>
+                    {worktreeOptionLabel(worktree)}
+                  </option>
+                ))}
+              </select>
+            )}
           </div>
           <div>
             <label className="mb-1.5 block text-xs text-secondary">
