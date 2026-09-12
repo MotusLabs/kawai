@@ -1,4 +1,4 @@
-// E2E (§8.4): create a worktree from the branch browser, watch its group
+// E2E (§8.4): create a worktree from the branch browser, watch its section
 // appear in the navigator, and launch a session at its root through the
 // normal session form. The pane's working directory proves the session really
 // started inside the new worktree.
@@ -43,10 +43,10 @@ test('branch browser creates a worktree and launches a session at its root', asy
   await page.goto('/')
 
   // Discovery seeds from this checkout's live session.
-  const header = page.getByTestId('worktree-group-header').first()
+  const header = page.getByTestId('section-header').first()
   await expect(header).toBeVisible({ timeout: SNAPSHOT_TIMEOUT })
 
-  // Open the repository branch browser from the worktree header.
+  // Open the repository branch browser from a worktree-section header.
   await page.getByTestId('worktree-branch-browser').first().click()
   const browser = page.getByTestId('branch-browser')
   await expect(browser).toBeVisible()
@@ -79,12 +79,15 @@ test('branch browser creates a worktree and launches a session at its root', asy
   await modal.locator('input.font-mono').fill('tail -f /dev/null')
   await modal.getByRole('button', { name: 'Create' }).click()
 
-  // The new worktree appears as its own group in the navigator (the section,
-  // not the header, carries the sessions).
-  const group = page.locator(`section[data-worktree-id$="${destination}"]`)
+  // The new worktree appears as its own section in the navigator (the
+  // section, not the header, carries the sessions). Its branch name matches
+  // no registry change, so it renders as an unmatched worktree section.
+  const group = page.locator(
+    `section[data-testid="worktree-section"][data-section-key$="${destination}"]`
+  )
   await expect(group).toBeVisible({ timeout: SNAPSHOT_TIMEOUT })
 
-  // The launched session lives inside that group, at the worktree root.
+  // The launched session lives inside that section, at the worktree root.
   const card = group.getByTestId('session-card').first()
   await expect(card).toBeVisible({ timeout: SNAPSHOT_TIMEOUT })
   await card.click()
