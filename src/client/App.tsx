@@ -54,6 +54,7 @@ export default function App() {
   const [newSessionInitialHost, setNewSessionInitialHost] = useState<string | undefined>(undefined)
   const [newSessionInitialPath, setNewSessionInitialPath] = useState<string | undefined>(undefined)
   const [newSessionInitialCommand, setNewSessionInitialCommand] = useState<string | undefined>(undefined)
+  const [newSessionInitialAutoStartChange, setNewSessionInitialAutoStartChange] = useState<string | undefined>(undefined)
   const [isSettingsOpen, setIsSettingsOpen] = useState(false)
   const [branchBrowserRepositoryId, setBranchBrowserRepositoryId] = useState<string | null>(null)
   const [createWorktreeBranch, setCreateWorktreeBranch] = useState<WorkspaceBranch | null>(null)
@@ -317,11 +318,31 @@ export default function App() {
               setNewSessionInitialHost(undefined)
               setNewSessionInitialPath(result.path)
               setNewSessionInitialCommand(undefined)
+              setNewSessionInitialAutoStartChange(undefined)
               setIsModalOpen(true)
             }
           } else {
             // Every operation failure surfaces an actionable error.
             if (pending) pendingWorktreeLaunchRef.current = null
+            setServerError(result.error)
+            window.setTimeout(() => setServerError(null), 6000)
+          }
+        }
+        if (result.operation === 'create-change-worktree') {
+          const pending = pendingChangeLaunchRef.current
+          if (result.ok) {
+            // Seeded creation succeeded: open the session form prefilled with
+            // the new worktree root and the apply auto-start offered (§7.4).
+            if (pending && pending.repositoryId === result.repositoryId && pending.change === result.change) {
+              pendingChangeLaunchRef.current = null
+              setNewSessionInitialHost(undefined)
+              setNewSessionInitialPath(result.path)
+              setNewSessionInitialCommand(undefined)
+              setNewSessionInitialAutoStartChange(result.change)
+              setIsModalOpen(true)
+            }
+          } else {
+            if (pending) pendingChangeLaunchRef.current = null
             setServerError(result.error)
             window.setTimeout(() => setServerError(null), 6000)
           }
@@ -694,6 +715,8 @@ export default function App() {
   const pendingWakeSelectionRef = useRef<string | null>(null)
   /** Create-worktree request awaiting its result to open the session form. */
   const pendingWorktreeLaunchRef = useRef<{ repositoryId: string; branch: string } | null>(null)
+  /** Create-change-worktree request awaiting its result the same way. */
+  const pendingChangeLaunchRef = useRef<{ repositoryId: string; change: string } | null>(null)
   const lastConnectionEpochRef = useRef(connectionEpoch)
 
   const selectFirstVisibleTarget = useCallback(() => {
@@ -995,21 +1018,34 @@ export default function App() {
     setNewSessionInitialHost(undefined)
     setNewSessionInitialPath(undefined)
     setNewSessionInitialCommand(undefined)
+    setNewSessionInitialAutoStartChange(undefined)
     setIsModalOpen(true)
     return true
   }
 
-  // Contextual new-session from a worktree header: preselect the worktree
+  // Contextual new-session from a section header: preselect the worktree
   // root; command presets, names, and hosts flow through the normal form.
+  // From a change section the form also offers the apply auto-start.
   const handleNewSessionInWorktree = useCallback(
-    (worktreePath: string) => {
+    (worktreePath: string, changeName?: string) => {
       if (!settingsHydrated) return
       setNewSessionInitialHost(undefined)
       setNewSessionInitialPath(worktreePath)
       setNewSessionInitialCommand(undefined)
+      setNewSessionInitialAutoStartChange(changeName)
       setIsModalOpen(true)
     },
     [settingsHydrated]
+  )
+  // Seeded creation from a worktree-less change section (§7.2): the server
+  // creates `.worktrees/<change>`, and the result routing below opens the
+  // prefilled session form (with auto-start offered) on success.
+  const handleCreateChangeWorktree = useCallback(
+    (repositoryId: string, change: string) => {
+      pendingChangeLaunchRef.current = { repositoryId, change }
+      sendMessage({ type: 'create-change-worktree', repositoryId, change })
+    },
+    [sendMessage]
   )
   // Repository branch browser entry from a worktree header (§8.1).
   const handleBrowseBranches = useCallback((repositoryId: string) => {
@@ -1056,9 +1092,10 @@ export default function App() {
     projectPath: string,
     name?: string,
     command?: string,
-    host?: string
+    host?: string,
+    autoStartChange?: string
   ) => {
-    sendMessage({ type: 'session-create', projectPath, name, command, host })
+    sendMessage({ type: 'session-create', projectPath, name, command, host, autoStartChange })
     if (!host) setLastProjectPath(projectPath)
   }
 
@@ -1140,6 +1177,7 @@ export default function App() {
           workspaceView={workspaceSnapshot ? workspaceView : null}
           onToggleSectionCollapse={toggleSectionCollapsed}
           onNewSessionInWorktree={handleNewSessionInWorktree}
+          onCreateChangeWorktree={handleCreateChangeWorktree}
           onBrowseBranches={handleBrowseBranches}
         />
       </div>
@@ -1176,6 +1214,7 @@ export default function App() {
         workspaceView={workspaceSnapshot ? workspaceView : null}
         onToggleSectionCollapse={toggleSectionCollapsed}
         onNewSessionInWorktree={handleNewSessionInWorktree}
+        onCreateChangeWorktree={handleCreateChangeWorktree}
         onBrowseBranches={handleBrowseBranches}
       />
 
@@ -1193,6 +1232,7 @@ export default function App() {
         initialHost={newSessionInitialHost}
         initialPath={newSessionInitialPath}
         initialCommand={newSessionInitialCommand}
+        initialAutoStartChange={newSessionInitialAutoStartChange}
         worktrees={worktreeOptions}
       />
 

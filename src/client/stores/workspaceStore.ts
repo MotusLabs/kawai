@@ -34,7 +34,7 @@ interface WorkspaceState {
   toggleSectionCollapsed: (sectionKey: string) => void
   isSectionCollapsed: (sectionKey: string) => boolean
   recordOperationResult: (result: WorkspaceOperationResult) => void
-  clearOperationResult: (operation: 'create-worktree') => void
+  clearOperationResult: (operation: WorkspaceOperationResult['operation']) => void
 }
 
 export const useWorkspaceStore = create<WorkspaceState>()(

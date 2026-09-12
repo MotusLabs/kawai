@@ -339,3 +339,106 @@ describe('NewSessionModal component', () => {
     })
   })
 })
+
+describe('NewSessionModal auto-start option', () => {
+  test('offers auto-start checked by default with a change context and submits the change name', () => {
+    setupDom()
+
+    const created: Array<{ path: string; autoStartChange?: string }> = []
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => {
+      renderer = TestRenderer.create(
+        <NewSessionModal
+          isOpen
+          onClose={() => {}}
+          onCreate={(path, _name, _command, _host, autoStartChange) => {
+            created.push({ path, autoStartChange })
+          }}
+          defaultProjectDir="/base"
+          commandPresets={DEFAULT_PRESETS}
+          defaultPresetId="claude"
+          initialPath="/repo/.worktrees/add-auth"
+          initialAutoStartChange="add-auth"
+        />
+      )
+    })
+
+    const checkbox = renderer.root.findByProps({ 'data-testid': 'auto-start-apply' })
+    expect(checkbox.props.checked).toBe(true)
+    expect(JSON.stringify(renderer.toJSON())).toContain('add-auth')
+
+    act(() => {
+      renderer.root.findByType('form').props.onSubmit({ preventDefault: () => {} })
+    })
+    expect(created).toEqual([
+      { path: '/repo/.worktrees/add-auth', autoStartChange: 'add-auth' },
+    ])
+
+    act(() => {
+      renderer.unmount()
+    })
+  })
+
+  test('unchecking auto-start submits without the change name', () => {
+    setupDom()
+
+    const created: Array<{ path: string; autoStartChange?: string }> = []
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => {
+      renderer = TestRenderer.create(
+        <NewSessionModal
+          isOpen
+          onClose={() => {}}
+          onCreate={(path, _name, _command, _host, autoStartChange) => {
+            created.push({ path, autoStartChange })
+          }}
+          defaultProjectDir="/base"
+          commandPresets={DEFAULT_PRESETS}
+          defaultPresetId="claude"
+          initialAutoStartChange="add-auth"
+        />
+      )
+    })
+
+    const checkbox = renderer.root.findByProps({ 'data-testid': 'auto-start-apply' })
+    act(() => {
+      checkbox.props.onChange({ target: { checked: false } })
+    })
+    expect(checkbox.props.checked).toBe(false)
+
+    act(() => {
+      renderer.root.findByType('form').props.onSubmit({ preventDefault: () => {} })
+    })
+    expect(created).toEqual([{ path: '/base', autoStartChange: undefined }])
+
+    act(() => {
+      renderer.unmount()
+    })
+  })
+
+  test('no auto-start affordance without a change context', () => {
+    setupDom()
+
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => {
+      renderer = TestRenderer.create(
+        <NewSessionModal
+          isOpen
+          onClose={() => {}}
+          onCreate={() => {}}
+          defaultProjectDir="/base"
+          commandPresets={DEFAULT_PRESETS}
+          defaultPresetId="claude"
+        />
+      )
+    })
+
+    expect(renderer.root.findAllByProps({ 'data-testid': 'auto-start-apply' })).toHaveLength(0)
+    // The form keeps exactly its three inputs (command, path, name).
+    expect(renderer.root.findAllByType('input')).toHaveLength(3)
+
+    act(() => {
+      renderer.unmount()
+    })
+  })
+})

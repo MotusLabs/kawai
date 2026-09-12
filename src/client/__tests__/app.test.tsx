@@ -1949,4 +1949,177 @@ describe('App', () => {
 
     act(() => renderer.unmount())
   })
+
+  test('change-section creation seeds the worktree and opens the form with auto-start', () => {
+    useSessionStore.setState({ sessions: [baseSession], selectedSessionId: baseSession.id, hasLoaded: true })
+    sendCalls = []
+
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => {
+      renderer = TestRenderer.create(<App />)
+    })
+    activeRenderer = renderer
+
+    if (!subscribeListener) {
+      throw new Error('Expected websocket subscription')
+    }
+
+    act(() => {
+      subscribeListener?.({
+        type: 'workspace-snapshot',
+        snapshot: {
+          repositories: [
+            {
+              id: '/proj/.git',
+              name: 'proj',
+              commonDir: '/proj/.git',
+              stale: false,
+              worktrees: [
+                {
+                  id: '/proj/.git::/proj/main',
+                  repositoryId: '/proj/.git',
+                  path: '/proj/main',
+                  branch: 'main',
+                  headRevision: 'aaaaaaa',
+                  detached: false,
+                  isMain: true,
+                  dirty: false,
+                  openspec: { changes: [], stale: false },
+                },
+              ],
+              branches: [
+                { name: 'main', revision: 'aaaaaaa', assignedWorktreeId: '/proj/.git::/proj/main' },
+              ],
+              changeRegistry: [{ name: 'add-auth', source: 'registry' }],
+            },
+          ],
+          generatedAt: '2026-01-01T00:00:00.000Z',
+        },
+      })
+    })
+
+    // The worktree-less change section offers seeded creation.
+    const createButton = renderer.root.findByProps({
+      'data-testid': 'section-create-change-worktree',
+    })
+    act(() => {
+      createButton.props.onClick()
+    })
+    expect(sendCalls).toContainEqual({
+      type: 'create-change-worktree',
+      repositoryId: '/proj/.git',
+      change: 'add-auth',
+    })
+
+    // Success routes into the session form prefilled with the new worktree
+    // root and the auto-start option offered (§7.4).
+    act(() => {
+      subscribeListener?.({
+        type: 'workspace-operation-result',
+        result: {
+          operation: 'create-change-worktree',
+          ok: true,
+          repositoryId: '/proj/.git',
+          change: 'add-auth',
+          branch: 'add-auth',
+          path: '/proj/main/.worktrees/add-auth',
+          commit: 'ccccccc3',
+          gitignoreUpdated: true,
+        },
+      })
+    })
+    const modal = renderer.root.findAllByProps({ 'aria-labelledby': 'new-session-title' })
+    expect(modal).toHaveLength(1)
+    expect(
+      modal[0].findAllByProps({ className: 'input flex-1 text-sm' })[0].props.value
+    ).toBe('/proj/main/.worktrees/add-auth')
+    expect(modal[0].findByProps({ 'data-testid': 'auto-start-apply' }).props.checked).toBe(true)
+
+    // Submitting the form carries the auto-start change to the server.
+    sendCalls = []
+    act(() => {
+      modal[0].findByType('form').props.onSubmit({ preventDefault: () => {} })
+    })
+    expect(sendCalls).toContainEqual({
+      type: 'session-create',
+      projectPath: '/proj/main/.worktrees/add-auth',
+      command: 'claude',
+      autoStartChange: 'add-auth',
+    })
+
+    act(() => renderer.unmount())
+  })
+
+  test('change-section creation failure surfaces the actionable error', () => {
+    useSessionStore.setState({ sessions: [baseSession], selectedSessionId: baseSession.id, hasLoaded: true })
+    sendCalls = []
+
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => {
+      renderer = TestRenderer.create(<App />)
+    })
+    activeRenderer = renderer
+
+    if (!subscribeListener) {
+      throw new Error('Expected websocket subscription')
+    }
+
+    act(() => {
+      subscribeListener?.({
+        type: 'workspace-snapshot',
+        snapshot: {
+          repositories: [
+            {
+              id: '/proj/.git',
+              name: 'proj',
+              commonDir: '/proj/.git',
+              stale: false,
+              worktrees: [
+                {
+                  id: '/proj/.git::/proj/main',
+                  repositoryId: '/proj/.git',
+                  path: '/proj/main',
+                  branch: 'main',
+                  headRevision: 'aaaaaaa',
+                  detached: false,
+                  isMain: true,
+                  dirty: false,
+                  openspec: { changes: [], stale: false },
+                },
+              ],
+              branches: [],
+              changeRegistry: [{ name: 'add-auth', source: 'registry' }],
+            },
+          ],
+          generatedAt: '2026-01-01T00:00:00.000Z',
+        },
+      })
+    })
+
+    act(() => {
+      renderer.root.findByProps({ 'data-testid': 'section-create-change-worktree' }).props.onClick()
+    })
+
+    act(() => {
+      subscribeListener?.({
+        type: 'workspace-operation-result',
+        result: {
+          operation: 'create-change-worktree',
+          ok: false,
+          repositoryId: '/proj/.git',
+          change: 'add-auth',
+          code: 'ERR_CHANGE_MISSING_ARTIFACTS',
+          error: 'Change artifacts not found in the main worktree: /proj/main/openspec/changes/add-auth',
+        },
+      })
+    })
+
+    expect(
+      renderer.root.findAllByProps({ 'aria-labelledby': 'new-session-title' })
+    ).toHaveLength(0)
+    const sessionListProps = renderer.root.findAllByType(SessionList)[0]?.props
+    expect(sessionListProps.error).toContain('Change artifacts not found')
+
+    act(() => renderer.unmount())
+  })
 })

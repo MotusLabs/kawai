@@ -488,6 +488,93 @@ describe('SessionList grouped rendering', () => {
     act(() => plain.unmount())
   })
 
+  test('change section actions create missing worktrees and prefill existing ones', () => {
+    // One change with its convention worktree, one without; the worktree is
+    // absorbed into the change section, so it renders no plain section.
+    const changeSnapshot: WorkspaceSnapshot = {
+      repositories: [
+        {
+          ...snapshot.repositories[0],
+          worktrees: [
+            snapshot.repositories[0].worktrees[0],
+            {
+              id: '/repo/.git::/repo/.worktrees/add-auth',
+              repositoryId: '/repo/.git',
+              path: '/repo/.worktrees/add-auth',
+              branch: 'add-auth',
+              headRevision: 'ddddddd4',
+              detached: false,
+              isMain: false,
+              dirty: false,
+              openspec: { changes: [], stale: false },
+            },
+          ],
+          changeRegistry: [
+            {
+              name: 'add-auth',
+              source: 'worktree',
+              worktreeId: '/repo/.git::/repo/.worktrees/add-auth',
+              worktreePath: '/repo/.worktrees/add-auth',
+            },
+            { name: 'add-dark-mode', source: 'registry' },
+          ],
+        },
+      ],
+      generatedAt: '2024-01-01T00:00:00.000Z',
+    }
+    const view = buildWorkspaceView(changeSnapshot, [baseSession], [], [])
+    const newSessionRequests: Array<[string, string | undefined]> = []
+    const createRequests: Array<[string, string]> = []
+
+    const { renderer } = renderList({
+      sessions: [baseSession],
+      workspaceView: view,
+      onNewSessionInWorktree: (worktreePath, changeName) =>
+        newSessionRequests.push([worktreePath, changeName]),
+      onCreateChangeWorktree: (repositoryId, change) =>
+        createRequests.push([repositoryId, change]),
+    })
+
+    // A change section whose worktree exists opens the session form with the
+    // worktree root and the change name (apply auto-start context).
+    const addAuth = renderer.root.findByProps({
+      'data-section-key': '/repo/.git::change::add-auth',
+    })
+    const newSessionButton = addAuth.findByProps({ 'data-testid': 'section-new-session' })
+    act(() => {
+      newSessionButton.props.onClick()
+    })
+    expect(newSessionRequests).toEqual([['/repo/.worktrees/add-auth', 'add-auth']])
+
+    // A worktree-less change section offers seeded creation instead.
+    const darkMode = renderer.root.findByProps({
+      'data-section-key': '/repo/.git::change::add-dark-mode',
+    })
+    expect(darkMode.findAllByProps({ 'data-testid': 'section-new-session' })).toHaveLength(0)
+    const createButton = darkMode.findByProps({ 'data-testid': 'section-create-change-worktree' })
+    expect(createButton.props.disabled).toBeUndefined()
+    expect(createButton.props['aria-label']).toBe(
+      'Create worktree for change add-dark-mode in repo'
+    )
+    act(() => {
+      createButton.props.onClick()
+    })
+    expect(createRequests).toEqual([['/repo/.git', 'add-dark-mode']])
+
+    // Without the create callback, no creation affordance renders.
+    const { renderer: plain } = renderList({
+      sessions: [baseSession],
+      workspaceView: view,
+      onNewSessionInWorktree: () => {},
+    })
+    expect(
+      plain.root.findAllByProps({ 'data-testid': 'section-create-change-worktree' })
+    ).toHaveLength(0)
+
+    act(() => renderer.unmount())
+    act(() => plain.unmount())
+  })
+
   test('collapsed worktree keeps its header new-session action', () => {
     const collapsed = ['/repo/.git::/repo/main']
     const view = makeView([baseSession], [], [], { collapsed })

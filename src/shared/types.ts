@@ -171,7 +171,17 @@ export type ClientMessage =
   // so multi-line content isn't auto-submitted line-by-line by the pane's app.
   | { type: 'terminal-paste'; sessionId: string; data: string }
   | { type: 'terminal-resize'; sessionId: string; cols: number; rows: number }
-  | { type: 'session-create'; projectPath: string; name?: string; command?: string; host?: string }
+  | {
+      type: 'session-create'
+      projectPath: string
+      name?: string
+      command?: string
+      host?: string
+      // OpenSpec change name: the server holds the mapped apply command as
+      // the session's pending first prompt (agent-type mapped, injected once
+      // at the first idle status). Absent = no auto-start.
+      autoStartChange?: string
+    }
   | { type: 'session-kill'; sessionId: string; source?: SessionKillSource }
   | { type: 'session-rename'; sessionId: string; newName: string }
   | { type: 'session-refresh' }

@@ -58,8 +58,11 @@ interface TerminalProps {
   /** Grouped workspace view forwarded to the mobile session drawer. */
   workspaceView?: WorkspaceView | null
   onToggleSectionCollapse?: (sectionKey: string) => void
-  /** Contextual new-session action on worktree group headers (mobile drawer). */
-  onNewSessionInWorktree?: (worktreePath: string) => void
+  /** Contextual new-session action on section headers (mobile drawer);
+   *  change name present for change sections (apply auto-start context). */
+  onNewSessionInWorktree?: (worktreePath: string, changeName?: string) => void
+  /** Creates the convention worktree for a worktree-less change section. */
+  onCreateChangeWorktree?: (repositoryId: string, change: string) => void
   /** Opens the repository branch browser (mobile drawer). */
   onBrowseBranches?: (repositoryId: string) => void
 }
@@ -125,6 +128,7 @@ export default function Terminal({
   workspaceView = null,
   onToggleSectionCollapse,
   onNewSessionInWorktree,
+  onCreateChangeWorktree,
   onBrowseBranches,
 }: TerminalProps) {
   void _onClose // Keep for interface compatibility
@@ -1692,6 +1696,7 @@ export default function Terminal({
           workspaceView={workspaceView}
           onToggleSectionCollapse={onToggleSectionCollapse}
           onNewSessionInWorktree={onNewSessionInWorktree}
+          onCreateChangeWorktree={onCreateChangeWorktree}
           onBrowseBranches={onBrowseBranches}
         />
       )}

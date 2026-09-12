@@ -85,8 +85,17 @@ interface WorkspaceSectionListProps extends GroupedRowContext {
   historyLimit: number
   onShowMoreHistory: () => void
   onNewSession?: () => void
-  /** Contextual new-session action on section headers. */
-  onNewSessionInWorktree?: (worktreePath: string) => void
+  /**
+   * Contextual new-session action on section headers. The change name is
+   * present when the action was invoked on a change section whose worktree
+   * exists, so the session form can offer the change's apply auto-start.
+   */
+  onNewSessionInWorktree?: (worktreePath: string, changeName?: string) => void
+  /**
+   * Creates the convention worktree for a change section whose worktree does
+   * not exist yet (seeded creation); the session form opens after success.
+   */
+  onCreateChangeWorktree?: (repositoryId: string, change: string) => void
   /** Opens the repository branch browser from a worktree section header. */
   onBrowseBranches?: (repositoryId: string) => void
 }
@@ -106,6 +115,7 @@ export default function WorkspaceSectionList(props: WorkspaceSectionListProps) {
     onShowMoreHistory,
     onNewSession,
     onNewSessionInWorktree,
+    onCreateChangeWorktree,
     onBrowseBranches,
     ...rowContext
   } = props
@@ -177,7 +187,7 @@ export default function WorkspaceSectionList(props: WorkspaceSectionListProps) {
                   </button>
                 )}
                 {onNewSessionInWorktree &&
-                  (section.kind === 'worktree' || section.change.worktreePath ? (
+                  (section.kind === 'worktree' || section.change.worktreePath) && (
                     <button
                       type="button"
                       className="flex shrink-0 items-center justify-center rounded p-1 text-muted hover:bg-hover hover:text-accent"
@@ -196,26 +206,30 @@ export default function WorkspaceSectionList(props: WorkspaceSectionListProps) {
                         onNewSessionInWorktree(
                           section.kind === 'worktree'
                             ? section.worktreePath
-                            : section.change.worktreePath!
+                            : section.change.worktreePath!,
+                          section.kind === 'change' ? section.change.name : undefined
                         )
                       }
                     >
                       <PlusIcon className="h-3.5 w-3.5" />
                     </button>
-                  ) : (
-                    // Change sections without a worktree show the affordance
-                    // disabled until the seeded-creation flow lands (task 7).
+                  )}
+                {onCreateChangeWorktree &&
+                  section.kind === 'change' &&
+                  !section.change.worktreePath && (
                     <button
                       type="button"
-                      disabled
-                      className="flex shrink-0 cursor-not-allowed items-center justify-center rounded p-1 text-muted/40"
-                      title={`Create the ${section.change.name} worktree first (coming with the seeding flow)`}
-                      aria-label={`Create the ${section.change.name} worktree first`}
-                      data-testid="section-new-session-disabled"
+                      className="flex shrink-0 items-center justify-center rounded p-1 text-muted hover:bg-hover hover:text-accent"
+                      title={`Create the ${section.change.name} worktree (branch ${section.change.name}, seeded with the change artifacts) and start a session`}
+                      aria-label={`Create worktree for change ${section.change.name} in ${section.repositoryName}`}
+                      data-testid="section-create-change-worktree"
+                      onClick={() =>
+                        onCreateChangeWorktree(section.repositoryId, section.change.name)
+                      }
                     >
                       <PlusIcon className="h-3.5 w-3.5" />
                     </button>
-                  ))}
+                  )}
               </div>
             }
           />

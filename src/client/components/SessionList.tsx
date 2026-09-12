@@ -59,8 +59,11 @@ interface SessionListProps {
    */
   workspaceView?: WorkspaceView | null
   onToggleSectionCollapse?: (sectionKey: string) => void
-  /** Contextual new-session action on worktree group headers. */
-  onNewSessionInWorktree?: (worktreePath: string) => void
+  /** Contextual new-session action on section headers (change name present
+   *  for change sections so the form can offer apply auto-start). */
+  onNewSessionInWorktree?: (worktreePath: string, changeName?: string) => void
+  /** Creates the convention worktree for a worktree-less change section. */
+  onCreateChangeWorktree?: (repositoryId: string, change: string) => void
   /** Opens the repository branch browser from a worktree header. */
   onBrowseBranches?: (repositoryId: string) => void
 }
@@ -93,6 +96,7 @@ export default function SessionList({
   workspaceView = null,
   onToggleSectionCollapse,
   onNewSessionInWorktree,
+  onCreateChangeWorktree,
   onBrowseBranches,
 }: SessionListProps) {
   useTimestampRefresh()
@@ -531,6 +535,7 @@ export default function SessionList({
             onShowMoreHistory={() => setHistoryLimit((prev) => prev + 20)}
             onNewSession={onNewSession}
             onNewSessionInWorktree={onNewSessionInWorktree}
+            onCreateChangeWorktree={onCreateChangeWorktree}
             onBrowseBranches={onBrowseBranches}
             selectedSessionId={selectedSessionId}
             selectedHibernatingSessionId={selectedHibernatingSessionId}

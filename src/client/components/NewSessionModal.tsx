@@ -27,7 +27,13 @@ function worktreeOptionLabel(worktree: NewSessionWorktreeOption): string {
 interface NewSessionModalProps {
   isOpen: boolean
   onClose: () => void
-  onCreate: (projectPath: string, name?: string, command?: string, host?: string) => void
+  onCreate: (
+    projectPath: string,
+    name?: string,
+    command?: string,
+    host?: string,
+    autoStartChange?: string
+  ) => void
   defaultProjectDir: string
   commandPresets: CommandPreset[]
   defaultPresetId: string
@@ -43,6 +49,11 @@ interface NewSessionModalProps {
   initialPath?: string
   /** Pre-fill command (e.g. when duplicating an existing session) */
   initialCommand?: string
+  /**
+   * OpenSpec change name when opened from a change section: offers the
+   * apply auto-start option, checked by default.
+   */
+  initialAutoStartChange?: string
 }
 
 export default function NewSessionModal({
@@ -60,6 +71,7 @@ export default function NewSessionModal({
   initialHost,
   initialPath,
   initialCommand,
+  initialAutoStartChange,
 }: NewSessionModalProps) {
   const [projectPath, setProjectPath] = useState('')
   const [name, setName] = useState('')
@@ -67,6 +79,9 @@ export default function NewSessionModal({
   const [command, setCommand] = useState('')
   const [showBrowser, setShowBrowser] = useState(false)
   const [selectedHost, setSelectedHost] = useState('')
+  // Auto-start is offered only with a change context (a change section's
+  // action), checked by default when that context exists.
+  const [autoStart, setAutoStart] = useState(false)
   const formRef = useRef<HTMLFormElement>(null)
   const projectPathRef = useRef<HTMLInputElement>(null)
   const defaultButtonRef = useRef<HTMLButtonElement>(null)
@@ -81,6 +96,7 @@ export default function NewSessionModal({
       setCommand('')
       setShowBrowser(false)
       setSelectedHost(initialHost ?? '')
+      setAutoStart(false)
       // Focus terminal after modal closes
       setTimeout(() => {
         if (typeof document === 'undefined' || typeof document.querySelector !== 'function') return
@@ -110,6 +126,7 @@ export default function NewSessionModal({
     setProjectPath(basePath)
     setName('')
     setSelectedHost(initialHost ?? '')
+    setAutoStart(initialAutoStartChange !== undefined)
     const trimmedInitialCommand = initialCommand?.trim()
     if (trimmedInitialCommand) {
       const matchingPreset = commandPresets.find((p) => getFullCommand(p) === trimmedInitialCommand)
@@ -142,7 +159,7 @@ export default function NewSessionModal({
         input.scrollLeft = input.scrollWidth
       }
     }, 50)
-  }, [activeProjectPath, commandPresets, defaultPresetId, defaultProjectDir, isOpen, lastProjectPath, initialHost, initialPath, initialCommand])
+  }, [activeProjectPath, commandPresets, defaultPresetId, defaultProjectDir, isOpen, lastProjectPath, initialHost, initialPath, initialCommand, initialAutoStartChange])
 
   useEffect(() => {
     if (!isOpen) return
@@ -237,7 +254,10 @@ export default function NewSessionModal({
       trimmedPath,
       name.trim() || undefined,
       finalCommand || undefined,
-      isRemoteHost ? selectedHost : undefined
+      isRemoteHost ? selectedHost : undefined,
+      // Auto-start is a local-session feature: the server holds the pending
+      // prompt and injects it through the local terminal-input path.
+      !isRemoteHost && initialAutoStartChange && autoStart ? initialAutoStartChange : undefined
     )
     onClose()
   }
@@ -465,6 +485,24 @@ export default function NewSessionModal({
               className="input text-sm placeholder:italic"
             />
           </div>
+          {initialAutoStartChange && !isRemoteHost && (
+            <label
+              className="flex cursor-pointer items-center gap-2 text-xs text-secondary"
+              title={`Sends the change's apply command (/opsx:apply ${initialAutoStartChange} for Claude, the equivalent for Codex) as the session's first input, once the agent becomes idle`}
+            >
+              <input
+                type="checkbox"
+                checked={autoStart}
+                onChange={(event) => setAutoStart(event.target.checked)}
+                data-testid="auto-start-apply"
+                className="h-3.5 w-3.5 accent-[var(--color-accent)]"
+              />
+              <span>
+                Start with the change's apply command{' '}
+                <span className="font-mono text-muted">{initialAutoStartChange}</span>
+              </span>
+            </label>
+          )}
         </div>
 
         <div className="mt-6 flex justify-end gap-2">

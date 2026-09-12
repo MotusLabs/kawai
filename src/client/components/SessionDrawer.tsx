@@ -30,8 +30,11 @@ interface SessionDrawerProps {
   /** Same grouped navigator as the desktop sidebar. */
   workspaceView?: WorkspaceView | null
   onToggleSectionCollapse?: (sectionKey: string) => void
-  /** Contextual new-session action on worktree group headers. */
-  onNewSessionInWorktree?: (worktreePath: string) => void
+  /** Contextual new-session action on section headers (change name present
+   *  for change sections so the form can offer apply auto-start). */
+  onNewSessionInWorktree?: (worktreePath: string, changeName?: string) => void
+  /** Creates the convention worktree for a worktree-less change section. */
+  onCreateChangeWorktree?: (repositoryId: string, change: string) => void
   /** Opens the repository branch browser from a worktree header. */
   onBrowseBranches?: (repositoryId: string) => void
 }
@@ -56,6 +59,7 @@ export default function SessionDrawer({
   workspaceView = null,
   onToggleSectionCollapse,
   onNewSessionInWorktree,
+  onCreateChangeWorktree,
   onBrowseBranches,
 }: SessionDrawerProps) {
   const prefersReducedMotion = useReducedMotion()
@@ -188,8 +192,16 @@ export default function SessionDrawer({
           onToggleSectionCollapse={onToggleSectionCollapse}
           onNewSessionInWorktree={
             onNewSessionInWorktree
-              ? (worktreePath) => {
-                  onNewSessionInWorktree(worktreePath)
+              ? (worktreePath, changeName) => {
+                  onNewSessionInWorktree(worktreePath, changeName)
+                  onClose()
+                }
+              : undefined
+          }
+          onCreateChangeWorktree={
+            onCreateChangeWorktree
+              ? (repositoryId, change) => {
+                  onCreateChangeWorktree(repositoryId, change)
                   onClose()
                 }
               : undefined
