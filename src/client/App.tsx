@@ -585,6 +585,7 @@ export default function App() {
   // otherwise (older server or before the first snapshot).
   const workspaceSnapshot = useWorkspaceStore((state) => state.snapshot)
   const collapsedWorktreeIds = useWorkspaceStore((state) => state.collapsedWorktreeIds)
+  const toggleWorktreeCollapsed = useWorkspaceStore((state) => state.toggleWorktreeCollapsed)
   const workspaceView = useMemo(
     () =>
       buildWorkspaceView(
@@ -1021,6 +1022,8 @@ export default function App() {
           onNewSession={handleNewSession}
           loading={!hasLoaded}
           error={connectionError || serverError}
+          workspaceView={workspaceSnapshot ? workspaceView : null}
+          onToggleWorktreeCollapse={toggleWorktreeCollapsed}
         />
       </div>
 
