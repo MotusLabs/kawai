@@ -4,8 +4,8 @@
 
 ## 1. Shared Workspace Contract
 
-- [ ] 1.1 Add shared repository, worktree, branch, OpenSpec-change, registry, section, snapshot, stale/error, and operation-result types plus additive client/server WebSocket messages, including create-session with an optional auto-start apply command; verify shared type tests and `bun run typecheck` pass.
-- [ ] 1.2 Add parsing/validation coverage for workspace snapshot, create-change-worktree, and auto-start-bearing create-session messages, including malformed and backward-compatible payloads; verify the focused shared and server validator tests pass.
+- [x] 1.1 Add shared repository, worktree, branch, OpenSpec-change, registry, section, snapshot, stale/error, and operation-result types plus additive client/server WebSocket messages, including create-session with an optional auto-start apply command; verify shared type tests and `bun run typecheck` pass.
+- [x] 1.2 Add parsing/validation coverage for workspace snapshot, create-change-worktree, and auto-start-bearing create-session messages, including malformed and backward-compatible payloads; verify the focused shared and server validator tests pass.
 
 ## 2. Git Repository Discovery
 
@@ -17,8 +17,8 @@
 ## 3. OpenSpec Change Registry and Discovery
 
 - [x] 3.1 Add per-worktree `openspec list --json` discovery with timeouts, bounded output, missing-root handling, and defensive parsing of optional fields; verify tests cover active, archived, missing-progress, malformed, and failed results.
-- [ ] 3.2 Build the per-repository change registry from the main worktree's OpenSpec root and resolve each change's canonical source — the `.worktrees/<change-name>` copy when it exists, the registry entry otherwise; verify tests cover seeded-only changes, worktree-canonical progress, worktrees missing the change, and divergent main-worktree copies.
-- [ ] 3.3 Merge registry and per-worktree results into their originating repository snapshots without copying state between worktrees, retaining last-valid values on failure; verify tests use two worktrees with divergent change lists and progress.
+- [x] 3.2 Build the per-repository change registry from the main worktree's OpenSpec root and resolve each change's canonical source — the `.worktrees/<change-name>` copy when it exists, the registry entry otherwise; verify tests cover seeded-only changes, worktree-canonical progress, worktrees missing the change, and divergent main-worktree copies.
+- [x] 3.3 Merge registry and per-worktree results into their originating repository snapshots without copying state between worktrees, retaining last-valid values on failure; verify tests use two worktrees with divergent change lists and progress.
 
 ## 4. Workspace Coordination
 
@@ -29,15 +29,15 @@
 ## 5. Client Workspace State and View Model
 
 - [x] 5.1 Add a Zustand workspace store for snapshots, per-worktree errors, operation state, and persisted collapse state; verify store tests cover reconnects, stale snapshots, collapse persistence, and operation results.
-- [ ] 5.2 Build pure selectors that associate active, hibernating, and historical sessions with the deepest worktree and produce change sections (with or without worktrees), unmatched-worktree sections including the main worktree, the `Workspace` section, remote groups, attention counts, and flattened visible navigation order; verify comprehensive selector tests cover filters and collapsed sections.
+- [x] 5.2 Build pure selectors that associate active, hibernating, and historical sessions with the deepest worktree and produce change sections (with or without worktrees), unmatched-worktree sections including the main worktree, the `Workspace` section, remote groups, attention counts, and flattened visible navigation order; verify comprehensive selector tests cover filters and collapsed sections.
 - [x] 5.3 Integrate workspace messages into `App.tsx` without changing existing session snapshot semantics and use the flattened section order for keyboard/terminal navigation; verify existing app, keyboard, filter, and selection tests remain green with new grouped cases.
 
 ## 6. Change-Section Navigator
 
-- [ ] 6.1 Extract section header components showing change name with progress for change sections, worktree name or branch for other sections, path, dirty/stale state, counts, collapse control, a new-session action, and accessible labels; verify component tests cover change, plain-worktree, main-worktree, `Workspace`, stale, collapsed, and hidden-permission states.
-- [ ] 6.2 Refactor `SessionList` to render live, hibernating, and historical rows inside sections ordered changes-first, then unmatched worktrees, then `Workspace`, then remote; verify component tests cover grouping, lifecycle actions, animations, filters, and empty sections.
+- [x] 6.1 Extract section header components showing change name with progress for change sections, worktree name or branch for other sections, path, dirty/stale state, counts, collapse control, a new-session action, and accessible labels; verify component tests cover change, plain-worktree, main-worktree, `Workspace`, stale, collapsed, and hidden-permission states.
+- [x] 6.2 Refactor `SessionList` to render live, hibernating, and historical rows inside sections ordered changes-first, then unmatched worktrees, then `Workspace`, then remote; verify component tests cover grouping, lifecycle actions, animations, filters, and empty sections.
 - [x] 6.3 Constrain manual drag ordering to a section and preserve flattened cross-section keyboard navigation; verify drag and keyboard tests reject cross-section moves and retain current within-group behavior.
-- [ ] 6.4 Render change identity and progress from the canonical source in change sections, with a missing-in-worktree indication when the worktree lacks the change; verify accessible component tests cover progress, no-root, collapsed-count, and discovery-failure cases.
+- [x] 6.4 Render change identity and progress from the canonical source in change sections, with a missing-in-worktree indication when the worktree lacks the change; verify accessible component tests cover progress, no-root, collapsed-count, and discovery-failure cases.
 - [x] 6.5 Use the same grouped navigator in the mobile drawer and desktop sidebar; verify responsive component coverage and Playwright DOM assertions exercise selection and collapse on both layouts.
 
 ## 7. Change Worktree Creation and Seeding
