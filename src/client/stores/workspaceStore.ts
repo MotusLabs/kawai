@@ -22,8 +22,8 @@ interface WorkspaceState {
   lastError: string | null
   /** Recent operation results, newest first, bounded. */
   operationResults: WorkspaceOperationResult[]
-  /** Collapsed worktree group ids (persisted by stable worktree id). */
-  collapsedWorktreeIds: string[]
+  /** Collapsed section keys (change sections by changeSectionKey, worktree sections by worktree id). */
+  collapsedSectionIds: string[]
 
   /** Parse and store a server snapshot; returns false and keeps the previous
    *  snapshot when the payload is malformed. */
@@ -31,8 +31,8 @@ interface WorkspaceState {
   /** Clear the snapshot (server confirmed no workspace data). */
   clearSnapshot: () => void
   setLastError: (error: string | null) => void
-  toggleWorktreeCollapsed: (worktreeId: string) => void
-  isWorktreeCollapsed: (worktreeId: string) => boolean
+  toggleSectionCollapsed: (sectionKey: string) => void
+  isSectionCollapsed: (sectionKey: string) => boolean
   recordOperationResult: (result: WorkspaceOperationResult) => void
   clearOperationResult: (operation: 'create-worktree') => void
 }
@@ -43,7 +43,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       snapshot: null,
       lastError: null,
       operationResults: [],
-      collapsedWorktreeIds: [],
+      collapsedSectionIds: [],
 
       applySnapshot: (payload) => {
         const snapshot = parseWorkspaceSnapshot(payload)
@@ -56,17 +56,17 @@ export const useWorkspaceStore = create<WorkspaceState>()(
 
       setLastError: (error) => set({ lastError: error }),
 
-      toggleWorktreeCollapsed: (worktreeId) => {
-        const { collapsedWorktreeIds } = get()
+      toggleSectionCollapsed: (sectionKey) => {
+        const { collapsedSectionIds } = get()
         set({
-          collapsedWorktreeIds: collapsedWorktreeIds.includes(worktreeId)
-            ? collapsedWorktreeIds.filter((id) => id !== worktreeId)
-            : [...collapsedWorktreeIds, worktreeId],
+          collapsedSectionIds: collapsedSectionIds.includes(sectionKey)
+            ? collapsedSectionIds.filter((id) => id !== sectionKey)
+            : [...collapsedSectionIds, sectionKey],
         })
       },
 
-      isWorktreeCollapsed: (worktreeId) =>
-        get().collapsedWorktreeIds.includes(worktreeId),
+      isSectionCollapsed: (sectionKey) =>
+        get().collapsedSectionIds.includes(sectionKey),
 
       recordOperationResult: (result) => {
         const { operationResults } = get()
@@ -84,7 +84,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
     {
       name: 'agentboard-workspace',
       storage: createJSONStorage(() => safeStorage),
-      partialize: (state) => ({ collapsedWorktreeIds: state.collapsedWorktreeIds }),
+      partialize: (state) => ({ collapsedSectionIds: state.collapsedSectionIds }),
     }
   )
 )

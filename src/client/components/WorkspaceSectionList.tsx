@@ -1,10 +1,11 @@
-// WorkspaceGroupedList.tsx - Grouped workspace navigator: live, hibernating,
-// and historical session rows rendered inside collapsible worktree groups
-// (WorktreeGroupHeader), with explicit local-ungrouped and remote fallback
-// sections. Each worktree group owns its own drag context so manual reorder
-// stays within the group; flattened cross-group navigation is computed by the
-// caller from the same view model. Dormant-row visibility follows the global
-// hibernating/history toggles so persisted preferences keep working.
+// WorkspaceSectionList.tsx - Sectioned workspace navigator: live,
+// hibernating, and historical session rows rendered inside collapsible
+// sections — OpenSpec change sections first, then unmatched worktree
+// sections, then the Workspace and remote fallbacks. Each section owns its
+// own drag context so manual reorder stays within the section; flattened
+// cross-section navigation is computed by the caller from the same view
+// model. Dormant-row visibility follows the global hibernating/history
+// toggles so persisted preferences keep working.
 
 import { useCallback, useState } from 'react'
 import { AnimatePresence } from 'motion/react'
@@ -28,13 +29,12 @@ import GitBranch01Icon from '@untitledui-icons/react/line/esm/GitBranch01Icon'
 import PlusIcon from '@untitledui-icons/react/line/esm/PlusIcon'
 import type { AgentSession, Session } from '@shared/types'
 import type { GroupedSessionEntry, WorkspaceView } from '../utils/workspaceView'
-import WorktreeGroupHeader from './WorktreeGroupHeader'
-import WorktreeOpenSpecRows from './WorktreeOpenSpecRows'
+import SectionHeader from './SectionHeader'
 import HibernatingSessionItem from './HibernatingSessionItem'
 import HistorySessionItem from './HistorySessionItem'
 import { SortableSessionItem } from './SessionRow'
 
-/** Context shared by every row regardless of its group. */
+/** Context shared by every row regardless of its section. */
 export interface GroupedRowContext {
   selectedSessionId: string | null
   selectedHibernatingSessionId: string | null
@@ -59,18 +59,19 @@ export interface GroupedRowContext {
   onMoveToHistory: (sessionId: string) => void
   onPreview: (session: AgentSession) => void
   /**
-   * Manual reorder within one group: the group's live session ids in their
-   * new order. The parent merges this into the global manual session order;
-   * drops outside the group never reach this callback (per-group DndContext).
+   * Manual reorder within one section: the section's live session ids in
+   * their new order. The parent merges this into the global manual session
+   * order; drops outside the section never reach this callback
+   * (per-section DndContext).
    */
   onReorder: (orderedSessionIds: string[]) => void
   /** Per-session new-row marker for entry animations. */
   isNew: (sessionId: string) => boolean
 }
 
-interface WorkspaceGroupedListProps extends GroupedRowContext {
+interface WorkspaceSectionListProps extends GroupedRowContext {
   view: WorkspaceView
-  onToggleCollapse: (worktreeId: string) => void
+  onToggleCollapse: (sectionKey: string) => void
   /** Remounts AnimatePresence children when filters change (entry animation). */
   remountKey: string
   /** Global dormant-row visibility (persisted settings). */
@@ -80,17 +81,17 @@ interface WorkspaceGroupedListProps extends GroupedRowContext {
   onToggleHistory: () => void
   hibernatingCount: number
   historyCount: number
-  /** Shared history pagination; each group shows at most this many rows. */
+  /** Shared history pagination; each section shows at most this many rows. */
   historyLimit: number
   onShowMoreHistory: () => void
   onNewSession?: () => void
-  /** Contextual new-session action on worktree headers. */
+  /** Contextual new-session action on section headers. */
   onNewSessionInWorktree?: (worktreePath: string) => void
-  /** Opens the repository branch browser from a worktree header. */
+  /** Opens the repository branch browser from a worktree section header. */
   onBrowseBranches?: (repositoryId: string) => void
 }
 
-export default function WorkspaceGroupedList(props: WorkspaceGroupedListProps) {
+export default function WorkspaceSectionList(props: WorkspaceSectionListProps) {
   const {
     view,
     onToggleCollapse,
@@ -110,7 +111,7 @@ export default function WorkspaceGroupedList(props: WorkspaceGroupedListProps) {
   } = props
 
   return (
-    <div data-testid="workspace-grouped-list">
+    <div data-testid="workspace-section-list">
       {(hibernatingCount > 0 || historyCount > 0) && (
         <div
           className="flex items-center gap-2 px-3 py-1.5 text-[11px] text-muted"
@@ -151,61 +152,86 @@ export default function WorkspaceGroupedList(props: WorkspaceGroupedListProps) {
         </div>
       )}
 
-      {view.worktreeGroups.map((group) => (
+      {view.sections.map((section) => (
         <section
-          key={group.worktreeId}
-          data-testid="worktree-group"
-          data-worktree-id={group.worktreeId}
-          data-collapsed={group.collapsed ? 'true' : 'false'}
+          key={section.key}
+          data-testid={section.kind === 'change' ? 'change-section' : 'worktree-section'}
+          data-section-key={section.key}
+          data-collapsed={section.collapsed ? 'true' : 'false'}
         >
-          <WorktreeGroupHeader
-            group={group}
+          <SectionHeader
+            section={section}
             onToggleCollapse={onToggleCollapse}
             actions={
-              onNewSessionInWorktree || onBrowseBranches ? (
-                <div className="flex shrink-0 items-center gap-0.5">
-                  {onBrowseBranches && (
+              <div className="flex shrink-0 items-center gap-0.5">
+                {section.kind === 'worktree' && onBrowseBranches && (
+                  <button
+                    type="button"
+                    className="flex shrink-0 items-center justify-center rounded p-1 text-muted hover:bg-hover hover:text-accent"
+                    title={`Browse branches in ${section.repositoryName}`}
+                    aria-label={`Browse branches in ${section.repositoryName}`}
+                    data-testid="worktree-branch-browser"
+                    onClick={() => onBrowseBranches(section.repositoryId)}
+                  >
+                    <GitBranch01Icon className="h-3.5 w-3.5" />
+                  </button>
+                )}
+                {onNewSessionInWorktree &&
+                  (section.kind === 'worktree' || section.change.worktreePath ? (
                     <button
                       type="button"
                       className="flex shrink-0 items-center justify-center rounded p-1 text-muted hover:bg-hover hover:text-accent"
-                      title={`Browse branches in ${group.repositoryName}`}
-                      aria-label={`Browse branches in ${group.repositoryName}`}
-                      data-testid="worktree-branch-browser"
-                      onClick={() => onBrowseBranches(group.repositoryId)}
-                    >
-                      <GitBranch01Icon className="h-3.5 w-3.5" />
-                    </button>
-                  )}
-                  {onNewSessionInWorktree && (
-                    <button
-                      type="button"
-                      className="flex shrink-0 items-center justify-center rounded p-1 text-muted hover:bg-hover hover:text-accent"
-                      title={`New session in ${group.worktreePath}`}
-                      aria-label={`New session in ${group.repositoryName} worktree ${group.worktreePath}`}
-                      data-testid="worktree-new-session"
-                      onClick={() => onNewSessionInWorktree(group.worktreePath)}
+                      title={`New session in ${
+                        section.kind === 'worktree'
+                          ? section.worktreePath
+                          : section.change.worktreePath
+                      }`}
+                      aria-label={`New session in ${
+                        section.kind === 'worktree'
+                          ? `${section.repositoryName} worktree ${section.worktreePath}`
+                          : `change ${section.change.name} worktree ${section.change.worktreePath}`
+                      }`}
+                      data-testid="section-new-session"
+                      onClick={() =>
+                        onNewSessionInWorktree(
+                          section.kind === 'worktree'
+                            ? section.worktreePath
+                            : section.change.worktreePath!
+                        )
+                      }
                     >
                       <PlusIcon className="h-3.5 w-3.5" />
                     </button>
-                  )}
-                </div>
-              ) : undefined
+                  ) : (
+                    // Change sections without a worktree show the affordance
+                    // disabled until the seeded-creation flow lands (task 7).
+                    <button
+                      type="button"
+                      disabled
+                      className="flex shrink-0 cursor-not-allowed items-center justify-center rounded p-1 text-muted/40"
+                      title={`Create the ${section.change.name} worktree first (coming with the seeding flow)`}
+                      aria-label={`Create the ${section.change.name} worktree first`}
+                      data-testid="section-new-session-disabled"
+                    >
+                      <PlusIcon className="h-3.5 w-3.5" />
+                    </button>
+                  ))}
+              </div>
             }
           />
-          {!group.collapsed && (
+          {!section.collapsed && (
             <>
-              <GroupedLiveRows entries={group.entries} ctx={rowContext} remountKey={remountKey} />
-              <WorktreeOpenSpecRows openspec={group.openspec} />
+              <GroupedLiveRows entries={section.entries} ctx={rowContext} remountKey={remountKey} />
               {showHibernating && (
                 <GroupedDormantRows
-                  entries={group.entries}
+                  entries={section.entries}
                   kind="hibernating"
                   ctx={rowContext}
                 />
               )}
               {showHistory && (
                 <GroupedDormantRows
-                  entries={group.entries}
+                  entries={section.entries}
                   kind="history"
                   ctx={rowContext}
                   limit={historyLimit}
@@ -217,24 +243,24 @@ export default function WorkspaceGroupedList(props: WorkspaceGroupedListProps) {
         </section>
       ))}
 
-      {view.localUngrouped.entries.length > 0 && (
-        <section className="border-t border-border" data-testid="local-ungrouped-section">
-          <FallbackSectionHeader label="Ungrouped" count={view.localUngrouped.entries.length} />
+      {view.workspace.entries.length > 0 && (
+        <section className="border-t border-border" data-testid="workspace-section">
+          <FallbackSectionHeader label="Workspace" count={view.workspace.entries.length} />
           <GroupedLiveRows
-            entries={view.localUngrouped.entries}
+            entries={view.workspace.entries}
             ctx={rowContext}
             remountKey={remountKey}
           />
           {showHibernating && (
             <GroupedDormantRows
-              entries={view.localUngrouped.entries}
+              entries={view.workspace.entries}
               kind="hibernating"
               ctx={rowContext}
             />
           )}
           {showHistory && (
             <GroupedDormantRows
-              entries={view.localUngrouped.entries}
+              entries={view.workspace.entries}
               kind="history"
               ctx={rowContext}
               limit={historyLimit}
@@ -303,9 +329,9 @@ interface GroupedLiveRowsProps {
 }
 
 /**
- * The live (active) rows of one group inside their own DndContext: manual
- * reordering is structurally confined to this group — a drop elsewhere is
- * never observed here, so cross-group moves cannot be applied.
+ * The live (active) rows of one section inside their own DndContext: manual
+ * reordering is structurally confined to this section — a drop elsewhere is
+ * never observed here, so cross-section moves cannot be applied.
  */
 function GroupedLiveRows({ entries, ctx, remountKey }: GroupedLiveRowsProps) {
   const liveSessions = entries.flatMap((entry) =>

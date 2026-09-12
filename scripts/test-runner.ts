@@ -113,7 +113,7 @@ async function main() {
       // Grouped-navigator tests render SessionList (framer-motion) with the
       // same window-stub pattern; same isolation requirement as above.
       'sessionListGrouped.test.tsx',
-      'WorktreeOpenSpecRows.test.tsx',
+      'SectionHeader.test.tsx',
     ])
 
     const serverTests: string[] = []

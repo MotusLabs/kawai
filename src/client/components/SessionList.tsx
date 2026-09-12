@@ -31,7 +31,7 @@ import SessionPreviewModal from './SessionPreviewModal'
 import HibernatingSessionItem from './HibernatingSessionItem'
 import HistorySessionItem from './HistorySessionItem'
 import { SortableSessionItem } from './SessionRow'
-import WorkspaceGroupedList from './WorkspaceGroupedList'
+import WorkspaceSectionList from './WorkspaceSectionList'
 import type { WorkspaceView } from '../utils/workspaceView'
 
 interface SessionListProps {
@@ -58,7 +58,7 @@ interface SessionListProps {
    * servers and the pre-snapshot window.
    */
   workspaceView?: WorkspaceView | null
-  onToggleWorktreeCollapse?: (worktreeId: string) => void
+  onToggleSectionCollapse?: (sectionKey: string) => void
   /** Contextual new-session action on worktree group headers. */
   onNewSessionInWorktree?: (worktreePath: string) => void
   /** Opens the repository branch browser from a worktree header. */
@@ -91,7 +91,7 @@ export default function SessionList({
   onMoveToHistory,
   onNewSession,
   workspaceView = null,
-  onToggleWorktreeCollapse,
+  onToggleSectionCollapse,
   onNewSessionInWorktree,
   onBrowseBranches,
 }: SessionListProps) {
@@ -517,9 +517,9 @@ export default function SessionList({
             ))}
           </div>
         ) : workspaceView ? (
-          <WorkspaceGroupedList
+          <WorkspaceSectionList
             view={workspaceView}
-            onToggleCollapse={onToggleWorktreeCollapse ?? (() => {})}
+            onToggleCollapse={onToggleSectionCollapse ?? (() => {})}
             remountKey={filterKey}
             showHibernating={showHibernating}
             showHistory={showHistory}

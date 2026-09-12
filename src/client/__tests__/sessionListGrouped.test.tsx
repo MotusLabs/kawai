@@ -1,6 +1,6 @@
 // sessionListGrouped.test.tsx - Task 6.2 coverage: SessionList renders live,
 // hibernating, and historical rows inside worktree groups with explicit
-// local-ungrouped and remote fallbacks — grouping, lifecycle actions, filters,
+// Workspace and remote fallback sections — grouping, lifecycle actions, filters,
 // empty groups, collapse, and dormant-row toggles.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from 'bun:test'
 import TestRenderer, { act } from 'react-test-renderer'
@@ -110,7 +110,7 @@ function makeView(
       projectFilters: options.projectFilters ?? [],
       hostFilters: [],
     },
-    collapsedWorktreeIds: options.collapsed ?? [],
+    collapsedSectionIds: options.collapsed ?? [],
   })
 }
 
@@ -201,8 +201,8 @@ describe('SessionList grouped rendering', () => {
       workspaceView: view,
     })
 
-    const groups = renderer.root.findAllByProps({ 'data-testid': 'worktree-group' })
-    expect(groups.map((g) => g.props['data-worktree-id'])).toEqual([
+    const groups = renderer.root.findAllByProps({ 'data-testid': 'worktree-section' })
+    expect(groups.map((g) => g.props['data-section-key'])).toEqual([
       '/repo/.git::/repo/main',
       '/repo/.git::/repo/feat',
       '/repo/.git::/repo/empty',
@@ -223,7 +223,7 @@ describe('SessionList grouped rendering', () => {
     // Empty worktree group renders its header without any rows.
     const emptyGroup = groups[2]
     expect(emptyGroup.findAllByProps({ 'data-testid': 'session-card' })).toHaveLength(0)
-    expect(emptyGroup.findByProps({ 'data-testid': 'worktree-group-header' })).toBeTruthy()
+    expect(emptyGroup.findByProps({ 'data-testid': 'section-header' })).toBeTruthy()
 
     act(() => renderer.unmount())
   })
@@ -244,7 +244,7 @@ describe('SessionList grouped rendering', () => {
 
     const { renderer } = renderList({ sessions, workspaceView: view })
 
-    const ungrouped = renderer.root.findByProps({ 'data-testid': 'local-ungrouped-section' })
+    const ungrouped = renderer.root.findByProps({ 'data-testid': 'workspace-section' })
     expect(ungrouped.findAllByProps({ 'data-testid': 'session-card' }).map((c) => c.props['data-session-id'])).toEqual(['live-plain'])
 
     const remote = renderer.root.findByProps({ 'data-testid': 'remote-section' })
@@ -263,7 +263,7 @@ describe('SessionList grouped rendering', () => {
       workspaceView: view,
     })
 
-    const groups = renderer.root.findAllByProps({ 'data-testid': 'worktree-group' })
+    const groups = renderer.root.findAllByProps({ 'data-testid': 'worktree-section' })
     // All three headers still render with repository context.
     expect(groups).toHaveLength(3)
 
@@ -283,14 +283,14 @@ describe('SessionList grouped rendering', () => {
     const { renderer } = renderList({
       sessions: [baseSession],
       workspaceView: view,
-      onToggleWorktreeCollapse: (id) => toggled.push(id),
+      onToggleSectionCollapse: (id) => toggled.push(id),
     })
 
-    const mainGroup = renderer.root.findAllByProps({ 'data-testid': 'worktree-group' })[0]
+    const mainGroup = renderer.root.findAllByProps({ 'data-testid': 'worktree-section' })[0]
     expect(mainGroup.props['data-collapsed']).toBe('true')
     expect(mainGroup.findAllByProps({ 'data-testid': 'session-card' })).toHaveLength(0)
 
-    const header = mainGroup.findByProps({ 'data-testid': 'worktree-group-header' })
+    const header = mainGroup.findByProps({ 'data-testid': 'section-header' })
     const collapseButton = header.findByProps({ 'aria-expanded': false })
     act(() => {
       collapseButton.props.onClick()
@@ -352,7 +352,7 @@ describe('SessionList grouped rendering', () => {
       onMoveToHistory: (id) => moves.push(id),
     })
 
-    const featGroup = renderer.root.findAllByProps({ 'data-testid': 'worktree-group' })[1]
+    const featGroup = renderer.root.findAllByProps({ 'data-testid': 'worktree-section' })[1]
     const liveCard = featGroup.findByProps({ 'data-testid': 'session-card' })
     act(() => {
       liveCard.props.onClick()
@@ -464,7 +464,7 @@ describe('SessionList grouped rendering', () => {
 
     // One action per worktree group (including empty worktrees), firing with
     // the group's exact root path.
-    const buttons = renderer.root.findAllByProps({ 'data-testid': 'worktree-new-session' })
+    const buttons = renderer.root.findAllByProps({ 'data-testid': 'section-new-session' })
     expect(buttons).toHaveLength(3)
     act(() => {
       buttons.forEach((button) => button.props.onClick())
@@ -475,14 +475,14 @@ describe('SessionList grouped rendering', () => {
     expect(buttons[0].props['aria-label']).toBe('New session in repo worktree /repo/main')
 
     // Fallback sections never receive the contextual action.
-    const ungrouped = renderer.root.findByProps({ 'data-testid': 'local-ungrouped-section' })
-    expect(ungrouped.findAllByProps({ 'data-testid': 'worktree-new-session' })).toHaveLength(0)
+    const ungrouped = renderer.root.findByProps({ 'data-testid': 'workspace-section' })
+    expect(ungrouped.findAllByProps({ 'data-testid': 'section-new-session' })).toHaveLength(0)
     const remote = renderer.root.findByProps({ 'data-testid': 'remote-section' })
-    expect(remote.findAllByProps({ 'data-testid': 'worktree-new-session' })).toHaveLength(0)
+    expect(remote.findAllByProps({ 'data-testid': 'section-new-session' })).toHaveLength(0)
 
     // Without the callback prop, no action buttons render at all.
     const { renderer: plain } = renderList({ sessions: [baseSession], workspaceView: view })
-    expect(plain.root.findAllByProps({ 'data-testid': 'worktree-new-session' })).toHaveLength(0)
+    expect(plain.root.findAllByProps({ 'data-testid': 'section-new-session' })).toHaveLength(0)
 
     act(() => renderer.unmount())
     act(() => plain.unmount())
@@ -499,9 +499,9 @@ describe('SessionList grouped rendering', () => {
       onNewSessionInWorktree: (worktreePath) => requestedPaths.push(worktreePath),
     })
 
-    const mainGroup = renderer.root.findAllByProps({ 'data-testid': 'worktree-group' })[0]
+    const mainGroup = renderer.root.findAllByProps({ 'data-testid': 'worktree-section' })[0]
     expect(mainGroup.props['data-collapsed']).toBe('true')
-    const button = mainGroup.findByProps({ 'data-testid': 'worktree-new-session' })
+    const button = mainGroup.findByProps({ 'data-testid': 'section-new-session' })
     act(() => {
       button.props.onClick()
     })
@@ -539,7 +539,7 @@ describe('SessionList grouped rendering', () => {
   test('falls back to the flat list when no workspace snapshot exists', () => {
     const { renderer } = renderList({ sessions: [baseSession], workspaceView: null })
 
-    expect(renderer.root.findAllByProps({ 'data-testid': 'worktree-group' })).toHaveLength(0)
+    expect(renderer.root.findAllByProps({ 'data-testid': 'worktree-section' })).toHaveLength(0)
     expect(renderer.root.findAllByProps({ 'data-testid': 'session-card' })).toHaveLength(1)
 
     act(() => renderer.unmount())
@@ -563,8 +563,8 @@ describe('SessionList grouped drag constraints', () => {
 
   function groupDragContext(renderer: TestRenderer.ReactTestRenderer, worktreeId: string) {
     const group = renderer.root
-      .findAllByProps({ 'data-testid': 'worktree-group' })
-      .find((section) => section.props['data-worktree-id'] === worktreeId)
+      .findAllByProps({ 'data-testid': 'worktree-section' })
+      .find((section) => section.props['data-section-key'] === worktreeId)
     if (!group) throw new Error(`Expected group ${worktreeId}`)
     const contexts = group.findAll(
       (instance) =>

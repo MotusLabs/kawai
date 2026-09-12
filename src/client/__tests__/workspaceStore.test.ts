@@ -67,7 +67,7 @@ beforeEach(() => {
     snapshot: null,
     lastError: null,
     operationResults: [],
-    collapsedWorktreeIds: [],
+    collapsedSectionIds: [],
   })
 })
 
@@ -127,35 +127,35 @@ describe('workspaceStore snapshots', () => {
 describe('workspaceStore collapse state', () => {
   test('toggles collapse per worktree id', () => {
     const store = useWorkspaceStore.getState()
-    store.toggleWorktreeCollapsed('/repo/.git::/repo')
-    expect(store.isWorktreeCollapsed('/repo/.git::/repo')).toBe(true)
-    store.toggleWorktreeCollapsed('/repo/.git::/repo')
-    expect(store.isWorktreeCollapsed('/repo/.git::/repo')).toBe(false)
+    store.toggleSectionCollapsed('/repo/.git::/repo')
+    expect(store.isSectionCollapsed('/repo/.git::/repo')).toBe(true)
+    store.toggleSectionCollapsed('/repo/.git::/repo')
+    expect(store.isSectionCollapsed('/repo/.git::/repo')).toBe(false)
   })
 
   test('collapse state persists to storage and survives rehydration', async () => {
-    useWorkspaceStore.getState().toggleWorktreeCollapsed('/repo/.git::/repo')
+    useWorkspaceStore.getState().toggleSectionCollapsed('/repo/.git::/repo')
     // persist middleware writes synchronously through safeStorage.
     const raw = storage.getItem('agentboard-workspace')
     expect(raw).toBeTruthy()
     const persisted = JSON.parse(raw as string) as {
-      state: { collapsedWorktreeIds: string[] }
+      state: { collapsedSectionIds: string[] }
     }
-    expect(persisted.state.collapsedWorktreeIds).toEqual(['/repo/.git::/repo'])
+    expect(persisted.state.collapsedSectionIds).toEqual(['/repo/.git::/repo'])
   })
 
   test('unknown persisted collapse ids are harmless', () => {
     storage.setItem(
       'agentboard-workspace',
       JSON.stringify({
-        state: { collapsedWorktreeIds: ['gone-worktree-id'] },
+        state: { collapsedSectionIds: ['gone-worktree-id'] },
         version: 0,
       })
     )
     // Rehydration (next store creation) tolerates unknown ids; the live
     // accessor simply reports them without error.
-    useWorkspaceStore.setState({ collapsedWorktreeIds: ['gone-worktree-id'] })
-    expect(useWorkspaceStore.getState().isWorktreeCollapsed('gone-worktree-id')).toBe(true)
+    useWorkspaceStore.setState({ collapsedSectionIds: ['gone-worktree-id'] })
+    expect(useWorkspaceStore.getState().isSectionCollapsed('gone-worktree-id')).toBe(true)
   })
 })
 

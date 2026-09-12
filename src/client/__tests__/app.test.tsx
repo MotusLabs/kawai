@@ -176,7 +176,7 @@ beforeEach(() => {
     snapshot: null,
     lastError: null,
     operationResults: [],
-    collapsedWorktreeIds: [],
+    collapsedSectionIds: [],
   })
 
   useSettingsStore.setState({
@@ -1698,7 +1698,7 @@ describe('App', () => {
 
     // Collapsing a worktree group removes its rows from navigation order.
     act(() => {
-      useWorkspaceStore.getState().toggleWorktreeCollapsed('/proj/.git::/proj/feat')
+      useWorkspaceStore.getState().toggleSectionCollapsed('/proj/.git::/proj/feat')
     })
     act(() => {
       useSessionStore.setState({ selectedSessionId: 's1' })

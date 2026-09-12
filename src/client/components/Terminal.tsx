@@ -57,7 +57,7 @@ interface TerminalProps {
   error?: string | null
   /** Grouped workspace view forwarded to the mobile session drawer. */
   workspaceView?: WorkspaceView | null
-  onToggleWorktreeCollapse?: (worktreeId: string) => void
+  onToggleSectionCollapse?: (sectionKey: string) => void
   /** Contextual new-session action on worktree group headers (mobile drawer). */
   onNewSessionInWorktree?: (worktreePath: string) => void
   /** Opens the repository branch browser (mobile drawer). */
@@ -123,7 +123,7 @@ export default function Terminal({
   loading = false,
   error = null,
   workspaceView = null,
-  onToggleWorktreeCollapse,
+  onToggleSectionCollapse,
   onNewSessionInWorktree,
   onBrowseBranches,
 }: TerminalProps) {
@@ -1690,7 +1690,7 @@ export default function Terminal({
           loading={loading}
           error={error}
           workspaceView={workspaceView}
-          onToggleWorktreeCollapse={onToggleWorktreeCollapse}
+          onToggleSectionCollapse={onToggleSectionCollapse}
           onNewSessionInWorktree={onNewSessionInWorktree}
           onBrowseBranches={onBrowseBranches}
         />

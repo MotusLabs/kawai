@@ -386,14 +386,14 @@ describe('SessionDrawer', () => {
           loading={false}
           error={null}
           workspaceView={view}
-          onToggleWorktreeCollapse={(worktreeId) => collapseCalls.push(worktreeId)}
+          onToggleSectionCollapse={(worktreeId) => collapseCalls.push(worktreeId)}
         />,
         { createNodeMock }
       )
     })
 
     // The drawer shows the same worktree grouping as the desktop sidebar.
-    const group = renderer!.root.findByProps({ 'data-testid': 'worktree-group' })
+    const group = renderer!.root.findByProps({ 'data-testid': 'worktree-section' })
     const card = group.findByProps({ 'data-testid': 'session-card' })
     act(() => {
       card.props.onClick()
@@ -402,7 +402,7 @@ describe('SessionDrawer', () => {
     expect(closeCalls).toHaveLength(1)
 
     // Collapse control routes to the workspace store callback.
-    const header = group.findByProps({ 'data-testid': 'worktree-group-header' })
+    const header = group.findByProps({ 'data-testid': 'section-header' })
     act(() => {
       header.findByProps({ 'aria-expanded': true }).props.onClick()
     })

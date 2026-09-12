@@ -608,13 +608,13 @@ export default function App() {
     return next
   }, [sortedSessions, projectFilters, hostFilters])
 
-  // Grouped workspace view: sessions partitioned by deepest worktree with
+  // Sectioned workspace view: sessions partitioned into change and worktree
   // explicit local-ungrouped and remote fallbacks. Built when a successful
   // workspace snapshot exists; navigation falls back to the flat order
   // otherwise (older server or before the first snapshot).
   const workspaceSnapshot = useWorkspaceStore((state) => state.snapshot)
-  const collapsedWorktreeIds = useWorkspaceStore((state) => state.collapsedWorktreeIds)
-  const toggleWorktreeCollapsed = useWorkspaceStore((state) => state.toggleWorktreeCollapsed)
+  const collapsedSectionIds = useWorkspaceStore((state) => state.collapsedSectionIds)
+  const toggleSectionCollapsed = useWorkspaceStore((state) => state.toggleSectionCollapsed)
   // Compact worktree options for the new-session picker.
   const worktreeOptions = useMemo(() => {
     if (!workspaceSnapshot) return []
@@ -656,7 +656,7 @@ export default function App() {
         historyAgentSessions,
         {
           filter: { projectFilters, hostFilters },
-          collapsedWorktreeIds,
+          collapsedSectionIds,
         }
       ),
     [
@@ -666,7 +666,7 @@ export default function App() {
       historyAgentSessions,
       projectFilters,
       hostFilters,
-      collapsedWorktreeIds,
+      collapsedSectionIds,
     ]
   )
 
@@ -1138,7 +1138,7 @@ export default function App() {
           loading={!hasLoaded}
           error={connectionError || serverError}
           workspaceView={workspaceSnapshot ? workspaceView : null}
-          onToggleWorktreeCollapse={toggleWorktreeCollapsed}
+          onToggleSectionCollapse={toggleSectionCollapsed}
           onNewSessionInWorktree={handleNewSessionInWorktree}
           onBrowseBranches={handleBrowseBranches}
         />
@@ -1174,7 +1174,7 @@ export default function App() {
         loading={!hasLoaded}
         error={connectionError || serverError}
         workspaceView={workspaceSnapshot ? workspaceView : null}
-        onToggleWorktreeCollapse={toggleWorktreeCollapsed}
+        onToggleSectionCollapse={toggleSectionCollapsed}
         onNewSessionInWorktree={handleNewSessionInWorktree}
         onBrowseBranches={handleBrowseBranches}
       />

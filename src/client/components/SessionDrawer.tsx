@@ -29,7 +29,7 @@ interface SessionDrawerProps {
   error: string | null
   /** Same grouped navigator as the desktop sidebar. */
   workspaceView?: WorkspaceView | null
-  onToggleWorktreeCollapse?: (worktreeId: string) => void
+  onToggleSectionCollapse?: (sectionKey: string) => void
   /** Contextual new-session action on worktree group headers. */
   onNewSessionInWorktree?: (worktreePath: string) => void
   /** Opens the repository branch browser from a worktree header. */
@@ -54,7 +54,7 @@ export default function SessionDrawer({
   loading,
   error,
   workspaceView = null,
-  onToggleWorktreeCollapse,
+  onToggleSectionCollapse,
   onNewSessionInWorktree,
   onBrowseBranches,
 }: SessionDrawerProps) {
@@ -185,7 +185,7 @@ export default function SessionDrawer({
           loading={loading}
           error={error}
           workspaceView={workspaceView}
-          onToggleWorktreeCollapse={onToggleWorktreeCollapse}
+          onToggleSectionCollapse={onToggleSectionCollapse}
           onNewSessionInWorktree={
             onNewSessionInWorktree
               ? (worktreePath) => {

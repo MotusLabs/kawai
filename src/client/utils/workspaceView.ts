@@ -1,14 +1,16 @@
-// workspaceView.ts - Pure selectors building the grouped workspace view
+// workspaceView.ts - Pure selectors building the sectioned workspace view
 // model: sessions (live, hibernating, historical) associated with their
-// deepest containing worktree, explicit local-ungrouped and remote fallback
-// groups, attention counts, and the flattened visible navigation order used
-// by keyboard/terminal navigation.
+// deepest containing worktree, grouped under OpenSpec change sections
+// (canonical source resolved server-side), then unmatched worktree
+// sections, then the Workspace and remote fallback sections. Also produces
+// the flattened visible navigation order used by keyboard/terminal
+// navigation.
 
 import type { AgentSession, Session } from '@shared/types'
 import {
+  changeSectionKey,
   deepestPathMatch,
-  type WorktreeOpenSpecState,
-  type WorkspaceRepository,
+  type ChangeRegistryEntry,
   type WorkspaceSnapshot,
 } from '@shared/workspace'
 
@@ -40,7 +42,7 @@ function agentSessionMatchesFilter(session: AgentSession, filter: SessionFilter)
   return true
 }
 
-/** A session row placed in a group; spans live, hibernating, and history. */
+/** A session row placed in a section; spans live, hibernating, and history. */
 export interface GroupedSessionEntry {
   /** Stable row key (agent session id when present). */
   key: string
@@ -52,9 +54,34 @@ export interface GroupedSessionEntry {
   liveSession?: Session
 }
 
-export interface WorktreeGroup {
+/** A collapsible section for one registry change. */
+export interface ChangeSectionData {
+  kind: 'change'
+  /** Stable section key (changeSectionKey). */
+  key: string
+  repositoryId: string
+  repositoryName: string
+  repositoryStale: boolean
+  repositoryError?: string
+  /** Registry entry with canonical source already resolved. */
+  change: ChangeRegistryEntry
+  collapsed: boolean
+  /** Filtered rows inside the section, in input order. */
+  entries: GroupedSessionEntry[]
+  /** Live rows currently waiting for permission. */
+  attentionCount: number
+  /**
+   * Permission-waiting rows hidden by collapse or filters: the header keeps
+   * signaling them even when their rows are invisible.
+   */
+  hiddenAttentionCount: number
+}
+
+/** A collapsible section for a worktree with no matching registry change. */
+export interface WorktreeSectionData {
   kind: 'worktree'
-  /** Stable worktree id from the snapshot. */
+  /** Stable section key (the worktree id). */
+  key: string
   worktreeId: string
   repositoryId: string
   repositoryName: string
@@ -66,38 +93,30 @@ export interface WorktreeGroup {
   headRevision: string
   isMain: boolean
   dirty: boolean
-  openspec: WorktreeOpenSpecState
   collapsed: boolean
-  /** Filtered rows inside the group, in input order. */
-  entries: GroupedSessionEntry[]
-  /** Live rows currently waiting for permission. */
-  attentionCount: number
-  /**
-   * Permission-waiting rows hidden by collapse or filters: the header keeps
-   * signaling them even when their rows are invisible.
-   */
-  hiddenAttentionCount: number
-}
-
-export interface LocalUngroupedGroup {
-  kind: 'local-ungrouped'
   entries: GroupedSessionEntry[]
   attentionCount: number
   hiddenAttentionCount: number
 }
 
-export interface RemoteGroup {
-  kind: 'remote'
+export type WorkspaceSection = ChangeSectionData | WorktreeSectionData
+
+export interface FallbackSectionData {
+  kind: 'workspace' | 'remote'
   entries: GroupedSessionEntry[]
   attentionCount: number
   hiddenAttentionCount: number
 }
 
 export interface WorkspaceView {
-  /** Worktree groups in snapshot order (repository, then path). */
-  worktreeGroups: WorktreeGroup[]
-  localUngrouped: LocalUngroupedGroup
-  remote: RemoteGroup
+  /**
+   * Sections in render order: per repository (snapshot order) its change
+   * sections first, then its unmatched worktrees (main worktree included).
+   */
+  sections: WorkspaceSection[]
+  /** Local sessions outside any worktree. */
+  workspace: FallbackSectionData
+  remote: FallbackSectionData
   /** Flattened visible (filter-passing, non-collapsed) rows in render order. */
   visibleEntries: GroupedSessionEntry[]
 }
@@ -133,33 +152,89 @@ export function buildWorkspaceView(
   history: AgentSession[],
   options: {
     filter?: SessionFilter
-    collapsedWorktreeIds?: string[]
+    collapsedSectionIds?: string[]
   } = {}
 ): WorkspaceView {
   const filter = options.filter ?? NO_FILTER
-  const collapsed = new Set(options.collapsedWorktreeIds ?? [])
+  const collapsed = new Set(options.collapsedSectionIds ?? [])
 
-  // Map every worktree path to its group index for deepest-match lookups.
-  const worktreePaths: string[] = []
-  const groupIndexByPath = new Map<string, number>()
-  const groups: WorktreeGroup[] = []
+  const sections: WorkspaceSection[] = []
+  // Session placement: deepest worktree path -> owning section index.
+  const sectionIndexByWorktreePath = new Map<string, number>()
+
   if (snapshot) {
     for (const repository of snapshot.repositories) {
+      const registry = repository.changeRegistry ?? []
+      const registryWorktreeIds = new Set(
+        registry.flatMap((entry) => (entry.worktreeId !== undefined ? [entry.worktreeId] : []))
+      )
+      const worktreeById = new Map(repository.worktrees.map((worktree) => [worktree.id, worktree]))
+
+      for (const entry of registry) {
+        // Only anchor a change section to a worktree that actually exists in
+        // the snapshot; inconsistent payloads degrade to registry-only.
+        const worktree =
+          entry.worktreeId !== undefined ? worktreeById.get(entry.worktreeId) : undefined
+        const key = changeSectionKey(repository.id, entry.name)
+        const index = sections.length
+        sections.push({
+          kind: 'change',
+          key,
+          repositoryId: repository.id,
+          repositoryName: repository.name,
+          repositoryStale: repository.stale,
+          ...(repository.error !== undefined ? { repositoryError: repository.error } : {}),
+          change: worktree
+            ? {
+                ...entry,
+                worktreeId: worktree.id,
+                worktreePath: worktree.path,
+              }
+            : { ...entry, worktreeId: undefined, worktreePath: undefined, missingInWorktree: undefined },
+          collapsed: collapsed.has(key),
+          entries: [],
+          attentionCount: 0,
+          hiddenAttentionCount: 0,
+        })
+        if (worktree) {
+          sectionIndexByWorktreePath.set(worktree.path, index)
+        }
+      }
+
       for (const worktree of repository.worktrees) {
-        groupIndexByPath.set(worktree.path, groups.length)
-        worktreePaths.push(worktree.path)
-        groups.push(createWorktreeGroup(repository, worktree, collapsed.has(worktree.id)))
+        if (registryWorktreeIds.has(worktree.id)) continue
+        const index = sections.length
+        sections.push({
+          kind: 'worktree',
+          key: worktree.id,
+          worktreeId: worktree.id,
+          repositoryId: repository.id,
+          repositoryName: repository.name,
+          repositoryStale: repository.stale,
+          ...(repository.error !== undefined ? { repositoryError: repository.error } : {}),
+          worktreePath: worktree.path,
+          ...(worktree.branch !== undefined ? { branch: worktree.branch } : {}),
+          detached: worktree.detached,
+          headRevision: worktree.headRevision,
+          isMain: worktree.isMain,
+          dirty: worktree.dirty,
+          collapsed: collapsed.has(worktree.id),
+          entries: [],
+          attentionCount: 0,
+          hiddenAttentionCount: 0,
+        })
+        sectionIndexByWorktreePath.set(worktree.path, index)
       }
     }
   }
 
-  const localUngrouped: LocalUngroupedGroup = {
-    kind: 'local-ungrouped',
+  const workspace: FallbackSectionData = {
+    kind: 'workspace',
     entries: [],
     attentionCount: 0,
     hiddenAttentionCount: 0,
   }
-  const remote: RemoteGroup = {
+  const remote: FallbackSectionData = {
     kind: 'remote',
     entries: [],
     attentionCount: 0,
@@ -174,20 +249,16 @@ export function buildWorkspaceView(
           ? agentSessionMatchesFilter(entry.agentSession, filter)
           : true
 
-    let group: WorktreeGroup | LocalUngroupedGroup | RemoteGroup
-    if (isRemote) {
-      group = remote
-    } else {
-      const ownerPath = path ? deepestPathMatch(path, worktreePaths) : null
-      const groupIndex = ownerPath !== null ? groupIndexByPath.get(ownerPath) : undefined
-      group = groupIndex !== undefined ? groups[groupIndex] : localUngrouped
-    }
+    const target = isRemote ? null : deepestPathMatch(path ?? '', sectionIndexByWorktreePath.keys())
+    const sectionIndex = target !== null ? sectionIndexByWorktreePath.get(target) : undefined
+    const section =
+      sectionIndex !== undefined ? sections[sectionIndex] : isRemote ? remote : workspace
 
     if (visible) {
-      group.entries.push(entry)
-      if (isAttentionEntry(entry)) group.attentionCount += 1
+      section.entries.push(entry)
+      if (isAttentionEntry(entry)) section.attentionCount += 1
     } else if (isAttentionEntry(entry)) {
-      group.hiddenAttentionCount += 1
+      section.hiddenAttentionCount += 1
     }
   }
 
@@ -202,37 +273,11 @@ export function buildWorkspaceView(
   }
 
   const visibleEntries: GroupedSessionEntry[] = []
-  for (const group of groups) {
-    if (!group.collapsed) visibleEntries.push(...group.entries)
+  for (const section of sections) {
+    if (!section.collapsed) visibleEntries.push(...section.entries)
   }
-  if (localUngrouped.entries.length > 0) visibleEntries.push(...localUngrouped.entries)
+  if (workspace.entries.length > 0) visibleEntries.push(...workspace.entries)
   if (remote.entries.length > 0) visibleEntries.push(...remote.entries)
 
-  return { worktreeGroups: groups, localUngrouped, remote, visibleEntries }
-}
-
-function createWorktreeGroup(
-  repository: WorkspaceRepository,
-  worktree: WorkspaceRepository['worktrees'][number],
-  collapsed: boolean
-): WorktreeGroup {
-  return {
-    kind: 'worktree',
-    worktreeId: worktree.id,
-    repositoryId: repository.id,
-    repositoryName: repository.name,
-    repositoryStale: repository.stale,
-    ...(repository.error !== undefined ? { repositoryError: repository.error } : {}),
-    worktreePath: worktree.path,
-    ...(worktree.branch !== undefined ? { branch: worktree.branch } : {}),
-    detached: worktree.detached,
-    headRevision: worktree.headRevision,
-    isMain: worktree.isMain,
-    dirty: worktree.dirty,
-    openspec: worktree.openspec,
-    collapsed,
-    entries: [],
-    attentionCount: 0,
-    hiddenAttentionCount: 0,
-  }
+  return { sections, workspace, remote, visibleEntries }
 }
