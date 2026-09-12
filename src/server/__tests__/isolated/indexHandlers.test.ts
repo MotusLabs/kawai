@@ -1069,6 +1069,132 @@ describe('server message handlers', () => {
     expect(createCalls[1]).toEqual({ projectPath: '/repo/main', name: undefined, command: undefined })
   })
 
+  /**
+   * The async refresh chain awaits the worker promise and its own
+   * setTimeout(0) yield before replacing the registry — one macrotask is
+   * not enough for an externally-triggered refresh to fully settle.
+   */
+  async function settleRefresh() {
+    for (let round = 0; round < 5; round += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    }
+  }
+
+  test('session-create with auto-start holds the prompt and injects it once at first idle', async () => {
+    // Task 8.1/8.2 wiring: the create-session message carries the change
+    // name; the server holds the mapped apply command and injects it — text
+    // plus Enter, the terminal-input keystroke pair — exactly once, at the
+    // session's first idle (`waiting`) status report.
+    const createdSession: Session = {
+      ...baseSession,
+      id: 'auto-1',
+      tmuxWindow: 'agentboard:auto-1',
+      status: 'working',
+    }
+    sessionManagerState.createWindow = () => createdSession
+    // The creation flow triggers its own refresh; seed the worker list so
+    // that refresh keeps the created session in the registry instead of
+    // discarding its pending prompt as a vanished session.
+    refreshWorkerSessions = [{ ...createdSession, status: 'working' }]
+    const tmuxSendKeys: string[][] = []
+    spawnSyncImpl = ((command: string[]) => {
+      const cmd = Array.isArray(command) ? command : [String(command)]
+      if (cmd[0] === 'tmux' && cmd.includes('send-keys')) {
+        tmuxSendKeys.push(cmd)
+      }
+      return {
+        exitCode: 0,
+        stdout: Buffer.from(''),
+        stderr: Buffer.from(''),
+      }
+    }) as unknown as typeof Bun.spawnSync
+
+    const { serveOptions } = await loadIndex()
+    const { ws, sent } = createWs()
+    const websocket = serveOptions.websocket
+    if (!websocket) {
+      throw new Error('WebSocket handlers not configured')
+    }
+
+    websocket.message?.(
+      ws as never,
+      JSON.stringify({
+        type: 'session-create',
+        projectPath: '/repo/.worktrees/add-auth',
+        command: 'claude',
+        autoStartChange: 'add-auth',
+      })
+    )
+    expect(sent.find((message) => message.type === 'session-created')).toBeTruthy()
+
+    // Let the creation-triggered refresh settle before driving explicit
+    // refreshes (a coalesced refresh would observe a stale worker list).
+    await settleRefresh()
+    websocket.message?.(ws as never, JSON.stringify({ type: 'session-refresh' }))
+    await settleRefresh()
+    expect(tmuxSendKeys).toHaveLength(0)
+
+    // The first idle report injects the mapped apply command exactly once.
+    refreshWorkerSessions = [{ ...createdSession, status: 'waiting' }]
+    websocket.message?.(ws as never, JSON.stringify({ type: 'session-refresh' }))
+    await settleRefresh()
+    expect(tmuxSendKeys).toEqual([
+      ['tmux', 'send-keys', '-t', 'agentboard:auto-1', '-l', '--', '/opsx:apply add-auth'],
+      ['tmux', 'send-keys', '-t', 'agentboard:auto-1', 'Enter'],
+    ])
+
+    // Double-trigger protection: later refreshes send nothing more.
+    refreshWorkerSessions = [{ ...createdSession, status: 'waiting' }]
+    websocket.message?.(ws as never, JSON.stringify({ type: 'session-refresh' }))
+    await settleRefresh()
+    expect(tmuxSendKeys).toHaveLength(2)
+  })
+
+  test('session-create with auto-start for an unrecognized agent sends nothing', async () => {
+    // Task 8.3: no mapped apply command — nothing is held, nothing is sent,
+    // even once the session reports idle.
+    const createdSession: Session = {
+      ...baseSession,
+      id: 'auto-2',
+      tmuxWindow: 'agentboard:auto-2',
+      status: 'waiting',
+    }
+    sessionManagerState.createWindow = () => createdSession
+    const tmuxSendKeys: string[][] = []
+    spawnSyncImpl = ((command: string[]) => {
+      const cmd = Array.isArray(command) ? command : [String(command)]
+      if (cmd[0] === 'tmux' && cmd.includes('send-keys')) {
+        tmuxSendKeys.push(cmd)
+      }
+      return {
+        exitCode: 0,
+        stdout: Buffer.from(''),
+        stderr: Buffer.from(''),
+      }
+    }) as unknown as typeof Bun.spawnSync
+
+    const { serveOptions } = await loadIndex()
+    const { ws } = createWs()
+    const websocket = serveOptions.websocket
+    if (!websocket) {
+      throw new Error('WebSocket handlers not configured')
+    }
+
+    websocket.message?.(
+      ws as never,
+      JSON.stringify({
+        type: 'session-create',
+        projectPath: '/repo/.worktrees/add-auth',
+        command: 'vim .',
+        autoStartChange: 'add-auth',
+      })
+    )
+    refreshWorkerSessions = [createdSession]
+    websocket.message?.(ws as never, JSON.stringify({ type: 'session-refresh' }))
+    await settleRefresh()
+    expect(tmuxSendKeys).toHaveLength(0)
+  })
+
   test('session-create at a disappeared worktree rejects with an actionable error and refreshes workspace', async () => {
     // Task 7.3: the selected worktree vanished between discovery and
     // submission. The handler must reject with an error naming the stale

@@ -75,6 +75,7 @@ import { createWorktree } from './git/createWorktree'
 import { createChangeWorktree } from './git/createChangeWorktree'
 import { WorkspaceCoordinator } from './workspace/workspaceCoordinator'
 import { WorkspaceWatcher, createNodeWatcherHost } from './workspace/workspaceWatcher'
+import { PendingAutoStartStore, type AutoStartInputSender } from './pendingAutoStart'
 import { RemoteSessionPoller, splitSshOptions, buildRemoteSessionId } from './remoteSessions'
 import { normalizePaneStartCommand } from './agentDetection'
 import { generateSessionName } from './nameGenerator'
@@ -1177,6 +1178,7 @@ async function refreshSessionsAsync(): Promise<void> {
         const hydrated = hydrateSessionsWithAgentSessions(sessions)
         const withOverrides = applyForceWorkingOverrides(hydrated)
         registry.replaceSessions(mergeRemoteSessions(withOverrides))
+        reconcilePendingAutoStart()
         const hydrateMs = Math.round(performance.now() - tHydrate)
         if (hydrateMs > 50) {
           logger.debug('session_refresh_hydrate_slow', { hydrateMs, sessionCount: sessions.length })
@@ -1204,6 +1206,7 @@ async function refreshSessionsAsync(): Promise<void> {
         const hydrated = hydrateSessionsWithAgentSessions(sessions)
         const withOverrides = applyForceWorkingOverrides(hydrated)
         registry.replaceSessions(mergeRemoteSessions(withOverrides))
+        reconcilePendingAutoStart()
         return
       }
     }
@@ -1214,6 +1217,56 @@ async function refreshSessionsAsync(): Promise<void> {
 
 function refreshSessions() {
   void refreshSessionsAsync()
+}
+
+/**
+ * Pending apply auto-start prompts, held server-side so they survive client
+ * reloads between session creation and the agent's first idle status (§8.1).
+ */
+const pendingAutoStart = new PendingAutoStartStore()
+
+/**
+ * Send literal text plus Enter to a local tmux target — the same keystroke
+ * pair the terminal-input path delivers for a line of input.
+ */
+const sendAutoStartInput: AutoStartInputSender = (tmuxTarget, text) => {
+  if (!isValidTmuxTarget(tmuxTarget)) return false
+  try {
+    const typed = Bun.spawnSync(['tmux', 'send-keys', '-t', tmuxTarget, '-l', '--', text], {
+      timeout: 5000,
+      stdout: 'pipe',
+      stderr: 'pipe',
+    })
+    if (typed.exitCode !== 0) return false
+    const entered = Bun.spawnSync(['tmux', 'send-keys', '-t', tmuxTarget, 'Enter'], {
+      timeout: 5000,
+      stdout: 'pipe',
+      stderr: 'pipe',
+    })
+    return entered.exitCode === 0
+  } catch {
+    return false
+  }
+}
+
+/**
+ * After every registry refresh: drop prompts whose session is gone, and
+ * inject each remaining prompt into its session the first time that session
+ * reports the idle status (§8.2). Injection mirrors the terminal-input Enter
+ * handling — the session flips to working and a debounced refresh follows.
+ */
+function reconcilePendingAutoStart(): void {
+  if (pendingAutoStart.size === 0) return
+  const sessions = registry.getAll()
+  pendingAutoStart.retainAll(new Set(sessions.map((session) => session.id)))
+  const injected = pendingAutoStart.injectWaiting(sessions, sendAutoStartInput)
+  for (const sessionId of injected) {
+    logger.info('auto_start_injected', { sessionId })
+    setForceWorking(sessionId)
+  }
+  if (injected.length > 0) {
+    scheduleEnterRefresh()
+  }
 }
 
 function listWindowsSyncOrNull(context: string): Session[] | null {
@@ -2573,6 +2626,21 @@ function handleMessage(
             message.name,
             message.command
           ))
+          // Hold the auto-start prompt before announcing the session: the
+          // first refresh after creation may already report idle (§8.1).
+          if (message.autoStartChange) {
+            const held = pendingAutoStart.holdFromCommand(
+              created.id,
+              message.command,
+              message.autoStartChange
+            )
+            if (!held) {
+              logger.info('auto_start_not_held', {
+                sessionId: created.id,
+                reason: 'unrecognized_agent_or_invalid_change',
+              })
+            }
+          }
           // Add session to registry immediately so terminal can attach
           refreshGeneration++
           const currentSessions = registry.getAll()
@@ -3126,6 +3194,8 @@ async function handleKill(
   }
   const remaining = registry.getAll().filter((item) => item.id !== sessionId)
   registry.replaceSessions(remaining)
+  // A killed session never reaches idle — discard its pending auto-start (§8.1).
+  pendingAutoStart.discard(sessionId)
   logger.info('session_kill_completed', {
     ...auditFields,
     durationMs: Date.now() - startedAt,
