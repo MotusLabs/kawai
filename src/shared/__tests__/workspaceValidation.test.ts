@@ -235,3 +235,101 @@ describe('parseCreateWorktreePayload', () => {
     expect(parseCreateWorktreePayload({ repositoryId: '/r/.git', branch: 'main', destination: '' })).toBeNull()
   })
 })
+
+describe('changeRegistry parsing', () => {
+  const withRegistry = (changeRegistry: unknown) => ({
+    ...validSnapshot,
+    repositories: [
+      {
+        ...validSnapshot.repositories[0],
+        changeRegistry,
+      },
+    ],
+  })
+
+  test('parses worktree-source and missing-in-worktree entries', () => {
+    const snapshot = parseWorkspaceSnapshot(
+      withRegistry([
+        {
+          name: 'add-auth',
+          status: 'in-progress',
+          completedTasks: 9,
+          totalTasks: 11,
+          source: 'worktree',
+          worktreeId: '/repo/.git::/repo/.worktrees/add-auth',
+          worktreePath: '/repo/.worktrees/add-auth',
+        },
+        {
+          name: 'add-dark-mode',
+          source: 'registry',
+          worktreeId: '/repo/.git::/repo/.worktrees/add-dark-mode',
+          worktreePath: '/repo/.worktrees/add-dark-mode',
+          missingInWorktree: true,
+        },
+      ])
+    )
+    expect(snapshot?.repositories[0].changeRegistry).toEqual([
+      {
+        name: 'add-auth',
+        status: 'in-progress',
+        completedTasks: 9,
+        totalTasks: 11,
+        source: 'worktree',
+        worktreeId: '/repo/.git::/repo/.worktrees/add-auth',
+        worktreePath: '/repo/.worktrees/add-auth',
+      },
+      {
+        name: 'add-dark-mode',
+        source: 'registry',
+        worktreeId: '/repo/.git::/repo/.worktrees/add-dark-mode',
+        worktreePath: '/repo/.worktrees/add-dark-mode',
+        missingInWorktree: true,
+      },
+    ])
+  })
+
+  test('drops malformed entries and tolerates an absent registry', () => {
+    const snapshot = parseWorkspaceSnapshot(
+      withRegistry([
+        { name: 'ok', source: 'registry' },
+        null,
+        { completedTasks: 1 },
+        'nope',
+        { name: '', source: 'worktree' },
+        { name: 'negative', source: 'registry', completedTasks: -1 },
+      ])
+    )
+    expect(snapshot?.repositories[0].changeRegistry).toEqual([
+      { name: 'ok', source: 'registry' },
+      // Invalid optional fields are dropped, the entry itself survives.
+      { name: 'negative', source: 'registry' },
+    ])
+
+    const legacy = parseWorkspaceSnapshot(validSnapshot)
+    expect(legacy?.repositories[0].changeRegistry).toBeUndefined()
+  })
+
+  test('normalizes an unknown source and inconsistent worktree fields', () => {
+    const snapshot = parseWorkspaceSnapshot(
+      withRegistry([
+        // Unknown source falls back to registry.
+        { name: 'a', source: 'elsewhere' },
+        // Worktree-source entry without a full id/path pair keeps registry semantics.
+        { name: 'b', source: 'worktree', worktreeId: 'only-id' },
+        // Registry-source entry with missingInWorktree false simply omits it.
+        {
+          name: 'c',
+          source: 'registry',
+          worktreeId: 'wt-c',
+          worktreePath: '/repo/.worktrees/c',
+          missingInWorktree: false,
+        },
+      ])
+    )
+    expect(snapshot?.repositories[0].changeRegistry).toEqual([
+      { name: 'a', source: 'registry' },
+      { name: 'b', source: 'registry' },
+      { name: 'c', source: 'registry', worktreeId: 'wt-c', worktreePath: '/repo/.worktrees/c' },
+    ])
+  })
+})

@@ -9,6 +9,7 @@ import type {
   WorkspaceRepository,
   WorkspaceSnapshot,
 } from '../../shared/workspace'
+import { resolveChangeRegistry } from './changeRegistry'
 
 export const OPENSPEC_TIMEOUT_MS = 15_000
 export const OPENSPEC_MAX_OUTPUT_BYTES = 512 * 1024
@@ -172,7 +173,7 @@ export function refreshRepositoryOpenSpec(
     }
   }
 
-  return {
+  const refreshed: WorkspaceRepository = {
     ...repository,
     worktrees: repository.worktrees.map((worktree) => {
       const discovered = discoverWorktreeOpenSpec(worktree.path, options)
@@ -189,6 +190,9 @@ export function refreshRepositoryOpenSpec(
       return { ...worktree, openspec: discovered }
     }),
   }
+  // The registry is derived from the (possibly retained) OpenSpec states, so
+  // a transient discovery failure keeps last-valid registry values too.
+  return { ...refreshed, changeRegistry: resolveChangeRegistry(refreshed) }
 }
 
 /**

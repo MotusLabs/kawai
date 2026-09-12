@@ -39,6 +39,36 @@ export interface WorktreeOpenSpecState {
   error?: string
 }
 
+/**
+ * Directory inside a repository's main worktree where convention worktrees
+ * for OpenSpec changes live: `<main>/.worktrees/<change-name>`.
+ */
+export const CHANGE_WORKTREES_DIR = '.worktrees'
+
+/** Which filesystem copy of a change is authoritative for display. */
+export type ChangeSourceKind = 'registry' | 'worktree'
+
+/**
+ * A registry change with its canonical source resolved. The registry lists
+ * unarchived changes from the repository's main worktree; once the convention
+ * worktree exists, that worktree's copy is canonical for status/progress.
+ */
+export interface ChangeRegistryEntry extends OpenSpecChangeSummary {
+  /** Canonical source for status and progress. */
+  source: ChangeSourceKind
+  /** Convention worktree id, when `.worktrees/<name>` exists. */
+  worktreeId?: string
+  /** Convention worktree path, when it exists. */
+  worktreePath?: string
+  /** True when the convention worktree exists but does not contain the change. */
+  missingInWorktree?: boolean
+}
+
+/** Stable section key for a change section. */
+export function changeSectionKey(repositoryId: string, changeName: string): string {
+  return `${repositoryId}::change::${changeName}`
+}
+
 /** A Git worktree (main or linked) belonging to a discovered repository. */
 export interface WorkspaceWorktree {
   /**
@@ -76,6 +106,12 @@ export interface WorkspaceRepository {
   worktrees: WorkspaceWorktree[]
   /** Local branches (assigned and unassigned). */
   branches: WorkspaceBranch[]
+  /**
+   * Registry of unarchived changes with canonical sources resolved. Optional
+   * so payloads from servers that predate the registry stay valid; treat
+   * absent as empty.
+   */
+  changeRegistry?: ChangeRegistryEntry[]
   /** True when the last successful snapshot is shown after a failed refresh. */
   stale: boolean
   /** Repository-scoped discovery error message. */

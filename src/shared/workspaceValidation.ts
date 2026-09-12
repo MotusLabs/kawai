@@ -4,6 +4,7 @@
 // corrupted ones (malformed entries are dropped, never fabricated).
 
 import type {
+  ChangeRegistryEntry,
   OpenSpecChangeSummary,
   WorkspaceBranch,
   WorkspaceRepository,
@@ -149,6 +150,32 @@ function parseBranch(value: unknown): WorkspaceBranch | null {
   return branch
 }
 
+/**
+ * Parse one registry entry. Malformed entries are dropped by the caller.
+ * A source claiming 'worktree' without a complete id/path pair is
+ * downgraded to 'registry' so downstream placement never fabricates a
+ * worktree; missingInWorktree only survives on registry-source entries.
+ */
+function parseChangeRegistryEntry(value: unknown): ChangeRegistryEntry | null {
+  if (!isRecord(value)) return null
+  const base = parseOpenSpecChange(value)
+  if (base === null) return null
+  const worktreeId = optionalString(value.worktreeId)
+  const worktreePath = optionalString(value.worktreePath)
+  const hasWorktree = worktreeId !== undefined && worktreePath !== undefined
+  const source: ChangeRegistryEntry['source'] =
+    value.source === 'worktree' && hasWorktree ? 'worktree' : 'registry'
+  const entry: ChangeRegistryEntry = { ...base, source }
+  if (hasWorktree) {
+    entry.worktreeId = worktreeId
+    entry.worktreePath = worktreePath
+    if (source === 'registry' && value.missingInWorktree === true) {
+      entry.missingInWorktree = true
+    }
+  }
+  return entry
+}
+
 function parseRepository(value: unknown): WorkspaceRepository | null {
   if (!isRecord(value)) return null
   const id = boundedString(value.id, WORKSPACE_MAX_FIELD_LENGTH)
@@ -178,6 +205,14 @@ function parseRepository(value: unknown): WorkspaceRepository | null {
     worktrees,
     branches,
     stale: value.stale === true,
+  }
+  if (Array.isArray(value.changeRegistry)) {
+    const changeRegistry: ChangeRegistryEntry[] = []
+    for (const rawEntry of value.changeRegistry.slice(0, WORKSPACE_MAX_CHANGES)) {
+      const entry = parseChangeRegistryEntry(rawEntry)
+      if (entry) changeRegistry.push(entry)
+    }
+    repository.changeRegistry = changeRegistry
   }
   const error = optionalString(value.error)
   if (error !== undefined) repository.error = error
