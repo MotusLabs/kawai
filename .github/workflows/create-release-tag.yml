@@ -12,7 +12,7 @@ permissions:
 jobs:
   create-tag:
     if: github.event.pull_request.merged == true
-    runs-on: local-k8s-public
+    runs-on: ubuntu-latest
     timeout-minutes: 5
 
     steps:
