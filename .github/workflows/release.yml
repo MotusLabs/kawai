@@ -10,7 +10,7 @@ jobs:
     # Every target is a `bun build --compile` cross-compile, so all four
     # platforms build on one Linux runner: the frontend is built once and the
     # loop below only swaps the compile target.
-    runs-on: local-k8s
+    runs-on: ubuntu-latest
     timeout-minutes: 20
 
     steps:
@@ -141,7 +141,7 @@ jobs:
 
   release:
     needs: build
-    runs-on: local-k8s
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
       # Creating the GitHub Release needs nothing else: npm publishing and
