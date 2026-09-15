@@ -51,6 +51,9 @@ process.env.PI_HOME = piDir
 
 export default defineConfig({
   testDir: 'tests/e2e',
+  // HTML report only in CI: ci.yml uploads playwright-report/ when the suite
+  // fails. Locally a report dir nobody reads is just clutter, so stdout only.
+  reporter: process.env.CI ? [['dot'], ['html', { open: 'never' }]] : 'list',
   timeout: 30000,
   expect: {
     timeout: 5000,
