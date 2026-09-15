@@ -8,7 +8,6 @@
 import { test, expect, type Page } from '@playwright/test'
 import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
 
 // Watches are best-effort; each external mutation lands by the next periodic
