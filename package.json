@@ -13,7 +13,7 @@
     "bun": ">=1.3.14"
   },
   "scripts": {
-    "dev": "concurrently -k \"bun run dev:server\" \"bun run dev:client\"",
+    "dev": "PORT=${PORT:-5050} HOSTNAME=0.0.0.0 concurrently -k \"bun run dev:server\" \"bun run dev:client\"",
     "dev:server": "bun scripts/dev-server.ts",
     "dev:client": "vite --host",
     "build": "vite build",
