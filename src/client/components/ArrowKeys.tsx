@@ -20,6 +20,7 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from 'react'
 import { MoveIcon } from '@untitledui-icons/react/line'
+import { useKeyboardShift } from '../hooks/useKeyboardShift'
 
 interface ArrowKeysProps {
   onSendKey: (key: string) => void
@@ -39,6 +40,13 @@ export const ARROW_KEYS = {
 } as const
 
 export type ArrowDirection = keyof typeof ARROW_KEYS
+
+const SHIFTED_ARROW_KEYS: Record<ArrowDirection, string> = {
+  up: '\x1b[1;2A',
+  down: '\x1b[1;2B',
+  left: '\x1b[1;2D',
+  right: '\x1b[1;2C',
+}
 
 export const REPEAT_INITIAL_DELAY = 400 // ms held before auto-repeat starts
 export const REPEAT_INTERVAL = 100 // ms between repeats while held
@@ -101,6 +109,7 @@ export default function ArrowKeys({
   const [padLeft, setPadLeft] = useState(0)
   const [heldDirection, setHeldDirection] = useState<ArrowDirection | null>(null)
   const clusterId = useId()
+  const shiftRef = useKeyboardShift(sessionKey, disabled)
 
   const triggerRef = useRef<HTMLButtonElement | null>(null)
   const wasKeyboardVisibleRef = useRef(false)
@@ -200,8 +209,9 @@ export default function ArrowKeys({
 
   const send = useCallback((direction: ArrowDirection) => {
     if (disabledRef.current) return
-    onSendKeyRef.current(ARROW_KEYS[direction])
-  }, [])
+    const keys = shiftRef.current ? SHIFTED_ARROW_KEYS : ARROW_KEYS
+    onSendKeyRef.current(keys[direction])
+  }, [shiftRef])
 
   const press = useCallback(
     (direction: ArrowDirection) => {
@@ -381,6 +391,9 @@ export default function ArrowKeys({
                     WebkitTouchCallout: 'none',
                     WebkitUserSelect: 'none',
                   }}
+                  // Safari still synthesizes mousedown after a canceled pointerdown.
+                  // Prevent it from moving focus away from the software keyboard.
+                  onMouseDown={(event) => event.preventDefault()}
                   onPointerDown={handleArrowPointerDown(direction)}
                   onPointerUp={handleArrowRelease}
                   onPointerCancel={handleArrowRelease}
