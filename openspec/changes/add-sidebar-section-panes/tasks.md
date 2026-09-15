@@ -27,12 +27,12 @@
 
 ## 5. Mobile drawer
 
-- [ ] 5.1 Confirm the panes size correctly inside `.session-drawer`'s bounded flex column and adjust the drawer's height model only if the panes overflow it; verify in `sessionDrawer.test.tsx` that the drawer renders the same panes with the same stored fractions.
-- [ ] 5.2 Verify a pane drag inside the drawer does not scroll or close the drawer; cover with an e2e case at a mobile viewport.
+- [x] 5.1 Confirm the panes size correctly inside `.session-drawer`'s bounded flex column and adjust the drawer's height model only if the panes overflow it; verify in `sessionDrawer.test.tsx` that the drawer renders the same panes with the same stored fractions.
+- [x] 5.2 Verify a pane drag inside the drawer does not scroll or close the drawer; cover with an e2e case at a mobile viewport.
 
 ## 6. Verification
 
-- [ ] 6.1 Add a Playwright case in `tests/e2e` asserting the `Remote` pane occupies ~25% of the sidebar height by default, that it scrolls independently of the sections above, and that a drag changes its share and survives a reload.
-- [ ] 6.2 Add a Playwright case at a short viewport asserting the panes shrink proportionally while the change/worktree region keeps its minimum height and no header is clipped.
+- [x] 6.1 Add a Playwright case in `tests/e2e` asserting the `Remote` pane occupies ~25% of the sidebar height by default, that it scrolls independently of the sections above, and that a drag changes its share and survives a reload.
+- [x] 6.2 Add a Playwright case at a short viewport asserting the panes shrink proportionally while the change/worktree region keeps its minimum height and no header is clipped.
 - [ ] 6.3 Run `bun run lint && bun run typecheck && bun run test` and the e2e suite; verify all pass.
 - [ ] 6.4 Review the rendered sidebar with the `dev-browser` skill at default, collapsed, and resized states; verify the `Workspace` and `Remote` headers stay docked and legible in each.

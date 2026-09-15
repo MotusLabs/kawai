@@ -413,6 +413,80 @@ describe('SessionDrawer', () => {
     })
   })
 
+  test('renders the fallback panes with the stored fractions', () => {
+    const { createNodeMock } = createDrawerMock()
+
+    const snapshot: WorkspaceSnapshot = {
+      repositories: [
+        {
+          id: '/repo/.git',
+          name: 'repo',
+          commonDir: '/repo/.git',
+          stale: false,
+          worktrees: [
+            {
+              id: '/repo/.git::/repo',
+              repositoryId: '/repo/.git',
+              path: '/repo',
+              branch: 'main',
+              headRevision: 'aaaaaaa1',
+              detached: false,
+              isMain: true,
+              dirty: false,
+              openspec: { changes: [], stale: false },
+            },
+          ],
+          branches: [],
+        },
+      ],
+      generatedAt: '2024-01-01T00:00:00.000Z',
+    }
+    const sessions: Session[] = [
+      { ...baseSession, id: 'in-repo', projectPath: '/repo/src' },
+      { ...baseSession, id: 'plain', projectPath: '/plain/project' },
+      { ...baseSession, id: 'remote', projectPath: '/remote/path', remote: true, host: 'box.example' },
+    ]
+    const view = buildWorkspaceView(snapshot, sessions, [], [])
+    useSettingsStore.setState({ workspacePaneFraction: 0.3, remotePaneFraction: 0.45 })
+
+    let renderer: TestRenderer.ReactTestRenderer
+    act(() => {
+      renderer = TestRenderer.create(
+        <SessionDrawer
+          isOpen
+          onClose={() => {}}
+          sessions={sessions}
+          selectedSessionId={null}
+          onSelect={() => {}}
+          onRename={() => {}}
+          onNewSession={() => true}
+          loading={false}
+          error={null}
+          workspaceView={view}
+        />,
+        { createNodeMock }
+      )
+    })
+
+    // The drawer renders the same panes as the desktop sidebar, sized by the
+    // same persisted fractions.
+    const workspacePane = renderer!.root.findByProps({ 'data-testid': 'workspace-section' })
+    expect(workspacePane.props.style.flex).toBe('0 1 30%')
+    const remotePane = renderer!.root.findByProps({ 'data-testid': 'remote-section' })
+    expect(remotePane.props.style.flex).toBe('0 1 45%')
+
+    // A keyboard resize inside the drawer reaches the shared store fraction.
+    const remoteHandle = remotePane.findByProps({ 'data-testid': 'pane-resize-handle' })
+    act(() => {
+      remoteHandle.props.onKeyDown({ key: 'ArrowUp', preventDefault: () => {} })
+    })
+    expect(useSettingsStore.getState().remotePaneFraction).toBeCloseTo(0.47, 10)
+
+    act(() => {
+      renderer!.unmount()
+    })
+  })
+
   test('ignores short swipe gestures', () => {
     const closeCalls: number[] = []
     const { listeners, createNodeMock } = createDrawerMock()
