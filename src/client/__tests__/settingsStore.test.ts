@@ -39,6 +39,8 @@ const {
   LEGACY_DEFAULT_PROJECT_DIR,
   DEFAULT_COMMAND,
   DEFAULT_PRESETS,
+  PANE_MIN_FRACTION,
+  PANE_MAX_FRACTION,
   isValidPreset,
   normalizePreset,
   getFullCommand,
@@ -380,6 +382,65 @@ describe('preset migration', () => {
     // Should be unchanged
     expect(migrated.command).toBe('node --inspect app.js')
     expect(migrated).toEqual(v2Preset)
+  })
+})
+
+describe('workspace pane fractions', () => {
+  beforeEach(() => {
+    useSettingsStore.setState({
+      workspacePaneFraction: 0.25,
+      remotePaneFraction: 0.25,
+    })
+  })
+
+  test('defaults both panes to a quarter of the navigator height', () => {
+    const state = useSettingsStore.getState()
+    expect(state.workspacePaneFraction).toBe(0.25)
+    expect(state.remotePaneFraction).toBe(0.25)
+    expect(PANE_MIN_FRACTION).toBe(0.1)
+    expect(PANE_MAX_FRACTION).toBe(0.6)
+  })
+
+  test('setters clamp out-of-range fractions to the pane bounds', () => {
+    const { setWorkspacePaneFraction, setRemotePaneFraction } = useSettingsStore.getState()
+    setWorkspacePaneFraction(0.01)
+    expect(useSettingsStore.getState().workspacePaneFraction).toBe(0.1)
+    setWorkspacePaneFraction(0.99)
+    expect(useSettingsStore.getState().workspacePaneFraction).toBe(0.6)
+    setRemotePaneFraction(-1)
+    expect(useSettingsStore.getState().remotePaneFraction).toBe(0.1)
+    setRemotePaneFraction(2)
+    expect(useSettingsStore.getState().remotePaneFraction).toBe(0.6)
+  })
+
+  test('setters fall back to the default for non-finite values', () => {
+    useSettingsStore.getState().setWorkspacePaneFraction(Number.NaN)
+    expect(useSettingsStore.getState().workspacePaneFraction).toBe(0.25)
+  })
+
+  test('state persisted at version 7 without the pane keys rehydrates to the defaults', async () => {
+    storage.setItem('agentboard-settings', JSON.stringify({
+      state: { sessionSortMode: 'status' },
+      version: 7,
+    }))
+
+    await useSettingsStore.persist.rehydrate()
+
+    expect(useSettingsStore.persist.getOptions().version).toBe(7)
+    expect(useSettingsStore.getState().workspacePaneFraction).toBe(0.25)
+    expect(useSettingsStore.getState().remotePaneFraction).toBe(0.25)
+  })
+
+  test('hand-edited persisted fractions are re-clamped on rehydration', async () => {
+    storage.setItem('agentboard-settings', JSON.stringify({
+      state: { workspacePaneFraction: 5, remotePaneFraction: 'garbage' },
+      version: 7,
+    }))
+
+    await useSettingsStore.persist.rehydrate()
+
+    expect(useSettingsStore.getState().workspacePaneFraction).toBe(0.6)
+    expect(useSettingsStore.getState().remotePaneFraction).toBe(0.25)
   })
 })
 

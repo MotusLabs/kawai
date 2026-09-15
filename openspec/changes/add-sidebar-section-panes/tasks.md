@@ -1,9 +1,9 @@
 ## 1. State and view model
 
-- [ ] 1.1 Add `FALLBACK_WORKSPACE_SECTION_KEY = 'fallback::workspace'` and `FALLBACK_REMOTE_SECTION_KEY = 'fallback::remote'` to `src/shared/workspace.ts` beside `changeSectionKey`; verify with a unit test asserting neither value can be produced by `changeSectionKey` or by a worktree id.
-- [ ] 1.2 Add `workspacePaneFraction` and `remotePaneFraction` (default `0.25`) plus clamped setters to `src/client/stores/settingsStore.ts`, with `PANE_MIN_FRACTION = 0.1` / `PANE_MAX_FRACTION = 0.6` exported; verify in `settingsStore.test.ts` that out-of-range values clamp and that state persisted at `version: 7` without the keys rehydrates to the defaults (no version bump).
-- [ ] 1.3 Add `collapsed: boolean` to `FallbackSectionData` in `src/client/utils/workspaceView.ts` and populate it from the two reserved keys; verify in `workspaceView.test.ts`.
-- [ ] 1.4 Make a collapsed fallback section move its attention into `hiddenAttentionCount` and drop its rows from `visibleEntries`; verify in `workspaceView.test.ts` that keyboard navigation order skips rows inside a collapsed `Remote` section while its hidden attention count is reported.
+- [x] 1.1 Add `FALLBACK_WORKSPACE_SECTION_KEY = 'fallback::workspace'` and `FALLBACK_REMOTE_SECTION_KEY = 'fallback::remote'` to `src/shared/workspace.ts` beside `changeSectionKey`; verify with a unit test asserting neither value can be produced by `changeSectionKey` or by a worktree id.
+- [x] 1.2 Add `workspacePaneFraction` and `remotePaneFraction` (default `0.25`) plus clamped setters to `src/client/stores/settingsStore.ts`, with `PANE_MIN_FRACTION = 0.1` / `PANE_MAX_FRACTION = 0.6` exported; verify in `settingsStore.test.ts` that out-of-range values clamp and that state persisted at `version: 7` without the keys rehydrates to the defaults (no version bump).
+- [x] 1.3 Add `collapsed: boolean` to `FallbackSectionData` in `src/client/utils/workspaceView.ts` and populate it from the two reserved keys; verify in `workspaceView.test.ts`.
+- [x] 1.4 Make a collapsed fallback section move its attention into `hiddenAttentionCount` and drop its rows from `visibleEntries`; verify in `workspaceView.test.ts` that keyboard navigation order skips rows inside a collapsed `Remote` section while its hidden attention count is reported.
 
 ## 2. Collapsible fallback headers
 
