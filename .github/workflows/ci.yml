@@ -60,6 +60,22 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      # The server's workspace discovery shells out to `openspec list --json`
+      # per worktree to build the change registry; the change-seeding and
+      # workspace-sync specs assert on registry content and cannot pass
+      # without the CLI on PATH.
+      - name: Ensure openspec CLI is available
+        run: |
+          if command -v openspec >/dev/null 2>&1; then
+            echo "openspec $(openspec --version) already present"
+            exit 0
+          fi
+          bun install -g @fission-ai/openspec@1.12.0
+          command -v openspec >/dev/null 2>&1 || {
+            echo "::error::openspec install reported success but is not on PATH"
+            exit 1
+          }
+
       - name: Ensure tmux is available
         run: |
           if command -v tmux >/dev/null 2>&1; then
