@@ -118,6 +118,62 @@ describe('createChangeWorktree operation', () => {
     expect(porcelainAfter).toEqual(['?? .worktrees/', '?? openspec/'])
   })
 
+  test('seeds the commit with a fallback identity when git has none configured', () => {
+    // Hide any global/system git identity the host happens to have — a bare
+    // CI runner is exactly this state, and `git commit` refuses without it.
+    // Git also exports GIT_AUTHOR_*/GIT_COMMITTER_* to hooks, and env vars
+    // outrank `-c`; scrub them so this test means the same thing whether it
+    // runs standalone or under the repo's pre-commit hook.
+    const noIdentityEnv = { GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null' }
+    const authorEnvKeys = [
+      'GIT_AUTHOR_NAME',
+      'GIT_AUTHOR_EMAIL',
+      'GIT_COMMITTER_NAME',
+      'GIT_COMMITTER_EMAIL',
+    ]
+    const savedAuthorEnv = authorEnvKeys.map((key) => [key, process.env[key]] as const)
+    for (const key of authorEnvKeys) delete process.env[key]
+    try {
+      const repo = makeRepo({ change: 'add-auth' })
+
+      const result = createChangeWorktree(
+        { repositoryId: repo.commonDir, change: 'add-auth' },
+        { env: noIdentityEnv }
+      )
+
+      expect(result.ok).toBe(true)
+      if (!result.ok || result.operation !== 'create-change-worktree') throw new Error('unreachable')
+      const destination = fs.realpathSync(path.join(worktreesDir(repo), 'add-auth'))
+      const author = runGit(['-C', destination, 'log', '-1', '--pretty=%an <%ae>'], {
+        env: noIdentityEnv,
+      }).stdout.trim()
+      expect(author).toBe('Kawai <kawai@localhost>')
+    } finally {
+      for (const [key, value] of savedAuthorEnv) {
+        if (value === undefined) delete process.env[key]
+        else process.env[key] = value
+      }
+    }
+  })
+
+  test('prefers a configured identity over the seed fallback', () => {
+    const repo = makeRepo({ change: 'add-auth' })
+    const noGlobalConfig = { GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null' }
+
+    const result = createChangeWorktree(
+      { repositoryId: repo.commonDir, change: 'add-auth' },
+      { env: { ...noGlobalConfig, ...COMMIT_ENV } }
+    )
+
+    expect(result.ok).toBe(true)
+    if (!result.ok || result.operation !== 'create-change-worktree') throw new Error('unreachable')
+    const destination = fs.realpathSync(path.join(worktreesDir(repo), 'add-auth'))
+    const author = runGit(['-C', destination, 'log', '-1', '--pretty=%an <%ae>'], {
+      env: noGlobalConfig,
+    }).stdout.trim()
+    expect(author).toBe('test <test@example.com>')
+  })
+
   test('checks out an existing unassigned branch and commits onto it', () => {
     const repo = makeRepo({ change: 'add-auth', existingBranch: 'add-auth' })
     const branchTipBefore = repo.git(['rev-parse', 'add-auth']).stdout.trim()

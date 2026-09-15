@@ -290,8 +290,28 @@ function seedChangeArtifacts(
     return seedFailed(`git add failed: ${added.stderr.trim().slice(0, 200)}`)
   }
 
+  // The seed commit is machine-authored; a bare environment without a
+  // configured git identity (fresh CI runners) would reject it with "tell
+  // me who you are". Fill in only the missing halves so a configured
+  // identity still authors the commit.
+  const identityArgs: string[] = []
+  if (runGit(['-C', destination, 'config', 'user.name'], gitOptions).stdout.trim() === '') {
+    identityArgs.push('-c', 'user.name=Kawai')
+  }
+  if (runGit(['-C', destination, 'config', 'user.email'], gitOptions).stdout.trim() === '') {
+    identityArgs.push('-c', 'user.email=kawai@localhost')
+  }
+
   const committed = runGit(
-    ['-C', destination, 'commit', '--no-verify', '-m', `chore(openspec): seed change ${change} from the main worktree`],
+    [
+      '-C',
+      destination,
+      ...identityArgs,
+      'commit',
+      '--no-verify',
+      '-m',
+      `chore(openspec): seed change ${change} from the main worktree`,
+    ],
     gitOptions
   )
   if (!committed.ok) {
