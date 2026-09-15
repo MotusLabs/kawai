@@ -144,6 +144,28 @@ describe('workspaceStore collapse state', () => {
     expect(persisted.state.collapsedSectionIds).toEqual(['/repo/.git::/repo'])
   })
 
+  test('fallback section keys round-trip through persisted collapse state', () => {
+    const store = useWorkspaceStore.getState()
+    store.toggleSectionCollapsed('fallback::workspace')
+    store.toggleSectionCollapsed('fallback::remote')
+    expect(store.isSectionCollapsed('fallback::workspace')).toBe(true)
+    expect(store.isSectionCollapsed('fallback::remote')).toBe(true)
+
+    const raw = storage.getItem('agentboard-workspace')
+    expect(raw).toBeTruthy()
+    const persisted = JSON.parse(raw as string) as {
+      state: { collapsedSectionIds: string[] }
+    }
+    expect(persisted.state.collapsedSectionIds).toEqual([
+      'fallback::workspace',
+      'fallback::remote',
+    ])
+
+    store.toggleSectionCollapsed('fallback::remote')
+    expect(useWorkspaceStore.getState().isSectionCollapsed('fallback::remote')).toBe(false)
+    expect(useWorkspaceStore.getState().isSectionCollapsed('fallback::workspace')).toBe(true)
+  })
+
   test('unknown persisted collapse ids are harmless', () => {
     storage.setItem(
       'agentboard-workspace',

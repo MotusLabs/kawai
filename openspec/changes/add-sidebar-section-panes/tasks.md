@@ -7,9 +7,9 @@
 
 ## 2. Collapsible fallback headers
 
-- [ ] 2.1 Extract `SectionHeader`'s collapse trigger into a reusable piece (shared chevron, `aria-expanded`, label) without changing existing change/worktree header markup; verify `SectionHeader.test.tsx` still passes unchanged.
-- [ ] 2.2 Replace `FallbackSectionHeader` in `WorkspaceSectionList.tsx` with a header using that trigger, wired to `onToggleCollapse` with the reserved key, showing the label, count, and an attention badge; verify in `sessionListGrouped.test.tsx` that clicking the `Remote` header toggles `aria-expanded` and hides its rows.
-- [ ] 2.3 Persist fallback collapse through `workspaceStore.toggleSectionCollapsed`; verify in `workspaceStore.test.ts` that a collapsed fallback key round-trips through the persisted `collapsedSectionIds`.
+- [x] 2.1 Extract `SectionHeader`'s collapse trigger into a reusable piece (shared chevron, `aria-expanded`, label) without changing existing change/worktree header markup; verify `SectionHeader.test.tsx` still passes unchanged.
+- [x] 2.2 Replace `FallbackSectionHeader` in `WorkspaceSectionList.tsx` with a header using that trigger, wired to `onToggleCollapse` with the reserved key, showing the label, count, and an attention badge; verify in `sessionListGrouped.test.tsx` that clicking the `Remote` header toggles `aria-expanded` and hides its rows.
+- [x] 2.3 Persist fallback collapse through `workspaceStore.toggleSectionCollapsed`; verify in `workspaceStore.test.ts` that a collapsed fallback key round-trips through the persisted `collapsedSectionIds`.
 
 ## 3. Pane layout
 

@@ -1,11 +1,13 @@
 // WorkspaceSectionList.tsx - Sectioned workspace navigator: live,
 // hibernating, and historical session rows rendered inside collapsible
 // sections — OpenSpec change sections first, then unmatched worktree
-// sections, then the Workspace and remote fallbacks. Each section owns its
-// own drag context so manual reorder stays within the section; flattened
-// cross-section navigation is computed by the caller from the same view
-// model. Dormant-row visibility follows the global hibernating/history
-// toggles so persisted preferences keep working.
+// sections, then the Workspace and remote fallbacks. Every section,
+// including the fallbacks, collapses through the same trigger and persists
+// by its stable key. Each section owns its own drag context so manual
+// reorder stays within the section; flattened cross-section navigation is
+// computed by the caller from the same view model. Dormant-row visibility
+// follows the global hibernating/history toggles so persisted preferences
+// keep working.
 
 import { useCallback, useState } from 'react'
 import { AnimatePresence } from 'motion/react'
@@ -26,10 +28,11 @@ import {
 import ChevronDownIcon from '@untitledui-icons/react/line/esm/ChevronDownIcon'
 import ChevronRightIcon from '@untitledui-icons/react/line/esm/ChevronRightIcon'
 import GitBranch01Icon from '@untitledui-icons/react/line/esm/GitBranch01Icon'
+import HandIcon from '@untitledui-icons/react/line/esm/HandIcon'
 import PlusIcon from '@untitledui-icons/react/line/esm/PlusIcon'
 import type { AgentSession, Session } from '@shared/types'
-import type { GroupedSessionEntry, WorkspaceView } from '../utils/workspaceView'
-import SectionHeader from './SectionHeader'
+import type { FallbackSectionData, GroupedSessionEntry, WorkspaceView } from '../utils/workspaceView'
+import SectionHeader, { CollapseTrigger } from './SectionHeader'
 import HibernatingSessionItem from './HibernatingSessionItem'
 import HistorySessionItem from './HistorySessionItem'
 import { SortableSessionItem } from './SessionRow'
@@ -258,55 +261,77 @@ export default function WorkspaceSectionList(props: WorkspaceSectionListProps) {
       ))}
 
       {view.workspace.entries.length > 0 && (
-        <section className="border-t border-border" data-testid="workspace-section">
-          <FallbackSectionHeader label="Workspace" count={view.workspace.entries.length} />
-          <GroupedLiveRows
-            entries={view.workspace.entries}
-            ctx={rowContext}
-            remountKey={remountKey}
+        <section
+          className="border-t border-border"
+          data-testid="workspace-section"
+          data-collapsed={view.workspace.collapsed ? 'true' : 'false'}
+        >
+          <FallbackSectionHeader
+            section={view.workspace}
+            onToggleCollapse={onToggleCollapse}
           />
-          {showHibernating && (
-            <GroupedDormantRows
-              entries={view.workspace.entries}
-              kind="hibernating"
-              ctx={rowContext}
-            />
-          )}
-          {showHistory && (
-            <GroupedDormantRows
-              entries={view.workspace.entries}
-              kind="history"
-              ctx={rowContext}
-              limit={historyLimit}
-              onShowMore={onShowMoreHistory}
-            />
+          {!view.workspace.collapsed && (
+            <>
+              <GroupedLiveRows
+                entries={view.workspace.entries}
+                ctx={rowContext}
+                remountKey={remountKey}
+              />
+              {showHibernating && (
+                <GroupedDormantRows
+                  entries={view.workspace.entries}
+                  kind="hibernating"
+                  ctx={rowContext}
+                />
+              )}
+              {showHistory && (
+                <GroupedDormantRows
+                  entries={view.workspace.entries}
+                  kind="history"
+                  ctx={rowContext}
+                  limit={historyLimit}
+                  onShowMore={onShowMoreHistory}
+                />
+              )}
+            </>
           )}
         </section>
       )}
 
       {view.remote.entries.length > 0 && (
-        <section className="border-t border-border" data-testid="remote-section">
-          <FallbackSectionHeader label="Remote" count={view.remote.entries.length} />
-          <GroupedLiveRows
-            entries={view.remote.entries}
-            ctx={rowContext}
-            remountKey={remountKey}
+        <section
+          className="border-t border-border"
+          data-testid="remote-section"
+          data-collapsed={view.remote.collapsed ? 'true' : 'false'}
+        >
+          <FallbackSectionHeader
+            section={view.remote}
+            onToggleCollapse={onToggleCollapse}
           />
-          {showHibernating && (
-            <GroupedDormantRows
-              entries={view.remote.entries}
-              kind="hibernating"
-              ctx={rowContext}
-            />
-          )}
-          {showHistory && (
-            <GroupedDormantRows
-              entries={view.remote.entries}
-              kind="history"
-              ctx={rowContext}
-              limit={historyLimit}
-              onShowMore={onShowMoreHistory}
-            />
+          {!view.remote.collapsed && (
+            <>
+              <GroupedLiveRows
+                entries={view.remote.entries}
+                ctx={rowContext}
+                remountKey={remountKey}
+              />
+              {showHibernating && (
+                <GroupedDormantRows
+                  entries={view.remote.entries}
+                  kind="hibernating"
+                  ctx={rowContext}
+                />
+              )}
+              {showHistory && (
+                <GroupedDormantRows
+                  entries={view.remote.entries}
+                  kind="history"
+                  ctx={rowContext}
+                  limit={historyLimit}
+                  onShowMore={onShowMoreHistory}
+                />
+              )}
+            </>
           )}
         </section>
       )}
@@ -325,12 +350,62 @@ export default function WorkspaceSectionList(props: WorkspaceSectionListProps) {
   )
 }
 
-function FallbackSectionHeader({ label, count }: { label: string; count: number }) {
+/**
+ * Header for a fallback (Workspace/Remote) section. Shares the collapse
+ * affordance and attention/count markup of SectionHeader; collapse state
+ * persists under the section's reserved key.
+ */
+function FallbackSectionHeader({
+  section,
+  onToggleCollapse,
+}: {
+  section: FallbackSectionData
+  onToggleCollapse: (sectionKey: string) => void
+}) {
+  const label = section.kind === 'workspace' ? 'Workspace' : 'Remote'
+  const hiddenAttention = section.hiddenAttentionCount
+  const attentionTotal = section.attentionCount + hiddenAttention
+
   return (
-    <div className="flex items-center justify-between px-3 py-2 text-xs font-medium uppercase tracking-wider text-muted">
-      <span>{label}</span>
-      <span className="w-8 text-right text-xs text-muted" aria-label={`${count} session(s)`}>
-        {count}
+    <div
+      className="flex items-center gap-1.5 px-3 py-1.5 text-left"
+      data-testid="fallback-section-header"
+      data-section-kind={section.kind}
+      data-section-key={section.key}
+      data-collapsed={section.collapsed ? 'true' : 'false'}
+      data-session-count={section.entries.length}
+      data-attention-count={attentionTotal}
+      data-hidden-attention-count={hiddenAttention}
+    >
+      <CollapseTrigger
+        sectionKey={section.key}
+        collapsed={section.collapsed}
+        onToggleCollapse={onToggleCollapse}
+        label={`${section.collapsed ? 'Expand' : 'Collapse'} ${label} section`}
+        title={`${label} sessions`}
+      >
+        <span className="truncate font-semibold uppercase tracking-wider text-muted">
+          {label}
+        </span>
+      </CollapseTrigger>
+
+      {attentionTotal > 0 && (
+        <span
+          className="flex shrink-0 items-center gap-0.5 rounded-full bg-amber-500/20 px-1.5 py-0.5 text-[10px] text-amber-600"
+          title="Sessions waiting for permission"
+          aria-label={`${attentionTotal} session(s) need permission`}
+          data-testid="section-attention-badge"
+        >
+          <HandIcon className="h-3 w-3" />
+          {attentionTotal}
+        </span>
+      )}
+
+      <span
+        className="w-6 shrink-0 text-right text-[11px] tabular-nums text-muted"
+        aria-label={`${section.entries.length} session(s)`}
+      >
+        {section.entries.length}
       </span>
     </div>
   )

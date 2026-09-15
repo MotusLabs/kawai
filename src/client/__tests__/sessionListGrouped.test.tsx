@@ -623,6 +623,86 @@ describe('SessionList grouped rendering', () => {
     act(() => plain.unmount())
   })
 
+  test('fallback sections collapse through their headers with the reserved keys', () => {
+    const sessions: Session[] = [
+      baseSession,
+      { ...baseSession, id: 'live-plain', projectPath: '/plain/project' },
+      {
+        ...baseSession,
+        id: 'live-remote',
+        projectPath: '/remote/path',
+        remote: true,
+        host: 'box.example',
+      },
+    ]
+    const view = makeView(sessions, [], [], {
+      collapsed: ['fallback::remote'],
+    })
+
+    const toggled: string[] = []
+    const { renderer } = renderList({
+      sessions,
+      workspaceView: view,
+      onToggleSectionCollapse: (key) => toggled.push(key),
+    })
+
+    // The Remote header starts collapsed: aria-expanded=false, rows hidden.
+    const remote = renderer.root.findByProps({ 'data-testid': 'remote-section' })
+    expect(remote.props['data-collapsed']).toBe('true')
+    const remoteHeader = remote.findByProps({ 'data-testid': 'fallback-section-header' })
+    expect(remoteHeader.props['data-section-key']).toBe('fallback::remote')
+    const remoteButton = remoteHeader.findByProps({ 'aria-expanded': false })
+    expect(remoteButton.props['aria-label']).toBe('Expand Remote section')
+    expect(remote.findAllByProps({ 'data-testid': 'session-card' })).toHaveLength(0)
+
+    act(() => {
+      remoteButton.props.onClick()
+    })
+    expect(toggled).toEqual(['fallback::remote'])
+
+    // The Workspace fallback header toggles with its own reserved key.
+    const workspace = renderer.root.findByProps({ 'data-testid': 'workspace-section' })
+    expect(workspace.props['data-collapsed']).toBe('false')
+    const workspaceButton = workspace
+      .findByProps({ 'data-testid': 'fallback-section-header' })
+      .findByProps({ 'aria-expanded': true })
+    expect(workspaceButton.props['aria-label']).toBe('Collapse Workspace section')
+    act(() => {
+      workspaceButton.props.onClick()
+    })
+    expect(toggled).toEqual(['fallback::remote', 'fallback::workspace'])
+
+    act(() => renderer.unmount())
+  })
+
+  test('collapsed fallback sections surface hidden permission counts', () => {
+    const sessions: Session[] = [
+      {
+        ...baseSession,
+        id: 'live-remote',
+        projectPath: '/remote/path',
+        remote: true,
+        host: 'box.example',
+        status: 'permission',
+      },
+    ]
+    const view = makeView(sessions, [], [], {
+      collapsed: ['fallback::remote'],
+    })
+
+    const { renderer } = renderList({ sessions, workspaceView: view })
+
+    const remote = renderer.root.findByProps({ 'data-testid': 'remote-section' })
+    const header = remote.findByProps({ 'data-testid': 'fallback-section-header' })
+    expect(header.props['data-attention-count']).toBe(1)
+    expect(header.props['data-hidden-attention-count']).toBe(1)
+    expect(remote.findByProps({ 'data-testid': 'section-attention-badge' }).props['aria-label']).toBe(
+      '1 session(s) need permission'
+    )
+
+    act(() => renderer.unmount())
+  })
+
   test('falls back to the flat list when no workspace snapshot exists', () => {
     const { renderer } = renderList({ sessions: [baseSession], workspaceView: null })
 
