@@ -22,6 +22,9 @@ export type SessionStatus = 'working' | 'waiting' | 'permission' | 'unknown'
 
 export type SessionSource = 'managed' | 'external'
 export type AgentType = 'claude' | 'claude-rp' | 'codex' | 'pi'
+
+/** First-prompt agents offered by the session form's "Start with" selector. */
+export type AutoStartAgent = 'claude' | 'codex'
 export type ClipboardOfferSource = 'tmux-buffer' | 'osc52'
 export type SessionKillSource =
   | 'keyboard_shortcut'
@@ -177,10 +180,12 @@ export type ClientMessage =
       name?: string
       command?: string
       host?: string
-      // OpenSpec change name: the server holds the mapped apply command as
-      // the session's pending first prompt (agent-type mapped, injected once
-      // at the first idle status). Absent = no auto-start.
+      // OpenSpec change context: with a selected agent, the server composes
+      // the mapped apply command into the session's start command as the
+      // agent's first prompt (a launch argument, held by the agent itself
+      // until trust/login gates clear). Absent agent = no first prompt.
       autoStartChange?: string
+      autoStartAgent?: AutoStartAgent
     }
   | { type: 'session-kill'; sessionId: string; source?: SessionKillSource }
   | { type: 'session-rename'; sessionId: string; newName: string }

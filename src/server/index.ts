@@ -45,6 +45,7 @@ import {
   type DirectoryErrorResponse,
   type AgentSession,
   type AgentType,
+  type AutoStartAgent,
   type HostStatus,
   type SessionKillSource,
   type WakeError,
@@ -75,7 +76,7 @@ import { createWorktree } from './git/createWorktree'
 import { createChangeWorktree } from './git/createChangeWorktree'
 import { WorkspaceCoordinator } from './workspace/workspaceCoordinator'
 import { WorkspaceWatcher, createNodeWatcherHost } from './workspace/workspaceWatcher'
-import { PendingAutoStartStore, type AutoStartInputSender } from './pendingAutoStart'
+import { composeAutoStartCommand } from './applyCommand'
 import { RemoteSessionPoller, splitSshOptions, buildRemoteSessionId } from './remoteSessions'
 import { normalizePaneStartCommand } from './agentDetection'
 import { generateSessionName } from './nameGenerator'
@@ -1178,7 +1179,6 @@ async function refreshSessionsAsync(): Promise<void> {
         const hydrated = hydrateSessionsWithAgentSessions(sessions)
         const withOverrides = applyForceWorkingOverrides(hydrated)
         registry.replaceSessions(mergeRemoteSessions(withOverrides))
-        reconcilePendingAutoStart()
         const hydrateMs = Math.round(performance.now() - tHydrate)
         if (hydrateMs > 50) {
           logger.debug('session_refresh_hydrate_slow', { hydrateMs, sessionCount: sessions.length })
@@ -1206,7 +1206,6 @@ async function refreshSessionsAsync(): Promise<void> {
         const hydrated = hydrateSessionsWithAgentSessions(sessions)
         const withOverrides = applyForceWorkingOverrides(hydrated)
         registry.replaceSessions(mergeRemoteSessions(withOverrides))
-        reconcilePendingAutoStart()
         return
       }
     }
@@ -1217,56 +1216,6 @@ async function refreshSessionsAsync(): Promise<void> {
 
 function refreshSessions() {
   void refreshSessionsAsync()
-}
-
-/**
- * Pending apply auto-start prompts, held server-side so they survive client
- * reloads between session creation and the agent's first idle status (§8.1).
- */
-const pendingAutoStart = new PendingAutoStartStore()
-
-/**
- * Send literal text plus Enter to a local tmux target — the same keystroke
- * pair the terminal-input path delivers for a line of input.
- */
-const sendAutoStartInput: AutoStartInputSender = (tmuxTarget, text) => {
-  if (!isValidTmuxTarget(tmuxTarget)) return false
-  try {
-    const typed = Bun.spawnSync(['tmux', 'send-keys', '-t', tmuxTarget, '-l', '--', text], {
-      timeout: 5000,
-      stdout: 'pipe',
-      stderr: 'pipe',
-    })
-    if (typed.exitCode !== 0) return false
-    const entered = Bun.spawnSync(['tmux', 'send-keys', '-t', tmuxTarget, 'Enter'], {
-      timeout: 5000,
-      stdout: 'pipe',
-      stderr: 'pipe',
-    })
-    return entered.exitCode === 0
-  } catch {
-    return false
-  }
-}
-
-/**
- * After every registry refresh: drop prompts whose session is gone, and
- * inject each remaining prompt into its session the first time that session
- * reports the idle status (§8.2). Injection mirrors the terminal-input Enter
- * handling — the session flips to working and a debounced refresh follows.
- */
-function reconcilePendingAutoStart(): void {
-  if (pendingAutoStart.size === 0) return
-  const sessions = registry.getAll()
-  pendingAutoStart.retainAll(new Set(sessions.map((session) => session.id)))
-  const injected = pendingAutoStart.injectWaiting(sessions, sendAutoStartInput)
-  for (const sessionId of injected) {
-    logger.info('auto_start_injected', { sessionId })
-    setForceWorking(sessionId)
-  }
-  if (injected.length > 0) {
-    scheduleEnterRefresh()
-  }
 }
 
 function listWindowsSyncOrNull(context: string): Session[] | null {
@@ -2621,29 +2570,37 @@ function handleMessage(
       return
     case 'session-create':
       if (message.host) {
-        fireAndForget(handleRemoteCreate(message.host, message.projectPath, message.name, message.command, ws), 'handleRemoteCreate')
+        fireAndForget(
+          handleRemoteCreate(
+            message.host,
+            message.projectPath,
+            message.name,
+            message.command,
+            message.autoStartAgent,
+            message.autoStartChange,
+            ws
+          ),
+          'handleRemoteCreate'
+        )
       } else {
         try {
+          // Compose the selected agent's apply prompt onto the start command
+          // as a launch argument; no prompt when agent or change is absent.
+          const startCommand = composeAutoStartCommand(
+            message.command,
+            message.autoStartAgent,
+            message.autoStartChange
+          )
+          if (message.autoStartAgent && startCommand === message.command) {
+            logger.info('auto_start_not_composed', {
+              reason: 'unrecognized_agent_or_invalid_change',
+            })
+          }
           const created = stampLocalSession(sessionManager.createWindow(
             message.projectPath,
             message.name,
-            message.command
+            startCommand
           ))
-          // Hold the auto-start prompt before announcing the session: the
-          // first refresh after creation may already report idle (§8.1).
-          if (message.autoStartChange) {
-            const held = pendingAutoStart.holdFromCommand(
-              created.id,
-              message.command,
-              message.autoStartChange
-            )
-            if (!held) {
-              logger.info('auto_start_not_held', {
-                sessionId: created.id,
-                reason: 'unrecognized_agent_or_invalid_change',
-              })
-            }
-          }
           // Add session to registry immediately so terminal can attach
           refreshGeneration++
           const currentSessions = registry.getAll()
@@ -2763,6 +2720,8 @@ async function handleRemoteCreate(
   projectPath: string,
   name: string | undefined,
   command: string | undefined,
+  autoStartAgent: AutoStartAgent | undefined,
+  autoStartChange: string | undefined,
   ws: ServerWebSocket<WSData>
 ) {
   if (!config.remoteAllowControl) {
@@ -2812,7 +2771,11 @@ async function handleRemoteCreate(
     const hasSessionResult = await runRemoteTmux(host, ['has-session', '-t', tmuxSession])
     const sessionExists = hasSessionResult.exitCode === 0
 
-    const windowCommand = normalizePaneStartCommand(command?.trim() || '') || 'claude'
+    // Same first-prompt composition as the local path: the selected agent's
+    // apply prompt rides in the start command as a launch argument, so the
+    // remote bash -lic wrapper re-quotes it without a pending-prompt store.
+    const startCommand = composeAutoStartCommand(command, autoStartAgent, autoStartChange)
+    const windowCommand = normalizePaneStartCommand(startCommand?.trim() || '') || 'claude'
     // Wrap in interactive login shell so .bashrc PATH is available
     // (non-interactive shells skip .bashrc due to [ -z "$PS1" ] && return guard).
     // Fall back to raw command on systems without bash (e.g. Alpine).
@@ -3197,8 +3160,6 @@ async function handleKill(
   }
   const remaining = registry.getAll().filter((item) => item.id !== sessionId)
   registry.replaceSessions(remaining)
-  // A killed session never reaches idle — discard its pending auto-start (§8.1).
-  pendingAutoStart.discard(sessionId)
   logger.info('session_kill_completed', {
     ...auditFields,
     durationMs: Date.now() - startedAt,
@@ -3588,11 +3549,16 @@ function buildResumeCommand(
   // and any existing resume subcommand/flag + its session ID argument.
   // Normalize first to handle tmux quoting and bash -lc wrappers.
   const resumableArg = /(?:"[^"]*"|'[^']*'|\S+)/
+  // The composed first-prompt positional (a quoted `/opsx:apply <change>` or
+  // `$openspec-apply-change <change>`, always last) must not re-run on wake —
+  // strip it by pattern; unrelated quoted flag values stay untouched.
+  const applyPromptArg = /(?:^|\s)'(?:\/opsx:apply|\$openspec-apply-change)\s+[^']*'/
   const flags = normalizePaneStartCommand(record.launchCommand)
     .replace(/^\S+\s*/, '')             // strip executable
     .replace(new RegExp(`--resume(?:\\s+|=)${resumableArg.source}`, 'g'), '') // strip --resume <id> / --resume=<id> (Claude)
     .replace(new RegExp(`\\bresume\\s+${resumableArg.source}`, 'g'), '') // strip resume <id> (Codex subcommand)
     .replace(new RegExp(`--session(?:\\s+|=)${resumableArg.source}`, 'g'), '') // strip --session <path> / --session=<path> (Pi)
+    .replace(new RegExp(applyPromptArg.source, 'g'), '') // strip the auto-start apply prompt
     .replace(/\s+/g, ' ')
     .trim()
 

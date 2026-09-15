@@ -2012,7 +2012,7 @@ describe('App', () => {
     })
 
     // Success routes into the session form prefilled with the new worktree
-    // root and the auto-start option offered (§7.4).
+    // root and the first-prompt selector offered, defaulted to Claude (§7.4).
     act(() => {
       subscribeListener?.({
         type: 'workspace-operation-result',
@@ -2033,9 +2033,12 @@ describe('App', () => {
     expect(
       modal[0].findAllByProps({ className: 'input flex-1 text-sm' })[0].props.value
     ).toBe('/proj/main/.worktrees/add-auth')
-    expect(modal[0].findByProps({ 'data-testid': 'auto-start-apply' }).props.checked).toBe(true)
+    expect(
+      modal[0].findByProps({ 'data-testid': 'start-with-select' }).props.value
+    ).toBe('claude')
 
-    // Submitting the form carries the auto-start change to the server.
+    // Submitting the form carries the change and the selected agent to the
+    // server, which composes the apply prompt into the start command.
     sendCalls = []
     act(() => {
       modal[0].findByType('form').props.onSubmit({ preventDefault: () => {} })
@@ -2045,6 +2048,7 @@ describe('App', () => {
       projectPath: '/proj/main/.worktrees/add-auth',
       command: 'claude',
       autoStartChange: 'add-auth',
+      autoStartAgent: 'claude',
     })
 
     act(() => renderer.unmount())

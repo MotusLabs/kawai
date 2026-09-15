@@ -3,8 +3,9 @@ import { type CommandPreset, getFullCommand } from '../stores/settingsStore'
 import { DirectoryBrowser } from './DirectoryBrowser'
 import AgentIcon from './AgentIcon'
 import { shortRevision } from '@shared/workspace'
+import { autoStartAgentFromToken, resolveAgentToken } from '@shared/agentToken'
 import { getPathLeaf } from '../utils/sessionLabel'
-import type { HostStatus } from '@shared/types'
+import type { AutoStartAgent, HostStatus } from '@shared/types'
 
 /** A discovered local worktree offered by the picker. */
 export interface NewSessionWorktreeOption {
@@ -24,6 +25,27 @@ function worktreeOptionLabel(worktree: NewSessionWorktreeOption): string {
   return `${worktree.repositoryName} · ${revision}${leaf ? ` (${leaf})` : ''}`
 }
 
+/** Values of the first-prompt ("Start with") selector. */
+type StartWithValue = AutoStartAgent | 'none'
+
+/**
+ * The first-prompt selector's default: the selected preset's declared agent
+ * type (an explicit user declaration; `pi` has no apply equivalent), else the
+ * claude/codex prefix rule on the command's resolved agent token, else
+ * Nothing.
+ */
+function defaultStartWith(
+  command: string,
+  presetId: string | null,
+  presets: CommandPreset[]
+): StartWithValue {
+  const declared = presets.find((preset) => preset.id === presetId)?.agentType
+  if (declared === 'claude') return 'claude'
+  if (declared === 'codex') return 'codex'
+  if (declared === 'pi') return 'none'
+  return autoStartAgentFromToken(resolveAgentToken(command)) ?? 'none'
+}
+
 interface NewSessionModalProps {
   isOpen: boolean
   onClose: () => void
@@ -32,7 +54,8 @@ interface NewSessionModalProps {
     name?: string,
     command?: string,
     host?: string,
-    autoStartChange?: string
+    autoStartChange?: string,
+    autoStartAgent?: AutoStartAgent
   ) => void
   defaultProjectDir: string
   commandPresets: CommandPreset[]
@@ -51,7 +74,7 @@ interface NewSessionModalProps {
   initialCommand?: string
   /**
    * OpenSpec change name when opened from a change section: offers the
-   * apply auto-start option, checked by default.
+   * first-prompt ("Start with") selector for the change's apply command.
    */
   initialAutoStartChange?: string
 }
@@ -79,9 +102,10 @@ export default function NewSessionModal({
   const [command, setCommand] = useState('')
   const [showBrowser, setShowBrowser] = useState(false)
   const [selectedHost, setSelectedHost] = useState('')
-  // Auto-start is offered only with a change context (a change section's
-  // action), checked by default when that context exists.
-  const [autoStart, setAutoStart] = useState(false)
+  // First-prompt selector: offered with a change context (a change section's
+  // action). Follows command/preset changes until the user picks explicitly.
+  const [startWith, setStartWith] = useState<StartWithValue>('none')
+  const [startWithTouched, setStartWithTouched] = useState(false)
   const formRef = useRef<HTMLFormElement>(null)
   const projectPathRef = useRef<HTMLInputElement>(null)
   const defaultButtonRef = useRef<HTMLButtonElement>(null)
@@ -96,7 +120,8 @@ export default function NewSessionModal({
       setCommand('')
       setShowBrowser(false)
       setSelectedHost(initialHost ?? '')
-      setAutoStart(false)
+      setStartWith('none')
+      setStartWithTouched(false)
       // Focus terminal after modal closes
       setTimeout(() => {
         if (typeof document === 'undefined' || typeof document.querySelector !== 'function') return
@@ -126,7 +151,8 @@ export default function NewSessionModal({
     setProjectPath(basePath)
     setName('')
     setSelectedHost(initialHost ?? '')
-    setAutoStart(initialAutoStartChange !== undefined)
+    setStartWith('none')
+    setStartWithTouched(false)
     const trimmedInitialCommand = initialCommand?.trim()
     if (trimmedInitialCommand) {
       const matchingPreset = commandPresets.find((p) => getFullCommand(p) === trimmedInitialCommand)
@@ -160,6 +186,13 @@ export default function NewSessionModal({
       }
     }, 50)
   }, [activeProjectPath, commandPresets, defaultPresetId, defaultProjectDir, isOpen, lastProjectPath, initialHost, initialPath, initialCommand, initialAutoStartChange])
+
+  // The first-prompt default follows command and preset changes until the
+  // user selects a value explicitly, after which their choice sticks.
+  useEffect(() => {
+    if (!isOpen || !initialAutoStartChange || startWithTouched) return
+    setStartWith(defaultStartWith(command, selectedPresetId, commandPresets))
+  }, [isOpen, initialAutoStartChange, startWithTouched, command, selectedPresetId, commandPresets])
 
   useEffect(() => {
     if (!isOpen) return
@@ -250,14 +283,17 @@ export default function NewSessionModal({
     }
 
     const finalCommand = command.trim()
+    // First-prompt selection applies to every host: the server composes the
+    // mapped apply command into the start command as a launch argument, so
+    // remote creation needs no local terminal-input path.
+    const startWithAgent = startWith !== 'none' ? startWith : undefined
     onCreate(
       trimmedPath,
       name.trim() || undefined,
       finalCommand || undefined,
       isRemoteHost ? selectedHost : undefined,
-      // Auto-start is a local-session feature: the server holds the pending
-      // prompt and injects it through the local terminal-input path.
-      !isRemoteHost && initialAutoStartChange && autoStart ? initialAutoStartChange : undefined
+      initialAutoStartChange && startWithAgent ? initialAutoStartChange : undefined,
+      startWithAgent
     )
     onClose()
   }
@@ -485,23 +521,27 @@ export default function NewSessionModal({
               className="input text-sm placeholder:italic"
             />
           </div>
-          {initialAutoStartChange && !isRemoteHost && (
-            <label
-              className="flex cursor-pointer items-center gap-2 text-xs text-secondary"
-              title={`Sends the change's apply command (/opsx:apply ${initialAutoStartChange} for Claude, the equivalent for Codex) as the session's first input, once the agent becomes idle`}
-            >
-              <input
-                type="checkbox"
-                checked={autoStart}
-                onChange={(event) => setAutoStart(event.target.checked)}
-                data-testid="auto-start-apply"
-                className="h-3.5 w-3.5 accent-[var(--color-accent)]"
-              />
-              <span>
-                Start with the change's apply command{' '}
-                <span className="font-mono text-muted">{initialAutoStartChange}</span>
-              </span>
-            </label>
+          {initialAutoStartChange && (
+            <div>
+              <label className="mb-1.5 block text-xs text-secondary">
+                Start with
+              </label>
+              <select
+                data-testid="start-with-select"
+                aria-label="First prompt for the change's apply command"
+                className="input text-xs"
+                value={startWith}
+                title={`The selected prompt is composed into the session's start command as a launch argument — the agent holds its first prompt until it is ready, so it survives trust and sign-in gates. Nothing is sent as terminal input.`}
+                onChange={(event) => {
+                  setStartWith(event.target.value as StartWithValue)
+                  setStartWithTouched(true)
+                }}
+              >
+                <option value="claude">Claude - /opsx:apply {initialAutoStartChange}</option>
+                <option value="codex">Codex - $openspec-apply-change {initialAutoStartChange}</option>
+                <option value="none">Nothing</option>
+              </select>
+            </div>
           )}
         </div>
 
