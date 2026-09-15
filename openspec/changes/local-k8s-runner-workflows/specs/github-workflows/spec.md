@@ -1,26 +1,26 @@
 ## Purpose
 
-Define the observable behavior of agentboard's GitHub Actions workflows: every job runs on the operator's local Kubernetes runner pool, is time-bounded, resolves dependencies through the cluster npm proxy with public fallback, and produces the same release artifacts as before — with no GitHub-hosted runner minutes consumed.
+Define the observable behavior of agentboard's GitHub Actions workflows: every job runs on GitHub-hosted runners, is time-bounded, resolves dependencies through a registry setup that probes the cluster npm proxy and falls back to the public registry, and produces the same release artifacts as before.
 
 ## ADDED Requirements
 
-### Requirement: All jobs run on the local Kubernetes runner pool
-Every job in `ci.yml`, `create-release-tag.yml`, and `release.yml` SHALL select the local Kubernetes runner pool (`runs-on: local-k8s`) and MUST NOT select a GitHub-hosted runner image.
+### Requirement: All jobs run on GitHub-hosted runners
+Every job in `ci.yml`, `create-release-tag.yml`, `release.yml`, and `local-runner-test.yml` SHALL run on GitHub-hosted `ubuntu-latest` runners and MUST NOT select a self-hosted pool label — the local Kubernetes pools are reserved for the organization's private repositories.
 
-#### Scenario: CI runs on the local pool
+#### Scenario: CI runs on hosted runners
 - **WHEN** a push or pull request triggers `ci.yml`
-- **THEN** both the quality-gates job and the e2e job are dispatched to runners labeled `local-k8s`
+- **THEN** both the quality-gates job and the e2e job run on `ubuntu-latest`
 
-#### Scenario: Release build runs on the local pool
+#### Scenario: Release runs on hosted runners
 - **WHEN** a `v*` tag triggers `release.yml`
-- **THEN** the build job runs on a `local-k8s` runner and no job in the workflow requests a hosted macOS or Ubuntu image
+- **THEN** the build and publish jobs run on `ubuntu-latest`
 
-#### Scenario: Tag creation runs on the local pool
+#### Scenario: Tag creation runs on hosted runners
 - **WHEN** a PR merged into master triggers `create-release-tag.yml`
-- **THEN** the tag job runs on a `local-k8s` runner
+- **THEN** the tag job runs on `ubuntu-latest`
 
 ### Requirement: Release binaries cross-compile from a single Linux job
-The release build job SHALL produce all four platform binaries (`darwin-arm64`, `darwin-x64`, `linux-x64`, `linux-arm64`) by cross-compiling on one Linux `local-k8s` runner, and each artifact SHALL contain the platform binary plus the frontend bundle, packaged exactly as the current matrix packages them.
+The release build job SHALL produce all four platform binaries (`darwin-arm64`, `darwin-x64`, `linux-x64`, `linux-arm64`) by cross-compiling on one Linux runner, and each artifact SHALL contain the platform binary plus the frontend bundle, packaged exactly as the current matrix packages them.
 
 #### Scenario: All four platforms build on one runner
 - **WHEN** the release build job runs
@@ -59,21 +59,21 @@ Workflows SHALL install Bun dependencies through a shared setup that points pack
 - **WHEN** the npm proxy does not answer
 - **THEN** `bun install` still succeeds by resolving through the public registry, and the job log carries a warning naming the proxy
 
-### Requirement: e2e suite runs on the local pool with its system dependencies satisfied
-The e2e job SHALL run on the local pool and MUST ensure tmux and a Playwright-capable Chromium (with its system dependencies) are available on the runner — installed by the workflow when absent, or verified present — before running the Playwright suite.
+### Requirement: e2e suite runs with its system dependencies satisfied
+The e2e job MUST ensure tmux and a Playwright-capable Chromium (with its system dependencies) are available on the runner — installed by the workflow when absent, or verified present — before running the Playwright suite.
 
-#### Scenario: e2e runs without hosted runners
-- **WHEN** the e2e job runs on a `local-k8s` runner
+#### Scenario: e2e resolves its system dependencies
+- **WHEN** the e2e job runs
 - **THEN** tmux is available on PATH, Playwright's Chromium is installed with its system dependencies, and the Playwright suite completes
 
 #### Scenario: Missing system dependency fails explicitly
 - **WHEN** tmux or Chromium's system dependencies are unavailable on the runner image and cannot be installed by the job
 - **THEN** the job fails with an error naming the missing dependency rather than failing opaquely inside the test suite
 
-### Requirement: Runner pool self-test is available on demand
-A workflow SHALL exist that, on manual dispatch, verifies the local runner pool: that the job executes on a `local-k8s` runner, that the runner is isolated (no Docker or containerd socket, no Kubernetes service-account token), and that Bun installs and runs.
+### Requirement: Environment self-test workflow is available on demand
+A dispatch-only workflow SHALL exist that verifies the workflow environment: it reports whether the runner is isolated (no Docker or containerd socket, no Kubernetes service-account token) and confirms that Bun installs and runs through the shared setup action.
 
-#### Scenario: Operator verifies the pool before migrating
+#### Scenario: Operator dispatches the self-test
 - **WHEN** the operator dispatches the self-test workflow
 - **THEN** the job reports runner isolation status and a working Bun installation, and fails with a named violation if any isolation check trips
 
