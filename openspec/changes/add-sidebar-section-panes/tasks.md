@@ -20,10 +20,10 @@
 
 ## 4. Resize control
 
-- [ ] 4.1 Add `src/client/components/PaneResizeHandle.tsx` with `role="separator"`, `aria-orientation="horizontal"`, `aria-valuenow/valuemin/valuemax` in whole percents, `aria-label`, `tabIndex={0}`, and `touch-action: none`; verify a new `paneResizeHandle.test.tsx` asserts the ARIA contract.
-- [ ] 4.2 Implement pointer drag: `pointerdown` captures the pointer and reads the container height once, `pointermove` converts delta to a clamped fraction, `pointerup`/`pointercancel` release capture; verify in `paneResizeHandle.test.tsx` with synthetic pointer events and a stubbed `getBoundingClientRect`.
-- [ ] 4.3 Implement keyboard resize: `ArrowUp`/`ArrowDown` step by `0.02`, `Home`/`End` jump to min/max, all through the clamped setters; verify in `paneResizeHandle.test.tsx`.
-- [ ] 4.4 Render the handle on the top edge of each expanded pane only (never on a collapsed pane), wired to that pane's fraction setter; verify in `sessionListGrouped.test.tsx`.
+- [x] 4.1 Add `src/client/components/PaneResizeHandle.tsx` with `role="separator"`, `aria-orientation="horizontal"`, `aria-valuenow/valuemin/valuemax` in whole percents, `aria-label`, `tabIndex={0}`, and `touch-action: none`; verify a new `paneResizeHandle.test.tsx` asserts the ARIA contract.
+- [x] 4.2 Implement pointer drag: `pointerdown` captures the pointer and reads the container height once, `pointermove` converts delta to a clamped fraction, `pointerup`/`pointercancel` release capture; verify in `paneResizeHandle.test.tsx` with synthetic pointer events and a stubbed `getBoundingClientRect`.
+- [x] 4.3 Implement keyboard resize: `ArrowUp`/`ArrowDown` step by `0.02`, `Home`/`End` jump to min/max, all through the clamped setters; verify in `paneResizeHandle.test.tsx`.
+- [x] 4.4 Render the handle on the top edge of each expanded pane only (never on a collapsed pane), wired to that pane's fraction setter; verify in `sessionListGrouped.test.tsx`.
 
 ## 5. Mobile drawer
 

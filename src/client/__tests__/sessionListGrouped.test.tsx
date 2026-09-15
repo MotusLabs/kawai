@@ -803,6 +803,49 @@ describe('SessionList fallback panes layout', () => {
 
     act(() => renderer.unmount())
   })
+
+  test('expanded panes carry a resize handle wired to their own fraction setter', () => {
+    const sessions = [baseSession, plainSession, remoteSession]
+    const view = makeView(sessions, [], [])
+    const { renderer } = renderList({ sessions, workspaceView: view })
+
+    const remotePane = renderer.root.findByProps({ 'data-testid': 'remote-section' })
+    const handle = remotePane.findByProps({ 'data-testid': 'pane-resize-handle' })
+    expect(handle.props['aria-label']).toBe('Resize Remote pane')
+    expect(handle.props['aria-valuenow']).toBe(25)
+
+    // Keyboard resize reaches only the Remote fraction.
+    act(() => {
+      handle.props.onKeyDown({ key: 'ArrowUp', preventDefault: () => {} })
+    })
+    expect(useSettingsStore.getState().remotePaneFraction).toBe(0.27)
+    expect(useSettingsStore.getState().workspacePaneFraction).toBe(0.25)
+
+    const workspacePane = renderer.root.findByProps({ 'data-testid': 'workspace-section' })
+    const workspaceHandle = workspacePane.findByProps({ 'data-testid': 'pane-resize-handle' })
+    expect(workspaceHandle.props['aria-label']).toBe('Resize Workspace pane')
+    act(() => {
+      workspaceHandle.props.onKeyDown({ key: 'End', preventDefault: () => {} })
+    })
+    expect(useSettingsStore.getState().workspacePaneFraction).toBe(0.6)
+    expect(useSettingsStore.getState().remotePaneFraction).toBe(0.27)
+
+    act(() => renderer.unmount())
+  })
+
+  test('a collapsed pane offers no resize handle', () => {
+    const sessions = [baseSession, plainSession, remoteSession]
+    const view = makeView(sessions, [], [], { collapsed: ['fallback::remote'] })
+    const { renderer } = renderList({ sessions, workspaceView: view })
+
+    const remotePane = renderer.root.findByProps({ 'data-testid': 'remote-section' })
+    expect(remotePane.findAllByProps({ 'data-testid': 'pane-resize-handle' })).toHaveLength(0)
+    // The expanded pane keeps its handle.
+    const workspacePane = renderer.root.findByProps({ 'data-testid': 'workspace-section' })
+    expect(workspacePane.findAllByProps({ 'data-testid': 'pane-resize-handle' })).toHaveLength(1)
+
+    act(() => renderer.unmount())
+  })
 })
 
 describe('SessionList grouped drag constraints', () => {

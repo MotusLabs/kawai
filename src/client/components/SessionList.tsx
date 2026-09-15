@@ -491,7 +491,9 @@ export default function SessionList({
   }
 
   const workspacePaneFraction = useSettingsStore((state) => state.workspacePaneFraction)
+  const setWorkspacePaneFraction = useSettingsStore((state) => state.setWorkspacePaneFraction)
   const remotePaneFraction = useSettingsStore((state) => state.remotePaneFraction)
+  const setRemotePaneFraction = useSettingsStore((state) => state.setRemotePaneFraction)
   /** Navigator body whose height the pane fractions resolve against. */
   const navigatorBodyRef = useRef<HTMLDivElement>(null)
 
@@ -527,12 +529,18 @@ export default function SessionList({
       newlyActiveIds.has(sessionId) || newlyFilteredInIds.has(sessionId),
   }
 
-  const renderFallbackPane = (section: WorkspaceView['workspace'] | WorkspaceView['remote'], fraction: number) =>
+  const renderFallbackPane = (
+    section: WorkspaceView['workspace'] | WorkspaceView['remote'],
+    fraction: number,
+    onFractionChange: (fraction: number) => void
+  ) =>
     section.entries.length > 0 ? (
       <FallbackSectionPane
         section={section}
         fraction={fraction}
+        onFractionChange={onFractionChange}
         onToggleCollapse={onToggleSectionCollapse ?? (() => {})}
+        containerRef={navigatorBodyRef}
         remountKey={filterKey}
         showHibernating={showHibernating}
         showHistory={showHistory}
@@ -602,8 +610,8 @@ export default function SessionList({
               {...rowContext}
             />
           </div>
-          {renderFallbackPane(workspaceView.workspace, workspacePaneFraction)}
-          {renderFallbackPane(workspaceView.remote, remotePaneFraction)}
+          {renderFallbackPane(workspaceView.workspace, workspacePaneFraction, setWorkspacePaneFraction)}
+          {renderFallbackPane(workspaceView.remote, remotePaneFraction, setRemotePaneFraction)}
         </div>
       ) : (
         <div className="min-h-0 flex-1 overflow-y-auto">

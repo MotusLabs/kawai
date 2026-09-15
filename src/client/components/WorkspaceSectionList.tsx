@@ -33,6 +33,7 @@ import HandIcon from '@untitledui-icons/react/line/esm/HandIcon'
 import PlusIcon from '@untitledui-icons/react/line/esm/PlusIcon'
 import type { AgentSession, Session } from '@shared/types'
 import type { FallbackSectionData, GroupedSessionEntry, WorkspaceView } from '../utils/workspaceView'
+import PaneResizeHandle from './PaneResizeHandle'
 import SectionHeader, { CollapseTrigger } from './SectionHeader'
 import HibernatingSessionItem from './HibernatingSessionItem'
 import HistorySessionItem from './HistorySessionItem'
@@ -292,7 +293,11 @@ export interface FallbackSectionPaneProps extends GroupedRowContext {
   section: FallbackSectionData
   /** Stored height as a fraction of the navigator body height. */
   fraction: number
+  /** Clamped setter for the stored fraction (drag and keyboard resize). */
+  onFractionChange: (fraction: number) => void
   onToggleCollapse: (sectionKey: string) => void
+  /** Ref to the navigator body whose height the fraction resolves against. */
+  containerRef: React.RefObject<HTMLElement | null>
   /** Remounts AnimatePresence children when filters change (entry animation). */
   remountKey: string
   showHibernating: boolean
@@ -302,19 +307,21 @@ export interface FallbackSectionPaneProps extends GroupedRowContext {
 }
 
 /**
- * One fallback section docked at the bottom of the navigator body: a
- * collapsible header above rows that scroll inside the pane, independent of
- * the flow region. Height comes from a percentage flex basis, so a short
- * navigator shrinks the panes proportionally while the flow region's
- * min-height holds its floor. A collapsed pane drops its basis entirely
- * (flex: 0 0 auto, header only), freeing its share to the remaining
- * sections without touching the stored fraction.
+ * One fallback section docked at the bottom of the navigator body: a resize
+ * handle on its top edge, a collapsible header, and rows that scroll inside
+ * the pane, independent of the flow region. Height comes from a percentage
+ * flex basis, so a short navigator shrinks the panes proportionally while
+ * the flow region's min-height holds its floor. A collapsed pane drops its
+ * basis entirely (flex: 0 0 auto, header only, no handle), freeing its
+ * share to the remaining sections without touching the stored fraction.
  */
 export function FallbackSectionPane(props: FallbackSectionPaneProps) {
   const {
     section,
     fraction,
+    onFractionChange,
     onToggleCollapse,
+    containerRef,
     remountKey,
     showHibernating,
     showHistory,
@@ -324,6 +331,7 @@ export function FallbackSectionPane(props: FallbackSectionPaneProps) {
   } = props
 
   const flexBasis = `${Math.round(fraction * 1000) / 10}%`
+  const label = section.kind === 'workspace' ? 'Workspace' : 'Remote'
 
   return (
     <section
@@ -338,6 +346,14 @@ export function FallbackSectionPane(props: FallbackSectionPaneProps) {
       data-collapsed={section.collapsed ? 'true' : 'false'}
       data-pane-fraction={section.collapsed ? undefined : fraction}
     >
+      {!section.collapsed && (
+        <PaneResizeHandle
+          label={label}
+          fraction={fraction}
+          onResize={onFractionChange}
+          containerRef={containerRef}
+        />
+      )}
       <FallbackSectionHeader section={section} onToggleCollapse={onToggleCollapse} />
       {!section.collapsed && (
         <div className="min-h-0 flex-1 overflow-y-auto" data-testid="fallback-pane-scroll">
