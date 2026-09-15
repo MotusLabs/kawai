@@ -13,10 +13,10 @@
 
 ## 3. Pane layout
 
-- [ ] 3.1 Restructure `SessionList.tsx` into a flex column: `shrink-0` filter bar (no longer `sticky`), `flex-1 min-h-0 overflow-y-auto` flow region for change/worktree sections, then the fallback panes; verify `sessionListComponent.test.tsx` and `sessionListFilters.test.tsx` pass and the filter dropdown still renders above the list.
-- [ ] 3.2 Render each displayed fallback section as a pane with `flex: 0 1 <fraction*100>%`, its own `overflow-y: auto`, and a `min-height` of its header row; verify in `sessionListGrouped.test.tsx` via the rendered flex basis for the default 25% and for a stored fraction.
-- [ ] 3.3 Give the flow region a `min-height` floor so panes shrink proportionally instead of displacing it, and render a collapsed pane as `flex: 0 0 auto` with header only; verify in `sessionListGrouped.test.tsx` that a collapsed pane carries no percentage basis and its stored fraction is unchanged.
-- [ ] 3.4 Keep a fallback section with no entries unrendered and reserving no height; verify in `sessionListGrouped.test.tsx`.
+- [x] 3.1 Restructure `SessionList.tsx` into a flex column: `shrink-0` filter bar (no longer `sticky`), `flex-1 min-h-0 overflow-y-auto` flow region for change/worktree sections, then the fallback panes; verify `sessionListComponent.test.tsx` and `sessionListFilters.test.tsx` pass and the filter dropdown still renders above the list.
+- [x] 3.2 Render each displayed fallback section as a pane with `flex: 0 1 <fraction*100>%`, its own `overflow-y: auto`, and a `min-height` of its header row; verify in `sessionListGrouped.test.tsx` via the rendered flex basis for the default 25% and for a stored fraction.
+- [x] 3.3 Give the flow region a `min-height` floor so panes shrink proportionally instead of displacing it, and render a collapsed pane as `flex: 0 0 auto` with header only; verify in `sessionListGrouped.test.tsx` that a collapsed pane carries no percentage basis and its stored fraction is unchanged.
+- [x] 3.4 Keep a fallback section with no entries unrendered and reserving no height; verify in `sessionListGrouped.test.tsx`.
 
 ## 4. Resize control
 

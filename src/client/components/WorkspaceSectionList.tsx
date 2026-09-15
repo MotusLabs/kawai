@@ -1,13 +1,14 @@
 // WorkspaceSectionList.tsx - Sectioned workspace navigator: live,
 // hibernating, and historical session rows rendered inside collapsible
 // sections — OpenSpec change sections first, then unmatched worktree
-// sections, then the Workspace and remote fallbacks. Every section,
-// including the fallbacks, collapses through the same trigger and persists
-// by its stable key. Each section owns its own drag context so manual
-// reorder stays within the section; flattened cross-section navigation is
-// computed by the caller from the same view model. Dormant-row visibility
-// follows the global hibernating/history toggles so persisted preferences
-// keep working.
+// sections. Every section, including the Workspace/Remote fallbacks, folds
+// through the same trigger and persists by its stable key; the fallbacks
+// render as docked panes (FallbackSectionPane) placed by the caller below
+// the scrolling flow region this list provides. Each section owns its own
+// drag context so manual reorder stays within the section; flattened
+// cross-section navigation is computed by the caller from the same view
+// model. Dormant-row visibility follows the global hibernating/history
+// toggles so persisted preferences keep working.
 
 import { useCallback, useState } from 'react'
 import { AnimatePresence } from 'motion/react'
@@ -260,82 +261,6 @@ export default function WorkspaceSectionList(props: WorkspaceSectionListProps) {
         </section>
       ))}
 
-      {view.workspace.entries.length > 0 && (
-        <section
-          className="border-t border-border"
-          data-testid="workspace-section"
-          data-collapsed={view.workspace.collapsed ? 'true' : 'false'}
-        >
-          <FallbackSectionHeader
-            section={view.workspace}
-            onToggleCollapse={onToggleCollapse}
-          />
-          {!view.workspace.collapsed && (
-            <>
-              <GroupedLiveRows
-                entries={view.workspace.entries}
-                ctx={rowContext}
-                remountKey={remountKey}
-              />
-              {showHibernating && (
-                <GroupedDormantRows
-                  entries={view.workspace.entries}
-                  kind="hibernating"
-                  ctx={rowContext}
-                />
-              )}
-              {showHistory && (
-                <GroupedDormantRows
-                  entries={view.workspace.entries}
-                  kind="history"
-                  ctx={rowContext}
-                  limit={historyLimit}
-                  onShowMore={onShowMoreHistory}
-                />
-              )}
-            </>
-          )}
-        </section>
-      )}
-
-      {view.remote.entries.length > 0 && (
-        <section
-          className="border-t border-border"
-          data-testid="remote-section"
-          data-collapsed={view.remote.collapsed ? 'true' : 'false'}
-        >
-          <FallbackSectionHeader
-            section={view.remote}
-            onToggleCollapse={onToggleCollapse}
-          />
-          {!view.remote.collapsed && (
-            <>
-              <GroupedLiveRows
-                entries={view.remote.entries}
-                ctx={rowContext}
-                remountKey={remountKey}
-              />
-              {showHibernating && (
-                <GroupedDormantRows
-                  entries={view.remote.entries}
-                  kind="hibernating"
-                  ctx={rowContext}
-                />
-              )}
-              {showHistory && (
-                <GroupedDormantRows
-                  entries={view.remote.entries}
-                  kind="history"
-                  ctx={rowContext}
-                  limit={historyLimit}
-                  onShowMore={onShowMoreHistory}
-                />
-              )}
-            </>
-          )}
-        </section>
-      )}
-
       {view.visibleEntries.length === 0 && onNewSession && (
         <button
           type="button"
@@ -347,6 +272,99 @@ export default function WorkspaceSectionList(props: WorkspaceSectionListProps) {
         </button>
       )}
     </div>
+  )
+}
+
+/**
+ * Minimum height (px) kept for the change/worktree flow region: when the
+ * navigator is too short to honor both pane defaults, the panes shrink
+ * proportionally rather than pushing this region below its floor.
+ */
+export const FLOW_REGION_MIN_HEIGHT = 96
+
+/**
+ * Minimum height (px) of an expanded fallback pane: its header row plus the
+ * drag handle above it. A collapsed pane sizes to its header alone.
+ */
+export const PANE_MIN_HEIGHT = 40
+
+export interface FallbackSectionPaneProps extends GroupedRowContext {
+  section: FallbackSectionData
+  /** Stored height as a fraction of the navigator body height. */
+  fraction: number
+  onToggleCollapse: (sectionKey: string) => void
+  /** Remounts AnimatePresence children when filters change (entry animation). */
+  remountKey: string
+  showHibernating: boolean
+  showHistory: boolean
+  historyLimit: number
+  onShowMoreHistory: () => void
+}
+
+/**
+ * One fallback section docked at the bottom of the navigator body: a
+ * collapsible header above rows that scroll inside the pane, independent of
+ * the flow region. Height comes from a percentage flex basis, so a short
+ * navigator shrinks the panes proportionally while the flow region's
+ * min-height holds its floor. A collapsed pane drops its basis entirely
+ * (flex: 0 0 auto, header only), freeing its share to the remaining
+ * sections without touching the stored fraction.
+ */
+export function FallbackSectionPane(props: FallbackSectionPaneProps) {
+  const {
+    section,
+    fraction,
+    onToggleCollapse,
+    remountKey,
+    showHibernating,
+    showHistory,
+    historyLimit,
+    onShowMoreHistory,
+    ...rowContext
+  } = props
+
+  const flexBasis = `${Math.round(fraction * 1000) / 10}%`
+
+  return (
+    <section
+      className="flex min-h-0 flex-col border-t border-border"
+      style={
+        section.collapsed
+          ? { flex: '0 0 auto' }
+          : { flex: `0 1 ${flexBasis}`, minHeight: PANE_MIN_HEIGHT }
+      }
+      data-testid={section.kind === 'workspace' ? 'workspace-section' : 'remote-section'}
+      data-section-key={section.key}
+      data-collapsed={section.collapsed ? 'true' : 'false'}
+      data-pane-fraction={section.collapsed ? undefined : fraction}
+    >
+      <FallbackSectionHeader section={section} onToggleCollapse={onToggleCollapse} />
+      {!section.collapsed && (
+        <div className="min-h-0 flex-1 overflow-y-auto" data-testid="fallback-pane-scroll">
+          <GroupedLiveRows
+            entries={section.entries}
+            ctx={rowContext}
+            remountKey={remountKey}
+          />
+          {showHibernating && (
+            <GroupedDormantRows
+              entries={section.entries}
+              kind="hibernating"
+              ctx={rowContext}
+            />
+          )}
+          {showHistory && (
+            <GroupedDormantRows
+              entries={section.entries}
+              kind="history"
+              ctx={rowContext}
+              limit={historyLimit}
+              onShowMore={onShowMoreHistory}
+            />
+          )}
+        </div>
+      )}
+    </section>
   )
 }
 
