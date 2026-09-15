@@ -6,6 +6,7 @@ import NewSessionModal from '../components/NewSessionModal'
 import { useSessionStore } from '../stores/sessionStore'
 import { useSettingsStore } from '../stores/settingsStore'
 import { useThemeStore } from '../stores/themeStore'
+import { useWorkspaceStore } from '../stores/workspaceStore'
 
 const globalAny = globalThis as typeof globalThis & {
   window?: Window & typeof globalThis
@@ -169,6 +170,13 @@ beforeEach(() => {
     connectionStatus: 'connected',
     connectionEpoch: 0,
     connectionError: null,
+  })
+
+  useWorkspaceStore.setState({
+    snapshot: null,
+    lastError: null,
+    operationResults: [],
+    collapsedSectionIds: [],
   })
 
   useSettingsStore.setState({
@@ -1572,5 +1580,546 @@ describe('App', () => {
     expect(sessions).toHaveLength(1)
     expect(sessions[0]?.id).toBe('session-2')
     expect(sessions[0]?.status).toBe('permission')
+  })
+
+  test('workspace snapshots store and keyboard navigation follows grouped order', () => {
+    // Grouped order (repositories by id, worktrees by path) intentionally
+    // differs from the flat created-sort order:
+    //   grouped: [other(s3), proj/feat(s2), proj/main(s1), ungrouped(s4)]
+    //   flat asc: [s1, s2, s3, s4]
+    const sessions: Session[] = [
+      { ...baseSession, id: 's1', projectPath: '/proj/main', createdAt: '2024-01-01T00:00:00.000Z' },
+      { ...baseSession, id: 's2', projectPath: '/proj/feat', createdAt: '2024-01-02T00:00:00.000Z' },
+      { ...baseSession, id: 's3', projectPath: '/other', createdAt: '2024-01-03T00:00:00.000Z' },
+      { ...baseSession, id: 's4', projectPath: '/plain', createdAt: '2024-01-04T00:00:00.000Z' },
+    ]
+    useSessionStore.setState({ sessions, selectedSessionId: 's1', hasLoaded: true })
+
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => {
+      renderer = TestRenderer.create(<App />)
+    })
+    activeRenderer = renderer
+
+    if (!subscribeListener) {
+      throw new Error('Expected websocket subscription')
+    }
+
+    act(() => {
+      subscribeListener?.({
+        type: 'workspace-snapshot',
+        snapshot: {
+          repositories: [
+            {
+              id: '/other/.git',
+              name: 'other',
+              commonDir: '/other/.git',
+              stale: false,
+              worktrees: [
+                {
+                  id: '/other/.git::/other',
+                  repositoryId: '/other/.git',
+                  path: '/other',
+                  branch: 'main',
+                  headRevision: 'ccccccc',
+                  detached: false,
+                  isMain: true,
+                  dirty: false,
+                  openspec: { changes: [], stale: false },
+                },
+              ],
+              branches: [],
+            },
+            {
+              id: '/proj/.git',
+              name: 'proj',
+              commonDir: '/proj/.git',
+              stale: false,
+              worktrees: [
+                {
+                  id: '/proj/.git::/proj/feat',
+                  repositoryId: '/proj/.git',
+                  path: '/proj/feat',
+                  branch: 'feat',
+                  headRevision: 'bbbbbbb',
+                  detached: false,
+                  isMain: false,
+                  dirty: false,
+                  openspec: { changes: [], stale: false },
+                },
+                {
+                  id: '/proj/.git::/proj/main',
+                  repositoryId: '/proj/.git',
+                  path: '/proj/main',
+                  branch: 'main',
+                  headRevision: 'aaaaaaa',
+                  detached: false,
+                  isMain: true,
+                  dirty: false,
+                  openspec: { changes: [], stale: false },
+                },
+              ],
+              branches: [],
+            },
+          ],
+          generatedAt: '2026-01-01T00:00:00.000Z',
+        },
+      })
+    })
+
+    expect(useWorkspaceStore.getState().snapshot?.repositories).toHaveLength(2)
+
+    // Digit 1 selects the first entry in the flattened grouped order (s3),
+    // not the flat-sort first (s1).
+    const keyHandler = getKeyHandler()
+    act(() => {
+      keyHandler({
+        key: '1', code: 'Digit1',
+        ctrlKey: true, shiftKey: true, altKey: false, metaKey: false,
+        defaultPrevented: false, preventDefault: () => {},
+      } as KeyboardEvent)
+    })
+    expect(useSessionStore.getState().selectedSessionId).toBe('s3')
+
+    // Bracket navigation follows grouped order: s1 -> s4 (skipping nothing),
+    // where the flat order would have gone s1 -> s2.
+    act(() => {
+      useSessionStore.setState({ selectedSessionId: 's1' })
+    })
+    const keyHandler2 = getKeyHandler()
+    act(() => {
+      keyHandler2({
+        key: ']', code: 'BracketRight',
+        ctrlKey: true, shiftKey: true, altKey: false, metaKey: false,
+        defaultPrevented: false, preventDefault: () => {},
+      } as KeyboardEvent)
+    })
+    expect(useSessionStore.getState().selectedSessionId).toBe('s4')
+
+    // Collapsing a worktree group removes its rows from navigation order.
+    act(() => {
+      useWorkspaceStore.getState().toggleSectionCollapsed('/proj/.git::/proj/feat')
+    })
+    act(() => {
+      useSessionStore.setState({ selectedSessionId: 's1' })
+    })
+    const keyHandler3 = getKeyHandler()
+    act(() => {
+      keyHandler3({
+        key: '[', code: 'BracketLeft',
+        ctrlKey: true, shiftKey: true, altKey: false, metaKey: false,
+        defaultPrevented: false, preventDefault: () => {},
+      } as KeyboardEvent)
+    })
+    // Grouped visible order is now [s3, s1, s4]; previous of s1 is s3 — the
+    // collapsed s2 row is skipped.
+    expect(useSessionStore.getState().selectedSessionId).toBe('s3')
+  })
+
+  test('workspace operation results are recorded from server messages', () => {
+    useSessionStore.setState({ sessions: [baseSession], selectedSessionId: baseSession.id, hasLoaded: true })
+
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => {
+      renderer = TestRenderer.create(<App />)
+    })
+    activeRenderer = renderer
+
+    if (!subscribeListener) {
+      throw new Error('Expected websocket subscription')
+    }
+
+    act(() => {
+      subscribeListener?.({
+        type: 'workspace-operation-result',
+        result: {
+          operation: 'create-worktree',
+          ok: false,
+          repositoryId: '/proj/.git',
+          branch: 'feat',
+          error: 'Destination already exists',
+        },
+      })
+    })
+
+    const results = useWorkspaceStore.getState().operationResults
+    expect(results).toHaveLength(1)
+    expect(results[0].operation).toBe('create-worktree')
+    expect(results[0].ok).toBe(false)
+  })
+
+  test('create-worktree launch routes through the session form on success', () => {
+    useSessionStore.setState({ sessions: [baseSession], selectedSessionId: baseSession.id, hasLoaded: true })
+    sendCalls = []
+
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => {
+      renderer = TestRenderer.create(<App />)
+    })
+    activeRenderer = renderer
+
+    if (!subscribeListener) {
+      throw new Error('Expected websocket subscription')
+    }
+
+    act(() => {
+      subscribeListener?.({
+        type: 'workspace-snapshot',
+        snapshot: {
+          repositories: [
+            {
+              id: '/proj/.git',
+              name: 'proj',
+              commonDir: '/proj/.git',
+              stale: false,
+              worktrees: [
+                {
+                  id: '/proj/.git::/proj/main',
+                  repositoryId: '/proj/.git',
+                  path: '/proj/main',
+                  branch: 'main',
+                  headRevision: 'aaaaaaa',
+                  detached: false,
+                  isMain: true,
+                  dirty: false,
+                  openspec: { changes: [], stale: false },
+                },
+              ],
+              branches: [
+                { name: 'main', revision: 'aaaaaaa', assignedWorktreeId: '/proj/.git::/proj/main' },
+                { name: 'spare', revision: 'bbbbbbb' },
+              ],
+            },
+          ],
+          generatedAt: '2026-01-01T00:00:00.000Z',
+        },
+      })
+    })
+
+    // Open the branch browser from a worktree header and pick the unassigned
+    // branch.
+    const browseButton = renderer.root.findAllByProps({ 'data-testid': 'worktree-branch-browser' })[0]
+    act(() => {
+      browseButton.props.onClick()
+    })
+    const spareRow = renderer.root
+      .findAllByProps({ 'data-testid': 'branch-row' })
+      .find((row) => row.props['data-branch'] === 'spare')
+    if (!spareRow) throw new Error('Expected spare branch row')
+    act(() => {
+      spareRow.findByProps({ 'data-testid': 'branch-create' }).props.onClick()
+    })
+
+    // Confirm the create-worktree form with the follow-up launch checked.
+    const form = renderer.root.findByProps({ 'data-testid': 'create-worktree-form' })
+    act(() => {
+      form.findByProps({ 'data-testid': 'create-worktree-destination' }).props.onChange({
+        target: { value: '/proj/spare-wt' },
+      })
+    })
+    act(() => {
+      form.findByProps({ 'data-testid': 'create-worktree-launch' }).props.onChange({
+        target: { checked: true },
+      })
+    })
+    act(() => {
+      form.props.onSubmit({ preventDefault: () => {} })
+    })
+
+    expect(sendCalls).toContainEqual({
+      type: 'create-worktree',
+      repositoryId: '/proj/.git',
+      branch: 'spare',
+      destination: '/proj/spare-wt',
+      launchSession: true,
+    })
+
+    // A successful result with launch pending opens the normal session form
+    // preselected with the created worktree root.
+    act(() => {
+      subscribeListener?.({
+        type: 'workspace-operation-result',
+        result: {
+          operation: 'create-worktree',
+          ok: true,
+          repositoryId: '/proj/.git',
+          branch: 'spare',
+          path: '/proj/spare-wt',
+        },
+      })
+    })
+    const modal = renderer.root.findAllByProps({ 'aria-labelledby': 'new-session-title' })
+    expect(modal).toHaveLength(1)
+    expect(
+      modal[0].findAllByProps({ className: 'input flex-1 text-sm' })[0].props.value
+    ).toBe('/proj/spare-wt')
+
+    act(() => renderer.unmount())
+  })
+
+  test('create-worktree failure surfaces the actionable error without the session form', () => {
+    useSessionStore.setState({ sessions: [baseSession], selectedSessionId: baseSession.id, hasLoaded: true })
+    sendCalls = []
+
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => {
+      renderer = TestRenderer.create(<App />)
+    })
+    activeRenderer = renderer
+
+    if (!subscribeListener) {
+      throw new Error('Expected websocket subscription')
+    }
+
+    act(() => {
+      subscribeListener?.({
+        type: 'workspace-snapshot',
+        snapshot: {
+          repositories: [
+            {
+              id: '/proj/.git',
+              name: 'proj',
+              commonDir: '/proj/.git',
+              stale: false,
+              worktrees: [
+                {
+                  id: '/proj/.git::/proj/main',
+                  repositoryId: '/proj/.git',
+                  path: '/proj/main',
+                  branch: 'main',
+                  headRevision: 'aaaaaaa',
+                  detached: false,
+                  isMain: true,
+                  dirty: false,
+                  openspec: { changes: [], stale: false },
+                },
+              ],
+              branches: [
+                { name: 'main', revision: 'aaaaaaa', assignedWorktreeId: '/proj/.git::/proj/main' },
+                { name: 'spare', revision: 'bbbbbbb' },
+              ],
+            },
+          ],
+          generatedAt: '2026-01-01T00:00:00.000Z',
+        },
+      })
+    })
+
+    const browseButton = renderer.root.findAllByProps({ 'data-testid': 'worktree-branch-browser' })[0]
+    act(() => {
+      browseButton.props.onClick()
+    })
+    const spareRow = renderer.root
+      .findAllByProps({ 'data-testid': 'branch-row' })
+      .find((row) => row.props['data-branch'] === 'spare')
+    if (!spareRow) throw new Error('Expected spare branch row')
+    act(() => {
+      spareRow.findByProps({ 'data-testid': 'branch-create' }).props.onClick()
+    })
+    const form = renderer.root.findByProps({ 'data-testid': 'create-worktree-form' })
+    act(() => {
+      form.findByProps({ 'data-testid': 'create-worktree-launch' }).props.onChange({
+        target: { checked: true },
+      })
+    })
+    act(() => {
+      form.props.onSubmit({ preventDefault: () => {} })
+    })
+
+    act(() => {
+      subscribeListener?.({
+        type: 'workspace-operation-result',
+        result: {
+          operation: 'create-worktree',
+          ok: false,
+          repositoryId: '/proj/.git',
+          branch: 'spare',
+          code: 'ERR_WORKTREE_BRANCH_ASSIGNED',
+          error: 'Branch spare is already checked out at /proj/other',
+        },
+      })
+    })
+
+    // No session form opens; the actionable error reaches the list surface.
+    expect(
+      renderer.root.findAllByProps({ 'aria-labelledby': 'new-session-title' })
+    ).toHaveLength(0)
+    const sessionListProps = renderer.root.findAllByType(SessionList)[0]?.props
+    expect(sessionListProps.error).toContain('already checked out')
+
+    act(() => renderer.unmount())
+  })
+
+  test('change-section creation seeds the worktree and opens the form with auto-start', () => {
+    useSessionStore.setState({ sessions: [baseSession], selectedSessionId: baseSession.id, hasLoaded: true })
+    sendCalls = []
+
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => {
+      renderer = TestRenderer.create(<App />)
+    })
+    activeRenderer = renderer
+
+    if (!subscribeListener) {
+      throw new Error('Expected websocket subscription')
+    }
+
+    act(() => {
+      subscribeListener?.({
+        type: 'workspace-snapshot',
+        snapshot: {
+          repositories: [
+            {
+              id: '/proj/.git',
+              name: 'proj',
+              commonDir: '/proj/.git',
+              stale: false,
+              worktrees: [
+                {
+                  id: '/proj/.git::/proj/main',
+                  repositoryId: '/proj/.git',
+                  path: '/proj/main',
+                  branch: 'main',
+                  headRevision: 'aaaaaaa',
+                  detached: false,
+                  isMain: true,
+                  dirty: false,
+                  openspec: { changes: [], stale: false },
+                },
+              ],
+              branches: [
+                { name: 'main', revision: 'aaaaaaa', assignedWorktreeId: '/proj/.git::/proj/main' },
+              ],
+              changeRegistry: [{ name: 'add-auth', source: 'registry' }],
+            },
+          ],
+          generatedAt: '2026-01-01T00:00:00.000Z',
+        },
+      })
+    })
+
+    // The worktree-less change section offers seeded creation.
+    const createButton = renderer.root.findByProps({
+      'data-testid': 'section-create-change-worktree',
+    })
+    act(() => {
+      createButton.props.onClick()
+    })
+    expect(sendCalls).toContainEqual({
+      type: 'create-change-worktree',
+      repositoryId: '/proj/.git',
+      change: 'add-auth',
+    })
+
+    // Success routes into the session form prefilled with the new worktree
+    // root and the auto-start option offered (§7.4).
+    act(() => {
+      subscribeListener?.({
+        type: 'workspace-operation-result',
+        result: {
+          operation: 'create-change-worktree',
+          ok: true,
+          repositoryId: '/proj/.git',
+          change: 'add-auth',
+          branch: 'add-auth',
+          path: '/proj/main/.worktrees/add-auth',
+          commit: 'ccccccc3',
+          gitignoreUpdated: true,
+        },
+      })
+    })
+    const modal = renderer.root.findAllByProps({ 'aria-labelledby': 'new-session-title' })
+    expect(modal).toHaveLength(1)
+    expect(
+      modal[0].findAllByProps({ className: 'input flex-1 text-sm' })[0].props.value
+    ).toBe('/proj/main/.worktrees/add-auth')
+    expect(modal[0].findByProps({ 'data-testid': 'auto-start-apply' }).props.checked).toBe(true)
+
+    // Submitting the form carries the auto-start change to the server.
+    sendCalls = []
+    act(() => {
+      modal[0].findByType('form').props.onSubmit({ preventDefault: () => {} })
+    })
+    expect(sendCalls).toContainEqual({
+      type: 'session-create',
+      projectPath: '/proj/main/.worktrees/add-auth',
+      command: 'claude',
+      autoStartChange: 'add-auth',
+    })
+
+    act(() => renderer.unmount())
+  })
+
+  test('change-section creation failure surfaces the actionable error', () => {
+    useSessionStore.setState({ sessions: [baseSession], selectedSessionId: baseSession.id, hasLoaded: true })
+    sendCalls = []
+
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => {
+      renderer = TestRenderer.create(<App />)
+    })
+    activeRenderer = renderer
+
+    if (!subscribeListener) {
+      throw new Error('Expected websocket subscription')
+    }
+
+    act(() => {
+      subscribeListener?.({
+        type: 'workspace-snapshot',
+        snapshot: {
+          repositories: [
+            {
+              id: '/proj/.git',
+              name: 'proj',
+              commonDir: '/proj/.git',
+              stale: false,
+              worktrees: [
+                {
+                  id: '/proj/.git::/proj/main',
+                  repositoryId: '/proj/.git',
+                  path: '/proj/main',
+                  branch: 'main',
+                  headRevision: 'aaaaaaa',
+                  detached: false,
+                  isMain: true,
+                  dirty: false,
+                  openspec: { changes: [], stale: false },
+                },
+              ],
+              branches: [],
+              changeRegistry: [{ name: 'add-auth', source: 'registry' }],
+            },
+          ],
+          generatedAt: '2026-01-01T00:00:00.000Z',
+        },
+      })
+    })
+
+    act(() => {
+      renderer.root.findByProps({ 'data-testid': 'section-create-change-worktree' }).props.onClick()
+    })
+
+    act(() => {
+      subscribeListener?.({
+        type: 'workspace-operation-result',
+        result: {
+          operation: 'create-change-worktree',
+          ok: false,
+          repositoryId: '/proj/.git',
+          change: 'add-auth',
+          code: 'ERR_CHANGE_MISSING_ARTIFACTS',
+          error: 'Change artifacts not found in the main worktree: /proj/main/openspec/changes/add-auth',
+        },
+      })
+    })
+
+    expect(
+      renderer.root.findAllByProps({ 'aria-labelledby': 'new-session-title' })
+    ).toHaveLength(0)
+    const sessionListProps = renderer.root.findAllByType(SessionList)[0]?.props
+    expect(sessionListProps.error).toContain('Change artifacts not found')
+
+    act(() => renderer.unmount())
   })
 })

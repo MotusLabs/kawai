@@ -785,6 +785,181 @@ describe('server message handlers', () => {
     })
   })
 
+  test('validates workspace create-worktree messages', async () => {
+    const { serveOptions } = await loadIndex()
+    const { ws, sent } = createWs()
+    const websocket = serveOptions.websocket
+    if (!websocket) {
+      throw new Error('WebSocket handlers not configured')
+    }
+
+    // Missing required fields.
+    websocket.message?.(
+      ws as never,
+      JSON.stringify({ type: 'create-worktree', branch: 'feat' })
+    )
+    // Relative destinations are rejected.
+    websocket.message?.(
+      ws as never,
+      JSON.stringify({
+        type: 'create-worktree',
+        repositoryId: '/repo/.git',
+        branch: 'feat',
+        destination: 'repo-feat',
+      })
+    )
+    // Invalid ref names are rejected.
+    websocket.message?.(
+      ws as never,
+      JSON.stringify({
+        type: 'create-worktree',
+        repositoryId: '/repo/.git',
+        branch: 'bad..name',
+        destination: '/repo-feat',
+      })
+    )
+    expect(sent.slice(0, 3)).toEqual([
+      { type: 'error', message: 'Invalid create-worktree payload' },
+      { type: 'error', message: 'Invalid create-worktree payload' },
+      { type: 'error', message: 'Invalid create-worktree payload' },
+    ])
+
+    // A valid payload reaches the operation path and replies with an
+    // operation result rather than a generic error.
+    websocket.message?.(
+      ws as never,
+      JSON.stringify({
+        type: 'create-worktree',
+        repositoryId: '/repo/.git',
+        branch: 'feat/x',
+        destination: '/repo-feat',
+      })
+    )
+    const resultIndex = sent.findIndex(
+      (message) => message.type === 'workspace-operation-result'
+    )
+    expect(resultIndex).toBeGreaterThan(-1)
+    expect(
+      sent.slice(resultIndex).some((message) => message.type === 'error')
+    ).toBe(false)
+
+    // workspace-refresh is recognized (no unknown-type error, no reply yet).
+    const sentBefore = sent.length
+    websocket.message?.(ws as never, JSON.stringify({ type: 'workspace-refresh' }))
+    expect(sent.length).toBe(sentBefore)
+  })
+
+  test('workspace snapshots reach clients on connect, discovery, and removal', async () => {
+    // Fake git plumbing for one repository at /wstest/repo on branch main.
+    const repoCommonDir = '/wstest/repo/.git'
+    spawnSyncImpl = ((command: string[], options?: { cwd?: string }) => {
+      const cmd = Array.isArray(command) ? command : [String(command)]
+      if (cmd[0] === 'git') {
+        const gitArgs = cmd.slice(1).filter((arg) => arg !== '--git-dir')
+        const cwd = options?.cwd ?? ''
+        if (gitArgs.includes('rev-parse')) {
+          if (cwd === '/wstest/repo' || cwd.startsWith('/wstest/repo/')) {
+            return {
+              exitCode: 0,
+              stdout: Buffer.from([repoCommonDir, repoCommonDir, '/wstest/repo'].join('\n')),
+              stderr: Buffer.from(''),
+            }
+          }
+          return { exitCode: 128, stdout: Buffer.from(''), stderr: Buffer.from('not a repo') }
+        }
+        if (gitArgs.includes('worktree')) {
+          return {
+            exitCode: 0,
+            stdout: Buffer.from(
+              ['worktree /wstest/repo', 'HEAD aaa1111', 'branch refs/heads/main', ''].join('\n')
+            ),
+            stderr: Buffer.from(''),
+          }
+        }
+        if (gitArgs.includes('for-each-ref')) {
+          return { exitCode: 0, stdout: Buffer.from('aaa1111 main'), stderr: Buffer.from('') }
+        }
+        if (gitArgs.includes('status')) {
+          return { exitCode: 0, stdout: Buffer.from(''), stderr: Buffer.from('') }
+        }
+      }
+      if (cmd[0] === 'openspec') {
+        return {
+          exitCode: 1,
+          stdout: Buffer.from(
+            JSON.stringify({
+              changes: [],
+              root: null,
+              status: [{ code: 'no_openspec_root' }],
+            })
+          ),
+          stderr: Buffer.from(''),
+        }
+      }
+      return { exitCode: 0, stdout: Buffer.from(''), stderr: Buffer.from('') }
+    }) as unknown as typeof Bun.spawnSync
+
+    const { serveOptions, registryInstance } = await loadIndex()
+    const websocket = serveOptions.websocket
+    if (!websocket) {
+      throw new Error('WebSocket handlers not configured')
+    }
+
+    // Initial connection: registry is empty, so the client receives the
+    // (empty) workspace snapshot captured on open.
+    const { ws: firstWs, sent: firstSent } = createWs()
+    websocket.open?.(firstWs as never)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    const initialSnapshot = firstSent.find(
+      (message) => message.type === 'workspace-snapshot'
+    )
+    expect(initialSnapshot).toBeTruthy()
+    if (initialSnapshot?.type === 'workspace-snapshot') {
+      expect(initialSnapshot.snapshot.repositories).toEqual([])
+    }
+
+    // New repository discovery: a local session path seeds /wstest/repo.
+    registryInstance.replaceSessions([
+      { ...baseSession, id: 'ws-1', projectPath: '/wstest/repo' },
+    ])
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    const discovered = firstSent
+      .filter((message) => message.type === 'workspace-snapshot')
+      .at(-1)
+    expect(discovered).toBeTruthy()
+    if (discovered?.type === 'workspace-snapshot') {
+      expect(discovered.snapshot.repositories).toHaveLength(1)
+      const repository = discovered.snapshot.repositories[0]
+      expect(repository.id).toBe(repoCommonDir)
+      expect(repository.worktrees[0].path).toBe('/wstest/repo')
+      expect(repository.worktrees[0].branch).toBe('main')
+      expect(repository.branches.map((branch) => branch.name)).toEqual(['main'])
+    }
+
+    // A newly connected client after discovery receives the latest snapshot.
+    const { ws: secondWs, sent: secondSent } = createWs()
+    websocket.open?.(secondWs as never)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    const onConnect = secondSent.find(
+      (message) => message.type === 'workspace-snapshot'
+    )
+    expect(onConnect).toBeTruthy()
+    if (onConnect?.type === 'workspace-snapshot') {
+      expect(onConnect.snapshot.repositories).toHaveLength(1)
+    }
+
+    // Path removal: the session disappears, so its repository is dropped.
+    registryInstance.replaceSessions([])
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    const afterRemoval = secondSent
+      .filter((message) => message.type === 'workspace-snapshot')
+      .at(-1)
+    expect(afterRemoval).toBeTruthy()
+    if (afterRemoval?.type === 'workspace-snapshot') {
+      expect(afterRemoval.snapshot.repositories).toEqual([])
+    }
+  })
+
   test('refreshes sessions and creates new sessions', async () => {
     const createdSession = { ...baseSession, id: 'created', name: 'new' }
     let listCalls = 0
@@ -827,11 +1002,13 @@ describe('server message handlers', () => {
       throw new Error('explode')
     }
 
+    // Use an existing directory: a missing path now takes the stale-worktree
+    // branch (§7.3) instead of surfacing the raw createWindow error.
     websocket.message?.(
       ws as never,
       JSON.stringify({
         type: 'session-create',
-        projectPath: '/tmp/new',
+        projectPath: '/tmp',
       })
     )
 
@@ -839,6 +1016,295 @@ describe('server message handlers', () => {
       type: 'error',
       message: 'explode',
     })
+  })
+
+  test('session-create at a worktree root passes the exact path and options through', async () => {
+    // Task 7.2/7.3 contract: the contextual worktree action opens the normal
+    // session form, so the handler must forward the exact project path plus
+    // the existing session options (name, command) to createWindow.
+    const createdSession = { ...baseSession, id: 'created-wt', name: 'worktree-agent' }
+    const createCalls: Array<{ projectPath: string; name?: string; command?: string }> = []
+    sessionManagerState.createWindow = (projectPath: string, name?: string, command?: string) => {
+      createCalls.push({ projectPath, name, command })
+      return createdSession
+    }
+    sessionManagerState.listWindows = () => [createdSession]
+
+    const { serveOptions } = await loadIndex()
+    const { ws, sent } = createWs()
+    const websocket = serveOptions.websocket
+    if (!websocket) {
+      throw new Error('WebSocket handlers not configured')
+    }
+
+    websocket.message?.(
+      ws as never,
+      JSON.stringify({
+        type: 'session-create',
+        projectPath: '/repo/worktrees/feat-x',
+        name: 'feat-x agent',
+        command: 'claude --resume abc',
+      })
+    )
+
+    expect(createCalls).toEqual([
+      {
+        projectPath: '/repo/worktrees/feat-x',
+        name: 'feat-x agent',
+        command: 'claude --resume abc',
+      },
+    ])
+    expect(
+      sent.find((message) => message.type === 'session-created')
+    ).toBeTruthy()
+
+    // Omitted optional fields stay undefined (no fabrication).
+    websocket.message?.(
+      ws as never,
+      JSON.stringify({
+        type: 'session-create',
+        projectPath: '/repo/main',
+      })
+    )
+    expect(createCalls[1]).toEqual({ projectPath: '/repo/main', name: undefined, command: undefined })
+  })
+
+  /**
+   * The async refresh chain awaits the worker promise and its own
+   * setTimeout(0) yield before replacing the registry — one macrotask is
+   * not enough for an externally-triggered refresh to fully settle.
+   */
+  async function settleRefresh() {
+    for (let round = 0; round < 5; round += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    }
+  }
+
+  test('session-create with auto-start holds the prompt and injects it once at first idle', async () => {
+    // Task 8.1/8.2 wiring: the create-session message carries the change
+    // name; the server holds the mapped apply command and injects it — text
+    // plus Enter, the terminal-input keystroke pair — exactly once, at the
+    // session's first idle (`waiting`) status report.
+    const createdSession: Session = {
+      ...baseSession,
+      id: 'auto-1',
+      tmuxWindow: 'agentboard:auto-1',
+      status: 'working',
+    }
+    sessionManagerState.createWindow = () => createdSession
+    // The creation flow triggers its own refresh; seed the worker list so
+    // that refresh keeps the created session in the registry instead of
+    // discarding its pending prompt as a vanished session.
+    refreshWorkerSessions = [{ ...createdSession, status: 'working' }]
+    const tmuxSendKeys: string[][] = []
+    spawnSyncImpl = ((command: string[]) => {
+      const cmd = Array.isArray(command) ? command : [String(command)]
+      if (cmd[0] === 'tmux' && cmd.includes('send-keys')) {
+        tmuxSendKeys.push(cmd)
+      }
+      return {
+        exitCode: 0,
+        stdout: Buffer.from(''),
+        stderr: Buffer.from(''),
+      }
+    }) as unknown as typeof Bun.spawnSync
+
+    const { serveOptions } = await loadIndex()
+    const { ws, sent } = createWs()
+    const websocket = serveOptions.websocket
+    if (!websocket) {
+      throw new Error('WebSocket handlers not configured')
+    }
+
+    websocket.message?.(
+      ws as never,
+      JSON.stringify({
+        type: 'session-create',
+        projectPath: '/repo/.worktrees/add-auth',
+        command: 'claude',
+        autoStartChange: 'add-auth',
+      })
+    )
+    expect(sent.find((message) => message.type === 'session-created')).toBeTruthy()
+
+    // Let the creation-triggered refresh settle before driving explicit
+    // refreshes (a coalesced refresh would observe a stale worker list).
+    await settleRefresh()
+    websocket.message?.(ws as never, JSON.stringify({ type: 'session-refresh' }))
+    await settleRefresh()
+    expect(tmuxSendKeys).toHaveLength(0)
+
+    // The first idle report injects the mapped apply command exactly once.
+    refreshWorkerSessions = [{ ...createdSession, status: 'waiting' }]
+    websocket.message?.(ws as never, JSON.stringify({ type: 'session-refresh' }))
+    await settleRefresh()
+    expect(tmuxSendKeys).toEqual([
+      ['tmux', 'send-keys', '-t', 'agentboard:auto-1', '-l', '--', '/opsx:apply add-auth'],
+      ['tmux', 'send-keys', '-t', 'agentboard:auto-1', 'Enter'],
+    ])
+
+    // Double-trigger protection: later refreshes send nothing more.
+    refreshWorkerSessions = [{ ...createdSession, status: 'waiting' }]
+    websocket.message?.(ws as never, JSON.stringify({ type: 'session-refresh' }))
+    await settleRefresh()
+    expect(tmuxSendKeys).toHaveLength(2)
+  })
+
+  test('session-create with auto-start for an unrecognized agent sends nothing', async () => {
+    // Task 8.3: no mapped apply command — nothing is held, nothing is sent,
+    // even once the session reports idle.
+    const createdSession: Session = {
+      ...baseSession,
+      id: 'auto-2',
+      tmuxWindow: 'agentboard:auto-2',
+      status: 'waiting',
+    }
+    sessionManagerState.createWindow = () => createdSession
+    const tmuxSendKeys: string[][] = []
+    spawnSyncImpl = ((command: string[]) => {
+      const cmd = Array.isArray(command) ? command : [String(command)]
+      if (cmd[0] === 'tmux' && cmd.includes('send-keys')) {
+        tmuxSendKeys.push(cmd)
+      }
+      return {
+        exitCode: 0,
+        stdout: Buffer.from(''),
+        stderr: Buffer.from(''),
+      }
+    }) as unknown as typeof Bun.spawnSync
+
+    const { serveOptions } = await loadIndex()
+    const { ws } = createWs()
+    const websocket = serveOptions.websocket
+    if (!websocket) {
+      throw new Error('WebSocket handlers not configured')
+    }
+
+    websocket.message?.(
+      ws as never,
+      JSON.stringify({
+        type: 'session-create',
+        projectPath: '/repo/.worktrees/add-auth',
+        command: 'vim .',
+        autoStartChange: 'add-auth',
+      })
+    )
+    refreshWorkerSessions = [createdSession]
+    websocket.message?.(ws as never, JSON.stringify({ type: 'session-refresh' }))
+    await settleRefresh()
+    expect(tmuxSendKeys).toHaveLength(0)
+  })
+
+  test('session-create at a disappeared worktree rejects with an actionable error and refreshes workspace', async () => {
+    // Task 7.3: the selected worktree vanished between discovery and
+    // submission. The handler must reject with an error naming the stale
+    // worktree and request a scoped workspace refresh of that exact path.
+    const repoCommonDir = '/wstest/repo/.git'
+    const revParseCwds: string[] = []
+    spawnSyncImpl = ((command: string[], options?: { cwd?: string }) => {
+      const cmd = Array.isArray(command) ? command : [String(command)]
+      if (cmd[0] === 'git') {
+        const gitArgs = cmd.slice(1).filter((arg) => arg !== '--git-dir')
+        const cwd = options?.cwd ?? ''
+        if (gitArgs.includes('rev-parse')) {
+          revParseCwds.push(cwd)
+          if (cwd === '/wstest/repo' || cwd.startsWith('/wstest/repo/')) {
+            return {
+              exitCode: 0,
+              stdout: Buffer.from([repoCommonDir, repoCommonDir, '/wstest/repo'].join('\n')),
+              stderr: Buffer.from(''),
+            }
+          }
+          return { exitCode: 128, stdout: Buffer.from(''), stderr: Buffer.from('not a repo') }
+        }
+        if (gitArgs.includes('worktree')) {
+          return {
+            exitCode: 0,
+            stdout: Buffer.from(
+              ['worktree /wstest/repo', 'HEAD aaa1111', 'branch refs/heads/main', ''].join('\n')
+            ),
+            stderr: Buffer.from(''),
+          }
+        }
+        if (gitArgs.includes('for-each-ref')) {
+          return { exitCode: 0, stdout: Buffer.from('aaa1111 main'), stderr: Buffer.from('') }
+        }
+        if (gitArgs.includes('status')) {
+          return { exitCode: 0, stdout: Buffer.from(''), stderr: Buffer.from('') }
+        }
+      }
+      if (cmd[0] === 'openspec') {
+        return {
+          exitCode: 1,
+          stdout: Buffer.from(
+            JSON.stringify({
+              changes: [],
+              root: null,
+              status: [{ code: 'no_openspec_root' }],
+            })
+          ),
+          stderr: Buffer.from(''),
+        }
+      }
+      return { exitCode: 0, stdout: Buffer.from(''), stderr: Buffer.from('') }
+    }) as unknown as typeof Bun.spawnSync
+
+    // Mimic the real SessionManager's missing-path rejection.
+    sessionManagerState.createWindow = (projectPath: string) => {
+      throw new Error(`Project path does not exist: ${projectPath}`)
+    }
+
+    const { serveOptions, registryInstance } = await loadIndex()
+    const websocket = serveOptions.websocket
+    if (!websocket) {
+      throw new Error('WebSocket handlers not configured')
+    }
+
+    // Seed discovery so the snapshot knows the /wstest/repo worktree.
+    const { ws, sent } = createWs()
+    websocket.open?.(ws as never)
+    registryInstance.replaceSessions([
+      { ...baseSession, id: 'ws-stale', projectPath: '/wstest/repo' },
+    ])
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    const revParseBefore = revParseCwds.length
+    websocket.message?.(
+      ws as never,
+      JSON.stringify({
+        type: 'session-create',
+        projectPath: '/wstest/repo/gone',
+        name: 'stale-agent',
+      })
+    )
+
+    // Rejected with the worktree-aware, actionable message; no session created.
+    expect(sent.find((message) => message.type === 'session-created')).toBeUndefined()
+    expect(sent.find((message) => message.type === 'error')).toMatchObject({
+      type: 'error',
+      message:
+        'Worktree no longer exists: /wstest/repo. It may have been removed outside Agentboard; workspace metadata is refreshing.',
+    })
+
+    // A scoped workspace refresh of the missing path was requested (its seed
+    // resolution re-runs git against exactly that directory).
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(revParseCwds.slice(revParseBefore)).toContain('/wstest/repo/gone')
+
+    // A missing path outside any known worktree keeps the generic message.
+    const sentBefore = sent.length
+    websocket.message?.(
+      ws as never,
+      JSON.stringify({
+        type: 'session-create',
+        projectPath: '/definitely/not/a/repo',
+      })
+    )
+    expect(sent[sent.length - 1]).toEqual({
+      type: 'error',
+      message: 'Project path does not exist: /definitely/not/a/repo',
+    })
+    expect(sent.length).toBe(sentBefore + 1)
   })
 
   test('returns errors for kill and rename when sessions are missing', async () => {

@@ -8,6 +8,7 @@ import { useEffect, useRef } from 'react'
 import { useReducedMotion } from 'motion/react'
 import type { AgentSession, Session } from '@shared/types'
 import SessionList from './SessionList'
+import type { WorkspaceView } from '../utils/workspaceView'
 
 interface SessionDrawerProps {
   isOpen: boolean
@@ -26,6 +27,16 @@ interface SessionDrawerProps {
   onNewSession: () => boolean | void
   loading: boolean
   error: string | null
+  /** Same grouped navigator as the desktop sidebar. */
+  workspaceView?: WorkspaceView | null
+  onToggleSectionCollapse?: (sectionKey: string) => void
+  /** Contextual new-session action on section headers (change name present
+   *  for change sections so the form can offer apply auto-start). */
+  onNewSessionInWorktree?: (worktreePath: string, changeName?: string) => void
+  /** Creates the convention worktree for a worktree-less change section. */
+  onCreateChangeWorktree?: (repositoryId: string, change: string) => void
+  /** Opens the repository branch browser from a worktree header. */
+  onBrowseBranches?: (repositoryId: string) => void
 }
 
 export default function SessionDrawer({
@@ -45,6 +56,11 @@ export default function SessionDrawer({
   onNewSession,
   loading,
   error,
+  workspaceView = null,
+  onToggleSectionCollapse,
+  onNewSessionInWorktree,
+  onCreateChangeWorktree,
+  onBrowseBranches,
 }: SessionDrawerProps) {
   const prefersReducedMotion = useReducedMotion()
   const drawerRef = useRef<HTMLDivElement>(null)
@@ -172,6 +188,32 @@ export default function SessionDrawer({
           }}
           loading={loading}
           error={error}
+          workspaceView={workspaceView}
+          onToggleSectionCollapse={onToggleSectionCollapse}
+          onNewSessionInWorktree={
+            onNewSessionInWorktree
+              ? (worktreePath, changeName) => {
+                  onNewSessionInWorktree(worktreePath, changeName)
+                  onClose()
+                }
+              : undefined
+          }
+          onCreateChangeWorktree={
+            onCreateChangeWorktree
+              ? (repositoryId, change) => {
+                  onCreateChangeWorktree(repositoryId, change)
+                  onClose()
+                }
+              : undefined
+          }
+          onBrowseBranches={
+            onBrowseBranches
+              ? (repositoryId) => {
+                  onBrowseBranches(repositoryId)
+                  onClose()
+                }
+              : undefined
+          }
         />
 
         {/* New session button at bottom */}

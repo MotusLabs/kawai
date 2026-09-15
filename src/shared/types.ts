@@ -2,6 +2,22 @@
 export const HISTORY_MAX_AGE_MIN_HOURS = 1
 export const HISTORY_MAX_AGE_MAX_HOURS = 168 // 7 days
 
+import type {
+  WorkspaceOperationResult,
+  WorkspaceSnapshot,
+} from './workspace'
+
+export type {
+  WorkspaceBranch,
+  WorkspaceRepository,
+  WorkspaceSnapshot,
+  WorkspaceWorktree,
+  WorktreeOpenSpecState,
+  OpenSpecChangeSummary,
+  WorkspaceOperationResult,
+  WorkspaceErrorCode,
+} from './workspace'
+
 export type SessionStatus = 'working' | 'waiting' | 'permission' | 'unknown'
 
 export type SessionSource = 'managed' | 'external'
@@ -100,6 +116,10 @@ export type ServerMessage =
       error?: string
     }
   | { type: 'session-move-to-history-result'; sessionId: string; ok: boolean; session?: AgentSession; error?: string }
+  // Workspace messages are additive: older clients can ignore them and all
+  // existing session messages/fields are unchanged.
+  | { type: 'workspace-snapshot'; snapshot: WorkspaceSnapshot }
+  | { type: 'workspace-operation-result'; result: WorkspaceOperationResult }
   | { type: 'terminal-output'; sessionId: string; data: string }
   | {
       type: 'terminal-error'
@@ -151,7 +171,17 @@ export type ClientMessage =
   // so multi-line content isn't auto-submitted line-by-line by the pane's app.
   | { type: 'terminal-paste'; sessionId: string; data: string }
   | { type: 'terminal-resize'; sessionId: string; cols: number; rows: number }
-  | { type: 'session-create'; projectPath: string; name?: string; command?: string; host?: string }
+  | {
+      type: 'session-create'
+      projectPath: string
+      name?: string
+      command?: string
+      host?: string
+      // OpenSpec change name: the server holds the mapped apply command as
+      // the session's pending first prompt (agent-type mapped, injected once
+      // at the first idle status). Absent = no auto-start.
+      autoStartChange?: string
+    }
   | { type: 'session-kill'; sessionId: string; source?: SessionKillSource }
   | { type: 'session-rename'; sessionId: string; newName: string }
   | { type: 'session-refresh' }
@@ -160,6 +190,20 @@ export type ClientMessage =
   | { type: 'session-wake'; sessionId: string }
   | { type: 'session-hibernate'; sessionId: string }
   | { type: 'session-move-to-history'; sessionId: string }
+  // Workspace messages are additive; existing clients never send them.
+  | { type: 'workspace-refresh'; projectPath?: string }
+  | {
+      type: 'create-worktree'
+      repositoryId: string
+      branch: string
+      destination: string
+      launchSession?: boolean
+    }
+  | {
+      type: 'create-change-worktree'
+      repositoryId: string
+      change: string
+    }
   | { type: 'ping'; seq?: number }
 
 /** Diagnostic metadata attached to parsed ServerMessages by useWebSocket. */

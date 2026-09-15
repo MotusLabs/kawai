@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { AgentSession, ServerMessage, Session, SessionKillSource } from '@shared/types'
+import type { WorkspaceBranch } from '@shared/workspace'
 import Header from './components/Header'
 import SessionList from './components/SessionList'
 import Terminal from './components/Terminal'
 import NewSessionModal from './components/NewSessionModal'
+import BranchBrowserModal from './components/BranchBrowserModal'
+import CreateWorktreeModal from './components/CreateWorktreeModal'
 import SettingsModal from './components/SettingsModal'
 import { ToastViewport } from './components/Toast'
 import { useSessionStore } from './stores/sessionStore'
@@ -14,10 +17,12 @@ import {
   SIDEBAR_MIN_WIDTH,
 } from './stores/settingsStore'
 import { useThemeStore } from './stores/themeStore'
+import { useWorkspaceStore } from './stores/workspaceStore'
 import { useWebSocket } from './hooks/useWebSocket'
 import { invalidateSnapshotCache } from './hooks/useTerminal'
 import { useVisualViewport } from './hooks/useVisualViewport'
 import { sortSessions } from './utils/sessions'
+import { buildWorkspaceView } from './utils/workspaceView'
 import { flushSync } from 'react-dom'
 import { setClientLogLevel } from './utils/clientLog'
 import { getEffectiveModifier, matchesModifier } from './utils/device'
@@ -50,7 +55,10 @@ export default function App() {
   const [newSessionInitialHost, setNewSessionInitialHost] = useState<string | undefined>(undefined)
   const [newSessionInitialPath, setNewSessionInitialPath] = useState<string | undefined>(undefined)
   const [newSessionInitialCommand, setNewSessionInitialCommand] = useState<string | undefined>(undefined)
+  const [newSessionInitialAutoStartChange, setNewSessionInitialAutoStartChange] = useState<string | undefined>(undefined)
   const [isSettingsOpen, setIsSettingsOpen] = useState(false)
+  const [branchBrowserRepositoryId, setBranchBrowserRepositoryId] = useState<string | null>(null)
+  const [createWorktreeBranch, setCreateWorktreeBranch] = useState<WorkspaceBranch | null>(null)
   const [serverError, setServerError] = useState<string | null>(null)
   const [serverInfo, setServerInfo] = useState<ServerInfo | null>(null)
   const [pendingHibernatingSession, setPendingHibernatingSession] =
@@ -292,6 +300,58 @@ export default function App() {
       }
       if (message.type === 'host-status') {
         setHostStatuses(message.hosts)
+      }
+      if (message.type === 'workspace-snapshot') {
+        // Malformed snapshots keep the last valid one (stale retention);
+        // reconnects resupply the latest snapshot on open.
+        useWorkspaceStore.getState().applySnapshot(message.snapshot)
+      }
+      if (message.type === 'workspace-operation-result') {
+        useWorkspaceStore.getState().recordOperationResult(message.result)
+        const result = message.result
+        if (result.operation === 'create-worktree') {
+          const pending = pendingWorktreeLaunchRef.current
+          if (result.ok) {
+            // Route a successful launch request through the normal session
+            // form — presets, names, and hosts stay in play (§8.4).
+            if (
+              pending &&
+              pending.repositoryId === result.repositoryId &&
+              pending.branch === result.branch
+            ) {
+              pendingWorktreeLaunchRef.current = null
+              setNewSessionInitialHost(undefined)
+              setNewSessionInitialPath(result.path)
+              setNewSessionInitialCommand(undefined)
+              setNewSessionInitialAutoStartChange(undefined)
+              setIsModalOpen(true)
+            }
+          } else {
+            // Every operation failure surfaces an actionable error.
+            if (pending) pendingWorktreeLaunchRef.current = null
+            setServerError(result.error)
+            window.setTimeout(() => setServerError(null), 6000)
+          }
+        }
+        if (result.operation === 'create-change-worktree') {
+          const pending = pendingChangeLaunchRef.current
+          if (result.ok) {
+            // Seeded creation succeeded: open the session form prefilled with
+            // the new worktree root and the apply auto-start offered (§7.4).
+            if (pending && pending.repositoryId === result.repositoryId && pending.change === result.change) {
+              pendingChangeLaunchRef.current = null
+              setNewSessionInitialHost(undefined)
+              setNewSessionInitialPath(result.path)
+              setNewSessionInitialCommand(undefined)
+              setNewSessionInitialAutoStartChange(result.change)
+              setIsModalOpen(true)
+            }
+          } else {
+            if (pending) pendingChangeLaunchRef.current = null
+            setServerError(result.error)
+            window.setTimeout(() => setServerError(null), 6000)
+          }
+        }
       }
       if (message.type === 'server-config') {
         setRemoteAllowControl(message.remoteAllowControl)
@@ -574,26 +634,109 @@ export default function App() {
     return next
   }, [sortedSessions, projectFilters, hostFilters])
 
+  // Sectioned workspace view: sessions partitioned into change and worktree
+  // explicit local-ungrouped and remote fallbacks. Built when a successful
+  // workspace snapshot exists; navigation falls back to the flat order
+  // otherwise (older server or before the first snapshot).
+  const workspaceSnapshot = useWorkspaceStore((state) => state.snapshot)
+  const collapsedSectionIds = useWorkspaceStore((state) => state.collapsedSectionIds)
+  const toggleSectionCollapsed = useWorkspaceStore((state) => state.toggleSectionCollapsed)
+  // Compact worktree options for the new-session picker.
+  const worktreeOptions = useMemo(() => {
+    if (!workspaceSnapshot) return []
+    return workspaceSnapshot.repositories.flatMap((repository) =>
+      repository.worktrees.map((worktree) => ({
+        worktreeId: worktree.id,
+        repositoryName: repository.name,
+        path: worktree.path,
+        ...(worktree.branch !== undefined ? { branch: worktree.branch } : {}),
+        detached: worktree.detached,
+        headRevision: worktree.headRevision,
+      }))
+    )
+  }, [workspaceSnapshot])
+  // Repository whose branches the branch browser is showing, when open.
+  const branchBrowserRepository = useMemo(
+    () =>
+      branchBrowserRepositoryId === null
+        ? null
+        : workspaceSnapshot?.repositories.find(
+            (repository) => repository.id === branchBrowserRepositoryId
+          ) ?? null,
+    [branchBrowserRepositoryId, workspaceSnapshot]
+  )
+  // Every known worktree path, for create-worktree destination de-confliction.
+  const allWorktreePaths = useMemo(
+    () =>
+      workspaceSnapshot?.repositories.flatMap((repository) =>
+        repository.worktrees.map((worktree) => worktree.path)
+      ) ?? [],
+    [workspaceSnapshot]
+  )
+  const workspaceView = useMemo(
+    () =>
+      buildWorkspaceView(
+        workspaceSnapshot,
+        sortedSessions,
+        hibernatingAgentSessions,
+        historyAgentSessions,
+        {
+          filter: { projectFilters, hostFilters },
+          collapsedSectionIds,
+        }
+      ),
+    [
+      workspaceSnapshot,
+      sortedSessions,
+      hibernatingAgentSessions,
+      historyAgentSessions,
+      projectFilters,
+      hostFilters,
+      collapsedSectionIds,
+    ]
+  )
+
+  // Flattened visible order across expanded groups drives keyboard and
+  // terminal navigation; falls back to the flat filtered order when no
+  // workspace snapshot is available.
+  const navigationLiveSessions = useMemo(() => {
+    if (!workspaceSnapshot) return filteredSortedSessions
+    return workspaceView.visibleEntries.flatMap((entry) =>
+      entry.kind === 'live' && entry.liveSession ? [entry.liveSession] : []
+    )
+  }, [workspaceSnapshot, workspaceView, filteredSortedSessions])
+
+  const navigationHibernatingSessions = useMemo(() => {
+    if (!workspaceSnapshot) return filteredHibernatingSessions
+    return workspaceView.visibleEntries.flatMap((entry) =>
+      entry.kind === 'hibernating' && entry.agentSession ? [entry.agentSession] : []
+    )
+  }, [workspaceSnapshot, workspaceView, filteredHibernatingSessions])
+
   const lastSelectedHibernatingSessionIdRef = useRef<string | null>(
     selectedHibernatingSessionId
   )
   const pendingHibernateSelectionRef = useRef<string | null>(null)
   const pendingWakeSelectionRef = useRef<string | null>(null)
+  /** Create-worktree request awaiting its result to open the session form. */
+  const pendingWorktreeLaunchRef = useRef<{ repositoryId: string; branch: string } | null>(null)
+  /** Create-change-worktree request awaiting its result the same way. */
+  const pendingChangeLaunchRef = useRef<{ repositoryId: string; change: string } | null>(null)
   const lastConnectionEpochRef = useRef(connectionEpoch)
 
   const selectFirstVisibleTarget = useCallback(() => {
-    if (filteredSortedSessions.length > 0) {
-      setSelectedSessionId(filteredSortedSessions[0].id)
+    if (navigationLiveSessions.length > 0) {
+      setSelectedSessionId(navigationLiveSessions[0].id)
       return true
     }
-    if (filteredHibernatingSessions.length > 0) {
-      setSelectedHibernatingSessionId(filteredHibernatingSessions[0].sessionId)
+    if (navigationHibernatingSessions.length > 0) {
+      setSelectedHibernatingSessionId(navigationHibernatingSessions[0].sessionId)
       return true
     }
     return false
   }, [
-    filteredSortedSessions,
-    filteredHibernatingSessions,
+    navigationLiveSessions,
+    navigationHibernatingSessions,
     setSelectedSessionId,
     setSelectedHibernatingSessionId,
   ])
@@ -638,7 +781,7 @@ export default function App() {
     if (!hasLoaded) return
     if (selectedHibernatingSessionId) return
     if (!selectedSessionId) return
-    if (filteredSortedSessions.some((session) => session.id === selectedSessionId)) {
+    if (navigationLiveSessions.some((session) => session.id === selectedSessionId)) {
       return
     }
     if (selectFirstVisibleTarget()) return
@@ -647,6 +790,7 @@ export default function App() {
     hasLoaded,
     selectedSessionId,
     selectedHibernatingSessionId,
+    navigationLiveSessions,
     selectFirstVisibleTarget,
     setSelectedSessionId,
   ])
@@ -660,14 +804,14 @@ export default function App() {
       return
     }
     if (
-      filteredHibernatingSessions.some(
+      navigationHibernatingSessions.some(
         (session) => session.sessionId === selectedHibernatingSessionId
       )
     ) {
       return
     }
 
-    const matchingLiveSession = filteredSortedSessions.find(
+    const matchingLiveSession = navigationLiveSessions.find(
       (session) => session.agentSessionId?.trim() === selectedHibernatingSessionId
     )
     if (matchingLiveSession) {
@@ -678,8 +822,8 @@ export default function App() {
     if (selectFirstVisibleTarget()) return
     setSelectedHibernatingSessionId(null)
   }, [
-    filteredHibernatingSessions,
-    filteredSortedSessions,
+    navigationHibernatingSessions,
+    navigationLiveSessions,
     agentSessionsEpoch,
     pendingHibernatingSession,
     selectedHibernatingSessionId,
@@ -697,7 +841,7 @@ export default function App() {
       return
     }
 
-    const matchingLiveSession = filteredSortedSessions.find(
+    const matchingLiveSession = navigationLiveSessions.find(
       (session) => session.agentSessionId?.trim() === pendingWakeSelectionId
     )
     if (matchingLiveSession) {
@@ -715,7 +859,7 @@ export default function App() {
       pendingWakeSelectionRef.current = null
     }
   }, [
-    filteredSortedSessions,
+    navigationLiveSessions,
     selectedSessionId,
     selectedHibernatingSessionId,
     selectFirstVisibleTarget,
@@ -730,13 +874,13 @@ export default function App() {
       hasLoaded &&
       selectedSessionId === null &&
       selectedHibernatingSessionId === null &&
-      (filteredSortedSessions.length > 0 || filteredHibernatingSessions.length > 0)
+      (navigationLiveSessions.length > 0 || navigationHibernatingSessions.length > 0)
     ) {
       selectFirstVisibleTarget()
     }
   }, [
-    filteredHibernatingSessions.length,
-    filteredSortedSessions.length,
+    navigationHibernatingSessions.length,
+    navigationLiveSessions.length,
     hasLoaded,
     selectFirstVisibleTarget,
     selectedSessionId,
@@ -788,12 +932,14 @@ export default function App() {
       // Bracket navigation: [mod]+[ / ]
       // When only hibernating sessions are visible, fall back to navigating
       // within the hibernating bucket so the keyboard shortcut keeps working.
+      // The order is the flattened grouped order when a workspace snapshot
+      // exists, crossing expanded worktree groups.
       if (isShortcut && (code === 'BracketLeft' || code === 'BracketRight')) {
         event.preventDefault()
         const delta = code === 'BracketLeft' ? -1 : 1
-        const activeNav = filteredSortedSessions
+        const activeNav = navigationLiveSessions
         if (activeNav.length === 0) {
-          const hibernatingNav = filteredHibernatingSessions
+          const hibernatingNav = navigationHibernatingSessions
           if (hibernatingNav.length === 0) return
           const currentIndex = hibernatingNav.findIndex(
             s => s.sessionId === selectedHibernatingSessionId
@@ -823,15 +969,15 @@ export default function App() {
       // unhandled so the browser/terminal keeps the key event.
       if (isShortcut && /^Digit[1-9]$/.test(code)) {
         const index = Number(code.slice('Digit'.length)) - 1
-        if (filteredSortedSessions.length > 0) {
-          const target = filteredSortedSessions[index]
+        if (navigationLiveSessions.length > 0) {
+          const target = navigationLiveSessions[index]
           if (!target) return
           event.preventDefault()
           setSelectedSessionId(target.id)
           return
         }
 
-        const target = filteredHibernatingSessions[index]
+        const target = navigationHibernatingSessions[index]
         if (!target) return
         event.preventDefault()
         setSelectedHibernatingSessionId(target.sessionId)
@@ -865,8 +1011,8 @@ export default function App() {
     selectedHibernatingSessionId,
     setSelectedSessionId,
     setSelectedHibernatingSessionId,
-    filteredSortedSessions,
-    filteredHibernatingSessions,
+    navigationLiveSessions,
+    navigationHibernatingSessions,
     handleKillSession,
     shortcutModifier,
     settingsHydrated,
@@ -877,18 +1023,84 @@ export default function App() {
     setNewSessionInitialHost(undefined)
     setNewSessionInitialPath(undefined)
     setNewSessionInitialCommand(undefined)
+    setNewSessionInitialAutoStartChange(undefined)
     setIsModalOpen(true)
     return true
   }
+
+  // Contextual new-session from a section header: preselect the worktree
+  // root; command presets, names, and hosts flow through the normal form.
+  // From a change section the form also offers the apply auto-start.
+  const handleNewSessionInWorktree = useCallback(
+    (worktreePath: string, changeName?: string) => {
+      if (!settingsHydrated) return
+      setNewSessionInitialHost(undefined)
+      setNewSessionInitialPath(worktreePath)
+      setNewSessionInitialCommand(undefined)
+      setNewSessionInitialAutoStartChange(changeName)
+      setIsModalOpen(true)
+    },
+    [settingsHydrated]
+  )
+  // Seeded creation from a worktree-less change section (§7.2): the server
+  // creates `.worktrees/<change>`, and the result routing below opens the
+  // prefilled session form (with auto-start offered) on success.
+  const handleCreateChangeWorktree = useCallback(
+    (repositoryId: string, change: string) => {
+      pendingChangeLaunchRef.current = { repositoryId, change }
+      sendMessage({ type: 'create-change-worktree', repositoryId, change })
+    },
+    [sendMessage]
+  )
+  // Repository branch browser entry from a worktree header (§8.1).
+  const handleBrowseBranches = useCallback((repositoryId: string) => {
+    setBranchBrowserRepositoryId(repositoryId)
+    setCreateWorktreeBranch(null)
+  }, [])
+  const handleCloseBranchBrowser = useCallback(() => {
+    setBranchBrowserRepositoryId(null)
+    setCreateWorktreeBranch(null)
+  }, [])
+  // Create-worktree form (§8.2): branch chosen in the browser.
+  const handleCreateWorktreeFromBranch = useCallback((branch: WorkspaceBranch) => {
+    setCreateWorktreeBranch(branch)
+  }, [])
+  const handleCancelCreateWorktree = useCallback(() => {
+    setCreateWorktreeBranch(null)
+  }, [])
+  const handleConfirmCreateWorktree = useCallback(
+    (destination: string, launchSession: boolean) => {
+      const branch = createWorktreeBranch
+      const repositoryId = branchBrowserRepositoryId
+      setBranchBrowserRepositoryId(null)
+      setCreateWorktreeBranch(null)
+      if (!branch || repositoryId === null) return
+      if (launchSession) {
+        pendingWorktreeLaunchRef.current = {
+          repositoryId,
+          branch: branch.name,
+        }
+      }
+      sendMessage({
+        type: 'create-worktree',
+        repositoryId,
+        branch: branch.name,
+        destination,
+        ...(launchSession ? { launchSession: true } : {}),
+      })
+    },
+    [createWorktreeBranch, branchBrowserRepositoryId, sendMessage]
+  )
   const handleOpenSettings = () => setIsSettingsOpen(true)
 
   const handleCreateSession = (
     projectPath: string,
     name?: string,
     command?: string,
-    host?: string
+    host?: string,
+    autoStartChange?: string
   ) => {
-    sendMessage({ type: 'session-create', projectPath, name, command, host })
+    sendMessage({ type: 'session-create', projectPath, name, command, host, autoStartChange })
     if (!host) setLastProjectPath(projectPath)
   }
 
@@ -967,6 +1179,11 @@ export default function App() {
           onNewSession={handleNewSession}
           loading={!hasLoaded}
           error={connectionError || serverError}
+          workspaceView={workspaceSnapshot ? workspaceView : null}
+          onToggleSectionCollapse={toggleSectionCollapsed}
+          onNewSessionInWorktree={handleNewSessionInWorktree}
+          onCreateChangeWorktree={handleCreateChangeWorktree}
+          onBrowseBranches={handleBrowseBranches}
         />
       </div>
 
@@ -979,7 +1196,7 @@ export default function App() {
       {/* Terminal - full height on desktop */}
       <Terminal
         session={selectedSession}
-        sessions={filteredSortedSessions}
+        sessions={navigationLiveSessions}
         hibernatingSession={selectedHibernatingSession}
         hibernatingSessions={hibernatingAgentSessions}
         connectionStatus={connectionStatus}
@@ -999,6 +1216,11 @@ export default function App() {
         historySessions={historyAgentSessions}
         loading={!hasLoaded}
         error={connectionError || serverError}
+        workspaceView={workspaceSnapshot ? workspaceView : null}
+        onToggleSectionCollapse={toggleSectionCollapsed}
+        onNewSessionInWorktree={handleNewSessionInWorktree}
+        onCreateChangeWorktree={handleCreateChangeWorktree}
+        onBrowseBranches={handleBrowseBranches}
       />
 
       <NewSessionModal
@@ -1015,6 +1237,8 @@ export default function App() {
         initialHost={newSessionInitialHost}
         initialPath={newSessionInitialPath}
         initialCommand={newSessionInitialCommand}
+        initialAutoStartChange={newSessionInitialAutoStartChange}
+        worktrees={worktreeOptions}
       />
 
       <SettingsModal
@@ -1022,6 +1246,24 @@ export default function App() {
         onClose={() => setIsSettingsOpen(false)}
         serverCwd={serverInfo?.cwd ?? null}
       />
+
+      {branchBrowserRepository && createWorktreeBranch === null && (
+        <BranchBrowserModal
+          repository={branchBrowserRepository}
+          onClose={handleCloseBranchBrowser}
+          onCreateWorktree={handleCreateWorktreeFromBranch}
+        />
+      )}
+
+      {branchBrowserRepository && createWorktreeBranch !== null && (
+        <CreateWorktreeModal
+          repository={branchBrowserRepository}
+          branch={createWorktreeBranch}
+          existingWorktreePaths={allWorktreePaths}
+          onConfirm={handleConfirmCreateWorktree}
+          onCancel={handleCancelCreateWorktree}
+        />
+      )}
 
       <ToastViewport />
     </div>

@@ -110,6 +110,18 @@ async function main() {
       'sessionListComponent.test.tsx',
       'sessionDrawer.test.tsx',
       'sessionListFilters.test.tsx',
+      // Grouped-navigator tests render SessionList (framer-motion) with the
+      // same window-stub pattern; same isolation requirement as above.
+      'sessionListGrouped.test.tsx',
+      'SectionHeader.test.tsx',
+      // The grouped navigator also puts motion components into whole-app and
+      // Terminal renders: main.test.ts mounts the full App (SessionList),
+      // and terminal.test.tsx opens the mobile drawer (SessionDrawer). Same
+      // leak class — saw CI fail with 'window.addEventListener is not a
+      // function' from a motion frame callback after another file restored
+      // its window stub.
+      'main.test.ts',
+      'terminal.test.tsx',
     ])
 
     const serverTests: string[] = []

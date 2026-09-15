@@ -1,5 +1,6 @@
 import type { Server, ServerWebSocket } from 'bun'
 import { createReadStream } from 'node:fs'
+import fsSync from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import fs from 'node:fs/promises'
@@ -64,6 +65,17 @@ import {
   isValidSessionId,
   isValidTmuxTarget,
 } from './validators'
+import {
+  parseCreateChangeWorktreePayload,
+  parseCreateWorktreePayload,
+} from '../shared/workspaceValidation'
+import { deepestPathMatch, type WorkspaceSnapshot } from '../shared/workspace'
+import { canonicalizePath } from './git/repositoryResolution'
+import { createWorktree } from './git/createWorktree'
+import { createChangeWorktree } from './git/createChangeWorktree'
+import { WorkspaceCoordinator } from './workspace/workspaceCoordinator'
+import { WorkspaceWatcher, createNodeWatcherHost } from './workspace/workspaceWatcher'
+import { PendingAutoStartStore, type AutoStartInputSender } from './pendingAutoStart'
 import { RemoteSessionPoller, splitSshOptions, buildRemoteSessionId } from './remoteSessions'
 import { normalizePaneStartCommand } from './agentDetection'
 import { generateSessionName } from './nameGenerator'
@@ -1166,6 +1178,7 @@ async function refreshSessionsAsync(): Promise<void> {
         const hydrated = hydrateSessionsWithAgentSessions(sessions)
         const withOverrides = applyForceWorkingOverrides(hydrated)
         registry.replaceSessions(mergeRemoteSessions(withOverrides))
+        reconcilePendingAutoStart()
         const hydrateMs = Math.round(performance.now() - tHydrate)
         if (hydrateMs > 50) {
           logger.debug('session_refresh_hydrate_slow', { hydrateMs, sessionCount: sessions.length })
@@ -1193,6 +1206,7 @@ async function refreshSessionsAsync(): Promise<void> {
         const hydrated = hydrateSessionsWithAgentSessions(sessions)
         const withOverrides = applyForceWorkingOverrides(hydrated)
         registry.replaceSessions(mergeRemoteSessions(withOverrides))
+        reconcilePendingAutoStart()
         return
       }
     }
@@ -1203,6 +1217,56 @@ async function refreshSessionsAsync(): Promise<void> {
 
 function refreshSessions() {
   void refreshSessionsAsync()
+}
+
+/**
+ * Pending apply auto-start prompts, held server-side so they survive client
+ * reloads between session creation and the agent's first idle status (§8.1).
+ */
+const pendingAutoStart = new PendingAutoStartStore()
+
+/**
+ * Send literal text plus Enter to a local tmux target — the same keystroke
+ * pair the terminal-input path delivers for a line of input.
+ */
+const sendAutoStartInput: AutoStartInputSender = (tmuxTarget, text) => {
+  if (!isValidTmuxTarget(tmuxTarget)) return false
+  try {
+    const typed = Bun.spawnSync(['tmux', 'send-keys', '-t', tmuxTarget, '-l', '--', text], {
+      timeout: 5000,
+      stdout: 'pipe',
+      stderr: 'pipe',
+    })
+    if (typed.exitCode !== 0) return false
+    const entered = Bun.spawnSync(['tmux', 'send-keys', '-t', tmuxTarget, 'Enter'], {
+      timeout: 5000,
+      stdout: 'pipe',
+      stderr: 'pipe',
+    })
+    return entered.exitCode === 0
+  } catch {
+    return false
+  }
+}
+
+/**
+ * After every registry refresh: drop prompts whose session is gone, and
+ * inject each remaining prompt into its session the first time that session
+ * reports the idle status (§8.2). Injection mirrors the terminal-input Enter
+ * handling — the session flips to working and a debounced refresh follows.
+ */
+function reconcilePendingAutoStart(): void {
+  if (pendingAutoStart.size === 0) return
+  const sessions = registry.getAll()
+  pendingAutoStart.retainAll(new Set(sessions.map((session) => session.id)))
+  const injected = pendingAutoStart.injectWaiting(sessions, sendAutoStartInput)
+  for (const sessionId of injected) {
+    logger.info('auto_start_injected', { sessionId })
+    setForceWorking(sessionId)
+  }
+  if (injected.length > 0) {
+    scheduleEnterRefresh()
+  }
 }
 
 function listWindowsSyncOrNull(context: string): Session[] | null {
@@ -1398,6 +1462,68 @@ registry.on('agent-sessions', ({ active, hibernating, history }) => {
 registry.on('agent-sessions-active', (active) => {
   broadcast({ type: 'agent-sessions-active', active })
 })
+
+// Workspace discovery seeds: live local session paths plus persisted active,
+// hibernating, and history agent-session paths. Remote sessions never seed
+// local Git discovery (see design.md non-goals).
+function collectWorkspaceSeeds(): string[] {
+  const seeds = new Set<string>()
+  for (const session of registry.getAll()) {
+    if (session.remote || !session.projectPath) continue
+    seeds.add(session.projectPath)
+  }
+  const agentSessions = registry.getAgentSessions()
+  for (const group of [agentSessions.active, agentSessions.hibernating, agentSessions.history]) {
+    for (const agentSession of group) {
+      if (agentSession.host || !agentSession.projectPath) continue
+      seeds.add(agentSession.projectPath)
+    }
+  }
+  return [...seeds]
+}
+
+// Workspace discovery coordinator hook. handleMessage routes workspace
+// messages through this; declared before first use to avoid TDZ access.
+export interface WorkspaceCoordinatorHook {
+  requestRefresh(projectPath?: string): Promise<void>
+  /** Latest snapshot; used to name the stale worktree in session-create errors. */
+  getSnapshot(): WorkspaceSnapshot | null
+}
+
+let workspaceCoordinator: WorkspaceCoordinatorHook | null = null
+
+export function attachWorkspaceCoordinator(coordinator: WorkspaceCoordinatorHook | null): void {
+  workspaceCoordinator = coordinator
+}
+
+const workspaceCoordinatorInstance = new WorkspaceCoordinator({
+  getSeeds: () => collectWorkspaceSeeds(),
+  broadcast: (snapshot) => {
+    broadcast({ type: 'workspace-snapshot', snapshot })
+    workspaceWatcherInstance?.updateTargets(snapshot)
+  },
+})
+
+// Filesystem watches for Git/OpenSpec metadata plus periodic reconciliation;
+// watches are latency optimization, reconciliation is correctness (§4.3).
+const workspaceWatcherInstance = new WorkspaceWatcher({
+  host: createNodeWatcherHost(fsSync),
+  onPathsChanged: (paths) => {
+    fireAndForget(workspaceCoordinatorInstance.refreshPaths(paths), 'workspaceWatchRefresh')
+  },
+  onReconcile: () => {
+    fireAndForget(workspaceCoordinatorInstance.reconcile(), 'workspaceReconcile')
+  },
+})
+attachWorkspaceCoordinator(workspaceCoordinatorInstance)
+
+function refreshWorkspaceSeeds(): void {
+  fireAndForget(workspaceCoordinatorInstance.requestRefresh(), 'workspaceSeedRefresh')
+}
+
+registry.on('sessions', () => refreshWorkspaceSeeds())
+registry.on('agent-sessions', () => refreshWorkspaceSeeds())
+refreshWorkspaceSeeds()
 
 app.post('/api/client-log', async (c) => {
   try {
@@ -2030,6 +2156,10 @@ const websocketHandlers = {
       hibernating: agentSessions.hibernating,
       history: agentSessions.history,
     })
+    const workspaceSnapshot = workspaceCoordinatorInstance.getSnapshot()
+    if (workspaceSnapshot) {
+      send(ws, { type: 'workspace-snapshot', snapshot: workspaceSnapshot })
+    }
     initializePersistentTerminal(ws)
   },
   message(ws: ServerWebSocket<WSData>, message: string | BufferSource) {
@@ -2088,6 +2218,7 @@ logger.info('server_started', {
 if (config.logPollIntervalMs > 0) {
   logPoller.start(config.logPollIntervalMs, config.logWatchMode)
 }
+workspaceWatcherInstance.start()
 void completeStartupVerification()
 
 // Cleanup all terminals on server shutdown
@@ -2104,6 +2235,7 @@ async function cleanupAllTerminals() {
     clearAttachDedup(ws)
   }
   await Promise.allSettled(disposePromises)
+  workspaceWatcherInstance.stop()
   logPoller.stop()
   remotePoller?.stop()
   db.close()
@@ -2404,6 +2536,65 @@ function fireAndForget(promise: Promise<unknown>, context: string): void {
   })
 }
 
+/**
+ * Actionable error for a project path that disappeared between discovery
+ * and submission. Names the owning worktree when one is known from the
+ * latest snapshot so the user can tell which group went stale.
+ */
+function staleProjectPathError(missingPath: string): string {
+  const worktreePaths =
+    workspaceCoordinator?.getSnapshot()?.repositories.flatMap((repository) =>
+      repository.worktrees.map((worktree) => worktree.path)
+    ) ?? []
+  const owner = deepestPathMatch(canonicalizePath(missingPath), worktreePaths)
+  if (owner) {
+    return `Worktree no longer exists: ${owner}. It may have been removed outside Agentboard; workspace metadata is refreshing.`
+  }
+  return `Project path does not exist: ${missingPath}`
+}
+
+async function handleCreateWorktree(
+  ws: ServerWebSocket<WSData>,
+  payload: { repositoryId: string; branch: string; destination: string; launchSession?: boolean }
+): Promise<void> {
+  // Validated, non-forced git worktree add (§8.3). Refresh + broadcast of the
+  // affected repository and launch routing happen in §8.4.
+  const result = createWorktree({
+    repositoryId: payload.repositoryId,
+    branch: payload.branch,
+    destination: payload.destination,
+  })
+  send(ws, { type: 'workspace-operation-result', result })
+  if (workspaceCoordinator) {
+    fireAndForget(
+      workspaceCoordinator.requestRefresh(result.ok ? result.path : payload.destination),
+      'workspaceRefreshAfterOperation'
+    )
+  }
+}
+
+async function handleCreateChangeWorktree(
+  ws: ServerWebSocket<WSData>,
+  payload: { repositoryId: string; change: string }
+): Promise<void> {
+  // Seeded creation (§7.2) with immediate revalidation inside the operation
+  // (§7.3): repository identity, destination nonexistence, and branch
+  // assignment are re-read from Git right before the non-forced
+  // `git worktree add`. The snapshot refreshes after every result — success
+  // or failure — so the navigator never shows stale sections.
+  const result = createChangeWorktree({
+    repositoryId: payload.repositoryId,
+    change: payload.change,
+  })
+  send(ws, { type: 'workspace-operation-result', result })
+  if (workspaceCoordinator) {
+    fireAndForget(
+      workspaceCoordinator.requestRefresh(result.ok ? result.path : payload.repositoryId),
+      'workspaceRefreshAfterChangeOperation'
+    )
+  }
+}
+
 function handleMessage(
   ws: ServerWebSocket<WSData>,
   rawMessage: string | BufferSource
@@ -2438,6 +2629,21 @@ function handleMessage(
             message.name,
             message.command
           ))
+          // Hold the auto-start prompt before announcing the session: the
+          // first refresh after creation may already report idle (§8.1).
+          if (message.autoStartChange) {
+            const held = pendingAutoStart.holdFromCommand(
+              created.id,
+              message.command,
+              message.autoStartChange
+            )
+            if (!held) {
+              logger.info('auto_start_not_held', {
+                sessionId: created.id,
+                reason: 'unrecognized_agent_or_invalid_change',
+              })
+            }
+          }
           // Add session to registry immediately so terminal can attach
           refreshGeneration++
           const currentSessions = registry.getAll()
@@ -2445,11 +2651,26 @@ function handleMessage(
           refreshSessions()
           send(ws, { type: 'session-created', session: created })
         } catch (error) {
-          send(ws, {
-            type: 'error',
-            message:
-              error instanceof Error ? error.message : 'Unable to create session',
-          })
+          // A directory that vanished between discovery and submission —
+          // typically a worktree removed outside Agentboard — gets an
+          // actionable, worktree-aware error plus a scoped workspace refresh
+          // so the stale group reconciles without a page reload (§7.3).
+          const resolvedPath = resolveProjectPath(message.projectPath)
+          if (resolvedPath && !fsSync.existsSync(resolvedPath)) {
+            send(ws, { type: 'error', message: staleProjectPathError(resolvedPath) })
+            if (workspaceCoordinator) {
+              fireAndForget(
+                workspaceCoordinator.requestRefresh(resolvedPath),
+                'workspaceRefreshMissingPath'
+              )
+            }
+          } else {
+            send(ws, {
+              type: 'error',
+              message:
+                error instanceof Error ? error.message : 'Unable to create session',
+            })
+          }
         }
       }
       return
@@ -2496,6 +2717,31 @@ function handleMessage(
     case 'session-move-to-history':
       handleMoveToHistory(message.sessionId, ws)
       return
+    case 'workspace-refresh':
+      // Workspace discovery coordinator is attached in §4; until then the
+      // message is recognized (no unknown-type error) but ignored.
+      if (workspaceCoordinator) {
+        fireAndForget(workspaceCoordinator.requestRefresh(message.projectPath), 'workspaceRefresh')
+      }
+      return
+    case 'create-worktree': {
+      const payload = parseCreateWorktreePayload(message)
+      if (!payload) {
+        send(ws, { type: 'error', message: 'Invalid create-worktree payload' })
+        return
+      }
+      fireAndForget(handleCreateWorktree(ws, payload), 'handleCreateWorktree')
+      return
+    }
+    case 'create-change-worktree': {
+      const payload = parseCreateChangeWorktreePayload(message)
+      if (!payload) {
+        send(ws, { type: 'error', message: 'Invalid create-change-worktree payload' })
+        return
+      }
+      fireAndForget(handleCreateChangeWorktree(ws, payload), 'handleCreateChangeWorktree')
+      return
+    }
     default:
       send(ws, { type: 'error', message: 'Unknown message type' })
   }
@@ -2951,6 +3197,8 @@ async function handleKill(
   }
   const remaining = registry.getAll().filter((item) => item.id !== sessionId)
   registry.replaceSessions(remaining)
+  // A killed session never reaches idle — discard its pending auto-start (§8.1).
+  pendingAutoStart.discard(sessionId)
   logger.info('session_kill_completed', {
     ...auditFields,
     durationMs: Date.now() - startedAt,

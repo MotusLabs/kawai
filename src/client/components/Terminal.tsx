@@ -24,6 +24,7 @@ import PasteStatus from './PasteStatus'
 import { useBrowserPaste, type BrowserPaste } from '../hooks/useBrowserPaste'
 import { clipboardFiles } from '../utils/browserFiles'
 import SessionDrawer from './SessionDrawer'
+import type { WorkspaceView } from '../utils/workspaceView'
 import SessionPreviewContent from './SessionPreviewContent'
 import { PlusIcon, XCloseIcon, DotsVerticalIcon, Menu01Icon } from '@untitledui-icons/react/line'
 import AlertTriangleIcon from '@untitledui-icons/react/line/esm/AlertTriangleIcon'
@@ -54,6 +55,16 @@ interface TerminalProps {
   onOpenSettings: () => void
   loading?: boolean
   error?: string | null
+  /** Grouped workspace view forwarded to the mobile session drawer. */
+  workspaceView?: WorkspaceView | null
+  onToggleSectionCollapse?: (sectionKey: string) => void
+  /** Contextual new-session action on section headers (mobile drawer);
+   *  change name present for change sections (apply auto-start context). */
+  onNewSessionInWorktree?: (worktreePath: string, changeName?: string) => void
+  /** Creates the convention worktree for a worktree-less change section. */
+  onCreateChangeWorktree?: (repositoryId: string, change: string) => void
+  /** Opens the repository branch browser (mobile drawer). */
+  onBrowseBranches?: (repositoryId: string) => void
 }
 
 type IOSResumeInputState = 'idle' | 'focused' | 'interrupted' | 'armed'
@@ -114,6 +125,11 @@ export default function Terminal({
   onOpenSettings,
   loading = false,
   error = null,
+  workspaceView = null,
+  onToggleSectionCollapse,
+  onNewSessionInWorktree,
+  onCreateChangeWorktree,
+  onBrowseBranches,
 }: TerminalProps) {
   void _onClose // Keep for interface compatibility
   const theme = useThemeStore((state) => state.theme)
@@ -1677,6 +1693,11 @@ export default function Terminal({
           onNewSession={onNewSession}
           loading={loading}
           error={error}
+          workspaceView={workspaceView}
+          onToggleSectionCollapse={onToggleSectionCollapse}
+          onNewSessionInWorktree={onNewSessionInWorktree}
+          onCreateChangeWorktree={onCreateChangeWorktree}
+          onBrowseBranches={onBrowseBranches}
         />
       )}
 

@@ -56,7 +56,16 @@ function handleWakeDetected(): void {
   _needsUserGesture = true
 }
 
-if (typeof window !== 'undefined') {
+// The listener + poller are installed once at import. Partial window stubs
+// (client tests swap in `{ localStorage }`-style fakes that stay in place
+// across later file loads in the same bun test process) must not crash the
+// import — a browser always has both event targets, so require them.
+if (
+  typeof window !== 'undefined' &&
+  typeof window.addEventListener === 'function' &&
+  typeof document !== 'undefined' &&
+  typeof document.addEventListener === 'function'
+) {
   // 'pageshow' fires on bfcache restore and some wake scenarios
   window.addEventListener('pageshow', (e) => {
     if (e.persisted) handleWakeDetected()
