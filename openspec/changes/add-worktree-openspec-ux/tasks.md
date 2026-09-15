@@ -56,7 +56,7 @@
 ## 9. Regression and Acceptance Verification
 
 - [x] 9.1 Add end-to-end coverage for external worktree creation, branch/ref changes, OpenSpec task progress changes, transient discovery failures, and periodic reconciliation without page reload; verify `bun run test:e2e` passes in the supported test environment.
-- [ ] 9.2 Exercise the completed desktop and mobile UX with the repository's browser-testing workflow, capture screenshots, and verify change-section grouping, seeding flow, auto-start injection, truncation, focus, keyboard access, and responsive layout against the specs.
+- [x] 9.2 Exercise the completed desktop and mobile UX with the repository's browser-testing workflow, capture screenshots, and verify change-section grouping, seeding flow, auto-start injection, truncation, focus, keyboard access, and responsive layout against the specs.
 - [ ] 9.3 Run `bun run lint && bun run typecheck && bun run test`, resolve all regressions, and confirm the workspace-discovery process shuts down cleanly.
 
 ## 10. Phase 2 (implemented by prior branch work)
