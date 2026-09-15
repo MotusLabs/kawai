@@ -4639,10 +4639,12 @@ describe('server fetch handlers', () => {
       port: number
       tailscaleIp: string | null
       protocol: string
+      cwd?: string
     }
     expect(payload.port).toBe(4040)
     expect(payload.protocol).toBe('http')
     expect(payload.tailscaleIp).toBe('100.64.0.42')
+    expect(payload.cwd).toBe(process.cwd())
   })
 
   test('tmux mouse mode timeout returns 504 and does not persist the setting', async () => {

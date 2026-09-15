@@ -3,7 +3,12 @@ import { create } from 'zustand'
 import { persist, createJSONStorage } from 'zustand/middleware'
 import { safeStorage } from '../utils/storage'
 
-const DEFAULT_PROJECT_DIR = '~/Documents/GitHub'
+// Empty means "not set" — fall back to the server's working directory
+// (exposed via /api/server-info) when pre-filling new sessions.
+const DEFAULT_PROJECT_DIR = ''
+// Pre-v7 hardcoded default; cleared during migration so the server
+// working directory takes over for anyone who never customized it.
+const LEGACY_DEFAULT_PROJECT_DIR = '~/Documents/GitHub'
 const DEFAULT_COMMAND = 'claude'
 const MAX_PRESETS = 50
 
@@ -267,9 +272,15 @@ export const useSettingsStore = create<SettingsState>()(
     {
       name: 'agentboard-settings',
       storage: createJSONStorage(() => safeStorage),
-      version: 6,
+      version: 7,
       migrate: (persistedState: unknown, version: number) => {
         const state = persistedState as Record<string, unknown>
+        // v7: drop the stale '~/Documents/GitHub' hardcoded default so the
+        // server's working directory becomes the default again for users
+        // who never explicitly customized the setting.
+        if (version < 7 && state.defaultProjectDir === LEGACY_DEFAULT_PROJECT_DIR) {
+          state.defaultProjectDir = DEFAULT_PROJECT_DIR
+        }
         if (
           typeof state.historySessionsExpanded !== 'boolean' &&
           typeof state.inactiveSessionsExpanded === 'boolean'
@@ -363,8 +374,8 @@ export const useSettingsStore = create<SettingsState>()(
         const missingBuiltIns = DEFAULT_PRESETS.filter(p => p.isBuiltIn && !existingIds.has(p.id))
         const finalPresets = [...trimmedPresets, ...missingBuiltIns]
 
-        if (version < 6) {
-          console.info(`[agentboard:settings] Migrated from v${version} to v6`)
+        if (version < 7) {
+          console.info(`[agentboard:settings] Migrated from v${version} to v7`)
         }
 
         return {
@@ -382,6 +393,7 @@ export const useSettingsStore = create<SettingsState>()(
 
 export {
   DEFAULT_PROJECT_DIR,
+  LEGACY_DEFAULT_PROJECT_DIR,
   DEFAULT_COMMAND,
   MAX_PRESETS,
   SIDEBAR_MIN_WIDTH,

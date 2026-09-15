@@ -36,6 +36,7 @@ const settingsModule = await import('../stores/settingsStore')
 const {
   useSettingsStore,
   DEFAULT_PROJECT_DIR,
+  LEGACY_DEFAULT_PROJECT_DIR,
   DEFAULT_COMMAND,
   DEFAULT_PRESETS,
   isValidPreset,
@@ -385,7 +386,7 @@ describe('preset migration', () => {
 describe('settings persistence migration', () => {
   test('runs the hibernating/history expansion rename for v5 persisted state', async () => {
     const options = useSettingsStore.persist.getOptions()
-    expect(options.version).toBe(6)
+    expect(options.version).toBe(7)
     if (!options.migrate) {
       throw new Error('Expected settings migration to be configured')
     }
@@ -399,6 +400,36 @@ describe('settings persistence migration', () => {
 
     expect(migrated.historySessionsExpanded).toBe(true)
     expect(migrated.hibernatingSessionsExpanded).toBe(false)
+  })
+
+  test('clears the legacy default project dir for pre-v7 persisted state', async () => {
+    const options = useSettingsStore.persist.getOptions()
+    if (!options.migrate) {
+      throw new Error('Expected settings migration to be configured')
+    }
+
+    const migrated = await Promise.resolve(options.migrate({
+      defaultProjectDir: LEGACY_DEFAULT_PROJECT_DIR,
+      commandPresets: DEFAULT_PRESETS.map((preset) => ({ ...preset })),
+      defaultPresetId: 'claude',
+    }, 6)) as Record<string, unknown>
+
+    expect(migrated.defaultProjectDir).toBe('')
+  })
+
+  test('preserves a customized default project dir during migration', async () => {
+    const options = useSettingsStore.persist.getOptions()
+    if (!options.migrate) {
+      throw new Error('Expected settings migration to be configured')
+    }
+
+    const migrated = await Promise.resolve(options.migrate({
+      defaultProjectDir: '/custom/code',
+      commandPresets: DEFAULT_PRESETS.map((preset) => ({ ...preset })),
+      defaultPresetId: 'claude',
+    }, 6)) as Record<string, unknown>
+
+    expect(migrated.defaultProjectDir).toBe('/custom/code')
   })
 })
 

@@ -27,6 +27,7 @@ interface ServerInfo {
   port: number
   tailscaleIp: string | null
   protocol: string
+  cwd?: string | null
 }
 
 function filterAgentSessions(
@@ -111,6 +112,10 @@ export default function App() {
   const hostFilters = useSettingsStore((state) => state.hostFilters)
   const soundOnPermission = useSettingsStore((state) => state.soundOnPermission)
   const soundOnIdle = useSettingsStore((state) => state.soundOnIdle)
+
+  // Empty defaultProjectDir means "not set" — fall back to the server's
+  // working directory when pre-filling the New Session dialog.
+  const effectiveDefaultProjectDir = defaultProjectDir || serverInfo?.cwd || ''
 
   const connectionEpoch = useSessionStore((state) => state.connectionEpoch)
   const { sendMessage, subscribe, getConnectionEpoch } = useWebSocket()
@@ -1000,7 +1005,7 @@ export default function App() {
         isOpen={isModalOpen}
         onClose={() => setIsModalOpen(false)}
         onCreate={handleCreateSession}
-        defaultProjectDir={defaultProjectDir}
+        defaultProjectDir={effectiveDefaultProjectDir}
         commandPresets={commandPresets}
         defaultPresetId={defaultPresetId}
         lastProjectPath={lastProjectPath}
@@ -1015,6 +1020,7 @@ export default function App() {
       <SettingsModal
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
+        serverCwd={serverInfo?.cwd ?? null}
       />
 
       <ToastViewport />

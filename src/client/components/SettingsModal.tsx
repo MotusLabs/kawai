@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
 import {
-  DEFAULT_PROJECT_DIR,
   MAX_PRESETS,
   FONT_OPTIONS,
   useSettingsStore,
@@ -23,11 +22,14 @@ interface SettingsChangeFlags {
 interface SettingsModalProps {
   isOpen: boolean
   onClose: (flags?: SettingsChangeFlags) => void
+  /** Server working directory (/api/server-info), used as the placeholder default. */
+  serverCwd?: string | null
 }
 
 export default function SettingsModal({
   isOpen,
   onClose,
+  serverCwd = null,
 }: SettingsModalProps) {
   const defaultProjectDir = useSettingsStore((state) => state.defaultProjectDir)
   const setDefaultProjectDir = useSettingsStore(
@@ -266,7 +268,9 @@ export default function SettingsModal({
     event.preventDefault()
     const trimmedDir = draftDir.trim()
     const webglChanged = draftUseWebGL !== useWebGL
-    setDefaultProjectDir(trimmedDir || DEFAULT_PROJECT_DIR)
+    // Empty means "not set" — the New Session dialog then defaults to the
+    // server's working directory.
+    setDefaultProjectDir(trimmedDir)
     setCommandPresets(draftPresets)
     setDefaultPresetId(draftDefaultPresetId)
     setSessionSortMode(draftSortMode)
@@ -420,10 +424,13 @@ export default function SettingsModal({
             <input
               value={draftDir}
               onChange={(event) => setDraftDir(event.target.value)}
-              placeholder={DEFAULT_PROJECT_DIR}
+              placeholder={serverCwd || 'Server working directory'}
               className="input"
               autoFocus
             />
+            <p className="mt-1.5 text-[10px] text-muted">
+              Leave empty to default to the server's working directory{serverCwd ? ` (${serverCwd})` : ''}.
+            </p>
           </div>
 
           {/* Command Presets Section */}
