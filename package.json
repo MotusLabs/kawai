@@ -1,6 +1,6 @@
 {
   "name": "@motuslabs/kawai",
-  "version": "0.5.3",
+  "version": "1.0.0",
   "type": "module",
   "description": "Web GUI for tmux optimized for AI agent TUIs",
   "author": "MotusLabs",
