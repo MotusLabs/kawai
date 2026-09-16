@@ -12,6 +12,7 @@ import { createPasteFileRoutes } from './routes/pasteFile'
 import { ensureTmux } from './prerequisites'
 import { SessionManager } from './SessionManager'
 import { SessionRegistry } from './SessionRegistry'
+import { BUILD_VERSION } from './version'
 import {
   initDatabase,
   type AgentSessionRecord,
@@ -1323,6 +1324,7 @@ const startupActiveSessions = db.getActiveSessions()
 seedRefreshWindowCountEstimate(startupActiveSessions.length)
 const startupWindows = listWindowsSyncOrNull('startup_state') ?? []
 logger.info('startup_state', {
+  version: BUILD_VERSION,
   activeSessionCount: startupActiveSessions.length,
   windowCount: startupWindows.length,
   activeWindows: startupActiveSessions.map((s) => ({

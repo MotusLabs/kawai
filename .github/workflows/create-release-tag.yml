@@ -16,9 +16,12 @@ jobs:
     timeout-minutes: 5
 
     steps:
-      - name: Checkout code
+      # The merge commit this PR produced on master, not master's current head:
+      # a PR merged moments later must not steal this PR's number.
+      - name: Checkout merge commit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
           fetch-depth: 0
           token: ${{ secrets.RELEASE_PAT }}
 
@@ -28,15 +31,34 @@ jobs:
         with:
           node-version: '24'
 
-      - name: Check version and create tag if needed
+      # package.json carries the plain MAJOR.MINOR.PATCH base, bumped by hand
+      # through `bun run release:*`. The merged PR number is appended as a
+      # semver prerelease identifier, so every merge cuts its own release
+      # without a version-bump commit: base 1.0.0 + PR 321 -> v1.0.0-321.
+      # Numeric prerelease identifiers compare numerically, so the tags sort in
+      # merge order (1.0.0-321 < 1.0.0-324 < 1.0.1-330).
+      - name: Resolve version and tag
         id: check_version
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          VERSION=$(node -p "require('./package.json').version")
+          set -euo pipefail
+
+          BASE=$(node -p "require('./package.json').version")
+          if ! [[ "$BASE" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::package.json version '$BASE' is not a plain MAJOR.MINOR.PATCH base; CI owns the -<PR> suffix and refuses to append to a version that already carries one"
+            exit 1
+          fi
+
+          VERSION="$BASE-$PR_NUMBER"
           TAG_NAME="v$VERSION"
 
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "tag=$TAG_NAME" >> $GITHUB_OUTPUT
 
+          # A given PR number can only be merged once, so this fires on a
+          # workflow re-run — the tag is already there and still points at the
+          # same commit.
           if git rev-parse "$TAG_NAME" >/dev/null 2>&1; then
             echo "should_tag=false" >> $GITHUB_OUTPUT
             echo "Tag $TAG_NAME already exists, skipping"
