@@ -2128,4 +2128,92 @@ describe('App', () => {
 
     act(() => renderer.unmount())
   })
+  test('defaults the New Session dialog to the server directory unless the browser overrides it', async () => {
+    const originalFetch = globalThis.fetch
+    const serverInfo = {
+      port: 4040,
+      tailscaleIp: null,
+      protocol: 'http',
+      cwd: '/opt/kawai',
+      defaultProjectDir: '/srv/work',
+    }
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input)
+      return new Response(
+        JSON.stringify(url === '/api/server-info' ? serverInfo : {}),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      )
+    }) as typeof fetch
+
+    let renderer!: TestRenderer.ReactTestRenderer
+    try {
+      useSettingsStore.setState({ defaultProjectDir: '' })
+
+      await act(async () => {
+        renderer = TestRenderer.create(<App />)
+        // Let the /api/server-info fetch chain settle inside act().
+        await new Promise((resolve) => setTimeout(resolve, 0))
+      })
+      activeRenderer = renderer
+
+      // AGENTBOARD_PROJECT_DIR wins over the server's working directory.
+      expect(
+        renderer.root.findByType(NewSessionModal).props.defaultProjectDir
+      ).toBe('/srv/work')
+
+      // An explicit browser setting still wins over both.
+      await act(async () => {
+        useSettingsStore.setState({ defaultProjectDir: '/home/me/code' })
+      })
+
+      expect(
+        renderer.root.findByType(NewSessionModal).props.defaultProjectDir
+      ).toBe('/home/me/code')
+    } finally {
+      globalThis.fetch = originalFetch
+      act(() => {
+        useSettingsStore.setState({ defaultProjectDir: '' })
+      })
+    }
+  })
+
+  test('falls back to the server working directory when no project dir is configured', async () => {
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input)
+      const payload =
+        url === '/api/server-info'
+          ? {
+              port: 4040,
+              tailscaleIp: null,
+              protocol: 'http',
+              cwd: '/opt/kawai',
+              defaultProjectDir: '',
+            }
+          : {}
+      return new Response(JSON.stringify(payload), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    }) as typeof fetch
+
+    let renderer!: TestRenderer.ReactTestRenderer
+    try {
+      useSettingsStore.setState({ defaultProjectDir: '' })
+
+      await act(async () => {
+        renderer = TestRenderer.create(<App />)
+        // Let the /api/server-info fetch chain settle inside act().
+        await new Promise((resolve) => setTimeout(resolve, 0))
+      })
+      activeRenderer = renderer
+
+      expect(
+        renderer.root.findByType(NewSessionModal).props.defaultProjectDir
+      ).toBe('/opt/kawai')
+    } finally {
+      globalThis.fetch = originalFetch
+      useSettingsStore.setState({ defaultProjectDir: '' })
+    }
+  })
 })

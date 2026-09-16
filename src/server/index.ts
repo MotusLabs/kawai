@@ -1705,9 +1705,12 @@ app.get('/api/server-info', (c) => {
     port: config.port,
     tailscaleIp: tsIp,
     protocol: tlsEnabled ? 'https' : 'http',
-    // Working directory of the server process; used as the default
-    // project directory for new sessions.
+    // Working directory of the server process; the fallback default project
+    // directory for new sessions.
     cwd: process.cwd(),
+    // AGENTBOARD_PROJECT_DIR, when set: takes precedence over cwd as the
+    // default project directory. An explicit browser setting still wins.
+    defaultProjectDir: config.defaultProjectDir,
   })
 })
 

@@ -3,8 +3,9 @@ import { create } from 'zustand'
 import { persist, createJSONStorage } from 'zustand/middleware'
 import { safeStorage } from '../utils/storage'
 
-// Empty means "not set" — fall back to the server's working directory
-// (exposed via /api/server-info) when pre-filling new sessions.
+// Empty means "not set" — fall back to the server's default directory
+// (AGENTBOARD_PROJECT_DIR, else its working directory; both exposed via
+// /api/server-info) when pre-filling new sessions.
 const DEFAULT_PROJECT_DIR = ''
 // Pre-v7 hardcoded default; cleared during migration so the server
 // working directory takes over for anyone who never customized it.
@@ -321,8 +322,8 @@ export const useSettingsStore = create<SettingsState>()(
       migrate: (persistedState: unknown, version: number) => {
         const state = persistedState as Record<string, unknown>
         // v7: drop the stale '~/Documents/GitHub' hardcoded default so the
-        // server's working directory becomes the default again for users
-        // who never explicitly customized the setting.
+        // server's directory becomes the default again for users who never
+        // explicitly customized the setting.
         if (version < 7 && state.defaultProjectDir === LEGACY_DEFAULT_PROJECT_DIR) {
           state.defaultProjectDir = DEFAULT_PROJECT_DIR
         }

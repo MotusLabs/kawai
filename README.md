@@ -156,6 +156,7 @@ bun run deps:risk -- --threshold moderate
 PORT=4040
 HOSTNAME=127.0.0.1
 TMUX_SESSION=agentboard
+AGENTBOARD_PROJECT_DIR=~/work
 REFRESH_INTERVAL_MS=5000
 DISCOVER_PREFIXES=work,external
 PRUNE_WS_SESSIONS=true
@@ -184,6 +185,8 @@ AGENTBOARD_PASTE_IMAGE_MAX_BYTES=41943040
 `HOSTNAME` controls which interfaces the server binds to (default `127.0.0.1` for localhost-only). With the default localhost binding, if Tailscale is detected the server also binds to your Tailscale IP automatically. Set to `0.0.0.0` to listen on all interfaces. A `HOSTNAME` that merely equals the machine hostname is treated as auto-exported by the environment (containers and some CI images do this) and ignored with a warning, keeping the localhost default.
 
 > **Security note:** Agentboard has no built-in authentication. Anyone who can reach the server has full access to your terminal sessions, including the ability to run commands as your user. The default localhost binding is safe. Tailscale provides network-level auth for remote access. Avoid setting `HOSTNAME=0.0.0.0` on untrusted networks (public WiFi, shared LANs) without an additional access control layer.
+
+`AGENTBOARD_PROJECT_DIR` sets the directory the UI pre-fills when you open the New Session dialog. Without it, the server's own working directory is used — which is awkward when you start Agentboard from its install directory or as a service. A leading `~` is expanded, so it works in a systemd `Environment=` line. The browser's **Settings → Default Project Directory** still takes precedence when it is non-empty; leave that field blank to follow the server.
 
 `DISCOVER_PREFIXES` lets you discover and control windows from other tmux sessions. If unset, all sessions except the managed one are discovered.
 

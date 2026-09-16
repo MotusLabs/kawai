@@ -320,4 +320,35 @@ describe('SettingsModal', () => {
       renderer.unmount()
     })
   })
+  test('shows the server default directory as the project dir placeholder', () => {
+    let renderer!: TestRenderer.ReactTestRenderer
+
+    act(() => {
+      renderer = TestRenderer.create(
+        <SettingsModal isOpen onClose={() => {}} serverDefaultDir="/srv/work" />
+      )
+    })
+
+    const dirInput = renderer.root.findAllByType('input')[0]
+    expect(dirInput?.props.placeholder).toBe('/srv/work')
+
+    act(() => {
+      renderer.unmount()
+    })
+  })
+
+  test('falls back to generic placeholder text without a server default', () => {
+    let renderer!: TestRenderer.ReactTestRenderer
+
+    act(() => {
+      renderer = TestRenderer.create(<SettingsModal isOpen onClose={() => {}} />)
+    })
+
+    const dirInput = renderer.root.findAllByType('input')[0]
+    expect(dirInput?.props.placeholder).toBe('Server default directory')
+
+    act(() => {
+      renderer.unmount()
+    })
+  })
 })
