@@ -32,6 +32,6 @@
 
 ## 6. Verification
 
-- [ ] 6.1 Confirm Codex expands `$openspec-apply-change <change>` when passed as an argv positional on a machine with Codex authenticated; if it does not, adjust only the Codex entry in the apply-command mapping and update the design's Open Questions accordingly
+- [x] 6.1 Confirm Codex expands `$openspec-apply-change <change>` when passed as an argv positional on a machine with Codex authenticated; if it does not, adjust only the Codex entry in the apply-command mapping and update the design's Open Questions accordingly
 - [x] 6.2 Run `bun run lint && bun run typecheck && bun run test` and confirm all pass
 - [x] 6.3 Create a session from a change section in a freshly created worktree with Claude selected, and verify the agent clears the trust dialog and then begins the apply command — the failure mode this change exists to fix

@@ -159,10 +159,16 @@ in Decision 5 is a no-op for them. Rollback is a straight revert.
 ## Open Questions
 
 - Does Codex expand `$openspec-apply-change` as a skill reference when it arrives as an
-  argv positional rather than typed into the composer? Unverified — Codex was not
-  authenticated on the machine where the probes ran. If it does not expand, only the
-  Codex entry in `APPLY_COMMANDS` changes; the approach, the specs, and the task
-  breakdown stay as written.
+  argv positional rather than typed into the composer? **Answered during task 6.1:
+  yes.** Verified on codex 0.153.4 authenticated via ChatGPT. A probe skill whose body
+  alone held a unique token was launched as `codex '$ab-probe hello-world'`; Codex held
+  the positional through the directory-trust dialog, then expanded the `$`-skill
+  reference and replied with the token without any tool calls — the body can only have
+  been injected by expansion. Caveat: `$openspec-apply-change` resolves only where that
+  skill is installed for Codex (`~/.codex/skills`); on a machine without it the prompt
+  still delivers verbatim and the model falls back to searching for the skill — the
+  same environment-mapping mismatch as `/opsx:apply` for Claude (see Risks). The
+  `APPLY_COMMANDS` Codex entry stays as written.
 - Should the `opsx` mapping be revisited? `/opsx:apply` resolved to `Unknown command` in
   this workspace. Out of scope here — this change carries the existing mapping forward
   unaltered — but it determines whether correct delivery produces a working session.
