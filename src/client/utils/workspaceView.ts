@@ -10,6 +10,8 @@ import type { AgentSession, Session } from '@shared/types'
 import {
   changeSectionKey,
   deepestPathMatch,
+  FALLBACK_REMOTE_SECTION_KEY,
+  FALLBACK_WORKSPACE_SECTION_KEY,
   type ChangeRegistryEntry,
   type WorkspaceSnapshot,
 } from '@shared/workspace'
@@ -103,6 +105,9 @@ export type WorkspaceSection = ChangeSectionData | WorktreeSectionData
 
 export interface FallbackSectionData {
   kind: 'workspace' | 'remote'
+  /** Reserved stable key (FALLBACK_*_SECTION_KEY) backing collapse persistence. */
+  key: string
+  collapsed: boolean
   entries: GroupedSessionEntry[]
   attentionCount: number
   hiddenAttentionCount: number
@@ -230,12 +235,16 @@ export function buildWorkspaceView(
 
   const workspace: FallbackSectionData = {
     kind: 'workspace',
+    key: FALLBACK_WORKSPACE_SECTION_KEY,
+    collapsed: collapsed.has(FALLBACK_WORKSPACE_SECTION_KEY),
     entries: [],
     attentionCount: 0,
     hiddenAttentionCount: 0,
   }
   const remote: FallbackSectionData = {
     kind: 'remote',
+    key: FALLBACK_REMOTE_SECTION_KEY,
+    collapsed: collapsed.has(FALLBACK_REMOTE_SECTION_KEY),
     entries: [],
     attentionCount: 0,
     hiddenAttentionCount: 0,
@@ -272,12 +281,25 @@ export function buildWorkspaceView(
     place(agentEntry(agentSession, 'history'), agentSession.projectPath, agentSession.host != null)
   }
 
+  // A collapsed fallback pane hides its rows: its attention moves into the
+  // hidden count so the header still signals it, mirroring the badge
+  // semantics of collapsed change/worktree sections.
+  for (const fallback of [workspace, remote]) {
+    if (!fallback.collapsed) continue
+    fallback.hiddenAttentionCount += fallback.attentionCount
+    fallback.attentionCount = 0
+  }
+
   const visibleEntries: GroupedSessionEntry[] = []
   for (const section of sections) {
     if (!section.collapsed) visibleEntries.push(...section.entries)
   }
-  if (workspace.entries.length > 0) visibleEntries.push(...workspace.entries)
-  if (remote.entries.length > 0) visibleEntries.push(...remote.entries)
+  if (!workspace.collapsed && workspace.entries.length > 0) {
+    visibleEntries.push(...workspace.entries)
+  }
+  if (!remote.collapsed && remote.entries.length > 0) {
+    visibleEntries.push(...remote.entries)
+  }
 
   return { sections, workspace, remote, visibleEntries }
 }

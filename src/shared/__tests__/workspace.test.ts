@@ -4,6 +4,9 @@ import type {
   ServerMessage,
 } from '../types'
 import {
+  changeSectionKey,
+  FALLBACK_REMOTE_SECTION_KEY,
+  FALLBACK_WORKSPACE_SECTION_KEY,
   repositoryId,
   shortRevision,
   worktreeId,
@@ -43,6 +46,35 @@ describe('workspace ids', () => {
 
   test('same repository identity across common-dir aliases is stable', () => {
     expect(worktreeId('/repo/.git', '/repo-a')).toBe(worktreeId('/repo/.git', '/repo-a'))
+  })
+})
+
+describe('fallback section keys', () => {
+  test('reserved keys never collide with change or worktree section identities', () => {
+    const reserved = [FALLBACK_WORKSPACE_SECTION_KEY, FALLBACK_REMOTE_SECTION_KEY]
+
+    // changeSectionKey always embeds the `::change::` separator, so even
+    // adversarial repository/change names cannot produce a bare
+    // `fallback::<name>` key.
+    const changeKeys = [
+      changeSectionKey('fallback', 'workspace'),
+      changeSectionKey('fallback', 'remote'),
+      changeSectionKey('/fallback/.git', 'workspace'),
+      changeSectionKey('/repo/.git', 'fallback::remote'),
+    ]
+
+    // Worktree ids are `<common-dir-path>::<worktree-path>`; the common dir
+    // is a canonical absolute path, so the id can never start with the
+    // reserved `fallback::` prefix.
+    const worktreeKeys = [
+      worktreeId(repositoryId('/repo/.git'), '/repo'),
+      worktreeId(repositoryId('/fallback/.git'), '/fallback'),
+      worktreeId('/fallback', 'workspace'),
+    ]
+
+    for (const key of [...changeKeys, ...worktreeKeys]) {
+      expect(reserved).not.toContain(key)
+    }
   })
 })
 

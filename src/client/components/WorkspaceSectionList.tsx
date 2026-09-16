@@ -1,8 +1,11 @@
 // WorkspaceSectionList.tsx - Sectioned workspace navigator: live,
 // hibernating, and historical session rows rendered inside collapsible
 // sections — OpenSpec change sections first, then unmatched worktree
-// sections, then the Workspace and remote fallbacks. Each section owns its
-// own drag context so manual reorder stays within the section; flattened
+// sections. Every section, including the Workspace/Remote fallbacks, folds
+// through the same trigger and persists by its stable key; the fallbacks
+// render as docked panes (FallbackSectionPane) placed by the caller below
+// the scrolling flow region this list provides. Each section owns its own
+// drag context so manual reorder stays within the section; flattened
 // cross-section navigation is computed by the caller from the same view
 // model. Dormant-row visibility follows the global hibernating/history
 // toggles so persisted preferences keep working.
@@ -26,10 +29,12 @@ import {
 import ChevronDownIcon from '@untitledui-icons/react/line/esm/ChevronDownIcon'
 import ChevronRightIcon from '@untitledui-icons/react/line/esm/ChevronRightIcon'
 import GitBranch01Icon from '@untitledui-icons/react/line/esm/GitBranch01Icon'
+import HandIcon from '@untitledui-icons/react/line/esm/HandIcon'
 import PlusIcon from '@untitledui-icons/react/line/esm/PlusIcon'
 import type { AgentSession, Session } from '@shared/types'
-import type { GroupedSessionEntry, WorkspaceView } from '../utils/workspaceView'
-import SectionHeader from './SectionHeader'
+import type { FallbackSectionData, GroupedSessionEntry, WorkspaceView } from '../utils/workspaceView'
+import PaneResizeHandle from './PaneResizeHandle'
+import SectionHeader, { CollapseTrigger } from './SectionHeader'
 import HibernatingSessionItem from './HibernatingSessionItem'
 import HistorySessionItem from './HistorySessionItem'
 import { SortableSessionItem } from './SessionRow'
@@ -257,60 +262,6 @@ export default function WorkspaceSectionList(props: WorkspaceSectionListProps) {
         </section>
       ))}
 
-      {view.workspace.entries.length > 0 && (
-        <section className="border-t border-border" data-testid="workspace-section">
-          <FallbackSectionHeader label="Workspace" count={view.workspace.entries.length} />
-          <GroupedLiveRows
-            entries={view.workspace.entries}
-            ctx={rowContext}
-            remountKey={remountKey}
-          />
-          {showHibernating && (
-            <GroupedDormantRows
-              entries={view.workspace.entries}
-              kind="hibernating"
-              ctx={rowContext}
-            />
-          )}
-          {showHistory && (
-            <GroupedDormantRows
-              entries={view.workspace.entries}
-              kind="history"
-              ctx={rowContext}
-              limit={historyLimit}
-              onShowMore={onShowMoreHistory}
-            />
-          )}
-        </section>
-      )}
-
-      {view.remote.entries.length > 0 && (
-        <section className="border-t border-border" data-testid="remote-section">
-          <FallbackSectionHeader label="Remote" count={view.remote.entries.length} />
-          <GroupedLiveRows
-            entries={view.remote.entries}
-            ctx={rowContext}
-            remountKey={remountKey}
-          />
-          {showHibernating && (
-            <GroupedDormantRows
-              entries={view.remote.entries}
-              kind="hibernating"
-              ctx={rowContext}
-            />
-          )}
-          {showHistory && (
-            <GroupedDormantRows
-              entries={view.remote.entries}
-              kind="history"
-              ctx={rowContext}
-              limit={historyLimit}
-              onShowMore={onShowMoreHistory}
-            />
-          )}
-        </section>
-      )}
-
       {view.visibleEntries.length === 0 && onNewSession && (
         <button
           type="button"
@@ -325,12 +276,170 @@ export default function WorkspaceSectionList(props: WorkspaceSectionListProps) {
   )
 }
 
-function FallbackSectionHeader({ label, count }: { label: string; count: number }) {
+/**
+ * Minimum height (px) kept for the change/worktree flow region: when the
+ * navigator is too short to honor both pane defaults, the panes shrink
+ * proportionally rather than pushing this region below its floor.
+ */
+export const FLOW_REGION_MIN_HEIGHT = 96
+
+/**
+ * Minimum height (px) of an expanded fallback pane: its header row plus the
+ * drag handle above it. A collapsed pane sizes to its header alone.
+ */
+export const PANE_MIN_HEIGHT = 40
+
+export interface FallbackSectionPaneProps extends GroupedRowContext {
+  section: FallbackSectionData
+  /** Stored height as a fraction of the navigator body height. */
+  fraction: number
+  /** Clamped setter for the stored fraction (drag and keyboard resize). */
+  onFractionChange: (fraction: number) => void
+  onToggleCollapse: (sectionKey: string) => void
+  /** Ref to the navigator body whose height the fraction resolves against. */
+  containerRef: React.RefObject<HTMLElement | null>
+  /** Remounts AnimatePresence children when filters change (entry animation). */
+  remountKey: string
+  showHibernating: boolean
+  showHistory: boolean
+  historyLimit: number
+  onShowMoreHistory: () => void
+}
+
+/**
+ * One fallback section docked at the bottom of the navigator body: a resize
+ * handle on its top edge, a collapsible header, and rows that scroll inside
+ * the pane, independent of the flow region. Height comes from a percentage
+ * flex basis, so a short navigator shrinks the panes proportionally while
+ * the flow region's min-height holds its floor. A collapsed pane drops its
+ * basis entirely (flex: 0 0 auto, header only, no handle), freeing its
+ * share to the remaining sections without touching the stored fraction.
+ */
+export function FallbackSectionPane(props: FallbackSectionPaneProps) {
+  const {
+    section,
+    fraction,
+    onFractionChange,
+    onToggleCollapse,
+    containerRef,
+    remountKey,
+    showHibernating,
+    showHistory,
+    historyLimit,
+    onShowMoreHistory,
+    ...rowContext
+  } = props
+
+  const flexBasis = `${Math.round(fraction * 1000) / 10}%`
+  const label = section.kind === 'workspace' ? 'Workspace' : 'Remote'
+
   return (
-    <div className="flex items-center justify-between px-3 py-2 text-xs font-medium uppercase tracking-wider text-muted">
-      <span>{label}</span>
-      <span className="w-8 text-right text-xs text-muted" aria-label={`${count} session(s)`}>
-        {count}
+    <section
+      className="flex min-h-0 flex-col border-t border-border"
+      style={
+        section.collapsed
+          ? { flex: '0 0 auto' }
+          : { flex: `0 1 ${flexBasis}`, minHeight: PANE_MIN_HEIGHT }
+      }
+      data-testid={section.kind === 'workspace' ? 'workspace-section' : 'remote-section'}
+      data-section-key={section.key}
+      data-collapsed={section.collapsed ? 'true' : 'false'}
+      data-pane-fraction={section.collapsed ? undefined : fraction}
+    >
+      {!section.collapsed && (
+        <PaneResizeHandle
+          label={label}
+          fraction={fraction}
+          onResize={onFractionChange}
+          containerRef={containerRef}
+        />
+      )}
+      <FallbackSectionHeader section={section} onToggleCollapse={onToggleCollapse} />
+      {!section.collapsed && (
+        <div className="min-h-0 flex-1 overflow-y-auto" data-testid="fallback-pane-scroll">
+          <GroupedLiveRows
+            entries={section.entries}
+            ctx={rowContext}
+            remountKey={remountKey}
+          />
+          {showHibernating && (
+            <GroupedDormantRows
+              entries={section.entries}
+              kind="hibernating"
+              ctx={rowContext}
+            />
+          )}
+          {showHistory && (
+            <GroupedDormantRows
+              entries={section.entries}
+              kind="history"
+              ctx={rowContext}
+              limit={historyLimit}
+              onShowMore={onShowMoreHistory}
+            />
+          )}
+        </div>
+      )}
+    </section>
+  )
+}
+
+/**
+ * Header for a fallback (Workspace/Remote) section. Shares the collapse
+ * affordance and attention/count markup of SectionHeader; collapse state
+ * persists under the section's reserved key.
+ */
+function FallbackSectionHeader({
+  section,
+  onToggleCollapse,
+}: {
+  section: FallbackSectionData
+  onToggleCollapse: (sectionKey: string) => void
+}) {
+  const label = section.kind === 'workspace' ? 'Workspace' : 'Remote'
+  const hiddenAttention = section.hiddenAttentionCount
+  const attentionTotal = section.attentionCount + hiddenAttention
+
+  return (
+    <div
+      className="flex items-center gap-1.5 px-3 py-1.5 text-left"
+      data-testid="fallback-section-header"
+      data-section-kind={section.kind}
+      data-section-key={section.key}
+      data-collapsed={section.collapsed ? 'true' : 'false'}
+      data-session-count={section.entries.length}
+      data-attention-count={attentionTotal}
+      data-hidden-attention-count={hiddenAttention}
+    >
+      <CollapseTrigger
+        sectionKey={section.key}
+        collapsed={section.collapsed}
+        onToggleCollapse={onToggleCollapse}
+        label={`${section.collapsed ? 'Expand' : 'Collapse'} ${label} section`}
+        title={`${label} sessions`}
+      >
+        <span className="truncate font-semibold uppercase tracking-wider text-muted">
+          {label}
+        </span>
+      </CollapseTrigger>
+
+      {attentionTotal > 0 && (
+        <span
+          className="flex shrink-0 items-center gap-0.5 rounded-full bg-amber-500/20 px-1.5 py-0.5 text-[10px] text-amber-600"
+          title="Sessions waiting for permission"
+          aria-label={`${attentionTotal} session(s) need permission`}
+          data-testid="section-attention-badge"
+        >
+          <HandIcon className="h-3 w-3" />
+          {attentionTotal}
+        </span>
+      )}
+
+      <span
+        className="w-6 shrink-0 text-right text-[11px] tabular-nums text-muted"
+        aria-label={`${section.entries.length} session(s)`}
+      >
+        {section.entries.length}
       </span>
     </div>
   )
