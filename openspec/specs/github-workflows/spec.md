@@ -77,6 +77,36 @@ A dispatch-only workflow SHALL exist that verifies the workflow environment: it 
 - **WHEN** the operator dispatches the self-test workflow
 - **THEN** the job reports runner isolation status and a working Bun installation, and fails with a named violation if any isolation check trips
 
+### Requirement: Every merge into master cuts a PR-numbered release tag
+`create-release-tag.yml` SHALL tag every merged pull request with `v<base>-<PR number>`, where `<base>` is the plain `MAJOR.MINOR.PATCH` version in `package.json` and `<PR number>` is the merged PR's number — a semver prerelease identifier that compares numerically, so tags sort in merge order. The workflow SHALL refuse to tag when the base version already carries a prerelease or build suffix, and SHALL tag the merge commit the PR produced rather than master's current head.
+
+#### Scenario: Merged PR is tagged
+- **WHEN** PR 321 merges into master while `package.json` reads `1.0.0`
+- **THEN** the workflow creates and pushes tag `v1.0.0-321` on that PR's merge commit, which triggers `release.yml`
+
+#### Scenario: Release happens without a version bump
+- **WHEN** a PR that does not change `package.json` merges into master
+- **THEN** it still receives its own tag and a full four-platform GitHub Release
+
+#### Scenario: Base version already carries a suffix
+- **WHEN** `package.json` reads a non-plain version such as `1.0.0-rc1`
+- **THEN** the workflow fails with an error naming the version rather than producing a double-suffixed tag
+
+#### Scenario: Workflow re-run does not duplicate a tag
+- **WHEN** the workflow re-runs for a PR whose tag already exists
+- **THEN** it skips tag creation and succeeds
+
+### Requirement: Released binaries report their own version
+The release build SHALL inject the tag's version into every platform binary at compile time, and the binary SHALL report it in its `startup_state` log line. The build job MUST fail if the booted binary does not report the expected version.
+
+#### Scenario: Binary names its release
+- **WHEN** the binary built from tag `v1.0.0-321` starts
+- **THEN** its `startup_state` log line carries version `1.0.0-321`
+
+#### Scenario: Injection silently fails
+- **WHEN** the version fails to substitute into the compiled binary
+- **THEN** the boot test fails with an error naming the expected version, and no release is published
+
 ### Requirement: Release publishes only to GitHub Releases
 The release workflow SHALL publish release artifacts exclusively to this repository's GitHub Releases — the four platform tarballs and binaries — and MUST NOT publish to npmjs.org, GitHub Packages, or any external registry or tap. The publish job SHALL need no registry credentials beyond the repository's own `contents: write` permission.
 

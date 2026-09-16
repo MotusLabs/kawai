@@ -21,16 +21,29 @@ jobs:
       - name: Install dependencies
         run: bun install
 
+      # The tag carries the full version, base plus the merged PR number
+      # (v1.0.0-321), and is the single source of truth for what this build
+      # calls itself — package.json only holds the base.
+      - name: Resolve version from tag
+        id: version
+        run: echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+
       - name: Build frontend
         run: bun run build
 
+      # --define substitutes the version at parse time, so the compiled binary
+      # reports the release it came from in its startup_state log line without
+      # reading package.json (which it does not ship) at runtime.
       - name: Build and package all platform binaries
+        env:
+          BUILD_VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
           for target in bun-darwin-arm64 bun-darwin-x64 bun-linux-x64 bun-linux-arm64; do
             artifact="agentboard-${target#bun-}"
             echo "Building $target -> $artifact"
             bun build src/server/index.ts src/server/sessionRefreshWorker.ts src/server/logMatchWorker.ts \
+              --define "process.env.KAWAI_BUILD_VERSION=\"$BUILD_VERSION\"" \
               --compile --target "$target" --outfile "$artifact"
             mkdir -p "package/$artifact/bin" "package/$artifact/dist"
             mv "$artifact" "package/$artifact/bin/agentboard"
@@ -75,6 +88,8 @@ jobs:
       # binary crashes — users never run it next to a node_modules, and the
       # smoke test must not either.
       - name: Boot-test the native linux binary
+        env:
+          BUILD_VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
           case "$(uname -m)" in
@@ -113,7 +128,15 @@ jobs:
             cat "$log"
             exit 1
           fi
-          echo "$native: booted"
+          # The binaries are only worth releasing if they can name themselves:
+          # a --define that silently failed to substitute would otherwise ship
+          # as a "-dev" build.
+          if ! grep -q "\"$BUILD_VERSION\"" "$log"; then
+            echo "::error::$native booted but its startup log does not report version $BUILD_VERSION; the --define injection did not land"
+            cat "$log"
+            exit 1
+          fi
+          echo "$native: booted, reporting version $BUILD_VERSION"
 
       - name: Upload agentboard-darwin-arm64
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
@@ -175,3 +198,7 @@ jobs:
         with:
           files: release-binaries/agentboard-*
           generate_release_notes: true
+          # Every merge ships, so each tag is a real release despite the
+          # semver-prerelease shape of its -<PR> suffix; without this the
+          # newest build would never take the "Latest release" badge.
+          prerelease: false
