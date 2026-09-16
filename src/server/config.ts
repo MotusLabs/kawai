@@ -1,5 +1,6 @@
 import os from 'node:os'
 import path from 'node:path'
+import { resolveProjectPath } from './paths'
 
 const terminalModeRaw = process.env.TERMINAL_MODE
 const terminalMode =
@@ -163,6 +164,14 @@ function resolveBindHostname(): string {
   return raw
 }
 
+// Directory the UI pre-fills for new sessions when the browser has no explicit
+// Default Project Directory. Overrides the server's working directory, so the
+// server can be started from anywhere (e.g. a service unit) while the UI still
+// points at the user's workdir. `~` is expanded here because service managers
+// pass Environment= values through without shell expansion.
+const projectDirRaw = process.env.AGENTBOARD_PROJECT_DIR?.trim() || ''
+const defaultProjectDir = projectDirRaw ? resolveProjectPath(projectDirRaw) : ''
+
 const pasteImageMaxBytesRaw = Number(process.env.AGENTBOARD_PASTE_IMAGE_MAX_BYTES)
 const pasteImageMaxBytes = Number.isFinite(pasteImageMaxBytesRaw) && pasteImageMaxBytesRaw > 0
   ? Math.floor(pasteImageMaxBytesRaw)
@@ -173,6 +182,7 @@ export const config = {
   hostname: resolveBindHostname(),
   hostLabel,
   tmuxSession: process.env.TMUX_SESSION || 'agentboard',
+  defaultProjectDir,
   refreshIntervalMs: Number(process.env.REFRESH_INTERVAL_MS) || 2000,
   discoverPrefixes: (process.env.DISCOVER_PREFIXES || '')
     .split(',')

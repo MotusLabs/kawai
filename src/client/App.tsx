@@ -33,6 +33,8 @@ interface ServerInfo {
   tailscaleIp: string | null
   protocol: string
   cwd?: string | null
+  /** AGENTBOARD_PROJECT_DIR, when the server was started with it. */
+  defaultProjectDir?: string | null
 }
 
 function filterAgentSessions(
@@ -122,8 +124,11 @@ export default function App() {
   const soundOnIdle = useSettingsStore((state) => state.soundOnIdle)
 
   // Empty defaultProjectDir means "not set" — fall back to the server's
-  // working directory when pre-filling the New Session dialog.
-  const effectiveDefaultProjectDir = defaultProjectDir || serverInfo?.cwd || ''
+  // AGENTBOARD_PROJECT_DIR, then its working directory, when pre-filling the
+  // New Session dialog.
+  const serverDefaultProjectDir =
+    serverInfo?.defaultProjectDir || serverInfo?.cwd || ''
+  const effectiveDefaultProjectDir = defaultProjectDir || serverDefaultProjectDir
 
   const connectionEpoch = useSessionStore((state) => state.connectionEpoch)
   const { sendMessage, subscribe, getConnectionEpoch } = useWebSocket()
@@ -1245,7 +1250,7 @@ export default function App() {
       <SettingsModal
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
-        serverCwd={serverInfo?.cwd ?? null}
+        serverDefaultDir={serverDefaultProjectDir || null}
       />
 
       {branchBrowserRepository && createWorktreeBranch === null && (

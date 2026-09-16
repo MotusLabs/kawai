@@ -22,14 +22,18 @@ interface SettingsChangeFlags {
 interface SettingsModalProps {
   isOpen: boolean
   onClose: (flags?: SettingsChangeFlags) => void
-  /** Server working directory (/api/server-info), used as the placeholder default. */
-  serverCwd?: string | null
+  /**
+   * Directory the server would use when this setting is empty
+   * (AGENTBOARD_PROJECT_DIR, else the server's working directory), from
+   * /api/server-info. Shown as the placeholder default.
+   */
+  serverDefaultDir?: string | null
 }
 
 export default function SettingsModal({
   isOpen,
   onClose,
-  serverCwd = null,
+  serverDefaultDir = null,
 }: SettingsModalProps) {
   const defaultProjectDir = useSettingsStore((state) => state.defaultProjectDir)
   const setDefaultProjectDir = useSettingsStore(
@@ -269,7 +273,7 @@ export default function SettingsModal({
     const trimmedDir = draftDir.trim()
     const webglChanged = draftUseWebGL !== useWebGL
     // Empty means "not set" — the New Session dialog then defaults to the
-    // server's working directory.
+    // server's directory (AGENTBOARD_PROJECT_DIR, else its working directory).
     setDefaultProjectDir(trimmedDir)
     setCommandPresets(draftPresets)
     setDefaultPresetId(draftDefaultPresetId)
@@ -424,12 +428,12 @@ export default function SettingsModal({
             <input
               value={draftDir}
               onChange={(event) => setDraftDir(event.target.value)}
-              placeholder={serverCwd || 'Server working directory'}
+              placeholder={serverDefaultDir || 'Server default directory'}
               className="input"
               autoFocus
             />
             <p className="mt-1.5 text-[10px] text-muted">
-              Leave empty to default to the server's working directory{serverCwd ? ` (${serverCwd})` : ''}.
+              Leave empty to default to the server's directory{serverDefaultDir ? ` (${serverDefaultDir})` : ''}.
             </p>
           </div>
 

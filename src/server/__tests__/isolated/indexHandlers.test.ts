@@ -83,6 +83,7 @@ const defaultConfig = {
   tmuxTimeoutMs: 3000,
   tmuxMutationTimeoutMs: 15000,
   pasteImageMaxBytes: 40 * 1024 * 1024,
+  defaultProjectDir: '',
 }
 
 const configState = { ...defaultConfig }
@@ -5226,11 +5227,36 @@ describe('server fetch handlers', () => {
       tailscaleIp: string | null
       protocol: string
       cwd?: string
+      defaultProjectDir?: string
     }
     expect(payload.port).toBe(4040)
     expect(payload.protocol).toBe('http')
     expect(payload.tailscaleIp).toBe('100.64.0.42')
     expect(payload.cwd).toBe(process.cwd())
+    expect(payload.defaultProjectDir).toBe('')
+  })
+
+  test('server-info reports the configured default project directory', async () => {
+    configState.defaultProjectDir = '/srv/work/projects'
+
+    const { serveOptions } = await loadIndex()
+    const fetchHandler = serveOptions.fetch
+    if (!fetchHandler) {
+      throw new Error('Fetch handler not configured')
+    }
+
+    const response = await fetchHandler.call(
+      {} as Bun.Server<unknown>,
+      new Request('http://localhost/api/server-info'),
+      {} as Bun.Server<unknown>
+    )
+
+    if (!response) {
+      throw new Error('Expected response for server-info request')
+    }
+
+    const payload = (await response.json()) as { defaultProjectDir?: string }
+    expect(payload.defaultProjectDir).toBe('/srv/work/projects')
   })
 
   test('tmux mouse mode timeout returns 504 and does not persist the setting', async () => {

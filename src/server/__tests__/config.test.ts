@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, spyOn, test } from 'bun:test'
 import os from 'node:os'
+import path from 'node:path'
 
 const ORIGINAL_ENV = {
   PORT: process.env.PORT,
@@ -33,6 +34,7 @@ const ORIGINAL_ENV = {
   AGENTBOARD_TMUX_TIMEOUT_MS: process.env.AGENTBOARD_TMUX_TIMEOUT_MS,
   AGENTBOARD_TMUX_MUTATION_TIMEOUT_MS: process.env.AGENTBOARD_TMUX_MUTATION_TIMEOUT_MS,
   AGENTBOARD_PASTE_IMAGE_MAX_BYTES: process.env.AGENTBOARD_PASTE_IMAGE_MAX_BYTES,
+  AGENTBOARD_PROJECT_DIR: process.env.AGENTBOARD_PROJECT_DIR,
 }
 
 const ENV_KEYS = Object.keys(ORIGINAL_ENV) as Array<keyof typeof ORIGINAL_ENV>
@@ -84,6 +86,7 @@ async function loadConfig(tag: string) {
     tmuxTimeoutMs: number
     tmuxMutationTimeoutMs: number
     pasteImageMaxBytes: number
+    defaultProjectDir: string
   }
 }
 
@@ -128,6 +131,7 @@ describe('config', () => {
     expect(config.tmuxTimeoutMs).toBe(3000)
     expect(config.tmuxMutationTimeoutMs).toBe(15000)
     expect(config.pasteImageMaxBytes).toBe(40 * 1024 * 1024)
+    expect(config.defaultProjectDir).toBe('')
   })
 
   test('parses env overrides and trims discover prefixes', async () => {
@@ -258,5 +262,27 @@ describe('config', () => {
 
     process.env.AGENTBOARD_PASTE_IMAGE_MAX_BYTES = '1024.9'
     expect((await loadConfig('paste-fractional')).pasteImageMaxBytes).toBe(1024)
+  })
+
+  test('resolves AGENTBOARD_PROJECT_DIR to an absolute path', async () => {
+    process.env.AGENTBOARD_PROJECT_DIR = '  /srv/work/projects  '
+
+    const config = await loadConfig('project-dir-absolute')
+    expect(config.defaultProjectDir).toBe('/srv/work/projects')
+  })
+
+  test('expands a leading ~ in AGENTBOARD_PROJECT_DIR', async () => {
+    const home = process.env.HOME || process.env.USERPROFILE || ''
+    process.env.AGENTBOARD_PROJECT_DIR = '~/work'
+
+    const config = await loadConfig('project-dir-tilde')
+    expect(config.defaultProjectDir).toBe(path.join(home, 'work'))
+  })
+
+  test('treats a blank AGENTBOARD_PROJECT_DIR as unset', async () => {
+    process.env.AGENTBOARD_PROJECT_DIR = '   '
+
+    const config = await loadConfig('project-dir-blank')
+    expect(config.defaultProjectDir).toBe('')
   })
 })
