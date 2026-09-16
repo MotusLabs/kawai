@@ -93,6 +93,12 @@ export default defineConfig(({ mode }) => {
         }
         return undefined
       })(),
+      watch: {
+        // Sibling git worktrees live under the project root. Edits there belong
+        // to another branch's checkout, not this dev server, and watching them
+        // forces spurious full-page reloads (and tsconfig cache clears).
+        ignored: ['**/.worktrees/**', '**/coverage/**', '**/playwright-report/**'],
+      },
       proxy: {
         '/api': {
           target: `http://localhost:${backendPort}`,
