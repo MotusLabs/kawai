@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { AgentSession, ServerMessage, Session, SessionKillSource } from '@shared/types'
+import type { AgentSession, AutoStartAgent, ServerMessage, Session, SessionKillSource } from '@shared/types'
 import type { WorkspaceBranch } from '@shared/workspace'
 import Header from './components/Header'
 import SessionList from './components/SessionList'
@@ -1098,9 +1098,10 @@ export default function App() {
     name?: string,
     command?: string,
     host?: string,
-    autoStartChange?: string
+    autoStartChange?: string,
+    autoStartAgent?: AutoStartAgent
   ) => {
-    sendMessage({ type: 'session-create', projectPath, name, command, host, autoStartChange })
+    sendMessage({ type: 'session-create', projectPath, name, command, host, autoStartChange, autoStartAgent })
     if (!host) setLastProjectPath(projectPath)
   }
 

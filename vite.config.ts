@@ -1,25 +1,21 @@
-import { defineConfig, loadEnv } from 'vite'
+import { createLogger, defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
 import path from 'node:path'
 import fs from 'node:fs'
+import { shouldSuppressProxyLog } from './src/shared/devProxyErrors'
 
-function isConnRefused(err: unknown): boolean {
-  if (!err || typeof err !== 'object') return false
-
-  const anyErr = err as { code?: unknown; message?: unknown; errors?: unknown }
-  if (anyErr.code === 'ECONNREFUSED') return true
-
-  // Node can surface dual-stack localhost failures as an AggregateError.
-  if (Array.isArray(anyErr.errors)) {
-    for (const sub of anyErr.errors) {
-      if (sub && typeof sub === 'object' && (sub as { code?: unknown }).code === 'ECONNREFUSED') {
-        return true
-      }
-    }
+// Backend restarts and browser reloads tear down proxied sockets mid-write.
+// Vite logs the resulting ECONNREFUSED/EPIPE/ECONNRESET as a stack trace even
+// though it recovers on its own, so filter those lines out of the dev log.
+function createDevLogger() {
+  const logger = createLogger()
+  const logError = logger.error.bind(logger)
+  logger.error = (msg, options) => {
+    if (shouldSuppressProxyLog(msg, options?.error)) return
+    logError(msg, options)
   }
-
-  return typeof anyErr.message === 'string' && anyErr.message.includes('ECONNREFUSED')
+  return logger
 }
 
 export default defineConfig(({ mode }) => {
@@ -33,6 +29,7 @@ export default defineConfig(({ mode }) => {
   const backendPort = env.PORT || '4040'
 
   return {
+    customLogger: createDevLogger(),
     plugins: [
       react(),
       VitePWA({
@@ -96,58 +93,21 @@ export default defineConfig(({ mode }) => {
         }
         return undefined
       })(),
+      watch: {
+        // Sibling git worktrees live under the project root. Edits there belong
+        // to another branch's checkout, not this dev server, and watching them
+        // forces spurious full-page reloads (and tsconfig cache clears).
+        ignored: ['**/.worktrees/**', '**/coverage/**', '**/playwright-report/**'],
+      },
       proxy: {
         '/api': {
           target: `http://localhost:${backendPort}`,
           // Preserve Vite string-shorthand behavior.
           changeOrigin: true,
-          configure: (proxy) => {
-            // Vite registers its own error handler after calling `configure()`.
-            // Patch `proxy.on()` so that handler doesn't log ECONNREFUSED during backend restarts.
-            const p = proxy as unknown as {
-              on: (event: string, listener: (...args: any[]) => void) => unknown
-            }
-            const originalOn = p.on.bind(p)
-            p.on = ((event: string, listener: (...args: any[]) => void) => {
-              if (event !== 'error') return originalOn(event, listener)
-              return originalOn(event, (err: unknown, _req: unknown, res: any, target: unknown) => {
-                if (isConnRefused(err)) {
-                  // Backend is restarting; avoid noisy logs and fail fast.
-                  if (res && typeof res.writeHead === 'function') {
-                    if (!res.headersSent && !res.writableEnded) {
-                      res.writeHead(502, { 'Content-Type': 'text/plain' })
-                    }
-                    if (!res.writableEnded) res.end()
-                  } else if (res && typeof res.end === 'function') {
-                    res.end()
-                  }
-                  return
-                }
-                listener(err, _req, res, target)
-              })
-            }) as typeof p.on
-          },
         },
         '/ws': {
           target: `ws://localhost:${backendPort}`,
           ws: true,
-          configure: (proxy) => {
-            const p = proxy as unknown as {
-              on: (event: string, listener: (...args: any[]) => void) => unknown
-            }
-            const originalOn = p.on.bind(p)
-            p.on = ((event: string, listener: (...args: any[]) => void) => {
-              if (event !== 'error') return originalOn(event, listener)
-              return originalOn(event, (err: unknown, req: unknown, res: any, target: unknown) => {
-                if (isConnRefused(err)) {
-                  // ws upgrade socket
-                  if (res && typeof res.end === 'function') res.end()
-                  return
-                }
-                listener(err, req, res, target)
-              })
-            }) as typeof p.on
-          },
         },
       },
     },

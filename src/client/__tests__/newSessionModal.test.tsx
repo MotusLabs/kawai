@@ -340,19 +340,23 @@ describe('NewSessionModal component', () => {
   })
 })
 
-describe('NewSessionModal auto-start option', () => {
-  test('offers auto-start checked by default with a change context and submits the change name', () => {
+describe('NewSessionModal first-prompt selector', () => {
+  test('offers Claude, Codex, and Nothing labelled with the literal prompts, defaulting from the preset', () => {
     setupDom()
 
-    const created: Array<{ path: string; autoStartChange?: string }> = []
+    const created: Array<{
+      path: string
+      autoStartChange?: string
+      autoStartAgent?: string
+    }> = []
     let renderer!: TestRenderer.ReactTestRenderer
     act(() => {
       renderer = TestRenderer.create(
         <NewSessionModal
           isOpen
           onClose={() => {}}
-          onCreate={(path, _name, _command, _host, autoStartChange) => {
-            created.push({ path, autoStartChange })
+          onCreate={(path, _name, _command, _host, autoStartChange, autoStartAgent) => {
+            created.push({ path, autoStartChange, autoStartAgent })
           }}
           defaultProjectDir="/base"
           commandPresets={DEFAULT_PRESETS}
@@ -363,15 +367,29 @@ describe('NewSessionModal auto-start option', () => {
       )
     })
 
-    const checkbox = renderer.root.findByProps({ 'data-testid': 'auto-start-apply' })
-    expect(checkbox.props.checked).toBe(true)
-    expect(JSON.stringify(renderer.toJSON())).toContain('add-auth')
+    const select = renderer.root.findByProps({ 'data-testid': 'start-with-select' })
+    // The default preset is Claude, so the selector defaults to Claude.
+    expect(select.props.value).toBe('claude')
+    const options = select.findAllByType('option')
+    expect(options.map((option) => option.props.value)).toEqual(['claude', 'codex', 'none'])
+    // Each option carries the literal prompt it would send.
+    expect(
+      options.map((option) =>
+        Array.isArray(option.props.children)
+          ? option.props.children.join('')
+          : option.props.children
+      )
+    ).toEqual([
+      'Claude - /opsx:apply add-auth',
+      'Codex - $openspec-apply-change add-auth',
+      'Nothing',
+    ])
 
     act(() => {
       renderer.root.findByType('form').props.onSubmit({ preventDefault: () => {} })
     })
     expect(created).toEqual([
-      { path: '/repo/.worktrees/add-auth', autoStartChange: 'add-auth' },
+      { path: '/repo/.worktrees/add-auth', autoStartChange: 'add-auth', autoStartAgent: 'claude' },
     ])
 
     act(() => {
@@ -379,18 +397,21 @@ describe('NewSessionModal auto-start option', () => {
     })
   })
 
-  test('unchecking auto-start submits without the change name', () => {
+  test('selecting Nothing submits without change name or agent', () => {
     setupDom()
 
-    const created: Array<{ path: string; autoStartChange?: string }> = []
+    const created: Array<{
+      autoStartChange?: string
+      autoStartAgent?: string
+    }> = []
     let renderer!: TestRenderer.ReactTestRenderer
     act(() => {
       renderer = TestRenderer.create(
         <NewSessionModal
           isOpen
           onClose={() => {}}
-          onCreate={(path, _name, _command, _host, autoStartChange) => {
-            created.push({ path, autoStartChange })
+          onCreate={(_path, _name, _command, _host, autoStartChange, autoStartAgent) => {
+            created.push({ autoStartChange, autoStartAgent })
           }}
           defaultProjectDir="/base"
           commandPresets={DEFAULT_PRESETS}
@@ -400,23 +421,168 @@ describe('NewSessionModal auto-start option', () => {
       )
     })
 
-    const checkbox = renderer.root.findByProps({ 'data-testid': 'auto-start-apply' })
+    const select = renderer.root.findByProps({ 'data-testid': 'start-with-select' })
     act(() => {
-      checkbox.props.onChange({ target: { checked: false } })
+      select.props.onChange({ target: { value: 'none' } })
     })
-    expect(checkbox.props.checked).toBe(false)
+    expect(select.props.value).toBe('none')
 
     act(() => {
       renderer.root.findByType('form').props.onSubmit({ preventDefault: () => {} })
     })
-    expect(created).toEqual([{ path: '/base', autoStartChange: undefined }])
+    expect(created).toEqual([{ autoStartChange: undefined, autoStartAgent: undefined }])
 
     act(() => {
       renderer.unmount()
     })
   })
 
-  test('no auto-start affordance without a change context', () => {
+  test('default precedence: preset agentType outranks the command, then the prefix rule, then Nothing', () => {
+    setupDom()
+
+    // A preset that declares claude while its command is a wrapper — the
+    // declaration wins.
+    const wrapperPreset = {
+      id: 'glm',
+      label: 'GLM',
+      command: 'claude-glm --yolo',
+      isBuiltIn: false,
+      agentType: 'claude' as const,
+    }
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => {
+      renderer = TestRenderer.create(
+        <NewSessionModal
+          isOpen
+          onClose={() => {}}
+          onCreate={() => {}}
+          defaultProjectDir="/base"
+          commandPresets={[...DEFAULT_PRESETS, wrapperPreset]}
+          defaultPresetId="glm"
+          initialAutoStartChange="add-auth"
+        />
+      )
+    })
+    expect(renderer.root.findByProps({ 'data-testid': 'start-with-select' }).props.value).toBe('claude')
+
+    // Custom mode with a wrapper command: no preset declaration, so the
+    // prefix rule on the resolved token picks Claude.
+    const buttons = renderer.root.findAllByType('button')
+    const customButton = buttons.find((button) => {
+      const children = Array.isArray(button.props.children)
+        ? button.props.children
+        : [button.props.children]
+      return children.some((c: unknown) => c === 'Custom')
+    })
+    act(() => {
+      customButton!.props.onClick()
+    })
+    const commandInput = renderer.root.findAllByType('input')[0]
+    act(() => {
+      commandInput.props.onChange({ target: { value: 'env FOO=1 npx claude-glm --yolo' } })
+    })
+    expect(renderer.root.findByProps({ 'data-testid': 'start-with-select' }).props.value).toBe('claude')
+
+    // An unrecognized command defaults to Nothing — but stays selectable.
+    act(() => {
+      commandInput.props.onChange({ target: { value: 'vim .' } })
+    })
+    const select = renderer.root.findByProps({ 'data-testid': 'start-with-select' })
+    expect(select.props.value).toBe('none')
+
+    act(() => {
+      renderer.unmount()
+    })
+  })
+
+  test('an explicit selection survives subsequent command edits', () => {
+    setupDom()
+
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => {
+      renderer = TestRenderer.create(
+        <NewSessionModal
+          isOpen
+          onClose={() => {}}
+          onCreate={() => {}}
+          defaultProjectDir="/base"
+          commandPresets={DEFAULT_PRESETS}
+          defaultPresetId="claude"
+          initialAutoStartChange="add-auth"
+        />
+      )
+    })
+
+    const select = renderer.root.findByProps({ 'data-testid': 'start-with-select' })
+    act(() => {
+      select.props.onChange({ target: { value: 'codex' } })
+    })
+    // Editing the command away from the preset no longer re-derives the
+    // default — the user's choice sticks.
+    const commandInput = renderer.root.findAllByType('input')[0]
+    act(() => {
+      commandInput.props.onChange({ target: { value: 'vim .' } })
+    })
+    expect(renderer.root.findByProps({ 'data-testid': 'start-with-select' }).props.value).toBe('codex')
+
+    act(() => {
+      renderer.unmount()
+    })
+  })
+
+  test('the selector is offered on remote hosts and the submission carries change and agent', () => {
+    setupDom()
+
+    const created: Array<{
+      path: string
+      host?: string
+      autoStartChange?: string
+      autoStartAgent?: string
+    }> = []
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => {
+      renderer = TestRenderer.create(
+        <NewSessionModal
+          isOpen
+          onClose={() => {}}
+          onCreate={(path, _name, _command, host, autoStartChange, autoStartAgent) => {
+            created.push({ path, host, autoStartChange, autoStartAgent })
+          }}
+          defaultProjectDir="/base"
+          commandPresets={DEFAULT_PRESETS}
+          defaultPresetId="claude"
+          remoteHosts={[
+            { host: 'box', ok: true, lastUpdated: '2026-01-01T00:00:00.000Z' },
+          ]}
+          remoteAllowControl
+          initialHost="box"
+          initialAutoStartChange="add-auth"
+        />
+      )
+    })
+
+    // No local-host gate: the dropdown renders for a remote host.
+    const select = renderer.root.findByProps({ 'data-testid': 'start-with-select' })
+    expect(select.props.value).toBe('claude')
+
+    act(() => {
+      renderer.root.findByType('form').props.onSubmit({ preventDefault: () => {} })
+    })
+    expect(created).toEqual([
+      {
+        path: '/base',
+        host: 'box',
+        autoStartChange: 'add-auth',
+        autoStartAgent: 'claude',
+      },
+    ])
+
+    act(() => {
+      renderer.unmount()
+    })
+  })
+
+  test('no first-prompt affordance without a change context', () => {
     setupDom()
 
     let renderer!: TestRenderer.ReactTestRenderer
@@ -433,7 +599,7 @@ describe('NewSessionModal auto-start option', () => {
       )
     })
 
-    expect(renderer.root.findAllByProps({ 'data-testid': 'auto-start-apply' })).toHaveLength(0)
+    expect(renderer.root.findAllByProps({ 'data-testid': 'start-with-select' })).toHaveLength(0)
     // The form keeps exactly its three inputs (command, path, name).
     expect(renderer.root.findAllByType('input')).toHaveLength(3)
 

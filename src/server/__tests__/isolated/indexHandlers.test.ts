@@ -1080,22 +1080,20 @@ describe('server message handlers', () => {
     }
   }
 
-  test('session-create with auto-start holds the prompt and injects it once at first idle', async () => {
-    // Task 8.1/8.2 wiring: the create-session message carries the change
-    // name; the server holds the mapped apply command and injects it — text
-    // plus Enter, the terminal-input keystroke pair — exactly once, at the
-    // session's first idle (`waiting`) status report.
-    const createdSession: Session = {
-      ...baseSession,
-      id: 'auto-1',
-      tmuxWindow: 'agentboard:auto-1',
-      status: 'working',
+  test('session-create composes the selected agent\'s apply prompt into the start command', async () => {
+    // Launch-argument composition (replacing keystroke injection): the
+    // create-session message carries the selected agent alongside the change
+    // name, and the handler appends the mapped, shell-quoted apply command to
+    // the start command before createWindow. An unrecognized agent or an
+    // invalid change name starts the session unmodified, and no keystrokes
+    // are ever delivered to the pane — not even at idle reports.
+    const createdSession = { ...baseSession, id: 'auto-1', name: 'compose' }
+    const createCalls: Array<{ projectPath: string; name?: string; command?: string }> = []
+    sessionManagerState.createWindow = (projectPath: string, name?: string, command?: string) => {
+      createCalls.push({ projectPath, name, command })
+      return { ...createdSession, tmuxWindow: `agentboard:${createCalls.length}` }
     }
-    sessionManagerState.createWindow = () => createdSession
-    // The creation flow triggers its own refresh; seed the worker list so
-    // that refresh keeps the created session in the registry instead of
-    // discarding its pending prompt as a vanished session.
-    refreshWorkerSessions = [{ ...createdSession, status: 'working' }]
+    sessionManagerState.listWindows = () => []
     const tmuxSendKeys: string[][] = []
     spawnSyncImpl = ((command: string[]) => {
       const cmd = Array.isArray(command) ? command : [String(command)]
@@ -1116,80 +1114,36 @@ describe('server message handlers', () => {
       throw new Error('WebSocket handlers not configured')
     }
 
-    websocket.message?.(
-      ws as never,
-      JSON.stringify({
-        type: 'session-create',
-        projectPath: '/repo/.worktrees/add-auth',
-        command: 'claude',
-        autoStartChange: 'add-auth',
-      })
-    )
-    expect(sent.find((message) => message.type === 'session-created')).toBeTruthy()
+    const sendCreate = (payload: Record<string, unknown>) =>
+      websocket.message?.(
+        ws as never,
+        JSON.stringify({
+          type: 'session-create',
+          projectPath: '/repo/.worktrees/add-auth',
+          ...payload,
+        })
+      )
 
-    // Let the creation-triggered refresh settle before driving explicit
-    // refreshes (a coalesced refresh would observe a stale worker list).
-    await settleRefresh()
-    websocket.message?.(ws as never, JSON.stringify({ type: 'session-refresh' }))
-    await settleRefresh()
-    expect(tmuxSendKeys).toHaveLength(0)
+    sendCreate({ command: 'claude', autoStartChange: 'add-auth', autoStartAgent: 'claude' })
+    sendCreate({ command: 'codex --yolo', autoStartChange: 'add-auth', autoStartAgent: 'codex' })
+    // An unrecognized agent composes nothing — the session still starts.
+    sendCreate({ command: 'vim .', autoStartChange: 'add-auth', autoStartAgent: 'pi' })
+    // An invalid change name composes nothing.
+    sendCreate({ command: 'claude', autoStartChange: '../evil', autoStartAgent: 'claude' })
+    // No agent selected: unmodified command.
+    sendCreate({ command: 'claude', autoStartChange: 'add-auth' })
 
-    // The first idle report injects the mapped apply command exactly once.
-    refreshWorkerSessions = [{ ...createdSession, status: 'waiting' }]
-    websocket.message?.(ws as never, JSON.stringify({ type: 'session-refresh' }))
-    await settleRefresh()
-    expect(tmuxSendKeys).toEqual([
-      ['tmux', 'send-keys', '-t', 'agentboard:auto-1', '-l', '--', '/opsx:apply add-auth'],
-      ['tmux', 'send-keys', '-t', 'agentboard:auto-1', 'Enter'],
+    expect(createCalls.map((call) => call.command)).toEqual([
+      `claude '/opsx:apply add-auth'`,
+      `codex --yolo '$openspec-apply-change add-auth'`,
+      'vim .',
+      'claude',
+      'claude',
     ])
+    expect(sent.filter((message) => message.type === 'session-created')).toHaveLength(5)
 
-    // Double-trigger protection: later refreshes send nothing more.
+    // Idle reports never trigger keystroke delivery for the prompt anymore.
     refreshWorkerSessions = [{ ...createdSession, status: 'waiting' }]
-    websocket.message?.(ws as never, JSON.stringify({ type: 'session-refresh' }))
-    await settleRefresh()
-    expect(tmuxSendKeys).toHaveLength(2)
-  })
-
-  test('session-create with auto-start for an unrecognized agent sends nothing', async () => {
-    // Task 8.3: no mapped apply command — nothing is held, nothing is sent,
-    // even once the session reports idle.
-    const createdSession: Session = {
-      ...baseSession,
-      id: 'auto-2',
-      tmuxWindow: 'agentboard:auto-2',
-      status: 'waiting',
-    }
-    sessionManagerState.createWindow = () => createdSession
-    const tmuxSendKeys: string[][] = []
-    spawnSyncImpl = ((command: string[]) => {
-      const cmd = Array.isArray(command) ? command : [String(command)]
-      if (cmd[0] === 'tmux' && cmd.includes('send-keys')) {
-        tmuxSendKeys.push(cmd)
-      }
-      return {
-        exitCode: 0,
-        stdout: Buffer.from(''),
-        stderr: Buffer.from(''),
-      }
-    }) as unknown as typeof Bun.spawnSync
-
-    const { serveOptions } = await loadIndex()
-    const { ws } = createWs()
-    const websocket = serveOptions.websocket
-    if (!websocket) {
-      throw new Error('WebSocket handlers not configured')
-    }
-
-    websocket.message?.(
-      ws as never,
-      JSON.stringify({
-        type: 'session-create',
-        projectPath: '/repo/.worktrees/add-auth',
-        command: 'vim .',
-        autoStartChange: 'add-auth',
-      })
-    )
-    refreshWorkerSessions = [createdSession]
     websocket.message?.(ws as never, JSON.stringify({ type: 'session-refresh' }))
     await settleRefresh()
     expect(tmuxSendKeys).toHaveLength(0)
@@ -2361,6 +2315,69 @@ describe('server message handlers', () => {
 
     // Session should be in registry
     expect(registryInstance.sessions.some((s) => s.remote && s.host === 'remote-host')).toBe(true)
+  })
+
+  test('remote session-create receives the composed apply command', async () => {
+    // The same launch-argument composition as the local path: the remote
+    // handler appends the quoted apply prompt to the window command before
+    // the bash -lic wrapping, so the first prompt rides in the remote start
+    // command rather than a pending-prompt store.
+    configState.remoteAllowControl = true
+    configState.remoteHosts = ['remote-host']
+    const { serveOptions } = await loadIndex()
+    sessionManagerState.listWindows = () => []
+
+    const sshCalls: string[][] = []
+    spawnSyncImpl = ((...args: Parameters<typeof Bun.spawnSync>) => {
+      const command = Array.isArray(args[0]) ? args[0] : [String(args[0])]
+      sshCalls.push(command as string[])
+      const cmdStr = command.join(' ')
+      if (cmdStr.includes('new-window')) {
+        return {
+          exitCode: 0,
+          stdout: Buffer.from(tmuxOutput(['1', '@5'])),
+          stderr: Buffer.from(''),
+        } as ReturnType<typeof Bun.spawnSync>
+      }
+      return {
+        exitCode: 0,
+        stdout: Buffer.from(''),
+        stderr: Buffer.from(''),
+      } as ReturnType<typeof Bun.spawnSync>
+    }) as typeof Bun.spawnSync
+
+    const { ws, sent } = createWs()
+    const websocket = serveOptions.websocket
+    if (!websocket) {
+      throw new Error('WebSocket handlers not configured')
+    }
+
+    websocket.message?.(
+      ws as never,
+      JSON.stringify({
+        type: 'session-create',
+        projectPath: '/home/user/project',
+        command: 'claude',
+        host: 'remote-host',
+        autoStartChange: 'add-auth',
+        autoStartAgent: 'claude',
+      })
+    )
+    await new Promise((r) => setTimeout(r, 0))
+
+    expect(sent.some((m) => m.type === 'session-created')).toBe(true)
+    const newWindowCall = sshCalls.find(
+      (cmd) => cmd[0] === 'ssh' && cmd.some((a) => typeof a === 'string' && a.includes('new-window'))
+    )
+    expect(newWindowCall).toBeTruthy()
+    // The window command argument carries the login-shell wrapper around the
+    // composed prompt. runRemoteTmux re-quotes each tmux arg for ssh, so
+    // assert on the prompt text itself, which contains no quote characters.
+    const windowCommandArg = newWindowCall!.find(
+      (a) => typeof a === 'string' && a.includes('/opsx:apply add-auth')
+    )
+    expect(windowCommandArg).toBeTruthy()
+    expect(windowCommandArg).toContain('bash -lic')
   })
 
   test('sends error when created remote window exits immediately', async () => {
@@ -4658,6 +4675,109 @@ describe('server message handlers', () => {
       name: 'quoted-session',
       command: 'claude --dangerously-skip-permissions --resume resume-quoted',
     })
+  })
+
+  test('wake strips the composed apply prompt from the stored launch command', async () => {
+    // A session created with a first prompt carries it in launchCommand.
+    // Resuming must reconstruct the original launch flags without the apply
+    // prompt, for both prompt forms — never re-running it on wake.
+    const { serveOptions } = await loadIndex()
+    const { ws } = createWs()
+    const websocket = serveOptions.websocket
+    if (!websocket) {
+      throw new Error('WebSocket handlers not configured')
+    }
+    websocket.open?.(ws as never)
+
+    const createdSession: Session = {
+      ...baseSession,
+      id: 'created-apply-prompt',
+      name: 'apply-prompt',
+      tmuxWindow: 'agentboard:54',
+    }
+    const commands: Array<string | undefined> = []
+    sessionManagerState.createWindow = (_projectPath, _name, command) => {
+      commands.push(command)
+      return createdSession
+    }
+
+    seedRecord(
+      makeRecord({
+        sessionId: 'resume-apply-prompt',
+        displayName: 'apply-prompt',
+        projectPath: '/tmp/apply',
+        agentType: 'claude',
+        currentWindow: null,
+        launchCommand: `claude --dangerously-skip-permissions '/opsx:apply add-x'`,
+      })
+    )
+    websocket.message?.(
+      ws as never,
+      JSON.stringify({ type: 'session-wake', sessionId: 'resume-apply-prompt' })
+    )
+    expect(commands[0]).toBe(
+      'claude --dangerously-skip-permissions --resume resume-apply-prompt'
+    )
+
+    seedRecord(
+      makeRecord({
+        sessionId: 'resume-apply-prompt-codex',
+        displayName: 'apply-prompt-codex',
+        projectPath: '/tmp/apply-codex',
+        agentType: 'codex',
+        currentWindow: null,
+        launchCommand: `codex --yolo '$openspec-apply-change add-x'`,
+      })
+    )
+    websocket.message?.(
+      ws as never,
+      JSON.stringify({ type: 'session-wake', sessionId: 'resume-apply-prompt-codex' })
+    )
+    expect(commands[1]).toBe('codex --yolo resume resume-apply-prompt-codex')
+  })
+
+  test('wake preserves unrelated quoted flag values while stripping the apply prompt', async () => {
+    const { serveOptions } = await loadIndex()
+    const { ws } = createWs()
+    const websocket = serveOptions.websocket
+    if (!websocket) {
+      throw new Error('WebSocket handlers not configured')
+    }
+    websocket.open?.(ws as never)
+
+    let createArgs: { projectPath: string; name?: string; command?: string } | null = null
+    const createdSession: Session = {
+      ...baseSession,
+      id: 'created-unrelated-quoted',
+      name: 'unrelated-quoted',
+      tmuxWindow: 'agentboard:56',
+    }
+    sessionManagerState.createWindow = (projectPath, name, command) => {
+      createArgs = { projectPath, name, command }
+      return createdSession
+    }
+
+    seedRecord(
+      makeRecord({
+        sessionId: 'resume-unrelated-quoted',
+        displayName: 'unrelated-quoted',
+        projectPath: '/tmp/unrelated',
+        agentType: 'claude',
+        currentWindow: null,
+        launchCommand: `claude --dangerously-skip-permissions --append-system-prompt 'foo' '/opsx:apply add-x'`,
+      })
+    )
+    websocket.message?.(
+      ws as never,
+      JSON.stringify({ type: 'session-wake', sessionId: 'resume-unrelated-quoted' })
+    )
+
+    expect(createArgs).not.toBeNull()
+    // The apply prompt is gone; the quoted --append-system-prompt value rides
+    // through exactly as stored.
+    expect(createArgs!.command).toBe(
+      `claude --dangerously-skip-permissions --append-system-prompt 'foo' --resume resume-unrelated-quoted`
+    )
   })
 
   test('wakes codex session with quoted launch_command preserving flags', async () => {

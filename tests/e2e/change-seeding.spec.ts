@@ -4,7 +4,8 @@
 // creation — `git worktree add <main>/.worktrees/<change>` on branch
 // `<change>`, artifacts copied from the main worktree and committed there —
 // and routes the success into the session form prefilled with the worktree
-// root, with the apply auto-start option offered and checked.
+// root, with the first-prompt ("Start with") selector offered and defaulted
+// to Claude.
 import { test, expect } from '@playwright/test'
 import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
@@ -67,13 +68,14 @@ test('change-section action seeds the worktree and opens the prefilled session f
   await createButton.click()
 
   // Success routes into the normal session form, prefilled with the seeded
-  // worktree root, with the apply auto-start offered and checked.
+  // worktree root, with the first-prompt selector offered and defaulted to
+  // Claude (the default preset declares it).
   const modal = page.getByRole('dialog', { name: 'New Session' })
   await expect(modal).toBeVisible({ timeout: CREATE_TIMEOUT })
   const pathInput = modal.locator('input.input.text-sm').first()
   await expect(pathInput).toHaveValue(worktreePath)
-  await expect(modal.getByTestId('auto-start-apply')).toBeChecked()
-  await expect(modal.getByTestId('auto-start-apply')).toBeVisible()
+  await expect(modal.getByTestId('start-with-select')).toBeVisible()
+  await expect(modal.getByTestId('start-with-select')).toHaveValue('claude')
 
   // The seeded worktree really exists on disk: convention path, branch named
   // after the change, artifacts committed on it.
@@ -87,8 +89,9 @@ test('change-section action seeds the worktree and opens the prefilled session f
   const status = run('git', ['-C', worktreePath, 'status', '--porcelain']).trim()
   expect(status).toBe('')
 
-  // The change's apply command is what the form would send: unchecking is
-  // not needed here — cancel instead of creating a real agent session.
+  // The change's apply command is what the form would send as a launch
+  // argument: switching to Nothing is not needed here — cancel instead of
+  // creating a real agent session.
   await modal.getByRole('button', { name: 'Cancel' }).click()
   await expect(modal).toBeHidden()
 })
