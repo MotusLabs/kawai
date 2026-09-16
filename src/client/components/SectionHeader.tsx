@@ -4,6 +4,8 @@
 // repository, branch or detached revision, path, and dirty/stale state.
 // Both carry attention counts, a collapse control, and accessible labels.
 // Purely presentational; collapse state lives in the workspace store.
+// CollapseTrigger is exported for the fallback (Workspace/Remote) section
+// headers, which share the same chevron/aria-expanded/label contract.
 
 import ChevronDownIcon from '@untitledui-icons/react/line/esm/ChevronDownIcon'
 import ChevronRightIcon from '@untitledui-icons/react/line/esm/ChevronRightIcon'
@@ -77,7 +79,12 @@ export default function SectionHeader({
   )
 }
 
-function CollapseTrigger({
+/**
+ * The collapse affordance shared by every section header: a chevron button
+ * carrying aria-expanded, the accessible label, and the section's identity
+ * for the toggle callback. Children render as the header's identity.
+ */
+export function CollapseTrigger({
   sectionKey,
   collapsed,
   onToggleCollapse,

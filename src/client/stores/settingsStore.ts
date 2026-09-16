@@ -112,6 +112,24 @@ const SIDEBAR_MIN_WIDTH = 180
 const SIDEBAR_MAX_WIDTH = 400
 const SIDEBAR_DEFAULT_WIDTH = 240
 
+// Workspace/Remote pane height constraints, as fractions of the navigator
+// height (the flex column below the filter bar). The joint constraint —
+// both panes plus the flow region's minimum — is enforced by CSS flex
+// shrink, not by these per-pane bounds.
+const PANE_MIN_FRACTION = 0.1
+const PANE_MAX_FRACTION = 0.6
+const PANE_DEFAULT_FRACTION = 0.25
+
+function clampPaneFraction(fraction: number): number {
+  return Math.max(PANE_MIN_FRACTION, Math.min(PANE_MAX_FRACTION, fraction))
+}
+
+function sanitizePaneFraction(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value)
+    ? clampPaneFraction(value)
+    : PANE_DEFAULT_FRACTION
+}
+
 interface SettingsState {
   defaultProjectDir: string
   setDefaultProjectDir: (dir: string) => void
@@ -153,6 +171,12 @@ interface SettingsState {
   setHibernatingSessionsExpanded: (expanded: boolean) => void
   sidebarWidth: number
   setSidebarWidth: (width: number) => void
+  /** Workspace pane height as a fraction of the navigator height. */
+  workspacePaneFraction: number
+  setWorkspacePaneFraction: (fraction: number) => void
+  /** Remote pane height as a fraction of the navigator height. */
+  remotePaneFraction: number
+  setRemotePaneFraction: (fraction: number) => void
   projectFilters: string[]
   setProjectFilters: (filters: string[]) => void
   hostFilters: string[]
@@ -222,6 +246,12 @@ export const useSettingsStore = create<SettingsState>()(
         set({
           sidebarWidth: Math.max(SIDEBAR_MIN_WIDTH, Math.min(SIDEBAR_MAX_WIDTH, width)),
         }),
+      workspacePaneFraction: PANE_DEFAULT_FRACTION,
+      setWorkspacePaneFraction: (fraction) =>
+        set({ workspacePaneFraction: sanitizePaneFraction(fraction) }),
+      remotePaneFraction: PANE_DEFAULT_FRACTION,
+      setRemotePaneFraction: (fraction) =>
+        set({ remotePaneFraction: sanitizePaneFraction(fraction) }),
       projectFilters: [],
       setProjectFilters: (filters) => set({ projectFilters: filters }),
       hostFilters: [],
@@ -273,6 +303,21 @@ export const useSettingsStore = create<SettingsState>()(
       name: 'agentboard-settings',
       storage: createJSONStorage(() => safeStorage),
       version: 7,
+      // Same shallow merge as the default, plus re-clamping of the pane
+      // fractions: a hand-edited or corrupt persisted value must not produce
+      // an unusable layout, and state persisted before the keys existed
+      // keeps the defaults supplied by the spread below.
+      merge: (persistedState, currentState) => {
+        const merged = {
+          ...currentState,
+          ...(persistedState as object),
+        } as SettingsState
+        return {
+          ...merged,
+          workspacePaneFraction: sanitizePaneFraction(merged.workspacePaneFraction),
+          remotePaneFraction: sanitizePaneFraction(merged.remotePaneFraction),
+        }
+      },
       migrate: (persistedState: unknown, version: number) => {
         const state = persistedState as Record<string, unknown>
         // v7: drop the stale '~/Documents/GitHub' hardcoded default so the
@@ -399,6 +444,8 @@ export {
   SIDEBAR_MIN_WIDTH,
   SIDEBAR_MAX_WIDTH,
   SIDEBAR_DEFAULT_WIDTH,
+  PANE_MIN_FRACTION,
+  PANE_MAX_FRACTION,
 }
 
 /**

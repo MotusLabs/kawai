@@ -5,7 +5,12 @@
 // attention counts, and the flattened visible navigation order.
 import { describe, expect, test } from 'bun:test'
 import type { AgentSession, Session } from '@shared/types'
-import { changeSectionKey, type WorkspaceSnapshot } from '@shared/workspace'
+import {
+  changeSectionKey,
+  FALLBACK_REMOTE_SECTION_KEY,
+  FALLBACK_WORKSPACE_SECTION_KEY,
+  type WorkspaceSnapshot,
+} from '@shared/workspace'
 import { buildWorkspaceView } from '../utils/workspaceView'
 
 function liveSession(id: string, projectPath: string, overrides: Partial<Session> = {}): Session {
@@ -321,6 +326,67 @@ describe('buildWorkspaceView attention counts', () => {
     expect(main?.hiddenAttentionCount).toBe(1)
     // Repository and change context remains despite the empty filtered rows.
     expect(view.sections).toHaveLength(5)
+  })
+})
+
+describe('buildWorkspaceView fallback section collapse', () => {
+  test('fallback sections carry their reserved keys and collapse state', () => {
+    const view = buildWorkspaceView(
+      snapshot,
+      [liveSession('s1', '/plain'), liveSession('r1', '/remote/path', { remote: true })],
+      [],
+      [],
+      { collapsedSectionIds: [FALLBACK_REMOTE_SECTION_KEY] }
+    )
+    expect(view.workspace.key).toBe(FALLBACK_WORKSPACE_SECTION_KEY)
+    expect(view.workspace.collapsed).toBe(false)
+    expect(view.remote.key).toBe(FALLBACK_REMOTE_SECTION_KEY)
+    expect(view.remote.collapsed).toBe(true)
+  })
+
+  test('a collapsed Remote section hides its rows and reports hidden attention', () => {
+    const view = buildWorkspaceView(
+      snapshot,
+      [
+        liveSession('r1', '/remote/one', { remote: true, status: 'permission' }),
+        liveSession('r2', '/remote/two', { remote: true }),
+        liveSession('s1', '/repo'),
+      ],
+      [],
+      [],
+      { collapsedSectionIds: [FALLBACK_REMOTE_SECTION_KEY] }
+    )
+    // Rows stay counted on the section (header count), but the permission
+    // waiting inside the collapsed pane is reported as hidden attention.
+    expect(view.remote.entries.map((e) => e.key)).toEqual(['r1', 'r2'])
+    expect(view.remote.attentionCount).toBe(0)
+    expect(view.remote.hiddenAttentionCount).toBe(1)
+    // Keyboard navigation order skips the collapsed pane's rows.
+    expect(view.visibleEntries.map((e) => e.key)).toEqual(['s1'])
+  })
+
+  test('a collapsed Workspace section drops its rows from the navigation order', () => {
+    const view = buildWorkspaceView(
+      snapshot,
+      [liveSession('s1', '/repo'), liveSession('w1', '/plain')],
+      [],
+      [],
+      { collapsedSectionIds: [FALLBACK_WORKSPACE_SECTION_KEY] }
+    )
+    expect(view.workspace.entries.map((e) => e.key)).toEqual(['w1'])
+    expect(view.visibleEntries.map((e) => e.key)).toEqual(['s1'])
+  })
+
+  test('expanded fallback sections keep attention in the visible count', () => {
+    const view = buildWorkspaceView(
+      snapshot,
+      [liveSession('r1', '/remote/one', { remote: true, status: 'permission' })],
+      [],
+      []
+    )
+    expect(view.remote.attentionCount).toBe(1)
+    expect(view.remote.hiddenAttentionCount).toBe(0)
+    expect(view.visibleEntries.map((e) => e.key)).toEqual(['r1'])
   })
 })
 

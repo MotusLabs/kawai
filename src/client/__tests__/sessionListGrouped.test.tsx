@@ -7,6 +7,7 @@ import TestRenderer, { act } from 'react-test-renderer'
 import type { AgentSession, Session } from '@shared/types'
 import type { WorkspaceSnapshot } from '@shared/workspace'
 import SessionList from '../components/SessionList'
+import { FLOW_REGION_MIN_HEIGHT, PANE_MIN_HEIGHT } from '../components/WorkspaceSectionList'
 import { buildWorkspaceView } from '../utils/workspaceView'
 import { useSettingsStore } from '../stores/settingsStore'
 import { useSessionStore } from '../stores/sessionStore'
@@ -623,11 +624,225 @@ describe('SessionList grouped rendering', () => {
     act(() => plain.unmount())
   })
 
+  test('fallback sections collapse through their headers with the reserved keys', () => {
+    const sessions: Session[] = [
+      baseSession,
+      { ...baseSession, id: 'live-plain', projectPath: '/plain/project' },
+      {
+        ...baseSession,
+        id: 'live-remote',
+        projectPath: '/remote/path',
+        remote: true,
+        host: 'box.example',
+      },
+    ]
+    const view = makeView(sessions, [], [], {
+      collapsed: ['fallback::remote'],
+    })
+
+    const toggled: string[] = []
+    const { renderer } = renderList({
+      sessions,
+      workspaceView: view,
+      onToggleSectionCollapse: (key) => toggled.push(key),
+    })
+
+    // The Remote header starts collapsed: aria-expanded=false, rows hidden.
+    const remote = renderer.root.findByProps({ 'data-testid': 'remote-section' })
+    expect(remote.props['data-collapsed']).toBe('true')
+    const remoteHeader = remote.findByProps({ 'data-testid': 'fallback-section-header' })
+    expect(remoteHeader.props['data-section-key']).toBe('fallback::remote')
+    const remoteButton = remoteHeader.findByProps({ 'aria-expanded': false })
+    expect(remoteButton.props['aria-label']).toBe('Expand Remote section')
+    expect(remote.findAllByProps({ 'data-testid': 'session-card' })).toHaveLength(0)
+
+    act(() => {
+      remoteButton.props.onClick()
+    })
+    expect(toggled).toEqual(['fallback::remote'])
+
+    // The Workspace fallback header toggles with its own reserved key.
+    const workspace = renderer.root.findByProps({ 'data-testid': 'workspace-section' })
+    expect(workspace.props['data-collapsed']).toBe('false')
+    const workspaceButton = workspace
+      .findByProps({ 'data-testid': 'fallback-section-header' })
+      .findByProps({ 'aria-expanded': true })
+    expect(workspaceButton.props['aria-label']).toBe('Collapse Workspace section')
+    act(() => {
+      workspaceButton.props.onClick()
+    })
+    expect(toggled).toEqual(['fallback::remote', 'fallback::workspace'])
+
+    act(() => renderer.unmount())
+  })
+
+  test('collapsed fallback sections surface hidden permission counts', () => {
+    const sessions: Session[] = [
+      {
+        ...baseSession,
+        id: 'live-remote',
+        projectPath: '/remote/path',
+        remote: true,
+        host: 'box.example',
+        status: 'permission',
+      },
+    ]
+    const view = makeView(sessions, [], [], {
+      collapsed: ['fallback::remote'],
+    })
+
+    const { renderer } = renderList({ sessions, workspaceView: view })
+
+    const remote = renderer.root.findByProps({ 'data-testid': 'remote-section' })
+    const header = remote.findByProps({ 'data-testid': 'fallback-section-header' })
+    expect(header.props['data-attention-count']).toBe(1)
+    expect(header.props['data-hidden-attention-count']).toBe(1)
+    expect(remote.findByProps({ 'data-testid': 'section-attention-badge' }).props['aria-label']).toBe(
+      '1 session(s) need permission'
+    )
+
+    act(() => renderer.unmount())
+  })
+
   test('falls back to the flat list when no workspace snapshot exists', () => {
     const { renderer } = renderList({ sessions: [baseSession], workspaceView: null })
 
     expect(renderer.root.findAllByProps({ 'data-testid': 'worktree-section' })).toHaveLength(0)
     expect(renderer.root.findAllByProps({ 'data-testid': 'session-card' })).toHaveLength(1)
+
+    act(() => renderer.unmount())
+  })
+})
+
+describe('SessionList fallback panes layout', () => {
+  const plainSession: Session = { ...baseSession, id: 'live-plain', projectPath: '/plain/project' }
+  const remoteSession: Session = {
+    ...baseSession,
+    id: 'live-remote',
+    projectPath: '/remote/path',
+    remote: true,
+    host: 'box.example',
+  }
+
+  beforeEach(() => {
+    useSettingsStore.setState({ workspacePaneFraction: 0.25, remotePaneFraction: 0.25 })
+  })
+
+  test('docks fallback sections as panes below the scrolling flow region', () => {
+    const sessions = [baseSession, plainSession, remoteSession]
+    const view = makeView(sessions, [], [])
+    const { renderer } = renderList({ sessions, workspaceView: view })
+
+    const navigator = renderer.root.findByProps({ 'data-testid': 'workspace-navigator' })
+    const flow = navigator.findByProps({ 'data-testid': 'workspace-flow-region' })
+
+    // Change/worktree sections scroll inside the flow region; the fallback
+    // panes are its siblings, docked at the bottom of the navigator.
+    expect(flow.findAllByProps({ 'data-testid': 'worktree-section' })).toHaveLength(3)
+    expect(flow.findAllByProps({ 'data-testid': 'workspace-section' })).toHaveLength(0)
+    expect(flow.findAllByProps({ 'data-testid': 'remote-section' })).toHaveLength(0)
+
+    const workspacePane = navigator.findByProps({ 'data-testid': 'workspace-section' })
+    const remotePane = navigator.findByProps({ 'data-testid': 'remote-section' })
+
+    // Default basis is 25% of the navigator height, with rows scrolling
+    // inside the pane rather than the flow region.
+    expect(workspacePane.props.style.flex).toBe('0 1 25%')
+    expect(remotePane.props.style.flex).toBe('0 1 25%')
+    expect(remotePane.props.style.minHeight).toBe(PANE_MIN_HEIGHT)
+    expect(remotePane.findByProps({ 'data-testid': 'fallback-pane-scroll' })).toBeTruthy()
+
+    // The flow region keeps a minimum height floor so short navigators
+    // shrink the panes instead of displacing the sections above.
+    expect(flow.props.style.minHeight).toBe(FLOW_REGION_MIN_HEIGHT)
+
+    act(() => renderer.unmount())
+  })
+
+  test('a stored fraction renders as the pane flex basis', () => {
+    useSettingsStore.setState({ remotePaneFraction: 0.4 })
+    const sessions = [baseSession, remoteSession]
+    const view = makeView(sessions, [], [])
+    const { renderer } = renderList({ sessions, workspaceView: view })
+
+    const remotePane = renderer.root.findByProps({ 'data-testid': 'remote-section' })
+    expect(remotePane.props.style.flex).toBe('0 1 40%')
+    expect(remotePane.props['data-pane-fraction']).toBe(0.4)
+
+    act(() => renderer.unmount())
+  })
+
+  test('a collapsed pane drops its percentage basis without touching the stored fraction', () => {
+    useSettingsStore.setState({ remotePaneFraction: 0.4 })
+    const sessions = [baseSession, remoteSession]
+    const view = makeView(sessions, [], [], { collapsed: ['fallback::remote'] })
+    const { renderer } = renderList({ sessions, workspaceView: view })
+
+    const remotePane = renderer.root.findByProps({ 'data-testid': 'remote-section' })
+    expect(remotePane.props.style.flex).toBe('0 0 auto')
+    expect(remotePane.props.style.minHeight).toBeUndefined()
+    expect(remotePane.props['data-pane-fraction']).toBeUndefined()
+    // Header only: no scrollable rows region inside the collapsed pane.
+    expect(remotePane.findAllByProps({ 'data-testid': 'fallback-pane-scroll' })).toHaveLength(0)
+    // Collapsing never writes the stored fraction; re-expanding restores it.
+    expect(useSettingsStore.getState().remotePaneFraction).toBe(0.4)
+
+    act(() => renderer.unmount())
+  })
+
+  test('a fallback section with no rows renders no pane at all', () => {
+    const view = makeView([baseSession], [], [])
+    const { renderer } = renderList({ sessions: [baseSession], workspaceView: view })
+
+    expect(renderer.root.findAllByProps({ 'data-testid': 'workspace-section' })).toHaveLength(0)
+    expect(renderer.root.findAllByProps({ 'data-testid': 'remote-section' })).toHaveLength(0)
+    // The flow region still renders and takes the full navigator height.
+    expect(
+      renderer.root.findByProps({ 'data-testid': 'workspace-flow-region' })
+    ).toBeTruthy()
+
+    act(() => renderer.unmount())
+  })
+
+  test('expanded panes carry a resize handle wired to their own fraction setter', () => {
+    const sessions = [baseSession, plainSession, remoteSession]
+    const view = makeView(sessions, [], [])
+    const { renderer } = renderList({ sessions, workspaceView: view })
+
+    const remotePane = renderer.root.findByProps({ 'data-testid': 'remote-section' })
+    const handle = remotePane.findByProps({ 'data-testid': 'pane-resize-handle' })
+    expect(handle.props['aria-label']).toBe('Resize Remote pane')
+    expect(handle.props['aria-valuenow']).toBe(25)
+
+    // Keyboard resize reaches only the Remote fraction.
+    act(() => {
+      handle.props.onKeyDown({ key: 'ArrowUp', preventDefault: () => {} })
+    })
+    expect(useSettingsStore.getState().remotePaneFraction).toBe(0.27)
+    expect(useSettingsStore.getState().workspacePaneFraction).toBe(0.25)
+
+    const workspacePane = renderer.root.findByProps({ 'data-testid': 'workspace-section' })
+    const workspaceHandle = workspacePane.findByProps({ 'data-testid': 'pane-resize-handle' })
+    expect(workspaceHandle.props['aria-label']).toBe('Resize Workspace pane')
+    act(() => {
+      workspaceHandle.props.onKeyDown({ key: 'End', preventDefault: () => {} })
+    })
+    expect(useSettingsStore.getState().workspacePaneFraction).toBe(0.6)
+    expect(useSettingsStore.getState().remotePaneFraction).toBe(0.27)
+
+    act(() => renderer.unmount())
+  })
+
+  test('a collapsed pane offers no resize handle', () => {
+    const sessions = [baseSession, plainSession, remoteSession]
+    const view = makeView(sessions, [], [], { collapsed: ['fallback::remote'] })
+    const { renderer } = renderList({ sessions, workspaceView: view })
+
+    const remotePane = renderer.root.findByProps({ 'data-testid': 'remote-section' })
+    expect(remotePane.findAllByProps({ 'data-testid': 'pane-resize-handle' })).toHaveLength(0)
+    // The expanded pane keeps its handle.
+    const workspacePane = renderer.root.findByProps({ 'data-testid': 'workspace-section' })
+    expect(workspacePane.findAllByProps({ 'data-testid': 'pane-resize-handle' })).toHaveLength(1)
 
     act(() => renderer.unmount())
   })
