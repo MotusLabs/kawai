@@ -40,7 +40,7 @@ function getHomeDir(): string {
   return process.env.HOME || process.env.USERPROFILE || ''
 }
 
-function getClaudeConfigDir(): string {
+export function getClaudeConfigDir(): string {
   const override = process.env.CLAUDE_CONFIG_DIR
   if (override && override.trim()) {
     const normalized = normalizeProjectPath(override)

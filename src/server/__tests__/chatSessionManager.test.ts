@@ -107,6 +107,15 @@ function initMessage(sessionId: string): SDKMessage {
   } as unknown as SDKMessage
 }
 
+/** Write an SDK transcript where findTranscriptPath looks for it. */
+function writeTranscript(sdkSessionId: string, content: string): string {
+  const dir = path.join(process.env.CLAUDE_CONFIG_DIR!, 'projects', '-tmp-proj')
+  fs.mkdirSync(dir, { recursive: true })
+  const filePath = path.join(dir, `${sdkSessionId}.jsonl`)
+  fs.writeFileSync(filePath, content)
+  return filePath
+}
+
 describe('ChatSessionManager', () => {
   let tempDir: string
   let db: SessionDatabase
@@ -368,7 +377,9 @@ describe('ChatSessionManager', () => {
       })
       expect(dbB.getChatSession(fresh.session.id)?.sdkSessionId).toBeNull()
 
-      // Continuing the started session resumes the stored SDK conversation.
+      // Continuing the started session resumes the stored SDK conversation
+      // (resume needs the transcript on disk — see the resume gate).
+      writeTranscript('sdk-resume-me', '[]')
       await harnessB.manager.send(startedId, 'continue')
       expect(harnessB.handles[0]!.options.resume).toBe('sdk-resume-me')
       // The fresh session starts with no resume.
@@ -392,6 +403,200 @@ describe('ChatSessionManager', () => {
       expect(all.filter((s) => s.kind === 'chat')).toHaveLength(2)
       expect(all.find((s) => s.id === 'term-1')).toBeDefined()
       dbB.close()
+    })
+  })
+
+  describe('transcript history and resume', () => {
+    const MATCHED_TRANSCRIPT = [
+      JSON.stringify({
+        type: 'user',
+        uuid: 'u1',
+        timestamp: '2026-10-04T10:00:00.000Z',
+        message: { role: 'user', content: 'hello' },
+      }),
+      JSON.stringify({
+        type: 'assistant',
+        uuid: 'a1',
+        timestamp: '2026-10-04T10:00:01.000Z',
+        message: {
+          id: 'msg_1',
+          content: [
+            {
+              type: 'tool_use',
+              id: 'call_1',
+              name: 'Bash',
+              input: { command: 'ls' },
+            },
+          ],
+        },
+      }),
+      JSON.stringify({
+        type: 'user',
+        uuid: 'u2',
+        timestamp: '2026-10-04T10:00:02.000Z',
+        message: {
+          role: 'user',
+          content: [
+            {
+              type: 'tool_result',
+              tool_use_id: 'call_1',
+              content: 'ok',
+            },
+          ],
+        },
+      }),
+      JSON.stringify({
+        type: 'assistant',
+        uuid: 'a2',
+        timestamp: '2026-10-04T10:00:03.000Z',
+        message: {
+          id: 'msg_2',
+          content: [{ type: 'text', text: 'done' }],
+        },
+      }),
+    ].join('\n')
+
+    /** A tool that died holding an approval: no tool_result was ever written. */
+    const PENDING_REQUEST_TRANSCRIPT = JSON.stringify({
+      type: 'assistant',
+      uuid: 'a1',
+      timestamp: '2026-10-04T12:00:00.000Z',
+      message: {
+        id: 'msg_1',
+        content: [
+          {
+            type: 'tool_use',
+            id: 'call_pending',
+            name: 'Bash',
+            input: { command: 'rm -rf /' },
+          },
+        ],
+      },
+    })
+
+    function seedRecord(sdkSessionId: string | null): string {
+      const sessionId = `chat-${crypto.randomUUID()}`
+      const now = new Date().toISOString()
+      db.insertChatSession({
+        sessionId,
+        name: 'seed',
+        projectPath: '/tmp/proj',
+        sdkSessionId,
+        status: 'waiting',
+        createdAt: now,
+        lastActivityAt: now,
+      })
+      return sessionId
+    }
+
+    test('getHistory replays a stored transcript into read-only events', () => {
+      process.env.ANTHROPIC_API_KEY = 'sk-test-key'
+      writeTranscript('sdk-hist', MATCHED_TRANSCRIPT)
+      const sessionId = seedRecord('sdk-hist')
+      const fresh = seedRecord(null)
+      const { manager } = createHarness(db)
+
+      const history = manager.getHistory(sessionId)
+      expect(history?.status).toBe('ok')
+      expect(history?.events.map((e) => e.type)).toEqual([
+        'user_message',
+        'tool_call',
+        'tool_result',
+        'assistant_text',
+      ])
+      for (const event of history?.events ?? []) {
+        expect(event.sequence).toBe(0)
+      }
+
+      // Never-started sessions have no SDK id and replay as empty.
+      expect(manager.getHistory(fresh)).toEqual({ status: 'ok', events: [] })
+      expect(manager.getHistory('chat-none')).toBeNull()
+    })
+
+    test('missing transcript yields a history-unavailable fallback', () => {
+      process.env.ANTHROPIC_API_KEY = 'sk-test-key'
+      const sessionId = seedRecord('sdk-vanished')
+      const { manager } = createHarness(db)
+
+      const history = manager.getHistory(sessionId)
+      expect(history?.status).toBe('missing')
+      expect(history?.events.map((e) => e.type)).toEqual(['notice'])
+      if (history?.events[0]?.type === 'notice') {
+        expect(history.events[0].text).toContain('History unavailable')
+      }
+    })
+
+    test('failed resume preserves the stored id and starts no fresh conversation', async () => {
+      process.env.ANTHROPIC_API_KEY = 'sk-test-key'
+      const dbPath = path.join(tempDir, 'resume-fail.db')
+      const dbA = initDatabase({ path: dbPath })
+      const harnessA = createHarness(dbA)
+      const created = harnessA.manager.createSession({ projectPath: '/tmp/proj' })
+      if (!created.ok) throw new Error('create failed')
+      const sessionId = created.session.id
+      await harnessA.manager.send(sessionId, 'one')
+      harnessA.handles[0]!.push(initMessage('sdk-ghost'))
+      await flush()
+      expect(dbA.getChatSession(sessionId)?.sdkSessionId).toBe('sdk-ghost')
+      dbA.close()
+
+      // Restart with no transcript on disk for the stored SDK id.
+      const dbB = initDatabase({ path: dbPath })
+      const harnessB = createHarness(dbB)
+      const result = await harnessB.manager.send(sessionId, 'continue')
+      expect(result.ok).toBe(false)
+      if (!result.ok) {
+        expect(result.error).toContain('transcript')
+        expect(result.error).toContain('sdk-ghost')
+      }
+      // Nothing spawned: the message must not reach a fresh conversation.
+      expect(harnessB.handles).toHaveLength(0)
+      // The row and its SDK id survive so a restored transcript can resume.
+      expect(dbB.getChatSession(sessionId)?.sdkSessionId).toBe('sdk-ghost')
+      expect(harnessB.manager.getHistory(sessionId)?.status).toBe('missing')
+
+      // Restoring the transcript makes the same id resume again.
+      writeTranscript('sdk-ghost', MATCHED_TRANSCRIPT)
+      await harnessB.manager.send(sessionId, 'continue')
+      expect(harnessB.handles[0]!.options.resume).toBe('sdk-ghost')
+      dbB.close()
+    })
+
+    test('parser failure with an existing transcript still permits resume', async () => {
+      process.env.ANTHROPIC_API_KEY = 'sk-test-key'
+      writeTranscript('sdk-ugly', 'not json\n{still not json')
+      const sessionId = seedRecord('sdk-ugly')
+      const { manager, handles } = createHarness(db)
+
+      expect(manager.getHistory(sessionId)?.status).toBe('unparseable')
+
+      // The SDK reads the file itself: an unparseable-but-present transcript
+      // must not block resume the way a missing one does.
+      const result = await manager.send(sessionId, 'keep going')
+      expect(result.ok).toBe(true)
+      expect(handles[0]!.options.resume).toBe('sdk-ugly')
+    })
+
+    test('restart cancellation of pending requests shows in restored history', () => {
+      process.env.ANTHROPIC_API_KEY = 'sk-test-key'
+      writeTranscript('sdk-pending', PENDING_REQUEST_TRANSCRIPT)
+      const sessionId = seedRecord('sdk-pending')
+      const { manager } = createHarness(db)
+
+      // Restored session, no live driver: the dead request is reconstructed
+      // and immediately marked cancelled (design D7).
+      const history = manager.getHistory(sessionId)
+      expect(history?.events.map((e) => e.type)).toEqual([
+        'tool_call',
+        'approval_request',
+        'request_resolved',
+      ])
+      expect(history?.events[1]).toMatchObject({ requestId: 'call_pending' })
+      expect(history?.events[2]).toMatchObject({
+        requestId: 'call_pending',
+        outcome: 'cancelled',
+      })
+      expect(manager.getPendingRequests(sessionId)).toEqual([])
     })
   })
 })

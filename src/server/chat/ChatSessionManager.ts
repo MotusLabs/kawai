@@ -18,6 +18,11 @@ import type { ChatSessionRecord, SessionDatabase } from '../db'
 import { generateSessionName } from '../nameGenerator'
 import type { SessionRegistry } from '../SessionRegistry'
 import { ChatSessionDriver, type ChatQueryFactory } from './ChatSessionDriver'
+import {
+  findTranscriptPath,
+  replayTranscriptFile,
+  type TranscriptReplay,
+} from './transcriptReplay'
 
 export type { ChatQueryFactory }
 
@@ -128,11 +133,47 @@ export class ChatSessionManager {
   }
 
   /**
+   * Read-only history for a chat session: the stored SDK transcript replayed
+   * into ChatEvents (with dead requests marked cancelled), or a
+   * "history unavailable" notice. Sessions that never started have no SDK id
+   * and replay as empty. Unknown sessions return null.
+   */
+  getHistory(sessionId: string): TranscriptReplay | null {
+    const record = this.records.get(sessionId)
+    if (!record) return null
+    if (!record.sdkSessionId) {
+      return { status: 'ok', events: [] }
+    }
+    return replayTranscriptFile(findTranscriptPath(record.sdkSessionId), {
+      excludeToolCallIds: this.liveToolCallIds(sessionId),
+    })
+  }
+
+  /**
    * Submit a user turn. The driver (and behind it the SDK subprocess) is
    * created lazily here — the first turn pays the spawn cost, creation never
-   * blocks on process startup.
+   * blocks on process startup. A stored SDK id whose transcript is missing
+   * refuses the turn rather than silently starting a fresh conversation
+   * (design D5): the id is kept so a restored transcript can still resume.
    */
   async send(sessionId: string, text: string): Promise<ChatActionResult> {
+    const record = this.records.get(sessionId)
+    if (!record) {
+      return { ok: false, error: `Unknown chat session ${sessionId}` }
+    }
+    if (
+      record.sdkSessionId &&
+      !this.drivers.has(sessionId) &&
+      !this.driverPromises.has(sessionId) &&
+      !findTranscriptPath(record.sdkSessionId)
+    ) {
+      return {
+        ok: false,
+        error:
+          'Cannot resume this conversation: the agent transcript is missing. ' +
+          `Restore ${record.sdkSessionId}.jsonl or create a new chat session.`,
+      }
+    }
     let driver: ChatSessionDriver | null
     try {
       driver = await this.ensureDriver(sessionId)
@@ -238,6 +279,16 @@ export class ChatSessionManager {
   }
 
   // ---------------------------------------------------------------- internals
+
+  /**
+   * Tool call ids a live (non-dead) driver has seen. Transcript replay must
+   * not mark those as cancelled — the live stream still owns their outcome.
+   */
+  private liveToolCallIds(sessionId: string): Set<string> {
+    const driver = this.drivers.get(sessionId)
+    if (!driver || driver.isDead) return new Set()
+    return driver.getSeenToolCallIds()
+  }
 
   /** Load chat_sessions rows into the registry as idle chat sessions. */
   private restorePersisted(): void {

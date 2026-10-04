@@ -24,6 +24,11 @@ import type {
   ChatQuestionAnswer,
 } from '../../shared/chat'
 import type { SessionStatus } from '../../shared/types'
+import {
+  ASK_USER_QUESTION_TOOL,
+  parseQuestions,
+  toolResultText,
+} from './contentBlocks'
 import { TurnQueue } from './TurnQueue'
 
 /** The SDK `query()` — injected so tests run against a fake. */
@@ -65,8 +70,6 @@ type DistributiveOmit<T, K extends PropertyKey> = T extends unknown
   : never
 type ChatEventDraft = DistributiveOmit<ChatEvent, 'id' | 'sequence' | 'at'>
 
-const ASK_USER_QUESTION_TOOL = 'AskUserQuestion'
-
 export class ChatSessionDriver {
   private readonly options: ChatSessionDriverOptions
   private readonly queue = new TurnQueue()
@@ -75,6 +78,8 @@ export class ChatSessionDriver {
   private turnCounter = 0
   private activeTurnId: string | null = null
   private readonly pendingRequests = new Map<string, PendingRequest>()
+  /** Tool use ids this live stream has seen (call or result). */
+  private readonly seenToolCallIds = new Set<string>()
   /** Echo suppression: texts we submitted that the SDK may echo back. */
   private readonly sentEchoTexts = new Map<string, number>()
   private capturedSdkSessionId: string | undefined
@@ -243,6 +248,14 @@ export class ChatSessionDriver {
     )
   }
 
+  /**
+   * Tool use ids this live stream has produced events for. Transcript replay
+   * uses it to avoid marking in-flight tools as dead requests.
+   */
+  getSeenToolCallIds(): Set<string> {
+    return new Set(this.seenToolCallIds)
+  }
+
   // ---------------------------------------------------------------- internals
 
   private spawnQuery(): void {
@@ -330,6 +343,7 @@ export class ChatSessionDriver {
           text: block.text,
         })
       } else if (block.type === 'tool_use') {
+        this.seenToolCallIds.add(block.id)
         this.emit({
           type: 'tool_call',
           turnId,
@@ -366,6 +380,7 @@ export class ChatSessionDriver {
     }
     for (const block of content) {
       if (block.type === 'tool_result') {
+        this.seenToolCallIds.add(block.tool_use_id)
         this.emit({
           type: 'tool_result',
           turnId,
@@ -535,59 +550,6 @@ export class ChatSessionDriver {
     } as ChatEvent
     this.options.onEvent(event)
   }
-}
-
-function toolResultText(content: unknown): string {
-  if (typeof content === 'string') return content
-  if (Array.isArray(content)) {
-    return content
-      .map((block) =>
-        block && typeof block === 'object' && 'text' in block
-          ? String((block as { text?: string }).text ?? '')
-          : ''
-      )
-      .join('')
-  }
-  return ''
-}
-
-function parseQuestions(input: Record<string, unknown>): ChatQuestion[] | null {
-  const raw = input.questions
-  if (!Array.isArray(raw) || raw.length === 0) return null
-  const questions: ChatQuestion[] = []
-  for (const entry of raw) {
-    if (!entry || typeof entry !== 'object') return null
-    const q = entry as {
-      question?: unknown
-      header?: unknown
-      multiSelect?: unknown
-      options?: unknown
-    }
-    if (typeof q.question !== 'string' || typeof q.header !== 'string') return null
-    if (!Array.isArray(q.options)) return null
-    const options = q.options
-      .filter(
-        (option): option is { label: string; description?: string; preview?: string } =>
-          !!option &&
-          typeof option === 'object' &&
-          typeof (option as { label?: unknown }).label === 'string'
-      )
-      .map((option) => ({
-        label: option.label,
-        ...(option.description !== undefined
-          ? { description: option.description }
-          : {}),
-        ...(option.preview !== undefined ? { preview: option.preview } : {}),
-      }))
-    if (options.length === 0) return null
-    questions.push({
-      question: q.question,
-      header: q.header,
-      multiSelect: q.multiSelect === true,
-      options,
-    })
-  }
-  return questions
 }
 
 function validateAnswers(

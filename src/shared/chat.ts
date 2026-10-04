@@ -5,10 +5,12 @@
 
 /**
  * Base shape of every conversation event. `id` is stable and unique
- * (clients suppress duplicates by id); `sequence` is assigned by the server
- * per session and increases monotonically, so a reconnecting client can
- * order snapshot history before buffered live events and skip anything it
- * has already seen. `turnId` correlates the events of one user turn.
+ * (clients suppress duplicates by id). Live events carry `sequence >= 1`,
+ * assigned by the server per session and increasing monotonically, so a
+ * reconnecting client can skip anything it has already seen; replayed
+ * history events carry `sequence: 0` — their order is the snapshot array
+ * order and they are deduped by id alone. `turnId` correlates the events of
+ * one user turn.
  */
 export interface ChatEventBase {
   id: string
