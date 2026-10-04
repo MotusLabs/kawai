@@ -80,8 +80,8 @@ persisted immediately. User messages pushed mid-turn queue into the stream and
 surface as user messages inside the running turn.
 
 Option parity with a terminal `claude` session in the project directory —
-the inverse of the demo's choices, which are demo-scoped: no custom
-`systemPrompt` (keep the Claude Code preset), no `allowedTools` restriction,
+the inverse of the demo's choices, which are demo-scoped: `systemPrompt: { type: "preset", preset: "claude_code" }`
+explicitly selects the Claude Code preset (omitting it uses the SDK minimal prompt), no `allowedTools` restriction,
 `settingSources: ["user", "project", "local"]` so CLAUDE.md/skills/config
 load, `permissionMode: "default"` (the documented mode for interactive apps
 with a `canUseTool` callback; absent callback means deny, so ours is always
@@ -89,11 +89,13 @@ provided), and `model`/`maxTurns`/`maxBudgetUsd` left unset for parity
 (configurability is a follow-up).
 
 ### D3: Wire protocol — additive chat messages, batched events
-New client messages: `chat-send {sessionId, text}`, `chat-interrupt
+Extend `session-create` with optional `kind` (absent = terminal).
+New client messages: `chat-attach {sessionId}`, `chat-detach {sessionId}`,
+`chat-answer {sessionId, requestId, answers}`, `chat-send {sessionId, text}`, `chat-interrupt
 {sessionId}`, `chat-approval {sessionId, requestId, decision}`. New server
 message: `chat-events {sessionId, events: ChatEvent[]}` — an ordered batch of
 typed events (`turn_started`, `user_message`, `assistant_text`,
-`assistant_delta`, `tool_call`, `tool_result`, `approval_request`,
+`assistant_delta`, `tool_call`, `tool_result`, `approval_request`, `question_request`, `request_resolved`,
 `turn_completed`, `turn_interrupted`, `notice`, `error`). Lifecycle continues
 to flow through the existing `session-created` / `session-update` /
 `session-removed` messages. Event mapping follows the SDK's shapes: each SDK
@@ -108,10 +110,25 @@ the `outputCoalescer` idea, much smaller cap) so token streaming doesn't
 flood the client. `ChatEvent` lives in a new `src/shared/chat.ts` rather than
 growing `types.ts`.
 
+Each event has a stable event id and message/tool correlation ids; live events
+also have a monotonically increasing per-session sequence. `chat-attach`
+subscribes the connection and returns `chat-snapshot {sessionId, events,
+pendingRequests, status, throughSequence}` before buffered live events newer
+than that sequence. Snapshot capture and subscription form one serialized
+boundary in the manager; live events generated during history loading are
+buffered. The snapshot replaces client state, includes unfinished live text
+and all currently pending approvals/questions, and replayed history is read-only.
+The client ignores repeated event ids/sequences and reconciles final assistant
+text with streamed deltas rather than appending it twice. `chat-detach` removes
+the subscription without stopping the agent. These rules apply to reloads and
+multiple browsers; only subscribed clients receive conversation content.
+
 ### D4: Status derived in the driver, applied via the registry
-Driver maps events to status (`turn_started` → working,
-`approval_request` → permission, every turn end — completion, interruption,
-or per-turn error result — → waiting) and calls `registry.updateSession`
+Driver derives status from state: any pending approval/question → permission;
+otherwise an in-flight turn → working; otherwise → waiting. Resolving a
+request recomputes status immediately, remaining in permission if another
+request is pending. Turn completion, interruption, and per-turn error results
+clear turn state. The driver calls `registry.updateSession`
 immediately — matching the existing immediate-working-on-Enter semantics
 exempt from the 30s bucket cadence. Per D2, per-turn error results do not end
 a streaming session, so they return the session to waiting (with an `error`/
@@ -126,8 +143,14 @@ pattern in `db.ts`. On restart, rows are loaded into the registry as idle chat
 sessions; the first `chat-send` resumes the SDK conversation. History replay
 parses the SDK transcript JSONL for that `sdkSessionId` into read-only
 `ChatEvent`s on attach. Fallback if the transcript is missing/unparseable:
-render an empty transcript with a "history unavailable" notice — resume still
-works because it only needs the session id. We do not duplicate conversation
+render a "history unavailable" notice and preserve any live state. A parser
+failure with an existing SDK-readable transcript may still permit resume; a
+missing transcript cannot be resumed using an id alone. Before resume, validate
+availability and handle SDK resume failures with a session-scoped actionable
+error, keeping the row and id intact and sending no message to a fresh session.
+Recovery is to restore the transcript and retry, or explicitly create a new
+chat session. Never silently replace the conversation. Sessions created but
+never started have no SDK id and start a fresh conversation normally. We do not duplicate conversation
 content into our own DB.
 
 ### D6: Discovery dedup — exclude chat transcripts
@@ -135,20 +158,34 @@ Log discovery/agent-session matching skips transcript files whose session id
 belongs to a live or stored chat session (the driver manager exposes the set
 of `sdkSessionId`s). One chat session, one UI entry.
 
-### D7: Approvals — promise bridge over `canUseTool`
+### D7: Approvals and questions — cancellable promise bridge over `canUseTool`
 `canUseTool` resolves a promise stored under `requestId`; the WS
 `chat-approval` message resolves it (`allow` → `{behavior:'allow'}` with
-unchanged input; `deny` → `{behavior:'deny', message}`), and killing a session
-rejects all pending approvals as denials so the SDK loop always unblocks. The
-approval card shows tool name + summarized arguments (full JSON behind a
+unchanged input; `deny` → `{behavior:'deny', message}`), and each callback's `options.signal` cancels its pending request. Stop clears
+queued unsent messages and cancels all pending requests for the interrupted
+turn before returning to waiting; kill/shutdown also settle all outstanding
+callbacks and stop the subprocess. Resolution/cancellation is idempotent,
+removes the request, and broadcasts `request_resolved` with its outcome to
+all subscribers. Late or duplicate answers cannot execute a tool twice; the
+first valid answer wins and stale responses receive a session-scoped error.
+Pending requests survive browser disconnects, but callbacks cannot survive a
+server restart: restored history marks them cancelled, and any new request
+on resume gets a new id. The approval card shows tool name + summarized arguments (full JSON behind a
 disclosure).
+
+`AskUserQuestion` is handled separately: emit `question_request` with question
+text, options, and multi-select flags; render choices and free-text answers;
+validate `chat-answer` against the pending questions and return
+`{behavior: 'allow', updatedInput: {...input, answers}}` in the pinned SDK's
+expected shape. Its cancellation, replay, and multi-client rules match tool
+approvals. Ordinary Allow/Deny cards do not answer questions.
 
 ### D8: Client — chat view + store slice, terminal untouched
 `NewSessionModal` gains a session-kind selector; chat kind hides command
 presets and host picker (local only). `App.tsx` renders `ChatView`
 (`src/client/components/chat/`) instead of `Terminal` when the active session
 is a chat session: message list (markdown via the existing `react-markdown`
-stack), tool activity entries, approval cards, composer, stop button. A new
+stack), tool activity entries, approval cards, question forms, composer, stop button. A new
 `chatStore` holds per-session transcripts and pending approvals, fed from
 `chat-events`; it replays from the server's history response on attach.
 
@@ -172,7 +209,7 @@ disables creation with an actionable error rather than degrading mid-session.
   streaming, and resume are doc-verified but not demo-exercised] → task 5.2's
   real-SDK walkthrough validates each before the change ships.
 - [`canUseTool` never times out] → approvals persist by design (spec);
-  kill/reject-all-on-kill guarantees no stuck SDK loops.
+  SDK cancellation signals plus stop/kill/shutdown settlement prevent stuck callbacks.
 - [Transcript JSONL is not a public contract] → parser is best-effort with
   graceful fallback (D5); unknown lines ignored.
 - [One resident subprocess per chat session] → acceptable at current scale

@@ -40,6 +40,14 @@ existing chat session SHALL receive the session's prior conversation.
 - **WHEN** the user submits a message in the chat view
 - **THEN** the user turn appears in the transcript, assistant text and tool activity stream in as they are produced, and the turn ends with a completion event
 
+#### Scenario: Reconnect during a turn or pending request
+- **WHEN** a client reconnects while output streams or an approval/question is pending
+- **THEN** it receives a snapshot containing history, unfinished output, current status, and pending requests before subsequent live events, without lost or duplicated content
+
+#### Scenario: Multiple clients answer the same request
+- **WHEN** two clients answer the same pending request
+- **THEN** only the first valid answer takes effect and all attached clients remove the resolved request
+
 #### Scenario: Reconnect replays prior conversation
 - **WHEN** a client attaches to a chat session that already has history (including after a page reload)
 - **THEN** the prior conversation is displayed before any new live events arrive
@@ -49,8 +57,11 @@ When the agent requests a tool use that requires approval, the system SHALL
 present an approval card in the chat view showing the tool and its
 arguments, and SHALL hold the agent until the user answers. Allowing SHALL
 let the tool run; denying SHALL return the denial to the agent so the turn
-continues. A pending approval SHALL persist until answered or the session is
-killed.
+continues. A pending approval SHALL survive browser disconnects until answered, cancelled
+by the SDK, interrupted, or killed. Server restart SHALL cancel outstanding
+requests rather than restore callbacks that no longer exist. Resolution and
+cancellation SHALL update every attached client; only the first valid answer
+SHALL take effect.
 
 #### Scenario: Approval card with allow and deny
 - **WHEN** the agent requests a tool use that requires approval
@@ -64,10 +75,28 @@ killed.
 - **WHEN** the user chooses Deny on a pending approval card
 - **THEN** the tool use is not executed, the denial is reported to the agent, and the turn continues
 
+### Requirement: Agent questions collect structured user answers
+The system SHALL handle SDK `AskUserQuestion` requests with question forms
+supporting offered options, multiple selections where requested, and free-text
+answers. Validated answers SHALL be returned as updated tool input. Questions
+SHALL follow the same reconnect, cancellation, and first-answer rules as approvals.
+
+#### Scenario: User answers an agent question
+- **WHEN** the agent requests user input through `AskUserQuestion`
+- **THEN** the chat view displays the questions and the user's submitted answers are returned to the agent so it can continue
+
 ### Requirement: Users can interrupt an in-flight turn
 The system SHALL let the user interrupt a chat session's in-flight turn.
 After an interrupt, output produced so far SHALL remain in the transcript
 and the session SHALL return to an idle state.
+
+#### Scenario: Stop cancels pending requests
+- **WHEN** the user activates stop while an approval or question is pending
+- **THEN** outstanding callbacks settle, queued unsent messages are discarded, all clients remove cancelled requests, and the session becomes waiting
+
+#### Scenario: Approval resolution updates status
+- **WHEN** a pending request is resolved
+- **THEN** status remains permission while another request is pending, becomes working if the turn continues with none pending, and becomes waiting when idle
 
 #### Scenario: Stop button aborts a working turn
 - **WHEN** the user activates stop while a turn is streaming
@@ -93,13 +122,21 @@ mechanism.
 - **THEN** the session is reported as waiting in the session list
 
 ### Requirement: Chat sessions persist across server restarts
-The system SHALL keep a chat session usable across server restarts: after a
+When its SDK transcript remains available, the system SHALL keep a chat session usable across server restarts: after a
 restart the session SHALL be listed with its prior conversation, and the
 next user message SHALL continue the same underlying agent conversation.
 
 #### Scenario: Restart continues the conversation
 - **WHEN** the server restarts while a chat session exists and the user then sends a message
 - **THEN** the message continues the same conversation, with prior history intact
+
+#### Scenario: Resume history is unavailable
+- **WHEN** a stored SDK session transcript is missing or the SDK cannot resume it
+- **THEN** the stored session and SDK id remain intact, the user receives an actionable error to restore the transcript or explicitly create a new session, and no fresh conversation is started implicitly
+
+#### Scenario: Restart while a request is pending
+- **WHEN** the server restarts with an unanswered approval or question
+- **THEN** the previous request is marked cancelled and any request produced on resume has a new request id
 
 #### Scenario: Kill removes the session
 - **WHEN** the user kills a chat session

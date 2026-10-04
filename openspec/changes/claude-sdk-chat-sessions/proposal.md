@@ -22,13 +22,16 @@ browser.
   WebSocket, handles approvals via `canUseTool`, supports interrupt and resume
   by SDK session id.
 - Client: a chat view (message list with markdown, tool-call summaries,
-  approval cards with Allow/Deny, composer, stop button) replaces the xterm
+  approval cards with Allow/Deny, agent question forms, composer, stop button) replaces the xterm
   pane for chat sessions.
 - Status for chat sessions is derived directly from SDK events
   (working / waiting / permission) instead of log polling; chat sessions
   appear in the existing session list, sorting, and activity cadence.
-- Chat sessions persist across server restarts (SDK session transcripts are
-  resumable) and are killable like any session.
+- Chat sessions persist across server restarts when SDK transcripts remain
+  available; missing transcripts produce an explicit recovery error rather
+  than silently starting a new conversation. Sessions are killable like any session.
+- Reconnect uses an ordered history/live snapshot with pending approvals and
+  questions; request resolution and cancellation synchronize all browsers.
 - New dependency: `@anthropic-ai/claude-agent-sdk`; auth via
   `ANTHROPIC_API_KEY` (or the CLI's existing login under `CLAUDE_CONFIG_DIR`).
 - Non-goal (for this change): Codex/other agent drivers. The driver boundary
