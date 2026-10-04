@@ -12,7 +12,7 @@
 - [x] 2.2 Derive status in the driver (pending approval/question→permission, otherwise in-flight turn→working, otherwise→waiting) and apply it via `registry.updateSession` immediately; verify unit tests assert each transition including approval resolution with zero/one/multiple pending requests and that updates bypass the 30s bucket suppression like the Enter path does
 - [x] 2.3 Implement `ChatSessionManager`: create with the auth gate (refuse with actionable error when neither `ANTHROPIC_API_KEY` nor CLI credentials exist), lazy SDK spawn on first turn, kill (abort + deny pending approvals + cleanup), and persistence via a new `chat_sessions` table in `db.ts` with load-on-start into the registry; capture the `sdkSessionId` from the init message at first-turn start and persist it immediately; verify unit tests with a temp database cover create/kill/restart-restore and the auth refusal
 - [x] 2.4 Add transcript replay: parse the SDK transcript JSONL for a stored `sdkSessionId` into read-only `ChatEvent`s on attach, with a "history unavailable" fallback when missing/unparseable; verify unit tests cover a fixture transcript, an unknown line, a missing file, parser failure with an existing transcript, failed SDK resume preserving the stored id, and restart cancellation of pending requests
-- [ ] 2.5 Exclude chat-session transcript files (by `sdkSessionId`) from log discovery / agent-session matching; verify a unit test asserts a chat transcript produces no extra active/external session
+- [x] 2.5 Exclude chat-session transcript files (by `sdkSessionId`) from log discovery / agent-session matching; verify a unit test asserts a chat transcript produces no extra active/external session
 
 ## 3. Server: WebSocket wiring
 

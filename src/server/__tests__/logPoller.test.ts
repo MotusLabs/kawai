@@ -612,6 +612,59 @@ describe('LogPoller', () => {
     db.close()
   })
 
+  test('a chat transcript produces no extra active/external session', async () => {
+    const tokens = Array.from({ length: 60 }, (_, i) => `token${i}`).join(' ')
+    setTmuxOutput(baseSession.tmuxWindow, buildLastExchangeOutput(tokens))
+    const projectPath = baseSession.projectPath
+    const logDir = path.join(
+      process.env.CLAUDE_CONFIG_DIR ?? '',
+      'projects',
+      encodeProjectPath(projectPath)
+    )
+    await fs.mkdir(logDir, { recursive: true })
+    // A chat session's SDK transcript looks exactly like any other Claude log.
+    const logPath = path.join(logDir, 'sdk-chat-1.jsonl')
+    await fs.writeFile(
+      logPath,
+      `${buildUserLogEntry(tokens, {
+        sessionId: 'sdk-chat-1',
+        cwd: projectPath,
+      })}\n${JSON.stringify({
+        type: 'assistant',
+        message: { content: [{ type: 'text', text: tokens }] },
+      })}\n`
+    )
+
+    // With the chat SDK id excluded, discovery must not create any session
+    // row for it — not active, not an orphan/external one.
+    const db = initDatabase({ path: ':memory:' })
+    const registry = new SessionRegistry()
+    registry.replaceSessions([baseSession])
+    const poller = new LogPoller(db, registry, {
+      matchWorkerClient: new InlineMatchWorkerClient(),
+      getChatSdkSessionIds: () => new Set(['sdk-chat-1']),
+    })
+    const stats = await poller.pollOnce()
+    expect(stats.newSessions).toBe(0)
+    expect(db.getActiveSessions()).toHaveLength(0)
+    expect(db.getSessionByLogPath(logPath)).toBeNull()
+    expect(db.getSessionById('sdk-chat-1')).toBeNull()
+    db.close()
+
+    // Without the exclusion the same transcript is discovered like any log —
+    // proving the file is discoverable and only the id set keeps it out.
+    const db2 = initDatabase({ path: ':memory:' })
+    const registry2 = new SessionRegistry()
+    registry2.replaceSessions([baseSession])
+    const leaky = new LogPoller(db2, registry2, {
+      matchWorkerClient: new InlineMatchWorkerClient(),
+    })
+    const leakyStats = await leaky.pollOnce()
+    expect(leakyStats.newSessions).toBe(1)
+    expect(db2.getSessionById('sdk-chat-1')?.logFilePath).toBe(logPath)
+    db2.close()
+  })
+
   test('does not orphan-rematch hibernating sessions', async () => {
     const db = initDatabase({ path: ':memory:' })
     const registry = new SessionRegistry()

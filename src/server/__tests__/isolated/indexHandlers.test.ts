@@ -357,6 +357,7 @@ mock.module('../../logger', () => ({
 }))
 mock.module('../../db', () => ({
   initDatabase: () => ({
+    getChatSessions: () => [],
     getSessionById: (sessionId: string) => dbState.records.get(sessionId) ?? null,
     getSessionByLogPath: (logFilePath: string) =>
       Array.from(dbState.records.values()).find(

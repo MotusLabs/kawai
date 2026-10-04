@@ -38,6 +38,11 @@ export interface MatchWorkerRequest {
   sessions: SessionSnapshot[]
   /** Known sessions to skip expensive file reads during log collection */
   knownSessions?: KnownSession[]
+  /**
+   * Chat-session SDK ids whose transcripts must not enter discovery/agent
+   * matching (design D6). Sent as an array so it crosses the worker boundary.
+   */
+  excludeSessionIds?: string[]
   scrollbackLines: number
   minTokensForMatch?: number
   forceOrphanRematch?: boolean

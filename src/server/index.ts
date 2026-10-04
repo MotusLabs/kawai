@@ -20,6 +20,7 @@ import {
 } from './db'
 import { LogPoller } from './logPoller'
 import { toAgentSession } from './agentSessions'
+import { ChatSessionManager } from './chat/ChatSessionManager'
 import { getLogSearchDirs } from './logDiscovery'
 import {
   DEFAULT_SCROLLBACK_LINES,
@@ -778,6 +779,16 @@ if (remotePoller) {
 const lastUserMessageLocks = new Map<string, number>()
 const LAST_USER_MESSAGE_LOCK_MS = 60_000 // 60 seconds
 
+// SDK-driven chat sessions own their transcripts; log discovery must not
+// surface those files as extra sessions (design D6).
+const chatSessionManager = new ChatSessionManager({
+  registry,
+  db,
+  // Live conversation events are broadcast when the chat WebSocket wiring
+  // lands; creation is not exposed yet, so nothing can emit them.
+  onEvent: () => {},
+})
+
 const logPoller = new LogPoller(db, registry, {
   onSessionOrphaned: (sessionId, supersededBy) => {
     updateDormantAgentSessions()
@@ -806,6 +817,7 @@ const logPoller = new LogPoller(db, registry, {
   rgThreads: config.rgThreads,
   matchProfile: config.logMatchProfile,
   matchWorker: config.logMatchWorker,
+  getChatSdkSessionIds: () => chatSessionManager.getSdkSessionIds(),
 })
 const sessionRefreshWorker = new SessionRefreshWorkerClient()
 const lastUserMessageWorker = new SessionRefreshWorkerClient()
@@ -2198,6 +2210,7 @@ async function cleanupAllTerminals() {
   workspaceWatcherInstance.stop()
   logPoller.stop()
   remotePoller?.stop()
+  chatSessionManager.shutdown()
   db.close()
 }
 

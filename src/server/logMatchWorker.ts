@@ -52,6 +52,7 @@ export function handleMatchWorkerRequest(
     const search = payload.search ?? {}
     const logDirs = payload.logDirs ?? getLogSearchDirs()
     const normalizedLogDirs = logDirs.map((logDir) => path.resolve(logDir))
+    const excludeSessionIds = new Set(payload.excludeSessionIds ?? [])
     let entries: LogEntrySnapshot[]
     let scanMs = 0
     let sortMs = 0
@@ -68,10 +69,15 @@ export function handleMatchWorkerRequest(
         })
       })
 
-      entries = collectLogEntriesForPaths(validPaths, payload.knownSessions ?? [])
+      entries = collectLogEntriesForPaths(
+        validPaths,
+        payload.knownSessions ?? [],
+        excludeSessionIds
+      )
     } else {
       const batch = collectLogEntryBatch(payload.maxLogsPerPoll, {
         knownSessions: payload.knownSessions,
+        excludeSessionIds,
       })
       entries = batch.entries
       scanMs = batch.scanMs

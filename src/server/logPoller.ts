@@ -187,6 +187,8 @@ export class LogPoller {
   private rgThreads?: number
   private startupReconciliationDelayMs: number
   private matchWorker: MatchWorkerClient | null
+  /** Chat SDK session ids to keep out of discovery (design D6). */
+  private getChatSdkSessionIds?: () => Set<string>
   private pollInFlight = false
   private pendingChangedPaths = new Set<string>()
   private orphanRematchPending = true
@@ -213,6 +215,7 @@ export class LogPoller {
       matchWorker,
       matchWorkerClient,
       startupReconciliationDelayMs,
+      getChatSdkSessionIds,
     }: {
       onSessionOrphaned?: (sessionId: string, supersededBy?: string) => void
       onSessionActivated?: (sessionId: string, window: string) => void
@@ -224,6 +227,7 @@ export class LogPoller {
       matchWorker?: boolean
       matchWorkerClient?: MatchWorkerClient
       startupReconciliationDelayMs?: number
+      getChatSdkSessionIds?: () => Set<string>
     } = {}
   ) {
     this.db = db
@@ -232,6 +236,7 @@ export class LogPoller {
     this.onSessionActivated = onSessionActivated
     this.onOrphanSessionsDiscovered = onOrphanSessionsDiscovered
     this.isLastUserMessageLocked = isLastUserMessageLocked
+    this.getChatSdkSessionIds = getChatSdkSessionIds
     const limit = maxLogsPerPoll ?? DEFAULT_MAX_LOGS
     this.maxLogsPerPoll = Math.max(1, limit)
     this.matchProfile = matchProfile ?? false
@@ -435,6 +440,7 @@ export class LogPoller {
           maxLogsPerPoll: 1, // We only care about orphan matching, not batch scanning
           sessions,
           knownSessions: [],
+          excludeSessionIds: this.chatExcludeSessionIds(),
           scrollbackLines: DEFAULT_SCROLLBACK_LINES,
           minTokensForMatch: MIN_LOG_TOKENS_FOR_INSERT,
           forceOrphanRematch: true,
@@ -653,6 +659,7 @@ export class LogPoller {
         maxLogsPerPoll: this.maxLogsPerPoll,
         sessions,
         knownSessions,
+        excludeSessionIds: this.chatExcludeSessionIds(),
         scrollbackLines: DEFAULT_SCROLLBACK_LINES,
         minTokensForMatch: MIN_LOG_TOKENS_FOR_INSERT,
         forceOrphanRematch: false,
@@ -1034,6 +1041,11 @@ export class LogPoller {
     }
   }
 
+  /** Chat SDK session ids to exclude from discovery (design D6). */
+  private chatExcludeSessionIds(): string[] {
+    return Array.from(this.getChatSdkSessionIds?.() ?? [])
+  }
+
   async pollOnce(): Promise<PollStats> {
     if (this.pollInFlight) {
       return {
@@ -1126,6 +1138,7 @@ export class LogPoller {
               : this.maxLogsPerPoll,
             sessions,
             knownSessions,
+            excludeSessionIds: this.chatExcludeSessionIds(),
             scrollbackLines: DEFAULT_SCROLLBACK_LINES,
             minTokensForMatch: MIN_LOG_TOKENS_FOR_INSERT,
             forceOrphanRematch: false,

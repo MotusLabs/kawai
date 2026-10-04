@@ -46,6 +46,11 @@ export interface KnownSession {
 export interface CollectLogEntryBatchOptions {
   /** Known sessions to skip enrichment for (avoids re-reading file contents) */
   knownSessions?: KnownSession[]
+  /**
+   * Chat-session SDK ids (design D6): their transcripts are not discovery
+   * material — one chat session, one UI entry.
+   */
+  excludeSessionIds?: Set<string>
 }
 
 // Shared per-file enrichment used by full scans and pre-filtered path batches.
@@ -112,7 +117,7 @@ export function collectLogEntryBatch(
   maxLogs: number,
   options: CollectLogEntryBatchOptions = {}
 ): LogEntryBatch {
-  const { knownSessions = [] } = options
+  const { knownSessions = [], excludeSessionIds } = options
   const knownByPath = new Map(
     knownSessions.map((s) => [s.logFilePath, s])
   )
@@ -144,22 +149,25 @@ export function collectLogEntryBatch(
   const limited = timeEntries.slice(0, Math.max(1, maxLogs))
   const sortMs = performance.now() - sortStart
 
-  const entries = limited.map((entry) =>
-    enrichLogEntry(
-      entry.logPath,
-      entry.mtime,
-      entry.birthtime,
-      entry.size,
-      knownByPath
+  const entries = limited
+    .map((entry) =>
+      enrichLogEntry(
+        entry.logPath,
+        entry.mtime,
+        entry.birthtime,
+        entry.size,
+        knownByPath
+      )
     )
-  )
+    .filter((entry) => !isExcludedChatLog(entry, excludeSessionIds))
 
   return { entries, scanMs, sortMs }
 }
 
 export function collectLogEntriesForPaths(
   logPaths: string[],
-  knownSessions: KnownSession[] = []
+  knownSessions: KnownSession[] = [],
+  excludeSessionIds?: Set<string>
 ): LogEntrySnapshot[] {
   const knownByPath = new Map(
     knownSessions.map((session) => [session.logFilePath, session])
@@ -169,16 +177,26 @@ export function collectLogEntriesForPaths(
   for (const logPath of new Set(logPaths)) {
     const times = getLogTimes(logPath)
     if (!times) continue
-    entries.push(
-      enrichLogEntry(
-        logPath,
-        times.mtime.getTime(),
-        times.birthtime.getTime(),
-        times.size,
-        knownByPath
-      )
+    const entry = enrichLogEntry(
+      logPath,
+      times.mtime.getTime(),
+      times.birthtime.getTime(),
+      times.size,
+      knownByPath
     )
+    if (isExcludedChatLog(entry, excludeSessionIds)) continue
+    entries.push(entry)
   }
 
   return entries
+}
+
+/** Design D6: chat transcripts are excluded from log discovery by SDK id. */
+function isExcludedChatLog(
+  entry: LogEntrySnapshot,
+  excludeSessionIds?: Set<string>
+): boolean {
+  return Boolean(
+    entry.sessionId && excludeSessionIds?.has(entry.sessionId)
+  )
 }
