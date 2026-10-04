@@ -25,6 +25,7 @@ class TerminalMock {
   buffer = { active: { viewportY: 0, baseY: 0 } }
   element: HTMLElement | null = null
   writes: string[] = []
+  writeCallbacks: Array<() => void> = []
   pasteCalls: string[] = []
   resetCalls = 0
   focusCalls = 0
@@ -64,8 +65,11 @@ class TerminalMock {
     return true
   }
 
-  write(data: string) {
+  write(data: string, callback?: () => void) {
     this.writes.push(data)
+    // xterm processes writes asynchronously and fires the callback on
+    // completion; tests fire these manually to simulate write completion.
+    if (callback) this.writeCallbacks.push(callback)
   }
 
   paste(text: string) {
@@ -170,7 +174,17 @@ mock.module('@xterm/addon-serialize', () => ({ SerializeAddon: SerializeAddonMoc
 mock.module('@xterm/addon-progress', () => ({ ProgressAddon: ProgressAddonMock }))
 mock.module('@xterm/addon-web-links', () => ({ WebLinksAddon: class {} }))
 
-const { forceTextPresentation, sanitizeLink, useTerminal, invalidateSnapshotCache, clearSnapshotCache } = await import('../hooks/useTerminal')
+// Record clientLog posts in-process (no fetch) so rate-limited diagnostics
+// are observable. Registered before the hook import, like the xterm mocks.
+const clientLogEvents: Array<{ event: string; fields: Record<string, unknown>; level?: string }> = []
+mock.module('../utils/clientLog', () => ({
+  clientLog: (event: string, fields?: Record<string, unknown>, level?: string) => {
+    clientLogEvents.push({ event, fields: fields ?? {}, level })
+  },
+  setClientLogLevel: () => {},
+}))
+
+const { forceTextPresentation, sanitizeLink, useTerminal, invalidateSnapshotCache, clearSnapshotCache, resetDroppedOutputRateLimiterForTests } = await import('../hooks/useTerminal')
 const { default: TerminalComponent } = await import('../components/Terminal')
 
 // Tracks a registered event listener with its capture flag
@@ -4622,5 +4636,372 @@ describe('useTerminal', () => {
     act(() => {
       renderer.unmount()
     })
+  })
+})
+
+// Write backpressure (design D7): flush() holds buffered output while earlier
+// terminal.write() calls are pending, forces through after 50ms, and guards
+// write acks by terminal identity plus generation so acks from superseded
+// lifecycles cannot consume new accounting.
+describe('write backpressure', () => {
+  // Deferred-timer window (pattern from the escape-sequence buffering test)
+  // so flush decisions are observable instead of firing eagerly. The 2ms
+  // idle, 16ms max and 50ms force-cap timers are told apart by delay.
+  function installDeferredTimers() {
+    const pendingTimers = new Map<number, { callback: () => void; delay: number }>()
+    let nextTimerId = 1
+    globalAny.window = {
+      setTimeout: ((callback: () => void, delay?: number) => {
+        const id = nextTimerId++
+        pendingTimers.set(id, { callback, delay: delay ?? 0 })
+        return id as unknown as ReturnType<typeof setTimeout>
+      }) as typeof setTimeout,
+      clearTimeout: ((id: ReturnType<typeof setTimeout>) => {
+        pendingTimers.delete(id as unknown as number)
+      }) as typeof clearTimeout,
+      devicePixelRatio: 1,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    } as unknown as Window & typeof globalThis
+
+    const fireWithDelay = (delay: number) => {
+      for (const [id, timer] of pendingTimers) {
+        if (timer.delay === delay) {
+          pendingTimers.delete(id)
+          timer.callback()
+        }
+      }
+    }
+    const countWithDelay = (delay: number) =>
+      [...pendingTimers.values()].filter((timer) => timer.delay === delay).length
+    const fireAll = () => {
+      for (const [id, timer] of pendingTimers) {
+        pendingTimers.delete(id)
+        timer.callback()
+      }
+    }
+    return { fireWithDelay, countWithDelay, fireAll }
+  }
+
+  async function mountDeferred() {
+    // The snapshot cache is module-scoped and survives across tests in this
+    // file; clear it so attach-time snapshot restores are deterministic.
+    clearSnapshotCache()
+    const timers = installDeferredTimers()
+    globalAny.navigator = {
+      userAgent: 'Chrome',
+      platform: 'MacIntel',
+      maxTouchPoints: 0,
+      clipboard: { writeText: () => Promise.resolve() },
+    } as unknown as Navigator
+
+    const listeners: Array<(message: ServerMessage) => void> = []
+    // Stable subscribe identity so the subscriber effect never re-subscribes
+    // mid-test; delivered messages always reach the current closure.
+    const subscribeFn = (listener: (message: ServerMessage) => void) => {
+      listeners[0] = listener
+      return () => {}
+    }
+    const sendCalls: Array<Record<string, unknown>> = []
+    const { container } = createContainerMock()
+
+    const renderProps = (sessionId: string, tmuxTarget: string) => (
+      <TerminalHarness
+        sessionId={sessionId}
+        tmuxTarget={tmuxTarget}
+        sendMessage={(message) => sendCalls.push(message)}
+        subscribe={subscribeFn}
+        theme={{ background: '#000' }}
+        fontSize={12}
+      />
+    )
+
+    let renderer!: TestRenderer.ReactTestRenderer
+    await act(async () => {
+      renderer = TestRenderer.create(renderProps('session-1', 'agentboard:@1'), {
+        createNodeMock: () => container,
+      })
+      await Promise.resolve()
+    })
+    // Clear the initial attach debounce (also delay 50) so any later 50ms
+    // timer is unambiguously the backpressure force cap.
+    timers.fireWithDelay(50)
+
+    const terminal = TerminalMock.instances[0]
+    if (!terminal) throw new Error('Expected terminal instance')
+
+    const output = (sessionId: string, data: string) => {
+      act(() => {
+        listeners[0]?.({ type: 'terminal-output', sessionId, data })
+      })
+    }
+    const updateSession = async (sessionId: string, tmuxTarget: string) => {
+      await act(async () => {
+        renderer.update(renderProps(sessionId, tmuxTarget))
+        await Promise.resolve()
+      })
+    }
+    return { timers, terminal, output, updateSession, renderer, listeners }
+  }
+
+  afterEach(() => {
+    resetDroppedOutputRateLimiterForTests()
+  })
+
+  test('flush defers while a write is pending and flushes when its callback drains the count', async () => {
+    const { timers, terminal, output, renderer } = await mountDeferred()
+
+    output('session-1', 'a')
+    act(() => { timers.fireWithDelay(2) })
+    expect(terminal.writes).toEqual(['a'])
+    expect(terminal.writeCallbacks).toHaveLength(1)
+
+    // New data while write 'a' is still pending: held, not written.
+    output('session-1', 'b')
+    act(() => { timers.fireWithDelay(2) })
+    expect(terminal.writes).toEqual(['a'])
+    // The first deferred flush armed the 50ms force cap.
+    expect(timers.countWithDelay(50)).toBe(1)
+
+    // Write 'a' completes: the count drains to zero and the held data flushes.
+    act(() => { terminal.writeCallbacks[0]?.() })
+    expect(terminal.writes).toEqual(['a', 'b'])
+    // Nothing is held anymore — the cap disarms with the drained count.
+    expect(timers.countWithDelay(50)).toBe(0)
+
+    act(() => { renderer.unmount() })
+  })
+
+  test('forces held data through after 50ms despite continuous arrivals', async () => {
+    const { timers, terminal, output, renderer } = await mountDeferred()
+
+    output('session-1', 'a')
+    act(() => { timers.fireWithDelay(2) })
+    expect(terminal.writes).toEqual(['a'])
+
+    // Continuous arrivals while the first write is pending: all held.
+    for (let i = 0; i < 5; i++) {
+      output('session-1', 'x')
+      act(() => { timers.fireWithDelay(2) })
+    }
+    expect(terminal.writes).toEqual(['a'])
+    // Non-restarting cap: five deferrals armed exactly one 50ms timer.
+    expect(timers.countWithDelay(50)).toBe(1)
+
+    act(() => { timers.fireWithDelay(50) })
+    expect(terminal.writes).toEqual(['a', 'xxxxx'])
+
+    // After the forced write, new data defers again behind it and arms a
+    // fresh cap only then.
+    output('session-1', 'c')
+    act(() => { timers.fireWithDelay(2) })
+    expect(terminal.writes).toEqual(['a', 'xxxxx'])
+    expect(timers.countWithDelay(50)).toBe(1)
+
+    act(() => { renderer.unmount() })
+  })
+
+  test('write A callback cannot clear pending write B issued by a forced flush', async () => {
+    const { timers, terminal, output, renderer } = await mountDeferred()
+
+    output('session-1', 'a')
+    act(() => { timers.fireWithDelay(2) })
+    output('session-1', 'b')
+    act(() => { timers.fireWithDelay(2) })
+    expect(terminal.writes).toEqual(['a'])
+
+    // Cap fires: write B goes out while write A is still pending.
+    act(() => { timers.fireWithDelay(50) })
+    expect(terminal.writes).toEqual(['a', 'b'])
+
+    // More data arrives and is held behind both pending writes.
+    output('session-1', 'c')
+    act(() => { timers.fireWithDelay(2) })
+    expect(timers.countWithDelay(50)).toBe(1)
+
+    // A's late callback only decrements the count; B is still pending, so
+    // the held 'c' must not flush yet (a boolean guard would get this wrong).
+    act(() => { terminal.writeCallbacks[0]?.() })
+    expect(terminal.writes).toEqual(['a', 'b'])
+
+    // B's callback drains the count to zero and flushes the held data.
+    act(() => { terminal.writeCallbacks[1]?.() })
+    expect(terminal.writes).toEqual(['a', 'b', 'c'])
+
+    act(() => { renderer.unmount() })
+  })
+
+  test('cleanup invalidates pending accounting and clears the force cap', async () => {
+    const { timers, terminal, output, renderer } = await mountDeferred()
+
+    output('session-1', 'a')
+    act(() => { timers.fireWithDelay(2) })
+    output('session-1', 'b')
+    act(() => { timers.fireWithDelay(2) })
+    expect(terminal.writes).toEqual(['a'])
+    expect(timers.countWithDelay(50)).toBe(1)
+
+    act(() => { renderer.unmount() })
+
+    // The terminal is disposed before the subscriber cleanup runs, so the
+    // held 'b' is dropped at teardown — and the force cap is cleared, not
+    // left to fire after unmount.
+    expect(terminal.writes).toEqual(['a'])
+    expect(timers.countWithDelay(50)).toBe(0)
+
+    // Stale acks after cleanup must not write anything new or throw.
+    act(() => { terminal.writeCallbacks[0]?.() })
+    act(() => { terminal.writeCallbacks[1]?.() })
+    expect(terminal.writes).toEqual(['a'])
+
+    // No lingering timers produce further writes.
+    act(() => { timers.fireAll() })
+    expect(terminal.writes).toEqual(['a'])
+  })
+
+  test('stale callback from before an A→B→A switch cannot flush or reset new data', async () => {
+    const { timers, terminal, output, updateSession, renderer } = await mountDeferred()
+
+    output('session-1', 'A1')
+    act(() => { timers.fireWithDelay(2) })
+    expect(terminal.writes).toEqual(['A1'])
+    // 'A1' stays in flight — its callback never fires before the switch.
+
+    await updateSession('session-2', 'agentboard:@2')
+    output('session-2', 'B1')
+    act(() => { timers.fireWithDelay(2) })
+    expect(terminal.writes).toEqual(['A1', 'B1'])
+
+    // Switch back: the cached snapshot for session-1 is restored (isolated
+    // write, no ack recorded), then live output resumes.
+    await updateSession('session-1', 'agentboard:@1')
+    output('session-1', 'A2')
+    act(() => { timers.fireWithDelay(2) })
+    expect(terminal.writes).toContain('A2')
+
+    // New data held behind the pending 'A2' write.
+    output('session-1', 'A3')
+    act(() => { timers.fireWithDelay(2) })
+    const writesBeforeStaleAck = terminal.writes.length
+    expect(timers.countWithDelay(50)).toBe(1)
+
+    // The pre-switch write's ack arrives on the same terminal: the
+    // generation advanced at both switches, so it is a no-op — it must not
+    // drain the count and flush the held 'A3' early.
+    act(() => { terminal.writeCallbacks[0]?.() })
+    expect(terminal.writes.length).toBe(writesBeforeStaleAck)
+
+    act(() => { timers.fireWithDelay(50) })
+    expect(terminal.writes[terminal.writes.length - 1]).toBe('A3')
+
+    act(() => { renderer.unmount() })
+  })
+
+  test('terminal-ready forced flush stays atomic and orphans older in-flight acks', async () => {
+    const { timers, terminal, output, listeners, updateSession, renderer } = await mountDeferred()
+
+    output('session-1', 'A1')
+    act(() => { timers.fireWithDelay(2) })
+    expect(terminal.writes).toEqual(['A1']) // in flight, unacked
+
+    await updateSession('session-2', 'agentboard:@2')
+    const resetsBeforeReady = terminal.resetCalls
+
+    // History for session-2 arrives but stays buffered (idle timer not fired).
+    output('session-2', 'B1')
+
+    // terminal-ready forces the atomic reset+history write past backpressure.
+    act(() => {
+      listeners[0]?.({ type: 'terminal-ready', sessionId: 'session-2' })
+    })
+    expect(terminal.writes).toEqual(['A1', 'B1'])
+    expect(terminal.resetCalls).toBe(resetsBeforeReady + 1)
+
+    // The pre-switch ack arrives on the same terminal: generation mismatch
+    // makes it a no-op, so it must not drain the forced write's count...
+    act(() => { terminal.writeCallbacks[0]?.() })
+    output('session-2', 'B2')
+    act(() => { timers.fireWithDelay(2) })
+    // ...and B2 is still held behind the in-flight forced write.
+    expect(terminal.writes).toEqual(['A1', 'B1'])
+    expect(timers.countWithDelay(50)).toBe(1)
+
+    // The forced write's own ack drains the count and flushes B2.
+    act(() => { terminal.writeCallbacks[1]?.() })
+    expect(terminal.writes).toEqual(['A1', 'B1', 'B2'])
+
+    act(() => { renderer.unmount() })
+  })
+})
+
+// Rate-limited dropped-output diagnostics (design D8): one
+// terminal_output_dropped report per 5s with suppressed events folded into
+// the next eligible report; no trailing report ends a burst.
+describe('terminal_output_dropped rate limiting', () => {
+  test('first report carries zero suppressed; the next eligible report folds in the suppressed events', async () => {
+    let nowMs = 0
+    resetDroppedOutputRateLimiterForTests(() => nowMs)
+    clientLogEvents.length = 0
+
+    const listeners: Array<(message: ServerMessage) => void> = []
+    const subscribeFn = (listener: (message: ServerMessage) => void) => {
+      listeners[0] = listener
+      return () => {}
+    }
+    const { container } = createContainerMock()
+
+    let renderer!: TestRenderer.ReactTestRenderer
+    await act(async () => {
+      renderer = TestRenderer.create(
+        <TerminalHarness
+          sessionId="session-1"
+          tmuxTarget="agentboard:@1"
+          sendMessage={() => {}}
+          subscribe={subscribeFn}
+          theme={{ background: '#000' }}
+          fontSize={12}
+        />,
+        { createNodeMock: () => container },
+      )
+      await Promise.resolve()
+    })
+
+    const dropped = () => clientLogEvents.filter((entry) => entry.event === 'terminal_output_dropped')
+    const drop = (data: string) => {
+      act(() => {
+        listeners[0]?.({ type: 'terminal-output', sessionId: 'session-9', data })
+      })
+    }
+
+    // First dropped event reports immediately with zero suppressed.
+    drop('one')
+    expect(dropped()).toHaveLength(1)
+    expect(dropped()[0]?.fields.suppressed).toBe(0)
+    expect(dropped()[0]?.level).toBe('info')
+
+    // Events inside the 5s window are suppressed entirely...
+    drop('two')
+    drop('three')
+    expect(dropped()).toHaveLength(1)
+
+    // ...and fold into the next eligible report once the window passes.
+    nowMs += 5000
+    drop('four')
+    expect(dropped()).toHaveLength(2)
+    expect(dropped()[1]?.fields.suppressed).toBe(2)
+
+    // Another suppressed burst folds into the report after it.
+    drop('five')
+    nowMs += 5000
+    drop('six')
+    expect(dropped()).toHaveLength(3)
+    expect(dropped()[2]?.fields.suppressed).toBe(1)
+
+    // No trailing report fires when the burst ends.
+    nowMs += 60_000
+    expect(dropped()).toHaveLength(3)
+
+    act(() => { renderer.unmount() })
+    resetDroppedOutputRateLimiterForTests()
   })
 })

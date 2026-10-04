@@ -134,15 +134,15 @@
 
 ## 7. Client: write backpressure and bounded diagnostics (design D7/D8)
 
-- [ ] 7.1 Add write backpressure to `flush()` in
+- [x] 7.1 Add write backpressure to `flush()` in
   `src/client/hooks/useTerminal.ts`: generation-scoped pending-write count and deferred flag,
   non-restarting 50 ms cap, terminal-identity plus generation callback guards,
   and invalidation on session switch/cleanup/terminal-ready. Audit every
   direct write and preserve reset+history atomicity; verify the backpressure tests in 7.3
   pass
-- [ ] 7.2 Rate-limit `terminal_output_dropped` clientLog posts to one per 5 s
+- [x] 7.2 Rate-limit `terminal_output_dropped` clientLog posts to one per 5 s
   with a suppressed count; verify the rate-limit test in 7.3 passes
-- [ ] 7.3 Extend `src/client/__tests__/useTerminal.test.tsx` using the
+- [x] 7.3 Extend `src/client/__tests__/useTerminal.test.tsx` using the
   existing fake-xterm harness: flush defers while a write is pending then
   flushes on callback; forces through after 50 ms despite continuous arrivals; write A callback
   cannot clear pending write B after a forced flush; resets on cleanup;
