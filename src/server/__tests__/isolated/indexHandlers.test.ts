@@ -595,12 +595,32 @@ function createWs() {
       clipboardBufferArmedUntil: 0,
       clipboardArmedAtSec: 0,
       clipboardWatchGen: 0,
+      copyModeCheckInFlight: false,
     },
     send: (payload: string) => {
       sent.push(JSON.parse(payload) as ServerMessage)
     },
   }
   return { ws, sent }
+}
+
+/**
+ * Async tmux handlers (copy-mode probes, history capture) send their replies
+ * only after their spawned command resolves — dispatch returning does not
+ * imply the handler finished. Bounded-poll the captured outbound messages.
+ */
+async function waitForSent(
+  sent: ServerMessage[],
+  predicate: (message: ServerMessage) => boolean,
+  description: string,
+  timeoutMs = 2000
+): Promise<void> {
+  const startedAt = Date.now()
+  while (Date.now() - startedAt < timeoutMs) {
+    if (sent.some(predicate)) return
+    await new Promise((r) => setTimeout(r, 5))
+  }
+  throw new Error(`Timed out waiting for: ${description}`)
 }
 
 let importCounter = 0
@@ -2937,7 +2957,15 @@ describe('server message handlers', () => {
     expect(attached?.resizes).toEqual([{ cols: 120, rows: 40 }])
 
     attached?.emitData('output')
-    expect(sent.some((message) => message.type === 'terminal-output')).toBe(true)
+    // Output frames flush on the coalescer's turn timer — await the frame.
+    await waitForSent(
+      sent,
+      (message) =>
+        message.type === 'terminal-output' &&
+        message.sessionId === baseSession.id &&
+        message.data === 'output',
+      'terminal-output frame after emitData'
+    )
 
     websocket.message?.(
       ws as never,
@@ -3416,6 +3444,15 @@ describe('server message handlers', () => {
     expect(captureUsesUtf8).toBe(true)
     expect(captureArgs).toContain('-e')
     expect(captureOptions?.timeout).toBe(configState.tmuxTimeoutMs)
+    // History chunks flush on the coalescer's turn timer — await the frame.
+    await waitForSent(
+      sent,
+      (message) =>
+        message.type === 'terminal-output' &&
+        message.sessionId === baseSession.id &&
+        message.data === 'visible pane 你好 🚀\r\n',
+      'coalesced history frame'
+    )
     const historyIndex = sent.findIndex(
       (message) =>
         message.type === 'terminal-output' &&
@@ -3431,6 +3468,12 @@ describe('server message handlers', () => {
     )
     expect(copyModeTarget).toBe(groupedTarget)
 
+    // The reply arrives asynchronously (async spawn) — await it.
+    await waitForSent(
+      sent,
+      (message) => message.type === 'tmux-copy-mode-status',
+      'copy-mode status reply'
+    )
     // The fullscreen flags from tmux propagate to the client (appMouse drives the
     // client's decision to stop hijacking mouse events into copy-mode).
     const fullscreenStatus = sent.find(
@@ -3574,6 +3617,10 @@ describe('server message handlers', () => {
       throw new Error('WebSocket handlers not configured')
     }
 
+    // The copy-mode reply is discarded unless the socket is open/registered —
+    // stale-reply discard checks sockets membership, so simulate the open.
+    websocket.open?.(ws as never)
+
     websocket.message?.(
       ws as never,
       JSON.stringify({ type: 'tmux-cancel-copy-mode', sessionId: baseSession.id })
@@ -3586,6 +3633,12 @@ describe('server message handlers', () => {
     expect(sendKeysTarget).toBe('agentboard:1.1')
     expect(displayTarget).toBe('agentboard:1.1')
 
+    // The status reply arrives asynchronously (async spawn) — await it.
+    await waitForSent(
+      sent,
+      (message) => message.type === 'tmux-copy-mode-status',
+      'copy-mode status reply'
+    )
     const statusMessage = sent.find(
       (message) => message.type === 'tmux-copy-mode-status'
     )

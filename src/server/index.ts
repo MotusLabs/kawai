@@ -35,6 +35,7 @@ import {
   TerminalProxyError,
 } from './terminal'
 import type { ITerminalProxy } from './terminal'
+import { TerminalOutputCoalescer } from './terminal/outputCoalescer'
 import { resolveProjectPath } from './paths'
 import {
   HISTORY_MAX_AGE_MIN_HOURS,
@@ -602,6 +603,14 @@ interface WSData {
   // (baseline read, in-flight poll) captures the generation at launch and bails
   // if it no longer matches, so a stale completion can't mutate a newer watch.
   clipboardWatchGen: number
+  // Copy-mode checks are async now; with a loaded tmux server a spawn can
+  // outlast the client's 750ms poll period and out-of-order replies would
+  // stale-flip the copy-mode state. Skip while one is in flight (latest-state
+  // semantics, mirroring clipboardPollInFlight).
+  copyModeCheckInFlight: boolean
+  // Per-connection terminal-output frame coalescer. Lives for the socket
+  // lifetime; terminal cleanup only clears its pending buffer.
+  outputCoalescer: TerminalOutputCoalescer | null
 }
 
 const sockets = new Set<ServerWebSocket<WSData>>()
@@ -2076,6 +2085,8 @@ function serverFetch(req: Request, server: Server<WSData>) {
           clipboardBufferArmedUntil: 0,
           clipboardArmedAtSec: 0,
           clipboardWatchGen: 0,
+          copyModeCheckInFlight: false,
+          outputCoalescer: null,
         },
       })
     ) {
@@ -2093,6 +2104,13 @@ const websocketHandlers = {
   perMessageDeflate: true,
   open(ws: ServerWebSocket<WSData>) {
     sockets.add(ws)
+    // Coalesced terminal-output frames for this connection. `sockets.has(ws)`
+    // is the authoritative open predicate — the close handler removes the
+    // socket and disposes the coalescer.
+    ws.data.outputCoalescer = new TerminalOutputCoalescer({
+      send: (payload) => ws.send(payload),
+      isOpen: () => sockets.has(ws),
+    })
     send(ws, { type: 'sessions', sessions: registry.getAll() })
     send(ws, { type: 'host-status', hosts: hostStatuses })
     send(ws, {
@@ -2121,6 +2139,8 @@ const websocketHandlers = {
   },
   close(ws: ServerWebSocket<WSData>) {
     cleanupTerminals(ws)
+    ws.data.outputCoalescer?.dispose()
+    ws.data.outputCoalescer = null
     sockets.delete(ws)
   },
 }
@@ -2467,18 +2487,35 @@ function cleanupTerminals(ws: ServerWebSocket<WSData>) {
   ws.data.currentSessionId = null
   ws.data.currentTmuxTarget = null
   ws.data.terminalHost = null
+  // Drop output buffered for the detached terminal; the coalescer itself stays
+  // alive so a later attach on this still-open socket delivers output again.
+  ws.data.outputCoalescer?.clearPending()
   clearAttachDedup(ws)
 }
 
 function broadcast(message: ServerMessage) {
   const payload = JSON.stringify(message)
   for (const socket of sockets) {
+    // Drain pending terminal output first so a broadcast cannot overtake
+    // output already queued for that connection.
+    socket.data.outputCoalescer?.flush()
     socket.send(payload)
   }
 }
 
 function send(ws: ServerWebSocket<WSData>, message: ServerMessage) {
-  ws.send(JSON.stringify(message))
+  const coalescer = ws.data.outputCoalescer
+  if (!coalescer) {
+    ws.send(JSON.stringify(message))
+    return
+  }
+  if (message.type === 'terminal-output') {
+    // Coalesced per connection: one frame per event-loop turn, with every
+    // non-output message draining pending output first (see sendOrdered).
+    coalescer.enqueue(message.sessionId, message.data)
+    return
+  }
+  coalescer.sendOrdered(message)
 }
 
 function fireAndForget(promise: Promise<unknown>, context: string): void {
@@ -2888,16 +2925,17 @@ async function handleCancelCopyMode(sessionId: string, ws: ServerWebSocket<WSDat
   if (session.remote && !config.remoteAllowAttach) return
 
   try {
-    // Exit tmux copy-mode quietly.
+    // Exit tmux copy-mode quietly. Async spawn: a sync spawnSync here stalls
+    // the event loop (and with it keystroke dispatch + terminal streaming)
+    // for the full command duration whenever the tmux server is slow.
+    // NOTE: async also means a keystroke racing this cancel can reach tmux
+    // first (worst case one key consumed by copy-mode navigation) — a race
+    // that already existed on the remote path.
     const target = resolveCopyModeTarget(sessionId, ws, session)
     if (session.remote && session.host) {
       await runRemoteTmux(session.host, ['send-keys', '-X', '-t', target, 'cancel'])
     } else {
-      Bun.spawnSync(['tmux', 'send-keys', '-X', '-t', target, 'cancel'], {
-        stdout: 'pipe',
-        stderr: 'pipe',
-        timeout: 5000,
-      })
+      await readTmuxCapture(['send-keys', '-X', '-t', target, 'cancel'])
     }
   } catch {
     // Ignore errors - copy-mode may not be active
@@ -2908,34 +2946,68 @@ async function handleCheckCopyMode(sessionId: string, ws: ServerWebSocket<WSData
   const session = registry.get(sessionId)
   if (!session) return
   if (session.remote && !config.remoteAllowAttach) return
+  // The client polls this every 750ms. With a loaded tmux server an async
+  // probe can outlast that period; letting a second probe race the first
+  // would let an older reply land after a newer one and stale-flip the
+  // copy-mode state. Skip instead — the next poll delivers fresh state.
+  if (ws.data.copyModeCheckInFlight) return
+  ws.data.copyModeCheckInFlight = true
+
+  // A probe can now outlive the attachment it was issued against (session
+  // switch, detach, socket close). Capture generation + resolved target before
+  // awaiting and discard the reply if either moved — the in-flight guard alone
+  // cannot stop a probe for an old attachment from completing after a switch.
+  const attachSeq = ws.data.terminalAttachSeq
+  const target = resolveCopyModeTarget(sessionId, ws, session)
 
   try {
-    const target = resolveCopyModeTarget(sessionId, ws, session)
     // Query tmux for pane copy-mode status plus fullscreen-app detection:
     //   pane_in_mode  -> tmux copy-mode active
     //   alternate_on  -> pane on the alternate screen buffer
     //   mouse_any_flag-> the in-pane app requested mouse tracking (owns the mouse)
+    // Async spawn (readTmuxCapture) rather than Bun.spawnSync: this runs on
+    // the main event loop, and a sync spawn blocks keystroke dispatch and
+    // terminal-output sends for the full command duration whenever the tmux
+    // server is busy serving many windows.
     const fmt = '#{pane_in_mode},#{alternate_on},#{mouse_any_flag}'
     let output: string
     if (session.remote && session.host) {
       const result = await runRemoteTmux(session.host, ['display-message', '-p', '-t', target, fmt])
       output = result.stdout?.trim() ?? ''
     } else {
-      const result = Bun.spawnSync(
-        ['tmux', ...withTmuxUtf8Flag(['display-message', '-p', '-t', target, fmt])],
-        { stdout: 'pipe', stderr: 'pipe', timeout: 5000 }
-      )
-      output = result.stdout?.toString().trim() ?? ''
+      output = (await readTmuxCapture(['display-message', '-p', '-t', target, fmt]))?.trim() ?? ''
     }
     const [inCopyModeField, altScreenField, appMouseField] = output.split(',')
     const inCopyMode = inCopyModeField === '1'
     const altScreen = altScreenField === '1'
     const appMouse = appMouseField === '1'
+    if (!copyModeReplyStillCurrent(ws, sessionId, attachSeq, target)) return
     send(ws, { type: 'tmux-copy-mode-status', sessionId, inCopyMode, altScreen, appMouse })
   } catch {
     // On error, assume not in copy mode and no fullscreen app
+    if (!copyModeReplyStillCurrent(ws, sessionId, attachSeq, target)) return
     send(ws, { type: 'tmux-copy-mode-status', sessionId, inCopyMode: false, altScreen: false, appMouse: false })
+  } finally {
+    ws.data.copyModeCheckInFlight = false
   }
+}
+
+/**
+ * True when a copy-mode probe's reply still describes the attachment it was
+ * issued against: the socket is still open, no new attachment started, and the
+ * resolved pane target is unchanged.
+ */
+function copyModeReplyStillCurrent(
+  ws: ServerWebSocket<WSData>,
+  sessionId: string,
+  attachSeq: number,
+  target: string
+): boolean {
+  if (!sockets.has(ws)) return false
+  if (ws.data.terminalAttachSeq !== attachSeq) return false
+  const session = registry.get(sessionId)
+  if (!session) return false
+  return resolveCopyModeTarget(sessionId, ws, session) === target
 }
 
 function restorePinnedState(previousPinnedState: Map<string, boolean>) {
@@ -4378,7 +4450,7 @@ async function attachTerminalPersistent(
   // Capture scrollback history BEFORE switching to avoid race with live output
   const history = session.remote && session.host
     ? await captureTmuxHistoryRemote(effectiveTarget, session.host)
-    : captureTmuxHistory(effectiveTarget)
+    : await captureTmuxHistory(effectiveTarget)
 
   const tCapture = performance.now()
 
@@ -4402,9 +4474,10 @@ async function attachTerminalPersistent(
         let chunks = 0
         for (let offset = 0; offset < history.length; offset += HISTORY_CHUNK_SIZE) {
           const chunk = history.slice(offset, offset + HISTORY_CHUNK_SIZE)
-          const payload = JSON.stringify({ type: 'terminal-output', sessionId, data: chunk })
-          ws.send(payload)
-          totalBytes += payload.length
+          // Routed through send() so history chunks join the coalesced output
+          // stream; the terminal-ready acknowledgement drains them first.
+          send(ws, { type: 'terminal-output', sessionId, data: chunk })
+          totalBytes += Buffer.byteLength(chunk, 'utf8')
           chunks += 1
         }
         const stringifyMs = Math.round(performance.now() - tStr)
@@ -4463,27 +4536,25 @@ async function attachTerminalPersistent(
   }
 }
 
-function captureTmuxHistory(target: string): string | null {
+async function captureTmuxHistory(target: string): Promise<string | null> {
   try {
     // Capture only the visible pane so initial attach paints the current view
     // immediately instead of replaying the entire scrollback buffer.
+    // Async spawn: this runs on the main event loop during attach, and a sync
+    // spawnSync would block keystroke dispatch and output streaming for the
+    // full capture duration on text-heavy panes.
     const colorArgs = config.terminalColorsEnabled ? ['-e'] : []
-    const result = Bun.spawnSync(['tmux', ...withTmuxUtf8Flag([
+    const output = await readTmuxCapture([
       'capture-pane',
       '-t',
       target,
       '-p',
       '-J',
       ...colorArgs,
-    ])], {
-      stdout: 'pipe',
-      stderr: 'pipe',
-      timeout: config.tmuxTimeoutMs,
-    })
-    if (result.exitCode !== 0) {
+    ])
+    if (output === null) {
       return null
     }
-    const output = result.stdout.toString()
     // Only return if there's actual content
     if (output.trim().length === 0) {
       return null
