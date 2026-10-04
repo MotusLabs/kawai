@@ -6,6 +6,7 @@
 import { writeFileSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+import { selectMobileSession } from './fixtures/mobile-session'
 import { test, expect, type CDPSession, type Page } from '@playwright/test'
 
 test.use({
@@ -17,7 +18,6 @@ test.use({
   hasTouch: true,
 })
 
-const WINDOW_NAME = 'arrows-repl'
 const REPL_PATH = fileURLToPath(new URL('./fixtures/paste-repl.py', import.meta.url))
 const ARROWS: Record<string, string> = {
   '1b5b41': 'UP',
@@ -85,32 +85,37 @@ async function deckLayout(page: Page) {
 test('arrow cluster: tap sends, hold repeats, deck never reflows', async ({ page }, testInfo) => {
   const session = process.env.E2E_TMUX_SESSION
   test.skip(!session, 'E2E_TMUX_SESSION not set')
-  const target = `${session}:${WINDOW_NAME}`
+  const windowName = `arrows-repl-${testInfo.workerIndex}-${testInfo.repeatEachIndex}`
+  const target = `${session}:${windowName}`
 
-  const created = tmux(['new-window', '-t', session!, '-n', WINDOW_NAME, `python3 ${REPL_PATH}`])
+  const created = tmux(['new-window', '-t', session!, '-n', windowName, `python3 ${REPL_PATH} --report-draft`])
   expect(created.status).toBe(0)
 
-  const submitAndRead = async (enter: { x: number; y: number }) => {
+  const draftHex = () => tmux(['capture-pane', '-t', target, '-p', '-J', '-S', '-200'])
+    .stdout.split('\n').filter(line => line.startsWith('DRAFT_HEX:')).at(-1)?.slice('DRAFT_HEX:'.length) ?? ''
+
+  const submitAndRead = async (expectedDraft?: string) => {
+    // tmux buffers escape-prefixed keys. Wait for the fixture to acknowledge
+    // them before Enter, rather than racing its input parser with another key.
+    if (expectedDraft !== undefined) await expect.poll(draftHex).toBe(expectedDraft)
+    const enter = await center(page, 'Enter')
     const before = hexLines(target).length
     await touch(page, enter.x, enter.y, 40)
-    const deadline = Date.now() + 5000
-    let lines = hexLines(target)
-    while (lines.length <= before && Date.now() < deadline) {
-      await sleep(150)
-      lines = hexLines(target)
-    }
-    return decode(lines[lines.length - 1] ?? '')
+    await expect.poll(() => hexLines(target).length, {
+      message: 'Enter must produce a new submission in the attached pane',
+    }).toBeGreaterThan(before)
+    return decode(hexLines(target).at(-1)!)
   }
 
   try {
-    await page.goto('/')
-    // On mobile the session list lives in a drawer: the card is in the DOM
-    // but not visible, so select it with a DOM click.
-    const card = page.getByTestId('session-card').filter({ hasText: WINDOW_NAME }).first()
-    await card.waitFor({ state: 'attached', timeout: 20000 })
-    await card.evaluate((el) => (el as HTMLElement).click())
-    await expect(page.locator('.xterm')).toBeVisible()
-    await sleep(2000) // let the terminal attach settle
+    await selectMobileSession(page, windowName)
+    await expect.poll(() => tmux(['capture-pane', '-t', target, '-p']).stdout)
+      .toContain('PASTE-REPL READY')
+    // Attachment may focus xterm. This test exercises the deck with the
+    // keyboard hidden; normalize focus before measuring and sending touches.
+    const input = page.locator('.xterm-helper-textarea')
+    await input.evaluate(element => element.blur())
+    await expect(input).not.toBeFocused()
 
     // Enter and the arrow trigger lead the scrollable deck, so they are
     // on-screen at scrollLeft 0. Pin the deck there before taking coordinates
@@ -118,7 +123,6 @@ test('arrow cluster: tap sends, hold repeats, deck never reflows', async ({ page
     await page.locator('.grid-flow-col').evaluate(element => { element.scrollLeft = 0 })
 
     const trigger = await center(page, 'Arrow keys')
-    const enter = await center(page, 'Enter')
     const layoutBefore = await deckLayout(page)
 
     const cluster = page.getByRole('group', { name: 'Arrow key cluster' })
@@ -145,19 +149,20 @@ test('arrow cluster: tap sends, hold repeats, deck never reflows', async ({ page
     const left = await center(page, 'Arrow left')
     const down = await center(page, 'Arrow down')
     await touch(page, up.x, up.y, 40)
-    expect(await submitAndRead(enter)).toBe('UP')
+    expect(await submitAndRead('1b5b41')).toBe('UP')
     await expect(cluster).toBeVisible()
     await touch(page, right.x, right.y, 40)
     await touch(page, left.x, left.y, 40)
     await touch(page, down.x, down.y, 40)
-    expect(await submitAndRead(enter)).toBe('RIGHT LEFT DOWN')
+    expect(await submitAndRead('1b5b431b5b441b5b42')).toBe('RIGHT LEFT DOWN')
 
     // A hold repeats: 400ms initial delay then every 100ms.
     await touch(page, up.x, up.y, 1000, async (cdp) => {
       const { data } = await cdp.send('Page.captureScreenshot', { format: 'png' })
       writeFileSync(testInfo.outputPath('arrow-cluster.png'), Buffer.from(data, 'base64'))
     })
-    const held = (await submitAndRead(enter)).split(' ')
+    await expect.poll(draftHex).toMatch(/^(1b5b41){4,}$/)
+    const held = (await submitAndRead()).split(' ')
     expect(held.length, held.join(' ')).toBeGreaterThanOrEqual(4)
     expect(held.every((key) => key === 'UP'), held.join(' ')).toBe(true)
 
@@ -165,13 +170,13 @@ test('arrow cluster: tap sends, hold repeats, deck never reflows', async ({ page
     // and the cluster remains.
     const esc = await center(page, 'esc')
     await touch(page, esc.x, esc.y, 40)
-    expect(await submitAndRead(enter)).toBe('?1b')
+    expect(await submitAndRead('1b')).toBe('?1b')
     await expect(cluster).toBeVisible()
 
     // Tapping outside (on the terminal) closes it without sending anything.
     await touch(page, 200, 400, 40)
     await expect(cluster).toHaveCount(0)
-    expect(await submitAndRead(enter)).toBe('(nothing)')
+    expect(await submitAndRead('')).toBe('(nothing)')
 
     // The trigger toggles it closed too.
     await touch(page, trigger.x, trigger.y, 40)

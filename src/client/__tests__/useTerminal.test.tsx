@@ -348,7 +348,7 @@ function TerminalHarness(props: {
   onPasteFiles?: (draft: { text: string; files: File[] }) => void
   onPasteError?: (message: string) => void
 }) {
-  const { containerRef, isTmuxCopyMode } = useTerminal({
+  const { containerRef, isTmuxCopyMode, isInputReady } = useTerminal({
     ...props,
     tmuxTarget: props.tmuxTarget ?? null,
     connectionStatus: props.connectionStatus ?? 'connected',
@@ -358,7 +358,7 @@ function TerminalHarness(props: {
     fontFamily: props.fontFamily ?? '"JetBrains Mono Variable", monospace',
     useWebGL: props.useWebGL ?? true,
   })
-  return <div ref={containerRef} data-copy-mode={isTmuxCopyMode ? 'true' : 'false'} />
+  return <div ref={containerRef} data-copy-mode={isTmuxCopyMode ? 'true' : 'false'} data-input-ready={isInputReady} />
 }
 
 const terminalSession: Session = {
@@ -1238,7 +1238,7 @@ describe('useTerminal', () => {
     })
   })
 
-  test('does not auto-scroll on attach and focuses when terminal-ready arrives', async () => {
+  test('updates input readiness independently of switching and focuses on terminal-ready', async () => {
     const pendingTimers = new Map<number, { callback: () => void; delay: number }>()
     let nextTimerId = 1
     globalAny.window = {
@@ -1266,8 +1266,9 @@ describe('useTerminal', () => {
     const listeners: Array<(message: ServerMessage) => void> = []
     const { container } = createContainerMock()
 
+    let renderer!: TestRenderer.ReactTestRenderer
     await act(async () => {
-      TestRenderer.create(
+      renderer = TestRenderer.create(
         <TerminalHarness
           sessionId="session-1"
           tmuxTarget="agentboard:@1"
@@ -1319,6 +1320,17 @@ describe('useTerminal', () => {
 
     expect(terminal.scrollCalls).toBe(0)
     expect(terminal.focusCalls).toBe(1)
+    expect(renderer.root.findByType('div').props['data-input-ready']).toBe(true)
+
+    // Readiness must update even when isSwitching is already false.
+    act(() => {
+      listeners[0]?.({ type: 'terminal-error', sessionId: 'session-1',
+        code: 'ERR_NOT_READY', message: 'attach failed', retryable: true })
+    })
+    expect(renderer.root.findByType('div').props['data-input-ready']).toBe(false)
+    act(() => { listeners[0]?.({ type: 'terminal-ready', sessionId: 'session-1' }) })
+    expect(renderer.root.findByType('div').props['data-input-ready']).toBe(true)
+    act(() => renderer.unmount())
   })
 
   test.each(['MacIntel', 'Win32'])('browser file paste on %s uploads without reading the host clipboard', async (platform) => {

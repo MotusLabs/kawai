@@ -380,6 +380,13 @@ export function useTerminal({
   const readySessionRef = useRef<string | null>(
     sessionId && allowAttach && connectionStatus === 'connected' ? sessionId : null
   )
+  // Refs gate event handlers immediately; state also updates rendered controls
+  // when readiness changes without a change to the loading indicator.
+  const [readySessionId, setReadySessionId] = useState(readySessionRef.current)
+  const updateReadySession = useCallback((id: string | null) => {
+    readySessionRef.current = id
+    setReadySessionId(id)
+  }, [])
   const attachedTargetRef = useRef<string | null>(null)
   const attachedConnectionEpochRef = useRef<number>(-1)
   const focusAfterAttachSessionRef = useRef<string | null>(null)
@@ -1248,12 +1255,12 @@ export function useTerminal({
       (attachedConnectionEpochRef.current >= 0 &&
         attachedConnectionEpochRef.current !== connectionEpoch)
     ) {
-      readySessionRef.current = null
+      updateReadySession(null)
       if (sessionId && allowAttach && connectionStatus === 'connected') {
         setIsSwitching(true)
       }
     }
-  }, [sessionId, allowAttach, connectionStatus, connectionEpoch])
+  }, [sessionId, allowAttach, connectionStatus, connectionEpoch, updateReadySession])
 
   // Handle session changes and websocket reconnects - attach/detach.
   useEffect(() => {
@@ -1264,7 +1271,7 @@ export function useTerminal({
     const prevTarget = attachedTargetRef.current
 
     if (!allowAttach) {
-      readySessionRef.current = null
+      updateReadySession(null)
       if (attachDebounceRef.current !== null) {
         window.clearTimeout(attachDebounceRef.current)
         attachDebounceRef.current = null
@@ -1286,7 +1293,7 @@ export function useTerminal({
     // Reattach when websocket comes back: server-side ws.currentSessionId is
     // cleared on disconnect, so input is ignored until a fresh terminal-attach.
     if (connectionStatus !== 'connected') {
-      readySessionRef.current = null
+      updateReadySession(null)
       if (attachDebounceRef.current !== null) {
         window.clearTimeout(attachDebounceRef.current)
         attachDebounceRef.current = null
@@ -1308,7 +1315,7 @@ export function useTerminal({
 
     // Detach from previous session first
     if (prevAttached && prevAttached !== sessionId) {
-      readySessionRef.current = null
+      updateReadySession(null)
       // Capture terminal snapshot before detach for instant restore on switch-back
       try {
         const serialized = serializeAddonRef.current?.serialize()
@@ -1363,7 +1370,7 @@ export function useTerminal({
       needsResetRef.current = true
       setIsSwitching(true)
       if (prevAttached !== null) {
-        readySessionRef.current = null
+        updateReadySession(null)
       }
 
       // Instantly show cached snapshot for the target session (if available)
@@ -1464,7 +1471,7 @@ export function useTerminal({
       attachedTargetRef.current = null
       attachedConnectionEpochRef.current = -1
       focusAfterAttachSessionRef.current = null
-      readySessionRef.current = null
+      updateReadySession(null)
     }
 
     // Cancel pending debounced attach on effect re-run or unmount
@@ -1478,7 +1485,7 @@ export function useTerminal({
         attachDebounceRef.current = null
       }
     }
-  }, [sessionId, tmuxTarget, allowAttach, connectionStatus, connectionEpoch, checkScrollPosition, setTmuxCopyMode])
+  }, [sessionId, tmuxTarget, allowAttach, connectionStatus, connectionEpoch, checkScrollPosition, setTmuxCopyMode, updateReadySession])
 
   useEffect(() => {
     if (copyModePollIntervalRef.current !== null) {
@@ -1610,7 +1617,7 @@ export function useTerminal({
         attachedSession &&
         message.sessionId === attachedSession
       ) {
-        readySessionRef.current = message.sessionId
+        updateReadySession(message.sessionId)
         // If output is buffered but unflushed, flush now so reset+write
         // stay atomic (avoids blank flash from resetting before flush fires).
         // If no output arrived at all (empty pane or server dedup), reset
@@ -1656,7 +1663,7 @@ export function useTerminal({
         attachedSession &&
         (!message.sessionId || message.sessionId === attachedSession)
       ) {
-        readySessionRef.current = null
+        updateReadySession(null)
         needsResetRef.current = false
         setIsSwitching(false)
       }
@@ -1717,7 +1724,7 @@ export function useTerminal({
       flush()
       cancelIosRepaint()
     }
-  }, [subscribe, checkScrollPosition, setTmuxCopyMode, offerClipboardCopy])
+  }, [subscribe, checkScrollPosition, setTmuxCopyMode, offerClipboardCopy, updateReadySession])
 
   // Handle resize - with longer debounce to prevent flickering
   useEffect(() => {
@@ -1851,6 +1858,7 @@ export function useTerminal({
     !!sessionId &&
     allowAttach &&
     connectionStatus === 'connected' &&
+    readySessionId === sessionId &&
     readySessionRef.current === sessionId
 
   return {
