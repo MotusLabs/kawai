@@ -51,13 +51,17 @@ export class SessionRegistry extends EventEmitter {
       removedIds.delete(id)
     }
 
-    // Check if anything actually changed
+    // Check if anything actually changed. Activity timestamps are compared in
+    // 30s buckets (design D5): steady output churn advances lastActivity on
+    // every refresh, which otherwise re-broadcast the full session list (and
+    // re-rendered the whole UI) each cycle. Stored/emitted timestamps keep
+    // full precision — only change detection quantizes.
     const hasChanges =
       removedIds.size > 0 ||
       nextMap.size !== this.sessions.size ||
       Array.from(nextMap.values()).some((next) => {
         const existing = this.sessions.get(next.id)
-        return !existing || !sessionsEqual(existing, next)
+        return !existing || !sessionsEqualForBroadcast(existing, next)
       })
 
     this.sessions = nextMap
@@ -159,13 +163,21 @@ function agentSessionsEqual(a: AgentSession, b: AgentSession): boolean {
   )
 }
 
-function sessionsEqual(a: Session, b: Session): boolean {
+/** Activity quantization for broadcast change detection (design D5). */
+const ACTIVITY_BUCKET_MS = 30_000
+
+/**
+ * Same-field equality as sessionsEqual, except lastActivity compares by 30s
+ * bucket. Invalid (unparseable) timestamps fall back to raw string equality,
+ * preserving the previous behavior for malformed values.
+ */
+function sessionsEqualForBroadcast(a: Session, b: Session): boolean {
   return (
     a.id === b.id &&
     a.name === b.name &&
     a.tmuxWindow === b.tmuxWindow &&
     a.status === b.status &&
-    a.lastActivity === b.lastActivity &&
+    activityInSameBucket(a.lastActivity, b.lastActivity) &&
     a.projectPath === b.projectPath &&
     a.source === b.source &&
     a.agentType === b.agentType &&
@@ -177,5 +189,16 @@ function sessionsEqual(a: Session, b: Session): boolean {
     a.isPinned === b.isPinned &&
     a.host === b.host &&
     a.remote === b.remote
+  )
+}
+
+function activityInSameBucket(a: string, b: string): boolean {
+  const timeA = Date.parse(a)
+  const timeB = Date.parse(b)
+  if (Number.isNaN(timeA) || Number.isNaN(timeB)) {
+    return a === b
+  }
+  return (
+    Math.floor(timeA / ACTIVITY_BUCKET_MS) === Math.floor(timeB / ACTIVITY_BUCKET_MS)
   )
 }

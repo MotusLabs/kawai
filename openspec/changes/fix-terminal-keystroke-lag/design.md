@@ -222,6 +222,54 @@ RTT measurement, frame-count reduction, and re-render counts.
   fallback — requires confirming on tmux 3.3a that a mid-chain failure does
   not abort the chain). Deferrable: it changes no spec behavior.
 
+## `lastActivity` audit (task 5.1, 2026-10-04)
+
+`rg -n "lastActivity" src/server src/client"` — every consumer, and what D5's
+bucketed change detection does to it:
+
+- **Status sorting** (`src/client/utils/sessions.ts:54-60`): status priority
+  first, precise `Date.parse(lastActivity)` descending as the tie-breaker.
+  Reads the *emitted payload* timestamps, which stay precise — sorting is
+  unaffected; only the moment a newer activity becomes *visible* can lag up to
+  one bucket. Accepted per D5.
+- **Grace-period staleness math** (`src/client/utils/sessions.ts:80-127`,
+  ms-epoch comparisons on `lastActivity`/`lastActivityAt` for dormant/working
+  grace windows): operates on precise payload values; untouched.
+- **Relative-time labels** (`SessionRow.tsx:227`,
+  `HistorySessionItem.tsx:29`, `HibernatingSessionItem.tsx:39`,
+  `SessionPreviewModal.tsx:51`, `Terminal.tsx:175` via `formatRelativeTime`):
+  minute-granularity display. Labels can change up to one bucket late after a
+  suppression; the 30s `nowTick` (D6) keeps them fresh thereafter. Minute
+  boundaries may shift one bucket late — not claimed lossless.
+- **Client store dedup** (`src/client/stores/sessionStore.ts:18`):
+  `sessionsEqualById` includes raw `lastActivity` equality. With bucketed
+  server broadcasts, sub-quantum churn no longer *arrives* at the store at
+  all, so this comparison no longer triggers per-refresh re-renders; on
+  bucket crossings the change is real and the store updates. Left as-is
+  (precise values, only compared when a broadcast lands).
+- **Server producers**: `SessionManager.ts:754` /
+  `sessionRefreshWorker.ts:367` (tmux `last_changed`), `logPoller.ts`
+  (log timestamps / mtimes, several sites), `remoteSessions.ts:435`
+  (`toIsoFromSeconds` from remote activity flags), `index.ts:2902` (Enter →
+  `new Date(now)`, the force-working path via `updateSession`, not quantized),
+  `index.ts:1090`/`3699` and `agentSessions.ts:14` (DB `lastActivityAt`
+  pass-through). All keep producing precise timestamps; only
+  `SessionRegistry.replaceSessions` change detection quantizes.
+- **Registry monotonicity** (`SessionRegistry.pickLatestActivity`): keeps the
+  precise max of existing/incoming per id; the stored map is replaced even
+  when no event is emitted, so the precise latest value survives suppression
+  and ships in the next emitted payload.
+- **DB (`db.ts`)**: `last_activity_at` persistence of precise values;
+  untouched by D5.
+- **Enter updates** (`index.ts:2902` + `updateSession`):
+  `updateSession` emits `session-update` immediately — outside the
+  quantization cadence — so the force-working UX on Enter is preserved.
+
+**Accepted delay:** activity-only recency ordering and label changes may
+become visible up to one 30s bucket late; payloads and stored values never
+lose precision, and invalid timestamps keep raw-comparison behavior in change
+detection.
+
 ## Review baseline (2026-10-04)
 
 The working tree already contains partial D1 implementation in

@@ -93,15 +93,15 @@
 
 ## 5. Server: quantized session broadcasts (design D5)
 
-- [ ] 5.1 Run `rg -n "lastActivity" src/server src/client` and record the audit
+- [x] 5.1 Run `rg -n "lastActivity" src/server src/client` and record the audit
   in design.md. Include status sorting, relative labels, remote sessions,
   and Enter updates. Keep precise timestamps; document the accepted bucket
   delay in recency ordering and labels
-- [ ] 5.2 Keep precise monotonic `lastActivity` in `nextMap`; compare valid
+- [x] 5.2 Keep precise monotonic `lastActivity` in `nextMap`; compare valid
   timestamps by 30 s bucket only in `replaceSessions` change detection.
   Preserve invalid-timestamp comparison behavior and immediate `updateSession`; verify the
   registry tests in 5.3 pass
-- [ ] 5.3 Extend `src/server/__tests__/01-sessionRegistry.test.ts`: no emit
+- [x] 5.3 Extend `src/server/__tests__/01-sessionRegistry.test.ts`: no emit
   on sub-quantum churn; emits on status/name/membership change and on bucket
   crossing; stored activity never regresses and retains full precision even without
   an emit; equal-status sessions in the same bucket retain precise recency
