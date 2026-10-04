@@ -59,9 +59,12 @@ mock.module('@xterm/addon-search', () => ({ SearchAddon: class {} }))
 mock.module('@xterm/addon-serialize', () => ({ SerializeAddon: class {} }))
 mock.module('@xterm/addon-progress', () => ({ ProgressAddon: class {} }))
 mock.module('@xterm/addon-web-links', () => ({ WebLinksAddon: class {} }))
-mock.module('../components/SessionPreviewContent', () => ({
-  default: () => <div data-testid="session-preview-content" />,
-}))
+// SessionPreviewContent is deliberately NOT mocked here: Bun 1.4.2 does not
+// restore mock.module registrations after the file finishes, so the stub
+// leaked into SessionPreviewModal.test.tsx when run in the same process
+// (the modal silently rendered the stub). The real component's preview
+// fetch fails harmlessly under test (relative URL, no server) and the error
+// is contained in its own state.
 
 const actualWebSocket = await import('../hooks/useWebSocket')
 

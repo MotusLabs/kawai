@@ -154,7 +154,7 @@
 
 ## 8. Integration verification
 
-- [ ] 8.1 Run `bun run lint && bun run typecheck && bun run test` end-to-end
+- [x] 8.1 Run `bun run lint && bun run typecheck && bun run test` end-to-end
   and record a fully green run
 - [ ] 8.2 Load reproduction per design (8 flooding tmux windows,
   `LOG_LEVEL=debug`): zero `event_loop_lag` events over 100 ms in 60 s of
