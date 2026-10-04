@@ -6,6 +6,22 @@ import type {
   WorkspaceOperationResult,
   WorkspaceSnapshot,
 } from './workspace'
+import type {
+  ChatApprovalDecision,
+  ChatEvent,
+  ChatPendingRequest,
+  ChatQuestionAnswer,
+} from './chat'
+
+export type {
+  ChatEvent,
+  ChatQuestion,
+  ChatQuestionAnswer,
+  ChatPendingRequest,
+  ChatRequestOutcome,
+  ChatApprovalDecision,
+  ChatTurnResultSubtype,
+} from './chat'
 
 export type {
   WorkspaceBranch,
@@ -168,6 +184,19 @@ export type ServerMessage =
       appMouse?: boolean
     }
   | { type: 'server-config'; remoteAllowControl: boolean; remoteAllowAttach: boolean; hostLabel: string; preferWindowName: boolean; clientLogLevel?: string }
+  // Chat messages are additive (like the workspace messages above): older
+  // clients ignore unknown message types; terminal behavior is unchanged.
+  | { type: 'chat-events'; sessionId: string; events: ChatEvent[] }
+  | {
+      type: 'chat-snapshot'
+      sessionId: string
+      /** Read-only replayed history plus unfinished live transcript. */
+      events: ChatEvent[]
+      pendingRequests: ChatPendingRequest[]
+      status: SessionStatus
+      /** Highest sequence included in this snapshot. */
+      throughSequence: number
+    }
   | { type: 'pong'; seq?: number }
   | { type: 'error'; message: string }
   | { type: 'kill-failed'; sessionId: string; message: string }
@@ -197,6 +226,9 @@ export type ClientMessage =
       name?: string
       command?: string
       host?: string
+      // Session kind: absent = terminal (tmux) session, unchanged behavior;
+      // 'chat' creates an SDK-driven chat session instead of a window.
+      kind?: SessionKind
       // OpenSpec change context: with a selected agent, the server composes
       // the mapped apply command into the session's start command as the
       // agent's first prompt (a launch argument, held by the agent itself
@@ -212,6 +244,24 @@ export type ClientMessage =
   | { type: 'session-wake'; sessionId: string }
   | { type: 'session-hibernate'; sessionId: string }
   | { type: 'session-move-to-history'; sessionId: string }
+  // Chat messages are additive: existing clients never send them.
+  | { type: 'chat-attach'; sessionId: string }
+  | { type: 'chat-detach'; sessionId: string }
+  | { type: 'chat-send'; sessionId: string; text: string }
+  | { type: 'chat-interrupt'; sessionId: string }
+  | {
+      type: 'chat-approval'
+      sessionId: string
+      requestId: string
+      decision: ChatApprovalDecision
+    }
+  | {
+      type: 'chat-answer'
+      sessionId: string
+      requestId: string
+      /** Answers keyed by question text (matches the SDK's answer map). */
+      answers: Record<string, ChatQuestionAnswer>
+    }
   // Workspace messages are additive; existing clients never send them.
   | { type: 'workspace-refresh'; projectPath?: string }
   | {
