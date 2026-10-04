@@ -19,7 +19,8 @@ import { isIOSDevice, getEffectiveModifier, getModifierDisplay } from '../utils/
 import { keepA11yRowsStable } from '../utils/a11yRowStability'
 import { formatRelativeTime } from '../utils/time'
 import { getPathLeaf } from '../utils/sessionLabel'
-import TerminalControls from './TerminalControls'
+import { useStableValue } from '../hooks/useStableValue'
+import TerminalControls, { type TerminalSessionInfo } from './TerminalControls'
 import PasteStatus from './PasteStatus'
 import { useBrowserPaste, type BrowserPaste } from '../hooks/useBrowserPaste'
 import { clipboardFiles } from '../utils/browserFiles'
@@ -32,6 +33,22 @@ import Copy01Icon from '@untitledui-icons/react/line/esm/Copy01Icon'
 import Edit05Icon from '@untitledui-icons/react/line/esm/Edit05Icon'
 import Moon01Icon from '@untitledui-icons/react/line/esm/Moon01Icon'
 import Settings01Icon from '@untitledui-icons/react/line/esm/Settings01Icon'
+
+/** Strip-data equality for the control-deck session list (id/name/status). */
+function controlSessionsEqual(
+  a: TerminalSessionInfo[],
+  b: TerminalSessionInfo[]
+): boolean {
+  return (
+    a.length === b.length &&
+    a.every(
+      (session, index) =>
+        session.id === b[index].id &&
+        session.name === b[index].name &&
+        session.status === b[index].status
+    )
+  )
+}
 
 interface TerminalProps {
   session: Session | null
@@ -1206,6 +1223,15 @@ export default function Terminal({
     return !!document.documentElement?.classList?.contains('keyboard-visible')
   }, [containerRef])
 
+  // Control-deck session list (id/name/status only), kept referentially
+  // stable while the strip data is unchanged (design D6): a fresh array per
+  // render would defeat TerminalControls' memo on every terminal re-render,
+  // including activity-only session broadcasts.
+  const controlSessions = useStableValue(
+    sessions.map((s) => ({ id: s.id, name: s.name, status: s.status })),
+    controlSessionsEqual
+  )
+
   useEffect(() => {
     if (!isiOS) return
     const container = containerRef.current
@@ -1662,7 +1688,7 @@ export default function Terminal({
           onPasteText={handlePasteText}
           onPasteImage={handlePasteImage}
           disabled={connectionStatus !== 'connected' || isReadOnly || !isInputReady}
-          sessions={sessions.map(s => ({ id: s.id, name: s.name, status: s.status }))}
+          sessions={controlSessions}
           currentSessionId={session.id}
           agentType={session.agentType}
           fileUploadsAllowed={!isRemoteSession}

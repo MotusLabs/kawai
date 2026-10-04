@@ -117,12 +117,12 @@
   and display flags). Stabilize handler bindings with full dependencies first, and thread a `nowTick` prop from
   `SessionList`'s timestamp tick into both the flat list and
   `WorkspaceSectionList`; verify the row tests in 6.3 pass
-- [ ] 6.2 Hoist the `sessions.map(...)` input in `Terminal.tsx` into a
+- [x] 6.2 Hoist the `sessions.map(...)` input in `Terminal.tsx` into a
   value-stable memoization of id/name/status (retain identity across new
   arrays with identical strip data), wrap `TerminalControls` in `React.memo` after confirming its
   other props are callback-stable (wrap any that are not in `useCallback`);
   verify the chrome tests in 6.3 pass
-- [ ] 6.3 Extend `src/client/__tests__/sessionListComponent.test.tsx` /
+- [x] 6.3 Extend `src/client/__tests__/sessionListComponent.test.tsx` /
   `sessionList.test.ts` (row not re-rendered on same-bucket lastActivity-only change;
   re-rendered on status or activity-bucket change; label refreshes on nowTick;
   replacing a callback invokes the new handler and adding/removing optional
