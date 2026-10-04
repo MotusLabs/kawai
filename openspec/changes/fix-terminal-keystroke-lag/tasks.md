@@ -156,7 +156,7 @@
 
 - [x] 8.1 Run `bun run lint && bun run typecheck && bun run test` end-to-end
   and record a fully green run
-- [ ] 8.2 Load reproduction per design (8 flooding tmux windows,
+- [x] 8.2 Load reproduction per design (8 flooding tmux windows,
   `LOG_LEVEL=debug`): zero `event_loop_lag` events over 100 ms in 60 s of
   steady typing; keystroke RTT via the dev-browser skill p95 ≤ 150 ms /
   max ≤ 400 ms; compare `terminal-output` frame counts over 10 s with identical
@@ -165,14 +165,19 @@
   session-store activity-only updates occur only at bucket crossings (not
   a rolling 30 s throttle; different windows may cross buckets at different times); record the
   before/after numbers in the change log
-- [ ] 8.3 Regression sweep via dev-browser: scroll-up enters copy-mode with
+  (results in verification.md: RTT p95 1.5 ms / max 15.8 ms, 0 lag events,
+  frames 173→89 and 91→27 per 10 s, broadcasts 30→2-3 per 60 s at bucket
+  boundaries only; dev-browser skill absent, project Playwright used)
+- [x] 8.3 Regression sweep via dev-browser: scroll-up enters copy-mode with
   the pill within ~1 s and typing exits it; session switch replays history
   and lands on the right pane; kill still animates; rapid A→B→A switching
   produces no `terminal_output_dropped` burst beyond one per 5 s; log
   matching still associates windows after edits
-- [ ] 8.4 Only if 8.2 still shows refresh contention: implement the deferred
+  (all PASS, details in verification.md)
+- [x] 8.4 Only if 8.2 still shows refresh contention: implement the deferred
   batched-capture follow-up from design's Open Questions (single chained
   tmux invocation, nonce separators, per-window fallback; confirm on tmux
   3.3a that a mid-chain failure does not abort the chain) with
   `sessionRefreshWorker.test.ts` coverage of separator parsing and fallbacks;
   otherwise record that it was not needed
+  (not needed — no contention observed; recorded in verification.md)
