@@ -10,7 +10,7 @@
 // model. Dormant-row visibility follows the global hibernating/history
 // toggles so persisted preferences keep working.
 
-import { useCallback, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { AnimatePresence } from 'motion/react'
 import {
   DndContext,
@@ -31,8 +31,9 @@ import ChevronRightIcon from '@untitledui-icons/react/line/esm/ChevronRightIcon'
 import GitBranch01Icon from '@untitledui-icons/react/line/esm/GitBranch01Icon'
 import HandIcon from '@untitledui-icons/react/line/esm/HandIcon'
 import PlusIcon from '@untitledui-icons/react/line/esm/PlusIcon'
-import type { AgentSession, Session } from '@shared/types'
+import type { AgentSession } from '@shared/types'
 import type { FallbackSectionData, GroupedSessionEntry, WorkspaceView } from '../utils/workspaceView'
+import { useStableValue, stringArraysEqual } from '../hooks/useStableValue'
 import PaneResizeHandle from './PaneResizeHandle'
 import SectionHeader, { CollapseTrigger } from './SectionHeader'
 import HibernatingSessionItem from './HibernatingSessionItem'
@@ -52,6 +53,8 @@ export interface GroupedRowContext {
   useSafariLayoutFallback: boolean
   exitDuration: number
   remoteAllowControl: boolean
+  /** Label clock refreshed every 30s by SessionList; rows memoized on it. */
+  nowTick: number
   onSelect: (sessionId: string) => void
   onSelectHibernating: (sessionId: string) => void
   onStartEdit: (sessionId: string) => void
@@ -457,8 +460,18 @@ interface GroupedLiveRowsProps {
  * never observed here, so cross-section moves cannot be applied.
  */
 function GroupedLiveRows({ entries, ctx, remountKey }: GroupedLiveRowsProps) {
-  const liveSessions = entries.flatMap((entry) =>
-    entry.kind === 'live' && entry.liveSession ? [entry.liveSession] : []
+  const liveSessions = useMemo(
+    () => entries.flatMap((entry) =>
+      entry.kind === 'live' && entry.liveSession ? [entry.liveSession] : []
+    ),
+    [entries]
+  )
+  // SortableContext rebuilds its context value whenever the items array
+  // identity changes, which re-renders every row through context even when
+  // memoized row props are equal; keep the id array while its values match.
+  const sortableItemIds = useStableValue(
+    liveSessions.map((session) => session.id),
+    stringArraysEqual
   )
   const [activeId, setActiveId] = useState<string | null>(null)
   const [overId, setOverId] = useState<string | null>(null)
@@ -513,7 +526,7 @@ function GroupedLiveRows({ entries, ctx, remountKey }: GroupedLiveRowsProps) {
       onDragEnd={handleDragEnd}
       onDragCancel={handleDragCancel}
     >
-      <SortableContext items={liveSessions.map((s) => s.id)} strategy={verticalListSortingStrategy}>
+      <SortableContext items={sortableItemIds} strategy={verticalListSortingStrategy}>
         <div key={remountKey}>
           {/* sync (not popLayout): without per-row layout animation,
               popLayout would overlap an exiting row with the sibling
@@ -540,13 +553,15 @@ function GroupedLiveRows({ entries, ctx, remountKey }: GroupedLiveRowsProps) {
                   showLastUserMessage={ctx.showLastUserMessage}
                   showHostInfo={ctx.showHostInfo}
                   dropIndicator={showDropIndicator}
-                  onSelect={() => ctx.onSelect(session.id)}
-                  onStartEdit={canControlRow(session, ctx) ? () => ctx.onStartEdit(session.id) : undefined}
+                  nowTick={ctx.nowTick}
+                  remoteAllowControl={ctx.remoteAllowControl}
+                  onSelect={ctx.onSelect}
+                  onStartEdit={ctx.onStartEdit}
                   onCancelEdit={ctx.onCancelEdit}
-                  onRename={(newName) => ctx.onRename(session.id, newName)}
-                  onHibernate={canHibernateRow(session) ? () => ctx.onHibernate(session.agentSessionId!.trim()) : undefined}
-                  onKill={canControlRow(session, ctx) ? () => ctx.onKill(session.id) : undefined}
-                  onDuplicate={canControlRow(session, ctx) ? () => ctx.onDuplicate(session.id) : undefined}
+                  onRename={ctx.onRename}
+                  onHibernate={ctx.onHibernate}
+                  onKill={ctx.onKill}
+                  onDuplicate={ctx.onDuplicate}
                 />
               )
             })}
@@ -554,20 +569,6 @@ function GroupedLiveRows({ entries, ctx, remountKey }: GroupedLiveRowsProps) {
         </div>
       </SortableContext>
     </DndContext>
-  )
-}
-
-function canControlRow(session: Session, ctx: GroupedRowContext): boolean {
-  const isRemote = session.remote === true
-  const isManaged = session.source === 'managed'
-  return !isRemote || (ctx.remoteAllowControl && isManaged)
-}
-
-function canHibernateRow(session: Session): boolean {
-  return Boolean(
-    session.source === 'managed' &&
-      session.remote !== true &&
-      session.agentSessionId?.trim()
   )
 }
 

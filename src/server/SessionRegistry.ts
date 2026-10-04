@@ -1,5 +1,6 @@
 import { EventEmitter } from 'node:events'
 import type { AgentSession, Session } from '../shared/types'
+import { activityInSameBucket } from '../shared/activityBucket'
 
 export interface RegistryEvents {
   sessions: (sessions: Session[]) => void
@@ -163,13 +164,11 @@ function agentSessionsEqual(a: AgentSession, b: AgentSession): boolean {
   )
 }
 
-/** Activity quantization for broadcast change detection (design D5). */
-const ACTIVITY_BUCKET_MS = 30_000
-
 /**
  * Same-field equality as sessionsEqual, except lastActivity compares by 30s
- * bucket. Invalid (unparseable) timestamps fall back to raw string equality,
- * preserving the previous behavior for malformed values.
+ * bucket (shared activityBucket helper, design D5). Invalid (unparseable)
+ * timestamps fall back to raw string equality, preserving the previous
+ * behavior for malformed values.
  */
 function sessionsEqualForBroadcast(a: Session, b: Session): boolean {
   return (
@@ -189,16 +188,5 @@ function sessionsEqualForBroadcast(a: Session, b: Session): boolean {
     a.isPinned === b.isPinned &&
     a.host === b.host &&
     a.remote === b.remote
-  )
-}
-
-function activityInSameBucket(a: string, b: string): boolean {
-  const timeA = Date.parse(a)
-  const timeB = Date.parse(b)
-  if (Number.isNaN(timeA) || Number.isNaN(timeB)) {
-    return a === b
-  }
-  return (
-    Math.floor(timeA / ACTIVITY_BUCKET_MS) === Math.floor(timeB / ACTIVITY_BUCKET_MS)
   )
 }

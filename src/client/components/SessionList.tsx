@@ -25,6 +25,7 @@ import { useSessionStore } from '../stores/sessionStore'
 import { getEffectiveModifier, getModifierDisplay } from '../utils/device'
 import { useCounterBump } from '../hooks/useCounterBump'
 import { useExitCleanup } from '../hooks/useExitCleanup'
+import { useStableValue, stringArraysEqual } from '../hooks/useStableValue'
 import HostFilterDropdown from './HostFilterDropdown'
 import ProjectFilterDropdown from './ProjectFilterDropdown'
 import SessionPreviewModal from './SessionPreviewModal'
@@ -72,13 +73,22 @@ interface SessionListProps {
   onBrowseBranches?: (repositoryId: string) => void
 }
 
-function useTimestampRefresh() {
-  const [, setTick] = useState(0)
+/**
+ * Current time refreshed every 30s; threaded into rows as nowTick so relative
+ * labels recompute on schedule while memoized rows skip unrelated re-renders.
+ */
+function useTimestampRefresh(): number {
+  const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
-    const id = setInterval(() => setTick((n) => n + 1), 30000)
+    const id = setInterval(() => setNow(Date.now()), 30000)
     return () => clearInterval(id)
   }, [])
+  return now
 }
+
+/** Stable default so absent optional actions keep GroupedRowContext handlers
+ *  defined without changing identity between renders. */
+const noop = () => {}
 
 export default function SessionList({
   sessions,
@@ -103,7 +113,7 @@ export default function SessionList({
   onCreateChangeWorktree,
   onBrowseBranches,
 }: SessionListProps) {
-  useTimestampRefresh()
+  const nowTick = useTimestampRefresh()
   const isSafari = useMemo(() => {
     if (typeof navigator === 'undefined') return false
     return /^((?!chrome|android).)*safari/i.test(navigator.userAgent)
@@ -286,6 +296,14 @@ export default function SessionList({
     }
     return next
   }, [sortedSessions, projectFilters, hostFilters])
+
+  // SortableContext rebuilds its context value whenever the items array
+  // identity changes, which re-renders every row through context even when
+  // memoized row props are equal; keep the id array while its values match.
+  const sortableItemIds = useStableValue(
+    filteredSessions.map((session) => session.id),
+    stringArraysEqual
+  )
 
   const filterKey = useMemo(
     () => {
@@ -485,10 +503,22 @@ export default function SessionList({
     }
   }, [filteredSessions, activeId, overId])
 
-  const handleRename = (sessionId: string, newName: string) => {
+  // Stable row-handler bindings (design D6): rows memoize on callback
+  // identity, so every handler below must keep a fixed identity across
+  // re-renders that do not change its dependencies.
+  const handleRename = useCallback((sessionId: string, newName: string) => {
     onRename(sessionId, newName)
     setEditingSessionId(null)
-  }
+  }, [onRename])
+
+  const cancelEdit = useCallback(() => setEditingSessionId(null), [])
+
+  const killFromContextMenu = useCallback(
+    (sessionId: string) => {
+      onKill?.(sessionId, 'session_list_context_menu')
+    },
+    [onKill]
+  )
 
   const workspacePaneFraction = useSettingsStore((state) => state.workspacePaneFraction)
   const setWorkspacePaneFraction = useSettingsStore((state) => state.setWorkspacePaneFraction)
@@ -498,36 +528,65 @@ export default function SessionList({
   const navigatorBodyRef = useRef<HTMLDivElement>(null)
 
   // Context shared by every grouped row, whether it renders in the flow
-  // region (WorkspaceSectionList) or a docked fallback pane.
-  const rowContext: GroupedRowContext = {
-    selectedSessionId,
-    selectedHibernatingSessionId,
-    editingSessionId,
-    showSessionIdPrefix,
-    showProjectName,
-    showLastUserMessage,
-    showHostInfo,
-    prefersReducedMotion,
-    useSafariLayoutFallback,
-    exitDuration: EXIT_DURATION,
-    remoteAllowControl,
-    onSelect,
-    onSelectHibernating: onSelectHibernating ?? (() => {}),
-    onStartEdit: setEditingSessionId,
-    onCancelEdit: () => setEditingSessionId(null),
-    onRename: handleRename,
-    onHibernate: onHibernate ?? (() => {}),
-    onKill: onKill
-      ? (sessionId) => onKill(sessionId, 'session_list_context_menu')
-      : () => {},
-    onDuplicate: onDuplicate ?? (() => {}),
-    onResume: onResume ?? (() => {}),
-    onMoveToHistory: onMoveToHistory ?? (() => {}),
-    onPreview: setPreviewSession,
-    onReorder: handleGroupReorder,
-    isNew: (sessionId) =>
-      newlyActiveIds.has(sessionId) || newlyFilteredInIds.has(sessionId),
-  }
+  // region (WorkspaceSectionList) or a docked fallback pane. Memoized so
+  // memoized rows keep stable handler props across unrelated re-renders.
+  const rowContext: GroupedRowContext = useMemo(
+    () => ({
+      selectedSessionId,
+      selectedHibernatingSessionId,
+      editingSessionId,
+      showSessionIdPrefix,
+      showProjectName,
+      showLastUserMessage,
+      showHostInfo,
+      prefersReducedMotion,
+      useSafariLayoutFallback,
+      exitDuration: EXIT_DURATION,
+      remoteAllowControl,
+      nowTick,
+      onSelect,
+      onSelectHibernating: onSelectHibernating ?? noop,
+      onStartEdit: setEditingSessionId,
+      onCancelEdit: cancelEdit,
+      onRename: handleRename,
+      onHibernate: onHibernate ?? noop,
+      onKill: onKill ? killFromContextMenu : noop,
+      onDuplicate: onDuplicate ?? noop,
+      onResume: onResume ?? noop,
+      onMoveToHistory: onMoveToHistory ?? noop,
+      onPreview: setPreviewSession,
+      onReorder: handleGroupReorder,
+      isNew: (sessionId) =>
+        newlyActiveIds.has(sessionId) || newlyFilteredInIds.has(sessionId),
+    }),
+    [
+      selectedSessionId,
+      selectedHibernatingSessionId,
+      editingSessionId,
+      showSessionIdPrefix,
+      showProjectName,
+      showLastUserMessage,
+      showHostInfo,
+      prefersReducedMotion,
+      useSafariLayoutFallback,
+      EXIT_DURATION,
+      remoteAllowControl,
+      nowTick,
+      onSelect,
+      onSelectHibernating,
+      cancelEdit,
+      handleRename,
+      onHibernate,
+      onKill,
+      killFromContextMenu,
+      onDuplicate,
+      onResume,
+      onMoveToHistory,
+      handleGroupReorder,
+      newlyActiveIds,
+      newlyFilteredInIds,
+    ]
+  )
 
   const renderFallbackPane = (
     section: WorkspaceView['workspace'] | WorkspaceView['remote'],
@@ -660,7 +719,7 @@ export default function SessionList({
                   onDragCancel={handleDragCancel}
                 >
                   <SortableContext
-                    items={filteredSessions.map((s) => s.id)}
+                    items={sortableItemIds}
                     strategy={verticalListSortingStrategy}
                   >
                     <div key={filterKey}>
@@ -671,15 +730,6 @@ export default function SessionList({
                         {filteredSessions.map((session, index) => {
                           const isTrulyNew = newlyActiveIds.has(session.id)
                           const isFilteredIn = newlyFilteredInIds.has(session.id)
-                          const isRemote = session.remote === true
-                          const isManaged = session.source === 'managed'
-                          const canControl = !isRemote || (remoteAllowControl && isManaged)
-                          const canHibernate = Boolean(
-                            onHibernate &&
-                            !isRemote &&
-                            isManaged &&
-                            session.agentSessionId?.trim()
-                          )
                           // Calculate drop indicator position
                           const activeIndex = activeId
                             ? filteredSessions.findIndex((s) => s.id === activeId)
@@ -703,21 +753,15 @@ export default function SessionList({
                               showLastUserMessage={showLastUserMessage}
                               showHostInfo={showHostInfo}
                               dropIndicator={showDropIndicator}
-                              onSelect={() => onSelect(session.id)}
-                              onStartEdit={canControl ? () => setEditingSessionId(session.id) : undefined}
-                              onCancelEdit={() => setEditingSessionId(null)}
-                              onRename={(newName) => handleRename(session.id, newName)}
-                              onHibernate={
-                                canHibernate
-                                  ? () => onHibernate?.(session.agentSessionId!.trim())
-                                  : undefined
-                              }
-                              onKill={
-                                onKill && canControl
-                                  ? () => onKill(session.id, 'session_list_context_menu')
-                                  : undefined
-                              }
-                              onDuplicate={onDuplicate && canControl ? () => onDuplicate(session.id) : undefined}
+                              nowTick={nowTick}
+                              remoteAllowControl={remoteAllowControl}
+                              onSelect={onSelect}
+                              onStartEdit={setEditingSessionId}
+                              onCancelEdit={cancelEdit}
+                              onRename={handleRename}
+                              onHibernate={onHibernate}
+                              onKill={onKill ? killFromContextMenu : undefined}
+                              onDuplicate={onDuplicate}
                             />
                           )
                         })}

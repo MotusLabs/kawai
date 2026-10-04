@@ -2216,4 +2216,56 @@ describe('App', () => {
       useSettingsStore.setState({ defaultProjectDir: '' })
     }
   })
+
+  test('duplicate builds session-create from current session data', () => {
+    useSessionStore.setState({ sessions: [baseSession], selectedSessionId: baseSession.id, hasLoaded: true })
+    sendCalls = []
+
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => {
+      renderer = TestRenderer.create(<App />)
+    })
+    activeRenderer = renderer
+
+    // The row rendered against the original data; the store's copy advances
+    // afterwards (a later broadcast). The memoized row must still duplicate
+    // from the current data, not from a snapshot captured at render time.
+    act(() => {
+      useSessionStore.setState({
+        sessions: [
+          { ...baseSession, name: 'beta', projectPath: '/tmp/updated', command: 'bun run dev' },
+        ],
+      })
+    })
+
+    // Desktop sidebar's row (the drawer may render its own copy).
+    const card = renderer.root.findAllByProps({ 'data-testid': 'session-card' })[0]
+    act(() => {
+      card.props.onContextMenu({ preventDefault: () => {}, stopPropagation: () => {}, clientX: 8, clientY: 8 })
+    })
+    const menu = renderer.root.findByProps({ role: 'menu' })
+    const duplicateButton = menu
+      .findAllByProps({ role: 'menuitem' })
+      .find((item) =>
+        (Array.isArray(item.props.children) ? item.props.children : [item.props.children]).some(
+          (child) => child === 'Duplicate'
+        )
+      )
+    if (!duplicateButton) {
+      throw new Error('Expected Duplicate menu item')
+    }
+
+    act(() => {
+      duplicateButton.props.onClick({ stopPropagation: () => {} })
+    })
+
+    const createMessage = sendCalls.find((message) => message.type === 'session-create')
+    expect(createMessage).toMatchObject({
+      type: 'session-create',
+      projectPath: '/tmp/updated',
+      command: 'bun run dev',
+    })
+
+    act(() => renderer.unmount())
+  })
 })

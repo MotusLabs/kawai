@@ -1,8 +1,8 @@
-export function formatRelativeTime(iso: string): string {
+export function formatRelativeTime(iso: string, now: number = Date.now()): string {
   const timestamp = Date.parse(iso)
   if (Number.isNaN(timestamp)) return ''
 
-  const delta = Date.now() - timestamp
+  const delta = now - timestamp
   const minutes = Math.floor(delta / 60000)
   if (minutes < 1) return 'now'
   if (minutes < 60) return `${minutes}m`

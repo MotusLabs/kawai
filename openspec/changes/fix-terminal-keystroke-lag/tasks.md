@@ -111,7 +111,7 @@
 
 ## 6. Client: render-storm fixes (design D6)
 
-- [ ] 6.1 Wrap `SortableSessionItem` in `React.memo` with a custom comparator
+- [x] 6.1 Wrap `SortableSessionItem` in `React.memo` with a custom comparator
   (all session fields with activity compared by bucket; all other props
   including callbacks, optional action availability, `nowTick`, drag/drop
   and display flags). Stabilize handler bindings with full dependencies first, and thread a `nowTick` prop from
