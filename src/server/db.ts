@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { Database as SQLiteDatabase } from 'bun:sqlite'
-import type { AgentType } from '../shared/types'
+import type { AgentType, SessionStatus } from '../shared/types'
 import { resolveProjectPath } from './paths'
 
 export interface AgentSessionRecord {
@@ -37,6 +37,21 @@ export interface KnownSessionKey {
   slug: string | null
   agentType: AgentType | null
   isCodexExec: boolean
+}
+
+/**
+ * Minimal chat-session row (design D5): conversation content itself is never
+ * duplicated into our DB — it lives in the SDK transcript addressed by
+ * `sdkSessionId`. Null sdkSessionId means created but never started.
+ */
+export interface ChatSessionRecord {
+  sessionId: string
+  name: string
+  projectPath: string
+  sdkSessionId: string | null
+  status: SessionStatus
+  createdAt: string
+  lastActivityAt: string
 }
 
 // last_user_message is a UI preview; unbounded values (giant pastes, tool
@@ -97,6 +112,15 @@ export interface SessionDatabase {
   // App settings
   getAppSetting: (key: string) => string | null
   setAppSetting: (key: string, value: string) => void
+  // Chat sessions (SDK-driven; separate from agent_sessions log rows)
+  insertChatSession: (session: ChatSessionRecord) => ChatSessionRecord
+  updateChatSession: (
+    sessionId: string,
+    patch: Partial<Omit<ChatSessionRecord, 'sessionId'>>
+  ) => ChatSessionRecord | null
+  deleteChatSession: (sessionId: string) => boolean
+  getChatSession: (sessionId: string) => ChatSessionRecord | null
+  getChatSessions: () => ChatSessionRecord[]
   close: () => void
 }
 
@@ -142,6 +166,18 @@ CREATE TABLE IF NOT EXISTS app_settings (
 );
 `
 
+const CREATE_CHAT_SESSIONS_TABLE_SQL = `
+CREATE TABLE IF NOT EXISTS chat_sessions (
+  session_id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  project_path TEXT NOT NULL,
+  sdk_session_id TEXT,
+  status TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  last_activity_at TEXT NOT NULL
+);
+`
+
 const CREATE_INDEXES_SQL = `
 CREATE INDEX IF NOT EXISTS idx_session_id
   ON agent_sessions (session_id);
@@ -165,6 +201,7 @@ export function initDatabase(options: { path?: string } = {}): SessionDatabase {
   migrateDatabase(db)
   db.exec(CREATE_TABLE_SQL)
   db.exec(CREATE_APP_SETTINGS_TABLE_SQL)
+  db.exec(CREATE_CHAT_SESSIONS_TABLE_SQL)
   migrateLastUserMessageColumn(db)
   migrateDeduplicateDisplayNames(db)
   migrateIsPinnedColumn(db)
@@ -246,6 +283,28 @@ export function initDatabase(options: { path?: string } = {}): SessionDatabase {
   const upsertAppSetting = db.prepare(
     'INSERT OR REPLACE INTO app_settings (key, value) VALUES ($key, $value)'
   )
+
+  // Chat sessions prepared statements
+  const insertChatStmt = db.prepare(
+    `INSERT INTO chat_sessions
+      (session_id, name, project_path, sdk_session_id, status, created_at, last_activity_at)
+     VALUES ($sessionId, $name, $projectPath, $sdkSessionId, $status, $createdAt, $lastActivityAt)`
+  )
+  const selectChatBySessionId = db.prepare(
+    'SELECT * FROM chat_sessions WHERE session_id = $sessionId'
+  )
+  const selectAllChatSessions = db.prepare(
+    'SELECT * FROM chat_sessions ORDER BY created_at, session_id'
+  )
+  const deleteChatStmt = db.prepare(
+    'DELETE FROM chat_sessions WHERE session_id = $sessionId'
+  )
+  const updateChatStmt = (fields: string[]) =>
+    db.prepare(
+      `UPDATE chat_sessions SET ${fields
+        .map((field) => `${field} = $${field}`)
+        .join(', ')} WHERE session_id = $sessionId`
+    )
 
   return {
     db,
@@ -459,6 +518,65 @@ export function initDatabase(options: { path?: string } = {}): SessionDatabase {
     setAppSetting: (key, value) => {
       upsertAppSetting.run({ $key: key, $value: value })
     },
+    // Chat sessions
+    insertChatSession: (session) => {
+      insertChatStmt.run({
+        $sessionId: session.sessionId,
+        $name: session.name,
+        $projectPath: session.projectPath,
+        $sdkSessionId: session.sdkSessionId,
+        $status: session.status,
+        $createdAt: session.createdAt,
+        $lastActivityAt: session.lastActivityAt,
+      })
+      return session
+    },
+    updateChatSession: (sessionId, patch) => {
+      const fieldMap: Record<string, string> = {
+        name: 'name',
+        projectPath: 'project_path',
+        sdkSessionId: 'sdk_session_id',
+        status: 'status',
+        createdAt: 'created_at',
+        lastActivityAt: 'last_activity_at',
+      }
+      const fields: string[] = []
+      const params: Record<string, string | number | null> = {
+        $sessionId: sessionId,
+      }
+      for (const [key, value] of Object.entries(patch)) {
+        if (value === undefined) continue
+        const field = fieldMap[key]
+        if (!field) continue
+        fields.push(field)
+        params[`$${field}`] = value
+      }
+      if (fields.length === 0) {
+        const row = selectChatBySessionId.get({ $sessionId: sessionId }) as
+          | Record<string, unknown>
+          | undefined
+        return row ? mapChatRow(row) : null
+      }
+      updateChatStmt(fields).run(params)
+      const row = selectChatBySessionId.get({ $sessionId: sessionId }) as
+        | Record<string, unknown>
+        | undefined
+      return row ? mapChatRow(row) : null
+    },
+    deleteChatSession: (sessionId) => {
+      const result = deleteChatStmt.run({ $sessionId: sessionId })
+      return result.changes > 0
+    },
+    getChatSession: (sessionId) => {
+      const row = selectChatBySessionId.get({ $sessionId: sessionId }) as
+        | Record<string, unknown>
+        | undefined
+      return row ? mapChatRow(row) : null
+    },
+    getChatSessions: () => {
+      const rows = selectAllChatSessions.all() as Record<string, unknown>[]
+      return rows.map(mapChatRow)
+    },
     close: () => {
       db.close()
     },
@@ -483,6 +601,21 @@ function ensureDataDir(dbPath: string) {
     fs.chmodSync(dir, 0o700)
   } catch {
     // Ignore chmod failures
+  }
+}
+
+function mapChatRow(row: Record<string, unknown>): ChatSessionRecord {
+  return {
+    sessionId: String(row.session_id ?? ''),
+    name: String(row.name ?? ''),
+    projectPath: String(row.project_path ?? ''),
+    sdkSessionId:
+      row.sdk_session_id === null || row.sdk_session_id === undefined
+        ? null
+        : String(row.sdk_session_id),
+    status: (row.status ?? 'waiting') as ChatSessionRecord['status'],
+    createdAt: String(row.created_at ?? ''),
+    lastActivityAt: String(row.last_activity_at ?? ''),
   }
 }
 
