@@ -399,6 +399,7 @@ export function SessionRow({
               {sessionIdPrefix}
             </span>
           )}
+          {session.kind === 'chat' && <span className="text-[11px] text-secondary">Chat</span>}
           {needsInput ? (
             <span
               className={`ml-1 flex shrink-0 items-center justify-center rounded-full px-1.5 py-0.5 ${statusPillClass[session.status]} pulse-approval`}

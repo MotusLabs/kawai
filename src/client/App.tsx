@@ -4,6 +4,8 @@ import type { WorkspaceBranch } from '@shared/workspace'
 import Header from './components/Header'
 import SessionList from './components/SessionList'
 import Terminal from './components/Terminal'
+import ChatView from './components/chat/ChatView'
+import { useChatStore } from './stores/chatStore'
 import NewSessionModal from './components/NewSessionModal'
 import BranchBrowserModal from './components/BranchBrowserModal'
 import CreateWorktreeModal from './components/CreateWorktreeModal'
@@ -405,6 +407,7 @@ export default function App() {
         }
       }
       if (message.type === 'session-removed') {
+        useChatStore.getState().remove(message.sessionId)
         // Do NOT clear pendingKills here — stale async refreshes (e.g. the
         // periodic 2s refresh) can arrive AFTER session-removed and re-add
         // the killed window if the tmux process hasn't fully exited yet.
@@ -527,6 +530,8 @@ export default function App() {
         setServerError(message.message)
         window.setTimeout(() => setServerError(null), 6000)
       }
+      if (message.type === 'chat-events') useChatStore.getState().apply(message.sessionId, message.events)
+      if (message.type === 'chat-snapshot') useChatStore.getState().snapshot(message)
       if (message.type === 'kill-failed') {
         // Restore optimistically removed session from pending-kill snapshot
         // (not exitingSessions, which may have been cleared by animation timer)
@@ -1104,9 +1109,10 @@ export default function App() {
     command?: string,
     host?: string,
     autoStartChange?: string,
-    autoStartAgent?: AutoStartAgent
+    autoStartAgent?: AutoStartAgent,
+    kind?: 'terminal' | 'chat'
   ) => {
-    sendMessage({ type: 'session-create', projectPath, name, command, host, autoStartChange, autoStartAgent })
+    sendMessage({ type: 'session-create', projectPath, name, command, host, autoStartChange, autoStartAgent, kind })
     if (!host) setLastProjectPath(projectPath)
   }
 
@@ -1199,8 +1205,13 @@ export default function App() {
         onMouseDown={handleResizeStart}
       />
 
-      {/* Terminal - full height on desktop */}
-      <Terminal
+      {/* Active session pane - full height on desktop */}
+      {selectedSession?.kind === 'chat' ? <ChatView
+        session={selectedSession} sendMessage={sendMessage}
+        connectionStatus={connectionStatus} connectionEpoch={connectionEpoch}
+        error={connectionError || serverError} onClose={() => setSelectedSessionId(null)}
+        onKill={() => handleKillSession(selectedSession.id)}
+      /> : <Terminal
         session={selectedSession}
         sessions={navigationLiveSessions}
         hibernatingSession={selectedHibernatingSession}
@@ -1227,7 +1238,7 @@ export default function App() {
         onNewSessionInWorktree={handleNewSessionInWorktree}
         onCreateChangeWorktree={handleCreateChangeWorktree}
         onBrowseBranches={handleBrowseBranches}
-      />
+      />}
 
       <NewSessionModal
         isOpen={isModalOpen}

@@ -55,7 +55,8 @@ interface NewSessionModalProps {
     command?: string,
     host?: string,
     autoStartChange?: string,
-    autoStartAgent?: AutoStartAgent
+    autoStartAgent?: AutoStartAgent,
+    kind?: 'terminal' | 'chat'
   ) => void
   defaultProjectDir: string
   commandPresets: CommandPreset[]
@@ -97,6 +98,7 @@ export default function NewSessionModal({
   initialAutoStartChange,
 }: NewSessionModalProps) {
   const [projectPath, setProjectPath] = useState('')
+  const [kind, setKind] = useState<'terminal' | 'chat'>('terminal')
   const [name, setName] = useState('')
   const [selectedPresetId, setSelectedPresetId] = useState<string | null>(null)
   const [command, setCommand] = useState('')
@@ -110,10 +112,11 @@ export default function NewSessionModal({
   const projectPathRef = useRef<HTMLInputElement>(null)
   const defaultButtonRef = useRef<HTMLButtonElement>(null)
 
-  const showHostPicker = remoteAllowControl && remoteHosts.length > 0
+  const showHostPicker = kind === 'terminal' && remoteAllowControl && remoteHosts.length > 0
 
   useEffect(() => {
     if (!isOpen) {
+      setKind('terminal')
       setProjectPath('')
       setName('')
       setSelectedPresetId(null)
@@ -273,12 +276,17 @@ export default function NewSessionModal({
   }
 
   const isCustomMode = selectedPresetId === null
-  const isRemoteHost = selectedHost !== ''
+  const isRemoteHost = kind === 'terminal' && selectedHost !== ''
 
   const handleSubmit = (event: React.FormEvent) => {
     event.preventDefault()
     const trimmedPath = projectPath.trim()
     if (!trimmedPath) {
+      return
+    }
+    if (kind === 'chat') {
+      onCreate(trimmedPath, name.trim() || undefined, undefined, undefined, undefined, undefined, 'chat')
+      onClose()
       return
     }
 
@@ -343,6 +351,14 @@ export default function NewSessionModal({
         </h2>
 
         <div className="mt-4 space-y-4">
+          <label className="block text-xs text-secondary">
+            Session kind
+            <select aria-label="Session kind" className="input mt-1.5" value={kind}
+              onChange={event => setKind(event.target.value as 'terminal' | 'chat')}>
+              <option value="terminal">Terminal</option>
+              <option value="chat">Claude chat</option>
+            </select>
+          </label>
           {showHostPicker && (
             <div>
               <label className="mb-1.5 block text-xs text-secondary">
@@ -394,7 +410,7 @@ export default function NewSessionModal({
             </div>
           )}
 
-          <div>
+          {kind === 'terminal' && <div>
             <label className="mb-1.5 block text-xs text-secondary">
               Command
             </label>
@@ -458,7 +474,7 @@ export default function NewSessionModal({
               placeholder="Enter command..."
               className="input mt-2 font-mono text-xs"
             />
-          </div>
+          </div>}
           <div>
             <label className="mb-1.5 block text-xs text-secondary">
               Project Path
@@ -521,7 +537,7 @@ export default function NewSessionModal({
               className="input text-sm placeholder:italic"
             />
           </div>
-          {initialAutoStartChange && (
+          {kind === 'terminal' && initialAutoStartChange && (
             <div>
               <label className="mb-1.5 block text-xs text-secondary">
                 Start with

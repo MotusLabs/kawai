@@ -104,6 +104,43 @@ bun run dev
 
 Open `http://<your-machine>:5173` (Vite dev server). In production, UI is served from the backend port (default 4040).
 
+### Creating chat sessions
+
+Choose **New session → Session kind → Claude chat**, enter a local project
+directory and an optional name, and select **Create**. Chat sessions appear
+with a Chat badge. Send messages in the composer, allow or deny tool requests,
+answer agent questions, and use Stop to interrupt a turn. Terminal sessions
+remain available through the Terminal kind.
+
+Configure Claude authentication on the server: set `ANTHROPIC_API_KEY`, set
+`CLAUDE_CODE_OAUTH_TOKEN` (for example from `claude setup-token`), or use an
+authenticated Claude CLI credentials directory. Bun loads the repository's
+`.env` file automatically; keep credentials out of Git. `CLAUDE_CONFIG_DIR`
+selects the CLI configuration and transcript directory. Credentials stay on
+the server. A failed SDK runtime probe refuses creation with an error; fix
+the installation/runtime and restart the server to retry.
+
+Chat sessions persist across server restarts. Keep their Claude transcript
+files under `CLAUDE_CONFIG_DIR/projects/` to resume the same conversation.
+If a transcript is missing, restore it or explicitly create a new session;
+the original conversation ID is preserved.
+
+For development without Claude authentication, enable the scripted fixture:
+
+```bash
+NODE_ENV=development AGENTBOARD_CHAT_FIXTURE=1 bun run dev
+```
+
+Select **Chat fixture** for a seeded approval. Send `approval`, `question`, or
+`stream` to exercise each interaction. The fixture is disabled outside
+development mode. Run its isolated Playwright checks with:
+
+```bash
+bun run build
+bunx playwright install chromium
+NODE_ENV=development AGENTBOARD_CHAT_FIXTURE=1 bunx playwright test tests/e2e/chat.spec.ts --workers=1
+```
+
 Production:
 
 ```bash

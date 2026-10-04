@@ -1,0 +1,82 @@
+import { expect, test } from '@playwright/test'
+
+test.skip(process.env.AGENTBOARD_CHAT_FIXTURE !== '1', 'Requires the development chat fixture')
+
+async function openFixture(page: import('@playwright/test').Page) {
+  await page.goto('/')
+  await page.locator('[data-session-id^="chat-"]').filter({ hasText: 'Chat fixture' }).first().click()
+  await expect(page.getByTestId('chat-view')).toBeVisible()
+}
+
+test('chat modal toggles local chat fields and creates a chat session', async ({ page }, info) => {
+  const creations: Array<{ kind?: string; name?: string }> = []
+  page.on('websocket', socket => socket.on('framesent', frame => {
+    const message = JSON.parse(String(frame.payload))
+    if (message.type === 'session-create') creations.push({ kind: message.kind, name: message.name })
+  }))
+  await page.goto('/')
+  await expect(page.locator('[data-session-id^="chat-"]').first()).toBeVisible()
+  await page.getByRole('button', { name: 'New session', exact: true }).first().click()
+  const dialog = page.getByRole('dialog', { name: 'New Session' })
+  await expect(dialog.getByTestId('command-select')).toBeVisible()
+  await dialog.getByLabel('Session kind').selectOption('chat')
+  await expect(dialog.getByTestId('command-select')).toHaveCount(0)
+  await expect(dialog.getByTestId('host-select')).toHaveCount(0)
+  await page.screenshot({ path: info.outputPath('chat-modal.png') })
+  await dialog.getByLabel('Session kind').selectOption('terminal')
+  await expect(dialog.getByTestId('command-select')).toBeVisible()
+  await dialog.getByLabel('Session kind').selectOption('chat')
+  await dialog.locator('input').first().fill(process.cwd())
+  await dialog.locator('input').last().fill('Browser chat')
+  await dialog.getByRole('button', { name: 'Create', exact: true }).click()
+  await expect.poll(() => creations).toEqual([{ kind: 'chat', name: 'Browser chat' }])
+  await expect(page.getByTestId('chat-view')).toContainText('Browser chat')
+  await page.getByLabel('Message Claude').fill('hello')
+  await page.getByRole('button', { name: 'Send', exact: true }).click()
+  await expect(page.getByTestId('chat-transcript')).toContainText('Fixture response')
+  await page.getByRole('button', { name: 'Kill session', exact: true }).click()
+  await expect(page.locator('[data-session-id^="chat-"]').filter({ hasText: 'Browser chat' })).toHaveCount(0)
+})
+
+test('approval, questions, streaming reconnect, two-client resolution, and stop', async ({ page, context }, info) => {
+  await openFixture(page)
+  const second = await context.newPage()
+  await openFixture(second)
+  await expect(page.getByRole('button', { name: 'Allow', exact: true })).toBeVisible()
+  await page.screenshot({ path: info.outputPath('chat-approval.png') })
+  await page.reload()
+  await expect(page.getByRole('button', { name: 'Allow', exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'Allow', exact: true }).click()
+  await expect(second.getByRole('button', { name: 'Allow', exact: true })).toHaveCount(0)
+  await expect(page.getByTestId('chat-transcript')).toContainText('Request accepted.')
+
+  await page.getByLabel('Message Claude').fill('approval')
+  await page.getByRole('button', { name: 'Send', exact: true }).click()
+  await page.getByRole('button', { name: 'Deny', exact: true }).click()
+  await expect(page.getByTestId('chat-transcript')).toContainText('Request denied.')
+
+  await page.getByLabel('Message Claude').fill('question')
+  await page.getByRole('button', { name: 'Send', exact: true }).click()
+  await page.getByLabel('Blue', { exact: false }).check()
+  await page.getByLabel('Green', { exact: false }).check()
+  await page.getByRole('button', { name: 'Submit answers' }).click()
+  await expect(page.getByRole('button', { name: 'Submit answers' })).toHaveCount(0)
+  await expect(second.getByRole('button', { name: 'Submit answers' })).toHaveCount(0)
+
+  await page.getByLabel('Message Claude').fill('stream')
+  await page.getByRole('button', { name: 'Send', exact: true }).click()
+  await expect(page.getByTestId('chat-transcript')).toContainText('Streaming')
+  await page.reload()
+  await expect(page.getByTestId('chat-transcript')).toContainText('Streaming a response across reconnect.')
+  await expect(page.getByText('Streaming a response across reconnect.', { exact: true })).toHaveCount(1)
+
+  await page.getByLabel('Message Claude').fill('approval')
+  await page.getByRole('button', { name: 'Send', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'Allow', exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'Stop', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'Allow', exact: true })).toHaveCount(0)
+  await expect(second.getByRole('button', { name: 'Allow', exact: true })).toHaveCount(0)
+  await expect(page.getByTestId('chat-transcript')).toContainText('Turn stopped')
+  await page.screenshot({ path: info.outputPath('chat-complete.png') })
+  await second.close()
+})
