@@ -21,6 +21,8 @@ import {
 import { LogPoller } from './logPoller'
 import { toAgentSession } from './agentSessions'
 import { ChatSessionManager } from './chat/ChatSessionManager'
+import { ChatConnections, type ChatConnection } from './chat/ChatConnections'
+import { chatFixtureEnabled, fixtureQueryFactory } from './chat/developmentFixture'
 import { getLogSearchDirs } from './logDiscovery'
 import {
   DEFAULT_SCROLLBACK_LINES,
@@ -784,10 +786,23 @@ const LAST_USER_MESSAGE_LOCK_MS = 60_000 // 60 seconds
 const chatSessionManager = new ChatSessionManager({
   registry,
   db,
-  // Live conversation events are broadcast when the chat WebSocket wiring
-  // lands; creation is not exposed yet, so nothing can emit them.
-  onEvent: () => {},
+  onEvent: (sessionId, event) => chatConnections.publish(sessionId, event),
+  ...(chatFixtureEnabled ? { queryFactory: fixtureQueryFactory, authCheck: () => true } : {}),
 })
+const chatConnections = new ChatConnections(chatSessionManager)
+if (chatFixtureEnabled && !registry.getAll().some(session => session.name === 'Chat fixture')) {
+  const fixture = chatSessionManager.createSession({ projectPath: process.cwd(), name: 'Chat fixture' })
+  if (fixture.ok) void chatSessionManager.send(fixture.session.id, 'Show an approval')
+}
+const chatPeers = new WeakMap<ServerWebSocket<WSData>, ChatConnection>()
+function chatPeer(ws: ServerWebSocket<WSData>): ChatConnection {
+  let peer = chatPeers.get(ws)
+  if (!peer) {
+    peer = { send: (message) => send(ws, message) }
+    chatPeers.set(ws, peer)
+  }
+  return peer
+}
 
 const logPoller = new LogPoller(db, registry, {
   onSessionOrphaned: (sessionId, supersededBy) => {
@@ -2138,6 +2153,8 @@ const websocketHandlers = {
     handleMessage(ws, message)
   },
   close(ws: ServerWebSocket<WSData>) {
+    const peer = chatPeers.get(ws)
+    if (peer) chatConnections.disconnect(peer)
     cleanupTerminals(ws)
     sockets.delete(ws)
   },
@@ -2586,6 +2603,14 @@ function handleMessage(
   }
 
   switch (message.type) {
+    case 'chat-attach':
+    case 'chat-detach':
+    case 'chat-send':
+    case 'chat-interrupt':
+    case 'chat-approval':
+    case 'chat-answer':
+      fireAndForget(chatConnections.handle(chatPeer(ws), message), 'chatMessage')
+      return
     case 'ping':
       send(ws, message.seq != null ? { type: 'pong', seq: message.seq } : { type: 'pong' })
       return
@@ -2593,6 +2618,14 @@ function handleMessage(
       refreshSessions()
       return
     case 'session-create':
+      if (message.kind === 'chat') {
+        const input = { projectPath: message.projectPath, name: message.name }
+        fireAndForget(chatSessionManager.createAvailableSession(input).then(result => {
+          if (result.ok) send(ws, { type: 'session-created', session: result.session })
+          else send(ws, { type: 'error', message: result.error })
+        }), 'createChatSession')
+        return
+      }
       if (message.host) {
         fireAndForget(
           handleRemoteCreate(
@@ -3044,9 +3077,7 @@ async function handleKill(
     return
   }
   if (!isTerminalSession(session)) {
-    // Chat sessions are killed through the chat session manager (wired into
-    // this handler with the chat WS messages); tmux paths below don't apply.
-    sendKillFailed(ws, sessionId, 'Chat session kill is not available yet', auditFields, startedAt, 'chat_not_supported')
+    chatSessionManager.kill(sessionId)
     return
   }
   if (session.remote && !config.remoteAllowControl) {

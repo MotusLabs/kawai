@@ -77,6 +77,7 @@ export class ChatSessionDriver {
   private sequence = 0
   private turnCounter = 0
   private activeTurnId: string | null = null
+  private streamingMessageId: string | null = null
   private readonly pendingRequests = new Map<string, PendingRequest>()
   /** Tool use ids this live stream has seen (call or result). */
   private readonly seenToolCallIds = new Set<string>()
@@ -360,11 +361,12 @@ export class ChatSessionDriver {
     const turnId = this.activeTurnId
     if (!turnId) return
     const event = message.event
+    if (event.type === 'message_start') this.streamingMessageId = event.message.id
     if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
       this.emit({
         type: 'assistant_delta',
         turnId,
-        messageId: message.uuid,
+        messageId: this.streamingMessageId ?? message.uuid,
         delta: event.delta.text,
       })
     }

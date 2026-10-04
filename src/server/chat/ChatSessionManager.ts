@@ -13,11 +13,12 @@ import type {
   ChatPendingRequest,
   ChatQuestionAnswer,
 } from '../../shared/chat'
-import type { Session, SessionStatus } from '../../shared/types'
+import type { ServerMessage, Session, SessionStatus } from '../../shared/types'
 import type { ChatSessionRecord, SessionDatabase } from '../db'
 import { generateSessionName } from '../nameGenerator'
 import type { SessionRegistry } from '../SessionRegistry'
 import { ChatSessionDriver, type ChatQueryFactory } from './ChatSessionDriver'
+import { probeSdkAvailability } from './sdkAvailability'
 import {
   findTranscriptPath,
   replayTranscriptFile,
@@ -33,6 +34,8 @@ export interface ChatSessionManagerOptions {
   onEvent: (sessionId: string, event: ChatEvent) => void
   /** Injected in tests; production resolves the SDK via dynamic import. */
   queryFactory?: ChatQueryFactory
+  availabilityProbe?: () => Promise<void>
+  authCheck?: () => boolean
 }
 
 export type ChatCreateResult =
@@ -56,11 +59,12 @@ function claudeConfigDir(): string {
 /**
  * Server-side auth gate (design D9): chat sessions can only run when the SDK
  * can authenticate — via ANTHROPIC_API_KEY in the environment or the CLI's
- * stored login under CLAUDE_CONFIG_DIR (~/.claude by default). The key itself
+ * an OAuth token or stored login under CLAUDE_CONFIG_DIR (~/.claude by default). Credentials
  * never leaves the server.
  */
 export function hasClaudeAuth(): boolean {
   if (process.env.ANTHROPIC_API_KEY?.trim()) return true
+  if (process.env.CLAUDE_CODE_OAUTH_TOKEN?.trim()) return true
   try {
     return fs.existsSync(path.join(claudeConfigDir(), CLI_CREDENTIALS_FILE))
   } catch {
@@ -72,7 +76,7 @@ export function hasClaudeAuth(): boolean {
 export function chatAuthErrorMessage(): string {
   return (
     'Chat sessions need Claude authentication on the server. ' +
-    'Set ANTHROPIC_API_KEY in the server environment, or log in with the ' +
+    'Set ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN in the server environment, or log in with the ' +
     `Claude CLI (\`claude login\`) so credentials exist at ${path.join(
       claudeConfigDir(),
       CLI_CREDENTIALS_FILE
@@ -90,6 +94,45 @@ export class ChatSessionManager {
     Promise<ChatSessionDriver | null>
   >()
   private sdkQuery: Promise<ChatQueryFactory> | null = null
+  private availability: Promise<void> | null = null
+
+  async createAvailableSession(input: { projectPath: string; name?: string }): Promise<ChatCreateResult> {
+    if (!(this.options.authCheck ?? hasClaudeAuth)()) return { ok: false, error: chatAuthErrorMessage() }
+    try {
+      this.availability ??= (this.options.availabilityProbe ??
+        (this.options.queryFactory ? async () => {} : probeSdkAvailability))()
+      await this.availability
+    } catch (error) {
+      return {
+        ok: false,
+        error: 'Claude Agent SDK is unavailable. Check its installation and runtime, then restart the server. ' +
+          (error instanceof Error ? error.message : 'SDK probe failed'),
+      }
+    }
+    return this.createSession(input)
+  }
+  private readonly snapshotHistory = new Map<string, ChatEvent[]>()
+  private readonly liveEvents = new Map<string, ChatEvent[]>()
+
+  /** Synchronous capture: no driver callback can interleave with history loading. */
+  getSnapshot(sessionId: string): Extract<ServerMessage, { type: 'chat-snapshot' }> | null {
+    if (!this.records.has(sessionId)) return null
+    this.captureHistory(sessionId)
+    const live = this.liveEvents.get(sessionId) ?? []
+    return {
+      type: 'chat-snapshot', sessionId,
+      events: [...(this.snapshotHistory.get(sessionId) ?? []), ...live],
+      pendingRequests: this.getPendingRequests(sessionId),
+      status: this.options.registry.get(sessionId)?.status ?? 'waiting',
+      throughSequence: live.at(-1)?.sequence ?? 0,
+    }
+  }
+
+  private captureHistory(sessionId: string): void {
+    if (!this.snapshotHistory.has(sessionId)) {
+      this.snapshotHistory.set(sessionId, this.getHistory(sessionId)?.events ?? [])
+    }
+  }
 
   constructor(options: ChatSessionManagerOptions) {
     this.options = options
@@ -105,7 +148,7 @@ export class ChatSessionManager {
     if (!projectPath) {
       return { ok: false, error: 'A project directory is required' }
     }
-    if (!hasClaudeAuth()) {
+    if (!(this.options.authCheck ?? hasClaudeAuth)()) {
       return { ok: false, error: chatAuthErrorMessage() }
     }
     const sessionId = `chat-${crypto.randomUUID()}`
@@ -251,6 +294,8 @@ export class ChatSessionManager {
     this.drivers.delete(sessionId)
     this.driverPromises.delete(sessionId)
     this.records.delete(sessionId)
+    this.snapshotHistory.delete(sessionId)
+    this.liveEvents.delete(sessionId)
     this.options.registry.removeChatSession(sessionId)
     this.options.db.deleteChatSession(sessionId)
     return true
@@ -316,6 +361,7 @@ export class ChatSessionManager {
     if (pending) return pending
     const record = this.records.get(sessionId)
     if (!record) return null
+    this.captureHistory(sessionId)
     const promise = (async () => {
       const queryFactory = await this.resolveQueryFactory()
       const driver = new ChatSessionDriver({
@@ -368,6 +414,11 @@ export class ChatSessionManager {
   }
 
   private handleDriverEvent(sessionId: string, event: ChatEvent): void {
+    if (!this.records.has(sessionId)) return
+    const events = this.liveEvents.get(sessionId) ?? []
+    event = { ...event, sequence: (events.at(-1)?.sequence ?? 0) + 1 }
+    events.push(event)
+    this.liveEvents.set(sessionId, events)
     this.options.onEvent(sessionId, event)
     if (
       event.type === 'turn_completed' ||

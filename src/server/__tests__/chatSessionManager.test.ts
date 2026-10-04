@@ -120,6 +120,7 @@ describe('ChatSessionManager', () => {
   let tempDir: string
   let db: SessionDatabase
   const originalApiKey = process.env.ANTHROPIC_API_KEY
+  const originalOAuthToken = process.env.CLAUDE_CODE_OAUTH_TOKEN
   const originalConfigDir = process.env.CLAUDE_CONFIG_DIR
 
   beforeEach(() => {
@@ -127,10 +128,16 @@ describe('ChatSessionManager', () => {
     db = initDatabase({ path: path.join(tempDir, 'test.db') })
     // Isolate auth from the host: no API key, empty CLI config dir.
     delete process.env.ANTHROPIC_API_KEY
+    delete process.env.CLAUDE_CODE_OAUTH_TOKEN
     process.env.CLAUDE_CONFIG_DIR = path.join(tempDir, 'claude-config')
   })
 
   afterEach(() => {
+    if (originalOAuthToken !== undefined) {
+      process.env.CLAUDE_CODE_OAUTH_TOKEN = originalOAuthToken
+    } else {
+      delete process.env.CLAUDE_CODE_OAUTH_TOKEN
+    }
     if (originalApiKey !== undefined) {
       process.env.ANTHROPIC_API_KEY = originalApiKey
     } else {
@@ -146,6 +153,39 @@ describe('ChatSessionManager', () => {
   })
 
   describe('auth gate', () => {
+    test('failed availability probe disables creation without creating a driver or row', async () => {
+      process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'
+      let probes = 0
+      const registry = new SessionRegistry()
+      const manager = new ChatSessionManager({
+        db, registry, onEvent: () => {},
+        availabilityProbe: async () => { probes++; throw new Error('broken runtime') },
+      })
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const result = await manager.createAvailableSession({ projectPath: '/tmp/proj' })
+        expect(result.ok).toBe(false)
+        if (!result.ok) {
+          expect(result.error).toContain('Claude Agent SDK is unavailable')
+          expect(result.error).toContain('restart the server')
+        }
+      }
+      expect(probes).toBe(1)
+      expect(db.getChatSessions()).toHaveLength(0)
+      expect(registry.getAll()).toHaveLength(0)
+    })
+
+    test('successful availability probe is cached for subsequent creations', async () => {
+      process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'
+      let probes = 0
+      const registry = new SessionRegistry()
+      const manager = new ChatSessionManager({
+        db, registry, onEvent: () => {},
+        availabilityProbe: async () => { probes++ },
+      })
+      expect((await manager.createAvailableSession({ projectPath: '/tmp/proj' })).ok).toBe(true)
+      expect((await manager.createAvailableSession({ projectPath: '/tmp/proj' })).ok).toBe(true)
+      expect(probes).toBe(1)
+    })
     test('refuses creation with an actionable error when no auth exists', () => {
       const { manager, registry } = createHarness(db)
       const result = manager.createSession({ projectPath: '/tmp/proj' })
@@ -166,6 +206,18 @@ describe('ChatSessionManager', () => {
       expect(hasClaudeAuth()).toBe(true)
       const { manager } = createHarness(db)
       expect(manager.createSession({ projectPath: '/tmp/proj' }).ok).toBe(true)
+    })
+
+    test('accepts an OAuth token from the environment', () => {
+      process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'
+      const { manager } = createHarness(db)
+      expect(hasClaudeAuth()).toBe(true)
+      expect(manager.createSession({ projectPath: '/tmp/proj' }).ok).toBe(true)
+    })
+
+    test('rejects a blank OAuth token', () => {
+      process.env.CLAUDE_CODE_OAUTH_TOKEN = '   '
+      expect(hasClaudeAuth()).toBe(false)
     })
 
     test('accepts CLI credentials under CLAUDE_CONFIG_DIR', () => {
@@ -217,6 +269,36 @@ describe('ChatSessionManager', () => {
     const unnamed = manager.createSession({ projectPath: '/tmp/proj' })
     expect(unnamed.ok).toBe(true)
     if (unnamed.ok) expect(unnamed.session.name).toMatch(/^[a-z]+-[a-z]+$/)
+  })
+
+  test('reconnect snapshots retain unfinished output and live pending requests without duplicating disk events', async () => {
+    process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'
+    const { manager, handles } = createHarness(db)
+    const created = manager.createSession({ projectPath: '/tmp/proj' })
+    if (!created.ok) throw new Error('create failed')
+    const id = created.session.id
+    await manager.send(id, 'hello')
+    const handle = handles[0]!
+    handle.push({ type: 'assistant', uuid: 'live-a', message: { id: 'message-a', role: 'assistant', content: [{ type: 'text', text: 'unfinished' }] } } as unknown as SDKMessage)
+    await flush()
+    const pending = handle.options.canUseTool!('Bash', { command: 'echo hello' }, {
+      signal: new AbortController().signal, toolUseID: 'tool-a', requestId: 'request-a',
+    })
+    await flush()
+    const snapshot = manager.getSnapshot(id)!
+    expect(snapshot.status).toBe('permission')
+    expect(snapshot.pendingRequests).toHaveLength(1)
+    expect(snapshot.events.filter(event => event.type === 'assistant_text')).toHaveLength(1)
+    expect(snapshot.throughSequence).toBe(snapshot.events.at(-1)!.sequence)
+    expect(snapshot.events.map(event => event.sequence)).toEqual(snapshot.events.map((_, index) => index + 1))
+    const requestId = snapshot.pendingRequests[0]!.requestId
+    expect(manager.resolveApproval(id, requestId, 'allow').ok).toBe(true)
+    await pending
+    expect(manager.getSnapshot(id)!.pendingRequests).toEqual([])
+    expect(manager.getSnapshot(id)!.status).toBe('working')
+    expect(manager.getSnapshot(id)!.events.at(-1)).toMatchObject({ type: 'request_resolved', outcome: 'allowed' })
+    manager.kill(id)
+    expect(manager.getSnapshot(id)).toBeNull()
   })
 
   test('first send lazily spawns the driver and persists sdkSessionId immediately', async () => {
