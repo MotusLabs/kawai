@@ -40,14 +40,31 @@ export type TerminalErrorCode =
   | 'ERR_TTY_DISCOVERY_TIMEOUT'
   | 'ERR_NOT_READY'
 
+/** Session kind: a tmux terminal window (default) or an SDK-driven chat. */
+export type SessionKind = 'terminal' | 'chat'
+
+/**
+ * A session backed by a tmux window. Everything tmux discovery produces has
+ * `tmuxWindow` set; chat sessions do not, so window-keyed code narrows with
+ * `isTerminalSession` before touching the field.
+ */
+export type TerminalSession = Session & { tmuxWindow: string }
+
+export function isTerminalSession(session: Session): session is TerminalSession {
+  return session.kind !== 'chat' && session.tmuxWindow !== undefined
+}
+
 export interface Session {
   id: string
   name: string
-  tmuxWindow: string
+  // Undefined for chat sessions (no tmux window backs them).
+  tmuxWindow?: string
   projectPath: string
   status: SessionStatus
   lastActivity: string
   createdAt: string
+  // Absent = terminal (back-compat with clients predating chat sessions).
+  kind?: SessionKind
   agentType?: AgentType
   source: SessionSource
   host?: string

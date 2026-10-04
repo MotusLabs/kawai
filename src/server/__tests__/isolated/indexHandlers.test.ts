@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, test, mock } from 'b
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import type { Session, ServerMessage } from '@shared/types'
+import type { Session, ServerMessage, TerminalSession } from '@shared/types'
 import type { AgentSessionRecord, ClaimCurrentWindowPatch } from '../../db'
 import { TmuxTimeoutError } from '../../tmuxTimeout'
 import { TMUX_FIELD_SEPARATOR } from '../../tmuxFormat'
@@ -547,7 +547,7 @@ mock.module('../../terminal', () => ({
   TerminalProxyError: TerminalProxyErrorMock,
 }))
 
-const baseSession: Session = {
+const baseSession: TerminalSession = {
   id: 'session-1',
   name: 'alpha',
   tmuxWindow: 'agentboard:1',
@@ -3844,7 +3844,7 @@ describe('server message handlers', () => {
   test('hibernate kills resolved live window when DB window is stale', async () => {
     const { serveOptions, registryInstance } = await loadIndex()
     const liveAgentSessionId = 'hibernate-stale-window'
-    const liveSession: Session = {
+    const liveSession: TerminalSession = {
       ...baseSession,
       id: 'live-stale-window',
       agentSessionId: liveAgentSessionId,
@@ -4163,7 +4163,7 @@ describe('server message handlers', () => {
     seedRecord(record)
 
     let createArgs: { projectPath: string; name?: string; command?: string } | null = null
-    const createdSession: Session = {
+    const createdSession: TerminalSession = {
       ...baseSession,
       id: 'created-session',
       name: 'resume',
@@ -4252,7 +4252,7 @@ describe('server message handlers', () => {
 
     const rematchId = 'wake-rematch'
     const logFilePath = '/tmp/wake-rematch.jsonl'
-    const liveSession: Session = {
+    const liveSession: TerminalSession = {
       ...baseSession,
       id: 'live-rematched-session',
       name: 'manual-rematch',
@@ -4337,7 +4337,7 @@ describe('server message handlers', () => {
         isPinned: true,
       })
     )
-    const createdSession: Session = {
+    const createdSession: TerminalSession = {
       ...baseSession,
       id: 'wake-lock-created',
       name: 'wake-lock',
@@ -4654,7 +4654,7 @@ describe('server message handlers', () => {
     seedRecord(record)
 
     let createArgs: { projectPath: string; name?: string; command?: string } | null = null
-    const createdSession: Session = {
+    const createdSession: TerminalSession = {
       ...baseSession,
       id: 'created-quoted',
       name: 'quoted-session',
@@ -4690,7 +4690,7 @@ describe('server message handlers', () => {
     }
     websocket.open?.(ws as never)
 
-    const createdSession: Session = {
+    const createdSession: TerminalSession = {
       ...baseSession,
       id: 'created-apply-prompt',
       name: 'apply-prompt',
@@ -4747,7 +4747,7 @@ describe('server message handlers', () => {
     websocket.open?.(ws as never)
 
     let createArgs: { projectPath: string; name?: string; command?: string } | null = null
-    const createdSession: Session = {
+    const createdSession: TerminalSession = {
       ...baseSession,
       id: 'created-unrelated-quoted',
       name: 'unrelated-quoted',
@@ -4801,7 +4801,7 @@ describe('server message handlers', () => {
     seedRecord(record)
 
     let createArgs: { projectPath: string; name?: string; command?: string } | null = null
-    const createdSession: Session = {
+    const createdSession: TerminalSession = {
       ...baseSession,
       id: 'created-codex',
       name: 'codex-session',
@@ -4842,7 +4842,7 @@ describe('server message handlers', () => {
     seedRecord(record)
 
     let createArgs: { projectPath: string; name?: string; command?: string } | null = null
-    const createdSession: Session = {
+    const createdSession: TerminalSession = {
       ...baseSession,
       id: 'created-codex-old',
       name: 'codex-old',
@@ -4884,7 +4884,7 @@ describe('server message handlers', () => {
     seedRecord(record)
 
     let createArgs: { projectPath: string; name?: string; command?: string } | null = null
-    const createdSession: Session = {
+    const createdSession: TerminalSession = {
       ...baseSession,
       id: 'created-pi',
       name: 'pi-session',
@@ -4977,7 +4977,7 @@ describe('server message handlers', () => {
       })
     )
 
-    const createdSession: Session = {
+    const createdSession: TerminalSession = {
       ...baseSession,
       id: 'wake-claim-created',
       name: 'wake-claim-throws',

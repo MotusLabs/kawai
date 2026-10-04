@@ -13,7 +13,7 @@ import {
 } from '../remoteSessions'
 import { isValidHostname } from '../config'
 import { TMUX_FIELD_SEPARATOR } from '../tmuxFormat'
-import type { Session } from '../../shared/types'
+import type { Session, TerminalSession } from '../../shared/types'
 
 function joinTmuxFields(fields: string[]): string {
   return fields.join(TMUX_FIELD_SEPARATOR)
@@ -434,7 +434,7 @@ describe('isValidHostname', () => {
 })
 
 // Helper to create a minimal Session for testing
-function makeSession(overrides: Partial<Session> & { id: string; tmuxWindow: string }): Session {
+function makeSession(overrides: Partial<Session> & { id: string; tmuxWindow: string }): TerminalSession {
   return {
     name: 'test',
     projectPath: '/home/user/project',

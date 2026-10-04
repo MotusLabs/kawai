@@ -6,7 +6,7 @@ import path from 'node:path'
 import { initDatabase } from '../db'
 import { LogPoller } from '../logPoller'
 import { SessionRegistry } from '../SessionRegistry'
-import type { Session } from '../../shared/types'
+import type { TerminalSession } from '../../shared/types'
 import { encodeProjectPath } from '../logDiscovery'
 import { handleMatchWorkerRequest } from '../logMatchWorker'
 import type {
@@ -20,7 +20,7 @@ const originalSpawnSync = bunAny.spawnSync
 const tmuxOutputs = new Map<string, string>()
 
 const baseProjectPath = path.join(process.cwd(), 'fixtures', 'alpha')
-const baseSession: Session = {
+const baseSession: TerminalSession = {
   id: 'window-1',
   name: 'alpha',
   tmuxWindow: 'agentboard:1',
@@ -1776,7 +1776,7 @@ describe('LogPoller', () => {
   test('ignores external windows in name-based orphan fallback', async () => {
     const db = initDatabase({ path: ':memory:' })
     const registry = new SessionRegistry()
-    const externalWindow: Session = {
+    const externalWindow: TerminalSession = {
       ...baseSession,
       id: 'external:1',
       name: 'orphan',
@@ -1839,7 +1839,7 @@ describe('LogPoller', () => {
     const db = initDatabase({ path: ':memory:' })
     const registry = new SessionRegistry()
     // Window has empty tmux output (still booting)
-    const bootingWindow: Session = {
+    const bootingWindow: TerminalSession = {
       ...baseSession,
       id: 'window-booting',
       name: 'booting',
@@ -1900,7 +1900,7 @@ describe('LogPoller', () => {
     const db = initDatabase({ path: ':memory:' })
     const registry = new SessionRegistry()
     // Window has empty tmux output (still booting)
-    const bootingWindow: Session = {
+    const bootingWindow: TerminalSession = {
       ...baseSession,
       id: 'window-claimed',
       name: 'claimed',

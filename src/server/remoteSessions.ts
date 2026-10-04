@@ -13,7 +13,7 @@ import {
   type PaneCacheState,
   type PaneSnapshot,
 } from './statusInference'
-import type { HostStatus, Session } from '../shared/types'
+import type { HostStatus, Session, TerminalSession } from '../shared/types'
 
 /**
  * Replace characters that are not safe for use in session IDs.
@@ -44,7 +44,7 @@ const remoteContentCache = new Map<string, PaneCacheState>()
 
 interface RemoteHostSnapshot {
   host: string
-  sessions: Session[]
+  sessions: TerminalSession[]
   ok: boolean
   error?: string
   updatedAt: number
@@ -106,9 +106,9 @@ export class RemoteSessionPoller {
     }
   }
 
-  getSessions(): Session[] {
+  getSessions(): TerminalSession[] {
     const now = Date.now()
-    const sessions: Session[] = []
+    const sessions: TerminalSession[] = []
     for (const snapshot of this.snapshots.values()) {
       if (!snapshot.ok) continue
       if (now - snapshot.updatedAt > this.staleAfterMs) continue
@@ -188,7 +188,7 @@ export class RemoteSessionPoller {
  * Build a single shell command that captures pane dimensions + content
  * for all sessions, separated by a known marker.
  */
-function buildBatchCaptureCommand(sessions: Session[], separator: string): string {
+function buildBatchCaptureCommand(sessions: TerminalSession[], separator: string): string {
   if (sessions.length === 0) return ''
   return sessions
     .map((s) => {
@@ -286,7 +286,7 @@ function cleanupRemoteContentCache(activeSessions: Session[]): void {
  * then enrich each session's status via inferSessionStatus.
  */
 async function captureRemotePaneStatus(
-  sessions: Session[],
+  sessions: TerminalSession[],
   host: string,
   sshOptions: string[],
   timeoutMs: number
@@ -391,10 +391,10 @@ function parseTmuxWindows(
   output: string,
   tmuxSessionPrefix: string,
   discoverPrefixes: string[]
-): Session[] {
+): TerminalSession[] {
   const lines = splitTmuxLines(output)
   const now = Date.now()
-  const sessions: Session[] = []
+  const sessions: TerminalSession[] = []
   const wsPrefix = `${tmuxSessionPrefix}-ws-`
 
   for (const line of lines) {

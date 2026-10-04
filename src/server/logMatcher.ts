@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import { performance } from 'node:perf_hooks'
 import { normalizeAgentLogEntry } from '../shared/eventTaxonomy'
-import type { AgentType, Session } from '../shared/types'
+import type { AgentType, TerminalSession } from '../shared/types'
 import { agentFamily } from './agentDetection'
 import {
   extractProjectPath,
@@ -2271,20 +2271,20 @@ export async function tryExactMatchWindowToLogAsync(
 }
 
 export interface ExactMatchRgResult {
-  matches: Map<string, Session>
+  matches: Map<string, TerminalSession>
   /** Windows where tryExactMatchWindowToLog returned null due to no extractable messages */
   noMessageWindows: Set<string>
 }
 
 export function matchWindowsToLogsByExactRg(
-  windows: Session[],
+  windows: TerminalSession[],
   logDirs: string | string[],
   scrollbackLines = DEFAULT_SCROLLBACK_LINES,
   search: ExactMatchSearchOptions = {}
 ): ExactMatchRgResult {
   const matches = new Map<
     string,
-    { window: Session; score: OrderedMatchScore }
+    { window: TerminalSession; score: OrderedMatchScore }
   >()
   const blocked = new Set<string>()
   const noMessageWindows = new Set<string>()
@@ -2331,7 +2331,7 @@ export function matchWindowsToLogsByExactRg(
     }
   }
 
-  const resolved = new Map<string, Session>()
+  const resolved = new Map<string, TerminalSession>()
   for (const [logPath, entry] of matches) {
     resolved.set(logPath, entry.window)
   }
@@ -2340,12 +2340,12 @@ export function matchWindowsToLogsByExactRg(
 }
 
 export async function matchWindowsToLogsByExactRgAsync(
-  windows: Session[],
+  windows: TerminalSession[],
   logDirs: string | string[],
   scrollbackLines = DEFAULT_SCROLLBACK_LINES,
   search: ExactMatchSearchOptions = {}
 ): Promise<ExactMatchRgResult> {
-  const matches = new Map<string, { window: Session; score: OrderedMatchScore }>()
+  const matches = new Map<string, { window: TerminalSession; score: OrderedMatchScore }>()
   const blocked = new Set<string>()
   const noMessageWindows = new Set<string>()
   const profile = search.profile
@@ -2401,7 +2401,7 @@ export async function matchWindowsToLogsByExactRgAsync(
     }
   }
 
-  const resolved = new Map<string, Session>()
+  const resolved = new Map<string, TerminalSession>()
   for (const [logPath, entry] of matches) {
     resolved.set(logPath, entry.window)
   }

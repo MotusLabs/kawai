@@ -1,4 +1,4 @@
-import type { AgentType, Session } from '../shared/types'
+import type { AgentType, TerminalSession } from '../shared/types'
 import type { ExactMatchProfiler } from './logMatcher'
 import type { KnownSession, LogEntrySnapshot } from './logPollData'
 import type { SessionSnapshot } from './logMatchGate'
@@ -26,7 +26,7 @@ export interface LastMessageCandidate {
 
 export interface MatchWorkerRequest {
   id: string
-  windows: Session[]
+  windows: TerminalSession[]
   maxLogsPerPoll: number
   logDirs?: string[]
   /**

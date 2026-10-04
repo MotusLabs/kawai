@@ -51,7 +51,9 @@ import {
   type SessionKillSource,
   type WakeError,
   type Session,
+  type TerminalSession,
 } from '../shared/types'
+import { isTerminalSession } from '../shared/types'
 import { logger, logLevel } from './logger'
 import {
   SessionRefreshWorkerClient,
@@ -625,7 +627,7 @@ interface TmuxBufferSummary {
   key: string
 }
 
-function stampLocalSession(session: Session): Session {
+function stampLocalSession<S extends Session>(session: S): S {
   return {
     ...session,
     host: localHostLabel,
@@ -633,7 +635,7 @@ function stampLocalSession(session: Session): Session {
   }
 }
 
-function stampLocalSessions(sessions: Session[]): Session[] {
+function stampLocalSessions<T extends Session>(sessions: T[]): T[] {
   return sessions.map(stampLocalSession)
 }
 
@@ -934,7 +936,7 @@ async function verifyAllSessions(
 }
 
 export function hydrateSessionsWithAgentSessions(
-  sessions: Session[],
+  sessions: TerminalSession[],
   { verifyAssociations = false, precomputedVerifications }: HydrateSessionsOptions = {}
 ): Session[] {
   const activeSessions = db.getActiveSessions()
@@ -1219,7 +1221,7 @@ function refreshSessions() {
   void refreshSessionsAsync()
 }
 
-function listWindowsSyncOrNull(context: string): Session[] | null {
+function listWindowsSyncOrNull(context: string): TerminalSession[] | null {
   try {
     if (!ensureBaseSessionForRefresh(context)) {
       return null
@@ -1272,7 +1274,9 @@ function scheduleEnterRefresh() {
 
 function scheduleLastUserMessageCapture(sessionId: string) {
   const session = registry.get(sessionId)
-  if (!session) return
+  // Chat sessions have no tmux window to capture from; their last user
+  // message is tracked by the chat driver, not the Enter-key path.
+  if (!session || !isTerminalSession(session)) return
   const tmuxWindow = session.tmuxWindow
 
   // Set lock immediately to prevent log poller from overwriting with stale data
@@ -1368,7 +1372,9 @@ async function completeStartupVerification(): Promise<void> {
   // Use local-only sessions for verification to prevent remote sessions
   // (whose tmuxWindow values aren't host-namespaced) from causing false
   // "window exists" decisions or incorrect hydration with local DB overlays.
-  const localSessions = registry.getAll().filter((s) => !s.remote)
+  const localSessions = registry.getAll().filter(
+    (s): s is TerminalSession => !s.remote && isTerminalSession(s)
+  )
   try {
     if (activeSessions.length > 0 && localSessions.length > 0) {
       const verifications = await verifyAllSessions(
@@ -2712,7 +2718,7 @@ function handleMessage(
 function resolveCopyModeTarget(
   sessionId: string,
   ws: ServerWebSocket<WSData>,
-  session: Session
+  session: TerminalSession
 ): string {
   if (ws.data.currentSessionId === sessionId && ws.data.currentTmuxTarget) {
     return ws.data.currentTmuxTarget
@@ -2884,7 +2890,7 @@ async function handleRemoteCreate(
 
 async function handleCancelCopyMode(sessionId: string, ws: ServerWebSocket<WSData>) {
   const session = registry.get(sessionId)
-  if (!session) return
+  if (!session || !isTerminalSession(session)) return
   if (session.remote && !config.remoteAllowAttach) return
 
   try {
@@ -2906,7 +2912,7 @@ async function handleCancelCopyMode(sessionId: string, ws: ServerWebSocket<WSDat
 
 async function handleCheckCopyMode(sessionId: string, ws: ServerWebSocket<WSData>) {
   const session = registry.get(sessionId)
-  if (!session) return
+  if (!session || !isTerminalSession(session)) return
   if (session.remote && !config.remoteAllowAttach) return
 
   try {
@@ -3022,6 +3028,12 @@ async function handleKill(
 
   if (!session) {
     sendKillFailed(ws, sessionId, 'Session not found', auditFields, startedAt, 'not_found')
+    return
+  }
+  if (!isTerminalSession(session)) {
+    // Chat sessions are killed through the chat session manager (wired into
+    // this handler with the chat WS messages); tmux paths below don't apply.
+    sendKillFailed(ws, sessionId, 'Chat session kill is not available yet', auditFields, startedAt, 'chat_not_supported')
     return
   }
   if (session.remote && !config.remoteAllowControl) {
@@ -3216,6 +3228,10 @@ async function handleRename(
       return
     }
   }
+  if (!isTerminalSession(session)) {
+    send(ws, { type: 'error', message: 'Chat session rename is not available yet' })
+    return
+  }
   if (session.remote && !config.remoteAllowControl) {
     send(ws, { type: 'error', message: 'Remote sessions are read-only' })
     return
@@ -3354,7 +3370,12 @@ function handleSessionHibernate(
     registry.get(record.currentWindow) ??
     registry.getAll().find((session) => session.agentSessionId?.trim() === sessionId)
 
-  if (!liveSession || liveSession.remote || liveSession.source !== 'managed') {
+  if (
+    !liveSession ||
+    !isTerminalSession(liveSession) ||
+    liveSession.remote ||
+    liveSession.source !== 'managed'
+  ) {
     logger.warn('session_hibernate_failed', {
       sessionId,
       reason: 'not_local_managed',
@@ -3612,9 +3633,9 @@ function recordWakeFailure(sessionId: string, message: string) {
 }
 
 function hydrateWakeSession(
-  session: Session,
+  session: TerminalSession,
   record: AgentSessionRecord
-): Session {
+): TerminalSession {
   return stampLocalSession({
     ...session,
     agentType: session.agentType ?? record.agentType,
@@ -3630,11 +3651,12 @@ function hydrateWakeSession(
 
 function tryRematchDormantSession(
   record: AgentSessionRecord
-): { session: Session; record: AgentSessionRecord } | null {
+): { session: TerminalSession; record: AgentSessionRecord } | null {
   refreshSessionsSync()
 
   const alreadyHydrated = registry.getAll().find(
-    (session) =>
+    (session): session is TerminalSession =>
+      isTerminalSession(session) &&
       !session.remote &&
       (session.agentSessionId?.trim() === record.sessionId ||
         session.logFilePath === record.logFilePath)
@@ -3678,8 +3700,10 @@ function tryRematchDormantSession(
   const candidates = registry
     .getAll()
     .filter(
-      (session) =>
-        !session.remote && !claimedWindows.has(session.tmuxWindow)
+      (session): session is TerminalSession =>
+        isTerminalSession(session) &&
+        !session.remote &&
+        !claimedWindows.has(session.tmuxWindow)
     )
   if (candidates.length === 0) {
     return null
@@ -4299,6 +4323,15 @@ async function attachTerminalPersistent(
   if (!session) {
     if (isTerminalAttachCurrent(ws, attachSeq)) {
       sendTerminalError(ws, sessionId, 'ERR_INVALID_WINDOW', 'Session not found', false)
+    }
+    return
+  }
+  // Chat sessions have no tmux window to attach a terminal to; the client
+  // renders ChatView for them and never sends terminal-attach, but refuse
+  // cleanly if one arrives (e.g. stale tab).
+  if (!isTerminalSession(session)) {
+    if (isTerminalAttachCurrent(ws, attachSeq)) {
+      sendTerminalError(ws, sessionId, 'ERR_INVALID_WINDOW', 'Chat sessions have no terminal', false)
     }
     return
   }

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test, mock } from 'bun:test'
 import TestRenderer, { act } from 'react-test-renderer'
-import type { AgentSession, ServerMessage, Session } from '@shared/types'
+import type { AgentSession, ServerMessage, Session, TerminalSession } from '@shared/types'
 import SessionList from '../components/SessionList'
 import NewSessionModal from '../components/NewSessionModal'
 import { useSessionStore } from '../stores/sessionStore'
@@ -216,7 +216,7 @@ afterEach(() => {
   })
 })
 
-const baseSession: Session = {
+const baseSession: TerminalSession = {
   id: 'session-1',
   name: 'alpha',
   tmuxWindow: 'agentboard:1',
@@ -515,7 +515,7 @@ describe('App', () => {
 
   test('hibernate result payload renders the hibernating view before the full snapshot arrives', () => {
     const hibernatingSessionId = 'hibernating-immediate'
-    const liveSession: Session = {
+    const liveSession: TerminalSession = {
       ...baseSession,
       id: 'live-immediate',
       agentSessionId: hibernatingSessionId,
@@ -575,7 +575,7 @@ describe('App', () => {
 
   test('keeps hibernating selection through active-only refreshes until the full hibernating snapshot arrives', () => {
     const hibernatingSessionId = 'hibernating-pending'
-    const liveSession: Session = {
+    const liveSession: TerminalSession = {
       ...baseSession,
       id: 'live-before-sleep',
       agentSessionId: hibernatingSessionId,

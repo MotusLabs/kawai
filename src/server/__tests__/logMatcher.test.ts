@@ -3,7 +3,7 @@ import fs from 'node:fs/promises'
 import fsSync from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
-import type { Session } from '../../shared/types'
+import type { TerminalSession } from '../../shared/types'
 import {
   normalizeText,
   matchWindowsToLogsByExactRg,
@@ -647,7 +647,7 @@ describe('logMatcher', () => {
       messagesB.map((message) => buildUserLogEntry(message)).join('\n')
     )
 
-    const windows: Session[] = [
+    const windows: TerminalSession[] = [
       {
         id: 'window-1',
         name: 'alpha',
@@ -700,7 +700,7 @@ describe('logMatcher', () => {
       createdAt: new Date().toISOString(),
       source: 'managed' as const,
     }
-    const windows: Session[] = [
+    const windows: TerminalSession[] = [
       { ...base, id: 'w-claude', name: 'claude-win', tmuxWindow: 'agentboard:1', agentType: 'claude' },
       { ...base, id: 'w-codex', name: 'codex-win', tmuxWindow: 'agentboard:2', agentType: 'codex' },
     ]
@@ -735,7 +735,7 @@ describe('logMatcher', () => {
       messages.map((message) => buildUserLogEntry(message)).join('\n')
     )
 
-    const windows: Session[] = [
+    const windows: TerminalSession[] = [
       {
         id: 'window-empty',
         name: 'booting',
@@ -788,7 +788,7 @@ describe('logMatcher', () => {
       messages.map((message) => buildUserLogEntry(message)).join('\n')
     )
 
-    const windows: Session[] = [
+    const windows: TerminalSession[] = [
       {
         id: 'window-empty-async',
         name: 'booting-async',

@@ -3,7 +3,7 @@ import fs from 'node:fs/promises'
 import fsSync from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import type { Session } from '../../shared/types'
+import type { TerminalSession } from '../../shared/types'
 import { handleMatchWorkerRequest } from '../logMatchWorker'
 import type { MatchWorkerRequest } from '../logMatchWorkerTypes'
 
@@ -200,7 +200,7 @@ afterEach(async () => {
   else delete process.env.PI_HOME
 })
 
-const baseSession: Session = {
+const baseSession: TerminalSession = {
   id: 'session-1',
   name: 'alpha',
   tmuxWindow: 'agentboard:1',

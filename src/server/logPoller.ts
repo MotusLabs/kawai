@@ -9,7 +9,8 @@ import { generateUniqueSessionName } from './nameGenerator'
 import type { SessionRegistry } from './SessionRegistry'
 import { LogMatchWorkerClient } from './logMatchWorkerClient'
 import { LogWatcher } from './logWatcher'
-import type { AgentType, Session } from '../shared/types'
+import type { AgentType, TerminalSession } from '../shared/types'
+import { isTerminalSession } from '../shared/types'
 import type { KnownSession, LogEntrySnapshot } from './logPollData'
 import {
   getEntriesNeedingMatch,
@@ -336,7 +337,7 @@ export class LogPoller {
     const orphanWorker = this.matchWorker
 
     try {
-      const windows = this.registry.getAll()
+      const windows: TerminalSession[] = this.registry.getAll().filter(isTerminalSession)
       const activeSessions = this.db.getActiveSessions()
       const initiallyClaimedWindows = new Set(
         activeSessions
@@ -502,7 +503,7 @@ export class LogPoller {
       if (unmatchedOrphans.length > 0) {
         // Build map of unclaimed window name -> window (only if name is unique)
         // Only consider managed windows to avoid cross-session misassociation.
-        const unclaimedByName = new Map<string, Session>()
+        const unclaimedByName = new Map<string, TerminalSession>()
         const ambiguousNames = new Set<string>()
         for (const window of windows) {
           if (window.source !== 'managed') continue
@@ -614,7 +615,7 @@ export class LogPoller {
     try {
       if (!this.matchWorker) return
 
-      const windows = this.registry.getAll()
+      const windows: TerminalSession[] = this.registry.getAll().filter(isTerminalSession)
       const logDirs = getLogSearchDirs()
       const sessionRecords = [
         ...this.db.getActiveSessions(),
@@ -684,7 +685,7 @@ export class LogPoller {
 
   private processMatchResponse(
     response: MatchWorkerResponse,
-    windows: Session[],
+    windows: TerminalSession[],
     sessionRecords: SessionRecord[]
   ): PollStats {
     let logsScanned = 0
@@ -708,7 +709,7 @@ export class LogPoller {
         lastKnownLogSize: session.lastKnownLogSize,
       }))
 
-    const exactWindowMatches = new Map<string, Session>()
+    const exactWindowMatches = new Map<string, TerminalSession>()
     const windowsByTmux = new Map(
       windows.map((window) => [window.tmuxWindow, window])
     )
@@ -1053,7 +1054,7 @@ export class LogPoller {
     let processMs = 0
 
     try {
-      const windows = this.registry.getAll()
+      const windows: TerminalSession[] = this.registry.getAll().filter(isTerminalSession)
       const logDirs = getLogSearchDirs()
       const sessionRecords = [
         ...this.db.getActiveSessions(),
