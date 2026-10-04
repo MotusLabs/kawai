@@ -50,7 +50,9 @@ burst).
 | before | 520/520      | 0.3 ms | 0.4 ms | 9.4 ms  | 0       | 0       |
 | after  | 520/520      | 1.3 ms | 1.5 ms | 15.8 ms | 0       | 0       |
 
-Thresholds p95 ≤ 150 ms / max ≤ 400 ms: **met** with wide margin. Note: on
+Transport-only thresholds p95 ≤ 150 ms / max ≤ 400 ms: **met**.
+These measurements exclude xterm consumption/rendering and do not certify
+keystroke-to-display latency; the rendered-echo follow-up below supplies that check. Note: on
 this localhost box the synthetic workload does not reproduce the original
 pathological lag (which involved real scrollback depth, log-match bursts and
 network RTT); the numbers certify the after-state against the thresholds, not
@@ -114,3 +116,44 @@ bucket-quantized, RTT p95 1.5 ms). The Open Question's precondition ("does
 the load test still show refresh-worker contention after the core steps
 land?") resolved to no, so the single chained tmux invocation with nonce
 separators was not implemented.
+
+## Rendered-echo follow-up (review fixes, 2026-10-04)
+
+The reproducible harness is now checked in at
+`scripts/verify-terminal-render-latency.mjs`. Run `bun run build`, then
+`bun scripts/verify-terminal-render-latency.mjs` (60 seconds by default).
+`VERIFY_SECONDS` adjusts duration; `CHROMIUM_PATH` overrides the browser binary.
+It uses a private tmux server, isolated application/log state, eight flooding
+windows (24 lines every 120 ms), and one attached quiet `cat` window. All windows
+run in a temporary directory, isolating terminal streaming from repository and
+OpenSpec discovery. Printable alphanumeric inputs are timestamped at actual
+WebSocket send; focus reports such as ESC[I are explicitly excluded. A
+nonrepeating expected suffix is matched against xterm's parsed visible buffer
+inside `onRender`, and the sample ends on the next animation frame, after a
+paint opportunity. This includes buffering, backpressure, parsing, and xterm
+rendering; it does not measure physical display scanout. Missing echoes fail
+the check, as do p95 >150 ms or max >400 ms.
+
+The full 60-second run recorded **522 / 522 rendered echoes**, p50 **18.8 ms**,
+p95 **40.5 ms**, max **49.4 ms**. Both rendered-echo targets passed; zero
+`event_loop_lag` events were recorded in the server log. Results,
+server logs, and the final browser screenshot were retained at
+`/tmp/kawai-render-latency-oGZKfM/` (`results.json`, `agentboard.log`, `terminal.png`).
+
+Scope limitation: exploratory runs using this repository as every window's
+working directory showed >1-second server event-loop stalls during synchronous
+workspace/OpenSpec discovery. The isolated-directory result verifies the
+terminal path under flood load; it does not certify repository discovery under
+load or replace that separate workload. The earlier blanket statement of
+end-to-end latency success has been narrowed accordingly.
+
+Review fixes also revalidate tmux targets after async matching, hydrate from
+current registry metadata, and drain held output before mouse-control writes.
+The dedup integration test now sends the second attach directly inside the
+first ready callback and scopes capture-count assertions to that connection.
+The new real-server copy-mode and coalescing suites run in isolated processes
+alongside the existing real-tmux suites, avoiding shared test mocks.
+
+Post-fix validation: `bun run lint && bun run typecheck && bun run test`
+completed successfully, including the isolated real-tmux suites. Strict
+validation also passed for the terminal-streaming and session-updates specs.

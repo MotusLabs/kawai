@@ -307,9 +307,21 @@ if (!tmuxAvailable || !localhostBindable) {
           sessionId?: string
           data?: string
         }> = []
+        let secondAttachSent = false
         ws.onmessage = (event) => {
           try {
-            messages.push(JSON.parse(String(event.data)))
+            const message = JSON.parse(String(event.data))
+            messages.push(message)
+            // Reply inside the ready callback. Polling then waiting for output
+            // quiescence consumes the server's 500ms dedup budget under load.
+            if (!secondAttachSent && message.type === 'terminal-ready' &&
+                message.sessionId === discoveredSessionId) {
+              secondAttachSent = true
+              ws.send(JSON.stringify({
+                type: 'terminal-attach', sessionId: discoveredSessionId,
+                tmuxTarget: tmuxWindowTarget, cols: 120, rows: 40,
+              }))
+            }
           } catch {
             // ignore
           }
@@ -367,31 +379,9 @@ if (!tmuxAvailable || !localhostBindable) {
           )
         expect(scrollbacksBeforeFirstReady.length).toBeGreaterThanOrEqual(1)
 
-        // Wait for the first attach's buffered history to finish arriving before
-        // sending the second attach. The dedup guarantee is "no new scrollback
-        // capture on the second attach", not "no delayed delivery from the first
-        // capture that was already in flight on the wire".
-        await waitForMessageQuiescence(
-          messages,
-          100,
-          300,
-          'first attach history delivery to settle'
-        )
-
-        // Step 2: Send the second terminal-attach immediately (well within 500ms).
-        // Nothing that waits on the pino log file may sit in this window: the
-        // server's dedup window is 500ms from attach completion, and transport
-        // flushes lag past that budget when the whole suite is running. All log
-        // assertions happen after the fact below.
-        ws.send(
-          JSON.stringify({
-            type: 'terminal-attach',
-            sessionId: discoveredSessionId,
-            tmuxTarget: tmuxWindowTarget,
-            cols: 120,
-            rows: 40,
-          })
-        )
+        // The message callback already sent the second attach immediately
+        // after the first ready, without an intervening poll or settle delay.
+        expect(secondAttachSent).toBe(true)
 
         // Wait for the second terminal-ready
         await waitUntil(
@@ -433,13 +423,14 @@ if (!tmuxAvailable || !localhostBindable) {
         expect(logDeltaFromTestStart).toContain('terminal_attach_dedup')
         // Exactly one scrollback capture for this session (the first attach);
         // the dedup fast-path performed none.
-        const historySendLines = logDeltaFromTestStart
-          .split('\n')
-          .filter(
-            (line) =>
-              line.includes('terminal_history_send') &&
-              line.includes(`"sessionId":"${discoveredSessionId}"`)
-          )
+        const events = logDeltaFromTestStart.split('\n').filter(Boolean).map((line) => JSON.parse(line))
+        const dedup = events.find((event) => event.event === 'terminal_attach_dedup' &&
+          event.sessionId === discoveredSessionId)
+        expect(dedup).toBeDefined()
+        // Pino can flush an older connection's logs after our initial offset.
+        // Count captures for this connection, rather than every attach to the pane.
+        const historySendLines = events.filter((event) =>
+          event.event === 'terminal_history_send' && event.connectionId === dedup.connectionId)
         expect(historySendLines).toHaveLength(1)
 
         // Total terminal-ready count should be exactly 2
@@ -803,29 +794,4 @@ function capturePaneText(target: string, env: NodeJS.ProcessEnv): string {
     { stdout: 'pipe', stderr: 'ignore', env }
   )
   return result.exitCode === 0 ? result.stdout.toString() : ''
-}
-
-async function waitForMessageQuiescence(
-  messages: Array<unknown>,
-  quietMs: number,
-  timeoutMs: number,
-  description: string
-): Promise<void> {
-  const startedAt = Date.now()
-  let lastCount = messages.length
-  let stableSince = Date.now()
-
-  while (Date.now() - startedAt < timeoutMs) {
-    await delay(25)
-    if (messages.length !== lastCount) {
-      lastCount = messages.length
-      stableSince = Date.now()
-      continue
-    }
-    if (Date.now() - stableSince >= quietMs) {
-      return
-    }
-  }
-
-  throw new Error(`Timed out waiting for message quiescence: ${description}`)
 }
