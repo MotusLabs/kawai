@@ -4,7 +4,7 @@
 
 - [x] 1.1 Add `@anthropic-ai/claude-agent-sdk` with a pinned exact version to `package.json`; verify `bun install` succeeds and a scratch script that dynamically imports the SDK and prints its version runs under Bun (discard the scratch file afterwards)
 - [x] 1.2 Add `kind?: 'terminal' | 'chat'` to `Session`, make `tmuxWindow` optional, and teach `sessionsEqualForBroadcast` both fields; add a chat-session map to `SessionRegistry` that `replaceSessions()` never clears, merged in `getAll()`/`updateSession`/removal; verify unit tests cover chat sessions surviving a tmux `replaceSessions` call and equality ignoring nothing it shouldn't
-- [ ] 1.3 Create `src/shared/chat.ts` with the `ChatEvent` union and add the `chat-attach`/`chat-detach`/`chat-send`/`chat-interrupt`/`chat-approval`/`chat-answer` client messages and `chat-events`/`chat-snapshot` server messages; extend `session-create` with optional `kind` to the WS unions; verify `bun run typecheck` passes and a unit test round-trips each new message through JSON
+- [x] 1.3 Create `src/shared/chat.ts` with the `ChatEvent` union and add the `chat-attach`/`chat-detach`/`chat-send`/`chat-interrupt`/`chat-approval`/`chat-answer` client messages and `chat-events`/`chat-snapshot` server messages; extend `session-create` with optional `kind` to the WS unions; verify `bun run typecheck` passes and a unit test round-trips each new message through JSON
 
 ## 2. Server: driver and session manager
 
