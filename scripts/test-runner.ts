@@ -124,6 +124,18 @@ async function main() {
       // its window stub.
       'main.test.ts',
       'terminal.test.tsx',
+      // More top-level mock.module(...) installers from the terminal-lag
+      // change. useTerminal.test.tsx stubs ../utils/clientLog — on Linux CI
+      // (bun 1.3.14) the stub leaked into clientLog.test.ts when readdir
+      // order loaded useTerminal first: setClientLogLevel became a no-op and
+      // every fetch-expecting assertion saw zero calls. sessionRowMemo and
+      // terminalControls stub ../utils/time and ../utils/device, which wider
+      // test files also import — same leak class, isolated preemptively.
+      // (Not reproducible off the runner: same bun build, file order, and
+      // core count pass locally, matching the order-dependent leaks above.)
+      'useTerminal.test.tsx',
+      'sessionRowMemo.test.tsx',
+      'terminalControls.test.tsx',
     ])
 
     const serverTests: string[] = []
