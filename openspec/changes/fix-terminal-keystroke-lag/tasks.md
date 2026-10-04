@@ -60,31 +60,31 @@
 
 ## 3. Server: WebSocket compression opt-in (design D3)
 
-- [ ] 3.1 Add `wsPerMessageDeflate` to `src/server/config.ts`
+- [x] 3.1 Add `wsPerMessageDeflate` to `src/server/config.ts`
   (`AGENTBOARD_WS_DEFLATE`, only literal `true` enables), use it at the
   `websocketHandlers` definition, and document the variable in the README
   Environment section; verify `bun run typecheck`
-- [ ] 3.2 Extend `src/server/__tests__/config.test.ts`: defaults false,
+- [x] 3.2 Extend `src/server/__tests__/config.test.ts`: defaults false,
   `true` → true, junk values → false; verify with
   `bun test src/server/__tests__/config.test.ts`
 
 ## 4. Server: paced log-match captures (design D4)
 
-- [ ] 4.1 Add `logMatchYieldMs` to `src/server/config.ts`
+- [x] 4.1 Add `logMatchYieldMs` to `src/server/config.ts`
   (`AGENTBOARD_LOG_MATCH_YIELD_MS`, default 25, clamped 0–250) and document
   it in the README Environment section; verify `bun run typecheck`
-- [ ] 4.2 Rework `matchWindowsToLogsByExactRgAsync` in
+- [x] 4.2 Rework `matchWindowsToLogsByExactRgAsync` in
   `src/server/logMatcher.ts` from `Promise.all` to a sequential loop with an
   inter-window yield via an injectable `wait` (new
   `interWindowYieldMs`/`wait` search options); verify the order-equivalence
   and yield tests in 4.4 pass
-- [ ] 4.3 Switch the session-wake matcher call (`src/server/index.ts`) and
+- [x] 4.3 Switch the session-wake matcher call (`src/server/index.ts`) and
   both match-worker call sites (`src/server/logMatchWorker.ts`) to the paced
   async variant, make the worker handler async, and serialize requests
   through a promise chain in `ctx.onmessage`; verify `bun run typecheck` and
   the serialization test in 4.4; recover the queue after rejection and update
   existing direct handler tests to await its Promise
-- [ ] 4.4 Extend `src/server/__tests__/logMatcher.test.ts` (async results
+- [x] 4.4 Extend `src/server/__tests__/logMatcher.test.ts` (async results
   identical to sync on fixtures; yield honored via the injected wait) and
   `src/server/__tests__/logMatchWorker.test.ts` (two queued requests
   serialize, including ordinary/orphan paths, and a failed request does not

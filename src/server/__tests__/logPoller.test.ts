@@ -14,8 +14,12 @@ import type {
   MatchWorkerResponse,
 } from '../logMatchWorkerTypes'
 
-const bunAny = Bun as typeof Bun & { spawnSync: typeof Bun.spawnSync }
+const bunAny = Bun as typeof Bun & {
+  spawnSync: typeof Bun.spawnSync
+  spawn: typeof Bun.spawn
+}
 const originalSpawnSync = bunAny.spawnSync
+const originalSpawn = bunAny.spawn
 
 const tmuxOutputs = new Map<string, string>()
 
@@ -153,7 +157,7 @@ class InlineMatchWorkerClient {
     request: Omit<MatchWorkerRequest, 'id'>,
     _options?: { timeoutMs?: number }
   ): Promise<MatchWorkerResponse> {
-    const response = handleMatchWorkerRequest({ ...request, id: 'test' })
+    const response = await handleMatchWorkerRequest({ ...request, id: 'test' })
     if (response.type === 'error') {
       throw new Error(response.error ?? 'Log match worker error')
     }
@@ -247,10 +251,47 @@ beforeEach(async () => {
       stderr: Buffer.from(''),
     } as ReturnType<typeof Bun.spawnSync>
   }) as typeof Bun.spawnSync
+
+  // The paced async matcher captures via Bun.spawn — delegate it to the
+  // spawnSync mock so both subprocess interfaces see the same fixtures.
+  bunAny.spawn = ((...args: Parameters<typeof Bun.spawn>) => {
+    const cmd = Array.isArray(args[0]) ? args[0] : [String(args[0])]
+    const syncResult = bunAny.spawnSync(
+      cmd as Parameters<typeof Bun.spawnSync>[0]
+    )
+    const stdoutBuf = syncResult.stdout ?? Buffer.from('')
+    const stderrBuf = syncResult.stderr ?? Buffer.from('')
+    return {
+      exited: Promise.resolve(syncResult.exitCode ?? 0),
+      stdout: new ReadableStream({
+        start(controller) {
+          controller.enqueue(
+            typeof stdoutBuf === 'string'
+              ? new TextEncoder().encode(stdoutBuf)
+              : stdoutBuf
+          )
+          controller.close()
+        },
+      }),
+      stderr: new ReadableStream({
+        start(controller) {
+          controller.enqueue(
+            typeof stderrBuf === 'string'
+              ? new TextEncoder().encode(stderrBuf)
+              : stderrBuf
+          )
+          controller.close()
+        },
+      }),
+      kill: () => {},
+      pid: 34567,
+    } as unknown as ReturnType<typeof Bun.spawn>
+  }) as typeof Bun.spawn
 })
 
 afterEach(async () => {
   bunAny.spawnSync = originalSpawnSync
+  bunAny.spawn = originalSpawn
   tmuxOutputs.clear()
   if (originalClaude) process.env.CLAUDE_CONFIG_DIR = originalClaude
   else delete process.env.CLAUDE_CONFIG_DIR

@@ -23,7 +23,7 @@ import { toAgentSession } from './agentSessions'
 import { getLogSearchDirs } from './logDiscovery'
 import {
   DEFAULT_SCROLLBACK_LINES,
-  matchWindowsToLogsByExactRg,
+  matchWindowsToLogsByExactRgAsync,
   stripPastePlaceholders,
   verifyWindowLogAssociationDetailed,
   verifyWindowLogAssociationDetailedAsync,
@@ -2101,7 +2101,9 @@ function serverFetch(req: Request, server: Server<WSData>) {
 const websocketHandlers = {
   idleTimeout: 40,
   sendPings: true,
-  perMessageDeflate: true,
+  // Off by default (design D3): per-frame deflate CPU lands on the
+  // keystroke-echo path; AGENTBOARD_WS_DEFLATE=true restores it.
+  perMessageDeflate: config.wsPerMessageDeflate,
   open(ws: ServerWebSocket<WSData>) {
     sockets.add(ws)
     // Coalesced terminal-output frames for this connection. `sockets.has(ws)`
@@ -2708,7 +2710,7 @@ function handleMessage(
       fireAndForget(handleCheckCopyMode(message.sessionId, ws), 'handleCheckCopyMode')
       return
     case 'session-wake':
-      handleSessionWake(message, ws)
+      fireAndForget(handleSessionWake(message, ws), 'handleSessionWake')
       return
     case 'session-hibernate':
       handleSessionHibernate(message.sessionId, ws)
@@ -3700,9 +3702,9 @@ function hydrateWakeSession(
   })
 }
 
-function tryRematchDormantSession(
+async function tryRematchDormantSession(
   record: AgentSessionRecord
-): { session: Session; record: AgentSessionRecord } | null {
+): Promise<{ session: Session; record: AgentSessionRecord } | null> {
   refreshSessionsSync()
 
   const alreadyHydrated = registry.getAll().find(
@@ -3758,13 +3760,17 @@ function tryRematchDormantSession(
   }
 
   try {
-    const result = matchWindowsToLogsByExactRg(
+    // Paced async variant (design D4): the wake path runs on the main thread,
+    // so its scrollback captures must interleave with interactive traffic
+    // instead of monopolizing the tmux server for the whole burst.
+    const result = await matchWindowsToLogsByExactRgAsync(
       candidates,
       getLogSearchDirs(),
       DEFAULT_SCROLLBACK_LINES,
       {
         logPaths: [record.logFilePath],
         rgThreads: config.rgThreads,
+        interWindowYieldMs: config.logMatchYieldMs,
       }
     )
     const match = result.matches.get(record.logFilePath)
@@ -3805,7 +3811,7 @@ function tryRematchDormantSession(
   }
 }
 
-function handleSessionWake(
+async function handleSessionWake(
   message: Extract<ClientMessage, { type: 'session-wake' }>,
   ws: ServerWebSocket<WSData>
 ) {
@@ -3898,7 +3904,7 @@ function handleSessionWake(
       }
     }
 
-    const rematched = tryRematchDormantSession(latest)
+    const rematched = await tryRematchDormantSession(latest)
     if (rematched) {
       send(ws, { type: 'session-wake-result', sessionId, ok: true, session: rematched.session })
       broadcast({
