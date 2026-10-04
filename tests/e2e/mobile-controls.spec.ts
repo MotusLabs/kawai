@@ -6,6 +6,7 @@
 // pane runs the paste-repl fixture, which echoes submitted input as hex.
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+import { selectMobileSession } from './fixtures/mobile-session'
 import { test, expect } from '@playwright/test'
 
 test.use({
@@ -17,7 +18,6 @@ test.use({
   hasTouch: true,
 })
 
-const WINDOW_NAME = 'shift-tab-repl'
 const REPL_PATH = fileURLToPath(new URL('./fixtures/paste-repl.py', import.meta.url))
 
 function tmux(args: string[]): { status: number | null; stdout: string } {
@@ -41,22 +41,16 @@ async function waitForPaneText(target: string, needle: string, timeoutMs = 10000
 test('keyboard Shift modifies touch quick keys sent to the pane', async ({ page }, testInfo) => {
   const session = process.env.E2E_TMUX_SESSION
   test.skip(!session, 'E2E_TMUX_SESSION not set')
-  const target = `${session}:${WINDOW_NAME}`
+  const windowName = `shift-tab-repl-${testInfo.workerIndex}-${testInfo.repeatEachIndex}`
+  const target = `${session}:${windowName}`
 
-  const created = tmux(['new-window', '-t', session!, '-n', WINDOW_NAME, `python3 ${REPL_PATH} --submit-cr-only`])
+  const created = tmux(['new-window', '-t', session!, '-n', windowName, `python3 ${REPL_PATH} --submit-cr-only`])
   expect(created.status).toBe(0)
 
   try {
     await waitForPaneText(target, 'PASTE-REPL READY')
 
-    await page.goto('/')
-    // On mobile the session list lives in a drawer: the card is in the DOM
-    // but not visible, so select it with a DOM click.
-    const card = page.getByTestId('session-card').filter({ hasText: WINDOW_NAME }).first()
-    await card.waitFor({ state: 'attached', timeout: 20000 })
-    await card.evaluate((el) => (el as HTMLElement).click())
-    await expect(page.locator('.xterm')).toBeVisible()
-    await page.waitForTimeout(2000) // let the terminal attach settle
+    await selectMobileSession(page, windowName)
 
     const tab = page.getByRole('button', { name: 'tab', exact: true })
     await expect(tab).toBeVisible()
@@ -67,6 +61,10 @@ test('keyboard Shift modifies touch quick keys sent to the pane', async ({ page 
     await page.screenshot({ path: testInfo.outputPath('mobile-key-deck.png') })
 
     const input = page.locator('.xterm-helper-textarea')
+    // Attachment can already focus xterm. The keyboard button toggles, so
+    // start with the keyboard hidden before testing that a tap shows it.
+    await input.evaluate(element => element.blur())
+    await expect(input).not.toBeFocused()
     await page.getByRole('button', { name: 'Show keyboard' }).tap()
     await expect(input).toBeFocused()
     for (const [label, hex] of [['tab', '1b5b5a'], ['Enter', '0a']]) {

@@ -12,6 +12,7 @@ agentboard attaches to AFTER startup:
 State is printed to the pane as single-line markers (newlines rendered as
 '|') so the test can assert via `tmux capture-pane`:
   PASTE-REPL READY / HELD:<content> / SUBMITTED:<content>
+With --report-draft, DRAFT_HEX:<hex> acknowledges raw input before submission.
 """
 import os
 import select
@@ -73,6 +74,8 @@ def main() -> None:
                         raise KeyboardInterrupt
                     else:
                         buf += byte
+                if "--report-draft" in sys.argv:
+                    os.write(1, b"DRAFT_HEX:" + buf.hex().encode() + b"\r\n")
                 if idx == -1:
                     raw = b""
                     break
