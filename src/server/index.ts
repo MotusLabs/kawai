@@ -36,6 +36,7 @@ import {
 } from './terminal'
 import type { ITerminalProxy } from './terminal'
 import { TerminalOutputCoalescer } from './terminal/outputCoalescer'
+import { revalidateRematchTarget } from './sessionWake/rematchTarget'
 import { resolveProjectPath } from './paths'
 import {
   HISTORY_MAX_AGE_MIN_HOURS,
@@ -3777,19 +3778,27 @@ async function tryRematchDormantSession(
     if (!match) {
       return null
     }
+    // Matching yields between windows. Recheck tmux and fetch current registry
+    // data before claiming: the captured candidate may have exited or changed.
+    const current = await revalidateRematchTarget(
+      match,
+      (target) => readTmuxCapture(['display-message', '-p', '-t', target, '#{window_id}']),
+      (id) => registry.get(id),
+    )
+    if (!current) return null
     const claimExtra: ClaimCurrentWindowPatch = {
-      displayName: match.name,
+      displayName: current.name,
       lastResumeError: null,
       wakeStartedAt: null,
     }
-    if (match.command && !record.launchCommand) {
-      claimExtra.launchCommand = match.command
+    if (current.command && !record.launchCommand) {
+      claimExtra.launchCommand = current.command
     }
-    const updated = db.claimCurrentWindow(record.sessionId, match.tmuxWindow, claimExtra)
+    const updated = db.claimCurrentWindow(record.sessionId, current.tmuxWindow, claimExtra)
     if (!updated) {
       return null
     }
-    const hydrated = hydrateWakeSession(match, updated)
+    const hydrated = hydrateWakeSession(current, updated)
     registry.replaceSessions(
       registry.getAll().map((session) =>
         session.id === hydrated.id ? hydrated : session

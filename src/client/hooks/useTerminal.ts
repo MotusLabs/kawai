@@ -431,6 +431,8 @@ export function useTerminal({
   // throttles the stream instead of growing xterm's write queue unboundedly.
   // The generation token invalidates acks across lifecycle boundaries
   // (session switch, detach/disconnect, cleanup, terminal-ready forced write).
+  // Controls must drain held output before writing directly to xterm.
+  const flushOutputBeforeControlRef = useRef<(() => void) | null>(null)
   const pendingWritesRef = useRef(0)
   const deferredFlushRef = useRef(false)
   const forceFlushTimerRef = useRef<number | null>(null)
@@ -554,9 +556,9 @@ export function useTerminal({
     const terminal = terminalRef.current
     if (terminal && nextValue) {
       // Disable all mouse tracking modes (1000=X10, 1002=button-event, 1003=any-event, 1006=SGR)
-      // Isolated lifecycle boundary (design D7 audit): tiny control sequence
-      // outside the accounted output stream — applies immediately and does
-      // not participate in write backpressure.
+      // Preserve order with older output held by backpressure; otherwise a
+      // buffered enable sequence could undo this disable after entering copy-mode.
+      flushOutputBeforeControlRef.current?.()
       terminal.write(DISABLE_MOUSE_TRACKING)
     }
 
@@ -1669,6 +1671,9 @@ export function useTerminal({
       })
     }
 
+    const flushBeforeControl = () => flush({ force: true })
+    flushOutputBeforeControlRef.current = flushBeforeControl
+
     const scheduleFlush = () => {
       // Reset idle timer on each new chunk
       if (idleTimerRef.current !== null) {
@@ -1828,9 +1833,7 @@ export function useTerminal({
         altScreenRef.current = message.altScreen === true
 
         if (!wasAppMouse && nextAppMouse) {
-          // Isolated lifecycle boundary (design D7 audit): control sequence
-          // outside the accounted output stream, same rationale as the
-          // DISABLE write in setTmuxCopyMode.
+          flushOutputBeforeControlRef.current?.()
           terminalRef.current?.write(ENABLE_MOUSE_TRACKING)
         }
 
@@ -1840,6 +1843,9 @@ export function useTerminal({
 
     return () => {
       unsubscribe()
+      if (flushOutputBeforeControlRef.current === flushBeforeControl) {
+        flushOutputBeforeControlRef.current = null
+      }
       // Flush any remaining buffer on cleanup — forced, so backpressure cannot
       // hold data past teardown — then invalidate: the final write's ack must
       // not touch accounting after the subscription is gone.

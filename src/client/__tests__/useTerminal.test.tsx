@@ -4772,6 +4772,33 @@ describe('write backpressure', () => {
     act(() => { renderer.unmount() })
   })
 
+  test('copy-mode controls follow older output held by backpressure', async () => {
+    const { timers, terminal, output, listeners, renderer } = await mountDeferred()
+    output('session-1', 'pending')
+    act(() => { timers.fireWithDelay(2) })
+    output('session-1', '\x1b[?1000h')
+    act(() => { timers.fireWithDelay(2) })
+    expect(terminal.writes).toEqual(['pending'])
+    act(() => {
+      listeners[0]?.({ type: 'tmux-copy-mode-status', sessionId: 'session-1', inCopyMode: true })
+    })
+    expect(terminal.writes).toEqual(['pending', '\x1b[?1000h', '\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l'])
+    act(() => { renderer.unmount() })
+  })
+
+  test('app mouse controls follow older output held by backpressure', async () => {
+    const { timers, terminal, output, listeners, renderer } = await mountDeferred()
+    output('session-1', 'pending')
+    act(() => { timers.fireWithDelay(2) })
+    output('session-1', '\x1b[?1000l')
+    act(() => { timers.fireWithDelay(2) })
+    act(() => {
+      listeners[0]?.({ type: 'tmux-copy-mode-status', sessionId: 'session-1', inCopyMode: false, appMouse: true })
+    })
+    expect(terminal.writes).toEqual(['pending', '\x1b[?1000l', '\x1b[?1000h\x1b[?1002h\x1b[?1006h'])
+    act(() => { renderer.unmount() })
+  })
+
   test('forces held data through after 50ms despite continuous arrivals', async () => {
     const { timers, terminal, output, renderer } = await mountDeferred()
 
