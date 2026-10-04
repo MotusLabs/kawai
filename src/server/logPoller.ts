@@ -442,6 +442,7 @@ export class LogPoller {
           skipMatchingPatterns: config.skipMatchingPatterns,
           search: {
             rgThreads: this.rgThreads,
+            interWindowYieldMs: config.logMatchYieldMs,
           },
         },
         { timeoutMs: 120000 } // 2 minutes for orphan rematch
@@ -661,6 +662,7 @@ export class LogPoller {
         preFilteredPaths: pathsToPoll,
         search: {
           rgThreads: this.rgThreads,
+          interWindowYieldMs: config.logMatchYieldMs,
         },
       })
 
@@ -1134,6 +1136,7 @@ export class LogPoller {
             search: {
               rgThreads: this.rgThreads,
               profile: this.matchProfile,
+              interWindowYieldMs: config.logMatchYieldMs,
             },
           })
 

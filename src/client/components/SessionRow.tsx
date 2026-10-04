@@ -2,8 +2,11 @@
 // the grouped workspace navigator: SortableSessionItem wraps SessionRow with
 // dnd-kit drag behavior and framer-motion enter/exit animations; SessionRow
 // renders the row content with rename editing and the long-press context menu.
+// SortableSessionItem is memoized behind a field-comparing comparator
+// (design D6): parents pass stable id-taking handlers that are bound per row
+// with useCallback, so activity churn inside a 30s bucket re-renders nothing.
 
-import { useCallback, useEffect, useRef, useState, forwardRef } from 'react'
+import { useCallback, useEffect, useRef, useState, forwardRef, memo } from 'react'
 import { motion } from 'motion/react'
 import { useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
@@ -13,6 +16,7 @@ import File06Icon from '@untitledui-icons/react/line/esm/File06Icon'
 import Edit05Icon from '@untitledui-icons/react/line/esm/Edit05Icon'
 import Moon01Icon from '@untitledui-icons/react/line/esm/Moon01Icon'
 import type { Session } from '@shared/types'
+import { activityInSameBucket } from '@shared/activityBucket'
 import { formatRelativeTime } from '../utils/time'
 import { getPathLeaf } from '../utils/sessionLabel'
 import { getSessionIdShort } from '../utils/sessionId'
@@ -30,6 +34,77 @@ export const statusPillClass: Record<Session['status'], string> = {
   unknown: 'bg-zinc-500/20 text-zinc-400',
 }
 
+/** Control availability: remote sessions accept list actions only when the
+ *  operator enabled remote control and the session is managed. */
+function canControlSession(session: Session, remoteAllowControl: boolean): boolean {
+  const isRemote = session.remote === true
+  const isManaged = session.source === 'managed'
+  return !isRemote || (remoteAllowControl && isManaged)
+}
+
+/** Hibernate parks a managed local session that has an agent session id. */
+function canHibernateSession(session: Session): boolean {
+  return Boolean(
+    session.source === 'managed' &&
+    session.remote !== true &&
+    session.agentSessionId?.trim()
+  )
+}
+
+const strictEquals = <T,>(a: T, b: T): boolean => a === b
+
+/**
+ * Compare two records through a per-field comparator table. The never-typed
+ * parameters are the standard bridge for correlated-union calls (each table
+ * entry stays precisely typed at its own key); iterates the table so a field
+ * without an entry is impossible to miss at runtime too.
+ */
+function everyFieldEquals<K extends PropertyKey>(
+  table: Record<K, (a: never, b: never) => boolean>,
+  a: { [P in K]?: unknown },
+  b: { [P in K]?: unknown },
+): boolean {
+  for (const key of Object.keys(table) as K[]) {
+    if (!table[key](a[key] as never, b[key] as never)) {
+      return false
+    }
+  }
+  return true
+}
+
+/**
+ * Field-by-field Session equality for row memoization. The mapped type keeps
+ * the table exhaustive: adding a Session field without an entry here is a
+ * type error. lastActivity compares by 30s bucket (design D6) — sub-quantum
+ * churn keeps precise stored values but must not re-render rows.
+ */
+export const SESSION_FIELD_EQUALS: {
+  [K in keyof Session]-?: (a: Session[K], b: Session[K]) => boolean
+} = {
+  id: strictEquals,
+  name: strictEquals,
+  tmuxWindow: strictEquals,
+  projectPath: strictEquals,
+  status: strictEquals,
+  createdAt: strictEquals,
+  agentType: strictEquals,
+  source: strictEquals,
+  host: strictEquals,
+  remote: strictEquals,
+  command: strictEquals,
+  agentSessionId: strictEquals,
+  agentSessionName: strictEquals,
+  logFilePath: strictEquals,
+  lastUserMessage: strictEquals,
+  isPinned: strictEquals,
+  lastActivity: activityInSameBucket,
+}
+
+/** True when two Session payloads render an identical row. */
+export function sessionsEqualForRender(a: Session, b: Session): boolean {
+  return everyFieldEquals(SESSION_FIELD_EQUALS, a, b)
+}
+
 export interface SortableSessionItemProps {
   session: Session
   isNew: boolean
@@ -43,36 +118,88 @@ export interface SortableSessionItemProps {
   showLastUserMessage: boolean
   showHostInfo: boolean
   dropIndicator: 'above' | 'below' | null
-  onSelect: () => void
-  onStartEdit?: () => void
+  /** Current time (ms) refreshed every 30s by the owning list; a new value
+   *  re-renders the row so relative labels stay fresh. */
+  nowTick: number
+  /** Remote-control permission, gating context-menu action availability. */
+  remoteAllowControl: boolean
+  /** Stable id-taking handlers from the owning list (bound per row inside);
+   *  an undefined optional handler hides that action. */
+  onSelect: (sessionId: string) => void
+  onStartEdit?: (sessionId: string) => void
   onCancelEdit: () => void
-  onRename: (newName: string) => void
-  onHibernate?: () => void
-  onKill?: () => void
-  onDuplicate?: () => void
+  onRename: (sessionId: string, newName: string) => void
+  onHibernate?: (agentSessionId: string) => void
+  onKill?: (sessionId: string) => void
+  onDuplicate?: (sessionId: string) => void
 }
 
-export const SortableSessionItem = forwardRef<HTMLDivElement, SortableSessionItemProps>(function SortableSessionItem({
-  session,
-  isNew,
-  exitDuration,
-  prefersReducedMotion,
-  useSafariLayoutFallback,
-  isSelected,
-  isEditing,
-  showSessionIdPrefix,
-  showProjectName,
-  showLastUserMessage,
-  showHostInfo,
-  dropIndicator,
-  onSelect,
-  onStartEdit,
-  onCancelEdit,
-  onRename,
-  onHibernate,
-  onKill,
-  onDuplicate,
-}, ref) {
+/**
+ * Memo comparator for SortableSessionItem, exhaustive over every prop via the
+ * mapped type: the session compares field-by-field (activity by 30s bucket),
+ * every other prop — callbacks including optional availability, nowTick, and
+ * the display/drag flags — by identity.
+ */
+const ITEM_PROP_EQUALS: {
+  [K in keyof SortableSessionItemProps]-?: (
+    a: SortableSessionItemProps[K],
+    b: SortableSessionItemProps[K],
+  ) => boolean
+} = {
+  session: sessionsEqualForRender,
+  isNew: strictEquals,
+  exitDuration: strictEquals,
+  prefersReducedMotion: strictEquals,
+  useSafariLayoutFallback: strictEquals,
+  isSelected: strictEquals,
+  isEditing: strictEquals,
+  showSessionIdPrefix: strictEquals,
+  showProjectName: strictEquals,
+  showLastUserMessage: strictEquals,
+  showHostInfo: strictEquals,
+  dropIndicator: strictEquals,
+  nowTick: strictEquals,
+  remoteAllowControl: strictEquals,
+  onSelect: strictEquals,
+  onStartEdit: strictEquals,
+  onCancelEdit: strictEquals,
+  onRename: strictEquals,
+  onHibernate: strictEquals,
+  onKill: strictEquals,
+  onDuplicate: strictEquals,
+}
+
+function sortableSessionItemPropsEqual(
+  prev: SortableSessionItemProps,
+  next: SortableSessionItemProps,
+): boolean {
+  return everyFieldEquals(ITEM_PROP_EQUALS, prev, next)
+}
+
+export const SortableSessionItem = memo(
+  forwardRef<HTMLDivElement, SortableSessionItemProps>(function SortableSessionItem({
+    session,
+    isNew,
+    exitDuration,
+    prefersReducedMotion,
+    useSafariLayoutFallback,
+    isSelected,
+    isEditing,
+    showSessionIdPrefix,
+    showProjectName,
+    showLastUserMessage,
+    showHostInfo,
+    dropIndicator,
+    nowTick,
+    remoteAllowControl,
+    onSelect,
+    onStartEdit,
+    onCancelEdit,
+    onRename,
+    onHibernate,
+    onKill,
+    onDuplicate,
+  }, ref) {
   const {
     attributes,
     listeners,
@@ -103,6 +230,36 @@ export const SortableSessionItem = forwardRef<HTMLDivElement, SortableSessionIte
       }
     },
     [setNodeRef, ref],
+  )
+
+  // Row-local handler bindings (design D6): parents pass stable id-taking
+  // callbacks; useCallback keeps the zero-arg props SessionRow receives
+  // identical across parent re-renders that do not change this row.
+  const canControl = canControlSession(session, remoteAllowControl)
+  const canHibernate = canHibernateSession(session)
+  const handleSelect = useCallback(
+    () => onSelect(session.id),
+    [onSelect, session.id],
+  )
+  const handleStartEdit = useCallback(
+    () => onStartEdit?.(session.id),
+    [onStartEdit, session.id],
+  )
+  const handleRenameRow = useCallback(
+    (newName: string) => onRename(session.id, newName),
+    [onRename, session.id],
+  )
+  const handleHibernate = useCallback(() => {
+    const agentSessionId = session.agentSessionId?.trim()
+    if (agentSessionId) onHibernate?.(agentSessionId)
+  }, [onHibernate, session.agentSessionId])
+  const handleKill = useCallback(
+    () => onKill?.(session.id),
+    [onKill, session.id],
+  )
+  const handleDuplicate = useCallback(
+    () => onDuplicate?.(session.id),
+    [onDuplicate, session.id],
   )
 
   return (
@@ -171,21 +328,24 @@ export const SortableSessionItem = forwardRef<HTMLDivElement, SortableSessionIte
         showProjectName={showProjectName}
         showLastUserMessage={showLastUserMessage}
         showHostInfo={showHostInfo}
+        nowTick={nowTick}
         isDragging={isDragging}
-        onSelect={onSelect}
-        onStartEdit={onStartEdit}
+        onSelect={handleSelect}
+        onStartEdit={onStartEdit && canControl ? handleStartEdit : undefined}
         onCancelEdit={onCancelEdit}
-        onRename={onRename}
-        onHibernate={onHibernate}
-        onKill={onKill}
-        onDuplicate={onDuplicate}
+        onRename={handleRenameRow}
+        onHibernate={onHibernate && canHibernate ? handleHibernate : undefined}
+        onKill={onKill && canControl ? handleKill : undefined}
+        onDuplicate={onDuplicate && canControl ? handleDuplicate : undefined}
       />
       {dropIndicator === 'below' && (
         <div className="absolute -bottom-px left-3 right-3 h-0.5 border-t-2 border-dashed border-accent" />
       )}
     </motion.div>
   )
-})
+  }),
+  sortableSessionItemPropsEqual,
+)
 
 SortableSessionItem.displayName = 'SortableSessionItem'
 
@@ -197,6 +357,8 @@ interface SessionRowProps {
   showProjectName: boolean
   showLastUserMessage: boolean
   showHostInfo: boolean
+  /** Label clock from the owning list; labels recompute only when it moves. */
+  nowTick?: number
   isDragging?: boolean
   onSelect: () => void
   onStartEdit?: () => void
@@ -215,6 +377,7 @@ export function SessionRow({
   showProjectName,
   showLastUserMessage,
   showHostInfo,
+  nowTick,
   isDragging = false,
   onSelect,
   onStartEdit,
@@ -224,7 +387,7 @@ export function SessionRow({
   onKill,
   onDuplicate,
 }: SessionRowProps) {
-  const lastActivity = formatRelativeTime(session.lastActivity)
+  const lastActivity = formatRelativeTime(session.lastActivity, nowTick)
   const inputRef = useRef<HTMLInputElement>(null)
   const contextMenuRef = useRef<HTMLDivElement>(null)
   const displayName =

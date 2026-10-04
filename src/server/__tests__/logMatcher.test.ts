@@ -680,6 +680,86 @@ describe('logMatcher', () => {
     await fs.rm(tempDir, { recursive: true, force: true })
   })
 
+  test('matchWindowsToLogsByExactRgAsync matches the sync variant and paces captures with the inter-window yield', async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agentboard-logmatch-paced-'))
+    const logTie = path.join(tempDir, 'session-tie.jsonl')
+    const logPlain = path.join(tempDir, 'session-plain.jsonl')
+    const tiePrompt = 'shared tie prompt'
+    const plainPrompt = 'plain unique prompt'
+
+    await fs.writeFile(logTie, buildUserLogEntry(tiePrompt))
+    await fs.writeFile(logPlain, buildUserLogEntry(plainPrompt))
+
+    const base = {
+      projectPath: '/tmp/proj',
+      status: 'waiting' as const,
+      lastActivity: new Date().toISOString(),
+      createdAt: new Date().toISOString(),
+      source: 'managed' as const,
+    }
+    // W1/W2 tie on logTie (identical scrollback -> blocked), W3 matches
+    // logPlain, W4 has an empty terminal (noMessageWindows).
+    const windows: Session[] = [
+      { ...base, id: 'w1', name: 'tie-1', tmuxWindow: 'agentboard:1' },
+      { ...base, id: 'w2', name: 'tie-2', tmuxWindow: 'agentboard:2' },
+      { ...base, id: 'w3', name: 'plain', tmuxWindow: 'agentboard:3' },
+      { ...base, id: 'w4', name: 'empty', tmuxWindow: 'agentboard:4' },
+    ]
+    setTmuxOutput('agentboard:1', buildPromptScrollback([tiePrompt]))
+    setTmuxOutput('agentboard:2', buildPromptScrollback([tiePrompt]))
+    setTmuxOutput('agentboard:3', buildPromptScrollback([plainPrompt]))
+    setTmuxOutput('agentboard:4', '')
+
+    const syncResult = matchWindowsToLogsByExactRg(windows, tempDir)
+
+    const waitCalls: number[] = []
+    commandCalls.length = 0
+    const asyncResult = await matchWindowsToLogsByExactRgAsync(windows, tempDir, 25, {
+      interWindowYieldMs: 15,
+      wait: async (ms) => {
+        waitCalls.push(ms)
+      },
+    })
+
+    // Order-equivalence with the sync variant, including the blocked tie and
+    // noMessageWindows.
+    const serialize = (matches: Map<string, Session>) =>
+      Array.from(matches.entries()).map(([logPath, session]) => [
+        logPath,
+        session.tmuxWindow,
+      ])
+    expect(serialize(asyncResult.matches)).toEqual(serialize(syncResult.matches))
+    expect(asyncResult.matches.get(logPlain)?.tmuxWindow).toBe('agentboard:3')
+    expect(asyncResult.matches.has(logTie)).toBe(false)
+    expect(syncResult.matches.has(logTie)).toBe(false)
+    expect(asyncResult.noMessageWindows).toEqual(syncResult.noMessageWindows)
+    expect(Array.from(asyncResult.noMessageWindows)).toEqual(['agentboard:4'])
+
+    // The yield fires between consecutive captures: 4 windows -> 3 waits of
+    // the configured length, and captures run sequentially in window order.
+    expect(waitCalls).toEqual([15, 15, 15])
+    const captureTargets = commandCalls
+      .filter(
+        (args) =>
+          args[0] === 'tmux' &&
+          (args[2] === 'capture-pane' || args[1] === 'capture-pane')
+      )
+      .map((args) => {
+        const targetIndex = args.indexOf('-t')
+        return args[targetIndex + 1]
+      })
+    expect(captureTargets).toEqual([
+      'agentboard:1',
+      'agentboard:2',
+      'agentboard:3',
+      'agentboard:4',
+      // The empty terminal triggers one extra ANSI-fallback capture.
+      'agentboard:4',
+    ])
+
+    await fs.rm(tempDir, { recursive: true, force: true })
+  })
+
   test('matchWindowsToLogsByExactRg never swaps a claude and a codex window sharing a prompt', async () => {
     // Incident replay: same prompt in a claude window (pane shows the collapsed
     // paste placeholder, which is in no log) and a codex window (pane shows the

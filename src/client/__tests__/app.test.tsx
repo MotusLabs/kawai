@@ -59,9 +59,12 @@ mock.module('@xterm/addon-search', () => ({ SearchAddon: class {} }))
 mock.module('@xterm/addon-serialize', () => ({ SerializeAddon: class {} }))
 mock.module('@xterm/addon-progress', () => ({ ProgressAddon: class {} }))
 mock.module('@xterm/addon-web-links', () => ({ WebLinksAddon: class {} }))
-mock.module('../components/SessionPreviewContent', () => ({
-  default: () => <div data-testid="session-preview-content" />,
-}))
+// SessionPreviewContent is deliberately NOT mocked here: Bun 1.4.2 does not
+// restore mock.module registrations after the file finishes, so the stub
+// leaked into SessionPreviewModal.test.tsx when run in the same process
+// (the modal silently rendered the stub). The real component's preview
+// fetch fails harmlessly under test (relative URL, no server) and the error
+// is contained in its own state.
 
 const actualWebSocket = await import('../hooks/useWebSocket')
 
@@ -2215,5 +2218,57 @@ describe('App', () => {
       globalThis.fetch = originalFetch
       useSettingsStore.setState({ defaultProjectDir: '' })
     }
+  })
+
+  test('duplicate builds session-create from current session data', () => {
+    useSessionStore.setState({ sessions: [baseSession], selectedSessionId: baseSession.id, hasLoaded: true })
+    sendCalls = []
+
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => {
+      renderer = TestRenderer.create(<App />)
+    })
+    activeRenderer = renderer
+
+    // The row rendered against the original data; the store's copy advances
+    // afterwards (a later broadcast). The memoized row must still duplicate
+    // from the current data, not from a snapshot captured at render time.
+    act(() => {
+      useSessionStore.setState({
+        sessions: [
+          { ...baseSession, name: 'beta', projectPath: '/tmp/updated', command: 'bun run dev' },
+        ],
+      })
+    })
+
+    // Desktop sidebar's row (the drawer may render its own copy).
+    const card = renderer.root.findAllByProps({ 'data-testid': 'session-card' })[0]
+    act(() => {
+      card.props.onContextMenu({ preventDefault: () => {}, stopPropagation: () => {}, clientX: 8, clientY: 8 })
+    })
+    const menu = renderer.root.findByProps({ role: 'menu' })
+    const duplicateButton = menu
+      .findAllByProps({ role: 'menuitem' })
+      .find((item) =>
+        (Array.isArray(item.props.children) ? item.props.children : [item.props.children]).some(
+          (child) => child === 'Duplicate'
+        )
+      )
+    if (!duplicateButton) {
+      throw new Error('Expected Duplicate menu item')
+    }
+
+    act(() => {
+      duplicateButton.props.onClick({ stopPropagation: () => {} })
+    })
+
+    const createMessage = sendCalls.find((message) => message.type === 'session-create')
+    expect(createMessage).toMatchObject({
+      type: 'session-create',
+      projectPath: '/tmp/updated',
+      command: 'bun run dev',
+    })
+
+    act(() => renderer.unmount())
   })
 })

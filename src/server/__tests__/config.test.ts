@@ -35,6 +35,8 @@ const ORIGINAL_ENV = {
   AGENTBOARD_TMUX_MUTATION_TIMEOUT_MS: process.env.AGENTBOARD_TMUX_MUTATION_TIMEOUT_MS,
   AGENTBOARD_PASTE_IMAGE_MAX_BYTES: process.env.AGENTBOARD_PASTE_IMAGE_MAX_BYTES,
   AGENTBOARD_PROJECT_DIR: process.env.AGENTBOARD_PROJECT_DIR,
+  AGENTBOARD_WS_DEFLATE: process.env.AGENTBOARD_WS_DEFLATE,
+  AGENTBOARD_LOG_MATCH_YIELD_MS: process.env.AGENTBOARD_LOG_MATCH_YIELD_MS,
 }
 
 const ENV_KEYS = Object.keys(ORIGINAL_ENV) as Array<keyof typeof ORIGINAL_ENV>
@@ -87,6 +89,8 @@ async function loadConfig(tag: string) {
     tmuxMutationTimeoutMs: number
     pasteImageMaxBytes: number
     defaultProjectDir: string
+    wsPerMessageDeflate: boolean
+    logMatchYieldMs: number
   }
 }
 
@@ -220,6 +224,39 @@ describe('config', () => {
 
     const config = await loadConfig('empty-hostname')
     expect(config.hostname).toBe('127.0.0.1')
+  })
+
+  test('wsPerMessageDeflate defaults to false and only literal true enables it', async () => {
+    delete process.env.AGENTBOARD_WS_DEFLATE
+    expect((await loadConfig('deflate-default')).wsPerMessageDeflate).toBe(false)
+
+    process.env.AGENTBOARD_WS_DEFLATE = 'true'
+    expect((await loadConfig('deflate-true')).wsPerMessageDeflate).toBe(true)
+
+    for (const junk of ['TRUE', '1', 'yes', 'on', ' false', '']) {
+      process.env.AGENTBOARD_WS_DEFLATE = junk
+      expect((await loadConfig(`deflate-junk-${junk || 'empty'}`)).wsPerMessageDeflate).toBe(false)
+    }
+  })
+
+  test('logMatchYieldMs defaults to 25 and clamps to 0-250', async () => {
+    delete process.env.AGENTBOARD_LOG_MATCH_YIELD_MS
+    expect((await loadConfig('yield-default')).logMatchYieldMs).toBe(25)
+
+    process.env.AGENTBOARD_LOG_MATCH_YIELD_MS = '0'
+    expect((await loadConfig('yield-zero')).logMatchYieldMs).toBe(0)
+
+    process.env.AGENTBOARD_LOG_MATCH_YIELD_MS = '80'
+    expect((await loadConfig('yield-80')).logMatchYieldMs).toBe(80)
+
+    process.env.AGENTBOARD_LOG_MATCH_YIELD_MS = '9999'
+    expect((await loadConfig('yield-high')).logMatchYieldMs).toBe(250)
+
+    process.env.AGENTBOARD_LOG_MATCH_YIELD_MS = '-5'
+    expect((await loadConfig('yield-negative')).logMatchYieldMs).toBe(0)
+
+    process.env.AGENTBOARD_LOG_MATCH_YIELD_MS = 'junk'
+    expect((await loadConfig('yield-junk')).logMatchYieldMs).toBe(25)
   })
 
   test('honors deliberately set HOSTNAME values', async () => {

@@ -83,6 +83,8 @@ async function main() {
     // isolation from global Bun.* mocks, but running them under coverage on
     // Linux CI can stall PTY attach readiness.
     const ISOLATED_REAL_TMUX_FILES = new Set([
+      'copy-mode-async.integration.test.ts',
+      'output-coalescing.integration.test.ts',
       'double-attach.integration.test.ts',
       'hibernation.integration.test.ts',
       'integration.test.ts',
@@ -92,9 +94,9 @@ async function main() {
     // Client tests that install top-level mock.module(...) hooks must run in a
     // separate process — Bun's module mocks persist for the lifetime of the
     // test process, so they leak into any subsequent file that imports the
-    // same module. app.test.tsx stubs ../components/SessionPreviewContent;
-    // when bun's readdir order puts it before SessionPreviewModal.test.tsx
-    // (e.g. on Linux ext4) the modal test sees the stub and breaks.
+    // same module. (app.test.tsx used to stub ../components/SessionPreviewContent
+    // here; the stub is gone, but its useWebSocket/xterm mocks keep it in this
+    // set.)
     const ISOLATED_CLIENT_FILES = new Set([
       'app.test.tsx',
       // Files that render motion/react (framer-motion) components. The

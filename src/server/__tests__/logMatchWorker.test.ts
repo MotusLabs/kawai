@@ -4,13 +4,20 @@ import fsSync from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import type { Session } from '../../shared/types'
-import { handleMatchWorkerRequest } from '../logMatchWorker'
-import type { MatchWorkerRequest } from '../logMatchWorkerTypes'
+import { createMatchWorkerDispatcher, handleMatchWorkerRequest } from '../logMatchWorker'
+import type {
+  MatchWorkerRequest,
+  MatchWorkerResponse,
+} from '../logMatchWorkerTypes'
 
 const messages: unknown[] = []
 
-const bunAny = Bun as typeof Bun & { spawnSync: typeof Bun.spawnSync }
+const bunAny = Bun as typeof Bun & {
+  spawnSync: typeof Bun.spawnSync
+  spawn: typeof Bun.spawn
+}
 const originalSpawnSync = bunAny.spawnSync
+const originalSpawn = bunAny.spawn
 const tmuxOutputs = new Map<string, string>()
 
 const originalClaude = process.env.CLAUDE_CONFIG_DIR
@@ -131,12 +138,13 @@ function setTmuxOutput(target: string, content: string) {
   tmuxOutputs.set(target, content)
 }
 
-function postRequest(request: MatchWorkerRequest) {
-  messages.push(handleMatchWorkerRequest(request))
+async function postRequest(request: MatchWorkerRequest) {
+  messages.push(await handleMatchWorkerRequest(request))
 }
 
 afterAll(() => {
   bunAny.spawnSync = originalSpawnSync
+  bunAny.spawn = originalSpawn
   if (originalClaude) process.env.CLAUDE_CONFIG_DIR = originalClaude
   else delete process.env.CLAUDE_CONFIG_DIR
   if (originalCodex) process.env.CODEX_HOME = originalCodex
@@ -184,10 +192,48 @@ beforeEach(async () => {
       stderr: Buffer.from(''),
     } as ReturnType<typeof Bun.spawnSync>
   }) as typeof Bun.spawnSync
+
+  // The async matcher (paced variant) captures via Bun.spawn — delegate it
+  // to the current spawnSync mock so both interfaces see the same fixtures.
+  // Read spawnSync at call time so test-local wrappers keep applying.
+  bunAny.spawn = ((...args: Parameters<typeof Bun.spawn>) => {
+    const cmd = Array.isArray(args[0]) ? args[0] : [String(args[0])]
+    const syncResult = bunAny.spawnSync(
+      cmd as Parameters<typeof Bun.spawnSync>[0]
+    )
+    const stdoutBuf = syncResult.stdout ?? Buffer.from('')
+    const stderrBuf = syncResult.stderr ?? Buffer.from('')
+    return {
+      exited: Promise.resolve(syncResult.exitCode ?? 0),
+      stdout: new ReadableStream({
+        start(controller) {
+          controller.enqueue(
+            typeof stdoutBuf === 'string'
+              ? new TextEncoder().encode(stdoutBuf)
+              : stdoutBuf
+          )
+          controller.close()
+        },
+      }),
+      stderr: new ReadableStream({
+        start(controller) {
+          controller.enqueue(
+            typeof stderrBuf === 'string'
+              ? new TextEncoder().encode(stderrBuf)
+              : stderrBuf
+          )
+          controller.close()
+        },
+      }),
+      kill: () => {},
+      pid: 23456,
+    } as unknown as ReturnType<typeof Bun.spawn>
+  }) as typeof Bun.spawn
 })
 
 afterEach(async () => {
   bunAny.spawnSync = originalSpawnSync
+  bunAny.spawn = originalSpawn
   tmuxOutputs.clear()
   if (tempRoot) {
     await fs.rm(tempRoot, { recursive: true, force: true })
@@ -222,7 +268,7 @@ describe('logMatchWorker', () => {
       buildUserLogEntry('hello', { sessionId: 'session-1', cwd: '/tmp/alpha' })
     )
 
-    postRequest({
+    await postRequest({
       id: 'request-1',
       windows: [baseSession],
       maxLogsPerPoll: 5,
@@ -258,7 +304,7 @@ describe('logMatchWorker', () => {
 
     setTmuxOutput('agentboard:1', buildPromptScrollback([message]))
 
-    postRequest({
+    await postRequest({
       id: 'request-2',
       windows: [baseSession],
       maxLogsPerPoll: 5,
@@ -288,7 +334,7 @@ describe('logMatchWorker', () => {
       throw new Error('boom')
     }) as typeof Bun.spawnSync
 
-    postRequest({
+    await postRequest({
       id: 'request-3',
       windows: [baseSession],
       maxLogsPerPoll: 5,
@@ -323,7 +369,7 @@ describe('logMatchWorker', () => {
       })
     )
 
-    postRequest({
+    await postRequest({
       id: 'request-prefiltered',
       windows: [],
       maxLogsPerPoll: 25,
@@ -361,7 +407,7 @@ describe('logMatchWorker', () => {
       })
     )
 
-    postRequest({
+    await postRequest({
       id: 'request-empty-prefiltered',
       windows: [],
       maxLogsPerPoll: 25,
@@ -378,5 +424,123 @@ describe('logMatchWorker', () => {
     )
     expect(entries).toContain(firstLogPath)
     expect(entries).toContain(secondLogPath)
+  })
+
+  test('dispatcher serializes queued requests and recovers after failure', async () => {
+    const logDir = path.join(process.env.CLAUDE_CONFIG_DIR as string, 'projects', 'alpha')
+    await fs.mkdir(logDir, { recursive: true })
+
+    const events: string[] = []
+    // Record capture-pane invocations by target; the targets differ per
+    // request, so the event order proves serialization.
+    const recordCaptures = (args: string[]) => {
+      const tmuxSubcommand = args[1] === '-u' ? args[2] : args[1]
+      if (args[0] === 'tmux' && tmuxSubcommand === 'capture-pane') {
+        const targetIndex = args.indexOf('-t')
+        events.push(`capture:${args[targetIndex + 1]}`)
+      }
+    }
+    const innerMock = bunAny.spawnSync
+    bunAny.spawnSync = ((args: string[]) => {
+      recordCaptures(args)
+      return innerMock(args as Parameters<typeof Bun.spawnSync>[0])
+    }) as typeof Bun.spawnSync
+
+    const dispatched: MatchWorkerResponse[] = []
+    const dispatch = createMatchWorkerDispatcher((response) =>
+      dispatched.push(response)
+    )
+
+    // Request 1: paced with two windows and a 20ms inter-window yield, so its
+    // captures and response span a measurable interval.
+    const pacedLog = path.join(logDir, 'paced.jsonl')
+    await fs.writeFile(
+      pacedLog,
+      buildUserLogEntry('paced message', { sessionId: 'session-paced', cwd: '/tmp/alpha' })
+    )
+    const pacedWindowA = { ...baseSession, tmuxWindow: 'agentboard: paced-a' }
+    const pacedWindowB = { ...baseSession, tmuxWindow: 'agentboard: paced-b' }
+    setTmuxOutput('agentboard: paced-a', buildPromptScrollback(['paced message']))
+    setTmuxOutput('agentboard: paced-b', buildPromptScrollback(['paced message']))
+
+    // Request 2: an orphan-rematch request whose capture must not start
+    // before request 1's response was posted.
+    const orphanLog = path.join(logDir, 'orphan.jsonl')
+    await fs.writeFile(
+      orphanLog,
+      buildUserLogEntry('orphan message', { sessionId: 'session-orphan', cwd: '/tmp/alpha' })
+    )
+    const orphanWindow = { ...baseSession, tmuxWindow: 'agentboard: orphan-w' }
+    setTmuxOutput('agentboard: orphan-w', buildPromptScrollback(['orphan message']))
+
+    const pacedRequest: MatchWorkerRequest = {
+      id: 'request-paced',
+      windows: [pacedWindowA, pacedWindowB],
+      maxLogsPerPoll: 5,
+      sessions: [],
+      scrollbackLines: 25,
+      search: { interWindowYieldMs: 20 },
+    }
+    const orphanRequest: MatchWorkerRequest = {
+      id: 'request-orphan',
+      windows: [orphanWindow],
+      maxLogsPerPoll: 5,
+      sessions: [],
+      scrollbackLines: 25,
+      forceOrphanRematch: true,
+      orphanCandidates: [
+        {
+          sessionId: 'session-orphan',
+          logFilePath: orphanLog,
+          projectPath: '/tmp/alpha',
+          agentType: 'claude',
+          currentWindow: null,
+        },
+      ],
+      search: { interWindowYieldMs: 20 },
+    }
+
+    // Queue both back-to-back without awaiting the first.
+    dispatch(pacedRequest)
+    dispatch(orphanRequest)
+
+    const deadline = Date.now() + 10000
+    while (
+      Date.now() < deadline &&
+      dispatched.filter((r) => r.type === 'result').length < 2
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+    expect(dispatched).toHaveLength(2)
+    expect(dispatched.map((r) => r.id)).toEqual(['request-paced', 'request-orphan'])
+
+    // Serialization: request 2's capture happens only after request 1's
+    // response was posted — never interleaved with request 1's captures.
+    const orphanCaptureIndex = events.findIndex(
+      (e) => e === 'capture:agentboard: orphan-w'
+    )
+    expect(orphanCaptureIndex).toBeGreaterThanOrEqual(0)
+    // All of request 1's captures precede request 2's capture.
+    expect(events.lastIndexOf('capture:agentboard: paced-b')).toBeLessThan(orphanCaptureIndex)
+
+    // A failing request must not poison the queue: force spawnSync to throw,
+    // dispatch an erroring request, then a normal one that still completes.
+    bunAny.spawnSync = (() => {
+      throw new Error('poison')
+    }) as typeof Bun.spawnSync
+    dispatched.length = 0
+    dispatch({ ...pacedRequest, id: 'request-failing' })
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    bunAny.spawnSync = innerMock as typeof Bun.spawnSync
+    dispatch({ ...orphanRequest, id: 'request-after-failure' })
+
+    const deadline2 = Date.now() + 10000
+    while (Date.now() < deadline2 && dispatched.length < 2) {
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+    expect(dispatched).toHaveLength(2)
+    expect(dispatched[0].type).toBe('error')
+    expect(dispatched[1].type).toBe('result')
+    expect(dispatched[1].id).toBe('request-after-failure')
   })
 })

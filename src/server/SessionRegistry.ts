@@ -1,5 +1,6 @@
 import { EventEmitter } from 'node:events'
 import type { AgentSession, Session } from '../shared/types'
+import { activityInSameBucket } from '../shared/activityBucket'
 
 export interface RegistryEvents {
   sessions: (sessions: Session[]) => void
@@ -51,13 +52,17 @@ export class SessionRegistry extends EventEmitter {
       removedIds.delete(id)
     }
 
-    // Check if anything actually changed
+    // Check if anything actually changed. Activity timestamps are compared in
+    // 30s buckets (design D5): steady output churn advances lastActivity on
+    // every refresh, which otherwise re-broadcast the full session list (and
+    // re-rendered the whole UI) each cycle. Stored/emitted timestamps keep
+    // full precision — only change detection quantizes.
     const hasChanges =
       removedIds.size > 0 ||
       nextMap.size !== this.sessions.size ||
       Array.from(nextMap.values()).some((next) => {
         const existing = this.sessions.get(next.id)
-        return !existing || !sessionsEqual(existing, next)
+        return !existing || !sessionsEqualForBroadcast(existing, next)
       })
 
     this.sessions = nextMap
@@ -159,13 +164,19 @@ function agentSessionsEqual(a: AgentSession, b: AgentSession): boolean {
   )
 }
 
-function sessionsEqual(a: Session, b: Session): boolean {
+/**
+ * Same-field equality as sessionsEqual, except lastActivity compares by 30s
+ * bucket (shared activityBucket helper, design D5). Invalid (unparseable)
+ * timestamps fall back to raw string equality, preserving the previous
+ * behavior for malformed values.
+ */
+function sessionsEqualForBroadcast(a: Session, b: Session): boolean {
   return (
     a.id === b.id &&
     a.name === b.name &&
     a.tmuxWindow === b.tmuxWindow &&
     a.status === b.status &&
-    a.lastActivity === b.lastActivity &&
+    activityInSameBucket(a.lastActivity, b.lastActivity) &&
     a.projectPath === b.projectPath &&
     a.source === b.source &&
     a.agentType === b.agentType &&
