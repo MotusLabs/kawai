@@ -519,6 +519,11 @@ if (!tmuxAvailable || !localhostBindable) {
         const TRIALS = 3
         const doubleResults: Array<{ timeMs: number; totalOutputBytes: number }> = []
         const singleResults: Array<{ timeMs: number; totalOutputBytes: number }> = []
+        // Bytes the server pushed into each proxy. Counted before throttling,
+        // so unlike client-side totals they don't depend on how much has
+        // drained when the wait condition fires.
+        const doubleProxyBytes: number[] = []
+        const singleProxyBytes: number[] = []
 
         for (let trial = 0; trial < TRIALS; trial++) {
           // --- Double-attach trial ---
@@ -531,6 +536,7 @@ if (!tmuxAvailable || !localhostBindable) {
               `double-trial-${trial + 1}`
             )
             doubleResults.push(result)
+            doubleProxyBytes.push(proxyA.getTotalServerToClientBytes())
             console.log(
               `  [trial ${trial + 1}] double-attach: ${Math.round(result.timeMs)}ms, ` +
                 `${result.totalOutputBytes} bytes, ` +
@@ -549,6 +555,7 @@ if (!tmuxAvailable || !localhostBindable) {
               `single-trial-${trial + 1}`
             )
             singleResults.push(result)
+            singleProxyBytes.push(proxyB.getTotalServerToClientBytes())
             console.log(
               `  [trial ${trial + 1}] single-attach: ${Math.round(result.timeMs)}ms, ` +
                 `${result.totalOutputBytes} bytes, ` +
@@ -569,12 +576,8 @@ if (!tmuxAvailable || !localhostBindable) {
         const medianSingle = median(singleResults.map((r) => r.timeMs))
         const improvement = ((medianDouble - medianSingle) / medianDouble) * 100
 
-        const medianDoubleBytes = median(
-          doubleResults.map((r) => r.totalOutputBytes)
-        )
-        const medianSingleBytes = median(
-          singleResults.map((r) => r.totalOutputBytes)
-        )
+        const medianDoubleBytes = median(doubleProxyBytes)
+        const medianSingleBytes = median(singleProxyBytes)
 
         console.log(
           `\n  [throttled-reconnect] Results (${TRIALS} trials each):` +
