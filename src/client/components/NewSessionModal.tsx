@@ -1,3 +1,4 @@
+import { useClaudeProfiles } from './chat/useClaudeProfiles'
 import { useEffect, useRef, useState } from 'react'
 import { type CommandPreset, getFullCommand } from '../stores/settingsStore'
 import { DirectoryBrowser } from './DirectoryBrowser'
@@ -56,7 +57,8 @@ interface NewSessionModalProps {
     host?: string,
     autoStartChange?: string,
     autoStartAgent?: AutoStartAgent,
-    kind?: 'terminal' | 'chat'
+    kind?: 'terminal' | 'chat',
+    claudeProfileId?: string
   ) => void
   defaultProjectDir: string
   commandPresets: CommandPreset[]
@@ -101,6 +103,8 @@ export default function NewSessionModal({
   /** Inline refusal for an empty Project Path — Create must never no-op silently. */
   const [projectPathError, setProjectPathError] = useState<string | null>(null)
   const [kind, setKind] = useState<'terminal' | 'chat'>('terminal')
+  const [claudeProfileId, setClaudeProfileId] = useState('default')
+  const catalog = useClaudeProfiles(isOpen && kind === 'chat')
   const [name, setName] = useState('')
   const [selectedPresetId, setSelectedPresetId] = useState<string | null>(null)
   const [command, setCommand] = useState('')
@@ -131,6 +135,7 @@ export default function NewSessionModal({
 
     if (!isOpen) {
       setKind('terminal')
+      setClaudeProfileId('default')
       setProjectPath('')
       setProjectPathError(null)
       setName('')
@@ -306,7 +311,8 @@ export default function NewSessionModal({
     }
     setProjectPathError(null)
     if (kind === 'chat') {
-      onCreate(trimmedPath, name.trim() || undefined, undefined, undefined, undefined, undefined, 'chat')
+      if (catalog.loading || catalog.error || !catalog.profiles.some(profile => profile.id === claudeProfileId)) return
+      onCreate(trimmedPath, name.trim() || undefined, undefined, undefined, undefined, undefined, 'chat', claudeProfileId)
       onClose()
       return
     }
@@ -380,6 +386,20 @@ export default function NewSessionModal({
               <option value="chat">Claude chat</option>
             </select>
           </label>
+          {kind === 'chat' && <div>
+            <label className="block text-xs text-secondary">Profile
+              <select aria-label="Profile" className="input mt-1.5" value={claudeProfileId}
+                disabled={catalog.loading || !!catalog.error}
+                onChange={event => setClaudeProfileId(event.target.value)}>
+                {catalog.profiles.map(profile => <option key={profile.id} value={profile.id}>{profile.label}</option>)}
+              </select>
+            </label>
+            {catalog.loading && <p className="mt-1 text-xs text-secondary">Loading profiles…</p>}
+            {catalog.error && <div className="mt-1 text-xs text-red-400">
+              <p role="alert">{catalog.error}</p>
+              <button type="button" className="btn mt-1" onClick={catalog.retry}>Retry profiles</button>
+            </div>}
+          </div>}
           {showHostPicker && (
             <div>
               <label className="mb-1.5 block text-xs text-secondary">
@@ -602,7 +622,7 @@ export default function NewSessionModal({
           <button type="button" onClick={onClose} className="btn">
             Cancel
           </button>
-          <button type="submit" className="btn btn-primary">
+          <button type="submit" className="btn btn-primary" disabled={kind === 'chat' && (catalog.loading || !!catalog.error)}>
             Create
           </button>
         </div>

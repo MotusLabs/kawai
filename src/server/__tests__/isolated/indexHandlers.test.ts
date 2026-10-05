@@ -783,6 +783,36 @@ describe('server message handlers', () => {
       else process.env.CLAUDE_CODE_OAUTH_TOKEN = previousToken
     }
   })
+  test('profile metadata routes and WS creation validate profile inputs', async () => {
+    const previousToken = process.env.CLAUDE_CODE_OAUTH_TOKEN
+    process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'
+    try {
+      const { serveOptions, registryInstance } = await loadIndex()
+      const { ws, sent } = createWs()
+      const websocket = serveOptions.websocket!
+      const before = registryInstance.getAll().length
+      for (const input of [
+        { kind: 'terminal', claudeProfileId: 'glm' },
+        { kind: 'chat', claudeProfileId: 'unknown' },
+        { kind: 'chat', claudeProfileId: 'glm', env: { ANTHROPIC_API_KEY: 'forbidden' } },
+      ]) {
+        websocket.message?.(ws as never, JSON.stringify({ type: 'session-create', projectPath: '/tmp/chat', ...input }))
+      }
+      await new Promise(resolve => setTimeout(resolve, 0))
+      expect(sent.filter(message => message.type === 'error')).toHaveLength(3)
+      expect(registryInstance.getAll()).toHaveLength(before)
+      websocket.message?.(ws as never, JSON.stringify({ type: 'session-create', kind: 'chat', projectPath: '/tmp/chat', claudeProfileId: 'mimo' }))
+      await new Promise(resolve => setTimeout(resolve, 0))
+      const created = sent.find(message => message.type === 'session-created')
+      if (created?.type !== 'session-created') throw new Error('Profile creation failed')
+      expect(created.session.claudeProfileId).toBe('mimo')
+      expect(JSON.stringify(created)).not.toContain('test-oauth-token')
+      websocket.message?.(ws as never, JSON.stringify({ type: 'session-kill', sessionId: created.session.id }))
+    } finally {
+      if (previousToken === undefined) delete process.env.CLAUDE_CODE_OAUTH_TOKEN
+      else process.env.CLAUDE_CODE_OAUTH_TOKEN = previousToken
+    }
+  })
   test('websocket open sends sessions and registry broadcasts', async () => {
     const { serveOptions, registryInstance } = await loadIndex()
     registryInstance.sessions = [baseSession]

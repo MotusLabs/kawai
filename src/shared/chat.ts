@@ -125,6 +125,12 @@ export type ChatPendingRequest =
 /** User decision on a pending approval_request. */
 export type ChatApprovalDecision = 'allow' | 'deny'
 
+/** Public catalog metadata; environment and credentials stay on the server. */
+export interface ClaudeProfileMetadata {
+  id: string
+  label: string
+}
+
 /**
  * Which side of the Agentboard <-> Claude Code process boundary a captured
  * protocol frame came from: `out` = written to the process stdin, `in` = read

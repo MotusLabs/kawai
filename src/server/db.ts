@@ -49,6 +49,7 @@ export interface ChatSessionRecord {
   name: string
   projectPath: string
   sdkSessionId: string | null
+  claudeProfileId?: string
   status: SessionStatus
   createdAt: string
   lastActivityAt: string
@@ -173,6 +174,7 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
   name TEXT NOT NULL,
   project_path TEXT NOT NULL,
   sdk_session_id TEXT,
+  profile_id TEXT NOT NULL DEFAULT 'default',
   status TEXT NOT NULL,
   created_at TEXT NOT NULL,
   last_activity_at TEXT NOT NULL
@@ -217,6 +219,10 @@ export function initDatabase(options: { path?: string } = {}): SessionDatabase {
   db.exec(CREATE_TABLE_SQL)
   db.exec(CREATE_APP_SETTINGS_TABLE_SQL)
   db.exec(CREATE_CHAT_SESSIONS_TABLE_SQL)
+  const chatColumns = db.prepare('PRAGMA table_info(chat_sessions)').all() as { name: string }[]
+  if (!chatColumns.some(column => column.name === 'profile_id')) {
+    db.exec("ALTER TABLE chat_sessions ADD COLUMN profile_id TEXT NOT NULL DEFAULT 'default'")
+  }
   migrateLastUserMessageColumn(db)
   migrateDeduplicateDisplayNames(db)
   migrateIsPinnedColumn(db)
@@ -305,8 +311,8 @@ export function initDatabase(options: { path?: string } = {}): SessionDatabase {
   // Chat sessions prepared statements
   const insertChatStmt = db.prepare(
     `INSERT INTO chat_sessions
-      (session_id, name, project_path, sdk_session_id, status, created_at, last_activity_at)
-     VALUES ($sessionId, $name, $projectPath, $sdkSessionId, $status, $createdAt, $lastActivityAt)`
+      (session_id, name, project_path, sdk_session_id, profile_id, status, created_at, last_activity_at)
+     VALUES ($sessionId, $name, $projectPath, $sdkSessionId, $profileId, $status, $createdAt, $lastActivityAt)`
   )
   const selectChatBySessionId = db.prepare(
     'SELECT * FROM chat_sessions WHERE session_id = $sessionId'
@@ -546,6 +552,7 @@ export function initDatabase(options: { path?: string } = {}): SessionDatabase {
         $name: session.name,
         $projectPath: session.projectPath,
         $sdkSessionId: session.sdkSessionId,
+        $profileId: session.claudeProfileId ?? 'default',
         $status: session.status,
         $createdAt: session.createdAt,
         $lastActivityAt: session.lastActivityAt,
@@ -557,6 +564,7 @@ export function initDatabase(options: { path?: string } = {}): SessionDatabase {
         name: 'name',
         projectPath: 'project_path',
         sdkSessionId: 'sdk_session_id',
+        claudeProfileId: 'profile_id',
         status: 'status',
         createdAt: 'created_at',
         lastActivityAt: 'last_activity_at',
@@ -628,6 +636,7 @@ function ensureDataDir(dbPath: string) {
 function mapChatRow(row: Record<string, unknown>): ChatSessionRecord {
   return {
     sessionId: String(row.session_id ?? ''),
+    claudeProfileId: String(row.profile_id ?? 'default'),
     name: String(row.name ?? ''),
     projectPath: String(row.project_path ?? ''),
     sdkSessionId:
