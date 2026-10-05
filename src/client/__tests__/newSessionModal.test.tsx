@@ -608,3 +608,188 @@ describe('NewSessionModal first-prompt selector', () => {
     })
   })
 })
+
+describe('NewSessionModal project path validation', () => {
+  function renderModal(overrides: Record<string, unknown> = {}) {
+    setupDom()
+    const created: unknown[] = []
+    let closed = 0
+
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => {
+      renderer = TestRenderer.create(
+        <NewSessionModal
+          isOpen
+          onClose={() => {
+            closed += 1
+          }}
+          onCreate={((...args: unknown[]) => {
+            created.push(args)
+          }) as never}
+          defaultProjectDir="/base"
+          commandPresets={DEFAULT_PRESETS}
+          defaultPresetId="claude"
+          {...overrides}
+        />
+      )
+    })
+
+    return {
+      renderer,
+      created,
+      get closed() {
+        return closed
+      },
+      submit: () => {
+        act(() => {
+          renderer.root.findByType('form').props.onSubmit({ preventDefault: () => {} })
+        })
+      },
+      pathError: () => {
+        const matches = renderer.root.findAllByProps({ 'data-testid': 'project-path-error' })
+        return matches.length > 0 ? String(matches[0].props.children) : null
+      },
+    }
+  }
+
+  test('empty project path refuses create and shows an inline error', () => {
+    const modal = renderModal()
+    const projectInput = modal.renderer.root.findAllByType('input')[1]
+
+    act(() => {
+      projectInput.props.onChange({ target: { value: '   ' } })
+    })
+    modal.submit()
+
+    expect(modal.pathError()).toBe('Enter a project path to create the session.')
+    expect(modal.created).toHaveLength(0)
+    expect(modal.closed).toBe(0)
+    // The input is marked invalid so the reason is reachable to assistive tech.
+    expect(
+      modal.renderer.root.findAllByType('input')[1].props['aria-invalid']
+    ).toBe('true')
+
+    act(() => {
+      modal.renderer.unmount()
+    })
+  })
+
+  test('empty project path refuses chat create too', () => {
+    const modal = renderModal()
+    const kindSelect = modal.renderer.root.findByProps({ 'aria-label': 'Session kind' })
+
+    act(() => {
+      kindSelect.props.onChange({ target: { value: 'chat' } })
+    })
+    const projectInput = modal.renderer.root.findAllByType('input')[0]
+    act(() => {
+      projectInput.props.onChange({ target: { value: '' } })
+    })
+    modal.submit()
+
+    expect(modal.pathError()).toBe('Enter a project path to create the session.')
+    expect(modal.created).toHaveLength(0)
+    expect(modal.closed).toBe(0)
+
+    act(() => {
+      modal.renderer.unmount()
+    })
+  })
+
+  test('typing a path clears the error and allows create', () => {
+    const modal = renderModal()
+    const projectInput = modal.renderer.root.findAllByType('input')[1]
+
+    // Clear the prefilled default so submit is refused and raises the error.
+    act(() => {
+      projectInput.props.onChange({ target: { value: '' } })
+    })
+    modal.submit()
+    expect(modal.pathError()).not.toBeNull()
+
+    act(() => {
+      projectInput.props.onChange({ target: { value: '/work/repo' } })
+    })
+    expect(modal.pathError()).toBeNull()
+
+    modal.submit()
+    expect(modal.pathError()).toBeNull()
+    expect(modal.created).toHaveLength(1)
+    expect(modal.closed).toBe(1)
+
+    act(() => {
+      modal.renderer.unmount()
+    })
+  })
+
+  test('a modal with no pre-filled path starts clean and refuses on submit', () => {
+    // Nothing supplies a default: no active/last project and no default dir.
+    const modal = renderModal({
+      defaultProjectDir: '',
+      lastProjectPath: null,
+      activeProjectPath: undefined,
+    })
+
+    expect(modal.pathError()).toBeNull()
+
+    modal.submit()
+    expect(modal.pathError()).toBe('Enter a project path to create the session.')
+    expect(modal.created).toHaveLength(0)
+    expect(modal.closed).toBe(0)
+
+    act(() => {
+      modal.renderer.unmount()
+    })
+  })
+
+  test('prop updates while open do not wipe what the user typed', () => {
+    // server-info (and thus defaultProjectDir) arrives asynchronously after
+    // the dialog opens; re-initializing on that change used to silently reset
+    // the form under the user's hands.
+    setupDom()
+    const created: Array<{ path: string; name?: string }> = []
+
+    const form = (props: { defaultProjectDir: string; lastProjectPath?: string | null }) => (
+      <NewSessionModal
+        isOpen
+        onClose={() => {}}
+        onCreate={((path: string, name?: string) => {
+          created.push({ path, name })
+        }) as never}
+        defaultProjectDir={props.defaultProjectDir}
+        commandPresets={DEFAULT_PRESETS}
+        defaultPresetId="claude"
+        lastProjectPath={props.lastProjectPath}
+      />
+    )
+
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => {
+      renderer = TestRenderer.create(form({ defaultProjectDir: '' }))
+    })
+
+    const [projectInput, nameInput] = renderer.root.findAllByType('input').slice(1)
+    act(() => {
+      projectInput.props.onChange({ target: { value: '/typed/by/user' } })
+      nameInput.props.onChange({ target: { value: 'My name' } })
+    })
+
+    // The async default lands while the dialog is still open.
+    act(() => {
+      renderer.update(form({ defaultProjectDir: '/late/default', lastProjectPath: '/late/last' }))
+    })
+
+    const inputs = renderer.root.findAllByType('input')
+    expect(inputs[1].props.value).toBe('/typed/by/user')
+    expect(inputs[2].props.value).toBe('My name')
+
+    act(() => {
+      renderer.root.findByType('form').props.onSubmit({ preventDefault: () => {} })
+    })
+    expect(created).toEqual([{ path: '/typed/by/user', name: 'My name' }])
+
+    act(() => {
+      renderer.unmount()
+    })
+  })
+})
