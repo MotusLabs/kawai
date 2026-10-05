@@ -1,6 +1,6 @@
 import { describe, expect, test, afterEach } from 'bun:test'
 import { Database as SQLiteDatabase } from 'bun:sqlite'
-import { initDatabase } from '../db'
+import { initDatabase, resolveDataDir } from '../db'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -702,6 +702,17 @@ describe('db', () => {
     db.db.exec("DELETE FROM app_settings WHERE key = 'another_key'")
   })
 
+  test('app settings delete removes only the named key', () => {
+    db.setAppSetting('delete_me', 'x')
+    db.setAppSetting('keep_me', 'y')
+    db.deleteAppSetting('delete_me')
+    expect(db.getAppSetting('delete_me')).toBeNull()
+    expect(db.getAppSetting('keep_me')).toBe('y')
+    // Deleting a missing key is a no-op.
+    db.deleteAppSetting('never_set')
+    db.deleteAppSetting('keep_me')
+  })
+
   test('wakeStartedAt is stored and cleared by window claim', () => {
     const wakeStartedAt = '2026-01-01T00:01:00.000Z'
     const inserted = db.insertSession(makeSession({
@@ -726,5 +737,28 @@ describe('db', () => {
     expect(claimed?.currentWindow).toBe('agentboard:77')
     expect(claimed?.wakeStartedAt).toBeNull()
     expect(db.getSessionById(inserted.sessionId)?.wakeStartedAt).toBeNull()
+  })
+})
+
+describe('resolveDataDir', () => {
+  const original = process.env.AGENTBOARD_DB_PATH
+  afterEach(() => {
+    if (original === undefined) delete process.env.AGENTBOARD_DB_PATH
+    else process.env.AGENTBOARD_DB_PATH = original
+  })
+  const defaultDir = path.join(process.env.HOME || process.env.USERPROFILE || '', '.agentboard')
+
+  test('is the directory of AGENTBOARD_DB_PATH', () => {
+    process.env.AGENTBOARD_DB_PATH = '/srv/agentboard/data/board.db'
+    expect(resolveDataDir()).toBe('/srv/agentboard/data')
+  })
+
+  test('falls back to the default data dir when unset, empty, or in-memory', () => {
+    delete process.env.AGENTBOARD_DB_PATH
+    expect(resolveDataDir()).toBe(defaultDir)
+    process.env.AGENTBOARD_DB_PATH = ' '
+    expect(resolveDataDir()).toBe(defaultDir)
+    process.env.AGENTBOARD_DB_PATH = ':memory:'
+    expect(resolveDataDir()).toBe(defaultDir)
   })
 })

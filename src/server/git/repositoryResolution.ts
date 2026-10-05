@@ -5,7 +5,7 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
-import { runGit } from './gitCommand'
+import { runGitAsync } from './gitCommand'
 
 export interface ResolvedGitDirs {
   /** Canonical absolute path of this worktree's .git directory. */
@@ -41,8 +41,8 @@ export function canonicalizePath(input: string): string {
  * Resolve the worktree and common Git directories containing `workdir`.
  * Returns null for non-Git paths, git failures, and timeouts.
  */
-export function resolveGitDirs(workdir: string): ResolvedGitDirs | null {
-  const result = runGit(
+export async function resolveGitDirs(workdir: string): Promise<ResolvedGitDirs | null> {
+  const result = await runGitAsync(
     ['rev-parse', '--path-format=absolute', '--git-dir', '--git-common-dir', '--show-toplevel'],
     { cwd: workdir }
   )
@@ -78,16 +78,21 @@ export interface ResolvedRepositories {
  * resolves into it; nested repositories stay distinct because their common
  * directories differ.
  */
-export function resolveSeedRepositories(seeds: Iterable<string>): ResolvedRepositories {
+export async function resolveSeedRepositories(seeds: Iterable<string>): Promise<ResolvedRepositories> {
+  // Read-only rev-parse per seed: resolve them concurrently so a pass costs
+  // one subprocess round-trip instead of one per project path.
+  const resolved = await Promise.all(
+    [...seeds]
+      .filter((seed) => seed && path.isAbsolute(seed))
+      .map(async (seed) => ({
+        canonicalPath: canonicalizePath(seed),
+        dirs: await resolveGitDirs(canonicalizePath(seed)),
+      }))
+  )
   const repositories = new Map<string, ResolvedGitDirs>()
-  const resolved: ResolvedSeed[] = []
-  for (const seed of seeds) {
-    if (!seed || !path.isAbsolute(seed)) continue
-    const canonicalPath = canonicalizePath(seed)
-    const dirs = resolveGitDirs(canonicalPath)
-    resolved.push({ canonicalPath, dirs })
-    if (dirs && !repositories.has(dirs.commonDir)) {
-      repositories.set(dirs.commonDir, dirs)
+  for (const seed of resolved) {
+    if (seed.dirs && !repositories.has(seed.dirs.commonDir)) {
+      repositories.set(seed.dirs.commonDir, seed.dirs)
     }
   }
   return { repositories, seeds: resolved }

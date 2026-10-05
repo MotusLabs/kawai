@@ -1,6 +1,7 @@
-// Chat-session wire contract: conversation events and the WebSocket message
-// payloads that carry them. Shared between the server's chat driver/WS layer
-// and the client's chat store. All SDK-specific types stay in the driver;
+// Chat-session wire contract: conversation events, the WebSocket message
+// payloads that carry them, and the raw protocol frames shown by the chat
+// debug view. Shared between the server's chat driver/WS layer and the
+// client's chat stores. All SDK-specific types stay in the driver;
 // this file is SDK-agnostic so the client never imports the agent SDK.
 
 /**
@@ -123,3 +124,22 @@ export type ChatPendingRequest =
 
 /** User decision on a pending approval_request. */
 export type ChatApprovalDecision = 'allow' | 'deny'
+
+/**
+ * Which side of the Agentboard <-> Claude Code process boundary a captured
+ * protocol frame came from: `out` = written to the process stdin, `in` = read
+ * from its stdout, `stderr` = its stderr, `lifecycle` = spawn/exit/error
+ * records Agentboard writes about the process itself.
+ */
+export type ChatWireDirection = 'out' | 'in' | 'stderr' | 'lifecycle'
+
+/** One captured line of chat protocol traffic. */
+export interface ChatWireFrame {
+  /** Per session, >= 1, monotonic across process respawns and restarts. */
+  seq: number
+  /** ISO timestamp of capture. */
+  at: string
+  dir: ChatWireDirection
+  /** The exact line as exchanged, without its trailing newline. */
+  raw: string
+}

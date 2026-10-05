@@ -1,12 +1,10 @@
 // Owns the lifecycle of chat sessions: auth-gated creation, lazy driver
 // construction (the SDK query() is spawned by the driver on the first turn),
 // persistence in the chat_sessions table with restore-on-start into the
-// registry, kill/shutdown settlement, and immediate sdkSessionId capture so a
+// registry, kill/shutdown settlement (including the session's protocol log), and immediate sdkSessionId capture so a
 // restart can resume the same agent conversation. The SDK import stays dynamic
 // (injected as a queryFactory in tests) so a broken install disables the
 // feature instead of crashing the server.
-import fs from 'node:fs'
-import path from 'node:path'
 import type {
   ChatApprovalDecision,
   ChatEvent,
@@ -18,6 +16,9 @@ import type { ChatSessionRecord, SessionDatabase } from '../db'
 import { generateSessionName } from '../nameGenerator'
 import type { SessionRegistry } from '../SessionRegistry'
 import { ChatSessionDriver, type ChatQueryFactory } from './ChatSessionDriver'
+import { chatAuthErrorMessage, hasClaudeAuth } from './chatAuth'
+import type { ChatProviderEnv } from './chatProviderEnv'
+import type { ChatWireLogs } from './ChatWireLogs'
 import { probeSdkAvailability } from './sdkAvailability'
 import {
   findTranscriptPath,
@@ -26,6 +27,7 @@ import {
 } from './transcriptReplay'
 
 export type { ChatQueryFactory }
+export { chatAuthErrorMessage, hasClaudeAuth }
 
 export interface ChatSessionManagerOptions {
   registry: SessionRegistry
@@ -34,8 +36,16 @@ export interface ChatSessionManagerOptions {
   onEvent: (sessionId: string, event: ChatEvent) => void
   /** Injected in tests; production resolves the SDK via dynamic import. */
   queryFactory?: ChatQueryFactory
-  availabilityProbe?: () => Promise<void>
+  /** Receives the provider env so it probes the endpoint sessions will use. */
+  availabilityProbe?: (providerEnv: ChatProviderEnv) => Promise<void>
   authCheck?: () => boolean
+  /**
+   * Provider overrides for SDK spawns (base URL, models, gateway token). A
+   * getter, so a Settings change reaches the next spawn without a restart.
+   */
+  getProviderEnv?: () => ChatProviderEnv
+  /** Per-session protocol capture for the chat debug view (always on). */
+  wireLogs?: ChatWireLogs
 }
 
 export type ChatCreateResult =
@@ -46,42 +56,9 @@ export type ChatActionResult =
   | { ok: true }
   | { ok: false; error: string }
 
-/** The Claude CLI's credentials file inside the config dir (Linux/Windows). */
-const CLI_CREDENTIALS_FILE = '.credentials.json'
-
-function claudeConfigDir(): string {
-  const override = process.env.CLAUDE_CONFIG_DIR?.trim()
-  if (override) return override
-  const home = process.env.HOME || process.env.USERPROFILE || ''
-  return path.join(home, '.claude')
-}
-
-/**
- * Server-side auth gate (design D9): chat sessions can only run when the SDK
- * can authenticate — via ANTHROPIC_API_KEY in the environment or the CLI's
- * an OAuth token or stored login under CLAUDE_CONFIG_DIR (~/.claude by default). Credentials
- * never leaves the server.
- */
-export function hasClaudeAuth(): boolean {
-  if (process.env.ANTHROPIC_API_KEY?.trim()) return true
-  if (process.env.CLAUDE_CODE_OAUTH_TOKEN?.trim()) return true
-  try {
-    return fs.existsSync(path.join(claudeConfigDir(), CLI_CREDENTIALS_FILE))
-  } catch {
-    return false
-  }
-}
-
-/** Actionable refusal shown when hasClaudeAuth() is false. */
-export function chatAuthErrorMessage(): string {
-  return (
-    'Chat sessions need Claude authentication on the server. ' +
-    'Set ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN in the server environment, or log in with the ' +
-    `Claude CLI (\`claude login\`) so credentials exist at ${path.join(
-      claudeConfigDir(),
-      CLI_CREDENTIALS_FILE
-    )} — or point CLAUDE_CONFIG_DIR at an authenticated config directory.`
-  )
+/** Order-independent identity of a provider configuration. */
+function providerEnvKey(env: ChatProviderEnv): string {
+  return JSON.stringify(Object.entries(env).sort(([a], [b]) => a.localeCompare(b)))
 }
 
 export class ChatSessionManager {
@@ -94,18 +71,22 @@ export class ChatSessionManager {
     Promise<ChatSessionDriver | null>
   >()
   private sdkQuery: Promise<ChatQueryFactory> | null = null
-  private availability: Promise<void> | null = null
+  /**
+   * The availability probe for one provider configuration. Keyed so a provider
+   * change in Settings re-probes the new endpoint; a failed probe is dropped so
+   * a corrected configuration (or repaired install) recovers without a restart.
+   * Concurrent creations under the same configuration share one probe.
+   */
+  private availability: { key: string; promise: Promise<void> } | null = null
 
   async createAvailableSession(input: { projectPath: string; name?: string }): Promise<ChatCreateResult> {
-    if (!(this.options.authCheck ?? hasClaudeAuth)()) return { ok: false, error: chatAuthErrorMessage() }
+    if (!this.authOk()) return { ok: false, error: chatAuthErrorMessage() }
     try {
-      this.availability ??= (this.options.availabilityProbe ??
-        (this.options.queryFactory ? async () => {} : probeSdkAvailability))()
-      await this.availability
+      await this.probeAvailability()
     } catch (error) {
       return {
         ok: false,
-        error: 'Claude Agent SDK is unavailable. Check its installation and runtime, then restart the server. ' +
+        error: 'Claude Agent SDK is unavailable. Check its installation, runtime, and chat provider settings, then try again. ' +
           (error instanceof Error ? error.message : 'SDK probe failed'),
       }
     }
@@ -137,6 +118,8 @@ export class ChatSessionManager {
   constructor(options: ChatSessionManagerOptions) {
     this.options = options
     this.restorePersisted()
+    // Logs of sessions deleted while the server was down are orphans now.
+    void this.options.wireLogs?.pruneOrphans(new Set(this.records.keys()))
   }
 
   /** Create a chat session. Refused (no side effects) when auth is missing. */
@@ -148,7 +131,7 @@ export class ChatSessionManager {
     if (!projectPath) {
       return { ok: false, error: 'A project directory is required' }
     }
-    if (!(this.options.authCheck ?? hasClaudeAuth)()) {
+    if (!this.authOk()) {
       return { ok: false, error: chatAuthErrorMessage() }
     }
     const sessionId = `chat-${crypto.randomUUID()}`
@@ -298,6 +281,7 @@ export class ChatSessionManager {
     this.liveEvents.delete(sessionId)
     this.options.registry.removeChatSession(sessionId)
     this.options.db.deleteChatSession(sessionId)
+    void this.options.wireLogs?.delete(sessionId).catch(() => {})
     return true
   }
 
@@ -368,6 +352,10 @@ export class ChatSessionManager {
         sessionId: record.sessionId,
         projectPath: record.projectPath,
         queryFactory,
+        getProviderEnv: () => this.providerEnv(),
+        ...(this.options.wireLogs
+          ? { wire: this.options.wireLogs.get(record.sessionId) }
+          : {}),
         ...(record.sdkSessionId
           ? { resumeSessionId: record.sdkSessionId }
           : {}),
@@ -392,6 +380,30 @@ export class ChatSessionManager {
     } finally {
       this.driverPromises.delete(sessionId)
     }
+  }
+
+  private probeAvailability(): Promise<void> {
+    const providerEnv = this.providerEnv()
+    const key = providerEnvKey(providerEnv)
+    if (this.availability?.key === key) return this.availability.promise
+    const probe = this.options.availabilityProbe ??
+      (this.options.queryFactory ? async () => {} : probeSdkAvailability)
+    const entry = { key, promise: probe(providerEnv) }
+    this.availability = entry
+    entry.promise.catch(() => {
+      if (this.availability === entry) this.availability = null
+    })
+    return entry.promise
+  }
+
+  private providerEnv(): ChatProviderEnv {
+    return this.options.getProviderEnv?.() ?? {}
+  }
+
+  private authOk(): boolean {
+    return this.options.authCheck
+      ? this.options.authCheck()
+      : hasClaudeAuth(this.providerEnv())
   }
 
   /**

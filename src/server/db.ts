@@ -112,6 +112,7 @@ export interface SessionDatabase {
   // App settings
   getAppSetting: (key: string) => string | null
   setAppSetting: (key: string, value: string) => void
+  deleteAppSetting: (key: string) => void
   // Chat sessions (SDK-driven; separate from agent_sessions log rows)
   insertChatSession: (session: ChatSessionRecord) => ChatSessionRecord
   updateChatSession: (
@@ -190,11 +191,25 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_current_window_unique
   WHERE current_window IS NOT NULL;
 `
 
-export function initDatabase(options: { path?: string } = {}): SessionDatabase {
+/** The database path from AGENTBOARD_DB_PATH, or the default data dir. */
+function resolveDbPath(): string {
   const envPath = process.env[DB_PATH_ENV]?.trim()
   const resolvedEnvPath =
     envPath && envPath !== ':memory:' ? resolveProjectPath(envPath) : envPath
-  const dbPath = options.path ?? resolvedEnvPath ?? DEFAULT_DB_PATH
+  return resolvedEnvPath ?? DEFAULT_DB_PATH
+}
+
+/**
+ * Directory beside agentboard.db for sibling data (chat wire logs). An
+ * in-memory database falls back to the default data directory.
+ */
+export function resolveDataDir(): string {
+  const dbPath = resolveDbPath()
+  return !dbPath || dbPath === ':memory:' ? DEFAULT_DATA_DIR : path.dirname(dbPath)
+}
+
+export function initDatabase(options: { path?: string } = {}): SessionDatabase {
+  const dbPath = options.path ?? resolveDbPath()
   ensureDataDir(dbPath)
 
   const db = new SQLiteDatabase(dbPath)
@@ -282,6 +297,9 @@ export function initDatabase(options: { path?: string } = {}): SessionDatabase {
   )
   const upsertAppSetting = db.prepare(
     'INSERT OR REPLACE INTO app_settings (key, value) VALUES ($key, $value)'
+  )
+  const deleteAppSettingStmt = db.prepare(
+    'DELETE FROM app_settings WHERE key = $key'
   )
 
   // Chat sessions prepared statements
@@ -517,6 +535,9 @@ export function initDatabase(options: { path?: string } = {}): SessionDatabase {
     },
     setAppSetting: (key, value) => {
       upsertAppSetting.run({ $key: key, $value: value })
+    },
+    deleteAppSetting: (key) => {
+      deleteAppSettingStmt.run({ $key: key })
     },
     // Chat sessions
     insertChatSession: (session) => {

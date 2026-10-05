@@ -75,12 +75,12 @@ afterAll(() => {
 })
 
 describe('createChangeWorktree operation', () => {
-  test('creates, seeds, and commits a new branch from HEAD; main stays untouched', () => {
+  test('creates, seeds, and commits a new branch from HEAD; main stays untouched', async () => {
     const repo = makeRepo({ change: 'add-auth' })
     const porcelainBefore = repo.git(['status', '--porcelain']).stdout.trim().split('\n').sort()
     expect(porcelainBefore).toEqual(['?? openspec/'])
 
-    const result = createChangeWorktree(
+    const result = await createChangeWorktree(
       { repositoryId: repo.commonDir, change: 'add-auth' },
       { env: COMMIT_ENV }
     )
@@ -118,7 +118,7 @@ describe('createChangeWorktree operation', () => {
     expect(porcelainAfter).toEqual(['?? .worktrees/', '?? openspec/'])
   })
 
-  test('seeds the commit with a fallback identity when git has none configured', () => {
+  test('seeds the commit with a fallback identity when git has none configured', async () => {
     // Hide any global/system git identity the host happens to have — a bare
     // CI runner is exactly this state, and `git commit` refuses without it.
     // Git also exports GIT_AUTHOR_*/GIT_COMMITTER_* to hooks, and env vars
@@ -136,7 +136,7 @@ describe('createChangeWorktree operation', () => {
     try {
       const repo = makeRepo({ change: 'add-auth' })
 
-      const result = createChangeWorktree(
+      const result = await createChangeWorktree(
         { repositoryId: repo.commonDir, change: 'add-auth' },
         { env: noIdentityEnv }
       )
@@ -156,11 +156,11 @@ describe('createChangeWorktree operation', () => {
     }
   })
 
-  test('prefers a configured identity over the seed fallback', () => {
+  test('prefers a configured identity over the seed fallback', async () => {
     const repo = makeRepo({ change: 'add-auth' })
     const noGlobalConfig = { GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null' }
 
-    const result = createChangeWorktree(
+    const result = await createChangeWorktree(
       { repositoryId: repo.commonDir, change: 'add-auth' },
       { env: { ...noGlobalConfig, ...COMMIT_ENV } }
     )
@@ -174,11 +174,11 @@ describe('createChangeWorktree operation', () => {
     expect(author).toBe('test <test@example.com>')
   })
 
-  test('checks out an existing unassigned branch and commits onto it', () => {
+  test('checks out an existing unassigned branch and commits onto it', async () => {
     const repo = makeRepo({ change: 'add-auth', existingBranch: 'add-auth' })
     const branchTipBefore = repo.git(['rev-parse', 'add-auth']).stdout.trim()
 
-    const result = createChangeWorktree(
+    const result = await createChangeWorktree(
       { repositoryId: repo.commonDir, change: 'add-auth' },
       { env: COMMIT_ENV }
     )
@@ -192,10 +192,10 @@ describe('createChangeWorktree operation', () => {
     expect(repo.git(['rev-parse', 'add-auth']).stdout.trim()).toBe(result.commit)
   })
 
-  test('leaves an existing .gitignore entry alone and reports it', () => {
+  test('leaves an existing .gitignore entry alone and reports it', async () => {
     const repo = makeRepo({ change: 'add-auth', committedGitignore: 'node_modules/\n.worktrees/\n' })
 
-    const result = createChangeWorktree(
+    const result = await createChangeWorktree(
       { repositoryId: repo.commonDir, change: 'add-auth' },
       { env: COMMIT_ENV }
     )
@@ -207,13 +207,13 @@ describe('createChangeWorktree operation', () => {
     )
   })
 
-  test('rejects an existing destination without modifying it', () => {
+  test('rejects an existing destination without modifying it', async () => {
     const repo = makeRepo({ change: 'add-auth' })
     const destination = path.join(worktreesDir(repo), 'add-auth')
     fs.mkdirSync(destination, { recursive: true })
     fs.writeFileSync(path.join(destination, 'marker.txt'), 'keep')
 
-    const result = createChangeWorktree(
+    const result = await createChangeWorktree(
       { repositoryId: repo.commonDir, change: 'add-auth' },
       { env: COMMIT_ENV }
     )
@@ -223,12 +223,12 @@ describe('createChangeWorktree operation', () => {
     expect(fs.readFileSync(path.join(destination, 'marker.txt'), 'utf8')).toBe('keep')
   })
 
-  test('rejects a branch already assigned in another worktree (race window)', () => {
+  test('rejects a branch already assigned in another worktree (race window)', async () => {
     const repo = makeRepo({ change: 'add-auth', existingBranch: 'add-auth' })
     const holder = path.join(tempRoot, `holder-${Math.random().toString(36).slice(2, 8)}`)
     repo.git(['worktree', 'add', holder, 'add-auth'])
 
-    const result = createChangeWorktree(
+    const result = await createChangeWorktree(
       { repositoryId: repo.commonDir, change: 'add-auth' },
       { env: COMMIT_ENV }
     )
@@ -239,10 +239,10 @@ describe('createChangeWorktree operation', () => {
     expect(fs.existsSync(path.join(worktreesDir(repo), 'add-auth'))).toBe(false)
   })
 
-  test('missing artifacts fail cleanly and clean the fresh worktree up', () => {
+  test('missing artifacts fail cleanly and clean the fresh worktree up', async () => {
     const repo = makeRepo({ change: 'add-auth' })
 
-    const result = createChangeWorktree(
+    const result = await createChangeWorktree(
       { repositoryId: repo.commonDir, change: 'no-such-change' },
       { env: COMMIT_ENV }
     )
@@ -259,11 +259,11 @@ describe('createChangeWorktree operation', () => {
     expect(repo.git(['branch', '--list', 'no-such-change']).stdout.trim()).toBe('no-such-change')
   })
 
-  test('surfaces command failure when the worktrees dir is blocked by a file', () => {
+  test('surfaces command failure when the worktrees dir is blocked by a file', async () => {
     const repo = makeRepo({ change: 'add-auth' })
     fs.writeFileSync(worktreesDir(repo), 'file, not directory')
 
-    const result = createChangeWorktree(
+    const result = await createChangeWorktree(
       { repositoryId: repo.commonDir, change: 'add-auth' },
       { env: COMMIT_ENV }
     )
@@ -273,10 +273,10 @@ describe('createChangeWorktree operation', () => {
     expect(fs.readFileSync(worktreesDir(repo), 'utf8')).toBe('file, not directory')
   })
 
-  test('rejects invalid repositories', () => {
+  test('rejects invalid repositories', async () => {
     const notARepo = fs.realpathSync(fs.mkdtempSync(path.join(tempRoot, 'not-a-repo-')))
 
-    const result = createChangeWorktree(
+    const result = await createChangeWorktree(
       { repositoryId: `${notARepo}/.git`, change: 'add-auth' },
       { env: COMMIT_ENV }
     )
@@ -284,10 +284,10 @@ describe('createChangeWorktree operation', () => {
     expect(result).toMatchObject({ ok: false, code: 'ERR_WORKSPACE_UNKNOWN_REPOSITORY' })
   })
 
-  test('rejects injection-like change names before touching git', () => {
+  test('rejects injection-like change names before touching git', async () => {
     const repo = makeRepo({ change: 'add-auth' })
     for (const change of ['--force', '-b', 'a/b', '..', '.', 'a b', 'bad..name', 'evil\nname']) {
-      const result = createChangeWorktree(
+      const result = await createChangeWorktree(
         { repositoryId: repo.commonDir, change },
         { env: COMMIT_ENV }
       )
@@ -299,13 +299,13 @@ describe('createChangeWorktree operation', () => {
       .toBe('main')
   })
 
-  test('creates literal names containing shell metacharacters verbatim', () => {
+  test('creates literal names containing shell metacharacters verbatim', async () => {
     // A legal single-segment ref with shell metacharacters proves
     // argument-array invocation: the name reaches git and the filesystem
     // byte-for-byte, with no shell interpretation.
     const repo = makeRepo({ change: 'evil;rm' })
 
-    const result = createChangeWorktree(
+    const result = await createChangeWorktree(
       { repositoryId: repo.commonDir, change: 'evil;rm' },
       { env: COMMIT_ENV }
     )
@@ -316,16 +316,16 @@ describe('createChangeWorktree operation', () => {
     expect(repo.git(['-C', destination, 'branch', '--show-current']).stdout.trim()).toBe('evil;rm')
   })
 
-  test('the created worktree is discoverable as the convention worktree', () => {
+  test('the created worktree is discoverable as the convention worktree', async () => {
     const repo = makeRepo({ change: 'add-auth' })
 
-    const result = createChangeWorktree(
+    const result = await createChangeWorktree(
       { repositoryId: repo.commonDir, change: 'add-auth' },
       { env: COMMIT_ENV }
     )
     expect(result.ok).toBe(true)
 
-    const info = discoverRepository(repo.commonDir)
+    const info = await discoverRepository(repo.commonDir)
     const destination = fs.realpathSync(path.join(worktreesDir(repo), 'add-auth'))
     const created = info?.worktrees.find((worktree) => worktree.path === destination)
     expect(created).toMatchObject({ branch: 'add-auth', detached: false })

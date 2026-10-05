@@ -29,12 +29,20 @@ import {
   parseQuestions,
   toolResultText,
 } from './contentBlocks'
+import { buildChatOptionsEnv, type ChatProviderEnv } from './chatProviderEnv'
 import { TurnQueue } from './TurnQueue'
+import { createWireTappedSpawn, type ChatWireRecorder } from './wireTap'
 
-/** The SDK `query()` — injected so tests run against a fake. */
+/**
+ * The SDK `query()` — injected so tests run against a fake. `wire` is the
+ * session's protocol-frame recorder: the real SDK is tapped through
+ * `options.spawnClaudeCodeProcess`, while a fake that never spawns a process
+ * (the development fixture) records synthetic frames into it directly.
+ */
 export type ChatQueryFactory = (params: {
   prompt: AsyncIterable<SDKUserMessage>
   options: Options
+  wire?: ChatWireRecorder
 }) => Query
 
 export interface ChatSessionDriverOptions {
@@ -44,11 +52,15 @@ export interface ChatSessionDriverOptions {
   queryFactory: ChatQueryFactory
   /** SDK session id to resume on the first turn (undefined = fresh). */
   resumeSessionId?: string
+  /** Provider overrides, read at each spawn so Settings changes apply. */
+  getProviderEnv?: () => ChatProviderEnv
   onEvent: (event: ChatEvent) => void
   /** Applied immediately on every derived status change. */
   onStatus: (status: SessionStatus) => void
   /** Fired once when the SDK init message reveals the session id. */
   onSdkSessionId?: (sdkSessionId: string) => void
+  /** Records the raw protocol of every spawned process (chat debug view). */
+  wire?: ChatWireRecorder
 }
 
 interface PendingRequest {
@@ -261,6 +273,8 @@ export class ChatSessionDriver {
 
   private spawnQuery(): void {
     const resume = this.capturedSdkSessionId ?? this.options.resumeSessionId
+    const env = buildChatOptionsEnv(this.options.getProviderEnv?.() ?? {})
+    const wire = this.options.wire
     const options: Options = {
       cwd: this.options.projectPath,
       // Option parity with a terminal `claude` session in the project dir.
@@ -270,8 +284,14 @@ export class ChatSessionDriver {
       includePartialMessages: true,
       canUseTool: this.canUseTool,
       ...(resume ? { resume } : {}),
+      ...(env ? { env } : {}),
+      ...(wire ? { spawnClaudeCodeProcess: createWireTappedSpawn(wire) } : {}),
     }
-    const query = this.options.queryFactory({ prompt: this.queue, options })
+    const query = this.options.queryFactory({
+      prompt: this.queue,
+      options,
+      ...(wire ? { wire } : {}),
+    })
     this.query = query
     void this.runQueryLoop(query)
   }

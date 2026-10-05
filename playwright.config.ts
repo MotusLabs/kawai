@@ -102,7 +102,13 @@ export default defineConfig({
     // its sessions (see the ssh stub above). A fresh server is required for
     // those to be active — with reuseExistingServer an older server may
     // answer without them; run on a fresh E2E_PORT when that bites.
-    command: `[ -d dist/client ] || bun run build && PATH=${stubBinDir}:$PATH LC_ALL=C LANG=C PORT=${port} TMUX_SESSION=${tmuxSession} AGENTBOARD_REMOTE_HOSTS=${remoteHost} AGENTBOARD_STATIC_DIR=dist/client bun src/server/index.ts`,
+    // Auth is pinned empty so the suite is hermetic: bun auto-loads the repo's
+    // .env, which may carry a real CLAUDE_CODE_OAUTH_TOKEN, and that would make
+    // chat creation silently succeed against the developer's own credentials.
+    // Chat tests that need a working backend opt in via AGENTBOARD_CHAT_FIXTURE,
+    // which injects its own authCheck. chat-real.spec.ts spawns its own server
+    // and is unaffected.
+    command: `[ -d dist/client ] || bun run build && PATH=${stubBinDir}:$PATH LC_ALL=C LANG=C PORT=${port} TMUX_SESSION=${tmuxSession} AGENTBOARD_REMOTE_HOSTS=${remoteHost} AGENTBOARD_STATIC_DIR=dist/client CLAUDE_CODE_OAUTH_TOKEN= ANTHROPIC_API_KEY= bun src/server/index.ts`,
     url: `http://localhost:${port}`,
     reuseExistingServer: !process.env.CI,
     timeout: 120000,

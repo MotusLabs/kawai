@@ -1,6 +1,7 @@
 import os from 'node:os'
 import path from 'node:path'
 import { resolveProjectPath } from './paths'
+import { parseChatProviderEnv } from './chat/chatProviderEnv'
 
 const terminalModeRaw = process.env.TERMINAL_MODE
 const terminalMode =
@@ -186,6 +187,11 @@ function resolveBindHostname(): string {
 const projectDirRaw = process.env.AGENTBOARD_PROJECT_DIR?.trim() || ''
 const defaultProjectDir = projectDirRaw ? resolveProjectPath(projectDirRaw) : ''
 
+// Provider environment for chat sessions (see chat/chatProviderEnv.ts), e.g.
+// AGENTBOARD_CHAT_ENV="ANTHROPIC_BASE_URL=https://gateway.example/anthropic;ANTHROPIC_MODEL=my-model".
+// The Settings override, when set, replaces this at runtime.
+const chatProviderEnv = parseChatProviderEnv(process.env.AGENTBOARD_CHAT_ENV)
+
 const pasteImageMaxBytesRaw = Number(process.env.AGENTBOARD_PASTE_IMAGE_MAX_BYTES)
 const pasteImageMaxBytes = Number.isFinite(pasteImageMaxBytesRaw) && pasteImageMaxBytesRaw > 0
   ? Math.floor(pasteImageMaxBytesRaw)
@@ -254,6 +260,7 @@ export const config = {
   tmuxTimeoutMs,
   tmuxMutationTimeoutMs,
   pasteImageMaxBytes,
+  chatProviderEnv,
   wsPerMessageDeflate,
   logMatchYieldMs,
 }

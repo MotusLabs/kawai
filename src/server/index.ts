@@ -9,12 +9,14 @@ import { Hono, type Context } from 'hono'
 import { serveStatic } from 'hono/bun'
 import { config, isValidHostname } from './config'
 import { createPasteFileRoutes } from './routes/pasteFile'
+import { createChatProviderEnvStore } from './routes/chatProviderEnv'
 import { ensureTmux } from './prerequisites'
 import { SessionManager } from './SessionManager'
 import { SessionRegistry } from './SessionRegistry'
 import { BUILD_VERSION } from './version'
 import {
   initDatabase,
+  resolveDataDir,
   type AgentSessionRecord,
   type ClaimCurrentWindowPatch,
 } from './db'
@@ -22,6 +24,7 @@ import { LogPoller } from './logPoller'
 import { toAgentSession } from './agentSessions'
 import { ChatSessionManager } from './chat/ChatSessionManager'
 import { ChatConnections, type ChatConnection } from './chat/ChatConnections'
+import { ChatWireLogs } from './chat/ChatWireLogs'
 import { chatFixtureEnabled, fixtureQueryFactory } from './chat/developmentFixture'
 import { getLogSearchDirs } from './logDiscovery'
 import {
@@ -542,6 +545,10 @@ if (storedTerminalColorsEnabled !== null) {
   config.terminalColorsEnabled = storedTerminalColorsEnabled === 'true'
 }
 
+// Chat provider environment: the Settings override wins over
+// AGENTBOARD_CHAT_ENV; read live by the chat manager at each SDK spawn.
+const chatProviderEnv = createChatProviderEnvStore(db, config.chatProviderEnv)
+
 const sessionManager = new SessionManager(undefined, {
   displayNameExists: (name, excludeSessionId) => db.displayNameExists(name, excludeSessionId),
   mouseMode: initialMouseMode,
@@ -791,15 +798,19 @@ if (remotePoller) {
 const lastUserMessageLocks = new Map<string, number>()
 const LAST_USER_MESSAGE_LOCK_MS = 60_000 // 60 seconds
 
+// Always-on raw protocol capture for the chat debug view, beside the DB.
+const chatWireLogs = new ChatWireLogs({ dir: path.join(resolveDataDir(), 'chat-wire') })
 // SDK-driven chat sessions own their transcripts; log discovery must not
 // surface those files as extra sessions (design D6).
 const chatSessionManager = new ChatSessionManager({
   registry,
   db,
   onEvent: (sessionId, event) => chatConnections.publish(sessionId, event),
+  getProviderEnv: chatProviderEnv.current,
+  wireLogs: chatWireLogs,
   ...(chatFixtureEnabled ? { queryFactory: fixtureQueryFactory, authCheck: () => true } : {}),
 })
-const chatConnections = new ChatConnections(chatSessionManager)
+const chatConnections = new ChatConnections(chatSessionManager, chatWireLogs)
 if (chatFixtureEnabled && !registry.getAll().some(session => session.name === 'Chat fixture')) {
   const fixture = chatSessionManager.createSession({ projectPath: process.cwd(), name: 'Chat fixture' })
   if (fixture.ok) void chatSessionManager.send(fixture.session.id, 'Show an approval')
@@ -1934,6 +1945,8 @@ app.put('/api/settings/history-max-age-hours', putHistoryMaxAgeHours)
 app.get('/api/settings/inactive-max-age-hours', getHistoryMaxAgeHours)
 app.put('/api/settings/inactive-max-age-hours', putHistoryMaxAgeHours)
 
+app.route('/api/settings/chat-provider-env', chatProviderEnv.routes)
+
 // Allowed paste-image types; the extension written to /tmp comes from this map,
 // never from client-supplied values. Note Bun's multipart parser derives
 // File.type from the part filename's extension, not the declared blob type.
@@ -2589,7 +2602,7 @@ async function handleCreateWorktree(
 ): Promise<void> {
   // Validated, non-forced git worktree add (§8.3). Refresh + broadcast of the
   // affected repository and launch routing happen in §8.4.
-  const result = createWorktree({
+  const result = await createWorktree({
     repositoryId: payload.repositoryId,
     branch: payload.branch,
     destination: payload.destination,
@@ -2612,7 +2625,7 @@ async function handleCreateChangeWorktree(
   // assignment are re-read from Git right before the non-forced
   // `git worktree add`. The snapshot refreshes after every result — success
   // or failure — so the navigator never shows stale sections.
-  const result = createChangeWorktree({
+  const result = await createChangeWorktree({
     repositoryId: payload.repositoryId,
     change: payload.change,
   })
@@ -2649,6 +2662,9 @@ function handleMessage(
     case 'chat-interrupt':
     case 'chat-approval':
     case 'chat-answer':
+    case 'chat-debug-open':
+    case 'chat-debug-page':
+    case 'chat-debug-close':
       fireAndForget(chatConnections.handle(chatPeer(ws), message), 'chatMessage')
       return
     case 'ping':

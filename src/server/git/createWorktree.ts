@@ -33,7 +33,7 @@ function pathsOverlap(a: string, b: string): boolean {
  * returned as a typed result — no exception escapes, nothing existing is
  * modified, and no force flag is ever passed to git.
  */
-export function createWorktree(input: CreateWorktreeInput): WorkspaceOperationResult {
+export async function createWorktree(input: CreateWorktreeInput): Promise<WorkspaceOperationResult> {
   const { repositoryId, branch, destination } = input
 
   if (!isValidGitRefName(branch)) {
@@ -61,7 +61,7 @@ export function createWorktree(input: CreateWorktreeInput): WorkspaceOperationRe
   // repository whose worktrees and branches can be read right now.
   let info
   try {
-    info = discoverRepository(repositoryId)
+    info = await discoverRepository(repositoryId)
   } catch {
     info = null
   }
