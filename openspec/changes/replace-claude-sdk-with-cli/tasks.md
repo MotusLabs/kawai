@@ -3,7 +3,7 @@
 ## 1. Replacement decision and dependency alignment
 
 - [ ] 1.1 Document a reproducible SDK limitation or measured dependency/runtime benefit, compare supported SDK options and narrow patch/upstream extension with full replacement, and record an explicit decision before transport implementation; verify a decision note contains evidence and scope, retaining the SDK if replacement is not justified.
-- [ ] 1.2 Confirm the base chat integration is complete and reconcile SDK-specific wording in the base/profile change artifacts through the update workflow without changing user-facing acceptance criteria; verify dependency order and launch contract are documented consistently before archive.
+- [ ] 1.2 Confirm PR #15 provider profiles are merged and reconcile SDK-specific wording in the main chat/profile specs through the update workflow without changing user-facing acceptance criteria or historical archives; verify dependency order and launch contract are documented consistently before archive.
 
 ## 2. Runtime contract and availability
 
@@ -23,13 +23,13 @@
 ## 4. Driver and manager replacement
 
 - [ ] 4.1 Switch ChatSessionDriver and TurnQueue to the local conversation interface, preserving event mapping and queue semantics; verify existing parity tests cover deltas/final text, tool events, echo suppression, status, two turns, recoverable errors including is_error with success subtype, crash recovery, and late events after interrupt.
-- [ ] 4.2 Replace manager SDK import with the runtime factory and actionable CLI errors; retain sdkSessionId storage, lazy first send, transcript replay, and resume; verify manager tests cover racing sends, immediate ID persistence, old records, failed resume, missing transcript, kill, restart, and process cleanup.
-- [ ] 4.3 Preserve profile-compatible env/model/inline-settings launch inputs and adapt already-applied profile integration if present; verify configuration isolation and conflicting-settings precedence against a local mock endpoint without live provider calls.
+- [ ] 4.2 Replace manager SDK import with the runtime factory and actionable CLI errors; retain sdkSessionId storage, lazy first send, transcript replay, resume, and raw protocol capture through ChatWireRecorder/ChatWireLogs; verify manager tests cover racing sends, immediate ID persistence, old records, failed resume, missing transcript, kill, restart, process cleanup, and exact frame capture with monotonic sequences across respawns.
+- [ ] 4.3 Preserve the implemented profile env/model/inline-settings launch inputs; verify configuration isolation and conflicting-settings precedence against a local mock endpoint without live provider calls.
 - [ ] 4.4 Remove SDK imports/dependency and regenerate the Bun lockfile after adapter parity; verify repository searches find no active SDK imports, bun install succeeds, and typecheck plus chat tests pass without the SDK installed.
 - [ ] 4.5 Update README and CLAUDE.md architecture/setup descriptions and rollback guidance; verify no instruction implies a bundled runtime and persisted conversation fields remain compatible.
 
 ## 5. Integration acceptance
 
 - [ ] 5.1 Run the installed CLI against a local mock Anthropic endpoint with temporary configuration; verify successive turns, approval allow/deny, AskUserQuestion, cancellation, interrupt, process cleanup, and resume of a fixture conversation created with the prior SDK, retaining observed results and no credentials.
-- [ ] 5.2 Use the dev-browser skill for chat regression verification, searching for it if absent and reporting its absence before using Playwright fallback; verify transcript streaming, approval/question cards, two-client resolution, reconnect, stop, restart/resume, and kill with screenshots and DOM assertions.
+- [ ] 5.2 Use the dev-browser skill for chat regression verification, searching for it if absent and reporting its absence before using Playwright fallback; verify transcript streaming, approval/question cards, two-client resolution, reconnect, stop, restart/resume, kill, and debug frame streaming/pagination/reconnect with screenshots and DOM assertions.
 - [ ] 5.3 Run bun run lint && bun run typecheck && bun run test and strict OpenSpec validation; verify all required checks pass or record actionable blockers before declaring implementation complete.

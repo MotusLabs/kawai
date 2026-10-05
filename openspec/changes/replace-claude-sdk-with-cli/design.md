@@ -6,7 +6,7 @@ See proposal.md for motivation. The installed TypeScript SDK is 0.3.289. ChatSes
 
 Source analysis of the Python SDK at commit 9c69ce7aced5cdf2aa1ac86fe62e877b4962de8b shows JSON-line subprocess transport and a bidirectional control channel. Installed Claude Code 2.1.289 accepted an initialize request directly and returned success without an inference prompt. This establishes handshake feasibility only; approvals, inference, and resume need integration validation. The installed TypeScript SDK remains the reference for Kawai parity where it differs from Python.
 
-The active chat change explicitly requires the SDK and lists direct CLI transport as a Bun fallback. This follow-up intentionally supersedes that implementation decision, not its chat behavior. Apply after the base chat integration is complete; reconcile its SDK-specific wording through the update workflow before both changes are archived. Do not alter its ongoing artifacts during this proposal. Provider profiles are separate work; whichever change applies second must adapt to the final launch contract.
+The base chat integration and debug view are implemented; provider profiles are implemented in PR #15 and must be merged before this replacement is applied. This follow-up intentionally supersedes the SDK transport decision while preserving existing behavior. Reconcile SDK-specific wording in main specs when implementing the replacement; archived artifacts remain historical records. The replacement must preserve the profiles' env/model/inline-settings launch contract.
 
 ## Goals / Non-Goals
 
@@ -42,7 +42,7 @@ Accept typed server launch options for cwd, copied env, optional model, and inli
 
 ### 4. Bidirectional protocol and persistent turns
 
-Start one stdout reader and one serialized write queue per process. Send {type: control_request, request_id, request: {subtype: initialize, hooks: null}}, await the matching success response, then release queued user messages. Route control responses by request ID; user messages carry role/content, parent_tool_use_id, and session_id in the SDK-compatible envelope.
+Start one stdout reader and one serialized write queue per process. Record exact stdin/stdout lines, stderr, and lifecycle events through the existing ChatWireRecorder/ChatWireLogs contract, preserving sequence identity across respawns and the chat-debug WebSocket interface; capture at the transport boundary without adding competing readers or writers. Send {type: control_request, request_id, request: {subtype: initialize, hooks: null}}, await the matching success response, then release queued user messages. Route control responses by request ID; user messages carry role/content, parent_tool_use_id, and session_id in the SDK-compatible envelope.
 
 Dispatch CLI can_use_tool requests concurrently with reading output. Bridge them to existing approval/question promises and answer using control_response with nested subtype, request_id, and response. Allow replies include updatedInput (original input when unchanged); question replies include validated answers. Handle control_cancel_request by aborting the corresponding pending UI request and suppressing late answers. Unknown request subtypes receive explicit protocol errors rather than implicit approval. Normal unknown informational events can be ignored.
 
@@ -70,6 +70,6 @@ Keep shared ChatEvent, request IDs visible to browsers, registry updates, and We
 
 ## Migration Plan
 
-Complete the base chat integration first. Introduce and test the adapter alongside current code, switch the injected driver/manager factory, then remove all SDK imports and the package/lockfile dependency. Keep database and WebSocket schemas intact. Install the tested CLI separately on the backend before deploying updated application code. Infrastructure changes are outside this plan and require reading the Relaydeck guides before execution.
+Merge the implemented provider profiles first. Introduce and test the adapter alongside current code, switch the injected driver/manager factory, then remove all SDK imports and the package/lockfile dependency. Keep database and WebSocket schemas intact. Install the tested CLI separately on the backend before deploying updated application code. Infrastructure changes are outside this plan and require reading the Relaydeck guides before execution.
 
-Rollback by restoring the prior application/package lockfile and SDK dependency; persisted IDs/transcripts remain usable. No data migration or deletion is required. Update SDK-specific wording in dependent change artifacts through the update workflow before archive, without discarding their user-facing acceptance criteria.
+Rollback by restoring the prior application/package lockfile and SDK dependency; persisted IDs/transcripts remain usable. No data migration or deletion is required. Update SDK-specific wording in main specs through the update workflow before archive, preserving their user-facing acceptance criteria and leaving historical archives intact.
