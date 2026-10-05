@@ -12,6 +12,7 @@ function sessionsEqualById(a: Session, b: Session): boolean {
   return (
     a.id === b.id &&
     a.kind === b.kind &&
+    a.claudeProfileId === b.claudeProfileId &&
     a.name === b.name &&
     a.tmuxWindow === b.tmuxWindow &&
     a.projectPath === b.projectPath &&
