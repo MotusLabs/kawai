@@ -6,6 +6,8 @@ import type { Options, Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk'
 import type { ChatEvent } from '../../shared/chat'
 import { initDatabase, type SessionDatabase } from '../db'
 import { SessionRegistry } from '../SessionRegistry'
+import { ChatWireLogs } from '../chat/ChatWireLogs'
+import type { ChatWireRecorder } from '../chat/wireTap'
 import {
   ChatSessionManager,
   hasClaudeAuth,
@@ -16,12 +18,13 @@ import {
 interface FakeHandle {
   query: Query
   options: Options
+  wire?: ChatWireRecorder
   push: (message: SDKMessage) => void
   closed: boolean
 }
 
 function fakeQueryFactory(handles: FakeHandle[]): ChatQueryFactory {
-  return ({ prompt: _prompt, options }) => {
+  return ({ prompt: _prompt, options, wire }) => {
     const queue: SDKMessage[] = []
     let resolveMessage:
       | ((result: IteratorResult<SDKMessage>) => void)
@@ -58,6 +61,7 @@ function fakeQueryFactory(handles: FakeHandle[]): ChatQueryFactory {
 
     handle.query = query
     handle.options = options
+    handle.wire = wire
     handle.push = (message) => {
       if (resolveMessage) {
         const resolve = resolveMessage
@@ -446,6 +450,59 @@ describe('ChatSessionManager', () => {
     if (!created.ok) throw new Error('create failed')
     await manager.send(created.session.id, 'hello')
     expect('env' in handles[0]!.options).toBe(false)
+    manager.kill(created.session.id)
+  })
+
+  test('each driver records into its session wire log, and kill deletes the log', async () => {
+    process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'
+    const wireLogs = new ChatWireLogs({ dir: path.join(tempDir, 'chat-wire') })
+    const handles: FakeHandle[] = []
+    const manager = new ChatSessionManager({
+      db, registry: new SessionRegistry(), onEvent: () => {},
+      queryFactory: fakeQueryFactory(handles), wireLogs,
+    })
+    const created = manager.createSession({ projectPath: '/tmp/proj' })
+    if (!created.ok) throw new Error('create failed')
+    const sessionId = created.session.id
+    await manager.send(sessionId, 'hello')
+    expect(handles[0]!.options.spawnClaudeCodeProcess).toBeTypeOf('function')
+    expect(handles[0]!.wire).toBe(wireLogs.get(sessionId))
+    handles[0]!.wire!.record('in', '{"type":"system"}')
+    expect((await wireLogs.readPage(sessionId, { limit: 10 })).frames.map(frame => frame.raw))
+      .toEqual(['{"type":"system"}'])
+    const logFile = wireLogs.get(sessionId).currentPath
+    expect(fs.existsSync(logFile)).toBe(true)
+
+    manager.kill(sessionId)
+    await flush()
+    expect(fs.existsSync(logFile)).toBe(false)
+  })
+
+  test('startup prunes wire logs of sessions that no longer exist', async () => {
+    process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'
+    const dir = path.join(tempDir, 'chat-wire')
+    const first = new ChatSessionManager({ db, registry: new SessionRegistry(), onEvent: () => {} })
+    const kept = first.createSession({ projectPath: '/tmp/proj' })
+    if (!kept.ok) throw new Error('create failed')
+    const seed = new ChatWireLogs({ dir })
+    for (const id of [kept.session.id, 'chat-orphan']) {
+      seed.get(id).record('in', 'frame')
+      await seed.get(id).flush()
+    }
+    new ChatSessionManager({
+      db, registry: new SessionRegistry(), onEvent: () => {}, wireLogs: new ChatWireLogs({ dir }),
+    })
+    await flush()
+    expect(fs.readdirSync(dir)).toEqual([`${kept.session.id}.jsonl`])
+  })
+
+  test('without wire logs the SDK spawns its own process', async () => {
+    process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'
+    const { manager, handles } = createHarness(db)
+    const created = manager.createSession({ projectPath: '/tmp/proj' })
+    if (!created.ok) throw new Error('create failed')
+    await manager.send(created.session.id, 'hello')
+    expect('spawnClaudeCodeProcess' in handles[0]!.options).toBe(false)
     manager.kill(created.session.id)
   })
 

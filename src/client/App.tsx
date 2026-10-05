@@ -6,6 +6,7 @@ import SessionList from './components/SessionList'
 import Terminal from './components/Terminal'
 import ChatView from './components/chat/ChatView'
 import { useChatStore } from './stores/chatStore'
+import { useChatDebugStore } from './stores/chatDebugStore'
 import NewSessionModal from './components/NewSessionModal'
 import BranchBrowserModal from './components/BranchBrowserModal'
 import CreateWorktreeModal from './components/CreateWorktreeModal'
@@ -532,6 +533,7 @@ export default function App() {
       }
       if (message.type === 'chat-events') useChatStore.getState().apply(message.sessionId, message.events)
       if (message.type === 'chat-snapshot') useChatStore.getState().snapshot(message)
+      if (message.type === 'chat-debug-frames') useChatDebugStore.getState().apply(message)
       if (message.type === 'kill-failed') {
         // Restore optimistically removed session from pending-kill snapshot
         // (not exitingSessions, which may have been cleared by animation timer)

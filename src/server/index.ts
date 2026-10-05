@@ -17,6 +17,7 @@ import { SessionRegistry } from './SessionRegistry'
 import { BUILD_VERSION } from './version'
 import {
   initDatabase,
+  resolveDataDir,
   type AgentSessionRecord,
   type ClaimCurrentWindowPatch,
 } from './db'
@@ -24,6 +25,7 @@ import { LogPoller } from './logPoller'
 import { toAgentSession } from './agentSessions'
 import { ChatSessionManager } from './chat/ChatSessionManager'
 import { ChatConnections, type ChatConnection } from './chat/ChatConnections'
+import { ChatWireLogs } from './chat/ChatWireLogs'
 import { chatFixtureEnabled, fixtureQueryFactory } from './chat/developmentFixture'
 import { getLogSearchDirs } from './logDiscovery'
 import {
@@ -797,6 +799,8 @@ if (remotePoller) {
 const lastUserMessageLocks = new Map<string, number>()
 const LAST_USER_MESSAGE_LOCK_MS = 60_000 // 60 seconds
 
+// Always-on raw protocol capture for the chat debug view, beside the DB.
+const chatWireLogs = new ChatWireLogs({ dir: path.join(resolveDataDir(), 'chat-wire') })
 // SDK-driven chat sessions own their transcripts; log discovery must not
 // surface those files as extra sessions (design D6).
 const chatSessionManager = new ChatSessionManager({
@@ -804,9 +808,10 @@ const chatSessionManager = new ChatSessionManager({
   db,
   onEvent: (sessionId, event) => chatConnections.publish(sessionId, event),
   getProviderEnv: chatProviderEnv.current,
+  wireLogs: chatWireLogs,
   ...(chatFixtureEnabled ? { queryFactory: fixtureQueryFactory, authCheck: () => true } : {}),
 })
-const chatConnections = new ChatConnections(chatSessionManager)
+const chatConnections = new ChatConnections(chatSessionManager, chatWireLogs)
 if (chatFixtureEnabled && !registry.getAll().some(session => session.name === 'Chat fixture')) {
   const fixture = chatSessionManager.createSession({ projectPath: process.cwd(), name: 'Chat fixture' })
   if (fixture.ok) void chatSessionManager.send(fixture.session.id, 'Show an approval')
@@ -2659,6 +2664,9 @@ function handleMessage(
     case 'chat-interrupt':
     case 'chat-approval':
     case 'chat-answer':
+    case 'chat-debug-open':
+    case 'chat-debug-page':
+    case 'chat-debug-close':
       fireAndForget(chatConnections.handle(chatPeer(ws), message), 'chatMessage')
       return
     case 'ping':

@@ -1,4 +1,6 @@
-// Configured authentication checks against the effective chat environment.
+// Server-side Claude authentication gate for chat sessions and the actionable
+// refusal shown when it fails. Evaluated against the same effective
+// environment the SDK process receives.
 import fs from 'node:fs'
 import path from 'node:path'
 import { effectiveChatEnv, type ChatProviderEnv } from './chatProviderEnv'
@@ -45,4 +47,3 @@ export function chatAuthErrorMessage(): string {
     )} — or point CLAUDE_CONFIG_DIR at an authenticated config directory.`
   )
 }
-

@@ -11,6 +11,7 @@ import type {
   ChatEvent,
   ChatPendingRequest,
   ChatQuestionAnswer,
+  ChatWireFrame,
 } from './chat'
 
 export type {
@@ -21,6 +22,8 @@ export type {
   ChatRequestOutcome,
   ChatApprovalDecision,
   ChatTurnResultSubtype,
+  ChatWireDirection,
+  ChatWireFrame,
 } from './chat'
 
 export type {
@@ -198,6 +201,16 @@ export type ServerMessage =
       /** Highest sequence included in this snapshot. */
       throughSequence: number
     }
+  // Debug-view protocol frames, sent only to clients that opened the view.
+  // `page: true` marks a reply to chat-debug-open/chat-debug-page (carrying
+  // `hasOlder`); otherwise the message is a live batch.
+  | {
+      type: 'chat-debug-frames'
+      sessionId: string
+      frames: ChatWireFrame[]
+      page?: boolean
+      hasOlder?: boolean
+    }
   | { type: 'pong'; seq?: number }
   | { type: 'error'; message: string }
   | { type: 'kill-failed'; sessionId: string; message: string }
@@ -264,6 +277,9 @@ export type ClientMessage =
       /** Answers keyed by question text (matches the SDK's answer map). */
       answers: Record<string, ChatQuestionAnswer>
     }
+  | { type: 'chat-debug-open'; sessionId: string }
+  | { type: 'chat-debug-page'; sessionId: string; beforeSeq: number }
+  | { type: 'chat-debug-close'; sessionId: string }
   // Workspace messages are additive; existing clients never send them.
   | { type: 'workspace-refresh'; projectPath?: string }
   | {

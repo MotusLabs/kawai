@@ -1,7 +1,7 @@
 // Owns the lifecycle of chat sessions: auth-gated creation, lazy driver
 // construction (the SDK query() is spawned by the driver on the first turn),
 // persistence in the chat_sessions table with restore-on-start into the
-// registry, kill/shutdown settlement, and immediate sdkSessionId capture so a
+// registry, kill/shutdown settlement (including the session's protocol log), and immediate sdkSessionId capture so a
 // restart can resume the same agent conversation. The SDK import stays dynamic
 // (injected as a queryFactory in tests) so a broken install disables the
 // feature instead of crashing the server.
@@ -16,9 +16,9 @@ import type { ChatSessionRecord, SessionDatabase } from '../db'
 import { generateSessionName } from '../nameGenerator'
 import type { SessionRegistry } from '../SessionRegistry'
 import { ChatSessionDriver, type ChatQueryFactory } from './ChatSessionDriver'
+import { chatAuthErrorMessage, hasClaudeAuth } from './chatAuth'
 import type { ChatProviderEnv } from './chatProviderEnv'
-import { hasClaudeAuth, chatAuthErrorMessage } from './claudeAuth'
-export { hasClaudeAuth, chatAuthErrorMessage } from './claudeAuth'
+import type { ChatWireLogs } from './ChatWireLogs'
 import { resolveClaudeProfile, claudeLaunchKey, type ClaudeLaunchConfiguration } from './ClaudeProfiles'
 import { probeSdkAvailability } from './sdkAvailability'
 import {
@@ -28,6 +28,7 @@ import {
 } from './transcriptReplay'
 
 export type { ChatQueryFactory }
+export { chatAuthErrorMessage, hasClaudeAuth }
 
 export interface ChatSessionManagerOptions {
   registry: SessionRegistry
@@ -44,6 +45,8 @@ export interface ChatSessionManagerOptions {
    * getter, so a Settings change reaches the next spawn without a restart.
    */
   getProviderEnv?: () => ChatProviderEnv
+  /** Per-session protocol capture for the chat debug view (always on). */
+  wireLogs?: ChatWireLogs
 }
 
 export type ChatCreateResult =
@@ -116,6 +119,8 @@ export class ChatSessionManager {
   constructor(options: ChatSessionManagerOptions) {
     this.options = options
     this.restorePersisted()
+    // Logs of sessions deleted while the server was down are orphans now.
+    void this.options.wireLogs?.pruneOrphans(new Set(this.records.keys()))
   }
 
   /** Create a chat session. Refused (no side effects) when auth is missing. */
@@ -284,6 +289,7 @@ export class ChatSessionManager {
     this.liveEvents.delete(sessionId)
     this.options.registry.removeChatSession(sessionId)
     this.options.db.deleteChatSession(sessionId)
+    void this.options.wireLogs?.delete(sessionId).catch(() => {})
     return true
   }
 
@@ -364,6 +370,9 @@ export class ChatSessionManager {
         queryFactory,
         getProviderEnv: () => this.providerEnv(),
         claudeProfileId: record.claudeProfileId,
+        ...(this.options.wireLogs
+          ? { wire: this.options.wireLogs.get(record.sessionId) }
+          : {}),
         ...(record.sdkSessionId
           ? { resumeSessionId: record.sdkSessionId }
           : {}),

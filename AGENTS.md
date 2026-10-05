@@ -28,15 +28,17 @@ Run `bun run lint && bun run typecheck && bun run test` after changes.
   - `src/server/SessionManager.ts` - tmux window discovery, log parsing, status detection
   - `src/server/index.ts` - Hono routes, WebSocket handling
   - `src/server/chat/` - SDK driver, session lifecycle, transcript replay, subscriptions, and development fixture
+  - `src/server/chat/wireTap.ts`, `ChatWireLog.ts`, `ChatWireLogs.ts` - always-on raw protocol capture for the chat debug view
 - src/client/     React frontend, xterm.js terminal, Zustand stores
   - `src/client/App.tsx` - main UI, keyboard shortcuts
   - `src/client/components/Terminal.tsx` - xterm.js wrapper
   - `src/client/components/chat/` - transcript, approvals, questions, and composer
   - `src/client/stores/chatStore.ts` - ordered transcript and pending requests
+  - `src/client/components/chat/ChatDebugPanel.tsx`, `src/client/stores/chatDebugStore.ts` - Debug toggle's protocol-frame panel
 - src/shared/     Shared types
   - `src/shared/chat.ts` - SDK-independent chat events and request contracts
 
-- Data directory: `~/.agentboard/` contains `agentboard.db` (session data) and `agentboard.log`
+- Data directory: `~/.agentboard/` contains `agentboard.db` (session data), `agentboard.log`, and `chat-wire/` (per-chat-session raw protocol logs, beside the DB)
 
 ## Git
 
