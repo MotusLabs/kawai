@@ -9,6 +9,7 @@ import { Hono, type Context } from 'hono'
 import { serveStatic } from 'hono/bun'
 import { config, isValidHostname } from './config'
 import { createPasteFileRoutes } from './routes/pasteFile'
+import { createChatProviderEnvStore } from './routes/chatProviderEnv'
 import { ensureTmux } from './prerequisites'
 import { SessionManager } from './SessionManager'
 import { SessionRegistry } from './SessionRegistry'
@@ -542,6 +543,10 @@ if (storedTerminalColorsEnabled !== null) {
   config.terminalColorsEnabled = storedTerminalColorsEnabled === 'true'
 }
 
+// Chat provider environment: the Settings override wins over
+// AGENTBOARD_CHAT_ENV; read live by the chat manager at each SDK spawn.
+const chatProviderEnv = createChatProviderEnvStore(db, config.chatProviderEnv)
+
 const sessionManager = new SessionManager(undefined, {
   displayNameExists: (name, excludeSessionId) => db.displayNameExists(name, excludeSessionId),
   mouseMode: initialMouseMode,
@@ -797,6 +802,7 @@ const chatSessionManager = new ChatSessionManager({
   registry,
   db,
   onEvent: (sessionId, event) => chatConnections.publish(sessionId, event),
+  getProviderEnv: chatProviderEnv.current,
   ...(chatFixtureEnabled ? { queryFactory: fixtureQueryFactory, authCheck: () => true } : {}),
 })
 const chatConnections = new ChatConnections(chatSessionManager)
@@ -1933,6 +1939,8 @@ app.get('/api/settings/history-max-age-hours', getHistoryMaxAgeHours)
 app.put('/api/settings/history-max-age-hours', putHistoryMaxAgeHours)
 app.get('/api/settings/inactive-max-age-hours', getHistoryMaxAgeHours)
 app.put('/api/settings/inactive-max-age-hours', putHistoryMaxAgeHours)
+
+app.route('/api/settings/chat-provider-env', chatProviderEnv.routes)
 
 // Allowed paste-image types; the extension written to /tmp comes from this map,
 // never from client-supplied values. Note Bun's multipart parser derives
