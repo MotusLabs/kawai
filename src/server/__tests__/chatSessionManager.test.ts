@@ -121,6 +121,7 @@ describe('ChatSessionManager', () => {
   let db: SessionDatabase
   const originalApiKey = process.env.ANTHROPIC_API_KEY
   const originalOAuthToken = process.env.CLAUDE_CODE_OAUTH_TOKEN
+  const originalAuthToken = process.env.ANTHROPIC_AUTH_TOKEN
   const originalConfigDir = process.env.CLAUDE_CONFIG_DIR
 
   beforeEach(() => {
@@ -129,6 +130,7 @@ describe('ChatSessionManager', () => {
     // Isolate auth from the host: no API key, empty CLI config dir.
     delete process.env.ANTHROPIC_API_KEY
     delete process.env.CLAUDE_CODE_OAUTH_TOKEN
+    delete process.env.ANTHROPIC_AUTH_TOKEN
     process.env.CLAUDE_CONFIG_DIR = path.join(tempDir, 'claude-config')
   })
 
@@ -137,6 +139,11 @@ describe('ChatSessionManager', () => {
       process.env.CLAUDE_CODE_OAUTH_TOKEN = originalOAuthToken
     } else {
       delete process.env.CLAUDE_CODE_OAUTH_TOKEN
+    }
+    if (originalAuthToken !== undefined) {
+      process.env.ANTHROPIC_AUTH_TOKEN = originalAuthToken
+    } else {
+      delete process.env.ANTHROPIC_AUTH_TOKEN
     }
     if (originalApiKey !== undefined) {
       process.env.ANTHROPIC_API_KEY = originalApiKey
@@ -215,6 +222,47 @@ describe('ChatSessionManager', () => {
       expect(manager.createSession({ projectPath: '/tmp/proj' }).ok).toBe(true)
     })
 
+    test('accepts ANTHROPIC_AUTH_TOKEN from the environment', () => {
+      process.env.ANTHROPIC_AUTH_TOKEN = 'gateway-token'
+      expect(hasClaudeAuth()).toBe(true)
+    })
+
+    test('evaluates credentials against the provider environment', () => {
+      expect(hasClaudeAuth({ ANTHROPIC_AUTH_TOKEN: 'gateway-token' })).toBe(true)
+      expect(hasClaudeAuth({ ANTHROPIC_API_KEY: 'sk-provider' })).toBe(true)
+      // An override can also blank an inherited credential.
+      process.env.ANTHROPIC_API_KEY = 'sk-host'
+      expect(hasClaudeAuth({ ANTHROPIC_API_KEY: '' })).toBe(false)
+      // And redirect the CLI config dir to one with stored credentials.
+      const providerConfig = path.join(tempDir, 'provider-config')
+      fs.mkdirSync(providerConfig, { recursive: true })
+      fs.writeFileSync(path.join(providerConfig, '.credentials.json'), '{}')
+      delete process.env.ANTHROPIC_API_KEY
+      expect(hasClaudeAuth({ CLAUDE_CONFIG_DIR: providerConfig })).toBe(true)
+    })
+
+    test('a credential supplied only by getProviderEnv allows creation', () => {
+      const registry = new SessionRegistry()
+      const manager = new ChatSessionManager({
+        db, registry, onEvent: () => {},
+        queryFactory: fakeQueryFactory([]),
+        getProviderEnv: () => ({ ANTHROPIC_AUTH_TOKEN: 'gateway-token' }),
+      })
+      expect(manager.createSession({ projectPath: '/tmp/proj' }).ok).toBe(true)
+    })
+
+    test('the availability probe runs under the provider environment', async () => {
+      process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'
+      const probed: Array<Record<string, string>> = []
+      const manager = new ChatSessionManager({
+        db, registry: new SessionRegistry(), onEvent: () => {},
+        availabilityProbe: async (providerEnv) => { probed.push(providerEnv) },
+        getProviderEnv: () => ({ ANTHROPIC_BASE_URL: 'https://gw.example/a' }),
+      })
+      expect((await manager.createAvailableSession({ projectPath: '/tmp/proj' })).ok).toBe(true)
+      expect(probed).toEqual([{ ANTHROPIC_BASE_URL: 'https://gw.example/a' }])
+    })
+
     test('rejects a blank OAuth token', () => {
       process.env.CLAUDE_CODE_OAUTH_TOKEN = '   '
       expect(hasClaudeAuth()).toBe(false)
@@ -230,6 +278,39 @@ describe('ChatSessionManager', () => {
       const { manager } = createHarness(db)
       expect(manager.createSession({ projectPath: '/tmp/proj' }).ok).toBe(true)
     })
+  })
+
+  test('provider env reaches the SDK spawn and Settings changes apply to the next driver', async () => {
+    process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'
+    let providerEnv: Record<string, string> = { ANTHROPIC_BASE_URL: 'https://gw.example/a' }
+    const handles: FakeHandle[] = []
+    const manager = new ChatSessionManager({
+      db, registry: new SessionRegistry(), onEvent: () => {},
+      queryFactory: fakeQueryFactory(handles),
+      getProviderEnv: () => providerEnv,
+    })
+    const first = manager.createSession({ projectPath: '/tmp/proj' })
+    if (!first.ok) throw new Error('create failed')
+    await manager.send(first.session.id, 'hello')
+    expect(handles[0]!.options.env?.ANTHROPIC_BASE_URL).toBe('https://gw.example/a')
+
+    providerEnv = { ANTHROPIC_BASE_URL: 'https://gw.example/b' }
+    const second = manager.createSession({ projectPath: '/tmp/proj' })
+    if (!second.ok) throw new Error('create failed')
+    await manager.send(second.session.id, 'hello')
+    expect(handles[1]!.options.env?.ANTHROPIC_BASE_URL).toBe('https://gw.example/b')
+    manager.kill(first.session.id)
+    manager.kill(second.session.id)
+  })
+
+  test('without provider env the SDK spawn omits env', async () => {
+    process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'
+    const { manager, handles } = createHarness(db)
+    const created = manager.createSession({ projectPath: '/tmp/proj' })
+    if (!created.ok) throw new Error('create failed')
+    await manager.send(created.session.id, 'hello')
+    expect('env' in handles[0]!.options).toBe(false)
+    manager.kill(created.session.id)
   })
 
   test('create registers a chat session and persists a row', () => {

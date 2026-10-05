@@ -103,7 +103,9 @@ interface Harness {
   sdkSessionIds: string[]
 }
 
-function createHarness(overrides: { resumeSessionId?: string } = {}): Harness {
+function createHarness(
+  overrides: { resumeSessionId?: string; getProviderEnv?: () => Record<string, string> } = {}
+): Harness {
   const events: ChatEvent[] = []
   const statuses: SessionStatus[] = []
   const fakes: FakeQueryHandle[] = []
@@ -195,6 +197,27 @@ function result(subtype: string, extra: Record<string, unknown> = {}): SDKMessag
 }
 
 describe('ChatSessionDriver', () => {
+  test('provider env is merged over process.env and re-read on every spawn', async () => {
+    let providerEnv: Record<string, string> = {
+      ANTHROPIC_BASE_URL: 'https://gw.example/anthropic',
+      ANTHROPIC_MODEL: 'gw-pro',
+    }
+    const harness = createHarness({ getProviderEnv: () => providerEnv })
+    harness.driver.send('hello')
+    const first = harness.fakes[0]!
+    expect(first.options.env).toEqual({ ...process.env, ...providerEnv })
+
+    // The query exits; the next send respawns under the updated provider.
+    first.exit()
+    await flush()
+    providerEnv = { ANTHROPIC_MODEL: 'gw-flash' }
+    harness.driver.send('again')
+    expect(harness.fakes).toHaveLength(2)
+    expect(harness.fakes[1]!.options.env?.ANTHROPIC_MODEL).toBe('gw-flash')
+    expect(harness.fakes[1]!.options.env?.ANTHROPIC_BASE_URL).toBe(process.env.ANTHROPIC_BASE_URL)
+    harness.driver.kill()
+  })
+
   test('turn lifecycle: lazy spawn, options parity, event mapping, session id capture', async () => {
     const harness = createHarness()
     expect(harness.fakes).toHaveLength(0) // no SDK spawn before first turn
@@ -214,6 +237,8 @@ describe('ChatSessionDriver', () => {
     expect(fake.options.includePartialMessages).toBe(true)
     expect(fake.options.canUseTool).toBeTypeOf('function')
     expect(fake.options.resume).toBeUndefined()
+    // No provider overrides: env is omitted so the SDK inherits process.env.
+    expect('env' in fake.options).toBe(false)
 
     fake.push({
       type: 'system',

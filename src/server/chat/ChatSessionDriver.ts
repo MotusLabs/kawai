@@ -29,6 +29,7 @@ import {
   parseQuestions,
   toolResultText,
 } from './contentBlocks'
+import { buildChatOptionsEnv, type ChatProviderEnv } from './chatProviderEnv'
 import { TurnQueue } from './TurnQueue'
 
 /** The SDK `query()` — injected so tests run against a fake. */
@@ -44,6 +45,8 @@ export interface ChatSessionDriverOptions {
   queryFactory: ChatQueryFactory
   /** SDK session id to resume on the first turn (undefined = fresh). */
   resumeSessionId?: string
+  /** Provider overrides, read at each spawn so Settings changes apply. */
+  getProviderEnv?: () => ChatProviderEnv
   onEvent: (event: ChatEvent) => void
   /** Applied immediately on every derived status change. */
   onStatus: (status: SessionStatus) => void
@@ -261,6 +264,7 @@ export class ChatSessionDriver {
 
   private spawnQuery(): void {
     const resume = this.capturedSdkSessionId ?? this.options.resumeSessionId
+    const env = buildChatOptionsEnv(this.options.getProviderEnv?.() ?? {})
     const options: Options = {
       cwd: this.options.projectPath,
       // Option parity with a terminal `claude` session in the project dir.
@@ -270,6 +274,7 @@ export class ChatSessionDriver {
       includePartialMessages: true,
       canUseTool: this.canUseTool,
       ...(resume ? { resume } : {}),
+      ...(env ? { env } : {}),
     }
     const query = this.options.queryFactory({ prompt: this.queue, options })
     this.query = query

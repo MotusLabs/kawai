@@ -35,6 +35,7 @@ const ORIGINAL_ENV = {
   AGENTBOARD_TMUX_MUTATION_TIMEOUT_MS: process.env.AGENTBOARD_TMUX_MUTATION_TIMEOUT_MS,
   AGENTBOARD_PASTE_IMAGE_MAX_BYTES: process.env.AGENTBOARD_PASTE_IMAGE_MAX_BYTES,
   AGENTBOARD_PROJECT_DIR: process.env.AGENTBOARD_PROJECT_DIR,
+  AGENTBOARD_CHAT_ENV: process.env.AGENTBOARD_CHAT_ENV,
   AGENTBOARD_WS_DEFLATE: process.env.AGENTBOARD_WS_DEFLATE,
   AGENTBOARD_LOG_MATCH_YIELD_MS: process.env.AGENTBOARD_LOG_MATCH_YIELD_MS,
 }
@@ -89,6 +90,7 @@ async function loadConfig(tag: string) {
     tmuxMutationTimeoutMs: number
     pasteImageMaxBytes: number
     defaultProjectDir: string
+    chatProviderEnv: Record<string, string>
     wsPerMessageDeflate: boolean
     logMatchYieldMs: number
   }
@@ -321,5 +323,19 @@ describe('config', () => {
 
     const config = await loadConfig('project-dir-blank')
     expect(config.defaultProjectDir).toBe('')
+  })
+
+  test('chatProviderEnv is empty when AGENTBOARD_CHAT_ENV is unset', async () => {
+    delete process.env.AGENTBOARD_CHAT_ENV
+    expect((await loadConfig('chat-env-unset')).chatProviderEnv).toEqual({})
+  })
+
+  test('parses AGENTBOARD_CHAT_ENV into chatProviderEnv', async () => {
+    process.env.AGENTBOARD_CHAT_ENV =
+      'ANTHROPIC_BASE_URL=https://gw.example/anthropic;ANTHROPIC_MODEL=gw-pro'
+    expect((await loadConfig('chat-env-set')).chatProviderEnv).toEqual({
+      ANTHROPIC_BASE_URL: 'https://gw.example/anthropic',
+      ANTHROPIC_MODEL: 'gw-pro',
+    })
   })
 })
