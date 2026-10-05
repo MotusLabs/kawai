@@ -51,7 +51,7 @@ function createDiscovery(
     broadcasts: [],
   }
   const api: WorkspaceDiscoveryApi = {
-    resolveSeeds: (seeds) => {
+    resolveSeeds: async (seeds) => {
       recording.resolveCalls += 1
       const repoMap = new Map<string, ResolvedGitDirs>()
       const resolvedSeeds: ResolvedSeed[] = []
@@ -68,14 +68,14 @@ function createDiscovery(
       }
       return { repositories: repoMap, seeds: resolvedSeeds }
     },
-    buildRepository: (commonDir, _dirs, _previous) => {
+    buildRepository: async (commonDir, _dirs, _previous) => {
       recording.buildCalls.push(commonDir)
       if (failCommonDirs.has(commonDir)) {
         throw new Error(`discovery failed for ${commonDir}`)
       }
       return structuredClone(repositoriesById.get(commonDir) ?? repositoryFixture(commonDir))
     },
-    refreshOpenSpec: (repository) => {
+    refreshOpenSpec: async (repository) => {
       recording.openSpecCalls.push(repository.id)
       return repository
     },

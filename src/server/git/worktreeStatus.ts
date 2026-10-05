@@ -3,7 +3,7 @@
 // offering any destructive operation (see workspace-navigation spec).
 
 import { deepestPathMatch } from '../../shared/workspace'
-import { runGit } from './gitCommand'
+import { runGitAsync } from './gitCommand'
 
 // Only the first byte matters for the dirty flag; keep the bound small so a
 // huge working tree cannot inflate discovery memory.
@@ -16,8 +16,8 @@ export const DIRTY_STATE_MAX_OUTPUT_BYTES = 64 * 1024
  * `.git/index.lock`, which the workspace watcher observes, so every
  * discovery pass would otherwise schedule another one.
  */
-export function isWorktreeDirty(worktreePath: string): boolean {
-  const result = runGit(
+export async function isWorktreeDirty(worktreePath: string): Promise<boolean> {
+  const result = await runGitAsync(
     ['--no-optional-locks', '-C', worktreePath, 'status', '--porcelain'],
     { maxOutputBytes: DIRTY_STATE_MAX_OUTPUT_BYTES }
   )

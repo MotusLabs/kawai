@@ -5,7 +5,7 @@
 // packed refs, and version-specific layouts better than reading .git files).
 
 import { canonicalizePath } from './repositoryResolution'
-import { runGit } from './gitCommand'
+import { runGitAsync } from './gitCommand'
 
 export interface GitWorktreeInfo {
   /** Canonical absolute worktree root path. */
@@ -140,19 +140,22 @@ export function assignBranches(
  * canonical common Git directory. Returns null when git fails or output is
  * unusable.
  */
-export function discoverRepository(commonDir: string): GitRepositoryInfo | null {
-  const worktreeResult = runGit(['--git-dir', commonDir, 'worktree', 'list', '--porcelain'])
+export async function discoverRepository(commonDir: string): Promise<GitRepositoryInfo | null> {
+  // Independent read-only listings: run both at once instead of serially.
+  const [worktreeResult, refResult] = await Promise.all([
+    runGitAsync(['--git-dir', commonDir, 'worktree', 'list', '--porcelain']),
+    runGitAsync([
+      '--git-dir',
+      commonDir,
+      'for-each-ref',
+      '--format=%(objectname) %(refname:short)',
+      'refs/heads',
+    ]),
+  ])
   if (!worktreeResult.ok) return null
   const worktrees = parseWorktreePorcelain(worktreeResult.stdout)
   if (worktrees.length === 0) return null
 
-  const refResult = runGit([
-    '--git-dir',
-    commonDir,
-    'for-each-ref',
-    '--format=%(objectname) %(refname:short)',
-    'refs/heads',
-  ])
   // A failing ref listing still yields worktrees; branch list stays empty.
   const branches = refResult.ok ? parseForEachRefHeads(refResult.stdout) : []
 

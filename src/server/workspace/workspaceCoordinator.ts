@@ -23,18 +23,18 @@ import {
 
 export interface WorkspaceDiscoveryApi {
   /** Resolve seed paths to repositories (git rev-parse based). */
-  resolveSeeds(seeds: string[]): { repositories: Map<string, ResolvedGitDirs>; seeds: ResolvedSeed[] }
+  resolveSeeds(seeds: string[]): Promise<{ repositories: Map<string, ResolvedGitDirs>; seeds: ResolvedSeed[] }>
   /** Rebuild one repository entry from its common dir. */
   buildRepository(
     commonDir: string,
     dirs: ResolvedGitDirs | null,
     previous?: WorkspaceSnapshot | null
-  ): WorkspaceRepository
+  ): Promise<WorkspaceRepository>
   /** Refresh OpenSpec state for one repository entry. */
   refreshOpenSpec(
     repository: WorkspaceRepository,
     previous?: WorkspaceRepository[]
-  ): WorkspaceRepository
+  ): Promise<WorkspaceRepository>
 }
 
 export const defaultDiscoveryApi: WorkspaceDiscoveryApi = {
@@ -138,7 +138,7 @@ export class WorkspaceCoordinator {
         this.pendingForced = false
         this.pendingScopedPaths.clear()
         try {
-          this.runPass(forced, scopedPaths)
+          await this.runPass(forced, scopedPaths)
         } catch (error) {
           // A failed pass keeps the last snapshot; reconciliation retries.
           this.lastError = error instanceof Error ? error.message : String(error)
@@ -155,10 +155,10 @@ export class WorkspaceCoordinator {
     return this.lastError
   }
 
-  private runPass(forceFull: boolean, scopedPaths: string[]): void {
+  private async runPass(forceFull: boolean, scopedPaths: string[]): Promise<void> {
     this.lastError = null
     const seeds = [...new Set([...this.options.getSeeds(), ...this.onDemandPaths])]
-    const resolved = this.discovery.resolveSeeds(seeds)
+    const resolved = await this.discovery.resolveSeeds(seeds)
 
     // Group resolved seed paths by repository and carry unresolved seeds to
     // their previous owners (stale carry-forward semantics from §2.4).
@@ -192,39 +192,43 @@ export class WorkspaceCoordinator {
     const nextRepositories = new Map<string, WorkspaceRepository>()
     const nextCache = new Map<string, RepositoryCacheEntry>()
 
-    for (const [commonDir, seedPaths] of seedPathsByCommonDir) {
-      const cached = this.cache.get(commonDir)
-      const seedsChanged =
-        !cached || !sameSeedSet(cached.seedPaths, seedPaths)
-      const mustRebuild =
-        this.snapshot === null || forceFull || affectedCommonDirs.has(commonDir) || seedsChanged
-      if (!mustRebuild && cached) {
-        nextCache.set(commonDir, cached)
-        nextRepositories.set(commonDir, cached.repository)
-        continue
-      }
-      try {
-        const dirs = resolved.repositories.get(commonDir) ?? null
-        let entry = this.discovery.buildRepository(commonDir, dirs, this.snapshot)
-        entry = this.discovery.refreshOpenSpec(entry, this.snapshot?.repositories)
-        nextCache.set(commonDir, { repository: entry, seedPaths })
-        nextRepositories.set(commonDir, entry)
-      } catch (error) {
-        // Error isolation: one failing repository never blocks the others.
-        const message = error instanceof Error ? error.message : String(error)
-        this.lastError = message
-        if (cached) {
-          const staleEntry: WorkspaceRepository = {
-            ...cached.repository,
-            stale: true,
-            error: message,
-          }
-          nextCache.set(commonDir, { ...cached, repository: staleEntry })
-          nextRepositories.set(commonDir, staleEntry)
+    // Rebuild every affected repository concurrently — discovery is all
+    // read-only subprocesses, so repositories never depend on each other.
+    await Promise.all(
+      [...seedPathsByCommonDir.entries()].map(async ([commonDir, seedPaths]) => {
+        const cached = this.cache.get(commonDir)
+        const seedsChanged =
+          !cached || !sameSeedSet(cached.seedPaths, seedPaths)
+        const mustRebuild =
+          this.snapshot === null || forceFull || affectedCommonDirs.has(commonDir) || seedsChanged
+        if (!mustRebuild && cached) {
+          nextCache.set(commonDir, cached)
+          nextRepositories.set(commonDir, cached.repository)
+          return
         }
-        // No cached entry: the repository stays absent until discovery works.
-      }
-    }
+        try {
+          const dirs = resolved.repositories.get(commonDir) ?? null
+          let entry = await this.discovery.buildRepository(commonDir, dirs, this.snapshot)
+          entry = await this.discovery.refreshOpenSpec(entry, this.snapshot?.repositories)
+          nextCache.set(commonDir, { repository: entry, seedPaths })
+          nextRepositories.set(commonDir, entry)
+        } catch (error) {
+          // Error isolation: one failing repository never blocks the others.
+          const message = error instanceof Error ? error.message : String(error)
+          this.lastError = message
+          if (cached) {
+            const staleEntry: WorkspaceRepository = {
+              ...cached.repository,
+              stale: true,
+              error: message,
+            }
+            nextCache.set(commonDir, { ...cached, repository: staleEntry })
+            nextRepositories.set(commonDir, staleEntry)
+          }
+          // No cached entry: the repository stays absent until discovery works.
+        }
+      })
+    )
 
     const repositories = [...nextRepositories.values()].sort((a, b) => a.id.localeCompare(b.id))
     const structuralChange =

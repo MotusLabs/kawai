@@ -42,10 +42,10 @@ afterAll(() => {
 })
 
 describe('createWorktree operation', () => {
-  test('creates a worktree for an unassigned branch at an absolute destination', () => {
+  test('creates a worktree for an unassigned branch at an absolute destination', async () => {
     const destination = path.join(tempRoot, 'repo-feat-x')
 
-    const result = createWorktree({
+    const result = await createWorktree({
       repositoryId: repoCommonDir,
       branch: 'feat-x',
       destination,
@@ -61,12 +61,12 @@ describe('createWorktree operation', () => {
     expect(fs.existsSync(path.join(destination, '.git'))).toBe(true)
 
     // The branch is now checked out in the new worktree.
-    const info = discoverRepository(repoCommonDir)
+    const info = await discoverRepository(repoCommonDir)
     const created = info?.worktrees.find((worktree) => worktree.path === fs.realpathSync(destination))
     expect(created).toMatchObject({ branch: 'feat-x', detached: false })
 
     // And re-creating the same branch is refused as assigned.
-    const duplicate = createWorktree({
+    const duplicate = await createWorktree({
       repositoryId: repoCommonDir,
       branch: 'feat-x',
       destination: path.join(tempRoot, 'repo-feat-x-2'),
@@ -78,12 +78,12 @@ describe('createWorktree operation', () => {
     expect(fs.existsSync(path.join(tempRoot, 'repo-feat-x-2'))).toBe(false)
   })
 
-  test('rejects an existing destination without modifying it', () => {
+  test('rejects an existing destination without modifying it', async () => {
     const existing = path.join(tempRoot, 'existing-dir')
     fs.mkdirSync(existing)
     fs.writeFileSync(path.join(existing, 'marker.txt'), 'keep')
 
-    const result = createWorktree({
+    const result = await createWorktree({
       repositoryId: repoCommonDir,
       branch: 'spare',
       destination: existing,
@@ -97,10 +97,10 @@ describe('createWorktree operation', () => {
     expect(fs.readdirSync(existing)).toEqual(['marker.txt'])
   })
 
-  test('rejects a branch already assigned in a linked worktree (concurrent assignment)', () => {
+  test('rejects a branch already assigned in a linked worktree (concurrent assignment)', async () => {
     // feat-x was checked out by the success test — the immediate
     // revalidation must catch the assignment before any git mutation.
-    const result = createWorktree({
+    const result = await createWorktree({
       repositoryId: repoCommonDir,
       branch: 'feat-x',
       destination: path.join(tempRoot, 'late-attempt'),
@@ -111,12 +111,12 @@ describe('createWorktree operation', () => {
     expect(fs.existsSync(path.join(tempRoot, 'late-attempt'))).toBe(false)
   })
 
-  test('rejects invalid repositories and unknown branches', () => {
+  test('rejects invalid repositories and unknown branches', async () => {
     const notARepo = path.join(tempRoot, 'not-a-repo')
     fs.mkdirSync(notARepo)
 
     expect(
-      createWorktree({
+      await createWorktree({
         repositoryId: `${notARepo}/.git`,
         branch: 'spare',
         destination: path.join(tempRoot, 'n/a'),
@@ -124,7 +124,7 @@ describe('createWorktree operation', () => {
     ).toMatchObject({ ok: false, code: 'ERR_WORKSPACE_UNKNOWN_REPOSITORY' })
 
     expect(
-      createWorktree({
+      await createWorktree({
         repositoryId: repoCommonDir,
         branch: 'does-not-exist',
         destination: path.join(tempRoot, 'unknown-branch-dest'),
@@ -133,12 +133,12 @@ describe('createWorktree operation', () => {
     expect(fs.existsSync(path.join(tempRoot, 'unknown-branch-dest'))).toBe(false)
   })
 
-  test('surfaces git command failure without partial destinations', () => {
+  test('surfaces git command failure without partial destinations', async () => {
     // A file occupies the parent directory level git needs to create.
     const blocker = path.join(tempRoot, 'blocker')
     fs.writeFileSync(blocker, 'file, not directory')
 
-    const result = createWorktree({
+    const result = await createWorktree({
       repositoryId: repoCommonDir,
       branch: 'spare',
       destination: path.join(blocker, 'child'),
@@ -152,10 +152,10 @@ describe('createWorktree operation', () => {
     expect(fs.readFileSync(blocker, 'utf8')).toBe('file, not directory')
   })
 
-  test('rejects destinations overlapping existing worktrees', () => {
+  test('rejects destinations overlapping existing worktrees', async () => {
     const insideMain = path.join(repoDir, 'nested-worktree')
     expect(
-      createWorktree({
+      await createWorktree({
         repositoryId: repoCommonDir,
         branch: 'spare',
         destination: insideMain,
@@ -166,7 +166,7 @@ describe('createWorktree operation', () => {
     // A destination that would CONTAIN the main worktree necessarily exists
     // already, so the stronger existence guard refuses it first.
     expect(
-      createWorktree({
+      await createWorktree({
         repositoryId: repoCommonDir,
         branch: 'spare',
         destination: path.dirname(repoDir),
@@ -174,10 +174,10 @@ describe('createWorktree operation', () => {
     ).toMatchObject({ ok: false, code: 'ERR_WORKTREE_DESTINATION_EXISTS' })
   })
 
-  test('rejects injection-like branch names and relative destinations', () => {
+  test('rejects injection-like branch names and relative destinations', async () => {
     // Option-like and malformed branch names never reach git.
     for (const branch of ['--force', '-b', 'bad..name', 'a b']) {
-      const result = createWorktree({
+      const result = await createWorktree({
         repositoryId: repoCommonDir,
         branch,
         destination: path.join(tempRoot, 'inject'),
@@ -189,7 +189,7 @@ describe('createWorktree operation', () => {
 
     // Shell metacharacters inside an otherwise-valid ref name are passed as
     // one literal argv element — git simply reports the unknown branch.
-    const shellish = createWorktree({
+    const shellish = await createWorktree({
       repositoryId: repoCommonDir,
       branch: 'evil;rm',
       destination: path.join(tempRoot, 'inject'),
@@ -199,7 +199,7 @@ describe('createWorktree operation', () => {
 
     // Relative destinations are refused outright.
     expect(
-      createWorktree({
+      await createWorktree({
         repositoryId: repoCommonDir,
         branch: 'spare',
         destination: 'relative/dest',
@@ -207,11 +207,11 @@ describe('createWorktree operation', () => {
     ).toMatchObject({ ok: false, code: 'ERR_WORKTREE_INVALID_DESTINATION' })
   })
 
-  test('creates literal destinations containing shell metacharacters verbatim', () => {
+  test('creates literal destinations containing shell metacharacters verbatim', async () => {
     // A legal-but-weird absolute path is created byte-for-byte — proof of
     // argument-array invocation (no shell interpretation).
     const weird = path.join(tempRoot, 'dest $(rm -rf /) `whoami`; echo hi')
-    const result = createWorktree({
+    const result = await createWorktree({
       repositoryId: repoCommonDir,
       branch: 'spare',
       destination: weird,

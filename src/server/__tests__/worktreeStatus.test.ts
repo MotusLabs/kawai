@@ -34,27 +34,27 @@ function gitInit(dir: string): void {
 }
 
 describe('isWorktreeDirty', () => {
-  test('reports clean worktree as not dirty', () => {
+  test('reports clean worktree as not dirty', async () => {
     const repo = path.join(tempRoot, 'clean')
     gitInit(repo)
-    expect(isWorktreeDirty(repo)).toBe(false)
+    expect(await isWorktreeDirty(repo)).toBe(false)
   })
 
-  test('detects tracked modifications', () => {
+  test('detects tracked modifications', async () => {
     const repo = path.join(tempRoot, 'tracked')
     gitInit(repo)
     fs.writeFileSync(path.join(repo, 'file.txt'), 'modified\n')
-    expect(isWorktreeDirty(repo)).toBe(true)
+    expect(await isWorktreeDirty(repo)).toBe(true)
   })
 
-  test('detects untracked files', () => {
+  test('detects untracked files', async () => {
     const repo = path.join(tempRoot, 'untracked')
     gitInit(repo)
     fs.writeFileSync(path.join(repo, 'new-file.txt'), 'untracked\n')
-    expect(isWorktreeDirty(repo)).toBe(true)
+    expect(await isWorktreeDirty(repo)).toBe(true)
   })
 
-  test('does not rewrite the index when stat data is stale', () => {
+  test('does not rewrite the index when stat data is stale', async () => {
     // A plain `git status` refreshes stale stat data in the index, touching
     // .git/index.lock — which the workspace watcher treats as a change.
     const repo = path.join(tempRoot, 'stale-stat')
@@ -63,47 +63,47 @@ describe('isWorktreeDirty', () => {
     fs.utimesSync(path.join(repo, 'file.txt'), future, future)
     const indexPath = path.join(repo, '.git', 'index')
     const indexBefore = fs.readFileSync(indexPath)
-    expect(isWorktreeDirty(repo)).toBe(false)
+    expect(await isWorktreeDirty(repo)).toBe(false)
     expect(fs.readFileSync(indexPath).equals(indexBefore)).toBe(true)
   })
 
-  test('returns false for a missing worktree', () => {
-    expect(isWorktreeDirty(path.join(tempRoot, 'missing'))).toBe(false)
+  test('returns false for a missing worktree', async () => {
+    expect(await isWorktreeDirty(path.join(tempRoot, 'missing'))).toBe(false)
   })
 
-  test('detects dirty state in linked worktrees independently', () => {
+  test('detects dirty state in linked worktrees independently', async () => {
     const repo = path.join(tempRoot, 'multi')
     const linked = path.join(tempRoot, 'multi-linked')
     gitInit(repo)
     runGit(['-C', repo, 'worktree', 'add', linked, '-b', 'linked'], { timeoutMs: 10_000 })
-    expect(isWorktreeDirty(repo)).toBe(false)
-    expect(isWorktreeDirty(linked)).toBe(false)
+    expect(await isWorktreeDirty(repo)).toBe(false)
+    expect(await isWorktreeDirty(linked)).toBe(false)
     fs.writeFileSync(path.join(linked, 'linked-file.txt'), 'untracked\n')
-    expect(isWorktreeDirty(repo)).toBe(false)
-    expect(isWorktreeDirty(linked)).toBe(true)
+    expect(await isWorktreeDirty(repo)).toBe(false)
+    expect(await isWorktreeDirty(linked)).toBe(true)
   })
 })
 
 describe('deepestWorktreeMatch', () => {
-  test('matches the worktree root exactly', () => {
+  test('matches the worktree root exactly', async () => {
     expect(deepestWorktreeMatch('/repo', ['/repo'])).toBe('/repo')
   })
 
-  test('matches paths beneath the root', () => {
+  test('matches paths beneath the root', async () => {
     expect(deepestWorktreeMatch('/repo/src/deep', ['/repo'])).toBe('/repo')
   })
 
-  test('respects path boundaries', () => {
+  test('respects path boundaries', async () => {
     expect(deepestWorktreeMatch('/repo-x/file', ['/repo'])).toBeNull()
     expect(deepestWorktreeMatch('/repository', ['/repo'])).toBeNull()
     expect(deepestWorktreeMatch('/rep', ['/repo'])).toBeNull()
   })
 
-  test('returns null for paths outside every worktree', () => {
+  test('returns null for paths outside every worktree', async () => {
     expect(deepestWorktreeMatch('/elsewhere', ['/repo', '/other'])).toBeNull()
   })
 
-  test('prefers the deepest nested match', () => {
+  test('prefers the deepest nested match', async () => {
     const worktrees = ['/repo', '/repo/inner-wt', '/repo/inner-wt/deeper-wt']
     expect(deepestWorktreeMatch('/repo/inner-wt/deeper-wt/src', worktrees)).toBe(
       '/repo/inner-wt/deeper-wt'
@@ -112,7 +112,7 @@ describe('deepestWorktreeMatch', () => {
     expect(deepestWorktreeMatch('/repo/src', worktrees)).toBe('/repo')
   })
 
-  test('exact nested root wins over containing worktree', () => {
+  test('exact nested root wins over containing worktree', async () => {
     expect(deepestWorktreeMatch('/repo/inner-wt', ['/repo', '/repo/inner-wt'])).toBe(
       '/repo/inner-wt'
     )

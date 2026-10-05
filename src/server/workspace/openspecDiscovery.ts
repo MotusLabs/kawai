@@ -24,23 +24,35 @@ export interface OpenspecCommandResult {
 export type OpenspecCommandRunner = (options: {
   cwd: string
   timeoutMs: number
-}) => OpenspecCommandResult
+}) => Promise<OpenspecCommandResult>
 
-/** Default runner: invoke the installed openspec CLI synchronously. */
-export function runOpenspecList({ cwd, timeoutMs }: { cwd: string; timeoutMs: number }): OpenspecCommandResult {
+/**
+ * Default runner: invoke the installed openspec CLI asynchronously. The CLI
+ * is a Node process that can take seconds to start, so a sync spawn would
+ * block the server's event loop for every worktree on each refresh pass.
+ */
+export async function runOpenspecList({ cwd, timeoutMs }: { cwd: string; timeoutMs: number }): Promise<OpenspecCommandResult> {
+  let proc: ReturnType<typeof Bun.spawn>
   try {
-    const result = Bun.spawnSync(['openspec', 'list', '--json'], {
+    proc = Bun.spawn(['openspec', 'list', '--json'], {
       cwd,
-      timeout: timeoutMs,
       env: process.env,
       stdout: 'pipe',
       stderr: 'pipe',
     })
-    const stdout = result.stdout ? result.stdout.toString('utf8') : ''
-    const stderr = result.stderr ? result.stderr.toString('utf8') : ''
+  } catch {
+    return { ok: false, exitCode: null, stdout: '', stderr: 'openspec spawn failed' }
+  }
+  const timer = setTimeout(() => proc.kill(), timeoutMs)
+  try {
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(proc.stdout as ReadableStream<Uint8Array>).text(),
+      new Response(proc.stderr as ReadableStream<Uint8Array>).text(),
+      proc.exited,
+    ])
     return {
-      ok: result.exitCode === 0,
-      exitCode: result.exitCode,
+      ok: exitCode === 0,
+      exitCode,
       stdout:
         stdout.length > OPENSPEC_MAX_OUTPUT_BYTES
           ? stdout.slice(0, OPENSPEC_MAX_OUTPUT_BYTES)
@@ -49,6 +61,8 @@ export function runOpenspecList({ cwd, timeoutMs }: { cwd: string; timeoutMs: nu
     }
   } catch {
     return { ok: false, exitCode: null, stdout: '', stderr: 'openspec spawn failed' }
+  } finally {
+    clearTimeout(timer)
   }
 }
 
@@ -123,13 +137,13 @@ function isMissingRootPayload(stdout: string): boolean {
  * Discover OpenSpec state for one worktree. Failures return a stale/error
  * state; the caller merges the previous values (task 3.2).
  */
-export function discoverWorktreeOpenSpec(
+export async function discoverWorktreeOpenSpec(
   worktreePath: string,
   options: { runner?: OpenspecCommandRunner; timeoutMs?: number } = {}
-): WorktreeOpenSpecState {
+): Promise<WorktreeOpenSpecState> {
   const runner = options.runner ?? runOpenspecList
   const timeoutMs = options.timeoutMs ?? OPENSPEC_TIMEOUT_MS
-  const result = runner({ cwd: worktreePath, timeoutMs })
+  const result = await runner({ cwd: worktreePath, timeoutMs })
 
   if (result.ok) {
     const parsed = parseOpenspecListOutput(result.stdout)
@@ -160,11 +174,11 @@ export function discoverWorktreeOpenSpec(
  * holds last-known repositories (any snapshot) for last-valid retention.
  * State is never copied between worktrees.
  */
-export function refreshRepositoryOpenSpec(
+export async function refreshRepositoryOpenSpec(
   repository: WorkspaceRepository,
   previous: WorkspaceRepository[] | undefined,
   options: { runner?: OpenspecCommandRunner; timeoutMs?: number } = {}
-): WorkspaceRepository {
+): Promise<WorkspaceRepository> {
   const previousOpenSpecByWorktreeId = new Map<string, WorktreeOpenSpecState>()
   for (const previousRepository of previous ?? []) {
     if (previousRepository.id !== repository.id) continue
@@ -173,10 +187,21 @@ export function refreshRepositoryOpenSpec(
     }
   }
 
+  // One CLI invocation per worktree, all in flight at once.
+  const discoveredByPath = new Map(
+    await Promise.all(
+      repository.worktrees.map(async (worktree) => {
+        const discovered = await discoverWorktreeOpenSpec(worktree.path, options)
+        return [worktree.id, discovered] as const
+      })
+    )
+  )
+
   const refreshed: WorkspaceRepository = {
     ...repository,
     worktrees: repository.worktrees.map((worktree) => {
-      const discovered = discoverWorktreeOpenSpec(worktree.path, options)
+      const discovered = discoveredByPath.get(worktree.id)
+      if (!discovered) return worktree
       if (discovered.stale) {
         const lastValid = previousOpenSpecByWorktreeId.get(worktree.id)
         if (lastValid && !lastValid.stale) {
@@ -202,15 +227,17 @@ export function refreshRepositoryOpenSpec(
  * divergent change lists and progress. A failed refresh retains the
  * worktree's last valid values with a stale indication.
  */
-export function refreshSnapshotOpenSpec(
+export async function refreshSnapshotOpenSpec(
   snapshot: WorkspaceSnapshot,
   previous: WorkspaceSnapshot | null | undefined,
   options: { runner?: OpenspecCommandRunner; timeoutMs?: number } = {}
-): WorkspaceSnapshot {
+): Promise<WorkspaceSnapshot> {
   return {
     ...snapshot,
-    repositories: snapshot.repositories.map((repository) =>
-      refreshRepositoryOpenSpec(repository, previous?.repositories, options)
+    repositories: await Promise.all(
+      snapshot.repositories.map((repository) =>
+        refreshRepositoryOpenSpec(repository, previous?.repositories, options)
+      )
     ),
   }
 }

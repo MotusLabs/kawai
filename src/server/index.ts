@@ -2589,7 +2589,7 @@ async function handleCreateWorktree(
 ): Promise<void> {
   // Validated, non-forced git worktree add (§8.3). Refresh + broadcast of the
   // affected repository and launch routing happen in §8.4.
-  const result = createWorktree({
+  const result = await createWorktree({
     repositoryId: payload.repositoryId,
     branch: payload.branch,
     destination: payload.destination,
@@ -2612,7 +2612,7 @@ async function handleCreateChangeWorktree(
   // assignment are re-read from Git right before the non-forced
   // `git worktree add`. The snapshot refreshes after every result — success
   // or failure — so the navigator never shows stale sections.
-  const result = createChangeWorktree({
+  const result = await createChangeWorktree({
     repositoryId: payload.repositoryId,
     change: payload.change,
   })
