@@ -15,7 +15,7 @@ The system SHALL offer Default, GLM, MiniMax, MiMo, Kimi, and LAN profiles when 
 
 #### Scenario: Older client omits the profile
 - **WHEN** a chat creation request omits a profile
-- **THEN** the session uses Default and inherits the backend's existing Claude configuration
+- **THEN** the session uses Default and retains the backend environment plus the effective global provider overrides from Settings or AGENTBOARD_CHAT_ENV
 
 #### Scenario: Catalog loading fails
 - **WHEN** the profile list cannot be loaded
@@ -29,7 +29,7 @@ The system SHALL accept only known predefined profile identifiers for chat creat
 - **THEN** an actionable error is returned and no session is created
 
 ### Requirement: Named profiles configure independent provider sessions
-Each named profile SHALL apply its predefined environment configuration to its agent session without changing the backend environment or other sessions. Named profiles SHALL replace inherited values for profile-controlled routing, model, attribution, and compaction variables. Profile settings SHALL take precedence over conflicting user, project, or local Claude settings for those variables.
+Each named profile SHALL apply its predefined environment configuration to its agent session without changing the backend environment or other sessions. The system SHALL first merge the backend environment with the effective global provider overrides (the persisted Settings override when present, otherwise AGENTBOARD_CHAT_ENV). Default SHALL preserve that existing configuration. Named profiles SHALL retain credentials and unrelated variables from the merged environment and SHALL replace inherited values for profile-controlled routing, model, attribution, and compaction variables. Profile settings SHALL take precedence over conflicting user, project, or local Claude settings for those variables.
 
 #### Scenario: GLM configuration
 - **WHEN** a GLM chat session starts
@@ -50,6 +50,21 @@ Each named profile SHALL apply its predefined environment configuration to its a
 #### Scenario: Conflicting Claude settings
 - **WHEN** user or project settings specify a different base URL or model for a named profile session
 - **THEN** the selected profile's routing and prescribed startup model apply while unrelated project settings remain available
+
+#### Scenario: Global provider settings coexist with profiles
+- **WHEN** global provider settings contain a gateway token, a base URL, and model overrides, and Default and GLM sessions start
+- **THEN** Default uses the global configuration, GLM uses its catalog routing and controlled model configuration, and both retain the global token without exposing it to clients
+
+### Requirement: Availability checks follow the selected profile
+The SDK availability probe SHALL use the same resolved environment, startup model, and inline controlled settings as the selected session profile. Successful and in-flight probes SHALL be shared only for equal resolved probe configurations. Failed probes SHALL be cleared so later creation attempts can retry. The probe SHALL remain a bounded SDK control-handshake check without sending a model turn.
+
+#### Scenario: Different profiles use separate probes
+- **WHEN** a successful Default probe exists and a user creates a GLM session with different resolved launch settings
+- **THEN** a new probe runs with GLM's resolved settings rather than reusing the Default result
+
+#### Scenario: Changed settings or failed probe can recover
+- **WHEN** global provider settings affecting a profile change, or its previous availability probe failed, and a user retries creation
+- **THEN** the probe runs again using the current resolved configuration
 
 ### Requirement: Profile selection persists through resume
 The system SHALL persist each chat session's profile identifier and reuse it after agent respawn or backend restart. Legacy sessions SHALL restore as Default. If a stored profile is no longer available, the system SHALL retain the session and report an actionable error rather than silently using another profile.
