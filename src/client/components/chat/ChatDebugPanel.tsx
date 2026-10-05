@@ -56,7 +56,7 @@ export default function ChatDebugPanel({ sessionId, view, sendMessage, connected
       </p>}
       {view.frames.map(frame => {
         const open = expanded.has(frame.seq)
-        return <div key={frame.seq} data-frame-seq={frame.seq} className="border-b border-border/50">
+        return <div key={frame.seq} data-frame-seq={frame.seq} className="border-b border-border">
           <button className="flex w-full items-baseline gap-2 py-1 text-left hover:bg-elevated" aria-expanded={open}
             onClick={() => toggle(frame.seq)}>
             <span className={`w-16 shrink-0 ${DIRECTION_STYLES[frame.dir]}`}>{DIRECTION_LABELS[frame.dir]}</span>
