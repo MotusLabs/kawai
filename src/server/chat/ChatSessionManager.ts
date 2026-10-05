@@ -14,6 +14,7 @@ import type {
 import type { ServerMessage, Session, SessionStatus } from '../../shared/types'
 import type { ChatSessionRecord, SessionDatabase } from '../db'
 import { generateSessionName } from '../nameGenerator'
+import { isExistingDirectory, resolveProjectPath } from '../paths'
 import type { SessionRegistry } from '../SessionRegistry'
 import { ChatSessionDriver, type ChatQueryFactory } from './ChatSessionDriver'
 import { chatAuthErrorMessage, hasClaudeAuth } from './chatAuth'
@@ -46,6 +47,8 @@ export interface ChatSessionManagerOptions {
   getProviderEnv?: () => ChatProviderEnv
   /** Per-session protocol capture for the chat debug view (always on). */
   wireLogs?: ChatWireLogs
+  /** Project-directory check; injected in tests that use fictitious paths. */
+  isDirectory?: (path: string) => boolean
 }
 
 export type ChatCreateResult =
@@ -80,6 +83,9 @@ export class ChatSessionManager {
   private availability: { key: string; promise: Promise<void> } | null = null
 
   async createAvailableSession(input: { projectPath: string; name?: string }): Promise<ChatCreateResult> {
+    // Refuse a bad path before the probe spends an SDK spawn on it.
+    const project = this.resolveProjectDirectory(input.projectPath)
+    if (!project.ok) return project
     if (!this.authOk()) return { ok: false, error: chatAuthErrorMessage() }
     try {
       await this.probeAvailability()
@@ -127,10 +133,9 @@ export class ChatSessionManager {
     projectPath: string
     name?: string
   }): ChatCreateResult {
-    const projectPath = input.projectPath.trim()
-    if (!projectPath) {
-      return { ok: false, error: 'A project directory is required' }
-    }
+    const project = this.resolveProjectDirectory(input.projectPath)
+    if (!project.ok) return project
+    const projectPath = project.path
     if (!this.authOk()) {
       return { ok: false, error: chatAuthErrorMessage() }
     }
@@ -151,6 +156,28 @@ export class ChatSessionManager {
     const session = this.toSession(record)
     this.options.registry.setChatSession(session)
     return { ok: true, session }
+  }
+
+  /**
+   * Resolve a project path as terminal sessions do (`~`, absolute) and require
+   * an existing directory: the agent process is spawned with it as `cwd`, and
+   * a missing `cwd` surfaces from the SDK as a misleading binary-launch error.
+   */
+  private resolveProjectDirectory(
+    value: string
+  ): { ok: true; path: string } | { ok: false; error: string } {
+    const resolved = resolveProjectPath(value)
+    if (!resolved) {
+      return { ok: false, error: 'A project directory is required' }
+    }
+    if (!this.isDirectory(resolved)) {
+      return { ok: false, error: `Project directory does not exist: ${resolved}` }
+    }
+    return { ok: true, path: resolved }
+  }
+
+  private isDirectory(value: string): boolean {
+    return (this.options.isDirectory ?? isExistingDirectory)(value)
   }
 
   /** True when the id is a known chat session. */
@@ -198,6 +225,20 @@ export class ChatSessionManager {
         error:
           'Cannot resume this conversation: the agent transcript is missing. ' +
           `Restore ${record.sdkSessionId}.jsonl or create a new chat session.`,
+      }
+    }
+    const live = this.drivers.get(sessionId)
+    if (
+      (!live || live.isDead) &&
+      !this.driverPromises.has(sessionId) &&
+      !this.isDirectory(record.projectPath)
+    ) {
+      // A running process keeps its cwd; only a (re)spawn needs the directory.
+      return {
+        ok: false,
+        error:
+          `Cannot start the agent: the project directory ${record.projectPath} no longer exists. ` +
+          'Create a new chat session in an existing directory.',
       }
     }
     let driver: ChatSessionDriver | null

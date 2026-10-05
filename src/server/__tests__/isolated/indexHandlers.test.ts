@@ -766,7 +766,7 @@ describe('server message handlers', () => {
       const websocket = serveOptions.websocket!
       websocket.open?.(ws as never)
       const before = registryInstance.getAll().length
-      websocket.message?.(ws as never, JSON.stringify({ type: 'session-create', kind: 'chat', projectPath: '/tmp/chat', name: 'test chat' }))
+      websocket.message?.(ws as never, JSON.stringify({ type: 'session-create', kind: 'chat', projectPath: os.tmpdir(), name: 'test chat' }))
       await new Promise(resolve => setTimeout(resolve, 0))
       const created = sent.find(message => message.type === 'session-created')
       expect(created?.type).toBe('session-created')
@@ -778,6 +778,26 @@ describe('server message handlers', () => {
       await new Promise(resolve => setTimeout(resolve, 0))
       expect(registryInstance.get(created.session.id)).toBeUndefined()
       expect(sent).toContainEqual({ type: 'session-removed', sessionId: created.session.id })
+    } finally {
+      if (previousToken === undefined) delete process.env.CLAUDE_CODE_OAUTH_TOKEN
+      else process.env.CLAUDE_CODE_OAUTH_TOKEN = previousToken
+    }
+  })
+  test('chat creation for a missing project directory replies with an error', async () => {
+    const previousToken = process.env.CLAUDE_CODE_OAUTH_TOKEN
+    process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'
+    try {
+      const { serveOptions, registryInstance } = await loadIndex()
+      const { ws, sent } = createWs()
+      const websocket = serveOptions.websocket!
+      websocket.open?.(ws as never)
+      const before = registryInstance.getAll().length
+      const missing = path.join(os.tmpdir(), 'agentboard-missing-chat-dir (deleted)')
+      websocket.message?.(ws as never, JSON.stringify({ type: 'session-create', kind: 'chat', projectPath: missing }))
+      await new Promise(resolve => setTimeout(resolve, 0))
+      expect(sent).toContainEqual({ type: 'error', message: `Project directory does not exist: ${missing}` })
+      expect(sent.some(message => message.type === 'session-created')).toBe(false)
+      expect(registryInstance.getAll()).toHaveLength(before)
     } finally {
       if (previousToken === undefined) delete process.env.CLAUDE_CODE_OAUTH_TOKEN
       else process.env.CLAUDE_CODE_OAUTH_TOKEN = previousToken

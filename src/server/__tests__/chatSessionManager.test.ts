@@ -14,6 +14,9 @@ import {
   type ChatQueryFactory,
 } from '../chat/ChatSessionManager'
 
+/** Every fictitious project path (`/tmp/proj`) counts as an existing directory. */
+const anyDirectory = () => true
+
 /** Minimal scriptable Query: tests push SDK messages, options are captured. */
 interface FakeHandle {
   query: Query
@@ -83,11 +86,15 @@ interface ManagerHarness {
   events: Array<{ sessionId: string; event: ChatEvent }>
 }
 
-function createHarness(db: SessionDatabase): ManagerHarness {
+function createHarness(
+  db: SessionDatabase,
+  isDirectory: (path: string) => boolean = anyDirectory
+): ManagerHarness {
   const registry = new SessionRegistry()
   const handles: FakeHandle[] = []
   const events: Array<{ sessionId: string; event: ChatEvent }> = []
   const manager = new ChatSessionManager({
+    isDirectory,
     registry,
     db,
     onEvent: (sessionId, event) => events.push({ sessionId, event }),
@@ -169,6 +176,7 @@ describe('ChatSessionManager', () => {
       let probes = 0
       const registry = new SessionRegistry()
       const manager = new ChatSessionManager({
+        isDirectory: anyDirectory,
         db, registry, onEvent: () => {},
         availabilityProbe: async () => { probes++; throw new Error('broken runtime') },
       })
@@ -191,6 +199,7 @@ describe('ChatSessionManager', () => {
       let providerEnv: Record<string, string> = { ANTHROPIC_BASE_URL: 'https://broken.example' }
       const probed: string[] = []
       const manager = new ChatSessionManager({
+        isDirectory: anyDirectory,
         db, registry: new SessionRegistry(), onEvent: () => {},
         availabilityProbe: async (env) => {
           probed.push(env.ANTHROPIC_BASE_URL ?? '')
@@ -209,6 +218,7 @@ describe('ChatSessionManager', () => {
       let providerEnv: Record<string, string> = { A: '1', B: '2' }
       let probes = 0
       const manager = new ChatSessionManager({
+        isDirectory: anyDirectory,
         db, registry: new SessionRegistry(), onEvent: () => {},
         availabilityProbe: async () => { probes++ },
         getProviderEnv: () => providerEnv,
@@ -227,6 +237,7 @@ describe('ChatSessionManager', () => {
       let probes = 0
       let release!: () => void
       const manager = new ChatSessionManager({
+        isDirectory: anyDirectory,
         db, registry: new SessionRegistry(), onEvent: () => {},
         availabilityProbe: () => { probes++; return new Promise<void>((resolve) => { release = resolve }) },
       })
@@ -243,6 +254,7 @@ describe('ChatSessionManager', () => {
       let probes = 0
       const registry = new SessionRegistry()
       const manager = new ChatSessionManager({
+        isDirectory: anyDirectory,
         db, registry, onEvent: () => {},
         availabilityProbe: async () => { probes++ },
       })
@@ -301,6 +313,7 @@ describe('ChatSessionManager', () => {
     test('a credential supplied only by getProviderEnv allows creation', () => {
       const registry = new SessionRegistry()
       const manager = new ChatSessionManager({
+        isDirectory: anyDirectory,
         db, registry, onEvent: () => {},
         queryFactory: fakeQueryFactory([]),
         getProviderEnv: () => ({ ANTHROPIC_AUTH_TOKEN: 'gateway-token' }),
@@ -312,6 +325,7 @@ describe('ChatSessionManager', () => {
       process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'
       const probed: Array<Record<string, string>> = []
       const manager = new ChatSessionManager({
+        isDirectory: anyDirectory,
         db, registry: new SessionRegistry(), onEvent: () => {},
         availabilityProbe: async (providerEnv) => { probed.push(providerEnv) },
         getProviderEnv: () => ({ ANTHROPIC_BASE_URL: 'https://gw.example/a' }),
@@ -342,6 +356,7 @@ describe('ChatSessionManager', () => {
     let providerEnv: Record<string, string> = { ANTHROPIC_BASE_URL: 'https://gw.example/a' }
     const handles: FakeHandle[] = []
     const manager = new ChatSessionManager({
+      isDirectory: anyDirectory,
       db, registry: new SessionRegistry(), onEvent: () => {},
       queryFactory: fakeQueryFactory(handles),
       getProviderEnv: () => providerEnv,
@@ -375,6 +390,7 @@ describe('ChatSessionManager', () => {
     const wireLogs = new ChatWireLogs({ dir: path.join(tempDir, 'chat-wire') })
     const handles: FakeHandle[] = []
     const manager = new ChatSessionManager({
+      isDirectory: anyDirectory,
       db, registry: new SessionRegistry(), onEvent: () => {},
       queryFactory: fakeQueryFactory(handles), wireLogs,
     })
@@ -398,7 +414,7 @@ describe('ChatSessionManager', () => {
   test('startup prunes wire logs of sessions that no longer exist', async () => {
     process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'
     const dir = path.join(tempDir, 'chat-wire')
-    const first = new ChatSessionManager({ db, registry: new SessionRegistry(), onEvent: () => {} })
+    const first = new ChatSessionManager({ isDirectory: anyDirectory, db, registry: new SessionRegistry(), onEvent: () => {} })
     const kept = first.createSession({ projectPath: '/tmp/proj' })
     if (!kept.ok) throw new Error('create failed')
     const seed = new ChatWireLogs({ dir })
@@ -407,6 +423,7 @@ describe('ChatSessionManager', () => {
       await seed.get(id).flush()
     }
     new ChatSessionManager({
+      isDirectory: anyDirectory,
       db, registry: new SessionRegistry(), onEvent: () => {}, wireLogs: new ChatWireLogs({ dir }),
     })
     await flush()
@@ -595,6 +612,110 @@ describe('ChatSessionManager', () => {
     // Rows survive shutdown; the restart path restores them.
     expect(db.getChatSession(created.session.id)).not.toBeNull()
     expect(registry.get(created.session.id)).toBeDefined()
+  })
+
+  describe('project directory', () => {
+    test('creation refuses a path that is not an existing directory, with no side effects', () => {
+      process.env.ANTHROPIC_API_KEY = 'sk-test-key'
+      const registry = new SessionRegistry()
+      // No isDirectory override: the real filesystem check runs.
+      const manager = new ChatSessionManager({ db, registry, onEvent: () => {} })
+      const file = path.join(tempDir, 'file.txt')
+      fs.writeFileSync(file, '')
+      for (const projectPath of [
+        path.join(tempDir, 'missing'),
+        `${tempDir} (deleted)`,
+        file,
+      ]) {
+        expect(manager.createSession({ projectPath })).toEqual({
+          ok: false,
+          error: `Project directory does not exist: ${projectPath}`,
+        })
+      }
+      expect(registry.getAll()).toHaveLength(0)
+      expect(db.getChatSessions()).toHaveLength(0)
+      expect(manager.createSession({ projectPath: `  ${tempDir}  ` }).ok).toBe(true)
+    })
+
+    test('a home-relative path is checked and stored as an absolute path', () => {
+      process.env.ANTHROPIC_API_KEY = 'sk-test-key'
+      const checked: string[] = []
+      const { manager } = createHarness(db, (dir) => {
+        checked.push(dir)
+        return true
+      })
+      const result = manager.createSession({ projectPath: '~/work/app' })
+      if (!result.ok) throw new Error('create failed')
+      const expected = path.join(os.homedir(), 'work', 'app')
+      expect(checked).toEqual([expected])
+      expect(result.session.projectPath).toBe(expected)
+      expect(db.getChatSession(result.session.id)?.projectPath).toBe(expected)
+    })
+
+    test('availability-checked creation refuses a missing directory before probing', async () => {
+      process.env.ANTHROPIC_API_KEY = 'sk-test-key'
+      let probes = 0
+      const manager = new ChatSessionManager({
+        isDirectory: () => false,
+        db, registry: new SessionRegistry(), onEvent: () => {},
+        availabilityProbe: async () => { probes++ },
+      })
+      expect(await manager.createAvailableSession({ projectPath: '/tmp/gone (deleted)' })).toEqual({
+        ok: false,
+        error: 'Project directory does not exist: /tmp/gone (deleted)',
+      })
+      expect(probes).toBe(0)
+      expect(db.getChatSessions()).toHaveLength(0)
+    })
+
+    test('send refuses to spawn when the directory disappeared, keeping the session', async () => {
+      process.env.ANTHROPIC_API_KEY = 'sk-test-key'
+      let exists = true
+      const { manager, registry, handles, events } = createHarness(db, () => exists)
+      const created = manager.createSession({ projectPath: '/tmp/proj' })
+      if (!created.ok) throw new Error('create failed')
+      const sessionId = created.session.id
+
+      exists = false
+      expect(await manager.send(sessionId, 'Hi')).toEqual({
+        ok: false,
+        error:
+          'Cannot start the agent: the project directory /tmp/proj no longer exists. ' +
+          'Create a new chat session in an existing directory.',
+      })
+      expect(handles).toHaveLength(0)
+      expect(events).toHaveLength(0)
+      expect(registry.get(sessionId)?.status).toBe('waiting')
+      expect(db.getChatSession(sessionId)).not.toBeNull()
+      expect(manager.getSnapshot(sessionId)?.events).toEqual([])
+
+      // Restoring the directory makes the session usable again.
+      exists = true
+      expect(await manager.send(sessionId, 'Hi')).toEqual({ ok: true })
+      expect(handles).toHaveLength(1)
+    })
+
+    test('a live driver is not blocked by the check; a crashed one is', async () => {
+      process.env.ANTHROPIC_API_KEY = 'sk-test-key'
+      let exists = true
+      const { manager, handles } = createHarness(db, () => exists)
+      const created = manager.createSession({ projectPath: '/tmp/proj' })
+      if (!created.ok) throw new Error('create failed')
+      const sessionId = created.session.id
+      expect(await manager.send(sessionId, 'first')).toEqual({ ok: true })
+
+      // The running process keeps its cwd, so later turns still go through.
+      exists = false
+      expect(await manager.send(sessionId, 'second')).toEqual({ ok: true })
+      expect(handles).toHaveLength(1)
+
+      // Once the process dies, a respawn would need the directory.
+      handles[0]!.query.close()
+      await flush()
+      const result = await manager.send(sessionId, 'third')
+      expect(result.ok).toBe(false)
+      expect(handles).toHaveLength(1)
+    })
   })
 
   describe('restart restore', () => {
