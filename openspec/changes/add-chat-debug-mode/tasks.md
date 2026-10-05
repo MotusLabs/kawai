@@ -34,8 +34,8 @@
 
 ## 6. Client debug panel
 
-- [ ] 6.1 Add `src/client/stores/chatDebugStore.ts` (seq-merge with dedupe and sort, `hasOlder`, `loadingOlder`, 5,000-frame cap) and route `chat-debug-frames` in `App.tsx`, and verify `chatDebugStore.test.ts` covers overlap between page and live frames, out-of-order arrival, and the cap
-- [ ] 6.2 Add a frame type-label helper (`type`, `subtype`, `request.subtype`, `event.type` for `stream_event`, raw-text fallback) and verify unit tests for each SDK frame shape and non-JSON lines
+- [x] 6.1 Add `src/client/stores/chatDebugStore.ts` (seq-merge with dedupe and sort, `hasOlder`, `loadingOlder`, 5,000-frame cap) and route `chat-debug-frames` in `App.tsx`, and verify `chatDebugStore.test.ts` covers overlap between page and live frames, out-of-order arrival, and the cap
+- [x] 6.2 Add a frame type-label helper (`type`, `subtype`, `request.subtype`, `event.type` for `stream_event`, raw-text fallback) and verify unit tests for each SDK frame shape and non-JSON lines
 - [ ] 6.3 Add the Debug toggle to `ChatView` (sends open/close, re-opens on `connectionEpoch` change while open) and verify `chatComponents.test.tsx` asserts the messages sent on toggle and on reconnect
 - [ ] 6.4 Implement `ChatDebugPanel.tsx` (desktop split / mobile replace, direction badge, time, seq, type label, expand to pretty JSON, Copy copies `raw`, Load older, tail-follow only at bottom, empty state) and verify component tests for expand, copy, load-older, and empty state
 - [ ] 6.5 Update `CLAUDE.md` Structure notes for the chat debug modules and the `chat-wire/` data directory, and verify the listed paths exist
