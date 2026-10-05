@@ -608,12 +608,32 @@ function createWs() {
       clipboardBufferArmedUntil: 0,
       clipboardArmedAtSec: 0,
       clipboardWatchGen: 0,
+      copyModeCheckInFlight: false,
     },
     send: (payload: string) => {
       sent.push(JSON.parse(payload) as ServerMessage)
     },
   }
   return { ws, sent }
+}
+
+/**
+ * Async tmux handlers (copy-mode probes, history capture) send their replies
+ * only after their spawned command resolves — dispatch returning does not
+ * imply the handler finished. Bounded-poll the captured outbound messages.
+ */
+async function waitForSent(
+  sent: ServerMessage[],
+  predicate: (message: ServerMessage) => boolean,
+  description: string,
+  timeoutMs = 2000
+): Promise<void> {
+  const startedAt = Date.now()
+  while (Date.now() - startedAt < timeoutMs) {
+    if (sent.some(predicate)) return
+    await new Promise((r) => setTimeout(r, 5))
+  }
+  throw new Error(`Timed out waiting for: ${description}`)
 }
 
 let importCounter = 0
@@ -2978,7 +2998,15 @@ describe('server message handlers', () => {
     expect(attached?.resizes).toEqual([{ cols: 120, rows: 40 }])
 
     attached?.emitData('output')
-    expect(sent.some((message) => message.type === 'terminal-output')).toBe(true)
+    // Output frames flush on the coalescer's turn timer — await the frame.
+    await waitForSent(
+      sent,
+      (message) =>
+        message.type === 'terminal-output' &&
+        message.sessionId === baseSession.id &&
+        message.data === 'output',
+      'terminal-output frame after emitData'
+    )
 
     websocket.message?.(
       ws as never,
@@ -3457,6 +3485,15 @@ describe('server message handlers', () => {
     expect(captureUsesUtf8).toBe(true)
     expect(captureArgs).toContain('-e')
     expect(captureOptions?.timeout).toBe(configState.tmuxTimeoutMs)
+    // History chunks flush on the coalescer's turn timer — await the frame.
+    await waitForSent(
+      sent,
+      (message) =>
+        message.type === 'terminal-output' &&
+        message.sessionId === baseSession.id &&
+        message.data === 'visible pane 你好 🚀\r\n',
+      'coalesced history frame'
+    )
     const historyIndex = sent.findIndex(
       (message) =>
         message.type === 'terminal-output' &&
@@ -3472,6 +3509,12 @@ describe('server message handlers', () => {
     )
     expect(copyModeTarget).toBe(groupedTarget)
 
+    // The reply arrives asynchronously (async spawn) — await it.
+    await waitForSent(
+      sent,
+      (message) => message.type === 'tmux-copy-mode-status',
+      'copy-mode status reply'
+    )
     // The fullscreen flags from tmux propagate to the client (appMouse drives the
     // client's decision to stop hijacking mouse events into copy-mode).
     const fullscreenStatus = sent.find(
@@ -3615,6 +3658,10 @@ describe('server message handlers', () => {
       throw new Error('WebSocket handlers not configured')
     }
 
+    // The copy-mode reply is discarded unless the socket is open/registered —
+    // stale-reply discard checks sockets membership, so simulate the open.
+    websocket.open?.(ws as never)
+
     websocket.message?.(
       ws as never,
       JSON.stringify({ type: 'tmux-cancel-copy-mode', sessionId: baseSession.id })
@@ -3627,6 +3674,12 @@ describe('server message handlers', () => {
     expect(sendKeysTarget).toBe('agentboard:1.1')
     expect(displayTarget).toBe('agentboard:1.1')
 
+    // The status reply arrives asynchronously (async spawn) — await it.
+    await waitForSent(
+      sent,
+      (message) => message.type === 'tmux-copy-mode-status',
+      'copy-mode status reply'
+    )
     const statusMessage = sent.find(
       (message) => message.type === 'tmux-copy-mode-status'
     )
@@ -4094,7 +4147,20 @@ describe('server message handlers', () => {
       ws as never,
       JSON.stringify({ type: 'session-wake', sessionId: 'bad id' })
     )
-    expect(sent[sent.length - 1]).toEqual({
+
+    await waitForSent(
+      sent,
+      (message) =>
+        message.type === 'session-wake-result' && message.sessionId === 'bad id',
+      `session-wake-result for ${'bad id'}`
+    )
+    await waitForSent(
+      sent,
+      (message) =>
+        message.type === 'session-wake-result' && message.sessionId === 'bad id',
+      'session-wake-result for bad id'
+      )
+expect(sent[sent.length - 1]).toEqual({
       type: 'session-wake-result',
       sessionId: 'bad id',
       ok: false,
@@ -4105,7 +4171,20 @@ describe('server message handlers', () => {
       ws as never,
       JSON.stringify({ type: 'session-wake', sessionId: 'missing' })
     )
-    expect(sent[sent.length - 1]).toEqual({
+
+    await waitForSent(
+      sent,
+      (message) =>
+        message.type === 'session-wake-result' && message.sessionId === 'missing',
+      `session-wake-result for ${'missing'}`
+    )
+    await waitForSent(
+      sent,
+      (message) =>
+        message.type === 'session-wake-result' && message.sessionId === 'missing',
+      'session-wake-result for missing'
+      )
+expect(sent[sent.length - 1]).toEqual({
       type: 'session-wake-result',
       sessionId: 'missing',
       ok: false,
@@ -4122,7 +4201,20 @@ describe('server message handlers', () => {
       ws as never,
       JSON.stringify({ type: 'session-wake', sessionId: 'active-session' })
     )
-    expect(sent[sent.length - 1]).toEqual({
+
+    await waitForSent(
+      sent,
+      (message) =>
+        message.type === 'session-wake-result' && message.sessionId === 'active-session',
+      `session-wake-result for ${'active-session'}`
+    )
+    await waitForSent(
+      sent,
+      (message) =>
+        message.type === 'session-wake-result' && message.sessionId === 'active-session',
+      'session-wake-result for active-session'
+      )
+expect(sent[sent.length - 1]).toEqual({
       type: 'session-wake-result',
       sessionId: 'active-session',
       ok: false,
@@ -4141,7 +4233,20 @@ describe('server message handlers', () => {
       ws as never,
       JSON.stringify({ type: 'session-wake', sessionId: 'bad-template' })
     )
-    expect(sent[sent.length - 1]).toEqual({
+
+    await waitForSent(
+      sent,
+      (message) =>
+        message.type === 'session-wake-result' && message.sessionId === 'bad-template',
+      `session-wake-result for ${'bad-template'}`
+    )
+    await waitForSent(
+      sent,
+      (message) =>
+        message.type === 'session-wake-result' && message.sessionId === 'bad-template',
+      'session-wake-result for bad-template'
+      )
+expect(sent[sent.length - 1]).toEqual({
       type: 'session-wake-result',
       sessionId: 'bad-template',
       ok: false,
@@ -4165,7 +4270,20 @@ describe('server message handlers', () => {
         sessionId: 'bad-template-with-launch-command',
       })
     )
-    expect(sent[sent.length - 1]).toEqual({
+    await waitForSent(
+      sent,
+      (message) =>
+        message.type === 'session-wake-result' &&
+        message.sessionId === 'bad-template-with-launch-command',
+      'session-wake-result for bad-template-with-launch-command'
+    )
+    await waitForSent(
+      sent,
+      (message) =>
+        message.type === 'session-wake-result' && message.sessionId === 'bad-template-with-launch-command',
+      'session-wake-result for bad-template-with-launch-command'
+      )
+expect(sent[sent.length - 1]).toEqual({
       type: 'session-wake-result',
       sessionId: 'bad-template-with-launch-command',
       ok: false,
@@ -4214,10 +4332,31 @@ describe('server message handlers', () => {
       createArgs = { projectPath, name, command }
       return createdSession
     }
+    // The deferred background refresh (refreshSessions()) lands after the
+    // async wake handler sends its result; have the refresh worker report the
+    // created session so the registry keeps it instead of being clobbered.
+    refreshWorkerSessions = [
+      {
+        ...createdSession,
+        agentSessionId: 'resume-ok',
+        agentSessionName: 'resume',
+        logFilePath: record.logFilePath,
+        isPinned: true,
+        lastActivity: record.lastActivityAt,
+        createdAt: record.createdAt,
+      },
+    ]
 
     websocket.message?.(
       ws as never,
       JSON.stringify({ type: 'session-wake', sessionId: 'resume-ok' })
+    )
+
+    await waitForSent(
+      sent,
+      (message) =>
+        message.type === 'session-wake-result' && message.sessionId === 'resume-ok',
+      `session-wake-result for ${'resume-ok'}`
     )
 
     expect(createArgs).not.toBeNull()
@@ -4324,6 +4463,13 @@ describe('server message handlers', () => {
       JSON.stringify({ type: 'session-wake', sessionId: rematchId })
     )
 
+    await waitForSent(
+      sent,
+      (message) =>
+        message.type === 'session-wake-result' && message.sessionId === rematchId,
+      `session-wake-result for ${rematchId}`
+    )
+
     expect(createCalled).toBe(false)
     expect(dbState.records.get(rematchId)).toMatchObject({
       currentWindow: liveSession.tmuxWindow,
@@ -4401,6 +4547,18 @@ describe('server message handlers', () => {
       JSON.stringify({ type: 'session-wake', sessionId })
     )
 
+    // The wake handler is async: wait for both results (the suppressed
+    // duplicate and the original's completion) before asserting.
+    const mutexDeadline = Date.now() + 2000
+    while (
+      sent.filter(
+        (message) =>
+          message.type === 'session-wake-result' && message.sessionId === sessionId
+      ).length < 2 &&
+      Date.now() < mutexDeadline
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 5))
+    }
     expect(createCalls).toBe(1)
     const wakeResults = sent.filter(
       (message) =>
@@ -4494,6 +4652,12 @@ describe('server message handlers', () => {
       ws as never,
       JSON.stringify({ type: 'session-wake', sessionId })
     )
+    await waitForSent(
+      sent,
+      (message) =>
+        message.type === 'session-wake-result' && message.sessionId === sessionId,
+      'session-wake-result for sessionId'
+    )
 
     // Newly-created window must be killed to avoid duplicate live windows.
     expect(killCalls).toEqual([newWindow])
@@ -4576,6 +4740,12 @@ describe('server message handlers', () => {
       ws as never,
       JSON.stringify({ type: 'session-wake', sessionId })
     )
+    await waitForSent(
+      sent,
+      (message) =>
+        message.type === 'session-wake-result' && message.sessionId === sessionId,
+      'session-wake-result for sessionId'
+    )
 
     expect(killCalls).toEqual([])
     expect(dbState.records.get(sessionId)).toMatchObject({
@@ -4639,10 +4809,26 @@ describe('server message handlers', () => {
     sessionManagerState.killWindow = (tmuxWindow: string) => {
       killCalls.push(tmuxWindow)
     }
+    // The deferred background refresh lands after the async handler's result;
+    // report the created session so the registry keeps it.
+    refreshWorkerSessions = [
+      {
+        ...newSession,
+        agentSessionId: sessionId,
+        agentSessionName: 'wake-same-window-race',
+        logFilePath: `/tmp/${sessionId}.jsonl`,
+      },
+    ]
 
     websocket.message?.(
       ws as never,
       JSON.stringify({ type: 'session-wake', sessionId })
+    )
+    await waitForSent(
+      sent,
+      (message) =>
+        message.type === 'session-wake-result' && message.sessionId === sessionId,
+      'session-wake-result for sessionId'
     )
 
     expect(killCalls).toEqual([])
@@ -4677,7 +4863,7 @@ describe('server message handlers', () => {
 
   test('wakes session with quoted launch_command by stripping tmux quotes', async () => {
     const { serveOptions } = await loadIndex()
-    const { ws } = createWs()
+    const { ws, sent } = createWs()
     const websocket = serveOptions.websocket
     if (!websocket) {
       throw new Error('WebSocket handlers not configured')
@@ -4711,6 +4897,13 @@ describe('server message handlers', () => {
       JSON.stringify({ type: 'session-wake', sessionId: 'resume-quoted' })
     )
 
+    await waitForSent(
+      sent,
+      (message) =>
+        message.type === 'session-wake-result' && message.sessionId === 'resume-quoted',
+      `session-wake-result for ${'resume-quoted'}`
+    )
+
     expect(createArgs).not.toBeNull()
     expect(createArgs!).toEqual({
       projectPath: '/tmp/quoted',
@@ -4724,7 +4917,7 @@ describe('server message handlers', () => {
     // Resuming must reconstruct the original launch flags without the apply
     // prompt, for both prompt forms — never re-running it on wake.
     const { serveOptions } = await loadIndex()
-    const { ws } = createWs()
+    const { ws, sent } = createWs()
     const websocket = serveOptions.websocket
     if (!websocket) {
       throw new Error('WebSocket handlers not configured')
@@ -4757,6 +4950,13 @@ describe('server message handlers', () => {
       ws as never,
       JSON.stringify({ type: 'session-wake', sessionId: 'resume-apply-prompt' })
     )
+
+    await waitForSent(
+      sent,
+      (message) =>
+        message.type === 'session-wake-result' && message.sessionId === 'resume-apply-prompt',
+      `session-wake-result for ${'resume-apply-prompt'}`
+    )
     expect(commands[0]).toBe(
       'claude --dangerously-skip-permissions --resume resume-apply-prompt'
     )
@@ -4775,12 +4975,19 @@ describe('server message handlers', () => {
       ws as never,
       JSON.stringify({ type: 'session-wake', sessionId: 'resume-apply-prompt-codex' })
     )
+
+    await waitForSent(
+      sent,
+      (message) =>
+        message.type === 'session-wake-result' && message.sessionId === 'resume-apply-prompt-codex',
+      `session-wake-result for ${'resume-apply-prompt-codex'}`
+    )
     expect(commands[1]).toBe('codex --yolo resume resume-apply-prompt-codex')
   })
 
   test('wake preserves unrelated quoted flag values while stripping the apply prompt', async () => {
     const { serveOptions } = await loadIndex()
-    const { ws } = createWs()
+    const { ws, sent } = createWs()
     const websocket = serveOptions.websocket
     if (!websocket) {
       throw new Error('WebSocket handlers not configured')
@@ -4814,6 +5021,13 @@ describe('server message handlers', () => {
       JSON.stringify({ type: 'session-wake', sessionId: 'resume-unrelated-quoted' })
     )
 
+    await waitForSent(
+      sent,
+      (message) =>
+        message.type === 'session-wake-result' && message.sessionId === 'resume-unrelated-quoted',
+      `session-wake-result for ${'resume-unrelated-quoted'}`
+    )
+
     expect(createArgs).not.toBeNull()
     // The apply prompt is gone; the quoted --append-system-prompt value rides
     // through exactly as stored.
@@ -4824,7 +5038,7 @@ describe('server message handlers', () => {
 
   test('wakes codex session with quoted launch_command preserving flags', async () => {
     const { serveOptions } = await loadIndex()
-    const { ws } = createWs()
+    const { ws, sent } = createWs()
     const websocket = serveOptions.websocket
     if (!websocket) {
       throw new Error('WebSocket handlers not configured')
@@ -4858,6 +5072,13 @@ describe('server message handlers', () => {
       JSON.stringify({ type: 'session-wake', sessionId: 'resume-codex' })
     )
 
+    await waitForSent(
+      sent,
+      (message) =>
+        message.type === 'session-wake-result' && message.sessionId === 'resume-codex',
+      `session-wake-result for ${'resume-codex'}`
+    )
+
     expect(createArgs).not.toBeNull()
     // Flags injected after exe, before resume subcommand
     expect(createArgs!.command).toBe('codex --yolo --search resume resume-codex')
@@ -4865,7 +5086,7 @@ describe('server message handlers', () => {
 
   test('wakes codex session stripping old resume subcommand from stored launch_command', async () => {
     const { serveOptions } = await loadIndex()
-    const { ws } = createWs()
+    const { ws, sent } = createWs()
     const websocket = serveOptions.websocket
     if (!websocket) {
       throw new Error('WebSocket handlers not configured')
@@ -4899,6 +5120,13 @@ describe('server message handlers', () => {
       JSON.stringify({ type: 'session-wake', sessionId: 'resume-codex-old' })
     )
 
+    await waitForSent(
+      sent,
+      (message) =>
+        message.type === 'session-wake-result' && message.sessionId === 'resume-codex-old',
+      `session-wake-result for ${'resume-codex-old'}`
+    )
+
     expect(createArgs).not.toBeNull()
     // Old 'resume old-session-id' stripped, only --search flag preserved
     expect(createArgs!.command).toBe('codex --search resume resume-codex-old')
@@ -4906,7 +5134,7 @@ describe('server message handlers', () => {
 
   test('wakes pi session from its log file path and preserves launch flags', async () => {
     const { serveOptions } = await loadIndex()
-    const { ws } = createWs()
+    const { ws, sent } = createWs()
     const websocket = serveOptions.websocket
     if (!websocket) {
       throw new Error('WebSocket handlers not configured')
@@ -4939,6 +5167,13 @@ describe('server message handlers', () => {
     websocket.message?.(
       ws as never,
       JSON.stringify({ type: 'session-wake', sessionId: 'resume-pi' })
+    )
+
+    await waitForSent(
+      sent,
+      (message) =>
+        message.type === 'session-wake-result' && message.sessionId === 'resume-pi',
+      `session-wake-result for ${'resume-pi'}`
     )
 
     expect(createArgs).not.toBeNull()
@@ -4982,6 +5217,13 @@ describe('server message handlers', () => {
     websocket.message?.(
       ws as never,
       JSON.stringify({ type: 'session-wake', sessionId: liveAgentSessionId })
+    )
+
+    await waitForSent(
+      sent,
+      (message) =>
+        message.type === 'session-wake-result' && message.sessionId === liveAgentSessionId,
+      `session-wake-result for ${liveAgentSessionId}`
     )
 
     expect(createCalled).toBe(false)
@@ -5046,6 +5288,13 @@ describe('server message handlers', () => {
       JSON.stringify({ type: 'session-wake', sessionId: hibernatingId })
     )
 
+    await waitForSent(
+      sent,
+      (message) =>
+        message.type === 'session-wake-result' && message.sessionId === hibernatingId,
+      `session-wake-result for ${hibernatingId}`
+    )
+
     expect(killCalls).toEqual([createdSession.tmuxWindow])
     expect(dbState.records.get(hibernatingId)).toMatchObject({
       currentWindow: null,
@@ -5088,6 +5337,13 @@ describe('server message handlers', () => {
     websocket.message?.(
       ws as never,
       JSON.stringify({ type: 'session-wake', sessionId: hibernatingId })
+    )
+
+    await waitForSent(
+      sent,
+      (message) =>
+        message.type === 'session-wake-result' && message.sessionId === hibernatingId,
+      `session-wake-result for ${hibernatingId}`
     )
 
     expect(sent[sent.length - 1]).toEqual({
@@ -5147,6 +5403,13 @@ describe('server message handlers', () => {
     websocket.message?.(
       ws as never,
       JSON.stringify({ type: 'session-wake', sessionId: hibernatingId })
+    )
+
+    await waitForSent(
+      sent,
+      (message) =>
+        message.type === 'session-wake-result' && message.sessionId === hibernatingId,
+      `session-wake-result for ${hibernatingId}`
     )
 
     expect(sent[sent.length - 1]).toEqual({

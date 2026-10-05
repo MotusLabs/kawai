@@ -7,6 +7,8 @@ export interface MatchWorkerSearchOptions {
   tailBytes?: number
   rgThreads?: number
   profile?: boolean
+  /** Pause between consecutive window captures; paces match bursts (D4). */
+  interWindowYieldMs?: number
 }
 
 export interface OrphanCandidate {

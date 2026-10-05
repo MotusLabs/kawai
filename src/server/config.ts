@@ -137,6 +137,20 @@ const remoteAllowAttach = remoteAllowAttachRaw !== undefined
   ? remoteAllowAttachRaw === 'true'
   : remoteAllowControl
 
+// Per-message WebSocket compression. Opt-in only (literal `true`): terminal
+// output is escape-sequence-heavy, coalesced frames are fewer and larger, and
+// per-frame deflate/inflate CPU sits directly on the keystroke-echo path on
+// LAN/Tailscale links where bandwidth is not binding.
+const wsPerMessageDeflate = process.env.AGENTBOARD_WS_DEFLATE === 'true'
+
+// Pause between consecutive tmux scrollback captures during a log-match pass
+// (design D4). Match bursts otherwise monopolize the single-threaded tmux
+// server and stall interactive terminal traffic. Clamped to 0–250 ms.
+const logMatchYieldMsRaw = Number(process.env.AGENTBOARD_LOG_MATCH_YIELD_MS)
+const logMatchYieldMs = Number.isFinite(logMatchYieldMsRaw)
+  ? Math.min(250, Math.max(0, Math.floor(logMatchYieldMsRaw)))
+  : 25
+
 const tmuxTimeoutMsRaw = Number(process.env.AGENTBOARD_TMUX_TIMEOUT_MS)
 const tmuxTimeoutMs = Number.isFinite(tmuxTimeoutMsRaw) && tmuxTimeoutMsRaw > 0
   ? Math.floor(tmuxTimeoutMsRaw)
@@ -240,4 +254,6 @@ export const config = {
   tmuxTimeoutMs,
   tmuxMutationTimeoutMs,
   pasteImageMaxBytes,
+  wsPerMessageDeflate,
+  logMatchYieldMs,
 }

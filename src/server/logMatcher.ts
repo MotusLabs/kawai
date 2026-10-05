@@ -140,6 +140,10 @@ const MIN_TAIL_MATCH_COUNT = 2
 const MAX_RECENT_USER_MESSAGES = 25
 const MAX_RECENT_TRACE_LINES = 12
 
+/** Default injectable wait for paced async matching. */
+const sleepMs = (ms: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, ms))
+
 // Minimum length for exact match search
 const MIN_EXACT_MATCH_LENGTH = 5
 const TRACE_EXCLUDE_PREFIXES = [
@@ -321,6 +325,14 @@ export interface ExactMatchSearchOptions {
   excludeLogPaths?: string[]
   /** When true, only match events with role === 'user' in the normalized path */
   userOnly?: boolean
+  /**
+   * Pause in ms between consecutive window scrollback captures in the async
+   * matcher (design D4). Paces match bursts so they interleave with
+   * interactive terminal traffic instead of monopolizing the tmux server.
+   */
+  interWindowYieldMs?: number
+  /** Injectable wait for tests; defaults to a setTimeout-based sleep. */
+  wait?: (ms: number) => Promise<void>
 }
 
 export interface ExactMessageSearchOptions extends ExactMatchSearchOptions {
@@ -2350,54 +2362,56 @@ export async function matchWindowsToLogsByExactRgAsync(
   const noMessageWindows = new Set<string>()
   const profile = search.profile
 
-  const windowResults = await Promise.all(
-    windows.map(async (window) => {
-      const start = performance.now()
-      const result = await tryExactMatchWindowToLogAsync(
-        window.tmuxWindow,
-        logDirs,
-        scrollbackLines,
-        { agentType: window.agentType, projectPath: window.projectPath },
-        search,
-        noMessageWindows
-      )
-      return {
-        window,
-        result,
-        elapsedMs: performance.now() - start,
-      }
-    })
-  )
+  // Sequential captures with a paced yield between windows (design D4): the
+  // previous Promise.all fan-out issued every scrollback capture at once,
+  // monopolizing the single-threaded tmux server for the whole burst.
+  // Aggregation below iterates in window order, so results are
+  // order-equivalent with the sync variant.
+  const wait = search.wait ?? sleepMs
+  const yieldMs = search.interWindowYieldMs ?? 0
 
-  for (const entry of windowResults) {
+  for (let index = 0; index < windows.length; index += 1) {
+    if (index > 0 && yieldMs > 0) {
+      await wait(yieldMs)
+    }
+    const window = windows[index]
+    const start = performance.now()
+    const result = await tryExactMatchWindowToLogAsync(
+      window.tmuxWindow,
+      logDirs,
+      scrollbackLines,
+      { agentType: window.agentType, projectPath: window.projectPath },
+      search,
+      noMessageWindows
+    )
     if (profile) {
       profile.windowMatchRuns += 1
-      profile.windowMatchMs += entry.elapsedMs
+      profile.windowMatchMs += performance.now() - start
     }
-    if (!entry.result) continue
+    if (!result) continue
 
     const score = {
-      matchedCount: entry.result.matchedCount,
-      matchedLength: entry.result.matchedLength,
+      matchedCount: result.matchedCount,
+      matchedLength: result.matchedLength,
     }
-    const existing = matches.get(entry.result.logPath)
+    const existing = matches.get(result.logPath)
 
-    if (blocked.has(entry.result.logPath)) {
+    if (blocked.has(result.logPath)) {
       continue
     }
     if (!existing) {
-      matches.set(entry.result.logPath, { window: entry.window, score })
+      matches.set(result.logPath, { window, score })
       continue
     }
 
     const comparison = compareOrderedScores(score, existing.score)
     if (comparison === 0) {
-      matches.delete(entry.result.logPath)
-      blocked.add(entry.result.logPath)
+      matches.delete(result.logPath)
+      blocked.add(result.logPath)
       continue
     }
     if (comparison < 0) {
-      matches.set(entry.result.logPath, { window: entry.window, score })
+      matches.set(result.logPath, { window, score })
     }
   }
 

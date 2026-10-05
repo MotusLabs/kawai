@@ -1,6 +1,7 @@
-import { afterEach, describe, expect, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, test, mock } from 'bun:test'
 import TestRenderer, { act } from 'react-test-renderer'
 import NumPad from '../components/NumPad'
+import { useStableValue, stringArraysEqual } from '../hooks/useStableValue'
 
 const globalAny = globalThis as typeof globalThis & {
   navigator?: Navigator
@@ -10,11 +11,31 @@ const globalAny = globalThis as typeof globalThis & {
 const originalNavigator = globalAny.navigator
 const originalFetch = globalAny.fetch
 
+// isIOSDevice runs on every TerminalControls render, so a counting wrapper
+// around it is the oracle for whether the deck re-rendered. Copy the module
+// to a plain object before registering the mock: property access on the
+// pre-mock namespace after mock.module deadlocks Bun's module loader.
+const actualDevice = { ...(await import('../utils/device')) }
+const actualIsIOSDevice = actualDevice.isIOSDevice
+
+let deckRenders = 0
+mock.module('../utils/device', () => ({
+  ...actualDevice,
+  isIOSDevice: () => {
+    deckRenders += 1
+    return actualIsIOSDevice()
+  },
+}))
+
 const { default: TerminalControls } = await import('../components/TerminalControls')
 
 afterEach(() => {
   globalAny.navigator = originalNavigator
   globalAny.fetch = originalFetch
+})
+
+beforeEach(() => {
+  deckRenders = 0
 })
 
 function clipboardWithImage() {
@@ -534,4 +555,112 @@ test('selected files survive resetting the native picker and wait with the draft
   await act(async () => { renderer.root.findByType('form').props.onSubmit({ preventDefault() {} }) })
   expect(sent).toEqual(["Read this\nplease\n'/tmp/notes.txt' "])
   renderer.unmount()
+})
+
+// Memoized deck (design D6): with every prop identity stable — including the
+// sessions strip array that Terminal value-stabilizes — re-rendering the
+// parent must not re-render the deck; changed strip data must.
+describe('TerminalControls memoization', () => {
+  test('stable inputs skip re-render; strip-data changes re-render', () => {
+    const sent: string[] = []
+    const selectedSessions: string[] = []
+    const onSendKey = (key: string) => {
+      sent.push(key)
+    }
+    const onSelectSession = (sessionId: string) => {
+      selectedSessions.push(sessionId)
+    }
+    const sessions = [
+      { id: 'session-1', name: 'alpha', status: 'working' as const },
+      { id: 'session-2', name: 'beta', status: 'waiting' as const },
+    ]
+    const props = {
+      onSendKey,
+      onSelectSession,
+      currentSessionId: 'session-1',
+    }
+
+    const renderer = TestRenderer.create(
+      <TerminalControls {...props} sessions={sessions} />
+    )
+    const afterMount = deckRenders
+    expect(afterMount).toBeGreaterThan(0)
+
+    // The same reference — what Terminal hands over once useStableValue has
+    // kept it across an activity-only broadcast — lets the memo bail out.
+    act(() => {
+      renderer.update(<TerminalControls {...props} sessions={sessions} />)
+    })
+    expect(deckRenders).toBe(afterMount)
+
+    // A fresh array of equal strip data re-renders (shallow memo compares by
+    // reference), which is exactly why Terminal stabilizes the array by
+    // value before passing it.
+    act(() => {
+      renderer.update(
+        <TerminalControls
+          {...props}
+          sessions={[
+            { id: 'session-1', name: 'alpha', status: 'working' },
+            { id: 'session-2', name: 'beta', status: 'waiting' },
+          ]}
+        />
+      )
+    })
+    expect(deckRenders).toBe(afterMount + 1)
+
+    // A real change (status flip) re-renders and reaches the DOM.
+    act(() => {
+      renderer.update(
+        <TerminalControls
+          {...props}
+          sessions={[
+            { id: 'session-1', name: 'alpha', status: 'permission' },
+            { id: 'session-2', name: 'beta', status: 'waiting' },
+          ]}
+        />
+      )
+    })
+    expect(deckRenders).toBeGreaterThan(afterMount)
+    expect(JSON.stringify(renderer.toJSON())).toContain('bg-approval')
+
+    // The stable key handler still delivers presses after the updates.
+    act(() => {
+      renderer.root
+        .findAllByProps({ 'aria-label': 'Enter' })
+        .at(-1)!
+        .props.onClick()
+    })
+    expect(sent).toEqual(['\r'])
+    expect(selectedSessions).toEqual([])
+
+    renderer.unmount()
+  })
+
+  test('useStableValue retains the reference while strip data matches', () => {
+    // The hook Terminal uses to keep the sessions prop identical across
+    // activity-only broadcasts: new array with identical values keeps the
+    // previous reference; a real change adopts the new one.
+    function Probe({ value }: { value: string[] }) {
+      const stable = useStableValue(value, stringArraysEqual)
+      return <div data-identity={stable === value ? 'new' : 'kept'} />
+    }
+
+    const renderer = TestRenderer.create(<Probe value={['a']} />)
+    const identity = () => renderer.root.findByType('div').props['data-identity']
+    expect(identity()).toBe('new')
+
+    act(() => {
+      renderer.update(<Probe value={['a']} />)
+    })
+    // Same values: the hook returned the stored reference, not the new one.
+    expect(identity()).toBe('kept')
+
+    act(() => {
+      renderer.update(<Probe value={['b']} />)
+    })
+    expect(identity()).toBe('new')
+
+    renderer.unmount()
+  })
 })

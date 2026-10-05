@@ -473,4 +473,167 @@ describe('SessionRegistry', () => {
       expect(activeEvents).toHaveLength(1)
     }
   })
+
+  describe('quantized broadcast change detection (D5)', () => {
+    const t0 = new Date('2024-06-01T00:00:10.000Z').toISOString()
+    const inBucket = new Date('2024-06-01T00:00:25.000Z').toISOString()
+    const nextBucket = new Date('2024-06-01T00:00:45.000Z').toISOString()
+
+    function trackSessions(registry: SessionRegistry) {
+      const events: Session[][] = []
+      registry.on('sessions', (sessions) => events.push(sessions))
+      return events
+    }
+
+    test('sub-quantum activity churn produces no broadcast', () => {
+      const registry = new SessionRegistry()
+      const events = trackSessions(registry)
+
+      registry.replaceSessions([makeSession({ lastActivity: t0 })])
+      expect(events).toHaveLength(1)
+
+      registry.replaceSessions([makeSession({ lastActivity: inBucket })])
+      expect(events).toHaveLength(1) // same 30s bucket, nothing else changed
+    })
+
+    test('activity crossing into a new bucket broadcasts', () => {
+      const registry = new SessionRegistry()
+      const events = trackSessions(registry)
+
+      registry.replaceSessions([makeSession({ lastActivity: t0 })])
+      events.length = 0
+
+      registry.replaceSessions([makeSession({ lastActivity: nextBucket })])
+      expect(events).toHaveLength(1)
+      expect(events[0][0].lastActivity).toBe(nextBucket)
+    })
+
+    test('status, name, and membership changes still broadcast', () => {
+      const registry = new SessionRegistry()
+      const events = trackSessions(registry)
+
+      registry.replaceSessions([makeSession({ lastActivity: t0 })])
+      events.length = 0
+
+      registry.replaceSessions([
+        makeSession({ lastActivity: inBucket, status: 'working' }),
+      ])
+      expect(events).toHaveLength(1)
+
+      registry.replaceSessions([
+        makeSession({ lastActivity: inBucket, name: 'renamed' }),
+      ])
+      expect(events).toHaveLength(2)
+
+      registry.replaceSessions([
+        makeSession({ id: 'added', lastActivity: inBucket }),
+        makeSession({ lastActivity: inBucket, name: 'renamed' }),
+      ])
+      expect(events).toHaveLength(3)
+
+      registry.replaceSessions([
+        makeSession({ lastActivity: inBucket, name: 'renamed' }),
+      ])
+      expect(events).toHaveLength(4) // membership removal broadcasts
+    })
+
+    test('stored activity never regresses and keeps precision without an emit', () => {
+      const registry = new SessionRegistry()
+      const events = trackSessions(registry)
+
+      registry.replaceSessions([makeSession({ lastActivity: inBucket })])
+      events.length = 0
+
+      // An older incoming activity must not regress the stored value, and the
+      // suppressed replacement must still retain the precise latest value.
+      const older = new Date('2024-06-01T00:00:12.000Z').toISOString()
+      registry.replaceSessions([makeSession({ lastActivity: older })])
+      expect(events).toHaveLength(0)
+      expect(registry.get('session-1')?.lastActivity).toBe(inBucket)
+
+      // ...and that precise value ships in the next emitted payload when a
+      // bucket crossing (or any other change) triggers a broadcast.
+      registry.replaceSessions([makeSession({ lastActivity: nextBucket })])
+      expect(events).toHaveLength(1)
+      expect(events[0][0].lastActivity).toBe(nextBucket)
+
+      // Sub-quantum advance under suppression: precise value stored, no emit.
+      const later = new Date('2024-06-01T00:00:52.000Z').toISOString()
+      registry.replaceSessions([makeSession({ lastActivity: later })])
+      expect(events).toHaveLength(1)
+      expect(registry.get('session-1')?.lastActivity).toBe(later)
+    })
+
+    test('equal-status sessions in one bucket retain precise recency when broadcast', () => {
+      const registry = new SessionRegistry()
+      const events = trackSessions(registry)
+
+      const a = makeSession({ id: 'a', lastActivity: t0 })
+      const b = makeSession({ id: 'b', lastActivity: inBucket })
+      registry.replaceSessions([a, b])
+      events.length = 0
+
+      // Status change on a triggers a broadcast; both payloads carry precise
+      // timestamps, preserving the client's precise activity sort order.
+      registry.replaceSessions([
+        { ...a, status: 'working' },
+        b,
+      ])
+      expect(events).toHaveLength(1)
+      const emitted = events[0].sort(
+        (x, y) => Date.parse(y.lastActivity) - Date.parse(x.lastActivity)
+      )
+      expect(emitted.map((s) => s.id)).toEqual(['b', 'a'])
+    })
+
+    test('invalid timestamps keep raw comparison behavior', () => {
+      const registry = new SessionRegistry()
+      const events = trackSessions(registry)
+
+      registry.replaceSessions([makeSession({ lastActivity: 'garbage' })])
+      events.length = 0
+
+      // Different invalid string is a change (raw comparison, as before).
+      registry.replaceSessions([makeSession({ lastActivity: 'garbage~2' })])
+      expect(events).toHaveLength(1)
+
+      // Same invalid string is not.
+      events.length = 0
+      registry.replaceSessions([makeSession({ lastActivity: 'garbage~2' })])
+      expect(events).toHaveLength(0)
+    })
+
+    test('createdAt is untouched by activity quantization', () => {
+      const registry = new SessionRegistry()
+      const events = trackSessions(registry)
+
+      const created = new Date('2024-05-01T00:00:00.000Z').toISOString()
+      registry.replaceSessions([makeSession({ createdAt: created, lastActivity: t0 })])
+      events.length = 0
+
+      registry.replaceSessions([makeSession({ lastActivity: inBucket })])
+      expect(events).toHaveLength(0)
+      expect(registry.get('session-1')?.createdAt).toBe(created)
+    })
+
+    test('Enter-path updateSession still emits immediately', () => {
+      const registry = new SessionRegistry()
+      registry.replaceSessions([makeSession({ lastActivity: t0 })])
+
+      const updates: Session[] = []
+      registry.on('session-update', (session) => updates.push(session))
+
+      const enterActivity = new Date('2024-06-01T00:00:15.000Z').toISOString()
+      registry.updateSession('session-1', {
+        status: 'working',
+        lastActivity: enterActivity,
+      })
+
+      expect(updates).toHaveLength(1)
+      expect(updates[0]).toMatchObject({
+        status: 'working',
+        lastActivity: enterActivity,
+      })
+    })
+  })
 })

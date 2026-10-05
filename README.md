@@ -217,6 +217,8 @@ AGENTBOARD_REMOTE_ALLOW_ATTACH=false
 AGENTBOARD_REMOTE_ALLOW_CONTROL=false
 AGENTBOARD_LOG_WATCH_MODE=watch
 AGENTBOARD_PASTE_IMAGE_MAX_BYTES=41943040
+AGENTBOARD_WS_DEFLATE=false
+AGENTBOARD_LOG_MATCH_YIELD_MS=25
 ```
 
 `HOSTNAME` controls which interfaces the server binds to (default `127.0.0.1` for localhost-only). With the default localhost binding, if Tailscale is detected the server also binds to your Tailscale IP automatically. Set to `0.0.0.0` to listen on all interfaces. A `HOSTNAME` that merely equals the machine hostname is treated as auto-exported by the environment (containers and some CI images do this) and ignored with a warning, keeping the localhost default.
@@ -228,6 +230,10 @@ AGENTBOARD_PASTE_IMAGE_MAX_BYTES=41943040
 `DISCOVER_PREFIXES` lets you discover and control windows from other tmux sessions. If unset, all sessions except the managed one are discovered.
 
 `PRUNE_WS_SESSIONS` removes orphaned `agentboard-ws-*` tmux sessions on startup (set to `false` to disable).
+
+`AGENTBOARD_WS_DEFLATE` enables per-message WebSocket compression (default off). Terminal output is escape-sequence-heavy and frames are coalesced per connection, so per-frame deflate CPU costs more on the keystroke-echo path than it saves on a LAN/Tailscale link. Set to `true` on slow links where bandwidth matters more than latency.
+
+`AGENTBOARD_LOG_MATCH_YIELD_MS` paces log matching: the pause in milliseconds inserted between consecutive tmux scrollback captures during a match pass (default 25, clamped to 0–250). Lower values finish matching faster but contend more with interactive terminal traffic.
 
 `AGENTBOARD_PREFER_WINDOW_NAME` (default `false`) controls how externally-discovered sessions are labeled. When `false`, the tmux session name is used (more meaningful than auto-renamed window names that follow the running process under tmux `automatic-rename on`). Set to `true` to use the tmux window name when it is non-empty and distinct from the session name — useful when you keep one shared session (e.g. `dev`) with one explicitly-named window per project (`myapp`, `infra`, ...).
 

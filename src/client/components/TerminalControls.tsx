@@ -6,7 +6,7 @@
  * Top row shows session switcher buttons to quickly jump between sessions
  */
 
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, memo } from 'react'
 import type { TouchEvent as ReactTouchEvent } from 'react'
 import type { AgentType, Session } from '@shared/types'
 import { CornerDownLeftIcon } from '@untitledui-icons/react/line'
@@ -17,7 +17,7 @@ import PasteStatus from './PasteStatus'
 import { useBrowserPaste } from '../hooks/useBrowserPaste'
 import { useKeyboardShift } from '../hooks/useKeyboardShift'
 
-interface SessionInfo {
+export interface TerminalSessionInfo {
   id: string
   name: string
   status: Session['status']
@@ -33,7 +33,7 @@ interface TerminalControlsProps {
   onPasteText?: (text: string) => void
   onPasteImage?: (text: string) => void
   disabled?: boolean
-  sessions: SessionInfo[]
+  sessions: TerminalSessionInfo[]
   currentSessionId: string | null
   /** Agent type of the attached session — controls image-paste delivery. */
   agentType?: AgentType
@@ -129,7 +129,10 @@ const statusDot: Record<Session['status'], string> = {
   unknown: 'bg-muted',
 }
 
-export default function TerminalControls({
+// Memoized (design D6): every prop is a primitive or a stable callback from
+// Terminal, and the sessions strip array is value-stabilized by the caller,
+// so terminal-output re-renders no longer re-render the control deck.
+function TerminalControls({
   onSendKey,
   onPasteText,
   onPasteImage,
@@ -428,3 +431,5 @@ export default function TerminalControls({
     </div>
   )
 }
+
+export default memo(TerminalControls)

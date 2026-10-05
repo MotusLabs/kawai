@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } fr
 import TestRenderer, { act } from 'react-test-renderer'
 import type { AgentSession, Session } from '@shared/types'
 import SessionList from '../components/SessionList'
+import { SESSION_FIELD_EQUALS, sessionsEqualForRender } from '../components/SessionRow'
 import { useSettingsStore } from '../stores/settingsStore'
 import { useSessionStore } from '../stores/sessionStore'
 
@@ -422,4 +423,105 @@ describe('SessionList component', () => {
 
     expect(cleared).toEqual([42])
   })
+})
+
+describe('session comparator (design D6)', () => {
+  // baseSession.lastActivity sits at a 30s bucket boundary (00:00:00), so
+  // +15s stays in-bucket and +45s crosses into the next bucket.
+  const sameBucket = '2024-01-01T00:00:15.000Z'
+  const nextBucket = '2024-01-01T00:00:45.000Z'
+
+  test('session comparator is exhaustive over the Session type', () => {
+    const fullSession: Session = {
+      ...baseSession,
+      agentType: 'claude',
+      host: 'host-a',
+      remote: false,
+      command: 'claude',
+      agentSessionId: 'agent-1',
+      agentSessionName: 'agent-name',
+      logFilePath: '/tmp/agent-1.jsonl',
+      lastUserMessage: 'hello',
+      isPinned: false,
+      kind: 'terminal',
+    }
+    // Compile-time exhaustiveness comes from the mapped type (a new Session
+    // field without a comparator entry fails typecheck); this runtime check
+    // keeps the table honest against the actual Session shape.
+    expect(Object.keys(SESSION_FIELD_EQUALS).sort()).toEqual(
+      Object.keys(fullSession).sort()
+    )
+
+    const changedValues: Record<string, unknown> = {
+      id: 'session-2',
+      name: 'beta',
+      tmuxWindow: 'agentboard:2',
+      projectPath: '/tmp/beta',
+      status: 'waiting',
+      lastActivity: nextBucket,
+      createdAt: '2024-01-02T00:00:00.000Z',
+      agentType: 'codex',
+      source: 'external',
+      host: 'host-b',
+      remote: true,
+      command: 'codex',
+      agentSessionId: 'agent-2',
+      agentSessionName: 'other-name',
+      logFilePath: '/tmp/agent-2.jsonl',
+      lastUserMessage: 'changed',
+      isPinned: true,
+    }
+    for (const field of Object.keys(fullSession)) {
+      const changed = { ...fullSession } as Record<string, unknown>
+      changed[field] = changedValues[field]
+      expect(sessionsEqualForRender(fullSession, changed as unknown as Session)).toBe(false)
+    }
+
+    // Identical copy compares equal; activity quantizes by 30s bucket.
+    expect(sessionsEqualForRender(fullSession, { ...fullSession })).toBe(true)
+    expect(
+      sessionsEqualForRender(fullSession, { ...fullSession, lastActivity: sameBucket })
+    ).toBe(true)
+    expect(
+      sessionsEqualForRender(fullSession, { ...fullSession, lastActivity: nextBucket })
+    ).toBe(false)
+    // Invalid timestamps keep raw comparison behavior.
+    expect(sessionsEqualForRender({ ...fullSession, lastActivity: 'x' }, { ...fullSession, lastActivity: 'x' })).toBe(true)
+    expect(sessionsEqualForRender({ ...fullSession, lastActivity: 'x' }, { ...fullSession, lastActivity: 'y' })).toBe(false)
+  })
+
+  test('SessionList re-renders keep row props stable across same-bucket churn', () => {
+    const selected: string[] = []
+    const listProps = {
+      selectedSessionId: null,
+      loading: false,
+      error: null,
+      onSelect: (sessionId: string) => selected.push(sessionId),
+      onRename: () => {},
+    }
+
+    const renderer = TestRenderer.create(
+      <SessionList sessions={[baseSession]} {...listProps} />
+    )
+    // The click handler SessionRow receives is the row's useCallback binding;
+    // its identity surviving a same-bucket broadcast (new sessions array and
+    // objects, equal rendered content) is what lets the memoized row bail.
+    const card = () => renderer.root.findByProps({ 'data-testid': 'session-card' })
+    const onClickBefore = card().props.onClick
+
+    act(() => {
+      renderer.update(
+        <SessionList sessions={[{ ...baseSession, lastActivity: sameBucket }]} {...listProps} />
+      )
+    })
+    expect(card().props.onClick).toBe(onClickBefore)
+
+    // The stable binding still selects the right session.
+    act(() => {
+      card().props.onClick()
+    })
+    expect(selected).toEqual(['session-1'])
+    act(() => renderer.unmount())
+  })
+
 })

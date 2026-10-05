@@ -31,6 +31,38 @@ export function clearSnapshotCache(): void {
   snapshotCache.clear()
 }
 
+// Rate-limited terminal_output_dropped diagnostics (design D8): at most one
+// clientLog post per 5 s. Events suppressed inside the window fold into the
+// next emitted report's count; the first report carries zero and no trailing
+// report closes a burst. The clock is performance.now (monotonic) and can be
+// injected for tests.
+const DROPPED_OUTPUT_LOG_INTERVAL_MS = 5000
+let droppedOutputClock: () => number = () => performance.now()
+let lastDroppedOutputLogAt = Number.NEGATIVE_INFINITY
+let suppressedDroppedOutputReports = 0
+
+function logTerminalOutputDropped(fields: Record<string, unknown>): void {
+  const now = droppedOutputClock()
+  if (now - lastDroppedOutputLogAt < DROPPED_OUTPUT_LOG_INTERVAL_MS) {
+    suppressedDroppedOutputReports += 1
+    return
+  }
+  lastDroppedOutputLogAt = now
+  clientLog(
+    'terminal_output_dropped',
+    { ...fields, suppressed: suppressedDroppedOutputReports },
+    'info'
+  )
+  suppressedDroppedOutputReports = 0
+}
+
+/** Test-only: reset the dropped-output limiter, optionally injecting its clock. */
+export function resetDroppedOutputRateLimiterForTests(now?: () => number): void {
+  droppedOutputClock = now ?? (() => performance.now())
+  lastDroppedOutputLogAt = Number.NEGATIVE_INFINITY
+  suppressedDroppedOutputReports = 0
+}
+
 // URL regex that matches standard URLs and IP:port patterns
 const URL_REGEX = /https?:\/\/[^\s"'<>]+|\b(?:localhost|\d{1,3}(?:\.\d{1,3}){3}):\d{1,5}(?:\/[^\s"'<>]*)?\b/
 const TRAILING_PUNCTUATION_REGEX = /[.,;:!?]+$/
@@ -401,13 +433,40 @@ export function useTerminal({
   const idleTimerRef = useRef<number | null>(null)
   const maxTimerRef = useRef<number | null>(null)
 
+  // Write backpressure (design D7): hold buffered output while earlier
+  // terminal.write() calls are still being processed, so a slow terminal
+  // throttles the stream instead of growing xterm's write queue unboundedly.
+  // The generation token invalidates acks across lifecycle boundaries
+  // (session switch, detach/disconnect, cleanup, terminal-ready forced write).
+  // Controls must drain held output before writing directly to xterm.
+  const flushOutputBeforeControlRef = useRef<(() => void) | null>(null)
+  const pendingWritesRef = useRef(0)
+  const deferredFlushRef = useRef(false)
+  const forceFlushTimerRef = useRef<number | null>(null)
+  const writeGenerationRef = useRef(0)
+
   // Deferred reset: defer terminal.reset() until history arrives to avoid blank flash
   const needsResetRef = useRef(false)
   const [isSwitching, setIsSwitching] = useState(false)
 
-  // Tuning: flush when idle for 2ms, or at most every 16ms
+  // Tuning: flush when idle for 2ms, or at most every 16ms; data held back by
+  // backpressure forces through 50ms after the first deferred flush at the latest
   const IDLE_FLUSH_MS = 2
   const MAX_FLUSH_MS = 16
+  const FORCE_FLUSH_MS = 50
+
+  // Invalidate pending-write accounting at a lifecycle boundary: advances the
+  // generation so acks from superseded writes become no-ops, and clears the
+  // count, deferred flag and force cap.
+  const invalidateWriteBackpressure = useCallback(() => {
+    writeGenerationRef.current += 1
+    pendingWritesRef.current = 0
+    deferredFlushRef.current = false
+    if (forceFlushTimerRef.current !== null) {
+      window.clearTimeout(forceFlushTimerRef.current)
+      forceFlushTimerRef.current = null
+    }
+  }, [])
 
   // iOS compositor repaint state — shared by visibility and subscriber effects.
   // Unified so only one repaint can be in-flight at a time.
@@ -504,6 +563,9 @@ export function useTerminal({
     const terminal = terminalRef.current
     if (terminal && nextValue) {
       // Disable all mouse tracking modes (1000=X10, 1002=button-event, 1003=any-event, 1006=SGR)
+      // Preserve order with older output held by backpressure; otherwise a
+      // buffered enable sequence could undo this disable after entering copy-mode.
+      flushOutputBeforeControlRef.current?.()
       terminal.write(DISABLE_MOUSE_TRACKING)
     }
 
@@ -1286,6 +1348,7 @@ export function useTerminal({
       }
       terminal.reset()
       needsResetRef.current = false
+      invalidateWriteBackpressure()
       setIsSwitching(false)
       return
     }
@@ -1309,6 +1372,7 @@ export function useTerminal({
       // Server state may have changed — all snapshots are potentially stale
       clearSnapshotCache()
       needsResetRef.current = false
+      invalidateWriteBackpressure()
       setIsSwitching(false)
       return
     }
@@ -1367,6 +1431,9 @@ export function useTerminal({
         window.clearTimeout(maxTimerRef.current)
         maxTimerRef.current = null
       }
+      // Supersede pending writes from the previous session: their acks must
+      // not touch the new attachment's accounting (design D7).
+      invalidateWriteBackpressure()
       needsResetRef.current = true
       setIsSwitching(true)
       if (prevAttached !== null) {
@@ -1377,6 +1444,10 @@ export function useTerminal({
       const cached = snapshotCache.get(sessionId)
       if (cached) {
         terminal.reset()
+        // Isolated lifecycle boundary (design D7 audit): the snapshot restore
+        // runs right after backpressure invalidation above, unaccounted —
+        // pre-switch acks are already stale and the streaming path starts
+        // clean at count zero when live history flushes.
         terminal.write(cached)
         // needsResetRef stays true — live history will replace the snapshot
       }
@@ -1472,6 +1543,8 @@ export function useTerminal({
       attachedConnectionEpochRef.current = -1
       focusAfterAttachSessionRef.current = null
       updateReadySession(null)
+      // Detach boundary: old acks must not touch later accounting (design D7)
+      invalidateWriteBackpressure()
     }
 
     // Cancel pending debounced attach on effect re-run or unmount
@@ -1485,7 +1558,7 @@ export function useTerminal({
         attachDebounceRef.current = null
       }
     }
-  }, [sessionId, tmuxTarget, allowAttach, connectionStatus, connectionEpoch, checkScrollPosition, setTmuxCopyMode, updateReadySession])
+  }, [sessionId, tmuxTarget, allowAttach, connectionStatus, connectionEpoch, checkScrollPosition, setTmuxCopyMode, invalidateWriteBackpressure, updateReadySession])
 
   useEffect(() => {
     if (copyModePollIntervalRef.current !== null) {
@@ -1511,7 +1584,7 @@ export function useTerminal({
   // Subscribe to terminal output with idle-based buffering
   // Batches chunks until the stream goes idle to avoid splitting escape sequences
   useEffect(() => {
-    const flush = () => {
+    const flush = (options?: { force?: boolean }) => {
       if (idleTimerRef.current !== null) {
         window.clearTimeout(idleTimerRef.current)
         idleTimerRef.current = null
@@ -1525,7 +1598,25 @@ export function useTerminal({
       const chunks = outputBufferRef.current
       if (!terminal || chunks.length === 0) return
 
+      // Backpressure (design D7): hold the data while earlier writes are still
+      // pending, so a slow terminal throttles this stream. Forced flushes (the
+      // 50ms cap below and the terminal-ready atomic reset+history write)
+      // bypass the hold so output can never stall indefinitely.
+      if (!options?.force && pendingWritesRef.current > 0) {
+        deferredFlushRef.current = true
+        // Single non-restarting cap from the first deferred flush: later
+        // chunks extend the held data but must not push the deadline out.
+        if (forceFlushTimerRef.current === null) {
+          forceFlushTimerRef.current = window.setTimeout(() => {
+            forceFlushTimerRef.current = null
+            flush({ force: true })
+          }, FORCE_FLUSH_MS)
+        }
+        return
+      }
+
       outputBufferRef.current = []
+      deferredFlushRef.current = false
       const data = chunks.join('')
 
       // Atomically swap: reset + write in same JS task = one rAF frame, no blank
@@ -1536,8 +1627,23 @@ export function useTerminal({
 
       const writeStart = performance.now()
       const dataLen = data.length
+      const writeTerminal = terminal
+      const writeGeneration = writeGenerationRef.current
+      pendingWritesRef.current += 1
 
-      terminal.write(data, () => {
+      writeTerminal.write(data, () => {
+        // Stale ack: the terminal instance was replaced, or a session switch,
+        // cleanup or terminal-ready forced write advanced the generation. A
+        // boolean guard would let write A's ack consume write B issued after
+        // a forced flush — the identity+generation pair closes that hole.
+        if (
+          terminalRef.current !== writeTerminal ||
+          writeGenerationRef.current !== writeGeneration
+        ) {
+          return
+        }
+        pendingWritesRef.current -= 1
+
         const writeMs = Math.round(performance.now() - writeStart)
         // Log slow writes (>50ms) to catch render bottlenecks
         if (writeMs > 50) {
@@ -1555,8 +1661,25 @@ export function useTerminal({
           })
         }
         checkScrollPosition()
+
+        // All issued writes have drained: disarm the cap (it exists only
+        // while data is held) and, if data was deferred behind them, flush
+        // it now (byte order preserved — it was buffered after them).
+        if (pendingWritesRef.current === 0) {
+          if (forceFlushTimerRef.current !== null) {
+            window.clearTimeout(forceFlushTimerRef.current)
+            forceFlushTimerRef.current = null
+          }
+          if (deferredFlushRef.current) {
+            deferredFlushRef.current = false
+            flush()
+          }
+        }
       })
     }
+
+    const flushBeforeControl = () => flush({ force: true })
+    flushOutputBeforeControlRef.current = flushBeforeControl
 
     const scheduleFlush = () => {
       // Reset idle timer on each new chunk
@@ -1574,17 +1697,18 @@ export function useTerminal({
     const unsubscribe = subscribe((message) => {
       const attachedSession = attachedSessionRef.current
 
-      // Log dropped terminal-output to diagnose missing history after kill
+      // Log dropped terminal-output to diagnose missing history after kill.
+      // Rate-limited (design D8): one report per 5s with a suppressed count.
       if (
         message.type === 'terminal-output' &&
         (!attachedSession || message.sessionId !== attachedSession)
       ) {
-        clientLog('terminal_output_dropped', {
+        logTerminalOutputDropped({
           messageSessionId: message.sessionId,
           attachedSession,
           bytes: message.data.length,
           hasSwitchStart: switchStartRef.current !== null,
-        }, 'info')
+        })
       }
 
       if (
@@ -1623,7 +1747,12 @@ export function useTerminal({
         // If no output arrived at all (empty pane or server dedup), reset
         // to clear stale content from the previous session.
         if (needsResetRef.current && outputBufferRef.current.length > 0) {
-          flush()
+          // Bypass backpressure for the atomic reset+history write, and
+          // advance the generation first: acks from writes issued before
+          // this boundary (same terminal, prior lifecycle) must not consume
+          // the new accounting (design D7).
+          invalidateWriteBackpressure()
+          flush({ force: true })
         } else if (needsResetRef.current) {
           terminalRef.current?.reset()
           needsResetRef.current = false
@@ -1711,6 +1840,7 @@ export function useTerminal({
         altScreenRef.current = message.altScreen === true
 
         if (!wasAppMouse && nextAppMouse) {
+          flushOutputBeforeControlRef.current?.()
           terminalRef.current?.write(ENABLE_MOUSE_TRACKING)
         }
 
@@ -1720,11 +1850,17 @@ export function useTerminal({
 
     return () => {
       unsubscribe()
-      // Flush any remaining buffer on cleanup
-      flush()
+      if (flushOutputBeforeControlRef.current === flushBeforeControl) {
+        flushOutputBeforeControlRef.current = null
+      }
+      // Flush any remaining buffer on cleanup — forced, so backpressure cannot
+      // hold data past teardown — then invalidate: the final write's ack must
+      // not touch accounting after the subscription is gone.
+      flush({ force: true })
+      invalidateWriteBackpressure()
       cancelIosRepaint()
     }
-  }, [subscribe, checkScrollPosition, setTmuxCopyMode, offerClipboardCopy, updateReadySession])
+  }, [subscribe, checkScrollPosition, setTmuxCopyMode, offerClipboardCopy, invalidateWriteBackpressure, updateReadySession])
 
   // Handle resize - with longer debounce to prevent flickering
   useEffect(() => {

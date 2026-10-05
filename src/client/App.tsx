@@ -1116,20 +1116,25 @@ export default function App() {
     if (!host) setLastProjectPath(projectPath)
   }
 
-  const handleResumeSession = (sessionId: string) => {
+  const handleResumeSession = useCallback((sessionId: string) => {
     sendMessage({ type: 'session-wake', sessionId })
-  }
+  }, [sendMessage])
 
   const handleHibernateSession = useCallback((sessionId: string) => {
     sendMessage({ type: 'session-hibernate', sessionId })
   }, [sendMessage])
 
-  const handleRenameSession = (sessionId: string, newName: string) => {
+  const handleRenameSession = useCallback((sessionId: string, newName: string) => {
     sendMessage({ type: 'session-rename', sessionId, newName })
-  }
+  }, [sendMessage])
 
   const handleDuplicateSession = useCallback((sessionId: string) => {
-    const session = sessions.find((s) => s.id === sessionId)
+    // Read sessions from the store at click time: memoized session rows must
+    // duplicate from current data, not from a snapshot captured when this
+    // callback was created (design D6 audit).
+    const session = useSessionStore
+      .getState()
+      .sessions.find((s) => s.id === sessionId)
     if (!session) return
     sendMessage({
       type: 'session-create',
@@ -1137,7 +1142,7 @@ export default function App() {
       command: session.command || undefined,
       host: session.remote && session.host ? session.host : undefined,
     })
-  }, [sessions, sendMessage])
+  }, [sendMessage])
 
   const handleMoveToHistory = useCallback((sessionId: string) => {
     sendMessage({ type: 'session-move-to-history', sessionId })

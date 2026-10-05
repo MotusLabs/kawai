@@ -83,6 +83,8 @@ async function main() {
     // isolation from global Bun.* mocks, but running them under coverage on
     // Linux CI can stall PTY attach readiness.
     const ISOLATED_REAL_TMUX_FILES = new Set([
+      'copy-mode-async.integration.test.ts',
+      'output-coalescing.integration.test.ts',
       'double-attach.integration.test.ts',
       'hibernation.integration.test.ts',
       'integration.test.ts',
@@ -92,9 +94,9 @@ async function main() {
     // Client tests that install top-level mock.module(...) hooks must run in a
     // separate process — Bun's module mocks persist for the lifetime of the
     // test process, so they leak into any subsequent file that imports the
-    // same module. app.test.tsx stubs ../components/SessionPreviewContent;
-    // when bun's readdir order puts it before SessionPreviewModal.test.tsx
-    // (e.g. on Linux ext4) the modal test sees the stub and breaks.
+    // same module. (app.test.tsx used to stub ../components/SessionPreviewContent
+    // here; the stub is gone, but its useWebSocket/xterm mocks keep it in this
+    // set.)
     const ISOLATED_CLIENT_FILES = new Set([
       'app.test.tsx',
       // Files that render motion/react (framer-motion) components. The
@@ -122,6 +124,18 @@ async function main() {
       // its window stub.
       'main.test.ts',
       'terminal.test.tsx',
+      // More top-level mock.module(...) installers from the terminal-lag
+      // change. useTerminal.test.tsx stubs ../utils/clientLog — on Linux CI
+      // (bun 1.3.14) the stub leaked into clientLog.test.ts when readdir
+      // order loaded useTerminal first: setClientLogLevel became a no-op and
+      // every fetch-expecting assertion saw zero calls. sessionRowMemo and
+      // terminalControls stub ../utils/time and ../utils/device, which wider
+      // test files also import — same leak class, isolated preemptively.
+      // (Not reproducible off the runner: same bun build, file order, and
+      // core count pass locally, matching the order-dependent leaks above.)
+      'useTerminal.test.tsx',
+      'sessionRowMemo.test.tsx',
+      'terminalControls.test.tsx',
     ])
 
     const serverTests: string[] = []

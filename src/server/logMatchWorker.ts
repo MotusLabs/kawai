@@ -15,7 +15,7 @@ import {
   extractLastUserMessageFromLog,
   getLogTokenCount,
   isToolNotificationText,
-  matchWindowsToLogsByExactRg,
+  matchWindowsToLogsByExactRgAsync,
 } from './logMatcher'
 import { getEntriesNeedingMatch, shouldSkipMatching } from './logMatchGate'
 import {
@@ -45,9 +45,9 @@ const ctx =
     ? null
     : (self as DedicatedWorkerGlobalScope | null)
 
-export function handleMatchWorkerRequest(
+export async function handleMatchWorkerRequest(
   payload: MatchWorkerRequest
-): MatchWorkerResponse {
+): Promise<MatchWorkerResponse> {
   try {
     const search = payload.search ?? {}
     const logDirs = payload.logDirs ?? getLogSearchDirs()
@@ -123,7 +123,7 @@ export function handleMatchWorkerRequest(
     } else {
       const matchStart = performance.now()
       const matchLogPaths = entriesToMatch.map((entry) => entry.logPath)
-      const matchResult = matchWindowsToLogsByExactRg(
+      const matchResult = await matchWindowsToLogsByExactRgAsync(
         unclaimedWindows,
         logDirs,
         payload.scrollbackLines ?? DEFAULT_SCROLLBACK_LINES,
@@ -132,6 +132,7 @@ export function handleMatchWorkerRequest(
           tailBytes: search.tailBytes,
           rgThreads: search.rgThreads,
           profile,
+          interWindowYieldMs: search.interWindowYieldMs,
         }
       )
       matchMs = performance.now() - matchStart
@@ -159,7 +160,7 @@ export function handleMatchWorkerRequest(
           search.rgThreads ?? 1,
           Math.min(os.cpus().length, 4)
         )
-        const orphanMatchResult = matchWindowsToLogsByExactRg(
+        const orphanMatchResult = await matchWindowsToLogsByExactRgAsync(
           unclaimedWindows,
           logDirs,
           payload.scrollbackLines ?? DEFAULT_SCROLLBACK_LINES,
@@ -167,6 +168,7 @@ export function handleMatchWorkerRequest(
             logPaths: orphanEntries.map((entry) => entry.logPath),
             rgThreads: startupRgThreads,
             profile,
+            interWindowYieldMs: search.interWindowYieldMs,
           }
         )
         orphanMatches = Array.from(orphanMatchResult.matches.entries()).map(
@@ -382,14 +384,42 @@ function attachLastUserMessage(
   }
 }
 
-if (ctx) {
-  ctx.onmessage = (event: MessageEvent<MatchWorkerRequest>) => {
-    const payload = event.data
+/**
+ * Serialized request dispatch for the worker: matching is paced by design
+ * (D4), and concurrent requests would fan out captures again, defeating the
+ * pacing and hammering the tmux server. Requests run one at a time through a
+ * promise chain; a rejected request recovers the chain so later queued
+ * requests still run (handleMatchWorkerRequest returns error responses
+ * itself; the catch is belt-and-suspenders for unexpected rejections).
+ */
+export function createMatchWorkerDispatcher(
+  post: (response: MatchWorkerResponse) => void
+): (payload: MatchWorkerRequest) => void {
+  let queue: Promise<void> = Promise.resolve()
+  return (payload: MatchWorkerRequest) => {
     if (!payload || !payload.id) {
       return
     }
-    const response = handleMatchWorkerRequest(payload)
+    queue = queue
+      .then(async () => {
+        post(await handleMatchWorkerRequest(payload))
+      })
+      .catch(() => {
+        post({
+          id: payload.id,
+          type: 'error',
+          error: 'match worker request failed',
+        })
+      })
+  }
+}
+
+if (ctx) {
+  const dispatch = createMatchWorkerDispatcher((response) =>
     ctx.postMessage(response)
+  )
+  ctx.onmessage = (event: MessageEvent<MatchWorkerRequest>) => {
+    dispatch(event.data)
   }
   // Signal that the worker is ready to receive messages
   ctx.postMessage({ type: 'ready' })
