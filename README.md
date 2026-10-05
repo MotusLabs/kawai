@@ -120,6 +120,21 @@ selects the CLI configuration and transcript directory. Credentials stay on
 the server. A failed SDK runtime probe refuses creation with an error; fix
 the installation/runtime and restart the server to retry.
 
+To run chat sessions against an Anthropic-compatible gateway or alternative
+model provider, give them a provider environment — overrides applied only to
+the SDK processes spawned for chat, never to terminal sessions:
+
+```bash
+AGENTBOARD_CHAT_ENV="ANTHROPIC_BASE_URL=https://gateway.example/anthropic;ANTHROPIC_MODEL=my-model"
+```
+
+Pairs are `;`-separated and only the first `=` splits. **Settings → Claude
+Chat Provider** overrides this value at runtime (persisted in the server
+database; **Reset to Default** returns to `AGENTBOARD_CHAT_ENV`). Changes apply
+to chat turns started after saving. A gateway token can go here as
+`ANTHROPIC_AUTH_TOKEN`; it counts toward the authentication check above, and
+credential-looking values are never sent back to the browser.
+
 Chat sessions persist across server restarts. Keep their Claude transcript
 files under `CLAUDE_CONFIG_DIR/projects/` to resume the same conversation.
 If a transcript is missing, restore it or explicitly create a new session;
