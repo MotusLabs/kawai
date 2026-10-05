@@ -68,6 +68,9 @@ export default function ChatProviderSettings() {
   const [error, setError] = useState<string | null>(null)
   const mountedRef = useRef(true)
 
+  // A completed request replaces every row and clears `dirty`, so editing is
+  // locked while one is in flight (`busy`); otherwise edits made after Apply
+  // would be silently overwritten by its response.
   const apply = (data: ChatProviderEnvResponse) => {
     if (!mountedRef.current) return
     setRows(toRows(data))
@@ -146,11 +149,13 @@ export default function ChatProviderSettings() {
                 value={row.name}
                 onChange={(e) => edit(row.id, { name: e.target.value })}
                 onKeyDown={onKeyDown}
+                disabled={busy}
               />
               <button
                 type="button"
                 className="btn text-xs"
                 aria-label={`Remove ${row.name || 'variable'}`}
+                disabled={busy}
                 onClick={() => {
                   setRows((current) => current.filter((r) => r.id !== row.id))
                   setDirty(true)
@@ -167,6 +172,7 @@ export default function ChatProviderSettings() {
               value={row.value}
               onChange={(e) => edit(row.id, { value: e.target.value })}
               onKeyDown={onKeyDown}
+              disabled={busy}
             />
           </div>
         ))}
@@ -176,6 +182,7 @@ export default function ChatProviderSettings() {
         <button
           type="button"
           className="btn text-xs"
+          disabled={busy}
           onClick={() => {
             setRows((current) => [...current, { id: nextRowId++, name: '', value: '', redacted: false }])
             setDirty(true)

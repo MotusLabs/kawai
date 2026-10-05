@@ -159,6 +159,36 @@ describe('ChatProviderSettings', () => {
     renderer.unmount()
   })
 
+  test('editing is locked while a save is in flight, so no edit is lost to its response', async () => {
+    const renderer = await render()
+    await type(inputs(renderer)[1]!, 'https://pending.example')
+    let release!: (response: Response) => void
+    const pending = new Promise<Response>((resolve) => { release = resolve })
+    const realFetch = globalThis.fetch
+    globalThis.fetch = (async () => pending) as unknown as typeof fetch
+    await click(byTestId(renderer, 'chat-provider-apply')[0]!)
+
+    for (const field of inputs(renderer)) expect(field.props.disabled).toBe(true)
+    const buttons = renderer.root.findAllByType('button')
+    for (const label of ['+ Add Variable']) {
+      expect(buttons.find((b) => b.children.includes(label))!.props.disabled).toBe(true)
+    }
+    for (const remove of buttons.filter((b) => String(b.props['aria-label']).startsWith('Remove'))) {
+      expect(remove.props.disabled).toBe(true)
+    }
+
+    await act(async () => {
+      release(new Response(JSON.stringify({
+        env: { ANTHROPIC_BASE_URL: 'https://pending.example' }, redacted: [], source: 'settings',
+      }), { status: 200 }))
+      await settle()
+    })
+    globalThis.fetch = realFetch
+    for (const field of inputs(renderer)) expect(field.props.disabled).toBe(false)
+    expect(inputs(renderer)[1]!.props.value).toBe('https://pending.example')
+    renderer.unmount()
+  })
+
   test('a failed load is reported', async () => {
     failNext = { status: 500, error: 'boom' }
     const renderer = await render()
