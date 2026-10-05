@@ -29,7 +29,8 @@ import {
   parseQuestions,
   toolResultText,
 } from './contentBlocks'
-import { buildChatOptionsEnv, type ChatProviderEnv } from './chatProviderEnv'
+import type { ChatProviderEnv } from './chatProviderEnv'
+import { resolveClaudeProfile } from './ClaudeProfiles'
 import { TurnQueue } from './TurnQueue'
 
 /** The SDK `query()` — injected so tests run against a fake. */
@@ -47,6 +48,8 @@ export interface ChatSessionDriverOptions {
   resumeSessionId?: string
   /** Provider overrides, read at each spawn so Settings changes apply. */
   getProviderEnv?: () => ChatProviderEnv
+  /** Persisted session profile; omitted for legacy Default sessions. */
+  claudeProfileId?: string
   onEvent: (event: ChatEvent) => void
   /** Applied immediately on every derived status change. */
   onStatus: (status: SessionStatus) => void
@@ -264,7 +267,7 @@ export class ChatSessionDriver {
 
   private spawnQuery(): void {
     const resume = this.capturedSdkSessionId ?? this.options.resumeSessionId
-    const env = buildChatOptionsEnv(this.options.getProviderEnv?.() ?? {})
+    const launch = resolveClaudeProfile(this.options.claudeProfileId, this.options.getProviderEnv?.() ?? {})
     const options: Options = {
       cwd: this.options.projectPath,
       // Option parity with a terminal `claude` session in the project dir.
@@ -274,7 +277,7 @@ export class ChatSessionDriver {
       includePartialMessages: true,
       canUseTool: this.canUseTool,
       ...(resume ? { resume } : {}),
-      ...(env ? { env } : {}),
+      ...launch,
     }
     const query = this.options.queryFactory({ prompt: this.queue, options })
     this.query = query

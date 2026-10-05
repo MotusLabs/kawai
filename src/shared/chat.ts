@@ -123,3 +123,9 @@ export type ChatPendingRequest =
 
 /** User decision on a pending approval_request. */
 export type ChatApprovalDecision = 'allow' | 'deny'
+
+/** Public catalog metadata; environment and credentials stay on the server. */
+export interface ClaudeProfileMetadata {
+  id: string
+  label: string
+}

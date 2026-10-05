@@ -204,6 +204,7 @@ export function sessionsEqualForBroadcast(a: Session, b: Session): boolean {
     a.id === b.id &&
     a.name === b.name &&
     a.kind === b.kind &&
+    a.claudeProfileId === b.claudeProfileId &&
     a.tmuxWindow === b.tmuxWindow &&
     a.status === b.status &&
     activityInSameBucket(a.lastActivity, b.lastActivity) &&

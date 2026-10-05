@@ -83,6 +83,7 @@ export const SESSION_FIELD_EQUALS: {
 } = {
   id: strictEquals,
   kind: strictEquals,
+  claudeProfileId: strictEquals,
   name: strictEquals,
   tmuxWindow: strictEquals,
   projectPath: strictEquals,

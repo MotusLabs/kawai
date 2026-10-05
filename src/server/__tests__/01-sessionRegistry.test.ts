@@ -395,6 +395,7 @@ describe('SessionRegistry', () => {
       { id: 'changed' },
       { name: 'changed' },
       { kind: 'chat' },
+      { claudeProfileId: 'glm' },
       { kind: undefined },
       { tmuxWindow: 'agentboard:2' },
       { tmuxWindow: undefined },

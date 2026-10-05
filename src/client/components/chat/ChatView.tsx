@@ -1,3 +1,4 @@
+import { useClaudeProfiles } from './useClaudeProfiles'
 // Attach on selection and reconnect; detaching never stops the agent.
 import { useEffect, useRef, useState } from 'react'
 import type { SendClientMessage, Session } from '@shared/types'
@@ -12,6 +13,9 @@ export default function ChatView({ session, sendMessage, connectionStatus, conne
   session: Session; sendMessage: SendClientMessage; connectionStatus: ConnectionStatus; connectionEpoch: number
   error: string | null; onClose: () => void; onKill: () => void
 }) {
+  const catalog = useClaudeProfiles(true)
+  const profileId = session.claudeProfileId ?? 'default'
+  const profileLabel = catalog.profiles.find(profile => profile.id === profileId)?.label ?? profileId
   const transcript = useChatStore(state => state.sessions[session.id]) ?? EMPTY
   const [text, setText] = useState('')
   const end = useRef<HTMLDivElement>(null)
@@ -27,6 +31,7 @@ export default function ChatView({ session, sendMessage, connectionStatus, conne
     <header className="flex items-center gap-3 border-b border-border p-3">
       <button className="btn md:hidden" onClick={onClose}>Sessions</button>
       <div className="min-w-0 flex-1"><h2 className="truncate text-sm font-medium">{session.name} · Chat</h2>
+        <p className="text-xs text-secondary" data-testid="chat-profile">Profile: {profileLabel}</p>
         <p className="truncate text-xs text-secondary">{session.projectPath}</p></div>
       <span className="text-xs text-secondary">{connected ? session.status : connectionStatus}</span>
       <button className="btn text-xs" onClick={onKill}>Kill session</button>

@@ -81,6 +81,7 @@ export interface Session {
   createdAt: string
   // Absent = terminal (back-compat with clients predating chat sessions).
   kind?: SessionKind
+  claudeProfileId?: string
   agentType?: AgentType
   source: SessionSource
   host?: string
@@ -229,6 +230,7 @@ export type ClientMessage =
       // Session kind: absent = terminal (tmux) session, unchanged behavior;
       // 'chat' creates an SDK-driven chat session instead of a window.
       kind?: SessionKind
+      claudeProfileId?: string
       // OpenSpec change context: with a selected agent, the server composes
       // the mapped apply command into the session's start command as the
       // agent's first prompt (a launch argument, held by the agent itself

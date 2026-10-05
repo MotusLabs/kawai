@@ -1,3 +1,4 @@
+import { createClaudeProfileRoutes, profileRequestError } from './routes/claudeProfiles'
 import type { Server, ServerWebSocket } from 'bun'
 import { createReadStream } from 'node:fs'
 import fsSync from 'node:fs'
@@ -1941,6 +1942,7 @@ app.get('/api/settings/inactive-max-age-hours', getHistoryMaxAgeHours)
 app.put('/api/settings/inactive-max-age-hours', putHistoryMaxAgeHours)
 
 app.route('/api/settings/chat-provider-env', chatProviderEnv.routes)
+app.route('/api/chat/profiles', createClaudeProfileRoutes())
 
 // Allowed paste-image types; the extension written to /tmp comes from this map,
 // never from client-supplied values. Note Bun's multipart parser derives
@@ -2666,8 +2668,12 @@ function handleMessage(
       refreshSessions()
       return
     case 'session-create':
+      if (profileRequestError(message)) {
+        send(ws, { type: 'error', message: profileRequestError(message)! })
+        return
+      }
       if (message.kind === 'chat') {
-        const input = { projectPath: message.projectPath, name: message.name }
+        const input = { projectPath: message.projectPath, name: message.name, claudeProfileId: message.claudeProfileId }
         fireAndForget(chatSessionManager.createAvailableSession(input).then(result => {
           if (result.ok) send(ws, { type: 'session-created', session: result.session })
           else send(ws, { type: 'error', message: result.error })

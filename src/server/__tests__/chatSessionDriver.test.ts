@@ -104,7 +104,7 @@ interface Harness {
 }
 
 function createHarness(
-  overrides: { resumeSessionId?: string; getProviderEnv?: () => Record<string, string> } = {}
+  overrides: { claudeProfileId?: string; resumeSessionId?: string; getProviderEnv?: () => Record<string, string> } = {}
 ): Harness {
   const events: ChatEvent[] = []
   const statuses: SessionStatus[] = []
@@ -197,6 +197,34 @@ function result(subtype: string, extra: Record<string, unknown> = {}): SDKMessag
 }
 
 describe('ChatSessionDriver', () => {
+  test('concurrent profile drivers keep launch settings and approval bridges independent', async () => {
+    const glm = createHarness({ claudeProfileId: 'glm' })
+    const minimax = createHarness({ claudeProfileId: 'minimax' })
+    glm.driver.send('glm turn')
+    minimax.driver.send('minimax turn')
+    const first = glm.fakes[0]!
+    const other = minimax.fakes[0]!
+    expect(first.options.model).toBe('sonnet')
+    expect(other.options.model).toBe('MiniMax-M3')
+    expect(first.options.env?.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBe('1000000')
+    expect(other.options.env?.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBeUndefined()
+    expect(first.options.settings).toMatchObject({ env: { ANTHROPIC_DEFAULT_OPUS_MODEL: 'glm-5.3[1m]' } })
+    expect(first.options.permissionMode).toBe('default')
+    expect(first.options.settingSources).toEqual(['user', 'project', 'local'])
+    const approval = sendApproval(first)
+    const request = glm.driver.getPendingRequests()[0]!
+    expect(minimax.driver.getPendingRequests()).toEqual([])
+    glm.driver.resolveApproval(request.requestId, 'allow')
+    expect(await approval).toMatchObject({ behavior: 'allow' })
+    first.exit()
+    await flush()
+    glm.driver.send('respawn')
+    expect(glm.fakes[1]!.options.model).toBe('sonnet')
+    expect(glm.fakes[1]!.options.env?.ANTHROPIC_BASE_URL).toBe(first.options.env?.ANTHROPIC_BASE_URL)
+    glm.driver.kill()
+    minimax.driver.kill()
+  })
+
   test('provider env is merged over process.env and re-read on every spawn', async () => {
     let providerEnv: Record<string, string> = {
       ANTHROPIC_BASE_URL: 'https://gw.example/anthropic',

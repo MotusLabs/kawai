@@ -159,6 +159,89 @@ describe('ChatSessionManager', () => {
     fs.rmSync(tempDir, { recursive: true, force: true })
   })
 
+  test('profiles persist, retain metadata, reject unknown IDs, and restore the SDK conversation', async () => {
+    process.env.ANTHROPIC_API_KEY = 'test-key'
+    const first = createHarness(db)
+    expect(first.manager.createSession({ projectPath: '/tmp/proj', claudeProfileId: 'unknown' }).ok).toBe(false)
+    expect(db.getChatSessions()).toEqual([])
+    expect(first.registry.getAll()).toEqual([])
+    const created = first.manager.createSession({ projectPath: '/tmp/proj', claudeProfileId: 'glm' })
+    if (!created.ok) throw new Error(created.error)
+    expect(created.session.claudeProfileId).toBe('glm')
+    const id = created.session.id
+    expect(db.getChatSession(id)?.claudeProfileId).toBe('glm')
+    await first.manager.send(id, 'first')
+    first.handles[0]!.push(initMessage('profile-conversation'))
+    await flush()
+    writeTranscript('profile-conversation', JSON.stringify({ type: 'user', message: { role: 'user', content: 'first' } }))
+    first.manager.shutdown()
+    const restored = createHarness(db)
+    expect(restored.registry.get(id)?.claudeProfileId).toBe('glm')
+    expect((await restored.manager.send(id, 'resume')).ok).toBe(true)
+    expect(restored.handles[0]!.options.resume).toBe('profile-conversation')
+    expect(restored.handles[0]!.options.model).toBe('sonnet')
+    expect(restored.handles[0]!.options.env?.ANTHROPIC_BASE_URL).toBe('https://zai.ruslan.casa/api/anthropic')
+    restored.manager.shutdown()
+    db.updateChatSession(id, { claudeProfileId: 'removed-profile' })
+    const unknown = createHarness(db)
+    expect(unknown.registry.get(id)?.claudeProfileId).toBe('removed-profile')
+    const result = await unknown.manager.send(id, 'resume')
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.error).toContain('removed-profile')
+    expect(unknown.handles).toHaveLength(0)
+    expect(db.getChatSession(id)?.sdkSessionId).toBe('profile-conversation')
+    unknown.manager.shutdown()
+  })
+
+  test('profile auth uses global credentials and refuses unauthenticated launch without side effects', async () => {
+    let globalEnv = { ANTHROPIC_AUTH_TOKEN: 'global-token' }
+    const registry = new SessionRegistry()
+    const handles: FakeHandle[] = []
+    const manager = new ChatSessionManager({ db, registry, onEvent: () => {}, queryFactory: fakeQueryFactory(handles), getProviderEnv: () => globalEnv })
+    for (const profile of ['glm', 'minimax', 'kimi']) {
+      const result = manager.createSession({ projectPath: '/tmp/proj', claudeProfileId: profile })
+      expect(result.ok).toBe(true)
+      if (!result.ok) throw new Error(result.error)
+      globalEnv = { ANTHROPIC_AUTH_TOKEN: '' }
+      expect((await manager.send(result.session.id, 'no auth')).ok).toBe(false)
+      expect(handles).toHaveLength(0)
+      globalEnv = { ANTHROPIC_AUTH_TOKEN: 'global-token' }
+    }
+    manager.shutdown()
+    globalEnv = { ANTHROPIC_AUTH_TOKEN: '' }
+    const count = db.getChatSessions().length
+    expect(manager.createSession({ projectPath: '/tmp/proj', claudeProfileId: 'lan' }).ok).toBe(false)
+    expect(db.getChatSessions()).toHaveLength(count)
+    process.env.CLAUDE_CODE_OAUTH_TOKEN = 'oauth-token'
+    expect(manager.createSession({ projectPath: '/tmp/proj', claudeProfileId: 'lan' }).ok).toBe(true)
+  })
+
+  test('availability caches complete profile configuration and retries failures', async () => {
+    let globalEnv = { ANTHROPIC_AUTH_TOKEN: 'global-token' }
+    const launches: Options[] = []
+    let fail = false
+    const manager = new ChatSessionManager({ db, registry: new SessionRegistry(), onEvent: () => {}, getProviderEnv: () => globalEnv,
+      availabilityProbe: async (_env, launch) => { launches.push(launch!); if (fail) throw new Error('failed') },
+    })
+    const create = (claudeProfileId: string) => manager.createAvailableSession({ projectPath: '/tmp/proj', claudeProfileId })
+    await Promise.all([create('glm'), create('glm')])
+    await create('minimax')
+    await create('glm')
+    expect(launches).toHaveLength(2)
+    expect(launches[0]?.model).toBe('sonnet')
+    expect(launches[1]?.model).toBe('MiniMax-M3')
+    expect(launches[0]?.settings).toMatchObject({ env: { ANTHROPIC_DEFAULT_OPUS_MODEL: 'glm-5.3[1m]' } })
+    globalEnv = { ANTHROPIC_AUTH_TOKEN: 'changed-token' }
+    await create('glm')
+    expect(launches).toHaveLength(3)
+    fail = true
+    expect((await create('lan')).ok).toBe(false)
+    fail = false
+    expect((await create('lan')).ok).toBe(true)
+    expect(launches).toHaveLength(5)
+    manager.shutdown()
+  })
+
   describe('auth gate', () => {
     test('failed availability probe disables creation without creating a driver or row', async () => {
       process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'

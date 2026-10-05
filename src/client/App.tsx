@@ -1110,9 +1110,10 @@ export default function App() {
     host?: string,
     autoStartChange?: string,
     autoStartAgent?: AutoStartAgent,
-    kind?: 'terminal' | 'chat'
+    kind?: 'terminal' | 'chat',
+    claudeProfileId?: string
   ) => {
-    sendMessage({ type: 'session-create', projectPath, name, command, host, autoStartChange, autoStartAgent, kind })
+    sendMessage({ type: 'session-create', projectPath, name, command, host, autoStartChange, autoStartAgent, kind, claudeProfileId })
     if (!host) setLastProjectPath(projectPath)
   }
 
