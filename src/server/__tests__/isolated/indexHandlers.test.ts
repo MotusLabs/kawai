@@ -766,7 +766,7 @@ describe('server message handlers', () => {
       const websocket = serveOptions.websocket!
       websocket.open?.(ws as never)
       const before = registryInstance.getAll().length
-      websocket.message?.(ws as never, JSON.stringify({ type: 'session-create', kind: 'chat', projectPath: '/tmp/chat', name: 'test chat' }))
+      websocket.message?.(ws as never, JSON.stringify({ type: 'session-create', kind: 'chat', projectPath: os.tmpdir(), name: 'test chat' }))
       await new Promise(resolve => setTimeout(resolve, 0))
       const created = sent.find(message => message.type === 'session-created')
       expect(created?.type).toBe('session-created')
@@ -783,6 +783,26 @@ describe('server message handlers', () => {
       else process.env.CLAUDE_CODE_OAUTH_TOKEN = previousToken
     }
   })
+  test('chat creation for a missing project directory replies with an error', async () => {
+    const previousToken = process.env.CLAUDE_CODE_OAUTH_TOKEN
+    process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'
+    try {
+      const { serveOptions, registryInstance } = await loadIndex()
+      const { ws, sent } = createWs()
+      const websocket = serveOptions.websocket!
+      websocket.open?.(ws as never)
+      const before = registryInstance.getAll().length
+      const missing = path.join(os.tmpdir(), 'agentboard-missing-chat-dir (deleted)')
+      websocket.message?.(ws as never, JSON.stringify({ type: 'session-create', kind: 'chat', projectPath: missing }))
+      await new Promise(resolve => setTimeout(resolve, 0))
+      expect(sent).toContainEqual({ type: 'error', message: `Project directory does not exist: ${missing}` })
+      expect(sent.some(message => message.type === 'session-created')).toBe(false)
+      expect(registryInstance.getAll()).toHaveLength(before)
+    } finally {
+      if (previousToken === undefined) delete process.env.CLAUDE_CODE_OAUTH_TOKEN
+      else process.env.CLAUDE_CODE_OAUTH_TOKEN = previousToken
+    }
+  })
   test('profile metadata routes and WS creation validate profile inputs', async () => {
     const previousToken = process.env.CLAUDE_CODE_OAUTH_TOKEN
     process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'
@@ -790,18 +810,20 @@ describe('server message handlers', () => {
       const { serveOptions, registryInstance } = await loadIndex()
       const { ws, sent } = createWs()
       const websocket = serveOptions.websocket!
+      // An existing directory, so the refusals below come from profile validation.
+      const projectPath = os.tmpdir()
       const before = registryInstance.getAll().length
       for (const input of [
         { kind: 'terminal', claudeProfileId: 'glm' },
         { kind: 'chat', claudeProfileId: 'unknown' },
         { kind: 'chat', claudeProfileId: 'glm', env: { ANTHROPIC_API_KEY: 'forbidden' } },
       ]) {
-        websocket.message?.(ws as never, JSON.stringify({ type: 'session-create', projectPath: '/tmp/chat', ...input }))
+        websocket.message?.(ws as never, JSON.stringify({ type: 'session-create', projectPath, ...input }))
       }
       await new Promise(resolve => setTimeout(resolve, 0))
       expect(sent.filter(message => message.type === 'error')).toHaveLength(3)
       expect(registryInstance.getAll()).toHaveLength(before)
-      websocket.message?.(ws as never, JSON.stringify({ type: 'session-create', kind: 'chat', projectPath: '/tmp/chat', claudeProfileId: 'mimo' }))
+      websocket.message?.(ws as never, JSON.stringify({ type: 'session-create', kind: 'chat', projectPath, claudeProfileId: 'mimo' }))
       await new Promise(resolve => setTimeout(resolve, 0))
       const created = sent.find(message => message.type === 'session-created')
       if (created?.type !== 'session-created') throw new Error('Profile creation failed')

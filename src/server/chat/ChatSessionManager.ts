@@ -14,6 +14,7 @@ import type {
 import type { ServerMessage, Session, SessionStatus } from '../../shared/types'
 import type { ChatSessionRecord, SessionDatabase } from '../db'
 import { generateSessionName } from '../nameGenerator'
+import { isExistingDirectory, resolveProjectDirectory } from '../paths'
 import type { SessionRegistry } from '../SessionRegistry'
 import { ChatSessionDriver, type ChatQueryFactory } from './ChatSessionDriver'
 import { chatAuthErrorMessage, hasClaudeAuth } from './chatAuth'
@@ -47,6 +48,8 @@ export interface ChatSessionManagerOptions {
   getProviderEnv?: () => ChatProviderEnv
   /** Per-session protocol capture for the chat debug view (always on). */
   wireLogs?: ChatWireLogs
+  /** Project-directory check; injected in tests that use fictitious paths. */
+  isDirectory?: (path: string) => boolean
 }
 
 export type ChatCreateResult =
@@ -76,6 +79,9 @@ export class ChatSessionManager {
   private readonly availability = new Map<string, Promise<void>>()
 
   async createAvailableSession(input: { projectPath: string; name?: string; claudeProfileId?: string }): Promise<ChatCreateResult> {
+    // Refuse a bad path before the probe spends an SDK spawn on it.
+    const project = resolveProjectDirectory(input.projectPath, this.options.isDirectory)
+    if (!project.ok) return project
     try {
       resolveClaudeProfile(input.claudeProfileId, this.providerEnv())
     } catch (error) {
@@ -129,10 +135,9 @@ export class ChatSessionManager {
     name?: string
     claudeProfileId?: string
   }): ChatCreateResult {
-    const projectPath = input.projectPath.trim()
-    if (!projectPath) {
-      return { ok: false, error: 'A project directory is required' }
-    }
+    const project = resolveProjectDirectory(input.projectPath, this.options.isDirectory)
+    if (!project.ok) return project
+    const projectPath = project.path
     try {
       resolveClaudeProfile(input.claudeProfileId, this.providerEnv())
     } catch (error) {
@@ -206,6 +211,20 @@ export class ChatSessionManager {
         error:
           'Cannot resume this conversation: the agent transcript is missing. ' +
           `Restore ${record.sdkSessionId}.jsonl or create a new chat session.`,
+      }
+    }
+    const live = this.drivers.get(sessionId)
+    if (
+      (!live || live.isDead) &&
+      !this.driverPromises.has(sessionId) &&
+      !(this.options.isDirectory ?? isExistingDirectory)(record.projectPath)
+    ) {
+      // A running process keeps its cwd; only a (re)spawn needs the directory.
+      return {
+        ok: false,
+        error:
+          `Cannot start the agent: the project directory ${record.projectPath} no longer exists. ` +
+          'Create a new chat session in an existing directory.',
       }
     }
     let driver: ChatSessionDriver | null
