@@ -54,6 +54,19 @@ describe('isWorktreeDirty', () => {
     expect(isWorktreeDirty(repo)).toBe(true)
   })
 
+  test('does not rewrite the index when stat data is stale', () => {
+    // A plain `git status` refreshes stale stat data in the index, touching
+    // .git/index.lock — which the workspace watcher treats as a change.
+    const repo = path.join(tempRoot, 'stale-stat')
+    gitInit(repo)
+    const future = new Date(Date.now() + 60_000)
+    fs.utimesSync(path.join(repo, 'file.txt'), future, future)
+    const indexPath = path.join(repo, '.git', 'index')
+    const indexBefore = fs.readFileSync(indexPath)
+    expect(isWorktreeDirty(repo)).toBe(false)
+    expect(fs.readFileSync(indexPath).equals(indexBefore)).toBe(true)
+  })
+
   test('returns false for a missing worktree', () => {
     expect(isWorktreeDirty(path.join(tempRoot, 'missing'))).toBe(false)
   })

@@ -11,11 +11,14 @@ export const DIRTY_STATE_MAX_OUTPUT_BYTES = 64 * 1024
 
 /**
  * True when the worktree has tracked or untracked changes. A failing git
- * status reports dirty=false rather than guessing.
+ * status reports dirty=false rather than guessing. `--no-optional-locks`
+ * stops status from refreshing the index: that write touches
+ * `.git/index.lock`, which the workspace watcher observes, so every
+ * discovery pass would otherwise schedule another one.
  */
 export function isWorktreeDirty(worktreePath: string): boolean {
   const result = runGit(
-    ['-C', worktreePath, 'status', '--porcelain'],
+    ['--no-optional-locks', '-C', worktreePath, 'status', '--porcelain'],
     { maxOutputBytes: DIRTY_STATE_MAX_OUTPUT_BYTES }
   )
   if (!result.ok) return false
