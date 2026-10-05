@@ -34,7 +34,9 @@ server variable and SHALL let the user override it from the Settings modal.
 A Settings override SHALL be persisted across server restarts and SHALL apply
 to the next SDK process spawned, without a server restart. Clearing the
 override SHALL restore the server-variable default. Invalid entries SHALL be
-refused with an error rather than silently dropped.
+refused with an error rather than silently dropped. Values of credential-like
+variables SHALL NOT be sent to the browser; saving without re-entering such a
+value SHALL keep the stored value.
 
 #### Scenario: Settings override applies to the next spawn
 - **WHEN** the user saves provider overrides in Settings and then starts a new chat session
@@ -47,3 +49,7 @@ refused with an error rather than silently dropped.
 #### Scenario: Invalid entry refused
 - **WHEN** the user saves an entry whose name is not a valid environment variable name
 - **THEN** nothing is saved and Settings shows why
+
+#### Scenario: Credentials are not sent to the browser
+- **WHEN** the provider environment contains a credential such as `ANTHROPIC_AUTH_TOKEN` and the user opens Settings
+- **THEN** the variable is listed without its value, and saving other edits keeps the stored credential
