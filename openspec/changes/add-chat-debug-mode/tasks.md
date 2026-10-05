@@ -2,8 +2,8 @@
 
 ## 1. Shared wire-frame contract
 
-- [ ] 1.1 Add `ChatWireDirection` and `ChatWireFrame` to `src/shared/chat.ts` (header comment updated) and verify `bun run typecheck` passes
-- [ ] 1.2 Add additive `chat-debug-open`, `chat-debug-page`, `chat-debug-close` client messages and the `chat-debug-frames` server message to `src/shared/types.ts`, and verify `bun run typecheck` passes with existing message switches unchanged
+- [x] 1.1 Add `ChatWireDirection` and `ChatWireFrame` to `src/shared/chat.ts` (header comment updated) and verify `bun run typecheck` passes
+- [x] 1.2 Add additive `chat-debug-open`, `chat-debug-page`, `chat-debug-close` client messages and the `chat-debug-frames` server message to `src/shared/types.ts`, and verify `bun run typecheck` passes with existing message switches unchanged
 
 ## 2. Wire tap spawner
 
