@@ -42,6 +42,6 @@
 
 ## 7. End-to-end verification
 
-- [ ] 7.1 Extend `tests/e2e/chat.spec.ts` (fixture) to toggle Debug, see request/response frames for an approval turn, expand a frame, load older, toggle off, and reload with frames still present, and verify the suite passes with `AGENTBOARD_CHAT_FIXTURE=1`
+- [x] 7.1 Extend `tests/e2e/chat.spec.ts` (fixture) to toggle Debug, see request/response frames for an approval turn, expand a frame, load older, toggle off, and reload with frames still present, and verify the suite passes with `AGENTBOARD_CHAT_FIXTURE=1`
 - [ ] 7.2 Run a real-SDK chat turn (`chat-real.spec.ts` or the `dev-browser` skill) with Debug open and verify `initialize`, user, `stream_event`, `can_use_tool` control request/response, and `result` frames appear and the chat behaves as before; capture screenshots at desktop and mobile widths
 - [ ] 7.3 Run `bun run lint && bun run typecheck && bun run test` and `openspec validate add-chat-debug-mode --strict`, and verify all pass
