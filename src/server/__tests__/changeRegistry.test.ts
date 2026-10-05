@@ -46,20 +46,20 @@ function repository(worktrees: WorkspaceWorktree[]): WorkspaceRepository {
 }
 
 describe('conventionWorktreePath', () => {
-  test('joins under the convention directory', () => {
+  test('joins under the convention directory', async () => {
     expect(conventionWorktreePath('/repo', 'add-auth')).toBe('/repo/.worktrees/add-auth')
   })
 })
 
 describe('resolveChangeRegistry', () => {
-  test('seeds registry-only changes with no convention worktree', () => {
+  test('seeds registry-only changes with no convention worktree', async () => {
     const registry = resolveChangeRegistry(
       repository([worktree('/repo', { isMain: true, changes: [{ name: 'add-auth' }] })])
     )
     expect(registry).toEqual<ChangeRegistryEntry[]>([{ name: 'add-auth', source: 'registry' }])
   })
 
-  test('worktree copy is canonical once it exists, even when divergent', () => {
+  test('worktree copy is canonical once it exists, even when divergent', async () => {
     const registry = resolveChangeRegistry(
       repository([
         worktree('/repo', { isMain: true, changes: [{ name: 'add-auth', completedTasks: 3, totalTasks: 11 }] }),
@@ -78,7 +78,7 @@ describe('resolveChangeRegistry', () => {
     ])
   })
 
-  test('flags a convention worktree that lacks the change', () => {
+  test('flags a convention worktree that lacks the change', async () => {
     const registry = resolveChangeRegistry(
       repository([
         worktree('/repo', { isMain: true, changes: [{ name: 'add-auth', completedTasks: 1, totalTasks: 4 }] }),
@@ -98,7 +98,7 @@ describe('resolveChangeRegistry', () => {
     ])
   })
 
-  test('a matching basename outside the convention directory never matches', () => {
+  test('a matching basename outside the convention directory never matches', async () => {
     const registry = resolveChangeRegistry(
       repository([
         worktree('/repo', { isMain: true, changes: [{ name: 'add-auth' }] }),
@@ -108,7 +108,7 @@ describe('resolveChangeRegistry', () => {
     expect(registry).toEqual<ChangeRegistryEntry[]>([{ name: 'add-auth', source: 'registry' }])
   })
 
-  test('sorts entries by change name and yields empty without a main worktree or seeds', () => {
+  test('sorts entries by change name and yields empty without a main worktree or seeds', async () => {
     expect(
       resolveChangeRegistry(
         repository([
@@ -129,7 +129,7 @@ describe('refreshRepositoryOpenSpec registry merge', () => {
     JSON.stringify({ changes, root: { path: '/repo/openspec' } })
 
   function runnerFor(mainChanges: unknown[], worktreeChanges: unknown[]): OpenspecCommandRunner {
-    return ({ cwd }) => {
+    return async ({ cwd }) => {
       const result: OpenspecCommandResult =
         cwd === '/repo'
           ? { ok: true, exitCode: 0, stdout: okPayload(mainChanges), stderr: '' }
@@ -138,8 +138,8 @@ describe('refreshRepositoryOpenSpec registry merge', () => {
     }
   }
 
-  test('derives the registry from discovered states', () => {
-    const refreshed = refreshRepositoryOpenSpec(
+  test('derives the registry from discovered states', async () => {
+    const refreshed = await refreshRepositoryOpenSpec(
       repository([worktree('/repo', { isMain: true }), worktree('/repo/.worktrees/add-auth')]),
       undefined,
       {
@@ -161,22 +161,22 @@ describe('refreshRepositoryOpenSpec registry merge', () => {
     ])
   })
 
-  test('retains last-valid registry values when discovery fails', () => {
+  test('retains last-valid registry values when discovery fails', async () => {
     const seed = repository([worktree('/repo', { isMain: true })])
-    const first = refreshRepositoryOpenSpec(seed, undefined, {
+    const first = await refreshRepositoryOpenSpec(seed, undefined, {
       runner: runnerFor([{ name: 'add-auth', completedTasks: 1, totalTasks: 3 }], []),
     })
     expect(first.changeRegistry).toEqual<ChangeRegistryEntry[]>([
       { name: 'add-auth', completedTasks: 1, totalTasks: 3, source: 'registry' },
     ])
 
-    const failing: OpenspecCommandRunner = () => ({
+    const failing: OpenspecCommandRunner = async () => ({
       ok: false,
       exitCode: 1,
       stdout: '',
       stderr: 'boom',
     })
-    const second = refreshRepositoryOpenSpec(seed, [first], { runner: failing })
+    const second = await refreshRepositoryOpenSpec(seed, [first], { runner: failing })
     expect(second.worktrees[0].openspec.stale).toBe(true)
     expect(second.changeRegistry).toEqual<ChangeRegistryEntry[]>([
       { name: 'add-auth', completedTasks: 1, totalTasks: 3, source: 'registry' },

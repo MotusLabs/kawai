@@ -46,14 +46,14 @@ afterAll(() => {
 })
 
 describe('buildWorkspaceSnapshot', () => {
-  test('assembles repository, worktrees, and branches deterministically', () => {
+  test('assembles repository, worktrees, and branches deterministically', async () => {
     const repo = path.join(tempRoot, 'repo')
     const linked = path.join(tempRoot, 'repo-linked')
     gitInit(repo)
     runGit(['-C', repo, 'worktree', 'add', linked, '-b', 'feat'], { timeoutMs: 10_000 })
 
-    const first = buildWorkspaceSnapshot([repo])
-    const second = buildWorkspaceSnapshot([repo, path.join(repo, 'sub')])
+    const first = await buildWorkspaceSnapshot([repo])
+    const second = await buildWorkspaceSnapshot([repo, path.join(repo, 'sub')])
 
     expect(first.repositories).toHaveLength(1)
     const repository = first.repositories[0]
@@ -83,10 +83,10 @@ describe('buildWorkspaceSnapshot', () => {
     })
   })
 
-  test('merges duplicate seeds from live, hibernating, and history paths', () => {
+  test('merges duplicate seeds from live, hibernating, and history paths', async () => {
     const repo = path.join(tempRoot, 'repo-dedupe')
     gitInit(repo)
-    const snapshot = buildWorkspaceSnapshot([
+    const snapshot = await buildWorkspaceSnapshot([
       repo,                                        // live
       path.join(repo, 'src'),                     // hibernating beneath root
       repo,                                        // history duplicate
@@ -95,10 +95,10 @@ describe('buildWorkspaceSnapshot', () => {
     expect(snapshot.repositories).toHaveLength(1)
   })
 
-  test('keeps last-valid repository entry with stale flag when discovery fails', () => {
+  test('keeps last-valid repository entry with stale flag when discovery fails', async () => {
     const repo = path.join(tempRoot, 'repo-stale')
     gitInit(repo)
-    const good = buildWorkspaceSnapshot([repo])
+    const good = await buildWorkspaceSnapshot([repo])
     expect(good.repositories[0].stale).toBe(false)
 
     // A previously discovered repository whose seed path no longer resolves
@@ -129,7 +129,7 @@ describe('buildWorkspaceSnapshot', () => {
       ],
       generatedAt: good.generatedAt,
     }
-    const withGhost = buildWorkspaceSnapshot([repo, ghostPath], previous)
+    const withGhost = await buildWorkspaceSnapshot([repo, ghostPath], previous)
     const ghost = withGhost.repositories.find((candidate) => candidate.id === brokenId)
     expect(ghost?.stale).toBe(true)
     expect(ghost?.error).toBe('Git discovery failed')
@@ -138,28 +138,28 @@ describe('buildWorkspaceSnapshot', () => {
     expect(healthy?.stale).toBe(false)
   })
 
-  test('drops previous repositories whose seed paths are all gone', () => {
+  test('drops previous repositories whose seed paths are all gone', async () => {
     const repo = path.join(tempRoot, 'repo-removal')
     gitInit(repo)
-    const first = buildWorkspaceSnapshot([repo])
+    const first = await buildWorkspaceSnapshot([repo])
     expect(first.repositories).toHaveLength(1)
 
     // No seeds at all -> the previous repository is not carried forward.
-    const emptied = buildWorkspaceSnapshot([], first)
+    const emptied = await buildWorkspaceSnapshot([], first)
     expect(emptied.repositories).toHaveLength(0)
   })
 
-  test('skips repositories that never discovered successfully', () => {
+  test('skips repositories that never discovered successfully', async () => {
     const plain = path.join(tempRoot, 'not-git')
     fs.mkdirSync(plain, { recursive: true })
-    const snapshot = buildWorkspaceSnapshot([plain])
+    const snapshot = await buildWorkspaceSnapshot([plain])
     expect(snapshot.repositories).toHaveLength(0)
   })
 
   test('snapshot parses cleanly through the shared validator', async () => {
     const repo = path.join(tempRoot, 'repo-validate')
     gitInit(repo)
-    const snapshot = buildWorkspaceSnapshot([repo])
+    const snapshot = await buildWorkspaceSnapshot([repo])
     const { parseWorkspaceSnapshot } = await import('../../shared/workspaceValidation')
     expect(parseWorkspaceSnapshot(snapshot)).toEqual(snapshot)
   })

@@ -13,6 +13,7 @@ import { useThemeStore, type Theme } from '../stores/themeStore'
 import { HISTORY_MAX_AGE_MIN_HOURS, HISTORY_MAX_AGE_MAX_HOURS } from '@shared/types'
 import { getEffectiveModifier, getModifierDisplay } from '../utils/device'
 import { Switch } from './Switch'
+import ChatProviderSettings from './ChatProviderSettings'
 import { playPermissionSound, playIdleSound, primeAudio } from '../utils/sound'
 
 interface SettingsChangeFlags {
@@ -749,6 +750,8 @@ export default function SettingsModal({
               </div>
             </div>
           </div>
+
+          <ChatProviderSettings />
 
           <div className="border-t border-border pt-4">
             <label className="mb-2 block text-xs text-secondary">

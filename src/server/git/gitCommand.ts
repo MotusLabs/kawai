@@ -46,7 +46,50 @@ export interface GitCommandResult {
   stderr: string
 }
 
-/** Run git synchronously with a timeout and output bound. */
+/**
+ * Run git asynchronously with a timeout and output bound. Workspace
+ * discovery uses this variant so subprocesses never block the event loop:
+ * keystrokes, WebSocket traffic, and signal handling keep flowing while git
+ * runs. A timeout kills the process; the killed exit resolves as a
+ * non-success with exitCode null, matching the sync variant.
+ */
+export async function runGitAsync(args: string[], options: GitCommandOptions = {}): Promise<GitCommandResult> {
+  const { cwd, timeoutMs = GIT_TIMEOUT_MS, maxOutputBytes = GIT_MAX_OUTPUT_BYTES, env } = options
+  let proc: ReturnType<typeof Bun.spawn>
+  try {
+    proc = Bun.spawn(['git', ...args], {
+      ...(cwd !== undefined ? { cwd } : {}),
+      env: env ? { ...cleanGitEnv(), ...env } : cleanGitEnv(),
+      stdin: 'ignore',
+      stdout: 'pipe',
+      stderr: 'pipe',
+    })
+  } catch {
+    // Missing cwd, git not installed, or spawn failure — treat as non-success.
+    return { ok: false, exitCode: null, stdout: '', stderr: '' }
+  }
+  const timer = setTimeout(() => proc.kill(), timeoutMs)
+  try {
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(proc.stdout as ReadableStream<Uint8Array>).text(),
+      new Response(proc.stderr as ReadableStream<Uint8Array>).text(),
+      proc.exited,
+    ])
+    return {
+      ok: exitCode === 0,
+      exitCode,
+      stdout: stdout.length > maxOutputBytes ? stdout.slice(0, maxOutputBytes) : stdout,
+      stderr: stderr.length > maxOutputBytes ? stderr.slice(0, maxOutputBytes) : stderr,
+    }
+  } catch {
+    return { ok: false, exitCode: null, stdout: '', stderr: '' }
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/** Run git synchronously with a timeout and output bound.
+ * Prefer runGitAsync on request paths: spawnSync blocks the event loop. */
 export function runGit(args: string[], options: GitCommandOptions = {}): GitCommandResult {
   const {
     cwd,

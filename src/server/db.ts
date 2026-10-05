@@ -112,6 +112,7 @@ export interface SessionDatabase {
   // App settings
   getAppSetting: (key: string) => string | null
   setAppSetting: (key: string, value: string) => void
+  deleteAppSetting: (key: string) => void
   // Chat sessions (SDK-driven; separate from agent_sessions log rows)
   insertChatSession: (session: ChatSessionRecord) => ChatSessionRecord
   updateChatSession: (
@@ -282,6 +283,9 @@ export function initDatabase(options: { path?: string } = {}): SessionDatabase {
   )
   const upsertAppSetting = db.prepare(
     'INSERT OR REPLACE INTO app_settings (key, value) VALUES ($key, $value)'
+  )
+  const deleteAppSettingStmt = db.prepare(
+    'DELETE FROM app_settings WHERE key = $key'
   )
 
   // Chat sessions prepared statements
@@ -517,6 +521,9 @@ export function initDatabase(options: { path?: string } = {}): SessionDatabase {
     },
     setAppSetting: (key, value) => {
       upsertAppSetting.run({ $key: key, $value: value })
+    },
+    deleteAppSetting: (key) => {
+      deleteAppSettingStmt.run({ $key: key })
     },
     // Chat sessions
     insertChatSession: (session) => {

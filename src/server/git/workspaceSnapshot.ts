@@ -27,15 +27,15 @@ import { deepestWorktreeMatch, isWorktreeDirty } from './worktreeStatus'
  * Previous repositories whose seeds are all gone are dropped — that is the
  * coordinator's path-removal behavior.
  */
-export function buildWorkspaceSnapshot(
+export async function buildWorkspaceSnapshot(
   seeds: Iterable<string>,
   previous?: WorkspaceSnapshot | null
-): WorkspaceSnapshot {
-  const resolved = resolveSeedRepositories(seeds)
+): Promise<WorkspaceSnapshot> {
+  const resolved = await resolveSeedRepositories(seeds)
   const repositories = new Map<string, WorkspaceRepository>()
 
   for (const [commonDir, dirs] of resolved.repositories) {
-    repositories.set(commonDir, buildRepositorySnapshot(commonDir, dirs, previous))
+    repositories.set(commonDir, await buildRepositorySnapshot(commonDir, dirs, previous))
   }
 
   if (previous) {
@@ -46,16 +46,16 @@ export function buildWorkspaceSnapshot(
   return { repositories: ordered, generatedAt: new Date().toISOString() }
 }
 
-export function buildRepositorySnapshot(
+export async function buildRepositorySnapshot(
   commonDir: string,
   dirs: ResolvedGitDirs | null,
   previous?: WorkspaceSnapshot | null
-): WorkspaceRepository {
+): Promise<WorkspaceRepository> {
   const id = repositoryId(commonDir)
   const previousEntry = previous?.repositories.find((repository) => repository.id === id)
   let info
   try {
-    info = discoverRepository(commonDir)
+    info = await discoverRepository(commonDir)
   } catch {
     info = null
   }
@@ -77,6 +77,13 @@ export function buildRepositorySnapshot(
   }
 
   const mainWorktree = info.worktrees.find((worktree) => worktree.isMain) ?? info.worktrees[0]
+  // Dirty checks are independent per worktree: run them concurrently so a
+  // repository with many worktrees costs one round-trip, not N serial ones.
+  const dirtyByPath = new Map(
+    await Promise.all(
+      info.worktrees.map(async (worktree) => [worktree.path, await isWorktreeDirty(worktree.path)] as const)
+    )
+  )
   const worktrees: WorkspaceWorktree[] = info.worktrees
     .map((worktree) => ({
       id: worktreeId(id, worktree.path),
@@ -87,7 +94,7 @@ export function buildRepositorySnapshot(
       isMain: worktree.isMain,
       // Prunable (missing-directory) worktrees report clean; they remain
       // listed because git porcelain is the source of truth.
-      dirty: isWorktreeDirty(worktree.path),
+      dirty: dirtyByPath.get(worktree.path) ?? false,
       openspec: { changes: [], stale: false },
       ...(worktree.branch !== undefined ? { branch: worktree.branch } : {}),
     }))

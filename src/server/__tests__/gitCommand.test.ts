@@ -7,7 +7,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { runGit } from '../git/gitCommand'
+import { runGit, runGitAsync } from '../git/gitCommand'
 
 let tempRoot: string
 let repoA: string
@@ -27,6 +27,60 @@ beforeAll(() => {
 
 afterAll(() => {
   fs.rmSync(tempRoot, { recursive: true, force: true })
+})
+
+describe('runGitAsync environment hygiene', () => {
+  test('ignores GIT_DIR/GIT_COMMON_DIR leaked into the environment', async () => {
+    const previousGitDir = process.env.GIT_DIR
+    const previousCommonDir = process.env.GIT_COMMON_DIR
+    process.env.GIT_DIR = path.join(repoA, '.git')
+    process.env.GIT_COMMON_DIR = path.join(repoA, '.git')
+    try {
+      const result = await runGitAsync(
+        ['rev-parse', '--path-format=absolute', '--git-common-dir', '--show-toplevel'],
+        { cwd: repoB }
+      )
+      expect(result.ok).toBe(true)
+      const [commonDir, toplevel] = result.stdout.trim().split('\n').map((line) => line.trim())
+      expect(commonDir).toBe(path.join(repoB, '.git'))
+      expect(toplevel).toBe(repoB)
+    } finally {
+      if (previousGitDir === undefined) delete process.env.GIT_DIR
+      else process.env.GIT_DIR = previousGitDir
+      if (previousCommonDir === undefined) delete process.env.GIT_COMMON_DIR
+      else process.env.GIT_COMMON_DIR = previousCommonDir
+    }
+  })
+
+  test('still honors an explicit GIT_DIR passed through the env option', async () => {
+    const result = await runGitAsync(['rev-parse', '--git-dir'], {
+      cwd: repoB,
+      env: { GIT_DIR: path.join(repoA, '.git') },
+    })
+    expect(result.ok).toBe(true)
+    expect(result.stdout.trim()).toBe(path.join(repoA, '.git'))
+  })
+
+  test('kills a hung git at the timeout and reports non-success', async () => {
+    // A PATH shim swaps git for a sleeper, so the kill is deterministic: the
+    // command would run far past the timeout if it were never killed.
+    const shimDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentboard-gitshim-'))
+    fs.writeFileSync(path.join(shimDir, 'git'), '#!/bin/sh\nexec sleep 30\n', { mode: 0o755 })
+    const previousPath = process.env.PATH
+    process.env.PATH = `${shimDir}:${previousPath ?? ''}`
+    try {
+      const result = await runGitAsync(['rev-parse', '--git-dir'], {
+        cwd: repoB,
+        timeoutMs: 150,
+      })
+      expect(result.ok).toBe(false)
+      expect(result.exitCode).not.toBe(0)
+    } finally {
+      if (previousPath === undefined) delete process.env.PATH
+      else process.env.PATH = previousPath
+      fs.rmSync(shimDir, { recursive: true, force: true })
+    }
+  })
 })
 
 describe('runGit environment hygiene', () => {
