@@ -135,17 +135,32 @@ export default function ChatProviderSettings() {
 
       <div className="space-y-2">
         {rows.map((row) => (
-          <div key={row.id} className="flex items-center gap-2">
+          // Stacked name over value: provider variable names run to 30+
+          // characters and would be clipped beside the value at modal width.
+          <div key={row.id} className="space-y-1 rounded border border-border p-2">
+            <div className="flex items-center gap-2">
+              <input
+                className="input min-w-0 flex-1 font-mono text-xs"
+                placeholder="NAME"
+                aria-label="Variable name"
+                value={row.name}
+                onChange={(e) => edit(row.id, { name: e.target.value })}
+                onKeyDown={onKeyDown}
+              />
+              <button
+                type="button"
+                className="btn text-xs"
+                aria-label={`Remove ${row.name || 'variable'}`}
+                onClick={() => {
+                  setRows((current) => current.filter((r) => r.id !== row.id))
+                  setDirty(true)
+                }}
+              >
+                ×
+              </button>
+            </div>
             <input
-              className="input min-w-0 flex-1 font-mono text-xs"
-              placeholder="NAME"
-              aria-label="Variable name"
-              value={row.name}
-              onChange={(e) => edit(row.id, { name: e.target.value })}
-              onKeyDown={onKeyDown}
-            />
-            <input
-              className="input min-w-0 flex-[2] font-mono text-xs"
+              className="input w-full font-mono text-xs"
               placeholder={row.redacted ? 'Stored — leave blank to keep' : 'value'}
               aria-label={`Value for ${row.name || 'new variable'}`}
               type={row.redacted ? 'password' : 'text'}
@@ -153,17 +168,6 @@ export default function ChatProviderSettings() {
               onChange={(e) => edit(row.id, { value: e.target.value })}
               onKeyDown={onKeyDown}
             />
-            <button
-              type="button"
-              className="btn text-xs"
-              aria-label={`Remove ${row.name || 'variable'}`}
-              onClick={() => {
-                setRows((current) => current.filter((r) => r.id !== row.id))
-                setDirty(true)
-              }}
-            >
-              ×
-            </button>
           </div>
         ))}
       </div>
