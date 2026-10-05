@@ -8,6 +8,7 @@ import type {
 } from '@anthropic-ai/claude-agent-sdk'
 import type { ChatEvent } from '../../shared/chat'
 import type { SessionStatus } from '../../shared/types'
+import type { ChatWireRecorder } from '../chat/wireTap'
 import {
   ChatSessionDriver,
   type ChatQueryFactory,
@@ -101,16 +102,23 @@ interface Harness {
   statuses: SessionStatus[]
   fakes: FakeQueryHandle[]
   sdkSessionIds: string[]
+  factoryWires: Array<ChatWireRecorder | undefined>
 }
 
 function createHarness(
-  overrides: { resumeSessionId?: string; getProviderEnv?: () => Record<string, string> } = {}
+  overrides: {
+    resumeSessionId?: string
+    getProviderEnv?: () => Record<string, string>
+    wire?: ChatWireRecorder
+  } = {}
 ): Harness {
   const events: ChatEvent[] = []
   const statuses: SessionStatus[] = []
   const fakes: FakeQueryHandle[] = []
   const sdkSessionIds: string[] = []
-  const factory: ChatQueryFactory = ({ prompt, options }) => {
+  const factoryWires: Array<ChatWireRecorder | undefined> = []
+  const factory: ChatQueryFactory = ({ prompt, options, wire }) => {
+    factoryWires.push(wire)
     const handle = createFakeQuery(prompt, options)
     fakes.push(handle)
     return handle.query
@@ -124,7 +132,7 @@ function createHarness(
     onSdkSessionId: (id) => sdkSessionIds.push(id),
     ...overrides,
   })
-  return { driver, events, statuses, fakes, sdkSessionIds }
+  return { driver, events, statuses, fakes, sdkSessionIds, factoryWires }
 }
 
 /** Let the driver's stream loop drain pushed messages. */
@@ -197,6 +205,31 @@ function result(subtype: string, extra: Record<string, unknown> = {}): SDKMessag
 }
 
 describe('ChatSessionDriver', () => {
+  test('a wire recorder taps every spawn, including the respawn after a crash', async () => {
+    const wire: ChatWireRecorder = { record: () => {} }
+    const harness = createHarness({ wire })
+    harness.driver.send('hello')
+    const first = harness.fakes[0]!
+    expect(first.options.spawnClaudeCodeProcess).toBeTypeOf('function')
+    expect(harness.factoryWires[0]).toBe(wire)
+
+    first.exit()
+    await flush()
+    harness.driver.send('again')
+    expect(harness.fakes).toHaveLength(2)
+    expect(harness.fakes[1]!.options.spawnClaudeCodeProcess).toBeTypeOf('function')
+    expect(harness.factoryWires[1]).toBe(wire)
+    harness.driver.kill()
+  })
+
+  test('without a wire recorder the SDK spawns its own process', () => {
+    const harness = createHarness()
+    harness.driver.send('hello')
+    expect('spawnClaudeCodeProcess' in harness.fakes[0]!.options).toBe(false)
+    expect(harness.factoryWires[0]).toBeUndefined()
+    harness.driver.kill()
+  })
+
   test('provider env is merged over process.env and re-read on every spawn', async () => {
     let providerEnv: Record<string, string> = {
       ANTHROPIC_BASE_URL: 'https://gw.example/anthropic',

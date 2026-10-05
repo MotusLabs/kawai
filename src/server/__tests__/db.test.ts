@@ -1,6 +1,6 @@
 import { describe, expect, test, afterEach } from 'bun:test'
 import { Database as SQLiteDatabase } from 'bun:sqlite'
-import { initDatabase } from '../db'
+import { initDatabase, resolveDataDir } from '../db'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -737,5 +737,28 @@ describe('db', () => {
     expect(claimed?.currentWindow).toBe('agentboard:77')
     expect(claimed?.wakeStartedAt).toBeNull()
     expect(db.getSessionById(inserted.sessionId)?.wakeStartedAt).toBeNull()
+  })
+})
+
+describe('resolveDataDir', () => {
+  const original = process.env.AGENTBOARD_DB_PATH
+  afterEach(() => {
+    if (original === undefined) delete process.env.AGENTBOARD_DB_PATH
+    else process.env.AGENTBOARD_DB_PATH = original
+  })
+  const defaultDir = path.join(process.env.HOME || process.env.USERPROFILE || '', '.agentboard')
+
+  test('is the directory of AGENTBOARD_DB_PATH', () => {
+    process.env.AGENTBOARD_DB_PATH = '/srv/agentboard/data/board.db'
+    expect(resolveDataDir()).toBe('/srv/agentboard/data')
+  })
+
+  test('falls back to the default data dir when unset, empty, or in-memory', () => {
+    delete process.env.AGENTBOARD_DB_PATH
+    expect(resolveDataDir()).toBe(defaultDir)
+    process.env.AGENTBOARD_DB_PATH = ' '
+    expect(resolveDataDir()).toBe(defaultDir)
+    process.env.AGENTBOARD_DB_PATH = ':memory:'
+    expect(resolveDataDir()).toBe(defaultDir)
   })
 })

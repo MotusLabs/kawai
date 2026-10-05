@@ -22,10 +22,10 @@
 
 ## 4. Driver, manager, and fixture integration
 
-- [ ] 4.1 Add `wire?: ChatWireRecorder` to `ChatSessionDriverOptions` and `ChatQueryFactory` params; pass `spawnClaudeCodeProcess: createWireTappedSpawn(wire)` in `spawnQuery()` and verify `chatSessionDriver.test.ts` asserts the option is present on first spawn and on respawn after a crash, and absent when no recorder is given
-- [ ] 4.2 Give `ChatSessionManager` a `wireLogs` option, hand each driver its session recorder, delete logs in `kill`, prune orphans after `restorePersisted`, and verify `chatSessionManager.test.ts` covers recorder wiring, kill deletion, and pruning (keep the file under 500 lines; extract helpers if needed)
-- [ ] 4.3 Build `ChatWireLogs` in `src/server/index.ts` from the DB directory (`dirname` of the resolved DB path) and verify the server starts with `bun run dev` and creates `chat-wire/` after a chat turn
-- [ ] 4.4 Make `fixtureQueryFactory` record synthetic `out` frames for prompts and permission answers and `in` frames for emitted `SDKMessage`s and permission requests, and verify a unit test that a fixture approval turn records request and response frames
+- [x] 4.1 Add `wire?: ChatWireRecorder` to `ChatSessionDriverOptions` and `ChatQueryFactory` params; pass `spawnClaudeCodeProcess: createWireTappedSpawn(wire)` in `spawnQuery()` and verify `chatSessionDriver.test.ts` asserts the option is present on first spawn and on respawn after a crash, and absent when no recorder is given
+- [x] 4.2 Give `ChatSessionManager` a `wireLogs` option, hand each driver its session recorder, delete logs in `kill`, prune orphans after `restorePersisted`, and verify `chatSessionManager.test.ts` covers recorder wiring, kill deletion, and pruning (keep the file under 500 lines; extract helpers if needed)
+- [x] 4.3 Build `ChatWireLogs` in `src/server/index.ts` from the DB directory (`dirname` of the resolved DB path) and verify the server starts with `bun run dev` and creates `chat-wire/` after a chat turn
+- [x] 4.4 Make `fixtureQueryFactory` record synthetic `out` frames for prompts and permission answers and `in` frames for emitted `SDKMessage`s and permission requests, and verify a unit test that a fixture approval turn records request and response frames
 
 ## 5. WebSocket debug subscriptions
 
