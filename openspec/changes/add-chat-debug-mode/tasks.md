@@ -7,9 +7,9 @@
 
 ## 2. Wire tap spawner
 
-- [ ] 2.1 Implement a UTF-8-safe line splitter in `src/server/chat/wireTap.ts` and verify unit tests cover multi-chunk lines, multi-byte characters split across chunks, CRLF-free raw output, and trailing partial-line flush on end
-- [ ] 2.2 Implement `createWireTappedSpawn(recorder)` per design D1 (spawn/exit/error lifecycle frames without `env`, tapped `stdin` Writable with callback passthrough, `stdout` Transform, drained `stderr`, delegated `kill`/`exitCode`/`killed`/`signalCode`/`on`/`once`/`off`) and verify a unit test spawning a small Bun echo script records `out`, `in`, `stderr`, spawn, and exit frames in order while the bytes read back equal the bytes written
-- [ ] 2.3 Verify by unit test that a spawn with a credential in `env` produces no frame containing the credential, and that spawning a missing executable records an `error` lifecycle frame and emits the child `error` event
+- [x] 2.1 Implement a UTF-8-safe line splitter in `src/server/chat/wireTap.ts` and verify unit tests cover multi-chunk lines, multi-byte characters split across chunks, verbatim line content (a `\r` is kept, only `\n` delimits), and trailing partial-line flush on end
+- [x] 2.2 Implement `createWireTappedSpawn(recorder)` per design D1 (spawn/exit/error lifecycle frames without `env`, tapped `stdin` Writable with callback passthrough, `stdout` Transform, drained `stderr`, delegated `kill`/`exitCode`/`killed`/`signalCode`/`on`/`once`/`off`) and verify a unit test spawning a small Bun echo script records `out`, `in`, `stderr`, spawn, and exit frames in order while the bytes read back equal the bytes written
+- [x] 2.3 Verify by unit test that a spawn with a credential in `env` produces no frame containing the credential, and that spawning a missing executable records an `error` lifecycle frame and emits the child `error` event
 
 ## 3. Per-session frame log
 
