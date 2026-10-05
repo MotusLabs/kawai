@@ -191,11 +191,25 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_current_window_unique
   WHERE current_window IS NOT NULL;
 `
 
-export function initDatabase(options: { path?: string } = {}): SessionDatabase {
+/** The database path from AGENTBOARD_DB_PATH, or the default data dir. */
+function resolveDbPath(): string {
   const envPath = process.env[DB_PATH_ENV]?.trim()
   const resolvedEnvPath =
     envPath && envPath !== ':memory:' ? resolveProjectPath(envPath) : envPath
-  const dbPath = options.path ?? resolvedEnvPath ?? DEFAULT_DB_PATH
+  return resolvedEnvPath ?? DEFAULT_DB_PATH
+}
+
+/**
+ * Directory beside agentboard.db for sibling data (chat wire logs). An
+ * in-memory database falls back to the default data directory.
+ */
+export function resolveDataDir(): string {
+  const dbPath = resolveDbPath()
+  return !dbPath || dbPath === ':memory:' ? DEFAULT_DATA_DIR : path.dirname(dbPath)
+}
+
+export function initDatabase(options: { path?: string } = {}): SessionDatabase {
+  const dbPath = options.path ?? resolveDbPath()
   ensureDataDir(dbPath)
 
   const db = new SQLiteDatabase(dbPath)

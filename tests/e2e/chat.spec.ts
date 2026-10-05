@@ -80,3 +80,67 @@ test('approval, questions, streaming reconnect, two-client resolution, and stop'
   await page.screenshot({ path: info.outputPath('chat-complete.png') })
   await second.close()
 })
+
+test('debug view shows protocol frames live, pages older frames, and survives reload', async ({ page }, info) => {
+  await openFixture(page)
+  const debug = page.getByRole('button', { name: 'Debug', exact: true })
+  const panel = page.getByTestId('chat-debug-panel')
+  await expect(debug).toHaveAttribute('aria-pressed', 'false')
+  await debug.click()
+  await expect(debug).toHaveAttribute('aria-pressed', 'true')
+  await expect(panel).toBeVisible()
+
+  // A fresh approval turn streams its permission request and response live.
+  const allow = page.getByRole('button', { name: 'Allow', exact: true })
+  if (await allow.count()) await allow.click()
+  const requests = panel.getByText('control_request · can_use_tool')
+  const responses = panel.getByText('control_response · success')
+  const requestsBefore = await requests.count()
+  const responsesBefore = await responses.count()
+  await page.getByLabel('Message Claude').fill('approval')
+  await page.getByRole('button', { name: 'Send', exact: true }).click()
+  await expect(requests).toHaveCount(requestsBefore + 1)
+  await allow.click()
+  await expect(page.getByTestId('chat-transcript')).toContainText('Request accepted.')
+  await expect(responses).toHaveCount(responsesBefore + 1)
+  await expect(panel.getByText('result · success').last()).toBeVisible()
+
+  // Expanding a frame shows its pretty-printed JSON.
+  await responses.last().click()
+  await expect(panel.locator('pre').last()).toContainText('"behavior": "allow"')
+  await page.screenshot({ path: info.outputPath('chat-debug.png') })
+
+  // Enough short turns to exceed one page (200 frames), then walk back.
+  const composer = page.getByLabel('Message Claude')
+  for (let index = 0; index < 70; index += 1) {
+    await composer.fill(`ping ${index}`)
+    await composer.press('Enter')
+  }
+  await expect(page.getByTestId('chat-transcript')).toContainText('ping 69')
+  await expect(page.getByTestId('chat-view').getByText('waiting', { exact: true })).toBeVisible()
+  const rows = panel.locator('[data-frame-seq]')
+  // Live frames all stay loaded while the panel is open; re-opening fetches
+  // only the newest page, leaving older frames to load on demand.
+  await debug.click()
+  await debug.click()
+  await expect(panel.getByRole('button', { name: 'Load older' })).toBeVisible()
+  await expect(rows).toHaveCount(200)
+  const before = await rows.count()
+  const oldestBefore = Number(await rows.first().getAttribute('data-frame-seq'))
+  await panel.getByRole('button', { name: 'Load older' }).click()
+  await expect.poll(() => rows.count()).toBeGreaterThan(before)
+  const seqs = (await rows.evaluateAll(nodes => nodes.map(node => Number(node.getAttribute('data-frame-seq')))))
+  expect(seqs).toEqual([...seqs].sort((a, b) => a - b))
+  expect(new Set(seqs).size).toBe(seqs.length)
+  expect(seqs[0]).toBeLessThan(oldestBefore)
+
+  // Toggling off keeps the conversation; frames persist across a reload.
+  await debug.click()
+  await expect(panel).toHaveCount(0)
+  await expect(page.getByTestId('chat-transcript')).toContainText('Request accepted.')
+  await page.reload()
+  await expect(page.getByRole('button', { name: 'Debug', exact: true })).toHaveAttribute('aria-pressed', 'false')
+  await page.getByRole('button', { name: 'Debug', exact: true }).click()
+  await expect(rows.last()).toHaveAttribute('data-frame-seq', String(seqs.at(-1)))
+  await expect(rows).toHaveCount(200)
+})

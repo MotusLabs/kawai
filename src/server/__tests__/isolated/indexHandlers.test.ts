@@ -366,6 +366,7 @@ mock.module('../../logger', () => ({
   },
 }))
 mock.module('../../db', () => ({
+  resolveDataDir: () => path.join(os.tmpdir(), `agentboard-index-handlers-${process.pid}`),
   initDatabase: () => ({
     getChatSessions: () => [],
     insertChatSession: () => {},
