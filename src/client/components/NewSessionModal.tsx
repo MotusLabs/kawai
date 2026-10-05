@@ -98,6 +98,8 @@ export default function NewSessionModal({
   initialAutoStartChange,
 }: NewSessionModalProps) {
   const [projectPath, setProjectPath] = useState('')
+  /** Inline refusal for an empty Project Path — Create must never no-op silently. */
+  const [projectPathError, setProjectPathError] = useState<string | null>(null)
   const [kind, setKind] = useState<'terminal' | 'chat'>('terminal')
   const [name, setName] = useState('')
   const [selectedPresetId, setSelectedPresetId] = useState<string | null>(null)
@@ -111,13 +113,26 @@ export default function NewSessionModal({
   const formRef = useRef<HTMLFormElement>(null)
   const projectPathRef = useRef<HTMLInputElement>(null)
   const defaultButtonRef = useRef<HTMLButtonElement>(null)
+  /**
+   * Whether the dialog is currently in its open state. State initialization
+   * must run only on the closed→open transition (and cleanup only on
+   * open→closed): this effect's dependencies include values that change while
+   * the dialog is open (server-info arriving, presets, active path), and
+   * re-initializing on those would silently wipe whatever the user typed.
+   */
+  const wasOpenRef = useRef(false)
 
   const showHostPicker = kind === 'terminal' && remoteAllowControl && remoteHosts.length > 0
 
   useEffect(() => {
+    // No open/closed transition: leave the form's live state alone.
+    if (isOpen === wasOpenRef.current) return
+    wasOpenRef.current = isOpen
+
     if (!isOpen) {
       setKind('terminal')
       setProjectPath('')
+      setProjectPathError(null)
       setName('')
       setSelectedPresetId(null)
       setCommand('')
@@ -152,6 +167,7 @@ export default function NewSessionModal({
       defaultProjectDir ||
       ''
     setProjectPath(basePath)
+    setProjectPathError(null)
     setName('')
     setSelectedHost(initialHost ?? '')
     setStartWith('none')
@@ -282,8 +298,13 @@ export default function NewSessionModal({
     event.preventDefault()
     const trimmedPath = projectPath.trim()
     if (!trimmedPath) {
+      // Refuse in place with a visible reason: a silent return leaves the user
+      // staring at a Create button that appears to do nothing (§ chat create).
+      setProjectPathError('Enter a project path to create the session.')
+      projectPathRef.current?.focus()
       return
     }
+    setProjectPathError(null)
     if (kind === 'chat') {
       onCreate(trimmedPath, name.trim() || undefined, undefined, undefined, undefined, undefined, 'chat')
       onClose()
@@ -483,7 +504,11 @@ export default function NewSessionModal({
               <input
                 ref={projectPathRef}
                 value={projectPath}
-                onChange={(event) => setProjectPath(event.target.value)}
+                onChange={(event) => {
+                  setProjectPath(event.target.value)
+                  setProjectPathError(null)
+                }}
+                aria-invalid={projectPathError !== null ? 'true' : undefined}
                 placeholder={
                   isRemoteHost
                     ? '/home/user/project'
@@ -504,6 +529,15 @@ export default function NewSessionModal({
                 </button>
               )}
             </div>
+            {projectPathError !== null ? (
+              <p
+                role="alert"
+                className="mt-1 text-xs text-red-500"
+                data-testid="project-path-error"
+              >
+                {projectPathError}
+              </p>
+            ) : null}
             {showWorktreePicker && (
               <select
                 data-testid="worktree-picker"
@@ -514,7 +548,10 @@ export default function NewSessionModal({
                   const worktree = worktrees.find(
                     (option) => option.worktreeId === event.target.value
                   )
-                  if (worktree) setProjectPath(worktree.path)
+                  if (worktree) {
+                    setProjectPath(worktree.path)
+                    setProjectPathError(null)
+                  }
                 }}
               >
                 <option value="">Discovered worktrees…</option>
@@ -575,6 +612,7 @@ export default function NewSessionModal({
           initialPath={browserInitialPath}
           onSelect={(path) => {
             setProjectPath(path)
+            setProjectPathError(null)
             setShowBrowser(false)
           }}
           onCancel={() => setShowBrowser(false)}

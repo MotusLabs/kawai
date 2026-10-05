@@ -702,6 +702,17 @@ describe('db', () => {
     db.db.exec("DELETE FROM app_settings WHERE key = 'another_key'")
   })
 
+  test('app settings delete removes only the named key', () => {
+    db.setAppSetting('delete_me', 'x')
+    db.setAppSetting('keep_me', 'y')
+    db.deleteAppSetting('delete_me')
+    expect(db.getAppSetting('delete_me')).toBeNull()
+    expect(db.getAppSetting('keep_me')).toBe('y')
+    // Deleting a missing key is a no-op.
+    db.deleteAppSetting('never_set')
+    db.deleteAppSetting('keep_me')
+  })
+
   test('wakeStartedAt is stored and cleared by window claim', () => {
     const wakeStartedAt = '2026-01-01T00:01:00.000Z'
     const inserted = db.insertSession(makeSession({

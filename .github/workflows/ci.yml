@@ -113,7 +113,19 @@ jobs:
         run: bun run build
 
       - name: Run e2e tests
-        run: bunx playwright test
+        # workers=1: these specs share one tmux server and several drive real
+        # pane I/O on a timer. Under parallel workers they race each other
+        # nondeterministically (observed: a different terminal spec flakes per
+        # run). Serial is slower but green every time.
+        run: bunx playwright test --workers=1
+
+      # chat.spec.ts drives the scripted chat fixture (approvals, questions,
+      # streaming), which the server only enables under NODE_ENV=development
+      # and AGENTBOARD_CHAT_FIXTURE=1. Run it as its own invocation on its own
+      # port so the fixture's seeded session never appears in the main suite's
+      # session lists. workers=1: the fixture scripts one conversation state.
+      - name: Run chat fixture e2e tests
+        run: NODE_ENV=development AGENTBOARD_CHAT_FIXTURE=1 E2E_PORT=4174 bunx playwright test tests/e2e/chat.spec.ts --workers=1
 
       - name: Upload test results
         if: failure()
