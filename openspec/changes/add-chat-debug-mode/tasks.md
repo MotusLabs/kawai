@@ -29,8 +29,8 @@
 
 ## 5. WebSocket debug subscriptions
 
-- [ ] 5.1 Handle `chat-debug-open` / `chat-debug-page` / `chat-debug-close` in `ChatConnections` (subscribe before the async page read, page size 200, unknown-session error) and route them from `src/server/index.ts`, and verify `chatConnections.test.ts` covers open returning the newest page with `hasOlder`, paging, close, and unknown session
-- [ ] 5.2 Batch live frames per connection on the existing zero-delay flush and drop debug subscriptions on `disconnect`, and verify tests that only debug-open connections receive frames, frames recorded during an in-flight open are delivered, and a disconnected connection receives nothing
+- [x] 5.1 Handle `chat-debug-open` / `chat-debug-page` / `chat-debug-close` in `ChatConnections` (subscribe before the async page read, page size 200, unknown-session error) and route them from `src/server/index.ts`, and verify `chatConnections.test.ts` covers open returning the newest page with `hasOlder`, paging, close, and unknown session
+- [x] 5.2 Batch live frames per connection on the existing zero-delay flush and drop debug subscriptions on `disconnect`, and verify tests that only debug-open connections receive frames, frames recorded during an in-flight open are delivered, and a disconnected connection receives nothing
 
 ## 6. Client debug panel
 

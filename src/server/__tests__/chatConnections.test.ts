@@ -1,10 +1,14 @@
-import { describe, expect, test } from 'bun:test'
+import { afterAll, describe, expect, test } from 'bun:test'
 import type { ChatEvent } from '../../shared/chat'
 import type { ServerMessage } from '../../shared/types'
-import { ChatConnections } from '../chat/ChatConnections'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import { CHAT_DEBUG_PAGE_SIZE, ChatConnections } from '../chat/ChatConnections'
+import { ChatWireLogs } from '../chat/ChatWireLogs'
 import type { ChatSessionManager } from '../chat/ChatSessionManager'
 
-function harness() {
+function harness(wireLogs?: ChatWireLogs) {
   const calls: unknown[] = []
   const snapshot: Extract<ServerMessage, { type: 'chat-snapshot' }> = {
     type: 'chat-snapshot', sessionId: 'chat-1', events: [],
@@ -26,7 +30,7 @@ function harness() {
     },
     answerQuestion: (...args: unknown[]) => { calls.push(['answer', ...args]); return { ok: true } },
   } as unknown as ChatSessionManager
-  const connections = new ChatConnections(manager)
+  const connections = new ChatConnections(manager, wireLogs)
   const messages: ServerMessage[] = []
   const connection = { send: (message: ServerMessage) => messages.push(message) }
   return { connections, connection, messages, calls, snapshot }
@@ -104,5 +108,124 @@ describe('chat WebSocket subscriptions', () => {
     await h.connections.handle(h.connection, { type: 'chat-send', sessionId: 'missing', text: 'hello' })
     expect(h.messages).toEqual([{ type: 'error', message: 'Unknown chat session missing' }])
     expect(h.calls).toEqual([])
+  })
+})
+
+describe('chat debug subscriptions', () => {
+  const dirs: string[] = []
+  function wireLogs(): ChatWireLogs {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'chat-debug-ws-'))
+    dirs.push(dir)
+    return new ChatWireLogs({ dir })
+  }
+  afterAll(() => {
+    for (const dir of dirs) fs.rmSync(dir, { recursive: true, force: true })
+  })
+  const tick = () => new Promise(resolve => setTimeout(resolve, 0))
+  const debugMessages = (messages: ServerMessage[]) =>
+    messages.filter((message): message is Extract<ServerMessage, { type: 'chat-debug-frames' }> => message.type === 'chat-debug-frames')
+  const seqsOf = (message: Extract<ServerMessage, { type: 'chat-debug-frames' }>) => message.frames.map(frame => frame.seq)
+
+  test('open replies with the newest page and hasOlder; page walks back; close stops live frames', async () => {
+    const logs = wireLogs()
+    const log = logs.get('chat-1')
+    for (let index = 0; index < CHAT_DEBUG_PAGE_SIZE + 5; index += 1) log.record('in', `frame-${index}`)
+    const h = harness(logs)
+    await h.connections.handle(h.connection, { type: 'chat-debug-open', sessionId: 'chat-1' })
+    const [first] = debugMessages(h.messages)
+    expect(first).toMatchObject({ sessionId: 'chat-1', page: true, hasOlder: true })
+    expect(first!.frames).toHaveLength(CHAT_DEBUG_PAGE_SIZE)
+    expect(first!.frames.at(-1)!.seq).toBe(CHAT_DEBUG_PAGE_SIZE + 5)
+
+    await h.connections.handle(h.connection, { type: 'chat-debug-page', sessionId: 'chat-1', beforeSeq: first!.frames[0]!.seq })
+    const older = debugMessages(h.messages)[1]!
+    expect(older).toMatchObject({ page: true, hasOlder: false })
+    expect(seqsOf(older)).toEqual([1, 2, 3, 4, 5])
+
+    log.record('out', 'live')
+    await tick()
+    expect(seqsOf(debugMessages(h.messages)[2]!)).toEqual([CHAT_DEBUG_PAGE_SIZE + 6])
+    expect(debugMessages(h.messages)[2]!.page).toBeUndefined()
+
+    await h.connections.handle(h.connection, { type: 'chat-debug-close', sessionId: 'chat-1' })
+    log.record('out', 'after close')
+    await tick()
+    expect(debugMessages(h.messages)).toHaveLength(3)
+  })
+
+  test('only debug-open connections receive frames; chat attach alone receives none', async () => {
+    const logs = wireLogs()
+    const h = harness(logs)
+    const otherMessages: ServerMessage[] = []
+    const other = { send: (message: ServerMessage) => otherMessages.push(message) }
+    await h.connections.handle(other, { type: 'chat-attach', sessionId: 'chat-1' })
+    await h.connections.handle(h.connection, { type: 'chat-debug-open', sessionId: 'chat-1' })
+    logs.get('chat-1').record('in', 'one')
+    logs.get('chat-1').record('in', 'two')
+    await tick()
+    expect(debugMessages(otherMessages)).toEqual([])
+    const live = debugMessages(h.messages).filter(message => !message.page)
+    expect(live.flatMap(seqsOf)).toEqual([1, 2])
+  })
+
+  test('frames recorded while the open page is being read are still delivered', async () => {
+    const logs = wireLogs()
+    logs.get('chat-1').record('in', 'before')
+    const h = harness(logs)
+    const opening = h.connections.handle(h.connection, { type: 'chat-debug-open', sessionId: 'chat-1' })
+    logs.get('chat-1').record('in', 'during')
+    await opening
+    await tick()
+    const delivered = new Set(debugMessages(h.messages).flatMap(seqsOf))
+    expect([...delivered].sort()).toEqual([1, 2])
+  })
+
+  test('large live bursts are split into bounded batches in order', async () => {
+    const logs = wireLogs()
+    const h = harness(logs)
+    await h.connections.handle(h.connection, { type: 'chat-debug-open', sessionId: 'chat-1' })
+    for (let index = 0; index < 300; index += 1) logs.get('chat-1').record('in', `${index}`)
+    await tick()
+    const live = debugMessages(h.messages).filter(message => !message.page)
+    expect(live.length).toBeGreaterThan(1)
+    expect(live.every(message => message.frames.length <= 128)).toBe(true)
+    expect(live.flatMap(seqsOf)).toEqual(Array.from({ length: 300 }, (_, index) => index + 1))
+  })
+
+  test('disconnect drops debug subscriptions and buffered frames', async () => {
+    const logs = wireLogs()
+    const h = harness(logs)
+    await h.connections.handle(h.connection, { type: 'chat-debug-open', sessionId: 'chat-1' })
+    logs.get('chat-1').record('in', 'buffered')
+    h.connections.disconnect(h.connection)
+    logs.get('chat-1').record('in', 'after')
+    await tick()
+    expect(debugMessages(h.messages).filter(message => !message.page)).toEqual([])
+  })
+
+  test('invalid page cursors and unknown sessions are refused', async () => {
+    const h = harness(wireLogs())
+    await h.connections.handle(h.connection, { type: 'chat-debug-page', sessionId: 'chat-1', beforeSeq: 0 })
+    await h.connections.handle(h.connection, { type: 'chat-debug-open', sessionId: 'missing' })
+    expect(h.messages).toEqual([
+      { type: 'error', message: 'chat-debug-page needs a positive integer beforeSeq' },
+      { type: 'error', message: 'Unknown chat session missing' },
+    ])
+  })
+
+  test('without wire logs open replies with an empty page', async () => {
+    const h = harness()
+    await h.connections.handle(h.connection, { type: 'chat-debug-open', sessionId: 'chat-1' })
+    expect(h.messages).toEqual([{ type: 'chat-debug-frames', sessionId: 'chat-1', frames: [], page: true, hasOlder: false }])
+  })
+
+  test('a page reply is dropped if the view closed while it was read', async () => {
+    const logs = wireLogs()
+    logs.get('chat-1').record('in', 'x')
+    const h = harness(logs)
+    const opening = h.connections.handle(h.connection, { type: 'chat-debug-open', sessionId: 'chat-1' })
+    await h.connections.handle(h.connection, { type: 'chat-debug-close', sessionId: 'chat-1' })
+    await opening
+    expect(debugMessages(h.messages)).toEqual([])
   })
 })

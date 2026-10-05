@@ -810,7 +810,7 @@ const chatSessionManager = new ChatSessionManager({
   wireLogs: chatWireLogs,
   ...(chatFixtureEnabled ? { queryFactory: fixtureQueryFactory, authCheck: () => true } : {}),
 })
-const chatConnections = new ChatConnections(chatSessionManager)
+const chatConnections = new ChatConnections(chatSessionManager, chatWireLogs)
 if (chatFixtureEnabled && !registry.getAll().some(session => session.name === 'Chat fixture')) {
   const fixture = chatSessionManager.createSession({ projectPath: process.cwd(), name: 'Chat fixture' })
   if (fixture.ok) void chatSessionManager.send(fixture.session.id, 'Show an approval')
@@ -2662,6 +2662,9 @@ function handleMessage(
     case 'chat-interrupt':
     case 'chat-approval':
     case 'chat-answer':
+    case 'chat-debug-open':
+    case 'chat-debug-page':
+    case 'chat-debug-close':
       fireAndForget(chatConnections.handle(chatPeer(ws), message), 'chatMessage')
       return
     case 'ping':

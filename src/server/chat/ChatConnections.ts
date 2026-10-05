@@ -1,8 +1,17 @@
 // Per-browser chat subscriptions and ordered event-loop batching. Snapshot
 // capture is synchronous so live events cannot overtake the initial snapshot.
-import type { ChatEvent } from '../../shared/chat'
+// Debug-view subscriptions are separate: only connections that opened a
+// session's debug view receive its wire frames. They subscribe before the
+// async page read, so no frame is missed; clients merge pages and live frames
+// by sequence, which makes the resulting overlap harmless.
+import type { ChatEvent, ChatWireFrame } from '../../shared/chat'
 import type { ClientMessage, ServerMessage } from '../../shared/types'
 import type { ChatSessionManager } from './ChatSessionManager'
+import type { ChatWireLogs } from './ChatWireLogs'
+
+/** Frames per debug page reply. */
+export const CHAT_DEBUG_PAGE_SIZE = 200
+const MAX_BATCH = 128
 
 export interface ChatConnection {
   send(message: ServerMessage): void
@@ -11,13 +20,21 @@ export interface ChatConnection {
 export class ChatConnections {
   private readonly subscriptions = new Map<ChatConnection, Set<string>>()
   private readonly batches = new Map<ChatConnection, Map<string, ChatEvent[]>>()
+  private readonly debugSubscriptions = new Map<ChatConnection, Map<string, () => void>>()
+  private readonly debugBatches = new Map<ChatConnection, Map<string, ChatWireFrame[]>>()
   private scheduled = false
 
-  constructor(private readonly manager: ChatSessionManager) {}
+  constructor(
+    private readonly manager: ChatSessionManager,
+    private readonly wireLogs?: ChatWireLogs
+  ) {}
 
   disconnect(connection: ChatConnection): void {
     this.subscriptions.delete(connection)
     this.batches.delete(connection)
+    for (const unsubscribe of this.debugSubscriptions.get(connection)?.values() ?? []) unsubscribe()
+    this.debugSubscriptions.delete(connection)
+    this.debugBatches.delete(connection)
   }
 
   publish(sessionId: string, event: ChatEvent): void {
@@ -26,7 +43,7 @@ export class ChatConnections {
       const batches = this.batches.get(connection) ?? new Map<string, ChatEvent[]>()
       const events = batches.get(sessionId) ?? []
       const previous = events.findLast(candidate => 'turnId' in candidate)
-      if (events.length >= 128 || (previous && 'turnId' in previous && 'turnId' in event && previous.turnId !== event.turnId)) {
+      if (events.length >= MAX_BATCH || (previous && 'turnId' in previous && 'turnId' in event && previous.turnId !== event.turnId)) {
         connection.send({ type: 'chat-events', sessionId, events: [...events] })
         events.length = 0
       }
@@ -34,6 +51,23 @@ export class ChatConnections {
       batches.set(sessionId, events)
       this.batches.set(connection, batches)
     }
+    this.scheduleFlush()
+  }
+
+  private publishFrame(connection: ChatConnection, sessionId: string, frame: ChatWireFrame): void {
+    const batches = this.debugBatches.get(connection) ?? new Map<string, ChatWireFrame[]>()
+    const frames = batches.get(sessionId) ?? []
+    if (frames.length >= MAX_BATCH) {
+      connection.send({ type: 'chat-debug-frames', sessionId, frames: [...frames] })
+      frames.length = 0
+    }
+    frames.push(frame)
+    batches.set(sessionId, frames)
+    this.debugBatches.set(connection, batches)
+    this.scheduleFlush()
+  }
+
+  private scheduleFlush(): void {
     if (!this.scheduled) {
       this.scheduled = true
       setTimeout(() => this.flush(), 0)
@@ -51,6 +85,42 @@ export class ChatConnections {
         }
       }
     }
+    const debugBatches = new Map(this.debugBatches)
+    this.debugBatches.clear()
+    for (const [connection, sessions] of debugBatches) {
+      for (const [sessionId, frames] of sessions) {
+        if (this.debugSubscriptions.get(connection)?.has(sessionId)) {
+          connection.send({ type: 'chat-debug-frames', sessionId, frames })
+        }
+      }
+    }
+  }
+
+  private openDebug(connection: ChatConnection, sessionId: string): void {
+    const sessions = this.debugSubscriptions.get(connection) ?? new Map<string, () => void>()
+    if (!sessions.has(sessionId) && this.wireLogs) {
+      sessions.set(sessionId, this.wireLogs.subscribe(sessionId, frame => this.publishFrame(connection, sessionId, frame)))
+    } else if (!sessions.has(sessionId)) {
+      sessions.set(sessionId, () => {})
+    }
+    this.debugSubscriptions.set(connection, sessions)
+  }
+
+  private closeDebug(connection: ChatConnection, sessionId: string): void {
+    this.debugSubscriptions.get(connection)?.get(sessionId)?.()
+    this.debugSubscriptions.get(connection)?.delete(sessionId)
+    this.debugBatches.get(connection)?.delete(sessionId)
+  }
+
+  private async sendDebugPage(connection: ChatConnection, sessionId: string, beforeSeq?: number): Promise<void> {
+    const page = this.wireLogs
+      ? await this.wireLogs.readPage(sessionId, {
+        limit: CHAT_DEBUG_PAGE_SIZE,
+        ...(beforeSeq !== undefined ? { beforeSeq } : {}),
+      })
+      : { frames: [], hasOlder: false }
+    if (!this.debugSubscriptions.get(connection)?.has(sessionId)) return
+    connection.send({ type: 'chat-debug-frames', sessionId, frames: page.frames, page: true, hasOlder: page.hasOlder })
   }
 
   async handle(connection: ChatConnection, message: ClientMessage): Promise<void> {
@@ -93,7 +163,21 @@ export class ChatConnections {
       case 'chat-answer': {
         const result = this.manager.answerQuestion(sessionId, message.requestId, message.answers)
         if (!result.ok) connection.send({ type: 'error', message: result.error })
+        return
       }
+      case 'chat-debug-open':
+        this.openDebug(connection, sessionId)
+        await this.sendDebugPage(connection, sessionId)
+        return
+      case 'chat-debug-page':
+        if (!Number.isInteger(message.beforeSeq) || message.beforeSeq < 1) {
+          connection.send({ type: 'error', message: 'chat-debug-page needs a positive integer beforeSeq' })
+          return
+        }
+        await this.sendDebugPage(connection, sessionId, message.beforeSeq)
+        return
+      case 'chat-debug-close':
+        this.closeDebug(connection, sessionId)
     }
   }
 }
