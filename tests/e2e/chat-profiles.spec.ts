@@ -1,5 +1,7 @@
 import { expect, test } from '@playwright/test'
 
+test.skip(process.env.AGENTBOARD_CHAT_FIXTURE !== '1', 'Requires the development chat fixture')
+
 // Run with NODE_ENV=development AGENTBOARD_CHAT_FIXTURE=1; sessions use the SDK-independent chat
 // fixture, while separate smoke scripts verify actual subprocess routing.
 test('select named profile, create, display, reconnect, and retain terminal form', async ({ page }, info) => {
