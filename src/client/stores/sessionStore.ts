@@ -11,6 +11,7 @@ const tabStorage = createTabStorage(SESSION_PERSIST_KEY)
 function sessionsEqualById(a: Session, b: Session): boolean {
   return (
     a.id === b.id &&
+    a.kind === b.kind &&
     a.name === b.name &&
     a.tmuxWindow === b.tmuxWindow &&
     a.projectPath === b.projectPath &&

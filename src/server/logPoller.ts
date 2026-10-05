@@ -9,7 +9,8 @@ import { generateUniqueSessionName } from './nameGenerator'
 import type { SessionRegistry } from './SessionRegistry'
 import { LogMatchWorkerClient } from './logMatchWorkerClient'
 import { LogWatcher } from './logWatcher'
-import type { AgentType, Session } from '../shared/types'
+import type { AgentType, TerminalSession } from '../shared/types'
+import { isTerminalSession } from '../shared/types'
 import type { KnownSession, LogEntrySnapshot } from './logPollData'
 import {
   getEntriesNeedingMatch,
@@ -186,6 +187,8 @@ export class LogPoller {
   private rgThreads?: number
   private startupReconciliationDelayMs: number
   private matchWorker: MatchWorkerClient | null
+  /** Chat SDK session ids to keep out of discovery (design D6). */
+  private getChatSdkSessionIds?: () => Set<string>
   private pollInFlight = false
   private pendingChangedPaths = new Set<string>()
   private orphanRematchPending = true
@@ -212,6 +215,7 @@ export class LogPoller {
       matchWorker,
       matchWorkerClient,
       startupReconciliationDelayMs,
+      getChatSdkSessionIds,
     }: {
       onSessionOrphaned?: (sessionId: string, supersededBy?: string) => void
       onSessionActivated?: (sessionId: string, window: string) => void
@@ -223,6 +227,7 @@ export class LogPoller {
       matchWorker?: boolean
       matchWorkerClient?: MatchWorkerClient
       startupReconciliationDelayMs?: number
+      getChatSdkSessionIds?: () => Set<string>
     } = {}
   ) {
     this.db = db
@@ -231,6 +236,7 @@ export class LogPoller {
     this.onSessionActivated = onSessionActivated
     this.onOrphanSessionsDiscovered = onOrphanSessionsDiscovered
     this.isLastUserMessageLocked = isLastUserMessageLocked
+    this.getChatSdkSessionIds = getChatSdkSessionIds
     const limit = maxLogsPerPoll ?? DEFAULT_MAX_LOGS
     this.maxLogsPerPoll = Math.max(1, limit)
     this.matchProfile = matchProfile ?? false
@@ -336,7 +342,7 @@ export class LogPoller {
     const orphanWorker = this.matchWorker
 
     try {
-      const windows = this.registry.getAll()
+      const windows: TerminalSession[] = this.registry.getAll().filter(isTerminalSession)
       const activeSessions = this.db.getActiveSessions()
       const initiallyClaimedWindows = new Set(
         activeSessions
@@ -434,6 +440,7 @@ export class LogPoller {
           maxLogsPerPoll: 1, // We only care about orphan matching, not batch scanning
           sessions,
           knownSessions: [],
+          excludeSessionIds: this.chatExcludeSessionIds(),
           scrollbackLines: DEFAULT_SCROLLBACK_LINES,
           minTokensForMatch: MIN_LOG_TOKENS_FOR_INSERT,
           forceOrphanRematch: true,
@@ -503,7 +510,7 @@ export class LogPoller {
       if (unmatchedOrphans.length > 0) {
         // Build map of unclaimed window name -> window (only if name is unique)
         // Only consider managed windows to avoid cross-session misassociation.
-        const unclaimedByName = new Map<string, Session>()
+        const unclaimedByName = new Map<string, TerminalSession>()
         const ambiguousNames = new Set<string>()
         for (const window of windows) {
           if (window.source !== 'managed') continue
@@ -615,7 +622,7 @@ export class LogPoller {
     try {
       if (!this.matchWorker) return
 
-      const windows = this.registry.getAll()
+      const windows: TerminalSession[] = this.registry.getAll().filter(isTerminalSession)
       const logDirs = getLogSearchDirs()
       const sessionRecords = [
         ...this.db.getActiveSessions(),
@@ -653,6 +660,7 @@ export class LogPoller {
         maxLogsPerPoll: this.maxLogsPerPoll,
         sessions,
         knownSessions,
+        excludeSessionIds: this.chatExcludeSessionIds(),
         scrollbackLines: DEFAULT_SCROLLBACK_LINES,
         minTokensForMatch: MIN_LOG_TOKENS_FOR_INSERT,
         forceOrphanRematch: false,
@@ -686,7 +694,7 @@ export class LogPoller {
 
   private processMatchResponse(
     response: MatchWorkerResponse,
-    windows: Session[],
+    windows: TerminalSession[],
     sessionRecords: SessionRecord[]
   ): PollStats {
     let logsScanned = 0
@@ -710,7 +718,7 @@ export class LogPoller {
         lastKnownLogSize: session.lastKnownLogSize,
       }))
 
-    const exactWindowMatches = new Map<string, Session>()
+    const exactWindowMatches = new Map<string, TerminalSession>()
     const windowsByTmux = new Map(
       windows.map((window) => [window.tmuxWindow, window])
     )
@@ -1035,6 +1043,11 @@ export class LogPoller {
     }
   }
 
+  /** Chat SDK session ids to exclude from discovery (design D6). */
+  private chatExcludeSessionIds(): string[] {
+    return Array.from(this.getChatSdkSessionIds?.() ?? [])
+  }
+
   async pollOnce(): Promise<PollStats> {
     if (this.pollInFlight) {
       return {
@@ -1055,7 +1068,7 @@ export class LogPoller {
     let processMs = 0
 
     try {
-      const windows = this.registry.getAll()
+      const windows: TerminalSession[] = this.registry.getAll().filter(isTerminalSession)
       const logDirs = getLogSearchDirs()
       const sessionRecords = [
         ...this.db.getActiveSessions(),
@@ -1127,6 +1140,7 @@ export class LogPoller {
               : this.maxLogsPerPoll,
             sessions,
             knownSessions,
+            excludeSessionIds: this.chatExcludeSessionIds(),
             scrollbackLines: DEFAULT_SCROLLBACK_LINES,
             minTokensForMatch: MIN_LOG_TOKENS_FOR_INSERT,
             forceOrphanRematch: false,

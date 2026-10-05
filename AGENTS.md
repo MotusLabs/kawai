@@ -20,16 +20,21 @@ Run `bun run lint && bun run typecheck && bun run test` after changes.
 - Backend discovers windows, streams terminal output via WebSocket
 - Parses Claude/Codex JSONL logs from `~/.claude/projects/` and `~/.codex/sessions/` for status
 - Status: unknown -> working -> waiting (derived from log events)
+- Chat sessions use the Claude Agent SDK without tmux. Turns and pending approvals/questions determine status directly. WebSocket snapshots restore history and pending requests on reconnect; SQLite rows and SDK transcripts allow restart/resume.
 
 ## Structure
 
 - src/server/     Hono backend, WebSocket, tmux/pty management, log parsing
   - `src/server/SessionManager.ts` - tmux window discovery, log parsing, status detection
   - `src/server/index.ts` - Hono routes, WebSocket handling
+  - `src/server/chat/` - SDK driver, session lifecycle, transcript replay, subscriptions, and development fixture
 - src/client/     React frontend, xterm.js terminal, Zustand stores
   - `src/client/App.tsx` - main UI, keyboard shortcuts
   - `src/client/components/Terminal.tsx` - xterm.js wrapper
+  - `src/client/components/chat/` - transcript, approvals, questions, and composer
+  - `src/client/stores/chatStore.ts` - ordered transcript and pending requests
 - src/shared/     Shared types
+  - `src/shared/chat.ts` - SDK-independent chat events and request contracts
 
 - Data directory: `~/.agentboard/` contains `agentboard.db` (session data) and `agentboard.log`
 

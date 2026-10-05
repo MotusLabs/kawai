@@ -25,7 +25,7 @@ import {
   TmuxTimeoutError,
   isTmuxTimeoutError,
 } from './tmuxTimeout'
-import type { Session, SessionStatus, SessionSource } from '../shared/types'
+import type { SessionStatus, SessionSource, TerminalSession } from '../shared/types'
 
 // Format string for batched window listing
 const BATCH_WINDOW_FORMAT = buildTmuxFormat([
@@ -97,7 +97,7 @@ export type RefreshWorkerResponse =
       id: string
       kind: 'refresh'
       type: 'result'
-      sessions: Session[]
+      sessions: TerminalSession[]
     }
   | {
       id: string
@@ -307,12 +307,12 @@ function listAllWindows(
   managedSession: string,
   discoverPrefixes: string[],
   preferWindowName: boolean
-): Session[] {
+): TerminalSession[] {
   const allWindows = listAllWindowData()
   const now = Date.now()
   const wsPrefix = `${managedSession}-ws-`
 
-  const sessions: Session[] = []
+  const sessions: TerminalSession[] = []
 
   for (const window of allWindows) {
     const { sessionName } = window

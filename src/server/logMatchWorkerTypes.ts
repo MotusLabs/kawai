@@ -1,4 +1,4 @@
-import type { AgentType, Session } from '../shared/types'
+import type { AgentType, TerminalSession } from '../shared/types'
 import type { ExactMatchProfiler } from './logMatcher'
 import type { KnownSession, LogEntrySnapshot } from './logPollData'
 import type { SessionSnapshot } from './logMatchGate'
@@ -28,7 +28,7 @@ export interface LastMessageCandidate {
 
 export interface MatchWorkerRequest {
   id: string
-  windows: Session[]
+  windows: TerminalSession[]
   maxLogsPerPoll: number
   logDirs?: string[]
   /**
@@ -40,6 +40,11 @@ export interface MatchWorkerRequest {
   sessions: SessionSnapshot[]
   /** Known sessions to skip expensive file reads during log collection */
   knownSessions?: KnownSession[]
+  /**
+   * Chat-session SDK ids whose transcripts must not enter discovery/agent
+   * matching (design D6). Sent as an array so it crosses the worker boundary.
+   */
+  excludeSessionIds?: string[]
   scrollbackLines: number
   minTokensForMatch?: number
   forceOrphanRematch?: boolean

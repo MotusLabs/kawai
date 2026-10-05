@@ -3,7 +3,7 @@
  * Provides async interface for refreshing session list off the main thread.
  */
 import { config } from './config'
-import type { Session } from '../shared/types'
+import type { TerminalSession } from '../shared/types'
 import type { RefreshWorkerRequest, RefreshWorkerResponse } from './sessionRefreshWorker'
 import { TMUX_TIMEOUT_ERROR_CODE } from './tmuxTimeout'
 
@@ -73,7 +73,7 @@ export class SessionRefreshWorkerClient {
     managedSession: string,
     discoverPrefixes: string[],
     options: { expectedWindowCount?: number; preferWindowName?: boolean } = {}
-  ): Promise<Session[]> {
+  ): Promise<TerminalSession[]> {
     if (this.disposed) {
       throw new Error('Session refresh worker is disposed')
     }
@@ -91,7 +91,7 @@ export class SessionRefreshWorkerClient {
       preferWindowName: options.preferWindowName,
     }
 
-    return new Promise<Session[]>((resolve, reject) => {
+    return new Promise<TerminalSession[]>((resolve, reject) => {
       const timeoutMs = getRefreshTimeoutMs(options.expectedWindowCount)
       const timeoutId = setTimeout(() => {
         this.handleRequestTimeout(id, generation)

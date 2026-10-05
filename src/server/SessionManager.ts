@@ -23,7 +23,7 @@ import {
   inferSessionStatus,
   type PaneCacheState,
 } from './statusInference'
-import type { Session, SessionStatus } from '../shared/types'
+import type { Session, SessionStatus, TerminalSession } from '../shared/types'
 
 interface WindowInfo {
   id: string
@@ -472,7 +472,7 @@ export class SessionManager {
     }
   }
 
-  listWindows(): Session[] {
+  listWindows(): TerminalSession[] {
     // Don't create the session just to list windows — that would leave an
     // orphan shell window (e.g. "zsh") visible in the UI.  Only configure
     // mouse mode when the session already exists.
@@ -503,7 +503,7 @@ export class SessionManager {
     name?: string,
     command?: string,
     options?: { excludeSessionId?: string }
-  ): Session {
+  ): TerminalSession {
     const sessionExisted = this.sessionExists()
 
     const resolvedPath = resolveProjectPath(projectPath)
@@ -671,7 +671,11 @@ export class SessionManager {
     const targetWindowId = this.extractWindowId(tmuxWindow)
     const existingNames = new Set(
       this.listWindowsForSession(sessionName, 'managed')
-        .filter((s) => this.extractWindowId(s.tmuxWindow) !== targetWindowId)
+        .filter(
+          (s) =>
+            s.tmuxWindow !== undefined &&
+            this.extractWindowId(s.tmuxWindow) !== targetWindowId
+        )
         .map((s) => s.name)
     )
 
@@ -682,7 +686,7 @@ export class SessionManager {
     this.runTmux(['rename-window', '-t', tmuxWindow, trimmed])
   }
 
-  private listExternalWindows(): Session[] {
+  private listExternalWindows(): TerminalSession[] {
     const wsPrefix = `${this.sessionName}-ws-`
     const allSessions = this.listSessions().filter(
       (sessionName) => !sessionName.startsWith(wsPrefix)
@@ -719,7 +723,7 @@ export class SessionManager {
   private listWindowsForSession(
     sessionName: string,
     source: Session['source']
-  ): Session[] {
+  ): TerminalSession[] {
     const output = this.listWindowOutput(sessionName)
 
     return splitTmuxLines(output)

@@ -1,14 +1,22 @@
 import { describe, expect, test } from 'bun:test'
-import type { Session } from '../../shared/types'
+import type { Session, TerminalSession } from '../../shared/types'
 import { revalidateRematchTarget } from '../sessionWake/rematchTarget'
 
-const candidate: Session = {
+const candidate: TerminalSession = {
   id: 'agentboard:@1', tmuxWindow: 'agentboard:@1', name: 'old',
   projectPath: '/tmp', status: 'waiting', source: 'managed',
   createdAt: '2026-10-04T00:00:00.000Z', lastActivity: '2026-10-04T00:00:00.000Z',
 }
 
 describe('wake rematch target revalidation', () => {
+  test('does not probe or hydrate chat sessions', async () => {
+    const chat: Session = { ...candidate, kind: 'chat', tmuxWindow: undefined }
+    let probes = 0
+    const probe = async () => { probes++; return '@1' }
+    expect(await revalidateRematchTarget(chat, probe, () => chat)).toBeNull()
+    expect(probes).toBe(0)
+    expect(await revalidateRematchTarget(candidate, probe, () => chat)).toBeNull()
+  })
   test('does not claim a window killed while matching was pending', async () => {
     expect(await revalidateRematchTarget(candidate, async () => null, () => candidate)).toBeNull()
   })

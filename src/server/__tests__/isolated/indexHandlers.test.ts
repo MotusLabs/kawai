@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, test, mock } from 'b
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import type { Session, ServerMessage } from '@shared/types'
+import type { Session, ServerMessage, TerminalSession } from '@shared/types'
 import type { AgentSessionRecord, ClaimCurrentWindowPatch } from '../../db'
 import { TmuxTimeoutError } from '../../tmuxTimeout'
 import { TMUX_FIELD_SEPARATOR } from '../../tmuxFormat'
@@ -212,6 +212,16 @@ class SessionRegistryMock {
     return this.sessions
   }
 
+  setChatSession(session: Session) {
+    this.sessions.push(session)
+    this.emit('sessions', this.sessions)
+  }
+
+  removeChatSession(id: string) {
+    this.sessions = this.sessions.filter(session => session.id !== id)
+    this.emit('session-removed', id)
+  }
+
   getAgentSessions() {
     return this.agentSessions
   }
@@ -357,6 +367,9 @@ mock.module('../../logger', () => ({
 }))
 mock.module('../../db', () => ({
   initDatabase: () => ({
+    getChatSessions: () => [],
+    insertChatSession: () => {},
+    deleteChatSession: () => {},
     getSessionById: (sessionId: string) => dbState.records.get(sessionId) ?? null,
     getSessionByLogPath: (logFilePath: string) =>
       Array.from(dbState.records.values()).find(
@@ -547,7 +560,7 @@ mock.module('../../terminal', () => ({
   TerminalProxyError: TerminalProxyErrorMock,
 }))
 
-const baseSession: Session = {
+const baseSession: TerminalSession = {
   id: 'session-1',
   name: 'alpha',
   tmuxWindow: 'agentboard:1',
@@ -740,7 +753,35 @@ afterAll(() => {
   mock.restore()
 })
 
+mock.module('../../chat/sdkAvailability', () => ({ probeSdkAvailability: async () => {} }))
+
 describe('server message handlers', () => {
+  test('chat creation and kill route through the manager without creating a tmux window', async () => {
+    const previousToken = process.env.CLAUDE_CODE_OAUTH_TOKEN
+    process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'
+    try {
+      const { serveOptions, registryInstance } = await loadIndex()
+      const { ws, sent } = createWs()
+      const websocket = serveOptions.websocket!
+      websocket.open?.(ws as never)
+      const before = registryInstance.getAll().length
+      websocket.message?.(ws as never, JSON.stringify({ type: 'session-create', kind: 'chat', projectPath: '/tmp/chat', name: 'test chat' }))
+      await new Promise(resolve => setTimeout(resolve, 0))
+      const created = sent.find(message => message.type === 'session-created')
+      expect(created?.type).toBe('session-created')
+      if (created?.type !== 'session-created') throw new Error('Chat creation failed')
+      expect(created.session.kind).toBe('chat')
+      expect(created.session.tmuxWindow).toBeUndefined()
+      expect(registryInstance.getAll()).toHaveLength(before + 1)
+      websocket.message?.(ws as never, JSON.stringify({ type: 'session-kill', sessionId: created.session.id }))
+      await new Promise(resolve => setTimeout(resolve, 0))
+      expect(registryInstance.get(created.session.id)).toBeUndefined()
+      expect(sent).toContainEqual({ type: 'session-removed', sessionId: created.session.id })
+    } finally {
+      if (previousToken === undefined) delete process.env.CLAUDE_CODE_OAUTH_TOKEN
+      else process.env.CLAUDE_CODE_OAUTH_TOKEN = previousToken
+    }
+  })
   test('websocket open sends sessions and registry broadcasts', async () => {
     const { serveOptions, registryInstance } = await loadIndex()
     registryInstance.sessions = [baseSession]
@@ -3897,7 +3938,7 @@ describe('server message handlers', () => {
   test('hibernate kills resolved live window when DB window is stale', async () => {
     const { serveOptions, registryInstance } = await loadIndex()
     const liveAgentSessionId = 'hibernate-stale-window'
-    const liveSession: Session = {
+    const liveSession: TerminalSession = {
       ...baseSession,
       id: 'live-stale-window',
       agentSessionId: liveAgentSessionId,
@@ -4281,7 +4322,7 @@ expect(sent[sent.length - 1]).toEqual({
     seedRecord(record)
 
     let createArgs: { projectPath: string; name?: string; command?: string } | null = null
-    const createdSession: Session = {
+    const createdSession: TerminalSession = {
       ...baseSession,
       id: 'created-session',
       name: 'resume',
@@ -4391,7 +4432,7 @@ expect(sent[sent.length - 1]).toEqual({
 
     const rematchId = 'wake-rematch'
     const logFilePath = '/tmp/wake-rematch.jsonl'
-    const liveSession: Session = {
+    const liveSession: TerminalSession = {
       ...baseSession,
       id: 'live-rematched-session',
       name: 'manual-rematch',
@@ -4483,7 +4524,7 @@ expect(sent[sent.length - 1]).toEqual({
         isPinned: true,
       })
     )
-    const createdSession: Session = {
+    const createdSession: TerminalSession = {
       ...baseSession,
       id: 'wake-lock-created',
       name: 'wake-lock',
@@ -4840,7 +4881,7 @@ expect(sent[sent.length - 1]).toEqual({
     seedRecord(record)
 
     let createArgs: { projectPath: string; name?: string; command?: string } | null = null
-    const createdSession: Session = {
+    const createdSession: TerminalSession = {
       ...baseSession,
       id: 'created-quoted',
       name: 'quoted-session',
@@ -4883,7 +4924,7 @@ expect(sent[sent.length - 1]).toEqual({
     }
     websocket.open?.(ws as never)
 
-    const createdSession: Session = {
+    const createdSession: TerminalSession = {
       ...baseSession,
       id: 'created-apply-prompt',
       name: 'apply-prompt',
@@ -4954,7 +4995,7 @@ expect(sent[sent.length - 1]).toEqual({
     websocket.open?.(ws as never)
 
     let createArgs: { projectPath: string; name?: string; command?: string } | null = null
-    const createdSession: Session = {
+    const createdSession: TerminalSession = {
       ...baseSession,
       id: 'created-unrelated-quoted',
       name: 'unrelated-quoted',
@@ -5015,7 +5056,7 @@ expect(sent[sent.length - 1]).toEqual({
     seedRecord(record)
 
     let createArgs: { projectPath: string; name?: string; command?: string } | null = null
-    const createdSession: Session = {
+    const createdSession: TerminalSession = {
       ...baseSession,
       id: 'created-codex',
       name: 'codex-session',
@@ -5063,7 +5104,7 @@ expect(sent[sent.length - 1]).toEqual({
     seedRecord(record)
 
     let createArgs: { projectPath: string; name?: string; command?: string } | null = null
-    const createdSession: Session = {
+    const createdSession: TerminalSession = {
       ...baseSession,
       id: 'created-codex-old',
       name: 'codex-old',
@@ -5112,7 +5153,7 @@ expect(sent[sent.length - 1]).toEqual({
     seedRecord(record)
 
     let createArgs: { projectPath: string; name?: string; command?: string } | null = null
-    const createdSession: Session = {
+    const createdSession: TerminalSession = {
       ...baseSession,
       id: 'created-pi',
       name: 'pi-session',
@@ -5219,7 +5260,7 @@ expect(sent[sent.length - 1]).toEqual({
       })
     )
 
-    const createdSession: Session = {
+    const createdSession: TerminalSession = {
       ...baseSession,
       id: 'wake-claim-created',
       name: 'wake-claim-throws',

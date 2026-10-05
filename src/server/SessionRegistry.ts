@@ -12,26 +12,51 @@ export interface RegistryEvents {
 
 export class SessionRegistry extends EventEmitter {
   private sessions: Map<string, Session>
+  // Chat sessions live outside tmux discovery, so replaceSessions() (which
+  // rebuilds `sessions` from a tmux listing) must never touch them. Kept in a
+  // separate map so a tmux refresh can't drop a live chat session.
+  private chatSessions: Map<string, Session>
   private agentSessions: { active: AgentSession[]; hibernating: AgentSession[]; history: AgentSession[] }
 
   constructor() {
     super()
     this.sessions = new Map<string, Session>()
+    this.chatSessions = new Map<string, Session>()
     this.agentSessions = { active: [], hibernating: [], history: [] }
   }
 
   getAll(): Session[] {
-    return Array.from(this.sessions.values())
+    return [...this.sessions.values(), ...this.chatSessions.values()]
   }
 
   get(sessionId: string): Session | undefined {
-    return this.sessions.get(sessionId)
+    return this.sessions.get(sessionId) ?? this.chatSessions.get(sessionId)
+  }
+
+  /** Register or replace a chat session (not affected by tmux discovery). */
+  setChatSession(session: Session): void {
+    this.chatSessions.set(session.id, session)
+    this.emit('sessions', this.getAll())
+  }
+
+  /** Remove a chat session; returns true when it existed. */
+  removeChatSession(sessionId: string): boolean {
+    const removed = this.chatSessions.delete(sessionId)
+    if (removed) {
+      this.emit('sessions', this.getAll())
+    }
+    return removed
   }
 
   replaceSessions(nextSessions: Session[]): void {
+    // Callers thread registry.getAll() back in when composing the next tmux
+    // world (e.g. session-create prepends the new window); chat sessions ride
+    // along in that list. They are owned by the chat map, never by this
+    // refresh, so drop them before diffing the tmux world.
+    const tmuxNext = nextSessions.filter((session) => session.kind !== 'chat')
     const nextMap = new Map<string, Session>()
 
-    for (const session of nextSessions) {
+    for (const session of tmuxNext) {
       const existing = this.sessions.get(session.id)
       const nextLastActivity = pickLatestActivity(
         existing?.lastActivity,
@@ -77,7 +102,7 @@ export class SessionRegistry extends EventEmitter {
   }
 
   updateSession(sessionId: string, updates: Partial<Session>): Session | undefined {
-    const current = this.sessions.get(sessionId)
+    const current = this.sessions.get(sessionId) ?? this.chatSessions.get(sessionId)
     if (!current) {
       return undefined
     }
@@ -87,7 +112,11 @@ export class SessionRegistry extends EventEmitter {
       ...updates,
     }
 
-    this.sessions.set(sessionId, updated)
+    if (this.chatSessions.has(sessionId)) {
+      this.chatSessions.set(sessionId, updated)
+    } else {
+      this.sessions.set(sessionId, updated)
+    }
     this.emit('session-update', updated)
     return updated
   }
@@ -170,10 +199,11 @@ function agentSessionsEqual(a: AgentSession, b: AgentSession): boolean {
  * timestamps fall back to raw string equality, preserving the previous
  * behavior for malformed values.
  */
-function sessionsEqualForBroadcast(a: Session, b: Session): boolean {
+export function sessionsEqualForBroadcast(a: Session, b: Session): boolean {
   return (
     a.id === b.id &&
     a.name === b.name &&
+    a.kind === b.kind &&
     a.tmuxWindow === b.tmuxWindow &&
     a.status === b.status &&
     activityInSameBucket(a.lastActivity, b.lastActivity) &&

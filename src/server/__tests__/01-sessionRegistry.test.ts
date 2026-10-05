@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { SessionRegistry } from '../SessionRegistry'
+import { SessionRegistry, sessionsEqualForBroadcast } from '../SessionRegistry'
 import type { AgentSession, Session } from '../../shared/types'
 
 const baseSession: Session = {
@@ -297,6 +297,125 @@ describe('SessionRegistry', () => {
     expect(activeEvents).toHaveLength(0)
     expect(fullEvents).toHaveLength(1)
     expect(fullEvents[0].hibernating[0]?.sessionId).toBe('s2')
+  })
+
+  test('chat sessions survive a tmux replaceSessions refresh', () => {
+    const registry = new SessionRegistry()
+    const removedIds: string[] = []
+
+    registry.on('session-removed', (sessionId) => removedIds.push(sessionId))
+
+    const chatSession = makeSession({
+      id: 'chat-abc',
+      name: 'chat-abc',
+      kind: 'chat',
+      tmuxWindow: undefined,
+      agentType: 'claude',
+    })
+    registry.setChatSession(chatSession)
+    registry.replaceSessions([makeSession({ id: 'window-1' })])
+
+    // A later tmux refresh with a completely different window set must not
+    // drop the chat session or report it as removed.
+    registry.replaceSessions([makeSession({ id: 'window-2', tmuxWindow: 'agentboard:9' })])
+
+    expect(registry.get('chat-abc')).toMatchObject({ kind: 'chat' })
+    expect(registry.getAll().map((s) => s.id)).toContain('chat-abc')
+    expect(removedIds).toEqual(['window-1'])
+  })
+
+  test('replaceSessions ignores chat sessions threaded through the next list', () => {
+    const registry = new SessionRegistry()
+
+    const chatSession = makeSession({ id: 'chat-abc', kind: 'chat', tmuxWindow: undefined })
+    registry.setChatSession(chatSession)
+    registry.replaceSessions([makeSession({ id: 'window-1' })])
+
+    // session-create composes the next list from getAll(), so the chat
+    // session rides along; it must not be duplicated or adopted by the tmux map.
+    registry.replaceSessions([
+      makeSession({ id: 'window-2', tmuxWindow: 'agentboard:2' }),
+      ...registry.getAll(),
+    ])
+
+    const all = registry.getAll()
+    expect(all.filter((s) => s.id === 'chat-abc')).toHaveLength(1)
+    expect(registry.get('chat-abc')).toMatchObject({ kind: 'chat' })
+
+    // ...and a follow-up tmux-only refresh still keeps it.
+    registry.replaceSessions([makeSession({ id: 'window-2', tmuxWindow: 'agentboard:2' })])
+    expect(registry.get('chat-abc')).toBeDefined()
+  })
+
+  test('updateSession applies to chat sessions and emits session-update', () => {
+    const registry = new SessionRegistry()
+    const updates: Session[] = []
+    registry.on('session-update', (session) => updates.push(session))
+
+    registry.setChatSession(
+      makeSession({ id: 'chat-abc', kind: 'chat', tmuxWindow: undefined, status: 'waiting' })
+    )
+    const updated = registry.updateSession('chat-abc', { status: 'working' })
+
+    expect(updated).toMatchObject({ id: 'chat-abc', kind: 'chat', status: 'working' })
+    expect(registry.get('chat-abc')?.status).toBe('working')
+    expect(updates).toHaveLength(1)
+
+    // The update must survive a tmux refresh (session stays in the chat map).
+    registry.replaceSessions([makeSession({ id: 'window-1' })])
+    expect(registry.get('chat-abc')?.status).toBe('working')
+  })
+
+  test('removeChatSession removes only the chat session', () => {
+    const registry = new SessionRegistry()
+    const removedIds: string[] = []
+    registry.on('session-removed', (sessionId) => removedIds.push(sessionId))
+
+    registry.setChatSession(makeSession({ id: 'chat-abc', kind: 'chat', tmuxWindow: undefined }))
+    registry.replaceSessions([makeSession({ id: 'window-1' })])
+
+    expect(registry.removeChatSession('chat-abc')).toBe(true)
+    expect(registry.get('chat-abc')).toBeUndefined()
+    expect(registry.get('window-1')).toBeDefined()
+    // Chat removal is not a tmux-world removal event; session-removed is the
+    // kill/broadcast signal the chat manager emits itself.
+    expect(removedIds).toEqual([])
+    expect(registry.removeChatSession('chat-abc')).toBe(false)
+  })
+
+  test('sessionsEqualForBroadcast compares every session field including kind and tmuxWindow', () => {
+    const base: Session = {
+      ...baseSession,
+      kind: 'terminal',
+    }
+
+    expect(sessionsEqualForBroadcast(base, { ...base })).toBe(true)
+
+    const fieldChanges: Array<Partial<Session>> = [
+      { id: 'changed' },
+      { name: 'changed' },
+      { kind: 'chat' },
+      { kind: undefined },
+      { tmuxWindow: 'agentboard:2' },
+      { tmuxWindow: undefined },
+      { status: 'working' },
+      { lastActivity: '2025-01-01T00:00:00.000Z' },
+      { projectPath: '/tmp/changed' },
+      { source: 'external' },
+      { agentType: 'codex' },
+      { command: 'claude --resume' },
+      { agentSessionId: 'agent-2' },
+      { agentSessionName: 'changed' },
+      { logFilePath: '/tmp/changed.jsonl' },
+      { lastUserMessage: 'changed' },
+      { isPinned: true },
+      { host: 'remote-host' },
+      { remote: true },
+    ]
+
+    for (const change of fieldChanges) {
+      expect(sessionsEqualForBroadcast(base, { ...base, ...change })).toBe(false)
+    }
   })
 
   test('agentSessionsEqual correctly compares all 12 fields of AgentSession', () => {

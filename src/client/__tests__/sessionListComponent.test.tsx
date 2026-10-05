@@ -443,6 +443,7 @@ describe('session comparator (design D6)', () => {
       logFilePath: '/tmp/agent-1.jsonl',
       lastUserMessage: 'hello',
       isPinned: false,
+      kind: 'terminal',
     }
     // Compile-time exhaustiveness comes from the mapped type (a new Session
     // field without a comparator entry fails typecheck); this runtime check
