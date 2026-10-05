@@ -96,6 +96,11 @@ export function chatAuthErrorMessage(): string {
   )
 }
 
+/** Order-independent identity of a provider configuration. */
+function providerEnvKey(env: ChatProviderEnv): string {
+  return JSON.stringify(Object.entries(env).sort(([a], [b]) => a.localeCompare(b)))
+}
+
 export class ChatSessionManager {
   private readonly options: ChatSessionManagerOptions
   private readonly records = new Map<string, ChatSessionRecord>()
@@ -106,18 +111,22 @@ export class ChatSessionManager {
     Promise<ChatSessionDriver | null>
   >()
   private sdkQuery: Promise<ChatQueryFactory> | null = null
-  private availability: Promise<void> | null = null
+  /**
+   * The availability probe for one provider configuration. Keyed so a provider
+   * change in Settings re-probes the new endpoint; a failed probe is dropped so
+   * a corrected configuration (or repaired install) recovers without a restart.
+   * Concurrent creations under the same configuration share one probe.
+   */
+  private availability: { key: string; promise: Promise<void> } | null = null
 
   async createAvailableSession(input: { projectPath: string; name?: string }): Promise<ChatCreateResult> {
     if (!this.authOk()) return { ok: false, error: chatAuthErrorMessage() }
     try {
-      this.availability ??= (this.options.availabilityProbe ??
-        (this.options.queryFactory ? async () => {} : probeSdkAvailability))(this.providerEnv())
-      await this.availability
+      await this.probeAvailability()
     } catch (error) {
       return {
         ok: false,
-        error: 'Claude Agent SDK is unavailable. Check its installation and runtime, then restart the server. ' +
+        error: 'Claude Agent SDK is unavailable. Check its installation, runtime, and chat provider settings, then try again. ' +
           (error instanceof Error ? error.message : 'SDK probe failed'),
       }
     }
@@ -405,6 +414,20 @@ export class ChatSessionManager {
     } finally {
       this.driverPromises.delete(sessionId)
     }
+  }
+
+  private probeAvailability(): Promise<void> {
+    const providerEnv = this.providerEnv()
+    const key = providerEnvKey(providerEnv)
+    if (this.availability?.key === key) return this.availability.promise
+    const probe = this.options.availabilityProbe ??
+      (this.options.queryFactory ? async () => {} : probeSdkAvailability)
+    const entry = { key, promise: probe(providerEnv) }
+    this.availability = entry
+    entry.promise.catch(() => {
+      if (this.availability === entry) this.availability = null
+    })
+    return entry.promise
   }
 
   private providerEnv(): ChatProviderEnv {

@@ -173,12 +173,65 @@ describe('ChatSessionManager', () => {
         expect(result.ok).toBe(false)
         if (!result.ok) {
           expect(result.error).toContain('Claude Agent SDK is unavailable')
-          expect(result.error).toContain('restart the server')
+          expect(result.error).toContain('try again')
         }
       }
-      expect(probes).toBe(1)
+      // Failures are not cached: each attempt re-probes.
+      expect(probes).toBe(2)
       expect(db.getChatSessions()).toHaveLength(0)
       expect(registry.getAll()).toHaveLength(0)
+    })
+
+    test('a probe that failed recovers once the provider environment is corrected', async () => {
+      process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'
+      let providerEnv: Record<string, string> = { ANTHROPIC_BASE_URL: 'https://broken.example' }
+      const probed: string[] = []
+      const manager = new ChatSessionManager({
+        db, registry: new SessionRegistry(), onEvent: () => {},
+        availabilityProbe: async (env) => {
+          probed.push(env.ANTHROPIC_BASE_URL ?? '')
+          if (env.ANTHROPIC_BASE_URL === 'https://broken.example') throw new Error('unreachable')
+        },
+        getProviderEnv: () => providerEnv,
+      })
+      expect((await manager.createAvailableSession({ projectPath: '/tmp/proj' })).ok).toBe(false)
+      providerEnv = { ANTHROPIC_BASE_URL: 'https://fixed.example' }
+      expect((await manager.createAvailableSession({ projectPath: '/tmp/proj' })).ok).toBe(true)
+      expect(probed).toEqual(['https://broken.example', 'https://fixed.example'])
+    })
+
+    test('a provider change re-probes; the same configuration (any key order) reuses the probe', async () => {
+      process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'
+      let providerEnv: Record<string, string> = { A: '1', B: '2' }
+      let probes = 0
+      const manager = new ChatSessionManager({
+        db, registry: new SessionRegistry(), onEvent: () => {},
+        availabilityProbe: async () => { probes++ },
+        getProviderEnv: () => providerEnv,
+      })
+      await manager.createAvailableSession({ projectPath: '/tmp/proj' })
+      providerEnv = { B: '2', A: '1' }
+      await manager.createAvailableSession({ projectPath: '/tmp/proj' })
+      expect(probes).toBe(1)
+      providerEnv = { A: '1', B: '3' }
+      await manager.createAvailableSession({ projectPath: '/tmp/proj' })
+      expect(probes).toBe(2)
+    })
+
+    test('concurrent creations share one in-flight probe', async () => {
+      process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'
+      let probes = 0
+      let release!: () => void
+      const manager = new ChatSessionManager({
+        db, registry: new SessionRegistry(), onEvent: () => {},
+        availabilityProbe: () => { probes++; return new Promise<void>((resolve) => { release = resolve }) },
+      })
+      const first = manager.createAvailableSession({ projectPath: '/tmp/proj' })
+      const second = manager.createAvailableSession({ projectPath: '/tmp/proj' })
+      release()
+      expect((await first).ok).toBe(true)
+      expect((await second).ok).toBe(true)
+      expect(probes).toBe(1)
     })
 
     test('successful availability probe is cached for subsequent creations', async () => {

@@ -118,7 +118,8 @@ authenticated Claude CLI credentials directory. Bun loads the repository's
 `.env` file automatically; keep credentials out of Git. `CLAUDE_CONFIG_DIR`
 selects the CLI configuration and transcript directory. Credentials stay on
 the server. A failed SDK runtime probe refuses creation with an error; fix
-the installation/runtime and restart the server to retry.
+the installation/runtime (or the chat provider environment below) and try
+again — a failed probe is not cached.
 
 To run chat sessions against an Anthropic-compatible gateway or alternative
 model provider, give them a provider environment — overrides applied only to

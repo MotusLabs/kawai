@@ -24,6 +24,10 @@ credentials against the same effective environment the SDK process receives.
 - **WHEN** a provider environment is configured and the user starts a terminal session
 - **THEN** the terminal session's environment does not contain the provider overrides
 
+#### Scenario: Availability is re-checked for a changed or failed provider
+- **WHEN** the SDK availability check failed, or the provider environment changed since it last succeeded, and the user creates a chat session
+- **THEN** the availability check runs again under the current provider environment instead of reusing the earlier result
+
 #### Scenario: Credential supplied through the provider environment
 - **WHEN** the server environment has no Claude credentials and the provider environment supplies an API key or auth token
 - **THEN** chat session creation is allowed
