@@ -13,12 +13,12 @@
 
 ## 3. Per-session frame log
 
-- [ ] 3.1 Implement `ChatWireLog` in `src/server/chat/ChatWireLog.ts` (synchronous `seq` assignment, batched serialized async append, `0700` dir / `0600` files) and verify unit tests that frames recorded in one tick land on disk in `seq` order
-- [ ] 3.2 Add rotation at a configurable size bound (16 MiB default) to `<id>.1.jsonl` and verify a unit test with a small bound keeps only the newest frames and continues recording after rotation
-- [ ] 3.3 Add `seq` resume from the file tail (current, then `.1`) and verify a unit test that a new `ChatWireLog` for an existing session continues after the last recorded `seq`
-- [ ] 3.4 Add `readPage({ beforeSeq, limit })` across both generations plus unflushed frames with `hasOlder`, and verify unit tests for newest page, older page, no gaps/duplicates across the rotation boundary, and empty log
-- [ ] 3.5 Make write failures non-fatal (logged once per session, frames dropped) and verify a unit test with an unwritable directory where `record` never throws
-- [ ] 3.6 Implement `ChatWireLogs` registry in `src/server/chat/ChatWireLogs.ts` (`get`, `delete`, `pruneOrphans`, `subscribe`) and verify unit tests for live fan-out to listeners, unsubscribe, deletion of both generations, and orphan pruning
+- [x] 3.1 Implement `ChatWireLog` in `src/server/chat/ChatWireLog.ts` (synchronous `seq` assignment, batched serialized async append, `0700` dir / `0600` files) and verify unit tests that frames recorded in one tick land on disk in `seq` order
+- [x] 3.2 Add rotation at a configurable size bound (16 MiB default) to `<id>.1.jsonl` and verify a unit test with a small bound keeps only the newest frames and continues recording after rotation
+- [x] 3.3 Add `seq` resume from the file tail (current, then `.1`) and verify a unit test that a new `ChatWireLog` for an existing session continues after the last recorded `seq`
+- [x] 3.4 Add `readPage({ beforeSeq, limit })` across both generations plus unflushed frames with `hasOlder`, and verify unit tests for newest page, older page, no gaps/duplicates across the rotation boundary, and empty log
+- [x] 3.5 Make write failures non-fatal (logged once per session, frames dropped) and verify a unit test with an unwritable directory where `record` never throws
+- [x] 3.6 Implement `ChatWireLogs` registry in `src/server/chat/ChatWireLogs.ts` (`get`, `delete`, `pruneOrphans`, `subscribe`) and verify unit tests for live fan-out to listeners, unsubscribe, deletion of both generations, and orphan pruning
 
 ## 4. Driver, manager, and fixture integration
 

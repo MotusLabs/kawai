@@ -7,7 +7,7 @@ function recorder() {
   return { frames, record: (dir: ChatWireDirection, raw: string) => frames.push({ dir, raw }) }
 }
 
-function waitFor<T>(emitter: { once(event: 'exit', listener: (code: number | null) => void): void }): Promise<number | null> {
+function waitForExit(emitter: { once(event: 'exit', listener: (code: number | null) => void): void }): Promise<number | null> {
   return new Promise(resolve => emitter.once('exit', code => resolve(code)))
 }
 
@@ -80,7 +80,7 @@ describe('createWireTappedSpawn', () => {
     const received: Buffer[] = []
     child.stdout.on('data', (chunk: Buffer) => received.push(chunk))
     const drained = new Promise(resolve => child.stdout.once('end', resolve))
-    const exited = waitFor(child)
+    const exited = waitForExit(child)
     child.stdin.write('{"type":"user","text":"hi"}\n')
     child.stdin.write('{"type":"control_request"}\n')
     child.stdin.end()
@@ -112,7 +112,7 @@ describe('createWireTappedSpawn', () => {
       env: { ...process.env, ANTHROPIC_API_KEY: secret, CLAUDE_CODE_OAUTH_TOKEN: secret },
       signal: new AbortController().signal,
     })
-    const exited = waitFor(child)
+    const exited = waitForExit(child)
     child.stdin.end('{"type":"user"}\n')
     await exited
     expect(frames.length).toBeGreaterThan(0)
