@@ -40,7 +40,7 @@ afterAll(() => {
 })
 
 describe('parseWorktreePorcelain fixtures', () => {
-  test('parses main, linked, and detached worktrees', () => {
+  test('parses main, linked, and detached worktrees', async () => {
     const fixture = [
       'worktree /repos/main',
       'HEAD 0123456789abcdef0123456789abcdef01234567',
@@ -81,7 +81,7 @@ describe('parseWorktreePorcelain fixtures', () => {
     expect(detached.branch).toBeUndefined()
   })
 
-  test('marks prunable and locked worktrees', () => {
+  test('marks prunable and locked worktrees', async () => {
     const fixture = [
       'worktree /repos/main',
       'HEAD aaa',
@@ -105,7 +105,7 @@ describe('parseWorktreePorcelain fixtures', () => {
     expect(worktrees[2].locked).toBe(true)
   })
 
-  test('ignores entries missing path or HEAD and unknown attributes', () => {
+  test('ignores entries missing path or HEAD and unknown attributes', async () => {
     const fixture = [
       'bare',
       '',
@@ -123,7 +123,7 @@ describe('parseWorktreePorcelain fixtures', () => {
     expect(worktrees[0].isMain).toBe(true)
   })
 
-  test('handles crlf line endings and trailing blank lines', () => {
+  test('handles crlf line endings and trailing blank lines', async () => {
     const fixture = 'worktree /repos/main\r\nHEAD abc\r\nbranch refs/heads/main\r\n\r\n'
     const worktrees = parseWorktreePorcelain(fixture)
     expect(worktrees).toHaveLength(1)
@@ -132,7 +132,7 @@ describe('parseWorktreePorcelain fixtures', () => {
 })
 
 describe('parseForEachRefHeads fixtures', () => {
-  test('parses revision and short ref name pairs', () => {
+  test('parses revision and short ref name pairs', async () => {
     const fixture = [
       '0123456789abcdef0123456789abcdef01234567 main',
       'fedcba9876543210fedcba9876543210fedcba98 feature/add-auth',
@@ -146,7 +146,7 @@ describe('parseForEachRefHeads fixtures', () => {
     ])
   })
 
-  test('skips malformed lines', () => {
+  test('skips malformed lines', async () => {
     const fixture = ['', 'not-a-ref', 'short rev-only', 'zzzz main', '0123456789abcdef0123456789abcdef01234567 ']
     const branches = parseForEachRefHeads(fixture.join('\n'))
     expect(branches).toEqual([])
@@ -154,7 +154,7 @@ describe('parseForEachRefHeads fixtures', () => {
 })
 
 describe('assignBranches', () => {
-  test('annotates assigned branches and leaves unassigned ones bare', () => {
+  test('annotates assigned branches and leaves unassigned ones bare', async () => {
     const worktrees = parseWorktreePorcelain(
       [
         'worktree /repos/main',
@@ -181,7 +181,7 @@ describe('assignBranches', () => {
 })
 
 describe('discoverRepository against real git', () => {
-  test('covers linked worktrees, detached HEAD, and packed refs', () => {
+  test('covers linked worktrees, detached HEAD, and packed refs', async () => {
     const repo = path.join(tempRoot, 'repo')
     const linked = path.join(tempRoot, 'repo-linked')
     const detached = path.join(tempRoot, 'repo-detached')
@@ -194,7 +194,7 @@ describe('discoverRepository against real git', () => {
     runGit(['-C', repo, 'pack-refs', '--all'], { timeoutMs: 5000 })
 
     const commonDir = path.join(repo, '.git')
-    const info = discoverRepository(commonDir)
+    const info = await discoverRepository(commonDir)
     expect(info).not.toBeNull()
 
     const paths = info!.worktrees.map((worktree) => worktree.path)
@@ -220,7 +220,7 @@ describe('discoverRepository against real git', () => {
     expect(mainBranch?.assignedWorktreePath).toBe(repo)
   })
 
-  test('returns null for an invalid common dir', () => {
-    expect(discoverRepository(path.join(tempRoot, 'not-a-git-dir'))).toBeNull()
+  test('returns null for an invalid common dir', async () => {
+    expect(await discoverRepository(path.join(tempRoot, 'not-a-git-dir'))).toBeNull()
   })
 })

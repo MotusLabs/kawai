@@ -10,7 +10,7 @@ import {
 } from '../workspace/openspecDiscovery'
 
 function runnerReturning(result: Partial<OpenspecCommandResult>) {
-  return (): OpenspecCommandResult => ({
+  return async (): Promise<OpenspecCommandResult> => ({
     ok: false,
     exitCode: 1,
     stdout: '',
@@ -40,18 +40,18 @@ const activeChangePayload = {
 }
 
 describe('parseOpenSpecChangeEntry', () => {
-  test('keeps name and optional fields when present', () => {
+  test('keeps name and optional fields when present', async () => {
     expect(
       parseOpenSpecChangeEntry({ name: 'x', status: 'in-progress', completedTasks: 1, totalTasks: 2, lastModified: 't' })
     ).toEqual({ name: 'x', status: 'in-progress', completedTasks: 1, totalTasks: 2, lastModified: 't' })
   })
 
-  test('missing progress fields do not invent values', () => {
+  test('missing progress fields do not invent values', async () => {
     expect(parseOpenSpecChangeEntry({ name: 'x' })).toEqual({ name: 'x' })
     expect(parseOpenSpecChangeEntry({ name: 'x', completedTasks: null, totalTasks: 'many' })).toEqual({ name: 'x' })
   })
 
-  test('rejects entries without a name', () => {
+  test('rejects entries without a name', async () => {
     expect(parseOpenSpecChangeEntry(null)).toBeNull()
     expect(parseOpenSpecChangeEntry({ status: 'in-progress' })).toBeNull()
     expect(parseOpenSpecChangeEntry({ name: '' })).toBeNull()
@@ -59,7 +59,7 @@ describe('parseOpenSpecChangeEntry', () => {
 })
 
 describe('parseOpenspecListOutput', () => {
-  test('parses active changes with root path', () => {
+  test('parses active changes with root path', async () => {
     const parsed = parseOpenspecListOutput(JSON.stringify(activeChangePayload))
     expect(parsed?.rootPath).toBe('/repo/openspec')
     expect(parsed?.changes).toHaveLength(2)
@@ -72,7 +72,7 @@ describe('parseOpenspecListOutput', () => {
     })
   })
 
-  test('archived changes are absent from active listing', () => {
+  test('archived changes are absent from active listing', async () => {
     // openspec list returns only active changes; an archived change simply
     // disappears from the payload.
     const archivedPayload = {
@@ -83,16 +83,16 @@ describe('parseOpenspecListOutput', () => {
     expect(parsed?.changes.map((change) => change.name)).toEqual(['add-auth'])
   })
 
-  test('malformed JSON returns null', () => {
+  test('malformed JSON returns null', async () => {
     expect(parseOpenspecListOutput('not json{')).toBeNull()
     expect(parseOpenspecListOutput('')).toBeNull()
   })
 
-  test('payload without a changes array returns null', () => {
+  test('payload without a changes array returns null', async () => {
     expect(parseOpenspecListOutput('{"root":null}')).toBeNull()
   })
 
-  test('null root parses without rootPath', () => {
+  test('null root parses without rootPath', async () => {
     const parsed = parseOpenspecListOutput('{"changes":[],"root":null}')
     expect(parsed).toEqual({ changes: [] })
     expect(parsed?.rootPath).toBeUndefined()
@@ -100,8 +100,8 @@ describe('parseOpenspecListOutput', () => {
 })
 
 describe('discoverWorktreeOpenSpec', () => {
-  test('active changes become a fresh non-stale state', () => {
-    const state = discoverWorktreeOpenSpec('/repo', {
+  test('active changes become a fresh non-stale state', async () => {
+    const state = await discoverWorktreeOpenSpec('/repo', {
       runner: runnerReturning({ ok: true, exitCode: 0, stdout: JSON.stringify(activeChangePayload) }),
     })
     expect(state.stale).toBe(false)
@@ -109,8 +109,8 @@ describe('discoverWorktreeOpenSpec', () => {
     expect(state.changes.map((change) => change.name)).toEqual(['add-auth', 'local-k8s-runner-workflows'])
   })
 
-  test('missing root produces an empty non-error state', () => {
-    const state = discoverWorktreeOpenSpec('/repo', {
+  test('missing root produces an empty non-error state', async () => {
+    const state = await discoverWorktreeOpenSpec('/repo', {
       runner: runnerReturning({
         ok: false,
         exitCode: 1,
@@ -131,8 +131,8 @@ describe('discoverWorktreeOpenSpec', () => {
     expect(state.error).toBeUndefined()
   })
 
-  test('command failure produces a stale error state', () => {
-    const state = discoverWorktreeOpenSpec('/repo', {
+  test('command failure produces a stale error state', async () => {
+    const state = await discoverWorktreeOpenSpec('/repo', {
       runner: runnerReturning({ ok: false, exitCode: 127, stderr: 'openspec: not found' }),
     })
     expect(state.stale).toBe(true)
@@ -140,37 +140,37 @@ describe('discoverWorktreeOpenSpec', () => {
     expect(state.changes).toEqual([])
   })
 
-  test('timeout produces a stale error state', () => {
-    const state = discoverWorktreeOpenSpec('/repo', {
+  test('timeout produces a stale error state', async () => {
+    const state = await discoverWorktreeOpenSpec('/repo', {
       runner: runnerReturning({ ok: false, exitCode: null }),
     })
     expect(state.stale).toBe(true)
     expect(state.error).toBe('openspec timed out')
   })
 
-  test('malformed success output produces a stale error state', () => {
-    const state = discoverWorktreeOpenSpec('/repo', {
+  test('malformed success output produces a stale error state', async () => {
+    const state = await discoverWorktreeOpenSpec('/repo', {
       runner: runnerReturning({ ok: true, exitCode: 0, stdout: 'garbage' }),
     })
     expect(state.stale).toBe(true)
     expect(state.error).toBe('Unparseable openspec output')
   })
 
-  test('missing-progress payload keeps name and status only', () => {
+  test('missing-progress payload keeps name and status only', async () => {
     const payload = {
       changes: [{ name: 'minimal', status: 'in-progress' }],
       root: { path: '/repo/openspec' },
     }
-    const state = discoverWorktreeOpenSpec('/repo', {
+    const state = await discoverWorktreeOpenSpec('/repo', {
       runner: runnerReturning({ ok: true, exitCode: 0, stdout: JSON.stringify(payload) }),
     })
     expect(state.changes).toEqual([{ name: 'minimal', status: 'in-progress' }])
   })
 
-  test('runner receives the worktree cwd and configured timeout', () => {
+  test('runner receives the worktree cwd and configured timeout', async () => {
     const seen: { value?: { cwd: string; timeoutMs: number } } = {}
-    discoverWorktreeOpenSpec('/repo-wt', {
-      runner: (options) => {
+    await discoverWorktreeOpenSpec('/repo-wt', {
+      runner: async (options) => {
         seen.value = options
         return { ok: true, exitCode: 0, stdout: '{"changes":[]}', stderr: '' }
       },

@@ -86,10 +86,10 @@ function cleanupPartialWorktree(
  * failure is returned as a typed result — no exception escapes, nothing
  * existing is modified, and no force flag is ever passed to git.
  */
-export function createChangeWorktree(
+export async function createChangeWorktree(
   input: CreateChangeWorktreeInput,
   options: CreateChangeWorktreeOptions = {}
-): WorkspaceOperationResult {
+): Promise<WorkspaceOperationResult> {
   const { repositoryId, change } = input
 
   // The change name becomes both a branch name and a single path segment
@@ -109,7 +109,7 @@ export function createChangeWorktree(
   // repository whose worktrees and branches can be read right now.
   let info
   try {
-    info = discoverRepository(repositoryId)
+    info = await discoverRepository(repositoryId)
   } catch {
     info = null
   }

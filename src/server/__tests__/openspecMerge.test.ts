@@ -41,8 +41,8 @@ function okPayload(changes: unknown[], rootPath: string): string {
 }
 
 describe('refreshSnapshotOpenSpec', () => {
-  test('two worktrees keep divergent change lists and progress', () => {
-    const runner: OpenspecCommandRunner = ({ cwd }) => {
+  test('two worktrees keep divergent change lists and progress', async () => {
+    const runner: OpenspecCommandRunner = async ({ cwd }) => {
       const result: OpenspecCommandResult =
         cwd === '/repo-main'
           ? {
@@ -67,7 +67,7 @@ describe('refreshSnapshotOpenSpec', () => {
     }
 
     const snapshot = snapshotWith([worktree('wt-main', '/repo-main'), worktree('wt-linked', '/repo-wt')])
-    const merged = refreshSnapshotOpenSpec(snapshot, null, { runner })
+    const merged = await refreshSnapshotOpenSpec(snapshot, null, { runner })
 
     const main = merged.repositories[0].worktrees.find((wt) => wt.id === 'wt-main')
     const linked = merged.repositories[0].worktrees.find((wt) => wt.id === 'wt-linked')
@@ -80,7 +80,7 @@ describe('refreshSnapshotOpenSpec', () => {
     expect(linked?.openspec.stale).toBe(false)
   })
 
-  test('failed refresh retains only the failing worktree’s last-valid values', () => {
+  test('failed refresh retains only the failing worktree’s last-valid values', async () => {
     const previous = snapshotWith([
       {
         ...worktree('wt-main', '/repo-main'),
@@ -101,7 +101,7 @@ describe('refreshSnapshotOpenSpec', () => {
     ])
 
     let callCount = 0
-    const runner: OpenspecCommandRunner = ({ cwd }) => {
+    const runner: OpenspecCommandRunner = async ({ cwd }) => {
       callCount += 1
       if (cwd === '/repo-main') {
         // The main worktree's openspec discovery fails this pass.
@@ -115,7 +115,7 @@ describe('refreshSnapshotOpenSpec', () => {
       }
     }
 
-    const merged = refreshSnapshotOpenSpec(previous, previous, { runner })
+    const merged = await refreshSnapshotOpenSpec(previous, previous, { runner })
     expect(callCount).toBe(2)
 
     const main = merged.repositories[0].worktrees.find((wt) => wt.id === 'wt-main')
@@ -130,7 +130,7 @@ describe('refreshSnapshotOpenSpec', () => {
     expect(linked?.openspec.changes.map((change) => change.name)).toEqual(['linked-updated'])
   })
 
-  test('never copies another worktree’s values into a failing one', () => {
+  test('never copies another worktree’s values into a failing one', async () => {
     const previous = snapshotWith([
       worktree('wt-main', '/repo-main'), // never had openspec data
       {
@@ -139,7 +139,7 @@ describe('refreshSnapshotOpenSpec', () => {
       },
     ])
 
-    const runner: OpenspecCommandRunner = ({ cwd }) => {
+    const runner: OpenspecCommandRunner = async ({ cwd }) => {
       if (cwd === '/repo-main') {
         return { ok: false, exitCode: 1, stdout: '', stderr: 'boom' }
       }
@@ -151,15 +151,15 @@ describe('refreshSnapshotOpenSpec', () => {
       }
     }
 
-    const merged = refreshSnapshotOpenSpec(previous, previous, { runner })
+    const merged = await refreshSnapshotOpenSpec(previous, previous, { runner })
     const main = merged.repositories[0].worktrees.find((wt) => wt.id === 'wt-main')
     // No last-valid values existed, and linked's data must not leak in.
     expect(main?.openspec.changes).toEqual([])
     expect(main?.openspec.stale).toBe(true)
   })
 
-  test('missing-root worktrees stay empty and non-stale', () => {
-    const runner: OpenspecCommandRunner = () => ({
+  test('missing-root worktrees stay empty and non-stale', async () => {
+    const runner: OpenspecCommandRunner = async () => ({
       ok: false,
       exitCode: 1,
       stdout: JSON.stringify({
@@ -170,7 +170,7 @@ describe('refreshSnapshotOpenSpec', () => {
       stderr: '',
     })
     const snapshot = snapshotWith([worktree('wt-main', '/repo-main')])
-    const merged = refreshSnapshotOpenSpec(snapshot, null, { runner })
+    const merged = await refreshSnapshotOpenSpec(snapshot, null, { runner })
     expect(merged.repositories[0].worktrees[0].openspec).toEqual({ changes: [], stale: false })
   })
 })

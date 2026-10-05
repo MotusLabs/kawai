@@ -897,10 +897,15 @@ describe('server message handlers', () => {
         destination: '/repo-feat',
       })
     )
+    // The operation spawns git before replying; bounded-poll for the reply.
+    await waitForSent(
+      sent,
+      (message) => message.type === 'workspace-operation-result',
+      'create-worktree operation result'
+    )
     const resultIndex = sent.findIndex(
       (message) => message.type === 'workspace-operation-result'
     )
-    expect(resultIndex).toBeGreaterThan(-1)
     expect(
       sent.slice(resultIndex).some((message) => message.type === 'error')
     ).toBe(false)
