@@ -14,12 +14,13 @@ import type {
 import type { ServerMessage, Session, SessionStatus } from '../../shared/types'
 import type { ChatSessionRecord, SessionDatabase } from '../db'
 import { generateSessionName } from '../nameGenerator'
-import { isExistingDirectory, resolveProjectPath } from '../paths'
+import { isExistingDirectory, resolveProjectDirectory } from '../paths'
 import type { SessionRegistry } from '../SessionRegistry'
 import { ChatSessionDriver, type ChatQueryFactory } from './ChatSessionDriver'
 import { chatAuthErrorMessage, hasClaudeAuth } from './chatAuth'
 import type { ChatProviderEnv } from './chatProviderEnv'
 import type { ChatWireLogs } from './ChatWireLogs'
+import { resolveClaudeProfile, claudeLaunchKey, type ClaudeLaunchConfiguration } from './ClaudeProfiles'
 import { probeSdkAvailability } from './sdkAvailability'
 import {
   findTranscriptPath,
@@ -38,7 +39,7 @@ export interface ChatSessionManagerOptions {
   /** Injected in tests; production resolves the SDK via dynamic import. */
   queryFactory?: ChatQueryFactory
   /** Receives the provider env so it probes the endpoint sessions will use. */
-  availabilityProbe?: (providerEnv: ChatProviderEnv) => Promise<void>
+  availabilityProbe?: (providerEnv: ChatProviderEnv, launch?: ClaudeLaunchConfiguration) => Promise<void>
   authCheck?: () => boolean
   /**
    * Provider overrides for SDK spawns (base URL, models, gateway token). A
@@ -59,11 +60,6 @@ export type ChatActionResult =
   | { ok: true }
   | { ok: false; error: string }
 
-/** Order-independent identity of a provider configuration. */
-function providerEnvKey(env: ChatProviderEnv): string {
-  return JSON.stringify(Object.entries(env).sort(([a], [b]) => a.localeCompare(b)))
-}
-
 export class ChatSessionManager {
   private readonly options: ChatSessionManagerOptions
   private readonly records = new Map<string, ChatSessionRecord>()
@@ -75,20 +71,25 @@ export class ChatSessionManager {
   >()
   private sdkQuery: Promise<ChatQueryFactory> | null = null
   /**
-   * The availability probe for one provider configuration. Keyed so a provider
+   * Availability probes for resolved provider configurations. Keyed so a provider
    * change in Settings re-probes the new endpoint; a failed probe is dropped so
    * a corrected configuration (or repaired install) recovers without a restart.
    * Concurrent creations under the same configuration share one probe.
    */
-  private availability: { key: string; promise: Promise<void> } | null = null
+  private readonly availability = new Map<string, Promise<void>>()
 
-  async createAvailableSession(input: { projectPath: string; name?: string }): Promise<ChatCreateResult> {
+  async createAvailableSession(input: { projectPath: string; name?: string; claudeProfileId?: string }): Promise<ChatCreateResult> {
     // Refuse a bad path before the probe spends an SDK spawn on it.
-    const project = this.resolveProjectDirectory(input.projectPath)
+    const project = resolveProjectDirectory(input.projectPath, this.options.isDirectory)
     if (!project.ok) return project
-    if (!this.authOk()) return { ok: false, error: chatAuthErrorMessage() }
     try {
-      await this.probeAvailability()
+      resolveClaudeProfile(input.claudeProfileId, this.providerEnv())
+    } catch (error) {
+      return { ok: false, error: String(error instanceof Error ? error.message : error) }
+    }
+    if (!this.authOk(input.claudeProfileId)) return { ok: false, error: chatAuthErrorMessage() }
+    try {
+      await this.probeAvailability(input.claudeProfileId)
     } catch (error) {
       return {
         ok: false,
@@ -132,11 +133,17 @@ export class ChatSessionManager {
   createSession(input: {
     projectPath: string
     name?: string
+    claudeProfileId?: string
   }): ChatCreateResult {
-    const project = this.resolveProjectDirectory(input.projectPath)
+    const project = resolveProjectDirectory(input.projectPath, this.options.isDirectory)
     if (!project.ok) return project
     const projectPath = project.path
-    if (!this.authOk()) {
+    try {
+      resolveClaudeProfile(input.claudeProfileId, this.providerEnv())
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) }
+    }
+    if (!this.authOk(input.claudeProfileId)) {
       return { ok: false, error: chatAuthErrorMessage() }
     }
     const sessionId = `chat-${crypto.randomUUID()}`
@@ -147,6 +154,7 @@ export class ChatSessionManager {
       name,
       projectPath,
       sdkSessionId: null as string | null,
+      claudeProfileId: input.claudeProfileId ?? 'default',
       status: 'waiting' as SessionStatus,
       createdAt: now,
       lastActivityAt: now,
@@ -156,28 +164,6 @@ export class ChatSessionManager {
     const session = this.toSession(record)
     this.options.registry.setChatSession(session)
     return { ok: true, session }
-  }
-
-  /**
-   * Resolve a project path as terminal sessions do (`~`, absolute) and require
-   * an existing directory: the agent process is spawned with it as `cwd`, and
-   * a missing `cwd` surfaces from the SDK as a misleading binary-launch error.
-   */
-  private resolveProjectDirectory(
-    value: string
-  ): { ok: true; path: string } | { ok: false; error: string } {
-    const resolved = resolveProjectPath(value)
-    if (!resolved) {
-      return { ok: false, error: 'A project directory is required' }
-    }
-    if (!this.isDirectory(resolved)) {
-      return { ok: false, error: `Project directory does not exist: ${resolved}` }
-    }
-    return { ok: true, path: resolved }
-  }
-
-  private isDirectory(value: string): boolean {
-    return (this.options.isDirectory ?? isExistingDirectory)(value)
   }
 
   /** True when the id is a known chat session. */
@@ -231,7 +217,7 @@ export class ChatSessionManager {
     if (
       (!live || live.isDead) &&
       !this.driverPromises.has(sessionId) &&
-      !this.isDirectory(record.projectPath)
+      !(this.options.isDirectory ?? isExistingDirectory)(record.projectPath)
     ) {
       // A running process keeps its cwd; only a (re)spawn needs the directory.
       return {
@@ -381,11 +367,19 @@ export class ChatSessionManager {
     sessionId: string
   ): Promise<ChatSessionDriver | null> {
     const existing = this.drivers.get(sessionId)
-    if (existing) return existing
+    if (existing) {
+      if (existing.isDead) {
+        resolveClaudeProfile(this.records.get(sessionId)?.claudeProfileId, this.providerEnv())
+        if (!this.authOk(this.records.get(sessionId)?.claudeProfileId)) throw new Error(chatAuthErrorMessage())
+      }
+      return existing
+    }
     const pending = this.driverPromises.get(sessionId)
     if (pending) return pending
     const record = this.records.get(sessionId)
     if (!record) return null
+    resolveClaudeProfile(record.claudeProfileId, this.providerEnv())
+    if (!this.authOk(record.claudeProfileId)) throw new Error(chatAuthErrorMessage())
     this.captureHistory(sessionId)
     const promise = (async () => {
       const queryFactory = await this.resolveQueryFactory()
@@ -394,6 +388,7 @@ export class ChatSessionManager {
         projectPath: record.projectPath,
         queryFactory,
         getProviderEnv: () => this.providerEnv(),
+        claudeProfileId: record.claudeProfileId,
         ...(this.options.wireLogs
           ? { wire: this.options.wireLogs.get(record.sessionId) }
           : {}),
@@ -423,28 +418,35 @@ export class ChatSessionManager {
     }
   }
 
-  private probeAvailability(): Promise<void> {
+  private probeAvailability(profileId: string = 'default'): Promise<void> {
     const providerEnv = this.providerEnv()
-    const key = providerEnvKey(providerEnv)
-    if (this.availability?.key === key) return this.availability.promise
+    const launch = resolveClaudeProfile(profileId, providerEnv)
+    const key = claudeLaunchKey(launch)
+    const cached = this.availability.get(key)
+    if (cached) return cached
     const probe = this.options.availabilityProbe ??
       (this.options.queryFactory ? async () => {} : probeSdkAvailability)
-    const entry = { key, promise: probe(providerEnv) }
-    this.availability = entry
-    entry.promise.catch(() => {
-      if (this.availability === entry) this.availability = null
+    const promise = probe(providerEnv, launch)
+    // Bound retained configurations; evicted successful probes can be repeated.
+    if (this.availability.size >= 32) this.availability.delete(this.availability.keys().next().value!)
+    this.availability.set(key, promise)
+    promise.catch(() => {
+      if (this.availability.get(key) === promise) this.availability.delete(key)
     })
-    return entry.promise
+    return promise
   }
 
   private providerEnv(): ChatProviderEnv {
     return this.options.getProviderEnv?.() ?? {}
   }
 
-  private authOk(): boolean {
+  private authOk(profileId: string = 'default'): boolean {
     return this.options.authCheck
       ? this.options.authCheck()
-      : hasClaudeAuth(this.providerEnv())
+      : hasClaudeAuth(Object.fromEntries(
+        Object.entries(resolveClaudeProfile(profileId, this.providerEnv()).env ?? {})
+          .filter((entry): entry is [string, string] => entry[1] !== undefined)
+      ))
   }
 
   /**
@@ -510,6 +512,7 @@ export class ChatSessionManager {
       id: record.sessionId,
       name: record.name,
       kind: 'chat',
+      claudeProfileId: record.claudeProfileId ?? 'default',
       projectPath: record.projectPath,
       status: record.status,
       lastActivity: record.lastActivityAt,

@@ -328,3 +328,5 @@ bun upgrade
 ```
 
 **Root cause**: Bun versions prior to 1.3.6 had a bug where the `terminal` option in `Bun.spawn()` incorrectly set stdin to `/dev/null` instead of the PTY. Since `tmux attach` requires stdin to be a terminal, it fails immediately. This was fixed in Bun 1.3.6.
+
+Claude chat also supports [per-session provider profiles](docs/claude-session-profiles.md).

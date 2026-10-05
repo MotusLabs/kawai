@@ -95,6 +95,9 @@ test('debug view shows protocol frames live, pages older frames, and survives re
   if (await allow.count()) await allow.click()
   const requests = panel.getByText('control_request · can_use_tool')
   const responses = panel.getByText('control_response · success')
+  // Wait for the initial history snapshot before measuring live additions.
+  await expect(panel.locator('[data-frame-seq]').first()).toBeVisible()
+  await expect(panel.getByText('Loading…', { exact: true })).toHaveCount(0)
   const requestsBefore = await requests.count()
   const responsesBefore = await responses.count()
   await page.getByLabel('Message Claude').fill('approval')

@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { isExistingDirectory, resolveProjectPath } from '../paths'
+import { isExistingDirectory, resolveProjectDirectory, resolveProjectPath } from '../paths'
 
 describe('resolveProjectPath', () => {
   test('returns empty for blank values', () => {
@@ -39,5 +39,20 @@ describe('isExistingDirectory', () => {
     } finally {
       fs.rmSync(dir, { recursive: true, force: true })
     }
+  })
+})
+
+describe('resolveProjectDirectory', () => {
+  test('requires a non-blank path naming an existing directory', () => {
+    expect(resolveProjectDirectory('  ')).toEqual({ ok: false, error: 'A project directory is required' })
+    expect(resolveProjectDirectory('/tmp/gone (deleted)', () => false)).toEqual({
+      ok: false,
+      error: 'Project directory does not exist: /tmp/gone (deleted)',
+    })
+    expect(resolveProjectDirectory(' ~/app ', () => true)).toEqual({
+      ok: true,
+      path: resolveProjectPath('~/app'),
+    })
+    expect(resolveProjectDirectory(os.tmpdir())).toEqual({ ok: true, path: path.resolve(os.tmpdir()) })
   })
 })

@@ -444,6 +444,7 @@ describe('session comparator (design D6)', () => {
       lastUserMessage: 'hello',
       isPinned: false,
       kind: 'terminal',
+      claudeProfileId: 'default',
     }
     // Compile-time exhaustiveness comes from the mapped type (a new Session
     // field without a comparator entry fails typecheck); this runtime check
@@ -454,6 +455,7 @@ describe('session comparator (design D6)', () => {
 
     const changedValues: Record<string, unknown> = {
       id: 'session-2',
+      claudeProfileId: 'glm',
       name: 'beta',
       tmuxWindow: 'agentboard:2',
       projectPath: '/tmp/beta',

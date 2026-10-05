@@ -32,3 +32,23 @@ export function isExistingDirectory(value: string): boolean {
     return false
   }
 }
+
+/**
+ * Resolve a chat project path as terminal sessions do (`~`, absolute) and
+ * require an existing directory: the agent process is spawned with it as
+ * `cwd`, and a missing `cwd` surfaces from the Claude Agent SDK as a
+ * misleading binary-launch error.
+ */
+export function resolveProjectDirectory(
+  value: string,
+  isDirectory: (path: string) => boolean = isExistingDirectory
+): { ok: true; path: string } | { ok: false; error: string } {
+  const resolved = resolveProjectPath(value)
+  if (!resolved) {
+    return { ok: false, error: 'A project directory is required' }
+  }
+  if (!isDirectory(resolved)) {
+    return { ok: false, error: `Project directory does not exist: ${resolved}` }
+  }
+  return { ok: true, path: resolved }
+}

@@ -3,8 +3,9 @@
 // The probe runs under the same provider environment as real chat spawns, so
 // it cannot pass against one endpoint while sessions use another.
 import { buildChatOptionsEnv, type ChatProviderEnv } from './chatProviderEnv'
+import type { ClaudeLaunchConfiguration } from './ClaudeProfiles'
 import { TurnQueue } from './TurnQueue'
-export async function probeSdkAvailability(providerEnv: ChatProviderEnv = {}): Promise<void> {
+export async function probeSdkAvailability(providerEnv: ChatProviderEnv = {}, launch?: ClaudeLaunchConfiguration): Promise<void> {
   const env = buildChatOptionsEnv(providerEnv)
   const sdk = await import('@anthropic-ai/claude-agent-sdk')
   const controller = new AbortController()
@@ -18,7 +19,7 @@ export async function probeSdkAvailability(providerEnv: ChatProviderEnv = {}): P
       systemPrompt: { type: 'preset', preset: 'claude_code' },
       permissionMode: 'default',
       canUseTool: async () => ({ behavior: 'deny', message: 'Runtime availability probe' }),
-      ...(env ? { env } : {}),
+      ...(launch ?? (env ? { env } : {})),
     },
   })
   try {
