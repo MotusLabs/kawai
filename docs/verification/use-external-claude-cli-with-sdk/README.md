@@ -131,3 +131,15 @@ Observed pre-existing behavior (not changed here):
   `Turn complete` before sending again.
 - Transcript replay shows the CLI's `[Request interrupted by user]` marker as
   a user message.
+
+## 5.2 — Required checks
+
+Run 2026-10-06 on the final implementation:
+
+- `bun run lint`: 0 warnings, 0 errors (one unused import in the new e2e spec
+  fixed first).
+- `bun run typecheck`: passed.
+- `bun run test`: 1733 passed, 0 failed (including isolated and real-tmux
+  suites). The pre-commit run of the real-tmux integration suite failed once
+  while a Playwright run had just loaded the host, then passed on retry.
+- `openspec validate use-external-claude-cli-with-sdk --strict`: valid.
