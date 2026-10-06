@@ -574,8 +574,13 @@ describe('SessionDrawer', () => {
     // Sizing: the drawer shares the desktop sidebar's stored fraction.
     expect(archivePane.props.style.flex).toBe('0 1 30%')
 
-    // Collapse: the Archive header toggles through its reserved key.
+    // The history visibility toggle sits in the Archive header here too.
     const header = archivePane.findByProps({ 'data-testid': 'fallback-section-header' })
+    const historyToggle = header.findByProps({ 'data-testid': 'archive-history-toggle' })
+    expect(historyToggle.props['aria-pressed']).toBe(true)
+    expect(renderer!.root.findAllByProps({ 'data-testid': 'workspace-dormant-toggles' })).toHaveLength(0)
+
+    // Collapse: the Archive header toggles through its reserved key.
     expect(header.props['data-section-key']).toBe('fallback::archive')
     act(() => {
       header.findByProps({ 'aria-expanded': true }).props.onClick()

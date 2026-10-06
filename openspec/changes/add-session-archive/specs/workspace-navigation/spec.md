@@ -21,6 +21,10 @@ The system SHALL place hibernating and historical agent sessions and archived ch
 - **WHEN** the navigator is displayed with no stored collapse state for `Archive`
 - **THEN** `Archive` is shown collapsed, with its header, count, and attention indicators visible
 
+#### Scenario: Hibernating and history visibility toggles live in the Archive header
+- **WHEN** the expanded `Archive` section contains hibernating or historical rows
+- **THEN** its header offers a hibernating toggle and a history toggle, each showing how many such rows the section holds, and toggling one shows or hides those rows within `Archive` with the choice retained across reloads; no such toggles are displayed above the change and worktree sections
+
 ## MODIFIED Requirements
 
 ### Requirement: Group sessions by OpenSpec change section

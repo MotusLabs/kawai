@@ -638,6 +638,8 @@ export default function SessionList({
         remountKey={filterKey}
         showHibernating={showHibernating}
         showHistory={showHistory}
+        onToggleHibernating={() => setShowHibernating(!showHibernating)}
+        onToggleHistory={() => setShowHistory(!showHistory)}
         historyLimit={historyLimit}
         onShowMoreHistory={() => setHistoryLimit((prev) => prev + 20)}
         {...rowContext}
@@ -689,14 +691,6 @@ export default function SessionList({
               view={workspaceView}
               onToggleCollapse={onToggleSectionCollapse ?? (() => {})}
               remountKey={filterKey}
-              showHibernating={showHibernating}
-              showHistory={showHistory}
-              onToggleHibernating={() => setShowHibernating(!showHibernating)}
-              onToggleHistory={() => setShowHistory(!showHistory)}
-              hibernatingCount={filteredHibernatingSessions.length}
-              historyCount={filteredHistorySessions.length}
-              historyLimit={historyLimit}
-              onShowMoreHistory={() => setHistoryLimit((prev) => prev + 20)}
               onNewSession={onNewSession}
               onNewSessionInWorktree={onNewSessionInWorktree}
               onCreateChangeWorktree={onCreateChangeWorktree}

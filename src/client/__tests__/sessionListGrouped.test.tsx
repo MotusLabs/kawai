@@ -308,9 +308,12 @@ describe('SessionList grouped rendering', () => {
     act(() => renderer.unmount())
   })
 
-  test('dormant toggles expose hibernating and history rows inside the Archive pane', () => {
+  test('Archive header toggles show and hide its hibernating and history rows', () => {
     const hibernating = [makeAgentSession('hib-feat', '/repo/feat')]
-    const history = [makeAgentSession('hist-main', '/repo/main')]
+    const history = [
+      makeAgentSession('hist-main', '/repo/main'),
+      makeAgentSession('hist-feat', '/repo/feat'),
+    ]
     const view = makeView([baseSession], hibernating, history)
 
     const { renderer } = renderList({
@@ -320,22 +323,54 @@ describe('SessionList grouped rendering', () => {
       workspaceView: view,
     })
 
-    // History rows hidden while the toggle is collapsed.
+    // No toggle strip remains above the change/worktree sections.
+    expect(renderer.root.findAllByProps({ 'data-testid': 'workspace-dormant-toggles' })).toHaveLength(0)
+    const flow = renderer.root.findByProps({ 'data-testid': 'workspace-flow-region' })
+    expect(flow.findAllByProps({ 'data-testid': 'archive-history-toggle' })).toHaveLength(0)
+
+    // The toggles live in the Archive header and count the section's rows.
+    const header = renderer.root
+      .findByProps({ 'data-testid': 'archive-section' })
+      .findByProps({ 'data-testid': 'fallback-section-header' })
+    const hibernatingToggle = header.findByProps({ 'data-testid': 'archive-hibernating-toggle' })
+    const historyToggle = header.findByProps({ 'data-testid': 'archive-history-toggle' })
+    expect(hibernatingToggle.props['aria-pressed']).toBe(true)
+    expect(hibernatingToggle.props['aria-label']).toBe('Hide 1 hibernating session(s)')
+    expect(historyToggle.props['aria-pressed']).toBe(false)
+    expect(historyToggle.props['aria-label']).toBe('Show 2 history session(s)')
+
+    // History rows hidden while the toggle is off; toggling persists and shows them.
     expect(renderer.root.findAllByProps({ 'data-testid': 'grouped-history-rows' })).toHaveLength(0)
+    act(() => {
+      historyToggle.props.onClick()
+    })
+    expect(useSettingsStore.getState().historySessionsExpanded).toBe(true)
+    const archivePane = renderer.root.findByProps({ 'data-testid': 'archive-section' })
+    expect(archivePane.findAllByProps({ 'data-testid': 'grouped-history-rows' })).toHaveLength(1)
 
     act(() => {
-      renderer.root.findByProps({ 'data-testid': 'workspace-history-toggle' }).props.onClick()
+      renderer.root.findByProps({ 'data-testid': 'archive-hibernating-toggle' }).props.onClick()
     })
-    expect(
-      useSettingsStore.getState().historySessionsExpanded
-    ).toBe(true)
+    expect(useSettingsStore.getState().hibernatingSessionsExpanded).toBe(false)
+    expect(renderer.root.findAllByProps({ 'data-testid': 'hibernating-session-card' })).toHaveLength(0)
 
-    act(() => {
-      renderer.root.findByProps({ 'data-testid': 'workspace-hibernating-toggle' }).props.onClick()
+    act(() => renderer.unmount())
+  })
+
+  test('a collapsed Archive header offers no dormant toggles', () => {
+    const history = [makeAgentSession('hist-main', '/repo/main')]
+    const view = makeView([baseSession], [], history, { collapsed: ['fallback::archive'] })
+    const { renderer } = renderList({
+      sessions: [baseSession],
+      historySessions: history,
+      workspaceView: view,
     })
-    expect(
-      useSettingsStore.getState().hibernatingSessionsExpanded
-    ).toBe(false)
+
+    const header = renderer.root
+      .findByProps({ 'data-testid': 'archive-section' })
+      .findByProps({ 'data-testid': 'fallback-section-header' })
+    expect(header.findAllByProps({ 'data-testid': 'archive-history-toggle' })).toHaveLength(0)
+    expect(header.findAllByProps({ 'data-testid': 'archive-hibernating-toggle' })).toHaveLength(0)
 
     act(() => renderer.unmount())
   })

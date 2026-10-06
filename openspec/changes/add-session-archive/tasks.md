@@ -22,6 +22,7 @@
 - [x] 3.2 Add an Archive button to the chat view header that asks for confirmation when status is `working` or `permission` and sends `chat-archive` otherwise or on confirmation; verify with ChatView tests for idle, working-confirmed, and working-declined
 - [x] 3.3 Render archived chats read-only in `ChatView`: transcript shown, composer, Stop, and request actions replaced by a Restore bar; verify with ChatView tests and that attach still requests a snapshot
 - [x] 3.4 Update `CLAUDE.md` "How It Works" to describe archived chats and the Archive section; verify the text matches the implemented behavior
+- [x] 3.5 Move the hibernating and history visibility toggles from the top of the navigator flow region into the expanded Archive pane header, with counts taken from the Archive section's rows, and stop rendering dormant rows in change, worktree, Workspace, and Remote sections; verify with SessionList and SessionDrawer tests
 
 ## 4. Integration
 
