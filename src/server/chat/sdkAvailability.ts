@@ -5,7 +5,11 @@
 import { buildChatOptionsEnv, type ChatProviderEnv } from './chatProviderEnv'
 import type { ClaudeLaunchConfiguration } from './ClaudeProfiles'
 import { TurnQueue } from './TurnQueue'
-export async function probeSdkAvailability(providerEnv: ChatProviderEnv = {}, launch?: ClaudeLaunchConfiguration): Promise<void> {
+export async function probeSdkAvailability(
+  providerEnv: ChatProviderEnv = {},
+  launch?: ClaudeLaunchConfiguration,
+  executablePath?: string
+): Promise<void> {
   const env = buildChatOptionsEnv(providerEnv)
   const sdk = await import('@anthropic-ai/claude-agent-sdk')
   const controller = new AbortController()
@@ -19,6 +23,9 @@ export async function probeSdkAvailability(providerEnv: ChatProviderEnv = {}, la
       systemPrompt: { type: 'preset', preset: 'claude_code' },
       permissionMode: 'default',
       canUseTool: async () => ({ behavior: 'deny', message: 'Runtime availability probe' }),
+      // The externally installed executable chat sessions will run; omitted
+      // when the caller injects its own runtime (tests, fixture).
+      ...(executablePath ? { pathToClaudeCodeExecutable: executablePath } : {}),
       ...(launch ?? (env ? { env } : {})),
     },
   })

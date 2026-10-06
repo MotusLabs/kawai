@@ -109,6 +109,7 @@ function createHarness(
   overrides: {
     claudeProfileId?: string
     resumeSessionId?: string
+    claudeExecutablePath?: string
     getProviderEnv?: () => Record<string, string>
     wire?: ChatWireRecorder
   } = {}
@@ -206,6 +207,19 @@ function result(subtype: string, extra: Record<string, unknown> = {}): SDKMessag
 }
 
 describe('ChatSessionDriver', () => {
+  test('passes the executable path when given and omits the option otherwise', async () => {
+    const external = createHarness({ claudeExecutablePath: '/opt/claude/bin/claude' })
+    external.driver.send('hello')
+    expect(external.fakes[0]!.options.pathToClaudeCodeExecutable).toBe('/opt/claude/bin/claude')
+
+    const injected = createHarness()
+    injected.driver.send('hello')
+    expect('pathToClaudeCodeExecutable' in injected.fakes[0]!.options).toBe(false)
+
+    external.driver.kill()
+    injected.driver.kill()
+  })
+
   test('concurrent profile drivers keep launch settings and approval bridges independent', async () => {
     const glm = createHarness({ claudeProfileId: 'glm' })
     const minimax = createHarness({ claudeProfileId: 'minimax' })

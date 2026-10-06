@@ -4,6 +4,7 @@
 // Archived chats render read-only: the transcript and debug view stay, the
 // composer/Stop/request actions are replaced by a Restore bar, and archiving
 // a live turn asks for confirmation first (the server interrupts it).
+// The root opts into `chat-palette`, the chat view's reduced-glare dark palette.
 import { useClaudeProfiles } from './useClaudeProfiles'
 import { useEffect, useRef, useState } from 'react'
 import type { SendClientMessage, Session } from '@shared/types'
@@ -51,7 +52,7 @@ export default function ChatView({ session, sendMessage, connectionStatus, conne
   const handleArchive = () => { requestChatArchive(session, sendMessage) }
   useEffect(() => { setText('') }, [session.id])
   useEffect(() => { end.current?.scrollIntoView?.({ block: 'end' }) }, [transcript.events.length, transcript.throughSequence])
-  return <main className="flex min-h-0 min-w-0 flex-1 flex-col bg-base text-primary" data-testid="chat-view">
+  return <main className="chat-palette flex min-h-0 min-w-0 flex-1 flex-col bg-base text-primary" data-testid="chat-view">
     <header className="flex items-center gap-3 border-b border-border p-3">
       <button className="btn md:hidden" onClick={onClose}>Sessions</button>
       <div className="min-w-0 flex-1"><h2 className="truncate text-sm font-medium">{session.name} · Chat</h2>
@@ -62,7 +63,7 @@ export default function ChatView({ session, sendMessage, connectionStatus, conne
       {!archived && <button className="btn text-xs" onClick={handleArchive} data-testid="chat-archive-button">Archive</button>}
       <button className="btn text-xs" onClick={onKill}>Kill session</button>
     </header>
-    {error && <p role="alert" className="border-b border-border p-3 text-sm text-red-400">{error}</p>}
+    {error && <p role="alert" className="border-b border-border p-3 text-sm text-chat-danger">{error}</p>}
     <div className="flex min-h-0 flex-1">
       <div className={`min-h-0 min-w-0 flex-1 flex-col ${debugOpen ? 'hidden md:flex' : 'flex'}`}>
         <div className="min-h-0 flex-1 overflow-y-auto p-4">

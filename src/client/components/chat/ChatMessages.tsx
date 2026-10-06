@@ -27,7 +27,7 @@ export default function ChatMessages({ events }: { events: ChatEvent[] }) {
             <pre className="mt-2 overflow-auto whitespace-pre-wrap">{event.output}</pre>
           </details>
         case 'notice': return <p key={event.id} className="text-xs text-secondary">{event.text}</p>
-        case 'error': return <p key={event.id} role="alert" className="text-sm text-red-400">{event.message}</p>
+        case 'error': return <p key={event.id} role="alert" className="text-sm text-chat-danger">{event.message}</p>
         case 'turn_interrupted': return <p key={event.id} className="text-xs text-secondary">Turn stopped</p>
         case 'request_resolved': return <p key={event.id} className="text-xs text-secondary">Request {event.outcome}</p>
         case 'turn_completed': return <p key={event.id} className="text-xs text-muted">
