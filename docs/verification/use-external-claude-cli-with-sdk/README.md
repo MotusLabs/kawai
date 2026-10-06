@@ -45,3 +45,35 @@ the SDK's bundled platform CLIs`.
 - `claudeSdkPlatformOverrides.test.ts` asserts every SDK
   `optionalDependencies` name is overridden, so an SDK upgrade that adds a
   platform package fails tests until the override list is updated.
+
+## 3.2 — Compiled release-style binary runs chat
+
+Verified 2026-10-06 on linux-x64, Bun 1.4.2, `claude` 2.1.291.
+
+Built `bun build src/server/index.ts src/server/sessionRefreshWorker.ts
+src/server/logMatchWorker.ts --define 'process.env.KAWAI_BUILD_VERSION="…"'
+--compile --target bun-linux-x64` (84 MB) with the stubbed install, then ran
+the binary from an empty directory with `claude` on `PATH` (no
+`KAWAI_CLAUDE_PATH`, so PATH resolution was exercised), a scratch
+`LOG_FILE`/`AGENTBOARD_DB_PATH`/`CLAUDE_CONFIG_DIR`, and
+`AGENTBOARD_CHAT_ENV` pointing at a loopback mock Anthropic endpoint with a
+synthetic API key (no real credentials or provider):
+
+- Chat creation passed the executable check and SDK handshake probe — the
+  wire log shows the spawn used `/home/coder/.local/bin/claude` from PATH.
+- The first turn streamed, the CLI sent a `can_use_tool` control request,
+  and the client received the `approval_request` card.
+- Answering `allow` over the WebSocket ran the real Bash tool
+  (`node -e "console.log('profile-smoke-approved")"`); the tool_result
+  carried the command's output.
+- The turn completed with subtype `success` and final text.
+
+This is the release configuration that previously failed its availability
+probe with "Native CLI binary for linux-x64 not found"; the result is
+recorded next to that failure in
+`openspec/changes/replace-claude-sdk-with-cli/decision.md`.
+
+Verification quirks hit along the way (expected, not defects): the mock must
+answer auxiliary CLI calls (title generation) without consuming the scripted
+tool_use, and the first attempt's `node` command was absent from the
+stripped server `PATH` until `/usr/local/bin` was included.

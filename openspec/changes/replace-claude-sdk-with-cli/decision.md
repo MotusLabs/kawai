@@ -43,6 +43,18 @@ Releases are `bun build --compile` binaries (linux-x64 asset in v1.0.0-21: 97.6 
 
 So chat creation in released binaries currently fails its availability probe. An external executable path fixes this; full replacement would also, but with far more protocol code to own.
 
+### 2026-10-06 follow-up: compiled binary chat works with the lighter option
+
+Re-verified after implementing `use-external-claude-cli-with-sdk`: a
+release-style `bun build --compile` binary (built as release.yml does, 84 MB,
+no `node_modules`, platform CLI stubs installed) run from an empty directory
+with `claude` 2.1.291 on `PATH` (no `KAWAI_CLAUDE_PATH`): chat creation
+passed the executable check and handshake probe, a streamed turn requested
+Bash permission, `allow` through the WebSocket API ran the real tool, and the
+turn completed successfully against a loopback mock provider with a synthetic
+key (no credentials, no live provider). Full log in
+`docs/verification/use-external-claude-cli-with-sdk/README.md`.
+
 ## Options compared
 
 1. **Keep SDK as-is** — no work; ~464 MB binaries; bundled CLI drifts from installed CLI.

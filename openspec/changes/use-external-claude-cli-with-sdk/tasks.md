@@ -13,7 +13,7 @@
 ## 3. Dependency trimming
 
 - [x] 3.1 Add `packages/claude-agent-sdk-no-cli/package.json`, add `overrides` for all eight SDK platform packages, and regenerate `bun.lock`; verify `bun install --frozen-lockfile` succeeds in a clean checkout, no `@anthropic-ai/claude-agent-sdk-*` directory holds a binary, lightningcss/oxlint/rolldown bindings remain, `bun run build` and `bun run lint` pass, `node_modules` size is recorded, and a test asserts that every SDK `optionalDependencies` name is overridden.
-- [ ] 3.2 Verify a compiled release-style binary runs chat: run `bun build --compile` as `release.yml` does, run the binary from an empty directory with `claude` on PATH, create a chat session, and complete an approval round trip through the API or UI; record the result next to the earlier compiled-probe failure in the decision note.
+- [x] 3.2 Verify a compiled release-style binary runs chat: run `bun build --compile` as `release.yml` does, run the binary from an empty directory with `claude` on PATH, create a chat session, and complete an approval round trip through the API or UI; record the result next to the earlier compiled-probe failure in the decision note.
 
 ## 4. Documentation
 
