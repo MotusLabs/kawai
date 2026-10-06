@@ -52,15 +52,23 @@ export function resolveClaudeExecutable(
   return Bun.which('claude', { PATH: env.PATH ?? '' }) ?? null
 }
 
+/** A verified executable: the path to run and its change identity. */
+export interface ClaudeExecutableCheck {
+  /** Configured path (not its realpath), to pass to the SDK. */
+  path: string
+  /** path + realpath + mtime; changes when the executable changes. */
+  identity: string
+}
+
 /**
  * Resolve and fully verify the executable: existence, execute permission,
  * and a version at or above CLAUDE_CODE_MIN_VERSION within the probe bound.
- * Returns the configured path on success. Successful checks are cached while
- * the file is unchanged; failures always re-check on the next call.
+ * Successful checks are cached while the file is unchanged; failures always
+ * re-check on the next call.
  */
 export async function ensureClaudeExecutable(
   env: Record<string, string | undefined> = process.env
-): Promise<string> {
+): Promise<ClaudeExecutableCheck> {
   const executablePath = resolveClaudeExecutable(env)
   if (!executablePath) {
     throw new ClaudeExecutableError(
@@ -77,13 +85,13 @@ export interface CheckClaudeExecutableOptions {
 }
 
 /**
- * Verify one executable path and return it. Throws ClaudeExecutableError with
- * an actionable message naming the checked path on every failure kind.
+ * Verify one executable path. Throws ClaudeExecutableError with an
+ * actionable message naming the checked path on every failure kind.
  */
 export async function checkClaudeExecutable(
   executablePath: string,
   options: CheckClaudeExecutableOptions = {}
-): Promise<string> {
+): Promise<ClaudeExecutableCheck> {
   let stats: fs.Stats
   try {
     stats = fs.statSync(executablePath) // follows symlinks, like execution
@@ -110,7 +118,7 @@ export async function checkClaudeExecutable(
   }
 
   const cacheKey = versionCacheKey(executablePath, stats)
-  if (verifiedKeys.has(cacheKey)) return executablePath
+  if (verifiedKeys.has(cacheKey)) return { path: executablePath, identity: cacheKey }
 
   const output = await probeVersion(executablePath, options.timeoutMs ?? CLAUDE_VERSION_PROBE_TIMEOUT_MS)
   const version = parseClaudeVersion(output)
@@ -130,7 +138,7 @@ export async function checkClaudeExecutable(
     )
   }
   verifiedKeys.add(cacheKey)
-  return executablePath
+  return { path: executablePath, identity: cacheKey }
 }
 
 /** Successful `path + realpath + mtime` checks; never holds failures. */

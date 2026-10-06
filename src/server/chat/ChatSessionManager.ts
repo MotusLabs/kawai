@@ -4,7 +4,10 @@
 // registry, kill/shutdown settlement (including the session's protocol log), and immediate sdkSessionId capture so a
 // restart can resume the same agent conversation. The SDK import stays dynamic
 // (injected as a queryFactory in tests) so a broken install disables the
-// feature instead of crashing the server.
+// feature instead of crashing the server. Chat spawns run a separately
+// installed Claude Code executable: creation and every (re)spawn first pass
+// an executable check (KAWAI_CLAUDE_PATH/PATH, version baseline) whose
+// ClaudeExecutableError messages reach the user verbatim.
 import type {
   ChatApprovalDecision,
   ChatEvent,
@@ -18,6 +21,11 @@ import { isExistingDirectory, resolveProjectDirectory } from '../paths'
 import type { SessionRegistry } from '../SessionRegistry'
 import { ChatSessionDriver, type ChatQueryFactory } from './ChatSessionDriver'
 import { chatAuthErrorMessage, hasClaudeAuth } from './chatAuth'
+import {
+  ClaudeExecutableError,
+  ensureClaudeExecutable,
+  type ClaudeExecutableCheck,
+} from './claudeExecutable'
 import type { ChatProviderEnv } from './chatProviderEnv'
 import type { ChatWireLogs } from './ChatWireLogs'
 import { resolveClaudeProfile, claudeLaunchKey, type ClaudeLaunchConfiguration } from './ClaudeProfiles'
@@ -39,7 +47,17 @@ export interface ChatSessionManagerOptions {
   /** Injected in tests; production resolves the SDK via dynamic import. */
   queryFactory?: ChatQueryFactory
   /** Receives the provider env so it probes the endpoint sessions will use. */
-  availabilityProbe?: (providerEnv: ChatProviderEnv, launch?: ClaudeLaunchConfiguration) => Promise<void>
+  availabilityProbe?: (
+    providerEnv: ChatProviderEnv,
+    launch?: ClaudeLaunchConfiguration,
+    executablePath?: string
+  ) => Promise<void>
+  /**
+   * Resolves and verifies the Claude Code executable every spawn will run.
+   * Injected in tests; the default checks KAWAI_CLAUDE_PATH/PATH (version
+   * probe + baseline). An injected queryFactory (fake runtime) skips it.
+   */
+  executableCheck?: () => Promise<ClaudeExecutableCheck>
   authCheck?: () => boolean
   /**
    * Provider overrides for SDK spawns (base URL, models, gateway token). A
@@ -95,6 +113,10 @@ export class ChatSessionManager {
     try {
       await this.probeAvailability(input.claudeProfileId)
     } catch (error) {
+      if (error instanceof ClaudeExecutableError) {
+        // Actionable by construction (names the path and the fix).
+        return { ok: false, error: error.message }
+      }
       return {
         ok: false,
         error: 'Claude Agent SDK is unavailable. Check its installation, runtime, and chat provider settings, then try again. ' +
@@ -238,6 +260,11 @@ export class ChatSessionManager {
     try {
       driver = await this.ensureDriver(sessionId)
     } catch (error) {
+      if (error instanceof ClaudeExecutableError) {
+        // Actionable by construction (names the path and the fix); the
+        // record and its stored conversation id are untouched.
+        return { ok: false, error: error.message }
+      }
       return {
         ok: false,
         error:
@@ -422,6 +449,9 @@ export class ChatSessionManager {
       if (existing.isDead) {
         resolveClaudeProfile(this.records.get(sessionId)?.claudeProfileId, this.providerEnv())
         if (!this.authOk(this.records.get(sessionId)?.claudeProfileId)) throw new Error(chatAuthErrorMessage())
+        // The executable may have been removed since the last spawn; a dead
+        // driver respawn must surface that before the process is missed.
+        await this.checkExecutable()
       }
       return existing
     }
@@ -436,6 +466,7 @@ export class ChatSessionManager {
     if (!this.authOk(record.claudeProfileId)) throw new Error(chatAuthErrorMessage())
     this.captureHistory(sessionId)
     const promise = (async () => {
+      const executable = await this.checkExecutable()
       const queryFactory = await this.resolveQueryFactory()
       const driver = new ChatSessionDriver({
         sessionId: record.sessionId,
@@ -443,6 +474,7 @@ export class ChatSessionManager {
         queryFactory,
         getProviderEnv: () => this.providerEnv(),
         claudeProfileId: record.claudeProfileId,
+        ...(executable ? { claudeExecutablePath: executable.path } : {}),
         ...(this.options.wireLogs
           ? { wire: this.options.wireLogs.get(record.sessionId) }
           : {}),
@@ -475,15 +507,24 @@ export class ChatSessionManager {
     }
   }
 
-  private probeAvailability(profileId: string = 'default'): Promise<void> {
+  /**
+   * Verify the executable, then the SDK handshake, under the resolved launch
+   * configuration. The probe cache key includes the executable identity
+   * (path + realpath + mtime), so an upgraded executable re-probes the
+   * handshake even when the provider configuration is unchanged.
+   */
+  private async probeAvailability(profileId: string = 'default'): Promise<void> {
+    const executable = await this.checkExecutable()
     const providerEnv = this.providerEnv()
     const launch = resolveClaudeProfile(profileId, providerEnv)
-    const key = claudeLaunchKey(launch)
+    const key = executable
+      ? `${claudeLaunchKey(launch)}\0${executable.identity}`
+      : claudeLaunchKey(launch)
     const cached = this.availability.get(key)
     if (cached) return cached
     const probe = this.options.availabilityProbe ??
       (this.options.queryFactory ? async () => {} : probeSdkAvailability)
-    const promise = probe(providerEnv, launch)
+    const promise = probe(providerEnv, launch, executable?.path)
     // Bound retained configurations; evicted successful probes can be repeated.
     if (this.availability.size >= 32) this.availability.delete(this.availability.keys().next().value!)
     this.availability.set(key, promise)
@@ -491,6 +532,19 @@ export class ChatSessionManager {
       if (this.availability.get(key) === promise) this.availability.delete(key)
     })
     return promise
+  }
+
+  /**
+   * The verified executable every spawn will run, or null when a fake
+   * runtime is injected (tests, development fixture) and no executable
+   * applies. Throws ClaudeExecutableError verbatim for the caller to report.
+   */
+  private async checkExecutable(): Promise<ClaudeExecutableCheck | null> {
+    if (this.options.executableCheck) return this.options.executableCheck()
+    // An injected fake runtime (queryFactory for sends, availabilityProbe for
+    // creation) must not require a Claude Code install.
+    if (this.options.queryFactory || this.options.availabilityProbe) return null
+    return ensureClaudeExecutable()
   }
 
   private providerEnv(): ChatProviderEnv {

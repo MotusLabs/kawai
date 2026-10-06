@@ -27,7 +27,7 @@ const versionScript = (version: string) =>
 
 /** Throw with the kind and message when the promise rejects, else fail. */
 async function expectRejection(
-  promise: Promise<string>,
+  promise: Promise<unknown>,
   kind: ClaudeExecutableError['kind']
 ): Promise<ClaudeExecutableError> {
   try {
@@ -86,7 +86,7 @@ describe('checkClaudeExecutable', () => {
       path.join('my tools', 'claude code'),
       versionScript('2.1.300')
     )
-    await expect(checkClaudeExecutable(exe)).resolves.toBe(exe)
+    await expect(checkClaudeExecutable(exe)).resolves.toMatchObject({ path: exe })
   })
 
   test('refuses a value with arguments as a missing executable', async () => {
@@ -130,9 +130,9 @@ describe('checkClaudeExecutable', () => {
 
   test('accepts the baseline version and newer ones', async () => {
     const base = makeExecutable(tempDir, 'base-claude', versionScript(CLAUDE_CODE_MIN_VERSION))
-    await expect(checkClaudeExecutable(base)).resolves.toBe(base)
+    await expect(checkClaudeExecutable(base)).resolves.toMatchObject({ path: base })
     const newer = makeExecutable(tempDir, 'new-claude', versionScript('3.0.0'))
-    await expect(checkClaudeExecutable(newer)).resolves.toBe(newer)
+    await expect(checkClaudeExecutable(newer)).resolves.toMatchObject({ path: newer })
   })
 
   test('refuses unparsable output, quoting it', async () => {
@@ -197,7 +197,7 @@ describe('checkClaudeExecutable', () => {
     await expectRejection(checkClaudeExecutable(exe), 'unsupported')
     fs.writeFileSync(exe, versionScript('2.1.300'))
     fs.chmodSync(exe, 0o755)
-    await expect(checkClaudeExecutable(exe)).resolves.toBe(exe)
+    await expect(checkClaudeExecutable(exe)).resolves.toMatchObject({ path: exe })
   })
 
   test('caches success until mtime changes, then re-probes', async () => {
@@ -206,13 +206,13 @@ describe('checkClaudeExecutable', () => {
     // so a freshly written file could otherwise never match a restored one.
     const t0 = new Date(Date.now() - 60_000)
     fs.utimesSync(exe, t0, t0)
-    await expect(checkClaudeExecutable(exe)).resolves.toBe(exe)
+    await expect(checkClaudeExecutable(exe)).resolves.toMatchObject({ path: exe })
 
     // Same mtime: the cached success returns even though the file now hangs.
     fs.writeFileSync(exe, '#!/bin/sh\nsleep 30\n')
     fs.chmodSync(exe, 0o755)
     fs.utimesSync(exe, t0, t0)
-    await expect(checkClaudeExecutable(exe, { timeoutMs: 200 })).resolves.toBe(exe)
+    await expect(checkClaudeExecutable(exe, { timeoutMs: 200 })).resolves.toMatchObject({ path: exe })
 
     // A bumped mtime invalidates the cache; the hanging probe now fails.
     const t1 = new Date(t0.getTime() + 5000)
@@ -234,12 +234,12 @@ describe('ensureClaudeExecutable', () => {
     const exe = makeExecutable(tempDir, 'explicit-claude', versionScript('2.1.300'))
     await expect(
       ensureClaudeExecutable({ KAWAI_CLAUDE_PATH: exe, PATH: '' })
-    ).resolves.toBe(exe)
+    ).resolves.toMatchObject({ path: exe })
   })
 
   test('resolves claude from PATH when no override is set', async () => {
     const exe = makeExecutable(tempDir, 'claude', versionScript('2.1.300'))
-    await expect(ensureClaudeExecutable({ PATH: tempDir })).resolves.toBe(exe)
+    await expect(ensureClaudeExecutable({ PATH: tempDir })).resolves.toMatchObject({ path: exe })
   })
 
   test('refuses creation with an actionable error when nothing resolves', async () => {
