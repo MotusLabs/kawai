@@ -72,6 +72,5 @@ None.
 - Tests: settings store and modal tests, chat component tests, and Markdown
   tests.
 - No server, protocol or dependency changes.
-- Sequencing: this branch is based on PR #24 and should merge after it.
-  `origin/master` now also has the Dark Dimmed palette change (PR #23), so
-  rebase onto `master` once PR #24 lands.
+- Sequencing: PR #24 has merged and this branch is rebased onto `master`,
+  which includes the Dark Dimmed palette (PR #23).

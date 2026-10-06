@@ -38,7 +38,8 @@ For motivation, see proposal.md (Why).
 1. **Scope the size with a CSS variable on the chat root, and size text in
    `em`.** `ChatView`'s `<main>` sets
    `style={{ '--chat-font-size': `${chatFontSize}px` }}` and the class
-   `.chat-root { font-size: var(--chat-font-size, 15px) }`. Text inside uses
+   `.chat-root { font-size: var(--chat-font-size, 15px) }`, next to the
+   existing `chat-palette` class. Text inside uses
    `em`-based sizes.
    - *Alternative: change the root size.* Rejected because it resizes the
      whole app.
@@ -98,10 +99,6 @@ For motivation, see proposal.md (Why).
 - [Larger text makes long tool-call JSON blocks taller] → Tool call and
   result `<pre>` blocks stay at `chat-meta` (12px by default). That is still
   larger than today's 9.75px, which is intended.
-- [PR #24 not merged yet, base drift from the palette change on master]
-  → Rebase onto `master` after PR #24 merges, before applying. Its
-  `text-red-400` → `text-chat-danger` changes do not overlap with the size
-  changes.
 - [Preview and chat visibly differ in size] → The modified requirement
   allows this. The preview is a compact peek view.
 

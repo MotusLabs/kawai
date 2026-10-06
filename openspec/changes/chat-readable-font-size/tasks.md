@@ -2,7 +2,7 @@
 
 ## 0. Base
 
-- [ ] 0.1 Once PR #24 (`fix-chat-markdown-rendering`) has merged, rebase `docs/chat-readable-font-size` onto `master` (picking up the Dark Dimmed palette) and verify `bun run test` passes before any code change
+- [x] 0.1 Once PR #24 (`fix-chat-markdown-rendering`) has merged, rebase `docs/chat-readable-font-size` onto `master` (picking up the Dark Dimmed palette) and verify `bun run test` passes before any code change
 
 ## 1. Chat font size setting
 
