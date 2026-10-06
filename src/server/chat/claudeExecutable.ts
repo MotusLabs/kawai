@@ -8,6 +8,7 @@
 // mtime so an upgrade in place re-checks; failures are never cached, so an
 // installed or repaired executable recovers without a server restart.
 import fs from 'node:fs'
+import path from 'node:path'
 
 /**
  * Minimum Claude Code version chat sessions support. Must stay equal to the
@@ -42,25 +43,38 @@ const INSTALL_HINT =
 /**
  * Resolve the executable chat sessions will run: the trimmed KAWAI_CLAUDE_PATH
  * value when non-empty, otherwise `claude` from PATH. Returns null when
- * neither yields a path; the value is used verbatim as one path.
+ * neither yields a path. The value is one path (never split or run by a
+ * shell), made absolute against the server working directory.
  */
 export function resolveClaudeExecutable(
   env: Record<string, string | undefined> = process.env
 ): string | null {
   const configured = (env.KAWAI_CLAUDE_PATH ?? '').trim()
-  if (configured) return configured
-  return Bun.which('claude', { PATH: env.PATH ?? '' }) ?? null
+  // Absolute against the server's working directory: verification runs here,
+  // but the SDK spawns from each project directory, where a relative path
+  // would name a different (or no) file.
+  if (configured) return path.resolve(configured)
+  const found = Bun.which('claude', { PATH: env.PATH ?? '' })
+  return found ? path.resolve(found) : null
+}
+
+/** A verified executable: the path to run and its change identity. */
+export interface ClaudeExecutableCheck {
+  /** Configured path (not its realpath), to pass to the SDK. */
+  path: string
+  /** path + realpath + mtime; changes when the executable changes. */
+  identity: string
 }
 
 /**
  * Resolve and fully verify the executable: existence, execute permission,
  * and a version at or above CLAUDE_CODE_MIN_VERSION within the probe bound.
- * Returns the configured path on success. Successful checks are cached while
- * the file is unchanged; failures always re-check on the next call.
+ * Successful checks are cached while the file is unchanged; failures always
+ * re-check on the next call.
  */
 export async function ensureClaudeExecutable(
   env: Record<string, string | undefined> = process.env
-): Promise<string> {
+): Promise<ClaudeExecutableCheck> {
   const executablePath = resolveClaudeExecutable(env)
   if (!executablePath) {
     throw new ClaudeExecutableError(
@@ -77,13 +91,13 @@ export interface CheckClaudeExecutableOptions {
 }
 
 /**
- * Verify one executable path and return it. Throws ClaudeExecutableError with
- * an actionable message naming the checked path on every failure kind.
+ * Verify one executable path. Throws ClaudeExecutableError with an
+ * actionable message naming the checked path on every failure kind.
  */
 export async function checkClaudeExecutable(
   executablePath: string,
   options: CheckClaudeExecutableOptions = {}
-): Promise<string> {
+): Promise<ClaudeExecutableCheck> {
   let stats: fs.Stats
   try {
     stats = fs.statSync(executablePath) // follows symlinks, like execution
@@ -110,7 +124,7 @@ export async function checkClaudeExecutable(
   }
 
   const cacheKey = versionCacheKey(executablePath, stats)
-  if (verifiedKeys.has(cacheKey)) return executablePath
+  if (verifiedKeys.has(cacheKey)) return { path: executablePath, identity: cacheKey }
 
   const output = await probeVersion(executablePath, options.timeoutMs ?? CLAUDE_VERSION_PROBE_TIMEOUT_MS)
   const version = parseClaudeVersion(output)
@@ -130,7 +144,7 @@ export async function checkClaudeExecutable(
     )
   }
   verifiedKeys.add(cacheKey)
-  return executablePath
+  return { path: executablePath, identity: cacheKey }
 }
 
 /** Successful `path + realpath + mtime` checks; never holds failures. */

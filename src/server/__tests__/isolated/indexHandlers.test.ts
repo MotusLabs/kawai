@@ -769,6 +769,21 @@ afterAll(() => {
 })
 
 mock.module('../../chat/sdkAvailability', () => ({ probeSdkAvailability: async () => {} }))
+// The executable check spawns a real child for --version; Bun.spawn is
+// mocked below, so stub the module like the handshake probe above.
+mock.module('../../chat/claudeExecutable', () => {
+  class ClaudeExecutableError extends Error {
+    kind: string
+    constructor(kind: string, message: string) {
+      super(message)
+      this.kind = kind
+    }
+  }
+  return {
+    ClaudeExecutableError,
+    ensureClaudeExecutable: async () => ({ path: '/mock/claude', identity: 'mock-claude' }),
+  }
+})
 
 describe('server message handlers', () => {
   test('chat creation and kill route through the manager without creating a tmux window', async () => {
