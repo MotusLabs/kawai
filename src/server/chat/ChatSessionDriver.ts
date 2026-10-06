@@ -57,6 +57,12 @@ export interface ChatSessionDriverOptions {
   getProviderEnv?: () => ChatProviderEnv
   /** Persisted session profile; omitted for legacy Default sessions. */
   claudeProfileId?: string
+  /**
+   * Externally installed Claude Code executable passed to the SDK as
+   * pathToClaudeCodeExecutable. Omitted when a fake runtime is injected
+   * (tests, development fixture), leaving SDK resolution unchanged.
+   */
+  claudeExecutablePath?: string
   onEvent: (event: ChatEvent) => void
   /** Applied immediately on every derived status change. */
   onStatus: (status: SessionStatus) => void
@@ -286,6 +292,9 @@ export class ChatSessionDriver {
       permissionMode: 'default',
       includePartialMessages: true,
       canUseTool: this.canUseTool,
+      ...(this.options.claudeExecutablePath
+        ? { pathToClaudeCodeExecutable: this.options.claudeExecutablePath }
+        : {}),
       ...(resume ? { resume } : {}),
       ...launch,
       ...(wire ? { spawnClaudeCodeProcess: createWireTappedSpawn(wire) } : {}),
