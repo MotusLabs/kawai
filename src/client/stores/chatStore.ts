@@ -2,7 +2,7 @@
 // Final assistant text replaces its streamed preview; request state is shared
 // through server resolution events rather than optimistic local answers.
 import { create } from 'zustand'
-import type { ChatEvent, ChatPendingRequest } from '@shared/chat'
+import type { ChatCommandState, ChatEvent, ChatPendingRequest } from '@shared/chat'
 import type { ServerMessage, SessionStatus } from '@shared/types'
 
 export interface ChatTranscript {
@@ -10,11 +10,14 @@ export interface ChatTranscript {
   pendingRequests: ChatPendingRequest[]
   status: SessionStatus
   throughSequence: number
+  /** The session's slash-command list; unavailable until an agent reports. */
+  commands: ChatCommandState
   seen: Set<string>
 }
 
 export const emptyTranscript = (): ChatTranscript => ({
-  events: [], pendingRequests: [], status: 'waiting', throughSequence: 0, seen: new Set(),
+  events: [], pendingRequests: [], status: 'waiting', throughSequence: 0,
+  commands: { status: 'unavailable', commands: [] }, seen: new Set(),
 })
 
 export function applyChatEvents(state: ChatTranscript, incoming: ChatEvent[]): ChatTranscript {
@@ -57,6 +60,8 @@ interface ChatStore {
   sessions: Record<string, ChatTranscript>
   apply: (sessionId: string, events: ChatEvent[]) => void
   snapshot: (message: Extract<ServerMessage, { type: 'chat-snapshot' }>) => void
+  /** Replace one session's command list (chat-commands push). */
+  setCommands: (message: Extract<ServerMessage, { type: 'chat-commands' }>) => void
   remove: (sessionId: string) => void
 }
 
@@ -72,6 +77,14 @@ export const useChatStore = create<ChatStore>((set) => ({
       pendingRequests: message.pendingRequests,
       status: message.status,
       throughSequence: message.throughSequence,
+      commands: message.commands,
+    },
+  } })),
+  setCommands: message => set(state => ({ sessions: {
+    ...state.sessions,
+    [message.sessionId]: {
+      ...(state.sessions[message.sessionId] ?? emptyTranscript()),
+      commands: message.state,
     },
   } })),
   remove: sessionId => set(state => {
