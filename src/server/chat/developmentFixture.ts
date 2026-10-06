@@ -49,6 +49,39 @@ export const fixtureQueryFactory: ChatQueryFactory = ({ prompt, options, wire })
       push({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: toolUseID, content: JSON.stringify(result) }] } })
       assistant(result?.behavior === 'allow' ? 'Request accepted.' : 'Request denied.')
     }
+    if (/markdown/i.test(text)) {
+      assistant([
+        '# Markdown showcase',
+        '',
+        'Headings, **bold**, *italic*, ~~struck through~~ and `inline code`, plus [a link](https://example.com).',
+        '',
+        '---',
+        '',
+        '## Lists',
+        '',
+        '- bullet one',
+        '- bullet two',
+        '',
+        '1. first',
+        '2. second',
+        '',
+        '- [ ] unchecked task',
+        '- [x] done task',
+        '',
+        '## Table',
+        '',
+        '| Element | Rendered |',
+        '| --- | --- |',
+        '| table | bordered |',
+        '| task list | checkboxes |',
+        '',
+        '> A blockquote sets text off.',
+        '',
+        '```ts',
+        "const fenced = 'code block'",
+        '```',
+      ].join('\n'))
+    }
     if (/stream/i.test(text)) {
       const messageId = crypto.randomUUID()
       push({ type: 'stream_event', event: { type: 'message_start', message: { id: messageId } } })

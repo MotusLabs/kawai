@@ -1,7 +1,6 @@
 // Read-only transcript entries; active approval/question controls live separately.
-import ReactMarkdown from 'react-markdown'
-import remarkBreaks from 'remark-breaks'
 import type { ChatEvent } from '@shared/chat'
+import Markdown from '../Markdown'
 
 export default function ChatMessages({ events }: { events: ChatEvent[] }) {
   return <div className="space-y-4" data-testid="chat-transcript">
@@ -15,9 +14,7 @@ export default function ChatMessages({ events }: { events: ChatEvent[] }) {
         case 'assistant_text':
           return <article key={event.id} data-chat-role="assistant" className="mr-8 p-3">
             <div className="mb-1 text-xs text-secondary">Claude</div>
-            <div className="prose prose-invert max-w-none break-words text-sm">
-              <ReactMarkdown remarkPlugins={[remarkBreaks]}>{event.text}</ReactMarkdown>
-            </div>
+            <Markdown content={event.text} />
           </article>
         case 'tool_call':
           return <details key={event.id} className="border-l-2 border-border px-3 text-xs text-secondary">
