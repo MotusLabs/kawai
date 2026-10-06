@@ -18,20 +18,17 @@ const markdownComponents: Components = {
       {children}
     </a>
   ),
-  // Task lists (remark-gfm) carry contains-task-list and render their own
-  // checkboxes, so they drop the marker and left padding.
-  ul: ({ children, className }) => (
-    <ul className={className?.includes('contains-task-list') ? 'my-2 space-y-1 list-none pl-0' : 'my-2 list-disc space-y-1 pl-5'}>
-      {children}
-    </ul>
-  ),
-  ol: ({ children, className }) => (
-    <ol className={className?.includes('contains-task-list') ? 'my-2 space-y-1 list-none pl-0' : 'my-2 list-decimal space-y-1 pl-5'}>
+  // remark-gfm marks a whole list contains-task-list when any item has a
+  // checkbox, so markers are dropped per task-list-item; ordinary siblings in
+  // a mixed list keep their bullet or number.
+  ul: ({ children }) => <ul className="my-2 list-disc space-y-1 pl-5">{children}</ul>,
+  ol: ({ children, start }) => (
+    <ol start={start} className="my-2 list-decimal space-y-1 pl-5">
       {children}
     </ol>
   ),
   li: ({ children, className }) => (
-    <li className={className ? `leading-6 ${className}` : 'leading-6'}>{children}</li>
+    <li className={className?.includes('task-list-item') ? `leading-6 list-none ${className}` : 'leading-6'}>{children}</li>
   ),
   h1: ({ children }) => <h1 className="mb-1 mt-3 text-base font-semibold first:mt-0">{children}</h1>,
   h2: ({ children }) => <h2 className="mb-1 mt-3 text-sm font-semibold first:mt-0">{children}</h2>,

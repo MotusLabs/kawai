@@ -73,16 +73,38 @@ describe('shared markdown renderer', () => {
     unmount()
   })
 
-  test('renders task lists with disabled checkboxes and no bullets', () => {
-    const { first, byType, unmount } = render('- [ ] a\n- [x] b')
-    const list = first('ul')
-    expect(classNameOf(list)).not.toContain('list-disc')
+  test('renders task lists with disabled checkboxes and no markers on task items', () => {
+    const { byType, unmount } = render('- [ ] a\n- [x] b')
     const items = byType('li')
+    expect(items.map(item => classNameOf(item))).toEqual([
+      expect.stringContaining('list-none'),
+      expect.stringContaining('list-none'),
+    ])
     expect(classNameOf(items[0]!)).toContain('task-list-item')
     const checkboxes = byType('input')
     expect(checkboxes).toHaveLength(2)
     expect(checkboxes.map(box => box.props.disabled)).toEqual([true, true])
     expect(checkboxes.map(box => box.props.checked)).toEqual([false, true])
+    unmount()
+  })
+
+  test('keeps markers on ordinary items in a mixed task list', () => {
+    for (const [source, tag, marker] of [
+      ['- plain\n- [ ] task', 'ul', 'list-disc'],
+      ['1. plain\n2. [x] task', 'ol', 'list-decimal'],
+    ] as const) {
+      const { first, byType, unmount } = render(source)
+      expect(classNameOf(first(tag))).toContain(marker)
+      const [plain, task] = byType('li').map(item => classNameOf(item))
+      expect(plain).not.toContain('list-none')
+      expect(task).toContain('list-none')
+      unmount()
+    }
+  })
+
+  test('preserves an ordered list starting number', () => {
+    const { first, unmount } = render('3. third\n4. fourth')
+    expect(first('ol').props.start).toBe(3)
     unmount()
   })
 
