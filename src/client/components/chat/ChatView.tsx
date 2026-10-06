@@ -13,6 +13,7 @@ import { closedDebugView, useChatDebugStore } from '../../stores/chatDebugStore'
 import ChatDebugPanel from './ChatDebugPanel'
 import ChatMessages from './ChatMessages'
 import ChatRequests from './ChatRequests'
+import { requestChatArchive } from '../../utils/chatArchive'
 
 const EMPTY = emptyTranscript()
 const CLOSED_DEBUG = closedDebugView()
@@ -47,13 +48,7 @@ export default function ChatView({ session, sendMessage, connectionStatus, conne
     if (debugOpen) store.close(session.id)
     else store.beginOpen(session.id)
   }
-  const handleArchive = () => {
-    // Confirmation is a client concern (chat-archive design D3): a turn in
-    // flight is interrupted by the archive, so ask first.
-    const busy = session.status === 'working' || session.status === 'permission'
-    if (busy && !window.confirm(`Archive "${session.name}"? A turn is in flight and will be interrupted.`)) return
-    sendMessage({ type: 'chat-archive', sessionId: session.id })
-  }
+  const handleArchive = () => { requestChatArchive(session, sendMessage) }
   useEffect(() => { setText('') }, [session.id])
   useEffect(() => { end.current?.scrollIntoView?.({ block: 'end' }) }, [transcript.events.length, transcript.throughSequence])
   return <main className="flex min-h-0 min-w-0 flex-1 flex-col bg-base text-primary" data-testid="chat-view">

@@ -26,6 +26,7 @@ import { invalidateSnapshotCache } from './hooks/useTerminal'
 import { useVisualViewport } from './hooks/useVisualViewport'
 import { sortSessions } from './utils/sessions'
 import { buildWorkspaceView } from './utils/workspaceView'
+import { requestChatArchive } from './utils/chatArchive'
 import { flushSync } from 'react-dom'
 import { setClientLogLevel } from './utils/clientLog'
 import { getEffectiveModifier, matchesModifier } from './utils/device'
@@ -943,11 +944,12 @@ export default function App() {
   }, [markSessionExiting, setSessions, sendMessage])
 
   // Chat archive/restore (chat-archive design D2/D3): the server operation is
-  // unconditional and idempotent; confirmation for in-flight turns happens
-  // in ChatView before it ever sends chat-archive.
+  // unconditional and idempotent; requestChatArchive asks before
+  // interrupting a turn in flight, same as the chat view header.
   const handleArchiveChat = useCallback(
     (sessionId: string) => {
-      sendMessage({ type: 'chat-archive', sessionId })
+      const session = useSessionStore.getState().sessions.find((s) => s.id === sessionId)
+      if (session) requestChatArchive(session, sendMessage)
     },
     [sendMessage]
   )
