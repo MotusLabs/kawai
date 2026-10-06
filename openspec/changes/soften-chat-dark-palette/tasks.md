@@ -8,9 +8,9 @@
 
 ## 2. Chat components adopt the scope
 
-- [ ] 2.1 Add `chat-palette` to `ChatView`'s root `<main>`. Replace `text-red-400` with `text-chat-danger` in the `ChatView` error banner and in `ChatMessages`' error event. Update `ChatView.tsx`'s header comment. Verify with a `chatComponents.test.tsx` case asserting that the root class and the danger class are present and `red-400` is absent.
-- [ ] 2.2 In `ChatDebugPanel.tsx`, map `DIRECTION_STYLES` to `text-chat-wire-out`, `text-chat-wire-in` and `text-chat-wire-stderr`, keeping `lifecycle` as `text-secondary`. Verify with a `chatComponents.test.tsx` case that renders frames of each direction and asserts the token classes.
-- [ ] 2.3 Run `bun run lint && bun run typecheck && bun run test` and verify all three pass.
+- [x] 2.1 Add `chat-palette` to `ChatView`'s root `<main>`. Replace `text-red-400` with `text-chat-danger` in the `ChatView` error banner and in `ChatMessages`' error event. Update `ChatView.tsx`'s header comment. Verify with a `chatComponents.test.tsx` case asserting that the root class and the danger class are present and `red-400` is absent.
+- [x] 2.2 In `ChatDebugPanel.tsx`, map `DIRECTION_STYLES` to `text-chat-wire-out`, `text-chat-wire-in` and `text-chat-wire-stderr`, keeping `lifecycle` as `text-secondary`. Verify with a `chatComponents.test.tsx` case that renders frames of each direction and asserts the token classes.
+- [x] 2.3 Run `bun run lint && bun run typecheck && bun run test` and verify all three pass.
 
 ## 3. Visual verification
 
