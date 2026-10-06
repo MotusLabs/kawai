@@ -60,6 +60,35 @@ export interface ChatQuestionAnswer {
 /** Result subtype reported by turn_completed (SDK result.subtype). */
 export type ChatTurnResultSubtype = string
 
+/** Where a slash command the agent reports is defined. */
+export type ChatCommandSource = 'builtin' | 'project' | 'user'
+
+/**
+ * One slash command the session's agent offers, normalized server-side from
+ * the agent's raw list: terminal-bound and internal commands are already
+ * filtered out, and the ` (project)` display suffix is folded into `source`.
+ */
+export interface ChatCommand {
+  /** Without the leading slash. */
+  name: string
+  description: string
+  /** Typed-arguments hint (e.g. `"[name]"`); omitted when the agent gave none. */
+  argumentHint?: string
+  /** Alternate names that resolve to this command. */
+  aliases: string[]
+  source: ChatCommandSource
+}
+
+/**
+ * The session's slash-command list as a replaceable state: `loading` while
+ * the agent starts, `ready` with the list, `unavailable` when no agent is
+ * (or can be) asked — never started, blocked, dead, or archived.
+ */
+export interface ChatCommandState {
+  status: 'loading' | 'ready' | 'unavailable'
+  commands: ChatCommand[]
+}
+
 export type ChatEvent =
   | (ChatTurnEventBase & { type: 'turn_started' })
   | (ChatTurnEventBase & { type: 'user_message'; text: string })

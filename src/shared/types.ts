@@ -8,6 +8,7 @@ import type {
 } from './workspace'
 import type {
   ChatApprovalDecision,
+  ChatCommandState,
   ChatEvent,
   ChatPendingRequest,
   ChatQuestionAnswer,
@@ -22,6 +23,9 @@ export type {
   ChatRequestOutcome,
   ChatApprovalDecision,
   ChatTurnResultSubtype,
+  ChatCommand,
+  ChatCommandSource,
+  ChatCommandState,
   ChatWireDirection,
   ChatWireFrame,
 } from './chat'
@@ -202,7 +206,13 @@ export type ServerMessage =
       status: SessionStatus
       /** Highest sequence included in this snapshot. */
       throughSequence: number
+      /** The session's slash-command list (replaceable state, not history). */
+      commands: ChatCommandState
     }
+  // Replaced command list pushed to subscribed connections whenever the
+  // agent reports a changed list (or the state changes). Additive: older
+  // clients ignore the unknown message.
+  | { type: 'chat-commands'; sessionId: string; state: ChatCommandState }
   // Debug-view protocol frames, sent only to clients that opened the view.
   // `page: true` marks a reply to chat-debug-open/chat-debug-page (carrying
   // `hasOlder`); otherwise the message is a live batch.

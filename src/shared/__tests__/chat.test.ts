@@ -184,6 +184,18 @@ describe('chat wire messages', () => {
       ],
       status: 'permission',
       throughSequence: 1,
+      commands: {
+        status: 'ready',
+        commands: [
+          {
+            name: 'clear',
+            description: 'Start a new session',
+            argumentHint: '[name]',
+            aliases: ['reset', 'new'],
+            source: 'builtin',
+          },
+        ],
+      },
     }
 
     const parsed = JSON.parse(JSON.stringify(message)) as ServerMessage
