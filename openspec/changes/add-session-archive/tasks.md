@@ -25,5 +25,5 @@
 
 ## 4. Integration
 
-- [ ] 4.1 Run `bun run lint && bun run typecheck && bun run test` and verify all pass
-- [ ] 4.2 With the `dev-browser` skill against `bun run dev`: archive an idle chat, confirm no agent process starts when it is opened, restore it, send a message that continues the conversation, and confirm closed terminal sessions appear in Archive and not in Remote; capture screenshots
+- [x] 4.1 Run `bun run lint && bun run typecheck && bun run test` and verify all pass
+- [x] 4.2 With the `dev-browser` skill against `bun run dev`: archive an idle chat, confirm no agent process starts when it is opened, restore it, send a message that continues the conversation, and confirm closed terminal sessions appear in Archive and not in Remote; capture screenshots
