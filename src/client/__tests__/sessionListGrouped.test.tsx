@@ -218,10 +218,10 @@ describe('SessionList grouped rendering', () => {
     // hibernating row shows.
     const archivePane = renderer.root.findByProps({ 'data-testid': 'archive-section' })
     expect(archivePane.findAllByProps({ 'data-testid': 'hibernating-session-card' })).toHaveLength(1)
-    expect(archivePane.findAllByProps({ 'data-testid': 'grouped-history-rows' })).toHaveLength(0)
+    expect(archivePane.findAllByProps({ 'data-testid': 'history-session-card' })).toHaveLength(0)
     for (const group of groups) {
       expect(group.findAllByProps({ 'data-testid': 'hibernating-session-card' })).toHaveLength(0)
-      expect(group.findAllByProps({ 'data-testid': 'grouped-history-rows' })).toHaveLength(0)
+      expect(group.findAllByProps({ 'data-testid': 'history-session-card' })).toHaveLength(0)
     }
 
     const featGroup = groups[1]
@@ -340,19 +340,76 @@ describe('SessionList grouped rendering', () => {
     expect(historyToggle.props['aria-label']).toBe('Show 2 history session(s)')
 
     // History rows hidden while the toggle is off; toggling persists and shows them.
-    expect(renderer.root.findAllByProps({ 'data-testid': 'grouped-history-rows' })).toHaveLength(0)
+    expect(renderer.root.findAllByProps({ 'data-testid': 'history-session-card' })).toHaveLength(0)
     act(() => {
       historyToggle.props.onClick()
     })
     expect(useSettingsStore.getState().historySessionsExpanded).toBe(true)
     const archivePane = renderer.root.findByProps({ 'data-testid': 'archive-section' })
-    expect(archivePane.findAllByProps({ 'data-testid': 'grouped-history-rows' })).toHaveLength(1)
+    expect(archivePane.findAllByProps({ 'data-testid': 'history-session-card' })).toHaveLength(2)
 
     act(() => {
       renderer.root.findByProps({ 'data-testid': 'archive-hibernating-toggle' }).props.onClick()
     })
     expect(useSettingsStore.getState().hibernatingSessionsExpanded).toBe(false)
     expect(renderer.root.findAllByProps({ 'data-testid': 'hibernating-session-card' })).toHaveLength(0)
+
+    act(() => renderer.unmount())
+  })
+
+  test('Archive renders chats, hibernating, and history rows in one newest-first list', () => {
+    const at = (day: number) => `2026-01-${String(day).padStart(2, '0')}T00:00:00.000Z`
+    const hibernating = [
+      { ...makeAgentSession('hib-new', '/repo/main'), lastActivityAt: at(9) },
+      { ...makeAgentSession('hib-old', '/repo/main'), lastActivityAt: at(3) },
+    ]
+    const history = [
+      { ...makeAgentSession('hist-mid', '/repo/main'), lastActivityAt: at(6) },
+      { ...makeAgentSession('hist-old', '/repo/main'), lastActivityAt: at(1) },
+    ]
+    const chat = (id: string, archivedAt: string): Session => ({
+      ...baseSession,
+      id,
+      kind: 'chat',
+      tmuxWindow: undefined,
+      archivedAt,
+      lastActivity: at(2),
+    })
+    const sessions = [baseSession, chat('chat-a', at(8)), chat('chat-b', at(4))]
+    useSettingsStore.setState({ historySessionsExpanded: true, hibernatingSessionsExpanded: true })
+    const view = makeView(sessions, hibernating, history)
+
+    const { renderer } = renderList({
+      sessions,
+      hibernatingSessions: hibernating,
+      historySessions: history,
+      workspaceView: view,
+    })
+
+    const archivePane = renderer.root.findByProps({ 'data-testid': 'archive-section' })
+    const rowIds = archivePane
+      .findAll((instance) =>
+        typeof instance.type === 'string' &&
+        ['session-card', 'hibernating-session-card', 'history-session-card'].includes(
+          instance.props['data-testid']
+        )
+      )
+      .map((row) => row.props['data-session-id'])
+    // Kinds interleave by time instead of grouping chats, then hibernating,
+    // then history.
+    expect(rowIds).toEqual([
+      'hib-new', // day 9
+      'chat-a', // archived day 8
+      'hist-mid', // day 6
+      'chat-b', // archived day 4
+      'hib-old', // day 3
+      'hist-old', // day 1
+    ])
+
+    // Archived chat rows cannot be dragged into a manual order.
+    const chatItem = archivePane
+      .findAll((instance) => instance.props?.session?.id === 'chat-a' && 'dragDisabled' in instance.props)[0]
+    expect(chatItem.props.dragDisabled).toBe(true)
 
     act(() => renderer.unmount())
   })
@@ -461,25 +518,19 @@ describe('SessionList grouped rendering', () => {
       workspaceView: view,
     })
 
-    const historyRows = renderer.root.findAllByProps({ 'data-testid': 'grouped-history-rows' })
-    expect(historyRows).toHaveLength(1)
-    const rendered = historyRows[0].findAllByType('button')
-    const showMore = rendered.find((button) =>
-      Array.isArray(button.props.children) && button.props.children.join('').includes('Show more')
-    )
-    if (!showMore) throw new Error('Expected Show more button')
+    const archivePane = renderer.root.findByProps({ 'data-testid': 'archive-section' })
+    expect(archivePane.findAllByProps({ 'data-testid': 'history-session-card' })).toHaveLength(20)
+    const showMore = archivePane.findByProps({ 'data-testid': 'archive-show-more-history' })
     expect((showMore.props.children as (string | number)[]).join('')).toBe('Show more (5 remaining)')
 
     act(() => {
       showMore.props.onClick()
     })
 
-    const historyRowsAfter = renderer.root.findAllByProps({ 'data-testid': 'grouped-history-rows' })
     expect(
-      historyRowsAfter[0].findAllByType('button').filter(
-        (button) => !Array.isArray(button.props.children) || !button.props.children.join('').includes('Show more')
-      ).length
-    ).toBe(25)
+      renderer.root.findAllByProps({ 'data-testid': 'history-session-card' })
+    ).toHaveLength(25)
+    expect(renderer.root.findAllByProps({ 'data-testid': 'archive-show-more-history' })).toHaveLength(0)
 
     act(() => renderer.unmount())
   })

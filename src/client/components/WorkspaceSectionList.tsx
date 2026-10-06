@@ -36,8 +36,7 @@ import type { FallbackSectionData, GroupedSessionEntry, WorkspaceView } from '..
 import { useStableValue, stringArraysEqual } from '../hooks/useStableValue'
 import PaneResizeHandle from './PaneResizeHandle'
 import SectionHeader, { CollapseTrigger } from './SectionHeader'
-import HibernatingSessionItem from './HibernatingSessionItem'
-import HistorySessionItem from './HistorySessionItem'
+import ArchiveRows from './ArchiveRows'
 import { SortableSessionItem } from './SessionRow'
 
 /** Context shared by every row regardless of its section. */
@@ -313,25 +312,21 @@ export function FallbackSectionPane(props: FallbackSectionPaneProps) {
       />
       {!section.collapsed && (
         <div className="min-h-0 flex-1 overflow-y-auto" data-testid="fallback-pane-scroll">
-          <GroupedLiveRows
-            entries={section.entries}
-            ctx={rowContext}
-            remountKey={remountKey}
-          />
-          {showHibernating && (
-            <GroupedDormantRows
+          {section.kind === 'archive' ? (
+            <ArchiveRows
               entries={section.entries}
-              kind="hibernating"
               ctx={rowContext}
+              remountKey={remountKey}
+              showHibernating={showHibernating}
+              showHistory={showHistory}
+              historyLimit={historyLimit}
+              onShowMoreHistory={onShowMoreHistory}
             />
-          )}
-          {showHistory && (
-            <GroupedDormantRows
+          ) : (
+            <GroupedLiveRows
               entries={section.entries}
-              kind="history"
               ctx={rowContext}
-              limit={historyLimit}
-              onShowMore={onShowMoreHistory}
+              remountKey={remountKey}
             />
           )}
         </div>
@@ -590,61 +585,5 @@ function GroupedLiveRows({ entries, ctx, remountKey }: GroupedLiveRowsProps) {
         </div>
       </SortableContext>
     </DndContext>
-  )
-}
-
-interface GroupedDormantRowsProps {
-  entries: GroupedSessionEntry[]
-  kind: 'hibernating' | 'history'
-  ctx: GroupedRowContext
-  limit?: number
-  onShowMore?: () => void
-}
-
-function GroupedDormantRows({ entries, kind, ctx, limit, onShowMore }: GroupedDormantRowsProps) {
-  const dormant = entries.flatMap((entry) =>
-    entry.kind === kind && entry.agentSession ? [entry.agentSession] : []
-  )
-  if (dormant.length === 0) return null
-  const visible = limit !== undefined ? dormant.slice(0, limit) : dormant
-
-  return (
-    <div className="py-1" data-testid={`grouped-${kind}-rows`}>
-      {kind === 'hibernating'
-        ? visible.map((session) => (
-            <HibernatingSessionItem
-              key={session.sessionId}
-              session={session}
-              isSelected={ctx.selectedHibernatingSessionId === session.sessionId}
-              showSessionIdPrefix={ctx.showSessionIdPrefix}
-              showProjectName={ctx.showProjectName}
-              showLastUserMessage={ctx.showLastUserMessage}
-              onSelect={(sessionId) => ctx.onSelectHibernating(sessionId)}
-              onWake={(sessionId) => ctx.onResume(sessionId)}
-              onRename={(sessionId, newName) => ctx.onRename(sessionId, newName)}
-              onMoveToHistory={ctx.onMoveToHistory}
-            />
-          ))
-        : visible.map((session) => (
-            <HistorySessionItem
-              key={session.sessionId}
-              session={session}
-              showSessionIdPrefix={ctx.showSessionIdPrefix}
-              showProjectName={ctx.showProjectName}
-              showLastUserMessage={ctx.showLastUserMessage}
-              onResume={(sessionId) => ctx.onResume(sessionId)}
-              onPreview={ctx.onPreview}
-            />
-          ))}
-      {limit !== undefined && dormant.length > limit && onShowMore && (
-        <button
-          type="button"
-          onClick={onShowMore}
-          className="w-full px-3 py-2 text-center text-xs text-muted hover:text-primary hover:bg-hover"
-        >
-          Show more ({dormant.length - limit} remaining)
-        </button>
-      )}
-    </div>
   )
 }

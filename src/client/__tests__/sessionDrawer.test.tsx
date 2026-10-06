@@ -565,9 +565,8 @@ describe('SessionDrawer', () => {
     const archivePane = renderer!.root.findByProps({ 'data-testid': 'archive-section' })
     const archiveCards = archivePane.findAllByProps({ 'data-testid': 'session-card' })
     expect(archiveCards.map((card) => card.props['data-session-id'])).toEqual(['chat-archived'])
-    const historyRows = archivePane.findAllByProps({ 'data-testid': 'grouped-history-rows' })
-    expect(historyRows).toHaveLength(1)
-    expect(historyRows[0].findAllByType('button').length).toBeGreaterThan(0)
+    const historyRows = archivePane.findAllByProps({ 'data-testid': 'history-session-card' })
+    expect(historyRows.map((row) => row.props['data-session-id'])).toEqual(['hist-1'])
     const liveGroup = renderer!.root.findByProps({ 'data-testid': 'worktree-section' })
     expect(liveGroup.findAllByProps({ 'data-testid': 'session-card' })).toHaveLength(1)
 

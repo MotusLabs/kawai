@@ -133,6 +133,8 @@ export interface SortableSessionItemProps {
   showLastUserMessage: boolean
   showHostInfo: boolean
   dropIndicator: 'above' | 'below' | null
+  /** Keeps the row out of manual reordering (archived chats in Archive). */
+  dragDisabled?: boolean
   /** Current time (ms) refreshed every 30s by the owning list; a new value
    *  re-renders the row so relative labels stay fresh. */
   nowTick: number
@@ -176,6 +178,7 @@ const ITEM_PROP_EQUALS: {
   showLastUserMessage: strictEquals,
   showHostInfo: strictEquals,
   dropIndicator: strictEquals,
+  dragDisabled: strictEquals,
   nowTick: strictEquals,
   remoteAllowControl: strictEquals,
   onSelect: strictEquals,
@@ -210,6 +213,7 @@ export const SortableSessionItem = memo(
     showLastUserMessage,
     showHostInfo,
     dropIndicator,
+    dragDisabled = false,
     nowTick,
     remoteAllowControl,
     onSelect,
@@ -231,6 +235,7 @@ export const SortableSessionItem = memo(
     isDragging,
   } = useSortable({
     id: session.id,
+    disabled: dragDisabled,
     animateLayoutChanges: ({ isSorting, wasDragging }) => isSorting || wasDragging,
   })
 
