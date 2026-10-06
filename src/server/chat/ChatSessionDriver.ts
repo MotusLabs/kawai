@@ -111,16 +111,20 @@ export class ChatSessionDriver {
     return this.dead
   }
 
+  /**
+   * Spawn the query without sending a turn (attach-time start): makes the
+   * agent's command list available before the first message. No-op while a
+   * query runs; a dead one respawns with resume, exactly like send.
+   */
+  start(): void {
+    if (this.killed) return
+    this.ensureQuery()
+  }
+
   /** Submit a user turn. Spawns the SDK lazily on the first turn. */
   send(text: string): void {
     if (this.killed) return
-    // A crashed SDK process does not end the chat session: respawn with
-    // resume on the next send. Sequence numbers keep counting so clients
-    // never see a reused sequence after a respawn.
-    this.dead = false
-    if (!this.query) {
-      this.spawnQuery()
-    }
+    this.ensureQuery()
     if (!this.activeTurnId) {
       this.turnCounter += 1
       this.activeTurnId = `turn-${this.turnCounter}`
@@ -273,6 +277,18 @@ export class ChatSessionDriver {
   }
 
   // ---------------------------------------------------------------- internals
+
+  /**
+   * A crashed SDK process does not end the chat session: respawn with resume
+   * on the next send/start. Sequence numbers keep counting so clients never
+   * see a reused sequence after a respawn.
+   */
+  private ensureQuery(): void {
+    this.dead = false
+    if (!this.query) {
+      this.spawnQuery()
+    }
+  }
 
   private spawnQuery(): void {
     const resume = this.capturedSdkSessionId ?? this.options.resumeSessionId

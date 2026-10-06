@@ -280,6 +280,46 @@ describe('ChatSessionDriver', () => {
     harness.driver.kill()
   })
 
+  test('start spawns the query without a turn; a later send reuses the same query', async () => {
+    const harness = createHarness()
+    harness.driver.start()
+    expect(harness.fakes).toHaveLength(1)
+    // No turn, no user message: only the spawn happened.
+    expect(typesOf(harness.events)).toEqual([])
+    expect(harness.statuses).toEqual([])
+
+    // While the query runs, start is a no-op (no second spawn).
+    harness.driver.start()
+    expect(harness.fakes).toHaveLength(1)
+
+    // A later send reuses the same query for its turn and reaches its prompt.
+    harness.driver.send('hello')
+    expect(harness.fakes).toHaveLength(1)
+    expect(typesOf(harness.events)).toEqual(['turn_started', 'user_message'])
+    const pulled = await harness.fakes[0]!.pullPrompt()
+    expect(pulled?.message).toMatchObject({ role: 'user', content: 'hello' })
+  })
+
+  test('start respawns a dead driver with resume', async () => {
+    const harness = createHarness()
+    harness.driver.start()
+    const first = harness.fakes[0]!
+    first.push({
+      type: 'system',
+      subtype: 'init',
+      session_id: 'sdk-start-resume',
+    } as unknown as SDKMessage)
+    await flush()
+    first.exit()
+    await flush()
+    expect(harness.driver.isDead).toBe(true)
+
+    harness.driver.start()
+    expect(harness.fakes).toHaveLength(2)
+    expect(harness.fakes[1]!.options.resume).toBe('sdk-start-resume')
+    harness.driver.kill()
+  })
+
   test('turn lifecycle: lazy spawn, options parity, event mapping, session id capture', async () => {
     const harness = createHarness()
     expect(harness.fakes).toHaveLength(0) // no SDK spawn before first turn

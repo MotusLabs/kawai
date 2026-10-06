@@ -3,7 +3,7 @@
 ## 1. Start the agent on attach
 
 - [x] 1.1 Extract the archived, missing-transcript, and missing-directory checks from `ChatSessionManager.send` into one start guard used by `send` with unchanged errors; verify existing manager send tests pass unchanged
-- [ ] 1.2 Add `ChatSessionDriver.start()` that spawns the query without pushing a turn, and is a no-op while a query runs; verify with driver tests that no user message reaches the fake query and a later send reuses the same query
+- [x] 1.2 Add `ChatSessionDriver.start()` that spawns the query without pushing a turn, and is a no-op while a query runs; verify with driver tests that no user message reaches the fake query and a later send reuses the same query
 - [ ] 1.3 Add `ChatSessionManager.start` through the guard and `ensureDriver`, restarting a dead driver; verify with manager tests for normal, archived, missing directory, missing transcript, concurrent start plus send (one driver), and spawn failure reported as a session error
 - [ ] 1.4 Call `manager.start` after the snapshot on `chat-attach` in `ChatConnections`; verify with a connections test that attach sends the snapshot first and starts once for two attaching clients
 - [ ] 1.5 Check with a real Claude Code process whether `system/init` arrives before any prompt, and record the result in design.md Context; verify the note is present
