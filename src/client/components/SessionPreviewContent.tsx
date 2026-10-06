@@ -6,9 +6,7 @@ import {
 } from '@shared/eventTaxonomy'
 import { asRecord, asString } from '@shared/json'
 import type { AgentSession } from '@shared/types'
-import ReactMarkdown, { type Components } from 'react-markdown'
-import remarkGfm from 'remark-gfm'
-import remarkBreaks from 'remark-breaks'
+import Markdown from './Markdown'
 
 const PREVIEW_FETCH_TIMEOUT_MS = 10_000
 const PREVIEW_LINE_LIMIT = 200
@@ -463,67 +461,6 @@ function ToolEntry({ entry }: { entry: ParsedEntry }) {
   )
 }
 
-// Tailwind-styled element overrides for rendered markdown (no typography plugin).
-const markdownComponents: Components = {
-  p: ({ children }) => <p className="my-2 first:mt-0 last:mb-0">{children}</p>,
-  a: ({ children, href }) => (
-    <a
-      href={href}
-      target="_blank"
-      rel="noreferrer noopener"
-      className="text-accent underline underline-offset-2 hover:text-primary"
-    >
-      {children}
-    </a>
-  ),
-  ul: ({ children }) => <ul className="my-2 list-disc space-y-1 pl-5">{children}</ul>,
-  ol: ({ children }) => <ol className="my-2 list-decimal space-y-1 pl-5">{children}</ol>,
-  li: ({ children }) => <li className="leading-6">{children}</li>,
-  h1: ({ children }) => <h1 className="mb-1 mt-3 text-base font-semibold first:mt-0">{children}</h1>,
-  h2: ({ children }) => <h2 className="mb-1 mt-3 text-sm font-semibold first:mt-0">{children}</h2>,
-  h3: ({ children }) => <h3 className="mb-1 mt-3 text-sm font-semibold first:mt-0">{children}</h3>,
-  strong: ({ children }) => <strong className="font-semibold text-primary">{children}</strong>,
-  em: ({ children }) => <em className="italic">{children}</em>,
-  blockquote: ({ children }) => (
-    <blockquote className="my-2 border-l-2 border-border pl-3 text-secondary">{children}</blockquote>
-  ),
-  hr: () => <hr className="my-3 border-border" />,
-  pre: ({ children }) => (
-    <pre className="my-2 overflow-x-auto rounded bg-base p-3 text-xs leading-relaxed text-secondary">
-      {children}
-    </pre>
-  ),
-  code: ({ className, children }) => {
-    const text = String(children ?? '')
-    // Block code carries a language-* class (fenced) or spans multiple lines;
-    // everything else is inline and gets the chip treatment.
-    const isBlock = (className?.includes('language-') ?? false) || text.includes('\n')
-    if (isBlock) {
-      return <code className={className}>{children}</code>
-    }
-    return <code className="rounded bg-surface px-1 py-0.5 text-[0.9em] text-primary">{children}</code>
-  },
-  table: ({ children }) => (
-    <div className="my-2 overflow-x-auto">
-      <table className="w-full border-collapse text-xs">{children}</table>
-    </div>
-  ),
-  th: ({ children }) => (
-    <th className="border border-border px-2 py-1 text-left font-semibold">{children}</th>
-  ),
-  td: ({ children }) => <td className="border border-border px-2 py-1 align-top">{children}</td>,
-}
-
-function MarkdownMessage({ content }: { content: string }) {
-  return (
-    <div className="min-w-0 break-words text-sm leading-6 text-primary [overflow-wrap:anywhere]">
-      <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]} components={markdownComponents}>
-        {content}
-      </ReactMarkdown>
-    </div>
-  )
-}
-
 function TranscriptEntry({ entry, showRole = true }: { entry: ParsedEntry; showRole?: boolean }) {
   // tool_result events normalize to empty text and are dropped by parseLogEntry,
   // so only tool_call and result entries reach the collapsible ToolEntry.
@@ -554,7 +491,7 @@ function TranscriptEntry({ entry, showRole = true }: { entry: ParsedEntry; showR
           {marker}
         </div>
       </div>
-      <MarkdownMessage content={entry.content} />
+      <Markdown content={entry.content} />
     </article>
   )
 }
