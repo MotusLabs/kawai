@@ -57,4 +57,37 @@ describe('development fixture wire frames', () => {
     }
     query.close()
   })
+
+  test('a markdown prompt replies with a markdown showcase', async () => {
+    const queue = new TurnQueue()
+    const query = fixtureQueryFactory({ prompt: queue, options: {} })
+    queue.push(userMessage('show me markdown'))
+    const texts: string[] = []
+    for await (const message of query) {
+      if (message.type === 'assistant') {
+        for (const block of message.message.content) {
+          if (block.type === 'text') texts.push(block.text)
+        }
+      }
+      if (message.type === 'result') break
+    }
+    query.close()
+    const showcase = texts.find(text => text.includes('# Markdown showcase'))
+    expect(showcase).toBeDefined()
+    for (const marker of [
+      '## Lists', // headings
+      '- bullet one', // unordered list
+      '1. first', // ordered list
+      '- [ ] unchecked task', // task list
+      '---', // horizontal rule
+      '| Element | Rendered |', // table
+      '`inline code`', // inline code
+      '```ts', // fenced code
+      '> A blockquote', // blockquote
+      '[a link](https://example.com)', // link
+      '~~struck through~~', // strikethrough
+    ]) {
+      expect(showcase).toContain(marker)
+    }
+  })
 })
