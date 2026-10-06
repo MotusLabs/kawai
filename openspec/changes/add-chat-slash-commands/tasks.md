@@ -24,8 +24,8 @@
 ## 4. Composer menu
 
 - [x] 4.1 Implement the pure filter and ranking (name prefix, alias prefix, name substring, description substring); verify with unit tests
-- [ ] 4.2 Implement `SlashCommandMenu.tsx` and wire it into `ChatView`: open on `^/\S*$`, loading and empty states, Up/Down/Enter/Tab/Escape and pointer selection, insert `/<name> ` with the argument hint, Enter not captured without matches, source tag for project and user commands; verify with component tests for each behavior
-- [ ] 4.3 Keep the menu absent for archived chats (no composer); verify with a ChatView test
+- [x] 4.2 Implement `SlashCommandMenu.tsx` and wire it into `ChatView`: open on `^/\S*$`, loading and empty states, Up/Down/Enter/Tab/Escape and pointer selection, insert `/<name> ` with the argument hint, Enter not captured without matches, source tag for project and user commands; verify with component tests for each behavior
+- [x] 4.3 Keep the menu absent for archived chats (no composer); verify with a ChatView test
 
 ## 5. `/clear`, `/reset`, `/new`
 
