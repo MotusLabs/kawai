@@ -171,7 +171,8 @@ async function probeVersion(executablePath: string, timeoutMs: number): Promise<
   let timer: ReturnType<typeof setTimeout> | undefined
   const timeout: Promise<null> = new Promise((resolve) => {
     timer = setTimeout(() => {
-      proc.kill()
+      // Force termination at the deadline even if the probe ignores SIGTERM.
+      proc.kill("SIGKILL")
       resolve(null)
     }, timeoutMs)
   })
@@ -184,12 +185,9 @@ async function probeVersion(executablePath: string, timeoutMs: number): Promise<
   try {
     const race = await Promise.race([completed, timeout])
     if (race === null) {
-      // Kill delivered; reap the child before reporting (bounded: a child
-      // that ignores SIGTERM must not hold the caller past the deadline).
-      await Promise.race([
-        proc.exited.catch(() => undefined),
-        new Promise((resolve) => setTimeout(resolve, 1000)),
-      ])
+      // Reap the force-killed child before reporting it stopped. Do not
+      // await stream reads: descendants may still hold the pipes open.
+      await proc.exited
       throw new ClaudeExecutableError(
         'probe-failed',
         `Claude Code at ${executablePath} did not report its version within ` +

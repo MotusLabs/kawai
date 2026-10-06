@@ -165,6 +165,33 @@ describe('checkClaudeExecutable', () => {
     expect(fs.existsSync(marker)).toBe(false)
   })
 
+  test('reaps a timed-out probe even when it ignores SIGTERM', async () => {
+    const pidFile = path.join(tempDir, 'probe.pid')
+    const exe = makeExecutable(
+      tempDir,
+      'ignores-term-claude',
+      `#!/bin/sh\ntrap '' TERM\necho $$ > "${pidFile}"\nwhile :; do sleep 1; done\n`
+    )
+    let pid: number | undefined
+    try {
+      const error = await expectRejection(
+        checkClaudeExecutable(exe, { timeoutMs: 200 }),
+        'probe-failed'
+      )
+      pid = Number(fs.readFileSync(pidFile, 'utf8').trim())
+      expect(error.message).toContain('was stopped')
+      expect(() => process.kill(pid!, 0)).toThrow()
+    } finally {
+      // Keep the test safe against regressions that leave the probe alive.
+      if (pid === undefined && fs.existsSync(pidFile)) {
+        pid = Number(fs.readFileSync(pidFile, 'utf8').trim())
+      }
+      if (pid !== undefined) {
+        try { process.kill(pid, 'SIGKILL') } catch { /* Already reaped. */ }
+      }
+    }
+  })
+
   test('re-checks after a failure once the executable is repaired', async () => {
     const exe = makeExecutable(tempDir, 'repaired-claude', versionScript('2.1.100'))
     await expectRejection(checkClaudeExecutable(exe), 'unsupported')
