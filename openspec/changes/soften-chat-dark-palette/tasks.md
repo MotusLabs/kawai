@@ -14,8 +14,8 @@
 
 ## 3. Visual verification
 
-- [ ] 3.1 With the `dev-browser` skill, start `bun run dev`. Open a chat session in the dark theme with user and assistant messages, a tool entry, an approval card and the Debug panel open. Take a screenshot and confirm that the chat pane uses the dimmed palette and the navigator keeps its near-black colors.
-- [ ] 3.2 Switch to the light theme and take a screenshot. Confirm that the chat view looks the same as on `master`.
+- [x] 3.1 With the `dev-browser` skill, start `bun run dev`. Open a chat session in the dark theme with user and assistant messages, a tool entry, an approval card and the Debug panel open. Take a screenshot and confirm that the chat pane uses the dimmed palette and the navigator keeps its near-black colors.
+- [x] 3.2 Switch to the light theme and take a screenshot. Confirm that the chat view looks the same as on `master`.
 
 ## Workflow follow-up
 
