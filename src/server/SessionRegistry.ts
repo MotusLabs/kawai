@@ -218,6 +218,7 @@ export function sessionsEqualForBroadcast(a: Session, b: Session): boolean {
     a.lastUserMessage === b.lastUserMessage &&
     a.isPinned === b.isPinned &&
     a.host === b.host &&
-    a.remote === b.remote
+    a.remote === b.remote &&
+    a.archivedAt === b.archivedAt
   )
 }

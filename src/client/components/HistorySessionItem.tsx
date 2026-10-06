@@ -76,6 +76,8 @@ export default memo(function HistorySessionItem({
       className="group relative cursor-pointer px-3 py-2 hover:bg-hover"
       role="button"
       tabIndex={0}
+      data-testid="history-session-card"
+      data-session-id={session.sessionId}
       title="Click to preview"
       onClick={() => onPreview(session)}
       onKeyDown={(e) => {

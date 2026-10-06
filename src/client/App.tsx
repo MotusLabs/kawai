@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { AgentSession, AutoStartAgent, ServerMessage, Session, SessionKillSource } from '@shared/types'
-import type { WorkspaceBranch } from '@shared/workspace'
+import { FALLBACK_ARCHIVE_SECTION_KEY, type WorkspaceBranch } from '@shared/workspace'
 import Header from './components/Header'
 import SessionList from './components/SessionList'
 import Terminal from './components/Terminal'
@@ -26,6 +26,7 @@ import { invalidateSnapshotCache } from './hooks/useTerminal'
 import { useVisualViewport } from './hooks/useVisualViewport'
 import { sortSessions } from './utils/sessions'
 import { buildWorkspaceView } from './utils/workspaceView'
+import { requestChatArchive } from './utils/chatArchive'
 import { flushSync } from 'react-dom'
 import { setClientLogLevel } from './utils/clientLog'
 import { getEffectiveModifier, matchesModifier } from './utils/device'
@@ -654,7 +655,17 @@ export default function App() {
   // otherwise (older server or before the first snapshot).
   const workspaceSnapshot = useWorkspaceStore((state) => state.snapshot)
   const collapsedSectionIds = useWorkspaceStore((state) => state.collapsedSectionIds)
+  const archiveSectionExpanded = useWorkspaceStore((state) => state.archiveSectionExpanded)
   const toggleSectionCollapsed = useWorkspaceStore((state) => state.toggleSectionCollapsed)
+  // First-use collapse: until the user has expanded it once, the Archive
+  // section reads as collapsed even without a stored collapse entry.
+  const effectiveCollapsedSectionIds = useMemo(
+    () =>
+      archiveSectionExpanded || collapsedSectionIds.includes(FALLBACK_ARCHIVE_SECTION_KEY)
+        ? collapsedSectionIds
+        : [...collapsedSectionIds, FALLBACK_ARCHIVE_SECTION_KEY],
+    [collapsedSectionIds, archiveSectionExpanded]
+  )
   // Compact worktree options for the new-session picker.
   const worktreeOptions = useMemo(() => {
     if (!workspaceSnapshot) return []
@@ -696,7 +707,7 @@ export default function App() {
         historyAgentSessions,
         {
           filter: { projectFilters, hostFilters },
-          collapsedSectionIds,
+          collapsedSectionIds: effectiveCollapsedSectionIds,
         }
       ),
     [
@@ -706,7 +717,7 @@ export default function App() {
       historyAgentSessions,
       projectFilters,
       hostFilters,
-      collapsedSectionIds,
+      effectiveCollapsedSectionIds,
     ]
   )
 
@@ -931,6 +942,23 @@ export default function App() {
     })
     sendMessage({ type: 'session-kill', sessionId, source })
   }, [markSessionExiting, setSessions, sendMessage])
+
+  // Chat archive/restore (chat-archive design D2/D3): the server operation is
+  // unconditional and idempotent; requestChatArchive asks before
+  // interrupting a turn in flight, same as the chat view header.
+  const handleArchiveChat = useCallback(
+    (sessionId: string) => {
+      const session = useSessionStore.getState().sessions.find((s) => s.id === sessionId)
+      if (session) requestChatArchive(session, sendMessage)
+    },
+    [sendMessage]
+  )
+  const handleRestoreChat = useCallback(
+    (sessionId: string) => {
+      sendMessage({ type: 'chat-restore', sessionId })
+    },
+    [sendMessage]
+  )
 
   useEffect(() => {
     const effectiveModifier = getEffectiveModifier(shortcutModifier)
@@ -1196,6 +1224,8 @@ export default function App() {
           onRename={handleRenameSession}
           onResume={handleResumeSession}
           onHibernate={handleHibernateSession}
+          onArchiveChat={handleArchiveChat}
+          onRestoreChat={handleRestoreChat}
           onKill={handleKillSession}
           onDuplicate={handleDuplicateSession}
           onMoveToHistory={handleMoveToHistory}
@@ -1241,6 +1271,8 @@ export default function App() {
         onResumeSession={handleResumeSession}
         onHibernateSession={handleHibernateSession}
         onMoveToHistory={handleMoveToHistory}
+        onArchiveChat={handleArchiveChat}
+        onRestoreChat={handleRestoreChat}
         historySessions={historyAgentSessions}
         loading={!hasLoaded}
         error={connectionError || serverError}

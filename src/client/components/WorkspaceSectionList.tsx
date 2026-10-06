@@ -1,14 +1,14 @@
-// WorkspaceSectionList.tsx - Sectioned workspace navigator: live,
-// hibernating, and historical session rows rendered inside collapsible
-// sections — OpenSpec change sections first, then unmatched worktree
-// sections. Every section, including the Workspace/Remote fallbacks, folds
-// through the same trigger and persists by its stable key; the fallbacks
-// render as docked panes (FallbackSectionPane) placed by the caller below
-// the scrolling flow region this list provides. Each section owns its own
-// drag context so manual reorder stays within the section; flattened
-// cross-section navigation is computed by the caller from the same view
-// model. Dormant-row visibility follows the global hibernating/history
-// toggles so persisted preferences keep working.
+// WorkspaceSectionList.tsx - Sectioned workspace navigator: live session
+// rows rendered inside collapsible sections — OpenSpec change sections
+// first, then unmatched worktree sections. Every section, including the
+// Workspace/Remote/Archive fallbacks, folds through the same trigger and
+// persists by its stable key; the fallbacks render as docked panes
+// (FallbackSectionPane) placed by the caller below the scrolling flow region
+// this list provides. Hibernating and historical rows live only in the
+// Archive pane, whose header carries the persisted hibernating/history
+// visibility toggles. Each section owns its own drag context so manual
+// reorder stays within the section; flattened cross-section navigation is
+// computed by the caller from the same view model.
 
 import { useCallback, useMemo, useState } from 'react'
 import { AnimatePresence } from 'motion/react'
@@ -26,18 +26,17 @@ import {
   SortableContext,
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable'
-import ChevronDownIcon from '@untitledui-icons/react/line/esm/ChevronDownIcon'
-import ChevronRightIcon from '@untitledui-icons/react/line/esm/ChevronRightIcon'
+import ClockRewindIcon from '@untitledui-icons/react/line/esm/ClockRewindIcon'
 import GitBranch01Icon from '@untitledui-icons/react/line/esm/GitBranch01Icon'
 import HandIcon from '@untitledui-icons/react/line/esm/HandIcon'
+import Moon01Icon from '@untitledui-icons/react/line/esm/Moon01Icon'
 import PlusIcon from '@untitledui-icons/react/line/esm/PlusIcon'
 import type { AgentSession } from '@shared/types'
 import type { FallbackSectionData, GroupedSessionEntry, WorkspaceView } from '../utils/workspaceView'
 import { useStableValue, stringArraysEqual } from '../hooks/useStableValue'
 import PaneResizeHandle from './PaneResizeHandle'
 import SectionHeader, { CollapseTrigger } from './SectionHeader'
-import HibernatingSessionItem from './HibernatingSessionItem'
-import HistorySessionItem from './HistorySessionItem'
+import ArchiveRows from './ArchiveRows'
 import { SortableSessionItem } from './SessionRow'
 
 /** Context shared by every row regardless of its section. */
@@ -61,6 +60,9 @@ export interface GroupedRowContext {
   onCancelEdit: () => void
   onRename: (sessionId: string, newName: string) => void
   onHibernate: (agentSessionId: string) => void
+  /** Chat-only actions: archive stops the agent, restore reactivates. */
+  onArchiveChat: (sessionId: string) => void
+  onRestoreChat: (sessionId: string) => void
   onKill: (sessionId: string) => void
   onDuplicate: (sessionId: string) => void
   onResume: (sessionId: string) => void
@@ -82,16 +84,6 @@ interface WorkspaceSectionListProps extends GroupedRowContext {
   onToggleCollapse: (sectionKey: string) => void
   /** Remounts AnimatePresence children when filters change (entry animation). */
   remountKey: string
-  /** Global dormant-row visibility (persisted settings). */
-  showHibernating: boolean
-  showHistory: boolean
-  onToggleHibernating: () => void
-  onToggleHistory: () => void
-  hibernatingCount: number
-  historyCount: number
-  /** Shared history pagination; each section shows at most this many rows. */
-  historyLimit: number
-  onShowMoreHistory: () => void
   onNewSession?: () => void
   /**
    * Contextual new-session action on section headers. The change name is
@@ -113,14 +105,6 @@ export default function WorkspaceSectionList(props: WorkspaceSectionListProps) {
     view,
     onToggleCollapse,
     remountKey,
-    showHibernating,
-    showHistory,
-    onToggleHibernating,
-    onToggleHistory,
-    hibernatingCount,
-    historyCount,
-    historyLimit,
-    onShowMoreHistory,
     onNewSession,
     onNewSessionInWorktree,
     onCreateChangeWorktree,
@@ -130,46 +114,6 @@ export default function WorkspaceSectionList(props: WorkspaceSectionListProps) {
 
   return (
     <div data-testid="workspace-section-list">
-      {(hibernatingCount > 0 || historyCount > 0) && (
-        <div
-          className="flex items-center gap-2 px-3 py-1.5 text-[11px] text-muted"
-          data-testid="workspace-dormant-toggles"
-        >
-          {hibernatingCount > 0 && (
-            <button
-              type="button"
-              onClick={onToggleHibernating}
-              className="flex items-center gap-1 rounded px-1.5 py-0.5 hover:bg-hover hover:text-primary"
-              aria-expanded={showHibernating}
-              data-testid="workspace-hibernating-toggle"
-            >
-              {showHibernating ? (
-                <ChevronDownIcon className="h-3 w-3" />
-              ) : (
-                <ChevronRightIcon className="h-3 w-3" />
-              )}
-              Hibernating {hibernatingCount}
-            </button>
-          )}
-          {historyCount > 0 && (
-            <button
-              type="button"
-              onClick={onToggleHistory}
-              className="flex items-center gap-1 rounded px-1.5 py-0.5 hover:bg-hover hover:text-primary"
-              aria-expanded={showHistory}
-              data-testid="workspace-history-toggle"
-            >
-              {showHistory ? (
-                <ChevronDownIcon className="h-3 w-3" />
-              ) : (
-                <ChevronRightIcon className="h-3 w-3" />
-              )}
-              History {historyCount}
-            </button>
-          )}
-        </div>
-      )}
-
       {view.sections.map((section) => (
         <section
           key={section.key}
@@ -242,25 +186,7 @@ export default function WorkspaceSectionList(props: WorkspaceSectionListProps) {
             }
           />
           {!section.collapsed && (
-            <>
-              <GroupedLiveRows entries={section.entries} ctx={rowContext} remountKey={remountKey} />
-              {showHibernating && (
-                <GroupedDormantRows
-                  entries={section.entries}
-                  kind="hibernating"
-                  ctx={rowContext}
-                />
-              )}
-              {showHistory && (
-                <GroupedDormantRows
-                  entries={section.entries}
-                  kind="history"
-                  ctx={rowContext}
-                  limit={historyLimit}
-                  onShowMore={onShowMoreHistory}
-                />
-              )}
-            </>
+            <GroupedLiveRows entries={section.entries} ctx={rowContext} remountKey={remountKey} />
           )}
         </section>
       ))}
@@ -281,7 +207,7 @@ export default function WorkspaceSectionList(props: WorkspaceSectionListProps) {
 
 /**
  * Minimum height (px) kept for the change/worktree flow region: when the
- * navigator is too short to honor both pane defaults, the panes shrink
+ * navigator is too short to honor every pane default, the panes shrink
  * proportionally rather than pushing this region below its floor.
  */
 export const FLOW_REGION_MIN_HEIGHT = 96
@@ -291,6 +217,19 @@ export const FLOW_REGION_MIN_HEIGHT = 96
  * drag handle above it. A collapsed pane sizes to its header alone.
  */
 export const PANE_MIN_HEIGHT = 40
+
+/** Fixed labels and row test ids of the docked fallback panes. */
+const FALLBACK_SECTION_LABELS: Record<FallbackSectionData['kind'], string> = {
+  workspace: 'Workspace',
+  remote: 'Remote',
+  archive: 'Archive',
+}
+
+const FALLBACK_SECTION_TEST_IDS: Record<FallbackSectionData['kind'], string> = {
+  workspace: 'workspace-section',
+  remote: 'remote-section',
+  archive: 'archive-section',
+}
 
 export interface FallbackSectionPaneProps extends GroupedRowContext {
   section: FallbackSectionData
@@ -303,8 +242,12 @@ export interface FallbackSectionPaneProps extends GroupedRowContext {
   containerRef: React.RefObject<HTMLElement | null>
   /** Remounts AnimatePresence children when filters change (entry animation). */
   remountKey: string
+  /** Global dormant-row visibility (persisted settings); toggled from the
+   *  Archive header, the only section that holds dormant rows. */
   showHibernating: boolean
   showHistory: boolean
+  onToggleHibernating: () => void
+  onToggleHistory: () => void
   historyLimit: number
   onShowMoreHistory: () => void
 }
@@ -328,13 +271,15 @@ export function FallbackSectionPane(props: FallbackSectionPaneProps) {
     remountKey,
     showHibernating,
     showHistory,
+    onToggleHibernating,
+    onToggleHistory,
     historyLimit,
     onShowMoreHistory,
     ...rowContext
   } = props
 
   const flexBasis = `${Math.round(fraction * 1000) / 10}%`
-  const label = section.kind === 'workspace' ? 'Workspace' : 'Remote'
+  const label = FALLBACK_SECTION_LABELS[section.kind]
 
   return (
     <section
@@ -344,7 +289,7 @@ export function FallbackSectionPane(props: FallbackSectionPaneProps) {
           ? { flex: '0 0 auto' }
           : { flex: `0 1 ${flexBasis}`, minHeight: PANE_MIN_HEIGHT }
       }
-      data-testid={section.kind === 'workspace' ? 'workspace-section' : 'remote-section'}
+      data-testid={FALLBACK_SECTION_TEST_IDS[section.kind]}
       data-section-key={section.key}
       data-collapsed={section.collapsed ? 'true' : 'false'}
       data-pane-fraction={section.collapsed ? undefined : fraction}
@@ -357,28 +302,31 @@ export function FallbackSectionPane(props: FallbackSectionPaneProps) {
           containerRef={containerRef}
         />
       )}
-      <FallbackSectionHeader section={section} onToggleCollapse={onToggleCollapse} />
+      <FallbackSectionHeader
+        section={section}
+        onToggleCollapse={onToggleCollapse}
+        showHibernating={showHibernating}
+        showHistory={showHistory}
+        onToggleHibernating={onToggleHibernating}
+        onToggleHistory={onToggleHistory}
+      />
       {!section.collapsed && (
         <div className="min-h-0 flex-1 overflow-y-auto" data-testid="fallback-pane-scroll">
-          <GroupedLiveRows
-            entries={section.entries}
-            ctx={rowContext}
-            remountKey={remountKey}
-          />
-          {showHibernating && (
-            <GroupedDormantRows
+          {section.kind === 'archive' ? (
+            <ArchiveRows
               entries={section.entries}
-              kind="hibernating"
               ctx={rowContext}
+              remountKey={remountKey}
+              showHibernating={showHibernating}
+              showHistory={showHistory}
+              historyLimit={historyLimit}
+              onShowMoreHistory={onShowMoreHistory}
             />
-          )}
-          {showHistory && (
-            <GroupedDormantRows
+          ) : (
+            <GroupedLiveRows
               entries={section.entries}
-              kind="history"
               ctx={rowContext}
-              limit={historyLimit}
-              onShowMore={onShowMoreHistory}
+              remountKey={remountKey}
             />
           )}
         </div>
@@ -388,20 +336,37 @@ export function FallbackSectionPane(props: FallbackSectionPaneProps) {
 }
 
 /**
- * Header for a fallback (Workspace/Remote) section. Shares the collapse
- * affordance and attention/count markup of SectionHeader; collapse state
- * persists under the section's reserved key.
+ * Header for a fallback (Workspace/Remote/Archive) section. Shares the
+ * collapse affordance and attention/count markup of SectionHeader; collapse
+ * state persists under the section's reserved key. An expanded section that
+ * holds dormant rows (in practice only Archive) also carries compact
+ * hibernating/history visibility toggles counting its own rows, so the
+ * header count never disagrees with rows hidden by a toggle elsewhere.
  */
 function FallbackSectionHeader({
   section,
   onToggleCollapse,
+  showHibernating,
+  showHistory,
+  onToggleHibernating,
+  onToggleHistory,
 }: {
   section: FallbackSectionData
   onToggleCollapse: (sectionKey: string) => void
+  showHibernating: boolean
+  showHistory: boolean
+  onToggleHibernating: () => void
+  onToggleHistory: () => void
 }) {
-  const label = section.kind === 'workspace' ? 'Workspace' : 'Remote'
+  const label = FALLBACK_SECTION_LABELS[section.kind]
   const hiddenAttention = section.hiddenAttentionCount
   const attentionTotal = section.attentionCount + hiddenAttention
+  let hibernatingCount = 0
+  let historyCount = 0
+  for (const entry of section.entries) {
+    if (entry.kind === 'hibernating') hibernatingCount += 1
+    else if (entry.kind === 'history') historyCount += 1
+  }
 
   return (
     <div
@@ -426,6 +391,23 @@ function FallbackSectionHeader({
         </span>
       </CollapseTrigger>
 
+      {!section.collapsed && hibernatingCount > 0 && (
+        <DormantToggle
+          kind="hibernating"
+          count={hibernatingCount}
+          shown={showHibernating}
+          onToggle={onToggleHibernating}
+        />
+      )}
+      {!section.collapsed && historyCount > 0 && (
+        <DormantToggle
+          kind="history"
+          count={historyCount}
+          shown={showHistory}
+          onToggle={onToggleHistory}
+        />
+      )}
+
       {attentionTotal > 0 && (
         <span
           className="flex shrink-0 items-center gap-0.5 rounded-full bg-amber-500/20 px-1.5 py-0.5 text-[10px] text-amber-600"
@@ -445,6 +427,38 @@ function FallbackSectionHeader({
         {section.entries.length}
       </span>
     </div>
+  )
+}
+
+/** Icon-and-count toggle showing or hiding one kind of dormant row. */
+function DormantToggle({
+  kind,
+  count,
+  shown,
+  onToggle,
+}: {
+  kind: 'hibernating' | 'history'
+  count: number
+  shown: boolean
+  onToggle: () => void
+}) {
+  const noun = kind === 'hibernating' ? 'hibernating' : 'history'
+  const Icon = kind === 'hibernating' ? Moon01Icon : ClockRewindIcon
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-pressed={shown}
+      aria-label={`${shown ? 'Hide' : 'Show'} ${count} ${noun} session(s)`}
+      title={`${shown ? 'Hide' : 'Show'} ${noun} sessions`}
+      className={`flex shrink-0 items-center gap-0.5 rounded px-1 py-0.5 text-[10px] tabular-nums hover:bg-hover hover:text-primary ${
+        shown ? 'text-secondary' : 'text-muted opacity-60'
+      }`}
+      data-testid={`archive-${kind}-toggle`}
+    >
+      <Icon className="h-3 w-3" />
+      {count}
+    </button>
   )
 }
 
@@ -560,6 +574,8 @@ function GroupedLiveRows({ entries, ctx, remountKey }: GroupedLiveRowsProps) {
                   onCancelEdit={ctx.onCancelEdit}
                   onRename={ctx.onRename}
                   onHibernate={ctx.onHibernate}
+                  onArchiveChat={ctx.onArchiveChat}
+                  onRestoreChat={ctx.onRestoreChat}
                   onKill={ctx.onKill}
                   onDuplicate={ctx.onDuplicate}
                 />
@@ -569,61 +585,5 @@ function GroupedLiveRows({ entries, ctx, remountKey }: GroupedLiveRowsProps) {
         </div>
       </SortableContext>
     </DndContext>
-  )
-}
-
-interface GroupedDormantRowsProps {
-  entries: GroupedSessionEntry[]
-  kind: 'hibernating' | 'history'
-  ctx: GroupedRowContext
-  limit?: number
-  onShowMore?: () => void
-}
-
-function GroupedDormantRows({ entries, kind, ctx, limit, onShowMore }: GroupedDormantRowsProps) {
-  const dormant = entries.flatMap((entry) =>
-    entry.kind === kind && entry.agentSession ? [entry.agentSession] : []
-  )
-  if (dormant.length === 0) return null
-  const visible = limit !== undefined ? dormant.slice(0, limit) : dormant
-
-  return (
-    <div className="py-1" data-testid={`grouped-${kind}-rows`}>
-      {kind === 'hibernating'
-        ? visible.map((session) => (
-            <HibernatingSessionItem
-              key={session.sessionId}
-              session={session}
-              isSelected={ctx.selectedHibernatingSessionId === session.sessionId}
-              showSessionIdPrefix={ctx.showSessionIdPrefix}
-              showProjectName={ctx.showProjectName}
-              showLastUserMessage={ctx.showLastUserMessage}
-              onSelect={(sessionId) => ctx.onSelectHibernating(sessionId)}
-              onWake={(sessionId) => ctx.onResume(sessionId)}
-              onRename={(sessionId, newName) => ctx.onRename(sessionId, newName)}
-              onMoveToHistory={ctx.onMoveToHistory}
-            />
-          ))
-        : visible.map((session) => (
-            <HistorySessionItem
-              key={session.sessionId}
-              session={session}
-              showSessionIdPrefix={ctx.showSessionIdPrefix}
-              showProjectName={ctx.showProjectName}
-              showLastUserMessage={ctx.showLastUserMessage}
-              onResume={(sessionId) => ctx.onResume(sessionId)}
-              onPreview={ctx.onPreview}
-            />
-          ))}
-      {limit !== undefined && dormant.length > limit && onShowMore && (
-        <button
-          type="button"
-          onClick={onShowMore}
-          className="w-full px-3 py-2 text-center text-xs text-muted hover:text-primary hover:bg-hover"
-        >
-          Show more ({dormant.length - limit} remaining)
-        </button>
-      )}
-    </div>
   )
 }

@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
+import { useState, useRef, useEffect, useCallback, useMemo, Fragment } from 'react'
 import { motion, AnimatePresence, useReducedMotion } from 'motion/react'
 import {
   DndContext,
@@ -37,7 +37,7 @@ import WorkspaceSectionList, {
   FLOW_REGION_MIN_HEIGHT,
   type GroupedRowContext,
 } from './WorkspaceSectionList'
-import type { WorkspaceView } from '../utils/workspaceView'
+import type { FallbackSectionData, WorkspaceView } from '../utils/workspaceView'
 
 interface SessionListProps {
   sessions: Session[]
@@ -52,6 +52,9 @@ interface SessionListProps {
   onRename: (sessionId: string, newName: string) => void
   onResume?: (sessionId: string) => void
   onHibernate?: (sessionId: string) => void
+  /** Chat-only actions: archive stops the agent, restore reactivates. */
+  onArchiveChat?: (sessionId: string) => void
+  onRestoreChat?: (sessionId: string) => void
   onKill?: (sessionId: string, source?: SessionKillSource) => void
   onDuplicate?: (sessionId: string) => void
   onMoveToHistory?: (sessionId: string) => void
@@ -103,6 +106,8 @@ export default function SessionList({
   onRename,
   onResume,
   onHibernate,
+  onArchiveChat,
+  onRestoreChat,
   onKill,
   onDuplicate,
   onMoveToHistory,
@@ -524,6 +529,8 @@ export default function SessionList({
   const setWorkspacePaneFraction = useSettingsStore((state) => state.setWorkspacePaneFraction)
   const remotePaneFraction = useSettingsStore((state) => state.remotePaneFraction)
   const setRemotePaneFraction = useSettingsStore((state) => state.setRemotePaneFraction)
+  const archivePaneFraction = useSettingsStore((state) => state.archivePaneFraction)
+  const setArchivePaneFraction = useSettingsStore((state) => state.setArchivePaneFraction)
   /** Navigator body whose height the pane fractions resolve against. */
   const navigatorBodyRef = useRef<HTMLDivElement>(null)
 
@@ -550,6 +557,8 @@ export default function SessionList({
       onCancelEdit: cancelEdit,
       onRename: handleRename,
       onHibernate: onHibernate ?? noop,
+      onArchiveChat: onArchiveChat ?? noop,
+      onRestoreChat: onRestoreChat ?? noop,
       onKill: onKill ? killFromContextMenu : noop,
       onDuplicate: onDuplicate ?? noop,
       onResume: onResume ?? noop,
@@ -577,6 +586,8 @@ export default function SessionList({
       cancelEdit,
       handleRename,
       onHibernate,
+      onArchiveChat,
+      onRestoreChat,
       onKill,
       killFromContextMenu,
       onDuplicate,
@@ -588,12 +599,36 @@ export default function SessionList({
     ]
   )
 
+  // Docked fallback panes in render order, top to bottom: Workspace, Remote,
+  // then Archive. A pane with no rows renders nothing and reserves no height.
+  const fallbackPanes: Array<{
+    section: FallbackSectionData | undefined
+    fraction: number
+    onFractionChange: (fraction: number) => void
+  }> = [
+    {
+      section: workspaceView?.workspace,
+      fraction: workspacePaneFraction,
+      onFractionChange: setWorkspacePaneFraction,
+    },
+    {
+      section: workspaceView?.remote,
+      fraction: remotePaneFraction,
+      onFractionChange: setRemotePaneFraction,
+    },
+    {
+      section: workspaceView?.archive,
+      fraction: archivePaneFraction,
+      onFractionChange: setArchivePaneFraction,
+    },
+  ]
+
   const renderFallbackPane = (
-    section: WorkspaceView['workspace'] | WorkspaceView['remote'],
+    section: FallbackSectionData | undefined,
     fraction: number,
     onFractionChange: (fraction: number) => void
   ) =>
-    section.entries.length > 0 ? (
+    section && section.entries.length > 0 ? (
       <FallbackSectionPane
         section={section}
         fraction={fraction}
@@ -603,6 +638,8 @@ export default function SessionList({
         remountKey={filterKey}
         showHibernating={showHibernating}
         showHistory={showHistory}
+        onToggleHibernating={() => setShowHibernating(!showHibernating)}
+        onToggleHistory={() => setShowHistory(!showHistory)}
         historyLimit={historyLimit}
         onShowMoreHistory={() => setHistoryLimit((prev) => prev + 20)}
         {...rowContext}
@@ -654,14 +691,6 @@ export default function SessionList({
               view={workspaceView}
               onToggleCollapse={onToggleSectionCollapse ?? (() => {})}
               remountKey={filterKey}
-              showHibernating={showHibernating}
-              showHistory={showHistory}
-              onToggleHibernating={() => setShowHibernating(!showHibernating)}
-              onToggleHistory={() => setShowHistory(!showHistory)}
-              hibernatingCount={filteredHibernatingSessions.length}
-              historyCount={filteredHistorySessions.length}
-              historyLimit={historyLimit}
-              onShowMoreHistory={() => setHistoryLimit((prev) => prev + 20)}
               onNewSession={onNewSession}
               onNewSessionInWorktree={onNewSessionInWorktree}
               onCreateChangeWorktree={onCreateChangeWorktree}
@@ -669,8 +698,13 @@ export default function SessionList({
               {...rowContext}
             />
           </div>
-          {renderFallbackPane(workspaceView.workspace, workspacePaneFraction, setWorkspacePaneFraction)}
-          {renderFallbackPane(workspaceView.remote, remotePaneFraction, setRemotePaneFraction)}
+          {fallbackPanes.map((pane) =>
+            pane.section ? (
+              <Fragment key={pane.section.key}>
+                {renderFallbackPane(pane.section, pane.fraction, pane.onFractionChange)}
+              </Fragment>
+            ) : null
+          )}
         </div>
       ) : (
         <div className="min-h-0 flex-1 overflow-y-auto">
@@ -760,6 +794,8 @@ export default function SessionList({
                               onCancelEdit={cancelEdit}
                               onRename={handleRename}
                               onHibernate={onHibernate}
+                              onArchiveChat={onArchiveChat}
+                              onRestoreChat={onRestoreChat}
                               onKill={onKill ? killFromContextMenu : undefined}
                               onDuplicate={onDuplicate}
                             />
