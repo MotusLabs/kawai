@@ -8,6 +8,7 @@
 // mtime so an upgrade in place re-checks; failures are never cached, so an
 // installed or repaired executable recovers without a server restart.
 import fs from 'node:fs'
+import path from 'node:path'
 
 /**
  * Minimum Claude Code version chat sessions support. Must stay equal to the
@@ -42,14 +43,19 @@ const INSTALL_HINT =
 /**
  * Resolve the executable chat sessions will run: the trimmed KAWAI_CLAUDE_PATH
  * value when non-empty, otherwise `claude` from PATH. Returns null when
- * neither yields a path; the value is used verbatim as one path.
+ * neither yields a path. The value is one path (never split or run by a
+ * shell), made absolute against the server working directory.
  */
 export function resolveClaudeExecutable(
   env: Record<string, string | undefined> = process.env
 ): string | null {
   const configured = (env.KAWAI_CLAUDE_PATH ?? '').trim()
-  if (configured) return configured
-  return Bun.which('claude', { PATH: env.PATH ?? '' }) ?? null
+  // Absolute against the server's working directory: verification runs here,
+  // but the SDK spawns from each project directory, where a relative path
+  // would name a different (or no) file.
+  if (configured) return path.resolve(configured)
+  const found = Bun.which('claude', { PATH: env.PATH ?? '' })
+  return found ? path.resolve(found) : null
 }
 
 /** A verified executable: the path to run and its change identity. */

@@ -449,9 +449,10 @@ export class ChatSessionManager {
       if (existing.isDead) {
         resolveClaudeProfile(this.records.get(sessionId)?.claudeProfileId, this.providerEnv())
         if (!this.authOk(this.records.get(sessionId)?.claudeProfileId)) throw new Error(chatAuthErrorMessage())
-        // The executable may have been removed since the last spawn; a dead
-        // driver respawn must surface that before the process is missed.
-        await this.checkExecutable()
+        // The executable may have been removed or moved since the last
+        // spawn: surface a failure now, and respawn the path just verified.
+        const executable = await this.checkExecutable()
+        existing.setClaudeExecutablePath(executable?.path)
       }
       return existing
     }

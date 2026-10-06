@@ -69,6 +69,14 @@ describe('resolveClaudeExecutable', () => {
   test('returns null when nothing resolves', () => {
     expect(resolveClaudeExecutable({ KAWAI_CLAUDE_PATH: '', PATH: '' })).toBeNull()
   })
+
+  test('makes a relative override absolute against the server working directory', () => {
+    // The SDK spawns from each project directory; a relative path must not
+    // be reinterpreted there.
+    expect(resolveClaudeExecutable({ KAWAI_CLAUDE_PATH: './review-bin/claude', PATH: '' })).toBe(
+      path.join(process.cwd(), 'review-bin', 'claude')
+    )
+  })
 })
 
 describe('checkClaudeExecutable', () => {
@@ -235,6 +243,14 @@ describe('ensureClaudeExecutable', () => {
     await expect(
       ensureClaudeExecutable({ KAWAI_CLAUDE_PATH: exe, PATH: '' })
     ).resolves.toMatchObject({ path: exe })
+  })
+
+  test('verifies and returns a relative override as an absolute path', async () => {
+    const exe = makeExecutable(tempDir, 'relative-claude', versionScript('2.1.300'))
+    const relative = path.relative(process.cwd(), exe)
+    expect(path.isAbsolute(relative)).toBe(false)
+    const checked = await ensureClaudeExecutable({ KAWAI_CLAUDE_PATH: relative, PATH: '' })
+    expect(checked.path).toBe(exe)
   })
 
   test('resolves claude from PATH when no override is set', async () => {

@@ -107,14 +107,26 @@ export class ChatSessionDriver {
   private capturedSdkSessionId: string | undefined
   private lastStatus: SessionStatus = 'waiting'
   private dead = false
+  /** Updated by the manager before a respawn; see setClaudeExecutablePath. */
+  private claudeExecutablePath: string | undefined
   private killed = false
 
   constructor(options: ChatSessionDriverOptions) {
     this.options = options
+    this.claudeExecutablePath = options.claudeExecutablePath
   }
 
   get isDead(): boolean {
     return this.dead
+  }
+
+  /**
+   * Executable for the next spawn. The manager re-verifies the executable
+   * before respawning a dead driver; the CLI may have moved since the first
+   * spawn, so the freshly verified path replaces the stored one.
+   */
+  setClaudeExecutablePath(path: string | undefined): void {
+    this.claudeExecutablePath = path
   }
 
   /** Submit a user turn. Spawns the SDK lazily on the first turn. */
@@ -292,8 +304,8 @@ export class ChatSessionDriver {
       permissionMode: 'default',
       includePartialMessages: true,
       canUseTool: this.canUseTool,
-      ...(this.options.claudeExecutablePath
-        ? { pathToClaudeCodeExecutable: this.options.claudeExecutablePath }
+      ...(this.claudeExecutablePath
+        ? { pathToClaudeCodeExecutable: this.claudeExecutablePath }
         : {}),
       ...(resume ? { resume } : {}),
       ...launch,

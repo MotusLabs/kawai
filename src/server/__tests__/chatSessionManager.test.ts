@@ -541,6 +541,30 @@ describe('ChatSessionManager', () => {
       expect(gated.getHistory(created.session.id)).not.toBeNull()
     })
 
+    test('a respawn uses the freshly verified path when the executable moved', async () => {
+      process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'
+      const handles: FakeHandle[] = []
+      let current = '/old/claude'
+      const manager = new ChatSessionManager({
+        isDirectory: anyDirectory,
+        db, registry: new SessionRegistry(), onEvent: () => {},
+        queryFactory: fakeQueryFactory(handles),
+        executableCheck: async () => ({ path: current, identity: current }),
+      })
+      const created = await manager.createAvailableSession({ projectPath: '/tmp/proj' })
+      if (!created.ok) throw new Error('creation should succeed')
+      expect((await manager.send(created.session.id, 'first')).ok).toBe(true)
+      expect(handles[0]!.options.pathToClaudeCodeExecutable).toBe('/old/claude')
+
+      // The agent dies; the CLI moves and PATH now resolves a replacement.
+      handles[0]!.query.close()
+      await flush()
+      current = '/new/claude'
+      expect((await manager.send(created.session.id, 'second')).ok).toBe(true)
+      expect(handles).toHaveLength(2)
+      expect(handles[1]!.options.pathToClaudeCodeExecutable).toBe('/new/claude')
+    })
+
     test('an injected queryFactory skips the executable check entirely', async () => {
       process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'
       const original = process.env.KAWAI_CLAUDE_PATH
