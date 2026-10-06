@@ -137,11 +137,11 @@ describe('ChatCommandTracker', () => {
     const tracker = new ChatCommandTracker((state) => states.push(state.status))
     expect(tracker.state).toEqual({ status: 'loading', commands: [] })
 
-    tracker.beginLoading() // idempotent: no duplicate publication
-    expect(states).toEqual([])
+    tracker.beginLoading()
+    expect(states).toEqual(['loading'])
 
     tracker.applyCommands([raw('clear')])
-    expect(states).toEqual(['ready'])
+    expect(states).toEqual(['loading', 'ready'])
     expect(tracker.state).toEqual({
       status: 'ready',
       commands: [command('clear', 'builtin')],
@@ -149,7 +149,7 @@ describe('ChatCommandTracker', () => {
 
     // The identical list again: no publication.
     tracker.applyCommands([raw('clear')])
-    expect(states).toEqual(['ready'])
+    expect(states).toEqual(['loading', 'ready'])
   })
 
   test('a changed list replaces the old one and publishes', () => {

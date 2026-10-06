@@ -111,9 +111,13 @@ export class ChatCommandTracker {
     return { status: this.status, commands: this.commands }
   }
 
-  /** A spawn happened: its initialize response is on the way. Idempotent. */
+  /**
+   * A spawn happened: its initialize response is on the way. Publishes even
+   * from the initial loading state, so a client whose snapshot predates the
+   * attach-time start learns the list is loading.
+   */
   beginLoading(): void {
-    this.publishIfChanged('loading', this.commands)
+    this.publish('loading', this.commands)
   }
 
   /**
@@ -150,8 +154,15 @@ export class ChatCommandTracker {
   ): void {
     const changed =
       status !== this.status || !commandsEqual(commands, this.commands)
+    if (changed) this.publish(status, commands)
+  }
+
+  private publish(
+    status: ChatCommandState['status'],
+    commands: ChatCommand[]
+  ): void {
     this.status = status
     this.commands = commands
-    if (changed) this.onChange?.(this.state)
+    this.onChange?.(this.state)
   }
 }

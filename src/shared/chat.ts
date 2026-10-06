@@ -92,6 +92,11 @@ export interface ChatCommandState {
 export type ChatEvent =
   | (ChatTurnEventBase & { type: 'turn_started' })
   | (ChatTurnEventBase & { type: 'user_message'; text: string })
+  | (ChatTurnEventBase & {
+      type: 'command_output'
+      /** Output text of a local slash command run in this turn. */
+      text: string
+    })
   | (ChatAssistantEventBase & { type: 'assistant_text'; text: string })
   | (ChatAssistantEventBase & { type: 'assistant_delta'; delta: string })
   | (ChatToolEventBase & { type: 'tool_call'; tool: string; input: unknown })

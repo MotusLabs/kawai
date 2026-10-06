@@ -18,6 +18,7 @@ import type {
 } from '@anthropic-ai/claude-agent-sdk'
 import type {
   ChatApprovalDecision,
+  ChatCommandState,
   ChatEvent,
   ChatPendingRequest,
   ChatQuestion,
@@ -30,6 +31,7 @@ import {
   toolResultText,
 } from './contentBlocks'
 import type { ChatProviderEnv } from './chatProviderEnv'
+import { ChatCommandTracker, type RawChatCommand } from './chatCommands'
 import { resolveClaudeProfile } from './ClaudeProfiles'
 import { TurnQueue } from './TurnQueue'
 import { createWireTappedSpawn, type ChatWireRecorder } from './wireTap'
@@ -62,6 +64,8 @@ export interface ChatSessionDriverOptions {
   onStatus: (status: SessionStatus) => void
   /** Fired once when the SDK init message reveals the session id. */
   onSdkSessionId?: (sdkSessionId: string) => void
+  /** Fired whenever the session's slash-command state meaningfully changed. */
+  onCommandState?: (state: ChatCommandState) => void
   /** Records the raw protocol of every spawned process (chat debug view). */
   wire?: ChatWireRecorder
 }
@@ -88,6 +92,8 @@ type ChatEventDraft = DistributiveOmit<ChatEvent, 'id' | 'sequence' | 'at'>
 export class ChatSessionDriver {
   private readonly options: ChatSessionDriverOptions
   private readonly queue = new TurnQueue()
+  /** Slash-command list state; this driver is its only feeder (design D2). */
+  private commands = new ChatCommandTracker()
   private query: Query | null = null
   private sequence = 0
   private turnCounter = 0
@@ -105,10 +111,16 @@ export class ChatSessionDriver {
 
   constructor(options: ChatSessionDriverOptions) {
     this.options = options
+    this.commands = new ChatCommandTracker(options.onCommandState)
   }
 
   get isDead(): boolean {
     return this.dead
+  }
+
+  /** Current slash-command state (loading / ready / unavailable). */
+  getCommandState(): ChatCommandState {
+    return this.commands.state
   }
 
   /**
@@ -164,6 +176,7 @@ export class ChatSessionDriver {
     this.queue.end()
     this.cancelAllRequests('killed')
     this.activeTurnId = null
+    this.commands.markUnavailable()
     const query = this.query
     this.query = null
     if (query) {
@@ -324,7 +337,28 @@ export class ChatSessionDriver {
       return
     }
     this.query = query
+    this.commands.beginLoading()
+    void this.fetchInitializationCommands(query)
     void this.runQueryLoop(query)
+  }
+
+  /**
+   * The initialize response carries the command list. Fetched fire-and-forget
+   * right after each spawn; a failure leaves the state to resolve through
+   * init/commands_changed or the driver's death. Test fakes without the
+   * method are skipped (their commands come from pushed messages).
+   */
+  private async fetchInitializationCommands(query: Query): Promise<void> {
+    if (typeof query.initializationResult !== 'function') return
+    try {
+      const result = await query.initializationResult()
+      if (this.query === query && Array.isArray(result.commands)) {
+        this.commands.applyCommands(result.commands as RawChatCommand[])
+      }
+    } catch {
+      // Not fatal: the process may still stream init/commands_changed, or die
+      // (which marks the state unavailable).
+    }
   }
 
   private async runQueryLoop(query: Query): Promise<void> {
@@ -354,6 +388,7 @@ export class ChatSessionDriver {
     this.activeTurnId = null
     this.cancelAllRequests('killed')
     this.emit({ type: 'error', message: reason })
+    this.commands.markUnavailable()
     this.refreshStatus()
   }
 
@@ -495,6 +530,21 @@ export class ChatSessionDriver {
       if (!this.capturedSdkSessionId && message.session_id) {
         this.capturedSdkSessionId = message.session_id
         this.options.onSdkSessionId?.(message.session_id)
+      }
+      // The authoritative terminal-bound set; until here the tracker used the
+      // observed fallback (verified 2026-10-06: init only arrives once a turn
+      // starts, so this lands with the first prompt).
+      this.commands.applyTerminalCommands(message.terminal_slash_commands)
+      return
+    }
+    if (message.subtype === 'commands_changed') {
+      this.commands.applyCommands(message.commands as RawChatCommand[])
+      return
+    }
+    if (message.subtype === 'local_command_output') {
+      const turnId = this.activeTurnId
+      if (turnId) {
+        this.emit({ type: 'command_output', turnId, text: message.content })
       }
       return
     }

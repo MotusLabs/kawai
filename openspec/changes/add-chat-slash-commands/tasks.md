@@ -12,7 +12,7 @@
 
 - [x] 2.1 Add `ChatCommand` and `ChatCommandState` to `src/shared/chat.ts`, and `commands` on `chat-snapshot` and the `chat-commands` server message to `src/shared/types.ts`; verify with `bun run typecheck`
 - [x] 2.2 Implement `src/server/chat/chatCommands.ts` normalization (source from `builtin` and the ` (project)` suffix, `__` and terminal-bound hiding with the fallback set, builtin-wins de-duplication) and state transitions; verify with unit tests using the recorded command list as a fixture
-- [ ] 2.3 Feed the state from the initialize response, `system/commands_changed`, and `system/init` in the driver, and mark it unavailable when the session is not started, blocked, dead, or archived; verify with driver tests for each source and transition
+- [x] 2.3 Feed the state from the initialize response, `system/commands_changed`, and `system/init` in the driver, and mark it unavailable when the session is not started, blocked, dead, or archived; verify with driver tests for each source and transition
 - [ ] 2.4 Include the state in `getSnapshot` and push `chat-commands` to subscribed connections on change; verify with manager and connections tests for snapshot contents and push fan-out
 - [ ] 2.5 Store the state per session in `chatStore` from snapshots and `chat-commands`; verify with store tests for replace semantics and reconnect
 
