@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
+import { useState, useRef, useEffect, useCallback, useMemo, Fragment } from 'react'
 import { motion, AnimatePresence, useReducedMotion } from 'motion/react'
 import {
   DndContext,
@@ -37,7 +37,7 @@ import WorkspaceSectionList, {
   FLOW_REGION_MIN_HEIGHT,
   type GroupedRowContext,
 } from './WorkspaceSectionList'
-import type { WorkspaceView } from '../utils/workspaceView'
+import type { FallbackSectionData, WorkspaceView } from '../utils/workspaceView'
 
 interface SessionListProps {
   sessions: Session[]
@@ -524,6 +524,8 @@ export default function SessionList({
   const setWorkspacePaneFraction = useSettingsStore((state) => state.setWorkspacePaneFraction)
   const remotePaneFraction = useSettingsStore((state) => state.remotePaneFraction)
   const setRemotePaneFraction = useSettingsStore((state) => state.setRemotePaneFraction)
+  const archivePaneFraction = useSettingsStore((state) => state.archivePaneFraction)
+  const setArchivePaneFraction = useSettingsStore((state) => state.setArchivePaneFraction)
   /** Navigator body whose height the pane fractions resolve against. */
   const navigatorBodyRef = useRef<HTMLDivElement>(null)
 
@@ -588,12 +590,36 @@ export default function SessionList({
     ]
   )
 
+  // Docked fallback panes in render order, top to bottom: Workspace, Remote,
+  // then Archive. A pane with no rows renders nothing and reserves no height.
+  const fallbackPanes: Array<{
+    section: FallbackSectionData | undefined
+    fraction: number
+    onFractionChange: (fraction: number) => void
+  }> = [
+    {
+      section: workspaceView?.workspace,
+      fraction: workspacePaneFraction,
+      onFractionChange: setWorkspacePaneFraction,
+    },
+    {
+      section: workspaceView?.remote,
+      fraction: remotePaneFraction,
+      onFractionChange: setRemotePaneFraction,
+    },
+    {
+      section: workspaceView?.archive,
+      fraction: archivePaneFraction,
+      onFractionChange: setArchivePaneFraction,
+    },
+  ]
+
   const renderFallbackPane = (
-    section: WorkspaceView['workspace'] | WorkspaceView['remote'],
+    section: FallbackSectionData | undefined,
     fraction: number,
     onFractionChange: (fraction: number) => void
   ) =>
-    section.entries.length > 0 ? (
+    section && section.entries.length > 0 ? (
       <FallbackSectionPane
         section={section}
         fraction={fraction}
@@ -669,8 +695,13 @@ export default function SessionList({
               {...rowContext}
             />
           </div>
-          {renderFallbackPane(workspaceView.workspace, workspacePaneFraction, setWorkspacePaneFraction)}
-          {renderFallbackPane(workspaceView.remote, remotePaneFraction, setRemotePaneFraction)}
+          {fallbackPanes.map((pane) =>
+            pane.section ? (
+              <Fragment key={pane.section.key}>
+                {renderFallbackPane(pane.section, pane.fraction, pane.onFractionChange)}
+              </Fragment>
+            ) : null
+          )}
         </div>
       ) : (
         <div className="min-h-0 flex-1 overflow-y-auto">

@@ -11,10 +11,10 @@
 
 ## 2. Navigator placement and the Archive pane
 
-- [ ] 2.1 Add `FALLBACK_ARCHIVE_SECTION_KEY` and an `archive` fallback section in `workspaceView.ts`; place hibernating and history agent sessions and chats with `archivedAt` there, sorted newest first by `archivedAt ?? lastActivity`, and drop the `host != null` remote check for agent sessions; verify with workspaceView tests for each placement, ordering, filters, attention counts, and visible navigation order
-- [ ] 2.2 Generalize the docked fallback panes to `[workspace, remote, archive]` with `archivePaneFraction` in the settings store and shared sizing, resize, and collapse logic; verify with SessionList and settings store tests for default sizing, proportional reduction, persistence, and collapsed-pane redistribution with three panes
-- [ ] 2.3 Treat the Archive section as collapsed until the user has expanded it, retaining the choice across reloads; verify with collapse-state tests for first use and after expanding
-- [ ] 2.4 Verify the mobile navigator (`SessionDrawer`) shows the Archive pane with the same grouping, collapse, and sizing, with a component test
+- [x] 2.1 Add `FALLBACK_ARCHIVE_SECTION_KEY` and an `archive` fallback section in `workspaceView.ts`; place hibernating and history agent sessions and chats with `archivedAt` there, sorted newest first by `archivedAt ?? lastActivity`, and drop the `host != null` remote check for agent sessions; verify with workspaceView tests for each placement, ordering, filters, attention counts, and visible navigation order
+- [x] 2.2 Generalize the docked fallback panes to `[workspace, remote, archive]` with `archivePaneFraction` in the settings store and shared sizing, resize, and collapse logic; verify with SessionList and settings store tests for default sizing, proportional reduction, persistence, and collapsed-pane redistribution with three panes
+- [x] 2.3 Treat the Archive section as collapsed until the user has expanded it, retaining the choice across reloads; verify with collapse-state tests for first use and after expanding
+- [x] 2.4 Verify the mobile navigator (`SessionDrawer`) shows the Archive pane with the same grouping, collapse, and sizing, with a component test
 
 ## 3. Archive and restore in the UI
 

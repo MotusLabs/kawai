@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { AgentSession, AutoStartAgent, ServerMessage, Session, SessionKillSource } from '@shared/types'
-import type { WorkspaceBranch } from '@shared/workspace'
+import { FALLBACK_ARCHIVE_SECTION_KEY, type WorkspaceBranch } from '@shared/workspace'
 import Header from './components/Header'
 import SessionList from './components/SessionList'
 import Terminal from './components/Terminal'
@@ -654,7 +654,17 @@ export default function App() {
   // otherwise (older server or before the first snapshot).
   const workspaceSnapshot = useWorkspaceStore((state) => state.snapshot)
   const collapsedSectionIds = useWorkspaceStore((state) => state.collapsedSectionIds)
+  const archiveSectionExpanded = useWorkspaceStore((state) => state.archiveSectionExpanded)
   const toggleSectionCollapsed = useWorkspaceStore((state) => state.toggleSectionCollapsed)
+  // First-use collapse: until the user has expanded it once, the Archive
+  // section reads as collapsed even without a stored collapse entry.
+  const effectiveCollapsedSectionIds = useMemo(
+    () =>
+      archiveSectionExpanded || collapsedSectionIds.includes(FALLBACK_ARCHIVE_SECTION_KEY)
+        ? collapsedSectionIds
+        : [...collapsedSectionIds, FALLBACK_ARCHIVE_SECTION_KEY],
+    [collapsedSectionIds, archiveSectionExpanded]
+  )
   // Compact worktree options for the new-session picker.
   const worktreeOptions = useMemo(() => {
     if (!workspaceSnapshot) return []
@@ -696,7 +706,7 @@ export default function App() {
         historyAgentSessions,
         {
           filter: { projectFilters, hostFilters },
-          collapsedSectionIds,
+          collapsedSectionIds: effectiveCollapsedSectionIds,
         }
       ),
     [
@@ -706,7 +716,7 @@ export default function App() {
       historyAgentSessions,
       projectFilters,
       hostFilters,
-      collapsedSectionIds,
+      effectiveCollapsedSectionIds,
     ]
   )
 

@@ -1,13 +1,13 @@
 // WorkspaceSectionList.tsx - Sectioned workspace navigator: live,
 // hibernating, and historical session rows rendered inside collapsible
 // sections — OpenSpec change sections first, then unmatched worktree
-// sections. Every section, including the Workspace/Remote fallbacks, folds
-// through the same trigger and persists by its stable key; the fallbacks
-// render as docked panes (FallbackSectionPane) placed by the caller below
-// the scrolling flow region this list provides. Each section owns its own
-// drag context so manual reorder stays within the section; flattened
-// cross-section navigation is computed by the caller from the same view
-// model. Dormant-row visibility follows the global hibernating/history
+// sections. Every section, including the Workspace/Remote/Archive
+// fallbacks, folds through the same trigger and persists by its stable key;
+// the fallbacks render as docked panes (FallbackSectionPane) placed by the
+// caller below the scrolling flow region this list provides. Each section
+// owns its own drag context so manual reorder stays within the section;
+// flattened cross-section navigation is computed by the caller from the same
+// view model. Dormant-row visibility follows the global hibernating/history
 // toggles so persisted preferences keep working.
 
 import { useCallback, useMemo, useState } from 'react'
@@ -281,7 +281,7 @@ export default function WorkspaceSectionList(props: WorkspaceSectionListProps) {
 
 /**
  * Minimum height (px) kept for the change/worktree flow region: when the
- * navigator is too short to honor both pane defaults, the panes shrink
+ * navigator is too short to honor every pane default, the panes shrink
  * proportionally rather than pushing this region below its floor.
  */
 export const FLOW_REGION_MIN_HEIGHT = 96
@@ -291,6 +291,19 @@ export const FLOW_REGION_MIN_HEIGHT = 96
  * drag handle above it. A collapsed pane sizes to its header alone.
  */
 export const PANE_MIN_HEIGHT = 40
+
+/** Fixed labels and row test ids of the docked fallback panes. */
+const FALLBACK_SECTION_LABELS: Record<FallbackSectionData['kind'], string> = {
+  workspace: 'Workspace',
+  remote: 'Remote',
+  archive: 'Archive',
+}
+
+const FALLBACK_SECTION_TEST_IDS: Record<FallbackSectionData['kind'], string> = {
+  workspace: 'workspace-section',
+  remote: 'remote-section',
+  archive: 'archive-section',
+}
 
 export interface FallbackSectionPaneProps extends GroupedRowContext {
   section: FallbackSectionData
@@ -334,7 +347,7 @@ export function FallbackSectionPane(props: FallbackSectionPaneProps) {
   } = props
 
   const flexBasis = `${Math.round(fraction * 1000) / 10}%`
-  const label = section.kind === 'workspace' ? 'Workspace' : 'Remote'
+  const label = FALLBACK_SECTION_LABELS[section.kind]
 
   return (
     <section
@@ -344,7 +357,7 @@ export function FallbackSectionPane(props: FallbackSectionPaneProps) {
           ? { flex: '0 0 auto' }
           : { flex: `0 1 ${flexBasis}`, minHeight: PANE_MIN_HEIGHT }
       }
-      data-testid={section.kind === 'workspace' ? 'workspace-section' : 'remote-section'}
+      data-testid={FALLBACK_SECTION_TEST_IDS[section.kind]}
       data-section-key={section.key}
       data-collapsed={section.collapsed ? 'true' : 'false'}
       data-pane-fraction={section.collapsed ? undefined : fraction}
@@ -388,9 +401,9 @@ export function FallbackSectionPane(props: FallbackSectionPaneProps) {
 }
 
 /**
- * Header for a fallback (Workspace/Remote) section. Shares the collapse
- * affordance and attention/count markup of SectionHeader; collapse state
- * persists under the section's reserved key.
+ * Header for a fallback (Workspace/Remote/Archive) section. Shares the
+ * collapse affordance and attention/count markup of SectionHeader; collapse
+ * state persists under the section's reserved key.
  */
 function FallbackSectionHeader({
   section,
@@ -399,7 +412,7 @@ function FallbackSectionHeader({
   section: FallbackSectionData
   onToggleCollapse: (sectionKey: string) => void
 }) {
-  const label = section.kind === 'workspace' ? 'Workspace' : 'Remote'
+  const label = FALLBACK_SECTION_LABELS[section.kind]
   const hiddenAttention = section.hiddenAttentionCount
   const attentionTotal = section.attentionCount + hiddenAttention
 

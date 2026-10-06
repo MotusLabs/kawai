@@ -33,6 +33,7 @@ globalAny.localStorage = storage
 globalAny.window = { localStorage: storage } as typeof window
 
 const { useWorkspaceStore } = await import('../stores/workspaceStore')
+const { FALLBACK_ARCHIVE_SECTION_KEY } = await import('../../shared/workspace')
 
 function snapshotWith(repoId: string, worktreePath: string) {
   return {
@@ -68,6 +69,7 @@ beforeEach(() => {
     lastError: null,
     operationResults: [],
     collapsedSectionIds: [],
+    archiveSectionExpanded: false,
   })
 })
 
@@ -178,6 +180,64 @@ describe('workspaceStore collapse state', () => {
     // accessor simply reports them without error.
     useWorkspaceStore.setState({ collapsedSectionIds: ['gone-worktree-id'] })
     expect(useWorkspaceStore.getState().isSectionCollapsed('gone-worktree-id')).toBe(true)
+  })
+
+  test('Archive reads as collapsed on first use with no stored entry', () => {
+    // No collapse entry and no recorded expansion: collapsed by default.
+    expect(useWorkspaceStore.getState().collapsedSectionIds).toEqual([])
+    expect(
+      useWorkspaceStore.getState().isSectionCollapsed(FALLBACK_ARCHIVE_SECTION_KEY)
+    ).toBe(true)
+  })
+
+  test('expanding Archive records the choice and persists it across reloads', () => {
+    const store = useWorkspaceStore.getState()
+    store.toggleSectionCollapsed(FALLBACK_ARCHIVE_SECTION_KEY)
+    expect(
+      useWorkspaceStore.getState().isSectionCollapsed(FALLBACK_ARCHIVE_SECTION_KEY)
+    ).toBe(false)
+
+    // The expansion marker persists; the collapse list stays empty.
+    const raw = storage.getItem('agentboard-workspace')
+    expect(raw).toBeTruthy()
+    const persisted = JSON.parse(raw as string) as {
+      state: { collapsedSectionIds: string[]; archiveSectionExpanded: boolean }
+    }
+    expect(persisted.state.collapsedSectionIds).toEqual([])
+    expect(persisted.state.archiveSectionExpanded).toBe(true)
+
+    // A reload with that persisted state keeps Archive expanded.
+    useWorkspaceStore.setState({
+      collapsedSectionIds: [],
+      archiveSectionExpanded: true,
+    })
+    expect(
+      useWorkspaceStore.getState().isSectionCollapsed(FALLBACK_ARCHIVE_SECTION_KEY)
+    ).toBe(false)
+  })
+
+  test('after first expansion, collapse toggles behave like every other section', () => {
+    const store = useWorkspaceStore.getState()
+    store.toggleSectionCollapsed(FALLBACK_ARCHIVE_SECTION_KEY) // expand (first use)
+    store.toggleSectionCollapsed(FALLBACK_ARCHIVE_SECTION_KEY) // collapse again
+    expect(
+      useWorkspaceStore.getState().isSectionCollapsed(FALLBACK_ARCHIVE_SECTION_KEY)
+    ).toBe(true)
+    expect(useWorkspaceStore.getState().collapsedSectionIds).toEqual([
+      FALLBACK_ARCHIVE_SECTION_KEY,
+    ])
+
+    // Reload with that persisted state: still collapsed, and expanding
+    // removes the explicit entry.
+    useWorkspaceStore.setState({
+      collapsedSectionIds: [FALLBACK_ARCHIVE_SECTION_KEY],
+      archiveSectionExpanded: true,
+    })
+    store.toggleSectionCollapsed(FALLBACK_ARCHIVE_SECTION_KEY)
+    expect(useWorkspaceStore.getState().collapsedSectionIds).toEqual([])
+    expect(
+      useWorkspaceStore.getState().isSectionCollapsed(FALLBACK_ARCHIVE_SECTION_KEY)
+    ).toBe(false)
   })
 })
 

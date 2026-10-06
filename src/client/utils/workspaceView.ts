@@ -1,15 +1,17 @@
 // workspaceView.ts - Pure selectors building the sectioned workspace view
-// model: sessions (live, hibernating, historical) associated with their
-// deepest containing worktree, grouped under OpenSpec change sections
-// (canonical source resolved server-side), then unmatched worktree
-// sections, then the Workspace and remote fallback sections. Also produces
-// the flattened visible navigation order used by keyboard/terminal
+// model: live sessions associated with their deepest containing worktree,
+// grouped under OpenSpec change sections (canonical source resolved
+// server-side), then unmatched worktree sections, then the Workspace,
+// Remote, and Archive fallback sections. Hibernating/historical agent
+// sessions and archived chats all land in Archive, newest first. Also
+// produces the flattened visible navigation order used by keyboard/terminal
 // navigation.
 
 import type { AgentSession, Session } from '@shared/types'
 import {
   changeSectionKey,
   deepestPathMatch,
+  FALLBACK_ARCHIVE_SECTION_KEY,
   FALLBACK_REMOTE_SECTION_KEY,
   FALLBACK_WORKSPACE_SECTION_KEY,
   type ChangeRegistryEntry,
@@ -104,7 +106,7 @@ export interface WorktreeSectionData {
 export type WorkspaceSection = ChangeSectionData | WorktreeSectionData
 
 export interface FallbackSectionData {
-  kind: 'workspace' | 'remote'
+  kind: 'workspace' | 'remote' | 'archive'
   /** Reserved stable key (FALLBACK_*_SECTION_KEY) backing collapse persistence. */
   key: string
   collapsed: boolean
@@ -122,6 +124,8 @@ export interface WorkspaceView {
   /** Local sessions outside any worktree. */
   workspace: FallbackSectionData
   remote: FallbackSectionData
+  /** Closed sessions: hibernating/history rows and archived chats. */
+  archive: FallbackSectionData
   /** Flattened visible (filter-passing, non-collapsed) rows in render order. */
   visibleEntries: GroupedSessionEntry[]
 }
@@ -148,6 +152,19 @@ function agentEntry(
 
 function isAttentionEntry(entry: GroupedSessionEntry): boolean {
   return entry.liveSession?.status === 'permission'
+}
+
+/**
+ * Newest-first sort key for Archive rows: archive time for archived chats,
+ * last activity for everything else (spec: newest first by last activity,
+ * or by archive time for archived chats).
+ */
+function archiveEntrySortKey(entry: GroupedSessionEntry): number {
+  if (entry.kind === 'live' && entry.liveSession) {
+    return Date.parse(entry.liveSession.archivedAt ?? entry.liveSession.lastActivity) || 0
+  }
+  if (entry.agentSession) return Date.parse(entry.agentSession.lastActivityAt) || 0
+  return 0
 }
 
 export function buildWorkspaceView(
@@ -249,21 +266,28 @@ export function buildWorkspaceView(
     attentionCount: 0,
     hiddenAttentionCount: 0,
   }
+  const archive: FallbackSectionData = {
+    kind: 'archive',
+    key: FALLBACK_ARCHIVE_SECTION_KEY,
+    collapsed: collapsed.has(FALLBACK_ARCHIVE_SECTION_KEY),
+    entries: [],
+    attentionCount: 0,
+    hiddenAttentionCount: 0,
+  }
 
-  const place = (entry: GroupedSessionEntry, path: string | undefined, isRemote: boolean) => {
-    const visible =
-      entry.kind === 'live' && entry.liveSession
-        ? sessionMatchesFilter(entry.liveSession, filter)
-        : entry.agentSession
-          ? agentSessionMatchesFilter(entry.agentSession, filter)
-          : true
+  const entryMatchesFilter = (entry: GroupedSessionEntry): boolean => {
+    if (entry.kind === 'live' && entry.liveSession) {
+      return sessionMatchesFilter(entry.liveSession, filter)
+    }
+    if (entry.agentSession) return agentSessionMatchesFilter(entry.agentSession, filter)
+    return true
+  }
 
-    const target = isRemote ? null : deepestPathMatch(path ?? '', sectionIndexByWorktreePath.keys())
-    const sectionIndex = target !== null ? sectionIndexByWorktreePath.get(target) : undefined
-    const section =
-      sectionIndex !== undefined ? sections[sectionIndex] : isRemote ? remote : workspace
-
-    if (visible) {
+  const addTo = (
+    section: { entries: GroupedSessionEntry[]; attentionCount: number; hiddenAttentionCount: number },
+    entry: GroupedSessionEntry
+  ) => {
+    if (entryMatchesFilter(entry)) {
       section.entries.push(entry)
       if (isAttentionEntry(entry)) section.attentionCount += 1
     } else if (isAttentionEntry(entry)) {
@@ -271,20 +295,35 @@ export function buildWorkspaceView(
     }
   }
 
-  for (const session of sessions) {
-    place(liveEntry(session), session.projectPath, session.remote === true)
+  const place = (entry: GroupedSessionEntry, path: string | undefined, isRemote: boolean) => {
+    const target = isRemote ? null : deepestPathMatch(path ?? '', sectionIndexByWorktreePath.keys())
+    const sectionIndex = target !== null ? sectionIndexByWorktreePath.get(target) : undefined
+    addTo(
+      sectionIndex !== undefined ? sections[sectionIndex] : isRemote ? remote : workspace,
+      entry
+    )
   }
+
+  for (const session of sessions) {
+    if (session.archivedAt != null) addTo(archive, liveEntry(session))
+    else place(liveEntry(session), session.projectPath, session.remote === true)
+  }
+  // Agent sessions are recorded by this server, so hibernating and history
+  // rows are local closed sessions: they always land in Archive, never in a
+  // change/worktree/Workspace section and never in Remote regardless of the
+  // host label they carry.
   for (const agentSession of hibernating) {
-    place(agentEntry(agentSession, 'hibernating'), agentSession.projectPath, agentSession.host != null)
+    addTo(archive, agentEntry(agentSession, 'hibernating'))
   }
   for (const agentSession of history) {
-    place(agentEntry(agentSession, 'history'), agentSession.projectPath, agentSession.host != null)
+    addTo(archive, agentEntry(agentSession, 'history'))
   }
+  archive.entries.sort((a, b) => archiveEntrySortKey(b) - archiveEntrySortKey(a))
 
   // A collapsed fallback pane hides its rows: its attention moves into the
   // hidden count so the header still signals it, mirroring the badge
   // semantics of collapsed change/worktree sections.
-  for (const fallback of [workspace, remote]) {
+  for (const fallback of [workspace, remote, archive]) {
     if (!fallback.collapsed) continue
     fallback.hiddenAttentionCount += fallback.attentionCount
     fallback.attentionCount = 0
@@ -300,6 +339,9 @@ export function buildWorkspaceView(
   if (!remote.collapsed && remote.entries.length > 0) {
     visibleEntries.push(...remote.entries)
   }
+  if (!archive.collapsed && archive.entries.length > 0) {
+    visibleEntries.push(...archive.entries)
+  }
 
-  return { sections, workspace, remote, visibleEntries }
+  return { sections, workspace, remote, archive, visibleEntries }
 }

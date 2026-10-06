@@ -8,9 +8,10 @@ import { create } from 'zustand'
 import { persist, createJSONStorage } from 'zustand/middleware'
 import { safeStorage } from '../utils/storage'
 import { parseWorkspaceSnapshot } from '../../shared/workspaceValidation'
-import type {
-  WorkspaceOperationResult,
-  WorkspaceSnapshot,
+import {
+  FALLBACK_ARCHIVE_SECTION_KEY,
+  type WorkspaceOperationResult,
+  type WorkspaceSnapshot,
 } from '../../shared/workspace'
 
 const MAX_OPERATION_RESULTS = 10
@@ -24,6 +25,12 @@ interface WorkspaceState {
   operationResults: WorkspaceOperationResult[]
   /** Collapsed section keys (change sections by changeSectionKey, worktree sections by worktree id). */
   collapsedSectionIds: string[]
+  /**
+   * Whether the user has ever expanded the Archive section. Until then it is
+   * treated as collapsed on first use (chat-archive design D6); the choice
+   * persists once made.
+   */
+  archiveSectionExpanded: boolean
 
   /** Parse and store a server snapshot; returns false and keeps the previous
    *  snapshot when the payload is malformed. */
@@ -44,6 +51,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       lastError: null,
       operationResults: [],
       collapsedSectionIds: [],
+      archiveSectionExpanded: false,
 
       applySnapshot: (payload) => {
         const snapshot = parseWorkspaceSnapshot(payload)
@@ -57,16 +65,31 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       setLastError: (error) => set({ lastError: error }),
 
       toggleSectionCollapsed: (sectionKey) => {
-        const { collapsedSectionIds } = get()
+        const { collapsedSectionIds, archiveSectionExpanded } = get()
+        // First-use collapse: the Archive section reads as collapsed until
+        // the user expands it once; that expansion is recorded so reloads
+        // keep the choice.
+        const wasCollapsed =
+          sectionKey === FALLBACK_ARCHIVE_SECTION_KEY
+            ? collapsedSectionIds.includes(sectionKey) || !archiveSectionExpanded
+            : collapsedSectionIds.includes(sectionKey)
         set({
-          collapsedSectionIds: collapsedSectionIds.includes(sectionKey)
+          collapsedSectionIds: wasCollapsed
             ? collapsedSectionIds.filter((id) => id !== sectionKey)
             : [...collapsedSectionIds, sectionKey],
+          ...(wasCollapsed && sectionKey === FALLBACK_ARCHIVE_SECTION_KEY
+            ? { archiveSectionExpanded: true }
+            : {}),
         })
       },
 
-      isSectionCollapsed: (sectionKey) =>
-        get().collapsedSectionIds.includes(sectionKey),
+      isSectionCollapsed: (sectionKey) => {
+        const { collapsedSectionIds, archiveSectionExpanded } = get()
+        if (sectionKey === FALLBACK_ARCHIVE_SECTION_KEY) {
+          return collapsedSectionIds.includes(sectionKey) || !archiveSectionExpanded
+        }
+        return collapsedSectionIds.includes(sectionKey)
+      },
 
       recordOperationResult: (result) => {
         const { operationResults } = get()
@@ -84,7 +107,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
     {
       name: 'agentboard-workspace',
       storage: createJSONStorage(() => safeStorage),
-      partialize: (state) => ({ collapsedSectionIds: state.collapsedSectionIds }),
+      partialize: (state) => ({
+        collapsedSectionIds: state.collapsedSectionIds,
+        archiveSectionExpanded: state.archiveSectionExpanded,
+      }),
     }
   )
 )

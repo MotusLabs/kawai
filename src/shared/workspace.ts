@@ -70,14 +70,15 @@ export function changeSectionKey(repositoryId: string, changeName: string): stri
 }
 
 /**
- * Reserved section keys for the `Workspace` and `Remote` fallback sections,
- * which collapse through the same collapsedSectionIds list as every other
- * section. Structurally unreachable as another section's identity: change
- * keys always embed the `::change::` separator, and worktree ids always
+ * Reserved section keys for the `Workspace`, `Remote`, and `Archive` fallback
+ * sections, which collapse through the same collapsedSectionIds list as every
+ * other section. Structurally unreachable as another section's identity:
+ * change keys always embed the `::change::` separator, and worktree ids always
  * start with the repository's canonical common-dir path.
  */
 export const FALLBACK_WORKSPACE_SECTION_KEY = 'fallback::workspace'
 export const FALLBACK_REMOTE_SECTION_KEY = 'fallback::remote'
+export const FALLBACK_ARCHIVE_SECTION_KEY = 'fallback::archive'
 
 /** A Git worktree (main or linked) belonging to a discovered repository. */
 export interface WorkspaceWorktree {

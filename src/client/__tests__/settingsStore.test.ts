@@ -390,19 +390,22 @@ describe('workspace pane fractions', () => {
     useSettingsStore.setState({
       workspacePaneFraction: 0.25,
       remotePaneFraction: 0.25,
+      archivePaneFraction: 0.25,
     })
   })
 
-  test('defaults both panes to a quarter of the navigator height', () => {
+  test('defaults every pane to a quarter of the navigator height', () => {
     const state = useSettingsStore.getState()
     expect(state.workspacePaneFraction).toBe(0.25)
     expect(state.remotePaneFraction).toBe(0.25)
+    expect(state.archivePaneFraction).toBe(0.25)
     expect(PANE_MIN_FRACTION).toBe(0.1)
     expect(PANE_MAX_FRACTION).toBe(0.6)
   })
 
   test('setters clamp out-of-range fractions to the pane bounds', () => {
-    const { setWorkspacePaneFraction, setRemotePaneFraction } = useSettingsStore.getState()
+    const { setWorkspacePaneFraction, setRemotePaneFraction, setArchivePaneFraction } =
+      useSettingsStore.getState()
     setWorkspacePaneFraction(0.01)
     expect(useSettingsStore.getState().workspacePaneFraction).toBe(0.1)
     setWorkspacePaneFraction(0.99)
@@ -411,11 +414,17 @@ describe('workspace pane fractions', () => {
     expect(useSettingsStore.getState().remotePaneFraction).toBe(0.1)
     setRemotePaneFraction(2)
     expect(useSettingsStore.getState().remotePaneFraction).toBe(0.6)
+    setArchivePaneFraction(0.01)
+    expect(useSettingsStore.getState().archivePaneFraction).toBe(0.1)
+    setArchivePaneFraction(2)
+    expect(useSettingsStore.getState().archivePaneFraction).toBe(0.6)
   })
 
   test('setters fall back to the default for non-finite values', () => {
     useSettingsStore.getState().setWorkspacePaneFraction(Number.NaN)
     expect(useSettingsStore.getState().workspacePaneFraction).toBe(0.25)
+    useSettingsStore.getState().setArchivePaneFraction(Number.NaN)
+    expect(useSettingsStore.getState().archivePaneFraction).toBe(0.25)
   })
 
   test('state persisted at version 7 without the pane keys rehydrates to the defaults', async () => {
@@ -429,11 +438,12 @@ describe('workspace pane fractions', () => {
     expect(useSettingsStore.persist.getOptions().version).toBe(7)
     expect(useSettingsStore.getState().workspacePaneFraction).toBe(0.25)
     expect(useSettingsStore.getState().remotePaneFraction).toBe(0.25)
+    expect(useSettingsStore.getState().archivePaneFraction).toBe(0.25)
   })
 
   test('hand-edited persisted fractions are re-clamped on rehydration', async () => {
     storage.setItem('agentboard-settings', JSON.stringify({
-      state: { workspacePaneFraction: 5, remotePaneFraction: 'garbage' },
+      state: { workspacePaneFraction: 5, remotePaneFraction: 'garbage', archivePaneFraction: -2 },
       version: 7,
     }))
 
@@ -441,6 +451,7 @@ describe('workspace pane fractions', () => {
 
     expect(useSettingsStore.getState().workspacePaneFraction).toBe(0.6)
     expect(useSettingsStore.getState().remotePaneFraction).toBe(0.25)
+    expect(useSettingsStore.getState().archivePaneFraction).toBe(0.1)
   })
 })
 

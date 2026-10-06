@@ -1,12 +1,14 @@
 // workspaceView.test.ts - Task 5.2 coverage: pure selectors associating
-// active, hibernating, and historical sessions with the deepest worktree and
-// producing change sections (with and without worktrees), unmatched-worktree
-// sections including the main worktree, Workspace/remote fallbacks,
-// attention counts, and the flattened visible navigation order.
+// active sessions with the deepest worktree and producing change sections
+// (with and without worktrees), unmatched-worktree sections including the
+// main worktree, Workspace/remote/Archive fallbacks (closed sessions collect
+// in Archive, newest first), attention counts, and the flattened visible
+// navigation order.
 import { describe, expect, test } from 'bun:test'
 import type { AgentSession, Session } from '@shared/types'
 import {
   changeSectionKey,
+  FALLBACK_ARCHIVE_SECTION_KEY,
   FALLBACK_REMOTE_SECTION_KEY,
   FALLBACK_WORKSPACE_SECTION_KEY,
   type WorkspaceSnapshot,
@@ -132,7 +134,7 @@ describe('buildWorkspaceView sectioning', () => {
     ])
   })
 
-  test('associates live, hibernating, and history sessions with the deepest worktree', () => {
+  test('associates live sessions with the deepest worktree; dormant rows go to Archive', () => {
     const view = buildWorkspaceView(
       snapshot,
       [
@@ -147,10 +149,9 @@ describe('buildWorkspaceView sectioning', () => {
     expect(findSection(view, MAIN_KEY)?.entries.map((e) => e.key)).toEqual(['s1'])
     expect(findSection(view, changeKey('add-auth'))?.entries.map((e) => e.key)).toEqual(['s2'])
     expect(findSection(view, '/repo/.git::/repo-nested')?.entries.map((e) => e.key)).toEqual(['s3'])
-    expect(findSection(view, '/repo/.git::/repo-linked')?.entries.map((e) => e.kind)).toEqual([
-      'hibernating',
-      'history',
-    ])
+    // Closed sessions leave their worktree sections entirely.
+    expect(findSection(view, '/repo/.git::/repo-linked')?.entries).toHaveLength(0)
+    expect(view.archive.entries.map((e) => e.kind)).toEqual(['hibernating', 'history'])
   })
 
   test('a change section without a worktree exists with no sessions', () => {
@@ -238,14 +239,15 @@ describe('buildWorkspaceView sectioning', () => {
     }
   })
 
-  test('remote-host agent sessions fall into the remote section', () => {
+  test('remote-host agent sessions land in Archive, not Remote', () => {
     const view = buildWorkspaceView(
       snapshot,
       [],
       [agentSession('rh', '/home/user/repo', { host: 'build-box' })],
       []
     )
-    expect(view.remote.entries).toHaveLength(1)
+    expect(view.remote.entries).toHaveLength(0)
+    expect(view.archive.entries.map((e) => e.key)).toEqual(['rh'])
   })
 
   test('path boundaries are respected (/repo does not capture /repo-x)', () => {
@@ -422,12 +424,15 @@ describe('buildWorkspaceView flattened navigation order', () => {
     const view = buildWorkspaceView(
       snapshot,
       [liveSession('s1', '/repo', { host: 'box-a' })],
-      [agentSession('h1', '/repo-linked', { host: 'box-b' })],
+      [
+        agentSession('h1', '/repo-linked', { host: 'box-b' }),
+        agentSession('h2', '/repo-linked', { host: 'box-a' }),
+      ],
       [],
       { filter: { projectFilters: [], hostFilters: ['box-a'] } }
     )
     expect(findSection(view, MAIN_KEY)?.entries).toHaveLength(1)
-    expect(findSection(view, '/repo/.git::/repo-linked')?.entries).toHaveLength(0)
+    expect(view.archive.entries.map((e) => e.key)).toEqual(['h2'])
   })
 
   test('empty worktrees (no sessions) remain visible as sections', () => {
@@ -435,5 +440,126 @@ describe('buildWorkspaceView flattened navigation order', () => {
     expect(view.sections).toHaveLength(5)
     expect(findSection(view, '/repo/.git::/repo-nested')?.entries).toHaveLength(0)
     expect(view.visibleEntries.map((e) => e.key)).toEqual(['s1'])
+  })
+})
+
+describe('buildWorkspaceView archive section', () => {
+  function chatSession(id: string, projectPath: string, overrides: Partial<Session> = {}): Session {
+    return liveSession(id, projectPath, { kind: 'chat', tmuxWindow: undefined, ...overrides })
+  }
+
+  test('archived chats leave their worktree section and land in Archive', () => {
+    const view = buildWorkspaceView(
+      snapshot,
+      [
+        chatSession('c1', `${ADD_AUTH_WT}/src`, { archivedAt: '2026-02-01T00:00:00.000Z' }),
+        chatSession('c2', `${ADD_AUTH_WT}/src`),
+      ],
+      [],
+      []
+    )
+    expect(findSection(view, changeKey('add-auth'))?.entries.map((e) => e.key)).toEqual(['c2'])
+    expect(view.archive.entries.map((e) => e.key)).toEqual(['c1'])
+    expect(view.workspace.entries).toHaveLength(0)
+  })
+
+  test('a restored chat returns to the section derived from its project path', () => {
+    const archived = buildWorkspaceView(
+      snapshot,
+      [chatSession('c1', `${ADD_AUTH_WT}/src`, { archivedAt: '2026-02-01T00:00:00.000Z' })],
+      [],
+      []
+    )
+    expect(archived.archive.entries).toHaveLength(1)
+
+    const restored = buildWorkspaceView(
+      snapshot,
+      [chatSession('c1', `${ADD_AUTH_WT}/src`, { archivedAt: null })],
+      [],
+      []
+    )
+    expect(restored.archive.entries).toHaveLength(0)
+    expect(findSection(restored, changeKey('add-auth'))?.entries.map((e) => e.key)).toEqual(['c1'])
+  })
+
+  test('archive rows sort newest first by archivedAt ?? lastActivity', () => {
+    const view = buildWorkspaceView(
+      snapshot,
+      [
+        // Sorts by archivedAt even though its lastActivity is newer.
+        chatSession('c-new', '/repo', {
+          archivedAt: '2026-03-01T00:00:00.000Z',
+          lastActivity: '2025-12-01T00:00:00.000Z',
+        }),
+        chatSession('c-old', '/repo', {
+          archivedAt: '2026-01-01T00:00:00.000Z',
+          lastActivity: '2026-01-01T00:00:00.000Z',
+        }),
+      ],
+      // Hibernating row newer than c-old's archive time but older than
+      // c-new's.
+      [agentSession('h-recent', '/repo', { lastActivityAt: '2026-02-01T00:00:00.000Z' })],
+      [agentSession('y-older', '/repo', { lastActivityAt: '2025-10-01T00:00:00.000Z' })]
+    )
+    expect(view.archive.entries.map((e) => e.key)).toEqual([
+      'c-new', // archivedAt 2026-03-01
+      'h-recent', // lastActivityAt 2026-02-01
+      'c-old', // archivedAt 2026-01-01
+      'y-older', // history lastActivityAt 2025-10-01
+    ])
+  })
+
+  test('filters hide archived rows and keep permission as hidden attention', () => {
+    const view = buildWorkspaceView(
+      snapshot,
+      [
+        chatSession('c-perm', '/plain/one', {
+          archivedAt: '2026-02-01T00:00:00.000Z',
+          status: 'permission',
+        }),
+        chatSession('c-other', '/plain/two', { archivedAt: '2026-02-02T00:00:00.000Z' }),
+      ],
+      [],
+      [],
+      { filter: { projectFilters: ['/plain/two'], hostFilters: [] } }
+    )
+    expect(view.archive.entries.map((e) => e.key)).toEqual(['c-other'])
+    expect(view.archive.hiddenAttentionCount).toBe(1)
+    expect(view.archive.attentionCount).toBe(0)
+  })
+
+  test('archive attention collapses into the hidden count and drops rows from navigation', () => {
+    const view = buildWorkspaceView(
+      snapshot,
+      [
+        chatSession('c-perm', '/repo', {
+          archivedAt: '2026-02-01T00:00:00.000Z',
+          status: 'permission',
+        }),
+        liveSession('s1', '/repo'),
+      ],
+      [],
+      [],
+      { collapsedSectionIds: [FALLBACK_ARCHIVE_SECTION_KEY] }
+    )
+    expect(view.archive.collapsed).toBe(true)
+    expect(view.archive.attentionCount).toBe(0)
+    expect(view.archive.hiddenAttentionCount).toBe(1)
+    expect(view.visibleEntries.map((e) => e.key)).toEqual(['s1'])
+  })
+
+  test('archive rows navigate after workspace and remote rows', () => {
+    const view = buildWorkspaceView(
+      snapshot,
+      [
+        chatSession('c1', '/plain/archive-chat', { archivedAt: '2026-02-01T00:00:00.000Z' }),
+        liveSession('s1', '/repo'),
+        liveSession('w1', '/plain'),
+        liveSession('r1', '/remote', { remote: true }),
+      ],
+      [],
+      []
+    )
+    expect(view.visibleEntries.map((e) => e.key)).toEqual(['s1', 'w1', 'r1', 'c1'])
   })
 })

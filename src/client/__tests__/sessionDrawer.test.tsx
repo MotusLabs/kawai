@@ -487,6 +487,106 @@ describe('SessionDrawer', () => {
     })
   })
 
+  test('shows the Archive pane with the same grouping, collapse, and sizing', () => {
+    const { createNodeMock } = createDrawerMock()
+
+    const snapshot: WorkspaceSnapshot = {
+      repositories: [
+        {
+          id: '/repo/.git',
+          name: 'repo',
+          commonDir: '/repo/.git',
+          stale: false,
+          worktrees: [
+            {
+              id: '/repo/.git::/repo',
+              repositoryId: '/repo/.git',
+              path: '/repo',
+              branch: 'main',
+              headRevision: 'aaaaaaa1',
+              detached: false,
+              isMain: true,
+              dirty: false,
+              openspec: { changes: [], stale: false },
+            },
+          ],
+          branches: [],
+        },
+      ],
+      generatedAt: '2024-01-01T00:00:00.000Z',
+    }
+    const archivedChat: Session = {
+      ...baseSession,
+      id: 'chat-archived',
+      kind: 'chat',
+      tmuxWindow: undefined,
+      projectPath: '/repo/src',
+      archivedAt: '2026-02-01T00:00:00.000Z',
+    }
+    const history = {
+      sessionId: 'hist-1',
+      logFilePath: '/tmp/hist-1.jsonl',
+      projectPath: '/repo',
+      agentType: 'claude' as const,
+      displayName: 'hist-1',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      lastActivityAt: '2024-01-01T00:00:00.000Z',
+      isActive: false,
+    }
+    const liveInRepo: Session = { ...baseSession, projectPath: '/repo/src' }
+    const sessions = [liveInRepo, archivedChat]
+    useSettingsStore.setState({ archivePaneFraction: 0.3, historySessionsExpanded: true })
+    const view = buildWorkspaceView(snapshot, sessions, [], [history])
+    const collapseCalls: string[] = []
+
+    let renderer: TestRenderer.ReactTestRenderer
+    act(() => {
+      renderer = TestRenderer.create(
+        <SessionDrawer
+          isOpen
+          onClose={() => {}}
+          sessions={sessions}
+          historySessions={[history]}
+          selectedSessionId={null}
+          onSelect={() => {}}
+          onRename={() => {}}
+          onNewSession={() => true}
+          loading={false}
+          error={null}
+          workspaceView={view}
+          onToggleSectionCollapse={(key) => collapseCalls.push(key)}
+        />,
+        { createNodeMock }
+      )
+    })
+
+    // Grouping: the archived chat left its worktree section for the Archive
+    // pane, together with the history row.
+    const archivePane = renderer!.root.findByProps({ 'data-testid': 'archive-section' })
+    const archiveCards = archivePane.findAllByProps({ 'data-testid': 'session-card' })
+    expect(archiveCards.map((card) => card.props['data-session-id'])).toEqual(['chat-archived'])
+    const historyRows = archivePane.findAllByProps({ 'data-testid': 'grouped-history-rows' })
+    expect(historyRows).toHaveLength(1)
+    expect(historyRows[0].findAllByType('button').length).toBeGreaterThan(0)
+    const liveGroup = renderer!.root.findByProps({ 'data-testid': 'worktree-section' })
+    expect(liveGroup.findAllByProps({ 'data-testid': 'session-card' })).toHaveLength(1)
+
+    // Sizing: the drawer shares the desktop sidebar's stored fraction.
+    expect(archivePane.props.style.flex).toBe('0 1 30%')
+
+    // Collapse: the Archive header toggles through its reserved key.
+    const header = archivePane.findByProps({ 'data-testid': 'fallback-section-header' })
+    expect(header.props['data-section-key']).toBe('fallback::archive')
+    act(() => {
+      header.findByProps({ 'aria-expanded': true }).props.onClick()
+    })
+    expect(collapseCalls).toEqual(['fallback::archive'])
+
+    act(() => {
+      renderer!.unmount()
+    })
+  })
+
   test('ignores short swipe gestures', () => {
     const closeCalls: number[] = []
     const { listeners, createNodeMock } = createDrawerMock()

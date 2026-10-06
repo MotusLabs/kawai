@@ -186,7 +186,7 @@ afterEach(() => {
 })
 
 describe('SessionList grouped rendering', () => {
-  test('renders live, hibernating, and history rows inside their worktree groups', () => {
+  test('renders live rows inside their worktree groups and closed rows in Archive', () => {
     const sessions: Session[] = [
       baseSession,
       { ...baseSession, id: 'live-feat', projectPath: '/repo/feat/src' },
@@ -213,13 +213,20 @@ describe('SessionList grouped rendering', () => {
     const mainCards = mainGroup.findAllByProps({ 'data-testid': 'session-card' })
     expect(mainCards.map((c) => c.props['data-session-id'])).toEqual(['live-main'])
 
-    // History is collapsed by default (persisted setting) — the row stays hidden.
-    expect(mainGroup.findAllByProps({ 'data-testid': 'grouped-history-rows' })).toHaveLength(0)
+    // Closed rows left the worktree groups: the Archive pane holds them.
+    // History is collapsed by default (persisted setting) — only the
+    // hibernating row shows.
+    const archivePane = renderer.root.findByProps({ 'data-testid': 'archive-section' })
+    expect(archivePane.findAllByProps({ 'data-testid': 'hibernating-session-card' })).toHaveLength(1)
+    expect(archivePane.findAllByProps({ 'data-testid': 'grouped-history-rows' })).toHaveLength(0)
+    for (const group of groups) {
+      expect(group.findAllByProps({ 'data-testid': 'hibernating-session-card' })).toHaveLength(0)
+      expect(group.findAllByProps({ 'data-testid': 'grouped-history-rows' })).toHaveLength(0)
+    }
 
     const featGroup = groups[1]
     const featCards = featGroup.findAllByProps({ 'data-testid': 'session-card' })
     expect(featCards.map((c) => c.props['data-session-id'])).toEqual(['live-feat'])
-    expect(featGroup.findAllByProps({ 'data-testid': 'hibernating-session-card' })).toHaveLength(1)
 
     // Empty worktree group renders its header without any rows.
     const emptyGroup = groups[2]
@@ -301,7 +308,7 @@ describe('SessionList grouped rendering', () => {
     act(() => renderer.unmount())
   })
 
-  test('dormant toggles expose hibernating and history rows inside groups', () => {
+  test('dormant toggles expose hibernating and history rows inside the Archive pane', () => {
     const hibernating = [makeAgentSession('hib-feat', '/repo/feat')]
     const history = [makeAgentSession('hist-main', '/repo/main')]
     const view = makeView([baseSession], hibernating, history)
@@ -381,8 +388,8 @@ describe('SessionList grouped rendering', () => {
     })
     expect(kills).toEqual(['live-feat'])
 
-    // Hibernating wake from the group's dormant rows (context-menu action).
-    const hibernatingCard = featGroup.findByProps({ 'data-testid': 'hibernating-session-card' })
+    // Hibernating wake from the Archive pane's dormant rows (context-menu action).
+    const hibernatingCard = renderer.root.findByProps({ 'data-testid': 'hibernating-session-card' })
     act(() => {
       hibernatingCard.props.onClick()
     })
@@ -406,7 +413,7 @@ describe('SessionList grouped rendering', () => {
     act(() => renderer.unmount())
   })
 
-  test('history pagination caps rows per group and Show more extends the limit', () => {
+  test('history pagination caps rows in the Archive pane and Show more extends the limit', () => {
     const history = Array.from({ length: 25 }, (_, i) =>
       makeAgentSession(`hist-${i}`, '/repo/main')
     )
@@ -723,13 +730,24 @@ describe('SessionList fallback panes layout', () => {
     remote: true,
     host: 'box.example',
   }
+  const archivedChat: Session = {
+    ...baseSession,
+    id: 'chat-archived',
+    kind: 'chat',
+    tmuxWindow: undefined,
+    archivedAt: '2026-02-01T00:00:00.000Z',
+  }
 
   beforeEach(() => {
-    useSettingsStore.setState({ workspacePaneFraction: 0.25, remotePaneFraction: 0.25 })
+    useSettingsStore.setState({
+      workspacePaneFraction: 0.25,
+      remotePaneFraction: 0.25,
+      archivePaneFraction: 0.25,
+    })
   })
 
   test('docks fallback sections as panes below the scrolling flow region', () => {
-    const sessions = [baseSession, plainSession, remoteSession]
+    const sessions = [baseSession, plainSession, remoteSession, archivedChat]
     const view = makeView(sessions, [], [])
     const { renderer } = renderList({ sessions, workspaceView: view })
 
@@ -741,16 +759,32 @@ describe('SessionList fallback panes layout', () => {
     expect(flow.findAllByProps({ 'data-testid': 'worktree-section' })).toHaveLength(3)
     expect(flow.findAllByProps({ 'data-testid': 'workspace-section' })).toHaveLength(0)
     expect(flow.findAllByProps({ 'data-testid': 'remote-section' })).toHaveLength(0)
+    expect(flow.findAllByProps({ 'data-testid': 'archive-section' })).toHaveLength(0)
 
     const workspacePane = navigator.findByProps({ 'data-testid': 'workspace-section' })
     const remotePane = navigator.findByProps({ 'data-testid': 'remote-section' })
+    const archivePane = navigator.findByProps({ 'data-testid': 'archive-section' })
 
-    // Default basis is 25% of the navigator height, with rows scrolling
-    // inside the pane rather than the flow region.
+    // Docked top to bottom: the change/worktree flow region, then Workspace,
+    // Remote, and Archive at the very bottom, each on its default 25% basis
+    // with rows scrolling inside the pane rather than the flow region.
+    const sectionOrder = navigator
+      .findAll((instance) => typeof instance.props?.['data-testid'] === 'string')
+      .filter((instance) => instance.props['data-testid'].endsWith('-section'))
+      .map((instance) => instance.props['data-testid'])
+    expect(sectionOrder).toEqual([
+      'worktree-section',
+      'worktree-section',
+      'worktree-section',
+      'workspace-section',
+      'remote-section',
+      'archive-section',
+    ])
     expect(workspacePane.props.style.flex).toBe('0 1 25%')
     expect(remotePane.props.style.flex).toBe('0 1 25%')
-    expect(remotePane.props.style.minHeight).toBe(PANE_MIN_HEIGHT)
-    expect(remotePane.findByProps({ 'data-testid': 'fallback-pane-scroll' })).toBeTruthy()
+    expect(archivePane.props.style.flex).toBe('0 1 25%')
+    expect(archivePane.props.style.minHeight).toBe(PANE_MIN_HEIGHT)
+    expect(archivePane.findByProps({ 'data-testid': 'fallback-pane-scroll' })).toBeTruthy()
 
     // The flow region keeps a minimum height floor so short navigators
     // shrink the panes instead of displacing the sections above.
@@ -796,6 +830,7 @@ describe('SessionList fallback panes layout', () => {
 
     expect(renderer.root.findAllByProps({ 'data-testid': 'workspace-section' })).toHaveLength(0)
     expect(renderer.root.findAllByProps({ 'data-testid': 'remote-section' })).toHaveLength(0)
+    expect(renderer.root.findAllByProps({ 'data-testid': 'archive-section' })).toHaveLength(0)
     // The flow region still renders and takes the full navigator height.
     expect(
       renderer.root.findByProps({ 'data-testid': 'workspace-flow-region' })
@@ -805,7 +840,7 @@ describe('SessionList fallback panes layout', () => {
   })
 
   test('expanded panes carry a resize handle wired to their own fraction setter', () => {
-    const sessions = [baseSession, plainSession, remoteSession]
+    const sessions = [baseSession, plainSession, remoteSession, archivedChat]
     const view = makeView(sessions, [], [])
     const { renderer } = renderList({ sessions, workspaceView: view })
 
@@ -821,6 +856,15 @@ describe('SessionList fallback panes layout', () => {
     expect(useSettingsStore.getState().remotePaneFraction).toBe(0.27)
     expect(useSettingsStore.getState().workspacePaneFraction).toBe(0.25)
 
+    const archivePane = renderer.root.findByProps({ 'data-testid': 'archive-section' })
+    const archiveHandle = archivePane.findByProps({ 'data-testid': 'pane-resize-handle' })
+    expect(archiveHandle.props['aria-label']).toBe('Resize Archive pane')
+    act(() => {
+      archiveHandle.props.onKeyDown({ key: 'ArrowUp', preventDefault: () => {} })
+    })
+    expect(useSettingsStore.getState().archivePaneFraction).toBe(0.27)
+    expect(useSettingsStore.getState().remotePaneFraction).toBe(0.27)
+
     const workspacePane = renderer.root.findByProps({ 'data-testid': 'workspace-section' })
     const workspaceHandle = workspacePane.findByProps({ 'data-testid': 'pane-resize-handle' })
     expect(workspaceHandle.props['aria-label']).toBe('Resize Workspace pane')
@@ -828,7 +872,30 @@ describe('SessionList fallback panes layout', () => {
       workspaceHandle.props.onKeyDown({ key: 'End', preventDefault: () => {} })
     })
     expect(useSettingsStore.getState().workspacePaneFraction).toBe(0.6)
-    expect(useSettingsStore.getState().remotePaneFraction).toBe(0.27)
+    expect(useSettingsStore.getState().archivePaneFraction).toBe(0.27)
+
+    act(() => renderer.unmount())
+  })
+
+  test('a collapsed pane frees its share to the remaining expanded panes', () => {
+    useSettingsStore.setState({ remotePaneFraction: 0.4, archivePaneFraction: 0.3 })
+    const sessions = [baseSession, plainSession, remoteSession, archivedChat]
+    const view = makeView(sessions, [], [], { collapsed: ['fallback::remote'] })
+    const { renderer } = renderList({ sessions, workspaceView: view })
+
+    const remotePane = renderer.root.findByProps({ 'data-testid': 'remote-section' })
+    expect(remotePane.props.style.flex).toBe('0 0 auto')
+    expect(remotePane.props.style.minHeight).toBeUndefined()
+
+    // The remaining expanded panes keep their stored basis; the freed height
+    // flows to them and the change/worktree region above via flex layout.
+    const workspacePane = renderer.root.findByProps({ 'data-testid': 'workspace-section' })
+    const archivePane = renderer.root.findByProps({ 'data-testid': 'archive-section' })
+    expect(workspacePane.props.style.flex).toBe('0 1 25%')
+    expect(archivePane.props.style.flex).toBe('0 1 30%')
+
+    // Re-expanding restores the stored Remote fraction untouched.
+    expect(useSettingsStore.getState().remotePaneFraction).toBe(0.4)
 
     act(() => renderer.unmount())
   })

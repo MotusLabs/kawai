@@ -113,10 +113,10 @@ const SIDEBAR_MIN_WIDTH = 180
 const SIDEBAR_MAX_WIDTH = 400
 const SIDEBAR_DEFAULT_WIDTH = 240
 
-// Workspace/Remote pane height constraints, as fractions of the navigator
-// height (the flex column below the filter bar). The joint constraint —
-// both panes plus the flow region's minimum — is enforced by CSS flex
-// shrink, not by these per-pane bounds.
+// Workspace/Remote/Archive pane height constraints, as fractions of the
+// navigator height (the flex column below the filter bar). The joint
+// constraint — every pane plus the flow region's minimum — is enforced by
+// CSS flex shrink, not by these per-pane bounds.
 const PANE_MIN_FRACTION = 0.1
 const PANE_MAX_FRACTION = 0.6
 const PANE_DEFAULT_FRACTION = 0.25
@@ -178,6 +178,9 @@ interface SettingsState {
   /** Remote pane height as a fraction of the navigator height. */
   remotePaneFraction: number
   setRemotePaneFraction: (fraction: number) => void
+  /** Archive pane height as a fraction of the navigator height. */
+  archivePaneFraction: number
+  setArchivePaneFraction: (fraction: number) => void
   projectFilters: string[]
   setProjectFilters: (filters: string[]) => void
   hostFilters: string[]
@@ -253,6 +256,9 @@ export const useSettingsStore = create<SettingsState>()(
       remotePaneFraction: PANE_DEFAULT_FRACTION,
       setRemotePaneFraction: (fraction) =>
         set({ remotePaneFraction: sanitizePaneFraction(fraction) }),
+      archivePaneFraction: PANE_DEFAULT_FRACTION,
+      setArchivePaneFraction: (fraction) =>
+        set({ archivePaneFraction: sanitizePaneFraction(fraction) }),
       projectFilters: [],
       setProjectFilters: (filters) => set({ projectFilters: filters }),
       hostFilters: [],
@@ -317,6 +323,7 @@ export const useSettingsStore = create<SettingsState>()(
           ...merged,
           workspacePaneFraction: sanitizePaneFraction(merged.workspacePaneFraction),
           remotePaneFraction: sanitizePaneFraction(merged.remotePaneFraction),
+          archivePaneFraction: sanitizePaneFraction(merged.archivePaneFraction),
         }
       },
       migrate: (persistedState: unknown, version: number) => {

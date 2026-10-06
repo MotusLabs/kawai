@@ -5,6 +5,7 @@ import type {
 } from '../types'
 import {
   changeSectionKey,
+  FALLBACK_ARCHIVE_SECTION_KEY,
   FALLBACK_REMOTE_SECTION_KEY,
   FALLBACK_WORKSPACE_SECTION_KEY,
   repositoryId,
@@ -51,7 +52,11 @@ describe('workspace ids', () => {
 
 describe('fallback section keys', () => {
   test('reserved keys never collide with change or worktree section identities', () => {
-    const reserved = [FALLBACK_WORKSPACE_SECTION_KEY, FALLBACK_REMOTE_SECTION_KEY]
+    const reserved = [
+      FALLBACK_WORKSPACE_SECTION_KEY,
+      FALLBACK_REMOTE_SECTION_KEY,
+      FALLBACK_ARCHIVE_SECTION_KEY,
+    ]
 
     // changeSectionKey always embeds the `::change::` separator, so even
     // adversarial repository/change names cannot produce a bare
@@ -59,6 +64,7 @@ describe('fallback section keys', () => {
     const changeKeys = [
       changeSectionKey('fallback', 'workspace'),
       changeSectionKey('fallback', 'remote'),
+      changeSectionKey('fallback', 'archive'),
       changeSectionKey('/fallback/.git', 'workspace'),
       changeSectionKey('/repo/.git', 'fallback::remote'),
     ]
