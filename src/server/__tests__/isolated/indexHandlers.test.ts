@@ -6,6 +6,7 @@ import type { Session, ServerMessage, TerminalSession } from '@shared/types'
 import type { AgentSessionRecord, ClaimCurrentWindowPatch } from '../../db'
 import { TmuxTimeoutError } from '../../tmuxTimeout'
 import { TMUX_FIELD_SEPARATOR } from '../../tmuxFormat'
+import { BUILD_VERSION } from '../../version'
 
 const bunAny = Bun as typeof Bun & {
   serve: typeof Bun.serve
@@ -5590,12 +5591,14 @@ describe('server fetch handlers', () => {
       protocol: string
       cwd?: string
       defaultProjectDir?: string
+      version: string
     }
     expect(payload.port).toBe(4040)
     expect(payload.protocol).toBe('http')
     expect(payload.tailscaleIp).toBe('100.64.0.42')
     expect(payload.cwd).toBe(process.cwd())
     expect(payload.defaultProjectDir).toBe('')
+    expect(payload.version).toBe(BUILD_VERSION)
   })
 
   test('server-info reports the configured default project directory', async () => {

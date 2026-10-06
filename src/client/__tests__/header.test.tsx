@@ -110,4 +110,28 @@ describe('Header', () => {
       renderer.unmount()
     })
   })
+
+  test('shows the server version as a tooltip on the title', () => {
+    const renderer = TestRenderer.create(
+      <Header connectionStatus="connected" onNewSession={() => {}} onOpenSettings={() => {}} tailscaleIp={null} version="1.0.0-17" />
+    )
+
+    expect(renderer.root.findByType('h1').props.title).toBe('Kawai v1.0.0-17')
+
+    act(() => {
+      renderer.unmount()
+    })
+  })
+
+  test('omits the title tooltip without a version', () => {
+    const renderer = TestRenderer.create(
+      <Header connectionStatus="connected" onNewSession={() => {}} onOpenSettings={() => {}} tailscaleIp={null} />
+    )
+
+    expect(renderer.root.findByType('h1').props.title).toBeUndefined()
+
+    act(() => {
+      renderer.unmount()
+    })
+  })
 })

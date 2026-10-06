@@ -29,12 +29,15 @@ interface SettingsModalProps {
    * /api/server-info. Shown as the placeholder default.
    */
   serverDefaultDir?: string | null
+  /** Server build version from /api/server-info, shown beside the title. */
+  version?: string | null
 }
 
 export default function SettingsModal({
   isOpen,
   onClose,
   serverDefaultDir = null,
+  version = null,
 }: SettingsModalProps) {
   const defaultProjectDir = useSettingsStore((state) => state.defaultProjectDir)
   const setDefaultProjectDir = useSettingsStore(
@@ -411,9 +414,16 @@ export default function SettingsModal({
         className="w-full max-w-lg max-h-[90vh] flex flex-col border border-border bg-elevated"
       >
         <div className="p-6 pb-0">
-          <h2 className="text-sm font-semibold uppercase tracking-wider text-primary text-balance">
-            Settings
-          </h2>
+          <div className="flex items-baseline justify-between gap-4">
+            <h2 className="text-sm font-semibold uppercase tracking-wider text-primary text-balance">
+              Settings
+            </h2>
+            {version && (
+              <span className="text-xs text-muted tabular-nums select-text">
+                v{version}
+              </span>
+            )}
+          </div>
           <p className="mt-2 text-xs text-muted text-pretty">
             Configure default directory, command presets, and display options.
           </p>

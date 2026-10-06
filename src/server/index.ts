@@ -1766,6 +1766,8 @@ app.get('/api/server-info', (c) => {
     // AGENTBOARD_PROJECT_DIR, when set: takes precedence over cwd as the
     // default project directory. An explicit browser setting still wins.
     defaultProjectDir: config.defaultProjectDir,
+    // Build version of this server (see ./version), shown in the UI.
+    version: BUILD_VERSION,
   })
 })
 

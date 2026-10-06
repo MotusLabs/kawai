@@ -351,4 +351,40 @@ describe('SettingsModal', () => {
       renderer.unmount()
     })
   })
+
+  test('shows the server version beside the title', () => {
+    let renderer!: TestRenderer.ReactTestRenderer
+
+    act(() => {
+      renderer = TestRenderer.create(
+        <SettingsModal isOpen onClose={() => {}} version="1.0.0-17" />
+      )
+    })
+
+    const versionLabel = renderer.root.findAllByType('span').find((node) =>
+      node.children.join('') === 'v1.0.0-17'
+    )
+    expect(versionLabel).toBeDefined()
+
+    act(() => {
+      renderer.unmount()
+    })
+  })
+
+  test('omits the version label until the server reports one', () => {
+    let renderer!: TestRenderer.ReactTestRenderer
+
+    act(() => {
+      renderer = TestRenderer.create(<SettingsModal isOpen onClose={() => {}} />)
+    })
+
+    const versionLabel = renderer.root.findAllByType('span').find((node) =>
+      node.children.join('').startsWith('v1.')
+    )
+    expect(versionLabel).toBeUndefined()
+
+    act(() => {
+      renderer.unmount()
+    })
+  })
 })
