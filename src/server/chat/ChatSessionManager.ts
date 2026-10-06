@@ -64,6 +64,16 @@ export type ChatActionResult =
 const ARCHIVED_SESSION_ERROR =
   'This chat session is archived. Restore it to continue the conversation.'
 
+/** The dynamic SDK import failed; surfaced by every spawn path. */
+function sdkLoadError(error: unknown): string {
+  return (
+    'The Claude Agent SDK could not be loaded, so chat sessions are unavailable. ' +
+    `Check the @anthropic-ai/claude-agent-sdk install: ${
+      error instanceof Error ? error.message : String(error)
+    }`
+  )
+}
+
 export class ChatSessionManager {
   private readonly options: ChatSessionManagerOptions
   private readonly records = new Map<string, ChatSessionRecord>()
@@ -204,48 +214,15 @@ export class ChatSessionManager {
     if (!record) {
       return { ok: false, error: `Unknown chat session ${sessionId}` }
     }
-    if (record.archivedAt != null) {
-      return { ok: false, error: ARCHIVED_SESSION_ERROR }
-    }
-    if (
-      record.sdkSessionId &&
-      !this.drivers.has(sessionId) &&
-      !this.driverPromises.has(sessionId) &&
-      !findTranscriptPath(record.sdkSessionId)
-    ) {
-      return {
-        ok: false,
-        error:
-          'Cannot resume this conversation: the agent transcript is missing. ' +
-          `Restore ${record.sdkSessionId}.jsonl or create a new chat session.`,
-      }
-    }
-    const live = this.drivers.get(sessionId)
-    if (
-      (!live || live.isDead) &&
-      !this.driverPromises.has(sessionId) &&
-      !(this.options.isDirectory ?? isExistingDirectory)(record.projectPath)
-    ) {
-      // A running process keeps its cwd; only a (re)spawn needs the directory.
-      return {
-        ok: false,
-        error:
-          `Cannot start the agent: the project directory ${record.projectPath} no longer exists. ` +
-          'Create a new chat session in an existing directory.',
-      }
+    const blocked = this.startBlocker(record)
+    if (blocked) {
+      return { ok: false, error: blocked }
     }
     let driver: ChatSessionDriver | null
     try {
       driver = await this.ensureDriver(sessionId)
     } catch (error) {
-      return {
-        ok: false,
-        error:
-          'The Claude Agent SDK could not be loaded, so chat sessions are unavailable. ' +
-          `Check the @anthropic-ai/claude-agent-sdk install: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
-      }
+      return { ok: false, error: sdkLoadError(error) }
     }
     if (!driver) {
       return { ok: false, error: `Unknown chat session ${sessionId}` }
@@ -386,6 +363,42 @@ export class ChatSessionManager {
   }
 
   // ---------------------------------------------------------------- internals
+
+  /**
+   * The single start guard (add-chat-slash-commands design D1): the refusal
+   * error for a spawn that must not happen — an archived session, a stored
+   * conversation whose transcript is missing, or a project directory that no
+   * longer exists — or null when a (re)spawn may proceed. `send` and `start`
+   * (attach) both go through it, so their errors are identical.
+   */
+  private startBlocker(record: ChatSessionRecord): string | null {
+    if (record.archivedAt != null) return ARCHIVED_SESSION_ERROR
+    const spawning = !this.driverPromises.has(record.sessionId)
+    if (
+      record.sdkSessionId &&
+      !this.drivers.has(record.sessionId) &&
+      spawning &&
+      !findTranscriptPath(record.sdkSessionId)
+    ) {
+      return (
+        'Cannot resume this conversation: the agent transcript is missing. ' +
+        `Restore ${record.sdkSessionId}.jsonl or create a new chat session.`
+      )
+    }
+    const live = this.drivers.get(record.sessionId)
+    if (
+      (!live || live.isDead) &&
+      spawning &&
+      !(this.options.isDirectory ?? isExistingDirectory)(record.projectPath)
+    ) {
+      // A running process keeps its cwd; only a (re)spawn needs the directory.
+      return (
+        `Cannot start the agent: the project directory ${record.projectPath} no longer exists. ` +
+        'Create a new chat session in an existing directory.'
+      )
+    }
+    return null
+  }
 
   /**
    * Tool call ids a live (non-dead) driver has seen. Transcript replay must
