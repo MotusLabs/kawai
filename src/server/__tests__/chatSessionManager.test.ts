@@ -593,6 +593,126 @@ describe('ChatSessionManager', () => {
     expect(manager.getSnapshot(id)).toBeNull()
   })
 
+  describe('start on attach', () => {
+    test('starts the agent without a prompt; sends reuse the same driver', async () => {
+      process.env.ANTHROPIC_API_KEY = 'sk-test-key'
+      const { manager, handles, events } = createHarness(db)
+      const created = manager.createSession({ projectPath: '/tmp/proj' })
+      if (!created.ok) throw new Error('create failed')
+      const sessionId = created.session.id
+
+      expect(await manager.start(sessionId)).toEqual({ ok: true })
+      expect(handles).toHaveLength(1)
+      // No prompt, no turn: the spawn alone produced no events.
+      expect(events).toEqual([])
+      expect(manager.getSnapshot(sessionId)?.status).toBe('waiting')
+
+      expect(await manager.send(sessionId, 'hello')).toEqual({ ok: true })
+      expect(handles).toHaveLength(1) // one driver for start + send
+      expect(handles[0]!.options.cwd).toBe('/tmp/proj')
+      manager.shutdown()
+    })
+
+    test('start is refused for archived sessions and starts nothing', async () => {
+      process.env.ANTHROPIC_API_KEY = 'sk-test-key'
+      const { manager, handles } = createHarness(db)
+      const created = manager.createSession({ projectPath: '/tmp/proj' })
+      if (!created.ok) throw new Error('create failed')
+      manager.archive(created.session.id)
+      expect(await manager.start(created.session.id)).toEqual({
+        ok: false,
+        error: 'This chat session is archived. Restore it to continue the conversation.',
+      })
+      expect(handles).toHaveLength(0)
+    })
+
+    test('start is refused when the project directory is missing', async () => {
+      process.env.ANTHROPIC_API_KEY = 'sk-test-key'
+      let exists = true
+      const { manager, handles } = createHarness(db, () => exists)
+      const created = manager.createSession({ projectPath: '/tmp/proj' })
+      if (!created.ok) throw new Error('create failed')
+      exists = false
+      expect(await manager.start(created.session.id)).toMatchObject({ ok: false })
+      expect(handles).toHaveLength(0)
+      // The refusal keeps the session: sending reports the same reason.
+      expect((await manager.send(created.session.id, 'hi')).ok).toBe(false)
+    })
+
+    test('start is refused when the stored transcript is missing', async () => {
+      process.env.ANTHROPIC_API_KEY = 'sk-test-key'
+      const dbPath = path.join(tempDir, 'start-ghost.db')
+      const dbA = initDatabase({ path: dbPath })
+      const harnessA = createHarness(dbA)
+      const created = harnessA.manager.createSession({ projectPath: '/tmp/proj' })
+      if (!created.ok) throw new Error('create failed')
+      const sessionId = created.session.id
+      await harnessA.manager.send(sessionId, 'one')
+      harnessA.handles[0]!.push(initMessage('sdk-start-ghost'))
+      await flush()
+      dbA.close()
+
+      // Restart with no transcript on disk: attach must not silently start a
+      // fresh conversation under the stored id.
+      const dbB = initDatabase({ path: dbPath })
+      const harnessB = createHarness(dbB)
+      const result = await harnessB.manager.start(sessionId)
+      expect(result.ok).toBe(false)
+      if (!result.ok) expect(result.error).toContain('sdk-start-ghost')
+      expect(harnessB.handles).toHaveLength(0)
+      dbB.close()
+    })
+
+    test('concurrent start and send share one driver', async () => {
+      process.env.ANTHROPIC_API_KEY = 'sk-test-key'
+      const { manager, handles } = createHarness(db)
+      const created = manager.createSession({ projectPath: '/tmp/proj' })
+      if (!created.ok) throw new Error('create failed')
+      const sessionId = created.session.id
+      const [started, sent] = await Promise.all([
+        manager.start(sessionId),
+        manager.send(sessionId, 'hello'),
+      ])
+      expect(started).toEqual({ ok: true })
+      expect(sent).toEqual({ ok: true })
+      expect(handles).toHaveLength(1)
+    })
+
+    test('a spawn failure is reported as a session error and retried later', async () => {
+      process.env.ANTHROPIC_API_KEY = 'sk-test-key'
+      const registry = new SessionRegistry()
+      const events: Array<{ sessionId: string; event: ChatEvent }> = []
+      let broken = true
+      const handles: FakeHandle[] = []
+      const failingFactory: ChatQueryFactory = (params) => {
+        if (broken) throw new Error('spawn exploded')
+        return fakeQueryFactory(handles)(params)
+      }
+      const manager = new ChatSessionManager({
+        isDirectory: anyDirectory,
+        db, registry,
+        onEvent: (sessionId, event) => events.push({ sessionId, event }),
+        queryFactory: failingFactory,
+      })
+      const created = manager.createSession({ projectPath: '/tmp/proj' })
+      if (!created.ok) throw new Error('create failed')
+      const sessionId = created.session.id
+
+      expect(await manager.start(sessionId)).toEqual({ ok: true })
+      await flush()
+      const error = events.find((e) => e.event.type === 'error')
+      expect(error?.event).toMatchObject({ message: 'The agent process failed to start: spawn exploded' })
+      // The session survives the failed spawn.
+      expect(db.getChatSession(sessionId)).not.toBeNull()
+
+      // Once the spawn works again, a later start respawns.
+      broken = false
+      expect(await manager.start(sessionId)).toEqual({ ok: true })
+      expect(handles).toHaveLength(1)
+      manager.shutdown()
+    })
+  })
+
   test('first send lazily spawns the driver and persists sdkSessionId immediately', async () => {
     process.env.ANTHROPIC_API_KEY = 'sk-test-key'
     const { manager, registry, handles, events } = createHarness(db)

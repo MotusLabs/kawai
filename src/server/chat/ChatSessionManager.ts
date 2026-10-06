@@ -232,6 +232,36 @@ export class ChatSessionManager {
     return { ok: true }
   }
 
+  /**
+   * Attach-time start (design D1): spawn the agent process without sending a
+   * prompt, so its command list is available before the first message. Goes
+   * through the same start guard as send and the same ensureDriver, so
+   * concurrent attaches and sends share one driver and a dead driver is
+   * restarted. Refusals report the guard's error; a failed spawn surfaces as
+   * a session error event from the driver.
+   */
+  async start(sessionId: string): Promise<ChatActionResult> {
+    const record = this.records.get(sessionId)
+    if (!record) {
+      return { ok: false, error: `Unknown chat session ${sessionId}` }
+    }
+    const blocked = this.startBlocker(record)
+    if (blocked) {
+      return { ok: false, error: blocked }
+    }
+    let driver: ChatSessionDriver | null
+    try {
+      driver = await this.ensureDriver(sessionId)
+    } catch (error) {
+      return { ok: false, error: sdkLoadError(error) }
+    }
+    if (!driver) {
+      return { ok: false, error: `Unknown chat session ${sessionId}` }
+    }
+    driver.start()
+    return { ok: true }
+  }
+
   /** Stop button: abort the in-flight turn without removing the session. */
   interrupt(sessionId: string): ChatActionResult {
     if (!this.records.has(sessionId)) {

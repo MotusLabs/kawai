@@ -306,11 +306,23 @@ export class ChatSessionDriver {
       ...launch,
       ...(wire ? { spawnClaudeCodeProcess: createWireTappedSpawn(wire) } : {}),
     }
-    const query = this.options.queryFactory({
-      prompt: this.queue,
-      options,
-      ...(wire ? { wire } : {}),
-    })
+    let query: Query
+    try {
+      query = this.options.queryFactory({
+        prompt: this.queue,
+        options,
+        ...(wire ? { wire } : {}),
+      })
+    } catch (error) {
+      // A spawn that fails outright is reported like a crash: session error,
+      // driver dead, and the next send/start retries.
+      this.markDead(
+        `The agent process failed to start: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      )
+      return
+    }
     this.query = query
     void this.runQueryLoop(query)
   }
