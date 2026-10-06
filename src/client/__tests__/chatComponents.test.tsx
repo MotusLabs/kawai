@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 import TestRenderer, { act, type ReactTestInstance } from 'react-test-renderer'
-import type { ChatWireFrame } from '@shared/chat'
+import type { ChatEvent, ChatWireFrame } from '@shared/chat'
 import type { ClientMessage, Session } from '@shared/types'
 import ChatRequests from '../components/chat/ChatRequests'
 import ChatMessages from '../components/chat/ChatMessages'
@@ -261,5 +261,46 @@ describe('chat debug view', () => {
     expect(textOf(loading.renderer.root)).toContain('Loading…')
     expect(loading.renderer.root.findAllByType('button').map(textOf)).not.toContain('Load older')
     loading.renderer.unmount()
+  })
+})
+
+describe('chat palette', () => {
+  const classOf = (node: ReactTestInstance) => String(node.props.className ?? '')
+
+  test('the chat view opts into the palette and errors use the danger token', () => {
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => {
+      renderer = TestRenderer.create(<ChatView session={chatSession} sendMessage={() => {}} connectionStatus="connected"
+        connectionEpoch={0} error="Connection lost" onClose={() => {}} onKill={() => {}} />)
+    })
+    expect(classOf(renderer.root.findByProps({ 'data-testid': 'chat-view' })).split(' ')).toContain('chat-palette')
+    const banner = renderer.root.findByProps({ role: 'alert' })
+    expect(classOf(banner)).toContain('text-chat-danger')
+    expect(classOf(banner)).not.toContain('red-400')
+    renderer.unmount()
+
+    const messages = TestRenderer.create(<ChatMessages events={[
+      { type: 'error', id: 'e', sequence: 0, at: 'now', message: 'Agent crashed' },
+    ] as ChatEvent[]} />)
+    const error = messages.root.findByProps({ role: 'alert' })
+    expect(classOf(error)).toContain('text-chat-danger')
+    expect(classOf(error)).not.toContain('red-400')
+    messages.unmount()
+  })
+
+  test('Debug panel direction labels use the palette tokens', () => {
+    const frames = (['out', 'in', 'stderr', 'lifecycle'] as const).map((dir, index) => wireFrame(index + 1, '{"type":"x"}', dir))
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => {
+      renderer = TestRenderer.create(<ChatDebugPanel sessionId="chat-1" view={{ ...closedDebugView(), open: true, frames }}
+        connected sendMessage={() => {}} onClose={() => {}} />)
+    })
+    const labelClass = (seq: number) => classOf(renderer.root.findByProps({ 'data-frame-seq': seq }).findAllByType('span')[0]!)
+    expect(labelClass(1)).toContain('text-chat-wire-out')
+    expect(labelClass(2)).toContain('text-chat-wire-in')
+    expect(labelClass(3)).toContain('text-chat-wire-stderr')
+    expect(labelClass(4)).toContain('text-secondary')
+    for (const seq of [1, 2, 3, 4]) expect(labelClass(seq)).not.toMatch(/(sky|emerald|amber)-400/)
+    renderer.unmount()
   })
 })

@@ -9,9 +9,9 @@ import { copyText } from '../../utils/copyText'
 import { DIRECTION_LABELS, frameLabel, frameTime, prettyFrame } from '../../utils/chatWireFrames'
 
 const DIRECTION_STYLES: Record<keyof typeof DIRECTION_LABELS, string> = {
-  out: 'text-sky-400',
-  in: 'text-emerald-400',
-  stderr: 'text-amber-400',
+  out: 'text-chat-wire-out',
+  in: 'text-chat-wire-in',
+  stderr: 'text-chat-wire-stderr',
   lifecycle: 'text-secondary',
 }
 
