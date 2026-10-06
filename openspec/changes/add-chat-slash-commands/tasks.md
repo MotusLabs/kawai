@@ -29,7 +29,7 @@
 
 ## 5. `/clear`, `/reset`, `/new`
 
-- [ ] 5.1 Intercept `/clear`, `/reset`, and `/new [name]` in `ChatView` submit: send `session-create` with the session's project and profile and the name, then `chat-archive` for the previous session on the matching `session-created`; on `error` leave it untouched; never send the command to the agent; verify with ChatView tests for each alias, a name, and a creation error
+- [x] 5.1 Intercept `/clear`, `/reset`, and `/new [name]` in `ChatView` submit: send `session-create` with the session's project and profile and the name, then `chat-archive` for the previous session on the matching `session-created`; on `error` leave it untouched; never send the command to the agent; verify with ChatView tests for each alias, a name, and a creation error
 
 ## 6. Planning and docs
 

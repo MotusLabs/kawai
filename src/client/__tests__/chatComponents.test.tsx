@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 import TestRenderer, { act, type ReactTestInstance } from 'react-test-renderer'
 import type { ChatCommandState, ChatWireFrame } from '@shared/chat'
-import type { ClientMessage, Session } from '@shared/types'
+import type { ClientMessage, ServerMessage, Session } from '@shared/types'
 import ChatRequests from '../components/chat/ChatRequests'
 import ChatMessages from '../components/chat/ChatMessages'
 import ChatDebugPanel from '../components/chat/ChatDebugPanel'
@@ -401,6 +401,100 @@ describe('slash-command menu', () => {
     const h = renderComposer(READY_COMMANDS, archived)
     expect(h.renderer.root.findAllByType('textarea')).toHaveLength(0)
     expect(h.renderer.root.findAllByProps({ 'data-testid': 'slash-command-menu' })).toHaveLength(0)
+    h.renderer.unmount()
+  })
+})
+
+describe('/clear, /reset, /new', () => {
+  afterEach(() => useChatStore.setState({ sessions: {} }))
+
+  function renderClearable(session: Session = chatSession) {
+    const sent: ClientMessage[] = []
+    const listeners: Array<(message: ServerMessage) => void> = []
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => {
+      renderer = TestRenderer.create(<ChatView
+        session={session}
+        sendMessage={message => { sent.push(message) }}
+        subscribe={listener => { listeners.push(listener); return () => {} }}
+        connectionStatus="connected" connectionEpoch={0} error={null}
+        onClose={() => {}} onKill={() => {}} />)
+    })
+    const type = (value: string) =>
+      act(() => { renderer.root.findByType('textarea').props.onChange({ target: { value } }) })
+    const submit = () =>
+      act(() => { renderer.root.findByType('form').props.onSubmit({ preventDefault: () => {} }) })
+    const deliver = (message: ServerMessage) =>
+      act(() => { for (const listener of listeners) listener(message) })
+    return { sent, renderer, type, submit, deliver }
+  }
+
+  const newChatCreated = (id: string, name?: string): ServerMessage => ({
+    type: 'session-created',
+    session: {
+      id, name: name ?? 'New chat', kind: 'chat', projectPath: '/tmp/project',
+      status: 'waiting', lastActivity: 'now', createdAt: 'now', source: 'managed',
+    },
+  })
+
+  test.each(['/clear', '/reset', '/new'])('%s creates a chat and archives the old one', (command) => {
+    const h = renderClearable()
+    h.type(command)
+    h.submit()
+    expect(h.sent.filter(message => message.type === 'session-create')).toEqual([{
+      type: 'session-create', projectPath: '/tmp/project', kind: 'chat', claudeProfileId: 'default',
+    }])
+    // The command itself never reaches the agent, and the composer cleared.
+    expect(h.sent.filter(message => message.type === 'chat-send')).toEqual([])
+    expect(h.renderer.root.findByType('textarea').props.value).toBe('')
+    // The composer text is gone but nothing is archived yet.
+    expect(h.sent.filter(message => message.type === 'chat-archive')).toEqual([])
+    h.deliver(newChatCreated('chat-new'))
+    expect(h.sent.filter(message => message.type === 'chat-archive')).toEqual([
+      { type: 'chat-archive', sessionId: 'chat-1' },
+    ])
+    h.renderer.unmount()
+  })
+
+  test('/new with a name names the created chat', () => {
+    const h = renderClearable()
+    h.type('/new release notes')
+    h.submit()
+    expect(h.sent.filter(message => message.type === 'session-create')).toEqual([{
+      type: 'session-create', projectPath: '/tmp/project', kind: 'chat',
+      claudeProfileId: 'default', name: 'release notes',
+    }])
+    h.deliver(newChatCreated('chat-named', 'release notes'))
+    expect(h.sent.filter(message => message.type === 'chat-archive')).toEqual([
+      { type: 'chat-archive', sessionId: 'chat-1' },
+    ])
+    h.renderer.unmount()
+  })
+
+  test('a creation error leaves the previous chat untouched', () => {
+    const h = renderClearable()
+    h.type('/clear')
+    h.submit()
+    h.deliver({ type: 'error', message: 'Claude Agent SDK is unavailable.' })
+    expect(h.sent.filter(message => message.type === 'chat-archive')).toEqual([])
+    // The failure also cancels the pending archive for later creations.
+    h.deliver(newChatCreated('chat-late'))
+    expect(h.sent.filter(message => message.type === 'chat-archive')).toEqual([])
+    h.renderer.unmount()
+  })
+
+  test('a session created in another project does not archive this chat', () => {
+    const h = renderClearable()
+    h.type('/clear')
+    h.submit()
+    h.deliver({
+      type: 'session-created',
+      session: {
+        id: 'chat-elsewhere', name: 'Elsewhere', kind: 'chat', projectPath: '/other/project',
+        status: 'waiting', lastActivity: 'now', createdAt: 'now', source: 'managed',
+      },
+    })
+    expect(h.sent.filter(message => message.type === 'chat-archive')).toEqual([])
     h.renderer.unmount()
   })
 })

@@ -1249,7 +1249,7 @@ export default function App() {
 
       {/* Active session pane - full height on desktop */}
       {selectedSession?.kind === 'chat' ? <ChatView
-        session={selectedSession} sendMessage={sendMessage}
+        session={selectedSession} sendMessage={sendMessage} subscribe={subscribe}
         connectionStatus={connectionStatus} connectionEpoch={connectionEpoch}
         error={connectionError || serverError} onClose={() => setSelectedSessionId(null)}
         onKill={() => handleKillSession(selectedSession.id)}

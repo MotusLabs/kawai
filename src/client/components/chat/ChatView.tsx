@@ -9,7 +9,7 @@
 // through when nothing matches, and /clear /reset /new compose a new chat.
 import { useClaudeProfiles } from './useClaudeProfiles'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { SendClientMessage, Session } from '@shared/types'
+import type { SendClientMessage, ServerMessage, Session } from '@shared/types'
 import type { ConnectionStatus } from '../../stores/sessionStore'
 import { emptyTranscript, useChatStore } from '../../stores/chatStore'
 import { closedDebugView, useChatDebugStore } from '../../stores/chatDebugStore'
@@ -23,9 +23,13 @@ import { requestChatArchive } from '../../utils/chatArchive'
 const EMPTY = emptyTranscript()
 const CLOSED_DEBUG = closedDebugView()
 
-export default function ChatView({ session, sendMessage, connectionStatus, connectionEpoch, error, onClose, onKill }: {
+/** `/clear`, `/reset`, `/new` — optionally followed by the new chat's name. */
+const CLEAR_COMMAND = /^\/(clear|reset|new)(?:\s+(.*))?$/
+
+export default function ChatView({ session, sendMessage, subscribe, connectionStatus, connectionEpoch, error, onClose, onKill }: {
   session: Session; sendMessage: SendClientMessage; connectionStatus: ConnectionStatus; connectionEpoch: number
   error: string | null; onClose: () => void; onKill: () => void
+  subscribe?: (listener: (message: ServerMessage) => void) => () => void
 }) {
   const catalog = useClaudeProfiles(true)
   const profileId = session.claudeProfileId ?? 'default'
@@ -55,6 +59,46 @@ export default function ChatView({ session, sendMessage, connectionStatus, conne
   }
   const handleArchive = () => { requestChatArchive(session, sendMessage) }
   useEffect(() => { setText('') }, [session.id])
+  // `/clear` composition (design D6): remember which session awaits archival;
+  // the matching session-created (a new chat in this project) archives it,
+  // an error reply leaves it untouched. Never sent to the agent.
+  const pendingClearRef = useRef<string | null>(null)
+  useEffect(() => { pendingClearRef.current = null }, [session.id])
+  useEffect(() => {
+    if (!subscribe) return
+    return subscribe((message) => {
+      const previous = pendingClearRef.current
+      if (!previous) return
+      if (
+        message.type === 'session-created' &&
+        message.session.id !== previous &&
+        message.session.kind === 'chat' &&
+        message.session.projectPath === session.projectPath
+      ) {
+        pendingClearRef.current = null
+        sendMessage({ type: 'chat-archive', sessionId: previous })
+      } else if (message.type === 'error') {
+        // The creation failed: the old chat stays exactly as it was.
+        pendingClearRef.current = null
+      }
+    })
+  }, [subscribe, sendMessage, session.projectPath])
+  const submitText = (trimmed: string) => {
+    const clear = CLEAR_COMMAND.exec(trimmed)
+    if (clear) {
+      const name = clear[2]?.trim()
+      pendingClearRef.current = session.id
+      sendMessage({
+        type: 'session-create',
+        projectPath: session.projectPath,
+        kind: 'chat',
+        ...(name ? { name } : {}),
+        claudeProfileId: profileId,
+      })
+      return
+    }
+    sendMessage({ type: 'chat-send', sessionId: session.id, text: trimmed })
+  }
   useEffect(() => { end.current?.scrollIntoView?.({ block: 'end' }) }, [transcript.events.length, transcript.throughSequence])
 
   // Slash-command menu: open while the text is a bare "/command" and a list
@@ -141,7 +185,7 @@ export default function ChatView({ session, sendMessage, connectionStatus, conne
           <form className="border-t border-border p-3" onSubmit={event => {
             event.preventDefault()
             if (!connected || !text.trim()) return
-            sendMessage({ type: 'chat-send', sessionId: session.id, text: text.trim() })
+            submitText(text.trim())
             setText('')
           }}>
             <div className="mx-auto max-w-3xl">
