@@ -3,7 +3,7 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import type { Session, ServerMessage, TerminalSession } from '@shared/types'
-import type { AgentSessionRecord, ClaimCurrentWindowPatch } from '../../db'
+import type { AgentSessionRecord, ChatSessionRecord, ClaimCurrentWindowPatch } from '../../db'
 import { TmuxTimeoutError } from '../../tmuxTimeout'
 import { TMUX_FIELD_SEPARATOR } from '../../tmuxFormat'
 import { BUILD_VERSION } from '../../version'
@@ -42,6 +42,7 @@ let logEntries: Array<{
 let dbState: {
   appSettings: Map<string, string>
   records: Map<string, AgentSessionRecord>
+  chatRecords: Map<string, ChatSessionRecord>
   nextId: number
   setAppSettingCalls: Array<{ key: string; value: string }>
   setAppSettingError: Error | null
@@ -94,6 +95,7 @@ function resetDbState() {
   dbState = {
     appSettings: new Map(),
     records: new Map(),
+    chatRecords: new Map(),
     nextId: 1,
     setAppSettingCalls: [],
     setAppSettingError: null,
@@ -369,9 +371,20 @@ mock.module('../../logger', () => ({
 mock.module('../../db', () => ({
   resolveDataDir: () => path.join(os.tmpdir(), `agentboard-index-handlers-${process.pid}`),
   initDatabase: () => ({
-    getChatSessions: () => [],
-    insertChatSession: () => {},
-    deleteChatSession: () => {},
+    getChatSessions: () => Array.from(dbState.chatRecords.values()),
+    getChatSession: (sessionId: string) => dbState.chatRecords.get(sessionId) ?? null,
+    insertChatSession: (session: ChatSessionRecord) => {
+      dbState.chatRecords.set(session.sessionId, session)
+      return session
+    },
+    updateChatSession: (sessionId: string, patch: Partial<Omit<ChatSessionRecord, 'sessionId'>>) => {
+      const record = dbState.chatRecords.get(sessionId)
+      if (!record) return null
+      const updated = { ...record, ...patch }
+      dbState.chatRecords.set(sessionId, updated)
+      return updated
+    },
+    deleteChatSession: (sessionId: string) => dbState.chatRecords.delete(sessionId),
     getSessionById: (sessionId: string) => dbState.records.get(sessionId) ?? null,
     getSessionByLogPath: (logFilePath: string) =>
       Array.from(dbState.records.values()).find(
@@ -779,6 +792,54 @@ describe('server message handlers', () => {
       await new Promise(resolve => setTimeout(resolve, 0))
       expect(registryInstance.get(created.session.id)).toBeUndefined()
       expect(sent).toContainEqual({ type: 'session-removed', sessionId: created.session.id })
+    } finally {
+      if (previousToken === undefined) delete process.env.CLAUDE_CODE_OAUTH_TOKEN
+      else process.env.CLAUDE_CODE_OAUTH_TOKEN = previousToken
+    }
+  })
+  test('chat archive and restore broadcast the updated session and refuse sends while archived', async () => {
+    const previousToken = process.env.CLAUDE_CODE_OAUTH_TOKEN
+    process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'
+    try {
+      const { serveOptions, registryInstance } = await loadIndex()
+      const { ws, sent } = createWs()
+      const websocket = serveOptions.websocket!
+      websocket.open?.(ws as never)
+      websocket.message?.(ws as never, JSON.stringify({ type: 'session-create', kind: 'chat', projectPath: os.tmpdir(), name: 'archive me' }))
+      await new Promise(resolve => setTimeout(resolve, 0))
+      const created = sent.find(message => message.type === 'session-created')
+      if (created?.type !== 'session-created') throw new Error('Chat creation failed')
+      const sessionId = created.session.id
+
+      websocket.message?.(ws as never, JSON.stringify({ type: 'chat-archive', sessionId }))
+      await new Promise(resolve => setTimeout(resolve, 0))
+      const archived = registryInstance.get(sessionId)
+      expect(archived?.archivedAt).toBeTruthy()
+      const update = sent.find(
+        message => message.type === 'session-update' && message.session.id === sessionId && message.session.archivedAt
+      )
+      expect(update).toBeTruthy()
+
+      // Sends while archived are refused with an archived error, and unknown
+      // ids echo the unknown-session error.
+      sent.length = 0
+      websocket.message?.(ws as never, JSON.stringify({ type: 'chat-send', sessionId, text: 'hello' }))
+      websocket.message?.(ws as never, JSON.stringify({ type: 'chat-archive', sessionId: 'chat-none' }))
+      websocket.message?.(ws as never, JSON.stringify({ type: 'chat-restore', sessionId: 'chat-none' }))
+      await new Promise(resolve => setTimeout(resolve, 0))
+      expect(sent).toContainEqual({ type: 'error', message: 'This chat session is archived. Restore it to continue the conversation.' })
+      expect(sent).toContainEqual({ type: 'error', message: 'Unknown chat session chat-none' })
+      expect(sent.filter(message => message.type === 'error' && message.message === 'Unknown chat session chat-none')).toHaveLength(2)
+
+      sent.length = 0
+      websocket.message?.(ws as never, JSON.stringify({ type: 'chat-restore', sessionId }))
+      await new Promise(resolve => setTimeout(resolve, 0))
+      expect(registryInstance.get(sessionId)?.archivedAt ?? null).toBeNull()
+      expect(sent.some(
+        message => message.type === 'session-update' && message.session.id === sessionId && !message.session.archivedAt
+      )).toBe(true)
+
+      websocket.message?.(ws as never, JSON.stringify({ type: 'session-kill', sessionId }))
     } finally {
       if (previousToken === undefined) delete process.env.CLAUDE_CODE_OAUTH_TOKEN
       else process.env.CLAUDE_CODE_OAUTH_TOKEN = previousToken

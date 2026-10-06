@@ -99,6 +99,7 @@ export const SESSION_FIELD_EQUALS: {
   logFilePath: strictEquals,
   lastUserMessage: strictEquals,
   isPinned: strictEquals,
+  archivedAt: strictEquals,
   lastActivity: activityInSameBucket,
 }
 

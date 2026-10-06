@@ -155,6 +155,18 @@ export class ChatConnections {
         if (!result.ok) connection.send({ type: 'error', message: result.error })
         return
       }
+      case 'chat-archive': {
+        // The manager's registry update broadcasts the archived session to
+        // every attached client; only failures echo here.
+        const result = this.manager.archive(sessionId)
+        if (!result.ok) connection.send({ type: 'error', message: result.error })
+        return
+      }
+      case 'chat-restore': {
+        const result = this.manager.restore(sessionId)
+        if (!result.ok) connection.send({ type: 'error', message: result.error })
+        return
+      }
       case 'chat-approval': {
         const result = this.manager.resolveApproval(sessionId, message.requestId, message.decision)
         if (!result.ok) connection.send({ type: 'error', message: result.error })

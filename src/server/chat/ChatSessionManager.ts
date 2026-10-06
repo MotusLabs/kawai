@@ -60,6 +60,10 @@ export type ChatActionResult =
   | { ok: true }
   | { ok: false; error: string }
 
+/** Send-time refusal for archived sessions; restoring clears it (design D2). */
+const ARCHIVED_SESSION_ERROR =
+  'This chat session is archived. Restore it to continue the conversation.'
+
 export class ChatSessionManager {
   private readonly options: ChatSessionManagerOptions
   private readonly records = new Map<string, ChatSessionRecord>()
@@ -200,6 +204,9 @@ export class ChatSessionManager {
     if (!record) {
       return { ok: false, error: `Unknown chat session ${sessionId}` }
     }
+    if (record.archivedAt != null) {
+      return { ok: false, error: ARCHIVED_SESSION_ERROR }
+    }
     if (
       record.sdkSessionId &&
       !this.drivers.has(sessionId) &&
@@ -255,6 +262,50 @@ export class ChatSessionManager {
     }
     // An idle session (no driver yet) has nothing to interrupt.
     this.drivers.get(sessionId)?.interrupt()
+    return { ok: true }
+  }
+
+  /**
+   * Archive: stop the agent process exactly the way kill stops it (interrupt
+   * the in-flight turn, settle pending requests as cancelled, terminate), but
+   * keep the record, SDK conversation id, live-event history, and protocol
+   * log (chat-archive design D2). The driver is forgotten, and ensureDriver
+   * refuses archived sessions, so nothing respawns it until restore.
+   */
+  archive(sessionId: string): ChatActionResult {
+    const record = this.records.get(sessionId)
+    if (!record) {
+      return { ok: false, error: `Unknown chat session ${sessionId}` }
+    }
+    const driver = this.drivers.get(sessionId)
+    if (driver) {
+      // Interrupt first so subscribers see request_resolved(cancelled) and
+      // turn_interrupted; kill then ends the process without the
+      // exited-unexpectedly error a bare close would report.
+      driver.interrupt()
+      driver.kill()
+    }
+    this.drivers.delete(sessionId)
+    this.driverPromises.delete(sessionId)
+    // Status returns to waiting: archived sessions never look busy.
+    this.applyPatch(sessionId, {
+      archivedAt: new Date().toISOString(),
+      status: 'waiting',
+    })
+    return { ok: true }
+  }
+
+  /**
+   * Restore: clear archived_at. The next send lazily recreates the driver
+   * with the stored conversation id, exactly as after a server restart.
+   */
+  restore(sessionId: string): ChatActionResult {
+    const record = this.records.get(sessionId)
+    if (!record) {
+      return { ok: false, error: `Unknown chat session ${sessionId}` }
+    }
+    if (record.archivedAt == null) return { ok: true }
+    this.applyPatch(sessionId, { archivedAt: null })
     return { ok: true }
   }
 
@@ -378,6 +429,9 @@ export class ChatSessionManager {
     if (pending) return pending
     const record = this.records.get(sessionId)
     if (!record) return null
+    // The single guard for every would-be spawn path (design D2 risk): an
+    // archived session must never start an agent process.
+    if (record.archivedAt != null) throw new Error(ARCHIVED_SESSION_ERROR)
     resolveClaudeProfile(record.claudeProfileId, this.providerEnv())
     if (!this.authOk(record.claudeProfileId)) throw new Error(chatAuthErrorMessage())
     this.captureHistory(sessionId)
@@ -402,8 +456,11 @@ export class ChatSessionManager {
           // lose the ability to resume the conversation.
           this.applyPatch(record.sessionId, { sdkSessionId }),
       })
-      if (!this.records.has(record.sessionId)) {
-        // Killed while the import was resolving.
+      if (
+        !this.records.has(record.sessionId) ||
+        // Archived while the import was resolving: same discard as kill.
+        this.records.get(record.sessionId)?.archivedAt != null
+      ) {
         driver.kill()
         return null
       }
@@ -504,6 +561,7 @@ export class ChatSessionManager {
       ...(patch.lastActivityAt !== undefined
         ? { lastActivity: patch.lastActivityAt }
         : {}),
+      ...(patch.archivedAt !== undefined ? { archivedAt: patch.archivedAt } : {}),
     })
   }
 
@@ -520,6 +578,7 @@ export class ChatSessionManager {
       source: 'managed',
       // Per design D1: existing icons, labels, and sorting keep working.
       agentType: 'claude',
+      ...(record.archivedAt != null ? { archivedAt: record.archivedAt } : {}),
     }
   }
 }

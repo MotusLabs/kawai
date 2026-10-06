@@ -43,6 +43,8 @@ export interface KnownSessionKey {
  * Minimal chat-session row (design D5): conversation content itself is never
  * duplicated into our DB — it lives in the SDK transcript addressed by
  * `sdkSessionId`. Null sdkSessionId means created but never started.
+ * `archivedAt` (chat-archive design D1) is the archive timestamp; null or
+ * absent means the session is live.
  */
 export interface ChatSessionRecord {
   sessionId: string
@@ -53,6 +55,7 @@ export interface ChatSessionRecord {
   status: SessionStatus
   createdAt: string
   lastActivityAt: string
+  archivedAt?: string | null
 }
 
 // last_user_message is a UI preview; unbounded values (giant pastes, tool
@@ -177,7 +180,8 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
   profile_id TEXT NOT NULL DEFAULT 'default',
   status TEXT NOT NULL,
   created_at TEXT NOT NULL,
-  last_activity_at TEXT NOT NULL
+  last_activity_at TEXT NOT NULL,
+  archived_at TEXT
 );
 `
 
@@ -222,6 +226,9 @@ export function initDatabase(options: { path?: string } = {}): SessionDatabase {
   const chatColumns = db.prepare('PRAGMA table_info(chat_sessions)').all() as { name: string }[]
   if (!chatColumns.some(column => column.name === 'profile_id')) {
     db.exec("ALTER TABLE chat_sessions ADD COLUMN profile_id TEXT NOT NULL DEFAULT 'default'")
+  }
+  if (!chatColumns.some(column => column.name === 'archived_at')) {
+    db.exec('ALTER TABLE chat_sessions ADD COLUMN archived_at TEXT')
   }
   migrateLastUserMessageColumn(db)
   migrateDeduplicateDisplayNames(db)
@@ -568,6 +575,7 @@ export function initDatabase(options: { path?: string } = {}): SessionDatabase {
         status: 'status',
         createdAt: 'created_at',
         lastActivityAt: 'last_activity_at',
+        archivedAt: 'archived_at',
       }
       const fields: string[] = []
       const params: Record<string, string | number | null> = {
@@ -646,6 +654,10 @@ function mapChatRow(row: Record<string, unknown>): ChatSessionRecord {
     status: (row.status ?? 'waiting') as ChatSessionRecord['status'],
     createdAt: String(row.created_at ?? ''),
     lastActivityAt: String(row.last_activity_at ?? ''),
+    archivedAt:
+      row.archived_at === null || row.archived_at === undefined
+        ? null
+        : String(row.archived_at),
   }
 }
 

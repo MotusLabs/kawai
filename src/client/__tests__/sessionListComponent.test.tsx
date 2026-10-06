@@ -445,6 +445,7 @@ describe('session comparator (design D6)', () => {
       isPinned: false,
       kind: 'terminal',
       claudeProfileId: 'default',
+      archivedAt: null,
     }
     // Compile-time exhaustiveness comes from the mapped type (a new Session
     // field without a comparator entry fails typecheck); this runtime check

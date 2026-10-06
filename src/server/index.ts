@@ -2664,6 +2664,8 @@ function handleMessage(
     case 'chat-detach':
     case 'chat-send':
     case 'chat-interrupt':
+    case 'chat-archive':
+    case 'chat-restore':
     case 'chat-approval':
     case 'chat-answer':
     case 'chat-debug-open':

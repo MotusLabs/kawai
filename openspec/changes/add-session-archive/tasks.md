@@ -2,12 +2,12 @@
 
 ## 1. Archived state on the server
 
-- [ ] 1.1 Add nullable `archived_at` to `chat_sessions` with a `PRAGMA table_info`-guarded migration and expose it on the record and as `archivedAt` on the shared `Session`; verify with db tests for a fresh database, an existing database without the column, and rows defaulting to not archived
-- [ ] 1.2 Add `ChatSessionManager.archive` that interrupts, cancels pending requests, stops and forgets the driver, keeps record, conversation ID, history, and protocol log, writes `archived_at`, and publishes the session; verify with manager tests for idle and in-flight archive, cancelled requests reported to subscribers, and the protocol log retained
-- [ ] 1.3 Make `ensureDriver` refuse archived sessions and return an "archived" error for sends; verify with manager tests that send and concurrent ensureDriver after archive start no driver
-- [ ] 1.4 Add `ChatSessionManager.restore` that clears `archived_at` so the next send resumes the stored conversation; verify with a manager test that restore then send creates a driver with the stored conversation ID
-- [ ] 1.5 Verify kill on an archived session removes the row and protocol log and that an archived session reloads as archived after a manager restart, with tests
-- [ ] 1.6 Add `chat-archive` and `chat-restore` client messages and handlers in `src/server/index.ts` broadcasting the updated session and returning errors for unknown sessions; verify with WebSocket handler tests
+- [x] 1.1 Add nullable `archived_at` to `chat_sessions` with a `PRAGMA table_info`-guarded migration and expose it on the record and as `archivedAt` on the shared `Session`; verify with db tests for a fresh database, an existing database without the column, and rows defaulting to not archived
+- [x] 1.2 Add `ChatSessionManager.archive` that interrupts, cancels pending requests, stops and forgets the driver, keeps record, conversation ID, history, and protocol log, writes `archived_at`, and publishes the session; verify with manager tests for idle and in-flight archive, cancelled requests reported to subscribers, and the protocol log retained
+- [x] 1.3 Make `ensureDriver` refuse archived sessions and return an "archived" error for sends; verify with manager tests that send and concurrent ensureDriver after archive start no driver
+- [x] 1.4 Add `ChatSessionManager.restore` that clears `archived_at` so the next send resumes the stored conversation; verify with a manager test that restore then send creates a driver with the stored conversation ID
+- [x] 1.5 Verify kill on an archived session removes the row and protocol log and that an archived session reloads as archived after a manager restart, with tests
+- [x] 1.6 Add `chat-archive` and `chat-restore` client messages and handlers in `src/server/index.ts` broadcasting the updated session and returning errors for unknown sessions; verify with WebSocket handler tests
 
 ## 2. Navigator placement and the Archive pane
 

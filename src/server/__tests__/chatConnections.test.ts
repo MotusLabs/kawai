@@ -21,6 +21,8 @@ function harness(wireLogs?: ChatWireLogs) {
     getSnapshot: () => snapshot,
     send: async (...args: unknown[]) => { calls.push(['send', ...args]); return { ok: true } },
     interrupt: (...args: unknown[]) => { calls.push(['interrupt', ...args]); return { ok: true } },
+    archive: (...args: unknown[]) => { calls.push(['archive', ...args]); return { ok: true } },
+    restore: (...args: unknown[]) => { calls.push(['restore', ...args]); return { ok: true } },
     resolveApproval: (...args: unknown[]) => {
       calls.push(['approval', ...args])
       if (!pending) return { ok: false, error: 'Already resolved' }
@@ -108,6 +110,21 @@ describe('chat WebSocket subscriptions', () => {
     await h.connections.handle(h.connection, { type: 'chat-send', sessionId: 'missing', text: 'hello' })
     expect(h.messages).toEqual([{ type: 'error', message: 'Unknown chat session missing' }])
     expect(h.calls).toEqual([])
+  })
+
+  test('archive and restore route to the manager; failures echo an error', async () => {
+    const h = harness()
+    await h.connections.handle(h.connection, { type: 'chat-archive', sessionId: 'chat-1' })
+    await h.connections.handle(h.connection, { type: 'chat-restore', sessionId: 'chat-1' })
+    expect(h.calls).toEqual([['archive', 'chat-1'], ['restore', 'chat-1']])
+    expect(h.messages).toEqual([])
+
+    await h.connections.handle(h.connection, { type: 'chat-archive', sessionId: 'missing' })
+    await h.connections.handle(h.connection, { type: 'chat-restore', sessionId: 'missing' })
+    expect(h.messages).toEqual([
+      { type: 'error', message: 'Unknown chat session missing' },
+      { type: 'error', message: 'Unknown chat session missing' },
+    ])
   })
 })
 

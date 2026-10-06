@@ -95,6 +95,8 @@ export interface Session {
   logFilePath?: string
   lastUserMessage?: string
   isPinned?: boolean
+  /** Chat sessions only: archive timestamp (design D1); set = archived. */
+  archivedAt?: string | null
 }
 
 export interface AgentSession {
@@ -264,6 +266,11 @@ export type ClientMessage =
   | { type: 'chat-detach'; sessionId: string }
   | { type: 'chat-send'; sessionId: string; text: string }
   | { type: 'chat-interrupt'; sessionId: string }
+  // Archive stops the agent process but keeps the record, conversation, and
+  // protocol log; restore clears the archived state (chat-archive design D2).
+  // Both idempotent; confirmation for in-flight turns is a client concern (D3).
+  | { type: 'chat-archive'; sessionId: string }
+  | { type: 'chat-restore'; sessionId: string }
   | {
       type: 'chat-approval'
       sessionId: string
