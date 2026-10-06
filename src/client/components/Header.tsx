@@ -11,6 +11,8 @@ interface HeaderProps {
   onNewSession: () => void
   onOpenSettings: () => void
   tailscaleIp: string | null
+  /** Server build version from /api/server-info, shown on hover. */
+  version?: string | null
 }
 
 const statusDot: Record<ConnectionStatus, string> = {
@@ -25,6 +27,7 @@ export default function Header({
   onNewSession,
   onOpenSettings,
   tailscaleIp,
+  version = null,
 }: HeaderProps) {
   const [copied, setCopied] = useState(false)
   const shortcutModifier = useSettingsStore((state) => state.shortcutModifier)
@@ -41,7 +44,10 @@ export default function Header({
   return (
     <header className="flex h-10 shrink-0 items-center justify-between border-b border-border bg-elevated px-3">
       <div className="flex items-center gap-2">
-        <h1 className="text-sm font-semibold tracking-tight text-primary text-balance">
+        <h1
+          className="text-sm font-semibold tracking-tight text-primary text-balance"
+          title={version ? `Kawai v${version}` : undefined}
+        >
           KAWAI
         </h1>
         <div className="flex items-center gap-1.5 text-xs text-muted">

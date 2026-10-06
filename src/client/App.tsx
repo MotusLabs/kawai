@@ -38,6 +38,8 @@ interface ServerInfo {
   cwd?: string | null
   /** AGENTBOARD_PROJECT_DIR, when the server was started with it. */
   defaultProjectDir?: string | null
+  /** Build version of the server, e.g. `1.0.0-17` or `1.0.0-dev`. */
+  version?: string
 }
 
 function filterAgentSessions(
@@ -1181,6 +1183,7 @@ export default function App() {
           onNewSession={handleNewSession}
           onOpenSettings={handleOpenSettings}
           tailscaleIp={serverInfo?.tailscaleIp ?? null}
+          version={serverInfo?.version ?? null}
         />
         <SessionList
           sessions={sessions}
@@ -1270,6 +1273,7 @@ export default function App() {
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
         serverDefaultDir={serverDefaultProjectDir || null}
+        version={serverInfo?.version ?? null}
       />
 
       {branchBrowserRepository && createWorktreeBranch === null && (
