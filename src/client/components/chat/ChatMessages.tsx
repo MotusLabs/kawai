@@ -29,6 +29,14 @@ export default function ChatMessages({ events }: { events: ChatEvent[] }) {
             <summary>{event.isError ? 'Tool failed' : 'Tool result'}</summary>
             <pre className="mt-2 overflow-auto whitespace-pre-wrap">{event.output}</pre>
           </details>
+        case 'command_output':
+          return <div key={event.id} data-testid="chat-command-output" data-chat-role="assistant"
+            className="mx-3 border-l-2 border-border px-3 py-2 text-xs text-secondary">
+            <div className="mb-1 text-xs">Command output</div>
+            <div className="max-w-none break-words font-mono whitespace-pre-wrap text-xs">
+              <ReactMarkdown remarkPlugins={[remarkBreaks]}>{event.text}</ReactMarkdown>
+            </div>
+          </div>
         case 'notice': return <p key={event.id} className="text-xs text-secondary">{event.text}</p>
         case 'error': return <p key={event.id} role="alert" className="text-sm text-red-400">{event.message}</p>
         case 'turn_interrupted': return <p key={event.id} className="text-xs text-secondary">Turn stopped</p>

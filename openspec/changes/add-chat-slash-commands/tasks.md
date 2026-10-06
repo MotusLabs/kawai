@@ -18,7 +18,7 @@
 
 ## 3. Local command output and replay
 
-- [ ] 3.1 Add the `command_output` `ChatEvent`, map `system/local_command_output` to it in the active turn, and render it in `ChatMessages` as a muted markdown block; verify with driver and component tests
+- [x] 3.1 Add the `command_output` `ChatEvent`, map `system/local_command_output` to it in the active turn, and render it in `ChatMessages` as a muted markdown block; verify with driver and component tests
 - [ ] 3.2 Map recorded `<command-name>`/`<command-args>` user records to `user_message` with the typed `/name args`, and `<local-command-stdout>` to `command_output`, in `transcriptReplay.ts`; verify with replay tests using fixtures from real transcripts, including an unknown markup shape falling back to current rendering
 
 ## 4. Composer menu

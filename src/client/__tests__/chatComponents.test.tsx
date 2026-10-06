@@ -49,6 +49,19 @@ describe('chat components', () => {
     expect(renderer.root.findByType('summary').children).toEqual(['Tool: ', 'Read'])
     renderer.unmount()
   })
+
+  test('command output renders as a muted markdown block', () => {
+    const renderer = TestRenderer.create(<ChatMessages events={[
+      { type: 'command_output', id: 'c', sequence: 0, at: 'now', turnId: 't', text: 'Context usage: **12%** of the window.' },
+    ]} />)
+    const block = renderer.root.findByProps({ 'data-testid': 'chat-command-output' })
+    expect(block.props.className).toContain('text-secondary')
+    expect(textOf(block)).toContain('Command output')
+    // Markdown renders (bold), inside the monospace container.
+    expect(renderer.root.findByType('strong').children).toEqual(['12%'])
+    expect(block.children.some(child => typeof child === 'object' && String(child.props.className).includes('font-mono'))).toBe(true)
+    renderer.unmount()
+  })
 })
 
 const chatSession = { id: 'chat-1', name: 'Chat', projectPath: '/tmp/project', status: 'waiting', kind: 'chat' } as unknown as Session
