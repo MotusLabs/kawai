@@ -49,6 +49,27 @@ describe('chat components', () => {
     expect(renderer.root.findByType('summary').children).toEqual(['Tool: ', 'Read'])
     renderer.unmount()
   })
+
+  test('assistant text renders headings, tables and strikethrough as elements', () => {
+    const renderer = TestRenderer.create(<ChatMessages events={[
+      { type: 'assistant_text', id: 'a', sequence: 0, at: 'now', turnId: 't', messageId: 'm',
+        text: '## Heading\n\n| a | b |\n| --- | --- |\n| 1 | 2 |\n\n~~gone~~' },
+    ]} />)
+    expect(renderer.root.findByType('h2').children).toEqual(['Heading'])
+    expect(renderer.root.findByType('table')).toBeTruthy()
+    expect(renderer.root.findByType('del').children).toEqual(['gone'])
+    renderer.unmount()
+  })
+
+  test('user messages keep markdown syntax literal', () => {
+    const renderer = TestRenderer.create(<ChatMessages events={[
+      { type: 'user_message', id: 'u', sequence: 0, at: 'now', turnId: 't', text: '**not bold**' },
+    ]} />)
+    const html = JSON.stringify(renderer.toJSON())
+    expect(html).toContain('**not bold**')
+    expect(renderer.root.findAllByType('strong')).toHaveLength(0)
+    renderer.unmount()
+  })
 })
 
 const chatSession = { id: 'chat-1', name: 'Chat', projectPath: '/tmp/project', status: 'waiting', kind: 'chat' } as unknown as Session
