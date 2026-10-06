@@ -21,7 +21,7 @@
 
 ## 5. Acceptance
 
-- [ ] 5.1 Use the dev-browser skill to verify chat against the installed CLI (reporting its absence before falling back to Playwright): streaming, approval allow/deny, AskUserQuestion, interrupt, kill, server restart and resume of a pre-change conversation, and debug frames; also verify a missing-executable error on the new-session form. Keep screenshots and DOM assertions.
+- [x] 5.1 Use the dev-browser skill to verify chat against the installed CLI (reporting its absence before falling back to Playwright): streaming, approval allow/deny, AskUserQuestion, interrupt, kill, server restart and resume of a pre-change conversation, and debug frames; also verify a missing-executable error on the new-session form. Keep screenshots and DOM assertions.
 - [ ] 5.2 Run `bun run lint && bun run typecheck && bun run test` and `openspec validate use-external-claude-cli-with-sdk --strict`; verify all pass or record actionable blockers.
 
 ## Workflow follow-up

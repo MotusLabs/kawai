@@ -77,3 +77,57 @@ Verification quirks hit along the way (expected, not defects): the mock must
 answer auxiliary CLI calls (title generation) without consuming the scripted
 tool_use, and the first attempt's `node` command was absent from the
 stripped server `PATH` until `/usr/local/bin` was included.
+
+## 5.1 — Browser regression against the installed CLI
+
+Verified 2026-10-06, Playwright (Chromium headless shell build 1200).
+
+The `dev-browser` skill was searched for (user and project `.claude/skills`,
+filesystem) and is not installed here, so the planned Playwright fallback was
+used. The spec is `tests/e2e/chat-external-cli.spec.ts`; it is opt-in because
+CI has no `claude` on PATH:
+
+```
+KAWAI_EXTERNAL_CLI_TEST=1 \
+KAWAI_PRECHANGE_CLAUDE_PATH=<pre-change checkout>/node_modules/@anthropic-ai/claude-agent-sdk-linux-x64/claude \
+bunx playwright test tests/e2e/chat-external-cli.spec.ts --workers=1
+```
+
+Result: 1 passed (15.5 s). All model traffic went to a loopback mock
+Anthropic endpoint with a synthetic key; tools (Bash, AskUserQuestion) ran
+for real in the Claude Code CLI.
+
+- Conversation created on the pre-change runtime: the SDK's formerly bundled
+  CLI 2.1.289 via `KAWAI_CLAUDE_PATH` (`created.png`).
+- Streaming: delayed text deltas rendered progressively (`streaming.png`).
+- Approval allow: card shown (`approval.png`); Allow ran the Bash tool, whose
+  marker file appeared; `Tool: Bash` and `Request allowed` in the transcript.
+- Approval deny: Deny left the marker absent; `Request denied`
+  (`denied.png`).
+- AskUserQuestion: the question card rendered; the answer resolved it
+  (`Request answered`; `question.png`).
+- Debug: the protocol panel showed live frames including
+  `control_request · can_use_tool` and `result · success`
+  (`debug-frames.png`).
+- Interrupt: Stop mid-stream produced `Turn stopped` (`interrupted.png`).
+- Server restart and resume: after a restart, the server ran the PATH
+  `claude` 2.1.291. The transcript replayed, a new turn completed, the stored
+  conversation ID was unchanged, and the wire log's spawns show the first on
+  2.1.289 and the resume on the PATH executable with `--resume=<id>`
+  (`resumed.png`).
+- Kill removed the session (`killed.png`).
+- Missing executable: with `KAWAI_CLAUDE_PATH=/nonexistent` and a PATH without
+  `claude`, submitting the new-session form created no session row. The
+  actionable error ("Claude Code executable not found at /nonexistent …
+  KAWAI_CLAUDE_PATH …") appeared in the app's error banner
+  (`missing-executable.png`).
+
+Observed pre-existing behavior (not changed here):
+
+- A message sent after a turn's final text has streamed, but before its
+  `result` arrives, folds into that turn. The finished turn's result then
+  clears the active turn, and the following turn's tool and result events
+  are dropped. This happens with any CLI build. The spec waits for each
+  `Turn complete` before sending again.
+- Transcript replay shows the CLI's `[Request interrupted by user]` marker as
+  a user message.
