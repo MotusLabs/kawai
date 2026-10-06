@@ -17,7 +17,7 @@
 
 ## 4. Documentation
 
-- [ ] 4.1 Update the README chat setup, `docs/claude-session-profiles.md`, and `CLAUDE.md` with the separate Claude Code install, the 2.1.289 baseline, `KAWAI_CLAUDE_PATH`, error meanings, upgrading the SDK and CLI together, and rollback; verify no text implies a bundled CLI (`grep -rn -i "bundled\|claude-agent-sdk-linux" README.md docs CLAUDE.md`) and the documented variable name matches the tests.
+- [x] 4.1 Update the README chat setup, `docs/claude-session-profiles.md`, and `CLAUDE.md` with the separate Claude Code install, the 2.1.289 baseline, `KAWAI_CLAUDE_PATH`, error meanings, upgrading the SDK and CLI together, and rollback; verify no text implies a bundled CLI (`grep -rn -i "bundled\|claude-agent-sdk-linux" README.md docs CLAUDE.md`) and the documented variable name matches the tests.
 
 ## 5. Acceptance
 

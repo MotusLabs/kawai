@@ -30,7 +30,7 @@ not depend on the Claude Code executable; only chat creation refuses.
 ## 3.1 — Platform CLI packages excluded
 
 Verified 2026-10-06 on linux-x64, Bun 1.4.2, commit `feat: stop installing
-the SDK's bundled platform CLIs`.
+the SDK's platform CLIs` (dependency-trimming commit).
 
 - `packages/claude-agent-sdk-no-cli` stub added; all eight
   `@anthropic-ai/claude-agent-sdk-<platform>` names map to it under

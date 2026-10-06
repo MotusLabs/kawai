@@ -63,11 +63,17 @@ profile environment, model, and inline settings, without sending a model turn.
 Equal configurations share successful/in-flight probes; changed configurations
 or failed probes are checked again. This is not a gateway connectivity check.
 
+Profiles configure routing and model environment, not the executable: every
+profile's chat sessions run the same server-wide Claude Code executable,
+resolved from `KAWAI_CLAUDE_PATH` or the server `PATH` and checked against
+the 2.1.289 baseline before the handshake probe (see the README chat setup).
+Upgrade the Agent SDK package and the installed Claude Code together.
+
 On rollback, retain the additive database column but stop named-profile
 sessions first: older code would resume them under global provider settings.
 
 Local verification: `bun scripts/verify-claude-profile-settings.ts` uses a
-loopback mock provider and synthetic credentials to exercise bundled SDK
+loopback mock provider and synthetic credentials to exercise real SDK
 settings precedence. It does not contact the catalog's gateways.
 
 `bun scripts/verify-claude-profile-resume.ts` additionally checks concurrent GLM/MiniMax sessions, tool approvals, and restart/resume with the same conversation IDs against loopback routes.
