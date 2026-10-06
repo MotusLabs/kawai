@@ -45,11 +45,15 @@ Before a chat session is created, the system SHALL verify within a bounded time 
 - **THEN** the check process is stopped, no session is created, and the user receives an actionable error
 
 ### Requirement: Executable checks recover without restart
-The system SHALL reuse a successful executable check only while the executable is unchanged and SHALL discard failed checks, so an installed, upgraded, or repaired executable is evaluated again without restarting the server.
+The system SHALL reuse successful executable and initialization checks only while the executable at the selected path is unchanged, and SHALL discard failed checks, so an installed, upgraded, or repaired executable is evaluated again without restarting the server.
 
 #### Scenario: Installation repaired
 - **WHEN** a creation attempt failed the executable check and the operator then installs a supported executable
 - **THEN** the next creation attempt checks again and succeeds without a server restart
+
+#### Scenario: Executable upgraded at the same path
+- **WHEN** a creation attempt succeeded and the operator then replaces or upgrades the executable while keeping the same path
+- **THEN** the next creation attempt repeats both the version and initialization checks against the new executable
 
 ### Requirement: Executable problems are confined to chat sessions
 A missing, unsupported, or failing Claude Code executable SHALL NOT prevent backend startup, terminal sessions, or reading existing chat history. Sending to an existing chat session when the executable has become unavailable SHALL fail with the same actionable error and SHALL leave the session and its stored conversation identity intact.
