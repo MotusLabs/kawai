@@ -2,7 +2,7 @@
 
 ## 1. Executable resolution and compatibility
 
-- [ ] 1.1 Add `src/server/chat/claudeExecutable.ts` with `KAWAI_CLAUDE_PATH`/`PATH` resolution, file and execute-permission checks, a bounded `--version` probe, the `CLAUDE_CODE_MIN_VERSION` baseline, `ClaudeExecutableError` kinds, and a success-only cache keyed by path, realpath, and mtime; verify unit tests cover the explicit path, PATH lookup, an unset or blank override, a value with spaces or arguments, a missing path, a directory, a non-executable file, an old version, a newer version, unparsable output, a timeout that kills the probe, re-check after a failure, re-check after mtime changes, and a baseline equal to the SDK's `claudeCodeVersion`.
+- [x] 1.1 Add `src/server/chat/claudeExecutable.ts` with `KAWAI_CLAUDE_PATH`/`PATH` resolution, file and execute-permission checks, a bounded `--version` probe, the `CLAUDE_CODE_MIN_VERSION` baseline, `ClaudeExecutableError` kinds, and a success-only cache keyed by path, realpath, and mtime; verify unit tests cover the explicit path, PATH lookup, an unset or blank override, a value with spaces or arguments, a missing path, a directory, a non-executable file, an old version, a newer version, unparsable output, a timeout that kills the probe, re-check after a failure, re-check after mtime changes, and a baseline equal to the SDK's `claudeCodeVersion`.
 
 ## 2. Chat launch wiring
 
