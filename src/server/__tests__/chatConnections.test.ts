@@ -119,6 +119,29 @@ describe('chat WebSocket subscriptions', () => {
     expect(secondMessages).toContainEqual({ type: 'error', message: 'Already resolved' })
   })
 
+  test('command-state pushes reach only subscribed connections, unbatched', async () => {
+    const h = harness()
+    const otherMessages: ServerMessage[] = []
+    const other = { send: (message: ServerMessage) => otherMessages.push(message) }
+    // No attach yet: nobody receives the state.
+    h.connections.publishCommandState('chat-1', { status: 'loading', commands: [] })
+    expect(h.messages).toEqual([])
+
+    await h.connections.handle(h.connection, { type: 'chat-attach', sessionId: 'chat-1' })
+    await h.connections.handle(other, { type: 'chat-attach', sessionId: 'chat-1' })
+    const ready = {
+      status: 'ready' as const,
+      commands: [{ name: 'usage', description: 'costs', aliases: [], source: 'builtin' as const }],
+    }
+    h.connections.publishCommandState('chat-1', ready)
+    const expected = { type: 'chat-commands' as const, sessionId: 'chat-1', state: ready }
+    // Sent immediately: no timer flush needed.
+    expect(h.messages).toEqual([h.snapshot, expected])
+    expect(otherMessages).toEqual([h.snapshot, expected])
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(h.messages).toEqual([h.snapshot, expected])
+  })
+
   test('unknown sessions return an actionable error', async () => {
     const h = harness()
     await h.connections.handle(h.connection, { type: 'chat-send', sessionId: 'missing', text: 'hello' })

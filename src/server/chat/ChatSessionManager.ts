@@ -7,6 +7,7 @@
 // feature instead of crashing the server.
 import type {
   ChatApprovalDecision,
+  ChatCommandState,
   ChatEvent,
   ChatPendingRequest,
   ChatQuestionAnswer,
@@ -36,6 +37,8 @@ export interface ChatSessionManagerOptions {
   db: SessionDatabase
   /** Conversation-event sink (wired to the WS broadcast in index.ts). */
   onEvent: (sessionId: string, event: ChatEvent) => void
+  /** Command-state sink (wired to the chat-commands push in index.ts). */
+  onCommandState?: (sessionId: string, state: ChatCommandState) => void
   /** Injected in tests; production resolves the SDK via dynamic import. */
   queryFactory?: ChatQueryFactory
   /** Receives the provider env so it probes the endpoint sessions will use. */
@@ -127,7 +130,7 @@ export class ChatSessionManager {
       pendingRequests: this.getPendingRequests(sessionId),
       status: this.options.registry.get(sessionId)?.status ?? 'waiting',
       throughSequence: live.at(-1)?.sequence ?? 0,
-      commands: { status: 'unavailable', commands: [] },
+      commands: this.commandState(sessionId),
     }
   }
 
@@ -135,6 +138,18 @@ export class ChatSessionManager {
     if (!this.snapshotHistory.has(sessionId)) {
       this.snapshotHistory.set(sessionId, this.getHistory(sessionId)?.events ?? [])
     }
+  }
+
+  /**
+   * The session's command state for snapshots: a live driver's tracker, or
+   * unavailable when no process can be asked (never started, blocked, dead,
+   * archived — design D3: the client needs no special case).
+   */
+  private commandState(sessionId: string): ChatCommandState {
+    const driver = this.drivers.get(sessionId)
+    return driver && !driver.isDead
+      ? driver.getCommandState()
+      : { status: 'unavailable', commands: [] }
   }
 
   constructor(options: ChatSessionManagerOptions) {
@@ -494,6 +509,8 @@ export class ChatSessionManager {
           ? { resumeSessionId: record.sdkSessionId }
           : {}),
         onEvent: (event) => this.handleDriverEvent(record.sessionId, event),
+        onCommandState: (state) =>
+          this.options.onCommandState?.(record.sessionId, state),
         onStatus: (status) => this.applyPatch(record.sessionId, { status }),
         onSdkSessionId: (sdkSessionId) =>
           // Persist immediately: a crash right after the first turn must not

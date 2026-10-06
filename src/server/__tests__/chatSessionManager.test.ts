@@ -713,6 +713,75 @@ describe('ChatSessionManager', () => {
     })
   })
 
+  describe('command state delivery', () => {
+    test('snapshot carries the live driver state; pushes fire on change and archive', async () => {
+      process.env.ANTHROPIC_API_KEY = 'sk-test-key'
+      const registry = new SessionRegistry()
+      const handles: FakeHandle[] = []
+      const events: Array<{ sessionId: string; event: ChatEvent }> = []
+      const commandStates: Array<{ sessionId: string; status: string }> = []
+      const manager = new ChatSessionManager({
+        isDirectory: anyDirectory,
+        db, registry,
+        onEvent: (sessionId, event) => events.push({ sessionId, event }),
+        onCommandState: (sessionId, state) =>
+          commandStates.push({ sessionId, status: state.status }),
+        queryFactory: fakeQueryFactory(handles),
+      })
+      const created = manager.createSession({ projectPath: '/tmp/proj' })
+      if (!created.ok) throw new Error('create failed')
+      const sessionId = created.session.id
+
+      // Before any spawn: unavailable, no special-casing on the client.
+      expect(manager.getSnapshot(sessionId)?.commands).toEqual({
+        status: 'unavailable',
+        commands: [],
+      })
+
+      await manager.start(sessionId)
+      await flush()
+      expect(commandStates).toEqual([{ sessionId, status: 'loading' }])
+
+      handles[0]!.push({
+        type: 'system',
+        subtype: 'commands_changed',
+        commands: [{ name: 'usage', description: 'costs', builtin: true }],
+      } as unknown as SDKMessage)
+      await flush()
+      expect(commandStates.at(-1)).toEqual({ sessionId, status: 'ready' })
+      expect(manager.getSnapshot(sessionId)?.commands).toEqual({
+        status: 'ready',
+        commands: [{ name: 'usage', description: 'costs', aliases: [], source: 'builtin' }],
+      })
+
+      manager.archive(sessionId)
+      await flush()
+      expect(commandStates.at(-1)).toEqual({ sessionId, status: 'unavailable' })
+      expect(manager.getSnapshot(sessionId)?.commands.status).toBe('unavailable')
+      manager.shutdown()
+    })
+
+    test('blocked starts publish no command state', async () => {
+      process.env.ANTHROPIC_API_KEY = 'sk-test-key'
+      const registry = new SessionRegistry()
+      const commandStates: string[] = []
+      const manager = new ChatSessionManager({
+        isDirectory: anyDirectory,
+        db, registry,
+        onEvent: () => {},
+        onCommandState: (_sessionId, state) => commandStates.push(state.status),
+        queryFactory: fakeQueryFactory([]),
+      })
+      const created = manager.createSession({ projectPath: '/tmp/proj' })
+      if (!created.ok) throw new Error('create failed')
+      manager.archive(created.session.id)
+      expect(await manager.start(created.session.id)).toMatchObject({ ok: false })
+      await flush()
+      expect(commandStates).toEqual([])
+      manager.shutdown()
+    })
+  })
+
   test('first send lazily spawns the driver and persists sdkSessionId immediately', async () => {
     process.env.ANTHROPIC_API_KEY = 'sk-test-key'
     const { manager, registry, handles, events } = createHarness(db)
