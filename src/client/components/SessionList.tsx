@@ -52,6 +52,9 @@ interface SessionListProps {
   onRename: (sessionId: string, newName: string) => void
   onResume?: (sessionId: string) => void
   onHibernate?: (sessionId: string) => void
+  /** Chat-only actions: archive stops the agent, restore reactivates. */
+  onArchiveChat?: (sessionId: string) => void
+  onRestoreChat?: (sessionId: string) => void
   onKill?: (sessionId: string, source?: SessionKillSource) => void
   onDuplicate?: (sessionId: string) => void
   onMoveToHistory?: (sessionId: string) => void
@@ -103,6 +106,8 @@ export default function SessionList({
   onRename,
   onResume,
   onHibernate,
+  onArchiveChat,
+  onRestoreChat,
   onKill,
   onDuplicate,
   onMoveToHistory,
@@ -552,6 +557,8 @@ export default function SessionList({
       onCancelEdit: cancelEdit,
       onRename: handleRename,
       onHibernate: onHibernate ?? noop,
+      onArchiveChat: onArchiveChat ?? noop,
+      onRestoreChat: onRestoreChat ?? noop,
       onKill: onKill ? killFromContextMenu : noop,
       onDuplicate: onDuplicate ?? noop,
       onResume: onResume ?? noop,
@@ -579,6 +586,8 @@ export default function SessionList({
       cancelEdit,
       handleRename,
       onHibernate,
+      onArchiveChat,
+      onRestoreChat,
       onKill,
       killFromContextMenu,
       onDuplicate,
@@ -791,6 +800,8 @@ export default function SessionList({
                               onCancelEdit={cancelEdit}
                               onRename={handleRename}
                               onHibernate={onHibernate}
+                              onArchiveChat={onArchiveChat}
+                              onRestoreChat={onRestoreChat}
                               onKill={onKill ? killFromContextMenu : undefined}
                               onDuplicate={onDuplicate}
                             />

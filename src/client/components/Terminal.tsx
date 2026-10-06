@@ -69,6 +69,10 @@ interface TerminalProps {
   onResumeSession: (sessionId: string) => void
   onHibernateSession?: (sessionId: string) => void
   onMoveToHistory?: (sessionId: string) => void
+  /** Chat-only actions forwarded to the mobile drawer: archive stops the
+   *  agent, restore reactivates. */
+  onArchiveChat?: (sessionId: string) => void
+  onRestoreChat?: (sessionId: string) => void
   onOpenSettings: () => void
   loading?: boolean
   error?: string | null
@@ -139,6 +143,8 @@ export default function Terminal({
   onResumeSession,
   onHibernateSession,
   onMoveToHistory,
+  onArchiveChat,
+  onRestoreChat,
   onOpenSettings,
   loading = false,
   error = null,
@@ -1715,6 +1721,8 @@ export default function Terminal({
           onRename={onRenameSession}
           onResume={onResumeSession}
           onHibernate={onHibernateSession}
+          onArchiveChat={onArchiveChat}
+          onRestoreChat={onRestoreChat}
           onMoveToHistory={onMoveToHistory}
           onNewSession={onNewSession}
           loading={loading}

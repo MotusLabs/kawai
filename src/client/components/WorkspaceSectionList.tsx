@@ -61,6 +61,9 @@ export interface GroupedRowContext {
   onCancelEdit: () => void
   onRename: (sessionId: string, newName: string) => void
   onHibernate: (agentSessionId: string) => void
+  /** Chat-only actions: archive stops the agent, restore reactivates. */
+  onArchiveChat: (sessionId: string) => void
+  onRestoreChat: (sessionId: string) => void
   onKill: (sessionId: string) => void
   onDuplicate: (sessionId: string) => void
   onResume: (sessionId: string) => void
@@ -573,6 +576,8 @@ function GroupedLiveRows({ entries, ctx, remountKey }: GroupedLiveRowsProps) {
                   onCancelEdit={ctx.onCancelEdit}
                   onRename={ctx.onRename}
                   onHibernate={ctx.onHibernate}
+                  onArchiveChat={ctx.onArchiveChat}
+                  onRestoreChat={ctx.onRestoreChat}
                   onKill={ctx.onKill}
                   onDuplicate={ctx.onDuplicate}
                 />

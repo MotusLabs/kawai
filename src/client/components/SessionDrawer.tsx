@@ -24,6 +24,9 @@ interface SessionDrawerProps {
   onResume?: (sessionId: string) => void
   onHibernate?: (sessionId: string) => void
   onMoveToHistory?: (sessionId: string) => void
+  /** Chat-only actions: archive stops the agent, restore reactivates. */
+  onArchiveChat?: (sessionId: string) => void
+  onRestoreChat?: (sessionId: string) => void
   onNewSession: () => boolean | void
   loading: boolean
   error: string | null
@@ -53,6 +56,8 @@ export default function SessionDrawer({
   onResume,
   onHibernate,
   onMoveToHistory,
+  onArchiveChat,
+  onRestoreChat,
   onNewSession,
   loading,
   error,
@@ -183,6 +188,8 @@ export default function SessionDrawer({
           onResume={onResume}
           onHibernate={onHibernate}
           onMoveToHistory={onMoveToHistory}
+          onArchiveChat={onArchiveChat}
+          onRestoreChat={onRestoreChat}
           onNewSession={() => {
             if (onNewSession() !== false) onClose()
           }}

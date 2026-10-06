@@ -11,10 +11,12 @@ import { motion } from 'motion/react'
 import { useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import { HandIcon, XCloseIcon } from '@untitledui-icons/react/line'
+import ArchiveIcon from '@untitledui-icons/react/line/esm/ArchiveIcon'
 import Copy01Icon from '@untitledui-icons/react/line/esm/Copy01Icon'
 import File06Icon from '@untitledui-icons/react/line/esm/File06Icon'
 import Edit05Icon from '@untitledui-icons/react/line/esm/Edit05Icon'
 import Moon01Icon from '@untitledui-icons/react/line/esm/Moon01Icon'
+import RefreshCcw03Icon from '@untitledui-icons/react/line/esm/RefreshCcw03Icon'
 import type { Session } from '@shared/types'
 import { activityInSameBucket } from '@shared/activityBucket'
 import { formatRelativeTime } from '../utils/time'
@@ -49,6 +51,16 @@ function canHibernateSession(session: Session): boolean {
     session.remote !== true &&
     session.agentSessionId?.trim()
   )
+}
+
+/** Archive/Restore apply to chat rows only (chat-archive spec: terminal
+ *  sessions keep Kill, Hibernate, and Move to History). */
+function canArchiveChat(session: Session): boolean {
+  return session.kind === 'chat' && session.archivedAt == null
+}
+
+function canRestoreChat(session: Session): boolean {
+  return session.kind === 'chat' && session.archivedAt != null
 }
 
 const strictEquals = <T,>(a: T, b: T): boolean => a === b
@@ -133,6 +145,9 @@ export interface SortableSessionItemProps {
   onCancelEdit: () => void
   onRename: (sessionId: string, newName: string) => void
   onHibernate?: (agentSessionId: string) => void
+  /** Chat-only actions: archive stops the agent, restore reactivates. */
+  onArchiveChat?: (sessionId: string) => void
+  onRestoreChat?: (sessionId: string) => void
   onKill?: (sessionId: string) => void
   onDuplicate?: (sessionId: string) => void
 }
@@ -168,6 +183,8 @@ const ITEM_PROP_EQUALS: {
   onCancelEdit: strictEquals,
   onRename: strictEquals,
   onHibernate: strictEquals,
+  onArchiveChat: strictEquals,
+  onRestoreChat: strictEquals,
   onKill: strictEquals,
   onDuplicate: strictEquals,
 }
@@ -200,6 +217,8 @@ export const SortableSessionItem = memo(
     onCancelEdit,
     onRename,
     onHibernate,
+    onArchiveChat,
+    onRestoreChat,
     onKill,
     onDuplicate,
   }, ref) {
@@ -240,6 +259,8 @@ export const SortableSessionItem = memo(
   // identical across parent re-renders that do not change this row.
   const canControl = canControlSession(session, remoteAllowControl)
   const canHibernate = canHibernateSession(session)
+  const canArchive = canArchiveChat(session)
+  const canRestore = canRestoreChat(session)
   const handleSelect = useCallback(
     () => onSelect(session.id),
     [onSelect, session.id],
@@ -256,6 +277,14 @@ export const SortableSessionItem = memo(
     const agentSessionId = session.agentSessionId?.trim()
     if (agentSessionId) onHibernate?.(agentSessionId)
   }, [onHibernate, session.agentSessionId])
+  const handleArchiveChat = useCallback(
+    () => onArchiveChat?.(session.id),
+    [onArchiveChat, session.id],
+  )
+  const handleRestoreChat = useCallback(
+    () => onRestoreChat?.(session.id),
+    [onRestoreChat, session.id],
+  )
   const handleKill = useCallback(
     () => onKill?.(session.id),
     [onKill, session.id],
@@ -338,6 +367,8 @@ export const SortableSessionItem = memo(
         onCancelEdit={onCancelEdit}
         onRename={handleRenameRow}
         onHibernate={onHibernate && canHibernate ? handleHibernate : undefined}
+        onArchive={onArchiveChat && canArchive ? handleArchiveChat : undefined}
+        onRestore={onRestoreChat && canRestore ? handleRestoreChat : undefined}
         onKill={onKill && canControl ? handleKill : undefined}
         onDuplicate={onDuplicate && canControl ? handleDuplicate : undefined}
       />
@@ -368,6 +399,10 @@ interface SessionRowProps {
   onCancelEdit: () => void
   onRename: (newName: string) => void
   onHibernate?: () => void
+  /** Chat-only: archive stops the agent and keeps the conversation. */
+  onArchive?: () => void
+  /** Chat-only: restore reactivates an archived conversation. */
+  onRestore?: () => void
   onKill?: () => void
   onDuplicate?: () => void
 }
@@ -387,6 +422,8 @@ export function SessionRow({
   onCancelEdit,
   onRename,
   onHibernate,
+  onArchive,
+  onRestore,
   onKill,
   onDuplicate,
 }: SessionRowProps) {
@@ -651,6 +688,36 @@ export function SessionRow({
             >
               <Moon01Icon width={14} height={14} />
               Hibernate
+            </button>
+          )}
+          {onArchive && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation()
+                setContextMenu(null)
+                onArchive()
+              }}
+              className="w-full px-3 py-2 text-left text-sm text-secondary hover:bg-hover hover:text-primary flex items-center gap-2"
+              role="menuitem"
+              title="Stop the agent and keep this chat read-only until restored"
+            >
+              <ArchiveIcon width={14} height={14} />
+              Archive
+            </button>
+          )}
+          {onRestore && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation()
+                setContextMenu(null)
+                onRestore()
+              }}
+              className="w-full px-3 py-2 text-left text-sm text-secondary hover:bg-hover hover:text-primary flex items-center gap-2"
+              role="menuitem"
+              title="Make this archived chat active again"
+            >
+              <RefreshCcw03Icon width={14} height={14} />
+              Restore
             </button>
           )}
           {session.logFilePath && (

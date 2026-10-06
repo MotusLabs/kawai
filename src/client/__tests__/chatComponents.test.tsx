@@ -58,6 +58,91 @@ const textOf = (node: ReactTestInstance): string =>
 const buttonNamed = (root: ReactTestInstance, name: string) =>
   root.findAllByType('button').find(button => textOf(button) === name)!
 
+describe('chat archive view', () => {
+  // Loose holder so the confirm stub can replace `window` without matching
+  // the full DOM Window type.
+  const windowSlot = globalThis as { window?: unknown }
+  const originalWindow = windowSlot.window
+  let confirmResult = true
+  const confirmCalls: string[] = []
+
+  afterEach(() => {
+    windowSlot.window = originalWindow
+    useChatDebugStore.setState({ views: {} })
+  })
+
+  function renderArchiveView(session: Session) {
+    confirmCalls.length = 0
+    windowSlot.window = {
+      confirm: (message?: string) => {
+        confirmCalls.push(message ?? '')
+        return confirmResult
+      },
+    }
+    const sent: ClientMessage[] = []
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => {
+      renderer = TestRenderer.create(<ChatView
+        session={session}
+        sendMessage={message => { sent.push(message) }}
+        connectionStatus="connected" connectionEpoch={0} error={null}
+        onClose={() => {}} onKill={() => {}} />)
+    })
+    return { sent, renderer }
+  }
+
+  test('archiving an idle chat sends chat-archive without confirmation', () => {
+    const { sent, renderer } = renderArchiveView(chatSession)
+    expect(confirmCalls).toHaveLength(0)
+    act(() => { renderer.root.findByProps({ 'data-testid': 'chat-archive-button' }).props.onClick() })
+    expect(confirmCalls).toHaveLength(0)
+    expect(sent).toContainEqual({ type: 'chat-archive', sessionId: 'chat-1' })
+    renderer.unmount()
+  })
+
+  test('archiving a working chat asks first and sends on confirmation', () => {
+    const working = { ...chatSession, status: 'working' } as Session
+    confirmResult = true
+    const { sent, renderer } = renderArchiveView(working)
+    act(() => { renderer.root.findByProps({ 'data-testid': 'chat-archive-button' }).props.onClick() })
+    expect(confirmCalls).toHaveLength(1)
+    expect(sent).toContainEqual({ type: 'chat-archive', sessionId: 'chat-1' })
+    renderer.unmount()
+  })
+
+  test('declining the confirmation keeps the turn running', () => {
+    const working = { ...chatSession, status: 'working' } as Session
+    confirmResult = false
+    const { sent, renderer } = renderArchiveView(working)
+    act(() => { renderer.root.findByProps({ 'data-testid': 'chat-archive-button' }).props.onClick() })
+    expect(confirmCalls).toHaveLength(1)
+    expect(sent.filter(message => message.type === 'chat-archive')).toEqual([])
+    renderer.unmount()
+  })
+
+  test('an archived chat renders read-only with a Restore bar', () => {
+    const archived = { ...chatSession, archivedAt: '2026-10-01T00:00:00.000Z' } as Session
+    const { sent, renderer } = renderArchiveView(archived)
+
+    // Attach still requests a snapshot; no agent is started for it.
+    expect(sent).toContainEqual({ type: 'chat-attach', sessionId: 'chat-1' })
+    // Read-only: no composer, Stop, Archive button, or request actions.
+    expect(renderer.root.findAllByType('textarea')).toHaveLength(0)
+    expect(renderer.root.findAllByType('form')).toHaveLength(0)
+    expect(buttonNamed(renderer.root, 'Stop')).toBeUndefined()
+    expect(renderer.root.findAllByProps({ 'data-testid': 'chat-archive-button' })).toHaveLength(0)
+    expect(textOf(renderer.root.findByProps({ 'data-testid': 'chat-archived-bar' }))).toContain('Archived')
+    expect(renderer.root.findByProps({ 'data-testid': 'chat-status' }).children).toContain('archived')
+    // Kill stays available for archived chats.
+    expect(buttonNamed(renderer.root, 'Kill session')).toBeTruthy()
+
+    // Restore sends chat-restore.
+    act(() => { buttonNamed(renderer.root, 'Restore').props.onClick() })
+    expect(sent).toContainEqual({ type: 'chat-restore', sessionId: 'chat-1' })
+    renderer.unmount()
+  })
+})
+
 describe('chat debug view', () => {
   afterEach(() => useChatDebugStore.setState({ views: {} }))
 

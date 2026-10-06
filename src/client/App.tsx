@@ -942,6 +942,22 @@ export default function App() {
     sendMessage({ type: 'session-kill', sessionId, source })
   }, [markSessionExiting, setSessions, sendMessage])
 
+  // Chat archive/restore (chat-archive design D2/D3): the server operation is
+  // unconditional and idempotent; confirmation for in-flight turns happens
+  // in ChatView before it ever sends chat-archive.
+  const handleArchiveChat = useCallback(
+    (sessionId: string) => {
+      sendMessage({ type: 'chat-archive', sessionId })
+    },
+    [sendMessage]
+  )
+  const handleRestoreChat = useCallback(
+    (sessionId: string) => {
+      sendMessage({ type: 'chat-restore', sessionId })
+    },
+    [sendMessage]
+  )
+
   useEffect(() => {
     const effectiveModifier = getEffectiveModifier(shortcutModifier)
 
@@ -1206,6 +1222,8 @@ export default function App() {
           onRename={handleRenameSession}
           onResume={handleResumeSession}
           onHibernate={handleHibernateSession}
+          onArchiveChat={handleArchiveChat}
+          onRestoreChat={handleRestoreChat}
           onKill={handleKillSession}
           onDuplicate={handleDuplicateSession}
           onMoveToHistory={handleMoveToHistory}
@@ -1251,6 +1269,8 @@ export default function App() {
         onResumeSession={handleResumeSession}
         onHibernateSession={handleHibernateSession}
         onMoveToHistory={handleMoveToHistory}
+        onArchiveChat={handleArchiveChat}
+        onRestoreChat={handleRestoreChat}
         historySessions={historyAgentSessions}
         loading={!hasLoaded}
         error={connectionError || serverError}
