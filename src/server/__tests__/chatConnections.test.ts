@@ -20,6 +20,7 @@ function harness(wireLogs?: ChatWireLogs) {
     has: (id: string) => id === 'chat-1',
     getSnapshot: () => snapshot,
     send: async (...args: unknown[]) => { calls.push(['send', ...args]); return { ok: true } },
+    start: (...args: unknown[]) => { calls.push(['start', ...args]); return Promise.resolve({ ok: true }) },
     interrupt: (...args: unknown[]) => { calls.push(['interrupt', ...args]); return { ok: true } },
     archive: (...args: unknown[]) => { calls.push(['archive', ...args]); return { ok: true } },
     restore: (...args: unknown[]) => { calls.push(['restore', ...args]); return { ok: true } },
@@ -62,6 +63,18 @@ describe('chat WebSocket subscriptions', () => {
     expect(h.messages).toEqual([h.snapshot])
     await new Promise(resolve => setTimeout(resolve, 0))
     expect(h.messages[1]).toEqual({ type: 'chat-events', sessionId: 'chat-1', events: [delta(1), delta(2)] })
+  })
+
+  test('attach sends the snapshot before starting the agent', async () => {
+    const h = harness()
+    await h.connections.handle(h.connection, { type: 'chat-attach', sessionId: 'chat-1' })
+    // The snapshot is on the wire before the start request reaches the
+    // manager; the manager dedupes concurrent attaches into one spawn.
+    expect(h.messages).toEqual([h.snapshot])
+    expect(h.calls).toEqual([['start', 'chat-1']])
+    // A second client attaching routes another idempotent start request.
+    await h.connections.handle({ send: () => {} }, { type: 'chat-attach', sessionId: 'chat-1' })
+    expect(h.calls).toEqual([['start', 'chat-1'], ['start', 'chat-1']])
   })
 
   test('deltas from different turns remain in different batches', async () => {

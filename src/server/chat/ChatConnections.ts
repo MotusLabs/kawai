@@ -139,6 +139,10 @@ export class ChatConnections {
         sessions.add(sessionId)
         this.subscriptions.set(connection, sessions)
         connection.send(snapshot)
+        // Start the agent (no prompt) after the snapshot so its command list
+        // is available before the first message; fire-and-forget, and
+        // refusals/failures surface through the session, not this reply.
+        void this.manager.start(sessionId)
         return
       }
       case 'chat-detach':
