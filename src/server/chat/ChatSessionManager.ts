@@ -29,7 +29,14 @@ import {
 } from './claudeExecutable'
 import type { ChatProviderEnv } from './chatProviderEnv'
 import type { ChatWireLogs } from './ChatWireLogs'
-import { resolveClaudeProfile, claudeLaunchKey, type ClaudeLaunchConfiguration } from './ClaudeProfiles'
+import {
+  resolveClaudeProfile,
+  claudeLaunchKey,
+  verifyProfileExecutable,
+  type ClaudeLaunchConfiguration,
+  type ProfileCatalogContext,
+} from './ClaudeProfiles'
+import { logger } from '../logger'
 import { probeSdkAvailability } from './sdkAvailability'
 import {
   findTranscriptPath,
@@ -69,6 +76,13 @@ export interface ChatSessionManagerOptions {
   wireLogs?: ChatWireLogs
   /** Project-directory check; injected in tests that use fictitious paths. */
   isDirectory?: (path: string) => boolean
+  /**
+   * Home directory for the user-level profile catalog (~/.kawai/profiles.json
+   * lives here). Injected in tests so a real home catalog cannot leak in.
+   */
+  profileCatalogHome?: string
+  /** Catalog file failure sink; defaults to the structured logger. */
+  catalogErrorLog?: (errors: string[]) => void
 }
 
 export type ChatCreateResult =
@@ -106,13 +120,13 @@ export class ChatSessionManager {
     const project = resolveProjectDirectory(input.projectPath, this.options.isDirectory)
     if (!project.ok) return project
     try {
-      resolveClaudeProfile(input.claudeProfileId, this.providerEnv())
+      this.launchFor(input.claudeProfileId, project.path)
     } catch (error) {
       return { ok: false, error: String(error instanceof Error ? error.message : error) }
     }
-    if (!this.authOk(input.claudeProfileId)) return { ok: false, error: chatAuthErrorMessage() }
+    if (!this.authOk(input.claudeProfileId, project.path)) return { ok: false, error: chatAuthErrorMessage() }
     try {
-      await this.probeAvailability(input.claudeProfileId)
+      await this.probeAvailability(input.claudeProfileId, project.path)
     } catch (error) {
       if (error instanceof ClaudeExecutableError) {
         // Actionable by construction (names the path and the fix).
@@ -166,11 +180,11 @@ export class ChatSessionManager {
     if (!project.ok) return project
     const projectPath = project.path
     try {
-      resolveClaudeProfile(input.claudeProfileId, this.providerEnv())
+      this.launchFor(input.claudeProfileId, projectPath)
     } catch (error) {
       return { ok: false, error: error instanceof Error ? error.message : String(error) }
     }
-    if (!this.authOk(input.claudeProfileId)) {
+    if (!this.authOk(input.claudeProfileId, projectPath)) {
       return { ok: false, error: chatAuthErrorMessage() }
     }
     const sessionId = `chat-${crypto.randomUUID()}`
@@ -487,12 +501,17 @@ export class ChatSessionManager {
     const existing = this.drivers.get(sessionId)
     if (existing) {
       if (existing.isDead) {
-        resolveClaudeProfile(this.records.get(sessionId)?.claudeProfileId, this.providerEnv())
-        if (!this.authOk(this.records.get(sessionId)?.claudeProfileId)) throw new Error(chatAuthErrorMessage())
-        // The executable may have been removed or moved since the last
-        // spawn: surface a failure now, and respawn the path just verified.
-        const executable = await this.checkExecutable()
-        existing.setClaudeExecutablePath(executable?.path)
+        const record = this.records.get(sessionId)
+        const launch = this.launchFor(record?.claudeProfileId, record?.projectPath)
+        if (launch.executable) {
+          verifyProfileExecutable(record?.claudeProfileId ?? 'default', launch.executable)
+        } else {
+          // The executable may have been removed or moved since the last
+          // spawn: surface a failure now, and respawn the path just verified.
+          const executable = await this.checkExecutable()
+          existing.setClaudeExecutablePath(executable?.path)
+        }
+        if (!this.authOk(record?.claudeProfileId, record?.projectPath)) throw new Error(chatAuthErrorMessage())
       }
       return existing
     }
@@ -503,11 +522,14 @@ export class ChatSessionManager {
     // The single guard for every would-be spawn path (design D2 risk): an
     // archived session must never start an agent process.
     if (record.archivedAt != null) throw new Error(ARCHIVED_SESSION_ERROR)
-    resolveClaudeProfile(record.claudeProfileId, this.providerEnv())
-    if (!this.authOk(record.claudeProfileId)) throw new Error(chatAuthErrorMessage())
+    const launch = this.launchFor(record.claudeProfileId, record.projectPath)
+    if (launch.executable) verifyProfileExecutable(record.claudeProfileId ?? 'default', launch.executable)
+    if (!this.authOk(record.claudeProfileId, record.projectPath)) throw new Error(chatAuthErrorMessage())
     this.captureHistory(sessionId)
     const promise = (async () => {
-      const executable = await this.checkExecutable()
+      // A profile executable replaces the standard binary (already verified
+      // above); otherwise every spawn runs the checked Claude Code install.
+      const executable = launch.executable ? null : await this.checkExecutable()
       const queryFactory = await this.resolveQueryFactory()
       const driver = new ChatSessionDriver({
         sessionId: record.sessionId,
@@ -519,6 +541,9 @@ export class ChatSessionManager {
         getApprovalPolicy: () =>
           this.records.get(record.sessionId)?.approvalPolicy ?? 'manual',
         claudeProfileId: record.claudeProfileId,
+        ...(this.options.profileCatalogHome
+          ? { profileCatalogHome: this.options.profileCatalogHome }
+          : {}),
         ...(executable ? { claudeExecutablePath: executable.path } : {}),
         ...(this.options.wireLogs
           ? { wire: this.options.wireLogs.get(record.sessionId) }
@@ -558,10 +583,13 @@ export class ChatSessionManager {
    * (path + realpath + mtime), so an upgraded executable re-probes the
    * handshake even when the provider configuration is unchanged.
    */
-  private async probeAvailability(profileId: string = 'default'): Promise<void> {
-    const executable = await this.checkExecutable()
+  private async probeAvailability(profileId: string = 'default', projectPath?: string): Promise<void> {
     const providerEnv = this.providerEnv()
-    const launch = resolveClaudeProfile(profileId, providerEnv)
+    const launch = this.launchFor(profileId, projectPath)
+    // A profile executable replaces the standard binary; verify it the same
+    // way creation would so the probe failure is the actionable one.
+    if (launch.executable) verifyProfileExecutable(profileId, launch.executable)
+    const executable = launch.executable ? null : await this.checkExecutable()
     const key = executable
       ? `${claudeLaunchKey(launch)}\0${executable.identity}`
       : claudeLaunchKey(launch)
@@ -569,7 +597,7 @@ export class ChatSessionManager {
     if (cached) return cached
     const probe = this.options.availabilityProbe ??
       (this.options.queryFactory ? async () => {} : probeSdkAvailability)
-    const promise = probe(providerEnv, launch, executable?.path)
+    const promise = probe(providerEnv, launch, launch.executable ?? executable?.path)
     // Bound retained configurations; evicted successful probes can be repeated.
     if (this.availability.size >= 32) this.availability.delete(this.availability.keys().next().value!)
     this.availability.set(key, promise)
@@ -596,11 +624,32 @@ export class ChatSessionManager {
     return this.options.getProviderEnv?.() ?? {}
   }
 
-  private authOk(profileId: string = 'default'): boolean {
+  /** Catalog lookup context for a session's project path. */
+  private catalogCtx(projectPath?: string): ProfileCatalogContext {
+    return {
+      ...(projectPath ? { projectPath } : {}),
+      ...(this.options.profileCatalogHome
+        ? { homeDir: this.options.profileCatalogHome }
+        : {}),
+    }
+  }
+
+  /**
+   * Launch configuration for a profile at a project path — every resolve site
+   * goes through here so catalog file failures are reported (never silently
+   * skipped: an invalid file would otherwise launch with inherited settings).
+   */
+  private launchFor(profileId: string | undefined, projectPath?: string): ClaudeLaunchConfiguration {
+    const report = this.options.catalogErrorLog
+      ?? (errors => logger.warn('chat_profile_catalog_errors', { errors }))
+    return resolveClaudeProfile(profileId, this.providerEnv(), this.catalogCtx(projectPath), report)
+  }
+
+  private authOk(profileId: string = 'default', projectPath?: string): boolean {
     return this.options.authCheck
       ? this.options.authCheck()
       : hasClaudeAuth(Object.fromEntries(
-        Object.entries(resolveClaudeProfile(profileId, this.providerEnv()).env ?? {})
+        Object.entries(this.launchFor(profileId, projectPath).env ?? {})
           .filter((entry): entry is [string, string] => entry[1] !== undefined)
       ))
   }
