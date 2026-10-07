@@ -23,9 +23,9 @@
 
 ## 4. Integration check
 
-- [ ] 4.1 Run `bun run lint && bun run typecheck && bun run test` and verify all pass
+- [x] 4.1 Run `bun run lint && bun run typecheck && bun run test` and verify all pass
 - [ ] 4.2 With `bun run dev` and the dev-browser skill, open a chat session with the markdown showcase fixture. Check the computed font sizes: at default settings, the message body is 15px and the "You"/"Claude" labels and turn footer are 12px. Set 18 in Settings: the body becomes 18px, headings are larger than the body, and the terminal font size is unchanged. Open the session log preview and confirm its markdown is still 11.375px. Take before and after screenshots
-- [ ] 4.3 Emulate a touch device (coarse pointer) with the chat font size at 13, and check that the composer's computed font size is 16px
+- [x] 4.3 Emulate a touch device (coarse pointer) with the chat font size at 13, and check that the composer's computed font size is 16px
 
 ## Workflow follow-up
 
