@@ -25,6 +25,7 @@ describe('shared markdown renderer', () => {
     const { root, unmount } = render('# H1\n\n## H2\n\n### H3\n\n- item\n\n```\nx\n```\n\n| a |\n| - |\n| 1 |')
     const sized = root.findAll(node => typeof node.type === 'string' && /\btext-(xs|sm|base|lg)\b|leading-6/.test(classNameOf(node)))
     expect(sized).toHaveLength(0)
+    expect(root.findAll(node => node.type === 'ul').every(node => classNameOf(node).includes('pl-[1.5em]'))).toBe(true)
     unmount()
   })
 

@@ -23,9 +23,9 @@ const markdownComponents: Components = {
   // remark-gfm marks a whole list contains-task-list when any item has a
   // checkbox, so markers are dropped per task-list-item; ordinary siblings in
   // a mixed list keep their bullet or number.
-  ul: ({ children }) => <ul className="my-2 list-disc space-y-1 pl-5">{children}</ul>,
+  ul: ({ children }) => <ul className="my-2 list-disc space-y-1 pl-[1.5em]">{children}</ul>,
   ol: ({ children, start }) => (
-    <ol start={start} className="my-2 list-decimal space-y-1 pl-5">
+    <ol start={start} className="my-2 list-decimal space-y-1 pl-[1.5em]">
       {children}
     </ol>
   ),
