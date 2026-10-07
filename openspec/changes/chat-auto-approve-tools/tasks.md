@@ -7,9 +7,9 @@
 
 ## 2. Policy decision and driver
 
-- [ ] 2.1 Create `src/server/chat/approvalPolicy.ts` with `decideApproval(policy, toolName)` (design D1) and a header comment; verify unit tests cover manual → ask, auto → allow, and `AskUserQuestion` → ask under both policies
-- [ ] 2.2 In `ChatSessionDriver`, take a `getApprovalPolicy` option, grant `allow` decisions in `canUseTool` immediately with a policy `request_resolved` carrying `tool` and no pending request, and set `decidedBy: 'user'` on user Allow/Deny; verify driver tests show no `approval_request`, no `permission` status under auto, questions still pending under auto, and unchanged manual behavior
-- [ ] 2.3 Add `onApprovalPolicyChanged(policy)` to the driver, which on `auto` grants pending approvals with `decidedBy: 'policy'` and leaves questions pending; verify a driver test with one pending approval and one pending question
+- [x] 2.1 Create `src/server/chat/approvalPolicy.ts` with `decideApproval(policy, toolName)` (design D1) and a header comment; verify unit tests cover manual → ask, auto → allow, and `AskUserQuestion` → ask under both policies
+- [x] 2.2 In `ChatSessionDriver`, take a `getApprovalPolicy` option, grant `allow` decisions in `canUseTool` immediately with a policy `request_resolved` carrying `tool` and no pending request, and set `decidedBy: 'user'` on user Allow/Deny; verify driver tests show no `approval_request`, no `permission` status under auto, questions still pending under auto, and unchanged manual behavior
+- [x] 2.3 Add `onApprovalPolicyChanged(policy)` to the driver, which on `auto` grants pending approvals with `decidedBy: 'policy'` and leaves questions pending; verify a driver test with one pending approval and one pending question
 
 ## 3. Manager and WebSocket routing
 

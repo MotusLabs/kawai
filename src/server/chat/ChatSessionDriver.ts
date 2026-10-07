@@ -18,6 +18,7 @@ import type {
 } from '@anthropic-ai/claude-agent-sdk'
 import type {
   ChatApprovalDecision,
+  ChatApprovalPolicy,
   ChatEvent,
   ChatPendingRequest,
   ChatQuestion,
@@ -30,6 +31,7 @@ import {
   toolResultText,
 } from './contentBlocks'
 import type { ChatProviderEnv } from './chatProviderEnv'
+import { decideApproval } from './approvalPolicy'
 import { resolveClaudeProfile } from './ClaudeProfiles'
 import { TurnQueue } from './TurnQueue'
 import { createWireTappedSpawn, type ChatWireRecorder } from './wireTap'
@@ -55,6 +57,12 @@ export interface ChatSessionDriverOptions {
   resumeSessionId?: string
   /** Provider overrides, read at each spawn so Settings changes apply. */
   getProviderEnv?: () => ChatProviderEnv
+  /**
+   * Session approval policy, read at each canUseTool call so a live policy
+   * switch applies to the next request without a respawn (design D2).
+   * Omitted = manual (today's behavior).
+   */
+  getApprovalPolicy?: () => ChatApprovalPolicy
   /** Persisted session profile; omitted for legacy Default sessions. */
   claudeProfileId?: string
   /**
@@ -195,12 +203,33 @@ export class ChatSessionDriver {
     this.kill()
   }
 
+  /**
+   * A live policy switch (design D4): switching to auto grants approvals
+   * already pending as cards; questions stay with the user. Switching to
+   * manual affects only later requests, so it is a no-op here.
+   */
+  onApprovalPolicyChanged(policy: ChatApprovalPolicy): void {
+    if (policy !== 'auto') return
+    for (const pending of Array.from(this.pendingRequests.values())) {
+      if (pending.kind !== 'approval' || pending.settled) continue
+      this.pendingRequests.delete(pending.requestId)
+      pending.settled = true
+      pending.settle({ behavior: 'allow' })
+      this.emit({
+        type: 'request_resolved',
+        requestId: pending.requestId,
+        outcome: 'allowed',
+        decidedBy: 'policy',
+      })
+    }
+    this.refreshStatus()
+  }
+
   /** Answer an approval card. First valid answer wins; stale answers error. */
   resolveApproval(
     requestId: string,
     decision: ChatApprovalDecision
-  ): { ok: true } | { ok: false; error: string } {
-    const pending = this.pendingRequests.get(requestId)
+  ): { ok: true } | { ok: false; error: string } {    const pending = this.pendingRequests.get(requestId)
     if (!pending || pending.settled) {
       return {
         ok: false,
@@ -214,13 +243,13 @@ export class ChatSessionDriver {
     pending.settled = true
     if (decision === 'allow') {
       pending.settle({ behavior: 'allow' })
-      this.emit({ type: 'request_resolved', requestId, outcome: 'allowed' })
+      this.emit({ type: 'request_resolved', requestId, outcome: 'allowed', decidedBy: 'user' })
     } else {
       pending.settle({
         behavior: 'deny',
         message: 'User denied this tool use in Agentboard',
       })
-      this.emit({ type: 'request_resolved', requestId, outcome: 'denied' })
+      this.emit({ type: 'request_resolved', requestId, outcome: 'denied', decidedBy: 'user' })
     }
     this.refreshStatus()
     return { ok: true }
@@ -257,7 +286,7 @@ export class ChatSessionDriver {
           : {}),
       },
     })
-    this.emit({ type: 'request_resolved', requestId, outcome: 'answered' })
+    this.emit({ type: 'request_resolved', requestId, outcome: 'answered', decidedBy: 'user' })
     this.refreshStatus()
     return { ok: true }
   }
@@ -500,6 +529,19 @@ export class ChatSessionDriver {
   private readonly canUseTool: CanUseTool = (toolName, input, toolOptions) => {
     const requestId = `req-${crypto.randomUUID()}`
     const turnId = this.activeTurnId ?? 'turn-0'
+    const policy = this.options.getApprovalPolicy?.() ?? 'manual'
+    if (decideApproval(policy, toolName) === 'allow') {
+      // Auto policy (design D3): grant without a card. No pending request is
+      // created, so the session never enters permission status for this use.
+      this.emit({
+        type: 'request_resolved',
+        requestId,
+        outcome: 'allowed',
+        decidedBy: 'policy',
+        tool: toolName,
+      })
+      return Promise.resolve({ behavior: 'allow' } as PermissionResult)
+    }
     const answer = new Promise<PermissionResult>((resolve) => {
       const pending: PendingRequest = {
         requestId,
