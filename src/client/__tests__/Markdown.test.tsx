@@ -21,11 +21,21 @@ function render(content: string) {
 const classNameOf = (node: ReactTestInstance) => String(node.props.className ?? '')
 
 describe('shared markdown renderer', () => {
+  test('inherits its base size: no rem-based text sizes anywhere in the output', () => {
+    const { root, unmount } = render('# H1\n\n## H2\n\n### H3\n\n- item\n\n```\nx\n```\n\n| a |\n| - |\n| 1 |')
+    const sized = root.findAll(node => typeof node.type === 'string' && /\btext-(xs|sm|base|lg)\b|leading-6/.test(classNameOf(node)))
+    expect(sized).toHaveLength(0)
+    unmount()
+  })
+
+
   test('renders headings, lists, blockquote, rule and fenced code blocks', () => {
     const { first, byType, textOf, unmount } = render(
       '# Title\n\n## Subtitle\n\n- one\n- two\n\n1. first\n2. second\n\n> quoted\n\n---\n\n```ts\nconst x = 1\n```',
     )
-    expect(classNameOf(first('h1'))).toContain('text-base')
+    expect(classNameOf(first('h1'))).toContain('text-[1.25em]')
+    expect(classNameOf(first('h2'))).toContain('text-[1.125em]')
+    expect(classNameOf(first('pre'))).toContain('text-[0.9em]')
     expect(classNameOf(first('h2'))).toContain('font-semibold')
     expect(classNameOf(first('ul'))).toContain('list-disc')
     expect(classNameOf(first('ol'))).toContain('list-decimal')

@@ -491,7 +491,10 @@ function TranscriptEntry({ entry, showRole = true }: { entry: ParsedEntry; showR
           {marker}
         </div>
       </div>
-      <Markdown content={entry.content} />
+      {/* Markdown inherits its size; the preview keeps its compact base. */}
+      <div className="min-w-0 text-sm leading-6" data-testid="preview-markdown">
+        <Markdown content={entry.content} />
+      </div>
     </article>
   )
 }
