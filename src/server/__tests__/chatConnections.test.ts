@@ -152,6 +152,53 @@ describe('chat WebSocket subscriptions', () => {
       { type: 'error', message: 'Unknown chat session missing' },
     ])
   })
+
+  test('activity follows the event it describes in the same flush', async () => {
+    const h = harness()
+    await h.connections.handle(h.connection, { type: 'chat-attach', sessionId: 'chat-1' })
+    const toolCall: ChatEvent = {
+      type: 'tool_call', id: 'event-1', sequence: 1, at: 'now', turnId: 'turn-1',
+      toolCallId: 'toolu_1', tool: 'Bash', input: {},
+    }
+    h.connections.publish('chat-1', toolCall)
+    h.connections.publishActivity('chat-1', { phase: 'running_tools', elapsedMs: 0, tool: 'Bash', count: 1 })
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(h.messages.slice(1)).toEqual([
+      { type: 'chat-events', sessionId: 'chat-1', events: [toolCall] },
+      { type: 'chat-activity', sessionId: 'chat-1', activity: { phase: 'running_tools', elapsedMs: 0, tool: 'Bash', count: 1 } },
+    ])
+  })
+
+  test('several activity changes within one tick collapse to the last', async () => {
+    const h = harness()
+    await h.connections.handle(h.connection, { type: 'chat-attach', sessionId: 'chat-1' })
+    h.connections.publishActivity('chat-1', { phase: 'requesting', elapsedMs: 0 })
+    h.connections.publishActivity('chat-1', { phase: 'thinking', elapsedMs: 0 })
+    h.connections.publishActivity('chat-1', { phase: 'retrying', elapsedMs: 0, attempt: 2, maxRetries: 10, errorStatus: 504 })
+    h.connections.publishActivity('chat-1', null)
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(h.messages.slice(1)).toEqual([
+      { type: 'chat-activity', sessionId: 'chat-1', activity: null },
+    ])
+  })
+
+  test('activity reaches only subscribed connections and none after detach', async () => {
+    const h = harness()
+    const otherMessages: ServerMessage[] = []
+    const other = { send: (message: ServerMessage) => otherMessages.push(message) }
+    await h.connections.handle(h.connection, { type: 'chat-attach', sessionId: 'chat-1' })
+    // The second browser never attached: no activity, ever.
+    h.connections.publishActivity('chat-1', { phase: 'thinking', elapsedMs: 0 })
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(h.messages.at(-1)).toMatchObject({ type: 'chat-activity', activity: { phase: 'thinking' } })
+    expect(otherMessages).toEqual([])
+
+    // After detach the queued value is dropped, not delivered late.
+    h.connections.publishActivity('chat-1', { phase: 'responding', elapsedMs: 0 })
+    await h.connections.handle(h.connection, { type: 'chat-detach', sessionId: 'chat-1' })
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(h.messages.filter(message => message.type === 'chat-activity')).toHaveLength(1)
+  })
 })
 
 describe('chat debug subscriptions', () => {
