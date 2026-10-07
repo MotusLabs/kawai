@@ -37,6 +37,12 @@ export const fixtureQueryFactory: ChatQueryFactory = ({ prompt, options, wire })
   })
   const run = async (text: string) => {
     const turn = generation
+    // Activity turns hold the initial request first so the "Waiting for
+    // model…" phase is long enough to observe in a browser.
+    if (/thinking|tool|retry/i.test(text)) {
+      await hold(900)
+      if (closed || turn !== generation) return
+    }
     assistant('**Fixture response** — chat streaming, tools, and permissions are ready.')
     if (/approval|question/i.test(text)) {
       const tool = /question/i.test(text) ? 'AskUserQuestion' : 'Bash'
@@ -62,7 +68,8 @@ export const fixtureQueryFactory: ChatQueryFactory = ({ prompt, options, wire })
       await hold(400)
       if (closed || turn !== generation) return
       push({ type: 'stream_event', event: { type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '', signature: '' } }, parent_tool_use_id: null })
-      await hold(1600)
+      // Long enough for a browser reload mid-phase to restore the row.
+      await hold(5000)
       if (closed || turn !== generation) return
       push({ type: 'stream_event', event: { type: 'content_block_stop', index: 0 }, parent_tool_use_id: null })
       assistant('Thought it over.')

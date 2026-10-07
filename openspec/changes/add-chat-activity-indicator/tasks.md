@@ -20,4 +20,4 @@
 
 ## 4. Integration check
 
-- [ ] 4.1 Use the `dev-browser` skill against `bun run dev` with the development fixture. Confirm the row shows "Waiting for model…", "Thinking…", "Running <tool>…", and "Retrying (…)…" with a ticking timer, hides while text streams, survives a page reload mid-phase with roughly the right elapsed time, and is gone after the turn completes. Save screenshots as evidence
+- [x] 4.1 Use the `dev-browser` skill against `bun run dev` with the development fixture. Confirm the row shows "Waiting for model…", "Thinking…", "Running <tool>…", and "Retrying (…)…" with a ticking timer, hides while text streams, survives a page reload mid-phase with roughly the right elapsed time, and is gone after the turn completes. Save screenshots as evidence
