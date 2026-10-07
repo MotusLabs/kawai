@@ -87,3 +87,53 @@ describe('chat store', () => {
     expect(useChatStore.getState().sessions['chat-2'].events).toHaveLength(1)
   })
 })
+
+describe('chat store activity', () => {
+  test('setActivity anchors the phase on the client clock and clears on null', () => {
+    const store = useChatStore.getState()
+    const before = Date.now()
+    store.setActivity('chat-1', { phase: 'thinking', elapsedMs: 5_000 })
+    const anchored = useChatStore.getState().sessions['chat-1'].activity!
+    const after = Date.now()
+    expect(anchored.value).toEqual({ phase: 'thinking', elapsedMs: 5_000 })
+    expect(anchored.phaseStartedAt).toBeGreaterThanOrEqual(before - 5_000)
+    expect(anchored.phaseStartedAt).toBeLessThanOrEqual(after - 5_000)
+
+    store.setActivity('chat-1', null)
+    expect(useChatStore.getState().sessions['chat-1'].activity).toBeNull()
+  })
+
+  test('a snapshot restores the in-flight activity with its age', () => {
+    const store = useChatStore.getState()
+    const before = Date.now()
+    store.snapshot({
+      type: 'chat-snapshot', sessionId: 'chat-1', events: [delta(1, 'streamed')],
+      pendingRequests: [], status: 'working', throughSequence: 1,
+      activity: { phase: 'running_tools', elapsedMs: 10_000, tool: 'Bash', count: 1 },
+    })
+    const activity = useChatStore.getState().sessions['chat-1'].activity!
+    expect(activity.value.phase).toBe('running_tools')
+    expect(activity.phaseStartedAt).toBeGreaterThanOrEqual(before - 10_000)
+    // An idle snapshot carries no row.
+    store.snapshot({
+      type: 'chat-snapshot', sessionId: 'chat-2', events: [], pendingRequests: [],
+      status: 'waiting', throughSequence: 0, activity: null,
+    })
+    expect(useChatStore.getState().sessions['chat-2'].activity).toBeNull()
+  })
+
+  test('turn end events clear the row even without a server null', () => {
+    const store = useChatStore.getState()
+    store.setActivity('chat-1', { phase: 'thinking', elapsedMs: 1_000 })
+    store.apply('chat-1', [
+      { id: 'done', sequence: 9, at: 'now', turnId: 'turn-1', type: 'turn_completed', subtype: 'success' },
+    ])
+    expect(useChatStore.getState().sessions['chat-1'].activity).toBeNull()
+
+    store.setActivity('chat-1', { phase: 'thinking', elapsedMs: 1_000 })
+    store.apply('chat-1', [
+      { id: 'stop', sequence: 10, at: 'now', turnId: 'turn-2', type: 'turn_interrupted' },
+    ])
+    expect(useChatStore.getState().sessions['chat-1'].activity).toBeNull()
+  })
+})

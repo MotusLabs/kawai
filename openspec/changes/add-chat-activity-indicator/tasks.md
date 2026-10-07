@@ -14,7 +14,7 @@
 
 ## 3. Client
 
-- [ ] 3.1 Add `activity` to `ChatTranscript` in `chatStore.ts`, a `setActivity` action anchoring `phaseStartedAt = Date.now() - elapsedMs`, snapshot handling, and clearing on `turn_completed`/`turn_interrupted`. Route `chat-activity` in `App.tsx`. Verify in `chatStore.test.ts` covering anchoring, snapshot restore, and the turn-end clear
+- [x] 3.1 Add `activity` to `ChatTranscript` in `chatStore.ts`, a `setActivity` action anchoring `phaseStartedAt = Date.now() - elapsedMs`, snapshot handling, and clearing on `turn_completed`/`turn_interrupted`. Route `chat-activity` in `App.tsx`. Verify in `chatStore.test.ts` covering anchoring, snapshot restore, and the turn-end clear
 - [ ] 3.2 Add `src/client/components/chat/ChatActivityRow.tsx` (pulsing dot, the phase labels from design D6, a 1 s ticking `Ns`/`Mm Ss` timer) and render it after `ChatMessages` in `ChatView.tsx`. Hide it for `responding`, when requests are pending, and for archived chats. Verify in `chatComponents.test.tsx` that each label renders, the elapsed time advances with fake timers, and the three hiding cases render no row
 - [ ] 3.3 Update header comments of touched files and the chat bullet in `CLAUDE.md` to mention the activity row, then verify `bun run lint && bun run typecheck && bun run test` pass
 
