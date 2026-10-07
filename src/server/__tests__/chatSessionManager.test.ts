@@ -242,6 +242,29 @@ describe('ChatSessionManager', () => {
     expect(restored.handles).toHaveLength(0)
   })
 
+  test('catalog file failures are reported and the rest of the catalog still launches', async () => {
+    process.env.ANTHROPIC_AUTH_TOKEN = 'test-token'
+    const project = path.join(tempDir, 'proj')
+    fs.mkdirSync(path.join(project, '.kawai'), { recursive: true })
+    const badFile = path.join(project, '.kawai', 'profiles.json')
+    fs.writeFileSync(badFile, '{ not json')
+    const reported: string[][] = []
+    const manager = new ChatSessionManager({
+      isDirectory: anyDirectory,
+      db, registry: new SessionRegistry(), onEvent: () => {},
+      queryFactory: fakeQueryFactory([]),
+      catalogErrorLog: errors => reported.push(errors),
+    })
+    // The invalid file is skipped: Default (shipped catalog) still creates
+    // and spawns — but the failure is reported instead of vanishing.
+    const created = manager.createSession({ projectPath: project })
+    expect(created.ok).toBe(true)
+    expect((await manager.send(created.ok ? created.session.id : '', 'hi')).ok).toBe(true)
+    expect(reported.length).toBeGreaterThan(0)
+    expect(reported[0]![0]).toContain(badFile)
+    manager.shutdown()
+  })
+
   test('profile auth uses global credentials and refuses unauthenticated launch without side effects', async () => {
     let globalEnv = { ANTHROPIC_AUTH_TOKEN: 'global-token' }
     const registry = new SessionRegistry()

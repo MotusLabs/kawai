@@ -401,6 +401,7 @@ export default function NewSessionModal({
               <p role="alert">{catalog.error}</p>
               <button type="button" className="btn mt-1" onClick={catalog.retry}>Retry profiles</button>
             </div>}
+            {catalog.warnings.map(warning => <p key={warning} role="status" className="mt-1 text-xs text-amber-400">{warning}</p>)}
           </div>}
           {showHostPicker && (
             <div>

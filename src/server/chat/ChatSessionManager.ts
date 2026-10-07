@@ -36,6 +36,7 @@ import {
   type ClaudeLaunchConfiguration,
   type ProfileCatalogContext,
 } from './ClaudeProfiles'
+import { logger } from '../logger'
 import { probeSdkAvailability } from './sdkAvailability'
 import {
   findTranscriptPath,
@@ -80,6 +81,8 @@ export interface ChatSessionManagerOptions {
    * lives here). Injected in tests so a real home catalog cannot leak in.
    */
   profileCatalogHome?: string
+  /** Catalog file failure sink; defaults to the structured logger. */
+  catalogErrorLog?: (errors: string[]) => void
 }
 
 export type ChatCreateResult =
@@ -117,7 +120,7 @@ export class ChatSessionManager {
     const project = resolveProjectDirectory(input.projectPath, this.options.isDirectory)
     if (!project.ok) return project
     try {
-      resolveClaudeProfile(input.claudeProfileId, this.providerEnv(), this.catalogCtx(project.path))
+      this.launchFor(input.claudeProfileId, project.path)
     } catch (error) {
       return { ok: false, error: String(error instanceof Error ? error.message : error) }
     }
@@ -177,7 +180,7 @@ export class ChatSessionManager {
     if (!project.ok) return project
     const projectPath = project.path
     try {
-      resolveClaudeProfile(input.claudeProfileId, this.providerEnv(), this.catalogCtx(projectPath))
+      this.launchFor(input.claudeProfileId, projectPath)
     } catch (error) {
       return { ok: false, error: error instanceof Error ? error.message : String(error) }
     }
@@ -499,7 +502,7 @@ export class ChatSessionManager {
     if (existing) {
       if (existing.isDead) {
         const record = this.records.get(sessionId)
-        const launch = resolveClaudeProfile(record?.claudeProfileId, this.providerEnv(), this.catalogCtx(record?.projectPath))
+        const launch = this.launchFor(record?.claudeProfileId, record?.projectPath)
         if (launch.executable) {
           verifyProfileExecutable(record?.claudeProfileId ?? 'default', launch.executable)
         } else {
@@ -519,7 +522,7 @@ export class ChatSessionManager {
     // The single guard for every would-be spawn path (design D2 risk): an
     // archived session must never start an agent process.
     if (record.archivedAt != null) throw new Error(ARCHIVED_SESSION_ERROR)
-    const launch = resolveClaudeProfile(record.claudeProfileId, this.providerEnv(), this.catalogCtx(record.projectPath))
+    const launch = this.launchFor(record.claudeProfileId, record.projectPath)
     if (launch.executable) verifyProfileExecutable(record.claudeProfileId ?? 'default', launch.executable)
     if (!this.authOk(record.claudeProfileId, record.projectPath)) throw new Error(chatAuthErrorMessage())
     this.captureHistory(sessionId)
@@ -582,7 +585,7 @@ export class ChatSessionManager {
    */
   private async probeAvailability(profileId: string = 'default', projectPath?: string): Promise<void> {
     const providerEnv = this.providerEnv()
-    const launch = resolveClaudeProfile(profileId, providerEnv, this.catalogCtx(projectPath))
+    const launch = this.launchFor(profileId, projectPath)
     // A profile executable replaces the standard binary; verify it the same
     // way creation would so the probe failure is the actionable one.
     if (launch.executable) verifyProfileExecutable(profileId, launch.executable)
@@ -631,11 +634,22 @@ export class ChatSessionManager {
     }
   }
 
+  /**
+   * Launch configuration for a profile at a project path — every resolve site
+   * goes through here so catalog file failures are reported (never silently
+   * skipped: an invalid file would otherwise launch with inherited settings).
+   */
+  private launchFor(profileId: string | undefined, projectPath?: string): ClaudeLaunchConfiguration {
+    const report = this.options.catalogErrorLog
+      ?? (errors => logger.warn('chat_profile_catalog_errors', { errors }))
+    return resolveClaudeProfile(profileId, this.providerEnv(), this.catalogCtx(projectPath), report)
+  }
+
   private authOk(profileId: string = 'default', projectPath?: string): boolean {
     return this.options.authCheck
       ? this.options.authCheck()
       : hasClaudeAuth(Object.fromEntries(
-        Object.entries(resolveClaudeProfile(profileId, this.providerEnv(), this.catalogCtx(projectPath)).env ?? {})
+        Object.entries(this.launchFor(profileId, projectPath).env ?? {})
           .filter((entry): entry is [string, string] => entry[1] !== undefined)
       ))
   }

@@ -18,26 +18,45 @@ export type ClaudeLaunchConfiguration = Pick<Options, 'env' | 'model' | 'setting
   executable?: string
 }
 
+/** Public catalog view: picker metadata plus per-file validation failures. */
+export interface ClaudeProfileCatalogView {
+  profiles: { id: string; label: string }[]
+  /** Catalog file failures; the rest of the catalog remains usable. */
+  errors: string[]
+}
+
 /**
  * Catalog identifiers and labels for a project path — the only fields that
- * may cross the client boundary. `default` always leads the list.
+ * may cross the client boundary — together with catalog file failures, so
+ * invalid files are reported instead of silently skipped. `default` always
+ * leads the list.
  */
-export function claudeProfileMetadata(
+export function claudeProfileCatalog(
   ctx: ProfileCatalogContext = {}
-): { id: string; label: string }[] {
-  const { profiles } = resolveProfileCatalog(ctx)
+): ClaudeProfileCatalogView {
+  const { profiles, errors } = resolveProfileCatalog(ctx)
   const metadata = [...profiles.entries()].map(({ 0: id, 1: profile }) => ({ id, label: profile.label }))
   const defaultIndex = metadata.findIndex(profile => profile.id === 'default')
   if (defaultIndex > 0) metadata.unshift(...metadata.splice(defaultIndex, 1))
-  return metadata
+  return { profiles: metadata, errors }
+}
+
+/** Identifier/label list only; see claudeProfileCatalog for the full view. */
+export function claudeProfileMetadata(
+  ctx: ProfileCatalogContext = {}
+): { id: string; label: string }[] {
+  return claudeProfileCatalog(ctx).profiles
 }
 
 export function resolveClaudeProfile(
   id: string = 'default',
   globalEnv: ChatProviderEnv = {},
-  ctx: ProfileCatalogContext = {}
+  ctx: ProfileCatalogContext = {},
+  onCatalogErrors?: (errors: string[]) => void
 ): ClaudeLaunchConfiguration {
-  const { profiles } = resolveProfileCatalog(ctx)
+  const { profiles, errors } = resolveProfileCatalog(ctx)
+  // A failed file skips silently otherwise; report it (the rest resolves).
+  if (errors.length > 0) onCatalogErrors?.(errors)
   const profile = profiles.get(id)
   if (!profile) {
     throw new Error(`Unknown Claude profile "${id}". Restore its catalog file entry before resuming.`)

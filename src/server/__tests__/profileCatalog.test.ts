@@ -220,4 +220,32 @@ describe('layered resolution', () => {
     expect(profiles.get('custom')?.label).toBe('Custom')
     expect(DEFAULT_PROFILE_CATALOG_PATH).toContain('config/profiles.default.json')
   })
+
+  test('home-relative project paths expand before discovery', () => {
+    // The project lives under the home directory; the request carries the
+    // path as the client typed it.
+    const project = path.join(homeDir, 'work', 'proj')
+    fs.mkdirSync(project, { recursive: true })
+    writeCatalog(project, { 'home-proj': { label: 'Home Proj' } })
+    const { profiles, errors } = resolveProfileCatalog({ homeDir, projectPath: '~/work/proj' })
+    expect(errors).toEqual([])
+    expect(profiles.get('home-proj')?.label).toBe('Home Proj')
+
+    // Bare `~` reads the home directory's own catalog.
+    writeCatalog(homeDir, { 'home-root': { label: 'Home Root' } })
+    const atRoot = resolveProfileCatalog({ homeDir, projectPath: '~' })
+    expect(atRoot.errors).toEqual([])
+    expect(atRoot.profiles.get('home-root')?.label).toBe('Home Root')
+
+    // The home file is not re-read as an untrusted project layer: its
+    // executables stay valid when the project path walks through home.
+    writeCatalog(homeDir, { lan: { label: 'LAN', executable: '/usr/local/bin/claude-lan' } })
+    const throughHome = resolveProfileCatalog({ homeDir, projectPath: '~/work/proj' })
+    expect(throughHome.errors).toEqual([])
+    expect(throughHome.profiles.get('lan')?.executable).toBe('/usr/local/bin/claude-lan')
+
+    // Absolute paths are unchanged by expansion.
+    const absolute = resolveProfileCatalog({ homeDir, projectPath: project })
+    expect(absolute.profiles.get('home-proj')?.label).toBe('Home Proj')
+  })
 })

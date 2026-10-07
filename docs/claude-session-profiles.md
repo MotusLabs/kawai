@@ -30,7 +30,9 @@ Entries with the same id merge per environment key: the nearest file wins,
 and an empty value neutralizes an inherited value. Scalar fields (`label`,
 `model`) follow nearest-set-wins; `label` falls back to the profile id. The
 `default` profile is definable in files and always exists (implicit and empty
-when no file defines it — global provider configuration alone).
+when no file defines it — global provider configuration alone). Home-relative
+project paths (`~/work/app`, as typed in New Session) expand to the server
+home before discovery, so the picker and creation read the same files.
 
 ```json
 {
@@ -46,8 +48,10 @@ Catalog `env` keys are restricted to the profile-controlled variables
 (PROFILE_CONTROLLED_ENV): routing, models, attribution, compaction.
 Credentials are never allowed in catalog files; they enter sessions only
 through the server environment or global provider Settings, so catalog files
-stay safe to commit and mount. A file that fails validation is reported and
-skipped; the rest of the catalog still resolves.
+stay safe to commit and mount. A file that fails validation is skipped, and
+the rest of the catalog still resolves — the failure is never silent: the
+picker shows it as a warning next to the profile list, and every launch
+resolution logs it (`chat_profile_catalog_errors` in agentboard.log).
 
 ## Operator-named executables
 
@@ -88,9 +92,10 @@ or through global provider Settings; credentials are not stored in the catalog
 or included in metadata. Credential presence does not prove gateway acceptance.
 Per-profile credential management is outside this feature.
 
-`GET /api/chat/profiles?projectPath=…` returns a JSON array containing only
-`{id, label}` resolved for that project path. A chat WebSocket creation
-request may include `claudeProfileId`:
+`GET /api/chat/profiles?projectPath=…` returns a JSON object:
+`{ profiles: [{id, label}, …], errors: [file failures, …] }`, resolved for
+that project path (profile entries carry identifiers and labels only). A chat
+WebSocket creation request may include `claudeProfileId`:
 
 ```json
 {"type":"session-create","kind":"chat","projectPath":"/workspace/project","claudeProfileId":"glm"}

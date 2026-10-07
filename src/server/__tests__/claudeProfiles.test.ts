@@ -137,3 +137,38 @@ describe('executable-backed profiles', () => {
     expect(claudeLaunchKey({ ...base, executable: '/wrappers/a' })).toBe(a)
   })
 })
+
+describe('catalog reporting', () => {
+  test('home-relative project paths resolve their project catalog', () => {
+    const project = path.join(tempHome, 'proj')
+    fs.mkdirSync(path.join(project, '.kawai'), { recursive: true })
+    fs.writeFileSync(path.join(project, '.kawai', 'profiles.json'), JSON.stringify({
+      'home-proj': { label: 'Home Proj', model: 'glm-5.3-flash[1m]' },
+    }))
+    const launch = resolveClaudeProfile('home-proj', {}, { homeDir: tempHome, projectPath: '~/proj' })
+    expect(launch.model).toBe('glm-5.3-flash[1m]')
+  })
+
+  test('launch resolution reports catalog file failures', () => {
+    const project = fs.mkdtempSync(path.join(os.tmpdir(), 'agentboard-profileerr-'))
+    try {
+      const badFile = path.join(project, '.kawai', 'profiles.json')
+      fs.mkdirSync(path.join(project, '.kawai'), { recursive: true })
+      fs.writeFileSync(badFile, '{ not json')
+      const reported: string[][] = []
+      // The invalid file is skipped (the shipped catalog still resolves), but
+      // the failure reaches the reporter instead of vanishing.
+      const launch = resolveClaudeProfile('default', {}, { homeDir: tempHome, projectPath: project },
+        errors => reported.push(errors))
+      expect(launch).toEqual({})
+      expect(reported).toHaveLength(1)
+      expect(reported[0]).toHaveLength(1)
+      expect(reported[0]![0]).toContain(badFile)
+      // No callback, no throw: resolution keeps working for callers that
+      // cannot report.
+      expect(() => resolveClaudeProfile('default', {}, { homeDir: tempHome, projectPath: project })).not.toThrow()
+    } finally {
+      fs.rmSync(project, { recursive: true, force: true })
+    }
+  })
+})

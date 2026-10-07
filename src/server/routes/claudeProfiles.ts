@@ -1,8 +1,10 @@
 // Public profile metadata and validation for session-create profile inputs.
 // The catalog is resolved for the request's project path, so a `.kawai`
-// directory in the project (or anywhere above it) extends the picker.
+// directory in the project (or anywhere above it) extends the picker; `~`
+// paths expand to the server home. File failures ride along as `errors` so
+// invalid catalog files are reported, not silently skipped.
 import { Hono } from 'hono'
-import { claudeProfileMetadata, type ProfileCatalogContext } from '../chat/ClaudeProfiles'
+import { claudeProfileCatalog, claudeProfileMetadata, type ProfileCatalogContext } from '../chat/ClaudeProfiles'
 
 function catalogContext(projectPath: unknown): ProfileCatalogContext {
   if (typeof projectPath !== 'string') return {}
@@ -12,7 +14,7 @@ function catalogContext(projectPath: unknown): ProfileCatalogContext {
 
 export function createClaudeProfileRoutes() {
   const routes = new Hono()
-  routes.get('/', c => c.json(claudeProfileMetadata(catalogContext(c.req.query('projectPath')))))
+  routes.get('/', c => c.json(claudeProfileCatalog(catalogContext(c.req.query('projectPath')))))
   return routes
 }
 

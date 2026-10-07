@@ -160,6 +160,18 @@ function parseCatalogFile(file: string, trusted: boolean): FileParse {
   return { ok: true, entries }
 }
 
+/**
+ * Expand a leading `~` against the effective home. Catalog requests carry the
+ * project path as the client typed it (`~/work/app`), while session creation
+ * expands home paths separately (paths.ts); expanding here keeps the picker,
+ * create-request validation, and the manager reading the same files.
+ */
+function expandHomePath(projectPath: string, home: string): string {
+  if (projectPath === '~') return home
+  if (projectPath.startsWith('~/')) return path.join(home, projectPath.slice(2))
+  return projectPath
+}
+
 /** `.kawai/profiles.json` files from `/` down to the project path, farthest first. */
 function projectCatalogFiles(projectPath: string): string[] {
   let real = projectPath
@@ -195,8 +207,13 @@ export function resolveProfileCatalog(
     : { file: ctx.imageDefaultPath ?? DEFAULT_PROFILE_CATALOG_PATH, trusted: true }
   // Farthest (base) first; project files follow from root down to the path.
   levels.push(base)
-  if (ctx.projectPath) {
-    for (const file of projectCatalogFiles(ctx.projectPath)) {
+  const projectPath = ctx.projectPath?.trim()
+  if (projectPath) {
+    for (const file of projectCatalogFiles(expandHomePath(projectPath, home))) {
+      // A home-relative project path walks through the user-level file's
+      // directory: it is already read as the trusted base, and re-reading it
+      // as an untrusted project layer would refuse its executables.
+      if (file === base.file) continue
       levels.push({ file, trusted: false })
     }
   }

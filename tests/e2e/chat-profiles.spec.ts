@@ -68,6 +68,30 @@ test('project-level .kawai catalog extends the picker for that path', async ({ p
   }
 })
 
+test('invalid project catalog file warns without blocking creation', async ({ page }, info) => {
+  const project = await mkdtemp(path.join(os.tmpdir(), 'agentboard-e2e-profiles-bad-'))
+  try {
+    await mkdir(path.join(project, '.kawai'), { recursive: true })
+    await writeFile(path.join(project, '.kawai', 'profiles.json'), '{ not json')
+    await page.goto('/')
+    await page.getByRole('button', { name: 'New session', exact: true }).first().click()
+    const dialog = page.getByRole('dialog', { name: 'New Session' })
+    await dialog.getByLabel('Session kind').selectOption('chat')
+    await dialog.locator('input').first().fill(project)
+    // The invalid file is reported by path...
+    await expect(dialog.getByRole('status')).toContainText('profiles.json')
+    // ...while the rest of the catalog resolves: creation still works.
+    await expect(dialog.getByLabel('Profile')).toHaveValue('default')
+    await expect(dialog.getByRole('button', { name: 'Create', exact: true })).toBeEnabled()
+    await dialog.locator('input').last().fill('Invalid catalog check')
+    await page.screenshot({ path: info.outputPath('catalog-warning.png') })
+    await dialog.getByRole('button', { name: 'Create', exact: true }).click()
+    await expect(page.getByTestId('chat-profile')).toHaveText('Profile: Default')
+  } finally {
+    await rm(project, { recursive: true, force: true })
+  }
+})
+
 test('catalog failure blocks chat creation and Retry recovers', async ({ page }, info) => {
   let fail = true
   await page.route('**/api/chat/profiles*', route => fail
