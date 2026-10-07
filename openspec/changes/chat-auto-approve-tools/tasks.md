@@ -13,8 +13,8 @@
 
 ## 3. Manager and WebSocket routing
 
-- [ ] 3.1 Add `ChatSessionManager.setApprovalPolicy` (design D4): write `manual` on creation, refuse archived or unknown sessions, persist via `applyPatch` so the `Session` broadcast carries `approvalPolicy`, call the live driver, append the on/off `notice` through the live-event path, and pass `getApprovalPolicy` to drivers; verify manager tests for broadcast, the notice in a later `getSnapshot`, archived refusal, a no-op repeat, a change with no live driver, and policy kept across restart (restore from DB) and archive/restore
-- [ ] 3.2 Route `chat-set-approval-policy` in `ChatConnections`, rejecting values other than `manual`/`auto` with an error to the sender; verify `chatConnections.test.ts` covers a valid switch, an invalid value, and an archived session
+- [x] 3.1 Add `ChatSessionManager.setApprovalPolicy` (design D4): write `manual` on creation, refuse archived or unknown sessions, persist via `applyPatch` so the `Session` broadcast carries `approvalPolicy`, call the live driver, append the on/off `notice` through the live-event path, and pass `getApprovalPolicy` to drivers; verify manager tests for broadcast, the notice in a later `getSnapshot`, archived refusal, a no-op repeat, a change with no live driver, and policy kept across restart (restore from DB) and archive/restore
+- [x] 3.2 Route `chat-set-approval-policy` in `ChatConnections`, rejecting values other than `manual`/`auto` with an error to the sender; verify `chatConnections.test.ts` covers a valid switch, an invalid value, and an archived session
 
 ## 4. Chat view
 
