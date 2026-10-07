@@ -5,6 +5,7 @@ import path from 'node:path'
 import type { Options, Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk'
 import type { Session } from '../../shared/types'
 import type { ChatActivity, ChatEvent } from '../../shared/chat'
+import type { ClaudeLaunchConfiguration } from '../chat/ClaudeProfiles'
 import { initDatabase, type SessionDatabase } from '../db'
 import { SessionRegistry } from '../SessionRegistry'
 import { ChatWireLogs } from '../chat/ChatWireLogs'
@@ -139,15 +140,19 @@ describe('ChatSessionManager', () => {
   const originalOAuthToken = process.env.CLAUDE_CODE_OAUTH_TOKEN
   const originalAuthToken = process.env.ANTHROPIC_AUTH_TOKEN
   const originalConfigDir = process.env.CLAUDE_CONFIG_DIR
+  const originalHome = process.env.HOME
 
   beforeEach(() => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentboard-chatmgr-'))
     db = initDatabase({ path: path.join(tempDir, 'test.db') })
-    // Isolate auth from the host: no API key, empty CLI config dir.
+    // Isolate auth from the host: no API key, empty CLI config dir. HOME is
+    // pinned so the profile catalog resolves against an empty home — a real
+    // ~/.kawai must not leak into these tests.
     delete process.env.ANTHROPIC_API_KEY
     delete process.env.CLAUDE_CODE_OAUTH_TOKEN
     delete process.env.ANTHROPIC_AUTH_TOKEN
     process.env.CLAUDE_CONFIG_DIR = path.join(tempDir, 'claude-config')
+    process.env.HOME = tempDir
   })
 
   afterEach(() => {
@@ -170,6 +175,11 @@ describe('ChatSessionManager', () => {
       process.env.CLAUDE_CONFIG_DIR = originalConfigDir
     } else {
       delete process.env.CLAUDE_CONFIG_DIR
+    }
+    if (originalHome !== undefined) {
+      process.env.HOME = originalHome
+    } else {
+      delete process.env.HOME
     }
     db.close()
     fs.rmSync(tempDir, { recursive: true, force: true })
@@ -209,6 +219,55 @@ describe('ChatSessionManager', () => {
     unknown.manager.shutdown()
   })
 
+  test('resume re-resolves the stored profile against the current filesystem', async () => {
+    process.env.ANTHROPIC_AUTH_TOKEN = 'test-token'
+    const project = path.join(tempDir, 'proj')
+    fs.mkdirSync(path.join(project, '.kawai'), { recursive: true })
+    const catalogFile = path.join(project, '.kawai', 'profiles.json')
+    fs.writeFileSync(catalogFile, JSON.stringify({
+      'glm-flash': { label: 'GLM Flash', model: 'glm-5.3-flash[1m]' },
+    }))
+    const first = createHarness(db)
+    const created = first.manager.createSession({ projectPath: project, claudeProfileId: 'glm-flash' })
+    expect(created.ok).toBe(true)
+    await first.manager.send(created.ok ? created.session.id : '', 'first turn')
+    expect(first.handles[0]!.options.model).toBe('glm-5.3-flash[1m]')
+    first.manager.shutdown()
+
+    // The defining file is gone after a restart: the session survives with
+    // its stored identity, and sending reports the missing profile.
+    fs.rmSync(catalogFile)
+    const restored = createHarness(db)
+    const result = await restored.manager.send(created.ok ? created.session.id : '', 'resume')
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.error).toContain('glm-flash')
+    expect(restored.registry.get(created.ok ? created.session.id : '')?.claudeProfileId).toBe('glm-flash')
+    expect(restored.handles).toHaveLength(0)
+  })
+
+  test('catalog file failures are reported and the rest of the catalog still launches', async () => {
+    process.env.ANTHROPIC_AUTH_TOKEN = 'test-token'
+    const project = path.join(tempDir, 'proj')
+    fs.mkdirSync(path.join(project, '.kawai'), { recursive: true })
+    const badFile = path.join(project, '.kawai', 'profiles.json')
+    fs.writeFileSync(badFile, '{ not json')
+    const reported: string[][] = []
+    const manager = new ChatSessionManager({
+      isDirectory: anyDirectory,
+      db, registry: new SessionRegistry(), onEvent: () => {},
+      queryFactory: fakeQueryFactory([]),
+      catalogErrorLog: errors => reported.push(errors),
+    })
+    // The invalid file is skipped: Default (shipped catalog) still creates
+    // and spawns — but the failure is reported instead of vanishing.
+    const created = manager.createSession({ projectPath: project })
+    expect(created.ok).toBe(true)
+    expect((await manager.send(created.ok ? created.session.id : '', 'hi')).ok).toBe(true)
+    expect(reported.length).toBeGreaterThan(0)
+    expect(reported[0]![0]).toContain(badFile)
+    manager.shutdown()
+  })
+
   test('profile auth uses global credentials and refuses unauthenticated launch without side effects', async () => {
     let globalEnv = { ANTHROPIC_AUTH_TOKEN: 'global-token' }
     const registry = new SessionRegistry()
@@ -234,7 +293,7 @@ describe('ChatSessionManager', () => {
 
   test('availability caches complete profile configuration and retries failures', async () => {
     let globalEnv = { ANTHROPIC_AUTH_TOKEN: 'global-token' }
-    const launches: Options[] = []
+    const launches: ClaudeLaunchConfiguration[] = []
     let fail = false
     const manager = new ChatSessionManager({ isDirectory: anyDirectory, db, registry: new SessionRegistry(), onEvent: () => {}, getProviderEnv: () => globalEnv,
       availabilityProbe: async (_env, launch) => { launches.push(launch!); if (fail) throw new Error('failed') },

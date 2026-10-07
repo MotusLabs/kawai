@@ -77,10 +77,25 @@ describe('chat components', () => {
 
 const chatSession = { id: 'chat-1', name: 'Chat', projectPath: '/tmp/project', status: 'waiting', kind: 'chat' } as unknown as Session
 const wireFrame = (seq: number, raw: string, dir: ChatWireFrame['dir'] = 'in'): ChatWireFrame => ({ seq, at: '2026-10-05T12:00:00.000Z', dir, raw })
+const deltaFrame = (seq: number, dir: ChatWireFrame['dir'] = 'in'): ChatWireFrame =>
+  wireFrame(seq, JSON.stringify({ type: 'stream_event', event: { type: 'content_block_delta' } }), dir)
 const textOf = (node: ReactTestInstance): string =>
   node.children.map(child => typeof child === 'string' ? child : textOf(child)).join('')
 const buttonNamed = (root: ReactTestInstance, name: string) =>
   root.findAllByType('button').find(button => textOf(button) === name)!
+/** Runs `run` with a stubbed document capturing every copied string. */
+const withClipboard = (run: () => void): string[] => {
+  const copied: string[] = []
+  const originalDocument = globalThis.document
+  const textarea = { value: '', style: {}, focus: () => {}, select: () => {} }
+  globalThis.document = {
+    createElement: () => textarea,
+    body: { appendChild: () => {}, removeChild: () => {} },
+    execCommand: () => { copied.push(textarea.value); return true },
+  } as unknown as Document
+  try { run() } finally { globalThis.document = originalDocument }
+  return copied
+}
 
 describe('chat approval policy', () => {
   afterEach(() => useChatDebugStore.setState({ views: {} }))
@@ -323,6 +338,120 @@ describe('chat debug view', () => {
       globalThis.document = originalDocument
     }
     expect(copied).toEqual([raw])
+    renderer.unmount()
+  })
+
+  test('a run of frames renders as one collapsed group row with count and ranges', () => {
+    const frames = Array.from({ length: 20 }, (_, index) => deltaFrame(index + 1))
+    const { renderer } = renderPanel(openView(frames))
+    const group = renderer.root.findByProps({ 'data-group-seq': 1 })
+    const text = textOf(group)
+    expect(text).toContain('← Claude')
+    expect(text).toContain('#1–#20')
+    expect(text).toContain('stream_event · content_block_delta')
+    expect(text).toContain('×20')
+    expect(group.findAllByType('button')[0]!.props['aria-expanded']).toBe(false)
+    // Collapsed: no member rows are rendered.
+    expect(group.findAllByProps({ 'data-frame-seq': 1 })).toHaveLength(0)
+    renderer.unmount()
+  })
+
+  test('expanding a group lists member rows with pretty JSON and Copy all joins raw lines', () => {
+    const frames = [
+      wireFrame(1, JSON.stringify({ type: 'stream_event', event: { type: 'content_block_delta', delta: 1 } })),
+      wireFrame(2, JSON.stringify({ type: 'system', subtype: 'thinking_tokens' })),
+      wireFrame(3, JSON.stringify({ type: 'stream_event', event: { type: 'content_block_delta', delta: 3 } })),
+    ]
+    const { renderer } = renderPanel(openView(frames))
+    const group = renderer.root.findByProps({ 'data-group-seq': 1 })
+    // ×N counts the run's delta frames; absorbed thinking_tokens report on top.
+    expect(textOf(group)).toContain('×2')
+    expect(textOf(group)).toContain('+1 thinking_tokens')
+    act(() => { group.findAllByType('button')[0]!.props.onClick() })
+    expect(group.findAllByType('button')[0]!.props['aria-expanded']).toBe(true)
+    const members = frames.map((_, index) => group.findByProps({ 'data-frame-seq': index + 1 }))
+
+    // A member expands to pretty JSON like an ungrouped row.
+    act(() => { members[1]!.findAllByType('button')[0]!.props.onClick() })
+    expect(members[1]!.findByType('pre').children.join('')).toBe(JSON.stringify(JSON.parse(frames[1]!.raw), null, 2))
+
+    // A member copies its raw line; Copy all joins every member's raw line.
+    let memberCopy: string[] = []
+    let allCopy: string[] = []
+    act(() => { memberCopy = withClipboard(() => buttonNamed(members[1]!, 'Copy').props.onClick()) })
+    act(() => { allCopy = withClipboard(() => buttonNamed(group, 'Copy all').props.onClick()) })
+    expect(memberCopy).toEqual([frames[1]!.raw])
+    expect(allCopy).toEqual([frames.map(frame => frame.raw).join('\n')])
+    renderer.unmount()
+  })
+
+  test('a group grows in place and stays expanded across live and older frames', () => {
+    const { renderer } = renderPanel(openView([deltaFrame(1), deltaFrame(2)]))
+    const group = renderer.root.findByProps({ 'data-group-seq': 1 })
+    act(() => { group.findAllByType('button')[0]!.props.onClick() })
+    const update = (frames: ChatWireFrame[]) => act(() => {
+      renderer.update(<ChatDebugPanel sessionId="chat-1" view={openView(frames)} connected
+        sendMessage={() => {}} onClose={() => {}} />)
+    })
+
+    // A live frame of the same type joins the expanded group; no new row.
+    update([deltaFrame(1), deltaFrame(2), deltaFrame(3)])
+    const grown = renderer.root.findByProps({ 'data-group-seq': 1 })
+    expect(grown.findAllByType('button')[0]!.props['aria-expanded']).toBe(true)
+    expect(textOf(grown)).toContain('×3')
+    expect(grown.findAllByProps({ 'data-frame-seq': 3 })).toHaveLength(1)
+    expect(renderer.root.findAllByProps({ 'data-group-seq': 1 })).toHaveLength(1)
+
+    // An older page prepends members; the group stays expanded under a new first seq.
+    update([deltaFrame(0), deltaFrame(1), deltaFrame(2), deltaFrame(3)])
+    const older = renderer.root.findByProps({ 'data-group-seq': 0 })
+    expect(older.findAllByType('button')[0]!.props['aria-expanded']).toBe(true)
+    expect(textOf(older)).toContain('×4')
+
+    // A different-type live frame starts its own row instead of joining.
+    update([deltaFrame(0), deltaFrame(1), deltaFrame(2), deltaFrame(3), wireFrame(4, '{"type":"result","subtype":"success"}')])
+    expect(renderer.root.findAllByProps({ 'data-group-seq': 0 })).toHaveLength(1)
+    expect(textOf(renderer.root.findByProps({ 'data-frame-seq': 4 }))).toContain('result · success')
+    renderer.unmount()
+  })
+
+  test('an expanded lone frame keeps its JSON open when a live frame groups it', () => {
+    const { renderer } = renderPanel(openView([deltaFrame(1)]))
+    const row = renderer.root.findByProps({ 'data-frame-seq': 1 })
+    act(() => { row.findAllByType('button')[0]!.props.onClick() })
+    expect(row.findByType('pre')).toBeTruthy()
+    // A matching live frame turns the run into a group; the frame the user
+    // expanded must not vanish into a collapsed row.
+    act(() => {
+      renderer.update(<ChatDebugPanel sessionId="chat-1" view={openView([deltaFrame(1), deltaFrame(2)])} connected
+        sendMessage={() => {}} onClose={() => {}} />)
+    })
+    const group = renderer.root.findByProps({ 'data-group-seq': 1 })
+    expect(group.findAllByType('button')[0]!.props['aria-expanded']).toBe(true)
+    expect(group.findByProps({ 'data-frame-seq': 1 }).findAllByType('pre')).toHaveLength(1)
+    // Collapsing the group folds the transferred JSON expansion away with it.
+    act(() => { group.findAllByType('button')[0]!.props.onClick() })
+    expect(group.findAllByType('button')[0]!.props['aria-expanded']).toBe(false)
+    act(() => { group.findAllByType('button')[0]!.props.onClick() })
+    expect(group.findByProps({ 'data-frame-seq': 1 }).findAllByType('pre')).toHaveLength(0)
+    renderer.unmount()
+  })
+
+  test('an expanded group stays expanded after the frame cap trims its original members', () => {
+    const { renderer } = renderPanel(openView([deltaFrame(10), deltaFrame(11)]))
+    act(() => { renderer.root.findByProps({ 'data-group-seq': 10 }).findAllByType('button')[0]!.props.onClick() })
+    const update = (frames: ChatWireFrame[]) => act(() => {
+      renderer.update(<ChatDebugPanel sessionId="chat-1" view={openView(frames)} connected
+        sendMessage={() => {}} onClose={() => {}} />)
+    })
+    // Live frames join the open group, then the 5000-frame cap trims the two
+    // seqs that were members at toggle time — the group must stay expanded.
+    update([deltaFrame(10), deltaFrame(11), deltaFrame(12), deltaFrame(13), deltaFrame(14)])
+    update([deltaFrame(12), deltaFrame(13), deltaFrame(14)])
+    const trimmed = renderer.root.findByProps({ 'data-group-seq': 12 })
+    expect(trimmed.findAllByType('button')[0]!.props['aria-expanded']).toBe(true)
+    expect(textOf(trimmed)).toContain('#12–#14')
+    expect(trimmed.findAllByProps({ 'data-frame-seq': 12 })).toHaveLength(1)
     renderer.unmount()
   })
 

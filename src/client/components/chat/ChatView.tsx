@@ -32,7 +32,7 @@ export default function ChatView({ session, sendMessage, connectionStatus, conne
   session: Session; sendMessage: SendClientMessage; connectionStatus: ConnectionStatus; connectionEpoch: number
   error: string | null; onClose: () => void; onKill: () => void
 }) {
-  const catalog = useClaudeProfiles(true)
+  const catalog = useClaudeProfiles(true, session.projectPath)
   const profileId = session.claudeProfileId ?? 'default'
   const profileLabel = catalog.profiles.find(profile => profile.id === profileId)?.label ?? profileId
   const chatFontSize = useSettingsStore(state => state.chatFontSize)

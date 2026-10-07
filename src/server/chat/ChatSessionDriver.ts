@@ -80,6 +80,11 @@ export interface ChatSessionDriverOptions {
   /** Persisted session profile; omitted for legacy Default sessions. */
   claudeProfileId?: string
   /**
+   * Home directory for the user-level profile catalog; injected in tests so a
+   * real home catalog cannot leak into launch resolution.
+   */
+  profileCatalogHome?: string
+  /**
    * Externally installed Claude Code executable passed to the SDK as
    * pathToClaudeCodeExecutable. Omitted when a fake runtime is injected
    * (tests, development fixture), leaving SDK resolution unchanged.
@@ -346,7 +351,20 @@ export class ChatSessionDriver {
 
   private spawnQuery(): void {
     const resume = this.capturedSdkSessionId ?? this.options.resumeSessionId
-    const launch = resolveClaudeProfile(this.options.claudeProfileId, this.options.getProviderEnv?.() ?? {})
+    const launch = resolveClaudeProfile(
+      this.options.claudeProfileId,
+      this.options.getProviderEnv?.() ?? {},
+      {
+        projectPath: this.options.projectPath,
+        ...(this.options.profileCatalogHome
+          ? { homeDir: this.options.profileCatalogHome }
+          : {}),
+      }
+    )
+    // An operator-named profile executable replaces the standard binary; the
+    // `executable` key itself is launch bookkeeping, not an SDK option.
+    const { executable: profileExecutable, ...launchOptions } = launch
+    const executablePath = profileExecutable ?? this.claudeExecutablePath
     const wire = this.options.wire
     const options: Options = {
       cwd: this.options.projectPath,
@@ -356,11 +374,11 @@ export class ChatSessionDriver {
       permissionMode: 'default',
       includePartialMessages: true,
       canUseTool: this.canUseTool,
-      ...(this.claudeExecutablePath
-        ? { pathToClaudeCodeExecutable: this.claudeExecutablePath }
+      ...(executablePath
+        ? { pathToClaudeCodeExecutable: executablePath }
         : {}),
       ...(resume ? { resume } : {}),
-      ...launch,
+      ...launchOptions,
       ...(wire ? { spawnClaudeCodeProcess: createWireTappedSpawn(wire) } : {}),
     }
     const query = this.options.queryFactory({
