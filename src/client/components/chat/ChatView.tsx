@@ -3,6 +3,9 @@
 // of it on narrow screens); its subscription follows the same reconnect rules.
 // The Auto-approve toggle switches the session's approval policy live (amber
 // while on); it renders from the broadcast Session, never local state.
+// During an in-flight turn an activity row (design D6) follows ChatMessages:
+// the live phase with a client-ticked timer, hidden while text streams, while
+// a request awaits the user, and in archived chats (design D4).
 // Archived chats render read-only: the transcript and debug view stay, the
 // composer/Stop/request actions are replaced by a Restore bar, and archiving
 // a live turn asks for confirmation first (the server interrupts it).

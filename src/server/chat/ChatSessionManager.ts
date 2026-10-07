@@ -1,13 +1,15 @@
 // Owns the lifecycle of chat sessions: auth-gated creation, lazy driver
 // construction (the SDK query() is spawned by the driver on the first turn),
 // persistence in the chat_sessions table with restore-on-start into the
-// registry, kill/shutdown settlement (including the session's protocol log), and immediate sdkSessionId capture so a
-// restart can resume the same agent conversation. The SDK import stays dynamic
-// (injected as a queryFactory in tests) so a broken install disables the
-// feature instead of crashing the server. Chat spawns run a separately
-// installed Claude Code executable: creation and every (re)spawn first pass
-// an executable check (KAWAI_CLAUDE_PATH/PATH, version baseline) whose
-// ClaudeExecutableError messages reach the user verbatim.
+// registry, kill/shutdown settlement (including the session's protocol log),
+// immediate sdkSessionId capture so a restart can resume the same agent
+// conversation, and the current in-flight-turn activity (phase plus start
+// time) surfaced through getSnapshot and the onActivity broadcast sink. The
+// SDK import stays dynamic (injected as a queryFactory in tests) so a broken
+// install disables the feature instead of crashing the server. Chat spawns
+// run a separately installed Claude Code executable: creation and every
+// (re)spawn first pass an executable check (KAWAI_CLAUDE_PATH/PATH, version
+// baseline) whose ClaudeExecutableError messages reach the user verbatim.
 import type {
   ChatActivity,
   ChatApprovalDecision,

@@ -1,8 +1,9 @@
 // Chat-session wire contract: conversation events, the WebSocket message
-// payloads that carry them, and the raw protocol frames shown by the chat
-// debug view. Shared between the server's chat driver/WS layer and the
-// client's chat stores. All SDK-specific types stay in the driver;
-// this file is SDK-agnostic so the client never imports the agent SDK.
+// payloads that carry them, the ephemeral live-turn activity, and the raw
+// protocol frames shown by the chat debug view. Shared between the server's
+// chat driver/WS layer and the client's chat stores. All SDK-specific types
+// stay in the driver; this file is SDK-agnostic so the client never imports
+// the agent SDK.
 
 /**
  * Base shape of every conversation event. `id` is stable and unique

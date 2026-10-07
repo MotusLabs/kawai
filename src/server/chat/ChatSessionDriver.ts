@@ -1,10 +1,13 @@
 // One long-lived Claude Agent SDK query() per chat session, in streaming-input
 // mode: user turns are pushed into a TurnQueue the query consumes, events are
 // mapped to ChatEvents, approvals/questions ride a cancellable promise bridge
-// over canUseTool, and status (working/permission/waiting) is derived from
-// driver state — never from log parsing. All SDK types are confined to this
-// module; the SDK itself is injected as a queryFactory (the manager does the
-// dynamic import), mirroring the SpawnFn convention in server/terminal/.
+// over canUseTool, status (working/permission/waiting) is derived from
+// driver state — never from log parsing — and the live-turn activity is
+// reduced from the same stream frames (thinking/tool_use block starts,
+// status, api_retry) through the pure chatActivity reducer. All SDK types
+// are confined to this module; the SDK itself is injected as a queryFactory
+// (the manager does the dynamic import), mirroring the SpawnFn convention in
+// server/terminal/.
 import type {
   CanUseTool,
   Options,
