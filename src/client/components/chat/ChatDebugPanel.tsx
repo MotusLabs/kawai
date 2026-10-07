@@ -18,6 +18,14 @@ const DIRECTION_STYLES: Record<keyof typeof DIRECTION_LABELS, string> = {
   lifecycle: 'text-secondary',
 }
 
+/**
+ * A group stays open while any member seq sits in either expansion set: the
+ * group set, or the per-frame JSON set — a lone frame the user expanded keeps
+ * its run open when a matching live frame arrives and groups it.
+ */
+const groupIsOpen = (members: readonly ChatWireFrame[], expanded: ReadonlySet<number>, groupExpanded: ReadonlySet<number>): boolean =>
+  members.some(member => groupExpanded.has(member.seq) || expanded.has(member.seq))
+
 function FrameRow({ frame, open, onToggle }: {
   frame: ChatWireFrame; open: boolean; onToggle: (seq: number) => void
 }) {
@@ -52,21 +60,48 @@ export default function ChatDebugPanel({ sessionId, view, sendMessage, connected
     const element = list.current
     if (element && following.current) element.scrollTop = element.scrollHeight
   }, [newestSeq])
+  // Keep every open group's membership complete: frames that join later enter
+  // the set too, so the set never loses contact with a live run — the frame cap
+  // may trim every seq added at toggle time, and the group stays open through
+  // its joiners instead of collapsing mid-run.
+  useEffect(() => {
+    const missing: number[] = []
+    for (const entry of entries) {
+      if (entry.kind !== 'group' || !groupIsOpen(entry.frames, expanded, groupExpanded)) continue
+      for (const member of entry.frames) if (!groupExpanded.has(member.seq)) missing.push(member.seq)
+    }
+    if (missing.length === 0) return
+    setGroupExpanded(current => {
+      const next = new Set(current)
+      for (const seq of missing) next.add(seq)
+      return next
+    })
+  }, [entries, expanded, groupExpanded])
   const toggle = (seq: number) => setExpanded(current => {
     const next = new Set(current)
     if (next.has(seq)) next.delete(seq)
     else next.add(seq)
     return next
   })
-  const toggleGroup = (members: readonly ChatWireFrame[]) => setGroupExpanded(current => {
-    const next = new Set(current)
-    const collapse = members.some(member => current.has(member.seq))
-    for (const member of members) {
-      if (collapse) next.delete(member.seq)
-      else next.add(member.seq)
-    }
-    return next
-  })
+  // Collapsing clears member JSON expansions too, so re-opening a group does
+  // not resurrect blobs the user folded away with it.
+  const toggleGroup = (members: readonly ChatWireFrame[]) => {
+    const collapse = groupIsOpen(members, expanded, groupExpanded)
+    setGroupExpanded(current => {
+      const next = new Set(current)
+      for (const member of members) {
+        if (collapse) next.delete(member.seq)
+        else next.add(member.seq)
+      }
+      return next
+    })
+    if (!collapse) return
+    setExpanded(current => {
+      const next = new Set(current)
+      for (const member of members) next.delete(member.seq)
+      return next
+    })
+  }
   const loadOlder = () => {
     const oldest = view.frames[0]
     if (!oldest) return
@@ -94,7 +129,7 @@ export default function ChatDebugPanel({ sessionId, view, sendMessage, connected
         : (() => {
           const first = entry.frames[0]!
           const last = entry.frames.at(-1)!
-          const open = entry.frames.some(member => groupExpanded.has(member.seq))
+          const open = groupIsOpen(entry.frames, expanded, groupExpanded)
           return <div key={`group-${first.seq}`} data-group-seq={first.seq} className="border-b border-border">
             <button className="flex w-full items-baseline gap-2 py-1 text-left hover:bg-elevated" aria-expanded={open}
               onClick={() => toggleGroup(entry.frames)}>

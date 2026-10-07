@@ -16,6 +16,11 @@
 - [x] 3.1 Run `bun run lint && bun run typecheck && bun run test` and confirm they pass
 - [x] 3.2 With the `dev-browser` skill, open the Debug panel on a chat session that streamed a thinking + text response, and confirm by screenshot that the deltas render as collapsed groups, that a group expands to its frames, and that live deltas grow the newest group in place
 
+## 4. Review fixes
+
+- [x] 4.1 A lone frame the user JSON-expanded keeps its expansion when a matching live frame turns its run into a group (group open checks the per-frame JSON set too); collapsing a group clears its members' JSON expansions
+- [x] 4.2 An expanded group stays expanded after the 5000-frame cap trims the seqs added at toggle time (open groups' membership is backfilled as frames join)
+
 ## Workflow follow-up
 
 - Archive the change once implemented and reviewed, syncing the `chat-debug` delta into the main spec.

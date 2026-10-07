@@ -413,6 +413,46 @@ describe('chat debug view', () => {
     renderer.unmount()
   })
 
+  test('an expanded lone frame keeps its JSON open when a live frame groups it', () => {
+    const { renderer } = renderPanel(openView([deltaFrame(1)]))
+    const row = renderer.root.findByProps({ 'data-frame-seq': 1 })
+    act(() => { row.findAllByType('button')[0]!.props.onClick() })
+    expect(row.findByType('pre')).toBeTruthy()
+    // A matching live frame turns the run into a group; the frame the user
+    // expanded must not vanish into a collapsed row.
+    act(() => {
+      renderer.update(<ChatDebugPanel sessionId="chat-1" view={openView([deltaFrame(1), deltaFrame(2)])} connected
+        sendMessage={() => {}} onClose={() => {}} />)
+    })
+    const group = renderer.root.findByProps({ 'data-group-seq': 1 })
+    expect(group.findAllByType('button')[0]!.props['aria-expanded']).toBe(true)
+    expect(group.findByProps({ 'data-frame-seq': 1 }).findAllByType('pre')).toHaveLength(1)
+    // Collapsing the group folds the transferred JSON expansion away with it.
+    act(() => { group.findAllByType('button')[0]!.props.onClick() })
+    expect(group.findAllByType('button')[0]!.props['aria-expanded']).toBe(false)
+    act(() => { group.findAllByType('button')[0]!.props.onClick() })
+    expect(group.findByProps({ 'data-frame-seq': 1 }).findAllByType('pre')).toHaveLength(0)
+    renderer.unmount()
+  })
+
+  test('an expanded group stays expanded after the frame cap trims its original members', () => {
+    const { renderer } = renderPanel(openView([deltaFrame(10), deltaFrame(11)]))
+    act(() => { renderer.root.findByProps({ 'data-group-seq': 10 }).findAllByType('button')[0]!.props.onClick() })
+    const update = (frames: ChatWireFrame[]) => act(() => {
+      renderer.update(<ChatDebugPanel sessionId="chat-1" view={openView(frames)} connected
+        sendMessage={() => {}} onClose={() => {}} />)
+    })
+    // Live frames join the open group, then the 5000-frame cap trims the two
+    // seqs that were members at toggle time — the group must stay expanded.
+    update([deltaFrame(10), deltaFrame(11), deltaFrame(12), deltaFrame(13), deltaFrame(14)])
+    update([deltaFrame(12), deltaFrame(13), deltaFrame(14)])
+    const trimmed = renderer.root.findByProps({ 'data-group-seq': 12 })
+    expect(trimmed.findAllByType('button')[0]!.props['aria-expanded']).toBe(true)
+    expect(textOf(trimmed)).toContain('#12–#14')
+    expect(trimmed.findAllByProps({ 'data-frame-seq': 12 })).toHaveLength(1)
+    renderer.unmount()
+  })
+
   test('Load older requests the page before the oldest loaded frame', () => {
     useChatDebugStore.getState().beginOpen('chat-1')
     const { sent, renderer } = renderPanel(openView([wireFrame(7, '{}'), wireFrame(8, '{}')], true))

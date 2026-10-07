@@ -86,10 +86,16 @@ batch.
 A group's first `seq` changes when "Load older" prepends to it or when the cap
 trims its oldest members. Group expansion is therefore stored as a set of
 member `seq`s: the group is expanded if any of its members is in the set, and
-toggling adds or removes all current members. When the group grows, it is
-still expanded because its earlier members are still in the set. New members
-render inside it without being added to the set. Per-frame JSON expansion
-keeps its existing `Set<seq>`.
+toggling adds or removes all current members. An effect keeps every open
+group's membership complete — frames that join later enter the set too — so
+the set never loses contact with a live run: the cap may trim every `seq`
+added at toggle time, and the group stays expanded through its joiners.
+
+A group also counts as expanded while any member is JSON-expanded, so a lone
+frame the user expanded stays visible when a matching live frame arrives and
+turns its run into a group; collapsing a group clears its members' JSON
+expansions with it. Per-frame JSON expansion otherwise keeps its existing
+`Set<seq>`.
 
 ### Copy all
 
