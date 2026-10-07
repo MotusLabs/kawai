@@ -116,6 +116,35 @@ export type ChatRequestDecidedBy = 'user' | 'policy'
 /** Per-session approval policy: manual shows approval cards; auto grants them. */
 export type ChatApprovalPolicy = 'manual' | 'auto'
 
+/** Live phase of an in-flight chat turn (activity indicator design D1). */
+export type ChatActivityPhase =
+  | 'requesting'
+  | 'thinking'
+  | 'responding'
+  | 'preparing_tool'
+  | 'running_tools'
+  | 'retrying'
+
+/**
+ * What the agent is doing right now. Ephemeral by design: it is not a
+ * ChatEvent, never sequenced, persisted, or replayed, and excluded from the
+ * session-list status broadcast. `elapsedMs` is how long the phase had lasted
+ * when the message was sent, so clients tick on their own clock (design D2).
+ */
+export interface ChatActivity {
+  phase: ChatActivityPhase
+  /** Milliseconds already spent in this phase when the message was sent. */
+  elapsedMs: number
+  /** preparing_tool / running_tools: oldest unresolved tool name. */
+  tool?: string
+  /** running_tools: number of unresolved tool calls (>= 1). */
+  count?: number
+  /** retrying */
+  attempt?: number
+  maxRetries?: number
+  errorStatus?: number
+}
+
 /** Self-contained snapshot of a still-pending approval or question. */
 export type ChatPendingRequest =
   | {

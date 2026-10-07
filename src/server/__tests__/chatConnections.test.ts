@@ -13,7 +13,7 @@ function harness(wireLogs?: ChatWireLogs) {
   const snapshot: Extract<ServerMessage, { type: 'chat-snapshot' }> = {
     type: 'chat-snapshot', sessionId: 'chat-1', events: [],
     pendingRequests: [{ kind: 'approval', requestId: 'approval-1', tool: 'Bash', input: {}, at: 'now' }],
-    status: 'permission', throughSequence: 0,
+    status: 'permission', throughSequence: 0, activity: null,
   }
   let pending = true
   const manager = {

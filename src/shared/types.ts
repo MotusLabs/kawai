@@ -7,6 +7,7 @@ import type {
   WorkspaceSnapshot,
 } from './workspace'
 import type {
+  ChatActivity,
   ChatApprovalDecision,
   ChatApprovalPolicy,
   ChatEvent,
@@ -16,6 +17,8 @@ import type {
 } from './chat'
 
 export type {
+  ChatActivity,
+  ChatActivityPhase,
   ChatEvent,
   ChatQuestion,
   ChatQuestionAnswer,
@@ -207,7 +210,12 @@ export type ServerMessage =
       status: SessionStatus
       /** Highest sequence included in this snapshot. */
       throughSequence: number
+      /** Current in-flight turn activity, or null when the turn is idle. */
+      activity: ChatActivity | null
     }
+  // Ephemeral live activity for an in-flight chat turn (design D1): sent only
+  // on phase changes, unordered with events, never persisted or replayed.
+  | { type: 'chat-activity'; sessionId: string; activity: ChatActivity | null }
   // Debug-view protocol frames, sent only to clients that opened the view.
   // `page: true` marks a reply to chat-debug-open/chat-debug-page (carrying
   // `hasOlder`); otherwise the message is a live batch.

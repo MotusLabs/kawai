@@ -140,6 +140,7 @@ export class ChatSessionManager {
       pendingRequests: this.getPendingRequests(sessionId),
       status: this.options.registry.get(sessionId)?.status ?? 'waiting',
       throughSequence: live.at(-1)?.sequence ?? 0,
+      activity: null,
     }
   }
 

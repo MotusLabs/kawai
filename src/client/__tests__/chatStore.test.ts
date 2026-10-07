@@ -62,7 +62,7 @@ describe('chat store', () => {
   test('a snapshot replaces stale state and its pending requests are authoritative', () => {
     const store = useChatStore.getState()
     store.apply('chat-1', [delta(1, 'old')])
-    store.snapshot({ type: 'chat-snapshot', sessionId: 'chat-1', events: [delta(2, 'restored')], pendingRequests: [], status: 'working', throughSequence: 2 })
+    store.snapshot({ type: 'chat-snapshot', sessionId: 'chat-1', events: [delta(2, 'restored')], pendingRequests: [], status: 'working', throughSequence: 2, activity: null })
     const state = useChatStore.getState().sessions['chat-1']
     expect(state.events).toHaveLength(1)
     expect(state.events[0]).toMatchObject({ text: 'restored' })
