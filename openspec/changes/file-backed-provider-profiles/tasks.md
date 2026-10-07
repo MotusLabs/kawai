@@ -34,4 +34,4 @@
 
 - [x] 6.1 Ship the current six profiles as the in-image default catalog file (env-only entries), delete the hardcoded array from `ClaudeProfiles.ts`, and verify the existing profile unit tests pass against the file-backed catalog unchanged in behavior
 - [x] 6.2 Run `bun run lint && bun run typecheck && bun run test` and verify all pass
-- [ ] 6.3 Exercise the app end to end with the dev-browser skill: pick a project path with a `.kawai/profiles.json` defining a new profile, create a chat session with it, confirm the picker offers it, the chat header shows its label, and a turn starts against it; confirm terminal session creation is unchanged
+- [x] 6.3 Exercise the app end to end with the dev-browser skill: pick a project path with a `.kawai/profiles.json` defining a new profile, create a chat session with it, confirm the picker offers it, the chat header shows its label, and a turn starts against it; confirm terminal session creation is unchanged
