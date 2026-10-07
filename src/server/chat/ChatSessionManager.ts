@@ -626,6 +626,7 @@ export class ChatSessionManager {
       name: record.name,
       kind: 'chat',
       claudeProfileId: record.claudeProfileId ?? 'default',
+      approvalPolicy: record.approvalPolicy ?? 'manual',
       projectPath: record.projectPath,
       status: record.status,
       lastActivity: record.lastActivityAt,

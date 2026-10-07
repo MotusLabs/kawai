@@ -86,6 +86,10 @@ export type ChatEvent =
       type: 'request_resolved'
       requestId: string
       outcome: ChatRequestOutcome
+      /** Who settled the request; absent on cancellations and legacy events. */
+      decidedBy?: ChatRequestDecidedBy
+      /** Tool name for policy grants that never showed a card. */
+      tool?: string
     })
   | (ChatTurnEventBase & {
       type: 'turn_completed'
@@ -105,6 +109,12 @@ export type ChatRequestOutcome =
   | 'denied'
   | 'answered'
   | 'cancelled'
+
+/** Who settled a request: the user answering, or the session's approval policy. */
+export type ChatRequestDecidedBy = 'user' | 'policy'
+
+/** Per-session approval policy: manual shows approval cards; auto grants them. */
+export type ChatApprovalPolicy = 'manual' | 'auto'
 
 /** Self-contained snapshot of a still-pending approval or question. */
 export type ChatPendingRequest =

@@ -2,8 +2,8 @@
 
 ## 1. Contracts and storage
 
-- [ ] 1.1 Add `ChatApprovalPolicy = 'manual' | 'auto'` and optional `decidedBy: 'user' | 'policy'` and `tool` on `request_resolved` in `src/shared/chat.ts`; add optional `approvalPolicy` to `Session` and the `chat-set-approval-policy` client message in `src/shared/types.ts`; verify `bun run typecheck` passes
-- [ ] 1.2 Add the `approval_policy TEXT NOT NULL DEFAULT 'manual'` column with the startup migration in `src/server/db.ts`, map it through `getChatSession`/`insertChatSession`/`updateChatSession` (an unknown stored value reads as manual), and extend the legacy-schema DB tests (pattern of `chatArchiveDb.test.ts`) so a pre-feature row reads as `manual` and an update round-trips `auto`
+- [x] 1.1 Add `ChatApprovalPolicy = 'manual' | 'auto'` and optional `decidedBy: 'user' | 'policy'` and `tool` on `request_resolved` in `src/shared/chat.ts`; add optional `approvalPolicy` to `Session` and the `chat-set-approval-policy` client message in `src/shared/types.ts`; verify `bun run typecheck` passes
+- [x] 1.2 Add the `approval_policy TEXT NOT NULL DEFAULT 'manual'` column with the startup migration in `src/server/db.ts`, map it through `getChatSession`/`insertChatSession`/`updateChatSession` (an unknown stored value reads as manual), and extend the legacy-schema DB tests (pattern of `chatArchiveDb.test.ts`) so a pre-feature row reads as `manual` and an update round-trips `auto`
 
 ## 2. Policy decision and driver
 
