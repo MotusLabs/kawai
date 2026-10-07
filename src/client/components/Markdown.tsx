@@ -65,10 +65,12 @@ const markdownComponents: Components = {
       <table className="w-full border-collapse text-xs">{children}</table>
     </div>
   ),
-  th: ({ children }) => (
-    <th className="border border-border px-2 py-1 text-left font-semibold">{children}</th>
+  // GFM column alignment (`:---:`, `---:`) arrives as an inline text-align
+  // style, which overrides the text-left default.
+  th: ({ children, style }) => (
+    <th style={style} className="border border-border px-2 py-1 text-left font-semibold">{children}</th>
   ),
-  td: ({ children }) => <td className="border border-border px-2 py-1 align-top">{children}</td>,
+  td: ({ children, style }) => <td style={style} className="border border-border px-2 py-1 align-top">{children}</td>,
 }
 
 export default function Markdown({ content }: { content: string }) {

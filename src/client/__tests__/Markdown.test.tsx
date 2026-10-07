@@ -117,6 +117,14 @@ describe('shared markdown renderer', () => {
     unmount()
   })
 
+  test('keeps GFM column alignment on header and body cells', () => {
+    const { byType, unmount } = render('| L | C | R | N |\n| :- | :-: | -: | - |\n| 1 | 2 | 3 | 4 |')
+    const alignOf = (node: ReactTestInstance) => node.props.style?.textAlign
+    expect(byType('th').map(alignOf)).toEqual(['left', 'center', 'right', undefined])
+    expect(byType('td').map(alignOf)).toEqual(['left', 'center', 'right', undefined])
+    unmount()
+  })
+
   test('keeps single line breaks', () => {
     const { byType, unmount } = render('first line\nsecond line')
     expect(byType('br')).toHaveLength(1)
