@@ -2,8 +2,8 @@
 
 ## 1. Detail helper
 
-- [ ] 1.1 Add `src/client/components/chat/toolCallLabel.ts` with a header comment, the per-tool field table (Read/Write/Edit `file_path`, NotebookEdit `notebook_path`, Bash `description` → `command`, Glob/Grep `pattern`, WebFetch `url`, WebSearch `query`, Agent/Task `description`, Skill `skill`), and newline collapsing; verify with a new `src/client/__tests__/toolCallLabel.test.ts` covering each mapped tool, the Bash fallback, an unknown/MCP tool, and missing, empty and non-string fields (all return no detail)
-- [ ] 1.2 Add project-relative path handling for path fields (inside → relative, equal to the project with or without a trailing slash → `.`, outside → unchanged, `/repo-other` vs `/repo` → unchanged, no project path → unchanged); verify with cases for each scenario in the spec's "Tool-call paths are shown relative to the project" requirement in the same test file
+- [ ] 1.1 Add `src/client/components/chat/toolCallLabel.ts` with a header comment, the per-tool ordered eligible-field table, where the first non-blank string wins (Read/Write/Edit `file_path`, NotebookEdit `notebook_path`, Bash `description` → `command`, Glob/Grep `pattern`, WebFetch `url`, WebSearch `query`, Agent/Task `description`, Skill `skill`), and newline collapsing; verify with a new `src/client/__tests__/toolCallLabel.test.ts` covering each mapped tool, Bash description vs. command fallback (description missing, blank and non-string), Bash with both fields unusable, an unknown/MCP tool, and missing, blank and non-string fields (no detail only when every eligible field is unusable)
+- [ ] 1.2 Add project-relative path handling for path fields (inside → relative, path and project equal after removing trailing slashes → `.` for all four `/repo`/`/repo/` combinations and never an empty string, outside → unchanged, `/repo-other` vs `/repo` → unchanged, no project path → unchanged); verify with cases for each scenario in the spec's "Tool-call paths are shown relative to the project" requirement in the same test file
 
 ## 2. Transcript rendering
 

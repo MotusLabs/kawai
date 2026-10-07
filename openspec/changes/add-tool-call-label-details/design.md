@@ -27,14 +27,20 @@ directory.
 
 ## Decisions
 
-1. **A static field table keyed by tool name, in a new
-   `src/client/components/chat/toolCallLabel.ts`.** It exports
+1. **A static table mapping each tool name to an ordered list of eligible
+   fields, in a new `src/client/components/chat/toolCallLabel.ts`.** It
+   exports
    `toolCallDetail(tool, input, projectPath): { text: string; isPath: boolean } | null`
    (exact shape left to implementation) and a small `relativeToProject`
-   helper. Entries: `Read`/`Write`/`Edit` → `file_path` (path);
-   `NotebookEdit` → `notebook_path` (path); `Bash` → `description`, falling
-   back to `command`; `Glob`/`Grep` → `pattern`; `WebFetch` → `url`;
-   `WebSearch` → `query`; `Agent`/`Task` → `description`; `Skill` → `skill`.
+   helper. The detail is the first eligible field whose value is a string
+   that is non-empty after trimming. The result is `null`, meaning a plain
+   label, only for an unknown tool or when every eligible field fails that
+   check. Entries: `Read`/`Write`/`Edit` → [`file_path`] (path);
+   `NotebookEdit` → [`notebook_path`] (path); `Bash` → [`description`,
+   `command`]; `Glob`/`Grep` → [`pattern`]; `WebFetch` → [`url`];
+   `WebSearch` → [`query`]; `Agent`/`Task` → [`description`]; `Skill` →
+   [`skill`]. A single ordered-list rule covers both the Bash fallback and
+   the missing-field case, so the two cannot disagree.
    *Alternative:* a generic rule like "first string field". It was rejected
    because input key order is not guaranteed and it would surface noisy
    values, such as Edit's `old_string`.
@@ -43,10 +49,14 @@ directory.
    the call is for in a few words, which is the point of the feature. The
    command can be long and is still visible when the entry is expanded.
 
-3. **Path relativization is string-based and POSIX-only.** The project path
-   has trailing slashes removed. A path equal to it maps to `.`, a path
-   starting with `<project>/` has that prefix removed, and any other path is
-   returned unchanged. Checking for the `/` separator keeps `/repo-other`
+3. **Path relativization is string-based and POSIX-only.** Trailing slashes
+   are removed from both the project path and the input path before
+   comparing (a bare `/` stays `/`). If the two are then equal, the result
+   is `.`. This check runs before prefix removal, so `/repo/` against
+   `/repo` gives `.` and never an empty string. Otherwise, a path starting
+   with `<project>/` has that prefix removed (when the project is `/`, the
+   prefix is `/` alone), and any other path is returned in its original
+   form. Checking for the `/` separator keeps `/repo-other`
    from matching `/repo`. Relative inputs are returned as they are. The
    server runs on Linux/macOS hosts, so there is no Windows path handling, and
    no `node:path` import in client code.

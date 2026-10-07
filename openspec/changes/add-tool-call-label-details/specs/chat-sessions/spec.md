@@ -4,19 +4,24 @@
 
 ### Requirement: Collapsed tool calls show a short input detail
 The chat view SHALL label each collapsed tool-call entry with the tool name
-followed by a one-line detail in parentheses, taken from a fixed input field
-of known Claude Code tools. Long details SHALL be truncated visually, with
-the full detail available on hover. A tool without a known field, or whose
-input lacks that field or has an empty value there, SHALL show only the tool
-name. Expanding the entry SHALL still show the full input.
+followed by a one-line detail in parentheses. Each known Claude Code tool has
+an ordered list of eligible input fields; the detail SHALL be the first one
+that is a non-blank string. Only an unknown tool, or a known tool whose
+eligible fields are all unusable, SHALL show the tool name alone. Long
+details SHALL be truncated visually, with the full detail on hover.
+Expanding the entry SHALL still show the full input.
 
 #### Scenario: File tool shows its path
 - **WHEN** the transcript contains a `Read`, `Write` or `Edit` call whose input has a `file_path`
 - **THEN** the collapsed entry reads `Tool: <name> (<path>)`
 
 #### Scenario: Bash prefers its description
-- **WHEN** a `Bash` call has a non-empty `description`
-- **THEN** the detail is the description, and when the description is missing or empty the detail is the command
+- **WHEN** a `Bash` call has a non-blank `description`
+- **THEN** the detail is the description
+
+#### Scenario: Bash falls back to its command
+- **WHEN** a `Bash` call's `description` is missing, blank or not a string, and its `command` is a non-blank string
+- **THEN** the detail is the command
 
 #### Scenario: Other known tools show their key field
 - **WHEN** a call is to `Glob` or `Grep` (pattern), `WebFetch` (url), `WebSearch` (query), `Agent` or `Task` (description), `Skill` (skill) or `NotebookEdit` (notebook_path)
@@ -26,8 +31,8 @@ name. Expanding the entry SHALL still show the full input.
 - **WHEN** a call is to a tool with no known field, such as an MCP tool
 - **THEN** the collapsed entry reads `Tool: <name>` with no parentheses
 
-#### Scenario: Missing or non-string field keeps the plain label
-- **WHEN** a known tool's input lacks its field, or the field is empty or not a string
+#### Scenario: No usable field keeps the plain label
+- **WHEN** every eligible field of a known tool's input is missing, blank or not a string (for `Bash`, both `description` and `command`)
 - **THEN** the collapsed entry reads `Tool: <name>` with no parentheses
 
 #### Scenario: Multi-line value stays on one line
@@ -37,8 +42,9 @@ name. Expanding the entry SHALL still show the full input.
 ### Requirement: Tool-call paths are shown relative to the project
 When a tool-call detail is a file path, the chat view SHALL show it relative
 to the chat session's project directory if the path is inside that
-directory, and SHALL show it unchanged otherwise. Paths that only share a
-name prefix with the project directory SHALL count as outside it.
+directory, and SHALL show it unchanged otherwise. Trailing slashes on either
+the path or the project directory SHALL NOT affect the result. Paths that
+only share a name prefix with the project directory SHALL count as outside.
 
 #### Scenario: Path inside the project
 - **WHEN** the project directory is `/repo` and a `Read` call has `file_path` `/repo/src/index.ts`
@@ -53,5 +59,5 @@ name prefix with the project directory SHALL count as outside it.
 - **THEN** the label reads `Tool: Read (/repo-other/a.ts)`
 
 #### Scenario: Path equal to the project directory
-- **WHEN** the project directory is `/repo` and a path detail is exactly `/repo` or `/repo/`
-- **THEN** the label shows `.`
+- **WHEN** the project directory is `/repo` or `/repo/` and a path detail is `/repo` or `/repo/`
+- **THEN** the label shows `.` in all four combinations
