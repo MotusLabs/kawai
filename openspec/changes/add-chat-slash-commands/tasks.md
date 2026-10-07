@@ -33,10 +33,10 @@
 
 ## 6. Planning and docs
 
-- [ ] 6.1 Confirm `replace-claude-sdk-with-cli` design Decisions 2 and 4 match the implemented behavior; verify with `openspec validate replace-claude-sdk-with-cli`
-- [ ] 6.2 Update `CLAUDE.md` "How It Works" for start on attach, the command list, and `/clear`; verify the text matches the implemented behavior
+- [x] 6.1 Confirm `replace-claude-sdk-with-cli` design Decisions 2 and 4 match the implemented behavior; verify with `openspec validate replace-claude-sdk-with-cli`
+- [x] 6.2 Update `CLAUDE.md` "How It Works" for start on attach, the command list, and `/clear`; verify the text matches the implemented behavior
 
 ## 7. Integration
 
-- [ ] 7.1 Run `bun run lint && bun run typecheck && bun run test` and verify all pass
+- [x] 7.1 Run `bun run lint && bun run typecheck && bun run test` and verify all pass
 - [ ] 7.2 With the `dev-browser` skill against `bun run dev`: open a chat and see the menu populate without sending, filter and insert a project command, run `/context` and see its output, reload and see the command and output replayed, run `/new demo` and see a new chat selected with the old one in Archive; capture screenshots

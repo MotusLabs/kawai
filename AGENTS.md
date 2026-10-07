@@ -21,6 +21,9 @@ Run `bun run lint && bun run typecheck && bun run test` after changes.
 - Parses Claude/Codex JSONL logs from `~/.claude/projects/` and `~/.codex/sessions/` for status
 - Status: unknown -> working -> waiting (derived from log events)
 - Chat sessions use the Claude Agent SDK without tmux. Turns and pending approvals/questions determine status directly. WebSocket snapshots restore history and pending requests on reconnect; SQLite rows and SDK transcripts allow restart/resume.
+- The chat agent starts when a client attaches (no prompt sent), so its slash-command list is ready before the first message; archived chats and sessions with a missing project directory start nothing.
+- Slash commands: the agent-reported list (name, description, argument hint, aliases, project/user source; terminal-bound and internal commands hidden) rides in the chat snapshot and as `chat-commands` pushes with loading/ready/unavailable state. The composer's `/` menu filters and inserts commands without sending; local command output (`/context` etc.) renders in the transcript, and replayed history shows slash-command turns as typed with their output.
+- `/clear`, `/reset`, and `/new [name]` never reach the agent: the client creates a new chat in the same project with the same profile (named when given), selects it, then archives the previous chat; on creation error the current chat is untouched.
 - Chat sessions can be archived (`archived_at` in `chat_sessions`): archiving stops the agent but keeps the record, conversation, and protocol log; archived chats open read-only (no agent starts; Restore resumes the same conversation) and are exempt from the history lookback. Kill is still the only permanent removal.
 - Navigator: live sessions sit in OpenSpec change/worktree sections; hibernating, history, and archived sessions collect in the docked `Archive` pane (newest first, collapsed until first expanded). `Remote` holds only live sessions on other hosts.
 
