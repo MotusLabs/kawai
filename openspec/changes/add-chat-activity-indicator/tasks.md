@@ -3,7 +3,7 @@
 ## 1. Contract and reducer
 
 - [x] 1.1 Add `ChatActivityPhase` and `ChatActivity` to `src/shared/chat.ts` and the `chat-activity` server message plus `chat-snapshot.activity: ChatActivity | null` to `src/shared/types.ts` (design D1, D2); verify `bun run typecheck` passes
-- [ ] 1.2 Add `src/server/chat/chatActivity.ts` with a header comment and the pure `reduceActivity` plus a projection-to-`ChatActivity` helper covering every row of the design D3 table. Include unresolved-tool ordering (oldest name and count), `redacted_thinking` → thinking, unknown status and block types ignored, the clock restarting on `request_resolved`, and a new phase start time only when the projection changes. Verify with a new `src/server/__tests__/chatActivity.test.ts` that drives each transition, using frame shapes copied from a real wire capture
+- [x] 1.2 Add `src/server/chat/chatActivity.ts` with a header comment and the pure `reduceActivity` plus a projection-to-`ChatActivity` helper covering every row of the design D3 table. Include unresolved-tool ordering (oldest name and count), `redacted_thinking` → thinking, unknown status and block types ignored, the clock restarting on `request_resolved`, and a new phase start time only when the projection changes. Verify with a new `src/server/__tests__/chatActivity.test.ts` that drives each transition, using frame shapes copied from a real wire capture
 
 ## 2. Driver and manager
 
