@@ -13,12 +13,12 @@ function harness(wireLogs?: ChatWireLogs) {
   const snapshot: Extract<ServerMessage, { type: 'chat-snapshot' }> = {
     type: 'chat-snapshot', sessionId: 'chat-1', events: [],
     pendingRequests: [{ kind: 'approval', requestId: 'approval-1', tool: 'Bash', input: {}, at: 'now' }],
-    status: 'permission', throughSequence: 0,
+    status: 'permission', throughSequence: 0, activity: null,
   }
   let pending = true
   const manager = {
-    has: (id: string) => id === 'chat-1',
-    getSnapshot: () => snapshot,
+    has: (id: string) => id === 'chat-1' || id === 'chat-2',
+    getSnapshot: (id: string) => (id === 'chat-1' ? snapshot : null),
     send: async (...args: unknown[]) => { calls.push(['send', ...args]); return { ok: true } },
     interrupt: (...args: unknown[]) => { calls.push(['interrupt', ...args]); return { ok: true } },
     archive: (...args: unknown[]) => { calls.push(['archive', ...args]); return { ok: true } },
@@ -151,6 +151,55 @@ describe('chat WebSocket subscriptions', () => {
       { type: 'error', message: 'Unknown chat session missing' },
       { type: 'error', message: 'Unknown chat session missing' },
     ])
+  })
+
+  test('activity follows the event it describes in the same flush', async () => {
+    const h = harness()
+    await h.connections.handle(h.connection, { type: 'chat-attach', sessionId: 'chat-1' })
+    const toolCall: ChatEvent = {
+      type: 'tool_call', id: 'event-1', sequence: 1, at: 'now', turnId: 'turn-1',
+      toolCallId: 'toolu_1', tool: 'Bash', input: {},
+    }
+    h.connections.publish('chat-1', toolCall)
+    h.connections.publishActivity('chat-1', { phase: 'running_tools', elapsedMs: 0, tool: 'Bash', count: 1 })
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(h.messages.slice(1)).toEqual([
+      { type: 'chat-events', sessionId: 'chat-1', events: [toolCall] },
+      { type: 'chat-activity', sessionId: 'chat-1', activity: { phase: 'running_tools', elapsedMs: 0, tool: 'Bash', count: 1 } },
+    ])
+  })
+
+  test('several activity changes within one tick collapse to the last', async () => {
+    const h = harness()
+    await h.connections.handle(h.connection, { type: 'chat-attach', sessionId: 'chat-1' })
+    h.connections.publishActivity('chat-1', { phase: 'requesting', elapsedMs: 0 })
+    h.connections.publishActivity('chat-1', { phase: 'thinking', elapsedMs: 0 })
+    h.connections.publishActivity('chat-1', { phase: 'retrying', elapsedMs: 0, attempt: 2, maxRetries: 10, errorStatus: 504 })
+    h.connections.publishActivity('chat-1', null)
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(h.messages.slice(1)).toEqual([
+      { type: 'chat-activity', sessionId: 'chat-1', activity: null },
+    ])
+  })
+
+  test('activity reaches only subscribed connections and none after detach', async () => {
+    const h = harness()
+    const otherMessages: ServerMessage[] = []
+    const other = { send: (message: ServerMessage) => otherMessages.push(message) }
+    await h.connections.handle(h.connection, { type: 'chat-attach', sessionId: 'chat-1' })
+    // A browser subscribed to another session never sees this one's activity.
+    await h.connections.handle(other, { type: 'chat-attach', sessionId: 'chat-2' })
+    h.connections.publishActivity('chat-1', { phase: 'thinking', elapsedMs: 0 })
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(h.messages.at(-1)).toMatchObject({ type: 'chat-activity', activity: { phase: 'thinking' } })
+    expect(otherMessages).toEqual([])
+
+    // After detach the queued value is dropped, not delivered late.
+    h.connections.publishActivity('chat-1', { phase: 'responding', elapsedMs: 0 })
+    await h.connections.handle(h.connection, { type: 'chat-detach', sessionId: 'chat-1' })
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(h.messages.filter(message => message.type === 'chat-activity')).toHaveLength(1)
+    expect(otherMessages).toEqual([])
   })
 })
 

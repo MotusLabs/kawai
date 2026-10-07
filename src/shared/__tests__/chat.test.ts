@@ -184,6 +184,7 @@ describe('chat wire messages', () => {
       ],
       status: 'permission',
       throughSequence: 1,
+      activity: { phase: 'thinking', elapsedMs: 4_000 },
     }
 
     const parsed = JSON.parse(JSON.stringify(message)) as ServerMessage

@@ -1,10 +1,13 @@
 // One long-lived Claude Agent SDK query() per chat session, in streaming-input
 // mode: user turns are pushed into a TurnQueue the query consumes, events are
 // mapped to ChatEvents, approvals/questions ride a cancellable promise bridge
-// over canUseTool, and status (working/permission/waiting) is derived from
-// driver state — never from log parsing. All SDK types are confined to this
-// module; the SDK itself is injected as a queryFactory (the manager does the
-// dynamic import), mirroring the SpawnFn convention in server/terminal/.
+// over canUseTool, status (working/permission/waiting) is derived from
+// driver state — never from log parsing — and the live-turn activity is
+// reduced from the same stream frames (thinking/tool_use block starts,
+// status, api_retry) through the pure chatActivity reducer. All SDK types
+// are confined to this module; the SDK itself is injected as a queryFactory
+// (the manager does the dynamic import), mirroring the SpawnFn convention in
+// server/terminal/.
 import type {
   CanUseTool,
   Options,
@@ -17,6 +20,7 @@ import type {
   SDKUserMessage,
 } from '@anthropic-ai/claude-agent-sdk'
 import type {
+  ChatActivity,
   ChatApprovalDecision,
   ChatApprovalPolicy,
   ChatEvent,
@@ -30,6 +34,16 @@ import {
   parseQuestions,
   toolResultText,
 } from './contentBlocks'
+import {
+  activityBody,
+  contentBlockToInput,
+  initialChatActivityState,
+  projectActivity,
+  reduceActivity,
+  systemFrameToInput,
+  type ChatActivityInput,
+  type ChatActivityState,
+} from './chatActivity'
 import type { ChatProviderEnv } from './chatProviderEnv'
 import { decideApproval } from './approvalPolicy'
 import { resolveClaudeProfile } from './ClaudeProfiles'
@@ -79,6 +93,12 @@ export interface ChatSessionDriverOptions {
   onEvent: (event: ChatEvent) => void
   /** Applied immediately on every derived status change. */
   onStatus: (status: SessionStatus) => void
+  /**
+   * Live activity of the in-flight turn (design D3): called only when the
+   * projected phase changes, with null when the turn ends. Ephemeral — never
+   * sequenced, buffered, or replayed like events.
+   */
+  onActivity?: (activity: ChatActivity | null) => void
   /** Fired once when the SDK init message reveals the session id. */
   onSdkSessionId?: (sdkSessionId: string) => void
   /** Records the raw protocol of every spawned process (chat debug view). */
@@ -119,6 +139,8 @@ export class ChatSessionDriver {
   private readonly sentEchoTexts = new Map<string, number>()
   private capturedSdkSessionId: string | undefined
   private lastStatus: SessionStatus = 'waiting'
+  /** Live-turn activity state (design D3); null phase when no turn runs. */
+  private activityState: ChatActivityState = initialChatActivityState()
   private dead = false
   /** Updated by the manager before a respawn; see setClaudeExecutablePath. */
   private claudeExecutablePath: string | undefined
@@ -393,6 +415,7 @@ export class ChatSessionDriver {
     this.dead = true
     this.query = null
     this.activeTurnId = null
+    this.feedActivity({ type: 'turn_end' })
     this.cancelAllRequests('killed')
     this.emit({ type: 'error', message: reason })
     this.refreshStatus()
@@ -444,6 +467,13 @@ export class ChatSessionDriver {
           tool: block.name,
           input: block.input,
         })
+        if (!isSubagentFrame(message)) {
+          this.feedActivity({
+            type: 'tool_call',
+            toolCallId: block.id,
+            tool: block.name,
+          })
+        }
       }
       // thinking and other block kinds are not surfaced in the transcript.
     }
@@ -461,6 +491,10 @@ export class ChatSessionDriver {
         messageId: this.streamingMessageId ?? message.uuid,
         delta: event.delta.text,
       })
+    }
+    if (event.type === 'content_block_start' && !isSubagentFrame(message)) {
+      const input = contentBlockToInput(event.content_block)
+      if (input) this.feedActivity(input)
     }
   }
 
@@ -482,6 +516,9 @@ export class ChatSessionDriver {
           output: toolResultText(block.content),
           isError: block.is_error,
         })
+        if (!isSubagentFrame(message)) {
+          this.feedActivity({ type: 'tool_result', toolCallId: block.tool_use_id })
+        }
       } else if (block.type === 'text') {
         this.maybeEchoUserText(block.text, turnId)
       }
@@ -542,6 +579,9 @@ export class ChatSessionDriver {
     if (message.subtype === 'compact_boundary') {
       this.emit({ type: 'notice', text: 'Context compacted' })
     }
+    if (isSubagentFrame(message)) return
+    const input = systemFrameToInput(message)
+    if (input) this.feedActivity(input)
     // Other system subtypes are informational; ignored.
   }
 
@@ -647,6 +687,25 @@ export class ChatSessionDriver {
     }
   }
 
+  /**
+   * One activity input (design D3). The state always advances; onActivity
+   * fires when the projected phase (not its elapsed time) changes or when the
+   * reducer restarts the clock (`request_resolved` after an approval wait) —
+   * clients re-anchor their timer on every publish, so a suppressed reset
+   * would keep counting the card's wait time.
+   */
+  private feedActivity(input: ChatActivityInput): void {
+    const previous = this.activityState
+    this.activityState = reduceActivity(this.activityState, input)
+    const changed =
+      JSON.stringify(activityBody(previous)) !==
+        JSON.stringify(activityBody(this.activityState)) ||
+      previous.phaseStartedAt !== this.activityState.phaseStartedAt
+    if (this.options.onActivity && changed) {
+      this.options.onActivity(projectActivity(this.activityState))
+    }
+  }
+
   private emit(draft: ChatEventDraft): void {
     this.sequence += 1
     const event: ChatEvent = {
@@ -656,7 +715,29 @@ export class ChatSessionDriver {
       at: new Date().toISOString(),
     } as ChatEvent
     this.options.onEvent(event)
+    // Turn lifecycle and request resolutions are top-level driver semantics
+    // (never subagent frames), so they ride the emit points directly.
+    if (draft.type === 'turn_started') {
+      this.feedActivity({ type: 'turn_started' })
+    } else if (
+      draft.type === 'turn_completed' ||
+      draft.type === 'turn_interrupted'
+    ) {
+      this.feedActivity({ type: 'turn_end' })
+    } else if (draft.type === 'request_resolved') {
+      this.feedActivity({ type: 'request_resolved' })
+    }
   }
+}
+
+/**
+ * Subagent frames (a Task tool's own requests, thinking, and tool traffic)
+ * must not disturb the parent turn's activity row (design D3): without this,
+ * a running Task would flicker between "Thinking" and "Running Task".
+ */
+function isSubagentFrame(frame: object): boolean {
+  const parent = (frame as { parent_tool_use_id?: unknown }).parent_tool_use_id
+  return parent != null
 }
 
 function validateAnswers(

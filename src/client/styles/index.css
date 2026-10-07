@@ -389,6 +389,20 @@ body {
   animation: pulse-complete 5s ease-out;
 }
 
+/* Chat activity row's live dot: a quiet breathing pulse in the working color */
+@keyframes pulse-activity {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+.chat-activity-dot {
+  width: 0.5em;
+  height: 0.5em;
+  border-radius: 9999px;
+  background: var(--working);
+  animation: pulse-activity 1.6s ease-in-out infinite;
+}
+
 /* Terminal styles */
 .xterm {
   font-family: "JetBrains Mono Variable", "JetBrains Mono", "SF Mono", "Fira Code", ui-monospace, monospace;

@@ -3,6 +3,9 @@
 // of it on narrow screens); its subscription follows the same reconnect rules.
 // The Auto-approve toggle switches the session's approval policy live (amber
 // while on); it renders from the broadcast Session, never local state.
+// During an in-flight turn an activity row (design D6) follows ChatMessages:
+// the live phase with a client-ticked timer, hidden while text streams, while
+// a request awaits the user, and in archived chats (design D4).
 // Archived chats render read-only: the transcript and debug view stay, the
 // composer/Stop/request actions are replaced by a Restore bar, and archiving
 // a live turn asks for confirmation first (the server interrupts it).
@@ -16,6 +19,7 @@ import type { ConnectionStatus } from '../../stores/sessionStore'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { emptyTranscript, useChatStore } from '../../stores/chatStore'
 import { closedDebugView, useChatDebugStore } from '../../stores/chatDebugStore'
+import ChatActivityRow from './ChatActivityRow'
 import ChatDebugPanel from './ChatDebugPanel'
 import ChatMessages from './ChatMessages'
 import ChatRequests from './ChatRequests'
@@ -68,6 +72,15 @@ export default function ChatView({ session, sendMessage, connectionStatus, conne
   }
   useEffect(() => { setText('') }, [session.id])
   useEffect(() => { end.current?.scrollIntoView?.({ block: 'end' }) }, [transcript.events.length, transcript.throughSequence])
+  // Activity row hiding rules (design D4): text streaming is its own visible
+  // progress, a pending approval/question owns the footer, and archived chats
+  // are read-only — none of them also show the live phase row.
+  const activity = transcript.activity
+  const showActivity =
+    !archived &&
+    activity !== null &&
+    activity.value.phase !== 'responding' &&
+    transcript.pendingRequests.length === 0
   return <main className="chat-palette chat-root flex min-h-0 min-w-0 flex-1 flex-col bg-base text-primary" data-testid="chat-view"
     style={{ '--chat-font-size': `${chatFontSize}px` } as CSSProperties}>
     <header className="flex items-center gap-3 border-b border-border p-3">
@@ -88,6 +101,9 @@ export default function ChatView({ session, sendMessage, connectionStatus, conne
         <div className="min-h-0 flex-1 overflow-y-auto p-4">
           <div className="mx-auto max-w-3xl space-y-4">
             <ChatMessages events={transcript.events} />
+            {showActivity && (
+              <ChatActivityRow activity={activity.value} phaseStartedAt={activity.phaseStartedAt} />
+            )}
             {!archived && <ChatRequests requests={transcript.pendingRequests} sessionId={session.id} sendMessage={sendMessage} disabled={!connected} />}
             <div ref={end} />
           </div>
