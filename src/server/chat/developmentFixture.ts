@@ -60,6 +60,11 @@ export const fixtureQueryFactory: ChatQueryFactory = ({ prompt, options, wire })
       })
       frame('out', { type: 'control_response', response: { subtype: 'success', request_id: requestId, response: result } })
       if (closed || turn !== generation) return
+      // The approved tool runs for a moment before its result lands — long
+      // enough to watch the activity row restart its clock at zero when the
+      // request resolves (the card's wait must not count as tool time).
+      await hold(900)
+      if (closed || turn !== generation) return
       push({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: toolUseID, content: JSON.stringify(result) }] } })
       assistant(result?.behavior === 'allow' ? 'Request accepted.' : 'Request denied.')
     }

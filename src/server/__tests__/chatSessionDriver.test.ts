@@ -1073,6 +1073,48 @@ describe('ChatSessionDriver activity', () => {
     }
   })
 
+  test('resolving an approval republishes the phase with a restarted clock', async () => {
+    const harness = createHarness()
+    harness.driver.send('run it')
+    const fake = harness.fakes[0]!
+    fake.push({
+      type: 'assistant',
+      message: {
+        id: 'msg_1',
+        content: [{ type: 'tool_use', id: 'toolu_1', name: 'Bash', input: {} }],
+        role: 'assistant',
+      },
+      parent_tool_use_id: null,
+      uuid: 'a-uuid',
+      session_id: 'sdk-1',
+    } as unknown as SDKMessage)
+    const approval = sendApproval(fake)
+    await flush()
+    expect(bodies(harness.activities)).toEqual([
+      { phase: 'requesting' },
+      { phase: 'running_tools', tool: 'Bash', count: 1 },
+    ])
+
+    // However long the user stares at the card, the body never changes — so
+    // the republish at resolution is what re-anchors clients; without it the
+    // row would surface the card's whole wait as tool time (PR #34 review).
+    const event = harness.events.find(
+      (e) => e.type === 'approval_request'
+    ) as { requestId: string }
+    expect(harness.driver.resolveApproval(event.requestId, 'allow')).toEqual({
+      ok: true,
+    })
+    await expect(approval).resolves.toMatchObject({ behavior: 'allow' })
+    await flush()
+
+    expect(harness.activities).toHaveLength(3)
+    const republished = harness.activities.at(-1)!
+    expect(bodies([republished])).toEqual([
+      { phase: 'running_tools', tool: 'Bash', count: 1 },
+    ])
+    expect(republished.elapsedMs).toBeLessThanOrEqual(2)
+  })
+
   test('subagent frames leave the parent phase untouched', async () => {
     const harness = createHarness()
     harness.driver.send('run a subagent')
@@ -1161,7 +1203,7 @@ describe('ChatSessionDriver activity', () => {
     expect(harness.activities.length).toBe(before)
   })
 
-  test('interrupt ends the activity; an approval resolution does not change it', async () => {
+  test('interrupt ends the activity after an approval resolution', async () => {
     const harness = createHarness()
     harness.driver.send('hello')
     const fake = harness.fakes[0]!
@@ -1181,10 +1223,9 @@ describe('ChatSessionDriver activity', () => {
       { phase: 'requesting' },
       { phase: 'running_tools', tool: 'Bash', count: 1 },
     ])
-    const before = harness.activities.length
 
-    // The approval card and its resolution never emit a new phase body; only
-    // the running clock restarts (design D3's approval-wait handling).
+    // The card's resolution republishes the same body with a restarted
+    // clock (design D3's approval-wait handling; see the dedicated test).
     const approval = sendApproval(fake)
     await flush()
     const request = harness.events.find((e) => e.type === 'approval_request') as {
@@ -1192,7 +1233,11 @@ describe('ChatSessionDriver activity', () => {
     }
     expect(harness.driver.resolveApproval(request.requestId, 'allow')).toEqual({ ok: true })
     await flush()
-    expect(harness.activities.length).toBe(before)
+    expect(bodies(harness.activities)).toEqual([
+      { phase: 'requesting' },
+      { phase: 'running_tools', tool: 'Bash', count: 1 },
+      { phase: 'running_tools', tool: 'Bash', count: 1 },
+    ])
 
     harness.driver.interrupt()
     await flush()

@@ -671,16 +671,19 @@ export class ChatSessionDriver {
 
   /**
    * One activity input (design D3). The state always advances; onActivity
-   * fires only when the projected phase (not its elapsed time) changes.
+   * fires when the projected phase (not its elapsed time) changes or when the
+   * reducer restarts the clock (`request_resolved` after an approval wait) —
+   * clients re-anchor their timer on every publish, so a suppressed reset
+   * would keep counting the card's wait time.
    */
   private feedActivity(input: ChatActivityInput): void {
-    const previous = activityBody(this.activityState)
+    const previous = this.activityState
     this.activityState = reduceActivity(this.activityState, input)
-    const current = activityBody(this.activityState)
-    if (
-      this.options.onActivity &&
-      JSON.stringify(previous) !== JSON.stringify(current)
-    ) {
+    const changed =
+      JSON.stringify(activityBody(previous)) !==
+        JSON.stringify(activityBody(this.activityState)) ||
+      previous.phaseStartedAt !== this.activityState.phaseStartedAt
+    if (this.options.onActivity && changed) {
       this.options.onActivity(projectActivity(this.activityState))
     }
   }

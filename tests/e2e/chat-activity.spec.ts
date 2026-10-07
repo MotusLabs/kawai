@@ -1,8 +1,10 @@
 // The activity row in a real browser against the development fixture: every
 // phase renders with its label (waiting, thinking, writing tool input,
 // running, retrying), the elapsed timer ticks client-side, the row hides
-// while assistant text streams and after the turn completes, and a reload
-// mid-phase restores it from the snapshot with roughly the right age.
+// while assistant text streams and after the turn completes, a reload
+// mid-phase restores it from the snapshot with roughly the right age, and an
+// approved tool restarts its clock so the card's wait never reads as tool
+// time.
 import { expect, test, type Page } from '@playwright/test'
 
 // Serial: the app selects every newly created session on every client, so
@@ -92,6 +94,29 @@ test('a tool turn prepares, runs, and hides while text streams', async ({ page }
   await expect(page.getByTestId('chat-transcript')).toContainText('Streaming a response across reconnect.')
   await expect(row(page)).toHaveCount(0)
   await page.screenshot({ path: info.outputPath('7-hidden-while-streaming.png') })
+
+  await page.getByRole('button', { name: 'Kill session', exact: true }).click()
+})
+
+test('an approved tool restarts its clock without the approval wait', async ({ page }, info) => {
+  await createChat(page, 'activity-approval')
+  await send(page, 'approval')
+
+  // The card owns the footer while it waits; let a stale clock pile up 3s.
+  const allow = page.getByRole('button', { name: 'Allow', exact: true })
+  await expect(allow).toBeVisible()
+  await expect(row(page)).toHaveCount(0)
+  await page.waitForTimeout(3_000)
+
+  // Approving restarts the phase clock: the row reappears near zero, not at
+  // the 3s the card's wait would otherwise have counted (PR #34 review).
+  await allow.click()
+  await expect(row(page)).toContainText('Running Bash…')
+  expect(await elapsedSeconds(page)).toBeLessThan(3)
+  await page.screenshot({ path: info.outputPath('10-fresh-clock-after-approval.png') })
+
+  await expect(page.getByTestId('chat-transcript')).toContainText('Request accepted.')
+  await expect(row(page)).toHaveCount(0)
 
   await page.getByRole('button', { name: 'Kill session', exact: true }).click()
 })
