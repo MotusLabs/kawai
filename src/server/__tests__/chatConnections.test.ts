@@ -31,6 +31,14 @@ function harness(wireLogs?: ChatWireLogs) {
       return { ok: true }
     },
     answerQuestion: (...args: unknown[]) => { calls.push(['answer', ...args]); return { ok: true } },
+    setApprovalPolicy: (...args: unknown[]) => {
+      calls.push(['setApprovalPolicy', ...args])
+      const policy = args[1]
+      if (policy !== 'manual' && policy !== 'auto') {
+        return { ok: false, error: `Unsupported approval policy ${String(policy)}` }
+      }
+      return { ok: true }
+    },
   } as unknown as ChatSessionManager
   const connections = new ChatConnections(manager, wireLogs)
   const messages: ServerMessage[] = []
@@ -52,6 +60,24 @@ describe('chat WebSocket subscriptions', () => {
     expect(h.calls).toEqual([
       ['send', 'chat-1', 'hello'], ['interrupt', 'chat-1'], ['answer', 'chat-1', 'question-1', {}], ['approval', 'chat-1', 'approval-1', 'allow'],
     ])
+  })
+
+  test('routes approval policy switches and echoes failures to the sender', async () => {
+    const h = harness()
+    await h.connections.handle(h.connection, { type: 'chat-set-approval-policy', sessionId: 'chat-1', policy: 'auto' })
+    await h.connections.handle(h.connection, { type: 'chat-set-approval-policy', sessionId: 'chat-1', policy: 'manual' })
+    expect(h.calls).toEqual([
+      ['setApprovalPolicy', 'chat-1', 'auto'],
+      ['setApprovalPolicy', 'chat-1', 'manual'],
+    ])
+    // An unsupported value is routed to the manager, which rejects it; the
+    // error echoes to the sender.
+    await h.connections.handle(h.connection, { type: 'chat-set-approval-policy', sessionId: 'chat-1', policy: 'yolo' as never })
+    expect(h.calls.at(-1)).toEqual(['setApprovalPolicy', 'chat-1', 'yolo'])
+    expect(h.messages).toEqual([{ type: 'error', message: 'Unsupported approval policy yolo' }])
+    // Unknown sessions fail before reaching the manager.
+    await h.connections.handle(h.connection, { type: 'chat-set-approval-policy', sessionId: 'missing', policy: 'auto' })
+    expect(h.messages[1]).toMatchObject({ type: 'error' })
   })
 
   test('snapshot precedes coalesced live events and contains pending approval', async () => {

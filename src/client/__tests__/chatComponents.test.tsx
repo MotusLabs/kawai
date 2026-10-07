@@ -80,6 +80,66 @@ const textOf = (node: ReactTestInstance): string =>
 const buttonNamed = (root: ReactTestInstance, name: string) =>
   root.findAllByType('button').find(button => textOf(button) === name)!
 
+describe('chat approval policy', () => {
+  afterEach(() => useChatDebugStore.setState({ views: {} }))
+
+  function renderPolicyView(session: Session) {
+    const sent: ClientMessage[] = []
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => {
+      renderer = TestRenderer.create(<ChatView
+        session={session}
+        sendMessage={message => { sent.push(message) }}
+        connectionStatus="connected" connectionEpoch={0} error={null}
+        onClose={() => {}} onKill={() => {}} />)
+    })
+    return { sent, renderer }
+  }
+
+  test('a manual session shows an unpressed toggle that switches to auto', () => {
+    const { sent, renderer } = renderPolicyView(chatSession)
+    const toggle = renderer.root.findByProps({ 'data-testid': 'chat-approval-policy' })
+    expect(toggle.props['aria-pressed']).toBe(false)
+    expect(toggle.props.className).not.toContain('btn-approval-on')
+    act(() => { toggle.props.onClick() })
+    expect(sent).toContainEqual({ type: 'chat-set-approval-policy', sessionId: 'chat-1', policy: 'auto' })
+    renderer.unmount()
+  })
+
+  test('an auto session shows a pressed, amber toggle that switches back', () => {
+    const auto = { ...chatSession, approvalPolicy: 'auto' } as Session
+    const { sent, renderer } = renderPolicyView(auto)
+    const toggle = renderer.root.findByProps({ 'data-testid': 'chat-approval-policy' })
+    expect(toggle.props['aria-pressed']).toBe(true)
+    expect(toggle.props.className).toContain('btn-approval-on')
+    act(() => { toggle.props.onClick() })
+    expect(sent).toContainEqual({ type: 'chat-set-approval-policy', sessionId: 'chat-1', policy: 'manual' })
+    renderer.unmount()
+  })
+
+  test('an archived chat hides the approval-policy control', () => {
+    const archived = { ...chatSession, archivedAt: '2026-10-01T00:00:00.000Z' } as Session
+    const { renderer } = renderPolicyView(archived)
+    expect(renderer.root.findAllByProps({ 'data-testid': 'chat-approval-policy' })).toHaveLength(0)
+    renderer.unmount()
+  })
+
+  test('policy grants render as auto-approved; user decisions stay distinct', () => {
+    const renderer = TestRenderer.create(<ChatMessages events={[
+      { type: 'request_resolved', id: 'p', sequence: 0, at: 'now', requestId: 'r1', outcome: 'allowed', decidedBy: 'policy', tool: 'Bash' },
+      { type: 'request_resolved', id: 'u', sequence: 1, at: 'now', requestId: 'r2', outcome: 'allowed', decidedBy: 'user' },
+      { type: 'request_resolved', id: 'd', sequence: 2, at: 'now', requestId: 'r3', outcome: 'denied', decidedBy: 'user' },
+      { type: 'request_resolved', id: 'c', sequence: 3, at: 'now', requestId: 'r4', outcome: 'cancelled' },
+    ]} />)
+    const paragraphTexts = renderer.root.findAllByType('p').map(node => textOf(node))
+    expect(paragraphTexts).toContain('Auto-approved Bash')
+    expect(paragraphTexts).toContain('Allowed by user')
+    expect(paragraphTexts).toContain('Denied by user')
+    expect(paragraphTexts).toContain('Request cancelled')
+    renderer.unmount()
+  })
+})
+
 describe('chat archive view', () => {
   // Loose holder so the confirm stub can replace `window` without matching
   // the full DOM Window type.

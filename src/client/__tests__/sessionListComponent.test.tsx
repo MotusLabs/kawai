@@ -445,6 +445,7 @@ describe('session comparator (design D6)', () => {
       isPinned: false,
       kind: 'terminal',
       claudeProfileId: 'default',
+      approvalPolicy: 'manual',
       archivedAt: null,
     }
     // Compile-time exhaustiveness comes from the mapped type (a new Session
@@ -457,6 +458,7 @@ describe('session comparator (design D6)', () => {
     const changedValues: Record<string, unknown> = {
       id: 'session-2',
       claudeProfileId: 'glm',
+      approvalPolicy: 'auto',
       name: 'beta',
       tmuxWindow: 'agentboard:2',
       projectPath: '/tmp/beta',
