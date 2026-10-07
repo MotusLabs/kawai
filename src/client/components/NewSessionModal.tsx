@@ -104,7 +104,9 @@ export default function NewSessionModal({
   const [projectPathError, setProjectPathError] = useState<string | null>(null)
   const [kind, setKind] = useState<'terminal' | 'chat'>('terminal')
   const [claudeProfileId, setClaudeProfileId] = useState('default')
-  const catalog = useClaudeProfiles(isOpen && kind === 'chat')
+  // The catalog is resolved for the entered project path: a `.kawai`
+  // directory in the project (or above it) extends the picker live.
+  const catalog = useClaudeProfiles(isOpen && kind === 'chat', projectPath)
   const [name, setName] = useState('')
   const [selectedPresetId, setSelectedPresetId] = useState<string | null>(null)
   const [command, setCommand] = useState('')

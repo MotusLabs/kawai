@@ -54,6 +54,43 @@ test('chat catalog selects Default or named profile and terminal creation remain
   submit(renderer)
   expect(created[2]?.[7]).toBeUndefined()
 })
+test('catalog refetches with the entered project path', async () => {
+  const urls: string[] = []
+  globalThis.fetch = (async (input: unknown) => {
+    urls.push(String(input))
+    return Response.json(metadata)
+  }) as unknown as typeof fetch
+  const renderer = await modal()
+  await kind(renderer, 'chat')
+  // The modal opens with the default project dir prefilled.
+  expect(urls.some(url => url.includes(`projectPath=${encodeURIComponent('/tmp')}`))).toBe(true)
+
+  // Typing a different project path refetches the catalog for that path.
+  await act(async () => {
+    const pathInput = renderer.root.findAllByType('input').find(input => input.props.value === '/tmp')!
+    pathInput.props.onChange({ target: { value: '/work/glm-flash' } })
+    await settle()
+  })
+  expect(urls.some(url => url.includes(`projectPath=${encodeURIComponent('/work/glm-flash')}`))).toBe(true)
+})
+
+test('chat header label resolves from the session project path catalog', async () => {
+  const urls: string[] = []
+  globalThis.fetch = (async (input: unknown) => {
+    urls.push(String(input))
+    return Response.json(metadata)
+  }) as unknown as typeof fetch
+  const session: Session = { id: 'chat-path', name: 'Path test', projectPath: '/work/proj', status: 'waiting', source: 'managed', kind: 'chat', createdAt: '', lastActivity: '', claudeProfileId: 'glm' }
+  let renderer!: TestRenderer.ReactTestRenderer
+  await act(async () => {
+    renderer = TestRenderer.create(<ChatView session={session} sendMessage={() => {}} connectionStatus="connected" connectionEpoch={1} error={null} onClose={() => {}} onKill={() => {}} />)
+    await settle()
+  })
+  renderers.push(renderer)
+  expect(urls.some(url => url.includes(`projectPath=${encodeURIComponent('/work/proj')}`))).toBe(true)
+  expect(renderer.root.findByProps({ 'data-testid': 'chat-profile' }).children.join('')).toBe('Profile: GLM')
+})
+
 test('loading and catalog error block submission and Retry recovers without losing selection', async () => {
   const renderer = await modal()
   let release!: (response: Response) => void

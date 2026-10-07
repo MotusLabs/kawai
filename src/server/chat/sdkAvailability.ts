@@ -15,6 +15,9 @@ export async function probeSdkAvailability(
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), 20_000)
   const prompt = new TurnQueue()
+  // `executable` is launch bookkeeping; the spawn path arrives via
+  // executablePath (the profile wrapper or the checked Claude install).
+  const { executable: _profileExecutable, ...launchOptions } = launch ?? {}
   const stream = sdk.query({
     prompt,
     options: {
@@ -26,7 +29,7 @@ export async function probeSdkAvailability(
       // The externally installed executable chat sessions will run; omitted
       // when the caller injects its own runtime (tests, fixture).
       ...(executablePath ? { pathToClaudeCodeExecutable: executablePath } : {}),
-      ...(launch ?? (env ? { env } : {})),
+      ...(launchOptions ?? (env ? { env } : {})),
     },
   })
   try {

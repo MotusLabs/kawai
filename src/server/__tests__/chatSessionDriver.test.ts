@@ -1,4 +1,7 @@
-import { describe, expect, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import type {
   Options,
   PermissionResult,
@@ -207,6 +210,20 @@ function result(subtype: string, extra: Record<string, unknown> = {}): SDKMessag
 }
 
 describe('ChatSessionDriver', () => {
+  // Pin catalog reads to an empty temp home: the shipped default applies
+  // deterministically, and a real ~/.kawai cannot leak into launch resolution.
+  let tempHome: string
+  const originalHome = process.env.HOME
+  beforeEach(() => {
+    tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'agentboard-chatdriver-'))
+    process.env.HOME = tempHome
+  })
+  afterEach(() => {
+    if (originalHome !== undefined) process.env.HOME = originalHome
+    else delete process.env.HOME
+    fs.rmSync(tempHome, { recursive: true, force: true })
+  })
+
   test('passes the executable path when given and omits the option otherwise', async () => {
     const external = createHarness({ claudeExecutablePath: '/opt/claude/bin/claude' })
     external.driver.send('hello')
@@ -246,6 +263,28 @@ describe('ChatSessionDriver', () => {
     expect(glm.fakes[1]!.options.env?.ANTHROPIC_BASE_URL).toBe(first.options.env?.ANTHROPIC_BASE_URL)
     glm.driver.kill()
     minimax.driver.kill()
+  })
+
+  test('executable-backed profiles spawn the wrapper with base env and no settings', async () => {
+    fs.mkdirSync(path.join(tempHome, '.kawai'), { recursive: true })
+    fs.writeFileSync(path.join(tempHome, '.kawai', 'profiles.json'), JSON.stringify({
+      lan: {
+        label: 'LAN',
+        executable: '/usr/local/bin/claude-lan',
+        env: { ANTHROPIC_BASE_URL: 'http://ai.lan:9292' },
+      },
+    }))
+    const lan = createHarness({ claudeProfileId: 'lan', claudeExecutablePath: '/opt/claude/bin/claude' })
+    lan.driver.send('lan turn')
+    const options = lan.fakes[0]!.options
+    // The wrapper replaces the checked Claude Code binary...
+    expect(options.pathToClaudeCodeExecutable).toBe('/usr/local/bin/claude-lan')
+    // ...receives the entry environment pre-applied on the merged base...
+    expect(options.env?.ANTHROPIC_BASE_URL).toBe('http://ai.lan:9292')
+    // ...and no inline controlled settings exist to override its exports.
+    expect(options.settings).toBeUndefined()
+    expect('executable' in options).toBe(false)
+    lan.driver.kill()
   })
 
   test('a wire recorder taps every spawn, including the respawn after a crash', async () => {
