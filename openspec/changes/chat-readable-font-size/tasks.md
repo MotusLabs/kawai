@@ -6,7 +6,7 @@
 
 ## 1. Chat font size setting
 
-- [ ] 1.1 Add `chatFontSize` (default 15) and `setChatFontSize` (clamps to 12–20, rounds to an integer) to `settingsStore.ts` beside `fontSize`. Sanitize the value in the persist `merge`: non-finite falls back to 15, anything else is clamped (design D4). Verify with `settingsStore.test.ts` cases for the default, setter clamping at 11 and 21, a hydrated `"abc"` falling back to 15, a hydrated 40 clamping to 20, and persisted state without the key keeping 15
+- [x] 1.1 Add `chatFontSize` (default 15) and `setChatFontSize` (clamps to 12–20, rounds to an integer) to `settingsStore.ts` beside `fontSize`. Sanitize the value in the persist `merge`: non-finite falls back to 15, anything else is clamped (design D4). Verify with `settingsStore.test.ts` cases for the default, setter clamping at 11 and 21, a hydrated `"abc"` falling back to 15, a hydrated 40 clamping to 20, and persisted state without the key keeping 15
 - [ ] 1.2 Add a "Chat font size" −/+ stepper to `SettingsModal.tsx` in the draft-and-save flow, with the hint "Chat text size in pixels (12-20)". Change the terminal hint so it clearly names the terminal (design D5). Verify with `settingsModal.test.ts` cases: the stepper stops at 12 and 20, Cancel discards the draft, and Save writes `chatFontSize` without changing `fontSize`
 
 ## 2. Chat-scoped sizing
