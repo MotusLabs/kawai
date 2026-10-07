@@ -9,6 +9,7 @@
 // an executable check (KAWAI_CLAUDE_PATH/PATH, version baseline) whose
 // ClaudeExecutableError messages reach the user verbatim.
 import type {
+  ChatActivity,
   ChatApprovalDecision,
   ChatApprovalPolicy,
   ChatEvent,
@@ -45,6 +46,12 @@ export interface ChatSessionManagerOptions {
   db: SessionDatabase
   /** Conversation-event sink (wired to the WS broadcast in index.ts). */
   onEvent: (sessionId: string, event: ChatEvent) => void
+  /**
+   * Live-activity sink (activity indicator design D5): called on each phase
+   * change of an in-flight turn, null when the turn ends. Wired to the WS
+   * broadcast in index.ts; activity is ephemeral and never persisted.
+   */
+  onActivity?: (sessionId: string, activity: ChatActivity | null) => void
   /** Injected in tests; production resolves the SDK via dynamic import. */
   queryFactory?: ChatQueryFactory
   /** Receives the provider env so it probes the endpoint sessions will use. */
@@ -94,6 +101,15 @@ export class ChatSessionManager {
   >()
   private sdkQuery: Promise<ChatQueryFactory> | null = null
   /**
+   * Current in-flight-turn activity per session: the phase body plus when it
+   * began. Cleared on turn end, stop, archive, kill, and driver death; a
+   * restart begins with none (design D5).
+   */
+  private readonly activities = new Map<
+    string,
+    { body: Omit<ChatActivity, 'elapsedMs'>; phaseStartedAt: number }
+  >()
+  /**
    * Availability probes for resolved provider configurations. Keyed so a provider
    * change in Settings re-probes the new endpoint; a failed probe is dropped so
    * a corrected configuration (or repaired install) recovers without a restart.
@@ -134,14 +150,22 @@ export class ChatSessionManager {
     if (!this.records.has(sessionId)) return null
     this.captureHistory(sessionId)
     const live = this.liveEvents.get(sessionId) ?? []
+    const activity = this.getActivity(sessionId)
     return {
       type: 'chat-snapshot', sessionId,
       events: [...(this.snapshotHistory.get(sessionId) ?? []), ...live],
       pendingRequests: this.getPendingRequests(sessionId),
       status: this.options.registry.get(sessionId)?.status ?? 'waiting',
       throughSequence: live.at(-1)?.sequence ?? 0,
-      activity: null,
+      activity,
     }
+  }
+
+  /** Current activity with a live-computed elapsed time, or null when idle. */
+  private getActivity(sessionId: string): ChatActivity | null {
+    const entry = this.activities.get(sessionId)
+    if (!entry) return null
+    return { ...entry.body, elapsedMs: Math.max(0, Date.now() - entry.phaseStartedAt) }
   }
 
   private captureHistory(sessionId: string): void {
@@ -318,6 +342,9 @@ export class ChatSessionManager {
     }
     this.drivers.delete(sessionId)
     this.driverPromises.delete(sessionId)
+    // The archived chat shows no activity row (design D5): any in-flight
+    // phase ended with the driver above.
+    this.clearActivity(sessionId)
     // Status returns to waiting: archived sessions never look busy.
     this.applyPatch(sessionId, {
       archivedAt: new Date().toISOString(),
@@ -425,6 +452,7 @@ export class ChatSessionManager {
     this.records.delete(sessionId)
     this.snapshotHistory.delete(sessionId)
     this.liveEvents.delete(sessionId)
+    this.activities.delete(sessionId)
     this.options.registry.removeChatSession(sessionId)
     this.options.db.deleteChatSession(sessionId)
     void this.options.wireLogs?.delete(sessionId).catch(() => {})
@@ -438,6 +466,7 @@ export class ChatSessionManager {
     }
     this.drivers.clear()
     this.driverPromises.clear()
+    this.activities.clear()
   }
 
   /**
@@ -528,6 +557,8 @@ export class ChatSessionManager {
           ? { resumeSessionId: record.sdkSessionId }
           : {}),
         onEvent: (event) => this.handleDriverEvent(record.sessionId, event),
+        onActivity: (activity) =>
+          this.handleDriverActivity(record.sessionId, activity),
         onStatus: (status) => this.applyPatch(record.sessionId, { status }),
         onSdkSessionId: (sdkSessionId) =>
           // Persist immediately: a crash right after the first turn must not
@@ -638,6 +669,34 @@ export class ChatSessionManager {
       event.type === 'question_request'
     ) {
       this.touch(sessionId)
+    }
+  }
+
+  /**
+   * Store the latest activity (anchored on this server's clock) and forward
+   * it to the broadcast sink. Null (turn end, driver death) clears it.
+   */
+  private handleDriverActivity(
+    sessionId: string,
+    activity: ChatActivity | null
+  ): void {
+    if (!this.records.has(sessionId)) return
+    if (activity === null) {
+      this.activities.delete(sessionId)
+    } else {
+      const { elapsedMs, ...body } = activity
+      this.activities.set(sessionId, {
+        body,
+        phaseStartedAt: Date.now() - elapsedMs,
+      })
+    }
+    this.options.onActivity?.(sessionId, activity)
+  }
+
+  /** Forget a session's activity, broadcasting null if one was showing. */
+  private clearActivity(sessionId: string): void {
+    if (this.activities.delete(sessionId)) {
+      this.options.onActivity?.(sessionId, null)
     }
   }
 
