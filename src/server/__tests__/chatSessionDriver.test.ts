@@ -955,6 +955,9 @@ describe('ChatSessionDriver', () => {
           'policy'
       )
     expect(policyGrant).toBeDefined()
+    expect(
+      (policyGrant as Extract<ChatEvent, { type: 'request_resolved' }>).tool
+    ).toBe('Bash')
     // The question stays pending and user-answerable.
     const questionEvent = harness.events.find((e) => e.type === 'question_request') as {
       requestId: string

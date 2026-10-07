@@ -24,5 +24,5 @@
 
 ## 5. Integration checks
 
-- [ ] 5.1 Run `bun run lint && bun run typecheck && bun run test` and verify all pass
-- [ ] 5.2 With the `dev-browser` skill against `bun run dev`, toggle Auto-approve with an approval card pending, confirm the card resolves, a tool runs with no card, the header indicator and transcript marks appear, a second tab sees the change, and the archived view hides the control; save screenshots as evidence
+- [x] 5.1 Run `bun run lint && bun run typecheck && bun run test` and verify all pass
+- [x] 5.2 With the `dev-browser` skill against `bun run dev`, toggle Auto-approve with an approval card pending, confirm the card resolves, a tool runs with no card, the header indicator and transcript marks appear, a second tab sees the change, and the archived view hides the control; save screenshots as evidence

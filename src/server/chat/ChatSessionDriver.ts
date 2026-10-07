@@ -220,6 +220,7 @@ export class ChatSessionDriver {
         requestId: pending.requestId,
         outcome: 'allowed',
         decidedBy: 'policy',
+        tool: pending.tool,
       })
     }
     this.refreshStatus()
