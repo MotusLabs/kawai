@@ -18,9 +18,9 @@
 
 ## 4. Chat view
 
-- [ ] 4.1 Add the approval-policy toggle to the `ChatView` header next to Debug/Archive (design D6), hidden for archived sessions and rendered from the broadcast `Session`; verify component tests for the off and on states, the sent message, and its absence in archived view
-- [ ] 4.2 Render `request_resolved` with `decidedBy: 'policy'` as "Auto-approved <tool>" in `ChatMessages`, leaving other resolutions unchanged; verify component tests, plus a `chatStore` test showing a policy resolution with no prior card leaves pending requests and status intact
-- [ ] 4.3 Update the chat-session notes in `CLAUDE.md` with the per-session approval policy and the `approval_policy` column; verify the text matches the implemented behavior
+- [x] 4.1 Add the approval-policy toggle to the `ChatView` header next to Debug/Archive (design D6), hidden for archived sessions and rendered from the broadcast `Session`; verify component tests for the off and on states, the sent message, and its absence in archived view
+- [x] 4.2 Render `request_resolved` with `decidedBy: 'policy'` as "Auto-approved <tool>" in `ChatMessages`, leaving other resolutions unchanged; verify component tests, plus a `chatStore` test showing a policy resolution with no prior card leaves pending requests and status intact
+- [x] 4.3 Update the chat-session notes in `CLAUDE.md` with the per-session approval policy and the `approval_policy` column; verify the text matches the implemented behavior
 
 ## 5. Integration checks
 

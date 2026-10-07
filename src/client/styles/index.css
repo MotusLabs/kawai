@@ -301,6 +301,18 @@ body {
     color: white;
   }
 
+  /* Auto-approve toggle: amber while on, mirroring the permission status hue. */
+  .btn-approval-on {
+    color: var(--approval);
+    border-color: var(--approval);
+    background: transparent;
+  }
+
+  .btn-approval-on:hover {
+    background: var(--approval);
+    color: white;
+  }
+
   .input {
     @apply w-full px-3 py-2;
     font-size: 16px; /* Prevents iOS zoom on focus */

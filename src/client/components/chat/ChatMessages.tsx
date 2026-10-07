@@ -29,7 +29,20 @@ export default function ChatMessages({ events }: { events: ChatEvent[] }) {
         case 'notice': return <p key={event.id} className="text-chat-meta text-secondary">{event.text}</p>
         case 'error': return <p key={event.id} role="alert" className="text-chat-body text-chat-danger">{event.message}</p>
         case 'turn_interrupted': return <p key={event.id} className="text-chat-meta text-secondary">Turn stopped</p>
-        case 'request_resolved': return <p key={event.id} className="text-chat-meta text-secondary">Request {event.outcome}</p>
+        case 'request_resolved': {
+          // Who decided: policy grants stand apart from the user's own calls.
+          if (event.decidedBy === 'policy') {
+            return <p key={event.id} className="text-chat-meta text-secondary" data-testid="auto-approved">
+              Auto-approved {event.tool ?? 'tool'}
+            </p>
+          }
+          if (event.decidedBy === 'user' && (event.outcome === 'allowed' || event.outcome === 'denied')) {
+            return <p key={event.id} className="text-chat-meta text-secondary">
+              {event.outcome === 'allowed' ? 'Allowed' : 'Denied'} by user
+            </p>
+          }
+          return <p key={event.id} className="text-chat-meta text-secondary">Request {event.outcome}</p>
+        }
         case 'turn_completed': return <p key={event.id} className="text-chat-meta text-muted">
           Turn complete · {event.subtype}{event.totalCostUsd !== undefined ? ` · $${event.totalCostUsd.toFixed(4)}` : ''}
           {event.numTurns !== undefined ? ` · ${event.numTurns} turns` : ''}

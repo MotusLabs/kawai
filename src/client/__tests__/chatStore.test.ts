@@ -40,6 +40,25 @@ describe('chat store', () => {
     expect(cancelled.status).toBe('waiting')
   })
 
+  test('a policy grant with no prior card leaves pending requests and status intact', () => {
+    // Auto policy resolves tool uses that never showed a card; the store
+    // must not disturb unrelated pending requests or reset status.
+    const approval: ChatEvent = { id: 'a', sequence: 1, at: 'now', turnId: 't', type: 'approval_request', requestId: 'r1', tool: 'Bash', input: {} }
+    const pending = applyChatEvents(emptyTranscript(), [approval])
+    const granted = applyChatEvents(pending, [
+      { id: 'g', sequence: 2, at: 'now', type: 'request_resolved', requestId: 'req-unseen', outcome: 'allowed', decidedBy: 'policy', tool: 'Write' },
+    ])
+    expect(granted.pendingRequests.map(request => request.requestId)).toEqual(['r1'])
+    expect(granted.status).toBe('permission')
+    expect(granted.events.at(-1)).toMatchObject({ type: 'request_resolved', decidedBy: 'policy', tool: 'Write' })
+    // With nothing pending the same event keeps the working status.
+    const lone = applyChatEvents(emptyTranscript(), [
+      { id: 's', sequence: 1, at: 'now', type: 'turn_started', turnId: 't' },
+      { id: 'g', sequence: 2, at: 'now', type: 'request_resolved', requestId: 'req-unseen', outcome: 'allowed', decidedBy: 'policy', tool: 'Write' },
+    ])
+    expect(lone.status).toBe('working')
+  })
+
   test('a snapshot replaces stale state and its pending requests are authoritative', () => {
     const store = useChatStore.getState()
     store.apply('chat-1', [delta(1, 'old')])
