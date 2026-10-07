@@ -177,6 +177,12 @@ export class ChatConnections {
         if (!result.ok) connection.send({ type: 'error', message: result.error })
         return
       }
+      case 'chat-set-approval-policy': {
+        // The manager validates the value; failures echo to the sender only.
+        const result = this.manager.setApprovalPolicy(sessionId, message.policy)
+        if (!result.ok) connection.send({ type: 'error', message: result.error })
+        return
+      }
       case 'chat-debug-open':
         this.openDebug(connection, sessionId)
         await this.sendDebugPage(connection, sessionId)

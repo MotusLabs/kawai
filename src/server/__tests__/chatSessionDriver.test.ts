@@ -9,7 +9,7 @@ import type {
   SDKMessage,
   SDKUserMessage,
 } from '@anthropic-ai/claude-agent-sdk'
-import type { ChatEvent } from '../../shared/chat'
+import type { ChatApprovalPolicy, ChatEvent } from '../../shared/chat'
 import type { SessionStatus } from '../../shared/types'
 import type { ChatWireRecorder } from '../chat/wireTap'
 import {
@@ -114,6 +114,7 @@ function createHarness(
     resumeSessionId?: string
     claudeExecutablePath?: string
     getProviderEnv?: () => Record<string, string>
+    getApprovalPolicy?: () => ChatApprovalPolicy
     wire?: ChatWireRecorder
   } = {}
 ): Harness {
@@ -882,5 +883,149 @@ describe('ChatSessionDriver', () => {
 
     await first
     await second
+  })
+
+  test('auto policy grants tool approvals without a card or permission status', async () => {
+    const harness = createHarness({ getApprovalPolicy: () => 'auto' })
+    harness.driver.send('go')
+    const fake = harness.fakes[0]!
+    const approval = sendApproval(fake)
+    await flush()
+
+    await expect(approval).resolves.toEqual({ behavior: 'allow' })
+    expect(typesOf(harness.events)).not.toContain('approval_request')
+    const resolved = harness.events.find((e) => e.type === 'request_resolved') as
+      | Extract<ChatEvent, { type: 'request_resolved' }>
+      | undefined
+    expect(resolved?.outcome).toBe('allowed')
+    expect(resolved?.decidedBy).toBe('policy')
+    expect(resolved?.tool).toBe('Bash')
+    expect(harness.statuses).not.toContain('permission')
+  })
+
+  test('auto policy still routes AskUserQuestion to the user', async () => {
+    const harness = createHarness({ getApprovalPolicy: () => 'auto' })
+    harness.driver.send('choose')
+    const fake = harness.fakes[0]!
+    const question = sendApproval(
+      fake,
+      {
+        questions: [
+          {
+            question: 'Which library?',
+            header: 'Library',
+            multiSelect: false,
+            options: [
+              { label: 'date-fns', description: 'modern' },
+              { label: 'dayjs', description: 'small' },
+            ],
+          },
+        ],
+      },
+      'AskUserQuestion'
+    )
+    await flush()
+
+    const event = harness.events.find((e) => e.type === 'question_request')
+    expect(event).toBeDefined()
+    expect(harness.statuses.at(-1)).toBe('permission')
+    const requestId = (event as { requestId: string }).requestId
+    expect(
+      harness.driver.answerQuestion(requestId, {
+        'Which library?': { options: ['dayjs'] },
+      })
+    ).toMatchObject({ ok: true })
+    await expect(question).resolves.toMatchObject({ behavior: 'allow' })
+  })
+
+  test('user decisions carry decidedBy user', async () => {
+    const harness = createHarness()
+    harness.driver.send('go')
+    const fake = harness.fakes[0]!
+    const approval = sendApproval(fake)
+    await flush()
+    const requestId = (harness.events.find((e) => e.type === 'approval_request') as {
+      requestId: string
+    }).requestId
+
+    expect(harness.driver.resolveApproval(requestId, 'allow')).toEqual({ ok: true })
+    await expect(approval).resolves.toEqual({ behavior: 'allow' })
+    const resolved = harness.events.find((e) => e.type === 'request_resolved') as
+      Extract<ChatEvent, { type: 'request_resolved' }>
+    expect(resolved.decidedBy).toBe('user')
+    expect(resolved.tool).toBeUndefined()
+  })
+
+  test('switching to auto grants pending approvals but not questions', async () => {
+    const harness = createHarness()
+    harness.driver.send('go')
+    const fake = harness.fakes[0]!
+    const approval = sendApproval(fake)
+    await flush()
+    const question = sendApproval(
+      fake,
+      {
+        questions: [
+          {
+            question: 'Which library?',
+            header: 'Library',
+            multiSelect: false,
+            options: [
+              { label: 'date-fns', description: 'modern' },
+              { label: 'dayjs', description: 'small' },
+            ],
+          },
+        ],
+      },
+      'AskUserQuestion'
+    )
+    await flush()
+    expect(harness.statuses.at(-1)).toBe('permission')
+
+    harness.driver.onApprovalPolicyChanged('auto')
+    await flush()
+
+    await expect(approval).resolves.toEqual({ behavior: 'allow' })
+    const policyGrant = harness.events
+      .filter((e) => e.type === 'request_resolved')
+      .find(
+        (e) =>
+          (e as Extract<ChatEvent, { type: 'request_resolved' }>).decidedBy ===
+          'policy'
+      )
+    expect(policyGrant).toBeDefined()
+    expect(
+      (policyGrant as Extract<ChatEvent, { type: 'request_resolved' }>).tool
+    ).toBe('Bash')
+    // The question stays pending and user-answerable.
+    const questionEvent = harness.events.find((e) => e.type === 'question_request') as {
+      requestId: string
+    }
+    expect(
+      harness.driver.answerQuestion(questionEvent.requestId, {
+        'Which library?': { options: ['dayjs'] },
+      })
+    ).toMatchObject({ ok: true })
+    await expect(question).resolves.toMatchObject({ behavior: 'allow' })
+  })
+
+  test('switching to manual leaves pending approvals with the user', async () => {
+    const harness = createHarness()
+    harness.driver.send('go')
+    const fake = harness.fakes[0]!
+    const approval = sendApproval(fake)
+    await flush()
+
+    harness.driver.onApprovalPolicyChanged('manual')
+    await flush()
+
+    const event = harness.events.find((e) => e.type === 'approval_request') as {
+      requestId: string
+    }
+    expect(harness.driver.resolveApproval(event.requestId, 'deny')).toEqual({ ok: true })
+    await expect(approval).resolves.toMatchObject({ behavior: 'deny' })
+    const resolved = harness.events.find((e) => e.type === 'request_resolved') as
+      Extract<ChatEvent, { type: 'request_resolved' }>
+    expect(resolved.decidedBy).toBe('user')
   })
 })

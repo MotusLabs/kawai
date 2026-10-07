@@ -1,7 +1,9 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { Database as SQLiteDatabase } from 'bun:sqlite'
+import type { ChatApprovalPolicy } from '../shared/chat'
 import type { AgentType, SessionStatus } from '../shared/types'
+import { parseApprovalPolicy } from './chat/approvalPolicy'
 import { resolveProjectPath } from './paths'
 
 export interface AgentSessionRecord {
@@ -44,7 +46,8 @@ export interface KnownSessionKey {
  * duplicated into our DB — it lives in the SDK transcript addressed by
  * `sdkSessionId`. Null sdkSessionId means created but never started.
  * `archivedAt` (chat-archive design D1) is the archive timestamp; null or
- * absent means the session is live.
+ * absent means the session is live. `approvalPolicy`
+ * (chat-auto-approve-tools design D5) defaults to manual.
  */
 export interface ChatSessionRecord {
   sessionId: string
@@ -56,6 +59,7 @@ export interface ChatSessionRecord {
   createdAt: string
   lastActivityAt: string
   archivedAt?: string | null
+  approvalPolicy?: ChatApprovalPolicy
 }
 
 // last_user_message is a UI preview; unbounded values (giant pastes, tool
@@ -181,7 +185,8 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
   status TEXT NOT NULL,
   created_at TEXT NOT NULL,
   last_activity_at TEXT NOT NULL,
-  archived_at TEXT
+  archived_at TEXT,
+  approval_policy TEXT NOT NULL DEFAULT 'manual'
 );
 `
 
@@ -229,6 +234,9 @@ export function initDatabase(options: { path?: string } = {}): SessionDatabase {
   }
   if (!chatColumns.some(column => column.name === 'archived_at')) {
     db.exec('ALTER TABLE chat_sessions ADD COLUMN archived_at TEXT')
+  }
+  if (!chatColumns.some(column => column.name === 'approval_policy')) {
+    db.exec("ALTER TABLE chat_sessions ADD COLUMN approval_policy TEXT NOT NULL DEFAULT 'manual'")
   }
   migrateLastUserMessageColumn(db)
   migrateDeduplicateDisplayNames(db)
@@ -318,8 +326,8 @@ export function initDatabase(options: { path?: string } = {}): SessionDatabase {
   // Chat sessions prepared statements
   const insertChatStmt = db.prepare(
     `INSERT INTO chat_sessions
-      (session_id, name, project_path, sdk_session_id, profile_id, status, created_at, last_activity_at)
-     VALUES ($sessionId, $name, $projectPath, $sdkSessionId, $profileId, $status, $createdAt, $lastActivityAt)`
+      (session_id, name, project_path, sdk_session_id, profile_id, status, created_at, last_activity_at, approval_policy)
+     VALUES ($sessionId, $name, $projectPath, $sdkSessionId, $profileId, $status, $createdAt, $lastActivityAt, $approvalPolicy)`
   )
   const selectChatBySessionId = db.prepare(
     'SELECT * FROM chat_sessions WHERE session_id = $sessionId'
@@ -563,6 +571,7 @@ export function initDatabase(options: { path?: string } = {}): SessionDatabase {
         $status: session.status,
         $createdAt: session.createdAt,
         $lastActivityAt: session.lastActivityAt,
+        $approvalPolicy: session.approvalPolicy ?? 'manual',
       })
       return session
     },
@@ -576,6 +585,7 @@ export function initDatabase(options: { path?: string } = {}): SessionDatabase {
         createdAt: 'created_at',
         lastActivityAt: 'last_activity_at',
         archivedAt: 'archived_at',
+        approvalPolicy: 'approval_policy',
       }
       const fields: string[] = []
       const params: Record<string, string | number | null> = {
@@ -658,6 +668,7 @@ function mapChatRow(row: Record<string, unknown>): ChatSessionRecord {
       row.archived_at === null || row.archived_at === undefined
         ? null
         : String(row.archived_at),
+    approvalPolicy: parseApprovalPolicy(row.approval_policy),
   }
 }
 

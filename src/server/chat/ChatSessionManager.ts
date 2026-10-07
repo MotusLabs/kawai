@@ -10,6 +10,7 @@
 // ClaudeExecutableError messages reach the user verbatim.
 import type {
   ChatApprovalDecision,
+  ChatApprovalPolicy,
   ChatEvent,
   ChatPendingRequest,
   ChatQuestionAnswer,
@@ -192,6 +193,8 @@ export class ChatSessionManager {
       projectPath,
       sdkSessionId: null as string | null,
       claudeProfileId: input.claudeProfileId ?? 'default',
+      // Every session starts manual; there is no per-profile default.
+      approvalPolicy: 'manual' as ChatApprovalPolicy,
       status: 'waiting' as SessionStatus,
       createdAt: now,
       lastActivityAt: now,
@@ -347,6 +350,43 @@ export class ChatSessionManager {
     return { ok: true }
   }
 
+  /**
+   * Switch a session's approval policy live (chat-auto-approve-tools design
+   * D4): persists and broadcasts the new policy, records a transcript
+   * notice, and lets a live driver grant approvals already pending as cards.
+   * Archived sessions refuse the change; setting the current value is a
+   * no-op, and switching to manual affects only later requests.
+   */
+  setApprovalPolicy(
+    sessionId: string,
+    policy: ChatApprovalPolicy
+  ): ChatActionResult {
+    if (policy !== 'manual' && policy !== 'auto') {
+      return { ok: false, error: `Unsupported approval policy ${String(policy)}` }
+    }
+    const record = this.records.get(sessionId)
+    if (!record) {
+      return { ok: false, error: `Unknown chat session ${sessionId}` }
+    }
+    if (record.archivedAt != null) {
+      return { ok: false, error: ARCHIVED_SESSION_ERROR }
+    }
+    if ((record.approvalPolicy ?? 'manual') === policy) return { ok: true }
+    this.applyPatch(sessionId, { approvalPolicy: policy })
+    // The notice rides the same live-event path as driver events (sequence
+    // assignment, snapshot inclusion) whether or not a driver is running.
+    // It precedes the driver's policy grants so the transcript reads in order.
+    this.handleDriverEvent(sessionId, {
+      type: 'notice',
+      text: policy === 'auto' ? 'Auto-approve on' : 'Auto-approve off',
+      id: `evt-${crypto.randomUUID()}`,
+      sequence: 0,
+      at: new Date().toISOString(),
+    } as ChatEvent)
+    this.drivers.get(sessionId)?.onApprovalPolicyChanged(policy)
+    return { ok: true }
+  }
+
   resolveApproval(
     sessionId: string,
     requestId: string,
@@ -493,6 +533,10 @@ export class ChatSessionManager {
         projectPath: record.projectPath,
         queryFactory,
         getProviderEnv: () => this.providerEnv(),
+        // Read per request so a live policy switch reaches the next
+        // canUseTool call without a respawn (design D2).
+        getApprovalPolicy: () =>
+          this.records.get(record.sessionId)?.approvalPolicy ?? 'manual',
         claudeProfileId: record.claudeProfileId,
         ...(this.options.profileCatalogHome
           ? { profileCatalogHome: this.options.profileCatalogHome }
@@ -652,6 +696,9 @@ export class ChatSessionManager {
         ? { lastActivity: patch.lastActivityAt }
         : {}),
       ...(patch.archivedAt !== undefined ? { archivedAt: patch.archivedAt } : {}),
+      ...(patch.approvalPolicy !== undefined
+        ? { approvalPolicy: patch.approvalPolicy }
+        : {}),
     })
   }
 
@@ -661,6 +708,7 @@ export class ChatSessionManager {
       name: record.name,
       kind: 'chat',
       claudeProfileId: record.claudeProfileId ?? 'default',
+      approvalPolicy: record.approvalPolicy ?? 'manual',
       projectPath: record.projectPath,
       status: record.status,
       lastActivity: record.lastActivityAt,

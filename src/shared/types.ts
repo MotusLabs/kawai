@@ -8,6 +8,7 @@ import type {
 } from './workspace'
 import type {
   ChatApprovalDecision,
+  ChatApprovalPolicy,
   ChatEvent,
   ChatPendingRequest,
   ChatQuestionAnswer,
@@ -20,6 +21,8 @@ export type {
   ChatQuestionAnswer,
   ChatPendingRequest,
   ChatRequestOutcome,
+  ChatRequestDecidedBy,
+  ChatApprovalPolicy,
   ChatApprovalDecision,
   ChatTurnResultSubtype,
   ChatWireDirection,
@@ -85,6 +88,8 @@ export interface Session {
   // Absent = terminal (back-compat with clients predating chat sessions).
   kind?: SessionKind
   claudeProfileId?: string
+  /** Chat sessions only: approval policy; absent = manual (legacy sessions). */
+  approvalPolicy?: ChatApprovalPolicy
   agentType?: AgentType
   source: SessionSource
   host?: string
@@ -283,6 +288,13 @@ export type ClientMessage =
       requestId: string
       /** Answers keyed by question text (matches the SDK's answer map). */
       answers: Record<string, ChatQuestionAnswer>
+    }
+  // Switches the session's approval policy live (chat-auto-approve-tools
+  // design D4): manual/auto only, no agent restart.
+  | {
+      type: 'chat-set-approval-policy'
+      sessionId: string
+      policy: ChatApprovalPolicy
     }
   | { type: 'chat-debug-open'; sessionId: string }
   | { type: 'chat-debug-page'; sessionId: string; beforeSeq: number }

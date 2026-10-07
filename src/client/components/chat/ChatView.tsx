@@ -1,6 +1,8 @@
 // Attach on selection and reconnect; detaching never stops the agent. The
 // Debug toggle opens the protocol-frame panel beside the transcript (in place
 // of it on narrow screens); its subscription follows the same reconnect rules.
+// The Auto-approve toggle switches the session's approval policy live (amber
+// while on); it renders from the broadcast Session, never local state.
 // Archived chats render read-only: the transcript and debug view stay, the
 // composer/Stop/request actions are replaced by a Restore bar, and archiving
 // a live turn asks for confirmation first (the server interrupts it).
@@ -54,6 +56,16 @@ export default function ChatView({ session, sendMessage, connectionStatus, conne
     else store.beginOpen(session.id)
   }
   const handleArchive = () => { requestChatArchive(session, sendMessage) }
+  // Approval policy (chat-auto-approve-tools design D6): rendered from the
+  // broadcast Session so every client agrees; archived chats hide the control.
+  const autoApprove = session.approvalPolicy === 'auto'
+  const toggleApprovalPolicy = () => {
+    sendMessage({
+      type: 'chat-set-approval-policy',
+      sessionId: session.id,
+      policy: autoApprove ? 'manual' : 'auto',
+    })
+  }
   useEffect(() => { setText('') }, [session.id])
   useEffect(() => { end.current?.scrollIntoView?.({ block: 'end' }) }, [transcript.events.length, transcript.throughSequence])
   return <main className="chat-palette chat-root flex min-h-0 min-w-0 flex-1 flex-col bg-base text-primary" data-testid="chat-view"
@@ -65,6 +77,8 @@ export default function ChatView({ session, sendMessage, connectionStatus, conne
         <p className="truncate text-chat-meta text-secondary">{session.projectPath}</p></div>
       <span className="text-chat-meta text-secondary" data-testid="chat-status">{connected ? (archived ? 'archived' : session.status) : connectionStatus}</span>
       <button className={`btn text-chat-meta ${debugOpen ? 'btn-primary' : ''}`} aria-pressed={debugOpen} onClick={toggleDebug}>Debug</button>
+      {!archived && <button className={`btn text-chat-meta ${autoApprove ? 'btn-approval-on' : ''}`} aria-pressed={autoApprove}
+        onClick={toggleApprovalPolicy} data-testid="chat-approval-policy">Auto-approve</button>}
       {!archived && <button className="btn text-chat-meta" onClick={handleArchive} data-testid="chat-archive-button">Archive</button>}
       <button className="btn text-chat-meta" onClick={onKill}>Kill session</button>
     </header>
