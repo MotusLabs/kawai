@@ -1,12 +1,20 @@
 // Explicit development-only fake SDK: exercises the real driver, approvals,
 // questions, status, and WebSocket path without authentication or model calls.
 // It never spawns a process, so it records synthetic wire frames shaped like
-// the real stream-json protocol for the chat debug view.
+// the real stream-json protocol for the chat debug view. The activity turns
+// (thinking / tool / retry) hold each phase long enough to watch the
+// indicator's timer tick; tests shrink the holds via
+// AGENTBOARD_CHAT_FIXTURE_HOLD_MS.
 import type { Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk'
 import type { ChatQueryFactory } from './ChatSessionDriver'
 
 export const chatFixtureEnabled =
   process.env.NODE_ENV === 'development' && process.env.AGENTBOARD_CHAT_FIXTURE === '1'
+
+/** Hold a phase for human-scale watching unless a test collapses all holds. */
+const hold = (ms: number) =>
+  new Promise<void>(resolve =>
+    setTimeout(resolve, Number(process.env.AGENTBOARD_CHAT_FIXTURE_HOLD_MS ?? ms)))
 
 export const fixtureQueryFactory: ChatQueryFactory = ({ prompt, options, wire }) => {
   const frame = (dir: 'out' | 'in' | 'lifecycle', value: unknown) => wire?.record(dir, JSON.stringify(value))
@@ -48,6 +56,43 @@ export const fixtureQueryFactory: ChatQueryFactory = ({ prompt, options, wire })
       if (closed || turn !== generation) return
       push({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: toolUseID, content: JSON.stringify(result) }] } })
       assistant(result?.behavior === 'allow' ? 'Request accepted.' : 'Request denied.')
+    }
+    if (/thinking/i.test(text)) {
+      push({ type: 'system', subtype: 'status', status: 'requesting' })
+      await hold(400)
+      if (closed || turn !== generation) return
+      push({ type: 'stream_event', event: { type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '', signature: '' } }, parent_tool_use_id: null })
+      await hold(1600)
+      if (closed || turn !== generation) return
+      push({ type: 'stream_event', event: { type: 'content_block_stop', index: 0 }, parent_tool_use_id: null })
+      assistant('Thought it over.')
+    }
+    if (/tool/i.test(text)) {
+      const toolUseID = crypto.randomUUID()
+      push({ type: 'system', subtype: 'status', status: 'requesting' })
+      await hold(400)
+      if (closed || turn !== generation) return
+      push({ type: 'stream_event', event: { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: toolUseID, name: 'Bash', input: {} } }, parent_tool_use_id: null })
+      await hold(600)
+      if (closed || turn !== generation) return
+      push({ type: 'assistant', message: { id: crypto.randomUUID(), role: 'assistant', content: [{ type: 'tool_use', id: toolUseID, name: 'Bash', input: { command: 'echo fixture' } }] } })
+      await hold(1600)
+      if (closed || turn !== generation) return
+      push({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: toolUseID, content: 'fixture output' }] } })
+      assistant('Tool finished.')
+    }
+    if (/retry/i.test(text)) {
+      push({ type: 'system', subtype: 'status', status: 'requesting' })
+      await hold(400)
+      for (const attempt of [1, 2]) {
+        if (closed || turn !== generation) return
+        push({ type: 'system', subtype: 'api_retry', attempt, max_retries: 10, retry_delay_ms: 500, error_status: 504, error: 'server_error' })
+        await hold(900)
+      }
+      if (closed || turn !== generation) return
+      push({ type: 'system', subtype: 'status', status: 'requesting' })
+      await hold(300)
+      assistant('Recovered from the retry.')
     }
     if (/markdown/i.test(text)) {
       assistant([
