@@ -26,7 +26,7 @@ export interface ChatActivityState {
   /** Tool named by the latest tool_use block start (preparing_tool). */
   preparingTool?: string
   /** Details of the latest system/api_retry frame (retrying). */
-  retry?: { attempt: number; maxRetries: number; errorStatus: number }
+  retry?: { attempt: number; maxRetries: number; errorStatus?: number }
 }
 
 export function initialChatActivityState(): ChatActivityState {
@@ -40,17 +40,19 @@ export type ChatActivityInput =
   | { type: 'block_start'; blockType: string; tool?: string }
   | { type: 'tool_call'; toolCallId: string; tool: string }
   | { type: 'tool_result'; toolCallId: string }
-  | { type: 'api_retry'; attempt: number; maxRetries: number; errorStatus: number }
+  | { type: 'api_retry'; attempt: number; maxRetries: number; errorStatus?: number }
   | { type: 'request_resolved' }
   | { type: 'turn_end' }
 
 /** Structural slice of an SDK `system` frame; keeps this module SDK-free. */
 export interface ChatSystemFrameSlice {
   subtype?: string
-  status?: string
+  /** SDKStatus is `'compacting' | 'requesting' | null`. */
+  status?: string | null
   attempt?: number
   max_retries?: number
-  error_status?: number
+  /** The CLI reports null when the failed attempt sent no status. */
+  error_status?: number | null
 }
 
 /** Structural slice of a `content_block_start` content_block. */
@@ -75,16 +77,14 @@ export function systemFrameToInput(
   }
   if (frame.subtype === 'api_retry') {
     const { attempt, max_retries, error_status } = frame
-    if (
-      typeof attempt === 'number' &&
-      typeof max_retries === 'number' &&
-      typeof error_status === 'number'
-    ) {
+    if (typeof attempt === 'number' && typeof max_retries === 'number') {
       return {
         type: 'api_retry',
         attempt,
         maxRetries: max_retries,
-        errorStatus: error_status,
+        ...(typeof error_status === 'number'
+          ? { errorStatus: error_status }
+          : {}),
       }
     }
   }
@@ -136,14 +136,7 @@ export function activityBody(
         count: state.unresolvedTools.length,
       }
     case 'retrying':
-      return {
-        phase: state.phase,
-        ...(state.retry ?? {
-          attempt: 0,
-          maxRetries: 0,
-          errorStatus: 0,
-        }),
-      }
+      return { phase: state.phase, ...(state.retry ?? {}) }
     default:
       return { phase: state.phase }
   }

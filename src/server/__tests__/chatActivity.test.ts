@@ -66,10 +66,22 @@ describe('systemFrameToInput', () => {
     expect(systemFrameToInput(thinkingTokens)).toBeNull()
     const init = { subtype: 'init', tools: [] }
     expect(systemFrameToInput(init)).toBeNull()
-    // A retry missing fields cannot be labeled; ignore it wholesale.
+    // A retry without attempt/maximum cannot be labeled; ignore it wholesale.
     expect(
-      systemFrameToInput({ subtype: 'api_retry', attempt: 2, max_retries: 10 })
+      systemFrameToInput({ subtype: 'api_retry', max_retries: 10 })
     ).toBeNull()
+  })
+
+  test('a retry with a null error status reports the attempt without one', () => {
+    // The CLI sends error_status: null when the attempt sent no status.
+    expect(
+      systemFrameToInput({
+        subtype: 'api_retry',
+        attempt: 1,
+        max_retries: 1,
+        error_status: null,
+      })
+    ).toEqual({ type: 'api_retry', attempt: 1, maxRetries: 1 })
   })
 })
 
