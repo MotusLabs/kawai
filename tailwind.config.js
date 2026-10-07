@@ -6,6 +6,11 @@ export default {
       fontFamily: {
         mono: ['"JetBrains Mono"', '"SF Mono"', '"Fira Code"', 'monospace'],
       },
+      // Chat view sizes, relative to .chat-root's --chat-font-size.
+      fontSize: {
+        'chat-body': ['1em', { lineHeight: '1.6' }],
+        'chat-meta': ['0.8em', { lineHeight: '1.4' }],
+      },
       colors: {
         base: 'var(--bg-base)',
         elevated: 'var(--bg-elevated)',

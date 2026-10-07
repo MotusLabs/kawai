@@ -11,15 +11,15 @@
 
 ## 2. Chat-scoped sizing
 
-- [ ] 2.1 Add `chat-body` (`1em`, line height 1.6) and `chat-meta` (`0.8em`, line height 1.4) under `theme.extend.fontSize` in `tailwind.config.js`. Add `.chat-root { font-size: var(--chat-font-size, 15px) }` and the coarse-pointer `.chat-composer` minimum of 16px to `index.css` (design D1, D2, D6). Verify `bun run build` emits `text-chat-body` and `text-chat-meta`
-- [ ] 2.2 In `ChatView.tsx`, give `<main>` the `chat-root` class and set `--chat-font-size` from `chatFontSize`. Replace `text-sm` with `text-chat-body` and `text-xs` with `text-chat-meta` in the header, error, archived banner and composer. The composer gets `chat-composer`. Leave `ChatDebugPanel` unchanged (design D7). Verify with `chatComponents.test.tsx`: the root carries `--chat-font-size: 18px` when the store holds 18, and the composer has the chat classes
-- [ ] 2.3 Make the same swap in `ChatMessages.tsx` and `ChatRequests.tsx`, putting size classes only on leaf text containers so `em` sizes don't compound. Verify with `chatComponents.test.tsx`: no `text-sm` or `text-xs` remains on transcript and request elements
+- [x] 2.1 Add `chat-body` (`1em`, line height 1.6) and `chat-meta` (`0.8em`, line height 1.4) under `theme.extend.fontSize` in `tailwind.config.js`. Add `.chat-root { font-size: var(--chat-font-size, 15px) }` and the coarse-pointer `.chat-composer` minimum of 16px to `index.css` (design D1, D2, D6). Verify `bun run build` emits `text-chat-body` and `text-chat-meta`
+- [x] 2.2 In `ChatView.tsx`, give `<main>` the `chat-root` class and set `--chat-font-size` from `chatFontSize`. Replace `text-sm` with `text-chat-body` and `text-xs` with `text-chat-meta` in the header, error, archived banner and composer. The composer gets `chat-composer`. Leave `ChatDebugPanel` unchanged (design D7). Verify with `chatComponents.test.tsx`: the root carries `--chat-font-size: 18px` when the store holds 18, and the composer has the chat classes
+- [x] 2.3 Make the same swap in `ChatMessages.tsx` and `ChatRequests.tsx`, putting size classes only on leaf text containers so `em` sizes don't compound. Verify with `chatComponents.test.tsx`: no `text-sm` or `text-xs` remains on transcript and request elements
 
 ## 3. Markdown inherits its size
 
-- [ ] 3.1 In `Markdown.tsx`, drop `text-sm` and `leading-6` from the wrapper and `li`. Use `leading-[1.6]` and the em element sizes from design D3 (`h1` 1.25em, `h2` 1.125em, `h3`–`h6` 1em, `pre` and `table` 0.9em). Update the header comment. Verify `Markdown.test.tsx` still passes, with any class assertions updated to the em sizes
-- [ ] 3.2 Wrap `<Markdown>` in `SessionPreviewContent.tsx` with `text-sm leading-6`, so the preview keeps today's size. Verify with a test that the preview wrapper has these classes
-- [ ] 3.3 Update the `Markdown` and chat entries in `AGENTS.md` if they describe sizing, and verify the wording matches the code
+- [x] 3.1 In `Markdown.tsx`, drop `text-sm` and `leading-6` from the wrapper and `li`. Use `leading-[1.6]` and the em element sizes from design D3 (`h1` 1.25em, `h2` 1.125em, `h3`–`h6` 1em, `pre` and `table` 0.9em). Update the header comment. Verify `Markdown.test.tsx` still passes, with any class assertions updated to the em sizes
+- [x] 3.2 Wrap `<Markdown>` in `SessionPreviewContent.tsx` with `text-sm leading-6`, so the preview keeps today's size. Verify with a test that the preview wrapper has these classes
+- [x] 3.3 Update the `Markdown` and chat entries in `AGENTS.md` if they describe sizing, and verify the wording matches the code
 
 ## 4. Integration check
 

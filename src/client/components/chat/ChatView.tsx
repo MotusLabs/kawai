@@ -4,11 +4,14 @@
 // Archived chats render read-only: the transcript and debug view stay, the
 // composer/Stop/request actions are replaced by a Restore bar, and archiving
 // a live turn asks for confirmation first (the server interrupts it).
-// The root opts into `chat-palette`, the chat view's reduced-glare dark palette.
+// The root opts into `chat-palette`, the chat view's reduced-glare dark palette,
+// and `chat-root`, whose --chat-font-size (Settings "Chat Font Size") sizes
+// chat text through the em-based text-chat-body / text-chat-meta utilities.
 import { useClaudeProfiles } from './useClaudeProfiles'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type CSSProperties } from 'react'
 import type { SendClientMessage, Session } from '@shared/types'
 import type { ConnectionStatus } from '../../stores/sessionStore'
+import { useSettingsStore } from '../../stores/settingsStore'
 import { emptyTranscript, useChatStore } from '../../stores/chatStore'
 import { closedDebugView, useChatDebugStore } from '../../stores/chatDebugStore'
 import ChatDebugPanel from './ChatDebugPanel'
@@ -26,6 +29,7 @@ export default function ChatView({ session, sendMessage, connectionStatus, conne
   const catalog = useClaudeProfiles(true)
   const profileId = session.claudeProfileId ?? 'default'
   const profileLabel = catalog.profiles.find(profile => profile.id === profileId)?.label ?? profileId
+  const chatFontSize = useSettingsStore(state => state.chatFontSize)
   const transcript = useChatStore(state => state.sessions[session.id]) ?? EMPTY
   const [text, setText] = useState('')
   const end = useRef<HTMLDivElement>(null)
@@ -52,18 +56,19 @@ export default function ChatView({ session, sendMessage, connectionStatus, conne
   const handleArchive = () => { requestChatArchive(session, sendMessage) }
   useEffect(() => { setText('') }, [session.id])
   useEffect(() => { end.current?.scrollIntoView?.({ block: 'end' }) }, [transcript.events.length, transcript.throughSequence])
-  return <main className="chat-palette flex min-h-0 min-w-0 flex-1 flex-col bg-base text-primary" data-testid="chat-view">
+  return <main className="chat-palette chat-root flex min-h-0 min-w-0 flex-1 flex-col bg-base text-primary" data-testid="chat-view"
+    style={{ '--chat-font-size': `${chatFontSize}px` } as CSSProperties}>
     <header className="flex items-center gap-3 border-b border-border p-3">
-      <button className="btn md:hidden" onClick={onClose}>Sessions</button>
-      <div className="min-w-0 flex-1"><h2 className="truncate text-sm font-medium">{session.name} · Chat</h2>
-        <p className="text-xs text-secondary" data-testid="chat-profile">Profile: {profileLabel}</p>
-        <p className="truncate text-xs text-secondary">{session.projectPath}</p></div>
-      <span className="text-xs text-secondary" data-testid="chat-status">{connected ? (archived ? 'archived' : session.status) : connectionStatus}</span>
-      <button className={`btn text-xs ${debugOpen ? 'btn-primary' : ''}`} aria-pressed={debugOpen} onClick={toggleDebug}>Debug</button>
-      {!archived && <button className="btn text-xs" onClick={handleArchive} data-testid="chat-archive-button">Archive</button>}
-      <button className="btn text-xs" onClick={onKill}>Kill session</button>
+      <button className="btn text-chat-meta md:hidden" onClick={onClose}>Sessions</button>
+      <div className="min-w-0 flex-1"><h2 className="truncate text-chat-body font-medium">{session.name} · Chat</h2>
+        <p className="text-chat-meta text-secondary" data-testid="chat-profile">Profile: {profileLabel}</p>
+        <p className="truncate text-chat-meta text-secondary">{session.projectPath}</p></div>
+      <span className="text-chat-meta text-secondary" data-testid="chat-status">{connected ? (archived ? 'archived' : session.status) : connectionStatus}</span>
+      <button className={`btn text-chat-meta ${debugOpen ? 'btn-primary' : ''}`} aria-pressed={debugOpen} onClick={toggleDebug}>Debug</button>
+      {!archived && <button className="btn text-chat-meta" onClick={handleArchive} data-testid="chat-archive-button">Archive</button>}
+      <button className="btn text-chat-meta" onClick={onKill}>Kill session</button>
     </header>
-    {error && <p role="alert" className="border-b border-border p-3 text-sm text-chat-danger">{error}</p>}
+    {error && <p role="alert" className="border-b border-border p-3 text-chat-body text-chat-danger">{error}</p>}
     <div className="flex min-h-0 flex-1">
       <div className={`min-h-0 min-w-0 flex-1 flex-col ${debugOpen ? 'hidden md:flex' : 'flex'}`}>
         <div className="min-h-0 flex-1 overflow-y-auto p-4">
@@ -76,8 +81,8 @@ export default function ChatView({ session, sendMessage, connectionStatus, conne
         {archived ? (
           <div className="border-t border-border p-3" data-testid="chat-archived-bar">
             <div className="mx-auto flex max-w-3xl items-center justify-between gap-2">
-              <p className="text-xs text-secondary">Archived — read-only. Restore to continue this conversation.</p>
-              <button className="btn btn-primary text-xs" onClick={() => sendMessage({ type: 'chat-restore', sessionId: session.id })}
+              <p className="text-chat-meta text-secondary">Archived — read-only. Restore to continue this conversation.</p>
+              <button className="btn btn-primary text-chat-meta" onClick={() => sendMessage({ type: 'chat-restore', sessionId: session.id })}
                 disabled={!connected}>Restore</button>
             </div>
           </div>
@@ -89,11 +94,11 @@ export default function ChatView({ session, sendMessage, connectionStatus, conne
             setText('')
           }}>
             <div className="mx-auto flex max-w-3xl items-end gap-2">
-              <textarea aria-label="Message Claude" className="input min-h-20 flex-1 resize-y" value={text}
+              <textarea aria-label="Message Claude" className="input chat-composer min-h-20 flex-1 resize-y text-chat-body" value={text}
                 disabled={!connected} placeholder="Message Claude…" onChange={event => setText(event.target.value)}
                 onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); event.currentTarget.form?.requestSubmit() } }} />
-              <button className="btn btn-primary" disabled={!connected || !text.trim()}>Send</button>
-              <button type="button" className="btn" disabled={!connected || session.status === 'waiting'}
+              <button className="btn btn-primary text-chat-meta" disabled={!connected || !text.trim()}>Send</button>
+              <button type="button" className="btn text-chat-meta" disabled={!connected || session.status === 'waiting'}
                 onClick={() => sendMessage({ type: 'chat-interrupt', sessionId: session.id })}>Stop</button>
             </div>
           </form>

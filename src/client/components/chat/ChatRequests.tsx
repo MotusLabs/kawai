@@ -18,9 +18,9 @@ function QuestionForm({ request, sessionId, sendMessage, disabled }: {
     {request.questions.map(question => {
       const answer = answers[question.question] ?? {}
       return <fieldset key={question.question} disabled={disabled}>
-        <legend className="mb-2 text-sm font-medium">{question.question}</legend>
+        <legend className="mb-2 text-chat-body font-medium">{question.question}</legend>
         <div className="space-y-2">
-          {question.options.map(option => <label key={option.label} className="flex items-start gap-2 text-sm">
+          {question.options.map(option => <label key={option.label} className="flex items-start gap-2 text-chat-body">
             <input type={question.multiSelect ? 'checkbox' : 'radio'} name={`${request.requestId}-${question.header}`}
               checked={answer.options?.includes(option.label) ?? false}
               onChange={event => update(question.question, {
@@ -29,14 +29,14 @@ function QuestionForm({ request, sessionId, sendMessage, disabled }: {
                   ? event.target.checked ? [...(answer.options ?? []), option.label] : (answer.options ?? []).filter(value => value !== option.label)
                   : [option.label],
               })} />
-            <span>{option.label}{option.description && <span className="block text-xs text-secondary">{option.description}</span>}</span>
+            <span>{option.label}{option.description && <span className="block text-chat-meta text-secondary">{option.description}</span>}</span>
           </label>)}
-          <input className="input" aria-label={`Free-text answer: ${question.question}`} placeholder="Your answer"
+          <input className="input chat-composer text-chat-body" aria-label={`Free-text answer: ${question.question}`} placeholder="Your answer"
             value={answer.text ?? ''} onChange={event => update(question.question, { ...answer, text: event.target.value })} />
         </div>
       </fieldset>
     })}
-    <button className="btn btn-primary" disabled={disabled || request.questions.some(question => {
+    <button className="btn btn-primary text-chat-meta" disabled={disabled || request.questions.some(question => {
       const answer = answers[question.question]
       return !answer?.text?.trim() && !answer?.options?.length
     })}>Submit answers</button>
@@ -50,13 +50,13 @@ export default function ChatRequests({ requests, sessionId, sendMessage, disable
     {requests.map(request => request.kind === 'question'
       ? <QuestionForm key={request.requestId} request={request} sessionId={sessionId} sendMessage={sendMessage} disabled={disabled} />
       : <section key={request.requestId} className="border border-border bg-elevated p-4">
-        <h3 className="text-sm font-medium">Approve {request.tool}?</h3>
-        <p className="mt-1 truncate text-xs text-secondary">{JSON.stringify(request.input)}</p>
-        <details className="my-3 text-xs"><summary>Arguments</summary>
+        <h3 className="text-chat-body font-medium">Approve {request.tool}?</h3>
+        <p className="mt-1 truncate text-chat-meta text-secondary">{JSON.stringify(request.input)}</p>
+        <details className="my-3 text-chat-meta"><summary>Arguments</summary>
           <pre className="overflow-auto whitespace-pre-wrap">{JSON.stringify(request.input, null, 2)}</pre>
         </details>
         <div className="flex gap-2">{(['allow', 'deny'] as const).map(decision =>
-          <button key={decision} disabled={disabled} className={`btn ${decision === 'allow' ? 'btn-primary' : ''}`}
+          <button key={decision} disabled={disabled} className={`btn text-chat-meta ${decision === 'allow' ? 'btn-primary' : ''}`}
             onClick={() => sendMessage({ type: 'chat-approval', sessionId, requestId: request.requestId, decision })}>
             {decision === 'allow' ? 'Allow' : 'Deny'}
           </button>)}</div>

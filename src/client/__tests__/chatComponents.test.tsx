@@ -7,6 +7,7 @@ import ChatMessages from '../components/chat/ChatMessages'
 import ChatDebugPanel from '../components/chat/ChatDebugPanel'
 import ChatView from '../components/chat/ChatView'
 import { closedDebugView, useChatDebugStore, type ChatDebugView } from '../stores/chatDebugStore'
+import { useSettingsStore } from '../stores/settingsStore'
 
 describe('chat components', () => {
   test('approval cards send allow and deny without hiding the pending request locally', () => {
@@ -323,5 +324,58 @@ describe('chat palette', () => {
     expect(labelClass(4)).toContain('text-secondary')
     for (const seq of [1, 2, 3, 4]) expect(labelClass(seq)).not.toMatch(/(sky|emerald|amber)-400/)
     renderer.unmount()
+  })
+})
+
+describe('chat font size', () => {
+  const classOf = (node: ReactTestInstance) => String(node.props.className ?? '')
+  const remSized = (node: ReactTestInstance) => /\btext-(xs|sm|base)\b/.test(classOf(node))
+
+  afterEach(() => useSettingsStore.setState({ chatFontSize: 15 }))
+
+  test('the chat root carries the chat font size and the composer uses chat sizing', () => {
+    useSettingsStore.setState({ chatFontSize: 18 })
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => {
+      renderer = TestRenderer.create(<ChatView session={chatSession} sendMessage={() => {}} connectionStatus="connected"
+        connectionEpoch={0} error="Connection lost" onClose={() => {}} onKill={() => {}} />)
+    })
+    const root = renderer.root.findByProps({ 'data-testid': 'chat-view' })
+    expect(classOf(root).split(' ')).toContain('chat-root')
+    expect(root.props.style['--chat-font-size']).toBe('18px')
+    const composer = renderer.root.findByProps({ 'aria-label': 'Message Claude' })
+    expect(classOf(composer)).toContain('chat-composer')
+    expect(classOf(composer)).toContain('text-chat-body')
+    const header = renderer.root.findByType('header')
+    expect(header.findAll(node => typeof node.type === 'string' && remSized(node))).toHaveLength(0)
+    expect(classOf(renderer.root.findByProps({ role: 'alert' }))).toContain('text-chat-body')
+    renderer.unmount()
+  })
+
+  test('transcript and request elements use em-based chat sizes, never rem sizes', () => {
+    const events = [
+      { type: 'user_message', id: 'u', sequence: 0, at: 'now', text: 'hi' },
+      { type: 'assistant_text', id: 'a', sequence: 1, at: 'now', text: '# Title\n\nbody' },
+      { type: 'tool_call', id: 't', sequence: 2, at: 'now', tool: 'Read', input: {} },
+      { type: 'tool_result', id: 'r', sequence: 3, at: 'now', output: 'ok', isError: false },
+      { type: 'notice', id: 'n', sequence: 4, at: 'now', text: 'note' },
+      { type: 'turn_completed', id: 'c', sequence: 5, at: 'now', subtype: 'success' },
+    ] as unknown as ChatEvent[]
+    const messages = TestRenderer.create(<ChatMessages events={events} />)
+    const transcript = messages.root.findByProps({ 'data-testid': 'chat-transcript' })
+    expect(transcript.findAll(node => typeof node.type === 'string' && remSized(node))).toHaveLength(0)
+    const user = messages.root.findByProps({ 'data-chat-role': 'user' })
+    expect(classOf(user.findAllByType('div')[0]!)).toContain('text-chat-meta')
+    expect(classOf(user.findByType('p'))).toContain('text-chat-body')
+    messages.unmount()
+
+    const requests = TestRenderer.create(<ChatRequests sessionId="chat-1" sendMessage={() => {}} disabled={false} requests={[
+      { kind: 'approval', requestId: 'p', tool: 'Bash', input: { command: 'ls' } },
+      { kind: 'question', requestId: 'q', questions: [{ question: 'Pick?', header: 'Pick', multiSelect: false,
+        options: [{ label: 'A', description: 'first' }] }] },
+    ] as never} />)
+    const container = requests.root.findByProps({ 'data-testid': 'chat-requests' })
+    expect(container.findAll(node => typeof node.type === 'string' && remSized(node))).toHaveLength(0)
+    requests.unmount()
   })
 })
