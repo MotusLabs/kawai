@@ -313,7 +313,7 @@ rendered or executed. User messages SHALL keep their literal text.
 
 #### Scenario: Chat and session preview render markdown the same way
 - **WHEN** the same markdown text appears as an assistant message in the chat view and in the session log preview
-- **THEN** both render the same elements with the same styling
+- **THEN** both render the same elements with the same styling in proportion to their base text size, so the chat follows the chat font size while the preview keeps its own size
 
 ### Requirement: Chat view uses a reduced-glare dark palette
 In the dark theme, the chat view SHALL render on a lifted dark-gray background
@@ -346,3 +346,30 @@ be unchanged.
 #### Scenario: Light theme is unchanged
 - **WHEN** the light theme is active and the user opens a chat session
 - **THEN** the chat view uses the app's existing light colors
+
+### Requirement: Chat text uses a readable, adjustable size
+The chat view SHALL size its text from a chat font size independent of the
+terminal font size and the rest of the app. The chat font size SHALL default
+to 15px and be adjustable from Settings between 12px and 20px. Message bodies
+SHALL render at the chat font size, and secondary text SHALL render at no less
+than 0.8 of it. The setting SHALL persist across reloads.
+
+#### Scenario: Default size is readable
+- **WHEN** a user who has never changed the chat font size opens a chat session
+- **THEN** user and assistant message bodies render at 15px and role labels, tool calls, notices and the turn footer render at 12px or larger
+
+#### Scenario: User changes the chat font size
+- **WHEN** the user sets the chat font size to 18px in Settings and saves
+- **THEN** chat message bodies, formatted assistant markdown, approval and question cards, and the composer scale to the new size, and the setting is still 18px after a page reload
+
+#### Scenario: Chat and terminal sizes are independent
+- **WHEN** the user changes the chat font size
+- **THEN** the terminal font size, terminal rendering and the session log preview are unchanged, and changing the terminal font size leaves chat text unchanged
+
+#### Scenario: Out-of-range values are clamped
+- **WHEN** the user tries to go below 12px or above 20px, or the stored value is out of range or not a number
+- **THEN** the chat font size is limited to 12–20px, and a non-numeric stored value falls back to 15px
+
+#### Scenario: Composer does not trigger mobile zoom
+- **WHEN** the chat font size is below 16px and the user focuses the composer on a touch device
+- **THEN** the composer text is at least 16px, so the browser does not zoom the page
