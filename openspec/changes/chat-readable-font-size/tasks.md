@@ -24,7 +24,8 @@
 ## 4. Integration check
 
 - [x] 4.1 Run `bun run lint && bun run typecheck && bun run test` and verify all pass
-- [ ] 4.2 With `bun run dev` and the dev-browser skill, open a chat session with the markdown showcase fixture. Check the computed font sizes: at default settings, the message body is 15px and the "You"/"Claude" labels and turn footer are 12px. Set 18 in Settings: the body becomes 18px, headings are larger than the body, and the terminal font size is unchanged. Open the session log preview and confirm its markdown is still 11.375px. Take before and after screenshots
+- [x] 4.2 With `bun run dev` and the dev-browser skill, open a chat session with the markdown showcase fixture. Check the computed font sizes: at default settings, the message body is 15px and the "You"/"Claude" labels and turn footer are 12px. Set 18 in Settings: the body becomes 18px, headings are larger than the body, and the terminal font size is unchanged. Open the session log preview and confirm its markdown is still 11.375px. Take before and after screenshots
+  - Verified by `tests/e2e/chat-font-size.spec.ts` (Playwright; the dev-browser skill is not installed), screenshots `chat-font-15.png` / `chat-font-18.png`. The session log preview could not be opened in the e2e environment (no history sessions); its size is checked by `SessionPreviewModal.test.tsx` asserting the `text-sm leading-6` wrapper (0.875rem × 13px root = 11.375px), not by a browser measurement.
 - [x] 4.3 Emulate a touch device (coarse pointer) with the chat font size at 13, and check that the composer's computed font size is 16px
 
 ## Workflow follow-up
