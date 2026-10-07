@@ -3,6 +3,8 @@
 // through server resolution events rather than optimistic local answers. The
 // live-turn activity is a single current value (not an event): it is anchored
 // on the client clock from the server's elapsedMs and cleared on turn end.
+// Unsubmitted composer drafts sit beside the transcripts, keyed by session, so
+// they survive switching chats; they are view state — never sent to the server.
 import { create } from 'zustand'
 import type { ChatActivity, ChatEvent, ChatPendingRequest } from '@shared/chat'
 import type { ServerMessage, SessionStatus } from '@shared/types'
@@ -74,15 +76,20 @@ export function applyChatEvents(state: ChatTranscript, incoming: ChatEvent[]): C
 
 interface ChatStore {
   sessions: Record<string, ChatTranscript>
+  /** Unsubmitted composer text per session; empty means no draft (key absent). */
+  drafts: Record<string, string>
   apply: (sessionId: string, events: ChatEvent[]) => void
   snapshot: (message: Extract<ServerMessage, { type: 'chat-snapshot' }>) => void
   /** Adopt the latest server activity (chat-activity) or clear it (null). */
   setActivity: (sessionId: string, activity: ChatActivity | null) => void
+  /** Save a session's composer draft; an empty text clears it. */
+  setDraft: (sessionId: string, text: string) => void
   remove: (sessionId: string) => void
 }
 
 export const useChatStore = create<ChatStore>((set) => ({
   sessions: {},
+  drafts: {},
   apply: (sessionId, events) => set(state => ({ sessions: {
     ...state.sessions, [sessionId]: applyChatEvents(state.sessions[sessionId] ?? emptyTranscript(), events),
   } })),
@@ -103,9 +110,17 @@ export const useChatStore = create<ChatStore>((set) => ({
       activity: activity ? anchorActivity(activity) : null,
     } } }
   }),
+  setDraft: (sessionId, text) => set(state => {
+    const drafts = { ...state.drafts }
+    if (text === '') delete drafts[sessionId]
+    else drafts[sessionId] = text
+    return { drafts }
+  }),
   remove: sessionId => set(state => {
     const sessions = { ...state.sessions }
     delete sessions[sessionId]
-    return { sessions }
+    const drafts = { ...state.drafts }
+    delete drafts[sessionId]
+    return { sessions, drafts }
   }),
 }))
