@@ -136,7 +136,8 @@ export function activityBody(
         count: state.unresolvedTools.length,
       }
     case 'retrying':
-      return { phase: state.phase, ...(state.retry ?? {}) }
+      // Spreading undefined adds nothing; retry is always set in this phase.
+      return { phase: state.phase, ...state.retry }
     default:
       return { phase: state.phase }
   }

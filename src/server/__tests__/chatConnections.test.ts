@@ -17,8 +17,8 @@ function harness(wireLogs?: ChatWireLogs) {
   }
   let pending = true
   const manager = {
-    has: (id: string) => id === 'chat-1',
-    getSnapshot: () => snapshot,
+    has: (id: string) => id === 'chat-1' || id === 'chat-2',
+    getSnapshot: (id: string) => (id === 'chat-1' ? snapshot : null),
     send: async (...args: unknown[]) => { calls.push(['send', ...args]); return { ok: true } },
     interrupt: (...args: unknown[]) => { calls.push(['interrupt', ...args]); return { ok: true } },
     archive: (...args: unknown[]) => { calls.push(['archive', ...args]); return { ok: true } },
@@ -187,7 +187,8 @@ describe('chat WebSocket subscriptions', () => {
     const otherMessages: ServerMessage[] = []
     const other = { send: (message: ServerMessage) => otherMessages.push(message) }
     await h.connections.handle(h.connection, { type: 'chat-attach', sessionId: 'chat-1' })
-    // The second browser never attached: no activity, ever.
+    // A browser subscribed to another session never sees this one's activity.
+    await h.connections.handle(other, { type: 'chat-attach', sessionId: 'chat-2' })
     h.connections.publishActivity('chat-1', { phase: 'thinking', elapsedMs: 0 })
     await new Promise(resolve => setTimeout(resolve, 0))
     expect(h.messages.at(-1)).toMatchObject({ type: 'chat-activity', activity: { phase: 'thinking' } })
@@ -198,6 +199,7 @@ describe('chat WebSocket subscriptions', () => {
     await h.connections.handle(h.connection, { type: 'chat-detach', sessionId: 'chat-1' })
     await new Promise(resolve => setTimeout(resolve, 0))
     expect(h.messages.filter(message => message.type === 'chat-activity')).toHaveLength(1)
+    expect(otherMessages).toEqual([])
   })
 })
 

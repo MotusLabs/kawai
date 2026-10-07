@@ -1,12 +1,14 @@
-import { afterEach, describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, jest, test } from 'bun:test'
 import TestRenderer, { act, type ReactTestInstance } from 'react-test-renderer'
-import type { ChatEvent, ChatWireFrame } from '@shared/chat'
+import type { ChatActivity, ChatEvent, ChatPendingRequest, ChatWireFrame } from '@shared/chat'
 import type { ClientMessage, Session } from '@shared/types'
 import ChatRequests from '../components/chat/ChatRequests'
 import ChatMessages from '../components/chat/ChatMessages'
 import ChatDebugPanel from '../components/chat/ChatDebugPanel'
 import ChatView from '../components/chat/ChatView'
+import ChatActivityRow from '../components/chat/ChatActivityRow'
 import { closedDebugView, useChatDebugStore, type ChatDebugView } from '../stores/chatDebugStore'
+import { emptyTranscript, useChatStore } from '../stores/chatStore'
 import { useSettingsStore } from '../stores/settingsStore'
 
 describe('chat components', () => {
@@ -437,5 +439,102 @@ describe('chat font size', () => {
     const container = requests.root.findByProps({ 'data-testid': 'chat-requests' })
     expect(container.findAll(node => typeof node.type === 'string' && remSized(node))).toHaveLength(0)
     requests.unmount()
+  })
+})
+
+describe('chat activity row', () => {
+  function renderRow(activity: ChatActivity, phaseStartedAt = Date.now()) {
+    let renderer!: TestRenderer.ReactTestRenderer
+    // act so the interval effect is registered before timers advance.
+    act(() => {
+      renderer = TestRenderer.create(
+        <ChatActivityRow activity={activity} phaseStartedAt={phaseStartedAt} />
+      )
+    })
+    const row = renderer.root.findByProps({ 'data-testid': 'chat-activity' })
+    return { renderer, row, text: textOf(row) }
+  }
+
+  test('each phase renders its label', () => {
+    const cases: Array<[ChatActivity, string]> = [
+      [{ phase: 'requesting', elapsedMs: 0 }, 'Waiting for model…'],
+      [{ phase: 'thinking', elapsedMs: 0 }, 'Thinking…'],
+      [{ phase: 'preparing_tool', elapsedMs: 0, tool: 'Edit' }, 'Writing Edit input…'],
+      [{ phase: 'running_tools', elapsedMs: 0, tool: 'Bash', count: 1 }, 'Running Bash…'],
+      [{ phase: 'running_tools', elapsedMs: 0, tool: 'Bash', count: 3 }, 'Running 3 tools…'],
+      [{ phase: 'retrying', elapsedMs: 0, attempt: 2, maxRetries: 10, errorStatus: 504 }, 'Retrying (2/10, 504)…'],
+      [{ phase: 'retrying', elapsedMs: 0, attempt: 1, maxRetries: 1 }, 'Retrying (1/1)…'],
+    ]
+    for (const [activity, label] of cases) {
+      const { renderer, row, text } = renderRow(activity)
+      expect(row.props['data-phase']).toBe(activity.phase)
+      expect(text).toContain(label)
+      renderer.unmount()
+    }
+  })
+
+  test('the elapsed time ticks once per second on the client clock', async () => {
+    jest.useFakeTimers()
+    try {
+      const { renderer, row } = renderRow({ phase: 'thinking', elapsedMs: 0 }, Date.now())
+      const elapsed = () => textOf(row.findByProps({ 'data-testid': 'chat-activity-elapsed' }))
+      expect(elapsed()).toBe('0s')
+      await act(async () => { jest.advanceTimersByTime(2_000) })
+      expect(elapsed()).toBe('2s')
+      await act(async () => { jest.advanceTimersByTime(59_000) })
+      expect(elapsed()).toBe('1m 01s')
+      renderer.unmount()
+    } finally {
+      jest.useRealTimers()
+    }
+  })
+
+  test('ChatView hides the row for responding phases, pending requests, and archived chats', () => {
+    const seed = (activity: ChatActivity | null, pendingRequests: ChatPendingRequest[] = []) => {
+      useChatStore.setState({ sessions: { 'chat-1': { ...emptyTranscript(), activity: activity
+        ? { value: activity, phaseStartedAt: Date.now() - activity.elapsedMs }
+        : null, pendingRequests } } })
+    }
+    const render = (session: Session) => {
+      let renderer!: TestRenderer.ReactTestRenderer
+      act(() => {
+        renderer = TestRenderer.create(<ChatView
+          session={session}
+          sendMessage={() => {}}
+          connectionStatus="connected" connectionEpoch={0} error={null}
+          onClose={() => {}} onKill={() => {}} />)
+      })
+      return renderer
+    }
+    const rows = (renderer: TestRenderer.ReactTestRenderer) =>
+      renderer.root.findAllByProps({ 'data-testid': 'chat-activity' })
+
+    // Positive control: an in-flight thinking turn shows the row.
+    seed({ phase: 'thinking', elapsedMs: 4_000 })
+    let renderer = render(chatSession)
+    expect(rows(renderer)).toHaveLength(1)
+    renderer.unmount()
+
+    // Streaming text is its own visible progress (design D4).
+    seed({ phase: 'responding', elapsedMs: 1_000 })
+    renderer = render(chatSession)
+    expect(rows(renderer)).toHaveLength(0)
+    renderer.unmount()
+
+    // A pending approval owns the footer.
+    seed({ phase: 'running_tools', elapsedMs: 1_000, tool: 'Bash', count: 1 }, [
+      { kind: 'approval', requestId: 'r', tool: 'Bash', input: {}, at: 'now' },
+    ])
+    renderer = render(chatSession)
+    expect(rows(renderer)).toHaveLength(0)
+    renderer.unmount()
+
+    // Archived chats are read-only.
+    const archived = { ...chatSession, archivedAt: '2026-10-01T00:00:00.000Z' } as Session
+    seed({ phase: 'thinking', elapsedMs: 4_000 })
+    renderer = render(archived)
+    expect(rows(renderer)).toHaveLength(0)
+    renderer.unmount()
+    useChatStore.setState({ sessions: {} })
   })
 })
