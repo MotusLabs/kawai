@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react'
 import {
   MAX_PRESETS,
   FONT_OPTIONS,
+  CHAT_FONT_SIZE_MIN,
+  CHAT_FONT_SIZE_MAX,
   useSettingsStore,
   type CommandPreset,
   type FontOption,
@@ -14,6 +16,7 @@ import { HISTORY_MAX_AGE_MIN_HOURS, HISTORY_MAX_AGE_MAX_HOURS } from '@shared/ty
 import { getEffectiveModifier, getModifierDisplay } from '../utils/device'
 import { Switch } from './Switch'
 import ChatProviderSettings from './ChatProviderSettings'
+import FontSizeStepper from './FontSizeStepper'
 import { playPermissionSound, playIdleSound, primeAudio } from '../utils/sound'
 
 interface SettingsChangeFlags {
@@ -61,6 +64,8 @@ export default function SettingsModal({
   const setUseWebGL = useSettingsStore((state) => state.setUseWebGL)
   const fontSize = useSettingsStore((state) => state.fontSize)
   const setFontSize = useSettingsStore((state) => state.setFontSize)
+  const chatFontSize = useSettingsStore((state) => state.chatFontSize)
+  const setChatFontSize = useSettingsStore((state) => state.setChatFontSize)
   const lineHeight = useSettingsStore((state) => state.lineHeight)
   const setLineHeight = useSettingsStore((state) => state.setLineHeight)
   const letterSpacing = useSettingsStore((state) => state.letterSpacing)
@@ -105,6 +110,7 @@ export default function SettingsModal({
     useState<SessionSortDirection>(sessionSortDirection)
   const [draftUseWebGL, setDraftUseWebGL] = useState(useWebGL)
   const [draftFontSize, setDraftFontSize] = useState(fontSize)
+  const [draftChatFontSize, setDraftChatFontSize] = useState(chatFontSize)
   const [draftLineHeight, setDraftLineHeight] = useState(lineHeight)
   const [draftLetterSpacing, setDraftLetterSpacing] = useState(letterSpacing)
   const [draftFontOption, setDraftFontOption] = useState<FontOption>(fontOption)
@@ -157,6 +163,7 @@ export default function SettingsModal({
       setDraftSortDirection(sessionSortDirection)
       setDraftUseWebGL(useWebGL)
       setDraftFontSize(fontSize)
+      setDraftChatFontSize(chatFontSize)
       setDraftLineHeight(lineHeight)
       setDraftLetterSpacing(letterSpacing)
       setDraftFontOption(fontOption)
@@ -239,6 +246,7 @@ export default function SettingsModal({
     sessionSortDirection,
     useWebGL,
     fontSize,
+    chatFontSize,
     lineHeight,
     letterSpacing,
     fontOption,
@@ -285,6 +293,7 @@ export default function SettingsModal({
     setSessionSortDirection(draftSortDirection)
     setUseWebGL(draftUseWebGL)
     setFontSize(draftFontSize)
+    setChatFontSize(draftChatFontSize)
     setLineHeight(draftLineHeight)
     setLetterSpacing(draftLetterSpacing)
     setFontOption(draftFontOption)
@@ -765,6 +774,20 @@ export default function SettingsModal({
 
           <div className="border-t border-border pt-4">
             <label className="mb-2 block text-xs text-secondary">
+              Chat Display
+            </label>
+            <FontSizeStepper
+              label="Chat Font Size"
+              hint="Chat text size in pixels (12-20)"
+              value={draftChatFontSize}
+              min={CHAT_FONT_SIZE_MIN}
+              max={CHAT_FONT_SIZE_MAX}
+              onChange={setDraftChatFontSize}
+            />
+          </div>
+
+          <div className="border-t border-border pt-4">
+            <label className="mb-2 block text-xs text-secondary">
               Terminal Rendering
             </label>
             <div className="flex items-center justify-between">
@@ -830,31 +853,14 @@ export default function SettingsModal({
               />
             </div>
 
-            <div className="mt-4 flex items-center justify-between">
-              <div>
-                <div className="text-sm text-primary">Font Size</div>
-                <div className="text-[10px] text-muted">
-                  Terminal text size in pixels (6-24)
-                </div>
-              </div>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => setDraftFontSize(Math.max(6, draftFontSize - 1))}
-                  className="flex h-7 w-7 items-center justify-center rounded bg-surface border border-border text-secondary hover:bg-hover"
-                >
-                  <span className="text-sm font-bold">−</span>
-                </button>
-                <span className="text-sm text-secondary w-6 text-center">{draftFontSize}</span>
-                <button
-                  type="button"
-                  onClick={() => setDraftFontSize(Math.min(24, draftFontSize + 1))}
-                  className="flex h-7 w-7 items-center justify-center rounded bg-surface border border-border text-secondary hover:bg-hover"
-                >
-                  <span className="text-sm font-bold">+</span>
-                </button>
-              </div>
-            </div>
+            <FontSizeStepper
+              label="Font Size"
+              hint="Terminal text size in pixels (6-24)"
+              value={draftFontSize}
+              min={6}
+              max={24}
+              onChange={setDraftFontSize}
+            />
 
             <div className="mt-4 flex items-center justify-between">
               <div>

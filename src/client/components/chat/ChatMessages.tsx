@@ -8,29 +8,29 @@ export default function ChatMessages({ events }: { events: ChatEvent[] }) {
       switch (event.type) {
         case 'user_message':
           return <article key={event.id} data-chat-role="user" className="ml-8 border border-border bg-elevated p-3">
-            <div className="mb-1 text-xs text-secondary">You</div>
-            <p className="whitespace-pre-wrap break-words text-sm">{event.text}</p>
+            <div className="mb-1 text-chat-meta text-secondary">You</div>
+            <p className="whitespace-pre-wrap break-words text-chat-body">{event.text}</p>
           </article>
         case 'assistant_text':
           return <article key={event.id} data-chat-role="assistant" className="mr-8 p-3">
-            <div className="mb-1 text-xs text-secondary">Claude</div>
+            <div className="mb-1 text-chat-meta text-secondary">Claude</div>
             <Markdown content={event.text} />
           </article>
         case 'tool_call':
-          return <details key={event.id} className="border-l-2 border-border px-3 text-xs text-secondary">
+          return <details key={event.id} className="border-l-2 border-border px-3 text-chat-meta text-secondary">
             <summary>Tool: {event.tool}</summary>
             <pre className="mt-2 overflow-auto whitespace-pre-wrap">{JSON.stringify(event.input, null, 2)}</pre>
           </details>
         case 'tool_result':
-          return <details key={event.id} className="px-3 text-xs text-secondary">
+          return <details key={event.id} className="px-3 text-chat-meta text-secondary">
             <summary>{event.isError ? 'Tool failed' : 'Tool result'}</summary>
             <pre className="mt-2 overflow-auto whitespace-pre-wrap">{event.output}</pre>
           </details>
-        case 'notice': return <p key={event.id} className="text-xs text-secondary">{event.text}</p>
-        case 'error': return <p key={event.id} role="alert" className="text-sm text-chat-danger">{event.message}</p>
-        case 'turn_interrupted': return <p key={event.id} className="text-xs text-secondary">Turn stopped</p>
-        case 'request_resolved': return <p key={event.id} className="text-xs text-secondary">Request {event.outcome}</p>
-        case 'turn_completed': return <p key={event.id} className="text-xs text-muted">
+        case 'notice': return <p key={event.id} className="text-chat-meta text-secondary">{event.text}</p>
+        case 'error': return <p key={event.id} role="alert" className="text-chat-body text-chat-danger">{event.message}</p>
+        case 'turn_interrupted': return <p key={event.id} className="text-chat-meta text-secondary">Turn stopped</p>
+        case 'request_resolved': return <p key={event.id} className="text-chat-meta text-secondary">Request {event.outcome}</p>
+        case 'turn_completed': return <p key={event.id} className="text-chat-meta text-muted">
           Turn complete · {event.subtype}{event.totalCostUsd !== undefined ? ` · $${event.totalCostUsd.toFixed(4)}` : ''}
           {event.numTurns !== undefined ? ` · ${event.numTurns} turns` : ''}
         </p>

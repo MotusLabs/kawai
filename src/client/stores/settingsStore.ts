@@ -131,6 +131,17 @@ function sanitizePaneFraction(value: unknown): number {
     : PANE_DEFAULT_FRACTION
 }
 
+// Chat view base text size in px, separate from the terminal font size.
+const CHAT_FONT_SIZE_MIN = 12
+const CHAT_FONT_SIZE_MAX = 20
+const CHAT_FONT_SIZE_DEFAULT = 15
+
+function sanitizeChatFontSize(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value)
+    ? Math.round(Math.max(CHAT_FONT_SIZE_MIN, Math.min(CHAT_FONT_SIZE_MAX, value)))
+    : CHAT_FONT_SIZE_DEFAULT
+}
+
 interface SettingsState {
   defaultProjectDir: string
   setDefaultProjectDir: (dir: string) => void
@@ -150,6 +161,8 @@ interface SettingsState {
   setUseWebGL: (enabled: boolean) => void
   fontSize: number
   setFontSize: (size: number) => void
+  chatFontSize: number
+  setChatFontSize: (size: number) => void
   lineHeight: number
   setLineHeight: (height: number) => void
   letterSpacing: number
@@ -225,6 +238,8 @@ export const useSettingsStore = create<SettingsState>()(
       setUseWebGL: (enabled) => set({ useWebGL: enabled }),
       fontSize: 13,
       setFontSize: (size) => set({ fontSize: Math.max(6, Math.min(24, size)) }),
+      chatFontSize: CHAT_FONT_SIZE_DEFAULT,
+      setChatFontSize: (size) => set({ chatFontSize: sanitizeChatFontSize(size) }),
       lineHeight: 1.0,
       setLineHeight: (height) => set({ lineHeight: Math.max(1.0, Math.min(2.0, height)) }),
       letterSpacing: 0,
@@ -311,9 +326,10 @@ export const useSettingsStore = create<SettingsState>()(
       storage: createJSONStorage(() => safeStorage),
       version: 7,
       // Same shallow merge as the default, plus re-clamping of the pane
-      // fractions: a hand-edited or corrupt persisted value must not produce
-      // an unusable layout, and state persisted before the keys existed
-      // keeps the defaults supplied by the spread below.
+      // fractions and chat font size: a hand-edited or corrupt persisted
+      // value must not produce an unusable layout, and state persisted
+      // before the keys existed keeps the defaults supplied by the spread
+      // below.
       merge: (persistedState, currentState) => {
         const merged = {
           ...currentState,
@@ -324,6 +340,7 @@ export const useSettingsStore = create<SettingsState>()(
           workspacePaneFraction: sanitizePaneFraction(merged.workspacePaneFraction),
           remotePaneFraction: sanitizePaneFraction(merged.remotePaneFraction),
           archivePaneFraction: sanitizePaneFraction(merged.archivePaneFraction),
+          chatFontSize: sanitizeChatFontSize(merged.chatFontSize),
         }
       },
       migrate: (persistedState: unknown, version: number) => {
@@ -454,6 +471,9 @@ export {
   SIDEBAR_DEFAULT_WIDTH,
   PANE_MIN_FRACTION,
   PANE_MAX_FRACTION,
+  CHAT_FONT_SIZE_MIN,
+  CHAT_FONT_SIZE_MAX,
+  CHAT_FONT_SIZE_DEFAULT,
 }
 
 /**

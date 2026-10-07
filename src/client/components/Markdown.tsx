@@ -1,6 +1,8 @@
 // Shared markdown renderer: element overrides styled with theme tokens
 // (no typography plugin). Used by the chat view and the session log preview,
-// so both render assistant text identically.
+// so both render assistant text with the same elements and styling. Sizes are
+// em-relative and the wrapper sets none, so the renderer inherits its base
+// size: the chat's --chat-font-size, or the preview's own text-sm.
 import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import remarkBreaks from 'remark-breaks'
@@ -21,21 +23,21 @@ const markdownComponents: Components = {
   // remark-gfm marks a whole list contains-task-list when any item has a
   // checkbox, so markers are dropped per task-list-item; ordinary siblings in
   // a mixed list keep their bullet or number.
-  ul: ({ children }) => <ul className="my-2 list-disc space-y-1 pl-5">{children}</ul>,
+  ul: ({ children }) => <ul className="my-2 list-disc space-y-1 pl-[1.5em]">{children}</ul>,
   ol: ({ children, start }) => (
-    <ol start={start} className="my-2 list-decimal space-y-1 pl-5">
+    <ol start={start} className="my-2 list-decimal space-y-1 pl-[1.5em]">
       {children}
     </ol>
   ),
   li: ({ children, className }) => (
-    <li className={className?.includes('task-list-item') ? `leading-6 list-none ${className}` : 'leading-6'}>{children}</li>
+    <li className={className?.includes('task-list-item') ? `list-none ${className}` : undefined}>{children}</li>
   ),
-  h1: ({ children }) => <h1 className="mb-1 mt-3 text-base font-semibold first:mt-0">{children}</h1>,
-  h2: ({ children }) => <h2 className="mb-1 mt-3 text-sm font-semibold first:mt-0">{children}</h2>,
-  h3: ({ children }) => <h3 className="mb-1 mt-3 text-sm font-semibold first:mt-0">{children}</h3>,
-  h4: ({ children }) => <h4 className="mb-1 mt-3 text-sm font-semibold first:mt-0">{children}</h4>,
-  h5: ({ children }) => <h5 className="mb-1 mt-3 text-sm font-semibold first:mt-0">{children}</h5>,
-  h6: ({ children }) => <h6 className="mb-1 mt-3 text-sm font-semibold first:mt-0">{children}</h6>,
+  h1: ({ children }) => <h1 className="mb-1 mt-3 text-[1.25em] font-semibold first:mt-0">{children}</h1>,
+  h2: ({ children }) => <h2 className="mb-1 mt-3 text-[1.125em] font-semibold first:mt-0">{children}</h2>,
+  h3: ({ children }) => <h3 className="mb-1 mt-3 font-semibold first:mt-0">{children}</h3>,
+  h4: ({ children }) => <h4 className="mb-1 mt-3 font-semibold first:mt-0">{children}</h4>,
+  h5: ({ children }) => <h5 className="mb-1 mt-3 font-semibold first:mt-0">{children}</h5>,
+  h6: ({ children }) => <h6 className="mb-1 mt-3 font-semibold first:mt-0">{children}</h6>,
   strong: ({ children }) => <strong className="font-semibold text-primary">{children}</strong>,
   em: ({ children }) => <em className="italic">{children}</em>,
   del: ({ children }) => <del className="line-through text-secondary">{children}</del>,
@@ -46,7 +48,7 @@ const markdownComponents: Components = {
   pre: ({ children }) => (
     // Nested code styling is reset so a one-line fenced block with no language
     // doesn't get the inline chip treatment; styling comes from position, not content.
-    <pre className="my-2 overflow-x-auto rounded bg-base p-3 text-xs leading-relaxed text-secondary [&>code]:bg-transparent [&>code]:p-0 [&>code]:text-inherit">
+    <pre className="my-2 overflow-x-auto rounded bg-base p-3 text-[0.9em] leading-relaxed text-secondary [&>code]:bg-transparent [&>code]:p-0 [&>code]:text-inherit">
       {children}
     </pre>
   ),
@@ -62,7 +64,7 @@ const markdownComponents: Components = {
   },
   table: ({ children }) => (
     <div className="my-2 overflow-x-auto">
-      <table className="w-full border-collapse text-xs">{children}</table>
+      <table className="w-full border-collapse text-[0.9em]">{children}</table>
     </div>
   ),
   // GFM column alignment (`:---:`, `---:`) arrives as an inline text-align
@@ -75,7 +77,7 @@ const markdownComponents: Components = {
 
 export default function Markdown({ content }: { content: string }) {
   return (
-    <div className="min-w-0 break-words text-sm leading-6 text-primary [overflow-wrap:anywhere]">
+    <div className="min-w-0 break-words leading-[1.6] text-primary [overflow-wrap:anywhere]">
       <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]} components={markdownComponents}>
         {content}
       </ReactMarkdown>

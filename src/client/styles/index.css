@@ -163,6 +163,22 @@
   --chat-wire-stderr: #daaa3f;
 }
 
+/* Chat view text size: the chat root carries --chat-font-size (the Settings
+   "Chat Font Size", default 15px) and chat text is sized in em from it via the
+   text-chat-body / text-chat-meta utilities, independent of the 13px root that
+   rem-based sizes use elsewhere. */
+.chat-root {
+  font-size: var(--chat-font-size, 15px);
+}
+
+/* Keep the composer at 16px or more on touch devices so iOS does not zoom on
+   focus. Two classes so it outranks the single-class text-chat-body utility. */
+@media (pointer: coarse) {
+  .chat-root .chat-composer {
+    font-size: max(16px, 1em);
+  }
+}
+
 * {
   box-sizing: border-box;
 }
