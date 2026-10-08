@@ -41,6 +41,39 @@ function setupDom() {
 }
 
 describe('NewSessionModal component', () => {
+  test('delayed autofocus preserves a field the user already focused', () => {
+    setupDom()
+    const callbacks: Array<() => void> = []
+    const originalTimeout = globalThis.setTimeout
+    let focused = 0
+    const field = {} as Element
+    const doc = globalAny.document!
+    let renderer!: TestRenderer.ReactTestRenderer
+    try {
+      globalThis.setTimeout = ((callback: () => void) => {
+        callbacks.push(callback)
+        return 1
+      }) as unknown as typeof setTimeout
+      act(() => {
+        renderer = TestRenderer.create(<NewSessionModal isOpen onClose={() => {}} onCreate={() => {}}
+          defaultProjectDir="/base" commandPresets={DEFAULT_PRESETS} defaultPresetId="claude" />, {
+          createNodeMock: element => element.type === 'form'
+            ? { contains: (node: Element) => node === field }
+            : { focus: () => { focused += 1 } },
+        })
+      })
+      Object.defineProperty(doc, 'activeElement', { value: field, configurable: true })
+      callbacks.forEach(callback => callback())
+      expect(focused).toBe(0)
+      Object.defineProperty(doc, 'activeElement', { value: null, configurable: true })
+      callbacks.forEach(callback => callback())
+      expect(focused).toBe(1)
+    } finally {
+      globalThis.setTimeout = originalTimeout
+      if (renderer) act(() => renderer.unmount())
+    }
+  })
+
   test('submits resolved values and closes', () => {
     setupDom()
 

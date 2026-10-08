@@ -205,7 +205,11 @@ export default function NewSessionModal({
     }
     // Focus default button and scroll project path after DOM update
     setTimeout(() => {
-      defaultButtonRef.current?.focus()
+      // Preserve focus if the user already started interacting with the form.
+      const activeElement = typeof document === 'undefined' ? null : document.activeElement
+      if (!activeElement || !formRef.current?.contains(activeElement)) {
+        defaultButtonRef.current?.focus()
+      }
       if (projectPathRef.current) {
         const input = projectPathRef.current
         input.scrollLeft = input.scrollWidth
