@@ -4,7 +4,7 @@
 // live-turn activity is a single current value (not an event): it is anchored
 // on the client clock from the server's elapsedMs and cleared on turn end.
 import { create } from 'zustand'
-import type { ChatActivity, ChatEvent, ChatPendingRequest } from '@shared/chat'
+import type { ChatActivity, ChatCommandState, ChatEvent, ChatPendingRequest } from '@shared/chat'
 import type { ServerMessage, SessionStatus } from '@shared/types'
 
 /** The live activity plus its client-clock anchor (design D6). */
@@ -19,12 +19,15 @@ export interface ChatTranscript {
   pendingRequests: ChatPendingRequest[]
   status: SessionStatus
   throughSequence: number
+  /** The session's slash-command list; unavailable until an agent reports. */
+  commands: ChatCommandState
   seen: Set<string>
   activity: ChatTranscriptActivity | null
 }
 
 export const emptyTranscript = (): ChatTranscript => ({
-  events: [], pendingRequests: [], status: 'waiting', throughSequence: 0, seen: new Set(), activity: null,
+  events: [], pendingRequests: [], status: 'waiting', throughSequence: 0,
+  commands: { status: 'unavailable', commands: [] }, seen: new Set(), activity: null,
 })
 
 /** Anchor a server-reported activity on the client's clock (design D2). */
@@ -76,6 +79,8 @@ interface ChatStore {
   sessions: Record<string, ChatTranscript>
   apply: (sessionId: string, events: ChatEvent[]) => void
   snapshot: (message: Extract<ServerMessage, { type: 'chat-snapshot' }>) => void
+  /** Replace one session's command list (chat-commands push). */
+  setCommands: (message: Extract<ServerMessage, { type: 'chat-commands' }>) => void
   /** Adopt the latest server activity (chat-activity) or clear it (null). */
   setActivity: (sessionId: string, activity: ChatActivity | null) => void
   remove: (sessionId: string) => void
@@ -93,7 +98,15 @@ export const useChatStore = create<ChatStore>((set) => ({
       pendingRequests: message.pendingRequests,
       status: message.status,
       throughSequence: message.throughSequence,
+      commands: message.commands,
       activity: message.activity ? anchorActivity(message.activity) : null,
+    },
+  } })),
+  setCommands: message => set(state => ({ sessions: {
+    ...state.sessions,
+    [message.sessionId]: {
+      ...(state.sessions[message.sessionId] ?? emptyTranscript()),
+      commands: message.state,
     },
   } })),
   setActivity: (sessionId, activity) => set(state => {

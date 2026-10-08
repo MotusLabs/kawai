@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, jest, test } from 'bun:test'
 import TestRenderer, { act, type ReactTestInstance } from 'react-test-renderer'
-import type { ChatActivity, ChatEvent, ChatPendingRequest, ChatWireFrame } from '@shared/chat'
-import type { ClientMessage, Session } from '@shared/types'
+import type { ChatActivity, ChatCommandState, ChatEvent, ChatPendingRequest, ChatWireFrame } from '@shared/chat'
+import type { ClientMessage, ServerMessage, Session } from '@shared/types'
 import ChatRequests from '../components/chat/ChatRequests'
 import ChatMessages from '../components/chat/ChatMessages'
 import ChatDebugPanel from '../components/chat/ChatDebugPanel'
@@ -119,6 +119,19 @@ describe('chat components', () => {
     expect(textOf(summaries[2]!)).toBe('Tool result')
     expect(summaries[2]!.findAll(node => node.props.title != null)).toHaveLength(0)
     expect(textOf(renderer.root.findAllByType('pre')[1]!)).toBe('Command failed: bun test\n    at test.ts:1:1')
+    renderer.unmount()
+  })
+
+  test('command output renders as a muted markdown block', () => {
+    const renderer = TestRenderer.create(<ChatMessages events={[
+      { type: 'command_output', id: 'c', sequence: 0, at: 'now', turnId: 't', text: 'Context usage: **12%** of the window.' },
+    ]} />)
+    const block = renderer.root.findByProps({ 'data-testid': 'chat-command-output' })
+    expect(block.props.className).toContain('text-secondary')
+    expect(block.props.className).toContain('font-mono')
+    expect(textOf(block)).toContain('Command output')
+    // Markdown renders (bold), inside the monospace container.
+    expect(renderer.root.findByType('strong').children).toEqual(['12%'])
     renderer.unmount()
   })
 
@@ -543,6 +556,227 @@ describe('chat debug view', () => {
     expect(textOf(loading.renderer.root)).toContain('Loading…')
     expect(loading.renderer.root.findAllByType('button').map(textOf)).not.toContain('Load older')
     loading.renderer.unmount()
+  })
+})
+
+describe('slash-command menu', () => {
+  const READY_COMMANDS: ChatCommandState = {
+    status: 'ready',
+    commands: [
+      { name: 'clear', description: 'Start a new session', argumentHint: '[name]', aliases: ['reset', 'new'], source: 'builtin' },
+      { name: 'context', description: 'Show context usage', aliases: ['ctx'], source: 'builtin' },
+      { name: 'compact', description: 'Compact the conversation', aliases: [], source: 'builtin' },
+      { name: 'openspec-explore', description: 'Explore ideas', aliases: [], source: 'project' },
+      { name: 'my-skill', description: 'A personal skill', aliases: [], source: 'user' },
+    ],
+  }
+
+  afterEach(() => useChatStore.setState({ sessions: {} }))
+
+  function renderComposer(commands: ChatCommandState, session: Session = chatSession) {
+    useChatStore.getState().setCommands({ type: 'chat-commands', sessionId: session.id, state: commands })
+    const sent: ClientMessage[] = []
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => {
+      renderer = TestRenderer.create(<ChatView
+        session={session}
+        sendMessage={message => { sent.push(message) }}
+        connectionStatus="connected" connectionEpoch={0} error={null}
+        onClose={() => {}} onKill={() => {}} />)
+    })
+    const type = (value: string) =>
+      act(() => { renderer.root.findByType('textarea').props.onChange({ target: { value } }) })
+    const key = (keyName: string) =>
+      act(() => { renderer.root.findByType('textarea').props.onKeyDown({
+        key: keyName, preventDefault: () => {}, currentTarget: { form: { requestSubmit: () => submit() } } }) })
+    const submit = () =>
+      act(() => { renderer.root.findByType('form').props.onSubmit({ preventDefault: () => {} }) })
+    return { sent, renderer, type, key, submit }
+  }
+
+  test('opens on a bare slash, filters, and stays closed otherwise', () => {
+    const h = renderComposer(READY_COMMANDS)
+    expect(h.renderer.root.findAllByProps({ 'data-testid': 'slash-command-menu' })).toHaveLength(0)
+    h.type('/')
+    expect(h.renderer.root.findAllByProps({ 'data-testid': 'slash-command-menu' })).toHaveLength(1)
+    h.type('/co')
+    const menu = h.renderer.root.findByProps({ 'data-testid': 'slash-command-menu' })
+    expect(menu.findAllByProps({ role: 'option' }).map(option => option.props['data-command-name']))
+      .toEqual(['context', 'compact'])
+    h.type('/context arg') // args started: the menu closes
+    expect(h.renderer.root.findAllByProps({ 'data-testid': 'slash-command-menu' })).toHaveLength(0)
+    h.renderer.unmount()
+  })
+
+  test('shows loading while the list is not ready, and nothing when unavailable', () => {
+    const loading = renderComposer({ status: 'loading', commands: [] })
+    loading.type('/')
+    expect(loading.renderer.root.findByProps({ 'data-testid': 'slash-command-loading' })).toBeDefined()
+    loading.renderer.unmount()
+    const unavailable = renderComposer({ status: 'unavailable', commands: [] })
+    unavailable.type('/')
+    expect(unavailable.renderer.root.findAllByProps({ 'data-testid': 'slash-command-menu' })).toHaveLength(0)
+    unavailable.renderer.unmount()
+  })
+
+  test('keyboard: Up/Down move, Enter inserts with the hint, nothing is sent', () => {
+    const h = renderComposer(READY_COMMANDS)
+    h.type('/c')
+    h.key('ArrowDown') // clear -> context
+    h.key('ArrowDown') // context -> compact
+    h.key('ArrowUp')   // compact -> context
+    h.key('Enter')
+    expect(h.renderer.root.findByType('textarea').props.value).toBe('/context ')
+    // The argument hint shows for a command that has one…
+    h.type('/clear ')
+    expect(h.renderer.root.findByProps({ 'data-testid': 'command-argument-hint' }).children)
+      .toEqual(['/', 'clear', ' ', '[name]'])
+    // …and typing arguments replaces it.
+    h.type('/clear demo')
+    expect(h.renderer.root.findAllByProps({ 'data-testid': 'command-argument-hint' })).toHaveLength(0)
+    // No message went to the agent while choosing.
+    expect(h.sent.filter(message => message.type === 'chat-send')).toEqual([])
+    h.renderer.unmount()
+  })
+
+  test('Tab also chooses; Escape closes without changing the text', () => {
+    const h = renderComposer(READY_COMMANDS)
+    h.type('/com')
+    h.key('Tab')
+    expect(h.renderer.root.findByType('textarea').props.value).toBe('/compact ')
+    expect(h.renderer.root.findAllByProps({ 'data-testid': 'slash-command-menu' })).toHaveLength(0)
+    h.type('/c')
+    h.key('Escape')
+    expect(h.renderer.root.findByType('textarea').props.value).toBe('/c')
+    expect(h.renderer.root.findAllByProps({ 'data-testid': 'slash-command-menu' })).toHaveLength(0)
+    h.renderer.unmount()
+  })
+
+  test('Enter without matches is not captured: the typed command submits', () => {
+    const h = renderComposer(READY_COMMANDS)
+    h.type('/zzz')
+    expect(h.renderer.root.findAllByProps({ 'data-testid': 'slash-command-menu' })).toHaveLength(1)
+    h.submit()
+    expect(h.sent.filter(message => message.type === 'chat-send')).toEqual([
+      { type: 'chat-send', sessionId: 'chat-1', text: '/zzz' },
+    ])
+    h.renderer.unmount()
+  })
+
+  test('pointer selection chooses on click; project and user commands are tagged', () => {
+    const h = renderComposer(READY_COMMANDS)
+    h.type('/')
+    const options = h.renderer.root.findByProps({ 'data-testid': 'slash-command-menu' })
+      .findAllByProps({ role: 'option' })
+    const explore = options.find(option => option.props['data-command-name'] === 'openspec-explore')!
+    expect(explore.findByProps({ 'data-testid': 'command-source-tag' }).children).toEqual(['project'])
+    const skill = options.find(option => option.props['data-command-name'] === 'my-skill')!
+    expect(skill.findByProps({ 'data-testid': 'command-source-tag' }).children).toEqual(['user'])
+    act(() => { explore.props.onClick() })
+    expect(h.renderer.root.findByType('textarea').props.value).toBe('/openspec-explore ')
+    h.renderer.unmount()
+  })
+
+  test('archived chats have no composer and no menu', () => {
+    const archived = { ...chatSession, archivedAt: '2026-10-01T00:00:00.000Z' } as Session
+    const h = renderComposer(READY_COMMANDS, archived)
+    expect(h.renderer.root.findAllByType('textarea')).toHaveLength(0)
+    expect(h.renderer.root.findAllByProps({ 'data-testid': 'slash-command-menu' })).toHaveLength(0)
+    h.renderer.unmount()
+  })
+})
+
+describe('/clear, /reset, /new', () => {
+  afterEach(() => useChatStore.setState({ sessions: {} }))
+
+  function renderClearable(session: Session = chatSession) {
+    const sent: ClientMessage[] = []
+    const listeners: Array<(message: ServerMessage) => void> = []
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => {
+      renderer = TestRenderer.create(<ChatView
+        session={session}
+        sendMessage={message => { sent.push(message) }}
+        subscribe={listener => { listeners.push(listener); return () => {} }}
+        connectionStatus="connected" connectionEpoch={0} error={null}
+        onClose={() => {}} onKill={() => {}} />)
+    })
+    const type = (value: string) =>
+      act(() => { renderer.root.findByType('textarea').props.onChange({ target: { value } }) })
+    const submit = () =>
+      act(() => { renderer.root.findByType('form').props.onSubmit({ preventDefault: () => {} }) })
+    const deliver = (message: ServerMessage) =>
+      act(() => { for (const listener of listeners) listener(message) })
+    return { sent, renderer, type, submit, deliver }
+  }
+
+  const newChatCreated = (id: string, name?: string): ServerMessage => ({
+    type: 'session-created',
+    session: {
+      id, name: name ?? 'New chat', kind: 'chat', projectPath: '/tmp/project',
+      status: 'waiting', lastActivity: 'now', createdAt: 'now', source: 'managed',
+    },
+  })
+
+  test.each(['/clear', '/reset', '/new'])('%s creates a chat and archives the old one', (command) => {
+    const h = renderClearable()
+    h.type(command)
+    h.submit()
+    expect(h.sent.filter(message => message.type === 'session-create')).toEqual([{
+      type: 'session-create', projectPath: '/tmp/project', kind: 'chat', claudeProfileId: 'default',
+    }])
+    // The command itself never reaches the agent, and the composer cleared.
+    expect(h.sent.filter(message => message.type === 'chat-send')).toEqual([])
+    expect(h.renderer.root.findByType('textarea').props.value).toBe('')
+    // The composer text is gone but nothing is archived yet.
+    expect(h.sent.filter(message => message.type === 'chat-archive')).toEqual([])
+    h.deliver(newChatCreated('chat-new'))
+    expect(h.sent.filter(message => message.type === 'chat-archive')).toEqual([
+      { type: 'chat-archive', sessionId: 'chat-1' },
+    ])
+    h.renderer.unmount()
+  })
+
+  test('/new with a name names the created chat', () => {
+    const h = renderClearable()
+    h.type('/new release notes')
+    h.submit()
+    expect(h.sent.filter(message => message.type === 'session-create')).toEqual([{
+      type: 'session-create', projectPath: '/tmp/project', kind: 'chat',
+      claudeProfileId: 'default', name: 'release notes',
+    }])
+    h.deliver(newChatCreated('chat-named', 'release notes'))
+    expect(h.sent.filter(message => message.type === 'chat-archive')).toEqual([
+      { type: 'chat-archive', sessionId: 'chat-1' },
+    ])
+    h.renderer.unmount()
+  })
+
+  test('a creation error leaves the previous chat untouched', () => {
+    const h = renderClearable()
+    h.type('/clear')
+    h.submit()
+    h.deliver({ type: 'error', message: 'Claude Agent SDK is unavailable.' })
+    expect(h.sent.filter(message => message.type === 'chat-archive')).toEqual([])
+    // The failure also cancels the pending archive for later creations.
+    h.deliver(newChatCreated('chat-late'))
+    expect(h.sent.filter(message => message.type === 'chat-archive')).toEqual([])
+    h.renderer.unmount()
+  })
+
+  test('a session created in another project does not archive this chat', () => {
+    const h = renderClearable()
+    h.type('/clear')
+    h.submit()
+    h.deliver({
+      type: 'session-created',
+      session: {
+        id: 'chat-elsewhere', name: 'Elsewhere', kind: 'chat', projectPath: '/other/project',
+        status: 'waiting', lastActivity: 'now', createdAt: 'now', source: 'managed',
+      },
+    })
+    expect(h.sent.filter(message => message.type === 'chat-archive')).toEqual([])
+    h.renderer.unmount()
   })
 })
 

@@ -49,6 +49,12 @@ export default function ChatMessages({ events, projectPath }: { events: ChatEven
             <pre className="mt-2 overflow-auto whitespace-pre-wrap">{event.output}</pre>
           </details>
         }
+        case 'command_output':
+          return <div key={event.id} data-testid="chat-command-output" data-chat-role="assistant"
+            className="mx-3 border-l-2 border-border px-3 py-2 font-mono text-xs text-secondary">
+            <div className="mb-1 text-xs">Command output</div>
+            <Markdown content={event.text} />
+          </div>
         case 'notice': return <p key={event.id} className="text-chat-meta text-secondary">{event.text}</p>
         case 'error': return <p key={event.id} role="alert" className="text-chat-body text-chat-danger">{event.message}</p>
         case 'turn_interrupted': return <p key={event.id} className="text-chat-meta text-secondary">Turn stopped</p>
