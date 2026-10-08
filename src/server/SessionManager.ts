@@ -13,6 +13,7 @@ import {
   BOOTSTRAP_WINDOW_COMMAND,
   BOOTSTRAP_WINDOW_NAME,
   buildTmuxFormat,
+  isBootstrapPlaceholderCommand,
   splitTmuxFields,
   splitTmuxLines,
   withTmuxUtf8Flag,
@@ -807,10 +808,22 @@ export class SessionManager {
     }
   }
 
+  /**
+   * The reserved placeholder window is invisible in every session: leftover
+   * base-style sessions (e2e fixtures, `new-session -n __agentboard_root__`)
+   * otherwise surface as phantom "terminal" rows that only run `tail` — they
+   * cannot be killed (external + allowKillExternal off) nor used as a terminal.
+   * In the managed session the name alone is enough (it is reserved there and
+   * may be relaunched); elsewhere only the exact placeholder recipe is hidden
+   * so a user window that merely shares the name stays visible.
+   */
   private isBootstrapWindow(sessionName: string, window: WindowInfo): boolean {
+    if (window.name !== BOOTSTRAP_WINDOW_NAME) {
+      return false
+    }
     return (
-      sessionName === this.sessionName &&
-      window.name === BOOTSTRAP_WINDOW_NAME
+      sessionName === this.sessionName ||
+      isBootstrapPlaceholderCommand(window.command)
     )
   }
 
