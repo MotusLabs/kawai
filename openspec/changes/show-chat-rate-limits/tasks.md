@@ -22,11 +22,11 @@
 ## 5. Deliver to clients
 
 - [x] 5.1 Fill `usage` in `getSnapshot` from the session's profile; verify with manager snapshot tests for a profile with a report, with a verdict, and with neither
-- [ ] 5.2 Push `chat-usage` from `ChatConnections` once per connection subscribed to any session of the changed profile; verify with connection tests for two sessions of one profile on one connection, and a session of another profile not receiving it
+- [x] 5.2 Push `chat-usage` from `ChatConnections` once per connection subscribed to any session of the changed profile; verify with connection tests for two sessions of one profile on one connection, and a session of another profile not receiving it
 
 ## 6. Usage bar
 
-- [ ] 6.1 Store reports per profile in `chatStore` from `chat-snapshot` and `chat-usage`, following the existing activity handling; verify with store tests
+- [x] 6.1 Store reports per profile in `chatStore` from `chat-snapshot` and `chat-usage`, following the existing activity handling; verify with store tests
 - [ ] 6.2 Implement `UsageBar.tsx` (one thin meter per window with label, fill from percent, rounded percent, locale reset time with weekday past a day, warning and limited styles, nothing rendered without window data) and render it under the `ChatView` header; verify with component tests for two windows, a scoped weekly window, one window, none, warning, limited, and reset-time formatting using fake timers
 
 ## 7. Planning and docs

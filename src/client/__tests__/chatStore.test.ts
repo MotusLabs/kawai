@@ -138,3 +138,56 @@ describe('chat store activity', () => {
     expect(useChatStore.getState().sessions['chat-1'].activity).toBeNull()
   })
 })
+
+describe('chat store usage', () => {
+  const report = {
+    status: 'allowed' as const,
+    windows: [
+      { key: 'five_hour', label: '5-hour window', percentUsed: 22.37, resetsAt: '2026-10-07T18:11:04.000Z' },
+      { key: 'seven_day', label: '7-day window', percentUsed: 17.12, resetsAt: null },
+    ],
+    receivedAt: '2026-10-07T13:00:00.000Z',
+  }
+
+  afterEach(() => useChatStore.setState({ sessions: {}, usage: {} }))
+
+  test('snapshots and pushes land in one per-profile map', () => {
+    const store = useChatStore.getState()
+    store.snapshot({
+      type: 'chat-snapshot', sessionId: 'chat-1', profileId: 'default',
+      events: [], pendingRequests: [], status: 'waiting', throughSequence: 0,
+      activity: null, usage: report,
+    })
+    expect(useChatStore.getState().usage['default']).toEqual(report)
+
+    // A push updates the same shared slot whatever session produced it.
+    store.setUsage('default', null)
+    expect(useChatStore.getState().usage['default']).toBeNull()
+
+    // Other profiles are untouched.
+    expect(useChatStore.getState().usage['glm']).toBeUndefined()
+  })
+
+  test('an attach-time snapshot is authoritative for its profile', () => {
+    const store = useChatStore.getState()
+    store.setUsage('default', report)
+    store.snapshot({
+      type: 'chat-snapshot', sessionId: 'chat-1', profileId: 'default',
+      events: [], pendingRequests: [], status: 'waiting', throughSequence: 0,
+      activity: null, usage: null, // restart: the server held nothing
+    })
+    expect(useChatStore.getState().usage['default']).toBeNull()
+  })
+
+  test('removing a session keeps the profile usage for its siblings', () => {
+    const store = useChatStore.getState()
+    store.snapshot({
+      type: 'chat-snapshot', sessionId: 'chat-1', profileId: 'default',
+      events: [], pendingRequests: [], status: 'waiting', throughSequence: 0,
+      activity: null, usage: report,
+    })
+    store.remove('chat-1')
+    expect(useChatStore.getState().sessions['chat-1']).toBeUndefined()
+    expect(useChatStore.getState().usage['default']).toEqual(report)
+  })
+})
