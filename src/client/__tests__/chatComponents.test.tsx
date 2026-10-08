@@ -72,7 +72,7 @@ describe('chat components', () => {
     expect(String(detail.props.className).split(' ')).toContain('truncate')
     // The JSON body keeps the full input for expanding.
     expect(renderer.root.findAllByType('pre')).toHaveLength(3)
-    expect(textOf(summaries[2]!.parent!.findByType('pre'))).toBe(JSON.stringify({ command }, null, 2))
+    expect(textOf(renderer.root.findAllByType('pre')[2]!)).toBe(JSON.stringify({ command }, null, 2))
     renderer.unmount()
   })
 
@@ -84,6 +84,41 @@ describe('chat components', () => {
     const summary = renderer.root.findByType('summary')
     expect(textOf(summary)).toBe('Tool: mcp__db__query')
     expect(summary.findAll(node => node.props.title != null)).toHaveLength(0)
+    renderer.unmount()
+  })
+
+  test('tool-call summaries show formatted details', () => {
+    const renderer = TestRenderer.create(<ChatMessages projectPath="/tmp/project" events={[
+      { type: 'tool_call', id: 'e', sequence: 0, at: 'now', turnId: 't', toolCallId: 't1', tool: 'Edit',
+        input: { file_path: '/tmp/project/src/a.ts', old_string: 'a\nb\nc', new_string: '1\n2\n3\n4\n5' } },
+      { type: 'tool_call', id: 'u', sequence: 1, at: 'now', turnId: 't', toolCallId: 't2', tool: 'TaskUpdate',
+        input: { taskId: '2', status: 'completed' } },
+    ]} />)
+    const summaries = renderer.root.findAllByType('summary')
+    expect(textOf(summaries[0]!)).toBe('Tool: Edit (src/a.ts +5 −3)')
+    expect(textOf(summaries[1]!)).toBe('Tool: TaskUpdate (Task 2 → completed)')
+    renderer.unmount()
+  })
+
+  test('tool-result summaries show the first output line as a hint', () => {
+    const renderer = TestRenderer.create(<ChatMessages events={[
+      { type: 'tool_result', id: 'r', sequence: 0, at: 'now', turnId: 't', toolCallId: 't1',
+        output: '\n  Task #1 created successfully: Run 6.3\nlater lines', isError: false },
+      { type: 'tool_result', id: 'f', sequence: 1, at: 'now', turnId: 't', toolCallId: 't2',
+        output: 'Command failed: bun test\n    at test.ts:1:1', isError: true },
+      { type: 'tool_result', id: 'e', sequence: 2, at: 'now', turnId: 't', toolCallId: 't3',
+        output: ' \n', isError: false },
+    ]} />)
+    const summaries = renderer.root.findAllByType('summary')
+    expect(textOf(summaries[0]!)).toBe('Tool result (Task #1 created successfully: Run 6.3)')
+    expect(textOf(summaries[1]!)).toBe('Tool failed (Command failed: bun test)')
+    // The full hint rides along on the truncating span for the hover tooltip.
+    const hint = summaries[0]!.findByProps({ title: 'Task #1 created successfully: Run 6.3' })
+    expect(String(hint.props.className).split(' ')).toContain('truncate')
+    // No non-blank line keeps the plain label, and the full output still expands.
+    expect(textOf(summaries[2]!)).toBe('Tool result')
+    expect(summaries[2]!.findAll(node => node.props.title != null)).toHaveLength(0)
+    expect(textOf(renderer.root.findAllByType('pre')[1]!)).toBe('Command failed: bun test\n    at test.ts:1:1')
     renderer.unmount()
   })
 

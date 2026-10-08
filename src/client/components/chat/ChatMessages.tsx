@@ -1,9 +1,25 @@
 // Read-only transcript entries; active approval/question controls live
 // separately. Tool-call summaries add a one-line input detail (paths relative
-// to the session's project) that ellipsizes with the full value on hover.
+// to the session's project) and tool-result summaries a first-line hint, each
+// ellipsizing with the full value on hover.
 import type { ChatEvent } from '@shared/chat'
 import Markdown from '../Markdown'
-import { toolCallDetail } from './toolCallLabel'
+import { toolCallDetail, toolResultDetail } from './toolCallLabel'
+
+/** `<summary>` whose optional parenthetical detail shrinks instead of wrapping. */
+function SummaryLabel({ label, detail }: { label: string; detail: string | null }) {
+  return <summary>
+    {/* Inner flex row keeps the <summary> list-item marker; only the detail shrinks. */}
+    <span className="flex min-w-0 items-baseline">
+      <span className="shrink-0">{label}</span>
+      {detail !== null && <>
+        <span className="shrink-0">{' ('}</span>
+        <span className="min-w-0 truncate" title={detail}>{detail}</span>
+        <span className="shrink-0">)</span>
+      </>}
+    </span>
+  </summary>
+}
 
 export default function ChatMessages({ events, projectPath }: { events: ChatEvent[]; projectPath?: string }) {
   return <div className="space-y-4" data-testid="chat-transcript">
@@ -22,25 +38,17 @@ export default function ChatMessages({ events, projectPath }: { events: ChatEven
         case 'tool_call': {
           const detail = toolCallDetail(event.tool, event.input, projectPath)
           return <details key={event.id} className="border-l-2 border-border px-3 text-chat-meta text-secondary">
-            {/* Inner flex row keeps the <summary> list-item marker; only the detail shrinks. */}
-            <summary>
-              <span className="flex min-w-0 items-baseline">
-                <span className="shrink-0">Tool: {event.tool}</span>
-                {detail !== null && <>
-                  <span className="shrink-0">{' ('}</span>
-                  <span className="min-w-0 truncate" title={detail}>{detail}</span>
-                  <span className="shrink-0">)</span>
-                </>}
-              </span>
-            </summary>
+            <SummaryLabel label={`Tool: ${event.tool}`} detail={detail} />
             <pre className="mt-2 overflow-auto whitespace-pre-wrap">{JSON.stringify(event.input, null, 2)}</pre>
           </details>
         }
-        case 'tool_result':
+        case 'tool_result': {
+          const hint = toolResultDetail(event.output)
           return <details key={event.id} className="px-3 text-chat-meta text-secondary">
-            <summary>{event.isError ? 'Tool failed' : 'Tool result'}</summary>
+            <SummaryLabel label={event.isError ? 'Tool failed' : 'Tool result'} detail={hint} />
             <pre className="mt-2 overflow-auto whitespace-pre-wrap">{event.output}</pre>
           </details>
+        }
         case 'notice': return <p key={event.id} className="text-chat-meta text-secondary">{event.text}</p>
         case 'error': return <p key={event.id} role="alert" className="text-chat-body text-chat-danger">{event.message}</p>
         case 'turn_interrupted': return <p key={event.id} className="text-chat-meta text-secondary">Turn stopped</p>
