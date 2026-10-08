@@ -9,11 +9,13 @@
 // Archived chats render read-only: the transcript and debug view stay, the
 // composer/Stop/request actions are replaced by a Restore bar, and archiving
 // a live turn asks for confirmation first (the server interrupts it).
+// Unsubmitted composer text is a per-session draft in the chat store, so it
+// survives switching chats; submitting clears it and killing discards it.
 // The root opts into `chat-palette`, the chat view's reduced-glare dark palette,
 // and `chat-root`, whose --chat-font-size (Settings "Chat Font Size") sizes
 // chat text through the em-based text-chat-body / text-chat-meta utilities.
 import { useClaudeProfiles } from './useClaudeProfiles'
-import { useEffect, useRef, useState, type CSSProperties } from 'react'
+import { useEffect, useRef, type CSSProperties } from 'react'
 import type { SendClientMessage, Session } from '@shared/types'
 import type { ConnectionStatus } from '../../stores/sessionStore'
 import { useSettingsStore } from '../../stores/settingsStore'
@@ -37,7 +39,8 @@ export default function ChatView({ session, sendMessage, connectionStatus, conne
   const profileLabel = catalog.profiles.find(profile => profile.id === profileId)?.label ?? profileId
   const chatFontSize = useSettingsStore(state => state.chatFontSize)
   const transcript = useChatStore(state => state.sessions[session.id]) ?? EMPTY
-  const [text, setText] = useState('')
+  const text = useChatStore(state => state.drafts[session.id] ?? '')
+  const setDraft = useChatStore(state => state.setDraft)
   const end = useRef<HTMLDivElement>(null)
   const connected = connectionStatus === 'connected'
   const archived = session.archivedAt != null
@@ -70,7 +73,6 @@ export default function ChatView({ session, sendMessage, connectionStatus, conne
       policy: autoApprove ? 'manual' : 'auto',
     })
   }
-  useEffect(() => { setText('') }, [session.id])
   useEffect(() => { end.current?.scrollIntoView?.({ block: 'end' }) }, [transcript.events.length, transcript.throughSequence])
   // Activity row hiding rules (design D4): text streaming is its own visible
   // progress, a pending approval/question owns the footer, and archived chats
@@ -121,11 +123,11 @@ export default function ChatView({ session, sendMessage, connectionStatus, conne
             event.preventDefault()
             if (!connected || !text.trim()) return
             sendMessage({ type: 'chat-send', sessionId: session.id, text: text.trim() })
-            setText('')
+            setDraft(session.id, '')
           }}>
             <div className="mx-auto flex max-w-3xl items-end gap-2">
               <textarea aria-label="Message Claude" className="input chat-composer min-h-20 flex-1 resize-y text-chat-body" value={text}
-                disabled={!connected} placeholder="Message Claude…" onChange={event => setText(event.target.value)}
+                disabled={!connected} placeholder="Message Claude…" onChange={event => setDraft(session.id, event.target.value)}
                 onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); event.currentTarget.form?.requestSubmit() } }} />
               <button className="btn btn-primary text-chat-meta" disabled={!connected || !text.trim()}>Send</button>
               <button type="button" className="btn text-chat-meta" disabled={!connected || session.status === 'waiting'}

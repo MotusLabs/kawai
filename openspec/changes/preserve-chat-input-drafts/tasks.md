@@ -6,8 +6,8 @@
 
 ## 2. Composer
 
-- [ ] 2.1 Rewire the composer in `src/client/components/chat/ChatView.tsx` (design D2): read `useChatStore(state => state.drafts[session.id] ?? '')`, call `setDraft(session.id, value)` from `onChange`, and on submit send the trimmed text then `setDraft(session.id, '')`. Delete the local `text` state and the `useEffect(() => setText(''), [session.id])` clear. Update the file's header comment. Verify in `src/client/__tests__/chatComponents.test.tsx`: typing then re-rendering with another session's props shows that session's own draft, switching back restores the typed text, submitting clears only the submitting session's draft, and archived sessions still render no composer
-- [ ] 2.2 Extend the chat bullet in `CLAUDE.md` to note that unsubmitted composer input is kept per session (cleared on submit, discarded on kill, not persisted across reloads), and verify `bun run lint && bun run typecheck && bun run test` pass
+- [x] 2.1 Rewire the composer in `src/client/components/chat/ChatView.tsx` (design D2): read `useChatStore(state => state.drafts[session.id] ?? '')`, call `setDraft(session.id, value)` from `onChange`, and on submit send the trimmed text then `setDraft(session.id, '')`. Delete the local `text` state and the `useEffect(() => setText(''), [session.id])` clear. Update the file's header comment. Verify in `src/client/__tests__/chatComponents.test.tsx`: typing then re-rendering with another session's props shows that session's own draft, switching back restores the typed text, submitting clears only the submitting session's draft, and archived sessions still render no composer
+- [x] 2.2 Extend the chat bullet in `CLAUDE.md` to note that unsubmitted composer input is kept per session (cleared on submit, discarded on kill, not persisted across reloads), and verify `bun run lint && bun run typecheck && bun run test` pass
 
 ## 3. Integration check
 
