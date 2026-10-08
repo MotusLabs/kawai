@@ -12,16 +12,16 @@
 ## 3. Store and capture
 
 - [x] 3.1 Implement `UsageLimitStore` in `usageLimits.ts` (latest report or "no data" verdict per profile, keep windows when a report has none, never let older data overwrite newer, change listener); verify with unit tests for merge, ordering, verdict recording, and notification
-- [ ] 3.2 Add `onUsageReport` and `onRateLimit` options to `ChatSessionDriver`, called for `rate_limit_event` and for messages carrying `usage_report`, and wire them in `ChatSessionManager` to the store with the session's profile id; verify with driver and manager tests using a fake query that emits both message kinds
+- [x] 3.2 Add `onUsageReport` and `onRateLimit` options to `ChatSessionDriver`, called for `rate_limit_event` and for messages carrying `usage_report`, and wire them in `ChatSessionManager` to the store with the session's profile id; verify with driver and manager tests using a fake query that emits both message kinds
 
 ## 4. Pull fallback
 
-- [ ] 4.1 Call `usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET({ skipBehaviors: true })` from the driver after a query spawns, and parse its `rate_limits` into the same report shape (windows from `five_hour`, `seven_day`, `seven_day_opus`, `seven_day_sonnet`, `seven_day_oauth_apps`, and `model_scoped[]`); verify with unit tests covering a full pull response, `rate_limits_available: false`, and a thrown call
-- [ ] 4.2 Record the "no data" verdict when a pull yields no windows, and skip later pulls for that profile while still accepting later pushes; verify with store and driver tests that a second spawn does not re-pull and that a subsequent `rate_limit_event` replaces the verdict
+- [x] 4.1 Call `usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET({ skipBehaviors: true })` from the driver after a query spawns, and parse its `rate_limits` into the same report shape (windows from `five_hour`, `seven_day`, `seven_day_opus`, `seven_day_sonnet`, `seven_day_oauth_apps`, and `model_scoped[]`); verify with unit tests covering a full pull response, `rate_limits_available: false`, and a thrown call
+- [x] 4.2 Record the "no data" verdict when a pull yields no windows, and skip later pulls for that profile while still accepting later pushes; verify with store and driver tests that a second spawn does not re-pull and that a subsequent `rate_limit_event` replaces the verdict
 
 ## 5. Deliver to clients
 
-- [ ] 5.1 Fill `usage` in `getSnapshot` from the session's profile; verify with manager snapshot tests for a profile with a report, with a verdict, and with neither
+- [x] 5.1 Fill `usage` in `getSnapshot` from the session's profile; verify with manager snapshot tests for a profile with a report, with a verdict, and with neither
 - [ ] 5.2 Push `chat-usage` from `ChatConnections` once per connection subscribed to any session of the changed profile; verify with connection tests for two sessions of one profile on one connection, and a session of another profile not receiving it
 
 ## 6. Usage bar

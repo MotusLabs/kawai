@@ -808,6 +808,7 @@ const chatSessionManager = new ChatSessionManager({
   db,
   onEvent: (sessionId, event) => chatConnections.publish(sessionId, event),
   onActivity: (sessionId, activity) => chatConnections.publishActivity(sessionId, activity),
+  onUsage: (profileId, report) => chatConnections.publishUsage(profileId, report),
   getProviderEnv: chatProviderEnv.current,
   wireLogs: chatWireLogs,
   ...(chatFixtureEnabled ? { queryFactory: fixtureQueryFactory, authCheck: () => true } : {}),
