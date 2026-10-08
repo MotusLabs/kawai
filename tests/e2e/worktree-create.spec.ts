@@ -74,6 +74,9 @@ test('branch browser creates a worktree and launches a session at its root', asy
   const pathInput = modal.locator('input.input.text-sm').first()
   await expect(pathInput).toHaveValue(destination)
 
+  // This flow launches a terminal; the dialog otherwise defaults to Chat.
+  await modal.getByLabel('Session kind').selectOption('terminal')
+
   // A stable long-running command keeps the pane alive for cwd assertions.
   await modal.getByRole('radio', { name: 'Custom' }).click()
   await modal.locator('input.font-mono').fill('tail -f /dev/null')

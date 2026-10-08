@@ -40,7 +40,105 @@ function setupDom() {
   return { keyHandlers }
 }
 
+/**
+ * Claude chat is the dialog's default kind; tests that exercise the terminal
+ * form (command presets, hosts, first-prompt) select Terminal first. A
+ * change-section launch is the one context that opens on Terminal by itself.
+ */
+function selectKind(renderer: TestRenderer.ReactTestRenderer, value: 'terminal' | 'chat') {
+  act(() => {
+    renderer.root.findByProps({ 'aria-label': 'Session kind' }).props.onChange({ target: { value } })
+  })
+}
+
 describe('NewSessionModal component', () => {
+  test('defaults to Claude chat, except a change-section launch which needs Terminal', () => {
+    setupDom()
+
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => {
+      renderer = TestRenderer.create(
+        <NewSessionModal
+          isOpen
+          onClose={() => {}}
+          onCreate={() => {}}
+          defaultProjectDir="/base"
+          commandPresets={DEFAULT_PRESETS}
+          defaultPresetId="claude"
+        />
+      )
+    })
+
+    const kindValue = () =>
+      renderer.root.findByProps({ 'aria-label': 'Session kind' }).props.value as string
+    expect(kindValue()).toBe('chat')
+    // Chat form: profile picker instead of command presets.
+    expect(renderer.root.findAllByProps({ 'data-testid': 'command-select' })).toHaveLength(0)
+    expect(renderer.root.findAllByProps({ 'aria-label': 'Profile' })).toHaveLength(1)
+
+    // A change-section launch offers the first-prompt selector, a terminal-only
+    // affordance, so that context opens on Terminal.
+    act(() => {
+      renderer.update(
+        <NewSessionModal
+          isOpen={false}
+          onClose={() => {}}
+          onCreate={() => {}}
+          defaultProjectDir="/base"
+          commandPresets={DEFAULT_PRESETS}
+          defaultPresetId="claude"
+        />
+      )
+    })
+    act(() => {
+      renderer.update(
+        <NewSessionModal
+          isOpen
+          onClose={() => {}}
+          onCreate={() => {}}
+          defaultProjectDir="/base"
+          commandPresets={DEFAULT_PRESETS}
+          defaultPresetId="claude"
+          initialPath="/repo/.worktrees/add-auth"
+          initialAutoStartChange="add-auth"
+        />
+      )
+    })
+    expect(kindValue()).toBe('terminal')
+    expect(renderer.root.findAllByProps({ 'data-testid': 'start-with-select' })).toHaveLength(1)
+
+    // Reopening without a change context falls back to the chat default.
+    act(() => {
+      renderer.update(
+        <NewSessionModal
+          isOpen={false}
+          onClose={() => {}}
+          onCreate={() => {}}
+          defaultProjectDir="/base"
+          commandPresets={DEFAULT_PRESETS}
+          defaultPresetId="claude"
+        />
+      )
+    })
+    act(() => {
+      renderer.update(
+        <NewSessionModal
+          isOpen
+          onClose={() => {}}
+          onCreate={() => {}}
+          defaultProjectDir="/base"
+          commandPresets={DEFAULT_PRESETS}
+          defaultPresetId="claude"
+        />
+      )
+    })
+    expect(kindValue()).toBe('chat')
+
+    act(() => {
+      renderer.unmount()
+    })
+  })
+
   test('delayed autofocus preserves a field the user already focused', () => {
     setupDom()
     const callbacks: Array<() => void> = []
@@ -56,7 +154,8 @@ describe('NewSessionModal component', () => {
       }) as unknown as typeof setTimeout
       act(() => {
         renderer = TestRenderer.create(<NewSessionModal isOpen onClose={() => {}} onCreate={() => {}}
-          defaultProjectDir="/base" commandPresets={DEFAULT_PRESETS} defaultPresetId="claude" />, {
+          defaultProjectDir="/base" commandPresets={DEFAULT_PRESETS} defaultPresetId="claude"
+          initialAutoStartChange="focus-test" />, {
           createNodeMock: element => element.type === 'form'
             ? { contains: (node: Element) => node === field }
             : { focus: () => { focused += 1 } },
@@ -100,6 +199,8 @@ describe('NewSessionModal component', () => {
         />
       )
     })
+
+    selectKind(renderer, 'terminal')
 
     // With new field order: modifiers/command (index 0), project path (index 1), name (index 2)
     const inputs = renderer.root.findAllByType('input')
@@ -212,6 +313,8 @@ describe('NewSessionModal component', () => {
       )
     })
 
+    selectKind(renderer, 'terminal')
+
     // Command input is the first input field
     const inputs = renderer.root.findAllByType('input')
     const commandInput = inputs[0]
@@ -272,6 +375,8 @@ describe('NewSessionModal component', () => {
         />
       )
     })
+
+    selectKind(renderer, 'terminal')
 
     const picker = renderer.root.findByProps({ 'data-testid': 'worktree-picker' })
     const options = picker.findAllByType('option')
@@ -334,6 +439,8 @@ describe('NewSessionModal component', () => {
       )
     })
 
+    selectKind(renderer, 'terminal')
+
     // lastProjectPath matches a discovered worktree: the picker shows it.
     const picker = renderer.root.findByProps({ 'data-testid': 'worktree-picker' })
     expect(picker.props.value).toBe('/repo/.git::/repo')
@@ -362,6 +469,7 @@ describe('NewSessionModal component', () => {
         />
       )
     })
+    selectKind(renderer, 'terminal')
     expect(
       renderer.root.findAllByProps({ 'data-testid': 'worktree-picker' })
     ).toHaveLength(0)
@@ -632,6 +740,8 @@ describe('NewSessionModal first-prompt selector', () => {
       )
     })
 
+    selectKind(renderer, 'terminal')
+
     expect(renderer.root.findAllByProps({ 'data-testid': 'start-with-select' })).toHaveLength(0)
     // The form keeps exactly its three inputs (command, path, name).
     expect(renderer.root.findAllByType('input')).toHaveLength(3)
@@ -687,6 +797,7 @@ describe('NewSessionModal project path validation', () => {
 
   test('empty project path refuses create and shows an inline error', () => {
     const modal = renderModal()
+    selectKind(modal.renderer, 'terminal')
     const projectInput = modal.renderer.root.findAllByType('input')[1]
 
     act(() => {
@@ -731,6 +842,7 @@ describe('NewSessionModal project path validation', () => {
 
   test('typing a path clears the error and allows create', () => {
     const modal = renderModal()
+    selectKind(modal.renderer, 'terminal')
     const projectInput = modal.renderer.root.findAllByType('input')[1]
 
     // Clear the prefilled default so submit is refused and raises the error.
@@ -801,6 +913,7 @@ describe('NewSessionModal project path validation', () => {
       renderer = TestRenderer.create(form({ defaultProjectDir: '' }))
     })
 
+    selectKind(renderer, 'terminal')
     const [projectInput, nameInput] = renderer.root.findAllByType('input').slice(1)
     act(() => {
       projectInput.props.onChange({ target: { value: '/typed/by/user' } })
