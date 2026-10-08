@@ -272,6 +272,11 @@ export class ChatSessionManager {
     return this.records.has(sessionId)
   }
 
+  /** Archived chats attach for history without starting an agent. */
+  isArchived(sessionId: string): boolean {
+    return this.records.get(sessionId)?.archivedAt != null
+  }
+
   /**
    * Read-only history for a chat session: the stored SDK transcript replayed
    * into ChatEvents (with dead requests marked cancelled), or a

@@ -6,7 +6,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { CHAT_DEBUG_PAGE_SIZE, ChatConnections } from '../chat/ChatConnections'
 import { ChatWireLogs } from '../chat/ChatWireLogs'
-import type { ChatSessionManager } from '../chat/ChatSessionManager'
+import type { ChatActionResult, ChatSessionManager } from '../chat/ChatSessionManager'
 
 function harness(wireLogs?: ChatWireLogs) {
   const calls: unknown[] = []
@@ -18,10 +18,11 @@ function harness(wireLogs?: ChatWireLogs) {
   }
   let pending = true
   const manager = {
+    isArchived: (_id: string) => false,
     has: (id: string) => id === 'chat-1' || id === 'chat-2',
     getSnapshot: (id: string) => (id === 'chat-1' ? snapshot : null),
     send: async (...args: unknown[]) => { calls.push(['send', ...args]); return { ok: true } },
-    start: (...args: unknown[]) => { calls.push(['start', ...args]); return Promise.resolve({ ok: true }) },
+    start: (...args: unknown[]) => { calls.push(['start', ...args]); return Promise.resolve<ChatActionResult>({ ok: true }) },
     interrupt: (...args: unknown[]) => { calls.push(['interrupt', ...args]); return { ok: true } },
     archive: (...args: unknown[]) => { calls.push(['archive', ...args]); return { ok: true } },
     restore: (...args: unknown[]) => { calls.push(['restore', ...args]); return { ok: true } },
@@ -45,7 +46,7 @@ function harness(wireLogs?: ChatWireLogs) {
   const connections = new ChatConnections(manager, wireLogs)
   const messages: ServerMessage[] = []
   const connection = { send: (message: ServerMessage) => messages.push(message) }
-  return { connections, connection, messages, calls, snapshot }
+  return { connections, connection, messages, calls, snapshot, manager }
 }
 
 const delta = (sequence: number, turnId = 'turn-1'): ChatEvent => ({
@@ -143,6 +144,21 @@ describe('chat WebSocket subscriptions', () => {
     expect(h.messages.some(message => message.type === 'chat-events')).toBe(true)
     expect(secondMessages.some(message => message.type === 'chat-events')).toBe(true)
     expect(secondMessages).toContainEqual({ type: 'error', message: 'Already resolved' })
+  })
+
+  test('attach reports startup refusals after the history snapshot', async () => {
+    const h = harness()
+    h.manager.start = async () => ({ ok: false, error: 'Cannot resume: transcript missing' })
+    await h.connections.handle(h.connection, { type: 'chat-attach', sessionId: 'chat-1' })
+    expect(h.messages).toEqual([h.snapshot, { type: 'error', message: 'Cannot resume: transcript missing' }])
+  })
+
+  test('archived attach restores history without starting or reporting an error', async () => {
+    const h = harness()
+    h.manager.isArchived = () => true
+    await h.connections.handle(h.connection, { type: 'chat-attach', sessionId: 'chat-1' })
+    expect(h.messages).toEqual([h.snapshot])
+    expect(h.calls).toEqual([])
   })
 
   test('command-state pushes reach only subscribed connections, unbatched', async () => {

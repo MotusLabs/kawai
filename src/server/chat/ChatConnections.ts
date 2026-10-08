@@ -184,10 +184,12 @@ export class ChatConnections {
         sessions.add(sessionId)
         this.subscriptions.set(connection, sessions)
         connection.send(snapshot)
-        // Start the agent (no prompt) after the snapshot so its command list
-        // is available before the first message; fire-and-forget, and
-        // refusals/failures surface through the session, not this reply.
-        void this.manager.start(sessionId)
+        // Archived chats attach only for history. Live chats start after the
+        // snapshot; report guard/import failures as well as driver errors.
+        if (!this.manager.isArchived(sessionId)) {
+          const result = await this.manager.start(sessionId)
+          if (!result.ok) connection.send({ type: 'error', message: result.error })
+        }
         return
       }
       case 'chat-detach':
