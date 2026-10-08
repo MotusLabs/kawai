@@ -11,6 +11,7 @@ import { extractRecentUserMessagesFromTmux } from './logMatcher'
 import {
   BOOTSTRAP_WINDOW_NAME,
   buildTmuxFormat,
+  isBootstrapPlaceholderCommand,
   splitTmuxFields,
   splitTmuxLines,
   withTmuxUtf8Flag,
@@ -322,10 +323,13 @@ function listAllWindows(
       continue
     }
 
-    // Skip the bootstrap placeholder window in the managed base session.
+    // Skip the bootstrap placeholder: reserved in the managed base session,
+    // and (name + placeholder command) anywhere so leftover base-style
+    // sessions do not surface as phantom terminal rows.
     if (
-      sessionName === managedSession &&
-      window.windowName === BOOTSTRAP_WINDOW_NAME
+      window.windowName === BOOTSTRAP_WINDOW_NAME &&
+      (sessionName === managedSession ||
+        isBootstrapPlaceholderCommand(window.command))
     ) {
       continue
     }

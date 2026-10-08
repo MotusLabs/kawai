@@ -45,11 +45,80 @@ describe('chat components', () => {
   test('assistant markdown and tool activity render without executing raw HTML', () => {
     const renderer = TestRenderer.create(<ChatMessages events={[
       { type: 'assistant_text', id: 'a', sequence: 0, at: 'now', turnId: 't', messageId: 'm', text: '**Hello** <script>bad()</script>' },
-      { type: 'tool_call', id: 'b', sequence: 0, at: 'now', turnId: 't', toolCallId: 'tool-1', tool: 'Read', input: { path: 'file.ts' } },
+      { type: 'tool_call', id: 'b', sequence: 0, at: 'now', turnId: 't', toolCallId: 'tool-1', tool: 'Read', input: { file_path: 'file.ts' } },
     ]} />)
     expect(renderer.root.findByType('strong').children).toEqual(['Hello'])
     expect(renderer.root.findAllByType('script')).toHaveLength(0)
-    expect(renderer.root.findByType('summary').children).toEqual(['Tool: ', 'Read'])
+    expect(textOf(renderer.root.findByType('summary'))).toBe('Tool: Read (file.ts)')
+    renderer.unmount()
+  })
+
+  test('tool-call summaries show a project-relative detail that truncates with the full value on hover', () => {
+    const command = 'bun run lint && bun run typecheck && bun run test --coverage --reporter=junit'
+    const renderer = TestRenderer.create(<ChatMessages projectPath="/tmp/project" events={[
+      { type: 'tool_call', id: 'r', sequence: 0, at: 'now', turnId: 't', toolCallId: 't1', tool: 'Read',
+        input: { file_path: '/tmp/project/src/index.ts' } },
+      { type: 'tool_call', id: 'b', sequence: 1, at: 'now', turnId: 't', toolCallId: 't2', tool: 'Bash',
+        input: { command: 'bun run lint\nbun run test' } },
+      { type: 'tool_call', id: 'l', sequence: 2, at: 'now', turnId: 't', toolCallId: 't3', tool: 'Bash',
+        input: { command } },
+    ]} />)
+    const summaries = renderer.root.findAllByType('summary')
+    expect(textOf(summaries[0]!)).toBe('Tool: Read (src/index.ts)')
+    expect(textOf(summaries[1]!)).toBe('Tool: Bash (bun run lint bun run test)')
+    // The full detail rides along on the truncating span for the hover tooltip.
+    const detail = summaries[2]!.findByProps({ title: command })
+    expect(detail.children).toEqual([command])
+    expect(String(detail.props.className).split(' ')).toContain('truncate')
+    // The JSON body keeps the full input for expanding.
+    expect(renderer.root.findAllByType('pre')).toHaveLength(3)
+    expect(textOf(renderer.root.findAllByType('pre')[2]!)).toBe(JSON.stringify({ command }, null, 2))
+    renderer.unmount()
+  })
+
+  test('a tool with no usable detail field renders exactly the plain label', () => {
+    const renderer = TestRenderer.create(<ChatMessages projectPath="/tmp/project" events={[
+      { type: 'tool_call', id: 'm', sequence: 0, at: 'now', turnId: 't', toolCallId: 't1', tool: 'mcp__db__query',
+        input: { sql: 'select 1' } },
+    ]} />)
+    const summary = renderer.root.findByType('summary')
+    expect(textOf(summary)).toBe('Tool: mcp__db__query')
+    expect(summary.findAll(node => node.props.title != null)).toHaveLength(0)
+    renderer.unmount()
+  })
+
+  test('tool-call summaries show formatted details', () => {
+    const renderer = TestRenderer.create(<ChatMessages projectPath="/tmp/project" events={[
+      { type: 'tool_call', id: 'e', sequence: 0, at: 'now', turnId: 't', toolCallId: 't1', tool: 'Edit',
+        input: { file_path: '/tmp/project/src/a.ts', old_string: 'a\nb\nc', new_string: '1\n2\n3\n4\n5' } },
+      { type: 'tool_call', id: 'u', sequence: 1, at: 'now', turnId: 't', toolCallId: 't2', tool: 'TaskUpdate',
+        input: { taskId: '2', status: 'completed' } },
+    ]} />)
+    const summaries = renderer.root.findAllByType('summary')
+    expect(textOf(summaries[0]!)).toBe('Tool: Edit (src/a.ts +5 −3)')
+    expect(textOf(summaries[1]!)).toBe('Tool: TaskUpdate (Task 2 → completed)')
+    renderer.unmount()
+  })
+
+  test('tool-result summaries show the first output line as a hint', () => {
+    const renderer = TestRenderer.create(<ChatMessages events={[
+      { type: 'tool_result', id: 'r', sequence: 0, at: 'now', turnId: 't', toolCallId: 't1',
+        output: '\n  Task #1 created successfully: Run 6.3\nlater lines', isError: false },
+      { type: 'tool_result', id: 'f', sequence: 1, at: 'now', turnId: 't', toolCallId: 't2',
+        output: 'Command failed: bun test\n    at test.ts:1:1', isError: true },
+      { type: 'tool_result', id: 'e', sequence: 2, at: 'now', turnId: 't', toolCallId: 't3',
+        output: ' \n', isError: false },
+    ]} />)
+    const summaries = renderer.root.findAllByType('summary')
+    expect(textOf(summaries[0]!)).toBe('Tool result (Task #1 created successfully: Run 6.3)')
+    expect(textOf(summaries[1]!)).toBe('Tool failed (Command failed: bun test)')
+    // The full hint rides along on the truncating span for the hover tooltip.
+    const hint = summaries[0]!.findByProps({ title: 'Task #1 created successfully: Run 6.3' })
+    expect(String(hint.props.className).split(' ')).toContain('truncate')
+    // No non-blank line keeps the plain label, and the full output still expands.
+    expect(textOf(summaries[2]!)).toBe('Tool result')
+    expect(summaries[2]!.findAll(node => node.props.title != null)).toHaveLength(0)
+    expect(textOf(renderer.root.findAllByType('pre')[1]!)).toBe('Command failed: bun test\n    at test.ts:1:1')
     renderer.unmount()
   })
 

@@ -46,7 +46,7 @@ export const fixtureQueryFactory: ChatQueryFactory = ({ prompt, options, wire })
     assistant('**Fixture response** — chat streaming, tools, and permissions are ready.')
     if (/approval|question/i.test(text)) {
       const tool = /question/i.test(text) ? 'AskUserQuestion' : 'Bash'
-      const input = tool === 'Bash' ? { command: 'echo fixture' } : {
+      const input = tool === 'Bash' ? { description: 'Print the fixture greeting', command: 'echo fixture' } : {
         questions: [{ question: 'Which color?', header: 'Color', multiSelect: true,
           options: [{ label: 'Blue', description: 'Ocean' }, { label: 'Green', description: 'Forest' }] }],
       }
@@ -87,7 +87,7 @@ export const fixtureQueryFactory: ChatQueryFactory = ({ prompt, options, wire })
       push({ type: 'stream_event', event: { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: toolUseID, name: 'Bash', input: {} } }, parent_tool_use_id: null })
       await hold(600)
       if (closed || turn !== generation) return
-      push({ type: 'assistant', message: { id: crypto.randomUUID(), role: 'assistant', content: [{ type: 'tool_use', id: toolUseID, name: 'Bash', input: { command: 'echo fixture' } }] } })
+      push({ type: 'assistant', message: { id: crypto.randomUUID(), role: 'assistant', content: [{ type: 'tool_use', id: toolUseID, name: 'Bash', input: { description: 'Print the fixture greeting', command: 'echo fixture' } }] } })
       await hold(1600)
       if (closed || turn !== generation) return
       push({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: toolUseID, content: 'fixture output' }] } })
