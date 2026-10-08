@@ -36,5 +36,5 @@
 
 ## 8. Integration
 
-- [ ] 8.1 Run `bun run lint && bun run typecheck && bun run test` and verify all pass
+- [x] 8.1 Run `bun run lint && bun run typecheck && bun run test` and verify all pass
 - [ ] 8.2 With the `dev-browser` skill against `bun run dev`: send a message in a default-profile chat and see the usage bar appear under the header with 5-hour and 7-day meters and reset times; open a GLM-profile chat and see no usage bar; reload and see the default-profile bar restored; capture screenshots
