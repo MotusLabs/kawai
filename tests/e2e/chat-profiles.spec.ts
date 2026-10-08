@@ -28,7 +28,10 @@ test('select named profile, create, display, reconnect, and retain terminal form
   await expect(page.getByTestId('chat-profile')).toHaveText('Profile: GLM')
   await page.screenshot({ path: info.outputPath('profile-reconnect.png') })
   await page.getByRole('button', { name: 'New session', exact: true }).first().click()
-  await expect(dialog.getByLabel('Session kind')).toHaveValue('terminal')
+  // Reopening defaults to Claude chat; switching to Terminal still restores
+  // the terminal form untouched by the chat flow.
+  await expect(dialog.getByLabel('Session kind')).toHaveValue('chat')
+  await dialog.getByLabel('Session kind').selectOption('terminal')
   await expect(dialog.getByTestId('command-select')).toBeVisible()
   await expect(dialog.getByLabel('Profile')).toHaveCount(0)
   await page.screenshot({ path: info.outputPath('terminal-regression.png') })

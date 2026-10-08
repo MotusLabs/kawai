@@ -102,7 +102,12 @@ export default function NewSessionModal({
   const [projectPath, setProjectPath] = useState('')
   /** Inline refusal for an empty Project Path — Create must never no-op silently. */
   const [projectPathError, setProjectPathError] = useState<string | null>(null)
-  const [kind, setKind] = useState<'terminal' | 'chat'>('terminal')
+  /**
+   * Claude chat is the default kind. A change-section launch is the exception:
+   * its first-prompt ("Start with") selector is a terminal-only affordance, so
+   * that context still opens on Terminal.
+   */
+  const [kind, setKind] = useState<'terminal' | 'chat'>('chat')
   const [claudeProfileId, setClaudeProfileId] = useState('default')
   // The catalog is resolved for the entered project path: a `.kawai`
   // directory in the project (or above it) extends the picker live.
@@ -136,7 +141,7 @@ export default function NewSessionModal({
     wasOpenRef.current = isOpen
 
     if (!isOpen) {
-      setKind('terminal')
+      setKind('chat')
       setClaudeProfileId('default')
       setProjectPath('')
       setProjectPathError(null)
@@ -167,6 +172,9 @@ export default function NewSessionModal({
       }
     }
     // Initialize state when opening
+    // A change-section launch needs Terminal for its first-prompt selector;
+    // every other open defaults to Claude chat.
+    setKind(initialAutoStartChange ? 'terminal' : 'chat')
     const basePath =
       initialPath?.trim() ||
       activeProjectPath?.trim() ||
