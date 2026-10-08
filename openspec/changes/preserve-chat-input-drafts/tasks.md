@@ -11,7 +11,7 @@
 
 ## 3. Integration check
 
-- [ ] 3.1 Use the `dev-browser` skill against `bun run dev` with the development fixture: type an unsubmitted draft into one chat, switch to a second chat and type a different draft, switch back and confirm both composers kept their own text; submit in one and confirm only it cleared; archive a chat with a draft and confirm the draft returns after Restore; reload the page and confirm composers are empty. Save screenshots as evidence
+- [x] 3.1 Use the `dev-browser` skill against `bun run dev` with the development fixture: type an unsubmitted draft into one chat, switch to a second chat and type a different draft, switch back and confirm both composers kept their own text; submit in one and confirm only it cleared; archive a chat with a draft and confirm the draft returns after Restore; reload the page and confirm composers are empty. Save screenshots as evidence
 
 ## Workflow follow-up
 
