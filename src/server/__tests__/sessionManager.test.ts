@@ -756,9 +756,10 @@ describe('SessionManager', () => {
     }
   })
 
-  test('listWindows hides reserved bootstrap window only in the managed base session', () => {
+  test('listWindows hides the reserved bootstrap placeholder in every session', () => {
     const managedSession = 'agentboard-bootstrap-filter'
     const externalSession = 'work-bootstrap-filter'
+    const leftoverSession = 'agentboard-e2e-manual'
     const runner = createTmuxRunner(
       [
         {
@@ -795,6 +796,19 @@ describe('SessionManager', () => {
             },
           ],
         },
+        {
+          name: leftoverSession,
+          windows: [
+            {
+              id: '21',
+              index: 21,
+              name: BOOTSTRAP_WINDOW_NAME,
+              path: '/tmp/leftover',
+              activity: 0,
+              command: BOOTSTRAP_WINDOW_COMMAND,
+            },
+          ],
+        },
       ],
       1
     )
@@ -813,12 +827,22 @@ describe('SessionManager', () => {
       expect(
         sessions.find((session) => session.tmuxWindow === `${managedSession}:0`)
       ).toBeUndefined()
-      expect(
-        sessions.find((session) => session.tmuxWindow === `${externalSession}:1`)
-      ).toBeTruthy()
+      // Reserved name in the managed session is hidden even when relaunched.
       expect(
         sessions.find((session) => session.tmuxWindow === `${managedSession}:1`)
       ).toBeUndefined()
+      // A real window that merely shares the reserved name stays visible.
+      expect(
+        sessions.find((session) => session.tmuxWindow === `${externalSession}:1`)
+      ).toBeTruthy()
+      // Leftover base-style external sessions (placeholder recipe only) vanish
+      // instead of listing as phantom terminal rows.
+      expect(
+        sessions.find((session) => session.tmuxWindow === `${leftoverSession}:21`)
+      ).toBeUndefined()
+      expect(
+        sessions.some((session) => session.name === leftoverSession)
+      ).toBe(false)
     } finally {
       config.discoverPrefixes = originalPrefixes
     }
