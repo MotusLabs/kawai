@@ -169,11 +169,13 @@ export class ChatSessionManager {
     const activity = this.getActivity(sessionId)
     return {
       type: 'chat-snapshot', sessionId,
+      profileId: this.records.get(sessionId)?.claudeProfileId ?? 'default',
       events: [...(this.snapshotHistory.get(sessionId) ?? []), ...live],
       pendingRequests: this.getPendingRequests(sessionId),
       status: this.options.registry.get(sessionId)?.status ?? 'waiting',
       throughSequence: live.at(-1)?.sequence ?? 0,
       activity,
+      usage: null,
     }
   }
 

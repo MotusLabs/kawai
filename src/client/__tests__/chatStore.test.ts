@@ -62,7 +62,7 @@ describe('chat store', () => {
   test('a snapshot replaces stale state and its pending requests are authoritative', () => {
     const store = useChatStore.getState()
     store.apply('chat-1', [delta(1, 'old')])
-    store.snapshot({ type: 'chat-snapshot', sessionId: 'chat-1', events: [delta(2, 'restored')], pendingRequests: [], status: 'working', throughSequence: 2, activity: null })
+    store.snapshot({ type: 'chat-snapshot', sessionId: 'chat-1', profileId: 'default', events: [delta(2, 'restored')], pendingRequests: [], status: 'working', throughSequence: 2, activity: null, usage: null })
     const state = useChatStore.getState().sessions['chat-1']
     expect(state.events).toHaveLength(1)
     expect(state.events[0]).toMatchObject({ text: 'restored' })
@@ -107,17 +107,18 @@ describe('chat store activity', () => {
     const store = useChatStore.getState()
     const before = Date.now()
     store.snapshot({
-      type: 'chat-snapshot', sessionId: 'chat-1', events: [delta(1, 'streamed')],
+      type: 'chat-snapshot', sessionId: 'chat-1', profileId: 'default', events: [delta(1, 'streamed')],
       pendingRequests: [], status: 'working', throughSequence: 1,
       activity: { phase: 'running_tools', elapsedMs: 10_000, tool: 'Bash', count: 1 },
+      usage: null,
     })
     const activity = useChatStore.getState().sessions['chat-1'].activity!
     expect(activity.value.phase).toBe('running_tools')
     expect(activity.phaseStartedAt).toBeGreaterThanOrEqual(before - 10_000)
     // An idle snapshot carries no row.
     store.snapshot({
-      type: 'chat-snapshot', sessionId: 'chat-2', events: [], pendingRequests: [],
-      status: 'waiting', throughSequence: 0, activity: null,
+      type: 'chat-snapshot', sessionId: 'chat-2', profileId: 'default', events: [], pendingRequests: [],
+      status: 'waiting', throughSequence: 0, activity: null, usage: null,
     })
     expect(useChatStore.getState().sessions['chat-2'].activity).toBeNull()
   })

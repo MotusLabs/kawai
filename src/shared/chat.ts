@@ -146,6 +146,41 @@ export interface ChatActivity {
   errorStatus?: number
 }
 
+/** Overall plan-limit status of a usage report. */
+export type ChatUsageStatus = 'allowed' | 'warning' | 'limited'
+
+/** One plan-usage window, rendered as a single meter in the chat usage bar. */
+export interface ChatUsageWindow {
+  /**
+   * Meter kind the window is keyed by (e.g. 'five_hour',
+   * 'seven_day_opus'); a model-scoped window appends its scope label, so
+   * distinct scoped windows never collide. Never the display label — a new
+   * server meter needs no client release to render.
+   */
+  key: string
+  /** Display text for the meter. */
+  label: string
+  /** Share of the window used, 0-100. */
+  percentUsed: number
+  /** ISO timestamp when the window resets, when known. */
+  resetsAt: string | null
+}
+
+/**
+ * The latest plan-usage report for a Claude profile, normalized from the
+ * three shapes Claude Code emits (pushed rate_limit_event frames, /usage
+ * reports on assistant messages, and the SDK usage control reply). Per
+ * profile because the underlying allowance is per account and provider;
+ * server memory only — a restart begins with none until the next update. A
+ * report without windows carries just the status and receipt time.
+ */
+export interface ChatUsageReport {
+  status: ChatUsageStatus
+  windows: ChatUsageWindow[]
+  /** ISO timestamp of when the report was received. */
+  receivedAt: string
+}
+
 /** Self-contained snapshot of a still-pending approval or question. */
 export type ChatPendingRequest =
   | {

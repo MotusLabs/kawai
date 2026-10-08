@@ -2,7 +2,7 @@
 
 ## 1. Shared report shape
 
-- [ ] 1.1 Add `ChatUsageWindow` (`key`, `label`, `percentUsed`, `resetsAt`) and `ChatUsageReport` (`status`, `windows`, `receivedAt`) to `src/shared/chat.ts`, and add `usage: ChatUsageReport | null` to `chat-snapshot` plus a `chat-usage` server message in `src/shared/types.ts`; verify with `bun run typecheck` and the existing shared-type tests still passing
+- [x] 1.1 Add `ChatUsageWindow` (`key`, `label`, `percentUsed`, `resetsAt`) and `ChatUsageReport` (`status`, `windows`, `receivedAt`) to `src/shared/chat.ts`, and add `usage: ChatUsageReport | null` to `chat-snapshot` plus a `chat-usage` server message in `src/shared/types.ts`; verify with `bun run typecheck` and the existing shared-type tests still passing
 
 ## 2. Normalize pushed reports
 

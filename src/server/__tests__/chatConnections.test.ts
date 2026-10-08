@@ -11,9 +11,9 @@ import type { ChatSessionManager } from '../chat/ChatSessionManager'
 function harness(wireLogs?: ChatWireLogs) {
   const calls: unknown[] = []
   const snapshot: Extract<ServerMessage, { type: 'chat-snapshot' }> = {
-    type: 'chat-snapshot', sessionId: 'chat-1', events: [],
+    type: 'chat-snapshot', sessionId: 'chat-1', profileId: 'default', events: [],
     pendingRequests: [{ kind: 'approval', requestId: 'approval-1', tool: 'Bash', input: {}, at: 'now' }],
-    status: 'permission', throughSequence: 0, activity: null,
+    status: 'permission', throughSequence: 0, activity: null, usage: null,
   }
   let pending = true
   const manager = {
