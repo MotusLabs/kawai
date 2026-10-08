@@ -27,12 +27,12 @@
 ## 6. Usage bar
 
 - [x] 6.1 Store reports per profile in `chatStore` from `chat-snapshot` and `chat-usage`, following the existing activity handling; verify with store tests
-- [ ] 6.2 Implement `UsageBar.tsx` (one thin meter per window with label, fill from percent, rounded percent, locale reset time with weekday past a day, warning and limited styles, nothing rendered without window data) and render it under the `ChatView` header; verify with component tests for two windows, a scoped weekly window, one window, none, warning, limited, and reset-time formatting using fake timers
+- [x] 6.2 Implement `UsageBar.tsx` (one thin meter per window with label, fill from percent, rounded percent, locale reset time with weekday past a day, warning and limited styles, nothing rendered without window data) and render it under the `ChatView` header; verify with component tests for two windows, a scoped weekly window, one window, none, warning, limited, and reset-time formatting using fake timers
 
 ## 7. Planning and docs
 
-- [ ] 7.1 Add `rate_limit_event`, `usage_report`, and the usage control request to the messages `replace-claude-sdk-with-cli` design Decision 4 must surface to the driver; verify with `openspec validate replace-claude-sdk-with-cli`
-- [ ] 7.2 Update `CLAUDE.md` "How It Works" to describe per-profile plan usage from pushed reports with the SDK pull as fallback; verify the text matches the implemented behavior
+- [x] 7.1 Add `rate_limit_event`, `usage_report`, and the usage control request to the messages `replace-claude-sdk-with-cli` design Decision 4 must surface to the driver; verify with `openspec validate replace-claude-sdk-with-cli`
+- [x] 7.2 Update `CLAUDE.md` "How It Works" to describe per-profile plan usage from pushed reports with the SDK pull as fallback; verify the text matches the implemented behavior
 
 ## 8. Integration
 
