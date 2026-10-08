@@ -10,6 +10,7 @@ import type {
   ChatActivity,
   ChatApprovalDecision,
   ChatApprovalPolicy,
+  ChatCommandState,
   ChatEvent,
   ChatPendingRequest,
   ChatQuestionAnswer,
@@ -28,6 +29,9 @@ export type {
   ChatApprovalPolicy,
   ChatApprovalDecision,
   ChatTurnResultSubtype,
+  ChatCommand,
+  ChatCommandSource,
+  ChatCommandState,
   ChatWireDirection,
   ChatWireFrame,
 } from './chat'
@@ -210,9 +214,15 @@ export type ServerMessage =
       status: SessionStatus
       /** Highest sequence included in this snapshot. */
       throughSequence: number
+      /** The session's slash-command list (replaceable state, not history). */
+      commands: ChatCommandState
       /** Current in-flight turn activity, or null when the turn is idle. */
       activity: ChatActivity | null
     }
+  // Replaced command list pushed to subscribed connections whenever the
+  // agent reports a changed list (or the state changes). Additive: older
+  // clients ignore the unknown message.
+  | { type: 'chat-commands'; sessionId: string; state: ChatCommandState }
   // Ephemeral live activity for an in-flight chat turn (design D1): sent only
   // on phase changes, unordered with events, never persisted or replayed.
   | { type: 'chat-activity'; sessionId: string; activity: ChatActivity | null }
