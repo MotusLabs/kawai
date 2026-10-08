@@ -4,10 +4,12 @@ import os from 'node:os'
 import path from 'node:path'
 import type { Options, Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk'
 import type { Session } from '../../shared/types'
-import type { ChatEvent } from '../../shared/chat'
+import type { ChatActivity, ChatEvent } from '../../shared/chat'
+import type { ClaudeLaunchConfiguration } from '../chat/ClaudeProfiles'
 import { initDatabase, type SessionDatabase } from '../db'
 import { SessionRegistry } from '../SessionRegistry'
 import { ChatWireLogs } from '../chat/ChatWireLogs'
+import { ClaudeExecutableError } from '../chat/claudeExecutable'
 import type { ChatWireRecorder } from '../chat/wireTap'
 import {
   ChatSessionManager,
@@ -85,6 +87,7 @@ interface ManagerHarness {
   registry: SessionRegistry
   handles: FakeHandle[]
   events: Array<{ sessionId: string; event: ChatEvent }>
+  activities: Array<{ sessionId: string; activity: ChatActivity | null }>
 }
 
 function createHarness(
@@ -94,14 +97,16 @@ function createHarness(
   const registry = new SessionRegistry()
   const handles: FakeHandle[] = []
   const events: Array<{ sessionId: string; event: ChatEvent }> = []
+  const activities: Array<{ sessionId: string; activity: ChatActivity | null }> = []
   const manager = new ChatSessionManager({
     isDirectory,
     registry,
     db,
     onEvent: (sessionId, event) => events.push({ sessionId, event }),
+    onActivity: (sessionId, activity) => activities.push({ sessionId, activity }),
     queryFactory: fakeQueryFactory(handles),
   })
-  return { manager, registry, handles, events }
+  return { manager, registry, handles, events, activities }
 }
 
 /** Let the driver's stream loop drain pushed messages. */
@@ -135,15 +140,19 @@ describe('ChatSessionManager', () => {
   const originalOAuthToken = process.env.CLAUDE_CODE_OAUTH_TOKEN
   const originalAuthToken = process.env.ANTHROPIC_AUTH_TOKEN
   const originalConfigDir = process.env.CLAUDE_CONFIG_DIR
+  const originalHome = process.env.HOME
 
   beforeEach(() => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentboard-chatmgr-'))
     db = initDatabase({ path: path.join(tempDir, 'test.db') })
-    // Isolate auth from the host: no API key, empty CLI config dir.
+    // Isolate auth from the host: no API key, empty CLI config dir. HOME is
+    // pinned so the profile catalog resolves against an empty home — a real
+    // ~/.kawai must not leak into these tests.
     delete process.env.ANTHROPIC_API_KEY
     delete process.env.CLAUDE_CODE_OAUTH_TOKEN
     delete process.env.ANTHROPIC_AUTH_TOKEN
     process.env.CLAUDE_CONFIG_DIR = path.join(tempDir, 'claude-config')
+    process.env.HOME = tempDir
   })
 
   afterEach(() => {
@@ -166,6 +175,11 @@ describe('ChatSessionManager', () => {
       process.env.CLAUDE_CONFIG_DIR = originalConfigDir
     } else {
       delete process.env.CLAUDE_CONFIG_DIR
+    }
+    if (originalHome !== undefined) {
+      process.env.HOME = originalHome
+    } else {
+      delete process.env.HOME
     }
     db.close()
     fs.rmSync(tempDir, { recursive: true, force: true })
@@ -205,6 +219,55 @@ describe('ChatSessionManager', () => {
     unknown.manager.shutdown()
   })
 
+  test('resume re-resolves the stored profile against the current filesystem', async () => {
+    process.env.ANTHROPIC_AUTH_TOKEN = 'test-token'
+    const project = path.join(tempDir, 'proj')
+    fs.mkdirSync(path.join(project, '.kawai'), { recursive: true })
+    const catalogFile = path.join(project, '.kawai', 'profiles.json')
+    fs.writeFileSync(catalogFile, JSON.stringify({
+      'glm-flash': { label: 'GLM Flash', model: 'glm-5.3-flash[1m]' },
+    }))
+    const first = createHarness(db)
+    const created = first.manager.createSession({ projectPath: project, claudeProfileId: 'glm-flash' })
+    expect(created.ok).toBe(true)
+    await first.manager.send(created.ok ? created.session.id : '', 'first turn')
+    expect(first.handles[0]!.options.model).toBe('glm-5.3-flash[1m]')
+    first.manager.shutdown()
+
+    // The defining file is gone after a restart: the session survives with
+    // its stored identity, and sending reports the missing profile.
+    fs.rmSync(catalogFile)
+    const restored = createHarness(db)
+    const result = await restored.manager.send(created.ok ? created.session.id : '', 'resume')
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.error).toContain('glm-flash')
+    expect(restored.registry.get(created.ok ? created.session.id : '')?.claudeProfileId).toBe('glm-flash')
+    expect(restored.handles).toHaveLength(0)
+  })
+
+  test('catalog file failures are reported and the rest of the catalog still launches', async () => {
+    process.env.ANTHROPIC_AUTH_TOKEN = 'test-token'
+    const project = path.join(tempDir, 'proj')
+    fs.mkdirSync(path.join(project, '.kawai'), { recursive: true })
+    const badFile = path.join(project, '.kawai', 'profiles.json')
+    fs.writeFileSync(badFile, '{ not json')
+    const reported: string[][] = []
+    const manager = new ChatSessionManager({
+      isDirectory: anyDirectory,
+      db, registry: new SessionRegistry(), onEvent: () => {},
+      queryFactory: fakeQueryFactory([]),
+      catalogErrorLog: errors => reported.push(errors),
+    })
+    // The invalid file is skipped: Default (shipped catalog) still creates
+    // and spawns — but the failure is reported instead of vanishing.
+    const created = manager.createSession({ projectPath: project })
+    expect(created.ok).toBe(true)
+    expect((await manager.send(created.ok ? created.session.id : '', 'hi')).ok).toBe(true)
+    expect(reported.length).toBeGreaterThan(0)
+    expect(reported[0]![0]).toContain(badFile)
+    manager.shutdown()
+  })
+
   test('profile auth uses global credentials and refuses unauthenticated launch without side effects', async () => {
     let globalEnv = { ANTHROPIC_AUTH_TOKEN: 'global-token' }
     const registry = new SessionRegistry()
@@ -230,7 +293,7 @@ describe('ChatSessionManager', () => {
 
   test('availability caches complete profile configuration and retries failures', async () => {
     let globalEnv = { ANTHROPIC_AUTH_TOKEN: 'global-token' }
-    const launches: Options[] = []
+    const launches: ClaudeLaunchConfiguration[] = []
     let fail = false
     const manager = new ChatSessionManager({ isDirectory: anyDirectory, db, registry: new SessionRegistry(), onEvent: () => {}, getProviderEnv: () => globalEnv,
       availabilityProbe: async (_env, launch) => { launches.push(launch!); if (fail) throw new Error('failed') },
@@ -327,6 +390,8 @@ describe('ChatSessionManager', () => {
       })
       const first = manager.createAvailableSession({ projectPath: '/tmp/proj' })
       const second = manager.createAvailableSession({ projectPath: '/tmp/proj' })
+      // The executable check precedes the probe, so let it start first.
+      await flush()
       release()
       expect((await first).ok).toBe(true)
       expect((await second).ok).toBe(true)
@@ -432,6 +497,148 @@ describe('ChatSessionManager', () => {
       expect(hasClaudeAuth()).toBe(true)
       const { manager } = createHarness(db)
       expect(manager.createSession({ projectPath: '/tmp/proj' }).ok).toBe(true)
+    })
+  })
+
+  describe('executable gate', () => {
+    test('refuses creation with the executable error verbatim and persists nothing', async () => {
+      process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'
+      const registry = new SessionRegistry()
+      const manager = new ChatSessionManager({
+        isDirectory: anyDirectory,
+        db, registry, onEvent: () => {},
+        executableCheck: () => Promise.reject(
+          new ClaudeExecutableError('missing', 'No Claude Code executable found. Install Claude Code.')
+        ),
+      })
+      const result = await manager.createAvailableSession({ projectPath: '/tmp/proj' })
+      expect(result).toEqual({ ok: false, error: 'No Claude Code executable found. Install Claude Code.' })
+      expect(db.getChatSessions()).toEqual([])
+      expect(registry.getAll().filter((session) => session.kind === 'chat')).toEqual([])
+    })
+
+    test('creation re-checks after an executable failure and recovers', async () => {
+      process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'
+      let checks = 0
+      const manager = new ChatSessionManager({
+        isDirectory: anyDirectory,
+        db, registry: new SessionRegistry(), onEvent: () => {},
+        availabilityProbe: async () => {},
+        executableCheck: async () => {
+          checks += 1
+          if (checks === 1) throw new ClaudeExecutableError('missing', 'No Claude Code executable found.')
+          return { path: '/opt/claude', identity: 'id-1' }
+        },
+      })
+      expect((await manager.createAvailableSession({ projectPath: '/tmp/proj' })).ok).toBe(false)
+      expect((await manager.createAvailableSession({ projectPath: '/tmp/proj' })).ok).toBe(true)
+      expect(checks).toBe(2)
+    })
+
+    test('an upgraded executable re-runs the handshake; an unchanged one reuses it', async () => {
+      process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'
+      let checks = 0
+      let probes = 0
+      const probedPaths: Array<string | undefined> = []
+      let identity = 'id-1'
+      const manager = new ChatSessionManager({
+        isDirectory: anyDirectory,
+        db, registry: new SessionRegistry(), onEvent: () => {},
+        executableCheck: async () => {
+          checks += 1
+          return { path: '/opt/claude', identity }
+        },
+        availabilityProbe: async (_env, _launch, executablePath) => {
+          probes += 1
+          probedPaths.push(executablePath)
+        },
+      })
+      await manager.createAvailableSession({ projectPath: '/tmp/proj' })
+      expect(probes).toBe(1)
+      expect(probedPaths[0]).toBe('/opt/claude')
+
+      // Same executable identity: the version check runs again, the cached
+      // handshake is reused.
+      await manager.createAvailableSession({ projectPath: '/tmp/proj' })
+      expect(checks).toBe(2)
+      expect(probes).toBe(1)
+
+      // An upgrade at the same path (new identity) re-runs the handshake too.
+      identity = 'id-2'
+      await manager.createAvailableSession({ projectPath: '/tmp/proj' })
+      expect(checks).toBe(3)
+      expect(probes).toBe(2)
+      expect(probedPaths[1]).toBe('/opt/claude')
+    })
+
+    test('a send after the executable disappears is refused with the record intact', async () => {
+      process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'
+      const { manager, handles } = createHarness(db)
+      let available = true
+      const gated = new ChatSessionManager({
+        isDirectory: anyDirectory,
+        db, registry: new SessionRegistry(), onEvent: () => {},
+        queryFactory: fakeQueryFactory(handles),
+        executableCheck: async () => {
+          if (!available) throw new ClaudeExecutableError('missing', `Claude Code executable not found at /opt/claude.`)
+          return { path: '/opt/claude', identity: 'id-1' }
+        },
+      })
+      const created = await gated.createAvailableSession({ projectPath: '/tmp/proj' })
+      if (!created.ok) throw new Error('creation should succeed')
+      expect((await gated.send(created.session.id, 'first turn')).ok).toBe(true)
+      handles[0]!.push(initMessage('sdk-session-9'))
+      await flush()
+      // The agent dies (process exit); the executable then disappears.
+      handles[0]!.query.close()
+      await flush()
+      available = false
+      const refused = await gated.send(created.session.id, 'second turn')
+      expect(refused).toEqual({ ok: false, error: 'Claude Code executable not found at /opt/claude.' })
+      expect(gated.has(created.session.id)).toBe(true)
+      expect(manager.has(created.session.id)).toBe(false)
+      expect(db.getChatSessions().map((row) => row.sdkSessionId)).toEqual(['sdk-session-9'])
+      // History reading still answers (the transcript file never existed in
+      // this fixture; the stored identity that locates it is intact).
+      expect(gated.getHistory(created.session.id)).not.toBeNull()
+    })
+
+    test('a respawn uses the freshly verified path when the executable moved', async () => {
+      process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'
+      const handles: FakeHandle[] = []
+      let current = '/old/claude'
+      const manager = new ChatSessionManager({
+        isDirectory: anyDirectory,
+        db, registry: new SessionRegistry(), onEvent: () => {},
+        queryFactory: fakeQueryFactory(handles),
+        executableCheck: async () => ({ path: current, identity: current }),
+      })
+      const created = await manager.createAvailableSession({ projectPath: '/tmp/proj' })
+      if (!created.ok) throw new Error('creation should succeed')
+      expect((await manager.send(created.session.id, 'first')).ok).toBe(true)
+      expect(handles[0]!.options.pathToClaudeCodeExecutable).toBe('/old/claude')
+
+      // The agent dies; the CLI moves and PATH now resolves a replacement.
+      handles[0]!.query.close()
+      await flush()
+      current = '/new/claude'
+      expect((await manager.send(created.session.id, 'second')).ok).toBe(true)
+      expect(handles).toHaveLength(2)
+      expect(handles[1]!.options.pathToClaudeCodeExecutable).toBe('/new/claude')
+    })
+
+    test('an injected queryFactory skips the executable check entirely', async () => {
+      process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'
+      const original = process.env.KAWAI_CLAUDE_PATH
+      process.env.KAWAI_CLAUDE_PATH = '/nonexistent-claude'
+      try {
+        const { manager } = createHarness(db)
+        const result = await manager.createAvailableSession({ projectPath: '/tmp/proj' })
+        expect(result.ok).toBe(true)
+      } finally {
+        if (original === undefined) delete process.env.KAWAI_CLAUDE_PATH
+        else process.env.KAWAI_CLAUDE_PATH = original
+      }
     })
   })
 
@@ -1465,5 +1672,229 @@ describe('ChatSessionManager', () => {
       })
       expect(manager.getPendingRequests(sessionId)).toEqual([])
     })
+  })
+
+  test('approval policy: starts manual, switches live, refuses invalid changes', async () => {
+    process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'
+    const { manager, registry, events } = createHarness(db)
+    const created = manager.createSession({ projectPath: '/tmp/proj' })
+    if (!created.ok) throw new Error(created.error)
+    const id = created.session.id
+    expect(created.session.approvalPolicy).toBe('manual')
+
+    expect(manager.setApprovalPolicy(id, 'auto')).toEqual({ ok: true })
+    expect(registry.get(id)?.approvalPolicy).toBe('auto')
+    expect(db.getChatSession(id)?.approvalPolicy).toBe('auto')
+    // Repeat is a no-op success that emits no second notice.
+    expect(manager.setApprovalPolicy(id, 'auto')).toEqual({ ok: true })
+    const notices = events
+      .map((entry) => entry.event)
+      .filter((event) => event.type === 'notice')
+    expect(notices).toHaveLength(1)
+    expect((notices[0] as { text: string }).text).toBe('Auto-approve on')
+    // The notice is part of the snapshot a later attach receives.
+    expect(
+      manager.getSnapshot(id)?.events.some(
+        (event) =>
+          event.type === 'notice' &&
+          (event as { text: string }).text === 'Auto-approve on'
+      )
+    ).toBe(true)
+
+    // Unknown sessions and unsupported values refuse without side effects.
+    expect(manager.setApprovalPolicy('chat-missing', 'auto')).toMatchObject({ ok: false })
+    expect(
+      manager.setApprovalPolicy(id, 'yolo' as unknown as 'auto')
+    ).toMatchObject({ ok: false })
+    expect(db.getChatSession(id)?.approvalPolicy).toBe('auto')
+
+    // Archived sessions refuse; restoring keeps the stored policy.
+    manager.archive(id)
+    expect(manager.setApprovalPolicy(id, 'manual')).toMatchObject({ ok: false })
+    expect(db.getChatSession(id)?.approvalPolicy).toBe('auto')
+    manager.restore(id)
+    expect(registry.get(id)?.approvalPolicy).toBe('auto')
+    manager.kill(id)
+  })
+
+  test('approval policy survives a backend restart', async () => {
+    process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'
+    const dbPath = path.join(tempDir, 'policy-restart.db')
+    const dbA = initDatabase({ path: dbPath })
+    const harnessA = createHarness(dbA)
+    const created = harnessA.manager.createSession({ projectPath: '/tmp/proj' })
+    if (!created.ok) throw new Error(created.error)
+    harnessA.manager.setApprovalPolicy(created.session.id, 'auto')
+    harnessA.manager.shutdown()
+    dbA.close()
+
+    const dbB = initDatabase({ path: dbPath })
+    try {
+      const registryB = new SessionRegistry()
+      new ChatSessionManager({
+        isDirectory: anyDirectory,
+        db: dbB,
+        registry: registryB,
+        onEvent: () => {},
+      })
+      expect(registryB.get(created.session.id)?.approvalPolicy).toBe('auto')
+    } finally {
+      dbB.close()
+    }
+  })
+
+  test('switching to auto grants a pending approval and the next request', async () => {
+    process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'
+    const { manager, handles, events } = createHarness(db)
+    const created = manager.createSession({ projectPath: '/tmp/proj' })
+    if (!created.ok) throw new Error(created.error)
+    const id = created.session.id
+    await manager.send(id, 'go')
+    await flush()
+    const controller = new AbortController()
+    const approval = handles[0]!.options.canUseTool!(
+      'Bash',
+      { command: 'ls' },
+      { signal: controller.signal, toolUseID: 'toolu_1', requestId: 'sdk-req-1' }
+    )
+    await flush()
+    expect(
+      events.some(({ event }) => event.type === 'approval_request')
+    ).toBe(true)
+
+    expect(manager.setApprovalPolicy(id, 'auto')).toEqual({ ok: true })
+    await expect(approval).resolves.toEqual({ behavior: 'allow' })
+    // A second tool use arrives after the switch: granted without a card.
+    const next = handles[0]!.options.canUseTool!(
+      'Write',
+      { file_path: '/tmp/x', content: 'x' },
+      { signal: controller.signal, toolUseID: 'toolu_2', requestId: 'sdk-req-2' }
+    )
+    await expect(next).resolves.toEqual({ behavior: 'allow' })
+    const policyResolutions = events
+      .map((entry) => entry.event)
+      .filter(
+        (event): event is Extract<ChatEvent, { type: 'request_resolved' }> =>
+          event.type === 'request_resolved'
+      )
+      .filter((event) => event.decidedBy === 'policy')
+    expect(policyResolutions).toHaveLength(2)
+    expect(manager.getSnapshot(id)?.pendingRequests).toEqual([])
+    manager.kill(id)
+  })
+})
+
+describe('ChatSessionManager activity', () => {
+  let tempDir: string
+  let db: SessionDatabase
+  beforeEach(() => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentboard-chatmgr-activity-'))
+    db = initDatabase({ path: path.join(tempDir, 'test.db') })
+    process.env.ANTHROPIC_API_KEY = 'sk-test-key'
+    process.env.CLAUDE_CONFIG_DIR = path.join(tempDir, 'claude-config')
+  })
+  afterEach(() => {
+    fs.rmSync(tempDir, { recursive: true, force: true })
+  })
+
+  test('snapshot mid-phase reports the phase and a growing elapsed time', async () => {
+    const { manager, handles, activities } = createHarness(db)
+    const created = manager.createSession({ projectPath: '/tmp/proj' })
+    if (!created.ok) throw new Error('create failed')
+    const id = created.session.id
+    await manager.send(id, 'hello')
+    handles[0]!.push({
+      type: 'stream_event',
+      event: {
+        type: 'content_block_start',
+        index: 0,
+        content_block: { type: 'thinking', thinking: '', signature: '' },
+      },
+      parent_tool_use_id: null,
+      uuid: 'p-1',
+      session_id: 'sdk-1',
+    } as unknown as SDKMessage)
+    await flush()
+    expect(activities.map((entry) => entry.activity?.phase)).toEqual([
+      'requesting',
+      'thinking',
+    ])
+
+    await new Promise((resolve) => setTimeout(resolve, 25))
+    const snapshot = manager.getSnapshot(id)!
+    expect(snapshot.activity).toMatchObject({ phase: 'thinking' })
+    expect(snapshot.activity!.elapsedMs).toBeGreaterThanOrEqual(20)
+
+    // A later snapshot of the same phase keeps counting, not restarting.
+    await new Promise((resolve) => setTimeout(resolve, 25))
+    expect(manager.getSnapshot(id)!.activity!.elapsedMs).toBeGreaterThanOrEqual(40)
+
+    // Turn end clears it: the driver's null reaches the sink and the snapshot.
+    handles[0]!.push({
+      type: 'result',
+      subtype: 'success',
+      result: '',
+      num_turns: 1,
+      total_cost_usd: 0,
+    } as unknown as SDKMessage)
+    await flush()
+    expect(activities.at(-1)).toEqual({ sessionId: id, activity: null })
+    expect(manager.getSnapshot(id)!.activity).toBeNull()
+    manager.kill(id)
+  })
+
+  test('idle, archived, and dead sessions report no activity', async () => {
+    const { manager, handles } = createHarness(db)
+    const created = manager.createSession({ projectPath: '/tmp/proj' })
+    if (!created.ok) throw new Error('create failed')
+    const id = created.session.id
+
+    // Idle: never sent a turn.
+    expect(manager.getSnapshot(id)!.activity).toBeNull()
+
+    // Archived mid-phase: the row must not survive the archive.
+    await manager.send(id, 'hello')
+    handles[0]!.push({
+      type: 'stream_event',
+      event: {
+        type: 'content_block_start',
+        index: 0,
+        content_block: { type: 'tool_use', id: 'toolu_1', name: 'Task', input: {} },
+      },
+      parent_tool_use_id: null,
+      uuid: 'p-1',
+      session_id: 'sdk-1',
+    } as unknown as SDKMessage)
+    await flush()
+    expect(manager.getSnapshot(id)!.activity).toMatchObject({
+      phase: 'preparing_tool',
+    })
+    manager.archive(id)
+    expect(manager.getSnapshot(id)!.activity).toBeNull()
+
+    // Restored and restarted: the new turn reports until the driver dies.
+    manager.restore(id)
+    const resent = await manager.send(id, 'again')
+    expect(resent.ok).toBe(true)
+    expect(handles).toHaveLength(2)
+    handles[1]!.push({
+      type: 'stream_event',
+      event: {
+        type: 'content_block_start',
+        index: 0,
+        content_block: { type: 'thinking', thinking: '', signature: '' },
+      },
+      parent_tool_use_id: null,
+      uuid: 'p-2',
+      session_id: 'sdk-1',
+    } as unknown as SDKMessage)
+    await flush()
+    expect(manager.getSnapshot(id)!.activity).toMatchObject({ phase: 'thinking' })
+
+    // A crashed driver clears the activity with its turn.
+    handles[1]!.query.close()
+    await flush()
+    expect(manager.getSnapshot(id)!.activity).toBeNull()
+    manager.kill(id)
   })
 })

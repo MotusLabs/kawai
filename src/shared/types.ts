@@ -7,7 +7,9 @@ import type {
   WorkspaceSnapshot,
 } from './workspace'
 import type {
+  ChatActivity,
   ChatApprovalDecision,
+  ChatApprovalPolicy,
   ChatCommandState,
   ChatEvent,
   ChatPendingRequest,
@@ -16,11 +18,15 @@ import type {
 } from './chat'
 
 export type {
+  ChatActivity,
+  ChatActivityPhase,
   ChatEvent,
   ChatQuestion,
   ChatQuestionAnswer,
   ChatPendingRequest,
   ChatRequestOutcome,
+  ChatRequestDecidedBy,
+  ChatApprovalPolicy,
   ChatApprovalDecision,
   ChatTurnResultSubtype,
   ChatCommand,
@@ -89,6 +95,8 @@ export interface Session {
   // Absent = terminal (back-compat with clients predating chat sessions).
   kind?: SessionKind
   claudeProfileId?: string
+  /** Chat sessions only: approval policy; absent = manual (legacy sessions). */
+  approvalPolicy?: ChatApprovalPolicy
   agentType?: AgentType
   source: SessionSource
   host?: string
@@ -208,11 +216,16 @@ export type ServerMessage =
       throughSequence: number
       /** The session's slash-command list (replaceable state, not history). */
       commands: ChatCommandState
+      /** Current in-flight turn activity, or null when the turn is idle. */
+      activity: ChatActivity | null
     }
   // Replaced command list pushed to subscribed connections whenever the
   // agent reports a changed list (or the state changes). Additive: older
   // clients ignore the unknown message.
   | { type: 'chat-commands'; sessionId: string; state: ChatCommandState }
+  // Ephemeral live activity for an in-flight chat turn (design D1): sent only
+  // on phase changes, unordered with events, never persisted or replayed.
+  | { type: 'chat-activity'; sessionId: string; activity: ChatActivity | null }
   // Debug-view protocol frames, sent only to clients that opened the view.
   // `page: true` marks a reply to chat-debug-open/chat-debug-page (carrying
   // `hasOlder`); otherwise the message is a live batch.
@@ -293,6 +306,13 @@ export type ClientMessage =
       requestId: string
       /** Answers keyed by question text (matches the SDK's answer map). */
       answers: Record<string, ChatQuestionAnswer>
+    }
+  // Switches the session's approval policy live (chat-auto-approve-tools
+  // design D4): manual/auto only, no agent restart.
+  | {
+      type: 'chat-set-approval-policy'
+      sessionId: string
+      policy: ChatApprovalPolicy
     }
   | { type: 'chat-debug-open'; sessionId: string }
   | { type: 'chat-debug-page'; sessionId: string; beforeSeq: number }

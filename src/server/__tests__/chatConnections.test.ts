@@ -14,12 +14,12 @@ function harness(wireLogs?: ChatWireLogs) {
     type: 'chat-snapshot', sessionId: 'chat-1', events: [],
     pendingRequests: [{ kind: 'approval', requestId: 'approval-1', tool: 'Bash', input: {}, at: 'now' }],
     status: 'permission', throughSequence: 0,
-    commands: { status: 'unavailable', commands: [] },
+    commands: { status: 'unavailable', commands: [] }, activity: null,
   }
   let pending = true
   const manager = {
-    has: (id: string) => id === 'chat-1',
-    getSnapshot: () => snapshot,
+    has: (id: string) => id === 'chat-1' || id === 'chat-2',
+    getSnapshot: (id: string) => (id === 'chat-1' ? snapshot : null),
     send: async (...args: unknown[]) => { calls.push(['send', ...args]); return { ok: true } },
     start: (...args: unknown[]) => { calls.push(['start', ...args]); return Promise.resolve({ ok: true }) },
     interrupt: (...args: unknown[]) => { calls.push(['interrupt', ...args]); return { ok: true } },
@@ -33,6 +33,14 @@ function harness(wireLogs?: ChatWireLogs) {
       return { ok: true }
     },
     answerQuestion: (...args: unknown[]) => { calls.push(['answer', ...args]); return { ok: true } },
+    setApprovalPolicy: (...args: unknown[]) => {
+      calls.push(['setApprovalPolicy', ...args])
+      const policy = args[1]
+      if (policy !== 'manual' && policy !== 'auto') {
+        return { ok: false, error: `Unsupported approval policy ${String(policy)}` }
+      }
+      return { ok: true }
+    },
   } as unknown as ChatSessionManager
   const connections = new ChatConnections(manager, wireLogs)
   const messages: ServerMessage[] = []
@@ -54,6 +62,24 @@ describe('chat WebSocket subscriptions', () => {
     expect(h.calls).toEqual([
       ['send', 'chat-1', 'hello'], ['interrupt', 'chat-1'], ['answer', 'chat-1', 'question-1', {}], ['approval', 'chat-1', 'approval-1', 'allow'],
     ])
+  })
+
+  test('routes approval policy switches and echoes failures to the sender', async () => {
+    const h = harness()
+    await h.connections.handle(h.connection, { type: 'chat-set-approval-policy', sessionId: 'chat-1', policy: 'auto' })
+    await h.connections.handle(h.connection, { type: 'chat-set-approval-policy', sessionId: 'chat-1', policy: 'manual' })
+    expect(h.calls).toEqual([
+      ['setApprovalPolicy', 'chat-1', 'auto'],
+      ['setApprovalPolicy', 'chat-1', 'manual'],
+    ])
+    // An unsupported value is routed to the manager, which rejects it; the
+    // error echoes to the sender.
+    await h.connections.handle(h.connection, { type: 'chat-set-approval-policy', sessionId: 'chat-1', policy: 'yolo' as never })
+    expect(h.calls.at(-1)).toEqual(['setApprovalPolicy', 'chat-1', 'yolo'])
+    expect(h.messages).toEqual([{ type: 'error', message: 'Unsupported approval policy yolo' }])
+    // Unknown sessions fail before reaching the manager.
+    await h.connections.handle(h.connection, { type: 'chat-set-approval-policy', sessionId: 'missing', policy: 'auto' })
+    expect(h.messages[1]).toMatchObject({ type: 'error' })
   })
 
   test('snapshot precedes coalesced live events and contains pending approval', async () => {
@@ -162,6 +188,55 @@ describe('chat WebSocket subscriptions', () => {
       { type: 'error', message: 'Unknown chat session missing' },
       { type: 'error', message: 'Unknown chat session missing' },
     ])
+  })
+
+  test('activity follows the event it describes in the same flush', async () => {
+    const h = harness()
+    await h.connections.handle(h.connection, { type: 'chat-attach', sessionId: 'chat-1' })
+    const toolCall: ChatEvent = {
+      type: 'tool_call', id: 'event-1', sequence: 1, at: 'now', turnId: 'turn-1',
+      toolCallId: 'toolu_1', tool: 'Bash', input: {},
+    }
+    h.connections.publish('chat-1', toolCall)
+    h.connections.publishActivity('chat-1', { phase: 'running_tools', elapsedMs: 0, tool: 'Bash', count: 1 })
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(h.messages.slice(1)).toEqual([
+      { type: 'chat-events', sessionId: 'chat-1', events: [toolCall] },
+      { type: 'chat-activity', sessionId: 'chat-1', activity: { phase: 'running_tools', elapsedMs: 0, tool: 'Bash', count: 1 } },
+    ])
+  })
+
+  test('several activity changes within one tick collapse to the last', async () => {
+    const h = harness()
+    await h.connections.handle(h.connection, { type: 'chat-attach', sessionId: 'chat-1' })
+    h.connections.publishActivity('chat-1', { phase: 'requesting', elapsedMs: 0 })
+    h.connections.publishActivity('chat-1', { phase: 'thinking', elapsedMs: 0 })
+    h.connections.publishActivity('chat-1', { phase: 'retrying', elapsedMs: 0, attempt: 2, maxRetries: 10, errorStatus: 504 })
+    h.connections.publishActivity('chat-1', null)
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(h.messages.slice(1)).toEqual([
+      { type: 'chat-activity', sessionId: 'chat-1', activity: null },
+    ])
+  })
+
+  test('activity reaches only subscribed connections and none after detach', async () => {
+    const h = harness()
+    const otherMessages: ServerMessage[] = []
+    const other = { send: (message: ServerMessage) => otherMessages.push(message) }
+    await h.connections.handle(h.connection, { type: 'chat-attach', sessionId: 'chat-1' })
+    // A browser subscribed to another session never sees this one's activity.
+    await h.connections.handle(other, { type: 'chat-attach', sessionId: 'chat-2' })
+    h.connections.publishActivity('chat-1', { phase: 'thinking', elapsedMs: 0 })
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(h.messages.at(-1)).toMatchObject({ type: 'chat-activity', activity: { phase: 'thinking' } })
+    expect(otherMessages).toEqual([])
+
+    // After detach the queued value is dropped, not delivered late.
+    h.connections.publishActivity('chat-1', { phase: 'responding', elapsedMs: 0 })
+    await h.connections.handle(h.connection, { type: 'chat-detach', sessionId: 'chat-1' })
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(h.messages.filter(message => message.type === 'chat-activity')).toHaveLength(1)
+    expect(otherMessages).toEqual([])
   })
 })
 

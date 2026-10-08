@@ -87,6 +87,14 @@
     "vite-plugin-pwa": "^1.2.0"
   },
   "overrides": {
-    "shell-quote": "^1.8.4"
+    "shell-quote": "^1.11.0",
+    "@anthropic-ai/claude-agent-sdk-linux-x64": "file:./packages/claude-agent-sdk-no-cli",
+    "@anthropic-ai/claude-agent-sdk-linux-arm64": "file:./packages/claude-agent-sdk-no-cli",
+    "@anthropic-ai/claude-agent-sdk-linux-x64-musl": "file:./packages/claude-agent-sdk-no-cli",
+    "@anthropic-ai/claude-agent-sdk-linux-arm64-musl": "file:./packages/claude-agent-sdk-no-cli",
+    "@anthropic-ai/claude-agent-sdk-darwin-x64": "file:./packages/claude-agent-sdk-no-cli",
+    "@anthropic-ai/claude-agent-sdk-darwin-arm64": "file:./packages/claude-agent-sdk-no-cli",
+    "@anthropic-ai/claude-agent-sdk-win32-x64": "file:./packages/claude-agent-sdk-no-cli",
+    "@anthropic-ai/claude-agent-sdk-win32-arm64": "file:./packages/claude-agent-sdk-no-cli"
   }
 }

@@ -1,0 +1,5 @@
+{
+  "name": "@motuslabs/claude-agent-sdk-no-cli",
+  "version": "0.0.0",
+  "description": "Empty stub that replaces the Claude Agent SDK's bundled platform CLI packages via package.json overrides. Kawai runs a separately installed Claude Code executable (KAWAI_CLAUDE_PATH or PATH) through the SDK's pathToClaudeCodeExecutable option, so the ~58 MB per-platform native CLIs are never used."
+}

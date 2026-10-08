@@ -1,12 +1,19 @@
 // Owns the lifecycle of chat sessions: auth-gated creation, lazy driver
 // construction (the SDK query() is spawned by the driver on the first turn),
 // persistence in the chat_sessions table with restore-on-start into the
-// registry, kill/shutdown settlement (including the session's protocol log), and immediate sdkSessionId capture so a
-// restart can resume the same agent conversation. The SDK import stays dynamic
-// (injected as a queryFactory in tests) so a broken install disables the
-// feature instead of crashing the server.
+// registry, kill/shutdown settlement (including the session's protocol log),
+// immediate sdkSessionId capture so a restart can resume the same agent
+// conversation, and the current in-flight-turn activity (phase plus start
+// time) surfaced through getSnapshot and the onActivity broadcast sink. The
+// SDK import stays dynamic (injected as a queryFactory in tests) so a broken
+// install disables the feature instead of crashing the server. Chat spawns
+// run a separately installed Claude Code executable: creation and every
+// (re)spawn first pass an executable check (KAWAI_CLAUDE_PATH/PATH, version
+// baseline) whose ClaudeExecutableError messages reach the user verbatim.
 import type {
+  ChatActivity,
   ChatApprovalDecision,
+  ChatApprovalPolicy,
   ChatCommandState,
   ChatEvent,
   ChatPendingRequest,
@@ -19,9 +26,21 @@ import { isExistingDirectory, resolveProjectDirectory } from '../paths'
 import type { SessionRegistry } from '../SessionRegistry'
 import { ChatSessionDriver, type ChatQueryFactory } from './ChatSessionDriver'
 import { chatAuthErrorMessage, hasClaudeAuth } from './chatAuth'
+import {
+  ClaudeExecutableError,
+  ensureClaudeExecutable,
+  type ClaudeExecutableCheck,
+} from './claudeExecutable'
 import type { ChatProviderEnv } from './chatProviderEnv'
 import type { ChatWireLogs } from './ChatWireLogs'
-import { resolveClaudeProfile, claudeLaunchKey, type ClaudeLaunchConfiguration } from './ClaudeProfiles'
+import {
+  resolveClaudeProfile,
+  claudeLaunchKey,
+  verifyProfileExecutable,
+  type ClaudeLaunchConfiguration,
+  type ProfileCatalogContext,
+} from './ClaudeProfiles'
+import { logger } from '../logger'
 import { probeSdkAvailability } from './sdkAvailability'
 import {
   findTranscriptPath,
@@ -39,10 +58,26 @@ export interface ChatSessionManagerOptions {
   onEvent: (sessionId: string, event: ChatEvent) => void
   /** Command-state sink (wired to the chat-commands push in index.ts). */
   onCommandState?: (sessionId: string, state: ChatCommandState) => void
+  /**
+   * Live-activity sink (activity indicator design D5): called on each phase
+   * change of an in-flight turn, null when the turn ends. Wired to the WS
+   * broadcast in index.ts; activity is ephemeral and never persisted.
+   */
+  onActivity?: (sessionId: string, activity: ChatActivity | null) => void
   /** Injected in tests; production resolves the SDK via dynamic import. */
   queryFactory?: ChatQueryFactory
   /** Receives the provider env so it probes the endpoint sessions will use. */
-  availabilityProbe?: (providerEnv: ChatProviderEnv, launch?: ClaudeLaunchConfiguration) => Promise<void>
+  availabilityProbe?: (
+    providerEnv: ChatProviderEnv,
+    launch?: ClaudeLaunchConfiguration,
+    executablePath?: string
+  ) => Promise<void>
+  /**
+   * Resolves and verifies the Claude Code executable every spawn will run.
+   * Injected in tests; the default checks KAWAI_CLAUDE_PATH/PATH (version
+   * probe + baseline). An injected queryFactory (fake runtime) skips it.
+   */
+  executableCheck?: () => Promise<ClaudeExecutableCheck>
   authCheck?: () => boolean
   /**
    * Provider overrides for SDK spawns (base URL, models, gateway token). A
@@ -53,6 +88,13 @@ export interface ChatSessionManagerOptions {
   wireLogs?: ChatWireLogs
   /** Project-directory check; injected in tests that use fictitious paths. */
   isDirectory?: (path: string) => boolean
+  /**
+   * Home directory for the user-level profile catalog (~/.kawai/profiles.json
+   * lives here). Injected in tests so a real home catalog cannot leak in.
+   */
+  profileCatalogHome?: string
+  /** Catalog file failure sink; defaults to the structured logger. */
+  catalogErrorLog?: (errors: string[]) => void
 }
 
 export type ChatCreateResult =
@@ -69,6 +111,11 @@ const ARCHIVED_SESSION_ERROR =
 
 /** The dynamic SDK import failed; surfaced by every spawn path. */
 function sdkLoadError(error: unknown): string {
+  if (error instanceof ClaudeExecutableError) {
+    // Actionable by construction (names the path and the fix); the
+    // record and its stored conversation id are untouched.
+    return error.message
+  }
   return (
     'The Claude Agent SDK could not be loaded, so chat sessions are unavailable. ' +
     `Check the @anthropic-ai/claude-agent-sdk install: ${
@@ -88,6 +135,15 @@ export class ChatSessionManager {
   >()
   private sdkQuery: Promise<ChatQueryFactory> | null = null
   /**
+   * Current in-flight-turn activity per session: the phase body plus when it
+   * began. Cleared on turn end, stop, archive, kill, and driver death; a
+   * restart begins with none (design D5).
+   */
+  private readonly activities = new Map<
+    string,
+    { body: Omit<ChatActivity, 'elapsedMs'>; phaseStartedAt: number }
+  >()
+  /**
    * Availability probes for resolved provider configurations. Keyed so a provider
    * change in Settings re-probes the new endpoint; a failed probe is dropped so
    * a corrected configuration (or repaired install) recovers without a restart.
@@ -100,14 +156,18 @@ export class ChatSessionManager {
     const project = resolveProjectDirectory(input.projectPath, this.options.isDirectory)
     if (!project.ok) return project
     try {
-      resolveClaudeProfile(input.claudeProfileId, this.providerEnv())
+      this.launchFor(input.claudeProfileId, project.path)
     } catch (error) {
       return { ok: false, error: String(error instanceof Error ? error.message : error) }
     }
-    if (!this.authOk(input.claudeProfileId)) return { ok: false, error: chatAuthErrorMessage() }
+    if (!this.authOk(input.claudeProfileId, project.path)) return { ok: false, error: chatAuthErrorMessage() }
     try {
-      await this.probeAvailability(input.claudeProfileId)
+      await this.probeAvailability(input.claudeProfileId, project.path)
     } catch (error) {
+      if (error instanceof ClaudeExecutableError) {
+        // Actionable by construction (names the path and the fix).
+        return { ok: false, error: error.message }
+      }
       return {
         ok: false,
         error: 'Claude Agent SDK is unavailable. Check its installation, runtime, and chat provider settings, then try again. ' +
@@ -124,6 +184,7 @@ export class ChatSessionManager {
     if (!this.records.has(sessionId)) return null
     this.captureHistory(sessionId)
     const live = this.liveEvents.get(sessionId) ?? []
+    const activity = this.getActivity(sessionId)
     return {
       type: 'chat-snapshot', sessionId,
       events: [...(this.snapshotHistory.get(sessionId) ?? []), ...live],
@@ -131,7 +192,15 @@ export class ChatSessionManager {
       status: this.options.registry.get(sessionId)?.status ?? 'waiting',
       throughSequence: live.at(-1)?.sequence ?? 0,
       commands: this.commandState(sessionId),
+      activity,
     }
+  }
+
+  /** Current activity with a live-computed elapsed time, or null when idle. */
+  private getActivity(sessionId: string): ChatActivity | null {
+    const entry = this.activities.get(sessionId)
+    if (!entry) return null
+    return { ...entry.body, elapsedMs: Math.max(0, Date.now() - entry.phaseStartedAt) }
   }
 
   private captureHistory(sessionId: string): void {
@@ -169,11 +238,11 @@ export class ChatSessionManager {
     if (!project.ok) return project
     const projectPath = project.path
     try {
-      resolveClaudeProfile(input.claudeProfileId, this.providerEnv())
+      this.launchFor(input.claudeProfileId, projectPath)
     } catch (error) {
       return { ok: false, error: error instanceof Error ? error.message : String(error) }
     }
-    if (!this.authOk(input.claudeProfileId)) {
+    if (!this.authOk(input.claudeProfileId, projectPath)) {
       return { ok: false, error: chatAuthErrorMessage() }
     }
     const sessionId = `chat-${crypto.randomUUID()}`
@@ -185,6 +254,8 @@ export class ChatSessionManager {
       projectPath,
       sdkSessionId: null as string | null,
       claudeProfileId: input.claudeProfileId ?? 'default',
+      // Every session starts manual; there is no per-profile default.
+      approvalPolicy: 'manual' as ChatApprovalPolicy,
       status: 'waiting' as SessionStatus,
       createdAt: now,
       lastActivityAt: now,
@@ -310,6 +381,9 @@ export class ChatSessionManager {
     }
     this.drivers.delete(sessionId)
     this.driverPromises.delete(sessionId)
+    // The archived chat shows no activity row (design D5): any in-flight
+    // phase ended with the driver above.
+    this.clearActivity(sessionId)
     // Status returns to waiting: archived sessions never look busy.
     this.applyPatch(sessionId, {
       archivedAt: new Date().toISOString(),
@@ -329,6 +403,43 @@ export class ChatSessionManager {
     }
     if (record.archivedAt == null) return { ok: true }
     this.applyPatch(sessionId, { archivedAt: null })
+    return { ok: true }
+  }
+
+  /**
+   * Switch a session's approval policy live (chat-auto-approve-tools design
+   * D4): persists and broadcasts the new policy, records a transcript
+   * notice, and lets a live driver grant approvals already pending as cards.
+   * Archived sessions refuse the change; setting the current value is a
+   * no-op, and switching to manual affects only later requests.
+   */
+  setApprovalPolicy(
+    sessionId: string,
+    policy: ChatApprovalPolicy
+  ): ChatActionResult {
+    if (policy !== 'manual' && policy !== 'auto') {
+      return { ok: false, error: `Unsupported approval policy ${String(policy)}` }
+    }
+    const record = this.records.get(sessionId)
+    if (!record) {
+      return { ok: false, error: `Unknown chat session ${sessionId}` }
+    }
+    if (record.archivedAt != null) {
+      return { ok: false, error: ARCHIVED_SESSION_ERROR }
+    }
+    if ((record.approvalPolicy ?? 'manual') === policy) return { ok: true }
+    this.applyPatch(sessionId, { approvalPolicy: policy })
+    // The notice rides the same live-event path as driver events (sequence
+    // assignment, snapshot inclusion) whether or not a driver is running.
+    // It precedes the driver's policy grants so the transcript reads in order.
+    this.handleDriverEvent(sessionId, {
+      type: 'notice',
+      text: policy === 'auto' ? 'Auto-approve on' : 'Auto-approve off',
+      id: `evt-${crypto.randomUUID()}`,
+      sequence: 0,
+      at: new Date().toISOString(),
+    } as ChatEvent)
+    this.drivers.get(sessionId)?.onApprovalPolicyChanged(policy)
     return { ok: true }
   }
 
@@ -380,6 +491,7 @@ export class ChatSessionManager {
     this.records.delete(sessionId)
     this.snapshotHistory.delete(sessionId)
     this.liveEvents.delete(sessionId)
+    this.activities.delete(sessionId)
     this.options.registry.removeChatSession(sessionId)
     this.options.db.deleteChatSession(sessionId)
     void this.options.wireLogs?.delete(sessionId).catch(() => {})
@@ -393,6 +505,7 @@ export class ChatSessionManager {
     }
     this.drivers.clear()
     this.driverPromises.clear()
+    this.activities.clear()
   }
 
   /**
@@ -479,8 +592,17 @@ export class ChatSessionManager {
     const existing = this.drivers.get(sessionId)
     if (existing) {
       if (existing.isDead) {
-        resolveClaudeProfile(this.records.get(sessionId)?.claudeProfileId, this.providerEnv())
-        if (!this.authOk(this.records.get(sessionId)?.claudeProfileId)) throw new Error(chatAuthErrorMessage())
+        const record = this.records.get(sessionId)
+        const launch = this.launchFor(record?.claudeProfileId, record?.projectPath)
+        if (launch.executable) {
+          verifyProfileExecutable(record?.claudeProfileId ?? 'default', launch.executable)
+        } else {
+          // The executable may have been removed or moved since the last
+          // spawn: surface a failure now, and respawn the path just verified.
+          const executable = await this.checkExecutable()
+          existing.setClaudeExecutablePath(executable?.path)
+        }
+        if (!this.authOk(record?.claudeProfileId, record?.projectPath)) throw new Error(chatAuthErrorMessage())
       }
       return existing
     }
@@ -491,17 +613,29 @@ export class ChatSessionManager {
     // The single guard for every would-be spawn path (design D2 risk): an
     // archived session must never start an agent process.
     if (record.archivedAt != null) throw new Error(ARCHIVED_SESSION_ERROR)
-    resolveClaudeProfile(record.claudeProfileId, this.providerEnv())
-    if (!this.authOk(record.claudeProfileId)) throw new Error(chatAuthErrorMessage())
+    const launch = this.launchFor(record.claudeProfileId, record.projectPath)
+    if (launch.executable) verifyProfileExecutable(record.claudeProfileId ?? 'default', launch.executable)
+    if (!this.authOk(record.claudeProfileId, record.projectPath)) throw new Error(chatAuthErrorMessage())
     this.captureHistory(sessionId)
     const promise = (async () => {
+      // A profile executable replaces the standard binary (already verified
+      // above); otherwise every spawn runs the checked Claude Code install.
+      const executable = launch.executable ? null : await this.checkExecutable()
       const queryFactory = await this.resolveQueryFactory()
       const driver = new ChatSessionDriver({
         sessionId: record.sessionId,
         projectPath: record.projectPath,
         queryFactory,
         getProviderEnv: () => this.providerEnv(),
+        // Read per request so a live policy switch reaches the next
+        // canUseTool call without a respawn (design D2).
+        getApprovalPolicy: () =>
+          this.records.get(record.sessionId)?.approvalPolicy ?? 'manual',
         claudeProfileId: record.claudeProfileId,
+        ...(this.options.profileCatalogHome
+          ? { profileCatalogHome: this.options.profileCatalogHome }
+          : {}),
+        ...(executable ? { claudeExecutablePath: executable.path } : {}),
         ...(this.options.wireLogs
           ? { wire: this.options.wireLogs.get(record.sessionId) }
           : {}),
@@ -511,6 +645,8 @@ export class ChatSessionManager {
         onEvent: (event) => this.handleDriverEvent(record.sessionId, event),
         onCommandState: (state) =>
           this.options.onCommandState?.(record.sessionId, state),
+        onActivity: (activity) =>
+          this.handleDriverActivity(record.sessionId, activity),
         onStatus: (status) => this.applyPatch(record.sessionId, { status }),
         onSdkSessionId: (sdkSessionId) =>
           // Persist immediately: a crash right after the first turn must not
@@ -536,15 +672,27 @@ export class ChatSessionManager {
     }
   }
 
-  private probeAvailability(profileId: string = 'default'): Promise<void> {
+  /**
+   * Verify the executable, then the SDK handshake, under the resolved launch
+   * configuration. The probe cache key includes the executable identity
+   * (path + realpath + mtime), so an upgraded executable re-probes the
+   * handshake even when the provider configuration is unchanged.
+   */
+  private async probeAvailability(profileId: string = 'default', projectPath?: string): Promise<void> {
     const providerEnv = this.providerEnv()
-    const launch = resolveClaudeProfile(profileId, providerEnv)
-    const key = claudeLaunchKey(launch)
+    const launch = this.launchFor(profileId, projectPath)
+    // A profile executable replaces the standard binary; verify it the same
+    // way creation would so the probe failure is the actionable one.
+    if (launch.executable) verifyProfileExecutable(profileId, launch.executable)
+    const executable = launch.executable ? null : await this.checkExecutable()
+    const key = executable
+      ? `${claudeLaunchKey(launch)}\0${executable.identity}`
+      : claudeLaunchKey(launch)
     const cached = this.availability.get(key)
     if (cached) return cached
     const probe = this.options.availabilityProbe ??
       (this.options.queryFactory ? async () => {} : probeSdkAvailability)
-    const promise = probe(providerEnv, launch)
+    const promise = probe(providerEnv, launch, launch.executable ?? executable?.path)
     // Bound retained configurations; evicted successful probes can be repeated.
     if (this.availability.size >= 32) this.availability.delete(this.availability.keys().next().value!)
     this.availability.set(key, promise)
@@ -554,15 +702,49 @@ export class ChatSessionManager {
     return promise
   }
 
+  /**
+   * The verified executable every spawn will run, or null when a fake
+   * runtime is injected (tests, development fixture) and no executable
+   * applies. Throws ClaudeExecutableError verbatim for the caller to report.
+   */
+  private async checkExecutable(): Promise<ClaudeExecutableCheck | null> {
+    if (this.options.executableCheck) return this.options.executableCheck()
+    // An injected fake runtime (queryFactory for sends, availabilityProbe for
+    // creation) must not require a Claude Code install.
+    if (this.options.queryFactory || this.options.availabilityProbe) return null
+    return ensureClaudeExecutable()
+  }
+
   private providerEnv(): ChatProviderEnv {
     return this.options.getProviderEnv?.() ?? {}
   }
 
-  private authOk(profileId: string = 'default'): boolean {
+  /** Catalog lookup context for a session's project path. */
+  private catalogCtx(projectPath?: string): ProfileCatalogContext {
+    return {
+      ...(projectPath ? { projectPath } : {}),
+      ...(this.options.profileCatalogHome
+        ? { homeDir: this.options.profileCatalogHome }
+        : {}),
+    }
+  }
+
+  /**
+   * Launch configuration for a profile at a project path — every resolve site
+   * goes through here so catalog file failures are reported (never silently
+   * skipped: an invalid file would otherwise launch with inherited settings).
+   */
+  private launchFor(profileId: string | undefined, projectPath?: string): ClaudeLaunchConfiguration {
+    const report = this.options.catalogErrorLog
+      ?? (errors => logger.warn('chat_profile_catalog_errors', { errors }))
+    return resolveClaudeProfile(profileId, this.providerEnv(), this.catalogCtx(projectPath), report)
+  }
+
+  private authOk(profileId: string = 'default', projectPath?: string): boolean {
     return this.options.authCheck
       ? this.options.authCheck()
       : hasClaudeAuth(Object.fromEntries(
-        Object.entries(resolveClaudeProfile(profileId, this.providerEnv()).env ?? {})
+        Object.entries(this.launchFor(profileId, projectPath).env ?? {})
           .filter((entry): entry is [string, string] => entry[1] !== undefined)
       ))
   }
@@ -602,6 +784,34 @@ export class ChatSessionManager {
     }
   }
 
+  /**
+   * Store the latest activity (anchored on this server's clock) and forward
+   * it to the broadcast sink. Null (turn end, driver death) clears it.
+   */
+  private handleDriverActivity(
+    sessionId: string,
+    activity: ChatActivity | null
+  ): void {
+    if (!this.records.has(sessionId)) return
+    if (activity === null) {
+      this.activities.delete(sessionId)
+    } else {
+      const { elapsedMs, ...body } = activity
+      this.activities.set(sessionId, {
+        body,
+        phaseStartedAt: Date.now() - elapsedMs,
+      })
+    }
+    this.options.onActivity?.(sessionId, activity)
+  }
+
+  /** Forget a session's activity, broadcasting null if one was showing. */
+  private clearActivity(sessionId: string): void {
+    if (this.activities.delete(sessionId)) {
+      this.options.onActivity?.(sessionId, null)
+    }
+  }
+
   /** Bump lastActivity across record, db, and registry in one update. */
   private touch(sessionId: string): void {
     this.applyPatch(sessionId, { lastActivityAt: new Date().toISOString() })
@@ -623,6 +833,9 @@ export class ChatSessionManager {
         ? { lastActivity: patch.lastActivityAt }
         : {}),
       ...(patch.archivedAt !== undefined ? { archivedAt: patch.archivedAt } : {}),
+      ...(patch.approvalPolicy !== undefined
+        ? { approvalPolicy: patch.approvalPolicy }
+        : {}),
     })
   }
 
@@ -632,6 +845,7 @@ export class ChatSessionManager {
       name: record.name,
       kind: 'chat',
       claudeProfileId: record.claudeProfileId ?? 'default',
+      approvalPolicy: record.approvalPolicy ?? 'manual',
       projectPath: record.projectPath,
       status: record.status,
       lastActivity: record.lastActivityAt,

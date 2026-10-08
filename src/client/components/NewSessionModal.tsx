@@ -104,7 +104,9 @@ export default function NewSessionModal({
   const [projectPathError, setProjectPathError] = useState<string | null>(null)
   const [kind, setKind] = useState<'terminal' | 'chat'>('terminal')
   const [claudeProfileId, setClaudeProfileId] = useState('default')
-  const catalog = useClaudeProfiles(isOpen && kind === 'chat')
+  // The catalog is resolved for the entered project path: a `.kawai`
+  // directory in the project (or above it) extends the picker live.
+  const catalog = useClaudeProfiles(isOpen && kind === 'chat', projectPath)
   const [name, setName] = useState('')
   const [selectedPresetId, setSelectedPresetId] = useState<string | null>(null)
   const [command, setCommand] = useState('')
@@ -399,6 +401,7 @@ export default function NewSessionModal({
               <p role="alert">{catalog.error}</p>
               <button type="button" className="btn mt-1" onClick={catalog.retry}>Retry profiles</button>
             </div>}
+            {catalog.warnings.map(warning => <p key={warning} role="status" className="mt-1 text-xs text-amber-400">{warning}</p>)}
           </div>}
           {showHostPicker && (
             <div>

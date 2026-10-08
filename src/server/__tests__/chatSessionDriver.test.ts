@@ -1,4 +1,7 @@
-import { describe, expect, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import type {
   Options,
   PermissionResult,
@@ -6,7 +9,7 @@ import type {
   SDKMessage,
   SDKUserMessage,
 } from '@anthropic-ai/claude-agent-sdk'
-import type { ChatEvent, ChatCommandState } from '../../shared/chat'
+import type { ChatActivity, ChatApprovalPolicy, ChatCommandState, ChatEvent } from '../../shared/chat'
 import type { SessionStatus } from '../../shared/types'
 import type { ChatWireRecorder } from '../chat/wireTap'
 import {
@@ -100,6 +103,7 @@ interface Harness {
   driver: ChatSessionDriver
   events: ChatEvent[]
   statuses: SessionStatus[]
+  activities: Array<ChatActivity | null>
   fakes: FakeQueryHandle[]
   sdkSessionIds: string[]
   factoryWires: Array<ChatWireRecorder | undefined>
@@ -110,7 +114,9 @@ function createHarness(
   overrides: {
     claudeProfileId?: string
     resumeSessionId?: string
+    claudeExecutablePath?: string
     getProviderEnv?: () => Record<string, string>
+    getApprovalPolicy?: () => ChatApprovalPolicy
     wire?: ChatWireRecorder
     /** Commands the fake queries' initializationResult() reports. */
     initializationCommands?: Array<Record<string, unknown>>
@@ -118,17 +124,20 @@ function createHarness(
 ): Harness {
   const events: ChatEvent[] = []
   const statuses: SessionStatus[] = []
+  const activities: Array<ChatActivity | null> = []
   const fakes: FakeQueryHandle[] = []
   const sdkSessionIds: string[] = []
   const factoryWires: Array<ChatWireRecorder | undefined> = []
   const commandStates: ChatCommandState[] = []
+  // initializationCommands feeds the fake factory; the rest pass to the driver.
+  const { initializationCommands, ...driverOverrides } = overrides
   const factory: ChatQueryFactory = ({ prompt, options, wire }) => {
     factoryWires.push(wire)
     const handle = createFakeQuery(prompt, options)
     fakes.push(handle)
-    if (overrides.initializationCommands) {
+    if (initializationCommands) {
       ;(handle.query as { initializationResult?: () => Promise<unknown> }).initializationResult =
-        () => Promise.resolve({ commands: overrides.initializationCommands })
+        () => Promise.resolve({ commands: initializationCommands })
     }
     return handle.query
   }
@@ -138,14 +147,12 @@ function createHarness(
     queryFactory: factory,
     onEvent: (event) => events.push(event),
     onStatus: (status) => statuses.push(status),
+    onActivity: (activity) => activities.push(activity),
     onSdkSessionId: (id) => sdkSessionIds.push(id),
     onCommandState: (state) => commandStates.push(state),
-    claudeProfileId: overrides.claudeProfileId,
-    ...(overrides.resumeSessionId ? { resumeSessionId: overrides.resumeSessionId } : {}),
-    ...(overrides.getProviderEnv ? { getProviderEnv: overrides.getProviderEnv } : {}),
-    ...(overrides.wire ? { wire: overrides.wire } : {}),
+    ...driverOverrides,
   })
-  return { driver, events, statuses, fakes, sdkSessionIds, factoryWires, commandStates }
+  return { driver, events, statuses, activities, fakes, sdkSessionIds, factoryWires, commandStates }
 }
 
 /** Let the driver's stream loop drain pushed messages. */
@@ -218,6 +225,33 @@ function result(subtype: string, extra: Record<string, unknown> = {}): SDKMessag
 }
 
 describe('ChatSessionDriver', () => {
+  // Pin catalog reads to an empty temp home: the shipped default applies
+  // deterministically, and a real ~/.kawai cannot leak into launch resolution.
+  let tempHome: string
+  const originalHome = process.env.HOME
+  beforeEach(() => {
+    tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'agentboard-chatdriver-'))
+    process.env.HOME = tempHome
+  })
+  afterEach(() => {
+    if (originalHome !== undefined) process.env.HOME = originalHome
+    else delete process.env.HOME
+    fs.rmSync(tempHome, { recursive: true, force: true })
+  })
+
+  test('passes the executable path when given and omits the option otherwise', async () => {
+    const external = createHarness({ claudeExecutablePath: '/opt/claude/bin/claude' })
+    external.driver.send('hello')
+    expect(external.fakes[0]!.options.pathToClaudeCodeExecutable).toBe('/opt/claude/bin/claude')
+
+    const injected = createHarness()
+    injected.driver.send('hello')
+    expect('pathToClaudeCodeExecutable' in injected.fakes[0]!.options).toBe(false)
+
+    external.driver.kill()
+    injected.driver.kill()
+  })
+
   test('concurrent profile drivers keep launch settings and approval bridges independent', async () => {
     const glm = createHarness({ claudeProfileId: 'glm' })
     const minimax = createHarness({ claudeProfileId: 'minimax' })
@@ -244,6 +278,28 @@ describe('ChatSessionDriver', () => {
     expect(glm.fakes[1]!.options.env?.ANTHROPIC_BASE_URL).toBe(first.options.env?.ANTHROPIC_BASE_URL)
     glm.driver.kill()
     minimax.driver.kill()
+  })
+
+  test('executable-backed profiles spawn the wrapper with base env and no settings', async () => {
+    fs.mkdirSync(path.join(tempHome, '.kawai'), { recursive: true })
+    fs.writeFileSync(path.join(tempHome, '.kawai', 'profiles.json'), JSON.stringify({
+      lan: {
+        label: 'LAN',
+        executable: '/usr/local/bin/claude-lan',
+        env: { ANTHROPIC_BASE_URL: 'http://ai.lan:9292' },
+      },
+    }))
+    const lan = createHarness({ claudeProfileId: 'lan', claudeExecutablePath: '/opt/claude/bin/claude' })
+    lan.driver.send('lan turn')
+    const options = lan.fakes[0]!.options
+    // The wrapper replaces the checked Claude Code binary...
+    expect(options.pathToClaudeCodeExecutable).toBe('/usr/local/bin/claude-lan')
+    // ...receives the entry environment pre-applied on the merged base...
+    expect(options.env?.ANTHROPIC_BASE_URL).toBe('http://ai.lan:9292')
+    // ...and no inline controlled settings exist to override its exports.
+    expect(options.settings).toBeUndefined()
+    expect('executable' in options).toBe(false)
+    lan.driver.kill()
   })
 
   test('a wire recorder taps every spawn, including the respawn after a crash', async () => {
@@ -997,5 +1053,401 @@ describe('ChatSessionDriver', () => {
 
     await first
     await second
+  })
+
+  test('auto policy grants tool approvals without a card or permission status', async () => {
+    const harness = createHarness({ getApprovalPolicy: () => 'auto' })
+    harness.driver.send('go')
+    const fake = harness.fakes[0]!
+    const approval = sendApproval(fake)
+    await flush()
+
+    await expect(approval).resolves.toEqual({ behavior: 'allow' })
+    expect(typesOf(harness.events)).not.toContain('approval_request')
+    const resolved = harness.events.find((e) => e.type === 'request_resolved') as
+      | Extract<ChatEvent, { type: 'request_resolved' }>
+      | undefined
+    expect(resolved?.outcome).toBe('allowed')
+    expect(resolved?.decidedBy).toBe('policy')
+    expect(resolved?.tool).toBe('Bash')
+    expect(harness.statuses).not.toContain('permission')
+  })
+
+  test('auto policy still routes AskUserQuestion to the user', async () => {
+    const harness = createHarness({ getApprovalPolicy: () => 'auto' })
+    harness.driver.send('choose')
+    const fake = harness.fakes[0]!
+    const question = sendApproval(
+      fake,
+      {
+        questions: [
+          {
+            question: 'Which library?',
+            header: 'Library',
+            multiSelect: false,
+            options: [
+              { label: 'date-fns', description: 'modern' },
+              { label: 'dayjs', description: 'small' },
+            ],
+          },
+        ],
+      },
+      'AskUserQuestion'
+    )
+    await flush()
+
+    const event = harness.events.find((e) => e.type === 'question_request')
+    expect(event).toBeDefined()
+    expect(harness.statuses.at(-1)).toBe('permission')
+    const requestId = (event as { requestId: string }).requestId
+    expect(
+      harness.driver.answerQuestion(requestId, {
+        'Which library?': { options: ['dayjs'] },
+      })
+    ).toMatchObject({ ok: true })
+    await expect(question).resolves.toMatchObject({ behavior: 'allow' })
+  })
+
+  test('user decisions carry decidedBy user', async () => {
+    const harness = createHarness()
+    harness.driver.send('go')
+    const fake = harness.fakes[0]!
+    const approval = sendApproval(fake)
+    await flush()
+    const requestId = (harness.events.find((e) => e.type === 'approval_request') as {
+      requestId: string
+    }).requestId
+
+    expect(harness.driver.resolveApproval(requestId, 'allow')).toEqual({ ok: true })
+    await expect(approval).resolves.toEqual({ behavior: 'allow' })
+    const resolved = harness.events.find((e) => e.type === 'request_resolved') as
+      Extract<ChatEvent, { type: 'request_resolved' }>
+    expect(resolved.decidedBy).toBe('user')
+    expect(resolved.tool).toBeUndefined()
+  })
+
+  test('switching to auto grants pending approvals but not questions', async () => {
+    const harness = createHarness()
+    harness.driver.send('go')
+    const fake = harness.fakes[0]!
+    const approval = sendApproval(fake)
+    await flush()
+    const question = sendApproval(
+      fake,
+      {
+        questions: [
+          {
+            question: 'Which library?',
+            header: 'Library',
+            multiSelect: false,
+            options: [
+              { label: 'date-fns', description: 'modern' },
+              { label: 'dayjs', description: 'small' },
+            ],
+          },
+        ],
+      },
+      'AskUserQuestion'
+    )
+    await flush()
+    expect(harness.statuses.at(-1)).toBe('permission')
+
+    harness.driver.onApprovalPolicyChanged('auto')
+    await flush()
+
+    await expect(approval).resolves.toEqual({ behavior: 'allow' })
+    const policyGrant = harness.events
+      .filter((e) => e.type === 'request_resolved')
+      .find(
+        (e) =>
+          (e as Extract<ChatEvent, { type: 'request_resolved' }>).decidedBy ===
+          'policy'
+      )
+    expect(policyGrant).toBeDefined()
+    expect(
+      (policyGrant as Extract<ChatEvent, { type: 'request_resolved' }>).tool
+    ).toBe('Bash')
+    // The question stays pending and user-answerable.
+    const questionEvent = harness.events.find((e) => e.type === 'question_request') as {
+      requestId: string
+    }
+    expect(
+      harness.driver.answerQuestion(questionEvent.requestId, {
+        'Which library?': { options: ['dayjs'] },
+      })
+    ).toMatchObject({ ok: true })
+    await expect(question).resolves.toMatchObject({ behavior: 'allow' })
+  })
+
+  test('switching to manual leaves pending approvals with the user', async () => {
+    const harness = createHarness()
+    harness.driver.send('go')
+    const fake = harness.fakes[0]!
+    const approval = sendApproval(fake)
+    await flush()
+
+    harness.driver.onApprovalPolicyChanged('manual')
+    await flush()
+
+    const event = harness.events.find((e) => e.type === 'approval_request') as {
+      requestId: string
+    }
+    expect(harness.driver.resolveApproval(event.requestId, 'deny')).toEqual({ ok: true })
+    await expect(approval).resolves.toMatchObject({ behavior: 'deny' })
+    const resolved = harness.events.find((e) => e.type === 'request_resolved') as
+      Extract<ChatEvent, { type: 'request_resolved' }>
+    expect(resolved.decidedBy).toBe('user')
+  })
+})
+
+describe('ChatSessionDriver activity', () => {
+  /** Phase bodies without elapsedMs, which is near-zero on live changes. */
+  function bodies(activities: Array<ChatActivity | null>): unknown[] {
+    return activities.map((activity) =>
+      activity === null
+        ? null
+        : Object.fromEntries(
+            Object.entries(activity).filter(([key]) => key !== 'elapsedMs')
+          )
+    )
+  }
+
+  function streamEvent(event: Record<string, unknown>, parent: string | null = null): SDKMessage {
+    return {
+      type: 'stream_event',
+      event,
+      parent_tool_use_id: parent,
+      uuid: 'p-uuid',
+      session_id: 'sdk-1',
+    } as unknown as SDKMessage
+  }
+
+  function systemFrame(fields: Record<string, unknown>): SDKMessage {
+    return { type: 'system', ...fields } as unknown as SDKMessage
+  }
+
+  test('a scripted turn walks the phases and ends with null', async () => {
+    const harness = createHarness()
+    harness.driver.send('hello')
+    const fake = harness.fakes[0]!
+    fake.push(systemFrame({ subtype: 'status', status: 'requesting' }))
+    fake.push(streamEvent({
+      type: 'content_block_start', index: 0,
+      content_block: { type: 'thinking', thinking: '', signature: '' },
+    }))
+    fake.push(streamEvent({
+      type: 'content_block_start', index: 1,
+      content_block: { type: 'text', text: '' },
+    }))
+    fake.push(streamEvent({
+      type: 'content_block_start', index: 2,
+      content_block: { type: 'tool_use', id: 'toolu_1', name: 'Edit', input: {} },
+    }))
+    fake.push({
+      type: 'assistant',
+      message: {
+        id: 'msg_1',
+        content: [{ type: 'tool_use', id: 'toolu_1', name: 'Edit', input: {} }],
+        role: 'assistant',
+      },
+      parent_tool_use_id: null,
+      uuid: 'a-uuid',
+      session_id: 'sdk-1',
+    } as unknown as SDKMessage)
+    fake.push(userToolResult('toolu_1'))
+    fake.push(systemFrame({
+      subtype: 'api_retry', attempt: 1, max_retries: 10,
+      retry_delay_ms: 567, error_status: 504, error: 'server_error',
+    }))
+    fake.push(systemFrame({ subtype: 'status', status: 'requesting' }))
+    fake.push(result('success'))
+    await flush()
+
+    expect(bodies(harness.activities)).toEqual([
+      { phase: 'requesting' },
+      { phase: 'thinking' },
+      { phase: 'responding' },
+      { phase: 'preparing_tool', tool: 'Edit' },
+      { phase: 'running_tools', tool: 'Edit', count: 1 },
+      { phase: 'requesting' },
+      { phase: 'retrying', attempt: 1, maxRetries: 10, errorStatus: 504 },
+      { phase: 'requesting' },
+      null,
+    ])
+    for (const activity of harness.activities) {
+      if (activity) expect(activity.elapsedMs).toBeGreaterThanOrEqual(0)
+    }
+  })
+
+  test('resolving an approval republishes the phase with a restarted clock', async () => {
+    const harness = createHarness()
+    harness.driver.send('run it')
+    const fake = harness.fakes[0]!
+    fake.push({
+      type: 'assistant',
+      message: {
+        id: 'msg_1',
+        content: [{ type: 'tool_use', id: 'toolu_1', name: 'Bash', input: {} }],
+        role: 'assistant',
+      },
+      parent_tool_use_id: null,
+      uuid: 'a-uuid',
+      session_id: 'sdk-1',
+    } as unknown as SDKMessage)
+    const approval = sendApproval(fake)
+    await flush()
+    expect(bodies(harness.activities)).toEqual([
+      { phase: 'requesting' },
+      { phase: 'running_tools', tool: 'Bash', count: 1 },
+    ])
+
+    // However long the user stares at the card, the body never changes — so
+    // the republish at resolution is what re-anchors clients; without it the
+    // row would surface the card's whole wait as tool time (PR #34 review).
+    const event = harness.events.find(
+      (e) => e.type === 'approval_request'
+    ) as { requestId: string }
+    expect(harness.driver.resolveApproval(event.requestId, 'allow')).toEqual({
+      ok: true,
+    })
+    await expect(approval).resolves.toMatchObject({ behavior: 'allow' })
+    await flush()
+
+    expect(harness.activities).toHaveLength(3)
+    const republished = harness.activities.at(-1)!
+    expect(bodies([republished])).toEqual([
+      { phase: 'running_tools', tool: 'Bash', count: 1 },
+    ])
+    expect(republished.elapsedMs).toBeLessThanOrEqual(2)
+  })
+
+  test('subagent frames leave the parent phase untouched', async () => {
+    const harness = createHarness()
+    harness.driver.send('run a subagent')
+    const fake = harness.fakes[0]!
+    fake.push({
+      type: 'assistant',
+      message: {
+        id: 'msg_1',
+        content: [{ type: 'tool_use', id: 'toolu_task', name: 'Task', input: {} }],
+        role: 'assistant',
+      },
+      parent_tool_use_id: null,
+      uuid: 'a-uuid',
+      session_id: 'sdk-1',
+    } as unknown as SDKMessage)
+    await flush()
+    expect(bodies(harness.activities)).toEqual([
+      { phase: 'requesting' },
+      { phase: 'running_tools', tool: 'Task', count: 1 },
+    ])
+
+    // The Task subagent's own requests, thinking, and tool traffic.
+    fake.push(streamEvent({
+      type: 'content_block_start', index: 0,
+      content_block: { type: 'thinking', thinking: '', signature: '' },
+    }, 'toolu_task'))
+    fake.push({
+      type: 'assistant',
+      message: {
+        id: 'msg_2',
+        content: [{ type: 'tool_use', id: 'toolu_sub', name: 'Bash', input: {} }],
+        role: 'assistant',
+      },
+      parent_tool_use_id: 'toolu_task',
+      uuid: 'b-uuid',
+      session_id: 'sdk-1',
+    } as unknown as SDKMessage)
+    fake.push({
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [{ type: 'tool_result', tool_use_id: 'toolu_sub', content: 'done' }],
+      },
+      parent_tool_use_id: 'toolu_task',
+    } as unknown as SDKMessage)
+    fake.push(systemFrame({
+      subtype: 'status', status: 'requesting', parent_tool_use_id: 'toolu_task',
+    }))
+    await flush()
+
+    // Still "Running Task…" for the whole subagent run.
+    expect(bodies(harness.activities)).toEqual([
+      { phase: 'requesting' },
+      { phase: 'running_tools', tool: 'Task', count: 1 },
+    ])
+
+    // The parent-level result ends the turn and the row.
+    fake.push(result('success'))
+    await flush()
+    expect(harness.activities.at(-1)).toBeNull()
+  })
+
+  test('thinking deltas and token estimates produce no activity calls', async () => {
+    const harness = createHarness()
+    harness.driver.send('hello')
+    const fake = harness.fakes[0]!
+    fake.push(streamEvent({
+      type: 'content_block_start', index: 0,
+      content_block: { type: 'thinking', thinking: '', signature: '' },
+    }))
+    await flush()
+    expect(bodies(harness.activities)).toEqual([
+      { phase: 'requesting' },
+      { phase: 'thinking' },
+    ])
+    const before = harness.activities.length
+
+    fake.push(streamEvent({
+      type: 'content_block_delta', index: 0,
+      delta: { type: 'thinking_delta', thinking: 'working' },
+    }))
+    fake.push(systemFrame({ subtype: 'thinking_tokens', estimated_tokens: 1, estimated_tokens_delta: 1 }))
+    fake.push(streamEvent({ type: 'content_block_stop', index: 0 }))
+    await flush()
+
+    expect(harness.activities.length).toBe(before)
+  })
+
+  test('interrupt ends the activity after an approval resolution', async () => {
+    const harness = createHarness()
+    harness.driver.send('hello')
+    const fake = harness.fakes[0]!
+    fake.push({
+      type: 'assistant',
+      message: {
+        id: 'msg_1',
+        content: [{ type: 'tool_use', id: 'toolu_1', name: 'Bash', input: { command: 'ls' } }],
+        role: 'assistant',
+      },
+      parent_tool_use_id: null,
+      uuid: 'a-uuid',
+      session_id: 'sdk-1',
+    } as unknown as SDKMessage)
+    await flush()
+    expect(bodies(harness.activities)).toEqual([
+      { phase: 'requesting' },
+      { phase: 'running_tools', tool: 'Bash', count: 1 },
+    ])
+
+    // The card's resolution republishes the same body with a restarted
+    // clock (design D3's approval-wait handling; see the dedicated test).
+    const approval = sendApproval(fake)
+    await flush()
+    const request = harness.events.find((e) => e.type === 'approval_request') as {
+      requestId: string
+    }
+    expect(harness.driver.resolveApproval(request.requestId, 'allow')).toEqual({ ok: true })
+    await flush()
+    expect(bodies(harness.activities)).toEqual([
+      { phase: 'requesting' },
+      { phase: 'running_tools', tool: 'Bash', count: 1 },
+      { phase: 'running_tools', tool: 'Bash', count: 1 },
+    ])
+
+    harness.driver.interrupt()
+    await flush()
+    expect(harness.activities.at(-1)).toBeNull()
+    await approval
   })
 })

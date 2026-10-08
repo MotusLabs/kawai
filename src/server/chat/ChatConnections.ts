@@ -1,10 +1,14 @@
 // Per-browser chat subscriptions and ordered event-loop batching. Snapshot
 // capture is synchronous so live events cannot overtake the initial snapshot.
+// Live-turn activity rides the same flush (design D5): the latest value per
+// connection and session is sent after that session's pending event batch, so
+// an activity never precedes the tool_call it describes and several phase
+// changes within one tick collapse into the last.
 // Debug-view subscriptions are separate: only connections that opened a
 // session's debug view receive its wire frames. They subscribe before the
 // async page read, so no frame is missed; clients merge pages and live frames
 // by sequence, which makes the resulting overlap harmless.
-import type { ChatCommandState, ChatEvent, ChatWireFrame } from '../../shared/chat'
+import type { ChatActivity, ChatCommandState, ChatEvent, ChatWireFrame } from '../../shared/chat'
 import type { ClientMessage, ServerMessage } from '../../shared/types'
 import type { ChatSessionManager } from './ChatSessionManager'
 import type { ChatWireLogs } from './ChatWireLogs'
@@ -20,6 +24,8 @@ export interface ChatConnection {
 export class ChatConnections {
   private readonly subscriptions = new Map<ChatConnection, Set<string>>()
   private readonly batches = new Map<ChatConnection, Map<string, ChatEvent[]>>()
+  /** Latest activity per connection and session, sent by the next flush. */
+  private readonly activityBatches = new Map<ChatConnection, Map<string, ChatActivity | null>>()
   private readonly debugSubscriptions = new Map<ChatConnection, Map<string, () => void>>()
   private readonly debugBatches = new Map<ChatConnection, Map<string, ChatWireFrame[]>>()
   private scheduled = false
@@ -32,6 +38,7 @@ export class ChatConnections {
   disconnect(connection: ChatConnection): void {
     this.subscriptions.delete(connection)
     this.batches.delete(connection)
+    this.activityBatches.delete(connection)
     for (const unsubscribe of this.debugSubscriptions.get(connection)?.values() ?? []) unsubscribe()
     this.debugSubscriptions.delete(connection)
     this.debugBatches.delete(connection)
@@ -67,6 +74,21 @@ export class ChatConnections {
     this.scheduleFlush()
   }
 
+  /**
+   * Queue the session's current activity for its subscribers (design D5):
+   * only the latest value per connection survives until the flush, which
+   * sends it after the pending event batch for the same session.
+   */
+  publishActivity(sessionId: string, activity: ChatActivity | null): void {
+    for (const [connection, sessions] of this.subscriptions) {
+      if (!sessions.has(sessionId)) continue
+      const latest = this.activityBatches.get(connection) ?? new Map<string, ChatActivity | null>()
+      latest.set(sessionId, activity)
+      this.activityBatches.set(connection, latest)
+    }
+    this.scheduleFlush()
+  }
+
   private publishFrame(connection: ChatConnection, sessionId: string, frame: ChatWireFrame): void {
     const batches = this.debugBatches.get(connection) ?? new Map<string, ChatWireFrame[]>()
     const frames = batches.get(sessionId) ?? []
@@ -95,6 +117,15 @@ export class ChatConnections {
       for (const [sessionId, events] of sessions) {
         if (this.subscriptions.get(connection)?.has(sessionId)) {
           connection.send({ type: 'chat-events', sessionId, events })
+        }
+      }
+    }
+    const activityBatches = new Map(this.activityBatches)
+    this.activityBatches.clear()
+    for (const [connection, sessions] of activityBatches) {
+      for (const [sessionId, activity] of sessions) {
+        if (this.subscriptions.get(connection)?.has(sessionId)) {
+          connection.send({ type: 'chat-activity', sessionId, activity })
         }
       }
     }
@@ -148,6 +179,7 @@ export class ChatConnections {
         const snapshot = this.manager.getSnapshot(sessionId)
         if (!snapshot) return
         this.batches.get(connection)?.delete(sessionId)
+        this.activityBatches.get(connection)?.delete(sessionId)
         const sessions = this.subscriptions.get(connection) ?? new Set<string>()
         sessions.add(sessionId)
         this.subscriptions.set(connection, sessions)
@@ -161,6 +193,7 @@ export class ChatConnections {
       case 'chat-detach':
         this.subscriptions.get(connection)?.delete(sessionId)
         this.batches.get(connection)?.delete(sessionId)
+        this.activityBatches.get(connection)?.delete(sessionId)
         return
       case 'chat-send': {
         const result = await this.manager.send(sessionId, message.text)
@@ -191,6 +224,12 @@ export class ChatConnections {
       }
       case 'chat-answer': {
         const result = this.manager.answerQuestion(sessionId, message.requestId, message.answers)
+        if (!result.ok) connection.send({ type: 'error', message: result.error })
+        return
+      }
+      case 'chat-set-approval-policy': {
+        // The manager validates the value; failures echo to the sender only.
+        const result = this.manager.setApprovalPolicy(sessionId, message.policy)
         if (!result.ok) connection.send({ type: 'error', message: result.error })
         return
       }

@@ -63,6 +63,13 @@ test('approval, questions, streaming reconnect, two-client resolution, and stop'
   await expect(page.getByRole('button', { name: 'Submit answers' })).toHaveCount(0)
   await expect(second.getByRole('button', { name: 'Submit answers' })).toHaveCount(0)
 
+  // The answered tool still runs for a moment (the fixture holds it so the
+  // activity row's restarted clock is observable). A send before the turn's
+  // result frame is queued into the live turn and its output is dropped
+  // (driver frames after turn end are ignored), so wait for the third
+  // "Turn complete" — approval, denial, question — before streaming.
+  await expect(page.getByText('Turn complete')).toHaveCount(3)
+
   await page.getByLabel('Message Claude').fill('stream')
   await page.getByRole('button', { name: 'Send', exact: true }).click()
   await expect(page.getByTestId('chat-transcript')).toContainText('Streaming')

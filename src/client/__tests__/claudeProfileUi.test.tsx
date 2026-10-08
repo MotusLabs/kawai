@@ -16,7 +16,7 @@ beforeEach(() => {
   created.length = 0
   globalThis.window = { addEventListener() {}, removeEventListener() {}, setTimeout() { return 1 } } as unknown as Window & typeof globalThis
   globalThis.document = { querySelector() { return { removeAttribute() {}, focus() {} } } } as unknown as Document
-  globalThis.fetch = (async () => Response.json(metadata)) as unknown as typeof fetch
+  globalThis.fetch = (async () => Response.json({ profiles: metadata, errors: [] })) as unknown as typeof fetch
 })
 afterEach(() => {
   for (const renderer of renderers.splice(0)) act(() => renderer.unmount())
@@ -54,6 +54,58 @@ test('chat catalog selects Default or named profile and terminal creation remain
   submit(renderer)
   expect(created[2]?.[7]).toBeUndefined()
 })
+test('catalog refetches with the entered project path', async () => {
+  const urls: string[] = []
+  globalThis.fetch = (async (input: unknown) => {
+    urls.push(String(input))
+    return Response.json({ profiles: metadata, errors: [] })
+  }) as unknown as typeof fetch
+  const renderer = await modal()
+  await kind(renderer, 'chat')
+  // The modal opens with the default project dir prefilled.
+  expect(urls.some(url => url.includes(`projectPath=${encodeURIComponent('/tmp')}`))).toBe(true)
+
+  // Typing a different project path refetches the catalog for that path.
+  await act(async () => {
+    const pathInput = renderer.root.findAllByType('input').find(input => input.props.value === '/tmp')!
+    pathInput.props.onChange({ target: { value: '/work/glm-flash' } })
+    await settle()
+  })
+  expect(urls.some(url => url.includes(`projectPath=${encodeURIComponent('/work/glm-flash')}`))).toBe(true)
+})
+
+test('catalog file warnings are visible without blocking creation', async () => {
+  globalThis.fetch = (async () => Response.json({
+    profiles: metadata,
+    errors: ['/work/proj/.kawai/profiles.json: invalid JSON (unexpected end of input).'],
+  })) as unknown as typeof fetch
+  const renderer = await modal()
+  await kind(renderer, 'chat')
+  const warning = renderer.root.findByProps({ role: 'status' })
+  expect(warning.children.join('')).toContain('/work/proj/.kawai/profiles.json')
+  // The rest of the catalog resolved: selection and creation still work.
+  expect(renderer.root.findByProps({ 'aria-label': 'Profile' }).props.disabled).toBe(false)
+  submit(renderer)
+  expect(created[0]?.[7]).toBe('default')
+})
+
+test('chat header label resolves from the session project path catalog', async () => {
+  const urls: string[] = []
+  globalThis.fetch = (async (input: unknown) => {
+    urls.push(String(input))
+    return Response.json({ profiles: metadata, errors: [] })
+  }) as unknown as typeof fetch
+  const session: Session = { id: 'chat-path', name: 'Path test', projectPath: '/work/proj', status: 'waiting', source: 'managed', kind: 'chat', createdAt: '', lastActivity: '', claudeProfileId: 'glm' }
+  let renderer!: TestRenderer.ReactTestRenderer
+  await act(async () => {
+    renderer = TestRenderer.create(<ChatView session={session} sendMessage={() => {}} connectionStatus="connected" connectionEpoch={1} error={null} onClose={() => {}} onKill={() => {}} />)
+    await settle()
+  })
+  renderers.push(renderer)
+  expect(urls.some(url => url.includes(`projectPath=${encodeURIComponent('/work/proj')}`))).toBe(true)
+  expect(renderer.root.findByProps({ 'data-testid': 'chat-profile' }).children.join('')).toBe('Profile: GLM')
+})
+
 test('loading and catalog error block submission and Retry recovers without losing selection', async () => {
   const renderer = await modal()
   let release!: (response: Response) => void
@@ -66,7 +118,7 @@ test('loading and catalog error block submission and Retry recovers without losi
   expect(renderer.root.findByProps({ role: 'alert' }).children.join('')).toContain('HTTP 500')
   submit(renderer)
   expect(created).toEqual([])
-  globalThis.fetch = (async () => Response.json(metadata)) as unknown as typeof fetch
+  globalThis.fetch = (async () => Response.json({ profiles: metadata, errors: [] })) as unknown as typeof fetch
   const retry = renderer.root.findAllByType('button').find(button => button.children.includes('Retry profiles'))!
   await act(async () => { retry.props.onClick(); await settle() })
   expect(renderer.root.findByProps({ 'aria-label': 'Profile' }).props.disabled).toBe(false)

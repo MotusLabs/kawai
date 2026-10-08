@@ -2,7 +2,7 @@
 
 ## 1. Replacement decision and dependency alignment
 
-- [ ] 1.1 Document a reproducible SDK limitation or measured dependency/runtime benefit, compare supported SDK options and narrow patch/upstream extension with full replacement, and record an explicit decision before transport implementation; verify a decision note contains evidence and scope, retaining the SDK if replacement is not justified.
+- [x] 1.1 Document a reproducible SDK limitation or measured dependency/runtime benefit, compare supported SDK options and narrow patch/upstream extension with full replacement, and record an explicit decision before transport implementation; verify a decision note contains evidence and scope, retaining the SDK if replacement is not justified.
 - [ ] 1.2 Confirm PR #15 provider profiles are merged and reconcile SDK-specific wording in the main chat/profile specs through the update workflow without changing user-facing acceptance criteria or historical archives; verify dependency order and launch contract are documented consistently before archive.
 
 ## 2. Runtime contract and availability

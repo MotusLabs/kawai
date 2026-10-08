@@ -121,6 +121,29 @@ the server. A failed SDK runtime probe refuses creation with an error; fix
 the installation/runtime (or the chat provider environment below) and try
 again — a failed probe is not cached.
 
+Chat sessions run a **separately installed Claude Code executable**; no CLI
+ships with Kawai's dependencies, and release binaries run without a
+`node_modules` tree. Install Claude Code **2.1.289 or newer** on every host
+that creates chat sessions (dev machines and the deployed backend) so `claude`
+is on the server's `PATH`, or set `KAWAI_CLAUDE_PATH` to the executable file.
+The value is a single path — never a shell command — and is read from the
+server environment only, never sent to browsers. Before creating a chat
+session, Kawai verifies within a bounded time that the executable exists, is
+executable, and reports a version at or above the baseline; an executable
+upgraded in place is re-checked automatically, and failed checks are retried
+on the next attempt, so installing or repairing the CLI needs no server
+restart. Each failure names the checked path and the fix: install Claude Code
+(<https://claude.com/claude-code>), upgrade a too-old CLI, or point
+`KAWAI_CLAUDE_PATH` at a supported executable. A missing or unsupported CLI
+affects only chat creation and sends to idle chat sessions — backend startup,
+terminal sessions, and reading existing chat history keep working. Upgrade
+the `@anthropic-ai/claude-agent-sdk` package and the installed Claude Code
+together (the baseline test pins the SDK's `claudeCodeVersion`): if a
+handshake starts failing after an SDK upgrade, update the CLI to match.
+Rollback: revert the application commit and reinstall dependencies — the
+SDK's own platform CLI packages install again and `KAWAI_CLAUDE_PATH` can be
+dropped; conversations, transcripts, and the database are unaffected.
+
 To run chat sessions against an Anthropic-compatible gateway or alternative
 model provider, give them a provider environment — overrides applied only to
 the SDK processes spawned for chat, never to terminal sessions:

@@ -1,8 +1,9 @@
 // Chat-session wire contract: conversation events, the WebSocket message
-// payloads that carry them, and the raw protocol frames shown by the chat
-// debug view. Shared between the server's chat driver/WS layer and the
-// client's chat stores. All SDK-specific types stay in the driver;
-// this file is SDK-agnostic so the client never imports the agent SDK.
+// payloads that carry them, the ephemeral live-turn activity, and the raw
+// protocol frames shown by the chat debug view. Shared between the server's
+// chat driver/WS layer and the client's chat stores. All SDK-specific types
+// stay in the driver; this file is SDK-agnostic so the client never imports
+// the agent SDK.
 
 /**
  * Base shape of every conversation event. `id` is stable and unique
@@ -120,6 +121,10 @@ export type ChatEvent =
       type: 'request_resolved'
       requestId: string
       outcome: ChatRequestOutcome
+      /** Who settled the request; absent on cancellations and legacy events. */
+      decidedBy?: ChatRequestDecidedBy
+      /** Tool name for policy grants that never showed a card. */
+      tool?: string
     })
   | (ChatTurnEventBase & {
       type: 'turn_completed'
@@ -139,6 +144,41 @@ export type ChatRequestOutcome =
   | 'denied'
   | 'answered'
   | 'cancelled'
+
+/** Who settled a request: the user answering, or the session's approval policy. */
+export type ChatRequestDecidedBy = 'user' | 'policy'
+
+/** Per-session approval policy: manual shows approval cards; auto grants them. */
+export type ChatApprovalPolicy = 'manual' | 'auto'
+
+/** Live phase of an in-flight chat turn (activity indicator design D1). */
+export type ChatActivityPhase =
+  | 'requesting'
+  | 'thinking'
+  | 'responding'
+  | 'preparing_tool'
+  | 'running_tools'
+  | 'retrying'
+
+/**
+ * What the agent is doing right now. Ephemeral by design: it is not a
+ * ChatEvent, never sequenced, persisted, or replayed, and excluded from the
+ * session-list status broadcast. `elapsedMs` is how long the phase had lasted
+ * when the message was sent, so clients tick on their own clock (design D2).
+ */
+export interface ChatActivity {
+  phase: ChatActivityPhase
+  /** Milliseconds already spent in this phase when the message was sent. */
+  elapsedMs: number
+  /** preparing_tool / running_tools: oldest unresolved tool name. */
+  tool?: string
+  /** running_tools: number of unresolved tool calls (>= 1). */
+  count?: number
+  /** retrying */
+  attempt?: number
+  maxRetries?: number
+  errorStatus?: number
+}
 
 /** Self-contained snapshot of a still-pending approval or question. */
 export type ChatPendingRequest =

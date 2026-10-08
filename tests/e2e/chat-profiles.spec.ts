@@ -1,4 +1,7 @@
 import { expect, test } from '@playwright/test'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
 
 test.skip(process.env.AGENTBOARD_CHAT_FIXTURE !== '1', 'Requires the development chat fixture')
 
@@ -31,9 +34,67 @@ test('select named profile, create, display, reconnect, and retain terminal form
   await page.screenshot({ path: info.outputPath('terminal-regression.png') })
 })
 
+test('project-level .kawai catalog extends the picker for that path', async ({ page }, info) => {
+  const project = await mkdtemp(path.join(os.tmpdir(), 'agentboard-e2e-profiles-'))
+  try {
+    await mkdir(path.join(project, '.kawai'), { recursive: true })
+    await writeFile(path.join(project, '.kawai', 'profiles.json'), JSON.stringify({
+      'glm-flash': {
+        label: 'GLM Flash',
+        model: 'glm-5.3-flash[1m]',
+        env: { ANTHROPIC_BASE_URL: 'https://zai.ruslan.casa/api/anthropic' },
+      },
+    }))
+    await page.goto('/')
+    await page.getByRole('button', { name: 'New session', exact: true }).first().click()
+    const dialog = page.getByRole('dialog', { name: 'New Session' })
+    await dialog.getByLabel('Session kind').selectOption('chat')
+    const profile = dialog.getByLabel('Profile')
+    // The prefilled server cwd has no .kawai: the shipped catalog applies.
+    await expect(profile.locator('option', { hasText: 'GLM Flash' })).toHaveCount(0)
+    // Entering the project path refetches the catalog and offers the entry.
+    await dialog.locator('input').first().fill(project)
+    await expect(profile.locator('option', { hasText: 'GLM Flash' })).toHaveCount(1)
+    await profile.selectOption('glm-flash')
+    await dialog.locator('input').last().fill('GLM Flash project catalog check')
+    await page.screenshot({ path: info.outputPath('project-catalog-picker.png') })
+    await dialog.getByRole('button', { name: 'Create', exact: true }).click()
+    await expect(page.getByTestId('chat-profile')).toHaveText('Profile: GLM Flash')
+    await page.getByLabel('Message Claude').fill('Hello flash')
+    await page.getByRole('button', { name: 'Send', exact: true }).click()
+    await page.screenshot({ path: info.outputPath('project-catalog-chat.png') })
+  } finally {
+    await rm(project, { recursive: true, force: true })
+  }
+})
+
+test('invalid project catalog file warns without blocking creation', async ({ page }, info) => {
+  const project = await mkdtemp(path.join(os.tmpdir(), 'agentboard-e2e-profiles-bad-'))
+  try {
+    await mkdir(path.join(project, '.kawai'), { recursive: true })
+    await writeFile(path.join(project, '.kawai', 'profiles.json'), '{ not json')
+    await page.goto('/')
+    await page.getByRole('button', { name: 'New session', exact: true }).first().click()
+    const dialog = page.getByRole('dialog', { name: 'New Session' })
+    await dialog.getByLabel('Session kind').selectOption('chat')
+    await dialog.locator('input').first().fill(project)
+    // The invalid file is reported by path...
+    await expect(dialog.getByRole('status')).toContainText('profiles.json')
+    // ...while the rest of the catalog resolves: creation still works.
+    await expect(dialog.getByLabel('Profile')).toHaveValue('default')
+    await expect(dialog.getByRole('button', { name: 'Create', exact: true })).toBeEnabled()
+    await dialog.locator('input').last().fill('Invalid catalog check')
+    await page.screenshot({ path: info.outputPath('catalog-warning.png') })
+    await dialog.getByRole('button', { name: 'Create', exact: true }).click()
+    await expect(page.getByTestId('chat-profile')).toHaveText('Profile: Default')
+  } finally {
+    await rm(project, { recursive: true, force: true })
+  }
+})
+
 test('catalog failure blocks chat creation and Retry recovers', async ({ page }, info) => {
   let fail = true
-  await page.route('**/api/chat/profiles', route => fail
+  await page.route('**/api/chat/profiles*', route => fail
     ? route.fulfill({ status: 503, contentType: 'application/json', body: '{}' })
     : route.continue())
   await page.goto('/')

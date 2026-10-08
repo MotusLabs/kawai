@@ -1,18 +1,28 @@
 // Attach on selection and reconnect; detaching never stops the agent. The
 // Debug toggle opens the protocol-frame panel beside the transcript (in place
 // of it on narrow screens); its subscription follows the same reconnect rules.
+// The Auto-approve toggle switches the session's approval policy live (amber
+// while on); it renders from the broadcast Session, never local state.
+// During an in-flight turn an activity row (design D6) follows ChatMessages:
+// the live phase with a client-ticked timer, hidden while text streams, while
+// a request awaits the user, and in archived chats (design D4).
 // Archived chats render read-only: the transcript and debug view stay, the
 // composer/Stop/request actions are replaced by a Restore bar, and archiving
 // a live turn asks for confirmation first (the server interrupts it).
 // The composer opens a slash-command menu while the text is a bare "/command"
 // (design D5): choosing inserts `/<name> ` without sending, Enter falls
 // through when nothing matches, and /clear /reset /new compose a new chat.
+// The root opts into `chat-palette`, the chat view's reduced-glare dark palette,
+// and `chat-root`, whose --chat-font-size (Settings "Chat Font Size") sizes
+// chat text through the em-based text-chat-body / text-chat-meta utilities.
 import { useClaudeProfiles } from './useClaudeProfiles'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import type { SendClientMessage, ServerMessage, Session } from '@shared/types'
 import type { ConnectionStatus } from '../../stores/sessionStore'
+import { useSettingsStore } from '../../stores/settingsStore'
 import { emptyTranscript, useChatStore } from '../../stores/chatStore'
 import { closedDebugView, useChatDebugStore } from '../../stores/chatDebugStore'
+import ChatActivityRow from './ChatActivityRow'
 import ChatDebugPanel from './ChatDebugPanel'
 import ChatMessages from './ChatMessages'
 import ChatRequests from './ChatRequests'
@@ -31,9 +41,10 @@ export default function ChatView({ session, sendMessage, subscribe, connectionSt
   error: string | null; onClose: () => void; onKill: () => void
   subscribe?: (listener: (message: ServerMessage) => void) => () => void
 }) {
-  const catalog = useClaudeProfiles(true)
+  const catalog = useClaudeProfiles(true, session.projectPath)
   const profileId = session.claudeProfileId ?? 'default'
   const profileLabel = catalog.profiles.find(profile => profile.id === profileId)?.label ?? profileId
+  const chatFontSize = useSettingsStore(state => state.chatFontSize)
   const transcript = useChatStore(state => state.sessions[session.id]) ?? EMPTY
   const [text, setText] = useState('')
   const end = useRef<HTMLDivElement>(null)
@@ -58,6 +69,16 @@ export default function ChatView({ session, sendMessage, subscribe, connectionSt
     else store.beginOpen(session.id)
   }
   const handleArchive = () => { requestChatArchive(session, sendMessage) }
+  // Approval policy (chat-auto-approve-tools design D6): rendered from the
+  // broadcast Session so every client agrees; archived chats hide the control.
+  const autoApprove = session.approvalPolicy === 'auto'
+  const toggleApprovalPolicy = () => {
+    sendMessage({
+      type: 'chat-set-approval-policy',
+      sessionId: session.id,
+      policy: autoApprove ? 'manual' : 'auto',
+    })
+  }
   useEffect(() => { setText('') }, [session.id])
   // `/clear` composition (design D6): remember which session awaits archival;
   // the matching session-created (a new chat in this project) archives it,
@@ -152,23 +173,38 @@ export default function ChatView({ session, sendMessage, subscribe, connectionSt
         (command) => command.name === hintName || command.aliases.includes(hintName)
       )
     : undefined
-  return <main className="flex min-h-0 min-w-0 flex-1 flex-col bg-base text-primary" data-testid="chat-view">
+  // Activity row hiding rules (design D4): text streaming is its own visible
+  // progress, a pending approval/question owns the footer, and archived chats
+  // are read-only — none of them also show the live phase row.
+  const activity = transcript.activity
+  const showActivity =
+    !archived &&
+    activity !== null &&
+    activity.value.phase !== 'responding' &&
+    transcript.pendingRequests.length === 0
+  return <main className="chat-palette chat-root flex min-h-0 min-w-0 flex-1 flex-col bg-base text-primary" data-testid="chat-view"
+    style={{ '--chat-font-size': `${chatFontSize}px` } as CSSProperties}>
     <header className="flex items-center gap-3 border-b border-border p-3">
-      <button className="btn md:hidden" onClick={onClose}>Sessions</button>
-      <div className="min-w-0 flex-1"><h2 className="truncate text-sm font-medium">{session.name} · Chat</h2>
-        <p className="text-xs text-secondary" data-testid="chat-profile">Profile: {profileLabel}</p>
-        <p className="truncate text-xs text-secondary">{session.projectPath}</p></div>
-      <span className="text-xs text-secondary" data-testid="chat-status">{connected ? (archived ? 'archived' : session.status) : connectionStatus}</span>
-      <button className={`btn text-xs ${debugOpen ? 'btn-primary' : ''}`} aria-pressed={debugOpen} onClick={toggleDebug}>Debug</button>
-      {!archived && <button className="btn text-xs" onClick={handleArchive} data-testid="chat-archive-button">Archive</button>}
-      <button className="btn text-xs" onClick={onKill}>Kill session</button>
+      <button className="btn text-chat-meta md:hidden" onClick={onClose}>Sessions</button>
+      <div className="min-w-0 flex-1"><h2 className="truncate text-chat-body font-medium">{session.name} · Chat</h2>
+        <p className="text-chat-meta text-secondary" data-testid="chat-profile">Profile: {profileLabel}</p>
+        <p className="truncate text-chat-meta text-secondary">{session.projectPath}</p></div>
+      <span className="text-chat-meta text-secondary" data-testid="chat-status">{connected ? (archived ? 'archived' : session.status) : connectionStatus}</span>
+      <button className={`btn text-chat-meta ${debugOpen ? 'btn-primary' : ''}`} aria-pressed={debugOpen} onClick={toggleDebug}>Debug</button>
+      {!archived && <button className={`btn text-chat-meta ${autoApprove ? 'btn-approval-on' : ''}`} aria-pressed={autoApprove}
+        onClick={toggleApprovalPolicy} data-testid="chat-approval-policy">Auto-approve</button>}
+      {!archived && <button className="btn text-chat-meta" onClick={handleArchive} data-testid="chat-archive-button">Archive</button>}
+      <button className="btn text-chat-meta" onClick={onKill}>Kill session</button>
     </header>
-    {error && <p role="alert" className="border-b border-border p-3 text-sm text-red-400">{error}</p>}
+    {error && <p role="alert" className="border-b border-border p-3 text-chat-body text-chat-danger">{error}</p>}
     <div className="flex min-h-0 flex-1">
       <div className={`min-h-0 min-w-0 flex-1 flex-col ${debugOpen ? 'hidden md:flex' : 'flex'}`}>
         <div className="min-h-0 flex-1 overflow-y-auto p-4">
           <div className="mx-auto max-w-3xl space-y-4">
             <ChatMessages events={transcript.events} />
+            {showActivity && (
+              <ChatActivityRow activity={activity.value} phaseStartedAt={activity.phaseStartedAt} />
+            )}
             {!archived && <ChatRequests requests={transcript.pendingRequests} sessionId={session.id} sendMessage={sendMessage} disabled={!connected} />}
             <div ref={end} />
           </div>
@@ -176,8 +212,8 @@ export default function ChatView({ session, sendMessage, subscribe, connectionSt
         {archived ? (
           <div className="border-t border-border p-3" data-testid="chat-archived-bar">
             <div className="mx-auto flex max-w-3xl items-center justify-between gap-2">
-              <p className="text-xs text-secondary">Archived — read-only. Restore to continue this conversation.</p>
-              <button className="btn btn-primary text-xs" onClick={() => sendMessage({ type: 'chat-restore', sessionId: session.id })}
+              <p className="text-chat-meta text-secondary">Archived — read-only. Restore to continue this conversation.</p>
+              <button className="btn btn-primary text-chat-meta" onClick={() => sendMessage({ type: 'chat-restore', sessionId: session.id })}
                 disabled={!connected}>Restore</button>
             </div>
           </div>
@@ -197,11 +233,11 @@ export default function ChatView({ session, sendMessage, subscribe, connectionSt
                 </div>
               )}
               <div className="flex items-end gap-2">
-                <textarea aria-label="Message Claude" className="input min-h-20 flex-1 resize-y" value={text}
+                <textarea aria-label="Message Claude" className="input chat-composer min-h-20 flex-1 resize-y text-chat-body" value={text}
                   disabled={!connected} placeholder="Message Claude…" onChange={event => setText(event.target.value)}
                   onKeyDown={handleComposerKeyDown} />
-                <button className="btn btn-primary" disabled={!connected || !text.trim()}>Send</button>
-                <button type="button" className="btn" disabled={!connected || session.status === 'waiting'}
+                <button className="btn btn-primary text-chat-meta" disabled={!connected || !text.trim()}>Send</button>
+                <button type="button" className="btn text-chat-meta" disabled={!connected || session.status === 'waiting'}
                   onClick={() => sendMessage({ type: 'chat-interrupt', sessionId: session.id })}>Stop</button>
               </div>
               {hintCommand?.argumentHint && (

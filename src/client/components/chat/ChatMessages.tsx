@@ -1,7 +1,6 @@
 // Read-only transcript entries; active approval/question controls live separately.
-import ReactMarkdown from 'react-markdown'
-import remarkBreaks from 'remark-breaks'
 import type { ChatEvent } from '@shared/chat'
+import Markdown from '../Markdown'
 
 export default function ChatMessages({ events }: { events: ChatEvent[] }) {
   return <div className="space-y-4" data-testid="chat-transcript">
@@ -9,39 +8,48 @@ export default function ChatMessages({ events }: { events: ChatEvent[] }) {
       switch (event.type) {
         case 'user_message':
           return <article key={event.id} data-chat-role="user" className="ml-8 border border-border bg-elevated p-3">
-            <div className="mb-1 text-xs text-secondary">You</div>
-            <p className="whitespace-pre-wrap break-words text-sm">{event.text}</p>
+            <div className="mb-1 text-chat-meta text-secondary">You</div>
+            <p className="whitespace-pre-wrap break-words text-chat-body">{event.text}</p>
           </article>
         case 'assistant_text':
           return <article key={event.id} data-chat-role="assistant" className="mr-8 p-3">
-            <div className="mb-1 text-xs text-secondary">Claude</div>
-            <div className="prose prose-invert max-w-none break-words text-sm">
-              <ReactMarkdown remarkPlugins={[remarkBreaks]}>{event.text}</ReactMarkdown>
-            </div>
+            <div className="mb-1 text-chat-meta text-secondary">Claude</div>
+            <Markdown content={event.text} />
           </article>
         case 'tool_call':
-          return <details key={event.id} className="border-l-2 border-border px-3 text-xs text-secondary">
+          return <details key={event.id} className="border-l-2 border-border px-3 text-chat-meta text-secondary">
             <summary>Tool: {event.tool}</summary>
             <pre className="mt-2 overflow-auto whitespace-pre-wrap">{JSON.stringify(event.input, null, 2)}</pre>
           </details>
         case 'tool_result':
-          return <details key={event.id} className="px-3 text-xs text-secondary">
+          return <details key={event.id} className="px-3 text-chat-meta text-secondary">
             <summary>{event.isError ? 'Tool failed' : 'Tool result'}</summary>
             <pre className="mt-2 overflow-auto whitespace-pre-wrap">{event.output}</pre>
           </details>
         case 'command_output':
           return <div key={event.id} data-testid="chat-command-output" data-chat-role="assistant"
-            className="mx-3 border-l-2 border-border px-3 py-2 text-xs text-secondary">
+            className="mx-3 border-l-2 border-border px-3 py-2 font-mono text-xs text-secondary">
             <div className="mb-1 text-xs">Command output</div>
-            <div className="max-w-none break-words font-mono whitespace-pre-wrap text-xs">
-              <ReactMarkdown remarkPlugins={[remarkBreaks]}>{event.text}</ReactMarkdown>
-            </div>
+            <Markdown content={event.text} />
           </div>
-        case 'notice': return <p key={event.id} className="text-xs text-secondary">{event.text}</p>
-        case 'error': return <p key={event.id} role="alert" className="text-sm text-red-400">{event.message}</p>
-        case 'turn_interrupted': return <p key={event.id} className="text-xs text-secondary">Turn stopped</p>
-        case 'request_resolved': return <p key={event.id} className="text-xs text-secondary">Request {event.outcome}</p>
-        case 'turn_completed': return <p key={event.id} className="text-xs text-muted">
+        case 'notice': return <p key={event.id} className="text-chat-meta text-secondary">{event.text}</p>
+        case 'error': return <p key={event.id} role="alert" className="text-chat-body text-chat-danger">{event.message}</p>
+        case 'turn_interrupted': return <p key={event.id} className="text-chat-meta text-secondary">Turn stopped</p>
+        case 'request_resolved': {
+          // Who decided: policy grants stand apart from the user's own calls.
+          if (event.decidedBy === 'policy') {
+            return <p key={event.id} className="text-chat-meta text-secondary" data-testid="auto-approved">
+              Auto-approved {event.tool ?? 'tool'}
+            </p>
+          }
+          if (event.decidedBy === 'user' && (event.outcome === 'allowed' || event.outcome === 'denied')) {
+            return <p key={event.id} className="text-chat-meta text-secondary">
+              {event.outcome === 'allowed' ? 'Allowed' : 'Denied'} by user
+            </p>
+          }
+          return <p key={event.id} className="text-chat-meta text-secondary">Request {event.outcome}</p>
+        }
+        case 'turn_completed': return <p key={event.id} className="text-chat-meta text-muted">
           Turn complete · {event.subtype}{event.totalCostUsd !== undefined ? ` · $${event.totalCostUsd.toFixed(4)}` : ''}
           {event.numTurns !== undefined ? ` · ${event.numTurns} turns` : ''}
         </p>

@@ -281,6 +281,53 @@ describe('SettingsModal', () => {
     })
   })
 
+  test('chat font size stepper stops at 12 and 20 and saves without touching the terminal size', () => {
+    useSettingsStore.setState({ chatFontSize: 13, fontSize: 13 })
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => {
+      renderer = TestRenderer.create(<SettingsModal isOpen onClose={() => {}} />)
+    })
+    const button = (label: string) => renderer.root.findByProps({ 'aria-label': label })
+
+    act(() => { button('Decrease Chat Font Size').props.onClick() })
+    expect(button('Decrease Chat Font Size').props.disabled).toBe(true)
+    act(() => { button('Decrease Chat Font Size').props.onClick() })
+    expect(useSettingsStore.getState().chatFontSize).toBe(13)
+
+    for (let i = 0; i < 10; i += 1) {
+      act(() => { button('Increase Chat Font Size').props.onClick() })
+    }
+    expect(button('Increase Chat Font Size').props.disabled).toBe(true)
+
+    act(() => {
+      renderer.root.findByType('form').props.onSubmit({ preventDefault: () => {} })
+    })
+    expect(useSettingsStore.getState().chatFontSize).toBe(20)
+    expect(useSettingsStore.getState().fontSize).toBe(13)
+    act(() => { renderer.unmount() })
+  })
+
+  test('closing without saving discards the chat font size draft', () => {
+    useSettingsStore.setState({ chatFontSize: 15 })
+    const onClose = () => {}
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => {
+      renderer = TestRenderer.create(<SettingsModal isOpen onClose={onClose} />)
+    })
+    act(() => { renderer.root.findByProps({ 'aria-label': 'Increase Chat Font Size' }).props.onClick() })
+    const cancel = renderer.root.findAllByType('button').find(b => b.props.children === 'Cancel' && b.props.className === 'btn')
+    if (!cancel) throw new Error('Expected cancel button')
+    act(() => { cancel.props.onClick() })
+    expect(useSettingsStore.getState().chatFontSize).toBe(15)
+
+    act(() => { renderer.update(<SettingsModal isOpen={false} onClose={onClose} />) })
+    act(() => { renderer.update(<SettingsModal isOpen onClose={onClose} />) })
+    const stepper = renderer.root.findByProps({ 'aria-label': 'Increase Chat Font Size' }).parent
+    const value = stepper?.findAll(node => node.type === 'span' && String(node.props.className).includes('w-6'))[0]
+    expect(value?.props.children).toBe(15)
+    act(() => { renderer.unmount() })
+  })
+
   test('updates preset command', () => {
     let renderer!: TestRenderer.ReactTestRenderer
 

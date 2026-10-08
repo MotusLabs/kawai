@@ -274,6 +274,9 @@ describe('SessionPreviewModal', () => {
 
     html = JSON.stringify(renderer.toJSON())
     expect(html).toContain('Hello')
+    const previewMarkdown = renderer.root.findAllByProps({ 'data-testid': 'preview-markdown' })
+    expect(previewMarkdown.length).toBeGreaterThan(0)
+    for (const node of previewMarkdown) expect(String(node.props.className)).toContain('text-sm leading-6')
     expect(html).toContain('World')
     expect(html).toContain('From response item')
     expect(html).toContain('From event msg')

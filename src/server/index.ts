@@ -808,6 +808,7 @@ const chatSessionManager = new ChatSessionManager({
   db,
   onEvent: (sessionId, event) => chatConnections.publish(sessionId, event),
   onCommandState: (sessionId, state) => chatConnections.publishCommandState(sessionId, state),
+  onActivity: (sessionId, activity) => chatConnections.publishActivity(sessionId, activity),
   getProviderEnv: chatProviderEnv.current,
   wireLogs: chatWireLogs,
   ...(chatFixtureEnabled ? { queryFactory: fixtureQueryFactory, authCheck: () => true } : {}),
@@ -2669,6 +2670,7 @@ function handleMessage(
     case 'chat-restore':
     case 'chat-approval':
     case 'chat-answer':
+    case 'chat-set-approval-policy':
     case 'chat-debug-open':
     case 'chat-debug-page':
     case 'chat-debug-close':

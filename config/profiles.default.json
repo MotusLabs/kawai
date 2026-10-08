@@ -1,0 +1,42 @@
+{
+  "default": { "label": "Default" },
+  "glm": {
+    "label": "GLM",
+    "model": "sonnet",
+    "env": {
+      "ANTHROPIC_BASE_URL": "https://zai.ruslan.casa/api/anthropic",
+      "ANTHROPIC_DEFAULT_SONNET_MODEL": "glm-5.3-flash[1m]",
+      "ANTHROPIC_DEFAULT_OPUS_MODEL": "glm-5.3[1m]",
+      "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "1000000"
+    }
+  },
+  "minimax": {
+    "label": "MiniMax",
+    "model": "MiniMax-M3",
+    "env": {
+      "ANTHROPIC_BASE_URL": "https://api.minimax.io/anthropic",
+      "ANTHROPIC_MODEL": "MiniMax-M3"
+    }
+  },
+  "mimo": {
+    "label": "MiMo",
+    "model": "mimo-v2.6-pro",
+    "env": {
+      "ANTHROPIC_BASE_URL": "https://xiaomi.ruslan.casa/anthropic",
+      "ANTHROPIC_MODEL": "mimo-v2.6-pro",
+      "ANTHROPIC_DEFAULT_SONNET_MODEL": "mimo-v2.6-flash",
+      "ANTHROPIC_DEFAULT_OPUS_MODEL": "mimo-v2.6-pro"
+    }
+  },
+  "kimi": {
+    "label": "Kimi",
+    "env": { "ANTHROPIC_BASE_URL": "https://kimi.ruslan.casa/" }
+  },
+  "lan": {
+    "label": "LAN",
+    "env": {
+      "ANTHROPIC_BASE_URL": "http://ai.lan:9292",
+      "CLAUDE_CODE_ATTRIBUTION_HEADER": "0"
+    }
+  }
+}

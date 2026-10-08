@@ -41,6 +41,9 @@ const {
   DEFAULT_PRESETS,
   PANE_MIN_FRACTION,
   PANE_MAX_FRACTION,
+  CHAT_FONT_SIZE_MIN,
+  CHAT_FONT_SIZE_MAX,
+  CHAT_FONT_SIZE_DEFAULT,
   isValidPreset,
   normalizePreset,
   getFullCommand,
@@ -452,6 +455,54 @@ describe('workspace pane fractions', () => {
     expect(useSettingsStore.getState().workspacePaneFraction).toBe(0.6)
     expect(useSettingsStore.getState().remotePaneFraction).toBe(0.25)
     expect(useSettingsStore.getState().archivePaneFraction).toBe(0.1)
+  })
+})
+
+describe('chat font size', () => {
+  beforeEach(() => {
+    useSettingsStore.setState({ chatFontSize: CHAT_FONT_SIZE_DEFAULT, fontSize: 13 })
+  })
+
+  test('defaults to 15px within a 12-20px range', () => {
+    expect(useSettingsStore.getState().chatFontSize).toBe(15)
+    expect(CHAT_FONT_SIZE_MIN).toBe(12)
+    expect(CHAT_FONT_SIZE_MAX).toBe(20)
+  })
+
+  test('setter clamps to the range, rounds, and leaves the terminal size alone', () => {
+    const { setChatFontSize } = useSettingsStore.getState()
+    setChatFontSize(11)
+    expect(useSettingsStore.getState().chatFontSize).toBe(12)
+    setChatFontSize(21)
+    expect(useSettingsStore.getState().chatFontSize).toBe(20)
+    setChatFontSize(16.6)
+    expect(useSettingsStore.getState().chatFontSize).toBe(17)
+    setChatFontSize(Number.NaN)
+    expect(useSettingsStore.getState().chatFontSize).toBe(15)
+    expect(useSettingsStore.getState().fontSize).toBe(13)
+  })
+
+  test('state persisted without the key rehydrates to the default', async () => {
+    storage.setItem('agentboard-settings', JSON.stringify({ state: { sessionSortMode: 'status' }, version: 7 }))
+    await useSettingsStore.persist.rehydrate()
+    expect(useSettingsStore.getState().chatFontSize).toBe(15)
+  })
+
+  test('hand-edited persisted values are sanitized on rehydration', async () => {
+    storage.setItem('agentboard-settings', JSON.stringify({ state: { chatFontSize: 'abc' }, version: 7 }))
+    await useSettingsStore.persist.rehydrate()
+    expect(useSettingsStore.getState().chatFontSize).toBe(15)
+
+    storage.setItem('agentboard-settings', JSON.stringify({ state: { chatFontSize: 40 }, version: 7 }))
+    await useSettingsStore.persist.rehydrate()
+    expect(useSettingsStore.getState().chatFontSize).toBe(20)
+  })
+
+  test('a saved size is persisted and read back on reload', async () => {
+    useSettingsStore.getState().setChatFontSize(18)
+    expect(JSON.parse(storage.getItem('agentboard-settings') ?? '{}').state.chatFontSize).toBe(18)
+    await useSettingsStore.persist.rehydrate()
+    expect(useSettingsStore.getState().chatFontSize).toBe(18)
   })
 })
 

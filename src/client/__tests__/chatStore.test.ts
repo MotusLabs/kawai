@@ -40,10 +40,29 @@ describe('chat store', () => {
     expect(cancelled.status).toBe('waiting')
   })
 
+  test('a policy grant with no prior card leaves pending requests and status intact', () => {
+    // Auto policy resolves tool uses that never showed a card; the store
+    // must not disturb unrelated pending requests or reset status.
+    const approval: ChatEvent = { id: 'a', sequence: 1, at: 'now', turnId: 't', type: 'approval_request', requestId: 'r1', tool: 'Bash', input: {} }
+    const pending = applyChatEvents(emptyTranscript(), [approval])
+    const granted = applyChatEvents(pending, [
+      { id: 'g', sequence: 2, at: 'now', type: 'request_resolved', requestId: 'req-unseen', outcome: 'allowed', decidedBy: 'policy', tool: 'Write' },
+    ])
+    expect(granted.pendingRequests.map(request => request.requestId)).toEqual(['r1'])
+    expect(granted.status).toBe('permission')
+    expect(granted.events.at(-1)).toMatchObject({ type: 'request_resolved', decidedBy: 'policy', tool: 'Write' })
+    // With nothing pending the same event keeps the working status.
+    const lone = applyChatEvents(emptyTranscript(), [
+      { id: 's', sequence: 1, at: 'now', type: 'turn_started', turnId: 't' },
+      { id: 'g', sequence: 2, at: 'now', type: 'request_resolved', requestId: 'req-unseen', outcome: 'allowed', decidedBy: 'policy', tool: 'Write' },
+    ])
+    expect(lone.status).toBe('working')
+  })
+
   test('a snapshot replaces stale state and its pending requests are authoritative', () => {
     const store = useChatStore.getState()
     store.apply('chat-1', [delta(1, 'old')])
-    store.snapshot({ type: 'chat-snapshot', sessionId: 'chat-1', events: [delta(2, 'restored')], pendingRequests: [], status: 'working', throughSequence: 2, commands: { status: 'ready', commands: [] } })
+    store.snapshot({ type: 'chat-snapshot', sessionId: 'chat-1', events: [delta(2, 'restored')], pendingRequests: [], status: 'working', throughSequence: 2, commands: { status: 'ready', commands: [] }, activity: null })
     const state = useChatStore.getState().sessions['chat-1']
     expect(state.events).toHaveLength(1)
     expect(state.events[0]).toMatchObject({ text: 'restored' })
@@ -74,7 +93,7 @@ describe('chat store', () => {
     // Reconnect: the snapshot's state is authoritative again.
     store.snapshot({
       type: 'chat-snapshot', sessionId: 'chat-1', events: [], pendingRequests: [],
-      status: 'waiting', throughSequence: 0, commands: { status: 'ready', commands: [usage] },
+      status: 'waiting', throughSequence: 0, commands: { status: 'ready', commands: [usage] }, activity: null,
     })
     expect(useChatStore.getState().sessions['chat-1'].commands).toEqual({ status: 'ready', commands: [usage] })
 
@@ -97,5 +116,56 @@ describe('chat store', () => {
     store.remove('chat-1')
     expect(useChatStore.getState().sessions['chat-1']).toBeUndefined()
     expect(useChatStore.getState().sessions['chat-2'].events).toHaveLength(1)
+  })
+})
+
+describe('chat store activity', () => {
+  test('setActivity anchors the phase on the client clock and clears on null', () => {
+    const store = useChatStore.getState()
+    const before = Date.now()
+    store.setActivity('chat-1', { phase: 'thinking', elapsedMs: 5_000 })
+    const anchored = useChatStore.getState().sessions['chat-1'].activity!
+    const after = Date.now()
+    expect(anchored.value).toEqual({ phase: 'thinking', elapsedMs: 5_000 })
+    expect(anchored.phaseStartedAt).toBeGreaterThanOrEqual(before - 5_000)
+    expect(anchored.phaseStartedAt).toBeLessThanOrEqual(after - 5_000)
+
+    store.setActivity('chat-1', null)
+    expect(useChatStore.getState().sessions['chat-1'].activity).toBeNull()
+  })
+
+  test('a snapshot restores the in-flight activity with its age', () => {
+    const store = useChatStore.getState()
+    const before = Date.now()
+    store.snapshot({
+      type: 'chat-snapshot', sessionId: 'chat-1', events: [delta(1, 'streamed')],
+      pendingRequests: [], status: 'working', throughSequence: 1,
+      commands: { status: 'ready', commands: [] },
+      activity: { phase: 'running_tools', elapsedMs: 10_000, tool: 'Bash', count: 1 },
+    })
+    const activity = useChatStore.getState().sessions['chat-1'].activity!
+    expect(activity.value.phase).toBe('running_tools')
+    expect(activity.phaseStartedAt).toBeGreaterThanOrEqual(before - 10_000)
+    // An idle snapshot carries no row.
+    store.snapshot({
+      type: 'chat-snapshot', sessionId: 'chat-2', events: [], pendingRequests: [],
+      status: 'waiting', throughSequence: 0, commands: { status: 'unavailable', commands: [] }, activity: null,
+    })
+    expect(useChatStore.getState().sessions['chat-2'].activity).toBeNull()
+  })
+
+  test('turn end events clear the row even without a server null', () => {
+    const store = useChatStore.getState()
+    store.setActivity('chat-1', { phase: 'thinking', elapsedMs: 1_000 })
+    store.apply('chat-1', [
+      { id: 'done', sequence: 9, at: 'now', turnId: 'turn-1', type: 'turn_completed', subtype: 'success' },
+    ])
+    expect(useChatStore.getState().sessions['chat-1'].activity).toBeNull()
+
+    store.setActivity('chat-1', { phase: 'thinking', elapsedMs: 1_000 })
+    store.apply('chat-1', [
+      { id: 'stop', sequence: 10, at: 'now', turnId: 'turn-2', type: 'turn_interrupted' },
+    ])
+    expect(useChatStore.getState().sessions['chat-1'].activity).toBeNull()
   })
 })

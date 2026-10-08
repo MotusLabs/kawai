@@ -67,18 +67,20 @@ existing chat session SHALL receive the session's prior conversation.
 - **THEN** the prior conversation is displayed before any new live events arrive
 
 ### Requirement: Tool approval requests surface as approval cards
-When the agent requests a tool use that requires approval, the system SHALL
-present an approval card in the chat view showing the tool and its
-arguments, and SHALL hold the agent until the user answers. Allowing SHALL
+When the agent requests a tool use that requires approval and the session's
+approval policy is manual, the system SHALL present an approval card in the
+chat view showing the tool and its arguments, and SHALL hold the agent until
+the user answers. Allowing SHALL
 let the tool run; denying SHALL return the denial to the agent so the turn
 continues. A pending approval SHALL survive browser disconnects until answered, cancelled
-by the SDK, interrupted, or killed. Server restart SHALL cancel outstanding
+by the SDK, interrupted, granted by switching the session to the auto policy,
+or killed. Server restart SHALL cancel outstanding
 requests rather than restore callbacks that no longer exist. Resolution and
 cancellation SHALL update every attached client; only the first valid answer
 SHALL take effect.
 
 #### Scenario: Approval card with allow and deny
-- **WHEN** the agent requests a tool use that requires approval
+- **WHEN** the agent requests a tool use that requires approval in a session with the manual policy
 - **THEN** an approval card with the tool name and arguments is shown, and no tool execution occurs before the user answers
 
 #### Scenario: Allow executes the tool
@@ -88,6 +90,106 @@ SHALL take effect.
 #### Scenario: Deny returns the denial to the agent
 - **WHEN** the user chooses Deny on a pending approval card
 - **THEN** the tool use is not executed, the denial is reported to the agent, and the turn continues
+
+### Requirement: Chat sessions have a per-session approval policy
+Each chat session SHALL have an approval policy of either manual or auto.
+Every new chat session SHALL start with the manual policy, and there SHALL be
+no global or per-profile default. The policy SHALL be stored with the session
+and SHALL be kept across server restarts, conversation resume, archive, and
+restore. Sessions created before this feature SHALL behave as manual.
+
+#### Scenario: New chat starts manual
+- **WHEN** a user creates a chat session with any profile
+- **THEN** the session's approval policy is manual and tool approvals show approval cards
+
+#### Scenario: Policy survives restart
+- **WHEN** a chat session's policy is auto and the server restarts
+- **THEN** the session is listed with the auto policy and its next tool approval is granted without a card
+
+#### Scenario: Policy survives archive and restore
+- **WHEN** a chat session with the auto policy is archived and later restored
+- **THEN** the restored session still has the auto policy
+
+#### Scenario: Legacy session defaults to manual
+- **WHEN** the server loads a chat session stored before approval policies existed
+- **THEN** the session's approval policy is manual
+
+### Requirement: Auto policy grants tool approvals without a card
+While a chat session's policy is auto, the system SHALL grant each tool
+approval request immediately without showing an approval card, and the
+session SHALL NOT enter the permission status for it. Agent questions SHALL
+NOT be answered by the policy: they SHALL always be shown as question forms.
+Tool uses denied by the user's Claude Code permission settings SHALL remain
+denied.
+
+#### Scenario: Tool runs without a card
+- **WHEN** the agent requests a tool use that requires approval in a session with the auto policy
+- **THEN** no approval card is shown, the tool runs, and the session stays working rather than permission
+
+#### Scenario: Questions still reach the user
+- **WHEN** the agent asks a question in a session with the auto policy
+- **THEN** the question form is shown, the session reports permission, and the agent waits for the user's answer
+
+#### Scenario: Settings deny rules still apply
+- **WHEN** the user's Claude Code settings deny a tool and the agent attempts it in a session with the auto policy
+- **THEN** the tool use is denied as it would be under the manual policy
+
+### Requirement: Users switch the approval policy from the chat view
+The chat view SHALL let the user switch a live chat session between manual
+and auto. The switch SHALL take effect for the next request without
+restarting the agent, and every attached client SHALL see the new policy.
+Switching to auto SHALL grant that session's pending approval cards; pending
+questions SHALL stay open. Switching to manual SHALL affect only later
+requests.
+
+#### Scenario: Enabling auto clears pending approvals
+- **WHEN** a session has a pending approval card and a pending question and the user switches it to auto
+- **THEN** the approval is granted and its tool runs, the question remains open, and the agent process is not restarted
+
+#### Scenario: Disabling auto returns to cards
+- **WHEN** the user switches a session from auto to manual during a turn
+- **THEN** tool uses already granted keep running and the next tool approval request shows an approval card
+
+#### Scenario: Other clients see the switch
+- **WHEN** two browsers are attached to the same chat session and one switches its policy
+- **THEN** both show the new policy without a reload
+
+### Requirement: Approval policy changes are validated
+The system SHALL refuse a policy change for an unknown session, for an
+archived session, or with a value other than manual or auto, and SHALL report
+an error to the requesting client without changing the stored policy.
+Archived chats SHALL NOT show the policy control.
+
+#### Scenario: Archived session refuses a change
+- **WHEN** a client requests a policy change for an archived chat session
+- **THEN** the request is refused with an error and the stored policy is unchanged
+
+#### Scenario: Unsupported value is refused
+- **WHEN** a client requests a policy value that is not manual or auto
+- **THEN** the request is refused with an error and the stored policy is unchanged
+
+#### Scenario: Archived chat hides the control
+- **WHEN** the user opens an archived chat session
+- **THEN** the read-only view shows no approval-policy control
+
+### Requirement: Auto-approved activity is visible
+While a chat session's policy is auto, its chat view header SHALL show a
+clearly distinguishable auto-approve indicator. Each tool use granted by the
+policy SHALL be marked in the transcript as auto-approved, distinct from a
+user's Allow, and each policy change SHALL add a transcript notice. Reconnecting
+clients SHALL receive these entries in the history snapshot.
+
+#### Scenario: Header indicates auto
+- **WHEN** a chat session's policy is auto
+- **THEN** its chat view header shows the auto-approve indicator, and the indicator disappears when the policy returns to manual
+
+#### Scenario: Transcript distinguishes who approved
+- **WHEN** one tool use is allowed by the user and another is granted by the auto policy
+- **THEN** the transcript marks the second as auto-approved and the first as allowed by the user
+
+#### Scenario: Policy change is recorded
+- **WHEN** the user switches a session's policy
+- **THEN** a notice stating the new policy appears in the transcript of every attached client and in the snapshot sent to clients that attach later
 
 ### Requirement: Agent questions collect structured user answers
 The system SHALL handle SDK `AskUserQuestion` requests with question forms
@@ -279,3 +381,97 @@ Archived chat sessions SHALL NOT be hidden or removed by the history lookback wi
 #### Scenario: Kill an archived chat
 - **WHEN** the user kills an archived chat session
 - **THEN** the session, its record, and its protocol log are removed and it leaves the session list
+
+### Requirement: Assistant markdown renders with visible formatting
+The chat view SHALL render assistant text as formatted content, not as plain
+text. Block and inline markdown elements and GitHub-flavored markdown
+extensions SHALL each be visually distinct from body text. Single line breaks
+inside a paragraph SHALL be preserved. Raw HTML in assistant text SHALL NOT be
+rendered or executed. User messages SHALL keep their literal text.
+
+#### Scenario: Block elements are formatted
+- **WHEN** assistant text contains a heading, a bulleted list, a numbered list, a blockquote, a horizontal rule and a fenced code block
+- **THEN** the heading is larger or bolder than body text, list items show bullets or numbers and are indented, the blockquote is visually set off, the rule is visible, and the code block appears in a monospace block whose whitespace is preserved and whose wide lines scroll horizontally instead of overflowing the transcript
+
+#### Scenario: Inline elements are formatted
+- **WHEN** assistant text contains bold, italic, inline code and a link
+- **THEN** bold and italic are visibly emphasized, inline code is visually distinct from surrounding text, and the link is visibly a link that opens in a new browser tab without giving the opened page access to the chat window
+
+#### Scenario: GitHub-flavored markdown is supported
+- **WHEN** assistant text contains a pipe table, `~~strikethrough~~`, a task list and a bare URL
+- **THEN** the table renders as a bordered table with a header row, the strikethrough text is struck through, task list items show checkboxes, the bare URL is a link, and no raw `|` or `~~` syntax is visible
+
+#### Scenario: Single line breaks are kept
+- **WHEN** assistant text contains two lines separated by a single newline
+- **THEN** they render on separate lines
+
+#### Scenario: Raw HTML stays inert
+- **WHEN** assistant text contains raw HTML such as a `<script>` tag
+- **THEN** no script runs and no element is created from that HTML
+
+#### Scenario: User messages are not reformatted
+- **WHEN** the user sends a message that contains markdown syntax
+- **THEN** the user's turn shows the literal text with its whitespace preserved
+
+#### Scenario: Chat and session preview render markdown the same way
+- **WHEN** the same markdown text appears as an assistant message in the chat view and in the session log preview
+- **THEN** both render the same elements with the same styling in proportion to their base text size, so the chat follows the chat font size while the preview keeps its own size
+
+### Requirement: Chat view uses a reduced-glare dark palette
+In the dark theme, the chat view SHALL render on a lifted dark-gray background
+with off-white text instead of the app's near-black palette. Primary message
+text SHALL have a contrast ratio between 7:1 and 10:1 against the chat
+background. Secondary text SHALL have at least 4.5:1 against every chat
+surface it appears on. The light theme and views outside the chat view SHALL
+be unchanged.
+
+#### Scenario: Assistant and user messages in the dark theme
+- **WHEN** the dark theme is active and the chat view shows user and assistant messages
+- **THEN** the transcript background is a dark gray rather than near-black, and message text measures between 7:1 and 10:1 contrast against it
+
+#### Scenario: Secondary text stays readable on every chat surface
+- **WHEN** role labels, tool-activity summaries, notices or the session header details appear on the chat background, inside the user-message bubble, or on an approval or question card
+- **THEN** that text measures at least 4.5:1 contrast against the surface behind it
+
+#### Scenario: Status and error colors follow the palette
+- **WHEN** the chat view shows an error, or the Debug panel lists outgoing, incoming, stderr and lifecycle frames
+- **THEN** each of these colors comes from the chat palette, stays distinguishable from the others, and measures at least 4.5:1 contrast against the chat background
+
+#### Scenario: Primary actions remain legible
+- **WHEN** the chat view shows a primary button such as Send, Allow, Submit answers or Restore
+- **THEN** its label measures at least 4.5:1 contrast against the button background
+
+#### Scenario: Rest of the app keeps its dark palette
+- **WHEN** the dark theme is active and the user looks at the session navigator, a terminal session or a modal while a chat session is open
+- **THEN** those areas keep the app's existing dark colors
+
+#### Scenario: Light theme is unchanged
+- **WHEN** the light theme is active and the user opens a chat session
+- **THEN** the chat view uses the app's existing light colors
+
+### Requirement: Chat text uses a readable, adjustable size
+The chat view SHALL size its text from a chat font size independent of the
+terminal font size and the rest of the app. The chat font size SHALL default
+to 15px and be adjustable from Settings between 12px and 20px. Message bodies
+SHALL render at the chat font size, and secondary text SHALL render at no less
+than 0.8 of it. The setting SHALL persist across reloads.
+
+#### Scenario: Default size is readable
+- **WHEN** a user who has never changed the chat font size opens a chat session
+- **THEN** user and assistant message bodies render at 15px and role labels, tool calls, notices and the turn footer render at 12px or larger
+
+#### Scenario: User changes the chat font size
+- **WHEN** the user sets the chat font size to 18px in Settings and saves
+- **THEN** chat message bodies, formatted assistant markdown, approval and question cards, and the composer scale to the new size, and the setting is still 18px after a page reload
+
+#### Scenario: Chat and terminal sizes are independent
+- **WHEN** the user changes the chat font size
+- **THEN** the terminal font size, terminal rendering and the session log preview are unchanged, and changing the terminal font size leaves chat text unchanged
+
+#### Scenario: Out-of-range values are clamped
+- **WHEN** the user tries to go below 12px or above 20px, or the stored value is out of range or not a number
+- **THEN** the chat font size is limited to 12–20px, and a non-numeric stored value falls back to 15px
+
+#### Scenario: Composer does not trigger mobile zoom
+- **WHEN** the chat font size is below 16px and the user focuses the composer on a touch device
+- **THEN** the composer text is at least 16px, so the browser does not zoom the page
