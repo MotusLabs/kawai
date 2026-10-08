@@ -6,12 +6,12 @@
 
 ## 2. Normalize pushed reports
 
-- [ ] 2.1 Implement the `rate_limit_event` parser in `src/server/chat/usageLimits.ts` (prefer `unifiedWindows` for both windows, fall back to `rateLimitType`/`utilization`/`resetsAt`, normalize 0–1 fractions to percent, reject non-finite or out-of-range values, map unknown status to allowed); verify with unit tests using the 2026-10-07 probe payload, a single-window payload, the GLM status-only payload, and malformed values
-- [ ] 2.2 Implement the `SDKUsageReport` parser in the same module (map `limits[]` rows to windows keyed by `kind`, take `percent` and `resets_at`, label from `scope.model.display_name` or the row's own label, status from `severity`); verify with unit tests covering a full `limits[]` array, a scoped weekly row, and an empty array
+- [x] 2.1 Implement the `rate_limit_event` parser in `src/server/chat/usageLimits.ts` (prefer `unifiedWindows` for both windows, fall back to `rateLimitType`/`utilization`/`resetsAt`, normalize 0–1 fractions to percent, reject non-finite or out-of-range values, map unknown status to allowed); verify with unit tests using the 2026-10-07 probe payload, a single-window payload, the GLM status-only payload, and malformed values
+- [x] 2.2 Implement the `SDKUsageReport` parser in the same module (map `limits[]` rows to windows keyed by `kind`, take `percent` and `resets_at`, label from `scope.model.display_name` or the row's own label, status from `severity`); verify with unit tests covering a full `limits[]` array, a scoped weekly row, and an empty array
 
 ## 3. Store and capture
 
-- [ ] 3.1 Implement `UsageLimitStore` in `usageLimits.ts` (latest report or "no data" verdict per profile, keep windows when a report has none, never let older data overwrite newer, change listener); verify with unit tests for merge, ordering, verdict recording, and notification
+- [x] 3.1 Implement `UsageLimitStore` in `usageLimits.ts` (latest report or "no data" verdict per profile, keep windows when a report has none, never let older data overwrite newer, change listener); verify with unit tests for merge, ordering, verdict recording, and notification
 - [ ] 3.2 Add `onUsageReport` and `onRateLimit` options to `ChatSessionDriver`, called for `rate_limit_event` and for messages carrying `usage_report`, and wire them in `ChatSessionManager` to the store with the session's profile id; verify with driver and manager tests using a fake query that emits both message kinds
 
 ## 4. Pull fallback
