@@ -39,4 +39,4 @@
 ## 7. Integration
 
 - [x] 7.1 Run `bun run lint && bun run typecheck && bun run test` and verify all pass
-- [ ] 7.2 With the `dev-browser` skill against `bun run dev`: open a chat and see the menu populate without sending, filter and insert a project command, run `/context` and see its output, reload and see the command and output replayed, run `/new demo` and see a new chat selected with the old one in Archive; capture screenshots
+- [x] 7.2 With the `dev-browser` skill against `bun run dev`: open a chat and see the menu populate without sending, filter and insert a project command, run `/context` and see its output, reload and see the command and output replayed, run `/new demo` and see a new chat selected with the old one in Archive; capture screenshots
