@@ -933,19 +933,21 @@ describe('NewSessionModal project path validation', () => {
  * Focus harness. react-test-renderer hosts are not DOM nodes, so refs are
  * `createNodeMock` objects whose `focus()` maintains `document.activeElement`
  * the way a browser would. Tags say which control holds focus. The mock form
- * answers `contains()` for the dialog's own controls so the initial-focus guard
- * can tell "the user already started interacting with the form" from ambient
- * focus left outside the dialog.
+ * answers `contains()` so the two "user moved focus" helpers can model the two
+ * sides of the form boundary — the dialog's own controls live outside it too
+ * (the directory browser), and a focus guard may not treat those as stealable.
  */
 function setupFocusDom() {
   const keyHandlers = new Map<string, EventListener>()
   const textarea = { removeAttribute: () => {}, focus: () => {} }
   let active: { tag: string } | null = null
-  /** Everything the mock form owns: its hosts plus a user-picked control. */
+  const body = { tag: 'body' }
+  /** Everything the mock form owns. */
   const formDescendants = new Set<object>()
 
   globalAny.document = {
     querySelector: () => textarea,
+    body,
     get activeElement() {
       return active as unknown as Element | null
     },
@@ -994,11 +996,19 @@ function setupFocusDom() {
     keyHandlers,
     createNodeMock,
     activeTag: () => active?.tag ?? null,
-    /** The user tabs to some control the dialog did not pick for them. */
+    /** The user picks a control outside the form, e.g. the directory browser. */
     moveFocusAway: () => {
-      const node = { tag: 'user-moved' }
+      active = { tag: 'user-moved' }
+    },
+    /** The user picks one of the form's own controls the dialog did not choose. */
+    moveFocusInForm: () => {
+      const node = { tag: 'user-in-form' }
       formDescendants.add(node)
       active = node
+    },
+    /** Nothing meaningful holds focus: it is resting on the document body. */
+    restFocusOnBody: () => {
+      active = body
     },
   }
 }
@@ -1073,28 +1083,56 @@ describe('NewSessionModal provisional focus', () => {
     })
   })
 
-  test('a focus the user moves before the deferred attempt is never stolen, and the catch-up leaves it too', async () => {
-    // The attempt is deferred ~50 ms so the DOM settles first — long enough
-    // for the user to reach a control of their own. It must then leave that
-    // focus alone rather than yanking it onto Create or the kind select.
-    const catalog = deferredCatalog()
-    const focus = setupFocusDom()
-    const renderer = await openDialog(focus)
-    focus.moveFocusAway()
+  test('the deferred attempt never overrides a focus the user moved before it fires', async () => {
+    // The attempt is deferred ~50 ms so the DOM settles first — long enough for
+    // the user to reach a control of their own. Whichever side of the form
+    // boundary they land on, the attempt must leave their focus alone rather
+    // than yank it onto Create or the kind select.
+    const outside = deferredCatalog()
+    const outsideFocus = setupFocusDom()
+    const outsideDialog = await openDialog(outsideFocus)
+    outsideFocus.moveFocusAway()
     await act(async () => {
       await afterFocusAttempt()
     })
-    expect(focus.activeTag()).toBe('user-moved')
+    expect(outsideFocus.activeTag()).toBe('user-moved')
 
     // Skipping the attempt leaves no provisional focus behind, so a later
     // catalog settle must not promote onto the user either.
-    catalog.succeed()
+    outside.succeed()
     await act(async () => {
       await settle()
     })
-    expect(focus.activeTag()).toBe('user-moved')
+    expect(outsideFocus.activeTag()).toBe('user-moved')
     act(() => {
-      renderer.unmount()
+      outsideDialog.unmount()
+    })
+
+    // The same holds for a form control the user picked for themselves.
+    deferredCatalog()
+    const insideFocus = setupFocusDom()
+    const insideDialog = await openDialog(insideFocus)
+    insideFocus.moveFocusInForm()
+    await act(async () => {
+      await afterFocusAttempt()
+    })
+    expect(insideFocus.activeTag()).toBe('user-in-form')
+    act(() => {
+      insideDialog.unmount()
+    })
+
+    // Focus resting on the body is nobody's choice, not the user's: the attempt
+    // still lands. (Catalog still deferred, so the kind select is the target.)
+    deferredCatalog()
+    const ambientFocus = setupFocusDom()
+    const ambientDialog = await openDialog(ambientFocus)
+    ambientFocus.restFocusOnBody()
+    await act(async () => {
+      await afterFocusAttempt()
+    })
+    expect(ambientFocus.activeTag()).toBe('kind-select')
+    act(() => {
+      ambientDialog.unmount()
     })
   })
 

@@ -241,15 +241,18 @@ export default function NewSessionModal({
     // active command-preset chip for Terminal, Create for chat) when it can
     // take focus, otherwise the always-enabled session-kind select. Whichever
     // lands is recorded as provisional so the catalog catch-up can promote it.
+    const focusBeforeAttempt = typeof document === 'undefined' ? null : document.activeElement
     setTimeout(() => {
-      // Preserve focus if the user already started interacting with the form:
-      // this attempt is deferred, so it can arrive after they have already
-      // picked a control of their own. Without this the attempt would yank
-      // focus back off them. Leaving `provisionalFocusRef` null then also keeps
-      // the catalog catch-up from promoting onto them later.
+      // This attempt is deferred, so it can arrive after the user has already
+      // picked a control of their own — inside the form or out of it, such as
+      // the directory browser that sits outside the form. Take focus only while
+      // nothing meaningful holds it (or the opener still does); anything else is
+      // theirs. Leaving `provisionalFocusRef` unset then also keeps the catalog
+      // catch-up from promoting onto them later.
       const activeElement = typeof document === 'undefined' ? null : document.activeElement
-      const userIsInForm = !!activeElement && !!formRef.current?.contains(activeElement)
-      if (!userIsInForm) {
+      const userHasFocus =
+        !!activeElement && activeElement !== document.body && activeElement !== focusBeforeAttempt
+      if (!userHasFocus) {
         const { kind: currentKind, createDisabled } = focusStateRef.current
         const target =
           currentKind === 'chat' && createDisabled
