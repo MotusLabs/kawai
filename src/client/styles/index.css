@@ -403,6 +403,33 @@ body {
   animation: pulse-activity 1.6s ease-in-out infinite;
 }
 
+/* Chat usage bar: one thin meter per plan window under the chat header.
+   The fill's color follows the report status (working/warning/danger). */
+.chat-usage-meter {
+  display: block;
+  flex: 1;
+  min-width: 4rem;
+  height: 4px;
+  border-radius: 9999px;
+  background: var(--border);
+  overflow: hidden;
+}
+
+.chat-usage-fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--working);
+}
+
+.chat-usage-warning .chat-usage-fill {
+  background: var(--approval);
+}
+
+.chat-usage-limited .chat-usage-fill {
+  background: var(--chat-danger);
+}
+
 /* Terminal styles */
 .xterm {
   font-family: "JetBrains Mono Variable", "JetBrains Mono", "SF Mono", "Fira Code", ui-monospace, monospace;

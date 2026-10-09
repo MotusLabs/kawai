@@ -11,16 +11,18 @@ import type { ChatActionResult, ChatSessionManager } from '../chat/ChatSessionMa
 function harness(wireLogs?: ChatWireLogs) {
   const calls: unknown[] = []
   const snapshot: Extract<ServerMessage, { type: 'chat-snapshot' }> = {
-    type: 'chat-snapshot', sessionId: 'chat-1', events: [],
+    type: 'chat-snapshot', sessionId: 'chat-1', profileId: 'default', events: [],
     pendingRequests: [{ kind: 'approval', requestId: 'approval-1', tool: 'Bash', input: {}, at: 'now' }],
     status: 'permission', throughSequence: 0,
-    commands: { status: 'unavailable', commands: [] }, activity: null,
+    commands: { status: 'unavailable', commands: [] }, activity: null, usage: null,
   }
   let pending = true
   const manager = {
     isArchived: (_id: string) => false,
-    has: (id: string) => id === 'chat-1' || id === 'chat-2',
-    getSnapshot: (id: string) => (id === 'chat-1' ? snapshot : null),
+    has: (id: string) => id === 'chat-1' || id === 'chat-2' || id === 'chat-3',
+    profileIdOf: (id: string) => (id === 'chat-2' ? 'glm' : 'default'),
+    getSnapshot: (id: string) =>
+      id === 'chat-2' ? null : { ...snapshot, sessionId: id },
     send: async (...args: unknown[]) => { calls.push(['send', ...args]); return { ok: true } },
     start: (...args: unknown[]) => { calls.push(['start', ...args]); return Promise.resolve<ChatActionResult>({ ok: true }) },
     interrupt: (...args: unknown[]) => { calls.push(['interrupt', ...args]); return { ok: true } },
@@ -253,6 +255,52 @@ describe('chat WebSocket subscriptions', () => {
     await new Promise(resolve => setTimeout(resolve, 0))
     expect(h.messages.filter(message => message.type === 'chat-activity')).toHaveLength(1)
     expect(otherMessages).toEqual([])
+  })
+
+  test('usage reaches a connection once for two sessions of one profile', async () => {
+    const h = harness()
+    await h.connections.handle(h.connection, { type: 'chat-attach', sessionId: 'chat-1' })
+    await h.connections.handle(h.connection, { type: 'chat-attach', sessionId: 'chat-3' })
+    const report = {
+      status: 'allowed' as const,
+      windows: [
+        { key: 'five_hour', label: '5-hour window', percentUsed: 22.37, resetsAt: '2026-10-07T18:11:04.000Z' },
+        { key: 'seven_day', label: '7-day window', percentUsed: 17.12, resetsAt: null },
+      ],
+      receivedAt: '2026-10-07T13:00:00.000Z',
+    }
+    h.connections.publishUsage('default', report)
+    // Several reports within one tick collapse to the latest value.
+    h.connections.publishUsage('default', null)
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(h.messages.filter(message => message.type === 'chat-usage')).toEqual([
+      { type: 'chat-usage', profileId: 'default', report: null },
+    ])
+  })
+
+  test('usage reaches only connections subscribed to the changed profile', async () => {
+    const h = harness()
+    const otherMessages: ServerMessage[] = []
+    const other = { send: (message: ServerMessage) => otherMessages.push(message) }
+    await h.connections.handle(h.connection, { type: 'chat-attach', sessionId: 'chat-1' })
+    await h.connections.handle(other, { type: 'chat-attach', sessionId: 'chat-2' })
+    const report = {
+      status: 'warning' as const,
+      windows: [
+        { key: 'five_hour', label: '5-hour window', percentUsed: 87, resetsAt: '2026-10-07T18:11:04.000Z' },
+      ],
+      receivedAt: '2026-10-07T13:00:00.000Z',
+    }
+    h.connections.publishUsage('default', report)
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(h.messages.at(-1)).toEqual({ type: 'chat-usage', profileId: 'default', report })
+    expect(otherMessages).toEqual([])
+
+    // Detaching the only session of the profile drops the queued report.
+    h.connections.publishUsage('default', report)
+    await h.connections.handle(h.connection, { type: 'chat-detach', sessionId: 'chat-1' })
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(h.messages.filter(message => message.type === 'chat-usage')).toHaveLength(1)
   })
 })
 

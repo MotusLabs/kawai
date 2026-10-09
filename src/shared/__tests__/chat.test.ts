@@ -197,9 +197,40 @@ describe('chat wire messages', () => {
         ],
       },
       activity: { phase: 'thinking', elapsedMs: 4_000 },
+      profileId: 'default',
+      usage: {
+        status: 'warning',
+        windows: [
+          { key: 'five_hour', label: '5-hour window', percentUsed: 22.4, resetsAt: '2026-10-07T18:00:00.000Z' },
+          { key: 'seven_day', label: '7-day window', percentUsed: 17, resetsAt: null },
+          { key: 'model_scoped:Fable', label: 'Fable weekly', percentUsed: 3.2, resetsAt: '2026-10-12T09:00:00.000Z' },
+        ],
+        receivedAt: '2026-10-07T13:00:00.000Z',
+      },
     }
 
     const parsed = JSON.parse(JSON.stringify(message)) as ServerMessage
     expect(parsed).toEqual(message)
+  })
+
+  test('chat-usage round-trips with a per-profile report or null', () => {
+    const messages: ServerMessage[] = [
+      {
+        type: 'chat-usage',
+        profileId: 'default',
+        report: {
+          status: 'limited',
+          windows: [
+            { key: 'five_hour', label: '5-hour window', percentUsed: 100, resetsAt: '2026-10-07T18:00:00.000Z' },
+          ],
+          receivedAt: '2026-10-07T13:00:00.000Z',
+        },
+      },
+      { type: 'chat-usage', profileId: 'glm', report: null },
+    ]
+    for (const message of messages) {
+      const parsed = JSON.parse(JSON.stringify(message)) as ServerMessage
+      expect(parsed).toEqual(message)
+    }
   })
 })

@@ -4,7 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import type { Options, Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk'
 import type { Session } from '../../shared/types'
-import type { ChatActivity, ChatEvent } from '../../shared/chat'
+import type { ChatActivity, ChatEvent, ChatUsageReport } from '../../shared/chat'
 import type { ClaudeLaunchConfiguration } from '../chat/ClaudeProfiles'
 import { initDatabase, type SessionDatabase } from '../db'
 import { SessionRegistry } from '../SessionRegistry'
@@ -27,16 +27,29 @@ interface FakeHandle {
   wire?: ChatWireRecorder
   push: (message: SDKMessage) => void
   closed: boolean
+  /** Usage control calls (options verbatim); empty when never pulled. */
+  usageCalls: Array<{ skipBehaviors?: boolean }>
 }
 
-function fakeQueryFactory(handles: FakeHandle[]): ChatQueryFactory {
+/** The usage control implementation a test injects into a fake query. */
+type FakeUsageControl = (opts: {
+  skipBehaviors?: boolean
+}) => Promise<unknown>
+
+function fakeQueryFactory(
+  handles: FakeHandle[],
+  usageImpl?: FakeUsageControl
+): ChatQueryFactory {
   return ({ prompt: _prompt, options, wire }) => {
     const queue: SDKMessage[] = []
     let resolveMessage:
       | ((result: IteratorResult<SDKMessage>) => void)
       | null = null
     let ended = false
-    const handle = { closed: false } as FakeHandle
+    const handle = {
+      closed: false,
+      usageCalls: [] as Array<{ skipBehaviors?: boolean }>,
+    } as FakeHandle
 
     const stream = async function* (): AsyncGenerator<SDKMessage, void> {
       while (true) {
@@ -63,6 +76,16 @@ function fakeQueryFactory(handles: FakeHandle[]): ChatQueryFactory {
         ended = true
         resolveMessage?.({ value: undefined, done: true })
       },
+      ...(usageImpl
+        ? {
+            usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: (
+              opts: { skipBehaviors?: boolean }
+            ) => {
+              handle.usageCalls.push(opts)
+              return usageImpl(opts)
+            },
+          }
+        : {}),
     }) as unknown as Query
 
     handle.query = query
@@ -88,25 +111,29 @@ interface ManagerHarness {
   handles: FakeHandle[]
   events: Array<{ sessionId: string; event: ChatEvent }>
   activities: Array<{ sessionId: string; activity: ChatActivity | null }>
+  usage: Array<{ profileId: string; report: ChatUsageReport | null }>
 }
 
 function createHarness(
   db: SessionDatabase,
-  isDirectory: (path: string) => boolean = anyDirectory
+  isDirectory: (path: string) => boolean = anyDirectory,
+  usageImpl?: FakeUsageControl
 ): ManagerHarness {
   const registry = new SessionRegistry()
   const handles: FakeHandle[] = []
   const events: Array<{ sessionId: string; event: ChatEvent }> = []
   const activities: Array<{ sessionId: string; activity: ChatActivity | null }> = []
+  const usage: Array<{ profileId: string; report: ChatUsageReport | null }> = []
   const manager = new ChatSessionManager({
     isDirectory,
     registry,
     db,
     onEvent: (sessionId, event) => events.push({ sessionId, event }),
     onActivity: (sessionId, activity) => activities.push({ sessionId, activity }),
-    queryFactory: fakeQueryFactory(handles),
+    onUsage: (profileId, report) => usage.push({ profileId, report }),
+    queryFactory: fakeQueryFactory(handles, usageImpl),
   })
-  return { manager, registry, handles, events, activities }
+  return { manager, registry, handles, events, activities, usage }
 }
 
 /** Let the driver's stream loop drain pushed messages. */
@@ -1896,5 +1923,213 @@ describe('ChatSessionManager activity', () => {
     await flush()
     expect(manager.getSnapshot(id)!.activity).toBeNull()
     manager.kill(id)
+  })
+})
+
+describe('ChatSessionManager usage', () => {
+  let tempDir: string
+  let db: SessionDatabase
+  const originalApiKey = process.env.ANTHROPIC_API_KEY
+  const originalConfigDir = process.env.CLAUDE_CONFIG_DIR
+  const originalHome = process.env.HOME
+  beforeEach(() => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentboard-chatmgr-usage-'))
+    db = initDatabase({ path: path.join(tempDir, 'test.db') })
+    process.env.ANTHROPIC_API_KEY = 'sk-test-key'
+    process.env.CLAUDE_CONFIG_DIR = path.join(tempDir, 'claude-config')
+    process.env.HOME = tempDir
+  })
+  afterEach(() => {
+    if (originalApiKey !== undefined) {
+      process.env.ANTHROPIC_API_KEY = originalApiKey
+    } else {
+      delete process.env.ANTHROPIC_API_KEY
+    }
+    if (originalConfigDir !== undefined) {
+      process.env.CLAUDE_CONFIG_DIR = originalConfigDir
+    } else {
+      delete process.env.CLAUDE_CONFIG_DIR
+    }
+    if (originalHome !== undefined) {
+      process.env.HOME = originalHome
+    } else {
+      delete process.env.HOME
+    }
+    db.close()
+    fs.rmSync(tempDir, { recursive: true, force: true })
+  })
+
+  function rateLimitEvent(fields: Record<string, unknown>): SDKMessage {
+    return {
+      type: 'rate_limit_event',
+      rate_limit_info: fields,
+      uuid: 'rl-uuid',
+      session_id: 'sdk-1',
+    } as unknown as SDKMessage
+  }
+
+  const PROBE_EVENT = rateLimitEvent({
+    status: 'allowed',
+    unifiedWindows: {
+      five_hour: { utilization: 0.2237, resetsAt: Date.parse('2026-10-07T18:11:04.000Z') },
+      seven_day: { utilization: 0.1712, resetsAt: Date.parse('2026-10-12T09:00:00.000Z') },
+    },
+  })
+
+  const FULL_PULL = {
+    subscription_type: 'max',
+    rate_limits_available: true,
+    rate_limits: {
+      five_hour: { utilization: 22.37, resets_at: '2026-10-07T18:11:04.000Z' },
+      seven_day: { utilization: 17.12, resets_at: '2026-10-12T09:00:00.000Z' },
+    },
+  }
+
+  test('pushed reports are stored per profile, shared by its sessions, and snapshotted', async () => {
+    const { manager, handles, usage } = createHarness(db)
+    const first = manager.createSession({ projectPath: '/tmp/proj' })
+    if (!first.ok) throw new Error('create failed')
+    // Neither report nor verdict: the snapshot carries no usage.
+    expect(manager.getSnapshot(first.session.id)!.usage).toBeNull()
+
+    const second = manager.createSession({ projectPath: '/tmp/proj' })
+    if (!second.ok) throw new Error('create failed')
+    await manager.send(first.session.id, 'hello')
+    // The fake query has no usage control, so the spawn records the
+    // no-data verdict first (broadcast as null).
+    handles[0]!.push(PROBE_EVENT)
+    await flush()
+
+    expect(usage).toHaveLength(2)
+    expect(usage[0]).toEqual({ profileId: 'default', report: null })
+    expect(usage[1]).toMatchObject({ profileId: 'default' })
+    expect(usage[1].report?.windows.map((window) => window.key)).toEqual([
+      'five_hour',
+      'seven_day',
+    ])
+    // The second session of the same profile sees the same report.
+    expect(manager.getSnapshot(first.session.id)!.usage).toBe(usage[1].report)
+    expect(manager.getSnapshot(second.session.id)!.usage).toBe(usage[1].report)
+    expect(manager.profileIdOf(first.session.id)).toBe('default')
+
+    // A later, windowless push keeps the windows and updates the status.
+    handles[0]!.push(rateLimitEvent({ status: 'rejected' }))
+    await flush()
+    const held = manager.getSnapshot(first.session.id)!.usage!
+    expect(held.status).toBe('limited')
+    expect(held.windows.map((window) => window.key)).toEqual([
+      'five_hour',
+      'seven_day',
+    ])
+  })
+
+  test('an assistant usage_report is stored for the session profile', async () => {
+    const { manager, handles, usage } = createHarness(db)
+    const created = manager.createSession({ projectPath: '/tmp/proj', claudeProfileId: 'glm' })
+    if (!created.ok) throw new Error('create failed')
+    await manager.send(created.session.id, 'hello')
+    handles[0]!.push({
+      type: 'assistant',
+      message: {
+        id: 'msg_usage',
+        content: [{ type: 'text', text: 'Usage report' }],
+        role: 'assistant',
+      },
+      parent_tool_use_id: null,
+      uuid: 'u-uuid',
+      session_id: 'sdk-1',
+      usage_report: {
+        rate_limits: {
+          limits: [
+            { kind: 'session', percent: 22.4, resets_at: null, severity: 'normal' },
+          ],
+        },
+      },
+    } as unknown as SDKMessage)
+    await flush()
+    expect(usage).toHaveLength(2)
+    expect(usage[0]).toEqual({ profileId: 'glm', report: null }) // spawn verdict
+    expect(usage[1]).toMatchObject({ profileId: 'glm' })
+    expect(usage[1].report?.windows).toHaveLength(1)
+    expect(manager.getSnapshot(created.session.id)!.usage).toBe(usage[1].report)
+  })
+
+  test('the pull fallback fills usage before any push and only once per profile', async () => {
+    const { manager, handles, usage } = createHarness(
+      db,
+      anyDirectory,
+      async (opts) => ({ ...FULL_PULL, opts })
+    )
+    const first = manager.createSession({ projectPath: '/tmp/proj' })
+    if (!first.ok) throw new Error('create failed')
+    await manager.send(first.session.id, 'hello')
+    await flush()
+    expect(handles[0]!.usageCalls).toEqual([{ skipBehaviors: true }])
+    expect(usage).toHaveLength(1)
+    expect(usage[0].report?.windows).toHaveLength(2)
+    expect(manager.getSnapshot(first.session.id)!.usage).toBe(usage[0].report)
+
+    // A second session of the same profile spawns later: no second pull.
+    const second = manager.createSession({ projectPath: '/tmp/proj' })
+    if (!second.ok) throw new Error('create failed')
+    await manager.send(second.session.id, 'hi')
+    await flush()
+    const calls = handles.flatMap((handle) => handle.usageCalls)
+    expect(calls).toHaveLength(1)
+  })
+
+  test('a no-data pull suppresses later pulls until a push replaces the verdict', async () => {
+    const { manager, handles, usage } = createHarness(
+      db,
+      anyDirectory,
+      async () => ({ rate_limits_available: false, rate_limits: null })
+    )
+    const first = manager.createSession({ projectPath: '/tmp/proj' })
+    if (!first.ok) throw new Error('create failed')
+    await manager.send(first.session.id, 'hello')
+    await flush()
+    // The verdict broadcasts as null and keeps the snapshot empty.
+    expect(usage).toEqual([{ profileId: 'default', report: null }])
+    expect(manager.getSnapshot(first.session.id)!.usage).toBeNull()
+
+    // Another session of the profile spawns: the verdict skips the pull.
+    const second = manager.createSession({ projectPath: '/tmp/proj' })
+    if (!second.ok) throw new Error('create failed')
+    await manager.send(second.session.id, 'again')
+    await flush()
+    expect(handles.flatMap((handle) => handle.usageCalls)).toHaveLength(1)
+
+    // A pushed report replaces the verdict and reaches the snapshot.
+    handles[1]!.push(PROBE_EVENT)
+    await flush()
+    const held = manager.getSnapshot(second.session.id)!.usage!
+    expect(held.windows.map((window) => window.key)).toEqual([
+      'five_hour',
+      'seven_day',
+    ])
+    expect(usage.at(-1)!.report).toBe(held)
+  })
+
+  test('usage does not survive a manager restart (memory only)', async () => {
+    const dbPath = path.join(tempDir, 'usage-restart.db')
+    const dbA = initDatabase({ path: dbPath })
+    const harnessA = createHarness(dbA, anyDirectory, async () => FULL_PULL)
+    const created = harnessA.manager.createSession({ projectPath: '/tmp/proj' })
+    if (!created.ok) throw new Error('create failed')
+    await harnessA.manager.send(created.session.id, 'hello')
+    await flush()
+    expect(harnessA.manager.getSnapshot(created.session.id)!.usage).not.toBeNull()
+    harnessA.manager.shutdown()
+    dbA.close()
+
+    const dbB = initDatabase({ path: dbPath })
+    const harnessB = createHarness(dbB, anyDirectory, async () => FULL_PULL)
+    expect(harnessB.manager.getSnapshot(created.session.id)!.usage).toBeNull()
+    // ...and the fresh store pulls again on the next spawn.
+    await harnessB.manager.send(created.session.id, 'resume')
+    await flush()
+    expect(harnessB.handles[0]!.usageCalls).toHaveLength(1)
+    harnessB.manager.shutdown()
+    dbB.close()
   })
 })

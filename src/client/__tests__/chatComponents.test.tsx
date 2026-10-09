@@ -1,12 +1,13 @@
 import { afterEach, describe, expect, jest, test } from 'bun:test'
 import TestRenderer, { act, type ReactTestInstance } from 'react-test-renderer'
-import type { ChatActivity, ChatCommandState, ChatEvent, ChatPendingRequest, ChatWireFrame } from '@shared/chat'
+import type { ChatActivity, ChatCommandState, ChatEvent, ChatPendingRequest, ChatUsageReport, ChatWireFrame } from '@shared/chat'
 import type { ClientMessage, ServerMessage, Session } from '@shared/types'
 import ChatRequests from '../components/chat/ChatRequests'
 import ChatMessages from '../components/chat/ChatMessages'
 import ChatDebugPanel from '../components/chat/ChatDebugPanel'
 import ChatView from '../components/chat/ChatView'
 import ChatActivityRow from '../components/chat/ChatActivityRow'
+import UsageBar from '../components/chat/UsageBar'
 import { closedDebugView, useChatDebugStore, type ChatDebugView } from '../stores/chatDebugStore'
 import { emptyTranscript, useChatStore } from '../stores/chatStore'
 import { useSettingsStore } from '../stores/settingsStore'
@@ -968,5 +969,154 @@ describe('chat activity row', () => {
     expect(rows(renderer)).toHaveLength(0)
     renderer.unmount()
     useChatStore.setState({ sessions: {} })
+  })
+})
+
+describe('chat usage bar', () => {
+  const NOW = Date.parse('2026-10-07T13:00:00.000Z')
+  const report = (overrides: Partial<ChatUsageReport> = {}): ChatUsageReport => ({
+    status: 'allowed',
+    windows: [
+      { key: 'five_hour', label: '5-hour window', percentUsed: 22.4, resetsAt: '2026-10-07T18:11:04.000Z' },
+      { key: 'seven_day', label: '7-day window', percentUsed: 17.12, resetsAt: '2026-10-12T09:00:00.000Z' },
+    ],
+    receivedAt: '2026-10-07T13:00:00.000Z',
+    ...overrides,
+  })
+  const meters = (renderer: TestRenderer.ReactTestRenderer) =>
+    renderer.root.findAllByProps({ 'data-testid': 'chat-usage-window' })
+  const renderBar = (usage: ChatUsageReport | null) => {
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => {
+      renderer = TestRenderer.create(<UsageBar report={usage} />)
+    })
+    return renderer
+  }
+
+  afterEach(() => {
+    useChatStore.setState({ usage: {} })
+    jest.useRealTimers()
+  })
+
+  test('renders one labeled meter per window with rounded percents', () => {
+    jest.useFakeTimers()
+    jest.setSystemTime(NOW)
+    const renderer = renderBar(report())
+    const bar = renderer.root.findByProps({ 'data-testid': 'chat-usage' })
+    expect(bar.props['data-status']).toBe('allowed')
+    expect(bar.props.className).not.toContain('chat-usage-warning')
+    expect(meters(renderer).map((meter) => meter.props['data-key'])).toEqual([
+      'five_hour',
+      'seven_day',
+    ])
+    expect(
+      meters(renderer).map((meter) =>
+        textOf(meter.findByProps({ 'data-testid': 'chat-usage-percent' }))
+      )
+    ).toEqual(['22%', '17%'])
+    renderer.unmount()
+  })
+
+  test('a scoped weekly window renders as its own labelled entry', () => {
+    const renderer = renderBar(
+      report({
+        windows: [
+          ...report().windows,
+          { key: 'model_scoped:Opus', label: 'Opus', percentUsed: 42.5, resetsAt: '2026-10-12T09:00:00.000Z' },
+        ],
+      })
+    )
+    const scoped = meters(renderer).find(
+      (meter) => meter.props['data-key'] === 'model_scoped:Opus'
+    )!
+    expect(textOf(scoped.findByProps({ 'data-testid': 'chat-usage-label' }))).toBe('Opus')
+    expect(textOf(scoped.findByProps({ 'data-testid': 'chat-usage-percent' }))).toBe('43%')
+    renderer.unmount()
+  })
+
+  test('a single window renders one meter; none renders nothing at all', () => {
+    const one = renderBar(
+      report({ windows: [{ key: 'five_hour', label: '5-hour window', percentUsed: 9, resetsAt: null }] })
+    )
+    expect(meters(one)).toHaveLength(1)
+    // No reset time is known: no reset label, no placeholder.
+    expect(one.root.findAllByProps({ 'data-testid': 'chat-usage-reset' })).toHaveLength(0)
+    one.unmount()
+
+    for (const empty of [null, report({ windows: [] })]) {
+      const none = renderBar(empty)
+      expect(none.root.findAllByProps({ 'data-testid': 'chat-usage' })).toHaveLength(0)
+      none.unmount()
+    }
+  })
+
+  test('warning and limited reports tint the bar', () => {
+    const warning = renderBar(report({ status: 'warning' }))
+    expect(
+      warning.root.findByProps({ 'data-testid': 'chat-usage' }).props.className
+    ).toContain('chat-usage-warning')
+    warning.unmount()
+
+    const limited = renderBar(report({ status: 'limited' }))
+    const bar = limited.root.findByProps({ 'data-testid': 'chat-usage' })
+    expect(bar.props.className).toContain('chat-usage-limited')
+    expect(bar.props['data-status']).toBe('limited')
+    limited.unmount()
+  })
+
+  test('reset times show the weekday only more than a day away', () => {
+    jest.useFakeTimers()
+    jest.setSystemTime(NOW)
+    const renderer = renderBar(report())
+    const resets = meters(renderer).map((meter) =>
+      textOf(meter.findByProps({ 'data-testid': 'chat-usage-reset' }))
+    )
+    // 5h window resets today: time only. 7-day window resets Monday: weekday.
+    expect(resets[0]).toMatch(/\d{1,2}:\d{2}/)
+    expect(resets[0]).not.toMatch(/Mon|Tue|Wed|Thu|Fri|Sat|Sun/)
+    expect(resets[1]).toMatch(/Mon|Tue|Wed|Thu|Fri|Sat|Sun/)
+    expect(resets[1]).toMatch(/\d{1,2}:\d{2}/)
+    renderer.unmount()
+  })
+})
+
+describe('ChatView usage bar', () => {
+  afterEach(() => useChatStore.setState({ usage: {} }))
+
+  function renderView(session: Session) {
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => {
+      renderer = TestRenderer.create(<ChatView
+        session={session}
+        sendMessage={() => {}}
+        connectionStatus="connected" connectionEpoch={0} error={null}
+        onClose={() => {}} onKill={() => {}} />)
+    })
+    return renderer
+  }
+
+  test('shows the profile report under the header and nothing without windows', () => {
+    useChatStore.setState({
+      usage: {
+        default: {
+          status: 'allowed',
+          windows: [
+            { key: 'five_hour', label: '5-hour window', percentUsed: 22.4, resetsAt: '2026-10-07T18:11:04.000Z' },
+          ],
+          receivedAt: '2026-10-07T13:00:00.000Z',
+        },
+      },
+    })
+    let renderer = renderView(chatSession)
+    const bar = renderer.root.findByProps({ 'data-testid': 'chat-usage' })
+    // Directly under the header, above the transcript column.
+    expect(bar.parent?.parent?.props.className).toContain('chat-palette')
+    renderer.unmount()
+
+    // A session of a profile with no data (GLM) shows no bar.
+    const glm = { ...chatSession, id: 'chat-glm', claudeProfileId: 'glm' } as Session
+    renderer = renderView(glm)
+    expect(renderer.root.findAllByProps({ 'data-testid': 'chat-usage' })).toHaveLength(0)
+    renderer.unmount()
   })
 })

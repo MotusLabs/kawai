@@ -3,8 +3,17 @@
 // through server resolution events rather than optimistic local answers. The
 // live-turn activity is a single current value (not an event): it is anchored
 // on the client clock from the server's elapsedMs and cleared on turn end.
+// Plan usage is per profile, not per session (the allowance is per account
+// and provider): the snapshot's `usage` and chat-usage pushes land in one
+// shared map, so every session of a profile renders the same bar.
 import { create } from 'zustand'
-import type { ChatActivity, ChatCommandState, ChatEvent, ChatPendingRequest } from '@shared/chat'
+import type {
+  ChatActivity,
+  ChatCommandState,
+  ChatEvent,
+  ChatPendingRequest,
+  ChatUsageReport,
+} from '@shared/chat'
 import type { ServerMessage, SessionStatus } from '@shared/types'
 
 /** The live activity plus its client-clock anchor (design D6). */
@@ -77,31 +86,40 @@ export function applyChatEvents(state: ChatTranscript, incoming: ChatEvent[]): C
 
 interface ChatStore {
   sessions: Record<string, ChatTranscript>
+  /** Latest plan-usage report per Claude profile (null = profile has none). */
+  usage: Record<string, ChatUsageReport | null>
   apply: (sessionId: string, events: ChatEvent[]) => void
   snapshot: (message: Extract<ServerMessage, { type: 'chat-snapshot' }>) => void
   /** Replace one session's command list (chat-commands push). */
   setCommands: (message: Extract<ServerMessage, { type: 'chat-commands' }>) => void
   /** Adopt the latest server activity (chat-activity) or clear it (null). */
   setActivity: (sessionId: string, activity: ChatActivity | null) => void
+  /** Adopt a profile's latest usage report (chat-usage / snapshot). */
+  setUsage: (profileId: string, report: ChatUsageReport | null) => void
   remove: (sessionId: string) => void
 }
 
 export const useChatStore = create<ChatStore>((set) => ({
   sessions: {},
+  usage: {},
   apply: (sessionId, events) => set(state => ({ sessions: {
     ...state.sessions, [sessionId]: applyChatEvents(state.sessions[sessionId] ?? emptyTranscript(), events),
   } })),
-  snapshot: message => set(state => ({ sessions: {
-    ...state.sessions,
-    [message.sessionId]: {
-      ...applyChatEvents(emptyTranscript(), message.events),
-      pendingRequests: message.pendingRequests,
-      status: message.status,
-      throughSequence: message.throughSequence,
-      commands: message.commands,
-      activity: message.activity ? anchorActivity(message.activity) : null,
+  snapshot: message => set(state => ({
+    sessions: {
+      ...state.sessions,
+      [message.sessionId]: {
+        ...applyChatEvents(emptyTranscript(), message.events),
+        pendingRequests: message.pendingRequests,
+        status: message.status,
+        throughSequence: message.throughSequence,
+        commands: message.commands,
+        activity: message.activity ? anchorActivity(message.activity) : null,
+      },
     },
-  } })),
+    // The snapshot's usage is authoritative for the profile at attach time.
+    usage: { ...state.usage, [message.profileId]: message.usage },
+  })),
   setCommands: message => set(state => ({ sessions: {
     ...state.sessions,
     [message.sessionId]: {
@@ -116,9 +134,13 @@ export const useChatStore = create<ChatStore>((set) => ({
       activity: activity ? anchorActivity(activity) : null,
     } } }
   }),
+  setUsage: (profileId, report) => set(state => ({
+    usage: { ...state.usage, [profileId]: report },
+  })),
   remove: sessionId => set(state => {
     const sessions = { ...state.sessions }
     delete sessions[sessionId]
+    // Profile usage outlives one session: a sibling may still show the bar.
     return { sessions }
   }),
 }))

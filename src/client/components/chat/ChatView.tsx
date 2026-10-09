@@ -27,6 +27,7 @@ import ChatDebugPanel from './ChatDebugPanel'
 import ChatMessages from './ChatMessages'
 import ChatRequests from './ChatRequests'
 import SlashCommandMenu from './SlashCommandMenu'
+import UsageBar from './UsageBar'
 import { filterChatCommands, slashMenuQuery } from './slashCommandFilter'
 import { requestChatArchive } from '../../utils/chatArchive'
 
@@ -46,6 +47,9 @@ export default function ChatView({ session, sendMessage, subscribe, connectionSt
   const profileLabel = catalog.profiles.find(profile => profile.id === profileId)?.label ?? profileId
   const chatFontSize = useSettingsStore(state => state.chatFontSize)
   const transcript = useChatStore(state => state.sessions[session.id]) ?? EMPTY
+  // Plan usage is per profile (usage bar design D4): every session of the
+  // profile renders the same shared report.
+  const usage = useChatStore(state => state.usage[profileId]) ?? null
   const [text, setText] = useState('')
   const end = useRef<HTMLDivElement>(null)
   const connected = connectionStatus === 'connected'
@@ -196,6 +200,7 @@ export default function ChatView({ session, sendMessage, subscribe, connectionSt
       {!archived && <button className="btn text-chat-meta" onClick={handleArchive} data-testid="chat-archive-button">Archive</button>}
       <button className="btn text-chat-meta" onClick={onKill}>Kill session</button>
     </header>
+    <UsageBar report={usage} />
     {error && <p role="alert" className="border-b border-border p-3 text-chat-body text-chat-danger">{error}</p>}
     <div className="flex min-h-0 flex-1">
       <div className={`min-h-0 min-w-0 flex-1 flex-col ${debugOpen ? 'hidden md:flex' : 'flex'}`}>

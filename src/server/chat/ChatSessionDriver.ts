@@ -28,6 +28,7 @@ import type {
   ChatPendingRequest,
   ChatQuestion,
   ChatQuestionAnswer,
+  ChatUsageReport,
 } from '../../shared/chat'
 import type { SessionStatus } from '../../shared/types'
 import {
@@ -45,6 +46,11 @@ import {
   type ChatActivityInput,
   type ChatActivityState,
 } from './chatActivity'
+import {
+  parseRateLimitEvent,
+  parseUsagePull,
+  parseUsageReport,
+} from './usageLimits'
 import type { ChatProviderEnv } from './chatProviderEnv'
 import { ChatCommandTracker, type RawChatCommand } from './chatCommands'
 import { decideApproval } from './approvalPolicy'
@@ -101,6 +107,24 @@ export interface ChatSessionDriverOptions {
    * sequenced, buffered, or replayed like events.
    */
   onActivity?: (activity: ChatActivity | null) => void
+  /**
+   * Plan usage (usage bar design D3): parsed report from a pushed
+   * rate_limit_event frame, whatever turn state the session is in.
+   */
+  onRateLimit?: (report: ChatUsageReport) => void
+  /**
+   * Plan usage: parsed report from an assistant message's usage_report (the
+   * structured twin of /usage). Not called when the report carries no
+   * limits at all.
+   */
+  onUsageReport?: (report: ChatUsageReport) => void
+  /**
+   * Claims the profile's one usage pull after a spawn (design D1); when it
+   * returns false the pull is skipped for this driver's whole lifetime.
+   */
+  claimUsagePull?: () => boolean
+  /** A pull that yielded no windows (or failed) records the no-data verdict. */
+  onUsageNoData?: () => void
   /** Fired once when the SDK init message reveals the session id. */
   onSdkSessionId?: (sdkSessionId: string) => void
   /** Fired whenever the session's slash-command state meaningfully changed. */
@@ -431,6 +455,37 @@ export class ChatSessionDriver {
     this.commands.beginLoading()
     void this.fetchInitializationCommands(query)
     void this.runQueryLoop(query)
+    this.maybePullUsage(query)
+  }
+
+  /**
+   * The usage pull fallback (design D1): right after a spawn, when the
+   * profile holds no data at all, ask the CLI for its plan windows so the
+   * bar can appear before the first turn reports anything. Everything is
+   * wrapped: the control API is explicitly unstable, and a throw, an absent
+   * method, or a shape change records the no-data verdict instead of
+   * disturbing the session.
+   */
+  private maybePullUsage(query: Query): void {
+    const { claimUsagePull, onUsageReport, onUsageNoData } = this.options
+    if (!claimUsagePull || !onUsageReport || !claimUsagePull()) return
+    const pull = query.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET
+    if (typeof pull !== 'function') {
+      onUsageNoData?.()
+      return
+    }
+    try {
+      void pull
+        .call(query, { skipBehaviors: true })
+        .then((response) => {
+          const report = parseUsagePull(response)
+          if (report && report.windows.length > 0) onUsageReport(report)
+          else onUsageNoData?.()
+        })
+        .catch(() => onUsageNoData?.())
+    } catch {
+      onUsageNoData?.()
+    }
   }
 
   /**
@@ -501,6 +556,13 @@ export class ChatSessionDriver {
       case 'system':
         this.handleSystem(message)
         return
+      case 'rate_limit_event':
+        // Plan usage rides these frames whatever the turn state; malformed
+        // values degrade to a windowless report, never a session error.
+        this.options.onRateLimit?.(
+          parseRateLimitEvent(message.rate_limit_info)
+        )
+        return
       default:
         // Trailing informational frames (prompt suggestions, status, hooks,
         // ...) are tolerated and ignored — a result ends a turn, not the
@@ -510,6 +572,12 @@ export class ChatSessionDriver {
   }
 
   private handleAssistant(message: SDKAssistantMessage): void {
+    // The /usage twin rides the wrapper level, not message.content, and is
+    // replayed to nobody — capture it even outside a turn.
+    if (message.usage_report) {
+      const report = parseUsageReport(message.usage_report)
+      if (report) this.options.onUsageReport?.(report)
+    }
     const turnId = this.activeTurnId
     if (!turnId) return
     const messageId = message.message.id ?? message.uuid

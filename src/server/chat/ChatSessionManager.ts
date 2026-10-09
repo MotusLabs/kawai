@@ -18,6 +18,7 @@ import type {
   ChatEvent,
   ChatPendingRequest,
   ChatQuestionAnswer,
+  ChatUsageReport,
 } from '../../shared/chat'
 import type { ServerMessage, Session, SessionStatus } from '../../shared/types'
 import type { ChatSessionRecord, SessionDatabase } from '../db'
@@ -42,6 +43,7 @@ import {
 } from './ClaudeProfiles'
 import { logger } from '../logger'
 import { probeSdkAvailability } from './sdkAvailability'
+import { UsageLimitStore } from './usageLimits'
 import {
   findTranscriptPath,
   replayTranscriptFile,
@@ -64,6 +66,12 @@ export interface ChatSessionManagerOptions {
    * broadcast in index.ts; activity is ephemeral and never persisted.
    */
   onActivity?: (sessionId: string, activity: ChatActivity | null) => void
+  /**
+   * Plan-usage sink (usage bar design D4): called with the latest report
+   * (or null) whenever a profile's held data changes. Wired to the WS
+   * broadcast in index.ts; usage is ephemeral and never persisted.
+   */
+  onUsage?: (profileId: string, report: ChatUsageReport | null) => void
   /** Injected in tests; production resolves the SDK via dynamic import. */
   queryFactory?: ChatQueryFactory
   /** Receives the provider env so it probes the endpoint sessions will use. */
@@ -150,6 +158,11 @@ export class ChatSessionManager {
    * Concurrent creations under the same configuration share one probe.
    */
   private readonly availability = new Map<string, Promise<void>>()
+  /**
+   * Latest plan-usage report (or no-data verdict) per Claude profile, in
+   * memory only (usage bar design D3): a restart begins with none.
+   */
+  private readonly usageLimits = new UsageLimitStore()
 
   async createAvailableSession(input: { projectPath: string; name?: string; claudeProfileId?: string }): Promise<ChatCreateResult> {
     // Refuse a bad path before the probe spends an SDK spawn on it.
@@ -187,12 +200,14 @@ export class ChatSessionManager {
     const activity = this.getActivity(sessionId)
     return {
       type: 'chat-snapshot', sessionId,
+      profileId: this.records.get(sessionId)?.claudeProfileId ?? 'default',
       events: [...(this.snapshotHistory.get(sessionId) ?? []), ...live],
       pendingRequests: this.getPendingRequests(sessionId),
       status: this.options.registry.get(sessionId)?.status ?? 'waiting',
       throughSequence: live.at(-1)?.sequence ?? 0,
       commands: this.commandState(sessionId),
       activity,
+      usage: this.usageLimits.get(this.profileIdOf(sessionId) ?? 'default'),
     }
   }
 
@@ -223,6 +238,10 @@ export class ChatSessionManager {
 
   constructor(options: ChatSessionManagerOptions) {
     this.options = options
+    // Profile usage changes drive the chat-usage broadcast (design D4).
+    this.usageLimits.subscribe((profileId, report) =>
+      this.options.onUsage?.(profileId, report)
+    )
     this.restorePersisted()
     // Logs of sessions deleted while the server was down are orphans now.
     void this.options.wireLogs?.pruneOrphans(new Set(this.records.keys()))
@@ -275,6 +294,14 @@ export class ChatSessionManager {
   /** Archived chats attach for history without starting an agent. */
   isArchived(sessionId: string): boolean {
     return this.records.get(sessionId)?.archivedAt != null
+  }
+
+  /**
+   * The session's Claude profile id (usage scoping, usage bar design D4):
+   * plan usage is tracked and broadcast per profile, never per session.
+   */
+  profileIdOf(sessionId: string): string | undefined {
+    return this.records.get(sessionId)?.claudeProfileId ?? 'default'
   }
 
   /**
@@ -652,6 +679,16 @@ export class ChatSessionManager {
           this.options.onCommandState?.(record.sessionId, state),
         onActivity: (activity) =>
           this.handleDriverActivity(record.sessionId, activity),
+        // Plan usage is recorded against the session's profile (design D3);
+        // the store's change listener drives the onUsage broadcast.
+        onRateLimit: (report) =>
+          this.usageLimits.record(record.claudeProfileId ?? 'default', report),
+        onUsageReport: (report) =>
+          this.usageLimits.record(record.claudeProfileId ?? 'default', report),
+        claimUsagePull: () =>
+          this.usageLimits.claimPull(record.claudeProfileId ?? 'default'),
+        onUsageNoData: () =>
+          this.usageLimits.recordNoData(record.claudeProfileId ?? 'default'),
         onStatus: (status) => this.applyPatch(record.sessionId, { status }),
         onSdkSessionId: (sdkSessionId) =>
           // Persist immediately: a crash right after the first turn must not
