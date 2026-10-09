@@ -1929,6 +1929,9 @@ describe('ChatSessionManager activity', () => {
 describe('ChatSessionManager usage', () => {
   let tempDir: string
   let db: SessionDatabase
+  const originalApiKey = process.env.ANTHROPIC_API_KEY
+  const originalConfigDir = process.env.CLAUDE_CONFIG_DIR
+  const originalHome = process.env.HOME
   beforeEach(() => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentboard-chatmgr-usage-'))
     db = initDatabase({ path: path.join(tempDir, 'test.db') })
@@ -1937,6 +1940,22 @@ describe('ChatSessionManager usage', () => {
     process.env.HOME = tempDir
   })
   afterEach(() => {
+    if (originalApiKey !== undefined) {
+      process.env.ANTHROPIC_API_KEY = originalApiKey
+    } else {
+      delete process.env.ANTHROPIC_API_KEY
+    }
+    if (originalConfigDir !== undefined) {
+      process.env.CLAUDE_CONFIG_DIR = originalConfigDir
+    } else {
+      delete process.env.CLAUDE_CONFIG_DIR
+    }
+    if (originalHome !== undefined) {
+      process.env.HOME = originalHome
+    } else {
+      delete process.env.HOME
+    }
+    db.close()
     fs.rmSync(tempDir, { recursive: true, force: true })
   })
 
