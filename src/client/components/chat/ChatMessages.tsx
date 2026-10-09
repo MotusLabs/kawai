@@ -6,18 +6,19 @@ import type { ChatEvent } from '@shared/chat'
 import Markdown from '../Markdown'
 import { toolCallDetail, toolResultDetail } from './toolCallLabel'
 
-/** `<summary>` whose optional parenthetical detail shrinks instead of wrapping. */
+/**
+ * `<summary>` whose optional parenthetical detail shrinks instead of wrapping.
+ * The chevron and label share one line (see `.chat-summary`); only the detail
+ * ellipsizes, with the full value on hover.
+ */
 function SummaryLabel({ label, detail }: { label: string; detail: string | null }) {
-  return <summary>
-    {/* Inner flex row keeps the <summary> list-item marker; only the detail shrinks. */}
-    <span className="flex min-w-0 items-baseline">
-      <span className="shrink-0">{label}</span>
-      {detail !== null && <>
-        <span className="shrink-0">{' ('}</span>
-        <span className="min-w-0 truncate" title={detail}>{detail}</span>
-        <span className="shrink-0">)</span>
-      </>}
-    </span>
+  return <summary className="chat-summary">
+    <span className="shrink-0">{label}</span>
+    {detail !== null && <>
+      <span className="shrink-0">{' ('}</span>
+      <span className="min-w-0 truncate" title={detail}>{detail}</span>
+      <span className="shrink-0">)</span>
+    </>}
   </summary>
 }
 
