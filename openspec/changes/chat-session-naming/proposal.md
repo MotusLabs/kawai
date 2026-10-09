@@ -17,6 +17,9 @@ the better name that already exists is never used.
 - Give each chat session a name provenance — `manual`, `auto`, or `placeholder`
   — so the system knows whether a name was chosen by a person or merely
   generated.
+- Migrate existing sessions by name shape, not wholesale: a name the placeholder
+  generator could not have produced is preserved as user-set, so names users
+  already supplied survive the upgrade.
 - Adopt Claude Code's generated title (the `ai-title` row it writes into the
   session transcript) whenever the name is not `manual`, and keep following that
   title as the conversation retitles it.

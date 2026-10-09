@@ -114,14 +114,29 @@ the rule is trimmed non-empty, with no character restriction and no uniqueness
 requirement. The existing terminal rule is unchanged and still applies to
 terminal sessions.
 
-### D6. Existing rows migrate as `placeholder`
+### D6. Existing rows migrate by name shape, never wholesale
 
-Sessions created before this change carry `adj-noun` names from
-`generateSessionName()` and no provenance. The migration stamps them
-`placeholder`, so they adopt a generated title at the next tail. The
-approval-policy requirement chose the opposite default ("before this feature
-SHALL behave as manual"); naming goes the other way because a placeholder name
-has no value to preserve.
+Sessions created before this change have no provenance: `createSession` records
+`input.name?.trim() || generateSessionName()`, so a name the user typed and a
+generated placeholder land in the same column. Migration must not guess from
+"looks random" — it must recover the distinction the schema never stored.
+
+`generateSessionName()` is a closed function over closed word lists
+(`${ADJECTIVES[i]}-${NOUNS[j]}`, 44 x 395 = 17,380 outputs). A name is
+generator-shaped only when it is exactly `adjective-noun` with both words in
+those lists. So:
+
+- generator-shaped (`sure-mark`, `calm-raven`) -> `placeholder`
+- anything else (`show-chat-rate-limits`, `docs-chat-session-naming`) -> `manual`
+
+This is exact for what the generator can emit, and it is conservative in the
+direction that matters: a name it cannot attribute to the generator is
+preserved. Blanket `placeholder` would have overwritten user-typed names such as
+`show-chat-rate-limits`, which exists in the live database today.
+
+*Alternative:* stamp every pre-existing row `manual`. Safe, but it strands the
+placeholders this change exists to replace. *Alternative:* stamp every row
+`placeholder`. Rejected — it destroys user-supplied names.
 
 ### D7. A `custom-title` row counts as `manual`
 
@@ -137,10 +152,12 @@ should stick. Treated as `manual` on read.
 - **[Retitles make the list row change under the user]** → Only while unclaimed.
   A single rename pins it. The list is name-sorted only if nothing else drives
   order, so movement is limited.
-- **[Migration misclassifies a hand-picked `adj-noun` name as a placeholder]** →
-  The generated title would replace it once. Low likelihood given the pattern;
-  recovered by renaming. Accepted for the sake of the four live sessions whose
-  placeholders are actively harmful.
+- **[A user-typed name that happens to be a valid `adjective-noun` pair]** →
+  D6 cannot tell `sure-mark` the placeholder from `sure-mark` typed on purpose;
+  the generator's output space is 17,380 pairs and both land in the same column.
+  The generated title would replace such a name once. Recovered by renaming.
+  Accepted because the alternative — treating every pre-existing name as
+  `manual` — strands the placeholders this change exists to replace.
 - **[A long generated title truncates in the row]** → Rows already truncate;
   the full name remains available in the header and on hover.
 - **[Watching a transcript per live chat session]** → Only live chat sessions are
@@ -149,8 +166,10 @@ should stick. Treated as `manual` on read.
 
 ## Migration Plan
 
-1. Add the provenance column to `chat_sessions`, defaulting existing rows to
-   `placeholder`. Column addition is additive and backward compatible.
+1. Add the provenance column to `chat_sessions` and stamp each existing row
+   per D6: `placeholder` when the name is a generator-shaped `adjective-noun`
+   pair, `manual` otherwise. Column addition is additive and backward
+   compatible.
 2. Existing chat sessions adopt a generated title on their first tail after the
    upgrade; nothing needs to run at migration time.
 3. Rollback: drop the column. Names stay as strings; nothing else depends on
