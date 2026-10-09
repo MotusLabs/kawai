@@ -860,6 +860,69 @@ describe('server message handlers', () => {
       else process.env.CLAUDE_CODE_OAUTH_TOKEN = previousToken
     }
   })
+  test('chat rename accepts free text and refuses empty names and unknown sessions', async () => {
+    const previousToken = process.env.CLAUDE_CODE_OAUTH_TOKEN
+    process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'
+    try {
+      const { serveOptions, registryInstance } = await loadIndex()
+      const { ws, sent } = createWs()
+      const websocket = serveOptions.websocket!
+      websocket.open?.(ws as never)
+      websocket.message?.(ws as never, JSON.stringify({ type: 'session-create', kind: 'chat', projectPath: os.tmpdir() }))
+      await new Promise(resolve => setTimeout(resolve, 0))
+      const created = sent.find(message => message.type === 'session-created')
+      if (created?.type !== 'session-created') throw new Error('Chat creation failed')
+      const sessionId = created.session.id
+
+      // Free text: spaces and punctuation the terminal `[\w-]+` rule rejects.
+      sent.length = 0
+      websocket.message?.(ws as never, JSON.stringify({
+        type: 'session-rename',
+        sessionId,
+        newName: '  Claude Code Chat subscription usage metrics spec!  ',
+      }))
+      await new Promise(resolve => setTimeout(resolve, 0))
+      expect(registryInstance.get(sessionId)?.name).toBe(
+        'Claude Code Chat subscription usage metrics spec!'
+      )
+      expect(registryInstance.get(sessionId)?.nameSource).toBe('manual')
+      expect(sent.some(
+        message => message.type === 'session-update'
+          && message.session.id === sessionId
+          && message.session.name === 'Claude Code Chat subscription usage metrics spec!'
+          && message.session.nameSource === 'manual'
+      )).toBe(true)
+
+      // Empty after trimming is refused and leaves the name alone.
+      sent.length = 0
+      websocket.message?.(ws as never, JSON.stringify({
+        type: 'session-rename',
+        sessionId,
+        newName: '   ',
+      }))
+      await new Promise(resolve => setTimeout(resolve, 0))
+      expect(sent).toContainEqual({ type: 'error', message: 'Name cannot be empty' })
+      expect(registryInstance.get(sessionId)?.name).toBe(
+        'Claude Code Chat subscription usage metrics spec!'
+      )
+
+      // Unknown sessions are refused — same error the terminal path gives,
+      // before any chat-specific handling runs.
+      sent.length = 0
+      websocket.message?.(ws as never, JSON.stringify({
+        type: 'session-rename',
+        sessionId: 'chat-none',
+        newName: 'whatever',
+      }))
+      await new Promise(resolve => setTimeout(resolve, 0))
+      expect(sent).toContainEqual({ type: 'error', message: 'Session not found' })
+
+      websocket.message?.(ws as never, JSON.stringify({ type: 'session-kill', sessionId }))
+    } finally {
+      if (previousToken === undefined) delete process.env.CLAUDE_CODE_OAUTH_TOKEN
+      else process.env.CLAUDE_CODE_OAUTH_TOKEN = previousToken
+    }
+  })
   test('chat creation for a missing project directory replies with an error', async () => {
     const previousToken = process.env.CLAUDE_CODE_OAUTH_TOKEN
     process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'

@@ -421,6 +421,25 @@ export class ChatSessionManager {
   }
 
   /**
+   * Rename a chat session (chat-session-naming design D1). A rename is a
+   * claim: it sets `manual` provenance, which is terminal, so no later
+   * generated title replaces it. Names are free text — trimmed non-empty —
+   * because chat sessions have no tmux window to name (design D5).
+   */
+  rename(sessionId: string, name: string): ChatActionResult {
+    const trimmed = name.trim()
+    if (!trimmed) {
+      return { ok: false, error: 'Name cannot be empty' }
+    }
+    const record = this.records.get(sessionId)
+    if (!record) {
+      return { ok: false, error: `Unknown chat session ${sessionId}` }
+    }
+    this.applyPatch(sessionId, { name: trimmed, nameSource: 'manual' })
+    return { ok: true }
+  }
+
+  /**
    * Switch a session's approval policy live (chat-auto-approve-tools design
    * D4): persists and broadcasts the new policy, records a transcript
    * notice, and lets a live driver grant approvals already pending as cards.
@@ -849,6 +868,9 @@ export class ChatSessionManager {
       ...(patch.archivedAt !== undefined ? { archivedAt: patch.archivedAt } : {}),
       ...(patch.approvalPolicy !== undefined
         ? { approvalPolicy: patch.approvalPolicy }
+        : {}),
+      ...(patch.nameSource !== undefined
+        ? { nameSource: patch.nameSource }
         : {}),
     })
   }

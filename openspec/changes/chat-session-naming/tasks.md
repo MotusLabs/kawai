@@ -8,9 +8,9 @@
 
 ## 2. Chat session rename
 
-- [ ] 2.1 Add a rename path to `ChatSessionManager` that sets name plus `manual` provenance and propagates through `applyPatch`, and verify a unit test asserts the rename reaches db, registry, and the `session-update` broadcast
-- [ ] 2.2 Replace the chat refusal in `handleRename` (`src/server/index.ts`) with the chat rename path, applying trimmed-non-empty validation instead of the terminal `[\w-]+` rule, and verify tests cover free-text names with spaces and punctuation, empty-name refusal, and unknown-session refusal
-- [ ] 2.3 Confirm terminal and remote rename behavior is unchanged by its existing tests, and verify `bun run test` passes with those still green
+- [x] 2.1 Add a rename path to `ChatSessionManager` that sets name plus `manual` provenance and propagates through `applyPatch`, and verify a unit test asserts the rename reaches db, registry, and the `session-update` broadcast
+- [x] 2.2 Replace the chat refusal in `handleRename` (`src/server/index.ts`) with the chat rename path, applying trimmed-non-empty validation instead of the terminal `[\w-]+` rule, and verify tests cover free-text names with spaces and punctuation, empty-name refusal, and unknown-session refusal
+- [x] 2.3 Confirm terminal and remote rename behavior is unchanged by its existing tests, and verify `bun run test` passes with those still green
 
 ## 3. Adopting generated titles
 
