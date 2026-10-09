@@ -14,11 +14,11 @@
 
 ## 3. Adopting generated titles
 
-- [ ] 3.1 Parse `ai-title` and `custom-title` rows in `src/server/chat/transcriptReplay.ts` (currently skipped as unknown types), and verify unit tests cover both row shapes, a missing `aiTitle`, and a truncated trailing line
-- [ ] 3.2 Implement a helper that returns the latest title and its implied source (`ai-title` → `auto`, `custom-title` → `manual`) from a transcript, and verify tests cover ordering when both appear
-- [ ] 3.3 Tail the transcript of each live chat session for new title rows and apply them when provenance is not `manual`, and verify a test asserts a later `ai-title` updates an `auto` name and never touches a `manual` one
-- [ ] 3.4 Release the tail on kill, archive, and shutdown, and verify a test asserts no watcher outlives the session
-- [ ] 3.5 Read the title as a catch-up when a chat session is restored or first attached after a restart, and verify a test covers a session named before the feature adopting its transcript's title
+- [x] 3.1 Parse `ai-title` and `custom-title` rows in `src/server/chat/transcriptReplay.ts` (currently skipped as unknown types), and verify unit tests cover both row shapes, a missing `aiTitle`, and a truncated trailing line
+- [x] 3.2 Implement a helper that returns the latest title and its implied source (`ai-title` → `auto`, `custom-title` → `manual`) from a transcript, and verify tests cover ordering when both appear
+- [x] 3.3 Tail the transcript of each live chat session for new title rows and apply them when provenance is not `manual`, and verify a test asserts a later `ai-title` updates an `auto` name and never touches a `manual` one
+- [x] 3.4 Release the tail on kill, archive, and shutdown, and verify a test asserts no watcher outlives the session
+- [x] 3.5 Read the title as a catch-up when a chat session is restored or first attached after a restart, and verify a test covers a session named before the feature adopting its transcript's title
 
 ## 4. Client rename surfaces
 
