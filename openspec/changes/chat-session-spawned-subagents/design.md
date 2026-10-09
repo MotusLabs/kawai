@@ -49,6 +49,12 @@ export interface ChatWorker {
   /** 1 for a top-level spawn; omit when unknown. */
   depth?: number
   status: ChatWorkerStatus
+  /**
+   * Whether the worker is known to be running right now. Distinct from
+   * `status`: `running` + `live: false` is the gap after the worker has left
+   * the background set and before its notification has landed.
+   */
+  live: boolean
   /** Most recent tool the worker ran. */
   lastTool?: string
   /** Milliseconds since the spawn when the message was sent. */
@@ -70,19 +76,27 @@ New server message `{ type: 'chat-workers'; sessionId; workers: ChatWorker[] }` 
 
 **The roster is built from the edge stream only** — `tool_call`, `task_started`, `task_progress`, `task_updated`, `task_notification`. That stream covers foreground and background workers alike and carries `tool_use_id`, the key that joins a worker to its row.
 
+**Liveness and outcome are separate fields.** `live` says whether the worker is running right now and drives the strip and the `working` status. `status` is the outcome, written only by an authoritative edge. That separation is what makes the reducer immune to frame ordering.
+
 | Input | Result |
 |---|---|
-| `tool_call` for Agent/Task | ensure a `running` row keyed by `toolCallId` |
-| `task_started` | fill `taskId`, `agentType`, `description`, `depth`; status `running` |
+| `tool_call` for Agent/Task | ensure a row keyed by `toolCallId`, `status: running`, `live: true` |
+| `task_started` | fill `taskId`, `agentType`, `description`, `depth`; `status: running`, `live: true` |
 | `task_progress` | update `lastTool` (and `description` if the frame renames it) |
-| `task_updated` `patch.status` | map onto `ChatWorkerStatus` |
-| `task_notification` | settle with its status and `summary` |
-| `background_tasks_changed` | prune the running **background** subset only (see below) |
-| `process_end` (driver death, interrupt, archive, kill) | settle any still-running worker as `stopped` |
+| `task_updated` `patch.status` | map onto `ChatWorkerStatus`; clear `live` when it settles |
+| `task_notification` | **always** write its status and `summary`, clearing `live`; overwrites a provisional state |
+| `background_tasks_changed` | set `live` from membership only (see below); never writes `status` |
+| `process_end` (driver death, interrupt, archive, kill) | write `stopped` for any worker still without an outcome |
 
-**`background_tasks_changed` is not a roster source.** Its payload is `tasks: { task_id, task_type, description, ambient? }[]` — no `tool_use_id`, so it cannot join to a row — and it lists *background* tasks only. Its own documentation says the payload "carries ids only, so do not correlate it with the edge stream" and that it is emitted whenever a foreground agent is backgrounded. So it is used as a liveness set: any roster entry that is running, has a `taskId`, is known to be backgrounded, and is absent from `tasks` is settled as `stopped` (a missed `task_notification` cannot wedge a running indicator). It never creates a row, never rewrites identity, and never touches foreground workers — replacing the roster with it would drop every foreground spawn.
+**`background_tasks_changed` is a liveness set, never an outcome source.** Its payload is `tasks: { task_id, task_type, description, ambient? }[]` — no `tool_use_id`, so it joins by `task_id` only — and it lists *background* tasks only, so it is never a roster source: replacing the roster with it would drop every foreground spawn and every identity field.
 
-A `task_started` with no `tool_use_id` cannot be joined to a row; it is tracked only for the background liveness set and renders nowhere.
+It also must not settle anything. Its documentation says ordering against the `task_started`/`task_notification` bookends is unspecified and that "**in practice the level precedes them**", so on a normal completion the set drops the task *before* the notification carrying `completed` arrives. Settling from the set would write `stopped` first and lock that in, discarding the real outcome when it lands.
+
+So the set writes `live` and nothing else. Membership is authoritative for background liveness — which is precisely what it is documented as ("consumers that only need 'is background work running' should replace their set with each payload") and what stops a missed notification from wedging a running indicator. Foreground workers are never in the set; their `live` comes from the edges and clears on settle or `process_end`.
+
+A worker in the gap (`status: running`, `live: false`) is absent from the strip and does not hold the session at `working`, while its row still reads running until the notification lands and writes the outcome. The gap is one frame wide in practice.
+
+A `task_started` with no `tool_use_id` cannot be joined to a row; it is tracked only for background liveness and renders nowhere.
 
 Unknown `task_type`s and `ambient: true` / `skip_transcript: true` tasks are dropped — they are housekeeping, not activity the user asked for.
 
@@ -112,20 +126,21 @@ A worker's settled status and summary are not recoverable after a restart: `task
 
 ### D7. Status extension lives in `refreshStatus`
 
-`working` while `activeTurnId` is set **or** any worker is `running`; `permission` still wins over `working`. `waiting` only when both are clear. The composer is untouched — it already accepts messages while `working`.
+`working` while `activeTurnId` is set **or** any worker is **live**; `permission` still wins over `working`. `waiting` only when both are clear. Liveness, not `status`, is what holds the session: a worker in the completion gap has already left the background set, so it must not keep the session at `working`. The composer is untouched — it already accepts messages while `working`.
 
 ### D8. The live strip and the row are thin views over one source
 
-A `ChatWorkersStrip.tsx` above the transcript lists `workers.filter(w => w.status === 'running')`. `ChatMessages` renders `tool_call` events for Agent/Task as `ChatWorkerRow.tsx`, joining on `workerId` for live fields and on the settled sidecar/snapshot row for outcomes. The strip hides when the filtered list is empty or the chat is archived; the row renders in archived chats from its persisted outcome. Depth badge comes from `depth`; omit it when unknown.
+A `ChatWorkersStrip.tsx` above the transcript lists `workers.filter(w => w.live)`. `ChatMessages` renders `tool_call` events for Agent/Task as `ChatWorkerRow.tsx`, joining on `workerId` for live fields and on the settled sidecar/snapshot row for outcomes. The strip hides when the filtered list is empty or the chat is archived; the row renders in archived chats from its persisted outcome. Depth badge comes from `depth`; omit it when unknown.
 
 ### D9. Development fixture
 
-`developmentFixture.ts` gets a keyword-triggered turn that emits an `Agent` `tool_call`, `task_started`, a couple of `task_progress` frames with `last_tool_name`, a `task_notification` with a summary, and one subagent `tool_use` that must **not** appear in the transcript. That exercises the row, the strip, the exclusion, and the settled outcome without a model.
+`developmentFixture.ts` gets a keyword-triggered turn that emits an `Agent` `tool_call`, `task_started`, a couple of `task_progress` frames with `last_tool_name`, a `background_tasks_changed` that drops the task *before* the `task_notification` carrying its summary, and one subagent `tool_use` that must **not** appear in the transcript. That exercises the row, the strip, the exclusion, the completion gap, and the settled outcome without a model.
 
 ## Risks / Trade-offs
 
 - [`task_*` and `parent_tool_use_id` are Claude Code stream-JSON details, not stable SDK API] → The reducer ignores unknown fields and task types; a missing frame degrades a row to coarser state (no last-tool, no summary), never to an error. Tests pin frame shapes copied from real wire captures and from `sdk.d.ts`.
 - [Reading a JSONL while Claude Code appends to it] → Parse complete lines only; drop a trailing partial line. If the file is missing entirely, the expanded row says the body is unavailable.
 - [A crash bypasses `process_end`, so running workers would otherwise be lost] → Every worker is persisted at spawn (D6). A restart reads entries still marked `running` and recovers them as `stopped`, so the row survives and the session cannot report a dead worker as running.
-- [`background_tasks_changed` is not emitted at startup and carries no `tool_use_id`] → It is never a roster source (D3); it only prunes the running background subset by `task_id`. Rows and identity come from the edge stream, and the sidecar restores them across restarts.
+- [`background_tasks_changed` is not emitted at startup, carries no `tool_use_id`, and arrives before the bookends it describes] → It is never a roster source and never writes an outcome (D3); it only sets `live`, joined by `task_id`. Rows and identity come from the edge stream, and the sidecar restores them across restarts.
+- [A `task_notification` can be lost, leaving a worker with no outcome] → The level set still clears `live`, so the strip and the `working` status cannot wedge; the row may read running without an outcome until `process_end` writes `stopped`. Degraded in the label, correct in the status.
 - [The row shows less than the raw `tool_call` did (the tool input JSON)] → Expanding shows the worker's whole transcript, which is the input's purpose. The raw input remains in the Debug panel's wire log.

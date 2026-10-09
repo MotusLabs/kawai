@@ -18,7 +18,7 @@ The system SHALL track every agent a chat session spawns as a worker identified 
 - **THEN** the snapshot lists those workers with their identity and running status
 
 ### Requirement: A worker has a lifecycle status
-A tracked worker SHALL have a status of running, completed, failed, or stopped, advancing from running exactly once to one of the three settled states. Status changes SHALL reach every attached client.
+A tracked worker SHALL have a status of running, completed, failed, or stopped. Only that worker's own completion, failure, or stop SHALL write a settled status, and its final result SHALL be the recorded outcome. A report that the worker is no longer among the running work MUST NOT write a settled status. Status changes SHALL reach every attached client.
 
 #### Scenario: Worker completes
 - **WHEN** a worker finishes its work normally
@@ -27,6 +27,21 @@ A tracked worker SHALL have a status of running, completed, failed, or stopped, 
 #### Scenario: Worker fails or is stopped
 - **WHEN** a worker ends in failure or is stopped before finishing
 - **THEN** its status becomes failed or stopped respectively
+
+#### Scenario: The running-set report precedes the worker's own result
+- **WHEN** the running work is reported without a worker and that worker's completion arrives afterwards
+- **THEN** the worker's status becomes completed from its own result and is not stopped from the earlier report
+
+### Requirement: A worker's liveness is tracked apart from its outcome
+The system SHALL track separately from its lifecycle status whether a worker is currently running. A worker with no settled status that is no longer reported among the running work SHALL NOT be listed in the live strip and SHALL NOT hold the session at working, and its row SHALL show no settled outcome until one arrives.
+
+#### Scenario: Worker leaves the running set before its result
+- **WHEN** a worker is no longer reported among the running work and has not yet reported its result
+- **THEN** the live strip omits it, the session is not held at working, and its row shows no settled outcome
+
+#### Scenario: Its result then arrives
+- **WHEN** that worker's result arrives after it left the running set
+- **THEN** its row shows the settled outcome and summary
 
 ### Requirement: Worker inner traffic stays out of the parent transcript
 A worker's own tool calls, tool results, and assistant text SHALL NOT be emitted as top-level conversation events, except for the `Agent` and `Task` calls that spawn that worker's own children, which are emitted so those children have a row. The worker's body is reached by expanding its row.
@@ -89,14 +104,14 @@ The system SHALL record a worker's identity when it spawns and its settled statu
 - **THEN** no worker appears as running
 
 ### Requirement: A live strip lists running workers
-While one or more workers of a chat session are running, the chat view SHALL show a strip above the transcript listing each running worker with its agent type, description, last tool name, and elapsed time. The strip SHALL disappear when no worker is running, and SHALL NOT appear in archived chats.
+While one or more workers of a chat session are currently running, the chat view SHALL show a strip above the transcript listing each of those workers with its agent type, description, last tool name, and elapsed time. The strip SHALL disappear when no worker is currently running, and SHALL NOT appear in archived chats.
 
 #### Scenario: Two workers running
-- **WHEN** a chat session has two running workers
+- **WHEN** a chat session has two currently running workers
 - **THEN** the strip lists both, each with its own last tool and elapsed time
 
-#### Scenario: Last worker settles
-- **WHEN** the last running worker of a chat session settles
+#### Scenario: Last worker leaves the running set
+- **WHEN** no worker of a chat session is currently running any more
 - **THEN** the strip is no longer shown
 
 #### Scenario: Archived chat

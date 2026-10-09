@@ -30,6 +30,10 @@ mechanism.
 - **WHEN** the last running worker of a chat session settles and no turn is in flight
 - **THEN** the session is reported as waiting in the session list
 
+#### Scenario: A worker that has left the running set does not hold the session
+- **WHEN** a worker is no longer reported among the running work and has not yet reported its result, and no turn is in flight
+- **THEN** the session is reported as waiting in the session list
+
 #### Scenario: Composer accepts messages while workers run
 - **WHEN** a chat session is reported as working only because spawned workers are running
 - **THEN** the user can still submit a new message and the agent accepts it
