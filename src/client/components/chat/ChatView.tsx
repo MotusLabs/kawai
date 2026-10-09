@@ -180,6 +180,31 @@ export default function ChatView({ session, sendMessage, subscribe, connectionSt
         (command) => command.name === hintName || command.aliases.includes(hintName)
       )
     : undefined
+  // Header rename (chat-session-naming): the title edits in place. A blank
+  // submit just exits editing — the server's empty-name refusal belongs to
+  // paths that can send one. The draft follows broadcast renames while not
+  // being edited, so another client's rename shows here without a reload.
+  const [editingName, setEditingName] = useState(false)
+  const [nameDraft, setNameDraft] = useState(session.name)
+  useEffect(() => { setEditingName(false); setNameDraft(session.name) }, [session.id])
+  useEffect(() => { if (!editingName) setNameDraft(session.name) }, [session.name, editingName])
+  const submitName = () => {
+    const trimmed = nameDraft.trim()
+    setEditingName(false)
+    if (trimmed && trimmed !== session.name) {
+      sendMessage({ type: 'session-rename', sessionId: session.id, newName: trimmed })
+    }
+  }
+  const handleNameKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === 'Enter') {
+      event.preventDefault()
+      submitName()
+    } else if (event.key === 'Escape') {
+      event.preventDefault()
+      setNameDraft(session.name)
+      setEditingName(false)
+    }
+  }
   // Activity row hiding rules (design D4): text streaming is its own visible
   // progress, a pending approval/question owns the footer, and archived chats
   // are read-only — none of them also show the live phase row.
@@ -193,7 +218,16 @@ export default function ChatView({ session, sendMessage, subscribe, connectionSt
     style={{ '--chat-font-size': `${chatFontSize}px` } as CSSProperties}>
     <header className="flex items-center gap-3 border-b border-border p-3">
       <button className="btn text-chat-meta md:hidden" onClick={onClose}>Sessions</button>
-      <div className="min-w-0 flex-1"><h2 className="truncate text-chat-body font-medium">{session.name} · Chat</h2>
+      <div className="min-w-0 flex-1">
+        {editingName ? (
+          <input data-testid="chat-name-input" autoFocus aria-label="Session name"
+            className="w-full rounded border border-border bg-surface px-1.5 py-0.5 text-chat-body font-medium text-primary outline-none focus:border-accent"
+            value={nameDraft} onChange={event => setNameDraft(event.target.value)}
+            onBlur={submitName} onKeyDown={handleNameKeyDown} />
+        ) : (
+          <h2 className="cursor-text truncate text-chat-body font-medium" title="Rename"
+            data-testid="chat-name" onClick={() => setEditingName(true)}>{session.name} · Chat</h2>
+        )}
         <p className="text-chat-meta text-secondary" data-testid="chat-profile">Profile: {profileLabel}</p>
         <p className="truncate text-chat-meta text-secondary">{session.projectPath}</p></div>
       <span className="text-chat-meta text-secondary" data-testid="chat-status">{connected ? (archived ? 'archived' : session.status) : connectionStatus}</span>

@@ -296,6 +296,55 @@ describe('App', () => {
 
   })
 
+  test('a rename broadcast updates the list row and an open chat header without a reload', () => {
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => {
+      renderer = TestRenderer.create(<App />)
+    })
+    activeRenderer = renderer
+    if (!subscribeListener) {
+      throw new Error('Expected websocket subscription')
+    }
+
+    const chat = {
+      id: 'chat-1',
+      name: 'pure-bell',
+      projectPath: '/tmp/project',
+      status: 'waiting' as const,
+      lastActivity: '2026-10-09T00:00:00.000Z',
+      createdAt: '2026-10-09T00:00:00.000Z',
+      source: 'managed' as const,
+      kind: 'chat' as const,
+      nameSource: 'placeholder' as const,
+    }
+    act(() => {
+      subscribeListener?.({ type: 'sessions', sessions: [chat] })
+    })
+    // The user opens the chat, then the server adopts a generated title.
+    act(() => {
+      useSessionStore.getState().setSelectedSessionId('chat-1')
+    })
+    act(() => {
+      subscribeListener?.({
+        type: 'session-update',
+        session: {
+          ...chat,
+          name: 'Claude Code Chat subscription usage metrics spec',
+          nameSource: 'auto',
+        },
+      })
+    })
+
+    const sessions = useSessionStore.getState().sessions
+    expect(sessions[0]?.name).toBe('Claude Code Chat subscription usage metrics spec')
+    expect(sessions[0]?.nameSource).toBe('auto')
+    // The selected session (the open chat header) follows the store...
+    expect(useSessionStore.getState().sessions.find((session) => session.id === 'chat-1')?.name)
+      .toBe('Claude Code Chat subscription usage metrics spec')
+    // ...and the rendered row shows the broadcast name.
+    expect(JSON.stringify(renderer.toJSON())).toContain('Claude Code Chat subscription usage metrics spec')
+  })
+
   test('keeps card on supersede-orphan and updates metadata on activation', () => {
     useSessionStore.setState({
       sessions: [

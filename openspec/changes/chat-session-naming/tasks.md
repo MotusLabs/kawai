@@ -22,9 +22,9 @@
 
 ## 4. Client rename surfaces
 
-- [ ] 4.1 Make the chat view header name editable (`src/client/components/chat/ChatView.tsx`) and verify a component test covers editing, submitting, and the empty-name case
-- [ ] 4.2 Wire the navigator rename entry point for chat rows (`src/client/components/SessionRow.tsx`) so it no longer errors, and verify a component test covers renaming a chat row and the name appearing on the row
-- [ ] 4.3 Render an updated name on `session-update` without a reload, and verify a test asserts an attached client's header and row follow the broadcast
+- [x] 4.1 Make the chat view header name editable (`src/client/components/chat/ChatView.tsx`) and verify a component test covers editing, submitting, and the empty-name case
+- [x] 4.2 Wire the navigator rename entry point for chat rows (`src/client/components/SessionRow.tsx`) so it no longer errors, and verify a component test covers renaming a chat row and the name appearing on the row
+- [x] 4.3 Render an updated name on `session-update` without a reload, and verify a test asserts an attached client's header and row follow the broadcast
 
 ## 5. Integration verification
 
