@@ -1425,6 +1425,71 @@ describe('ChatSessionManager', () => {
     })
   })
 
+  describe('rename', () => {
+    test('rename reaches db, registry, and the session-update broadcast as manual', () => {
+      process.env.ANTHROPIC_API_KEY = 'sk-test-key'
+      const { manager, registry } = createHarness(db)
+      const created = manager.createSession({ projectPath: '/tmp/proj' })
+      if (!created.ok) throw new Error('create failed')
+      const sessionId = created.session.id
+      expect(created.session.nameSource).toBe('placeholder')
+
+      const updates: Session[] = []
+      registry.on('session-update', (session: Session) => updates.push(session))
+
+      expect(manager.rename(sessionId, '  Claude Code Chat metrics  ').ok).toBe(
+        true
+      )
+
+      expect(db.getChatSession(sessionId)?.name).toBe('Claude Code Chat metrics')
+      expect(db.getChatSession(sessionId)?.nameSource).toBe('manual')
+
+      const inRegistry = registry.get(sessionId)
+      expect(inRegistry?.name).toBe('Claude Code Chat metrics')
+      expect(inRegistry?.nameSource).toBe('manual')
+
+      expect(updates).toHaveLength(1)
+      expect(updates[0]?.id).toBe(sessionId)
+      expect(updates[0]?.name).toBe('Claude Code Chat metrics')
+      expect(updates[0]?.nameSource).toBe('manual')
+    })
+
+    test('rename is a claim: provenance becomes manual even when the name is unchanged', () => {
+      process.env.ANTHROPIC_API_KEY = 'sk-test-key'
+      const { manager, registry } = createHarness(db)
+      const created = manager.createSession({ projectPath: '/tmp/proj' })
+      if (!created.ok) throw new Error('create failed')
+      const sessionId = created.session.id
+      // An unnamed session starts on a placeholder; re-submitting that same
+      // string is still a claim, so provenance must move to manual.
+      expect(created.session.nameSource).toBe('placeholder')
+
+      expect(manager.rename(sessionId, created.session.name).ok).toBe(true)
+      expect(registry.get(sessionId)?.nameSource).toBe('manual')
+      expect(db.getChatSession(sessionId)?.nameSource).toBe('manual')
+    })
+
+    test('rename refuses an empty name and an unknown session', () => {
+      process.env.ANTHROPIC_API_KEY = 'sk-test-key'
+      const { manager } = createHarness(db)
+      const created = manager.createSession({ projectPath: '/tmp/proj' })
+      if (!created.ok) throw new Error('create failed')
+
+      const empty = manager.rename(created.session.id, '   ')
+      expect(empty.ok).toBe(false)
+      if (!empty.ok) expect(empty.error).toContain('empty')
+
+      const unknown = manager.rename('chat-missing', 'anything')
+      expect(unknown.ok).toBe(false)
+      if (!unknown.ok) expect(unknown.error).toContain('Unknown')
+
+      // Refusals leave the stored name alone.
+      expect(db.getChatSession(created.session.id)?.nameSource).toBe(
+        'placeholder'
+      )
+    })
+  })
+
   describe('restart restore', () => {
     test('rows load as idle chat sessions; next send resumes the stored SDK id', async () => {
       process.env.ANTHROPIC_API_KEY = 'sk-test-key'
@@ -1503,6 +1568,42 @@ describe('ChatSessionManager', () => {
       const all = registryB.getAll()
       expect(all.filter((s) => s.kind === 'chat')).toHaveLength(2)
       expect(all.find((s) => s.id === 'term-1')).toBeDefined()
+      dbB.close()
+    })
+
+    test('create records name provenance and a restart restores it unchanged', () => {
+      process.env.ANTHROPIC_API_KEY = 'sk-test-key'
+      const dbPath = path.join(tempDir, 'name-source.db')
+      const dbA = initDatabase({ path: dbPath })
+      const harnessA = createHarness(dbA)
+
+      const named = harnessA.manager.createSession({
+        projectPath: '/tmp/proj',
+        name: 'show-chat-rate-limits',
+      })
+      if (!named.ok) throw new Error('create failed')
+      expect(named.session.name).toBe('show-chat-rate-limits')
+      expect(named.session.nameSource).toBe('manual')
+
+      const unnamed = harnessA.manager.createSession({ projectPath: '/tmp/other' })
+      if (!unnamed.ok) throw new Error('create failed')
+      expect(unnamed.session.nameSource).toBe('placeholder')
+
+      expect(dbA.getChatSession(named.session.id)?.nameSource).toBe('manual')
+      expect(dbA.getChatSession(unnamed.session.id)?.nameSource).toBe(
+        'placeholder'
+      )
+      dbA.close()
+
+      // "Restart": fresh db handle, registry, and manager on the same file.
+      const dbB = initDatabase({ path: dbPath })
+      const harnessB = createHarness(dbB)
+      const restoredNamed = harnessB.registry.get(named.session.id)
+      const restoredUnnamed = harnessB.registry.get(unnamed.session.id)
+      expect(restoredNamed?.name).toBe('show-chat-rate-limits')
+      expect(restoredNamed?.nameSource).toBe('manual')
+      expect(restoredUnnamed?.nameSource).toBe('placeholder')
+      expect(dbB.getChatSession(named.session.id)?.nameSource).toBe('manual')
       dbB.close()
     })
   })

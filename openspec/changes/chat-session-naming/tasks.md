@@ -2,15 +2,15 @@
 
 ## 1. Name provenance data model
 
-- [ ] 1.1 Add a `nameSource` field (`manual` | `auto` | `placeholder`) to `ChatSessionRecord` and to `Session` in `src/server/db.ts` and `src/shared/types.ts`, and verify `bun run typecheck` passes with the field threaded through `toSession`
-- [ ] 1.2 Add the `name_source` column to `chat_sessions` in `src/server/db.ts`, stamping each pre-existing row per design D6 — `placeholder` only when the name is a generator-shaped `adjective-noun` pair, `manual` otherwise — and verify unit tests cover both sides: `sure-mark` becomes `placeholder`, `show-chat-rate-limits` stays `manual`
-- [ ] 1.3 Persist and restore `nameSource` through `insertChatSession` / `updateChatSession`, and verify a round-trip test covers create, update, and `restorePersisted`
+- [x] 1.1 Add a `nameSource` field (`manual` | `auto` | `placeholder`) to `ChatSessionRecord` and to `Session` in `src/server/db.ts` and `src/shared/types.ts`, and verify `bun run typecheck` passes with the field threaded through `toSession`
+- [x] 1.2 Add the `name_source` column to `chat_sessions` in `src/server/db.ts`, stamping each pre-existing row per design D6 — `placeholder` only when the name is a generator-shaped `adjective-noun` pair, `manual` otherwise — and verify unit tests cover both sides: `sure-mark` becomes `placeholder`, `show-chat-rate-limits` stays `manual`
+- [x] 1.3 Persist and restore `nameSource` through `insertChatSession` / `updateChatSession`, and verify a round-trip test covers create, update, and `restorePersisted`
 
 ## 2. Chat session rename
 
-- [ ] 2.1 Add a rename path to `ChatSessionManager` that sets name plus `manual` provenance and propagates through `applyPatch`, and verify a unit test asserts the rename reaches db, registry, and the `session-update` broadcast
-- [ ] 2.2 Replace the chat refusal in `handleRename` (`src/server/index.ts`) with the chat rename path, applying trimmed-non-empty validation instead of the terminal `[\w-]+` rule, and verify tests cover free-text names with spaces and punctuation, empty-name refusal, and unknown-session refusal
-- [ ] 2.3 Confirm terminal and remote rename behavior is unchanged by its existing tests, and verify `bun run test` passes with those still green
+- [x] 2.1 Add a rename path to `ChatSessionManager` that sets name plus `manual` provenance and propagates through `applyPatch`, and verify a unit test asserts the rename reaches db, registry, and the `session-update` broadcast
+- [x] 2.2 Replace the chat refusal in `handleRename` (`src/server/index.ts`) with the chat rename path, applying trimmed-non-empty validation instead of the terminal `[\w-]+` rule, and verify tests cover free-text names with spaces and punctuation, empty-name refusal, and unknown-session refusal
+- [x] 2.3 Confirm terminal and remote rename behavior is unchanged by its existing tests, and verify `bun run test` passes with those still green
 
 ## 3. Adopting generated titles
 

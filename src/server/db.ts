@@ -2,8 +2,9 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { Database as SQLiteDatabase } from 'bun:sqlite'
 import type { ChatApprovalPolicy } from '../shared/chat'
-import type { AgentType, SessionStatus } from '../shared/types'
+import type { AgentType, ChatNameSource, SessionStatus } from '../shared/types'
 import { parseApprovalPolicy } from './chat/approvalPolicy'
+import { isGeneratorSessionName } from './nameGenerator'
 import { resolveProjectPath } from './paths'
 
 export interface AgentSessionRecord {
@@ -47,7 +48,9 @@ export interface KnownSessionKey {
  * `sdkSessionId`. Null sdkSessionId means created but never started.
  * `archivedAt` (chat-archive design D1) is the archive timestamp; null or
  * absent means the session is live. `approvalPolicy`
- * (chat-auto-approve-tools design D5) defaults to manual.
+ * (chat-auto-approve-tools design D5) defaults to manual. `nameSource`
+ * (chat-session-naming design D1) records who chose `name`; absent means the
+ * name was never attributed and is treated as manual so it cannot be lost.
  */
 export interface ChatSessionRecord {
   sessionId: string
@@ -60,6 +63,7 @@ export interface ChatSessionRecord {
   lastActivityAt: string
   archivedAt?: string | null
   approvalPolicy?: ChatApprovalPolicy
+  nameSource?: ChatNameSource
 }
 
 // last_user_message is a UI preview; unbounded values (giant pastes, tool
@@ -186,7 +190,8 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
   created_at TEXT NOT NULL,
   last_activity_at TEXT NOT NULL,
   archived_at TEXT,
-  approval_policy TEXT NOT NULL DEFAULT 'manual'
+  approval_policy TEXT NOT NULL DEFAULT 'manual',
+  name_source TEXT NOT NULL DEFAULT 'manual'
 );
 `
 
@@ -239,6 +244,7 @@ export function initDatabase(options: { path?: string } = {}): SessionDatabase {
     db.exec("ALTER TABLE chat_sessions ADD COLUMN approval_policy TEXT NOT NULL DEFAULT 'manual'")
   }
   migrateLastUserMessageColumn(db)
+  migrateChatNameSourceColumn(db)
   migrateDeduplicateDisplayNames(db)
   migrateIsPinnedColumn(db)
   migrateIsSleepingToPinnedColumn(db)
@@ -326,8 +332,8 @@ export function initDatabase(options: { path?: string } = {}): SessionDatabase {
   // Chat sessions prepared statements
   const insertChatStmt = db.prepare(
     `INSERT INTO chat_sessions
-      (session_id, name, project_path, sdk_session_id, profile_id, status, created_at, last_activity_at, approval_policy)
-     VALUES ($sessionId, $name, $projectPath, $sdkSessionId, $profileId, $status, $createdAt, $lastActivityAt, $approvalPolicy)`
+      (session_id, name, project_path, sdk_session_id, profile_id, status, created_at, last_activity_at, approval_policy, name_source)
+     VALUES ($sessionId, $name, $projectPath, $sdkSessionId, $profileId, $status, $createdAt, $lastActivityAt, $approvalPolicy, $nameSource)`
   )
   const selectChatBySessionId = db.prepare(
     'SELECT * FROM chat_sessions WHERE session_id = $sessionId'
@@ -572,6 +578,7 @@ export function initDatabase(options: { path?: string } = {}): SessionDatabase {
         $createdAt: session.createdAt,
         $lastActivityAt: session.lastActivityAt,
         $approvalPolicy: session.approvalPolicy ?? 'manual',
+        $nameSource: session.nameSource ?? 'manual',
       })
       return session
     },
@@ -586,6 +593,7 @@ export function initDatabase(options: { path?: string } = {}): SessionDatabase {
         lastActivityAt: 'last_activity_at',
         archivedAt: 'archived_at',
         approvalPolicy: 'approval_policy',
+        nameSource: 'name_source',
       }
       const fields: string[] = []
       const params: Record<string, string | number | null> = {
@@ -669,7 +677,13 @@ function mapChatRow(row: Record<string, unknown>): ChatSessionRecord {
         ? null
         : String(row.archived_at),
     approvalPolicy: parseApprovalPolicy(row.approval_policy),
+    nameSource: parseChatNameSource(row.name_source),
   }
+}
+
+/** Read a stored provenance value; anything absent or unknown reads as manual. */
+function parseChatNameSource(value: unknown): ChatNameSource {
+  return value === 'placeholder' || value === 'auto' ? value : 'manual'
 }
 
 function mapRow(row: Record<string, unknown>): AgentSessionRecord {
@@ -776,6 +790,36 @@ function migrateLastUserMessageColumn(db: SQLiteDatabase) {
     return
   }
   db.exec('ALTER TABLE agent_sessions ADD COLUMN last_user_message TEXT')
+}
+
+/**
+ * chat-session-naming design D6: rows created before this feature stored the
+ * name but not who chose it — a user-typed name and a generated placeholder
+ * landed in the same column. Recover the distinction by name shape, never
+ * wholesale: `isGeneratorSessionName` is exact for what the generator can
+ * emit, and a name it cannot attribute is preserved as `manual`.
+ */
+function migrateChatNameSourceColumn(db: SQLiteDatabase) {
+  const columns = getColumnNames(db, 'chat_sessions')
+  if (columns.length === 0 || columns.includes('name_source')) {
+    return
+  }
+  // Default `manual` is the conservative stamp: only names the generator
+  // provably produced are downgraded to `placeholder`.
+  db.exec(
+    "ALTER TABLE chat_sessions ADD COLUMN name_source TEXT NOT NULL DEFAULT 'manual'"
+  )
+  const rows = db
+    .prepare('SELECT session_id, name FROM chat_sessions')
+    .all() as { session_id: string; name: string }[]
+  const markPlaceholder = db.prepare(
+    "UPDATE chat_sessions SET name_source = 'placeholder' WHERE session_id = $sessionId"
+  )
+  for (const row of rows) {
+    if (isGeneratorSessionName(row.name)) {
+      markPlaceholder.run({ $sessionId: row.session_id })
+    }
+  }
 }
 
 function migrateIsPinnedColumn(db: SQLiteDatabase) {

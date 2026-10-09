@@ -3378,7 +3378,18 @@ async function handleRename(
     }
   }
   if (!isTerminalSession(session)) {
-    send(ws, { type: 'error', message: 'Chat session rename is not available yet' })
+    // Chat names are free text (chat-session-naming design D5): a chat session
+    // has no tmux window to name, and generated titles carry spaces and
+    // punctuation the terminal `[\w-]+` rule would reject.
+    const trimmed = newName.trim()
+    if (!trimmed) {
+      send(ws, { type: 'error', message: 'Name cannot be empty' })
+      return
+    }
+    const result = chatSessionManager.rename(sessionId, trimmed)
+    if (!result.ok) {
+      send(ws, { type: 'error', message: result.error })
+    }
     return
   }
   if (session.remote && !config.remoteAllowControl) {
