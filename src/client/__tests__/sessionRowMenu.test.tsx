@@ -68,7 +68,11 @@ function renderRow(
     onArchiveChat: (sessionId: string) => void
     onRestoreChat: (sessionId: string) => void
     onKill: (sessionId: string) => void
-  }>
+  }> & {
+    onRename?: (sessionId: string, newName: string) => void
+    onStartEdit?: (sessionId: string) => void
+    isEditing?: boolean
+  } = {}
 ): TestRenderer.ReactTestRenderer {
   let renderer!: TestRenderer.ReactTestRenderer
   act(() => {
@@ -82,7 +86,7 @@ function renderRow(
             prefersReducedMotion={false}
             useSafariLayoutFallback={false}
             isSelected={false}
-            isEditing={false}
+            isEditing={actions.isEditing ?? false}
             showSessionIdPrefix={false}
             showProjectName={false}
             showLastUserMessage={false}
@@ -91,8 +95,9 @@ function renderRow(
             nowTick={Date.now()}
             remoteAllowControl={false}
             onSelect={() => {}}
+            onStartEdit={actions.onStartEdit}
             onCancelEdit={() => {}}
-            onRename={() => {}}
+            onRename={actions.onRename ?? (() => {})}
             onArchiveChat={actions.onArchiveChat}
             onRestoreChat={actions.onRestoreChat}
             onKill={actions.onKill}
@@ -183,5 +188,55 @@ describe('SessionRow chat archive menu', () => {
     expect(menuItemNames(renderer.root)).not.toContain('Restore')
 
     act(() => renderer.unmount())
+  })
+})
+
+describe('SessionRow chat rename', () => {
+  test('a chat row offers Rename, submits free text, and shows the broadcast name', () => {
+    // The menu entry point exists for chat rows (canControl is true), and the
+    // server no longer refuses the request — so renaming works end to end.
+    const startedEdit: string[] = []
+    const renames: Array<{ sessionId: string; newName: string }> = []
+    const renderer = renderRow(baseChat, {
+      onStartEdit: (sessionId) => startedEdit.push(sessionId),
+      onRename: (sessionId, newName) => renames.push({ sessionId, newName }),
+    })
+    expect(menuItemNames(renderer.root)).toContain('Rename')
+    const renameButton = renderer.root
+      .findAllByProps({ role: 'menuitem' })
+      .find((item) =>
+        item.children.some((child) => typeof child === 'string' && child.trim() === 'Rename')
+      )
+    if (!renameButton) throw new Error('Expected Rename menu item')
+    act(() => {
+      renameButton.props.onClick({ stopPropagation: () => {} })
+    })
+    expect(startedEdit).toEqual(['chat-1'])
+    act(() => renderer.unmount())
+
+    // The editing row submits the typed value, spaces and all.
+    const editing = renderRow(baseChat, {
+      isEditing: true,
+      onRename: (sessionId, newName) => renames.push({ sessionId, newName }),
+    })
+    const input = editing.root.findByType('input')
+    act(() => {
+      input.props.onChange({ target: { value: 'Claude Code Chat usage metrics spec' } })
+    })
+    act(() => {
+      input.props.onKeyDown({ key: 'Enter', preventDefault: () => {} })
+    })
+    expect(renames).toEqual([
+      { sessionId: 'chat-1', newName: 'Claude Code Chat usage metrics spec' },
+    ])
+    act(() => editing.unmount())
+
+    // The session-update lands as a new session prop: the row shows the name.
+    const renamed = renderRow(
+      { ...baseChat, name: 'Claude Code Chat usage metrics spec' },
+      {}
+    )
+    expect(JSON.stringify(renamed.toJSON())).toContain('Claude Code Chat usage metrics spec')
+    act(() => renamed.unmount())
   })
 })
