@@ -12,6 +12,7 @@ import type {
 import type {
   ChatActivity,
   ChatApprovalPolicy,
+  ChatCommandState,
   ChatEvent,
   ChatUsageReport,
 } from '../../shared/chat'
@@ -139,6 +140,7 @@ interface Harness {
   fakes: FakeQueryHandle[]
   sdkSessionIds: string[]
   factoryWires: Array<ChatWireRecorder | undefined>
+  commandStates: ChatCommandState[]
 }
 
 function createHarness(
@@ -153,6 +155,8 @@ function createHarness(
     usageImpl?: FakeUsageControl
     /** Gates the driver's usage pull; defaults to "never claim". */
     claimUsagePull?: () => boolean
+    /** Commands the fake queries' initializationResult() reports. */
+    initializationCommands?: Array<Record<string, unknown>>
   } = {}
 ): Harness {
   const events: ChatEvent[] = []
@@ -164,11 +168,18 @@ function createHarness(
   const fakes: FakeQueryHandle[] = []
   const sdkSessionIds: string[] = []
   const factoryWires: Array<ChatWireRecorder | undefined> = []
-  const { usageImpl, claimUsagePull, ...driverOverrides } = overrides
+  const commandStates: ChatCommandState[] = []
+  // usageImpl/claimUsagePull/initializationCommands feed the fake factory; the
+  // rest pass to the driver.
+  const { usageImpl, claimUsagePull, initializationCommands, ...driverOverrides } = overrides
   const factory: ChatQueryFactory = ({ prompt, options, wire }) => {
     factoryWires.push(wire)
     const handle = createFakeQuery(prompt, options, usageImpl)
     fakes.push(handle)
+    if (initializationCommands) {
+      ;(handle.query as { initializationResult?: () => Promise<unknown> }).initializationResult =
+        () => Promise.resolve({ commands: initializationCommands })
+    }
     return handle.query
   }
   const driver = new ChatSessionDriver({
@@ -183,6 +194,7 @@ function createHarness(
     ...(claimUsagePull ? { claimUsagePull } : {}),
     onUsageNoData: () => noData.push(1),
     onSdkSessionId: (id) => sdkSessionIds.push(id),
+    onCommandState: (state) => commandStates.push(state),
     ...driverOverrides,
   })
   return {
@@ -196,6 +208,7 @@ function createHarness(
     fakes,
     sdkSessionIds,
     factoryWires,
+    commandStates,
   }
 }
 
@@ -390,6 +403,162 @@ describe('ChatSessionDriver', () => {
     expect(harness.fakes[1]!.options.env?.ANTHROPIC_MODEL).toBe('gw-flash')
     expect(harness.fakes[1]!.options.env?.ANTHROPIC_BASE_URL).toBe(process.env.ANTHROPIC_BASE_URL)
     harness.driver.kill()
+  })
+
+  test('start spawns the query without a turn; a later send reuses the same query', async () => {
+    const harness = createHarness()
+    harness.driver.start()
+    expect(harness.fakes).toHaveLength(1)
+    // No turn, no user message: only the spawn happened.
+    expect(typesOf(harness.events)).toEqual([])
+    expect(harness.statuses).toEqual([])
+
+    // While the query runs, start is a no-op (no second spawn).
+    harness.driver.start()
+    expect(harness.fakes).toHaveLength(1)
+
+    // A later send reuses the same query for its turn and reaches its prompt.
+    harness.driver.send('hello')
+    expect(harness.fakes).toHaveLength(1)
+    expect(typesOf(harness.events)).toEqual(['turn_started', 'user_message'])
+    const pulled = await harness.fakes[0]!.pullPrompt()
+    expect(pulled?.message).toMatchObject({ role: 'user', content: 'hello' })
+  })
+
+  test('start respawns a dead driver with resume', async () => {
+    const harness = createHarness()
+    harness.driver.start()
+    const first = harness.fakes[0]!
+    first.push({
+      type: 'system',
+      subtype: 'init',
+      session_id: 'sdk-start-resume',
+    } as unknown as SDKMessage)
+    await flush()
+    first.exit()
+    await flush()
+    expect(harness.driver.isDead).toBe(true)
+
+    harness.driver.start()
+    expect(harness.fakes).toHaveLength(2)
+    expect(harness.fakes[1]!.options.resume).toBe('sdk-start-resume')
+    harness.driver.kill()
+  })
+
+  describe('command state', () => {
+    test('spawn publishes loading, the initialize response publishes ready', async () => {
+      const harness = createHarness({
+        initializationCommands: [
+          { name: 'clear', description: 'new session', argumentHint: '[name]', aliases: ['reset'], builtin: true },
+          { name: 'openspec-explore', description: 'explore (project)' },
+        ],
+      })
+      harness.driver.start()
+      await flush()
+      expect(harness.commandStates.map((state) => state.status)).toEqual([
+        'loading',
+        'ready',
+      ])
+      const ready = harness.commandStates.at(-1)!
+      expect(ready.commands).toEqual([
+        { name: 'clear', description: 'new session', argumentHint: '[name]', aliases: ['reset'], source: 'builtin' },
+        { name: 'openspec-explore', description: 'explore', aliases: [], source: 'project' },
+      ])
+      harness.driver.kill()
+    })
+
+    test('commands_changed replaces the list', async () => {
+      const harness = createHarness({
+        initializationCommands: [{ name: 'usage', description: 'costs', builtin: true }],
+      })
+      harness.driver.start()
+      await flush()
+      harness.fakes[0]!.push({
+        type: 'system',
+        subtype: 'commands_changed',
+        commands: [{ name: 'fresh', description: 'newly discovered' }],
+      } as unknown as SDKMessage)
+      await flush()
+      const ready = harness.commandStates.at(-1)!
+      expect(ready.status).toBe('ready')
+      expect(ready.commands.map((command) => command.name)).toEqual(['fresh'])
+      harness.driver.kill()
+    })
+
+    test('init replaces the terminal set and re-publishes without init payload it stays', async () => {
+      const harness = createHarness({
+        initializationCommands: [
+          { name: 'statusline', description: 'prompt', builtin: true },
+          { name: 'doctor', description: 'health', builtin: true },
+        ],
+      })
+      harness.driver.start()
+      await flush()
+      // doctor is hidden by the fallback terminal set until init speaks.
+      expect(harness.commandStates.at(-1)!.commands.map((c) => c.name)).toEqual(['statusline'])
+
+      // init without terminal_slash_commands (pre-field CLI): unchanged.
+      harness.fakes[0]!.push({
+        type: 'system',
+        subtype: 'init',
+        session_id: 'sdk-c1',
+      } as unknown as SDKMessage)
+      await flush()
+      expect(harness.commandStates).toHaveLength(2)
+
+      // init naming statusline terminal-bound hides it and re-publishes.
+      harness.fakes[0]!.push({
+        type: 'system',
+        subtype: 'init',
+        session_id: 'sdk-c1',
+        terminal_slash_commands: ['statusline'],
+      } as unknown as SDKMessage)
+      await flush()
+      expect(harness.commandStates.at(-1)!.commands.map((c) => c.name)).toEqual(['doctor'])
+      harness.driver.kill()
+    })
+
+    test('death and kill mark unavailable; a respawn publishes loading again', async () => {
+      const harness = createHarness({
+        initializationCommands: [{ name: 'usage', description: 'costs', builtin: true }],
+      })
+      harness.driver.start()
+      await flush()
+      expect(harness.commandStates.at(-1)!.status).toBe('ready')
+
+      harness.fakes[0]!.exit()
+      await flush()
+      expect(harness.driver.getCommandState().status).toBe('unavailable')
+
+      harness.driver.start() // respawn
+      expect(harness.driver.getCommandState().status).toBe('loading')
+      harness.driver.kill()
+      expect(harness.driver.getCommandState().status).toBe('unavailable')
+    })
+
+    test('local command output maps to a command_output event in the active turn', async () => {
+      const harness = createHarness()
+      harness.driver.send('/context')
+      const fake = harness.fakes[0]!
+      fake.push({
+        type: 'system',
+        subtype: 'local_command_output',
+        content: 'Context usage: 12%',
+      } as unknown as SDKMessage)
+      await flush()
+      // Output after the turn ended has no turn to attach to: dropped.
+      harness.driver.interrupt()
+      fake.push({
+        type: 'system',
+        subtype: 'local_command_output',
+        content: 'orphan output',
+      } as unknown as SDKMessage)
+      await flush()
+      const outputs = harness.events.filter((e) => e.type === 'command_output')
+      expect(outputs).toHaveLength(1)
+      expect(outputs[0]).toMatchObject({ text: 'Context usage: 12%', turnId: 'turn-1' })
+      harness.driver.kill()
+    })
   })
 
   test('turn lifecycle: lazy spawn, options parity, event mapping, session id capture', async () => {

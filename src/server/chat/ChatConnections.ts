@@ -13,6 +13,7 @@
 // by sequence, which makes the resulting overlap harmless.
 import type {
   ChatActivity,
+  ChatCommandState,
   ChatEvent,
   ChatUsageReport,
   ChatWireFrame,
@@ -53,6 +54,19 @@ export class ChatConnections {
     for (const unsubscribe of this.debugSubscriptions.get(connection)?.values() ?? []) unsubscribe()
     this.debugSubscriptions.delete(connection)
     this.debugBatches.delete(connection)
+  }
+
+  /**
+   * Push a replaced command list to every connection subscribed to the
+   * session. Immediate (not batched): the state is replaceable, not ordered
+   * history, so it never waits behind event batching.
+   */
+  publishCommandState(sessionId: string, state: ChatCommandState): void {
+    for (const [connection, sessions] of this.subscriptions) {
+      if (sessions.has(sessionId)) {
+        connection.send({ type: 'chat-commands', sessionId, state })
+      }
+    }
   }
 
   publish(sessionId: string, event: ChatEvent): void {
@@ -217,6 +231,12 @@ export class ChatConnections {
         sessions.add(sessionId)
         this.subscriptions.set(connection, sessions)
         connection.send(snapshot)
+        // Archived chats attach only for history. Live chats start after the
+        // snapshot; report guard/import failures as well as driver errors.
+        if (!this.manager.isArchived(sessionId)) {
+          const result = await this.manager.start(sessionId)
+          if (!result.ok) connection.send({ type: 'error', message: result.error })
+        }
         return
       }
       case 'chat-detach':

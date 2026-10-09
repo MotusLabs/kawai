@@ -9,6 +9,7 @@
 import { create } from 'zustand'
 import type {
   ChatActivity,
+  ChatCommandState,
   ChatEvent,
   ChatPendingRequest,
   ChatUsageReport,
@@ -27,12 +28,15 @@ export interface ChatTranscript {
   pendingRequests: ChatPendingRequest[]
   status: SessionStatus
   throughSequence: number
+  /** The session's slash-command list; unavailable until an agent reports. */
+  commands: ChatCommandState
   seen: Set<string>
   activity: ChatTranscriptActivity | null
 }
 
 export const emptyTranscript = (): ChatTranscript => ({
-  events: [], pendingRequests: [], status: 'waiting', throughSequence: 0, seen: new Set(), activity: null,
+  events: [], pendingRequests: [], status: 'waiting', throughSequence: 0,
+  commands: { status: 'unavailable', commands: [] }, seen: new Set(), activity: null,
 })
 
 /** Anchor a server-reported activity on the client's clock (design D2). */
@@ -86,6 +90,8 @@ interface ChatStore {
   usage: Record<string, ChatUsageReport | null>
   apply: (sessionId: string, events: ChatEvent[]) => void
   snapshot: (message: Extract<ServerMessage, { type: 'chat-snapshot' }>) => void
+  /** Replace one session's command list (chat-commands push). */
+  setCommands: (message: Extract<ServerMessage, { type: 'chat-commands' }>) => void
   /** Adopt the latest server activity (chat-activity) or clear it (null). */
   setActivity: (sessionId: string, activity: ChatActivity | null) => void
   /** Adopt a profile's latest usage report (chat-usage / snapshot). */
@@ -107,12 +113,20 @@ export const useChatStore = create<ChatStore>((set) => ({
         pendingRequests: message.pendingRequests,
         status: message.status,
         throughSequence: message.throughSequence,
+        commands: message.commands,
         activity: message.activity ? anchorActivity(message.activity) : null,
       },
     },
     // The snapshot's usage is authoritative for the profile at attach time.
     usage: { ...state.usage, [message.profileId]: message.usage },
   })),
+  setCommands: message => set(state => ({ sessions: {
+    ...state.sessions,
+    [message.sessionId]: {
+      ...(state.sessions[message.sessionId] ?? emptyTranscript()),
+      commands: message.state,
+    },
+  } })),
   setActivity: (sessionId, activity) => set(state => {
     const current = state.sessions[sessionId] ?? emptyTranscript()
     return { sessions: { ...state.sessions, [sessionId]: {

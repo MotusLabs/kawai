@@ -1,7 +1,9 @@
 import { describe, expect, test } from 'bun:test'
 import {
+  BOOTSTRAP_WINDOW_COMMAND,
   TMUX_FIELD_SEPARATOR,
   buildTmuxFormat,
+  isBootstrapPlaceholderCommand,
   splitTmuxFields,
   splitTmuxLines,
   withTmuxUtf8Flag,
@@ -65,5 +67,18 @@ describe('tmuxFormat', () => {
       'list-windows',
       '-a',
     ])
+  })
+
+  test('isBootstrapPlaceholderCommand matches the placeholder recipe only', () => {
+    expect(isBootstrapPlaceholderCommand(BOOTSTRAP_WINDOW_COMMAND)).toBe(true)
+    // Quoted tmux pane_start_command shape, and the pane_current_command fallback.
+    expect(isBootstrapPlaceholderCommand(`"${BOOTSTRAP_WINDOW_COMMAND}"`)).toBe(
+      true
+    )
+    expect(isBootstrapPlaceholderCommand('tail')).toBe(true)
+    expect(isBootstrapPlaceholderCommand('  tail  ')).toBe(true)
+    expect(isBootstrapPlaceholderCommand('claude')).toBe(false)
+    expect(isBootstrapPlaceholderCommand('tail -f /var/log/app.log')).toBe(false)
+    expect(isBootstrapPlaceholderCommand('')).toBe(false)
   })
 })

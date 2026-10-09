@@ -74,7 +74,9 @@ test('branch browser creates a worktree and launches a session at its root', asy
   const pathInput = modal.locator('input.input.text-sm').first()
   await expect(pathInput).toHaveValue(destination)
 
-  // A stable long-running command keeps the pane alive for cwd assertions.
+  // The dialog defaults to Claude chat; this launch needs a tmux pane. A
+  // stable long-running command keeps the pane alive for cwd assertions.
+  await modal.getByLabel('Session kind').selectOption('terminal')
   await modal.getByRole('radio', { name: 'Custom' }).click()
   await modal.locator('input.font-mono').fill('tail -f /dev/null')
   await modal.getByRole('button', { name: 'Create' }).click()

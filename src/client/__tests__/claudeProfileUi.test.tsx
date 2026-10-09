@@ -41,8 +41,7 @@ function submit(renderer: TestRenderer.ReactTestRenderer) { act(() => renderer.r
 
 test('chat catalog selects Default or named profile and terminal creation remains independent', async () => {
   const renderer = await modal()
-  expect(renderer.root.findAllByProps({ 'aria-label': 'Profile' })).toHaveLength(0)
-  await kind(renderer, 'chat')
+  // Chat is the dialog's default kind, so the profile picker is present on open.
   expect(renderer.root.findByProps({ 'aria-label': 'Profile' }).props.value).toBe('default')
   submit(renderer)
   expect(created[0]?.[7]).toBe('default')
@@ -61,8 +60,7 @@ test('catalog refetches with the entered project path', async () => {
     return Response.json({ profiles: metadata, errors: [] })
   }) as unknown as typeof fetch
   const renderer = await modal()
-  await kind(renderer, 'chat')
-  // The modal opens with the default project dir prefilled.
+  // The modal opens on the chat kind with the default project dir prefilled.
   expect(urls.some(url => url.includes(`projectPath=${encodeURIComponent('/tmp')}`))).toBe(true)
 
   // Typing a different project path refetches the catalog for that path.
@@ -80,7 +78,6 @@ test('catalog file warnings are visible without blocking creation', async () => 
     errors: ['/work/proj/.kawai/profiles.json: invalid JSON (unexpected end of input).'],
   })) as unknown as typeof fetch
   const renderer = await modal()
-  await kind(renderer, 'chat')
   const warning = renderer.root.findByProps({ role: 'status' })
   expect(warning.children.join('')).toContain('/work/proj/.kawai/profiles.json')
   // The rest of the catalog resolved: selection and creation still work.
@@ -107,10 +104,10 @@ test('chat header label resolves from the session project path catalog', async (
 })
 
 test('loading and catalog error block submission and Retry recovers without losing selection', async () => {
-  const renderer = await modal()
+  // Hang the catalog request for the modal's initial (chat-kind) load.
   let release!: (response: Response) => void
   globalThis.fetch = (() => new Promise<Response>(resolve => { release = resolve })) as unknown as typeof fetch
-  await kind(renderer, 'chat')
+  const renderer = await modal()
   submit(renderer)
   expect(created).toEqual([])
   expect(renderer.root.findByProps({ 'aria-label': 'Profile' }).props.disabled).toBe(true)

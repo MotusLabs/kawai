@@ -536,6 +536,7 @@ export default function App() {
       }
       if (message.type === 'chat-events') useChatStore.getState().apply(message.sessionId, message.events)
       if (message.type === 'chat-snapshot') useChatStore.getState().snapshot(message)
+      if (message.type === 'chat-commands') useChatStore.getState().setCommands(message)
       if (message.type === 'chat-activity') useChatStore.getState().setActivity(message.sessionId, message.activity)
       if (message.type === 'chat-usage') useChatStore.getState().setUsage(message.profileId, message.report)
       if (message.type === 'chat-debug-frames') useChatDebugStore.getState().apply(message)
@@ -1250,7 +1251,7 @@ export default function App() {
 
       {/* Active session pane - full height on desktop */}
       {selectedSession?.kind === 'chat' ? <ChatView
-        session={selectedSession} sendMessage={sendMessage}
+        session={selectedSession} sendMessage={sendMessage} subscribe={subscribe}
         connectionStatus={connectionStatus} connectionEpoch={connectionEpoch}
         error={connectionError || serverError} onClose={() => setSelectedSessionId(null)}
         onKill={() => handleKillSession(selectedSession.id)}
