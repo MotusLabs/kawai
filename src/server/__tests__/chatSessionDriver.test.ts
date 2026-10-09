@@ -9,7 +9,13 @@ import type {
   SDKMessage,
   SDKUserMessage,
 } from '@anthropic-ai/claude-agent-sdk'
-import type { ChatActivity, ChatApprovalPolicy, ChatEvent } from '../../shared/chat'
+import type {
+  ChatActivity,
+  ChatApprovalPolicy,
+  ChatCommandState,
+  ChatEvent,
+  ChatUsageReport,
+} from '../../shared/chat'
 import type { SessionStatus } from '../../shared/types'
 import type { ChatWireRecorder } from '../chat/wireTap'
 import {
@@ -34,16 +40,28 @@ interface FakeQueryHandle {
   closed: boolean
   /** End the stream as the real process would on exit/crash. */
   exit: () => void
+  /** Calls to the usage control (0 when the driver never pulled). */
+  usageCalls: Array<{ skipBehaviors?: boolean }>
 }
+
+/** The usage control implementation a test injects into a fake query. */
+export type FakeUsageControl = (opts: {
+  skipBehaviors?: boolean
+}) => Promise<unknown>
 
 function createFakeQuery(
   prompt: AsyncIterable<SDKUserMessage>,
-  options: Options
+  options: Options,
+  usageImpl?: FakeUsageControl
 ): FakeQueryHandle {
   const messages: SDKMessage[] = []
   let resolveMessage: ((result: IteratorResult<SDKMessage>) => void) | null = null
   let ended = false
-  const handle = { interrupts: 0, closed: false } as FakeQueryHandle
+  const handle = {
+    interrupts: 0,
+    closed: false,
+    usageCalls: [] as Array<{ skipBehaviors?: boolean }>,
+  } as FakeQueryHandle
 
   const stream = async function* (): AsyncGenerator<SDKMessage, void> {
     while (true) {
@@ -71,6 +89,18 @@ function createFakeQuery(
       ended = true
       resolveMessage?.({ value: undefined, done: true })
     },
+    // The unstable usage control: attached only when a test provides one, so
+    // the default fake exercises the driver's missing-method path.
+    ...(usageImpl
+      ? {
+          usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: (
+            opts: { skipBehaviors?: boolean }
+          ) => {
+            handle.usageCalls.push(opts)
+            return usageImpl(opts)
+          },
+        }
+      : {}),
   }) as unknown as Query
 
   handle.query = query
@@ -104,9 +134,13 @@ interface Harness {
   events: ChatEvent[]
   statuses: SessionStatus[]
   activities: Array<ChatActivity | null>
+  rateLimits: ChatUsageReport[]
+  usageReports: ChatUsageReport[]
+  noData: number[]
   fakes: FakeQueryHandle[]
   sdkSessionIds: string[]
   factoryWires: Array<ChatWireRecorder | undefined>
+  commandStates: ChatCommandState[]
 }
 
 function createHarness(
@@ -117,18 +151,35 @@ function createHarness(
     getProviderEnv?: () => Record<string, string>
     getApprovalPolicy?: () => ChatApprovalPolicy
     wire?: ChatWireRecorder
+    /** Injected usage control on every spawned fake query. */
+    usageImpl?: FakeUsageControl
+    /** Gates the driver's usage pull; defaults to "never claim". */
+    claimUsagePull?: () => boolean
+    /** Commands the fake queries' initializationResult() reports. */
+    initializationCommands?: Array<Record<string, unknown>>
   } = {}
 ): Harness {
   const events: ChatEvent[] = []
   const statuses: SessionStatus[] = []
   const activities: Array<ChatActivity | null> = []
+  const rateLimits: ChatUsageReport[] = []
+  const usageReports: ChatUsageReport[] = []
+  const noData: number[] = []
   const fakes: FakeQueryHandle[] = []
   const sdkSessionIds: string[] = []
   const factoryWires: Array<ChatWireRecorder | undefined> = []
+  const commandStates: ChatCommandState[] = []
+  // usageImpl/claimUsagePull/initializationCommands feed the fake factory; the
+  // rest pass to the driver.
+  const { usageImpl, claimUsagePull, initializationCommands, ...driverOverrides } = overrides
   const factory: ChatQueryFactory = ({ prompt, options, wire }) => {
     factoryWires.push(wire)
-    const handle = createFakeQuery(prompt, options)
+    const handle = createFakeQuery(prompt, options, usageImpl)
     fakes.push(handle)
+    if (initializationCommands) {
+      ;(handle.query as { initializationResult?: () => Promise<unknown> }).initializationResult =
+        () => Promise.resolve({ commands: initializationCommands })
+    }
     return handle.query
   }
   const driver = new ChatSessionDriver({
@@ -138,10 +189,27 @@ function createHarness(
     onEvent: (event) => events.push(event),
     onStatus: (status) => statuses.push(status),
     onActivity: (activity) => activities.push(activity),
+    onRateLimit: (report) => rateLimits.push(report),
+    onUsageReport: (report) => usageReports.push(report),
+    ...(claimUsagePull ? { claimUsagePull } : {}),
+    onUsageNoData: () => noData.push(1),
     onSdkSessionId: (id) => sdkSessionIds.push(id),
-    ...overrides,
+    onCommandState: (state) => commandStates.push(state),
+    ...driverOverrides,
   })
-  return { driver, events, statuses, activities, fakes, sdkSessionIds, factoryWires }
+  return {
+    driver,
+    events,
+    statuses,
+    activities,
+    rateLimits,
+    usageReports,
+    noData,
+    fakes,
+    sdkSessionIds,
+    factoryWires,
+    commandStates,
+  }
 }
 
 /** Let the driver's stream loop drain pushed messages. */
@@ -335,6 +403,162 @@ describe('ChatSessionDriver', () => {
     expect(harness.fakes[1]!.options.env?.ANTHROPIC_MODEL).toBe('gw-flash')
     expect(harness.fakes[1]!.options.env?.ANTHROPIC_BASE_URL).toBe(process.env.ANTHROPIC_BASE_URL)
     harness.driver.kill()
+  })
+
+  test('start spawns the query without a turn; a later send reuses the same query', async () => {
+    const harness = createHarness()
+    harness.driver.start()
+    expect(harness.fakes).toHaveLength(1)
+    // No turn, no user message: only the spawn happened.
+    expect(typesOf(harness.events)).toEqual([])
+    expect(harness.statuses).toEqual([])
+
+    // While the query runs, start is a no-op (no second spawn).
+    harness.driver.start()
+    expect(harness.fakes).toHaveLength(1)
+
+    // A later send reuses the same query for its turn and reaches its prompt.
+    harness.driver.send('hello')
+    expect(harness.fakes).toHaveLength(1)
+    expect(typesOf(harness.events)).toEqual(['turn_started', 'user_message'])
+    const pulled = await harness.fakes[0]!.pullPrompt()
+    expect(pulled?.message).toMatchObject({ role: 'user', content: 'hello' })
+  })
+
+  test('start respawns a dead driver with resume', async () => {
+    const harness = createHarness()
+    harness.driver.start()
+    const first = harness.fakes[0]!
+    first.push({
+      type: 'system',
+      subtype: 'init',
+      session_id: 'sdk-start-resume',
+    } as unknown as SDKMessage)
+    await flush()
+    first.exit()
+    await flush()
+    expect(harness.driver.isDead).toBe(true)
+
+    harness.driver.start()
+    expect(harness.fakes).toHaveLength(2)
+    expect(harness.fakes[1]!.options.resume).toBe('sdk-start-resume')
+    harness.driver.kill()
+  })
+
+  describe('command state', () => {
+    test('spawn publishes loading, the initialize response publishes ready', async () => {
+      const harness = createHarness({
+        initializationCommands: [
+          { name: 'clear', description: 'new session', argumentHint: '[name]', aliases: ['reset'], builtin: true },
+          { name: 'openspec-explore', description: 'explore (project)' },
+        ],
+      })
+      harness.driver.start()
+      await flush()
+      expect(harness.commandStates.map((state) => state.status)).toEqual([
+        'loading',
+        'ready',
+      ])
+      const ready = harness.commandStates.at(-1)!
+      expect(ready.commands).toEqual([
+        { name: 'clear', description: 'new session', argumentHint: '[name]', aliases: ['reset'], source: 'builtin' },
+        { name: 'openspec-explore', description: 'explore', aliases: [], source: 'project' },
+      ])
+      harness.driver.kill()
+    })
+
+    test('commands_changed replaces the list', async () => {
+      const harness = createHarness({
+        initializationCommands: [{ name: 'usage', description: 'costs', builtin: true }],
+      })
+      harness.driver.start()
+      await flush()
+      harness.fakes[0]!.push({
+        type: 'system',
+        subtype: 'commands_changed',
+        commands: [{ name: 'fresh', description: 'newly discovered' }],
+      } as unknown as SDKMessage)
+      await flush()
+      const ready = harness.commandStates.at(-1)!
+      expect(ready.status).toBe('ready')
+      expect(ready.commands.map((command) => command.name)).toEqual(['fresh'])
+      harness.driver.kill()
+    })
+
+    test('init replaces the terminal set and re-publishes without init payload it stays', async () => {
+      const harness = createHarness({
+        initializationCommands: [
+          { name: 'statusline', description: 'prompt', builtin: true },
+          { name: 'doctor', description: 'health', builtin: true },
+        ],
+      })
+      harness.driver.start()
+      await flush()
+      // doctor is hidden by the fallback terminal set until init speaks.
+      expect(harness.commandStates.at(-1)!.commands.map((c) => c.name)).toEqual(['statusline'])
+
+      // init without terminal_slash_commands (pre-field CLI): unchanged.
+      harness.fakes[0]!.push({
+        type: 'system',
+        subtype: 'init',
+        session_id: 'sdk-c1',
+      } as unknown as SDKMessage)
+      await flush()
+      expect(harness.commandStates).toHaveLength(2)
+
+      // init naming statusline terminal-bound hides it and re-publishes.
+      harness.fakes[0]!.push({
+        type: 'system',
+        subtype: 'init',
+        session_id: 'sdk-c1',
+        terminal_slash_commands: ['statusline'],
+      } as unknown as SDKMessage)
+      await flush()
+      expect(harness.commandStates.at(-1)!.commands.map((c) => c.name)).toEqual(['doctor'])
+      harness.driver.kill()
+    })
+
+    test('death and kill mark unavailable; a respawn publishes loading again', async () => {
+      const harness = createHarness({
+        initializationCommands: [{ name: 'usage', description: 'costs', builtin: true }],
+      })
+      harness.driver.start()
+      await flush()
+      expect(harness.commandStates.at(-1)!.status).toBe('ready')
+
+      harness.fakes[0]!.exit()
+      await flush()
+      expect(harness.driver.getCommandState().status).toBe('unavailable')
+
+      harness.driver.start() // respawn
+      expect(harness.driver.getCommandState().status).toBe('loading')
+      harness.driver.kill()
+      expect(harness.driver.getCommandState().status).toBe('unavailable')
+    })
+
+    test('local command output maps to a command_output event in the active turn', async () => {
+      const harness = createHarness()
+      harness.driver.send('/context')
+      const fake = harness.fakes[0]!
+      fake.push({
+        type: 'system',
+        subtype: 'local_command_output',
+        content: 'Context usage: 12%',
+      } as unknown as SDKMessage)
+      await flush()
+      // Output after the turn ended has no turn to attach to: dropped.
+      harness.driver.interrupt()
+      fake.push({
+        type: 'system',
+        subtype: 'local_command_output',
+        content: 'orphan output',
+      } as unknown as SDKMessage)
+      await flush()
+      const outputs = harness.events.filter((e) => e.type === 'command_output')
+      expect(outputs).toHaveLength(1)
+      expect(outputs[0]).toMatchObject({ text: 'Context usage: 12%', turnId: 'turn-1' })
+      harness.driver.kill()
+    })
   })
 
   test('turn lifecycle: lazy spawn, options parity, event mapping, session id capture', async () => {
@@ -1282,5 +1506,185 @@ describe('ChatSessionDriver activity', () => {
     await flush()
     expect(harness.activities.at(-1)).toBeNull()
     await approval
+  })
+})
+
+describe('ChatSessionDriver usage', () => {
+  /** A pushed rate_limit_event frame (2026-10-07 probe shape). */
+  function rateLimitEvent(fields: Record<string, unknown>): SDKMessage {
+    return {
+      type: 'rate_limit_event',
+      rate_limit_info: fields,
+      uuid: 'rl-uuid',
+      session_id: 'sdk-1',
+    } as unknown as SDKMessage
+  }
+
+  /** An assistant message carrying the /usage twin on the wrapper level. */
+  function usageReportMessage(limits: unknown): SDKMessage {
+    return {
+      type: 'assistant',
+      message: {
+        id: 'msg_usage',
+        content: [{ type: 'text', text: 'Usage report' }],
+        role: 'assistant',
+      },
+      parent_tool_use_id: null,
+      uuid: 'u-uuid',
+      session_id: 'sdk-1',
+      usage_report: { rate_limits: { limits } },
+    } as unknown as SDKMessage
+  }
+
+  const FULL_PULL = {
+    subscription_type: 'max',
+    rate_limits_available: true,
+    rate_limits: {
+      five_hour: { utilization: 22.37, resets_at: '2026-10-07T18:11:04.000Z' },
+      seven_day: { utilization: 17.12, resets_at: '2026-10-12T09:00:00.000Z' },
+    },
+  }
+
+  test('a rate_limit_event is parsed and forwarded, even outside a turn', async () => {
+    const harness = createHarness()
+    harness.driver.send('hello')
+    harness.fakes[0]!.push(
+      rateLimitEvent({
+        status: 'allowed',
+        unifiedWindows: {
+          five_hour: { utilization: 0.2237, resetsAt: Date.parse('2026-10-07T18:11:04.000Z') },
+          seven_day: { utilization: 0.1712, resetsAt: Date.parse('2026-10-12T09:00:00.000Z') },
+        },
+      })
+    )
+    await flush()
+    expect(harness.rateLimits).toHaveLength(1)
+    expect(harness.rateLimits[0]).toMatchObject({
+      status: 'allowed',
+      windows: [
+        { key: 'five_hour', percentUsed: 22.37 },
+        { key: 'seven_day', percentUsed: 17.12 },
+      ],
+    })
+    expect(harness.usageReports).toHaveLength(0)
+
+    // A status-only push (the GLM shape) still reports, windowless.
+    harness.fakes[0]!.push(rateLimitEvent({ status: 'allowed', isUsingOverage: false }))
+    await flush()
+    expect(harness.rateLimits[1]).toMatchObject({ status: 'allowed', windows: [] })
+  })
+
+  test('an assistant usage_report is parsed and forwarded', async () => {
+    const harness = createHarness()
+    harness.driver.send('hello')
+    harness.fakes[0]!.push(
+      usageReportMessage([
+        { kind: 'session', percent: 22.4, resets_at: '2026-10-07T18:11:04.000Z', severity: 'normal' },
+        { kind: 'weekly_scoped', percent: 42.5, scope: { model: { display_name: 'Opus' } }, severity: 'warning' },
+      ])
+    )
+    await flush()
+    expect(harness.usageReports).toHaveLength(1)
+    expect(harness.usageReports[0]).toMatchObject({
+      status: 'warning',
+      windows: [
+        { key: 'session', percentUsed: 22.4 },
+        { key: 'weekly_scoped:Opus', label: 'Opus', percentUsed: 42.5 },
+      ],
+    })
+    expect(harness.rateLimits).toHaveLength(0)
+
+    // A report whose limits could not be fetched fires nothing.
+    harness.fakes[0]!.push(usageReportMessage(null))
+    await flush()
+    expect(harness.usageReports).toHaveLength(1)
+  })
+
+  test('the usage pull runs after a spawn when claimed and reports windows', async () => {
+    const harness = createHarness({
+      claimUsagePull: () => true,
+      usageImpl: async (opts) => ({ ...FULL_PULL, opts }),
+    })
+    harness.driver.send('hello')
+    await flush()
+    expect(harness.fakes[0]!.usageCalls).toEqual([{ skipBehaviors: true }])
+    expect(harness.usageReports).toHaveLength(1)
+    expect(harness.usageReports[0]).toMatchObject({
+      status: 'allowed',
+      windows: [
+        { key: 'five_hour', percentUsed: 22.37 },
+        { key: 'seven_day', percentUsed: 17.12 },
+      ],
+    })
+    expect(harness.noData).toHaveLength(0)
+  })
+
+  test('a claim that returns false never touches the control', async () => {
+    const harness = createHarness({
+      claimUsagePull: () => false,
+      usageImpl: async () => FULL_PULL,
+    })
+    harness.driver.send('hello')
+    await flush()
+    expect(harness.fakes[0]!.usageCalls).toEqual([])
+    expect(harness.usageReports).toHaveLength(0)
+  })
+
+  test('rate_limits_available false and a thrown call record the no-data verdict', async () => {
+    const unavailable = createHarness({
+      claimUsagePull: () => true,
+      usageImpl: async () => ({ rate_limits_available: false, rate_limits: null }),
+    })
+    unavailable.driver.send('hello')
+    await flush()
+    expect(unavailable.usageReports).toHaveLength(0)
+    expect(unavailable.noData).toHaveLength(1)
+
+    const throwing = createHarness({
+      claimUsagePull: () => true,
+      usageImpl: () => Promise.reject(new Error('unstable API changed')),
+    })
+    throwing.driver.send('hello')
+    await flush()
+    expect(throwing.noData).toHaveLength(1)
+    expect(throwing.driver.isDead).toBe(false) // the failure never kills the session
+  })
+
+  test('a query without the control method records the verdict', async () => {
+    // No usageImpl: the fake query omits the unstable method entirely.
+    const harness = createHarness({ claimUsagePull: () => true })
+    harness.driver.send('hello')
+    await flush()
+    expect(harness.noData).toHaveLength(1)
+  })
+
+  test('a pull yielding no windows records the verdict, not an empty report', async () => {
+    const harness = createHarness({
+      claimUsagePull: () => true,
+      usageImpl: async () => ({ rate_limits_available: true, rate_limits: {} }),
+    })
+    harness.driver.send('hello')
+    await flush()
+    expect(harness.usageReports).toHaveLength(0)
+    expect(harness.noData).toHaveLength(1)
+  })
+
+  test('a respawn does not re-pull once the claim was spent', async () => {
+    let claims = 0
+    const harness = createHarness({
+      claimUsagePull: () => (claims += 1) === 1,
+      usageImpl: async () => FULL_PULL,
+    })
+    harness.driver.send('first')
+    await flush()
+    expect(harness.fakes[0]!.usageCalls).toHaveLength(1)
+
+    harness.fakes[0]!.exit()
+    await flush()
+    harness.driver.send('second')
+    await flush()
+    expect(harness.fakes).toHaveLength(2)
+    expect(harness.fakes[1]!.usageCalls).toHaveLength(0)
+    expect(claims).toBe(2)
   })
 })

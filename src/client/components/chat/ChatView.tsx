@@ -9,14 +9,17 @@
 // Archived chats render read-only: the transcript and debug view stay, the
 // composer/Stop/request actions are replaced by a Restore bar, and archiving
 // a live turn asks for confirmation first (the server interrupts it).
-// Unsubmitted composer text is a per-session draft in the chat store, so it
-// survives switching chats; submitting clears it and killing discards it.
+// Unsubmitted composer text is kept per session across switches and archive/restore.
+// Submitting clears that session draft; killing discards it; reload drops all drafts.
+// The composer opens a slash-command menu while the text is a bare "/command"
+// (design D5): choosing inserts `/<name> ` without sending, Enter falls
+// through when nothing matches, and /clear /reset /new compose a new chat.
 // The root opts into `chat-palette`, the chat view's reduced-glare dark palette,
 // and `chat-root`, whose --chat-font-size (Settings "Chat Font Size") sizes
 // chat text through the em-based text-chat-body / text-chat-meta utilities.
 import { useClaudeProfiles } from './useClaudeProfiles'
-import { useEffect, useRef, type CSSProperties } from 'react'
-import type { SendClientMessage, Session } from '@shared/types'
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import type { SendClientMessage, ServerMessage, Session } from '@shared/types'
 import type { ConnectionStatus } from '../../stores/sessionStore'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { emptyTranscript, useChatStore } from '../../stores/chatStore'
@@ -25,22 +28,33 @@ import ChatActivityRow from './ChatActivityRow'
 import ChatDebugPanel from './ChatDebugPanel'
 import ChatMessages from './ChatMessages'
 import ChatRequests from './ChatRequests'
+import SlashCommandMenu from './SlashCommandMenu'
+import UsageBar from './UsageBar'
+import { filterChatCommands, slashMenuQuery } from './slashCommandFilter'
 import { requestChatArchive } from '../../utils/chatArchive'
 
 const EMPTY = emptyTranscript()
 const CLOSED_DEBUG = closedDebugView()
 
-export default function ChatView({ session, sendMessage, connectionStatus, connectionEpoch, error, onClose, onKill }: {
+/** `/clear`, `/reset`, `/new` — optionally followed by the new chat's name. */
+const CLEAR_COMMAND = /^\/(clear|reset|new)(?:\s+(.*))?$/
+
+export default function ChatView({ session, sendMessage, subscribe, connectionStatus, connectionEpoch, error, onClose, onKill }: {
   session: Session; sendMessage: SendClientMessage; connectionStatus: ConnectionStatus; connectionEpoch: number
   error: string | null; onClose: () => void; onKill: () => void
+  subscribe?: (listener: (message: ServerMessage) => void) => () => void
 }) {
   const catalog = useClaudeProfiles(true, session.projectPath)
   const profileId = session.claudeProfileId ?? 'default'
   const profileLabel = catalog.profiles.find(profile => profile.id === profileId)?.label ?? profileId
   const chatFontSize = useSettingsStore(state => state.chatFontSize)
   const transcript = useChatStore(state => state.sessions[session.id]) ?? EMPTY
+  // Plan usage is per profile (usage bar design D4): every session of the
+  // profile renders the same shared report.
+  const usage = useChatStore(state => state.usage[profileId]) ?? null
   const text = useChatStore(state => state.drafts[session.id] ?? '')
   const setDraft = useChatStore(state => state.setDraft)
+  const setText = (value: string) => setDraft(session.id, value)
   const end = useRef<HTMLDivElement>(null)
   const connected = connectionStatus === 'connected'
   const archived = session.archivedAt != null
@@ -73,7 +87,99 @@ export default function ChatView({ session, sendMessage, connectionStatus, conne
       policy: autoApprove ? 'manual' : 'auto',
     })
   }
+  // `/clear` composition (design D6): remember which session awaits archival;
+  // the matching session-created (a new chat in this project) archives it,
+  // an error reply leaves it untouched. Never sent to the agent.
+  const pendingClearRef = useRef<string | null>(null)
+  useEffect(() => { pendingClearRef.current = null }, [session.id])
+  useEffect(() => {
+    if (!subscribe) return
+    return subscribe((message) => {
+      const previous = pendingClearRef.current
+      if (!previous) return
+      if (
+        message.type === 'session-created' &&
+        message.session.id !== previous &&
+        message.session.kind === 'chat' &&
+        message.session.projectPath === session.projectPath
+      ) {
+        pendingClearRef.current = null
+        sendMessage({ type: 'chat-archive', sessionId: previous })
+      } else if (message.type === 'error') {
+        // The creation failed: the old chat stays exactly as it was.
+        pendingClearRef.current = null
+      }
+    })
+  }, [subscribe, sendMessage, session.projectPath])
+  const submitText = (trimmed: string) => {
+    const clear = CLEAR_COMMAND.exec(trimmed)
+    if (clear) {
+      const name = clear[2]?.trim()
+      pendingClearRef.current = session.id
+      sendMessage({
+        type: 'session-create',
+        projectPath: session.projectPath,
+        kind: 'chat',
+        ...(name ? { name } : {}),
+        claudeProfileId: profileId,
+      })
+      return
+    }
+    sendMessage({ type: 'chat-send', sessionId: session.id, text: trimmed })
+  }
   useEffect(() => { end.current?.scrollIntoView?.({ block: 'end' }) }, [transcript.events.length, transcript.throughSequence])
+
+  // Slash-command menu: open while the text is a bare "/command" and a list
+  // can exist. Escape dismisses until the text changes; Enter/Tab choose only
+  // with a highlighted match, so unknown commands still send as typed.
+  const commandState = transcript.commands
+  const [highlighted, setHighlighted] = useState(0)
+  const [menuDismissed, setMenuDismissed] = useState(false)
+  useEffect(() => { setHighlighted(0); setMenuDismissed(false) }, [text])
+  const menuOpen =
+    slashMenuQuery(text) !== null && !menuDismissed && commandState.status !== 'unavailable'
+  const matches = useMemo(
+    () => (menuOpen ? filterChatCommands(commandState.commands, text) : []),
+    [menuOpen, commandState.commands, text]
+  )
+  const chooseCommand = (name: string) => { setText(`/${name} `) }
+  const handleComposerKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (matches.length > 0) {
+      if (event.key === 'ArrowDown') {
+        event.preventDefault()
+        setHighlighted((highlighted + 1) % matches.length)
+        return
+      }
+      if (event.key === 'ArrowUp') {
+        event.preventDefault()
+        setHighlighted((highlighted - 1 + matches.length) % matches.length)
+        return
+      }
+      if (event.key === 'Enter' || event.key === 'Tab') {
+        event.preventDefault()
+        const chosen = matches[highlighted] ?? matches[0]!
+        chooseCommand(chosen.name)
+        return
+      }
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        setMenuDismissed(true)
+        return
+      }
+    }
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault()
+      event.currentTarget.form?.requestSubmit()
+    }
+  }
+  // The argument hint of a just-inserted or typed `/<name> ` shows until the
+  // user types arguments (the trailing-space match stops matching then).
+  const hintName = /^\/(\S+) $/.exec(text)?.[1]
+  const hintCommand = hintName
+    ? commandState.commands.find(
+        (command) => command.name === hintName || command.aliases.includes(hintName)
+      )
+    : undefined
   // Activity row hiding rules (design D4): text streaming is its own visible
   // progress, a pending approval/question owns the footer, and archived chats
   // are read-only — none of them also show the live phase row.
@@ -97,12 +203,13 @@ export default function ChatView({ session, sendMessage, connectionStatus, conne
       {!archived && <button className="btn text-chat-meta" onClick={handleArchive} data-testid="chat-archive-button">Archive</button>}
       <button className="btn text-chat-meta" onClick={onKill}>Kill session</button>
     </header>
+    <UsageBar report={usage} />
     {error && <p role="alert" className="border-b border-border p-3 text-chat-body text-chat-danger">{error}</p>}
     <div className="flex min-h-0 flex-1">
       <div className={`min-h-0 min-w-0 flex-1 flex-col ${debugOpen ? 'hidden md:flex' : 'flex'}`}>
         <div className="min-h-0 flex-1 overflow-y-auto p-4">
           <div className="mx-auto max-w-3xl space-y-4">
-            <ChatMessages events={transcript.events} />
+            <ChatMessages events={transcript.events} projectPath={session.projectPath} />
             {showActivity && (
               <ChatActivityRow activity={activity.value} phaseStartedAt={activity.phaseStartedAt} />
             )}
@@ -122,16 +229,30 @@ export default function ChatView({ session, sendMessage, connectionStatus, conne
           <form className="border-t border-border p-3" onSubmit={event => {
             event.preventDefault()
             if (!connected || !text.trim()) return
-            sendMessage({ type: 'chat-send', sessionId: session.id, text: text.trim() })
-            setDraft(session.id, '')
+            submitText(text.trim())
+            setText('')
           }}>
-            <div className="mx-auto flex max-w-3xl items-end gap-2">
-              <textarea aria-label="Message Claude" className="input chat-composer min-h-20 flex-1 resize-y text-chat-body" value={text}
-                disabled={!connected} placeholder="Message Claude…" onChange={event => setDraft(session.id, event.target.value)}
-                onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); event.currentTarget.form?.requestSubmit() } }} />
-              <button className="btn btn-primary text-chat-meta" disabled={!connected || !text.trim()}>Send</button>
-              <button type="button" className="btn text-chat-meta" disabled={!connected || session.status === 'waiting'}
-                onClick={() => sendMessage({ type: 'chat-interrupt', sessionId: session.id })}>Stop</button>
+            <div className="mx-auto max-w-3xl">
+              {menuOpen && (
+                <div className="mb-2">
+                  <SlashCommandMenu matches={matches} loading={commandState.status === 'loading'}
+                    highlightedIndex={highlighted} onHighlight={setHighlighted}
+                    onChoose={command => chooseCommand(command.name)} />
+                </div>
+              )}
+              <div className="flex items-end gap-2">
+                <textarea aria-label="Message Claude" className="input chat-composer min-h-20 flex-1 resize-y text-chat-body" value={text}
+                  disabled={!connected} placeholder="Message Claude…" onChange={event => setText(event.target.value)}
+                  onKeyDown={handleComposerKeyDown} />
+                <button className="btn btn-primary text-chat-meta" disabled={!connected || !text.trim()}>Send</button>
+                <button type="button" className="btn text-chat-meta" disabled={!connected || session.status === 'waiting'}
+                  onClick={() => sendMessage({ type: 'chat-interrupt', sessionId: session.id })}>Stop</button>
+              </div>
+              {hintCommand?.argumentHint && (
+                <p className="mt-1 font-mono text-xs text-muted" data-testid="command-argument-hint">
+                  /{hintCommand.name} {hintCommand.argumentHint}
+                </p>
+              )}
             </div>
           </form>
         )}

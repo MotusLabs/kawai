@@ -6,20 +6,25 @@ import os from 'node:os'
 import path from 'node:path'
 import { CHAT_DEBUG_PAGE_SIZE, ChatConnections } from '../chat/ChatConnections'
 import { ChatWireLogs } from '../chat/ChatWireLogs'
-import type { ChatSessionManager } from '../chat/ChatSessionManager'
+import type { ChatActionResult, ChatSessionManager } from '../chat/ChatSessionManager'
 
 function harness(wireLogs?: ChatWireLogs) {
   const calls: unknown[] = []
   const snapshot: Extract<ServerMessage, { type: 'chat-snapshot' }> = {
-    type: 'chat-snapshot', sessionId: 'chat-1', events: [],
+    type: 'chat-snapshot', sessionId: 'chat-1', profileId: 'default', events: [],
     pendingRequests: [{ kind: 'approval', requestId: 'approval-1', tool: 'Bash', input: {}, at: 'now' }],
-    status: 'permission', throughSequence: 0, activity: null,
+    status: 'permission', throughSequence: 0,
+    commands: { status: 'unavailable', commands: [] }, activity: null, usage: null,
   }
   let pending = true
   const manager = {
-    has: (id: string) => id === 'chat-1' || id === 'chat-2',
-    getSnapshot: (id: string) => (id === 'chat-1' ? snapshot : null),
+    isArchived: (_id: string) => false,
+    has: (id: string) => id === 'chat-1' || id === 'chat-2' || id === 'chat-3',
+    profileIdOf: (id: string) => (id === 'chat-2' ? 'glm' : 'default'),
+    getSnapshot: (id: string) =>
+      id === 'chat-2' ? null : { ...snapshot, sessionId: id },
     send: async (...args: unknown[]) => { calls.push(['send', ...args]); return { ok: true } },
+    start: (...args: unknown[]) => { calls.push(['start', ...args]); return Promise.resolve<ChatActionResult>({ ok: true }) },
     interrupt: (...args: unknown[]) => { calls.push(['interrupt', ...args]); return { ok: true } },
     archive: (...args: unknown[]) => { calls.push(['archive', ...args]); return { ok: true } },
     restore: (...args: unknown[]) => { calls.push(['restore', ...args]); return { ok: true } },
@@ -43,7 +48,7 @@ function harness(wireLogs?: ChatWireLogs) {
   const connections = new ChatConnections(manager, wireLogs)
   const messages: ServerMessage[] = []
   const connection = { send: (message: ServerMessage) => messages.push(message) }
-  return { connections, connection, messages, calls, snapshot }
+  return { connections, connection, messages, calls, snapshot, manager }
 }
 
 const delta = (sequence: number, turnId = 'turn-1'): ChatEvent => ({
@@ -90,6 +95,18 @@ describe('chat WebSocket subscriptions', () => {
     expect(h.messages[1]).toEqual({ type: 'chat-events', sessionId: 'chat-1', events: [delta(1), delta(2)] })
   })
 
+  test('attach sends the snapshot before starting the agent', async () => {
+    const h = harness()
+    await h.connections.handle(h.connection, { type: 'chat-attach', sessionId: 'chat-1' })
+    // The snapshot is on the wire before the start request reaches the
+    // manager; the manager dedupes concurrent attaches into one spawn.
+    expect(h.messages).toEqual([h.snapshot])
+    expect(h.calls).toEqual([['start', 'chat-1']])
+    // A second client attaching routes another idempotent start request.
+    await h.connections.handle({ send: () => {} }, { type: 'chat-attach', sessionId: 'chat-1' })
+    expect(h.calls).toEqual([['start', 'chat-1'], ['start', 'chat-1']])
+  })
+
   test('deltas from different turns remain in different batches', async () => {
     const h = harness()
     await h.connections.handle(h.connection, { type: 'chat-attach', sessionId: 'chat-1' })
@@ -129,6 +146,44 @@ describe('chat WebSocket subscriptions', () => {
     expect(h.messages.some(message => message.type === 'chat-events')).toBe(true)
     expect(secondMessages.some(message => message.type === 'chat-events')).toBe(true)
     expect(secondMessages).toContainEqual({ type: 'error', message: 'Already resolved' })
+  })
+
+  test('attach reports startup refusals after the history snapshot', async () => {
+    const h = harness()
+    h.manager.start = async () => ({ ok: false, error: 'Cannot resume: transcript missing' })
+    await h.connections.handle(h.connection, { type: 'chat-attach', sessionId: 'chat-1' })
+    expect(h.messages).toEqual([h.snapshot, { type: 'error', message: 'Cannot resume: transcript missing' }])
+  })
+
+  test('archived attach restores history without starting or reporting an error', async () => {
+    const h = harness()
+    h.manager.isArchived = () => true
+    await h.connections.handle(h.connection, { type: 'chat-attach', sessionId: 'chat-1' })
+    expect(h.messages).toEqual([h.snapshot])
+    expect(h.calls).toEqual([])
+  })
+
+  test('command-state pushes reach only subscribed connections, unbatched', async () => {
+    const h = harness()
+    const otherMessages: ServerMessage[] = []
+    const other = { send: (message: ServerMessage) => otherMessages.push(message) }
+    // No attach yet: nobody receives the state.
+    h.connections.publishCommandState('chat-1', { status: 'loading', commands: [] })
+    expect(h.messages).toEqual([])
+
+    await h.connections.handle(h.connection, { type: 'chat-attach', sessionId: 'chat-1' })
+    await h.connections.handle(other, { type: 'chat-attach', sessionId: 'chat-1' })
+    const ready = {
+      status: 'ready' as const,
+      commands: [{ name: 'usage', description: 'costs', aliases: [], source: 'builtin' as const }],
+    }
+    h.connections.publishCommandState('chat-1', ready)
+    const expected = { type: 'chat-commands' as const, sessionId: 'chat-1', state: ready }
+    // Sent immediately: no timer flush needed.
+    expect(h.messages).toEqual([h.snapshot, expected])
+    expect(otherMessages).toEqual([h.snapshot, expected])
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(h.messages).toEqual([h.snapshot, expected])
   })
 
   test('unknown sessions return an actionable error', async () => {
@@ -200,6 +255,52 @@ describe('chat WebSocket subscriptions', () => {
     await new Promise(resolve => setTimeout(resolve, 0))
     expect(h.messages.filter(message => message.type === 'chat-activity')).toHaveLength(1)
     expect(otherMessages).toEqual([])
+  })
+
+  test('usage reaches a connection once for two sessions of one profile', async () => {
+    const h = harness()
+    await h.connections.handle(h.connection, { type: 'chat-attach', sessionId: 'chat-1' })
+    await h.connections.handle(h.connection, { type: 'chat-attach', sessionId: 'chat-3' })
+    const report = {
+      status: 'allowed' as const,
+      windows: [
+        { key: 'five_hour', label: '5-hour window', percentUsed: 22.37, resetsAt: '2026-10-07T18:11:04.000Z' },
+        { key: 'seven_day', label: '7-day window', percentUsed: 17.12, resetsAt: null },
+      ],
+      receivedAt: '2026-10-07T13:00:00.000Z',
+    }
+    h.connections.publishUsage('default', report)
+    // Several reports within one tick collapse to the latest value.
+    h.connections.publishUsage('default', null)
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(h.messages.filter(message => message.type === 'chat-usage')).toEqual([
+      { type: 'chat-usage', profileId: 'default', report: null },
+    ])
+  })
+
+  test('usage reaches only connections subscribed to the changed profile', async () => {
+    const h = harness()
+    const otherMessages: ServerMessage[] = []
+    const other = { send: (message: ServerMessage) => otherMessages.push(message) }
+    await h.connections.handle(h.connection, { type: 'chat-attach', sessionId: 'chat-1' })
+    await h.connections.handle(other, { type: 'chat-attach', sessionId: 'chat-2' })
+    const report = {
+      status: 'warning' as const,
+      windows: [
+        { key: 'five_hour', label: '5-hour window', percentUsed: 87, resetsAt: '2026-10-07T18:11:04.000Z' },
+      ],
+      receivedAt: '2026-10-07T13:00:00.000Z',
+    }
+    h.connections.publishUsage('default', report)
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(h.messages.at(-1)).toEqual({ type: 'chat-usage', profileId: 'default', report })
+    expect(otherMessages).toEqual([])
+
+    // Detaching the only session of the profile drops the queued report.
+    h.connections.publishUsage('default', report)
+    await h.connections.handle(h.connection, { type: 'chat-detach', sessionId: 'chat-1' })
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(h.messages.filter(message => message.type === 'chat-usage')).toHaveLength(1)
   })
 })
 

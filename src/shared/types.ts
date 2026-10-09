@@ -10,9 +10,11 @@ import type {
   ChatActivity,
   ChatApprovalDecision,
   ChatApprovalPolicy,
+  ChatCommandState,
   ChatEvent,
   ChatPendingRequest,
   ChatQuestionAnswer,
+  ChatUsageReport,
   ChatWireFrame,
 } from './chat'
 
@@ -20,6 +22,9 @@ export type {
   ChatActivity,
   ChatActivityPhase,
   ChatEvent,
+  ChatUsageReport,
+  ChatUsageWindow,
+  ChatUsageStatus,
   ChatQuestion,
   ChatQuestionAnswer,
   ChatPendingRequest,
@@ -28,6 +33,9 @@ export type {
   ChatApprovalPolicy,
   ChatApprovalDecision,
   ChatTurnResultSubtype,
+  ChatCommand,
+  ChatCommandSource,
+  ChatCommandState,
   ChatWireDirection,
   ChatWireFrame,
 } from './chat'
@@ -204,18 +212,32 @@ export type ServerMessage =
   | {
       type: 'chat-snapshot'
       sessionId: string
+      /** Claude profile of the session; keys the client's per-profile usage. */
+      profileId: string
       /** Read-only replayed history plus unfinished live transcript. */
       events: ChatEvent[]
       pendingRequests: ChatPendingRequest[]
       status: SessionStatus
       /** Highest sequence included in this snapshot. */
       throughSequence: number
+      /** The session's slash-command list (replaceable state, not history). */
+      commands: ChatCommandState
       /** Current in-flight turn activity, or null when the turn is idle. */
       activity: ChatActivity | null
+      /** Latest plan-usage report for the session's profile, when one is held. */
+      usage: ChatUsageReport | null
     }
+  // Replaced command list pushed to subscribed connections whenever the
+  // agent reports a changed list (or the state changes). Additive: older
+  // clients ignore the unknown message.
+  | { type: 'chat-commands'; sessionId: string; state: ChatCommandState }
   // Ephemeral live activity for an in-flight chat turn (design D1): sent only
   // on phase changes, unordered with events, never persisted or replayed.
   | { type: 'chat-activity'; sessionId: string; activity: ChatActivity | null }
+  // Latest plan usage for a Claude profile (usage bar design D4): sent once to
+  // every connection subscribed to at least one session of the profile when a
+  // new report is captured. Additive and ephemeral like chat-activity.
+  | { type: 'chat-usage'; profileId: string; report: ChatUsageReport | null }
   // Debug-view protocol frames, sent only to clients that opened the view.
   // `page: true` marks a reply to chat-debug-open/chat-debug-page (carrying
   // `hasOlder`); otherwise the message is a live batch.

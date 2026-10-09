@@ -23,10 +23,12 @@ import type {
   ChatActivity,
   ChatApprovalDecision,
   ChatApprovalPolicy,
+  ChatCommandState,
   ChatEvent,
   ChatPendingRequest,
   ChatQuestion,
   ChatQuestionAnswer,
+  ChatUsageReport,
 } from '../../shared/chat'
 import type { SessionStatus } from '../../shared/types'
 import {
@@ -44,7 +46,13 @@ import {
   type ChatActivityInput,
   type ChatActivityState,
 } from './chatActivity'
+import {
+  parseRateLimitEvent,
+  parseUsagePull,
+  parseUsageReport,
+} from './usageLimits'
 import type { ChatProviderEnv } from './chatProviderEnv'
+import { ChatCommandTracker, type RawChatCommand } from './chatCommands'
 import { decideApproval } from './approvalPolicy'
 import { resolveClaudeProfile } from './ClaudeProfiles'
 import { TurnQueue } from './TurnQueue'
@@ -99,8 +107,28 @@ export interface ChatSessionDriverOptions {
    * sequenced, buffered, or replayed like events.
    */
   onActivity?: (activity: ChatActivity | null) => void
+  /**
+   * Plan usage (usage bar design D3): parsed report from a pushed
+   * rate_limit_event frame, whatever turn state the session is in.
+   */
+  onRateLimit?: (report: ChatUsageReport) => void
+  /**
+   * Plan usage: parsed report from an assistant message's usage_report (the
+   * structured twin of /usage). Not called when the report carries no
+   * limits at all.
+   */
+  onUsageReport?: (report: ChatUsageReport) => void
+  /**
+   * Claims the profile's one usage pull after a spawn (design D1); when it
+   * returns false the pull is skipped for this driver's whole lifetime.
+   */
+  claimUsagePull?: () => boolean
+  /** A pull that yielded no windows (or failed) records the no-data verdict. */
+  onUsageNoData?: () => void
   /** Fired once when the SDK init message reveals the session id. */
   onSdkSessionId?: (sdkSessionId: string) => void
+  /** Fired whenever the session's slash-command state meaningfully changed. */
+  onCommandState?: (state: ChatCommandState) => void
   /** Records the raw protocol of every spawned process (chat debug view). */
   wire?: ChatWireRecorder
 }
@@ -127,6 +155,8 @@ type ChatEventDraft = DistributiveOmit<ChatEvent, 'id' | 'sequence' | 'at'>
 export class ChatSessionDriver {
   private readonly options: ChatSessionDriverOptions
   private readonly queue = new TurnQueue()
+  /** Slash-command list state; this driver is its only feeder (design D2). */
+  private commands = new ChatCommandTracker()
   private query: Query | null = null
   private sequence = 0
   private turnCounter = 0
@@ -148,11 +178,27 @@ export class ChatSessionDriver {
 
   constructor(options: ChatSessionDriverOptions) {
     this.options = options
+    this.commands = new ChatCommandTracker(options.onCommandState)
     this.claudeExecutablePath = options.claudeExecutablePath
   }
 
   get isDead(): boolean {
     return this.dead
+  }
+
+  /** Current slash-command state (loading / ready / unavailable). */
+  getCommandState(): ChatCommandState {
+    return this.commands.state
+  }
+
+  /**
+   * Spawn the query without sending a turn (attach-time start): makes the
+   * agent's command list available before the first message. No-op while a
+   * query runs; a dead one respawns with resume, exactly like send.
+   */
+  start(): void {
+    if (this.killed) return
+    this.ensureQuery()
   }
 
   /**
@@ -167,13 +213,7 @@ export class ChatSessionDriver {
   /** Submit a user turn. Spawns the SDK lazily on the first turn. */
   send(text: string): void {
     if (this.killed) return
-    // A crashed SDK process does not end the chat session: respawn with
-    // resume on the next send. Sequence numbers keep counting so clients
-    // never see a reused sequence after a respawn.
-    this.dead = false
-    if (!this.query) {
-      this.spawnQuery()
-    }
+    this.ensureQuery()
     if (!this.activeTurnId) {
       this.turnCounter += 1
       this.activeTurnId = `turn-${this.turnCounter}`
@@ -213,6 +253,7 @@ export class ChatSessionDriver {
     this.queue.end()
     this.cancelAllRequests('killed')
     this.activeTurnId = null
+    this.commands.markUnavailable()
     const query = this.query
     this.query = null
     if (query) {
@@ -349,6 +390,18 @@ export class ChatSessionDriver {
 
   // ---------------------------------------------------------------- internals
 
+  /**
+   * A crashed SDK process does not end the chat session: respawn with resume
+   * on the next send/start. Sequence numbers keep counting so clients never
+   * see a reused sequence after a respawn.
+   */
+  private ensureQuery(): void {
+    this.dead = false
+    if (!this.query) {
+      this.spawnQuery()
+    }
+  }
+
   private spawnQuery(): void {
     const resume = this.capturedSdkSessionId ?? this.options.resumeSessionId
     const launch = resolveClaudeProfile(
@@ -381,13 +434,77 @@ export class ChatSessionDriver {
       ...launchOptions,
       ...(wire ? { spawnClaudeCodeProcess: createWireTappedSpawn(wire) } : {}),
     }
-    const query = this.options.queryFactory({
-      prompt: this.queue,
-      options,
-      ...(wire ? { wire } : {}),
-    })
+    let query: Query
+    try {
+      query = this.options.queryFactory({
+        prompt: this.queue,
+        options,
+        ...(wire ? { wire } : {}),
+      })
+    } catch (error) {
+      // A spawn that fails outright is reported like a crash: session error,
+      // driver dead, and the next send/start retries.
+      this.markDead(
+        `The agent process failed to start: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      )
+      return
+    }
     this.query = query
+    this.commands.beginLoading()
+    void this.fetchInitializationCommands(query)
     void this.runQueryLoop(query)
+    this.maybePullUsage(query)
+  }
+
+  /**
+   * The usage pull fallback (design D1): right after a spawn, when the
+   * profile holds no data at all, ask the CLI for its plan windows so the
+   * bar can appear before the first turn reports anything. Everything is
+   * wrapped: the control API is explicitly unstable, and a throw, an absent
+   * method, or a shape change records the no-data verdict instead of
+   * disturbing the session.
+   */
+  private maybePullUsage(query: Query): void {
+    const { claimUsagePull, onUsageReport, onUsageNoData } = this.options
+    if (!claimUsagePull || !onUsageReport || !claimUsagePull()) return
+    const pull = query.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET
+    if (typeof pull !== 'function') {
+      onUsageNoData?.()
+      return
+    }
+    try {
+      void pull
+        .call(query, { skipBehaviors: true })
+        .then((response) => {
+          const report = parseUsagePull(response)
+          if (report && report.windows.length > 0) onUsageReport(report)
+          else onUsageNoData?.()
+        })
+        .catch(() => onUsageNoData?.())
+    } catch {
+      onUsageNoData?.()
+    }
+  }
+
+  /**
+   * The initialize response carries the command list. Fetched fire-and-forget
+   * right after each spawn; a failure leaves the state to resolve through
+   * init/commands_changed or the driver's death. Test fakes without the
+   * method are skipped (their commands come from pushed messages).
+   */
+  private async fetchInitializationCommands(query: Query): Promise<void> {
+    if (typeof query.initializationResult !== 'function') return
+    try {
+      const result = await query.initializationResult()
+      if (this.query === query && Array.isArray(result.commands)) {
+        this.commands.applyCommands(result.commands as RawChatCommand[])
+      }
+    } catch {
+      // Not fatal: the process may still stream init/commands_changed, or die
+      // (which marks the state unavailable).
+    }
   }
 
   private async runQueryLoop(query: Query): Promise<void> {
@@ -418,6 +535,7 @@ export class ChatSessionDriver {
     this.feedActivity({ type: 'turn_end' })
     this.cancelAllRequests('killed')
     this.emit({ type: 'error', message: reason })
+    this.commands.markUnavailable()
     this.refreshStatus()
   }
 
@@ -438,6 +556,13 @@ export class ChatSessionDriver {
       case 'system':
         this.handleSystem(message)
         return
+      case 'rate_limit_event':
+        // Plan usage rides these frames whatever the turn state; malformed
+        // values degrade to a windowless report, never a session error.
+        this.options.onRateLimit?.(
+          parseRateLimitEvent(message.rate_limit_info)
+        )
+        return
       default:
         // Trailing informational frames (prompt suggestions, status, hooks,
         // ...) are tolerated and ignored — a result ends a turn, not the
@@ -447,6 +572,12 @@ export class ChatSessionDriver {
   }
 
   private handleAssistant(message: SDKAssistantMessage): void {
+    // The /usage twin rides the wrapper level, not message.content, and is
+    // replayed to nobody — capture it even outside a turn.
+    if (message.usage_report) {
+      const report = parseUsageReport(message.usage_report)
+      if (report) this.options.onUsageReport?.(report)
+    }
     const turnId = this.activeTurnId
     if (!turnId) return
     const messageId = message.message.id ?? message.uuid
@@ -573,6 +704,21 @@ export class ChatSessionDriver {
       if (!this.capturedSdkSessionId && message.session_id) {
         this.capturedSdkSessionId = message.session_id
         this.options.onSdkSessionId?.(message.session_id)
+      }
+      // The authoritative terminal-bound set; until here the tracker used the
+      // observed fallback (verified 2026-10-06: init only arrives once a turn
+      // starts, so this lands with the first prompt).
+      this.commands.applyTerminalCommands(message.terminal_slash_commands)
+      return
+    }
+    if (message.subtype === 'commands_changed') {
+      this.commands.applyCommands(message.commands as RawChatCommand[])
+      return
+    }
+    if (message.subtype === 'local_command_output') {
+      const turnId = this.activeTurnId
+      if (turnId) {
+        this.emit({ type: 'command_output', turnId, text: message.content })
       }
       return
     }

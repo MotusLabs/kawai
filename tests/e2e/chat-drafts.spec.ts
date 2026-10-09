@@ -30,7 +30,7 @@ async function createChat(page: import('@playwright/test').Page, name: string) {
   await expect(page.getByTestId('chat-view')).toContainText(name)
 }
 
-test('composer drafts are kept per chat while switching and cleared per session on submit', async ({ page }) => {
+test('composer drafts are kept per chat while switching and cleared per session on submit', async ({ page }, info) => {
   await page.goto('/')
   await openChat(page, 'Chat fixture')
   await createChat(page, 'Drafts B')
@@ -42,7 +42,7 @@ test('composer drafts are kept per chat while switching and cleared per session 
   await composer(page).fill('draft for A')
   await openChat(page, 'Drafts B')
   await expect(composer(page)).toHaveValue('draft for B')
-  await page.screenshot({ path: 'docs/verification/preserve-chat-input-drafts/switching-keeps-both-drafts.png' })
+  await page.screenshot({ path: info.outputPath('switching-keeps-both-drafts.png') })
   await openChat(page, 'Chat fixture')
   await expect(composer(page)).toHaveValue('draft for A')
 
@@ -56,7 +56,7 @@ test('composer drafts are kept per chat while switching and cleared per session 
   await killOpenChat(page)
 })
 
-test('a draft survives archive and restore but not a page reload', async ({ page }) => {
+test('a draft survives archive and restore but not a page reload', async ({ page }, info) => {
   await page.goto('/')
   await openChat(page, 'Chat fixture')
   await createChat(page, 'Drafts C')
@@ -73,19 +73,19 @@ test('a draft survives archive and restore but not a page reload', async ({ page
   await archivedRow.click({ force: true })
   await expect(page.getByTestId('chat-archived-bar')).toBeVisible()
   await expect(composer(page)).toHaveCount(0)
-  await page.screenshot({ path: 'docs/verification/preserve-chat-input-drafts/archived-hides-composer.png' })
+  await page.screenshot({ path: info.outputPath('archived-hides-composer.png') })
 
   // Restoring brings the composer back with the pre-archive draft.
   await page.getByRole('button', { name: 'Restore', exact: true }).click()
   await expect(composer(page)).toBeVisible()
   await expect(composer(page)).toHaveValue('draft after restore')
-  await page.screenshot({ path: 'docs/verification/preserve-chat-input-drafts/restore-returns-draft.png' })
+  await page.screenshot({ path: info.outputPath('restore-returns-draft.png') })
 
   // Drafts are client-side only: a reload drops them.
   await page.reload()
   await expect(composer(page)).toBeVisible()
   await expect(composer(page)).toHaveValue('')
-  await page.screenshot({ path: 'docs/verification/preserve-chat-input-drafts/reload-clears-draft.png' })
+  await page.screenshot({ path: info.outputPath('reload-clears-draft.png') })
 
   await killOpenChat(page)
 })

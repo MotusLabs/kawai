@@ -4,11 +4,20 @@
 // connection and session is sent after that session's pending event batch, so
 // an activity never precedes the tool_call it describes and several phase
 // changes within one tick collapse into the last.
+// Plan usage rides it too (usage bar design D4), scoped by profile instead of
+// session: one latest-value slot per connection and profile, sent to every
+// connection subscribed to at least one session of that profile.
 // Debug-view subscriptions are separate: only connections that opened a
 // session's debug view receive its wire frames. They subscribe before the
 // async page read, so no frame is missed; clients merge pages and live frames
 // by sequence, which makes the resulting overlap harmless.
-import type { ChatActivity, ChatEvent, ChatWireFrame } from '../../shared/chat'
+import type {
+  ChatActivity,
+  ChatCommandState,
+  ChatEvent,
+  ChatUsageReport,
+  ChatWireFrame,
+} from '../../shared/chat'
 import type { ClientMessage, ServerMessage } from '../../shared/types'
 import type { ChatSessionManager } from './ChatSessionManager'
 import type { ChatWireLogs } from './ChatWireLogs'
@@ -26,6 +35,8 @@ export class ChatConnections {
   private readonly batches = new Map<ChatConnection, Map<string, ChatEvent[]>>()
   /** Latest activity per connection and session, sent by the next flush. */
   private readonly activityBatches = new Map<ChatConnection, Map<string, ChatActivity | null>>()
+  /** Latest usage report per connection and profile, sent by the next flush. */
+  private readonly usageBatches = new Map<ChatConnection, Map<string, ChatUsageReport | null>>()
   private readonly debugSubscriptions = new Map<ChatConnection, Map<string, () => void>>()
   private readonly debugBatches = new Map<ChatConnection, Map<string, ChatWireFrame[]>>()
   private scheduled = false
@@ -39,9 +50,23 @@ export class ChatConnections {
     this.subscriptions.delete(connection)
     this.batches.delete(connection)
     this.activityBatches.delete(connection)
+    this.usageBatches.delete(connection)
     for (const unsubscribe of this.debugSubscriptions.get(connection)?.values() ?? []) unsubscribe()
     this.debugSubscriptions.delete(connection)
     this.debugBatches.delete(connection)
+  }
+
+  /**
+   * Push a replaced command list to every connection subscribed to the
+   * session. Immediate (not batched): the state is replaceable, not ordered
+   * history, so it never waits behind event batching.
+   */
+  publishCommandState(sessionId: string, state: ChatCommandState): void {
+    for (const [connection, sessions] of this.subscriptions) {
+      if (sessions.has(sessionId)) {
+        connection.send({ type: 'chat-commands', sessionId, state })
+      }
+    }
   }
 
   publish(sessionId: string, event: ChatEvent): void {
@@ -74,6 +99,30 @@ export class ChatConnections {
       this.activityBatches.set(connection, latest)
     }
     this.scheduleFlush()
+  }
+
+  /**
+   * Queue a profile's latest plan-usage report (usage bar design D4): one
+   * message per connection subscribed to at least one session of that
+   * profile — every session of the profile renders the same data, so the
+   * report is not fanned out per session.
+   */
+  publishUsage(profileId: string, report: ChatUsageReport | null): void {
+    for (const [connection, sessions] of this.subscriptions) {
+      if (!this.subscribesProfile(sessions, profileId)) continue
+      const latest = this.usageBatches.get(connection) ?? new Map<string, ChatUsageReport | null>()
+      latest.set(profileId, report)
+      this.usageBatches.set(connection, latest)
+    }
+    this.scheduleFlush()
+  }
+
+  /** True when one of the subscribed sessions belongs to the profile. */
+  private subscribesProfile(sessions: Set<string>, profileId: string): boolean {
+    for (const sessionId of sessions) {
+      if (this.manager.profileIdOf(sessionId) === profileId) return true
+    }
+    return false
   }
 
   private publishFrame(connection: ChatConnection, sessionId: string, frame: ChatWireFrame): void {
@@ -113,6 +162,17 @@ export class ChatConnections {
       for (const [sessionId, activity] of sessions) {
         if (this.subscriptions.get(connection)?.has(sessionId)) {
           connection.send({ type: 'chat-activity', sessionId, activity })
+        }
+      }
+    }
+    const usageBatches = new Map(this.usageBatches)
+    this.usageBatches.clear()
+    for (const [connection, profiles] of usageBatches) {
+      const sessions = this.subscriptions.get(connection)
+      if (!sessions) continue
+      for (const [profileId, report] of profiles) {
+        if (this.subscribesProfile(sessions, profileId)) {
+          connection.send({ type: 'chat-usage', profileId, report })
         }
       }
     }
@@ -171,6 +231,12 @@ export class ChatConnections {
         sessions.add(sessionId)
         this.subscriptions.set(connection, sessions)
         connection.send(snapshot)
+        // Archived chats attach only for history. Live chats start after the
+        // snapshot; report guard/import failures as well as driver errors.
+        if (!this.manager.isArchived(sessionId)) {
+          const result = await this.manager.start(sessionId)
+          if (!result.ok) connection.send({ type: 'error', message: result.error })
+        }
         return
       }
       case 'chat-detach':

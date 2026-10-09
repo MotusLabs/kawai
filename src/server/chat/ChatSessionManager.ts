@@ -14,9 +14,11 @@ import type {
   ChatActivity,
   ChatApprovalDecision,
   ChatApprovalPolicy,
+  ChatCommandState,
   ChatEvent,
   ChatPendingRequest,
   ChatQuestionAnswer,
+  ChatUsageReport,
 } from '../../shared/chat'
 import type { ServerMessage, Session, SessionStatus } from '../../shared/types'
 import type { ChatSessionRecord, SessionDatabase } from '../db'
@@ -41,6 +43,7 @@ import {
 } from './ClaudeProfiles'
 import { logger } from '../logger'
 import { probeSdkAvailability } from './sdkAvailability'
+import { UsageLimitStore } from './usageLimits'
 import {
   findTranscriptPath,
   replayTranscriptFile,
@@ -55,12 +58,20 @@ export interface ChatSessionManagerOptions {
   db: SessionDatabase
   /** Conversation-event sink (wired to the WS broadcast in index.ts). */
   onEvent: (sessionId: string, event: ChatEvent) => void
+  /** Command-state sink (wired to the chat-commands push in index.ts). */
+  onCommandState?: (sessionId: string, state: ChatCommandState) => void
   /**
    * Live-activity sink (activity indicator design D5): called on each phase
    * change of an in-flight turn, null when the turn ends. Wired to the WS
    * broadcast in index.ts; activity is ephemeral and never persisted.
    */
   onActivity?: (sessionId: string, activity: ChatActivity | null) => void
+  /**
+   * Plan-usage sink (usage bar design D4): called with the latest report
+   * (or null) whenever a profile's held data changes. Wired to the WS
+   * broadcast in index.ts; usage is ephemeral and never persisted.
+   */
+  onUsage?: (profileId: string, report: ChatUsageReport | null) => void
   /** Injected in tests; production resolves the SDK via dynamic import. */
   queryFactory?: ChatQueryFactory
   /** Receives the provider env so it probes the endpoint sessions will use. */
@@ -106,6 +117,21 @@ export type ChatActionResult =
 const ARCHIVED_SESSION_ERROR =
   'This chat session is archived. Restore it to continue the conversation.'
 
+/** The dynamic SDK import failed; surfaced by every spawn path. */
+function sdkLoadError(error: unknown): string {
+  if (error instanceof ClaudeExecutableError) {
+    // Actionable by construction (names the path and the fix); the
+    // record and its stored conversation id are untouched.
+    return error.message
+  }
+  return (
+    'The Claude Agent SDK could not be loaded, so chat sessions are unavailable. ' +
+    `Check the @anthropic-ai/claude-agent-sdk install: ${
+      error instanceof Error ? error.message : String(error)
+    }`
+  )
+}
+
 export class ChatSessionManager {
   private readonly options: ChatSessionManagerOptions
   private readonly records = new Map<string, ChatSessionRecord>()
@@ -132,6 +158,11 @@ export class ChatSessionManager {
    * Concurrent creations under the same configuration share one probe.
    */
   private readonly availability = new Map<string, Promise<void>>()
+  /**
+   * Latest plan-usage report (or no-data verdict) per Claude profile, in
+   * memory only (usage bar design D3): a restart begins with none.
+   */
+  private readonly usageLimits = new UsageLimitStore()
 
   async createAvailableSession(input: { projectPath: string; name?: string; claudeProfileId?: string }): Promise<ChatCreateResult> {
     // Refuse a bad path before the probe spends an SDK spawn on it.
@@ -169,11 +200,14 @@ export class ChatSessionManager {
     const activity = this.getActivity(sessionId)
     return {
       type: 'chat-snapshot', sessionId,
+      profileId: this.records.get(sessionId)?.claudeProfileId ?? 'default',
       events: [...(this.snapshotHistory.get(sessionId) ?? []), ...live],
       pendingRequests: this.getPendingRequests(sessionId),
       status: this.options.registry.get(sessionId)?.status ?? 'waiting',
       throughSequence: live.at(-1)?.sequence ?? 0,
+      commands: this.commandState(sessionId),
       activity,
+      usage: this.usageLimits.get(this.profileIdOf(sessionId) ?? 'default'),
     }
   }
 
@@ -190,8 +224,24 @@ export class ChatSessionManager {
     }
   }
 
+  /**
+   * The session's command state for snapshots: a live driver's tracker, or
+   * unavailable when no process can be asked (never started, blocked, dead,
+   * archived — design D3: the client needs no special case).
+   */
+  private commandState(sessionId: string): ChatCommandState {
+    const driver = this.drivers.get(sessionId)
+    return driver && !driver.isDead
+      ? driver.getCommandState()
+      : { status: 'unavailable', commands: [] }
+  }
+
   constructor(options: ChatSessionManagerOptions) {
     this.options = options
+    // Profile usage changes drive the chat-usage broadcast (design D4).
+    this.usageLimits.subscribe((profileId, report) =>
+      this.options.onUsage?.(profileId, report)
+    )
     this.restorePersisted()
     // Logs of sessions deleted while the server was down are orphans now.
     void this.options.wireLogs?.pruneOrphans(new Set(this.records.keys()))
@@ -241,6 +291,19 @@ export class ChatSessionManager {
     return this.records.has(sessionId)
   }
 
+  /** Archived chats attach for history without starting an agent. */
+  isArchived(sessionId: string): boolean {
+    return this.records.get(sessionId)?.archivedAt != null
+  }
+
+  /**
+   * The session's Claude profile id (usage scoping, usage bar design D4):
+   * plan usage is tracked and broadcast per profile, never per session.
+   */
+  profileIdOf(sessionId: string): string | undefined {
+    return this.records.get(sessionId)?.claudeProfileId ?? 'default'
+  }
+
   /**
    * Read-only history for a chat session: the stored SDK transcript replayed
    * into ChatEvents (with dead requests marked cancelled), or a
@@ -270,59 +333,51 @@ export class ChatSessionManager {
     if (!record) {
       return { ok: false, error: `Unknown chat session ${sessionId}` }
     }
-    if (record.archivedAt != null) {
-      return { ok: false, error: ARCHIVED_SESSION_ERROR }
-    }
-    if (
-      record.sdkSessionId &&
-      !this.drivers.has(sessionId) &&
-      !this.driverPromises.has(sessionId) &&
-      !findTranscriptPath(record.sdkSessionId)
-    ) {
-      return {
-        ok: false,
-        error:
-          'Cannot resume this conversation: the agent transcript is missing. ' +
-          `Restore ${record.sdkSessionId}.jsonl or create a new chat session.`,
-      }
-    }
-    const live = this.drivers.get(sessionId)
-    if (
-      (!live || live.isDead) &&
-      !this.driverPromises.has(sessionId) &&
-      !(this.options.isDirectory ?? isExistingDirectory)(record.projectPath)
-    ) {
-      // A running process keeps its cwd; only a (re)spawn needs the directory.
-      return {
-        ok: false,
-        error:
-          `Cannot start the agent: the project directory ${record.projectPath} no longer exists. ` +
-          'Create a new chat session in an existing directory.',
-      }
+    const blocked = this.startBlocker(record)
+    if (blocked) {
+      return { ok: false, error: blocked }
     }
     let driver: ChatSessionDriver | null
     try {
       driver = await this.ensureDriver(sessionId)
     } catch (error) {
-      if (error instanceof ClaudeExecutableError) {
-        // Actionable by construction (names the path and the fix); the
-        // record and its stored conversation id are untouched.
-        return { ok: false, error: error.message }
-      }
-      return {
-        ok: false,
-        error:
-          'The Claude Agent SDK could not be loaded, so chat sessions are unavailable. ' +
-          `Check the @anthropic-ai/claude-agent-sdk install: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
-      }
+      return { ok: false, error: sdkLoadError(error) }
     }
     if (!driver) {
       return { ok: false, error: `Unknown chat session ${sessionId}` }
     }
     driver.send(text)
     this.touch(sessionId)
+    return { ok: true }
+  }
+
+  /**
+   * Attach-time start (design D1): spawn the agent process without sending a
+   * prompt, so its command list is available before the first message. Goes
+   * through the same start guard as send and the same ensureDriver, so
+   * concurrent attaches and sends share one driver and a dead driver is
+   * restarted. Refusals report the guard's error; a failed spawn surfaces as
+   * a session error event from the driver.
+   */
+  async start(sessionId: string): Promise<ChatActionResult> {
+    const record = this.records.get(sessionId)
+    if (!record) {
+      return { ok: false, error: `Unknown chat session ${sessionId}` }
+    }
+    const blocked = this.startBlocker(record)
+    if (blocked) {
+      return { ok: false, error: blocked }
+    }
+    let driver: ChatSessionDriver | null
+    try {
+      driver = await this.ensureDriver(sessionId)
+    } catch (error) {
+      return { ok: false, error: sdkLoadError(error) }
+    }
+    if (!driver) {
+      return { ok: false, error: `Unknown chat session ${sessionId}` }
+    }
+    driver.start()
     return { ok: true }
   }
 
@@ -501,6 +556,42 @@ export class ChatSessionManager {
   // ---------------------------------------------------------------- internals
 
   /**
+   * The single start guard (add-chat-slash-commands design D1): the refusal
+   * error for a spawn that must not happen — an archived session, a stored
+   * conversation whose transcript is missing, or a project directory that no
+   * longer exists — or null when a (re)spawn may proceed. `send` and `start`
+   * (attach) both go through it, so their errors are identical.
+   */
+  private startBlocker(record: ChatSessionRecord): string | null {
+    if (record.archivedAt != null) return ARCHIVED_SESSION_ERROR
+    const spawning = !this.driverPromises.has(record.sessionId)
+    if (
+      record.sdkSessionId &&
+      !this.drivers.has(record.sessionId) &&
+      spawning &&
+      !findTranscriptPath(record.sdkSessionId)
+    ) {
+      return (
+        'Cannot resume this conversation: the agent transcript is missing. ' +
+        `Restore ${record.sdkSessionId}.jsonl or create a new chat session.`
+      )
+    }
+    const live = this.drivers.get(record.sessionId)
+    if (
+      (!live || live.isDead) &&
+      spawning &&
+      !(this.options.isDirectory ?? isExistingDirectory)(record.projectPath)
+    ) {
+      // A running process keeps its cwd; only a (re)spawn needs the directory.
+      return (
+        `Cannot start the agent: the project directory ${record.projectPath} no longer exists. ` +
+        'Create a new chat session in an existing directory.'
+      )
+    }
+    return null
+  }
+
+  /**
    * Tool call ids a live (non-dead) driver has seen. Transcript replay must
    * not mark those as cancelled — the live stream still owns their outcome.
    */
@@ -584,8 +675,20 @@ export class ChatSessionManager {
           ? { resumeSessionId: record.sdkSessionId }
           : {}),
         onEvent: (event) => this.handleDriverEvent(record.sessionId, event),
+        onCommandState: (state) =>
+          this.options.onCommandState?.(record.sessionId, state),
         onActivity: (activity) =>
           this.handleDriverActivity(record.sessionId, activity),
+        // Plan usage is recorded against the session's profile (design D3);
+        // the store's change listener drives the onUsage broadcast.
+        onRateLimit: (report) =>
+          this.usageLimits.record(record.claudeProfileId ?? 'default', report),
+        onUsageReport: (report) =>
+          this.usageLimits.record(record.claudeProfileId ?? 'default', report),
+        claimUsagePull: () =>
+          this.usageLimits.claimPull(record.claudeProfileId ?? 'default'),
+        onUsageNoData: () =>
+          this.usageLimits.recordNoData(record.claudeProfileId ?? 'default'),
         onStatus: (status) => this.applyPatch(record.sessionId, { status }),
         onSdkSessionId: (sdkSessionId) =>
           // Persist immediately: a crash right after the first turn must not

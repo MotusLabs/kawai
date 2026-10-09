@@ -10,10 +10,12 @@ const globalAny = globalThis as typeof globalThis & {
 
 const originalWindow = globalAny.window
 const originalDocument = globalAny.document
+const originalFetch = globalThis.fetch
 
 afterEach(() => {
   globalAny.window = originalWindow
   globalAny.document = originalDocument
+  globalThis.fetch = originalFetch
 })
 
 function setupDom() {
@@ -39,6 +41,125 @@ function setupDom() {
 
   return { keyHandlers }
 }
+
+/**
+ * Claude chat is the dialog's default kind; tests that exercise the terminal
+ * form (command presets, hosts, first-prompt) select Terminal first. A
+ * change-section launch is the one context that opens on Terminal by itself.
+ */
+function selectKind(renderer: TestRenderer.ReactTestRenderer, value: 'terminal' | 'chat') {
+  act(() => {
+    renderer.root.findByProps({ 'aria-label': 'Session kind' }).props.onChange({ target: { value } })
+  })
+}
+
+function profileSelectorCount(renderer: TestRenderer.ReactTestRenderer) {
+  return renderer.root.findAllByProps({ 'aria-label': 'Profile' }).length
+}
+
+/**
+ * Drive the dialog through the opens the spec cares about: `reopen` closes and
+ * opens again the way App does — `initial*` props change in the same batched
+ * update as `isOpen` — so the preselected kind is always the current entry
+ * point's, never a leftover from the previous open.
+ */
+function mountDialog(entry: Record<string, unknown> = {}) {
+  setupDom()
+  const form = (isOpen: boolean, props: Record<string, unknown>) => (
+    <NewSessionModal
+      isOpen={isOpen}
+      onClose={() => {}}
+      onCreate={() => {}}
+      defaultProjectDir="/base"
+      commandPresets={DEFAULT_PRESETS}
+      defaultPresetId="claude"
+      {...props}
+    />
+  )
+
+  let renderer!: TestRenderer.ReactTestRenderer
+  act(() => {
+    renderer = TestRenderer.create(form(true, entry))
+  })
+
+  return {
+    renderer,
+    kind: () =>
+      renderer.root.findByProps({ 'aria-label': 'Session kind' }).props.value as string,
+    reopen: (next: Record<string, unknown> = {}) => {
+      act(() => {
+        renderer.update(form(false, entry))
+      })
+      act(() => {
+        renderer.update(form(true, next))
+      })
+    },
+    unmount: () => {
+      act(() => {
+        renderer.unmount()
+      })
+    },
+  }
+}
+
+describe('NewSessionModal default session kind', () => {
+  test('a generic open preselects chat: profile selector, no command presets', () => {
+    const dialog = mountDialog()
+    expect(dialog.kind()).toBe('chat')
+    expect(profileSelectorCount(dialog.renderer)).toBe(1)
+    expect(dialog.renderer.root.findAllByProps({ 'data-testid': 'command-select' })).toHaveLength(0)
+    dialog.unmount()
+  })
+
+  test('a change-section open preselects Terminal with the first-prompt selector', () => {
+    const dialog = mountDialog({
+      initialPath: '/repo/.worktrees/add-auth',
+      initialAutoStartChange: 'add-auth',
+    })
+    expect(dialog.kind()).toBe('terminal')
+    expect(dialog.renderer.root.findAllByProps({ 'data-testid': 'start-with-select' })).toHaveLength(1)
+    expect(profileSelectorCount(dialog.renderer)).toBe(0)
+    dialog.unmount()
+  })
+
+  test('generic open → close → change-section open preselects Terminal', () => {
+    const dialog = mountDialog()
+    expect(dialog.kind()).toBe('chat')
+    dialog.reopen({ initialAutoStartChange: 'add-auth' })
+    expect(dialog.kind()).toBe('terminal')
+    dialog.unmount()
+  })
+
+  test('change-section open → close → generic open preselects Claude chat', () => {
+    const dialog = mountDialog({ initialAutoStartChange: 'add-auth' })
+    expect(dialog.kind()).toBe('terminal')
+    dialog.reopen()
+    expect(dialog.kind()).toBe('chat')
+    dialog.unmount()
+  })
+
+  test('switching kind keeps the entered project path and display name', () => {
+    const dialog = mountDialog()
+    const inputs = dialog.renderer.root.findAllByType('input')
+    act(() => {
+      inputs[0].props.onChange({ target: { value: '/typed/by/user' } })
+      inputs[1].props.onChange({ target: { value: 'My session' } })
+    })
+
+    selectKind(dialog.renderer, 'terminal')
+    const terminalInputs = dialog.renderer.root.findAllByType('input')
+    // Command, project path, display name.
+    expect(terminalInputs[1].props.value).toBe('/typed/by/user')
+    expect(terminalInputs[2].props.value).toBe('My session')
+
+    selectKind(dialog.renderer, 'chat')
+    const chatInputs = dialog.renderer.root.findAllByType('input')
+    expect(chatInputs[0].props.value).toBe('/typed/by/user')
+    expect(chatInputs[1].props.value).toBe('My session')
+
+    dialog.unmount()
+  })
+})
 
 describe('NewSessionModal component', () => {
   test('submits resolved values and closes', () => {
@@ -67,6 +188,8 @@ describe('NewSessionModal component', () => {
         />
       )
     })
+
+    selectKind(renderer, 'terminal')
 
     // With new field order: modifiers/command (index 0), project path (index 1), name (index 2)
     const inputs = renderer.root.findAllByType('input')
@@ -179,6 +302,8 @@ describe('NewSessionModal component', () => {
       )
     })
 
+    selectKind(renderer, 'terminal')
+
     // Command input is the first input field
     const inputs = renderer.root.findAllByType('input')
     const commandInput = inputs[0]
@@ -239,6 +364,8 @@ describe('NewSessionModal component', () => {
         />
       )
     })
+
+    selectKind(renderer, 'terminal')
 
     const picker = renderer.root.findByProps({ 'data-testid': 'worktree-picker' })
     const options = picker.findAllByType('option')
@@ -301,6 +428,8 @@ describe('NewSessionModal component', () => {
       )
     })
 
+    selectKind(renderer, 'terminal')
+
     // lastProjectPath matches a discovered worktree: the picker shows it.
     const picker = renderer.root.findByProps({ 'data-testid': 'worktree-picker' })
     expect(picker.props.value).toBe('/repo/.git::/repo')
@@ -329,6 +458,7 @@ describe('NewSessionModal component', () => {
         />
       )
     })
+    selectKind(renderer, 'terminal')
     expect(
       renderer.root.findAllByProps({ 'data-testid': 'worktree-picker' })
     ).toHaveLength(0)
@@ -599,6 +729,8 @@ describe('NewSessionModal first-prompt selector', () => {
       )
     })
 
+    selectKind(renderer, 'terminal')
+
     expect(renderer.root.findAllByProps({ 'data-testid': 'start-with-select' })).toHaveLength(0)
     // The form keeps exactly its three inputs (command, path, name).
     expect(renderer.root.findAllByType('input')).toHaveLength(3)
@@ -654,6 +786,7 @@ describe('NewSessionModal project path validation', () => {
 
   test('empty project path refuses create and shows an inline error', () => {
     const modal = renderModal()
+    selectKind(modal.renderer, 'terminal')
     const projectInput = modal.renderer.root.findAllByType('input')[1]
 
     act(() => {
@@ -698,6 +831,7 @@ describe('NewSessionModal project path validation', () => {
 
   test('typing a path clears the error and allows create', () => {
     const modal = renderModal()
+    selectKind(modal.renderer, 'terminal')
     const projectInput = modal.renderer.root.findAllByType('input')[1]
 
     // Clear the prefilled default so submit is refused and raises the error.
@@ -768,6 +902,7 @@ describe('NewSessionModal project path validation', () => {
       renderer = TestRenderer.create(form({ defaultProjectDir: '' }))
     })
 
+    selectKind(renderer, 'terminal')
     const [projectInput, nameInput] = renderer.root.findAllByType('input').slice(1)
     act(() => {
       projectInput.props.onChange({ target: { value: '/typed/by/user' } })
@@ -788,6 +923,237 @@ describe('NewSessionModal project path validation', () => {
     })
     expect(created).toEqual([{ path: '/typed/by/user', name: 'My name' }])
 
+    act(() => {
+      renderer.unmount()
+    })
+  })
+})
+
+/**
+ * Focus harness. react-test-renderer hosts are not DOM nodes, so refs are
+ * `createNodeMock` objects whose `focus()` maintains `document.activeElement`
+ * the way a browser would. Tags say which control holds focus. The mock form
+ * answers `contains()` for the dialog's own controls so the initial-focus guard
+ * can tell "the user already started interacting with the form" from ambient
+ * focus left outside the dialog.
+ */
+function setupFocusDom() {
+  const keyHandlers = new Map<string, EventListener>()
+  const textarea = { removeAttribute: () => {}, focus: () => {} }
+  let active: { tag: string } | null = null
+  /** Everything the mock form owns: its hosts plus a user-picked control. */
+  const formDescendants = new Set<object>()
+
+  globalAny.document = {
+    querySelector: () => textarea,
+    get activeElement() {
+      return active as unknown as Element | null
+    },
+  } as unknown as Document
+
+  globalAny.window = {
+    addEventListener: (event: string, handler: EventListener) => {
+      keyHandlers.set(event, handler)
+    },
+    removeEventListener: (event: string) => {
+      keyHandlers.delete(event)
+    },
+  } as unknown as Window & typeof globalThis
+
+  const tagFor = (element: { type?: unknown; props?: Record<string, unknown> }) => {
+    const props = element.props ?? {}
+    if (props['aria-label'] === 'Session kind') return 'kind-select'
+    if (props['aria-label'] === 'Profile') return 'profile'
+    if (element.type === 'button' && props.type === 'submit') return 'create'
+    return `${String(element.type)}:${String(props['data-testid'] ?? props['aria-label'] ?? '')}`
+  }
+
+  const createNodeMock = (element: { type?: unknown; props?: Record<string, unknown> }) => {
+    const node: {
+      tag: string
+      focus(): void
+      blur(): void
+      contains?: (other: unknown) => boolean
+    } = {
+      tag: tagFor(element),
+      focus() {
+        active = node
+      },
+      blur() {
+        if (active === node) active = null
+      },
+    }
+    if (element.type === 'form') {
+      node.contains = (other: unknown) => formDescendants.has(other as object)
+    }
+    formDescendants.add(node)
+    return node
+  }
+
+  return {
+    keyHandlers,
+    createNodeMock,
+    activeTag: () => active?.tag ?? null,
+    /** The user tabs to some control the dialog did not pick for them. */
+    moveFocusAway: () => {
+      const node = { tag: 'user-moved' }
+      formDescendants.add(node)
+      active = node
+    },
+  }
+}
+
+/** Hang the chat profile catalog until the test releases it. */
+function deferredCatalog() {
+  let release!: (response: Response) => void
+  globalThis.fetch = (() =>
+    new Promise<Response>((resolve) => {
+      release = resolve
+    })) as unknown as typeof fetch
+  return {
+    succeed: (profiles: Array<{ id: string; label: string }> = [{ id: 'default', label: 'Default' }]) =>
+      release(Response.json({ profiles, errors: [] })),
+    fail: () => release(Response.json({ error: 'down' }, { status: 500 })),
+  }
+}
+
+const settle = async () => {
+  for (let i = 0; i < 12; i++) await Promise.resolve()
+}
+
+/** The dialog's initial focus attempt runs ~50 ms after open. */
+const afterFocusAttempt = () => new Promise((resolve) => setTimeout(resolve, 60))
+
+async function openDialog(focus: ReturnType<typeof setupFocusDom>) {
+  let renderer!: TestRenderer.ReactTestRenderer
+  await act(async () => {
+    renderer = TestRenderer.create(
+      <NewSessionModal
+        isOpen
+        onClose={() => {}}
+        onCreate={() => {}}
+        defaultProjectDir="/base"
+        commandPresets={DEFAULT_PRESETS}
+        defaultPresetId="claude"
+      />,
+      { createNodeMock: focus.createNodeMock }
+    )
+    await settle()
+  })
+  return renderer
+}
+
+describe('NewSessionModal provisional focus', () => {
+  test('the initial attempt focuses Create when it is enabled and the kind select while the catalog loads', async () => {
+    // Delayed catalog: Create cannot take focus yet, so the attempt falls back
+    // to the always-enabled session-kind select. The catalog is never released.
+    deferredCatalog()
+    const loadingFocus = setupFocusDom()
+    const loadingDialog = await openDialog(loadingFocus)
+    await act(async () => {
+      await afterFocusAttempt()
+    })
+    expect(loadingFocus.activeTag()).toBe('kind-select')
+    act(() => {
+      loadingDialog.unmount()
+    })
+
+    // A catalog that settles before the attempt: Create is enabled and takes
+    // focus itself.
+    globalThis.fetch = (async () =>
+      Response.json({ profiles: [{ id: 'default', label: 'Default' }], errors: [] })) as unknown as typeof fetch
+    const readyFocus = setupFocusDom()
+    const readyDialog = await openDialog(readyFocus)
+    await act(async () => {
+      await afterFocusAttempt()
+    })
+    expect(readyFocus.activeTag()).toBe('create')
+    act(() => {
+      readyDialog.unmount()
+    })
+  })
+
+  test('a focus the user moves before the deferred attempt is never stolen, and the catch-up leaves it too', async () => {
+    // The attempt is deferred ~50 ms so the DOM settles first — long enough
+    // for the user to reach a control of their own. It must then leave that
+    // focus alone rather than yanking it onto Create or the kind select.
+    const catalog = deferredCatalog()
+    const focus = setupFocusDom()
+    const renderer = await openDialog(focus)
+    focus.moveFocusAway()
+    await act(async () => {
+      await afterFocusAttempt()
+    })
+    expect(focus.activeTag()).toBe('user-moved')
+
+    // Skipping the attempt leaves no provisional focus behind, so a later
+    // catalog settle must not promote onto the user either.
+    catalog.succeed()
+    await act(async () => {
+      await settle()
+    })
+    expect(focus.activeTag()).toBe('user-moved')
+    act(() => {
+      renderer.unmount()
+    })
+  })
+
+  test('a settled catalog promotes provisional focus to Create, but never steals a focus the user moved', async () => {
+    // Provisional focus still holds: the catch-up promotes it to Create.
+    const promoting = deferredCatalog()
+    const promotingFocus = setupFocusDom()
+    const promotingDialog = await openDialog(promotingFocus)
+    await act(async () => {
+      await afterFocusAttempt()
+    })
+    expect(promotingFocus.activeTag()).toBe('kind-select')
+    promoting.succeed()
+    await act(async () => {
+      await settle()
+    })
+    expect(promotingFocus.activeTag()).toBe('create')
+    act(() => {
+      promotingDialog.unmount()
+    })
+
+    // The user moved focus away before the catalog settled: leave it alone.
+    const stealing = deferredCatalog()
+    const stealingFocus = setupFocusDom()
+    const stealingDialog = await openDialog(stealingFocus)
+    await act(async () => {
+      await afterFocusAttempt()
+    })
+    expect(stealingFocus.activeTag()).toBe('kind-select')
+    stealingFocus.moveFocusAway()
+    stealing.succeed()
+    await act(async () => {
+      await settle()
+    })
+    expect(stealingFocus.activeTag()).toBe('user-moved')
+    act(() => {
+      stealingDialog.unmount()
+    })
+  })
+
+  test('a catalog error leaves focus on the session-kind select', async () => {
+    const catalog = deferredCatalog()
+    const focus = setupFocusDom()
+    const renderer = await openDialog(focus)
+    await act(async () => {
+      await afterFocusAttempt()
+    })
+    expect(focus.activeTag()).toBe('kind-select')
+
+    catalog.fail()
+    await act(async () => {
+      await settle()
+    })
+    expect(focus.activeTag()).toBe('kind-select')
+    expect(renderer.root.findByProps({ role: 'alert' })).toBeDefined()
+    // Create stays unusable, so the kind select is the right resting place.
+    expect(
+      renderer.root.findAllByType('button').find((button) => button.props.type === 'submit')!.props.disabled
+    ).toBe(true)
     act(() => {
       renderer.unmount()
     })

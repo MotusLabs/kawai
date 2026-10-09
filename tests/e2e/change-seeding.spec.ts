@@ -68,12 +68,15 @@ test('change-section action seeds the worktree and opens the prefilled session f
   await createButton.click()
 
   // Success routes into the normal session form, prefilled with the seeded
-  // worktree root, with the first-prompt selector offered and defaulted to
-  // Claude (the default preset declares it).
+  // worktree root. A change-section launch exists to offer the terminal-only
+  // first-prompt selector, so that entry point preselects Terminal (the
+  // generic open preselects Claude chat instead) and the selector is
+  // defaulted to Claude (the default preset declares it).
   const modal = page.getByRole('dialog', { name: 'New Session' })
   await expect(modal).toBeVisible({ timeout: CREATE_TIMEOUT })
   const pathInput = modal.locator('input.input.text-sm').first()
   await expect(pathInput).toHaveValue(worktreePath)
+  await expect(modal.getByLabel('Session kind')).toHaveValue('terminal')
   await expect(modal.getByTestId('start-with-select')).toBeVisible()
   await expect(modal.getByTestId('start-with-select')).toHaveValue('claude')
 

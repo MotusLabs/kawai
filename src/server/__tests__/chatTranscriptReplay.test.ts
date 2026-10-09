@@ -155,6 +155,104 @@ describe('parseTranscriptContent', () => {
     })
   })
 
+  test('maps recorded slash-command turns to the typed command and its output', () => {
+    // Fixtures copied verbatim from real transcripts (2026-10): both CLI
+    // markup generations, with args, without args, and the recorded stdout
+    // of the command that ran.
+    const content = [
+      JSON.stringify({
+        type: 'user',
+        uuid: 'u-cmd-args',
+        timestamp: '2026-10-04T11:00:00.000Z',
+        message: {
+          role: 'user',
+          content:
+            '<command-message>openspec-explore</command-message>\n<command-name>/openspec-explore</command-name>\n<command-args>When I start a new session with `Start with the change\'s apply command` checked, the cli start clean like nothing was typed.</command-args>',
+        },
+      }),
+      JSON.stringify({
+        type: 'user',
+        uuid: 'u-cmd-noargs',
+        timestamp: '2026-10-04T11:00:01.000Z',
+        message: {
+          role: 'user',
+          content:
+            '<command-message>openspec-archive-change</command-message>\n<command-name>/openspec-archive-change</command-name>',
+        },
+      }),
+      JSON.stringify({
+        type: 'user',
+        uuid: 'u-cmd-old',
+        timestamp: '2026-10-04T11:00:02.000Z',
+        message: {
+          role: 'user',
+          content:
+            '<command-name>/clear</command-name>\n            <command-message>clear</command-message>\n            <command-args></command-args>',
+        },
+      }),
+      JSON.stringify({
+        type: 'system',
+        subtype: 'local_command',
+        uuid: 'sys-usage',
+        timestamp: '2026-10-04T11:00:03.000Z',
+        content:
+          '<local-command-stdout>Total cost:            $0.0000\nTotal duration (API):  0s\nUsage:                 0 input, 0 output, 0 cache read, 0 cache write</local-command-stdout>',
+      }),
+      JSON.stringify({
+        type: 'system',
+        subtype: 'local_command',
+        uuid: 'sys-empty',
+        timestamp: '2026-10-04T11:00:04.000Z',
+        content: '<local-command-stdout></local-command-stdout>',
+      }),
+    ].join('\n')
+
+    const parsed = parseTranscriptContent(content)
+    expect(typesOf(parsed.events)).toEqual([
+      'user_message',
+      'user_message',
+      'user_message',
+      'command_output',
+    ])
+    expect(parsed.events[0]).toMatchObject({
+      type: 'user_message',
+      turnId: 'hist-turn-1',
+      text: '/openspec-explore When I start a new session with `Start with the change\'s apply command` checked, the cli start clean like nothing was typed.',
+    })
+    expect(parsed.events[1]).toMatchObject({
+      type: 'user_message',
+      turnId: 'hist-turn-2',
+      text: '/openspec-archive-change',
+    })
+    // Old-generation markup with empty args: the slash survives, no stray space.
+    expect(parsed.events[2]).toMatchObject({ type: 'user_message', text: '/clear' })
+    // The stdout joins the turn that ran the command; the empty one is skipped.
+    expect(parsed.events[3]).toMatchObject({
+      type: 'command_output',
+      turnId: 'hist-turn-3',
+      text: 'Total cost:            $0.0000\nTotal duration (API):  0s\nUsage:                 0 input, 0 output, 0 cache read, 0 cache write',
+    })
+  })
+
+  test('unknown command markup falls back to plain user text', () => {
+    // A markup shape without <command-name> (here: only the message tag, as a
+    // hypothetical future/older CLI might write) renders as it was recorded.
+    const content = [
+      JSON.stringify({
+        type: 'user',
+        uuid: 'u-unknown',
+        timestamp: '2026-10-04T12:00:00.000Z',
+        message: { role: 'user', content: '<command-message>mystery</command-message>' },
+      }),
+    ].join('\n')
+    const parsed = parseTranscriptContent(content)
+    expect(parsed.events).toHaveLength(1)
+    expect(parsed.events[0]).toMatchObject({
+      type: 'user_message',
+      text: '<command-message>mystery</command-message>',
+    })
+  })
+
   test('skips unknown lines, meta, sidechains and a truncated tail', () => {
     const content = [
       JSON.stringify({

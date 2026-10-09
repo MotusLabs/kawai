@@ -13,6 +13,9 @@ async function openChatCreateDialog(page: Page) {
   const dialog = page.getByRole('dialog', { name: 'New Session' })
   await expect(dialog).toBeVisible()
   await dialog.getByLabel('Session kind').selectOption('chat')
+  // Wait for React to replace the terminal fields before resolving inputs.
+  await expect(dialog.getByTestId('command-select')).toHaveCount(0)
+  await expect(dialog.getByLabel('Profile')).toBeEnabled()
   return dialog
 }
 
@@ -40,15 +43,17 @@ test('chat kind hides terminal-only fields and restores them', async ({ page }, 
   await page.goto('/')
   await page.getByRole('button', { name: 'New session', exact: true }).first().click()
   const dialog = page.getByRole('dialog', { name: 'New Session' })
-  await expect(dialog.getByTestId('command-select')).toBeVisible()
-
-  await dialog.getByLabel('Session kind').selectOption('chat')
+  // Claude chat is the default kind: terminal-only fields start hidden.
+  await expect(dialog.getByLabel('Session kind')).toHaveValue('chat')
   await expect(dialog.getByTestId('command-select')).toHaveCount(0)
   await expect(dialog.getByTestId('host-select')).toHaveCount(0)
   await page.screenshot({ path: info.outputPath('chat-create-modal.png') })
 
   await dialog.getByLabel('Session kind').selectOption('terminal')
   await expect(dialog.getByTestId('command-select')).toBeVisible()
+
+  await dialog.getByLabel('Session kind').selectOption('chat')
+  await expect(dialog.getByTestId('command-select')).toHaveCount(0)
 })
 
 test('empty project path refuses create with inline validation', async ({ page }) => {
@@ -76,7 +81,8 @@ test('a create the server refuses surfaces the reason', async ({ page }) => {
   const dialog = await openChatCreateDialog(page)
 
   await dialog.locator('input').first().fill(process.cwd())
-  await dialog.locator('input').last().fill('Refused chat')
+  await dialog.getByPlaceholder('auto-generated').fill('Refused chat')
+  await expect(dialog.getByPlaceholder('auto-generated')).toHaveValue('Refused chat')
   await dialog.getByRole('button', { name: 'Create', exact: true }).click()
 
   // The request is well-formed and does leave the browser…

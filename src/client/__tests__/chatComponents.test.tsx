@@ -1,12 +1,13 @@
 import { afterEach, describe, expect, jest, test } from 'bun:test'
 import TestRenderer, { act, type ReactTestInstance } from 'react-test-renderer'
-import type { ChatActivity, ChatEvent, ChatPendingRequest, ChatWireFrame } from '@shared/chat'
-import type { ClientMessage, Session } from '@shared/types'
+import type { ChatActivity, ChatCommandState, ChatEvent, ChatPendingRequest, ChatUsageReport, ChatWireFrame } from '@shared/chat'
+import type { ClientMessage, ServerMessage, Session } from '@shared/types'
 import ChatRequests from '../components/chat/ChatRequests'
 import ChatMessages from '../components/chat/ChatMessages'
 import ChatDebugPanel from '../components/chat/ChatDebugPanel'
 import ChatView from '../components/chat/ChatView'
 import ChatActivityRow from '../components/chat/ChatActivityRow'
+import UsageBar from '../components/chat/UsageBar'
 import { closedDebugView, useChatDebugStore, type ChatDebugView } from '../stores/chatDebugStore'
 import { emptyTranscript, useChatStore } from '../stores/chatStore'
 import { useSettingsStore } from '../stores/settingsStore'
@@ -45,11 +46,93 @@ describe('chat components', () => {
   test('assistant markdown and tool activity render without executing raw HTML', () => {
     const renderer = TestRenderer.create(<ChatMessages events={[
       { type: 'assistant_text', id: 'a', sequence: 0, at: 'now', turnId: 't', messageId: 'm', text: '**Hello** <script>bad()</script>' },
-      { type: 'tool_call', id: 'b', sequence: 0, at: 'now', turnId: 't', toolCallId: 'tool-1', tool: 'Read', input: { path: 'file.ts' } },
+      { type: 'tool_call', id: 'b', sequence: 0, at: 'now', turnId: 't', toolCallId: 'tool-1', tool: 'Read', input: { file_path: 'file.ts' } },
     ]} />)
     expect(renderer.root.findByType('strong').children).toEqual(['Hello'])
     expect(renderer.root.findAllByType('script')).toHaveLength(0)
-    expect(renderer.root.findByType('summary').children).toEqual(['Tool: ', 'Read'])
+    expect(textOf(renderer.root.findByType('summary'))).toBe('Tool: Read (file.ts)')
+    renderer.unmount()
+  })
+
+  test('tool-call summaries show a project-relative detail that truncates with the full value on hover', () => {
+    const command = 'bun run lint && bun run typecheck && bun run test --coverage --reporter=junit'
+    const renderer = TestRenderer.create(<ChatMessages projectPath="/tmp/project" events={[
+      { type: 'tool_call', id: 'r', sequence: 0, at: 'now', turnId: 't', toolCallId: 't1', tool: 'Read',
+        input: { file_path: '/tmp/project/src/index.ts' } },
+      { type: 'tool_call', id: 'b', sequence: 1, at: 'now', turnId: 't', toolCallId: 't2', tool: 'Bash',
+        input: { command: 'bun run lint\nbun run test' } },
+      { type: 'tool_call', id: 'l', sequence: 2, at: 'now', turnId: 't', toolCallId: 't3', tool: 'Bash',
+        input: { command } },
+    ]} />)
+    const summaries = renderer.root.findAllByType('summary')
+    expect(textOf(summaries[0]!)).toBe('Tool: Read (src/index.ts)')
+    expect(textOf(summaries[1]!)).toBe('Tool: Bash (bun run lint bun run test)')
+    // The full detail rides along on the truncating span for the hover tooltip.
+    const detail = summaries[2]!.findByProps({ title: command })
+    expect(detail.children).toEqual([command])
+    expect(String(detail.props.className).split(' ')).toContain('truncate')
+    // The JSON body keeps the full input for expanding.
+    expect(renderer.root.findAllByType('pre')).toHaveLength(3)
+    expect(textOf(renderer.root.findAllByType('pre')[2]!)).toBe(JSON.stringify({ command }, null, 2))
+    renderer.unmount()
+  })
+
+  test('a tool with no usable detail field renders exactly the plain label', () => {
+    const renderer = TestRenderer.create(<ChatMessages projectPath="/tmp/project" events={[
+      { type: 'tool_call', id: 'm', sequence: 0, at: 'now', turnId: 't', toolCallId: 't1', tool: 'mcp__db__query',
+        input: { sql: 'select 1' } },
+    ]} />)
+    const summary = renderer.root.findByType('summary')
+    expect(textOf(summary)).toBe('Tool: mcp__db__query')
+    expect(summary.findAll(node => node.props.title != null)).toHaveLength(0)
+    renderer.unmount()
+  })
+
+  test('tool-call summaries show formatted details', () => {
+    const renderer = TestRenderer.create(<ChatMessages projectPath="/tmp/project" events={[
+      { type: 'tool_call', id: 'e', sequence: 0, at: 'now', turnId: 't', toolCallId: 't1', tool: 'Edit',
+        input: { file_path: '/tmp/project/src/a.ts', old_string: 'a\nb\nc', new_string: '1\n2\n3\n4\n5' } },
+      { type: 'tool_call', id: 'u', sequence: 1, at: 'now', turnId: 't', toolCallId: 't2', tool: 'TaskUpdate',
+        input: { taskId: '2', status: 'completed' } },
+    ]} />)
+    const summaries = renderer.root.findAllByType('summary')
+    expect(textOf(summaries[0]!)).toBe('Tool: Edit (src/a.ts +5 −3)')
+    expect(textOf(summaries[1]!)).toBe('Tool: TaskUpdate (Task 2 → completed)')
+    renderer.unmount()
+  })
+
+  test('tool-result summaries show the first output line as a hint', () => {
+    const renderer = TestRenderer.create(<ChatMessages events={[
+      { type: 'tool_result', id: 'r', sequence: 0, at: 'now', turnId: 't', toolCallId: 't1',
+        output: '\n  Task #1 created successfully: Run 6.3\nlater lines', isError: false },
+      { type: 'tool_result', id: 'f', sequence: 1, at: 'now', turnId: 't', toolCallId: 't2',
+        output: 'Command failed: bun test\n    at test.ts:1:1', isError: true },
+      { type: 'tool_result', id: 'e', sequence: 2, at: 'now', turnId: 't', toolCallId: 't3',
+        output: ' \n', isError: false },
+    ]} />)
+    const summaries = renderer.root.findAllByType('summary')
+    expect(textOf(summaries[0]!)).toBe('Tool result (Task #1 created successfully: Run 6.3)')
+    expect(textOf(summaries[1]!)).toBe('Tool failed (Command failed: bun test)')
+    // The full hint rides along on the truncating span for the hover tooltip.
+    const hint = summaries[0]!.findByProps({ title: 'Task #1 created successfully: Run 6.3' })
+    expect(String(hint.props.className).split(' ')).toContain('truncate')
+    // No non-blank line keeps the plain label, and the full output still expands.
+    expect(textOf(summaries[2]!)).toBe('Tool result')
+    expect(summaries[2]!.findAll(node => node.props.title != null)).toHaveLength(0)
+    expect(textOf(renderer.root.findAllByType('pre')[1]!)).toBe('Command failed: bun test\n    at test.ts:1:1')
+    renderer.unmount()
+  })
+
+  test('command output renders as a muted markdown block', () => {
+    const renderer = TestRenderer.create(<ChatMessages events={[
+      { type: 'command_output', id: 'c', sequence: 0, at: 'now', turnId: 't', text: 'Context usage: **12%** of the window.' },
+    ]} />)
+    const block = renderer.root.findByProps({ 'data-testid': 'chat-command-output' })
+    expect(block.props.className).toContain('text-secondary')
+    expect(block.props.className).toContain('font-mono')
+    expect(textOf(block)).toContain('Command output')
+    // Markdown renders (bold), inside the monospace container.
+    expect(renderer.root.findByType('strong').children).toEqual(['12%'])
     renderer.unmount()
   })
 
@@ -545,6 +628,229 @@ describe('chat debug view', () => {
   })
 })
 
+describe('slash-command menu', () => {
+  const READY_COMMANDS: ChatCommandState = {
+    status: 'ready',
+    commands: [
+      { name: 'clear', description: 'Start a new session', argumentHint: '[name]', aliases: ['reset', 'new'], source: 'builtin' },
+      { name: 'context', description: 'Show context usage', aliases: ['ctx'], source: 'builtin' },
+      { name: 'compact', description: 'Compact the conversation', aliases: [], source: 'builtin' },
+      { name: 'openspec-explore', description: 'Explore ideas', aliases: [], source: 'project' },
+      { name: 'my-skill', description: 'A personal skill', aliases: [], source: 'user' },
+    ],
+  }
+
+  afterEach(() => useChatStore.setState({ sessions: {}, drafts: {} }))
+
+  function renderComposer(commands: ChatCommandState, session: Session = chatSession) {
+    useChatStore.getState().setCommands({ type: 'chat-commands', sessionId: session.id, state: commands })
+    const sent: ClientMessage[] = []
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => {
+      renderer = TestRenderer.create(<ChatView
+        session={session}
+        sendMessage={message => { sent.push(message) }}
+        connectionStatus="connected" connectionEpoch={0} error={null}
+        onClose={() => {}} onKill={() => {}} />)
+    })
+    const type = (value: string) =>
+      act(() => { renderer.root.findByType('textarea').props.onChange({ target: { value } }) })
+    const key = (keyName: string) =>
+      act(() => { renderer.root.findByType('textarea').props.onKeyDown({
+        key: keyName, preventDefault: () => {}, currentTarget: { form: { requestSubmit: () => submit() } } }) })
+    const submit = () =>
+      act(() => { renderer.root.findByType('form').props.onSubmit({ preventDefault: () => {} }) })
+    return { sent, renderer, type, key, submit }
+  }
+
+  test('opens on a bare slash, filters, and stays closed otherwise', () => {
+    const h = renderComposer(READY_COMMANDS)
+    expect(h.renderer.root.findAllByProps({ 'data-testid': 'slash-command-menu' })).toHaveLength(0)
+    h.type('/')
+    expect(h.renderer.root.findAllByProps({ 'data-testid': 'slash-command-menu' })).toHaveLength(1)
+    h.type('/co')
+    const menu = h.renderer.root.findByProps({ 'data-testid': 'slash-command-menu' })
+    expect(menu.findAllByProps({ role: 'option' }).map(option => option.props['data-command-name']))
+      .toEqual(['context', 'compact'])
+    h.type('/context arg') // args started: the menu closes
+    expect(h.renderer.root.findAllByProps({ 'data-testid': 'slash-command-menu' })).toHaveLength(0)
+    h.renderer.unmount()
+  })
+
+  test('shows loading while the list is not ready, and nothing when unavailable', () => {
+    const loading = renderComposer({ status: 'loading', commands: [] })
+    loading.type('/')
+    expect(loading.renderer.root.findByProps({ 'data-testid': 'slash-command-loading' })).toBeDefined()
+    loading.renderer.unmount()
+    const unavailable = renderComposer({ status: 'unavailable', commands: [] })
+    unavailable.type('/')
+    expect(unavailable.renderer.root.findAllByProps({ 'data-testid': 'slash-command-menu' })).toHaveLength(0)
+    unavailable.renderer.unmount()
+  })
+
+  test('keyboard: Up/Down move, Enter inserts with the hint, nothing is sent', () => {
+    const h = renderComposer(READY_COMMANDS)
+    h.type('/c')
+    h.key('ArrowDown') // clear -> context
+    h.key('ArrowDown') // context -> compact
+    h.key('ArrowUp')   // compact -> context
+    h.key('Enter')
+    expect(h.renderer.root.findByType('textarea').props.value).toBe('/context ')
+    expect(useChatStore.getState().drafts['chat-1']).toBe('/context ')
+    // The argument hint shows for a command that has one…
+    h.type('/clear ')
+    expect(h.renderer.root.findByProps({ 'data-testid': 'command-argument-hint' }).children)
+      .toEqual(['/', 'clear', ' ', '[name]'])
+    // …and typing arguments replaces it.
+    h.type('/clear demo')
+    expect(h.renderer.root.findAllByProps({ 'data-testid': 'command-argument-hint' })).toHaveLength(0)
+    // No message went to the agent while choosing.
+    expect(h.sent.filter(message => message.type === 'chat-send')).toEqual([])
+    h.renderer.unmount()
+  })
+
+  test('Tab also chooses; Escape closes without changing the text', () => {
+    const h = renderComposer(READY_COMMANDS)
+    h.type('/com')
+    h.key('Tab')
+    expect(h.renderer.root.findByType('textarea').props.value).toBe('/compact ')
+    expect(h.renderer.root.findAllByProps({ 'data-testid': 'slash-command-menu' })).toHaveLength(0)
+    h.type('/c')
+    h.key('Escape')
+    expect(h.renderer.root.findByType('textarea').props.value).toBe('/c')
+    expect(h.renderer.root.findAllByProps({ 'data-testid': 'slash-command-menu' })).toHaveLength(0)
+    h.renderer.unmount()
+  })
+
+  test('Enter without matches is not captured: the typed command submits', () => {
+    const h = renderComposer(READY_COMMANDS)
+    h.type('/zzz')
+    expect(h.renderer.root.findAllByProps({ 'data-testid': 'slash-command-menu' })).toHaveLength(1)
+    h.submit()
+    expect(h.sent.filter(message => message.type === 'chat-send')).toEqual([
+      { type: 'chat-send', sessionId: 'chat-1', text: '/zzz' },
+    ])
+    h.renderer.unmount()
+  })
+
+  test('pointer selection chooses on click; project and user commands are tagged', () => {
+    const h = renderComposer(READY_COMMANDS)
+    h.type('/')
+    const options = h.renderer.root.findByProps({ 'data-testid': 'slash-command-menu' })
+      .findAllByProps({ role: 'option' })
+    const explore = options.find(option => option.props['data-command-name'] === 'openspec-explore')!
+    expect(explore.findByProps({ 'data-testid': 'command-source-tag' }).children).toEqual(['project'])
+    const skill = options.find(option => option.props['data-command-name'] === 'my-skill')!
+    expect(skill.findByProps({ 'data-testid': 'command-source-tag' }).children).toEqual(['user'])
+    act(() => { explore.props.onClick() })
+    expect(h.renderer.root.findByType('textarea').props.value).toBe('/openspec-explore ')
+    h.renderer.unmount()
+  })
+
+  test('archived chats have no composer and no menu', () => {
+    const archived = { ...chatSession, archivedAt: '2026-10-01T00:00:00.000Z' } as Session
+    const h = renderComposer(READY_COMMANDS, archived)
+    expect(h.renderer.root.findAllByType('textarea')).toHaveLength(0)
+    expect(h.renderer.root.findAllByProps({ 'data-testid': 'slash-command-menu' })).toHaveLength(0)
+    h.renderer.unmount()
+  })
+})
+
+describe('/clear, /reset, /new', () => {
+  afterEach(() => useChatStore.setState({ sessions: {}, drafts: {} }))
+
+  function renderClearable(session: Session = chatSession) {
+    const sent: ClientMessage[] = []
+    const listeners: Array<(message: ServerMessage) => void> = []
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => {
+      renderer = TestRenderer.create(<ChatView
+        session={session}
+        sendMessage={message => { sent.push(message) }}
+        subscribe={listener => { listeners.push(listener); return () => {} }}
+        connectionStatus="connected" connectionEpoch={0} error={null}
+        onClose={() => {}} onKill={() => {}} />)
+    })
+    const type = (value: string) =>
+      act(() => { renderer.root.findByType('textarea').props.onChange({ target: { value } }) })
+    const submit = () =>
+      act(() => { renderer.root.findByType('form').props.onSubmit({ preventDefault: () => {} }) })
+    const deliver = (message: ServerMessage) =>
+      act(() => { for (const listener of listeners) listener(message) })
+    return { sent, renderer, type, submit, deliver }
+  }
+
+  const newChatCreated = (id: string, name?: string): ServerMessage => ({
+    type: 'session-created',
+    session: {
+      id, name: name ?? 'New chat', kind: 'chat', projectPath: '/tmp/project',
+      status: 'waiting', lastActivity: 'now', createdAt: 'now', source: 'managed',
+    },
+  })
+
+  test.each(['/clear', '/reset', '/new'])('%s creates a chat and archives the old one', (command) => {
+    const h = renderClearable()
+    h.type(command)
+    h.submit()
+    expect(h.sent.filter(message => message.type === 'session-create')).toEqual([{
+      type: 'session-create', projectPath: '/tmp/project', kind: 'chat', claudeProfileId: 'default',
+    }])
+    expect(useChatStore.getState().drafts).not.toHaveProperty('chat-1')
+    // The command itself never reaches the agent, and the composer cleared.
+    expect(h.sent.filter(message => message.type === 'chat-send')).toEqual([])
+    expect(h.renderer.root.findByType('textarea').props.value).toBe('')
+    // The composer text is gone but nothing is archived yet.
+    expect(h.sent.filter(message => message.type === 'chat-archive')).toEqual([])
+    h.deliver(newChatCreated('chat-new'))
+    expect(h.sent.filter(message => message.type === 'chat-archive')).toEqual([
+      { type: 'chat-archive', sessionId: 'chat-1' },
+    ])
+    h.renderer.unmount()
+  })
+
+  test('/new with a name names the created chat', () => {
+    const h = renderClearable()
+    h.type('/new release notes')
+    h.submit()
+    expect(h.sent.filter(message => message.type === 'session-create')).toEqual([{
+      type: 'session-create', projectPath: '/tmp/project', kind: 'chat',
+      claudeProfileId: 'default', name: 'release notes',
+    }])
+    h.deliver(newChatCreated('chat-named', 'release notes'))
+    expect(h.sent.filter(message => message.type === 'chat-archive')).toEqual([
+      { type: 'chat-archive', sessionId: 'chat-1' },
+    ])
+    h.renderer.unmount()
+  })
+
+  test('a creation error leaves the previous chat untouched', () => {
+    const h = renderClearable()
+    h.type('/clear')
+    h.submit()
+    h.deliver({ type: 'error', message: 'Claude Agent SDK is unavailable.' })
+    expect(h.sent.filter(message => message.type === 'chat-archive')).toEqual([])
+    // The failure also cancels the pending archive for later creations.
+    h.deliver(newChatCreated('chat-late'))
+    expect(h.sent.filter(message => message.type === 'chat-archive')).toEqual([])
+    h.renderer.unmount()
+  })
+
+  test('a session created in another project does not archive this chat', () => {
+    const h = renderClearable()
+    h.type('/clear')
+    h.submit()
+    h.deliver({
+      type: 'session-created',
+      session: {
+        id: 'chat-elsewhere', name: 'Elsewhere', kind: 'chat', projectPath: '/other/project',
+        status: 'waiting', lastActivity: 'now', createdAt: 'now', source: 'managed',
+      },
+    })
+    expect(h.sent.filter(message => message.type === 'chat-archive')).toEqual([])
+    h.renderer.unmount()
+  })
+})
+
 describe('chat palette', () => {
   const classOf = (node: ReactTestInstance) => String(node.props.className ?? '')
 
@@ -733,5 +1039,154 @@ describe('chat activity row', () => {
     expect(rows(renderer)).toHaveLength(0)
     renderer.unmount()
     useChatStore.setState({ sessions: {} })
+  })
+})
+
+describe('chat usage bar', () => {
+  const NOW = Date.parse('2026-10-07T13:00:00.000Z')
+  const report = (overrides: Partial<ChatUsageReport> = {}): ChatUsageReport => ({
+    status: 'allowed',
+    windows: [
+      { key: 'five_hour', label: '5-hour window', percentUsed: 22.4, resetsAt: '2026-10-07T18:11:04.000Z' },
+      { key: 'seven_day', label: '7-day window', percentUsed: 17.12, resetsAt: '2026-10-12T09:00:00.000Z' },
+    ],
+    receivedAt: '2026-10-07T13:00:00.000Z',
+    ...overrides,
+  })
+  const meters = (renderer: TestRenderer.ReactTestRenderer) =>
+    renderer.root.findAllByProps({ 'data-testid': 'chat-usage-window' })
+  const renderBar = (usage: ChatUsageReport | null) => {
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => {
+      renderer = TestRenderer.create(<UsageBar report={usage} />)
+    })
+    return renderer
+  }
+
+  afterEach(() => {
+    useChatStore.setState({ usage: {} })
+    jest.useRealTimers()
+  })
+
+  test('renders one labeled meter per window with rounded percents', () => {
+    jest.useFakeTimers()
+    jest.setSystemTime(NOW)
+    const renderer = renderBar(report())
+    const bar = renderer.root.findByProps({ 'data-testid': 'chat-usage' })
+    expect(bar.props['data-status']).toBe('allowed')
+    expect(bar.props.className).not.toContain('chat-usage-warning')
+    expect(meters(renderer).map((meter) => meter.props['data-key'])).toEqual([
+      'five_hour',
+      'seven_day',
+    ])
+    expect(
+      meters(renderer).map((meter) =>
+        textOf(meter.findByProps({ 'data-testid': 'chat-usage-percent' }))
+      )
+    ).toEqual(['22%', '17%'])
+    renderer.unmount()
+  })
+
+  test('a scoped weekly window renders as its own labelled entry', () => {
+    const renderer = renderBar(
+      report({
+        windows: [
+          ...report().windows,
+          { key: 'model_scoped:Opus', label: 'Opus', percentUsed: 42.5, resetsAt: '2026-10-12T09:00:00.000Z' },
+        ],
+      })
+    )
+    const scoped = meters(renderer).find(
+      (meter) => meter.props['data-key'] === 'model_scoped:Opus'
+    )!
+    expect(textOf(scoped.findByProps({ 'data-testid': 'chat-usage-label' }))).toBe('Opus')
+    expect(textOf(scoped.findByProps({ 'data-testid': 'chat-usage-percent' }))).toBe('43%')
+    renderer.unmount()
+  })
+
+  test('a single window renders one meter; none renders nothing at all', () => {
+    const one = renderBar(
+      report({ windows: [{ key: 'five_hour', label: '5-hour window', percentUsed: 9, resetsAt: null }] })
+    )
+    expect(meters(one)).toHaveLength(1)
+    // No reset time is known: no reset label, no placeholder.
+    expect(one.root.findAllByProps({ 'data-testid': 'chat-usage-reset' })).toHaveLength(0)
+    one.unmount()
+
+    for (const empty of [null, report({ windows: [] })]) {
+      const none = renderBar(empty)
+      expect(none.root.findAllByProps({ 'data-testid': 'chat-usage' })).toHaveLength(0)
+      none.unmount()
+    }
+  })
+
+  test('warning and limited reports tint the bar', () => {
+    const warning = renderBar(report({ status: 'warning' }))
+    expect(
+      warning.root.findByProps({ 'data-testid': 'chat-usage' }).props.className
+    ).toContain('chat-usage-warning')
+    warning.unmount()
+
+    const limited = renderBar(report({ status: 'limited' }))
+    const bar = limited.root.findByProps({ 'data-testid': 'chat-usage' })
+    expect(bar.props.className).toContain('chat-usage-limited')
+    expect(bar.props['data-status']).toBe('limited')
+    limited.unmount()
+  })
+
+  test('reset times show the weekday only more than a day away', () => {
+    jest.useFakeTimers()
+    jest.setSystemTime(NOW)
+    const renderer = renderBar(report())
+    const resets = meters(renderer).map((meter) =>
+      textOf(meter.findByProps({ 'data-testid': 'chat-usage-reset' }))
+    )
+    // 5h window resets today: time only. 7-day window resets Monday: weekday.
+    expect(resets[0]).toMatch(/\d{1,2}:\d{2}/)
+    expect(resets[0]).not.toMatch(/Mon|Tue|Wed|Thu|Fri|Sat|Sun/)
+    expect(resets[1]).toMatch(/Mon|Tue|Wed|Thu|Fri|Sat|Sun/)
+    expect(resets[1]).toMatch(/\d{1,2}:\d{2}/)
+    renderer.unmount()
+  })
+})
+
+describe('ChatView usage bar', () => {
+  afterEach(() => useChatStore.setState({ usage: {} }))
+
+  function renderView(session: Session) {
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => {
+      renderer = TestRenderer.create(<ChatView
+        session={session}
+        sendMessage={() => {}}
+        connectionStatus="connected" connectionEpoch={0} error={null}
+        onClose={() => {}} onKill={() => {}} />)
+    })
+    return renderer
+  }
+
+  test('shows the profile report under the header and nothing without windows', () => {
+    useChatStore.setState({
+      usage: {
+        default: {
+          status: 'allowed',
+          windows: [
+            { key: 'five_hour', label: '5-hour window', percentUsed: 22.4, resetsAt: '2026-10-07T18:11:04.000Z' },
+          ],
+          receivedAt: '2026-10-07T13:00:00.000Z',
+        },
+      },
+    })
+    let renderer = renderView(chatSession)
+    const bar = renderer.root.findByProps({ 'data-testid': 'chat-usage' })
+    // Directly under the header, above the transcript column.
+    expect(bar.parent?.parent?.props.className).toContain('chat-palette')
+    renderer.unmount()
+
+    // A session of a profile with no data (GLM) shows no bar.
+    const glm = { ...chatSession, id: 'chat-glm', claudeProfileId: 'glm' } as Session
+    renderer = renderView(glm)
+    expect(renderer.root.findAllByProps({ 'data-testid': 'chat-usage' })).toHaveLength(0)
+    renderer.unmount()
   })
 })

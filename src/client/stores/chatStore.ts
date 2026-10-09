@@ -3,10 +3,18 @@
 // through server resolution events rather than optimistic local answers. The
 // live-turn activity is a single current value (not an event): it is anchored
 // on the client clock from the server's elapsedMs and cleared on turn end.
-// Unsubmitted composer drafts sit beside the transcripts, keyed by session, so
-// they survive switching chats; they are view state — never sent to the server.
+// Plan usage is per profile, not per session (the allowance is per account
+// and provider): the snapshot's `usage` and chat-usage pushes land in one
+// shared map, so every session of a profile renders the same bar.
+// Unsubmitted composer drafts are client-only state, keyed by session.
 import { create } from 'zustand'
-import type { ChatActivity, ChatEvent, ChatPendingRequest } from '@shared/chat'
+import type {
+  ChatActivity,
+  ChatCommandState,
+  ChatEvent,
+  ChatPendingRequest,
+  ChatUsageReport,
+} from '@shared/chat'
 import type { ServerMessage, SessionStatus } from '@shared/types'
 
 /** The live activity plus its client-clock anchor (design D6). */
@@ -21,12 +29,15 @@ export interface ChatTranscript {
   pendingRequests: ChatPendingRequest[]
   status: SessionStatus
   throughSequence: number
+  /** The session's slash-command list; unavailable until an agent reports. */
+  commands: ChatCommandState
   seen: Set<string>
   activity: ChatTranscriptActivity | null
 }
 
 export const emptyTranscript = (): ChatTranscript => ({
-  events: [], pendingRequests: [], status: 'waiting', throughSequence: 0, seen: new Set(), activity: null,
+  events: [], pendingRequests: [], status: 'waiting', throughSequence: 0,
+  commands: { status: 'unavailable', commands: [] }, seen: new Set(), activity: null,
 })
 
 /** Anchor a server-reported activity on the client's clock (design D2). */
@@ -76,13 +87,18 @@ export function applyChatEvents(state: ChatTranscript, incoming: ChatEvent[]): C
 
 interface ChatStore {
   sessions: Record<string, ChatTranscript>
-  /** Unsubmitted composer text per session; empty means no draft (key absent). */
+  /** Empty drafts have no key; never persisted or sent to the server. */
   drafts: Record<string, string>
+  /** Latest plan-usage report per Claude profile (null = profile has none). */
+  usage: Record<string, ChatUsageReport | null>
   apply: (sessionId: string, events: ChatEvent[]) => void
   snapshot: (message: Extract<ServerMessage, { type: 'chat-snapshot' }>) => void
+  /** Replace one session's command list (chat-commands push). */
+  setCommands: (message: Extract<ServerMessage, { type: 'chat-commands' }>) => void
   /** Adopt the latest server activity (chat-activity) or clear it (null). */
   setActivity: (sessionId: string, activity: ChatActivity | null) => void
-  /** Save a session's composer draft; an empty text clears it. */
+  /** Adopt a profile's latest usage report (chat-usage / snapshot). */
+  setUsage: (profileId: string, report: ChatUsageReport | null) => void
   setDraft: (sessionId: string, text: string) => void
   remove: (sessionId: string) => void
 }
@@ -90,17 +106,30 @@ interface ChatStore {
 export const useChatStore = create<ChatStore>((set) => ({
   sessions: {},
   drafts: {},
+  usage: {},
   apply: (sessionId, events) => set(state => ({ sessions: {
     ...state.sessions, [sessionId]: applyChatEvents(state.sessions[sessionId] ?? emptyTranscript(), events),
   } })),
-  snapshot: message => set(state => ({ sessions: {
+  snapshot: message => set(state => ({
+    sessions: {
+      ...state.sessions,
+      [message.sessionId]: {
+        ...applyChatEvents(emptyTranscript(), message.events),
+        pendingRequests: message.pendingRequests,
+        status: message.status,
+        throughSequence: message.throughSequence,
+        commands: message.commands,
+        activity: message.activity ? anchorActivity(message.activity) : null,
+      },
+    },
+    // The snapshot's usage is authoritative for the profile at attach time.
+    usage: { ...state.usage, [message.profileId]: message.usage },
+  })),
+  setCommands: message => set(state => ({ sessions: {
     ...state.sessions,
     [message.sessionId]: {
-      ...applyChatEvents(emptyTranscript(), message.events),
-      pendingRequests: message.pendingRequests,
-      status: message.status,
-      throughSequence: message.throughSequence,
-      activity: message.activity ? anchorActivity(message.activity) : null,
+      ...(state.sessions[message.sessionId] ?? emptyTranscript()),
+      commands: message.state,
     },
   } })),
   setActivity: (sessionId, activity) => set(state => {
@@ -110,6 +139,9 @@ export const useChatStore = create<ChatStore>((set) => ({
       activity: activity ? anchorActivity(activity) : null,
     } } }
   }),
+  setUsage: (profileId, report) => set(state => ({
+    usage: { ...state.usage, [profileId]: report },
+  })),
   setDraft: (sessionId, text) => set(state => {
     const drafts = { ...state.drafts }
     if (text === '') delete drafts[sessionId]
@@ -119,6 +151,7 @@ export const useChatStore = create<ChatStore>((set) => ({
   remove: sessionId => set(state => {
     const sessions = { ...state.sessions }
     delete sessions[sessionId]
+    // Profile usage outlives one session: a sibling may still show the bar.
     const drafts = { ...state.drafts }
     delete drafts[sessionId]
     return { sessions, drafts }
