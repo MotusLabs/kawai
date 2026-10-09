@@ -1478,6 +1478,42 @@ describe('ChatSessionManager', () => {
       expect(all.find((s) => s.id === 'term-1')).toBeDefined()
       dbB.close()
     })
+
+    test('create records name provenance and a restart restores it unchanged', () => {
+      process.env.ANTHROPIC_API_KEY = 'sk-test-key'
+      const dbPath = path.join(tempDir, 'name-source.db')
+      const dbA = initDatabase({ path: dbPath })
+      const harnessA = createHarness(dbA)
+
+      const named = harnessA.manager.createSession({
+        projectPath: '/tmp/proj',
+        name: 'show-chat-rate-limits',
+      })
+      if (!named.ok) throw new Error('create failed')
+      expect(named.session.name).toBe('show-chat-rate-limits')
+      expect(named.session.nameSource).toBe('manual')
+
+      const unnamed = harnessA.manager.createSession({ projectPath: '/tmp/other' })
+      if (!unnamed.ok) throw new Error('create failed')
+      expect(unnamed.session.nameSource).toBe('placeholder')
+
+      expect(dbA.getChatSession(named.session.id)?.nameSource).toBe('manual')
+      expect(dbA.getChatSession(unnamed.session.id)?.nameSource).toBe(
+        'placeholder'
+      )
+      dbA.close()
+
+      // "Restart": fresh db handle, registry, and manager on the same file.
+      const dbB = initDatabase({ path: dbPath })
+      const harnessB = createHarness(dbB)
+      const restoredNamed = harnessB.registry.get(named.session.id)
+      const restoredUnnamed = harnessB.registry.get(unnamed.session.id)
+      expect(restoredNamed?.name).toBe('show-chat-rate-limits')
+      expect(restoredNamed?.nameSource).toBe('manual')
+      expect(restoredUnnamed?.nameSource).toBe('placeholder')
+      expect(dbB.getChatSession(named.session.id)?.nameSource).toBe('manual')
+      dbB.close()
+    })
   })
 
   describe('transcript history and resume', () => {

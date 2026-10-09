@@ -19,7 +19,12 @@ import type {
   ChatPendingRequest,
   ChatQuestionAnswer,
 } from '../../shared/chat'
-import type { ServerMessage, Session, SessionStatus } from '../../shared/types'
+import type {
+  ChatNameSource,
+  ServerMessage,
+  Session,
+  SessionStatus,
+} from '../../shared/types'
 import type { ChatSessionRecord, SessionDatabase } from '../db'
 import { generateSessionName } from '../nameGenerator'
 import { isExistingDirectory, resolveProjectDirectory } from '../paths'
@@ -246,7 +251,8 @@ export class ChatSessionManager {
       return { ok: false, error: chatAuthErrorMessage() }
     }
     const sessionId = `chat-${crypto.randomUUID()}`
-    const name = input.name?.trim() || generateSessionName()
+    const suppliedName = input.name?.trim()
+    const name = suppliedName || generateSessionName()
     const now = new Date().toISOString()
     const record = {
       sessionId,
@@ -256,6 +262,9 @@ export class ChatSessionManager {
       claudeProfileId: input.claudeProfileId ?? 'default',
       // Every session starts manual; there is no per-profile default.
       approvalPolicy: 'manual' as ChatApprovalPolicy,
+      // chat-session-naming design D1: a name the user typed sticks forever,
+      // one the generator produced is a placeholder a later title may replace.
+      nameSource: (suppliedName ? 'manual' : 'placeholder') as ChatNameSource,
       status: 'waiting' as SessionStatus,
       createdAt: now,
       lastActivityAt: now,
@@ -851,6 +860,9 @@ export class ChatSessionManager {
       kind: 'chat',
       claudeProfileId: record.claudeProfileId ?? 'default',
       approvalPolicy: record.approvalPolicy ?? 'manual',
+      // Absent provenance is treated as manual: a name we cannot attribute is
+      // never handed over to a generated title (chat-session-naming design D6).
+      nameSource: record.nameSource ?? 'manual',
       projectPath: record.projectPath,
       status: record.status,
       lastActivity: record.lastActivityAt,

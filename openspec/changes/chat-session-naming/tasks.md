@@ -2,9 +2,9 @@
 
 ## 1. Name provenance data model
 
-- [ ] 1.1 Add a `nameSource` field (`manual` | `auto` | `placeholder`) to `ChatSessionRecord` and to `Session` in `src/server/db.ts` and `src/shared/types.ts`, and verify `bun run typecheck` passes with the field threaded through `toSession`
-- [ ] 1.2 Add the `name_source` column to `chat_sessions` in `src/server/db.ts`, stamping each pre-existing row per design D6 — `placeholder` only when the name is a generator-shaped `adjective-noun` pair, `manual` otherwise — and verify unit tests cover both sides: `sure-mark` becomes `placeholder`, `show-chat-rate-limits` stays `manual`
-- [ ] 1.3 Persist and restore `nameSource` through `insertChatSession` / `updateChatSession`, and verify a round-trip test covers create, update, and `restorePersisted`
+- [x] 1.1 Add a `nameSource` field (`manual` | `auto` | `placeholder`) to `ChatSessionRecord` and to `Session` in `src/server/db.ts` and `src/shared/types.ts`, and verify `bun run typecheck` passes with the field threaded through `toSession`
+- [x] 1.2 Add the `name_source` column to `chat_sessions` in `src/server/db.ts`, stamping each pre-existing row per design D6 — `placeholder` only when the name is a generator-shaped `adjective-noun` pair, `manual` otherwise — and verify unit tests cover both sides: `sure-mark` becomes `placeholder`, `show-chat-rate-limits` stays `manual`
+- [x] 1.3 Persist and restore `nameSource` through `insertChatSession` / `updateChatSession`, and verify a round-trip test covers create, update, and `restorePersisted`
 
 ## 2. Chat session rename
 
