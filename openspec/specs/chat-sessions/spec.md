@@ -475,3 +475,281 @@ than 0.8 of it. The setting SHALL persist across reloads.
 #### Scenario: Composer does not trigger mobile zoom
 - **WHEN** the chat font size is below 16px and the user focuses the composer on a touch device
 - **THEN** the composer text is at least 16px, so the browser does not zoom the page
+
+### Requirement: Collapsed tool calls show a short input detail
+The chat view SHALL label each collapsed tool-call entry with the tool name
+followed by a one-line detail in parentheses, derived from the tool's input.
+Only an unknown tool, or a known tool whose detail is unusable, SHALL show the
+tool name alone. Long details SHALL be truncated visually, with the full
+detail on hover. Expanding the entry SHALL still show the full input.
+
+#### Scenario: File tool shows its path
+- **WHEN** the transcript contains a `Read` or `NotebookEdit` call whose input has a path field
+- **THEN** the collapsed entry reads `Tool: <name> (<path>)`
+
+#### Scenario: Bash shows its description and command
+- **WHEN** a `Bash` call has a non-blank `description` and a non-blank `command`
+- **THEN** the detail is `<description> — <command>`
+
+#### Scenario: Bash falls back to its command
+- **WHEN** a `Bash` call's `description` is missing, blank or not a string, and its `command` is a non-blank string
+- **THEN** the detail is the command
+
+#### Scenario: Bash falls back to its description
+- **WHEN** a `Bash` call's `command` is missing, blank or not a string, and its `description` is a non-blank string
+- **THEN** the detail is the description
+
+#### Scenario: Other known tools show their key field
+- **WHEN** a call is to `Glob` or `Grep` (pattern), `WebFetch` (url), `WebSearch` or `ToolSearch` (query), `Agent`, `Task` or `Monitor` (description), `Skill` (skill), `TaskCreate` (subject), `TaskStop` or `TaskOutput` (task_id), or `ExitPlanMode` (planFilePath)
+- **THEN** the detail is that field's value
+
+#### Scenario: EnterWorktree shows its path or name
+- **WHEN** an `EnterWorktree` call has a non-blank `path`, or only a non-blank `name`
+- **THEN** the detail is the path, or the name when no path is usable
+
+#### Scenario: TaskUpdate shows the task id and status
+- **WHEN** a `TaskUpdate` call has a `taskId` and a `status`
+- **THEN** the detail is `Task <taskId> → <status>`
+
+#### Scenario: AskUserQuestion shows the question header
+- **WHEN** an `AskUserQuestion` call's first question has a non-blank `header`
+- **THEN** the detail is the header, suffixed with ` · <n> questions` when the call has more than one question
+
+#### Scenario: Unknown tool keeps the plain label
+- **WHEN** a call is to a tool with no known mapping, such as an MCP tool
+- **THEN** the collapsed entry reads `Tool: <name>` with no parentheses
+
+#### Scenario: No usable field keeps the plain label
+- **WHEN** every part of a known tool's detail is missing, blank or not a string (for `Bash`, both `description` and `command`)
+- **THEN** the collapsed entry reads `Tool: <name>` with no parentheses
+
+#### Scenario: Multi-line value stays on one line
+- **WHEN** a detail value contains line breaks, such as a multi-line Bash command
+- **THEN** the collapsed label shows it on a single line, truncated with an ellipsis when too long, and hovering shows the full value
+
+### Requirement: Tool-call paths are shown relative to the project
+When a tool-call detail is a file path, the chat view SHALL show it relative
+to the chat session's project directory if the path is inside that
+directory, and SHALL show it unchanged otherwise. Trailing slashes on either
+the path or the project directory SHALL NOT affect the result. Paths that
+only share a name prefix with the project directory SHALL count as outside.
+
+#### Scenario: Path inside the project
+- **WHEN** the project directory is `/repo` and a `Read` call has `file_path` `/repo/src/index.ts`
+- **THEN** the label reads `Tool: Read (src/index.ts)`
+
+#### Scenario: Path outside the project
+- **WHEN** the project directory is `/repo` and a `Read` call has `file_path` `/etc/hosts`
+- **THEN** the label reads `Tool: Read (/etc/hosts)`
+
+#### Scenario: Sibling directory with a shared prefix
+- **WHEN** the project directory is `/repo` and a `Read` call has `file_path` `/repo-other/a.ts`
+- **THEN** the label reads `Tool: Read (/repo-other/a.ts)`
+
+#### Scenario: Path equal to the project directory
+- **WHEN** the project directory is `/repo` or `/repo/` and a path detail is `/repo` or `/repo/`
+- **THEN** the label shows `.` in all four combinations
+
+### Requirement: Edit and Write show a line delta
+When a collapsed `Edit` or `Write` tool-call entry has a detail, the chat view
+SHALL append the changed line counts as `+<added> −<removed>`, counted over
+the input text. A zero side SHALL be omitted, and when both sides are zero the
+delta SHALL be omitted entirely.
+
+#### Scenario: Edit shows added and removed lines
+- **WHEN** an `Edit` call replaces three lines of `old_string` with five lines of `new_string`
+- **THEN** the label reads `Tool: Edit (<path> +5 −3)`
+
+#### Scenario: Write shows added lines only
+- **WHEN** a `Write` call has `content` of forty-five lines
+- **THEN** the label reads `Tool: Write (<path> +45)`
+
+#### Scenario: A trailing newline does not add a line
+- **WHEN** a counted value is `"a\nb\nc"` or `"a\nb\nc\n"`
+- **THEN** both count three lines, and the empty string counts zero
+
+#### Scenario: A zero side is omitted
+- **WHEN** an `Edit` call's `new_string` is empty, or its `old_string` is empty
+- **THEN** the delta shows only the non-zero side, for example `−3` or `+5`
+
+#### Scenario: No delta when nothing changes
+- **WHEN** both sides of the delta count zero lines
+- **THEN** the label shows the path alone, with no delta
+
+### Requirement: Collapsed tool results show a one-line hint
+The chat view SHALL label each collapsed tool-result entry with the first
+non-blank line of its output, in parentheses, on one line. The hint SHALL be
+truncated visually, with the full line on hover. An output with no non-blank
+line SHALL keep the plain `Tool result` or `Tool failed` label. Expanding the
+entry SHALL still show the full output.
+
+#### Scenario: Result hint is the first non-blank line
+- **WHEN** a tool result's output starts with blank lines and then reads `Task #1 created successfully: Run 6.3`
+- **THEN** the collapsed entry reads `Tool result (Task #1 created successfully: Run 6.3)`
+
+#### Scenario: Error result shows the first error line
+- **WHEN** a tool result is an error whose first line is `Command failed: bun test`
+- **THEN** the collapsed entry reads `Tool failed (Command failed: bun test)`
+
+#### Scenario: Empty output keeps the plain label
+- **WHEN** a tool result's output has no non-blank line
+- **THEN** the collapsed entry reads `Tool result` or `Tool failed` with no parentheses
+
+#### Scenario: Long hint stays on one line
+- **WHEN** the first non-blank line is longer than the available width
+- **THEN** the hint is truncated with an ellipsis, and hovering shows the full line
+
+### Requirement: Chat transcript shows the in-flight turn's activity
+While a chat turn is in flight, the chat view SHALL show one activity row as the last entry of the transcript, naming what the agent is doing and how long it has been in that phase. The phases are: waiting for the model, thinking, preparing a tool's input, running a tool, and retrying an API request. The elapsed time SHALL count up live without new server messages.
+
+#### Scenario: Waiting for the first token
+- **WHEN** the user sends a message and the model has not yet produced any content
+- **THEN** the transcript ends with a row reading "Waiting for model…" and an elapsed time that increases each second
+
+#### Scenario: Model is thinking
+- **WHEN** the model starts a thinking block
+- **THEN** the activity row reads "Thinking…" and its elapsed time restarts from zero
+
+#### Scenario: Tool input is being written
+- **WHEN** the model starts a tool-use block whose input is still streaming
+- **THEN** the activity row names that tool as being prepared, for example "Writing Edit input…"
+
+#### Scenario: A tool is running
+- **WHEN** a tool call has been shown and its result has not yet arrived
+- **THEN** the activity row reads "Running <tool>…" with the time since that phase began
+
+#### Scenario: Several tools are running
+- **WHEN** more than one tool call of the turn is awaiting its result
+- **THEN** the activity row reads "Running <n> tools…"
+
+#### Scenario: API request is retried
+- **WHEN** Claude Code reports an API retry with an attempt number, a maximum, and an error status
+- **THEN** the activity row reads "Retrying (<attempt>/<max>, <status>)…"
+
+#### Scenario: Turn ends
+- **WHEN** the turn completes, is interrupted, or the agent process dies
+- **THEN** no activity row is shown
+
+### Requirement: Activity row yields to other visible progress
+The chat view SHALL hide the activity row while assistant text is streaming, while an approval or question card awaits the user, and in archived or otherwise read-only chats. The row SHALL return when the turn enters another activity phase.
+
+#### Scenario: Text is streaming
+- **WHEN** the model is streaming assistant text
+- **THEN** no activity row is shown below the streaming text
+
+#### Scenario: Approval card pending
+- **WHEN** a tool approval or agent question awaits the user
+- **THEN** no activity row is shown, and after the user answers the row resumes with the next phase
+
+#### Scenario: Archived chat
+- **WHEN** the user opens an archived chat
+- **THEN** no activity row is shown
+
+### Requirement: Activity is live-only and restored on reconnect
+Activity SHALL be ephemeral: it is not part of the conversation history, is not persisted, and does not change the session-list status. A client attaching or reconnecting during a turn SHALL receive the current activity phase and its start time so the row and elapsed time resume.
+
+#### Scenario: Reconnect while thinking
+- **WHEN** a client reconnects to a chat whose turn has been thinking for 10 seconds
+- **THEN** the transcript ends with "Thinking…" showing roughly 10 seconds elapsed
+
+#### Scenario: History has no activity rows
+- **WHEN** a chat with completed turns is reopened or replayed from history
+- **THEN** the transcript contains no activity rows
+
+#### Scenario: Session list is unaffected
+- **WHEN** a turn moves between activity phases
+- **THEN** the session list still reports the session as working and receives no additional updates for the phase changes
+
+### Requirement: The agent starts when a chat is opened
+The system SHALL start a chat session's agent process, without sending a prompt, when a client attaches to the session and no process is running for it. Attaching MUST NOT start a process for an archived chat session or for a session whose project directory no longer exists. A start that fails SHALL be reported to attached clients as a session error and SHALL NOT remove the session or its history.
+
+#### Scenario: Open a chat after a server restart
+- **WHEN** a client attaches to an unarchived chat session with no running agent process
+- **THEN** the agent process starts and resumes the stored conversation, and no message is sent to the agent
+
+#### Scenario: Open an archived chat
+- **WHEN** a client attaches to an archived chat session
+- **THEN** no agent process is started
+
+#### Scenario: Project directory is missing
+- **WHEN** a client attaches to a chat session whose project directory no longer exists
+- **THEN** no agent process is started and sending a message is refused as before
+
+#### Scenario: Several clients attach
+- **WHEN** two clients attach to the same chat session at the same time
+- **THEN** at most one agent process is started for it
+
+### Requirement: Clients receive the chat's slash commands
+The system SHALL provide each attached client with the slash commands the session's agent reports, each with its name, description, argument hint, aliases, and whether it is defined by the project or user. The list SHALL have a loading, ready, or unavailable state, be part of the reconnect snapshot, and be replaced for every attached client when the agent reports a changed list. Commands bound to a terminal and internal commands SHALL NOT be included.
+
+#### Scenario: List is ready after opening
+- **WHEN** a client attaches to a chat session and the agent finishes starting
+- **THEN** the client receives the session's command list in the ready state
+
+#### Scenario: List changes mid-session
+- **WHEN** the agent reports a changed command list
+- **THEN** every attached client replaces its list with the new one
+
+#### Scenario: Reconnect restores the list
+- **WHEN** a client reconnects to a chat session whose command list is ready
+- **THEN** the snapshot it receives includes the list
+
+#### Scenario: Agent could not start
+- **WHEN** the agent process for a chat session failed to start or is not running
+- **THEN** the command list is in the unavailable state and typed messages, including slash commands, can still be submitted
+
+#### Scenario: Terminal-only commands are hidden
+- **WHEN** the agent reports commands that are bound to a terminal or are internal
+- **THEN** those commands are not included in the list sent to clients
+
+### Requirement: The composer offers a slash-command menu
+The chat composer SHALL open a command menu when the message starts with `/`, filtering the session's commands by the typed text against names and aliases first and descriptions second. The menu SHALL be operable by keyboard and pointer. Choosing a command SHALL insert `/<name> ` into the composer without sending it and SHALL show the command's argument hint. The menu SHALL indicate when the list is loading and SHALL NOT block sending.
+
+#### Scenario: Filter and choose by keyboard
+- **WHEN** the user types `/re` and presses Enter while a matching command is highlighted
+- **THEN** the composer contains `/<chosen name> `, the argument hint is shown, and no message is sent
+
+#### Scenario: Dismiss the menu
+- **WHEN** the menu is open and the user presses Escape
+- **THEN** the menu closes and the composer text is unchanged
+
+#### Scenario: Send while the menu has no match
+- **WHEN** the typed command matches no listed command and the user presses Enter
+- **THEN** the menu does not intercept Enter and the message is sent as typed
+
+#### Scenario: List still loading
+- **WHEN** the user types `/` before the command list is ready
+- **THEN** the menu shows that commands are loading
+
+### Requirement: Local command output appears in the transcript
+The system SHALL show output produced by a local slash command in the transcript of the turn that ran it, and SHALL include it in reconnect snapshots and replayed history.
+
+#### Scenario: Run a local command
+- **WHEN** the user sends a local command such as `/context`
+- **THEN** its output appears in the transcript and the turn completes
+
+#### Scenario: Reload after a local command
+- **WHEN** a client attaches to a chat session after a local command ran in it
+- **THEN** the command and its output appear in the replayed conversation
+
+### Requirement: Replayed history shows slash commands as typed
+Replayed chat history SHALL show a slash-command turn as the command and arguments the user typed, and SHALL NOT show the markup Claude Code records around commands or the expanded prompt text of a command.
+
+#### Scenario: Reload after a project command
+- **WHEN** a client attaches to a chat session in which the user ran `/openspec-explore some idea`
+- **THEN** the replayed user turn shows `/openspec-explore some idea` and no command markup
+
+### Requirement: Clearing a chat starts a new chat and archives the old one
+Sending `/clear`, `/reset`, or `/new`, optionally followed by a name, SHALL create a new chat session in the same project directory with the same profile, named with the given name when present, select it, and then archive the previous chat session. The command SHALL NOT be sent to the agent. If the new session cannot be created, the previous chat session SHALL remain unchanged and the user SHALL receive the creation error.
+
+#### Scenario: Clear a chat
+- **WHEN** the user sends `/clear` in a chat session
+- **THEN** a new chat session with the same project directory and profile is created and selected, and the previous session is archived with its conversation intact
+
+#### Scenario: New chat with a name
+- **WHEN** the user sends `/new release notes`
+- **THEN** the new chat session is named `release notes`
+
+#### Scenario: New chat cannot be created
+- **WHEN** the user sends `/clear` and the new chat session cannot be created
+- **THEN** the previous chat session is not archived and the user sees why creation failed

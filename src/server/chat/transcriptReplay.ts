@@ -16,6 +16,33 @@ import {
 
 export type TranscriptReplayStatus = 'ok' | 'missing' | 'unparseable'
 
+/** Recorded `<command-name>` markup (both CLI generations, any tag order). */
+const COMMAND_NAME_TAG = /<command-name>\s*([^<]*?)\s*<\/command-name>/
+const COMMAND_ARGS_TAG = /<command-args>([\s\S]*?)<\/command-args>/
+const LOCAL_COMMAND_STDOUT_TAG = /<local-command-stdout>([\s\S]*?)<\/local-command-stdout>/
+
+/**
+ * A user record Claude Code writes for a typed slash command, mapped back to
+ * what the user typed: `/name` plus trimmed `<command-args>` when present.
+ * Null when the text carries no `<command-name>` markup (unknown shapes fall
+ * back to current rendering).
+ */
+function parseCommandMarkup(text: string): string | null {
+  const name = COMMAND_NAME_TAG.exec(text)?.[1]?.replace(/^\/+/, '')
+  if (!name) return null
+  const args = COMMAND_ARGS_TAG.exec(text)?.[1]?.trim() ?? ''
+  return `/${name}${args ? ` ${args}` : ''}`
+}
+
+/**
+ * Inner text of a recorded `<local-command-stdout>` block; null when the
+ * record carries no stdout markup or it is empty (nothing to replay).
+ */
+function parseLocalCommandStdout(text: string): string | null {
+  const inner = LOCAL_COMMAND_STDOUT_TAG.exec(text)?.[1]
+  return inner && inner.trim() ? inner : null
+}
+
 export interface TranscriptReplay {
   status: TranscriptReplayStatus
   /**
@@ -131,6 +158,21 @@ export function parseTranscriptContent(content: string): ParsedTranscript {
           type: 'notice',
           text: 'Context compacted',
         })
+      } else if (
+        record.subtype === 'local_command' &&
+        typeof record.content === 'string'
+      ) {
+        const output = parseLocalCommandStdout(record.content)
+        if (output !== null) {
+          events.push({
+            id: `hist-${lineUuid}`,
+            sequence: 0,
+            at,
+            type: 'command_output',
+            turnId: `hist-turn-${turnCounter}`,
+            text: output,
+          })
+        }
       }
       // Other system subtypes are informational; ignored.
       continue
@@ -138,7 +180,8 @@ export function parseTranscriptContent(content: string): ParsedTranscript {
     if (type === 'user' || type === 'assistant') {
       if (typeof contentValue === 'string') {
         if (type === 'user') {
-          if (contentValue.length > 0) {
+          const typed = parseCommandMarkup(contentValue) ?? contentValue
+          if (typed.length > 0) {
             turnCounter += 1
             events.push({
               id: `hist-${lineUuid}`,
@@ -146,7 +189,7 @@ export function parseTranscriptContent(content: string): ParsedTranscript {
               at,
               type: 'user_message',
               turnId: `hist-turn-${turnCounter}`,
-              text: contentValue,
+              text: typed,
             })
           }
         } else {
@@ -175,7 +218,8 @@ export function parseTranscriptContent(content: string): ParsedTranscript {
         const blockType = blockRecord.type
         if (blockType === 'text' && typeof blockRecord.text === 'string') {
           if (type === 'user') {
-            if (blockRecord.text.length > 0) {
+            const typed = parseCommandMarkup(blockRecord.text) ?? blockRecord.text
+            if (typed.length > 0) {
               turnCounter += 1
               events.push({
                 id: blockId,
@@ -183,7 +227,7 @@ export function parseTranscriptContent(content: string): ParsedTranscript {
                 at,
                 type: 'user_message',
                 turnId: `hist-turn-${turnCounter}`,
-                text: blockRecord.text,
+                text: typed,
               })
             }
           } else {
