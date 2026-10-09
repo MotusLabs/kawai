@@ -24,7 +24,9 @@ See proposal.md for motivation; requirements are in `specs/chat-usage-limits`.
 
 ### 1. Push first, pull as fallback
 
-Accept pushed reports whenever they arrive and treat the pull request as gap-filling, not as a poll. The pull runs once per profile per server lifetime: when a query first spawns for a profile that holds neither a report nor a recorded "no data" verdict. A pull that returns `rate_limits_available: false`, or no windows, or throws, records that verdict so later turns do not retry it — a provider that reports nothing (GLM, MiMo, …) would otherwise pay a wasted control round-trip on every turn. Any later push still overwrites the verdict.
+Accept pushed reports whenever they arrive and treat the pull request as gap-filling, not as a poll. The pull runs once per profile per server lifetime: when a query first spawns for a profile that holds neither a report nor a recorded "no data" verdict. A pull that returns `rate_limits_available: false`, or no windows, or throws, records that verdict so later turns do not retry it — a session with no usage source (API key, no account login) would otherwise pay a wasted control round-trip on every turn. Any later push still overwrites the verdict.
+
+Verified against a live server on 2026-10-08: the pull follows the CLI host login (`~/.claude/.credentials.json`), not the session's `ANTHROPIC_BASE_URL` — a GLM-gateway session's `get_usage` reply carried the logged-in claude.ai account's real windows. Account-level data on gateway-routed profiles is accepted behavior: pushed per-provider reports still overwrite per profile, a gateway push without windows keeps the pulled windows, and the no-bar contract still holds when no login exists. The spec's refresh requirement and the walkthrough task record this.
 
 `skipBehaviors: true` keeps the call off the local-transcript scan; this change only needs the plan windows.
 
@@ -64,7 +66,7 @@ Both the bar and its meters are omitted when a window is missing rather than sho
 - [Fraction vs percent ambiguity] The sources disagree on scale. → Normalization is explicit per source and covered by fixtures; out-of-range values are dropped rather than rendered wrong.
 - [Nothing before the first turn] Lazy spawn means no query, so no pull and no bar, until a turn begins. → Accepted and stated in the spec; paying a spawn at open time just for usage would contradict the deliberate lazy-spawn cost decision.
 - [Push may be sparse] `rate_limit_event` carries one window at a time unless `unifiedWindows` is present, and `SDKUsageReport` only arrives with `/usage`. → The merge rule keeps the best of both, and the pull fills the initial gap.
-- [Shared account across profiles] Two profiles using the same Anthropic account would track separately. → Only `default` uses Anthropic auth today; acceptable.
+- [Account-level pull across profiles] The pull follows the CLI host login, not the session's provider, so every profile sharing that login shows the same account data — a gateway-routed session displays an account its traffic does not consume. → Accepted (user decision, 2026-10-08): suppressing gateway profiles would hide the bar in gateway-default deployments where the pull is the only source; pushed reports still win per profile, and no login means no bar.
 - [Transport replacement] `replace-claude-sdk-with-cli` must keep forwarding `rate_limit_event` and the pull request. → Task 4.1 records it in that change's design; the parser is transport-agnostic for the same reason `chatActivity.ts` is.
 - [Snapshot/header overlap] `add-chat-slash-commands` also touches the snapshot type and chat chrome. → Follow the already-landed `chat-activity` additive pattern; whichever of this change and `add-chat-slash-commands` lands second rebases.
 

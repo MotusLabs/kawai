@@ -64,7 +64,7 @@ The latest report for a session's profile SHALL be included in the chat snapshot
 - **THEN** sessions of that profile show no usage bar until the next report
 
 ### Requirement: Usage is refreshed when no report has arrived
-When a chat session's profile holds no report and the session has begun a turn, the system SHALL obtain plan usage data on demand rather than waiting for the agent to emit one. When plan limits do not apply, or no usage data can be obtained, the system SHALL record no window data and show no usage bar. A refresh SHALL NOT replace fresher window data with older data.
+When a chat session's profile holds no report and the session has begun a turn, the system SHALL obtain plan usage data on demand rather than waiting for the agent to emit one. On-demand data reflects the account the agent process is logged in with, not the session's provider routing. When plan limits do not apply, or no usage data can be obtained, the system SHALL record no window data and show no usage bar. A refresh SHALL NOT replace fresher window data with older data.
 
 #### Scenario: Windows appear early in the first turn
 - **WHEN** a chat session's first turn has started, its profile holds no report, and plan usage data is obtainable
@@ -74,8 +74,12 @@ When a chat session's profile holds no report and the session has begun a turn, 
 - **WHEN** a chat session has been opened but no turn has begun
 - **THEN** no usage bar is shown
 
+#### Scenario: Gateway-routed profile with an account login
+- **WHEN** the session's provider routes model traffic through a non-Anthropic endpoint while the agent process is logged in with a Claude account
+- **THEN** the usage bar shows that account's plan windows
+
 #### Scenario: Session without plan limits
-- **WHEN** the session authenticates with an API key or another provider where plan limits do not apply
+- **WHEN** the session authenticates with an API key and no account login, so plan limits do not apply
 - **THEN** no usage bar is shown
 
 #### Scenario: Stale data is not downgraded
