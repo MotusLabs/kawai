@@ -5,7 +5,7 @@ import { applyChatEvents, emptyTranscript, useChatStore } from '../stores/chatSt
 const delta = (sequence: number, delta: string): Extract<ChatEvent, { type: 'assistant_delta' }> => ({
   type: 'assistant_delta', id: `event-${sequence}`, sequence, at: 'now', turnId: 'turn-1', messageId: 'message-1', delta,
 })
-afterEach(() => useChatStore.setState({ sessions: {} }))
+afterEach(() => useChatStore.setState({ sessions: {}, drafts: {} }))
 
 describe('chat store', () => {
   test('ordered deltas merge and final text replaces the preview', () => {
@@ -116,6 +116,39 @@ describe('chat store', () => {
     store.remove('chat-1')
     expect(useChatStore.getState().sessions['chat-1']).toBeUndefined()
     expect(useChatStore.getState().sessions['chat-2'].events).toHaveLength(1)
+  })
+})
+
+describe('chat store drafts', () => {
+  test('setDraft writes, overwrites, and deletes the key on empty', () => {
+    const store = useChatStore.getState()
+    store.setDraft('chat-1', 'hello')
+    expect(useChatStore.getState().drafts['chat-1']).toBe('hello')
+    store.setDraft('chat-1', 'hello there')
+    expect(useChatStore.getState().drafts['chat-1']).toBe('hello there')
+    store.setDraft('chat-1', '')
+    expect(useChatStore.getState().drafts).not.toHaveProperty('chat-1')
+    // Other sessions keep their drafts.
+    store.setDraft('chat-2', 'kept')
+    store.setDraft('chat-1', '')
+    expect(useChatStore.getState().drafts['chat-2']).toBe('kept')
+  })
+
+  test('apply and snapshot leave drafts untouched', () => {
+    const store = useChatStore.getState()
+    store.setDraft('chat-1', 'in progress')
+    store.apply('chat-1', [delta(1, 'streamed')])
+    store.snapshot({ type: 'chat-snapshot', sessionId: 'chat-1', profileId: 'default', events: [delta(2, 'restored')], pendingRequests: [], status: 'working', throughSequence: 2, activity: null, commands: { status: 'unavailable', commands: [] }, usage: null })
+    expect(useChatStore.getState().drafts['chat-1']).toBe('in progress')
+  })
+
+  test('remove discards the session draft but keeps other sessions\'', () => {
+    const store = useChatStore.getState()
+    store.setDraft('chat-1', 'mine')
+    store.setDraft('chat-2', 'theirs')
+    store.remove('chat-1')
+    expect(useChatStore.getState().drafts).not.toHaveProperty('chat-1')
+    expect(useChatStore.getState().drafts['chat-2']).toBe('theirs')
   })
 })
 

@@ -325,6 +325,74 @@ describe('chat archive view', () => {
   })
 })
 
+describe('chat composer drafts', () => {
+  afterEach(() => useChatStore.setState({ sessions: {}, drafts: {} }))
+
+  const chatB = { ...chatSession, id: 'chat-2', name: 'Chat B' } as Session
+  function renderComposerView(session: Session) {
+    const sent: ClientMessage[] = []
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => {
+      renderer = TestRenderer.create(<ChatView
+        session={session}
+        sendMessage={message => { sent.push(message) }}
+        connectionStatus="connected" connectionEpoch={0} error={null}
+        onClose={() => {}} onKill={() => {}} />)
+    })
+    return { sent, renderer }
+  }
+  // Prop-swap the shared ChatView, the way App.tsx switches selected chats.
+  const switchTo = (renderer: TestRenderer.ReactTestRenderer, session: Session) => act(() => {
+    renderer.update(<ChatView
+      session={session}
+      sendMessage={() => {}}
+      connectionStatus="connected" connectionEpoch={0} error={null}
+      onClose={() => {}} onKill={() => {}} />)
+  })
+  const composerOf = (renderer: TestRenderer.ReactTestRenderer) =>
+    renderer.root.findByProps({ 'aria-label': 'Message Claude' })
+  const type = (renderer: TestRenderer.ReactTestRenderer, value: string) =>
+    act(() => { composerOf(renderer).props.onChange({ target: { value } }) })
+
+  test('switching chats keeps each session draft separate', () => {
+    const { renderer } = renderComposerView(chatSession)
+    type(renderer, 'half-written for chat-1')
+    // The other chat's composer starts empty — chat-1's text must not leak in.
+    switchTo(renderer, chatB)
+    expect(composerOf(renderer).props.value).toBe('')
+    type(renderer, 'chat-2 note')
+    // Switching back restores chat-1's draft untouched.
+    switchTo(renderer, chatSession)
+    expect(composerOf(renderer).props.value).toBe('half-written for chat-1')
+    expect(useChatStore.getState().drafts).toEqual({
+      'chat-1': 'half-written for chat-1', 'chat-2': 'chat-2 note',
+    })
+    renderer.unmount()
+  })
+
+  test('submitting clears only the submitting session draft', () => {
+    useChatStore.setState({ drafts: { 'chat-1': 'send me', 'chat-2': 'keep me' } })
+    const { sent, renderer } = renderComposerView(chatSession)
+    expect(composerOf(renderer).props.value).toBe('send me')
+    act(() => { renderer.root.findByType('form').props.onSubmit({ preventDefault: () => {} }) })
+    expect(sent).toContainEqual({ type: 'chat-send', sessionId: 'chat-1', text: 'send me' })
+    expect(useChatStore.getState().drafts).toEqual({ 'chat-2': 'keep me' })
+    renderer.unmount()
+  })
+
+  test('an archived chat hides the composer but keeps its draft through restore', () => {
+    useChatStore.setState({ drafts: { 'chat-1': 'after restore' } })
+    const archived = { ...chatSession, archivedAt: '2026-10-01T00:00:00.000Z' } as Session
+    const { renderer } = renderComposerView(archived)
+    expect(renderer.root.findAllByType('textarea')).toHaveLength(0)
+    expect(useChatStore.getState().drafts['chat-1']).toBe('after restore')
+    // The server's unarchived Session re-renders the composer with the draft.
+    switchTo(renderer, chatSession)
+    expect(composerOf(renderer).props.value).toBe('after restore')
+    renderer.unmount()
+  })
+})
+
 describe('chat debug view', () => {
   afterEach(() => useChatDebugStore.setState({ views: {} }))
 
@@ -572,7 +640,7 @@ describe('slash-command menu', () => {
     ],
   }
 
-  afterEach(() => useChatStore.setState({ sessions: {} }))
+  afterEach(() => useChatStore.setState({ sessions: {}, drafts: {} }))
 
   function renderComposer(commands: ChatCommandState, session: Session = chatSession) {
     useChatStore.getState().setCommands({ type: 'chat-commands', sessionId: session.id, state: commands })
@@ -628,6 +696,7 @@ describe('slash-command menu', () => {
     h.key('ArrowUp')   // compact -> context
     h.key('Enter')
     expect(h.renderer.root.findByType('textarea').props.value).toBe('/context ')
+    expect(useChatStore.getState().drafts['chat-1']).toBe('/context ')
     // The argument hint shows for a command that has one…
     h.type('/clear ')
     expect(h.renderer.root.findByProps({ 'data-testid': 'command-argument-hint' }).children)
@@ -688,7 +757,7 @@ describe('slash-command menu', () => {
 })
 
 describe('/clear, /reset, /new', () => {
-  afterEach(() => useChatStore.setState({ sessions: {} }))
+  afterEach(() => useChatStore.setState({ sessions: {}, drafts: {} }))
 
   function renderClearable(session: Session = chatSession) {
     const sent: ClientMessage[] = []
@@ -726,6 +795,7 @@ describe('/clear, /reset, /new', () => {
     expect(h.sent.filter(message => message.type === 'session-create')).toEqual([{
       type: 'session-create', projectPath: '/tmp/project', kind: 'chat', claudeProfileId: 'default',
     }])
+    expect(useChatStore.getState().drafts).not.toHaveProperty('chat-1')
     // The command itself never reaches the agent, and the composer cleared.
     expect(h.sent.filter(message => message.type === 'chat-send')).toEqual([])
     expect(h.renderer.root.findByType('textarea').props.value).toBe('')

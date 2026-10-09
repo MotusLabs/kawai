@@ -6,6 +6,7 @@
 // Plan usage is per profile, not per session (the allowance is per account
 // and provider): the snapshot's `usage` and chat-usage pushes land in one
 // shared map, so every session of a profile renders the same bar.
+// Unsubmitted composer drafts are client-only state, keyed by session.
 import { create } from 'zustand'
 import type {
   ChatActivity,
@@ -86,6 +87,8 @@ export function applyChatEvents(state: ChatTranscript, incoming: ChatEvent[]): C
 
 interface ChatStore {
   sessions: Record<string, ChatTranscript>
+  /** Empty drafts have no key; never persisted or sent to the server. */
+  drafts: Record<string, string>
   /** Latest plan-usage report per Claude profile (null = profile has none). */
   usage: Record<string, ChatUsageReport | null>
   apply: (sessionId: string, events: ChatEvent[]) => void
@@ -96,11 +99,13 @@ interface ChatStore {
   setActivity: (sessionId: string, activity: ChatActivity | null) => void
   /** Adopt a profile's latest usage report (chat-usage / snapshot). */
   setUsage: (profileId: string, report: ChatUsageReport | null) => void
+  setDraft: (sessionId: string, text: string) => void
   remove: (sessionId: string) => void
 }
 
 export const useChatStore = create<ChatStore>((set) => ({
   sessions: {},
+  drafts: {},
   usage: {},
   apply: (sessionId, events) => set(state => ({ sessions: {
     ...state.sessions, [sessionId]: applyChatEvents(state.sessions[sessionId] ?? emptyTranscript(), events),
@@ -137,10 +142,18 @@ export const useChatStore = create<ChatStore>((set) => ({
   setUsage: (profileId, report) => set(state => ({
     usage: { ...state.usage, [profileId]: report },
   })),
+  setDraft: (sessionId, text) => set(state => {
+    const drafts = { ...state.drafts }
+    if (text === '') delete drafts[sessionId]
+    else drafts[sessionId] = text
+    return { drafts }
+  }),
   remove: sessionId => set(state => {
     const sessions = { ...state.sessions }
     delete sessions[sessionId]
     // Profile usage outlives one session: a sibling may still show the bar.
-    return { sessions }
+    const drafts = { ...state.drafts }
+    delete drafts[sessionId]
+    return { sessions, drafts }
   }),
 }))

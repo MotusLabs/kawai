@@ -125,7 +125,7 @@ jobs:
       # port so the fixture's seeded session never appears in the main suite's
       # session lists. workers=1: the fixture scripts one conversation state.
       - name: Run chat fixture e2e tests
-        run: NODE_ENV=development AGENTBOARD_CHAT_FIXTURE=1 E2E_PORT=4174 bunx playwright test tests/e2e/chat.spec.ts tests/e2e/chat-profiles.spec.ts tests/e2e/chat-font-size.spec.ts --workers=1
+        run: NODE_ENV=development AGENTBOARD_CHAT_FIXTURE=1 E2E_PORT=4174 bunx playwright test tests/e2e/chat.spec.ts tests/e2e/chat-profiles.spec.ts tests/e2e/chat-font-size.spec.ts tests/e2e/chat-drafts.spec.ts --workers=1
 
       - name: Upload test results
         if: failure()

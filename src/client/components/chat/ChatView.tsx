@@ -9,6 +9,8 @@
 // Archived chats render read-only: the transcript and debug view stay, the
 // composer/Stop/request actions are replaced by a Restore bar, and archiving
 // a live turn asks for confirmation first (the server interrupts it).
+// Unsubmitted composer text is kept per session across switches and archive/restore.
+// Submitting clears that session draft; killing discards it; reload drops all drafts.
 // The composer opens a slash-command menu while the text is a bare "/command"
 // (design D5): choosing inserts `/<name> ` without sending, Enter falls
 // through when nothing matches, and /clear /reset /new compose a new chat.
@@ -50,7 +52,9 @@ export default function ChatView({ session, sendMessage, subscribe, connectionSt
   // Plan usage is per profile (usage bar design D4): every session of the
   // profile renders the same shared report.
   const usage = useChatStore(state => state.usage[profileId]) ?? null
-  const [text, setText] = useState('')
+  const text = useChatStore(state => state.drafts[session.id] ?? '')
+  const setDraft = useChatStore(state => state.setDraft)
+  const setText = (value: string) => setDraft(session.id, value)
   const end = useRef<HTMLDivElement>(null)
   const connected = connectionStatus === 'connected'
   const archived = session.archivedAt != null
@@ -83,7 +87,6 @@ export default function ChatView({ session, sendMessage, subscribe, connectionSt
       policy: autoApprove ? 'manual' : 'auto',
     })
   }
-  useEffect(() => { setText('') }, [session.id])
   // `/clear` composition (design D6): remember which session awaits archival;
   // the matching session-created (a new chat in this project) archives it,
   // an error reply leaves it untouched. Never sent to the agent.
