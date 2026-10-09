@@ -3,7 +3,7 @@ import { defineConfig } from '@playwright/test'
 
 export default defineConfig({
   testDir: 'tests/e2e',
-  testMatch: 'chat-real.spec.ts',
+  testMatch: ['chat-real.spec.ts', 'chat-naming-real.spec.ts'],
   workers: 1,
   timeout: 240_000,
   expect: { timeout: 60_000 },

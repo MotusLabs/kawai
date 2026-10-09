@@ -28,8 +28,8 @@
 
 ## 5. Integration verification
 
-- [ ] 5.1 Run `bun run lint && bun run typecheck && bun run test` and verify all three pass
-- [ ] 5.2 Start the app and verify end to end that a chat created without a name starts on a placeholder, adopts Claude's generated title while unclaimed, keeps a manual rename against later titles, and shows the name in the navigator without opening the chat
+- [x] 5.1 Run `bun run lint && bun run typecheck && bun run test` and verify all three pass
+- [x] 5.2 Start the app and verify end to end that a chat created without a name starts on a placeholder, adopts Claude's generated title while unclaimed, keeps a manual rename against later titles, and shows the name in the navigator without opening the chat
 
 ## Workflow follow-up
 
