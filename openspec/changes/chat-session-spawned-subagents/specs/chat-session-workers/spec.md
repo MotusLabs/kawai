@@ -29,7 +29,7 @@ A tracked worker SHALL have a status of running, completed, failed, or stopped, 
 - **THEN** its status becomes failed or stopped respectively
 
 ### Requirement: Worker inner traffic stays out of the parent transcript
-A worker's own tool calls, tool results, and assistant text SHALL NOT be emitted as top-level conversation events. Only the parent's Agent tool call and the worker's settled outcome appear in the transcript; the worker's body is reached by expanding its row.
+A worker's own tool calls, tool results, and assistant text SHALL NOT be emitted as top-level conversation events, except for the `Agent` and `Task` calls that spawn that worker's own children, which are emitted so those children have a row. The worker's body is reached by expanding its row.
 
 #### Scenario: Worker runs a tool
 - **WHEN** a running worker invokes a tool such as Bash or Read
@@ -39,8 +39,12 @@ A worker's own tool calls, tool results, and assistant text SHALL NOT be emitted
 - **WHEN** a running worker produces assistant text
 - **THEN** no assistant-message entry for it appears in the parent transcript
 
+#### Scenario: Worker spawns its own worker
+- **WHEN** a running worker makes an Agent tool call that starts a nested worker
+- **THEN** that Agent tool call appears as a top-level transcript entry, and the nested worker's other tool calls and text do not
+
 ### Requirement: The Agent tool call renders as a worker summary row
-In the chat view, a tool call that spawned a worker SHALL render as a worker summary row naming the agent type, description, current status, elapsed time since the call, and the most recent tool the worker ran, rather than as a collapsed tool card. Spawns below the top level SHALL be marked with their nesting depth.
+In the chat view, a tool call that spawned a worker SHALL render as a worker summary row naming the agent type, description, current status, elapsed time since the call, and the most recent tool the worker ran, rather than as a collapsed tool card. Rows for workers of every depth SHALL sit as siblings in the parent transcript, and spawns below the top level SHALL be marked with their nesting depth.
 
 #### Scenario: Running worker row
 - **WHEN** a worker spawned by the parent is running and has just invoked Bash
@@ -48,7 +52,7 @@ In the chat view, a tool call that spawned a worker SHALL render as a worker sum
 
 #### Scenario: Nested worker is marked
 - **WHEN** a worker was spawned from inside another worker
-- **THEN** its row carries a depth marker showing it is below the top level
+- **THEN** its row sits alongside the top-level rows in the parent transcript and carries a depth marker showing it is below the top level
 
 #### Scenario: Unknown worker tool
 - **WHEN** a worker has not yet invoked any tool
@@ -69,12 +73,16 @@ Expanding a worker summary row SHALL show that worker's conversation — its pro
 - **WHEN** a worker's on-disk transcript cannot be found or read
 - **THEN** the expanded row reports that the body is unavailable rather than showing another worker's transcript or failing the chat view
 
-### Requirement: A settled worker's outcome persists on its row
-When a worker settles, the system SHALL record on its row the settled status and the one-line summary of the worker's result. That outcome SHALL survive server restart and reconnect: the row SHALL show it without a live worker, and the session SHALL NOT report the worker as running.
+### Requirement: A worker's outcome persists on its row
+The system SHALL record a worker's identity when it spawns and its settled status and one-line result summary when it settles. Both SHALL survive server restart and reconnect: the row SHALL show the recorded outcome without a live worker, and the session SHALL NOT report the worker as running.
 
 #### Scenario: Row after restart
 - **WHEN** the server restarts after a worker completed
 - **THEN** reopening the chat shows that worker's row with the completed status and its result summary
+
+#### Scenario: Worker was running when the server died
+- **WHEN** the server restarts after a worker was still running
+- **THEN** that worker's row is still shown, with a stopped status and no result summary, and the session does not report it as running
 
 #### Scenario: Reconnect does not resurrect a worker
 - **WHEN** a client reconnects to a chat whose workers have all settled

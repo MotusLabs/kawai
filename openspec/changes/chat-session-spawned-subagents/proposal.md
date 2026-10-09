@@ -6,7 +6,7 @@ A Claude Code chat session is no longer a single conversation. The `Agent` tool 
 
 ## What Changes
 
-- Give each spawned worker an identity in the chat event stream keyed by the parent's `Agent` tool call, and stop emitting the worker's own tool calls and text as top-level transcript entries.
+- Give each spawned worker an identity in the chat event stream keyed by its spawning `Agent` tool call, and stop emitting a worker's own tool calls and text as top-level transcript entries — except the `Agent`/`Task` calls that spawn its children, which stay so nested workers have a row.
 - Render that `Agent` tool call as a **worker summary row** — agent type, description, live status, elapsed time, last tool name, and a depth badge — instead of a collapsed tool card. Expanding the row shows the worker's own transcript, read from its on-disk JSONL while it runs and after it ends.
 - Persist a worker's outcome on the row when it settles (`completed` / `failed` / `stopped` plus the one-line summary the parent received), so the row survives server restart, reconnect, and archive.
 - Show a slim **live strip** above the transcript listing every running worker while any is in flight, so the fleet is glanceable without expanding anything.
@@ -30,5 +30,5 @@ Non-goals for this change: per-task stop affordances and `perTaskStopAffordance`
 - Server: `src/server/chat/ChatSessionDriver.ts` (consume `task_*` and `background_tasks_changed` frames currently dropped by the unknown-frame default; stop emitting subagent `tool_call`/`tool_result`), `ChatSessionManager.ts` (hold the live worker roster, include it in snapshots, persist outcomes), `ChatConnections.ts` (fan out roster updates), `transcriptReplay.ts`, `developmentFixture.ts`.
 - Shared: `src/shared/chat.ts` (worker roster types), `src/shared/types.ts` (`chat-workers` message, `chat-snapshot.workers`, worker fields on the `Agent` tool-call event). Additive except that worker inner tool calls leave the transcript.
 - Client: `src/client/components/chat/` (worker row rendering inside `ChatMessages.tsx`, a new live-strip component), `src/client/stores/chatStore.ts`, `ChatView.tsx`.
-- Storage: no schema change. Worker bodies are read from the existing `~/.claude/projects/<dir>/<sessionId>/subagents/agent-<id>.jsonl` and `agent-<id>.meta.json`; outcomes live on the existing conversation events.
+- Storage: no schema change. Worker bodies are read from the existing `~/.claude/projects/<dir>/<sessionId>/subagents/agent-<id>.jsonl` and `agent-<id>.meta.json`; worker identity and outcomes persist in a `chat-workers/` sidecar beside `agentboard.db`, mirroring `chat-wire/`.
 - The activity indicator's "Running Task…" row is unchanged and continues to ignore subagent frames.

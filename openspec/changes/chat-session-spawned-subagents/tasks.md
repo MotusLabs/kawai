@@ -8,13 +8,14 @@
 
 ## 2. Driver consumes task frames and excludes worker inner traffic
 
-- [ ] 2.1 Narrow `isSubagentFrame` in `ChatSessionDriver.ts` to subagent content frames in `handleAssistant` / `handleUser`, and verify worker `tool_call` / `tool_result` events are no longer emitted while parent tool calls still are
-- [ ] 2.2 Feed `task_*` and `background_tasks_changed` frames into `reduceWorkers` and a new `onWorkers` option where `handleSdkMessage` currently drops them, and verify driver tests cover a spawn, a last-tool update, and a settle
-- [ ] 2.3 Settle still-running workers as `stopped` on driver death, interrupt, archive, and kill, and verify tests cover each of those four exits
+- [ ] 2.1 Narrow `isSubagentFrame` in `ChatSessionDriver.ts` to subagent content frames in `handleAssistant` / `handleUser`, keeping a worker's `Agent`/`Task` tool_use and its tool_result so nested spawns have a row anchor, and verify worker Bash/Read calls are no longer emitted while parent tool calls and nested Agent calls still are
+- [ ] 2.2 Feed the `task_*` edge frames into `reduceWorkers` and a new `onWorkers` option where `handleSdkMessage` currently drops them, and verify driver tests cover a spawn, a last-tool update, and a settle
+- [ ] 2.3 Prune the running background subset from `background_tasks_changed.tasks` by `task_id` without creating rows or touching foreground workers, and verify a test leaves a running foreground worker in place when the level set omits it
+- [ ] 2.4 Settle still-running workers as `stopped` on driver death, interrupt, archive, and kill, and verify tests cover each of those four exits
 
 ## 3. Outcomes, status, and delivery
 
-- [ ] 3.1 Persist settled workers to `resolveDataDir()/chat-workers/<sessionId>.json` on every settle and read them back at snapshot time, and verify a unit test round-trips a completed and a failed worker and settles an orphan whose file lists it as running
+- [ ] 3.1 Persist a worker to `resolveDataDir()/chat-workers/<sessionId>.json` when it spawns and rewrite it on every settle, and verify a unit test round-trips a completed and a failed worker, keeps a running worker's row after an abrupt stop, and recovers it as `stopped`
 - [ ] 3.2 Extend `refreshStatus` so `working` covers a running worker as well as an in-flight turn, and verify status tests cover workers-only, turn-plus-workers, and the return to `waiting` when the last worker settles
 - [ ] 3.3 Include `workers` in `chat-snapshot` and fan out `chat-workers` from `ChatConnections` beside `chat-activity`, and verify a reconnect mid-run receives the running roster and a reconnect after settle receives the persisted outcomes with nothing marked running
 
@@ -28,7 +29,7 @@
 
 ## 5. Fixture and integration verification
 
-- [ ] 5.1 Add the D9 keyword turn to `developmentFixture.ts` (Agent call, `task_started`, `task_progress`, `task_notification`, and one subagent `tool_use`), and verify the fixture's unit tests assert the subagent tool call is absent from the transcript
+- [ ] 5.1 Add the D9 keyword turn to `developmentFixture.ts` (Agent call, `task_started`, `task_progress`, `task_notification`, one nested `Agent` call with its `task_started`, and one subagent `tool_use`), and verify the fixture's unit tests assert the subagent tool call is absent from the transcript while the nested `Agent` call is present
 - [ ] 5.2 Walk the fixture in the browser via the `dev-browser` skill and verify the row, the live strip, the expanded body, and the settled outcome render and that the strip leaves when the worker settles
 - [ ] 5.3 Run `bun run lint && bun run typecheck && bun run test` and verify the full suite is green
 

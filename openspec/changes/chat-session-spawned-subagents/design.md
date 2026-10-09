@@ -60,13 +60,15 @@ export interface ChatWorker {
 
 New server message `{ type: 'chat-workers'; sessionId; workers: ChatWorker[] }` carrying the full set, and `workers: ChatWorker[]` on `chat-snapshot`. Both additive.
 
-*Why a full-set message rather than deltas:* `background_tasks_changed` is documented as a level signal — "replace your set with each payload rather than pairing edges, so a missed bookend cannot wedge a stale running indicator". The roster is a level signal for the same reason. The client replaces its running set wholesale and merges in the settled rows it already holds.
+*Why a full-set message rather than deltas:* `background_tasks_changed` is documented as a level signal — "replace your set with each payload rather than pairing edges, so a missed bookend cannot wedge a stale running indicator". The roster is a level signal for the same reason. The client replaces its running set wholesale and merges in the settled rows it already holds. The **server's** roster is still built from the edge stream (D3); the level message below only prunes it.
 
 *Alternative:* make workers sequenced `ChatEvent`s. Rejected: last-tool and elapsed churn on every task frame would flood the event log, be replayed as history, and need dedup on reconnect — exactly the problems the activity channel already solved.
 
 ### D3. Pure reducer `src/server/chat/chatWorkers.ts`
 
-`reduceWorkers(state, input) → state`, SDK-free, frames matched structurally. Inputs: `task_started`, `task_progress`, `task_updated`, `task_notification`, `background_tasks_changed`, `tool_call` (Agent only), `process_end`. The driver feeds it where it already handles messages and calls a new `onWorkers(workers)` option when the projection changes.
+`reduceWorkers(state, input) → state`, SDK-free, frames matched structurally. The driver feeds it where it already handles messages and calls a new `onWorkers(workers)` option when the projection changes.
+
+**The roster is built from the edge stream only** — `tool_call`, `task_started`, `task_progress`, `task_updated`, `task_notification`. That stream covers foreground and background workers alike and carries `tool_use_id`, the key that joins a worker to its row.
 
 | Input | Result |
 |---|---|
@@ -75,14 +77,20 @@ New server message `{ type: 'chat-workers'; sessionId; workers: ChatWorker[] }` 
 | `task_progress` | update `lastTool` (and `description` if the frame renames it) |
 | `task_updated` `patch.status` | map onto `ChatWorkerStatus` |
 | `task_notification` | settle with its status and `summary` |
-| `background_tasks_changed` | replace the running set from its `background_tasks` |
+| `background_tasks_changed` | prune the running **background** subset only (see below) |
 | `process_end` (driver death, interrupt, archive, kill) | settle any still-running worker as `stopped` |
+
+**`background_tasks_changed` is not a roster source.** Its payload is `tasks: { task_id, task_type, description, ambient? }[]` — no `tool_use_id`, so it cannot join to a row — and it lists *background* tasks only. Its own documentation says the payload "carries ids only, so do not correlate it with the edge stream" and that it is emitted whenever a foreground agent is backgrounded. So it is used as a liveness set: any roster entry that is running, has a `taskId`, is known to be backgrounded, and is absent from `tasks` is settled as `stopped` (a missed `task_notification` cannot wedge a running indicator). It never creates a row, never rewrites identity, and never touches foreground workers — replacing the roster with it would drop every foreground spawn.
+
+A `task_started` with no `tool_use_id` cannot be joined to a row; it is tracked only for the background liveness set and renders nowhere.
 
 Unknown `task_type`s and `ambient: true` / `skip_transcript: true` tasks are dropped — they are housekeeping, not activity the user asked for.
 
-### D4. Subagent frames are excluded by frame kind, not by a blanket `parent_tool_use_id` test
+### D4. Subagent frames are excluded by frame kind, not by a blanket `parent_tool_use_id` test — with a carve-out for nested spawns
 
 The existing `isSubagentFrame` helper keys on `parent_tool_use_id != null`. That field means different things per frame type: on `assistant`/`user` frames it means "from a subagent", but on `tool_progress` it means "heartbeat for tool X" — every such frame in the captured wire logs is a parent Bash heartbeat. Narrow the exclusion to `handleAssistant` and `handleUser` only, and name it for what it tests (subagent *content* frames). `handlePartial` / `handleSystem` keep ignoring those frames for activity as they do now.
+
+**Nested spawns need their `Agent` call kept.** A worker's own `Agent`/`Task` tool_use arrives as a subagent content frame (`forwardSubagentText: false` still forwards tool_use/tool_result blocks). Dropping it would leave a depth-2 worker with no row anchor, which D1 and the summary-row requirement both depend on. So the exclusion drops a worker's traffic **except** `Agent`/`Task` tool_use blocks and their tool_results, which are emitted as top-level events exactly like the parent's and become that nested worker's row. Everything else a worker runs stays out of the parent transcript.
 
 ### D5. The worker body is read from disk on expand
 
@@ -94,11 +102,13 @@ Reading while the worker runs is safe because Claude Code appends whole records:
 
 *Alternative:* `getSubagentMessages` from the SDK. Rejected: it ties the reader to the SDK import that `replace-claude-sdk-with-cli` is removing, and the JSONL shape is stable and already parsed by `transcriptReplay`'s sibling helpers.
 
-### D6. Settled outcomes persist in a `chat-workers/` sidecar
+### D6. Every worker persists at spawn; running entries are recovered as `stopped`
 
-A worker's settled status and summary are not recoverable after a restart: `task_notification` is a stream frame, and the parent's `tool_result` for a background spawn is only a launch receipt. Persist one JSON file per chat session at `resolveDataDir()/chat-workers/<sessionId>.json`, mirroring `chat-wire/`. Written on every settle, read at snapshot time to restore settled rows and to settle orphans whose process died mid-run.
+A worker's settled status and summary are not recoverable after a restart: `task_notification` is a stream frame, and the parent's `tool_result` for a background spawn is only a launch receipt. Persist one JSON file per chat session at `resolveDataDir()/chat-workers/<sessionId>.json`, mirroring `chat-wire/`, holding one record per worker: `workerId`, `taskId`, `agentType`, `description`, `depth`, `status`, `summary`.
 
-*Alternative:* a `chat_sessions` JSON column. Rejected: a migration for a value that is a per-session append-only list, and `chat-wire/` already set the sidecar precedent. *Alternative:* derive status from the subagent JSONL. Rejected: `failed` vs `stopped` and the one-line summary are not derivable from the file.
+**Write on spawn, rewrite on every settle.** Persisting only settled workers would lose a worker that was still running when the server died: `process_end` never fires on a crash, so nothing would record it and its row would fall back to a plain tool card with no outcome. With the record written at spawn, a restart finds it still marked `running` and recovers it as `stopped` — the row stays visible and truthful, and the session cannot report it as running.
+
+*Alternative:* a `chat_sessions` JSON column. Rejected: a migration for a value that is a per-session append-only list, and `chat-wire/` already set the sidecar precedent. *Alternative:* derive status from the subagent JSONL. Rejected: `failed` vs `stopped` and the one-line summary are not derivable from the file. *Alternative:* settle running workers only in `process_end`. Rejected: that is exactly the crash gap.
 
 ### D7. Status extension lives in `refreshStatus`
 
@@ -116,6 +126,6 @@ A `ChatWorkersStrip.tsx` above the transcript lists `workers.filter(w => w.statu
 
 - [`task_*` and `parent_tool_use_id` are Claude Code stream-JSON details, not stable SDK API] → The reducer ignores unknown fields and task types; a missing frame degrades a row to coarser state (no last-tool, no summary), never to an error. Tests pin frame shapes copied from real wire captures and from `sdk.d.ts`.
 - [Reading a JSONL while Claude Code appends to it] → Parse complete lines only; drop a trailing partial line. If the file is missing entirely, the expanded row says the body is unavailable.
-- [A process death settles running workers only in memory] → `process_end` settles them as `stopped` and the sidecar records it, so a later snapshot cannot resurrect them.
-- [`background_tasks_changed` is not emitted at startup] → The roster resets to empty whenever the CLI process (re)starts and is repopulated by the next membership change or by `task_started`; the sidecar carries only settled rows across restarts.
+- [A crash bypasses `process_end`, so running workers would otherwise be lost] → Every worker is persisted at spawn (D6). A restart reads entries still marked `running` and recovers them as `stopped`, so the row survives and the session cannot report a dead worker as running.
+- [`background_tasks_changed` is not emitted at startup and carries no `tool_use_id`] → It is never a roster source (D3); it only prunes the running background subset by `task_id`. Rows and identity come from the edge stream, and the sidecar restores them across restarts.
 - [The row shows less than the raw `tool_call` did (the tool input JSON)] → Expanding shows the worker's whole transcript, which is the input's purpose. The raw input remains in the Debug panel's wire log.
