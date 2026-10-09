@@ -446,6 +446,7 @@ describe('session comparator (design D6)', () => {
       kind: 'terminal',
       claudeProfileId: 'default',
       approvalPolicy: 'manual',
+      nameSource: 'manual',
       archivedAt: null,
     }
     // Compile-time exhaustiveness comes from the mapped type (a new Session

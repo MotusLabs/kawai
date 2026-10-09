@@ -63,6 +63,21 @@ export function generateSessionName(): string {
   return `${pick(ADJECTIVES)}-${pick(NOUNS)}`
 }
 
+const ADJECTIVE_SET = new Set(ADJECTIVES)
+const NOUN_SET = new Set(NOUNS)
+
+/**
+ * True only for a name the placeholder generator could have emitted: exactly
+ * `adjective-noun`, both words from its closed lists (chat-session-naming
+ * design D6). Everything else — a user-typed name, a two-hyphen suffixed
+ * fallback — is not attributable to the generator.
+ */
+export function isGeneratedSessionName(name: string): boolean {
+  const match = /^([a-z]+)-([a-z]+)$/.exec(name)
+  if (!match) return false
+  return ADJECTIVE_SET.has(match[1]!) && NOUN_SET.has(match[2]!)
+}
+
 const MAX_RETRIES = 100
 
 export function generateUniqueSessionName(

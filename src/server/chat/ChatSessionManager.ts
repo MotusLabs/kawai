@@ -20,7 +20,7 @@ import type {
   ChatQuestionAnswer,
   ChatUsageReport,
 } from '../../shared/chat'
-import type { ServerMessage, Session, SessionStatus } from '../../shared/types'
+import type { ServerMessage, Session, SessionNameSource, SessionStatus } from '../../shared/types'
 import type { ChatSessionRecord, SessionDatabase } from '../db'
 import { generateSessionName } from '../nameGenerator'
 import { isExistingDirectory, resolveProjectDirectory } from '../paths'
@@ -265,7 +265,8 @@ export class ChatSessionManager {
       return { ok: false, error: chatAuthErrorMessage() }
     }
     const sessionId = `chat-${crypto.randomUUID()}`
-    const name = input.name?.trim() || generateSessionName()
+    const trimmedInputName = input.name?.trim()
+    const name = trimmedInputName || generateSessionName()
     const now = new Date().toISOString()
     const record = {
       sessionId,
@@ -275,6 +276,9 @@ export class ChatSessionManager {
       claudeProfileId: input.claudeProfileId ?? 'default',
       // Every session starts manual; there is no per-profile default.
       approvalPolicy: 'manual' as ChatApprovalPolicy,
+      // A user-supplied name is manual forever; the generated fallback is a
+      // placeholder a later generated title may replace (design D1).
+      nameSource: (trimmedInputName ? 'manual' : 'placeholder') as SessionNameSource,
       status: 'waiting' as SessionStatus,
       createdAt: now,
       lastActivityAt: now,
@@ -388,6 +392,26 @@ export class ChatSessionManager {
     }
     // An idle session (no driver yet) has nothing to interrupt.
     this.drivers.get(sessionId)?.interrupt()
+    return { ok: true }
+  }
+
+  /**
+   * Rename: set the name with manual provenance (design D1 — any rename makes
+   * the name user-set, forever after immune to generated titles). Free text:
+   * any non-empty-after-trim value is accepted (design D5). Propagates through
+   * applyPatch to the db row, the registry, and the session-update broadcast;
+   * the conversation and status are untouched. Archived chats keep the action
+   * (read-only covers the conversation, not the label).
+   */
+  rename(sessionId: string, newName: string): ChatActionResult {
+    const trimmed = newName.trim()
+    if (!trimmed) {
+      return { ok: false, error: 'Name cannot be empty' }
+    }
+    if (!this.records.has(sessionId)) {
+      return { ok: false, error: `Unknown chat session ${sessionId}` }
+    }
+    this.applyPatch(sessionId, { name: trimmed, nameSource: 'manual' })
     return { ok: true }
   }
 
@@ -871,6 +895,9 @@ export class ChatSessionManager {
     this.options.registry.updateSession(sessionId, {
       ...(patch.status !== undefined ? { status: patch.status } : {}),
       ...(patch.name !== undefined ? { name: patch.name } : {}),
+      ...(patch.nameSource !== undefined
+        ? { nameSource: patch.nameSource }
+        : {}),
       ...(patch.lastActivityAt !== undefined
         ? { lastActivity: patch.lastActivityAt }
         : {}),
@@ -888,6 +915,7 @@ export class ChatSessionManager {
       kind: 'chat',
       claudeProfileId: record.claudeProfileId ?? 'default',
       approvalPolicy: record.approvalPolicy ?? 'manual',
+      nameSource: record.nameSource ?? 'manual',
       projectPath: record.projectPath,
       status: record.status,
       lastActivity: record.lastActivityAt,

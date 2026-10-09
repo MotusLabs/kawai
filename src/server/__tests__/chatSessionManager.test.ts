@@ -1809,6 +1809,62 @@ describe('ChatSessionManager', () => {
     expect(manager.getSnapshot(id)?.pendingRequests).toEqual([])
     manager.kill(id)
   })
+
+  test('create stamps nameSource by input, restorePersisted round-trips it', async () => {
+    process.env.ANTHROPIC_API_KEY = 'test-key'
+    const named = createHarness(db).manager.createSession({ projectPath: '/tmp/proj', name: 'My spec work' })
+    expect(named.ok).toBe(true)
+    if (named.ok) {
+      expect(named.session.nameSource).toBe('manual')
+      expect(named.session.name).toBe('My spec work')
+      expect(db.getChatSession(named.session.id)?.nameSource).toBe('manual')
+    }
+    const unnamed = createHarness(db).manager.createSession({ projectPath: '/tmp/proj' })
+    expect(unnamed.ok).toBe(true)
+    if (unnamed.ok) {
+      // Generated placeholder shape plus placeholder provenance.
+      expect(unnamed.session.name).toMatch(/^[a-z]+-[a-z]+$/)
+      expect(unnamed.session.nameSource).toBe('placeholder')
+      expect(db.getChatSession(unnamed.session.id)?.nameSource).toBe('placeholder')
+      db.updateChatSession(unnamed.session.id, { nameSource: 'auto' })
+    }
+    // Restart: restorePersisted feeds the stored provenance into the registry.
+    const restored = createHarness(db)
+    if (named.ok) {
+      expect(restored.registry.get(named.session.id)?.nameSource).toBe('manual')
+    }
+    if (unnamed.ok) {
+      expect(restored.registry.get(unnamed.session.id)?.nameSource).toBe('auto')
+    }
+    restored.manager.shutdown()
+  })
+
+  test('rename sets manual provenance and reaches db, registry, and the session-update broadcast', async () => {
+    process.env.ANTHROPIC_API_KEY = 'test-key'
+    const harness = createHarness(db)
+    const created = harness.manager.createSession({ projectPath: '/tmp/proj' })
+    if (!created.ok) throw new Error(created.error)
+    const id = created.session.id
+    const updates: Session[] = []
+    harness.registry.on('session-update', (session) => updates.push(session))
+    // Free text with spaces and punctuation (design D5).
+    const result = harness.manager.rename(id, '  Claude Code Chat subscription usage metrics spec ')
+    expect(result.ok).toBe(true)
+    expect(harness.manager.rename(id, '   ').ok).toBe(false)
+    expect(harness.manager.rename('chat-unknown', 'x').ok).toBe(false)
+    expect(db.getChatSession(id)?.name).toBe('Claude Code Chat subscription usage metrics spec')
+    expect(db.getChatSession(id)?.nameSource).toBe('manual')
+    expect(harness.registry.get(id)?.name).toBe('Claude Code Chat subscription usage metrics spec')
+    expect(harness.registry.get(id)?.nameSource).toBe('manual')
+    const renameBroadcast = updates.find(
+      (session) => session.name === 'Claude Code Chat subscription usage metrics spec'
+    )
+    expect(renameBroadcast).toBeDefined()
+    expect(renameBroadcast?.nameSource).toBe('manual')
+    // The empty and unknown refusals applied nothing.
+    expect(db.getChatSession(id)?.name).toBe('Claude Code Chat subscription usage metrics spec')
+    harness.manager.shutdown()
+  })
 })
 
 describe('ChatSessionManager activity', () => {

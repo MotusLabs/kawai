@@ -89,6 +89,7 @@ async function main() {
       'hibernation.integration.test.ts',
       'integration.test.ts',
       'throttled-reconnect.integration.test.ts',
+      'chatRename.integration.test.ts',
     ])
 
     // Client tests that install top-level mock.module(...) hooks must run in a
