@@ -124,6 +124,15 @@ only share a name prefix with the project directory SHALL count as outside.
 
 ## REMOVED Requirements
 
+### Requirement: Collapsed tool calls show a short input detail
+**Reason**: Replaced by the shorter `<toolName>(<handle>)` label. The `Tool: `
+prefix and the Bash `description — command` composition were the loudest part
+of each row, and the label contract is now owned by the handle requirements.
+**Migration**: See `Collapsed tool entries show a short handle` for the label
+shape, `Tool handles come from the tool's input` for the designated fields,
+and `Bash shows its description with a command fallback` for Bash. An
+unusable handle shows the bare tool name, as before.
+
 ### Requirement: Edit and Write show a line delta
 **Reason**: The delta was evidence sitting on the orientation line, and it
 was appended at the tail where the ellipsis cuts first. It also counted

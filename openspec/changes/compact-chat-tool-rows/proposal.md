@@ -61,8 +61,8 @@ None.
 ### Modified Capabilities
 
 - `chat-sessions`: Collapsed tool activity becomes one entry per tool use
-  labelled `<toolName>(<handle>)`, failures carry a mark, and the line-delta
-  and result-hint requirements are removed.
+  labelled `<toolName>(<handle>)`, failures carry a mark, and the
+  input-detail, line-delta and result-hint requirements are removed.
 
 ## Impact
 
