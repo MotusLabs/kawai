@@ -932,12 +932,17 @@ describe('NewSessionModal project path validation', () => {
 /**
  * Focus harness. react-test-renderer hosts are not DOM nodes, so refs are
  * `createNodeMock` objects whose `focus()` maintains `document.activeElement`
- * the way a browser would. Tags say which control holds focus.
+ * the way a browser would. Tags say which control holds focus. The mock form
+ * answers `contains()` for the dialog's own controls so the initial-focus guard
+ * can tell "the user already started interacting with the form" from ambient
+ * focus left outside the dialog.
  */
 function setupFocusDom() {
   const keyHandlers = new Map<string, EventListener>()
   const textarea = { removeAttribute: () => {}, focus: () => {} }
   let active: { tag: string } | null = null
+  /** Everything the mock form owns: its hosts plus a user-picked control. */
+  const formDescendants = new Set<object>()
 
   globalAny.document = {
     querySelector: () => textarea,
@@ -964,7 +969,12 @@ function setupFocusDom() {
   }
 
   const createNodeMock = (element: { type?: unknown; props?: Record<string, unknown> }) => {
-    const node = {
+    const node: {
+      tag: string
+      focus(): void
+      blur(): void
+      contains?: (other: unknown) => boolean
+    } = {
       tag: tagFor(element),
       focus() {
         active = node
@@ -973,6 +983,10 @@ function setupFocusDom() {
         if (active === node) active = null
       },
     }
+    if (element.type === 'form') {
+      node.contains = (other: unknown) => formDescendants.has(other as object)
+    }
+    formDescendants.add(node)
     return node
   }
 
@@ -982,7 +996,9 @@ function setupFocusDom() {
     activeTag: () => active?.tag ?? null,
     /** The user tabs to some control the dialog did not pick for them. */
     moveFocusAway: () => {
-      active = { tag: 'user-moved' }
+      const node = { tag: 'user-moved' }
+      formDescendants.add(node)
+      active = node
     },
   }
 }
@@ -1054,6 +1070,31 @@ describe('NewSessionModal provisional focus', () => {
     expect(readyFocus.activeTag()).toBe('create')
     act(() => {
       readyDialog.unmount()
+    })
+  })
+
+  test('a focus the user moves before the deferred attempt is never stolen, and the catch-up leaves it too', async () => {
+    // The attempt is deferred ~50 ms so the DOM settles first — long enough
+    // for the user to reach a control of their own. It must then leave that
+    // focus alone rather than yanking it onto Create or the kind select.
+    const catalog = deferredCatalog()
+    const focus = setupFocusDom()
+    const renderer = await openDialog(focus)
+    focus.moveFocusAway()
+    await act(async () => {
+      await afterFocusAttempt()
+    })
+    expect(focus.activeTag()).toBe('user-moved')
+
+    // Skipping the attempt leaves no provisional focus behind, so a later
+    // catalog settle must not promote onto the user either.
+    catalog.succeed()
+    await act(async () => {
+      await settle()
+    })
+    expect(focus.activeTag()).toBe('user-moved')
+    act(() => {
+      renderer.unmount()
     })
   })
 

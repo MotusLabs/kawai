@@ -242,13 +242,22 @@ export default function NewSessionModal({
     // take focus, otherwise the always-enabled session-kind select. Whichever
     // lands is recorded as provisional so the catalog catch-up can promote it.
     setTimeout(() => {
-      const { kind: currentKind, createDisabled } = focusStateRef.current
-      const target =
-        currentKind === 'chat' && createDisabled
-          ? kindSelectRef.current
-          : (defaultButtonRef.current ?? kindSelectRef.current)
-      target?.focus()
-      provisionalFocusRef.current = target ?? null
+      // Preserve focus if the user already started interacting with the form:
+      // this attempt is deferred, so it can arrive after they have already
+      // picked a control of their own. Without this the attempt would yank
+      // focus back off them. Leaving `provisionalFocusRef` null then also keeps
+      // the catalog catch-up from promoting onto them later.
+      const activeElement = typeof document === 'undefined' ? null : document.activeElement
+      const userIsInForm = !!activeElement && !!formRef.current?.contains(activeElement)
+      if (!userIsInForm) {
+        const { kind: currentKind, createDisabled } = focusStateRef.current
+        const target =
+          currentKind === 'chat' && createDisabled
+            ? kindSelectRef.current
+            : (defaultButtonRef.current ?? kindSelectRef.current)
+        target?.focus()
+        provisionalFocusRef.current = target ?? null
+      }
       if (projectPathRef.current) {
         const input = projectPathRef.current
         input.scrollLeft = input.scrollWidth
