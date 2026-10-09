@@ -30,6 +30,17 @@ function worktreeOptionLabel(worktree: NewSessionWorktreeOption): string {
 type StartWithValue = AutoStartAgent | 'none'
 
 /**
+ * The session kind a fresh open preselects. A change-section launch exists to
+ * offer the terminal-only first-prompt ("Start with") selector, so that entry
+ * point keeps Terminal; every other open defaults to Claude chat. Recalculated
+ * on every open rather than remembered, so the previous open's choice never
+ * leaks into the next one.
+ */
+function defaultKind(initialAutoStartChange?: string): 'terminal' | 'chat' {
+  return initialAutoStartChange ? 'terminal' : 'chat'
+}
+
+/**
  * The first-prompt selector's default: the selected preset's declared agent
  * type (an explicit user declaration; `pi` has no apply equivalent), else the
  * claude/codex prefix rule on the command's resolved agent token, else
@@ -102,12 +113,8 @@ export default function NewSessionModal({
   const [projectPath, setProjectPath] = useState('')
   /** Inline refusal for an empty Project Path — Create must never no-op silently. */
   const [projectPathError, setProjectPathError] = useState<string | null>(null)
-  /**
-   * Claude chat is the default kind. A change-section launch is the exception:
-   * its first-prompt ("Start with") selector is a terminal-only affordance, so
-   * that context still opens on Terminal.
-   */
-  const [kind, setKind] = useState<'terminal' | 'chat'>('chat')
+  /** Seeded with the generic default; every open re-derives it (see `defaultKind`). */
+  const [kind, setKind] = useState<'terminal' | 'chat'>(defaultKind())
   const [claudeProfileId, setClaudeProfileId] = useState('default')
   // The catalog is resolved for the entered project path: a `.kawai`
   // directory in the project (or above it) extends the picker live.
@@ -124,6 +131,23 @@ export default function NewSessionModal({
   const formRef = useRef<HTMLFormElement>(null)
   const projectPathRef = useRef<HTMLInputElement>(null)
   const defaultButtonRef = useRef<HTMLButtonElement>(null)
+  const kindSelectRef = useRef<HTMLSelectElement>(null)
+  /**
+   * The element the dialog focused provisionally at open. The catalog catch-up
+   * below may replace it with Create, but only while it is still what has focus
+   * — a focus the user moved themselves is never stolen.
+   */
+  const provisionalFocusRef = useRef<HTMLElement | null>(null)
+  /**
+   * Whether Create can currently take focus, read by the deferred focus attempt
+   * that outlives the render which scheduled it. Create is disabled while the
+   * chat profile catalog loads or errors, and a disabled button cannot be
+   * focused, so the attempt needs a live answer to pick its fallback.
+   */
+  const focusStateRef = useRef<{ kind: 'terminal' | 'chat'; createDisabled: boolean }>({
+    kind: defaultKind(),
+    createDisabled: true,
+  })
   /**
    * Whether the dialog is currently in its open state. State initialization
    * must run only on the closed→open transition (and cleanup only on
@@ -141,7 +165,9 @@ export default function NewSessionModal({
     wasOpenRef.current = isOpen
 
     if (!isOpen) {
-      setKind('chat')
+      // `kind` is deliberately left alone: the next open re-derives it from its
+      // own entry point (see `defaultKind`), so a reset here would only record
+      // the open that just ended.
       setClaudeProfileId('default')
       setProjectPath('')
       setProjectPathError(null)
@@ -152,6 +178,7 @@ export default function NewSessionModal({
       setSelectedHost(initialHost ?? '')
       setStartWith('none')
       setStartWithTouched(false)
+      provisionalFocusRef.current = null
       // Focus terminal after modal closes
       setTimeout(() => {
         if (typeof document === 'undefined' || typeof document.querySelector !== 'function') return
@@ -172,9 +199,8 @@ export default function NewSessionModal({
       }
     }
     // Initialize state when opening
-    // A change-section launch needs Terminal for its first-prompt selector;
-    // every other open defaults to Claude chat.
-    setKind(initialAutoStartChange ? 'terminal' : 'chat')
+    setKind(defaultKind(initialAutoStartChange))
+    provisionalFocusRef.current = null
     const basePath =
       initialPath?.trim() ||
       activeProjectPath?.trim() ||
@@ -211,12 +237,26 @@ export default function NewSessionModal({
         setCommand('')
       }
     }
-    // Focus default button and scroll project path after DOM update
+    // Provisional focus after DOM update: the dialog's primary action (the
+    // active command-preset chip for Terminal, Create for chat) when it can
+    // take focus, otherwise the always-enabled session-kind select. Whichever
+    // lands is recorded as provisional so the catalog catch-up can promote it.
     setTimeout(() => {
-      // Preserve focus if the user already started interacting with the form.
+      // Preserve focus if the user already started interacting with the form:
+      // this attempt is deferred, so it can arrive after they have already
+      // picked a control of their own. Without this the attempt would yank
+      // focus back off them. Leaving `provisionalFocusRef` null then also keeps
+      // the catalog catch-up from promoting onto them later.
       const activeElement = typeof document === 'undefined' ? null : document.activeElement
-      if (!activeElement || !formRef.current?.contains(activeElement)) {
-        defaultButtonRef.current?.focus()
+      const userIsInForm = !!activeElement && !!formRef.current?.contains(activeElement)
+      if (!userIsInForm) {
+        const { kind: currentKind, createDisabled } = focusStateRef.current
+        const target =
+          currentKind === 'chat' && createDisabled
+            ? kindSelectRef.current
+            : (defaultButtonRef.current ?? kindSelectRef.current)
+        target?.focus()
+        provisionalFocusRef.current = target ?? null
       }
       if (projectPathRef.current) {
         const input = projectPathRef.current
@@ -224,6 +264,32 @@ export default function NewSessionModal({
       }
     }, 50)
   }, [activeProjectPath, commandPresets, defaultPresetId, defaultProjectDir, isOpen, lastProjectPath, initialHost, initialPath, initialCommand, initialAutoStartChange])
+
+  // Keep the deferred focus attempt's view of Create current; that attempt is
+  // scheduled once per open and reads this after the catalog has moved on.
+  useEffect(() => {
+    focusStateRef.current = {
+      kind,
+      createDisabled: kind === 'chat' && (catalog.loading || !!catalog.error),
+    }
+  })
+
+  // Provisional-focus catch-up. Create cannot take focus while the chat
+  // profile catalog loads, so the open attempt settles for the kind select;
+  // once the catalog settles, promote that provisional focus to Create — but
+  // only while it is still what has focus. A focus the user moved themselves
+  // never matches the provisional ref, so it is never stolen.
+  useEffect(() => {
+    if (!isOpen || kind !== 'chat') return
+    if (catalog.loading || !!catalog.error) return
+    const provisional = provisionalFocusRef.current
+    if (!provisional) return
+    if (typeof document !== 'undefined' && document.activeElement !== provisional) return
+    const create = defaultButtonRef.current
+    if (!create) return
+    create.focus()
+    provisionalFocusRef.current = create
+  }, [isOpen, kind, catalog.loading, catalog.error])
 
   // The first-prompt default follows command and preset changes until the
   // user selects a value explicitly, after which their choice sticks.
@@ -394,7 +460,7 @@ export default function NewSessionModal({
         <div className="mt-4 space-y-4">
           <label className="block text-xs text-secondary">
             Session kind
-            <select aria-label="Session kind" className="input mt-1.5" value={kind}
+            <select ref={kindSelectRef} aria-label="Session kind" className="input mt-1.5" value={kind}
               onChange={event => setKind(event.target.value as 'terminal' | 'chat')}>
               <option value="terminal">Terminal</option>
               <option value="chat">Claude chat</option>
@@ -637,7 +703,12 @@ export default function NewSessionModal({
           <button type="button" onClick={onClose} className="btn">
             Cancel
           </button>
-          <button type="submit" className="btn btn-primary" disabled={kind === 'chat' && (catalog.loading || !!catalog.error)}>
+          <button
+            ref={kind === 'chat' ? defaultButtonRef : undefined}
+            type="submit"
+            className="btn btn-primary"
+            disabled={kind === 'chat' && (catalog.loading || !!catalog.error)}
+          >
             Create
           </button>
         </div>
