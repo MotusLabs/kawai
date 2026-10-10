@@ -64,14 +64,14 @@ The latest report for a session's profile SHALL be included in the chat snapshot
 - **THEN** sessions of that profile show no usage bar until the next report
 
 ### Requirement: Usage is refreshed when no report has arrived
-When a chat session's profile holds no report and the session has begun a turn, the system SHALL obtain plan usage data on demand rather than waiting for the agent to emit one. On-demand data reflects the account the agent process is logged in with, not the session's provider routing. When plan limits do not apply, or no usage data can be obtained, the system SHALL record no window data and show no usage bar. A refresh SHALL NOT replace fresher window data with older data.
+When a chat session's profile holds no report and the session's agent has started, the system SHALL obtain plan usage data on demand rather than waiting for the agent to emit one. On-demand data reflects the account the agent process is logged in with, not the session's provider routing. When plan limits do not apply, or no usage data can be obtained, the system SHALL record no window data and show no usage bar. A refresh SHALL NOT replace fresher window data with older data.
 
-#### Scenario: Windows appear early in the first turn
-- **WHEN** a chat session's first turn has started, its profile holds no report, and plan usage data is obtainable
-- **THEN** the usage bar shows the plan windows without waiting for that turn to complete
+#### Scenario: Windows appear before the first message
+- **WHEN** a client attaches to a chat session, starting its agent without sending a prompt, and the profile holds no report while plan usage data is obtainable
+- **THEN** the usage bar shows the plan windows without waiting for the first turn
 
-#### Scenario: Session that has never run a turn
-- **WHEN** a chat session has been opened but no turn has begun
+#### Scenario: Session whose agent has not started
+- **WHEN** a chat session's profile holds no report and its agent has not started, as with a session no client has attached to, an archived chat, or a missing project directory
 - **THEN** no usage bar is shown
 
 #### Scenario: Gateway-routed profile with an account login
