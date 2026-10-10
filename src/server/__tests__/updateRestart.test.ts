@@ -7,6 +7,9 @@ import {
   performRestart,
   planRestart,
   planRestartAfterInstall,
+  planSystemdSourceAdoption,
+  restartAfterInstall,
+  writeSystemdSourceAdoption,
   type SpawnedCommand,
   type SpawnResult,
 } from '../updates/updateRestart'
@@ -90,11 +93,31 @@ describe('planRestartAfterInstall', () => {
     expect(plan.exitsAfterSpawn).toBe(false)
   })
 
-  test('a source install execs the freshly installed binary, even under a supervisor', () => {
-    // Restarting the unit (or this bun process) would restart the source
+  test('a source install under systemd adopts the unit instead of spawning a child', () => {
+    // A bare successor would live in the unit's cgroup: service cleanup kills
+    // it when this process exits (and Restart=always revives the source
+    // build). The unit must be re-exec'd onto the installed binary itself.
+    const plan = planRestartAfterInstall(
+      detectRestartContext({ INVOCATION_ID: 'abc123', AGENTBOARD_SYSTEMD_UNIT: 'kawai.service' } as NodeJS.ProcessEnv),
+      { root: '/home/dev/.agentboard/app', compiled: false },
+    )
+    expect(plan.mode).toBe('systemd')
+    expect(plan.command).toEqual([
+      'sh',
+      '-c',
+      'systemctl --user daemon-reload && exec systemctl --user restart "$0"',
+      'kawai.service',
+    ])
+    expect(plan.exitsAfterSpawn).toBe(false)
+    // No bare successor is spawned for this mode at all.
+    expect(plan.command.join(' ')).not.toContain('sleep')
+  })
+
+  test('a source install execs the freshly installed binary under launchd or bare', () => {
+    // Restarting the agent (or this bun process) would restart the source
     // build; the successor must be the release binary that just landed.
     const plan = planRestartAfterInstall(
-      detectRestartContext({ INVOCATION_ID: 'abc123' } as NodeJS.ProcessEnv),
+      detectRestartContext({ XPC_SERVICE_NAME: 'com.agentboard' } as NodeJS.ProcessEnv),
       { root: '/home/dev/.agentboard/app', compiled: false },
       { bareDelayMs: 500 },
     )
@@ -129,6 +152,94 @@ describe('planRestartAfterInstall', () => {
     const plan = planRestartAfterInstall({ mode: 'bare' }, { root: '/opt/agentboard', compiled: true })
     expect(plan.mode).toBe('bare')
     expect(plan.cwd).toBe('/opt/agentboard')
+  })
+})
+
+describe('systemd source adoption', () => {
+  const systemd = detectRestartContext({ INVOCATION_ID: 'abc123' } as NodeJS.ProcessEnv)
+  const install = { root: '/home/dev/.agentboard/app', compiled: false }
+
+  test('plans a drop-in pointing the unit at the installed release', () => {
+    const adoption = planSystemdSourceAdoption(systemd, install, { homeDir: '/home/dev' })
+    expect(adoption.unitFile).toBe('agentboard.service')
+    expect(adoption.dropInPath).toBe(
+      '/home/dev/.config/systemd/user/agentboard.service.d/50-agentboard-update.conf',
+    )
+    expect(adoption.contents).toContain('[Service]')
+    expect(adoption.contents).toContain('WorkingDirectory=/home/dev/.agentboard/app')
+    expect(adoption.contents).toContain('ExecStart=/home/dev/.agentboard/app/bin/agentboard')
+  })
+
+  test('normalizes a suffix-less pinned unit and honors the pin', () => {
+    const pinned = detectRestartContext({
+      INVOCATION_ID: 'abc',
+      AGENTBOARD_SYSTEMD_UNIT: 'kawai',
+    } as NodeJS.ProcessEnv)
+    const adoption = planSystemdSourceAdoption(pinned, install, { homeDir: '/home/dev' })
+    expect(adoption.unitFile).toBe('kawai.service')
+    expect(adoption.dropInPath).toBe(
+      '/home/dev/.config/systemd/user/kawai.service.d/50-agentboard-update.conf',
+    )
+  })
+
+  test('writes the drop-in directory and file', () => {
+    const adoption = planSystemdSourceAdoption(systemd, install, { homeDir: '/home/dev' })
+    const dirs: string[] = []
+    const files: Array<{ path: string; contents: string }> = []
+    writeSystemdSourceAdoption(adoption, {
+      mkdir: (dir) => dirs.push(dir),
+      writeFile: (file, contents) => files.push({ path: file, contents }),
+    })
+    expect(dirs).toEqual(['/home/dev/.config/systemd/user/agentboard.service.d'])
+    expect(files).toHaveLength(1)
+    expect(files[0]?.path).toBe(adoption.dropInPath)
+    expect(files[0]?.contents).toBe(adoption.contents)
+  })
+
+  test('restartAfterInstall writes the drop-in, then reloads and restarts the unit', async () => {
+    const adoption = planSystemdSourceAdoption(systemd, install, { homeDir: '/home/dev' })
+    const dirs: string[] = []
+    const files: string[] = []
+    const commands: string[][] = []
+    const plan = await restartAfterInstall(systemd, install, {
+      homeDir: '/home/dev',
+      mkdir: (dir) => dirs.push(dir),
+      writeFile: (file) => files.push(file),
+      spawn: (command) => {
+        commands.push(command)
+        return { exited: Promise.resolve({ exitCode: 0, stderr: '' }) }
+      },
+    })
+    expect(plan.mode).toBe('systemd')
+    expect(dirs).toEqual([adoption.dropInPath.slice(0, adoption.dropInPath.lastIndexOf('/'))])
+    expect(files).toEqual([adoption.dropInPath])
+    expect(commands).toEqual([[
+      'sh',
+      '-c',
+      'systemctl --user daemon-reload && exec systemctl --user restart "$0"',
+      'agentboard.service',
+    ]])
+  })
+
+  test('restartAfterInstall leaves non-systemd modes unprepared', async () => {
+    const files: string[] = []
+    const commands: string[][] = []
+    await restartAfterInstall(
+      { mode: 'bare' },
+      { root: '/home/dev/.agentboard/app', compiled: false },
+      {
+        mkdir: () => { throw new Error('no adoption expected') },
+        writeFile: () => files.push('unexpected'),
+        spawn: (command, cwd) => {
+          commands.push([String(cwd), ...command])
+          return { exited: new Promise<SpawnResult>(() => {}) }
+        },
+        exit: () => {},
+      },
+    )
+    expect(files).toEqual([])
+    expect(commands).toHaveLength(1)
+    expect(commands[0]?.[0]).toBe('/home/dev/.agentboard/app')
   })
 })
 

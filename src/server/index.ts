@@ -17,7 +17,7 @@ import { SessionRegistry } from './SessionRegistry'
 import { BUILD_VERSION } from './version'
 import { startUpdateChecker } from './updates/updateChecker'
 import { installUpdate } from './updates/updateInstaller'
-import { detectRestartContext, performRestart, planRestartAfterInstall } from './updates/updateRestart'
+import { detectRestartContext, restartAfterInstall } from './updates/updateRestart'
 import {
   initDatabase,
   resolveDataDir,
@@ -1806,15 +1806,16 @@ app.post('/api/update/install', async (c) => {
   // Respond first: the restart verb may terminate this process (that is its
   // job), and the client must hear the outcome before the connection drops.
   // A source run restarts onto the installed release binary, not this
-  // process — see planRestartAfterInstall.
-  const plan = planRestartAfterInstall(detectRestartContext(), install)
+  // process; under systemd the unit itself is adopted into that install —
+  // see restartAfterInstall.
+  const context = detectRestartContext()
   const restartTimer = setTimeout(() => {
-    void performRestart(plan).catch((cause) => {
+    void restartAfterInstall(context, install).catch((cause) => {
       // The install landed; only the takeover failed. Keep serving the old
       // build and log loudly — a manual restart picks up the new files.
       logger.error('update_restart_failed', {
         message: cause instanceof Error ? cause.message : String(cause),
-        mode: plan.mode,
+        mode: context.mode,
       })
     })
   }, UPDATE_RESTART_DELAY_MS)
