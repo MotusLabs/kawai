@@ -117,3 +117,14 @@ The release workflow SHALL publish release artifacts exclusively to this reposit
 #### Scenario: No external registry is contacted
 - **WHEN** the publish job runs
 - **THEN** it contains no `npm publish`, no Homebrew tap update, and requests only `contents: write` permissions
+
+### Requirement: Release artifacts publish SHA256 checksums
+The release publish job SHALL upload a SHA256 checksum file on the GitHub Release covering every platform tarball it publishes. The publish job MUST fail rather than create a release whose checksum file is missing or does not list every tarball.
+
+#### Scenario: Checksums accompany the release
+- **WHEN** a `v*` tag triggers `release.yml` and the build job succeeds
+- **THEN** the GitHub Release carries a checksum file with one SHA256 entry per platform tarball, each matching its tarball's content
+
+#### Scenario: Incomplete checksums block publishing
+- **WHEN** a checksum cannot be computed for one of the platform tarballs
+- **THEN** the publish job fails and no release is created
