@@ -769,6 +769,16 @@ export class ChatSessionDriver {
     }
     if (message.subtype === 'compact_boundary') {
       this.emit({ type: 'notice', text: 'Context compacted' })
+      // The post-compaction size is the new reading (design D3): the meter
+      // drops with the transcript, auto or manual alike. A missing, invalid,
+      // or zero post_tokens keeps the last reading — never a placeholder
+      // standing in for "unknown".
+      const post = positiveFinite(message.compact_metadata?.post_tokens)
+      if (post !== null) {
+        this.contextUsedTokens = post
+        this.contextMeasuredAt = new Date().toISOString()
+        this.publishContextUsage()
+      }
     }
     if (isSubagentFrame(message)) return
     const input = systemFrameToInput(message)

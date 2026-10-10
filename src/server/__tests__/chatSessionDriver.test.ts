@@ -380,6 +380,28 @@ function modelUsageWith(contextWindow: number): Record<string, unknown> {
   }
 }
 
+/**
+ * A compact_boundary frame; postTokens omitted leaves post_tokens unset —
+ * compact_metadata is required but post_tokens is optional (design D3).
+ */
+function compactBoundary(
+  trigger: 'auto' | 'manual',
+  preTokens: number,
+  postTokens?: number
+): SDKMessage {
+  return {
+    type: 'system',
+    subtype: 'compact_boundary',
+    compact_metadata: {
+      trigger,
+      pre_tokens: preTokens,
+      ...(postTokens !== undefined ? { post_tokens: postTokens } : {}),
+    },
+    uuid: 'compact-uuid',
+    session_id: 'sdk-1',
+  } as unknown as SDKMessage
+}
+
 describe('ChatSessionDriver', () => {
   // Pin catalog reads to an empty temp home: the shipped default applies
   // deterministically, and a real ~/.kawai cannot leak into launch resolution.
@@ -1969,5 +1991,56 @@ describe('ChatSessionDriver context usage', () => {
     expect(harness.contextUsage.at(-1)).toMatchObject({ usedTokens: 50_000, thresholdTokens: 200_000, percentage: 25 })
     // Attach without the control is a no-op, not an error.
     expect(fake.contextCalls).toHaveLength(0)
+  })
+
+  test('compact_boundary drops the meter to the post-compaction size, auto or manual', async () => {
+    const harness = createHarness()
+    harness.driver.send('hello')
+    const fake = harness.fakes[0]!
+    fake.push(assistantUsage({ input_tokens: 157_900 }, 'msg_1'))
+    fake.push(result('success', { modelUsage: modelUsageWith(200_000) }))
+    await flush()
+    expect(harness.contextUsage.at(-1)).toMatchObject({ usedTokens: 157_900 })
+
+    fake.push(compactBoundary('auto', 157_900, 8_200))
+    await flush()
+    expect(harness.contextUsage.at(-1)).toMatchObject({ usedTokens: 8_200, thresholdTokens: 200_000 })
+    // The transcript notice survives the adoption (design D3).
+    expect(harness.events.some((event) => event.type === 'notice')).toBe(true)
+
+    fake.push(compactBoundary('manual', 8_200, 6_500))
+    await flush()
+    expect(harness.contextUsage.at(-1)).toMatchObject({ usedTokens: 6_500, percentage: 3.3 })
+  })
+
+  test('a boundary without a usable post_tokens keeps the last reading', async () => {
+    const harness = createHarness()
+    harness.driver.send('hello')
+    const fake = harness.fakes[0]!
+    fake.push(assistantUsage({ input_tokens: 157_900 }, 'msg_1'))
+    fake.push(result('success', { modelUsage: modelUsageWith(200_000) }))
+    await flush()
+    const before = harness.contextUsage.length
+    expect(harness.contextUsage.at(-1)).toMatchObject({ usedTokens: 157_900 })
+
+    // Metadata present but no post_tokens — the case that matters, since
+    // compact_metadata is required while post_tokens is optional.
+    fake.push(compactBoundary('auto', 157_900))
+    await flush()
+    expect(harness.contextUsage).toHaveLength(before)
+    expect(harness.contextUsage.at(-1)).toMatchObject({ usedTokens: 157_900 })
+
+    // A non-finite post_tokens is equally unusable: no NaN reading, ever.
+    fake.push(compactBoundary('manual', 157_900, Number.NaN))
+    await flush()
+    expect(harness.contextUsage).toHaveLength(before)
+    expect(harness.contextUsage.at(-1)).toMatchObject({ usedTokens: 157_900 })
+
+    // Metadata absent entirely: the notice still lands, the meter still holds.
+    fake.push({ type: 'system', subtype: 'compact_boundary', uuid: 'u', session_id: 'sdk-1' } as unknown as SDKMessage)
+    await flush()
+    expect(harness.contextUsage).toHaveLength(before)
+    expect(harness.contextUsage.at(-1)).toMatchObject({ usedTokens: 157_900 })
+    expect(harness.events.filter((event) => event.type === 'notice')).toHaveLength(3)
   })
 })
