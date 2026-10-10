@@ -24,7 +24,7 @@ const GIT_DISCOVERY_ENV_KEYS = [
 ] as const
 
 /** Process env without Git discovery redirects (never mutates process.env). */
-function cleanGitEnv(): NodeJS.ProcessEnv {
+export function cleanGitEnv(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env }
   for (const key of GIT_DISCOVERY_ENV_KEYS) {
     delete env[key]

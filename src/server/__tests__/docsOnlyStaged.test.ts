@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { runGit } from '../git/gitCommand'
+import { cleanGitEnv, runGit } from '../git/gitCommand'
 
 const repoRoot = path.resolve(import.meta.dir, '../../..')
 const classifier = path.join(repoRoot, 'scripts/docs-only-staged.sh')
@@ -27,6 +27,10 @@ function isDocsOnly() {
   const proc = Bun.spawnSync({
     cmd: [classifier],
     cwd: repo,
+    // Scrub the git hook exports (GIT_DIR/GIT_INDEX_FILE/…): without this,
+    // a run under the pre-commit hook classifies the real commit's index
+    // instead of this fixture's, and every docs-only expectation fails.
+    env: cleanGitEnv(),
     stdout: 'pipe',
     stderr: 'pipe',
   })
@@ -127,5 +131,40 @@ describe('docs-only-staged', () => {
 
   test('an empty index is docs-only', () => {
     expect(isDocsOnly()).toBe(true)
+  })
+
+  test('git env exported by the hook does not leak into the classifier', () => {
+    // A pre-commit hook runs this suite with GIT_DIR/GIT_INDEX_FILE pointing
+    // at the commit in progress; the classifier must still judge the fixture
+    // repo. Without scrubbing, it reads the foreign index, sees its staged
+    // source file, and answers "not docs-only" for a docs-only fixture. The
+    // pollution must ride the spawn environment from process start — Bun's
+    // default spawn env is the startup one, not runtime process.env edits —
+    // so the check re-runs a docs-only expectation as a subprocess.
+    const foreignRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'agentboard-docsonly-foreign-'))
+    const foreign = path.join(foreignRoot, 'repo')
+    fs.mkdirSync(foreign)
+    const gitInForeign = (...args: string[]) =>
+      runGit(['-c', 'user.name=test', '-c', 'user.email=test@example.com', ...args], { cwd: foreign })
+    if (!gitInForeign('init', '--initial-branch=main').ok) throw new Error('foreign init failed')
+    fs.mkdirSync(path.join(foreign, 'src'), { recursive: true })
+    fs.writeFileSync(path.join(foreign, 'src/runtime.ts'), 'export const runtime = 1\n')
+    if (!gitInForeign('add', '.').ok) throw new Error('foreign add failed')
+    try {
+      const proc = Bun.spawnSync({
+        cmd: [process.execPath, 'test', import.meta.path, '-t', 'an empty index is docs-only'],
+        cwd: repoRoot,
+        env: {
+          ...process.env,
+          GIT_DIR: path.join(foreign, '.git'),
+          GIT_INDEX_FILE: path.join(foreign, '.git', 'index'),
+        },
+        stdout: 'pipe',
+        stderr: 'pipe',
+      })
+      expect(proc.exitCode).toBe(0)
+    } finally {
+      fs.rmSync(foreignRoot, { recursive: true, force: true })
+    }
   })
 })
