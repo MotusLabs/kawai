@@ -768,7 +768,8 @@ export class ChatSessionDriver {
       return
     }
     if (message.subtype === 'compact_boundary') {
-      this.emit({ type: 'notice', text: 'Context compacted' })
+      // Adopt before the notice: the manager persists the reading when it
+      // sees the notice below, so the fresher value must already be live.
       // The post-compaction size is the new reading (design D3): the meter
       // drops with the transcript, auto or manual alike. A missing, invalid,
       // or zero post_tokens keeps the last reading — never a placeholder
@@ -779,6 +780,7 @@ export class ChatSessionDriver {
         this.contextMeasuredAt = new Date().toISOString()
         this.publishContextUsage()
       }
+      this.emit({ type: 'notice', text: 'Context compacted' })
     }
     if (isSubagentFrame(message)) return
     const input = systemFrameToInput(message)

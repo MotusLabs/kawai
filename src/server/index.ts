@@ -813,6 +813,7 @@ const chatSessionManager = new ChatSessionManager({
   onEvent: (sessionId, event) => chatConnections.publish(sessionId, event),
   onCommandState: (sessionId, state) => chatConnections.publishCommandState(sessionId, state),
   onActivity: (sessionId, activity) => chatConnections.publishActivity(sessionId, activity),
+  onContextUsage: (sessionId, usage) => chatConnections.publishContextUsage(sessionId, usage),
   onUsage: (profileId, report) => chatConnections.publishUsage(profileId, report),
   getProviderEnv: chatProviderEnv.current,
   wireLogs: chatWireLogs,

@@ -29,9 +29,9 @@
 
 ## 6. Manager and delivery
 
-- [ ] 6.1 Hold the latest reading in `src/server/chat/ChatSessionManager.ts`, prefer it over the stored column in `getSnapshot`, and include `contextUsage` in the snapshot, and verify `src/server/__tests__/chatSessionManager.test.ts` covers the in-memory value winning over a stale stored one
-- [ ] 6.2 Persist the reading on `turn_completed`, `compact_boundary`, and driver death only — not on every frame (design D5) — and verify a manager test shows a multi-request turn writes at its boundary rather than per assistant frame
-- [ ] 6.3 Coalesce live updates in `src/server/chat/ChatConnections.ts` the way `activityBatches` already does, sending the latest reading per session on the next flush, and verify `src/server/__tests__/chatConnections.test.ts` shows several queued updates collapsing to one message per flush
+- [x] 6.1 Hold the latest reading in `src/server/chat/ChatSessionManager.ts`, prefer it over the stored column in `getSnapshot`, and include `contextUsage` in the snapshot, and verify `src/server/__tests__/chatSessionManager.test.ts` covers the in-memory value winning over a stale stored one
+- [x] 6.2 Persist the reading on `turn_completed`, `compact_boundary`, and driver death only — not on every frame (design D5) — and verify a manager test shows a multi-request turn writes at its boundary rather than per assistant frame
+- [x] 6.3 Coalesce live updates in `src/server/chat/ChatConnections.ts` the way `activityBatches` already does, sending the latest reading per session on the next flush, and verify `src/server/__tests__/chatConnections.test.ts` shows several queued updates collapsing to one message per flush
 
 ## 7. Client
 

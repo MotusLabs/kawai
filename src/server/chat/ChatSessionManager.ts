@@ -17,6 +17,7 @@ import type {
   ChatApprovalDecision,
   ChatApprovalPolicy,
   ChatCommandState,
+  ChatContextUsage,
   ChatEvent,
   ChatPendingRequest,
   ChatQuestionAnswer,
@@ -75,6 +76,13 @@ export interface ChatSessionManagerOptions {
    * broadcast in index.ts; activity is ephemeral and never persisted.
    */
   onActivity?: (sessionId: string, activity: ChatActivity | null) => void
+  /**
+   * Context-usage sink (context meter design D5): called with the latest
+   * reading whenever the driver publishes one. Wired to the coalesced WS
+   * broadcast in index.ts; the reading itself persists only at turn
+   * boundaries, compaction, and driver death.
+   */
+  onContextUsage?: (sessionId: string, usage: ChatContextUsage) => void
   /**
    * Plan-usage sink (usage bar design D4): called with the latest report
    * (or null) whenever a profile's held data changes. Wired to the WS
@@ -168,6 +176,12 @@ export class ChatSessionManager {
     { body: Omit<ChatActivity, 'elapsedMs'>; phaseStartedAt: number }
   >()
   /**
+   * Latest context-usage reading per session (context meter design D5): the
+   * fresher in-memory value between boundary writes; getSnapshot prefers it
+   * over the stored column. Survives respawns; a restart begins with none.
+   */
+  private readonly contextReadings = new Map<string, ChatContextUsage>()
+  /**
    * Availability probes for resolved provider configurations. Keyed so a provider
    * change in Settings re-probes the new endpoint; a failed probe is dropped so
    * a corrected configuration (or repaired install) recovers without a restart.
@@ -230,7 +244,12 @@ export class ChatSessionManager {
       throughSequence: live.at(-1)?.sequence ?? 0,
       commands: this.commandState(sessionId),
       activity,
-      contextUsage: null,
+      // In-memory wins: between boundary writes it is fresher than the
+      // stored column (design D5).
+      contextUsage:
+        this.contextReadings.get(sessionId) ??
+        this.records.get(sessionId)?.contextUsage ??
+        null,
       usage: this.usageLimits.get(this.profileIdOf(sessionId) ?? 'default'),
     }
   }
@@ -450,6 +469,11 @@ export class ChatSessionManager {
     // The archived chat shows no activity row (design D5): any in-flight
     // phase ended with the driver above.
     this.clearActivity(sessionId)
+    // The archived header shows the stored reading, frozen with the agent:
+    // write the freshest in-memory value, then forget the live slot so
+    // snapshots fall back to the column.
+    this.persistContextUsage(sessionId)
+    this.contextReadings.delete(sessionId)
     // Status returns to waiting: archived sessions never look busy.
     this.applyPatch(sessionId, {
       archivedAt: new Date().toISOString(),
@@ -578,6 +602,7 @@ export class ChatSessionManager {
     this.snapshotHistory.delete(sessionId)
     this.liveEvents.delete(sessionId)
     this.activities.delete(sessionId)
+    this.contextReadings.delete(sessionId)
     this.options.registry.removeChatSession(sessionId)
     this.options.db.deleteChatSession(sessionId)
     void this.options.wireLogs?.delete(sessionId).catch(() => {})
@@ -592,6 +617,12 @@ export class ChatSessionManager {
     this.drivers.clear()
     this.driverPromises.clear()
     this.activities.clear()
+    // Shutdown settles like kill, but the rows survive it: write each live
+    // reading so a restart restores the last one seen (design D5).
+    for (const [sessionId] of this.contextReadings) {
+      this.persistContextUsage(sessionId)
+    }
+    this.contextReadings.clear()
     for (const sessionId of this.titleWatchers.keys()) {
       this.releaseTitleWatch(sessionId)
     }
@@ -806,6 +837,8 @@ export class ChatSessionManager {
           this.options.onCommandState?.(record.sessionId, state),
         onActivity: (activity) =>
           this.handleDriverActivity(record.sessionId, activity),
+        onContextUsage: (usage) =>
+          this.handleDriverContextUsage(record.sessionId, usage),
         // Plan usage is recorded against the session's profile (design D3);
         // the store's change listener drives the onUsage broadcast.
         onRateLimit: (report) =>
@@ -954,6 +987,36 @@ export class ChatSessionManager {
     ) {
       this.touch(sessionId)
     }
+    // Context-usage write points (design D5): a turn boundary, the compaction
+    // notice (the driver's compact_boundary), and an error — the visible
+    // signal of driver death. Never per assistant frame.
+    if (
+      event.type === 'turn_completed' ||
+      event.type === 'error' ||
+      (event.type === 'notice' && event.text === 'Context compacted')
+    ) {
+      this.persistContextUsage(sessionId)
+    }
+  }
+
+  /**
+   * Hold the latest reading (design D5) and forward it to the broadcast sink;
+   * persistence is throttled to the boundary events above.
+   */
+  private handleDriverContextUsage(
+    sessionId: string,
+    usage: ChatContextUsage
+  ): void {
+    if (!this.records.has(sessionId)) return
+    this.contextReadings.set(sessionId, usage)
+    this.options.onContextUsage?.(sessionId, usage)
+  }
+
+  /** Write the freshest in-memory reading to the record, if one exists. */
+  private persistContextUsage(sessionId: string): void {
+    const usage = this.contextReadings.get(sessionId)
+    if (!usage) return
+    this.applyPatch(sessionId, { contextUsage: usage })
   }
 
   /**
