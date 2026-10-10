@@ -151,6 +151,15 @@ export type ChatRequestDecidedBy = 'user' | 'policy'
 /** Per-session approval policy: manual shows approval cards; auto grants them. */
 export type ChatApprovalPolicy = 'manual' | 'auto'
 
+/**
+ * Read a stored policy value; anything absent or unknown reads as manual.
+ * Shared so the browser-persisted settings default and the wire/DB value
+ * sanitize identically.
+ */
+export function parseApprovalPolicy(value: unknown): ChatApprovalPolicy {
+  return value === 'auto' ? 'auto' : 'manual'
+}
+
 /** Live phase of an in-flight chat turn (activity indicator design D1). */
 export type ChatActivityPhase =
   | 'requesting'

@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { create } from 'zustand'
 import { persist, createJSONStorage } from 'zustand/middleware'
 import type { ChatApprovalPolicy } from '@shared/types'
+import { parseApprovalPolicy } from '@shared/chat'
 import { safeStorage } from '../utils/storage'
 
 // Empty means "not set" — fall back to the server's default directory
@@ -145,10 +146,6 @@ function sanitizeChatFontSize(value: unknown): number {
 
 // Anything that is not exactly 'auto' reads as 'manual', so a hand-edited or
 // corrupt persisted value can never silently auto-approve tools (design D1).
-function sanitizeDefaultApprovalPolicy(value: unknown): ChatApprovalPolicy {
-  return value === 'auto' ? 'auto' : 'manual'
-}
-
 interface SettingsState {
   defaultProjectDir: string
   setDefaultProjectDir: (dir: string) => void
@@ -252,7 +249,7 @@ export const useSettingsStore = create<SettingsState>()(
       setChatFontSize: (size) => set({ chatFontSize: sanitizeChatFontSize(size) }),
       defaultApprovalPolicy: 'manual',
       setDefaultApprovalPolicy: (policy) =>
-        set({ defaultApprovalPolicy: sanitizeDefaultApprovalPolicy(policy) }),
+        set({ defaultApprovalPolicy: parseApprovalPolicy(policy) }),
       lineHeight: 1.0,
       setLineHeight: (height) => set({ lineHeight: Math.max(1.0, Math.min(2.0, height)) }),
       letterSpacing: 0,
@@ -355,7 +352,7 @@ export const useSettingsStore = create<SettingsState>()(
           remotePaneFraction: sanitizePaneFraction(merged.remotePaneFraction),
           archivePaneFraction: sanitizePaneFraction(merged.archivePaneFraction),
           chatFontSize: sanitizeChatFontSize(merged.chatFontSize),
-          defaultApprovalPolicy: sanitizeDefaultApprovalPolicy(merged.defaultApprovalPolicy),
+          defaultApprovalPolicy: parseApprovalPolicy(merged.defaultApprovalPolicy),
         }
       },
       migrate: (persistedState: unknown, version: number) => {
