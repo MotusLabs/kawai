@@ -122,8 +122,9 @@ this feature SHALL behave as manual.
 ### Requirement: Users configure the default approval policy for new chat sessions
 The system SHALL let the user choose the approval policy new chat sessions
 start with, from Settings, and SHALL apply it at creation unless the user
-overrides it in the New Session dialog. The stored default SHALL NOT change
-the policy of any existing session.
+overrides it in the New Session dialog. A chat created by `/clear`, `/reset`,
+or `/new` instead carries over the previous chat's policy. The stored default
+SHALL NOT change the policy of any existing session.
 
 #### Scenario: Settings default seeds new chats
 - **WHEN** the user sets the default approval policy to auto and then creates a chat session
@@ -786,11 +787,15 @@ Replayed chat history SHALL show a slash-command turn as the command and argumen
 - **THEN** the replayed user turn shows `/openspec-explore some idea` and no command markup
 
 ### Requirement: Clearing a chat starts a new chat and archives the old one
-Sending `/clear`, `/reset`, or `/new`, optionally followed by a name, SHALL create a new chat session in the same project directory with the same profile, named with the given name when present, select it, and then archive the previous chat session. The command SHALL NOT be sent to the agent. If the new session cannot be created, the previous chat session SHALL remain unchanged and the user SHALL receive the creation error.
+Sending `/clear`, `/reset`, or `/new`, optionally followed by a name, SHALL create a new chat session in the same project directory, with the same profile and the same approval policy, named with the given name when present, select it, and then archive the previous chat session. The command SHALL NOT be sent to the agent. If the new session cannot be created, the previous chat session SHALL remain unchanged and the user SHALL receive the creation error.
 
 #### Scenario: Clear a chat
 - **WHEN** the user sends `/clear` in a chat session
 - **THEN** a new chat session with the same project directory and profile is created and selected, and the previous session is archived with its conversation intact
+
+#### Scenario: The approval policy carries over
+- **WHEN** the user sends `/new` in a chat session whose approval policy is auto
+- **THEN** the new chat session starts with the auto policy and grants tool uses without approval cards
 
 #### Scenario: New chat with a name
 - **WHEN** the user sends `/new release notes`

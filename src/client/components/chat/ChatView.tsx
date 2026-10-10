@@ -122,6 +122,10 @@ export default function ChatView({ session, sendMessage, subscribe, connectionSt
         kind: 'chat',
         ...(name ? { name } : {}),
         claudeProfileId: profileId,
+        // Clone this chat's setup, mirroring the profile: a cleared chat is
+        // the same working session with a fresh conversation, not a new pick
+        // from the dialog. Legacy sessions without a stored policy read manual.
+        approvalPolicy: session.approvalPolicy ?? 'manual',
       })
       return
     }

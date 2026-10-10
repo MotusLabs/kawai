@@ -845,6 +845,7 @@ describe('/clear, /reset, /new', () => {
     h.submit()
     expect(h.sent.filter(message => message.type === 'session-create')).toEqual([{
       type: 'session-create', projectPath: '/tmp/project', kind: 'chat', claudeProfileId: 'default',
+      approvalPolicy: 'manual',
     }])
     expect(useChatStore.getState().drafts).not.toHaveProperty('chat-1')
     // The command itself never reaches the agent, and the composer cleared.
@@ -865,12 +866,23 @@ describe('/clear, /reset, /new', () => {
     h.submit()
     expect(h.sent.filter(message => message.type === 'session-create')).toEqual([{
       type: 'session-create', projectPath: '/tmp/project', kind: 'chat',
-      claudeProfileId: 'default', name: 'release notes',
+      claudeProfileId: 'default', name: 'release notes', approvalPolicy: 'manual',
     }])
     h.deliver(newChatCreated('chat-named', 'release notes'))
     expect(h.sent.filter(message => message.type === 'chat-archive')).toEqual([
       { type: 'chat-archive', sessionId: 'chat-1' },
     ])
+    h.renderer.unmount()
+  })
+
+  test.each(['manual', 'auto'] as const)('%s policy carries over to the new chat', (policy) => {
+    const h = renderClearable({ ...chatSession, approvalPolicy: policy })
+    h.type('/clear')
+    h.submit()
+    expect(h.sent.filter(message => message.type === 'session-create')).toEqual([{
+      type: 'session-create', projectPath: '/tmp/project', kind: 'chat',
+      claudeProfileId: 'default', approvalPolicy: policy,
+    }])
     h.renderer.unmount()
   })
 
