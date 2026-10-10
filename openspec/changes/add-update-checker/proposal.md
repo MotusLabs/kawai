@@ -8,7 +8,7 @@ Kawai ships as a standalone binary from GitHub Releases and is often left runnin
 
 - **Periodic update check.** The server polls `https://api.github.com/repos/MotusLabs/kawai/releases/latest` on startup and on a timer, and compares the latest release's *base* version (`MAJOR.MINOR.PATCH`) against the running build's base. A newer base is "an update available"; newer PR-suffixed builds of the same base are not — every merge to master cuts a release, so any-other comparison would nag constantly.
 - **Persistent header chip.** When an update (or a first binary install) is available, a small persistent chip in the header shows the target version and opens an update panel. It is not a transient toast. It disappears once the running build's base is current.
-- **L3 self-update.** The panel's primary action downloads the platform tarball, verifies its SHA256 against the published checksum file, atomically replaces `bin/agentboard` and `dist/client` in the discovered install root, and restarts the server (systemd unit, launchd agent, or in-place re-exec). Source checkouts get the same download path targeting `~/.agentboard/app/` — they are never rebuilt and the git tree is never touched.
+- **L3 self-update.** The panel's primary action downloads the platform tarball, verifies its SHA256 against the published checksum file *before* extracting, swaps `bin/agentboard` and `dist/client` in the discovered install root all-or-restore (each live path moved aside first; any failure restores it), and restarts the server (systemd unit, launchd agent, or in-place re-exec). Source checkouts get the same download path targeting `~/.agentboard/app/` — they are never rebuilt and the git tree is never touched.
 - **Release checksums.** `release.yml` publishes a SHA256 checksum file alongside the four platform tarballs so the updater has something to verify against.
 - **Service installers run the release binary.** `systemd/install.sh` and `launchd/install.sh` stop wrapping `bun run start` from a git checkout and instead install/point at the release binary, with restart policies that make in-place update + restart work (`Restart=always`, launchd `kickstart -k`).
 - **Doc URL rewrite.** Replace remaining `gbasin/agentboard` repository URLs with `MotusLabs/kawai` in README and SECURITY.md. Release asset names (`agentboard-<platform>.tar.gz`) stay unchanged.
@@ -23,7 +23,7 @@ Kawai ships as a standalone binary from GitHub Releases and is often left runnin
 
 ## Impact
 
-- **Server:** new update-checker module (GitHub release fetch, semver base compare, ETag cache), update-installer module (download, checksum verify, atomic swap, restart), and routes/WebSocket messages to expose update state to the client.
+- **Server:** new update-checker module (GitHub release fetch, semver base compare, ETag cache), update-installer module (download, tarball checksum verify, all-or-restore swap, restart), and routes/WebSocket messages to expose update state to the client.
 - **Client:** header chip and update panel; `App.tsx` / `Header.tsx` wiring.
 - **CI:** `.github/workflows/release.yml` generates and uploads checksums.
 - **Deploy:** `systemd/install.sh`, `launchd/install.sh`, and their READMEs retarget at the release binary; restart policies change so L3 restart is reliable.

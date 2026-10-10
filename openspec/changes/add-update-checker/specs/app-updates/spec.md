@@ -47,27 +47,38 @@ While an update is available, the header SHALL show a small persistent chip nami
 - **WHEN** the server restarts on a build whose base matches the latest release
 - **THEN** the chip is not shown
 
-### Requirement: Update install verifies checksums before replacing files
-Applying an update SHALL download the release tarball for the running platform, extract it to a staging location, and verify its SHA256 against the release's published checksum file before any installed file is replaced. A failed or missing checksum MUST abort the update and leave the running install unchanged.
+### Requirement: Update install verifies the tarball before extracting
+Applying an update SHALL download the release tarball for the running platform and verify that tarball's SHA256 against an entry in the release's published checksum file **before** extracting it and before any write to the live install root. A mismatch, a missing checksum file, or a missing entry for that tarball MUST refuse the update and leave the running install unchanged. There is no alternate acceptance path.
 
-#### Scenario: Checksum mismatch aborts the update
-- **WHEN** the downloaded tarball's SHA256 does not match the published checksum
-- **THEN** the update stops and the existing install is left unchanged
+#### Scenario: Checksum mismatch refuses the update
+- **WHEN** the downloaded tarball's SHA256 does not match its published entry
+- **THEN** the update stops before extract and the existing install is left unchanged
+
+#### Scenario: Missing checksum file refuses the update
+- **WHEN** the target release has no checksum file, or the file has no entry for the platform tarball
+- **THEN** the update stops with an error naming the missing checksum and the existing install is left unchanged
 
 #### Scenario: Matching checksum proceeds
-- **WHEN** the downloaded tarball's SHA256 matches the published checksum
-- **THEN** the update proceeds to replace installed files
+- **WHEN** the downloaded tarball's SHA256 matches its published entry
+- **THEN** the update proceeds to extract into a staging location outside the live install root
 
-### Requirement: Update install replaces both the binary and the client bundle
-A successful update SHALL replace both the installed `agentboard` executable and its `dist/client` frontend bundle in the discovered install root. The running process MAY continue serving the previous build until it is restarted.
+### Requirement: Update install places both installed paths
+A successful update SHALL place the new `agentboard` executable and the new `dist/client` frontend bundle in the discovered install root. Because `dist/client` is a directory, the update MUST NOT assume it is replaceable by a single rename over a non-empty directory.
 
 #### Scenario: Both paths are replaced
-- **WHEN** an update is applied to an install root
+- **WHEN** an update completes successfully against an install root
 - **THEN** the install root's `bin/agentboard` and `dist/client` both come from the new release
 
 #### Scenario: Partial layout is refused
 - **WHEN** the discovered install root does not contain the expected binary and client bundle paths
 - **THEN** the update is refused with an error naming the unexpected layout
+
+### Requirement: Update install restores the install when a swap step fails
+Each live path SHALL be moved aside before its replacement is moved in, and if any swap step fails every already-swapped path SHALL be restored from its aside copy so the install is unchanged.
+
+#### Scenario: Failure mid-swap restores the install
+- **WHEN** placing either path fails after the other has already been swapped
+- **THEN** every swapped path is restored from its aside copy and the install matches the pre-update state
 
 ### Requirement: Update restarts the running deployment
 After replacing files, the update action SHALL restart the running server so the new build takes over: the systemd unit for a systemd deployment, the launchd agent for a launchd deployment, and the current process otherwise.
