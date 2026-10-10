@@ -1,16 +1,33 @@
 // UpdatePanel.tsx - the update dialog opened from the header chip. Shows the
 // target release and drives the server's install action: download, checksum
 // verify, all-or-restore swap, restart. The server restarts on success — the
-// connection dropping here is the expected outcome, not an error.
+// connection dropping here is the expected outcome, not an error. But
+// "Restarting…" stays recoverable: a restart verb can fail with the socket
+// intact, or a reconnect can land on a server that still offers the same
+// target, so the settle window returns the panel to a retryable failure
+// instead of an undismissable dialog.
 import { useEffect, useState } from 'react'
+import { useSessionStore } from '../stores/sessionStore'
 import { useUpdateStore } from '../stores/updateStore'
 
 type Phase = 'idle' | 'updating' | 'restarting' | 'failed'
+
+/**
+ * How long a restart may take before the panel concludes the takeover failed.
+ * Re-arms on every (re)connection epoch change: whichever server the client
+ * ends up talking to has this long to clear the target (a fresh build's
+ * startup check pushes `update-state`), or the panel recovers to a failure.
+ */
+const RESTART_SETTLE_MS = 10_000
+
+const RESTART_STALLED =
+  'The update was installed, but this server is still the previous build — the restart may have failed. Check ~/.agentboard/agentboard.log for update_restart_failed, then retry.'
 
 export default function UpdatePanel() {
   const update = useUpdateStore((state) => state.update)
   const open = useUpdateStore((state) => state.panelOpen)
   const closePanel = useUpdateStore((state) => state.closePanel)
+  const connectionEpoch = useSessionStore((state) => state.connectionEpoch)
   const [phase, setPhase] = useState<Phase>('idle')
   const [error, setError] = useState<string | null>(null)
   const target = update?.target ?? null
@@ -21,6 +38,19 @@ export default function UpdatePanel() {
     setPhase('idle')
     setError(null)
   }, [target?.tag])
+
+  useEffect(() => {
+    if (phase !== 'restarting') return
+    // The POST already resolved, so a server that meant to restart has either
+    // done so (the target clears and this dialog unmounts) or failed without
+    // dropping the connection. Either way, outlasting the settle window on a
+    // server still offering this target means the takeover never happened.
+    const timer = setTimeout(() => {
+      setPhase('failed')
+      setError(RESTART_STALLED)
+    }, RESTART_SETTLE_MS)
+    return () => clearTimeout(timer)
+  }, [phase, connectionEpoch])
 
   if (!open || target === null) return null
 
@@ -45,7 +75,7 @@ export default function UpdatePanel() {
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
-      onClick={phase === 'idle' ? closePanel : undefined}
+      onClick={phase === 'updating' ? undefined : closePanel}
       data-testid="update-panel-overlay"
     >
       <div
@@ -79,10 +109,10 @@ export default function UpdatePanel() {
         <div className="flex justify-end gap-2">
           <button
             onClick={closePanel}
-            disabled={phase === 'updating' || phase === 'restarting'}
+            disabled={phase === 'updating'}
             className="h-8 rounded border border-border px-3 text-sm text-secondary hover:bg-hover disabled:opacity-50"
           >
-            {phase === 'restarting' ? 'Restarting…' : 'Not now'}
+            {phase === 'restarting' ? 'Close' : 'Not now'}
           </button>
           <button
             onClick={() => void install()}

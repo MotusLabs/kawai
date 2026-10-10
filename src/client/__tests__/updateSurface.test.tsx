@@ -3,6 +3,7 @@ import TestRenderer, { act, type ReactTestInstance } from 'react-test-renderer'
 import type { ServerMessage, UpdateState } from '@shared/types'
 import Header from '../components/Header'
 import UpdatePanel from '../components/UpdatePanel'
+import { useSessionStore } from '../stores/sessionStore'
 import { useUpdateStore } from '../stores/updateStore'
 
 const textOf = (node: ReactTestInstance): string =>
@@ -14,7 +15,10 @@ const withTarget = (base: string, tag = `v${base}-12`): UpdateState => ({
 })
 const current: UpdateState = { current: '1.0.0-3', target: null }
 
-afterEach(() => useUpdateStore.setState({ update: null, panelOpen: false }))
+afterEach(() => {
+  useUpdateStore.setState({ update: null, panelOpen: false })
+  useSessionStore.setState({ connectionEpoch: 0 })
+})
 
 describe('header update chip', () => {
   // Created inside act(): a renderer created bare misses later act()-wrapped
@@ -135,6 +139,74 @@ describe('update panel', () => {
       expect(textOf(failed.root.findByProps({ role: 'alert' }))).toContain('checksum missing')
       expect(textOf(failed.root.findByProps({ 'data-testid': 'update-install' }))).toBe('Update now')
       failed.unmount()
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test('a restart that outlasts the settle window recovers to a retryable failure', async () => {
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async () => new Response(JSON.stringify({ ok: true }), { status: 200 })) as unknown as typeof fetch
+    jest.useFakeTimers()
+    try {
+      act(() => { useUpdateStore.setState({ update: withTarget('1.2.0'), panelOpen: true }) })
+      let renderer!: TestRenderer.ReactTestRenderer
+      act(() => { renderer = TestRenderer.create(<UpdatePanel />) })
+      await act(async () => { renderer.root.findByProps({ 'data-testid': 'update-install' }).props.onClick() })
+      expect(textOf(renderer.root.findByProps({ 'data-testid': 'update-install' }))).toBe('Restarting…')
+
+      // The POST resolved, the socket never dropped, and the target is still
+      // offered: the restart verb failed server-side. The panel must not lock.
+      await act(async () => { jest.advanceTimersByTime(10_000) })
+      expect(textOf(renderer.root.findByProps({ role: 'alert' }))).toContain('restart may have failed')
+      expect(textOf(renderer.root.findByProps({ 'data-testid': 'update-install' }))).toBe('Update now')
+      renderer.unmount()
+    } finally {
+      jest.useRealTimers()
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test('a reconnect onto the old build re-arms the settle window', async () => {
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async () => new Response(JSON.stringify({ ok: true }), { status: 200 })) as unknown as typeof fetch
+    jest.useFakeTimers()
+    try {
+      act(() => { useUpdateStore.setState({ update: withTarget('1.2.0'), panelOpen: true }) })
+      let renderer!: TestRenderer.ReactTestRenderer
+      act(() => { renderer = TestRenderer.create(<UpdatePanel />) })
+      await act(async () => { renderer.root.findByProps({ 'data-testid': 'update-install' }).props.onClick() })
+
+      // The socket drops and reconnects near the end of the first window; the
+      // server it lands on still offers the target, so the re-armed window
+      // must also expire into the recoverable failure.
+      await act(async () => { jest.advanceTimersByTime(9_000) })
+      act(() => { useSessionStore.setState({ connectionEpoch: 1 }) })
+      expect(renderer.root.findAllByProps({ role: 'alert' })).toHaveLength(0)
+      await act(async () => { jest.advanceTimersByTime(9_000) })
+      expect(renderer.root.findAllByProps({ role: 'alert' })).toHaveLength(0)
+      await act(async () => { jest.advanceTimersByTime(1_000) })
+      expect(textOf(renderer.root.findByProps({ role: 'alert' }))).toContain('restart may have failed')
+      renderer.unmount()
+    } finally {
+      jest.useRealTimers()
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test('the panel stays dismissible while restarting', async () => {
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async () => new Response(JSON.stringify({ ok: true }), { status: 200 })) as unknown as typeof fetch
+    try {
+      act(() => { useUpdateStore.setState({ update: withTarget('1.2.0'), panelOpen: true }) })
+      let renderer!: TestRenderer.ReactTestRenderer
+      act(() => { renderer = TestRenderer.create(<UpdatePanel />) })
+      await act(async () => { renderer.root.findByProps({ 'data-testid': 'update-install' }).props.onClick() })
+      const close = renderer.root.findAllByType('button').find(b => textOf(b) === 'Close')!
+      expect(close.props.disabled).toBeFalsy()
+      act(() => { close.props.onClick() })
+      expect(useUpdateStore.getState().panelOpen).toBe(false)
+      renderer.unmount()
     } finally {
       globalThis.fetch = originalFetch
     }
