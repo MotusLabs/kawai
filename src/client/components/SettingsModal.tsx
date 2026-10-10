@@ -8,12 +8,10 @@ import {
   type CommandPreset,
 } from '../stores/settingsStore'
 import { useThemeStore, type Theme } from '../stores/themeStore'
-import { getEffectiveModifier, getModifierDisplay } from '../utils/device'
-import { Switch } from './Switch'
 import SessionsSettings from './settings/SessionsSettings'
 import ChatSettings from './settings/ChatSettings'
 import TerminalSettings from './settings/TerminalSettings'
-import { playPermissionSound, playIdleSound, primeAudio } from '../utils/sound'
+import GeneralSettings from './settings/GeneralSettings'
 
 interface SettingsChangeFlags {
   webglChanged: boolean
@@ -337,104 +335,16 @@ export default function SettingsModal({
         </div>
 
         <div role="tabpanel" aria-label="General" hidden={activeTab !== 'general'} className="mt-5 space-y-4">
-          <div className="border-t border-border pt-4">
-            <label className="mb-2 block text-xs text-secondary">
-              Appearance
-            </label>
-            <div className="flex items-center justify-between">
-              <div>
-                <div className="text-sm text-primary">Dark Mode</div>
-                <div className="text-[10px] text-muted">
-                  Switch between dark and light themes.
-                </div>
-              </div>
-              <Switch
-                checked={draftTheme === 'dark'}
-                onCheckedChange={(checked) => setDraftTheme(checked ? 'dark' : 'light')}
-              />
-            </div>
-          </div>
-
-          <div className="border-t border-border pt-4 space-y-3">
-            <label className="mb-1 block text-xs text-secondary">
-              Notifications
-            </label>
-            <div className="flex items-center justify-between">
-              <div className="flex-1">
-                <div className="text-sm text-primary">Permission Sound</div>
-                <div className="text-[10px] text-muted">
-                  Play a ping when any session needs permission.
-                </div>
-              </div>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => void playPermissionSound()}
-                  className="btn text-xs px-2 py-1"
-                >
-                  Test
-                </button>
-                <Switch
-                  checked={draftSoundOnPermission}
-                  onCheckedChange={(checked) => {
-                    setDraftSoundOnPermission(checked)
-                    if (checked) void primeAudio() // Unlock audio on user gesture
-                  }}
-                />
-              </div>
-            </div>
-            <div className="flex items-center justify-between">
-              <div className="flex-1">
-                <div className="text-sm text-primary">Idle Sound</div>
-                <div className="text-[10px] text-muted">
-                  Play a chime when a session finishes working.
-                </div>
-              </div>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => void playIdleSound()}
-                  className="btn text-xs px-2 py-1"
-                >
-                  Test
-                </button>
-                <Switch
-                  checked={draftSoundOnIdle}
-                  onCheckedChange={(checked) => {
-                    setDraftSoundOnIdle(checked)
-                    if (checked) void primeAudio() // Unlock audio on user gesture
-                  }}
-                />
-              </div>
-            </div>
-          </div>
-
-          <div className="border-t border-border pt-4">
-            <label className="mb-2 block text-xs text-secondary">
-              Keyboard Shortcut Modifier
-            </label>
-            <div className="grid grid-cols-5 gap-1">
-              {(
-                ['auto', 'ctrl-option', 'ctrl-shift', 'cmd-option', 'cmd-shift'] as const
-              ).map((mod) => (
-                <button
-                  key={mod}
-                  type="button"
-                  className={`btn text-xs px-2 ${draftShortcutModifier === mod ? 'btn-primary' : ''}`}
-                  onClick={() => setDraftShortcutModifier(mod)}
-                >
-                  {mod === 'auto'
-                    ? 'Auto'
-                    : getModifierDisplay(mod)}
-                </button>
-              ))}
-            </div>
-            <p className="mt-1.5 text-[10px] text-muted">
-              {draftShortcutModifier === 'auto'
-                ? `Shortcuts: ${getModifierDisplay(getEffectiveModifier('auto'))}+[1-9/N/X/[/]]`
-                : `Shortcuts: ${getModifierDisplay(draftShortcutModifier)}+[1-9/N/X/[/]]`}
-            </p>
-          </div>
+          <GeneralSettings
+            draftTheme={draftTheme}
+            onDraftThemeChange={setDraftTheme}
+            draftSoundOnPermission={draftSoundOnPermission}
+            onDraftSoundOnPermissionChange={setDraftSoundOnPermission}
+            draftSoundOnIdle={draftSoundOnIdle}
+            onDraftSoundOnIdleChange={setDraftSoundOnIdle}
+            draftShortcutModifier={draftShortcutModifier}
+            onDraftShortcutModifierChange={setDraftShortcutModifier}
+          />
         </div>
 
         <div role="tabpanel" aria-label="Chat" hidden={activeTab !== 'chat'} className="mt-5 space-y-4">

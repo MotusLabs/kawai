@@ -10,7 +10,7 @@
 - [x] 2.1 Extract the Sessions tab into `src/client/components/settings/SessionsSettings.tsx`, keeping drafts in the shell and moving only the section's own ephemeral state (add-preset form) — verify the file is under 500 lines, `bun run typecheck` passes, and `settingsModal.test.tsx` passes
 - [x] 2.2 Extract the Chat tab into `src/client/components/settings/ChatSettings.tsx` as a thin composition of `FontSizeStepper` and `ChatProviderSettings` — verify the file is under 500 lines and `settingsModal.test.tsx` plus `bun run test src/client/__tests__/chatProviderSettings.test.tsx` pass
 - [x] 2.3 Extract the Terminal tab into `src/client/components/settings/TerminalSettings.tsx`, moving the four self-saving settings (mouse mode, terminal colors, history lookback, window names) with their immediate-PUT handlers (design D5) — verify the file is under 500 lines and the terminal-colors loading and update tests in `settingsModal.test.tsx` pass
-- [ ] 2.4 Extract the General tab into `src/client/components/settings/GeneralSettings.tsx` (theme, notifications, shortcut modifier) — verify the file is under 500 lines and `settingsModal.test.tsx` passes
+- [x] 2.4 Extract the General tab into `src/client/components/settings/GeneralSettings.tsx` (theme, notifications, shortcut modifier) — verify the file is under 500 lines and `settingsModal.test.tsx` passes
 
 ## 3. Default approval policy store and Settings control
 
