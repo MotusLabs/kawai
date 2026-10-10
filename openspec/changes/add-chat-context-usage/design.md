@@ -26,7 +26,7 @@ reconnecting client sees it immediately.
 
 **Goals:**
 - One number per chat session that answers "how close to compaction am I",
-  correct for profile-configured windows.
+  correct for the autocompact reserve and for profile-configured windows.
 - Updates during a turn, not only at turn end.
 - Survives restart, resume, archive, and restore.
 - Cheap enough to update constantly: no extra process round trips.
@@ -40,7 +40,7 @@ reconnecting client sees it immediately.
 
 ## Decisions
 
-### D1. Source: per-assistant-frame usage, not `result.usage` and not a control request
+### D1. Source of *used* tokens: per-assistant-frame usage, not `result.usage`
 
 The meter reads `message.message.usage` off each assistant frame and takes
 `input + cache_read + cache_creation + output` of the **latest** frame as the
@@ -53,51 +53,88 @@ reported `pre_tokens: 168253` — agreement to about 1%.
 
 *Why not `getContextUsage({ detail: 'summary' })` as the source:* it returns
 the right answer (`totalTokens`, `rawMaxTokens`, `percentage`) but is a
-control request against a live `Query`. The driver is lazy — it does not spawn
-until the first send — so a restored chat would show nothing until the user
-talks to it, and a failed or unsupported request leaves no reading at all.
-The passive stream is already there on every request.
+control request against a live `Query`. A restored chat with no live process
+would show nothing, and a failed or unsupported request leaves no reading at
+all. The passive stream is already there on every request. `getContextUsage`
+does still run, but only as the threshold correction in D2.
 
 *Rejected alternative: active polling.* Extra round trips and a dependency on
 a live process for a number the stream already carries.
 
-### D2. Denominator: `modelUsage[*].contextWindow`, accepting its one known blind spot
+### D2. Denominator: the auto-compaction threshold, not the model window
 
-The window token count comes from the resolved model usage's `contextWindow`,
-which is the model's believed limit. That is the denominator for mimo (200k,
-no override) and for `glm-5.3[1m]` (1M model with a matching 1M
-`CLAUDE_CODE_AUTO_COMPACT_WINDOW`).
+The meter answers "how close to compaction am I", so it divides by the
+session's **auto-compaction threshold** — the used-token count at which the
+conversation would be compacted — not by `modelUsage[*].contextWindow`.
 
-The blind spot: `rawMaxTokens` from `getContextUsage` is the **resolved
-autocompact window**, which is the model limit *or* a smaller
-compaction-policy window. If a profile ever sets
-`CLAUDE_CODE_AUTO_COMPACT_WINDOW` below its model's limit, the meter would
-understate fullness until an active call corrected it. No profile does that
-today, and the knob is operator configuration, so this is accepted rather than
-solved. When the drill-down later calls `getContextUsage`, it should adopt
-`rawMaxTokens` as the denominator as a correction.
+A real `/context` report on mimo shows why the two differ: 157.9k used of a
+200k window reads 79%, while the autocompact reserve is 33k and auto-compaction
+has been observed to fire at `pre_tokens: 168253`. Dividing by 200k reads 79%
+at the moment the conversation is about to be summarised; dividing by
+200k − 33k = 167k reads 95% and tells the truth. The reserve is present in
+every session, not only overridden ones, so this is the common case.
 
-*Why not hardcode 200k:* GLM's window is 1M. That is the case the proposal
-calls out.
+Resolution order for the threshold:
 
-### D3. Compaction adopts `post_tokens` immediately
+1. **Observed from the context-usage report.** `getContextUsage` (or a `/context`
+   command's structured `context_usage`) carries `rawMaxTokens` and a
+   `buffer` category (`kind: 'buffer'`), so the threshold is
+   `rawMaxTokens − buffer`. The `autoCompactThreshold` field is expected to
+   carry the same number directly and is preferred when present. The agent
+   starts on attach, so a live `Query` is usually available without waiting
+   for a turn; when it is not, fall through.
+2. **The profile's configured window.** `CLAUDE_CODE_AUTO_COMPACT_WINDOW` from
+   the resolved profile environment the server already computes
+   (`PROFILE_CONTROLLED_ENV`), when it configures a smaller window than the
+   model's. This is the window, not yet reserve-adjusted, so it is the right
+   answer for an override and an approximation otherwise.
+3. **`modelUsage[*].contextWindow`**, labelled as an approximation of the
+   window rather than the threshold. Only for a session that has neither an
+   observed report nor a profile override.
+
+*Why not `modelUsage.contextWindow` alone:* it is the model's believed limit
+and ignores both the autocompact reserve and any profile override. The
+reserve is 16.5% in the observed report, so this understates fullness in
+**every** session; an override understates it further, to the point the meter
+reads 20% when compaction is imminent.
+
+*Rejected alternative: reporting window fullness instead.* `/context` already
+prints `used / rawMaxTokens`, so a second meter showing the same 79% would be
+redundant. The chat header exists to warn about compaction, and that is the
+other number.
+
+*Calling `getContextUsage` is a light control request, not a poll.* It runs
+on attach and at turn boundaries, following the `interrupt` precedent of
+holding a live `Query` handle and calling a control method on it. It is not
+the source of the used-token count (D1) and it is not polled per frame.
+
+### D3. Compaction adopts `post_tokens` when it is present
 
 On `compact_boundary`, the driver reads `compact_metadata.post_tokens` and
 publishes that as the new reading, keeping the existing `'Context compacted'`
 notice. `trigger: 'auto' | 'manual'` is recorded but does not change the
 meter; both paths drop it.
 
+`compact_metadata` is required on the boundary frame but `post_tokens` is
+optional — only `trigger` and `pre_tokens` are required — so a frame carrying
+no post-compaction size is a real case, not a theoretical one.
+
+- `post_tokens` present and a finite number → publish it as the new reading.
+- `compact_metadata` absent, `post_tokens` absent, or the value non-finite →
+  retain the previous reading and let the next request correct it.
+
 *Why not wait for the next request:* the notice already tells the user
 something happened. A meter that says "94%" while the notice says "compacted"
 is worse than no meter.
 
-*Fallback:* if `compact_metadata` is absent (older CLI), keep the last
-reading and let the next request correct it. Never emit a zero.
+*Never invent a reading.* Undefined, `NaN`, and a zero standing in for
+"unknown" are all forbidden; the meter keeps its last known value instead
+(D7).
 
 ### D4. Persistence lives on `chat_sessions`, delivery rides the snapshot
 
 Four columns added with the existing additive-migration pattern used for
-`archived_at` and `approval_policy`: `context_tokens`, `context_window`,
+`archived_at` and `approval_policy`: `context_tokens`, `context_threshold`,
 `context_pct`, `context_at`. A single JSON column was considered and rejected
 — the meter needs three stable numbers now, and a JSON blob trades a trivial
 future migration for awkward queries and untyped reads. If the drill-down
@@ -140,13 +177,20 @@ request has run and is not yet known before the first one.
 
 ## Risks / Trade-offs
 
-- **Denominator blind spot (D2)** → Accepted. Documented above; the later
-  `getContextUsage` drill-down corrects it. Until a profile sets
-  `CLAUDE_CODE_AUTO_COMPACT_WINDOW` below its model limit, the two agree.
-- **`compact_metadata` missing on older CLIs** → Keep the last reading; the
-  next request corrects it (D3). The Claude Code baseline is pinned well
-  ahead of the field, so this is a fallback rather than a live path.
-- **Percentages over 100%** → The window can be exceeded before compaction
+- **Threshold source may be briefly approximate (D2)** → A session with no
+  live `Query` and no profile override meters against the model window until
+  the first observed report. Labelled as such; the next attach or turn
+  corrects it. Better than blocking the meter on a control request.
+- **`autoCompactThreshold` units need confirming against a live report** →
+  D2 prefers the field when present and falls back to
+  `rawMaxTokens − buffer`, which is known-correct from a real `/context`
+  report. The task that wires it pins this down with a fixture from a real
+  report rather than assuming.
+- **`compact_metadata` present but `post_tokens` missing** → Keep the last
+  reading; the next request corrects it (D3). Also covers metadata absent
+  entirely on older CLIs. The Claude Code baseline is pinned well ahead of
+  the field, so this is a fallback rather than a live path.
+- **Percentages over 100%** → The threshold can be exceeded before compaction
   fires. Render it; clamping hides a real problem. Callers must not assume
   `pct <= 100`.
 - **`message.usage` on streamed blocks is documented as "not final"** → It is
