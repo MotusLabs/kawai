@@ -35,9 +35,9 @@
 
 ## 7. Client
 
-- [ ] 7.1 Store the reading on the chat transcript entry in `src/client/stores/chatStore.ts` from `chat-snapshot` and live updates, and verify `src/client/__tests__/chatStore.test.ts` covers both paths and the clearing case
-- [ ] 7.2 Render the meter in the `src/client/components/chat/ChatView.tsx` header beside the session status — percentage plus `used / threshold` token counts — and verify `src/client/__tests__/chatComponents.test.tsx` covers the rendered counts and the hidden state when the reading is `null`
-- [ ] 7.3 Show the stored reading on an archived chat with no refresh affordance, and verify a component test covers the archived header
+- [x] 7.1 Store the reading on the chat transcript entry in `src/client/stores/chatStore.ts` from `chat-snapshot` and live updates, and verify `src/client/__tests__/chatStore.test.ts` covers both paths and the clearing case
+- [x] 7.2 Render the meter in the `src/client/components/chat/ChatView.tsx` header beside the session status — percentage plus `used / threshold` token counts — and verify `src/client/__tests__/chatComponents.test.tsx` covers the rendered counts and the hidden state when the reading is `null`
+- [x] 7.3 Show the stored reading on an archived chat with no refresh affordance, and verify a component test covers the archived header
 
 ## 8. Integration
 
