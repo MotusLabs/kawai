@@ -25,13 +25,18 @@ export interface ReleaseFeed {
 
 export interface ReleaseFeedOptions {
   repo?: string
+  /** Full releases-latest endpoint override; defaults to the GitHub API. */
+  endpoint?: string
   fetchImpl?: typeof fetch
 }
 
 export function createReleaseFeed(options: ReleaseFeedOptions = {}): ReleaseFeed {
   const repo = options.repo ?? RELEASE_REPO
   const doFetch = options.fetchImpl ?? fetch
-  const endpoint = `https://api.github.com/repos/${repo}/releases/latest`
+  // KAWAI_UPDATE_ENDPOINT lets a developer pin a fake latest locally without
+  // rebuilding — the same escape hatch KAWAI_BUILD_VERSION gives the version.
+  const endpoint =
+    options.endpoint ?? process.env.KAWAI_UPDATE_ENDPOINT ?? `https://api.github.com/repos/${repo}/releases/latest`
   let etag: string | null = null
   let cached: LatestRelease | null = null
 

@@ -103,4 +103,22 @@ describe('releaseFeed', () => {
     expect(requests[2]!.headers['If-None-Match']).toBe('W/"abc"')
     expect(recovered?.tag).toBe('v1.2.0-7')
   })
+
+  test('the endpoint override pins a fake latest (KAWAI_UPDATE_ENDPOINT)', async () => {
+    const original = process.env.KAWAI_UPDATE_ENDPOINT
+    const { impl, requests } = fakeFetch([{ status: 200, body: releaseBody() }])
+    try {
+      process.env.KAWAI_UPDATE_ENDPOINT = 'http://127.0.0.1:9/releases/latest'
+      const feed = createReleaseFeed({ fetchImpl: impl })
+      expect((await feed.latest())?.tag).toBe('v1.2.0-7')
+      expect(requests[0]!.url).toBe('http://127.0.0.1:9/releases/latest')
+      // An explicit option still wins over the environment.
+      const pinned = createReleaseFeed({ endpoint: 'http://127.0.0.1:8/releases/latest', fetchImpl: impl })
+      await pinned.latest()
+      expect(requests[1]!.url).toBe('http://127.0.0.1:8/releases/latest')
+    } finally {
+      if (original === undefined) delete process.env.KAWAI_UPDATE_ENDPOINT
+      else process.env.KAWAI_UPDATE_ENDPOINT = original
+    }
+  })
 })
