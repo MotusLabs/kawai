@@ -30,6 +30,7 @@ import { ChatSessionManager } from './chat/ChatSessionManager'
 import { ChatConnections, type ChatConnection } from './chat/ChatConnections'
 import { ChatWireLogs } from './chat/ChatWireLogs'
 import { chatFixtureEnabled, fixtureQueryFactory } from './chat/developmentFixture'
+import { parseApprovalPolicy } from './chat/approvalPolicy'
 import { getLogSearchDirs } from './logDiscovery'
 import {
   DEFAULT_SCROLLBACK_LINES,
@@ -2738,7 +2739,14 @@ function handleMessage(
         return
       }
       if (message.kind === 'chat') {
-        const input = { projectPath: message.projectPath, name: message.name, claudeProfileId: message.claudeProfileId }
+        // parseApprovalPolicy sanitizes the wire value: absent or unknown
+        // reads as manual, so older clients are unchanged (design D3).
+        const input = {
+          projectPath: message.projectPath,
+          name: message.name,
+          claudeProfileId: message.claudeProfileId,
+          approvalPolicy: parseApprovalPolicy(message.approvalPolicy),
+        }
         fireAndForget(chatSessionManager.createAvailableSession(input).then(result => {
           if (result.ok) send(ws, { type: 'session-created', session: result.session })
           else send(ws, { type: 'error', message: result.error })

@@ -22,7 +22,7 @@
 
 - [x] 4.1 Add optional `approvalPolicy?: ChatApprovalPolicy` to the `session-create` message in `src/shared/types.ts` and thread it through `handleCreateSession` in `src/client/App.tsx` — verify `bun run typecheck` passes and no existing `session-create` call site changes shape
 - [x] 4.2 Let `ChatSessionManager.createSession` accept `approvalPolicy` and use it instead of hardcoding `'manual'`, falling back to `'manual'` when absent — verify `bun run test src/server/__tests__/chatSessionManager.test.ts` covers created-with-auto, created-without-policy, and that a named profile leaves the supplied policy unchanged
-- [ ] 4.3 Pass `approvalPolicy` from the `session-create` handler in `src/server/index.ts` into `createAvailableSession` — verify `bun run test src/server/__tests__/` covers the chat create path and an absent field still producing a manual session
+- [x] 4.3 Pass `approvalPolicy` from the `session-create` handler in `src/server/index.ts` into `createAvailableSession` — verify `bun run test src/server/__tests__/` covers the chat create path and an absent field still producing a manual session
 
 ## 5. New Session dialog override
 
