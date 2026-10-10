@@ -58,8 +58,12 @@ individual tools.
 - The hook callback is observational only: it reports the new cwd and returns
   `{ continue: true }`. It MUST NOT block or alter the agent.
 
-Ignore hook firings that are not the main session (subagent frames carry
-`parent_tool_use_id`); only the top-level session's cwd moves the chat row.
+Ignore hook firings that are not the main session: `CwdChangedHookInput`
+extends the SDK's `BaseHookInput`, whose `agent_id` is present only when
+the hook fires from within a subagent and absent for the main thread —
+the SDK's documented discriminator. Only a hook input without `agent_id`
+moves the chat row. (`parent_tool_use_id` is a streamed-message field and
+does not exist on hook inputs; using it here would not typecheck.)
 
 ### D2. Overwrite `chat_sessions.project_path` in place
 

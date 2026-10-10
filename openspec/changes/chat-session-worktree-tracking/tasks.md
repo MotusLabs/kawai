@@ -3,7 +3,7 @@
 ## 1. Track the agent's working directory in the chat driver
 
 - [ ] 1.1 Register an observational `CwdChanged` hook on the chat SDK query in `src/server/chat/ChatSessionDriver.ts` and surface `new_cwd` through a new driver callback; verify with a unit test in `src/server/__tests__/chatSessionDriver.test.ts` that a hook input with `old_cwd`/`new_cwd` invokes the callback with the new directory and never blocks the agent
-- [ ] 1.2 Ignore cwd changes that belong to a subagent (hook input carrying `parent_tool_use_id`) and verify with a unit test that only the main session's cwd reaches the callback
+- [ ] 1.2 Ignore cwd changes that belong to a subagent — the hook input carries `agent_id` only when it fires from within a subagent (`BaseHookInput`; absent for the main thread) — and verify with a unit test whose fixture mirrors the real hook shape (`hook_event_name`, `old_cwd`/`new_cwd`, and `agent_id` on the subagent firing; the same fields without `agent_id` on the main-thread firing) that only the main session's cwd reaches the callback
 
 ## 2. Persist and publish the updated session path
 
