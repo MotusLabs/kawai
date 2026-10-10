@@ -117,7 +117,8 @@ interface ManagerHarness {
 function createHarness(
   db: SessionDatabase,
   isDirectory: (path: string) => boolean = anyDirectory,
-  usageImpl?: FakeUsageControl
+  usageImpl?: FakeUsageControl,
+  titleLocateIntervalMs?: number
 ): ManagerHarness {
   const registry = new SessionRegistry()
   const handles: FakeHandle[] = []
@@ -132,6 +133,7 @@ function createHarness(
     onActivity: (sessionId, activity) => activities.push({ sessionId, activity }),
     onUsage: (profileId, report) => usage.push({ profileId, report }),
     queryFactory: fakeQueryFactory(handles, usageImpl),
+    titleLocateIntervalMs,
   })
   return { manager, registry, handles, events, activities, usage }
 }
@@ -140,6 +142,20 @@ function createHarness(
 async function flush(rounds = 6): Promise<void> {
   for (let i = 0; i < rounds; i++) {
     await new Promise((resolve) => setTimeout(resolve, 1))
+  }
+}
+
+/** Poll until the condition holds (watcher callbacks are async). */
+async function waitForCondition(
+  condition: () => boolean,
+  timeoutMs = 2_000
+): Promise<void> {
+  const started = Date.now()
+  while (!condition()) {
+    if (Date.now() - started > timeoutMs) {
+      throw new Error('Timed out waiting for condition')
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10))
   }
 }
 
@@ -1909,6 +1925,202 @@ describe('ChatSessionManager', () => {
     expect(policyResolutions).toHaveLength(2)
     expect(manager.getSnapshot(id)?.pendingRequests).toEqual([])
     manager.kill(id)
+  })
+  test('a live session adopts generated titles while unclaimed and never after a manual rename', async () => {
+    process.env.ANTHROPIC_API_KEY = 'test-key'
+    const harness = createHarness(db)
+    const created = harness.manager.createSession({ projectPath: '/tmp/proj' })
+    if (!created.ok) throw new Error(created.error)
+    const id = created.session.id
+    expect(created.session.nameSource).toBe('placeholder')
+    const transcript = writeTranscript(
+      'title-session',
+      JSON.stringify({ type: 'ai-title', aiTitle: 'first title', sessionId: 'title-session' }) + '\n'
+    )
+    await harness.manager.send(id, 'hello')
+    // The init message carries the SDK session id; the title tail starts with
+    // it and adopts the transcript's current title.
+    harness.handles[0]!.push(initMessage('title-session'))
+    await waitForCondition(
+      () => db.getChatSession(id)?.name === 'first title'
+    )
+    expect(harness.registry.get(id)?.nameSource).toBe('auto')
+    // A later title replaces an auto name (design D2).
+    fs.appendFileSync(
+      transcript,
+      JSON.stringify({ type: 'ai-title', aiTitle: 'better title', sessionId: 'title-session' }) + '\n'
+    )
+    await waitForCondition(
+      () => db.getChatSession(id)?.name === 'better title'
+    )
+    expect(db.getChatSession(id)?.nameSource).toBe('auto')
+    // A user rename pins the name: later titles never touch it (design D1).
+    expect(harness.manager.rename(id, 'my own name').ok).toBe(true)
+    fs.appendFileSync(
+      transcript,
+      JSON.stringify({ type: 'ai-title', aiTitle: 'too late', sessionId: 'title-session' }) + '\n'
+    )
+    await flush(10)
+    expect(db.getChatSession(id)?.name).toBe('my own name')
+    expect(db.getChatSession(id)?.nameSource).toBe('manual')
+    expect(harness.registry.get(id)?.name).toBe('my own name')
+    harness.manager.shutdown()
+  })
+
+  test('no title tail outlives kill, archive, or shutdown', async () => {
+    process.env.ANTHROPIC_API_KEY = 'test-key'
+    // Kill: the session is gone, so nothing adopts the appended title.
+    const killHarness = createHarness(db)
+    const killCreated = killHarness.manager.createSession({ projectPath: '/tmp/proj' })
+    if (!killCreated.ok) throw new Error(killCreated.error)
+    const killId = killCreated.session.id
+    writeTranscript(
+      'title-kill',
+      JSON.stringify({ type: 'ai-title', aiTitle: 'kill title', sessionId: 'title-kill' }) + '\n'
+    )
+    await killHarness.manager.send(killId, 'hello')
+    killHarness.handles[0]!.push(initMessage('title-kill'))
+    await waitForCondition(
+      () => db.getChatSession(killId)?.name === 'kill title'
+    )
+    killHarness.manager.kill(killId)
+    fs.appendFileSync(
+      path.join(process.env.CLAUDE_CONFIG_DIR!, 'projects', '-tmp-proj', 'title-kill.jsonl'),
+      JSON.stringify({ type: 'ai-title', aiTitle: 'post-kill', sessionId: 'title-kill' }) + '\n'
+    )
+    await flush(10)
+    expect(db.getChatSession(killId)).toBeNull()
+    killHarness.manager.shutdown()
+
+    // Archive: the record stays, the tail does not follow later writes.
+    const archiveHarness = createHarness(db)
+    const archiveCreated = archiveHarness.manager.createSession({ projectPath: '/tmp/proj' })
+    if (!archiveCreated.ok) throw new Error(archiveCreated.error)
+    const archiveId = archiveCreated.session.id
+    writeTranscript(
+      'title-archive',
+      JSON.stringify({ type: 'ai-title', aiTitle: 'archive title', sessionId: 'title-archive' }) + '\n'
+    )
+    await archiveHarness.manager.send(archiveId, 'hello')
+    archiveHarness.handles[0]!.push(initMessage('title-archive'))
+    await waitForCondition(
+      () => db.getChatSession(archiveId)?.name === 'archive title'
+    )
+    expect(archiveHarness.manager.archive(archiveId).ok).toBe(true)
+    fs.appendFileSync(
+      path.join(process.env.CLAUDE_CONFIG_DIR!, 'projects', '-tmp-proj', 'title-archive.jsonl'),
+      JSON.stringify({ type: 'ai-title', aiTitle: 'post-archive', sessionId: 'title-archive' }) + '\n'
+    )
+    await flush(10)
+    expect(db.getChatSession(archiveId)?.name).toBe('archive title')
+    archiveHarness.manager.shutdown()
+
+    // Shutdown: every tail ends with the server.
+    const shutdownHarness = createHarness(db)
+    const shutdownCreated = shutdownHarness.manager.createSession({ projectPath: '/tmp/proj' })
+    if (!shutdownCreated.ok) throw new Error(shutdownCreated.error)
+    const shutdownId = shutdownCreated.session.id
+    writeTranscript(
+      'title-shutdown',
+      JSON.stringify({ type: 'ai-title', aiTitle: 'shutdown title', sessionId: 'title-shutdown' }) + '\n'
+    )
+    await shutdownHarness.manager.send(shutdownId, 'hello')
+    shutdownHarness.handles[0]!.push(initMessage('title-shutdown'))
+    await waitForCondition(
+      () => db.getChatSession(shutdownId)?.name === 'shutdown title'
+    )
+    shutdownHarness.manager.shutdown()
+    fs.appendFileSync(
+      path.join(process.env.CLAUDE_CONFIG_DIR!, 'projects', '-tmp-proj', 'title-shutdown.jsonl'),
+      JSON.stringify({ type: 'ai-title', aiTitle: 'post-shutdown', sessionId: 'title-shutdown' }) + '\n'
+    )
+    await flush(10)
+    expect(db.getChatSession(shutdownId)?.name).toBe('shutdown title')
+  })
+
+  test('a transcript that appears long after the SDK id still arms the title tail', async () => {
+    process.env.ANTHROPIC_API_KEY = 'test-key'
+    // The agent starts on attach with no prompt, so the SDK id arrives before
+    // any transcript exists — and a later send reuses the driver without
+    // re-arming. The locator must therefore outlive its early retries. The
+    // wait has to pass the old three-retry budget (2s+4s+2s = 6s) to prove
+    // the tail survives it; the locate interval is shrunk so the new code
+    // picks the file up promptly instead of backing off to 15s.
+    const harness = createHarness(db, anyDirectory, undefined, 20)
+    const created = harness.manager.createSession({ projectPath: '/tmp/proj' })
+    if (!created.ok) throw new Error(created.error)
+    const id = created.session.id
+    await harness.manager.send(id, 'hello')
+    // SDK id known, transcript not yet written: the placeholder stands.
+    harness.handles[0]!.push(initMessage('title-late'))
+    await flush(10)
+    expect(db.getChatSession(id)?.nameSource).toBe('placeholder')
+    await new Promise((resolve) => setTimeout(resolve, 6_500))
+    // The first message finally persists a transcript carrying a title.
+    writeTranscript(
+      'title-late',
+      JSON.stringify({ type: 'ai-title', aiTitle: 'late title', sessionId: 'title-late' }) + '\n'
+    )
+    await waitForCondition(() => db.getChatSession(id)?.name === 'late title')
+    expect(db.getChatSession(id)?.nameSource).toBe('auto')
+    harness.manager.shutdown()
+  }, 15_000)
+
+  test('a restored session adopts its transcript title as a catch-up, dormant ones only on attach', async () => {
+    process.env.ANTHROPIC_API_KEY = 'test-key'
+    // A pre-feature session (migrated to placeholder) whose conversation
+    // already carries a generated title: restorePersisted adopts it without
+    // anyone opening the chat.
+    const now = new Date().toISOString()
+    db.insertChatSession({
+      sessionId: 'chat-preexisting',
+      name: 'sure-mark',
+      projectPath: '/tmp/proj',
+      sdkSessionId: 'title-restore',
+      status: 'waiting',
+      createdAt: now,
+      lastActivityAt: now,
+      nameSource: 'placeholder',
+    })
+    writeTranscript(
+      'title-restore',
+      JSON.stringify({ type: 'ai-title', aiTitle: 'restored title', sessionId: 'title-restore' }) + '\n'
+    )
+    const restored = createHarness(db)
+    expect(restored.registry.get('chat-preexisting')?.name).toBe('restored title')
+    expect(restored.registry.get('chat-preexisting')?.nameSource).toBe('auto')
+    restored.manager.shutdown()
+
+    // A dormant session whose transcript gains a title later adopts nothing
+    // (no tail until it goes live)...
+    const later = new Date().toISOString()
+    db.insertChatSession({
+      sessionId: 'chat-dormant',
+      name: 'pure-bell',
+      projectPath: '/tmp/proj',
+      sdkSessionId: 'title-dormant',
+      status: 'waiting',
+      createdAt: later,
+      lastActivityAt: later,
+      nameSource: 'placeholder',
+    })
+    writeTranscript('title-dormant', '')
+    const dormant = createHarness(db)
+    expect(dormant.registry.get('chat-dormant')?.name).toBe('pure-bell')
+    fs.writeFileSync(
+      path.join(process.env.CLAUDE_CONFIG_DIR!, 'projects', '-tmp-proj', 'title-dormant.jsonl'),
+      JSON.stringify({ type: 'ai-title', aiTitle: 'attached later', sessionId: 'title-dormant' }) + '\n'
+    )
+    await flush(10)
+    expect(dormant.registry.get('chat-dormant')?.name).toBe('pure-bell')
+    // ...and adopts on the first attach (the spawn arms the tail, whose
+    // catch-up read picks the title up).
+    expect((await dormant.manager.start('chat-dormant')).ok).toBe(true)
+    await waitForCondition(
+      () => db.getChatSession('chat-dormant')?.name === 'attached later'
+    )
+    expect(dormant.registry.get('chat-dormant')?.nameSource).toBe('auto')
+    dormant.manager.shutdown()
   })
 })
 

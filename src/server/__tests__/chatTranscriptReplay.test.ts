@@ -6,6 +6,8 @@ import type { ChatEvent } from '../../shared/chat'
 import {
   findTranscriptPath,
   parseTranscriptContent,
+  parseTranscriptTitleLine,
+  readTranscriptTitle,
   replayTranscriptFile,
   withCancelledRequests,
 } from '../chat/transcriptReplay'
@@ -404,6 +406,129 @@ describe('parseTranscriptContent', () => {
       { excludeToolCallIds: new Set(['call_live']) }
     )
     expect(typesOf(events)).toEqual(['tool_call'])
+  })
+})
+
+describe('transcript title rows', () => {
+  let titleTempDir: string
+  const originalTitleConfigDir = process.env.CLAUDE_CONFIG_DIR
+  beforeEach(() => {
+    titleTempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentboard-titles-'))
+    process.env.CLAUDE_CONFIG_DIR = path.join(titleTempDir, 'claude-config')
+  })
+  afterEach(() => {
+    if (originalTitleConfigDir !== undefined) {
+      process.env.CLAUDE_CONFIG_DIR = originalTitleConfigDir
+    } else {
+      delete process.env.CLAUDE_CONFIG_DIR
+    }
+    fs.rmSync(titleTempDir, { recursive: true, force: true })
+  })
+
+  function writeTitleTranscript(sdkSessionId: string, lines: string[]): string {
+    const dir = path.join(process.env.CLAUDE_CONFIG_DIR!, 'projects', '-tmp-proj')
+    fs.mkdirSync(dir, { recursive: true })
+    const filePath = path.join(dir, `${sdkSessionId}.jsonl`)
+    fs.writeFileSync(filePath, lines.join('\n') + '\n')
+    return filePath
+  }
+
+  test('an ai-title row yields the title with auto source', () => {
+    const line = JSON.stringify({
+      type: 'ai-title',
+      aiTitle: 'openspec-apply',
+      sessionId: 'sdk-1',
+    })
+    expect(parseTranscriptTitleLine(line)).toEqual({
+      title: 'openspec-apply',
+      source: 'auto',
+    })
+  })
+
+  test('a custom-title row yields the title with manual source (design D7)', () => {
+    const line = JSON.stringify({
+      type: 'custom-title',
+      customTitle: 'My pinned name',
+      sessionId: 'sdk-1',
+    })
+    expect(parseTranscriptTitleLine(line)).toEqual({
+      title: 'My pinned name',
+      source: 'manual',
+    })
+  })
+
+  test('non-title rows, missing or blank titles, and junk yield null', () => {
+    expect(parseTranscriptTitleLine(JSON.stringify({ type: 'user', message: { role: 'user', content: 'hi' } }))).toBeNull()
+    expect(parseTranscriptTitleLine(JSON.stringify({ type: 'ai-title', sessionId: 'sdk-1' }))).toBeNull()
+    expect(parseTranscriptTitleLine(JSON.stringify({ type: 'ai-title', aiTitle: '   ', sessionId: 'sdk-1' }))).toBeNull()
+    expect(parseTranscriptTitleLine(JSON.stringify({ type: 'custom-title' }))).toBeNull()
+    expect(parseTranscriptTitleLine('not json at all')).toBeNull()
+    expect(parseTranscriptTitleLine('')).toBeNull()
+  })
+
+  test('a truncated trailing title line is not a title yet', () => {
+    // The tail of a file being appended: no closing brace, no newline.
+    const truncated = '{"type":"ai-title","aiTitle":"openspec-ap'
+    expect(parseTranscriptTitleLine(truncated)).toBeNull()
+  })
+
+  test('parseTranscriptContent reports the latest title row and ignores them as events', () => {
+    const content = [
+      JSON.stringify({ type: 'ai-title', aiTitle: 'first title', sessionId: 's' }),
+      JSON.stringify({
+        type: 'user',
+        uuid: 'u1',
+        timestamp: '2026-10-04T10:00:00.000Z',
+        message: { role: 'user', content: 'hello' },
+      }),
+      JSON.stringify({ type: 'ai-title', aiTitle: 'better title', sessionId: 's' }),
+    ].join('\n')
+    const parsed = parseTranscriptContent(content)
+    expect(parsed.title).toEqual({ title: 'better title', source: 'auto' })
+    // Title rows are state, not chronology: nothing is replayed for them.
+    expect(typesOf(parsed.events)).toEqual(['user_message'])
+    expect(parsed.invalidLines).toBe(0)
+  })
+
+  test('ordering: a user-set title sticks, a generated one follows the latest', () => {
+    // D1/D7: a `custom-title` is user-set and terminal, so a later generated
+    // title does not displace it — whatever the arrival order.
+    const customFirst = [
+      JSON.stringify({ type: 'custom-title', customTitle: 'user title', sessionId: 's' }),
+      JSON.stringify({ type: 'ai-title', aiTitle: 'later generated', sessionId: 's' }),
+    ].join('\n')
+    expect(parseTranscriptContent(customFirst).title).toEqual({
+      title: 'user title',
+      source: 'manual',
+    })
+    const customLast = [
+      JSON.stringify({ type: 'ai-title', aiTitle: 'later generated', sessionId: 's' }),
+      JSON.stringify({ type: 'custom-title', customTitle: 'user title', sessionId: 's' }),
+    ].join('\n')
+    expect(parseTranscriptContent(customLast).title).toEqual({
+      title: 'user title',
+      source: 'manual',
+    })
+    // D2: while unclaimed, the latest generated title is current.
+    const generated = [
+      JSON.stringify({ type: 'ai-title', aiTitle: 'early', sessionId: 's' }),
+      JSON.stringify({ type: 'ai-title', aiTitle: 'later generated', sessionId: 's' }),
+    ].join('\n')
+    expect(parseTranscriptContent(generated).title).toEqual({
+      title: 'later generated',
+      source: 'auto',
+    })
+  })
+
+  test('readTranscriptTitle reads a file and tolerates a missing one', () => {
+    const filePath = writeTitleTranscript('sdk-title', [
+      JSON.stringify({ type: 'ai-title', aiTitle: 'file title', sessionId: 's' }),
+    ])
+    expect(readTranscriptTitle(filePath)).toEqual({
+      title: 'file title',
+      source: 'auto',
+    })
+    expect(readTranscriptTitle(path.join(path.dirname(filePath), 'nope.jsonl'))).toBeNull()
   })
 })
 

@@ -1190,3 +1190,70 @@ describe('ChatView usage bar', () => {
     renderer.unmount()
   })
 })
+
+describe('chat header rename', () => {
+  afterEach(() => { useChatDebugStore.setState({ views: {} }) })
+
+  function renderNameView(session: Session) {
+    const sent: ClientMessage[] = []
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => {
+      renderer = TestRenderer.create(<ChatView
+        session={session}
+        sendMessage={message => { sent.push(message) }}
+        connectionStatus="connected" connectionEpoch={0} error={null}
+        onClose={() => {}} onKill={() => {}} />)
+    })
+    return { sent, renderer }
+  }
+
+  const renamesOf = (sent: ClientMessage[]): ClientMessage[] =>
+    sent.filter(message => message.type === 'session-rename')
+
+  test('shows the name; clicking it opens an input that submits a rename', () => {
+    const { sent, renderer } = renderNameView(chatSession)
+    const title = renderer.root.findByProps({ 'data-testid': 'chat-name' })
+    expect(textOf(title)).toBe('Chat · Chat')
+    act(() => { title.props.onClick() })
+    const input = renderer.root.findByProps({ 'data-testid': 'chat-name-input' })
+    act(() => { input.props.onChange({ target: { value: 'Claude Code Chat subscription usage metrics spec' } }) })
+    act(() => { input.props.onKeyDown({ key: 'Enter', preventDefault: () => {} }) })
+    expect(renamesOf(sent)).toEqual([{
+      type: 'session-rename',
+      sessionId: 'chat-1',
+      newName: 'Claude Code Chat subscription usage metrics spec',
+    }])
+    // Editing ended; the title shows the broadcast name once it arrives.
+    expect(renderer.root.findAllByProps({ 'data-testid': 'chat-name-input' })).toHaveLength(0)
+    renderer.unmount()
+  })
+
+  test('an empty name exits editing without sending', () => {
+    const { sent, renderer } = renderNameView(chatSession)
+    act(() => { renderer.root.findByProps({ 'data-testid': 'chat-name' }).props.onClick() })
+    const input = renderer.root.findByProps({ 'data-testid': 'chat-name-input' })
+    act(() => { input.props.onChange({ target: { value: '   ' } }) })
+    act(() => { input.props.onBlur() })
+    expect(renamesOf(sent)).toEqual([])
+    expect(renderer.root.findAllByProps({ 'data-testid': 'chat-name-input' })).toHaveLength(0)
+    renderer.unmount()
+  })
+
+  test('Escape reverts the draft and sends nothing; a broadcast rename shows without a reload', () => {
+    const { sent, renderer } = renderNameView(chatSession)
+    act(() => { renderer.root.findByProps({ 'data-testid': 'chat-name' }).props.onClick() })
+    const input = renderer.root.findByProps({ 'data-testid': 'chat-name-input' })
+    act(() => { input.props.onChange({ target: { value: 'discarded' } }) })
+    act(() => { input.props.onKeyDown({ key: 'Escape', preventDefault: () => {} }) })
+    expect(renamesOf(sent)).toEqual([])
+    // The unedited header follows a session-update the way App delivers it:
+    // a new session prop with the broadcast name.
+    act(() => { renderer.update(<ChatView
+      session={{ ...chatSession, name: 'renamed elsewhere' } as Session}
+      sendMessage={message => { sent.push(message) }}
+      connectionStatus="connected" connectionEpoch={0} error={null}
+      onClose={() => {}} onKill={() => {}} />) })
+    expect(textOf(renderer.root.findByProps({ 'data-testid': 'chat-name' }))).toBe('renamed elsewhere · Chat')
+    renderer.unmount()
+  })
+})

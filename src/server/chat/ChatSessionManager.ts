@@ -4,7 +4,9 @@
 // registry, kill/shutdown settlement (including the session's protocol log),
 // immediate sdkSessionId capture so a restart can resume the same agent
 // conversation, and the current in-flight-turn activity (phase plus start
-// time) surfaced through getSnapshot and the onActivity broadcast sink. The
+// time) surfaced through getSnapshot and the onActivity broadcast sink. A
+// live session's transcript is tailed for the agent's generated title rows,
+// which replace any non-user-set name (chat-session-naming design D4). The
 // SDK import stays dynamic (injected as a queryFactory in tests) so a broken
 // install disables the feature instead of crashing the server. Chat spawns
 // run a separately installed Claude Code executable: creation and every
@@ -51,9 +53,11 @@ import { probeSdkAvailability } from './sdkAvailability'
 import { UsageLimitStore } from './usageLimits'
 import {
   findTranscriptPath,
+  readTranscriptTitle,
   replayTranscriptFile,
   type TranscriptReplay,
 } from './transcriptReplay'
+import { watchTranscriptTitle, type TranscriptTitleWatcher } from './transcriptTitleWatcher'
 
 export type { ChatQueryFactory }
 export { chatAuthErrorMessage, hasClaudeAuth }
@@ -106,6 +110,13 @@ export interface ChatSessionManagerOptions {
    * lives here). Injected in tests so a real home catalog cannot leak in.
    */
   profileCatalogHome?: string
+  /**
+   * Base delay between transcript-locate retries (chat-session-naming D4).
+   * The locator runs until the session goes away — the transcript appears
+   * with the first message, which can be much later than the SDK id. Tests
+   * shrink it so a delayed transcript is cheap to cover.
+   */
+  titleLocateIntervalMs?: number
   /** Catalog file failure sink; defaults to the structured logger. */
   catalogErrorLog?: (errors: string[]) => void
 }
@@ -168,6 +179,13 @@ export class ChatSessionManager {
    * memory only (usage bar design D3): a restart begins with none.
    */
   private readonly usageLimits = new UsageLimitStore()
+  /**
+   * Transcript title tails per live session (chat-session-naming design D4):
+   * a handle is either an armed watcher or a pending locate retry, so exactly
+   * one entry exists whenever a session's transcript is being followed.
+   * Released on kill, archive, and shutdown.
+   */
+  private readonly titleWatchers = new Map<string, { close: () => void }>()
 
   async createAvailableSession(input: { projectPath: string; name?: string; claudeProfileId?: string }): Promise<ChatCreateResult> {
     // Refuse a bad path before the probe spends an SDK spawn on it.
@@ -422,6 +440,9 @@ export class ChatSessionManager {
     }
     this.drivers.delete(sessionId)
     this.driverPromises.delete(sessionId)
+    // The transcript is final once the agent is stopped: release the title
+    // tail with it (design D4 risk note).
+    this.releaseTitleWatch(sessionId)
     // The archived chat shows no activity row (design D5): any in-flight
     // phase ended with the driver above.
     this.clearActivity(sessionId)
@@ -548,6 +569,7 @@ export class ChatSessionManager {
     this.drivers.get(sessionId)?.kill()
     this.drivers.delete(sessionId)
     this.driverPromises.delete(sessionId)
+    this.releaseTitleWatch(sessionId)
     this.records.delete(sessionId)
     this.snapshotHistory.delete(sessionId)
     this.liveEvents.delete(sessionId)
@@ -566,6 +588,9 @@ export class ChatSessionManager {
     this.drivers.clear()
     this.driverPromises.clear()
     this.activities.clear()
+    for (const sessionId of this.titleWatchers.keys()) {
+      this.releaseTitleWatch(sessionId)
+    }
   }
 
   /**
@@ -641,9 +666,79 @@ export class ChatSessionManager {
           status: 'waiting',
         })
       }
+      // Title catch-up (chat-session-naming design D4): a session whose name
+      // was never user-set adopts its transcript's latest title now, so the
+      // list is correct for sessions nobody opens. Nothing is persisted —
+      // the row re-derives on the next restart the same way.
+      if (
+        (record.nameSource ?? 'manual') !== 'manual' &&
+        record.sdkSessionId
+      ) {
+        const filePath = findTranscriptPath(record.sdkSessionId)
+        const title = filePath ? readTranscriptTitle(filePath) : null
+        if (title) {
+          record = { ...record, name: title.title, nameSource: title.source }
+        }
+      }
       this.records.set(record.sessionId, record)
       this.options.registry.setChatSession(this.toSession(record))
     }
+  }
+
+  /**
+   * Adopt a transcript title for a session whose name is not user-set
+   * (design D1/D2): placeholder and auto names follow each newer title; a
+   * manual name is never touched. A `custom-title` row counts as user-set
+   * (design D7), so adopting it also pins the name.
+   */
+  private applyTranscriptTitle(
+    sessionId: string,
+    title: string,
+    source: 'auto' | 'manual'
+  ): void {
+    const record = this.records.get(sessionId)
+    if (!record || (record.nameSource ?? 'manual') === 'manual') return
+    if (record.name === title && record.nameSource === source) return
+    this.applyPatch(sessionId, { name: title, nameSource: source })
+  }
+
+  /**
+   * Start following a session's transcript for title rows. The transcript is
+   * created by the first message, which can arrive much later than the SDK id
+   * (the agent starts on attach, with no prompt), and a later send reuses the
+   * driver without re-running this. So the locate retry lives as long as the
+   * session does — giving up would pin the placeholder for the whole
+   * conversation. Polls back off to `titleLocateIntervalMs * 7.5`.
+   */
+  private watchSessionTitle(sessionId: string, attempt = 0): void {
+    if (this.titleWatchers.has(sessionId)) return
+    const record = this.records.get(sessionId)
+    if (!record || record.archivedAt != null || !record.sdkSessionId) return
+    const filePath = findTranscriptPath(record.sdkSessionId)
+    if (!filePath) {
+      const base = this.options.titleLocateIntervalMs ?? 2_000
+      const timer = setTimeout(
+        () => {
+          this.titleWatchers.delete(sessionId)
+          this.watchSessionTitle(sessionId, attempt + 1)
+        },
+        Math.min(base * 2 ** Math.min(attempt, 3), base * 7.5)
+      )
+      timer.unref?.()
+      this.titleWatchers.set(sessionId, { close: () => clearTimeout(timer) })
+      return
+    }
+    const watcher: TranscriptTitleWatcher = watchTranscriptTitle(
+      filePath,
+      (title, source) => this.applyTranscriptTitle(sessionId, title, source)
+    )
+    this.titleWatchers.set(sessionId, watcher)
+  }
+
+  /** Stop following a session's transcript (kill, archive, shutdown). */
+  private releaseTitleWatch(sessionId: string): void {
+    this.titleWatchers.get(sessionId)?.close()
+    this.titleWatchers.delete(sessionId)
   }
 
   private async ensureDriver(
@@ -732,6 +827,9 @@ export class ChatSessionManager {
         return null
       }
       this.drivers.set(record.sessionId, driver)
+      // A restored conversation already has a transcript: its title tail
+      // starts with the (re)spawn, before any attach or send.
+      if (record.sdkSessionId) this.watchSessionTitle(record.sessionId)
       return driver
     })()
     this.driverPromises.set(sessionId, promise)
@@ -896,6 +994,11 @@ export class ChatSessionManager {
     const next = { ...record, ...patch }
     this.records.set(sessionId, next)
     this.options.db.updateChatSession(sessionId, patch)
+    // The first SDK session id makes a transcript followable: start the
+    // title tail for the now-live conversation (design D4).
+    if (patch.sdkSessionId !== undefined) {
+      this.watchSessionTitle(sessionId)
+    }
     this.options.registry.updateSession(sessionId, {
       ...(patch.status !== undefined ? { status: patch.status } : {}),
       ...(patch.name !== undefined ? { name: patch.name } : {}),

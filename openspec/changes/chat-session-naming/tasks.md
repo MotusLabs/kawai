@@ -14,22 +14,22 @@
 
 ## 3. Adopting generated titles
 
-- [ ] 3.1 Parse `ai-title` and `custom-title` rows in `src/server/chat/transcriptReplay.ts` (currently skipped as unknown types), and verify unit tests cover both row shapes, a missing `aiTitle`, and a truncated trailing line
-- [ ] 3.2 Implement a helper that returns the latest title and its implied source (`ai-title` → `auto`, `custom-title` → `manual`) from a transcript, and verify tests cover ordering when both appear
-- [ ] 3.3 Tail the transcript of each live chat session for new title rows and apply them when provenance is not `manual`, and verify a test asserts a later `ai-title` updates an `auto` name and never touches a `manual` one
-- [ ] 3.4 Release the tail on kill, archive, and shutdown, and verify a test asserts no watcher outlives the session
-- [ ] 3.5 Read the title as a catch-up when a chat session is restored or first attached after a restart, and verify a test covers a session named before the feature adopting its transcript's title
+- [x] 3.1 Parse `ai-title` and `custom-title` rows in `src/server/chat/transcriptReplay.ts` (currently skipped as unknown types), and verify unit tests cover both row shapes, a missing `aiTitle`, and a truncated trailing line
+- [x] 3.2 Implement a helper that returns the latest title and its implied source (`ai-title` → `auto`, `custom-title` → `manual`) from a transcript, and verify tests cover ordering when both appear
+- [x] 3.3 Tail the transcript of each live chat session for new title rows and apply them when provenance is not `manual`, and verify a test asserts a later `ai-title` updates an `auto` name and never touches a `manual` one
+- [x] 3.4 Release the tail on kill, archive, and shutdown, and verify a test asserts no watcher outlives the session
+- [x] 3.5 Read the title as a catch-up when a chat session is restored or first attached after a restart, and verify a test covers a session named before the feature adopting its transcript's title
 
 ## 4. Client rename surfaces
 
-- [ ] 4.1 Make the chat view header name editable (`src/client/components/chat/ChatView.tsx`) and verify a component test covers editing, submitting, and the empty-name case
-- [ ] 4.2 Wire the navigator rename entry point for chat rows (`src/client/components/SessionRow.tsx`) so it no longer errors, and verify a component test covers renaming a chat row and the name appearing on the row
-- [ ] 4.3 Render an updated name on `session-update` without a reload, and verify a test asserts an attached client's header and row follow the broadcast
+- [x] 4.1 Make the chat view header name editable (`src/client/components/chat/ChatView.tsx`) and verify a component test covers editing, submitting, and the empty-name case
+- [x] 4.2 Wire the navigator rename entry point for chat rows (`src/client/components/SessionRow.tsx`) so it no longer errors, and verify a component test covers renaming a chat row and the name appearing on the row
+- [x] 4.3 Render an updated name on `session-update` without a reload, and verify a test asserts an attached client's header and row follow the broadcast
 
 ## 5. Integration verification
 
-- [ ] 5.1 Run `bun run lint && bun run typecheck && bun run test` and verify all three pass
-- [ ] 5.2 Start the app and verify end to end that a chat created without a name starts on a placeholder, adopts Claude's generated title while unclaimed, keeps a manual rename against later titles, and shows the name in the navigator without opening the chat
+- [x] 5.1 Run `bun run lint && bun run typecheck && bun run test` and verify all three pass
+- [x] 5.2 Start the app and verify end to end that a chat created without a name starts on a placeholder, adopts Claude's generated title while unclaimed, keeps a manual rename against later titles, and shows the name in the navigator without opening the chat
 
 ## Workflow follow-up
 
