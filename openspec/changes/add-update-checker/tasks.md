@@ -34,9 +34,9 @@
 
 ## 6. End-to-end verification
 
-- [ ] 6.1 Run `bun run lint && bun run typecheck && bun run test` and verify the suite is green with the new modules included.
-- [ ] 6.2 Manually drive the chip against a newer base version (pinned fake latest or a real release) and verify: chip appears, update applies, server restarts on the new build, chip clears.
-- [ ] 6.3 Verify a source-checkout server offers install-not-update, lands under `~/.agentboard/app/`, and leaves `git status` clean.
+- [x] 6.1 Run `bun run lint && bun run typecheck && bun run test` and verify the suite is green with the new modules included.
+- [x] 6.2 Manually drive the chip against a newer base version (pinned fake latest or a real release) and verify: chip appears, update applies, server restarts on the new build, chip clears.
+- [x] 6.3 Verify a source-checkout server offers install-not-update, lands under `~/.agentboard/app/`, and leaves `git status` clean.
 
 ## Workflow follow-up
 
