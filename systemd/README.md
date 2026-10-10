@@ -1,11 +1,11 @@
 # Systemd User Service
 
-Run agentboard as a persistent systemd user service that starts on boot.
+Run agentboard as a persistent systemd user service that starts on boot,
+executing the release binary — no bun or source checkout required.
 
 ## Prerequisites
 
 - Linux with systemd
-- `bun` installed and available in PATH
 - `loginctl enable-linger $USER` (allows user services to run without an active session)
 
 ## Installation
@@ -19,9 +19,17 @@ loginctl enable-linger $USER
 ```
 
 The install script will:
-1. Detect your bun installation path
-2. Generate `agentboard.service` with correct paths for your system
-3. Install and start the service
+1. Install the latest release (`bin/agentboard` + `dist/client`) under
+   `~/.agentboard/app`, downloading the platform tarball when nothing is
+   installed yet
+2. Generate `agentboard.service` in `~/.config/systemd/user` with
+   `ExecStart` pointing at the installed binary and `Restart=always`, so the
+   service comes back after a clean exit and a completed in-app update can
+   restart the deployment
+3. Enable and start the service
+
+Self-updates land in the same `~/.agentboard/app` root and restart the unit
+through `systemctl --user restart agentboard`.
 
 ## Commands
 
@@ -32,7 +40,7 @@ systemctl --user status agentboard
 # View logs
 journalctl --user -u agentboard -f
 
-# Restart after code changes
+# Restart (also how a completed self-update takes over)
 systemctl --user restart agentboard
 
 # Stop the service
