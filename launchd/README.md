@@ -1,13 +1,11 @@
 # launchd User Agents (macOS)
 
-Run agentboard as a persistent launchd user agent that starts at login and restarts on crash. Parallel to [`systemd/`](../systemd/) for Linux.
+Run agentboard as a persistent launchd user agent that starts at login and restarts on crash, executing the release binary — no bun or source checkout required. Parallel to [`systemd/`](../systemd/) for Linux.
 
 ## Prerequisites
 
 - macOS
-- `bun` in PATH (`brew install oven-sh/bun/bun`)
 - `tmux` in PATH (`brew install tmux`)
-- Repository cloned locally (service runs `bun run start` from the repo directory)
 
 ## Installation
 
@@ -16,14 +14,14 @@ Run agentboard as a persistent launchd user agent that starts at login and resta
 ```
 
 The install script will:
-1. Detect `bun` and `tmux` paths
-2. Generate a wrapper script and a log-rotate script in `~/.agentboard/bin/`
+1. Install the latest release (`bin/agentboard` + `dist/client`) under `~/.agentboard/app`, downloading the platform tarball when nothing is installed yet
+2. Generate a wrapper script (PATH + locale, then exec the binary) and a log-rotate script in `~/.agentboard/bin/`
 3. Generate two plists in `~/Library/LaunchAgents/`
 4. Load them via `launchctl`
 
 Installs two agents:
 
-- **`com.agentboard`** — supervises agentboard. `KeepAlive` respawns on crash or non-zero exit, `ThrottleInterval: 10` prevents tight restart loops.
+- **`com.agentboard`** — supervises agentboard. `KeepAlive` respawns on crash or clean exit (`SuccessfulExit: true`, so a completed self-update comes back on the new binary), `ThrottleInterval: 10` prevents tight restart loops.
 - **`com.agentboard.logrotate`** — hourly. Rotates `agentboard.log`, `launchd.out.log`, and `launchd.err.log` under `~/.agentboard/` at 50MB each using a copytruncate pattern (preserves pino's open file descriptor), keeps 5 gzipped archives per file.
 
 After install, agentboard listens on `http://localhost:4040`.

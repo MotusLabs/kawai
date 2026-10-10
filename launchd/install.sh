@@ -1,20 +1,25 @@
 #!/bin/bash
-# Install agentboard as a persistent launchd user agent on macOS.
+# Install agentboard as a persistent launchd user agent on macOS, running the
+# release binary installed under ~/.agentboard/app — the same root the in-app
+# updater owns. The latest platform tarball is downloaded when nothing is
+# installed yet; the git checkout is never a write target.
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_DIR="$(dirname "$SCRIPT_DIR")"
 LAUNCH_AGENTS="$HOME/Library/LaunchAgents"
 AGENTBOARD_DIR="$HOME/.agentboard"
 BIN_DIR="$AGENTBOARD_DIR/bin"
+APP_DIR="$AGENTBOARD_DIR/app"
+BIN_PATH="$APP_DIR/bin/agentboard"
 
+# Bun is no longer required to run the server itself; it is only prepended to
+# the session PATH when present, for the agent CLIs the sessions launch.
 BUN_PATH="$(command -v bun || true)"
-if [ -z "$BUN_PATH" ]; then
-    echo "Error: bun not found in PATH (brew install oven-sh/bun/bun)"
-    exit 1
+BUN_DIR=""
+if [ -n "$BUN_PATH" ]; then
+    BUN_DIR="$(dirname "$BUN_PATH"):"
 fi
-BUN_DIR="$(dirname "$BUN_PATH")"
 
 TMUX_PATH="$(command -v tmux || true)"
 if [ -z "$TMUX_PATH" ]; then
@@ -23,13 +28,33 @@ if [ -z "$TMUX_PATH" ]; then
 fi
 TMUX_DIR="$(dirname "$TMUX_PATH")"
 
+# --- Install the release binary unless one is already present.
+if [ ! -x "$BIN_PATH" ]; then
+    case "$(uname -s)/$(uname -m)" in
+        Darwin/arm64)  PLATFORM="darwin-arm64" ;;
+        Darwin/x86_64) PLATFORM="darwin-x64" ;;
+        Linux/x86_64)  PLATFORM="linux-x64" ;;
+        Linux/aarch64|Linux/arm64) PLATFORM="linux-arm64" ;;
+        *) echo "Error: unsupported platform $(uname -s)/$(uname -m)"; exit 1 ;;
+    esac
+    TARBALL="agentboard-$PLATFORM.tar.gz"
+    echo "Downloading latest release ($TARBALL) to $APP_DIR"
+    mkdir -p "$APP_DIR"
+    TMP_TARBALL="$(mktemp "${AGENTBOARD_DIR}/install-XXXXXX.tar.gz")"
+    trap 'rm -f "$TMP_TARBALL"' EXIT
+    curl -fsSL "https://github.com/MotusLabs/kawai/releases/latest/download/$TARBALL" -o "$TMP_TARBALL"
+    tar -xzf "$TMP_TARBALL" -C "$APP_DIR"
+    rm -f "$TMP_TARBALL"
+    trap - EXIT
+fi
+
 # Guard against paths containing characters that would corrupt plist XML or
 # allow shell re-evaluation inside the generated wrapper. The generated scripts
 # embed these paths inside double-quoted shell strings, so shell metachars
 # (especially $, `, \) could trigger command substitution at service launch
 # even if the user's path only looked unusual (e.g. a repo cloned under
 # /tmp/foo$(bar)). Reject up front instead of trying to escape correctly.
-for var in HOME REPO_DIR BUN_PATH TMUX_PATH; do
+for var in HOME APP_DIR TMUX_PATH; do
     case "${!var}" in
         *[\<\>\&\"\'\$\`\\\;\|\(\)]*)
             echo "Error: \$$var contains characters unsafe for plist XML or shell: ${!var}"
@@ -40,26 +65,27 @@ done
 mkdir -p "$LAUNCH_AGENTS" "$BIN_DIR"
 
 echo "Installing agentboard LaunchAgents with:"
-echo "  Repo:  $REPO_DIR"
-echo "  Bun:   $BUN_PATH"
-echo "  Tmux:  $TMUX_PATH"
+echo "  Binary: $BIN_PATH"
+echo "  Tmux:   $TMUX_PATH"
 echo ""
 
-# --- Wrapper script: sets PATH + UTF-8 locale, then execs bun run start.
-# LaunchAgents start with a bare env; without LANG set, tmux mangles unicode.
-# PATH covers common agent install locations (~/.local/bin for tools like
-# claude and cursor-agent, Homebrew, ~/.cargo/bin, ~/go/bin) so that tmux
-# windows spawned by agentboard can find whichever CLI the user launches.
+# --- Wrapper script: sets PATH + UTF-8 locale, then execs the release
+# binary from the app root. LaunchAgents start with a bare env; without LANG
+# set, tmux mangles unicode. PATH covers common agent install locations
+# (~/.local/bin for tools like claude and cursor-agent, Homebrew,
+# ~/.cargo/bin, ~/go/bin) so that tmux windows spawned by agentboard can find
+# whichever CLI the user launches.
 cat > "$BIN_DIR/agentboard-run.sh" << EOF
 #!/bin/bash
-export PATH="$BUN_DIR:$TMUX_DIR:$HOME/.local/bin:$HOME/bin:$HOME/.cargo/bin:$HOME/go/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin"
+export PATH="${BUN_DIR}$TMUX_DIR:$HOME/.local/bin:$HOME/bin:$HOME/.cargo/bin:$HOME/go/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin"
 export HOME="$HOME"
 export NODE_ENV=production
+export AGENTBOARD_LAUNCHD_LABEL=com.agentboard
 export LANG=en_US.UTF-8
 export LC_ALL=en_US.UTF-8
 export LC_CTYPE=en_US.UTF-8
-cd "$REPO_DIR"
-exec "$BUN_PATH" run start
+cd "$APP_DIR"
+exec "$BIN_PATH"
 EOF
 chmod +x "$BIN_DIR/agentboard-run.sh"
 
@@ -108,12 +134,14 @@ cat > "$LAUNCH_AGENTS/com.agentboard.plist" << EOF
   <key>Label</key><string>com.agentboard</string>
   <key>ProgramArguments</key>
   <array><string>$BIN_DIR/agentboard-run.sh</string></array>
-  <key>WorkingDirectory</key><string>$REPO_DIR</string>
+  <key>WorkingDirectory</key><string>$APP_DIR</string>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key>
   <dict>
     <key>Crashed</key><true/>
-    <key>SuccessfulExit</key><false/>
+    <!-- Relaunch after a clean exit too, so a completed self-update (which
+         exits the old process) comes back on the new binary. -->
+    <key>SuccessfulExit</key><true/>
   </dict>
   <key>ThrottleInterval</key><integer>10</integer>
   <key>EnvironmentVariables</key>
