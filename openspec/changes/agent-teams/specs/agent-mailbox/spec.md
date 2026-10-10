@@ -161,13 +161,32 @@ Queued, scheduled, and dead-lettered messages, and claims of messages not yet de
 - **WHEN** a session with queued direct messages is killed
 - **THEN** those messages are dead-lettered
 
-### Requirement: Claimed mail is reconciled on restart
-Every delivered envelope SHALL carry its message id as a stable delivery identity, recorded in the recipient's transcript when delivery happens. On restart, a claimed message SHALL be reconciled against the claiming recipient's transcript by that identity: completed as delivered when the record is found, and returned to the queue when it is not.
+### Requirement: Delivery is acknowledged by the recipient's durable record
+Every delivered envelope SHALL carry its message id. Delivery SHALL be acknowledged only by a well-formed row in the recipient agent's transcript that carries that id; submission — a pushed turn or the `peer_message` display event — SHALL NOT count as receipt. On restart, a message that was pushed but not acknowledged SHALL be reconciled by that record: completed as delivered when the row is found, and returned to the queue when the transcript ends cleanly with no such row.
 
 #### Scenario: Crash after delivery, before completion
 - **WHEN** the server crashes after a claimed message's turn has been recorded in the recipient's transcript but before the message row is marked delivered
 - **THEN** on restart the message is reconciled from the transcript, marked delivered, and never delivered to any member again
 
 #### Scenario: Crash after claim, before delivery
-- **WHEN** the server crashes after a message is claimed but before its turn reaches the recipient's transcript
+- **WHEN** the server crashes after a message is claimed but before its turn is pushed
 - **THEN** on restart the message is returned to the queue and is later delivered exactly once under the normal delivery rules
+
+#### Scenario: Crash after push, before the agent consumes the input
+- **WHEN** the server crashes after the turn is pushed but the SDK never consumed it, so no transcript row was written
+- **THEN** on restart the message is returned to the queue and is later delivered exactly once
+
+### Requirement: Uncertain receipt is held for the human
+When receipt can be neither confirmed nor refuted — the recipient's transcript is missing, unreadable, or ends in a malformed row — the message SHALL be held out of automatic delivery and reassignment and surfaced in the mailbox view. A human retry SHALL go to the same recipient with a possible-duplicate notice keyed by the message id, and discarding SHALL be an explicit action.
+
+#### Scenario: Receipt without a confirmed durable record
+- **WHEN** a pushed message's recipient transcript ends in a torn row after a machine-level crash
+- **THEN** the message is held as uncertain rather than requeued, and no other member can receive it
+
+#### Scenario: Transcript unavailable
+- **WHEN** reconciliation cannot read the recipient's transcript at all
+- **THEN** the message is held as uncertain and the mailbox view shows it for human resolution
+
+#### Scenario: Human retry of an uncertain message
+- **WHEN** the user retries a held message to the same recipient
+- **THEN** the redelivered envelope tells the agent to treat an already-seen message id as a no-op
