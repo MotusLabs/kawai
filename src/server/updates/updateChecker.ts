@@ -6,7 +6,7 @@
 // never surfaces an error in the UI.
 import type { UpdateState } from '@shared/types'
 import { BUILD_VERSION } from '../version'
-import { createReleaseFeed, type ReleaseFeed } from './releaseFeed'
+import { createReleaseFeed, type LatestRelease, type ReleaseFeed } from './releaseFeed'
 import { baseOf, isNewerBase } from './updateVersions'
 
 /** Startup plus one check every six hours stays far inside the rate limit. */
@@ -25,6 +25,11 @@ export interface UpdateChecker {
   check(): Promise<void>
   /** Current client-facing state. */
   getState(): UpdateState
+  /**
+   * The release behind the current target, with its download assets — what
+   * the install verb acts on. Null while no update is reported.
+   */
+  getRelease(): LatestRelease | null
   stop(): void
 }
 
@@ -33,19 +38,21 @@ export function startUpdateChecker(options: UpdateCheckerOptions = {}): UpdateCh
   const current = options.currentVersion ?? BUILD_VERSION
   const intervalMs = options.intervalMs ?? UPDATE_CHECK_INTERVAL_MS
   let state: UpdateState = { current, target: null }
+  let release: LatestRelease | null = null
 
   const check = async (): Promise<void> => {
-    let release
+    let latest
     try {
-      release = await feed.latest()
+      latest = await feed.latest()
     } catch {
       return
     }
-    if (release === null) return
-    const target = isNewerBase(release.tag, current)
-      ? { tag: release.tag, base: baseOf(release.tag) ?? release.tag, htmlUrl: release.htmlUrl }
+    if (latest === null) return
+    const target = isNewerBase(latest.tag, current)
+      ? { tag: latest.tag, base: baseOf(latest.tag) ?? latest.tag, htmlUrl: latest.htmlUrl }
       : null
     const next: UpdateState = { current, target }
+    release = target === null ? null : latest
     if (sameTarget(next.target, state.target)) return
     state = next
     options.onChange?.(state)
@@ -59,6 +66,7 @@ export function startUpdateChecker(options: UpdateCheckerOptions = {}): UpdateCh
   return {
     check,
     getState: () => state,
+    getRelease: () => release,
     stop: () => clearInterval(timer),
   }
 }

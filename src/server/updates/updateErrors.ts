@@ -11,6 +11,7 @@ export type UpdateErrorCode =
   | 'ERR_UPDATE_CHECKSUM_MISMATCH'
   | 'ERR_UPDATE_TARBALL_EXTRACT'
   | 'ERR_UPDATE_SWAP_FAILED'
+  | 'ERR_UPDATE_RESTART_FAILED'
 
 export class UpdateError extends Error {
   readonly code: UpdateErrorCode

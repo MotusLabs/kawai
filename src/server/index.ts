@@ -16,6 +16,8 @@ import { SessionManager } from './SessionManager'
 import { SessionRegistry } from './SessionRegistry'
 import { BUILD_VERSION } from './version'
 import { startUpdateChecker } from './updates/updateChecker'
+import { installUpdate } from './updates/updateInstaller'
+import { detectRestartContext, performRestart, planRestart } from './updates/updateRestart'
 import {
   initDatabase,
   resolveDataDir,
@@ -1782,6 +1784,39 @@ app.get('/api/server-info', (c) => {
     // Update availability (see ./updates); `target` is null while current.
     update: updateChecker.getState(),
   })
+})
+
+// The update verb (see ./updates): verify → download → swap → restart, driven
+// from the discovery state the chip was rendered against. Refusals fail
+// closed with the named error and leave the install unchanged.
+const UPDATE_RESTART_DELAY_MS = 500
+app.post('/api/update/install', async (c) => {
+  const release = updateChecker.getRelease()
+  if (updateChecker.getState().target === null || release === null) {
+    return c.json({ error: 'No update is currently available' }, 409)
+  }
+  try {
+    await installUpdate({ release })
+  } catch (cause) {
+    const message = cause instanceof Error ? cause.message : String(cause)
+    logger.error('update_install_refused', { message, tag: release.tag })
+    return c.json({ error: message }, 500)
+  }
+  // Respond first: the restart verb may terminate this process (that is its
+  // job), and the client must hear the outcome before the connection drops.
+  const plan = planRestart(detectRestartContext())
+  const restartTimer = setTimeout(() => {
+    void performRestart(plan).catch((cause) => {
+      // The install landed; only the takeover failed. Keep serving the old
+      // build and log loudly — a manual restart picks up the new files.
+      logger.error('update_restart_failed', {
+        message: cause instanceof Error ? cause.message : String(cause),
+        mode: plan.mode,
+      })
+    })
+  }, UPDATE_RESTART_DELAY_MS)
+  restartTimer.unref?.()
+  return c.json({ ok: true, restarting: true })
 })
 
 // Tmux mouse mode setting
