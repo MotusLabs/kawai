@@ -90,20 +90,28 @@ export interface SpawnResult {
   stderr: string
 }
 
-export type RestartSpawner = (command: string[]) => Promise<SpawnResult>
+export interface SpawnedCommand {
+  /** Resolves when the command exits; never awaited for bare re-execs. */
+  exited: Promise<SpawnResult>
+}
 
-async function spawnForRestart(command: string[]): Promise<SpawnResult> {
+export type RestartSpawner = (command: string[]) => SpawnedCommand
+
+function spawnForRestart(command: string[]): SpawnedCommand {
   const proc = Bun.spawn(command, {
     env: process.env,
     stdin: 'ignore',
     stdout: 'ignore',
     stderr: 'pipe',
   })
-  const [stderr, exitCode] = await Promise.all([
-    new Response(proc.stderr as ReadableStream<Uint8Array> | null).text(),
-    proc.exited,
-  ])
-  return { exitCode, stderr }
+  const exited = (async (): Promise<SpawnResult> => {
+    const [stderr, exitCode] = await Promise.all([
+      new Response(proc.stderr as ReadableStream<Uint8Array> | null).text(),
+      proc.exited,
+    ])
+    return { exitCode, stderr }
+  })()
+  return { exited }
 }
 
 export interface PerformRestartOptions {
@@ -115,7 +123,9 @@ export interface PerformRestartOptions {
 /**
  * Run the restart plan. Under a supervisor the verb may terminate this
  * process as part of the restart — that is the expected outcome, not an
- * error. Bare mode spawns the successor and exits.
+ * error. Bare mode spawns the successor and exits immediately: the successor
+ * is a long-running server, so waiting for it to exit would deadlock the
+ * handover.
  */
 export async function performRestart(
   plan: RestartPlan,
@@ -124,9 +134,9 @@ export async function performRestart(
   const spawn = options.spawn ?? spawnForRestart
   const exit = options.exit ?? ((code: number) => process.exit(code))
 
-  let result: SpawnResult
+  let spawned: SpawnedCommand
   try {
-    result = await spawn(plan.command)
+    spawned = spawn(plan.command)
   } catch (cause) {
     throw new UpdateError(
       'ERR_UPDATE_RESTART_FAILED',
@@ -142,6 +152,15 @@ export async function performRestart(
 
   // Under a supervisor a non-zero exit means the verb itself failed (a zero
   // exit, or never returning because we were restarted, is success).
+  let result: SpawnResult
+  try {
+    result = await spawned.exited
+  } catch (cause) {
+    throw new UpdateError(
+      'ERR_UPDATE_RESTART_FAILED',
+      `Restarting via ${plan.mode} failed to run (${cause instanceof Error ? cause.message : String(cause)})`,
+    )
+  }
   if (result.exitCode !== 0) {
     throw new UpdateError(
       'ERR_UPDATE_RESTART_FAILED',

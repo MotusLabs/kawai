@@ -6,8 +6,11 @@ import {
   detectRestartContext,
   performRestart,
   planRestart,
+  type SpawnedCommand,
   type SpawnResult,
 } from '../updates/updateRestart'
+
+const command = (result: SpawnResult): SpawnedCommand => ({ exited: Promise.resolve(result) })
 
 describe('detectRestartContext', () => {
   test('systemd is detected from $INVOCATION_ID', () => {
@@ -69,23 +72,23 @@ describe('planRestart', () => {
 })
 
 describe('performRestart', () => {
-  const ok = async (): Promise<SpawnResult> => ({ exitCode: 0, stderr: '' })
-
   test('a supervisor verb that succeeds resolves', async () => {
-    await performRestart(planRestart({ mode: 'systemd', systemdUnit: 'agentboard.service' }), { spawn: ok })
+    await performRestart(planRestart({ mode: 'systemd', systemdUnit: 'agentboard.service' }), {
+      spawn: () => command({ exitCode: 0, stderr: '' }),
+    })
   })
 
   test('a failed supervisor verb surfaces the named error', async () => {
-    const failing = async (): Promise<SpawnResult> => ({ exitCode: 1, stderr: 'Unit not found' })
     let refusal: unknown
-    await performRestart(planRestart({ mode: 'systemd', systemdUnit: 'agentboard.service' }), { spawn: failing })
-      .catch((cause) => { refusal = cause })
+    await performRestart(planRestart({ mode: 'systemd', systemdUnit: 'agentboard.service' }), {
+      spawn: () => command({ exitCode: 1, stderr: 'Unit not found' }),
+    }).catch((cause) => { refusal = cause })
     expect(String((refusal as Error).message)).toContain('ERR_UPDATE_RESTART_FAILED')
     expect(String((refusal as Error).message)).toContain('Unit not found')
   })
 
   test('a spawn that throws surfaces the named error', async () => {
-    const throwing = async (): Promise<SpawnResult> => { throw new Error('ENOENT systemctl') }
+    const throwing = (): SpawnedCommand => { throw new Error('ENOENT systemctl') }
     let refusal: unknown
     await performRestart(planRestart({ mode: 'launchd', launchdLabel: 'com.agentboard' }, { uid: 501 }), { spawn: throwing })
       .catch((cause) => { refusal = cause })
@@ -93,17 +96,24 @@ describe('performRestart', () => {
     expect(String((refusal as Error).message)).toContain('ENOENT systemctl')
   })
 
-  test('bare mode exits after spawning the successor', async () => {
+  test('bare mode exits after spawning the successor, without awaiting it', async () => {
     const commands: string[][] = []
     const exits: number[] = []
+    let successorResolved = false
     await performRestart(
       planRestart({ mode: 'bare' }, { execPath: '/opt/agentboard/bin/agentboard', bareDelayMs: 0 }),
       {
-        spawn: async (command) => { commands.push(command); return { exitCode: 0, stderr: '' } },
+        // The successor never exits (it is a server); bare mode must not
+        // wait for it.
+        spawn: (cmd) => {
+          commands.push(cmd)
+          return { exited: new Promise<SpawnResult>(() => { successorResolved = true }) }
+        },
         exit: (code) => exits.push(code),
       },
     )
     expect(commands).toHaveLength(1)
     expect(exits).toEqual([0])
+    expect(successorResolved).toBe(true)
   })
 })
