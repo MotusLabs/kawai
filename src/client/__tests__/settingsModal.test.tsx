@@ -48,6 +48,7 @@ beforeEach(() => {
     showProjectName: true,
     showLastUserMessage: true,
     showSessionIdPrefix: false,
+    defaultApprovalPolicy: 'manual',
     hostFilters: [],
   })
   useThemeStore.setState({ theme: 'dark' })
@@ -66,6 +67,7 @@ afterEach(() => {
     showProjectName: true,
     showLastUserMessage: true,
     showSessionIdPrefix: false,
+    defaultApprovalPolicy: 'manual',
     hostFilters: [],
   })
   useThemeStore.setState({ theme: 'dark' })
@@ -325,6 +327,65 @@ describe('SettingsModal', () => {
     const stepper = renderer.root.findByProps({ 'aria-label': 'Increase Chat Font Size' }).parent
     const value = stepper?.findAll(node => node.type === 'span' && String(node.props.className).includes('w-6'))[0]
     expect(value?.props.children).toBe(15)
+    act(() => { renderer.unmount() })
+  })
+
+  test('approval policy commits on Save and reverts the other segment', () => {
+    useSettingsStore.setState({ defaultApprovalPolicy: 'auto' })
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => {
+      renderer = TestRenderer.create(<SettingsModal isOpen onClose={() => {}} />)
+    })
+
+    // The Sessions tab also has a "Manual" sort button, so scope to the
+    // approval section of the Chat tab.
+    const approvalButtons = () => {
+      const section = renderer.root.findByProps({ children: 'New Chat Sessions' }).parent
+      if (!section) throw new Error('Expected approval section')
+      return section.findAllByType('button')
+    }
+
+    expect(approvalButtons().map((button) => button.props.children)).toEqual(['Manual', 'Auto-approve'])
+    expect(approvalButtons()[1].props.className).toContain('btn-primary')
+
+    act(() => { approvalButtons()[0].props.onClick() })
+    expect(approvalButtons()[0].props.className).toContain('btn-primary')
+    expect(approvalButtons()[1].props.className).not.toContain('btn-primary')
+
+    act(() => {
+      renderer.root.findByType('form').props.onSubmit({ preventDefault: () => {} })
+    })
+    expect(useSettingsStore.getState().defaultApprovalPolicy).toBe('manual')
+
+    act(() => { renderer.unmount() })
+  })
+
+  test('closing without saving discards the approval policy draft', () => {
+    useSettingsStore.setState({ defaultApprovalPolicy: 'manual' })
+    const onClose = () => {}
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => {
+      renderer = TestRenderer.create(<SettingsModal isOpen onClose={onClose} />)
+    })
+
+    const approvalButtons = () => {
+      const section = renderer.root.findByProps({ children: 'New Chat Sessions' }).parent
+      if (!section) throw new Error('Expected approval section')
+      return section.findAllByType('button')
+    }
+
+    act(() => { approvalButtons()[1].props.onClick() })
+
+    const cancel = renderer.root.findAllByType('button').find(b => b.props.children === 'Cancel' && b.props.className === 'btn')
+    if (!cancel) throw new Error('Expected cancel button')
+    act(() => { cancel.props.onClick() })
+    expect(useSettingsStore.getState().defaultApprovalPolicy).toBe('manual')
+
+    // Reopening starts from the stored default again, not the discarded draft.
+    act(() => { renderer.update(<SettingsModal isOpen={false} onClose={onClose} />) })
+    act(() => { renderer.update(<SettingsModal isOpen onClose={onClose} />) })
+    expect(approvalButtons()[1].props.className).not.toContain('btn-primary')
+    expect(approvalButtons()[0].props.className).toContain('btn-primary')
     act(() => { renderer.unmount() })
   })
 

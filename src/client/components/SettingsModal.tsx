@@ -8,6 +8,7 @@ import {
   type CommandPreset,
 } from '../stores/settingsStore'
 import { useThemeStore, type Theme } from '../stores/themeStore'
+import type { ChatApprovalPolicy } from '@shared/types'
 import SessionsSettings from './settings/SessionsSettings'
 import ChatSettings from './settings/ChatSettings'
 import TerminalSettings from './settings/TerminalSettings'
@@ -70,6 +71,12 @@ export default function SettingsModal({
   const setFontSize = useSettingsStore((state) => state.setFontSize)
   const chatFontSize = useSettingsStore((state) => state.chatFontSize)
   const setChatFontSize = useSettingsStore((state) => state.setChatFontSize)
+  const defaultApprovalPolicy = useSettingsStore(
+    (state) => state.defaultApprovalPolicy
+  )
+  const setDefaultApprovalPolicy = useSettingsStore(
+    (state) => state.setDefaultApprovalPolicy
+  )
   const lineHeight = useSettingsStore((state) => state.lineHeight)
   const setLineHeight = useSettingsStore((state) => state.setLineHeight)
   const letterSpacing = useSettingsStore((state) => state.letterSpacing)
@@ -115,6 +122,8 @@ export default function SettingsModal({
   const [draftUseWebGL, setDraftUseWebGL] = useState(useWebGL)
   const [draftFontSize, setDraftFontSize] = useState(fontSize)
   const [draftChatFontSize, setDraftChatFontSize] = useState(chatFontSize)
+  const [draftDefaultApprovalPolicy, setDraftDefaultApprovalPolicy] =
+    useState<ChatApprovalPolicy>(defaultApprovalPolicy)
   const [draftLineHeight, setDraftLineHeight] = useState(lineHeight)
   const [draftLetterSpacing, setDraftLetterSpacing] = useState(letterSpacing)
   const [draftFontOption, setDraftFontOption] = useState<FontOption>(fontOption)
@@ -154,6 +163,7 @@ export default function SettingsModal({
       setDraftUseWebGL(useWebGL)
       setDraftFontSize(fontSize)
       setDraftChatFontSize(chatFontSize)
+      setDraftDefaultApprovalPolicy(defaultApprovalPolicy)
       setDraftLineHeight(lineHeight)
       setDraftLetterSpacing(letterSpacing)
       setDraftFontOption(fontOption)
@@ -204,6 +214,7 @@ export default function SettingsModal({
     useWebGL,
     fontSize,
     chatFontSize,
+    defaultApprovalPolicy,
     lineHeight,
     letterSpacing,
     fontOption,
@@ -251,6 +262,7 @@ export default function SettingsModal({
     setUseWebGL(draftUseWebGL)
     setFontSize(draftFontSize)
     setChatFontSize(draftChatFontSize)
+    setDefaultApprovalPolicy(draftDefaultApprovalPolicy)
     setLineHeight(draftLineHeight)
     setLetterSpacing(draftLetterSpacing)
     setFontOption(draftFontOption)
@@ -349,6 +361,8 @@ export default function SettingsModal({
 
         <div role="tabpanel" aria-label="Chat" hidden={activeTab !== 'chat'} className="mt-5 space-y-4">
           <ChatSettings
+            draftDefaultApprovalPolicy={draftDefaultApprovalPolicy}
+            onDraftDefaultApprovalPolicyChange={setDraftDefaultApprovalPolicy}
             draftChatFontSize={draftChatFontSize}
             onDraftChatFontSizeChange={setDraftChatFontSize}
           />
