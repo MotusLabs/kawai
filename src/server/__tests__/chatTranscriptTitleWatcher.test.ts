@@ -170,4 +170,27 @@ describe('watchTranscriptTitle', () => {
       watcher.close()
     }
   })
+
+  test('an atomic replacement is re-read and later appends still land', async () => {
+    // Equal-size titles on purpose: a shrink check alone would not notice.
+    const filePath = makeFile(aiTitle('original'))
+    const observed: Observed[] = []
+    const watcher = watchTranscriptTitle(filePath, (title, source) =>
+      observed.push({ title, source })
+    )
+    try {
+      await waitForObserved(observed, (entry) => entry.title === 'original')
+      // Temp file plus rename: the path still exists, but it is a new inode,
+      // and `fs.watch` is still following the replaced one.
+      const tmp = path.join(tempDir, 'tmp.jsonl')
+      fs.writeFileSync(tmp, aiTitle('replaced'))
+      fs.renameSync(tmp, filePath)
+      await waitForObserved(observed, (entry) => entry.title === 'replaced')
+      // The replacement is what gets tailed from here on.
+      append(filePath, aiTitle('subsequent title'))
+      await waitForObserved(observed, (entry) => entry.title === 'subsequent title')
+    } finally {
+      watcher.close()
+    }
+  })
 })

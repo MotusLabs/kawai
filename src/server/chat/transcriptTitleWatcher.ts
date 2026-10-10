@@ -4,10 +4,11 @@
 // session's JSONL — they never appear on the SDK message stream, so the file
 // is the only source. The watcher reports each new title row as it lands:
 // it reads only the appended region, tolerates a truncated trailing line by
-// holding it until the next write completes it, and resets when the file
-// shrinks (a rewrite). Until the file exists it watches the parent directory,
-// so a watch armed before the transcript's first write still picks the file
-// up on creation.
+// holding it until the next write completes it, and resets when the file is
+// rewritten (a shrink) or replaced (a new inode — `fs.watch` follows the old
+// one, so the watch is re-armed). Until the file exists it watches the parent
+// directory, so a watch armed before the transcript's first write still picks
+// the file up on creation.
 import fs from 'node:fs'
 import path from 'node:path'
 import { parseTranscriptTitleLine } from './transcriptReplay'
@@ -28,6 +29,8 @@ export function watchTranscriptTitle(
 ): TranscriptTitleWatcher {
   let offset = 0
   let remainder = ''
+  /** Inode of the file currently being tailed, so a replace is detectable. */
+  let inode = -1
   let fileWatcher: fs.FSWatcher | null = null
   let dirWatcher: fs.FSWatcher | null = null
   let closed = false
@@ -39,18 +42,23 @@ export function watchTranscriptTitle(
     dirWatcher = null
   }
 
-  /** Consume the appended region; a shrunk file means a rewrite — restart. */
+  /**
+   * Consume the appended region. A new inode (rename-over) or a shrink (an
+   * in-place rewrite) discards what we tracked — restart from the beginning.
+   */
   const readAppended = (): void => {
-    let size: number
+    let stat: fs.Stats
     try {
-      size = fs.statSync(filePath).size
+      stat = fs.statSync(filePath)
     } catch {
       return
     }
-    if (size < offset) {
+    if (stat.ino !== inode || stat.size < offset) {
+      inode = stat.ino
       offset = 0
       remainder = ''
     }
+    const size = stat.size
     if (size === offset) return
     let chunk: string
     try {
@@ -81,6 +89,7 @@ export function watchTranscriptTitle(
     stopWatchers()
     offset = 0
     remainder = ''
+    inode = -1
     try {
       dirWatcher = fs.watch(
         path.dirname(filePath),
@@ -106,6 +115,20 @@ export function watchTranscriptTitle(
         // file to come back.
         if (!fs.existsSync(filePath)) {
           armDirectory()
+          return
+        }
+        let currentInode: number
+        try {
+          currentInode = fs.statSync(filePath).ino
+        } catch {
+          armDirectory()
+          return
+        }
+        if (currentInode !== inode) {
+          // rename-over: this watch still follows the replaced inode, so
+          // re-arm on the replacement. `watchFile` re-reads from offset 0.
+          inode = -1
+          watchFile()
           return
         }
         readAppended()
