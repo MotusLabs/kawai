@@ -24,8 +24,8 @@
 
 ## 5. Driver reads compaction
 
-- [ ] 5.1 On `compact_boundary`, adopt `compact_metadata.post_tokens` as the new reading when it is present and finite, while keeping the existing `'Context compacted'` notice (design D3), and verify a driver test covers `trigger: 'auto'` and `trigger: 'manual'` both dropping the meter to the post-compaction size
-- [ ] 5.2 Keep the last reading when `post_tokens` is missing or invalid even though compaction metadata is present — `compact_metadata` is required but `post_tokens` is optional, so a frame carrying only `trigger` and `pre_tokens` is the case that matters — and also when metadata is absent entirely or `post_tokens` is non-finite. Never publish `undefined`, `NaN`, or a zero standing in for "unknown" (design D3). Verify a driver test covers each fallback, with the metadata-present-but-no-`post_tokens` case named explicitly
+- [x] 5.1 On `compact_boundary`, adopt `compact_metadata.post_tokens` as the new reading when it is present and finite, while keeping the existing `'Context compacted'` notice (design D3), and verify a driver test covers `trigger: 'auto'` and `trigger: 'manual'` both dropping the meter to the post-compaction size
+- [x] 5.2 Keep the last reading when `post_tokens` is missing or invalid even though compaction metadata is present — `compact_metadata` is required but `post_tokens` is optional, so a frame carrying only `trigger` and `pre_tokens` is the case that matters — and also when metadata is absent entirely or `post_tokens` is non-finite. Never publish `undefined`, `NaN`, or a zero standing in for "unknown" (design D3). Verify a driver test covers each fallback, with the metadata-present-but-no-`post_tokens` case named explicitly
 
 ## 6. Manager and delivery
 
