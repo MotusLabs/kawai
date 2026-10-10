@@ -22,7 +22,13 @@ One Worker per loaded rule file, created with `env: {}` plus the rule's declared
 Load at server start; reload via an authenticated UI action that rebuilds all Workers and reports per-rule results. No file watching: a rule planted by an agent in `~/.kawai/routing/` needs a human action to run.
 
 ### D4. Candidates are pre-filtered by kawai
-The context contains only candidates that delivery, staffing, caps, and parking already allow, as `{ id, kind: 'member' | 'spawn', profileId, sessionId?, cwd, idleForMs? }`. Rules cannot violate safety rules by construction; picks outside the list fall back.
+The context contains only candidates that delivery, staffing, caps, and parking already allow, as `{ id, kind: 'member' | 'spawn', profileId, sessionId?, cwd, idleForMs? }`. Rules cannot violate safety rules by construction; picks outside the list fall back. The context also carries `group.profileCaps` and live counts per profile so rules can weigh free capacity.
+
+### D4a. Per-profile caps count live group members
+`profiles` parses to an ordered list of `{ profileId, cap? }`. A `spawn` candidate for profile P exists only when `count(non-archived group members on P) < cap(P)` and the group total is below `max` (default: sum of caps, or `team-tasks`' default of 1 when no caps are set). Counting happens inside the claim transaction that inserts the `spawning` placeholder (`team-tasks` D4), so concurrent spawns cannot overshoot. User-created sessions count too, which is what protects a provider account; the new-session dialog only warns, because a human adding capacity on purpose is legitimate. *Alternative:* count spawned sessions only — rejected: the account would see more concurrent sessions than the cap says. Account-wide (cross-group) caps are deferred; they would be a user-level profile setting, not a group key.
+
+### D4b. Limit frontmatter
+`onLimit: { parkIfResetWithin, otherwise, forwardTo }` is the built-in `onLimit` when no rule defines one. Durations accept `<n>m` / `<n>h`. `forwardTo` is resolved at forward time; an unknown target falls back to the same group and is logged.
 
 ### D5. Per-group decision serialization and claim re-validation
 The dispatcher keeps one in-flight decision per group; others wait. After the rule returns, the claim transaction re-checks eligibility (see `agent-teams` D5). On failure: re-run once, then built-in strategy.

@@ -7,15 +7,49 @@ Lets the user decide which agent or provider profile handles a group's messages,
 ## ADDED Requirements
 
 ### Requirement: Groups list allowed profiles
-A group's frontmatter SHALL accept `profiles`, a list of profile ids that its spawned members may use. A single `profile` value SHALL be treated as a one-item list. Unknown profile ids SHALL be reported and ignored. Existing members SHALL keep their own profiles.
+A group's frontmatter SHALL accept `profiles` as a list of profile ids or as a map from profile id to a positive member cap. Either form SHALL define which profiles spawned members may use, and its order SHALL be the profile preference order. A single `profile` value SHALL be treated as a one-item list. Unknown profile ids SHALL be reported and ignored. Existing members SHALL keep their own profiles.
 
 #### Scenario: Mixed group
 - **WHEN** the `devs` group sets `profiles: [claude, glm]`
 - **THEN** a spawned `devs` member may use either profile
 
+#### Scenario: Map form
+- **WHEN** the `devs` group sets `profiles: { glm: 2, mimo: 1, claude: 1 }`
+- **THEN** spawned members may use `glm`, `mimo`, or `claude`, preferred in that order
+
 #### Scenario: Unknown profile
 - **WHEN** a group lists a profile id that no profile catalog defines
 - **THEN** the id is ignored and the problem is reported
+
+### Requirement: Per-profile member caps
+When `profiles` is a map, the system SHALL NOT spawn a group member on a profile whose number of live members of that group has reached its cap. Live members SHALL include every non-archived session of the group on that profile, whether created by the user or spawned, including busy and parked members. Caps SHALL count only the group's own members. The group's `max` SHALL default to the sum of the caps and, when set, SHALL further limit the total.
+
+#### Scenario: Profile cap reached
+- **WHEN** `devs` has `profiles: { glm: 2, mimo: 1, claude: 1 }` and two live `glm` members
+- **THEN** no `glm` member is spawned and spawn candidates offer only `mimo` and `claude` while they have room
+
+#### Scenario: Parked members hold their slots
+- **WHEN** both live `glm` members of `devs` are parked on a `glm` limit
+- **THEN** forwarded `devs` work is not given a new `glm` member
+
+#### Scenario: Overall max
+- **WHEN** `devs` sets `max: 3` with caps summing to 4 and has three live members
+- **THEN** no further member is spawned on any profile
+
+#### Scenario: Default max
+- **WHEN** `devs` sets per-profile caps summing to 4 and no `max`
+- **THEN** up to four members may be live at once
+
+#### Scenario: Other groups do not count
+- **WHEN** `qa` has three live `glm` members and `devs` caps `glm` at 2 with none live
+- **THEN** `devs` may still spawn `glm` members
+
+### Requirement: Manual sessions over a cap are warned, not refused
+When the user creates a chat session for a group on a profile whose cap is already reached, the new-session dialog SHALL warn that the cap is exceeded and SHALL still allow creation. The session SHALL count toward the cap.
+
+#### Scenario: User exceeds cap
+- **WHEN** `devs` caps `claude` at 1, one `claude` member is live, and the user creates another `devs` session on `claude`
+- **THEN** the dialog shows a cap warning, the session is created, and kawai spawns no `claude` member for `devs` until the count drops below the cap
 
 ### Requirement: Built-in routing strategy
 Without a routing rule, the system SHALL route by the group's `strategy`: `first-available` (default) picks the longest-idle member, else a spawn slot of the first allowed profile; `profile-order` prefers candidates whose profile appears earlier in `profiles`. Both SHALL skip candidates whose profile is in cooldown.
@@ -66,7 +100,7 @@ The system SHALL load routing rules at server start and when the user triggers R
 - **THEN** the edited rule is used for later decisions and the UI lists its load status
 
 ### Requirement: Route contract
-`route` SHALL receive the group, the message's priority, sender group, tags, worktree, task id, the eligible candidates (idle members and spawn slots per allowed profile, already filtered by delivery and staffing rules), and per-profile usage and limit events with their sources and times. It SHALL return a pick of one candidate, a hold with a reason and optional retry delay, or default. It MAY be asynchronous.
+`route` SHALL receive the group with its per-profile caps and live member counts, the message's priority, sender group, tags, worktree, task id, the eligible candidates (idle members and spawn slots per allowed profile, already filtered by delivery and staffing rules), and per-profile usage and limit events with their sources and times. It SHALL return a pick of one candidate, a hold with a reason and optional retry delay, or default. It MAY be asynchronous.
 
 #### Scenario: Pick a spawn slot
 - **WHEN** a rule returns a pick of the `glm` spawn slot

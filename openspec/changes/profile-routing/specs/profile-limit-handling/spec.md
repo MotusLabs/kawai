@@ -43,6 +43,21 @@ When the turn handling a delivered message fails with a final limit event, the s
 - **WHEN** an agent hits a limit before any tool call for the message
 - **THEN** the message returns to its group's queue
 
+### Requirement: Group frontmatter configures limit outcomes
+A group's frontmatter SHALL accept an `onLimit` map with `parkIfResetWithin` (a duration such as `90m` or `3h`), `otherwise` (`forward` or `release`, default `forward`) applied when the agent made progress and the reset is later, and `forwardTo` (a group id or team session id, default the same group). Invalid values SHALL be reported and the defaults used.
+
+#### Scenario: Release instead of forward
+- **WHEN** `devs` sets `onLimit: { parkIfResetWithin: 1h, otherwise: release }` and a member with progress hits a limit resetting in 2 hours
+- **THEN** the message returns to the `devs` queue without a handoff package
+
+#### Scenario: Forward to another group
+- **WHEN** `devs` sets `onLimit: { forwardTo: architects }` and a member with progress hits a limit resetting in 5 hours
+- **THEN** the message is forwarded to `architects` with a handoff package
+
+#### Scenario: Invalid duration
+- **WHEN** `parkIfResetWithin` is set to `soon`
+- **THEN** the problem is reported and 3h is used
+
 ### Requirement: Parked work resumes on the same agent
 Parking SHALL keep the message with the agent and schedule a resume message to that agent at the reset time. A parked agent SHALL receive no group mail and SHALL be shown as paused with the reason and resume time. If the resume fails on a limit again, the message SHALL be resolved again; after 3 parks it SHALL be released.
 
