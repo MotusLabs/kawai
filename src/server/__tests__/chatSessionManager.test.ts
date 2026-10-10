@@ -117,7 +117,8 @@ interface ManagerHarness {
 function createHarness(
   db: SessionDatabase,
   isDirectory: (path: string) => boolean = anyDirectory,
-  usageImpl?: FakeUsageControl
+  usageImpl?: FakeUsageControl,
+  titleLocateIntervalMs?: number
 ): ManagerHarness {
   const registry = new SessionRegistry()
   const handles: FakeHandle[] = []
@@ -132,6 +133,7 @@ function createHarness(
     onActivity: (sessionId, activity) => activities.push({ sessionId, activity }),
     onUsage: (profileId, report) => usage.push({ profileId, report }),
     queryFactory: fakeQueryFactory(handles, usageImpl),
+    titleLocateIntervalMs,
   })
   return { manager, registry, handles, events, activities, usage }
 }
@@ -2035,6 +2037,34 @@ describe('ChatSessionManager', () => {
     await flush(10)
     expect(db.getChatSession(shutdownId)?.name).toBe('shutdown title')
   })
+
+  test('a transcript that appears long after the SDK id still arms the title tail', async () => {
+    process.env.ANTHROPIC_API_KEY = 'test-key'
+    // The agent starts on attach with no prompt, so the SDK id arrives before
+    // any transcript exists — and a later send reuses the driver without
+    // re-arming. The locator must therefore outlive its early retries. The
+    // wait has to pass the old three-retry budget (2s+4s+2s = 6s) to prove
+    // the tail survives it; the locate interval is shrunk so the new code
+    // picks the file up promptly instead of backing off to 15s.
+    const harness = createHarness(db, anyDirectory, undefined, 20)
+    const created = harness.manager.createSession({ projectPath: '/tmp/proj' })
+    if (!created.ok) throw new Error(created.error)
+    const id = created.session.id
+    await harness.manager.send(id, 'hello')
+    // SDK id known, transcript not yet written: the placeholder stands.
+    harness.handles[0]!.push(initMessage('title-late'))
+    await flush(10)
+    expect(db.getChatSession(id)?.nameSource).toBe('placeholder')
+    await new Promise((resolve) => setTimeout(resolve, 6_500))
+    // The first message finally persists a transcript carrying a title.
+    writeTranscript(
+      'title-late',
+      JSON.stringify({ type: 'ai-title', aiTitle: 'late title', sessionId: 'title-late' }) + '\n'
+    )
+    await waitForCondition(() => db.getChatSession(id)?.name === 'late title')
+    expect(db.getChatSession(id)?.nameSource).toBe('auto')
+    harness.manager.shutdown()
+  }, 15_000)
 
   test('a restored session adopts its transcript title as a catch-up, dormant ones only on attach', async () => {
     process.env.ANTHROPIC_API_KEY = 'test-key'

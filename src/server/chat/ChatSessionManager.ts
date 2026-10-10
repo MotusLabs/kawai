@@ -110,6 +110,13 @@ export interface ChatSessionManagerOptions {
    * lives here). Injected in tests so a real home catalog cannot leak in.
    */
   profileCatalogHome?: string
+  /**
+   * Base delay between transcript-locate retries (chat-session-naming D4).
+   * The locator runs until the session goes away — the transcript appears
+   * with the first message, which can be much later than the SDK id. Tests
+   * shrink it so a delayed transcript is cheap to cover.
+   */
+  titleLocateIntervalMs?: number
   /** Catalog file failure sink; defaults to the structured logger. */
   catalogErrorLog?: (errors: string[]) => void
 }
@@ -696,10 +703,12 @@ export class ChatSessionManager {
   }
 
   /**
-   * Start following a session's transcript for title rows. The transcript
-   * exists only once the CLI has persisted its first message, so a missing
-   * file is retried a couple of times before the watch is dropped (the next
-   * spawn retries too).
+   * Start following a session's transcript for title rows. The transcript is
+   * created by the first message, which can arrive much later than the SDK id
+   * (the agent starts on attach, with no prompt), and a later send reuses the
+   * driver without re-running this. So the locate retry lives as long as the
+   * session does — giving up would pin the placeholder for the whole
+   * conversation. Polls back off to `titleLocateIntervalMs * 7.5`.
    */
   private watchSessionTitle(sessionId: string, attempt = 0): void {
     if (this.titleWatchers.has(sessionId)) return
@@ -707,11 +716,14 @@ export class ChatSessionManager {
     if (!record || record.archivedAt != null || !record.sdkSessionId) return
     const filePath = findTranscriptPath(record.sdkSessionId)
     if (!filePath) {
-      if (attempt >= 3) return
-      const timer = setTimeout(() => {
-        this.titleWatchers.delete(sessionId)
-        this.watchSessionTitle(sessionId, attempt + 1)
-      }, 2_000)
+      const base = this.options.titleLocateIntervalMs ?? 2_000
+      const timer = setTimeout(
+        () => {
+          this.titleWatchers.delete(sessionId)
+          this.watchSessionTitle(sessionId, attempt + 1)
+        },
+        Math.min(base * 2 ** Math.min(attempt, 3), base * 7.5)
+      )
       timer.unref?.()
       this.titleWatchers.set(sessionId, { close: () => clearTimeout(timer) })
       return
