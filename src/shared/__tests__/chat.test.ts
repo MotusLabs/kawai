@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { ClientMessage, ServerMessage } from '../types'
-import type { ChatEvent } from '../chat'
+import type { ChatContextUsage, ChatEvent } from '../chat'
 
 /**
  * Every chat-related ClientMessage/ServerMessage variant must survive a
@@ -8,6 +8,19 @@ import type { ChatEvent } from '../chat'
  * because both ends of the WebSocket only ever see serialized text.
  */
 describe('chat wire messages', () => {
+  test('ChatContextUsage is a plain JSON-safe value with no SDK reach', () => {
+    // Constructed only from primitives: the client renders this type without
+    // the agent SDK, so the shared contract must never grow SDK-shaped fields.
+    const reading: ChatContextUsage = {
+      usedTokens: 157_900,
+      thresholdTokens: 167_000,
+      percentage: 94.55,
+      at: '2026-10-10T12:00:00.000Z',
+    }
+    const parsed = JSON.parse(JSON.stringify(reading)) as ChatContextUsage
+    expect(parsed).toEqual(reading)
+  })
+
   const clientMessages: ClientMessage[] = [
     { type: 'session-create', projectPath: '/tmp/proj', kind: 'chat' },
     { type: 'session-create', projectPath: '/tmp/proj' }, // absent kind = terminal
@@ -197,6 +210,12 @@ describe('chat wire messages', () => {
         ],
       },
       activity: { phase: 'thinking', elapsedMs: 4_000 },
+      contextUsage: {
+        usedTokens: 157_900,
+        thresholdTokens: 167_000,
+        percentage: 94.55,
+        at: '2026-10-10T12:00:00.000Z',
+      },
       profileId: 'default',
       usage: {
         status: 'warning',
@@ -207,6 +226,27 @@ describe('chat wire messages', () => {
         ],
         receivedAt: '2026-10-07T13:00:00.000Z',
       },
+    }
+
+    const parsed = JSON.parse(JSON.stringify(message)) as ServerMessage
+    expect(parsed).toEqual(message)
+  })
+
+  test('chat-snapshot carries a null context reading before the first model request', () => {
+    // Design D7: no reading is a state, not a zero — the field is present
+    // and null, never undefined or an invented 0%.
+    const message: ServerMessage = {
+      type: 'chat-snapshot',
+      sessionId: 'chat-1',
+      events: [],
+      pendingRequests: [],
+      status: 'unknown',
+      throughSequence: 0,
+      commands: { status: 'loading', commands: [] },
+      activity: null,
+      contextUsage: null,
+      profileId: 'default',
+      usage: null,
     }
 
     const parsed = JSON.parse(JSON.stringify(message)) as ServerMessage

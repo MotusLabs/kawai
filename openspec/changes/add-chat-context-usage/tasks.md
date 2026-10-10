@@ -2,8 +2,8 @@
 
 ## 1. Shared contract
 
-- [ ] 1.1 Add a `ChatContextUsage` value type (`usedTokens`, `thresholdTokens`, `percentage`, `at`) to `src/shared/chat.ts`, and verify `src/shared/__tests__/chat.test.ts` constructs it without reaching into SDK types
-- [ ] 1.2 Add `contextUsage: ChatContextUsage | null` beside `activity` on `chat-snapshot` in `src/shared/types.ts`, and verify the `chat-snapshot` round-trip test in `src/shared/__tests__/chat.test.ts` carries it alongside `activity` and `pendingRequests`
+- [x] 1.1 Add a `ChatContextUsage` value type (`usedTokens`, `thresholdTokens`, `percentage`, `at`) to `src/shared/chat.ts`, and verify `src/shared/__tests__/chat.test.ts` constructs it without reaching into SDK types
+- [x] 1.2 Add `contextUsage: ChatContextUsage | null` beside `activity` on `chat-snapshot` in `src/shared/types.ts`, and verify the `chat-snapshot` round-trip test in `src/shared/__tests__/chat.test.ts` carries it alongside `activity` and `pendingRequests`
 
 ## 2. Persistence
 

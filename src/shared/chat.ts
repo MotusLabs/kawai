@@ -180,6 +180,28 @@ export interface ChatActivity {
   errorStatus?: number
 }
 
+/**
+ * The session's distance to auto-compaction: how much of its
+ * auto-compaction threshold — the used-token count at which the conversation
+ * would be compacted, not the model's full context window — the current
+ * conversation occupies. `usedTokens` is the latest model request's
+ * `input + cache_read + cache_creation + output`: the window as of that
+ * request, never lifetime traffic. `percentage` is used/threshold × 100 and
+ * may exceed 100, since compaction can lag the threshold. Unlike
+ * `ChatActivity` this is a slow session fact: it persists with the chat
+ * session across restart and archive and rides the snapshot; it is never a
+ * ChatEvent and is absent (`null`) rather than zero before the first
+ * request.
+ */
+export interface ChatContextUsage {
+  usedTokens: number
+  thresholdTokens: number
+  /** Share of the threshold in use; not clamped to 100. */
+  percentage: number
+  /** ISO timestamp of when the reading was measured. */
+  at: string
+}
+
 /** Overall plan-limit status of a usage report. */
 export type ChatUsageStatus = 'allowed' | 'warning' | 'limited'
 
