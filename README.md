@@ -87,6 +87,20 @@ curl -fsSL https://github.com/gbasin/agentboard/releases/latest/download/agentbo
 ./bin/agentboard
 ```
 
+Every release also publishes a `SHA256SUMS` file with one SHA256 entry per
+platform tarball. Verify a download by hand before extracting:
+
+```bash
+curl -fsSL -O https://github.com/MotusLabs/kawai/releases/latest/download/SHA256SUMS
+curl -fsSL -O https://github.com/MotusLabs/kawai/releases/latest/download/agentboard-darwin-arm64.tar.gz
+sha256sum -c --ignore-missing SHA256SUMS
+```
+
+`sha256sum -c` prints `agentboard-<platform>.tar.gz: OK` when the tarball
+matches its published entry. The in-app updater performs this same check —
+and refuses to extract on any mismatch or missing entry — before applying an
+update.
+
 Then open `http://localhost:4040` (or `http://<your-machine>:4040` from another device).
 
 > Previously distributed via npm and Homebrew — those channels are frozen at v0.5.x and will not receive further updates.

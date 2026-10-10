@@ -193,10 +193,18 @@ jobs:
               bin/agentboard dist/client
           done
 
+      # The updater's only trust anchor: a release without a complete
+      # checksum file is refused by design, so an incomplete manifest must
+      # fail the publish job here rather than ship.
+      - name: Generate release checksums
+        run: scripts/release-checksums.sh release-binaries
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64  # v3.0.3
         with:
-          files: release-binaries/agentboard-*
+          files: |
+            release-binaries/agentboard-*
+            release-binaries/SHA256SUMS
           generate_release_notes: true
           # Every merge ships, so each tag is a real release despite the
           # semver-prerelease shape of its -<PR> suffix; without this the

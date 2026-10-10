@@ -2,8 +2,8 @@
 
 ## 1. Release checksums
 
-- [ ] 1.1 Generate a SHA256 checksum file over the four platform tarballs in `.github/workflows/release.yml` and upload it on the GitHub Release; verify the publish job fails when any tarball's checksum is missing, and that a successful run's release carries one matching entry per tarball.
-- [ ] 1.2 Document the checksum file alongside the install table in `README.md` (what it is, how to verify by hand); verify the rendered section names the file and the check command works against a real release asset.
+- [x] 1.1 Generate a SHA256 checksum file over the four platform tarballs in `.github/workflows/release.yml` and upload it on the GitHub Release; verify the publish job fails when any tarball's checksum is missing, and that a successful run's release carries one matching entry per tarball.
+- [x] 1.2 Document the checksum file alongside the install table in `README.md` (what it is, how to verify by hand); verify the rendered section names the file and the check command works against a real release asset.
 
 ## 2. Update discovery
 
