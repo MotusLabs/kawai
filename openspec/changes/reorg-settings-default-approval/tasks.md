@@ -16,7 +16,7 @@
 
 - [x] 3.1 Add `defaultApprovalPolicy: ChatApprovalPolicy` with setter to `useSettingsStore`, defaulting to `'manual'` and re-sanitized on persist merge so any value other than `'auto'` reads as `'manual'` (design D1) — verify `bun run test src/client/__tests__/settingsStore.test.ts` covers the default, a saved `'auto'`, and rejection of a corrupt value
 - [x] 3.2 Add the segmented `[ Manual | Auto-approve ]` control to the Chat tab, drafted from the store and committed on Save like `defaultPresetId` (design D7) — verify `settingsModal.test.tsx` covers Save committing the value and Cancel discarding it
-- [ ] 3.3 Update the approval-policy note in `CLAUDE.md` to say new chat sessions start with the Settings default rather than always manual — verify the note matches the behavior in 3.1 and 4.2
+- [x] 3.3 Update the approval-policy note in `CLAUDE.md` to say new chat sessions start with the Settings default rather than always manual — verify the note matches the behavior in 3.1 and 4.2
 
 ## 4. Create-time policy on the wire and server
 
