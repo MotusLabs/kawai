@@ -31,7 +31,7 @@
 
 ## 6. Integration verification
 
-- [ ] 6.1 Run `bun run lint && bun run typecheck && bun run test` and verify the full suite is green with no new failures
+- [x] 6.1 Run `bun run lint && bun run typecheck && bun run test` and verify the full suite is green with no new failures
 - [ ] 6.2 Open Settings and step through all four tabs in the running app (dev-browser), verify the Chat tab shows the approval control beside chat font size and provider env, and verify a chat session created with the box unchecked starts manual — confirm by the header toggle state and by the absence of auto-approval cards on its first tool use
 
 ## Workflow follow-up
