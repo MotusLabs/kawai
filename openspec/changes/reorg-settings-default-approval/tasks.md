@@ -3,7 +3,7 @@
 ## 1. Settings tab shell
 
 - [x] 1.1 Add tab state and a nav strip (Sessions / Chat / Terminal / General) to `SettingsModal.tsx`, wrap the existing sections in four panels, and mark the three inactive panels `hidden` so they leave the accessibility tree — verify `bun run test src/client/__tests__/settingsModal.test.tsx` passes unchanged, since every control stays mounted
-- [ ] 1.2 Move each existing section to its tab (Dark Mode and Notifications and the shortcut modifier to General; chat font size and `ChatProviderSettings` to Chat; everything else to Sessions or Terminal as in design D4) — verify `bun run test src/client/__tests__/settingsModal.test.tsx` passes and the modal still opens on Sessions
+- [x] 1.2 Move each existing section to its tab (Dark Mode and Notifications and the shortcut modifier to General; chat font size and `ChatProviderSettings` to Chat; everything else to Sessions or Terminal as in design D4) — verify `bun run test src/client/__tests__/settingsModal.test.tsx` passes and the modal still opens on Sessions
 
 ## 2. Extract section components
 

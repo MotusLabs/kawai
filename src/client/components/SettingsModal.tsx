@@ -721,36 +721,29 @@ export default function SettingsModal({
                 onCheckedChange={setDraftShowSessionIdSuffix}
               />
             </div>
-            <div className="flex items-center justify-between">
-              <div>
-                <div className="text-sm text-primary">History Sessions Lookback</div>
-                <div className="text-[10px] text-muted">
-                  Show history sessions from the last N hours ({HISTORY_MAX_AGE_MIN_HOURS}-{HISTORY_MAX_AGE_MAX_HOURS}).
-                </div>
-              </div>
-              <div className="flex items-center gap-2">
-                <input
-                  type="number"
-                  min={HISTORY_MAX_AGE_MIN_HOURS}
-                  max={HISTORY_MAX_AGE_MAX_HOURS}
-                  value={historyMaxAgeHours}
-                  onChange={(e) => {
-                    const val = parseInt(e.target.value, 10)
-                    if (val >= HISTORY_MAX_AGE_MIN_HOURS && val <= HISTORY_MAX_AGE_MAX_HOURS) {
-                      handleHistoryMaxAgeHoursChange(val)
-                    }
-                  }}
-                  disabled={historyMaxAgeHoursLoading}
-                  className="input text-xs py-1 px-2 w-16 text-center"
-                />
-                <span className="text-xs text-muted">hrs</span>
-              </div>
-            </div>
           </div>
 
         </div>
 
         <div role="tabpanel" aria-label="General" hidden={activeTab !== 'general'} className="mt-5 space-y-4">
+          <div className="border-t border-border pt-4">
+            <label className="mb-2 block text-xs text-secondary">
+              Appearance
+            </label>
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="text-sm text-primary">Dark Mode</div>
+                <div className="text-[10px] text-muted">
+                  Switch between dark and light themes.
+                </div>
+              </div>
+              <Switch
+                checked={draftTheme === 'dark'}
+                onCheckedChange={(checked) => setDraftTheme(checked ? 'dark' : 'light')}
+              />
+            </div>
+          </div>
+
           <div className="border-t border-border pt-4 space-y-3">
             <label className="mb-1 block text-xs text-secondary">
               Notifications
@@ -805,6 +798,32 @@ export default function SettingsModal({
             </div>
           </div>
 
+          <div className="border-t border-border pt-4">
+            <label className="mb-2 block text-xs text-secondary">
+              Keyboard Shortcut Modifier
+            </label>
+            <div className="grid grid-cols-5 gap-1">
+              {(
+                ['auto', 'ctrl-option', 'ctrl-shift', 'cmd-option', 'cmd-shift'] as const
+              ).map((mod) => (
+                <button
+                  key={mod}
+                  type="button"
+                  className={`btn text-xs px-2 ${draftShortcutModifier === mod ? 'btn-primary' : ''}`}
+                  onClick={() => setDraftShortcutModifier(mod)}
+                >
+                  {mod === 'auto'
+                    ? 'Auto'
+                    : getModifierDisplay(mod)}
+                </button>
+              ))}
+            </div>
+            <p className="mt-1.5 text-[10px] text-muted">
+              {draftShortcutModifier === 'auto'
+                ? `Shortcuts: ${getModifierDisplay(getEffectiveModifier('auto'))}+[1-9/N/X/[/]]`
+                : `Shortcuts: ${getModifierDisplay(draftShortcutModifier)}+[1-9/N/X/[/]]`}
+            </p>
+          </div>
         </div>
 
         <div role="tabpanel" aria-label="Chat" hidden={activeTab !== 'chat'} className="mt-5 space-y-4">
@@ -974,46 +993,34 @@ export default function SettingsModal({
                 />
               )}
             </div>
-
-            <div className="mt-4 flex items-center justify-between">
-              <div>
-                <div className="text-sm text-primary">Dark Mode</div>
-                <div className="text-[10px] text-muted">
-                  Switch between dark and light themes.
-                </div>
-              </div>
-              <Switch
-                checked={draftTheme === 'dark'}
-                onCheckedChange={(checked) => setDraftTheme(checked ? 'dark' : 'light')}
-              />
-            </div>
           </div>
 
-          <div className="border-t border-border pt-4">
-            <label className="mb-2 block text-xs text-secondary">
-              Keyboard Shortcut Modifier
-            </label>
-            <div className="grid grid-cols-5 gap-1">
-              {(
-                ['auto', 'ctrl-option', 'ctrl-shift', 'cmd-option', 'cmd-shift'] as const
-              ).map((mod) => (
-                <button
-                  key={mod}
-                  type="button"
-                  className={`btn text-xs px-2 ${draftShortcutModifier === mod ? 'btn-primary' : ''}`}
-                  onClick={() => setDraftShortcutModifier(mod)}
-                >
-                  {mod === 'auto'
-                    ? 'Auto'
-                    : getModifierDisplay(mod)}
-                </button>
-              ))}
+          {/* History lookback is one of the four self-saving (immediate-PUT)
+              settings; they live together on the Terminal tab (design D5). */}
+          <div className="border-t border-border pt-4 flex items-center justify-between">
+            <div>
+              <div className="text-sm text-primary">History Sessions Lookback</div>
+              <div className="text-[10px] text-muted">
+                Show history sessions from the last N hours ({HISTORY_MAX_AGE_MIN_HOURS}-{HISTORY_MAX_AGE_MAX_HOURS}).
+              </div>
             </div>
-            <p className="mt-1.5 text-[10px] text-muted">
-              {draftShortcutModifier === 'auto'
-                ? `Shortcuts: ${getModifierDisplay(getEffectiveModifier('auto'))}+[1-9/N/X/[/]]`
-                : `Shortcuts: ${getModifierDisplay(draftShortcutModifier)}+[1-9/N/X/[/]]`}
-            </p>
+            <div className="flex items-center gap-2">
+              <input
+                type="number"
+                min={HISTORY_MAX_AGE_MIN_HOURS}
+                max={HISTORY_MAX_AGE_MAX_HOURS}
+                value={historyMaxAgeHours}
+                onChange={(e) => {
+                  const val = parseInt(e.target.value, 10)
+                  if (val >= HISTORY_MAX_AGE_MIN_HOURS && val <= HISTORY_MAX_AGE_MAX_HOURS) {
+                    handleHistoryMaxAgeHoursChange(val)
+                  }
+                }}
+                disabled={historyMaxAgeHoursLoading}
+                className="input text-xs py-1 px-2 w-16 text-center"
+              />
+              <span className="text-xs text-muted">hrs</span>
+            </div>
           </div>
         </div>
 
