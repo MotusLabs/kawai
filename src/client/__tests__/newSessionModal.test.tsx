@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import TestRenderer, { act } from 'react-test-renderer'
+import TestRenderer, { act, type ReactTestInstance } from 'react-test-renderer'
 import NewSessionModal from '../components/NewSessionModal'
 import { DEFAULT_PRESETS, useSettingsStore } from '../stores/settingsStore'
 
@@ -1302,6 +1302,179 @@ describe('NewSessionModal auto-approve tools', () => {
 
     act(() => {
       dialog.renderer.unmount()
+    })
+  })
+})
+
+describe('NewSessionModal radiogroup keyboard navigation', () => {
+  /**
+   * Each radio's handler closes over its own map index, and focus follows the
+   * selection, so a keypress lands on whichever radio is currently selected.
+   * react-test-renderer has no DOM, so stand in for the handler's
+   * `parentElement.querySelectorAll('[role="radio"]')[n].focus()`.
+   */
+  function press(group: ReactTestInstance, key: string, focusLog: number[] = []) {
+    const radios = group.findAllByType('button')
+    const activeIndex = radios.findIndex((radio) => radio.props.tabIndex === 0)
+    const currentTarget = {
+      parentElement: {
+        querySelectorAll: () => radios.map((_, index) => ({ focus: () => focusLog.push(index) })),
+      },
+    }
+    act(() => {
+      radios[activeIndex]!.props.onKeyDown({ key, preventDefault: () => {}, currentTarget })
+    })
+    return focusLog
+  }
+
+  // The command picker prefixes each label with an AgentIcon; the host picker
+  // renders the label alone. Pull out whichever child is the text.
+  const labels = (group: ReactTestInstance) =>
+    group.findAllByType('button').map((radio) => {
+      const children = radio.props.children
+      const parts: unknown[] = Array.isArray(children) ? children : [children]
+      return parts.find((part) => typeof part === 'string') as string
+    })
+  const checked = (group: ReactTestInstance) =>
+    group.findAllByType('button').map((radio) => radio.props['aria-checked'] as boolean)
+  const tabbable = (group: ReactTestInstance) =>
+    group.findAllByType('button').map((radio) => radio.props.tabIndex as number)
+
+  test('the host picker arrows through Local and the remote hosts, wrapping both ways', () => {
+    setupDom()
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => {
+      renderer = TestRenderer.create(
+        <NewSessionModal
+          isOpen
+          onClose={() => {}}
+          onCreate={() => {}}
+          defaultProjectDir="/base"
+          commandPresets={DEFAULT_PRESETS}
+          defaultPresetId="claude"
+          remoteHosts={[
+            { host: 'box-a', ok: true, lastUpdated: '2026-01-01T00:00:00.000Z' },
+            { host: 'box-b', ok: true, lastUpdated: '2026-01-01T00:00:00.000Z' },
+          ]}
+          remoteAllowControl
+        />
+      )
+    })
+    selectKind(renderer, 'terminal')
+
+    const group = renderer.root.findByProps({ 'data-testid': 'host-select' })
+    expect(group.props.role).toBe('radiogroup')
+    expect(labels(group)).toEqual(['Local', 'box-a', 'box-b'])
+    expect(checked(group)).toEqual([true, false, false])
+    expect(tabbable(group)).toEqual([0, -1, -1])
+
+    const focusLog: number[] = []
+    press(group, 'ArrowRight', focusLog)
+    expect(checked(group)).toEqual([false, true, false])
+    expect(tabbable(group)).toEqual([-1, 0, -1])
+
+    press(group, 'ArrowRight', focusLog)
+    expect(checked(group)).toEqual([false, false, true])
+
+    // Wraps forward off the end and backward off the start.
+    press(group, 'ArrowRight', focusLog)
+    expect(checked(group)).toEqual([true, false, false])
+    press(group, 'ArrowLeft', focusLog)
+    expect(checked(group)).toEqual([false, false, true])
+
+    // Every move refocused the newly selected radio.
+    expect(focusLog).toEqual([1, 2, 0, 2])
+
+    // An unmatched key leaves the selection alone.
+    press(group, 'Enter')
+    expect(checked(group)).toEqual([false, false, true])
+
+    act(() => {
+      renderer.unmount()
+    })
+  })
+
+  test('the command picker arrows through the presets and Custom, wrapping', () => {
+    setupDom()
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => {
+      renderer = TestRenderer.create(
+        <NewSessionModal
+          isOpen
+          onClose={() => {}}
+          onCreate={() => {}}
+          defaultProjectDir="/base"
+          commandPresets={DEFAULT_PRESETS}
+          defaultPresetId="claude"
+        />
+      )
+    })
+    selectKind(renderer, 'terminal')
+
+    const group = renderer.root.findByProps({ 'data-testid': 'command-select' })
+    expect(group.props.role).toBe('radiogroup')
+    expect(labels(group)).toEqual(['Claude', 'Codex', 'Pi', 'Custom'])
+    expect(checked(group)).toEqual([true, false, false, false])
+    expect(tabbable(group)).toEqual([0, -1, -1, -1])
+
+    const focusLog: number[] = []
+    press(group, 'ArrowRight', focusLog)
+    expect(checked(group)).toEqual([false, true, false, false])
+
+    // Reaching Custom clears the command the way clicking it does.
+    press(group, 'ArrowRight', focusLog)
+    press(group, 'ArrowRight', focusLog)
+    expect(checked(group)).toEqual([false, false, false, true])
+    expect(tabbable(group)).toEqual([-1, -1, -1, 0])
+    expect(renderer.root.findAllByType('input')[0]!.props.value).toBe('')
+
+    // Wraps back to the first preset and restores its command.
+    press(group, 'ArrowRight', focusLog)
+    expect(checked(group)).toEqual([true, false, false, false])
+    expect(renderer.root.findAllByType('input')[0]!.props.value).toBe('claude')
+    expect(focusLog).toEqual([1, 2, 3, 0])
+
+    // Backward from the first preset lands on Custom again.
+    press(group, 'ArrowLeft', focusLog)
+    expect(checked(group)).toEqual([false, false, false, true])
+
+    act(() => {
+      renderer.unmount()
+    })
+  })
+
+  test('both pickers keep their roving tabindex through the whole cycle', () => {
+    setupDom()
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => {
+      renderer = TestRenderer.create(
+        <NewSessionModal
+          isOpen
+          onClose={() => {}}
+          onCreate={() => {}}
+          defaultProjectDir="/base"
+          commandPresets={DEFAULT_PRESETS}
+          defaultPresetId="claude"
+          remoteHosts={[{ host: 'box-a', ok: true, lastUpdated: '2026-01-01T00:00:00.000Z' }]}
+          remoteAllowControl
+        />
+      )
+    })
+    selectKind(renderer, 'terminal')
+
+    const hostGroup = renderer.root.findByProps({ 'data-testid': 'host-select' })
+    const commandGroup = renderer.root.findByProps({ 'data-testid': 'command-select' })
+    for (const group of [hostGroup, commandGroup]) {
+      const count = group.findAllByType('button').length
+      for (let step = 0; step < count + 1; step++) {
+        // Exactly one radio is in the tab order at every point in the cycle.
+        expect(tabbable(group).filter((value) => value === 0)).toHaveLength(1)
+        press(group, 'ArrowRight')
+      }
+    }
+
+    act(() => {
+      renderer.unmount()
     })
   })
 })
