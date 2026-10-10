@@ -21,7 +21,13 @@ export const useUpdateStore = create<UpdateStore>((set) => ({
   update: null,
   panelOpen: false,
 
-  setFromServerInfo: (update) => set({ update: update ?? null }),
+  setFromServerInfo: (update) =>
+    set((state) => ({
+      update: update ?? null,
+      // Same closing rule as apply(): a reconnected server reporting no
+      // target leaves an open panel nothing to offer.
+      panelOpen: (update ?? null)?.target === null ? false : state.panelOpen,
+    })),
 
   apply: (message) => {
     if (message.type !== 'update-state') return

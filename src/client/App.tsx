@@ -1194,7 +1194,11 @@ export default function App() {
     document.documentElement.setAttribute('data-theme', theme)
   }, [theme])
 
-  // Fetch server info (including Tailscale IP) on mount
+  // Fetch server info (including Tailscale IP) on mount and on every
+  // reconnect: after an update the server across the socket is a different
+  // build, and a fresh build never re-broadcasts the update state (its
+  // checker starts at "current"), so this re-seed is what clears a stale
+  // target the previous build pushed — and refreshes the shown version.
   useEffect(() => {
     fetch('/api/server-info')
       .then((res) => res.json())
@@ -1203,7 +1207,7 @@ export default function App() {
         useUpdateStore.getState().setFromServerInfo(info.update)
       })
       .catch(() => {})
-  }, [])
+  }, [connectionEpoch])
 
   const remoteHostStatuses = useMemo(() => {
     if (!hostLabel) return hostStatuses
