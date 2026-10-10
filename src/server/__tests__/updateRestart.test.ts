@@ -69,6 +69,13 @@ describe('planRestart', () => {
       '4040',
     ])
     expect(plan.exitsAfterSpawn).toBe(true)
+    // No cwd pinned: the successor inherits this process's directory.
+    expect(plan.cwd).toBeUndefined()
+  })
+
+  test('bare can pin the successor working directory', () => {
+    const plan = planRestart({ mode: 'bare' }, { cwd: '/opt/agentboard' })
+    expect(plan.cwd).toBe('/opt/agentboard')
   })
 })
 
@@ -99,6 +106,9 @@ describe('planRestartAfterInstall', () => {
       '/home/dev/.agentboard/app/bin/agentboard',
     ])
     expect(plan.exitsAfterSpawn).toBe(true)
+    // The successor runs from the install root so the cwd-relative client
+    // bundle resolves to the fresh release, not the source checkout.
+    expect(plan.cwd).toBe('/home/dev/.agentboard/app')
   })
 
   test('a source install carries no source argv into the successor', () => {
@@ -113,6 +123,12 @@ describe('planRestartAfterInstall', () => {
       'sleep 0; exec "$0" "$@"',
       '/home/dev/.agentboard/app/bin/agentboard',
     ])
+  })
+
+  test('a compiled bare install also restarts from the install root', () => {
+    const plan = planRestartAfterInstall({ mode: 'bare' }, { root: '/opt/agentboard', compiled: true })
+    expect(plan.mode).toBe('bare')
+    expect(plan.cwd).toBe('/opt/agentboard')
   })
 })
 
@@ -160,5 +176,21 @@ describe('performRestart', () => {
     expect(commands).toHaveLength(1)
     expect(exits).toEqual([0])
     expect(successorResolved).toBe(true)
+  })
+
+  test('the successor working directory reaches the spawner', async () => {
+    const spawned: Array<{ command: string[]; cwd?: string }> = []
+    await performRestart(
+      planRestartAfterInstall({ mode: 'bare' }, { root: '/home/dev/.agentboard/app', compiled: false }, { bareDelayMs: 0 }),
+      {
+        spawn: (command, cwd) => {
+          spawned.push({ command, cwd })
+          return { exited: new Promise<SpawnResult>(() => {}) }
+        },
+        exit: () => {},
+      },
+    )
+    expect(spawned).toHaveLength(1)
+    expect(spawned[0]?.cwd).toBe('/home/dev/.agentboard/app')
   })
 })

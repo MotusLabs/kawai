@@ -3,8 +3,11 @@
 // systemd unit for a systemd deployment, the launchd agent for a launchd
 // deployment, and a detached re-exec of the new binary otherwise. The bare
 // wrapper sleeps briefly before exec so the exiting process releases the
-// port first; a failed restart surfaces a named error instead of leaving a
-// swapped install that keeps serving the old build.
+// port first, and runs from the install root — the server resolves its
+// client bundle cwd-relative, so a successor left in some other directory
+// (a source checkout) would serve that directory's frontend. A failed
+// restart surfaces a named error instead of leaving a swapped install that
+// keeps serving the old build.
 
 import path from 'node:path'
 import { UpdateError } from './updateErrors'
@@ -46,6 +49,8 @@ export interface PlanRestartOptions {
   uid?: number | null
   /** Grace period before a bare re-exec, so the old process releases the port. */
   bareDelayMs?: number
+  /** Working directory for a bare successor; unset inherits this process's. */
+  cwd?: string
 }
 
 export interface RestartPlan {
@@ -53,6 +58,8 @@ export interface RestartPlan {
   command: string[]
   /** True when this process exits after spawning the successor (bare mode). */
   exitsAfterSpawn: boolean
+  /** Working directory the successor is spawned with (bare mode only). */
+  cwd?: string
 }
 
 /** Select the restart verb for a context; pure, for unit testing. */
@@ -82,6 +89,7 @@ export function planRestart(
         // the (already swapped) binary in its place.
         command: ['sh', '-c', `sleep ${Math.max(0, bareDelayMs) / 1000}; exec "$0" "$@"`, execPath, ...argv],
         exitsAfterSpawn: true,
+        cwd: options.cwd,
       }
   }
 }
@@ -99,16 +107,20 @@ export interface InstallOutcome {
  * release binary the install just placed under the application directory —
  * re-running this process (or restarting a supervisor unit) would restart
  * the source build, so the bare successor is planned regardless of context.
+ * A bare successor always runs from the install root: the server locates its
+ * client bundle cwd-relative, and the fresh bundle lives in that root, not
+ * in whatever directory this process happened to start from.
  */
 export function planRestartAfterInstall(
   context: RestartContext,
   install: InstallOutcome,
   options: PlanRestartOptions = {},
 ): RestartPlan {
-  if (install.compiled) return planRestart(context, options)
+  const withRoot: PlanRestartOptions = { ...options, cwd: options.cwd ?? install.root }
+  if (install.compiled) return planRestart(context, withRoot)
   return planRestart(
     { mode: 'bare' },
-    { ...options, execPath: path.join(install.root, 'bin', 'agentboard'), argv: [] },
+    { ...withRoot, execPath: path.join(install.root, 'bin', 'agentboard'), argv: [] },
   )
 }
 
@@ -122,11 +134,12 @@ export interface SpawnedCommand {
   exited: Promise<SpawnResult>
 }
 
-export type RestartSpawner = (command: string[]) => SpawnedCommand
+export type RestartSpawner = (command: string[], cwd?: string) => SpawnedCommand
 
-function spawnForRestart(command: string[]): SpawnedCommand {
+function spawnForRestart(command: string[], cwd?: string): SpawnedCommand {
   const proc = Bun.spawn(command, {
     env: process.env,
+    cwd,
     stdin: 'ignore',
     stdout: 'ignore',
     stderr: 'pipe',
@@ -163,7 +176,7 @@ export async function performRestart(
 
   let spawned: SpawnedCommand
   try {
-    spawned = spawn(plan.command)
+    spawned = spawn(plan.command, plan.cwd)
   } catch (cause) {
     throw new UpdateError(
       'ERR_UPDATE_RESTART_FAILED',
