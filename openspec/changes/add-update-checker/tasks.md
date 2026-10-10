@@ -30,7 +30,7 @@
 - [x] 5.1 Implement restart-per-supervisor (systemd unit restart, launchd kickstart, bare re-exec) selected from how the process was launched; verify unit tests cover verb selection for each mode and that a failed restart surfaces an error instead of succeeding silently.
 - [x] 5.2 Retarget `systemd/install.sh` and its README at the installed release binary, with a restart policy that brings the service back after a clean exit; verify the generated unit's start command is the binary and a restart of the unit serves the new process.
 - [x] 5.3 Retarget `launchd/install.sh` and its README at the installed release binary, keeping the PATH/locale wrapper and logrotate; verify the generated plist's program is the binary and a kickstart reloads the agent.
-- [ ] 5.4 Cover the L3 update flow (download → verify tarball → extract → all-or-restore swap → restart) with an isolated integration test against a fake release server and a temp install root; verify the test asserts the new files landed, the restart verb was invoked, a checksum mismatch left the root unchanged, and a mid-swap failure restored both paths.
+- [x] 5.4 Cover the L3 update flow (download → verify tarball → extract → all-or-restore swap → restart) with an isolated integration test against a fake release server and a temp install root; verify the test asserts the new files landed, the restart verb was invoked, a checksum mismatch left the root unchanged, and a mid-swap failure restored both paths.
 
 ## 6. End-to-end verification
 
