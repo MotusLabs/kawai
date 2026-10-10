@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, jest, test } from 'bun:test'
 import TestRenderer, { act, type ReactTestInstance } from 'react-test-renderer'
-import type { ChatActivity, ChatCommandState, ChatEvent, ChatPendingRequest, ChatUsageReport, ChatWireFrame } from '@shared/chat'
+import type { ChatActivity, ChatCommandState, ChatContextUsage, ChatEvent, ChatPendingRequest, ChatUsageReport, ChatWireFrame } from '@shared/chat'
 import type { ClientMessage, ServerMessage, Session } from '@shared/types'
 import ChatRequests from '../components/chat/ChatRequests'
 import ChatMessages from '../components/chat/ChatMessages'
@@ -1317,6 +1317,70 @@ describe('chat header rename', () => {
       connectionStatus="connected" connectionEpoch={0} error={null}
       onClose={() => {}} onKill={() => {}} />) })
     expect(textOf(renderer.root.findByProps({ 'data-testid': 'chat-name' }))).toBe('renamed elsewhere · Chat')
+    renderer.unmount()
+  })
+})
+
+describe('chat context meter', () => {
+  afterEach(() => useChatStore.setState({ sessions: {}, usage: {}, drafts: {} }))
+
+  const READING: ChatContextUsage = {
+    usedTokens: 157_900,
+    thresholdTokens: 167_000,
+    percentage: 94.6,
+    at: '2026-10-10T12:00:00.000Z',
+  }
+
+  function renderView(session: Session = chatSession) {
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => {
+      renderer = TestRenderer.create(<ChatView
+        session={session}
+        sendMessage={() => {}}
+        connectionStatus="connected" connectionEpoch={0} error={null}
+        onClose={() => {}} onKill={() => {}} />)
+    })
+    return renderer
+  }
+
+  test('the header shows the percentage and used / threshold counts beside the status', () => {
+    act(() => { useChatStore.getState().setContextUsage('chat-1', READING) })
+    const renderer = renderView()
+    const meter = renderer.root.findByProps({ 'data-testid': 'chat-context-meter' })
+    expect(textOf(meter)).toBe('Context 94.6% · 157.9k / 167k')
+    expect(meter.props.title).toContain('157900 of 167000 tokens')
+    renderer.unmount()
+  })
+
+  test('a coalesced push updates the rendered meter in place', () => {
+    act(() => { useChatStore.getState().setContextUsage('chat-1', READING) })
+    const renderer = renderView()
+    act(() => {
+      useChatStore.getState().setContextUsage('chat-1', {
+        usedTokens: 8_200, thresholdTokens: 167_000, percentage: 4.9, at: '2026-10-10T12:05:00.000Z',
+      })
+    })
+    expect(textOf(renderer.root.findByProps({ 'data-testid': 'chat-context-meter' }))).toBe('Context 4.9% · 8.2k / 167k')
+    renderer.unmount()
+  })
+
+  test('no reading renders no meter', () => {
+    act(() => { useChatStore.setState({ sessions: {} }) })
+    const renderer = renderView()
+    expect(renderer.root.findAllByProps({ 'data-testid': 'chat-context-meter' })).toHaveLength(0)
+    renderer.unmount()
+  })
+
+  test('an archived chat shows the stored reading with no refresh affordance', () => {
+    act(() => { useChatStore.getState().setContextUsage('chat-1', READING) })
+    const archived = { ...chatSession, archivedAt: '2026-10-01T00:00:00.000Z' } as Session
+    const renderer = renderView(archived)
+    expect(renderer.root.findByProps({ 'data-testid': 'chat-status' }).children).toContain('archived')
+    const meter = renderer.root.findByProps({ 'data-testid': 'chat-context-meter' })
+    expect(textOf(meter)).toBe('Context 94.6% · 157.9k / 167k')
+    // Inert text beside the archived status — no button, nothing to click.
+    expect(meter.findAllByType('button')).toHaveLength(0)
+    expect(renderer.root.findByProps({ 'data-testid': 'chat-archived-bar' })).toBeTruthy()
     renderer.unmount()
   })
 })

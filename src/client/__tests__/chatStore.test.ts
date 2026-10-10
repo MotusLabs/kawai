@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import type { ChatEvent } from '@shared/chat'
+import type { ChatContextUsage, ChatEvent } from '@shared/chat'
 import { applyChatEvents, emptyTranscript, useChatStore } from '../stores/chatStore'
 
 const delta = (sequence: number, delta: string): Extract<ChatEvent, { type: 'assistant_delta' }> => ({
@@ -258,5 +258,53 @@ describe('chat store usage', () => {
     store.remove('chat-1')
     expect(useChatStore.getState().sessions['chat-1']).toBeUndefined()
     expect(useChatStore.getState().usage['default']).toEqual(report)
+  })
+})
+
+describe('chat store context usage', () => {
+  const reading = (usedTokens: number): ChatContextUsage => ({
+    usedTokens,
+    thresholdTokens: 200_000,
+    percentage: usedTokens / 2_000,
+    at: '2026-10-10T12:00:00.000Z',
+  })
+
+  afterEach(() => useChatStore.setState({ sessions: {}, usage: {} }))
+
+  test('snapshots and live pushes replace the reading; a null snapshot clears it', () => {
+    const store = useChatStore.getState()
+    store.snapshot({
+      type: 'chat-snapshot', sessionId: 'chat-1', profileId: 'default',
+      events: [], pendingRequests: [], status: 'working', throughSequence: 0,
+      commands: { status: 'unavailable', commands: [] },
+      activity: null, contextUsage: reading(60_000), usage: null,
+    })
+    expect(useChatStore.getState().sessions['chat-1'].contextUsage).toEqual(reading(60_000))
+
+    // A coalesced push replaces the snapshot's value.
+    store.setContextUsage('chat-1', reading(90_000))
+    expect(useChatStore.getState().sessions['chat-1'].contextUsage).toEqual(reading(90_000))
+
+    // A push ahead of any snapshot materializes a transcript, losing nothing.
+    store.setContextUsage('chat-2', reading(10_000))
+    expect(useChatStore.getState().sessions['chat-2'].contextUsage).toEqual(reading(10_000))
+
+    // The clearing case: a snapshot with no reading (a restart, or a session
+    // that never produced one) is authoritative, not merged.
+    store.snapshot({
+      type: 'chat-snapshot', sessionId: 'chat-1', profileId: 'default',
+      events: [], pendingRequests: [], status: 'waiting', throughSequence: 0,
+      commands: { status: 'unavailable', commands: [] },
+      activity: null, contextUsage: null, usage: null,
+    })
+    expect(useChatStore.getState().sessions['chat-1'].contextUsage).toBeNull()
+  })
+
+  test('transcript events never touch the reading', () => {
+    const store = useChatStore.getState()
+    store.setContextUsage('chat-1', reading(50_000))
+    store.apply('chat-1', [delta(1, 'streaming')])
+    expect(useChatStore.getState().sessions['chat-1'].contextUsage).toEqual(reading(50_000))
+    expect(useChatStore.getState().sessions['chat-1'].events).toHaveLength(1)
   })
 })

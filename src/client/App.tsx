@@ -543,6 +543,7 @@ export default function App() {
       if (message.type === 'chat-snapshot') useChatStore.getState().snapshot(message)
       if (message.type === 'chat-commands') useChatStore.getState().setCommands(message)
       if (message.type === 'chat-activity') useChatStore.getState().setActivity(message.sessionId, message.activity)
+      if (message.type === 'chat-context-usage') useChatStore.getState().setContextUsage(message.sessionId, message.usage)
       if (message.type === 'chat-usage') useChatStore.getState().setUsage(message.profileId, message.report)
       if (message.type === 'chat-debug-frames') useChatDebugStore.getState().apply(message)
       if (message.type === 'kill-failed') {
