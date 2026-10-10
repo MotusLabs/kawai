@@ -187,7 +187,7 @@ export class ChatSessionManager {
    */
   private readonly titleWatchers = new Map<string, { close: () => void }>()
 
-  async createAvailableSession(input: { projectPath: string; name?: string; claudeProfileId?: string }): Promise<ChatCreateResult> {
+  async createAvailableSession(input: { projectPath: string; name?: string; claudeProfileId?: string; approvalPolicy?: ChatApprovalPolicy }): Promise<ChatCreateResult> {
     // Refuse a bad path before the probe spends an SDK spawn on it.
     const project = resolveProjectDirectory(input.projectPath, this.options.isDirectory)
     if (!project.ok) return project
@@ -275,6 +275,8 @@ export class ChatSessionManager {
     projectPath: string
     name?: string
     claudeProfileId?: string
+    /** Starting policy (reorg-settings-default-approval design D3); absent = manual. */
+    approvalPolicy?: ChatApprovalPolicy
   }): ChatCreateResult {
     const project = resolveProjectDirectory(input.projectPath, this.options.isDirectory)
     if (!project.ok) return project
@@ -297,8 +299,9 @@ export class ChatSessionManager {
       projectPath,
       sdkSessionId: null as string | null,
       claudeProfileId: input.claudeProfileId ?? 'default',
-      // Every session starts manual; there is no per-profile default.
-      approvalPolicy: 'manual' as ChatApprovalPolicy,
+      // The client's Settings default, sent on session-create; absent means
+      // manual (older clients). Profiles never influence the policy.
+      approvalPolicy: (input.approvalPolicy ?? 'manual') as ChatApprovalPolicy,
       // chat-session-naming design D1: a name the user typed sticks forever,
       // one the generator produced is a placeholder a later title may replace.
       nameSource: (suppliedName ? 'manual' : 'placeholder') as ChatNameSource,

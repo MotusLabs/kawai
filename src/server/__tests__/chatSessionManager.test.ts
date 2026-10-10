@@ -262,6 +262,35 @@ describe('ChatSessionManager', () => {
     unknown.manager.shutdown()
   })
 
+  test('create-time approval policy: supplied policy sticks, absent means manual, profiles leave it unchanged', () => {
+    process.env.ANTHROPIC_API_KEY = 'test-key'
+    const { manager, registry } = createHarness(db)
+
+    // A supplied policy is stored on the session, registry, and DB row.
+    const auto = manager.createSession({ projectPath: '/tmp/proj', approvalPolicy: 'auto' })
+    if (!auto.ok) throw new Error(auto.error)
+    expect(auto.session.approvalPolicy).toBe('auto')
+    expect(registry.get(auto.session.id)?.approvalPolicy).toBe('auto')
+    expect(db.getChatSession(auto.session.id)?.approvalPolicy).toBe('auto')
+
+    // Absent field falls back to manual (older clients, terminal path).
+    const manual = manager.createSession({ projectPath: '/tmp/proj' })
+    if (!manual.ok) throw new Error(manual.error)
+    expect(manual.session.approvalPolicy).toBe('manual')
+    expect(db.getChatSession(manual.session.id)?.approvalPolicy).toBe('manual')
+
+    // A named profile does not override the supplied policy.
+    const profiled = manager.createSession({
+      projectPath: '/tmp/proj',
+      claudeProfileId: 'glm',
+      approvalPolicy: 'auto',
+    })
+    if (!profiled.ok) throw new Error(profiled.error)
+    expect(profiled.session.claudeProfileId).toBe('glm')
+    expect(profiled.session.approvalPolicy).toBe('auto')
+    manager.shutdown()
+  })
+
   test('resume re-resolves the stored profile against the current filesystem', async () => {
     process.env.ANTHROPIC_AUTH_TOKEN = 'test-token'
     const project = path.join(tempDir, 'proj')
