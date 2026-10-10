@@ -6,6 +6,7 @@
 // port first; a failed restart surfaces a named error instead of leaving a
 // swapped install that keeps serving the old build.
 
+import path from 'node:path'
 import { UpdateError } from './updateErrors'
 
 export type RestartMode = 'systemd' | 'launchd' | 'bare'
@@ -83,6 +84,32 @@ export function planRestart(
         exitsAfterSpawn: true,
       }
   }
+}
+
+/** The install outcome the restart follows (see updateInstaller). */
+export interface InstallOutcome {
+  root: string
+  compiled: boolean
+}
+
+/**
+ * Plan the takeover restart after an install lands. A compiled run keeps its
+ * supervisor context: the unit/agent restart re-runs the (already swapped)
+ * binary, and bare mode re-execs it. A source run must instead exec the
+ * release binary the install just placed under the application directory —
+ * re-running this process (or restarting a supervisor unit) would restart
+ * the source build, so the bare successor is planned regardless of context.
+ */
+export function planRestartAfterInstall(
+  context: RestartContext,
+  install: InstallOutcome,
+  options: PlanRestartOptions = {},
+): RestartPlan {
+  if (install.compiled) return planRestart(context, options)
+  return planRestart(
+    { mode: 'bare' },
+    { ...options, execPath: path.join(install.root, 'bin', 'agentboard'), argv: [] },
+  )
 }
 
 export interface SpawnResult {

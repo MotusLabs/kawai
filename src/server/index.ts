@@ -17,7 +17,7 @@ import { SessionRegistry } from './SessionRegistry'
 import { BUILD_VERSION } from './version'
 import { startUpdateChecker } from './updates/updateChecker'
 import { installUpdate } from './updates/updateInstaller'
-import { detectRestartContext, performRestart, planRestart } from './updates/updateRestart'
+import { detectRestartContext, performRestart, planRestartAfterInstall } from './updates/updateRestart'
 import {
   initDatabase,
   resolveDataDir,
@@ -1795,8 +1795,9 @@ app.post('/api/update/install', async (c) => {
   if (updateChecker.getState().target === null || release === null) {
     return c.json({ error: 'No update is currently available' }, 409)
   }
+  let install
   try {
-    await installUpdate({ release })
+    install = await installUpdate({ release })
   } catch (cause) {
     const message = cause instanceof Error ? cause.message : String(cause)
     logger.error('update_install_refused', { message, tag: release.tag })
@@ -1804,7 +1805,9 @@ app.post('/api/update/install', async (c) => {
   }
   // Respond first: the restart verb may terminate this process (that is its
   // job), and the client must hear the outcome before the connection drops.
-  const plan = planRestart(detectRestartContext())
+  // A source run restarts onto the installed release binary, not this
+  // process — see planRestartAfterInstall.
+  const plan = planRestartAfterInstall(detectRestartContext(), install)
   const restartTimer = setTimeout(() => {
     void performRestart(plan).catch((cause) => {
       // The install landed; only the takeover failed. Keep serving the old

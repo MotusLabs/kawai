@@ -6,6 +6,7 @@ import {
   detectRestartContext,
   performRestart,
   planRestart,
+  planRestartAfterInstall,
   type SpawnedCommand,
   type SpawnResult,
 } from '../updates/updateRestart'
@@ -68,6 +69,50 @@ describe('planRestart', () => {
       '4040',
     ])
     expect(plan.exitsAfterSpawn).toBe(true)
+  })
+})
+
+describe('planRestartAfterInstall', () => {
+  test('a compiled install keeps its supervisor context', () => {
+    const plan = planRestartAfterInstall(
+      detectRestartContext({ INVOCATION_ID: 'abc123' } as NodeJS.ProcessEnv),
+      { root: '/opt/agentboard', compiled: true },
+    )
+    expect(plan.mode).toBe('systemd')
+    expect(plan.command).toEqual(['systemctl', '--user', 'restart', 'agentboard.service'])
+    expect(plan.exitsAfterSpawn).toBe(false)
+  })
+
+  test('a source install execs the freshly installed binary, even under a supervisor', () => {
+    // Restarting the unit (or this bun process) would restart the source
+    // build; the successor must be the release binary that just landed.
+    const plan = planRestartAfterInstall(
+      detectRestartContext({ INVOCATION_ID: 'abc123' } as NodeJS.ProcessEnv),
+      { root: '/home/dev/.agentboard/app', compiled: false },
+      { bareDelayMs: 500 },
+    )
+    expect(plan.mode).toBe('bare')
+    expect(plan.command).toEqual([
+      'sh',
+      '-c',
+      'sleep 0.5; exec "$0" "$@"',
+      '/home/dev/.agentboard/app/bin/agentboard',
+    ])
+    expect(plan.exitsAfterSpawn).toBe(true)
+  })
+
+  test('a source install carries no source argv into the successor', () => {
+    const plan = planRestartAfterInstall(
+      { mode: 'bare' },
+      { root: '/home/dev/.agentboard/app', compiled: false },
+      { execPath: '/usr/local/bin/bun', argv: ['src/server/index.ts'], bareDelayMs: 0 },
+    )
+    expect(plan.command).toEqual([
+      'sh',
+      '-c',
+      'sleep 0; exec "$0" "$@"',
+      '/home/dev/.agentboard/app/bin/agentboard',
+    ])
   })
 })
 
