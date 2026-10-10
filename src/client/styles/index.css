@@ -389,6 +389,34 @@ body {
   animation: pulse-complete 5s ease-out;
 }
 
+/* Chat tool-call summary: a single line of chevron + label + detail. The
+   <summary> is the flex row itself, so the disclosure marker and the label
+   never split across lines (an inner block-level child would force that);
+   only the trailing detail shrinks. */
+.chat-summary {
+  display: flex;
+  align-items: baseline;
+  min-width: 0;
+  cursor: pointer;
+  list-style: none;
+}
+
+/* Native disclosure markers are replaced by the ::before chevron below. */
+.chat-summary::-webkit-details-marker {
+  display: none;
+}
+
+.chat-summary::before {
+  content: '▸';
+  flex: none;
+  margin-right: 0.4em;
+  transition: transform 0.15s ease;
+}
+
+details[open] > .chat-summary::before {
+  transform: rotate(90deg);
+}
+
 /* Chat activity row's live dot: a quiet breathing pulse in the working color */
 @keyframes pulse-activity {
   0%, 100% { opacity: 1; }
