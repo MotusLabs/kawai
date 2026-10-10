@@ -170,4 +170,34 @@ describe('watchTranscriptTitle', () => {
       watcher.close()
     }
   })
+
+  test('an atomic replacement (temp file + rename) is followed, equal size included', async () => {
+    // Same byte length, so a size-only check cannot distinguish the files:
+    // the replacement must be caught by identity, not size.
+    const filePath = makeFile(aiTitle('replaced-title-one'))
+    const observed: Observed[] = []
+    const watcher = watchTranscriptTitle(filePath, (title, source) =>
+      observed.push({ title, source })
+    )
+    try {
+      await waitForObserved(observed, (entry) => entry.title === 'replaced-title-one')
+      expect(
+        Buffer.byteLength(aiTitle('replaced-title-one'))
+      ).toBe(Buffer.byteLength(aiTitle('replaced-title-two')))
+      const temp = path.join(tempDir, 'transcript.jsonl.tmp')
+      fs.writeFileSync(temp, aiTitle('replaced-title-two'))
+      fs.renameSync(temp, filePath)
+      await waitForObserved(observed, (entry) => entry.title === 'replaced-title-two')
+      // The new inode is the one being tailed now: a later append to it lands.
+      append(filePath, aiTitle('appended after replace'))
+      await waitForObserved(observed, (entry) => entry.title === 'appended after replace')
+      expect(observed.map((entry) => entry.title)).toEqual([
+        'replaced-title-one',
+        'replaced-title-two',
+        'appended after replace',
+      ])
+    } finally {
+      watcher.close()
+    }
+  })
 })
