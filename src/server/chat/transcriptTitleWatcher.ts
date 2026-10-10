@@ -56,9 +56,12 @@ export function watchTranscriptTitle(
 
   /**
    * Consume the appended region; a shrunk file means a rewrite — restart.
-   * Only the batch's last title row is reported: earlier rows are history a
-   * later row already superseded, and replaying them would momentarily move
-   * the name backwards.
+   * The batch is folded to one report so a re-arm's catch-up read cannot
+   * replay superseded rows over the current name. The fold follows the same
+   * rule as adoption: a user rename (`custom-title`) is terminal (design
+   * D1/D7) — the latest user rename wins, and a generated title (`ai-title`)
+   * is reported only when the batch carries no user claim, whatever the row
+   * order.
    */
   const readAppended = (): void => {
     let size: number
@@ -93,7 +96,12 @@ export function watchTranscriptTitle(
     let latest: { title: string; source: 'auto' | 'manual' } | null = null
     for (const line of lines) {
       const title = parseTranscriptTitleLine(line.trim())
-      if (title) latest = { title: title.title, source: title.source }
+      if (!title) continue
+      if (title.source === 'manual') {
+        latest = { title: title.title, source: title.source }
+      } else if (latest?.source !== 'manual') {
+        latest = { title: title.title, source: title.source }
+      }
     }
     if (latest) onTitle(latest.title, latest.source)
   }

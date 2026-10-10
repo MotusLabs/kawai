@@ -105,6 +105,43 @@ describe('watchTranscriptTitle', () => {
     }
   })
 
+  test('a user title in a batch beats a generated title after it', async () => {
+    // One write carrying both rows: a plain last-row fold would report the
+    // ai-title and drop the user's claim — manual is terminal (design D1/D7).
+    const filePath = makeFile()
+    const observed: Observed[] = []
+    const watcher = watchTranscriptTitle(filePath, (title, source) =>
+      observed.push({ title, source })
+    )
+    try {
+      append(filePath, customTitle('user title') + aiTitle('regenerated title'))
+      await waitForObserved(observed, (entry) => entry.title === 'user title')
+      await settle()
+      expect(observed).toEqual([{ title: 'user title', source: 'manual' }])
+    } finally {
+      watcher.close()
+    }
+  })
+
+  test('the latest user rename in a batch wins over earlier ones', async () => {
+    const filePath = makeFile()
+    const observed: Observed[] = []
+    const watcher = watchTranscriptTitle(filePath, (title, source) =>
+      observed.push({ title, source })
+    )
+    try {
+      append(
+        filePath,
+        customTitle('first rename') + customTitle('second rename') + aiTitle('ignored')
+      )
+      await waitForObserved(observed, (entry) => entry.title === 'second rename')
+      await settle()
+      expect(observed).toEqual([{ title: 'second rename', source: 'manual' }])
+    } finally {
+      watcher.close()
+    }
+  })
+
   test('a truncated trailing line waits for the write that completes it', async () => {
     const filePath = makeFile()
     const observed: Observed[] = []
