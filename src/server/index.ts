@@ -15,6 +15,7 @@ import { ensureTmux } from './prerequisites'
 import { SessionManager } from './SessionManager'
 import { SessionRegistry } from './SessionRegistry'
 import { BUILD_VERSION } from './version'
+import { startUpdateChecker } from './updates/updateChecker'
 import {
   initDatabase,
   resolveDataDir,
@@ -1397,6 +1398,13 @@ logger.info('startup_state', {
 refreshSessionsSync() // hydrate from persisted associations without verification
 setInterval(refreshSessions, config.refreshIntervalMs) // Async for periodic
 
+// Update discovery: one checker per process, silent on every failure. The
+// first check rides startup; later changes push to connected clients so the
+// header chip can appear without a reload.
+const updateChecker = startUpdateChecker({
+  onChange: update => broadcast({ type: 'update-state', update }),
+})
+
 // Event loop lag monitor — detects when spawnSync or other blocking work
 // starves the event loop, causing typing lag and slow WebSocket delivery.
 if (logLevel === 'debug') {
@@ -1771,6 +1779,8 @@ app.get('/api/server-info', (c) => {
     defaultProjectDir: config.defaultProjectDir,
     // Build version of this server (see ./version), shown in the UI.
     version: BUILD_VERSION,
+    // Update availability (see ./updates); `target` is null while current.
+    update: updateChecker.getState(),
   })
 })
 

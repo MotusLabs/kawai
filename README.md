@@ -1,13 +1,13 @@
 # Kawai
 
-[![CI](https://img.shields.io/github/actions/workflow/status/gbasin/agentboard/ci.yml?branch=master&logo=github)](https://github.com/gbasin/agentboard/actions)
-[![License: MIT](https://img.shields.io/github/license/gbasin/agentboard)](https://github.com/gbasin/agentboard/blob/master/LICENSE)
+[![CI](https://img.shields.io/github/actions/workflow/status/MotusLabs/kawai/ci.yml?branch=master&logo=github)](https://github.com/MotusLabs/kawai/actions)
+[![License: MIT](https://img.shields.io/github/license/MotusLabs/kawai)](https://github.com/MotusLabs/kawai/blob/master/LICENSE)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178c6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
-[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/gbasin/agentboard)
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/MotusLabs/kawai)
 
 Kawai is a Web GUI for `tmux` that's optimized for agent TUI's (`claude`, `codex`, etc). A lighter-weight, agent-optimized alternative to Blink, Termux, etc.
 
-Kawai is built on top of [Agentboard](https://github.com/gbasin/agentboard), keeping its core session discovery, status inference, and live terminal streaming, while extending it toward more autonomous, spec-driven agent operation — see [Roadmap](#roadmap) below.
+Kawai is built on top of Agentboard, keeping its core session discovery, status inference, and live terminal streaming, while extending it toward more autonomous, spec-driven agent operation — see [Roadmap](#roadmap) below.
 
 Run your desktop/server, then connect from your phone or laptop over Tailscale/LAN. You get a shared workspace across devices.
 
@@ -71,7 +71,7 @@ Kawai extends Agentboard's session board with agent-native workflow tooling. The
 
 ### GitHub Releases
 
-Download the tarball for your platform from the [releases page](https://github.com/gbasin/agentboard/releases), extract it, and run the binary from the extracted directory — the server serves its UI from `./dist/client` relative to the working directory:
+Download the tarball for your platform from the [releases page](https://github.com/MotusLabs/kawai/releases), extract it, and run the binary from the extracted directory — the server serves its UI from `./dist/client` relative to the working directory:
 
 | Platform | Tarball |
 | --- | --- |
@@ -83,7 +83,7 @@ Download the tarball for your platform from the [releases page](https://github.c
 One-liner (macOS Apple Silicon — swap the platform for your machine):
 
 ```bash
-curl -fsSL https://github.com/gbasin/agentboard/releases/latest/download/agentboard-darwin-arm64.tar.gz | tar -xz
+curl -fsSL https://github.com/MotusLabs/kawai/releases/latest/download/agentboard-darwin-arm64.tar.gz | tar -xz
 ./bin/agentboard
 ```
 

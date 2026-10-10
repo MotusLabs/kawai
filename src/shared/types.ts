@@ -165,6 +165,27 @@ export interface DirectoryErrorResponse {
   message: string
 }
 
+/**
+ * The server's update-discovery result: the running build, and the release
+ * to offer when a newer base version exists. `target` is null while the
+ * running base is current (or discovery has not found anything), so a
+ * missing signal and a current build look the same — by design, discovery
+ * fails silent.
+ */
+export interface UpdateState {
+  /** Running build version, e.g. `1.0.0-17` or `1.0.0-dev`. */
+  current: string
+  /** The release an update would move to; null when current. */
+  target: null | {
+    /** Release tag, e.g. `v1.1.0-12`. */
+    tag: string
+    /** `MAJOR.MINOR.PATCH` base of the tag. */
+    base: string
+    /** Release page, when the API provided one. */
+    htmlUrl: null | string
+  }
+}
+
 export type ServerMessage =
   | { type: 'sessions'; sessions: Session[] }
   | { type: 'session-update'; session: Session }
@@ -216,6 +237,9 @@ export type ServerMessage =
       appMouse?: boolean
     }
   | { type: 'server-config'; remoteAllowControl: boolean; remoteAllowAttach: boolean; hostLabel: string; preferWindowName: boolean; clientLogLevel?: string }
+  // Update availability is additive too: older clients ignore it, and the
+  // payload rides server-info for first paint and this push for changes.
+  | { type: 'update-state'; update: UpdateState }
   // Chat messages are additive (like the workspace messages above): older
   // clients ignore unknown message types; terminal behavior is unchanged.
   | { type: 'chat-events'; sessionId: string; events: ChatEvent[] }

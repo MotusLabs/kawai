@@ -7,10 +7,10 @@
 
 ## 2. Update discovery
 
-- [ ] 2.1 Add a pure base-version compare helper (running `BUILD_VERSION` vs latest tag, ignoring the `-<PR>` suffix) and verify unit tests cover: base bump is an update, same-base newer PR is not, running ahead is not, and `-dev` still compares against its base.
-- [ ] 2.2 Add a GitHub `releases/latest` client pinned to `MotusLabs/kawai` with ETag caching and fail-silent error handling; verify unit tests cover a successful fetch, an HTTP error, and an offline rejection, none of which throw into the UI path.
-- [ ] 2.3 Rewrite remaining `gbasin/agentboard` repository URLs to `MotusLabs/kawai` in `README.md` and `SECURITY.md`; verify `grep -rn "gbasin/agentboard" README.md SECURITY.md` returns nothing and every release/download link resolves to `MotusLabs/kawai`.
-- [ ] 2.4 Run the check on startup and on a periodic timer, exposing current update state to clients; verify unit tests show the timer drives a check, a silent failure leaves state unchanged, and a reported update appears in the server's client-facing payload.
+- [x] 2.1 Add a pure base-version compare helper (running `BUILD_VERSION` vs latest tag, ignoring the `-<PR>` suffix) and verify unit tests cover: base bump is an update, same-base newer PR is not, running ahead is not, and `-dev` still compares against its base.
+- [x] 2.2 Add a GitHub `releases/latest` client pinned to `MotusLabs/kawai` with ETag caching and fail-silent error handling; verify unit tests cover a successful fetch, an HTTP error, and an offline rejection, none of which throw into the UI path.
+- [x] 2.3 Rewrite remaining `gbasin/agentboard` repository URLs to `MotusLabs/kawai` in `README.md` and `SECURITY.md`; verify `grep -rn "gbasin/agentboard" README.md SECURITY.md` returns nothing and every release/download link resolves to `MotusLabs/kawai`.
+- [x] 2.4 Run the check on startup and on a periodic timer, exposing current update state to clients; verify unit tests show the timer drives a check, a silent failure leaves state unchanged, and a reported update appears in the server's client-facing payload.
 
 ## 3. Update surface
 
