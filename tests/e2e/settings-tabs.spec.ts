@@ -54,8 +54,8 @@ test('the four tabs each show their sections and the modal opens on Sessions', a
   await expect(chatPanel).toBeVisible()
   await expect(chatPanel.getByText('Claude Chat Provider')).toBeVisible()
   await expect(chatPanel.getByText('New Chat Sessions', { exact: true })).toBeVisible()
-  await expect(chatPanel.getByRole('button', { name: 'Manual', exact: true })).toBeVisible()
-  await expect(chatPanel.getByRole('button', { name: 'Auto-approve' })).toBeVisible()
+  await expect(chatPanel.getByRole('radio', { name: 'Manual', exact: true })).toBeVisible()
+  await expect(chatPanel.getByRole('radio', { name: 'Auto-approve', exact: true })).toBeVisible()
   await expect(chatPanel.getByLabel('Increase Chat Font Size')).toBeVisible()
   await settledScreenshot(page, info.outputPath('2-chat-tab.png'))
 
@@ -80,7 +80,7 @@ test('the approval default commits on Save and seeds the New Session checkbox', 
   await openSettings(page)
 
   await page.getByRole('tab', { name: 'Chat' }).click()
-  await page.getByRole('button', { name: 'Auto-approve' }).click()
+  await panel(page, 'Chat').getByRole('radio', { name: 'Auto-approve', exact: true }).click()
   await page.getByRole('button', { name: 'Save', exact: true }).click()
 
   // The stored default is auto, and the New Session dialog pre-checks from it.
