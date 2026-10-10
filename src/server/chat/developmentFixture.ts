@@ -91,6 +91,22 @@ export const fixtureQueryFactory: ChatQueryFactory = ({ prompt, options, wire })
       await hold(1600)
       if (closed || turn !== generation) return
       push({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: toolUseID, content: 'fixture output' }] } })
+      // A failing use right after: the compact entry carries the ✗ mark.
+      const failID = crypto.randomUUID()
+      await hold(400)
+      if (closed || turn !== generation) return
+      push({ type: 'assistant', message: { id: crypto.randomUUID(), role: 'assistant', content: [{ type: 'tool_use', id: failID, name: 'Bash', input: { description: 'Fail the fixture check', command: 'exit 1' } }] } })
+      await hold(600)
+      if (closed || turn !== generation) return
+      push({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: failID, content: 'fixture failure', is_error: true }] } })
+      // A path-bearing use shows the project-relative handle.
+      const readID = crypto.randomUUID()
+      await hold(400)
+      if (closed || turn !== generation) return
+      push({ type: 'assistant', message: { id: crypto.randomUUID(), role: 'assistant', content: [{ type: 'tool_use', id: readID, name: 'Read', input: { file_path: `${options.cwd ?? '.'}/README.md` } }] } })
+      await hold(400)
+      if (closed || turn !== generation) return
+      push({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: readID, content: '# Fixture project' }] } })
       assistant('Tool finished.')
     }
     if (/retry/i.test(text)) {
