@@ -7,8 +7,8 @@
 
 ## 2. Persistence
 
-- [ ] 2.1 Add `context_tokens`, `context_threshold`, `context_pct`, `context_at` columns to `chat_sessions` with the existing additive-migration guard in `src/server/db.ts`, and verify a new `src/server/__tests__/chatContextDb.test.ts` covers both a fresh create and a migration of a pre-existing table
-- [ ] 2.2 Map the columns through `ChatSessionRecord` and `updateChatSession` alongside `approvalPolicy`, and verify the same test patches and re-reads a reading including the `null` case
+- [x] 2.1 Add `context_tokens`, `context_threshold`, `context_pct`, `context_at` columns to `chat_sessions` with the existing additive-migration guard in `src/server/db.ts`, and verify a new `src/server/__tests__/chatContextDb.test.ts` covers both a fresh create and a migration of a pre-existing table
+- [x] 2.2 Map the columns through `ChatSessionRecord` and `updateChatSession` alongside `approvalPolicy`, and verify the same test patches and re-reads a reading including the `null` case
 
 ## 3. Driver reads the stream
 
