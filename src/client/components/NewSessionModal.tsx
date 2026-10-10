@@ -626,6 +626,7 @@ export default function NewSessionModal({
             <div className="flex gap-2">
               <input
                 ref={projectPathRef}
+                aria-label="Project Path"
                 value={projectPath}
                 onChange={(event) => {
                   setProjectPath(event.target.value)
