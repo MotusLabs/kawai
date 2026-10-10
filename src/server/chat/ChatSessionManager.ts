@@ -230,6 +230,7 @@ export class ChatSessionManager {
       throughSequence: live.at(-1)?.sequence ?? 0,
       commands: this.commandState(sessionId),
       activity,
+      contextUsage: null,
       usage: this.usageLimits.get(this.profileIdOf(sessionId) ?? 'default'),
     }
   }
