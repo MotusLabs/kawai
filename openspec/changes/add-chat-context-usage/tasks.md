@@ -18,14 +18,14 @@
 
 ## 4. Threshold source
 
-- [ ] 4.1 Resolve the auto-compaction threshold in `src/server/chat/ChatSessionDriver.ts` per design D2: observed `autoCompactThreshold` (else `rawMaxTokens − buffer`) from `getContextUsage` when a live `Query` answers, else the profile's `CLAUDE_CODE_AUTO_COMPACT_WINDOW` when it configures a smaller window, else `modelUsage[*].contextWindow` labelled as an approximation. Wire `getContextUsage` as a light control call on attach and at turn boundaries, following the `interrupt` precedent. Verify `src/server/__tests__/chatSessionDriver.test.ts` covers each resolution step and the fallback order
+- [ ] 4.1 Resolve the auto-compaction threshold in `src/server/chat/ChatSessionDriver.ts` per design D2: observed `autoCompactThreshold` (else `rawMaxTokens − buffer`) from `getContextUsage` when a live `Query` answers, else the profile's `CLAUDE_CODE_AUTO_COMPACT_WINDOW` whenever it is set, else `modelUsage[*].contextWindow` labelled as an approximation. Wire `getContextUsage` as a light control call on attach and at turn boundaries, following the `interrupt` precedent. Verify `src/server/__tests__/chatSessionDriver.test.ts` covers each resolution step and the fallback order
 - [ ] 4.2 Verify the threshold against a real context-usage report rather than assuming `autoCompactThreshold`'s units, and pin the fixture in a test: a 200000-token window with a 33000-token buffer and 157900 used must yield a 167000 threshold and a percentage near 95, not the 79 that the full window gives
-- [ ] 4.3 Cover a profile-configured 100000-token window on a 200000-token model, and verify the threshold reflects the configured window rather than the model's
+- [ ] 4.3 Cover a profile-configured 100000-token window on a 200000-token model, and verify a used count at that threshold reads about 100 percent rather than 50 — the model's limit is not the denominator. Cover the larger case too: a 1000000-token override on a 200000-token model must not fall through to the model's limit
 
 ## 5. Driver reads compaction
 
 - [ ] 5.1 On `compact_boundary`, adopt `compact_metadata.post_tokens` as the new reading when it is present and finite, while keeping the existing `'Context compacted'` notice (design D3), and verify a driver test covers `trigger: 'auto'` and `trigger: 'manual'` both dropping the meter to the post-compaction size
-- [ ] 5.2 Keep the last reading when `compact_metadata` is absent, when `post_tokens` is absent, or when `post_tokens` is non-finite — never publishing `undefined`, `NaN`, or a zero standing in for "unknown" (design D3), and verify a driver test covers each of those three fallbacks
+- [ ] 5.2 Keep the last reading when `post_tokens` is missing or invalid even though compaction metadata is present — `compact_metadata` is required but `post_tokens` is optional, so a frame carrying only `trigger` and `pre_tokens` is the case that matters — and also when metadata is absent entirely or `post_tokens` is non-finite. Never publish `undefined`, `NaN`, or a zero standing in for "unknown" (design D3). Verify a driver test covers each fallback, with the metadata-present-but-no-`post_tokens` case named explicitly
 
 ## 6. Manager and delivery
 

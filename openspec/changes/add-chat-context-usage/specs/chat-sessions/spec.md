@@ -48,9 +48,13 @@ known, the system SHALL retain the previous reading.
 - **WHEN** the conversation is compacted explicitly rather than by auto-compaction, and the post-compaction size is known
 - **THEN** the reported context usage falls to the post-compaction size in the same way
 
-#### Scenario: Unknown post-compaction size keeps the prior reading
-- **WHEN** a compaction is signalled without a usable post-compaction size
+#### Scenario: Compaction metadata without a post-compaction size keeps the prior reading
+- **WHEN** a compaction is signalled with metadata that carries no usable post-compaction size
 - **THEN** the reported context usage retains its previous value, and no zero, undefined, or placeholder reading is published
+
+#### Scenario: Compaction with no metadata keeps the prior reading
+- **WHEN** a compaction is signalled with no compaction metadata at all
+- **THEN** the reported context usage retains its previous value in the same way
 
 ### Requirement: Context usage is measured against the auto-compaction threshold
 The percentage and threshold token count SHALL use the session's
@@ -62,9 +66,13 @@ session nearing compaction reports a high percentage.
 - **WHEN** a session whose context window is 200000 tokens holds a 33000-token autocompact reserve and has 157900 tokens in use
 - **THEN** its threshold token count reads 167000 and its percentage reads about 95 rather than the 79 that the full window would give
 
-#### Scenario: Configured window overrides the model window
+#### Scenario: Smaller configured window overrides the model window
 - **WHEN** a chat session runs under a profile that configures a 100000-token auto-compaction window on a 200000-token model
-- **THEN** its threshold token count reflects the configured 100000-token window rather than the model's 200000 tokens
+- **THEN** its threshold token count derives from the configured 100000-token window rather than the model's 200000 tokens, and a used count at that threshold reads about 100 percent rather than 50
+
+#### Scenario: Larger configured window overrides the model window
+- **WHEN** a chat session runs under a profile that configures a 1000000-token auto-compaction window on a 200000-token model
+- **THEN** its threshold token count derives from the configured 1000000-token window rather than the model's 200000 tokens
 
 ### Requirement: Context usage survives restarts and archives
 The latest context usage SHALL be stored with the chat session and kept

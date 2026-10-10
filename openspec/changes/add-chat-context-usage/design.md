@@ -85,12 +85,16 @@ Resolution order for the threshold:
    for a turn; when it is not, fall through.
 2. **The profile's configured window.** `CLAUDE_CODE_AUTO_COMPACT_WINDOW` from
    the resolved profile environment the server already computes
-   (`PROFILE_CONTROLLED_ENV`), when it configures a smaller window than the
-   model's. This is the window, not yet reserve-adjusted, so it is the right
-   answer for an override and an approximation otherwise.
+   (`PROFILE_CONTROLLED_ENV`), whenever it is set — smaller *or* larger than
+   the model's limit. Skipping a larger override (GLM's 1,000,000) would fall
+   through to step 3 and reproduce the exact bug this decision exists to
+   prevent: a 100k window metered against a 200k limit reads 50% at the
+   moment compaction fires. The configured value is a window, so the
+   threshold is that window less the reserve when a report has shown one;
+   otherwise the window itself, labelled as a threshold approximation.
 3. **`modelUsage[*].contextWindow`**, labelled as an approximation of the
    window rather than the threshold. Only for a session that has neither an
-   observed report nor a profile override.
+   observed report nor a configured window.
 
 *Why not `modelUsage.contextWindow` alone:* it is the model's believed limit
 and ignores both the autocompact reserve and any profile override. The
