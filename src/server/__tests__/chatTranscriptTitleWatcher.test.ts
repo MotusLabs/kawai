@@ -171,6 +171,27 @@ describe('watchTranscriptTitle', () => {
     }
   })
 
+  test('every title row in a batch is reported, in order', async () => {
+    // A `custom-title` must reach the caller even when a later `ai-title`
+    // follows it in the same read — collapsing the batch to its last row
+    // would let a generated title hide a user's rename (design D1/D7).
+    const filePath = makeFile()
+    const observed: Observed[] = []
+    const watcher = watchTranscriptTitle(filePath, (title, source) =>
+      observed.push({ title, source })
+    )
+    try {
+      append(filePath, customTitle('user title') + aiTitle('later generated'))
+      await waitForObserved(observed, (entry) => entry.title === 'later generated')
+      expect(observed).toEqual([
+        { title: 'user title', source: 'manual' },
+        { title: 'later generated', source: 'auto' },
+      ])
+    } finally {
+      watcher.close()
+    }
+  })
+
   test('an atomic replacement is re-read and later appends still land', async () => {
     // Equal-size titles on purpose: a shrink check alone would not notice.
     const filePath = makeFile(aiTitle('original'))
