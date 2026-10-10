@@ -16,7 +16,7 @@ test('select named profile, create, display, reconnect, and retain terminal form
   await expect(dialog.getByRole('button', { name: 'Create', exact: true })).toBeEnabled()
   await dialog.getByLabel('Profile').selectOption('glm')
   await page.screenshot({ path: info.outputPath('profile-selection.png') })
-  await dialog.locator('input').first().fill(process.cwd())
+  await dialog.getByLabel('Project Path').fill(process.cwd())
   await dialog.locator('input').last().fill('GLM profile browser check')
   await dialog.getByRole('button', { name: 'Create', exact: true }).click()
   await expect(page.getByTestId('chat-profile')).toHaveText('Profile: GLM')
@@ -56,7 +56,7 @@ test('project-level .kawai catalog extends the picker for that path', async ({ p
     // The prefilled server cwd has no .kawai: the shipped catalog applies.
     await expect(profile.locator('option', { hasText: 'GLM Flash' })).toHaveCount(0)
     // Entering the project path refetches the catalog and offers the entry.
-    await dialog.locator('input').first().fill(project)
+    await dialog.getByLabel('Project Path').fill(project)
     await expect(profile.locator('option', { hasText: 'GLM Flash' })).toHaveCount(1)
     await profile.selectOption('glm-flash')
     await dialog.locator('input').last().fill('GLM Flash project catalog check')
@@ -80,7 +80,7 @@ test('invalid project catalog file warns without blocking creation', async ({ pa
     await page.getByRole('button', { name: 'New session', exact: true }).first().click()
     const dialog = page.getByRole('dialog', { name: 'New Session' })
     await dialog.getByLabel('Session kind').selectOption('chat')
-    await dialog.locator('input').first().fill(project)
+    await dialog.getByLabel('Project Path').fill(project)
     // The invalid file is reported by path...
     await expect(dialog.getByRole('status')).toContainText('profiles.json')
     // ...while the rest of the catalog resolves: creation still works.
