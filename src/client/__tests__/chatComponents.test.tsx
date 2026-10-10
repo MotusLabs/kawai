@@ -709,6 +709,30 @@ describe('slash-command menu', () => {
     h.renderer.unmount()
   })
 
+  test('the highlighted option carries the accent mark; others lift on hover', () => {
+    const h = renderComposer(READY_COMMANDS)
+    h.type('/c')
+    const option = (index: number) =>
+      h.renderer.root.findByProps({ 'data-testid': 'slash-command-menu' })
+        .findAllByProps({ role: 'option' })[index]!
+    // Exact tokens: `hover:bg-hover` contains `bg-hover` as a substring.
+    const classesOf = (node: ReactTestInstance) => String(node.props.className).split(' ')
+    // The first match starts marked — lifted off the surface, accent text…
+    expect(option(0).props['aria-selected']).toBe(true)
+    expect(classesOf(option(0))).toContain('bg-hover')
+    expect(classesOf(option(0))).toContain('text-accent')
+    expect(classesOf(option(0))).not.toContain('hover:bg-hover')
+    // …and the rest sit on the menu surface until hovered.
+    expect(option(1).props['aria-selected']).toBe(false)
+    expect(classesOf(option(1))).toContain('hover:bg-hover')
+    // The mark follows the arrow keys.
+    h.key('ArrowDown')
+    expect(option(1).props['aria-selected']).toBe(true)
+    expect(classesOf(option(1))).toContain('text-accent')
+    expect(classesOf(option(0))).toContain('hover:bg-hover')
+    h.renderer.unmount()
+  })
+
   test('Tab also chooses; Escape closes without changing the text', () => {
     const h = renderComposer(READY_COMMANDS)
     h.type('/com')
@@ -753,6 +777,33 @@ describe('slash-command menu', () => {
     expect(h.renderer.root.findAllByType('textarea')).toHaveLength(0)
     expect(h.renderer.root.findAllByProps({ 'data-testid': 'slash-command-menu' })).toHaveLength(0)
     h.renderer.unmount()
+  })
+
+  // Regression guard for the invisible-highlight bug: `bg-primary-accent`
+  // names no Tailwind color, so the "selected" row styled with it produced no
+  // CSS at all. Every bg-*/text-* color utility in the menu must resolve to a
+  // theme color in tailwind.config.js or to a default Tailwind palette color.
+  test('every bg-*/text-* color utility in the menu resolves to a defined token', async () => {
+    const component = await Bun.file(new URL('../components/chat/SlashCommandMenu.tsx', import.meta.url)).text()
+    const config = await Bun.file(new URL('../../../tailwind.config.js', import.meta.url)).text()
+    // The colors block is flat (`base: 'var(--bg-base)'`, `'border-subtle': …`),
+    // so its keys are every quoted or bare identifier followed by a colon.
+    const colorsBlock = config.match(/\bcolors:\s*\{([^}]*)\}/)?.[1] ?? ''
+    const themeColors = new Set([...colorsBlock.matchAll(/(?:'([^']+)'|([A-Za-z][\w-]*))\s*:/g)]
+      .map(match => match[1] ?? match[2]!))
+    // Default Tailwind palette hues (sky-400, red-50, …) and bare black/white.
+    const palette = 'slate gray zinc neutral stone red orange amber yellow lime green emerald teal cyan sky blue indigo violet purple fuchsia pink rose black white'.split(' ')
+    // text-* utilities that size or align text rather than color it.
+    const notColors = new Set(['xs', 'sm', 'base', 'lg', 'xl', '2xl', '3xl', '4xl', '5xl', '6xl', '7xl', '8xl', '9xl',
+      'left', 'center', 'right', 'justify'])
+    const utilities = [...component.matchAll(/\b(?:bg|text)-[a-z0-9/-]+/g)].map(match => match[0])
+    expect(utilities).not.toEqual([])
+    const unresolved = utilities.filter(utility => {
+      const color = utility.replace(/^(?:bg|text)-/, '').split('/')[0]!
+      if (utility.startsWith('text-') && notColors.has(color)) return false
+      return !themeColors.has(color) && !palette.some(hue => color === hue || color.startsWith(`${hue}-`))
+    })
+    expect(unresolved).toEqual([])
   })
 })
 

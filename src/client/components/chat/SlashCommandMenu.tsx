@@ -25,7 +25,7 @@ export default function SlashCommandMenu({ matches, loading, highlightedIndex, o
           aria-selected={index === highlightedIndex}
           data-command-name={command.name}
           className={`flex w-full items-baseline gap-2 rounded px-2 py-1.5 text-left ${
-            index === highlightedIndex ? 'bg-primary-accent text-primary' : 'hover:bg-elevated'
+            index === highlightedIndex ? 'bg-hover text-accent' : 'hover:bg-hover'
           }`}
           // Pointer movement highlights without scrolling the list (hover);
           // a click chooses immediately.
