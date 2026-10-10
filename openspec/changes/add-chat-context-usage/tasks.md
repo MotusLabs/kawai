@@ -41,8 +41,8 @@
 
 ## 8. Integration
 
-- [ ] 8.1 Run `bun run lint && bun run typecheck && bun run test` and verify all three pass
-- [ ] 8.2 Open a live chat session in the running app via the `dev-browser` skill and verify the meter rises across a multi-tool turn, drops when the transcript shows the compaction notice, and still shows its reading after a server restart — spanning the driver, manager, persistence and client groups
+- [x] 8.1 Run `bun run lint && bun run typecheck && bun run test` and verify all three pass
+- [x] 8.2 Open a live chat session in the running app via the `dev-browser` skill and verify the meter rises across a multi-tool turn, drops when the transcript shows the compaction notice, and still shows its reading after a server restart — spanning the driver, manager, persistence and client groups
 
 ## Workflow follow-up
 
