@@ -77,11 +77,12 @@ export type TerminalErrorCode =
 export type SessionKind = 'terminal' | 'chat'
 
 /**
- * Who set a chat session's name (chat-session-naming design D1): a user
- * (`manual`, never overwritten by a generated title), the agent's generated
- * title (`auto`), or the create-time placeholder.
+ * Who chose a chat session's name (chat-session-naming design D1). `manual` is
+ * terminal: once a person has set a name, no generated title replaces it.
+ * `placeholder` came from `generateSessionName()`; `auto` was adopted from a
+ * title the agent generated and is still followed until a person claims it.
  */
-export type SessionNameSource = 'manual' | 'auto' | 'placeholder'
+export type ChatNameSource = 'manual' | 'auto' | 'placeholder'
 
 /**
  * A session backed by a tmux window. Everything tmux discovery produces has
@@ -108,8 +109,8 @@ export interface Session {
   claudeProfileId?: string
   /** Chat sessions only: approval policy; absent = manual (legacy sessions). */
   approvalPolicy?: ChatApprovalPolicy
-  /** Chat sessions only: name provenance; absent = manual (legacy sessions). */
-  nameSource?: SessionNameSource
+  /** Chat sessions only: who chose `name`; absent = manual (never overwritten). */
+  nameSource?: ChatNameSource
   agentType?: AgentType
   source: SessionSource
   host?: string

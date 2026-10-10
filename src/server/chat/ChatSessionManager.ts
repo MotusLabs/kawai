@@ -22,7 +22,12 @@ import type {
   ChatQuestionAnswer,
   ChatUsageReport,
 } from '../../shared/chat'
-import type { ServerMessage, Session, SessionNameSource, SessionStatus } from '../../shared/types'
+import type {
+  ChatNameSource,
+  ServerMessage,
+  Session,
+  SessionStatus,
+} from '../../shared/types'
 import type { ChatSessionRecord, SessionDatabase } from '../db'
 import { generateSessionName } from '../nameGenerator'
 import { isExistingDirectory, resolveProjectDirectory } from '../paths'
@@ -276,8 +281,8 @@ export class ChatSessionManager {
       return { ok: false, error: chatAuthErrorMessage() }
     }
     const sessionId = `chat-${crypto.randomUUID()}`
-    const trimmedInputName = input.name?.trim()
-    const name = trimmedInputName || generateSessionName()
+    const suppliedName = input.name?.trim()
+    const name = suppliedName || generateSessionName()
     const now = new Date().toISOString()
     const record = {
       sessionId,
@@ -287,9 +292,9 @@ export class ChatSessionManager {
       claudeProfileId: input.claudeProfileId ?? 'default',
       // Every session starts manual; there is no per-profile default.
       approvalPolicy: 'manual' as ChatApprovalPolicy,
-      // A user-supplied name is manual forever; the generated fallback is a
-      // placeholder a later generated title may replace (design D1).
-      nameSource: (trimmedInputName ? 'manual' : 'placeholder') as SessionNameSource,
+      // chat-session-naming design D1: a name the user typed sticks forever,
+      // one the generator produced is a placeholder a later title may replace.
+      nameSource: (suppliedName ? 'manual' : 'placeholder') as ChatNameSource,
       status: 'waiting' as SessionStatus,
       createdAt: now,
       lastActivityAt: now,
@@ -407,26 +412,6 @@ export class ChatSessionManager {
   }
 
   /**
-   * Rename: set the name with manual provenance (design D1 — any rename makes
-   * the name user-set, forever after immune to generated titles). Free text:
-   * any non-empty-after-trim value is accepted (design D5). Propagates through
-   * applyPatch to the db row, the registry, and the session-update broadcast;
-   * the conversation and status are untouched. Archived chats keep the action
-   * (read-only covers the conversation, not the label).
-   */
-  rename(sessionId: string, newName: string): ChatActionResult {
-    const trimmed = newName.trim()
-    if (!trimmed) {
-      return { ok: false, error: 'Name cannot be empty' }
-    }
-    if (!this.records.has(sessionId)) {
-      return { ok: false, error: `Unknown chat session ${sessionId}` }
-    }
-    this.applyPatch(sessionId, { name: trimmed, nameSource: 'manual' })
-    return { ok: true }
-  }
-
-  /**
    * Archive: stop the agent process exactly the way kill stops it (interrupt
    * the in-flight turn, settle pending requests as cancelled, terminate), but
    * keep the record, SDK conversation id, live-event history, and protocol
@@ -473,6 +458,25 @@ export class ChatSessionManager {
     }
     if (record.archivedAt == null) return { ok: true }
     this.applyPatch(sessionId, { archivedAt: null })
+    return { ok: true }
+  }
+
+  /**
+   * Rename a chat session (chat-session-naming design D1). A rename is a
+   * claim: it sets `manual` provenance, which is terminal, so no later
+   * generated title replaces it. Names are free text — trimmed non-empty —
+   * because chat sessions have no tmux window to name (design D5).
+   */
+  rename(sessionId: string, name: string): ChatActionResult {
+    const trimmed = name.trim()
+    if (!trimmed) {
+      return { ok: false, error: 'Name cannot be empty' }
+    }
+    const record = this.records.get(sessionId)
+    if (!record) {
+      return { ok: false, error: `Unknown chat session ${sessionId}` }
+    }
+    this.applyPatch(sessionId, { name: trimmed, nameSource: 'manual' })
     return { ok: true }
   }
 
@@ -996,6 +1000,9 @@ export class ChatSessionManager {
       ...(patch.approvalPolicy !== undefined
         ? { approvalPolicy: patch.approvalPolicy }
         : {}),
+      ...(patch.nameSource !== undefined
+        ? { nameSource: patch.nameSource }
+        : {}),
     })
   }
 
@@ -1006,6 +1013,8 @@ export class ChatSessionManager {
       kind: 'chat',
       claudeProfileId: record.claudeProfileId ?? 'default',
       approvalPolicy: record.approvalPolicy ?? 'manual',
+      // Absent provenance is treated as manual: a name we cannot attribute is
+      // never handed over to a generated title (chat-session-naming design D6).
       nameSource: record.nameSource ?? 'manual',
       projectPath: record.projectPath,
       status: record.status,

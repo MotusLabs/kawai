@@ -460,6 +460,7 @@ describe('session comparator (design D6)', () => {
       id: 'session-2',
       claudeProfileId: 'glm',
       approvalPolicy: 'auto',
+      nameSource: 'auto',
       name: 'beta',
       tmuxWindow: 'agentboard:2',
       projectPath: '/tmp/beta',

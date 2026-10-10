@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test'
 import {
   generateSessionName,
   generateUniqueSessionName,
-  isGeneratedSessionName,
+  isGeneratorSessionName,
 } from '../nameGenerator'
 
 const originalRandom = Math.random
@@ -50,26 +50,34 @@ describe('generateUniqueSessionName', () => {
   })
 })
 
-describe('isGeneratedSessionName', () => {
-  test('accepts words from both closed lists', () => {
-    expect(isGeneratedSessionName('sure-mark')).toBe(true)
-    expect(isGeneratedSessionName('calm-raven')).toBe(true)
-    expect(isGeneratedSessionName('bold-arch')).toBe(true)
+describe('isGeneratorSessionName', () => {
+  test('accepts a pair the generator can emit', () => {
+    expect(isGeneratorSessionName('bold-arch')).toBe(true)
+    expect(isGeneratorSessionName('sure-mark')).toBe(true)
+    expect(isGeneratorSessionName('calm-raven')).toBe(true)
   })
 
-  test('rejects names outside the word lists', () => {
-    // Real pre-existing names the generator could not have produced.
-    expect(isGeneratedSessionName('show-chat-rate-limits')).toBe(false)
-    expect(isGeneratedSessionName('docs-chat-session-naming')).toBe(false)
-    expect(isGeneratedSessionName('openspec-apply')).toBe(false)
+  test('rejects a user-supplied name the generator could not produce', () => {
+    expect(isGeneratorSessionName('show-chat-rate-limits')).toBe(false)
+    expect(isGeneratorSessionName('docs-chat-session-naming')).toBe(false)
+    expect(isGeneratorSessionName('rename')).toBe(false)
   })
 
-  test('rejects shapes the generator never emits', () => {
-    expect(isGeneratedSessionName('sure-mark-k7x1')).toBe(false) // suffixed fallback
-    expect(isGeneratedSessionName('Sure-Mark')).toBe(false) // case
-    expect(isGeneratedSessionName('sure')).toBe(false) // one word
-    expect(isGeneratedSessionName('')).toBe(false)
-    expect(isGeneratedSessionName('sure mark')).toBe(false)
-    expect(isGeneratedSessionName('bold-unnoun')).toBe(false) // unknown noun
+  test('rejects a real word paired with a word outside its list', () => {
+    expect(isGeneratorSessionName('sure-table')).toBe(false)
+    expect(isGeneratorSessionName('blazing-arch')).toBe(false)
+  })
+
+  test('rejects the suffixed unique-name fallback and case variants', () => {
+    expect(isGeneratorSessionName('bold-arch-k3x9')).toBe(false)
+    expect(isGeneratorSessionName('Sure-Mark')).toBe(false)
+    expect(isGeneratorSessionName('')).toBe(false)
+  })
+
+  test('every name the generator emits is recognized', () => {
+    Math.random = () => 0
+    expect(isGeneratorSessionName(generateSessionName())).toBe(true)
+    Math.random = () => 0.999999
+    expect(isGeneratorSessionName(generateSessionName())).toBe(true)
   })
 })

@@ -67,15 +67,19 @@ const ADJECTIVE_SET = new Set(ADJECTIVES)
 const NOUN_SET = new Set(NOUNS)
 
 /**
- * True only for a name the placeholder generator could have emitted: exactly
- * `adjective-noun`, both words from its closed lists (chat-session-naming
- * design D6). Everything else — a user-typed name, a two-hyphen suffixed
- * fallback — is not attributable to the generator.
+ * True when `name` is exactly a pair this generator can emit: `adjective-noun`
+ * with both words from the closed lists above. The output space is finite
+ * (44 x 395), so "could the generator have produced this" is decidable rather
+ * than guessed. Used to recover name provenance for rows created before
+ * chat-session-naming stored it (design D6) — a generator-shaped name is a
+ * placeholder, anything else is preserved as user-set. Deliberately does not
+ * match the rare `adjective-noun-suffix` fallback of
+ * `generateUniqueSessionName`: an unattributable name is preserved.
  */
-export function isGeneratedSessionName(name: string): boolean {
-  const match = /^([a-z]+)-([a-z]+)$/.exec(name)
-  if (!match) return false
-  return ADJECTIVE_SET.has(match[1]!) && NOUN_SET.has(match[2]!)
+export function isGeneratorSessionName(name: string): boolean {
+  const parts = name.split('-')
+  if (parts.length !== 2) return false
+  return ADJECTIVE_SET.has(parts[0]) && NOUN_SET.has(parts[1])
 }
 
 const MAX_RETRIES = 100
