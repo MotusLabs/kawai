@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 import TestRenderer, { act } from 'react-test-renderer'
 import NewSessionModal from '../components/NewSessionModal'
-import { DEFAULT_PRESETS } from '../stores/settingsStore'
+import { DEFAULT_PRESETS, useSettingsStore } from '../stores/settingsStore'
 
 const globalAny = globalThis as typeof globalThis & {
   window?: Window & typeof globalThis
@@ -141,9 +141,10 @@ describe('NewSessionModal default session kind', () => {
   test('switching kind keeps the entered project path and display name', () => {
     const dialog = mountDialog()
     const inputs = dialog.renderer.root.findAllByType('input')
+    // Chat input order: auto-approve checkbox, project path, display name.
     act(() => {
-      inputs[0].props.onChange({ target: { value: '/typed/by/user' } })
-      inputs[1].props.onChange({ target: { value: 'My session' } })
+      inputs[1].props.onChange({ target: { value: '/typed/by/user' } })
+      inputs[2].props.onChange({ target: { value: 'My session' } })
     })
 
     selectKind(dialog.renderer, 'terminal')
@@ -154,8 +155,8 @@ describe('NewSessionModal default session kind', () => {
 
     selectKind(dialog.renderer, 'chat')
     const chatInputs = dialog.renderer.root.findAllByType('input')
-    expect(chatInputs[0].props.value).toBe('/typed/by/user')
-    expect(chatInputs[1].props.value).toBe('My session')
+    expect(chatInputs[1].props.value).toBe('/typed/by/user')
+    expect(chatInputs[2].props.value).toBe('My session')
 
     dialog.unmount()
   })
@@ -814,7 +815,8 @@ describe('NewSessionModal project path validation', () => {
     act(() => {
       kindSelect.props.onChange({ target: { value: 'chat' } })
     })
-    const projectInput = modal.renderer.root.findAllByType('input')[0]
+    // Chat inputs: auto-approve checkbox first, then the project path.
+    const projectInput = modal.renderer.root.findAllByType('input')[1]
     act(() => {
       projectInput.props.onChange({ target: { value: '' } })
     })
@@ -1194,6 +1196,112 @@ describe('NewSessionModal provisional focus', () => {
     ).toBe(true)
     act(() => {
       renderer.unmount()
+    })
+  })
+})
+
+describe('NewSessionModal auto-approve tools', () => {
+  afterEach(() => {
+    useSettingsStore.setState({ defaultApprovalPolicy: 'manual' })
+  })
+
+  /**
+   * Open the dialog on its chat default with a resolved profile catalog, so
+   * the chat submit path can run (it refuses while the catalog loads).
+   */
+  async function chatDialog() {
+    setupDom()
+    const created: Array<{ path: string; approvalPolicy?: string }> = []
+    globalThis.fetch = (async () =>
+      Response.json({ profiles: [{ id: 'default', label: 'Default' }], errors: [] })) as unknown as typeof fetch
+
+    let renderer!: TestRenderer.ReactTestRenderer
+    await act(async () => {
+      renderer = TestRenderer.create(
+        <NewSessionModal
+          isOpen
+          onClose={() => {}}
+          onCreate={(path, _name, _command, _host, _change, _agent, _kind, _profile, approvalPolicy) => {
+            created.push({ path, approvalPolicy })
+          }}
+          defaultProjectDir="/base"
+          commandPresets={DEFAULT_PRESETS}
+          defaultPresetId="claude"
+        />
+      )
+      await settle()
+    })
+
+    return {
+      renderer,
+      created,
+      checkbox: () => renderer.root.findAllByProps({ 'data-testid': 'chat-auto-approve' }),
+      submit: () => {
+        act(() => {
+          renderer.root.findByType('form').props.onSubmit({ preventDefault: () => {} })
+        })
+      },
+    }
+  }
+
+  test('the checkbox appears for chat and not for terminal', async () => {
+    useSettingsStore.setState({ defaultApprovalPolicy: 'manual' })
+    const dialog = await chatDialog()
+
+    // Chat is the dialog's default kind: the checkbox is present.
+    expect(dialog.checkbox()).toHaveLength(1)
+    expect(dialog.checkbox()[0].props.checked).toBe(false)
+
+    selectKind(dialog.renderer, 'terminal')
+    expect(dialog.checkbox()).toHaveLength(0)
+
+    selectKind(dialog.renderer, 'chat')
+    expect(dialog.checkbox()).toHaveLength(1)
+
+    act(() => {
+      dialog.renderer.unmount()
+    })
+  })
+
+  test('a default of auto pre-checks the box and submits auto', async () => {
+    useSettingsStore.setState({ defaultApprovalPolicy: 'auto' })
+    const dialog = await chatDialog()
+    expect(dialog.checkbox()[0].props.checked).toBe(true)
+
+    dialog.submit()
+    expect(dialog.created).toEqual([{ path: '/base', approvalPolicy: 'auto' }])
+
+    act(() => {
+      dialog.renderer.unmount()
+    })
+  })
+
+  test('unchecking an auto default creates a manual session', async () => {
+    useSettingsStore.setState({ defaultApprovalPolicy: 'auto' })
+    const dialog = await chatDialog()
+    act(() => {
+      dialog.checkbox()[0].props.onChange({ target: { checked: false } })
+    })
+    expect(dialog.checkbox()[0].props.checked).toBe(false)
+
+    dialog.submit()
+    expect(dialog.created).toEqual([{ path: '/base', approvalPolicy: 'manual' }])
+
+    act(() => {
+      dialog.renderer.unmount()
+    })
+  })
+
+  test('a default of manual leaves the box unchecked and submits manual', async () => {
+    useSettingsStore.setState({ defaultApprovalPolicy: 'manual' })
+    const dialog = await chatDialog()
+    expect(dialog.checkbox()[0].props.checked).toBe(false)
+
+    dialog.submit()
+    expect(dialog.created).toEqual([{ path: '/base', approvalPolicy: 'manual' }])
+
+    act(() => {
+      dialog.renderer.unmount()
     })
   })
 })

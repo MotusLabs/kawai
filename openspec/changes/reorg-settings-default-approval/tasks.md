@@ -26,8 +26,8 @@
 
 ## 5. New Session dialog override
 
-- [ ] 5.1 Add an "Auto-approve tools" checkbox to `NewSessionModal` shown only when `kind === 'chat'`, pre-checked from `defaultApprovalPolicy`, and passed through `onCreate` (design D2) — verify `bun run test src/client/__tests__/newSessionModal.test.tsx` covers the checkbox appearing for chat and not for terminal
-- [ ] 5.2 Cover seeding and override in `newSessionModal.test.tsx`: the default of auto pre-checks the box, unchecking it creates a manual session, and the default of manual leaves it unchecked — verify those three cases pass
+- [x] 5.1 Add an "Auto-approve tools" checkbox to `NewSessionModal` shown only when `kind === 'chat'`, pre-checked from `defaultApprovalPolicy`, and passed through `onCreate` (design D2) — verify `bun run test src/client/__tests__/newSessionModal.test.tsx` covers the checkbox appearing for chat and not for terminal
+- [x] 5.2 Cover seeding and override in `newSessionModal.test.tsx`: the default of auto pre-checks the box, unchecking it creates a manual session, and the default of manual leaves it unchecked — verify those three cases pass
 
 ## 6. Integration verification
 

@@ -1,12 +1,12 @@
 import { useClaudeProfiles } from './chat/useClaudeProfiles'
 import { useEffect, useRef, useState } from 'react'
-import { type CommandPreset, getFullCommand } from '../stores/settingsStore'
+import { type CommandPreset, getFullCommand, useSettingsStore } from '../stores/settingsStore'
 import { DirectoryBrowser } from './DirectoryBrowser'
 import AgentIcon from './AgentIcon'
 import { shortRevision } from '@shared/workspace'
 import { autoStartAgentFromToken, resolveAgentToken } from '@shared/agentToken'
 import { getPathLeaf } from '../utils/sessionLabel'
-import type { AutoStartAgent, HostStatus } from '@shared/types'
+import type { AutoStartAgent, ChatApprovalPolicy, HostStatus } from '@shared/types'
 
 /** A discovered local worktree offered by the picker. */
 export interface NewSessionWorktreeOption {
@@ -69,7 +69,8 @@ interface NewSessionModalProps {
     autoStartChange?: string,
     autoStartAgent?: AutoStartAgent,
     kind?: 'terminal' | 'chat',
-    claudeProfileId?: string
+    claudeProfileId?: string,
+    approvalPolicy?: ChatApprovalPolicy
   ) => void
   defaultProjectDir: string
   commandPresets: CommandPreset[]
@@ -116,6 +117,10 @@ export default function NewSessionModal({
   /** Seeded with the generic default; every open re-derives it (see `defaultKind`). */
   const [kind, setKind] = useState<'terminal' | 'chat'>(defaultKind())
   const [claudeProfileId, setClaudeProfileId] = useState('default')
+  // Auto-approve is seeded from the Settings default on every open (design
+  // D2): the checkbox is the deliberate per-session act.
+  const defaultApprovalPolicy = useSettingsStore((state) => state.defaultApprovalPolicy)
+  const [autoApprove, setAutoApprove] = useState(false)
   // The catalog is resolved for the entered project path: a `.kawai`
   // directory in the project (or above it) extends the picker live.
   const catalog = useClaudeProfiles(isOpen && kind === 'chat', projectPath)
@@ -200,6 +205,7 @@ export default function NewSessionModal({
     }
     // Initialize state when opening
     setKind(defaultKind(initialAutoStartChange))
+    setAutoApprove(defaultApprovalPolicy === 'auto')
     provisionalFocusRef.current = null
     const basePath =
       initialPath?.trim() ||
@@ -266,7 +272,7 @@ export default function NewSessionModal({
         input.scrollLeft = input.scrollWidth
       }
     }, 50)
-  }, [activeProjectPath, commandPresets, defaultPresetId, defaultProjectDir, isOpen, lastProjectPath, initialHost, initialPath, initialCommand, initialAutoStartChange])
+  }, [activeProjectPath, commandPresets, defaultPresetId, defaultProjectDir, defaultApprovalPolicy, isOpen, lastProjectPath, initialHost, initialPath, initialCommand, initialAutoStartChange])
 
   // Keep the deferred focus attempt's view of Create current; that attempt is
   // scheduled once per open and reads this after the catalog has moved on.
@@ -395,7 +401,7 @@ export default function NewSessionModal({
     setProjectPathError(null)
     if (kind === 'chat') {
       if (catalog.loading || catalog.error || !catalog.profiles.some(profile => profile.id === claudeProfileId)) return
-      onCreate(trimmedPath, name.trim() || undefined, undefined, undefined, undefined, undefined, 'chat', claudeProfileId)
+      onCreate(trimmedPath, name.trim() || undefined, undefined, undefined, undefined, undefined, 'chat', claudeProfileId, autoApprove ? 'auto' : 'manual')
       onClose()
       return
     }
@@ -483,6 +489,19 @@ export default function NewSessionModal({
               <button type="button" className="btn mt-1" onClick={catalog.retry}>Retry profiles</button>
             </div>}
             {catalog.warnings.map(warning => <p key={warning} role="status" className="mt-1 text-xs text-amber-400">{warning}</p>)}
+            <label className="mt-3 flex items-center gap-2 text-xs text-secondary">
+              <input
+                type="checkbox"
+                aria-label="Auto-approve tools"
+                data-testid="chat-auto-approve"
+                checked={autoApprove}
+                onChange={(event) => setAutoApprove(event.target.checked)}
+              />
+              Auto-approve tools
+            </label>
+            <p className="mt-1 text-[10px] text-muted">
+              Tools run without asking for this session. Change it anytime from the chat header.
+            </p>
           </div>}
           {showHostPicker && (
             <div>
