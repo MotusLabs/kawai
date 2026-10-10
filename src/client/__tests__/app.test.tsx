@@ -6,6 +6,7 @@ import NewSessionModal from '../components/NewSessionModal'
 import { useSessionStore } from '../stores/sessionStore'
 import { useSettingsStore } from '../stores/settingsStore'
 import { useThemeStore } from '../stores/themeStore'
+import { useUpdateStore } from '../stores/updateStore'
 import { useWorkspaceStore } from '../stores/workspaceStore'
 
 const globalAny = globalThis as typeof globalThis & {
@@ -195,6 +196,7 @@ beforeEach(() => {
   })
 
   useThemeStore.setState({ theme: 'dark' })
+  useUpdateStore.setState({ update: null, panelOpen: false })
 })
 
 afterEach(() => {
@@ -208,6 +210,7 @@ afterEach(() => {
   globalAny.navigator = originalNavigator
   globalAny.ResizeObserver = originalResizeObserver
   globalAny.localStorage = originalLocalStorage
+  useUpdateStore.setState({ update: null, panelOpen: false })
   useSettingsStore.setState({
     projectFilters: [],
     sessionSortMode: 'created',
@@ -252,6 +255,33 @@ function getKeyHandler() {
 }
 
 describe('App', () => {
+  test('an update-state push toggles the header chip without a reload', () => {
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => {
+      renderer = TestRenderer.create(<App />)
+    })
+    activeRenderer = renderer
+
+    if (!subscribeListener) {
+      throw new Error('Expected websocket subscription')
+    }
+
+    const chips = () => renderer.root.findAllByProps({ 'data-testid': 'update-chip' })
+    expect(chips()).toHaveLength(0)
+    act(() => {
+      subscribeListener?.({
+        type: 'update-state',
+        update: { current: '1.0.0-3', target: { tag: 'v1.1.0-12', base: '1.1.0', htmlUrl: null } },
+      })
+    })
+    expect(chips()).toHaveLength(1)
+    // A later push that clears the target removes the chip — still no reload.
+    act(() => {
+      subscribeListener?.({ type: 'update-state', update: { current: '1.1.0-12', target: null } })
+    })
+    expect(chips()).toHaveLength(0)
+  })
+
   test('handles websocket messages and errors', () => {
     let renderer!: TestRenderer.ReactTestRenderer
 

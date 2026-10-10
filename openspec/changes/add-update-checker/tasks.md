@@ -14,9 +14,9 @@
 
 ## 3. Update surface
 
-- [ ] 3.1 Add a persistent header chip naming the target version when an update is available; verify component tests show the chip appears on update state, stays visible past any transient-toast timeout, and is absent when the running base is current.
-- [ ] 3.2 Add an update panel opened from the chip, with the target version and a primary update action; verify component tests cover open/dismiss and that the action is offered only while an update is reported.
-- [ ] 3.3 Wire the chip and panel to server update state through the existing client store/WebSocket path; verify an App-level test shows state changes toggle the chip without a page reload.
+- [x] 3.1 Add a persistent header chip naming the target version when an update is available; verify component tests show the chip appears on update state, stays visible past any transient-toast timeout, and is absent when the running base is current.
+- [x] 3.2 Add an update panel opened from the chip, with the target version and a primary update action; verify component tests cover open/dismiss and that the action is offered only while an update is reported.
+- [x] 3.3 Wire the chip and panel to server update state through the existing client store/WebSocket path; verify an App-level test shows state changes toggle the chip without a page reload.
 
 ## 4. Update install
 

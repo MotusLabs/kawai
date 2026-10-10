@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { AgentSession, AutoStartAgent, ServerMessage, Session, SessionKillSource } from '@shared/types'
+import type { AgentSession, AutoStartAgent, ServerMessage, Session, SessionKillSource, UpdateState } from '@shared/types'
 import { FALLBACK_ARCHIVE_SECTION_KEY, type WorkspaceBranch } from '@shared/workspace'
 import Header from './components/Header'
 import SessionList from './components/SessionList'
@@ -7,10 +7,12 @@ import Terminal from './components/Terminal'
 import ChatView from './components/chat/ChatView'
 import { useChatStore } from './stores/chatStore'
 import { useChatDebugStore } from './stores/chatDebugStore'
+import { useUpdateStore } from './stores/updateStore'
 import NewSessionModal from './components/NewSessionModal'
 import BranchBrowserModal from './components/BranchBrowserModal'
 import CreateWorktreeModal from './components/CreateWorktreeModal'
 import SettingsModal from './components/SettingsModal'
+import UpdatePanel from './components/UpdatePanel'
 import { ToastViewport } from './components/Toast'
 import { useSessionStore } from './stores/sessionStore'
 import {
@@ -41,6 +43,8 @@ interface ServerInfo {
   defaultProjectDir?: string | null
   /** Build version of the server, e.g. `1.0.0-17` or `1.0.0-dev`. */
   version?: string
+  /** Update availability, seeded from discovery (see server/updates). */
+  update?: UpdateState | null
 }
 
 function filterAgentSessions(
@@ -534,6 +538,7 @@ export default function App() {
         setServerError(message.message)
         window.setTimeout(() => setServerError(null), 6000)
       }
+      if (message.type === 'update-state') useUpdateStore.getState().apply(message)
       if (message.type === 'chat-events') useChatStore.getState().apply(message.sessionId, message.events)
       if (message.type === 'chat-snapshot') useChatStore.getState().snapshot(message)
       if (message.type === 'chat-commands') useChatStore.getState().setCommands(message)
@@ -1193,7 +1198,10 @@ export default function App() {
   useEffect(() => {
     fetch('/api/server-info')
       .then((res) => res.json())
-      .then((info: ServerInfo) => setServerInfo(info))
+      .then((info: ServerInfo) => {
+        setServerInfo(info)
+        useUpdateStore.getState().setFromServerInfo(info.update)
+      })
       .catch(() => {})
   }, [])
 
@@ -1310,6 +1318,8 @@ export default function App() {
         serverDefaultDir={serverDefaultProjectDir || null}
         version={serverInfo?.version ?? null}
       />
+
+      <UpdatePanel />
 
       {branchBrowserRepository && createWorktreeBranch === null && (
         <BranchBrowserModal

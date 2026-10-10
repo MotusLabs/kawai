@@ -1,9 +1,11 @@
 import { useState } from 'react'
 import type { ConnectionStatus } from '../stores/sessionStore'
 import { useSettingsStore } from '../stores/settingsStore'
+import { useUpdateStore } from '../stores/updateStore'
 import { PlusIcon } from '@untitledui-icons/react/line'
 import Copy01Icon from '@untitledui-icons/react/line/esm/Copy01Icon'
 import Settings02Icon from '@untitledui-icons/react/line/esm/Settings02Icon'
+import ArrowUpIcon from '@untitledui-icons/react/line/esm/ArrowUpIcon'
 import { getEffectiveModifier, getModifierDisplay } from '../utils/device'
 
 interface HeaderProps {
@@ -32,6 +34,9 @@ export default function Header({
   const [copied, setCopied] = useState(false)
   const shortcutModifier = useSettingsStore((state) => state.shortcutModifier)
   const modDisplay = getModifierDisplay(getEffectiveModifier(shortcutModifier))
+  const update = useUpdateStore((state) => state.update)
+  const updateTarget = update?.target ?? null
+  const openUpdatePanel = useUpdateStore((state) => state.openPanel)
 
   const handleCopyTailscaleUrl = () => {
     if (!tailscaleIp) return
@@ -66,6 +71,19 @@ export default function Header({
       </div>
 
       <div className="flex items-center gap-1.5">
+        {/* Persistent while an update exists — a durability signal, not a
+            toast; it clears only when the running base is current again. */}
+        {updateTarget && (
+          <button
+            onClick={openUpdatePanel}
+            data-testid="update-chip"
+            className="flex h-7 items-center gap-1 rounded border border-approval px-2 text-xs text-approval transition-colors hover:bg-hover"
+            title={`Update available: ${updateTarget.tag} (running ${update?.current ?? '?'})`}
+          >
+            <ArrowUpIcon width={12} height={12} className="shrink-0" />
+            {updateTarget.base}
+          </button>
+        )}
         <button
           onClick={onNewSession}
           className="flex h-7 w-7 items-center justify-center rounded bg-accent text-white hover:bg-accent/90 active:scale-95 transition-all"
