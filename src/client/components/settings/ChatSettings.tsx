@@ -17,6 +17,12 @@ export interface ChatSettingsProps {
   onDraftChatFontSizeChange: (size: number) => void
 }
 
+/** The two policies, in the order they appear in the segmented control. */
+const APPROVAL_POLICY_OPTIONS: Array<{ id: ChatApprovalPolicy; label: string }> = [
+  { id: 'manual', label: 'Manual' },
+  { id: 'auto', label: 'Auto-approve' },
+]
+
 export default function ChatSettings({
   draftDefaultApprovalPolicy,
   onDraftDefaultApprovalPolicyChange,
@@ -38,21 +44,45 @@ export default function ChatSettings({
               Default for new chat sessions. Auto-approve lets tools run without asking.
             </div>
           </div>
-          <div className="flex gap-1">
-            <button
-              type="button"
-              className={`btn text-xs px-3 ${draftDefaultApprovalPolicy === 'manual' ? 'btn-primary' : ''}`}
-              onClick={() => onDraftDefaultApprovalPolicyChange('manual')}
-            >
-              Manual
-            </button>
-            <button
-              type="button"
-              className={`btn text-xs px-3 ${draftDefaultApprovalPolicy === 'auto' ? 'btn-primary' : ''}`}
-              onClick={() => onDraftDefaultApprovalPolicyChange('auto')}
-            >
-              Auto-approve
-            </button>
+          <div
+            className="flex gap-1"
+            role="radiogroup"
+            aria-label="Default approval policy"
+            data-testid="default-approval-policy-select"
+          >
+            {APPROVAL_POLICY_OPTIONS.map((option, index) => {
+              const isActive = draftDefaultApprovalPolicy === option.id
+              return (
+                <button
+                  key={option.id}
+                  type="button"
+                  role="radio"
+                  aria-checked={isActive}
+                  tabIndex={isActive ? 0 : -1}
+                  onClick={() => onDraftDefaultApprovalPolicyChange(option.id)}
+                  onKeyDown={(e) => {
+                    let newIndex = index
+                    if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
+                      e.preventDefault()
+                      newIndex = (index + 1) % APPROVAL_POLICY_OPTIONS.length
+                    } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
+                      e.preventDefault()
+                      newIndex = (index - 1 + APPROVAL_POLICY_OPTIONS.length) % APPROVAL_POLICY_OPTIONS.length
+                    } else {
+                      return
+                    }
+                    const next = APPROVAL_POLICY_OPTIONS[newIndex]!
+                    onDraftDefaultApprovalPolicyChange(next.id)
+                    e.currentTarget.parentElement
+                      ?.querySelectorAll<HTMLButtonElement>('[role="radio"]')[newIndex]
+                      ?.focus()
+                  }}
+                  className={`btn text-xs px-3 focus:outline-none focus:ring-2 focus:ring-primary ${isActive ? 'btn-primary' : ''}`}
+                >
+                  {option.label}
+                </button>
+              )
+            })}
           </div>
         </div>
       </div>

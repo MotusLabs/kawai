@@ -306,14 +306,45 @@ export default function SettingsModal({
 
         {/* Tab strip (design D6): inactive panels stay mounted with `hidden`
             so every control keeps its place in the tree — they leave the
-            accessibility tree and tab order instead of unmounting. */}
-        <div role="tablist" aria-label="Settings sections" className="flex gap-1 px-6 pt-4">
+            accessibility tree and tab order instead of unmounting. Arrow keys
+            move selection and focus together (roving tabindex), and each tab
+            is wired to its panel by id so the two stay paired regardless of
+            DOM order. */}
+        <div
+          role="tablist"
+          aria-label="Settings sections"
+          className="flex gap-1 px-6 pt-4"
+          onKeyDown={(e) => {
+            const index = SETTINGS_TABS.findIndex(tab => tab.id === activeTab)
+            let newIndex = index
+            if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
+              e.preventDefault()
+              newIndex = (index + 1) % SETTINGS_TABS.length
+            } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
+              e.preventDefault()
+              newIndex = (index - 1 + SETTINGS_TABS.length) % SETTINGS_TABS.length
+            } else if (e.key === 'Home') {
+              e.preventDefault()
+              newIndex = 0
+            } else if (e.key === 'End') {
+              e.preventDefault()
+              newIndex = SETTINGS_TABS.length - 1
+            } else {
+              return
+            }
+            setActiveTab(SETTINGS_TABS[newIndex]!.id)
+            e.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]')[newIndex]?.focus()
+          }}
+        >
           {SETTINGS_TABS.map((tab) => (
             <button
               key={tab.id}
               type="button"
               role="tab"
+              id={`settings-tab-${tab.id}`}
+              aria-controls={`settings-panel-${tab.id}`}
               aria-selected={activeTab === tab.id}
+              tabIndex={activeTab === tab.id ? 0 : -1}
               onClick={() => setActiveTab(tab.id)}
               className={`btn text-xs px-3 py-1 ${activeTab === tab.id ? 'btn-primary' : ''}`}
             >
@@ -324,7 +355,7 @@ export default function SettingsModal({
 
         <div className="flex-1 overflow-y-auto px-6 pb-4">
 
-        <div role="tabpanel" aria-label="Sessions" hidden={activeTab !== 'sessions'} className="mt-5 space-y-4">
+        <div role="tabpanel" id="settings-panel-sessions" aria-labelledby="settings-tab-sessions" tabIndex={0} hidden={activeTab !== 'sessions'} className="mt-5 space-y-4">
           <SessionsSettings
             serverDefaultDir={serverDefaultDir}
             draftDir={draftDir}
@@ -346,20 +377,7 @@ export default function SettingsModal({
           />
         </div>
 
-        <div role="tabpanel" aria-label="General" hidden={activeTab !== 'general'} className="mt-5 space-y-4">
-          <GeneralSettings
-            draftTheme={draftTheme}
-            onDraftThemeChange={setDraftTheme}
-            draftSoundOnPermission={draftSoundOnPermission}
-            onDraftSoundOnPermissionChange={setDraftSoundOnPermission}
-            draftSoundOnIdle={draftSoundOnIdle}
-            onDraftSoundOnIdleChange={setDraftSoundOnIdle}
-            draftShortcutModifier={draftShortcutModifier}
-            onDraftShortcutModifierChange={setDraftShortcutModifier}
-          />
-        </div>
-
-        <div role="tabpanel" aria-label="Chat" hidden={activeTab !== 'chat'} className="mt-5 space-y-4">
+        <div role="tabpanel" id="settings-panel-chat" aria-labelledby="settings-tab-chat" tabIndex={0} hidden={activeTab !== 'chat'} className="mt-5 space-y-4">
           <ChatSettings
             draftDefaultApprovalPolicy={draftDefaultApprovalPolicy}
             onDraftDefaultApprovalPolicyChange={setDraftDefaultApprovalPolicy}
@@ -368,7 +386,7 @@ export default function SettingsModal({
           />
         </div>
 
-        <div role="tabpanel" aria-label="Terminal" hidden={activeTab !== 'terminal'} className="mt-5 space-y-4">
+        <div role="tabpanel" id="settings-panel-terminal" aria-labelledby="settings-tab-terminal" tabIndex={0} hidden={activeTab !== 'terminal'} className="mt-5 space-y-4">
           <TerminalSettings
             draftUseWebGL={draftUseWebGL}
             onDraftUseWebGLChange={setDraftUseWebGL}
@@ -383,6 +401,19 @@ export default function SettingsModal({
             onDraftFontOptionChange={setDraftFontOption}
             draftCustomFontFamily={draftCustomFontFamily}
             onDraftCustomFontFamilyChange={setDraftCustomFontFamily}
+          />
+        </div>
+
+        <div role="tabpanel" id="settings-panel-general" aria-labelledby="settings-tab-general" tabIndex={0} hidden={activeTab !== 'general'} className="mt-5 space-y-4">
+          <GeneralSettings
+            draftTheme={draftTheme}
+            onDraftThemeChange={setDraftTheme}
+            draftSoundOnPermission={draftSoundOnPermission}
+            onDraftSoundOnPermissionChange={setDraftSoundOnPermission}
+            draftSoundOnIdle={draftSoundOnIdle}
+            onDraftSoundOnIdleChange={setDraftSoundOnIdle}
+            draftShortcutModifier={draftShortcutModifier}
+            onDraftShortcutModifierChange={setDraftShortcutModifier}
           />
         </div>
 
