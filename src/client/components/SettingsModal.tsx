@@ -23,6 +23,16 @@ interface SettingsChangeFlags {
   webglChanged: boolean
 }
 
+/** Settings tab (design D4): one concern per tab, opening on Sessions. */
+type SettingsTab = 'sessions' | 'chat' | 'terminal' | 'general'
+
+const SETTINGS_TABS: Array<{ id: SettingsTab; label: string }> = [
+  { id: 'sessions', label: 'Sessions' },
+  { id: 'chat', label: 'Chat' },
+  { id: 'terminal', label: 'Terminal' },
+  { id: 'general', label: 'General' },
+]
+
 interface SettingsModalProps {
   isOpen: boolean
   onClose: (flags?: SettingsChangeFlags) => void
@@ -129,6 +139,9 @@ export default function SettingsModal({
   const [draftTheme, setDraftTheme] = useState<Theme>(theme)
   const [draftSoundOnPermission, setDraftSoundOnPermission] = useState(soundOnPermission)
   const [draftSoundOnIdle, setDraftSoundOnIdle] = useState(soundOnIdle)
+  // The modal always opens on Sessions (design D4); the selection is never
+  // persisted across opens.
+  const [activeTab, setActiveTab] = useState<SettingsTab>('sessions')
 
   // Server-side settings (fetched from API)
   const [tmuxMouseMode, setTmuxMouseMode] = useState(true)
@@ -175,6 +188,7 @@ export default function SettingsModal({
       setDraftTheme(theme)
       setDraftSoundOnPermission(soundOnPermission)
       setDraftSoundOnIdle(soundOnIdle)
+      setActiveTab('sessions')
       setShowAddForm(false)
       setNewLabel('')
       setNewCommand('')
@@ -438,9 +452,27 @@ export default function SettingsModal({
           </p>
         </div>
 
+        {/* Tab strip (design D6): inactive panels stay mounted with `hidden`
+            so every control keeps its place in the tree — they leave the
+            accessibility tree and tab order instead of unmounting. */}
+        <div role="tablist" aria-label="Settings sections" className="flex gap-1 px-6 pt-4">
+          {SETTINGS_TABS.map((tab) => (
+            <button
+              key={tab.id}
+              type="button"
+              role="tab"
+              aria-selected={activeTab === tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              className={`btn text-xs px-3 py-1 ${activeTab === tab.id ? 'btn-primary' : ''}`}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+
         <div className="flex-1 overflow-y-auto px-6 pb-4">
 
-        <div className="mt-5 space-y-4">
+        <div role="tabpanel" aria-label="Sessions" hidden={activeTab !== 'sessions'} className="mt-5 space-y-4">
           <div>
             <label className="mb-1.5 block text-xs text-secondary">
               Default Project Directory
@@ -716,6 +748,9 @@ export default function SettingsModal({
             </div>
           </div>
 
+        </div>
+
+        <div role="tabpanel" aria-label="General" hidden={activeTab !== 'general'} className="mt-5 space-y-4">
           <div className="border-t border-border pt-4 space-y-3">
             <label className="mb-1 block text-xs text-secondary">
               Notifications
@@ -770,6 +805,9 @@ export default function SettingsModal({
             </div>
           </div>
 
+        </div>
+
+        <div role="tabpanel" aria-label="Chat" hidden={activeTab !== 'chat'} className="mt-5 space-y-4">
           <ChatProviderSettings />
 
           <div className="border-t border-border pt-4">
@@ -786,6 +824,9 @@ export default function SettingsModal({
             />
           </div>
 
+        </div>
+
+        <div role="tabpanel" aria-label="Terminal" hidden={activeTab !== 'terminal'} className="mt-5 space-y-4">
           <div className="border-t border-border pt-4">
             <label className="mb-2 block text-xs text-secondary">
               Terminal Rendering
