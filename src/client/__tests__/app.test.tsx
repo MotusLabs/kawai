@@ -6,6 +6,7 @@ import NewSessionModal from '../components/NewSessionModal'
 import { useSessionStore } from '../stores/sessionStore'
 import { useSettingsStore } from '../stores/settingsStore'
 import { useThemeStore } from '../stores/themeStore'
+import { useUpdateStore } from '../stores/updateStore'
 import { useWorkspaceStore } from '../stores/workspaceStore'
 
 const globalAny = globalThis as typeof globalThis & {
@@ -195,6 +196,7 @@ beforeEach(() => {
   })
 
   useThemeStore.setState({ theme: 'dark' })
+  useUpdateStore.setState({ update: null, panelOpen: false })
 })
 
 afterEach(() => {
@@ -208,6 +210,7 @@ afterEach(() => {
   globalAny.navigator = originalNavigator
   globalAny.ResizeObserver = originalResizeObserver
   globalAny.localStorage = originalLocalStorage
+  useUpdateStore.setState({ update: null, panelOpen: false })
   useSettingsStore.setState({
     projectFilters: [],
     sessionSortMode: 'created',
@@ -252,6 +255,75 @@ function getKeyHandler() {
 }
 
 describe('App', () => {
+  test('an update-state push toggles the header chip without a reload', () => {
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => {
+      renderer = TestRenderer.create(<App />)
+    })
+    activeRenderer = renderer
+
+    if (!subscribeListener) {
+      throw new Error('Expected websocket subscription')
+    }
+
+    const chips = () => renderer.root.findAllByProps({ 'data-testid': 'update-chip' })
+    expect(chips()).toHaveLength(0)
+    act(() => {
+      subscribeListener?.({
+        type: 'update-state',
+        update: { current: '1.0.0-3', target: { tag: 'v1.1.0-12', base: '1.1.0', htmlUrl: null } },
+      })
+    })
+    expect(chips()).toHaveLength(1)
+    // A later push that clears the target removes the chip — still no reload.
+    act(() => {
+      subscribeListener?.({ type: 'update-state', update: { current: '1.1.0-12', target: null } })
+    })
+    expect(chips()).toHaveLength(0)
+  })
+
+  test('a reconnect re-seeds update state from server-info', async () => {
+    // After an update the reconnect lands on a new build that never pushes
+    // update state (its checker starts "current"); the server-info re-fetch
+    // is what clears the stale target the previous build pushed.
+    const originalFetch = globalThis.fetch
+    const infoCalls: string[] = []
+    globalThis.fetch = (async (url: string | URL | Request) => {
+      const target = String(url)
+      if (target.includes('server-info')) {
+        infoCalls.push(target)
+        return new Response(
+          JSON.stringify({ version: '1.1.0-12', update: { current: '1.1.0-12', target: null } }),
+          { status: 200 },
+        )
+      }
+      return new Response('{}', { status: 200 })
+    }) as unknown as typeof fetch
+    try {
+      let renderer!: TestRenderer.ReactTestRenderer
+      act(() => { renderer = TestRenderer.create(<App />) })
+      activeRenderer = renderer
+      await act(async () => {})
+      expect(infoCalls).toHaveLength(1)
+
+      // The old build's last push left a target behind; the reconnect bumps
+      // the epoch and the re-seed must clear it (no false "restart failed").
+      act(() => {
+        useUpdateStore.setState({
+          update: { current: '1.0.0-3', target: { tag: 'v1.1.0-12', base: '1.1.0', htmlUrl: null } },
+          panelOpen: true,
+        })
+      })
+      act(() => { useSessionStore.setState({ connectionEpoch: 1 }) })
+      await act(async () => {})
+      expect(infoCalls).toHaveLength(2)
+      expect(useUpdateStore.getState().update?.target).toBeNull()
+      expect(useUpdateStore.getState().panelOpen).toBe(false)
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
   test('handles websocket messages and errors', () => {
     let renderer!: TestRenderer.ReactTestRenderer
 

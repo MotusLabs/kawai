@@ -5,7 +5,7 @@
 We take the security of Agentboard seriously. If you believe you have found a security vulnerability, please report it to us privately. **Please do not report security vulnerabilities through public GitHub issues, discussions, or pull requests.**
 
 Instead, please report them via:
-- [GitHub Security Advisory](https://github.com/gbasin/agentboard/security/advisories/new)
+- [GitHub Security Advisory](https://github.com/MotusLabs/kawai/security/advisories/new)
 
 ### Reporting Process
 1. **Submit Report**: Use the above channel to submit your report
@@ -25,7 +25,6 @@ Instead, please report them via:
 | Version | Supported |
 |---------|-----------|
 | Latest commit on the default branch | Yes |
-| Latest published npm package (`@gbasin/agentboard`) | Yes |
 | All other versions | No |
 
 
