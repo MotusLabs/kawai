@@ -12,15 +12,15 @@
 
 ## 3. Driver reads the stream
 
-- [ ] 3.1 Read `message.message.usage` on assistant frames in `src/server/chat/ChatSessionDriver.ts`, keeping the latest `input + cache_read + cache_creation + output` as the used-token count (design D1), and verify `src/server/__tests__/chatSessionDriver.test.ts` covers the reading rising across successive requests and staying within the window when session totals far exceed it
-- [ ] 3.2 Skip frames where `isSubagentFrame` is true before reading usage (design D6), and verify a driver test shows a Task subagent's usage does not move the meter
-- [ ] 3.3 Publish through a new `onContextUsage` callback, leaving it `null` until the first model request (design D7), and verify a driver test asserts `null` for a session that has not produced a request
+- [x] 3.1 Read `message.message.usage` on assistant frames in `src/server/chat/ChatSessionDriver.ts`, keeping the latest `input + cache_read + cache_creation + output` as the used-token count (design D1), and verify `src/server/__tests__/chatSessionDriver.test.ts` covers the reading rising across successive requests and staying within the window when session totals far exceed it
+- [x] 3.2 Skip frames where `isSubagentFrame` is true before reading usage (design D6), and verify a driver test shows a Task subagent's usage does not move the meter
+- [x] 3.3 Publish through a new `onContextUsage` callback, leaving it `null` until the first model request (design D7), and verify a driver test asserts `null` for a session that has not produced a request
 
 ## 4. Threshold source
 
-- [ ] 4.1 Resolve the auto-compaction threshold in `src/server/chat/ChatSessionDriver.ts` per design D2: observed `autoCompactThreshold` (else `rawMaxTokens − buffer`) from `getContextUsage` when a live `Query` answers, else the profile's `CLAUDE_CODE_AUTO_COMPACT_WINDOW` whenever it is set, else `modelUsage[*].contextWindow` labelled as an approximation. Wire `getContextUsage` as a light control call on attach and at turn boundaries, following the `interrupt` precedent. Verify `src/server/__tests__/chatSessionDriver.test.ts` covers each resolution step and the fallback order
-- [ ] 4.2 Verify the threshold against a real context-usage report rather than assuming `autoCompactThreshold`'s units, and pin the fixture in a test: a 200000-token window with a 33000-token buffer and 157900 used must yield a 167000 threshold and a percentage near 95, not the 79 that the full window gives
-- [ ] 4.3 Cover a profile-configured 100000-token window on a 200000-token model, and verify a used count at that threshold reads about 100 percent rather than 50 — the model's limit is not the denominator. Cover the larger case too: a 1000000-token override on a 200000-token model must not fall through to the model's limit
+- [x] 4.1 Resolve the auto-compaction threshold in `src/server/chat/ChatSessionDriver.ts` per design D2: observed `autoCompactThreshold` (else `rawMaxTokens − buffer`) from `getContextUsage` when a live `Query` answers, else the profile's `CLAUDE_CODE_AUTO_COMPACT_WINDOW` whenever it is set, else `modelUsage[*].contextWindow` labelled as an approximation. Wire `getContextUsage` as a light control call on attach and at turn boundaries, following the `interrupt` precedent. Verify `src/server/__tests__/chatSessionDriver.test.ts` covers each resolution step and the fallback order
+- [x] 4.2 Verify the threshold against a real context-usage report rather than assuming `autoCompactThreshold`'s units, and pin the fixture in a test: a 200000-token window with a 33000-token buffer and 157900 used must yield a 167000 threshold and a percentage near 95, not the 79 that the full window gives
+- [x] 4.3 Cover a profile-configured 100000-token window on a 200000-token model, and verify a used count at that threshold reads about 100 percent rather than 50 — the model's limit is not the denominator. Cover the larger case too: a 1000000-token override on a 200000-token model must not fall through to the model's limit
 
 ## 5. Driver reads compaction
 

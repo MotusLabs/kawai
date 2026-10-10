@@ -13,6 +13,7 @@ import type {
   ChatActivity,
   ChatApprovalPolicy,
   ChatCommandState,
+  ChatContextUsage,
   ChatEvent,
   ChatUsageReport,
 } from '../../shared/chat'
@@ -42,6 +43,8 @@ interface FakeQueryHandle {
   exit: () => void
   /** Calls to the usage control (0 when the driver never pulled). */
   usageCalls: Array<{ skipBehaviors?: boolean }>
+  /** Calls to the context-usage control (attach and turn boundaries). */
+  contextCalls: Array<{ detail?: string }>
 }
 
 /** The usage control implementation a test injects into a fake query. */
@@ -49,10 +52,16 @@ export type FakeUsageControl = (opts: {
   skipBehaviors?: boolean
 }) => Promise<unknown>
 
+/** The context-usage control implementation a test injects into a fake query. */
+export type FakeContextControl = (opts: {
+  detail?: string
+}) => Promise<unknown>
+
 function createFakeQuery(
   prompt: AsyncIterable<SDKUserMessage>,
   options: Options,
-  usageImpl?: FakeUsageControl
+  usageImpl?: FakeUsageControl,
+  contextImpl?: FakeContextControl
 ): FakeQueryHandle {
   const messages: SDKMessage[] = []
   let resolveMessage: ((result: IteratorResult<SDKMessage>) => void) | null = null
@@ -61,6 +70,7 @@ function createFakeQuery(
     interrupts: 0,
     closed: false,
     usageCalls: [] as Array<{ skipBehaviors?: boolean }>,
+    contextCalls: [] as Array<{ detail?: string }>,
   } as FakeQueryHandle
 
   const stream = async function* (): AsyncGenerator<SDKMessage, void> {
@@ -101,6 +111,16 @@ function createFakeQuery(
           },
         }
       : {}),
+    // The context-usage control: attached only when a test provides one, so
+    // the default fake exercises the driver's missing-method path.
+    ...(contextImpl
+      ? {
+          getContextUsage: (opts: { detail?: string }) => {
+            handle.contextCalls.push(opts)
+            return contextImpl(opts)
+          },
+        }
+      : {}),
   }) as unknown as Query
 
   handle.query = query
@@ -136,6 +156,7 @@ interface Harness {
   activities: Array<ChatActivity | null>
   rateLimits: ChatUsageReport[]
   usageReports: ChatUsageReport[]
+  contextUsage: ChatContextUsage[]
   noData: number[]
   fakes: FakeQueryHandle[]
   sdkSessionIds: string[]
@@ -153,6 +174,8 @@ function createHarness(
     wire?: ChatWireRecorder
     /** Injected usage control on every spawned fake query. */
     usageImpl?: FakeUsageControl
+    /** Injected context-usage control on every spawned fake query. */
+    contextImpl?: FakeContextControl
     /** Gates the driver's usage pull; defaults to "never claim". */
     claimUsagePull?: () => boolean
     /** Commands the fake queries' initializationResult() reports. */
@@ -164,17 +187,18 @@ function createHarness(
   const activities: Array<ChatActivity | null> = []
   const rateLimits: ChatUsageReport[] = []
   const usageReports: ChatUsageReport[] = []
+  const contextUsage: ChatContextUsage[] = []
   const noData: number[] = []
   const fakes: FakeQueryHandle[] = []
   const sdkSessionIds: string[] = []
   const factoryWires: Array<ChatWireRecorder | undefined> = []
   const commandStates: ChatCommandState[] = []
-  // usageImpl/claimUsagePull/initializationCommands feed the fake factory; the
-  // rest pass to the driver.
-  const { usageImpl, claimUsagePull, initializationCommands, ...driverOverrides } = overrides
+  // usageImpl/contextImpl/claimUsagePull/initializationCommands feed the fake
+  // factory; the rest pass to the driver.
+  const { usageImpl, contextImpl, claimUsagePull, initializationCommands, ...driverOverrides } = overrides
   const factory: ChatQueryFactory = ({ prompt, options, wire }) => {
     factoryWires.push(wire)
-    const handle = createFakeQuery(prompt, options, usageImpl)
+    const handle = createFakeQuery(prompt, options, usageImpl, contextImpl)
     fakes.push(handle)
     if (initializationCommands) {
       ;(handle.query as { initializationResult?: () => Promise<unknown> }).initializationResult =
@@ -191,6 +215,7 @@ function createHarness(
     onActivity: (activity) => activities.push(activity),
     onRateLimit: (report) => rateLimits.push(report),
     onUsageReport: (report) => usageReports.push(report),
+    onContextUsage: (usage) => contextUsage.push(usage),
     ...(claimUsagePull ? { claimUsagePull } : {}),
     onUsageNoData: () => noData.push(1),
     onSdkSessionId: (id) => sdkSessionIds.push(id),
@@ -204,6 +229,7 @@ function createHarness(
     activities,
     rateLimits,
     usageReports,
+    contextUsage,
     noData,
     fakes,
     sdkSessionIds,
@@ -279,6 +305,79 @@ function result(subtype: string, extra: Record<string, unknown> = {}): SDKMessag
     stop_reason: null,
     ...extra,
   } as unknown as SDKMessage
+}
+
+/**
+ * Assistant frame carrying per-request usage (design D1): input + cache_read
+ * + cache_creation + output is the next request's cost, never a total. A
+ * non-null parentToolUseId marks the frame as a Task subagent's (design D6).
+ */
+function assistantUsage(
+  usage: {
+    input_tokens?: number
+    cache_read_input_tokens?: number
+    cache_creation_input_tokens?: number
+    output_tokens?: number
+  },
+  id = 'msg_usage',
+  parentToolUseId: string | null = null
+): SDKMessage {
+  return {
+    type: 'assistant',
+    message: {
+      id,
+      content: [],
+      role: 'assistant',
+      usage: {
+        input_tokens: usage.input_tokens ?? 0,
+        cache_read_input_tokens: usage.cache_read_input_tokens ?? 0,
+        cache_creation_input_tokens: usage.cache_creation_input_tokens ?? 0,
+        output_tokens: usage.output_tokens ?? 0,
+      },
+    },
+    parent_tool_use_id: parentToolUseId,
+    uuid: `uuid-${id}`,
+    session_id: 'sdk-1',
+  } as unknown as SDKMessage
+}
+
+/**
+ * A context-usage control response (SDKControlGetContextUsageResponse) with
+ * test-safe defaults; override rawMaxTokens, autoCompactThreshold, and
+ * categories. Buffer rows are the autocompact reserve (design D2).
+ */
+function contextReport(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    categories: [],
+    totalTokens: 0,
+    maxTokens: 200_000,
+    rawMaxTokens: 200_000,
+    percentage: 0,
+    gridRows: [],
+    model: 'claude-sonnet-4-5',
+    memoryFiles: [],
+    mcpTools: [],
+    agents: [],
+    isAutoCompactEnabled: true,
+    apiUsage: null,
+    ...overrides,
+  }
+}
+
+/** A modelUsage map whose every model runs the given context window. */
+function modelUsageWith(contextWindow: number): Record<string, unknown> {
+  return {
+    'claude-sonnet-4-5': {
+      inputTokens: 1,
+      outputTokens: 1,
+      cacheReadInputTokens: 1,
+      cacheCreationInputTokens: 1,
+      webSearchRequests: 0,
+      costUSD: 0,
+      contextWindow,
+      maxOutputTokens: 8_192,
+    },
+  }
 }
 
 describe('ChatSessionDriver', () => {
@@ -1686,5 +1785,189 @@ describe('ChatSessionDriver usage', () => {
     expect(harness.fakes).toHaveLength(2)
     expect(harness.fakes[1]!.usageCalls).toHaveLength(0)
     expect(claims).toBe(2)
+  })
+})
+
+describe('ChatSessionDriver context usage', () => {
+  // Same pinned-home isolation as the main describe: launch resolution must
+  // not see a real ~/.kawai.
+  let tempHome: string
+  const originalHome = process.env.HOME
+  beforeEach(() => {
+    tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'agentboard-chatdriver-'))
+    process.env.HOME = tempHome
+  })
+  afterEach(() => {
+    if (originalHome !== undefined) process.env.HOME = originalHome
+    else delete process.env.HOME
+    fs.rmSync(tempHome, { recursive: true, force: true })
+  })
+
+  test('the reading tracks the latest request, never the session total', async () => {
+    const harness = createHarness()
+    harness.driver.send('turn one')
+    const fake = harness.fakes[0]!
+    // First request: 60k of a window the result frame then reveals as 200k.
+    fake.push(assistantUsage({ input_tokens: 10_000, cache_read_input_tokens: 45_000, cache_creation_input_tokens: 4_000, output_tokens: 1_000 }, 'msg_1'))
+    fake.push(result('success', { modelUsage: modelUsageWith(200_000) }))
+    await flush()
+    expect(harness.contextUsage).toHaveLength(1)
+    expect(harness.contextUsage[0]).toMatchObject({ usedTokens: 60_000, thresholdTokens: 200_000, percentage: 30 })
+
+    // Second request: a bigger single request replaces — never adds to — the
+    // previous reading, even after turns of traffic whose session totals far
+    // exceed the window.
+    harness.driver.send('turn two')
+    fake.push(assistantUsage({ input_tokens: 20_000, cache_read_input_tokens: 90_000, cache_creation_input_tokens: 8_000, output_tokens: 2_000 }, 'msg_2'))
+    await flush()
+    expect(harness.contextUsage).toHaveLength(2)
+    expect(harness.contextUsage[1]).toMatchObject({ usedTokens: 120_000, thresholdTokens: 200_000, percentage: 60 })
+  })
+
+  test("a Task subagent's usage does not move the meter", async () => {
+    const harness = createHarness()
+    harness.driver.send('run a task')
+    const fake = harness.fakes[0]!
+    const parent = { input_tokens: 10_000, cache_read_input_tokens: 45_000, cache_creation_input_tokens: 4_000, output_tokens: 1_000 }
+    fake.push(assistantUsage(parent, 'msg_1'))
+    fake.push(result('success', { modelUsage: modelUsageWith(200_000) }))
+    await flush()
+    expect(harness.contextUsage).toHaveLength(1)
+
+    // The subagent's own giant request is invisible to the parent's meter.
+    fake.push(assistantUsage({ input_tokens: 150_000, cache_read_input_tokens: 30_000, cache_creation_input_tokens: 6_000, output_tokens: 4_000 }, 'msg_sub', 'toolu_task_1'))
+    await flush()
+    expect(harness.contextUsage).toHaveLength(1)
+
+    // The next parent frame still publishes normally.
+    fake.push(assistantUsage({ input_tokens: 12_000, cache_read_input_tokens: 50_000, cache_creation_input_tokens: 4_000, output_tokens: 1_000 }, 'msg_2'))
+    await flush()
+    expect(harness.contextUsage).toHaveLength(2)
+    expect(harness.contextUsage[1]).toMatchObject({ usedTokens: 67_000 })
+  })
+
+  test('no reading exists before the first model request, however rich the thresholds', async () => {
+    // Every threshold source can answer at attach; without a used count
+    // there is no reading at all — null, never a placeholder (design D7).
+    const harness = createHarness({
+      contextImpl: async () => contextReport({ autoCompactThreshold: 167_000 }),
+      getProviderEnv: () => ({ CLAUDE_CODE_AUTO_COMPACT_WINDOW: '100000' }),
+    })
+    harness.driver.start()
+    await flush()
+    harness.fakes[0]!.push(result('success', { modelUsage: modelUsageWith(200_000) }))
+    await flush()
+    expect(harness.contextUsage).toHaveLength(0)
+    harness.driver.kill()
+  })
+
+  test('the report threshold wins over the profile window and the model limit', async () => {
+    const harness = createHarness({
+      contextImpl: async () =>
+        // autoCompactThreshold present: rawMaxTokens − buffer (167000) must
+        // NOT be derived over the observed 120000 (design D2 step 1).
+        contextReport({ autoCompactThreshold: 120_000, rawMaxTokens: 200_000, categories: [{ name: 'buffer', tokens: 33_000, color: '#fff', kind: 'buffer' }] }),
+      getProviderEnv: () => ({ CLAUDE_CODE_AUTO_COMPACT_WINDOW: '100000' }),
+    })
+    harness.driver.send('hello')
+    const fake = harness.fakes[0]!
+    fake.push(assistantUsage({ input_tokens: 60_000 }, 'msg_1'))
+    fake.push(result('success', { modelUsage: modelUsageWith(200_000) }))
+    await flush()
+    expect(harness.contextUsage.at(-1)).toMatchObject({ usedTokens: 60_000, thresholdTokens: 120_000 })
+    // The control fired on attach and again at the turn boundary.
+    expect(fake.contextCalls.map((call) => call.detail)).toEqual(['summary', 'summary'])
+  })
+
+  test('interrupting a turn re-resolves the threshold', async () => {
+    const harness = createHarness({
+      contextImpl: async () => contextReport({ autoCompactThreshold: 167_000 }),
+    })
+    harness.driver.send('hello')
+    const fake = harness.fakes[0]!
+    fake.push(assistantUsage({ input_tokens: 100_000 }, 'msg_1'))
+    await flush()
+    expect(fake.contextCalls).toHaveLength(1) // attach only, mid-turn
+    harness.driver.interrupt()
+    await flush()
+    expect(fake.contextCalls).toHaveLength(2) // the interrupted boundary
+  })
+
+  test('without autoCompactThreshold the threshold is the window minus the buffer', async () => {
+    const harness = createHarness({
+      contextImpl: async () =>
+        contextReport({
+          rawMaxTokens: 200_000,
+          categories: [
+            { name: 'tools', tokens: 120_000, color: '#fff', kind: 'used' },
+            { name: 'compaction buffer', tokens: 33_000, color: '#fff', kind: 'buffer' },
+          ],
+        }),
+    })
+    harness.driver.send('hello')
+    const fake = harness.fakes[0]!
+    // The pinned real-report fixture (task 4.2): 157900 used of a 200000
+    // window with a 33000 buffer. The meter must read 167000 — ~94.6%, near
+    // 95 — not the 78.95% the full window would give.
+    fake.push(assistantUsage({ input_tokens: 25_000, cache_read_input_tokens: 125_000, cache_creation_input_tokens: 5_900, output_tokens: 2_000 }, 'msg_1'))
+    await flush()
+    expect(harness.contextUsage.at(-1)).toMatchObject({
+      usedTokens: 157_900,
+      thresholdTokens: 167_000,
+      percentage: 94.6,
+    })
+  })
+
+  test('a profile window is the denominator, and an override above the model limit stands', async () => {
+    const small = createHarness({
+      getProviderEnv: () => ({ CLAUDE_CODE_AUTO_COMPACT_WINDOW: '100000' }),
+    })
+    small.driver.send('hello')
+    small.fakes[0]!.push(assistantUsage({ input_tokens: 100_000 }, 'msg_1'))
+    small.fakes[0]!.push(result('success', { modelUsage: modelUsageWith(200_000) }))
+    await flush()
+    // 100000 used at the 100000 profile threshold reads 100%, not the 50%
+    // the model's 200000 limit would give.
+    expect(small.contextUsage.at(-1)).toMatchObject({ usedTokens: 100_000, thresholdTokens: 100_000, percentage: 100 })
+
+    const large = createHarness({
+      getProviderEnv: () => ({ CLAUDE_CODE_AUTO_COMPACT_WINDOW: '1000000' }),
+    })
+    large.driver.send('hello')
+    large.fakes[0]!.push(assistantUsage({ input_tokens: 150_000 }, 'msg_1'))
+    large.fakes[0]!.push(result('success', { modelUsage: modelUsageWith(200_000) }))
+    await flush()
+    // A 1000000 override on a 200000 model must not fall through to the
+    // model's limit.
+    expect(large.contextUsage.at(-1)).toMatchObject({ usedTokens: 150_000, thresholdTokens: 1_000_000, percentage: 15 })
+  })
+
+  test('a known reserve shrinks the profile window when the report yields no threshold', async () => {
+    // The buffer rows still teach the reserve even when the report carries no
+    // usable threshold (rawMaxTokens 0); the profile window is then reduced by
+    // it (design D2 step 2).
+    const harness = createHarness({
+      contextImpl: async () =>
+        contextReport({ rawMaxTokens: 0, categories: [{ name: 'compaction buffer', tokens: 20_000, color: '#fff', kind: 'buffer' }] }),
+      getProviderEnv: () => ({ CLAUDE_CODE_AUTO_COMPACT_WINDOW: '100000' }),
+    })
+    harness.driver.send('hello')
+    harness.fakes[0]!.push(assistantUsage({ input_tokens: 80_000 }, 'msg_1'))
+    await flush()
+    expect(harness.contextUsage.at(-1)).toMatchObject({ usedTokens: 80_000, thresholdTokens: 80_000, percentage: 100 })
+  })
+
+  test('the model context window is the last resort', async () => {
+    // No control method on the fake, no profile window: the result's
+    // modelUsage answers.
+    const harness = createHarness()
+    harness.driver.send('hello')
+    const fake = harness.fakes[0]!
+    fake.push(assistantUsage({ input_tokens: 50_000 }, 'msg_1'))
+    fake.push(result('success', { modelUsage: modelUsageWith(200_000) }))
+    await flush()
+    expect(harness.contextUsage.at(-1)).toMatchObject({ usedTokens: 50_000, thresholdTokens: 200_000, percentage: 25 })
+    // Attach without the control is a no-op, not an error.
+    expect(fake.contextCalls).toHaveLength(0)
   })
 })

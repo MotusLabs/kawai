@@ -14,6 +14,7 @@ import type {
   PermissionResult,
   Query,
   SDKAssistantMessage,
+  SDKControlGetContextUsageResponse,
   SDKMessage,
   SDKPartialAssistantMessage,
   SDKResultMessage,
@@ -24,6 +25,7 @@ import type {
   ChatApprovalDecision,
   ChatApprovalPolicy,
   ChatCommandState,
+  ChatContextUsage,
   ChatEvent,
   ChatPendingRequest,
   ChatQuestion,
@@ -108,6 +110,14 @@ export interface ChatSessionDriverOptions {
    */
   onActivity?: (activity: ChatActivity | null) => void
   /**
+   * Context usage (context meter designs D1/D7): the latest reading, fired
+   * when a new per-request usage lands, when compaction adopts a
+   * post-compaction size, or when a threshold correction re-scales the
+   * current reading. Never fired before the first model request and never
+   * with a placeholder — no reading is this callback never firing (D7).
+   */
+  onContextUsage?: (usage: ChatContextUsage) => void
+  /**
    * Plan usage (usage bar design D3): parsed report from a pushed
    * rate_limit_event frame, whatever turn state the session is in.
    */
@@ -171,6 +181,23 @@ export class ChatSessionDriver {
   private lastStatus: SessionStatus = 'waiting'
   /** Live-turn activity state (design D3); null phase when no turn runs. */
   private activityState: ChatActivityState = initialChatActivityState()
+  /**
+   * Latest per-request used tokens (context meter design D1); null until the
+   * first model request — a session with no request has no reading (D7).
+   */
+  private contextUsedTokens: number | null = null
+  /** When the current used-token count was measured. */
+  private contextMeasuredAt: string | null = null
+  /** Threshold observed from a context-usage report (design D2 step 1). */
+  private reportContextThreshold: number | null = null
+  /** Autocompact reserve observed in a report; adjusts a profile window (D2). */
+  private reportContextReserve: number | null = null
+  /** Profile-configured window (CLAUDE_CODE_AUTO_COMPACT_WINDOW) at the last spawn (D2 step 2). */
+  private profileCompactWindow: number | null = null
+  /** Largest model contextWindow seen on a result's modelUsage (D2 step 3). */
+  private modelContextWindow: number | null = null
+  /** Last reading handed to onContextUsage; suppresses identical re-publishes. */
+  private lastPublishedContextUsage: ChatContextUsage | null = null
   private dead = false
   /** Updated by the manager before a respawn; see setClaudeExecutablePath. */
   private claudeExecutablePath: string | undefined
@@ -237,6 +264,8 @@ export class ChatSessionDriver {
       const turnId = this.activeTurnId
       this.activeTurnId = null
       this.emit({ type: 'turn_interrupted', turnId })
+      // Turn boundary: re-resolve the threshold for the next turn (design D2).
+      this.refreshContextThreshold()
     }
     const query = this.query
     if (query) {
@@ -414,6 +443,11 @@ export class ChatSessionDriver {
           : {}),
       }
     )
+    // The profile-configured window (design D2 step 2) is re-read each spawn
+    // so Settings changes apply to the next process.
+    this.profileCompactWindow = parsePositiveTokens(
+      launch.env?.CLAUDE_CODE_AUTO_COMPACT_WINDOW
+    )
     // An operator-named profile executable replaces the standard binary; the
     // `executable` key itself is launch bookkeeping, not an SDK option.
     const { executable: profileExecutable, ...launchOptions } = launch
@@ -456,6 +490,9 @@ export class ChatSessionDriver {
     void this.fetchInitializationCommands(query)
     void this.runQueryLoop(query)
     this.maybePullUsage(query)
+    // Attach-time threshold probe (design D2): the report can answer before
+    // the first request does.
+    this.refreshContextThreshold()
   }
 
   /**
@@ -578,6 +615,9 @@ export class ChatSessionDriver {
       const report = parseUsageReport(message.usage_report)
       if (report) this.options.onUsageReport?.(report)
     }
+    // Context usage rides the same wrapper level, whatever the turn state —
+    // trailing frames after an interrupt still measure the live context.
+    this.readContextUsage(message)
     const turnId = this.activeTurnId
     if (!turnId) return
     const messageId = message.message.id ?? message.uuid
@@ -671,6 +711,9 @@ export class ChatSessionDriver {
   }
 
   private handleResult(message: SDKResultMessage): void {
+    // modelUsage arrives on every result whatever the turn state; its
+    // contextWindow is the threshold fallback (design D2 step 3).
+    this.readModelContextWindow(message)
     const turnId = this.activeTurnId
     if (!turnId) {
       // Already reported via turn_interrupted (or no turn ran); a trailing
@@ -697,6 +740,8 @@ export class ChatSessionDriver {
       this.emit({ type: 'error', message: detail })
     }
     this.refreshStatus()
+    // Turn boundary: re-resolve the threshold for the next turn (design D2).
+    this.refreshContextThreshold()
   }
 
   private handleSystem(message: Extract<SDKMessage, { type: 'system' }>): void {
@@ -852,6 +897,137 @@ export class ChatSessionDriver {
     }
   }
 
+  /**
+   * Per-request context usage (design D1): an assistant frame carries the
+   * latest request's usage — input plus cache reads/creations plus output —
+   * which is exactly what the next request pays, never the session total.
+   * The latest frame wins; subagent frames are skipped (design D6) so a Task
+   * tool's own requests cannot move the parent's meter. Malformed or
+   * non-positive sums leave the last reading untouched (design D7).
+   */
+  private readContextUsage(message: SDKAssistantMessage): void {
+    if (isSubagentFrame(message)) return
+    const usage = message.message.usage
+    if (!usage) return
+    const used =
+      (usage.input_tokens ?? 0) +
+      (usage.cache_read_input_tokens ?? 0) +
+      (usage.cache_creation_input_tokens ?? 0) +
+      (usage.output_tokens ?? 0)
+    if (!Number.isFinite(used) || used <= 0) return
+    this.contextUsedTokens = used
+    this.contextMeasuredAt = new Date().toISOString()
+    this.publishContextUsage()
+  }
+
+  /**
+   * The contextWindow on every result's modelUsage is the last-resort
+   * threshold (design D2 step 3); the largest seen wins so a mid-session
+   * model switch widens rather than truncates the meter's denominator.
+   */
+  private readModelContextWindow(message: SDKResultMessage): void {
+    const windows = Object.values(message.modelUsage ?? {})
+      .map((usage) => usage?.contextWindow)
+      .filter((window): window is number => Number.isFinite(window) && window > 0)
+    if (windows.length === 0) return
+    this.modelContextWindow = Math.max(...windows)
+    this.publishContextUsage()
+  }
+
+  /**
+   * The compaction threshold (design D2): an observed report threshold wins;
+   * else the profile-configured window, shrunk by the observed autocompact
+   * reserve when one is known; else the largest model contextWindow as an
+   * approximation. A profile window larger than the model's is honored, not
+   * capped — an explicit override is the operator's answer.
+   */
+  private contextThreshold(): number | null {
+    if (this.reportContextThreshold !== null) return this.reportContextThreshold
+    if (this.profileCompactWindow !== null) {
+      const reserve = this.reportContextReserve
+      if (reserve !== null && reserve > 0 && this.profileCompactWindow > reserve) {
+        return this.profileCompactWindow - reserve
+      }
+      return this.profileCompactWindow
+    }
+    return this.modelContextWindow
+  }
+
+  /**
+   * Publish the current reading; a no-op until both a used count and a
+   * threshold exist — never a placeholder (design D7). Identical
+   * re-publications are suppressed; callers re-anchor on every publish.
+   */
+  private publishContextUsage(): void {
+    const used = this.contextUsedTokens
+    const threshold = this.contextThreshold()
+    if (used === null || threshold === null || threshold <= 0) return
+    const reading: ChatContextUsage = {
+      usedTokens: used,
+      thresholdTokens: threshold,
+      percentage: Math.round((used / threshold) * 1000) / 10,
+      at: this.contextMeasuredAt ?? new Date().toISOString(),
+    }
+    const last = this.lastPublishedContextUsage
+    if (
+      last &&
+      last.usedTokens === reading.usedTokens &&
+      last.thresholdTokens === reading.thresholdTokens &&
+      last.at === reading.at
+    ) {
+      return
+    }
+    this.lastPublishedContextUsage = reading
+    this.options.onContextUsage?.(reading)
+  }
+
+  /**
+   * Light control call (the interrupt precedent): ask the CLI for its
+   * context-usage report on attach and at turn boundaries. Best-effort — a
+   * missing method, a throw, or a rejection keeps the last threshold, and a
+   * report that lands after a respawn (or death) is dropped.
+   */
+  private refreshContextThreshold(): void {
+    const query = this.query
+    if (!query || typeof query.getContextUsage !== 'function') return
+    try {
+      void query
+        .getContextUsage({ detail: 'summary' })
+        .then((report) => {
+          if (this.query === query) this.applyContextReport(report)
+        })
+        .catch(() => {
+          // Best-effort: keep the last resolved threshold.
+        })
+    } catch {
+      // Same.
+    }
+  }
+
+  /**
+   * Adopt a context-usage report (design D2 step 1): buffer rows are the
+   * autocompact reserve, and the threshold is the report's own
+   * autoCompactThreshold when present, else the window minus that reserve —
+   * where compaction actually fires.
+   */
+  private applyContextReport(report: SDKControlGetContextUsageResponse): void {
+    const reserve = (report.categories ?? [])
+      .filter((category) => category.kind === 'buffer')
+      .reduce((sum, category) => sum + category.tokens, 0)
+    if (reserve > 0) this.reportContextReserve = reserve
+    const direct = positiveFinite(report.autoCompactThreshold)
+    if (direct !== null) {
+      this.reportContextThreshold = direct
+    } else {
+      const raw = positiveFinite(report.rawMaxTokens)
+      if (raw !== null) {
+        const derived = positiveFinite(raw - (this.reportContextReserve ?? 0))
+        if (derived !== null) this.reportContextThreshold = derived
+      }
+    }
+    this.publishContextUsage()
+  }
+
   private emit(draft: ChatEventDraft): void {
     this.sequence += 1
     const event: ChatEvent = {
@@ -884,6 +1060,19 @@ export class ChatSessionDriver {
 function isSubagentFrame(frame: object): boolean {
   const parent = (frame as { parent_tool_use_id?: unknown }).parent_tool_use_id
   return parent != null
+}
+
+/** A positive finite token count, or null for absent/zero/NaN values. */
+function positiveFinite(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+    ? value
+    : null
+}
+
+/** A positive token count from an env-style string; anything else is unset. */
+function parsePositiveTokens(value: string | undefined): number | null {
+  if (!value) return null
+  return positiveFinite(Number(value))
 }
 
 function validateAnswers(
