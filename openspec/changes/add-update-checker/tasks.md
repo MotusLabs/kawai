@@ -21,7 +21,7 @@
 ## 4. Update install
 
 - [x] 4.1 Discover the install root from a compiled process (`bin/agentboard` + `dist/client` layout) and refuse unexpected layouts with a named error; verify unit tests cover a valid root and a refused partial layout.
-- [ ] 4.2 Download the platform tarball and verify its SHA256 against its entry in the release's published checksum file **before** extracting; verify unit tests cover a matching checksum proceeding to extract, a mismatch refusing before extract, and a missing checksum file or missing entry refusing with no fallback, each leaving the live install untouched.
+- [x] 4.2 Download the platform tarball and verify its SHA256 against its entry in the release's published checksum file **before** extracting; verify unit tests cover a matching checksum proceeding to extract, a mismatch refusing before extract, and a missing checksum file or missing entry refusing with no fallback, each leaving the live install untouched.
 - [ ] 4.3 Swap `bin/agentboard` and `dist/client` all-or-restore after verification — move each live path aside, move its replacement in, and restore every aside copy if any step fails (note `dist/client` is a directory and cannot be renamed over a non-empty directory); verify unit tests cover both paths replaced on success, restore-to-unchanged when the second placement fails, and no writes into the live root before verification passes.
 - [ ] 4.4 When running from source, install the release binary and client bundle under `~/.agentboard/app/` without writing the git tree; verify unit tests cover the install target and that a source checkout's files are unchanged after the action.
 
