@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { Database as SQLiteDatabase } from 'bun:sqlite'
-import type { ChatApprovalPolicy } from '../shared/chat'
+import type { ChatApprovalPolicy, ChatContextUsage } from '../shared/chat'
 import type { AgentType, ChatNameSource, SessionStatus } from '../shared/types'
 import { parseApprovalPolicy } from './chat/approvalPolicy'
 import { isGeneratorSessionName } from './nameGenerator'
@@ -51,6 +51,9 @@ export interface KnownSessionKey {
  * (chat-auto-approve-tools design D5) defaults to manual. `nameSource`
  * (chat-session-naming design D1) records who chose `name`; absent means the
  * name was never attributed and is treated as manual so it cannot be lost.
+ * `contextUsage` (add-chat-context-usage design D4) is the latest
+ * context-usage reading, stored over four columns; null/absent means no
+ * model request has been measured yet.
  */
 export interface ChatSessionRecord {
   sessionId: string
@@ -64,6 +67,7 @@ export interface ChatSessionRecord {
   archivedAt?: string | null
   approvalPolicy?: ChatApprovalPolicy
   nameSource?: ChatNameSource
+  contextUsage?: ChatContextUsage | null
 }
 
 // last_user_message is a UI preview; unbounded values (giant pastes, tool
@@ -191,7 +195,11 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
   last_activity_at TEXT NOT NULL,
   archived_at TEXT,
   approval_policy TEXT NOT NULL DEFAULT 'manual',
-  name_source TEXT NOT NULL DEFAULT 'manual'
+  name_source TEXT NOT NULL DEFAULT 'manual',
+  context_tokens INTEGER,
+  context_threshold INTEGER,
+  context_pct REAL,
+  context_at TEXT
 );
 `
 
@@ -242,6 +250,20 @@ export function initDatabase(options: { path?: string } = {}): SessionDatabase {
   }
   if (!chatColumns.some(column => column.name === 'approval_policy')) {
     db.exec("ALTER TABLE chat_sessions ADD COLUMN approval_policy TEXT NOT NULL DEFAULT 'manual'")
+  }
+  // Context-usage reading (design D4): all four nullable — NULL means the
+  // session has not produced a model request yet (design D7).
+  if (!chatColumns.some(column => column.name === 'context_tokens')) {
+    db.exec('ALTER TABLE chat_sessions ADD COLUMN context_tokens INTEGER')
+  }
+  if (!chatColumns.some(column => column.name === 'context_threshold')) {
+    db.exec('ALTER TABLE chat_sessions ADD COLUMN context_threshold INTEGER')
+  }
+  if (!chatColumns.some(column => column.name === 'context_pct')) {
+    db.exec('ALTER TABLE chat_sessions ADD COLUMN context_pct REAL')
+  }
+  if (!chatColumns.some(column => column.name === 'context_at')) {
+    db.exec('ALTER TABLE chat_sessions ADD COLUMN context_at TEXT')
   }
   migrateLastUserMessageColumn(db)
   migrateChatNameSourceColumn(db)
@@ -599,12 +621,23 @@ export function initDatabase(options: { path?: string } = {}): SessionDatabase {
       const params: Record<string, string | number | null> = {
         $sessionId: sessionId,
       }
+      // The context reading is one value spread over four columns (design
+      // D4); a null patch clears all four together so no partial reading is
+      // ever stored.
+      if (patch.contextUsage !== undefined) {
+        const usage = patch.contextUsage
+        fields.push('context_tokens', 'context_threshold', 'context_pct', 'context_at')
+        params.$context_tokens = usage?.usedTokens ?? null
+        params.$context_threshold = usage?.thresholdTokens ?? null
+        params.$context_pct = usage?.percentage ?? null
+        params.$context_at = usage?.at ?? null
+      }
       for (const [key, value] of Object.entries(patch)) {
-        if (value === undefined) continue
+        if (value === undefined || key === 'contextUsage') continue
         const field = fieldMap[key]
         if (!field) continue
         fields.push(field)
-        params[`$${field}`] = value
+        params[`$${field}`] = value as string | number | null
       }
       if (fields.length === 0) {
         const row = selectChatBySessionId.get({ $sessionId: sessionId }) as
@@ -678,6 +711,21 @@ function mapChatRow(row: Record<string, unknown>): ChatSessionRecord {
         : String(row.archived_at),
     approvalPolicy: parseApprovalPolicy(row.approval_policy),
     nameSource: parseChatNameSource(row.name_source),
+    contextUsage:
+      row.context_tokens === null ||
+      row.context_tokens === undefined ||
+      row.context_threshold === null ||
+      row.context_threshold === undefined
+        ? null
+        : {
+            usedTokens: Number(row.context_tokens),
+            thresholdTokens: Number(row.context_threshold),
+            percentage: Number(row.context_pct ?? 0),
+            at:
+              row.context_at === null || row.context_at === undefined
+                ? ''
+                : String(row.context_at),
+          },
   }
 }
 
