@@ -188,6 +188,11 @@ export function planSystemdSourceAdoption(
       '# release installed under the agentboard application directory.\n' +
       '[Service]\n' +
       `WorkingDirectory=${install.root}\n` +
+      // ExecStart is a list directive: a bare assignment in a drop-in appends
+      // a second entry and systemd refuses the unit ("more than one
+      // ExecStart="). The empty assignment resets the list first; only the
+      // final entry survives. WorkingDirectory is scalar and simply overrides.
+      'ExecStart=\n' +
       `ExecStart=${path.join(install.root, 'bin', 'agentboard')}\n`,
   }
 }

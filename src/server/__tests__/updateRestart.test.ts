@@ -2,6 +2,9 @@
 // each launch mode maps to its own verb, a failed verb surfaces the named
 // error, and bare mode exits after spawning the successor.
 import { describe, expect, test } from 'bun:test'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import {
   detectRestartContext,
   performRestart,
@@ -167,7 +170,12 @@ describe('systemd source adoption', () => {
     )
     expect(adoption.contents).toContain('[Service]')
     expect(adoption.contents).toContain('WorkingDirectory=/home/dev/.agentboard/app')
-    expect(adoption.contents).toContain('ExecStart=/home/dev/.agentboard/app/bin/agentboard')
+    // ExecStart is a list directive: the empty assignment must reset the
+    // unit's own ExecStart immediately before the replacement is set, or
+    // systemd rejects the unit for having two ExecStart entries.
+    expect(adoption.contents).toContain(
+      'ExecStart=\nExecStart=/home/dev/.agentboard/app/bin/agentboard\n',
+    )
   })
 
   test('normalizes a suffix-less pinned unit and honors the pin', () => {
@@ -240,6 +248,42 @@ describe('systemd source adoption', () => {
     expect(files).toEqual([])
     expect(commands).toHaveLength(1)
     expect(commands[0]?.[0]).toBe('/home/dev/.agentboard/app')
+  })
+
+  test('the generated drop-in passes systemd-analyze against a stock unit', async () => {
+    const systemdAnalyze = Bun.which('systemd-analyze')
+    if (systemdAnalyze === null) return // off-Linux: the reset-then-set shape is pinned above
+    // Real install root so verify can check the ExecStart target exists.
+    const workRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'agentboard-adoption-'))
+    try {
+      fs.mkdirSync(path.join(workRoot, 'app', 'bin'), { recursive: true })
+      const binPath = path.join(workRoot, 'app', 'bin', 'agentboard')
+      fs.writeFileSync(binPath, '#!/bin/sh\nexec sleep 9999\n', { mode: 0o755 })
+      const adoption = planSystemdSourceAdoption(systemd, { root: path.join(workRoot, 'app'), compiled: false }, { homeDir: '/home/dev' })
+      const unitDir = path.join(workRoot, 'units')
+      fs.mkdirSync(path.join(unitDir, 'agentboard.service.d'), { recursive: true })
+      // The stock shape from systemd/install.sh, running a source command.
+      fs.writeFileSync(
+        path.join(unitDir, 'agentboard.service'),
+        '[Unit]\nDescription=Agentboard\n\n[Service]\nType=simple\n' +
+          `WorkingDirectory=${workRoot}/kawai\n` +
+          'ExecStart=/usr/local/bin/bun run start\n',
+      )
+      fs.writeFileSync(path.join(unitDir, 'agentboard.service.d', '50-agentboard-update.conf'), adoption.contents)
+      const proc = Bun.spawn([systemdAnalyze, 'verify', path.join(unitDir, 'agentboard.service')], {
+        stdout: 'pipe',
+        stderr: 'pipe',
+      })
+      const [stderr, exitCode] = await Promise.all([
+        new Response(proc.stderr).text(),
+        proc.exited,
+      ])
+      expect(stderr).not.toContain('more than one ExecStart')
+      expect(stderr).not.toContain('Refusing')
+      expect(exitCode).toBe(0)
+    } finally {
+      fs.rmSync(workRoot, { recursive: true, force: true })
+    }
   })
 })
 
