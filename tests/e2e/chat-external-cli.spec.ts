@@ -215,7 +215,7 @@ test('external CLI chat: streaming, approvals, question, interrupt, debug, resum
     await page.getByRole('button', { name: 'Allow', exact: true }).click()
     await expect.poll(() => existsSync(markerAllow), { timeout: 30_000 }).toBe(true)
     await completed()
-    await expect(transcript).toContainText('Tool: Bash')
+    await expect(transcript).toContainText('Bash (Write the allow marker)')
     await expect(transcript).toContainText('Request allowed')
 
     // Approval deny: the tool never runs.

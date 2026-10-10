@@ -50,11 +50,11 @@ describe('chat components', () => {
     ]} />)
     expect(renderer.root.findByType('strong').children).toEqual(['Hello'])
     expect(renderer.root.findAllByType('script')).toHaveLength(0)
-    expect(textOf(renderer.root.findByType('summary'))).toBe('Tool: Read (file.ts)')
+    expect(textOf(renderer.root.findByType('summary'))).toBe('Read (file.ts)')
     renderer.unmount()
   })
 
-  test('tool-call summaries show a project-relative detail that truncates with the full value on hover', () => {
+  test('tool entries show a project-relative handle that truncates with the full value on hover', () => {
     const command = 'bun run lint && bun run typecheck && bun run test --coverage --reporter=junit'
     const renderer = TestRenderer.create(<ChatMessages projectPath="/tmp/project" events={[
       { type: 'tool_call', id: 'r', sequence: 0, at: 'now', turnId: 't', toolCallId: 't1', tool: 'Read',
@@ -65,30 +65,30 @@ describe('chat components', () => {
         input: { command } },
     ]} />)
     const summaries = renderer.root.findAllByType('summary')
-    expect(textOf(summaries[0]!)).toBe('Tool: Read (src/index.ts)')
-    expect(textOf(summaries[1]!)).toBe('Tool: Bash (bun run lint bun run test)')
-    // The full detail rides along on the truncating span for the hover tooltip.
-    const detail = summaries[2]!.findByProps({ title: command })
-    expect(detail.children).toEqual([command])
-    expect(String(detail.props.className).split(' ')).toContain('truncate')
+    expect(textOf(summaries[0]!)).toBe('Read (src/index.ts)')
+    expect(textOf(summaries[1]!)).toBe('Bash (bun run lint bun run test)')
+    // The full handle rides along on the truncating span for the hover tooltip.
+    const handle = summaries[2]!.findByProps({ title: command })
+    expect(handle.children).toEqual([command])
+    expect(String(handle.props.className).split(' ')).toContain('truncate')
     // The JSON body keeps the full input for expanding.
     expect(renderer.root.findAllByType('pre')).toHaveLength(3)
     expect(textOf(renderer.root.findAllByType('pre')[2]!)).toBe(JSON.stringify({ command }, null, 2))
     renderer.unmount()
   })
 
-  test('a tool with no usable detail field renders exactly the plain label', () => {
+  test('a tool with no usable handle field renders exactly the bare tool name', () => {
     const renderer = TestRenderer.create(<ChatMessages projectPath="/tmp/project" events={[
       { type: 'tool_call', id: 'm', sequence: 0, at: 'now', turnId: 't', toolCallId: 't1', tool: 'mcp__db__query',
         input: { sql: 'select 1' } },
     ]} />)
     const summary = renderer.root.findByType('summary')
-    expect(textOf(summary)).toBe('Tool: mcp__db__query')
+    expect(textOf(summary)).toBe('mcp__db__query')
     expect(summary.findAll(node => node.props.title != null)).toHaveLength(0)
     renderer.unmount()
   })
 
-  test('tool-call summaries show formatted details', () => {
+  test('tool entries show formatted handles', () => {
     const renderer = TestRenderer.create(<ChatMessages projectPath="/tmp/project" events={[
       { type: 'tool_call', id: 'e', sequence: 0, at: 'now', turnId: 't', toolCallId: 't1', tool: 'Edit',
         input: { file_path: '/tmp/project/src/a.ts', old_string: 'a\nb\nc', new_string: '1\n2\n3\n4\n5' } },
@@ -96,30 +96,64 @@ describe('chat components', () => {
         input: { taskId: '2', status: 'completed' } },
     ]} />)
     const summaries = renderer.root.findAllByType('summary')
-    expect(textOf(summaries[0]!)).toBe('Tool: Edit (src/a.ts +5 −3)')
-    expect(textOf(summaries[1]!)).toBe('Tool: TaskUpdate (Task 2 → completed)')
+    expect(textOf(summaries[0]!)).toBe('Edit (src/a.ts)')
+    expect(textOf(summaries[1]!)).toBe('TaskUpdate (Task 2 → completed)')
     renderer.unmount()
   })
 
-  test('tool-result summaries show the first output line as a hint', () => {
+  test('a tool call and its later result render as one entry expanding to input then output', () => {
+    const renderer = TestRenderer.create(<ChatMessages projectPath="/tmp/project" events={[
+      { type: 'tool_call', id: 'c', sequence: 0, at: 'now', turnId: 't', toolCallId: 't1', tool: 'Read',
+        input: { file_path: '/tmp/project/src/index.ts' } },
+      { type: 'tool_result', id: 'r', sequence: 1, at: 'now', turnId: 't', toolCallId: 't1',
+        output: 'file contents', isError: false },
+    ]} />)
+    expect(renderer.root.findAllByType('details')).toHaveLength(1)
+    expect(renderer.root.findAllByType('summary')).toHaveLength(1)
+    expect(textOf(renderer.root.findByType('summary'))).toBe('Read (src/index.ts)')
+    const blocks = renderer.root.findAllByType('pre')
+    expect(blocks).toHaveLength(2)
+    expect(textOf(blocks[0]!)).toBe(JSON.stringify({ file_path: '/tmp/project/src/index.ts' }, null, 2))
+    expect(textOf(blocks[1]!)).toBe('file contents')
+    renderer.unmount()
+  })
+
+  test('a tool result without a matching call renders its own entry expanding to the output alone', () => {
     const renderer = TestRenderer.create(<ChatMessages events={[
-      { type: 'tool_result', id: 'r', sequence: 0, at: 'now', turnId: 't', toolCallId: 't1',
-        output: '\n  Task #1 created successfully: Run 6.3\nlater lines', isError: false },
-      { type: 'tool_result', id: 'f', sequence: 1, at: 'now', turnId: 't', toolCallId: 't2',
-        output: 'Command failed: bun test\n    at test.ts:1:1', isError: true },
-      { type: 'tool_result', id: 'e', sequence: 2, at: 'now', turnId: 't', toolCallId: 't3',
-        output: ' \n', isError: false },
+      { type: 'tool_result', id: 'r', sequence: 0, at: 'now', turnId: 't', toolCallId: 'missing',
+        output: 'orphan output', isError: false },
+    ]} />)
+    expect(renderer.root.findAllByType('details')).toHaveLength(1)
+    expect(textOf(renderer.root.findByType('summary'))).toBe('Tool result')
+    const blocks = renderer.root.findAllByType('pre')
+    expect(blocks).toHaveLength(1)
+    expect(textOf(blocks[0]!)).toBe('orphan output')
+    renderer.unmount()
+  })
+
+  test('a failed tool use is marked ✗ outside the truncating handle; successes carry no mark', () => {
+    const longHandle = 'a'.repeat(120)
+    const renderer = TestRenderer.create(<ChatMessages projectPath="/tmp/project" events={[
+      { type: 'tool_call', id: 'c1', sequence: 0, at: 'now', turnId: 't', toolCallId: 't1', tool: 'Bash',
+        input: { command: longHandle } },
+      { type: 'tool_result', id: 'r1', sequence: 1, at: 'now', turnId: 't', toolCallId: 't1',
+        output: 'Command failed: bun test', isError: true },
+      { type: 'tool_call', id: 'c2', sequence: 2, at: 'now', turnId: 't', toolCallId: 't2', tool: 'Bash',
+        input: { command: 'bun test' } },
+      { type: 'tool_result', id: 'r2', sequence: 3, at: 'now', turnId: 't', toolCallId: 't2',
+        output: 'all good', isError: false },
     ]} />)
     const summaries = renderer.root.findAllByType('summary')
-    expect(textOf(summaries[0]!)).toBe('Tool result (Task #1 created successfully: Run 6.3)')
-    expect(textOf(summaries[1]!)).toBe('Tool failed (Command failed: bun test)')
-    // The full hint rides along on the truncating span for the hover tooltip.
-    const hint = summaries[0]!.findByProps({ title: 'Task #1 created successfully: Run 6.3' })
-    expect(String(hint.props.className).split(' ')).toContain('truncate')
-    // No non-blank line keeps the plain label, and the full output still expands.
-    expect(textOf(summaries[2]!)).toBe('Tool result')
-    expect(summaries[2]!.findAll(node => node.props.title != null)).toHaveLength(0)
-    expect(textOf(renderer.root.findAllByType('pre')[1]!)).toBe('Command failed: bun test\n    at test.ts:1:1')
+    expect(summaries[0]!.findAllByProps({ 'data-testid': 'tool-failed-mark' })).toHaveLength(1)
+    expect(textOf(summaries[0]!.findByProps({ 'data-testid': 'tool-failed-mark' }))).toBe('✗')
+    // The mark is a sibling of the truncating span, not inside it, so a long
+    // handle cannot ellipsize it away.
+    const handle = summaries[0]!.findByProps({ title: longHandle })
+    expect(handle.children).toEqual([longHandle])
+    expect(handle.findAllByProps({ 'data-testid': 'tool-failed-mark' })).toHaveLength(0)
+    expect(String(handle.props.className).split(' ')).toContain('truncate')
+    expect(summaries[1]!.findAllByProps({ 'data-testid': 'tool-failed-mark' })).toHaveLength(0)
+    expect(renderer.root.findAllByType('summary')).toHaveLength(2)
     renderer.unmount()
   })
 
@@ -921,8 +955,8 @@ describe('chat font size', () => {
     const events = [
       { type: 'user_message', id: 'u', sequence: 0, at: 'now', text: 'hi' },
       { type: 'assistant_text', id: 'a', sequence: 1, at: 'now', text: '# Title\n\nbody' },
-      { type: 'tool_call', id: 't', sequence: 2, at: 'now', tool: 'Read', input: {} },
-      { type: 'tool_result', id: 'r', sequence: 3, at: 'now', output: 'ok', isError: false },
+      { type: 'tool_call', id: 't', sequence: 2, at: 'now', turnId: 'turn', toolCallId: 'tc', tool: 'Read', input: {} },
+      { type: 'tool_result', id: 'r', sequence: 3, at: 'now', turnId: 'turn', toolCallId: 'tc', output: 'ok', isError: false },
       { type: 'notice', id: 'n', sequence: 4, at: 'now', text: 'note' },
       { type: 'turn_completed', id: 'c', sequence: 5, at: 'now', subtype: 'success' },
     ] as unknown as ChatEvent[]
