@@ -71,9 +71,10 @@ export interface ParsedTranscript {
   /** Lines that were not valid JSON (truncated tail, corruption). */
   invalidLines: number
   /**
-   * The latest title row in the file, or null when there is none. Title rows
-   * are state, not chronology (rewritten at turn boundaries), so only the
-   * last one matters.
+   * The transcript's current title, or null when there is none. Title rows
+   * are state re-emitted at turn boundaries, so among generated titles the
+   * last one is current (D2). A `custom-title` is user-set and terminal
+   * (D1/D7), so it is never displaced by a later `ai-title`.
    */
   title: TranscriptTitle | null
 }
@@ -171,9 +172,11 @@ export function parseTranscriptContent(content: string): ParsedTranscript {
     if (!line) continue
     const lineTitle = parseTranscriptTitleLine(line)
     if (lineTitle) {
-      // State rows rewritten at turn boundaries: the last one in the file is
-      // the current title.
-      title = lineTitle
+      // Generated titles: the latest is current (D2). A user-set title is
+      // terminal (D1/D7), so it holds until another user-set one replaces it.
+      if (lineTitle.source === 'manual' || title?.source !== 'manual') {
+        title = lineTitle
+      }
       continue
     }
     let record: Record<string, unknown>

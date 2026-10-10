@@ -490,22 +490,33 @@ describe('transcript title rows', () => {
     expect(parsed.invalidLines).toBe(0)
   })
 
-  test('ordering: the last title row wins, whatever its type', () => {
-    const content = [
+  test('ordering: a user-set title sticks, a generated one follows the latest', () => {
+    // D1/D7: a `custom-title` is user-set and terminal, so a later generated
+    // title does not displace it — whatever the arrival order.
+    const customFirst = [
       JSON.stringify({ type: 'custom-title', customTitle: 'user title', sessionId: 's' }),
       JSON.stringify({ type: 'ai-title', aiTitle: 'later generated', sessionId: 's' }),
     ].join('\n')
-    expect(parseTranscriptContent(content).title).toEqual({
-      title: 'later generated',
-      source: 'auto',
-    })
-    const reversed = [
-      JSON.stringify({ type: 'ai-title', aiTitle: 'later generated', sessionId: 's' }),
-      JSON.stringify({ type: 'custom-title', customTitle: 'user title', sessionId: 's' }),
-    ].join('\n')
-    expect(parseTranscriptContent(reversed).title).toEqual({
+    expect(parseTranscriptContent(customFirst).title).toEqual({
       title: 'user title',
       source: 'manual',
+    })
+    const customLast = [
+      JSON.stringify({ type: 'ai-title', aiTitle: 'later generated', sessionId: 's' }),
+      JSON.stringify({ type: 'custom-title', customTitle: 'user title', sessionId: 's' }),
+    ].join('\n')
+    expect(parseTranscriptContent(customLast).title).toEqual({
+      title: 'user title',
+      source: 'manual',
+    })
+    // D2: while unclaimed, the latest generated title is current.
+    const generated = [
+      JSON.stringify({ type: 'ai-title', aiTitle: 'early', sessionId: 's' }),
+      JSON.stringify({ type: 'ai-title', aiTitle: 'later generated', sessionId: 's' }),
+    ].join('\n')
+    expect(parseTranscriptContent(generated).title).toEqual({
+      title: 'later generated',
+      source: 'auto',
     })
   })
 
