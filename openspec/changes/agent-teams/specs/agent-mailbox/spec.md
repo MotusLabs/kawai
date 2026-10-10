@@ -151,7 +151,7 @@ The UI SHALL show, per team, queued, scheduled, and dead-lettered messages with 
 - **THEN** it is queued again with its thread's hop count reset
 
 ### Requirement: Queued mail survives restart
-Queued, scheduled, and dead-lettered messages, and claims of messages not yet delivered, SHALL persist across server restart. A message claimed but not delivered before a restart SHALL be queued again.
+Queued, scheduled, and dead-lettered messages, and claims of messages not yet delivered, SHALL persist across server restart.
 
 #### Scenario: Restart with queued mail
 - **WHEN** the server restarts with messages queued for a group
@@ -160,3 +160,14 @@ Queued, scheduled, and dead-lettered messages, and claims of messages not yet de
 #### Scenario: Recipient killed before delivery
 - **WHEN** a session with queued direct messages is killed
 - **THEN** those messages are dead-lettered
+
+### Requirement: Claimed mail is reconciled on restart
+Every delivered envelope SHALL carry its message id as a stable delivery identity, recorded in the recipient's transcript when delivery happens. On restart, a claimed message SHALL be reconciled against the claiming recipient's transcript by that identity: completed as delivered when the record is found, and returned to the queue when it is not.
+
+#### Scenario: Crash after delivery, before completion
+- **WHEN** the server crashes after a claimed message's turn has been recorded in the recipient's transcript but before the message row is marked delivered
+- **THEN** on restart the message is reconciled from the transcript, marked delivered, and never delivered to any member again
+
+#### Scenario: Crash after claim, before delivery
+- **WHEN** the server crashes after a message is claimed but before its turn reaches the recipient's transcript
+- **THEN** on restart the message is returned to the queue and is later delivered exactly once under the normal delivery rules

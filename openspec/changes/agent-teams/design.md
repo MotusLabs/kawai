@@ -27,7 +27,10 @@ A delivered message becomes an `SDKUserMessage` with `origin: { kind: 'peer', fr
 The manager notifies the dispatcher on every status change. "Idle" = driver status `waiting`, no pending requests, no live background workers, not archived, not killed, project directory exists. The dispatcher re-checks idleness inside the claim transaction.
 
 ### D5. Atomic claim in SQLite
-`team_messages(id, team_id, to_kind, to_id, from_session, from_group, origin_path, priority, tags, thread_id, in_reply_to, hop, body, state, claimed_by, claimed_at, deliver_at, created_at, delivered_at)`. Claim = `UPDATE ... SET state='claimed', claimed_by=? WHERE id=? AND state='queued'` in a transaction with the idleness re-check; the row count decides the winner. Delivered rows stay for thread lookup. A startup sweep returns `claimed` rows to `queued`.
+`team_messages(id, team_id, to_kind, to_id, from_session, from_group, origin_path, priority, tags, thread_id, in_reply_to, hop, body, state, claimed_by, claimed_at, deliver_at, created_at, delivered_at)`. Claim = `UPDATE ... SET state='claimed', claimed_by=? WHERE id=? AND state='queued'` in a transaction with the idleness re-check; the row count decides the winner. Delivered rows stay for thread lookup.
+
+### D10. Crash-safe delivery reconciliation
+Claiming is atomic, but pushing a peer turn into Claude Code is not: a crash between the push and the `delivered` write leaves a claimed row whose turn may already have run tools, so a startup sweep that blindly requeues claimed rows can deliver one message twice. Instead, every peer envelope (D3) and its `peer_message` event carry the message id — the stable delivery identity — and startup reconciles: for each `claimed` row, the recipient's persisted record (the session's kawai chat events, then its Claude Code transcript JSONL — the same sources replay and resume already use) is searched for that id. Found → delivery happened; the row is completed as `delivered` (reconciled) and never sent again. Not found → the push never reached the agent (the pushed input died with the process); the row returns to `queued`, where the existing rules apply unchanged, including dead-lettering direct mail whose recipient was killed. *Alternative:* relax the exactly-once guarantee and require idempotent retry handling in every recipient — rejected: it taxes all agents for a rare crash window, and the transcript lookup reuses machinery resume already needs.
 
 ### D6. Team identity
 `team_id` = realpath of `git rev-parse --git-common-dir` for the session's project directory, cached per directory; non-repo directories use their own realpath. Group files resolve from the main working tree (parent of the common dir) layered over `~/.kawai/groups/`.
@@ -47,6 +50,7 @@ For an archived sender the dispatcher calls the existing restore path, then deli
 - [Restore-on-reply silently revives sessions and spends tokens] → the restored session's transcript shows the reply as the reason; hop limits bound loops.
 - [Agents abuse urgent] → urgent group mail never interrupts; urgent direct interrupts are visible in the transcript with the sender.
 - [Group prompt files are agent-writable] → prompts apply only at spawn; this is documented. Group files cannot carry executables or credentials.
+- [Crash between turn push and the `delivered` write] → D10 reconciliation; startup cost is bounded by the number of claimed rows (zero in normal operation).
 - [SDK replacement] → D2/D3 depend on SDK features; `replace-claude-sdk-with-cli` must provide in-process tools and peer origin equivalents.
 
 ## Migration Plan
