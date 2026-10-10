@@ -5,7 +5,9 @@
 // (ENOTEMPTY). Correctness comes from ordering instead — each live path is
 // moved aside before its replacement is moved in, and any failure restores
 // every already-swapped path from its aside copy, leaving the install exactly
-// as it was.
+// as it was. Fresh installs (source runs) have no live paths to move aside;
+// their placements are recorded too and restored by removal, so a failed
+// fresh install leaves no partial binary behind.
 
 import fs from 'node:fs'
 import path from 'node:path'
@@ -63,14 +65,16 @@ export interface SwapInstallPathsOptions {
  */
 export function swapInstallPaths(options: SwapInstallPathsOptions): void {
   const { root, stagedRoot } = options
-  const swapped: Array<{ live: string; aside: string }> = []
+  // `aside` is null for a fresh placement (nothing was moved aside): its
+  // rollback is removal, restoring "no install" rather than an old file.
+  const swapped: Array<{ live: string; aside: string | null }> = []
 
   const restore = (cause: unknown): UpdateError => {
     const problems: string[] = []
     for (const { live, aside } of swapped.reverse()) {
       try {
         fs.rmSync(live, { recursive: true, force: true })
-        fs.renameSync(aside, live)
+        if (aside !== null) fs.renameSync(aside, live)
       } catch (restoreCause) {
         problems.push(`${live}: ${restoreCause instanceof Error ? restoreCause.message : String(restoreCause)}`)
       }
@@ -103,7 +107,7 @@ export function swapInstallPaths(options: SwapInstallPathsOptions): void {
         if (movedAside) fs.renameSync(aside, live)
         throw restore(cause)
       }
-      if (movedAside) swapped.push({ live, aside })
+      swapped.push({ live, aside: movedAside ? aside : null })
     }
   } catch (cause) {
     if (cause instanceof UpdateError) throw cause
@@ -112,6 +116,6 @@ export function swapInstallPaths(options: SwapInstallPathsOptions): void {
 
   // Success: the aside copies are no longer needed.
   for (const { aside } of swapped) {
-    fs.rmSync(aside, { recursive: true, force: true })
+    if (aside !== null) fs.rmSync(aside, { recursive: true, force: true })
   }
 }

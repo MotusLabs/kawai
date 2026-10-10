@@ -97,6 +97,22 @@ describe('swapInstallPaths', () => {
     expect(after['bin/agentboard']).toContain('new')
     expect(after['dist/client/index.html']).toContain('new')
   })
+
+  test('a failed fresh install leaves no partial binary behind', () => {
+    // Partial staged release: bin present, dist/client missing — the second
+    // placement fails after the fresh binary was already placed. With no
+    // aside copies to restore, rollback must remove what was placed.
+    fs.mkdirSync(path.join(stagedRoot, 'bin'), { recursive: true })
+    fs.writeFileSync(path.join(stagedRoot, 'bin', 'agentboard'), '#!/bin/sh\n# new\n', { mode: 0o755 })
+    let refusal: unknown
+    try {
+      swapInstallPaths({ root, stagedRoot })
+    } catch (cause) {
+      refusal = cause
+    }
+    expect(String((refusal as Error).message)).toContain('ERR_UPDATE_SWAP_FAILED')
+    expect(snapshot(root)).toEqual({})
+  })
 })
 
 describe('extractTarball', () => {
