@@ -281,6 +281,14 @@ export type ServerMessage =
   // every connection subscribed to at least one session of the profile when a
   // new report is captured. Additive and ephemeral like chat-activity.
   | { type: 'chat-usage'; profileId: string; report: ChatUsageReport | null }
+  // Latest context-usage reading for a chat session (context meter design D5):
+  // coalesced like chat-activity — only the latest value survives until the
+  // flush — additive, never sequenced or replayed.
+  | {
+      type: 'chat-context-usage'
+      sessionId: string
+      usage: ChatContextUsage
+    }
   // Debug-view protocol frames, sent only to clients that opened the view.
   // `page: true` marks a reply to chat-debug-open/chat-debug-page (carrying
   // `hasOlder`); otherwise the message is a live batch.
