@@ -61,7 +61,7 @@ test('empty project path refuses create with inline validation', async ({ page }
   const dialog = await openChatCreateDialog(page)
 
   // Force the empty state regardless of any prefilled default.
-  await dialog.locator('input').first().fill('')
+  await dialog.getByLabel('Project Path').fill('')
   await dialog.getByRole('button', { name: 'Create', exact: true }).click()
 
   await expect(dialog.getByTestId('project-path-error')).toHaveText(
@@ -72,7 +72,7 @@ test('empty project path refuses create with inline validation', async ({ page }
   expect(creations).toEqual([])
 
   // Typing clears the refusal so the user can proceed.
-  await dialog.locator('input').first().fill('/tmp')
+  await dialog.getByLabel('Project Path').fill('/tmp')
   await expect(dialog.getByTestId('project-path-error')).toHaveCount(0)
 })
 
@@ -80,7 +80,7 @@ test('a create the server refuses surfaces the reason', async ({ page }) => {
   const { creations, errors } = trackCreations(page)
   const dialog = await openChatCreateDialog(page)
 
-  await dialog.locator('input').first().fill(process.cwd())
+  await dialog.getByLabel('Project Path').fill(process.cwd())
   await dialog.getByPlaceholder('auto-generated').fill('Refused chat')
   await expect(dialog.getByPlaceholder('auto-generated')).toHaveValue('Refused chat')
   await dialog.getByRole('button', { name: 'Create', exact: true }).click()

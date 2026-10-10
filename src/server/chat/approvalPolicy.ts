@@ -10,10 +10,8 @@ import { ASK_USER_QUESTION_TOOL } from './contentBlocks'
 /** What canUseTool should do with a tool use under the current policy. */
 export type ApprovalDecision = 'ask' | 'allow'
 
-/** Read a stored policy value; anything absent or unknown reads as manual. */
-export function parseApprovalPolicy(value: unknown): ChatApprovalPolicy {
-  return value === 'auto' ? 'auto' : 'manual'
-}
+/** Shared with the client's settings store so both sides sanitize alike. */
+export { parseApprovalPolicy } from '../../shared/chat'
 
 /** Ask under manual; allow everything under auto except agent questions. */
 export function decideApproval(

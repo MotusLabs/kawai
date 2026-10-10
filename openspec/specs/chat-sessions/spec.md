@@ -93,14 +93,19 @@ SHALL take effect.
 
 ### Requirement: Chat sessions have a per-session approval policy
 Each chat session SHALL have an approval policy of either manual or auto.
-Every new chat session SHALL start with the manual policy, and there SHALL be
-no global or per-profile default. The policy SHALL be stored with the session
-and SHALL be kept across server restarts, conversation resume, archive, and
-restore. Sessions created before this feature SHALL behave as manual.
+A new chat session SHALL start with the policy supplied at its creation, or
+manual when none is supplied. A session's profile SHALL NOT choose its policy.
+The policy SHALL be stored with the session and SHALL be kept across server
+restarts, conversation resume, archive, and restore. Sessions created before
+this feature SHALL behave as manual.
 
 #### Scenario: New chat starts manual
-- **WHEN** a user creates a chat session with any profile
+- **WHEN** a user creates a chat session with any profile and no approval policy supplied
 - **THEN** the session's approval policy is manual and tool approvals show approval cards
+
+#### Scenario: New chat starts with the supplied policy
+- **WHEN** a user creates a chat session with the auto policy
+- **THEN** the session's approval policy is auto and its tool uses are granted without approval cards
 
 #### Scenario: Policy survives restart
 - **WHEN** a chat session's policy is auto and the server restarts
@@ -113,6 +118,29 @@ restore. Sessions created before this feature SHALL behave as manual.
 #### Scenario: Legacy session defaults to manual
 - **WHEN** the server loads a chat session stored before approval policies existed
 - **THEN** the session's approval policy is manual
+
+### Requirement: Users configure the default approval policy for new chat sessions
+The system SHALL let the user choose the approval policy new chat sessions
+start with, from Settings, and SHALL apply it at creation unless the user
+overrides it in the New Session dialog. A chat created by `/clear`, `/reset`,
+or `/new` instead carries over the previous chat's policy. The stored default
+SHALL NOT change the policy of any existing session.
+
+#### Scenario: Settings default seeds new chats
+- **WHEN** the user sets the default approval policy to auto and then creates a chat session
+- **THEN** the session starts with the auto policy and its tool uses are granted without approval cards
+
+#### Scenario: Creation dialog overrides the default
+- **WHEN** the default approval policy is auto and the user creates a chat session with Auto-approve unchecked
+- **THEN** the session starts with the manual policy
+
+#### Scenario: The default does not touch existing sessions
+- **WHEN** the user changes the default approval policy while chat sessions exist
+- **THEN** every existing session keeps the policy it already had
+
+#### Scenario: Unspecified policy creates a manual session
+- **WHEN** a client creates a chat session without naming an approval policy
+- **THEN** the session starts with the manual policy regardless of the stored default
 
 ### Requirement: Auto policy grants tool approvals without a card
 While a chat session's policy is auto, the system SHALL grant each tool
@@ -759,11 +787,15 @@ Replayed chat history SHALL show a slash-command turn as the command and argumen
 - **THEN** the replayed user turn shows `/openspec-explore some idea` and no command markup
 
 ### Requirement: Clearing a chat starts a new chat and archives the old one
-Sending `/clear`, `/reset`, or `/new`, optionally followed by a name, SHALL create a new chat session in the same project directory with the same profile, named with the given name when present, select it, and then archive the previous chat session. The command SHALL NOT be sent to the agent. If the new session cannot be created, the previous chat session SHALL remain unchanged and the user SHALL receive the creation error.
+Sending `/clear`, `/reset`, or `/new`, optionally followed by a name, SHALL create a new chat session in the same project directory, with the same profile and the same approval policy, named with the given name when present, select it, and then archive the previous chat session. The command SHALL NOT be sent to the agent. If the new session cannot be created, the previous chat session SHALL remain unchanged and the user SHALL receive the creation error.
 
 #### Scenario: Clear a chat
 - **WHEN** the user sends `/clear` in a chat session
 - **THEN** a new chat session with the same project directory and profile is created and selected, and the previous session is archived with its conversation intact
+
+#### Scenario: The approval policy carries over
+- **WHEN** the user sends `/new` in a chat session whose approval policy is auto
+- **THEN** the new chat session starts with the auto policy and grants tool uses without approval cards
 
 #### Scenario: New chat with a name
 - **WHEN** the user sends `/new release notes`

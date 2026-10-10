@@ -48,6 +48,7 @@ beforeEach(() => {
     showProjectName: true,
     showLastUserMessage: true,
     showSessionIdPrefix: false,
+    defaultApprovalPolicy: 'manual',
     hostFilters: [],
   })
   useThemeStore.setState({ theme: 'dark' })
@@ -66,6 +67,7 @@ afterEach(() => {
     showProjectName: true,
     showLastUserMessage: true,
     showSessionIdPrefix: false,
+    defaultApprovalPolicy: 'manual',
     hostFilters: [],
   })
   useThemeStore.setState({ theme: 'dark' })
@@ -325,6 +327,175 @@ describe('SettingsModal', () => {
     const stepper = renderer.root.findByProps({ 'aria-label': 'Increase Chat Font Size' }).parent
     const value = stepper?.findAll(node => node.type === 'span' && String(node.props.className).includes('w-6'))[0]
     expect(value?.props.children).toBe(15)
+    act(() => { renderer.unmount() })
+  })
+
+  test('tab panels are paired with their tabs and sit in strip order', () => {
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => {
+      renderer = TestRenderer.create(<SettingsModal isOpen onClose={() => {}} />)
+    })
+
+    const tabs = renderer.root.findAllByType('button').filter(button => button.props.role === 'tab')
+    const panels = renderer.root.findAllByProps({ role: 'tabpanel' })
+    expect(tabs.map(tab => tab.props.id)).toEqual([
+      'settings-tab-sessions', 'settings-tab-chat', 'settings-tab-terminal', 'settings-tab-general',
+    ])
+    // Panels follow the same order, so document-order pairing matches too.
+    expect(panels.map(panel => panel.props.id)).toEqual([
+      'settings-panel-sessions', 'settings-panel-chat', 'settings-panel-terminal', 'settings-panel-general',
+    ])
+    for (const tab of tabs) {
+      expect(tab.props['aria-controls']).toBe(`settings-panel-${String(tab.props.id).replace('settings-tab-', '')}`)
+    }
+    for (const panel of panels) {
+      expect(panel.props['aria-labelledby']).toBe(`settings-tab-${String(panel.props.id).replace('settings-panel-', '')}`)
+    }
+
+    act(() => { renderer.unmount() })
+  })
+
+  test('arrow keys move the tab selection and only the active tab is tabbable', () => {
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => {
+      renderer = TestRenderer.create(<SettingsModal isOpen onClose={() => {}} />)
+    })
+    const tablist = renderer.root.findByProps({ role: 'tablist' })
+    const tabs = () => renderer.root.findAllByType('button').filter(button => button.props.role === 'tab')
+    const selected = () => tabs().findIndex(tab => tab.props['aria-selected'] === true)
+    const pressed: number[] = []
+    // react-test-renderer has no DOM; stand in for querySelectorAll(...)[n].focus().
+    const currentTarget = {
+      querySelectorAll: () => [{ focus: () => pressed.push(0) }, { focus: () => pressed.push(1) }, { focus: () => pressed.push(2) }, { focus: () => pressed.push(3) }],
+    }
+    const key = (value: string) =>
+      act(() => { tablist.props.onKeyDown({ key: value, preventDefault: () => {}, currentTarget }) })
+
+    expect(selected()).toBe(0)
+    expect(tabs().map(tab => tab.props.tabIndex)).toEqual([0, -1, -1, -1])
+
+    key('ArrowRight')
+    expect(selected()).toBe(1)
+    expect(tabs().map(tab => tab.props.tabIndex)).toEqual([-1, 0, -1, -1])
+    expect(tabs()[1]!.props['aria-selected']).toBe(true)
+
+    key('ArrowLeft')
+    expect(selected()).toBe(0)
+
+    key('End')
+    expect(selected()).toBe(3)
+    key('Home')
+    expect(selected()).toBe(0)
+
+    // Wraps at both ends.
+    key('ArrowLeft')
+    expect(selected()).toBe(3)
+    key('ArrowRight')
+    expect(selected()).toBe(0)
+
+    // Every move refocused the newly selected tab.
+    expect(pressed).toEqual([1, 0, 3, 0, 3, 0])
+    act(() => { renderer.unmount() })
+  })
+
+  test('approval policy commits on Save and reverts the other segment', () => {
+    useSettingsStore.setState({ defaultApprovalPolicy: 'auto' })
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => {
+      renderer = TestRenderer.create(<SettingsModal isOpen onClose={() => {}} />)
+    })
+
+    // The Sessions tab also has a "Manual" sort button, so scope to the
+    // approval section of the Chat tab.
+    const approvalButtons = () => {
+      const section = renderer.root.findByProps({ children: 'New Chat Sessions' }).parent
+      if (!section) throw new Error('Expected approval section')
+      return section.findAllByType('button')
+    }
+
+    expect(approvalButtons().map((button) => button.props.children)).toEqual(['Manual', 'Auto-approve'])
+    expect(approvalButtons()[1].props.className).toContain('btn-primary')
+
+    act(() => { approvalButtons()[0].props.onClick() })
+    expect(approvalButtons()[0].props.className).toContain('btn-primary')
+    expect(approvalButtons()[1].props.className).not.toContain('btn-primary')
+
+    act(() => {
+      renderer.root.findByType('form').props.onSubmit({ preventDefault: () => {} })
+    })
+    expect(useSettingsStore.getState().defaultApprovalPolicy).toBe('manual')
+
+    act(() => { renderer.unmount() })
+  })
+
+  test('closing without saving discards the approval policy draft', () => {
+    useSettingsStore.setState({ defaultApprovalPolicy: 'manual' })
+    const onClose = () => {}
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => {
+      renderer = TestRenderer.create(<SettingsModal isOpen onClose={onClose} />)
+    })
+
+    const approvalButtons = () => {
+      const section = renderer.root.findByProps({ children: 'New Chat Sessions' }).parent
+      if (!section) throw new Error('Expected approval section')
+      return section.findAllByType('button')
+    }
+
+    act(() => { approvalButtons()[1].props.onClick() })
+
+    const cancel = renderer.root.findAllByType('button').find(b => b.props.children === 'Cancel' && b.props.className === 'btn')
+    if (!cancel) throw new Error('Expected cancel button')
+    act(() => { cancel.props.onClick() })
+    expect(useSettingsStore.getState().defaultApprovalPolicy).toBe('manual')
+
+    // Reopening starts from the stored default again, not the discarded draft.
+    act(() => { renderer.update(<SettingsModal isOpen={false} onClose={onClose} />) })
+    act(() => { renderer.update(<SettingsModal isOpen onClose={onClose} />) })
+    expect(approvalButtons()[1].props.className).not.toContain('btn-primary')
+    expect(approvalButtons()[0].props.className).toContain('btn-primary')
+    act(() => { renderer.unmount() })
+  })
+
+  test('approval policy radiogroup exposes checked state and arrow-key selection', () => {
+    useSettingsStore.setState({ defaultApprovalPolicy: 'manual' })
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => {
+      renderer = TestRenderer.create(<SettingsModal isOpen onClose={() => {}} />)
+    })
+
+    const group = renderer.root.findByProps({ 'data-testid': 'default-approval-policy-select' })
+    expect(group.props.role).toBe('radiogroup')
+    const segments = () => group.findAllByType('button')
+    expect(segments().map(button => button.props['aria-checked'])).toEqual([true, false])
+    expect(segments().map(button => button.props.tabIndex)).toEqual([0, -1])
+
+    const focused: number[] = []
+    const currentTarget = {
+      parentElement: {
+        querySelectorAll: () => [{ focus: () => focused.push(0) }, { focus: () => focused.push(1) }],
+      },
+    }
+    // Each segment's handler closes over its own index, and focus follows the
+    // selection — so the key lands on whichever segment is currently selected.
+    const key = (value: string) => {
+      const activeIndex = segments().findIndex(button => button.props.tabIndex === 0)
+      act(() => {
+        segments()[activeIndex]!.props.onKeyDown({ key: value, preventDefault: () => {}, currentTarget })
+      })
+    }
+
+    key('ArrowRight')
+    expect(segments().map(button => button.props['aria-checked'])).toEqual([false, true])
+    expect(segments().map(button => button.props.tabIndex)).toEqual([-1, 0])
+    expect(focused).toEqual([1])
+
+    // Wraps back around, and an unmatched key leaves the draft alone.
+    key('ArrowRight')
+    expect(segments().map(button => button.props['aria-checked'])).toEqual([true, false])
+    key('Enter')
+    expect(segments().map(button => button.props['aria-checked'])).toEqual([true, false])
+
     act(() => { renderer.unmount() })
   })
 
