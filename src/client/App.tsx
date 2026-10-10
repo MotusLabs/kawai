@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { AgentSession, AutoStartAgent, ServerMessage, Session, SessionKillSource, UpdateState } from '@shared/types'
+import type { AgentSession, AutoStartAgent, ChatApprovalPolicy, ServerMessage, Session, SessionKillSource, UpdateState } from '@shared/types'
 import { FALLBACK_ARCHIVE_SECTION_KEY, type WorkspaceBranch } from '@shared/workspace'
 import Header from './components/Header'
 import SessionList from './components/SessionList'
@@ -1151,9 +1151,10 @@ export default function App() {
     autoStartChange?: string,
     autoStartAgent?: AutoStartAgent,
     kind?: 'terminal' | 'chat',
-    claudeProfileId?: string
+    claudeProfileId?: string,
+    approvalPolicy?: ChatApprovalPolicy
   ) => {
-    sendMessage({ type: 'session-create', projectPath, name, command, host, autoStartChange, autoStartAgent, kind, claudeProfileId })
+    sendMessage({ type: 'session-create', projectPath, name, command, host, autoStartChange, autoStartAgent, kind, claudeProfileId, approvalPolicy })
     if (!host) setLastProjectPath(projectPath)
   }
 

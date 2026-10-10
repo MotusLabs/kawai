@@ -315,6 +315,10 @@ export type ClientMessage =
       // 'chat' creates an SDK-driven chat session instead of a window.
       kind?: SessionKind
       claudeProfileId?: string
+      // Chat sessions only: starting approval policy (reorg-settings-default-
+      // approval design D3). Absent = manual, so older clients and terminal
+      // sessions are unchanged.
+      approvalPolicy?: ChatApprovalPolicy
       // OpenSpec change context: with a selected agent, the server composes
       // the mapped apply command into the session's start command as the
       // agent's first prompt (a launch argument, held by the agent itself
