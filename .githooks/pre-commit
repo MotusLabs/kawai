@@ -9,7 +9,14 @@ bun run lint
 echo "Type checking..."
 bun run typecheck
 
-echo "Running tests..."
-bun run test
+# Docs-only commits have nothing for the unit suite to cover. Lint and
+# typecheck still run — they are cheap and give a misclassified source file
+# some scrutiny. See scripts/docs-only-staged.sh for the classification rules.
+if scripts/docs-only-staged.sh; then
+	echo "Docs-only change; skipping tests."
+else
+	echo "Running tests..."
+	bun run test
+fi
 
 echo "All checks passed!"
