@@ -117,7 +117,8 @@ interface ManagerHarness {
 function createHarness(
   db: SessionDatabase,
   isDirectory: (path: string) => boolean = anyDirectory,
-  usageImpl?: FakeUsageControl
+  usageImpl?: FakeUsageControl,
+  titleLocateIntervalMs?: number
 ): ManagerHarness {
   const registry = new SessionRegistry()
   const handles: FakeHandle[] = []
@@ -132,6 +133,7 @@ function createHarness(
     onActivity: (sessionId, activity) => activities.push({ sessionId, activity }),
     onUsage: (profileId, report) => usage.push({ profileId, report }),
     queryFactory: fakeQueryFactory(handles, usageImpl),
+    titleLocateIntervalMs,
   })
   return { manager, registry, handles, events, activities, usage }
 }
@@ -2148,6 +2150,38 @@ describe('ChatSessionManager', () => {
     )
     expect(dormant.registry.get('chat-dormant')?.nameSource).toBe('auto')
     dormant.manager.shutdown()
+  })
+
+  test('a transcript that appears long after the SDK id still adopts its title', async () => {
+    process.env.ANTHROPIC_API_KEY = 'test-key'
+    // The SDK id arrives with the attach-time spawn (no prompt sent), but the
+    // transcript is only written when the CLI persists its first message —
+    // which can be much later. The locator must still be polling then; a
+    // bounded retry would have given up and the placeholder would never move.
+    const harness = createHarness(db, anyDirectory, undefined, 25)
+    const created = harness.manager.createSession({ projectPath: '/tmp/proj' })
+    if (!created.ok) throw new Error(created.error)
+    const sessionId = created.session.id
+    const placeholder = created.session.name
+    await harness.manager.send(sessionId, 'hello')
+    harness.handles[0]!.push(initMessage('title-late'))
+    await flush()
+    expect(db.getChatSession(sessionId)?.sdkSessionId).toBe('title-late')
+    // Well past any bounded retry budget (the old cap quit after ~4 polls).
+    await new Promise((resolve) => setTimeout(resolve, 400))
+    expect(db.getChatSession(sessionId)?.name).toBe(placeholder)
+    writeTranscript(
+      'title-late',
+      JSON.stringify({ type: 'ai-title', aiTitle: 'late title', sessionId: 'title-late' }) + '\n'
+    )
+    // Deadline well under the production poll's first retry: adoption must
+    // ride the injected 25ms poll, not a lucky 2s timer.
+    await waitForCondition(
+      () => db.getChatSession(sessionId)?.name === 'late title',
+      600
+    )
+    expect(db.getChatSession(sessionId)?.nameSource).toBe('auto')
+    harness.manager.shutdown()
   })
 })
 

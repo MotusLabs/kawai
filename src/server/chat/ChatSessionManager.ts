@@ -106,6 +106,13 @@ export interface ChatSessionManagerOptions {
   /** Project-directory check; injected in tests that use fictitious paths. */
   isDirectory?: (path: string) => boolean
   /**
+   * Poll interval for locating a chat transcript that does not exist yet
+   * (title adoption, design D4). Injected in tests; default 2s. The poll runs
+   * for the session's life — the transcript appears only when the CLI
+   * persists its first message, however much later that is.
+   */
+  titleLocateIntervalMs?: number
+  /**
    * Home directory for the user-level profile catalog (~/.kawai/profiles.json
    * lives here). Injected in tests so a real home catalog cannot leak in.
    */
@@ -697,21 +704,22 @@ export class ChatSessionManager {
 
   /**
    * Start following a session's transcript for title rows. The transcript
-   * exists only once the CLI has persisted its first message, so a missing
-   * file is retried a couple of times before the watch is dropped (the next
-   * spawn retries too).
+   * exists only once the CLI has persisted its first message — which can long
+   * outlive the attach-time spawn that reported the SDK id (the same driver is
+   * reused, so the spawn never re-runs) — so a missing file is polled until it
+   * appears; the poll ends only when the watch is released (kill, archive,
+   * shutdown).
    */
-  private watchSessionTitle(sessionId: string, attempt = 0): void {
+  private watchSessionTitle(sessionId: string): void {
     if (this.titleWatchers.has(sessionId)) return
     const record = this.records.get(sessionId)
     if (!record || record.archivedAt != null || !record.sdkSessionId) return
     const filePath = findTranscriptPath(record.sdkSessionId)
     if (!filePath) {
-      if (attempt >= 3) return
       const timer = setTimeout(() => {
         this.titleWatchers.delete(sessionId)
-        this.watchSessionTitle(sessionId, attempt + 1)
-      }, 2_000)
+        this.watchSessionTitle(sessionId)
+      }, this.options.titleLocateIntervalMs ?? 2_000)
       timer.unref?.()
       this.titleWatchers.set(sessionId, { close: () => clearTimeout(timer) })
       return
