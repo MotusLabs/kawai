@@ -3,8 +3,9 @@
 // It never spawns a process, so it records synthetic wire frames shaped like
 // the real stream-json protocol for the chat debug view. The activity turns
 // (thinking / tool / retry) hold each phase long enough to watch the
-// indicator's timer tick; tests shrink the holds via
-// AGENTBOARD_CHAT_FIXTURE_HOLD_MS.
+// indicator's timer tick; the context turn climbs the meter toward the
+// compaction threshold and drops it across a compact_boundary. Tests shrink
+// the holds via AGENTBOARD_CHAT_FIXTURE_HOLD_MS.
 import type { Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk'
 import type { ChatQueryFactory } from './ChatSessionDriver'
 
@@ -32,8 +33,15 @@ export const fixtureQueryFactory: ChatQueryFactory = ({ prompt, options, wire })
     wake?.()
     wake = null
   }
-  const assistant = (text: string) => push({
-    type: 'assistant', message: { id: crypto.randomUUID(), role: 'assistant', content: [{ type: 'text', text }] },
+  /** Per-request usage summing to `used` tokens (context meter design D1). */
+  const usageAt = (used: number) => ({
+    input_tokens: 2_000,
+    cache_read_input_tokens: Math.max(0, used - 8_000),
+    cache_creation_input_tokens: 4_000,
+    output_tokens: 2_000,
+  })
+  const assistant = (text: string, used = 42_000) => push({
+    type: 'assistant', message: { id: crypto.randomUUID(), role: 'assistant', content: [{ type: 'text', text }], usage: usageAt(used) },
   })
   const run = async (text: string) => {
     const turn = generation
@@ -106,6 +114,25 @@ export const fixtureQueryFactory: ChatQueryFactory = ({ prompt, options, wire })
       await hold(300)
       assistant('Recovered from the retry.')
     }
+    if (/context/i.test(text)) {
+      // Context-meter walkthrough: requests climb toward the compaction
+      // threshold — a 200k window with a 33k buffer, so 167k (answered by
+      // the getContextUsage control below) — a tool runs mid-climb, and an
+      // auto-compaction drops the meter to the post-compaction size.
+      assistant('Reading the project.', 60_000)
+      await hold(900)
+      if (closed || turn !== generation) return
+      assistant('Investigating deeper.', 120_000)
+      await hold(900)
+      if (closed || turn !== generation) return
+      const toolUseID = crypto.randomUUID()
+      push({ type: 'assistant', message: { id: crypto.randomUUID(), role: 'assistant', content: [{ type: 'tool_use', id: toolUseID, name: 'Grep', input: { pattern: 'compact' } }] } })
+      push({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: toolUseID, content: '3 matches' }] } })
+      assistant('Near the threshold now.', 157_900)
+      await hold(900)
+      if (closed || turn !== generation) return
+      push({ type: 'system', subtype: 'compact_boundary', compact_metadata: { trigger: 'auto', pre_tokens: 157_900, post_tokens: 12_000 } })
+    }
     if (/markdown/i.test(text)) {
       assistant([
         '# Markdown showcase',
@@ -166,6 +193,27 @@ export const fixtureQueryFactory: ChatQueryFactory = ({ prompt, options, wire })
     }
   })()
   return Object.assign(stream, {
+    // The context-usage control (context meter design D2): the driver probes
+    // it on attach and at turn boundaries, so the fixture answers with the
+    // same 200k-window/33k-buffer shape as the pinned real report.
+    getContextUsage: async () => ({
+      categories: [
+        { name: 'conversation', tokens: 60_000, color: '#3b82f6', kind: 'used' },
+        { name: 'compaction buffer', tokens: 33_000, color: '#f59e0b', kind: 'buffer' },
+        { name: 'free space', tokens: 107_000, color: '#22c55e', kind: 'free' },
+      ],
+      totalTokens: 60_000,
+      maxTokens: 200_000,
+      rawMaxTokens: 200_000,
+      percentage: 30,
+      gridRows: [],
+      model: 'claude-sonnet-4-5',
+      memoryFiles: [],
+      mcpTools: [],
+      agents: [],
+      isAutoCompactEnabled: true,
+      apiUsage: null,
+    }),
     interrupt: async () => {
       frame('out', { type: 'control_request', request_id: crypto.randomUUID(), request: { subtype: 'interrupt' } })
       generation++
