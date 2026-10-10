@@ -3,13 +3,38 @@ set -e
 
 echo "Running pre-commit checks..."
 
+# Docs-only commits have nothing for the unit suite to cover. Treat a path as
+# documentation when it is a markdown/text file or lives under an OpenSpec/docs
+# tree (those trees hold specs, proposals, images, and yaml metadata). A single
+# non-doc path turns the check back on — lint and typecheck still run either
+# way, so a misclassified source file still gets some scrutiny.
+docs_only=1
+while IFS= read -r file; do
+	[ -n "$file" ] || continue
+	case "$file" in
+	*.md | *.mdx | *.txt | *.rst) ;;
+	openspec/* | docs/*) ;;
+	LICENSE | LICENSE.* | COPYING | NOTICE | AUTHORS | CHANGELOG | CHANGELOG.*) ;;
+	*)
+		docs_only=0
+		break
+		;;
+	esac
+done <<EOF
+$(git diff --cached --name-only)
+EOF
+
 echo "Linting..."
 bun run lint
 
 echo "Type checking..."
 bun run typecheck
 
-echo "Running tests..."
-bun run test
+if [ "$docs_only" = 1 ]; then
+	echo "Docs-only change; skipping tests."
+else
+	echo "Running tests..."
+	bun run test
+fi
 
 echo "All checks passed!"
