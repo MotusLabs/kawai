@@ -1,8 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import {
   FONT_OPTIONS,
-  CHAT_FONT_SIZE_MIN,
-  CHAT_FONT_SIZE_MAX,
   useSettingsStore,
   type FontOption,
   type SessionSortDirection,
@@ -14,9 +12,9 @@ import { useThemeStore, type Theme } from '../stores/themeStore'
 import { HISTORY_MAX_AGE_MIN_HOURS, HISTORY_MAX_AGE_MAX_HOURS } from '@shared/types'
 import { getEffectiveModifier, getModifierDisplay } from '../utils/device'
 import { Switch } from './Switch'
-import ChatProviderSettings from './ChatProviderSettings'
 import FontSizeStepper from './FontSizeStepper'
 import SessionsSettings from './settings/SessionsSettings'
+import ChatSettings from './settings/ChatSettings'
 import { playPermissionSound, playIdleSound, primeAudio } from '../utils/sound'
 
 interface SettingsChangeFlags {
@@ -547,21 +545,10 @@ export default function SettingsModal({
         </div>
 
         <div role="tabpanel" aria-label="Chat" hidden={activeTab !== 'chat'} className="mt-5 space-y-4">
-          <ChatProviderSettings />
-
-          <div className="border-t border-border pt-4">
-            <label className="mb-2 block text-xs text-secondary">
-              Chat Display
-            </label>
-            <FontSizeStepper
-              label="Chat Font Size"
-              hint="Chat text size in pixels (12-20)"
-              value={draftChatFontSize}
-              min={CHAT_FONT_SIZE_MIN}
-              max={CHAT_FONT_SIZE_MAX}
-              onChange={setDraftChatFontSize}
-            />
-          </div>
+          <ChatSettings
+            draftChatFontSize={draftChatFontSize}
+            onDraftChatFontSizeChange={setDraftChatFontSize}
+          />
         </div>
 
         <div role="tabpanel" aria-label="Terminal" hidden={activeTab !== 'terminal'} className="mt-5 space-y-4">
