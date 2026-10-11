@@ -40,5 +40,7 @@ export interface TeamMessage {
   possibleDuplicate: boolean
   /** Killed-sender reply fallback: deliver with the whole thread attached. */
   attachThread: boolean
+  /** The team task this message works under (team-tasks); null = none. */
+  taskId: string | null
 }
 

@@ -28,6 +28,8 @@ export interface EnqueueInput {
   attachThread?: boolean
   /** Sender group's hopLimit, else the default. */
   hopLimit?: number
+  /** Team task the message works under (validated by the caller). */
+  taskId?: string | null
 }
 
 export const DEFAULT_HOP_LIMIT = 20
@@ -56,13 +58,21 @@ CREATE TABLE IF NOT EXISTS team_messages (
   delivered_at TEXT,
   reason TEXT,
   possible_duplicate INTEGER NOT NULL DEFAULT 0,
-  attach_thread INTEGER NOT NULL DEFAULT 0
+  attach_thread INTEGER NOT NULL DEFAULT 0,
+  task_id TEXT
 );
 CREATE INDEX IF NOT EXISTS team_messages_queue ON team_messages (team_id, state);
 CREATE INDEX IF NOT EXISTS team_messages_thread ON team_messages (thread_id);
 CREATE INDEX IF NOT EXISTS team_messages_recipient ON team_messages (to_id, state);
 CREATE INDEX IF NOT EXISTS team_messages_claimant ON team_messages (claimed_by, state);
 `
+
+/** Columns added after the table first shipped, for databases that predate them. */
+function migrateTable(db: Database) {
+  const columns = db.prepare('PRAGMA table_info(team_messages)').all() as Array<{ name: string }>
+  if (!columns.some(column => column.name === 'task_id')) db.exec('ALTER TABLE team_messages ADD COLUMN task_id TEXT')
+  db.exec('CREATE INDEX IF NOT EXISTS team_messages_task ON team_messages (task_id)')
+}
 
 const nowIso = () => new Date().toISOString()
 
@@ -86,6 +96,7 @@ export class MailboxStore {
   private readonly dynamicStatements = new Map<string, ReturnType<Database['prepare']>>()
   constructor(private readonly db: Database, private readonly options: { recipientExists?: (id: string) => boolean } = {}) {
     db.exec(CREATE_TABLE_SQL)
+    migrateTable(db)
     this.statements = Object.fromEntries(Object.entries(mailboxSql).map(([key, sql]) => [key, db.prepare(sql)])) as typeof this.statements
   }
 
@@ -123,6 +134,7 @@ export class MailboxStore {
       $createdAt: now,
       $reason: overLimit ? 'hop-limit' : null,
       $attachThread: input.attachThread ? 1 : 0,
+      $taskId: input.taskId ?? null,
     })
     this.changed(id, true)
     return this.get(id)!
@@ -260,6 +272,11 @@ export class MailboxStore {
     return this.select("thread_id = $threadId AND state = 'delivered'", { $threadId: threadId })
   }
 
+  /** Every message referencing a task, in any state (task detail view). */
+  forTask(taskId: string): TeamMessage[] {
+    return this.select('task_id = $taskId', { $taskId: taskId })
+  }
+
   /** Urgent direct mail held for a session's pending request. */
   awaitingRequestFor(sessionId: string): TeamMessage[] {
     return this.select(`state = 'awaiting-request' AND to_kind = 'session' AND to_id = $sessionId`, {
@@ -335,5 +352,6 @@ function mapRow(row: Record<string, unknown>): TeamMessage {
     reason: text(row.reason),
     possibleDuplicate: Number(row.possible_duplicate ?? 0) === 1,
     attachThread: Number(row.attach_thread ?? 0) === 1,
+    taskId: text(row.task_id),
   }
 }

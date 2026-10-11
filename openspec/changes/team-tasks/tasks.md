@@ -9,10 +9,10 @@
 
 ## 2. Durable task records
 
-- [ ] 2.1 Add `team_tasks`, `team_task_revisions`, and `team_task_journal` tables per design D1, nullable `task_id` on `team_messages` and `chat_sessions`, and shared SDK-free task types; verify database migration tests preserve existing sessions/messages and round-trip task references, creator identity, optional parent/worktree/change, timestamps, and status.
-- [ ] 2.2 Implement task-store create/get/list/detail operations with initial revision 1, team scoping, subtasks, and participants derived from associated sessions, messages, and journal authors; verify tests cover human/agent creators, team isolation, parent links, concurrent participants, and task persistence after database reopen and session archive/kill.
-- [ ] 2.3 Implement atomic direction/acceptance amendments and numbered immutable revisions, plus append-only journal writes and status updates; verify tests retain earlier revisions, append author/time/text in order, increment revisions safely across competing amendments, and persist changes across reopening the store.
-- [ ] 2.4 Document task/revision/journal durability and their relationship to sessions and OpenSpec; verify the documentation states that killing a creator preserves the task and that task status does not rewrite OpenSpec checkboxes.
+- [x] 2.1 Add `team_tasks`, `team_task_revisions`, and `team_task_journal` tables per design D1, nullable `task_id` on `team_messages` and `chat_sessions`, and shared SDK-free task types; verify database migration tests preserve existing sessions/messages and round-trip task references, creator identity, optional parent/worktree/change, timestamps, and status.
+- [x] 2.2 Implement task-store create/get/list/detail operations with initial revision 1, team scoping, subtasks, and participants derived from associated sessions, messages, and journal authors; verify tests cover human/agent creators, team isolation, parent links, concurrent participants, and task persistence after database reopen and session archive/kill.
+- [x] 2.3 Implement atomic direction/acceptance amendments and numbered immutable revisions, plus append-only journal writes and status updates; verify tests retain earlier revisions, append author/time/text in order, increment revisions safely across competing amendments, and persist changes across reopening the store.
+- [x] 2.4 Document task/revision/journal durability and their relationship to sessions and OpenSpec; verify the documentation states that killing a creator preserves the task and that task status does not rewrite OpenSpec checkboxes.
 
 ## 3. Task service and agent tools
 

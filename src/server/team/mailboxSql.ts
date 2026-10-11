@@ -2,9 +2,9 @@
 export const mailboxSql = {
   enqueue: `INSERT INTO team_messages
       (id, team_id, to_kind, to_id, from_session, from_group, origin_path, priority, tags,
-       thread_id, in_reply_to, hop, body, state, deliver_at, created_at, reason, attach_thread)
+       thread_id, in_reply_to, hop, body, state, deliver_at, created_at, reason, attach_thread, task_id)
       VALUES ($id, $teamId, $toKind, $toId, $fromSession, $fromGroup, $originPath, $priority, $tags,
-       $threadId, $inReplyTo, $hop, $body, $state, $deliverAt, $createdAt, $reason, $attachThread)`,
+       $threadId, $inReplyTo, $hop, $body, $state, $deliverAt, $createdAt, $reason, $attachThread, $taskId)`,
   get: 'SELECT * FROM team_messages WHERE id = $id',
   nextEligible: `SELECT * FROM team_messages
       WHERE team_id = $teamId AND state = 'queued'
