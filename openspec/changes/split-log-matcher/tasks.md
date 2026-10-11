@@ -2,16 +2,16 @@
 
 ## 1. Remove the unreachable sync-verification branch in index.ts
 
-- [ ] 1.1 Delete the `else if (verifyAssociations)` branch in `hydrateSessionsWithAgentSessions`
+- [x] 1.1 Delete the `else if (verifyAssociations)` branch in `hydrateSessionsWithAgentSessions`
   (src/server/index.ts:1074-1094) and the `logDirs` computation it alone consumes
   (index.ts:1038-1040); keep the `precomputedVerifications` path byte-identical in behavior
-- [ ] 1.2 Remove the `verifyAssociations` field from `HydrateSessionsOptions` (index.ts:941),
+- [x] 1.2 Remove the `verifyAssociations` field from `HydrateSessionsOptions` (index.ts:941),
   the destructured default at index.ts:1017, the `refreshSessionsSync` parameter and its
   pass-through (index.ts:1322-1328), and the `verifyAssociations: true` argument at
   index.ts:1470
-- [ ] 1.3 Remove the now-unused sync import `verifyWindowLogAssociationDetailed` from
+- [x] 1.3 Remove the now-unused sync import `verifyWindowLogAssociationDetailed` from
   index.ts's logMatcher import block (keep `verifyWindowLogAssociationDetailedAsync`)
-- [ ] 1.4 Run `bun run lint && bun run typecheck && bun run test`; commit
+- [x] 1.4 Run `bun run lint && bun run typecheck && bun run test`; commit
   (`refactor: remove unreachable verifyAssociations branch from hydration`)
 
 ## 2. Delete the sync matcher chain from logMatcher.ts
