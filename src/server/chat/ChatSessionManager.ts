@@ -1347,7 +1347,11 @@ export class ChatSessionManager {
     if (!record) return
     const next = { ...record, ...patch }
     this.records.set(sessionId, next)
-    if ((patch.status !== undefined && patch.status !== record.status) || patch.projectPath !== undefined || patch.archivedAt !== undefined) this.dispatcher?.notify()
+    if (
+      (patch.status !== undefined && patch.status !== record.status) ||
+      patch.projectPath !== undefined || patch.archivedAt !== undefined ||
+      (patch.sdkSessionId !== undefined && patch.sdkSessionId !== record.sdkSessionId)
+    ) this.dispatcher?.notify()
     this.options.db.updateChatSession(sessionId, patch)
     // The first SDK session id makes a transcript followable: start the
     // title tail for the now-live conversation (design D4).

@@ -1,7 +1,7 @@
 // Group membership of chat sessions (agent-teams): creation validates the
 // group against the project's team catalog, stores it, and the group stays
 // fixed through restart and archive/restore.
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -78,6 +78,28 @@ describe('chat session groups', () => {
       expect(clone.ok && clone.session.groupId).toBe('devs')
       expect((await manager.createAvailableSession({ projectPath: project, groupId: 'devs' })).ok).toBe(false)
       expect((await manager.createAvailableSession({ projectPath: project, groupId: 'devs', cloneFromSessionId: 'missing' })).ok).toBe(false)
+    } finally { manager.shutdown() }
+  })
+
+  test('transcript identity changes wake mail delivery without waking for activity metadata', async () => {
+    const manager = createManager()
+    try {
+      const result = await manager.createAvailableSession({ projectPath: project })
+      if (!result.ok) throw new Error(result.error)
+      await manager.teams.track(result.session.id, project)
+      await manager.dispatcher.settled()
+      const notify = spyOn(manager.dispatcher, 'notify')
+      // Exercise the patch boundary used by the driver's onSessionId callback.
+      const patcher = manager as unknown as {
+        applyPatch(id: string, patch: { sdkSessionId?: string; lastActivityAt?: string }): void
+      }
+      try {
+        patcher.applyPatch(result.session.id, { sdkSessionId: 'missing-transcript' })
+        expect(notify).toHaveBeenCalledTimes(1)
+        patcher.applyPatch(result.session.id, { sdkSessionId: 'missing-transcript' })
+        patcher.applyPatch(result.session.id, { lastActivityAt: new Date().toISOString() })
+        expect(notify).toHaveBeenCalledTimes(1)
+      } finally { notify.mockRestore() }
     } finally { manager.shutdown() }
   })
 
