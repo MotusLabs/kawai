@@ -967,10 +967,16 @@ export class ChatSessionManager {
       // above); otherwise every spawn runs the checked Claude Code install.
       const executable = launch.executable ? null : await this.checkExecutable()
       const queryFactory = await this.resolveQueryFactory()
+      // The team must be known before the first spawn reads its prompt.
+      await this.teams.track(record.sessionId, this.records.get(record.sessionId)?.projectPath ?? record.projectPath)
       const driver = new ChatSessionDriver({
         sessionId: record.sessionId,
         projectPath: record.projectPath,
         queryFactory,
+        getSystemPromptAppend: () => this.teams.promptFor(
+          record.sessionId,
+          this.records.get(record.sessionId)?.groupId
+        ),
         getProviderEnv: () => this.providerEnv(),
         // Read per request so a live policy switch reaches the next
         // canUseTool call without a respawn (design D2).

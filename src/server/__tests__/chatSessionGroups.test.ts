@@ -5,7 +5,9 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import type { Options } from '@anthropic-ai/claude-agent-sdk'
 import { ChatSessionManager } from '../chat/ChatSessionManager'
+import { fixtureQueryFactory } from '../chat/developmentFixture'
 import { initDatabase, type SessionDatabase } from '../db'
 import { SessionRegistry } from '../SessionRegistry'
 
@@ -100,6 +102,23 @@ describe('chat session groups', () => {
     manager.archive(id)
     expect(registry.get(id)).toMatchObject({ groupId: 'devs', groupLabel: 'devs', groupMissing: true })
     expect(db.getChatSession(id)?.groupId).toBe('devs')
+    manager.shutdown()
+  })
+
+  test('a member spawns with its role prompt and the team groups', async () => {
+    fs.writeFileSync(path.join(project, '.kawai', 'groups', 'qa.md'), '---\ndescription: Tests releases\n---\nYou test.')
+    const spawned: Options[] = []
+    const manager = new ChatSessionManager({
+      db, registry: new SessionRegistry(), onEvent: () => {}, profileCatalogHome: home,
+      availabilityProbe: async () => {},
+      queryFactory: (args) => { spawned.push(args.options); return fixtureQueryFactory(args) },
+    })
+    const result = await manager.createAvailableSession({ projectPath: project, groupId: 'devs' })
+    if (!result.ok) throw new Error(result.error)
+    expect(await manager.start(result.session.id)).toEqual({ ok: true })
+    const systemPrompt = spawned[0]?.systemPrompt as { append?: string }
+    expect(systemPrompt.append).toContain('# Your role: devs\n\nBuild.')
+    expect(systemPrompt.append).toContain('- `qa` (qa): Tests releases')
     manager.shutdown()
   })
 })

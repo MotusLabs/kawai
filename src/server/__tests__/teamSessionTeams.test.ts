@@ -17,7 +17,7 @@ describe('SessionTeams', () => {
     home = path.join(root, 'home')
     fs.mkdirSync(path.join(a, '.kawai', 'groups'), { recursive: true })
     fs.mkdirSync(b)
-    fs.writeFileSync(path.join(a, '.kawai', 'groups', 'devs.md'), '---\nlabel: Developers\n---\n')
+    fs.writeFileSync(path.join(a, '.kawai', 'groups', 'devs.md'), '---\nlabel: Developers\n---\nBuild.')
   })
   afterEach(() => fs.rmSync(root, { recursive: true, force: true }))
 
@@ -41,6 +41,17 @@ describe('SessionTeams', () => {
 
     teams.forget('s3')
     expect(teams.teamOf('s3')).toBeUndefined()
+  })
+
+  test('promptFor reads the role at call time and degrades without a team or group', async () => {
+    const teams = new SessionTeams({ homeDir: home })
+    expect(teams.promptFor('s1', 'devs')).toContain('(this team defines no groups yet)')
+    await teams.track('s1', a)
+    expect(teams.promptFor('s1', 'devs')).toContain('# Your role: Developers')
+    fs.writeFileSync(path.join(a, '.kawai', 'groups', 'devs.md'), '---\nlabel: Builders\n---\nShip it.')
+    expect(teams.promptFor('s1', 'devs')).toContain('# Your role: Builders\n\nShip it.')
+    expect(teams.promptFor('s1', 'gone')).not.toContain('# Your role')
+    expect(teams.promptFor('s1', null)).toContain('You belong to no group')
   })
 
   test('a superseded resolution is dropped', async () => {

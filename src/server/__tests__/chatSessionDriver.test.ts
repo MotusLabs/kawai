@@ -180,6 +180,7 @@ function createHarness(
     claudeExecutablePath?: string
     getProviderEnv?: () => Record<string, string>
     getApprovalPolicy?: () => ChatApprovalPolicy
+    getSystemPromptAppend?: () => string | undefined
     /** Replaces the harness's cwd capture (e.g. with a throwing observer). */
     onCwdChanged?: (newCwd: string) => void
     wire?: ChatWireRecorder
@@ -550,6 +551,33 @@ describe('ChatSessionDriver', () => {
     expect(harness.fakes).toHaveLength(2)
     expect(harness.fakes[1]!.options.env?.ANTHROPIC_MODEL).toBe('gw-flash')
     expect(harness.fakes[1]!.options.env?.ANTHROPIC_BASE_URL).toBe(process.env.ANTHROPIC_BASE_URL)
+    harness.driver.kill()
+  })
+
+  test('the team prompt is appended to the preset and re-read only at the next spawn', async () => {
+    let prompt = '# Your role: QA\n\nTest it.'
+    let reads = 0
+    const harness = createHarness({ getSystemPromptAppend: () => { reads++; return prompt } })
+    harness.driver.send('hello')
+    expect(harness.fakes[0]!.options.systemPrompt).toEqual({
+      type: 'preset', preset: 'claude_code', append: '# Your role: QA\n\nTest it.',
+    })
+    // An edit while the process runs changes nothing for it.
+    prompt = '# Your role: QA\n\nTest it twice.'
+    harness.driver.send('again')
+    expect(reads).toBe(1)
+    harness.fakes[0]!.exit()
+    await flush()
+    harness.driver.send('after exit')
+    expect(harness.fakes[1]!.options.systemPrompt).toMatchObject({ append: '# Your role: QA\n\nTest it twice.' })
+    expect(reads).toBe(2)
+    harness.driver.kill()
+  })
+
+  test('without a team prompt the preset is unchanged', () => {
+    const harness = createHarness({ getSystemPromptAppend: () => '' })
+    harness.driver.send('hello')
+    expect(harness.fakes[0]!.options.systemPrompt).toEqual({ type: 'preset', preset: 'claude_code' })
     harness.driver.kill()
   })
 

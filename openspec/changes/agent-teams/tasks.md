@@ -15,8 +15,8 @@
 
 ## 3. Role and mailbox prompt
 
-- [ ] 3.1 Add a pure `src/server/team/teamPrompt.ts` building the appended system prompt: the role body (members only) and a mailbox note naming the member's group, every team group with its description, how mail arrives (peer turns, envelope fields, message id), and how to send, and verify tests pin a member's prompt and a no-group session's note-only prompt
-- [ ] 3.2 Pass that prompt as `systemPrompt: { type: 'preset', preset: 'claude_code', append }` from the driver at each spawn (read from the catalog at spawn time only), and verify driver tests show the appended prompt in spawn options and that editing the group file changes only the next spawn's prompt
+- [x] 3.1 Add a pure `src/server/team/teamPrompt.ts` building the appended system prompt: the role body (members only) and a mailbox note naming the member's group, every team group with its description, how mail arrives (peer turns, envelope fields, message id), and how to send, and verify tests pin a member's prompt and a no-group session's note-only prompt
+- [x] 3.2 Pass that prompt as `systemPrompt: { type: 'preset', preset: 'claude_code', append }` from the driver at each spawn (read from the catalog at spawn time only), and verify driver tests show the appended prompt in spawn options and that editing the group file changes only the next spawn's prompt
 
 ## 4. Mailbox store
 

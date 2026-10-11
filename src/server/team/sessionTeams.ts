@@ -5,7 +5,8 @@
 // Group display — label, and whether the group's file still exists — is read
 // from the team's catalog on demand, so a removed or edited file shows up the
 // next time the session is published.
-import { loadGroupCatalog } from './groupCatalog'
+import { loadGroupCatalog, type GroupCatalog } from './groupCatalog'
+import { buildTeamPrompt } from './teamPrompt'
 import { resolveTeam, type TeamIdentity } from './teamIdentity'
 
 export interface SessionGroupInfo {
@@ -67,12 +68,30 @@ export class SessionTeams {
 
   /** Display state of a session's group; undefined until its team is known. */
   groupInfo(sessionId: string, groupId: string): SessionGroupInfo | undefined {
+    const group = this.catalogOf(sessionId)?.groups.get(groupId)
+    if (!this.teamOf(sessionId)) return undefined
+    return group ? { label: group.label, missing: false } : { label: groupId, missing: true }
+  }
+
+  /**
+   * The system-prompt addition for a spawn (design D7), read from the files
+   * as they are now. A missing group gets the note without a role; a team
+   * not resolved yet gets the note with no group list.
+   */
+  promptFor(sessionId: string, groupId: string | null | undefined): string {
+    const catalog = this.catalogOf(sessionId)
+    const groups = [...(catalog?.groups.values() ?? [])]
+    const group = groupId ? catalog?.groups.get(groupId) : undefined
+    return buildTeamPrompt({ sessionId, groups, ...(group ? { group } : {}) })
+  }
+
+  /** The session's team catalog, freshly read; undefined until resolved. */
+  catalogOf(sessionId: string): GroupCatalog | undefined {
     const team = this.teamOf(sessionId)
     if (!team) return undefined
-    const group = loadGroupCatalog({
+    return loadGroupCatalog({
       groupsRoot: team.groupsRoot,
       ...(this.options.homeDir ? { homeDir: this.options.homeDir } : {}),
-    }).groups.get(groupId)
-    return group ? { label: group.label, missing: false } : { label: groupId, missing: true }
+    })
   }
 }

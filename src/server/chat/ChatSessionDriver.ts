@@ -118,6 +118,11 @@ export interface ChatSessionDriverOptions {
    * (tests, development fixture), leaving SDK resolution unchanged.
    */
   claudeExecutablePath?: string
+  /**
+   * Text appended to the preset system prompt, read at every spawn (team
+   * role + mailbox note, agent-teams D7). Omitted/empty = preset only.
+   */
+  getSystemPromptAppend?: () => string | undefined
   onEvent: (event: ChatEvent) => void
   /** Applied immediately on every derived status change. */
   onStatus: (status: SessionStatus) => void
@@ -508,10 +513,17 @@ export class ChatSessionDriver {
     const { executable: profileExecutable, ...launchOptions } = launch
     const executablePath = profileExecutable ?? this.claudeExecutablePath
     const wire = this.options.wire
+    const systemPromptAppend = this.options.getSystemPromptAppend?.()
     const options: Options = {
       cwd: this.sessionProjectPath,
       // Option parity with a terminal `claude` session in the project dir.
-      systemPrompt: { type: 'preset', preset: 'claude_code' },
+      // The team role + mailbox note (agent-teams D7) is read per spawn: a
+      // running process keeps its prompt, the next spawn gets edits.
+      systemPrompt: {
+        type: 'preset',
+        preset: 'claude_code',
+        ...(systemPromptAppend ? { append: systemPromptAppend } : {}),
+      },
       settingSources: ['user', 'project', 'local'],
       permissionMode: 'default',
       includePartialMessages: true,
