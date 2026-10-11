@@ -20,8 +20,8 @@
 
 ## 4. Mailbox store
 
-- [ ] 4.1 Add the `team_messages` table (design D5 columns plus `pushed_at`, states `queued` / `claimed` / `pushed` / `delivered` / `dead` / `uncertain` / `cancelled` / `awaiting-request`) and a `src/server/team/mailboxStore.ts` API (enqueue, atomic claim by `UPDATE … WHERE state='queued'`, mark pushed / delivered, requeue, dead-letter, hold uncertain, cancel, retry, discard, list per team, eligible-for-recipient query), and verify store tests cover a lost claim race (exactly one winner), persistence across reopening the database, and each state transition
-- [ ] 4.2 Count hops per thread and dead-letter a send that would exceed the sender group's `hopLimit` (else 20), with a retry that resets the thread's hop count, and verify tests stop a ping-pong past the limit and requeue it on retry
+- [x] 4.1 Add the `team_messages` table (design D5 columns plus `pushed_at`, states `queued` / `claimed` / `pushed` / `delivered` / `dead` / `uncertain` / `cancelled` / `awaiting-request`) and a `src/server/team/mailboxStore.ts` API (enqueue, atomic claim by `UPDATE … WHERE state='queued'`, mark pushed / delivered, requeue, dead-letter, hold uncertain, cancel, retry, discard, list per team, eligible-for-recipient query), and verify store tests cover a lost claim race (exactly one winner), persistence across reopening the database, and each state transition
+- [x] 4.2 Count hops per thread and dead-letter a send that would exceed the sender group's `hopLimit` (else 20), with a retry that resets the thread's hop count, and verify tests stop a ping-pong past the limit and requeue it on retry
 
 ## 5. Mailbox tools
 
