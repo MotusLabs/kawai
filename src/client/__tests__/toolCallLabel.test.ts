@@ -1,12 +1,12 @@
 import { describe, expect, test } from 'bun:test'
-import { relativeToProject, toolCallDetail, toolResultDetail } from '../components/chat/toolCallLabel'
+import { relativeToProject, toolCallDetail } from '../components/chat/toolCallLabel'
 
 describe('toolCallDetail', () => {
   test('each mapped tool shows its key field', () => {
     const cases: Array<[tool: string, input: Record<string, unknown>, expected: string]> = [
       ['Read', { file_path: '/repo/src/index.ts' }, '/repo/src/index.ts'],
-      ['Write', { file_path: '/repo/out.ts', content: 'line' }, '/repo/out.ts +1'],
-      ['Edit', { file_path: '/repo/a.ts', old_string: 'x', new_string: 'y' }, '/repo/a.ts +1 −1'],
+      ['Write', { file_path: '/repo/out.ts', content: 'line' }, '/repo/out.ts'],
+      ['Edit', { file_path: '/repo/a.ts', old_string: 'x', new_string: 'y' }, '/repo/a.ts'],
       ['NotebookEdit', { notebook_path: '/repo/nb.ipynb' }, '/repo/nb.ipynb'],
       ['Bash', { command: 'ls' }, 'ls'],
       ['Glob', { pattern: '*.ts' }, '*.ts'],
@@ -30,8 +30,8 @@ describe('toolCallDetail', () => {
     }
   })
 
-  test('Bash composes description and command, dropping unusable parts', () => {
-    expect(toolCallDetail('Bash', { description: 'Run unit tests', command: 'bun test' })).toBe('Run unit tests — bun test')
+  test('Bash prefers description and falls back to a usable command', () => {
+    expect(toolCallDetail('Bash', { description: 'Run unit tests', command: 'bun test' })).toBe('Run unit tests')
     expect(toolCallDetail('Bash', { command: 'bun test' })).toBe('bun test')
     expect(toolCallDetail('Bash', { description: 'Run unit tests' })).toBe('Run unit tests')
     expect(toolCallDetail('Bash', { description: '   ', command: 'bun test' })).toBe('bun test')
@@ -78,7 +78,7 @@ describe('toolCallDetail', () => {
   test('line breaks collapse so the detail stays on one line', () => {
     expect(toolCallDetail('Bash', { command: 'bun run lint\nbun run test' })).toBe('bun run lint bun run test')
     expect(toolCallDetail('Bash', { command: ' \r\n bun test \n ' })).toBe('bun test')
-    expect(toolCallDetail('Bash', { description: 'Lint\ntypecheck', command: 'bun x' })).toBe('Lint typecheck — bun x')
+    expect(toolCallDetail('Bash', { description: 'Lint\ntypecheck', command: 'bun x' })).toBe('Lint typecheck')
   })
 
   test('path fields are made relative to the project', () => {
@@ -87,24 +87,6 @@ describe('toolCallDetail', () => {
     expect(toolCallDetail('EnterWorktree', { path: '/repo/.worktrees/docs' }, '/repo')).toBe('.worktrees/docs')
     // `name` is never treated as a path, even when it looks like one.
     expect(toolCallDetail('EnterWorktree', { name: '/repo/docs' }, '/repo')).toBe('/repo/docs')
-  })
-
-  test('Edit and Write append a git-style line delta', () => {
-    expect(toolCallDetail('Edit', { file_path: '/repo/a.ts', old_string: 'a\nb\nc', new_string: '1\n2\n3\n4\n5' })).toBe('/repo/a.ts +5 −3')
-    expect(toolCallDetail('Edit', { file_path: '/repo/a.ts', old_string: 'a', new_string: 'b' })).toBe('/repo/a.ts +1 −1')
-    // A trailing newline does not add a line.
-    expect(toolCallDetail('Edit', { file_path: '/repo/a.ts', old_string: 'a\nb\nc', new_string: 'a\nb\nc\n' })).toBe('/repo/a.ts +3 −3')
-    // Deletion-only keeps the removed side alone.
-    expect(toolCallDetail('Edit', { file_path: '/repo/a.ts', old_string: 'a\nb', new_string: '' })).toBe('/repo/a.ts −2')
-    // Write counts additions only, from `content`.
-    expect(toolCallDetail('Write', { file_path: '/repo/out.ts', content: 'x\ny\nz\n' })).toBe('/repo/out.ts +3')
-    expect(toolCallDetail('Write', { file_path: '/repo/out.ts', content: '' })).toBe('/repo/out.ts')
-    // Both sides zero: no delta at all.
-    expect(toolCallDetail('Edit', { file_path: '/repo/a.ts', old_string: '', new_string: '' })).toBe('/repo/a.ts')
-    // replace_all reports the per-replacement change.
-    expect(toolCallDetail('Edit', { file_path: '/repo/a.ts', old_string: 'a', new_string: 'bb', replace_all: true })).toBe('/repo/a.ts +1 −1')
-    // No usable path means no detail, delta included.
-    expect(toolCallDetail('Edit', { old_string: 'a', new_string: 'b' })).toBeNull()
   })
 })
 
@@ -139,19 +121,5 @@ describe('relativeToProject', () => {
     expect(relativeToProject('src/index.ts', '/repo')).toBe('src/index.ts')
     expect(relativeToProject('/etc/hosts', '/')).toBe('etc/hosts')
     expect(relativeToProject('/', '/')).toBe('.')
-  })
-})
-
-describe('toolResultDetail', () => {
-  test('the hint is the first non-blank line, on one line', () => {
-    expect(toolResultDetail('\n\n  Task #1 created successfully: Run 6.3\nnext line')).toBe('Task #1 created successfully: Run 6.3')
-    expect(toolResultDetail('Command failed: bun test\n    at test.ts:1:1')).toBe('Command failed: bun test')
-    expect(toolResultDetail('single line')).toBe('single line')
-    expect(toolResultDetail('ok\r\nsecond')).toBe('ok')
-  })
-
-  test('an output with no non-blank line yields no hint', () => {
-    expect(toolResultDetail('')).toBeNull()
-    expect(toolResultDetail(' \n\t\n')).toBeNull()
   })
 })

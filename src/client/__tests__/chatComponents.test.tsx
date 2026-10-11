@@ -51,7 +51,7 @@ describe('chat components', () => {
     ]} />)
     expect(renderer.root.findByType('strong').children).toEqual(['Hello'])
     expect(renderer.root.findAllByType('script')).toHaveLength(0)
-    expect(textOf(renderer.root.findByType('summary'))).toBe('Tool: Read (file.ts)')
+    expect(textOf(renderer.root.findByType('summary'))).toBe('Read(file.ts)')
     renderer.unmount()
   })
 
@@ -66,8 +66,8 @@ describe('chat components', () => {
         input: { command } },
     ]} />)
     const summaries = renderer.root.findAllByType('summary')
-    expect(textOf(summaries[0]!)).toBe('Tool: Read (src/index.ts)')
-    expect(textOf(summaries[1]!)).toBe('Tool: Bash (bun run lint bun run test)')
+    expect(textOf(summaries[0]!)).toBe('Read(src/index.ts)')
+    expect(textOf(summaries[1]!)).toBe('Bash(bun run lint bun run test)')
     // The full detail rides along on the truncating span for the hover tooltip.
     const detail = summaries[2]!.findByProps({ title: command })
     expect(detail.children).toEqual([command])
@@ -84,7 +84,7 @@ describe('chat components', () => {
         input: { sql: 'select 1' } },
     ]} />)
     const summary = renderer.root.findByType('summary')
-    expect(textOf(summary)).toBe('Tool: mcp__db__query')
+    expect(textOf(summary)).toBe('mcp__db__query')
     expect(summary.findAll(node => node.props.title != null)).toHaveLength(0)
     renderer.unmount()
   })
@@ -97,30 +97,64 @@ describe('chat components', () => {
         input: { taskId: '2', status: 'completed' } },
     ]} />)
     const summaries = renderer.root.findAllByType('summary')
-    expect(textOf(summaries[0]!)).toBe('Tool: Edit (src/a.ts +5 −3)')
-    expect(textOf(summaries[1]!)).toBe('Tool: TaskUpdate (Task 2 → completed)')
+    expect(textOf(summaries[0]!)).toBe('Edit(src/a.ts)')
+    expect(textOf(summaries[1]!)).toBe('TaskUpdate(Task 2 → completed)')
     renderer.unmount()
   })
 
-  test('tool-result summaries show the first output line as a hint', () => {
+  test('paired tools retain their row when results arrive, with input before output', () => {
+    const call: ChatEvent = { type: 'tool_call', id: 'c', sequence: 0, at: 'now', turnId: 't',
+      toolCallId: 't1', tool: 'Bash', input: { description: 'Run tests', command: 'bun test' } }
+    const result: ChatEvent = { type: 'tool_result', id: 'r', sequence: 2, at: 'now', turnId: 't',
+      toolCallId: 't1', output: 'All tests passed', isError: false }
+    const message: ChatEvent = { type: 'assistant_text', id: 'a', sequence: 1, at: 'now', turnId: 't',
+      messageId: 'm', text: 'Checking the output.' }
+    const renderer = TestRenderer.create(<ChatMessages events={[call, message]} />)
+    const row = renderer.root.findByType('details')
+    expect(row.findAllByType('pre')).toHaveLength(1)
+    act(() => renderer.update(<ChatMessages events={[call, message, result]} />))
+    expect(renderer.root.findAllByType('details')).toHaveLength(1)
+    expect(renderer.root.findByType('details')).toBe(row)
+    expect(textOf(row.findByType('summary'))).toBe('Bash(Run tests)')
+    expect(row.findAllByType('pre').map(textOf)).toEqual([JSON.stringify(call.input, null, 2), result.output])
+    expect(row.findAllByProps({ 'aria-label': 'Tool failed' })).toHaveLength(0)
+    renderer.unmount()
+    // A reconnect snapshot produces the same single entry.
+    const replay = TestRenderer.create(<ChatMessages events={[call, message, result]} />)
+    expect(replay.root.findAllByType('details')).toHaveLength(1)
+    replay.unmount()
+  })
+
+  test('parallel results pair by id rather than arrival order and failures stay outside truncation', () => {
+    const command = 'long command '.repeat(50)
     const renderer = TestRenderer.create(<ChatMessages events={[
-      { type: 'tool_result', id: 'r', sequence: 0, at: 'now', turnId: 't', toolCallId: 't1',
-        output: '\n  Task #1 created successfully: Run 6.3\nlater lines', isError: false },
-      { type: 'tool_result', id: 'f', sequence: 1, at: 'now', turnId: 't', toolCallId: 't2',
-        output: 'Command failed: bun test\n    at test.ts:1:1', isError: true },
-      { type: 'tool_result', id: 'e', sequence: 2, at: 'now', turnId: 't', toolCallId: 't3',
-        output: ' \n', isError: false },
+      { type: 'tool_call', id: 'a', sequence: 0, at: 'now', turnId: 't', toolCallId: 't1', tool: 'Bash', input: { command } },
+      { type: 'tool_call', id: 'b', sequence: 1, at: 'now', turnId: 't', toolCallId: 't2', tool: 'Read', input: { file_path: 'a.ts' } },
+      { type: 'tool_result', id: 'r2', sequence: 2, at: 'now', turnId: 't', toolCallId: 't2', output: 'file contents', isError: false },
+      { type: 'tool_result', id: 'r1', sequence: 3, at: 'now', turnId: 't', toolCallId: 't1', output: 'Command failed', isError: true },
     ]} />)
-    const summaries = renderer.root.findAllByType('summary')
-    expect(textOf(summaries[0]!)).toBe('Tool result (Task #1 created successfully: Run 6.3)')
-    expect(textOf(summaries[1]!)).toBe('Tool failed (Command failed: bun test)')
-    // The full hint rides along on the truncating span for the hover tooltip.
-    const hint = summaries[0]!.findByProps({ title: 'Task #1 created successfully: Run 6.3' })
-    expect(String(hint.props.className).split(' ')).toContain('truncate')
-    // No non-blank line keeps the plain label, and the full output still expands.
-    expect(textOf(summaries[2]!)).toBe('Tool result')
-    expect(summaries[2]!.findAll(node => node.props.title != null)).toHaveLength(0)
-    expect(textOf(renderer.root.findAllByType('pre')[1]!)).toBe('Command failed: bun test\n    at test.ts:1:1')
+    const rows = renderer.root.findAllByType('details')
+    expect(rows).toHaveLength(2)
+    expect(rows[0]!.findAllByType('pre').map(textOf)[1]).toBe('Command failed')
+    expect(rows[1]!.findAllByType('pre').map(textOf)[1]).toBe('file contents')
+    const summary = rows[0]!.findByType('summary')
+    const mark = summary.findByProps({ 'aria-label': 'Tool failed' })
+    expect(textOf(mark)).toBe('✗')
+    expect(mark.props.className).toContain('shrink-0')
+    expect(summary.findByProps({ title: command.trim() }).findAllByProps({ 'aria-label': 'Tool failed' })).toHaveLength(0)
+    expect(rows[1]!.findAllByProps({ 'aria-label': 'Tool failed' })).toHaveLength(0)
+    renderer.unmount()
+  })
+
+  test('orphan results retain their full output without result hints', () => {
+    const output = 'Command failed: bun test\n    at test.ts:1:1'
+    const renderer = TestRenderer.create(<ChatMessages events={[
+      { type: 'tool_result', id: 'r', sequence: 0, at: 'now', turnId: 't', toolCallId: 't1', output, isError: true },
+      { type: 'tool_result', id: 's', sequence: 1, at: 'now', turnId: 't', toolCallId: 't2', output: 'ok', isError: false },
+    ]} />)
+    expect(renderer.root.findAllByType('details')).toHaveLength(2)
+    expect(renderer.root.findAllByType('summary').map(textOf)).toEqual(['Tool result✗', 'Tool result'])
+    expect(renderer.root.findAllByType('pre').map(textOf)).toEqual([output, 'ok'])
     renderer.unmount()
   })
 

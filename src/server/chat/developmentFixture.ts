@@ -5,7 +5,8 @@
 // (thinking / tool / retry) hold each phase long enough to watch the
 // indicator's timer tick; the context turn climbs the meter toward the
 // compaction threshold and drops it across a compact_boundary. Tests shrink
-// the holds via AGENTBOARD_CHAT_FIXTURE_HOLD_MS.
+// the holds via AGENTBOARD_CHAT_FIXTURE_HOLD_MS. Tool turns exercise short
+// Bash handles; "tool fail" adds a failed result and a project-relative Read.
 import type { Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk'
 import type { ChatQueryFactory } from './ChatSessionDriver'
 
@@ -98,7 +99,12 @@ export const fixtureQueryFactory: ChatQueryFactory = ({ prompt, options, wire })
       push({ type: 'assistant', message: { id: crypto.randomUUID(), role: 'assistant', content: [{ type: 'tool_use', id: toolUseID, name: 'Bash', input: { description: 'Print the fixture greeting', command: 'echo fixture' } }] } })
       await hold(1600)
       if (closed || turn !== generation) return
-      push({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: toolUseID, content: 'fixture output' }] } })
+      push({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: toolUseID, content: /fail/i.test(text) ? 'Fixture command failed' : 'fixture output', is_error: /fail/i.test(text) }] } })
+      if (/fail/i.test(text)) {
+        const readID = crypto.randomUUID()
+        push({ type: 'assistant', message: { id: crypto.randomUUID(), role: 'assistant', content: [{ type: 'tool_use', id: readID, name: 'Read', input: { file_path: `${options.cwd}/src/client/App.tsx` } }] } })
+        push({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: readID, content: '// Fixture file contents' }] } })
+      }
       assistant('Tool finished.')
     }
     if (/retry/i.test(text)) {

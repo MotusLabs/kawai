@@ -1,30 +1,51 @@
-// Read-only transcript entries; active approval/question controls live
-// separately. Tool-call summaries add a one-line input detail (paths relative
-// to the session's project) and tool-result summaries a first-line hint, each
-// ellipsizing with the full value on hover.
+// Read-only transcript with one expandable entry per tool use. Calls and
+// results are paired in the view; approvals/questions render separately.
 import type { ChatEvent } from '@shared/chat'
 import Markdown from '../Markdown'
-import { toolCallDetail, toolResultDetail } from './toolCallLabel'
+import { toolCallDetail } from './toolCallLabel'
 
 /**
  * `<summary>` whose optional parenthetical detail shrinks instead of wrapping.
  * The chevron and label share one line (see `.chat-summary`); only the detail
  * ellipsizes, with the full value on hover.
  */
-function SummaryLabel({ label, detail }: { label: string; detail: string | null }) {
+function SummaryLabel({ label, detail, failed = false }: { label: string; detail: string | null; failed?: boolean }) {
   return <summary className="chat-summary">
     <span className="shrink-0">{label}</span>
     {detail !== null && <>
-      <span className="shrink-0">{' ('}</span>
+      <span className="shrink-0">{'('}</span>
       <span className="min-w-0 truncate" title={detail}>{detail}</span>
       <span className="shrink-0">)</span>
     </>}
+    {failed && <span className="shrink-0 text-chat-danger" aria-label="Tool failed">✗</span>}
   </summary>
+}
+
+type ToolResult = Extract<ChatEvent, { type: 'tool_result' }>
+type TranscriptEntry = { event: ChatEvent; result?: ToolResult }
+
+/** Attach later results to the earlier call while preserving transcript order. */
+function toolEntries(events: ChatEvent[]): TranscriptEntry[] {
+  const entries: TranscriptEntry[] = []
+  const calls = new Map<string, TranscriptEntry>()
+  for (const event of events) {
+    if (event.type === 'tool_result') {
+      const call = calls.get(event.toolCallId)
+      if (call) {
+        call.result = event
+        continue
+      }
+    }
+    const entry: TranscriptEntry = { event }
+    entries.push(entry)
+    if (event.type === 'tool_call') calls.set(event.toolCallId, entry)
+  }
+  return entries
 }
 
 export default function ChatMessages({ events, projectPath }: { events: ChatEvent[]; projectPath?: string }) {
   return <div className="space-y-4" data-testid="chat-transcript">
-    {events.map(event => {
+    {toolEntries(events).map(({ event, result }) => {
       switch (event.type) {
         case 'user_message':
           return <article key={event.id} data-chat-role="user" className="ml-8 border border-border bg-elevated p-3">
@@ -38,15 +59,15 @@ export default function ChatMessages({ events, projectPath }: { events: ChatEven
           </article>
         case 'tool_call': {
           const detail = toolCallDetail(event.tool, event.input, projectPath)
-          return <details key={event.id} className="border-l-2 border-border px-3 text-chat-meta text-secondary">
-            <SummaryLabel label={`Tool: ${event.tool}`} detail={detail} />
+          return <details key={`tool:${event.toolCallId}`} className="border-l-2 border-border px-3 text-chat-meta text-secondary">
+            <SummaryLabel label={event.tool} detail={detail} failed={result?.isError} />
             <pre className="mt-2 overflow-auto whitespace-pre-wrap">{JSON.stringify(event.input, null, 2)}</pre>
+            {result && <pre className="mt-2 overflow-auto whitespace-pre-wrap">{result.output}</pre>}
           </details>
         }
         case 'tool_result': {
-          const hint = toolResultDetail(event.output)
           return <details key={event.id} className="px-3 text-chat-meta text-secondary">
-            <SummaryLabel label={event.isError ? 'Tool failed' : 'Tool result'} detail={hint} />
+            <SummaryLabel label="Tool result" detail={null} failed={event.isError} />
             <pre className="mt-2 overflow-auto whitespace-pre-wrap">{event.output}</pre>
           </details>
         }
