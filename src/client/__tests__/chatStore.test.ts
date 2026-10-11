@@ -1,11 +1,12 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import type { ChatContextUsage, ChatEvent } from '@shared/chat'
+import type { ChatContextUsage, ChatEvent, ChatNotification } from '@shared/chat'
+import type { ClientMessage } from '@shared/types'
 import { applyChatEvents, emptyTranscript, useChatStore } from '../stores/chatStore'
 
 const delta = (sequence: number, delta: string): Extract<ChatEvent, { type: 'assistant_delta' }> => ({
   type: 'assistant_delta', id: `event-${sequence}`, sequence, at: 'now', turnId: 'turn-1', messageId: 'message-1', delta,
 })
-afterEach(() => useChatStore.setState({ sessions: {}, drafts: {} }))
+afterEach(() => useChatStore.setState({ sessions: {}, drafts: {}, closedAccountNotices: {} }))
 
 describe('chat store', () => {
   test('ordered deltas merge and final text replaces the preview', () => {
@@ -215,7 +216,7 @@ describe('chat store usage', () => {
     receivedAt: '2026-10-07T13:00:00.000Z',
   }
 
-  afterEach(() => useChatStore.setState({ sessions: {}, usage: {} }))
+  afterEach(() => useChatStore.setState({ sessions: {}, usage: {}, closedAccountNotices: {} }))
 
   test('snapshots and pushes land in one per-profile map', () => {
     const store = useChatStore.getState()
@@ -269,7 +270,7 @@ describe('chat store context usage', () => {
     at: '2026-10-10T12:00:00.000Z',
   })
 
-  afterEach(() => useChatStore.setState({ sessions: {}, usage: {} }))
+  afterEach(() => useChatStore.setState({ sessions: {}, usage: {}, closedAccountNotices: {} }))
 
   test('snapshots and live pushes replace the reading; a null snapshot clears it', () => {
     const store = useChatStore.getState()
@@ -329,7 +330,7 @@ describe('chat store workers', () => {
     elapsedMs,
   })
 
-  afterEach(() => useChatStore.setState({ sessions: {}, workerBodies: {} }))
+  afterEach(() => useChatStore.setState({ sessions: {}, workerBodies: {}, closedAccountNotices: {} }))
 
   test('snapshots and pushes anchor each row on the client clock', () => {
     const store = useChatStore.getState()
@@ -401,5 +402,77 @@ describe('chat store workers', () => {
     // A settled reply is final; reset leaves it alone.
     store.resetWorkerBody('chat-1', 'toolu_settled')
     expect(useChatStore.getState().workerBodies['chat-1']!.toolu_settled).toEqual({ status: 'unavailable' })
+  })
+})
+
+describe('chat store notifications', () => {
+  const accountNotice = (text = 'Your login expires in 2 days'): ChatNotification => ({
+    key: 'login-expiry', source: 'account', severity: 'warning', priority: 'high', text,
+    hint: 'run /login in a Claude terminal to renew', receivedAt: '2026-10-12T00:00:00.000Z',
+  })
+  const agentNotice = (key = 'model-context-window'): ChatNotification => ({
+    key, source: 'agent', severity: 'warning', priority: 'high', text: 'Context low',
+    receivedAt: '2026-10-12T00:00:01.000Z',
+  })
+  const sent: ClientMessage[] = []
+  const send = (message: ClientMessage) => { sent.push(message) }
+
+  afterEach(() => {
+    useChatStore.setState({ sessions: {}, closedAccountNotices: {} })
+    sent.length = 0
+  })
+
+  test('a snapshot and pushes replace the list wholesale', () => {
+    const store = useChatStore.getState()
+    store.snapshot({
+      type: 'chat-snapshot', sessionId: 'chat-1', profileId: 'default', events: [], pendingRequests: [],
+      status: 'waiting', throughSequence: 0, commands: { status: 'unavailable', commands: [] },
+      activity: null, contextUsage: null, usage: null, workers: [],
+      notifications: [accountNotice(), agentNotice()],
+    })
+    expect(useChatStore.getState().sessions['chat-1']!.notifications).toHaveLength(2)
+    store.setNotifications('chat-1', [agentNotice()])
+    expect(useChatStore.getState().sessions['chat-1']!.notifications).toEqual([agentNotice()])
+    store.setNotifications('chat-1', [])
+    expect(useChatStore.getState().sessions['chat-1']!.notifications).toEqual([])
+    // Other sessions are untouched.
+    expect(useChatStore.getState().sessions['chat-2']).toBeUndefined()
+  })
+
+  test('closing an agent notice sends the dismiss message', () => {
+    const store = useChatStore.getState()
+    store.setNotifications('chat-1', [agentNotice()])
+    store.closeNotification('chat-1', agentNotice(), send)
+    expect(sent).toEqual([
+      { type: 'chat-dismiss-notification', sessionId: 'chat-1', key: 'model-context-window' },
+    ])
+  })
+
+  test('closing an account notice hides it in this tab until its text changes', () => {
+    const store = useChatStore.getState()
+    store.snapshot({
+      type: 'chat-snapshot', sessionId: 'chat-1', profileId: 'default', events: [], pendingRequests: [],
+      status: 'waiting', throughSequence: 0, commands: { status: 'unavailable', commands: [] },
+      activity: null, contextUsage: null, usage: null, workers: [],
+      notifications: [accountNotice(), agentNotice()],
+    })
+    store.closeNotification('chat-1', accountNotice(), send)
+    // Nothing was sent to the server; the push re-hides it, the agent one stays.
+    expect(sent).toEqual([])
+    store.setNotifications('chat-1', [accountNotice(), agentNotice()])
+    expect(useChatStore.getState().sessions['chat-1']!.notifications).toEqual([agentNotice()])
+    // A new day count changes the text: the notice shows again.
+    store.setNotifications('chat-1', [accountNotice('Your login expires in 1 day')])
+    expect(useChatStore.getState().sessions['chat-1']!.notifications.map((notice) => notice.text))
+      .toEqual(['Your login expires in 1 day'])
+  })
+
+  test('removing the session drops its closed-account keys', () => {
+    const store = useChatStore.getState()
+    store.setNotifications('chat-1', [accountNotice()])
+    store.closeNotification('chat-1', accountNotice(), send)
+    expect(useChatStore.getState().closedAccountNotices['chat-1']?.size).toBe(1)
+    store.remove('chat-1')
+    expect(useChatStore.getState().closedAccountNotices['chat-1']).toBeUndefined()
   })
 })

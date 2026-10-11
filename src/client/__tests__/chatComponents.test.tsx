@@ -362,7 +362,7 @@ describe('chat archive view', () => {
 })
 
 describe('chat composer drafts', () => {
-  afterEach(() => useChatStore.setState({ sessions: {}, drafts: {} }))
+  afterEach(() => useChatStore.setState({ sessions: {}, drafts: {}, closedAccountNotices: {} }))
 
   const chatB = { ...chatSession, id: 'chat-2', name: 'Chat B' } as Session
   function renderComposerView(session: Session) {
@@ -676,7 +676,7 @@ describe('slash-command menu', () => {
     ],
   }
 
-  afterEach(() => useChatStore.setState({ sessions: {}, drafts: {} }))
+  afterEach(() => useChatStore.setState({ sessions: {}, drafts: {}, closedAccountNotices: {} }))
 
   function renderComposer(commands: ChatCommandState, session: Session = chatSession) {
     useChatStore.getState().setCommands({ type: 'chat-commands', sessionId: session.id, state: commands })
@@ -844,7 +844,7 @@ describe('slash-command menu', () => {
 })
 
 describe('/clear, /reset, /new', () => {
-  afterEach(() => useChatStore.setState({ sessions: {}, drafts: {} }))
+  afterEach(() => useChatStore.setState({ sessions: {}, drafts: {}, closedAccountNotices: {} }))
 
   function renderClearable(session: Session = chatSession) {
     const sent: ClientMessage[] = []
@@ -1157,7 +1157,7 @@ describe('chat activity row', () => {
     renderer = render(archived)
     expect(rows(renderer)).toHaveLength(0)
     renderer.unmount()
-    useChatStore.setState({ sessions: {} })
+    useChatStore.setState({ sessions: {}, closedAccountNotices: {} })
   })
 })
 
@@ -1421,7 +1421,7 @@ describe('chat context meter', () => {
   })
 
   test('no reading renders no meter', () => {
-    act(() => { useChatStore.setState({ sessions: {} }) })
+    act(() => { useChatStore.setState({ sessions: {}, closedAccountNotices: {} }) })
     const renderer = renderView()
     expect(renderer.root.findAllByProps({ 'data-testid': 'chat-context-meter' })).toHaveLength(0)
     renderer.unmount()
@@ -1497,7 +1497,7 @@ describe('chat workers', () => {
   const seedWorkers = (workers: ChatWorker[]) => {
     act(() => { useChatStore.getState().setWorkers(SESSION, workers) })
   }
-  afterEach(() => useChatStore.setState({ sessions: {}, workerBodies: {} }))
+  afterEach(() => useChatStore.setState({ sessions: {}, workerBodies: {}, closedAccountNotices: {} }))
 
   test('an Agent call with a roster entry renders the worker summary row', () => {
     seedWorkers([rosterWorker('toolu_w1')])
@@ -1744,6 +1744,6 @@ describe('chat workers', () => {
     expect(renderer.root.findAllByProps({ 'data-testid': 'chat-worker-elapsed' })).toHaveLength(0)
     expect(textOf(renderer.root.findByProps({ 'data-testid': 'chat-worker-summary' }))).toBe('Ran out of budget')
     renderer.unmount()
-    useChatStore.setState({ sessions: {} })
+    useChatStore.setState({ sessions: {}, closedAccountNotices: {} })
   })
 })

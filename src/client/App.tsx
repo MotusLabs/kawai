@@ -550,6 +550,7 @@ export default function App() {
       if (message.type === 'chat-context-usage') useChatStore.getState().setContextUsage(message.sessionId, message.usage)
       if (message.type === 'chat-usage') useChatStore.getState().setUsage(message.profileId, message.report)
       if (message.type === 'chat-workers') useChatStore.getState().setWorkers(message.sessionId, message.workers)
+      if (message.type === 'chat-notifications') useChatStore.getState().setNotifications(message.sessionId, message.notifications)
       if (message.type === 'chat-worker-transcript') useChatStore.getState().setWorkerBody(message)
       if (message.type === 'team-mailbox-snapshot') useTeamMailboxStore.getState().apply(message)
       if (message.type === 'team-mailbox-dead-letter') notifyMailboxDeadLetter(message)

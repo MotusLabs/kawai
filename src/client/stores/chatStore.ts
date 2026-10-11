@@ -11,6 +11,10 @@
 // Plan usage is per profile, not per session (the allowance is per account
 // and provider): the snapshot's `usage` and chat-usage pushes land in one
 // shared map, so every session of a profile renders the same bar.
+// Notifications are another replaced current value (notification strip
+// design D6): the snapshot and chat-notifications pushes own the list, agent
+// notices close through the server, and account notices close per browser
+// tab only — a hidden one returns when its text (the day count) changes.
 // Unsubmitted composer drafts are client-only state, keyed by session.
 import { create } from 'zustand'
 import type {
@@ -18,11 +22,12 @@ import type {
   ChatCommandState,
   ChatContextUsage,
   ChatEvent,
+  ChatNotification,
   ChatPendingRequest,
   ChatUsageReport,
   ChatWorker,
 } from '@shared/chat'
-import type { ServerMessage, SessionStatus } from '@shared/types'
+import type { SendClientMessage, ServerMessage, SessionStatus } from '@shared/types'
 
 /** The live activity plus its client-clock anchor (design D6). */
 export interface ChatTranscriptActivity {
@@ -56,12 +61,14 @@ export interface ChatTranscript {
   contextUsage: ChatContextUsage | null
   /** Latest worker roster (workers design D2): replaced, never merged. */
   workers: ChatTranscriptWorker[]
+  /** Active notices (notification strip design D6), closed account ones filtered. */
+  notifications: ChatNotification[]
 }
 
 export const emptyTranscript = (): ChatTranscript => ({
   events: [], pendingRequests: [], status: 'waiting', throughSequence: 0,
   commands: { status: 'unavailable', commands: [] }, seen: new Set(), activity: null, contextUsage: null,
-  workers: [],
+  workers: [], notifications: [],
 })
 
 /** Anchor a server-reported activity on the client's clock (design D2). */
@@ -75,6 +82,22 @@ function anchorWorkers(workers: ChatWorker[]): ChatTranscriptWorker[] {
     ...row,
     startedAt: Date.now() - elapsedMs,
   }))
+}
+
+/** A notice's per-tab close key: a changed text is a different notice. */
+function accountCloseKey(notice: ChatNotification): string {
+  return `${notice.key}:${notice.text}`
+}
+
+/** Drop the account notices this tab closed; agent notices pass through. */
+function visibleNotifications(
+  closed: Set<string> | undefined,
+  notifications: ChatNotification[]
+): ChatNotification[] {
+  if (!closed || closed.size === 0) return notifications
+  return notifications.filter(
+    (notice) => notice.source !== 'account' || !closed.has(accountCloseKey(notice))
+  )
 }
 
 export function applyChatEvents(state: ChatTranscript, incoming: ChatEvent[]): ChatTranscript {
@@ -125,6 +148,13 @@ interface ChatStore {
   usage: Record<string, ChatUsageReport | null>
   /** Worker bodies per session and worker (workers design D5, on expand). */
   workerBodies: Record<string, Record<string, ChatWorkerBody>>
+  /**
+   * Account notices this browser tab closed (notification strip design D6),
+   * keyed per session by `${key}:${text}`: a changed day count changes the
+   * text and shows the notice again. Never sent to the server, dropped by a
+   * reload.
+   */
+  closedAccountNotices: Record<string, Set<string>>
   apply: (sessionId: string, events: ChatEvent[]) => void
   snapshot: (message: Extract<ServerMessage, { type: 'chat-snapshot' }>) => void
   /** Replace one session's command list (chat-commands push). */
@@ -137,8 +167,20 @@ interface ChatStore {
   setUsage: (profileId: string, report: ChatUsageReport | null) => void
   /** Adopt the latest roster (chat-workers push / snapshot). */
   setWorkers: (sessionId: string, workers: ChatWorker[]) => void
+  /** Adopt the latest notice list (chat-notifications push / snapshot). */
+  setNotifications: (sessionId: string, notifications: ChatNotification[]) => void
   /** Adopt a worker-body reply (chat-worker-transcript). */
   setWorkerBody: (message: Extract<ServerMessage, { type: 'chat-worker-transcript' }>) => void
+  /**
+   * Close a notice (notification strip design D6): an agent notice is
+   * dismissed on the server (every attached client loses it), an account
+   * notice is hidden in this tab only until its text changes.
+   */
+  closeNotification: (
+    sessionId: string,
+    notice: ChatNotification,
+    send: SendClientMessage
+  ) => void
   /**
    * Mark a body as fetching; true only for the first request, so the caller
    * sends the wire request exactly once per worker.
@@ -155,6 +197,7 @@ export const useChatStore = create<ChatStore>((set) => ({
   drafts: {},
   usage: {},
   workerBodies: {},
+  closedAccountNotices: {},
   apply: (sessionId, events) => set(state => ({ sessions: {
     ...state.sessions, [sessionId]: applyChatEvents(state.sessions[sessionId] ?? emptyTranscript(), events),
   } })),
@@ -173,6 +216,12 @@ export const useChatStore = create<ChatStore>((set) => ({
         // The roster is authoritative at attach time, live rows and settled
         // outcomes together (workers design D2).
         workers: anchorWorkers(message.workers),
+        // The notice list is authoritative at attach time, minus whatever
+        // this tab closed (notification strip design D6).
+        notifications: visibleNotifications(
+          state.closedAccountNotices[message.sessionId],
+          message.notifications
+        ),
       },
     },
     // The snapshot's usage is authoritative for the profile at attach time.
@@ -209,6 +258,32 @@ export const useChatStore = create<ChatStore>((set) => ({
       workers: anchorWorkers(workers),
     } } }
   }),
+  setNotifications: (sessionId, notifications) => set(state => {
+    const current = state.sessions[sessionId] ?? emptyTranscript()
+    return { sessions: { ...state.sessions, [sessionId]: {
+      ...current,
+      notifications: visibleNotifications(
+        state.closedAccountNotices[sessionId],
+        notifications
+      ),
+    } } }
+  }),
+  closeNotification: (sessionId, notice, send) => {
+    if (notice.source === 'agent') {
+      // Server-side dismissal: every attached client loses it when the
+      // manager's push lands.
+      send({ type: 'chat-dismiss-notification', sessionId, key: notice.key })
+      return
+    }
+    set(state => ({
+      closedAccountNotices: {
+        ...state.closedAccountNotices,
+        [sessionId]: new Set(state.closedAccountNotices[sessionId] ?? []).add(
+          accountCloseKey(notice)
+        ),
+      },
+    }))
+  },
   setWorkerBody: message => set(state => ({
     workerBodies: {
       ...state.workerBodies,
@@ -254,6 +329,8 @@ export const useChatStore = create<ChatStore>((set) => ({
     delete drafts[sessionId]
     const workerBodies = { ...state.workerBodies }
     delete workerBodies[sessionId]
-    return { sessions, drafts, workerBodies }
+    const closedAccountNotices = { ...state.closedAccountNotices }
+    delete closedAccountNotices[sessionId]
+    return { sessions, drafts, workerBodies, closedAccountNotices }
   }),
 }))

@@ -11,7 +11,7 @@ import { useChatStore } from '../stores/chatStore'
 import { toastManager } from '../components/Toast'
 import { notifyMailboxDeadLetter } from '../utils/teamMailboxNotification'
 
-afterEach(() => { useTeamMailboxStore.setState({ views: {} }); useChatStore.setState({ sessions: {} }) })
+afterEach(() => { useTeamMailboxStore.setState({ views: {} }); useChatStore.setState({ sessions: {}, closedAccountNotices: {} }) })
 const peer: ChatEvent = { type: 'peer_message', id: 'p1', sequence: 1, at: 'now', turnId: 'turn', messageId: 'mail',
   senderSession: 'lead', senderGroup: 'leads', priority: 'urgent', originPath: '/repo/worktree', tags: ['review', 'review'],
   threadId: 'thread', body: 'Review this change', possibleDuplicate: true }
