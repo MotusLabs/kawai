@@ -157,6 +157,8 @@ interface Harness {
   rateLimits: ChatUsageReport[]
   usageReports: ChatUsageReport[]
   contextUsage: ChatContextUsage[]
+  /** Correction flag per onContextUsage publish, aligned with contextUsage. */
+  contextCorrections: boolean[]
   noData: number[]
   fakes: FakeQueryHandle[]
   sdkSessionIds: string[]
@@ -188,6 +190,7 @@ function createHarness(
   const rateLimits: ChatUsageReport[] = []
   const usageReports: ChatUsageReport[] = []
   const contextUsage: ChatContextUsage[] = []
+  const contextCorrections: boolean[] = []
   const noData: number[] = []
   const fakes: FakeQueryHandle[] = []
   const sdkSessionIds: string[] = []
@@ -215,7 +218,10 @@ function createHarness(
     onActivity: (activity) => activities.push(activity),
     onRateLimit: (report) => rateLimits.push(report),
     onUsageReport: (report) => usageReports.push(report),
-    onContextUsage: (usage) => contextUsage.push(usage),
+    onContextUsage: (usage, correction) => {
+      contextUsage.push(usage)
+      contextCorrections.push(correction ?? false)
+    },
     ...(claimUsagePull ? { claimUsagePull } : {}),
     onUsageNoData: () => noData.push(1),
     onSdkSessionId: (id) => sdkSessionIds.push(id),
@@ -230,6 +236,7 @@ function createHarness(
     rateLimits,
     usageReports,
     contextUsage,
+    contextCorrections,
     noData,
     fakes,
     sdkSessionIds,
@@ -2042,5 +2049,77 @@ describe('ChatSessionDriver context usage', () => {
     expect(harness.contextUsage).toHaveLength(before)
     expect(harness.contextUsage.at(-1)).toMatchObject({ usedTokens: 157_900 })
     expect(harness.events.filter((event) => event.type === 'notice')).toHaveLength(3)
+  })
+
+  test("a respawn drops the old process's report threshold when the new probe fails", async () => {
+    // The old process observed a 167k report threshold over a 200k profile
+    // window; the operator then narrows the window to 100k and the process
+    // crashes. The respawn must not inherit the dead process's reading.
+    const window = { env: '200000' }
+    let probes = 0
+    const harness = createHarness({
+      getProviderEnv: () => ({ CLAUDE_CODE_AUTO_COMPACT_WINDOW: window.env }),
+      contextImpl: async () => {
+        probes += 1
+        return probes === 1
+          ? contextReport({ autoCompactThreshold: 167_000 })
+          : Promise.reject(new Error('probe failed'))
+      },
+    })
+    harness.driver.send('hello')
+    const fake = harness.fakes[0]!
+    fake.push(assistantUsage({ input_tokens: 157_900 }, 'msg_1'))
+    await flush()
+    expect(harness.contextUsage.at(-1)).toMatchObject({ thresholdTokens: 167_000 })
+
+    fake.exit()
+    await flush()
+    expect(harness.driver.isDead).toBe(true)
+    window.env = '100000'
+    harness.driver.send('again')
+    expect(harness.fakes).toHaveLength(2)
+    // The spawn itself re-anchors the retained reading on the new window —
+    // flagged as a correction — before any frame arrives.
+    const spawnRepublish = harness.contextUsage.at(-1)!
+    expect(spawnRepublish).toMatchObject({ usedTokens: 157_900, thresholdTokens: 100_000 })
+    expect(harness.contextCorrections.at(-1)).toBe(true)
+
+    // The respawn's attach probe failed, so the profile window keeps ruling.
+    const respawned = harness.fakes[1]!
+    respawned.push(assistantUsage({ input_tokens: 80_000 }, 'msg_2'))
+    await flush()
+    expect(harness.contextUsage.at(-1)).toMatchObject({ usedTokens: 80_000, thresholdTokens: 100_000, percentage: 80 })
+    expect(harness.contextCorrections.at(-1)).toBe(false)
+  })
+
+  test('a report landing after the turn boundary republishes as a correction', async () => {
+    let threshold = 200_000
+    let calls = 0
+    const harness = createHarness({
+      contextImpl: () => {
+        // The attach probe answers at once; every boundary probe resolves
+        // late — after turn_completed has already published the reading.
+        calls += 1
+        if (calls === 1) return Promise.resolve(contextReport({ autoCompactThreshold: threshold }))
+        return new Promise((resolve) => {
+          setTimeout(() => resolve(contextReport({ autoCompactThreshold: threshold })), 25)
+        })
+      },
+    })
+    harness.driver.send('hello')
+    const fake = harness.fakes[0]!
+    fake.push(assistantUsage({ input_tokens: 157_900 }, 'msg_1'))
+    fake.push(result('success', { modelUsage: modelUsageWith(200_000) }))
+    await flush()
+    // The boundary published a plain reading of the then-known threshold.
+    expect(harness.contextUsage.at(-1)).toMatchObject({ thresholdTokens: 200_000 })
+    expect(harness.contextCorrections.at(-1)).toBe(false)
+
+    threshold = 100_000
+    await new Promise((resolve) => setTimeout(resolve, 40))
+    // The late report re-scales the same used count as a correction, so the
+    // manager can persist the new denominator without another boundary.
+    expect(harness.contextUsage.at(-1)).toMatchObject({ usedTokens: 157_900, thresholdTokens: 100_000, percentage: 157.9 })
+    expect(harness.contextCorrections.at(-1)).toBe(true)
   })
 })

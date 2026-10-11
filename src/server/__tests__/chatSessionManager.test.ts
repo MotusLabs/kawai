@@ -2643,4 +2643,42 @@ describe('ChatSessionManager context usage', () => {
     expect(db.getChatSession(id)!.contextUsage).toMatchObject({ usedTokens: 30_000 })
     harness.manager.shutdown()
   })
+
+  test('a late threshold correction persists without waiting for another boundary', async () => {
+    // The turn-boundary probe resolves after turn_completed has already
+    // written the reading; the correction itself must reach the database, or
+    // an abrupt restart would restore a different percentage than the one
+    // last displayed.
+    let threshold = 200_000
+    let probes = 0
+    const report = () => ({
+      categories: [], totalTokens: 0, maxTokens: 200_000, rawMaxTokens: 200_000,
+      percentage: 0, gridRows: [], model: 'claude-sonnet-4-5', memoryFiles: [],
+      mcpTools: [], agents: [], isAutoCompactEnabled: true, apiUsage: null,
+      autoCompactThreshold: threshold,
+    })
+    const harness = createHarness(db, anyDirectory, undefined, undefined, () => {
+      probes += 1
+      // Attach answers at once; the boundary probe resolves late.
+      if (probes === 1) return Promise.resolve(report())
+      return new Promise((resolve) => {
+        setTimeout(() => resolve(report()), 25)
+      })
+    })
+    const created = harness.manager.createSession({ projectPath: '/tmp/proj' })
+    if (!created.ok) throw new Error('create failed')
+    const id = created.session.id
+    await harness.manager.send(id, 'turn')
+    const fake = harness.handles[0]!
+    fake.push(assistantUsage(157_900, 'msg_1'))
+    fake.push(resultWithWindow())
+    await flush()
+    expect(db.getChatSession(id)!.contextUsage).toMatchObject({ usedTokens: 157_900, thresholdTokens: 200_000 })
+
+    threshold = 100_000
+    await new Promise((resolve) => setTimeout(resolve, 40))
+    // No further turn or event: the correction wrote the re-scaled reading.
+    expect(db.getChatSession(id)!.contextUsage).toMatchObject({ usedTokens: 157_900, thresholdTokens: 100_000, percentage: 157.9 })
+    harness.manager.shutdown()
+  })
 })

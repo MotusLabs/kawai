@@ -834,8 +834,8 @@ export class ChatSessionManager {
           this.options.onCommandState?.(record.sessionId, state),
         onActivity: (activity) =>
           this.handleDriverActivity(record.sessionId, activity),
-        onContextUsage: (usage) =>
-          this.handleDriverContextUsage(record.sessionId, usage),
+        onContextUsage: (usage, correction) =>
+          this.handleDriverContextUsage(record.sessionId, usage, correction),
         // Plan usage is recorded against the session's profile (design D3);
         // the store's change listener drives the onUsage broadcast.
         onRateLimit: (report) =>
@@ -998,15 +998,22 @@ export class ChatSessionManager {
 
   /**
    * Hold the latest reading (design D5) and forward it to the broadcast sink;
-   * persistence is throttled to the boundary events above.
+   * persistence is throttled to the boundary events above — except
+   * corrections, which persist at once: the turn-boundary probe resolves
+   * after `turn_completed` has already written the reading, and an abrupt
+   * restart would otherwise restore a different threshold (and percentage)
+   * than the one last displayed. Corrections are probe answers and
+   * spawn-time re-anchors, so they do not reintroduce per-frame churn.
    */
   private handleDriverContextUsage(
     sessionId: string,
-    usage: ChatContextUsage
+    usage: ChatContextUsage,
+    correction = false
   ): void {
     if (!this.records.has(sessionId)) return
     this.contextReadings.set(sessionId, usage)
     this.options.onContextUsage?.(sessionId, usage)
+    if (correction) this.persistContextUsage(sessionId)
   }
 
   /** Write the freshest in-memory reading to the record, if one exists. */
