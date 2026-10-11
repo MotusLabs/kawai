@@ -33,6 +33,7 @@ import type {
   ChatQuestion,
   ChatQuestionAnswer,
   ChatUsageReport,
+  ChatWorker,
 } from '../../shared/chat'
 import type { SessionStatus } from '../../shared/types'
 import {
@@ -50,6 +51,15 @@ import {
   type ChatActivityInput,
   type ChatActivityState,
 } from './chatActivity'
+import {
+  anyWorkerLive,
+  initialChatWorkersState,
+  projectWorkers,
+  reduceWorkers,
+  taskFrameToInput,
+  type ChatWorkersInput,
+  type ChatWorkersState,
+} from './chatWorkers'
 import {
   ChatContextTracker,
   parsePositiveTokens,
@@ -117,6 +127,12 @@ export interface ChatSessionDriverOptions {
    * sequenced, buffered, or replayed like events.
    */
   onActivity?: (activity: ChatActivity | null) => void
+  /**
+   * The spawned-worker roster (workers design D2): the full projection,
+   * called whenever it changes — never per elapsed tick. Ephemeral like
+   * activity: never sequenced, persisted only through the sidecar (D6).
+   */
+  onWorkers?: (workers: ChatWorker[]) => void
   /**
    * Context usage (context meter designs D1/D7): the latest reading, fired
    * when a new per-request usage lands, when compaction adopts a
@@ -201,6 +217,17 @@ export class ChatSessionDriver {
   private lastStatus: SessionStatus = 'waiting'
   /** Live-turn activity state (design D3); null phase when no turn runs. */
   private activityState: ChatActivityState = initialChatActivityState()
+  /**
+   * Spawned-worker roster state (workers design D3); reduced from the task
+   * edge stream and the background level set, projected on change.
+   */
+  private workersState: ChatWorkersState = initialChatWorkersState()
+  /**
+   * Agent/Task tool_use ids, parent and nested alike (design D4): the only
+   * worker traffic kept in the parent transcript, and the join keys that say
+   * a subagent tool_result belongs to a kept nested-spawn call.
+   */
+  private readonly agentToolCallIds = new Set<string>()
   /** Context-meter state (context meter designs D1–D3); see contextUsage.ts. */
   private readonly context = new ChatContextTracker()
   private dead = false
@@ -284,6 +311,9 @@ export class ChatSessionDriver {
       // Turn boundary: re-resolve the threshold for the next turn (design D2).
       this.refreshContextThreshold()
     }
+    // Workers die with the aborted turn (design D3): outcome-less rows
+    // settle as stopped so none can keep reading as live.
+    this.feedWorkers({ type: 'process_end' })
     const query = this.query
     if (query) {
       void query.interrupt().catch(() => {
@@ -299,6 +329,9 @@ export class ChatSessionDriver {
     this.queue.end()
     this.cancelAllRequests('killed')
     this.activeTurnId = null
+    // Archive and kill both end the process (design D3): every worker still
+    // without an outcome settles as stopped, nothing survives as live.
+    this.feedWorkers({ type: 'process_end' })
     this.commands.markUnavailable()
     const query = this.query
     this.query = null
@@ -595,6 +628,9 @@ export class ChatSessionDriver {
     this.dead = true
     this.query = null
     this.activeTurnId = null
+    // The process is gone (design D3): workers cannot have outcomes any
+    // more, so any still-open row settles as stopped rather than wedging.
+    this.feedWorkers({ type: 'process_end' })
     this.feedActivity({ type: 'turn_end' })
     this.cancelAllRequests('killed')
     this.emit({ type: 'error', message: reason })
@@ -655,8 +691,11 @@ export class ChatSessionDriver {
     const turnId = this.activeTurnId
     if (!turnId) return
     const messageId = message.message.id ?? message.uuid
+    const subagent = isSubagentContentFrame(message)
     for (const block of message.message.content) {
       if (block.type === 'text') {
+        // Worker chatter stays out of the parent transcript (design D4).
+        if (subagent) continue
         this.emit({
           type: 'assistant_text',
           turnId,
@@ -664,6 +703,10 @@ export class ChatSessionDriver {
           text: block.text,
         })
       } else if (block.type === 'tool_use') {
+        // D4 carve-out: a worker's own Agent/Task call is the anchor of the
+        // nested worker's row, so it is emitted exactly like the parent's.
+        // Everything else a worker runs stays out.
+        if (subagent && !isAgentSpawnTool(block.name)) continue
         this.seenToolCallIds.add(block.id)
         this.emit({
           type: 'tool_call',
@@ -672,7 +715,12 @@ export class ChatSessionDriver {
           tool: block.name,
           input: block.input,
         })
-        if (!isSubagentFrame(message)) {
+        if (isAgentSpawnTool(block.name)) {
+          this.agentToolCallIds.add(block.id)
+          // The row anchor (design D1): the spawning call's id is the workerId.
+          this.feedWorkers({ type: 'spawn', toolCallId: block.id })
+        }
+        if (!subagent) {
           this.feedActivity({
             type: 'tool_call',
             toolCallId: block.id,
@@ -697,7 +745,7 @@ export class ChatSessionDriver {
         delta: event.delta.text,
       })
     }
-    if (event.type === 'content_block_start' && !isSubagentFrame(message)) {
+    if (event.type === 'content_block_start' && !isSubagentContentFrame(message)) {
       const input = contentBlockToInput(event.content_block)
       if (input) this.feedActivity(input)
     }
@@ -711,8 +759,13 @@ export class ChatSessionDriver {
       this.maybeEchoUserText(content, turnId)
       return
     }
+    const subagent = isSubagentContentFrame(message)
     for (const block of content) {
       if (block.type === 'tool_result') {
+        // D4 carve-out: only the tool_result of a kept Agent/Task call (a
+        // nested spawn) rides the parent transcript; a worker's own tool
+        // results stay out.
+        if (subagent && !this.agentToolCallIds.has(block.tool_use_id)) continue
         this.seenToolCallIds.add(block.tool_use_id)
         this.emit({
           type: 'tool_result',
@@ -721,10 +774,11 @@ export class ChatSessionDriver {
           output: toolResultText(block.content),
           isError: block.is_error,
         })
-        if (!isSubagentFrame(message)) {
+        if (!subagent) {
           this.feedActivity({ type: 'tool_result', toolCallId: block.tool_use_id })
         }
       } else if (block.type === 'text') {
+        if (subagent) continue
         this.maybeEchoUserText(block.text, turnId)
       }
     }
@@ -818,7 +872,15 @@ export class ChatSessionDriver {
       )
       this.emit({ type: 'notice', text: 'Context compacted', kind: 'compacted' })
     }
-    if (isSubagentFrame(message)) return
+    // The task_* edges and the background level set feed the worker roster
+    // (design D3); they never reach the activity reducer, whose own inputs
+    // are status and api_retry only.
+    const rosterInput = taskFrameToInput(message)
+    if (rosterInput) {
+      this.feedWorkers(rosterInput)
+      return
+    }
+    if (isSubagentContentFrame(message)) return
     const input = systemFrameToInput(message)
     if (input) this.feedActivity(input)
     // Other system subtypes are informational; ignored.
@@ -932,10 +994,13 @@ export class ChatSessionDriver {
   }
 
   private refreshStatus(): void {
+    // D7: a live worker holds the session at working just like an in-flight
+    // turn; permission still wins. Liveness, not status: a worker in the
+    // completion gap (running, left the set) must not hold the session.
     const next: SessionStatus =
       this.pendingRequests.size > 0
         ? 'permission'
-        : this.activeTurnId
+        : this.activeTurnId || anyWorkerLive(this.workersState)
           ? 'working'
           : 'waiting'
     if (next !== this.lastStatus) {
@@ -964,6 +1029,25 @@ export class ChatSessionDriver {
   }
 
   /**
+   * One roster input (design D3). The reducer returns the same reference on
+   * a no-op input (a repeated last-tool), which is the publish gate: the
+   * full projection goes out exactly when the roster changed, elapsed times
+   * computed fresh so clients re-anchor their timers on every publish.
+   */
+  private feedWorkers(input: ChatWorkersInput): void {
+    const next = reduceWorkers(this.workersState, input)
+    if (next === this.workersState) return
+    this.workersState = next
+    this.options.onWorkers?.(projectWorkers(this.workersState))
+    this.refreshStatus()
+  }
+
+  /** Current roster projection with elapsed times computed now (design D2). */
+  getWorkers(): ChatWorker[] {
+    return projectWorkers(this.workersState)
+  }
+
+  /**
    * Per-request context usage (design D1): an assistant frame carries the
    * latest request's usage — input plus cache reads/creations plus output —
    * which is exactly what the next request pays, never the session total.
@@ -971,7 +1055,7 @@ export class ChatSessionDriver {
    * tool's own requests cannot move the parent's meter.
    */
   private readContextUsage(message: SDKAssistantMessage): void {
-    if (isSubagentFrame(message)) return
+    if (isSubagentContentFrame(message)) return
     const usage = message.message.usage
     if (!usage) return
     this.applyContextStep(
@@ -1056,13 +1140,22 @@ export class ChatSessionDriver {
 }
 
 /**
- * Subagent frames (a Task tool's own requests, thinking, and tool traffic)
- * must not disturb the parent turn's activity row (design D3): without this,
- * a running Task would flicker between "Thinking" and "Running Task".
+ * Subagent *content* frames (design D4): an assistant/user frame whose
+ * `parent_tool_use_id` is set comes from a worker, so its text and tool
+ * traffic stay out of the parent transcript — except the worker's own
+ * Agent/Task calls, whose emission anchors the nested worker's row. The same
+ * field on stream/system frames carries other meanings (e.g. a tool_progress
+ * heartbeat names its parent tool call); there it only suppresses the
+ * activity row, as it did before this change.
  */
-function isSubagentFrame(frame: object): boolean {
+function isSubagentContentFrame(frame: object): boolean {
   const parent = (frame as { parent_tool_use_id?: unknown }).parent_tool_use_id
   return parent != null
+}
+
+/** The tools that spawn a worker (design D1): both names, current and old. */
+function isAgentSpawnTool(toolName: string): boolean {
+  return toolName === 'Agent' || toolName === 'Task'
 }
 
 function validateAnswers(

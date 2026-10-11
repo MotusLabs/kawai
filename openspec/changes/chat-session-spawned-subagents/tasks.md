@@ -8,15 +8,15 @@
 
 ## 2. Driver consumes task frames and excludes worker inner traffic
 
-- [ ] 2.1 Narrow `isSubagentFrame` in `ChatSessionDriver.ts` to subagent content frames in `handleAssistant` / `handleUser`, keeping a worker's `Agent`/`Task` tool_use and its tool_result so nested spawns have a row anchor, and verify worker Bash/Read calls are no longer emitted while parent tool calls and nested Agent calls still are
-- [ ] 2.2 Feed the `task_*` edge frames into `reduceWorkers` and a new `onWorkers` option where `handleSdkMessage` currently drops them, and verify driver tests cover a spawn, a last-tool update, and a settle
-- [ ] 2.3 Set `live` from membership in `background_tasks_changed.tasks` by `task_id` — never writing `status`, creating rows, or touching foreground workers — and verify a test leaves a running foreground worker in place when the level set omits it, and that a `task_notification` arriving after the worker left the set still writes its real outcome
-- [ ] 2.4 Write `stopped` on driver death, interrupt, archive, and kill for any worker still without an outcome, and verify tests cover each of those four exits
+- [x] 2.1 Narrow `isSubagentFrame` in `ChatSessionDriver.ts` to subagent content frames in `handleAssistant` / `handleUser`, keeping a worker's `Agent`/`Task` tool_use and its tool_result so nested spawns have a row anchor, and verify worker Bash/Read calls are no longer emitted while parent tool calls and nested Agent calls still are
+- [x] 2.2 Feed the `task_*` edge frames into `reduceWorkers` and a new `onWorkers` option where `handleSdkMessage` currently drops them, and verify driver tests cover a spawn, a last-tool update, and a settle
+- [x] 2.3 Set `live` from membership in `background_tasks_changed.tasks` by `task_id` — never writing `status`, creating rows, or touching foreground workers — and verify a test leaves a running foreground worker in place when the level set omits it, and that a `task_notification` arriving after the worker left the set still writes its real outcome
+- [x] 2.4 Write `stopped` on driver death, interrupt, archive, and kill for any worker still without an outcome, and verify tests cover each of those four exits
 
 ## 3. Outcomes, status, and delivery
 
 - [ ] 3.1 Persist a worker to `resolveDataDir()/chat-workers/<sessionId>.json` when it spawns and rewrite it on every settle, and verify a unit test round-trips a completed and a failed worker, keeps a running worker's row after an abrupt stop, and recovers it as `stopped`
-- [ ] 3.2 Extend `refreshStatus` so `working` covers a live worker as well as an in-flight turn, and verify status tests cover workers-only, turn-plus-workers, and the return to `waiting` when no worker is live any more — including a worker that has left the running set before its result
+- [x] 3.2 Extend `refreshStatus` so `working` covers a live worker as well as an in-flight turn, and verify status tests cover workers-only, turn-plus-workers, and the return to `waiting` when no worker is live any more — including a worker that has left the running set before its result
 - [ ] 3.3 Include `workers` in `chat-snapshot` and fan out `chat-workers` from `ChatConnections` beside `chat-activity`, and verify a reconnect mid-run receives the running roster and a reconnect after settle receives the persisted outcomes with nothing marked running
 
 ## 4. Client: worker row, live strip, and expand

@@ -111,8 +111,8 @@ export interface ChatTaskFrameSlice {
   task_type?: string
   is_backgrounded?: boolean
   last_tool_name?: string
-  /** SDKTaskNotificationMessage.status. */
-  status?: string
+  /** SDKTaskNotificationMessage.status ('completed' | 'failed' | 'stopped'). */
+  status?: string | null
   summary?: string
   /** SDKTaskUpdatedMessage.patch. */
   patch?: { status?: string; description?: string; is_backgrounded?: boolean }
