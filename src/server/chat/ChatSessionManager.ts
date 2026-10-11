@@ -57,6 +57,7 @@ import { logger } from '../logger'
 import { probeSdkAvailability } from './sdkAvailability'
 import { UsageLimitStore } from './usageLimits'
 import { readWorkerTranscript } from './chatWorkerTranscript'
+import { loadTeamGroups } from '../team/teamGroups'
 import {
   findTranscriptPath,
   readTranscriptCwd,
@@ -129,8 +130,9 @@ export interface ChatSessionManagerOptions {
   /** Project-directory check; injected in tests that use fictitious paths. */
   isDirectory?: (path: string) => boolean
   /**
-   * Home directory for the user-level profile catalog (~/.kawai/profiles.json
-   * lives here). Injected in tests so a real home catalog cannot leak in.
+   * Home directory for the user-level `.kawai` catalogs (profiles.json and
+   * groups/ live here). Injected in tests so a real home catalog cannot leak
+   * in.
    */
   profileCatalogHome?: string
   /**
@@ -244,10 +246,18 @@ export class ChatSessionManager {
     { timer: ReturnType<typeof setTimeout>; path: string }
   >()
 
-  async createAvailableSession(input: { projectPath: string; name?: string; claudeProfileId?: string; approvalPolicy?: ChatApprovalPolicy }): Promise<ChatCreateResult> {
+  async createAvailableSession(input: { projectPath: string; name?: string; claudeProfileId?: string; approvalPolicy?: ChatApprovalPolicy; groupId?: string }): Promise<ChatCreateResult> {
     // Refuse a bad path before the probe spends an SDK spawn on it.
     const project = resolveProjectDirectory(input.projectPath, this.options.isDirectory)
     if (!project.ok) return project
+    // A group must exist in the project's team catalog at creation; it is
+    // never re-validated later (a removed file just marks it missing).
+    if (input.groupId !== undefined) {
+      const { catalog } = await loadTeamGroups(project.path, this.options.profileCatalogHome)
+      if (!catalog.groups.has(input.groupId)) {
+        return { ok: false, error: `Unknown group "${input.groupId}" for this project's team` }
+      }
+    }
     try {
       this.launchFor(input.claudeProfileId, project.path)
     } catch (error) {
@@ -370,6 +380,8 @@ export class ChatSessionManager {
     claudeProfileId?: string
     /** Starting policy (reorg-settings-default-approval design D3); absent = manual. */
     approvalPolicy?: ChatApprovalPolicy
+    /** Team group, already validated by createAvailableSession; absent = none. */
+    groupId?: string
   }): ChatCreateResult {
     const project = resolveProjectDirectory(input.projectPath, this.options.isDirectory)
     if (!project.ok) return project
@@ -398,6 +410,7 @@ export class ChatSessionManager {
       // chat-session-naming design D1: a name the user typed sticks forever,
       // one the generator produced is a placeholder a later title may replace.
       nameSource: (suppliedName ? 'manual' : 'placeholder') as ChatNameSource,
+      groupId: input.groupId ?? null,
       status: 'waiting' as SessionStatus,
       createdAt: now,
       lastActivityAt: now,
@@ -1311,6 +1324,7 @@ export class ChatSessionManager {
       // Per design D1: existing icons, labels, and sorting keep working.
       agentType: 'claude',
       ...(record.archivedAt != null ? { archivedAt: record.archivedAt } : {}),
+      ...(record.groupId != null ? { groupId: record.groupId } : {}),
     }
   }
 }

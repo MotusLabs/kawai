@@ -448,6 +448,7 @@ describe('session comparator (design D6)', () => {
       approvalPolicy: 'manual',
       nameSource: 'manual',
       archivedAt: null,
+      groupId: 'devs',
     }
     // Compile-time exhaustiveness comes from the mapped type (a new Session
     // field without a comparator entry fails typecheck); this runtime check
@@ -477,6 +478,7 @@ describe('session comparator (design D6)', () => {
       logFilePath: '/tmp/agent-2.jsonl',
       lastUserMessage: 'changed',
       isPinned: true,
+      groupId: 'qa',
     }
     for (const field of Object.keys(fullSession)) {
       const changed = { ...fullSession } as Record<string, unknown>

@@ -128,6 +128,8 @@ export interface Session {
   isPinned?: boolean
   /** Chat sessions only: archive timestamp (design D1); set = archived. */
   archivedAt?: string | null
+  /** Chat sessions only: team group id (agent-teams); absent = no group. */
+  groupId?: string
 }
 
 export interface AgentSession {
@@ -361,6 +363,10 @@ export type ClientMessage =
       // approval design D3). Absent = manual, so older clients and terminal
       // sessions are unchanged.
       approvalPolicy?: ChatApprovalPolicy
+      // Chat sessions only: team group (agent-teams), validated against the
+      // project's group catalog and fixed for the session's life. Absent =
+      // no group.
+      groupId?: string
       // OpenSpec change context: with a selected agent, the server composes
       // the mapped apply command into the session's start command as the
       // agent's first prompt (a launch argument, held by the agent itself

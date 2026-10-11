@@ -1,4 +1,5 @@
 import { createClaudeProfileRoutes, profileRequestError } from './routes/claudeProfiles'
+import { createTeamGroupRoutes } from './routes/teamGroups'
 import type { Server, ServerWebSocket } from 'bun'
 import { createReadStream } from 'node:fs'
 import fsSync from 'node:fs'
@@ -2019,6 +2020,7 @@ app.put('/api/settings/inactive-max-age-hours', putHistoryMaxAgeHours)
 
 app.route('/api/settings/chat-provider-env', chatProviderEnv.routes)
 app.route('/api/chat/profiles', createClaudeProfileRoutes())
+app.route('/api/chat/groups', createTeamGroupRoutes())
 
 // Allowed paste-image types; the extension written to /tmp comes from this map,
 // never from client-supplied values. Note Bun's multipart parser derives
@@ -2763,6 +2765,9 @@ function handleMessage(
           name: message.name,
           claudeProfileId: message.claudeProfileId,
           approvalPolicy: parseApprovalPolicy(message.approvalPolicy),
+          ...(typeof message.groupId === 'string' && message.groupId.trim()
+            ? { groupId: message.groupId.trim() }
+            : {}),
         }
         fireAndForget(chatSessionManager.createAvailableSession(input).then(result => {
           if (result.ok) send(ws, { type: 'session-created', session: result.session })

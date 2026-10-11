@@ -114,6 +114,7 @@ export const SESSION_FIELD_EQUALS: {
   lastUserMessage: strictEquals,
   isPinned: strictEquals,
   archivedAt: strictEquals,
+  groupId: strictEquals,
   lastActivity: activityInSameBucket,
 }
 
