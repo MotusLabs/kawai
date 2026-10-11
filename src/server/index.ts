@@ -1,3 +1,6 @@
+// Server entry point and composition root: Hono routes, the WebSocket
+// protocol (sessions, chat, terminal streaming), log-content caching, remote
+// session merge, and update wiring all start here.
 import { createClaudeProfileRoutes, profileRequestError } from './routes/claudeProfiles'
 import { createTeamGroupRoutes } from './routes/teamGroups'
 import type { Server, ServerWebSocket } from 'bun'

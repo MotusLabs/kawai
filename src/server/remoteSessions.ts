@@ -1,3 +1,5 @@
+// Remote tmux session discovery over SSH: batch capture, output parsing,
+// status enrichment, and remote content caching.
 import { inferAgentType, normalizePaneStartCommand } from './agentDetection'
 import { config } from './config'
 import { resolveExternalDisplayName } from './displayName'

@@ -1,3 +1,5 @@
+// tmux lifecycle management: window discovery, creation and target
+// resolution, command sending, and environment scrubbing for spawned panes.
 import fs from 'node:fs'
 import path from 'node:path'
 import { inferAgentType, normalizePaneStartCommand } from './agentDetection'

@@ -1,3 +1,5 @@
+// New-session dialog: project/worktree/branch selection, agent and Claude
+// profile choice, and per-session approval policy.
 import { useClaudeProfiles } from './chat/useClaudeProfiles'
 import { useTeamGroups } from './chat/useTeamGroups'
 import { useEffect, useRef, useState } from 'react'

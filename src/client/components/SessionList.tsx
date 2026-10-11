@@ -1,3 +1,5 @@
+// Session list rendering: flat and grouped rows, collapsible section
+// headers, and fallback panes for empty navigator states.
 import { useState, useRef, useEffect, useCallback, useMemo, Fragment } from 'react'
 import { motion, AnimatePresence, useReducedMotion } from 'motion/react'
 import {

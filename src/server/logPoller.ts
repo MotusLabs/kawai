@@ -1,3 +1,5 @@
+// Watches agent JSONL logs and matches them to tmux windows via the
+// exact-match pipeline, including background rematching of orphaned windows.
 import { logger } from './logger'
 import { config } from './config'
 import type { SessionDatabase } from './db'

@@ -1,3 +1,6 @@
+// Terminal ownership hook: xterm lifecycle and attach/detach, output
+// streaming with backpressure, paste and image handling, tmux copy-mode,
+// and iOS/WebGL renderer workarounds.
 import { useEffect, useRef, useCallback, useLayoutEffect, useState } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'

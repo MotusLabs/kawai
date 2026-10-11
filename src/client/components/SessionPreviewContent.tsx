@@ -1,3 +1,5 @@
+// Session preview: helpers that parse captured log output into entries,
+// plus the rendered expandable preview UI.
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
   parseAndNormalizeAgentLogLine,

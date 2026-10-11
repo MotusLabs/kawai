@@ -1,3 +1,5 @@
+// SQLite persistence for sessions and chat records: schema creation,
+// incremental column migrations, and typed query helpers.
 import fs from 'node:fs'
 import path from 'node:path'
 import { Database as SQLiteDatabase } from 'bun:sqlite'

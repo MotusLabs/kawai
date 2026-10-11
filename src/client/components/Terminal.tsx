@@ -1,3 +1,5 @@
+// Terminal view around useTerminal: the xterm surface plus mobile chrome
+// (drawer, header, control deck) and drag-and-drop paste targets.
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react'
 import { clientLog } from '../utils/clientLog'
 import type {

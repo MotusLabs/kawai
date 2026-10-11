@@ -1,3 +1,5 @@
+// Root component: app layout, keyboard shortcuts, and the WebSocket
+// subscription that routes every server message into stores and local state.
 import { useTeamMailboxStore } from './stores/teamMailboxStore'
 import { notifyMailboxDeadLetter } from './utils/teamMailboxNotification'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'

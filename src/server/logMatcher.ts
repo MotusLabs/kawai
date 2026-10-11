@@ -1,3 +1,6 @@
+// Exact-match pipeline associating tmux windows with agent JSONL logs:
+// scrollback capture, user-message extraction, candidate search, and
+// association verification. Async variants serve the match worker.
 import fs from 'node:fs'
 import { performance } from 'node:perf_hooks'
 import { normalizeAgentLogEntry } from '../shared/eventTaxonomy'

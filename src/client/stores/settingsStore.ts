@@ -1,3 +1,5 @@
+// Persisted client settings store: typed fields with setters, localStorage
+// sync, and migration of previously stored shapes.
 import { useState, useEffect } from 'react'
 import { create } from 'zustand'
 import { persist, createJSONStorage } from 'zustand/middleware'

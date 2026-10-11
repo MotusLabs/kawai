@@ -1,3 +1,5 @@
+// Local terminal proxy: drives a spawned tmux client for attach, resize,
+// switching, and grouped-session management on the local host.
 import {
   syncFeatureEnabled,
   TerminalProxyBase,
