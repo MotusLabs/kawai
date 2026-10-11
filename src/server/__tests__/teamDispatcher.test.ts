@@ -149,3 +149,28 @@ test('a recipient lost after push holds a visible claim instead of waiting for r
   const mail = send(); await dispatch()
   expect(store.get(mail.id)).toMatchObject({ state: 'uncertain', claimedBy: 'dev' })
 })
+test('a claim requeued while its interrupt runs is not delivered, then delivered once', async () => {
+  dispatcher.close()
+  dispatcher = new MailDispatcher(store, {
+    recipients: () => recipients, prepare: async () => {},
+    // The awaited interrupt lets the recipient's turn end naturally, which
+    // settles it and requeues the unpushed claim mid-flight.
+    interrupt: async () => {
+      recipients[0]!.idle = true
+      for (const mail of store.claimsFor('dev')) store.requeue(mail.id)
+    },
+    deliver: (id, peer) => {
+      delivered.push({ recipient: id, id: peer.messageId })
+      recipients.find(row => row.sessionId === id)!.idle = false
+    },
+    watchReceipt: () => {},
+  })
+  const mail = send({ toKind: 'session', toId: 'dev', priority: 'urgent' })
+  await dispatch()
+  expect(delivered).toEqual([])
+  expect(store.get(mail.id)).toMatchObject({ state: 'queued', claimedBy: null })
+  // Now idle: the requeued mail is delivered exactly once, as a normal turn.
+  await dispatch()
+  expect(delivered).toEqual([{ recipient: 'dev', id: mail.id }])
+  expect(store.get(mail.id)).toMatchObject({ state: 'claimed', claimedBy: 'dev' })
+})

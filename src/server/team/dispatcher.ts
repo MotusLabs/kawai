@@ -78,9 +78,7 @@ export class MailDispatcher {
       for (const held of this.store.awaitingRequestFor(row.sessionId)) {
         if (!row.pendingRequest) this.store.requeue(held.id)
       }
-      const urgent = this.store.listForTeam(row.teamId).filter(message =>
-        message.state === 'queued' && message.toKind === 'session' && message.toId === row.sessionId &&
-        message.priority === 'urgent' && (!message.deliverAt || message.deliverAt <= new Date().toISOString()))
+      const urgent = this.store.urgentDirectFor(row.sessionId)
       for (const message of urgent) {
         if (this.current(row.sessionId)?.pendingRequest) {
           this.store.holdForRequest(message.id)
@@ -121,7 +119,11 @@ export class MailDispatcher {
         return
       }
       const envelope = messageEnvelope(message, message.attachThread ? this.store.thread(message.threadId) : undefined)
-      this.store.markPushed(message.id)
+      // The awaited interrupt can also let a turn end or the driver die, which
+      // settles the recipient and requeues this claim. A refused markPushed
+      // means exactly that: the row is queued again, so delivering here would
+      // duplicate it on the next pass.
+      if (!this.store.markPushed(message.id)) return
       this.options.deliver(recipient.sessionId, envelope)
       const pushed = this.store.get(message.id)!
       if (!this.current(recipient.sessionId)?.available) this.store.holdUncertain(message.id, 'recipient-unavailable-after-push')
