@@ -239,6 +239,17 @@ describe('chat wire messages', () => {
           elapsedMs: 4_000,
         },
       ],
+      notifications: [
+        {
+          key: 'login-expiry',
+          source: 'account',
+          severity: 'warning',
+          priority: 'high',
+          text: 'Your login expires in 2 days',
+          hint: 'run /login in a Claude terminal to renew',
+          receivedAt: '2026-10-07T13:00:00.000Z',
+        },
+      ],
     }
 
     const parsed = JSON.parse(JSON.stringify(message)) as ServerMessage
@@ -261,6 +272,7 @@ describe('chat wire messages', () => {
       profileId: 'default',
       usage: null,
       workers: [],
+      notifications: [],
     }
 
     const parsed = JSON.parse(JSON.stringify(message)) as ServerMessage

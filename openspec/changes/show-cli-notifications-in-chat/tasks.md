@@ -2,7 +2,7 @@
 
 ## 1. Shared contracts
 
-- [ ] 1.1 Add `ChatNotification` (key, source, severity, priority, text, hint?, receivedAt) to `src/shared/chat.ts`. Add `notifications` to `chat-snapshot`, the `chat-notifications` server message, and the `chat-dismiss-notification` client message to `src/shared/types.ts`, each with a header comment that names the message additive and ephemeral. Verify with `bun run typecheck`, fixing every snapshot construction site and test fixture that now needs `notifications: []`.
+- [x] 1.1 Add `ChatNotification` (key, source, severity, priority, text, hint?, receivedAt) to `src/shared/chat.ts`. Add `notifications` to `chat-snapshot`, the `chat-notifications` server message, and the `chat-dismiss-notification` client message to `src/shared/types.ts`, each with a header comment that names the message additive and ephemeral. Verify with `bun run typecheck`, fixing every snapshot construction site and test fixture that now needs `notifications: []`.
 
 ## 2. Account notices (login expiry)
 

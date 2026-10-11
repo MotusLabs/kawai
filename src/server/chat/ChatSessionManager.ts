@@ -318,6 +318,7 @@ export class ChatSessionManager {
       // The spawned-worker roster (workers design D2); live entries hold the
       // session at working, settled ones carry their persisted outcomes.
       workers: this.getWorkers(sessionId),
+      notifications: [],
     }
   }
 
