@@ -42,7 +42,7 @@ test('a worker turn shows the row, the live strip, the body, and the settled out
   // Grep call never reaches the parent transcript.
   await expect(rows).toHaveCount(2)
   await expect(rows.nth(1).getByTestId('chat-worker-depth')).toHaveText('depth 2')
-  await expect(page.getByTestId('chat-transcript')).not.toContainText('Tool: Grep')
+  await expect(page.getByTestId('chat-transcript')).not.toContainText('package.json')
   await page.screenshot({ path: info.outputPath('2-nested-worker.png') })
 
   // Settled: the strip leaves and the row carries the notification's outcome.

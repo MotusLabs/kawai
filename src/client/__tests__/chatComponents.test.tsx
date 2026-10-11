@@ -1494,6 +1494,19 @@ describe('chat workers', () => {
     renderer.unmount()
   })
 
+  test('a worker row absorbs its paired tool result like any other tool', () => {
+    seedWorkers([rosterWorker('toolu_w1', { status: 'completed', live: false })])
+    const renderer = TestRenderer.create(
+      <ChatMessages sessionId={SESSION} events={[agentCall('toolu_w1'), {
+        type: 'tool_result', id: 'r-w1', sequence: 1, at: 'now', turnId: 'turn-1',
+        toolCallId: 'toolu_w1', output: 'Found three packages.', isError: false,
+      }]} />
+    )
+    expect(renderer.root.findAllByProps({ 'data-testid': 'chat-worker-row' })).toHaveLength(1)
+    expect(renderer.root.findAllByType('summary')).toHaveLength(1)
+    renderer.unmount()
+  })
+
   test('a roster-less Agent call falls back to the plain tool card', () => {
     const renderer = TestRenderer.create(
       <ChatMessages sessionId={SESSION} events={[agentCall('toolu_unknown')]} />
