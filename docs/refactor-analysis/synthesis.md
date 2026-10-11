@@ -35,6 +35,11 @@ The debt is concentrated in **six god-units plus a handful of cheap hygiene item
 ## Priority plan
 
 ### P0 — Hygiene (minutes each, do first)
+> **Status: DONE 2026-10-11** — all four items landed as commits `0c84ff7` (deps), `d820a0b`
+> (devProxyErrors + its test), `600ddf5` (logMatcher: 4 functions + 18 export keywords, net −48
+> LOC), `75f4a49` (headers on the 14 largest modules that lacked them). Full suite green on
+> every commit via the pre-commit hook.
+
 1. Remove dead dependencies `node-pty` and `@fontsource-variable/jetbrains-mono` (both verified:
    zero static/dynamic/require references; "pty" is a Bun.spawn'd tmux client; fonts are
    self-hosted via `@fontface`). [verification.md]
