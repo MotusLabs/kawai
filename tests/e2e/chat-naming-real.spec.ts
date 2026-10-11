@@ -95,7 +95,7 @@ test('placeholder names adopt generated titles and keep manual renames', async (
     await page.getByRole('button', { name: 'New session', exact: true }).first().click()
     const modal = page.getByRole('dialog', { name: 'New Session' })
     await modal.getByLabel('Session kind').selectOption('chat')
-    await modal.locator('input').first().fill(project)
+    await modal.getByLabel('Project Path').fill(project)
     // No name: the session must start on a generated placeholder.
     await modal.getByRole('button', { name: 'Create', exact: true }).click()
     await expect(page.getByTestId('chat-view')).toBeVisible()

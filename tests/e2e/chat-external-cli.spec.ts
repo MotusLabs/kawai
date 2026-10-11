@@ -184,7 +184,7 @@ test('external CLI chat: streaming, approvals, question, interrupt, debug, resum
     await page.getByRole('button', { name: 'New session', exact: true }).first().click()
     const modal = page.getByRole('dialog', { name: 'New Session' })
     await modal.getByLabel('Session kind').selectOption('chat')
-    await modal.locator('input').first().fill(project)
+    await modal.getByLabel('Project Path').fill(project)
     await modal.locator('input').last().fill('External CLI check')
     await modal.getByRole('button', { name: 'Create', exact: true }).click()
     await expect(page.getByTestId('chat-view')).toBeVisible()
@@ -303,7 +303,7 @@ test('external CLI chat: streaming, approvals, question, interrupt, debug, resum
     await page.getByRole('button', { name: 'New session', exact: true }).first().click()
     const errorModal = page.getByRole('dialog', { name: 'New Session' })
     await errorModal.getByLabel('Session kind').selectOption('chat')
-    await errorModal.locator('input').first().fill(project)
+    await errorModal.getByLabel('Project Path').fill(project)
     await errorModal.getByRole('button', { name: 'Create', exact: true }).click()
     // Creation errors surface in the app's error banner.
     await expect(page.getByText(/Claude Code executable not found at \/nonexistent\..*KAWAI_CLAUDE_PATH/)).toBeVisible()

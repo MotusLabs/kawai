@@ -58,7 +58,7 @@ test('real chat approvals, questions, interrupt, reconnect, restart, recovery, a
     await page.getByRole('button', { name: 'New session', exact: true }).first().click()
     const modal = page.getByRole('dialog', { name: 'New Session' })
     await modal.getByLabel('Session kind').selectOption('chat')
-    await modal.locator('input').first().fill(project)
+    await modal.getByLabel('Project Path').fill(project)
     await modal.locator('input').last().fill('Real SDK walkthrough')
     await modal.getByRole('button', { name: 'Create', exact: true }).click()
     await expect(page.getByTestId('chat-view')).toContainText('Real SDK walkthrough')

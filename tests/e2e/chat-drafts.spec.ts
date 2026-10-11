@@ -24,7 +24,7 @@ async function createChat(page: import('@playwright/test').Page, name: string) {
   await page.getByRole('button', { name: 'New session', exact: true }).first().click()
   const dialog = page.getByRole('dialog', { name: 'New Session' })
   await dialog.getByLabel('Session kind').selectOption('chat')
-  await dialog.locator('input').first().fill(process.cwd())
+  await dialog.getByLabel('Project Path').fill(process.cwd())
   await dialog.locator('input').last().fill(name)
   await dialog.getByRole('button', { name: 'Create', exact: true }).click()
   await expect(page.getByTestId('chat-view')).toContainText(name)

@@ -16,7 +16,7 @@ async function createChat(page: Page, name: string) {
   await page.getByRole('button', { name: 'New session', exact: true }).first().click()
   const dialog = page.getByRole('dialog', { name: 'New Session' })
   await dialog.getByLabel('Session kind').selectOption('chat')
-  await dialog.locator('input').first().fill(process.cwd())
+  await dialog.getByLabel('Project Path').fill(process.cwd())
   await dialog.locator('input').last().fill(name)
   await dialog.getByRole('button', { name: 'Create', exact: true }).click()
   await expect(page.getByTestId('chat-view')).toContainText(name)
@@ -62,6 +62,8 @@ test('chat text defaults to 15px and follows the Chat Font Size setting', async 
 
   const terminalSizeBefore = (await storedSettings(page)).fontSize
   await page.getByRole('button', { name: 'Settings', exact: true }).click()
+  // Chat Font Size lives on the Chat tab of the four-tab Settings modal.
+  await page.getByRole('tab', { name: 'Chat' }).click()
   for (let i = 0; i < 3; i += 1) await page.getByRole('button', { name: 'Increase Chat Font Size' }).click()
   await page.getByRole('button', { name: 'Save', exact: true }).click()
 

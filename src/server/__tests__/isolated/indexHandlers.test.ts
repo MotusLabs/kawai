@@ -812,6 +812,42 @@ describe('server message handlers', () => {
       else process.env.CLAUDE_CODE_OAUTH_TOKEN = previousToken
     }
   })
+  test('chat creation applies the requested approval policy and defaults to manual', async () => {
+    const previousToken = process.env.CLAUDE_CODE_OAUTH_TOKEN
+    process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'
+    try {
+      const { serveOptions, registryInstance } = await loadIndex()
+      const websocket = serveOptions.websocket!
+
+      const create = async (payload: Record<string, unknown>) => {
+        const { ws, sent } = createWs()
+        websocket.open?.(ws as never)
+        websocket.message?.(ws as never, JSON.stringify({
+          type: 'session-create',
+          kind: 'chat',
+          projectPath: os.tmpdir(),
+          ...payload,
+        }))
+        await new Promise(resolve => setTimeout(resolve, 0))
+        const created = sent.find(message => message.type === 'session-created')
+        if (created?.type !== 'session-created') throw new Error('Chat creation failed')
+        return created.session
+      }
+
+      const auto = await create({ approvalPolicy: 'auto' })
+      expect(auto.approvalPolicy).toBe('auto')
+      expect(registryInstance.get(auto.id)?.approvalPolicy).toBe('auto')
+
+      // Absent field (older clients) and an unknown value both read as manual.
+      const absent = await create({})
+      expect(absent.approvalPolicy).toBe('manual')
+      const corrupt = await create({ approvalPolicy: 'yolo' })
+      expect(corrupt.approvalPolicy).toBe('manual')
+    } finally {
+      if (previousToken === undefined) delete process.env.CLAUDE_CODE_OAUTH_TOKEN
+      else process.env.CLAUDE_CODE_OAUTH_TOKEN = previousToken
+    }
+  })
   test('chat archive and restore broadcast the updated session and refuse sends while archived', async () => {
     const previousToken = process.env.CLAUDE_CODE_OAUTH_TOKEN
     process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'

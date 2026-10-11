@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react'
 import { create } from 'zustand'
 import { persist, createJSONStorage } from 'zustand/middleware'
+import type { ChatApprovalPolicy } from '@shared/types'
+import { parseApprovalPolicy } from '@shared/chat'
 import { safeStorage } from '../utils/storage'
 
 // Empty means "not set" — fall back to the server's default directory
@@ -142,6 +144,8 @@ function sanitizeChatFontSize(value: unknown): number {
     : CHAT_FONT_SIZE_DEFAULT
 }
 
+// Anything that is not exactly 'auto' reads as 'manual', so a hand-edited or
+// corrupt persisted value can never silently auto-approve tools (design D1).
 interface SettingsState {
   defaultProjectDir: string
   setDefaultProjectDir: (dir: string) => void
@@ -163,6 +167,9 @@ interface SettingsState {
   setFontSize: (size: number) => void
   chatFontSize: number
   setChatFontSize: (size: number) => void
+  /** Starting approval policy for new chat sessions; 'manual' unless saved as 'auto'. */
+  defaultApprovalPolicy: ChatApprovalPolicy
+  setDefaultApprovalPolicy: (policy: ChatApprovalPolicy) => void
   lineHeight: number
   setLineHeight: (height: number) => void
   letterSpacing: number
@@ -240,6 +247,9 @@ export const useSettingsStore = create<SettingsState>()(
       setFontSize: (size) => set({ fontSize: Math.max(6, Math.min(24, size)) }),
       chatFontSize: CHAT_FONT_SIZE_DEFAULT,
       setChatFontSize: (size) => set({ chatFontSize: sanitizeChatFontSize(size) }),
+      defaultApprovalPolicy: 'manual',
+      setDefaultApprovalPolicy: (policy) =>
+        set({ defaultApprovalPolicy: parseApprovalPolicy(policy) }),
       lineHeight: 1.0,
       setLineHeight: (height) => set({ lineHeight: Math.max(1.0, Math.min(2.0, height)) }),
       letterSpacing: 0,
@@ -326,10 +336,11 @@ export const useSettingsStore = create<SettingsState>()(
       storage: createJSONStorage(() => safeStorage),
       version: 7,
       // Same shallow merge as the default, plus re-clamping of the pane
-      // fractions and chat font size: a hand-edited or corrupt persisted
-      // value must not produce an unusable layout, and state persisted
-      // before the keys existed keeps the defaults supplied by the spread
-      // below.
+      // fractions and chat font size and re-sanitizing of the default
+      // approval policy: a hand-edited or corrupt persisted value must not
+      // produce an unusable layout or silently auto-approve tools, and state
+      // persisted before the keys existed keeps the defaults supplied by the
+      // spread below.
       merge: (persistedState, currentState) => {
         const merged = {
           ...currentState,
@@ -341,6 +352,7 @@ export const useSettingsStore = create<SettingsState>()(
           remotePaneFraction: sanitizePaneFraction(merged.remotePaneFraction),
           archivePaneFraction: sanitizePaneFraction(merged.archivePaneFraction),
           chatFontSize: sanitizeChatFontSize(merged.chatFontSize),
+          defaultApprovalPolicy: parseApprovalPolicy(merged.defaultApprovalPolicy),
         }
       },
       migrate: (persistedState: unknown, version: number) => {

@@ -506,6 +506,39 @@ describe('chat font size', () => {
   })
 })
 
+describe('default approval policy', () => {
+  beforeEach(() => {
+    useSettingsStore.setState({ defaultApprovalPolicy: 'manual' })
+  })
+
+  test('defaults to manual', () => {
+    expect(useSettingsStore.getState().defaultApprovalPolicy).toBe('manual')
+  })
+
+  test('a saved auto policy is persisted and read back on reload', async () => {
+    useSettingsStore.getState().setDefaultApprovalPolicy('auto')
+    expect(JSON.parse(storage.getItem('agentboard-settings') ?? '{}').state.defaultApprovalPolicy).toBe('auto')
+    await useSettingsStore.persist.rehydrate()
+    expect(useSettingsStore.getState().defaultApprovalPolicy).toBe('auto')
+  })
+
+  test('state persisted without the key rehydrates to manual', async () => {
+    storage.setItem('agentboard-settings', JSON.stringify({ state: { sessionSortMode: 'status' }, version: 7 }))
+    await useSettingsStore.persist.rehydrate()
+    expect(useSettingsStore.getState().defaultApprovalPolicy).toBe('manual')
+  })
+
+  test('hand-edited persisted values are sanitized to manual on rehydration', async () => {
+    storage.setItem('agentboard-settings', JSON.stringify({ state: { defaultApprovalPolicy: 'yolo' }, version: 7 }))
+    await useSettingsStore.persist.rehydrate()
+    expect(useSettingsStore.getState().defaultApprovalPolicy).toBe('manual')
+
+    storage.setItem('agentboard-settings', JSON.stringify({ state: { defaultApprovalPolicy: 'AUTO' }, version: 7 }))
+    await useSettingsStore.persist.rehydrate()
+    expect(useSettingsStore.getState().defaultApprovalPolicy).toBe('manual')
+  })
+})
+
 describe('settings persistence migration', () => {
   test('runs the hibernating/history expansion rename for v5 persisted state', async () => {
     const options = useSettingsStore.persist.getOptions()
