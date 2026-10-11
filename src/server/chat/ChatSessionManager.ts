@@ -409,8 +409,11 @@ export class ChatSessionManager {
         ...(options.profileCatalogHome ? { homeDir: options.profileCatalogHome } : {}),
         onErrors: errors => logger.warn('team_caps_file_errors', { errors }),
       }),
+      // A spawned member keeps the task it was spawned for; others follow
+      // the task of the mail they received last.
       associateTask: (id, taskId) => {
-        if (this.records.get(id)?.taskId !== taskId) this.applyPatch(id, { taskId })
+        const record = this.records.get(id)
+        if (record && !record.spawned && record.taskId !== taskId) this.applyPatch(id, { taskId })
       },
       transcriptFor: id => { const sdkId = this.records.get(id)?.sdkSessionId; return sdkId ? findTranscriptPath(sdkId) : null },
       onChange: options.onMailboxChange,

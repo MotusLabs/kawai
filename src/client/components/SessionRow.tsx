@@ -462,6 +462,8 @@ export function SessionRow({
   const showDirectory = showProjectName && Boolean(directoryLeaf)
   const showHostBadge = showHostInfo && Boolean(hostLabel)
   const showMessage = showLastUserMessage && Boolean(session.lastUserMessage)
+  // Team tasks: spawned/task badges ride line 2 so they never crowd out the name.
+  const showTaskBadges = session.kind === 'chat' && (session.spawned === true || Boolean(session.taskId))
 
   // Track previous status for transition animation
   const prevStatusRef = useRef<Session['status']>(session.status)
@@ -627,18 +629,6 @@ export function SessionRow({
               {session.groupLabel ?? session.groupId}
             </span>
           )}
-          {session.kind === 'chat' && session.spawned && (
-            <span data-testid="session-spawned-badge" className="shrink-0 rounded border border-border px-1 text-[11px] text-secondary"
-              title="Started by worktree staffing">spawned</span>
-          )}
-          {session.kind === 'chat' && session.taskId && (
-            <span data-testid="session-task-badge" className="max-w-24 shrink-0 truncate rounded border border-border px-1 text-[11px] text-secondary"
-              title={`Task: ${session.taskTitle ?? session.taskId}`}>{session.taskTitle ?? 'task'}</span>
-          )}
-          {spawnedNeedsAttention(session) && (
-            <span data-testid="session-attention-badge" className="shrink-0 rounded bg-amber-500/20 px-1 text-[11px] text-amber-600"
-              title="A spawned session is waiting for your approval or answer">needs attention</span>
-          )}
           {needsInput ? (
             <span
               className={`ml-1 flex shrink-0 items-center justify-center rounded-full px-1.5 py-0.5 ${statusPillClass[session.status]} pulse-approval`}
@@ -656,12 +646,25 @@ export function SessionRow({
           )}
         </div>
 
-        {/* Line 2: Project badge + last user message (up to 2 lines total) */}
-        {(showDirectory || showHostBadge || showMessage) && (
+        {/* Line 2: Project badge, team-task badges (spawned, task, needs
+            attention), and last user message (up to 2 lines total). */}
+        {(showDirectory || showHostBadge || showMessage || showTaskBadges) && (
           <div className="flex flex-wrap items-center gap-1 pl-[1.375rem]">
             {showHostBadge && <HostBadge name={hostLabel!} />}
             {showDirectory && (
               <ProjectBadge name={directoryLeaf!} fullPath={session.projectPath} />
+            )}
+            {showTaskBadges && session.spawned && (
+              <span data-testid="session-spawned-badge" className="shrink-0 rounded border border-border px-1 text-[11px] text-secondary"
+                title="Started by worktree staffing">spawned</span>
+            )}
+            {showTaskBadges && session.taskId && (
+              <span data-testid="session-task-badge" className="max-w-40 truncate rounded border border-border px-1 text-[11px] text-secondary"
+                title={`Task: ${session.taskTitle ?? session.taskId}`}>{session.taskTitle ?? 'task'}</span>
+            )}
+            {spawnedNeedsAttention(session) && (
+              <span data-testid="session-attention-badge" className="shrink-0 rounded bg-amber-500/20 px-1 text-[11px] text-amber-600"
+                title="A spawned session is waiting for your approval or answer">needs attention</span>
             )}
             {showMessage && (
               <span className="line-clamp-2 text-xs italic text-muted">

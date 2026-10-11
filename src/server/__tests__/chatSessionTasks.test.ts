@@ -90,6 +90,18 @@ describe('chat session tasks', () => {
     manager.shutdown()
   })
 
+  test('a spawned member keeps the task it was spawned for when other task mail arrives', async () => {
+    const manager = createManager()
+    const { task, session } = await spawnedSession(manager)
+    const team = await resolveTeam(project)
+    const other = await manager.tasks.create({ kind: 'human', team }, { title: 'Import', direction: 'd' })
+    const mail = manager.mailbox.store.enqueue({ teamId: team.teamId, toKind: 'session', toId: session.id, fromSession: 'lead', fromGroup: null, originPath: project, body: 'also', taskId: other.id })
+    await waitFor(() => manager.mailbox.store.get(mail.id)?.claimedBy === session.id, 'delivery')
+    expect(registry.get(session.id)).toMatchObject({ taskId: task.id, taskTitle: 'Export' })
+    expect(db.getChatSession(session.id)?.taskId).toBe(task.id)
+    manager.shutdown()
+  })
+
   for (const prompt of ['approval', 'question'] as const) {
     test(`a spawned session awaiting ${prompt} shows permission status until it is resolved`, async () => {
       const manager = createManager()
