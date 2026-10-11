@@ -78,11 +78,12 @@ export interface ChatSessionManagerOptions {
   onActivity?: (sessionId: string, activity: ChatActivity | null) => void
   /**
    * Context-usage sink (context meter design D5): called with the latest
-   * reading whenever the driver publishes one. Wired to the coalesced WS
-   * broadcast in index.ts; the reading itself persists only at turn
-   * boundaries, compaction, and driver death.
+   * reading whenever the driver publishes one, or null when a conversation
+   * reset clears it. Wired to the coalesced WS broadcast in index.ts; the
+   * reading itself persists at turn boundaries, compaction, driver death,
+   * and the driver-flagged corrections.
    */
-  onContextUsage?: (sessionId: string, usage: ChatContextUsage) => void
+  onContextUsage?: (sessionId: string, usage: ChatContextUsage | null) => void
   /**
    * Plan-usage sink (usage bar design D4): called with the latest report
    * (or null) whenever a profile's held data changes. Wired to the WS
@@ -834,8 +835,8 @@ export class ChatSessionManager {
           this.options.onCommandState?.(record.sessionId, state),
         onActivity: (activity) =>
           this.handleDriverActivity(record.sessionId, activity),
-        onContextUsage: (usage, correction) =>
-          this.handleDriverContextUsage(record.sessionId, usage, correction),
+        onContextUsage: (usage, opts) =>
+          this.handleDriverContextUsage(record.sessionId, usage, opts),
         // Plan usage is recorded against the session's profile (design D3);
         // the store's change listener drives the onUsage broadcast.
         onRateLimit: (report) =>
@@ -986,11 +987,13 @@ export class ChatSessionManager {
     }
     // Context-usage write points (design D5): a turn boundary, the compaction
     // notice (the driver's compact_boundary), and an error — the visible
-    // signal of driver death. Never per assistant frame.
+    // signal of driver death. Never per assistant frame. The compaction
+    // notice is identified by its `kind`, not its display text, so rewording
+    // the copy cannot silently stop the write.
     if (
       event.type === 'turn_completed' ||
       event.type === 'error' ||
-      (event.type === 'notice' && event.text === 'Context compacted')
+      (event.type === 'notice' && event.kind === 'compacted')
     ) {
       this.persistContextUsage(sessionId)
     }
@@ -998,22 +1001,30 @@ export class ChatSessionManager {
 
   /**
    * Hold the latest reading (design D5) and forward it to the broadcast sink;
-   * persistence is throttled to the boundary events above — except
-   * corrections, which persist at once: the turn-boundary probe resolves
+   * persistence is throttled to the boundary events above — except when the
+   * driver asks for a write now (`persist`): the turn-boundary probe resolves
    * after `turn_completed` has already written the reading, and an abrupt
    * restart would otherwise restore a different threshold (and percentage)
-   * than the one last displayed. Corrections are probe answers and
-   * spawn-time re-anchors, so they do not reintroduce per-frame churn.
+   * than the one last displayed. Those are probe answers, spawn-time
+   * re-anchors, and compaction, so they do not reintroduce per-frame churn.
+   * A null usage clears the reading (a conversation reset leaves nothing
+   * measured) and is persisted as such so a restart cannot restore it.
    */
   private handleDriverContextUsage(
     sessionId: string,
-    usage: ChatContextUsage,
-    correction = false
+    usage: ChatContextUsage | null,
+    opts?: { persist?: boolean }
   ): void {
     if (!this.records.has(sessionId)) return
+    if (usage === null) {
+      this.contextReadings.delete(sessionId)
+      this.options.onContextUsage?.(sessionId, null)
+      this.applyPatch(sessionId, { contextUsage: null })
+      return
+    }
     this.contextReadings.set(sessionId, usage)
     this.options.onContextUsage?.(sessionId, usage)
-    if (correction) this.persistContextUsage(sessionId)
+    if (opts?.persist) this.persistContextUsage(sessionId)
   }
 
   /** Write the freshest in-memory reading to the record, if one exists. */

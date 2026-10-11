@@ -79,16 +79,55 @@ test('updateChatSession round-trips the reading and clears it with null', () => 
     db.updateChatSession('row', { contextUsage: READING })
     expect(db.getChatSession('row')?.contextUsage).toEqual(READING)
 
-    // Null clears all four columns together: no partial reading survives.
+    // Null clears all five columns together: no partial reading survives.
     db.updateChatSession('row', { contextUsage: null })
     expect(db.getChatSession('row')?.contextUsage).toBeNull()
     const raw = db.db
-      .prepare("SELECT context_tokens, context_threshold, context_pct, context_at FROM chat_sessions WHERE session_id = 'row'")
+      .prepare("SELECT context_tokens, context_threshold, context_pct, context_at, context_approx FROM chat_sessions WHERE session_id = 'row'")
       .get() as Record<string, unknown>
     expect(raw.context_tokens).toBeNull()
     expect(raw.context_threshold).toBeNull()
     expect(raw.context_pct).toBeNull()
     expect(raw.context_at).toBeNull()
+    expect(raw.context_approx).toBeNull()
+  } finally {
+    db.close()
+    fs.rmSync(path.dirname(dbPath), { recursive: true, force: true })
+  }
+})
+
+test('an approximate threshold round-trips its label', () => {
+  const dbPath = tempDbPath('chat-context-approx-')
+  const db = initDatabase({ path: dbPath })
+  try {
+    seedRow(db, 'row')
+    db.updateChatSession('row', {
+      contextUsage: { ...READING, thresholdApproximate: true },
+    })
+    expect(db.getChatSession('row')?.contextUsage).toEqual({
+      ...READING,
+      thresholdApproximate: true,
+    })
+    // An exact threshold stores no label — absence is the default.
+    db.updateChatSession('row', { contextUsage: READING })
+    const exact = db.getChatSession('row')?.contextUsage
+    expect(exact?.thresholdApproximate).toBeUndefined()
+  } finally {
+    db.close()
+    fs.rmSync(path.dirname(dbPath), { recursive: true, force: true })
+  }
+})
+
+test('a partial column set reads as no reading rather than an invented zero', () => {
+  const dbPath = tempDbPath('chat-context-partial-')
+  const db = initDatabase({ path: dbPath })
+  try {
+    seedRow(db, 'row')
+    // Simulate a corrupt/partial row: tokens present, percentage missing.
+    db.db
+      .prepare("UPDATE chat_sessions SET context_tokens = 157900, context_threshold = 167000, context_at = '2026-10-10T12:00:00.000Z' WHERE session_id = 'row'")
+      .run()
+    expect(db.getChatSession('row')?.contextUsage).toBeNull()
   } finally {
     db.close()
     fs.rmSync(path.dirname(dbPath), { recursive: true, force: true })

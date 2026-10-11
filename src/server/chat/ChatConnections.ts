@@ -39,7 +39,7 @@ export class ChatConnections {
   /** Latest activity per connection and session, sent by the next flush. */
   private readonly activityBatches = new Map<ChatConnection, Map<string, ChatActivity | null>>()
   /** Latest context-usage reading per connection and session (design D5). */
-  private readonly contextBatches = new Map<ChatConnection, Map<string, ChatContextUsage>>()
+  private readonly contextBatches = new Map<ChatConnection, Map<string, ChatContextUsage | null>>()
   /** Latest usage report per connection and profile, sent by the next flush. */
   private readonly usageBatches = new Map<ChatConnection, Map<string, ChatUsageReport | null>>()
   private readonly debugSubscriptions = new Map<ChatConnection, Map<string, () => void>>()
@@ -112,10 +112,10 @@ export class ChatConnections {
    * D5): like activity, only the latest value per connection and session
    * survives until the flush, which sends it after the pending event batch.
    */
-  publishContextUsage(sessionId: string, usage: ChatContextUsage): void {
+  publishContextUsage(sessionId: string, usage: ChatContextUsage | null): void {
     for (const [connection, sessions] of this.subscriptions) {
       if (!sessions.has(sessionId)) continue
-      const latest = this.contextBatches.get(connection) ?? new Map<string, ChatContextUsage>()
+      const latest = this.contextBatches.get(connection) ?? new Map<string, ChatContextUsage | null>()
       latest.set(sessionId, usage)
       this.contextBatches.set(connection, latest)
     }

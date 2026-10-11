@@ -7,6 +7,7 @@ import ChatMessages from '../components/chat/ChatMessages'
 import ChatDebugPanel from '../components/chat/ChatDebugPanel'
 import ChatView from '../components/chat/ChatView'
 import ChatActivityRow from '../components/chat/ChatActivityRow'
+import { formatContextTokens } from '../components/chat/ChatContextMeter'
 import UsageBar from '../components/chat/UsageBar'
 import { closedDebugView, useChatDebugStore, type ChatDebugView } from '../stores/chatDebugStore'
 import { emptyTranscript, useChatStore } from '../stores/chatStore'
@@ -1370,5 +1371,40 @@ describe('chat context meter', () => {
     expect(meter.findAllByType('button')).toHaveLength(0)
     expect(renderer.root.findByProps({ 'data-testid': 'chat-archived-bar' })).toBeTruthy()
     renderer.unmount()
+  })
+
+  test('an approximate threshold is marked, not claimed as the compaction threshold', () => {
+    act(() => {
+      useChatStore.getState().setContextUsage('chat-1', {
+        ...READING, thresholdTokens: 200_000, percentage: 79, thresholdApproximate: true,
+      })
+    })
+    const renderer = renderView()
+    const meter = renderer.root.findByProps({ 'data-testid': 'chat-context-meter' })
+    expect(textOf(meter)).toBe('Context 79% · 157.9k / 200k~')
+    expect(meter.props.title).toContain('standing in for the compaction threshold')
+    renderer.unmount()
+  })
+
+  test('a null push clears the meter', () => {
+    act(() => { useChatStore.getState().setContextUsage('chat-1', READING) })
+    const renderer = renderView()
+    expect(renderer.root.findByProps({ 'data-testid': 'chat-context-meter' })).toBeTruthy()
+    act(() => { useChatStore.getState().setContextUsage('chat-1', null) })
+    expect(renderer.root.findAllByProps({ 'data-testid': 'chat-context-meter' })).toHaveLength(0)
+    renderer.unmount()
+  })
+})
+
+describe('formatContextTokens', () => {
+  test('rounds to one decimal of the larger unit and promotes at the boundary', () => {
+    expect(formatContextTokens(900)).toBe('900')
+    expect(formatContextTokens(1_050)).toBe('1.1k')
+    expect(formatContextTokens(157_900)).toBe('157.9k')
+    expect(formatContextTokens(167_000)).toBe('167k')
+    // 999.95k rounds to 1000k — which is 1M, not a four-digit k count.
+    expect(formatContextTokens(999_950)).toBe('1M')
+    expect(formatContextTokens(1_000_000)).toBe('1M')
+    expect(formatContextTokens(1_500_000)).toBe('1.5M')
   })
 })

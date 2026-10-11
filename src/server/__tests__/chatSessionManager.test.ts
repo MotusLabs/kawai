@@ -133,7 +133,7 @@ interface ManagerHarness {
   handles: FakeHandle[]
   events: Array<{ sessionId: string; event: ChatEvent }>
   activities: Array<{ sessionId: string; activity: ChatActivity | null }>
-  contextUsage: Array<{ sessionId: string; usage: ChatContextUsage }>
+  contextUsage: Array<{ sessionId: string; usage: ChatContextUsage | null }>
   usage: Array<{ profileId: string; report: ChatUsageReport | null }>
 }
 
@@ -148,7 +148,7 @@ function createHarness(
   const handles: FakeHandle[] = []
   const events: Array<{ sessionId: string; event: ChatEvent }> = []
   const activities: Array<{ sessionId: string; activity: ChatActivity | null }> = []
-  const contextUsage: Array<{ sessionId: string; usage: ChatContextUsage }> = []
+  const contextUsage: Array<{ sessionId: string; usage: ChatContextUsage | null }> = []
   const usage: Array<{ profileId: string; report: ChatUsageReport | null }> = []
   const manager = new ChatSessionManager({
     isDirectory,
@@ -2679,6 +2679,59 @@ describe('ChatSessionManager context usage', () => {
     await new Promise((resolve) => setTimeout(resolve, 40))
     // No further turn or event: the correction wrote the re-scaled reading.
     expect(db.getChatSession(id)!.contextUsage).toMatchObject({ usedTokens: 157_900, thresholdTokens: 100_000, percentage: 157.9 })
+    harness.manager.shutdown()
+  })
+
+  test('a conversation reset clears the reading and persists the clear', async () => {
+    const harness = createHarness(db)
+    const created = harness.manager.createSession({ projectPath: '/tmp/proj' })
+    if (!created.ok) throw new Error('create failed')
+    const id = created.session.id
+    await harness.manager.send(id, 'turn')
+    const fake = harness.handles[0]!
+    fake.push(assistantUsage(80_000, 'msg_1'))
+    fake.push(resultWithWindow())
+    await flush()
+    expect(db.getChatSession(id)!.contextUsage).toMatchObject({ usedTokens: 80_000 })
+
+    fake.push({
+      type: 'conversation_reset',
+      trigger: 'plan_mode_exit',
+      new_conversation_id: 'fresh',
+      uuid: 'reset-uuid',
+      session_id: 'sdk-1',
+    } as unknown as SDKMessage)
+    await flush()
+    // The stored column goes too: a restart must not resurrect the old
+    // conversation's occupancy.
+    expect(db.getChatSession(id)!.contextUsage).toBeNull()
+    expect(harness.manager.getSnapshot(id)!.contextUsage).toBeNull()
+    expect(harness.contextUsage.at(-1)?.usage).toBeNull()
+    harness.manager.shutdown()
+  })
+
+  test('compaction persists on the notice kind, not its display text', async () => {
+    const harness = createHarness(db)
+    const created = harness.manager.createSession({ projectPath: '/tmp/proj' })
+    if (!created.ok) throw new Error('create failed')
+    const id = created.session.id
+    await harness.manager.send(id, 'turn')
+    const fake = harness.handles[0]!
+    fake.push(assistantUsage(80_000, 'msg_1'))
+    fake.push(resultWithWindow())
+    await flush()
+    expect(db.getChatSession(id)!.contextUsage).toMatchObject({ usedTokens: 80_000 })
+
+    // The driver tags the compact_boundary notice with kind: 'compacted';
+    // that tag — not the string 'Context compacted' — is what makes this
+    // write happen. The published reading is dropped to post_tokens first.
+    fake.push(compactBoundary(12_000))
+    await flush()
+    expect(db.getChatSession(id)!.contextUsage).toMatchObject({ usedTokens: 12_000 })
+    const notice = harness.events
+      .map((entry) => entry.event)
+      .find((event) => event.type === 'notice')
+    expect(notice).toMatchObject({ type: 'notice', kind: 'compacted' })
     harness.manager.shutdown()
   })
 })

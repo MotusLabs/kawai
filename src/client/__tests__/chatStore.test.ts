@@ -307,4 +307,11 @@ describe('chat store context usage', () => {
     expect(useChatStore.getState().sessions['chat-1'].contextUsage).toEqual(reading(50_000))
     expect(useChatStore.getState().sessions['chat-1'].events).toHaveLength(1)
   })
+
+  test('a null push clears the reading (a conversation reset)', () => {
+    const store = useChatStore.getState()
+    store.setContextUsage('chat-1', reading(50_000))
+    store.setContextUsage('chat-1', null)
+    expect(useChatStore.getState().sessions['chat-1'].contextUsage).toBeNull()
+  })
 })

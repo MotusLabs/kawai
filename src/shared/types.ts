@@ -283,11 +283,12 @@ export type ServerMessage =
   | { type: 'chat-usage'; profileId: string; report: ChatUsageReport | null }
   // Latest context-usage reading for a chat session (context meter design D5):
   // coalesced like chat-activity — only the latest value survives until the
-  // flush — additive, never sequenced or replayed.
+  // flush — additive, never sequenced or replayed. A null `usage` clears the
+  // meter (a conversation reset leaves nothing measured, design D7).
   | {
       type: 'chat-context-usage'
       sessionId: string
-      usage: ChatContextUsage
+      usage: ChatContextUsage | null
     }
   // Debug-view protocol frames, sent only to clients that opened the view.
   // `page: true` marks a reply to chat-debug-open/chat-debug-page (carrying

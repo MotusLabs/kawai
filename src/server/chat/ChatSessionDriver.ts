@@ -4,17 +4,18 @@
 // over canUseTool, status (working/permission/waiting) is derived from
 // driver state — never from log parsing — and the live-turn activity is
 // reduced from the same stream frames (thinking/tool_use block starts,
-// status, api_retry) through the pure chatActivity reducer. All SDK types
-// are confined to this module; the SDK itself is injected as a queryFactory
-// (the manager does the dynamic import), mirroring the SpawnFn convention in
-// server/terminal/.
+// status, api_retry) through the pure chatActivity reducer. Context-meter
+// state (per-request usage, compaction drops, threshold resolution) lives in
+// the pure contextUsage tracker; this module only maps frames onto its
+// inputs. All SDK types are confined to this module; the SDK itself is
+// injected as a queryFactory (the manager does the dynamic import), mirroring
+// the SpawnFn convention in server/terminal/.
 import type {
   CanUseTool,
   Options,
   PermissionResult,
   Query,
   SDKAssistantMessage,
-  SDKControlGetContextUsageResponse,
   SDKMessage,
   SDKPartialAssistantMessage,
   SDKResultMessage,
@@ -48,6 +49,12 @@ import {
   type ChatActivityInput,
   type ChatActivityState,
 } from './chatActivity'
+import {
+  ChatContextTracker,
+  parsePositiveTokens,
+  sumRequestUsage,
+  type ChatContextStep,
+} from './contextUsage'
 import {
   parseRateLimitEvent,
   parseUsagePull,
@@ -113,14 +120,16 @@ export interface ChatSessionDriverOptions {
    * Context usage (context meter designs D1/D7): the latest reading, fired
    * when a new per-request usage lands, when compaction adopts a
    * post-compaction size, or when a threshold correction re-scales the
-   * current reading. Never fired before the first model request and never
-   * with a placeholder — no reading is this callback never firing (D7).
-   * `correction` marks the re-scale cases — a probe answer or a spawn-time
-   * re-anchor, which can land after the boundary already persisted the
-   * reading — so the manager can write the corrected denominator without
-   * waiting for the next boundary.
+   * current reading. Never fired with a placeholder — before the first model
+   * request this callback simply does not fire (D7). A null `usage` clears
+   * the reading (a conversation reset leaves nothing measured). `persist`
+   * marks writes that must not wait for the next turn boundary: probe
+   * answers, spawn-time re-anchors, and compaction.
    */
-  onContextUsage?: (usage: ChatContextUsage, correction?: boolean) => void
+  onContextUsage?: (
+    usage: ChatContextUsage | null,
+    opts?: { persist?: boolean }
+  ) => void
   /**
    * Plan usage (usage bar design D3): parsed report from a pushed
    * rate_limit_event frame, whatever turn state the session is in.
@@ -185,23 +194,8 @@ export class ChatSessionDriver {
   private lastStatus: SessionStatus = 'waiting'
   /** Live-turn activity state (design D3); null phase when no turn runs. */
   private activityState: ChatActivityState = initialChatActivityState()
-  /**
-   * Latest per-request used tokens (context meter design D1); null until the
-   * first model request — a session with no request has no reading (D7).
-   */
-  private contextUsedTokens: number | null = null
-  /** When the current used-token count was measured. */
-  private contextMeasuredAt: string | null = null
-  /** Threshold observed from a context-usage report (design D2 step 1). */
-  private reportContextThreshold: number | null = null
-  /** Autocompact reserve observed in a report; adjusts a profile window (D2). */
-  private reportContextReserve: number | null = null
-  /** Profile-configured window (CLAUDE_CODE_AUTO_COMPACT_WINDOW) at the last spawn (D2 step 2). */
-  private profileCompactWindow: number | null = null
-  /** Largest model contextWindow seen on a result's modelUsage (D2 step 3). */
-  private modelContextWindow: number | null = null
-  /** Last reading handed to onContextUsage; suppresses identical re-publishes. */
-  private lastPublishedContextUsage: ChatContextUsage | null = null
+  /** Context-meter state (context meter designs D1–D3); see contextUsage.ts. */
+  private readonly context = new ChatContextTracker()
   private dead = false
   /** Updated by the manager before a respawn; see setClaudeExecutablePath. */
   private claudeExecutablePath: string | undefined
@@ -452,15 +446,11 @@ export class ChatSessionDriver {
     // observed report readings die with it — they outrank the profile, so a
     // stale threshold would survive a window change whenever the new probe
     // fails to answer.
-    this.profileCompactWindow = parsePositiveTokens(
-      launch.env?.CLAUDE_CODE_AUTO_COMPACT_WINDOW
+    this.applyContextStep(
+      this.context.setProfileWindow(
+        parsePositiveTokens(launch.env?.CLAUDE_CODE_AUTO_COMPACT_WINDOW)
+      )
     )
-    this.reportContextThreshold = null
-    this.reportContextReserve = null
-    // A respawn with a changed window re-scales the retained reading at once
-    // (flagged as a correction so the manager persists it), not on the next
-    // model frame.
-    this.publishContextUsage(true)
     // An operator-named profile executable replaces the standard binary; the
     // `executable` key itself is launch bookkeeping, not an SDK option.
     const { executable: profileExecutable, ...launchOptions } = launch
@@ -612,6 +602,14 @@ export class ChatSessionDriver {
         this.options.onRateLimit?.(
           parseRateLimitEvent(message.rate_limit_info)
         )
+        return
+      case 'conversation_reset':
+        // The conversation is gone (plan-mode clear-context, fresh_session,
+        // onboarding): nothing is measured any more, so the meter clears
+        // rather than keeping the old window's occupancy (design D7). The
+        // threshold sources stay — they describe the process/profile, not
+        // the conversation.
+        this.applyContextStep(this.context.resetConversation())
         return
       default:
         // Trailing informational frames (prompt suggestions, status, hooks,
@@ -781,19 +779,21 @@ export class ChatSessionDriver {
       return
     }
     if (message.subtype === 'compact_boundary') {
-      // Adopt before the notice: the manager persists the reading when it
-      // sees the notice below, so the fresher value must already be live.
-      // The post-compaction size is the new reading (design D3): the meter
-      // drops with the transcript, auto or manual alike. A missing, invalid,
-      // or zero post_tokens keeps the last reading — never a placeholder
-      // standing in for "unknown".
-      const post = positiveFinite(message.compact_metadata?.post_tokens)
-      if (post !== null) {
-        this.contextUsedTokens = post
-        this.contextMeasuredAt = new Date().toISOString()
-        this.publishContextUsage()
-      }
-      this.emit({ type: 'notice', text: 'Context compacted' })
+      // Adopt before the notice so the fresher value is already live when
+      // subscribers see it. The post-compaction size is the new reading
+      // (design D3): the meter drops with the transcript, auto or manual
+      // alike. A missing, invalid, or zero post_tokens keeps the last reading
+      // — never a placeholder standing in for "unknown" — and the boundary
+      // still owes a write either way.
+      this.applyContextStep(
+        this.context.compact(
+          typeof message.compact_metadata?.post_tokens === 'number'
+            ? message.compact_metadata.post_tokens
+            : null,
+          new Date().toISOString()
+        )
+      )
+      this.emit({ type: 'notice', text: 'Context compacted', kind: 'compacted' })
     }
     if (isSubagentFrame(message)) return
     const input = systemFrameToInput(message)
@@ -927,22 +927,15 @@ export class ChatSessionDriver {
    * latest request's usage — input plus cache reads/creations plus output —
    * which is exactly what the next request pays, never the session total.
    * The latest frame wins; subagent frames are skipped (design D6) so a Task
-   * tool's own requests cannot move the parent's meter. Malformed or
-   * non-positive sums leave the last reading untouched (design D7).
+   * tool's own requests cannot move the parent's meter.
    */
   private readContextUsage(message: SDKAssistantMessage): void {
     if (isSubagentFrame(message)) return
     const usage = message.message.usage
     if (!usage) return
-    const used =
-      (usage.input_tokens ?? 0) +
-      (usage.cache_read_input_tokens ?? 0) +
-      (usage.cache_creation_input_tokens ?? 0) +
-      (usage.output_tokens ?? 0)
-    if (!Number.isFinite(used) || used <= 0) return
-    this.contextUsedTokens = used
-    this.contextMeasuredAt = new Date().toISOString()
-    this.publishContextUsage()
+    this.applyContextStep(
+      this.context.readRequest(sumRequestUsage(usage), new Date().toISOString())
+    )
   }
 
   /**
@@ -951,60 +944,22 @@ export class ChatSessionDriver {
    * model switch widens rather than truncates the meter's denominator.
    */
   private readModelContextWindow(message: SDKResultMessage): void {
-    const windows = Object.values(message.modelUsage ?? {})
-      .map((usage) => usage?.contextWindow)
-      .filter((window): window is number => Number.isFinite(window) && window > 0)
-    if (windows.length === 0) return
-    this.modelContextWindow = Math.max(...windows)
-    this.publishContextUsage()
-  }
-
-  /**
-   * The compaction threshold (design D2): an observed report threshold wins;
-   * else the profile-configured window, shrunk by the observed autocompact
-   * reserve when one is known; else the largest model contextWindow as an
-   * approximation. A profile window larger than the model's is honored, not
-   * capped — an explicit override is the operator's answer.
-   */
-  private contextThreshold(): number | null {
-    if (this.reportContextThreshold !== null) return this.reportContextThreshold
-    if (this.profileCompactWindow !== null) {
-      const reserve = this.reportContextReserve
-      if (reserve !== null && reserve > 0 && this.profileCompactWindow > reserve) {
-        return this.profileCompactWindow - reserve
+    for (const usage of Object.values(message.modelUsage ?? {})) {
+      const window = usage?.contextWindow
+      if (typeof window === 'number') {
+        this.applyContextStep(this.context.noteModelWindow(window))
       }
-      return this.profileCompactWindow
     }
-    return this.modelContextWindow
   }
 
-  /**
-   * Publish the current reading; a no-op until both a used count and a
-   * threshold exist — never a placeholder (design D7). Identical
-   * re-publications are suppressed; callers re-anchor on every publish.
-   * `correction` marks threshold re-scales (see onContextUsage).
-   */
-  private publishContextUsage(correction = false): void {
-    const used = this.contextUsedTokens
-    const threshold = this.contextThreshold()
-    if (used === null || threshold === null || threshold <= 0) return
-    const reading: ChatContextUsage = {
-      usedTokens: used,
-      thresholdTokens: threshold,
-      percentage: Math.round((used / threshold) * 1000) / 10,
-      at: this.contextMeasuredAt ?? new Date().toISOString(),
-    }
-    const last = this.lastPublishedContextUsage
-    if (
-      last &&
-      last.usedTokens === reading.usedTokens &&
-      last.thresholdTokens === reading.thresholdTokens &&
-      last.at === reading.at
-    ) {
+  /** Forward a tracker step to the manager sink. */
+  private applyContextStep(step: ChatContextStep): void {
+    if (step.kind === 'none') return
+    if (step.kind === 'clear') {
+      this.options.onContextUsage?.(null, { persist: true })
       return
     }
-    this.lastPublishedContextUsage = reading
-    this.options.onContextUsage?.(reading, correction)
+    this.options.onContextUsage?.(step.usage, { persist: step.persist })
   }
 
   /**
@@ -1020,7 +975,12 @@ export class ChatSessionDriver {
       void query
         .getContextUsage({ detail: 'summary' })
         .then((report) => {
-          if (this.query === query) this.applyContextReport(report)
+          if (this.query === query) {
+            // The probe is asynchronous: it usually resolves just after the
+            // turn boundary already persisted the previous reading, so the
+            // tracker flags this re-scale for immediate persistence.
+            this.applyContextStep(this.context.applyReport(report))
+          }
         })
         .catch(() => {
           // Best-effort: keep the last resolved threshold.
@@ -1028,33 +988,6 @@ export class ChatSessionDriver {
     } catch {
       // Same.
     }
-  }
-
-  /**
-   * Adopt a context-usage report (design D2 step 1): buffer rows are the
-   * autocompact reserve, and the threshold is the report's own
-   * autoCompactThreshold when present, else the window minus that reserve —
-   * where compaction actually fires.
-   */
-  private applyContextReport(report: SDKControlGetContextUsageResponse): void {
-    const reserve = (report.categories ?? [])
-      .filter((category) => category.kind === 'buffer')
-      .reduce((sum, category) => sum + category.tokens, 0)
-    if (reserve > 0) this.reportContextReserve = reserve
-    const direct = positiveFinite(report.autoCompactThreshold)
-    if (direct !== null) {
-      this.reportContextThreshold = direct
-    } else {
-      const raw = positiveFinite(report.rawMaxTokens)
-      if (raw !== null) {
-        const derived = positiveFinite(raw - (this.reportContextReserve ?? 0))
-        if (derived !== null) this.reportContextThreshold = derived
-      }
-    }
-    // The probe is asynchronous: it usually resolves just after the turn
-    // boundary already persisted the previous reading, so this re-scale is
-    // flagged as a correction for immediate persistence.
-    this.publishContextUsage(true)
   }
 
   private emit(draft: ChatEventDraft): void {
@@ -1089,19 +1022,6 @@ export class ChatSessionDriver {
 function isSubagentFrame(frame: object): boolean {
   const parent = (frame as { parent_tool_use_id?: unknown }).parent_tool_use_id
   return parent != null
-}
-
-/** A positive finite token count, or null for absent/zero/NaN values. */
-function positiveFinite(value: unknown): number | null {
-  return typeof value === 'number' && Number.isFinite(value) && value > 0
-    ? value
-    : null
-}
-
-/** A positive token count from an env-style string; anything else is unset. */
-function parsePositiveTokens(value: string | undefined): number | null {
-  if (!value) return null
-  return positiveFinite(Number(value))
 }
 
 function validateAnswers(

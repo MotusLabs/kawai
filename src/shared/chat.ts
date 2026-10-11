@@ -135,7 +135,16 @@ export type ChatEvent =
       finalText?: string
     })
   | (ChatTurnEventBase & { type: 'turn_interrupted' })
-  | (ChatEventBase & { type: 'notice'; text: string })
+  | (ChatEventBase & {
+      type: 'notice'
+      text: string
+      /**
+       * Discriminator for notices other code acts on. `compacted` marks the
+       * compact_boundary notice; matching on this beats matching on its
+       * display text, which is free to change.
+       */
+      kind?: 'compacted'
+    })
   | (ChatEventBase & { type: 'error'; message: string })
 
 /** How a pending approval/question request ended. */
@@ -200,6 +209,15 @@ export interface ChatContextUsage {
   percentage: number
   /** ISO timestamp of when the reading was measured. */
   at: string
+  /**
+   * True when `thresholdTokens` is a window standing in for the compaction
+   * threshold (design D2 steps 2–3): the profile window with no observed
+   * reserve, or the model's context window. An approximation of the window,
+   * not a measured threshold — the meter must say so rather than claim a
+   * distance to compaction it does not know. Absent/false means the number
+   * is a real threshold.
+   */
+  thresholdApproximate?: boolean
 }
 
 /** Overall plan-limit status of a usage report. */
