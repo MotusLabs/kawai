@@ -836,7 +836,7 @@ const chatSessionManager = new ChatSessionManager({
   },
   ...(chatFixtureEnabled ? { queryFactory: fixtureQueryFactory, authCheck: () => true } : {}),
 })
-const chatConnections = new ChatConnections(chatSessionManager, chatWireLogs)
+const chatConnections = new ChatConnections(chatSessionManager, chatWireLogs, message => broadcast(message))
 if (chatFixtureEnabled && !registry.getAll().some(session => session.name === 'Chat fixture')) {
   const fixture = chatSessionManager.createSession({ projectPath: process.cwd(), name: 'Chat fixture' })
   if (fixture.ok) void chatSessionManager.send(fixture.session.id, 'Show an approval')

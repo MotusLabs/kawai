@@ -66,3 +66,28 @@ test('hop-limit dead letter notifies attached team client once', async () => {
     body: 'Loop', inReplyTo: first, hopLimit: 1 })
   expect(messages.filter(message => message.type === 'team-mailbox-dead-letter')).toHaveLength(1)
 })
+
+test('global hop-limit notifier works without a selected chat', () => {
+  const broadcast: ServerMessage[] = []
+  const manager = { mailbox: { store } } as unknown as ChatSessionManager
+  const globalConnections = new ChatConnections(manager, undefined, message => broadcast.push(message))
+  const first = enqueue()
+  const dead = store.enqueue({ teamId: 'team', fromSession: 'dev', fromGroup: null, toKind: 'group', toId: 'devs', originPath: '/repo',
+    body: 'Loop', inReplyTo: first, hopLimit: 1 })
+  globalConnections.publishMailbox('team', dead)
+  expect(broadcast).toEqual([{ type: 'team-mailbox-dead-letter', teamId: 'team', messageId: dead.id, senderSession: 'dev' }])
+})
+
+test('close during asynchronous team resolution cannot resurrect a subscription', async () => {
+  let resolve!: (team: { teamId: string }) => void
+  const manager = {
+    has: () => true, teams: { resolvedTeamOf: () => new Promise<{ teamId: string }>(done => { resolve = done }) },
+    mailbox: { store },
+  } as unknown as ChatSessionManager
+  const pendingConnections = new ChatConnections(manager)
+  const opening = pendingConnections.handle(connection, { type: 'team-mailbox-open', sessionId: 'dev' })
+  await pendingConnections.handle(connection, { type: 'team-mailbox-close', sessionId: 'dev' })
+  resolve({ teamId: 'team' }); await opening
+  pendingConnections.publishMailbox('team')
+  expect(messages).toEqual([])
+})

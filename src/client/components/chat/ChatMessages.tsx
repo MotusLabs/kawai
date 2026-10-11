@@ -61,6 +61,20 @@ export default function ChatMessages({ events, projectPath, sessionId, sendMessa
             <div className="mb-1 text-chat-meta text-secondary">You</div>
             <p className="whitespace-pre-wrap break-words text-chat-body">{event.text}</p>
           </article>
+        case 'peer_message':
+          return <article key={event.id} data-chat-role="peer" className="border-l-2 border-primary bg-elevated p-3">
+            <div className="mb-1 flex flex-wrap gap-2 text-chat-meta text-secondary">
+              <span>Peer · {event.senderSession}</span>
+              <span>{event.senderGroup ?? 'No group'}</span><span>{event.priority}</span>
+              {event.tags.map(tag => <span key={tag}>#{tag}</span>)}
+            </div>
+            <p className="break-all text-chat-meta text-secondary">{event.originPath}</p>
+            {event.possibleDuplicate && <p role="status" className="text-chat-meta text-chat-danger">Possible duplicate — an already-seen message should be treated as a no-op.</p>}
+            <p className="whitespace-pre-wrap break-words text-chat-body">{event.body}</p>
+            {event.thread && <details className="mt-2 text-chat-meta"><summary>Earlier messages in this thread</summary>
+              {event.thread.map(message => <p key={message.messageId} className="whitespace-pre-wrap">{message.senderSession}: {message.body}</p>)}
+            </details>}
+          </article>
         case 'assistant_text':
           return <article key={event.id} data-chat-role="assistant" className="mr-8 p-3">
             <div className="mb-1 text-chat-meta text-secondary">Claude</div>

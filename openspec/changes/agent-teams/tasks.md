@@ -45,15 +45,15 @@
 
 ## 8. Visibility
 
-- [ ] 8.1 Render `peer_message` as a distinct transcript row (sender, group, priority, origin path, tags) in `ChatMessages.tsx`, and verify component tests show the row apart from user messages and restored from a reconnect snapshot
+- [x] 8.1 Render `peer_message` as a distinct transcript row (sender, group, priority, origin path, tags) in `ChatMessages.tsx`, and verify component tests show the row apart from user messages and restored from a reconnect snapshot
 - [x] 8.2 Add team-mailbox client/server messages (open, close, cancel, retry, discard; a mailbox snapshot push on change) handled in `ChatConnections` or a sibling, and verify connection tests cover snapshot on open, a push after enqueue, and each action
-- [ ] 8.3 Add a team mailbox view listing queued, scheduled, dead-lettered, and uncertain messages with sender, recipient, priority, and age, with cancel, retry, and discard actions, and verify component tests cover each list and action
-- [ ] 8.4 Notify the human when a message is dead-lettered by the hop limit (a new additive server message shown as a toast via `toastManager`), and verify a test shows the toast for a hop-limit dead letter
+- [x] 8.3 Add a team mailbox view listing queued, scheduled, dead-lettered, and uncertain messages with sender, recipient, priority, and age, with cancel, retry, and discard actions, and verify component tests cover each list and action
+- [x] 8.4 Notify the human when a message is dead-lettered by the hop limit (a new additive server message shown as a toast via `toastManager`), and verify a test shows the toast for a hop-limit dead letter
 
 ## 9. Integration
 
 - [x] 9.1 Add a headless integration test running two fixture chat sessions in one temporary repository (a `devs` member and a team lead) where the lead's `send_message` handler queues mail that the dev receives as a new turn once idle and whose reply returns to the lead, and verify the test passes
-- [ ] 9.2 Walk the group picker, navigator badge, peer-message row, and mailbox view in the browser against the fixture, and verify each renders as specified
+- [x] 9.2 Walk the group picker, navigator badge, peer-message row, and mailbox view in the browser against the fixture, and verify each renders as specified
 - [ ] 9.3 Run `bun run lint && bun run typecheck && bun run test` and verify the full suite is green
 
 ## Workflow follow-up

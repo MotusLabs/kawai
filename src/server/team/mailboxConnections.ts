@@ -5,10 +5,11 @@ import type { ChatSessionManager } from '../chat/ChatSessionManager'
 import type { ChatConnection } from '../chat/ChatConnections'
 
 export class MailboxConnections {
+  private pendingOpen = new Map<ChatConnection, Map<string, object>>()
   private subscriptions = new Map<ChatConnection, Map<string, string>>()
   constructor(private readonly manager: ChatSessionManager) {}
 
-  disconnect(connection: ChatConnection) { this.subscriptions.delete(connection) }
+  disconnect(connection: ChatConnection) { this.subscriptions.delete(connection); this.pendingOpen.delete(connection) }
 
   publish(teamId: string) {
     for (const [connection, sessions] of this.subscriptions) {
@@ -26,10 +27,21 @@ export class MailboxConnections {
     if (!message.type.startsWith('team-mailbox-') || !('sessionId' in message)) return
     const sessionId = message.sessionId
     if (message.type === 'team-mailbox-close') {
+      this.pendingOpen.get(connection)?.delete(sessionId)
       this.subscriptions.get(connection)?.delete(sessionId)
       return
     }
+    const token = {}
+    if (message.type === 'team-mailbox-open') {
+      const pending = this.pendingOpen.get(connection) ?? new Map()
+      pending.set(sessionId, token)
+      this.pendingOpen.set(connection, pending)
+    }
     const team = await this.manager.teams.resolvedTeamOf(sessionId)
+    if (message.type === 'team-mailbox-open') {
+      if (this.pendingOpen.get(connection)?.get(sessionId) !== token) return
+      this.pendingOpen.get(connection)?.delete(sessionId)
+    }
     if (!this.manager.has(sessionId) || !team) {
       connection.send({ type: 'error', message: 'Chat team is unavailable' })
       return

@@ -57,7 +57,8 @@ export class ChatConnections {
 
   constructor(
     private readonly manager: ChatSessionManager,
-    private readonly wireLogs?: ChatWireLogs
+    private readonly wireLogs?: ChatWireLogs,
+    private readonly broadcastMailboxNotice?: (message: ServerMessage) => void
   ) { this.mailboxConnections = new MailboxConnections(manager) }
 
   disconnect(connection: ChatConnection): void {
@@ -81,9 +82,11 @@ export class ChatConnections {
   publishMailbox(teamId: string, message?: TeamMessage): void {
     this.mailboxConnections.publish(teamId)
     if (message?.state === 'dead' && message.reason === 'hop-limit') {
+      const notice: ServerMessage = { type: 'team-mailbox-dead-letter', teamId, messageId: message.id, senderSession: message.fromSession }
+      if (this.broadcastMailboxNotice) { this.broadcastMailboxNotice(notice); return }
       for (const [connection, sessions] of this.subscriptions) {
         if ([...sessions].some(id => this.manager.teams.teamOf(id)?.teamId === teamId)) {
-          connection.send({ type: 'team-mailbox-dead-letter', teamId, messageId: message.id, senderSession: message.fromSession })
+          connection.send(notice)
         }
       }
     }
