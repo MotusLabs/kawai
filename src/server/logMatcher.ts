@@ -20,15 +20,15 @@ import {
 import { logger } from './logger'
 import { withTmuxUtf8Flag } from './tmuxFormat'
 
-export type LogTextMode = 'all' | 'assistant' | 'user' | 'assistant-user'
+type LogTextMode = 'all' | 'assistant' | 'user' | 'assistant-user'
 
-export interface LogReadOptions {
+interface LogReadOptions {
   lineLimit: number
   byteLimit: number
   maxByteLimit?: number
 }
 
-export interface LogTextOptionsInput {
+interface LogTextOptionsInput {
   mode?: LogTextMode
   logRead?: Partial<LogReadOptions>
 }
@@ -316,7 +316,7 @@ export function hasMessageInValidUserContext(
  * Uses flexible whitespace matching to handle differences between tmux and log content.
  * Returns list of matching log file paths.
  */
-export interface ExactMatchSearchOptions {
+interface ExactMatchSearchOptions {
   logPaths?: string[]
   tailBytes?: number
   rgThreads?: number
@@ -335,7 +335,7 @@ export interface ExactMatchSearchOptions {
   wait?: (ms: number) => Promise<void>
 }
 
-export interface ExactMessageSearchOptions extends ExactMatchSearchOptions {
+interface ExactMessageSearchOptions extends ExactMatchSearchOptions {
   minLength?: number
 }
 
@@ -617,7 +617,7 @@ function hasMessageInValidUserContextProgressive(
   return false
 }
 
-export function findLogsWithExactMessage(
+function findLogsWithExactMessage(
   userMessage: string,
   logDirs: string | string[],
   {
@@ -688,7 +688,7 @@ export function findLogsWithExactMessage(
   return validMatches.length > 0 ? validMatches : []
 }
 
-export async function findLogsWithExactMessageAsync(
+async function findLogsWithExactMessageAsync(
   userMessage: string,
   logDirs: string | string[],
   {
@@ -1421,13 +1421,6 @@ function resolveLogReadOptions(
   }
 }
 
-export function getTerminalScrollback(
-  tmuxWindow: string,
-  lines = DEFAULT_SCROLLBACK_LINES
-): string {
-  return captureTerminalScrollback(tmuxWindow, lines).content
-}
-
 /** Capture terminal scrollback with success/failure indicator. */
 export function captureTerminalScrollback(
   tmuxWindow: string,
@@ -1452,15 +1445,8 @@ export function captureTerminalScrollback(
   return { ok: true, content: result.stdout }
 }
 
-export async function getTerminalScrollbackAsync(
-  tmuxWindow: string,
-  lines = DEFAULT_SCROLLBACK_LINES
-): Promise<string> {
-  return (await captureTerminalScrollbackAsync(tmuxWindow, lines)).content
-}
-
 /** Async capture terminal scrollback with success/failure indicator. */
-export async function captureTerminalScrollbackAsync(
+async function captureTerminalScrollbackAsync(
   tmuxWindow: string,
   lines = DEFAULT_SCROLLBACK_LINES
 ): Promise<{ ok: boolean; content: string }> {
@@ -1487,7 +1473,7 @@ export async function captureTerminalScrollbackAsync(
  * Get terminal scrollback with ANSI escape codes preserved.
  * Used for detecting pi's TUI which uses background colors for user messages.
  */
-export function getTerminalScrollbackWithAnsi(
+function getTerminalScrollbackWithAnsi(
   tmuxWindow: string,
   lines = DEFAULT_SCROLLBACK_LINES
 ): string {
@@ -1511,7 +1497,7 @@ export function getTerminalScrollbackWithAnsi(
   return result.stdout
 }
 
-export async function getTerminalScrollbackWithAnsiAsync(
+async function getTerminalScrollbackWithAnsiAsync(
   tmuxWindow: string,
   lines = DEFAULT_SCROLLBACK_LINES
 ): Promise<string> {
@@ -1535,7 +1521,7 @@ export async function getTerminalScrollbackWithAnsiAsync(
   return result.stdout
 }
 
-export function readLogContent(
+function readLogContent(
   logPath: string,
   { lineLimit, byteLimit }: LogReadOptions = DEFAULT_LOG_READ_OPTIONS
 ): string {
@@ -1545,15 +1531,6 @@ export function readLogContent(
   } catch {
     return ''
   }
-}
-
-export function extractLogText(
-  logPath: string,
-  { mode = DEFAULT_LOG_TEXT_MODE, logRead }: LogTextOptionsInput = {}
-): string {
-  const resolvedRead = resolveLogReadOptions(logRead)
-  const raw = readLogContent(logPath, resolvedRead)
-  return extractTextFromRaw(raw, mode)
 }
 
 function extractTextFromRaw(raw: string, mode: LogTextMode): string {
@@ -1826,7 +1803,7 @@ export function extractLastEntryTimestamp(
   return null
 }
 
-export interface ExactMatchContext {
+interface ExactMatchContext {
   agentType?: AgentType
   projectPath?: string
 }
@@ -1839,7 +1816,7 @@ export interface ExactMatchContext {
  * list defers the match until the right-typed log appears. Fails open when the
  * window type or a log's type is unknown.
  */
-export function filterCandidatesByAgentType(
+function filterCandidatesByAgentType(
   candidates: string[],
   agentType: AgentType | undefined
 ): string[] {
@@ -1851,7 +1828,7 @@ export function filterCandidatesByAgentType(
   })
 }
 
-export interface ExactMatchResult {
+interface ExactMatchResult {
   logPath: string
   userMessage: string
   matchedCount: number
@@ -2071,7 +2048,7 @@ export function tryExactMatchWindowToLog(
   }
 }
 
-export async function tryExactMatchWindowToLogAsync(
+async function tryExactMatchWindowToLogAsync(
   tmuxWindow: string,
   logDirs: string | string[],
   scrollbackLines = DEFAULT_SCROLLBACK_LINES,
@@ -2282,7 +2259,7 @@ export async function tryExactMatchWindowToLogAsync(
   }
 }
 
-export interface ExactMatchRgResult {
+interface ExactMatchRgResult {
   matches: Map<string, TerminalSession>
   /** Windows where tryExactMatchWindowToLog returned null due to no extractable messages */
   noMessageWindows: Set<string>
@@ -2423,7 +2400,7 @@ export async function matchWindowsToLogsByExactRgAsync(
   return { matches: resolved, noMessageWindows }
 }
 
-export interface VerifyWindowLogOptions {
+interface VerifyWindowLogOptions {
   context?: ExactMatchContext
   scrollbackLines?: number
   /** Log paths to exclude from consideration (e.g., logs belonging to other active windows) */
@@ -2466,33 +2443,8 @@ export function verifyWindowLogAssociation(
   return bestMatch !== null && bestMatch.logPath === logPath
 }
 
-export async function verifyWindowLogAssociationAsync(
-  tmuxWindow: string,
-  logPath: string,
-  logDirs: string[],
-  options: VerifyWindowLogOptions = {}
-): Promise<boolean> {
-  const {
-    context = {},
-    scrollbackLines = DEFAULT_SCROLLBACK_LINES,
-    excludeLogPaths = [],
-  } = options
-
-  const excludeSet = new Set(excludeLogPaths)
-  excludeSet.delete(logPath)
-
-  const bestMatch = await tryExactMatchWindowToLogAsync(
-    tmuxWindow,
-    logDirs,
-    scrollbackLines,
-    context,
-    { excludeLogPaths: excludeSet.size > 0 ? [...excludeSet] : undefined }
-  )
-  return bestMatch !== null && bestMatch.logPath === logPath
-}
-
 // Tri-state verification types for hybrid session matching
-export type WindowLogVerificationStatus = 'verified' | 'mismatch' | 'inconclusive'
+type WindowLogVerificationStatus = 'verified' | 'mismatch' | 'inconclusive'
 
 export interface WindowLogVerificationResult {
   status: WindowLogVerificationStatus
