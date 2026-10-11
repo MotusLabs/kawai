@@ -199,3 +199,35 @@ test('fixed and dynamic SQL statements are compiled once and reused across calls
     store.listForTeam(TEAM); expect(prepare.mock.calls).toHaveLength(afterFirstList)
   } finally { prepare.mockRestore(); db.close() }
 })
+test('urgentDirectFor returns only due urgent direct mail for the recipient, oldest first', () => {
+  const db = new Database(':memory:'); const store = new MailboxStore(db)
+  try {
+    const base = { teamId: TEAM, toKind: 'session' as const, toId: 'chat-dev', fromSession: 'lead', fromGroup: null, originPath: '/repo', body: '' }
+    const urgentOld = store.enqueue({ ...base, body: 'old', priority: 'urgent' }, '2026-01-01T00:00:00.000Z')
+    store.enqueue({ ...base, body: 'normal', priority: 'normal' })
+    store.enqueue({ ...base, body: 'urgent-new', priority: 'urgent' }, '2026-01-02T00:00:00.000Z')
+    store.enqueue({ ...base, body: 'scheduled', priority: 'urgent', deliverAt: '2099-01-01T00:00:00.000Z' })
+    const claimed = store.enqueue({ ...base, body: 'claimed', priority: 'urgent' })
+    store.claim(claimed.id, 'chat-dev') // a claimed row must not come back as urgent-queued
+    store.enqueue({ ...base, toId: 'chat-other', body: 'other', priority: 'urgent' })
+    store.enqueue({ ...base, toKind: 'group', toId: 'devs', body: 'group', priority: 'urgent' })
+    expect(store.urgentDirectFor('chat-dev').map(row => row.body)).toEqual(['old', 'urgent-new'])
+    expect(store.urgentDirectFor('chat-dev')[0]!.id).toBe(urgentOld.id)
+    expect(store.urgentDirectFor('chat-none')).toEqual([])
+  } finally { db.close() }
+})
+test('claimsFor returns one session\'s unacknowledged claims only', () => {
+  const db = new Database(':memory:'); const store = new MailboxStore(db)
+  try {
+    const base = { teamId: TEAM, toKind: 'group' as const, toId: 'devs', fromSession: 'lead', fromGroup: null, originPath: '/repo', body: '' }
+    const mine = store.enqueue(base)
+    store.enqueue(base)
+    store.claim(mine.id, 'chat-dev')
+    expect(store.claimsFor('chat-dev').map(row => row.id)).toEqual([mine.id])
+    store.markPushed(mine.id)
+    expect(store.claimsFor('chat-dev').map(row => row.id)).toEqual([mine.id])
+    store.markDelivered(mine.id)
+    expect(store.claimsFor('chat-dev')).toEqual([])
+    expect(store.claimsFor('chat-none')).toEqual([])
+  } finally { db.close() }
+})

@@ -94,8 +94,7 @@ export class SessionMailbox {
 
   /** Live CLI input may still be draining: absence cannot authorize requeue. */
   settleRecipient(id: string) {
-    for (const mail of this.mailbox.store.unacknowledgedClaims()) {
-      if (mail.claimedBy !== id) continue
+    for (const mail of this.mailbox.store.claimsFor(id)) {
       if (mail.pushedAt) this.settle(mail)
       else this.mailbox.store.requeue(mail.id)
     }

@@ -60,6 +60,8 @@ CREATE TABLE IF NOT EXISTS team_messages (
 );
 CREATE INDEX IF NOT EXISTS team_messages_queue ON team_messages (team_id, state);
 CREATE INDEX IF NOT EXISTS team_messages_thread ON team_messages (thread_id);
+CREATE INDEX IF NOT EXISTS team_messages_recipient ON team_messages (to_id, state);
+CREATE INDEX IF NOT EXISTS team_messages_claimant ON team_messages (claimed_by, state);
 `
 
 const nowIso = () => new Date().toISOString()
@@ -236,6 +238,21 @@ export class MailboxStore {
   /** Claimed rows not yet acknowledged (startup reconciliation, D10). */
   unacknowledgedClaims(): TeamMessage[] {
     return this.select(`state = 'claimed'`, {})
+  }
+
+  /**
+   * Due urgent direct mail for one recipient, oldest first. Backs the
+   * dispatcher's interrupt pass without walking the team's whole mailbox.
+   */
+  urgentDirectFor(sessionId: string, now = nowIso()): TeamMessage[] {
+    return (this.statements.urgentDirectFor.all({ $sessionId: sessionId, $now: now }) as Record<string, unknown>[])
+      .map(mapRow)
+  }
+
+  /** A session's claimed, unacknowledged rows (turn-end settlement). */
+  claimsFor(sessionId: string): TeamMessage[] {
+    return (this.statements.claimsFor.all({ $sessionId: sessionId }) as Record<string, unknown>[])
+      .map(mapRow)
   }
 
   /** Confirmed conversation history only; undelivered mail is not context. */

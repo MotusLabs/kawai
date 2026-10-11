@@ -26,4 +26,11 @@ export const mailboxSql = {
       WHERE state = 'queued' AND (deliver_at IS NULL OR deliver_at <= $now)`,
   nextDueAt: `SELECT MIN(deliver_at) AS due FROM team_messages
       WHERE state = 'queued' AND deliver_at > $now`,
+  urgentDirectFor: `SELECT * FROM team_messages
+      WHERE to_kind = 'session' AND to_id = $sessionId AND state = 'queued'
+        AND priority = 'urgent' AND (deliver_at IS NULL OR deliver_at <= $now)
+      ORDER BY created_at, rowid`,
+  claimsFor: `SELECT * FROM team_messages
+      WHERE claimed_by = $sessionId AND state = 'claimed'
+      ORDER BY created_at, rowid`,
 } as const
