@@ -285,6 +285,7 @@ export class ChatSessionManager {
   }
 
   private captureHistory(sessionId: string): void {
+    if (!this.records.has(sessionId)) return
     if (!this.snapshotHistory.has(sessionId)) {
       this.snapshotHistory.set(sessionId, this.getHistory(sessionId)?.events ?? [])
     }
@@ -394,10 +395,7 @@ export class ChatSessionManager {
     // (worktree tracking design D3): a session whose transcript moved while
     // the server was down follows it on attach too, not only at startup —
     // the same overwrite a live CwdChanged firing would have made.
-    if (replay.cwd && replay.cwd !== record.projectPath) {
-      this.applyPatch(sessionId, { projectPath: replay.cwd })
-      this.drivers.get(sessionId)?.setProjectPath(replay.cwd)
-    }
+    if (replay.cwd) this.handleDriverCwdChanged(sessionId, replay.cwd)
     return replay
   }
 
@@ -409,6 +407,9 @@ export class ChatSessionManager {
    * (design D5): the id is kept so a restored transcript can still resume.
    */
   async send(sessionId: string, text: string): Promise<ChatActionResult> {
+    // Recovery can replace the record's path: finish it before checking the
+    // directory or resolving the launch configuration.
+    this.captureHistory(sessionId)
     const record = this.records.get(sessionId)
     if (!record) {
       return { ok: false, error: `Unknown chat session ${sessionId}` }
@@ -440,6 +441,8 @@ export class ChatSessionManager {
    * a session error event from the driver.
    */
   async start(sessionId: string): Promise<ChatActionResult> {
+    // Direct starts need the same recovery ordering as attach and send.
+    this.captureHistory(sessionId)
     const record = this.records.get(sessionId)
     if (!record) {
       return { ok: false, error: `Unknown chat session ${sessionId}` }
@@ -853,7 +856,6 @@ export class ChatSessionManager {
     const launch = this.launchFor(record.claudeProfileId, record.projectPath)
     if (launch.executable) verifyProfileExecutable(record.claudeProfileId ?? 'default', launch.executable)
     if (!this.authOk(record.claudeProfileId, record.projectPath)) throw new Error(chatAuthErrorMessage())
-    this.captureHistory(sessionId)
     const promise = (async () => {
       // A profile executable replaces the standard binary (already verified
       // above); otherwise every spawn runs the checked Claude Code install.

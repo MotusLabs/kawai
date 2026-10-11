@@ -1710,6 +1710,62 @@ describe('ChatSessionManager', () => {
       expect(harness.refreshes).toEqual([])
     })
 
+    for (const action of ['send', 'start'] as const) {
+      test(`direct ${action} recovers the path before validating and spawning`, async () => {
+        process.env.ANTHROPIC_API_KEY = 'sk-test-key'
+        const worktree = '/tmp/proj/.claude/worktrees/recovered'
+        const now = new Date().toISOString()
+        db.insertChatSession({
+          sessionId: 'chat-recovered', name: 'Recovered',
+          projectPath: '/tmp/proj', sdkSessionId: 'sdk-late-cwd',
+          status: 'waiting', createdAt: now, lastActivityAt: now,
+        })
+        // No transcript at startup. It arrives before the first direct action,
+        // and the original directory is gone: the guard must use the new cwd.
+        const harness = createHarness(db, (directory) => directory === worktree,
+          undefined, undefined, undefined, 5)
+        writeTranscript('sdk-late-cwd', JSON.stringify({
+          type: 'user', uuid: 'recovered-user', cwd: worktree,
+          message: { role: 'user', content: 'hello' },
+        }))
+        const outcome = action === 'send'
+          ? await harness.manager.send('chat-recovered', 'continue')
+          : await harness.manager.start('chat-recovered')
+        expect(outcome).toEqual({ ok: true })
+        expect(db.getChatSession('chat-recovered')?.projectPath).toBe(worktree)
+        expect(harness.handles[0]!.options.cwd).toBe(worktree)
+        expect(harness.handles[0]!.options.resume).toBe('sdk-late-cwd')
+        await new Promise((resolve) => setTimeout(resolve, 30))
+        expect(harness.refreshes).toEqual([worktree])
+        harness.manager.shutdown()
+      })
+    }
+
+    test('history recovery refreshes discovery once for the latest moved path', async () => {
+      process.env.ANTHROPIC_API_KEY = 'sk-test-key'
+      const harness = createHarness(db, anyDirectory, undefined, undefined, undefined, 5)
+      const created = harness.manager.createSession({ projectPath: '/tmp/proj' })
+      if (!created.ok) throw new Error('create failed')
+      const id = created.session.id
+      await harness.manager.send(id, 'first')
+      harness.handles[0]!.push(initMessage('sdk-history-cwd'))
+      await flush()
+      const recover = (cwd: string) => {
+        writeTranscript('sdk-history-cwd', JSON.stringify({
+          type: 'user', uuid: 'moved-user', cwd,
+          message: { role: 'user', content: 'hello' },
+        }))
+        harness.manager.getHistory(id)
+      }
+      recover('/tmp/other-repo/one')
+      recover('/tmp/other-repo/two')
+      recover('/tmp/other-repo/two') // same-path recovery is a no-op
+      await new Promise((resolve) => setTimeout(resolve, 30))
+      expect(harness.refreshes).toEqual(['/tmp/other-repo/two'])
+      expect(harness.registry.get(id)?.projectPath).toBe('/tmp/other-repo/two')
+      harness.manager.shutdown()
+    })
+
     test('a restored session whose transcript moved comes back with the worktree path', async () => {
       process.env.ANTHROPIC_API_KEY = 'sk-test-key'
       const first = createHarness(db)
