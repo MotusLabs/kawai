@@ -18,4 +18,6 @@
 ## 4. Integration
 
 - [x] 4.1 Adjust `src/server/chat/developmentFixture.ts` so fixture tool calls exercise a Bash description handle and a failed tool use, then run `bun run lint && bun run typecheck && bun run test` and verify the suite is green
-- [ ] 4.2 Start the app with the development fixture and use the `dev-browser` skill to screenshot a chat transcript — verify one row per tool use, `Bash(...)`-style labels, project-relative paths, and `✗` on the failed entry
+- [x] 4.2 Start the app with the development fixture and use the `dev-browser` skill to screenshot a chat transcript — verify one row per tool use, `Bash(...)`-style labels, project-relative paths, and `✗` on the failed entry
+
+Browser verification used Playwright in place of the unavailable `dev-browser` skill, as approved by the user. Verified paired rows, Bash description handles, project-relative paths, failure marks, expanded input/output order, and reload replay without page errors. Screenshots: `/tmp/compact-chat-browser/compact-rows.png` and `/tmp/compact-chat-browser/expanded-row.png`.
