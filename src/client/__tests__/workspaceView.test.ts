@@ -563,3 +563,36 @@ describe('buildWorkspaceView archive section', () => {
     expect(view.visibleEntries.map((e) => e.key)).toEqual(['s1', 'w1', 'r1', 'c1'])
   })
 })
+
+describe('buildWorkspaceView chat worktree placement', () => {
+  // Worktree tracking: a chat session's projectPath follows the agent's cwd,
+  // so placement is derived per snapshot from the path alone.
+  function chatSession(id: string, projectPath: string, overrides: Partial<Session> = {}): Session {
+    return liveSession(id, projectPath, { kind: 'chat', tmuxWindow: undefined, ...overrides })
+  }
+
+  test('a chat created in a worktree lands in that worktree section', () => {
+    const view = buildWorkspaceView(snapshot, [chatSession('chat-1', ADD_AUTH_WT)], [], [])
+    expect(findSection(view, changeKey('add-auth'))?.entries.map((e) => e.key)).toEqual(['chat-1'])
+    expect(view.workspace.entries).toHaveLength(0)
+  })
+
+  test('a chat whose path moves to another worktree moves sections', () => {
+    const before = buildWorkspaceView(snapshot, [chatSession('chat-1', ADD_AUTH_WT)], [], [])
+    expect(findSection(before, changeKey('add-auth'))?.entries.map((e) => e.key)).toEqual(['chat-1'])
+
+    // The agent's cwd moved to a different worktree: the row follows its new
+    // path into that worktree's section on the next snapshot.
+    const after = buildWorkspaceView(snapshot, [chatSession('chat-1', '/repo-linked')], [], [])
+    expect(findSection(after, changeKey('add-auth'))?.entries).toHaveLength(0)
+    expect(findSection(after, '/repo/.git::/repo-linked')?.entries.map((e) => e.key)).toEqual(['chat-1'])
+  })
+
+  test('a chat whose path leaves Git lands in Workspace', () => {
+    const view = buildWorkspaceView(snapshot, [chatSession('chat-1', '/plain/project')], [], [])
+    expect(view.workspace.entries.map((e) => e.key)).toEqual(['chat-1'])
+    for (const section of view.sections) {
+      expect(section.entries).toHaveLength(0)
+    }
+  })
+})

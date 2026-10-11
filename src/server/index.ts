@@ -817,6 +817,15 @@ const chatSessionManager = new ChatSessionManager({
   onUsage: (profileId, report) => chatConnections.publishUsage(profileId, report),
   getProviderEnv: chatProviderEnv.current,
   wireLogs: chatWireLogs,
+  // Scoped workspace discovery after the agent moves (worktree tracking D2);
+  // the closure runs only once a live agent reports a new cwd, by which time
+  // the coordinator below exists.
+  requestWorkspaceRefresh: (projectPath) => {
+    fireAndForget(
+      workspaceCoordinatorInstance.requestRefresh(projectPath),
+      'workspaceChatCwdRefresh'
+    )
+  },
   ...(chatFixtureEnabled ? { queryFactory: fixtureQueryFactory, authCheck: () => true } : {}),
 })
 const chatConnections = new ChatConnections(chatSessionManager, chatWireLogs)

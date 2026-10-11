@@ -54,6 +54,7 @@ import { probeSdkAvailability } from './sdkAvailability'
 import { UsageLimitStore } from './usageLimits'
 import {
   findTranscriptPath,
+  readTranscriptCwd,
   readTranscriptTitle,
   replayTranscriptFile,
   type TranscriptReplay,
@@ -128,6 +129,18 @@ export interface ChatSessionManagerOptions {
   titleLocateIntervalMs?: number
   /** Catalog file failure sink; defaults to the structured logger. */
   catalogErrorLog?: (errors: string[]) => void
+  /**
+   * Scoped workspace-discovery refresh (worktree tracking design D2): called
+   * once per debounce window with the session's newest path after the agent
+   * moved, so a newly entered worktree is discovered without a reload.
+   * Wired to the workspace coordinator in index.ts.
+   */
+  requestWorkspaceRefresh?: (projectPath: string) => void
+  /**
+   * Debounce window for those refreshes (default 500ms): a fast cd chain
+   * collapses into one discovery pass for its final directory.
+   */
+  cwdRefreshDebounceMs?: number
 }
 
 export type ChatCreateResult =
@@ -201,6 +214,15 @@ export class ChatSessionManager {
    * Released on kill, archive, and shutdown.
    */
   private readonly titleWatchers = new Map<string, { close: () => void }>()
+  /**
+   * Pending debounced workspace refreshes (worktree tracking design D2): one
+   * per session whose agent moved, firing with the newest path only. Cleared
+   * on kill and shutdown; the callback itself cannot outlive the session.
+   */
+  private readonly cwdRefreshTimers = new Map<
+    string,
+    { timer: ReturnType<typeof setTimeout>; path: string }
+  >()
 
   async createAvailableSession(input: { projectPath: string; name?: string; claudeProfileId?: string; approvalPolicy?: ChatApprovalPolicy }): Promise<ChatCreateResult> {
     // Refuse a bad path before the probe spends an SDK spawn on it.
@@ -263,6 +285,7 @@ export class ChatSessionManager {
   }
 
   private captureHistory(sessionId: string): void {
+    if (!this.records.has(sessionId)) return
     if (!this.snapshotHistory.has(sessionId)) {
       this.snapshotHistory.set(sessionId, this.getHistory(sessionId)?.events ?? [])
     }
@@ -365,11 +388,18 @@ export class ChatSessionManager {
     const record = this.records.get(sessionId)
     if (!record) return null
     if (!record.sdkSessionId) {
-      return { status: 'ok', events: [] }
+      return { status: 'ok', events: [], cwd: null }
     }
-    return replayTranscriptFile(findTranscriptPath(record.sdkSessionId), {
-      excludeToolCallIds: this.liveToolCallIds(sessionId),
-    })
+    const replay = replayTranscriptFile(
+      findTranscriptPath(record.sdkSessionId),
+      { excludeToolCallIds: this.liveToolCallIds(sessionId) }
+    )
+    // The transcript's last cwd is where the conversation actually is
+    // (worktree tracking design D3): a session whose transcript moved while
+    // the server was down follows it on attach too, not only at startup —
+    // the same overwrite a live CwdChanged firing would have made.
+    if (replay.cwd) this.handleDriverCwdChanged(sessionId, replay.cwd)
+    return replay
   }
 
   /**
@@ -380,6 +410,9 @@ export class ChatSessionManager {
    * (design D5): the id is kept so a restored transcript can still resume.
    */
   async send(sessionId: string, text: string): Promise<ChatActionResult> {
+    // Recovery can replace the record's path: finish it before checking the
+    // directory or resolving the launch configuration.
+    this.captureHistory(sessionId)
     const record = this.records.get(sessionId)
     if (!record) {
       return { ok: false, error: `Unknown chat session ${sessionId}` }
@@ -411,6 +444,8 @@ export class ChatSessionManager {
    * a session error event from the driver.
    */
   async start(sessionId: string): Promise<ChatActionResult> {
+    // Direct starts need the same recovery ordering as attach and send.
+    this.captureHistory(sessionId)
     const record = this.records.get(sessionId)
     if (!record) {
       return { ok: false, error: `Unknown chat session ${sessionId}` }
@@ -599,6 +634,7 @@ export class ChatSessionManager {
     this.drivers.delete(sessionId)
     this.driverPromises.delete(sessionId)
     this.releaseTitleWatch(sessionId)
+    this.cancelCwdRefresh(sessionId)
     this.records.delete(sessionId)
     this.snapshotHistory.delete(sessionId)
     this.liveEvents.delete(sessionId)
@@ -626,6 +662,9 @@ export class ChatSessionManager {
     this.contextReadings.clear()
     for (const sessionId of this.titleWatchers.keys()) {
       this.releaseTitleWatch(sessionId)
+    }
+    for (const sessionId of this.cwdRefreshTimers.keys()) {
+      this.cancelCwdRefresh(sessionId)
     }
   }
 
@@ -706,14 +745,27 @@ export class ChatSessionManager {
       // was never user-set adopts its transcript's latest title now, so the
       // list is correct for sessions nobody opens. Nothing is persisted —
       // the row re-derives on the next restart the same way.
-      if (
-        (record.nameSource ?? 'manual') !== 'manual' &&
-        record.sdkSessionId
-      ) {
+      // Cwd catch-up (worktree tracking design D3): the transcript's last
+      // cwd is where the conversation actually is — the agent may have
+      // entered a worktree before the restart. Unlike the title this is
+      // persisted, matching what the live CwdChanged firing would have
+      // written, so the row and the registry agree from here on.
+      if (record.sdkSessionId) {
         const filePath = findTranscriptPath(record.sdkSessionId)
-        const title = filePath ? readTranscriptTitle(filePath) : null
-        if (title) {
-          record = { ...record, name: title.title, nameSource: title.source }
+        if (filePath) {
+          if ((record.nameSource ?? 'manual') !== 'manual') {
+            const title = readTranscriptTitle(filePath)
+            if (title) {
+              record = { ...record, name: title.title, nameSource: title.source }
+            }
+          }
+          const cwd = readTranscriptCwd(filePath)
+          if (cwd && cwd !== record.projectPath) {
+            record = { ...record, projectPath: cwd }
+            this.options.db.updateChatSession(record.sessionId, {
+              projectPath: cwd,
+            })
+          }
         }
       }
       this.records.set(record.sessionId, record)
@@ -807,7 +859,6 @@ export class ChatSessionManager {
     const launch = this.launchFor(record.claudeProfileId, record.projectPath)
     if (launch.executable) verifyProfileExecutable(record.claudeProfileId ?? 'default', launch.executable)
     if (!this.authOk(record.claudeProfileId, record.projectPath)) throw new Error(chatAuthErrorMessage())
-    this.captureHistory(sessionId)
     const promise = (async () => {
       // A profile executable replaces the standard binary (already verified
       // above); otherwise every spawn runs the checked Claude Code install.
@@ -855,6 +906,8 @@ export class ChatSessionManager {
           // Persist immediately: a crash right after the first turn must not
           // lose the ability to resume the conversation.
           this.applyPatch(record.sessionId, { sdkSessionId }),
+        onCwdChanged: (newCwd) =>
+          this.handleDriverCwdChanged(record.sessionId, newCwd),
       })
       if (
         !this.records.has(record.sessionId) ||
@@ -1038,6 +1091,46 @@ export class ChatSessionManager {
   }
 
   /**
+   * The agent's working directory moved (worktree tracking design D2): the
+   * session row follows it in place — every consumer reads projectPath — and
+   * the live driver learns it so any respawn resumes in the directory the
+   * conversation is actually in, not the creation path. No-ops when the path
+   * is unchanged, so hook noise for the same directory never writes.
+   */
+  private handleDriverCwdChanged(sessionId: string, newCwd: string): void {
+    const record = this.records.get(sessionId)
+    if (!record || record.projectPath === newCwd) return
+    this.applyPatch(sessionId, { projectPath: newCwd })
+    this.drivers.get(sessionId)?.setProjectPath(newCwd)
+    this.scheduleCwdRefresh(sessionId, newCwd)
+  }
+
+  /**
+   * One scoped discovery pass per debounce window (design D2): a fast cd chain
+   * collapses into a single refresh for its final directory, so a newly
+   * entered worktree is discovered without a reload while its creation does
+   * not stampede the coordinator.
+   */
+  private scheduleCwdRefresh(sessionId: string, path: string): void {
+    const pending = this.cwdRefreshTimers.get(sessionId)
+    if (pending) clearTimeout(pending.timer)
+    const timer = setTimeout(() => {
+      this.cwdRefreshTimers.delete(sessionId)
+      this.options.requestWorkspaceRefresh?.(path)
+    }, this.options.cwdRefreshDebounceMs ?? 500)
+    timer.unref?.()
+    this.cwdRefreshTimers.set(sessionId, { timer, path })
+  }
+
+  /** Forget a session's pending refresh (kill, shutdown). */
+  private cancelCwdRefresh(sessionId: string): void {
+    const pending = this.cwdRefreshTimers.get(sessionId)
+    if (!pending) return
+    clearTimeout(pending.timer)
+    this.cwdRefreshTimers.delete(sessionId)
+  }
+
+  /**
    * Store the latest activity (anchored on this server's clock) and forward
    * it to the broadcast sink. Null (turn end, driver death) clears it.
    */
@@ -1086,6 +1179,11 @@ export class ChatSessionManager {
     }
     this.options.registry.updateSession(sessionId, {
       ...(patch.status !== undefined ? { status: patch.status } : {}),
+      // The agent's cwd move rides the same session-update broadcast, so
+      // clients re-group the row without a reload (worktree tracking D2).
+      ...(patch.projectPath !== undefined
+        ? { projectPath: patch.projectPath }
+        : {}),
       ...(patch.name !== undefined ? { name: patch.name } : {}),
       ...(patch.lastActivityAt !== undefined
         ? { lastActivity: patch.lastActivityAt }
