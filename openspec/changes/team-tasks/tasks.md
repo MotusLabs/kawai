@@ -45,10 +45,10 @@
 
 ## 7. Task UI
 
-- [ ] 7.1 Add a per-team task store and task-list/create view showing title, status, creator, and participants, with team scope and optional parent/worktree/change inputs; verify component tests cover creation, listed participants, errors, and authoritative reconnect updates.
-- [ ] 7.2 Add task detail showing current direction/acceptance, revision history, append-only journal, subtasks, and linked messages, plus human amend/note/status/reopen controls; verify component tests cover every section and action, retained old revisions, a missing creator, and disabled controls while disconnected.
-- [ ] 7.3 Show the associated task in a chat's header, task context on peer-message rows, and spawned/task/needs-attention badges in the navigator under the current worktree; verify component tests cover live and replayed events, spawned sessions in subdirectories, pending approval/question flags, and flag removal after resolution.
-- [ ] 7.4 Document where task creation, detail, history, message links, and spawned-session attention appear in the UI; verify documented labels/actions match the rendered components.
+- [x] 7.1 Add a per-team task store and task-list/create view showing title, status, creator, and participants, with team scope and optional parent/worktree/change inputs; verify component tests cover creation, listed participants, errors, and authoritative reconnect updates.
+- [x] 7.2 Add task detail showing current direction/acceptance, revision history, append-only journal, subtasks, and linked messages, plus human amend/note/status/reopen controls; verify component tests cover every section and action, retained old revisions, a missing creator, and disabled controls while disconnected.
+- [x] 7.3 Show the associated task in a chat's header, task context on peer-message rows, and spawned/task/needs-attention badges in the navigator under the current worktree; verify component tests cover live and replayed events, spawned sessions in subdirectories, pending approval/question flags, and flag removal after resolution.
+- [x] 7.4 Document where task creation, detail, history, message links, and spawned-session attention appear in the UI; verify documented labels/actions match the rendered components.
 
 ## 8. Integration
 

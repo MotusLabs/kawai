@@ -27,6 +27,7 @@ import { composeSortableTransform } from '../utils/sortableTransform'
 import AgentIcon from './AgentIcon'
 import ProjectBadge from './ProjectBadge'
 import HostBadge from './HostBadge'
+import { spawnedNeedsAttention } from '../utils/teamTaskNotification'
 
 /** Status pill classes for the time/activity badge */
 export const statusPillClass: Record<Session['status'], string> = {
@@ -625,6 +626,18 @@ export function SessionRow({
             >
               {session.groupLabel ?? session.groupId}
             </span>
+          )}
+          {session.kind === 'chat' && session.spawned && (
+            <span data-testid="session-spawned-badge" className="shrink-0 rounded border border-border px-1 text-[11px] text-secondary"
+              title="Started by worktree staffing">spawned</span>
+          )}
+          {session.kind === 'chat' && session.taskId && (
+            <span data-testid="session-task-badge" className="max-w-24 shrink-0 truncate rounded border border-border px-1 text-[11px] text-secondary"
+              title={`Task: ${session.taskTitle ?? session.taskId}`}>{session.taskTitle ?? 'task'}</span>
+          )}
+          {spawnedNeedsAttention(session) && (
+            <span data-testid="session-attention-badge" className="shrink-0 rounded bg-amber-500/20 px-1 text-[11px] text-amber-600"
+              title="A spawned session is waiting for your approval or answer">needs attention</span>
           )}
           {needsInput ? (
             <span

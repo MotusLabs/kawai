@@ -1,6 +1,7 @@
 // Root component: app layout, keyboard shortcuts, and the WebSocket
 // subscription that routes every server message into stores and local state.
 import { useTeamMailboxStore } from './stores/teamMailboxStore'
+import { useTeamTaskStore } from './stores/teamTaskStore'
 import { notifyMailboxDeadLetter } from './utils/teamMailboxNotification'
 import { notifySpawnedAttention } from './utils/teamTaskNotification'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -558,6 +559,9 @@ export default function App() {
       if (message.type === 'chat-worker-transcript') useChatStore.getState().setWorkerBody(message)
       if (message.type === 'team-mailbox-snapshot') useTeamMailboxStore.getState().apply(message)
       if (message.type === 'team-mailbox-dead-letter') notifyMailboxDeadLetter(message)
+      if (message.type === 'team-tasks-snapshot') useTeamTaskStore.getState().applySnapshot(message)
+      if (message.type === 'team-task-detail') useTeamTaskStore.getState().applyDetail(message)
+      if (message.type === 'team-task-result') useTeamTaskStore.getState().applyResult(message)
       if (message.type === 'chat-debug-frames') useChatDebugStore.getState().apply(message)
       if (message.type === 'kill-failed') {
         // Restore optimistically removed session from pending-kill snapshot

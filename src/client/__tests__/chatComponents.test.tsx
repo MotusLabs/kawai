@@ -13,6 +13,7 @@ import UsageBar from '../components/chat/UsageBar'
 import { closedDebugView, useChatDebugStore, type ChatDebugView } from '../stores/chatDebugStore'
 import { emptyTranscript, useChatStore } from '../stores/chatStore'
 import { useSettingsStore } from '../stores/settingsStore'
+import { useTeamTaskStore } from '../stores/teamTaskStore'
 
 describe('chat components', () => {
   test('approval cards send allow and deny without hiding the pending request locally', () => {
@@ -1745,5 +1746,44 @@ describe('chat workers', () => {
     expect(textOf(renderer.root.findByProps({ 'data-testid': 'chat-worker-summary' }))).toBe('Ran out of budget')
     renderer.unmount()
     useChatStore.setState({ sessions: {} })
+  })
+})
+
+describe('chat task header and tasks panel', () => {
+  afterEach(() => useTeamTaskStore.setState({ views: {} }))
+
+  test('the header names the task; clicking opens the tasks panel on it and subscribes; reconnect resubscribes', () => {
+    const sent: ClientMessage[] = []
+    const session = { ...chatSession, spawned: true, taskId: 'task-1', taskTitle: 'Export' } as Session
+    const props = { session, sendMessage: (message: ClientMessage) => { sent.push(message) }, connectionStatus: 'connected' as const, error: null, onClose: () => {}, onKill: () => {} }
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => { renderer = TestRenderer.create(<ChatView {...props} connectionEpoch={0} />) })
+    const link = renderer.root.findByProps({ 'data-testid': 'chat-task' })
+    expect(textOf(link.parent!)).toBe('Spawned for task Export')
+    act(() => link.props.onClick())
+    expect(renderer.root.findAllByProps({ 'data-testid': 'team-tasks' })).toHaveLength(1)
+    expect(sent.filter(message => message.type.startsWith('team-task'))).toEqual([
+      { type: 'team-tasks-open', sessionId: 'chat-1' },
+      { type: 'team-task-open', sessionId: 'chat-1', taskId: 'task-1' },
+    ])
+    sent.length = 0
+    act(() => renderer.update(<ChatView {...props} connectionEpoch={1} />))
+    expect(sent.filter(message => message.type.startsWith('team-task'))).toEqual([
+      { type: 'team-tasks-close', sessionId: 'chat-1' },
+      { type: 'team-task-close', sessionId: 'chat-1', taskId: 'task-1' },
+      { type: 'team-tasks-open', sessionId: 'chat-1' },
+      { type: 'team-task-open', sessionId: 'chat-1', taskId: 'task-1' },
+    ])
+    // Opening the mailbox replaces the tasks panel in the shared side slot.
+    act(() => renderer.root.find(node => node.type === 'button' && node.children.join('') === 'Mailbox').props.onClick())
+    expect(renderer.root.findAllByProps({ 'data-testid': 'team-tasks' })).toHaveLength(0)
+    act(() => renderer.unmount())
+  })
+
+  test('a chat without a task shows no task line', () => {
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => { renderer = TestRenderer.create(<ChatView session={chatSession} sendMessage={() => {}} connectionStatus="connected" connectionEpoch={0} error={null} onClose={() => {}} onKill={() => {}} />) })
+    expect(renderer.root.findAllByProps({ 'data-testid': 'chat-task' })).toHaveLength(0)
+    act(() => renderer.unmount())
   })
 })
