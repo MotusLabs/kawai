@@ -48,6 +48,30 @@ The system SHALL visually group active sessions under collapsible sections for u
 - **WHEN** a live remote session does not have repository metadata supplied by its host
 - **THEN** the navigator retains it in an explicit remote section without assigning local Git metadata
 
+### Requirement: Group chat sessions by current working directory
+The system SHALL place each live chat session in the change, worktree, or
+`Workspace` section derived from that session's current working directory,
+using the same deepest-path association as terminal sessions. A chat created
+in a worktree SHALL appear under that worktree's section. When a chat's working
+directory moves to another worktree, the next session update SHALL move the
+session to the section for the new directory without a page reload.
+
+#### Scenario: Chat started in a worktree
+- **WHEN** a chat session is created with a discovered worktree as its project path
+- **THEN** the navigator lists that session in the matching change or worktree section, not in `Workspace`
+
+#### Scenario: Chat agent enters a worktree
+- **WHEN** a live chat session's working directory changes from one discovered worktree to another
+- **THEN** the navigator moves the session to the section derived from the new worktree
+
+#### Scenario: Chat agent is inside a worktree subdirectory
+- **WHEN** a live chat session's working directory is a directory beneath a discovered worktree root
+- **THEN** the navigator associates the session with that worktree using the deepest matching path
+
+#### Scenario: Chat leaves Git entirely
+- **WHEN** a live chat session's working directory changes to a path that matches no discovered worktree
+- **THEN** the navigator moves the session to the `Workspace` section
+
 ### Requirement: Navigate workspace sections
 The system SHALL provide collapsible sections whose headers identify the change name and progress for change sections, the worktree name and checked-out branch or detached revision when available for other worktree sections, and the fixed label for the `Workspace`, `Remote`, and `Archive` sections. Every displayed section, including `Workspace`, `Remote`, and `Archive`, SHALL expose the same collapse affordance, expansion state, and session count on its header. Collapsed state SHALL be retained locally across reloads by stable section identity, and the identities of the `Workspace`, `Remote`, and `Archive` sections MUST NOT collide with any change or worktree section identity.
 
