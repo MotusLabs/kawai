@@ -4,8 +4,8 @@
 
 - [x] 1.1 Extend group frontmatter with `canCreateTasks` (boolean, default false), `max` (positive integer, default 1), `profile` (optional profile id), and `approval` (`manual` or `auto`, default manual); verify parser/catalog tests cover valid settings, defaults, malformed settings, and project-over-user layering.
 - [x] 1.2 Add worktree-root resolution and task-target validation using the existing git worktree helpers: normalize main checkout and linked-worktree targets to listed roots, resolve members in subdirectories to their enclosing worktree, refresh the worktree list on a cache miss, and refuse other paths; verify temporary-repository tests cover both roots, subdirectories, symlinks, moved members, invalid targets, and removed worktrees, using `cleanGitEnv()` for every test git command.
-- [ ] 1.3 Add user-level `~/.kawai/teams.json` loading with the default spawn cap of 5, positive-integer global/per-repository settings, repository/worktree keys normalized to team identity, and startup/file-change reload; verify tests cover absent files, overrides, worktree keys, malformed JSON/settings reported with default fallback, and project files being unable to raise team caps.
-- [ ] 1.4 Document task-related group settings, user-level caps, worktree-root matching, and the absence of implicit worktree creation in the How It Works documentation; verify the examples match parser defaults and the loader's paths.
+- [x] 1.3 Add user-level `~/.kawai/teams.json` loading with the default spawn cap of 5, positive-integer global/per-repository settings, repository/worktree keys normalized to team identity, and startup/file-change reload; verify tests cover absent files, overrides, worktree keys, malformed JSON/settings reported with default fallback, and project files being unable to raise team caps.
+- [x] 1.4 Document task-related group settings, user-level caps, worktree-root matching, and the absence of implicit worktree creation in the How It Works documentation; verify the examples match parser defaults and the loader's paths.
 
 ## 2. Durable task records
 
