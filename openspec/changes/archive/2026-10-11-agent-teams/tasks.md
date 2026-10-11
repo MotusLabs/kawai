@@ -54,7 +54,7 @@
 
 - [x] 9.1 Add a headless integration test running two fixture chat sessions in one temporary repository (a `devs` member and a team lead) where the lead's `send_message` handler queues mail that the dev receives as a new turn once idle and whose reply returns to the lead, and verify the test passes
 - [x] 9.2 Walk the group picker, navigator badge, peer-message row, and mailbox view in the browser against the fixture, and verify each renders as specified
-- [ ] 9.3 Run `bun run lint && bun run typecheck && bun run test` and verify the full suite is green
+- [x] 9.3 Run `bun run lint && bun run typecheck && bun run test` and verify the full suite is green
 
 ## Workflow follow-up
 
