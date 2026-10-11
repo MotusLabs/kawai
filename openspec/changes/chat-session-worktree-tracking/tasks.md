@@ -12,8 +12,8 @@
 
 ## 3. Recover the cwd from the transcript
 
-- [ ] 3.1 Capture the newest non-empty `cwd` (falling back to `attachment.snapshot.workingDirectory`) while parsing in `src/server/chat/transcriptReplay.ts` and return it from the replay helper without changing emitted `ChatEvent`s; verify with a unit test in `src/server/__tests__/chatTranscriptReplay.test.ts` covering a transcript whose cwd changes mid-file and one with no cwd field
-- [ ] 3.2 On `restorePersisted` and on attach/history replay, sync `project_path` to the transcript's last cwd when it differs and re-publish the session; verify with a unit test that a restored session whose transcript moved into a worktree comes back with the worktree path
+- [x] 3.1 Capture the newest non-empty `cwd` (falling back to `attachment.snapshot.workingDirectory`) while parsing in `src/server/chat/transcriptReplay.ts` and return it from the replay helper without changing emitted `ChatEvent`s; verify with a unit test in `src/server/__tests__/chatTranscriptReplay.test.ts` covering a transcript whose cwd changes mid-file and one with no cwd field
+- [x] 3.2 On `restorePersisted` and on attach/history replay, sync `project_path` to the transcript's last cwd when it differs and re-publish the session; verify with a unit test that a restored session whose transcript moved into a worktree comes back with the worktree path
 
 ## 4. Keep workspace discovery in step
 
@@ -21,9 +21,9 @@
 
 ## 5. Navigator placement
 
-- [ ] 5.1 Add grouping tests in `src/client/__tests__/workspaceView.test.ts` (and `sessionListGrouped.test.tsx` if a rendering assert is needed) for: a chat created in a worktree lands in that worktree section; a chat whose path changes to another worktree moves sections; a chat whose path leaves Git lands in `Workspace`
-- [ ] 5.2 Verify the started-in-a-worktree path end-to-end against a live server: create a Claude Code Chat with a discovered worktree as its project path and confirm the left menu lists it under that worktree section, not `Workspace` (headless WS check is enough; fix `workspaceSnapshot`/`repositoryResolution` if placement is wrong despite a correct `projectPath`)
+- [x] 5.1 Add grouping tests in `src/client/__tests__/workspaceView.test.ts` (and `sessionListGrouped.test.tsx` if a rendering assert is needed) for: a chat created in a worktree lands in that worktree section; a chat whose path changes to another worktree moves sections; a chat whose path leaves Git lands in `Workspace`
+- [x] 5.2 Verify the started-in-a-worktree path end-to-end against a live server: create a Claude Code Chat with a discovered worktree as its project path and confirm the left menu lists it under that worktree section, not `Workspace` (headless WS check is enough; fix `workspaceSnapshot`/`repositoryResolution` if placement is wrong despite a correct `projectPath`)
 
 ## 6. Regression pass
 
-- [ ] 6.1 Run `bun run lint && bun run typecheck && bun run test` and verify all three pass with no new failures
+- [x] 6.1 Run `bun run lint && bun run typecheck && bun run test` and verify all three pass with no new failures
