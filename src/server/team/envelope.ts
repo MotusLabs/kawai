@@ -5,6 +5,10 @@ import type { ChatPeerMessage } from '../../shared/chat'
 import { ENVELOPE_TAG } from './teamPrompt'
 import type { TeamMessage } from './mailboxStore'
 
+// Built from the same constant formatEnvelope writes, so the two cannot
+// drift apart and silently stop matching.
+const ENVELOPE_PATTERN = new RegExp(`^<${ENVELOPE_TAG} metadata="([^"\\n]*)">\\n([\\s\\S]*)\\n</${ENVELOPE_TAG}>$`)
+
 const escapeAttribute = (text: string) => text.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 const unescapeAttribute = (text: string) => text.replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&')
 const DUPLICATE_NOTE = 'Possible duplicate: if you have already seen this message id, treat it as a no-op.'
@@ -26,7 +30,7 @@ export function formatEnvelope(envelope: ChatPeerMessage): string {
 }
 
 export function parseEnvelope(text: string): ChatPeerMessage | null {
-  const match = /^<kawai-message metadata="([^"\n]*)">\n([\s\S]*)\n<\/kawai-message>$/.exec(text)
+  const match = ENVELOPE_PATTERN.exec(text)
   if (!match) return null
   try {
     const meta = JSON.parse(unescapeAttribute(match[1]!))
