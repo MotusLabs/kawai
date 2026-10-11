@@ -757,7 +757,9 @@ beforeEach(() => {
   processAny.on = (() => processAny) as typeof processAny.on
 })
 
-afterEach(() => {
+afterEach(async () => {
+  // Startup mailbox work must settle before closing its SQLite fixture.
+  for (let i = 0; i < 6; i++) await Promise.resolve()
   mailboxDb.close()
   bunAny.serve = originalServe
   bunAny.spawn = originalSpawn

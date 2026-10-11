@@ -2,6 +2,7 @@
 export const HISTORY_MAX_AGE_MIN_HOURS = 1
 export const HISTORY_MAX_AGE_MAX_HOURS = 168 // 7 days
 
+import type { TeamMessage } from './team'
 import type {
   WorkspaceOperationResult,
   WorkspaceSnapshot,
@@ -308,6 +309,8 @@ export type ServerMessage =
   // not deltas — a missed bookend must not wedge a stale running worker. Sent
   // whenever the roster projection changes; additive and ephemeral like
   // chat-activity, while settled outcomes also ride the snapshot and persist.
+  | { type: 'team-mailbox-snapshot'; sessionId: string; teamId: string; messages: TeamMessage[] }
+  | { type: 'team-mailbox-dead-letter'; teamId: string; messageId: string; senderSession: string }
   | { type: 'chat-workers'; sessionId: string; workers: ChatWorker[] }
   // A worker's body on expand (workers design D5): the reply to
   // chat-worker-transcript, read from the worker's on-disk transcript.
@@ -416,6 +419,8 @@ export type ClientMessage =
       sessionId: string
       policy: ChatApprovalPolicy
     }
+  | { type: 'team-mailbox-open' | 'team-mailbox-close'; sessionId: string }
+  | { type: 'team-mailbox-cancel' | 'team-mailbox-retry' | 'team-mailbox-discard'; sessionId: string; messageId: string }
   | { type: 'chat-debug-open'; sessionId: string }
   | { type: 'chat-debug-page'; sessionId: string; beforeSeq: number }
   | { type: 'chat-debug-close'; sessionId: string }

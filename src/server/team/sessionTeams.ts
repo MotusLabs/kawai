@@ -61,6 +61,16 @@ export class SessionTeams {
     return this.entries.get(sessionId)?.team
   }
 
+  /** Mailbox opens wait for startup/path-change resolution before scoping. */
+  async resolvedTeamOf(sessionId: string): Promise<TeamIdentity | undefined> {
+    let entry = this.entries.get(sessionId)
+    while (entry?.pending) {
+      await entry.pending
+      entry = this.entries.get(sessionId)
+    }
+    return entry?.team
+  }
+
   /** Session ids whose resolved team is `teamId`. */
   membersOf(teamId: string): string[] {
     return [...this.entries].filter(([, entry]) => entry.team?.teamId === teamId).map(([id]) => id)

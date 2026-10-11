@@ -87,3 +87,11 @@ test('SDK server exposes the four mailbox tools', async () => {
   expect(server.name).toBe('kawai-team')
   await server.instance.close()
 })
+
+test('killed sender without a group leaves reply dead-lettered', async () => {
+  records.get('lead')!.groupId = null
+  const original = await handlers.send_message({ to_kind: 'session', to_id: 'dev', body: 'Hi' })
+  store.claim(original.id, 'dev'); store.markPushed(original.id); store.markDelivered(original.id)
+  records.delete('lead')
+  expect(await mailboxHandlers(mailbox, 'dev').reply({ message_id: original.id, body: 'Answer' })).toMatchObject({ state: 'dead', reason: 'killed-sender-without-group' })
+})

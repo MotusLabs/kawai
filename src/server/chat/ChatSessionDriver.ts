@@ -332,7 +332,7 @@ export class ChatSessionDriver {
   }
 
   /** Stop button: abort the in-flight turn, drop queued sends, cancel asks. */
-  interrupt(): void {
+  interrupt(): Promise<void> {
     this.queue.clearPending()
     this.cancelAllRequests('interrupted')
     if (this.activeTurnId) {
@@ -347,11 +347,14 @@ export class ChatSessionDriver {
     this.feedWorkers({ type: 'process_end' })
     const query = this.query
     if (query) {
-      void query.interrupt().catch(() => {
+      const completed = query.interrupt().then(() => {}).catch(() => {
         // The process may already be gone; the stream loop handles death.
       })
+      this.refreshStatus()
+      return completed
     }
     this.refreshStatus()
+    return Promise.resolve()
   }
 
   /** Kill the session: abort, settle pending approvals with a denial, stop. */

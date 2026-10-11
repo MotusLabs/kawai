@@ -816,6 +816,7 @@ const chatSessionManager = new ChatSessionManager({
   registry,
   db,
   onEvent: (sessionId, event) => chatConnections.publish(sessionId, event),
+  onMailboxChange: (teamId, message) => chatConnections.publishMailbox(teamId, message),
   onCommandState: (sessionId, state) => chatConnections.publishCommandState(sessionId, state),
   onActivity: (sessionId, activity) => chatConnections.publishActivity(sessionId, activity),
   onContextUsage: (sessionId, usage) => chatConnections.publishContextUsage(sessionId, usage),
@@ -2743,6 +2744,11 @@ function handleMessage(
     case 'chat-debug-open':
     case 'chat-debug-page':
     case 'chat-debug-close':
+    case 'team-mailbox-open':
+    case 'team-mailbox-close':
+    case 'team-mailbox-cancel':
+    case 'team-mailbox-retry':
+    case 'team-mailbox-discard':
     case 'chat-worker-transcript':
       fireAndForget(chatConnections.handle(chatPeer(ws), message), 'chatMessage')
       return

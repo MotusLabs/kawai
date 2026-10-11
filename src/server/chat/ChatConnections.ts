@@ -27,6 +27,8 @@ import type {
 import type { ClientMessage, ServerMessage } from '../../shared/types'
 import type { ChatSessionManager } from './ChatSessionManager'
 import type { ChatWireLogs } from './ChatWireLogs'
+import { MailboxConnections } from '../team/mailboxConnections'
+import type { TeamMessage } from '../../shared/team'
 
 /** Frames per debug page reply. */
 export const CHAT_DEBUG_PAGE_SIZE = 200
@@ -51,12 +53,15 @@ export class ChatConnections {
   private readonly debugBatches = new Map<ChatConnection, Map<string, ChatWireFrame[]>>()
   private scheduled = false
 
+  private readonly mailboxConnections: MailboxConnections
+
   constructor(
     private readonly manager: ChatSessionManager,
     private readonly wireLogs?: ChatWireLogs
-  ) {}
+  ) { this.mailboxConnections = new MailboxConnections(manager) }
 
   disconnect(connection: ChatConnection): void {
+    this.mailboxConnections.disconnect(connection)
     this.subscriptions.delete(connection)
     this.batches.delete(connection)
     this.activityBatches.delete(connection)
@@ -73,6 +78,17 @@ export class ChatConnections {
    * session. Immediate (not batched): the state is replaceable, not ordered
    * history, so it never waits behind event batching.
    */
+  publishMailbox(teamId: string, message?: TeamMessage): void {
+    this.mailboxConnections.publish(teamId)
+    if (message?.state === 'dead' && message.reason === 'hop-limit') {
+      for (const [connection, sessions] of this.subscriptions) {
+        if ([...sessions].some(id => this.manager.teams.teamOf(id)?.teamId === teamId)) {
+          connection.send({ type: 'team-mailbox-dead-letter', teamId, messageId: message.id, senderSession: message.fromSession })
+        }
+      }
+    }
+  }
+
   publishCommandState(sessionId: string, state: ChatCommandState): void {
     for (const [connection, sessions] of this.subscriptions) {
       if (sessions.has(sessionId)) {
@@ -276,6 +292,7 @@ export class ChatConnections {
   }
 
   async handle(connection: ChatConnection, message: ClientMessage): Promise<void> {
+    if (message.type.startsWith('team-mailbox-')) return this.mailboxConnections.handle(connection, message)
     if (!message.type.startsWith('chat-') || !('sessionId' in message)) return
     const { sessionId } = message
     if (!this.manager.has(sessionId)) {

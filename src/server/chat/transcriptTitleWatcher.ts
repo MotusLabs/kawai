@@ -29,7 +29,9 @@ export interface TranscriptTitleWatcher {
  */
 export function watchTranscriptTitle(
   filePath: string,
-  onTitle: (title: string, source: 'auto' | 'manual') => void
+  onTitle: (title: string, source: 'auto' | 'manual') => void,
+  /** Shared durable-row observer for mailbox receipts. */
+  onRow?: (line: string) => void
 ): TranscriptTitleWatcher {
   let offset = 0
   let remainder = ''
@@ -98,6 +100,7 @@ export function watchTranscriptTitle(
     // would drop a `custom-title` that a later `ai-title` follows, letting a
     // generated title overwrite a user's rename (design D1/D7).
     for (const line of lines) {
+      onRow?.(line)
       const title = parseTranscriptTitleLine(line.trim())
       if (title) onTitle(title.title, title.source)
     }

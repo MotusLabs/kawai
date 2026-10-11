@@ -62,6 +62,9 @@ import { SessionTeams } from '../team/sessionTeams'
 import { TeamMailbox } from '../team/TeamMailbox'
 import { MailboxStore } from '../team/mailboxStore'
 import { createMailboxServer } from '../team/mailboxTools'
+import type { TeamMessage } from '../../shared/team'
+import { MailDispatcher } from '../team/dispatcher'
+import { receiptMessageId, reconcileMailbox } from '../team/receipt'
 import {
   findTranscriptPath,
   readTranscriptCwd,
@@ -77,6 +80,7 @@ export { chatAuthErrorMessage, hasClaudeAuth }
 export interface ChatSessionManagerOptions {
   registry: SessionRegistry
   db: SessionDatabase
+  onMailboxChange?: (teamId: string, message?: TeamMessage) => void
   /** Conversation-event sink (wired to the WS broadcast in index.ts). */
   onEvent: (sessionId: string, event: ChatEvent) => void
   /** Command-state sink (wired to the chat-commands push in index.ts). */
@@ -373,6 +377,7 @@ export class ChatSessionManager {
     this.teams = new SessionTeams({
       ...(options.profileCatalogHome ? { homeDir: options.profileCatalogHome } : {}),
       onResolved: (sessionId) => {
+        this.dispatcher?.notify()
         const record = this.records.get(sessionId)
         // Group-less sessions have nothing to show; skip the broadcast.
         if (record?.groupId != null) {
@@ -387,12 +392,58 @@ export class ChatSessionManager {
     this.mailbox = new TeamMailbox(new MailboxStore(options.db.db), {
       getSession: (id) => this.records.get(id),
       homeDir: options.profileCatalogHome,
+      onChange: () => this.dispatcher.notify(),
       restoreSession: (id) => {
         const result = this.restore(id)
         if (!result.ok) throw new Error(result.error)
       },
     })
+    this.dispatcher = new MailDispatcher(this.mailbox.store, {
+      recipients: () => [...this.records.values()].flatMap(record => {
+        const team = this.teams.teamOf(record.sessionId)
+        if (!team) return []
+        const driver = this.drivers.get(record.sessionId)
+        return [{
+          sessionId: record.sessionId, teamId: team.teamId,
+          groupId: record.groupId && !this.teams.groupInfo(record.sessionId, record.groupId)?.missing ? record.groupId : null,
+          idle: record.status === 'waiting',
+          pendingRequest: (driver?.getPendingRequests().length ?? 0) > 0,
+          available: record.archivedAt == null && !this.startBlocker(record) && (this.options.isDirectory ?? isExistingDirectory)(record.projectPath),
+        }]
+      }),
+      prepare: async id => {
+        this.captureHistory(id)
+        const driver = await this.ensureDriver(id)
+        if (!driver) throw new Error('Recipient disappeared')
+        driver.start()
+      },
+      interrupt: async id => { await this.drivers.get(id)?.interrupt() },
+      deliver: (id, envelope) => {
+        const driver = this.drivers.get(id)
+        if (!driver) throw new Error('Recipient disappeared')
+        driver.deliver(envelope)
+      },
+      onError: error => logger.warn('team_mailbox_dispatch_failed', { error: String(error) }),
+      watchReceipt: message => {
+        if (message.claimedBy) this.watchSessionTitle(message.claimedBy)
+      },
+    })
     this.restorePersisted()
+    reconcileMailbox(this.mailbox.store, id => {
+      const sdkId = this.records.get(id)?.sdkSessionId
+      return sdkId ? findTranscriptPath(sdkId) : null
+    })
+    // Reconciliation may have requeued mail for a session killed while down.
+    for (const teamId of this.mailbox.store.teamsWithQueuedMail()) {
+      for (const mail of this.mailbox.store.listForTeam(teamId)) {
+        if (mail.toKind === 'session' && !this.records.has(mail.toId)) this.mailbox.store.deadLetter(mail.id, 'killed-recipient')
+      }
+    }
+    this.releaseMailboxSubscription = this.mailbox.store.subscribe((teamId, message) => {
+      this.options.onMailboxChange?.(teamId, message)
+      this.dispatcher.notify()
+    })
+    this.dispatcher.notify()
     // Logs of sessions deleted while the server was down are orphans now.
     void this.options.wireLogs?.pruneOrphans(new Set(this.records.keys()))
   }
@@ -400,6 +451,8 @@ export class ChatSessionManager {
   /** Each session's team (agent-teams); shared with the mailbox dispatcher. */
   readonly teams: SessionTeams
   readonly mailbox: TeamMailbox
+  readonly dispatcher: MailDispatcher
+  private readonly releaseMailboxSubscription: () => void
 
   /** Create a chat session. Refused (no side effects) when auth is missing. */
   createSession(input: {
@@ -727,6 +780,8 @@ export class ChatSessionManager {
     this.releaseTitleWatch(sessionId)
     this.cancelCwdRefresh(sessionId)
     this.records.delete(sessionId)
+    this.mailbox.store.deadLetterDirectTo(sessionId, 'killed-recipient')
+    this.dispatcher.notify()
     this.snapshotHistory.delete(sessionId)
     this.liveEvents.delete(sessionId)
     this.activities.delete(sessionId)
@@ -743,6 +798,8 @@ export class ChatSessionManager {
 
   /** Server shutdown: settle every driver (callbacks cannot survive it). */
   shutdown(): void {
+    this.dispatcher.close()
+    this.releaseMailboxSubscription()
     for (const driver of this.drivers.values()) {
       driver.shutdown()
     }
@@ -933,7 +990,13 @@ export class ChatSessionManager {
     }
     const watcher: TranscriptTitleWatcher = watchTranscriptTitle(
       filePath,
-      (title, source) => this.applyTranscriptTitle(sessionId, title, source)
+      (title, source) => this.applyTranscriptTitle(sessionId, title, source),
+      line => {
+        const id = receiptMessageId(line)
+        if (!id) return
+        const message = this.mailbox.store.get(id)
+        if (message?.claimedBy === sessionId) this.mailbox.store.markDelivered(id)
+      }
     )
     this.titleWatchers.set(sessionId, watcher)
   }
@@ -1159,6 +1222,7 @@ export class ChatSessionManager {
     events.push(event)
     this.liveEvents.set(sessionId, events)
     this.options.onEvent(sessionId, event)
+    if (event.type === 'request_resolved') this.dispatcher.notify()
     if (
       event.type === 'turn_completed' ||
       event.type === 'approval_request' ||
@@ -1316,6 +1380,7 @@ export class ChatSessionManager {
   ): void {
     const record = this.records.get(sessionId)
     if (!record) return
+    this.dispatcher?.notify()
     const next = { ...record, ...patch }
     this.records.set(sessionId, next)
     this.options.db.updateChatSession(sessionId, patch)
