@@ -2741,6 +2741,7 @@ function handleMessage(
     case 'chat-debug-open':
     case 'chat-debug-page':
     case 'chat-debug-close':
+    case 'chat-worker-transcript':
       fireAndForget(chatConnections.handle(chatPeer(ws), message), 'chatMessage')
       return
     case 'ping':
