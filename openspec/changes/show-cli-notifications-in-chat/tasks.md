@@ -18,8 +18,8 @@
 
 - [x] 4.1 In `ChatSessionManager`, keep the per-session agent notice map with same-key replacement and `timeout_ms` expiry timers that check the instance is unchanged. Clear the map and its timers on stop, archive, kill, and restart. Verify with manager tests using fake timers: replacement, expiry, an untimed notice persisting, archive and kill clearing, and no leak into another session.
 - [x] 4.2 Map each session to its credentials path via `launchFor` on attach (archived included) and on agent start, and check the store. Merge the account notice first, then sort by priority and newest (design D5). Add `notifications` to `getSnapshot` and emit `onNotifications(sessionId, list)` on any change. Verify with tests: snapshot contents, two sessions sharing a credentials path both updating, an unknown profile giving no notice, and an archived chat getting an account notice but no agent notice.
-- [ ] 4.3 Handle `chat-dismiss-notification` for agent notices (unknown keys are a no-op) and push the new list. Verify with a WebSocket handler test.
-- [ ] 4.4 Add `publishNotifications` to `ChatConnections`, batched into the existing flush like `publishUsage`. In `src/server/index.ts`, wire `onNotifications` and a 30-minute recheck timer for attached sessions' credentials paths, cleared on shutdown. Verify with `ChatConnections` tests that only subscribed connections receive the push, and that `bun run test` passes.
+- [x] 4.3 Handle `chat-dismiss-notification` for agent notices (unknown keys are a no-op) and push the new list. Verify with a WebSocket handler test.
+- [x] 4.4 Add `publishNotifications` to `ChatConnections`, batched into the existing flush like `publishUsage`. In `src/server/index.ts`, wire `onNotifications` and a 30-minute recheck timer for attached sessions' credentials paths, cleared on shutdown. Verify with `ChatConnections` tests that only subscribed connections receive the push, and that `bun run test` passes.
 
 ## 5. Client strip
 

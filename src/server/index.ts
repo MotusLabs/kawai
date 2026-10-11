@@ -825,6 +825,8 @@ const chatSessionManager = new ChatSessionManager({
   onContextUsage: (sessionId, usage) => chatConnections.publishContextUsage(sessionId, usage),
   onUsage: (profileId, report) => chatConnections.publishUsage(profileId, report),
   onWorkers: (sessionId, workers) => chatConnections.publishWorkers(sessionId, workers),
+  onNotifications: (sessionId, notifications) =>
+    chatConnections.publishNotifications(sessionId, notifications),
   getProviderEnv: chatProviderEnv.current,
   wireLogs: chatWireLogs,
   workerStore: chatWorkerStore,
@@ -1428,6 +1430,16 @@ setInterval(refreshSessions, config.refreshIntervalMs) // Async for periodic
 const updateChecker = startUpdateChecker({
   onChange: update => broadcast({ type: 'update-state', update }),
 })
+
+// Account-notice slow recheck (notification strip design D3): every 30
+// minutes, re-read the credentials of every session with an attached client,
+// so a renewal or a rolled-over day count shows without a reattach. Attach
+// and agent start check too; this timer only closes the gap between them.
+const ACCOUNT_NOTICE_RECHECK_MS = 30 * 60 * 1000
+const accountNoticeTimer = setInterval(() => {
+  chatSessionManager.recheckAccountNotices(chatConnections.subscribedSessionIds())
+}, ACCOUNT_NOTICE_RECHECK_MS)
+accountNoticeTimer.unref?.()
 
 // Event loop lag monitor — detects when spawnSync or other blocking work
 // starves the event loop, causing typing lag and slow WebSocket delivery.
@@ -2342,6 +2354,7 @@ async function cleanupAllTerminals() {
   workspaceWatcherInstance.stop()
   logPoller.stop()
   remotePoller?.stop()
+  clearInterval(accountNoticeTimer)
   chatSessionManager.shutdown()
   db.close()
 }
