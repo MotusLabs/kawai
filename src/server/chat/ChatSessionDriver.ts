@@ -56,6 +56,7 @@ import {
   anyWorkerLive,
   initialChatWorkersState,
   projectWorkers,
+  recoveredWorkersState,
   reduceWorkers,
   taskFrameToInput,
   type ChatWorkersInput,
@@ -128,6 +129,12 @@ export interface ChatSessionDriverOptions {
    */
   getSystemPromptAppend?: () => string | undefined
   teamMcpServer?: NonNullable<Options['mcpServers']>[string]
+  /**
+   * Recovered roster rows (workers design D6) seeding a fresh driver, so
+   * outcomes from before a restart or an archive/restore stay in the roster
+   * and the sidecar instead of being replaced by the first publish.
+   */
+  recoveredWorkers?: ChatWorker[]
   onEvent: (event: ChatEvent) => void
   /** Applied immediately on every derived status change. */
   onStatus: (status: SessionStatus) => void
@@ -252,6 +259,10 @@ export class ChatSessionDriver {
     this.commands = new ChatCommandTracker(options.onCommandState)
     this.claudeExecutablePath = options.claudeExecutablePath
     this.sessionProjectPath = options.projectPath
+    // Workers design D6: carry the recovered outcomes into the fresh roster.
+    if (options.recoveredWorkers?.length) {
+      this.workersState = recoveredWorkersState(options.recoveredWorkers)
+    }
   }
 
   get isDead(): boolean {
@@ -780,6 +791,10 @@ export class ChatSessionDriver {
   private handlePartial(message: SDKPartialAssistantMessage): void {
     const turnId = this.activeTurnId
     if (!turnId) return
+    // Worker chatter stays out of the parent transcript (design D4): its
+    // stream must neither leak deltas nor hijack the parent's streaming id —
+    // filtering the completed assistant message cannot undo either.
+    if (isSubagentContentFrame(message)) return
     const event = message.event
     if (event.type === 'message_start') this.streamingMessageId = event.message.id
     if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
@@ -790,7 +805,7 @@ export class ChatSessionDriver {
         delta: event.delta.text,
       })
     }
-    if (event.type === 'content_block_start' && !isSubagentContentFrame(message)) {
+    if (event.type === 'content_block_start') {
       const input = contentBlockToInput(event.content_block)
       if (input) this.feedActivity(input)
     }
@@ -819,6 +834,16 @@ export class ChatSessionDriver {
           output: toolResultText(block.content),
           isError: block.is_error,
         })
+        // A rejected spawn never starts a task, so no task frame can settle
+        // its row — the error result is the only bookend the worker gets.
+        // Without it the row stays live and holds the session at working.
+        if (block.is_error && this.agentToolCallIds.has(block.tool_use_id)) {
+          this.feedWorkers({
+            type: 'spawn_rejected',
+            toolCallId: block.tool_use_id,
+            summary: toolResultText(block.content),
+          })
+        }
         if (!subagent) {
           this.feedActivity({ type: 'tool_result', toolCallId: block.tool_use_id })
         }

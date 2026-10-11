@@ -3,6 +3,7 @@ import {
   anyWorkerLive,
   initialChatWorkersState,
   projectWorkers,
+  recoveredWorkersState,
   reduceWorkers,
   taskFrameToInput,
   type ChatWorkersInput,
@@ -466,6 +467,75 @@ describe('reduceWorkers', () => {
       2_000
     )
     expect(next).toBe(state)
+  })
+
+  test('a rejected spawn settles its running row as failed', () => {
+    let state = reduceWorkers(
+      initialChatWorkersState(),
+      { type: 'spawn', toolCallId: TOOL_USE_ID },
+      1_000
+    )
+    state = reduceWorkers(
+      state,
+      { type: 'spawn_rejected', toolCallId: TOOL_USE_ID, summary: 'Unknown agent type "scout"' },
+      2_000
+    )
+    expect(projectWorkers(state, 2_500)[0]).toMatchObject({
+      status: 'failed', live: false, summary: 'Unknown agent type "scout"',
+    })
+    expect(anyWorkerLive(state)).toBe(false)
+  })
+
+  test('spawn_rejected changes nothing without a running anchored row', () => {
+    const empty = initialChatWorkersState()
+    expect(reduceWorkers(empty, { type: 'spawn_rejected', toolCallId: TOOL_USE_ID }, 1_000)).toBe(empty)
+    // A settled row keeps its outcome: only a still-running row may settle.
+    const settled = reduceWorkers(
+      spawnedState(),
+      taskFrameToInput(taskNotificationFrame())!,
+      2_000
+    )
+    expect(
+      reduceWorkers(settled, { type: 'spawn_rejected', toolCallId: TOOL_USE_ID, summary: 'late' }, 2_100)
+    ).toBe(settled)
+  })
+
+  test('a notification landing after a rejected spawn still wins', () => {
+    let state = reduceWorkers(
+      initialChatWorkersState(),
+      { type: 'spawn', toolCallId: TOOL_USE_ID },
+      1_000
+    )
+    state = reduceWorkers(
+      state,
+      { type: 'spawn_rejected', toolCallId: TOOL_USE_ID, summary: 'rejected' },
+      2_000
+    )
+    state = reduceWorkers(
+      state,
+      taskFrameToInput(taskNotificationFrame({ status: 'completed', summary: 'late finish' }))!,
+      3_000
+    )
+    expect(projectWorkers(state, 3_500)[0]).toMatchObject({
+      status: 'completed', summary: 'late finish', live: false,
+    })
+  })
+
+  test('recoveredWorkersState seeds settled rows that nothing recovers live', () => {
+    const state = recoveredWorkersState([
+      { workerId: 'toolu_done', taskId: 'task_done', status: 'completed', live: true, elapsedMs: 5, summary: 'mapped' },
+      { workerId: 'toolu_lost', status: 'running', live: true, elapsedMs: 3 },
+    ])
+    const projected = projectWorkers(state, 2_000)
+    expect(projected).toEqual([
+      expect.objectContaining({ workerId: 'toolu_done', status: 'completed', live: false, summary: 'mapped' }),
+      expect.objectContaining({ workerId: 'toolu_lost', status: 'stopped', live: false }),
+    ])
+    expect(anyWorkerLive(state)).toBe(false)
+    // A seeded row keeps its place when a later spawn joins the roster.
+    const next = reduceWorkers(state, { type: 'spawn', toolCallId: 'toolu_new' }, 2_500)
+    expect(projectWorkers(next, 2_600).map((worker) => worker.workerId))
+      .toEqual(['toolu_done', 'toolu_lost', 'toolu_new'])
   })
 })
 

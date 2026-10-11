@@ -193,6 +193,8 @@ function createHarness(
     claimUsagePull?: () => boolean
     /** Commands the fake queries' initializationResult() reports. */
     initializationCommands?: Array<Record<string, unknown>>
+    /** Persisted roster rows seeding the driver (workers design D6). */
+    recoveredWorkers?: ChatWorker[]
   } = {}
 ): Harness {
   const events: ChatEvent[] = []
@@ -2643,6 +2645,115 @@ describe('ChatSessionDriver workers', () => {
     expect(harness.driver.getWorkers()).toMatchObject([
       { workerId: 'toolu_agent', status: 'stopped', live: false },
     ])
+  })
+
+  test('a rejected spawn settles its row and frees the session', async () => {
+    const harness = createHarness()
+    harness.driver.send('spawn a worker')
+    const fake = harness.fakes[0]!
+    fake.push(assistantToolUse('toolu_agent', 'Agent', null))
+    await flush()
+    expect(harness.statuses.at(-1)).toBe('working')
+    // The spawn is rejected before any task starts: the error result is the
+    // only bookend the row will ever get.
+    fake.push({
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [
+          {
+            type: 'tool_result',
+            tool_use_id: 'toolu_agent',
+            content: 'Unknown agent type "scout"',
+            is_error: true,
+          },
+        ],
+      },
+      parent_tool_use_id: null,
+    } as unknown as SDKMessage)
+    fake.push(result('success'))
+    await flush()
+    expect(roster(harness.workers).at(-1)).toEqual([
+      { workerId: 'toolu_agent', status: 'failed', live: false, summary: 'Unknown agent type "scout"' },
+    ])
+    expect(harness.statuses.at(-1)).toBe('waiting')
+    harness.driver.kill()
+  })
+
+  test("a worker's stream stays out of the parent transcript and off its id", async () => {
+    const harness = createHarness()
+    harness.driver.send('stream')
+    const fake = harness.fakes[0]!
+    fake.push(assistantToolUse('toolu_task', 'Task', null))
+    await flush()
+    // A worker's message_start must not hijack the parent's streaming id…
+    fake.push({
+      type: 'stream_event',
+      parent_tool_use_id: 'toolu_task',
+      event: { type: 'message_start', message: { id: 'msg_worker' } },
+      uuid: 'w-0',
+      session_id: 'sdk-1',
+    } as unknown as SDKMessage)
+    // …and its text deltas must not reach the parent transcript.
+    fake.push({
+      type: 'stream_event',
+      parent_tool_use_id: 'toolu_task',
+      event: {
+        type: 'content_block_delta',
+        index: 0,
+        delta: { type: 'text_delta', text: 'worker chatter' },
+      },
+      uuid: 'w-1',
+      session_id: 'sdk-1',
+    } as unknown as SDKMessage)
+    await flush()
+    expect(harness.events.filter((event) => event.type === 'assistant_delta')).toEqual([])
+    // The parent's own stream still maps, under its own message id.
+    fake.push({
+      type: 'stream_event',
+      parent_tool_use_id: null,
+      event: { type: 'message_start', message: { id: 'msg_parent' } },
+      uuid: 'p-0',
+      session_id: 'sdk-1',
+    } as unknown as SDKMessage)
+    fake.push({
+      type: 'stream_event',
+      parent_tool_use_id: null,
+      event: {
+        type: 'content_block_delta',
+        index: 0,
+        delta: { type: 'text_delta', text: 'parent text' },
+      },
+      uuid: 'p-1',
+      session_id: 'sdk-1',
+    } as unknown as SDKMessage)
+    await flush()
+    const deltas = harness.events.filter(
+      (event): event is Extract<ChatEvent, { type: 'assistant_delta' }> =>
+        event.type === 'assistant_delta'
+    )
+    expect(deltas.map((event) => `${event.messageId}:${event.delta}`))
+      .toEqual(['msg_parent:parent text'])
+    harness.driver.kill()
+  })
+
+  test('recovered rows seed the fresh roster and survive later publishes', async () => {
+    const harness = createHarness({
+      recoveredWorkers: [
+        { workerId: 'toolu_done', status: 'completed', live: false, elapsedMs: 0, summary: 'mapped' },
+      ],
+    })
+    harness.driver.send('research')
+    // Before any publish this turn, the recovered outcome is still on offer.
+    expect(harness.driver.getWorkers()).toMatchObject([
+      { workerId: 'toolu_done', status: 'completed', live: false, summary: 'mapped' },
+    ])
+    await spawnWorker(harness)
+    // The first publish appends to the seeded roster, not replaces it.
+    expect(
+      roster(harness.workers).at(-1)?.map((worker) => (worker as { workerId: string }).workerId)
+    ).toEqual(['toolu_done', 'toolu_agent'])
+    harness.driver.kill()
   })
 })
 

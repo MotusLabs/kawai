@@ -51,6 +51,30 @@ export function initialChatWorkersState(): ChatWorkersState {
   return { workers: [] }
 }
 
+/**
+ * Initial roster state from persisted rows (workers design D6): a fresh
+ * driver is seeded with the recovered outcomes so a restart or an
+ * archive/restore keeps them in snapshots, later publishes, and the sidecar
+ * instead of starting from an empty roster. The process that owed any
+ * outcome is gone, so nothing recovers as live or running.
+ */
+export function recoveredWorkersState(rows: ChatWorker[]): ChatWorkersState {
+  return {
+    workers: rows.map((row) => ({
+      workerId: row.workerId,
+      ...(row.taskId !== undefined ? { taskId: row.taskId } : {}),
+      ...(row.agentType !== undefined ? { agentType: row.agentType } : {}),
+      ...(row.description !== undefined ? { description: row.description } : {}),
+      ...(row.depth !== undefined ? { depth: row.depth } : {}),
+      status: row.status === 'running' ? 'stopped' : row.status,
+      live: false,
+      background: false,
+      ...(row.summary !== undefined ? { summary: row.summary } : {}),
+      startedAt: Date.now(),
+    })),
+  }
+}
+
 /** Normalized roster inputs; the driver maps raw frames onto these. */
 export type ChatWorkersInput =
   /** A tool_call for Agent/Task: the row anchor (design D1). */
@@ -91,6 +115,17 @@ export type ChatWorkersInput =
       /** The background level set: live membership, nothing else (D3). */
       type: 'background_tasks'
       taskIds: string[]
+    }
+  | {
+      /**
+       * The spawning tool call itself failed (a rejected spawn): no task
+       * will ever start, so the error result is the only bookend the row
+       * gets. Like task_updated's patch, the outcome is provisional — a
+       * notification landing later still overrides it (D3).
+       */
+      type: 'spawn_rejected'
+      toolCallId: string
+      summary?: string
     }
   /** Driver death, interrupt, archive, kill: settle everything unresolved. */
   | { type: 'process_end' }
@@ -455,6 +490,18 @@ export function reduceWorkers(
               : entry
         ),
       }
+    }
+    case 'spawn_rejected': {
+      // Only a still-running row can settle here: the spawn call errored, no
+      // task frames can ever arrive, and a settled row keeps its outcome.
+      const existing = findEntry(state, { workerId: input.toolCallId })
+      if (!existing || existing.status !== 'running') return state
+      return withEntry(state, {
+        ...existing,
+        status: 'failed',
+        live: false,
+        ...(input.summary !== undefined ? { summary: input.summary } : {}),
+      })
     }
   }
 }

@@ -3200,6 +3200,47 @@ describe('ChatSessionManager worker sidecar', () => {
     restored.manager.shutdown()
   })
 
+  test('a restarted session keeps recovered outcomes when its agent starts again', async () => {
+    process.env.ANTHROPIC_API_KEY = 'test-key'
+    const store = new ChatWorkerStore({ dir: sidecarDir })
+    const harness = createHarness(
+      db, anyDirectory, undefined, undefined, undefined, undefined, store
+    )
+    const created = harness.manager.createSession({ projectPath: '/tmp/proj' })
+    if (!created.ok) throw new Error(created.error)
+    const id = created.session.id
+    await harness.manager.send(id, 'research')
+    const handle = harness.handles[0]!
+    handle.push(initMessage('sdk-workers-3'))
+    await spawnWorker(handle, 'toolu_w1', 'task_1', 'Map the workspace')
+    await settleWorker(handle, 'toolu_w1', 'task_1', 'completed', 'Mapped 14 files')
+    harness.manager.shutdown()
+
+    // Restart: the fresh driver is seeded with the recovered rows, so a new
+    // spawn appends to the roster instead of replacing it — and the sidecar
+    // keeps both, where a publish from an empty roster would lose the old
+    // outcome on disk too. Resume needs the transcript to exist.
+    writeTranscript('sdk-workers-3', `${JSON.stringify({ type: 'user', uuid: 'u1' })}\n`)
+    const restored = createHarness(
+      db, anyDirectory, undefined, undefined, undefined, undefined, reopenedStore()
+    )
+    const sent = await restored.manager.send(id, 'research again')
+    if (!sent.ok) throw new Error(sent.error)
+    await flush()
+    const nextHandle = restored.handles[0]!
+    nextHandle.push(initMessage('sdk-workers-3'))
+    await spawnWorker(nextHandle, 'toolu_w2', 'task_2', 'Index the API')
+    expect(
+      restored.manager.getSnapshot(id)!.workers.map((worker) => worker.workerId)
+    ).toEqual(['toolu_w1', 'toolu_w2'])
+    await waitForCondition(() => {
+      const rows = reopenedStore().read(id)
+      return rows.some(worker => worker.workerId === 'toolu_w1') &&
+        rows.some(worker => worker.workerId === 'toolu_w2')
+    })
+    restored.manager.shutdown()
+  })
+
   test('a worker still running at an abrupt stop is kept and recovered as stopped', async () => {
     process.env.ANTHROPIC_API_KEY = 'test-key'
     const store = new ChatWorkerStore({ dir: sidecarDir })

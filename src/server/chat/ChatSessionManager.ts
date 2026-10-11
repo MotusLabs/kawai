@@ -1034,6 +1034,12 @@ export class ChatSessionManager {
         ...(record.sdkSessionId
           ? { resumeSessionId: record.sdkSessionId }
           : {}),
+        // Workers design D6: a fresh driver carries the recovered rows, so a
+        // restart or archive/restore keeps earlier outcomes in the roster and
+        // the sidecar instead of replacing them with an empty one.
+        ...(this.workerRows.has(record.sessionId)
+          ? { recoveredWorkers: this.workerRows.get(record.sessionId) ?? [] }
+          : {}),
         onEvent: (event) => this.handleDriverEvent(record.sessionId, event),
         onCommandState: (state) =>
           this.options.onCommandState?.(record.sessionId, state),
