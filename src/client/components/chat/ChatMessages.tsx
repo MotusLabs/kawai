@@ -1,7 +1,12 @@
 // Read-only transcript with one expandable entry per tool use. Calls and
 // results are paired in the view; approvals/questions render separately.
+// Agent/Task calls render as worker rows instead (workers design D8) when a
+// session context is given: the row joins the roster by workerId and falls
+// back to the plain paired card without one.
 import type { ChatEvent } from '@shared/chat'
+import type { SendClientMessage } from '@shared/types'
 import Markdown from '../Markdown'
+import ChatWorkerRow from './ChatWorkerRow'
 import { toolCallDetail } from './toolCallLabel'
 
 /**
@@ -43,7 +48,11 @@ function toolEntries(events: ChatEvent[]): TranscriptEntry[] {
   return entries
 }
 
-export default function ChatMessages({ events, projectPath }: { events: ChatEvent[]; projectPath?: string }) {
+export default function ChatMessages({ events, projectPath, sessionId, sendMessage, connected }: {
+  events: ChatEvent[]; projectPath?: string
+  /** Present in the app (not in isolated tests): worker rows join the store. */
+  sessionId?: string; sendMessage?: SendClientMessage; connected?: boolean
+}) {
   return <div className="space-y-4" data-testid="chat-transcript">
     {toolEntries(events).map(({ event, result }) => {
       switch (event.type) {
@@ -59,11 +68,16 @@ export default function ChatMessages({ events, projectPath }: { events: ChatEven
           </article>
         case 'tool_call': {
           const detail = toolCallDetail(event.tool, event.input, projectPath)
-          return <details key={`tool:${event.toolCallId}`} className="border-l-2 border-border px-3 text-chat-meta text-secondary">
+          const card = <details key={`tool:${event.toolCallId}`} className="border-l-2 border-border px-3 text-chat-meta text-secondary">
             <SummaryLabel label={event.tool} detail={detail} failed={result?.isError} />
             <pre className="mt-2 overflow-auto whitespace-pre-wrap">{JSON.stringify(event.input, null, 2)}</pre>
             {result && <pre className="mt-2 overflow-auto whitespace-pre-wrap">{result.output}</pre>}
           </details>
+          if (sessionId === undefined || (event.tool !== 'Agent' && event.tool !== 'Task')) return card
+          return <ChatWorkerRow key={`tool:${event.toolCallId}`} sessionId={sessionId}
+            workerId={event.toolCallId} tool={event.tool} fallback={card}
+            renderBody={body => <ChatMessages events={body} projectPath={projectPath} />}
+            sendMessage={sendMessage} connected={connected} />
         }
         case 'tool_result': {
           return <details key={event.id} className="px-3 text-chat-meta text-secondary">

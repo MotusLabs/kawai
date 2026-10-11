@@ -315,3 +315,74 @@ describe('chat store context usage', () => {
     expect(useChatStore.getState().sessions['chat-1'].contextUsage).toBeNull()
   })
 })
+
+describe('chat store workers', () => {
+  const rosterWorker = (live: boolean, elapsedMs: number) => ({
+    workerId: 'toolu_spawn_1',
+    taskId: 'task_1',
+    agentType: 'Explore',
+    description: 'Map the workspace',
+    depth: 1 as const,
+    status: live ? ('running' as const) : ('completed' as const),
+    live,
+    lastTool: 'Grep',
+    elapsedMs,
+  })
+
+  afterEach(() => useChatStore.setState({ sessions: {}, workerBodies: {} }))
+
+  test('snapshots and pushes anchor each row on the client clock', () => {
+    const store = useChatStore.getState()
+    const before = Date.now()
+    store.snapshot({
+      type: 'chat-snapshot', sessionId: 'chat-1', profileId: 'default',
+      events: [], pendingRequests: [], status: 'working', throughSequence: 0,
+      commands: { status: 'unavailable', commands: [] },
+      activity: null, contextUsage: null, usage: null,
+      workers: [rosterWorker(true, 4_000)],
+    })
+    const after = Date.now()
+    const anchored = useChatStore.getState().sessions['chat-1'].workers[0]!
+    expect(anchored.startedAt).toBeGreaterThanOrEqual(before - 4_000)
+    expect(anchored.startedAt).toBeLessThanOrEqual(after - 4_000)
+    expect(anchored.workerId).toBe('toolu_spawn_1')
+
+    // A push replaces the whole roster (level semantics, design D2).
+    store.setWorkers('chat-1', [rosterWorker(false, 9_000)])
+    const settled = useChatStore.getState().sessions['chat-1'].workers[0]!
+    expect(settled.live).toBe(false)
+    expect(settled.status).toBe('completed')
+
+    // A push ahead of any snapshot materializes a transcript, losing nothing.
+    store.setWorkers('chat-2', [rosterWorker(true, 1_000)])
+    expect(useChatStore.getState().sessions['chat-2'].workers).toHaveLength(1)
+  })
+
+  test('worker bodies fetch once, adopt their reply, and clear with the session', () => {
+    const store = useChatStore.getState()
+    // First request wins; repeats (re-toggles) never re-send.
+    expect(store.requestWorkerBody('chat-1', 'toolu_spawn_1')).toBe(true)
+    expect(store.requestWorkerBody('chat-1', 'toolu_spawn_1')).toBe(false)
+    expect(useChatStore.getState().workerBodies['chat-1']!.toolu_spawn_1).toEqual({ status: 'fetching' })
+
+    // The reply adopts, ok or unavailable.
+    store.setWorkerBody({
+      type: 'chat-worker-transcript', sessionId: 'chat-1', workerId: 'toolu_spawn_1',
+      status: 'ok',
+      events: [{ id: 'w1', sequence: 0, at: 'now', turnId: 't', type: 'user_message', text: 'map it' }],
+    })
+    expect(useChatStore.getState().workerBodies['chat-1']!.toolu_spawn_1).toEqual({
+      status: 'ok',
+      events: [{ id: 'w1', sequence: 0, at: 'now', turnId: 't', type: 'user_message', text: 'map it' }],
+    })
+    store.setWorkerBody({
+      type: 'chat-worker-transcript', sessionId: 'chat-1', workerId: 'toolu_none',
+      status: 'unavailable', events: [],
+    })
+    expect(useChatStore.getState().workerBodies['chat-1']!.toolu_none).toEqual({ status: 'unavailable' })
+
+    // Kill clears only the removed session's bodies.
+    store.remove('chat-1')
+    expect(useChatStore.getState().workerBodies['chat-1']).toBeUndefined()
+  })
+})

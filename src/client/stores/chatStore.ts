@@ -5,6 +5,9 @@
 // on the client clock from the server's elapsedMs and cleared on turn end.
 // The context-usage reading is another such current value: replaced by
 // snapshots and coalesced pushes, never sequenced into the transcript.
+// The worker roster is a level value too (workers design D2): snapshots and
+// chat-workers pushes replace it wholesale, each row's elapsed anchored on
+// the client clock so its timer ticks between publishes.
 // Plan usage is per profile, not per session (the allowance is per account
 // and provider): the snapshot's `usage` and chat-usage pushes land in one
 // shared map, so every session of a profile renders the same bar.
@@ -17,6 +20,7 @@ import type {
   ChatEvent,
   ChatPendingRequest,
   ChatUsageReport,
+  ChatWorker,
 } from '@shared/chat'
 import type { ServerMessage, SessionStatus } from '@shared/types'
 
@@ -26,6 +30,18 @@ export interface ChatTranscriptActivity {
   /** Date.now() when the phase began; the row's timer ticks from this. */
   phaseStartedAt: number
 }
+
+/** A roster row with its elapsed anchored on the client clock (D2). */
+export interface ChatTranscriptWorker extends Omit<ChatWorker, 'elapsedMs'> {
+  /** Date.now() - elapsedMs at adopt time; the row's timer ticks from this. */
+  startedAt: number
+}
+
+/** A worker's expanded body: in flight, delivered, or reported missing. */
+export type ChatWorkerBody =
+  | { status: 'fetching' }
+  | { status: 'ok'; events: ChatEvent[] }
+  | { status: 'unavailable' }
 
 export interface ChatTranscript {
   events: ChatEvent[]
@@ -38,16 +54,27 @@ export interface ChatTranscript {
   activity: ChatTranscriptActivity | null
   /** Latest context-usage reading; null before the first model request. */
   contextUsage: ChatContextUsage | null
+  /** Latest worker roster (workers design D2): replaced, never merged. */
+  workers: ChatTranscriptWorker[]
 }
 
 export const emptyTranscript = (): ChatTranscript => ({
   events: [], pendingRequests: [], status: 'waiting', throughSequence: 0,
   commands: { status: 'unavailable', commands: [] }, seen: new Set(), activity: null, contextUsage: null,
+  workers: [],
 })
 
 /** Anchor a server-reported activity on the client's clock (design D2). */
 function anchorActivity(activity: ChatActivity): ChatTranscriptActivity {
   return { value: activity, phaseStartedAt: Date.now() - activity.elapsedMs }
+}
+
+/** Anchor a roster's elapsed times on the client's clock (workers D2). */
+function anchorWorkers(workers: ChatWorker[]): ChatTranscriptWorker[] {
+  return workers.map(({ elapsedMs, ...row }) => ({
+    ...row,
+    startedAt: Date.now() - elapsedMs,
+  }))
 }
 
 export function applyChatEvents(state: ChatTranscript, incoming: ChatEvent[]): ChatTranscript {
@@ -96,6 +123,8 @@ interface ChatStore {
   drafts: Record<string, string>
   /** Latest plan-usage report per Claude profile (null = profile has none). */
   usage: Record<string, ChatUsageReport | null>
+  /** Worker bodies per session and worker (workers design D5, on expand). */
+  workerBodies: Record<string, Record<string, ChatWorkerBody>>
   apply: (sessionId: string, events: ChatEvent[]) => void
   snapshot: (message: Extract<ServerMessage, { type: 'chat-snapshot' }>) => void
   /** Replace one session's command list (chat-commands push). */
@@ -106,6 +135,15 @@ interface ChatStore {
   setContextUsage: (sessionId: string, usage: ChatContextUsage | null) => void
   /** Adopt a profile's latest usage report (chat-usage / snapshot). */
   setUsage: (profileId: string, report: ChatUsageReport | null) => void
+  /** Adopt the latest roster (chat-workers push / snapshot). */
+  setWorkers: (sessionId: string, workers: ChatWorker[]) => void
+  /** Adopt a worker-body reply (chat-worker-transcript). */
+  setWorkerBody: (message: Extract<ServerMessage, { type: 'chat-worker-transcript' }>) => void
+  /**
+   * Mark a body as fetching; true only for the first request, so the caller
+   * sends the wire request exactly once per worker.
+   */
+  requestWorkerBody: (sessionId: string, workerId: string) => boolean
   setDraft: (sessionId: string, text: string) => void
   remove: (sessionId: string) => void
 }
@@ -114,6 +152,7 @@ export const useChatStore = create<ChatStore>((set) => ({
   sessions: {},
   drafts: {},
   usage: {},
+  workerBodies: {},
   apply: (sessionId, events) => set(state => ({ sessions: {
     ...state.sessions, [sessionId]: applyChatEvents(state.sessions[sessionId] ?? emptyTranscript(), events),
   } })),
@@ -129,6 +168,9 @@ export const useChatStore = create<ChatStore>((set) => ({
         activity: message.activity ? anchorActivity(message.activity) : null,
         // Authoritative replace: a restart or unread session clears to null.
         contextUsage: message.contextUsage,
+        // The roster is authoritative at attach time, live rows and settled
+        // outcomes together (workers design D2).
+        workers: anchorWorkers(message.workers),
       },
     },
     // The snapshot's usage is authoritative for the profile at attach time.
@@ -158,6 +200,37 @@ export const useChatStore = create<ChatStore>((set) => ({
       contextUsage: usage,
     } } }
   }),
+  setWorkers: (sessionId, workers) => set(state => {
+    const current = state.sessions[sessionId] ?? emptyTranscript()
+    return { sessions: { ...state.sessions, [sessionId]: {
+      ...current,
+      workers: anchorWorkers(workers),
+    } } }
+  }),
+  setWorkerBody: message => set(state => ({
+    workerBodies: {
+      ...state.workerBodies,
+      [message.sessionId]: {
+        ...state.workerBodies[message.sessionId],
+        [message.workerId]: message.status === 'ok'
+          ? { status: 'ok', events: message.events }
+          : { status: 'unavailable' },
+      },
+    },
+  })),
+  requestWorkerBody: (sessionId, workerId) => {
+    let first = false
+    set(state => {
+      const body = state.workerBodies[sessionId]?.[workerId]
+      if (body !== undefined) return state
+      first = true
+      return { workerBodies: { ...state.workerBodies, [sessionId]: {
+        ...state.workerBodies[sessionId],
+        [workerId]: { status: 'fetching' },
+      } } }
+    })
+    return first
+  },
   setDraft: (sessionId, text) => set(state => {
     const drafts = { ...state.drafts }
     if (text === '') delete drafts[sessionId]
@@ -170,6 +243,8 @@ export const useChatStore = create<ChatStore>((set) => ({
     // Profile usage outlives one session: a sibling may still show the bar.
     const drafts = { ...state.drafts }
     delete drafts[sessionId]
-    return { sessions, drafts }
+    const workerBodies = { ...state.workerBodies }
+    delete workerBodies[sessionId]
+    return { sessions, drafts, workerBodies }
   }),
 }))

@@ -56,6 +56,7 @@ import {
 import { logger } from '../logger'
 import { probeSdkAvailability } from './sdkAvailability'
 import { UsageLimitStore } from './usageLimits'
+import { readWorkerTranscript } from './chatWorkerTranscript'
 import {
   findTranscriptPath,
   readTranscriptCwd,
@@ -315,6 +316,21 @@ export class ChatSessionManager {
     const entry = this.activities.get(sessionId)
     if (!entry) return null
     return { ...entry.body, elapsedMs: Math.max(0, Date.now() - entry.phaseStartedAt) }
+  }
+
+  /**
+   * A worker's expanded body (workers design D5), read from the on-disk
+   * subagent transcript. Works live and after settle; unavailable (never an
+   * error) when the worker or its file cannot be found.
+   */
+  getWorkerTranscript(
+    sessionId: string,
+    workerId: string
+  ): { status: 'ok' | 'unavailable'; events: ChatEvent[] } {
+    return readWorkerTranscript(
+      this.records.get(sessionId)?.sdkSessionId ?? null,
+      workerId
+    )
   }
 
   private captureHistory(sessionId: string): void {

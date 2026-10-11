@@ -360,6 +360,18 @@ export class ChatConnections {
         return
       case 'chat-debug-close':
         this.closeDebug(connection, sessionId)
+        return
+      case 'chat-worker-transcript': {
+        // A read-only body fetch (design D5): the reply is not a broadcast,
+        // it goes to the asking connection only.
+        connection.send({
+          type: 'chat-worker-transcript',
+          sessionId,
+          workerId: message.workerId,
+          ...this.manager.getWorkerTranscript(sessionId, message.workerId),
+        })
+        return
+      }
     }
   }
 }

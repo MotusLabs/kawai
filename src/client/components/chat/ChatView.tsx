@@ -32,6 +32,7 @@ import ChatContextMeter from './ChatContextMeter'
 import ChatDebugPanel from './ChatDebugPanel'
 import ChatMessages from './ChatMessages'
 import ChatRequests from './ChatRequests'
+import ChatWorkersStrip from './ChatWorkersStrip'
 import SlashCommandMenu from './SlashCommandMenu'
 import UsageBar from './UsageBar'
 import { filterChatCommands, slashMenuQuery } from './slashCommandFilter'
@@ -250,9 +251,13 @@ export default function ChatView({ session, sendMessage, subscribe, connectionSt
     {error && <p role="alert" className="border-b border-border p-3 text-chat-body text-chat-danger">{error}</p>}
     <div className="flex min-h-0 flex-1">
       <div className={`min-h-0 min-w-0 flex-1 flex-col ${debugOpen ? 'hidden md:flex' : 'flex'}`}>
+        {/* The live-workers strip (design D8): live rows only, hidden in
+            archived chats and when nothing runs (the strip hides itself). */}
+        {!archived && <ChatWorkersStrip sessionId={session.id} />}
         <div className="min-h-0 flex-1 overflow-y-auto p-4">
           <div className="mx-auto max-w-3xl space-y-4">
-            <ChatMessages events={transcript.events} projectPath={session.projectPath} />
+            <ChatMessages events={transcript.events} projectPath={session.projectPath}
+              sessionId={session.id} sendMessage={sendMessage} connected={connected} />
             {showActivity && (
               <ChatActivityRow activity={activity.value} phaseStartedAt={activity.phaseStartedAt} />
             )}

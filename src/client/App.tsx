@@ -545,6 +545,8 @@ export default function App() {
       if (message.type === 'chat-activity') useChatStore.getState().setActivity(message.sessionId, message.activity)
       if (message.type === 'chat-context-usage') useChatStore.getState().setContextUsage(message.sessionId, message.usage)
       if (message.type === 'chat-usage') useChatStore.getState().setUsage(message.profileId, message.report)
+      if (message.type === 'chat-workers') useChatStore.getState().setWorkers(message.sessionId, message.workers)
+      if (message.type === 'chat-worker-transcript') useChatStore.getState().setWorkerBody(message)
       if (message.type === 'chat-debug-frames') useChatDebugStore.getState().apply(message)
       if (message.type === 'kill-failed') {
         // Restore optimistically removed session from pending-kill snapshot

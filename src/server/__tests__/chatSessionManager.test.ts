@@ -2180,6 +2180,30 @@ describe('ChatSessionManager', () => {
       })
       expect(manager.getPendingRequests(sessionId)).toEqual([])
     })
+
+    test('worker bodies read the subagent transcript beside the session', () => {
+      process.env.ANTHROPIC_API_KEY = 'sk-test-key'
+      const parent = writeTranscript('sdk-workers', MATCHED_TRANSCRIPT)
+      const subagents = path.join(parent.replace(/\.jsonl$/, ''), 'subagents')
+      fs.mkdirSync(subagents, { recursive: true })
+      fs.writeFileSync(path.join(subagents, 'agent-a1.meta.json'),
+        JSON.stringify({ toolUseId: 'toolu_spawn_1' }))
+      fs.writeFileSync(path.join(subagents, 'agent-a1.jsonl'), JSON.stringify({
+        type: 'user', uuid: 'w1', isSidechain: true,
+        timestamp: '2026-10-04T10:00:00.000Z',
+        message: { role: 'user', content: 'Map the workspace' },
+      }) + '\n')
+      const sessionId = seedRecord('sdk-workers')
+      const { manager } = createHarness(db)
+
+      const body = manager.getWorkerTranscript(sessionId, 'toolu_spawn_1')
+      expect(body.status).toBe('ok')
+      expect(body.events.map((e) => e.type)).toEqual(['user_message'])
+      expect(manager.getWorkerTranscript(sessionId, 'toolu_other').status)
+        .toBe('unavailable')
+      expect(manager.getWorkerTranscript('no-such-chat', 'toolu_spawn_1').status)
+        .toBe('unavailable')
+    })
   })
 
   test('approval policy: starts manual, switches live, refuses invalid changes', async () => {

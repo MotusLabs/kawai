@@ -21,11 +21,11 @@
 
 ## 4. Client: worker row, live strip, and expand
 
-- [ ] 4.1 Render `tool_call` events for `Agent` / `Task` as a worker summary row in `ChatMessages.tsx`, joining live state by `workerId` and falling back to the collapsed tool card when no roster entry exists, and verify the row shows agent type, description, status, elapsed, and last tool
-- [ ] 4.2 Add the depth badge for `depth > 1` and omit it when depth is unknown, and verify a nested spawn renders marked and a top-level spawn does not
-- [ ] 4.3 Add `ChatWorkersStrip.tsx` above the transcript listing live workers (`workers.filter(w => w.live)`), hiding itself when none are live or the chat is archived, and verify two running workers each show their own last tool and elapsed time and the strip disappears once none are live
-- [ ] 4.4 Fetch a worker's body over `chat-worker-transcript` on first expand and cache it in `chatStore`, and verify expanding a running worker and a finished worker both show that worker's transcript and a missing file reports the body unavailable
-- [ ] 4.5 Render the persisted outcome and summary on the row in archived chats, with expand still available and no strip or running state, and verify an archived chat with workers shows exactly that
+- [x] 4.1 Render `tool_call` events for `Agent` / `Task` as a worker summary row in `ChatMessages.tsx`, joining live state by `workerId` and falling back to the collapsed tool card when no roster entry exists, and verify the row shows agent type, description, status, elapsed, and last tool
+- [x] 4.2 Add the depth badge for `depth > 1` and omit it when depth is unknown, and verify a nested spawn renders marked and a top-level spawn does not
+- [x] 4.3 Add `ChatWorkersStrip.tsx` above the transcript listing live workers (`workers.filter(w => w.live)`), hiding itself when none are live or the chat is archived, and verify two running workers each show their own last tool and elapsed time and the strip disappears once none are live
+- [x] 4.4 Fetch a worker's body over `chat-worker-transcript` on first expand and cache it in `chatStore`, and verify expanding a running worker and a finished worker both show that worker's transcript and a missing file reports the body unavailable
+- [x] 4.5 Render the persisted outcome and summary on the row in archived chats, with expand still available and no strip or running state, and verify an archived chat with workers shows exactly that
 
 ## 5. Fixture and integration verification
 

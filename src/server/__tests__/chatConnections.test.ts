@@ -36,6 +36,12 @@ function harness(wireLogs?: ChatWireLogs) {
       return { ok: true }
     },
     answerQuestion: (...args: unknown[]) => { calls.push(['answer', ...args]); return { ok: true } },
+    getWorkerTranscript: (id: string, workerId: string) => {
+      calls.push(['workerTranscript', id, workerId])
+      return workerId === 'toolu_spawn_1'
+        ? { status: 'ok', events: [delta(1)] }
+        : { status: 'unavailable', events: [] }
+    },
     setApprovalPolicy: (...args: unknown[]) => {
       calls.push(['setApprovalPolicy', ...args])
       const policy = args[1]
@@ -476,5 +482,30 @@ describe('chat debug subscriptions', () => {
     await h.connections.handle(h.connection, { type: 'chat-debug-close', sessionId: 'chat-1' })
     await opening
     expect(debugMessages(h.messages)).toEqual([])
+  })
+})
+
+describe('chat worker transcript requests', () => {
+  test('replies to the asking connection only, ok or unavailable', async () => {
+    const h = harness()
+    const otherMessages: ServerMessage[] = []
+    const other = { send: (message: ServerMessage) => otherMessages.push(message) }
+    await h.connections.handle(other, { type: 'chat-attach', sessionId: 'chat-1' })
+    otherMessages.length = 0
+
+    await h.connections.handle(h.connection, { type: 'chat-worker-transcript', sessionId: 'chat-1', workerId: 'toolu_spawn_1' })
+    await h.connections.handle(h.connection, { type: 'chat-worker-transcript', sessionId: 'chat-1', workerId: 'toolu_gone' })
+    expect(h.messages).toEqual([
+      { type: 'chat-worker-transcript', sessionId: 'chat-1', workerId: 'toolu_spawn_1', status: 'ok', events: [delta(1)] },
+      { type: 'chat-worker-transcript', sessionId: 'chat-1', workerId: 'toolu_gone', status: 'unavailable', events: [] },
+    ])
+    expect(otherMessages).toEqual([])
+  })
+
+  test('an unknown session is refused without reading', async () => {
+    const h = harness()
+    await h.connections.handle(h.connection, { type: 'chat-worker-transcript', sessionId: 'nope', workerId: 'toolu_spawn_1' })
+    expect(h.messages).toEqual([{ type: 'error', message: 'Unknown chat session nope' }])
+    expect(h.calls.filter(call => (call as unknown[])[0] === 'workerTranscript')).toEqual([])
   })
 })

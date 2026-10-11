@@ -303,6 +303,17 @@ export type ServerMessage =
   // whenever the roster projection changes; additive and ephemeral like
   // chat-activity, while settled outcomes also ride the snapshot and persist.
   | { type: 'chat-workers'; sessionId: string; workers: ChatWorker[] }
+  // A worker's body on expand (workers design D5): the reply to
+  // chat-worker-transcript, read from the worker's on-disk transcript.
+  // 'unavailable' reports a missing file or unknown worker (the row shows
+  // the body as unavailable, never an error).
+  | {
+      type: 'chat-worker-transcript'
+      sessionId: string
+      workerId: string
+      status: 'ok' | 'unavailable'
+      events: ChatEvent[]
+    }
   // Debug-view protocol frames, sent only to clients that opened the view.
   // `page: true` marks a reply to chat-debug-open/chat-debug-page (carrying
   // `hasOlder`); otherwise the message is a live batch.
@@ -398,6 +409,9 @@ export type ClientMessage =
   | { type: 'chat-debug-open'; sessionId: string }
   | { type: 'chat-debug-page'; sessionId: string; beforeSeq: number }
   | { type: 'chat-debug-close'; sessionId: string }
+  // A worker's expanded body (workers design D5): read the worker's on-disk
+  // transcript live or after settle; the reply is chat-worker-transcript.
+  | { type: 'chat-worker-transcript'; sessionId: string; workerId: string }
   // Workspace messages are additive; existing clients never send them.
   | { type: 'workspace-refresh'; projectPath?: string }
   | {
