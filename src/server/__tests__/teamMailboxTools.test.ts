@@ -44,6 +44,12 @@ test('group mail binds actual sender and ignores forged fields', async () => {
 test('direct mail to another member', async () => {
   expect(await handlers.send_message({ to_kind: 'session', to_id: 'dev', body: 'Review' })).toMatchObject({ toKind: 'session', toId: 'dev' })
 })
+test('direct mail restores an archived recipient instead of queueing forever', async () => {
+  records.get('dev')!.archivedAt = '2026-01-01'
+  const message = await handlers.send_message({ to_kind: 'session', to_id: 'dev', body: 'Review' })
+  expect(message).toMatchObject({ toKind: 'session', toId: 'dev', state: 'queued' })
+  expect(records.get('dev')!.archivedAt).toBeNull()
+})
 test('unknown group and session are refused without enqueueing', async () => {
   await expect(handlers.send_message({ ...groupMail, to_id: 'missing' })).rejects.toThrow('Unknown group')
   await expect(handlers.send_message({ to_kind: 'session', to_id: 'missing', body: 'Hi' })).rejects.toThrow('Unknown recipient')

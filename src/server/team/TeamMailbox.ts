@@ -43,6 +43,9 @@ export class TeamMailbox {
       if ((await resolveTeam(recipient.projectPath)).teamId !== team.teamId) {
         throw new Error('Recipient belongs to another team')
       }
+      // Direct mail resumes an archived recipient, exactly as replies do:
+      // otherwise the message could queue forever behind a parked session.
+      if (recipient.archivedAt) await this.options.restoreSession?.(recipient.sessionId)
     }
     return this.publish(this.store.enqueue({
       teamId: team.teamId, toKind: input.to_kind, toId: input.to_id,

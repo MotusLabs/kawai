@@ -17,6 +17,10 @@ Each chat agent SHALL have a tool to send a message to a group of its team or to
 - **WHEN** an agent sends a message to another chat session of its team
 - **THEN** the message is queued in that session's direct mailbox
 
+#### Scenario: Archived recipient is restored
+- **WHEN** an agent sends a message directly to a teammate that is archived
+- **THEN** the recipient is restored and the message is delivered by the normal delivery rules
+
 #### Scenario: Unknown recipient
 - **WHEN** an agent sends a message to a group that its team does not define
 - **THEN** the tool returns an error naming the unknown group and nothing is queued
