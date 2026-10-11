@@ -206,12 +206,15 @@ export class ChatSessionDriver {
   private dead = false
   /** Updated by the manager before a respawn; see setClaudeExecutablePath. */
   private claudeExecutablePath: string | undefined
+  /** The agent's current working directory; see setProjectPath. */
+  private sessionProjectPath: string
   private killed = false
 
   constructor(options: ChatSessionDriverOptions) {
     this.options = options
     this.commands = new ChatCommandTracker(options.onCommandState)
     this.claudeExecutablePath = options.claudeExecutablePath
+    this.sessionProjectPath = options.projectPath
   }
 
   get isDead(): boolean {
@@ -240,6 +243,15 @@ export class ChatSessionDriver {
    */
   setClaudeExecutablePath(path: string | undefined): void {
     this.claudeExecutablePath = path
+  }
+
+  /**
+   * Working directory for the next spawn (worktree tracking design D2): the
+   * manager advances it when the agent's cwd moves, so a respawn resumes in
+   * the directory the conversation is actually in, not the creation path.
+   */
+  setProjectPath(path: string): void {
+    this.sessionProjectPath = path
   }
 
   /** Submit a user turn. Spawns the SDK lazily on the first turn. */
@@ -442,7 +454,7 @@ export class ChatSessionDriver {
       this.options.claudeProfileId,
       this.options.getProviderEnv?.() ?? {},
       {
-        projectPath: this.options.projectPath,
+        projectPath: this.sessionProjectPath,
         ...(this.options.profileCatalogHome
           ? { homeDir: this.options.profileCatalogHome }
           : {}),
@@ -464,7 +476,7 @@ export class ChatSessionDriver {
     const executablePath = profileExecutable ?? this.claudeExecutablePath
     const wire = this.options.wire
     const options: Options = {
-      cwd: this.options.projectPath,
+      cwd: this.sessionProjectPath,
       // Option parity with a terminal `claude` session in the project dir.
       systemPrompt: { type: 'preset', preset: 'claude_code' },
       settingSources: ['user', 'project', 'local'],

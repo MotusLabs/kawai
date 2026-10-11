@@ -2,7 +2,12 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import type { Options, Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk'
+import type {
+  CwdChangedHookInput,
+  Options,
+  Query,
+  SDKMessage,
+} from '@anthropic-ai/claude-agent-sdk'
 import type { Session } from '../../shared/types'
 import type {
   ChatActivity,
@@ -135,6 +140,8 @@ interface ManagerHarness {
   activities: Array<{ sessionId: string; activity: ChatActivity | null }>
   contextUsage: Array<{ sessionId: string; usage: ChatContextUsage | null }>
   usage: Array<{ profileId: string; report: ChatUsageReport | null }>
+  /** Scoped workspace refreshes fired after cwd moves (worktree tracking D2). */
+  refreshes: string[]
 }
 
 function createHarness(
@@ -142,7 +149,8 @@ function createHarness(
   isDirectory: (path: string) => boolean = anyDirectory,
   usageImpl?: FakeUsageControl,
   titleLocateIntervalMs?: number,
-  contextImpl?: FakeContextControl
+  contextImpl?: FakeContextControl,
+  cwdRefreshDebounceMs?: number
 ): ManagerHarness {
   const registry = new SessionRegistry()
   const handles: FakeHandle[] = []
@@ -150,6 +158,7 @@ function createHarness(
   const activities: Array<{ sessionId: string; activity: ChatActivity | null }> = []
   const contextUsage: Array<{ sessionId: string; usage: ChatContextUsage | null }> = []
   const usage: Array<{ profileId: string; report: ChatUsageReport | null }> = []
+  const refreshes: string[] = []
   const manager = new ChatSessionManager({
     isDirectory,
     registry,
@@ -160,8 +169,10 @@ function createHarness(
     onUsage: (profileId, report) => usage.push({ profileId, report }),
     queryFactory: fakeQueryFactory(handles, usageImpl, contextImpl),
     titleLocateIntervalMs,
+    ...(cwdRefreshDebounceMs !== undefined ? { cwdRefreshDebounceMs } : {}),
+    requestWorkspaceRefresh: (projectPath) => refreshes.push(projectPath),
   })
-  return { manager, registry, handles, events, activities, contextUsage, usage }
+  return { manager, registry, handles, events, activities, contextUsage, usage, refreshes }
 }
 
 /** Let the driver's stream loop drain pushed messages. */
@@ -252,6 +263,29 @@ function compactBoundary(postTokens: number): SDKMessage {
     uuid: 'compact-uuid',
     session_id: 'sdk-1',
   } as unknown as SDKMessage
+}
+
+/** Fire the driver's registered CwdChanged hook, as the SDK process would. */
+async function fireCwdChanged(
+  handle: FakeHandle,
+  newCwd: string,
+  agentId?: string
+): Promise<void> {
+  const hook = handle.options.hooks?.CwdChanged?.[0]?.hooks[0]
+  if (!hook) throw new Error('CwdChanged hook not registered')
+  await hook(
+    {
+      session_id: 'sdk-cwd-1',
+      transcript_path: '/tmp/transcript.jsonl',
+      cwd: '/tmp/proj',
+      hook_event_name: 'CwdChanged',
+      old_cwd: '/tmp/proj',
+      new_cwd: newCwd,
+      ...(agentId ? { agent_id: agentId } : {}),
+    } as CwdChangedHookInput,
+    undefined,
+    { signal: new AbortController().signal }
+  )
 }
 
 /** Write an SDK transcript where findTranscriptPath looks for it. */
@@ -1590,6 +1624,90 @@ describe('ChatSessionManager', () => {
       expect(db.getChatSession(created.session.id)?.nameSource).toBe(
         'placeholder'
       )
+    })
+  })
+
+  describe('cwd tracking', () => {
+    test('a cwd move patches the stored path, republishes it, and skips no-ops', async () => {
+      process.env.ANTHROPIC_API_KEY = 'sk-test-key'
+      const harness = createHarness(db)
+      const created = harness.manager.createSession({ projectPath: '/tmp/proj' })
+      if (!created.ok) throw new Error('create failed')
+      const sessionId = created.session.id
+      expect(await harness.manager.send(sessionId, 'enter a worktree')).toEqual({ ok: true })
+      expect(harness.handles[0]!.options.cwd).toBe('/tmp/proj')
+
+      const updates: Session[] = []
+      harness.registry.on('session-update', (session: Session) => updates.push(session))
+      const worktree = '/tmp/proj/.claude/worktrees/add-feature'
+      await fireCwdChanged(harness.handles[0]!, worktree)
+
+      // The stored row and the published Session both show the new directory.
+      expect(db.getChatSession(sessionId)?.projectPath).toBe(worktree)
+      expect(harness.registry.get(sessionId)?.projectPath).toBe(worktree)
+      // The session-update broadcast carries the move (worktree tracking D2),
+      // so clients re-group the row without a reload.
+      const moved = updates.filter((session) => session.id === sessionId)
+      expect(moved.at(-1)?.projectPath).toBe(worktree)
+
+      // A repeat for the same directory is a no-op: no write, no broadcast.
+      const updateCount = updates.length
+      await fireCwdChanged(harness.handles[0]!, worktree)
+      expect(updates).toHaveLength(updateCount)
+      expect(db.getChatSession(sessionId)?.projectPath).toBe(worktree)
+      harness.manager.shutdown()
+    })
+
+    test('a respawn after the move resumes in the new directory', async () => {
+      process.env.ANTHROPIC_API_KEY = 'sk-test-key'
+      const harness = createHarness(db)
+      const created = harness.manager.createSession({ projectPath: '/tmp/proj' })
+      if (!created.ok) throw new Error('create failed')
+      const sessionId = created.session.id
+      await harness.manager.send(sessionId, 'first')
+      harness.handles[0]!.push(initMessage('sdk-cwd-session'))
+      await flush()
+      const worktree = '/tmp/proj/.claude/worktrees/add-feature'
+      await fireCwdChanged(harness.handles[0]!, worktree)
+
+      // The process dies; the respawn must land in the worktree, not the
+      // creation path, and still resume the same conversation.
+      harness.handles[0]!.query.close()
+      await flush()
+      expect(await harness.manager.send(sessionId, 'second')).toEqual({ ok: true })
+      expect(harness.handles).toHaveLength(2)
+      expect(harness.handles[1]!.options.cwd).toBe(worktree)
+      expect(harness.handles[1]!.options.resume).toBe('sdk-cwd-session')
+      harness.manager.shutdown()
+    })
+
+    test('several hook events together issue exactly one scoped refresh for the newest path', async () => {
+      process.env.ANTHROPIC_API_KEY = 'sk-test-key'
+      const harness = createHarness(db, anyDirectory, undefined, undefined, undefined, 5)
+      const created = harness.manager.createSession({ projectPath: '/tmp/proj' })
+      if (!created.ok) throw new Error('create failed')
+      await harness.manager.send(created.session.id, 'cd around')
+      // A fast cd chain collapses into one discovery pass for its final
+      // directory (worktree tracking D2).
+      await fireCwdChanged(harness.handles[0]!, '/tmp/proj/.claude/worktrees/one')
+      await fireCwdChanged(harness.handles[0]!, '/tmp/proj/.claude/worktrees/two')
+      await fireCwdChanged(harness.handles[0]!, '/tmp/proj/.claude/worktrees/three')
+      await new Promise((resolve) => setTimeout(resolve, 30))
+      expect(harness.refreshes).toEqual(['/tmp/proj/.claude/worktrees/three'])
+      harness.manager.shutdown()
+    })
+
+    test('kill cancels a pending refresh', async () => {
+      process.env.ANTHROPIC_API_KEY = 'sk-test-key'
+      const harness = createHarness(db, anyDirectory, undefined, undefined, undefined, 5)
+      const created = harness.manager.createSession({ projectPath: '/tmp/proj' })
+      if (!created.ok) throw new Error('create failed')
+      const sessionId = created.session.id
+      await harness.manager.send(sessionId, 'move')
+      await fireCwdChanged(harness.handles[0]!, '/tmp/proj/.claude/worktrees/gone')
+      harness.manager.kill(sessionId)
+      await new Promise((resolve) => setTimeout(resolve, 30))
+      expect(harness.refreshes).toEqual([])
     })
   })
 
