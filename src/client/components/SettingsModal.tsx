@@ -11,6 +11,7 @@ import { useThemeStore, type Theme } from '../stores/themeStore'
 import type { ChatApprovalPolicy } from '@shared/types'
 import SessionsSettings from './settings/SessionsSettings'
 import ChatSettings from './settings/ChatSettings'
+import type { ChatProviderSettingsHandle } from './ChatProviderSettings'
 import TerminalSettings from './settings/TerminalSettings'
 import GeneralSettings from './settings/GeneralSettings'
 
@@ -146,6 +147,10 @@ export default function SettingsModal({
   // persisted across opens.
   const [activeTab, setActiveTab] = useState<SettingsTab>('sessions')
 
+  const chatProviderSettingsRef = useRef<ChatProviderSettingsHandle>(null)
+  const [chatProviderBusy, setChatProviderBusy] = useState(true)
+  const submittingRef = useRef(false)
+
   const reenableTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
@@ -248,8 +253,18 @@ export default function SettingsModal({
     return null
   }
 
-  const handleSubmit = (event: React.FormEvent) => {
+  const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault()
+    if (submittingRef.current) return
+    submittingRef.current = true
+    // Persist the provider draft before committing preferences or closing.
+    const saved = await chatProviderSettingsRef.current?.save()
+    submittingRef.current = false
+    if (!chatProviderSettingsRef.current) return
+    if (!saved) {
+      setActiveTab('chat')
+      return
+    }
     const trimmedDir = draftDir.trim()
     const webglChanged = draftUseWebGL !== useWebGL
     // Empty means "not set" — the New Session dialog then defaults to the
@@ -379,6 +394,8 @@ export default function SettingsModal({
 
         <div role="tabpanel" id="settings-panel-chat" aria-labelledby="settings-tab-chat" tabIndex={0} hidden={activeTab !== 'chat'} className="mt-5 space-y-4">
           <ChatSettings
+            providerSettingsRef={chatProviderSettingsRef}
+            onProviderBusyChange={setChatProviderBusy}
             draftDefaultApprovalPolicy={draftDefaultApprovalPolicy}
             onDraftDefaultApprovalPolicyChange={setDraftDefaultApprovalPolicy}
             draftChatFontSize={draftChatFontSize}
@@ -423,7 +440,7 @@ export default function SettingsModal({
           <button type="button" onClick={() => onClose()} className="btn">
             Cancel
           </button>
-          <button type="submit" className="btn btn-primary">
+          <button type="submit" className="btn btn-primary" disabled={chatProviderBusy}>
             Save
           </button>
         </div>

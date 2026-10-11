@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import TestRenderer, { act } from 'react-test-renderer'
 import type { ChatProviderEnvResponse } from '@shared/chatProviderSettings'
+import SettingsModal from '../components/SettingsModal'
 import ChatProviderSettings, { rowsToUpdate } from '../components/ChatProviderSettings'
 
 interface Recorded {
@@ -22,7 +23,10 @@ beforeEach(() => {
     redacted: ['ANTHROPIC_AUTH_TOKEN'],
     source: 'settings',
   }
-  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (!String(input).includes("chat-provider-env")) {
+      return Response.json(String(input).includes("history-max-age-hours") ? { hours: 24 } : { enabled: true })
+    }
     const method = init?.method ?? 'GET'
     const body = typeof init?.body === 'string' ? JSON.parse(init.body) : null
     requests.push({ method, body })
@@ -194,6 +198,77 @@ describe('ChatProviderSettings', () => {
     const renderer = await render()
     expect(byTestId(renderer, 'chat-provider-error')[0]!.children.join('')).toContain('boom')
     renderer.unmount()
+  })
+})
+
+describe('SettingsModal provider save', () => {
+  for (const failure of [null, { status: 500, error: 'Unable to persist' }]) {
+    test(failure ? 'keeps the modal and edits on a save failure' : 'Save persists edits before closing and restores them on reopen', async () => {
+      let closed = 0
+      let renderer!: TestRenderer.ReactTestRenderer
+      const onClose = () => { closed++ }
+      await act(async () => {
+        renderer = TestRenderer.create(<SettingsModal isOpen onClose={onClose} />)
+        await settle()
+      })
+      const value = () => renderer.root.findByProps({ 'aria-label': 'Value for ANTHROPIC_BASE_URL' })
+      await type(value(), 'https://saved.example')
+      failNext = failure
+      await act(async () => {
+        await renderer.root.findByType('form').props.onSubmit({ preventDefault() {} })
+      })
+      expect(requests.filter(r => r.method === 'PUT')).toEqual([{
+        method: 'PUT',
+        body: {
+          env: { ANTHROPIC_BASE_URL: 'https://saved.example', ANTHROPIC_AUTH_TOKEN: '' },
+          keep: ['ANTHROPIC_AUTH_TOKEN'],
+        },
+      }])
+      expect(closed).toBe(failure ? 0 : 1)
+      if (failure) {
+        expect(value().props.value).toBe('https://saved.example')
+        expect(byTestId(renderer, 'chat-provider-error')[0]!.children.join('')).toContain(failure.error)
+      } else {
+        await act(async () => { renderer.update(<SettingsModal isOpen={false} onClose={onClose} />) })
+        await act(async () => {
+          renderer.update(<SettingsModal isOpen onClose={onClose} />)
+          await settle()
+        })
+        expect(value().props.value).toBe('https://saved.example')
+      }
+      await act(async () => { renderer.unmount() })
+    })
+  }
+
+  test('Save waits for persistence and prevents duplicate submission', async () => {
+    let closed = 0
+    let renderer!: TestRenderer.ReactTestRenderer
+    await act(async () => {
+      renderer = TestRenderer.create(<SettingsModal isOpen onClose={() => { closed++ }} />)
+      await settle()
+    })
+    await type(renderer.root.findByProps({ 'aria-label': 'Value for ANTHROPIC_BASE_URL' }), 'https://pending.example')
+    let release!: (response: Response) => void
+    let puts = 0
+    globalThis.fetch = (() => {
+      puts++
+      return new Promise<Response>(resolve => { release = resolve })
+    }) as unknown as typeof fetch
+    let save!: Promise<void>
+    await act(async () => {
+      save = renderer.root.findByType('form').props.onSubmit({ preventDefault() {} })
+      await settle()
+    })
+    expect(closed).toBe(0)
+    expect(renderer.root.findAllByType('button').find(b => b.props.type === 'submit')!.props.disabled).toBe(true)
+    await act(async () => {
+      await renderer.root.findByType('form').props.onSubmit({ preventDefault() {} })
+      release(Response.json(serverState))
+      await save
+    })
+    expect(puts).toBe(1)
+    expect(closed).toBe(1)
+    await act(async () => { renderer.unmount() })
   })
 })
 

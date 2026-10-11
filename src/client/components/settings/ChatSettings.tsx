@@ -2,8 +2,9 @@
 // policy for new chat sessions (segmented, design D7), the Claude provider
 // environment settings, and the chat font size. Both drafts live in the modal
 // shell and commit on Save (design D5).
+import type { Ref } from 'react'
 import type { ChatApprovalPolicy } from '@shared/types'
-import ChatProviderSettings from '../ChatProviderSettings'
+import ChatProviderSettings, { type ChatProviderSettingsHandle } from '../ChatProviderSettings'
 import FontSizeStepper from '../FontSizeStepper'
 import {
   CHAT_FONT_SIZE_MIN,
@@ -11,6 +12,8 @@ import {
 } from '../../stores/settingsStore'
 
 export interface ChatSettingsProps {
+  providerSettingsRef: Ref<ChatProviderSettingsHandle>
+  onProviderBusyChange: (busy: boolean) => void
   draftDefaultApprovalPolicy: ChatApprovalPolicy
   onDraftDefaultApprovalPolicyChange: (policy: ChatApprovalPolicy) => void
   draftChatFontSize: number
@@ -24,6 +27,8 @@ const APPROVAL_POLICY_OPTIONS: Array<{ id: ChatApprovalPolicy; label: string }> 
 ]
 
 export default function ChatSettings({
+  providerSettingsRef,
+  onProviderBusyChange,
   draftDefaultApprovalPolicy,
   onDraftDefaultApprovalPolicyChange,
   draftChatFontSize,
@@ -31,7 +36,7 @@ export default function ChatSettings({
 }: ChatSettingsProps) {
   return (
     <>
-      <ChatProviderSettings />
+      <ChatProviderSettings ref={providerSettingsRef} onBusyChange={onProviderBusyChange} />
 
       <div className="border-t border-border pt-4">
         <label className="mb-2 block text-xs text-secondary">
