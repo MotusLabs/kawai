@@ -16,22 +16,22 @@ const SEVEN_DAY_RESET = '2026-10-12T09:00:00.000Z'
 
 /**
  * The 2026-10-07 probe payload: one event carrying both plan windows through
- * the undocumented unifiedWindows sibling (fractions, epoch-ms resets), plus
+ * the undocumented unifiedWindows sibling (fractions, epoch-seconds resets), plus
  * the legacy single-window fields naming one of them.
  */
 const PROBE_EVENT: RateLimitInfoSlice = {
   status: 'allowed',
   rateLimitType: 'seven_day',
   utilization: 0.1712,
-  resetsAt: Date.parse(SEVEN_DAY_RESET),
+  resetsAt: Date.parse(SEVEN_DAY_RESET) / 1000,
   unifiedWindows: {
     five_hour: {
       utilization: 0.2237,
-      resetsAt: Date.parse(FIVE_HOUR_RESET),
+      resetsAt: Date.parse(FIVE_HOUR_RESET) / 1000,
     },
     seven_day: {
       utilization: 0.1712,
-      resetsAt: Date.parse(SEVEN_DAY_RESET),
+      resetsAt: Date.parse(SEVEN_DAY_RESET) / 1000,
     },
   },
   isUsingOverage: false,
@@ -59,6 +59,23 @@ describe('parseRateLimitEvent', () => {
     })
   })
 
+  test('resetsAt is epoch seconds, as captured on the wire (2026-10-11)', () => {
+    const report = parseRateLimitEvent(
+      {
+        status: 'allowed',
+        unifiedWindows: {
+          five_hour: { utilization: 0.03, resetsAt: 1791723600 },
+          seven_day: { utilization: 0.32, resetsAt: 1791817200 },
+        },
+      },
+      AT
+    )
+    expect(report.windows.map((window) => window.resetsAt)).toEqual([
+      '2026-10-11T13:00:00.000Z',
+      '2026-10-12T15:00:00.000Z',
+    ])
+  })
+
   test('a single-window payload falls back to rateLimitType', () => {
     expect(
       parseRateLimitEvent(
@@ -66,7 +83,7 @@ describe('parseRateLimitEvent', () => {
           status: 'allowed_warning',
           rateLimitType: 'five_hour',
           utilization: 0.87,
-          resetsAt: Date.parse(FIVE_HOUR_RESET),
+          resetsAt: Date.parse(FIVE_HOUR_RESET) / 1000,
         },
         AT
       )
@@ -106,11 +123,11 @@ describe('parseRateLimitEvent', () => {
         rateLimitType: 'seven_day',
         utilization: Number.NaN,
         unifiedWindows: {
-          five_hour: { utilization: 1.4, resetsAt: Date.parse(FIVE_HOUR_RESET) }, // fraction > 1
-          seven_day: { utilization: -0.1, resetsAt: Date.parse(SEVEN_DAY_RESET) }, // negative
-          seven_day_opus: { utilization: '0.2' as unknown as number, resetsAt: Date.parse(SEVEN_DAY_RESET) }, // string
+          five_hour: { utilization: 1.4, resetsAt: Date.parse(FIVE_HOUR_RESET) / 1000 }, // fraction > 1
+          seven_day: { utilization: -0.1, resetsAt: Date.parse(SEVEN_DAY_RESET) / 1000 }, // negative
+          seven_day_opus: { utilization: '0.2' as unknown as number, resetsAt: Date.parse(SEVEN_DAY_RESET) / 1000 }, // string
           seven_day_sonnet: { utilization: 0.31, resetsAt: Number.NaN }, // valid %, unusable reset
-          seven_day_oauth_apps: { utilization: 0.42, resetsAt: Date.parse(SEVEN_DAY_RESET) },
+          seven_day_oauth_apps: { utilization: 0.42, resetsAt: Date.parse(SEVEN_DAY_RESET) / 1000 },
         },
       },
       AT

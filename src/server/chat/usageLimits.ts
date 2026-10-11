@@ -51,10 +51,13 @@ function percentValue(value: unknown): number | null {
   return value
 }
 
-/** ISO reset time from an epoch-ms number or ISO string; null when unusable. */
+/**
+ * ISO reset time from an epoch-seconds number (rate_limit_event, e.g.
+ * 1791723600) or ISO string; null when unusable.
+ */
 function toIsoResetsAt(value: unknown): string | null {
   if (typeof value === 'number' && Number.isFinite(value)) {
-    return new Date(value).toISOString()
+    return new Date(value * 1000).toISOString()
   }
   if (typeof value === 'string' && value.trim() !== '' && !Number.isNaN(Date.parse(value))) {
     return value
@@ -92,7 +95,7 @@ function worstStatus(a: ChatUsageStatus, b: ChatUsageStatus): ChatUsageStatus {
 /** Structural slice of a `rate_limit_event`'s rate_limit_info (SDK-free). */
 export interface RateLimitInfoSlice {
   status?: string
-  /** Epoch-ms reset time of the rateLimitType window. */
+  /** Epoch-seconds reset time of the rateLimitType window. */
   resetsAt?: number | null
   rateLimitType?: string
   utilization?: number

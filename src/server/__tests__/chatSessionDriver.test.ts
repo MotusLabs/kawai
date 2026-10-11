@@ -1694,8 +1694,8 @@ describe('ChatSessionDriver usage', () => {
       rateLimitEvent({
         status: 'allowed',
         unifiedWindows: {
-          five_hour: { utilization: 0.2237, resetsAt: Date.parse('2026-10-07T18:11:04.000Z') },
-          seven_day: { utilization: 0.1712, resetsAt: Date.parse('2026-10-12T09:00:00.000Z') },
+          five_hour: { utilization: 0.2237, resetsAt: Date.parse('2026-10-07T18:11:04.000Z') / 1000 },
+          seven_day: { utilization: 0.1712, resetsAt: Date.parse('2026-10-12T09:00:00.000Z') / 1000 },
         },
       })
     )
