@@ -96,3 +96,15 @@ test('recipient becoming busy while startup is pending loses the claim', async (
   const mail = send(); await dispatch()
   expect(store.get(mail.id)?.state).toBe('queued')
 })
+
+test('a new approval during interrupt acknowledgment keeps urgent mail unpushed', async () => {
+  dispatcher.close()
+  dispatcher = new MailDispatcher(store, {
+    recipients: () => recipients, prepare: async () => {},
+    interrupt: async () => { recipients[0]!.pendingRequest = true },
+    deliver: () => { throw new Error('approval must stay open') }, watchReceipt: () => {},
+  })
+  const mail = send({ toKind: 'session', toId: 'dev', priority: 'urgent' })
+  await dispatch()
+  expect(store.get(mail.id)).toMatchObject({ state: 'awaiting-request', pushedAt: null, claimedBy: null })
+})

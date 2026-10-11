@@ -111,8 +111,12 @@ export class MailDispatcher {
     this.idleSince.delete(recipient.sessionId)
     try {
       if (interrupt) await this.options.interrupt(recipient.sessionId)
-      if (this.closed || !this.current(recipient.sessionId)?.available) {
+      const current = this.current(recipient.sessionId)
+      // The awaited interrupt allows a human turn/card to arrive. Re-check
+      // before recording a push so a refused submission cannot strand mail.
+      if (this.closed || !current?.available || !current.idle || current.pendingRequest) {
         this.store.requeue(message.id)
+        if (current?.pendingRequest) this.store.holdForRequest(message.id)
         return
       }
       const envelope = messageEnvelope(message, message.attachThread ? this.store.thread(message.threadId) : undefined)
