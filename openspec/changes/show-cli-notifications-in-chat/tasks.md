@@ -6,9 +6,9 @@
 
 ## 2. Account notices (login expiry)
 
-- [ ] 2.1 Extract the config-dir resolution from `chatAuth.ts` into an exported helper, keeping `hasClaudeAuth` and its message the same. Verify the existing `chatAuth` tests still pass.
-- [ ] 2.2 Create `src/server/chat/accountNotices.ts` with `credentialsPathFor(env)` and `loginExpiryNotice(credentials, now)`, implementing the CLI rule from design D2. Add a header comment citing Claude Code 2.1.296. Verify with unit tests covering every scenario of "Expiring logins produce an account notice per profile": 1.4 days → "2 days", 5 h → "1 day", more than 3 days, expired, `expiresAt` beyond refresh + 3 days, each suppressing env var (API key, auth token, OAuth token, Bedrock, Vertex, Foundry), `CLAUDE_CONFIG_DIR` override, and missing, unreadable, malformed, or field-less files.
-- [ ] 2.3 Add `AccountNoticeStore`, keyed by credentials path, with `check(path)` and change-only subscriber notification. Verify with unit tests that unchanged results publish nothing, a new day count publishes, and a renewed login publishes null.
+- [x] 2.1 Extract the config-dir resolution from `chatAuth.ts` into an exported helper, keeping `hasClaudeAuth` and its message the same. Verify the existing `chatAuth` tests still pass.
+- [x] 2.2 Create `src/server/chat/accountNotices.ts` with `credentialsPathFor(env)` and `loginExpiryNotice(credentials, now)`, implementing the CLI rule from design D2. Add a header comment citing Claude Code 2.1.296. Verify with unit tests covering every scenario of "Expiring logins produce an account notice per profile": 1.4 days → "2 days", 5 h → "1 day", more than 3 days, expired, `expiresAt` beyond refresh + 3 days, each suppressing env var (API key, auth token, OAuth token, Bedrock, Vertex, Foundry), `CLAUDE_CONFIG_DIR` override, and missing, unreadable, malformed, or field-less files.
+- [x] 2.3 Add `AccountNoticeStore`, keyed by credentials path, with `check(path)` and change-only subscriber notification. Verify with unit tests that unchanged results publish nothing, a new day count publishes, and a renewed login publishes null.
 
 ## 3. Agent notices
 
