@@ -31,7 +31,10 @@ import ChatActivityRow from './ChatActivityRow'
 import ChatContextMeter from './ChatContextMeter'
 import ChatDebugPanel from './ChatDebugPanel'
 import ChatMessages from './ChatMessages'
+import TeamMailboxPanel from './TeamMailboxPanel'
+import { closedMailbox, useTeamMailboxStore } from '../../stores/teamMailboxStore'
 import ChatRequests from './ChatRequests'
+import ChatWorkersStrip from './ChatWorkersStrip'
 import SlashCommandMenu from './SlashCommandMenu'
 import UsageBar from './UsageBar'
 import { filterChatCommands, slashMenuQuery } from './slashCommandFilter'
@@ -39,6 +42,7 @@ import { requestChatArchive } from '../../utils/chatArchive'
 
 const EMPTY = emptyTranscript()
 const CLOSED_DEBUG = closedDebugView()
+const CLOSED_MAILBOX = closedMailbox()
 
 /** `/clear`, `/reset`, `/new` — optionally followed by the new chat's name. */
 const CLEAR_COMMAND = /^\/(clear|reset|new)(?:\s+(.*))?$/
@@ -78,7 +82,19 @@ export default function ChatView({ session, sendMessage, subscribe, connectionSt
   const toggleDebug = () => {
     const store = useChatDebugStore.getState()
     if (debugOpen) store.close(session.id)
-    else store.beginOpen(session.id)
+    else { useTeamMailboxStore.getState().close(session.id); store.beginOpen(session.id) }
+  }
+  const mailbox = useTeamMailboxStore(state => state.views[session.id]) ?? CLOSED_MAILBOX
+  useEffect(() => {
+    if (!connected || !mailbox.open) return
+    useTeamMailboxStore.getState().open(session.id)
+    sendMessage({ type: 'team-mailbox-open', sessionId: session.id })
+    return () => sendMessage({ type: 'team-mailbox-close', sessionId: session.id })
+  }, [session.id, connected, connectionEpoch, mailbox.open, sendMessage])
+  const toggleMailbox = () => {
+    const store = useTeamMailboxStore.getState()
+    if (mailbox.open) store.close(session.id)
+    else { useChatDebugStore.getState().close(session.id); store.open(session.id) }
   }
   const handleArchive = () => { requestChatArchive(session, sendMessage) }
   // Approval policy (chat-auto-approve-tools design D6): rendered from the
@@ -130,6 +146,8 @@ export default function ChatView({ session, sendMessage, subscribe, connectionSt
         // the same working session with a fresh conversation, not a new pick
         // from the dialog. Legacy sessions without a stored policy read manual.
         approvalPolicy: session.approvalPolicy ?? 'manual',
+        // A grouped chat clones its server-owned role even if its file is gone.
+        ...(session.groupId ? { groupId: session.groupId, cloneFromSessionId: session.id } : {}),
       })
       return
     }
@@ -241,6 +259,7 @@ export default function ChatView({ session, sendMessage, subscribe, connectionSt
       <span className="text-chat-meta text-secondary" data-testid="chat-status">{connected ? (archived ? 'archived' : session.status) : connectionStatus}</span>
       <ChatContextMeter usage={transcript.contextUsage} />
       <button className={`btn text-chat-meta ${debugOpen ? 'btn-primary' : ''}`} aria-pressed={debugOpen} onClick={toggleDebug}>Debug</button>
+      <button className={`btn text-chat-meta ${mailbox.open ? 'btn-primary' : ''}`} aria-pressed={mailbox.open} onClick={toggleMailbox}>Mailbox</button>
       {!archived && <button className={`btn text-chat-meta ${autoApprove ? 'btn-approval-on' : ''}`} aria-pressed={autoApprove}
         onClick={toggleApprovalPolicy} data-testid="chat-approval-policy">Auto-approve</button>}
       {!archived && <button className="btn text-chat-meta" onClick={handleArchive} data-testid="chat-archive-button">Archive</button>}
@@ -249,10 +268,14 @@ export default function ChatView({ session, sendMessage, subscribe, connectionSt
     <UsageBar report={usage} />
     {error && <p role="alert" className="border-b border-border p-3 text-chat-body text-chat-danger">{error}</p>}
     <div className="flex min-h-0 flex-1">
-      <div className={`min-h-0 min-w-0 flex-1 flex-col ${debugOpen ? 'hidden md:flex' : 'flex'}`}>
+      <div className={`min-h-0 min-w-0 flex-1 flex-col ${debugOpen || mailbox.open ? 'hidden md:flex' : 'flex'}`}>
+        {/* The live-workers strip (design D8): live rows only, hidden in
+            archived chats and when nothing runs (the strip hides itself). */}
+        {!archived && <ChatWorkersStrip sessionId={session.id} />}
         <div className="min-h-0 flex-1 overflow-y-auto p-4">
           <div className="mx-auto max-w-3xl space-y-4">
-            <ChatMessages events={transcript.events} projectPath={session.projectPath} />
+            <ChatMessages events={transcript.events} projectPath={session.projectPath}
+              sessionId={session.id} sendMessage={sendMessage} connected={connected} />
             {showActivity && (
               <ChatActivityRow activity={activity.value} phaseStartedAt={activity.phaseStartedAt} />
             )}
@@ -300,6 +323,7 @@ export default function ChatView({ session, sendMessage, subscribe, connectionSt
           </form>
         )}
       </div>
+      {mailbox.open && <TeamMailboxPanel sessionId={session.id} view={mailbox} sendMessage={sendMessage} connected={connected} onClose={toggleMailbox} />}
       {debugOpen && <ChatDebugPanel key={session.id} sessionId={session.id} view={debug} sendMessage={sendMessage}
         connected={connected} onClose={toggleDebug} />}
     </div>

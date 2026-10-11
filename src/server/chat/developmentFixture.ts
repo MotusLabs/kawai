@@ -4,7 +4,8 @@
 // the real stream-json protocol for the chat debug view. The activity turns
 // (thinking / tool / retry) hold each phase long enough to watch the
 // indicator's timer tick; the context turn climbs the meter toward the
-// compaction threshold and drops it across a compact_boundary. Tests shrink
+// compaction threshold and drops it across a compact_boundary; the worker turn
+// spawns a subagent (with a nested one) through task frames. Tests shrink
 // the holds via AGENTBOARD_CHAT_FIXTURE_HOLD_MS. Tool turns exercise short
 // Bash handles; "tool fail" adds a failed result and a project-relative Read.
 import type { Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk'
@@ -138,6 +139,43 @@ export const fixtureQueryFactory: ChatQueryFactory = ({ prompt, options, wire })
       await hold(900)
       if (closed || turn !== generation) return
       push({ type: 'system', subtype: 'compact_boundary', compact_metadata: { trigger: 'auto', pre_tokens: 157_900, post_tokens: 12_000 } })
+    }
+    if (/worker/i.test(text)) {
+      // Spawned-worker walkthrough (workers design D9): a top-level Agent call
+      // whose worker reports progress, runs one tool of its own (excluded
+      // from the transcript), and spawns a nested Agent (kept, as its row
+      // anchor). The level set drops the task before its notification — the
+      // completion gap — so the settled outcome must be the notification's.
+      const spawnId = `toolu_fixture_${crypto.randomUUID()}`
+      const nestedId = `toolu_fixture_${crypto.randomUUID()}`
+      const taskId = `task-${spawnId}`
+      const nestedTaskId = `task-${nestedId}`
+      const spawnInput = { subagent_type: 'Explore', description: 'Map the workspace', prompt: 'List the packages and their entry points.' }
+      push({ type: 'assistant', message: { id: crypto.randomUUID(), role: 'assistant', content: [{ type: 'tool_use', id: spawnId, name: 'Agent', input: spawnInput }] }, parent_tool_use_id: null })
+      push({ type: 'system', subtype: 'task_started', task_id: taskId, tool_use_id: spawnId, description: 'Map the workspace', subagent_type: 'Explore', task_type: 'local_agent', spawn_depth: 1, is_backgrounded: true })
+      push({ type: 'system', subtype: 'background_tasks_changed', tasks: [{ task_id: taskId, task_type: 'local_agent', description: 'Map the workspace' }] })
+      await hold(1200)
+      if (closed || turn !== generation) return
+      const workerToolId = `toolu_fixture_${crypto.randomUUID()}`
+      push({ type: 'assistant', message: { id: crypto.randomUUID(), role: 'assistant', content: [{ type: 'tool_use', id: workerToolId, name: 'Grep', input: { pattern: 'package.json' } }] }, parent_tool_use_id: spawnId })
+      push({ type: 'system', subtype: 'task_progress', task_id: taskId, tool_use_id: spawnId, description: 'Map the workspace', subagent_type: 'Explore', last_tool_name: 'Grep', usage: { total_tokens: 1_200, tool_uses: 1, duration_ms: 1_200 } })
+      push({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: workerToolId, content: '3 matches' }] }, parent_tool_use_id: spawnId })
+      await hold(1200)
+      if (closed || turn !== generation) return
+      push({ type: 'assistant', message: { id: crypto.randomUUID(), role: 'assistant', content: [{ type: 'tool_use', id: nestedId, name: 'Agent', input: { subagent_type: 'general-purpose', description: 'Read the server entry', prompt: 'Summarize src/server/index.ts.' } }] }, parent_tool_use_id: spawnId })
+      push({ type: 'system', subtype: 'task_started', task_id: nestedTaskId, tool_use_id: nestedId, description: 'Read the server entry', subagent_type: 'general-purpose', task_type: 'local_agent', spawn_depth: 2, is_backgrounded: true })
+      push({ type: 'system', subtype: 'task_progress', task_id: taskId, tool_use_id: spawnId, description: 'Map the workspace', subagent_type: 'Explore', last_tool_name: 'Agent', usage: { total_tokens: 2_400, tool_uses: 2, duration_ms: 2_400 } })
+      await hold(1200)
+      if (closed || turn !== generation) return
+      push({ type: 'system', subtype: 'task_notification', task_id: nestedTaskId, tool_use_id: nestedId, status: 'completed', summary: 'The server entry wires Hono routes and the WebSocket.', output_file: '' })
+      push({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: nestedId, content: 'Hono routes and the WebSocket.' }] }, parent_tool_use_id: spawnId })
+      // The completion gap: the level drops the task before its bookend.
+      push({ type: 'system', subtype: 'background_tasks_changed', tasks: [] })
+      await hold(600)
+      if (closed || turn !== generation) return
+      push({ type: 'system', subtype: 'task_notification', task_id: taskId, tool_use_id: spawnId, status: 'completed', summary: 'Found three packages: client, server, shared.', output_file: '' })
+      push({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: spawnId, content: 'Found three packages: client, server, shared.' }] }, parent_tool_use_id: null })
+      assistant('The worker mapped the workspace.')
     }
     if (/markdown/i.test(text)) {
       assistant([

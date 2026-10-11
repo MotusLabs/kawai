@@ -226,6 +226,19 @@ describe('chat wire messages', () => {
         ],
         receivedAt: '2026-10-07T13:00:00.000Z',
       },
+      workers: [
+        {
+          workerId: 'toolu_spawn_1',
+          taskId: 'task_1',
+          agentType: 'Explore',
+          description: 'Map the workspace',
+          depth: 1,
+          status: 'running',
+          live: true,
+          lastTool: 'Grep',
+          elapsedMs: 4_000,
+        },
+      ],
     }
 
     const parsed = JSON.parse(JSON.stringify(message)) as ServerMessage
@@ -247,6 +260,7 @@ describe('chat wire messages', () => {
       contextUsage: null,
       profileId: 'default',
       usage: null,
+      workers: [],
     }
 
     const parsed = JSON.parse(JSON.stringify(message)) as ServerMessage

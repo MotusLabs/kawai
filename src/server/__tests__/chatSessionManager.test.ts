@@ -14,11 +14,13 @@ import type {
   ChatContextUsage,
   ChatEvent,
   ChatUsageReport,
+  ChatWorker,
 } from '../../shared/chat'
 import type { ClaudeLaunchConfiguration } from '../chat/ClaudeProfiles'
 import { initDatabase, type SessionDatabase } from '../db'
 import { SessionRegistry } from '../SessionRegistry'
 import { ChatWireLogs } from '../chat/ChatWireLogs'
+import { ChatWorkerStore } from '../chat/chatWorkerStore'
 import { ClaudeExecutableError } from '../chat/claudeExecutable'
 import type { ChatWireRecorder } from '../chat/wireTap'
 import {
@@ -52,6 +54,20 @@ type FakeUsageControl = (opts: {
 type FakeContextControl = (opts: {
   detail?: string
 }) => Promise<unknown>
+
+const testManagers = new Set<ChatSessionManager>()
+function managedManager(options: ConstructorParameters<typeof ChatSessionManager>[0]) {
+  const manager = new ChatSessionManager(options)
+  testManagers.add(manager)
+  return manager
+}
+function closeDispatchers() {
+  for (const manager of testManagers) manager.dispatcher.close()
+}
+afterEach(() => {
+  closeDispatchers()
+  testManagers.clear()
+})
 
 function fakeQueryFactory(
   handles: FakeHandle[],
@@ -140,6 +156,8 @@ interface ManagerHarness {
   activities: Array<{ sessionId: string; activity: ChatActivity | null }>
   contextUsage: Array<{ sessionId: string; usage: ChatContextUsage | null }>
   usage: Array<{ profileId: string; report: ChatUsageReport | null }>
+  /** Worker-roster publishes, in order (workers design D2). */
+  workers: Array<{ sessionId: string; workers: ChatWorker[] }>
   /** Scoped workspace refreshes fired after cwd moves (worktree tracking D2). */
   refreshes: string[]
 }
@@ -150,7 +168,8 @@ function createHarness(
   usageImpl?: FakeUsageControl,
   titleLocateIntervalMs?: number,
   contextImpl?: FakeContextControl,
-  cwdRefreshDebounceMs?: number
+  cwdRefreshDebounceMs?: number,
+  workerStore?: ChatWorkerStore
 ): ManagerHarness {
   const registry = new SessionRegistry()
   const handles: FakeHandle[] = []
@@ -158,8 +177,9 @@ function createHarness(
   const activities: Array<{ sessionId: string; activity: ChatActivity | null }> = []
   const contextUsage: Array<{ sessionId: string; usage: ChatContextUsage | null }> = []
   const usage: Array<{ profileId: string; report: ChatUsageReport | null }> = []
+  const workers: Array<{ sessionId: string; workers: ChatWorker[] }> = []
   const refreshes: string[] = []
-  const manager = new ChatSessionManager({
+  const manager = managedManager({
     isDirectory,
     registry,
     db,
@@ -167,12 +187,14 @@ function createHarness(
     onActivity: (sessionId, activity) => activities.push({ sessionId, activity }),
     onContextUsage: (sessionId, reading) => contextUsage.push({ sessionId, usage: reading }),
     onUsage: (profileId, report) => usage.push({ profileId, report }),
+    onWorkers: (sessionId, roster) => workers.push({ sessionId, workers: roster }),
     queryFactory: fakeQueryFactory(handles, usageImpl, contextImpl),
     titleLocateIntervalMs,
     ...(cwdRefreshDebounceMs !== undefined ? { cwdRefreshDebounceMs } : {}),
     requestWorkspaceRefresh: (projectPath) => refreshes.push(projectPath),
+    ...(workerStore !== undefined ? { workerStore } : {}),
   })
-  return { manager, registry, handles, events, activities, contextUsage, usage, refreshes }
+  return { manager, registry, handles, events, activities, contextUsage, usage, workers, refreshes }
 }
 
 /** Let the driver's stream loop drain pushed messages. */
@@ -345,6 +367,7 @@ describe('ChatSessionManager', () => {
     } else {
       delete process.env.HOME
     }
+    closeDispatchers()
     db.close()
     fs.rmSync(tempDir, { recursive: true, force: true })
   })
@@ -445,7 +468,7 @@ describe('ChatSessionManager', () => {
     const badFile = path.join(project, '.kawai', 'profiles.json')
     fs.writeFileSync(badFile, '{ not json')
     const reported: string[][] = []
-    const manager = new ChatSessionManager({
+    const manager = managedManager({
       isDirectory: anyDirectory,
       db, registry: new SessionRegistry(), onEvent: () => {},
       queryFactory: fakeQueryFactory([]),
@@ -465,7 +488,7 @@ describe('ChatSessionManager', () => {
     let globalEnv = { ANTHROPIC_AUTH_TOKEN: 'global-token' }
     const registry = new SessionRegistry()
     const handles: FakeHandle[] = []
-    const manager = new ChatSessionManager({ isDirectory: anyDirectory, db, registry, onEvent: () => {}, queryFactory: fakeQueryFactory(handles), getProviderEnv: () => globalEnv })
+    const manager = managedManager({ isDirectory: anyDirectory, db, registry, onEvent: () => {}, queryFactory: fakeQueryFactory(handles), getProviderEnv: () => globalEnv })
     for (const profile of ['glm', 'minimax', 'kimi']) {
       const result = manager.createSession({ projectPath: '/tmp/proj', claudeProfileId: profile })
       expect(result.ok).toBe(true)
@@ -488,7 +511,7 @@ describe('ChatSessionManager', () => {
     let globalEnv = { ANTHROPIC_AUTH_TOKEN: 'global-token' }
     const launches: ClaudeLaunchConfiguration[] = []
     let fail = false
-    const manager = new ChatSessionManager({ isDirectory: anyDirectory, db, registry: new SessionRegistry(), onEvent: () => {}, getProviderEnv: () => globalEnv,
+    const manager = managedManager({ isDirectory: anyDirectory, db, registry: new SessionRegistry(), onEvent: () => {}, getProviderEnv: () => globalEnv,
       availabilityProbe: async (_env, launch) => { launches.push(launch!); if (fail) throw new Error('failed') },
     })
     const create = (claudeProfileId: string) => manager.createAvailableSession({ projectPath: '/tmp/proj', claudeProfileId })
@@ -515,7 +538,7 @@ describe('ChatSessionManager', () => {
       process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'
       let probes = 0
       const registry = new SessionRegistry()
-      const manager = new ChatSessionManager({
+      const manager = managedManager({
         isDirectory: anyDirectory,
         db, registry, onEvent: () => {},
         availabilityProbe: async () => { probes++; throw new Error('broken runtime') },
@@ -538,7 +561,7 @@ describe('ChatSessionManager', () => {
       process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'
       let providerEnv: Record<string, string> = { ANTHROPIC_BASE_URL: 'https://broken.example' }
       const probed: string[] = []
-      const manager = new ChatSessionManager({
+      const manager = managedManager({
         isDirectory: anyDirectory,
         db, registry: new SessionRegistry(), onEvent: () => {},
         availabilityProbe: async (env) => {
@@ -557,7 +580,7 @@ describe('ChatSessionManager', () => {
       process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'
       let providerEnv: Record<string, string> = { A: '1', B: '2' }
       let probes = 0
-      const manager = new ChatSessionManager({
+      const manager = managedManager({
         isDirectory: anyDirectory,
         db, registry: new SessionRegistry(), onEvent: () => {},
         availabilityProbe: async () => { probes++ },
@@ -576,7 +599,7 @@ describe('ChatSessionManager', () => {
       process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'
       let probes = 0
       let release!: () => void
-      const manager = new ChatSessionManager({
+      const manager = managedManager({
         isDirectory: anyDirectory,
         db, registry: new SessionRegistry(), onEvent: () => {},
         availabilityProbe: () => { probes++; return new Promise<void>((resolve) => { release = resolve }) },
@@ -595,7 +618,7 @@ describe('ChatSessionManager', () => {
       process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'
       let probes = 0
       const registry = new SessionRegistry()
-      const manager = new ChatSessionManager({
+      const manager = managedManager({
         isDirectory: anyDirectory,
         db, registry, onEvent: () => {},
         availabilityProbe: async () => { probes++ },
@@ -654,7 +677,7 @@ describe('ChatSessionManager', () => {
 
     test('a credential supplied only by getProviderEnv allows creation', () => {
       const registry = new SessionRegistry()
-      const manager = new ChatSessionManager({
+      const manager = managedManager({
         isDirectory: anyDirectory,
         db, registry, onEvent: () => {},
         queryFactory: fakeQueryFactory([]),
@@ -666,7 +689,7 @@ describe('ChatSessionManager', () => {
     test('the availability probe runs under the provider environment', async () => {
       process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'
       const probed: Array<Record<string, string>> = []
-      const manager = new ChatSessionManager({
+      const manager = managedManager({
         isDirectory: anyDirectory,
         db, registry: new SessionRegistry(), onEvent: () => {},
         availabilityProbe: async (providerEnv) => { probed.push(providerEnv) },
@@ -697,7 +720,7 @@ describe('ChatSessionManager', () => {
     test('refuses creation with the executable error verbatim and persists nothing', async () => {
       process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'
       const registry = new SessionRegistry()
-      const manager = new ChatSessionManager({
+      const manager = managedManager({
         isDirectory: anyDirectory,
         db, registry, onEvent: () => {},
         executableCheck: () => Promise.reject(
@@ -713,7 +736,7 @@ describe('ChatSessionManager', () => {
     test('creation re-checks after an executable failure and recovers', async () => {
       process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'
       let checks = 0
-      const manager = new ChatSessionManager({
+      const manager = managedManager({
         isDirectory: anyDirectory,
         db, registry: new SessionRegistry(), onEvent: () => {},
         availabilityProbe: async () => {},
@@ -734,7 +757,7 @@ describe('ChatSessionManager', () => {
       let probes = 0
       const probedPaths: Array<string | undefined> = []
       let identity = 'id-1'
-      const manager = new ChatSessionManager({
+      const manager = managedManager({
         isDirectory: anyDirectory,
         db, registry: new SessionRegistry(), onEvent: () => {},
         executableCheck: async () => {
@@ -768,7 +791,7 @@ describe('ChatSessionManager', () => {
       process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'
       const { manager, handles } = createHarness(db)
       let available = true
-      const gated = new ChatSessionManager({
+      const gated = managedManager({
         isDirectory: anyDirectory,
         db, registry: new SessionRegistry(), onEvent: () => {},
         queryFactory: fakeQueryFactory(handles),
@@ -800,7 +823,7 @@ describe('ChatSessionManager', () => {
       process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'
       const handles: FakeHandle[] = []
       let current = '/old/claude'
-      const manager = new ChatSessionManager({
+      const manager = managedManager({
         isDirectory: anyDirectory,
         db, registry: new SessionRegistry(), onEvent: () => {},
         queryFactory: fakeQueryFactory(handles),
@@ -839,7 +862,7 @@ describe('ChatSessionManager', () => {
     process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'
     let providerEnv: Record<string, string> = { ANTHROPIC_BASE_URL: 'https://gw.example/a' }
     const handles: FakeHandle[] = []
-    const manager = new ChatSessionManager({
+    const manager = managedManager({
       isDirectory: anyDirectory,
       db, registry: new SessionRegistry(), onEvent: () => {},
       queryFactory: fakeQueryFactory(handles),
@@ -873,7 +896,7 @@ describe('ChatSessionManager', () => {
     process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'
     const wireLogs = new ChatWireLogs({ dir: path.join(tempDir, 'chat-wire') })
     const handles: FakeHandle[] = []
-    const manager = new ChatSessionManager({
+    const manager = managedManager({
       isDirectory: anyDirectory,
       db, registry: new SessionRegistry(), onEvent: () => {},
       queryFactory: fakeQueryFactory(handles), wireLogs,
@@ -898,7 +921,7 @@ describe('ChatSessionManager', () => {
   test('startup prunes wire logs of sessions that no longer exist', async () => {
     process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'
     const dir = path.join(tempDir, 'chat-wire')
-    const first = new ChatSessionManager({ isDirectory: anyDirectory, db, registry: new SessionRegistry(), onEvent: () => {} })
+    const first = managedManager({ isDirectory: anyDirectory, db, registry: new SessionRegistry(), onEvent: () => {} })
     const kept = first.createSession({ projectPath: '/tmp/proj' })
     if (!kept.ok) throw new Error('create failed')
     const seed = new ChatWireLogs({ dir })
@@ -906,7 +929,7 @@ describe('ChatSessionManager', () => {
       seed.get(id).record('in', 'frame')
       await seed.get(id).flush()
     }
-    new ChatSessionManager({
+    managedManager({
       isDirectory: anyDirectory,
       db, registry: new SessionRegistry(), onEvent: () => {}, wireLogs: new ChatWireLogs({ dir }),
     })
@@ -1050,6 +1073,7 @@ describe('ChatSessionManager', () => {
       await harnessA.manager.send(sessionId, 'one')
       harnessA.handles[0]!.push(initMessage('sdk-start-ghost'))
       await flush()
+      closeDispatchers()
       dbA.close()
 
       // Restart with no transcript on disk: attach must not silently start a
@@ -1060,6 +1084,7 @@ describe('ChatSessionManager', () => {
       expect(result.ok).toBe(false)
       if (!result.ok) expect(result.error).toContain('sdk-start-ghost')
       expect(harnessB.handles).toHaveLength(0)
+      closeDispatchers()
       dbB.close()
     })
 
@@ -1088,7 +1113,7 @@ describe('ChatSessionManager', () => {
         if (broken) throw new Error('spawn exploded')
         return fakeQueryFactory(handles)(params)
       }
-      const manager = new ChatSessionManager({
+      const manager = managedManager({
         isDirectory: anyDirectory,
         db, registry,
         onEvent: (sessionId, event) => events.push({ sessionId, event }),
@@ -1120,7 +1145,7 @@ describe('ChatSessionManager', () => {
       const handles: FakeHandle[] = []
       const events: Array<{ sessionId: string; event: ChatEvent }> = []
       const commandStates: Array<{ sessionId: string; status: string }> = []
-      const manager = new ChatSessionManager({
+      const manager = managedManager({
         isDirectory: anyDirectory,
         db, registry,
         onEvent: (sessionId, event) => events.push({ sessionId, event }),
@@ -1165,7 +1190,7 @@ describe('ChatSessionManager', () => {
       process.env.ANTHROPIC_API_KEY = 'sk-test-key'
       const registry = new SessionRegistry()
       const commandStates: string[] = []
-      const manager = new ChatSessionManager({
+      const manager = managedManager({
         isDirectory: anyDirectory,
         db, registry,
         onEvent: () => {},
@@ -1253,7 +1278,7 @@ describe('ChatSessionManager', () => {
       const registry = new SessionRegistry()
       const updates: Array<Session | undefined> = []
       registry.on('session-update', (session) => updates.push(session))
-      const manager = new ChatSessionManager({
+      const manager = managedManager({
         isDirectory: anyDirectory,
         db, registry, onEvent: () => {},
         queryFactory: fakeQueryFactory(handles), wireLogs,
@@ -1386,7 +1411,7 @@ describe('ChatSessionManager', () => {
       process.env.ANTHROPIC_API_KEY = 'sk-test-key'
       const wireLogs = new ChatWireLogs({ dir: path.join(tempDir, 'chat-wire') })
       const handles: FakeHandle[] = []
-      const managerA = new ChatSessionManager({
+      const managerA = managedManager({
         isDirectory: anyDirectory,
         db, registry: new SessionRegistry(), onEvent: () => {},
         queryFactory: fakeQueryFactory(handles), wireLogs,
@@ -1406,7 +1431,7 @@ describe('ChatSessionManager', () => {
       // "Restart": fresh registry and manager on the same database and logs.
       const handlesB: FakeHandle[] = []
       const registryB = new SessionRegistry()
-      const managerB = new ChatSessionManager({
+      const managerB = managedManager({
         isDirectory: anyDirectory,
         db, registry: registryB, onEvent: () => {},
         queryFactory: fakeQueryFactory(handlesB), wireLogs,
@@ -1492,7 +1517,7 @@ describe('ChatSessionManager', () => {
       process.env.ANTHROPIC_API_KEY = 'sk-test-key'
       const registry = new SessionRegistry()
       // No isDirectory override: the real filesystem check runs.
-      const manager = new ChatSessionManager({ db, registry, onEvent: () => {} })
+      const manager = managedManager({ db, registry, onEvent: () => {} })
       const file = path.join(tempDir, 'file.txt')
       fs.writeFileSync(file, '')
       for (const projectPath of [
@@ -1528,7 +1553,7 @@ describe('ChatSessionManager', () => {
     test('availability-checked creation refuses a missing directory before probing', async () => {
       process.env.ANTHROPIC_API_KEY = 'sk-test-key'
       let probes = 0
-      const manager = new ChatSessionManager({
+      const manager = managedManager({
         isDirectory: () => false,
         db, registry: new SessionRegistry(), onEvent: () => {},
         availabilityProbe: async () => { probes++ },
@@ -1884,6 +1909,7 @@ describe('ChatSessionManager', () => {
       await flush()
       // Turn still in flight: the persisted row says working.
       expect(dbA.getChatSession(startedId)?.status).toBe('working')
+      closeDispatchers()
       dbA.close()
 
       // "Restart": fresh db handle, registry, and manager on the same file.
@@ -1940,6 +1966,7 @@ describe('ChatSessionManager', () => {
       const all = registryB.getAll()
       expect(all.filter((s) => s.kind === 'chat')).toHaveLength(2)
       expect(all.find((s) => s.id === 'term-1')).toBeDefined()
+      closeDispatchers()
       dbB.close()
     })
 
@@ -1965,6 +1992,7 @@ describe('ChatSessionManager', () => {
       expect(dbA.getChatSession(unnamed.session.id)?.nameSource).toBe(
         'placeholder'
       )
+      closeDispatchers()
       dbA.close()
 
       // "Restart": fresh db handle, registry, and manager on the same file.
@@ -1976,6 +2004,7 @@ describe('ChatSessionManager', () => {
       expect(restoredNamed?.nameSource).toBe('manual')
       expect(restoredUnnamed?.nameSource).toBe('placeholder')
       expect(dbB.getChatSession(named.session.id)?.nameSource).toBe('manual')
+      closeDispatchers()
       dbB.close()
     })
   })
@@ -2112,6 +2141,7 @@ describe('ChatSessionManager', () => {
       harnessA.handles[0]!.push(initMessage('sdk-ghost'))
       await flush()
       expect(dbA.getChatSession(sessionId)?.sdkSessionId).toBe('sdk-ghost')
+      closeDispatchers()
       dbA.close()
 
       // Restart with no transcript on disk for the stored SDK id.
@@ -2133,6 +2163,7 @@ describe('ChatSessionManager', () => {
       writeTranscript('sdk-ghost', MATCHED_TRANSCRIPT)
       await harnessB.manager.send(sessionId, 'continue')
       expect(harnessB.handles[0]!.options.resume).toBe('sdk-ghost')
+      closeDispatchers()
       dbB.close()
     })
 
@@ -2171,6 +2202,30 @@ describe('ChatSessionManager', () => {
         outcome: 'cancelled',
       })
       expect(manager.getPendingRequests(sessionId)).toEqual([])
+    })
+
+    test('worker bodies read the subagent transcript beside the session', () => {
+      process.env.ANTHROPIC_API_KEY = 'sk-test-key'
+      const parent = writeTranscript('sdk-workers', MATCHED_TRANSCRIPT)
+      const subagents = path.join(parent.replace(/\.jsonl$/, ''), 'subagents')
+      fs.mkdirSync(subagents, { recursive: true })
+      fs.writeFileSync(path.join(subagents, 'agent-a1.meta.json'),
+        JSON.stringify({ toolUseId: 'toolu_spawn_1' }))
+      fs.writeFileSync(path.join(subagents, 'agent-a1.jsonl'), JSON.stringify({
+        type: 'user', uuid: 'w1', isSidechain: true,
+        timestamp: '2026-10-04T10:00:00.000Z',
+        message: { role: 'user', content: 'Map the workspace' },
+      }) + '\n')
+      const sessionId = seedRecord('sdk-workers')
+      const { manager } = createHarness(db)
+
+      const body = manager.getWorkerTranscript(sessionId, 'toolu_spawn_1')
+      expect(body.status).toBe('ok')
+      expect(body.events.map((e) => e.type)).toEqual(['user_message'])
+      expect(manager.getWorkerTranscript(sessionId, 'toolu_other').status)
+        .toBe('unavailable')
+      expect(manager.getWorkerTranscript('no-such-chat', 'toolu_spawn_1').status)
+        .toBe('unavailable')
     })
   })
 
@@ -2226,12 +2281,13 @@ describe('ChatSessionManager', () => {
     if (!created.ok) throw new Error(created.error)
     harnessA.manager.setApprovalPolicy(created.session.id, 'auto')
     harnessA.manager.shutdown()
+    closeDispatchers()
     dbA.close()
 
     const dbB = initDatabase({ path: dbPath })
     try {
       const registryB = new SessionRegistry()
-      new ChatSessionManager({
+      managedManager({
         isDirectory: anyDirectory,
         db: dbB,
         registry: registryB,
@@ -2239,6 +2295,7 @@ describe('ChatSessionManager', () => {
       })
       expect(registryB.get(created.session.id)?.approvalPolicy).toBe('auto')
     } finally {
+      closeDispatchers()
       dbB.close()
     }
   })
@@ -2624,6 +2681,7 @@ describe('ChatSessionManager usage', () => {
     } else {
       delete process.env.HOME
     }
+    closeDispatchers()
     db.close()
     fs.rmSync(tempDir, { recursive: true, force: true })
   })
@@ -2789,6 +2847,7 @@ describe('ChatSessionManager usage', () => {
     await flush()
     expect(harnessA.manager.getSnapshot(created.session.id)!.usage).not.toBeNull()
     harnessA.manager.shutdown()
+    closeDispatchers()
     dbA.close()
 
     const dbB = initDatabase({ path: dbPath })
@@ -2799,6 +2858,7 @@ describe('ChatSessionManager usage', () => {
     await flush()
     expect(harnessB.handles[0]!.usageCalls).toHaveLength(1)
     harnessB.manager.shutdown()
+    closeDispatchers()
     dbB.close()
   })
 })
@@ -3002,5 +3062,249 @@ describe('ChatSessionManager context usage', () => {
       .find((event) => event.type === 'notice')
     expect(notice).toMatchObject({ type: 'notice', kind: 'compacted' })
     harness.manager.shutdown()
+  })
+})
+
+describe('ChatSessionManager worker sidecar', () => {
+  let tempDir: string
+  let db: SessionDatabase
+  let sidecarDir: string
+  const originalApiKey = process.env.ANTHROPIC_API_KEY
+  const originalConfigDir = process.env.CLAUDE_CONFIG_DIR
+  const originalHome = process.env.HOME
+
+  beforeEach(() => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentboard-chatworkers-'))
+    db = initDatabase({ path: path.join(tempDir, 'test.db') })
+    sidecarDir = path.join(tempDir, 'chat-workers')
+    // Same isolation contract as the main describe: auth pinned to a key,
+    // CLI config and home inside the temp dir so nothing leaks in.
+    delete process.env.ANTHROPIC_API_KEY
+    process.env.CLAUDE_CONFIG_DIR = path.join(tempDir, 'claude-config')
+    process.env.HOME = tempDir
+  })
+  afterEach(() => {
+    if (originalApiKey !== undefined) process.env.ANTHROPIC_API_KEY = originalApiKey
+    else delete process.env.ANTHROPIC_API_KEY
+    if (originalConfigDir !== undefined) process.env.CLAUDE_CONFIG_DIR = originalConfigDir
+    else delete process.env.CLAUDE_CONFIG_DIR
+    if (originalHome !== undefined) process.env.HOME = originalHome
+    else delete process.env.HOME
+    closeDispatchers()
+    db.close()
+    fs.rmSync(tempDir, { recursive: true, force: true })
+  })
+
+  /** The Agent spawn + task_started prefix (design D1) on the fake stream. */
+  async function spawnWorker(
+    handle: FakeHandle,
+    toolUseId: string,
+    taskId: string,
+    description: string
+  ): Promise<void> {
+    handle.push({
+      type: 'assistant',
+      message: {
+        id: `msg_${toolUseId}`,
+        content: [{ type: 'tool_use', id: toolUseId, name: 'Agent', input: {} }],
+        role: 'assistant',
+      },
+      parent_tool_use_id: null,
+      uuid: `uuid-${toolUseId}`,
+      session_id: 'sdk-1',
+    } as unknown as SDKMessage)
+    handle.push({
+      type: 'system',
+      subtype: 'task_started',
+      task_id: taskId,
+      tool_use_id: toolUseId,
+      description,
+      subagent_type: 'Explore',
+      spawn_depth: 1,
+      task_type: 'local_agent',
+    } as unknown as SDKMessage)
+    await flush()
+  }
+
+  /** task_notification settle frame for one worker. */
+  async function settleWorker(
+    handle: FakeHandle,
+    toolUseId: string,
+    taskId: string,
+    status: 'completed' | 'failed',
+    summary: string
+  ): Promise<void> {
+    handle.push({
+      type: 'system',
+      subtype: 'task_notification',
+      task_id: taskId,
+      tool_use_id: toolUseId,
+      status,
+      output_file: '/tmp/subagent.jsonl',
+      summary,
+    } as unknown as SDKMessage)
+    await flush()
+  }
+
+  /** A fresh store over the same directory, as a restart would build. */
+  const reopenedStore = () => new ChatWorkerStore({ dir: sidecarDir })
+
+  test('settled workers round-trip through the sidecar and the snapshot', async () => {
+    process.env.ANTHROPIC_API_KEY = 'test-key'
+    const store = new ChatWorkerStore({ dir: sidecarDir })
+    const harness = createHarness(
+      db, anyDirectory, undefined, undefined, undefined, undefined, store
+    )
+    const created = harness.manager.createSession({ projectPath: '/tmp/proj' })
+    if (!created.ok) throw new Error(created.error)
+    const id = created.session.id
+    await harness.manager.send(id, 'research')
+    const handle = harness.handles[0]!
+    handle.push(initMessage('sdk-workers-1'))
+    await spawnWorker(handle, 'toolu_w1', 'task_1', 'Map the workspace')
+    await spawnWorker(handle, 'toolu_w2', 'task_2', 'Index the API')
+    await settleWorker(handle, 'toolu_w1', 'task_1', 'completed', 'Mapped 14 files')
+    await settleWorker(handle, 'toolu_w2', 'task_2', 'failed', 'endpoint down')
+    // The sink saw every roster publish (workers design D2): spawn, fill,
+    // and settle for each worker.
+    expect(harness.workers.map(entry => entry.workers)).toHaveLength(6)
+    harness.manager.shutdown()
+
+    // Restart: a fresh store over the same directory recovers the rows.
+    const restored = createHarness(
+      db, anyDirectory, undefined, undefined, undefined, undefined, reopenedStore()
+    )
+    expect(restored.manager.getSnapshot(id)!.workers.map(({ elapsedMs: _e, ...row }) => row))
+      .toEqual([
+        {
+          workerId: 'toolu_w1',
+          taskId: 'task_1',
+          agentType: 'Explore',
+          description: 'Map the workspace',
+          depth: 1,
+          status: 'completed',
+          live: false,
+          summary: 'Mapped 14 files',
+        },
+        {
+          workerId: 'toolu_w2',
+          taskId: 'task_2',
+          agentType: 'Explore',
+          description: 'Index the API',
+          depth: 1,
+          status: 'failed',
+          live: false,
+          summary: 'endpoint down',
+        },
+      ])
+    restored.manager.shutdown()
+  })
+
+  test('a restarted session keeps recovered outcomes when its agent starts again', async () => {
+    process.env.ANTHROPIC_API_KEY = 'test-key'
+    const store = new ChatWorkerStore({ dir: sidecarDir })
+    const harness = createHarness(
+      db, anyDirectory, undefined, undefined, undefined, undefined, store
+    )
+    const created = harness.manager.createSession({ projectPath: '/tmp/proj' })
+    if (!created.ok) throw new Error(created.error)
+    const id = created.session.id
+    await harness.manager.send(id, 'research')
+    const handle = harness.handles[0]!
+    handle.push(initMessage('sdk-workers-3'))
+    await spawnWorker(handle, 'toolu_w1', 'task_1', 'Map the workspace')
+    await settleWorker(handle, 'toolu_w1', 'task_1', 'completed', 'Mapped 14 files')
+    harness.manager.shutdown()
+
+    // Restart: the fresh driver is seeded with the recovered rows, so a new
+    // spawn appends to the roster instead of replacing it — and the sidecar
+    // keeps both, where a publish from an empty roster would lose the old
+    // outcome on disk too. Resume needs the transcript to exist.
+    writeTranscript('sdk-workers-3', `${JSON.stringify({ type: 'user', uuid: 'u1' })}\n`)
+    const restored = createHarness(
+      db, anyDirectory, undefined, undefined, undefined, undefined, reopenedStore()
+    )
+    const sent = await restored.manager.send(id, 'research again')
+    if (!sent.ok) throw new Error(sent.error)
+    await flush()
+    const nextHandle = restored.handles[0]!
+    nextHandle.push(initMessage('sdk-workers-3'))
+    await spawnWorker(nextHandle, 'toolu_w2', 'task_2', 'Index the API')
+    expect(
+      restored.manager.getSnapshot(id)!.workers.map((worker) => worker.workerId)
+    ).toEqual(['toolu_w1', 'toolu_w2'])
+    await waitForCondition(() => {
+      const rows = reopenedStore().read(id)
+      return rows.some(worker => worker.workerId === 'toolu_w1') &&
+        rows.some(worker => worker.workerId === 'toolu_w2')
+    })
+    restored.manager.shutdown()
+  })
+
+  test('a worker still running at an abrupt stop is kept and recovered as stopped', async () => {
+    process.env.ANTHROPIC_API_KEY = 'test-key'
+    const store = new ChatWorkerStore({ dir: sidecarDir })
+    const harness = createHarness(
+      db, anyDirectory, undefined, undefined, undefined, undefined, store
+    )
+    const created = harness.manager.createSession({ projectPath: '/tmp/proj' })
+    if (!created.ok) throw new Error(created.error)
+    const id = created.session.id
+    await harness.manager.send(id, 'research')
+    const handle = harness.handles[0]!
+    handle.push(initMessage('sdk-workers-2'))
+    await spawnWorker(handle, 'toolu_run', 'task_run', 'Map the workspace')
+    // The sidecar holds the running row before anything settles (D6: the
+    // write happens at spawn, not at settle — the crash gap).
+    await waitForCondition(() =>
+      store.read(id).some(worker => worker.status === 'running')
+    )
+    // A reconnect mid-run receives the running roster from the live driver
+    // (workers design D2), elapsed computed fresh at snapshot time.
+    expect(harness.manager.getSnapshot(id)!.workers).toMatchObject([
+      { workerId: 'toolu_run', status: 'running', live: true },
+    ])
+    // Abrupt stop: no shutdown settlement, as a crash would leave things.
+    const recovered: ChatWorker[] = []
+    const restored = managedManager({
+      isDirectory: anyDirectory,
+      registry: new SessionRegistry(),
+      db,
+      onEvent: () => {},
+      queryFactory: fakeQueryFactory([]),
+      workerStore: reopenedStore(),
+      onWorkers: (_sessionId, workers) => recovered.push(...workers),
+    })
+    const snapshot = restored.getSnapshot(id)!
+    expect(snapshot.workers).toMatchObject([
+      { workerId: 'toolu_run', status: 'stopped', live: false },
+    ])
+    // The corrected roster is rewritten so the file and the rows agree.
+    await waitForCondition(() =>
+      reopenedStore().read(id).every(worker => worker.status === 'stopped')
+    )
+    restored.shutdown()
+    expect(recovered).toEqual([])
+  })
+
+  test('kill removes the sidecar with the session', async () => {
+    process.env.ANTHROPIC_API_KEY = 'test-key'
+    const store = new ChatWorkerStore({ dir: sidecarDir })
+    const harness = createHarness(
+      db, anyDirectory, undefined, undefined, undefined, undefined, store
+    )
+    const created = harness.manager.createSession({ projectPath: '/tmp/proj' })
+    if (!created.ok) throw new Error(created.error)
+    const id = created.session.id
+    await harness.manager.send(id, 'research')
+    const handle = harness.handles[0]!
+    handle.push(initMessage('sdk-workers-3'))
+    await spawnWorker(handle, 'toolu_kill', 'task_kill', 'Map the workspace')
+    await waitForCondition(() => store.read(id).length === 1)
+    harness.manager.kill(id)
+    await waitForCondition(
+      () => !fs.existsSync(path.join(sidecarDir, `${id}.json`))
+    )
+    expect(reopenedStore().read(id)).toEqual([])
   })
 })

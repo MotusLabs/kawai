@@ -6,6 +6,7 @@
 // (design D4); this component only renders what it is given.
 import { useEffect, useState } from 'react'
 import type { ChatActivity } from '@shared/chat'
+import { formatElapsed } from './chatElapsed'
 
 /** Human label for a phase; tools fall back to a generic name. */
 function activityLabel(activity: ChatActivity): string {
@@ -29,13 +30,6 @@ function activityLabel(activity: ChatActivity): string {
         : `Retrying (${attempt})…`
     }
   }
-}
-
-/** `Ns` under a minute, `Mm Ss` beyond it. */
-function formatElapsed(elapsedMs: number): string {
-  const seconds = Math.max(0, Math.floor(elapsedMs / 1000))
-  if (seconds < 60) return `${seconds}s`
-  return `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, '0')}s`
 }
 
 export default function ChatActivityRow({ activity, phaseStartedAt }: {

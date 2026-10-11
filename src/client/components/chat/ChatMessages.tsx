@@ -1,7 +1,12 @@
 // Read-only transcript with one expandable entry per tool use. Calls and
 // results are paired in the view; approvals/questions render separately.
+// Agent/Task calls render as worker rows instead (workers design D8) when a
+// session context is given: the row joins the roster by workerId and falls
+// back to the plain paired card without one.
 import type { ChatEvent } from '@shared/chat'
+import type { SendClientMessage } from '@shared/types'
 import Markdown from '../Markdown'
+import ChatWorkerRow from './ChatWorkerRow'
 import { toolCallDetail } from './toolCallLabel'
 
 /**
@@ -43,7 +48,11 @@ function toolEntries(events: ChatEvent[]): TranscriptEntry[] {
   return entries
 }
 
-export default function ChatMessages({ events, projectPath }: { events: ChatEvent[]; projectPath?: string }) {
+export default function ChatMessages({ events, projectPath, sessionId, sendMessage, connected }: {
+  events: ChatEvent[]; projectPath?: string
+  /** Present in the app (not in isolated tests): worker rows join the store. */
+  sessionId?: string; sendMessage?: SendClientMessage; connected?: boolean
+}) {
   return <div className="space-y-4" data-testid="chat-transcript">
     {toolEntries(events).map(({ event, result }) => {
       switch (event.type) {
@@ -52,6 +61,20 @@ export default function ChatMessages({ events, projectPath }: { events: ChatEven
             <div className="mb-1 text-chat-meta text-secondary">You</div>
             <p className="whitespace-pre-wrap break-words text-chat-body">{event.text}</p>
           </article>
+        case 'peer_message':
+          return <article key={event.id} data-chat-role="peer" className="border-l-2 border-primary bg-elevated p-3">
+            <div className="mb-1 flex flex-wrap gap-2 text-chat-meta text-secondary">
+              <span>Peer · {event.senderSession}</span>
+              <span>{event.senderGroup ?? 'No group'}</span><span>{event.priority}</span>
+              {[...new Set(event.tags)].map(tag => <span key={tag}>#{tag}</span>)}
+            </div>
+            <p className="break-all text-chat-meta text-secondary">{event.originPath}</p>
+            {event.possibleDuplicate && <p role="status" className="text-chat-meta text-chat-danger">Possible duplicate — an already-seen message should be treated as a no-op.</p>}
+            <p className="whitespace-pre-wrap break-words text-chat-body">{event.body}</p>
+            {event.thread && <details className="mt-2 text-chat-meta"><summary>Earlier messages in this thread</summary>
+              {event.thread.map(message => <p key={message.messageId} className="whitespace-pre-wrap">{message.senderSession}: {message.body}</p>)}
+            </details>}
+          </article>
         case 'assistant_text':
           return <article key={event.id} data-chat-role="assistant" className="mr-8 p-3">
             <div className="mb-1 text-chat-meta text-secondary">Claude</div>
@@ -59,11 +82,16 @@ export default function ChatMessages({ events, projectPath }: { events: ChatEven
           </article>
         case 'tool_call': {
           const detail = toolCallDetail(event.tool, event.input, projectPath)
-          return <details key={`tool:${event.toolCallId}`} className="border-l-2 border-border px-3 text-chat-meta text-secondary">
+          const card = <details key={`tool:${event.toolCallId}`} className="border-l-2 border-border px-3 text-chat-meta text-secondary">
             <SummaryLabel label={event.tool} detail={detail} failed={result?.isError} />
             <pre className="mt-2 overflow-auto whitespace-pre-wrap">{JSON.stringify(event.input, null, 2)}</pre>
             {result && <pre className="mt-2 overflow-auto whitespace-pre-wrap">{result.output}</pre>}
           </details>
+          if (sessionId === undefined || (event.tool !== 'Agent' && event.tool !== 'Task')) return card
+          return <ChatWorkerRow key={`tool:${event.toolCallId}`} sessionId={sessionId}
+            workerId={event.toolCallId} tool={event.tool} fallback={card}
+            renderBody={body => <ChatMessages events={body} projectPath={projectPath} />}
+            sendMessage={sendMessage} connected={connected} />
         }
         case 'tool_result': {
           return <details key={event.id} className="px-3 text-chat-meta text-secondary">

@@ -2,6 +2,7 @@
 export const HISTORY_MAX_AGE_MIN_HOURS = 1
 export const HISTORY_MAX_AGE_MAX_HOURS = 168 // 7 days
 
+import type { TeamMessage } from './team'
 import type {
   WorkspaceOperationResult,
   WorkspaceSnapshot,
@@ -17,6 +18,7 @@ import type {
   ChatQuestionAnswer,
   ChatUsageReport,
   ChatWireFrame,
+  ChatWorker,
 } from './chat'
 
 export type {
@@ -40,6 +42,8 @@ export type {
   ChatCommandState,
   ChatWireDirection,
   ChatWireFrame,
+  ChatWorker,
+  ChatWorkerStatus,
 } from './chat'
 
 export type {
@@ -125,6 +129,12 @@ export interface Session {
   isPinned?: boolean
   /** Chat sessions only: archive timestamp (design D1); set = archived. */
   archivedAt?: string | null
+  /** Chat sessions only: team group id (agent-teams); absent = no group. */
+  groupId?: string
+  /** The group's display label; absent until the session's team is known. */
+  groupLabel?: string
+  /** True when no group file defines `groupId` any more. */
+  groupMissing?: boolean
 }
 
 export interface AgentSession {
@@ -269,6 +279,11 @@ export type ServerMessage =
       contextUsage: ChatContextUsage | null
       /** Latest plan-usage report for the session's profile, when one is held. */
       usage: ChatUsageReport | null
+      /**
+       * Agents the session spawned (workers design D2): the full roster at
+       * snapshot time — running ones live, settled ones with their outcomes.
+       */
+      workers: ChatWorker[]
     }
   // Replaced command list pushed to subscribed connections whenever the
   // agent reports a changed list (or the state changes). Additive: older
@@ -289,6 +304,24 @@ export type ServerMessage =
       type: 'chat-context-usage'
       sessionId: string
       usage: ChatContextUsage | null
+    }
+  // Full worker roster of a chat session (workers design D2): a level signal,
+  // not deltas — a missed bookend must not wedge a stale running worker. Sent
+  // whenever the roster projection changes; additive and ephemeral like
+  // chat-activity, while settled outcomes also ride the snapshot and persist.
+  | { type: 'team-mailbox-snapshot'; sessionId: string; teamId: string; messages: TeamMessage[] }
+  | { type: 'team-mailbox-dead-letter'; teamId: string; messageId: string; senderSession: string }
+  | { type: 'chat-workers'; sessionId: string; workers: ChatWorker[] }
+  // A worker's body on expand (workers design D5): the reply to
+  // chat-worker-transcript, read from the worker's on-disk transcript.
+  // 'unavailable' reports a missing file or unknown worker (the row shows
+  // the body as unavailable, never an error).
+  | {
+      type: 'chat-worker-transcript'
+      sessionId: string
+      workerId: string
+      status: 'ok' | 'unavailable'
+      events: ChatEvent[]
     }
   // Debug-view protocol frames, sent only to clients that opened the view.
   // `page: true` marks a reply to chat-debug-open/chat-debug-page (carrying
@@ -337,6 +370,12 @@ export type ClientMessage =
       // approval design D3). Absent = manual, so older clients and terminal
       // sessions are unchanged.
       approvalPolicy?: ChatApprovalPolicy
+      // Chat sessions only: team group (agent-teams), validated against the
+      // project's group catalog and fixed for the session's life. Absent =
+      // no group.
+      groupId?: string
+      /** Existing chat whose stored role is preserved, including a missing role. */
+      cloneFromSessionId?: string
       // OpenSpec change context: with a selected agent, the server composes
       // the mapped apply command into the session's start command as the
       // agent's first prompt (a launch argument, held by the agent itself
@@ -382,9 +421,14 @@ export type ClientMessage =
       sessionId: string
       policy: ChatApprovalPolicy
     }
+  | { type: 'team-mailbox-open' | 'team-mailbox-close'; sessionId: string }
+  | { type: 'team-mailbox-cancel' | 'team-mailbox-retry' | 'team-mailbox-discard'; sessionId: string; messageId: string }
   | { type: 'chat-debug-open'; sessionId: string }
   | { type: 'chat-debug-page'; sessionId: string; beforeSeq: number }
   | { type: 'chat-debug-close'; sessionId: string }
+  // A worker's expanded body (workers design D5): read the worker's on-disk
+  // transcript live or after settle; the reply is chat-worker-transcript.
+  | { type: 'chat-worker-transcript'; sessionId: string; workerId: string }
   // Workspace messages are additive; existing clients never send them.
   | { type: 'workspace-refresh'; projectPath?: string }
   | {

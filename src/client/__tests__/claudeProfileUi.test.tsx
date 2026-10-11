@@ -72,11 +72,17 @@ test('catalog refetches with the entered project path', async () => {
   expect(urls.some(url => url.includes(`projectPath=${encodeURIComponent('/work/glm-flash')}`))).toBe(true)
 })
 
+/** The dialog also asks for team groups; answer that empty, separately. */
+const noGroups = (profiles: (input: unknown) => Promise<Response>) =>
+  ((input: unknown) => String(input).startsWith('/api/chat/groups')
+    ? Promise.resolve(Response.json({ groups: [], errors: [] }))
+    : profiles(input)) as unknown as typeof fetch
+
 test('catalog file warnings are visible without blocking creation', async () => {
-  globalThis.fetch = (async () => Response.json({
+  globalThis.fetch = noGroups(async () => Response.json({
     profiles: metadata,
     errors: ['/work/proj/.kawai/profiles.json: invalid JSON (unexpected end of input).'],
-  })) as unknown as typeof fetch
+  }))
   const renderer = await modal()
   const warning = renderer.root.findByProps({ role: 'status' })
   expect(warning.children.join('')).toContain('/work/proj/.kawai/profiles.json')
@@ -106,7 +112,7 @@ test('chat header label resolves from the session project path catalog', async (
 test('loading and catalog error block submission and Retry recovers without losing selection', async () => {
   // Hang the catalog request for the modal's initial (chat-kind) load.
   let release!: (response: Response) => void
-  globalThis.fetch = (() => new Promise<Response>(resolve => { release = resolve })) as unknown as typeof fetch
+  globalThis.fetch = noGroups(() => new Promise<Response>(resolve => { release = resolve }))
   const renderer = await modal()
   submit(renderer)
   expect(created).toEqual([])

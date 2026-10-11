@@ -114,6 +114,9 @@ export const SESSION_FIELD_EQUALS: {
   lastUserMessage: strictEquals,
   isPinned: strictEquals,
   archivedAt: strictEquals,
+  groupId: strictEquals,
+  groupLabel: strictEquals,
+  groupMissing: strictEquals,
   lastActivity: activityInSameBucket,
 }
 
@@ -610,6 +613,16 @@ export function SessionRow({
             </span>
           )}
           {session.kind === 'chat' && <span className="text-[11px] text-secondary">Chat</span>}
+          {session.kind === 'chat' && session.groupId && (
+            <span
+              data-testid="session-group-badge"
+              data-missing={session.groupMissing ? 'true' : undefined}
+              className={`shrink-0 truncate rounded border px-1 text-[11px] ${session.groupMissing ? 'border-dashed border-border text-muted line-through' : 'border-border text-secondary'}`}
+              title={session.groupMissing ? `Group "${session.groupId}" is no longer defined` : `Group: ${session.groupLabel ?? session.groupId}`}
+            >
+              {session.groupLabel ?? session.groupId}
+            </span>
+          )}
           {needsInput ? (
             <span
               className={`ml-1 flex shrink-0 items-center justify-center rounded-full px-1.5 py-0.5 ${statusPillClass[session.status]} pulse-approval`}

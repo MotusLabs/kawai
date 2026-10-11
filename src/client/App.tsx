@@ -1,3 +1,5 @@
+import { useTeamMailboxStore } from './stores/teamMailboxStore'
+import { notifyMailboxDeadLetter } from './utils/teamMailboxNotification'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { AgentSession, AutoStartAgent, ChatApprovalPolicy, ServerMessage, Session, SessionKillSource, UpdateState } from '@shared/types'
 import { FALLBACK_ARCHIVE_SECTION_KEY, type WorkspaceBranch } from '@shared/workspace'
@@ -545,6 +547,10 @@ export default function App() {
       if (message.type === 'chat-activity') useChatStore.getState().setActivity(message.sessionId, message.activity)
       if (message.type === 'chat-context-usage') useChatStore.getState().setContextUsage(message.sessionId, message.usage)
       if (message.type === 'chat-usage') useChatStore.getState().setUsage(message.profileId, message.report)
+      if (message.type === 'chat-workers') useChatStore.getState().setWorkers(message.sessionId, message.workers)
+      if (message.type === 'chat-worker-transcript') useChatStore.getState().setWorkerBody(message)
+      if (message.type === 'team-mailbox-snapshot') useTeamMailboxStore.getState().apply(message)
+      if (message.type === 'team-mailbox-dead-letter') notifyMailboxDeadLetter(message)
       if (message.type === 'chat-debug-frames') useChatDebugStore.getState().apply(message)
       if (message.type === 'kill-failed') {
         // Restore optimistically removed session from pending-kill snapshot
@@ -1153,9 +1159,10 @@ export default function App() {
     autoStartAgent?: AutoStartAgent,
     kind?: 'terminal' | 'chat',
     claudeProfileId?: string,
-    approvalPolicy?: ChatApprovalPolicy
+    approvalPolicy?: ChatApprovalPolicy,
+    groupId?: string
   ) => {
-    sendMessage({ type: 'session-create', projectPath, name, command, host, autoStartChange, autoStartAgent, kind, claudeProfileId, approvalPolicy })
+    sendMessage({ type: 'session-create', projectPath, name, command, host, autoStartChange, autoStartAgent, kind, claudeProfileId, approvalPolicy, ...(groupId ? { groupId } : {}) })
     if (!host) setLastProjectPath(projectPath)
   }
 

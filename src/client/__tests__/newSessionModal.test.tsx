@@ -1018,10 +1018,14 @@ function setupFocusDom() {
 /** Hang the chat profile catalog until the test releases it. */
 function deferredCatalog() {
   let release!: (response: Response) => void
-  globalThis.fetch = (() =>
-    new Promise<Response>((resolve) => {
-      release = resolve
-    })) as unknown as typeof fetch
+  // Only the profile catalog hangs; the team-groups request answers at once
+  // (empty) so it cannot take over the held resolver.
+  globalThis.fetch = ((url: string) =>
+    String(url).startsWith('/api/chat/groups')
+      ? Promise.resolve(Response.json({ groups: [], errors: [] }))
+      : new Promise<Response>((resolve) => {
+        release = resolve
+      })) as unknown as typeof fetch
   return {
     succeed: (profiles: Array<{ id: string; label: string }> = [{ id: 'default', label: 'Default' }]) =>
       release(Response.json({ profiles, errors: [] })),
@@ -1476,5 +1480,64 @@ describe('NewSessionModal radiogroup keyboard navigation', () => {
     act(() => {
       renderer.unmount()
     })
+  })
+})
+
+describe('NewSessionModal team group picker', () => {
+  async function groupDialog(groupsResponse: unknown) {
+    setupDom()
+    const created: Array<{ path: string; groupId?: string }> = []
+    globalThis.fetch = (async (url: string) =>
+      String(url).startsWith('/api/chat/groups')
+        ? Response.json(groupsResponse)
+        : Response.json({ profiles: [{ id: 'default', label: 'Default' }], errors: [] })) as unknown as typeof fetch
+    let renderer!: TestRenderer.ReactTestRenderer
+    await act(async () => {
+      renderer = TestRenderer.create(
+        <NewSessionModal
+          isOpen
+          onClose={() => {}}
+          onCreate={(path, _name, _command, _host, _change, _agent, _kind, _profile, _policy, groupId) => {
+            created.push({ path, ...(groupId ? { groupId } : {}) })
+          }}
+          defaultProjectDir="/base"
+          commandPresets={DEFAULT_PRESETS}
+          defaultPresetId="claude"
+        />
+      )
+      await settle()
+    })
+    const select = () => renderer.root.findByProps({ 'aria-label': 'Group' })
+    const submit = () => act(() => {
+      renderer.root.findByType('form').props.onSubmit({ preventDefault: () => {} })
+    })
+    return { renderer, created, select, submit }
+  }
+
+  test('offers the team groups after "No group" and creates with the chosen one', async () => {
+    const dialog = await groupDialog({
+      groups: [
+        { id: 'devs', label: 'Developers', description: 'Build features' },
+        { id: 'qa', label: 'qa', description: '' },
+      ],
+      errors: [],
+    })
+    const options = dialog.select().findAllByType('option')
+    expect(options.map(option => option.props.value)).toEqual(['', 'devs', 'qa'])
+    expect(options[1]!.props.title).toBe('Build features')
+    act(() => { dialog.select().props.onChange({ target: { value: 'devs' } }) })
+    dialog.submit()
+    expect(dialog.created).toEqual([{ path: '/base', groupId: 'devs' }])
+    act(() => { dialog.renderer.unmount() })
+  })
+
+  test('creating without choosing a group sends none, and catalog problems show as warnings', async () => {
+    const dialog = await groupDialog({ groups: [], errors: ['/base/.kawai/groups/x.md: bad'] })
+    expect(dialog.select().props.value).toBe('')
+    expect(dialog.renderer.root.findAllByProps({ role: 'status' })
+      .some(node => node.children.includes('/base/.kawai/groups/x.md: bad'))).toBe(true)
+    dialog.submit()
+    expect(dialog.created).toEqual([{ path: '/base' }])
+    act(() => { dialog.renderer.unmount() })
   })
 })

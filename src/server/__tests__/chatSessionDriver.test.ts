@@ -18,6 +18,7 @@ import type {
   ChatContextUsage,
   ChatEvent,
   ChatUsageReport,
+  ChatWorker,
 } from '../../shared/chat'
 import type { SessionStatus } from '../../shared/types'
 import type { ChatWireRecorder } from '../chat/wireTap'
@@ -156,6 +157,8 @@ interface Harness {
   events: ChatEvent[]
   statuses: SessionStatus[]
   activities: Array<ChatActivity | null>
+  /** Each roster publish (workers design D2): the full projection. */
+  workers: ChatWorker[][]
   rateLimits: ChatUsageReport[]
   usageReports: ChatUsageReport[]
   contextUsage: Array<ChatContextUsage | null>
@@ -177,6 +180,8 @@ function createHarness(
     claudeExecutablePath?: string
     getProviderEnv?: () => Record<string, string>
     getApprovalPolicy?: () => ChatApprovalPolicy
+    teamMcpServer?: NonNullable<Options['mcpServers']>[string]
+    getSystemPromptAppend?: () => string | undefined
     /** Replaces the harness's cwd capture (e.g. with a throwing observer). */
     onCwdChanged?: (newCwd: string) => void
     wire?: ChatWireRecorder
@@ -188,11 +193,14 @@ function createHarness(
     claimUsagePull?: () => boolean
     /** Commands the fake queries' initializationResult() reports. */
     initializationCommands?: Array<Record<string, unknown>>
+    /** Persisted roster rows seeding the driver (workers design D6). */
+    recoveredWorkers?: ChatWorker[]
   } = {}
 ): Harness {
   const events: ChatEvent[] = []
   const statuses: SessionStatus[] = []
   const activities: Array<ChatActivity | null> = []
+  const workers: ChatWorker[][] = []
   const rateLimits: ChatUsageReport[] = []
   const usageReports: ChatUsageReport[] = []
   const contextUsage: Array<ChatContextUsage | null> = []
@@ -223,6 +231,7 @@ function createHarness(
     onEvent: (event) => events.push(event),
     onStatus: (status) => statuses.push(status),
     onActivity: (activity) => activities.push(activity),
+    onWorkers: (list) => workers.push(list),
     onRateLimit: (report) => rateLimits.push(report),
     onUsageReport: (report) => usageReports.push(report),
     onContextUsage: (usage, opts) => {
@@ -246,6 +255,7 @@ function createHarness(
     events,
     statuses,
     activities,
+    workers,
     rateLimits,
     usageReports,
     contextUsage,
@@ -544,6 +554,33 @@ describe('ChatSessionDriver', () => {
     expect(harness.fakes).toHaveLength(2)
     expect(harness.fakes[1]!.options.env?.ANTHROPIC_MODEL).toBe('gw-flash')
     expect(harness.fakes[1]!.options.env?.ANTHROPIC_BASE_URL).toBe(process.env.ANTHROPIC_BASE_URL)
+    harness.driver.kill()
+  })
+
+  test('the team prompt is appended to the preset and re-read only at the next spawn', async () => {
+    let prompt = '# Your role: QA\n\nTest it.'
+    let reads = 0
+    const harness = createHarness({ getSystemPromptAppend: () => { reads++; return prompt } })
+    harness.driver.send('hello')
+    expect(harness.fakes[0]!.options.systemPrompt).toEqual({
+      type: 'preset', preset: 'claude_code', append: '# Your role: QA\n\nTest it.',
+    })
+    // An edit while the process runs changes nothing for it.
+    prompt = '# Your role: QA\n\nTest it twice.'
+    harness.driver.send('again')
+    expect(reads).toBe(1)
+    harness.fakes[0]!.exit()
+    await flush()
+    harness.driver.send('after exit')
+    expect(harness.fakes[1]!.options.systemPrompt).toMatchObject({ append: '# Your role: QA\n\nTest it twice.' })
+    expect(reads).toBe(2)
+    harness.driver.kill()
+  })
+
+  test('without a team prompt the preset is unchanged', () => {
+    const harness = createHarness({ getSystemPromptAppend: () => '' })
+    harness.driver.send('hello')
+    expect(harness.fakes[0]!.options.systemPrompt).toEqual({ type: 'preset', preset: 'claude_code' })
     harness.driver.kill()
   })
 
@@ -2272,4 +2309,484 @@ describe('ChatSessionDriver cwd tracking', () => {
     expect(harness.cwds).toEqual(['/tmp/project/.worktrees/fix'])
     harness.driver.kill()
   })
+})
+
+describe('ChatSessionDriver workers', () => {
+  /** Roster publishes without elapsedMs, which ticks on the live clock. */
+  function roster(lists: ChatWorker[][]): unknown[][] {
+    return lists.map((list) =>
+      list.map(({ elapsedMs: _elapsed, ...body }) => body)
+    )
+  }
+
+  /** Assistant frame carrying one tool_use; a non-null parent = a worker's. */
+  function assistantToolUse(
+    id: string,
+    name: string,
+    parent: string | null
+  ): SDKMessage {
+    return {
+      type: 'assistant',
+      message: {
+        id: `msg_${id}`,
+        content: [{ type: 'tool_use', id, name, input: {} }],
+        role: 'assistant',
+      },
+      parent_tool_use_id: parent,
+      uuid: `uuid-${id}`,
+      session_id: 'sdk-1',
+    } as unknown as SDKMessage
+  }
+
+  /** A worker's tool_result frame (design D4: only nested spawns survive). */
+  function workerToolResult(toolUseId: string, parent: string): SDKMessage {
+    return {
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [{ type: 'tool_result', tool_use_id: toolUseId, content: 'done' }],
+      },
+      parent_tool_use_id: parent,
+    } as unknown as SDKMessage
+  }
+
+  /** A system task frame; fields follow sdk.d.ts verbatim. */
+  function taskFrame(fields: Record<string, unknown>): SDKMessage {
+    return { type: 'system', ...fields } as unknown as SDKMessage
+  }
+
+  /** The spawn prefix every roster test begins with (design D1). */
+  async function spawnWorker(
+    harness: Harness,
+    overrides: Record<string, unknown> = {}
+  ): Promise<void> {
+    const fake = harness.fakes[0]!
+    fake.push(assistantToolUse('toolu_agent', 'Agent', null))
+    fake.push(
+      taskFrame({
+        subtype: 'task_started',
+        task_id: 'task_1',
+        tool_use_id: 'toolu_agent',
+        description: 'Map the workspace',
+        subagent_type: 'Explore',
+        spawn_depth: 1,
+        task_type: 'local_agent',
+        ...overrides,
+      })
+    )
+    await flush()
+  }
+
+  test("a worker's traffic stays out of the parent transcript except nested spawns", async () => {
+    const harness = createHarness()
+    harness.driver.send('spawn one')
+    const fake = harness.fakes[0]!
+    fake.push(assistantToolUse('toolu_task', 'Task', null))
+    // The worker's own Bash call and its result: dropped (design D4).
+    fake.push(assistantToolUse('toolu_sub_bash', 'Bash', 'toolu_task'))
+    fake.push(workerToolResult('toolu_sub_bash', 'toolu_task'))
+    // The worker's chatter: dropped too.
+    fake.push({
+      type: 'assistant',
+      message: {
+        id: 'msg_chatter',
+        content: [{ type: 'text', text: 'worker chatter' }],
+        role: 'assistant',
+      },
+      parent_tool_use_id: 'toolu_task',
+      uuid: 'uuid-chatter',
+      session_id: 'sdk-1',
+    } as unknown as SDKMessage)
+    // A nested Agent call and its result: kept — the depth-2 row anchor.
+    fake.push(assistantToolUse('toolu_nested', 'Agent', 'toolu_task'))
+    fake.push(workerToolResult('toolu_nested', 'toolu_task'))
+    await flush()
+    expect(
+      harness.events
+        .filter((event) => event.type === 'tool_call')
+        .map((event) => event.toolCallId)
+    ).toEqual(['toolu_task', 'toolu_nested'])
+    expect(
+      harness.events
+        .filter((event) => event.type === 'tool_result')
+        .map((event) => event.toolCallId)
+    ).toEqual(['toolu_nested'])
+    expect(
+      harness.events.some((event) => event.type === 'assistant_text')
+    ).toBe(false)
+    harness.driver.kill()
+  })
+
+  test('task frames build the roster: spawn, fill, last tool, settle', async () => {
+    const harness = createHarness()
+    harness.driver.send('research')
+    const fake = harness.fakes[0]!
+    fake.push(assistantToolUse('toolu_agent', 'Agent', null))
+    await flush()
+    fake.push(
+      taskFrame({
+        subtype: 'task_started',
+        task_id: 'task_1',
+        tool_use_id: 'toolu_agent',
+        description: 'Map the workspace',
+        subagent_type: 'Explore',
+        spawn_depth: 1,
+        task_type: 'local_agent',
+      })
+    )
+    await flush()
+    fake.push(
+      taskFrame({
+        subtype: 'task_progress',
+        task_id: 'task_1',
+        tool_use_id: 'toolu_agent',
+        description: 'Map the workspace',
+        usage: { total_tokens: 12_400, tool_uses: 6, duration_ms: 31_000 },
+        last_tool_name: 'Grep',
+      })
+    )
+    await flush()
+    fake.push(
+      taskFrame({
+        subtype: 'task_notification',
+        task_id: 'task_1',
+        tool_use_id: 'toolu_agent',
+        status: 'completed',
+        output_file: '/home/u/.claude/subagents/agent-task_1.jsonl',
+        summary: 'Mapped 14 files',
+      })
+    )
+    await flush()
+    expect(roster(harness.workers)).toEqual([
+      [{ workerId: 'toolu_agent', status: 'running', live: true }],
+      [
+        {
+          workerId: 'toolu_agent',
+          taskId: 'task_1',
+          agentType: 'Explore',
+          description: 'Map the workspace',
+          depth: 1,
+          status: 'running',
+          live: true,
+        },
+      ],
+      [
+        {
+          workerId: 'toolu_agent',
+          taskId: 'task_1',
+          agentType: 'Explore',
+          description: 'Map the workspace',
+          depth: 1,
+          status: 'running',
+          live: true,
+          lastTool: 'Grep',
+        },
+      ],
+      [
+        {
+          workerId: 'toolu_agent',
+          taskId: 'task_1',
+          agentType: 'Explore',
+          description: 'Map the workspace',
+          depth: 1,
+          status: 'completed',
+          live: false,
+          lastTool: 'Grep',
+          summary: 'Mapped 14 files',
+        },
+      ],
+    ])
+    expect(harness.driver.getWorkers()).toMatchObject([
+      { workerId: 'toolu_agent', status: 'completed', live: false },
+    ])
+    harness.driver.kill()
+  })
+
+  test('the background level set governs live only; a late notification still lands', async () => {
+    const harness = createHarness()
+    harness.driver.send('research')
+    const fake = harness.fakes[0]!
+    await spawnWorker(harness, { is_backgrounded: true })
+    const before = harness.workers.length
+    fake.push(
+      taskFrame({
+        subtype: 'background_tasks_changed',
+        tasks: [
+          { task_id: 'task_1', task_type: 'local_agent', description: 'Map' },
+        ],
+      })
+    )
+    await flush()
+    // Already live: the level's arrival changes nothing (no publish).
+    expect(harness.workers.length).toBe(before)
+    // The turn ends; the set drops the task before its notification.
+    fake.push(result('success'))
+    fake.push(taskFrame({ subtype: 'background_tasks_changed', tasks: [] }))
+    await flush()
+    expect(roster(harness.workers).at(-1)).toEqual([
+      {
+        workerId: 'toolu_agent',
+        taskId: 'task_1',
+        agentType: 'Explore',
+        description: 'Map the workspace',
+        depth: 1,
+        status: 'running',
+        live: false,
+        // The gap: not live, so the session is not working either (D7).
+      },
+    ])
+    expect(harness.statuses.at(-1)).toBe('waiting')
+    // The notification after the drop still writes the real outcome (D3).
+    fake.push(
+      taskFrame({
+        subtype: 'task_notification',
+        task_id: 'task_1',
+        tool_use_id: 'toolu_agent',
+        status: 'completed',
+        output_file: '/x',
+        summary: 'Mapped 14 files',
+      })
+    )
+    await flush()
+    expect(roster(harness.workers).at(-1)).toEqual([
+      expect.objectContaining({
+        status: 'completed',
+        live: false,
+        summary: 'Mapped 14 files',
+      }),
+    ])
+    harness.driver.kill()
+  })
+
+  test('a foreground worker stays live when the level set omits it', async () => {
+    const harness = createHarness()
+    harness.driver.send('research')
+    const fake = harness.fakes[0]!
+    await spawnWorker(harness)
+    const before = harness.workers.length
+    fake.push(taskFrame({ subtype: 'background_tasks_changed', tasks: [] }))
+    fake.push(result('success'))
+    await flush()
+    // The empty set never touched the foreground row (D3), and its liveness
+    // holds the session at working after the turn (D7).
+    expect(harness.workers.length).toBe(before)
+    expect(harness.driver.getWorkers()).toMatchObject([
+      { workerId: 'toolu_agent', status: 'running', live: true },
+    ])
+    expect(harness.statuses.at(-1)).toBe('working')
+    harness.driver.kill()
+  })
+
+  test('a live worker holds working with no turn running', async () => {
+    const harness = createHarness()
+    harness.driver.send('research')
+    const fake = harness.fakes[0]!
+    await spawnWorker(harness)
+    fake.push(result('success'))
+    await flush()
+    expect(harness.statuses.at(-1)).toBe('working')
+    // And back to waiting once it settles.
+    fake.push(
+      taskFrame({
+        subtype: 'task_notification',
+        task_id: 'task_1',
+        tool_use_id: 'toolu_agent',
+        status: 'failed',
+        output_file: '/x',
+        summary: 'no match',
+      })
+    )
+    await flush()
+    expect(harness.statuses.at(-1)).toBe('waiting')
+    harness.driver.kill()
+  })
+
+  test('driver death settles outcome-less workers as stopped', async () => {
+    const harness = createHarness()
+    harness.driver.send('research')
+    await spawnWorker(harness)
+    harness.fakes[0]!.exit()
+    await flush()
+    expect(harness.driver.isDead).toBe(true)
+    expect(harness.driver.getWorkers()).toMatchObject([
+      { workerId: 'toolu_agent', status: 'stopped', live: false },
+    ])
+  })
+
+  test('interrupt settles outcome-less workers as stopped', async () => {
+    const harness = createHarness()
+    harness.driver.send('research')
+    await spawnWorker(harness)
+    harness.driver.interrupt()
+    expect(harness.driver.getWorkers()).toMatchObject([
+      { workerId: 'toolu_agent', status: 'stopped', live: false },
+    ])
+    harness.driver.kill()
+  })
+
+  test('kill settles outcome-less workers as stopped', async () => {
+    const harness = createHarness()
+    harness.driver.send('research')
+    await spawnWorker(harness)
+    harness.driver.kill()
+    expect(harness.driver.getWorkers()).toMatchObject([
+      { workerId: 'toolu_agent', status: 'stopped', live: false },
+    ])
+  })
+
+  test('archive settles outcome-less workers as stopped', async () => {
+    // ChatSessionManager.archive composes exactly these two calls; pinned
+    // here so the composition cannot drift.
+    const harness = createHarness()
+    harness.driver.send('research')
+    await spawnWorker(harness)
+    harness.driver.interrupt()
+    harness.driver.kill()
+    expect(harness.driver.getWorkers()).toMatchObject([
+      { workerId: 'toolu_agent', status: 'stopped', live: false },
+    ])
+  })
+
+  test('a rejected spawn settles its row and frees the session', async () => {
+    const harness = createHarness()
+    harness.driver.send('spawn a worker')
+    const fake = harness.fakes[0]!
+    fake.push(assistantToolUse('toolu_agent', 'Agent', null))
+    await flush()
+    expect(harness.statuses.at(-1)).toBe('working')
+    // The spawn is rejected before any task starts: the error result is the
+    // only bookend the row will ever get.
+    fake.push({
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [
+          {
+            type: 'tool_result',
+            tool_use_id: 'toolu_agent',
+            content: 'Unknown agent type "scout"',
+            is_error: true,
+          },
+        ],
+      },
+      parent_tool_use_id: null,
+    } as unknown as SDKMessage)
+    fake.push(result('success'))
+    await flush()
+    expect(roster(harness.workers).at(-1)).toEqual([
+      { workerId: 'toolu_agent', status: 'failed', live: false, summary: 'Unknown agent type "scout"' },
+    ])
+    expect(harness.statuses.at(-1)).toBe('waiting')
+    harness.driver.kill()
+  })
+
+  test("a worker's stream stays out of the parent transcript and off its id", async () => {
+    const harness = createHarness()
+    harness.driver.send('stream')
+    const fake = harness.fakes[0]!
+    fake.push(assistantToolUse('toolu_task', 'Task', null))
+    await flush()
+    // A worker's message_start must not hijack the parent's streaming id…
+    fake.push({
+      type: 'stream_event',
+      parent_tool_use_id: 'toolu_task',
+      event: { type: 'message_start', message: { id: 'msg_worker' } },
+      uuid: 'w-0',
+      session_id: 'sdk-1',
+    } as unknown as SDKMessage)
+    // …and its text deltas must not reach the parent transcript.
+    fake.push({
+      type: 'stream_event',
+      parent_tool_use_id: 'toolu_task',
+      event: {
+        type: 'content_block_delta',
+        index: 0,
+        delta: { type: 'text_delta', text: 'worker chatter' },
+      },
+      uuid: 'w-1',
+      session_id: 'sdk-1',
+    } as unknown as SDKMessage)
+    await flush()
+    expect(harness.events.filter((event) => event.type === 'assistant_delta')).toEqual([])
+    // The parent's own stream still maps, under its own message id.
+    fake.push({
+      type: 'stream_event',
+      parent_tool_use_id: null,
+      event: { type: 'message_start', message: { id: 'msg_parent' } },
+      uuid: 'p-0',
+      session_id: 'sdk-1',
+    } as unknown as SDKMessage)
+    fake.push({
+      type: 'stream_event',
+      parent_tool_use_id: null,
+      event: {
+        type: 'content_block_delta',
+        index: 0,
+        delta: { type: 'text_delta', text: 'parent text' },
+      },
+      uuid: 'p-1',
+      session_id: 'sdk-1',
+    } as unknown as SDKMessage)
+    await flush()
+    const deltas = harness.events.filter(
+      (event): event is Extract<ChatEvent, { type: 'assistant_delta' }> =>
+        event.type === 'assistant_delta'
+    )
+    expect(deltas.map((event) => `${event.messageId}:${event.delta}`))
+      .toEqual(['msg_parent:parent text'])
+    harness.driver.kill()
+  })
+
+  test('recovered rows seed the fresh roster and survive later publishes', async () => {
+    const harness = createHarness({
+      recoveredWorkers: [
+        { workerId: 'toolu_done', status: 'completed', live: false, elapsedMs: 0, summary: 'mapped' },
+      ],
+    })
+    harness.driver.send('research')
+    // Before any publish this turn, the recovered outcome is still on offer.
+    expect(harness.driver.getWorkers()).toMatchObject([
+      { workerId: 'toolu_done', status: 'completed', live: false, summary: 'mapped' },
+    ])
+    await spawnWorker(harness)
+    // The first publish appends to the seeded roster, not replaces it.
+    expect(
+      roster(harness.workers).at(-1)?.map((worker) => (worker as { workerId: string }).workerId)
+    ).toEqual(['toolu_done', 'toolu_agent'])
+    harness.driver.kill()
+  })
+})
+
+
+test('mailbox tools are registered and allowed without cards under either policy', async () => {
+  const { MAILBOX_ALLOWED_TOOLS } = await import('../team/mailboxTools')
+  for (const policy of ['manual', 'auto'] as const) {
+    const server = { type: 'stdio' as const, command: 'mailbox-test' }
+    const h = createHarness({ teamMcpServer: server, getApprovalPolicy: () => policy })
+    h.driver.start()
+    const options = h.fakes[0]!.options
+    expect(options.mcpServers).toEqual({ 'kawai-team': server })
+    expect(options.allowedTools).toEqual(MAILBOX_ALLOWED_TOOLS)
+    for (const name of MAILBOX_ALLOWED_TOOLS) {
+      const answer = await options.canUseTool!(name, {}, { signal: new AbortController().signal, toolUseID: 'mail-call', requestId: 'mail-request' })
+      expect(answer?.behavior).toBe('allow')
+    }
+    expect(h.events.some(event => event.type === 'approval_request')).toBe(false)
+    expect(h.driver.getPendingRequests()).toEqual([])
+    h.driver.kill()
+  }
+})
+
+test('peer delivery pushes a peer-origin turn and emits display metadata without a user copy', async () => {
+  const PEER = { messageId: 'mail-1', senderSession: 'lead', senderGroup: null, priority: 'normal' as const, originPath: '/repo', tags: [], threadId: 'mail-1', body: 'Review this', possibleDuplicate: false }
+  const { formatEnvelope } = await import('../team/envelope')
+  const h = createHarness()
+  h.driver.deliver(PEER)
+  expect(h.events.find(event => event.type === 'peer_message')).toMatchObject(PEER)
+  const prompt = await h.fakes[0]!.pullPrompt()
+  expect(prompt?.origin).toEqual({ kind: 'peer', from: PEER.senderSession })
+  expect(prompt?.message.content).toBe(formatEnvelope(PEER))
+  expect(h.events.some(event => event.type === 'user_message')).toBe(false)
+  expect(() => h.driver.deliver(PEER)).toThrow('not idle')
+  h.driver.kill()
 })

@@ -30,9 +30,11 @@ import type {
   ChatContextUsage,
   ChatEvent,
   ChatPendingRequest,
+  ChatPeerMessage,
   ChatQuestion,
   ChatQuestionAnswer,
   ChatUsageReport,
+  ChatWorker,
 } from '../../shared/chat'
 import type { SessionStatus } from '../../shared/types'
 import {
@@ -51,6 +53,16 @@ import {
   type ChatActivityState,
 } from './chatActivity'
 import {
+  anyWorkerLive,
+  initialChatWorkersState,
+  projectWorkers,
+  recoveredWorkersState,
+  reduceWorkers,
+  taskFrameToInput,
+  type ChatWorkersInput,
+  type ChatWorkersState,
+} from './chatWorkers'
+import {
   ChatContextTracker,
   parsePositiveTokens,
   sumRequestUsage,
@@ -66,6 +78,9 @@ import { ChatCommandTracker, type RawChatCommand } from './chatCommands'
 import { decideApproval } from './approvalPolicy'
 import { resolveClaudeProfile } from './ClaudeProfiles'
 import { TurnQueue } from './TurnQueue'
+import { MAILBOX_ALLOWED_TOOLS } from '../team/mailboxTools'
+import { TEAM_MCP_SERVER } from '../team/teamPrompt'
+import { formatEnvelope } from '../team/envelope'
 import { createWireTappedSpawn, type ChatWireRecorder } from './wireTap'
 
 /**
@@ -108,6 +123,18 @@ export interface ChatSessionDriverOptions {
    * (tests, development fixture), leaving SDK resolution unchanged.
    */
   claudeExecutablePath?: string
+  /**
+   * Text appended to the preset system prompt, read at every spawn (team
+   * role + mailbox note, agent-teams D7). Omitted/empty = preset only.
+   */
+  getSystemPromptAppend?: () => string | undefined
+  teamMcpServer?: NonNullable<Options['mcpServers']>[string]
+  /**
+   * Recovered roster rows (workers design D6) seeding a fresh driver, so
+   * outcomes from before a restart or an archive/restore stay in the roster
+   * and the sidecar instead of being replaced by the first publish.
+   */
+  recoveredWorkers?: ChatWorker[]
   onEvent: (event: ChatEvent) => void
   /** Applied immediately on every derived status change. */
   onStatus: (status: SessionStatus) => void
@@ -117,6 +144,12 @@ export interface ChatSessionDriverOptions {
    * sequenced, buffered, or replayed like events.
    */
   onActivity?: (activity: ChatActivity | null) => void
+  /**
+   * The spawned-worker roster (workers design D2): the full projection,
+   * called whenever it changes — never per elapsed tick. Ephemeral like
+   * activity: never sequenced, persisted only through the sidecar (D6).
+   */
+  onWorkers?: (workers: ChatWorker[]) => void
   /**
    * Context usage (context meter designs D1/D7): the latest reading, fired
    * when a new per-request usage lands, when compaction adopts a
@@ -201,6 +234,17 @@ export class ChatSessionDriver {
   private lastStatus: SessionStatus = 'waiting'
   /** Live-turn activity state (design D3); null phase when no turn runs. */
   private activityState: ChatActivityState = initialChatActivityState()
+  /**
+   * Spawned-worker roster state (workers design D3); reduced from the task
+   * edge stream and the background level set, projected on change.
+   */
+  private workersState: ChatWorkersState = initialChatWorkersState()
+  /**
+   * Agent/Task tool_use ids, parent and nested alike (design D4): the only
+   * worker traffic kept in the parent transcript, and the join keys that say
+   * a subagent tool_result belongs to a kept nested-spawn call.
+   */
+  private readonly agentToolCallIds = new Set<string>()
   /** Context-meter state (context meter designs D1–D3); see contextUsage.ts. */
   private readonly context = new ChatContextTracker()
   private dead = false
@@ -215,6 +259,10 @@ export class ChatSessionDriver {
     this.commands = new ChatCommandTracker(options.onCommandState)
     this.claudeExecutablePath = options.claudeExecutablePath
     this.sessionProjectPath = options.projectPath
+    // Workers design D6: carry the recovered outcomes into the fresh roster.
+    if (options.recoveredWorkers?.length) {
+      this.workersState = recoveredWorkersState(options.recoveredWorkers)
+    }
   }
 
   get isDead(): boolean {
@@ -273,8 +321,29 @@ export class ChatSessionDriver {
     this.refreshStatus()
   }
 
+  /** Peer submission is display state; only the CLI transcript proves receipt. */
+  deliver(envelope: ChatPeerMessage): void {
+    if (this.killed) throw new Error('Recipient was killed')
+    if (this.activeTurnId || this.pendingRequests.size || anyWorkerLive(this.workersState)) {
+      throw new Error('Recipient is not idle')
+    }
+    this.ensureQuery()
+    this.turnCounter += 1
+    this.activeTurnId = `turn-${this.turnCounter}`
+    this.emit({ type: 'turn_started', turnId: this.activeTurnId })
+    const text = formatEnvelope(envelope)
+    this.trackEcho(text)
+    this.emit({ type: 'peer_message', turnId: this.activeTurnId, ...envelope })
+    this.queue.push({
+      type: 'user', message: { role: 'user', content: text },
+      parent_tool_use_id: null,
+      origin: { kind: 'peer', from: envelope.senderSession },
+    })
+    this.refreshStatus()
+  }
+
   /** Stop button: abort the in-flight turn, drop queued sends, cancel asks. */
-  interrupt(): void {
+  interrupt(): Promise<void> {
     this.queue.clearPending()
     this.cancelAllRequests('interrupted')
     if (this.activeTurnId) {
@@ -284,13 +353,19 @@ export class ChatSessionDriver {
       // Turn boundary: re-resolve the threshold for the next turn (design D2).
       this.refreshContextThreshold()
     }
+    // Workers die with the aborted turn (design D3): outcome-less rows
+    // settle as stopped so none can keep reading as live.
+    this.feedWorkers({ type: 'process_end' })
     const query = this.query
     if (query) {
-      void query.interrupt().catch(() => {
+      const completed = query.interrupt().then(() => {}).catch(() => {
         // The process may already be gone; the stream loop handles death.
       })
+      this.refreshStatus()
+      return completed
     }
     this.refreshStatus()
+    return Promise.resolve()
   }
 
   /** Kill the session: abort, settle pending approvals with a denial, stop. */
@@ -299,6 +374,9 @@ export class ChatSessionDriver {
     this.queue.end()
     this.cancelAllRequests('killed')
     this.activeTurnId = null
+    // Archive and kill both end the process (design D3): every worker still
+    // without an outcome settles as stopped, nothing survives as live.
+    this.feedWorkers({ type: 'process_end' })
     this.commands.markUnavailable()
     const query = this.query
     this.query = null
@@ -475,10 +553,21 @@ export class ChatSessionDriver {
     const { executable: profileExecutable, ...launchOptions } = launch
     const executablePath = profileExecutable ?? this.claudeExecutablePath
     const wire = this.options.wire
+    const systemPromptAppend = this.options.getSystemPromptAppend?.()
     const options: Options = {
       cwd: this.sessionProjectPath,
       // Option parity with a terminal `claude` session in the project dir.
-      systemPrompt: { type: 'preset', preset: 'claude_code' },
+      // The team role + mailbox note (agent-teams D7) is read per spawn: a
+      // running process keeps its prompt, the next spawn gets edits.
+      systemPrompt: {
+        type: 'preset',
+        preset: 'claude_code',
+        ...(systemPromptAppend ? { append: systemPromptAppend } : {}),
+      },
+      ...(this.options.teamMcpServer ? {
+        mcpServers: { [TEAM_MCP_SERVER]: this.options.teamMcpServer },
+        allowedTools: MAILBOX_ALLOWED_TOOLS,
+      } : {}),
       settingSources: ['user', 'project', 'local'],
       permissionMode: 'default',
       includePartialMessages: true,
@@ -595,6 +684,9 @@ export class ChatSessionDriver {
     this.dead = true
     this.query = null
     this.activeTurnId = null
+    // The process is gone (design D3): workers cannot have outcomes any
+    // more, so any still-open row settles as stopped rather than wedging.
+    this.feedWorkers({ type: 'process_end' })
     this.feedActivity({ type: 'turn_end' })
     this.cancelAllRequests('killed')
     this.emit({ type: 'error', message: reason })
@@ -655,8 +747,11 @@ export class ChatSessionDriver {
     const turnId = this.activeTurnId
     if (!turnId) return
     const messageId = message.message.id ?? message.uuid
+    const subagent = isSubagentContentFrame(message)
     for (const block of message.message.content) {
       if (block.type === 'text') {
+        // Worker chatter stays out of the parent transcript (design D4).
+        if (subagent) continue
         this.emit({
           type: 'assistant_text',
           turnId,
@@ -664,6 +759,10 @@ export class ChatSessionDriver {
           text: block.text,
         })
       } else if (block.type === 'tool_use') {
+        // D4 carve-out: a worker's own Agent/Task call is the anchor of the
+        // nested worker's row, so it is emitted exactly like the parent's.
+        // Everything else a worker runs stays out.
+        if (subagent && !isAgentSpawnTool(block.name)) continue
         this.seenToolCallIds.add(block.id)
         this.emit({
           type: 'tool_call',
@@ -672,7 +771,12 @@ export class ChatSessionDriver {
           tool: block.name,
           input: block.input,
         })
-        if (!isSubagentFrame(message)) {
+        if (isAgentSpawnTool(block.name)) {
+          this.agentToolCallIds.add(block.id)
+          // The row anchor (design D1): the spawning call's id is the workerId.
+          this.feedWorkers({ type: 'spawn', toolCallId: block.id })
+        }
+        if (!subagent) {
           this.feedActivity({
             type: 'tool_call',
             toolCallId: block.id,
@@ -687,6 +791,10 @@ export class ChatSessionDriver {
   private handlePartial(message: SDKPartialAssistantMessage): void {
     const turnId = this.activeTurnId
     if (!turnId) return
+    // Worker chatter stays out of the parent transcript (design D4): its
+    // stream must neither leak deltas nor hijack the parent's streaming id —
+    // filtering the completed assistant message cannot undo either.
+    if (isSubagentContentFrame(message)) return
     const event = message.event
     if (event.type === 'message_start') this.streamingMessageId = event.message.id
     if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
@@ -697,7 +805,7 @@ export class ChatSessionDriver {
         delta: event.delta.text,
       })
     }
-    if (event.type === 'content_block_start' && !isSubagentFrame(message)) {
+    if (event.type === 'content_block_start') {
       const input = contentBlockToInput(event.content_block)
       if (input) this.feedActivity(input)
     }
@@ -711,8 +819,13 @@ export class ChatSessionDriver {
       this.maybeEchoUserText(content, turnId)
       return
     }
+    const subagent = isSubagentContentFrame(message)
     for (const block of content) {
       if (block.type === 'tool_result') {
+        // D4 carve-out: only the tool_result of a kept Agent/Task call (a
+        // nested spawn) rides the parent transcript; a worker's own tool
+        // results stay out.
+        if (subagent && !this.agentToolCallIds.has(block.tool_use_id)) continue
         this.seenToolCallIds.add(block.tool_use_id)
         this.emit({
           type: 'tool_result',
@@ -721,10 +834,21 @@ export class ChatSessionDriver {
           output: toolResultText(block.content),
           isError: block.is_error,
         })
-        if (!isSubagentFrame(message)) {
+        // A rejected spawn never starts a task, so no task frame can settle
+        // its row — the error result is the only bookend the worker gets.
+        // Without it the row stays live and holds the session at working.
+        if (block.is_error && this.agentToolCallIds.has(block.tool_use_id)) {
+          this.feedWorkers({
+            type: 'spawn_rejected',
+            toolCallId: block.tool_use_id,
+            summary: toolResultText(block.content),
+          })
+        }
+        if (!subagent) {
           this.feedActivity({ type: 'tool_result', toolCallId: block.tool_use_id })
         }
       } else if (block.type === 'text') {
+        if (subagent) continue
         this.maybeEchoUserText(block.text, turnId)
       }
     }
@@ -818,7 +942,15 @@ export class ChatSessionDriver {
       )
       this.emit({ type: 'notice', text: 'Context compacted', kind: 'compacted' })
     }
-    if (isSubagentFrame(message)) return
+    // The task_* edges and the background level set feed the worker roster
+    // (design D3); they never reach the activity reducer, whose own inputs
+    // are status and api_retry only.
+    const rosterInput = taskFrameToInput(message)
+    if (rosterInput) {
+      this.feedWorkers(rosterInput)
+      return
+    }
+    if (isSubagentContentFrame(message)) return
     const input = systemFrameToInput(message)
     if (input) this.feedActivity(input)
     // Other system subtypes are informational; ignored.
@@ -843,6 +975,9 @@ export class ChatSessionDriver {
   }
 
   private readonly canUseTool: CanUseTool = (toolName, input, toolOptions) => {
+    if (this.options.teamMcpServer && MAILBOX_ALLOWED_TOOLS.includes(toolName)) {
+      return Promise.resolve({ behavior: 'allow' } as PermissionResult)
+    }
     const requestId = `req-${crypto.randomUUID()}`
     const turnId = this.activeTurnId ?? 'turn-0'
     const policy = this.options.getApprovalPolicy?.() ?? 'manual'
@@ -932,10 +1067,13 @@ export class ChatSessionDriver {
   }
 
   private refreshStatus(): void {
+    // D7: a live worker holds the session at working just like an in-flight
+    // turn; permission still wins. Liveness, not status: a worker in the
+    // completion gap (running, left the set) must not hold the session.
     const next: SessionStatus =
       this.pendingRequests.size > 0
         ? 'permission'
-        : this.activeTurnId
+        : this.activeTurnId || anyWorkerLive(this.workersState)
           ? 'working'
           : 'waiting'
     if (next !== this.lastStatus) {
@@ -964,6 +1102,25 @@ export class ChatSessionDriver {
   }
 
   /**
+   * One roster input (design D3). The reducer returns the same reference on
+   * a no-op input (a repeated last-tool), which is the publish gate: the
+   * full projection goes out exactly when the roster changed, elapsed times
+   * computed fresh so clients re-anchor their timers on every publish.
+   */
+  private feedWorkers(input: ChatWorkersInput): void {
+    const next = reduceWorkers(this.workersState, input)
+    if (next === this.workersState) return
+    this.workersState = next
+    this.options.onWorkers?.(projectWorkers(this.workersState))
+    this.refreshStatus()
+  }
+
+  /** Current roster projection with elapsed times computed now (design D2). */
+  getWorkers(): ChatWorker[] {
+    return projectWorkers(this.workersState)
+  }
+
+  /**
    * Per-request context usage (design D1): an assistant frame carries the
    * latest request's usage — input plus cache reads/creations plus output —
    * which is exactly what the next request pays, never the session total.
@@ -971,7 +1128,7 @@ export class ChatSessionDriver {
    * tool's own requests cannot move the parent's meter.
    */
   private readContextUsage(message: SDKAssistantMessage): void {
-    if (isSubagentFrame(message)) return
+    if (isSubagentContentFrame(message)) return
     const usage = message.message.usage
     if (!usage) return
     this.applyContextStep(
@@ -1056,13 +1213,22 @@ export class ChatSessionDriver {
 }
 
 /**
- * Subagent frames (a Task tool's own requests, thinking, and tool traffic)
- * must not disturb the parent turn's activity row (design D3): without this,
- * a running Task would flicker between "Thinking" and "Running Task".
+ * Subagent *content* frames (design D4): an assistant/user frame whose
+ * `parent_tool_use_id` is set comes from a worker, so its text and tool
+ * traffic stay out of the parent transcript — except the worker's own
+ * Agent/Task calls, whose emission anchors the nested worker's row. The same
+ * field on stream/system frames carries other meanings (e.g. a tool_progress
+ * heartbeat names its parent tool call); there it only suppresses the
+ * activity row, as it did before this change.
  */
-function isSubagentFrame(frame: object): boolean {
+function isSubagentContentFrame(frame: object): boolean {
   const parent = (frame as { parent_tool_use_id?: unknown }).parent_tool_use_id
   return parent != null
+}
+
+/** The tools that spawn a worker (design D1): both names, current and old. */
+function isAgentSpawnTool(toolName: string): boolean {
+  return toolName === 'Agent' || toolName === 'Task'
 }
 
 function validateAnswers(

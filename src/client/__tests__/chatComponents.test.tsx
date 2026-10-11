@@ -1,12 +1,13 @@
 import { afterEach, describe, expect, jest, test } from 'bun:test'
 import TestRenderer, { act, type ReactTestInstance } from 'react-test-renderer'
-import type { ChatActivity, ChatCommandState, ChatContextUsage, ChatEvent, ChatPendingRequest, ChatUsageReport, ChatWireFrame } from '@shared/chat'
+import type { ChatActivity, ChatCommandState, ChatContextUsage, ChatEvent, ChatPendingRequest, ChatUsageReport, ChatWireFrame, ChatWorker } from '@shared/chat'
 import type { ClientMessage, ServerMessage, Session } from '@shared/types'
 import ChatRequests from '../components/chat/ChatRequests'
 import ChatMessages from '../components/chat/ChatMessages'
 import ChatDebugPanel from '../components/chat/ChatDebugPanel'
 import ChatView from '../components/chat/ChatView'
 import ChatActivityRow from '../components/chat/ChatActivityRow'
+import ChatWorkersStrip from '../components/chat/ChatWorkersStrip'
 import { formatContextTokens } from '../components/chat/ChatContextMeter'
 import UsageBar from '../components/chat/UsageBar'
 import { closedDebugView, useChatDebugStore, type ChatDebugView } from '../stores/chatDebugStore'
@@ -921,6 +922,26 @@ describe('/clear, /reset, /new', () => {
     h.renderer.unmount()
   })
 
+  test('the team group carries over to the new chat', () => {
+    const h = renderClearable({ ...chatSession, groupId: 'devs' } as Session)
+    h.type('/clear')
+    h.submit()
+    expect(h.sent.filter(message => message.type === 'session-create')).toEqual([{
+      type: 'session-create', projectPath: '/tmp/project', kind: 'chat',
+      claudeProfileId: 'default', approvalPolicy: 'manual', groupId: 'devs', cloneFromSessionId: 'chat-1',
+    }])
+    h.renderer.unmount()
+  })
+
+  test.each(['/clear', '/reset', '/new'])('%s clones the stored role when its group file is missing', (command) => {
+    const h = renderClearable({ ...chatSession, groupId: 'devs', groupMissing: true } as Session)
+    h.type(command); h.submit()
+    expect(h.sent.find(message => message.type === 'session-create')).toMatchObject({ groupId: 'devs', cloneFromSessionId: 'chat-1' })
+    h.deliver(newChatCreated('chat-clone'))
+    expect(h.sent.filter(message => message.type === 'chat-archive')).toEqual([{ type: 'chat-archive', sessionId: 'chat-1' }])
+    h.renderer.unmount()
+  })
+
   test('a creation error leaves the previous chat untouched', () => {
     const h = renderClearable()
     h.type('/clear')
@@ -1452,5 +1473,277 @@ describe('formatContextTokens', () => {
     expect(formatContextTokens(999_950)).toBe('1M')
     expect(formatContextTokens(1_000_000)).toBe('1M')
     expect(formatContextTokens(1_500_000)).toBe('1.5M')
+  })
+})
+
+describe('chat workers', () => {
+  const SESSION = 'chat-workers-1'
+  const agentCall = (toolCallId: string): ChatEvent => ({
+    type: 'tool_call', id: `event-${toolCallId}`, sequence: 0, at: 'now', turnId: 'turn-1',
+    toolCallId, tool: 'Agent', input: {},
+  })
+  const rosterWorker = (workerId: string, overrides: Partial<ChatWorker> = {}): ChatWorker => ({
+    workerId,
+    taskId: `task-${workerId}`,
+    agentType: 'Explore',
+    description: 'Map the workspace',
+    depth: 1,
+    status: 'running',
+    live: true,
+    lastTool: 'Grep',
+    elapsedMs: 4_000,
+    ...overrides,
+  })
+  const seedWorkers = (workers: ChatWorker[]) => {
+    act(() => { useChatStore.getState().setWorkers(SESSION, workers) })
+  }
+  afterEach(() => useChatStore.setState({ sessions: {}, workerBodies: {} }))
+
+  test('an Agent call with a roster entry renders the worker summary row', () => {
+    seedWorkers([rosterWorker('toolu_w1')])
+    const renderer = TestRenderer.create(
+      <ChatMessages sessionId={SESSION} events={[agentCall('toolu_w1')]} />
+    )
+    const summary = renderer.root.findByType('summary')
+    const text = textOf(summary)
+    expect(text).toContain('Agent · Explore')
+    expect(text).toContain('Map the workspace')
+    expect(text).toContain('· Grep')
+    // Live elapsed anchors on the client clock; only its shape is stable.
+    expect(renderer.root.findByProps({ 'data-testid': 'chat-worker-elapsed' })).toBeDefined()
+    renderer.unmount()
+  })
+
+  test('a worker row absorbs its paired tool result like any other tool', () => {
+    seedWorkers([rosterWorker('toolu_w1', { status: 'completed', live: false })])
+    const renderer = TestRenderer.create(
+      <ChatMessages sessionId={SESSION} events={[agentCall('toolu_w1'), {
+        type: 'tool_result', id: 'r-w1', sequence: 1, at: 'now', turnId: 'turn-1',
+        toolCallId: 'toolu_w1', output: 'Found three packages.', isError: false,
+      }]} />
+    )
+    expect(renderer.root.findAllByProps({ 'data-testid': 'chat-worker-row' })).toHaveLength(1)
+    expect(renderer.root.findAllByType('summary')).toHaveLength(1)
+    renderer.unmount()
+  })
+
+  test('a roster-less Agent call falls back to the plain tool card', () => {
+    const renderer = TestRenderer.create(
+      <ChatMessages sessionId={SESSION} events={[agentCall('toolu_unknown')]} />
+    )
+    expect(textOf(renderer.root.findByType('summary'))).toBe('Agent')
+    expect(renderer.root.findAllByProps({ 'data-testid': 'chat-worker-row' })).toHaveLength(0)
+    // A non-Agent tool call never becomes a worker row even with a session.
+    const plain = TestRenderer.create(<ChatMessages sessionId={SESSION} events={[{
+      type: 'tool_call', id: 'e-b', sequence: 0, at: 'now', turnId: 'turn-1',
+      toolCallId: 'toolu_b', tool: 'Bash', input: { command: 'ls' },
+    }]} />)
+    expect(textOf(plain.root.findByType('summary'))).toBe('Bash(ls)')
+    renderer.unmount()
+    plain.unmount()
+  })
+
+  test('the depth badge marks nested spawns only', () => {
+    seedWorkers([
+      rosterWorker('toolu_top', { depth: 1 }),
+      rosterWorker('toolu_nested', { depth: 2 }),
+      rosterWorker('toolu_unknown', { depth: undefined }),
+    ])
+    const renderer = TestRenderer.create(<ChatMessages sessionId={SESSION} events={[
+      agentCall('toolu_top'), agentCall('toolu_nested'), agentCall('toolu_unknown'),
+    ]} />)
+    const badges = renderer.root.findAllByProps({ 'data-testid': 'chat-worker-depth' })
+    expect(badges).toHaveLength(1)
+    expect(badges[0]!.children).toEqual(['depth 2'])
+    renderer.unmount()
+  })
+
+  test('the strip lists each live worker with its own tool and elapsed, and hides when none', () => {
+    // Created inside act(): later store updates must still re-render it.
+    let renderer: TestRenderer.ReactTestRenderer
+    act(() => { renderer = TestRenderer.create(<ChatWorkersStrip sessionId={SESSION} />) })
+    // Nothing live yet: the strip renders nothing at all.
+    expect(renderer!.toJSON()).toBeNull()
+    seedWorkers([
+      rosterWorker('toolu_w1', { lastTool: 'Grep', description: 'Map the workspace' }),
+      rosterWorker('toolu_w2', { lastTool: 'Read', description: 'Index the API' }),
+    ])
+    const rows = renderer!.root.findAllByProps({ 'data-testid': 'chat-worker-strip-row' })
+    expect(rows).toHaveLength(2)
+    expect(textOf(rows[0]!)).toContain('Explore')
+    expect(textOf(rows[0]!)).toContain('Map the workspace')
+    expect(textOf(rows[0]!)).toContain('· Grep')
+    expect(textOf(rows[1]!)).toContain('· Read')
+    expect(renderer!.root.findAllByProps({ 'data-testid': 'chat-worker-strip-elapsed' })).toHaveLength(2)
+    // Settling every worker empties the strip again.
+    act(() => {
+      useChatStore.getState().setWorkers(SESSION, [
+        rosterWorker('toolu_w1', { status: 'completed', live: false }),
+        rosterWorker('toolu_w2', { status: 'completed', live: false }),
+      ])
+    })
+    expect(renderer!.toJSON()).toBeNull()
+    renderer!.unmount()
+  })
+
+  test('expanding fetches the body once and renders it; a missing file reports unavailable', () => {
+    seedWorkers([rosterWorker('toolu_w1')])
+    const sent: ClientMessage[] = []
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => {
+      renderer = TestRenderer.create(
+        <ChatMessages sessionId={SESSION} events={[agentCall('toolu_w1')]}
+          sendMessage={message => sent.push(message)} connected />
+      )
+    })
+    const row = renderer.root.findByProps({ 'data-testid': 'chat-worker-row' })
+    // Opening fetches; re-toggles and re-renders never re-send (design D5).
+    act(() => { row.props.onToggle({ currentTarget: { open: true } }) })
+    act(() => { row.props.onToggle({ currentTarget: { open: false } }) })
+    act(() => { row.props.onToggle({ currentTarget: { open: true } }) })
+    expect(sent).toEqual([
+      { type: 'chat-worker-transcript', sessionId: SESSION, workerId: 'toolu_w1' },
+    ])
+    expect(textOf(renderer.root.findByProps({ 'data-testid': 'chat-worker-body-status' }))).toBe('Loading…')
+    act(() => {
+      useChatStore.getState().setWorkerBody({
+        type: 'chat-worker-transcript', sessionId: SESSION, workerId: 'toolu_w1',
+        status: 'ok',
+        events: [
+          { type: 'user_message', id: 'w1', sequence: 0, at: 'now', turnId: 't', text: 'map the workspace' },
+          { type: 'assistant_text', id: 'w2', sequence: 1, at: 'now', turnId: 't', messageId: 'm', text: 'mapped 14 files' },
+        ],
+      })
+    })
+    const body = renderer.root.findByProps({ 'data-testid': 'chat-worker-body' })
+    expect(textOf(body)).toContain('map the workspace')
+    expect(textOf(body)).toContain('mapped 14 files')
+    renderer.unmount()
+
+    // A worker whose file is missing reports the body unavailable.
+    seedWorkers([rosterWorker('toolu_missing')])
+    let missing: TestRenderer.ReactTestRenderer
+    act(() => {
+      missing = TestRenderer.create(
+        <ChatMessages sessionId={SESSION} events={[agentCall('toolu_missing')]}
+          sendMessage={message => sent.push(message)} connected />
+      )
+    })
+    act(() => {
+      missing!.root.findByProps({ 'data-testid': 'chat-worker-row' }).props.onToggle({ currentTarget: { open: true } })
+    })
+    act(() => {
+      useChatStore.getState().setWorkerBody({
+        type: 'chat-worker-transcript', sessionId: SESSION, workerId: 'toolu_missing',
+        status: 'unavailable', events: [],
+      })
+    })
+    expect(textOf(missing!.root.findByProps({ 'data-testid': 'chat-worker-body-status' })))
+      .toContain('Body unavailable')
+    missing!.unmount()
+  })
+
+  test('a fetch stranded by a dead socket does not burn its one-shot marker; reconnect retries it', () => {
+    seedWorkers([rosterWorker('toolu_w1')])
+    const sent: ClientMessage[] = []
+    let renderer!: TestRenderer.ReactTestRenderer
+    const render = (connected: boolean) => {
+      const element = (
+        <ChatMessages sessionId={SESSION} events={[agentCall('toolu_w1')]}
+          sendMessage={message => sent.push(message)} connected={connected} />
+      )
+      if (renderer) renderer.update(element)
+      else renderer = TestRenderer.create(element)
+    }
+    act(() => { render(false) })
+    // Expanding while offline sends nothing and shows the reconnect notice.
+    act(() => {
+      renderer.root.findByProps({ 'data-testid': 'chat-worker-row' }).props.onToggle({ currentTarget: { open: true } })
+    })
+    expect(sent).toEqual([])
+    expect(textOf(renderer.root.findByProps({ 'data-testid': 'chat-worker-body-status' })))
+      .toBe('Body unavailable — reconnect to load it.')
+    // The socket returns: the still-open row fetches at last.
+    act(() => { render(true) })
+    expect(sent).toEqual([
+      { type: 'chat-worker-transcript', sessionId: SESSION, workerId: 'toolu_w1' },
+    ])
+    expect(useChatStore.getState().workerBodies[SESSION]!.toolu_w1).toEqual({ status: 'fetching' })
+    // The socket dies mid-fetch: the marker rolls back instead of stranding…
+    act(() => { render(false) })
+    expect(useChatStore.getState().workerBodies[SESSION]!.toolu_w1).toBeUndefined()
+    // …so the next reconnect can request the body again.
+    act(() => { render(true) })
+    expect(sent).toEqual([
+      { type: 'chat-worker-transcript', sessionId: SESSION, workerId: 'toolu_w1' },
+      { type: 'chat-worker-transcript', sessionId: SESSION, workerId: 'toolu_w1' },
+    ])
+    renderer.unmount()
+  })
+
+  test('a settled worker renders its outcome and summary, as archived chats do', () => {
+    seedWorkers([rosterWorker('toolu_done', {
+      status: 'completed', live: false, summary: 'Mapped 14 files',
+    })])
+    const sent: ClientMessage[] = []
+    const renderer = TestRenderer.create(
+      <ChatMessages sessionId={SESSION} events={[agentCall('toolu_done')]}
+        sendMessage={message => sent.push(message)} connected />
+    )
+    const row = renderer.root.findByProps({ 'data-testid': 'chat-worker-row' })
+    expect(row.props['data-status']).toBe('completed')
+    expect(textOf(renderer.root.findByType('summary'))).toContain('done')
+    expect(textOf(renderer.root.findByProps({ 'data-testid': 'chat-worker-summary' }))).toBe('Mapped 14 files')
+    // Expand stays available on the settled row.
+    act(() => { row.props.onToggle({ currentTarget: { open: true } }) })
+    expect(sent).toEqual([
+      { type: 'chat-worker-transcript', sessionId: SESSION, workerId: 'toolu_done' },
+    ])
+    renderer.unmount()
+  })
+
+  test('an archived ChatView shows persisted outcomes with no strip or running state', () => {
+    const archived = { ...chatSession, archivedAt: '2026-10-01T00:00:00.000Z' } as Session
+    const render = (session: Session) => {
+      let renderer!: TestRenderer.ReactTestRenderer
+      act(() => {
+        renderer = TestRenderer.create(<ChatView
+          session={session}
+          sendMessage={() => {}}
+          connectionStatus="connected" connectionEpoch={0} error={null}
+          onClose={() => {}} onKill={() => {}} />)
+      })
+      return renderer
+    }
+    const seed = (workers: ChatWorker[]) => {
+      useChatStore.getState().snapshot({
+        type: 'chat-snapshot', sessionId: chatSession.id, profileId: 'default',
+        events: [agentCall('toolu_done'), agentCall('toolu_live')],
+        pendingRequests: [], status: 'waiting', throughSequence: 0,
+        commands: { status: 'unavailable', commands: [] }, activity: null,
+        contextUsage: null, usage: null, workers,
+      })
+    }
+    const workers = [
+      rosterWorker('toolu_done', { status: 'failed', live: false, summary: 'Ran out of budget' }),
+      rosterWorker('toolu_live'),
+    ]
+
+    // Positive control: a live chat shows the strip for the live worker.
+    seed(workers)
+    let renderer = render(chatSession)
+    expect(renderer.root.findAllByProps({ 'data-testid': 'chat-workers-strip' })).toHaveLength(1)
+    renderer.unmount()
+
+    // Archived: settled rows only (the server stops every worker on archive).
+    seed([workers[0]!, rosterWorker('toolu_live', { status: 'stopped', live: false })])
+    renderer = render(archived)
+    expect(renderer.root.findAllByProps({ 'data-testid': 'chat-workers-strip' })).toHaveLength(0)
+    const rows = renderer.root.findAllByProps({ 'data-testid': 'chat-worker-row' })
+    expect(rows.map(row => row.props['data-status'])).toEqual(['failed', 'stopped'])
+    expect(renderer.root.findAllByProps({ 'data-testid': 'chat-worker-elapsed' })).toHaveLength(0)
+    expect(textOf(renderer.root.findByProps({ 'data-testid': 'chat-worker-summary' }))).toBe('Ran out of budget')
+    renderer.unmount()
+    useChatStore.setState({ sessions: {} })
   })
 })

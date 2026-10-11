@@ -62,7 +62,7 @@ describe('chat store', () => {
   test('a snapshot replaces stale state and its pending requests are authoritative', () => {
     const store = useChatStore.getState()
     store.apply('chat-1', [delta(1, 'old')])
-    store.snapshot({ type: 'chat-snapshot', sessionId: 'chat-1', profileId: 'default', events: [delta(2, 'restored')], pendingRequests: [], status: 'working', throughSequence: 2, commands: { status: 'ready', commands: [] }, activity: null, contextUsage: null, usage: null })
+    store.snapshot({ type: 'chat-snapshot', sessionId: 'chat-1', profileId: 'default', events: [delta(2, 'restored')], pendingRequests: [], status: 'working', throughSequence: 2, commands: { status: 'ready', commands: [] }, activity: null, contextUsage: null, usage: null, workers: [] })
     const state = useChatStore.getState().sessions['chat-1']
     expect(state.events).toHaveLength(1)
     expect(state.events[0]).toMatchObject({ text: 'restored' })
@@ -93,7 +93,7 @@ describe('chat store', () => {
     // Reconnect: the snapshot's state is authoritative again.
     store.snapshot({
       type: 'chat-snapshot', sessionId: 'chat-1', profileId: 'default', events: [], pendingRequests: [],
-      status: 'waiting', throughSequence: 0, commands: { status: 'ready', commands: [usage] }, activity: null, contextUsage: null, usage: null,
+      status: 'waiting', throughSequence: 0, commands: { status: 'ready', commands: [usage] }, activity: null, contextUsage: null, usage: null, workers: [],
     })
     expect(useChatStore.getState().sessions['chat-1'].commands).toEqual({ status: 'ready', commands: [usage] })
 
@@ -138,7 +138,7 @@ describe('chat store drafts', () => {
     const store = useChatStore.getState()
     store.setDraft('chat-1', 'in progress')
     store.apply('chat-1', [delta(1, 'streamed')])
-    store.snapshot({ type: 'chat-snapshot', sessionId: 'chat-1', profileId: 'default', events: [delta(2, 'restored')], pendingRequests: [], status: 'working', throughSequence: 2, activity: null, contextUsage: null, commands: { status: 'unavailable', commands: [] }, usage: null })
+    store.snapshot({ type: 'chat-snapshot', sessionId: 'chat-1', profileId: 'default', events: [delta(2, 'restored')], pendingRequests: [], status: 'working', throughSequence: 2, activity: null, contextUsage: null, commands: { status: 'unavailable', commands: [] }, usage: null, workers: [] })
     expect(useChatStore.getState().drafts['chat-1']).toBe('in progress')
   })
 
@@ -176,7 +176,7 @@ describe('chat store activity', () => {
       commands: { status: 'ready', commands: [] },
       activity: { phase: 'running_tools', elapsedMs: 10_000, tool: 'Bash', count: 1 },
       contextUsage: null,
-      usage: null,
+      usage: null, workers: [],
     })
     const activity = useChatStore.getState().sessions['chat-1'].activity!
     expect(activity.value.phase).toBe('running_tools')
@@ -184,7 +184,7 @@ describe('chat store activity', () => {
     // An idle snapshot carries no row.
     store.snapshot({
       type: 'chat-snapshot', sessionId: 'chat-2', profileId: 'default', events: [], pendingRequests: [],
-      status: 'waiting', throughSequence: 0, commands: { status: 'unavailable', commands: [] }, activity: null, contextUsage: null, usage: null,
+      status: 'waiting', throughSequence: 0, commands: { status: 'unavailable', commands: [] }, activity: null, contextUsage: null, usage: null, workers: [],
     })
     expect(useChatStore.getState().sessions['chat-2'].activity).toBeNull()
   })
@@ -223,7 +223,7 @@ describe('chat store usage', () => {
       type: 'chat-snapshot', sessionId: 'chat-1', profileId: 'default',
       events: [], pendingRequests: [], status: 'waiting', throughSequence: 0,
       commands: { status: 'unavailable', commands: [] },
-      activity: null, contextUsage: null, usage: report,
+      activity: null, contextUsage: null, usage: report, workers: [],
     })
     expect(useChatStore.getState().usage['default']).toEqual(report)
 
@@ -242,7 +242,7 @@ describe('chat store usage', () => {
       type: 'chat-snapshot', sessionId: 'chat-1', profileId: 'default',
       events: [], pendingRequests: [], status: 'waiting', throughSequence: 0,
       commands: { status: 'unavailable', commands: [] },
-      activity: null, contextUsage: null, usage: null, // restart: the server held nothing
+      activity: null, contextUsage: null, usage: null, workers: [], // restart: the server held nothing
     })
     expect(useChatStore.getState().usage['default']).toBeNull()
   })
@@ -253,7 +253,7 @@ describe('chat store usage', () => {
       type: 'chat-snapshot', sessionId: 'chat-1', profileId: 'default',
       events: [], pendingRequests: [], status: 'waiting', throughSequence: 0,
       commands: { status: 'unavailable', commands: [] },
-      activity: null, contextUsage: null, usage: report,
+      activity: null, contextUsage: null, usage: report, workers: [],
     })
     store.remove('chat-1')
     expect(useChatStore.getState().sessions['chat-1']).toBeUndefined()
@@ -277,7 +277,7 @@ describe('chat store context usage', () => {
       type: 'chat-snapshot', sessionId: 'chat-1', profileId: 'default',
       events: [], pendingRequests: [], status: 'working', throughSequence: 0,
       commands: { status: 'unavailable', commands: [] },
-      activity: null, contextUsage: reading(60_000), usage: null,
+      activity: null, contextUsage: reading(60_000), usage: null, workers: [],
     })
     expect(useChatStore.getState().sessions['chat-1'].contextUsage).toEqual(reading(60_000))
 
@@ -295,7 +295,7 @@ describe('chat store context usage', () => {
       type: 'chat-snapshot', sessionId: 'chat-1', profileId: 'default',
       events: [], pendingRequests: [], status: 'waiting', throughSequence: 0,
       commands: { status: 'unavailable', commands: [] },
-      activity: null, contextUsage: null, usage: null,
+      activity: null, contextUsage: null, usage: null, workers: [],
     })
     expect(useChatStore.getState().sessions['chat-1'].contextUsage).toBeNull()
   })
@@ -313,5 +313,93 @@ describe('chat store context usage', () => {
     store.setContextUsage('chat-1', reading(50_000))
     store.setContextUsage('chat-1', null)
     expect(useChatStore.getState().sessions['chat-1'].contextUsage).toBeNull()
+  })
+})
+
+describe('chat store workers', () => {
+  const rosterWorker = (live: boolean, elapsedMs: number) => ({
+    workerId: 'toolu_spawn_1',
+    taskId: 'task_1',
+    agentType: 'Explore',
+    description: 'Map the workspace',
+    depth: 1 as const,
+    status: live ? ('running' as const) : ('completed' as const),
+    live,
+    lastTool: 'Grep',
+    elapsedMs,
+  })
+
+  afterEach(() => useChatStore.setState({ sessions: {}, workerBodies: {} }))
+
+  test('snapshots and pushes anchor each row on the client clock', () => {
+    const store = useChatStore.getState()
+    const before = Date.now()
+    store.snapshot({
+      type: 'chat-snapshot', sessionId: 'chat-1', profileId: 'default',
+      events: [], pendingRequests: [], status: 'working', throughSequence: 0,
+      commands: { status: 'unavailable', commands: [] },
+      activity: null, contextUsage: null, usage: null,
+      workers: [rosterWorker(true, 4_000)],
+    })
+    const after = Date.now()
+    const anchored = useChatStore.getState().sessions['chat-1'].workers[0]!
+    expect(anchored.startedAt).toBeGreaterThanOrEqual(before - 4_000)
+    expect(anchored.startedAt).toBeLessThanOrEqual(after - 4_000)
+    expect(anchored.workerId).toBe('toolu_spawn_1')
+
+    // A push replaces the whole roster (level semantics, design D2).
+    store.setWorkers('chat-1', [rosterWorker(false, 9_000)])
+    const settled = useChatStore.getState().sessions['chat-1'].workers[0]!
+    expect(settled.live).toBe(false)
+    expect(settled.status).toBe('completed')
+
+    // A push ahead of any snapshot materializes a transcript, losing nothing.
+    store.setWorkers('chat-2', [rosterWorker(true, 1_000)])
+    expect(useChatStore.getState().sessions['chat-2'].workers).toHaveLength(1)
+  })
+
+  test('worker bodies fetch once, adopt their reply, and clear with the session', () => {
+    const store = useChatStore.getState()
+    // First request wins; repeats (re-toggles) never re-send.
+    expect(store.requestWorkerBody('chat-1', 'toolu_spawn_1')).toBe(true)
+    expect(store.requestWorkerBody('chat-1', 'toolu_spawn_1')).toBe(false)
+    expect(useChatStore.getState().workerBodies['chat-1']!.toolu_spawn_1).toEqual({ status: 'fetching' })
+
+    // The reply adopts, ok or unavailable.
+    store.setWorkerBody({
+      type: 'chat-worker-transcript', sessionId: 'chat-1', workerId: 'toolu_spawn_1',
+      status: 'ok',
+      events: [{ id: 'w1', sequence: 0, at: 'now', turnId: 't', type: 'user_message', text: 'map it' }],
+    })
+    expect(useChatStore.getState().workerBodies['chat-1']!.toolu_spawn_1).toEqual({
+      status: 'ok',
+      events: [{ id: 'w1', sequence: 0, at: 'now', turnId: 't', type: 'user_message', text: 'map it' }],
+    })
+    store.setWorkerBody({
+      type: 'chat-worker-transcript', sessionId: 'chat-1', workerId: 'toolu_none',
+      status: 'unavailable', events: [],
+    })
+    expect(useChatStore.getState().workerBodies['chat-1']!.toolu_none).toEqual({ status: 'unavailable' })
+
+    // Kill clears only the removed session's bodies.
+    store.remove('chat-1')
+    expect(useChatStore.getState().workerBodies['chat-1']).toBeUndefined()
+  })
+
+  test('a stranded fetch marker rolls back so the worker body can be requested again', () => {
+    const store = useChatStore.getState()
+    store.requestWorkerBody('chat-1', 'toolu_spawn_1')
+    store.requestWorkerBody('chat-1', 'toolu_settled')
+    store.setWorkerBody({
+      type: 'chat-worker-transcript', sessionId: 'chat-1', workerId: 'toolu_settled',
+      status: 'unavailable', events: [],
+    })
+    // A dead socket strands the fetch: only a still-fetching marker rolls back.
+    store.resetWorkerBody('chat-1', 'toolu_spawn_1')
+    expect(useChatStore.getState().workerBodies['chat-1']!.toolu_spawn_1).toBeUndefined()
+    expect(store.requestWorkerBody('chat-1', 'toolu_spawn_1')).toBe(true)
+    // A settled reply is final; reset leaves it alone.
+    store.resetWorkerBody('chat-1', 'toolu_settled')
+    expect(useChatStore.getState().workerBodies['chat-1']!.toolu_settled).toEqual({ status: 'unavailable' })
   })
 })

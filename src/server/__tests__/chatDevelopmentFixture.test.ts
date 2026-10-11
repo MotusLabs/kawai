@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import type { SDKMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
-import type { ChatWireDirection } from '../../shared/chat'
+import type { ChatEvent, ChatWireDirection, ChatWorker } from '../../shared/chat'
+import { ChatSessionDriver } from '../chat/ChatSessionDriver'
 import { fixtureQueryFactory } from '../chat/developmentFixture'
 import { TurnQueue } from '../chat/TurnQueue'
 
@@ -166,5 +167,59 @@ describe('development fixture activity turns', () => {
     const shapes = shapeOf(messages)
     expect(shapes.filter(shape => shape === 'system/status')).toHaveLength(2)
     expect(shapes.at(-1)).toBe('result')
+  })
+})
+
+describe('development fixture worker turn', () => {
+  beforeEach(() => {
+    process.env.AGENTBOARD_CHAT_FIXTURE_HOLD_MS = '1'
+  })
+  afterEach(() => {
+    delete process.env.AGENTBOARD_CHAT_FIXTURE_HOLD_MS
+  })
+
+  test('the real driver keeps spawn anchors, drops worker tools, and settles from the notification', async () => {
+    const events: ChatEvent[] = []
+    const rosters: ChatWorker[][] = []
+    const statuses: string[] = []
+    const driver = new ChatSessionDriver({
+      sessionId: 'chat-fixture-workers',
+      projectPath: '/tmp/project',
+      queryFactory: fixtureQueryFactory,
+      onEvent: (event) => events.push(event),
+      onStatus: (status) => statuses.push(status),
+      onWorkers: (workers) => rosters.push(workers),
+    })
+    driver.send('spawn a worker')
+    const deadline = Date.now() + 3_000
+    while (!events.some((event) => event.type === 'turn_completed') && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 5))
+    }
+
+    const toolCalls = events.flatMap((event) => (event.type === 'tool_call' ? [event] : []))
+    // Both spawns anchor rows; the worker's own Grep never reaches the parent.
+    expect(toolCalls.map((call) => call.tool)).toEqual(['Agent', 'Agent'])
+    expect(toolCalls.some((call) => call.tool === 'Grep')).toBe(false)
+
+    // Mid-run the top-level worker was live with its last tool.
+    expect(rosters.some((roster) =>
+      roster.some((worker) => worker.live && worker.lastTool === 'Grep'))).toBe(true)
+
+    // The gap itself is background-governed: the level dropped the task
+    // before its notification, so the row sat not-live with no outcome yet.
+    expect(rosters.some((roster) =>
+      roster.some((worker) => worker.workerId === toolCalls[0]!.toolCallId &&
+        worker.status === 'running' && worker.live === false))).toBe(true)
+
+    const final = rosters.at(-1)!
+    const [top, nested] = toolCalls.map((call) =>
+      final.find((worker) => worker.workerId === call.toolCallId)!)
+    // The level dropped the task before its bookend: the outcome is still the
+    // notification's, not the stopped fallback.
+    expect(top).toMatchObject({ status: 'completed', live: false, agentType: 'Explore' })
+    expect(top!.summary).toBe('Found three packages: client, server, shared.')
+    expect(nested).toMatchObject({ status: 'completed', depth: 2 })
+    expect(statuses.at(-1)).toBe('waiting')
+    driver.kill()
   })
 })

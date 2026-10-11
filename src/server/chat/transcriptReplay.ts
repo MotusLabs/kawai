@@ -4,6 +4,7 @@
 // "history unavailable" notice, and tool_use blocks with no tool_result —
 // the only marker of a request that died with the process — are replayed as
 // request pairs that history immediately marks cancelled (design D7).
+import { parseEnvelope } from '../team/envelope'
 import fs from 'node:fs'
 import path from 'node:path'
 import type { ChatEvent } from '../../shared/chat'
@@ -168,8 +169,13 @@ export function parseTranscriptTitleLine(
  * Parse transcript JSONL content into read-only events. Tolerant: lines that
  * are not valid JSON and lines of an unknown kind are skipped. `unmatchedToolCallIds`
  * lists tool uses that never got a result — see `withCancelledRequests`.
+ * `includeSidechain` keeps sidechain records (a subagent transcript file is
+ * all sidechain) for the worker-body reader (workers design D5).
  */
-export function parseTranscriptContent(content: string): ParsedTranscript {
+export function parseTranscriptContent(
+  content: string,
+  options?: { includeSidechain?: boolean }
+): ParsedTranscript {
   const events: ChatEvent[] = []
   const resultToolCallIds = new Set<string>()
   const unmatchedCandidates: string[] = []
@@ -206,11 +212,17 @@ export function parseTranscriptContent(content: string): ParsedTranscript {
       invalidLines += 1
       continue
     }
-    if (record.isMeta === true || record.isSidechain === true) continue
+    if (
+      record.isMeta === true ||
+      (record.isSidechain === true && options?.includeSidechain !== true)
+    ) {
+      continue
+    }
     // Worktree tracking design D3: each record may carry the working
     // directory at write time (attachment rows spell it
-    // snapshot.workingDirectory); the newest non-empty one wins. A
-    // sidechain's cwd never gets here — subagent lines were skipped above.
+    // snapshot.workingDirectory); the newest non-empty one wins. Parent
+    // parses already dropped sidechain records above; a worker-body parse
+    // keeps them, and its caller simply ignores the captured cwd.
     const snapshot = asRecord(asRecord(record.attachment)?.snapshot)
     const lineCwd =
       stringField(record, 'cwd') ??
@@ -260,15 +272,15 @@ export function parseTranscriptContent(content: string): ParsedTranscript {
       if (typeof contentValue === 'string') {
         if (type === 'user') {
           const typed = parseCommandMarkup(contentValue) ?? contentValue
+          const peer = parseEnvelope(typed)
           if (typed.length > 0) {
             turnCounter += 1
             events.push({
               id: `hist-${lineUuid}`,
               sequence: 0,
               at,
-              type: 'user_message',
               turnId: `hist-turn-${turnCounter}`,
-              text: typed,
+              ...(peer ? { type: 'peer_message' as const, ...peer } : { type: 'user_message' as const, text: typed }),
             })
           }
         } else {
@@ -298,15 +310,15 @@ export function parseTranscriptContent(content: string): ParsedTranscript {
         if (blockType === 'text' && typeof blockRecord.text === 'string') {
           if (type === 'user') {
             const typed = parseCommandMarkup(blockRecord.text) ?? blockRecord.text
+            const peer = parseEnvelope(typed)
             if (typed.length > 0) {
               turnCounter += 1
               events.push({
                 id: blockId,
                 sequence: 0,
                 at,
-                type: 'user_message',
                 turnId: `hist-turn-${turnCounter}`,
-                text: typed,
+                ...(peer ? { type: 'peer_message' as const, ...peer } : { type: 'user_message' as const, text: typed }),
               })
             }
           } else {

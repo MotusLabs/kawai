@@ -90,9 +90,24 @@ export interface ChatCommandState {
   commands: ChatCommand[]
 }
 
+/** Mail received from another chat agent; shared without SDK dependencies. */
+export interface ChatPeerMessage {
+  messageId: string
+  senderSession: string
+  senderGroup: string | null
+  priority: 'normal' | 'urgent'
+  originPath: string
+  tags: string[]
+  threadId: string
+  body: string
+  possibleDuplicate: boolean
+  thread?: Array<{ messageId: string; senderSession: string; body: string }>
+}
+
 export type ChatEvent =
   | (ChatTurnEventBase & { type: 'turn_started' })
   | (ChatTurnEventBase & { type: 'user_message'; text: string })
+  | (ChatTurnEventBase & ChatPeerMessage & { type: 'peer_message' })
   | (ChatTurnEventBase & {
       type: 'command_output'
       /** Output text of a local slash command run in this turn. */
@@ -262,6 +277,42 @@ export interface ChatUsageReport {
   windows: ChatUsageWindow[]
   /** ISO timestamp of when the report was received. */
   receivedAt: string
+}
+
+/** Lifecycle outcome of an agent the chat session spawned (workers design D2). */
+export type ChatWorkerStatus = 'running' | 'completed' | 'failed' | 'stopped'
+
+/**
+ * One agent spawned by the chat session's `Agent`/`Task` tool call, joined to
+ * its transcript row by that call's id. Live fields (`lastTool`, `elapsedMs`,
+ * `live`) churn with the worker's progress and ride the roster channel — the
+ * full-set `chat-workers` message and `chat-snapshot.workers` — never the
+ * sequenced event stream; only the settled outcome is durable. Like
+ * `ChatActivity`, `elapsedMs` is the value when the message was sent, so
+ * clients tick their own clock.
+ */
+export interface ChatWorker {
+  /** The spawning Agent tool call's id. */
+  workerId: string
+  /** SDK task handle; needed later for per-task stop. */
+  taskId?: string
+  agentType?: string
+  description?: string
+  /** 1 for a top-level spawn; omit when unknown. */
+  depth?: number
+  status: ChatWorkerStatus
+  /**
+   * Whether the worker is known to be running right now. Distinct from
+   * `status`: `running` + `live: false` is the gap after the worker has left
+   * the background set and before its notification has landed.
+   */
+  live: boolean
+  /** Most recent tool the worker ran. */
+  lastTool?: string
+  /** Milliseconds since the spawn when the message was sent. */
+  elapsedMs: number
+  /** Settled workers only. */
+  summary?: string
 }
 
 /** Self-contained snapshot of a still-pending approval or question. */
