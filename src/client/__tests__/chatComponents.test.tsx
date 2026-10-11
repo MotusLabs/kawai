@@ -922,6 +922,17 @@ describe('/clear, /reset, /new', () => {
     h.renderer.unmount()
   })
 
+  test('the team group carries over to the new chat', () => {
+    const h = renderClearable({ ...chatSession, groupId: 'devs' } as Session)
+    h.type('/clear')
+    h.submit()
+    expect(h.sent.filter(message => message.type === 'session-create')).toEqual([{
+      type: 'session-create', projectPath: '/tmp/project', kind: 'chat',
+      claudeProfileId: 'default', approvalPolicy: 'manual', groupId: 'devs',
+    }])
+    h.renderer.unmount()
+  })
+
   test('a creation error leaves the previous chat untouched', () => {
     const h = renderClearable()
     h.type('/clear')

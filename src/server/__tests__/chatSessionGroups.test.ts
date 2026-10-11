@@ -81,4 +81,25 @@ describe('chat session groups', () => {
     expect(registry.get(result.session.id)?.groupId).toBe('devs')
     restarted.shutdown()
   })
+
+  test('the listed session carries the group label, and a removed file marks it missing', async () => {
+    fs.writeFileSync(path.join(project, '.kawai', 'groups', 'devs.md'), '---\nlabel: Developers\n---\nBuild.')
+    const registry = new SessionRegistry()
+    const manager = new ChatSessionManager({
+      db, registry, onEvent: () => {}, profileCatalogHome: home, availabilityProbe: async () => {},
+    })
+    const result = await manager.createAvailableSession({ projectPath: project, groupId: 'devs' })
+    if (!result.ok) throw new Error(result.error)
+    const id = result.session.id
+    await manager.teams.track(id, project)
+    expect(registry.get(id)).toMatchObject({ groupId: 'devs', groupLabel: 'Developers', groupMissing: false })
+
+    // The file goes away; the next published status change shows it missing
+    // while the session keeps its stored group.
+    fs.rmSync(path.join(project, '.kawai', 'groups', 'devs.md'))
+    manager.archive(id)
+    expect(registry.get(id)).toMatchObject({ groupId: 'devs', groupLabel: 'devs', groupMissing: true })
+    expect(db.getChatSession(id)?.groupId).toBe('devs')
+    manager.shutdown()
+  })
 })

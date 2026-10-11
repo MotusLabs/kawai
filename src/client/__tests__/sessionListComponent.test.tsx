@@ -449,6 +449,8 @@ describe('session comparator (design D6)', () => {
       nameSource: 'manual',
       archivedAt: null,
       groupId: 'devs',
+      groupLabel: 'Developers',
+      groupMissing: false,
     }
     // Compile-time exhaustiveness comes from the mapped type (a new Session
     // field without a comparator entry fails typecheck); this runtime check
@@ -479,6 +481,8 @@ describe('session comparator (design D6)', () => {
       lastUserMessage: 'changed',
       isPinned: true,
       groupId: 'qa',
+      groupLabel: 'QA',
+      groupMissing: true,
     }
     for (const field of Object.keys(fullSession)) {
       const changed = { ...fullSession } as Record<string, unknown>
@@ -530,6 +534,28 @@ describe('session comparator (design D6)', () => {
       card().props.onClick()
     })
     expect(selected).toEqual(['session-1'])
+    act(() => renderer.unmount())
+  })
+
+  test('chat rows show their team group, marked when the group is missing', () => {
+    const listProps = {
+      selectedSessionId: null, loading: false, error: null,
+      onSelect: () => {}, onRename: () => {},
+    }
+    const chat = (id: string, extra: Partial<Session>): Session =>
+      ({ ...baseSession, id, kind: 'chat', ...extra })
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => {
+      renderer = TestRenderer.create(<SessionList sessions={[
+        chat('chat-dev', { groupId: 'devs', groupLabel: 'Developers', groupMissing: false }),
+        chat('chat-gone', { groupId: 'qa', groupLabel: 'qa', groupMissing: true }),
+        chat('chat-solo', {}),
+      ]} {...listProps} />)
+    })
+    const badges = renderer.root.findAllByProps({ 'data-testid': 'session-group-badge' })
+    expect(badges.map(badge => badge.children.join(''))).toEqual(['Developers', 'qa'])
+    expect(badges.map(badge => badge.props['data-missing'])).toEqual([undefined, 'true'])
+    expect(badges[1]!.props.title).toContain('no longer defined')
     act(() => renderer.unmount())
   })
 

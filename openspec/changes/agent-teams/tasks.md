@@ -11,7 +11,7 @@
 - [x] 2.1 Add a nullable `group_id` column to `chat_sessions` (inline migration in `initDatabase`, `groupId` on `ChatSessionRecord`, insert / update `fieldMap` / `mapChatRow`), and verify db tests round-trip a group, keep it through archive and restore, and leave pre-existing rows with no group
 - [x] 2.2 Carry `groupId` on the shared `Session` and as optional `groupId` on `session-create`; validate it against the team's catalog in `createAvailableSession` (unknown group refused with an error, absent = no group) and never change it after creation, and verify manager tests cover create-with-group, create-without-group, an unknown group, and the group surviving restart
 - [x] 2.3 Expose the team's groups and catalog errors for a project path over a `/api/chat/groups` route, and verify route tests return layered groups and report a malformed file
-- [ ] 2.4 Add a group picker (default "No group") to the chat block of `NewSessionModal.tsx` fed by that route, and a group badge beside the Chat label in `SessionRow.tsx` (marked missing when the stored id is no longer defined; `SESSION_FIELD_EQUALS` updated), and verify component tests cover choosing a group, creating without one, and the missing-group badge
+- [x] 2.4 Add a group picker (default "No group") to the chat block of `NewSessionModal.tsx` fed by that route, and a group badge beside the Chat label in `SessionRow.tsx` (marked missing when the stored id is no longer defined; `SESSION_FIELD_EQUALS` updated), and verify component tests cover choosing a group, creating without one, and the missing-group badge
 
 ## 3. Role and mailbox prompt
 

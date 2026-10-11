@@ -1155,9 +1155,10 @@ export default function App() {
     autoStartAgent?: AutoStartAgent,
     kind?: 'terminal' | 'chat',
     claudeProfileId?: string,
-    approvalPolicy?: ChatApprovalPolicy
+    approvalPolicy?: ChatApprovalPolicy,
+    groupId?: string
   ) => {
-    sendMessage({ type: 'session-create', projectPath, name, command, host, autoStartChange, autoStartAgent, kind, claudeProfileId, approvalPolicy })
+    sendMessage({ type: 'session-create', projectPath, name, command, host, autoStartChange, autoStartAgent, kind, claudeProfileId, approvalPolicy, ...(groupId ? { groupId } : {}) })
     if (!host) setLastProjectPath(projectPath)
   }
 

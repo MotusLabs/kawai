@@ -130,6 +130,10 @@ export interface Session {
   archivedAt?: string | null
   /** Chat sessions only: team group id (agent-teams); absent = no group. */
   groupId?: string
+  /** The group's display label; absent until the session's team is known. */
+  groupLabel?: string
+  /** True when no group file defines `groupId` any more. */
+  groupMissing?: boolean
 }
 
 export interface AgentSession {

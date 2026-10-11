@@ -58,6 +58,7 @@ import { probeSdkAvailability } from './sdkAvailability'
 import { UsageLimitStore } from './usageLimits'
 import { readWorkerTranscript } from './chatWorkerTranscript'
 import { loadTeamGroups } from '../team/teamGroups'
+import { SessionTeams } from '../team/sessionTeams'
 import {
   findTranscriptPath,
   readTranscriptCwd,
@@ -364,6 +365,18 @@ export class ChatSessionManager {
 
   constructor(options: ChatSessionManagerOptions) {
     this.options = options
+    // Team membership (agent-teams D6) resolves asynchronously; once a
+    // session's team is known its group label/missing state is published.
+    this.teams = new SessionTeams({
+      ...(options.profileCatalogHome ? { homeDir: options.profileCatalogHome } : {}),
+      onResolved: (sessionId) => {
+        const record = this.records.get(sessionId)
+        // Group-less sessions have nothing to show; skip the broadcast.
+        if (record?.groupId != null) {
+          this.options.registry.updateSession(sessionId, this.groupFields(record))
+        }
+      },
+    })
     // Profile usage changes drive the chat-usage broadcast (design D4).
     this.usageLimits.subscribe((profileId, report) =>
       this.options.onUsage?.(profileId, report)
@@ -372,6 +385,9 @@ export class ChatSessionManager {
     // Logs of sessions deleted while the server was down are orphans now.
     void this.options.wireLogs?.pruneOrphans(new Set(this.records.keys()))
   }
+
+  /** Each session's team (agent-teams); shared with the mailbox dispatcher. */
+  readonly teams: SessionTeams
 
   /** Create a chat session. Refused (no side effects) when auth is missing. */
   createSession(input: {
@@ -419,6 +435,7 @@ export class ChatSessionManager {
     this.options.db.insertChatSession(record)
     const session = this.toSession(record)
     this.options.registry.setChatSession(session)
+    void this.teams.track(sessionId, projectPath)
     return { ok: true, session }
   }
 
@@ -703,6 +720,7 @@ export class ChatSessionManager {
     this.activities.delete(sessionId)
     this.contextReadings.delete(sessionId)
     this.workerRows.delete(sessionId)
+    this.teams.forget(sessionId)
     this.options.registry.removeChatSession(sessionId)
     this.options.db.deleteChatSession(sessionId)
     void this.options.wireLogs?.delete(sessionId).catch(() => {})
@@ -854,6 +872,7 @@ export class ChatSessionManager {
       }
       this.records.set(record.sessionId, record)
       this.options.registry.setChatSession(this.toSession(record))
+      void this.teams.track(record.sessionId, record.projectPath)
     }
   }
 
@@ -1285,7 +1304,12 @@ export class ChatSessionManager {
     if (patch.sdkSessionId !== undefined) {
       this.watchSessionTitle(sessionId)
     }
+    // A moved cwd may leave the team (another repository); re-resolve.
+    if (patch.projectPath !== undefined) void this.teams.track(sessionId, patch.projectPath)
     this.options.registry.updateSession(sessionId, {
+      // Status changes re-read the group file, so a removed or restored
+      // group shows in the navigator without a restart.
+      ...(patch.status !== undefined ? this.groupFields(next) : {}),
       ...(patch.status !== undefined ? { status: patch.status } : {}),
       // The agent's cwd move rides the same session-update broadcast, so
       // clients re-group the row without a reload (worktree tracking D2).
@@ -1324,7 +1348,17 @@ export class ChatSessionManager {
       // Per design D1: existing icons, labels, and sorting keep working.
       agentType: 'claude',
       ...(record.archivedAt != null ? { archivedAt: record.archivedAt } : {}),
-      ...(record.groupId != null ? { groupId: record.groupId } : {}),
+      ...this.groupFields(record),
+    }
+  }
+
+  /** Group id plus display state; label/missing only once the team is known. */
+  private groupFields(record: ChatSessionRecord): Partial<Session> {
+    if (record.groupId == null) return {}
+    const info = this.teams.groupInfo(record.sessionId, record.groupId)
+    return {
+      groupId: record.groupId,
+      ...(info ? { groupLabel: info.label, groupMissing: info.missing } : {}),
     }
   }
 }

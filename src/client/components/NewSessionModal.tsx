@@ -1,4 +1,5 @@
 import { useClaudeProfiles } from './chat/useClaudeProfiles'
+import { useTeamGroups } from './chat/useTeamGroups'
 import { useEffect, useRef, useState } from 'react'
 import { type CommandPreset, getFullCommand, useSettingsStore } from '../stores/settingsStore'
 import { DirectoryBrowser } from './DirectoryBrowser'
@@ -70,7 +71,8 @@ interface NewSessionModalProps {
     autoStartAgent?: AutoStartAgent,
     kind?: 'terminal' | 'chat',
     claudeProfileId?: string,
-    approvalPolicy?: ChatApprovalPolicy
+    approvalPolicy?: ChatApprovalPolicy,
+    groupId?: string
   ) => void
   defaultProjectDir: string
   commandPresets: CommandPreset[]
@@ -124,6 +126,9 @@ export default function NewSessionModal({
   // The catalog is resolved for the entered project path: a `.kawai`
   // directory in the project (or above it) extends the picker live.
   const catalog = useClaudeProfiles(isOpen && kind === 'chat', projectPath)
+  // Team groups (agent-teams): the project's roles; "" = no group.
+  const teamGroups = useTeamGroups(isOpen && kind === 'chat', projectPath)
+  const [groupId, setGroupId] = useState('')
   const [name, setName] = useState('')
   const [selectedPresetId, setSelectedPresetId] = useState<string | null>(null)
   const [command, setCommand] = useState('')
@@ -174,6 +179,7 @@ export default function NewSessionModal({
       // own entry point (see `defaultKind`), so a reset here would only record
       // the open that just ended.
       setClaudeProfileId('default')
+      setGroupId('')
       setProjectPath('')
       setProjectPathError(null)
       setName('')
@@ -401,7 +407,9 @@ export default function NewSessionModal({
     setProjectPathError(null)
     if (kind === 'chat') {
       if (catalog.loading || catalog.error || !catalog.profiles.some(profile => profile.id === claudeProfileId)) return
-      onCreate(trimmedPath, name.trim() || undefined, undefined, undefined, undefined, undefined, 'chat', claudeProfileId, autoApprove ? 'auto' : 'manual')
+      // A group no longer offered (path changed since picking) is dropped.
+      const group = teamGroups.groups.some(option => option.id === groupId) ? groupId : undefined
+      onCreate(trimmedPath, name.trim() || undefined, undefined, undefined, undefined, undefined, 'chat', claudeProfileId, autoApprove ? 'auto' : 'manual', group)
       onClose()
       return
     }
@@ -489,6 +497,14 @@ export default function NewSessionModal({
               <button type="button" className="btn mt-1" onClick={catalog.retry}>Retry profiles</button>
             </div>}
             {catalog.warnings.map(warning => <p key={warning} role="status" className="mt-1 text-xs text-amber-400">{warning}</p>)}
+            <label className="mt-3 block text-xs text-secondary">Group
+              <select aria-label="Group" className="input mt-1.5" value={groupId}
+                onChange={event => setGroupId(event.target.value)}>
+                <option value="">No group</option>
+                {teamGroups.groups.map(group => <option key={group.id} value={group.id} title={group.description}>{group.label}</option>)}
+              </select>
+            </label>
+            {teamGroups.warnings.map(warning => <p key={warning} role="status" className="mt-1 text-xs text-amber-400">{warning}</p>)}
             <label className="mt-3 flex items-center gap-2 text-xs text-secondary">
               <input
                 type="checkbox"
