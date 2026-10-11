@@ -25,7 +25,7 @@
 
 - [x] 5.1 Store `notifications[sessionId]` in `chatStore` from snapshots and `chat-notifications`. Add client-side closing of account notices, keyed by `${sessionId}:${key}:${text}`, and a dismiss action that sends `chat-dismiss-notification` for agent notices. Verify with store tests: replace semantics, a hidden account notice reappearing when its text changes, and a dismiss sending the message.
 - [x] 5.2 Create `NotificationStrip.tsx` and render it under the header next to `UsageBar` in `ChatView.tsx`. Use one line per notice with a severity style, a dim hint, and a close button, and render nothing when the list is empty. Use solid semantic colour tokens, with no `/opacity` utilities. Verify with component tests for the warning and error styles, priority order, the empty state, and close buttons calling the right actions.
-- [ ] 5.3 Update the `How It Works` section of `CLAUDE.md` with a notifications bullet covering both sources, ephemerality, and closing. Verify that the bullet matches the implemented behavior.
+- [x] 5.3 Update the `How It Works` section of `CLAUDE.md` with a notifications bullet covering both sources, ephemerality, and closing. Verify that the bullet matches the implemented behavior.
 
 ## 6. Integration
 
