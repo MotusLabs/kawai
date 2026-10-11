@@ -30,11 +30,11 @@
 
 ## 5. Bounded worktree staffing
 
-- [ ] 5.1 Filter task-targeted group mail by the member's current resolved worktree before atomic idle claim, retaining urgent/direct/oldest ordering and longest-idle pickup; verify dispatcher tests cover an idle matching member, a member in a subdirectory, an idle member elsewhere being skipped, and cwd moves changing eligibility.
-- [ ] 5.2 Add a durable spawning reservation and atomic cap checks for group live-member `max`, team live-spawned-session caps, and one live non-archived spawned member of any group per resolved worktree; verify competing dispatch attempts cannot create duplicate writers or exceed caps, archived/killed sessions release slots, and a busy writer in a subdirectory still occupies its worktree slot.
-- [ ] 5.3 Create a member programmatically in a valid target worktree when no idle matching member exists and all caps allow it, carrying group/profile/approval/task and delivering the message as the first turn; verify manager/dispatcher tests cover group settings, default profile/manual approval, associated task persistence, and first-turn delivery only once.
-- [ ] 5.4 Release failed spawning reservations and requeue mail without bypassing receipt recovery, reconcile interrupted startup reservations, re-evaluate waiting mail when slots free or members become idle, and dead-letter queued task mail whose target worktree was removed; verify failure/restart/cap-release tests cover each path and confirm no git worktree is ever created implicitly.
-- [ ] 5.5 Document staffing triggers, cap accounting, one spawned writer per worktree, and failure/removal behavior; verify the rules match dispatcher tests and distinguish ordinary manually created members from spawned-session cap accounting.
+- [x] 5.1 Filter task-targeted group mail by the member's current resolved worktree before atomic idle claim, retaining urgent/direct/oldest ordering and longest-idle pickup; verify dispatcher tests cover an idle matching member, a member in a subdirectory, an idle member elsewhere being skipped, and cwd moves changing eligibility.
+- [x] 5.2 Add a durable spawning reservation and atomic cap checks for group live-member `max`, team live-spawned-session caps, and one live non-archived spawned member of any group per resolved worktree; verify competing dispatch attempts cannot create duplicate writers or exceed caps, archived/killed sessions release slots, and a busy writer in a subdirectory still occupies its worktree slot.
+- [x] 5.3 Create a member programmatically in a valid target worktree when no idle matching member exists and all caps allow it, carrying group/profile/approval/task and delivering the message as the first turn; verify manager/dispatcher tests cover group settings, default profile/manual approval, associated task persistence, and first-turn delivery only once.
+- [x] 5.4 Release failed spawning reservations and requeue mail without bypassing receipt recovery, reconcile interrupted startup reservations, re-evaluate waiting mail when slots free or members become idle, and dead-letter queued task mail whose target worktree was removed; verify failure/restart/cap-release tests cover each path and confirm no git worktree is ever created implicitly.
+- [x] 5.5 Document staffing triggers, cap accounting, one spawned writer per worktree, and failure/removal behavior; verify the rules match dispatcher tests and distinguish ordinary manually created members from spawned-session cap accounting.
 
 ## 6. Human task connections
 
@@ -52,7 +52,7 @@
 
 ## 8. Integration
 
-- [ ] 8.1 Add a headless fixture integration in one temporary repository with a linked worktree: a permitted lead creates/amends a task, sends worktree-targeted mail, a member is spawned within caps and receives current context, and its note/reply returns under the same task; verify the test passes, preserves the task across creator kill/restart, and uses `cleanGitEnv()` for git commands.
+- [x] 8.1 Add a headless fixture integration in one temporary repository with a linked worktree: a permitted lead creates/amends a task, sends worktree-targeted mail, a member is spawned within caps and receives current context, and its note/reply returns under the same task; verify the test passes, preserves the task across creator kill/restart, and uses `cleanGitEnv()` for git commands.
 - [ ] 8.2 Walk task creation/detail/amendment/journal/status controls, worktree-targeted spawning, task/header/peer badges, cap-wait behavior, and needs-attention notification against the fixture using repository Playwright; verify DOM state and screenshots, including reload/reconnect restoration.
 - [ ] 8.3 Run `bun run lint && bun run typecheck && bun run test` and OpenSpec validation, and verify the full suite is green with the task/worktree integration included.
 

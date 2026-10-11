@@ -1,6 +1,10 @@
 // Durable mailbox dispatch, serialized across asynchronous agent startup.
 // Idleness is checked again inside the atomic claim; SDK queues receive only
 // idle turns, except urgent direct mail after an acknowledged interrupt.
+// Group mail whose task targets a worktree (team-tasks D4) only goes to a
+// member whose resolved worktree is that target; after the idle pass a
+// staffing hook may spawn a member for mail nobody could take, and the
+// reserved message becomes the new member's first turn.
 import type { ChatPeerMessage } from '../../shared/chat'
 import type { ChatPeerTaskContext } from '../../shared/teamTasks'
 import type { TeamMessage } from './mailboxStore'
@@ -14,6 +18,14 @@ export interface MailRecipient {
   idle: boolean
   pendingRequest: boolean
   available: boolean
+  /** The worktree root containing the member's current project path. */
+  worktree?: string
+}
+
+/** Mail reserved for a freshly spawned member, to deliver as its first turn. */
+export interface SpawnAssignment {
+  message: TeamMessage
+  sessionId: string
 }
 
 export class MailDispatcher {
@@ -36,8 +48,19 @@ export class MailDispatcher {
     taskContext?: (taskId: string | null) => ChatPeerTaskContext | null
     /** A task message was pushed to this session: it now works on that task. */
     associateTask?: (sessionId: string, taskId: string) => void
+    /** Target worktree root of group mail under a worktree task; null = any member. */
+    targetWorktree?: (message: TeamMessage) => string | null
+    /** Spawn members for worktree mail no idle member could take (team-tasks D4). */
+    staff?: () => Promise<SpawnAssignment[]>
     onError?: (error: unknown) => void
   }) {}
+
+  /** Whether a member may take a message given its task's target worktree. */
+  private inWorktree(recipient: MailRecipient | undefined, message: TeamMessage): boolean {
+    if (message.toKind !== 'group' || !this.options.targetWorktree) return true
+    const target = this.options.targetWorktree(message)
+    return target === null || recipient?.worktree === target
+  }
 
   notify(): void {
     if (this.closed) return
@@ -98,21 +121,31 @@ export class MailDispatcher {
     const idle = recipients.filter(row => this.idleSince.has(row.sessionId))
       .sort((a, b) => this.idleSince.get(a.sessionId)! - this.idleSince.get(b.sessionId)!)
     for (const row of idle) {
-      const message = this.store.nextEligible({ teamId: row.teamId, sessionId: row.sessionId, groupId: row.groupId })
+      const message = this.store.nextEligible({ teamId: row.teamId, sessionId: row.sessionId, groupId: row.groupId },
+        undefined, candidate => this.inWorktree(row, candidate))
       if (message) await this.push(message, row, false)
+    }
+    if (this.closed || !this.options.staff) return
+    for (const assignment of await this.options.staff()) {
+      const recipient = this.current(assignment.sessionId)
+      if (recipient) await this.push(assignment.message, recipient, false, true)
+      // Not delivered as the first turn (the member was not ready or went
+      // away): back to the queue, where the member can still pick it up.
+      if (this.store.get(assignment.message.id)?.state === 'spawning') this.store.requeue(assignment.message.id)
     }
   }
 
-  private async push(message: TeamMessage, recipient: MailRecipient, interrupt: boolean) {
+  private async push(message: TeamMessage, recipient: MailRecipient, interrupt: boolean, reserved = false) {
     try {
       await this.options.prepare(recipient.sessionId)
       if (this.closed) return
       const eligible = () => {
         const current = this.current(recipient.sessionId)
         return !!current?.available && !current.pendingRequest && current.teamId === message.teamId &&
-          (interrupt || current.idle) && (message.toKind === 'session' || current.groupId === message.toId)
+          (interrupt || current.idle) && (message.toKind === 'session' || current.groupId === message.toId) &&
+          this.inWorktree(current, message)
       }
-      if (!this.store.claimWhen(message.id, recipient.sessionId, eligible)) return
+      if (!this.store.claimWhen(message.id, recipient.sessionId, eligible, reserved)) return
       this.idleSince.delete(recipient.sessionId)
       if (interrupt) await this.options.interrupt(recipient.sessionId)
       const current = this.current(recipient.sessionId)

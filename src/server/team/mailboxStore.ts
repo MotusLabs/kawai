@@ -7,7 +7,7 @@
 // recipient transcript carried the id). Threads count hops along the reply
 // chain; a send past the limit is stored dead-lettered instead of queued.
 import type { Database } from 'bun:sqlite'
-import { mailboxSql } from './mailboxSql'
+import { mailboxSql, worktreeTaskMailSql } from './mailboxSql'
 
 import type { MessageState, MessagePriority, TeamMessage } from '../../shared/team'
 export type { MessageState, MessagePriority, TeamMessage } from '../../shared/team'
@@ -147,14 +147,52 @@ export class MailboxStore {
 
   /**
    * The next message an idle recipient should get: urgent before normal,
-   * direct before group, then oldest. Scheduled rows count once due.
+   * direct before group, then oldest. Scheduled rows count once due. An
+   * `accept` filter (worktree staffing, team-tasks D4) skips rows this
+   * recipient may not take, keeping that order for the rest.
    */
-  nextEligible(recipient: { teamId: string; sessionId: string; groupId: string | null }, now = nowIso()): TeamMessage | null {
-    const row = this.statements.nextEligible.get({
+  nextEligible(
+    recipient: { teamId: string; sessionId: string; groupId: string | null },
+    now = nowIso(),
+    accept?: (message: TeamMessage) => boolean
+  ): TeamMessage | null {
+    // all(), not iterate(): leaving an iteration early would leave the shared
+    // prepared statement mid-step for its next caller.
+    const rows = this.statements.nextEligible.all({
       $teamId: recipient.teamId, $sessionId: recipient.sessionId,
       $groupId: recipient.groupId, $now: now,
-    })
-    return row ? mapRow(row as Record<string, unknown>) : null
+    }) as Record<string, unknown>[]
+    for (const row of rows) {
+      const message = mapRow(row)
+      if (!accept || accept(message)) return message
+    }
+    return null
+  }
+
+  /** Claim a row reserved for a spawn by the session spawned for it. */
+  claimSpawned(id: string, sessionId: string, now = nowIso()): boolean {
+    return this.changed(id, this.statements.claimSpawned.run({
+      $id: id, $sessionId: sessionId, $now: now,
+    }).changes === 1)
+  }
+
+  /** Reserve queued mail for a spawn (inside the cap transaction). */
+  reserveForSpawn(id: string): boolean {
+    return this.transition(id, ['queued'], { state: 'spawning' })
+  }
+
+  /**
+   * Due queued group mail whose task targets a worktree, urgent first then
+   * oldest, with that target (staffing candidates, team-tasks D4).
+   */
+  worktreeTaskMail(now = nowIso()): Array<{ message: TeamMessage; worktree: string }> {
+    return (this.cachedStatement(worktreeTaskMailSql).all({ $now: now }) as Record<string, unknown>[])
+      .map(row => ({ message: mapRow(row), worktree: String(row.task_worktree) }))
+  }
+
+  /** Rows left reserved by an interrupted spawn (startup reconciliation). */
+  spawningRows(): TeamMessage[] {
+    return this.select(`state = 'spawning'`, {})
   }
 
   /** Atomic claim: true for exactly one caller per queued (or held) message. */
@@ -165,8 +203,9 @@ export class MailboxStore {
   }
 
   /** Re-check recipient availability inside the transaction that wins the claim. */
-  claimWhen(id: string, sessionId: string, isEligible: () => boolean): boolean {
-    return this.db.transaction(() => isEligible() && this.claim(id, sessionId))()
+  claimWhen(id: string, sessionId: string, isEligible: () => boolean, reserved = false): boolean {
+    return this.db.transaction(() => isEligible() &&
+      (reserved ? this.claimSpawned(id, sessionId) : this.claim(id, sessionId)))()
   }
 
   /** Urgent direct mail held while the recipient's card awaits the human. */
@@ -184,15 +223,15 @@ export class MailboxStore {
     return this.changed(id, this.statements.markDelivered.run({ $id: id, $now: now }).changes === 1)
   }
 
-  /** Back to the queue; the claim and push are forgotten. */
+  /** Back to the queue; the claim, push, and any spawn reservation are forgotten. */
   requeue(id: string): boolean {
-    return this.transition(id, ['claimed', 'awaiting-request'], {
+    return this.transition(id, ['claimed', 'awaiting-request', 'spawning'], {
       state: 'queued', claimed_by: null, claimed_at: null, pushed_at: null,
     })
   }
 
   deadLetter(id: string, reason: string): boolean {
-    return this.transition(id, ['queued', 'claimed', 'awaiting-request'], { state: 'dead', reason })
+    return this.transition(id, ['queued', 'claimed', 'awaiting-request', 'spawning'], { state: 'dead', reason })
   }
 
   /** Receipt neither confirmed nor refuted (D10): out of automatic delivery. */
@@ -298,7 +337,7 @@ export class MailboxStore {
 
   /** The mailbox view: everything not settled, plus dead and uncertain. */
   listForTeam(teamId: string): TeamMessage[] {
-    return this.select(`team_id = $teamId AND state IN ('queued', 'awaiting-request', 'claimed', 'dead', 'uncertain')`, {
+    return this.select(`team_id = $teamId AND state IN ('queued', 'awaiting-request', 'spawning', 'claimed', 'dead', 'uncertain')`, {
       $teamId: teamId,
     })
   }

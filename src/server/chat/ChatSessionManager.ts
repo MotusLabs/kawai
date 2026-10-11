@@ -66,6 +66,8 @@ import { MailDispatcher } from '../team/dispatcher'
 import { receiptMessageId } from '../team/receipt'
 import { SessionMailbox } from '../team/sessionMailbox'
 import type { TaskService } from '../team/TaskService'
+import type { SpawnRequest, SpawnResult } from '../team/staffing'
+import { TeamCaps } from '../team/teamCaps'
 import {
   findTranscriptPath,
   readTranscriptCwd,
@@ -255,7 +257,7 @@ export class ChatSessionManager {
     { timer: ReturnType<typeof setTimeout>; path: string }
   >()
 
-  async createAvailableSession(input: { projectPath: string; name?: string; claudeProfileId?: string; approvalPolicy?: ChatApprovalPolicy; groupId?: string; cloneFromSessionId?: string }): Promise<ChatCreateResult> {
+  async createAvailableSession(input: { projectPath: string; name?: string; claudeProfileId?: string; approvalPolicy?: ChatApprovalPolicy; groupId?: string; cloneFromSessionId?: string; taskId?: string; spawned?: boolean }): Promise<ChatCreateResult> {
     // Refuse a bad path before the probe spends an SDK spawn on it.
     const project = resolveProjectDirectory(input.projectPath, this.options.isDirectory)
     if (!project.ok) return project
@@ -400,6 +402,11 @@ export class ChatSessionManager {
       prepare: async id => { this.captureHistory(id); const driver = await this.ensureDriver(id); if (!driver) throw new Error('Recipient disappeared'); driver.start() },
       restore: id => { const result = this.restore(id); if (!result.ok) throw new Error(result.error) },
       watchReceipt: id => this.watchSessionTitle(id),
+      spawn: request => this.spawnMember(request),
+      caps: new TeamCaps({
+        ...(options.profileCatalogHome ? { homeDir: options.profileCatalogHome } : {}),
+        onErrors: errors => logger.warn('team_caps_file_errors', { errors }),
+      }),
       associateTask: (id, taskId) => {
         if (this.records.get(id)?.taskId !== taskId) this.applyPatch(id, { taskId })
       },
@@ -430,6 +437,23 @@ export class ChatSessionManager {
   readonly dispatcher: MailDispatcher
   private readonly teamMail: SessionMailbox
 
+  /**
+   * Worktree staffing's programmatic create (team-tasks D4): a group member
+   * in the task's worktree with the group's profile and approval policy,
+   * associated with the task and marked spawned. Resolves once the member's
+   * team is known, so the dispatcher can deliver its first turn at once.
+   */
+  private async spawnMember(request: SpawnRequest): Promise<SpawnResult> {
+    const result = await this.createAvailableSession({
+      projectPath: request.projectPath, groupId: request.groupId, approvalPolicy: request.approvalPolicy,
+      taskId: request.taskId, spawned: true,
+      ...(request.profileId ? { claudeProfileId: request.profileId } : {}),
+    })
+    if (!result.ok) return result
+    await this.teams.track(result.session.id, result.session.projectPath)
+    return { ok: true, sessionId: result.session.id }
+  }
+
   /** Create a chat session. Refused (no side effects) when auth is missing. */
   createSession(input: {
     projectPath: string
@@ -439,6 +463,10 @@ export class ChatSessionManager {
     approvalPolicy?: ChatApprovalPolicy
     /** Team group, already validated by createAvailableSession; absent = none. */
     groupId?: string
+    /** Team task the session starts on (worktree staffing); absent = none. */
+    taskId?: string
+    /** Created by worktree staffing rather than the human. */
+    spawned?: boolean
   }): ChatCreateResult {
     const project = resolveProjectDirectory(input.projectPath, this.options.isDirectory)
     if (!project.ok) return project
@@ -468,6 +496,8 @@ export class ChatSessionManager {
       // one the generator produced is a placeholder a later title may replace.
       nameSource: (suppliedName ? 'manual' : 'placeholder') as ChatNameSource,
       groupId: input.groupId ?? null,
+      taskId: input.taskId ?? null,
+      spawned: input.spawned === true,
       status: 'waiting' as SessionStatus,
       createdAt: now,
       lastActivityAt: now,

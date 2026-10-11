@@ -2,6 +2,8 @@
 export type MessageState =
   | 'queued'
   | 'claimed'
+  /** Reserved for a member being spawned in its task's worktree (team-tasks D4). */
+  | 'spawning'
   | 'awaiting-request'
   | 'delivered'
   | 'dead'
