@@ -691,12 +691,20 @@ describe('slash-command menu', () => {
     })
     const type = (value: string) =>
       act(() => { renderer.root.findByType('textarea').props.onChange({ target: { value } }) })
+    // Type with an explicit caret (collapsed at `caret`, or a selection).
+    const typeAt = (value: string, caret: number, selectionEnd: number = caret) =>
+      act(() => { renderer.root.findByType('textarea').props.onChange({
+        target: { value, selectionStart: caret, selectionEnd } }) })
+    // A caret move or selection without typing (arrows, clicks, dragging).
+    const moveCaret = (caret: number, selectionEnd: number = caret) =>
+      act(() => { renderer.root.findByType('textarea').props.onSelect({
+        target: { selectionStart: caret, selectionEnd } }) })
     const key = (keyName: string) =>
       act(() => { renderer.root.findByType('textarea').props.onKeyDown({
         key: keyName, preventDefault: () => {}, currentTarget: { form: { requestSubmit: () => submit() } } }) })
     const submit = () =>
       act(() => { renderer.root.findByType('form').props.onSubmit({ preventDefault: () => {} }) })
-    return { sent, renderer, type, key, submit }
+    return { sent, renderer, type, typeAt, moveCaret, key, submit }
   }
 
   test('opens on a bare slash, filters, and stays closed otherwise', () => {
@@ -766,6 +774,83 @@ describe('slash-command menu', () => {
     expect(option(1).props['aria-selected']).toBe(true)
     expect(classesOf(option(1))).toContain('text-accent')
     expect(classesOf(option(0))).toContain('hover:bg-hover')
+    h.renderer.unmount()
+  })
+
+  test('choosing mid-message replaces only the /word and sends nothing', () => {
+    const h = renderComposer(READY_COMMANDS)
+    // Caret just after `/re` inside `please run /re on this`.
+    h.typeAt('please run /re on this', 13)
+    expect(h.renderer.root.findAllByProps({ 'data-testid': 'slash-command-menu' })).toHaveLength(1)
+    h.key('Enter')
+    expect(h.renderer.root.findByType('textarea').props.value).toBe('please run /clear on this')
+    expect(useChatStore.getState().drafts['chat-1']).toBe('please run /clear on this')
+    expect(h.renderer.root.findAllByProps({ 'data-testid': 'slash-command-menu' })).toHaveLength(0)
+    expect(h.sent.filter(message => message.type === 'chat-send')).toEqual([])
+    h.renderer.unmount()
+  })
+
+  test('the argument hint follows a mid-message insertion and hides once args are typed', () => {
+    const h = renderComposer(READY_COMMANDS)
+    // Inserting mid-message leaves the caret just after `/clear ` — the only
+    // position where the hint may show (design D4).
+    h.typeAt('please run /cl later', 13)
+    h.key('Enter')
+    expect(h.renderer.root.findByType('textarea').props.value).toBe('please run /clear later')
+    expect(h.renderer.root.findByProps({ 'data-testid': 'command-argument-hint' }).children)
+      .toEqual(['/', 'clear', ' ', '[name]'])
+    // Typing arguments moves the caret past the inserted space: hint gone.
+    h.typeAt('please run /clear demo later', 19)
+    expect(h.renderer.root.findAllByProps({ 'data-testid': 'command-argument-hint' })).toHaveLength(0)
+    h.renderer.unmount()
+  })
+
+  test('opens mid-message and at the start of a later line', () => {
+    const h = renderComposer(READY_COMMANDS)
+    h.typeAt('please run /co', 14)
+    const menu = h.renderer.root.findByProps({ 'data-testid': 'slash-command-menu' })
+    expect(menu.findAllByProps({ role: 'option' }).map(option => option.props['data-command-name']))
+      .toEqual(['context', 'compact'])
+    // A `/` word on the second line lists everything, like a leading one.
+    h.typeAt('first line\n/', 12)
+    expect(h.renderer.root.findByProps({ 'data-testid': 'slash-command-menu' })
+      .findAllByProps({ role: 'option' })).toHaveLength(READY_COMMANDS.commands.length)
+    h.renderer.unmount()
+  })
+
+  test('stays closed for and/or and /usr/bin', () => {
+    const h = renderComposer(READY_COMMANDS)
+    h.typeAt('check and/or maybe', 11)
+    expect(h.renderer.root.findAllByProps({ 'data-testid': 'slash-command-menu' })).toHaveLength(0)
+    h.typeAt('look at /usr/bin now', 15)
+    expect(h.renderer.root.findAllByProps({ 'data-testid': 'slash-command-menu' })).toHaveLength(0)
+    h.renderer.unmount()
+  })
+
+  test('moving the caret out of the word or selecting text closes; returning reopens', () => {
+    const h = renderComposer(READY_COMMANDS)
+    h.typeAt('please run /re on this', 13)
+    expect(h.renderer.root.findAllByProps({ 'data-testid': 'slash-command-menu' })).toHaveLength(1)
+    // Arrow keys / a click move the caret into another word: closed.
+    h.moveCaret(17)
+    expect(h.renderer.root.findAllByProps({ 'data-testid': 'slash-command-menu' })).toHaveLength(0)
+    // Back into the `/` word: open again, filtered the same.
+    h.moveCaret(13)
+    expect(h.renderer.root.findAllByProps({ 'data-testid': 'slash-command-menu' })).toHaveLength(1)
+    // A selection (even inside the word) has no single caret: closed.
+    h.moveCaret(11, 13)
+    expect(h.renderer.root.findAllByProps({ 'data-testid': 'slash-command-menu' })).toHaveLength(0)
+    h.renderer.unmount()
+  })
+
+  test('a mid-message /clear is sent as typed without creating a new chat', () => {
+    const h = renderComposer(READY_COMMANDS)
+    h.type('please run /clear later')
+    h.submit()
+    expect(h.sent.filter(message => message.type === 'chat-send')).toEqual([
+      { type: 'chat-send', sessionId: 'chat-1', text: 'please run /clear later' },
+    ])
+    expect(h.sent.filter(message => message.type === 'session-create')).toEqual([])
     h.renderer.unmount()
   })
 
