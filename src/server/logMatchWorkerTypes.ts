@@ -55,7 +55,7 @@ export interface MatchWorkerRequest {
   skipMatchingPatterns?: string[]
 }
 
-/** A window where tryExactMatchWindowToLog returned null due to no extractable messages */
+/** A window where tryExactMatchWindowToLogAsync returned null due to no extractable messages */
 export interface NoMessageWindow {
   tmuxWindow: string
   projectPath: string | null

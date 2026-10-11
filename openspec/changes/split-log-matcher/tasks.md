@@ -16,17 +16,17 @@
 
 ## 2. Delete the sync matcher chain from logMatcher.ts
 
-- [ ] 2.1 Delete the sync twins: `tryExactMatchWindowToLog`, `matchWindowsToLogsByExactRg`,
+- [x] 2.1 Delete the sync twins: `tryExactMatchWindowToLog`, `matchWindowsToLogsByExactRg`,
   `verifyWindowLogAssociation`, `verifyWindowLogAssociationDetailed`,
   `findLogsWithExactMessage`, `findLogsWithExactMessageInPaths`,
   `getTerminalScrollbackWithAnsi`, `captureTerminalScrollback`
-- [ ] 2.2 Delete helpers orphaned by 2.1 only (verify each with a repo-wide grep before
+- [x] 2.2 Delete helpers orphaned by 2.1 only (verify each with a repo-wide grep before
   deleting: sync command-running wrappers, candidate-filter helpers used solely by the sync
   chain); do NOT delete helpers the async chain or extraction code still use
-- [ ] 2.3 In `src/server/__tests__/logMatcher.test.ts`, delete tests covering only the removed
+- [x] 2.3 In `src/server/__tests__/logMatcher.test.ts`, delete tests covering only the removed
   sync functions; port any case whose matrix is not already covered against the async twin
   (rule: coverage, not symmetry — design D3); fix the import block
-- [ ] 2.4 Run lint, typecheck, and the full suite; commit
+- [x] 2.4 Run lint, typecheck, and the full suite; commit
   (`refactor: delete production-dead sync matcher chain`)
 
 ## 3. Split the remaining module into src/server/logmatch/

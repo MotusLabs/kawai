@@ -6,11 +6,8 @@ import os from 'node:os'
 import type { TerminalSession } from '../../shared/types'
 import {
   normalizeText,
-  matchWindowsToLogsByExactRg,
   matchWindowsToLogsByExactRgAsync,
-  tryExactMatchWindowToLog,
   getLogTokenCount,
-  verifyWindowLogAssociation,
   verifyWindowLogAssociationDetailedAsync,
   extractRecentTraceLinesFromTmux,
   extractRecentUserMessagesFromTmux,
@@ -21,17 +18,14 @@ import {
   hasMessageInValidUserContext,
   isToolNotificationText,
   extractLastEntryTimestamp,
-  captureTerminalScrollback,
   iterateLogLinesBackward,
   stripPastePlaceholders,
 } from '../logMatcher'
 
 const bunAny = Bun as typeof Bun & {
   spawn: typeof Bun.spawn
-  spawnSync: typeof Bun.spawnSync
 }
 const originalSpawn = bunAny.spawn
-const originalSpawnSync = bunAny.spawnSync
 
 const tmuxOutputs = new Map<string, string>()
 const commandCalls: string[][] = []
@@ -187,6 +181,33 @@ function buildUserLogEntry(message: string): string {
   })
 }
 
+/**
+ * Drive one window through the async matcher and return its matched log path
+ * (or null when no confident match) — the single-window entry point the
+ * production pipeline exposes to tests.
+ */
+async function matchSingleWindowToLog(
+  tmuxWindow: string,
+  logDirs: string,
+  agentType?: TerminalSession['agentType']
+): Promise<string | null> {
+  const windows: TerminalSession[] = [
+    {
+      id: 'window-single',
+      name: 'single',
+      tmuxWindow,
+      projectPath: '/tmp/proj',
+      status: 'waiting',
+      lastActivity: new Date().toISOString(),
+      createdAt: new Date().toISOString(),
+      source: 'managed',
+      agentType,
+    },
+  ]
+  const { matches } = await matchWindowsToLogsByExactRgAsync(windows, logDirs)
+  return [...matches.keys()][0] ?? null
+}
+
 beforeEach(() => {
   commandCalls.length = 0
   bunAny.spawn = ((args: string[]) => {
@@ -199,31 +220,28 @@ beforeEach(() => {
       pid: 12345,
     } as unknown as ReturnType<typeof Bun.spawn>
   }) as typeof Bun.spawn
-
-  bunAny.spawnSync = ((args: string[]) => {
-    return runCommand(args) as ReturnType<typeof Bun.spawnSync>
-  }) as typeof Bun.spawnSync
 })
 
 afterEach(() => {
   bunAny.spawn = originalSpawn
-  bunAny.spawnSync = originalSpawnSync
   tmuxOutputs.clear()
 })
 
 describe('logMatcher', () => {
-  test('captures tmux scrollback through a UTF-8 client', () => {
-    setTmuxOutput('agentboard:1', '你好 🚀')
+  test('captures tmux scrollback through a UTF-8 client', async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agentboard-logmatch-'))
+    const logPath = path.join(tempDir, 'session.jsonl')
+    await fs.writeFile(logPath, buildUserLogEntry('你好 🚀'))
+    setTmuxOutput('agentboard:1', buildPromptScrollback(['你好 🚀']))
 
-    expect(captureTerminalScrollback('agentboard:1', 20)).toEqual({
-      ok: true,
-      content: '你好 🚀',
-    })
+    // The match only succeeds when the CJK content flows through the capture.
+    expect(await matchSingleWindowToLog('agentboard:1', tempDir)).toBe(logPath)
     expect(commandCalls[0]?.slice(0, 3)).toEqual([
       'tmux',
       '-u',
       'capture-pane',
     ])
+    await fs.rm(tempDir, { recursive: true, force: true })
   })
 
   test('normalizeText strips ANSI and control characters', () => {
@@ -472,7 +490,7 @@ describe('logMatcher', () => {
     await fs.rm(tempDir, { recursive: true, force: true })
   })
 
-  test('tryExactMatchWindowToLog uses ordered prompts to disambiguate', async () => {
+  test('matchWindowsToLogsByExactRgAsync uses ordered prompts to disambiguate', async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agentboard-logmatch-'))
     const logPathA = path.join(tempDir, 'session-a.jsonl')
     const logPathB = path.join(tempDir, 'session-b.jsonl')
@@ -489,12 +507,12 @@ describe('logMatcher', () => {
 
     setTmuxOutput('agentboard:1', buildPromptScrollback(messages))
 
-    const result = tryExactMatchWindowToLog('agentboard:1', tempDir)
-    expect(result?.logPath).toBe(logPathA)
+    const result = await matchSingleWindowToLog('agentboard:1', tempDir)
+    expect(result).toBe(logPathA)
     await fs.rm(tempDir, { recursive: true, force: true })
   })
 
-  test('tryExactMatchWindowToLog detects decorated Claude prompts', async () => {
+  test('matchWindowsToLogsByExactRgAsync detects decorated Claude prompts', async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agentboard-logmatch-'))
     const logPath = path.join(tempDir, 'session.jsonl')
     const message = 'decorated claude prompt'
@@ -505,12 +523,12 @@ describe('logMatcher', () => {
       buildPromptScrollback([message], { prefix: '> ' })
     )
 
-    const result = tryExactMatchWindowToLog('agentboard:1', tempDir)
-    expect(result?.logPath).toBe(logPath)
+    const result = await matchSingleWindowToLog('agentboard:1', tempDir)
+    expect(result).toBe(logPath)
     await fs.rm(tempDir, { recursive: true, force: true })
   })
 
-  test('tryExactMatchWindowToLog detects decorated Codex prompts', async () => {
+  test('matchWindowsToLogsByExactRgAsync detects decorated Codex prompts', async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agentboard-logmatch-'))
     const logPath = path.join(tempDir, 'session.jsonl')
     const message = 'decorated codex prompt'
@@ -521,12 +539,12 @@ describe('logMatcher', () => {
       buildPromptScrollback([message], { prefix: '* ', glyph: '›' })
     )
 
-    const result = tryExactMatchWindowToLog('agentboard:1', tempDir)
-    expect(result?.logPath).toBe(logPath)
+    const result = await matchSingleWindowToLog('agentboard:1', tempDir)
+    expect(result).toBe(logPath)
     await fs.rm(tempDir, { recursive: true, force: true })
   })
 
-  test('tryExactMatchWindowToLog refuses a log of a different agent type than the window', async () => {
+  test('matchWindowsToLogsByExactRgAsync refuses a log of a different agent type than the window', async () => {
     // Same prompt pasted into a claude window and a codex window seconds apart:
     // the claude log flushes first, so for a moment it is the only log containing
     // the codex pane's text. The codex window must wait, not claim the claude log.
@@ -538,25 +556,17 @@ describe('logMatcher', () => {
     await fs.writeFile(claudeLog, buildUserLogEntry(message))
     setTmuxOutput('agentboard:1', buildPromptScrollback([message]))
 
-    expect(
-      tryExactMatchWindowToLog('agentboard:1', tempDir, undefined, { agentType: 'codex' })
-    ).toBeNull()
+    expect(await matchSingleWindowToLog('agentboard:1', tempDir, 'codex')).toBeNull()
     // Unknown window type fails open
-    expect(
-      tryExactMatchWindowToLog('agentboard:1', tempDir, undefined, {})?.logPath
-    ).toBe(claudeLog)
-    expect(
-      tryExactMatchWindowToLog('agentboard:1', tempDir, undefined, { agentType: 'claude' })?.logPath
-    ).toBe(claudeLog)
+    expect(await matchSingleWindowToLog('agentboard:1', tempDir)).toBe(claudeLog)
+    expect(await matchSingleWindowToLog('agentboard:1', tempDir, 'claude')).toBe(claudeLog)
 
     // Once the codex log catches up, the codex window picks it over the claude log
     const codexDir = path.join(tempDir, '.codex', 'sessions')
     await fs.mkdir(codexDir, { recursive: true })
     const codexLog = path.join(codexDir, 'rollout-codex.jsonl')
     await fs.writeFile(codexLog, buildUserLogEntry(message))
-    expect(
-      tryExactMatchWindowToLog('agentboard:1', tempDir, undefined, { agentType: 'codex' })?.logPath
-    ).toBe(codexLog)
+    expect(await matchSingleWindowToLog('agentboard:1', tempDir, 'codex')).toBe(codexLog)
     await fs.rm(tempDir, { recursive: true, force: true })
   })
 
@@ -592,7 +602,7 @@ describe('logMatcher', () => {
     await fs.rm(tempDir, { recursive: true, force: true })
   })
 
-  test('tryExactMatchWindowToLog falls back to trace lines and skips subagents', async () => {
+  test('matchWindowsToLogsByExactRgAsync falls back to trace lines and skips subagents', async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agentboard-logmatch-'))
     const logPathMain = path.join(tempDir, 'session-main.jsonl')
     const logPathSub = path.join(tempDir, 'session-sub.jsonl')
@@ -625,62 +635,13 @@ describe('logMatcher', () => {
 
     setTmuxOutput('agentboard:1', CODEX_REVIEW_SCROLLBACK)
 
-    const result = tryExactMatchWindowToLog('agentboard:1', tempDir)
-    expect(result?.logPath).toBe(logPathMain)
+    const result = await matchSingleWindowToLog('agentboard:1', tempDir)
+    expect(result).toBe(logPathMain)
 
     await fs.rm(tempDir, { recursive: true, force: true })
   })
 
-  test('matchWindowsToLogsByExactRg returns unique matches', async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agentboard-logmatch-'))
-    const logPathA = path.join(tempDir, 'session-a.jsonl')
-    const logPathB = path.join(tempDir, 'session-b.jsonl')
-    const messagesA = ['alpha one', 'alpha two']
-    const messagesB = ['beta one', 'beta two']
-
-    await fs.writeFile(
-      logPathA,
-      messagesA.map((message) => buildUserLogEntry(message)).join('\n')
-    )
-    await fs.writeFile(
-      logPathB,
-      messagesB.map((message) => buildUserLogEntry(message)).join('\n')
-    )
-
-    const windows: TerminalSession[] = [
-      {
-        id: 'window-1',
-        name: 'alpha',
-        tmuxWindow: 'agentboard:1',
-        projectPath: '/tmp/alpha',
-        status: 'waiting',
-        lastActivity: new Date().toISOString(),
-        createdAt: new Date().toISOString(),
-        source: 'managed',
-      },
-      {
-        id: 'window-2',
-        name: 'beta',
-        tmuxWindow: 'agentboard:2',
-        projectPath: '/tmp/beta',
-        status: 'waiting',
-        lastActivity: new Date().toISOString(),
-        createdAt: new Date().toISOString(),
-        source: 'managed',
-      },
-    ]
-
-    setTmuxOutput('agentboard:1', buildPromptScrollback(messagesA))
-    setTmuxOutput('agentboard:2', buildPromptScrollback(messagesB))
-
-    const { matches: results } = matchWindowsToLogsByExactRg(windows, tempDir)
-    expect(results.get(logPathA)?.tmuxWindow).toBe('agentboard:1')
-    expect(results.get(logPathB)?.tmuxWindow).toBe('agentboard:2')
-
-    await fs.rm(tempDir, { recursive: true, force: true })
-  })
-
-  test('matchWindowsToLogsByExactRgAsync matches the sync variant and paces captures with the inter-window yield', async () => {
+  test('matchWindowsToLogsByExactRgAsync paces captures with the inter-window yield', async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agentboard-logmatch-paced-'))
     const logTie = path.join(tempDir, 'session-tie.jsonl')
     const logPlain = path.join(tempDir, 'session-plain.jsonl')
@@ -710,8 +671,6 @@ describe('logMatcher', () => {
     setTmuxOutput('agentboard:3', buildPromptScrollback([plainPrompt]))
     setTmuxOutput('agentboard:4', '')
 
-    const syncResult = matchWindowsToLogsByExactRg(windows, tempDir)
-
     const waitCalls: number[] = []
     commandCalls.length = 0
     const asyncResult = await matchWindowsToLogsByExactRgAsync(windows, tempDir, 25, {
@@ -721,18 +680,9 @@ describe('logMatcher', () => {
       },
     })
 
-    // Order-equivalence with the sync variant, including the blocked tie and
-    // noMessageWindows.
-    const serialize = (matches: Map<string, TerminalSession>) =>
-      Array.from(matches.entries()).map(([logPath, session]) => [
-        logPath,
-        session.tmuxWindow,
-      ])
-    expect(serialize(asyncResult.matches)).toEqual(serialize(syncResult.matches))
+    // The blocked tie and noMessageWindows come out of the same aggregation.
     expect(asyncResult.matches.get(logPlain)?.tmuxWindow).toBe('agentboard:3')
     expect(asyncResult.matches.has(logTie)).toBe(false)
-    expect(syncResult.matches.has(logTie)).toBe(false)
-    expect(asyncResult.noMessageWindows).toEqual(syncResult.noMessageWindows)
     expect(Array.from(asyncResult.noMessageWindows)).toEqual(['agentboard:4'])
 
     // The yield fires between consecutive captures: 4 windows -> 3 waits of
@@ -760,7 +710,7 @@ describe('logMatcher', () => {
     await fs.rm(tempDir, { recursive: true, force: true })
   })
 
-  test('matchWindowsToLogsByExactRg never swaps a claude and a codex window sharing a prompt', async () => {
+  test('matchWindowsToLogsByExactRgAsync never swaps a claude and a codex window sharing a prompt', async () => {
     // Incident replay: same prompt in a claude window (pane shows the collapsed
     // paste placeholder, which is in no log) and a codex window (pane shows the
     // raw paste). Phase 1: only the claude log has flushed. Phase 2: both have.
@@ -789,76 +739,19 @@ describe('logMatcher', () => {
 
     // Phase 1: claude log flushed first
     await fs.writeFile(claudeLog, buildUserLogEntry(paste))
-    let { matches } = matchWindowsToLogsByExactRg(windows, tempDir)
+    let { matches } = await matchWindowsToLogsByExactRgAsync(windows, tempDir)
     expect(matches.size).toBe(0)
 
     // Phase 2: codex log catches up
     await fs.writeFile(codexLog, buildUserLogEntry(paste))
-    ;({ matches } = matchWindowsToLogsByExactRg(windows, tempDir))
+    ;({ matches } = await matchWindowsToLogsByExactRgAsync(windows, tempDir))
     expect(matches.get(codexLog)?.tmuxWindow).toBe('agentboard:2')
     expect(matches.has(claudeLog)).toBe(false)
 
-    const asyncResult = await matchWindowsToLogsByExactRgAsync(windows, tempDir)
-    expect(asyncResult.matches.get(codexLog)?.tmuxWindow).toBe('agentboard:2')
-    expect(asyncResult.matches.has(claudeLog)).toBe(false)
-
     await fs.rm(tempDir, { recursive: true, force: true })
   })
 
-  test('matchWindowsToLogsByExactRg returns noMessageWindows for empty terminals', async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agentboard-nomsg-'))
-    const logPath = path.join(tempDir, 'session.jsonl')
-    const messages = ['gamma one', 'gamma two']
-
-    await fs.writeFile(
-      logPath,
-      messages.map((message) => buildUserLogEntry(message)).join('\n')
-    )
-
-    const windows: TerminalSession[] = [
-      {
-        id: 'window-empty',
-        name: 'booting',
-        tmuxWindow: 'agentboard:3',
-        projectPath: '/tmp/booting',
-        status: 'unknown',
-        lastActivity: new Date().toISOString(),
-        createdAt: new Date().toISOString(),
-        source: 'managed',
-      },
-      {
-        id: 'window-content',
-        name: 'gamma',
-        tmuxWindow: 'agentboard:4',
-        projectPath: '/tmp/gamma',
-        status: 'waiting',
-        lastActivity: new Date().toISOString(),
-        createdAt: new Date().toISOString(),
-        source: 'managed',
-      },
-    ]
-
-    // Empty terminal: no user messages and no trace lines
-    setTmuxOutput('agentboard:3', '')
-    // Window with real content that matches the log
-    setTmuxOutput('agentboard:4', buildPromptScrollback(messages))
-
-    const { matches: results, noMessageWindows } = matchWindowsToLogsByExactRg(
-      windows,
-      tempDir
-    )
-
-    // The empty window should be in noMessageWindows
-    expect(noMessageWindows.has('agentboard:3')).toBe(true)
-    // The content window should NOT be in noMessageWindows
-    expect(noMessageWindows.has('agentboard:4')).toBe(false)
-    // The content window should still match its log
-    expect(results.get(logPath)?.tmuxWindow).toBe('agentboard:4')
-
-    await fs.rm(tempDir, { recursive: true, force: true })
-  })
-
-  test('matchWindowsToLogsByExactRgAsync returns noMessageWindows (parity with sync)', async () => {
+  test('matchWindowsToLogsByExactRgAsync returns noMessageWindows for empty terminals', async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agentboard-async-nomsg-'))
     const logPath = path.join(tempDir, 'session.jsonl')
     const messages = ['delta one', 'delta two']
@@ -904,25 +797,8 @@ describe('logMatcher', () => {
     await fs.rm(tempDir, { recursive: true, force: true })
   })
 
-  test('verifyWindowLogAssociation returns true when content matches', async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agentboard-verify-'))
-    const logPath = path.join(tempDir, 'session.jsonl')
-    const messages = ['verify test one', 'verify test two']
-
-    await fs.writeFile(
-      logPath,
-      messages.map((m) => buildUserLogEntry(m)).join('\n')
-    )
-    setTmuxOutput('agentboard:1', buildPromptScrollback(messages))
-
-    const result = verifyWindowLogAssociation('agentboard:1', logPath, [tempDir], {})
-    expect(result).toBe(true)
-
-    await fs.rm(tempDir, { recursive: true, force: true })
-  })
-
-  test('verifyWindowLogAssociation returns false when content does not match', async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agentboard-verify-'))
+  test('verifyWindowLogAssociationDetailedAsync returns inconclusive when no log matches the window content', async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agentboard-verify-async-'))
     const logPath = path.join(tempDir, 'session.jsonl')
 
     // Log has different content than the tmux window
@@ -932,24 +808,14 @@ describe('logMatcher', () => {
     )
     setTmuxOutput('agentboard:1', buildPromptScrollback(['different window content']))
 
-    const result = verifyWindowLogAssociation('agentboard:1', logPath, [tempDir], {})
-    expect(result).toBe(false)
-
-    await fs.rm(tempDir, { recursive: true, force: true })
-  })
-
-  test('verifyWindowLogAssociation returns false for empty terminal', async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agentboard-verify-'))
-    const logPath = path.join(tempDir, 'session.jsonl')
-
-    await fs.writeFile(
+    const result = await verifyWindowLogAssociationDetailedAsync(
+      'agentboard:1',
       logPath,
-      buildUserLogEntry('some content')
+      [tempDir],
+      {}
     )
-    setTmuxOutput('agentboard:1', '') // Empty terminal
-
-    const result = verifyWindowLogAssociation('agentboard:1', logPath, [tempDir], {})
-    expect(result).toBe(false)
+    expect(result.status).toBe('inconclusive')
+    expect(result.reason).toBe('no_match')
 
     await fs.rm(tempDir, { recursive: true, force: true })
   })
@@ -1002,26 +868,6 @@ describe('logMatcher', () => {
     )
     expect(result.status).toBe('mismatch')
     expect(result.bestMatch?.logPath).toBe(otherLog)
-
-    await fs.rm(tempDir, { recursive: true, force: true })
-  })
-
-  test('tryExactMatchWindowToLog matches messages with JSON-escaped quotes', async () => {
-    // Regression test: terminal shows "working" but log has \"working\" (JSON-escaped)
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agentboard-quotes-'))
-    const logPath = path.join(tempDir, 'session.jsonl')
-    const messageWithQuotes = 'why is it appearing as "working" in the UI?'
-
-    // JSON.stringify escapes quotes as \" in the log file
-    await fs.writeFile(
-      logPath,
-      buildUserLogEntry(messageWithQuotes)
-    )
-    // Terminal shows unescaped quotes
-    setTmuxOutput('agentboard:1', buildPromptScrollback([messageWithQuotes]))
-
-    const result = tryExactMatchWindowToLog('agentboard:1', tempDir)
-    expect(result?.logPath).toBe(logPath)
 
     await fs.rm(tempDir, { recursive: true, force: true })
   })
@@ -1723,7 +1569,7 @@ describe('hasMessageInValidUserContext', () => {
 })
 
 describe('integration: JSON field pattern filters terminal captures', () => {
-  test('tryExactMatchWindowToLog excludes logs with message only in tool_result', async () => {
+  test('matcher excludes logs with message only in tool_result', async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agentboard-toolresult-'))
 
     // Log A: has message as actual user message
@@ -1760,14 +1606,14 @@ describe('integration: JSON field pattern filters terminal captures', () => {
 
     setTmuxOutput('agentboard:1', buildPromptScrollback([userMessage]))
 
-    const result = tryExactMatchWindowToLog('agentboard:1', tempDir)
+    const result = await matchSingleWindowToLog('agentboard:1', tempDir)
     // Should match Log A (actual user message), not Log B (terminal capture)
-    expect(result?.logPath).toBe(logPathA)
+    expect(result).toBe(logPathA)
 
     await fs.rm(tempDir, { recursive: true, force: true })
   })
 
-  test('tryExactMatchWindowToLog matches correct log when both have message in different contexts', async () => {
+  test('matcher picks the correct log when both have message in different contexts', async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agentboard-context-'))
 
     const logPathCorrect = path.join(tempDir, 'correct.jsonl')
@@ -1796,8 +1642,8 @@ describe('integration: JSON field pattern filters terminal captures', () => {
 
     setTmuxOutput('agentboard:1', buildPromptScrollback(messages))
 
-    const result = tryExactMatchWindowToLog('agentboard:1', tempDir)
-    expect(result?.logPath).toBe(logPathCorrect)
+    const result = await matchSingleWindowToLog('agentboard:1', tempDir)
+    expect(result).toBe(logPathCorrect)
 
     await fs.rm(tempDir, { recursive: true, force: true })
   })
