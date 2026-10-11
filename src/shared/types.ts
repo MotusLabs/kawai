@@ -17,6 +17,7 @@ import type {
   ChatQuestionAnswer,
   ChatUsageReport,
   ChatWireFrame,
+  ChatWorker,
 } from './chat'
 
 export type {
@@ -40,6 +41,8 @@ export type {
   ChatCommandState,
   ChatWireDirection,
   ChatWireFrame,
+  ChatWorker,
+  ChatWorkerStatus,
 } from './chat'
 
 export type {
@@ -269,6 +272,11 @@ export type ServerMessage =
       contextUsage: ChatContextUsage | null
       /** Latest plan-usage report for the session's profile, when one is held. */
       usage: ChatUsageReport | null
+      /**
+       * Agents the session spawned (workers design D2): the full roster at
+       * snapshot time — running ones live, settled ones with their outcomes.
+       */
+      workers: ChatWorker[]
     }
   // Replaced command list pushed to subscribed connections whenever the
   // agent reports a changed list (or the state changes). Additive: older
@@ -290,6 +298,11 @@ export type ServerMessage =
       sessionId: string
       usage: ChatContextUsage | null
     }
+  // Full worker roster of a chat session (workers design D2): a level signal,
+  // not deltas — a missed bookend must not wedge a stale running worker. Sent
+  // whenever the roster projection changes; additive and ephemeral like
+  // chat-activity, while settled outcomes also ride the snapshot and persist.
+  | { type: 'chat-workers'; sessionId: string; workers: ChatWorker[] }
   // Debug-view protocol frames, sent only to clients that opened the view.
   // `page: true` marks a reply to chat-debug-open/chat-debug-page (carrying
   // `hasOlder`); otherwise the message is a live batch.

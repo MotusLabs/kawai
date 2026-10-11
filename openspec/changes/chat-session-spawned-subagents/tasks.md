@@ -2,9 +2,9 @@
 
 ## 1. Worker model and roster reducer
 
-- [ ] 1.1 Add `ChatWorker`, `ChatWorkerStatus`, the `chat-workers` server message, and `workers` on `chat-snapshot` to `src/shared/chat.ts` and `src/shared/types.ts`, and verify `bun run typecheck` passes with the new shapes unused
-- [ ] 1.2 Create `src/server/chat/chatWorkers.ts` with `reduceWorkers` and the D3 input table, and verify unit tests pin `task_started` / `task_progress` / `task_updated` / `task_notification` / `background_tasks_changed` / `process_end` transitions — including that `task_notification` overwrites a provisional outcome and that `background_tasks_changed` writes `live` only — plus the dropping of `ambient` and `skip_transcript` tasks
-- [ ] 1.3 Reuse `chatActivity.ts`'s structural-frame convention in `chatWorkers.ts`, and verify tests match frame shapes copied from `sdk.d.ts` without importing the SDK
+- [x] 1.1 Add `ChatWorker`, `ChatWorkerStatus`, the `chat-workers` server message, and `workers` on `chat-snapshot` to `src/shared/chat.ts` and `src/shared/types.ts`, and verify `bun run typecheck` passes with the new shapes unused
+- [x] 1.2 Create `src/server/chat/chatWorkers.ts` with `reduceWorkers` and the D3 input table, and verify unit tests pin `task_started` / `task_progress` / `task_updated` / `task_notification` / `background_tasks_changed` / `process_end` transitions — including that `task_notification` overwrites a provisional outcome and that `background_tasks_changed` writes `live` only — plus the dropping of `ambient` and `skip_transcript` tasks
+- [x] 1.3 Reuse `chatActivity.ts`'s structural-frame convention in `chatWorkers.ts`, and verify tests match frame shapes copied from `sdk.d.ts` without importing the SDK
 
 ## 2. Driver consumes task frames and excludes worker inner traffic
 

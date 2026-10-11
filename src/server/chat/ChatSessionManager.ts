@@ -274,6 +274,9 @@ export class ChatSessionManager {
         this.records.get(sessionId)?.contextUsage ??
         null,
       usage: this.usageLimits.get(this.profileIdOf(sessionId) ?? 'default'),
+      // The spawned-worker roster (workers design D2); live entries hold the
+      // session at working, settled ones carry their persisted outcomes.
+      workers: [],
     }
   }
 
