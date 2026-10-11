@@ -156,8 +156,8 @@ interface Harness {
   activities: Array<ChatActivity | null>
   rateLimits: ChatUsageReport[]
   usageReports: ChatUsageReport[]
-  contextUsage: ChatContextUsage[]
-  /** Correction flag per onContextUsage publish, aligned with contextUsage. */
+  contextUsage: Array<ChatContextUsage | null>
+  /** Persist-request flag per onContextUsage publish, aligned with contextUsage. */
   contextCorrections: boolean[]
   noData: number[]
   fakes: FakeQueryHandle[]
@@ -189,7 +189,7 @@ function createHarness(
   const activities: Array<ChatActivity | null> = []
   const rateLimits: ChatUsageReport[] = []
   const usageReports: ChatUsageReport[] = []
-  const contextUsage: ChatContextUsage[] = []
+  const contextUsage: Array<ChatContextUsage | null> = []
   const contextCorrections: boolean[] = []
   const noData: number[] = []
   const fakes: FakeQueryHandle[] = []
@@ -218,9 +218,14 @@ function createHarness(
     onActivity: (activity) => activities.push(activity),
     onRateLimit: (report) => rateLimits.push(report),
     onUsageReport: (report) => usageReports.push(report),
-    onContextUsage: (usage, correction) => {
+    onContextUsage: (usage, opts) => {
+      if (usage === null) {
+        contextUsage.push(null)
+        contextCorrections.push(opts?.persist === true)
+        return
+      }
       contextUsage.push(usage)
-      contextCorrections.push(correction ?? false)
+      contextCorrections.push(opts?.persist === true)
     },
     ...(claimUsagePull ? { claimUsagePull } : {}),
     onUsageNoData: () => noData.push(1),
@@ -2121,5 +2126,61 @@ describe('ChatSessionDriver context usage', () => {
     // manager can persist the new denominator without another boundary.
     expect(harness.contextUsage.at(-1)).toMatchObject({ usedTokens: 157_900, thresholdTokens: 100_000, percentage: 157.9 })
     expect(harness.contextCorrections.at(-1)).toBe(true)
+  })
+
+  test('a conversation reset clears the meter back to no reading', async () => {
+    const harness = createHarness({
+      contextImpl: async () => contextReport({ autoCompactThreshold: 167_000 }),
+    })
+    harness.driver.send('hello')
+    const fake = harness.fakes[0]!
+    fake.push(assistantUsage({ input_tokens: 157_900 }, 'msg_1'))
+    await flush()
+    expect(harness.contextUsage.at(-1)).toMatchObject({ usedTokens: 157_900 })
+
+    // Plan-mode clear-context / fresh_session / onboarding: the conversation
+    // is gone, so nothing is measured — not the old window's occupancy.
+    fake.push({
+      type: 'conversation_reset',
+      trigger: 'plan_mode_exit',
+      new_conversation_id: 'fresh',
+      uuid: 'reset-uuid',
+      session_id: 'sdk-1',
+    } as unknown as SDKMessage)
+    await flush()
+    expect(harness.contextUsage.at(-1)).toBeNull()
+
+    // The next request starts a fresh reading; the threshold survives — it
+    // describes the process/profile, not the conversation.
+    fake.push(assistantUsage({ input_tokens: 8_200 }, 'msg_2'))
+    await flush()
+    expect(harness.contextUsage.at(-1)).toMatchObject({
+      usedTokens: 8_200,
+      thresholdTokens: 167_000,
+    })
+  })
+
+  test('the model-window fallback is labelled as an approximation', async () => {
+    const harness = createHarness()
+    harness.driver.send('hello')
+    harness.fakes[0]!.push(assistantUsage({ input_tokens: 157_900 }, 'msg_1'))
+    harness.fakes[0]!.push(result('success', { modelUsage: modelUsageWith(200_000) }))
+    await flush()
+    expect(harness.contextUsage.at(-1)).toMatchObject({
+      thresholdTokens: 200_000,
+      thresholdApproximate: true,
+    })
+  })
+
+  test('a report threshold is never labelled approximate', async () => {
+    const harness = createHarness({
+      contextImpl: async () => contextReport({ autoCompactThreshold: 167_000 }),
+    })
+    harness.driver.send('hello')
+    harness.fakes[0]!.push(assistantUsage({ input_tokens: 157_900 }, 'msg_1'))
+    await flush()
+    const reading = harness.contextUsage.at(-1)
+    expect(reading).toMatchObject({ thresholdTokens: 167_000 })
+    expect(reading?.thresholdApproximate).toBeUndefined()
   })
 })

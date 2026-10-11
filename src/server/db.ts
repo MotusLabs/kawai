@@ -52,7 +52,7 @@ export interface KnownSessionKey {
  * (chat-session-naming design D1) records who chose `name`; absent means the
  * name was never attributed and is treated as manual so it cannot be lost.
  * `contextUsage` (add-chat-context-usage design D4) is the latest
- * context-usage reading, stored over four columns; null/absent means no
+ * context-usage reading, stored over five columns; null/absent means no
  * model request has been measured yet.
  */
 export interface ChatSessionRecord {
@@ -199,7 +199,8 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
   context_tokens INTEGER,
   context_threshold INTEGER,
   context_pct REAL,
-  context_at TEXT
+  context_at TEXT,
+  context_approx INTEGER
 );
 `
 
@@ -264,6 +265,9 @@ export function initDatabase(options: { path?: string } = {}): SessionDatabase {
   }
   if (!chatColumns.some(column => column.name === 'context_at')) {
     db.exec('ALTER TABLE chat_sessions ADD COLUMN context_at TEXT')
+  }
+  if (!chatColumns.some(column => column.name === 'context_approx')) {
+    db.exec('ALTER TABLE chat_sessions ADD COLUMN context_approx INTEGER')
   }
   migrateLastUserMessageColumn(db)
   migrateChatNameSourceColumn(db)
@@ -621,16 +625,24 @@ export function initDatabase(options: { path?: string } = {}): SessionDatabase {
       const params: Record<string, string | number | null> = {
         $sessionId: sessionId,
       }
-      // The context reading is one value spread over four columns (design
-      // D4); a null patch clears all four together so no partial reading is
-      // ever stored.
+      // The context reading is one value spread over five columns (design
+      // D4); a null patch clears them together so no partial reading is ever
+      // stored. `context_approx` records whether the threshold is a window
+      // standing in for the real one (design D2 steps 2–3).
       if (patch.contextUsage !== undefined) {
         const usage = patch.contextUsage
-        fields.push('context_tokens', 'context_threshold', 'context_pct', 'context_at')
+        fields.push(
+          'context_tokens',
+          'context_threshold',
+          'context_pct',
+          'context_at',
+          'context_approx'
+        )
         params.$context_tokens = usage?.usedTokens ?? null
         params.$context_threshold = usage?.thresholdTokens ?? null
         params.$context_pct = usage?.percentage ?? null
         params.$context_at = usage?.at ?? null
+        params.$context_approx = usage ? (usage.thresholdApproximate ? 1 : 0) : null
       }
       for (const [key, value] of Object.entries(patch)) {
         if (value === undefined || key === 'contextUsage') continue
@@ -711,21 +723,31 @@ function mapChatRow(row: Record<string, unknown>): ChatSessionRecord {
         : String(row.archived_at),
     approvalPolicy: parseApprovalPolicy(row.approval_policy),
     nameSource: parseChatNameSource(row.name_source),
-    contextUsage:
-      row.context_tokens === null ||
-      row.context_tokens === undefined ||
-      row.context_threshold === null ||
-      row.context_threshold === undefined
-        ? null
-        : {
-            usedTokens: Number(row.context_tokens),
-            thresholdTokens: Number(row.context_threshold),
-            percentage: Number(row.context_pct ?? 0),
-            at:
-              row.context_at === null || row.context_at === undefined
-                ? ''
-                : String(row.context_at),
-          },
+    contextUsage: mapContextUsage(row),
+  }
+}
+
+/**
+ * All five columns are written together (design D4), so a row missing any of
+ * them is not a reading — return null rather than inventing a percentage or
+ * timestamp (design D7). A `context_approx` of 1 marks a window standing in
+ * for the threshold (design D2 steps 2–3).
+ */
+function mapContextUsage(row: Record<string, unknown>): ChatContextUsage | null {
+  const used = row.context_tokens
+  const threshold = row.context_threshold
+  const pct = row.context_pct
+  const at = row.context_at
+  if (used === null || used === undefined) return null
+  if (threshold === null || threshold === undefined) return null
+  if (pct === null || pct === undefined) return null
+  if (at === null || at === undefined) return null
+  return {
+    usedTokens: Number(used),
+    thresholdTokens: Number(threshold),
+    percentage: Number(pct),
+    at: String(at),
+    ...(row.context_approx === 1 ? { thresholdApproximate: true } : {}),
   }
 }
 

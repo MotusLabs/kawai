@@ -102,8 +102,8 @@ interface ChatStore {
   setCommands: (message: Extract<ServerMessage, { type: 'chat-commands' }>) => void
   /** Adopt the latest server activity (chat-activity) or clear it (null). */
   setActivity: (sessionId: string, activity: ChatActivity | null) => void
-  /** Adopt the latest context reading (chat-context-usage push). */
-  setContextUsage: (sessionId: string, usage: ChatContextUsage) => void
+  /** Adopt the latest context reading (chat-context-usage push); null clears. */
+  setContextUsage: (sessionId: string, usage: ChatContextUsage | null) => void
   /** Adopt a profile's latest usage report (chat-usage / snapshot). */
   setUsage: (profileId: string, report: ChatUsageReport | null) => void
   setDraft: (sessionId: string, text: string) => void
