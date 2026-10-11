@@ -3,6 +3,8 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import type {
+  CwdChangedHookInput,
+  HookJSONOutput,
   Options,
   PermissionResult,
   Query,
@@ -160,6 +162,8 @@ interface Harness {
   /** Persist-request flag per onContextUsage publish, aligned with contextUsage. */
   contextCorrections: boolean[]
   noData: number[]
+  /** Main-session CwdChanged hook firings, in order (worktree tracking D1). */
+  cwds: string[]
   fakes: FakeQueryHandle[]
   sdkSessionIds: string[]
   factoryWires: Array<ChatWireRecorder | undefined>
@@ -173,6 +177,8 @@ function createHarness(
     claudeExecutablePath?: string
     getProviderEnv?: () => Record<string, string>
     getApprovalPolicy?: () => ChatApprovalPolicy
+    /** Replaces the harness's cwd capture (e.g. with a throwing observer). */
+    onCwdChanged?: (newCwd: string) => void
     wire?: ChatWireRecorder
     /** Injected usage control on every spawned fake query. */
     usageImpl?: FakeUsageControl
@@ -192,6 +198,7 @@ function createHarness(
   const contextUsage: Array<ChatContextUsage | null> = []
   const contextCorrections: boolean[] = []
   const noData: number[] = []
+  const cwds: string[] = []
   const fakes: FakeQueryHandle[] = []
   const sdkSessionIds: string[] = []
   const factoryWires: Array<ChatWireRecorder | undefined> = []
@@ -230,6 +237,7 @@ function createHarness(
     ...(claimUsagePull ? { claimUsagePull } : {}),
     onUsageNoData: () => noData.push(1),
     onSdkSessionId: (id) => sdkSessionIds.push(id),
+    onCwdChanged: (cwd) => cwds.push(cwd),
     onCommandState: (state) => commandStates.push(state),
     ...driverOverrides,
   })
@@ -243,6 +251,7 @@ function createHarness(
     contextUsage,
     contextCorrections,
     noData,
+    cwds,
     fakes,
     sdkSessionIds,
     factoryWires,
@@ -2182,5 +2191,85 @@ describe('ChatSessionDriver context usage', () => {
     const reading = harness.contextUsage.at(-1)
     expect(reading).toMatchObject({ thresholdTokens: 167_000 })
     expect(reading?.thresholdApproximate).toBeUndefined()
+  })
+})
+
+describe('ChatSessionDriver cwd tracking', () => {
+  // Same pinned-home isolation as the main describe: launch resolution must
+  // not see a real ~/.kawai.
+  let tempHome: string
+  const originalHome = process.env.HOME
+  beforeEach(() => {
+    tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'agentboard-chatdriver-cwd-'))
+    process.env.HOME = tempHome
+  })
+  afterEach(() => {
+    if (originalHome !== undefined) process.env.HOME = originalHome
+    else delete process.env.HOME
+    fs.rmSync(tempHome, { recursive: true, force: true })
+  })
+
+  /** Invoke the driver's registered CwdChanged hook with a real-shaped input. */
+  const fireCwdChanged = async (
+    fake: FakeQueryHandle,
+    fields: Partial<CwdChangedHookInput>
+  ): Promise<HookJSONOutput> => {
+    const hook = fake.options.hooks?.CwdChanged?.[0]?.hooks[0]
+    if (!hook) throw new Error('CwdChanged hook not registered')
+    const input = {
+      session_id: 'sdk-cwd-1',
+      transcript_path: '/tmp/transcript.jsonl',
+      cwd: '/tmp/project',
+      hook_event_name: 'CwdChanged',
+      old_cwd: '/tmp/project',
+      new_cwd: '/tmp/project',
+      ...fields,
+    } as CwdChangedHookInput
+    return hook(input, undefined, { signal: new AbortController().signal })
+  }
+
+  test('CwdChanged reports the new cwd and never blocks the agent', async () => {
+    const harness = createHarness()
+    harness.driver.send('hello')
+    const fake = harness.fakes[0]!
+    const verdict = await fireCwdChanged(fake, {
+      old_cwd: '/tmp/project',
+      new_cwd: '/tmp/project/.claude/worktrees/add-feature',
+    })
+    // Observational: the hook always lets the agent continue.
+    expect(verdict).toEqual({ continue: true })
+    expect(harness.cwds).toEqual(['/tmp/project/.claude/worktrees/add-feature'])
+    harness.driver.kill()
+  })
+
+  test('a throwing observer still lets the agent continue', async () => {
+    const harness = createHarness({
+      onCwdChanged: () => {
+        throw new Error('observer failed')
+      },
+    })
+    harness.driver.send('hello')
+    const verdict = await fireCwdChanged(harness.fakes[0]!, {
+      new_cwd: '/tmp/elsewhere',
+    })
+    expect(verdict).toEqual({ continue: true })
+    harness.driver.kill()
+  })
+
+  test("subagent cwd changes don't move the chat row", async () => {
+    const harness = createHarness()
+    harness.driver.send('hello')
+    const fake = harness.fakes[0]!
+    // Mirrors the real hook shape: agent_id rides subagent firings only.
+    await fireCwdChanged(fake, {
+      agent_id: 'agent-sub-1',
+      old_cwd: '/tmp/project',
+      new_cwd: '/tmp/subagent-scratch',
+    })
+    expect(harness.cwds).toEqual([])
+    // The main thread's firing — same fields without agent_id — still reports.
+    await fireCwdChanged(fake, { new_cwd: '/tmp/project/.worktrees/fix' })
+    expect(harness.cwds).toEqual(['/tmp/project/.worktrees/fix'])
+    harness.driver.kill()
   })
 })

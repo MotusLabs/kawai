@@ -12,6 +12,7 @@
 // the SpawnFn convention in server/terminal/.
 import type {
   CanUseTool,
+  HookCallback,
   Options,
   PermissionResult,
   Query,
@@ -150,6 +151,12 @@ export interface ChatSessionDriverOptions {
   onUsageNoData?: () => void
   /** Fired once when the SDK init message reveals the session id. */
   onSdkSessionId?: (sdkSessionId: string) => void
+  /**
+   * The agent's working directory moved (worktree tracking design D1):
+   * main-session CwdChanged hook firings only — subagent changes are
+   * filtered inside the driver — reporting the new directory.
+   */
+  onCwdChanged?: (newCwd: string) => void
   /** Fired whenever the session's slash-command state meaningfully changed. */
   onCommandState?: (state: ChatCommandState) => void
   /** Records the raw protocol of every spawned process (chat debug view). */
@@ -464,6 +471,10 @@ export class ChatSessionDriver {
       permissionMode: 'default',
       includePartialMessages: true,
       canUseTool: this.canUseTool,
+      // Worktree tracking (design D1): every cwd change — EnterWorktree,
+      // a shell cd, anything Claude Code records — reports the session's
+      // new working directory. Observational only; never blocks the agent.
+      hooks: { CwdChanged: [{ hooks: [this.cwdChangedHook] }] },
       ...(executablePath
         ? { pathToClaudeCodeExecutable: executablePath }
         : {}),
@@ -799,6 +810,24 @@ export class ChatSessionDriver {
     const input = systemFrameToInput(message)
     if (input) this.feedActivity(input)
     // Other system subtypes are informational; ignored.
+  }
+
+  /**
+   * Observational CwdChanged hook (worktree tracking design D1). Fires for
+   * every change of the session's working directory; `agent_id` is present
+   * only on subagent firings (the SDK's documented discriminator), and only
+   * the main session's cwd moves the chat row. Always lets the agent
+   * continue, whatever the observer does.
+   */
+  private readonly cwdChangedHook: HookCallback = async (input) => {
+    try {
+      if (input.hook_event_name === 'CwdChanged' && !input.agent_id) {
+        this.options.onCwdChanged?.(input.new_cwd)
+      }
+    } catch {
+      // Observational only: a failing observer must never block the agent.
+    }
+    return { continue: true }
   }
 
   private readonly canUseTool: CanUseTool = (toolName, input, toolOptions) => {
