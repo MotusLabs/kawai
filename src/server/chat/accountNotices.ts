@@ -129,13 +129,16 @@ export class AccountNoticeStore {
   /**
    * Read and evaluate a credentials file, caching the result. Returns the
    * current notice (or null) and notifies subscribers only when it changed.
+   * A first check that finds nothing primes the cache silently — "no
+   * notice" was the state before it too, so there is nothing to report.
    */
   check(credentialsPath: string, now: number = Date.now()): ChatNotification | null {
     const next = loginExpiryNotice(this.readCredentials(credentialsPath), now)
-    const previous = this.latest.get(credentialsPath)
+    const previous = this.latest.get(credentialsPath) ?? null
     // An unchanged day count keeps the earlier object (stable receivedAt).
-    if (previous !== undefined && (previous?.text ?? null) === (next?.text ?? null)) {
-      return previous
+    if ((previous?.text ?? null) === (next?.text ?? null)) {
+      this.latest.set(credentialsPath, previous ?? next)
+      return previous ?? next
     }
     this.latest.set(credentialsPath, next)
     for (const listener of this.listeners) {

@@ -154,6 +154,19 @@ describe('AccountNoticeStore', () => {
     expect(events).toEqual(['Your login expires in 2 days', null])
   })
 
+  test('a first check that finds nothing primes the cache silently', () => {
+    const files: Record<string, string> = { '/far': credentialsJson(30) }
+    const notices = new AccountNoticeStore((p) => files[p]!)
+    const events: Array<string | null> = []
+    notices.subscribe((_p, notice) => events.push(notice?.text ?? null))
+    expect(notices.check('/far', NOW)).toBeNull()
+    expect(events).toEqual([])
+    // A notice appearing later still publishes.
+    files['/far'] = credentialsJson(1.4)
+    expect(notices.check('/far', NOW)?.text).toBe('Your login expires in 2 days')
+    expect(events).toEqual(['Your login expires in 2 days'])
+  })
+
   test('a missing or malformed file reads as no notice, without error', () => {
     const notices = store({ '/malformed': '{not json' })
     expect(notices.check('/missing')).toBeNull()
