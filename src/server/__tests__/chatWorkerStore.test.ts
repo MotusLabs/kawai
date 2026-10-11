@@ -110,4 +110,16 @@ describe('ChatWorkerStore', () => {
     expect(store.read('../../escape')).toEqual([])
     expect(fs.readdirSync(dir)).toEqual([])
   })
+
+  test('a failed write is not recorded as persisted, so the identical roster retries', async () => {
+    const blocker = path.join(dir, 'blocker')
+    fs.writeFileSync(blocker, 'not a directory')
+    const store = new ChatWorkerStore({ dir: path.join(blocker, 'workers') })
+    const workers: ChatWorker[] = [{ ...liveWorker(), status: 'stopped', live: false }]
+    await expect(store.write('chat-1', workers)).rejects.toThrow()
+    // The obstacle clears; the same roster must still reach the disk.
+    fs.rmSync(blocker)
+    await store.write('chat-1', workers)
+    expect(store.read('chat-1')).toEqual([expect.objectContaining({ status: 'stopped' })])
+  })
 })

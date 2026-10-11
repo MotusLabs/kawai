@@ -71,12 +71,14 @@ export class ChatWorkerStore {
       const records = workers.map(toPersisted)
       const content = JSON.stringify(records, null, 2)
       if (this.written.get(sessionId) === content) return
-      this.written.set(sessionId, content)
       await fs.promises.mkdir(this.dir, { recursive: true })
       const target = this.fileOf(sessionId)
       const staging = `${target}.tmp`
       await fs.promises.writeFile(staging, content, 'utf8')
       await fs.promises.rename(staging, target)
+      // Record the write only once it landed: a failed write must not be
+      // treated as persisted, or the identical roster would never retry.
+      this.written.set(sessionId, content)
     })
   }
 
