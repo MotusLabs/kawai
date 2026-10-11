@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, jest, test } from 'bun:test'
 import TestRenderer, { act, type ReactTestInstance } from 'react-test-renderer'
-import type { ChatActivity, ChatCommandState, ChatContextUsage, ChatEvent, ChatPendingRequest, ChatUsageReport, ChatWireFrame, ChatWorker } from '@shared/chat'
+import type { ChatActivity, ChatCommandState, ChatContextUsage, ChatEvent, ChatNotification, ChatPendingRequest, ChatUsageReport, ChatWireFrame, ChatWorker } from '@shared/chat'
 import type { ClientMessage, ServerMessage, Session } from '@shared/types'
 import ChatRequests from '../components/chat/ChatRequests'
 import ChatMessages from '../components/chat/ChatMessages'
@@ -10,6 +10,7 @@ import ChatActivityRow from '../components/chat/ChatActivityRow'
 import ChatWorkersStrip from '../components/chat/ChatWorkersStrip'
 import { formatContextTokens } from '../components/chat/ChatContextMeter'
 import UsageBar from '../components/chat/UsageBar'
+import NotificationStrip from '../components/chat/NotificationStrip'
 import { closedDebugView, useChatDebugStore, type ChatDebugView } from '../stores/chatDebugStore'
 import { emptyTranscript, useChatStore } from '../stores/chatStore'
 import { useSettingsStore } from '../stores/settingsStore'
@@ -1745,5 +1746,88 @@ describe('chat workers', () => {
     expect(textOf(renderer.root.findByProps({ 'data-testid': 'chat-worker-summary' }))).toBe('Ran out of budget')
     renderer.unmount()
     useChatStore.setState({ sessions: {}, closedAccountNotices: {} })
+  })
+})
+
+describe('chat notification strip', () => {
+  const notice = (overrides: Partial<ChatNotification> = {}): ChatNotification => ({
+    key: 'model-context-window',
+    source: 'agent',
+    severity: 'warning',
+    priority: 'high',
+    text: 'Context left: less than 20%',
+    receivedAt: '2026-10-12T00:00:00.000Z',
+    ...overrides,
+  })
+  const closed: ChatNotification[] = []
+  function renderStrip(notifications: ChatNotification[]) {
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => {
+      renderer = TestRenderer.create(
+        <NotificationStrip notifications={notifications} onClose={n => closed.push(n)} />
+      )
+    })
+    return renderer
+  }
+  const rows = (renderer: TestRenderer.ReactTestRenderer) =>
+    renderer.root.findAllByProps({ 'data-testid': 'chat-notification' })
+
+  test('renders nothing when the session has no active notices', () => {
+    const renderer = renderStrip([])
+    expect(renderer.root.children).toEqual([])
+    renderer.unmount()
+  })
+
+  test('warning and error notices style by severity; a hint renders dimmed', () => {
+    const renderer = renderStrip([
+      notice({ severity: 'warning', hint: undefined }),
+      notice({ key: 'error-compacting-conversation', severity: 'error', text: 'Error compacting conversation' }),
+      notice({ key: 'memory-paused', severity: 'info', text: 'Memory is paused' }),
+    ])
+    const styled = rows(renderer)
+    expect(styled.map(row => row.props['data-severity'])).toEqual(['warning', 'error', 'info'])
+    expect(styled[0]!.props.className).toContain('text-approval')
+    expect(styled[1]!.props.className).toContain('text-chat-danger')
+    expect(styled[2]!.props.className).toContain('text-primary')
+    renderer.unmount()
+  })
+
+  test('the login notice shows its text with the dimmed renewal hint', () => {
+    const renderer = renderStrip([
+      notice({
+        key: 'login-expiry',
+        source: 'account',
+        severity: 'warning',
+        priority: 'high',
+        text: 'Your login expires in 2 days',
+        hint: 'run /login in a Claude terminal to renew',
+      }),
+    ])
+    const row = rows(renderer)[0]!
+    expect(textOf(row)).toContain('Your login expires in 2 days')
+    expect(textOf(row)).toContain('run /login in a Claude terminal to renew')
+    renderer.unmount()
+  })
+
+  test('rows render in the delivered (priority-sorted) order', () => {
+    const renderer = renderStrip([
+      notice({ key: 'urgent', priority: 'immediate', severity: 'error', text: 'now' }),
+      notice({ key: 'low', priority: 'low', severity: 'info', text: 'meh' }),
+    ])
+    expect(rows(renderer).map(row => row.props['data-key'])).toEqual(['urgent', 'low'])
+    renderer.unmount()
+  })
+
+  test('close buttons call onClose with their own notice', () => {
+    const list = [
+      notice({ key: 'a', text: 'first' }),
+      notice({ key: 'login-expiry', source: 'account', text: 'Your login expires in 2 days', hint: 'run /login in a Claude terminal to renew' }),
+    ]
+    const renderer = renderStrip(list)
+    const buttons = renderer.root.findAllByProps({ 'data-testid': 'chat-notification-close' })
+    act(() => buttons[0]!.props.onClick())
+    act(() => buttons[1]!.props.onClick())
+    expect(closed).toEqual([list[0], list[1]])
+    renderer.unmount()
   })
 })
