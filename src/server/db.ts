@@ -68,6 +68,8 @@ export interface ChatSessionRecord {
   approvalPolicy?: ChatApprovalPolicy
   nameSource?: ChatNameSource
   contextUsage?: ChatContextUsage | null
+  /** Team group (agent-teams): set at creation only; null/absent = none. */
+  groupId?: string | null
 }
 
 // last_user_message is a UI preview; unbounded values (giant pastes, tool
@@ -200,7 +202,8 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
   context_threshold INTEGER,
   context_pct REAL,
   context_at TEXT,
-  context_approx INTEGER
+  context_approx INTEGER,
+  group_id TEXT
 );
 `
 
@@ -268,6 +271,10 @@ export function initDatabase(options: { path?: string } = {}): SessionDatabase {
   }
   if (!chatColumns.some(column => column.name === 'context_approx')) {
     db.exec('ALTER TABLE chat_sessions ADD COLUMN context_approx INTEGER')
+  }
+  // Team group (agent-teams): nullable, so existing sessions have none.
+  if (!chatColumns.some(column => column.name === 'group_id')) {
+    db.exec('ALTER TABLE chat_sessions ADD COLUMN group_id TEXT')
   }
   migrateLastUserMessageColumn(db)
   migrateChatNameSourceColumn(db)
@@ -358,8 +365,8 @@ export function initDatabase(options: { path?: string } = {}): SessionDatabase {
   // Chat sessions prepared statements
   const insertChatStmt = db.prepare(
     `INSERT INTO chat_sessions
-      (session_id, name, project_path, sdk_session_id, profile_id, status, created_at, last_activity_at, approval_policy, name_source)
-     VALUES ($sessionId, $name, $projectPath, $sdkSessionId, $profileId, $status, $createdAt, $lastActivityAt, $approvalPolicy, $nameSource)`
+      (session_id, name, project_path, sdk_session_id, profile_id, status, created_at, last_activity_at, approval_policy, name_source, group_id)
+     VALUES ($sessionId, $name, $projectPath, $sdkSessionId, $profileId, $status, $createdAt, $lastActivityAt, $approvalPolicy, $nameSource, $groupId)`
   )
   const selectChatBySessionId = db.prepare(
     'SELECT * FROM chat_sessions WHERE session_id = $sessionId'
@@ -605,6 +612,7 @@ export function initDatabase(options: { path?: string } = {}): SessionDatabase {
         $lastActivityAt: session.lastActivityAt,
         $approvalPolicy: session.approvalPolicy ?? 'manual',
         $nameSource: session.nameSource ?? 'manual',
+        $groupId: session.groupId ?? null,
       })
       return session
     },
@@ -620,6 +628,8 @@ export function initDatabase(options: { path?: string } = {}): SessionDatabase {
         archivedAt: 'archived_at',
         approvalPolicy: 'approval_policy',
         nameSource: 'name_source',
+        // group_id is deliberately absent: a session's group is fixed at
+        // creation (agent-teams), so no patch can change it.
       }
       const fields: string[] = []
       const params: Record<string, string | number | null> = {
@@ -724,6 +734,7 @@ function mapChatRow(row: Record<string, unknown>): ChatSessionRecord {
     approvalPolicy: parseApprovalPolicy(row.approval_policy),
     nameSource: parseChatNameSource(row.name_source),
     contextUsage: mapContextUsage(row),
+    groupId: row.group_id === null || row.group_id === undefined ? null : String(row.group_id),
   }
 }
 

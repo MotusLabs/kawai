@@ -90,9 +90,24 @@ export interface ChatCommandState {
   commands: ChatCommand[]
 }
 
+/** Mail received from another chat agent; shared without SDK dependencies. */
+export interface ChatPeerMessage {
+  messageId: string
+  senderSession: string
+  senderGroup: string | null
+  priority: 'normal' | 'urgent'
+  originPath: string
+  tags: string[]
+  threadId: string
+  body: string
+  possibleDuplicate: boolean
+  thread?: Array<{ messageId: string; senderSession: string; body: string }>
+}
+
 export type ChatEvent =
   | (ChatTurnEventBase & { type: 'turn_started' })
   | (ChatTurnEventBase & { type: 'user_message'; text: string })
+  | (ChatTurnEventBase & ChatPeerMessage & { type: 'peer_message' })
   | (ChatTurnEventBase & {
       type: 'command_output'
       /** Output text of a local slash command run in this turn. */

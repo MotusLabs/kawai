@@ -1,4 +1,5 @@
 import { createClaudeProfileRoutes, profileRequestError } from './routes/claudeProfiles'
+import { createTeamGroupRoutes } from './routes/teamGroups'
 import type { Server, ServerWebSocket } from 'bun'
 import { createReadStream } from 'node:fs'
 import fsSync from 'node:fs'
@@ -815,6 +816,7 @@ const chatSessionManager = new ChatSessionManager({
   registry,
   db,
   onEvent: (sessionId, event) => chatConnections.publish(sessionId, event),
+  onMailboxChange: (teamId, message) => chatConnections.publishMailbox(teamId, message),
   onCommandState: (sessionId, state) => chatConnections.publishCommandState(sessionId, state),
   onActivity: (sessionId, activity) => chatConnections.publishActivity(sessionId, activity),
   onContextUsage: (sessionId, usage) => chatConnections.publishContextUsage(sessionId, usage),
@@ -834,7 +836,7 @@ const chatSessionManager = new ChatSessionManager({
   },
   ...(chatFixtureEnabled ? { queryFactory: fixtureQueryFactory, authCheck: () => true } : {}),
 })
-const chatConnections = new ChatConnections(chatSessionManager, chatWireLogs)
+const chatConnections = new ChatConnections(chatSessionManager, chatWireLogs, message => broadcast(message))
 if (chatFixtureEnabled && !registry.getAll().some(session => session.name === 'Chat fixture')) {
   const fixture = chatSessionManager.createSession({ projectPath: process.cwd(), name: 'Chat fixture' })
   if (fixture.ok) void chatSessionManager.send(fixture.session.id, 'Show an approval')
@@ -2019,6 +2021,7 @@ app.put('/api/settings/inactive-max-age-hours', putHistoryMaxAgeHours)
 
 app.route('/api/settings/chat-provider-env', chatProviderEnv.routes)
 app.route('/api/chat/profiles', createClaudeProfileRoutes())
+app.route('/api/chat/groups', createTeamGroupRoutes())
 
 // Allowed paste-image types; the extension written to /tmp comes from this map,
 // never from client-supplied values. Note Bun's multipart parser derives
@@ -2741,6 +2744,11 @@ function handleMessage(
     case 'chat-debug-open':
     case 'chat-debug-page':
     case 'chat-debug-close':
+    case 'team-mailbox-open':
+    case 'team-mailbox-close':
+    case 'team-mailbox-cancel':
+    case 'team-mailbox-retry':
+    case 'team-mailbox-discard':
     case 'chat-worker-transcript':
       fireAndForget(chatConnections.handle(chatPeer(ws), message), 'chatMessage')
       return
@@ -2761,8 +2769,12 @@ function handleMessage(
         const input = {
           projectPath: message.projectPath,
           name: message.name,
+          ...(typeof message.cloneFromSessionId === 'string' ? { cloneFromSessionId: message.cloneFromSessionId } : {}),
           claudeProfileId: message.claudeProfileId,
           approvalPolicy: parseApprovalPolicy(message.approvalPolicy),
+          ...(typeof message.groupId === 'string' && message.groupId.trim()
+            ? { groupId: message.groupId.trim() }
+            : {}),
         }
         fireAndForget(chatSessionManager.createAvailableSession(input).then(result => {
           if (result.ok) send(ws, { type: 'session-created', session: result.session })

@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeEach, describe, expect, test, mock } from 'bun:test'
+import { Database } from 'bun:sqlite'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
@@ -29,6 +30,8 @@ const originalConsoleLog = console.log
 const originalConsoleError = console.error
 const originalProcessOn = processAny.on
 const originalProcessExit = processAny.exit
+
+let mailboxDb: Database
 
 let serveOptions: Parameters<typeof Bun.serve>[0] | null = null
 let spawnSyncImpl: typeof Bun.spawnSync
@@ -371,6 +374,7 @@ mock.module('../../logger', () => ({
 mock.module('../../db', () => ({
   resolveDataDir: () => path.join(os.tmpdir(), `agentboard-index-handlers-${process.pid}`),
   initDatabase: () => ({
+    db: mailboxDb,
     getChatSessions: () => Array.from(dbState.chatRecords.values()),
     getChatSession: (sessionId: string) => dbState.chatRecords.get(sessionId) ?? null,
     insertChatSession: (session: ChatSessionRecord) => {
@@ -673,6 +677,7 @@ async function loadIndex() {
 }
 
 beforeEach(() => {
+  mailboxDb = new Database(':memory:')
   serveOptions = null
   replaceSessionsCalls = []
   logEntries = []
@@ -752,7 +757,10 @@ beforeEach(() => {
   processAny.on = (() => processAny) as typeof processAny.on
 })
 
-afterEach(() => {
+afterEach(async () => {
+  // Startup mailbox work must settle before closing its SQLite fixture.
+  for (let i = 0; i < 6; i++) await Promise.resolve()
+  mailboxDb.close()
   bunAny.serve = originalServe
   bunAny.spawn = originalSpawn
   bunAny.spawnSync = originalSpawnSync

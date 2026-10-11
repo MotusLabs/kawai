@@ -30,6 +30,7 @@ import type {
   ChatContextUsage,
   ChatEvent,
   ChatPendingRequest,
+  ChatPeerMessage,
   ChatQuestion,
   ChatQuestionAnswer,
   ChatUsageReport,
@@ -76,6 +77,9 @@ import { ChatCommandTracker, type RawChatCommand } from './chatCommands'
 import { decideApproval } from './approvalPolicy'
 import { resolveClaudeProfile } from './ClaudeProfiles'
 import { TurnQueue } from './TurnQueue'
+import { MAILBOX_ALLOWED_TOOLS } from '../team/mailboxTools'
+import { TEAM_MCP_SERVER } from '../team/teamPrompt'
+import { formatEnvelope } from '../team/envelope'
 import { createWireTappedSpawn, type ChatWireRecorder } from './wireTap'
 
 /**
@@ -118,6 +122,12 @@ export interface ChatSessionDriverOptions {
    * (tests, development fixture), leaving SDK resolution unchanged.
    */
   claudeExecutablePath?: string
+  /**
+   * Text appended to the preset system prompt, read at every spawn (team
+   * role + mailbox note, agent-teams D7). Omitted/empty = preset only.
+   */
+  getSystemPromptAppend?: () => string | undefined
+  teamMcpServer?: NonNullable<Options['mcpServers']>[string]
   onEvent: (event: ChatEvent) => void
   /** Applied immediately on every derived status change. */
   onStatus: (status: SessionStatus) => void
@@ -300,8 +310,29 @@ export class ChatSessionDriver {
     this.refreshStatus()
   }
 
+  /** Peer submission is display state; only the CLI transcript proves receipt. */
+  deliver(envelope: ChatPeerMessage): void {
+    if (this.killed) throw new Error('Recipient was killed')
+    if (this.activeTurnId || this.pendingRequests.size || anyWorkerLive(this.workersState)) {
+      throw new Error('Recipient is not idle')
+    }
+    this.ensureQuery()
+    this.turnCounter += 1
+    this.activeTurnId = `turn-${this.turnCounter}`
+    this.emit({ type: 'turn_started', turnId: this.activeTurnId })
+    const text = formatEnvelope(envelope)
+    this.trackEcho(text)
+    this.emit({ type: 'peer_message', turnId: this.activeTurnId, ...envelope })
+    this.queue.push({
+      type: 'user', message: { role: 'user', content: text },
+      parent_tool_use_id: null,
+      origin: { kind: 'peer', from: envelope.senderSession },
+    })
+    this.refreshStatus()
+  }
+
   /** Stop button: abort the in-flight turn, drop queued sends, cancel asks. */
-  interrupt(): void {
+  interrupt(): Promise<void> {
     this.queue.clearPending()
     this.cancelAllRequests('interrupted')
     if (this.activeTurnId) {
@@ -316,11 +347,14 @@ export class ChatSessionDriver {
     this.feedWorkers({ type: 'process_end' })
     const query = this.query
     if (query) {
-      void query.interrupt().catch(() => {
+      const completed = query.interrupt().then(() => {}).catch(() => {
         // The process may already be gone; the stream loop handles death.
       })
+      this.refreshStatus()
+      return completed
     }
     this.refreshStatus()
+    return Promise.resolve()
   }
 
   /** Kill the session: abort, settle pending approvals with a denial, stop. */
@@ -508,10 +542,21 @@ export class ChatSessionDriver {
     const { executable: profileExecutable, ...launchOptions } = launch
     const executablePath = profileExecutable ?? this.claudeExecutablePath
     const wire = this.options.wire
+    const systemPromptAppend = this.options.getSystemPromptAppend?.()
     const options: Options = {
       cwd: this.sessionProjectPath,
       // Option parity with a terminal `claude` session in the project dir.
-      systemPrompt: { type: 'preset', preset: 'claude_code' },
+      // The team role + mailbox note (agent-teams D7) is read per spawn: a
+      // running process keeps its prompt, the next spawn gets edits.
+      systemPrompt: {
+        type: 'preset',
+        preset: 'claude_code',
+        ...(systemPromptAppend ? { append: systemPromptAppend } : {}),
+      },
+      ...(this.options.teamMcpServer ? {
+        mcpServers: { [TEAM_MCP_SERVER]: this.options.teamMcpServer },
+        allowedTools: MAILBOX_ALLOWED_TOOLS,
+      } : {}),
       settingSources: ['user', 'project', 'local'],
       permissionMode: 'default',
       includePartialMessages: true,
@@ -905,6 +950,9 @@ export class ChatSessionDriver {
   }
 
   private readonly canUseTool: CanUseTool = (toolName, input, toolOptions) => {
+    if (this.options.teamMcpServer && MAILBOX_ALLOWED_TOOLS.includes(toolName)) {
+      return Promise.resolve({ behavior: 'allow' } as PermissionResult)
+    }
     const requestId = `req-${crypto.randomUUID()}`
     const turnId = this.activeTurnId ?? 'turn-0'
     const policy = this.options.getApprovalPolicy?.() ?? 'manual'

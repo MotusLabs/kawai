@@ -4,6 +4,7 @@
 // "history unavailable" notice, and tool_use blocks with no tool_result —
 // the only marker of a request that died with the process — are replayed as
 // request pairs that history immediately marks cancelled (design D7).
+import { parseEnvelope } from '../team/envelope'
 import fs from 'node:fs'
 import path from 'node:path'
 import type { ChatEvent } from '../../shared/chat'
@@ -271,15 +272,15 @@ export function parseTranscriptContent(
       if (typeof contentValue === 'string') {
         if (type === 'user') {
           const typed = parseCommandMarkup(contentValue) ?? contentValue
+          const peer = parseEnvelope(typed)
           if (typed.length > 0) {
             turnCounter += 1
             events.push({
               id: `hist-${lineUuid}`,
               sequence: 0,
               at,
-              type: 'user_message',
               turnId: `hist-turn-${turnCounter}`,
-              text: typed,
+              ...(peer ? { type: 'peer_message' as const, ...peer } : { type: 'user_message' as const, text: typed }),
             })
           }
         } else {
@@ -309,15 +310,15 @@ export function parseTranscriptContent(
         if (blockType === 'text' && typeof blockRecord.text === 'string') {
           if (type === 'user') {
             const typed = parseCommandMarkup(blockRecord.text) ?? blockRecord.text
+            const peer = parseEnvelope(typed)
             if (typed.length > 0) {
               turnCounter += 1
               events.push({
                 id: blockId,
                 sequence: 0,
                 at,
-                type: 'user_message',
                 turnId: `hist-turn-${turnCounter}`,
-                text: typed,
+                ...(peer ? { type: 'peer_message' as const, ...peer } : { type: 'user_message' as const, text: typed }),
               })
             }
           } else {

@@ -55,6 +55,20 @@ type FakeContextControl = (opts: {
   detail?: string
 }) => Promise<unknown>
 
+const testManagers = new Set<ChatSessionManager>()
+function managedManager(options: ConstructorParameters<typeof ChatSessionManager>[0]) {
+  const manager = new ChatSessionManager(options)
+  testManagers.add(manager)
+  return manager
+}
+function closeDispatchers() {
+  for (const manager of testManagers) manager.dispatcher.close()
+}
+afterEach(() => {
+  closeDispatchers()
+  testManagers.clear()
+})
+
 function fakeQueryFactory(
   handles: FakeHandle[],
   usageImpl?: FakeUsageControl,
@@ -165,7 +179,7 @@ function createHarness(
   const usage: Array<{ profileId: string; report: ChatUsageReport | null }> = []
   const workers: Array<{ sessionId: string; workers: ChatWorker[] }> = []
   const refreshes: string[] = []
-  const manager = new ChatSessionManager({
+  const manager = managedManager({
     isDirectory,
     registry,
     db,
@@ -353,6 +367,7 @@ describe('ChatSessionManager', () => {
     } else {
       delete process.env.HOME
     }
+    closeDispatchers()
     db.close()
     fs.rmSync(tempDir, { recursive: true, force: true })
   })
@@ -453,7 +468,7 @@ describe('ChatSessionManager', () => {
     const badFile = path.join(project, '.kawai', 'profiles.json')
     fs.writeFileSync(badFile, '{ not json')
     const reported: string[][] = []
-    const manager = new ChatSessionManager({
+    const manager = managedManager({
       isDirectory: anyDirectory,
       db, registry: new SessionRegistry(), onEvent: () => {},
       queryFactory: fakeQueryFactory([]),
@@ -473,7 +488,7 @@ describe('ChatSessionManager', () => {
     let globalEnv = { ANTHROPIC_AUTH_TOKEN: 'global-token' }
     const registry = new SessionRegistry()
     const handles: FakeHandle[] = []
-    const manager = new ChatSessionManager({ isDirectory: anyDirectory, db, registry, onEvent: () => {}, queryFactory: fakeQueryFactory(handles), getProviderEnv: () => globalEnv })
+    const manager = managedManager({ isDirectory: anyDirectory, db, registry, onEvent: () => {}, queryFactory: fakeQueryFactory(handles), getProviderEnv: () => globalEnv })
     for (const profile of ['glm', 'minimax', 'kimi']) {
       const result = manager.createSession({ projectPath: '/tmp/proj', claudeProfileId: profile })
       expect(result.ok).toBe(true)
@@ -496,7 +511,7 @@ describe('ChatSessionManager', () => {
     let globalEnv = { ANTHROPIC_AUTH_TOKEN: 'global-token' }
     const launches: ClaudeLaunchConfiguration[] = []
     let fail = false
-    const manager = new ChatSessionManager({ isDirectory: anyDirectory, db, registry: new SessionRegistry(), onEvent: () => {}, getProviderEnv: () => globalEnv,
+    const manager = managedManager({ isDirectory: anyDirectory, db, registry: new SessionRegistry(), onEvent: () => {}, getProviderEnv: () => globalEnv,
       availabilityProbe: async (_env, launch) => { launches.push(launch!); if (fail) throw new Error('failed') },
     })
     const create = (claudeProfileId: string) => manager.createAvailableSession({ projectPath: '/tmp/proj', claudeProfileId })
@@ -523,7 +538,7 @@ describe('ChatSessionManager', () => {
       process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'
       let probes = 0
       const registry = new SessionRegistry()
-      const manager = new ChatSessionManager({
+      const manager = managedManager({
         isDirectory: anyDirectory,
         db, registry, onEvent: () => {},
         availabilityProbe: async () => { probes++; throw new Error('broken runtime') },
@@ -546,7 +561,7 @@ describe('ChatSessionManager', () => {
       process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'
       let providerEnv: Record<string, string> = { ANTHROPIC_BASE_URL: 'https://broken.example' }
       const probed: string[] = []
-      const manager = new ChatSessionManager({
+      const manager = managedManager({
         isDirectory: anyDirectory,
         db, registry: new SessionRegistry(), onEvent: () => {},
         availabilityProbe: async (env) => {
@@ -565,7 +580,7 @@ describe('ChatSessionManager', () => {
       process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'
       let providerEnv: Record<string, string> = { A: '1', B: '2' }
       let probes = 0
-      const manager = new ChatSessionManager({
+      const manager = managedManager({
         isDirectory: anyDirectory,
         db, registry: new SessionRegistry(), onEvent: () => {},
         availabilityProbe: async () => { probes++ },
@@ -584,7 +599,7 @@ describe('ChatSessionManager', () => {
       process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'
       let probes = 0
       let release!: () => void
-      const manager = new ChatSessionManager({
+      const manager = managedManager({
         isDirectory: anyDirectory,
         db, registry: new SessionRegistry(), onEvent: () => {},
         availabilityProbe: () => { probes++; return new Promise<void>((resolve) => { release = resolve }) },
@@ -603,7 +618,7 @@ describe('ChatSessionManager', () => {
       process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'
       let probes = 0
       const registry = new SessionRegistry()
-      const manager = new ChatSessionManager({
+      const manager = managedManager({
         isDirectory: anyDirectory,
         db, registry, onEvent: () => {},
         availabilityProbe: async () => { probes++ },
@@ -662,7 +677,7 @@ describe('ChatSessionManager', () => {
 
     test('a credential supplied only by getProviderEnv allows creation', () => {
       const registry = new SessionRegistry()
-      const manager = new ChatSessionManager({
+      const manager = managedManager({
         isDirectory: anyDirectory,
         db, registry, onEvent: () => {},
         queryFactory: fakeQueryFactory([]),
@@ -674,7 +689,7 @@ describe('ChatSessionManager', () => {
     test('the availability probe runs under the provider environment', async () => {
       process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'
       const probed: Array<Record<string, string>> = []
-      const manager = new ChatSessionManager({
+      const manager = managedManager({
         isDirectory: anyDirectory,
         db, registry: new SessionRegistry(), onEvent: () => {},
         availabilityProbe: async (providerEnv) => { probed.push(providerEnv) },
@@ -705,7 +720,7 @@ describe('ChatSessionManager', () => {
     test('refuses creation with the executable error verbatim and persists nothing', async () => {
       process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'
       const registry = new SessionRegistry()
-      const manager = new ChatSessionManager({
+      const manager = managedManager({
         isDirectory: anyDirectory,
         db, registry, onEvent: () => {},
         executableCheck: () => Promise.reject(
@@ -721,7 +736,7 @@ describe('ChatSessionManager', () => {
     test('creation re-checks after an executable failure and recovers', async () => {
       process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'
       let checks = 0
-      const manager = new ChatSessionManager({
+      const manager = managedManager({
         isDirectory: anyDirectory,
         db, registry: new SessionRegistry(), onEvent: () => {},
         availabilityProbe: async () => {},
@@ -742,7 +757,7 @@ describe('ChatSessionManager', () => {
       let probes = 0
       const probedPaths: Array<string | undefined> = []
       let identity = 'id-1'
-      const manager = new ChatSessionManager({
+      const manager = managedManager({
         isDirectory: anyDirectory,
         db, registry: new SessionRegistry(), onEvent: () => {},
         executableCheck: async () => {
@@ -776,7 +791,7 @@ describe('ChatSessionManager', () => {
       process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'
       const { manager, handles } = createHarness(db)
       let available = true
-      const gated = new ChatSessionManager({
+      const gated = managedManager({
         isDirectory: anyDirectory,
         db, registry: new SessionRegistry(), onEvent: () => {},
         queryFactory: fakeQueryFactory(handles),
@@ -808,7 +823,7 @@ describe('ChatSessionManager', () => {
       process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'
       const handles: FakeHandle[] = []
       let current = '/old/claude'
-      const manager = new ChatSessionManager({
+      const manager = managedManager({
         isDirectory: anyDirectory,
         db, registry: new SessionRegistry(), onEvent: () => {},
         queryFactory: fakeQueryFactory(handles),
@@ -847,7 +862,7 @@ describe('ChatSessionManager', () => {
     process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'
     let providerEnv: Record<string, string> = { ANTHROPIC_BASE_URL: 'https://gw.example/a' }
     const handles: FakeHandle[] = []
-    const manager = new ChatSessionManager({
+    const manager = managedManager({
       isDirectory: anyDirectory,
       db, registry: new SessionRegistry(), onEvent: () => {},
       queryFactory: fakeQueryFactory(handles),
@@ -881,7 +896,7 @@ describe('ChatSessionManager', () => {
     process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'
     const wireLogs = new ChatWireLogs({ dir: path.join(tempDir, 'chat-wire') })
     const handles: FakeHandle[] = []
-    const manager = new ChatSessionManager({
+    const manager = managedManager({
       isDirectory: anyDirectory,
       db, registry: new SessionRegistry(), onEvent: () => {},
       queryFactory: fakeQueryFactory(handles), wireLogs,
@@ -906,7 +921,7 @@ describe('ChatSessionManager', () => {
   test('startup prunes wire logs of sessions that no longer exist', async () => {
     process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'
     const dir = path.join(tempDir, 'chat-wire')
-    const first = new ChatSessionManager({ isDirectory: anyDirectory, db, registry: new SessionRegistry(), onEvent: () => {} })
+    const first = managedManager({ isDirectory: anyDirectory, db, registry: new SessionRegistry(), onEvent: () => {} })
     const kept = first.createSession({ projectPath: '/tmp/proj' })
     if (!kept.ok) throw new Error('create failed')
     const seed = new ChatWireLogs({ dir })
@@ -914,7 +929,7 @@ describe('ChatSessionManager', () => {
       seed.get(id).record('in', 'frame')
       await seed.get(id).flush()
     }
-    new ChatSessionManager({
+    managedManager({
       isDirectory: anyDirectory,
       db, registry: new SessionRegistry(), onEvent: () => {}, wireLogs: new ChatWireLogs({ dir }),
     })
@@ -1058,6 +1073,7 @@ describe('ChatSessionManager', () => {
       await harnessA.manager.send(sessionId, 'one')
       harnessA.handles[0]!.push(initMessage('sdk-start-ghost'))
       await flush()
+      closeDispatchers()
       dbA.close()
 
       // Restart with no transcript on disk: attach must not silently start a
@@ -1068,6 +1084,7 @@ describe('ChatSessionManager', () => {
       expect(result.ok).toBe(false)
       if (!result.ok) expect(result.error).toContain('sdk-start-ghost')
       expect(harnessB.handles).toHaveLength(0)
+      closeDispatchers()
       dbB.close()
     })
 
@@ -1096,7 +1113,7 @@ describe('ChatSessionManager', () => {
         if (broken) throw new Error('spawn exploded')
         return fakeQueryFactory(handles)(params)
       }
-      const manager = new ChatSessionManager({
+      const manager = managedManager({
         isDirectory: anyDirectory,
         db, registry,
         onEvent: (sessionId, event) => events.push({ sessionId, event }),
@@ -1128,7 +1145,7 @@ describe('ChatSessionManager', () => {
       const handles: FakeHandle[] = []
       const events: Array<{ sessionId: string; event: ChatEvent }> = []
       const commandStates: Array<{ sessionId: string; status: string }> = []
-      const manager = new ChatSessionManager({
+      const manager = managedManager({
         isDirectory: anyDirectory,
         db, registry,
         onEvent: (sessionId, event) => events.push({ sessionId, event }),
@@ -1173,7 +1190,7 @@ describe('ChatSessionManager', () => {
       process.env.ANTHROPIC_API_KEY = 'sk-test-key'
       const registry = new SessionRegistry()
       const commandStates: string[] = []
-      const manager = new ChatSessionManager({
+      const manager = managedManager({
         isDirectory: anyDirectory,
         db, registry,
         onEvent: () => {},
@@ -1261,7 +1278,7 @@ describe('ChatSessionManager', () => {
       const registry = new SessionRegistry()
       const updates: Array<Session | undefined> = []
       registry.on('session-update', (session) => updates.push(session))
-      const manager = new ChatSessionManager({
+      const manager = managedManager({
         isDirectory: anyDirectory,
         db, registry, onEvent: () => {},
         queryFactory: fakeQueryFactory(handles), wireLogs,
@@ -1394,7 +1411,7 @@ describe('ChatSessionManager', () => {
       process.env.ANTHROPIC_API_KEY = 'sk-test-key'
       const wireLogs = new ChatWireLogs({ dir: path.join(tempDir, 'chat-wire') })
       const handles: FakeHandle[] = []
-      const managerA = new ChatSessionManager({
+      const managerA = managedManager({
         isDirectory: anyDirectory,
         db, registry: new SessionRegistry(), onEvent: () => {},
         queryFactory: fakeQueryFactory(handles), wireLogs,
@@ -1414,7 +1431,7 @@ describe('ChatSessionManager', () => {
       // "Restart": fresh registry and manager on the same database and logs.
       const handlesB: FakeHandle[] = []
       const registryB = new SessionRegistry()
-      const managerB = new ChatSessionManager({
+      const managerB = managedManager({
         isDirectory: anyDirectory,
         db, registry: registryB, onEvent: () => {},
         queryFactory: fakeQueryFactory(handlesB), wireLogs,
@@ -1500,7 +1517,7 @@ describe('ChatSessionManager', () => {
       process.env.ANTHROPIC_API_KEY = 'sk-test-key'
       const registry = new SessionRegistry()
       // No isDirectory override: the real filesystem check runs.
-      const manager = new ChatSessionManager({ db, registry, onEvent: () => {} })
+      const manager = managedManager({ db, registry, onEvent: () => {} })
       const file = path.join(tempDir, 'file.txt')
       fs.writeFileSync(file, '')
       for (const projectPath of [
@@ -1536,7 +1553,7 @@ describe('ChatSessionManager', () => {
     test('availability-checked creation refuses a missing directory before probing', async () => {
       process.env.ANTHROPIC_API_KEY = 'sk-test-key'
       let probes = 0
-      const manager = new ChatSessionManager({
+      const manager = managedManager({
         isDirectory: () => false,
         db, registry: new SessionRegistry(), onEvent: () => {},
         availabilityProbe: async () => { probes++ },
@@ -1892,6 +1909,7 @@ describe('ChatSessionManager', () => {
       await flush()
       // Turn still in flight: the persisted row says working.
       expect(dbA.getChatSession(startedId)?.status).toBe('working')
+      closeDispatchers()
       dbA.close()
 
       // "Restart": fresh db handle, registry, and manager on the same file.
@@ -1948,6 +1966,7 @@ describe('ChatSessionManager', () => {
       const all = registryB.getAll()
       expect(all.filter((s) => s.kind === 'chat')).toHaveLength(2)
       expect(all.find((s) => s.id === 'term-1')).toBeDefined()
+      closeDispatchers()
       dbB.close()
     })
 
@@ -1973,6 +1992,7 @@ describe('ChatSessionManager', () => {
       expect(dbA.getChatSession(unnamed.session.id)?.nameSource).toBe(
         'placeholder'
       )
+      closeDispatchers()
       dbA.close()
 
       // "Restart": fresh db handle, registry, and manager on the same file.
@@ -1984,6 +2004,7 @@ describe('ChatSessionManager', () => {
       expect(restoredNamed?.nameSource).toBe('manual')
       expect(restoredUnnamed?.nameSource).toBe('placeholder')
       expect(dbB.getChatSession(named.session.id)?.nameSource).toBe('manual')
+      closeDispatchers()
       dbB.close()
     })
   })
@@ -2120,6 +2141,7 @@ describe('ChatSessionManager', () => {
       harnessA.handles[0]!.push(initMessage('sdk-ghost'))
       await flush()
       expect(dbA.getChatSession(sessionId)?.sdkSessionId).toBe('sdk-ghost')
+      closeDispatchers()
       dbA.close()
 
       // Restart with no transcript on disk for the stored SDK id.
@@ -2141,6 +2163,7 @@ describe('ChatSessionManager', () => {
       writeTranscript('sdk-ghost', MATCHED_TRANSCRIPT)
       await harnessB.manager.send(sessionId, 'continue')
       expect(harnessB.handles[0]!.options.resume).toBe('sdk-ghost')
+      closeDispatchers()
       dbB.close()
     })
 
@@ -2258,12 +2281,13 @@ describe('ChatSessionManager', () => {
     if (!created.ok) throw new Error(created.error)
     harnessA.manager.setApprovalPolicy(created.session.id, 'auto')
     harnessA.manager.shutdown()
+    closeDispatchers()
     dbA.close()
 
     const dbB = initDatabase({ path: dbPath })
     try {
       const registryB = new SessionRegistry()
-      new ChatSessionManager({
+      managedManager({
         isDirectory: anyDirectory,
         db: dbB,
         registry: registryB,
@@ -2271,6 +2295,7 @@ describe('ChatSessionManager', () => {
       })
       expect(registryB.get(created.session.id)?.approvalPolicy).toBe('auto')
     } finally {
+      closeDispatchers()
       dbB.close()
     }
   })
@@ -2656,6 +2681,7 @@ describe('ChatSessionManager usage', () => {
     } else {
       delete process.env.HOME
     }
+    closeDispatchers()
     db.close()
     fs.rmSync(tempDir, { recursive: true, force: true })
   })
@@ -2821,6 +2847,7 @@ describe('ChatSessionManager usage', () => {
     await flush()
     expect(harnessA.manager.getSnapshot(created.session.id)!.usage).not.toBeNull()
     harnessA.manager.shutdown()
+    closeDispatchers()
     dbA.close()
 
     const dbB = initDatabase({ path: dbPath })
@@ -2831,6 +2858,7 @@ describe('ChatSessionManager usage', () => {
     await flush()
     expect(harnessB.handles[0]!.usageCalls).toHaveLength(1)
     harnessB.manager.shutdown()
+    closeDispatchers()
     dbB.close()
   })
 })
@@ -3062,6 +3090,7 @@ describe('ChatSessionManager worker sidecar', () => {
     else delete process.env.CLAUDE_CONFIG_DIR
     if (originalHome !== undefined) process.env.HOME = originalHome
     else delete process.env.HOME
+    closeDispatchers()
     db.close()
     fs.rmSync(tempDir, { recursive: true, force: true })
   })
@@ -3196,7 +3225,7 @@ describe('ChatSessionManager worker sidecar', () => {
     ])
     // Abrupt stop: no shutdown settlement, as a crash would leave things.
     const recovered: ChatWorker[] = []
-    const restored = new ChatSessionManager({
+    const restored = managedManager({
       isDirectory: anyDirectory,
       registry: new SessionRegistry(),
       db,

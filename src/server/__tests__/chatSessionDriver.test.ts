@@ -180,6 +180,8 @@ function createHarness(
     claudeExecutablePath?: string
     getProviderEnv?: () => Record<string, string>
     getApprovalPolicy?: () => ChatApprovalPolicy
+    teamMcpServer?: NonNullable<Options['mcpServers']>[string]
+    getSystemPromptAppend?: () => string | undefined
     /** Replaces the harness's cwd capture (e.g. with a throwing observer). */
     onCwdChanged?: (newCwd: string) => void
     wire?: ChatWireRecorder
@@ -550,6 +552,33 @@ describe('ChatSessionDriver', () => {
     expect(harness.fakes).toHaveLength(2)
     expect(harness.fakes[1]!.options.env?.ANTHROPIC_MODEL).toBe('gw-flash')
     expect(harness.fakes[1]!.options.env?.ANTHROPIC_BASE_URL).toBe(process.env.ANTHROPIC_BASE_URL)
+    harness.driver.kill()
+  })
+
+  test('the team prompt is appended to the preset and re-read only at the next spawn', async () => {
+    let prompt = '# Your role: QA\n\nTest it.'
+    let reads = 0
+    const harness = createHarness({ getSystemPromptAppend: () => { reads++; return prompt } })
+    harness.driver.send('hello')
+    expect(harness.fakes[0]!.options.systemPrompt).toEqual({
+      type: 'preset', preset: 'claude_code', append: '# Your role: QA\n\nTest it.',
+    })
+    // An edit while the process runs changes nothing for it.
+    prompt = '# Your role: QA\n\nTest it twice.'
+    harness.driver.send('again')
+    expect(reads).toBe(1)
+    harness.fakes[0]!.exit()
+    await flush()
+    harness.driver.send('after exit')
+    expect(harness.fakes[1]!.options.systemPrompt).toMatchObject({ append: '# Your role: QA\n\nTest it twice.' })
+    expect(reads).toBe(2)
+    harness.driver.kill()
+  })
+
+  test('without a team prompt the preset is unchanged', () => {
+    const harness = createHarness({ getSystemPromptAppend: () => '' })
+    harness.driver.send('hello')
+    expect(harness.fakes[0]!.options.systemPrompt).toEqual({ type: 'preset', preset: 'claude_code' })
     harness.driver.kill()
   })
 
@@ -2615,4 +2644,38 @@ describe('ChatSessionDriver workers', () => {
       { workerId: 'toolu_agent', status: 'stopped', live: false },
     ])
   })
+})
+
+
+test('mailbox tools are registered and allowed without cards under either policy', async () => {
+  const { MAILBOX_ALLOWED_TOOLS } = await import('../team/mailboxTools')
+  for (const policy of ['manual', 'auto'] as const) {
+    const server = { type: 'stdio' as const, command: 'mailbox-test' }
+    const h = createHarness({ teamMcpServer: server, getApprovalPolicy: () => policy })
+    h.driver.start()
+    const options = h.fakes[0]!.options
+    expect(options.mcpServers).toEqual({ 'kawai-team': server })
+    expect(options.allowedTools).toEqual(MAILBOX_ALLOWED_TOOLS)
+    for (const name of MAILBOX_ALLOWED_TOOLS) {
+      const answer = await options.canUseTool!(name, {}, { signal: new AbortController().signal, toolUseID: 'mail-call', requestId: 'mail-request' })
+      expect(answer?.behavior).toBe('allow')
+    }
+    expect(h.events.some(event => event.type === 'approval_request')).toBe(false)
+    expect(h.driver.getPendingRequests()).toEqual([])
+    h.driver.kill()
+  }
+})
+
+test('peer delivery pushes a peer-origin turn and emits display metadata without a user copy', async () => {
+  const PEER = { messageId: 'mail-1', senderSession: 'lead', senderGroup: null, priority: 'normal' as const, originPath: '/repo', tags: [], threadId: 'mail-1', body: 'Review this', possibleDuplicate: false }
+  const { formatEnvelope } = await import('../team/envelope')
+  const h = createHarness()
+  h.driver.deliver(PEER)
+  expect(h.events.find(event => event.type === 'peer_message')).toMatchObject(PEER)
+  const prompt = await h.fakes[0]!.pullPrompt()
+  expect(prompt?.origin).toEqual({ kind: 'peer', from: PEER.senderSession })
+  expect(prompt?.message.content).toBe(formatEnvelope(PEER))
+  expect(h.events.some(event => event.type === 'user_message')).toBe(false)
+  expect(() => h.driver.deliver(PEER)).toThrow('not idle')
+  h.driver.kill()
 })

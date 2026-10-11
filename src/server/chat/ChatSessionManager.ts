@@ -57,6 +57,14 @@ import { logger } from '../logger'
 import { probeSdkAvailability } from './sdkAvailability'
 import { UsageLimitStore } from './usageLimits'
 import { readWorkerTranscript } from './chatWorkerTranscript'
+import { loadTeamGroups } from '../team/teamGroups'
+import { SessionTeams } from '../team/sessionTeams'
+import { TeamMailbox } from '../team/TeamMailbox'
+import { createMailboxServer } from '../team/mailboxTools'
+import type { TeamMessage } from '../../shared/team'
+import { MailDispatcher } from '../team/dispatcher'
+import { receiptMessageId } from '../team/receipt'
+import { SessionMailbox } from '../team/sessionMailbox'
 import {
   findTranscriptPath,
   readTranscriptCwd,
@@ -72,6 +80,7 @@ export { chatAuthErrorMessage, hasClaudeAuth }
 export interface ChatSessionManagerOptions {
   registry: SessionRegistry
   db: SessionDatabase
+  onMailboxChange?: (teamId: string, message?: TeamMessage) => void
   /** Conversation-event sink (wired to the WS broadcast in index.ts). */
   onEvent: (sessionId: string, event: ChatEvent) => void
   /** Command-state sink (wired to the chat-commands push in index.ts). */
@@ -129,8 +138,9 @@ export interface ChatSessionManagerOptions {
   /** Project-directory check; injected in tests that use fictitious paths. */
   isDirectory?: (path: string) => boolean
   /**
-   * Home directory for the user-level profile catalog (~/.kawai/profiles.json
-   * lives here). Injected in tests so a real home catalog cannot leak in.
+   * Home directory for the user-level `.kawai` catalogs (profiles.json and
+   * groups/ live here). Injected in tests so a real home catalog cannot leak
+   * in.
    */
   profileCatalogHome?: string
   /**
@@ -244,10 +254,21 @@ export class ChatSessionManager {
     { timer: ReturnType<typeof setTimeout>; path: string }
   >()
 
-  async createAvailableSession(input: { projectPath: string; name?: string; claudeProfileId?: string; approvalPolicy?: ChatApprovalPolicy }): Promise<ChatCreateResult> {
+  async createAvailableSession(input: { projectPath: string; name?: string; claudeProfileId?: string; approvalPolicy?: ChatApprovalPolicy; groupId?: string; cloneFromSessionId?: string }): Promise<ChatCreateResult> {
     // Refuse a bad path before the probe spends an SDK spawn on it.
     const project = resolveProjectDirectory(input.projectPath, this.options.isDirectory)
     if (!project.ok) return project
+    const clone = input.cloneFromSessionId ? this.records.get(input.cloneFromSessionId) : undefined
+    if (input.cloneFromSessionId && (!clone || clone.projectPath !== project.path)) return { ok: false, error: 'Clone source must be an existing chat in this project' }
+    if (clone) input = { ...input, groupId: clone.groupId ?? undefined }
+    // Fresh group choices require a definition. A clone preserves the
+    // source record's immutable role, including one whose file was removed.
+    if (input.groupId !== undefined && !clone) {
+      const { catalog } = await loadTeamGroups(project.path, this.options.profileCatalogHome)
+      if (!catalog.groups.has(input.groupId)) {
+        return { ok: false, error: `Unknown group "${input.groupId}" for this project's team` }
+      }
+    }
     try {
       this.launchFor(input.claudeProfileId, project.path)
     } catch (error) {
@@ -354,14 +375,47 @@ export class ChatSessionManager {
 
   constructor(options: ChatSessionManagerOptions) {
     this.options = options
+    // Team membership (agent-teams D6) resolves asynchronously; once a
+    // session's team is known its group label/missing state is published.
+    this.teams = new SessionTeams({
+      ...(options.profileCatalogHome ? { homeDir: options.profileCatalogHome } : {}),
+      onResolved: (sessionId) => {
+        this.dispatcher?.notify()
+        const record = this.records.get(sessionId)
+        // Group-less sessions have nothing to show; skip the broadcast.
+        if (record?.groupId != null) {
+          this.options.registry.updateSession(sessionId, this.groupFields(record))
+        }
+      },
+    })
     // Profile usage changes drive the chat-usage broadcast (design D4).
     this.usageLimits.subscribe((profileId, report) =>
       this.options.onUsage?.(profileId, report)
     )
+    this.teamMail = new SessionMailbox(options.db.db, {
+      teams: this.teams, records: () => this.records.values(), getRecord: id => this.records.get(id),
+      getDriver: id => this.drivers.get(id), homeDir: options.profileCatalogHome,
+      available: record => record.archivedAt == null && !this.startBlocker(record) && (options.isDirectory ?? isExistingDirectory)(record.projectPath),
+      prepare: async id => { this.captureHistory(id); const driver = await this.ensureDriver(id); if (!driver) throw new Error('Recipient disappeared'); driver.start() },
+      restore: id => { const result = this.restore(id); if (!result.ok) throw new Error(result.error) },
+      watchReceipt: id => this.watchSessionTitle(id),
+      transcriptFor: id => { const sdkId = this.records.get(id)?.sdkSessionId; return sdkId ? findTranscriptPath(sdkId) : null },
+      onChange: options.onMailboxChange,
+      onError: error => logger.warn('team_mailbox_dispatch_failed', { error: String(error) }),
+    })
+    this.mailbox = this.teamMail.mailbox
+    this.dispatcher = this.teamMail.dispatcher
     this.restorePersisted()
+    this.teamMail.start()
     // Logs of sessions deleted while the server was down are orphans now.
     void this.options.wireLogs?.pruneOrphans(new Set(this.records.keys()))
   }
+
+  /** Each session's team (agent-teams); shared with the mailbox dispatcher. */
+  readonly teams: SessionTeams
+  readonly mailbox: TeamMailbox
+  readonly dispatcher: MailDispatcher
+  private readonly teamMail: SessionMailbox
 
   /** Create a chat session. Refused (no side effects) when auth is missing. */
   createSession(input: {
@@ -370,6 +424,8 @@ export class ChatSessionManager {
     claudeProfileId?: string
     /** Starting policy (reorg-settings-default-approval design D3); absent = manual. */
     approvalPolicy?: ChatApprovalPolicy
+    /** Team group, already validated by createAvailableSession; absent = none. */
+    groupId?: string
   }): ChatCreateResult {
     const project = resolveProjectDirectory(input.projectPath, this.options.isDirectory)
     if (!project.ok) return project
@@ -398,6 +454,7 @@ export class ChatSessionManager {
       // chat-session-naming design D1: a name the user typed sticks forever,
       // one the generator produced is a placeholder a later title may replace.
       nameSource: (suppliedName ? 'manual' : 'placeholder') as ChatNameSource,
+      groupId: input.groupId ?? null,
       status: 'waiting' as SessionStatus,
       createdAt: now,
       lastActivityAt: now,
@@ -406,6 +463,7 @@ export class ChatSessionManager {
     this.options.db.insertChatSession(record)
     const session = this.toSession(record)
     this.options.registry.setChatSession(session)
+    void this.teams.track(sessionId, projectPath)
     return { ok: true, session }
   }
 
@@ -546,6 +604,7 @@ export class ChatSessionManager {
       driver.interrupt()
       driver.kill()
     }
+    this.teamMail.settleRecipient(sessionId)
     this.drivers.delete(sessionId)
     this.driverPromises.delete(sessionId)
     // The transcript is final once the agent is stopped: release the title
@@ -680,16 +739,20 @@ export class ChatSessionManager {
     const record = this.records.get(sessionId)
     if (!record) return false
     this.drivers.get(sessionId)?.kill()
+    this.teamMail.settleRecipient(sessionId)
     this.drivers.delete(sessionId)
     this.driverPromises.delete(sessionId)
     this.releaseTitleWatch(sessionId)
     this.cancelCwdRefresh(sessionId)
     this.records.delete(sessionId)
+    this.mailbox.store.deadLetterDirectTo(sessionId, 'killed-recipient')
+    this.dispatcher.notify()
     this.snapshotHistory.delete(sessionId)
     this.liveEvents.delete(sessionId)
     this.activities.delete(sessionId)
     this.contextReadings.delete(sessionId)
     this.workerRows.delete(sessionId)
+    this.teams.forget(sessionId)
     this.options.registry.removeChatSession(sessionId)
     this.options.db.deleteChatSession(sessionId)
     void this.options.wireLogs?.delete(sessionId).catch(() => {})
@@ -700,6 +763,7 @@ export class ChatSessionManager {
 
   /** Server shutdown: settle every driver (callbacks cannot survive it). */
   shutdown(): void {
+    this.teamMail.close()
     for (const driver of this.drivers.values()) {
       driver.shutdown()
     }
@@ -841,6 +905,7 @@ export class ChatSessionManager {
       }
       this.records.set(record.sessionId, record)
       this.options.registry.setChatSession(this.toSession(record))
+      void this.teams.track(record.sessionId, record.projectPath)
     }
   }
 
@@ -889,7 +954,13 @@ export class ChatSessionManager {
     }
     const watcher: TranscriptTitleWatcher = watchTranscriptTitle(
       filePath,
-      (title, source) => this.applyTranscriptTitle(sessionId, title, source)
+      (title, source) => this.applyTranscriptTitle(sessionId, title, source),
+      line => {
+        const id = receiptMessageId(line)
+        if (!id) return
+        const message = this.mailbox.store.get(id)
+        if (message?.claimedBy === sessionId) this.mailbox.store.markDelivered(id)
+      }
     )
     this.titleWatchers.set(sessionId, watcher)
   }
@@ -935,10 +1006,18 @@ export class ChatSessionManager {
       // above); otherwise every spawn runs the checked Claude Code install.
       const executable = launch.executable ? null : await this.checkExecutable()
       const queryFactory = await this.resolveQueryFactory()
+      // The team must be known before the first spawn reads its prompt.
+      await this.teams.track(record.sessionId, this.records.get(record.sessionId)?.projectPath ?? record.projectPath)
+      const teamMcpServer = await createMailboxServer(this.mailbox, record.sessionId)
       const driver = new ChatSessionDriver({
         sessionId: record.sessionId,
         projectPath: record.projectPath,
         queryFactory,
+        teamMcpServer,
+        getSystemPromptAppend: () => this.teams.promptFor(
+          record.sessionId,
+          this.records.get(record.sessionId)?.groupId
+        ),
         getProviderEnv: () => this.providerEnv(),
         // Read per request so a live policy switch reaches the next
         // canUseTool call without a respawn (design D2).
@@ -1107,6 +1186,8 @@ export class ChatSessionManager {
     events.push(event)
     this.liveEvents.set(sessionId, events)
     this.options.onEvent(sessionId, event)
+    if (event.type === 'request_resolved') this.dispatcher.notify()
+    if (event.type === 'error' || event.type === 'turn_completed') this.teamMail.settleRecipient(sessionId)
     if (
       event.type === 'turn_completed' ||
       event.type === 'approval_request' ||
@@ -1266,13 +1347,23 @@ export class ChatSessionManager {
     if (!record) return
     const next = { ...record, ...patch }
     this.records.set(sessionId, next)
+    if (
+      (patch.status !== undefined && patch.status !== record.status) ||
+      patch.projectPath !== undefined || patch.archivedAt !== undefined ||
+      (patch.sdkSessionId !== undefined && patch.sdkSessionId !== record.sdkSessionId)
+    ) this.dispatcher?.notify()
     this.options.db.updateChatSession(sessionId, patch)
     // The first SDK session id makes a transcript followable: start the
     // title tail for the now-live conversation (design D4).
     if (patch.sdkSessionId !== undefined) {
       this.watchSessionTitle(sessionId)
     }
+    // A moved cwd may leave the team (another repository); re-resolve.
+    if (patch.projectPath !== undefined) void this.teams.track(sessionId, patch.projectPath)
     this.options.registry.updateSession(sessionId, {
+      // Status changes re-read the group file, so a removed or restored
+      // group shows in the navigator without a restart.
+      ...(patch.status !== undefined ? this.groupFields(next) : {}),
       ...(patch.status !== undefined ? { status: patch.status } : {}),
       // The agent's cwd move rides the same session-update broadcast, so
       // clients re-group the row without a reload (worktree tracking D2).
@@ -1311,6 +1402,17 @@ export class ChatSessionManager {
       // Per design D1: existing icons, labels, and sorting keep working.
       agentType: 'claude',
       ...(record.archivedAt != null ? { archivedAt: record.archivedAt } : {}),
+      ...this.groupFields(record),
+    }
+  }
+
+  /** Group id plus display state; label/missing only once the team is known. */
+  private groupFields(record: ChatSessionRecord): Partial<Session> {
+    if (record.groupId == null) return {}
+    const info = this.teams.groupInfo(record.sessionId, record.groupId)
+    return {
+      groupId: record.groupId,
+      ...(info ? { groupLabel: info.label, groupMissing: info.missing } : {}),
     }
   }
 }
