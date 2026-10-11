@@ -2,8 +2,9 @@ import { describe, expect, test } from 'bun:test'
 import type { GroupDefinition } from '../team/groupFile'
 import { buildTeamPrompt } from '../team/teamPrompt'
 
-const qa: GroupDefinition = { id: 'qa', label: 'QA', description: 'Tests releases', prompt: 'You test everything.' }
-const devs: GroupDefinition = { id: 'devs', label: 'devs', description: '', prompt: 'You build.' }
+const settings = { canCreateTasks: false, max: 1, approval: 'manual' } as const
+const qa: GroupDefinition = { id: 'qa', label: 'QA', description: 'Tests releases', ...settings, prompt: 'You test everything.' }
+const devs: GroupDefinition = { id: 'devs', label: 'devs', description: '', ...settings, prompt: 'You build.' }
 
 describe('buildTeamPrompt', () => {
   test('a member gets its role body, its group, and every team group with descriptions', () => {
