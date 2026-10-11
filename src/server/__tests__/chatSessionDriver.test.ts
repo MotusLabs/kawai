@@ -180,6 +180,7 @@ function createHarness(
     claudeExecutablePath?: string
     getProviderEnv?: () => Record<string, string>
     getApprovalPolicy?: () => ChatApprovalPolicy
+    teamMcpServer?: NonNullable<Options['mcpServers']>[string]
     getSystemPromptAppend?: () => string | undefined
     /** Replaces the harness's cwd capture (e.g. with a throwing observer). */
     onCwdChanged?: (newCwd: string) => void
@@ -2643,4 +2644,38 @@ describe('ChatSessionDriver workers', () => {
       { workerId: 'toolu_agent', status: 'stopped', live: false },
     ])
   })
+})
+
+
+test('mailbox tools are registered and allowed without cards under either policy', async () => {
+  const { MAILBOX_ALLOWED_TOOLS } = await import('../team/mailboxTools')
+  for (const policy of ['manual', 'auto'] as const) {
+    const server = { type: 'stdio' as const, command: 'mailbox-test' }
+    const h = createHarness({ teamMcpServer: server, getApprovalPolicy: () => policy })
+    h.driver.start()
+    const options = h.fakes[0]!.options
+    expect(options.mcpServers).toEqual({ 'kawai-team': server })
+    expect(options.allowedTools).toEqual(MAILBOX_ALLOWED_TOOLS)
+    for (const name of MAILBOX_ALLOWED_TOOLS) {
+      const answer = await options.canUseTool!(name, {}, { signal: new AbortController().signal, toolUseID: 'mail-call', requestId: 'mail-request' })
+      expect(answer?.behavior).toBe('allow')
+    }
+    expect(h.events.some(event => event.type === 'approval_request')).toBe(false)
+    expect(h.driver.getPendingRequests()).toEqual([])
+    h.driver.kill()
+  }
+})
+
+test('peer delivery pushes a peer-origin turn and emits display metadata without a user copy', async () => {
+  const PEER = { messageId: 'mail-1', senderSession: 'lead', senderGroup: null, priority: 'normal' as const, originPath: '/repo', tags: [], threadId: 'mail-1', body: 'Review this', possibleDuplicate: false }
+  const { formatEnvelope } = await import('../team/envelope')
+  const h = createHarness()
+  h.driver.deliver(PEER)
+  expect(h.events.find(event => event.type === 'peer_message')).toMatchObject(PEER)
+  const prompt = await h.fakes[0]!.pullPrompt()
+  expect(prompt?.origin).toEqual({ kind: 'peer', from: PEER.senderSession })
+  expect(prompt?.message.content).toBe(formatEnvelope(PEER))
+  expect(h.events.some(event => event.type === 'user_message')).toBe(false)
+  expect(() => h.driver.deliver(PEER)).toThrow('not idle')
+  h.driver.kill()
 })

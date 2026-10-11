@@ -59,6 +59,9 @@ import { UsageLimitStore } from './usageLimits'
 import { readWorkerTranscript } from './chatWorkerTranscript'
 import { loadTeamGroups } from '../team/teamGroups'
 import { SessionTeams } from '../team/sessionTeams'
+import { TeamMailbox } from '../team/TeamMailbox'
+import { MailboxStore } from '../team/mailboxStore'
+import { createMailboxServer } from '../team/mailboxTools'
 import {
   findTranscriptPath,
   readTranscriptCwd,
@@ -381,6 +384,14 @@ export class ChatSessionManager {
     this.usageLimits.subscribe((profileId, report) =>
       this.options.onUsage?.(profileId, report)
     )
+    this.mailbox = new TeamMailbox(new MailboxStore(options.db.db), {
+      getSession: (id) => this.records.get(id),
+      homeDir: options.profileCatalogHome,
+      restoreSession: (id) => {
+        const result = this.restore(id)
+        if (!result.ok) throw new Error(result.error)
+      },
+    })
     this.restorePersisted()
     // Logs of sessions deleted while the server was down are orphans now.
     void this.options.wireLogs?.pruneOrphans(new Set(this.records.keys()))
@@ -388,6 +399,7 @@ export class ChatSessionManager {
 
   /** Each session's team (agent-teams); shared with the mailbox dispatcher. */
   readonly teams: SessionTeams
+  readonly mailbox: TeamMailbox
 
   /** Create a chat session. Refused (no side effects) when auth is missing. */
   createSession(input: {
@@ -969,10 +981,12 @@ export class ChatSessionManager {
       const queryFactory = await this.resolveQueryFactory()
       // The team must be known before the first spawn reads its prompt.
       await this.teams.track(record.sessionId, this.records.get(record.sessionId)?.projectPath ?? record.projectPath)
+      const teamMcpServer = await createMailboxServer(this.mailbox, record.sessionId)
       const driver = new ChatSessionDriver({
         sessionId: record.sessionId,
         projectPath: record.projectPath,
         queryFactory,
+        teamMcpServer,
         getSystemPromptAppend: () => this.teams.promptFor(
           record.sessionId,
           this.records.get(record.sessionId)?.groupId

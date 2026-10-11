@@ -30,6 +30,7 @@ import type {
   ChatContextUsage,
   ChatEvent,
   ChatPendingRequest,
+  ChatPeerMessage,
   ChatQuestion,
   ChatQuestionAnswer,
   ChatUsageReport,
@@ -76,6 +77,9 @@ import { ChatCommandTracker, type RawChatCommand } from './chatCommands'
 import { decideApproval } from './approvalPolicy'
 import { resolveClaudeProfile } from './ClaudeProfiles'
 import { TurnQueue } from './TurnQueue'
+import { MAILBOX_ALLOWED_TOOLS } from '../team/mailboxTools'
+import { TEAM_MCP_SERVER } from '../team/teamPrompt'
+import { formatEnvelope } from '../team/envelope'
 import { createWireTappedSpawn, type ChatWireRecorder } from './wireTap'
 
 /**
@@ -123,6 +127,7 @@ export interface ChatSessionDriverOptions {
    * role + mailbox note, agent-teams D7). Omitted/empty = preset only.
    */
   getSystemPromptAppend?: () => string | undefined
+  teamMcpServer?: NonNullable<Options['mcpServers']>[string]
   onEvent: (event: ChatEvent) => void
   /** Applied immediately on every derived status change. */
   onStatus: (status: SessionStatus) => void
@@ -301,6 +306,27 @@ export class ChatSessionDriver {
       type: 'user',
       message: { role: 'user', content: text },
       parent_tool_use_id: null,
+    })
+    this.refreshStatus()
+  }
+
+  /** Peer submission is display state; only the CLI transcript proves receipt. */
+  deliver(envelope: ChatPeerMessage): void {
+    if (this.killed) throw new Error('Recipient was killed')
+    if (this.activeTurnId || this.pendingRequests.size || anyWorkerLive(this.workersState)) {
+      throw new Error('Recipient is not idle')
+    }
+    this.ensureQuery()
+    this.turnCounter += 1
+    this.activeTurnId = `turn-${this.turnCounter}`
+    this.emit({ type: 'turn_started', turnId: this.activeTurnId })
+    const text = formatEnvelope(envelope)
+    this.trackEcho(text)
+    this.emit({ type: 'peer_message', turnId: this.activeTurnId, ...envelope })
+    this.queue.push({
+      type: 'user', message: { role: 'user', content: text },
+      parent_tool_use_id: null,
+      origin: { kind: 'peer', from: envelope.senderSession },
     })
     this.refreshStatus()
   }
@@ -524,6 +550,10 @@ export class ChatSessionDriver {
         preset: 'claude_code',
         ...(systemPromptAppend ? { append: systemPromptAppend } : {}),
       },
+      ...(this.options.teamMcpServer ? {
+        mcpServers: { [TEAM_MCP_SERVER]: this.options.teamMcpServer },
+        allowedTools: MAILBOX_ALLOWED_TOOLS,
+      } : {}),
       settingSources: ['user', 'project', 'local'],
       permissionMode: 'default',
       includePartialMessages: true,
@@ -917,6 +947,9 @@ export class ChatSessionDriver {
   }
 
   private readonly canUseTool: CanUseTool = (toolName, input, toolOptions) => {
+    if (this.options.teamMcpServer && MAILBOX_ALLOWED_TOOLS.includes(toolName)) {
+      return Promise.resolve({ behavior: 'allow' } as PermissionResult)
+    }
     const requestId = `req-${crypto.randomUUID()}`
     const turnId = this.activeTurnId ?? 'turn-0'
     const policy = this.options.getApprovalPolicy?.() ?? 'manual'
