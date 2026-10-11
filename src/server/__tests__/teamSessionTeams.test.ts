@@ -63,4 +63,24 @@ describe('SessionTeams', () => {
     expect(resolved).toEqual([])
     expect(teams.teamOf('s1')).toBeUndefined()
   })
+
+  test('the catalog is reused while its files are unchanged and re-read once they move', async () => {
+    const teams = new SessionTeams({ homeDir: home })
+    await teams.track('s1', a)
+    expect(teams.groupInfo('s1', 'devs')).toEqual({ label: 'Developers', missing: false })
+    // Unchanged files serve the same parsed catalog (a per-cycle map sees it too).
+    const warm = teams.catalogOf('s1')
+    expect(teams.catalogOf('s1')).toBe(warm)
+    const cycle = new Map()
+    expect(teams.catalogOf('s1', cycle)).toBe(warm)
+    // An edit changes the stamp: the next read re-reads and sees it.
+    fs.writeFileSync(path.join(a, '.kawai', 'groups', 'devs.md'), '---\nlabel: Builders\n---\nShip it.')
+    expect(teams.catalogOf('s1')).not.toBe(warm)
+    expect(teams.groupInfo('s1', 'devs')).toEqual({ label: 'Builders', missing: false })
+    // Files joining and leaving the listing are equally visible.
+    fs.writeFileSync(path.join(a, '.kawai', 'groups', 'qa.md'), '---\nlabel: QA\n---\nTest.')
+    expect(teams.groupInfo('s1', 'qa')).toEqual({ label: 'QA', missing: false })
+    fs.rmSync(path.join(a, '.kawai', 'groups', 'qa.md'))
+    expect(teams.groupInfo('s1', 'qa')).toEqual({ label: 'qa', missing: true })
+  })
 })

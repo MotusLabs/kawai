@@ -5,7 +5,7 @@
 // Group display — label, and whether the group's file still exists — is read
 // from the team's catalog on demand, so a removed or edited file shows up the
 // next time the session is published.
-import { loadGroupCatalog, type GroupCatalog } from './groupCatalog'
+import { groupCatalogStamp, loadGroupCatalog, type GroupCatalog } from './groupCatalog'
 import { buildTeamPrompt } from './teamPrompt'
 import { resolveTeam, type TeamIdentity } from './teamIdentity'
 
@@ -23,8 +23,20 @@ interface Entry {
   pending?: Promise<void>
 }
 
+/** A catalog kept warm between file changes (validated by stamp, below). */
+interface CachedCatalog {
+  stamp: string
+  catalog: GroupCatalog
+}
+
 export class SessionTeams {
   private readonly entries = new Map<string, Entry>()
+  /**
+   * Parsed catalogs keyed by team id and groups root, reused while the files'
+   * listing stamp holds. Status flips re-ask for group labels on every turn
+   * boundary; without this each one would re-read and re-parse every file.
+   */
+  private readonly catalogCache = new Map<string, CachedCatalog>()
 
   constructor(
     private readonly options: {
@@ -95,16 +107,31 @@ export class SessionTeams {
     return buildTeamPrompt({ sessionId, groups, ...(group ? { group } : {}) })
   }
 
-  /** The session's team catalog, freshly read; undefined until resolved. */
+  /**
+   * The session's team catalog; undefined until resolved. A per-cycle `cache`
+   * map shares one read across a dispatch pass; behind both sits a parsed
+   * catalog reused while its files' stamp is unchanged, so frequent callers
+   * (status flips, spawns) still see edits without re-reading every turn.
+   */
   catalogOf(sessionId: string, cache?: Map<string, GroupCatalog>): GroupCatalog | undefined {
     const team = this.teamOf(sessionId)
     if (!team) return undefined
     const cached = cache?.get(team.teamId)
     if (cached) return cached
-    const catalog = loadGroupCatalog({
+    const context = {
       groupsRoot: team.groupsRoot,
       ...(this.options.homeDir ? { homeDir: this.options.homeDir } : {}),
-    })
+    }
+    const stamp = groupCatalogStamp(context)
+    // Same team from two worktrees would share an id but not a groups root.
+    const key = `${team.teamId}\0${team.groupsRoot}`
+    const warm = this.catalogCache.get(key)
+    if (warm && warm.stamp === stamp) {
+      cache?.set(team.teamId, warm.catalog)
+      return warm.catalog
+    }
+    const catalog = loadGroupCatalog(context)
+    this.catalogCache.set(key, { stamp, catalog })
     cache?.set(team.teamId, catalog)
     return catalog
   }
