@@ -385,4 +385,21 @@ describe('chat store workers', () => {
     store.remove('chat-1')
     expect(useChatStore.getState().workerBodies['chat-1']).toBeUndefined()
   })
+
+  test('a stranded fetch marker rolls back so the worker body can be requested again', () => {
+    const store = useChatStore.getState()
+    store.requestWorkerBody('chat-1', 'toolu_spawn_1')
+    store.requestWorkerBody('chat-1', 'toolu_settled')
+    store.setWorkerBody({
+      type: 'chat-worker-transcript', sessionId: 'chat-1', workerId: 'toolu_settled',
+      status: 'unavailable', events: [],
+    })
+    // A dead socket strands the fetch: only a still-fetching marker rolls back.
+    store.resetWorkerBody('chat-1', 'toolu_spawn_1')
+    expect(useChatStore.getState().workerBodies['chat-1']!.toolu_spawn_1).toBeUndefined()
+    expect(store.requestWorkerBody('chat-1', 'toolu_spawn_1')).toBe(true)
+    // A settled reply is final; reset leaves it alone.
+    store.resetWorkerBody('chat-1', 'toolu_settled')
+    expect(useChatStore.getState().workerBodies['chat-1']!.toolu_settled).toEqual({ status: 'unavailable' })
+  })
 })

@@ -144,6 +144,8 @@ interface ChatStore {
    * sends the wire request exactly once per worker.
    */
   requestWorkerBody: (sessionId: string, workerId: string) => boolean
+  /** Roll back a fetching marker a dead socket stranded (request or reply lost). */
+  resetWorkerBody: (sessionId: string, workerId: string) => void
   setDraft: (sessionId: string, text: string) => void
   remove: (sessionId: string) => void
 }
@@ -231,6 +233,13 @@ export const useChatStore = create<ChatStore>((set) => ({
     })
     return first
   },
+  resetWorkerBody: (sessionId, workerId) => set(state => {
+    const bodies = state.workerBodies[sessionId]
+    if (bodies?.[workerId]?.status !== 'fetching') return state
+    const next = { ...bodies }
+    delete next[workerId]
+    return { workerBodies: { ...state.workerBodies, [sessionId]: next } }
+  }),
   setDraft: (sessionId, text) => set(state => {
     const drafts = { ...state.drafts }
     if (text === '') delete drafts[sessionId]

@@ -1643,6 +1643,44 @@ describe('chat workers', () => {
     missing!.unmount()
   })
 
+  test('a fetch stranded by a dead socket does not burn its one-shot marker; reconnect retries it', () => {
+    seedWorkers([rosterWorker('toolu_w1')])
+    const sent: ClientMessage[] = []
+    let renderer!: TestRenderer.ReactTestRenderer
+    const render = (connected: boolean) => {
+      const element = (
+        <ChatMessages sessionId={SESSION} events={[agentCall('toolu_w1')]}
+          sendMessage={message => sent.push(message)} connected={connected} />
+      )
+      if (renderer) renderer.update(element)
+      else renderer = TestRenderer.create(element)
+    }
+    act(() => { render(false) })
+    // Expanding while offline sends nothing and shows the reconnect notice.
+    act(() => {
+      renderer.root.findByProps({ 'data-testid': 'chat-worker-row' }).props.onToggle({ currentTarget: { open: true } })
+    })
+    expect(sent).toEqual([])
+    expect(textOf(renderer.root.findByProps({ 'data-testid': 'chat-worker-body-status' })))
+      .toBe('Body unavailable — reconnect to load it.')
+    // The socket returns: the still-open row fetches at last.
+    act(() => { render(true) })
+    expect(sent).toEqual([
+      { type: 'chat-worker-transcript', sessionId: SESSION, workerId: 'toolu_w1' },
+    ])
+    expect(useChatStore.getState().workerBodies[SESSION]!.toolu_w1).toEqual({ status: 'fetching' })
+    // The socket dies mid-fetch: the marker rolls back instead of stranding…
+    act(() => { render(false) })
+    expect(useChatStore.getState().workerBodies[SESSION]!.toolu_w1).toBeUndefined()
+    // …so the next reconnect can request the body again.
+    act(() => { render(true) })
+    expect(sent).toEqual([
+      { type: 'chat-worker-transcript', sessionId: SESSION, workerId: 'toolu_w1' },
+      { type: 'chat-worker-transcript', sessionId: SESSION, workerId: 'toolu_w1' },
+    ])
+    renderer.unmount()
+  })
+
   test('a settled worker renders its outcome and summary, as archived chats do', () => {
     seedWorkers([rosterWorker('toolu_done', {
       status: 'completed', live: false, summary: 'Mapped 14 files',

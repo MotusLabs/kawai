@@ -8,7 +8,7 @@
 // tool card instead. Archived chats render the same row read-only from its
 // persisted outcome; expand stays available. The transcript renderer is the
 // caller's too (`renderBody`), so the body reads exactly like the parent.
-import type { ReactNode } from 'react'
+import { useEffect, useRef, type ReactNode } from 'react'
 import type { ChatEvent } from '@shared/chat'
 import type { SendClientMessage } from '@shared/types'
 import { useChatStore } from '../../stores/chatStore'
@@ -37,20 +37,41 @@ export default function ChatWorkerRow({ sessionId, workerId, tool, fallback, ren
   )
   const body = useChatStore(state => state.workerBodies[sessionId]?.[workerId])
   const now = useTickingClock(worker?.live === true)
+  const openRef = useRef(false)
+  const sendBody = () => {
+    sendMessage?.({
+      type: 'chat-worker-transcript',
+      sessionId,
+      workerId,
+    })
+  }
+
+  // Hooks must run before the fallback return below.
+  useEffect(() => {
+    // A socket that dies mid-fetch strands the marker (the reply never
+    // comes): roll it back so the reopened socket can request the body.
+    if (connected === false) useChatStore.getState().resetWorkerBody(sessionId, workerId)
+  }, [connected, sessionId, workerId])
+  useEffect(() => {
+    // Reconnect retries the fetch for the row the user still has open —
+    // including one expanded while offline, whose request was never sent.
+    if (connected !== true || !openRef.current) return
+    if (useChatStore.getState().requestWorkerBody(sessionId, workerId)) {
+      sendMessage?.({ type: 'chat-worker-transcript', sessionId, workerId })
+    }
+  }, [connected, sessionId, workerId, sendMessage])
 
   // No roster entry: the plain card, exactly like any other tool.
   if (!worker) return fallback
 
   // First expand fetches once (design D5); the reply lands in the store.
+  // A disconnected socket drops the request silently, so the fetch waits
+  // for the reconnect effect above instead of burning its one-shot marker.
   const handleToggle = (event: React.SyntheticEvent<HTMLDetailsElement>) => {
+    openRef.current = event.currentTarget.open
     if (!event.currentTarget.open) return
-    if (useChatStore.getState().requestWorkerBody(sessionId, workerId)) {
-      sendMessage?.({
-        type: 'chat-worker-transcript',
-        sessionId,
-        workerId,
-      })
-    }
+    if (connected === false) return
+    if (useChatStore.getState().requestWorkerBody(sessionId, workerId)) sendBody()
   }
 
   return <details className="border-l-2 border-border px-3 text-chat-meta text-secondary"
