@@ -108,3 +108,44 @@ test('a new approval during interrupt acknowledgment keeps urgent mail unpushed'
   await dispatch()
   expect(store.get(mail.id)).toMatchObject({ state: 'awaiting-request', pushedAt: null, claimedBy: null })
 })
+
+
+test('persistently broken earliest recipient does not starve healthy group or direct mail', async () => {
+  dispatcher.close()
+  recipients[0]!.idle = true
+  recipients.push({ ...recipients[0]!, sessionId: 'healthy' })
+  const errors: unknown[] = []
+  dispatcher = new MailDispatcher(store, {
+    recipients: () => recipients,
+    prepare: async id => { if (id === 'dev') throw new Error('lost auth') },
+    interrupt: async () => {},
+    deliver: (id, mail) => { delivered.push({ recipient: id, id: mail.messageId }); recipients.find(row => row.sessionId === id)!.idle = false },
+    watchReceipt: () => {}, onError: error => errors.push(error),
+  })
+  const group = send(); await dispatch()
+  expect(delivered).toEqual([{ recipient: 'healthy', id: group.id }])
+  recipients[1]!.idle = true
+  const sick = send({ toKind: 'session', toId: 'dev' })
+  const direct = send({ toKind: 'session', toId: 'healthy' }); await dispatch()
+  expect(delivered.at(-1)).toEqual({ recipient: 'healthy', id: direct.id })
+  expect(store.get(sick.id)?.state).toBe('queued')
+  expect(errors).toHaveLength(2)
+})
+test('failed push holds the claim immediately and keeps its recipient for human resolution', async () => {
+  dispatcher.close(); recipients[0]!.idle = true
+  dispatcher = new MailDispatcher(store, {
+    recipients: () => recipients, prepare: async () => {}, interrupt: async () => {},
+    deliver: () => { throw new Error('queue submission failed') }, watchReceipt: () => {},
+  })
+  const mail = send(); await dispatch()
+  expect(store.get(mail.id)).toMatchObject({ state: 'uncertain', claimedBy: 'dev', reason: 'delivery-submit-failed' })
+})
+test('a recipient lost after push holds a visible claim instead of waiting for restart', async () => {
+  dispatcher.close(); recipients[0]!.idle = true
+  dispatcher = new MailDispatcher(store, {
+    recipients: () => recipients, prepare: async () => {}, interrupt: async () => {},
+    deliver: () => { recipients[0]!.available = false }, watchReceipt: () => {},
+  })
+  const mail = send(); await dispatch()
+  expect(store.get(mail.id)).toMatchObject({ state: 'uncertain', claimedBy: 'dev' })
+})

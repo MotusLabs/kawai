@@ -68,6 +68,19 @@ describe('chat session groups', () => {
     manager.shutdown()
   })
 
+  test('a trusted clone keeps a removed group while ordinary creation stays strict', async () => {
+    const manager = createManager()
+    try {
+      const original = await manager.createAvailableSession({ projectPath: project, groupId: 'devs' })
+      if (!original.ok) throw new Error(original.error)
+      fs.rmSync(path.join(project, '.kawai/groups/devs.md'))
+      const clone = await manager.createAvailableSession({ projectPath: project, groupId: 'forged', cloneFromSessionId: original.session.id })
+      expect(clone.ok && clone.session.groupId).toBe('devs')
+      expect((await manager.createAvailableSession({ projectPath: project, groupId: 'devs' })).ok).toBe(false)
+      expect((await manager.createAvailableSession({ projectPath: project, groupId: 'devs', cloneFromSessionId: 'missing' })).ok).toBe(false)
+    } finally { manager.shutdown() }
+  })
+
   test('the group survives archive, restore, and a restart', async () => {
     const manager = createManager()
     const result = await manager.createAvailableSession({ projectPath: project, groupId: 'devs' })

@@ -12,6 +12,7 @@ export default function TeamMailboxPanel({ sessionId, view, sendMessage, connect
   useEffect(() => { const timer = setInterval(() => setNow(Date.now()), 30000); return () => clearInterval(timer) }, [])
   const categories: Array<[string, (message: TeamMessage) => boolean]> = [
     ['Queued', row => (row.state === 'queued' && (!row.deliverAt || Date.parse(row.deliverAt) <= now)) || row.state === 'awaiting-request'],
+    ['Receiving', row => row.state === 'claimed'],
     ['Scheduled', row => row.state === 'queued' && !!row.deliverAt && Date.parse(row.deliverAt) > now],
     ['Dead letters', row => row.state === 'dead'],
     ['Held for review', row => row.state === 'uncertain'],

@@ -66,7 +66,7 @@ export default function ChatMessages({ events, projectPath, sessionId, sendMessa
             <div className="mb-1 flex flex-wrap gap-2 text-chat-meta text-secondary">
               <span>Peer · {event.senderSession}</span>
               <span>{event.senderGroup ?? 'No group'}</span><span>{event.priority}</span>
-              {event.tags.map(tag => <span key={tag}>#{tag}</span>)}
+              {[...new Set(event.tags)].map(tag => <span key={tag}>#{tag}</span>)}
             </div>
             <p className="break-all text-chat-meta text-secondary">{event.originPath}</p>
             {event.possibleDuplicate && <p role="status" className="text-chat-meta text-chat-danger">Possible duplicate — an already-seen message should be treated as a no-op.</p>}

@@ -80,6 +80,12 @@ test('two agents deliver group mail once idle, confirm receipt and reply in the 
     // Keep the direct message queued so kill exercises the permanent-removal path.
     manager.kill(lead.session.id)
     expect(manager.mailbox.store.get(undeliverable.id)?.state).toBe('dead')
+    const unconfirmed = manager.mailbox.store.enqueue({ teamId: mail.teamId, toKind: 'group', toId: 'devs', fromSession: 'lead', fromGroup: 'leads', originPath: repo, body: 'Unconfirmed before kill' })
+    manager.mailbox.store.claim(unconfirmed.id, dev.session.id); manager.mailbox.store.markPushed(unconfirmed.id)
+    manager.kill(dev.session.id)
+    expect(manager.mailbox.store.get(unconfirmed.id)).toMatchObject({ state: 'uncertain', claimedBy: dev.session.id })
+    expect(manager.mailbox.store.retry(unconfirmed.id)).toBe(false)
+    expect(manager.mailbox.store.get(unconfirmed.id)?.reason).toBe('killed-recipient')
   } finally {
     manager.shutdown(); db.close()
     if (priorConfig === undefined) delete process.env.CLAUDE_CONFIG_DIR

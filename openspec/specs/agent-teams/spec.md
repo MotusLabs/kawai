@@ -74,6 +74,11 @@ The new-session dialog SHALL let the user choose one of the team's groups, or no
 - **WHEN** a session's group file is removed
 - **THEN** the session keeps its stored group id, the navigator marks the group as missing, and the session receives no new group mail until the group is defined again
 
+#### Scenario: Clear a conversation with a missing group
+- **WHEN** the user invokes `/clear`, `/reset`, or `/new` in a chat whose stored group definition has been removed
+- **THEN** a fresh chat is created with the source chat's stored group, the navigator marks it missing, and the prior chat is archived only after successful creation
+- **AND** ordinary new-session creation still refuses unknown group choices
+
 ### Requirement: Members receive their role and team context
 When a group member's agent process starts, the system SHALL add to its system prompt the group's role prompt and a mailbox note naming the member's group, every group of the team with its description, and how messages arrive and are sent. A session without a group SHALL receive the mailbox note without a role prompt.
 

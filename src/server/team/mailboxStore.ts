@@ -7,6 +7,7 @@
 // recipient transcript carried the id). Threads count hops along the reply
 // chain; a send past the limit is stored dead-lettered instead of queued.
 import type { Database } from 'bun:sqlite'
+import { mailboxSql } from './mailboxSql'
 
 import type { MessageState, MessagePriority, TeamMessage } from '../../shared/team'
 export type { MessageState, MessagePriority, TeamMessage } from '../../shared/team'
@@ -79,8 +80,17 @@ export class MailboxStore {
     return changed
   }
 
-  constructor(private readonly db: Database) {
+  private readonly statements: Record<keyof typeof mailboxSql, ReturnType<Database['prepare']>>
+  private readonly dynamicStatements = new Map<string, ReturnType<Database['prepare']>>()
+  constructor(private readonly db: Database, private readonly options: { recipientExists?: (id: string) => boolean } = {}) {
     db.exec(CREATE_TABLE_SQL)
+    this.statements = Object.fromEntries(Object.entries(mailboxSql).map(([key, sql]) => [key, db.prepare(sql)])) as typeof this.statements
+  }
+
+  private cachedStatement(sql: string) {
+    let statement = this.dynamicStatements.get(sql)
+    if (!statement) { statement = this.db.prepare(sql); this.dynamicStatements.set(sql, statement) }
+    return statement
   }
 
   /**
@@ -92,11 +102,7 @@ export class MailboxStore {
     const hop = input.inReplyTo ? input.inReplyTo.hop + 1 : 1
     const limit = input.hopLimit ?? DEFAULT_HOP_LIMIT
     const overLimit = hop > limit
-    this.db.prepare(`INSERT INTO team_messages
-      (id, team_id, to_kind, to_id, from_session, from_group, origin_path, priority, tags,
-       thread_id, in_reply_to, hop, body, state, deliver_at, created_at, reason, attach_thread)
-      VALUES ($id, $teamId, $toKind, $toId, $fromSession, $fromGroup, $originPath, $priority, $tags,
-       $threadId, $inReplyTo, $hop, $body, $state, $deliverAt, $createdAt, $reason, $attachThread)`).run({
+    this.statements.enqueue.run({
       $id: id,
       $teamId: input.teamId,
       $toKind: input.toKind,
@@ -105,7 +111,7 @@ export class MailboxStore {
       $fromGroup: input.fromGroup,
       $originPath: input.originPath,
       $priority: input.priority ?? 'normal',
-      $tags: JSON.stringify(input.tags ?? []),
+      $tags: JSON.stringify([...new Set(input.tags ?? [])]),
       $threadId: input.inReplyTo?.threadId ?? id,
       $inReplyTo: input.inReplyTo?.id ?? null,
       $hop: hop,
@@ -121,7 +127,7 @@ export class MailboxStore {
   }
 
   get(id: string): TeamMessage | null {
-    const row = this.db.prepare('SELECT * FROM team_messages WHERE id = $id').get({ $id: id })
+    const row = this.statements.get.get({ $id: id })
     return row ? mapRow(row as Record<string, unknown>) : null
   }
 
@@ -130,13 +136,7 @@ export class MailboxStore {
    * direct before group, then oldest. Scheduled rows count once due.
    */
   nextEligible(recipient: { teamId: string; sessionId: string; groupId: string | null }, now = nowIso()): TeamMessage | null {
-    const row = this.db.prepare(`SELECT * FROM team_messages
-      WHERE team_id = $teamId AND state = 'queued'
-        AND (deliver_at IS NULL OR deliver_at <= $now)
-        AND ((to_kind = 'session' AND to_id = $sessionId)
-          OR (to_kind = 'group' AND $groupId IS NOT NULL AND to_id = $groupId))
-      ORDER BY (priority = 'urgent') DESC, (to_kind = 'session') DESC, created_at, rowid
-      LIMIT 1`).get({
+    const row = this.statements.nextEligible.get({
       $teamId: recipient.teamId, $sessionId: recipient.sessionId,
       $groupId: recipient.groupId, $now: now,
     })
@@ -145,8 +145,7 @@ export class MailboxStore {
 
   /** Atomic claim: true for exactly one caller per queued (or held) message. */
   claim(id: string, sessionId: string, now = nowIso()): boolean {
-    return this.changed(id, this.db.prepare(`UPDATE team_messages SET state = 'claimed', claimed_by = $sessionId, claimed_at = $now
-      WHERE id = $id AND state IN ('queued', 'awaiting-request')`).run({
+    return this.changed(id, this.statements.claim.run({
       $id: id, $sessionId: sessionId, $now: now,
     }).changes === 1)
   }
@@ -163,14 +162,12 @@ export class MailboxStore {
 
   /** Written immediately before the turn push (D10 step 2). */
   markPushed(id: string, now = nowIso()): boolean {
-    return this.changed(id, this.db.prepare(`UPDATE team_messages SET pushed_at = $now
-      WHERE id = $id AND state = 'claimed'`).run({ $id: id, $now: now }).changes === 1)
+    return this.changed(id, this.statements.markPushed.run({ $id: id, $now: now }).changes === 1)
   }
 
   /** The acknowledgement boundary (D10 step 3): the transcript carried the id. */
   markDelivered(id: string, now = nowIso()): boolean {
-    return this.changed(id, this.db.prepare(`UPDATE team_messages SET state = 'delivered', delivered_at = $now
-      WHERE id = $id AND state = 'claimed'`).run({ $id: id, $now: now }).changes === 1)
+    return this.changed(id, this.statements.markDelivered.run({ $id: id, $now: now }).changes === 1)
   }
 
   /** Back to the queue; the claim and push are forgotten. */
@@ -201,6 +198,14 @@ export class MailboxStore {
    */
   retry(id: string): boolean {
     const message = this.get(id)
+    const recipient = message?.state === 'uncertain' ? message.claimedBy : message?.toKind === 'session' ? message.toId : null
+    if (message && ['dead', 'uncertain'].includes(message.state) && recipient && this.options.recipientExists && !this.options.recipientExists(recipient)) {
+      this.transition(id, ['dead', 'uncertain'], {
+        state: 'dead', reason: 'killed-recipient', to_kind: 'session', to_id: recipient,
+        ...(message.state === 'uncertain' ? { possible_duplicate: 1 } : {}),
+      })
+      return false
+    }
     if (message?.state === 'dead') {
       return this.transition(id, ['dead'], { state: 'queued', hop: 1, reason: null })
     }
@@ -220,9 +225,8 @@ export class MailboxStore {
 
   /** Direct mail queued for a killed session can never arrive: dead-letter it. */
   deadLetterDirectTo(sessionId: string, reason: string): number {
-    const affected = this.db.prepare("SELECT id FROM team_messages WHERE to_kind = 'session' AND to_id = $sessionId AND state IN ('queued', 'awaiting-request')").all({ $sessionId: sessionId }) as Array<{ id: string }>
-    const count = this.db.prepare(`UPDATE team_messages SET state = 'dead', reason = $reason
-      WHERE to_kind = 'session' AND to_id = $sessionId AND state IN ('queued', 'awaiting-request')`).run({
+    const affected = this.statements.directIds.all({ $sessionId: sessionId }) as Array<{ id: string }>
+    const count = this.statements.deadLetterDirectTo.run({
       $sessionId: sessionId, $reason: reason,
     }).changes
     for (const row of affected) this.changed(row.id, true)
@@ -234,9 +238,9 @@ export class MailboxStore {
     return this.select(`state = 'claimed'`, {})
   }
 
-  /** Every message of a thread, oldest first. */
+  /** Confirmed conversation history only; undelivered mail is not context. */
   thread(threadId: string): TeamMessage[] {
-    return this.select('thread_id = $threadId', { $threadId: threadId })
+    return this.select("thread_id = $threadId AND state = 'delivered'", { $threadId: threadId })
   }
 
   /** Urgent direct mail held for a session's pending request. */
@@ -248,15 +252,13 @@ export class MailboxStore {
 
   /** Teams with mail that may be deliverable now. */
   teamsWithQueuedMail(now = nowIso()): string[] {
-    return (this.db.prepare(`SELECT DISTINCT team_id FROM team_messages
-      WHERE state = 'queued' AND (deliver_at IS NULL OR deliver_at <= $now)`).all({ $now: now }) as Array<{ team_id: string }>)
+    return (this.statements.teamsWithQueuedMail.all({ $now: now }) as Array<{ team_id: string }>)
       .map(row => row.team_id)
   }
 
   /** Earliest future due time among scheduled rows; null when none. */
   nextDueAt(now = nowIso()): string | null {
-    const row = this.db.prepare(`SELECT MIN(deliver_at) AS due FROM team_messages
-      WHERE state = 'queued' AND deliver_at > $now`).get({ $now: now }) as { due: string | null }
+    const row = this.statements.nextDueAt.get({ $now: now }) as { due: string | null }
     return row.due
   }
 
@@ -268,7 +270,7 @@ export class MailboxStore {
   }
 
   private select(where: string, params: Record<string, string>): TeamMessage[] {
-    return (this.db.prepare(`SELECT * FROM team_messages WHERE ${where} ORDER BY created_at, rowid`)
+    return (this.cachedStatement(`SELECT * FROM team_messages WHERE ${where} ORDER BY created_at, rowid`)
       .all(params) as Record<string, unknown>[]).map(mapRow)
   }
 
@@ -278,7 +280,7 @@ export class MailboxStore {
     const params: Record<string, string | number | null> = { $id: id }
     for (const [column, value] of Object.entries(set)) params[`$${column}`] = value
     from.forEach((state, index) => { params[`$from${index}`] = state })
-    return this.changed(id, this.db.prepare(`UPDATE team_messages SET ${assignments} WHERE id = $id AND state IN (${states})`)
+    return this.changed(id, this.cachedStatement(`UPDATE team_messages SET ${assignments} WHERE id = $id AND state IN (${states})`)
       .run(params).changes === 1)
   }
 }

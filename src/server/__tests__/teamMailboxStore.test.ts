@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -138,7 +138,7 @@ describe('MailboxStore', () => {
     expect(last).toMatchObject({ hop: 3, state: 'queued' })
     const over = send({ inReplyTo: last, hopLimit: 3 })
     expect(over).toMatchObject({ hop: 4, state: 'dead', reason: 'hop-limit', threadId: last.threadId })
-    expect(store.thread(last.threadId)).toHaveLength(4)
+    expect(store.thread(last.threadId)).toHaveLength(0) // Queued/dead sends are not delivered history.
     // Retry resets the hop, so the conversation can continue from there.
     store.retry(over.id)
     const next = send({ inReplyTo: store.get(over.id)!, hopLimit: 3 })
@@ -158,4 +158,44 @@ describe('MailboxStore', () => {
     expect(store.get(message.id)?.tags).toEqual([])
     expect(store.get('missing')).toBeNull()
   })
+})
+
+
+test('retry to a killed direct or uncertain recipient cannot leave a queue row', () => {
+  const db = new Database(':memory:')
+  const store = new MailboxStore(db, { recipientExists: id => id !== 'killed' })
+  try {
+    for (const state of ['dead', 'uncertain']) {
+      const row = store.enqueue({ teamId: TEAM, toKind: state === 'dead' ? 'session' : 'group', toId: state === 'dead' ? 'killed' : 'devs', fromSession: 'lead', fromGroup: null, originPath: '/repo', body: state })
+      if (state === 'dead') store.deadLetter(row.id, 'killed-recipient')
+      else { store.claim(row.id, 'killed'); store.markPushed(row.id); store.holdUncertain(row.id, 'torn') }
+      expect(store.retry(row.id)).toBe(false)
+      expect(store.get(row.id)).toMatchObject({ state: 'dead', reason: 'killed-recipient', toKind: 'session', toId: 'killed' })
+    }
+  } finally { db.close() }
+})
+test('thread history includes confirmed delivery only, excluding queued, cancelled and dead siblings', () => {
+  const db = new Database(':memory:'); const store = new MailboxStore(db)
+  const base = { teamId: TEAM, toKind: 'group' as const, toId: 'devs', fromSession: 'lead', fromGroup: null, originPath: '/repo', body: 'Confirmed' }
+  try {
+    const original = store.enqueue(base); store.claim(original.id, 'dev'); store.markPushed(original.id); store.markDelivered(original.id)
+    for (const state of ['queued', 'cancelled', 'dead']) {
+      const sibling = store.enqueue({ ...base, body: state, inReplyTo: original })
+      if (state === 'cancelled') store.cancel(sibling.id)
+      if (state === 'dead') store.deadLetter(sibling.id, 'hop-limit')
+    }
+    expect(store.thread(original.threadId).map(row => row.body)).toEqual(['Confirmed'])
+  } finally { db.close() }
+})
+
+test('fixed and dynamic SQL statements are compiled once and reused across calls', () => {
+  const db = new Database(':memory:'); const prepare = spyOn(db, 'prepare')
+  try {
+    const store = new MailboxStore(db)
+    const initialized = prepare.mock.calls.length
+    for (let i=0; i<10; i++) { store.get('missing'); store.nextDueAt(); store.nextEligible({ teamId: TEAM, sessionId: 'dev', groupId: 'devs' }) }
+    expect(prepare.mock.calls).toHaveLength(initialized)
+    store.listForTeam(TEAM); const afterFirstList = prepare.mock.calls.length
+    store.listForTeam(TEAM); expect(prepare.mock.calls).toHaveLength(afterFirstList)
+  } finally { prepare.mockRestore(); db.close() }
 })

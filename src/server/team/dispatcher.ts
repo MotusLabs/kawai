@@ -25,11 +25,12 @@ export class MailDispatcher {
 
   constructor(private readonly store: MailboxStore, private readonly options: {
     recipients: () => MailRecipient[]
+    recipient?: (id: string) => MailRecipient | undefined
+    beginCycle?: () => void
     prepare: (sessionId: string) => Promise<void>
     interrupt: (sessionId: string) => Promise<void>
     deliver: (sessionId: string, envelope: ChatPeerMessage) => void
     watchReceipt: (message: TeamMessage) => void
-    onChange?: (teamId: string) => void
     onError?: (error: unknown) => void
   }) {}
 
@@ -60,9 +61,10 @@ export class MailDispatcher {
     this.timer = null
   }
 
-  private current(id: string) { return this.options.recipients().find(row => row.sessionId === id) }
+  private current(id: string) { return this.options.recipient ? this.options.recipient(id) : this.options.recipients().find(row => row.sessionId === id) }
 
   private async dispatch() {
+    this.options.beginCycle?.()
     const recipients = this.options.recipients()
     const ids = new Set(recipients.map(row => row.sessionId))
     for (const id of this.idleSince.keys()) if (!ids.has(id)) this.idleSince.delete(id)
@@ -82,7 +84,6 @@ export class MailDispatcher {
       for (const message of urgent) {
         if (this.current(row.sessionId)?.pendingRequest) {
           this.store.holdForRequest(message.id)
-          this.options.onChange?.(row.teamId)
           continue
         }
         if (!this.current(row.sessionId)?.idle) {
@@ -100,16 +101,16 @@ export class MailDispatcher {
   }
 
   private async push(message: TeamMessage, recipient: MailRecipient, interrupt: boolean) {
-    await this.options.prepare(recipient.sessionId)
-    if (this.closed) return
-    const eligible = () => {
-      const current = this.current(recipient.sessionId)
-      return !!current?.available && !current.pendingRequest && current.teamId === message.teamId &&
-        (interrupt || current.idle) && (message.toKind === 'session' || current.groupId === message.toId)
-    }
-    if (!this.store.claimWhen(message.id, recipient.sessionId, eligible)) return
-    this.idleSince.delete(recipient.sessionId)
     try {
+      await this.options.prepare(recipient.sessionId)
+      if (this.closed) return
+      const eligible = () => {
+        const current = this.current(recipient.sessionId)
+        return !!current?.available && !current.pendingRequest && current.teamId === message.teamId &&
+          (interrupt || current.idle) && (message.toKind === 'session' || current.groupId === message.toId)
+      }
+      if (!this.store.claimWhen(message.id, recipient.sessionId, eligible)) return
+      this.idleSince.delete(recipient.sessionId)
       if (interrupt) await this.options.interrupt(recipient.sessionId)
       const current = this.current(recipient.sessionId)
       // The awaited interrupt allows a human turn/card to arrive. Re-check
@@ -122,14 +123,22 @@ export class MailDispatcher {
       const envelope = messageEnvelope(message, message.attachThread ? this.store.thread(message.threadId) : undefined)
       this.store.markPushed(message.id)
       this.options.deliver(recipient.sessionId, envelope)
-      this.options.watchReceipt(this.store.get(message.id)!)
+      const pushed = this.store.get(message.id)!
+      if (!this.current(recipient.sessionId)?.available) this.store.holdUncertain(message.id, 'recipient-unavailable-after-push')
+      this.options.watchReceipt(pushed)
     } catch (error) {
       // A pushed claim must be reconciled from its transcript; it cannot be
       // requeued merely because a display observer or submit call threw.
-      if (!this.store.get(message.id)?.pushedAt) this.store.requeue(message.id)
+      const claimed = this.store.get(message.id)
+      if (claimed?.state === 'claimed') {
+        if (claimed.pushedAt) {
+          this.store.holdUncertain(message.id, 'delivery-submit-failed')
+          try { this.options.watchReceipt(this.store.get(message.id)!) } catch (receiptError) { this.options.onError?.(receiptError) }
+        }
+        else this.store.requeue(message.id)
+      }
       this.options.onError?.(error)
     }
-    this.options.onChange?.(message.teamId)
   }
 
   private armTimer() {

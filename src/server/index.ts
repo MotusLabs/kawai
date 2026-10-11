@@ -2769,6 +2769,7 @@ function handleMessage(
         const input = {
           projectPath: message.projectPath,
           name: message.name,
+          ...(typeof message.cloneFromSessionId === 'string' ? { cloneFromSessionId: message.cloneFromSessionId } : {}),
           claudeProfileId: message.claudeProfileId,
           approvalPolicy: parseApprovalPolicy(message.approvalPolicy),
           ...(typeof message.groupId === 'string' && message.groupId.trim()

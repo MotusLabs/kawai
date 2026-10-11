@@ -13,7 +13,7 @@ import { notifyMailboxDeadLetter } from '../utils/teamMailboxNotification'
 
 afterEach(() => { useTeamMailboxStore.setState({ views: {} }); useChatStore.setState({ sessions: {} }) })
 const peer: ChatEvent = { type: 'peer_message', id: 'p1', sequence: 1, at: 'now', turnId: 'turn', messageId: 'mail',
-  senderSession: 'lead', senderGroup: 'leads', priority: 'urgent', originPath: '/repo/worktree', tags: ['review'],
+  senderSession: 'lead', senderGroup: 'leads', priority: 'urgent', originPath: '/repo/worktree', tags: ['review', 'review'],
   threadId: 'thread', body: 'Review this change', possibleDuplicate: true }
 const mail = (id: string, state: TeamMessage['state'], deliverAt: string | null = null): TeamMessage => ({
   id, state, deliverAt, teamId: 'team', toKind: 'group', toId: 'devs', fromSession: 'lead', fromGroup: 'leads',
@@ -32,6 +32,7 @@ test('peer row is distinct and restored by reconnect snapshot', () => {
   for (const text of ['leads', 'urgent', '/repo/worktree', 'review', 'Possible duplicate', 'Review this change']) {
     expect(JSON.stringify(renderer.toJSON())).toContain(text)
   }
+  expect(row.findAllByType('span').filter(span => JSON.stringify(span.children) === '["#","review"]')).toHaveLength(1)
   expect(renderer.root.findAllByProps({ 'data-chat-role': 'user' })).toHaveLength(1)
   renderer.unmount()
 })
@@ -40,7 +41,7 @@ test('mailbox lists all categories and sends cancel, retry, discard; offline act
   const view = { open: true, loading: false, messages: [mail('queued', 'queued'), mail('future', 'queued', new Date(Date.now()+60000).toISOString()), mail('dead', 'dead'), mail('held', 'uncertain')] }
   const props = { sessionId: 'dev', view, connected: true, sendMessage: (message: ClientMessage) => sent.push(message), onClose: () => {} }
   const renderer = TestRenderer.create(<TeamMailboxPanel {...props} />)
-  expect(renderer.root.findAllByType('section').map(section => section.props['aria-label'])).toEqual(['Queued', 'Scheduled', 'Dead letters', 'Held for review'])
+  expect(renderer.root.findAllByType('section').map(section => section.props['aria-label'])).toEqual(['Queued', 'Receiving', 'Scheduled', 'Dead letters', 'Held for review'])
   const actions = renderer.root.findAllByType('button').slice(1)
   act(() => { for (const button of actions) button.props.onClick() })
   expect(sent.map(message => message.type)).toEqual(['team-mailbox-cancel', 'team-mailbox-cancel', 'team-mailbox-retry', 'team-mailbox-discard', 'team-mailbox-retry', 'team-mailbox-discard'])
@@ -63,4 +64,10 @@ test('hop-limit notice adds a human toast', () => {
     notifyMailboxDeadLetter({ type: 'team-mailbox-dead-letter', teamId: 'team', messageId: 'stopped', senderSession: 'lead' })
     expect(add).toHaveBeenCalledWith(expect.objectContaining({ title: 'Team message stopped at hop limit', description: expect.stringContaining('stopped') }))
   } finally { add.mockRestore() }
+})
+
+test('claimed mail stays visible while waiting for the durable receipt', () => {
+  const renderer = TestRenderer.create(<TeamMailboxPanel sessionId="dev" view={{ open: true, loading: false, messages: [mail('in flight', 'claimed')] }} connected sendMessage={() => {}} onClose={() => {}} />)
+  expect(JSON.stringify(renderer.root.findByProps({ 'aria-label': 'Receiving' }).findByType('article').findAllByType('p').map(p => p.children))).toContain('in flight')
+  renderer.unmount()
 })

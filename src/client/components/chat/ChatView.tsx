@@ -146,10 +146,8 @@ export default function ChatView({ session, sendMessage, subscribe, connectionSt
         // the same working session with a fresh conversation, not a new pick
         // from the dialog. Legacy sessions without a stored policy read manual.
         approvalPolicy: session.approvalPolicy ?? 'manual',
-        // The team role carries over too (agent-teams): same seat, fresh
-        // conversation. A group whose file is gone fails creation, and the
-        // current chat stays untouched.
-        ...(session.groupId ? { groupId: session.groupId } : {}),
+        // A grouped chat clones its server-owned role even if its file is gone.
+        ...(session.groupId ? { groupId: session.groupId, cloneFromSessionId: session.id } : {}),
       })
       return
     }

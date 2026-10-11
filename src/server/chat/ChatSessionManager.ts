@@ -60,11 +60,11 @@ import { readWorkerTranscript } from './chatWorkerTranscript'
 import { loadTeamGroups } from '../team/teamGroups'
 import { SessionTeams } from '../team/sessionTeams'
 import { TeamMailbox } from '../team/TeamMailbox'
-import { MailboxStore } from '../team/mailboxStore'
 import { createMailboxServer } from '../team/mailboxTools'
 import type { TeamMessage } from '../../shared/team'
 import { MailDispatcher } from '../team/dispatcher'
-import { receiptMessageId, reconcileMailbox } from '../team/receipt'
+import { receiptMessageId } from '../team/receipt'
+import { SessionMailbox } from '../team/sessionMailbox'
 import {
   findTranscriptPath,
   readTranscriptCwd,
@@ -254,13 +254,16 @@ export class ChatSessionManager {
     { timer: ReturnType<typeof setTimeout>; path: string }
   >()
 
-  async createAvailableSession(input: { projectPath: string; name?: string; claudeProfileId?: string; approvalPolicy?: ChatApprovalPolicy; groupId?: string }): Promise<ChatCreateResult> {
+  async createAvailableSession(input: { projectPath: string; name?: string; claudeProfileId?: string; approvalPolicy?: ChatApprovalPolicy; groupId?: string; cloneFromSessionId?: string }): Promise<ChatCreateResult> {
     // Refuse a bad path before the probe spends an SDK spawn on it.
     const project = resolveProjectDirectory(input.projectPath, this.options.isDirectory)
     if (!project.ok) return project
-    // A group must exist in the project's team catalog at creation; it is
-    // never re-validated later (a removed file just marks it missing).
-    if (input.groupId !== undefined) {
+    const clone = input.cloneFromSessionId ? this.records.get(input.cloneFromSessionId) : undefined
+    if (input.cloneFromSessionId && (!clone || clone.projectPath !== project.path)) return { ok: false, error: 'Clone source must be an existing chat in this project' }
+    if (clone) input = { ...input, groupId: clone.groupId ?? undefined }
+    // Fresh group choices require a definition. A clone preserves the
+    // source record's immutable role, including one whose file was removed.
+    if (input.groupId !== undefined && !clone) {
       const { catalog } = await loadTeamGroups(project.path, this.options.profileCatalogHome)
       if (!catalog.groups.has(input.groupId)) {
         return { ok: false, error: `Unknown group "${input.groupId}" for this project's team` }
@@ -389,61 +392,21 @@ export class ChatSessionManager {
     this.usageLimits.subscribe((profileId, report) =>
       this.options.onUsage?.(profileId, report)
     )
-    this.mailbox = new TeamMailbox(new MailboxStore(options.db.db), {
-      getSession: (id) => this.records.get(id),
-      homeDir: options.profileCatalogHome,
-      onChange: () => this.dispatcher.notify(),
-      restoreSession: (id) => {
-        const result = this.restore(id)
-        if (!result.ok) throw new Error(result.error)
-      },
-    })
-    this.dispatcher = new MailDispatcher(this.mailbox.store, {
-      recipients: () => [...this.records.values()].flatMap(record => {
-        const team = this.teams.teamOf(record.sessionId)
-        if (!team) return []
-        const driver = this.drivers.get(record.sessionId)
-        return [{
-          sessionId: record.sessionId, teamId: team.teamId,
-          groupId: record.groupId && !this.teams.groupInfo(record.sessionId, record.groupId)?.missing ? record.groupId : null,
-          idle: record.status === 'waiting',
-          pendingRequest: (driver?.getPendingRequests().length ?? 0) > 0,
-          available: record.archivedAt == null && !this.startBlocker(record) && (this.options.isDirectory ?? isExistingDirectory)(record.projectPath),
-        }]
-      }),
-      prepare: async id => {
-        this.captureHistory(id)
-        const driver = await this.ensureDriver(id)
-        if (!driver) throw new Error('Recipient disappeared')
-        driver.start()
-      },
-      interrupt: async id => { await this.drivers.get(id)?.interrupt() },
-      deliver: (id, envelope) => {
-        const driver = this.drivers.get(id)
-        if (!driver) throw new Error('Recipient disappeared')
-        driver.deliver(envelope)
-      },
+    this.teamMail = new SessionMailbox(options.db.db, {
+      teams: this.teams, records: () => this.records.values(), getRecord: id => this.records.get(id),
+      getDriver: id => this.drivers.get(id), homeDir: options.profileCatalogHome,
+      available: record => record.archivedAt == null && !this.startBlocker(record) && (options.isDirectory ?? isExistingDirectory)(record.projectPath),
+      prepare: async id => { this.captureHistory(id); const driver = await this.ensureDriver(id); if (!driver) throw new Error('Recipient disappeared'); driver.start() },
+      restore: id => { const result = this.restore(id); if (!result.ok) throw new Error(result.error) },
+      watchReceipt: id => this.watchSessionTitle(id),
+      transcriptFor: id => { const sdkId = this.records.get(id)?.sdkSessionId; return sdkId ? findTranscriptPath(sdkId) : null },
+      onChange: options.onMailboxChange,
       onError: error => logger.warn('team_mailbox_dispatch_failed', { error: String(error) }),
-      watchReceipt: message => {
-        if (message.claimedBy) this.watchSessionTitle(message.claimedBy)
-      },
     })
+    this.mailbox = this.teamMail.mailbox
+    this.dispatcher = this.teamMail.dispatcher
     this.restorePersisted()
-    reconcileMailbox(this.mailbox.store, id => {
-      const sdkId = this.records.get(id)?.sdkSessionId
-      return sdkId ? findTranscriptPath(sdkId) : null
-    })
-    // Reconciliation may have requeued mail for a session killed while down.
-    for (const teamId of this.mailbox.store.teamsWithQueuedMail()) {
-      for (const mail of this.mailbox.store.listForTeam(teamId)) {
-        if (mail.toKind === 'session' && !this.records.has(mail.toId)) this.mailbox.store.deadLetter(mail.id, 'killed-recipient')
-      }
-    }
-    this.releaseMailboxSubscription = this.mailbox.store.subscribe((teamId, message) => {
-      this.options.onMailboxChange?.(teamId, message)
-      this.dispatcher.notify()
-    })
-    this.dispatcher.notify()
+    this.teamMail.start()
     // Logs of sessions deleted while the server was down are orphans now.
     void this.options.wireLogs?.pruneOrphans(new Set(this.records.keys()))
   }
@@ -452,7 +415,7 @@ export class ChatSessionManager {
   readonly teams: SessionTeams
   readonly mailbox: TeamMailbox
   readonly dispatcher: MailDispatcher
-  private readonly releaseMailboxSubscription: () => void
+  private readonly teamMail: SessionMailbox
 
   /** Create a chat session. Refused (no side effects) when auth is missing. */
   createSession(input: {
@@ -641,6 +604,7 @@ export class ChatSessionManager {
       driver.interrupt()
       driver.kill()
     }
+    this.teamMail.settleRecipient(sessionId)
     this.drivers.delete(sessionId)
     this.driverPromises.delete(sessionId)
     // The transcript is final once the agent is stopped: release the title
@@ -775,6 +739,7 @@ export class ChatSessionManager {
     const record = this.records.get(sessionId)
     if (!record) return false
     this.drivers.get(sessionId)?.kill()
+    this.teamMail.settleRecipient(sessionId)
     this.drivers.delete(sessionId)
     this.driverPromises.delete(sessionId)
     this.releaseTitleWatch(sessionId)
@@ -798,8 +763,7 @@ export class ChatSessionManager {
 
   /** Server shutdown: settle every driver (callbacks cannot survive it). */
   shutdown(): void {
-    this.dispatcher.close()
-    this.releaseMailboxSubscription()
+    this.teamMail.close()
     for (const driver of this.drivers.values()) {
       driver.shutdown()
     }
@@ -1223,6 +1187,7 @@ export class ChatSessionManager {
     this.liveEvents.set(sessionId, events)
     this.options.onEvent(sessionId, event)
     if (event.type === 'request_resolved') this.dispatcher.notify()
+    if (event.type === 'error' || event.type === 'turn_completed') this.teamMail.settleRecipient(sessionId)
     if (
       event.type === 'turn_completed' ||
       event.type === 'approval_request' ||
@@ -1380,9 +1345,9 @@ export class ChatSessionManager {
   ): void {
     const record = this.records.get(sessionId)
     if (!record) return
-    this.dispatcher?.notify()
     const next = { ...record, ...patch }
     this.records.set(sessionId, next)
+    if ((patch.status !== undefined && patch.status !== record.status) || patch.projectPath !== undefined || patch.archivedAt !== undefined) this.dispatcher?.notify()
     this.options.db.updateChatSession(sessionId, patch)
     // The first SDK session id makes a transcript followable: start the
     // title tail for the now-live conversation (design D4).

@@ -928,8 +928,17 @@ describe('/clear, /reset, /new', () => {
     h.submit()
     expect(h.sent.filter(message => message.type === 'session-create')).toEqual([{
       type: 'session-create', projectPath: '/tmp/project', kind: 'chat',
-      claudeProfileId: 'default', approvalPolicy: 'manual', groupId: 'devs',
+      claudeProfileId: 'default', approvalPolicy: 'manual', groupId: 'devs', cloneFromSessionId: 'chat-1',
     }])
+    h.renderer.unmount()
+  })
+
+  test.each(['/clear', '/reset', '/new'])('%s clones the stored role when its group file is missing', (command) => {
+    const h = renderClearable({ ...chatSession, groupId: 'devs', groupMissing: true } as Session)
+    h.type(command); h.submit()
+    expect(h.sent.find(message => message.type === 'session-create')).toMatchObject({ groupId: 'devs', cloneFromSessionId: 'chat-1' })
+    h.deliver(newChatCreated('chat-clone'))
+    expect(h.sent.filter(message => message.type === 'chat-archive')).toEqual([{ type: 'chat-archive', sessionId: 'chat-1' }])
     h.renderer.unmount()
   })
 

@@ -77,8 +77,8 @@ export class SessionTeams {
   }
 
   /** Display state of a session's group; undefined until its team is known. */
-  groupInfo(sessionId: string, groupId: string): SessionGroupInfo | undefined {
-    const group = this.catalogOf(sessionId)?.groups.get(groupId)
+  groupInfo(sessionId: string, groupId: string, cache?: Map<string, GroupCatalog>): SessionGroupInfo | undefined {
+    const group = this.catalogOf(sessionId, cache)?.groups.get(groupId)
     if (!this.teamOf(sessionId)) return undefined
     return group ? { label: group.label, missing: false } : { label: groupId, missing: true }
   }
@@ -96,12 +96,16 @@ export class SessionTeams {
   }
 
   /** The session's team catalog, freshly read; undefined until resolved. */
-  catalogOf(sessionId: string): GroupCatalog | undefined {
+  catalogOf(sessionId: string, cache?: Map<string, GroupCatalog>): GroupCatalog | undefined {
     const team = this.teamOf(sessionId)
     if (!team) return undefined
-    return loadGroupCatalog({
+    const cached = cache?.get(team.teamId)
+    if (cached) return cached
+    const catalog = loadGroupCatalog({
       groupsRoot: team.groupsRoot,
       ...(this.options.homeDir ? { homeDir: this.options.homeDir } : {}),
     })
+    cache?.set(team.teamId, catalog)
+    return catalog
   }
 }

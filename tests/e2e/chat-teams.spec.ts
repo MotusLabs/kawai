@@ -67,10 +67,24 @@ test('group picker, badge, peer replay and mailbox controls', async ({ page }, i
     await panel.locator(`[data-message-id="${seeded.dead}"]`).getByRole('button', { name: 'Discard' }).click()
     await expect(panel.locator(`[data-message-id="${seeded.dead}"]`)).toHaveCount(0)
     await panel.locator(`[data-message-id="${seeded.held}"]`).getByRole('button', { name: 'Retry' }).click()
-    await expect(panel.locator(`[data-message-id="${seeded.held}"]`)).toHaveCount(0)
+    // The SDK-free fixture writes no CLI transcript: even after retry, the
+    // unconfirmed receipt stays visible for review instead of vanishing.
+    await expect(page.locator('[data-chat-role="peer"]').filter({ hasText: 'Held browser mail' })).toContainText('Possible duplicate')
+    await expect(panel.locator(`[data-message-id="${seeded.held}"]`)).toContainText('receipt-unconfirmed-after-delivery')
     await page.getByRole('button', { name: 'Close mailbox' }).click()
     await expect(page.locator('[data-chat-role="peer"]').filter({ hasText: 'Held browser mail' })).toContainText('Possible duplicate')
     await page.screenshot({ path: info.outputPath('team-peer-retry.png') })
+    // Clearing a member still works after its group file is removed.
+    rmSync(join(root, '.kawai/groups/devs.md'))
+    await page.getByLabel('Message Claude').fill('/clear')
+    await page.getByRole('button', { name: 'Send', exact: true }).click()
+    await expect(page.getByTestId('chat-transcript')).not.toContainText('Browser peer greeting')
+    await expect(page.getByTestId('session-group-badge').filter({ hasText: 'devs' }).first()).toHaveAttribute('data-missing', 'true')
+    await page.screenshot({ path: info.outputPath('team-clear-missing-group.png') })
+    await page.getByRole('button', { name: 'Kill session', exact: true }).click()
+    await page.getByRole('button', { name: 'Expand Archive section' }).click()
+    // Archived rows use a drag-disabled wrapper, as in chat-drafts.spec.ts.
+    await page.getByTestId('archive-rows').locator(`[data-session-id="${dev}"]`).click({ force: true })
     await page.getByRole('button', { name: 'Kill session', exact: true }).click()
     await page.locator(`[data-session-id="${lead}"]`).click()
     await page.getByRole('button', { name: 'Kill session', exact: true }).click()

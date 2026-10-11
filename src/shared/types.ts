@@ -374,6 +374,8 @@ export type ClientMessage =
       // project's group catalog and fixed for the session's life. Absent =
       // no group.
       groupId?: string
+      /** Existing chat whose stored role is preserved, including a missing role. */
+      cloneFromSessionId?: string
       // OpenSpec change context: with a selected agent, the server composes
       // the mapped apply command into the session's start command as the
       // agent's first prompt (a launch argument, held by the agent itself
