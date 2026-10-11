@@ -12,7 +12,7 @@
 
 ## 3. Agent notices
 
-- [ ] 3.1 In `ChatSessionDriver.handleSystem`, map `subtype === 'notification'` frames to `ChatNotification` (color → severity, per design D1) and pass them through a new `onNotification` option, ignoring frames without `key` or `text`. Verify with driver tests: warning, error, and no-color frames, and that a malformed frame is ignored.
+- [x] 3.1 In `ChatSessionDriver.handleSystem`, map `subtype === 'notification'` frames to `ChatNotification` (color → severity, per design D1) and pass them through a new `onNotification` option, ignoring frames without `key` or `text`. Verify with driver tests: warning, error, and no-color frames, and that a malformed frame is ignored.
 
 ## 4. Manager merge, lifecycle, and fan-out
 

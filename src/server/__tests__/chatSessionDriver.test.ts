@@ -17,6 +17,7 @@ import type {
   ChatCommandState,
   ChatContextUsage,
   ChatEvent,
+  ChatNotification,
   ChatUsageReport,
   ChatWorker,
 } from '../../shared/chat'
@@ -157,6 +158,8 @@ interface Harness {
   events: ChatEvent[]
   statuses: SessionStatus[]
   activities: Array<ChatActivity | null>
+  /** Each agent notification (notification strip design D4) with its timeout. */
+  notifications: Array<[ChatNotification, number | undefined]>
   /** Each roster publish (workers design D2): the full projection. */
   workers: ChatWorker[][]
   rateLimits: ChatUsageReport[]
@@ -195,11 +198,14 @@ function createHarness(
     initializationCommands?: Array<Record<string, unknown>>
     /** Persisted roster rows seeding the driver (workers design D6). */
     recoveredWorkers?: ChatWorker[]
+    /** Replaces the harness's notification capture. */
+    onNotification?: (notification: ChatNotification, timeoutMs?: number) => void
   } = {}
 ): Harness {
   const events: ChatEvent[] = []
   const statuses: SessionStatus[] = []
   const activities: Array<ChatActivity | null> = []
+  const notifications: Array<[ChatNotification, number | undefined]> = []
   const workers: ChatWorker[][] = []
   const rateLimits: ChatUsageReport[] = []
   const usageReports: ChatUsageReport[] = []
@@ -231,6 +237,7 @@ function createHarness(
     onEvent: (event) => events.push(event),
     onStatus: (status) => statuses.push(status),
     onActivity: (activity) => activities.push(activity),
+    onNotification: overrides.onNotification ?? ((notification, timeoutMs) => notifications.push([notification, timeoutMs])),
     onWorkers: (list) => workers.push(list),
     onRateLimit: (report) => rateLimits.push(report),
     onUsageReport: (report) => usageReports.push(report),
@@ -255,6 +262,7 @@ function createHarness(
     events,
     statuses,
     activities,
+    notifications,
     workers,
     rateLimits,
     usageReports,
@@ -430,6 +438,27 @@ function compactBoundary(
     },
     uuid: 'compact-uuid',
     session_id: 'sdk-1',
+  } as unknown as SDKMessage
+}
+
+/**
+ * A system/notification frame (notification strip design D4): the CLI's
+ * notification queue on the SDK channel.
+ */
+function notificationFrame(
+  overrides: Record<string, unknown> = {}
+): SDKMessage {
+  return {
+    type: 'system',
+    subtype: 'notification',
+    key: 'model-context-window',
+    text: 'Context left: less than 20%',
+    priority: 'high',
+    color: 'warning',
+    timeout_ms: 15_000,
+    uuid: 'notification-uuid',
+    session_id: 'sdk-1',
+    ...overrides,
   } as unknown as SDKMessage
 }
 
@@ -1685,6 +1714,68 @@ describe('ChatSessionDriver activity', () => {
     await flush()
     expect(harness.activities.at(-1)).toBeNull()
     await approval
+  })
+})
+
+describe('ChatSessionDriver notifications', () => {
+  test('a warning notification maps to a warning-severity ChatNotification with its timeout', async () => {
+    const harness = createHarness()
+    await harness.driver.send('hello')
+    const fake = harness.fakes[0]!
+    fake.push(notificationFrame())
+    await flush()
+    const [notification, timeoutMs] = harness.notifications[0]!
+    expect(notification).toMatchObject({
+      key: 'model-context-window',
+      source: 'agent',
+      severity: 'warning',
+      priority: 'high',
+      text: 'Context left: less than 20%',
+    })
+    expect(typeof notification.receivedAt).toBe('string')
+    expect(timeoutMs).toBe(15_000)
+    // The frame never becomes a transcript event.
+    expect(typesOf(harness.events)).not.toContain('notice')
+  })
+
+  test('an error color maps to error severity; a missing color maps to info', async () => {
+    const harness = createHarness()
+    await harness.driver.send('hello')
+    const fake = harness.fakes[0]!
+    fake.push(notificationFrame({ key: 'error-compacting-conversation', text: 'Error compacting conversation', color: 'error' }))
+    fake.push(notificationFrame({ key: 'memory-paused', text: 'Memory is paused', color: undefined, priority: 'medium', timeout_ms: undefined }))
+    await flush()
+    expect(harness.notifications.map(([notification]) => notification.severity)).toEqual(['error', 'info'])
+    expect(harness.notifications.map(([, timeoutMs]) => timeoutMs)).toEqual([15_000, undefined])
+    expect(harness.notifications[1]![0]).toMatchObject({ key: 'memory-paused', priority: 'medium' })
+  })
+
+  test('malformed frames without a key or text are ignored', async () => {
+    const harness = createHarness()
+    await harness.driver.send('hello')
+    const fake = harness.fakes[0]!
+    fake.push(notificationFrame({ key: '', text: 'no key' }))
+    fake.push(notificationFrame({ key: 'has-key', text: '' }))
+    fake.push(notificationFrame({ key: undefined, text: undefined }))
+    await flush()
+    expect(harness.notifications).toEqual([])
+  })
+
+  test('an unknown priority degrades to low instead of leaking through', async () => {
+    const harness = createHarness()
+    await harness.driver.send('hello')
+    harness.fakes[0]!.push(notificationFrame({ priority: 'whenever' as unknown as 'high' }))
+    await flush()
+    expect(harness.notifications[0]![0].priority).toBe('low')
+  })
+
+  test('notifications arrive outside a turn as well, like rate-limit frames', async () => {
+    const harness = createHarness()
+    harness.driver.start()
+    await flush()
+    harness.fakes[0]!.push(notificationFrame())
+    await flush()
+    expect(harness.notifications).toHaveLength(1)
   })
 })
 
