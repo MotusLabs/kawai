@@ -38,10 +38,10 @@
 
 ## 6. Human task connections
 
-- [ ] 6.1 Add team-scoped task-list/detail subscriptions and authoritative snapshots/pushes for tasks, revisions, journal, subtasks, participants, and linked messages; verify connection tests cover open/change/close/disconnect, reconnect snapshots, delayed team resolution, and cross-team access refusal.
-- [ ] 6.2 Add human create/amend/note/status actions through the UI connection path using the task service, including parent/worktree/change inputs; verify connection tests cover each action, invalid references, revision pushes, and reopening a task whose creator was killed.
-- [ ] 6.3 Carry associated task and spawned-session identity through session persistence, snapshots, and navigator equality checks; flag spawned sessions with pending approvals/questions as needing attention and trigger the existing notification path; verify manager/connection tests cover restart, archive/restore, approval/question resolution, and a notification without an open task view.
-- [ ] 6.4 Document the human task controls and needs-attention behavior; verify the documentation states that humans can amend and close tasks regardless of creator and that auto-spawn uses the configured approval policy.
+- [x] 6.1 Add team-scoped task-list/detail subscriptions and authoritative snapshots/pushes for tasks, revisions, journal, subtasks, participants, and linked messages; verify connection tests cover open/change/close/disconnect, reconnect snapshots, delayed team resolution, and cross-team access refusal.
+- [x] 6.2 Add human create/amend/note/status actions through the UI connection path using the task service, including parent/worktree/change inputs; verify connection tests cover each action, invalid references, revision pushes, and reopening a task whose creator was killed.
+- [x] 6.3 Carry associated task and spawned-session identity through session persistence, snapshots, and navigator equality checks; flag spawned sessions with pending approvals/questions as needing attention and trigger the existing notification path; verify manager/connection tests cover restart, archive/restore, approval/question resolution, and a notification without an open task view.
+- [x] 6.4 Document the human task controls and needs-attention behavior; verify the documentation states that humans can amend and close tasks regardless of creator and that auto-spawn uses the configured approval policy.
 
 ## 7. Task UI
 

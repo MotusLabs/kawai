@@ -3,6 +3,7 @@ export const HISTORY_MAX_AGE_MIN_HOURS = 1
 export const HISTORY_MAX_AGE_MAX_HOURS = 168 // 7 days
 
 import type { TeamMessage } from './team'
+import type { TaskStatus, TeamTask, TeamTaskDetail, TeamTaskSummary } from './teamTasks'
 import type {
   WorkspaceOperationResult,
   WorkspaceSnapshot,
@@ -317,6 +318,13 @@ export type ServerMessage =
   // chat-activity, while settled outcomes also ride the snapshot and persist.
   | { type: 'team-mailbox-snapshot'; sessionId: string; teamId: string; messages: TeamMessage[] }
   | { type: 'team-mailbox-dead-letter'; teamId: string; messageId: string; senderSession: string }
+  // Team tasks (team-tasks 6.1): authoritative snapshots for a session's
+  // team — the list, and each task whose detail the connection has open.
+  | { type: 'team-tasks-snapshot'; sessionId: string; teamId: string; tasks: TeamTaskSummary[] }
+  | { type: 'team-task-detail'; sessionId: string; teamId: string; detail: TeamTaskDetail }
+  // Result of a human task action; `task` is set on success (a created
+  // task's id lets the view open it), `error` on refusal.
+  | { type: 'team-task-result'; sessionId: string; requestId: string; task?: TeamTask; error?: string }
   | { type: 'chat-workers'; sessionId: string; workers: ChatWorker[] }
   // A worker's body on expand (workers design D5): the reply to
   // chat-worker-transcript, read from the worker's on-disk transcript.
@@ -429,6 +437,24 @@ export type ClientMessage =
     }
   | { type: 'team-mailbox-open' | 'team-mailbox-close'; sessionId: string }
   | { type: 'team-mailbox-cancel' | 'team-mailbox-retry' | 'team-mailbox-discard'; sessionId: string; messageId: string }
+  // Team tasks (team-tasks 6.1/6.2): list and detail subscriptions scoped by
+  // the session's team; human actions answer with team-task-result.
+  | { type: 'team-tasks-open' | 'team-tasks-close'; sessionId: string }
+  | { type: 'team-task-open' | 'team-task-close'; sessionId: string; taskId: string }
+  | {
+      type: 'team-task-create'
+      sessionId: string
+      requestId: string
+      title: string
+      direction: string
+      acceptance?: string
+      parentId?: string
+      worktree?: string
+      openspecChange?: string
+    }
+  | { type: 'team-task-amend'; sessionId: string; requestId: string; taskId: string; direction?: string; acceptance?: string }
+  | { type: 'team-task-note'; sessionId: string; requestId: string; taskId: string; text: string }
+  | { type: 'team-task-status'; sessionId: string; requestId: string; taskId: string; status: TaskStatus }
   | { type: 'chat-debug-open'; sessionId: string }
   | { type: 'chat-debug-page'; sessionId: string; beforeSeq: number }
   | { type: 'chat-debug-close'; sessionId: string }

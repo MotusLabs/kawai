@@ -84,6 +84,8 @@ export interface ChatSessionManagerOptions {
   registry: SessionRegistry
   db: SessionDatabase
   onMailboxChange?: (teamId: string, message?: TeamMessage) => void
+  /** Every committed team-task change (wired to the task view push in index.ts). */
+  onTaskChange?: (teamId: string) => void
   /** Conversation-event sink (wired to the WS broadcast in index.ts). */
   onEvent: (sessionId: string, event: ChatEvent) => void
   /** Command-state sink (wired to the chat-commands push in index.ts). */
@@ -418,6 +420,7 @@ export class ChatSessionManager {
     this.tasks = this.teamMail.tasks
     // A retitled task re-labels the headers of the sessions working on it.
     this.tasks.store.subscribe(task => {
+      this.options.onTaskChange?.(task.teamId)
       for (const record of this.records.values()) {
         if (record.taskId === task.id) this.options.registry.updateSession(record.sessionId, this.taskFields(record))
       }

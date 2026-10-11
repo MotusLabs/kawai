@@ -2,6 +2,7 @@
 // subscription that routes every server message into stores and local state.
 import { useTeamMailboxStore } from './stores/teamMailboxStore'
 import { notifyMailboxDeadLetter } from './utils/teamMailboxNotification'
+import { notifySpawnedAttention } from './utils/teamTaskNotification'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { AgentSession, AutoStartAgent, ChatApprovalPolicy, ServerMessage, Session, SessionKillSource, UpdateState } from '@shared/types'
 import { FALLBACK_ARCHIVE_SECTION_KEY, type WorkspaceBranch } from '@shared/workspace'
@@ -226,6 +227,9 @@ export default function App() {
         const currentSessions = useSessionStore.getState().sessions
         const { soundOnPermission, soundOnIdle } = useSettingsStore.getState()
 
+        for (const nextSession of message.sessions) {
+          notifySpawnedAttention(currentSessions.find((s) => s.id === nextSession.id), nextSession)
+        }
         if (soundOnPermission || soundOnIdle) {
           for (const nextSession of message.sessions) {
             const prevSession = currentSessions.find((s) => s.id === nextSession.id)
@@ -390,6 +394,7 @@ export default function App() {
         const nextStatus = message.session.status
 
         updateSession(message.session)
+        notifySpawnedAttention(prevSession, message.session)
 
         // Only play sounds for known sessions (skip new/unknown sessions)
         if (prevStatus) {
