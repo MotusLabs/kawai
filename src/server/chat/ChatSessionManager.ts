@@ -65,6 +65,7 @@ import type { TeamMessage } from '../../shared/team'
 import { MailDispatcher } from '../team/dispatcher'
 import { receiptMessageId } from '../team/receipt'
 import { SessionMailbox } from '../team/sessionMailbox'
+import type { TaskService } from '../team/TaskService'
 import {
   findTranscriptPath,
   readTranscriptCwd,
@@ -404,6 +405,7 @@ export class ChatSessionManager {
       onError: error => logger.warn('team_mailbox_dispatch_failed', { error: String(error) }),
     })
     this.mailbox = this.teamMail.mailbox
+    this.tasks = this.teamMail.tasks
     this.dispatcher = this.teamMail.dispatcher
     this.restorePersisted()
     this.teamMail.start()
@@ -414,6 +416,8 @@ export class ChatSessionManager {
   /** Each session's team (agent-teams); shared with the mailbox dispatcher. */
   readonly teams: SessionTeams
   readonly mailbox: TeamMailbox
+  /** Team tasks (team-tasks); the task tools and UI actions go through it. */
+  readonly tasks: TaskService
   readonly dispatcher: MailDispatcher
   private readonly teamMail: SessionMailbox
 
@@ -1008,7 +1012,7 @@ export class ChatSessionManager {
       const queryFactory = await this.resolveQueryFactory()
       // The team must be known before the first spawn reads its prompt.
       await this.teams.track(record.sessionId, this.records.get(record.sessionId)?.projectPath ?? record.projectPath)
-      const teamMcpServer = await createMailboxServer(this.mailbox, record.sessionId)
+      const teamMcpServer = await createMailboxServer(this.mailbox, record.sessionId, this.tasks)
       const driver = new ChatSessionDriver({
         sessionId: record.sessionId,
         projectPath: record.projectPath,

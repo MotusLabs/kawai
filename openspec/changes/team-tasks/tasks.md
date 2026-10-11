@@ -16,10 +16,10 @@
 
 ## 3. Task service and agent tools
 
-- [ ] 3.1 Add a sender-bound task service validating same-team task/parent references, target worktrees, and existing linked OpenSpec changes; read `canCreateTasks` from the caller's current group catalog and refuse creation by other agents; verify service tests cover permitted/default/no-group callers, fresh settings, invalid links, cross-team parents/tasks, and forged creator identity being ignored.
-- [ ] 3.2 Enforce creator-or-human direction/acceptance amendments, any-member journal notes and `active`/`blocked` updates, creator-only agent `done`/`cancelled`, and human access to every status including reopening; verify a permission matrix includes human-created tasks, contributors, a killed creator, and refusal messages suggesting a note or message instead of unauthorized amendments.
-- [ ] 3.3 Register `task_create`, `task_get`, `task_note`, `task_update_status`, `task_amend`, and `task_list` in the per-session in-process MCP server with validated inputs and bound identity; verify handler and driver tests cover each tool, permissions, full task retrieval, same-team listing, and the spawn-time tool registration.
-- [ ] 3.4 Extend the agent mailbox/system-prompt note with task tools, creator ownership, journal contributions, and linked-change authority; verify prompt tests cover permitted creators, ordinary contributors, and sessions with no group, and document the tool contracts beside the task lifecycle rules.
+- [x] 3.1 Add a sender-bound task service validating same-team task/parent references, target worktrees, and existing linked OpenSpec changes; read `canCreateTasks` from the caller's current group catalog and refuse creation by other agents; verify service tests cover permitted/default/no-group callers, fresh settings, invalid links, cross-team parents/tasks, and forged creator identity being ignored.
+- [x] 3.2 Enforce creator-or-human direction/acceptance amendments, any-member journal notes and `active`/`blocked` updates, creator-only agent `done`/`cancelled`, and human access to every status including reopening; verify a permission matrix includes human-created tasks, contributors, a killed creator, and refusal messages suggesting a note or message instead of unauthorized amendments.
+- [x] 3.3 Register `task_create`, `task_get`, `task_note`, `task_update_status`, `task_amend`, and `task_list` in the per-session in-process MCP server with validated inputs and bound identity; verify handler and driver tests cover each tool, permissions, full task retrieval, same-team listing, and the spawn-time tool registration.
+- [x] 3.4 Extend the agent mailbox/system-prompt note with task tools, creator ownership, journal contributions, and linked-change authority; verify prompt tests cover permitted creators, ordinary contributors, and sessions with no group, and document the tool contracts beside the task lifecycle rules.
 
 ## 4. Task context in messages
 

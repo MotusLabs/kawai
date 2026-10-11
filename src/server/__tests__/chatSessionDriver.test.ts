@@ -2759,15 +2759,15 @@ describe('ChatSessionDriver workers', () => {
 
 
 test('mailbox tools are registered and allowed without cards under either policy', async () => {
-  const { MAILBOX_ALLOWED_TOOLS } = await import('../team/mailboxTools')
+  const { TEAM_ALLOWED_TOOLS } = await import('../team/mailboxTools')
   for (const policy of ['manual', 'auto'] as const) {
     const server = { type: 'stdio' as const, command: 'mailbox-test' }
     const h = createHarness({ teamMcpServer: server, getApprovalPolicy: () => policy })
     h.driver.start()
     const options = h.fakes[0]!.options
     expect(options.mcpServers).toEqual({ 'kawai-team': server })
-    expect(options.allowedTools).toEqual(MAILBOX_ALLOWED_TOOLS)
-    for (const name of MAILBOX_ALLOWED_TOOLS) {
+    expect(options.allowedTools).toEqual(TEAM_ALLOWED_TOOLS)
+    for (const name of TEAM_ALLOWED_TOOLS) {
       const answer = await options.canUseTool!(name, {}, { signal: new AbortController().signal, toolUseID: 'mail-call', requestId: 'mail-request' })
       expect(answer?.behavior).toBe('allow')
     }

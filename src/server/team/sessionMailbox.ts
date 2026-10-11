@@ -9,10 +9,13 @@ import { TeamMailbox } from './TeamMailbox'
 import { MailboxStore } from './mailboxStore'
 import { MailDispatcher, type MailRecipient } from './dispatcher'
 import { reconcileMailbox, transcriptReceipt } from './receipt'
+import { TaskStore } from './taskStore'
+import { TaskService } from './TaskService'
 import type { Database } from 'bun:sqlite'
 
 export class SessionMailbox {
   readonly mailbox: TeamMailbox
+  readonly tasks: TaskService
   readonly dispatcher: MailDispatcher
   private readonly catalogs = new Map<string, GroupCatalog>()
   private releaseSubscription?: () => void
@@ -31,7 +34,9 @@ export class SessionMailbox {
     onChange?: (team: string, message?: TeamMessage) => void
     onError: (error: unknown) => void
   }) {
-    this.mailbox = new TeamMailbox(new MailboxStore(db, { recipientExists: id => !!options.getRecord(id) }), {
+    const store = new MailboxStore(db, { recipientExists: id => !!options.getRecord(id) })
+    this.tasks = new TaskService(new TaskStore(db, store), { getSession: options.getRecord, homeDir: options.homeDir })
+    this.mailbox = new TeamMailbox(store, {
       getSession: options.getRecord, homeDir: options.homeDir, restoreSession: options.restore,
     })
     this.dispatcher = new MailDispatcher(this.mailbox.store, {
