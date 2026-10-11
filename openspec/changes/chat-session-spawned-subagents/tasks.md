@@ -29,7 +29,7 @@
 
 ## 5. Fixture and integration verification
 
-- [ ] 5.1 Add the D9 keyword turn to `developmentFixture.ts` (Agent call, `task_started`, `task_progress`, a `background_tasks_changed` that drops the task before its `task_notification`, one nested `Agent` call with its `task_started`, and one subagent `tool_use`), and verify the fixture's unit tests assert the subagent tool call is absent from the transcript while the nested `Agent` call is present and the settled outcome is the notification's, not `stopped`
+- [x] 5.1 Add the D9 keyword turn to `developmentFixture.ts` (Agent call, `task_started`, `task_progress`, a `background_tasks_changed` that drops the task before its `task_notification`, one nested `Agent` call with its `task_started`, and one subagent `tool_use`), and verify the fixture's unit tests assert the subagent tool call is absent from the transcript while the nested `Agent` call is present and the settled outcome is the notification's, not `stopped`
 - [ ] 5.2 Walk the fixture in the browser via the `dev-browser` skill and verify the row, the live strip, the expanded body, and the settled outcome render and that the strip leaves when the worker settles
 - [ ] 5.3 Run `bun run lint && bun run typecheck && bun run test` and verify the full suite is green
 
