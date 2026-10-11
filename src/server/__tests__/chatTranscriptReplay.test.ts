@@ -7,6 +7,7 @@ import {
   findTranscriptPath,
   parseTranscriptContent,
   parseTranscriptTitleLine,
+  readTranscriptCwd,
   readTranscriptTitle,
   replayTranscriptFile,
   withCancelledRequests,
@@ -611,5 +612,99 @@ describe('replayTranscriptFile', () => {
       'assistant_text',
       'user_message',
     ])
+  })
+})
+
+describe('transcript cwd recovery', () => {
+  let tempDir: string
+  const originalConfigDir = process.env.CLAUDE_CONFIG_DIR
+
+  beforeEach(() => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentboard-replay-cwd-'))
+    process.env.CLAUDE_CONFIG_DIR = path.join(tempDir, 'claude-config')
+  })
+
+  afterEach(() => {
+    if (originalConfigDir !== undefined) {
+      process.env.CLAUDE_CONFIG_DIR = originalConfigDir
+    } else {
+      delete process.env.CLAUDE_CONFIG_DIR
+    }
+    fs.rmSync(tempDir, { recursive: true, force: true })
+  })
+
+  function writeTranscript(sdkSessionId: string, content: string): string {
+    const dir = path.join(
+      process.env.CLAUDE_CONFIG_DIR!,
+      'projects',
+      '-tmp-proj'
+    )
+    fs.mkdirSync(dir, { recursive: true })
+    const filePath = path.join(dir, `${sdkSessionId}.jsonl`)
+    fs.writeFileSync(filePath, content)
+    return filePath
+  }
+
+  /** A minimal user record carrying the given top-level cwd. */
+  function userLine(uuid: string, cwd?: string): string {
+    return JSON.stringify({
+      type: 'user',
+      uuid,
+      timestamp: '2026-10-04T10:00:00.000Z',
+      message: { role: 'user', content: 'hello' },
+      ...(cwd !== undefined ? { cwd } : {}),
+    })
+  }
+
+  test('the newest non-empty cwd wins as the transcript moves mid-file', () => {
+    const worktree = '/tmp/proj/.claude/worktrees/add-feature'
+    const content = [
+      userLine('u1', '/tmp/proj'),
+      userLine('u2', '/tmp/proj'),
+      // The agent entered a worktree between these turns; a blank value on
+      // the way never counts as a move.
+      userLine('u3', ''),
+      userLine('u4', worktree),
+    ].join('\n')
+    const parsed = parseTranscriptContent(content)
+    expect(parsed.cwd).toBe(worktree)
+    // No ChatEvent carries the cwd — recovery is return-value only.
+    expect(JSON.stringify(parsed.events)).not.toContain(worktree)
+
+    const replay = replayTranscriptFile(writeTranscript('sdk-cwd-moves', content))
+    expect(replay.status).toBe('ok')
+    expect(replay.cwd).toBe(worktree)
+  })
+
+  test('a transcript with no cwd field records null', () => {
+    expect(parseTranscriptContent(FIXTURE_TRANSCRIPT).cwd).toBeNull()
+    const replay = replayTranscriptFile(writeTranscript('sdk-cwd-none', FIXTURE_TRANSCRIPT))
+    expect(replay.status).toBe('ok')
+    expect(replay.cwd).toBeNull()
+    // Unavailable history carries no cwd either.
+    expect(replayTranscriptFile(null).cwd).toBeNull()
+  })
+
+  test('an attachment snapshot workingDirectory stands in for a missing cwd', () => {
+    const content = [
+      JSON.stringify({
+        type: 'user',
+        uuid: 'u1',
+        timestamp: '2026-10-04T10:00:00.000Z',
+        message: { role: 'user', content: 'run it' },
+        attachment: { snapshot: { workingDirectory: '/tmp/proj' } },
+      }),
+      // A later top-level cwd outranks the earlier attachment fallback.
+      userLine('u2', '/tmp/proj/.claude/worktrees/fix'),
+    ].join('\n')
+    expect(parseTranscriptContent(content).cwd).toBe(
+      '/tmp/proj/.claude/worktrees/fix'
+    )
+  })
+
+  test('readTranscriptCwd reads a file and tolerates a missing one', () => {
+    const filePath = writeTranscript('sdk-cwd-read', userLine('u1', '/tmp/proj'))
+    expect(readTranscriptCwd(filePath)).toBe('/tmp/proj')
+    expect(readTranscriptCwd(path.join(tempDir, 'gone.jsonl'))).toBeNull()
   })
 })

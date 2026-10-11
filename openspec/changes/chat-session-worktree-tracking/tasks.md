@@ -7,8 +7,8 @@
 
 ## 2. Persist and publish the updated session path
 
-- [ ] 2.1 Handle the driver's cwd callback in `src/server/chat/ChatSessionManager.ts` by patching `project_path` via `updateChatSession`, re-publishing the session through the registry, and skipping no-op updates when the path is unchanged; verify with a unit test in `src/server/__tests__/chatSessionManager.test.ts` that the stored row and the published `Session.projectPath` both show the new directory
-- [ ] 2.2 Confirm clients see the move without a reload by asserting the `sessions` broadcast carries the updated `projectPath` (extend `chatSessionManager.test.ts` or the registry test)
+- [x] 2.1 Handle the driver's cwd callback in `src/server/chat/ChatSessionManager.ts` by patching `project_path` via `updateChatSession`, re-publishing the session through the registry, and skipping no-op updates when the path is unchanged; verify with a unit test in `src/server/__tests__/chatSessionManager.test.ts` that the stored row and the published `Session.projectPath` both show the new directory
+- [x] 2.2 Confirm clients see the move without a reload by asserting the `sessions` broadcast carries the updated `projectPath` (extend `chatSessionManager.test.ts` or the registry test)
 
 ## 3. Recover the cwd from the transcript
 
@@ -17,7 +17,7 @@
 
 ## 4. Keep workspace discovery in step
 
-- [ ] 4.1 After a path change, request a scoped `workspaceCoordinator.requestRefresh(newPath)` (debounced) so a newly entered worktree is discovered without a reload; verify with a unit test that a cwd update issues exactly one refresh for the new path even when several hook events arrive together
+- [x] 4.1 After a path change, request a scoped `workspaceCoordinator.requestRefresh(newPath)` (debounced) so a newly entered worktree is discovered without a reload; verify with a unit test that a cwd update issues exactly one refresh for the new path even when several hook events arrive together
 
 ## 5. Navigator placement
 

@@ -1709,6 +1709,72 @@ describe('ChatSessionManager', () => {
       await new Promise((resolve) => setTimeout(resolve, 30))
       expect(harness.refreshes).toEqual([])
     })
+
+    test('a restored session whose transcript moved comes back with the worktree path', async () => {
+      process.env.ANTHROPIC_API_KEY = 'sk-test-key'
+      const first = createHarness(db)
+      const created = first.manager.createSession({ projectPath: '/tmp/proj' })
+      if (!created.ok) throw new Error('create failed')
+      const sessionId = created.session.id
+      await first.manager.send(sessionId, 'enter a worktree')
+      first.handles[0]!.push(initMessage('sdk-moved-session'))
+      await flush()
+      first.manager.shutdown()
+
+      // The transcript records the conversation ending in a worktree.
+      const movedLine = (uuid: string, cwd: string) =>
+        JSON.stringify({
+          type: 'user',
+          uuid,
+          timestamp: '2026-10-04T10:00:00.000Z',
+          message: { role: 'user', content: 'hello' },
+          cwd,
+        })
+      const transcriptPath = writeTranscript(
+        'sdk-moved-session',
+        [
+          movedLine('u1', '/tmp/proj'),
+          movedLine('u2', '/tmp/proj/.claude/worktrees/add-feature'),
+        ].join('\n')
+      )
+
+      // Restart: restorePersisted adopts the transcript's last cwd (design
+      // D3), so the row, the registry, and any respawn land in the worktree.
+      const restored = createHarness(db)
+      expect(restored.registry.get(sessionId)?.projectPath).toBe(
+        '/tmp/proj/.claude/worktrees/add-feature'
+      )
+      expect(db.getChatSession(sessionId)?.projectPath).toBe(
+        '/tmp/proj/.claude/worktrees/add-feature'
+      )
+      expect(await restored.manager.send(sessionId, 'continue')).toEqual({ ok: true })
+      expect(restored.handles[0]!.options.cwd).toBe(
+        '/tmp/proj/.claude/worktrees/add-feature'
+      )
+
+      // A later transcript move reaches the attach/history replay the same
+      // way (design D3): replaying the history syncs and re-publishes the
+      // row. (The first attach after a restart is what replays history —
+      // here send already cached a snapshot, so call the replay directly.)
+      const updates: Session[] = []
+      restored.registry.on('session-update', (session: Session) => updates.push(session))
+      fs.writeFileSync(
+        transcriptPath,
+        movedLine('u3', '/tmp/proj/.claude/worktrees/later') + '\n'
+      )
+      const replay = restored.manager.getHistory(sessionId)
+      expect(replay?.cwd).toBe('/tmp/proj/.claude/worktrees/later')
+      expect(restored.registry.get(sessionId)?.projectPath).toBe(
+        '/tmp/proj/.claude/worktrees/later'
+      )
+      expect(db.getChatSession(sessionId)?.projectPath).toBe(
+        '/tmp/proj/.claude/worktrees/later'
+      )
+      expect(updates.at(-1)?.projectPath).toBe(
+        '/tmp/proj/.claude/worktrees/later'
+      )
+      restored.manager.shutdown()
+    })
   })
 
   describe('restart restore', () => {
@@ -1932,7 +1998,7 @@ describe('ChatSessionManager', () => {
       }
 
       // Never-started sessions have no SDK id and replay as empty.
-      expect(manager.getHistory(fresh)).toEqual({ status: 'ok', events: [] })
+      expect(manager.getHistory(fresh)).toEqual({ status: 'ok', events: [], cwd: null })
       expect(manager.getHistory('chat-none')).toBeNull()
     })
 

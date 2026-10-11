@@ -54,6 +54,7 @@ import { probeSdkAvailability } from './sdkAvailability'
 import { UsageLimitStore } from './usageLimits'
 import {
   findTranscriptPath,
+  readTranscriptCwd,
   readTranscriptTitle,
   replayTranscriptFile,
   type TranscriptReplay,
@@ -383,11 +384,21 @@ export class ChatSessionManager {
     const record = this.records.get(sessionId)
     if (!record) return null
     if (!record.sdkSessionId) {
-      return { status: 'ok', events: [] }
+      return { status: 'ok', events: [], cwd: null }
     }
-    return replayTranscriptFile(findTranscriptPath(record.sdkSessionId), {
-      excludeToolCallIds: this.liveToolCallIds(sessionId),
-    })
+    const replay = replayTranscriptFile(
+      findTranscriptPath(record.sdkSessionId),
+      { excludeToolCallIds: this.liveToolCallIds(sessionId) }
+    )
+    // The transcript's last cwd is where the conversation actually is
+    // (worktree tracking design D3): a session whose transcript moved while
+    // the server was down follows it on attach too, not only at startup —
+    // the same overwrite a live CwdChanged firing would have made.
+    if (replay.cwd && replay.cwd !== record.projectPath) {
+      this.applyPatch(sessionId, { projectPath: replay.cwd })
+      this.drivers.get(sessionId)?.setProjectPath(replay.cwd)
+    }
+    return replay
   }
 
   /**
@@ -728,14 +739,27 @@ export class ChatSessionManager {
       // was never user-set adopts its transcript's latest title now, so the
       // list is correct for sessions nobody opens. Nothing is persisted —
       // the row re-derives on the next restart the same way.
-      if (
-        (record.nameSource ?? 'manual') !== 'manual' &&
-        record.sdkSessionId
-      ) {
+      // Cwd catch-up (worktree tracking design D3): the transcript's last
+      // cwd is where the conversation actually is — the agent may have
+      // entered a worktree before the restart. Unlike the title this is
+      // persisted, matching what the live CwdChanged firing would have
+      // written, so the row and the registry agree from here on.
+      if (record.sdkSessionId) {
         const filePath = findTranscriptPath(record.sdkSessionId)
-        const title = filePath ? readTranscriptTitle(filePath) : null
-        if (title) {
-          record = { ...record, name: title.title, nameSource: title.source }
+        if (filePath) {
+          if ((record.nameSource ?? 'manual') !== 'manual') {
+            const title = readTranscriptTitle(filePath)
+            if (title) {
+              record = { ...record, name: title.title, nameSource: title.source }
+            }
+          }
+          const cwd = readTranscriptCwd(filePath)
+          if (cwd && cwd !== record.projectPath) {
+            record = { ...record, projectPath: cwd }
+            this.options.db.updateChatSession(record.sessionId, {
+              projectPath: cwd,
+            })
+          }
         }
       }
       this.records.set(record.sessionId, record)

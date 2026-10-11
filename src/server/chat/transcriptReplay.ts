@@ -52,6 +52,12 @@ export interface TranscriptReplay {
    * re-parses of the same file produce the same ids.
    */
   events: ChatEvent[]
+  /**
+   * The working directory the conversation ended in (worktree tracking
+   * design D3), or null when the transcript holds none. Null whenever the
+   * history itself is unavailable.
+   */
+  cwd: string | null
 }
 
 /**
@@ -77,6 +83,12 @@ export interface ParsedTranscript {
    * (D1/D7), so it is never displaced by a later `ai-title`.
    */
   title: TranscriptTitle | null
+  /**
+   * The newest non-empty working directory the transcript records (design
+   * D3) — where the conversation actually is, which may be a worktree the
+   * agent entered. Null when no line records one.
+   */
+  cwd: string | null
 }
 
 /**
@@ -165,6 +177,7 @@ export function parseTranscriptContent(content: string): ParsedTranscript {
   let turnCounter = 0
   let lineIndex = 0
   let title: TranscriptTitle | null = null
+  let cwd: string | null = null
 
   for (const rawLine of content.split('\n')) {
     lineIndex += 1
@@ -194,6 +207,15 @@ export function parseTranscriptContent(content: string): ParsedTranscript {
       continue
     }
     if (record.isMeta === true || record.isSidechain === true) continue
+    // Worktree tracking design D3: each record may carry the working
+    // directory at write time (attachment rows spell it
+    // snapshot.workingDirectory); the newest non-empty one wins. A
+    // sidechain's cwd never gets here — subagent lines were skipped above.
+    const snapshot = asRecord(asRecord(record.attachment)?.snapshot)
+    const lineCwd =
+      stringField(record, 'cwd') ??
+      stringField(snapshot, 'workingDirectory')
+    if (lineCwd) cwd = lineCwd
     const type = record.type
     const lineUuid =
       typeof record.uuid === 'string' && record.uuid
@@ -346,6 +368,7 @@ export function parseTranscriptContent(content: string): ParsedTranscript {
     ),
     invalidLines,
     title,
+    cwd,
   }
 }
 
@@ -446,6 +469,7 @@ export function replayTranscriptFile(
         parsed.unmatchedToolCallIds,
         options
       ),
+      cwd: parsed.cwd,
     }
   } catch {
     return historyUnavailable('unparseable')
@@ -465,11 +489,25 @@ export function readTranscriptTitle(filePath: string): TranscriptTitle | null {
   }
 }
 
+/**
+ * The working directory a transcript file's conversation ended in, or null
+ * when the file is unreadable or records none. The restart catch-up for
+ * sessions restored after the agent moved (worktree tracking design D3).
+ */
+export function readTranscriptCwd(filePath: string): string | null {
+  try {
+    return parseTranscriptContent(fs.readFileSync(filePath, 'utf8')).cwd
+  } catch {
+    return null
+  }
+}
+
 function historyUnavailable(
   status: 'missing' | 'unparseable'
 ): TranscriptReplay {
   return {
     status,
+    cwd: null,
     events: [
       {
         id: 'hist-unavailable',
