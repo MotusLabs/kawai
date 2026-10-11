@@ -205,6 +205,12 @@ describe('development fixture worker turn', () => {
     expect(rosters.some((roster) =>
       roster.some((worker) => worker.live && worker.lastTool === 'Grep'))).toBe(true)
 
+    // The gap itself is background-governed: the level dropped the task
+    // before its notification, so the row sat not-live with no outcome yet.
+    expect(rosters.some((roster) =>
+      roster.some((worker) => worker.workerId === toolCalls[0]!.toolCallId &&
+        worker.status === 'running' && worker.live === false))).toBe(true)
+
     const final = rosters.at(-1)!
     const [top, nested] = toolCalls.map((call) =>
       final.find((worker) => worker.workerId === call.toolCallId)!)

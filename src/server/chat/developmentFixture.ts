@@ -152,7 +152,7 @@ export const fixtureQueryFactory: ChatQueryFactory = ({ prompt, options, wire })
       const nestedTaskId = `task-${nestedId}`
       const spawnInput = { subagent_type: 'Explore', description: 'Map the workspace', prompt: 'List the packages and their entry points.' }
       push({ type: 'assistant', message: { id: crypto.randomUUID(), role: 'assistant', content: [{ type: 'tool_use', id: spawnId, name: 'Agent', input: spawnInput }] }, parent_tool_use_id: null })
-      push({ type: 'system', subtype: 'task_started', task_id: taskId, tool_use_id: spawnId, description: 'Map the workspace', subagent_type: 'Explore', task_type: 'local_agent', spawn_depth: 1 })
+      push({ type: 'system', subtype: 'task_started', task_id: taskId, tool_use_id: spawnId, description: 'Map the workspace', subagent_type: 'Explore', task_type: 'local_agent', spawn_depth: 1, is_backgrounded: true })
       push({ type: 'system', subtype: 'background_tasks_changed', tasks: [{ task_id: taskId, task_type: 'local_agent', description: 'Map the workspace' }] })
       await hold(1200)
       if (closed || turn !== generation) return
@@ -163,7 +163,7 @@ export const fixtureQueryFactory: ChatQueryFactory = ({ prompt, options, wire })
       await hold(1200)
       if (closed || turn !== generation) return
       push({ type: 'assistant', message: { id: crypto.randomUUID(), role: 'assistant', content: [{ type: 'tool_use', id: nestedId, name: 'Agent', input: { subagent_type: 'general-purpose', description: 'Read the server entry', prompt: 'Summarize src/server/index.ts.' } }] }, parent_tool_use_id: spawnId })
-      push({ type: 'system', subtype: 'task_started', task_id: nestedTaskId, tool_use_id: nestedId, description: 'Read the server entry', subagent_type: 'general-purpose', task_type: 'local_agent', spawn_depth: 2 })
+      push({ type: 'system', subtype: 'task_started', task_id: nestedTaskId, tool_use_id: nestedId, description: 'Read the server entry', subagent_type: 'general-purpose', task_type: 'local_agent', spawn_depth: 2, is_backgrounded: true })
       push({ type: 'system', subtype: 'task_progress', task_id: taskId, tool_use_id: spawnId, description: 'Map the workspace', subagent_type: 'Explore', last_tool_name: 'Agent', usage: { total_tokens: 2_400, tool_uses: 2, duration_ms: 2_400 } })
       await hold(1200)
       if (closed || turn !== generation) return
