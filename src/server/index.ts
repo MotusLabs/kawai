@@ -29,6 +29,7 @@ import { toAgentSession } from './agentSessions'
 import { ChatSessionManager } from './chat/ChatSessionManager'
 import { ChatConnections, type ChatConnection } from './chat/ChatConnections'
 import { ChatWireLogs } from './chat/ChatWireLogs'
+import { ChatWorkerStore } from './chat/chatWorkerStore'
 import { chatFixtureEnabled, fixtureQueryFactory } from './chat/developmentFixture'
 import { parseApprovalPolicy } from './chat/approvalPolicy'
 import { getLogSearchDirs } from './logDiscovery'
@@ -805,6 +806,9 @@ const LAST_USER_MESSAGE_LOCK_MS = 60_000 // 60 seconds
 
 // Always-on raw protocol capture for the chat debug view, beside the DB.
 const chatWireLogs = new ChatWireLogs({ dir: path.join(resolveDataDir(), 'chat-wire') })
+// Worker-outcome sidecars for restart recovery (workers design D6), likewise
+// beside the DB; kill removes a session's file with its record.
+const chatWorkerStore = new ChatWorkerStore({ dir: path.join(resolveDataDir(), 'chat-workers') })
 // SDK-driven chat sessions own their transcripts; log discovery must not
 // surface those files as extra sessions (design D6).
 const chatSessionManager = new ChatSessionManager({
@@ -815,8 +819,10 @@ const chatSessionManager = new ChatSessionManager({
   onActivity: (sessionId, activity) => chatConnections.publishActivity(sessionId, activity),
   onContextUsage: (sessionId, usage) => chatConnections.publishContextUsage(sessionId, usage),
   onUsage: (profileId, report) => chatConnections.publishUsage(profileId, report),
+  onWorkers: (sessionId, workers) => chatConnections.publishWorkers(sessionId, workers),
   getProviderEnv: chatProviderEnv.current,
   wireLogs: chatWireLogs,
+  workerStore: chatWorkerStore,
   // Scoped workspace discovery after the agent moves (worktree tracking D2);
   // the closure runs only once a live agent reports a new cwd, by which time
   // the coordinator below exists.

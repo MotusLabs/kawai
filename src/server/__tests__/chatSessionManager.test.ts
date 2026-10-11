@@ -14,11 +14,13 @@ import type {
   ChatContextUsage,
   ChatEvent,
   ChatUsageReport,
+  ChatWorker,
 } from '../../shared/chat'
 import type { ClaudeLaunchConfiguration } from '../chat/ClaudeProfiles'
 import { initDatabase, type SessionDatabase } from '../db'
 import { SessionRegistry } from '../SessionRegistry'
 import { ChatWireLogs } from '../chat/ChatWireLogs'
+import { ChatWorkerStore } from '../chat/chatWorkerStore'
 import { ClaudeExecutableError } from '../chat/claudeExecutable'
 import type { ChatWireRecorder } from '../chat/wireTap'
 import {
@@ -140,6 +142,8 @@ interface ManagerHarness {
   activities: Array<{ sessionId: string; activity: ChatActivity | null }>
   contextUsage: Array<{ sessionId: string; usage: ChatContextUsage | null }>
   usage: Array<{ profileId: string; report: ChatUsageReport | null }>
+  /** Worker-roster publishes, in order (workers design D2). */
+  workers: Array<{ sessionId: string; workers: ChatWorker[] }>
   /** Scoped workspace refreshes fired after cwd moves (worktree tracking D2). */
   refreshes: string[]
 }
@@ -150,7 +154,8 @@ function createHarness(
   usageImpl?: FakeUsageControl,
   titleLocateIntervalMs?: number,
   contextImpl?: FakeContextControl,
-  cwdRefreshDebounceMs?: number
+  cwdRefreshDebounceMs?: number,
+  workerStore?: ChatWorkerStore
 ): ManagerHarness {
   const registry = new SessionRegistry()
   const handles: FakeHandle[] = []
@@ -158,6 +163,7 @@ function createHarness(
   const activities: Array<{ sessionId: string; activity: ChatActivity | null }> = []
   const contextUsage: Array<{ sessionId: string; usage: ChatContextUsage | null }> = []
   const usage: Array<{ profileId: string; report: ChatUsageReport | null }> = []
+  const workers: Array<{ sessionId: string; workers: ChatWorker[] }> = []
   const refreshes: string[] = []
   const manager = new ChatSessionManager({
     isDirectory,
@@ -167,12 +173,14 @@ function createHarness(
     onActivity: (sessionId, activity) => activities.push({ sessionId, activity }),
     onContextUsage: (sessionId, reading) => contextUsage.push({ sessionId, usage: reading }),
     onUsage: (profileId, report) => usage.push({ profileId, report }),
+    onWorkers: (sessionId, roster) => workers.push({ sessionId, workers: roster }),
     queryFactory: fakeQueryFactory(handles, usageImpl, contextImpl),
     titleLocateIntervalMs,
     ...(cwdRefreshDebounceMs !== undefined ? { cwdRefreshDebounceMs } : {}),
     requestWorkspaceRefresh: (projectPath) => refreshes.push(projectPath),
+    ...(workerStore !== undefined ? { workerStore } : {}),
   })
-  return { manager, registry, handles, events, activities, contextUsage, usage, refreshes }
+  return { manager, registry, handles, events, activities, contextUsage, usage, workers, refreshes }
 }
 
 /** Let the driver's stream loop drain pushed messages. */
@@ -3002,5 +3010,207 @@ describe('ChatSessionManager context usage', () => {
       .find((event) => event.type === 'notice')
     expect(notice).toMatchObject({ type: 'notice', kind: 'compacted' })
     harness.manager.shutdown()
+  })
+})
+
+describe('ChatSessionManager worker sidecar', () => {
+  let tempDir: string
+  let db: SessionDatabase
+  let sidecarDir: string
+  const originalApiKey = process.env.ANTHROPIC_API_KEY
+  const originalConfigDir = process.env.CLAUDE_CONFIG_DIR
+  const originalHome = process.env.HOME
+
+  beforeEach(() => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentboard-chatworkers-'))
+    db = initDatabase({ path: path.join(tempDir, 'test.db') })
+    sidecarDir = path.join(tempDir, 'chat-workers')
+    // Same isolation contract as the main describe: auth pinned to a key,
+    // CLI config and home inside the temp dir so nothing leaks in.
+    delete process.env.ANTHROPIC_API_KEY
+    process.env.CLAUDE_CONFIG_DIR = path.join(tempDir, 'claude-config')
+    process.env.HOME = tempDir
+  })
+  afterEach(() => {
+    if (originalApiKey !== undefined) process.env.ANTHROPIC_API_KEY = originalApiKey
+    else delete process.env.ANTHROPIC_API_KEY
+    if (originalConfigDir !== undefined) process.env.CLAUDE_CONFIG_DIR = originalConfigDir
+    else delete process.env.CLAUDE_CONFIG_DIR
+    if (originalHome !== undefined) process.env.HOME = originalHome
+    else delete process.env.HOME
+    db.close()
+    fs.rmSync(tempDir, { recursive: true, force: true })
+  })
+
+  /** The Agent spawn + task_started prefix (design D1) on the fake stream. */
+  async function spawnWorker(
+    handle: FakeHandle,
+    toolUseId: string,
+    taskId: string,
+    description: string
+  ): Promise<void> {
+    handle.push({
+      type: 'assistant',
+      message: {
+        id: `msg_${toolUseId}`,
+        content: [{ type: 'tool_use', id: toolUseId, name: 'Agent', input: {} }],
+        role: 'assistant',
+      },
+      parent_tool_use_id: null,
+      uuid: `uuid-${toolUseId}`,
+      session_id: 'sdk-1',
+    } as unknown as SDKMessage)
+    handle.push({
+      type: 'system',
+      subtype: 'task_started',
+      task_id: taskId,
+      tool_use_id: toolUseId,
+      description,
+      subagent_type: 'Explore',
+      spawn_depth: 1,
+      task_type: 'local_agent',
+    } as unknown as SDKMessage)
+    await flush()
+  }
+
+  /** task_notification settle frame for one worker. */
+  async function settleWorker(
+    handle: FakeHandle,
+    toolUseId: string,
+    taskId: string,
+    status: 'completed' | 'failed',
+    summary: string
+  ): Promise<void> {
+    handle.push({
+      type: 'system',
+      subtype: 'task_notification',
+      task_id: taskId,
+      tool_use_id: toolUseId,
+      status,
+      output_file: '/tmp/subagent.jsonl',
+      summary,
+    } as unknown as SDKMessage)
+    await flush()
+  }
+
+  /** A fresh store over the same directory, as a restart would build. */
+  const reopenedStore = () => new ChatWorkerStore({ dir: sidecarDir })
+
+  test('settled workers round-trip through the sidecar and the snapshot', async () => {
+    process.env.ANTHROPIC_API_KEY = 'test-key'
+    const store = new ChatWorkerStore({ dir: sidecarDir })
+    const harness = createHarness(
+      db, anyDirectory, undefined, undefined, undefined, undefined, store
+    )
+    const created = harness.manager.createSession({ projectPath: '/tmp/proj' })
+    if (!created.ok) throw new Error(created.error)
+    const id = created.session.id
+    await harness.manager.send(id, 'research')
+    const handle = harness.handles[0]!
+    handle.push(initMessage('sdk-workers-1'))
+    await spawnWorker(handle, 'toolu_w1', 'task_1', 'Map the workspace')
+    await spawnWorker(handle, 'toolu_w2', 'task_2', 'Index the API')
+    await settleWorker(handle, 'toolu_w1', 'task_1', 'completed', 'Mapped 14 files')
+    await settleWorker(handle, 'toolu_w2', 'task_2', 'failed', 'endpoint down')
+    // The sink saw every roster publish (workers design D2): spawn, fill,
+    // and settle for each worker.
+    expect(harness.workers.map(entry => entry.workers)).toHaveLength(6)
+    harness.manager.shutdown()
+
+    // Restart: a fresh store over the same directory recovers the rows.
+    const restored = createHarness(
+      db, anyDirectory, undefined, undefined, undefined, undefined, reopenedStore()
+    )
+    expect(restored.manager.getSnapshot(id)!.workers.map(({ elapsedMs: _e, ...row }) => row))
+      .toEqual([
+        {
+          workerId: 'toolu_w1',
+          taskId: 'task_1',
+          agentType: 'Explore',
+          description: 'Map the workspace',
+          depth: 1,
+          status: 'completed',
+          live: false,
+          summary: 'Mapped 14 files',
+        },
+        {
+          workerId: 'toolu_w2',
+          taskId: 'task_2',
+          agentType: 'Explore',
+          description: 'Index the API',
+          depth: 1,
+          status: 'failed',
+          live: false,
+          summary: 'endpoint down',
+        },
+      ])
+    restored.manager.shutdown()
+  })
+
+  test('a worker still running at an abrupt stop is kept and recovered as stopped', async () => {
+    process.env.ANTHROPIC_API_KEY = 'test-key'
+    const store = new ChatWorkerStore({ dir: sidecarDir })
+    const harness = createHarness(
+      db, anyDirectory, undefined, undefined, undefined, undefined, store
+    )
+    const created = harness.manager.createSession({ projectPath: '/tmp/proj' })
+    if (!created.ok) throw new Error(created.error)
+    const id = created.session.id
+    await harness.manager.send(id, 'research')
+    const handle = harness.handles[0]!
+    handle.push(initMessage('sdk-workers-2'))
+    await spawnWorker(handle, 'toolu_run', 'task_run', 'Map the workspace')
+    // The sidecar holds the running row before anything settles (D6: the
+    // write happens at spawn, not at settle — the crash gap).
+    await waitForCondition(() =>
+      store.read(id).some(worker => worker.status === 'running')
+    )
+    // A reconnect mid-run receives the running roster from the live driver
+    // (workers design D2), elapsed computed fresh at snapshot time.
+    expect(harness.manager.getSnapshot(id)!.workers).toMatchObject([
+      { workerId: 'toolu_run', status: 'running', live: true },
+    ])
+    // Abrupt stop: no shutdown settlement, as a crash would leave things.
+    const recovered: ChatWorker[] = []
+    const restored = new ChatSessionManager({
+      isDirectory: anyDirectory,
+      registry: new SessionRegistry(),
+      db,
+      onEvent: () => {},
+      queryFactory: fakeQueryFactory([]),
+      workerStore: reopenedStore(),
+      onWorkers: (_sessionId, workers) => recovered.push(...workers),
+    })
+    const snapshot = restored.getSnapshot(id)!
+    expect(snapshot.workers).toMatchObject([
+      { workerId: 'toolu_run', status: 'stopped', live: false },
+    ])
+    // The corrected roster is rewritten so the file and the rows agree.
+    await waitForCondition(() =>
+      reopenedStore().read(id).every(worker => worker.status === 'stopped')
+    )
+    restored.shutdown()
+    expect(recovered).toEqual([])
+  })
+
+  test('kill removes the sidecar with the session', async () => {
+    process.env.ANTHROPIC_API_KEY = 'test-key'
+    const store = new ChatWorkerStore({ dir: sidecarDir })
+    const harness = createHarness(
+      db, anyDirectory, undefined, undefined, undefined, undefined, store
+    )
+    const created = harness.manager.createSession({ projectPath: '/tmp/proj' })
+    if (!created.ok) throw new Error(created.error)
+    const id = created.session.id
+    await harness.manager.send(id, 'research')
+    const handle = harness.handles[0]!
+    handle.push(initMessage('sdk-workers-3'))
+    await spawnWorker(handle, 'toolu_kill', 'task_kill', 'Map the workspace')
+    await waitForCondition(() => store.read(id).length === 1)
+    harness.manager.kill(id)
+    await waitForCondition(
+      () => !fs.existsSync(path.join(sidecarDir, `${id}.json`))
+    )
+    expect(reopenedStore().read(id)).toEqual([])
   })
 })

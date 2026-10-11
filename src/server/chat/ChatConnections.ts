@@ -6,7 +6,9 @@
 // changes within one tick collapse into the last.
 // Context usage rides it too (context meter design D5), same per-session
 // latest-value coalescing as activity.
-// Plan usage rides it as well (usage bar design D4), scoped by profile instead
+// The worker roster rides it as well (workers design D2): the latest full
+// projection per connection and session — a level signal, never a delta.
+// Plan usage rides it too (usage bar design D4), scoped by profile instead
 // of session: one latest-value slot per connection and profile, sent to every
 // connection subscribed to at least one session of that profile.
 // Debug-view subscriptions are separate: only connections that opened a
@@ -20,6 +22,7 @@ import type {
   ChatEvent,
   ChatUsageReport,
   ChatWireFrame,
+  ChatWorker,
 } from '../../shared/chat'
 import type { ClientMessage, ServerMessage } from '../../shared/types'
 import type { ChatSessionManager } from './ChatSessionManager'
@@ -42,6 +45,8 @@ export class ChatConnections {
   private readonly contextBatches = new Map<ChatConnection, Map<string, ChatContextUsage | null>>()
   /** Latest usage report per connection and profile, sent by the next flush. */
   private readonly usageBatches = new Map<ChatConnection, Map<string, ChatUsageReport | null>>()
+  /** Latest worker roster per connection and session (workers design D2). */
+  private readonly workerBatches = new Map<ChatConnection, Map<string, ChatWorker[]>>()
   private readonly debugSubscriptions = new Map<ChatConnection, Map<string, () => void>>()
   private readonly debugBatches = new Map<ChatConnection, Map<string, ChatWireFrame[]>>()
   private scheduled = false
@@ -57,6 +62,7 @@ export class ChatConnections {
     this.activityBatches.delete(connection)
     this.contextBatches.delete(connection)
     this.usageBatches.delete(connection)
+    this.workerBatches.delete(connection)
     for (const unsubscribe of this.debugSubscriptions.get(connection)?.values() ?? []) unsubscribe()
     this.debugSubscriptions.delete(connection)
     this.debugBatches.delete(connection)
@@ -118,6 +124,22 @@ export class ChatConnections {
       const latest = this.contextBatches.get(connection) ?? new Map<string, ChatContextUsage | null>()
       latest.set(sessionId, usage)
       this.contextBatches.set(connection, latest)
+    }
+    this.scheduleFlush()
+  }
+
+  /**
+   * Queue the session's current worker roster (workers design D2): the full
+   * projection replaces any earlier one per connection and session, and is
+   * sent by the flush after that session's pending event batch. A level
+   * signal — clients replace, never merge.
+   */
+  publishWorkers(sessionId: string, workers: ChatWorker[]): void {
+    for (const [connection, sessions] of this.subscriptions) {
+      if (!sessions.has(sessionId)) continue
+      const latest = this.workerBatches.get(connection) ?? new Map<string, ChatWorker[]>()
+      latest.set(sessionId, workers)
+      this.workerBatches.set(connection, latest)
     }
     this.scheduleFlush()
   }
@@ -206,6 +228,15 @@ export class ChatConnections {
         }
       }
     }
+    const workerBatches = new Map(this.workerBatches)
+    this.workerBatches.clear()
+    for (const [connection, sessions] of workerBatches) {
+      for (const [sessionId, workers] of sessions) {
+        if (this.subscriptions.get(connection)?.has(sessionId)) {
+          connection.send({ type: 'chat-workers', sessionId, workers })
+        }
+      }
+    }
     const debugBatches = new Map(this.debugBatches)
     this.debugBatches.clear()
     for (const [connection, sessions] of debugBatches) {
@@ -258,6 +289,7 @@ export class ChatConnections {
         this.batches.get(connection)?.delete(sessionId)
         this.activityBatches.get(connection)?.delete(sessionId)
         this.contextBatches.get(connection)?.delete(sessionId)
+        this.workerBatches.get(connection)?.delete(sessionId)
         const sessions = this.subscriptions.get(connection) ?? new Set<string>()
         sessions.add(sessionId)
         this.subscriptions.set(connection, sessions)
@@ -275,6 +307,7 @@ export class ChatConnections {
         this.batches.get(connection)?.delete(sessionId)
         this.activityBatches.get(connection)?.delete(sessionId)
         this.contextBatches.get(connection)?.delete(sessionId)
+        this.workerBatches.get(connection)?.delete(sessionId)
         return
       case 'chat-send': {
         const result = await this.manager.send(sessionId, message.text)

@@ -3,8 +3,10 @@
 // persistence in the chat_sessions table with restore-on-start into the
 // registry, kill/shutdown settlement (including the session's protocol log),
 // immediate sdkSessionId capture so a restart can resume the same agent
-// conversation, and the current in-flight-turn activity (phase plus start
-// time) surfaced through getSnapshot and the onActivity broadcast sink. A
+// conversation, the current in-flight-turn activity (phase plus start
+// time) surfaced through getSnapshot and the onActivity broadcast sink,
+// and the spawned-worker roster (rows plus outcomes) surfaced the same way
+// through onWorkers and recovered from a sidecar on restart. A
 // live session's transcript is tailed for the agent's generated title rows,
 // which replace any non-user-set name (chat-session-naming design D4). The
 // SDK import stays dynamic (injected as a queryFactory in tests) so a broken
@@ -22,6 +24,7 @@ import type {
   ChatPendingRequest,
   ChatQuestionAnswer,
   ChatUsageReport,
+  ChatWorker,
 } from '../../shared/chat'
 import type {
   ChatNameSource,
@@ -42,6 +45,7 @@ import {
 } from './claudeExecutable'
 import type { ChatProviderEnv } from './chatProviderEnv'
 import type { ChatWireLogs } from './ChatWireLogs'
+import type { ChatWorkerStore } from './chatWorkerStore'
 import {
   resolveClaudeProfile,
   claudeLaunchKey,
@@ -91,6 +95,14 @@ export interface ChatSessionManagerOptions {
    * broadcast in index.ts; usage is ephemeral and never persisted.
    */
   onUsage?: (profileId: string, report: ChatUsageReport | null) => void
+  /**
+   * Worker-roster sink (workers design D2): the full projection whenever a
+   * live session's roster changes. Wired to the WS broadcast in index.ts;
+   * ephemeral in transit, persisted through the sidecar (design D6).
+   */
+  onWorkers?: (sessionId: string, workers: ChatWorker[]) => void
+  /** Sidecar store for restart recovery of worker outcomes (design D6). */
+  workerStore?: ChatWorkerStore
   /** Injected in tests; production resolves the SDK via dynamic import. */
   queryFactory?: ChatQueryFactory
   /** Receives the provider env so it probes the endpoint sessions will use. */
@@ -196,6 +208,13 @@ export class ChatSessionManager {
    */
   private readonly contextReadings = new Map<string, ChatContextUsage>()
   /**
+   * Latest worker roster per session (workers design D2): the last publish
+   * of a live driver, or the recovered sidecar rows of a restarted one. A
+   * live driver's projection is computed fresh for snapshots; this map is
+   * what archived and restored sessions read.
+   */
+  private readonly workerRows = new Map<string, ChatWorker[]>()
+  /**
    * Availability probes for resolved provider configurations. Keyed so a provider
    * change in Settings re-probes the new endpoint; a failed probe is dropped so
    * a corrected configuration (or repaired install) recovers without a restart.
@@ -276,8 +295,19 @@ export class ChatSessionManager {
       usage: this.usageLimits.get(this.profileIdOf(sessionId) ?? 'default'),
       // The spawned-worker roster (workers design D2); live entries hold the
       // session at working, settled ones carry their persisted outcomes.
-      workers: [],
+      workers: this.getWorkers(sessionId),
     }
+  }
+
+  /**
+   * The session's roster: a live driver's fresh projection (elapsed times
+   * computed now), the last publish for archived sessions, or the recovered
+   * sidecar rows after a restart.
+   */
+  private getWorkers(sessionId: string): ChatWorker[] {
+    const driver = this.drivers.get(sessionId)
+    if (driver && !driver.isDead) return driver.getWorkers()
+    return this.workerRows.get(sessionId) ?? []
   }
 
   /** Current activity with a live-computed elapsed time, or null when idle. */
@@ -643,9 +673,12 @@ export class ChatSessionManager {
     this.liveEvents.delete(sessionId)
     this.activities.delete(sessionId)
     this.contextReadings.delete(sessionId)
+    this.workerRows.delete(sessionId)
     this.options.registry.removeChatSession(sessionId)
     this.options.db.deleteChatSession(sessionId)
     void this.options.wireLogs?.delete(sessionId).catch(() => {})
+    // The session is gone for good; its worker rows go with it (D6).
+    void this.options.workerStore?.delete(sessionId).catch(() => {})
     return true
   }
 
@@ -771,6 +804,25 @@ export class ChatSessionManager {
           }
         }
       }
+      // Worker-roster recovery (workers design D6): a sidecar row still
+      // marked running can never gain an outcome — the process that owed it
+      // is gone — so it recovers as stopped. The corrected roster is
+      // rewritten so the file and the rows agree.
+      if (this.options.workerStore) {
+        const records = this.options.workerStore.read(record.sessionId)
+        if (records.length > 0) {
+          const recovered: ChatWorker[] = records.map((entry) => ({
+            ...entry,
+            ...(entry.status === 'running' ? { status: 'stopped' as const } : {}),
+            live: false,
+            elapsedMs: 0,
+          }))
+          this.workerRows.set(record.sessionId, recovered)
+          void this.options.workerStore
+            .write(record.sessionId, recovered)
+            .catch(() => {})
+        }
+      }
       this.records.set(record.sessionId, record)
       this.options.registry.setChatSession(this.toSession(record))
     }
@@ -892,6 +944,8 @@ export class ChatSessionManager {
           this.options.onCommandState?.(record.sessionId, state),
         onActivity: (activity) =>
           this.handleDriverActivity(record.sessionId, activity),
+        onWorkers: (workers) =>
+          this.handleDriverWorkers(record.sessionId, workers),
         onContextUsage: (usage, opts) =>
           this.handleDriverContextUsage(record.sessionId, usage, opts),
         // Plan usage is recorded against the session's profile (design D3);
@@ -1158,6 +1212,28 @@ export class ChatSessionManager {
   private clearActivity(sessionId: string): void {
     if (this.activities.delete(sessionId)) {
       this.options.onActivity?.(sessionId, null)
+    }
+  }
+
+  /**
+   * Hold the latest roster (design D2) and forward it to the broadcast sink.
+   * The sidecar write (design D6) is keyed on the persisted shape, so this
+   * fires on every publish but only touches the disk when a row's identity
+   * or outcome changed — spawn, fill, settle. Write failures are logged by
+   * the store and never fail the session.
+   */
+  private handleDriverWorkers(sessionId: string, workers: ChatWorker[]): void {
+    if (!this.records.has(sessionId)) return
+    this.workerRows.set(sessionId, workers)
+    this.options.onWorkers?.(sessionId, workers)
+    const store = this.options.workerStore
+    if (store) {
+      store.write(sessionId, workers).catch((error) => {
+        logger.warn('chat_worker_sidecar_write_failed', {
+          sessionId,
+          error: error instanceof Error ? error.message : String(error),
+        })
+      })
     }
   }
 

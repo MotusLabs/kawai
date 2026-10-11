@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from 'bun:test'
-import type { ChatContextUsage, ChatEvent } from '../../shared/chat'
+import type { ChatContextUsage, ChatEvent, ChatWorker } from '../../shared/chat'
 import type { ServerMessage } from '../../shared/types'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -55,6 +55,18 @@ const delta = (sequence: number, turnId = 'turn-1'): ChatEvent => ({
   type: 'assistant_delta', id: `event-${sequence}`, sequence, at: 'now', turnId, messageId: 'message-1', delta: `${sequence}`,
 })
 
+const worker = (status: 'running' | 'completed', live: boolean): ChatWorker => ({
+  workerId: 'toolu_spawn_1',
+  taskId: 'task_1',
+  agentType: 'Explore',
+  description: 'Map the workspace',
+  depth: 1,
+  status,
+  live,
+  lastTool: 'Grep',
+  elapsedMs: 4_000,
+})
+
 describe('chat WebSocket subscriptions', () => {
   test('routes send, interrupt, approval, and question answers', async () => {
     const h = harness()
@@ -105,6 +117,25 @@ describe('chat WebSocket subscriptions', () => {
     // A second client attaching routes another idempotent start request.
     await h.connections.handle({ send: () => {} }, { type: 'chat-attach', sessionId: 'chat-1' })
     expect(h.calls).toEqual([['start', 'chat-1'], ['start', 'chat-1']])
+  })
+
+  test('worker rosters coalesce to the latest and replace, never merge', async () => {
+    const h = harness()
+    await h.connections.handle(h.connection, { type: 'chat-attach', sessionId: 'chat-1' })
+    h.connections.publishWorkers('chat-1', [worker('running', true)])
+    h.connections.publishWorkers('chat-1', [worker('completed', false)])
+    // A roster for a session nobody subscribes to goes nowhere.
+    h.connections.publishWorkers('chat-3', [worker('running', true)])
+    await new Promise(resolve => setTimeout(resolve, 0))
+    // One message, carrying only the latest projection (workers design D2).
+    expect(h.messages.slice(1)).toEqual([
+      { type: 'chat-workers', sessionId: 'chat-1', workers: [worker('completed', false)] },
+    ])
+    // Detach stops the flow for that connection.
+    await h.connections.handle(h.connection, { type: 'chat-detach', sessionId: 'chat-1' })
+    h.connections.publishWorkers('chat-1', [worker('running', true)])
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(h.messages).toHaveLength(2)
   })
 
   test('deltas from different turns remain in different batches', async () => {

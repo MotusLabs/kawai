@@ -15,9 +15,9 @@
 
 ## 3. Outcomes, status, and delivery
 
-- [ ] 3.1 Persist a worker to `resolveDataDir()/chat-workers/<sessionId>.json` when it spawns and rewrite it on every settle, and verify a unit test round-trips a completed and a failed worker, keeps a running worker's row after an abrupt stop, and recovers it as `stopped`
+- [x] 3.1 Persist a worker to `resolveDataDir()/chat-workers/<sessionId>.json` when it spawns and rewrite it on every settle, and verify a unit test round-trips a completed and a failed worker, keeps a running worker's row after an abrupt stop, and recovers it as `stopped`
 - [x] 3.2 Extend `refreshStatus` so `working` covers a live worker as well as an in-flight turn, and verify status tests cover workers-only, turn-plus-workers, and the return to `waiting` when no worker is live any more — including a worker that has left the running set before its result
-- [ ] 3.3 Include `workers` in `chat-snapshot` and fan out `chat-workers` from `ChatConnections` beside `chat-activity`, and verify a reconnect mid-run receives the running roster and a reconnect after settle receives the persisted outcomes with nothing marked running
+- [x] 3.3 Include `workers` in `chat-snapshot` and fan out `chat-workers` from `ChatConnections` beside `chat-activity`, and verify a reconnect mid-run receives the running roster and a reconnect after settle receives the persisted outcomes with nothing marked running
 
 ## 4. Client: worker row, live strip, and expand
 
