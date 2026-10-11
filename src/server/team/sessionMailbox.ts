@@ -11,6 +11,7 @@ import { MailDispatcher, type MailRecipient } from './dispatcher'
 import { reconcileMailbox, transcriptReceipt } from './receipt'
 import { TaskStore } from './taskStore'
 import { TaskService } from './TaskService'
+import { buildTaskContext } from './taskContext'
 import type { Database } from 'bun:sqlite'
 
 export class SessionMailbox {
@@ -29,15 +30,18 @@ export class SessionMailbox {
     prepare: (id: string) => Promise<void>
     restore: (id: string) => void
     watchReceipt: (id: string) => void
+    /** The session received mail under this task (its header shows it). */
+    associateTask?: (id: string, taskId: string) => void
     transcriptFor: (id: string) => string | null
     homeDir?: string
     onChange?: (team: string, message?: TeamMessage) => void
     onError: (error: unknown) => void
   }) {
     const store = new MailboxStore(db, { recipientExists: id => !!options.getRecord(id) })
-    this.tasks = new TaskService(new TaskStore(db, store), { getSession: options.getRecord, homeDir: options.homeDir })
+    const taskStore = new TaskStore(db, store)
+    this.tasks = new TaskService(taskStore, { getSession: options.getRecord, homeDir: options.homeDir })
     this.mailbox = new TeamMailbox(store, {
-      getSession: options.getRecord, homeDir: options.homeDir, restoreSession: options.restore,
+      getSession: options.getRecord, homeDir: options.homeDir, restoreSession: options.restore, tasks: taskStore,
     })
     this.dispatcher = new MailDispatcher(this.mailbox.store, {
       beginCycle: () => this.catalogs.clear(),
@@ -53,6 +57,8 @@ export class SessionMailbox {
         if (!driver) throw new Error('Recipient disappeared')
         driver.deliver(envelope)
       },
+      taskContext: taskId => buildTaskContext(taskStore, taskId),
+      associateTask: (id, taskId) => options.associateTask?.(id, taskId),
       watchReceipt: mail => {
         if (!mail.claimedBy) return
         if (!options.getRecord(mail.claimedBy) || this.mailbox.store.get(mail.id)?.state === 'uncertain') this.settle(mail)

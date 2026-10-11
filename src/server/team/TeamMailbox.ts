@@ -1,9 +1,12 @@
 // Sender-bound mailbox operations. Identity always comes from the current
-// session record; tool arguments can only choose a recipient and content.
+// session record; tool arguments can only choose a recipient, content, and
+// (team-tasks) a task of the sender's own team. A reply without a task id
+// keeps the task of the message it answers.
 import type { ChatSessionRecord } from '../db'
 import { loadTeamGroups } from './teamGroups'
-import { resolveTeam } from './teamIdentity'
+import { resolveTeam, type TeamIdentity } from './teamIdentity'
 import { MailboxStore, type TeamMessage } from './mailboxStore'
+import type { TaskStore } from './taskStore'
 
 export interface MailInput {
   to_kind: 'group' | 'session'
@@ -11,6 +14,7 @@ export interface MailInput {
   body: string
   urgent?: boolean
   tags?: string[]
+  task_id?: string
 }
 
 export class TeamMailbox {
@@ -19,7 +23,16 @@ export class TeamMailbox {
     homeDir?: string
     onChange?: (message: TeamMessage) => void
     restoreSession?: (id: string) => void | Promise<void>
+    tasks?: TaskStore
   }) {}
+
+  /** A task id of the sender's team, or an error; nothing is enqueued on failure. */
+  private taskOf(team: TeamIdentity, taskId: string | undefined): string | null {
+    if (!taskId) return null
+    const task = this.options.tasks?.get(taskId)
+    if (!task || task.teamId !== team.teamId) throw new Error(`Task not found in this team: ${taskId}`)
+    return task.id
+  }
 
   private async context(sessionId: string) {
     const sender = this.options.getSession(sessionId)
@@ -35,6 +48,7 @@ export class TeamMailbox {
 
   async send(sessionId: string, input: MailInput, deliverAt?: string): Promise<TeamMessage> {
     const { sender, team, catalog } = await this.context(sessionId)
+    const taskId = this.taskOf(team, input.task_id)
     if (input.to_kind === 'group') {
       if (!catalog.groups.has(input.to_id)) throw new Error(`Unknown group: ${input.to_id}`)
     } else {
@@ -53,7 +67,7 @@ export class TeamMailbox {
       originPath: sender.projectPath, body: input.body,
       priority: input.urgent ? 'urgent' : 'normal', tags: input.tags,
       hopLimit: sender.groupId ? catalog.groups.get(sender.groupId)?.hopLimit : undefined,
-      deliverAt,
+      deliverAt, taskId,
     }))
   }
 
@@ -69,8 +83,9 @@ export class TeamMailbox {
     return this.send(sessionId, input, new Date(due).toISOString())
   }
 
-  async reply(sessionId: string, input: { message_id: string; body: string; urgent?: boolean; tags?: string[] }) {
+  async reply(sessionId: string, input: { message_id: string; body: string; urgent?: boolean; tags?: string[]; task_id?: string }) {
     const { sender, team, catalog } = await this.context(sessionId)
+    const explicitTask = this.taskOf(team, input.task_id)
     const original = this.store.get(input.message_id)
     if (!original || original.teamId !== team.teamId || original.claimedBy !== sessionId || original.deliveredAt === null) {
       throw new Error('Can only reply to a message received by this session')
@@ -88,6 +103,7 @@ export class TeamMailbox {
       originPath: sender.projectPath, body: input.body,
       priority: input.urgent ? 'urgent' : 'normal', tags: input.tags,
       inReplyTo: original, attachThread: fallback,
+      taskId: explicitTask ?? original.taskId,
       hopLimit: sender.groupId ? catalog.groups.get(sender.groupId)?.hopLimit : undefined,
     })
     if (!recipient && (!fallback || !catalog.groups.has(original.fromGroup!))) {

@@ -135,6 +135,12 @@ export interface Session {
   groupLabel?: string
   /** True when no group file defines `groupId` any more. */
   groupMissing?: boolean
+  /** Chat sessions only: the team task it works on (team-tasks); absent = none. */
+  taskId?: string
+  /** That task's current title; absent when the task is unknown. */
+  taskTitle?: string
+  /** Created by worktree staffing, not by the human (team-tasks D4). */
+  spawned?: boolean
 }
 
 export interface AgentSession {

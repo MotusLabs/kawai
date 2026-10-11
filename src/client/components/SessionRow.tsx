@@ -117,6 +117,9 @@ export const SESSION_FIELD_EQUALS: {
   groupId: strictEquals,
   groupLabel: strictEquals,
   groupMissing: strictEquals,
+  taskId: strictEquals,
+  taskTitle: strictEquals,
+  spawned: strictEquals,
   lastActivity: activityInSameBucket,
 }
 

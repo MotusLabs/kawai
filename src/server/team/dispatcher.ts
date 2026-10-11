@@ -2,6 +2,7 @@
 // Idleness is checked again inside the atomic claim; SDK queues receive only
 // idle turns, except urgent direct mail after an acknowledged interrupt.
 import type { ChatPeerMessage } from '../../shared/chat'
+import type { ChatPeerTaskContext } from '../../shared/teamTasks'
 import type { TeamMessage } from './mailboxStore'
 import { MailboxStore } from './mailboxStore'
 import { messageEnvelope } from './envelope'
@@ -31,6 +32,10 @@ export class MailDispatcher {
     interrupt: (sessionId: string) => Promise<void>
     deliver: (sessionId: string, envelope: ChatPeerMessage) => void
     watchReceipt: (message: TeamMessage) => void
+    /** The task section for a delivery, read now (team-tasks D3). */
+    taskContext?: (taskId: string | null) => ChatPeerTaskContext | null
+    /** A task message was pushed to this session: it now works on that task. */
+    associateTask?: (sessionId: string, taskId: string) => void
     onError?: (error: unknown) => void
   }) {}
 
@@ -118,13 +123,15 @@ export class MailDispatcher {
         if (current?.pendingRequest) this.store.holdForRequest(message.id)
         return
       }
-      const envelope = messageEnvelope(message, message.attachThread ? this.store.thread(message.threadId) : undefined)
+      const envelope = messageEnvelope(message, message.attachThread ? this.store.thread(message.threadId) : undefined,
+        this.options.taskContext?.(message.taskId))
       // The awaited interrupt can also let a turn end or the driver die, which
       // settles the recipient and requeues this claim. A refused markPushed
       // means exactly that: the row is queued again, so delivering here would
       // duplicate it on the next pass.
       if (!this.store.markPushed(message.id)) return
       this.options.deliver(recipient.sessionId, envelope)
+      if (message.taskId) this.options.associateTask?.(recipient.sessionId, message.taskId)
       const pushed = this.store.get(message.id)!
       if (!this.current(recipient.sessionId)?.available) this.store.holdUncertain(message.id, 'recipient-unavailable-after-push')
       this.options.watchReceipt(pushed)

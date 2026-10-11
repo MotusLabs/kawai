@@ -400,12 +400,21 @@ export class ChatSessionManager {
       prepare: async id => { this.captureHistory(id); const driver = await this.ensureDriver(id); if (!driver) throw new Error('Recipient disappeared'); driver.start() },
       restore: id => { const result = this.restore(id); if (!result.ok) throw new Error(result.error) },
       watchReceipt: id => this.watchSessionTitle(id),
+      associateTask: (id, taskId) => {
+        if (this.records.get(id)?.taskId !== taskId) this.applyPatch(id, { taskId })
+      },
       transcriptFor: id => { const sdkId = this.records.get(id)?.sdkSessionId; return sdkId ? findTranscriptPath(sdkId) : null },
       onChange: options.onMailboxChange,
       onError: error => logger.warn('team_mailbox_dispatch_failed', { error: String(error) }),
     })
     this.mailbox = this.teamMail.mailbox
     this.tasks = this.teamMail.tasks
+    // A retitled task re-labels the headers of the sessions working on it.
+    this.tasks.store.subscribe(task => {
+      for (const record of this.records.values()) {
+        if (record.taskId === task.id) this.options.registry.updateSession(record.sessionId, this.taskFields(record))
+      }
+    })
     this.dispatcher = this.teamMail.dispatcher
     this.restorePersisted()
     this.teamMail.start()
@@ -1391,6 +1400,7 @@ export class ChatSessionManager {
       ...(patch.nameSource !== undefined
         ? { nameSource: patch.nameSource }
         : {}),
+      ...(patch.taskId !== undefined ? this.taskFields(next) : {}),
     })
   }
 
@@ -1413,7 +1423,16 @@ export class ChatSessionManager {
       agentType: 'claude',
       ...(record.archivedAt != null ? { archivedAt: record.archivedAt } : {}),
       ...this.groupFields(record),
+      ...this.taskFields(record),
+      ...(record.spawned ? { spawned: true } : {}),
     }
+  }
+
+  /** Associated task id plus its current title (team-tasks header). */
+  private taskFields(record: ChatSessionRecord): Partial<Session> {
+    if (record.taskId == null) return {}
+    const title = this.tasks.store.get(record.taskId)?.title
+    return { taskId: record.taskId, ...(title !== undefined ? { taskTitle: title } : {}) }
   }
 
   /** Group id plus display state; label/missing only once the team is known. */

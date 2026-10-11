@@ -23,10 +23,10 @@
 
 ## 4. Task context in messages
 
-- [ ] 4.1 Accept optional `task_id` on send/reply/schedule, persist it on mailbox rows, inherit the original task on replies when omitted, and reject unknown/cross-team task ids; verify handler/store tests cover explicit overrides within the team, inheritance, scheduled persistence, ordinary messages without a task, and invalid references creating no mail.
-- [ ] 4.2 Build task context at delivery from the latest revision: title, direction, acceptance criteria, revision, status, linked change, worktree, and a bounded excerpt of the last five journal entries, with full detail available through `task_get`; verify tests show amendments/notes made after enqueue appearing at delivery and linked-change artifacts named as authoritative.
-- [ ] 4.3 Extend the fixed peer envelope and replayed/shared peer event with task context while retaining compatibility with existing envelopes, and persist the session's associated task for its header; verify format/parse, live delivery, restart/reconnect replay, no-task compatibility, and uncertain-retry duplicate notices retain the expected task context.
-- [ ] 4.4 Document task inheritance and delivery-time context, including the bounded journal excerpt and linked OpenSpec authority; verify documented fields match the shared envelope and tool inputs.
+- [x] 4.1 Accept optional `task_id` on send/reply/schedule, persist it on mailbox rows, inherit the original task on replies when omitted, and reject unknown/cross-team task ids; verify handler/store tests cover explicit overrides within the team, inheritance, scheduled persistence, ordinary messages without a task, and invalid references creating no mail.
+- [x] 4.2 Build task context at delivery from the latest revision: title, direction, acceptance criteria, revision, status, linked change, worktree, and a bounded excerpt of the last five journal entries, with full detail available through `task_get`; verify tests show amendments/notes made after enqueue appearing at delivery and linked-change artifacts named as authoritative.
+- [x] 4.3 Extend the fixed peer envelope and replayed/shared peer event with task context while retaining compatibility with existing envelopes, and persist the session's associated task for its header; verify format/parse, live delivery, restart/reconnect replay, no-task compatibility, and uncertain-retry duplicate notices retain the expected task context.
+- [x] 4.4 Document task inheritance and delivery-time context, including the bounded journal excerpt and linked OpenSpec authority; verify documented fields match the shared envelope and tool inputs.
 
 ## 5. Bounded worktree staffing
 

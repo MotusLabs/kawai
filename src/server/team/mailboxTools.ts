@@ -11,7 +11,7 @@ export const MAILBOX_TOOL_NAMES = ['send_message', 'reply', 'schedule_message', 
 /** Every team tool, allowed without approval cards under either policy. */
 export const TEAM_ALLOWED_TOOLS = [...MAILBOX_TOOL_NAMES, ...TASK_TOOL_NAMES].map(name => `mcp__${TEAM_MCP_SERVER}__${name}`)
 
-const content = { body: z.string().min(1), urgent: z.boolean().optional(), tags: z.array(z.string()).optional() }
+const content = { body: z.string().min(1), urgent: z.boolean().optional(), tags: z.array(z.string()).optional(), task_id: z.string().min(1).optional() }
 const recipient = { to_kind: z.enum(['group', 'session']), to_id: z.string().min(1) }
 export const mailboxSchemas = {
   send_message: z.object({ ...recipient, ...content }),

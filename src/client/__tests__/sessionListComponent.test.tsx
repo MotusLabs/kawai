@@ -451,6 +451,9 @@ describe('session comparator (design D6)', () => {
       groupId: 'devs',
       groupLabel: 'Developers',
       groupMissing: false,
+      taskId: 'task-1',
+      taskTitle: 'Export',
+      spawned: false,
     }
     // Compile-time exhaustiveness comes from the mapped type (a new Session
     // field without a comparator entry fails typecheck); this runtime check
@@ -483,6 +486,9 @@ describe('session comparator (design D6)', () => {
       groupId: 'qa',
       groupLabel: 'QA',
       groupMissing: true,
+      taskId: 'task-2',
+      taskTitle: 'Import',
+      spawned: true,
     }
     for (const field of Object.keys(fullSession)) {
       const changed = { ...fullSession } as Record<string, unknown>
