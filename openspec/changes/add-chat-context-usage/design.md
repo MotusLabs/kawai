@@ -96,6 +96,26 @@ Resolution order for the threshold:
    window rather than the threshold. Only for a session that has neither an
    observed report nor a configured window.
 
+Step 1 is process-scoped: a respawn (crash, or a profile change taking
+effect) clears the observed report threshold and reserve and re-reads the
+profile window, so a dead process's 167k cannot outrank a freshly configured
+100k window when the new probe fails to answer.
+
+The labelling is data, not a comment: a reading whose denominator is a
+window standing in for the threshold (step 3, or step 2 with no observed
+reserve, or a `rawMaxTokens` derivation with no buffer) carries
+`thresholdApproximate: true`, and the meter's title says so. A window that
+claims a distance to compaction it does not know is worse than no meter —
+it is the exact 79%-while-compaction-is-imminent confusion this decision
+exists to remove. The label persists with the reading, so a restored chat
+does not start claiming a threshold it never had.
+
+The reserve, too, is report-scoped: a later report that answers with
+categories but no `kind: 'buffer'` row clears it, so auto-compact being
+disabled mid-session cannot leave a stale reserve shrinking the derived
+threshold. A report with no categories at all simply did not say, and leaves
+the reserve alone.
+
 *Why not `modelUsage.contextWindow` alone:* it is the model's believed limit
 and ignores both the autocompact reserve and any profile override. The
 reserve is 16.5% in the observed report, so this understates fullness in
@@ -116,8 +136,9 @@ the source of the used-token count (D1) and it is not polled per frame.
 
 On `compact_boundary`, the driver reads `compact_metadata.post_tokens` and
 publishes that as the new reading, keeping the existing `'Context compacted'`
-notice. `trigger: 'auto' | 'manual'` is recorded but does not change the
-meter; both paths drop it.
+notice — tagged `kind: 'compacted'`, so the manager's persist point matches
+the tag rather than the display text. `trigger: 'auto' | 'manual'` is
+recorded but does not change the meter; both paths drop it.
 
 `compact_metadata` is required on the boundary frame but `post_tokens` is
 optional — only `trigger` and `pre_tokens` are required — so a frame carrying
@@ -137,12 +158,15 @@ is worse than no meter.
 
 ### D4. Persistence lives on `chat_sessions`, delivery rides the snapshot
 
-Four columns added with the existing additive-migration pattern used for
+Five columns added with the existing additive-migration pattern used for
 `archived_at` and `approval_policy`: `context_tokens`, `context_threshold`,
-`context_pct`, `context_at`. A single JSON column was considered and rejected
-— the meter needs three stable numbers now, and a JSON blob trades a trivial
-future migration for awkward queries and untyped reads. If the drill-down
-later needs categories, those can be a separate column or table.
+`context_pct`, `context_at`, `context_approx`. A single JSON column was
+considered and rejected — the meter needs three stable numbers now, and a
+JSON blob trades a trivial future migration for awkward queries and untyped
+reads. If the drill-down later needs categories, those can be a separate
+column or table. The five are written and cleared together; a row missing
+any of them reads as no reading (D7) rather than inventing a percentage or
+timestamp.
 
 `chat-snapshot` gains a `contextUsage` field beside `activity`. Older clients
 ignore unknown fields, so this is additive exactly like the chat messages
@@ -163,9 +187,18 @@ session. Broadcasting and persisting each one is waste.
   (`activityBatches`, "latest value per connection and session"). The meter
   is a single current value, never a sequenced event, so it does not enter the
   transcript, get a sequence number, or replay.
-- **Persist:** write on `turn_completed`, on `compact_boundary`, and on
-  driver death. In-memory holds the fresher value between writes; `getSnapshot`
-  prefers in-memory and falls back to the stored column.
+- **Persist:** write on `turn_completed`, on `compact_boundary` (the notice
+  tagged `kind: 'compacted'`, never its display text), and on driver death.
+  In-memory holds the fresher value between writes; `getSnapshot` prefers
+  in-memory and falls back to the stored column. One addition: the
+  turn-boundary threshold probe resolves *after* `turn_completed` has already
+  written, so a publish that only re-scales the threshold (a probe answer, or
+  the spawn-time re-anchor after a respawn clears the dead process's report
+  readings) is flagged as a *correction* and persisted at once — rare by
+  nature, so it does not reintroduce per-frame churn, and an abrupt restart
+  cannot restore a different percentage than the one last displayed. A
+  conversation reset persists the clear, so a restart cannot resurrect the
+  old conversation's occupancy.
 
 ### D6. Subagent frames are ignored
 
@@ -179,17 +212,27 @@ main-loop window that compacts. The same guard applies to the usage reader.
 A zero would claim the conversation is empty, which is never true once a
 request has run and is not yet known before the first one.
 
+A `conversation_reset` frame (plan-mode clear-context, `fresh_session`,
+onboarding) returns the meter to that state. The window the old conversation
+occupied is gone, so a meter still showing 94% for a fresh transcript is a
+lie of the same kind a zero would be. The threshold sources survive the
+reset — they describe the process and profile, not the conversation. The
+clear rides the live `chat-context-usage` push as a null, matching how
+`chat-activity` clears, and is persisted so a restart does not restore the
+stale reading.
+
 ## Risks / Trade-offs
 
 - **Threshold source may be briefly approximate (D2)** → A session with no
   live `Query` and no profile override meters against the model window until
-  the first observed report. Labelled as such; the next attach or turn
-  corrects it. Better than blocking the meter on a control request.
-- **`autoCompactThreshold` units need confirming against a live report** →
-  D2 prefers the field when present and falls back to
-  `rawMaxTokens − buffer`, which is known-correct from a real `/context`
-  report. The task that wires it pins this down with a fixture from a real
-  report rather than assuming.
+  the first observed report. Labelled as such on the reading and in the
+  meter's title; the next attach or turn corrects it. Better than blocking
+  the meter on a control request.
+- **`autoCompactThreshold` units** → D2 prefers the field when present and
+  falls back to `rawMaxTokens − buffer`, which is known-correct from a real
+  `/context` report. The pinned fixture carries `autoCompactThreshold:
+  167000` for that same 200k/33k report — the field is the threshold in
+  tokens, not a percentage or the full window.
 - **`compact_metadata` present but `post_tokens` missing** → Keep the last
   reading; the next request corrects it (D3). Also covers metadata absent
   entirely on older CLIs. The Claude Code baseline is pinned well ahead of

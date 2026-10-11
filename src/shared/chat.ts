@@ -135,7 +135,16 @@ export type ChatEvent =
       finalText?: string
     })
   | (ChatTurnEventBase & { type: 'turn_interrupted' })
-  | (ChatEventBase & { type: 'notice'; text: string })
+  | (ChatEventBase & {
+      type: 'notice'
+      text: string
+      /**
+       * Discriminator for notices other code acts on. `compacted` marks the
+       * compact_boundary notice; matching on this beats matching on its
+       * display text, which is free to change.
+       */
+      kind?: 'compacted'
+    })
   | (ChatEventBase & { type: 'error'; message: string })
 
 /** How a pending approval/question request ended. */
@@ -178,6 +187,37 @@ export interface ChatActivity {
   attempt?: number
   maxRetries?: number
   errorStatus?: number
+}
+
+/**
+ * The session's distance to auto-compaction: how much of its
+ * auto-compaction threshold — the used-token count at which the conversation
+ * would be compacted, not the model's full context window — the current
+ * conversation occupies. `usedTokens` is the latest model request's
+ * `input + cache_read + cache_creation + output`: the window as of that
+ * request, never lifetime traffic. `percentage` is used/threshold × 100 and
+ * may exceed 100, since compaction can lag the threshold. Unlike
+ * `ChatActivity` this is a slow session fact: it persists with the chat
+ * session across restart and archive and rides the snapshot; it is never a
+ * ChatEvent and is absent (`null`) rather than zero before the first
+ * request.
+ */
+export interface ChatContextUsage {
+  usedTokens: number
+  thresholdTokens: number
+  /** Share of the threshold in use; not clamped to 100. */
+  percentage: number
+  /** ISO timestamp of when the reading was measured. */
+  at: string
+  /**
+   * True when `thresholdTokens` is a window standing in for the compaction
+   * threshold (design D2 steps 2–3): the profile window with no observed
+   * reserve, or the model's context window. An approximation of the window,
+   * not a measured threshold — the meter must say so rather than claim a
+   * distance to compaction it does not know. Absent/false means the number
+   * is a real threshold.
+   */
+  thresholdApproximate?: boolean
 }
 
 /** Overall plan-limit status of a usage report. */

@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from 'bun:test'
-import type { ChatEvent } from '../../shared/chat'
+import type { ChatContextUsage, ChatEvent } from '../../shared/chat'
 import type { ServerMessage } from '../../shared/types'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -14,7 +14,7 @@ function harness(wireLogs?: ChatWireLogs) {
     type: 'chat-snapshot', sessionId: 'chat-1', profileId: 'default', events: [],
     pendingRequests: [{ kind: 'approval', requestId: 'approval-1', tool: 'Bash', input: {}, at: 'now' }],
     status: 'permission', throughSequence: 0,
-    commands: { status: 'unavailable', commands: [] }, activity: null, usage: null,
+    commands: { status: 'unavailable', commands: [] }, activity: null, contextUsage: null, usage: null,
   }
   let pending = true
   const manager = {
@@ -255,6 +255,31 @@ describe('chat WebSocket subscriptions', () => {
     await new Promise(resolve => setTimeout(resolve, 0))
     expect(h.messages.filter(message => message.type === 'chat-activity')).toHaveLength(1)
     expect(otherMessages).toEqual([])
+  })
+
+  test('several context-usage updates within one tick collapse to one message', async () => {
+    const h = harness()
+    await h.connections.handle(h.connection, { type: 'chat-attach', sessionId: 'chat-1' })
+    const reading = (usedTokens: number): ChatContextUsage => ({
+      usedTokens,
+      thresholdTokens: 200_000,
+      percentage: (usedTokens / 200_000) * 100,
+      at: 'now',
+    })
+    h.connections.publishContextUsage('chat-1', reading(40_000))
+    h.connections.publishContextUsage('chat-1', reading(60_000))
+    h.connections.publishContextUsage('chat-1', reading(95_000))
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(h.messages.slice(1)).toEqual([
+      { type: 'chat-context-usage', sessionId: 'chat-1', usage: reading(95_000) },
+    ])
+
+    // The next flush carries only its own latest value.
+    h.connections.publishContextUsage('chat-1', reading(96_000))
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(h.messages.slice(2)).toEqual([
+      { type: 'chat-context-usage', sessionId: 'chat-1', usage: reading(96_000) },
+    ])
   })
 
   test('usage reaches a connection once for two sessions of one profile', async () => {

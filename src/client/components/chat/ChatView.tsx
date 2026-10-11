@@ -6,6 +6,9 @@
 // During an in-flight turn an activity row (design D6) follows ChatMessages:
 // the live phase with a client-ticked timer, hidden while text streams, while
 // a request awaits the user, and in archived chats (design D4).
+// The header carries the context meter beside the session status: the live
+// share of the autocompact threshold with `used / threshold` counts, hidden
+// until the first model request; archived chats keep the stored reading.
 // Archived chats render read-only: the transcript and debug view stay, the
 // composer/Stop/request actions are replaced by a Restore bar, and archiving
 // a live turn asks for confirmation first (the server interrupts it).
@@ -25,6 +28,7 @@ import { useSettingsStore } from '../../stores/settingsStore'
 import { emptyTranscript, useChatStore } from '../../stores/chatStore'
 import { closedDebugView, useChatDebugStore } from '../../stores/chatDebugStore'
 import ChatActivityRow from './ChatActivityRow'
+import ChatContextMeter from './ChatContextMeter'
 import ChatDebugPanel from './ChatDebugPanel'
 import ChatMessages from './ChatMessages'
 import ChatRequests from './ChatRequests'
@@ -231,6 +235,7 @@ export default function ChatView({ session, sendMessage, subscribe, connectionSt
         <p className="text-chat-meta text-secondary" data-testid="chat-profile">Profile: {profileLabel}</p>
         <p className="truncate text-chat-meta text-secondary">{session.projectPath}</p></div>
       <span className="text-chat-meta text-secondary" data-testid="chat-status">{connected ? (archived ? 'archived' : session.status) : connectionStatus}</span>
+      <ChatContextMeter usage={transcript.contextUsage} />
       <button className={`btn text-chat-meta ${debugOpen ? 'btn-primary' : ''}`} aria-pressed={debugOpen} onClick={toggleDebug}>Debug</button>
       {!archived && <button className={`btn text-chat-meta ${autoApprove ? 'btn-approval-on' : ''}`} aria-pressed={autoApprove}
         onClick={toggleApprovalPolicy} data-testid="chat-approval-policy">Auto-approve</button>}

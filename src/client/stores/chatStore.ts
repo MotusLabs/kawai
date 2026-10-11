@@ -3,6 +3,8 @@
 // through server resolution events rather than optimistic local answers. The
 // live-turn activity is a single current value (not an event): it is anchored
 // on the client clock from the server's elapsedMs and cleared on turn end.
+// The context-usage reading is another such current value: replaced by
+// snapshots and coalesced pushes, never sequenced into the transcript.
 // Plan usage is per profile, not per session (the allowance is per account
 // and provider): the snapshot's `usage` and chat-usage pushes land in one
 // shared map, so every session of a profile renders the same bar.
@@ -11,6 +13,7 @@ import { create } from 'zustand'
 import type {
   ChatActivity,
   ChatCommandState,
+  ChatContextUsage,
   ChatEvent,
   ChatPendingRequest,
   ChatUsageReport,
@@ -33,11 +36,13 @@ export interface ChatTranscript {
   commands: ChatCommandState
   seen: Set<string>
   activity: ChatTranscriptActivity | null
+  /** Latest context-usage reading; null before the first model request. */
+  contextUsage: ChatContextUsage | null
 }
 
 export const emptyTranscript = (): ChatTranscript => ({
   events: [], pendingRequests: [], status: 'waiting', throughSequence: 0,
-  commands: { status: 'unavailable', commands: [] }, seen: new Set(), activity: null,
+  commands: { status: 'unavailable', commands: [] }, seen: new Set(), activity: null, contextUsage: null,
 })
 
 /** Anchor a server-reported activity on the client's clock (design D2). */
@@ -46,7 +51,7 @@ function anchorActivity(activity: ChatActivity): ChatTranscriptActivity {
 }
 
 export function applyChatEvents(state: ChatTranscript, incoming: ChatEvent[]): ChatTranscript {
-  const next = { ...state, events: [...state.events], pendingRequests: [...state.pendingRequests], seen: new Set(state.seen), activity: state.activity }
+  const next = { ...state, events: [...state.events], pendingRequests: [...state.pendingRequests], seen: new Set(state.seen), activity: state.activity, contextUsage: state.contextUsage }
   for (const event of incoming) {
     if (next.seen.has(event.id) || (event.sequence > 0 && event.sequence <= next.throughSequence)) continue
     next.seen.add(event.id)
@@ -97,6 +102,8 @@ interface ChatStore {
   setCommands: (message: Extract<ServerMessage, { type: 'chat-commands' }>) => void
   /** Adopt the latest server activity (chat-activity) or clear it (null). */
   setActivity: (sessionId: string, activity: ChatActivity | null) => void
+  /** Adopt the latest context reading (chat-context-usage push); null clears. */
+  setContextUsage: (sessionId: string, usage: ChatContextUsage | null) => void
   /** Adopt a profile's latest usage report (chat-usage / snapshot). */
   setUsage: (profileId: string, report: ChatUsageReport | null) => void
   setDraft: (sessionId: string, text: string) => void
@@ -120,6 +127,8 @@ export const useChatStore = create<ChatStore>((set) => ({
         throughSequence: message.throughSequence,
         commands: message.commands,
         activity: message.activity ? anchorActivity(message.activity) : null,
+        // Authoritative replace: a restart or unread session clears to null.
+        contextUsage: message.contextUsage,
       },
     },
     // The snapshot's usage is authoritative for the profile at attach time.
@@ -142,6 +151,13 @@ export const useChatStore = create<ChatStore>((set) => ({
   setUsage: (profileId, report) => set(state => ({
     usage: { ...state.usage, [profileId]: report },
   })),
+  setContextUsage: (sessionId, usage) => set(state => {
+    const current = state.sessions[sessionId] ?? emptyTranscript()
+    return { sessions: { ...state.sessions, [sessionId]: {
+      ...current,
+      contextUsage: usage,
+    } } }
+  }),
   setDraft: (sessionId, text) => set(state => {
     const drafts = { ...state.drafts }
     if (text === '') delete drafts[sessionId]

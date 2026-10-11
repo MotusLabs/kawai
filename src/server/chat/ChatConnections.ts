@@ -4,8 +4,10 @@
 // connection and session is sent after that session's pending event batch, so
 // an activity never precedes the tool_call it describes and several phase
 // changes within one tick collapse into the last.
-// Plan usage rides it too (usage bar design D4), scoped by profile instead of
-// session: one latest-value slot per connection and profile, sent to every
+// Context usage rides it too (context meter design D5), same per-session
+// latest-value coalescing as activity.
+// Plan usage rides it as well (usage bar design D4), scoped by profile instead
+// of session: one latest-value slot per connection and profile, sent to every
 // connection subscribed to at least one session of that profile.
 // Debug-view subscriptions are separate: only connections that opened a
 // session's debug view receive its wire frames. They subscribe before the
@@ -14,6 +16,7 @@
 import type {
   ChatActivity,
   ChatCommandState,
+  ChatContextUsage,
   ChatEvent,
   ChatUsageReport,
   ChatWireFrame,
@@ -35,6 +38,8 @@ export class ChatConnections {
   private readonly batches = new Map<ChatConnection, Map<string, ChatEvent[]>>()
   /** Latest activity per connection and session, sent by the next flush. */
   private readonly activityBatches = new Map<ChatConnection, Map<string, ChatActivity | null>>()
+  /** Latest context-usage reading per connection and session (design D5). */
+  private readonly contextBatches = new Map<ChatConnection, Map<string, ChatContextUsage | null>>()
   /** Latest usage report per connection and profile, sent by the next flush. */
   private readonly usageBatches = new Map<ChatConnection, Map<string, ChatUsageReport | null>>()
   private readonly debugSubscriptions = new Map<ChatConnection, Map<string, () => void>>()
@@ -50,6 +55,7 @@ export class ChatConnections {
     this.subscriptions.delete(connection)
     this.batches.delete(connection)
     this.activityBatches.delete(connection)
+    this.contextBatches.delete(connection)
     this.usageBatches.delete(connection)
     for (const unsubscribe of this.debugSubscriptions.get(connection)?.values() ?? []) unsubscribe()
     this.debugSubscriptions.delete(connection)
@@ -97,6 +103,21 @@ export class ChatConnections {
       const latest = this.activityBatches.get(connection) ?? new Map<string, ChatActivity | null>()
       latest.set(sessionId, activity)
       this.activityBatches.set(connection, latest)
+    }
+    this.scheduleFlush()
+  }
+
+  /**
+   * Queue the session's latest context-usage reading (context meter design
+   * D5): like activity, only the latest value per connection and session
+   * survives until the flush, which sends it after the pending event batch.
+   */
+  publishContextUsage(sessionId: string, usage: ChatContextUsage | null): void {
+    for (const [connection, sessions] of this.subscriptions) {
+      if (!sessions.has(sessionId)) continue
+      const latest = this.contextBatches.get(connection) ?? new Map<string, ChatContextUsage | null>()
+      latest.set(sessionId, usage)
+      this.contextBatches.set(connection, latest)
     }
     this.scheduleFlush()
   }
@@ -165,6 +186,15 @@ export class ChatConnections {
         }
       }
     }
+    const contextBatches = new Map(this.contextBatches)
+    this.contextBatches.clear()
+    for (const [connection, sessions] of contextBatches) {
+      for (const [sessionId, usage] of sessions) {
+        if (this.subscriptions.get(connection)?.has(sessionId)) {
+          connection.send({ type: 'chat-context-usage', sessionId, usage })
+        }
+      }
+    }
     const usageBatches = new Map(this.usageBatches)
     this.usageBatches.clear()
     for (const [connection, profiles] of usageBatches) {
@@ -227,6 +257,7 @@ export class ChatConnections {
         if (!snapshot) return
         this.batches.get(connection)?.delete(sessionId)
         this.activityBatches.get(connection)?.delete(sessionId)
+        this.contextBatches.get(connection)?.delete(sessionId)
         const sessions = this.subscriptions.get(connection) ?? new Set<string>()
         sessions.add(sessionId)
         this.subscriptions.set(connection, sessions)
@@ -243,6 +274,7 @@ export class ChatConnections {
         this.subscriptions.get(connection)?.delete(sessionId)
         this.batches.get(connection)?.delete(sessionId)
         this.activityBatches.get(connection)?.delete(sessionId)
+        this.contextBatches.get(connection)?.delete(sessionId)
         return
       case 'chat-send': {
         const result = await this.manager.send(sessionId, message.text)

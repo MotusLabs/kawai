@@ -11,6 +11,7 @@ import type {
   ChatApprovalDecision,
   ChatApprovalPolicy,
   ChatCommandState,
+  ChatContextUsage,
   ChatEvent,
   ChatPendingRequest,
   ChatQuestionAnswer,
@@ -21,6 +22,7 @@ import type {
 export type {
   ChatActivity,
   ChatActivityPhase,
+  ChatContextUsage,
   ChatEvent,
   ChatUsageReport,
   ChatUsageWindow,
@@ -258,6 +260,13 @@ export type ServerMessage =
       commands: ChatCommandState
       /** Current in-flight turn activity, or null when the turn is idle. */
       activity: ChatActivity | null
+      /**
+       * Latest context-usage reading for the session, or null before the
+       * first model request (context meter design D7: no reading is a state,
+       * not a zero). Slow session state like `status`, not ephemeral like
+       * `activity` — it also persists with the chat session.
+       */
+      contextUsage: ChatContextUsage | null
       /** Latest plan-usage report for the session's profile, when one is held. */
       usage: ChatUsageReport | null
     }
@@ -272,6 +281,15 @@ export type ServerMessage =
   // every connection subscribed to at least one session of the profile when a
   // new report is captured. Additive and ephemeral like chat-activity.
   | { type: 'chat-usage'; profileId: string; report: ChatUsageReport | null }
+  // Latest context-usage reading for a chat session (context meter design D5):
+  // coalesced like chat-activity — only the latest value survives until the
+  // flush — additive, never sequenced or replayed. A null `usage` clears the
+  // meter (a conversation reset leaves nothing measured, design D7).
+  | {
+      type: 'chat-context-usage'
+      sessionId: string
+      usage: ChatContextUsage | null
+    }
   // Debug-view protocol frames, sent only to clients that opened the view.
   // `page: true` marks a reply to chat-debug-open/chat-debug-page (carrying
   // `hasOlder`); otherwise the message is a live batch.

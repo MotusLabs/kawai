@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import type { ChatEvent } from '@shared/chat'
+import type { ChatContextUsage, ChatEvent } from '@shared/chat'
 import { applyChatEvents, emptyTranscript, useChatStore } from '../stores/chatStore'
 
 const delta = (sequence: number, delta: string): Extract<ChatEvent, { type: 'assistant_delta' }> => ({
@@ -62,7 +62,7 @@ describe('chat store', () => {
   test('a snapshot replaces stale state and its pending requests are authoritative', () => {
     const store = useChatStore.getState()
     store.apply('chat-1', [delta(1, 'old')])
-    store.snapshot({ type: 'chat-snapshot', sessionId: 'chat-1', profileId: 'default', events: [delta(2, 'restored')], pendingRequests: [], status: 'working', throughSequence: 2, commands: { status: 'ready', commands: [] }, activity: null, usage: null })
+    store.snapshot({ type: 'chat-snapshot', sessionId: 'chat-1', profileId: 'default', events: [delta(2, 'restored')], pendingRequests: [], status: 'working', throughSequence: 2, commands: { status: 'ready', commands: [] }, activity: null, contextUsage: null, usage: null })
     const state = useChatStore.getState().sessions['chat-1']
     expect(state.events).toHaveLength(1)
     expect(state.events[0]).toMatchObject({ text: 'restored' })
@@ -93,7 +93,7 @@ describe('chat store', () => {
     // Reconnect: the snapshot's state is authoritative again.
     store.snapshot({
       type: 'chat-snapshot', sessionId: 'chat-1', profileId: 'default', events: [], pendingRequests: [],
-      status: 'waiting', throughSequence: 0, commands: { status: 'ready', commands: [usage] }, activity: null, usage: null,
+      status: 'waiting', throughSequence: 0, commands: { status: 'ready', commands: [usage] }, activity: null, contextUsage: null, usage: null,
     })
     expect(useChatStore.getState().sessions['chat-1'].commands).toEqual({ status: 'ready', commands: [usage] })
 
@@ -138,7 +138,7 @@ describe('chat store drafts', () => {
     const store = useChatStore.getState()
     store.setDraft('chat-1', 'in progress')
     store.apply('chat-1', [delta(1, 'streamed')])
-    store.snapshot({ type: 'chat-snapshot', sessionId: 'chat-1', profileId: 'default', events: [delta(2, 'restored')], pendingRequests: [], status: 'working', throughSequence: 2, activity: null, commands: { status: 'unavailable', commands: [] }, usage: null })
+    store.snapshot({ type: 'chat-snapshot', sessionId: 'chat-1', profileId: 'default', events: [delta(2, 'restored')], pendingRequests: [], status: 'working', throughSequence: 2, activity: null, contextUsage: null, commands: { status: 'unavailable', commands: [] }, usage: null })
     expect(useChatStore.getState().drafts['chat-1']).toBe('in progress')
   })
 
@@ -175,6 +175,7 @@ describe('chat store activity', () => {
       pendingRequests: [], status: 'working', throughSequence: 1,
       commands: { status: 'ready', commands: [] },
       activity: { phase: 'running_tools', elapsedMs: 10_000, tool: 'Bash', count: 1 },
+      contextUsage: null,
       usage: null,
     })
     const activity = useChatStore.getState().sessions['chat-1'].activity!
@@ -183,7 +184,7 @@ describe('chat store activity', () => {
     // An idle snapshot carries no row.
     store.snapshot({
       type: 'chat-snapshot', sessionId: 'chat-2', profileId: 'default', events: [], pendingRequests: [],
-      status: 'waiting', throughSequence: 0, commands: { status: 'unavailable', commands: [] }, activity: null, usage: null,
+      status: 'waiting', throughSequence: 0, commands: { status: 'unavailable', commands: [] }, activity: null, contextUsage: null, usage: null,
     })
     expect(useChatStore.getState().sessions['chat-2'].activity).toBeNull()
   })
@@ -222,7 +223,7 @@ describe('chat store usage', () => {
       type: 'chat-snapshot', sessionId: 'chat-1', profileId: 'default',
       events: [], pendingRequests: [], status: 'waiting', throughSequence: 0,
       commands: { status: 'unavailable', commands: [] },
-      activity: null, usage: report,
+      activity: null, contextUsage: null, usage: report,
     })
     expect(useChatStore.getState().usage['default']).toEqual(report)
 
@@ -241,7 +242,7 @@ describe('chat store usage', () => {
       type: 'chat-snapshot', sessionId: 'chat-1', profileId: 'default',
       events: [], pendingRequests: [], status: 'waiting', throughSequence: 0,
       commands: { status: 'unavailable', commands: [] },
-      activity: null, usage: null, // restart: the server held nothing
+      activity: null, contextUsage: null, usage: null, // restart: the server held nothing
     })
     expect(useChatStore.getState().usage['default']).toBeNull()
   })
@@ -252,10 +253,65 @@ describe('chat store usage', () => {
       type: 'chat-snapshot', sessionId: 'chat-1', profileId: 'default',
       events: [], pendingRequests: [], status: 'waiting', throughSequence: 0,
       commands: { status: 'unavailable', commands: [] },
-      activity: null, usage: report,
+      activity: null, contextUsage: null, usage: report,
     })
     store.remove('chat-1')
     expect(useChatStore.getState().sessions['chat-1']).toBeUndefined()
     expect(useChatStore.getState().usage['default']).toEqual(report)
+  })
+})
+
+describe('chat store context usage', () => {
+  const reading = (usedTokens: number): ChatContextUsage => ({
+    usedTokens,
+    thresholdTokens: 200_000,
+    percentage: usedTokens / 2_000,
+    at: '2026-10-10T12:00:00.000Z',
+  })
+
+  afterEach(() => useChatStore.setState({ sessions: {}, usage: {} }))
+
+  test('snapshots and live pushes replace the reading; a null snapshot clears it', () => {
+    const store = useChatStore.getState()
+    store.snapshot({
+      type: 'chat-snapshot', sessionId: 'chat-1', profileId: 'default',
+      events: [], pendingRequests: [], status: 'working', throughSequence: 0,
+      commands: { status: 'unavailable', commands: [] },
+      activity: null, contextUsage: reading(60_000), usage: null,
+    })
+    expect(useChatStore.getState().sessions['chat-1'].contextUsage).toEqual(reading(60_000))
+
+    // A coalesced push replaces the snapshot's value.
+    store.setContextUsage('chat-1', reading(90_000))
+    expect(useChatStore.getState().sessions['chat-1'].contextUsage).toEqual(reading(90_000))
+
+    // A push ahead of any snapshot materializes a transcript, losing nothing.
+    store.setContextUsage('chat-2', reading(10_000))
+    expect(useChatStore.getState().sessions['chat-2'].contextUsage).toEqual(reading(10_000))
+
+    // The clearing case: a snapshot with no reading (a restart, or a session
+    // that never produced one) is authoritative, not merged.
+    store.snapshot({
+      type: 'chat-snapshot', sessionId: 'chat-1', profileId: 'default',
+      events: [], pendingRequests: [], status: 'waiting', throughSequence: 0,
+      commands: { status: 'unavailable', commands: [] },
+      activity: null, contextUsage: null, usage: null,
+    })
+    expect(useChatStore.getState().sessions['chat-1'].contextUsage).toBeNull()
+  })
+
+  test('transcript events never touch the reading', () => {
+    const store = useChatStore.getState()
+    store.setContextUsage('chat-1', reading(50_000))
+    store.apply('chat-1', [delta(1, 'streaming')])
+    expect(useChatStore.getState().sessions['chat-1'].contextUsage).toEqual(reading(50_000))
+    expect(useChatStore.getState().sessions['chat-1'].events).toHaveLength(1)
+  })
+
+  test('a null push clears the reading (a conversation reset)', () => {
+    const store = useChatStore.getState()
+    store.setContextUsage('chat-1', reading(50_000))
+    store.setContextUsage('chat-1', null)
+    expect(useChatStore.getState().sessions['chat-1'].contextUsage).toBeNull()
   })
 })

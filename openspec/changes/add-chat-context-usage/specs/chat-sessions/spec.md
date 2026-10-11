@@ -16,6 +16,10 @@ session has produced a model request, rather than showing a zero reading.
 - **WHEN** a chat session has not yet produced a model request
 - **THEN** the chat view header shows no context meter
 
+#### Scenario: Conversation reset returns the meter to absent
+- **WHEN** a running conversation is reset (plan-mode clear-context, a fresh session, or onboarding) after a context usage has been reported
+- **THEN** the chat view header shows no context meter again, and a later server restart does not restore the reading the discarded conversation had
+
 #### Scenario: Meter coexists with header chrome
 - **WHEN** a chat view is open for a live session that has produced a model request
 - **THEN** the context meter is shown beside the session status and the profile, project path, and session controls remain present
@@ -73,6 +77,14 @@ session nearing compaction reports a high percentage.
 #### Scenario: Larger configured window overrides the model window
 - **WHEN** a chat session runs under a profile that configures a 1000000-token auto-compaction window on a 200000-token model
 - **THEN** its threshold token count derives from the configured 1000000-token window rather than the model's 200000 tokens
+
+#### Scenario: An approximate threshold is labelled as one
+- **WHEN** a session's threshold must come from the model's context window, or from a configured window with no observed autocompact reserve, because no context-usage report has shown the real reserve
+- **THEN** the reading is marked as approximate and the meter says so, so it is not taken for an observed threshold
+
+#### Scenario: A later report replaces the approximation
+- **WHEN** a session that was metered against an approximate threshold later produces a context-usage report that reveals the reserve
+- **THEN** the reading is recalculated against the observed auto-compaction threshold and is no longer marked approximate
 
 ### Requirement: Context usage survives restarts and archives
 The latest context usage SHALL be stored with the chat session and kept
