@@ -54,7 +54,7 @@
 
 - [x] 8.1 Add a headless fixture integration in one temporary repository with a linked worktree: a permitted lead creates/amends a task, sends worktree-targeted mail, a member is spawned within caps and receives current context, and its note/reply returns under the same task; verify the test passes, preserves the task across creator kill/restart, and uses `cleanGitEnv()` for git commands.
 - [x] 8.2 Walk task creation/detail/amendment/journal/status controls, worktree-targeted spawning, task/header/peer badges, cap-wait behavior, and needs-attention notification against the fixture using repository Playwright; verify DOM state and screenshots, including reload/reconnect restoration.
-- [ ] 8.3 Run `bun run lint && bun run typecheck && bun run test` and OpenSpec validation, and verify the full suite is green with the task/worktree integration included.
+- [x] 8.3 Run `bun run lint && bun run typecheck && bun run test` and OpenSpec validation, and verify the full suite is green with the task/worktree integration included.
 
 ## Workflow follow-up
 
