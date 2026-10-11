@@ -115,8 +115,12 @@ export interface ChatSessionDriverOptions {
    * post-compaction size, or when a threshold correction re-scales the
    * current reading. Never fired before the first model request and never
    * with a placeholder — no reading is this callback never firing (D7).
+   * `correction` marks the re-scale cases — a probe answer or a spawn-time
+   * re-anchor, which can land after the boundary already persisted the
+   * reading — so the manager can write the corrected denominator without
+   * waiting for the next boundary.
    */
-  onContextUsage?: (usage: ChatContextUsage) => void
+  onContextUsage?: (usage: ChatContextUsage, correction?: boolean) => void
   /**
    * Plan usage (usage bar design D3): parsed report from a pushed
    * rate_limit_event frame, whatever turn state the session is in.
@@ -444,10 +448,19 @@ export class ChatSessionDriver {
       }
     )
     // The profile-configured window (design D2 step 2) is re-read each spawn
-    // so Settings changes apply to the next process.
+    // so Settings changes apply to the next process. The old process's
+    // observed report readings die with it — they outrank the profile, so a
+    // stale threshold would survive a window change whenever the new probe
+    // fails to answer.
     this.profileCompactWindow = parsePositiveTokens(
       launch.env?.CLAUDE_CODE_AUTO_COMPACT_WINDOW
     )
+    this.reportContextThreshold = null
+    this.reportContextReserve = null
+    // A respawn with a changed window re-scales the retained reading at once
+    // (flagged as a correction so the manager persists it), not on the next
+    // model frame.
+    this.publishContextUsage(true)
     // An operator-named profile executable replaces the standard binary; the
     // `executable` key itself is launch bookkeeping, not an SDK option.
     const { executable: profileExecutable, ...launchOptions } = launch
@@ -969,8 +982,9 @@ export class ChatSessionDriver {
    * Publish the current reading; a no-op until both a used count and a
    * threshold exist — never a placeholder (design D7). Identical
    * re-publications are suppressed; callers re-anchor on every publish.
+   * `correction` marks threshold re-scales (see onContextUsage).
    */
-  private publishContextUsage(): void {
+  private publishContextUsage(correction = false): void {
     const used = this.contextUsedTokens
     const threshold = this.contextThreshold()
     if (used === null || threshold === null || threshold <= 0) return
@@ -990,7 +1004,7 @@ export class ChatSessionDriver {
       return
     }
     this.lastPublishedContextUsage = reading
-    this.options.onContextUsage?.(reading)
+    this.options.onContextUsage?.(reading, correction)
   }
 
   /**
@@ -1037,7 +1051,10 @@ export class ChatSessionDriver {
         if (derived !== null) this.reportContextThreshold = derived
       }
     }
-    this.publishContextUsage()
+    // The probe is asynchronous: it usually resolves just after the turn
+    // boundary already persisted the previous reading, so this re-scale is
+    // flagged as a correction for immediate persistence.
+    this.publishContextUsage(true)
   }
 
   private emit(draft: ChatEventDraft): void {

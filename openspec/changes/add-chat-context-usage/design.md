@@ -96,6 +96,11 @@ Resolution order for the threshold:
    window rather than the threshold. Only for a session that has neither an
    observed report nor a configured window.
 
+Step 1 is process-scoped: a respawn (crash, or a profile change taking
+effect) clears the observed report threshold and reserve and re-reads the
+profile window, so a dead process's 167k cannot outrank a freshly configured
+100k window when the new probe fails to answer.
+
 *Why not `modelUsage.contextWindow` alone:* it is the model's believed limit
 and ignores both the autocompact reserve and any profile override. The
 reserve is 16.5% in the observed report, so this understates fullness in
@@ -165,7 +170,13 @@ session. Broadcasting and persisting each one is waste.
   transcript, get a sequence number, or replay.
 - **Persist:** write on `turn_completed`, on `compact_boundary`, and on
   driver death. In-memory holds the fresher value between writes; `getSnapshot`
-  prefers in-memory and falls back to the stored column.
+  prefers in-memory and falls back to the stored column. One addition: the
+  turn-boundary threshold probe resolves *after* `turn_completed` has already
+  written, so a publish that only re-scales the threshold (a probe answer, or
+  the spawn-time re-anchor after a respawn clears the dead process's report
+  readings) is flagged as a *correction* and persisted at once — rare by
+  nature, so it does not reintroduce per-frame churn, and an abrupt restart
+  cannot restore a different percentage than the one last displayed.
 
 ### D6. Subagent frames are ignored
 
