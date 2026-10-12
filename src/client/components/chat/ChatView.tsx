@@ -335,6 +335,15 @@ export default function ChatView({ session, sendMessage, subscribe, connectionSt
         {session.parked && <p className="truncate text-chat-meta text-amber-600" data-testid="chat-paused">{parkedLabel(session.parked)}</p>}
         <p className="truncate text-chat-meta text-secondary">{session.projectPath}</p></div>
       <span className="text-chat-meta text-secondary" data-testid="chat-status">{connected ? (archived ? 'archived' : session.status) : connectionStatus}</span>
+      {transcript.model && (
+        <span
+          className="shrink-0 whitespace-nowrap text-chat-meta text-secondary"
+          data-testid="chat-model"
+          title={`Model reported by the agent: ${transcript.model}`}
+        >
+          {transcript.model}
+        </span>
+      )}
       <ChatContextMeter usage={transcript.contextUsage} />
       <button className={`btn text-chat-meta ${debugOpen ? 'btn-primary' : ''}`} aria-pressed={debugOpen} onClick={toggleDebug}>Debug</button>
       <button className={`btn text-chat-meta ${mailbox.open ? 'btn-primary' : ''}`} aria-pressed={mailbox.open} onClick={toggleMailbox}>Mailbox</button>

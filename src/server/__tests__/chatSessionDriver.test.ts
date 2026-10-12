@@ -177,6 +177,8 @@ interface Harness {
   sdkSessionIds: string[]
   factoryWires: Array<ChatWireRecorder | undefined>
   commandStates: ChatCommandState[]
+  /** Each onModel firing (chat-session-model design D5), in order. */
+  models: string[]
 }
 
 function createHarness(
@@ -224,6 +226,7 @@ function createHarness(
   const sdkSessionIds: string[] = []
   const factoryWires: Array<ChatWireRecorder | undefined> = []
   const commandStates: ChatCommandState[] = []
+  const models: string[] = []
   // usageImpl/contextImpl/claimUsagePull/initializationCommands feed the fake
   // factory; the rest pass to the driver.
   const { usageImpl, contextImpl, claimUsagePull, initializationCommands, ...driverOverrides } = overrides
@@ -261,6 +264,7 @@ function createHarness(
     ...(claimUsagePull ? { claimUsagePull } : {}),
     onUsageNoData: () => noData.push(1),
     onSdkSessionId: (id) => sdkSessionIds.push(id),
+    onModel: (model) => models.push(model),
     onCwdChanged: (cwd) => cwds.push(cwd),
     onCommandState: (state) => commandStates.push(state),
     ...driverOverrides,
@@ -283,6 +287,7 @@ function createHarness(
     sdkSessionIds,
     factoryWires,
     commandStates,
+    models,
   }
 }
 
@@ -2349,6 +2354,70 @@ describe('ChatSessionDriver context usage', () => {
     const reading = harness.contextUsage.at(-1)
     expect(reading).toMatchObject({ thresholdTokens: 167_000 })
     expect(reading?.thresholdApproximate).toBeUndefined()
+  })
+})
+
+describe('ChatSessionDriver model', () => {
+  /** An init frame carrying a model, in the shape the SDK delivers it. */
+  function initFrame(model?: string): SDKMessage {
+    return {
+      type: 'system',
+      subtype: 'init',
+      session_id: 'sdk-model-1',
+      ...(model !== undefined ? { model } : {}),
+    } as unknown as SDKMessage
+  }
+
+  test('the first init fires once with its model', async () => {
+    const harness = createHarness()
+    harness.driver.send('hello')
+    harness.fakes[0]!.push(initFrame('claude-sonnet-5-5'))
+    await flush()
+    expect(harness.models).toEqual(['claude-sonnet-5-5'])
+    harness.driver.kill()
+  })
+
+  test('an unchanged model on the next turn does not re-fire', async () => {
+    const harness = createHarness()
+    harness.driver.send('hello')
+    const fake = harness.fakes[0]!
+    fake.push(initFrame('claude-sonnet-5-5'))
+    fake.push(result('success'))
+    await flush()
+    // The next turn's init names the same model: no second firing.
+    harness.driver.send('again')
+    fake.push(initFrame('claude-sonnet-5-5'))
+    fake.push(result('success'))
+    await flush()
+    expect(harness.models).toEqual(['claude-sonnet-5-5'])
+    harness.driver.kill()
+  })
+
+  test('a changed model re-fires with the new value', async () => {
+    const harness = createHarness()
+    harness.driver.send('hello')
+    const fake = harness.fakes[0]!
+    fake.push(initFrame('claude-sonnet-5-5'))
+    fake.push(result('success'))
+    await flush()
+    // A mid-session /model switch: the next turn's init carries the alias.
+    harness.driver.send('switched')
+    fake.push(initFrame('sonnet'))
+    fake.push(result('success'))
+    await flush()
+    expect(harness.models).toEqual(['claude-sonnet-5-5', 'sonnet'])
+    harness.driver.kill()
+  })
+
+  test('an empty or missing model never fires', async () => {
+    const harness = createHarness()
+    harness.driver.send('hello')
+    const fake = harness.fakes[0]!
+    fake.push(initFrame())
+    fake.push(initFrame(''))
+    await flush()
+    expect(harness.models).toEqual([])
+    harness.driver.kill()
   })
 })
 

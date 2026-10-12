@@ -554,6 +554,7 @@ export default function App() {
       if (message.type === 'chat-commands') useChatStore.getState().setCommands(message)
       if (message.type === 'chat-activity') useChatStore.getState().setActivity(message.sessionId, message.activity)
       if (message.type === 'chat-context-usage') useChatStore.getState().setContextUsage(message.sessionId, message.usage)
+      if (message.type === 'chat-model') useChatStore.getState().setModel(message.sessionId, message.model)
       if (message.type === 'chat-usage') useChatStore.getState().setUsage(message.profileId, message.report)
       if (message.type === 'chat-workers') useChatStore.getState().setWorkers(message.sessionId, message.workers)
       if (message.type === 'chat-notifications') useChatStore.getState().setNotifications(message.sessionId, message.notifications)

@@ -122,6 +122,12 @@ export interface ChatSessionManagerOptions {
    */
   onContextUsage?: (sessionId: string, usage: ChatContextUsage | null) => void
   /**
+   * Model sink (chat-session-model design D5): called only when the driver
+   * reports a model different from the last one. Wired to the coalesced WS
+   * broadcast in index.ts; the value itself persists with the session row.
+   */
+  onModel?: (sessionId: string, model: string) => void
+  /**
    * Plan-usage sink (usage bar design D4): called with the latest report
    * (or null) whenever a profile's held data changes. Wired to the WS
    * broadcast in index.ts; usage is ephemeral and never persisted.
@@ -403,6 +409,9 @@ export class ChatSessionManager {
         this.contextReadings.get(sessionId) ??
         this.records.get(sessionId)?.contextUsage ??
         null,
+      // Stored with the row (design D4): applyPatch keeps the record current,
+      // so this is the last reported model, null before the first one.
+      model: this.records.get(sessionId)?.model ?? null,
       usage: this.usageLimits.get(this.profileIdOf(sessionId) ?? 'default'),
       // The spawned-worker roster (workers design D2); live entries hold the
       // session at working, settled ones carry their persisted outcomes.
@@ -1514,6 +1523,7 @@ export class ChatSessionManager {
           this.handleDriverWorkers(record.sessionId, workers),
         onContextUsage: (usage, opts) =>
           this.handleDriverContextUsage(record.sessionId, usage, opts),
+        onModel: (model) => this.handleDriverModel(record.sessionId, model),
         // Plan usage is recorded against the session's profile (design D3);
         // the store's change listener drives the onUsage broadcast.
         onRateLimit: (report) =>
@@ -1751,6 +1761,19 @@ export class ChatSessionManager {
     const usage = this.contextReadings.get(sessionId)
     if (!usage) return
     this.applyPatch(sessionId, { contextUsage: usage })
+  }
+
+  /**
+   * The driver reported a model different from the last one (chat-session-model
+   * design D5): record and persist it right away — model changes are rare (a
+   * /model switch), so there is no per-request churn to batch, and a crash
+   * before the next boundary must not lose the switch — then hand it to the
+   * broadcast sink. The driver already deduped, so this runs per change.
+   */
+  private handleDriverModel(sessionId: string, model: string): void {
+    if (!this.records.has(sessionId)) return
+    this.applyPatch(sessionId, { model })
+    this.options.onModel?.(sessionId, model)
   }
 
   /**
