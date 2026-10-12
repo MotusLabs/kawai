@@ -1,6 +1,7 @@
 // Log-content reading for the session preview: byte-cursor windows for large
-// transcripts, an mtime-keyed line cache for hibernated logs, and a streaming
-// fallback for older beforeLine requests.
+// transcripts, an mtime-keyed line cache for hibernated logs (LogLineCache,
+// one instance per server boot, built in the composition root), and a
+// streaming fallback for older beforeLine requests.
 import { createReadStream } from 'node:fs'
 import fs from 'node:fs/promises'
 import { createInterface } from 'node:readline'
@@ -26,24 +27,11 @@ interface CachedLogLines {
   mtimeMs: number
   lines: string[]
 }
-const LOG_LINE_CACHE = new Map<string, CachedLogLines>()
 // Logs larger than this are streamed with a bounded window instead of cached, so
 // a pathologically large file never lands in memory whole.
 const MAX_CACHEABLE_LOG_BYTES = 4 * 1024 * 1024
 // Total budget across all cached logs; oldest entries are evicted past this.
 const MAX_LOG_CACHE_BYTES = 16 * 1024 * 1024
-let logLineCacheBytes = 0
-
-function enforceLogCacheBudget(): void {
-  // Map preserves insertion order, so the first key is the least-recently-used.
-  while (logLineCacheBytes > MAX_LOG_CACHE_BYTES) {
-    const oldestKey = LOG_LINE_CACHE.keys().next().value
-    if (oldestKey === undefined) break
-    const evicted = LOG_LINE_CACHE.get(oldestKey)
-    LOG_LINE_CACHE.delete(oldestKey)
-    if (evicted) logLineCacheBytes -= evicted.size
-  }
-}
 
 function selectLineWindow(
   lines: string[],
@@ -223,65 +211,78 @@ async function readLogLineWindowFromEnd(
   }
 }
 
-export async function readLogLineWindow(
-  logPath: string,
-  stats: { size: number; mtimeMs: number },
-  limit: number,
-  beforeLine: number,
-  beforeByte?: number
-): Promise<LogLineWindow> {
-  // Don't cache oversized logs; stream a bounded window so memory stays in check.
-  if (stats.size > MAX_CACHEABLE_LOG_BYTES) {
-    if (beforeByte !== undefined && Number.isFinite(beforeByte)) {
-      return readLogLineWindowFromEnd(logPath, stats, limit, beforeByte)
+export class LogLineCache {
+  /** logPath -> parsed lines; Map order is recency (first = least recent). */
+  readonly entries = new Map<string, CachedLogLines>()
+  private totalBytes = 0
+
+  /** Bytes currently accounted to cached logs. */
+  get bytes(): number {
+    return this.totalBytes
+  }
+
+  async readLogLineWindow(
+    logPath: string,
+    stats: { size: number; mtimeMs: number },
+    limit: number,
+    beforeLine: number,
+    beforeByte?: number
+  ): Promise<LogLineWindow> {
+    // Don't cache oversized logs; stream a bounded window so memory stays in check.
+    if (stats.size > MAX_CACHEABLE_LOG_BYTES) {
+      if (beforeByte !== undefined && Number.isFinite(beforeByte)) {
+        return readLogLineWindowFromEnd(logPath, stats, limit, beforeByte)
+      }
+      if (!Number.isFinite(beforeLine)) {
+        return readLogLineWindowFromEnd(logPath, stats, limit, stats.size)
+      }
+      return streamLogLineWindow(logPath, limit, beforeLine)
     }
-    if (!Number.isFinite(beforeLine)) {
-      return readLogLineWindowFromEnd(logPath, stats, limit, stats.size)
+
+    const cached = this.entries.get(logPath)
+    if (cached && cached.size === stats.size && cached.mtimeMs === stats.mtimeMs) {
+      // Refresh recency: re-inserting moves the key to the end of the Map.
+      this.entries.delete(logPath)
+      this.entries.set(logPath, cached)
+      return selectLineWindow(cached.lines, limit, beforeLine)
     }
-    return streamLogLineWindow(logPath, limit, beforeLine)
+
+    const lines = await readAllLogLines(logPath)
+    // Reconcile byte accounting against the CURRENT entry (re-read after the await,
+    // not the pre-await `cached`) so two concurrent misses for the same path can't
+    // double-count and skew the cache budget.
+    const prior = this.entries.get(logPath)
+    if (prior) {
+      this.entries.delete(logPath)
+      this.totalBytes -= prior.size
+    }
+    this.entries.set(logPath, { size: stats.size, mtimeMs: stats.mtimeMs, lines })
+    this.totalBytes += stats.size
+    this.enforceBudget()
+    return selectLineWindow(lines, limit, beforeLine)
   }
 
-  const cached = LOG_LINE_CACHE.get(logPath)
-  if (cached && cached.size === stats.size && cached.mtimeMs === stats.mtimeMs) {
-    // Refresh recency: re-inserting moves the key to the end of the Map.
-    LOG_LINE_CACHE.delete(logPath)
-    LOG_LINE_CACHE.set(logPath, cached)
-    return selectLineWindow(cached.lines, limit, beforeLine)
-  }
-
-  const lines = await readAllLogLines(logPath)
-  // Reconcile byte accounting against the CURRENT entry (re-read after the await,
-  // not the pre-await `cached`) so two concurrent misses for the same path can't
-  // double-count and skew the cache budget.
-  const prior = LOG_LINE_CACHE.get(logPath)
-  if (prior) {
-    LOG_LINE_CACHE.delete(logPath)
-    logLineCacheBytes -= prior.size
-  }
-  LOG_LINE_CACHE.set(logPath, { size: stats.size, mtimeMs: stats.mtimeMs, lines })
-  logLineCacheBytes += stats.size
-  enforceLogCacheBudget()
-  return selectLineWindow(lines, limit, beforeLine)
-}
-
-// Test hooks (house pattern: see remoteSessions.ts "export for testing" block).
-// The cache is module-private; these let tests observe and drive byte-budget
-// eviction without 16MB fixtures.
-export const logLineCacheTestHooks = {
-  cache: LOG_LINE_CACHE,
-  seed(entries: Array<{ key: string; size: number; mtimeMs: number }>): void {
+  /**
+   * Test hook: insert line-less entries of the given sizes (then enforce the
+   * budget) so eviction can be driven without 16MB fixtures.
+   */
+  seedForTest(entries: Array<{ key: string; size: number; mtimeMs: number }>): void {
     for (const entry of entries) {
-      LOG_LINE_CACHE.delete(entry.key)
-      LOG_LINE_CACHE.set(entry.key, { size: entry.size, mtimeMs: entry.mtimeMs, lines: [] })
-      logLineCacheBytes += entry.size
+      this.entries.delete(entry.key)
+      this.entries.set(entry.key, { size: entry.size, mtimeMs: entry.mtimeMs, lines: [] })
+      this.totalBytes += entry.size
     }
-    enforceLogCacheBudget()
-  },
-  reset(): void {
-    LOG_LINE_CACHE.clear()
-    logLineCacheBytes = 0
-  },
-  bytes(): number {
-    return logLineCacheBytes
-  },
+    this.enforceBudget()
+  }
+
+  private enforceBudget(): void {
+    // Map preserves insertion order, so the first key is the least-recently-used.
+    while (this.totalBytes > MAX_LOG_CACHE_BYTES) {
+      const oldestKey = this.entries.keys().next().value
+      if (oldestKey === undefined) break
+      const evicted = this.entries.get(oldestKey)
+      this.entries.delete(oldestKey)
+      if (evicted) this.totalBytes -= evicted.size
+    }
+  }
 }

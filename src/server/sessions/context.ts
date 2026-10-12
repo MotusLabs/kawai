@@ -29,10 +29,12 @@ export interface SessionOpsContext {
   chatSessionManager: ChatSessionManager
   broadcast: (message: ServerMessage) => void
   send: (ws: ServerWebSocket<WSData>, message: ServerMessage) => void
-  /** Remote tmux control-plane call (RemoteSessionService until it lands). */
+  /** Remote tmux control-plane call (RemoteSessionService.runTmux). */
   runRemoteTmux: (host: string, args: string[]) => Promise<RemoteCommandResult>
   /** Optimistic remote-rename overrides; shared with the remote merge. */
   remoteSessionNameOverrides: Map<string, { name: string; setAt: number }>
   /** Optimistic remote-kill tombstones; shared with the remote merge. */
   remoteSessionTombstones: Map<string, number>
+  /** Session ids with a wake in progress; a second wake is refused. */
+  wakeInFlight: Set<string>
 }

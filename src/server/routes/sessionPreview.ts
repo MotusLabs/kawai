@@ -5,17 +5,18 @@
 import fs from 'node:fs/promises'
 import { Hono } from 'hono'
 import type { initDatabase } from '../db'
-import { readLogLineWindow } from '../logContent'
+import type { LogLineCache } from '../logContent'
 import { isValidSessionId } from '../validators'
 
 type SessionDatabase = ReturnType<typeof initDatabase>
 
 export interface SessionPreviewRouteDeps {
   db: SessionDatabase
+  logLineCache: LogLineCache
 }
 
 export function createSessionPreviewRoutes(deps: SessionPreviewRouteDeps) {
-  const { db } = deps
+  const { db, logLineCache } = deps
   const routes = new Hono()
 
   routes.get('/:sessionId', async (c) => {
@@ -65,7 +66,7 @@ export function createSessionPreviewRoutes(deps: SessionPreviewRouteDeps) {
       const beforeByte = rawBeforeByte !== undefined && Number.isFinite(rawBeforeByte)
         ? Math.max(0, Math.trunc(rawBeforeByte))
         : undefined
-      const lineWindow = await readLogLineWindow(
+      const lineWindow = await logLineCache.readLogLineWindow(
         logPath,
         stats,
         limit,

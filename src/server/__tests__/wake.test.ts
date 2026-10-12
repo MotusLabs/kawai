@@ -125,6 +125,7 @@ function makeHarness(
     },
     remoteSessionNameOverrides: new Map(),
     remoteSessionTombstones: new Map(),
+    wakeInFlight: new Set(),
   }
 
   return { ctx, registry, sent, broadcasts, killCalls, refreshCalls, createArgs }

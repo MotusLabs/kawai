@@ -23,6 +23,7 @@ import { SessionRefreshWorkerClient } from './sessionRefreshWorkerClient'
 import { resolveTerminalMode } from './terminal'
 import { LogPoller } from './logPoller'
 import { toAgentSession } from './agentSessions'
+import { LogLineCache } from './logContent'
 import { startUpdateChecker } from './updates/updateChecker'
 import { ChatSessionManager } from './chat/ChatSessionManager'
 import { ChatConnections, type ChatConnection } from './chat/ChatConnections'
@@ -205,6 +206,7 @@ export function startServer(): void {
     runRemoteTmux: (host, args) => remote.runTmux(host, args),
     remoteSessionNameOverrides: remote.remoteSessionNameOverrides,
     remoteSessionTombstones: remote.remoteSessionTombstones,
+    wakeInFlight: new Set<string>(),
   }
   // Terminal attach/detach/input over each socket's tmux proxy (see ws/).
   const terminalCtx: TerminalAttachContext = {
@@ -354,7 +356,10 @@ export function startServer(): void {
   }))
   app.get('/api/sessions', (c) => c.json(registry.getAll()))
 
-  app.route('/api/session-preview', createSessionPreviewRoutes({ db }))
+  app.route('/api/session-preview', createSessionPreviewRoutes({
+    db,
+    logLineCache: new LogLineCache(),
+  }))
   app.route('/api/directories', createDirectoryRoutes())
 
   app.route('/api/update', createUpdateInstallRoutes({ updateChecker }))

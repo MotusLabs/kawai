@@ -1,7 +1,7 @@
 // Session wake: resume a hibernated agent session by rematching it to a live
 // window or recreating one from the stored resume command. The claim-race
 // branches (atomic claimCurrentWindow with reread verification, created-window
-// cleanup, and the wakeInFlight set) are load-bearing race fixes and moved
+// cleanup, and the context's wakeInFlight set) are load-bearing race fixes and moved
 // verbatim from index.ts.
 import type { ServerWebSocket } from 'bun'
 import { logger } from '../logger'
@@ -19,8 +19,6 @@ import { stampLocalSession } from '../sessionStamp'
 import type { WSData } from '../ws/wsTypes'
 import { buildResumeCommand, validateWakeTemplate } from './resumeCommand'
 import type { SessionOpsContext } from './context'
-
-const wakeInFlight = new Set<string>()
 
 function recordWakeFailure(ctx: SessionOpsContext, sessionId: string, message: string) {
   try {
@@ -239,7 +237,7 @@ export async function handleSessionWake(
     return
   }
 
-  if (wakeInFlight.has(sessionId)) {
+  if (ctx.wakeInFlight.has(sessionId)) {
     logger.info('session_wake_noop', {
       sessionId,
       reason: 'wake_in_flight',
@@ -254,7 +252,7 @@ export async function handleSessionWake(
     return
   }
 
-  wakeInFlight.add(sessionId)
+  ctx.wakeInFlight.add(sessionId)
   let createdWindowToCleanup: string | null = null
 
   try {
@@ -486,6 +484,6 @@ export async function handleSessionWake(
     const err: WakeError = { code: 'WAKE_FAILED', message }
     ctx.send(ws, { type: 'session-wake-result', sessionId, ok: false, error: err })
   } finally {
-    wakeInFlight.delete(sessionId)
+    ctx.wakeInFlight.delete(sessionId)
   }
 }
