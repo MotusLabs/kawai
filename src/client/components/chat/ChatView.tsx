@@ -9,6 +9,9 @@
 // The header carries the context meter beside the session status: the live
 // share of the autocompact threshold with `used / threshold` counts, hidden
 // until the first model request; archived chats keep the stored reading.
+// Under the header, the usage bar is joined by the notification strip
+// (notification strip design D7): the session's active notices, styled by
+// severity and closable, hidden when there are none.
 // Archived chats render read-only: the transcript and debug view stay, the
 // composer/Stop/request actions are replaced by a Restore bar, and archiving
 // a live turn asks for confirmation first (the server interrupts it).
@@ -42,6 +45,7 @@ import TeamTasksPanel from './TeamTasksPanel'
 import { closedTaskView, useTeamTaskStore } from '../../stores/teamTaskStore'
 import ChatRequests from './ChatRequests'
 import ChatWorkersStrip from './ChatWorkersStrip'
+import NotificationStrip from './NotificationStrip'
 import SlashCommandMenu from './SlashCommandMenu'
 import UsageBar from './UsageBar'
 import { filterChatCommands, insertCommand, slashTokenAt } from './slashCommandFilter'
@@ -337,6 +341,19 @@ export default function ChatView({ session, sendMessage, subscribe, connectionSt
       <button className="btn text-chat-meta" onClick={onKill}>Kill session</button>
     </header>
     <UsageBar report={usage} />
+    {/* The notification strip (design D7): under the header, beside the
+        usage bar. Archived chats are read-only surfaces that no agent feeds,
+        so they render account notices only (design D4). */}
+    <NotificationStrip
+      notifications={
+        archived
+          ? transcript.notifications.filter((notice) => notice.source === 'account')
+          : transcript.notifications
+      }
+      onClose={(notice) =>
+        useChatStore.getState().closeNotification(session.id, notice, sendMessage)
+      }
+    />
     {error && <p role="alert" className="border-b border-border p-3 text-chat-body text-chat-danger">{error}</p>}
     <div className="flex min-h-0 flex-1">
       <div className={`min-h-0 min-w-0 flex-1 flex-col ${debugOpen || mailbox.open || tasks.open ? 'hidden md:flex' : 'flex'}`}>

@@ -15,6 +15,7 @@ import type {
   ChatCommandState,
   ChatContextUsage,
   ChatEvent,
+  ChatNotification,
   ChatPendingRequest,
   ChatQuestionAnswer,
   ChatUsageReport,
@@ -27,6 +28,10 @@ export type {
   ChatActivityPhase,
   ChatContextUsage,
   ChatEvent,
+  ChatNotification,
+  ChatNotificationSource,
+  ChatNotificationSeverity,
+  ChatNotificationPriority,
   ChatUsageReport,
   ChatUsageWindow,
   ChatUsageStatus,
@@ -291,6 +296,13 @@ export type ServerMessage =
        * snapshot time — running ones live, settled ones with their outcomes.
        */
       workers: ChatWorker[]
+      /**
+       * The session's active notices (notification strip design D1): its
+       * profile's account notices followed by its own agent notices, sorted by
+       * priority and newest. Additive and ephemeral — never persisted,
+       * sequenced, or replayed.
+       */
+      notifications: ChatNotification[]
     }
   // Replaced command list pushed to subscribed connections whenever the
   // agent reports a changed list (or the state changes). Additive: older
@@ -326,6 +338,11 @@ export type ServerMessage =
   // task's id lets the view open it), `error` on refusal.
   | { type: 'team-task-result'; sessionId: string; requestId: string; task?: TeamTask; error?: string }
   | { type: 'chat-workers'; sessionId: string; workers: ChatWorker[] }
+  // A chat session's active notices (notification strip design D5): the full
+  // replace-semantics list, pushed to subscribed connections whenever it
+  // changes — a missed push heals on the next one. Additive and ephemeral
+  // like chat-activity: never sequenced, persisted, or replayed.
+  | { type: 'chat-notifications'; sessionId: string; notifications: ChatNotification[] }
   // A worker's body on expand (workers design D5): the reply to
   // chat-worker-transcript, read from the worker's on-disk transcript.
   // 'unavailable' reports a missing file or unknown worker (the row shows
@@ -461,6 +478,12 @@ export type ClientMessage =
   // A worker's expanded body (workers design D5): read the worker's on-disk
   // transcript live or after settle; the reply is chat-worker-transcript.
   | { type: 'chat-worker-transcript'; sessionId: string; workerId: string }
+  // Close an agent notice for its session on the server (notification strip
+  // design D6): the manager drops the key and pushes the new list to every
+  // attached client; unknown keys are a no-op. Account notices are closed
+  // client-side only and never send this. Additive: existing clients never
+  // send it.
+  | { type: 'chat-dismiss-notification'; sessionId: string; key: string }
   // Workspace messages are additive; existing clients never send them.
   | { type: 'workspace-refresh'; projectPath?: string }
   | {
