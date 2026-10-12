@@ -457,8 +457,10 @@ describe('chat store notifications', () => {
       notifications: [accountNotice(), agentNotice()],
     })
     store.closeNotification('chat-1', accountNotice(), send)
-    // Nothing was sent to the server; the push re-hides it, the agent one stays.
+    // Nothing was sent to the server; the visible list hides it right away,
+    // the agent one stays, and a later push re-hides the account one.
     expect(sent).toEqual([])
+    expect(useChatStore.getState().sessions['chat-1']!.notifications).toEqual([agentNotice()])
     store.setNotifications('chat-1', [accountNotice(), agentNotice()])
     expect(useChatStore.getState().sessions['chat-1']!.notifications).toEqual([agentNotice()])
     // A new day count changes the text: the notice shows again.

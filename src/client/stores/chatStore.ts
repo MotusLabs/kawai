@@ -275,14 +275,32 @@ export const useChatStore = create<ChatStore>((set) => ({
       send({ type: 'chat-dismiss-notification', sessionId, key: notice.key })
       return
     }
-    set(state => ({
-      closedAccountNotices: {
-        ...state.closedAccountNotices,
-        [sessionId]: new Set(state.closedAccountNotices[sessionId] ?? []).add(
-          accountCloseKey(notice)
-        ),
-      },
-    }))
+    set(state => {
+      const current = state.sessions[sessionId]
+      const key = accountCloseKey(notice)
+      return {
+        closedAccountNotices: {
+          ...state.closedAccountNotices,
+          [sessionId]: new Set(state.closedAccountNotices[sessionId] ?? []).add(key),
+        },
+        // Hide it right away: the visible list re-derives now, not only when
+        // the next snapshot or push arrives.
+        ...(current
+          ? {
+              sessions: {
+                ...state.sessions,
+                [sessionId]: {
+                  ...current,
+                  notifications: current.notifications.filter(
+                    (candidate) =>
+                      candidate.source !== 'account' || accountCloseKey(candidate) !== key
+                  ),
+                },
+              },
+            }
+          : {}),
+      }
+    })
   },
   setWorkerBody: message => set(state => ({
     workerBodies: {
