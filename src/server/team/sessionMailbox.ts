@@ -92,6 +92,9 @@ export class SessionMailbox {
         if (options.getRecord(mail.claimedBy)) options.watchReceipt(mail.claimedBy)
       },
       onError: options.onError,
+      // Nothing dispatches before start(): receipt recovery and the
+      // killed-recipient sweep need every restored record first.
+      held: true,
     })
   }
 
@@ -109,7 +112,7 @@ export class SessionMailbox {
     }
   }
 
-  /** Start only after persisted chat records are restored. */
+  /** Start only after persisted chat records are restored; dispatch is held until then. */
   start() {
     const store = this.mailbox.store
     reconcileMailbox(store, this.options.transcriptFor)
@@ -123,6 +126,7 @@ export class SessionMailbox {
       this.options.onChange?.(team, message)
       this.dispatcher.notify()
     })
+    this.dispatcher.release()
     this.dispatcher.notify()
   }
 

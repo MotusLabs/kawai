@@ -33,6 +33,8 @@ beforeEach(async () => {
     getDriver: id => ({ getPendingRequests: () => [], deliver: () => { records.get(id)!.status = 'working' } }) as unknown as ChatSessionDriver,
     prepare: async () => {}, restore: () => {}, watchReceipt: () => {}, transcriptFor: () => file, onError: error => { throw error },
   })
+  // These tests drive dispatch directly, without start()'s recovery pass.
+  runtime.dispatcher.release()
 })
 afterEach(() => { runtime.close(); db.close(); fs.rmSync(dir, { recursive: true, force: true }) })
 const mail = () => runtime.mailbox.store.enqueue({ teamId: dir, toKind: 'group', toId: 'devs', fromSession: 'lead', fromGroup: 'leads', originPath: dir, body: 'Work' })

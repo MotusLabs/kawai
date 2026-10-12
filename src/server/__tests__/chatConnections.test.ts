@@ -19,6 +19,8 @@ function harness(wireLogs?: ChatWireLogs) {
   let pending = true
   const manager = {
     isArchived: (_id: string) => false,
+    whenRestored: () => Promise.resolve(),
+    loadHistory: async () => {},
     has: (id: string) => id === 'chat-1' || id === 'chat-2' || id === 'chat-3',
     profileIdOf: (id: string) => (id === 'chat-2' ? 'glm' : 'default'),
     getSnapshot: (id: string) =>

@@ -840,10 +840,13 @@ const chatSessionManager = new ChatSessionManager({
   ...(chatFixtureEnabled ? { queryFactory: fixtureQueryFactory, authCheck: () => true } : {}),
 })
 const chatConnections = new ChatConnections(chatSessionManager, chatWireLogs, message => broadcast(message))
-if (chatFixtureEnabled && !registry.getAll().some(session => session.name === 'Chat fixture')) {
+// Restore is async (async-transcript-parsing D2): check for the fixture once
+// the persisted rows are in, or every restart would add another one.
+void chatSessionManager.whenRestored().then(() => {
+  if (!chatFixtureEnabled || registry.getAll().some(session => session.name === 'Chat fixture')) return
   const fixture = chatSessionManager.createSession({ projectPath: process.cwd(), name: 'Chat fixture' })
   if (fixture.ok) void chatSessionManager.send(fixture.session.id, 'Show an approval')
-}
+})
 const chatPeers = new WeakMap<ServerWebSocket<WSData>, ChatConnection>()
 function chatPeer(ws: ServerWebSocket<WSData>): ChatConnection {
   let peer = chatPeers.get(ws)

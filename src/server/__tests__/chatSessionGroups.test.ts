@@ -115,6 +115,7 @@ describe('chat session groups', () => {
     const restarted = new ChatSessionManager({
       db, registry, onEvent: () => {}, profileCatalogHome: home,
     })
+    await restarted.whenRestored()
     expect(registry.get(result.session.id)?.groupId).toBe('devs')
     restarted.shutdown()
   })

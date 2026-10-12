@@ -16,6 +16,8 @@ beforeEach(() => {
   connection = { send: message => messages.push(message) }
   const manager = {
     has: (id: string) => id === 'dev',
+    whenRestored: () => Promise.resolve(),
+    loadHistory: async () => {},
     teams: { teamOf: () => ({ teamId: 'team' }), resolvedTeamOf: async () => ({ teamId: 'team' }) },
     mailbox: { store }, dispatcher: { notify: () => {} },
     getSnapshot: () => ({ type: 'chat-snapshot', sessionId: 'dev', events: [], pendingRequests: [] }),
@@ -81,7 +83,7 @@ test('global hop-limit notifier works without a selected chat', () => {
 test('close during asynchronous team resolution cannot resurrect a subscription', async () => {
   let resolve!: (team: { teamId: string }) => void
   const manager = {
-    has: () => true, teams: { resolvedTeamOf: () => new Promise<{ teamId: string }>(done => { resolve = done }) },
+    has: () => true, whenRestored: () => Promise.resolve(), teams: { resolvedTeamOf: () => new Promise<{ teamId: string }>(done => { resolve = done }) },
     mailbox: { store },
   } as unknown as ChatSessionManager
   const pendingConnections = new ChatConnections(manager)

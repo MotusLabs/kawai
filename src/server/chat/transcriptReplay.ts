@@ -468,25 +468,7 @@ export function replayTranscriptFile(
     const code = (error as NodeJS.ErrnoException).code
     return historyUnavailable(code === 'ENOENT' ? 'missing' : 'unparseable')
   }
-  try {
-    const parsed = parseTranscriptContent(content)
-    // Content that produced no events at all but failed to parse is a parser
-    // failure; an empty or bookkeeping-only file is simply an empty history.
-    if (parsed.events.length === 0 && parsed.invalidLines > 0) {
-      return historyUnavailable('unparseable')
-    }
-    return {
-      status: 'ok',
-      events: withCancelledRequests(
-        parsed.events,
-        parsed.unmatchedToolCallIds,
-        options
-      ),
-      cwd: parsed.cwd,
-    }
-  } catch {
-    return historyUnavailable('unparseable')
-  }
+  return replayContent(content, options)
 }
 
 /**
@@ -606,6 +588,14 @@ export async function replayTranscriptFileAsync(
     const code = (error as NodeJS.ErrnoException).code
     return historyUnavailable(code === 'ENOENT' ? 'missing' : 'unparseable')
   }
+  return replayContent(content, options)
+}
+
+/** The parse shared by the sync and async file replays. */
+function replayContent(
+  content: string,
+  options?: { excludeToolCallIds?: Set<string> }
+): TranscriptReplay {
   try {
     const parsed = parseTranscriptContent(content)
     // Content that produced no events at all but failed to parse is a parser

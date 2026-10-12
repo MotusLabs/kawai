@@ -56,8 +56,11 @@ type FakeContextControl = (opts: {
 }) => Promise<unknown>
 
 const testManagers = new Set<ChatSessionManager>()
-function managedManager(options: ConstructorParameters<typeof ChatSessionManager>[0]) {
+async function managedManager(options: ConstructorParameters<typeof ChatSessionManager>[0]) {
   const manager = new ChatSessionManager(options)
+  // Restore is async (async-transcript-parsing design D2): block until the
+  // persisted rows are in, matching the pre-change synchronous constructor.
+  await manager.whenRestored()
   testManagers.add(manager)
   return manager
 }
@@ -162,7 +165,7 @@ interface ManagerHarness {
   refreshes: string[]
 }
 
-function createHarness(
+async function createHarness(
   db: SessionDatabase,
   isDirectory: (path: string) => boolean = anyDirectory,
   usageImpl?: FakeUsageControl,
@@ -170,7 +173,7 @@ function createHarness(
   contextImpl?: FakeContextControl,
   cwdRefreshDebounceMs?: number,
   workerStore?: ChatWorkerStore
-): ManagerHarness {
+): Promise<ManagerHarness> {
   const registry = new SessionRegistry()
   const handles: FakeHandle[] = []
   const events: Array<{ sessionId: string; event: ChatEvent }> = []
@@ -179,7 +182,7 @@ function createHarness(
   const usage: Array<{ profileId: string; report: ChatUsageReport | null }> = []
   const workers: Array<{ sessionId: string; workers: ChatWorker[] }> = []
   const refreshes: string[] = []
-  const manager = managedManager({
+  const manager = await managedManager({
     isDirectory,
     registry,
     db,
@@ -374,7 +377,7 @@ describe('ChatSessionManager', () => {
 
   test('profiles persist, retain metadata, reject unknown IDs, and restore the SDK conversation', async () => {
     process.env.ANTHROPIC_API_KEY = 'test-key'
-    const first = createHarness(db)
+    const first = await createHarness(db)
     expect(first.manager.createSession({ projectPath: '/tmp/proj', claudeProfileId: 'unknown' }).ok).toBe(false)
     expect(db.getChatSessions()).toEqual([])
     expect(first.registry.getAll()).toEqual([])
@@ -388,7 +391,7 @@ describe('ChatSessionManager', () => {
     await flush()
     writeTranscript('profile-conversation', JSON.stringify({ type: 'user', message: { role: 'user', content: 'first' } }))
     first.manager.shutdown()
-    const restored = createHarness(db)
+    const restored = await createHarness(db)
     expect(restored.registry.get(id)?.claudeProfileId).toBe('glm')
     expect((await restored.manager.send(id, 'resume')).ok).toBe(true)
     expect(restored.handles[0]!.options.resume).toBe('profile-conversation')
@@ -396,7 +399,7 @@ describe('ChatSessionManager', () => {
     expect(restored.handles[0]!.options.env?.ANTHROPIC_BASE_URL).toBe('https://zai.ruslan.casa/api/anthropic')
     restored.manager.shutdown()
     db.updateChatSession(id, { claudeProfileId: 'removed-profile' })
-    const unknown = createHarness(db)
+    const unknown = await createHarness(db)
     expect(unknown.registry.get(id)?.claudeProfileId).toBe('removed-profile')
     const result = await unknown.manager.send(id, 'resume')
     expect(result.ok).toBe(false)
@@ -406,9 +409,9 @@ describe('ChatSessionManager', () => {
     unknown.manager.shutdown()
   })
 
-  test('create-time approval policy: supplied policy sticks, absent means manual, profiles leave it unchanged', () => {
+  test('create-time approval policy: supplied policy sticks, absent means manual, profiles leave it unchanged', async () => {
     process.env.ANTHROPIC_API_KEY = 'test-key'
-    const { manager, registry } = createHarness(db)
+    const { manager, registry } = await createHarness(db)
 
     // A supplied policy is stored on the session, registry, and DB row.
     const auto = manager.createSession({ projectPath: '/tmp/proj', approvalPolicy: 'auto' })
@@ -443,7 +446,7 @@ describe('ChatSessionManager', () => {
     fs.writeFileSync(catalogFile, JSON.stringify({
       'glm-flash': { label: 'GLM Flash', model: 'glm-5.3-flash[1m]' },
     }))
-    const first = createHarness(db)
+    const first = await createHarness(db)
     const created = first.manager.createSession({ projectPath: project, claudeProfileId: 'glm-flash' })
     expect(created.ok).toBe(true)
     await first.manager.send(created.ok ? created.session.id : '', 'first turn')
@@ -453,7 +456,7 @@ describe('ChatSessionManager', () => {
     // The defining file is gone after a restart: the session survives with
     // its stored identity, and sending reports the missing profile.
     fs.rmSync(catalogFile)
-    const restored = createHarness(db)
+    const restored = await createHarness(db)
     const result = await restored.manager.send(created.ok ? created.session.id : '', 'resume')
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.error).toContain('glm-flash')
@@ -468,7 +471,7 @@ describe('ChatSessionManager', () => {
     const badFile = path.join(project, '.kawai', 'profiles.json')
     fs.writeFileSync(badFile, '{ not json')
     const reported: string[][] = []
-    const manager = managedManager({
+    const manager = await managedManager({
       isDirectory: anyDirectory,
       db, registry: new SessionRegistry(), onEvent: () => {},
       queryFactory: fakeQueryFactory([]),
@@ -488,7 +491,7 @@ describe('ChatSessionManager', () => {
     let globalEnv = { ANTHROPIC_AUTH_TOKEN: 'global-token' }
     const registry = new SessionRegistry()
     const handles: FakeHandle[] = []
-    const manager = managedManager({ isDirectory: anyDirectory, db, registry, onEvent: () => {}, queryFactory: fakeQueryFactory(handles), getProviderEnv: () => globalEnv })
+    const manager = await managedManager({ isDirectory: anyDirectory, db, registry, onEvent: () => {}, queryFactory: fakeQueryFactory(handles), getProviderEnv: () => globalEnv })
     for (const profile of ['glm', 'minimax', 'kimi']) {
       const result = manager.createSession({ projectPath: '/tmp/proj', claudeProfileId: profile })
       expect(result.ok).toBe(true)
@@ -511,7 +514,7 @@ describe('ChatSessionManager', () => {
     let globalEnv = { ANTHROPIC_AUTH_TOKEN: 'global-token' }
     const launches: ClaudeLaunchConfiguration[] = []
     let fail = false
-    const manager = managedManager({ isDirectory: anyDirectory, db, registry: new SessionRegistry(), onEvent: () => {}, getProviderEnv: () => globalEnv,
+    const manager = await managedManager({ isDirectory: anyDirectory, db, registry: new SessionRegistry(), onEvent: () => {}, getProviderEnv: () => globalEnv,
       availabilityProbe: async (_env, launch) => { launches.push(launch!); if (fail) throw new Error('failed') },
     })
     const create = (claudeProfileId: string) => manager.createAvailableSession({ projectPath: '/tmp/proj', claudeProfileId })
@@ -538,7 +541,7 @@ describe('ChatSessionManager', () => {
       process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'
       let probes = 0
       const registry = new SessionRegistry()
-      const manager = managedManager({
+      const manager = await managedManager({
         isDirectory: anyDirectory,
         db, registry, onEvent: () => {},
         availabilityProbe: async () => { probes++; throw new Error('broken runtime') },
@@ -561,7 +564,7 @@ describe('ChatSessionManager', () => {
       process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'
       let providerEnv: Record<string, string> = { ANTHROPIC_BASE_URL: 'https://broken.example' }
       const probed: string[] = []
-      const manager = managedManager({
+      const manager = await managedManager({
         isDirectory: anyDirectory,
         db, registry: new SessionRegistry(), onEvent: () => {},
         availabilityProbe: async (env) => {
@@ -580,7 +583,7 @@ describe('ChatSessionManager', () => {
       process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'
       let providerEnv: Record<string, string> = { A: '1', B: '2' }
       let probes = 0
-      const manager = managedManager({
+      const manager = await managedManager({
         isDirectory: anyDirectory,
         db, registry: new SessionRegistry(), onEvent: () => {},
         availabilityProbe: async () => { probes++ },
@@ -599,7 +602,7 @@ describe('ChatSessionManager', () => {
       process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'
       let probes = 0
       let release!: () => void
-      const manager = managedManager({
+      const manager = await managedManager({
         isDirectory: anyDirectory,
         db, registry: new SessionRegistry(), onEvent: () => {},
         availabilityProbe: () => { probes++; return new Promise<void>((resolve) => { release = resolve }) },
@@ -618,7 +621,7 @@ describe('ChatSessionManager', () => {
       process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'
       let probes = 0
       const registry = new SessionRegistry()
-      const manager = managedManager({
+      const manager = await managedManager({
         isDirectory: anyDirectory,
         db, registry, onEvent: () => {},
         availabilityProbe: async () => { probes++ },
@@ -627,8 +630,8 @@ describe('ChatSessionManager', () => {
       expect((await manager.createAvailableSession({ projectPath: '/tmp/proj' })).ok).toBe(true)
       expect(probes).toBe(1)
     })
-    test('refuses creation with an actionable error when no auth exists', () => {
-      const { manager, registry } = createHarness(db)
+    test('refuses creation with an actionable error when no auth exists', async () => {
+      const { manager, registry } = await createHarness(db)
       const result = manager.createSession({ projectPath: '/tmp/proj' })
 
       expect(result.ok).toBe(false)
@@ -642,16 +645,16 @@ describe('ChatSessionManager', () => {
       expect(hasClaudeAuth()).toBe(false)
     })
 
-    test('accepts ANTHROPIC_API_KEY from the environment', () => {
+    test('accepts ANTHROPIC_API_KEY from the environment', async () => {
       process.env.ANTHROPIC_API_KEY = 'sk-test-key'
       expect(hasClaudeAuth()).toBe(true)
-      const { manager } = createHarness(db)
+      const { manager } = await createHarness(db)
       expect(manager.createSession({ projectPath: '/tmp/proj' }).ok).toBe(true)
     })
 
-    test('accepts an OAuth token from the environment', () => {
+    test('accepts an OAuth token from the environment', async () => {
       process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'
-      const { manager } = createHarness(db)
+      const { manager } = await createHarness(db)
       expect(hasClaudeAuth()).toBe(true)
       expect(manager.createSession({ projectPath: '/tmp/proj' }).ok).toBe(true)
     })
@@ -675,9 +678,9 @@ describe('ChatSessionManager', () => {
       expect(hasClaudeAuth({ CLAUDE_CONFIG_DIR: providerConfig })).toBe(true)
     })
 
-    test('a credential supplied only by getProviderEnv allows creation', () => {
+    test('a credential supplied only by getProviderEnv allows creation', async () => {
       const registry = new SessionRegistry()
-      const manager = managedManager({
+      const manager = await managedManager({
         isDirectory: anyDirectory,
         db, registry, onEvent: () => {},
         queryFactory: fakeQueryFactory([]),
@@ -689,7 +692,7 @@ describe('ChatSessionManager', () => {
     test('the availability probe runs under the provider environment', async () => {
       process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'
       const probed: Array<Record<string, string>> = []
-      const manager = managedManager({
+      const manager = await managedManager({
         isDirectory: anyDirectory,
         db, registry: new SessionRegistry(), onEvent: () => {},
         availabilityProbe: async (providerEnv) => { probed.push(providerEnv) },
@@ -699,19 +702,19 @@ describe('ChatSessionManager', () => {
       expect(probed).toEqual([{ ANTHROPIC_BASE_URL: 'https://gw.example/a' }])
     })
 
-    test('rejects a blank OAuth token', () => {
+    test('rejects a blank OAuth token', async () => {
       process.env.CLAUDE_CODE_OAUTH_TOKEN = '   '
       expect(hasClaudeAuth()).toBe(false)
     })
 
-    test('accepts CLI credentials under CLAUDE_CONFIG_DIR', () => {
+    test('accepts CLI credentials under CLAUDE_CONFIG_DIR', async () => {
       fs.mkdirSync(process.env.CLAUDE_CONFIG_DIR!, { recursive: true })
       fs.writeFileSync(
         path.join(process.env.CLAUDE_CONFIG_DIR!, '.credentials.json'),
         '{}'
       )
       expect(hasClaudeAuth()).toBe(true)
-      const { manager } = createHarness(db)
+      const { manager } = await createHarness(db)
       expect(manager.createSession({ projectPath: '/tmp/proj' }).ok).toBe(true)
     })
   })
@@ -720,7 +723,7 @@ describe('ChatSessionManager', () => {
     test('refuses creation with the executable error verbatim and persists nothing', async () => {
       process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'
       const registry = new SessionRegistry()
-      const manager = managedManager({
+      const manager = await managedManager({
         isDirectory: anyDirectory,
         db, registry, onEvent: () => {},
         executableCheck: () => Promise.reject(
@@ -736,7 +739,7 @@ describe('ChatSessionManager', () => {
     test('creation re-checks after an executable failure and recovers', async () => {
       process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'
       let checks = 0
-      const manager = managedManager({
+      const manager = await managedManager({
         isDirectory: anyDirectory,
         db, registry: new SessionRegistry(), onEvent: () => {},
         availabilityProbe: async () => {},
@@ -757,7 +760,7 @@ describe('ChatSessionManager', () => {
       let probes = 0
       const probedPaths: Array<string | undefined> = []
       let identity = 'id-1'
-      const manager = managedManager({
+      const manager = await managedManager({
         isDirectory: anyDirectory,
         db, registry: new SessionRegistry(), onEvent: () => {},
         executableCheck: async () => {
@@ -789,9 +792,9 @@ describe('ChatSessionManager', () => {
 
     test('a send after the executable disappears is refused with the record intact', async () => {
       process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'
-      const { manager, handles } = createHarness(db)
+      const { manager, handles } = await createHarness(db)
       let available = true
-      const gated = managedManager({
+      const gated = await managedManager({
         isDirectory: anyDirectory,
         db, registry: new SessionRegistry(), onEvent: () => {},
         queryFactory: fakeQueryFactory(handles),
@@ -823,7 +826,7 @@ describe('ChatSessionManager', () => {
       process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'
       const handles: FakeHandle[] = []
       let current = '/old/claude'
-      const manager = managedManager({
+      const manager = await managedManager({
         isDirectory: anyDirectory,
         db, registry: new SessionRegistry(), onEvent: () => {},
         queryFactory: fakeQueryFactory(handles),
@@ -848,7 +851,7 @@ describe('ChatSessionManager', () => {
       const original = process.env.KAWAI_CLAUDE_PATH
       process.env.KAWAI_CLAUDE_PATH = '/nonexistent-claude'
       try {
-        const { manager } = createHarness(db)
+        const { manager } = await createHarness(db)
         const result = await manager.createAvailableSession({ projectPath: '/tmp/proj' })
         expect(result.ok).toBe(true)
       } finally {
@@ -862,7 +865,7 @@ describe('ChatSessionManager', () => {
     process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'
     let providerEnv: Record<string, string> = { ANTHROPIC_BASE_URL: 'https://gw.example/a' }
     const handles: FakeHandle[] = []
-    const manager = managedManager({
+    const manager = await managedManager({
       isDirectory: anyDirectory,
       db, registry: new SessionRegistry(), onEvent: () => {},
       queryFactory: fakeQueryFactory(handles),
@@ -884,7 +887,7 @@ describe('ChatSessionManager', () => {
 
   test('without provider env the SDK spawn omits env', async () => {
     process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'
-    const { manager, handles } = createHarness(db)
+    const { manager, handles } = await createHarness(db)
     const created = manager.createSession({ projectPath: '/tmp/proj' })
     if (!created.ok) throw new Error('create failed')
     await manager.send(created.session.id, 'hello')
@@ -896,7 +899,7 @@ describe('ChatSessionManager', () => {
     process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'
     const wireLogs = new ChatWireLogs({ dir: path.join(tempDir, 'chat-wire') })
     const handles: FakeHandle[] = []
-    const manager = managedManager({
+    const manager = await managedManager({
       isDirectory: anyDirectory,
       db, registry: new SessionRegistry(), onEvent: () => {},
       queryFactory: fakeQueryFactory(handles), wireLogs,
@@ -921,7 +924,7 @@ describe('ChatSessionManager', () => {
   test('startup prunes wire logs of sessions that no longer exist', async () => {
     process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'
     const dir = path.join(tempDir, 'chat-wire')
-    const first = managedManager({ isDirectory: anyDirectory, db, registry: new SessionRegistry(), onEvent: () => {} })
+    const first = await managedManager({ isDirectory: anyDirectory, db, registry: new SessionRegistry(), onEvent: () => {} })
     const kept = first.createSession({ projectPath: '/tmp/proj' })
     if (!kept.ok) throw new Error('create failed')
     const seed = new ChatWireLogs({ dir })
@@ -939,7 +942,7 @@ describe('ChatSessionManager', () => {
 
   test('without wire logs the SDK spawns its own process', async () => {
     process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'
-    const { manager, handles } = createHarness(db)
+    const { manager, handles } = await createHarness(db)
     const created = manager.createSession({ projectPath: '/tmp/proj' })
     if (!created.ok) throw new Error('create failed')
     await manager.send(created.session.id, 'hello')
@@ -947,9 +950,9 @@ describe('ChatSessionManager', () => {
     manager.kill(created.session.id)
   })
 
-  test('create registers a chat session and persists a row', () => {
+  test('create registers a chat session and persists a row', async () => {
     process.env.ANTHROPIC_API_KEY = 'sk-test-key'
-    const { manager, registry } = createHarness(db)
+    const { manager, registry } = await createHarness(db)
     const result = manager.createSession({
       projectPath: '/tmp/proj',
       name: 'delta',
@@ -988,7 +991,7 @@ describe('ChatSessionManager', () => {
 
   test('reconnect snapshots retain unfinished output and live pending requests without duplicating disk events', async () => {
     process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'
-    const { manager, handles } = createHarness(db)
+    const { manager, handles } = await createHarness(db)
     const created = manager.createSession({ projectPath: '/tmp/proj' })
     if (!created.ok) throw new Error('create failed')
     const id = created.session.id
@@ -1019,7 +1022,7 @@ describe('ChatSessionManager', () => {
   describe('start on attach', () => {
     test('starts the agent without a prompt; sends reuse the same driver', async () => {
       process.env.ANTHROPIC_API_KEY = 'sk-test-key'
-      const { manager, handles, events } = createHarness(db)
+      const { manager, handles, events } = await createHarness(db)
       const created = manager.createSession({ projectPath: '/tmp/proj' })
       if (!created.ok) throw new Error('create failed')
       const sessionId = created.session.id
@@ -1038,7 +1041,7 @@ describe('ChatSessionManager', () => {
 
     test('start is refused for archived sessions and starts nothing', async () => {
       process.env.ANTHROPIC_API_KEY = 'sk-test-key'
-      const { manager, handles } = createHarness(db)
+      const { manager, handles } = await createHarness(db)
       const created = manager.createSession({ projectPath: '/tmp/proj' })
       if (!created.ok) throw new Error('create failed')
       manager.archive(created.session.id)
@@ -1052,7 +1055,7 @@ describe('ChatSessionManager', () => {
     test('start is refused when the project directory is missing', async () => {
       process.env.ANTHROPIC_API_KEY = 'sk-test-key'
       let exists = true
-      const { manager, handles } = createHarness(db, () => exists)
+      const { manager, handles } = await createHarness(db, () => exists)
       const created = manager.createSession({ projectPath: '/tmp/proj' })
       if (!created.ok) throw new Error('create failed')
       exists = false
@@ -1066,7 +1069,7 @@ describe('ChatSessionManager', () => {
       process.env.ANTHROPIC_API_KEY = 'sk-test-key'
       const dbPath = path.join(tempDir, 'start-ghost.db')
       const dbA = initDatabase({ path: dbPath })
-      const harnessA = createHarness(dbA)
+      const harnessA = await createHarness(dbA)
       const created = harnessA.manager.createSession({ projectPath: '/tmp/proj' })
       if (!created.ok) throw new Error('create failed')
       const sessionId = created.session.id
@@ -1079,7 +1082,7 @@ describe('ChatSessionManager', () => {
       // Restart with no transcript on disk: attach must not silently start a
       // fresh conversation under the stored id.
       const dbB = initDatabase({ path: dbPath })
-      const harnessB = createHarness(dbB)
+      const harnessB = await createHarness(dbB)
       const result = await harnessB.manager.start(sessionId)
       expect(result.ok).toBe(false)
       if (!result.ok) expect(result.error).toContain('sdk-start-ghost')
@@ -1090,7 +1093,7 @@ describe('ChatSessionManager', () => {
 
     test('concurrent start and send share one driver', async () => {
       process.env.ANTHROPIC_API_KEY = 'sk-test-key'
-      const { manager, handles } = createHarness(db)
+      const { manager, handles } = await createHarness(db)
       const created = manager.createSession({ projectPath: '/tmp/proj' })
       if (!created.ok) throw new Error('create failed')
       const sessionId = created.session.id
@@ -1113,7 +1116,7 @@ describe('ChatSessionManager', () => {
         if (broken) throw new Error('spawn exploded')
         return fakeQueryFactory(handles)(params)
       }
-      const manager = managedManager({
+      const manager = await managedManager({
         isDirectory: anyDirectory,
         db, registry,
         onEvent: (sessionId, event) => events.push({ sessionId, event }),
@@ -1145,7 +1148,7 @@ describe('ChatSessionManager', () => {
       const handles: FakeHandle[] = []
       const events: Array<{ sessionId: string; event: ChatEvent }> = []
       const commandStates: Array<{ sessionId: string; status: string }> = []
-      const manager = managedManager({
+      const manager = await managedManager({
         isDirectory: anyDirectory,
         db, registry,
         onEvent: (sessionId, event) => events.push({ sessionId, event }),
@@ -1190,7 +1193,7 @@ describe('ChatSessionManager', () => {
       process.env.ANTHROPIC_API_KEY = 'sk-test-key'
       const registry = new SessionRegistry()
       const commandStates: string[] = []
-      const manager = managedManager({
+      const manager = await managedManager({
         isDirectory: anyDirectory,
         db, registry,
         onEvent: () => {},
@@ -1209,7 +1212,7 @@ describe('ChatSessionManager', () => {
 
   test('first send lazily spawns the driver and persists sdkSessionId immediately', async () => {
     process.env.ANTHROPIC_API_KEY = 'sk-test-key'
-    const { manager, registry, handles, events } = createHarness(db)
+    const { manager, registry, handles, events } = await createHarness(db)
     const created = manager.createSession({ projectPath: '/tmp/proj' })
     if (!created.ok) throw new Error('create failed')
     const sessionId = created.session.id
@@ -1237,7 +1240,7 @@ describe('ChatSessionManager', () => {
 
   test('kill denies pending approvals, removes session and row, ignores later sends', async () => {
     process.env.ANTHROPIC_API_KEY = 'sk-test-key'
-    const { manager, registry, handles } = createHarness(db)
+    const { manager, registry, handles } = await createHarness(db)
     const created = manager.createSession({ projectPath: '/tmp/proj' })
     if (!created.ok) throw new Error('create failed')
     const sessionId = created.session.id
@@ -1278,7 +1281,7 @@ describe('ChatSessionManager', () => {
       const registry = new SessionRegistry()
       const updates: Array<Session | undefined> = []
       registry.on('session-update', (session) => updates.push(session))
-      const manager = managedManager({
+      const manager = await managedManager({
         isDirectory: anyDirectory,
         db, registry, onEvent: () => {},
         queryFactory: fakeQueryFactory(handles), wireLogs,
@@ -1311,7 +1314,7 @@ describe('ChatSessionManager', () => {
 
     test('archiving an in-flight turn cancels pending requests and reports them to subscribers', async () => {
       process.env.ANTHROPIC_API_KEY = 'sk-test-key'
-      const { manager, handles, events, registry } = createHarness(db)
+      const { manager, handles, events, registry } = await createHarness(db)
       const created = manager.createSession({ projectPath: '/tmp/proj' })
       if (!created.ok) throw new Error('create failed')
       const sessionId = created.session.id
@@ -1349,7 +1352,7 @@ describe('ChatSessionManager', () => {
 
     test('send to an archived session is refused and starts no driver', async () => {
       process.env.ANTHROPIC_API_KEY = 'sk-test-key'
-      const { manager, handles } = createHarness(db)
+      const { manager, handles } = await createHarness(db)
       const created = manager.createSession({ projectPath: '/tmp/proj' })
       if (!created.ok) throw new Error('create failed')
       const sessionId = created.session.id
@@ -1364,7 +1367,7 @@ describe('ChatSessionManager', () => {
 
     test('a driver import racing archive never starts the process', async () => {
       process.env.ANTHROPIC_API_KEY = 'sk-test-key'
-      const { manager, handles } = createHarness(db)
+      const { manager, handles } = await createHarness(db)
       const created = manager.createSession({ projectPath: '/tmp/proj' })
       if (!created.ok) throw new Error('create failed')
       const sessionId = created.session.id
@@ -1385,7 +1388,7 @@ describe('ChatSessionManager', () => {
 
     test('restore clears archived_at and the next send resumes the stored conversation', async () => {
       process.env.ANTHROPIC_API_KEY = 'sk-test-key'
-      const { manager, handles, registry } = createHarness(db)
+      const { manager, handles, registry } = await createHarness(db)
       const created = manager.createSession({ projectPath: '/tmp/proj' })
       if (!created.ok) throw new Error('create failed')
       const sessionId = created.session.id
@@ -1411,7 +1414,7 @@ describe('ChatSessionManager', () => {
       process.env.ANTHROPIC_API_KEY = 'sk-test-key'
       const wireLogs = new ChatWireLogs({ dir: path.join(tempDir, 'chat-wire') })
       const handles: FakeHandle[] = []
-      const managerA = managedManager({
+      const managerA = await managedManager({
         isDirectory: anyDirectory,
         db, registry: new SessionRegistry(), onEvent: () => {},
         queryFactory: fakeQueryFactory(handles), wireLogs,
@@ -1431,7 +1434,7 @@ describe('ChatSessionManager', () => {
       // "Restart": fresh registry and manager on the same database and logs.
       const handlesB: FakeHandle[] = []
       const registryB = new SessionRegistry()
-      const managerB = managedManager({
+      const managerB = await managedManager({
         isDirectory: anyDirectory,
         db, registry: registryB, onEvent: () => {},
         queryFactory: fakeQueryFactory(handlesB), wireLogs,
@@ -1456,9 +1459,9 @@ describe('ChatSessionManager', () => {
       managerB.shutdown()
     })
 
-    test('archive and restore on unknown sessions return actionable errors', () => {
+    test('archive and restore on unknown sessions return actionable errors', async () => {
       process.env.ANTHROPIC_API_KEY = 'sk-test-key'
-      const { manager } = createHarness(db)
+      const { manager } = await createHarness(db)
       expect(manager.archive('chat-none')).toEqual({
         ok: false,
         error: 'Unknown chat session chat-none',
@@ -1472,7 +1475,7 @@ describe('ChatSessionManager', () => {
 
   test('actions on unknown sessions and idle sessions return actionable errors', async () => {
     process.env.ANTHROPIC_API_KEY = 'sk-test-key'
-    const { manager } = createHarness(db)
+    const { manager } = await createHarness(db)
     expect(manager.interrupt('chat-none')).toMatchObject({ ok: false })
     await expect(manager.send('chat-none', 'x')).resolves.toMatchObject({
       ok: false,
@@ -1500,7 +1503,7 @@ describe('ChatSessionManager', () => {
 
   test('shutdown settles drivers without removing sessions', async () => {
     process.env.ANTHROPIC_API_KEY = 'sk-test-key'
-    const { manager, registry, handles } = createHarness(db)
+    const { manager, registry, handles } = await createHarness(db)
     const created = manager.createSession({ projectPath: '/tmp/proj' })
     if (!created.ok) throw new Error('create failed')
     await manager.send(created.session.id, 'hi')
@@ -1513,11 +1516,11 @@ describe('ChatSessionManager', () => {
   })
 
   describe('project directory', () => {
-    test('creation refuses a path that is not an existing directory, with no side effects', () => {
+    test('creation refuses a path that is not an existing directory, with no side effects', async () => {
       process.env.ANTHROPIC_API_KEY = 'sk-test-key'
       const registry = new SessionRegistry()
       // No isDirectory override: the real filesystem check runs.
-      const manager = managedManager({ db, registry, onEvent: () => {} })
+      const manager = await managedManager({ db, registry, onEvent: () => {} })
       const file = path.join(tempDir, 'file.txt')
       fs.writeFileSync(file, '')
       for (const projectPath of [
@@ -1535,10 +1538,10 @@ describe('ChatSessionManager', () => {
       expect(manager.createSession({ projectPath: `  ${tempDir}  ` }).ok).toBe(true)
     })
 
-    test('a home-relative path is checked and stored as an absolute path', () => {
+    test('a home-relative path is checked and stored as an absolute path', async () => {
       process.env.ANTHROPIC_API_KEY = 'sk-test-key'
       const checked: string[] = []
-      const { manager } = createHarness(db, (dir) => {
+      const { manager } = await createHarness(db, (dir) => {
         checked.push(dir)
         return true
       })
@@ -1553,7 +1556,7 @@ describe('ChatSessionManager', () => {
     test('availability-checked creation refuses a missing directory before probing', async () => {
       process.env.ANTHROPIC_API_KEY = 'sk-test-key'
       let probes = 0
-      const manager = managedManager({
+      const manager = await managedManager({
         isDirectory: () => false,
         db, registry: new SessionRegistry(), onEvent: () => {},
         availabilityProbe: async () => { probes++ },
@@ -1569,7 +1572,7 @@ describe('ChatSessionManager', () => {
     test('send refuses to spawn when the directory disappeared, keeping the session', async () => {
       process.env.ANTHROPIC_API_KEY = 'sk-test-key'
       let exists = true
-      const { manager, registry, handles, events } = createHarness(db, () => exists)
+      const { manager, registry, handles, events } = await createHarness(db, () => exists)
       const created = manager.createSession({ projectPath: '/tmp/proj' })
       if (!created.ok) throw new Error('create failed')
       const sessionId = created.session.id
@@ -1596,7 +1599,7 @@ describe('ChatSessionManager', () => {
     test('a live driver is not blocked by the check; a crashed one is', async () => {
       process.env.ANTHROPIC_API_KEY = 'sk-test-key'
       let exists = true
-      const { manager, handles } = createHarness(db, () => exists)
+      const { manager, handles } = await createHarness(db, () => exists)
       const created = manager.createSession({ projectPath: '/tmp/proj' })
       if (!created.ok) throw new Error('create failed')
       const sessionId = created.session.id
@@ -1617,9 +1620,9 @@ describe('ChatSessionManager', () => {
   })
 
   describe('rename', () => {
-    test('rename reaches db, registry, and the session-update broadcast as manual', () => {
+    test('rename reaches db, registry, and the session-update broadcast as manual', async () => {
       process.env.ANTHROPIC_API_KEY = 'sk-test-key'
-      const { manager, registry } = createHarness(db)
+      const { manager, registry } = await createHarness(db)
       const created = manager.createSession({ projectPath: '/tmp/proj' })
       if (!created.ok) throw new Error('create failed')
       const sessionId = created.session.id
@@ -1645,9 +1648,9 @@ describe('ChatSessionManager', () => {
       expect(updates[0]?.nameSource).toBe('manual')
     })
 
-    test('rename is a claim: provenance becomes manual even when the name is unchanged', () => {
+    test('rename is a claim: provenance becomes manual even when the name is unchanged', async () => {
       process.env.ANTHROPIC_API_KEY = 'sk-test-key'
-      const { manager, registry } = createHarness(db)
+      const { manager, registry } = await createHarness(db)
       const created = manager.createSession({ projectPath: '/tmp/proj' })
       if (!created.ok) throw new Error('create failed')
       const sessionId = created.session.id
@@ -1660,9 +1663,9 @@ describe('ChatSessionManager', () => {
       expect(db.getChatSession(sessionId)?.nameSource).toBe('manual')
     })
 
-    test('rename refuses an empty name and an unknown session', () => {
+    test('rename refuses an empty name and an unknown session', async () => {
       process.env.ANTHROPIC_API_KEY = 'sk-test-key'
-      const { manager } = createHarness(db)
+      const { manager } = await createHarness(db)
       const created = manager.createSession({ projectPath: '/tmp/proj' })
       if (!created.ok) throw new Error('create failed')
 
@@ -1684,7 +1687,7 @@ describe('ChatSessionManager', () => {
   describe('cwd tracking', () => {
     test('a cwd move patches the stored path, republishes it, and skips no-ops', async () => {
       process.env.ANTHROPIC_API_KEY = 'sk-test-key'
-      const harness = createHarness(db)
+      const harness = await createHarness(db)
       const created = harness.manager.createSession({ projectPath: '/tmp/proj' })
       if (!created.ok) throw new Error('create failed')
       const sessionId = created.session.id
@@ -1714,7 +1717,7 @@ describe('ChatSessionManager', () => {
 
     test('a respawn after the move resumes in the new directory', async () => {
       process.env.ANTHROPIC_API_KEY = 'sk-test-key'
-      const harness = createHarness(db)
+      const harness = await createHarness(db)
       const created = harness.manager.createSession({ projectPath: '/tmp/proj' })
       if (!created.ok) throw new Error('create failed')
       const sessionId = created.session.id
@@ -1737,7 +1740,7 @@ describe('ChatSessionManager', () => {
 
     test('several hook events together issue exactly one scoped refresh for the newest path', async () => {
       process.env.ANTHROPIC_API_KEY = 'sk-test-key'
-      const harness = createHarness(db, anyDirectory, undefined, undefined, undefined, 5)
+      const harness = await createHarness(db, anyDirectory, undefined, undefined, undefined, 5)
       const created = harness.manager.createSession({ projectPath: '/tmp/proj' })
       if (!created.ok) throw new Error('create failed')
       await harness.manager.send(created.session.id, 'cd around')
@@ -1753,7 +1756,7 @@ describe('ChatSessionManager', () => {
 
     test('kill cancels a pending refresh', async () => {
       process.env.ANTHROPIC_API_KEY = 'sk-test-key'
-      const harness = createHarness(db, anyDirectory, undefined, undefined, undefined, 5)
+      const harness = await createHarness(db, anyDirectory, undefined, undefined, undefined, 5)
       const created = harness.manager.createSession({ projectPath: '/tmp/proj' })
       if (!created.ok) throw new Error('create failed')
       const sessionId = created.session.id
@@ -1776,7 +1779,7 @@ describe('ChatSessionManager', () => {
         })
         // No transcript at startup. It arrives before the first direct action,
         // and the original directory is gone: the guard must use the new cwd.
-        const harness = createHarness(db, (directory) => directory === worktree,
+        const harness = await createHarness(db, (directory) => directory === worktree,
           undefined, undefined, undefined, 5)
         writeTranscript('sdk-late-cwd', JSON.stringify({
           type: 'user', uuid: 'recovered-user', cwd: worktree,
@@ -1797,7 +1800,7 @@ describe('ChatSessionManager', () => {
 
     test('history recovery refreshes discovery once for the latest moved path', async () => {
       process.env.ANTHROPIC_API_KEY = 'sk-test-key'
-      const harness = createHarness(db, anyDirectory, undefined, undefined, undefined, 5)
+      const harness = await createHarness(db, anyDirectory, undefined, undefined, undefined, 5)
       const created = harness.manager.createSession({ projectPath: '/tmp/proj' })
       if (!created.ok) throw new Error('create failed')
       const id = created.session.id
@@ -1822,7 +1825,7 @@ describe('ChatSessionManager', () => {
 
     test('a restored session whose transcript moved comes back with the worktree path', async () => {
       process.env.ANTHROPIC_API_KEY = 'sk-test-key'
-      const first = createHarness(db)
+      const first = await createHarness(db)
       const created = first.manager.createSession({ projectPath: '/tmp/proj' })
       if (!created.ok) throw new Error('create failed')
       const sessionId = created.session.id
@@ -1850,7 +1853,7 @@ describe('ChatSessionManager', () => {
 
       // Restart: restorePersisted adopts the transcript's last cwd (design
       // D3), so the row, the registry, and any respawn land in the worktree.
-      const restored = createHarness(db)
+      const restored = await createHarness(db)
       expect(restored.registry.get(sessionId)?.projectPath).toBe(
         '/tmp/proj/.claude/worktrees/add-feature'
       )
@@ -1892,7 +1895,7 @@ describe('ChatSessionManager', () => {
       process.env.ANTHROPIC_API_KEY = 'sk-test-key'
       const dbPath = path.join(tempDir, 'restart.db')
       const dbA = initDatabase({ path: dbPath })
-      const harnessA = createHarness(dbA)
+      const harnessA = await createHarness(dbA)
       const created = harnessA.manager.createSession({
         projectPath: '/tmp/proj',
         name: 'echo',
@@ -1914,7 +1917,7 @@ describe('ChatSessionManager', () => {
 
       // "Restart": fresh db handle, registry, and manager on the same file.
       const dbB = initDatabase({ path: dbPath })
-      const harnessB = createHarness(dbB)
+      const harnessB = await createHarness(dbB)
       const registryB = harnessB.registry
 
       const restored = registryB.get(startedId)
@@ -1970,11 +1973,11 @@ describe('ChatSessionManager', () => {
       dbB.close()
     })
 
-    test('create records name provenance and a restart restores it unchanged', () => {
+    test('create records name provenance and a restart restores it unchanged', async () => {
       process.env.ANTHROPIC_API_KEY = 'sk-test-key'
       const dbPath = path.join(tempDir, 'name-source.db')
       const dbA = initDatabase({ path: dbPath })
-      const harnessA = createHarness(dbA)
+      const harnessA = await createHarness(dbA)
 
       const named = harnessA.manager.createSession({
         projectPath: '/tmp/proj',
@@ -1997,7 +2000,7 @@ describe('ChatSessionManager', () => {
 
       // "Restart": fresh db handle, registry, and manager on the same file.
       const dbB = initDatabase({ path: dbPath })
-      const harnessB = createHarness(dbB)
+      const harnessB = await createHarness(dbB)
       const restoredNamed = harnessB.registry.get(named.session.id)
       const restoredUnnamed = harnessB.registry.get(unnamed.session.id)
       expect(restoredNamed?.name).toBe('show-chat-rate-limits')
@@ -2092,12 +2095,12 @@ describe('ChatSessionManager', () => {
       return sessionId
     }
 
-    test('getHistory replays a stored transcript into read-only events', () => {
+    test('getHistory replays a stored transcript into read-only events', async () => {
       process.env.ANTHROPIC_API_KEY = 'sk-test-key'
       writeTranscript('sdk-hist', MATCHED_TRANSCRIPT)
       const sessionId = seedRecord('sdk-hist')
       const fresh = seedRecord(null)
-      const { manager } = createHarness(db)
+      const { manager } = await createHarness(db)
 
       const history = manager.getHistory(sessionId)
       expect(history?.status).toBe('ok')
@@ -2116,10 +2119,10 @@ describe('ChatSessionManager', () => {
       expect(manager.getHistory('chat-none')).toBeNull()
     })
 
-    test('missing transcript yields a history-unavailable fallback', () => {
+    test('missing transcript yields a history-unavailable fallback', async () => {
       process.env.ANTHROPIC_API_KEY = 'sk-test-key'
       const sessionId = seedRecord('sdk-vanished')
-      const { manager } = createHarness(db)
+      const { manager } = await createHarness(db)
 
       const history = manager.getHistory(sessionId)
       expect(history?.status).toBe('missing')
@@ -2133,7 +2136,7 @@ describe('ChatSessionManager', () => {
       process.env.ANTHROPIC_API_KEY = 'sk-test-key'
       const dbPath = path.join(tempDir, 'resume-fail.db')
       const dbA = initDatabase({ path: dbPath })
-      const harnessA = createHarness(dbA)
+      const harnessA = await createHarness(dbA)
       const created = harnessA.manager.createSession({ projectPath: '/tmp/proj' })
       if (!created.ok) throw new Error('create failed')
       const sessionId = created.session.id
@@ -2146,7 +2149,7 @@ describe('ChatSessionManager', () => {
 
       // Restart with no transcript on disk for the stored SDK id.
       const dbB = initDatabase({ path: dbPath })
-      const harnessB = createHarness(dbB)
+      const harnessB = await createHarness(dbB)
       const result = await harnessB.manager.send(sessionId, 'continue')
       expect(result.ok).toBe(false)
       if (!result.ok) {
@@ -2171,7 +2174,7 @@ describe('ChatSessionManager', () => {
       process.env.ANTHROPIC_API_KEY = 'sk-test-key'
       writeTranscript('sdk-ugly', 'not json\n{still not json')
       const sessionId = seedRecord('sdk-ugly')
-      const { manager, handles } = createHarness(db)
+      const { manager, handles } = await createHarness(db)
 
       expect(manager.getHistory(sessionId)?.status).toBe('unparseable')
 
@@ -2182,11 +2185,11 @@ describe('ChatSessionManager', () => {
       expect(handles[0]!.options.resume).toBe('sdk-ugly')
     })
 
-    test('restart cancellation of pending requests shows in restored history', () => {
+    test('restart cancellation of pending requests shows in restored history', async () => {
       process.env.ANTHROPIC_API_KEY = 'sk-test-key'
       writeTranscript('sdk-pending', PENDING_REQUEST_TRANSCRIPT)
       const sessionId = seedRecord('sdk-pending')
-      const { manager } = createHarness(db)
+      const { manager } = await createHarness(db)
 
       // Restored session, no live driver: the dead request is reconstructed
       // and immediately marked cancelled (design D7).
@@ -2204,7 +2207,7 @@ describe('ChatSessionManager', () => {
       expect(manager.getPendingRequests(sessionId)).toEqual([])
     })
 
-    test('worker bodies read the subagent transcript beside the session', () => {
+    test('worker bodies read the subagent transcript beside the session', async () => {
       process.env.ANTHROPIC_API_KEY = 'sk-test-key'
       const parent = writeTranscript('sdk-workers', MATCHED_TRANSCRIPT)
       const subagents = path.join(parent.replace(/\.jsonl$/, ''), 'subagents')
@@ -2217,7 +2220,7 @@ describe('ChatSessionManager', () => {
         message: { role: 'user', content: 'Map the workspace' },
       }) + '\n')
       const sessionId = seedRecord('sdk-workers')
-      const { manager } = createHarness(db)
+      const { manager } = await createHarness(db)
 
       const body = manager.getWorkerTranscript(sessionId, 'toolu_spawn_1')
       expect(body.status).toBe('ok')
@@ -2231,7 +2234,7 @@ describe('ChatSessionManager', () => {
 
   test('approval policy: starts manual, switches live, refuses invalid changes', async () => {
     process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'
-    const { manager, registry, events } = createHarness(db)
+    const { manager, registry, events } = await createHarness(db)
     const created = manager.createSession({ projectPath: '/tmp/proj' })
     if (!created.ok) throw new Error(created.error)
     const id = created.session.id
@@ -2276,7 +2279,7 @@ describe('ChatSessionManager', () => {
     process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'
     const dbPath = path.join(tempDir, 'policy-restart.db')
     const dbA = initDatabase({ path: dbPath })
-    const harnessA = createHarness(dbA)
+    const harnessA = await createHarness(dbA)
     const created = harnessA.manager.createSession({ projectPath: '/tmp/proj' })
     if (!created.ok) throw new Error(created.error)
     harnessA.manager.setApprovalPolicy(created.session.id, 'auto')
@@ -2287,7 +2290,7 @@ describe('ChatSessionManager', () => {
     const dbB = initDatabase({ path: dbPath })
     try {
       const registryB = new SessionRegistry()
-      managedManager({
+      await managedManager({
         isDirectory: anyDirectory,
         db: dbB,
         registry: registryB,
@@ -2302,7 +2305,7 @@ describe('ChatSessionManager', () => {
 
   test('switching to auto grants a pending approval and the next request', async () => {
     process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'
-    const { manager, handles, events } = createHarness(db)
+    const { manager, handles, events } = await createHarness(db)
     const created = manager.createSession({ projectPath: '/tmp/proj' })
     if (!created.ok) throw new Error(created.error)
     const id = created.session.id
@@ -2341,7 +2344,7 @@ describe('ChatSessionManager', () => {
   })
   test('a live session adopts generated titles while unclaimed and never after a manual rename', async () => {
     process.env.ANTHROPIC_API_KEY = 'test-key'
-    const harness = createHarness(db)
+    const harness = await createHarness(db)
     const created = harness.manager.createSession({ projectPath: '/tmp/proj' })
     if (!created.ok) throw new Error(created.error)
     const id = created.session.id
@@ -2383,7 +2386,7 @@ describe('ChatSessionManager', () => {
   test('no title tail outlives kill, archive, or shutdown', async () => {
     process.env.ANTHROPIC_API_KEY = 'test-key'
     // Kill: the session is gone, so nothing adopts the appended title.
-    const killHarness = createHarness(db)
+    const killHarness = await createHarness(db)
     const killCreated = killHarness.manager.createSession({ projectPath: '/tmp/proj' })
     if (!killCreated.ok) throw new Error(killCreated.error)
     const killId = killCreated.session.id
@@ -2406,7 +2409,7 @@ describe('ChatSessionManager', () => {
     killHarness.manager.shutdown()
 
     // Archive: the record stays, the tail does not follow later writes.
-    const archiveHarness = createHarness(db)
+    const archiveHarness = await createHarness(db)
     const archiveCreated = archiveHarness.manager.createSession({ projectPath: '/tmp/proj' })
     if (!archiveCreated.ok) throw new Error(archiveCreated.error)
     const archiveId = archiveCreated.session.id
@@ -2429,7 +2432,7 @@ describe('ChatSessionManager', () => {
     archiveHarness.manager.shutdown()
 
     // Shutdown: every tail ends with the server.
-    const shutdownHarness = createHarness(db)
+    const shutdownHarness = await createHarness(db)
     const shutdownCreated = shutdownHarness.manager.createSession({ projectPath: '/tmp/proj' })
     if (!shutdownCreated.ok) throw new Error(shutdownCreated.error)
     const shutdownId = shutdownCreated.session.id
@@ -2459,7 +2462,7 @@ describe('ChatSessionManager', () => {
     // wait has to pass the old three-retry budget (2s+4s+2s = 6s) to prove
     // the tail survives it; the locate interval is shrunk so the new code
     // picks the file up promptly instead of backing off to 15s.
-    const harness = createHarness(db, anyDirectory, undefined, 20)
+    const harness = await createHarness(db, anyDirectory, undefined, 20)
     const created = harness.manager.createSession({ projectPath: '/tmp/proj' })
     if (!created.ok) throw new Error(created.error)
     const id = created.session.id
@@ -2499,7 +2502,7 @@ describe('ChatSessionManager', () => {
       'title-restore',
       JSON.stringify({ type: 'ai-title', aiTitle: 'restored title', sessionId: 'title-restore' }) + '\n'
     )
-    const restored = createHarness(db)
+    const restored = await createHarness(db)
     expect(restored.registry.get('chat-preexisting')?.name).toBe('restored title')
     expect(restored.registry.get('chat-preexisting')?.nameSource).toBe('auto')
     restored.manager.shutdown()
@@ -2518,7 +2521,7 @@ describe('ChatSessionManager', () => {
       nameSource: 'placeholder',
     })
     writeTranscript('title-dormant', '')
-    const dormant = createHarness(db)
+    const dormant = await createHarness(db)
     expect(dormant.registry.get('chat-dormant')?.name).toBe('pure-bell')
     fs.writeFileSync(
       path.join(process.env.CLAUDE_CONFIG_DIR!, 'projects', '-tmp-proj', 'title-dormant.jsonl'),
@@ -2551,7 +2554,7 @@ describe('ChatSessionManager activity', () => {
   })
 
   test('snapshot mid-phase reports the phase and a growing elapsed time', async () => {
-    const { manager, handles, activities } = createHarness(db)
+    const { manager, handles, activities } = await createHarness(db)
     const created = manager.createSession({ projectPath: '/tmp/proj' })
     if (!created.ok) throw new Error('create failed')
     const id = created.session.id
@@ -2597,7 +2600,7 @@ describe('ChatSessionManager activity', () => {
   })
 
   test('idle, archived, and dead sessions report no activity', async () => {
-    const { manager, handles } = createHarness(db)
+    const { manager, handles } = await createHarness(db)
     const created = manager.createSession({ projectPath: '/tmp/proj' })
     if (!created.ok) throw new Error('create failed')
     const id = created.session.id
@@ -2713,7 +2716,7 @@ describe('ChatSessionManager usage', () => {
   }
 
   test('pushed reports are stored per profile, shared by its sessions, and snapshotted', async () => {
-    const { manager, handles, usage } = createHarness(db)
+    const { manager, handles, usage } = await createHarness(db)
     const first = manager.createSession({ projectPath: '/tmp/proj' })
     if (!first.ok) throw new Error('create failed')
     // Neither report nor verdict: the snapshot carries no usage.
@@ -2751,7 +2754,7 @@ describe('ChatSessionManager usage', () => {
   })
 
   test('an assistant usage_report is stored for the session profile', async () => {
-    const { manager, handles, usage } = createHarness(db)
+    const { manager, handles, usage } = await createHarness(db)
     const created = manager.createSession({ projectPath: '/tmp/proj', claudeProfileId: 'glm' })
     if (!created.ok) throw new Error('create failed')
     await manager.send(created.session.id, 'hello')
@@ -2782,7 +2785,7 @@ describe('ChatSessionManager usage', () => {
   })
 
   test('the pull fallback fills usage before any push and only once per profile', async () => {
-    const { manager, handles, usage } = createHarness(
+    const { manager, handles, usage } = await createHarness(
       db,
       anyDirectory,
       async (opts) => ({ ...FULL_PULL, opts })
@@ -2806,7 +2809,7 @@ describe('ChatSessionManager usage', () => {
   })
 
   test('a no-data pull suppresses later pulls until a push replaces the verdict', async () => {
-    const { manager, handles, usage } = createHarness(
+    const { manager, handles, usage } = await createHarness(
       db,
       anyDirectory,
       async () => ({ rate_limits_available: false, rate_limits: null })
@@ -2840,7 +2843,7 @@ describe('ChatSessionManager usage', () => {
   test('usage does not survive a manager restart (memory only)', async () => {
     const dbPath = path.join(tempDir, 'usage-restart.db')
     const dbA = initDatabase({ path: dbPath })
-    const harnessA = createHarness(dbA, anyDirectory, async () => FULL_PULL)
+    const harnessA = await createHarness(dbA, anyDirectory, async () => FULL_PULL)
     const created = harnessA.manager.createSession({ projectPath: '/tmp/proj' })
     if (!created.ok) throw new Error('create failed')
     await harnessA.manager.send(created.session.id, 'hello')
@@ -2851,7 +2854,7 @@ describe('ChatSessionManager usage', () => {
     dbA.close()
 
     const dbB = initDatabase({ path: dbPath })
-    const harnessB = createHarness(dbB, anyDirectory, async () => FULL_PULL)
+    const harnessB = await createHarness(dbB, anyDirectory, async () => FULL_PULL)
     expect(harnessB.manager.getSnapshot(created.session.id)!.usage).toBeNull()
     // ...and the fresh store pulls again on the next spawn.
     await harnessB.manager.send(created.session.id, 'resume')
@@ -2883,7 +2886,7 @@ describe('ChatSessionManager context usage', () => {
   })
 
   test('the snapshot prefers the fresher in-memory reading over the stored column', async () => {
-    const seed = createHarness(db)
+    const seed = await createHarness(db)
     const created = seed.manager.createSession({ projectPath: '/tmp/proj' })
     if (!created.ok) throw new Error('create failed')
     const id = created.session.id
@@ -2891,7 +2894,7 @@ describe('ChatSessionManager context usage', () => {
     const stale = { usedTokens: 90_000, thresholdTokens: 200_000, percentage: 45, at: '2026-10-10T10:00:00.000Z' }
     db.updateChatSession(id, { contextUsage: stale })
 
-    const harness = createHarness(db)
+    const harness = await createHarness(db)
     expect(harness.manager.getSnapshot(id)!.contextUsage).toEqual(stale)
 
     await harness.manager.send(id, 'turn')
@@ -2911,7 +2914,7 @@ describe('ChatSessionManager context usage', () => {
   })
 
   test('a multi-request turn writes the reading at its boundary, not per frame', async () => {
-    const harness = createHarness(db)
+    const harness = await createHarness(db)
     const created = harness.manager.createSession({ projectPath: '/tmp/proj' })
     if (!created.ok) throw new Error('create failed')
     const id = created.session.id
@@ -2946,7 +2949,7 @@ describe('ChatSessionManager context usage', () => {
   })
 
   test('compaction and driver death write the reading too', async () => {
-    const harness = createHarness(db)
+    const harness = await createHarness(db)
     const created = harness.manager.createSession({ projectPath: '/tmp/proj' })
     if (!created.ok) throw new Error('create failed')
     const id = created.session.id
@@ -2986,7 +2989,7 @@ describe('ChatSessionManager context usage', () => {
       mcpTools: [], agents: [], isAutoCompactEnabled: true, apiUsage: null,
       autoCompactThreshold: threshold,
     })
-    const harness = createHarness(db, anyDirectory, undefined, undefined, () => {
+    const harness = await createHarness(db, anyDirectory, undefined, undefined, () => {
       probes += 1
       // Attach answers at once; the boundary probe resolves late.
       if (probes === 1) return Promise.resolve(report())
@@ -3012,7 +3015,7 @@ describe('ChatSessionManager context usage', () => {
   })
 
   test('a conversation reset clears the reading and persists the clear', async () => {
-    const harness = createHarness(db)
+    const harness = await createHarness(db)
     const created = harness.manager.createSession({ projectPath: '/tmp/proj' })
     if (!created.ok) throw new Error('create failed')
     const id = created.session.id
@@ -3040,7 +3043,7 @@ describe('ChatSessionManager context usage', () => {
   })
 
   test('compaction persists on the notice kind, not its display text', async () => {
-    const harness = createHarness(db)
+    const harness = await createHarness(db)
     const created = harness.manager.createSession({ projectPath: '/tmp/proj' })
     if (!created.ok) throw new Error('create failed')
     const id = created.session.id
@@ -3152,7 +3155,7 @@ describe('ChatSessionManager worker sidecar', () => {
   test('settled workers round-trip through the sidecar and the snapshot', async () => {
     process.env.ANTHROPIC_API_KEY = 'test-key'
     const store = new ChatWorkerStore({ dir: sidecarDir })
-    const harness = createHarness(
+    const harness = await createHarness(
       db, anyDirectory, undefined, undefined, undefined, undefined, store
     )
     const created = harness.manager.createSession({ projectPath: '/tmp/proj' })
@@ -3171,7 +3174,7 @@ describe('ChatSessionManager worker sidecar', () => {
     harness.manager.shutdown()
 
     // Restart: a fresh store over the same directory recovers the rows.
-    const restored = createHarness(
+    const restored = await createHarness(
       db, anyDirectory, undefined, undefined, undefined, undefined, reopenedStore()
     )
     expect(restored.manager.getSnapshot(id)!.workers.map(({ elapsedMs: _e, ...row }) => row))
@@ -3203,7 +3206,7 @@ describe('ChatSessionManager worker sidecar', () => {
   test('a restarted session keeps recovered outcomes when its agent starts again', async () => {
     process.env.ANTHROPIC_API_KEY = 'test-key'
     const store = new ChatWorkerStore({ dir: sidecarDir })
-    const harness = createHarness(
+    const harness = await createHarness(
       db, anyDirectory, undefined, undefined, undefined, undefined, store
     )
     const created = harness.manager.createSession({ projectPath: '/tmp/proj' })
@@ -3221,7 +3224,7 @@ describe('ChatSessionManager worker sidecar', () => {
     // keeps both, where a publish from an empty roster would lose the old
     // outcome on disk too. Resume needs the transcript to exist.
     writeTranscript('sdk-workers-3', `${JSON.stringify({ type: 'user', uuid: 'u1' })}\n`)
-    const restored = createHarness(
+    const restored = await createHarness(
       db, anyDirectory, undefined, undefined, undefined, undefined, reopenedStore()
     )
     const sent = await restored.manager.send(id, 'research again')
@@ -3244,7 +3247,7 @@ describe('ChatSessionManager worker sidecar', () => {
   test('a worker still running at an abrupt stop is kept and recovered as stopped', async () => {
     process.env.ANTHROPIC_API_KEY = 'test-key'
     const store = new ChatWorkerStore({ dir: sidecarDir })
-    const harness = createHarness(
+    const harness = await createHarness(
       db, anyDirectory, undefined, undefined, undefined, undefined, store
     )
     const created = harness.manager.createSession({ projectPath: '/tmp/proj' })
@@ -3266,7 +3269,7 @@ describe('ChatSessionManager worker sidecar', () => {
     ])
     // Abrupt stop: no shutdown settlement, as a crash would leave things.
     const recovered: ChatWorker[] = []
-    const restored = managedManager({
+    const restored = await managedManager({
       isDirectory: anyDirectory,
       registry: new SessionRegistry(),
       db,
@@ -3290,7 +3293,7 @@ describe('ChatSessionManager worker sidecar', () => {
   test('kill removes the sidecar with the session', async () => {
     process.env.ANTHROPIC_API_KEY = 'test-key'
     const store = new ChatWorkerStore({ dir: sidecarDir })
-    const harness = createHarness(
+    const harness = await createHarness(
       db, anyDirectory, undefined, undefined, undefined, undefined, store
     )
     const created = harness.manager.createSession({ projectPath: '/tmp/proj' })

@@ -1,4 +1,6 @@
 // Durable mailbox dispatch, serialized across asynchronous agent startup.
+// A dispatcher may start held, recording requests without dispatching until
+// its owner's startup recovery has run.
 // Idleness is checked again inside the atomic claim; SDK queues receive only
 // idle turns, except urgent direct mail after an acknowledged interrupt.
 // Group mail whose task targets a worktree (team-tasks D4) only goes to a
@@ -34,6 +36,8 @@ export class MailDispatcher {
   private requested = false
   private running: Promise<void> | null = null
   private closed = false
+  /** Held: requests are recorded but nothing dispatches until release(). */
+  private held: boolean
   private timer: ReturnType<typeof setTimeout> | null = null
 
   constructor(private readonly store: MailboxStore, private readonly options: {
@@ -53,7 +57,11 @@ export class MailDispatcher {
     /** Spawn members for worktree mail no idle member could take (team-tasks D4). */
     staff?: () => Promise<SpawnAssignment[]>
     onError?: (error: unknown) => void
-  }) {}
+    /** Start held (see release): the owner still has recovery to run first. */
+    held?: boolean
+  }) {
+    this.held = options.held ?? false
+  }
 
   /** Whether a member may take a message given its task's target worktree. */
   private inWorktree(recipient: MailRecipient | undefined, message: TeamMessage): boolean {
@@ -65,7 +73,7 @@ export class MailDispatcher {
   notify(): void {
     if (this.closed) return
     this.requested = true
-    if (this.running) return
+    if (this.held || this.running) return
     this.running = Promise.resolve().then(async () => {
       while (this.requested && !this.closed) {
         this.requested = false
@@ -76,6 +84,13 @@ export class MailDispatcher {
       this.armTimer()
       if (this.requested) this.notify()
     })
+  }
+
+  /** Lift the hold; requests recorded while held dispatch now. */
+  release(): void {
+    if (!this.held) return
+    this.held = false
+    if (this.requested) this.notify()
   }
 
   /** Tests and startup callers can await all work requested so far. */
