@@ -16,7 +16,7 @@ a commit; `indexHandlers.test.ts` must pass unchanged (design D5) throughout.
 
 ## 2. Session refresh loop
 
-- [ ] 2.1 Create `src/server/refresh/SessionRefreshLoop.ts` as a class taking
+- [x] 2.1 Create `src/server/refresh/SessionRefreshLoop.ts` as a class taking
   `{ db, registry, sessionManager, sessionRefreshWorker, config, remoteMerge, broadcast }`
   (ChatSessionManagerOptions DI style); lift `hydrateSessionsWithAgentSessions` (keep its
   export and its empty-input guard FIRST — design D4), `verifyAllSessions`,
@@ -25,7 +25,7 @@ a commit; `indexHandlers.test.ts` must pass unchanged (design D5) throughout.
   (`refreshInFlight`, `refreshGeneration`, `hasConfirmedLocalSessionSnapshot`,
   `lastSuccessfulRefreshWindowCount`, `refreshWindowCountFloor`, `startupExpectedWindowCount`,
   `enterRefreshTimer`, the two `setInterval` registrations, today ~index.ts:879–1500)
-- [ ] 2.2 Move `hydrateSessionsEmptyGuard.test.ts`'s import to the new module; delete the
+- [x] 2.2 Move `hydrateSessionsEmptyGuard.test.ts`'s import to the new module; delete the
   dead `WorkspaceCoordinatorHook`/`attachWorkspaceCoordinator` export pair (design D6,
   ~index.ts:1502–1510), keeping a single local coordinator reference; commit
   (`refactor: lift session refresh loop into refresh/SessionRefreshLoop`)

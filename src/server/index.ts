@@ -38,9 +38,6 @@ import { getLogSearchDirs } from './logDiscovery'
 import {
   DEFAULT_SCROLLBACK_LINES,
   matchWindowsToLogsByExactRgAsync,
-  stripPastePlaceholders,
-  verifyWindowLogAssociationDetailedAsync,
-  type WindowLogVerificationResult,
 } from './logmatch'
 import {
   createTerminalProxy,
@@ -72,12 +69,7 @@ import { isTerminalSession } from '../shared/types'
 import { logger, logLevel } from './logger'
 import {
   SessionRefreshWorkerClient,
-  SessionRefreshWorkerTimeoutError,
 } from './sessionRefreshWorkerClient'
-import {
-  setForceWorkingUntil,
-  applyForceWorkingOverrides,
-} from './forceWorkingStatus'
 import { TmuxTimeoutError } from './tmuxTimeout'
 import {
   MAX_FIELD_LENGTH,
@@ -88,7 +80,7 @@ import {
   parseCreateChangeWorktreePayload,
   parseCreateWorktreePayload,
 } from '../shared/workspaceValidation'
-import { deepestPathMatch, type WorkspaceSnapshot } from '../shared/workspace'
+import { deepestPathMatch } from '../shared/workspace'
 import { canonicalizePath } from './git/repositoryResolution'
 import { createWorktree } from './git/createWorktree'
 import { createChangeWorktree } from './git/createChangeWorktree'
@@ -100,6 +92,7 @@ import { normalizePaneStartCommand } from './agentDetection'
 import { generateSessionName } from './nameGenerator'
 import { shellQuote } from './shellQuote'
 import { readLogLineWindow } from './logContent'
+import { SessionRefreshLoop } from './refresh/SessionRefreshLoop'
 import { SshTerminalProxy } from './terminal/SshTerminalProxy'
 import { normalizeCapturedHistory } from './terminal/tmuxText'
 import {
@@ -328,18 +321,6 @@ try {
   })
 }
 
-function ensureBaseSessionForRefresh(context: string): boolean {
-  try {
-    sessionManager.ensureSession()
-    return true
-  } catch (error) {
-    logger.warn('base_session_ensure_failed', {
-      context,
-      error: error instanceof Error ? error.message : String(error),
-    })
-    return false
-  }
-}
 const registry = new SessionRegistry()
 
 interface WSData {
@@ -542,11 +523,6 @@ if (remotePoller) {
   updateHostStatuses([])
 }
 
-// Lock map for Enter-key lastUserMessage capture: tmuxWindow -> expiry timestamp
-// Prevents stale log data from overwriting fresh terminal captures
-const lastUserMessageLocks = new Map<string, number>()
-const LAST_USER_MESSAGE_LOCK_MS = 60_000 // 60 seconds
-
 // Always-on raw protocol capture for the chat debug view, beside the DB.
 const chatWireLogs = new ChatWireLogs({ dir: path.join(resolveDataDir(), 'chat-wire') })
 // Worker-outcome sidecars for restart recovery (workers design D6), likewise
@@ -593,16 +569,29 @@ function chatPeer(ws: ServerWebSocket<WSData>): ChatConnection {
   return peer
 }
 
+const sessionRefreshWorker = new SessionRefreshWorkerClient()
+const lastUserMessageWorker = new SessionRefreshWorkerClient()
+
+const refresh = new SessionRefreshLoop({
+  db,
+  registry,
+  sessionManager,
+  sessionRefreshWorker,
+  lastUserMessageWorker,
+  broadcast: (message) => broadcast(message),
+  mergeRemoteSessions,
+  historyMaxAgeHours: () => runtimeHistoryMaxAgeHours,
+})
 const logPoller = new LogPoller(db, registry, {
   onSessionOrphaned: (sessionId, supersededBy) => {
-    updateDormantAgentSessions()
+    refresh.updateDormantAgentSessions()
     const session = db.getSessionById(sessionId)
     if (session) {
       broadcast({ type: 'session-orphaned', session: toAgentSession(session), supersededBy })
     }
   },
   onSessionActivated: (sessionId, window) => {
-    updateDormantAgentSessions()
+    refresh.updateDormantAgentSessions()
     const session = db.getSessionById(sessionId)
     if (session) {
       broadcast({
@@ -613,529 +602,20 @@ const logPoller = new LogPoller(db, registry, {
     }
   },
   onOrphanSessionsDiscovered: () => {
-    updateDormantAgentSessions()
+    refresh.updateDormantAgentSessions()
   },
-  isLastUserMessageLocked: (tmuxWindow) =>
-    (lastUserMessageLocks.get(tmuxWindow) ?? 0) > Date.now(),
+  isLastUserMessageLocked: (tmuxWindow) => refresh.isLastUserMessageLocked(tmuxWindow),
   maxLogsPerPoll: config.logPollMax,
   rgThreads: config.rgThreads,
   matchProfile: config.logMatchProfile,
   matchWorker: config.logMatchWorker,
   getChatSdkSessionIds: () => chatSessionManager.getSdkSessionIds(),
 })
-const sessionRefreshWorker = new SessionRefreshWorkerClient()
-const lastUserMessageWorker = new SessionRefreshWorkerClient()
-
-// Active sessions update on every refresh — cheap (few rows).
-// History sessions query is expensive — only run on actual mutations.
-function filterExcludedAgentSessions(sessions: AgentSession[]): AgentSession[] {
-  const excludedProjects = config.excludeProjects ?? []
-  if (excludedProjects.length === 0) {
-    return sessions
-  }
-
-  return sessions.filter((session) => {
-    const projectPath = session.projectPath || ''
-    return !excludedProjects.some((excluded) => {
-      if (excluded === '<empty>') return projectPath === ''
-      return projectPath.startsWith(excluded)
-    })
-  })
-}
-
-function updateActiveAgentSessions() {
-  const active = hasConfirmedLocalSessionSnapshot
-    ? db.getActiveSessions().map(toAgentSession)
-    : []
-  const current = registry.getAgentSessions()
-  registry.setAgentSessions(
-    active,
-    current.hibernating,
-    current.history
-  )
-}
-
-function updateDormantAgentSessions() {
-  const hibernating = filterExcludedAgentSessions(
-    db.getHibernatingSessions().map(toAgentSession)
-  )
-  const history = filterExcludedAgentSessions(
-    db.getHistorySessions({ maxAgeHours: runtimeHistoryMaxAgeHours }).map(
-      toAgentSession
-    )
-  )
-  const active = hasConfirmedLocalSessionSnapshot
-    ? db.getActiveSessions().map(toAgentSession)
-    : []
-  registry.setAgentSessions(active, hibernating, history)
-}
-
-interface VerificationDecision {
-  verification: WindowLogVerificationResult
-  nameMatches: boolean
-  windowExists: boolean
-}
-
-interface HydrateSessionsOptions {
-  precomputedVerifications?: Map<string, VerificationDecision>
-}
-
-async function verifyAllSessions(
-  activeSessions: AgentSessionRecord[],
-  sessions: Session[],
-  logDirs: string[]
-): Promise<Map<string, VerificationDecision>> {
-  const windowSet = new Set(sessions.map((session) => session.tmuxWindow))
-  const windowByTarget = new Map(sessions.map((session) => [session.tmuxWindow, session]))
-  const allLogPaths = activeSessions
-    .filter((session) => session.currentWindow)
-    .map((session) => ({ sessionId: session.sessionId, logPath: session.logFilePath }))
-
-  const entries: Array<[string, VerificationDecision]> = await Promise.all(
-    activeSessions.map(async (agentSession): Promise<[string, VerificationDecision]> => {
-      const currentWindow = agentSession.currentWindow
-      if (!currentWindow || !windowSet.has(currentWindow)) {
-        const decision: VerificationDecision = {
-          verification: {
-            status: 'inconclusive',
-            bestMatch: null,
-            reason: 'no_match',
-          },
-          nameMatches: false,
-          windowExists: false,
-        }
-        return [agentSession.sessionId, decision]
-      }
-
-      const excludeLogPaths = allLogPaths
-        .filter((entry) => entry.sessionId !== agentSession.sessionId)
-        .map((entry) => entry.logPath)
-
-      try {
-        const verification = await verifyWindowLogAssociationDetailedAsync(
-          currentWindow,
-          agentSession.logFilePath,
-          logDirs,
-          {
-            context: {
-              agentType: agentSession.agentType,
-              projectPath: agentSession.projectPath,
-            },
-            excludeLogPaths,
-          }
-        )
-        const window = windowByTarget.get(currentWindow)
-        const nameMatches = Boolean(window && window.name === agentSession.displayName)
-        const decision: VerificationDecision = {
-          verification,
-          nameMatches,
-          windowExists: true,
-        }
-        return [agentSession.sessionId, decision]
-      } catch (error) {
-        logger.warn('session_verification_error', {
-          sessionId: agentSession.sessionId,
-          error: String(error),
-        })
-        const decision: VerificationDecision = {
-          verification: { status: 'verified', bestMatch: null },
-          nameMatches: true,
-          windowExists: true,
-        }
-        return [agentSession.sessionId, decision]
-      }
-    })
-  )
-
-  return new Map(entries)
-}
-
-export function hydrateSessionsWithAgentSessions(
-  sessions: TerminalSession[],
-  { precomputedVerifications }: HydrateSessionsOptions = {}
-): Session[] {
-  const activeSessions = db.getActiveSessions()
-  // Sanity guard: callers ultimately source `sessions` from a tmux query (e.g.
-  // sessionRefreshWorker.refresh or listWindowsSyncOrNull). When that query
-  // transiently returns an empty array — but the DB still tracks live
-  // sessions — every active session would fail the windowSet membership check
-  // below and be treated as orphaned, which then triggers
-  // sessionManager.killWindow() for each. That mass-kills the user's working
-  // tmux windows in one pass. Skip this cycle and let the next refresh
-  // observe a real state. completeStartupVerification() already applies an
-  // equivalent guard before hydrating.
-  if (activeSessions.length > 0 && sessions.length === 0) {
-    logger.warn('hydrate_sessions_skipped_empty_input', {
-      activeSessionCount: activeSessions.length,
-    })
-    return sessions
-  }
-  const windowSet = new Set(sessions.map((session) => session.tmuxWindow))
-  const activeMap = new Map<string, typeof activeSessions[number]>()
-  const orphaned: AgentSession[] = []
-
-  for (const agentSession of activeSessions) {
-    const precomputed = precomputedVerifications?.get(agentSession.sessionId)
-    const currentWindow = agentSession.currentWindow
-    const windowExists = precomputed
-      ? precomputed.windowExists
-      : Boolean(currentWindow && windowSet.has(currentWindow))
-
-    if (!windowExists || !currentWindow) {
-      logger.info('session_orphaned', {
-        sessionId: agentSession.sessionId,
-        displayName: agentSession.displayName,
-        currentWindow: agentSession.currentWindow,
-        windowSetSize: windowSet.size,
-        windowSetSample: Array.from(windowSet).slice(0, 5),
-      })
-      // Kill any leftover dead window from remain-on-exit
-      if (currentWindow) {
-        try { sessionManager.killWindow(currentWindow) } catch { /* may already be gone */ }
-      }
-      const orphanedSession = db.orphanSession(agentSession.sessionId)
-      if (orphanedSession) {
-        orphaned.push(toAgentSession(orphanedSession))
-      }
-      continue
-    }
-
-    let verification: WindowLogVerificationResult | null = null
-    let nameMatches = false
-
-    if (precomputed) {
-      verification = precomputed.verification
-      nameMatches = precomputed.nameMatches
-    }
-
-    if (verification) {
-      let shouldOrphan = false
-      let fallbackUsed = false
-
-      if (verification.status === 'verified') {
-        shouldOrphan = false
-      } else if (nameMatches) {
-        shouldOrphan = false
-        fallbackUsed = true
-      } else {
-        shouldOrphan = true
-      }
-
-      if (shouldOrphan) {
-        logger.info('session_verification_failed', {
-          sessionId: agentSession.sessionId,
-          displayName: agentSession.displayName,
-          currentWindow,
-          logFilePath: agentSession.logFilePath,
-          verificationStatus: verification.status,
-          verificationReason: verification.reason ?? null,
-          nameMatches,
-          bestMatchLog: verification.bestMatch?.logPath ?? null,
-        })
-        const orphanedSession = db.orphanSession(agentSession.sessionId, {
-          hibernate: false,
-        })
-        if (orphanedSession) {
-          orphaned.push(toAgentSession(orphanedSession))
-        }
-        continue
-      }
-
-      if (fallbackUsed) {
-        logger.info('session_verification_name_fallback', {
-          sessionId: agentSession.sessionId,
-          displayName: agentSession.displayName,
-          currentWindow,
-          verificationStatus: verification.status,
-        })
-      }
-    }
-
-    activeMap.set(currentWindow, agentSession)
-  }
-
-  const hydrated = sessions.map((session) => {
-    const agentSession = activeMap.get(session.tmuxWindow)
-    if (!agentSession) {
-      return session
-    }
-    if (agentSession.displayName !== session.name) {
-      db.updateSession(agentSession.sessionId, { displayName: session.name })
-      agentSession.displayName = session.name
-    }
-    return {
-      ...session,
-      // Use log-based agentType if command-based detection failed
-      agentType: session.agentType ?? agentSession.agentType,
-      agentSessionId: agentSession.sessionId,
-      agentSessionName: agentSession.displayName,
-      logFilePath: agentSession.logFilePath,
-      lastUserMessage: agentSession.lastUserMessage ?? session.lastUserMessage,
-      // Use persisted log times (survives server restarts, works when tmux lacks creation time)
-      lastActivity: agentSession.lastActivityAt,
-      createdAt: agentSession.createdAt,
-      isPinned: agentSession.isPinned,
-    }
-  })
-
-  if (orphaned.length > 0) {
-    for (const session of orphaned) {
-      broadcast({ type: 'session-orphaned', session })
-    }
-    updateDormantAgentSessions()
-  } else {
-    updateActiveAgentSessions()
-  }
-  return hydrated
-}
-
-let refreshInFlight = false
-// Bumped on optimistic registry mutations (kill, create, resume) so
-// in-flight refreshes that started before the mutation discard their stale
-// window list instead of reverting the optimistic update.
-let refreshGeneration = 0
-let hasConfirmedLocalSessionSnapshot = false
-let lastSuccessfulRefreshWindowCount = 1
-let refreshWindowCountFloor = 0
-let startupExpectedWindowCount = 1
-
-function normalizeWindowCount(windowCount: number): number {
-  return Math.max(
-    1,
-    Number.isFinite(windowCount) ? Math.floor(windowCount) : 0
-  )
-}
-
-function countLocalSessions(sessions: Session[]): number {
-  return sessions.filter((session) => !session.remote).length
-}
-
-function seedRefreshWindowCountEstimate(localSessionCount: number): void {
-  startupExpectedWindowCount = normalizeWindowCount(localSessionCount)
-}
-
-function recordSuccessfulRefreshWindowCount(localSessionCount: number): void {
-  hasConfirmedLocalSessionSnapshot = true
-  lastSuccessfulRefreshWindowCount = normalizeWindowCount(localSessionCount)
-  refreshWindowCountFloor = 0
-  startupExpectedWindowCount = 1
-}
-
-function shouldSkipSyncRefreshFallback(error: unknown): boolean {
-  return error instanceof SessionRefreshWorkerTimeoutError
-}
-
-function estimateRefreshWindowCount(): number {
-  const localSessionCount = registry.getAll().filter((session) => !session.remote).length
-  return Math.max(
-    1,
-    localSessionCount,
-    lastSuccessfulRefreshWindowCount,
-    refreshWindowCountFloor,
-    startupExpectedWindowCount
-  )
-}
-
-function noteRefreshTimeout(): number {
-  const currentEstimate = estimateRefreshWindowCount()
-  const nextEstimate = Math.max(currentEstimate + 4, currentEstimate * 2)
-  refreshWindowCountFloor = nextEstimate
-  return nextEstimate
-}
-
-async function refreshSessionsAsync(): Promise<void> {
-  if (refreshInFlight) return
-  refreshInFlight = true
-  try {
-    if (!ensureBaseSessionForRefresh('async_refresh')) {
-      return
-    }
-    // Loop: retry once if an optimistic mutation invalidated our snapshot.
-    // At most one retry — if another mutation lands during the retry,
-    // the next scheduled refresh will pick it up.
-    for (let attempt = 0; attempt < 2; attempt++) {
-      const gen = refreshGeneration
-      try {
-        const sessions = await sessionRefreshWorker.refresh(
-          config.tmuxSession,
-          config.discoverPrefixes,
-          {
-            expectedWindowCount: estimateRefreshWindowCount(),
-            preferWindowName: config.preferWindowName,
-          }
-        )
-        // Mutation happened while we were listing windows — discard and retry
-        if (gen !== refreshGeneration) continue
-        // Yield before blocking SQLite work so pending WebSocket buffers flush
-        await new Promise<void>((resolve) => setTimeout(resolve, 0))
-        if (gen !== refreshGeneration) continue
-        const tHydrate = performance.now()
-        recordSuccessfulRefreshWindowCount(countLocalSessions(sessions))
-        const hydrated = hydrateSessionsWithAgentSessions(sessions)
-        const withOverrides = applyForceWorkingOverrides(hydrated)
-        registry.replaceSessions(mergeRemoteSessions(withOverrides))
-        const hydrateMs = Math.round(performance.now() - tHydrate)
-        if (hydrateMs > 50) {
-          logger.debug('session_refresh_hydrate_slow', { hydrateMs, sessionCount: sessions.length })
-        }
-        return
-      } catch (error) {
-        // Fallback to sync on worker failure — sync listWindows sees
-        // post-mutation state so no generation check needed here.
-        logger.warn('session_refresh_worker_error', {
-          message: error instanceof Error ? error.message : String(error),
-        })
-        if (shouldSkipSyncRefreshFallback(error)) {
-          const nextExpectedWindowCount = noteRefreshTimeout()
-          logger.warn('session_refresh_sync_fallback_skipped', {
-            reason: 'worker_timeout',
-            nextExpectedWindowCount,
-          })
-          return
-        }
-        const sessions = listWindowsSyncOrNull('worker_fallback')
-        if (!sessions) {
-          return
-        }
-        recordSuccessfulRefreshWindowCount(countLocalSessions(sessions))
-        const hydrated = hydrateSessionsWithAgentSessions(sessions)
-        const withOverrides = applyForceWorkingOverrides(hydrated)
-        registry.replaceSessions(mergeRemoteSessions(withOverrides))
-        return
-      }
-    }
-  } finally {
-    refreshInFlight = false
-  }
-}
-
-function refreshSessions() {
-  void refreshSessionsAsync()
-}
-
-function listWindowsSyncOrNull(context: string): TerminalSession[] | null {
-  try {
-    if (!ensureBaseSessionForRefresh(context)) {
-      return null
-    }
-    return sessionManager.listWindows()
-  } catch (error) {
-    if (error instanceof TmuxTimeoutError) {
-      logger.warn('session_refresh_sync_skipped', {
-        context,
-        reason: 'tmux_timeout',
-        timeoutMs: config.tmuxTimeoutMs,
-        message: error.message,
-      })
-      return null
-    }
-    throw error
-  }
-}
-
-// Sync version for startup - ensures sessions are ready before server starts
-function refreshSessionsSync() {
-  const sessions = listWindowsSyncOrNull('sync_refresh')
-  if (!sessions) {
-    return
-  }
-  recordSuccessfulRefreshWindowCount(countLocalSessions(sessions))
-  const hydrated = hydrateSessionsWithAgentSessions(sessions)
-  registry.replaceSessions(mergeRemoteSessions(hydrated))
-}
-
-// Debounced refresh triggered by Enter key in terminal input
-let enterRefreshTimer: Timer | null = null
-const lastUserMessageTimers = new Map<string, Timer>()
-
-function setForceWorking(sessionId: string) {
-  setForceWorkingUntil(sessionId, Date.now() + config.workingGracePeriodMs)
-  // Immediately update registry so UI shows "working" right away
-  registry.updateSession(sessionId, { status: 'working' })
-}
-
-function scheduleEnterRefresh() {
-  if (enterRefreshTimer) {
-    clearTimeout(enterRefreshTimer)
-  }
-  enterRefreshTimer = setTimeout(() => {
-    enterRefreshTimer = null
-    refreshSessions()
-  }, config.enterRefreshDelayMs)
-}
-
-function scheduleLastUserMessageCapture(sessionId: string) {
-  const session = registry.get(sessionId)
-  // Chat sessions have no tmux window to capture from; their last user
-  // message is tracked by the chat driver, not the Enter-key path.
-  if (!session || !isTerminalSession(session)) return
-  const tmuxWindow = session.tmuxWindow
-
-  // Set lock immediately to prevent log poller from overwriting with stale data
-  // during the debounce delay (before capture completes)
-  lastUserMessageLocks.set(tmuxWindow, Date.now() + LAST_USER_MESSAGE_LOCK_MS)
-
-  const existing = lastUserMessageTimers.get(tmuxWindow)
-  if (existing) {
-    clearTimeout(existing)
-  }
-  const timer = setTimeout(() => {
-    lastUserMessageTimers.delete(tmuxWindow)
-    void captureLastUserMessage(tmuxWindow)
-  }, config.enterRefreshDelayMs)
-  lastUserMessageTimers.set(tmuxWindow, timer)
-}
-
-async function captureLastUserMessage(tmuxWindow: string) {
-  try {
-    const captured = await lastUserMessageWorker.getLastUserMessage(tmuxWindow)
-    const message = captured?.trim() ? stripPastePlaceholders(captured) : ''
-    if (!message || message !== captured) {
-      // Empty capture, or a paste the TUI collapsed to a "[Pasted text …]"
-      // placeholder: the JSONL log has the real prompt, so release the
-      // Enter-key lock and let the log poller supply/upgrade the summary
-      // instead of blocking it for the full lock window.
-      lastUserMessageLocks.delete(tmuxWindow)
-    }
-    if (!message) return
-    const record = db.getSessionByWindow(tmuxWindow)
-    if (!record) return
-    if (record.lastUserMessage === message) return
-    const updated = db.updateSession(record.sessionId, { lastUserMessage: message })
-    if (!updated) return
-    registry.updateSession(tmuxWindow, { lastUserMessage: message })
-    updateActiveAgentSessions()
-  } catch (error) {
-    lastUserMessageLocks.delete(tmuxWindow)
-    logger.warn('last_user_message_capture_error', {
-      tmuxWindow,
-      message: error instanceof Error ? error.message : String(error),
-    })
-  }
-}
 
 
-// Log startup state for debugging orphan issues
-const startupActiveSessions = db.getActiveSessions()
-seedRefreshWindowCountEstimate(startupActiveSessions.length)
-const startupWindows = listWindowsSyncOrNull('startup_state') ?? []
-logger.info('startup_state', {
-  version: BUILD_VERSION,
-  activeSessionCount: startupActiveSessions.length,
-  windowCount: startupWindows.length,
-  activeWindows: startupActiveSessions.map((s) => ({
-    sessionId: s.sessionId.slice(0, 8),
-    name: s.displayName,
-    window: s.currentWindow,
-  })),
-  tmuxWindows: startupWindows.map((w) => ({
-    tmuxWindow: w.tmuxWindow,
-    name: w.name,
-  })),
-})
 
-refreshSessionsSync() // hydrate from persisted associations without verification
-setInterval(refreshSessions, config.refreshIntervalMs) // Async for periodic
+refresh.logStartupState()
+refresh.start()
 
 // Update discovery: one checker per process, silent on every failure. The
 // first check rides startup; later changes push to connected clients so the
@@ -1166,37 +646,6 @@ if (logLevel === 'debug') {
   }, EL_CHECK_MS)
 }
 
-async function completeStartupVerification(): Promise<void> {
-  const activeSessions = db.getActiveSessions()
-  // Use local-only sessions for verification to prevent remote sessions
-  // (whose tmuxWindow values aren't host-namespaced) from causing false
-  // "window exists" decisions or incorrect hydration with local DB overlays.
-  const localSessions = registry.getAll().filter(
-    (s): s is TerminalSession => !s.remote && isTerminalSession(s)
-  )
-  try {
-    if (activeSessions.length > 0 && localSessions.length > 0) {
-      const verifications = await verifyAllSessions(
-        activeSessions,
-        localSessions,
-        getLogSearchDirs()
-      )
-      const hydrated = hydrateSessionsWithAgentSessions(localSessions, {
-        precomputedVerifications: verifications,
-      })
-      const withOverrides = applyForceWorkingOverrides(hydrated)
-      registry.replaceSessions(mergeRemoteSessions(withOverrides))
-    }
-  } catch (error) {
-    logger.warn('startup_verification_error', {
-      message: error instanceof Error ? error.message : String(error),
-    })
-  }
-
-  // Load dormant sessions after startup verification so the list reflects the
-  // final active/hibernating/history split without auto-waking anything.
-  updateDormantAgentSessions()
-}
 
 registry.on('session-update', (session) => {
   broadcast({ type: 'session-update', session })
@@ -1237,20 +686,6 @@ function collectWorkspaceSeeds(): string[] {
   return [...seeds]
 }
 
-// Workspace discovery coordinator hook. handleMessage routes workspace
-// messages through this; declared before first use to avoid TDZ access.
-export interface WorkspaceCoordinatorHook {
-  requestRefresh(projectPath?: string): Promise<void>
-  /** Latest snapshot; used to name the stale worktree in session-create errors. */
-  getSnapshot(): WorkspaceSnapshot | null
-}
-
-let workspaceCoordinator: WorkspaceCoordinatorHook | null = null
-
-export function attachWorkspaceCoordinator(coordinator: WorkspaceCoordinatorHook | null): void {
-  workspaceCoordinator = coordinator
-}
-
 const workspaceCoordinatorInstance = new WorkspaceCoordinator({
   getSeeds: () => collectWorkspaceSeeds(),
   broadcast: (snapshot) => {
@@ -1270,7 +705,6 @@ const workspaceWatcherInstance = new WorkspaceWatcher({
     fireAndForget(workspaceCoordinatorInstance.reconcile(), 'workspaceReconcile')
   },
 })
-attachWorkspaceCoordinator(workspaceCoordinatorInstance)
 
 function refreshWorkspaceSeeds(): void {
   fireAndForget(workspaceCoordinatorInstance.requestRefresh(), 'workspaceSeedRefresh')
@@ -1704,7 +1138,7 @@ app.put('/api/settings/prefer-window-name', async (c) => {
   })
   // Names are recomputed on refresh; schedule one so the sidebar updates
   // promptly instead of waiting for the next poll tick.
-  scheduleEnterRefresh()
+  refresh.scheduleEnterRefresh()
   return c.json({ enabled: body.enabled })
 })
 
@@ -1724,7 +1158,7 @@ const putHistoryMaxAgeHours = async (c: Context) => {
     runtimeHistoryMaxAgeHours = hours
     db.setAppSetting(HISTORY_MAX_AGE_HOURS_KEY, String(hours))
     // Re-broadcast agent sessions with new max age
-    updateDormantAgentSessions()
+    refresh.updateDormantAgentSessions()
     return c.json({ hours })
   } catch {
     return c.json({ error: 'Invalid request body' }, 400)
@@ -2037,7 +1471,7 @@ if (config.logPollIntervalMs > 0) {
   logPoller.start(config.logPollIntervalMs, config.logWatchMode)
 }
 workspaceWatcherInstance.start()
-void completeStartupVerification()
+void refresh.completeStartupVerification()
 
 // Cleanup all terminals on server shutdown
 async function cleanupAllTerminals() {
@@ -2379,7 +1813,7 @@ function fireAndForget(promise: Promise<unknown>, context: string): void {
  */
 function staleProjectPathError(missingPath: string): string {
   const worktreePaths =
-    workspaceCoordinator?.getSnapshot()?.repositories.flatMap((repository) =>
+    workspaceCoordinatorInstance.getSnapshot()?.repositories.flatMap((repository) =>
       repository.worktrees.map((worktree) => worktree.path)
     ) ?? []
   const owner = deepestPathMatch(canonicalizePath(missingPath), worktreePaths)
@@ -2401,12 +1835,10 @@ async function handleCreateWorktree(
     destination: payload.destination,
   })
   send(ws, { type: 'workspace-operation-result', result })
-  if (workspaceCoordinator) {
-    fireAndForget(
-      workspaceCoordinator.requestRefresh(result.ok ? result.path : payload.destination),
-      'workspaceRefreshAfterOperation'
-    )
-  }
+  fireAndForget(
+    workspaceCoordinatorInstance.requestRefresh(result.ok ? result.path : payload.destination),
+    'workspaceRefreshAfterOperation'
+  )
 }
 
 async function handleCreateChangeWorktree(
@@ -2423,12 +1855,10 @@ async function handleCreateChangeWorktree(
     change: payload.change,
   })
   send(ws, { type: 'workspace-operation-result', result })
-  if (workspaceCoordinator) {
-    fireAndForget(
-      workspaceCoordinator.requestRefresh(result.ok ? result.path : payload.repositoryId),
-      'workspaceRefreshAfterChangeOperation'
-    )
-  }
+  fireAndForget(
+    workspaceCoordinatorInstance.requestRefresh(result.ok ? result.path : payload.repositoryId),
+    'workspaceRefreshAfterChangeOperation'
+  )
 }
 
 function handleMessage(
@@ -2473,7 +1903,7 @@ function handleMessage(
       send(ws, message.seq != null ? { type: 'pong', seq: message.seq } : { type: 'pong' })
       return
     case 'session-refresh':
-      refreshSessions()
+      refresh.refreshSessions()
       return
     case 'session-create':
       if (profileRequestError(message)) {
@@ -2532,10 +1962,10 @@ function handleMessage(
             startCommand
           ))
           // Add session to registry immediately so terminal can attach
-          refreshGeneration++
+          refresh.noteOptimisticMutation()
           const currentSessions = registry.getAll()
           registry.replaceSessions([created, ...currentSessions])
-          refreshSessions()
+          refresh.refreshSessions()
           send(ws, { type: 'session-created', session: created })
         } catch (error) {
           // A directory that vanished between discovery and submission —
@@ -2545,12 +1975,10 @@ function handleMessage(
           const resolvedPath = resolveProjectPath(message.projectPath)
           if (resolvedPath && !fsSync.existsSync(resolvedPath)) {
             send(ws, { type: 'error', message: staleProjectPathError(resolvedPath) })
-            if (workspaceCoordinator) {
-              fireAndForget(
-                workspaceCoordinator.requestRefresh(resolvedPath),
-                'workspaceRefreshMissingPath'
-              )
-            }
+            fireAndForget(
+              workspaceCoordinatorInstance.requestRefresh(resolvedPath),
+              'workspaceRefreshMissingPath'
+            )
           } else {
             send(ws, {
               type: 'error',
@@ -2605,11 +2033,7 @@ function handleMessage(
       handleMoveToHistory(message.sessionId, ws)
       return
     case 'workspace-refresh':
-      // Workspace discovery coordinator is attached in §4; until then the
-      // message is recognized (no unknown-type error) but ignored.
-      if (workspaceCoordinator) {
-        fireAndForget(workspaceCoordinator.requestRefresh(message.projectPath), 'workspaceRefresh')
-      }
+      fireAndForget(workspaceCoordinatorInstance.requestRefresh(message.projectPath), 'workspaceRefresh')
       return
     case 'create-worktree': {
       const payload = parseCreateWorktreePayload(message)
@@ -3103,7 +2527,7 @@ async function handleKill(
   }
 
   // Bump generation so any in-flight refresh discards its stale result
-  refreshGeneration++
+  refresh.noteOptimisticMutation()
   const orphaned = new Map<string, AgentSession>()
   for (const agentSessionId of agentSessionIds) {
     try {
@@ -3122,7 +2546,7 @@ async function handleKill(
     }
   }
   if (orphaned.size > 0) {
-    updateDormantAgentSessions()
+    refresh.updateDormantAgentSessions()
     for (const orphanedSession of orphaned.values()) {
       broadcast({ type: 'session-orphaned', session: orphanedSession })
     }
@@ -3133,7 +2557,7 @@ async function handleKill(
     ...auditFields,
     durationMs: Date.now() - startedAt,
   })
-  // Don't call refreshSessions() here — the registry is already updated
+  // Don't call refresh.refreshSessions() here — the registry is already updated
   // synchronously.  An async refresh would race with the tmux process
   // dying and could re-add the killed window to the registry before the
   // process exits, causing stale broadcasts that resurrect the session
@@ -3147,7 +2571,7 @@ async function handleRename(
 ) {
   let session = registry.get(sessionId)
   if (!session) {
-    refreshSessionsSync() // Use sync for inline operations needing immediate results
+    refresh.refreshSessionsSync() // Use sync for inline operations needing immediate results
     session = registry.get(sessionId)
     if (!session) {
       const record = db.getSessionById(sessionId)
@@ -3173,7 +2597,7 @@ async function handleRename(
           send(ws, { type: 'error', message: 'Unable to rename session' })
           return
         }
-        updateDormantAgentSessions()
+        refresh.updateDormantAgentSessions()
         return
       }
       send(ws, { type: 'error', message: 'Session not found' })
@@ -3237,7 +2661,7 @@ async function handleRename(
 
   try {
     sessionManager.renameWindow(session.tmuxWindow, newName)
-    refreshSessions()
+    refresh.refreshSessions()
   } catch (error) {
     send(ws, {
       type: 'error',
@@ -3286,7 +2710,7 @@ function handleMoveToHistory(
     }
   }
 
-  updateDormantAgentSessions()
+  refresh.updateDormantAgentSessions()
 }
 
 function handleSessionHibernate(
@@ -3448,7 +2872,7 @@ function handleSessionHibernate(
     }
   }
 
-  refreshGeneration++
+  refresh.noteOptimisticMutation()
   let updated: ReturnType<typeof db.updateSession>
   try {
     updated = db.updateSession(sessionId, {
@@ -3493,7 +2917,7 @@ function handleSessionHibernate(
 
   const remaining = registry.getAll().filter((session) => session.id !== liveSession.id)
   registry.replaceSessions(remaining)
-  updateDormantAgentSessions()
+  refresh.updateDormantAgentSessions()
 }
 
 /**
@@ -3586,7 +3010,7 @@ function recordWakeFailure(sessionId: string, message: string) {
       lastResumeError: message,
       wakeStartedAt: null,
     })
-    updateDormantAgentSessions()
+    refresh.updateDormantAgentSessions()
   } catch (error) {
     logger.error('session_wake_error_persist_failed', {
       sessionId,
@@ -3615,7 +3039,7 @@ function hydrateWakeSession(
 async function tryRematchDormantSession(
   record: AgentSessionRecord
 ): Promise<{ session: TerminalSession; record: AgentSessionRecord } | null> {
-  refreshSessionsSync()
+  refresh.refreshSessionsSync()
 
   const alreadyHydrated = registry.getAll().find(
     (session): session is TerminalSession =>
@@ -3647,7 +3071,7 @@ async function tryRematchDormantSession(
         session.id === hydrated.id ? hydrated : session
       )
     )
-    updateDormantAgentSessions()
+    refresh.updateDormantAgentSessions()
     return { session: hydrated, record: updated }
   }
 
@@ -3716,7 +3140,7 @@ async function tryRematchDormantSession(
         session.id === hydrated.id ? hydrated : session
       )
     )
-    updateDormantAgentSessions()
+    refresh.updateDormantAgentSessions()
     logger.info('session_wake_rematch_success', {
       sessionId: record.sessionId,
       window: match.tmuxWindow,
@@ -3770,7 +3194,7 @@ async function handleSessionWake(
             wakeStartedAt: null,
             lastResumeError: null,
           })
-          updateDormantAgentSessions()
+          refresh.updateDormantAgentSessions()
         } catch (error) {
           logger.warn('session_wake_marker_clear_failed', {
             sessionId,
@@ -3894,7 +3318,7 @@ async function handleSessionWake(
               }) ?? reread
             : reread
         createdWindowToCleanup = null
-        refreshGeneration++
+        refresh.noteOptimisticMutation()
         const hydrated = hydrateWakeSession(created, resolvedRecord)
         const currentSessions = registry
           .getAll()
@@ -3903,8 +3327,8 @@ async function handleSessionWake(
             session.tmuxWindow !== hydrated.tmuxWindow
           )
         registry.replaceSessions([hydrated, ...currentSessions])
-        updateDormantAgentSessions()
-        refreshSessions()
+        refresh.updateDormantAgentSessions()
+        refresh.refreshSessions()
         send(ws, { type: 'session-wake-result', sessionId, ok: true, session: hydrated })
         broadcast({
           type: 'session-activated',
@@ -3933,8 +3357,8 @@ async function handleSessionWake(
             error: error instanceof Error ? error.message : String(error),
           })
         }
-        refreshSessionsSync()
-        updateDormantAgentSessions()
+        refresh.refreshSessionsSync()
+        refresh.updateDormantAgentSessions()
         logger.info('session_wake_noop', {
           sessionId,
           reason: 'created_window_claimed_by_other_session',
@@ -3964,7 +3388,7 @@ async function handleSessionWake(
       // Sync refresh so the registry reflects the racing claim before we look
       // up the live session — the rematcher updates DB before its own
       // session-activated emission, so without this we may miss it.
-      refreshSessionsSync()
+      refresh.refreshSessionsSync()
       const latestRecord = db.getSessionById(sessionId)
       const liveSession = latestRecord?.currentWindow
         ? registry.get(latestRecord.currentWindow) ??
@@ -3993,12 +3417,12 @@ async function handleSessionWake(
     createdWindowToCleanup = null
     // Add session to registry immediately so terminal can attach
     // (async refresh will update with any additional data later)
-    refreshGeneration++
+    refresh.noteOptimisticMutation()
     const currentSessions = registry.getAll()
     const hydrated = hydrateWakeSession(created, updatedRecord)
     registry.replaceSessions([hydrated, ...currentSessions])
-    updateDormantAgentSessions()
-    refreshSessions()
+    refresh.updateDormantAgentSessions()
+    refresh.refreshSessions()
     send(ws, { type: 'session-wake-result', sessionId, ok: true, session: hydrated })
     broadcast({
       type: 'session-activated',
@@ -4603,9 +4027,9 @@ function handleTerminalInputPersistent(
   // On Enter key: immediately set "working" status and schedule refresh
   if (data.includes('\r') || data.includes('\n')) {
     if (!session?.remote) {
-      setForceWorking(sessionId)
-      scheduleEnterRefresh()
-      scheduleLastUserMessageCapture(sessionId)
+      refresh.setForceWorking(sessionId)
+      refresh.scheduleEnterRefresh()
+      refresh.scheduleLastUserMessageCapture(sessionId)
     }
   }
 }
