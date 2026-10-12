@@ -26,7 +26,7 @@ The UI SHALL list, per team, delivered history and pending mail together, newest
 - **THEN** none of those messages appear in this team's Messages view
 
 ### Requirement: Thread detail shows the conversation and its delivery facts
-Thread detail SHALL show a thread's messages in chronological order with their reply relationships, each message's current recipient or claimant and delivery state, and, for task-linked messages, the task revision the delivered context carried. The revision shown SHALL be the one recorded at delivery, not the task's current revision.
+Thread detail SHALL show a thread's messages in chronological order with their reply relationships, each message's current recipient or claimant and delivery state, and, for task-linked messages, the task revision the delivered context carried. The revision shown SHALL be the one recorded at delivery, not the task's current revision. A message's delivery state SHALL NOT be presented as acceptance of the work it delivered.
 
 #### Scenario: Chronological order and replies
 - **WHEN** the user opens a thread that started as task mail and was answered through different sessions

@@ -22,6 +22,7 @@ Depends on `agent-teams`, `agent-mailbox`, and `team-tasks` (shipped) and on `pr
 - Accountable owner / assignment state on messages → `task-assignment`.
 - Agent-initiated mail to the human (`send_message` to `human`), read/unread state for human mail, and full-text search of bodies.
 - Retroactive history for messages created before this change (they show their row timestamps only).
+- Presenting receipt as accepted work: delivery state says a message arrived, never that its work was reviewed or accepted — results, review/QA handoffs, and acceptance (§5 of the UX doc) own that and arrive with the later results-and-review changes.
 
 ## Capabilities
 
@@ -36,7 +37,7 @@ Depends on `agent-teams`, `agent-mailbox`, and `team-tasks` (shipped) and on `pr
 ## Impact
 
 - Server: `src/server/team/mailboxStore.ts` (event recording inside every transition, `task_revision`, `from_kind`/`to_kind: 'human'`, one guarded table rebuild making `from_session`/`to_id` nullable), new `messageEvents.ts`, `messageQuery.ts` (filters/paging), `sessionDirectory.ts`; `TeamMailbox.ts` (human send/reply, reply to human), `envelope.ts` (human sender), `dispatcher.ts` (revision at push), `teamPrompt.ts`; new `messageConnections.ts` beside `mailboxConnections.ts`; `ChatSessionManager.ts` (directory upkeep on create/rename so names survive kill), `ChatConnections.ts` (to-human toast push), `taskStore.ts` participants query (skip null senders).
-- Shared: `src/shared/team.ts` (`TeamActor`, `MessageEvent`, query/filter types; `TaskActor` becomes an alias), `src/shared/chat.ts` (`ChatPeerMessage.senderKind`, nullable `senderSession`), `src/shared/types.ts` (`team-messages-*`, `team-thread-*`, `team-message-send`/`team-message-send-result` following the task-action request pattern).
+- Shared: `src/shared/team.ts` (`TeamMessage` widened for the human actor kind and nullable `to_id`/`from_session`, `TeamActor`, `MessageEvent`, query/filter types; `TaskActor` becomes an alias), `src/shared/chat.ts` (`ChatPeerMessage.senderKind`, nullable `senderSession`), `src/shared/types.ts` (`team-messages-*`, `team-thread-*`, `team-message-send`/`team-message-send-result` following the task-action request pattern).
 - Client: new `TeamMessagesView.tsx`, `TeamMessagesPanel.tsx`, `TeamThreadDetail.tsx`, `TeamMessageComposer.tsx`, `teamMessagesStore.ts`; `ChatView.tsx` (Messages toggle), `ChatMessages.tsx` (human sender label), `TeamTaskDetail.tsx` (open thread link), `App.tsx` (routing pushes, toast).
 - Data: additive tables `team_message_events`, `team_session_directory`; additive columns on `team_messages`; one guarded rebuild of `team_messages` to relax two NOT NULL constraints.
 - Tests: unit/integration tests per task; Playwright `tests/e2e/chat-team-messages.spec.ts` for E06/E11 (written, not run here).
