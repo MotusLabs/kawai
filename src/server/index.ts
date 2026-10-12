@@ -93,6 +93,7 @@ import { generateSessionName } from './nameGenerator'
 import { shellQuote } from './shellQuote'
 import { readLogLineWindow } from './logContent'
 import { SessionRefreshLoop } from './refresh/SessionRefreshLoop'
+import type { WSData } from './ws/wsTypes'
 import { SshTerminalProxy } from './terminal/SshTerminalProxy'
 import { normalizeCapturedHistory } from './terminal/tmuxText'
 import {
@@ -322,39 +323,6 @@ try {
 }
 
 const registry = new SessionRegistry()
-
-interface WSData {
-  terminal: ITerminalProxy | null
-  currentSessionId: string | null
-  currentTmuxTarget: string | null
-  connectionId: string
-  remoteAddress: string | null
-  userAgent: string | null
-  terminalHost: string | null
-  terminalAttachSeq: number
-  lastAttachKey: string | null
-  lastAttachTs: number
-  clipboardPollTimer: ReturnType<typeof setInterval> | null
-  clipboardPollInFlight: boolean
-  lastClipboardBufferKey: string | null
-  clipboardBufferArmedUntil: number
-  // Unix seconds of the arming gesture. Only buffers created at or after this
-  // are offered, so an unrelated/pre-existing buffer change during the armed
-  // window can't clobber the clipboard.
-  clipboardArmedAtSec: number
-  // Incremented on every stop/restart of the clipboard watch. Async work
-  // (baseline read, in-flight poll) captures the generation at launch and bails
-  // if it no longer matches, so a stale completion can't mutate a newer watch.
-  clipboardWatchGen: number
-  // Copy-mode checks are async now; with a loaded tmux server a spawn can
-  // outlast the client's 750ms poll period and out-of-order replies would
-  // stale-flip the copy-mode state. Skip while one is in flight (latest-state
-  // semantics, mirroring clipboardPollInFlight).
-  copyModeCheckInFlight: boolean
-  // Per-connection terminal-output frame coalescer. Lives for the socket
-  // lifetime; terminal cleanup only clears its pending buffer.
-  outputCoalescer: TerminalOutputCoalescer | null
-}
 
 const sockets = new Set<ServerWebSocket<WSData>>()
 const localHostLabel = config.hostLabel
