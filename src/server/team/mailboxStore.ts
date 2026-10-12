@@ -9,7 +9,7 @@
 import type { Database } from 'bun:sqlite'
 import { mailboxSql, worktreeTaskMailSql } from './mailboxSql'
 
-import type { MessageState, MessagePriority, TeamMessage } from '../../shared/team'
+import type { ChatHandoffPackage, MessageState, MessagePriority, TeamMessage } from '../../shared/team'
 export type { MessageState, MessagePriority, TeamMessage } from '../../shared/team'
 
 export interface EnqueueInput {
@@ -30,6 +30,9 @@ export interface EnqueueInput {
   hopLimit?: number
   /** Team task the message works under (validated by the caller). */
   taskId?: string | null
+  /** Forwarded work after a limit (profile routing). */
+  handoff?: ChatHandoffPackage | null
+  excludedProfile?: string | null
 }
 
 export const DEFAULT_HOP_LIMIT = 20
@@ -59,7 +62,13 @@ CREATE TABLE IF NOT EXISTS team_messages (
   reason TEXT,
   possible_duplicate INTEGER NOT NULL DEFAULT 0,
   attach_thread INTEGER NOT NULL DEFAULT 0,
-  task_id TEXT
+  task_id TEXT,
+  claim_commit TEXT,
+  parked_until TEXT,
+  park_count INTEGER NOT NULL DEFAULT 0,
+  resume_message_id TEXT,
+  handoff TEXT,
+  excluded_profile TEXT
 );
 CREATE INDEX IF NOT EXISTS team_messages_queue ON team_messages (team_id, state);
 CREATE INDEX IF NOT EXISTS team_messages_thread ON team_messages (thread_id);
@@ -72,6 +81,13 @@ function migrateTable(db: Database) {
   const columns = db.prepare('PRAGMA table_info(team_messages)').all() as Array<{ name: string }>
   if (!columns.some(column => column.name === 'task_id')) db.exec('ALTER TABLE team_messages ADD COLUMN task_id TEXT')
   db.exec('CREATE INDEX IF NOT EXISTS team_messages_task ON team_messages (task_id)')
+  // Profile routing: claim commit, parking, and handoff.
+  for (const [name, type] of [
+    ['claim_commit', 'TEXT'], ['parked_until', 'TEXT'], ['park_count', 'INTEGER NOT NULL DEFAULT 0'],
+    ['resume_message_id', 'TEXT'], ['handoff', 'TEXT'], ['excluded_profile', 'TEXT'],
+  ] as const) {
+    if (!columns.some(column => column.name === name)) db.exec(`ALTER TABLE team_messages ADD COLUMN ${name} ${type}`)
+  }
 }
 
 const nowIso = () => new Date().toISOString()
@@ -135,6 +151,8 @@ export class MailboxStore {
       $reason: overLimit ? 'hop-limit' : null,
       $attachThread: input.attachThread ? 1 : 0,
       $taskId: input.taskId ?? null,
+      $handoff: input.handoff ? JSON.stringify(input.handoff) : null,
+      $excludedProfile: input.excludedProfile ?? null,
     })
     this.changed(id, true)
     return this.get(id)!
@@ -244,6 +262,52 @@ export class MailboxStore {
     return this.transition(id, ['claimed'], { state: 'uncertain', reason })
   }
 
+  /** HEAD of the claimant's directory, recorded once after the claim. */
+  setClaimCommit(id: string, commit: string): boolean {
+    return this.changed(id, this.cachedStatement('UPDATE team_messages SET claim_commit = $commit WHERE id = $id AND claim_commit IS NULL')
+      .run({ $id: id, $commit: commit }).changes === 1)
+  }
+
+  /** Keep handled work on its agent after a limit, with a resume scheduled. */
+  park(id: string, until: string, resumeMessageId: string): boolean {
+    const message = this.get(id)
+    if (!message) return false
+    return this.transition(id, ['delivered', 'parked'], {
+      state: 'parked', parked_until: until, resume_message_id: resumeMessageId, park_count: message.parkCount + 1,
+    })
+  }
+
+  /** The parked agent worked again successfully: the work is simply delivered. */
+  unpark(id: string): boolean {
+    return this.transition(id, ['parked'], { state: 'delivered', parked_until: null, resume_message_id: null })
+  }
+
+  /**
+   * Back to a group's queue after a limit: claim and delivery are forgotten,
+   * and direct mail is retargeted to the group of the agent that held it.
+   */
+  release(id: string, groupId: string): boolean {
+    return this.transition(id, ['delivered', 'parked'], {
+      state: 'queued', to_kind: 'group', to_id: groupId, claimed_by: null, claimed_at: null, pushed_at: null,
+      delivered_at: null, parked_until: null, resume_message_id: null, claim_commit: null,
+    })
+  }
+
+  /** Handed off: `reason` names the message that carries the work on. */
+  markForwarded(id: string, reason: string): boolean {
+    return this.transition(id, ['delivered', 'parked'], { state: 'forwarded', reason, parked_until: null, resume_message_id: null })
+  }
+
+  /** Messages an agent holds parked. */
+  parkedBy(sessionId: string): TeamMessage[] {
+    return this.select(`state = 'parked' AND claimed_by = $sessionId`, { $sessionId: sessionId })
+  }
+
+  /** The parked message a resume message belongs to. */
+  parkedFor(resumeMessageId: string): TeamMessage | null {
+    return this.select(`state = 'parked' AND resume_message_id = $resume`, { $resume: resumeMessageId })[0] ?? null
+  }
+
   /** The user cancels a queued or scheduled message. */
   cancel(id: string): boolean {
     return this.transition(id, ['queued', 'awaiting-request'], { state: 'cancelled' })
@@ -342,7 +406,7 @@ export class MailboxStore {
 
   /** The mailbox view: everything not settled, plus dead and uncertain. */
   listForTeam(teamId: string): TeamMessage[] {
-    return this.select(`team_id = $teamId AND state IN ('queued', 'awaiting-request', 'spawning', 'claimed', 'dead', 'uncertain')`, {
+    return this.select(`team_id = $teamId AND state IN ('queued', 'awaiting-request', 'spawning', 'claimed', 'parked', 'dead', 'uncertain')`, {
       $teamId: teamId,
     })
   }
@@ -397,5 +461,22 @@ function mapRow(row: Record<string, unknown>): TeamMessage {
     possibleDuplicate: Number(row.possible_duplicate ?? 0) === 1,
     attachThread: Number(row.attach_thread ?? 0) === 1,
     taskId: text(row.task_id),
+    claimCommit: text(row.claim_commit),
+    parkedUntil: text(row.parked_until),
+    parkCount: Number(row.park_count ?? 0),
+    resumeMessageId: text(row.resume_message_id),
+    handoff: parseHandoff(row.handoff),
+    excludedProfile: text(row.excluded_profile),
+  }
+}
+
+function parseHandoff(value: unknown): ChatHandoffPackage | null {
+  if (typeof value !== 'string') return null
+  try {
+    const parsed = JSON.parse(value) as ChatHandoffPackage
+    return parsed && typeof parsed === 'object' && typeof parsed.fromSession === 'string' ? parsed : null
+  } catch {
+    // A corrupt package reads as none; the message itself stays usable.
+    return null
   }
 }

@@ -3,13 +3,16 @@
 // avoids treating an ordinary user mention of the tag as delivered mail. A
 // task message (team-tasks D3) also carries its task context in the metadata
 // and as a readable header above the body; envelopes without one keep the
-// original shape, so older transcripts still parse.
+// original shape, so older transcripts still parse. Work forwarded after a
+// provider limit (profile routing) carries its handoff package the same way,
+// below the task header.
 import type { ChatPeerMessage } from '../../shared/chat'
 import type { ChatPeerTaskContext } from '../../shared/teamTasks'
 import { TASK_STATUSES } from '../../shared/teamTasks'
 import { ENVELOPE_TAG } from './teamPrompt'
 import type { TeamMessage } from './mailboxStore'
 import { formatTaskHeader } from './taskContext'
+import { formatHandoffHeader, isHandoffPackage } from './routing/handoff'
 
 // Built from the same constant formatEnvelope writes, so the two cannot
 // drift apart and silently stop matching.
@@ -28,12 +31,14 @@ export function messageEnvelope(message: TeamMessage, thread?: TeamMessage[], ta
       messageId: row.id, senderSession: row.fromSession, body: row.body,
     })) } : {}),
     ...(task ? { task } : {}),
+    ...(message.handoff ? { handoff: message.handoff } : {}),
   }
 }
 
 export function formatEnvelope(envelope: ChatPeerMessage): string {
   const { body, ...metadata } = envelope
-  const header = envelope.task ? `${formatTaskHeader(envelope.task)}\n` : ''
+  const header = (envelope.task ? `${formatTaskHeader(envelope.task)}\n` : '') +
+    (envelope.handoff ? formatHandoffHeader(envelope.handoff) : '')
   return `<${ENVELOPE_TAG} metadata="${escapeAttribute(JSON.stringify(metadata))}">\n${envelope.possibleDuplicate ? `${DUPLICATE_NOTE}\n` : ''}${header}${body}\n</${ENVELOPE_TAG}>`
 }
 
@@ -51,6 +56,7 @@ export function parseEnvelope(text: string): ChatPeerMessage | null {
     if (meta.thread !== undefined && (!Array.isArray(meta.thread) || !meta.thread.every((row: Record<string, unknown>) =>
       row && ['messageId', 'senderSession', 'body'].every(key => typeof row[key] === 'string')))) return null
     if (meta.task !== undefined && !isTaskContext(meta.task)) return null
+    if (meta.handoff !== undefined && !isHandoffPackage(meta.handoff)) return null
     let body = match[2]!
     if (meta.possibleDuplicate) {
       if (!body.startsWith(`${DUPLICATE_NOTE}\n`)) return null
@@ -61,12 +67,18 @@ export function parseEnvelope(text: string): ChatPeerMessage | null {
       if (!body.startsWith(header)) return null
       body = body.slice(header.length)
     }
+    if (meta.handoff) {
+      const header = formatHandoffHeader(meta.handoff)
+      if (!body.startsWith(header)) return null
+      body = body.slice(header.length)
+    }
     return {
       messageId: meta.messageId, senderSession: meta.senderSession, senderGroup: meta.senderGroup,
       priority: meta.priority, originPath: meta.originPath, tags: meta.tags, threadId: meta.threadId,
       possibleDuplicate: meta.possibleDuplicate, body,
       ...(meta.thread ? { thread: meta.thread } : {}),
       ...(meta.task ? { task: meta.task } : {}),
+      ...(meta.handoff ? { handoff: meta.handoff } : {}),
     }
   } catch { return null }
 }

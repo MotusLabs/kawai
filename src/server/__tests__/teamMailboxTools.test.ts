@@ -101,3 +101,24 @@ test('killed sender without a group leaves reply dead-lettered', async () => {
   records.delete('lead')
   expect(await mailboxHandlers(mailbox, 'dev').reply({ message_id: original.id, body: 'Answer' })).toMatchObject({ state: 'dead', reason: 'killed-sender-without-group' })
 })
+
+test('urgent direct mail to an agent whose profile is cooling is refused; normal mail still queues', async () => {
+  records.get('dev')!.claudeProfileId = 'glm'
+  const until = '2026-10-12T15:40:00.000Z'
+  mailbox = new TeamMailbox(store, { getSession: id => records.get(id), homeDir: dir,
+    cooldownUntil: profileId => (profileId === 'glm' ? until : null) })
+  handlers = mailboxHandlers(mailbox, 'lead')
+  const time = new Date(until).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  const error = await handlers.send_message({ to_kind: 'session', to_id: 'dev', body: 'Now!', urgent: true }).then(() => null, e => e as Error)
+  expect(error?.message).toContain('profile glm')
+  expect(error?.message).toContain(time)
+  expect(store.teamsWithQueuedMail()).toEqual([])
+  expect(await handlers.send_message({ to_kind: 'session', to_id: 'dev', body: 'Later' })).toMatchObject({ state: 'queued' })
+  // An urgent reply to a cooling sender is refused the same way.
+  const original = await mailboxHandlers(mailbox, 'dev').send_message({ to_kind: 'session', to_id: 'lead', body: 'Q' })
+  store.claim(original.id, 'lead'); store.markPushed(original.id); store.markDelivered(original.id)
+  const replyError = await handlers.reply({ message_id: original.id, body: 'A', urgent: true }).then(() => null, e => e as Error)
+  expect(replyError?.message).toContain('profile glm')
+  // Group mail is never refused for cooldown.
+  expect(await handlers.send_message({ ...groupMail, urgent: true })).toMatchObject({ state: 'queued' })
+})

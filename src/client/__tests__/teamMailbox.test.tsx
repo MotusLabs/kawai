@@ -20,6 +20,7 @@ const mail = (id: string, state: TeamMessage['state'], deliverAt: string | null 
   originPath: '/repo', priority: 'normal', tags: [], threadId: id, inReplyTo: null, hop: 1, body: id,
   claimedBy: state === 'uncertain' ? 'dev' : null, claimedAt: null, createdAt: new Date().toISOString(),
   pushedAt: null, deliveredAt: null, reason: null, possibleDuplicate: false, attachThread: false, taskId: null,
+  claimCommit: null, parkedUntil: null, parkCount: 0, resumeMessageId: null, handoff: null, excludedProfile: null,
 })
 test('peer row is distinct and restored by reconnect snapshot', () => {
   const events: ChatEvent[] = [{ type: 'user_message', id: 'u1', sequence: 0, at: 'now', turnId: 't', text: 'Human' }, peer]

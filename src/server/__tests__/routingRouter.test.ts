@@ -19,7 +19,8 @@ const message = (over: Partial<TeamMessage> = {}): TeamMessage => ({
   id: 'm1', teamId: 'team', toKind: 'group', toId: 'devs', fromSession: 'lead', fromGroup: 'leads', originPath: '/repo',
   priority: 'normal', tags: ['t'], threadId: 'm1', inReplyTo: null, hop: 1, body: 'SECRET BODY', state: 'queued',
   claimedBy: null, claimedAt: null, deliverAt: null, createdAt: '', pushedAt: null, deliveredAt: null, reason: null,
-  possibleDuplicate: false, attachThread: false, taskId: 'task-1', ...over,
+  possibleDuplicate: false, attachThread: false, taskId: 'task-1',
+  claimCommit: null, parkedUntil: null, parkCount: 0, resumeMessageId: null, handoff: null, excludedProfile: null, ...over,
 })
 
 const eligible = (sessionId: string, idleForMs = 10): EligibleMember => ({
@@ -47,6 +48,7 @@ function makeRouter() {
         return { message: m, sessionId: `spawned-${profileId}` }
       },
     },
+    excludedProfile: m => m.excludedProfile ?? undefined,
     rules: {
       rule: () => (rule ? { route: async (ctx: RouteContext) => { ruleCalls.push(ctx); return rule!(ctx) } } as never : undefined),
     },
@@ -91,6 +93,13 @@ describe('built-in routing', () => {
     events.glm = [finalEvent('glm', null)]
     expect(await makeRouter().route(message(), { eligible: [eligible('a', 50), eligible('b', 5)], attempt: 0 }))
       .toEqual({ kind: 'member', sessionId: 'b' })
+  })
+
+  test('forwarded work never goes back to the limited profile', async () => {
+    expect(await makeRouter().route(message({ excludedProfile: 'glm' }), { eligible: [eligible('a', 50), eligible('b', 5)], attempt: 0 }))
+      .toEqual({ kind: 'member', sessionId: 'b' })
+    expect(await makeRouter().route(message({ excludedProfile: 'glm' }), { eligible: [eligible('a', 50)], attempt: 0 }))
+      .toEqual({ kind: 'none' })
   })
 
   test('a cooling-only candidate set holds until the cooldown ends', async () => {

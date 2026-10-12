@@ -92,6 +92,12 @@ export class MailDispatcher {
     targetWorktree?: (message: TeamMessage) => string | null
     /** Decides who takes group mail (profile routing); default longest idle. */
     router?: GroupRouter
+    /** A claim was won (profile routing records the claim commit). */
+    claimed?: (message: TeamMessage, sessionId: string) => void
+    /** Mail was pushed as the session's next turn. */
+    delivered?: (sessionId: string, message: TeamMessage) => void
+    /** Another time the dispatcher must wake (e.g. a recovery note), epoch ms. */
+    wakeAt?: () => number | null
     onError?: (error: unknown) => void
     now?: () => number
   }) {}
@@ -256,6 +262,7 @@ export class MailDispatcher {
       }
       if (!this.store.claimWhen(message.id, recipient.sessionId, eligible, reserved)) return false
       this.idleSince.delete(recipient.sessionId)
+      this.options.claimed?.(message, recipient.sessionId)
       if (interrupt) await this.options.interrupt(recipient.sessionId)
       const current = this.current(recipient.sessionId)
       // The awaited interrupt allows a human turn/card to arrive. Re-check
@@ -273,6 +280,7 @@ export class MailDispatcher {
       // duplicate it on the next pass.
       if (!this.store.markPushed(message.id)) return true
       this.options.deliver(recipient.sessionId, envelope)
+      this.options.delivered?.(recipient.sessionId, message)
       if (message.taskId) this.options.associateTask?.(recipient.sessionId, message.taskId)
       const pushed = this.store.get(message.id)!
       if (!this.current(recipient.sessionId)?.available) this.store.holdUncertain(message.id, 'recipient-unavailable-after-push')
@@ -305,7 +313,8 @@ export class MailDispatcher {
     this.timer = null
     if (this.closed) return
     const due = this.store.nextDueAt()
-    const times = [due ? Date.parse(due) : null, ...this.holds.values()].filter((at): at is number => at !== null)
+    const times = [due ? Date.parse(due) : null, ...this.holds.values(), this.options.wakeAt?.() ?? null]
+      .filter((at): at is number => at !== null)
     if (times.length === 0) return
     this.timer = setTimeout(() => this.notify(), Math.min(2147483647, Math.max(0, Math.min(...times) - Date.now())))
     this.timer.unref?.()

@@ -33,3 +33,34 @@ test('replay restores string and block peer turns with all metadata', () => {
     expect(replay.events[0]).toMatchObject({ type: 'peer_message', ...PEER })
   }
 })
+
+const HANDOFF = {
+  fromSession: 'chat-glm', fromProfile: 'glm', claimCommit: 'abc1234', lastError: 'API Error: 429 quota',
+  progress: { toolCalls: 3, tools: ['Read', 'Edit', 'Bash'], filesTouched: ['src/a.ts'] },
+}
+
+test('a handoff package renders the digest, claim commit, and inspect-first instruction, and round-trips', () => {
+  const peer = { ...PEER, handoff: HANDOFF }
+  const text = formatEnvelope(peer)
+  expect(text).toContain('[Handoff] Session chat-glm (profile glm) hit a provider limit')
+  expect(text).toContain('3 tool calls (Read, Edit, Bash)')
+  expect(text).toContain('Files touched: src/a.ts.')
+  expect(text).toContain('Last error: API Error: 429 quota.')
+  expect(text).toContain('`git status`, `git diff abc1234`, and `git log abc1234..`')
+  expect(parseEnvelope(text)).toEqual(peer)
+  // The readable section is verified against the metadata on parse.
+  expect(parseEnvelope(text.replace('3 tool calls', '9 tool calls'))).toBeNull()
+})
+
+test('a handoff without a claim commit still asks for git status first', () => {
+  const peer = { ...PEER, handoff: { ...HANDOFF, claimCommit: null, lastError: null, progress: { toolCalls: 1, tools: [], filesTouched: [] } } }
+  const text = formatEnvelope(peer)
+  expect(text).toContain('run `git status` and inspect what changed')
+  expect(text).toContain('1 tool call.')
+  expect(parseEnvelope(text)).toEqual(peer)
+})
+
+test('a malformed handoff package is not mail', () => {
+  const text = formatEnvelope({ ...PEER, handoff: HANDOFF }).replace('&quot;toolCalls&quot;:3', '&quot;toolCalls&quot;:&quot;3&quot;')
+  expect(parseEnvelope(text)).toBeNull()
+})

@@ -22,6 +22,7 @@ import { worktreeRootOf } from './worktreeRoots'
 import { LimitEventStore } from './routing/limitEvents'
 import { RuleRegistry, type RuleLoadReport } from './routing/ruleLoader'
 import { ProfileRouter } from './routing/router'
+import { LimitOutcomes, type HandoffTarget } from './routing/limitOutcomes'
 import { loadTeamGroups } from './teamGroups'
 import type { ChatUsageReport } from '../../shared/chat'
 import type { RouteDecisionLogEntry } from '../../shared/routing'
@@ -35,6 +36,7 @@ export class SessionMailbox {
   readonly limits: LimitEventStore
   readonly rules: RuleRegistry
   readonly router: ProfileRouter
+  readonly outcomes: LimitOutcomes
   private readonly catalogs = new Map<string, GroupCatalog>()
   private releaseSubscription?: () => void
 
@@ -74,6 +76,7 @@ export class SessionMailbox {
     this.tasks = new TaskService(taskStore, { getSession: options.getRecord, homeDir: options.homeDir })
     this.mailbox = new TeamMailbox(store, {
       getSession: options.getRecord, homeDir: options.homeDir, restoreSession: options.restore, tasks: taskStore,
+      cooldownUntil: profileId => this.limits.cooldownUntil(profileId),
     })
     this.staffing = new WorktreeStaffing(db, store, {
       records: options.records,
@@ -104,10 +107,22 @@ export class SessionMailbox {
       rules: this.rules,
       limits: this.limits,
       usageOf: profileId => options.usageOf?.(profileId) ?? null,
+      excludedProfile: message => message.excludedProfile ?? undefined,
       ...(options.onRouteDecision ? { onDecision: options.onRouteDecision } : {}),
     })
+    this.outcomes = new LimitOutcomes(db, {
+      store, limits: this.limits, rules: this.rules,
+      getRecord: options.getRecord,
+      teamOf: id => options.teams.teamOf(id)?.teamId,
+      groupOf: (sessionId, groupId) => options.teams.catalogOf(sessionId, this.catalogs)?.groups.get(groupId),
+      taskTitle: taskId => taskStore.get(taskId)?.title ?? null,
+      onError: options.onError,
+    })
     this.dispatcher = new MailDispatcher(this.mailbox.store, {
-      beginCycle: () => this.catalogs.clear(),
+      beginCycle: () => { this.catalogs.clear(); this.outcomes.processNotes() },
+      claimed: (message, id) => this.outcomes.claimed(message, id),
+      delivered: (id, message) => this.outcomes.delivered(id, message),
+      wakeAt: () => this.outcomes.nextNoteAt(),
       recipients: () => [...options.records()].flatMap(record => {
         const recipient = this.recipient(record.sessionId)
         return recipient ? [recipient] : []
@@ -144,7 +159,25 @@ export class SessionMailbox {
       pendingRequest: (this.options.getDriver(id)?.getPendingRequests().length ?? 0) > 0,
       available: this.options.available(record),
       worktree: worktreeRootOf(record.projectPath),
+      parked: this.mailbox.store.parkedBy(id).length > 0,
     }
+  }
+
+  /** A tool call in a session's transcript (limit progress). */
+  toolCall(sessionId: string, tool: string, input: unknown) {
+    this.outcomes.toolCall(sessionId, tool, input)
+  }
+
+  /** A session's turn ended; its mail was settled first. */
+  turnEnded(sessionId: string, success: boolean) {
+    void this.outcomes.turnEnded(sessionId, success).then(() => this.dispatcher.notify(), this.options.onError)
+  }
+
+  /** The human hands parked work to a group or session. */
+  handOff(messageId: string, target: HandoffTarget) {
+    const forwarded = this.outcomes.handOff(messageId, target)
+    this.dispatcher.notify()
+    return forwarded
   }
 
   /** Start only after persisted chat records are restored. */

@@ -1,7 +1,9 @@
 // Sender-bound mailbox operations. Identity always comes from the current
 // session record; tool arguments can only choose a recipient, content, and
 // (team-tasks) a task of the sender's own team. A reply without a task id
-// keeps the task of the message it answers.
+// keeps the task of the message it answers. Urgent direct mail to an agent
+// whose profile is cooling after a provider limit is refused (profile
+// routing): it could neither interrupt usefully nor run.
 import type { ChatSessionRecord } from '../db'
 import { loadTeamGroups } from './teamGroups'
 import { resolveTeam, type TeamIdentity } from './teamIdentity'
@@ -24,7 +26,20 @@ export class TeamMailbox {
     onChange?: (message: TeamMessage) => void
     restoreSession?: (id: string) => void | Promise<void>
     tasks?: TaskStore
+    /** Built-in cooldown end (ISO) of a profile, or null. */
+    cooldownUntil?: (profileId: string) => string | null
   }) {}
+
+  /** Refuse urgent direct mail to an agent whose profile is cooling; nothing is queued. */
+  private refuseCooling(recipient: ChatSessionRecord, urgent: boolean | undefined) {
+    if (!urgent) return
+    const profileId = recipient.claudeProfileId ?? 'default'
+    const until = this.options.cooldownUntil?.(profileId)
+    if (!until) return
+    const time = new Date(until).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    throw new Error(`Session ${recipient.sessionId} runs on profile ${profileId}, which is cooling down after a provider limit until ${time} (${until}). ` +
+      'Send it without urgent to queue it, or send it to another agent.')
+  }
 
   /** A task id of the sender's team, or an error; nothing is enqueued on failure. */
   private taskOf(team: TeamIdentity, taskId: string | undefined): string | null {
@@ -57,6 +72,7 @@ export class TeamMailbox {
       if ((await resolveTeam(recipient.projectPath)).teamId !== team.teamId) {
         throw new Error('Recipient belongs to another team')
       }
+      this.refuseCooling(recipient, input.urgent)
       // Direct mail resumes an archived recipient, exactly as replies do:
       // otherwise the message could queue forever behind a parked session.
       if (recipient.archivedAt) await this.options.restoreSession?.(recipient.sessionId)
@@ -94,6 +110,7 @@ export class TeamMailbox {
     if (recipient && (await resolveTeam(recipient.projectPath)).teamId !== team.teamId) {
       throw new Error('Recipient belongs to another team')
     }
+    if (recipient) this.refuseCooling(recipient, input.urgent)
     if (recipient?.archivedAt) await this.options.restoreSession?.(recipient.sessionId)
     const fallback = !recipient && original.fromGroup !== null
     const message = this.store.enqueue({
