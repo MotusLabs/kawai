@@ -40,15 +40,15 @@ The two `UNIQUE(strategy_id, command_id)` constraints are what make D4's idempot
 
 **What this does and does not establish.** It establishes that the decision did not come from the agent tool surface and that no repository or peer document can grant publication (S09's named vectors). It does **not** establish that a human physically typed the frame: `/ws` upgrades unconditionally (`src/server/index.ts`) and human actions are trusted from the message's `sessionId`, exactly as `TaskService` does for `team-task-create`/`amend`/`status`. A local process that can open the WebSocket can speak `strategy-approve`. That is the same boundary every existing human WS action already has; see the two drafts below and Open Questions.
 
-### D3b. Human assurance for approval — two drafts (human chooses)
-The review found that "authenticated human UI connection" overclaims. Both drafts below are written out; the spec files carry Draft B until the human rules.
+### D3b. Human assurance for approval — Draft B ruled 2026-10-13
+The review found that "authenticated human UI connection" overclaims. Both drafts were written out for the human, who ruled **Draft B** on 2026-10-13. Draft A stays here as a documented alternative and is not adopted; the spec files carry Draft B.
 
-**Draft B — honest boundary (recommended, currently in `specs/strategy-approval/spec.md`).**
+**Draft B — honest boundary (ruled 2026-10-13; in `specs/strategy-approval/spec.md`).**
 Requirement text: "Approval, publication, and withdrawal SHALL be possible only through the human UI action path. Agents SHALL have no tool that approves, publishes, or withdraws a revision. The runtime SHALL enforce this; prompt conventions are insufficient. The guarantee is that no agent tool surface can approve; it does not by itself distinguish a human browser from a local process speaking the UI connection protocol."
 Task delta: 4.3 notes that the forged-WS-client vector is explicitly accepted, matching `team-task-*`.
 Why recommended: an assurance step applied only to `strategy-approve` would harden strategy approval while leaving `team-task-create`/`amend`/`status` equally forgeable — that looks secured and is worse than an honest boundary. The real fix is a separate change covering every human WS action.
 
-**Draft A — real assurance step (alternative).**
+**Draft A — real assurance step (documented alternative, not adopted).**
 Requirement text: "Approval, publication, and withdrawal SHALL be possible only through the human UI action path after a server-issued human-assurance step: the server issues a nonce bound to the live UI connection and the action must echo it. Agents SHALL have no tool that approves, publishes, or withdraws a revision. A client that cannot complete the assurance step SHALL be refused. The runtime SHALL enforce this; prompt conventions are insufficient."
 Mechanics: `StrategyConnections` issues the nonce only to a connection that has opened a strategy view (the browser flow) and echoes it in `strategy-approve`; the nonce is single-use, bound to the connection, and expires. A bare script that speaks the frames without it is refused.
 Task delta: 4.3 gains a forged-WS-client case (a script that speaks `strategy-approve` without the nonce is refused); 4.1 gains the nonce issue/echo step.
@@ -85,22 +85,15 @@ Additive tables only. No existing team, task, or session behavior changes. No st
 
 ## Open Questions
 
-Each has a recommended default the tasks assume unless the human says otherwise; overriding the first three would reshape D1/D5/D7 and the task list.
+All eight were ruled by the human on 2026-10-13. Every ruling landed on the recommended default, so D1, D5, and D7 stand as written and the task list is unchanged. This table is now a record of the decisions, not a set of assumptions.
 
-| Question | Recommended default | If changed |
+| Question | Ruling (2026-10-13) | Notes |
 | --- | --- | --- |
-| Product identity and repository bindings | One product per owning team (git common dir + its worktrees); human-chosen slug; no cross-repo bindings yet | Needs an access-scope model and binding validation in D5 |
-| Where approved revisions are stored | kawai-owned SQLite (`agentboard.db`) only; repo export later as a non-authoritative projection | File-backed authority would reopen S09; would need signing or a trusted writer |
-| Ownership and quorum for approval | Single human owner; no quorum or delegation | Needs multiple actor identities on `strategy_decisions` and a quorum rule |
-| Vision vs. strategy as separate records | One record; the template's Purpose/Approach cover both | Splitting adds a second entity and a link |
-| Competing drafts | Several drafts per product, one active approved revision; the human picks on approve | Auto-merge or "latest draft wins" would break S12/S17 |
-| Evidence threshold for "validated" | Requires a source reference; external research is the author's job | A research gate would need an evidence workflow |
-| Review horizon | Storeable field on the record; expiry only prompts review, never approves | Auto-renewal would violate human-only approval |
-
-### Raised in review (2026-10-12): S09 transport assurance
-
-The seven rows above go to the human unchanged. One further question came out of review and needs the same ruling.
-
-| Question | Recommended default | If changed |
-| --- | --- | --- |
-| Does "human-only approval" require a transport-level assurance step, or is "no agent tool surface" the honest boundary? | **Draft B** (honest boundary): state the guarantee as "no agent tool surface can approve", and accept the local-process WS vector as the same boundary `team-task-*` already has | **Draft A**: add a server-issued, connection-bound single-use nonce that `strategy-approve` must echo, and a forged-WS-client test in 4.3. Doing A only for strategy looks secured while leaving `team-task-create`/`amend`/`status` forgeable — so A should be paired with a separate change covering every human WS action. Both drafts are written out in D3b |
+| Product identity and repository bindings | One product per owning team (git common dir + its worktrees); human-chosen slug; no cross-repo bindings yet | D5 stands. Widening later is additive `strategy_repo_bindings` rows plus an access-scope model |
+| Where approved revisions are stored | kawai-owned SQLite (`agentboard.db`) only; any repo export is a non-authoritative projection | D1 stands. File-backed authority would reopen S09 and would need signing or a trusted writer |
+| Ownership and quorum for approval | Single human owner; no quorum or delegation | D7 stands. Multiple actors later would need identities on `strategy_decisions` and a quorum rule |
+| Vision vs. strategy as separate records | One record; the template's Purpose/Approach cover both | Splitting would add a second entity and a link |
+| Competing drafts | Several drafts per product, one active approved revision; the human picks on approve | No auto-merge and no "latest draft wins" — either would break S12/S17 |
+| Evidence threshold for "validated" | Requires a source reference; external research is the author's job | No research gate in this change |
+| Review horizon | Storeable field on the record; expiry prompts review, never approves | Auto-renewal would violate human-only approval |
+| S09 transport assurance (raised in review 2026-10-12) | **Draft B — honest boundary. Confirmed.** The guarantee is "no agent tool surface can approve"; the local-process WS vector is named as not excluded | Draft A (nonce assurance step) stays in D3b as a documented alternative and is **not** adopted. If real transport assurance is ever wanted, the right shape is a separate change covering every human WS action — keep the pairing caveat in D3b |
