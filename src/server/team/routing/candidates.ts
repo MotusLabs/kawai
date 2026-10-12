@@ -2,8 +2,10 @@
 // Pure: the dispatcher supplies the group's live members (already judged
 // eligible or not by delivery rules, worktree, and parking) and whether
 // staffing may spawn at all (worktree task mail, team cap, one spawned
-// writer per worktree); this module applies cooldown, the per-profile caps,
-// and the group `max`, and reports the live counts rules see.
+// writer per worktree); this module applies the per-profile caps and the
+// group `max`, and reports the live counts rules see. Cooling profiles stay
+// among the candidates — a rule may decide otherwise; the built-in strategy
+// skips them — except the profile a forwarded message left.
 //
 // Caps count every non-archived member of the group on a profile — created
 // by the user or spawned, busy or parked — plus pending spawn reservations.
@@ -30,8 +32,6 @@ export interface CandidateInput {
   spawnAllowed: boolean
   /** Where a spawned member would start; required for spawn slots. */
   spawnCwd: string | null
-  /** The profile is cooling now. */
-  cooling: (profileId: string) => boolean
   /** A forwarded message never goes back to the limited profile. */
   excludeProfile?: string
 }
@@ -55,7 +55,7 @@ export function buildCandidates(input: CandidateInput): CandidateSet {
   for (const profileId of input.pendingSpawnProfiles) count(profileId)
   const live = input.members.length + input.pendingSpawnProfiles.length
   const allowed = group.profiles.length > 0 ? group.profiles : [{ profileId: DEFAULT_PROFILE_ID }]
-  const usable = (profileId: string) => profileId !== input.excludeProfile && !input.cooling(profileId)
+  const usable = (profileId: string) => profileId !== input.excludeProfile
 
   const candidates: RouteCandidate[] = []
   for (const member of input.members) {

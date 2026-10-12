@@ -2,7 +2,7 @@
 // independent of SDK transport and timing of the manager's subscriptions.
 import { afterEach, beforeEach, expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
-import { MailDispatcher, type MailRecipient } from '../team/dispatcher'
+import { MailDispatcher, type GroupRouter, type MailRecipient, type RouteView } from '../team/dispatcher'
 import { MailboxStore, type EnqueueInput } from '../team/mailboxStore'
 
 let db: Database
@@ -173,4 +173,75 @@ test('a claim requeued while its interrupt runs is not delivered, then delivered
   await dispatch()
   expect(delivered).toEqual([{ recipient: 'dev', id: mail.id }])
   expect(store.get(mail.id)).toMatchObject({ state: 'claimed', claimedBy: 'dev' })
+})
+
+// Routing (profile-routing D5): the dispatcher asks a router per group message.
+const withRouter = (route: GroupRouter['route'], now?: () => number) => {
+  dispatcher.close()
+  dispatcher = new MailDispatcher(store, {
+    recipients: () => recipients,
+    prepare: async () => {},
+    interrupt: async id => { recipients.find(row => row.sessionId === id)!.idle = true },
+    deliver: (id, peer) => { delivered.push({ recipient: id, id: peer.messageId }); recipients.find(row => row.sessionId === id)!.idle = false },
+    watchReceipt: () => {},
+    router: { route },
+    ...(now ? { now } : {}),
+  })
+}
+
+test('the router chooses among eligible members; parked members are not offered', async () => {
+  recipients = [
+    { sessionId: 'a', teamId: 'team', groupId: 'devs', idle: true, pendingRequest: false, available: true },
+    { sessionId: 'b', teamId: 'team', groupId: 'devs', idle: true, pendingRequest: false, available: true },
+    { sessionId: 'p', teamId: 'team', groupId: 'devs', idle: true, pendingRequest: false, available: true, parked: true },
+  ]
+  const views: RouteView[] = []
+  withRouter(async (_message, view) => { views.push(view); return { kind: 'member', sessionId: 'b' } })
+  const m = send(); await dispatch()
+  expect(delivered).toEqual([{ recipient: 'b', id: m.id }])
+  expect(views[0]!.eligible.map(row => row.sessionId)).toEqual(['a', 'b'])
+  expect(views[0]!.attempt).toBe(0)
+})
+
+test('a stale pick is routed again, then by attempt 2', async () => {
+  recipients = [
+    { sessionId: 'busy', teamId: 'team', groupId: 'devs', idle: true, pendingRequest: false, available: true },
+    { sessionId: 'free', teamId: 'team', groupId: 'devs', idle: true, pendingRequest: false, available: true },
+  ]
+  const attempts: number[] = []
+  withRouter(async (_message, view) => {
+    attempts.push(view.attempt)
+    if (view.attempt < 2) {
+      // The member started a turn while the rule ran.
+      recipients[0]!.idle = false
+      return { kind: 'member', sessionId: 'busy' }
+    }
+    return { kind: 'member', sessionId: 'free' }
+  })
+  const m = send(); await dispatch()
+  expect(attempts).toEqual([0, 1, 2])
+  expect(delivered).toEqual([{ recipient: 'free', id: m.id }])
+})
+
+test('a hold keeps the message queued and re-arms the timer for its retry time', async () => {
+  recipients = [{ sessionId: 'a', teamId: 'team', groupId: 'devs', idle: true, pendingRequest: false, available: true }]
+  let hold = true
+  withRouter(async (_message, view) => (hold ? { kind: 'hold', retryAt: Date.now() + 30 } : { kind: 'member', sessionId: view.eligible[0]!.sessionId }))
+  const m = send(); await dispatch()
+  expect(store.get(m.id)?.state).toBe('queued')
+  hold = false
+  await Bun.sleep(80)
+  await dispatcher.settled()
+  expect(delivered).toEqual([{ recipient: 'a', id: m.id }])
+})
+
+test('direct mail, urgent or not, never consults the router', async () => {
+  recipients[0]!.idle = true
+  let calls = 0
+  withRouter(async () => { calls++; return { kind: 'none' } })
+  send({ toKind: 'session', toId: 'dev', priority: 'urgent' })
+  send({ toKind: 'session', toId: 'dev' })
+  await dispatch()
+  expect(calls).toBe(0)
+  expect(delivered).toHaveLength(1)
 })

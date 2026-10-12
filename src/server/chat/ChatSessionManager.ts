@@ -418,6 +418,7 @@ export class ChatSessionManager {
       },
       transcriptFor: id => { const sdkId = this.records.get(id)?.sdkSessionId; return sdkId ? findTranscriptPath(sdkId) : null },
       onChange: options.onMailboxChange,
+      usageOf: profileId => this.usageLimits.get(profileId),
       onError: error => logger.warn('team_mailbox_dispatch_failed', { error: String(error) }),
     })
     this.mailbox = this.teamMail.mailbox

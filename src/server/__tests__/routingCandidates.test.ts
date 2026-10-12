@@ -18,7 +18,7 @@ const CAPPED = 'profiles: { glm: 2, mimo: 1, claude: 1 }'
 function build(over: Partial<CandidateInput>) {
   return buildCandidates({
     group: group(CAPPED), members: [], pendingSpawnProfiles: [], spawnAllowed: true, spawnCwd: '/repo/wt',
-    cooling: () => false, ...over,
+    ...over,
   })
 }
 const ids = (candidates: RouteCandidate[]) => candidates.map(candidate => candidate.id)
@@ -60,10 +60,10 @@ describe('buildCandidates', () => {
     expect(ids(build({ group: group('profiles: { glm: 2 }') }).candidates)).toEqual(['spawn:glm'])
   })
 
-  test('eligible members are candidates unless their profile cools or is excluded', () => {
+  test('eligible members are candidates, cooling or not, unless their profile is excluded', () => {
     const set = build({
       members: [member('a', 'glm', { idleForMs: 5 }), member('b', 'claude'), member('c', 'mimo', { eligible: false })],
-      cooling: profileId => profileId === 'claude', spawnAllowed: false,
+      excludeProfile: 'claude', spawnAllowed: false,
     })
     expect(set.candidates).toEqual([{ id: 'member:a', kind: 'member', profileId: 'glm', sessionId: 'a', cwd: '/repo/wt', idleForMs: 5 }])
   })
@@ -94,6 +94,14 @@ describe('builtinPick', () => {
     const list = [c('a', 'member', 'glm', 99), c('b', 'member', 'claude', 1), c('s', 'spawn', 'claude')]
     expect(builtinPick('profile-order', list, ['claude', 'glm'])?.id).toBe('b')
     expect(builtinPick('profile-order', [c('x', 'member', 'other', 99), c('a', 'member', 'glm', 1)], ['claude', 'glm'])?.id).toBe('a')
+  })
+
+  test('both strategies skip cooling profiles, members and spawns alike', () => {
+    const list = [c('a', 'member', 'glm', 99), c('b', 'member', 'claude', 1), c('s', 'spawn', 'glm')]
+    const cooling = (profileId: string) => profileId === 'glm'
+    expect(builtinPick('first-available', list, ['glm', 'claude'], cooling)?.id).toBe('b')
+    expect(builtinPick('profile-order', list, ['glm', 'claude'], cooling)?.id).toBe('b')
+    expect(builtinPick('first-available', [list[0]!, list[2]!], ['glm'], cooling)).toBeNull()
   })
 
   test('no candidates, no pick', () => {

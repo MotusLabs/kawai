@@ -1,6 +1,8 @@
-// Worktree staffing (team-tasks D4/D6): worktree-filtered pickup, the three
-// caps with durable reservations, spawn failure and restart reconciliation,
-// and dead-lettering mail for a removed worktree — never creating one.
+// Worktree staffing (team-tasks D4/D6, profile-routing D4a): worktree-filtered
+// pickup, the caps (group max, per-profile, team, worktree writer) with
+// durable reservations, spawn failure and restart reconciliation, and
+// dead-lettering mail for a removed worktree — never creating one. Spawns
+// are driven the production way: the profile router over due group mail.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from 'bun:test'
 import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
@@ -8,7 +10,9 @@ import os from 'node:os'
 import path from 'node:path'
 import { cleanGitEnv } from '../git/gitCommand'
 import { initDatabase, type ChatSessionRecord, type SessionDatabase } from '../db'
-import { MailDispatcher, type MailRecipient } from '../team/dispatcher'
+import { MailDispatcher, type EligibleMember, type MailRecipient, type SpawnAssignment } from '../team/dispatcher'
+import { ProfileRouter } from '../team/routing/router'
+import { loadTeamGroups } from '../team/teamGroups'
 import { MailboxStore } from '../team/mailboxStore'
 import { WorktreeStaffing, type SpawnRequest, type SpawnResult } from '../team/staffing'
 import { TaskStore } from '../team/taskStore'
@@ -49,7 +53,8 @@ let db: SessionDatabase
 let store: MailboxStore
 let tasks: TaskStore
 let records: Map<string, ChatSessionRecord>
-let idleMembers: Array<{ groupId: string; worktree: string }>
+/** Sessions the router sees as idle and eligible (they must also be records). */
+let idleMembers: string[]
 let spawned: SpawnRequest[]
 let spawnFails: string | null
 let staffing: WorktreeStaffing
@@ -65,20 +70,48 @@ const record = (sessionId: string, extra: Partial<ChatSessionRecord>): ChatSessi
 const makeStaffing = (onError?: (error: unknown) => void) => new WorktreeStaffing(db.db, store, {
   records: () => records.values(),
   teamOf: () => team,
-  hasIdleMember: (teamId, groupId, worktree) => teamId === team.teamId && idleMembers.some(row => row.groupId === groupId && row.worktree === worktree),
   caps: new TeamCaps({ homeDir: home }),
   worktrees: new TeamWorktrees({ ttlMs: 0 }),
   ...(onError ? { onError } : {}),
-  homeDir: home,
   now: () => clock,
   spawn: async (request): Promise<SpawnResult> => {
     spawned.push(request)
     if (spawnFails) return { ok: false, error: spawnFails }
     const sessionId = `spawned-${spawned.length}`
-    records.set(sessionId, record(sessionId, { projectPath: request.projectPath, groupId: request.groupId, spawned: true, taskId: request.taskId, status: 'waiting' }))
+    records.set(sessionId, record(sessionId, {
+      projectPath: request.projectPath, groupId: request.groupId, spawned: true, taskId: request.taskId, status: 'waiting',
+      ...(request.profileId ? { claudeProfileId: request.profileId } : {}),
+    }))
     return { ok: true, sessionId }
   },
 })
+const targetWorktree = (message: { taskId: string | null }) => (message.taskId ? tasks.get(message.taskId)?.worktree ?? null : null)
+const makeRouter = (staff: WorktreeStaffing) => new ProfileRouter({
+  groupOf: async message => (await loadTeamGroups(repo, home)).catalog.groups.get(message.toId),
+  members: (_teamId, groupId) => [...records.values()]
+    .filter(row => row.archivedAt == null && row.groupId === groupId)
+    .map(row => ({ sessionId: row.sessionId, profileId: row.claudeProfileId ?? 'default', cwd: row.projectPath })),
+  targetWorktree,
+  staffing: staff, rules: { rule: () => undefined }, limits: { forProfile: () => [] }, usageOf: () => null,
+  now: () => clock,
+})
+/** One routing pass over due group mail; the members spawned and the mail reserved for them. */
+const pass = async (staff: WorktreeStaffing = staffing): Promise<SpawnAssignment[]> => {
+  const router = makeRouter(staff)
+  const assignments: SpawnAssignment[] = []
+  for (const message of store.dueGroupMail()) {
+    const eligible: EligibleMember[] = idleMembers.flatMap(id => {
+      const row = records.get(id)
+      return row && worktreeRootOf(row.projectPath) === targetWorktree(message) ? [{
+        sessionId: id, teamId: team.teamId, groupId: row.groupId ?? null, idle: true, pendingRequest: false, available: true,
+        worktree: worktreeRootOf(row.projectPath), idleForMs: 1,
+      }] : []
+    })
+    const result = await router.route(message, { eligible, attempt: 0 })
+    if (result.kind === 'spawned') assignments.push(result.assignment)
+  }
+  return assignments
+}
 const task = (worktree: string | null) => tasks.create({ teamId: team.teamId, title: 't', direction: 'd', creator: { kind: 'human', sessionId: null }, worktree })
 const mail = (taskId: string | null, extra: Partial<Parameters<MailboxStore['enqueue']>[0]> = {}) => store.enqueue({
   teamId: team.teamId, toKind: 'group', toId: 'devs', fromSession: 'lead', fromGroup: 'leads', originPath: repo, body: 'work', taskId, ...extra,
@@ -106,7 +139,7 @@ describe('spawning', () => {
   test('an unstaffed worktree gets a member with the group settings and the message reserved for it', async () => {
     const t = task(featX)
     const m = mail(t.id)
-    const assignments = await staffing.run()
+    const assignments = await pass()
     expect(spawned).toEqual([{ projectPath: featX, groupId: 'devs', profileId: 'glm', approvalPolicy: 'auto', taskId: t.id }])
     expect(assignments).toEqual([{ message: expect.objectContaining({ id: m.id, state: 'spawning' }), sessionId: 'spawned-1' }])
     expect(db.db.prepare('SELECT COUNT(*) AS n FROM team_spawns').get()).toEqual({ n: 0 })
@@ -115,14 +148,15 @@ describe('spawning', () => {
   test('group defaults: default profile and manual approval', async () => {
     writeGroup('devs', 'max: 1')
     mail(task(featX).id)
-    await staffing.run()
+    await pass()
     expect(spawned[0]).toEqual({ projectPath: featX, groupId: 'devs', approvalPolicy: 'manual', taskId: expect.any(String) })
   })
 
   test('an idle member already in the worktree takes the mail: no spawn', async () => {
-    idleMembers.push({ groupId: 'devs', worktree: featX })
+    records.set('dev-x', record('dev-x', { projectPath: featX, status: 'waiting' }))
+    idleMembers.push('dev-x')
     mail(task(featX).id)
-    expect(await staffing.run()).toEqual([])
+    expect(await pass()).toEqual([])
     expect(spawned).toEqual([])
   })
 
@@ -130,7 +164,7 @@ describe('spawning', () => {
     mail(null)
     mail(task(null).id)
     mail(task(featX).id, { toKind: 'session', toId: 'lead' })
-    expect(await staffing.run()).toEqual([])
+    expect(await pass()).toEqual([])
     expect(spawned).toEqual([])
   })
 })
@@ -141,28 +175,28 @@ describe('caps', () => {
     records.set('dev-1', record('dev-1', { projectPath: featY }))
     records.set('dev-2', record('dev-2', { projectPath: repo }))
     const m = mail(task(featX).id)
-    expect(await staffing.run()).toEqual([])
+    expect(await pass()).toEqual([])
     expect(store.get(m.id)?.state).toBe('queued')
     // Archiving a member frees its slot; the next pass spawns.
     records.get('dev-2')!.archivedAt = '2026-10-11'
-    expect(await staffing.run()).toHaveLength(1)
+    expect(await pass()).toHaveLength(1)
   })
 
   test('one spawned writer per worktree, even busy in a subdirectory, and of another group', async () => {
     records.set('writer', record('writer', { projectPath: path.join(featX, 'src'), spawned: true, groupId: 'qa' }))
     const m = mail(task(featX).id)
-    expect(await staffing.run()).toEqual([])
+    expect(await pass()).toEqual([])
     expect(store.get(m.id)?.state).toBe('queued')
     // A manually created (not spawned) member in the worktree does not hold the writer slot.
     records.get('writer')!.spawned = false
-    expect(await staffing.run()).toHaveLength(1)
+    expect(await pass()).toHaveLength(1)
   })
 
   test('a second message for a staffed worktree waits for the spawned member', async () => {
     const t = task(featX)
     mail(t.id)
     const second = mail(t.id)
-    const assignments = await staffing.run()
+    const assignments = await pass()
     expect(assignments).toHaveLength(1)
     expect(spawned).toHaveLength(1)
     expect(store.get(second.id)?.state).toBe('queued')
@@ -173,10 +207,10 @@ describe('caps', () => {
     fs.writeFileSync(teamCapsFile(home), JSON.stringify({ maxSpawnedSessions: 1 }))
     mail(task(featX).id)
     const waiting = mail(task(featY).id)
-    expect(await staffing.run()).toHaveLength(1)
+    expect(await pass()).toHaveLength(1)
     expect(store.get(waiting.id)?.state).toBe('queued')
     records.delete('spawned-1')
-    expect(await staffing.run()).toHaveLength(1)
+    expect(await pass()).toHaveLength(1)
     expect(spawned.map(request => request.projectPath)).toEqual([featX, featY])
   })
 
@@ -188,7 +222,7 @@ describe('caps', () => {
       return target
     })
     for (const target of worktrees) mail(task(target).id)
-    expect(await staffing.run()).toHaveLength(5)
+    expect(await pass()).toHaveLength(5)
     for (const target of worktrees) git(['worktree', 'remove', '--force', target], repo)
   })
 
@@ -197,7 +231,7 @@ describe('caps', () => {
     mail(t.id)
     mail(t.id)
     const other = makeStaffing()
-    const results = await Promise.all([staffing.run(), other.run(), staffing.run()])
+    const results = await Promise.all([pass(), pass(other), pass()])
     expect(results.flat()).toHaveLength(1)
     expect(spawned).toHaveLength(1)
   })
@@ -205,7 +239,56 @@ describe('caps', () => {
   test('a pending reservation counts toward the caps', async () => {
     db.db.prepare("INSERT INTO team_spawns (id, message_id, team_id, group_id, worktree, created_at) VALUES ('r', 'm', ?, 'qa', ?, 'now')").run(team.teamId, featX)
     mail(task(featX).id)
-    expect(await staffing.run()).toEqual([])
+    expect(await pass()).toEqual([])
+  })
+})
+
+describe('per-profile caps (profile routing)', () => {
+  test('a reached profile cap moves spawns to the next allowed profile', async () => {
+    writeGroup('devs', 'profiles: { glm: 1, minimax: 1 }')
+    records.set('dev-glm', record('dev-glm', { projectPath: repo, claudeProfileId: 'glm' }))
+    mail(task(featX).id)
+    expect(await pass()).toHaveLength(1)
+    expect(spawned.map(request => request.profileId)).toEqual(['minimax'])
+  })
+
+  test('user-created members count; with every profile at its cap nothing is spawned', async () => {
+    writeGroup('devs', 'profiles: { glm: 1, minimax: 1 }')
+    records.set('dev-glm', record('dev-glm', { projectPath: repo, claudeProfileId: 'glm' }))
+    records.set('dev-mm', record('dev-mm', { projectPath: featY, claudeProfileId: 'minimax' }))
+    const m = mail(task(featX).id)
+    expect(await pass()).toEqual([])
+    expect(store.get(m.id)?.state).toBe('queued')
+  })
+
+  test('members of other groups never count toward a cap', async () => {
+    writeGroup('devs', 'profiles: { glm: 1 }')
+    records.set('qa-glm', record('qa-glm', { projectPath: repo, groupId: 'qa', claudeProfileId: 'glm' }))
+    mail(task(featX).id)
+    expect(await pass()).toHaveLength(1)
+  })
+
+  test('concurrent spawns on one profile re-count inside the reservation and never overshoot', async () => {
+    writeGroup('devs', 'profiles: { glm: 1 }\nmax: 5')
+    const group = (await loadTeamGroups(repo, home)).catalog.groups.get('devs')!
+    const first = mail(task(featX).id)
+    const second = mail(task(featY).id)
+    const other = makeStaffing()
+    const results = await Promise.all([
+      staffing.spawnFor(first, featX, group, 'glm'), other.spawnFor(second, featY, group, 'glm'),
+    ])
+    expect(results.filter(Boolean)).toHaveLength(1)
+    expect(spawned).toHaveLength(1)
+    expect(results.some(result => result === null)).toBe(true)
+  })
+
+  test('a pending reservation on a profile holds its slot', async () => {
+    writeGroup('devs', 'profiles: { glm: 1, minimax: 1 }')
+    db.db.prepare("INSERT INTO team_spawns (id, message_id, team_id, group_id, worktree, created_at, profile_id) VALUES ('r', 'm', ?, 'devs', ?, 'now', 'glm')")
+      .run(team.teamId, featY)
+    mail(task(featX).id)
+    expect(await pass()).toHaveLength(1)
+    expect(spawned.map(request => request.profileId)).toEqual(['minimax'])
   })
 })
 
@@ -215,15 +298,15 @@ describe('failure, restart, and removal', () => {
     const errors: unknown[] = []
     staffing = makeStaffing(error => errors.push(error))
     const m = mail(task(featX).id)
-    expect(await staffing.run()).toEqual([])
+    expect(await pass()).toEqual([])
     expect(store.get(m.id)).toMatchObject({ state: 'queued', claimedBy: null })
     expect(db.db.prepare('SELECT COUNT(*) AS n FROM team_spawns').get()).toEqual({ n: 0 })
     expect(String(errors[0])).toContain('profile glm is not defined')
-    await staffing.run()
+    await pass()
     expect(spawned).toHaveLength(1)
     clock += 31_000
     spawnFails = null
-    expect(await staffing.run()).toHaveLength(1)
+    expect(await pass()).toHaveLength(1)
   })
 
   test('startup reconciliation drops interrupted reservations and requeues reserved mail', () => {
@@ -246,7 +329,7 @@ describe('failure, restart, and removal', () => {
     const m = mail(t.id)
     fs.rmSync(doomed, { recursive: true, force: true })
     const before = git(['worktree', 'list', '--porcelain'], repo)
-    expect(await staffing.run()).toEqual([])
+    expect(await pass()).toEqual([])
     expect(store.get(m.id)).toMatchObject({ state: 'dead', reason: `worktree-missing: ${doomed}` })
     expect(spawned).toEqual([])
     expect(git(['worktree', 'list', '--porcelain'], repo)).toBe(before)
@@ -312,7 +395,7 @@ describe('dispatcher routing by worktree', () => {
       deliver: (id, peer) => delivered.push({ to: id, id: peer.messageId }),
       watchReceipt: () => {},
       targetWorktree: message => (message.taskId ? tasks.get(message.taskId)?.worktree ?? null : null),
-      staff: () => staff.run(),
+      router: makeRouter(staff),
     })
     await run()
     await run()
@@ -328,7 +411,7 @@ describe('dispatcher routing by worktree', () => {
       recipients: () => [], prepare: async () => {}, interrupt: async () => {},
       deliver: () => { throw new Error('unreachable') }, watchReceipt: () => {},
       targetWorktree: message => (message.taskId ? tasks.get(message.taskId)?.worktree ?? null : null),
-      staff: () => staff.run(),
+      router: makeRouter(staff),
     })
     await run()
     expect(store.get(m.id)).toMatchObject({ state: 'queued', claimedBy: null })

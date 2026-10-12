@@ -21,6 +21,10 @@ import { TeamCaps } from './teamCaps'
 import { worktreeRootOf } from './worktreeRoots'
 import { LimitEventStore } from './routing/limitEvents'
 import { RuleRegistry, type RuleLoadReport } from './routing/ruleLoader'
+import { ProfileRouter } from './routing/router'
+import { loadTeamGroups } from './teamGroups'
+import type { ChatUsageReport } from '../../shared/chat'
+import type { RouteDecisionLogEntry } from '../../shared/routing'
 import type { Database } from 'bun:sqlite'
 
 export class SessionMailbox {
@@ -30,6 +34,7 @@ export class SessionMailbox {
   readonly staffing: WorktreeStaffing
   readonly limits: LimitEventStore
   readonly rules: RuleRegistry
+  readonly router: ProfileRouter
   private readonly catalogs = new Map<string, GroupCatalog>()
   private releaseSubscription?: () => void
 
@@ -53,6 +58,10 @@ export class SessionMailbox {
     onChange?: (team: string, message?: TeamMessage) => void
     /** Routing rules finished loading (start or reload). */
     onRulesLoaded?: (report: RuleLoadReport) => void
+    /** A profile's latest plan usage, for routing rules. */
+    usageOf?: (profileId: string) => ChatUsageReport | null
+    /** A routing decision was made (mailbox view). */
+    onRouteDecision?: (entry: RouteDecisionLogEntry) => void
     onError: (error: unknown) => void
   }) {
     const store = new MailboxStore(db, { recipientExists: id => !!options.getRecord(id) })
@@ -69,16 +78,33 @@ export class SessionMailbox {
     this.staffing = new WorktreeStaffing(db, store, {
       records: options.records,
       teamOf: id => options.teams.teamOf(id),
-      hasIdleMember: (teamId, groupId, worktree) => [...options.records()].some(record => {
-        const recipient = this.recipient(record.sessionId)
-        return !!recipient && recipient.teamId === teamId && recipient.groupId === groupId && recipient.worktree === worktree &&
-          recipient.idle && recipient.available && !recipient.pendingRequest
-      }),
       caps: options.caps ?? new TeamCaps({ homeDir: options.homeDir }),
       worktrees: this.tasks.worktrees,
       spawn: request => options.spawn ? options.spawn(request) : Promise.resolve({ ok: false, error: 'Spawning is not available' }),
-      homeDir: options.homeDir,
       onError: options.onError,
+    })
+    const targetWorktree = (message: TeamMessage) => (message.taskId ? taskStore.get(message.taskId)?.worktree ?? null : null)
+    this.router = new ProfileRouter({
+      // Read through a live team member's cached catalog (one read per team
+      // per cycle); with no live member, resolve from the message's origin.
+      groupOf: async message => {
+        const records = [...options.records()]
+        const peer = records.find(record => record.sessionId === message.fromSession && options.teams.teamOf(record.sessionId)?.teamId === message.teamId) ??
+          records.find(record => options.teams.teamOf(record.sessionId)?.teamId === message.teamId)
+        if (peer) return options.teams.catalogOf(peer.sessionId, this.catalogs)?.groups.get(message.toId)
+        const { team, catalog } = await loadTeamGroups(message.originPath, options.homeDir)
+        return team.teamId === message.teamId ? catalog.groups.get(message.toId) : undefined
+      },
+      members: (teamId, groupId) => [...options.records()].flatMap(record =>
+        record.archivedAt == null && record.groupId === groupId && options.teams.teamOf(record.sessionId)?.teamId === teamId
+          ? [{ sessionId: record.sessionId, profileId: record.claudeProfileId ?? 'default', cwd: record.projectPath }]
+          : []),
+      targetWorktree,
+      staffing: this.staffing,
+      rules: this.rules,
+      limits: this.limits,
+      usageOf: profileId => options.usageOf?.(profileId) ?? null,
+      ...(options.onRouteDecision ? { onDecision: options.onRouteDecision } : {}),
     })
     this.dispatcher = new MailDispatcher(this.mailbox.store, {
       beginCycle: () => this.catalogs.clear(),
@@ -95,8 +121,8 @@ export class SessionMailbox {
         driver.deliver(envelope)
       },
       taskContext: taskId => buildTaskContext(taskStore, taskId),
-      targetWorktree: message => (message.taskId ? taskStore.get(message.taskId)?.worktree ?? null : null),
-      staff: () => this.staffing.run(),
+      targetWorktree,
+      router: this.router,
       associateTask: (id, taskId) => options.associateTask?.(id, taskId),
       watchReceipt: mail => {
         if (!mail.claimedBy) return

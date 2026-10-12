@@ -90,8 +90,10 @@ export interface RouteMessage {
 
 /**
  * One eligible way to handle the message, already filtered by delivery,
- * staffing, caps, parking, and cooldown. `member` is an idle group member;
- * `spawn` is a slot to spawn a new member on that profile.
+ * staffing, caps, and parking. `member` is an idle group member; `spawn` is a
+ * slot to spawn a new member on that profile. Candidates on a cooling profile
+ * are included — check `profiles[profileId].cooldownUntil`; the built-in
+ * strategy skips them.
  */
 export interface RouteCandidate {
   id: string
@@ -148,4 +150,17 @@ export interface RoutingRule {
   env?: string[]
   /** Per-call timeout; default 3000, at most 10000. */
   timeoutMs?: number
+}
+
+/** One routing decision, as the mailbox view lists it. */
+export interface RouteDecisionLogEntry {
+  at: string
+  teamId: string
+  groupId: string
+  messageId: string
+  /** Who decided: the group's rule, the built-in strategy, or the built-in after a rule problem. */
+  source: 'rule' | 'builtin' | 'fallback'
+  /** A candidate id (`member:<session>` / `spawn:<profile>`), `hold`, `none`, or `built-in`. */
+  decision: string
+  reason?: string
 }

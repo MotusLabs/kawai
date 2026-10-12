@@ -169,6 +169,11 @@ export class MailboxStore {
     return null
   }
 
+  /** Due queued group mail of every team, urgent first then oldest (routing). */
+  dueGroupMail(now = nowIso()): TeamMessage[] {
+    return (this.statements.dueGroupMail.all({ $now: now }) as Record<string, unknown>[]).map(mapRow)
+  }
+
   /** Claim a row reserved for a spawn by the session spawned for it. */
   claimSpawned(id: string, sessionId: string, now = nowIso()): boolean {
     return this.changed(id, this.statements.claimSpawned.run({

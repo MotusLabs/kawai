@@ -31,6 +31,9 @@ export const mailboxSql = {
       ORDER BY created_at, rowid`,
   claimSpawned: `UPDATE team_messages SET state = 'claimed', claimed_by = $sessionId, claimed_at = $now
       WHERE id = $id AND state = 'spawning'`,
+  dueGroupMail: `SELECT * FROM team_messages
+      WHERE state = 'queued' AND to_kind = 'group' AND (deliver_at IS NULL OR deliver_at <= $now)
+      ORDER BY (priority = 'urgent') DESC, created_at, rowid`,
   claimsFor: `SELECT * FROM team_messages
       WHERE claimed_by = $sessionId AND state = 'claimed'
       ORDER BY created_at, rowid`,
