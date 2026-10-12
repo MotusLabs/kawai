@@ -15,7 +15,7 @@ Depends on `agent-mailbox`, `team-worktree-staffing`, and `profile-routing` (imp
   - recipient unavailable (archived, directory missing, or cannot start), with the start blocker's text;
   - recipient profile cooling until a time;
   - agent startup failed, with the error;
-  - no eligible member, broken down as busy / pending card / parked / in another worktree / unavailable / cooling / excluded profile;
+  - no eligible member, broken down as busy / pending card / parked / in another worktree / unavailable / startup failed / excluded profile; cooling is not a group-path exclusion (cooling members stay candidates and surface as the separate all-profiles-cooling constraint) — only direct mail excludes cooling recipients;
   - group cap `n/m`;
   - per-profile caps `n/cap`;
   - team spawn cap `n/m`;
@@ -26,8 +26,8 @@ Depends on `agent-mailbox`, `team-worktree-staffing`, and `profile-routing` (imp
   - group definition missing;
   - starting agent.
 
-  Group-mail reasons are recorded by the routing decision itself, from the same eligibility checks and capacity counts that made it. Direct-mail reasons come from the dispatcher's recipient view. Nothing is inferred from navigator badges.
-- **Re-evaluated on change.** Every dispatch pass runs on session status, archive, path, request, limit, rule, and mailbox changes, and it refreshes the reasons. A team's mailbox snapshot is re-sent when its reasons change, not only when a row changes state. Reasons are in-memory and never persisted. After a restart they are rebuilt by the first pass.
+  Group-mail reasons are recorded by the routing decision itself, from the same eligibility checks and capacity counts that made it. Direct-mail reasons come from the dispatcher's recipient view. Nothing is inferred from navigator badges. Constraints are ordered deterministically — capacity (group, per-profile, team spawn, worktree occupancy) before member facts before spawn/routing specifics — and the first is the immediate blocker (design D1, open question Q1).
+- **Re-evaluated on change.** Every dispatch pass runs on session record changes (status, archive, path, SDK identity), request resolution, team resolution, limit, rule, and mailbox changes, and it refreshes the reasons. A team's mailbox snapshot is re-sent when its reasons change, not only when a row changes state. Reasons are in-memory and never persisted. After a restart they are rebuilt by the first pass.
 - **Dead-letter labels.** Dead letters whose reason is a known code get readable labels. The codes today are `worktree-missing: <path>`, `killed-recipient`, `killed-sender-without-group`, and `hop-limit`; for example, `worktree-missing: <path>` becomes "Target worktree is missing". The code stays visible.
 - **Failed spawns actually retry.** Staffing waits 30 s after a failed spawn, but nothing wakes the dispatcher when the backoff ends. A failed spawn retries only when something else happens to notify the dispatcher. The dispatcher's timer now includes the end of each backoff, so the "retry at" a reason shows is a real time.
 - **Worktree occupancy read model.** A server-side `teamRoster` function lists a team's live (non-archived) sessions per resolved worktree root. It includes manual and spawned sessions, with group, profile, status, and task, and pending spawn reservations. Staffing's worktree count and the waiting reasons read it, and mailbox snapshots carry it. Task-assignment's dispatch preview can reuse it.
@@ -48,14 +48,14 @@ Non-goals:
 - `team-waiting-reasons`: per-message waiting reasons (immediate blocker plus other constraints, with counts and named sessions), when they are recomputed and published, and the per-worktree live-session read model they and later team views use.
 
 ### Modified Capabilities
-- `agent-mailbox`: the "Team mailbox is inspectable" requirement now covers every unsettled state. That includes **Starting agent** for `spawning`, the waiting reason on each pending row, and readable dead-letter reasons.
+- `agent-mailbox`: the "Team mailbox is inspectable" requirement now names every unsettled state, including **Starting agent** for `spawning` and the today-unnamed awaiting-approval state; a new "Waiting rows render their reason" requirement carries the blocker-first line with expandable constraints and readable dead-letter labels.
 - `team-worktree-staffing`: a failed spawn retries on its own once its backoff ends. Before this change, it waited for an unrelated wake-up.
 
 ## Impact
 
 - Server:
   - New pure `src/server/team/waitingReasons.ts` (explainer) and `src/server/team/teamRoster.ts` (occupancy).
-  - `dispatcher.ts` gains a shared member-eligibility classifier, a per-message diagnosis ledger, in-flight and start-failure tracking, and an `afterPass` hook.
+  - `dispatcher.ts` gains a member-state cause reporter beneath the unchanged `eligibleFor`/claim predicates, a per-message diagnosis ledger, in-flight and start-failure tracking, and an `afterPass` hook for reason-only refreshes; `spawning` rows are diagnosed at the reserve transition itself (design D3), not after the pass.
   - `staffing.ts` exposes `capacity()` with counts, caps, occupants, and backoff, plus `nextRetryAt()`.
   - `routing/router.ts` returns a diagnosis with `none`/`hold` and keeps hold reasons.
   - `sessionMailbox.ts` adds the availability reason, wiring, and reason-change publishing. `ChatSessionManager.ts` exposes `startBlocker` text as the availability reason.

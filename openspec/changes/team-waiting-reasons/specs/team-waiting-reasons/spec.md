@@ -13,6 +13,10 @@ For each message waiting in the queued-and-due, awaiting-request, or starting-ag
 - **WHEN** a group message waits because the group already has its maximum live members, 2 of 2
 - **THEN** its waiting reason states the group capacity as the blocker with the count 2 of 2
 
+#### Scenario: Team spawn capacity is the blocker
+- **WHEN** a worktree task message waits because the team already has its maximum live spawned members, 5 of 5
+- **THEN** its waiting reason states the team spawn capacity as the blocker with the count 5 of 5
+
 #### Scenario: Worktree occupied is the blocker with a name
 - **WHEN** a worktree task message waits because the target worktree already has a live spawned member
 - **THEN** its waiting reason names that member and the worktree instead of reporting every session as merely busy
