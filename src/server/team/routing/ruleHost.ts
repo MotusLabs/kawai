@@ -171,9 +171,12 @@ function validateDecision(value: unknown): RouteDecision {
   }
   if (decision?.type === 'hold' && typeof decision.reason === 'string') {
     const retry = decision.retryAfterMs
+    if (retry !== undefined && !(typeof retry === 'number' && Number.isFinite(retry) && retry >= 0)) {
+      throw new Error('retryAfterMs must be a finite non-negative number')
+    }
     return {
       type: 'hold', reason: decision.reason,
-      ...(typeof retry === 'number' && Number.isFinite(retry) && retry > 0 ? { retryAfterMs: retry } : {}),
+      ...(retry !== undefined ? { retryAfterMs: retry } : {}),
     }
   }
   throw new Error(`route returned an invalid decision: ${JSON.stringify(value)}`)

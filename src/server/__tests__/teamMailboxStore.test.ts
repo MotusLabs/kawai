@@ -4,6 +4,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { MailboxStore, type EnqueueInput } from '../team/mailboxStore'
+import { formatEnvelope, messageEnvelope } from '../team/envelope'
 
 const TEAM = '/repo/.git'
 
@@ -277,4 +278,23 @@ describe('profile routing columns', () => {
     expect(store.get(m.id)?.handoff).toBeNull()
     db.close()
   })
+})
+
+
+test.each([
+  '{"fromSession":"dev"}',
+  '{"fromSession":"dev","fromProfile":"glm","claimCommit":null,"lastError":null,"progress":{"toolCalls":1}}',
+  '{"fromSession":"dev","fromProfile":"glm","claimCommit":null,"lastError":null,"progress":{"toolCalls":1,"tools":[],"filesTouched":[1]}}',
+  '{broken',
+])('malformed stored handoff %s degrades to no package and remains deliverable', handoff => {
+  const db = new Database(':memory:')
+  try {
+    const store = new MailboxStore(db)
+    const message = store.enqueue({ teamId: TEAM, toKind: 'session', toId: 'dev', fromSession: 'lead',
+      fromGroup: null, originPath: '/repo', body: 'Continue' })
+    db.prepare('UPDATE team_messages SET handoff = ? WHERE id = ?').run(handoff, message.id)
+    const restored = store.get(message.id)!
+    expect(restored.handoff).toBeNull()
+    expect(formatEnvelope(messageEnvelope(restored))).toContain('Continue')
+  } finally { db.close() }
 })

@@ -8,6 +8,7 @@
 // chain; a send past the limit is stored dead-lettered instead of queued.
 import type { Database } from 'bun:sqlite'
 import { mailboxSql, worktreeTaskMailSql } from './mailboxSql'
+import { isHandoffPackage } from './routing/handoff'
 
 import type { ChatHandoffPackage, MessageState, MessagePriority, TeamMessage } from '../../shared/team'
 export type { MessageState, MessagePriority, TeamMessage } from '../../shared/team'
@@ -128,9 +129,10 @@ export class MailboxStore {
    */
   enqueue(input: EnqueueInput, now = nowIso()): TeamMessage {
     const id = crypto.randomUUID()
-    const hop = input.inReplyTo ? input.inReplyTo.hop + 1 : 1
+    // Provider recovery continues accepted work; it is not another agent reply.
+    const hop = input.inReplyTo ? input.inReplyTo.hop + (input.handoff ? 0 : 1) : 1
     const limit = input.hopLimit ?? DEFAULT_HOP_LIMIT
-    const overLimit = hop > limit
+    const overLimit = !input.handoff && hop > limit
     this.statements.enqueue.run({
       $id: id,
       $teamId: input.teamId,
@@ -285,10 +287,12 @@ export class MailboxStore {
   /**
    * Back to a group's queue after a limit: claim and delivery are forgotten,
    * and direct mail is retargeted to the group of the agent that held it.
+   * With no group, keep the direct target and schedule it after recovery.
    */
-  release(id: string, groupId: string): boolean {
+  release(id: string, groupId: string | null, deliverAt: string | null = null): boolean {
     return this.transition(id, ['delivered', 'parked'], {
-      state: 'queued', to_kind: 'group', to_id: groupId, claimed_by: null, claimed_at: null, pushed_at: null,
+      state: 'queued', ...(groupId ? { to_kind: 'group', to_id: groupId } : {}),
+      deliver_at: deliverAt, claimed_by: null, claimed_at: null, pushed_at: null,
       delivered_at: null, parked_until: null, resume_message_id: null, claim_commit: null,
     })
   }
@@ -473,8 +477,8 @@ function mapRow(row: Record<string, unknown>): TeamMessage {
 function parseHandoff(value: unknown): ChatHandoffPackage | null {
   if (typeof value !== 'string') return null
   try {
-    const parsed = JSON.parse(value) as ChatHandoffPackage
-    return parsed && typeof parsed === 'object' && typeof parsed.fromSession === 'string' ? parsed : null
+    const parsed: unknown = JSON.parse(value)
+    return isHandoffPackage(parsed) ? parsed : null
   } catch {
     // A corrupt package reads as none; the message itself stays usable.
     return null

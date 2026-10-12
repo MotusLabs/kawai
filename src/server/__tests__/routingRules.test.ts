@@ -203,4 +203,16 @@ export default {
     fs.rmSync(path.join(home, '.kawai', 'routing'), { recursive: true })
     expect((await open().reload()).rules).toEqual([])
   })
+  test('a zero-delay hold retains its retry time', async () => {
+    write('devs.ts', "export default { route: () => ({ type: 'hold', reason: 'yield', retryAfterMs: 0 }) }")
+    await open().reload()
+    expect(await registry!.rule('devs')!.route(CTX)).toEqual({ type: 'hold', reason: 'yield', retryAfterMs: 0 })
+  })
+
+  test.each(['-1', 'NaN', 'Infinity', "'soon'"])('invalid retry delay %s rejects instead of creating an indefinite hold', async value => {
+    write('devs.ts', `export default { route: () => ({ type: 'hold', reason: 'yield', retryAfterMs: ${value} }) }`)
+    await open().reload()
+    expect((await failure(registry!.rule('devs')!.route(CTX))).message).toContain('finite non-negative')
+  })
+
 })
