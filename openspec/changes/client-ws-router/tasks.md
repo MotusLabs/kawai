@@ -21,7 +21,7 @@ tick the checkbox in the same commit.
 
 ## 2. Dedupe shared handlers
 
-- [ ] 2.1 Fold the repeated patterns now co-located in the modules: one
+- [x] 2.1 Fold the repeated patterns now co-located in the modules: one
   `notifyStatusTransitions(prev, next)` (sound transitions), one `handleWorktreeResult`
   for the create-worktree result paths, one transient-error helper with timer cleanup;
   suite green; commit (`refactor: dedupe status, worktree, and error handling in protocol modules`)

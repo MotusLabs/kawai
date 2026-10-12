@@ -13,6 +13,25 @@ export function handleWorkspaceSnapshot(
   useWorkspaceStore.getState().applySnapshot(message.snapshot)
 }
 
+/** Settle a worktree launch: match its pending request, open the form, or surface the error (F7 dedupe). */
+function settleLaunch(
+  deps: MessageRouterDeps,
+  pending: unknown,
+  clearPending: () => void,
+  matched: boolean,
+  launch: () => void,
+  error: string
+): void {
+  if (matched) {
+    clearPending()
+    launch()
+    return
+  }
+  if (pending) clearPending()
+  // Every operation failure surfaces an actionable error.
+  deps.setTransientError(error)
+}
+
 export function handleWorkspaceOperationResult(
   message: Extract<ServerMessage, { type: 'workspace-operation-result' }>,
   deps: MessageRouterDeps
@@ -21,35 +40,31 @@ export function handleWorkspaceOperationResult(
   const result = message.result
   if (result.operation === 'create-worktree') {
     const pending = deps.pendingWorktreeLaunch.current
-    if (result.ok) {
+    const launchPath = result.ok ? result.path : ''
+    settleLaunch(
+      deps,
+      pending,
+      () => { deps.pendingWorktreeLaunch.current = null },
+      Boolean(result.ok && pending && pending.repositoryId === result.repositoryId && pending.branch === result.branch),
       // Route a successful launch request through the normal session
       // form — presets, names, and hosts stay in play (§8.4).
-      if (
-        pending &&
-        pending.repositoryId === result.repositoryId &&
-        pending.branch === result.branch
-      ) {
-        deps.pendingWorktreeLaunch.current = null
-        deps.openSessionFormPrefilled({ path: result.path })
-      }
-    } else {
-      // Every operation failure surfaces an actionable error.
-      if (pending) deps.pendingWorktreeLaunch.current = null
-      deps.setTransientError(result.error)
-    }
+      () => deps.openSessionFormPrefilled({ path: launchPath }),
+      result.ok ? '' : result.error
+    )
   }
   if (result.operation === 'create-change-worktree') {
     const pending = deps.pendingChangeLaunch.current
-    if (result.ok) {
+    const launchPath = result.ok ? result.path : ''
+    const launchChange = result.ok ? result.change : ''
+    settleLaunch(
+      deps,
+      pending,
+      () => { deps.pendingChangeLaunch.current = null },
+      Boolean(result.ok && pending && pending.repositoryId === result.repositoryId && pending.change === result.change),
       // Seeded creation succeeded: open the session form prefilled with
       // the new worktree root and the apply auto-start offered (§7.4).
-      if (pending && pending.repositoryId === result.repositoryId && pending.change === result.change) {
-        deps.pendingChangeLaunch.current = null
-        deps.openSessionFormPrefilled({ path: result.path, autoStartChange: result.change })
-      }
-    } else {
-      if (pending) deps.pendingChangeLaunch.current = null
-      deps.setTransientError(result.error)
-    }
+      () => deps.openSessionFormPrefilled({ path: launchPath, autoStartChange: launchChange }),
+      result.ok ? '' : result.error
+    )
   }
 }

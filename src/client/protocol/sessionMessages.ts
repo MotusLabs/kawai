@@ -11,6 +11,21 @@ import { playIdleSound, playPermissionSound } from '../utils/sound'
 import type { ServerMessage } from '@shared/types'
 import type { MessageRouterDeps } from './types'
 
+/** Play the configured sounds for a session's status transition (F7 dedupe). */
+function notifyStatusTransitions(
+  prevStatus: string | undefined,
+  nextStatus: string
+): void {
+  if (!prevStatus) return
+  const { soundOnPermission, soundOnIdle } = useSettingsStore.getState()
+  if (prevStatus !== 'permission' && nextStatus === 'permission' && soundOnPermission) {
+    void playPermissionSound()
+  }
+  if (prevStatus === 'working' && nextStatus === 'waiting' && soundOnIdle) {
+    void playIdleSound()
+  }
+}
+
 export function handleSessions(
   message: Extract<ServerMessage, { type: 'sessions' }>,
   deps: MessageRouterDeps
@@ -27,12 +42,7 @@ export function handleSessions(
     for (const nextSession of message.sessions) {
       const prevSession = currentSessions.find((s) => s.id === nextSession.id)
       if (prevSession && prevSession.status !== nextSession.status) {
-        if (prevSession.status !== 'permission' && nextSession.status === 'permission' && soundOnPermission) {
-          void playPermissionSound()
-        }
-        if (prevSession.status === 'working' && nextSession.status === 'waiting' && soundOnIdle) {
-          void playIdleSound()
-        }
+        notifyStatusTransitions(prevSession.status, nextSession.status)
       }
     }
   }
@@ -130,16 +140,7 @@ export function handleSessionUpdate(
   notifySpawnedAttention(prevSession, message.session)
 
   // Only play sounds for known sessions (skip new/unknown sessions)
-  if (prevStatus) {
-    const { soundOnPermission, soundOnIdle } = useSettingsStore.getState()
-
-    if (prevStatus !== 'permission' && nextStatus === 'permission' && soundOnPermission) {
-      void playPermissionSound()
-    }
-    if (prevStatus === 'working' && nextStatus === 'waiting' && soundOnIdle) {
-      void playIdleSound()
-    }
-  }
+  notifyStatusTransitions(prevStatus, nextStatus)
 }
 
 export function handleSessionCreated(
