@@ -1,7 +1,8 @@
 // updateVersions.ts - release-version comparison for update discovery.
 // Every merge to master cuts a release, so "any newer tag" would fire
 // constantly; discovery therefore compares only the MAJOR.MINOR.PATCH base
-// and ignores the -<PR> build suffix (and the -dev marker of source runs).
+// and ignores the -<build> suffix (the merge commit's count, plus the -dev
+// marker of source runs).
 
 /**
  * The `MAJOR.MINOR.PATCH` base of a version or tag, or null when it does not

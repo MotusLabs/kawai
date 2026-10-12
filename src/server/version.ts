@@ -4,11 +4,11 @@
  * The build version this process reports.
  *
  * `package.json` holds the plain `MAJOR.MINOR.PATCH` base, bumped by hand via
- * `bun run release:*`. CI appends the merged PR number as a prerelease
- * identifier so every merge into master gets its own tag — base `1.0.0` plus
- * PR 321 becomes `v1.0.0-321` — and the release build bakes that full version
- * into the binary with `bun build --define` (see
- * .github/workflows/release.yml).
+ * `bun run release:*`. CI appends a build number — the merge commit's count on
+ * master, monotonic in merge order — as a prerelease identifier so every merge
+ * into master gets its own tag: base `1.0.0` plus build 3187 becomes
+ * `v1.0.0-3187`. The release build bakes that full version into the binary
+ * with `bun build --define` (see .github/workflows/release.yml).
  *
  * Nothing injects it for `bun run dev`, `bun start` or tests, so those fall
  * back to the base version marked `-dev`: local logs must never be mistakable

@@ -25,8 +25,9 @@ describe('resolveBuildVersion', () => {
 })
 
 describe('BASE_VERSION', () => {
-  // CI appends `-<PR number>` to this base to build the release tag, and
-  // refuses to tag if the base already carries a suffix of its own.
+  // CI appends a `-<build number>` (the merge commit's count on master) to
+  // this base to build the release tag, and refuses to tag if the base
+  // already carries a suffix of its own.
   test('is a plain MAJOR.MINOR.PATCH version', () => {
     expect(BASE_VERSION).toMatch(/^\d+\.\d+\.\d+$/)
   })
