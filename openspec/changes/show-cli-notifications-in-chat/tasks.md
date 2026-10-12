@@ -29,7 +29,7 @@
 
 ## 6. Integration
 
-- [ ] 6.1 Run `bun run lint && bun run typecheck && bun run test` and verify all pass.
+- [x] 6.1 Run `bun run lint && bun run typecheck && bun run test` and verify all pass.
 - [ ] 6.2 Verify end to end without touching the live kawai instance or running `test:e2e`. Start a dev server on a spare port with `CLAUDE_CONFIG_DIR` pointing to a temp copy of `.credentials.json` whose `refreshTokenExpiresAt` is set 1.4 days ahead. Attach over WebSocket and confirm the snapshot carries "Your login expires in 2 days". Then use the `dev-browser` skill to screenshot the strip in a chat view.
 - [ ] 6.3 Run `openspec validate show-cli-notifications-in-chat --strict` and verify it passes.
 
