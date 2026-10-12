@@ -97,10 +97,16 @@ a commit; `indexHandlers.test.ts` must pass unchanged (design D5) throughout.
 
 ## 7. Composition root and close-out
 
-- [ ] 7.1 Create `src/server/bootstrap.ts` with `startServer()`: construct `db`, `registry`,
+- [x] 7.1 Create `src/server/bootstrap.ts` with `startServer()`: construct `db`, `registry`,
   managers, and every extracted module in one explicit, commented, linear sequence; own
   `Bun.serve`, signal handlers, and the shutdown list; `index.ts` shrinks to the boot-on-import
   entry (header + `startServer()` call, per design D1)
+  - Deviation: three more modules so `bootstrap.ts` stays under 500 LOC (split rule) —
+    `ws/messageRouter.ts` (`handleMessage` plus the worktree-create handlers and the stale
+    project-path error, over a `MessageRouterContext`), `ws/socketHandlers.ts` (the `/ws`
+    upgrade `fetch` and the Bun websocket open/message/close handlers), and
+    `startupPreflight.ts` (`checkPortAvailable`, `pruneOrphanedWsSessions`). All state lives
+    inside `startServer()`, so each harness re-import boots a fresh graph.
 - [ ] 7.2 Confirm the shape: every new module under 500 LOC with a header comment; no
   module-scope mutable singletons outside `bootstrap.ts`; record actual per-module LOC in the
   change notes
