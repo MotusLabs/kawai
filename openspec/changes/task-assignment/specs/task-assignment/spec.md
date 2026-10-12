@@ -7,7 +7,7 @@ Names who is responsible for a team task: a durable assignment record per dispat
 ## ADDED Requirements
 
 ### Requirement: An assignment names who is responsible, separately from participants
-Each dispatch SHALL create a durable assignment record: target (a group — its role is the requested role — or a session), initial instruction, dispatcher, state, claimed agent once claimed, and supersession. Records SHALL be kept and shown separately from the participant list, and assigning SHALL NOT change participants. A task SHALL have at most one outstanding assignment; a queued group assignment shows its requested role with no claimed agent.
+Each dispatch SHALL create an assignment record: target (a group — the requested role — or a session), initial instruction, dispatcher, state, claimed agent when claimed, and supersession. Records are kept separate from the participant list; assigning SHALL NOT change it. A task SHALL have at most one outstanding assignment — the newest neither superseded nor failed; delivered work stays outstanding until superseded. A queued group assignment has a requested role and no claimed agent.
 
 #### Scenario: Queued group assignment has no agent yet
 - **WHEN** a task is assigned to a group whose members are all busy and dispatch is accepted
@@ -37,7 +37,7 @@ The task form SHALL offer **Create task** and **Create and assign**. **Create ta
 - **THEN** the dispatch is refused with an error and no instruction is sent
 
 ### Requirement: Creation and dispatch are idempotent under a stable request identity
-Create and dispatch requests SHALL carry a request key that identifies one user intent. Repeating a request with the same key and the same payload SHALL return the prior outcome — the same task, the same assignment, the same instruction — and SHALL NOT create a second task or dispatch a second instruction. A request that reuses an existing key with a different payload SHALL be refused. Retrying after a reconnect or a repeated click with the same key SHALL NOT duplicate a task or an instruction.
+Create and dispatch requests SHALL carry a request key that identifies one user intent, unique within the team. Repeating a request with the same key and the same payload SHALL return the prior outcome and SHALL NOT create a second task or dispatch a second instruction. A request that reuses an existing key with a different payload SHALL be refused. Retrying after a reconnect or a repeated click with the same key SHALL NOT duplicate a task or an instruction.
 
 #### Scenario: Reconnect during submission does not duplicate
 - **WHEN** the connection drops while **Create and assign** is being submitted and the human resubmits the same request after reconnecting
@@ -52,7 +52,7 @@ Create and dispatch requests SHALL carry a request key that identifies one user 
 - **THEN** the request is refused with an error and the original assignment is unchanged
 
 ### Requirement: A refused dispatch retains the task and the assignment draft
-When task creation succeeds and dispatch fails, the error SHALL be shown inline, the task SHALL remain, the assignment draft (target and instruction) SHALL remain as entered, and a **Retry assignment** action SHALL dispatch the existing task without creating a new one. A refused create or dispatch SHALL never silently erase entered form input.
+When task creation succeeds and dispatch fails, the error SHALL be shown inline, the task SHALL remain, the assignment draft (target and instruction) SHALL remain as entered, and a **Retry assignment** action SHALL dispatch the existing task without creating a new one; once creation has committed, only that dispatch-side retry is offered, never a repeated create. A refused create or dispatch SHALL never silently erase entered form input.
 
 #### Scenario: Retry assignment reuses the existing task
 - **WHEN** creation succeeded, dispatch to a group failed, and the human retries the assignment successfully
@@ -78,7 +78,7 @@ Before dispatch, the UI SHALL show a preview with the target worktree, the reque
 - **THEN** the preview shows a warning naming both worktrees, and dispatch remains available
 
 ### Requirement: Reassignment is an explicit handoff
-Task detail SHALL offer **Assign / send task**. When an outstanding assignment exists, a new dispatch SHALL show it and require the human to choose **notify** or **stop**. **Stop** supersedes it and cancels its instruction only while undelivered; it never stops or archives the previous recipient nor undoes delivered work. **Notify** supersedes it and sends the previous claimed agent, when one exists, a normal-priority direct note. Superseded assignments remain in history.
+Task detail SHALL offer **Assign / send task**. A new dispatch onto an outstanding assignment SHALL show it and require the human to choose **notify** or **stop**. **Stop** supersedes it and cancels its instruction only while it is queued or waiting on a pending request; it never stops or archives the previous recipient nor undoes delivered work. **Notify** supersedes it and sends the previous claimed agent, if any, a normal-priority direct note. Superseded assignments remain in history.
 
 #### Scenario: Reassignment requires an explicit choice
 - **WHEN** the human dispatches a new assignment while the task has an outstanding assignment
