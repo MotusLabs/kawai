@@ -26,7 +26,7 @@ Depends on `agent-mailbox`, `team-worktree-staffing`, and `profile-routing` (imp
   - group definition missing;
   - starting agent.
 
-  Group-mail reasons are recorded by the routing decision itself, from the same eligibility checks and capacity counts that made it. Direct-mail reasons come from the dispatcher's recipient view. Nothing is inferred from navigator badges. Constraints are ordered deterministically — capacity (group, per-profile, team spawn, worktree occupancy) before member facts before spawn/routing specifics — and the first is the immediate blocker (design D1; Q1 decided caps-first).
+  Group-mail reasons are recorded by the routing decision itself, from the same eligibility checks and capacity counts that made it. Direct-mail reasons come from the dispatcher's recipient view. Nothing is inferred from navigator badges. Constraints are ordered deterministically — capacity (group, per-profile, team spawn, worktree occupancy) before member facts before spawn/routing specifics — and the first is the immediate blocker, except that a row starting an agent always shows Starting agent as its blocker, its own reservation's capacity effects listed among the other constraints (design D1; Q1 decided caps-first).
 - **Re-evaluated on change.** Every dispatch pass runs on session record changes (status, archive, path, SDK identity), request resolution, team resolution, limit, rule, and mailbox changes, and it refreshes the reasons. A team's mailbox snapshot is re-sent when its reasons change, not only when a row changes state. Reasons are in-memory and never persisted. After a restart they are rebuilt by the first pass.
 - **Dead-letter labels.** Dead letters whose reason is a known code get readable labels. The codes today are `worktree-missing: <path>`, `killed-recipient`, `killed-sender-without-group`, and `hop-limit`; for example, `worktree-missing: <path>` becomes "Target worktree is missing". The code stays visible.
 - **Failed spawns actually retry.** Staffing waits 30 s after a failed spawn, but nothing wakes the dispatcher when the backoff ends. A failed spawn retries only when something else happens to notify the dispatcher. The dispatcher's timer now includes the end of each backoff, so the "retry at" a reason shows is a real time.
@@ -56,7 +56,7 @@ Non-goals:
 - Server:
   - New pure `src/server/team/waitingReasons.ts` (explainer) and `src/server/team/teamRoster.ts` (occupancy).
   - `dispatcher.ts` gains a member-state cause reporter beneath the unchanged `eligibleFor`/claim predicates, a per-message diagnosis ledger, in-flight and start-failure tracking, and an `afterPass` hook for reason-only refreshes; `spawning` rows are diagnosed at the reserve transition itself (design D3), not after the pass.
-  - `staffing.ts` exposes `capacity()` with counts, caps, occupants, and backoff, plus `nextRetryAt()`.
+  - `staffing.ts` exposes `capacity()` with counts, caps, occupants, and backoff, plus `nextRetryAt()`; its reservation transaction inserts the `team_spawns` row before flipping the message to `spawning` (rolling back on a failed reserve), so the reserve-notify snapshot already sees the reservation.
   - `routing/router.ts` returns a diagnosis with `none`/`hold` and keeps hold reasons.
   - `sessionMailbox.ts` adds the availability reason, wiring, and reason-change publishing. `ChatSessionManager.ts` exposes `startBlocker` text as the availability reason.
   - `mailboxConnections.ts` adds snapshot fields.
