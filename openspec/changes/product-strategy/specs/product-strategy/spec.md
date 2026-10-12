@@ -54,16 +54,16 @@ Strategy claims SHALL carry a kind — owner preference, explicit user statement
 - **WHEN** a claim is saved as a validated observation with no source reference
 - **THEN** the save is refused with an error naming the missing source
 
+#### Scenario: Unfounded demand figure stays a hypothesis
+- **WHEN** a draft stores a demand figure with a hypothesis kind and no source reference
+- **THEN** the claim is stored only as a hypothesis and is not stored as a validated observation
+
 ### Requirement: Missing baselines and targets are Unknown
 Success measures SHALL record outcome, proposed measure, known baseline, and agreed target. Values that are not known or agreed SHALL be stored as `Unknown`. Neither the store nor agent tools SHALL invent a baseline, target, or metric.
 
 #### Scenario: Absent baseline stays Unknown (S08)
 - **WHEN** a success measure is saved with no measured baseline
 - **THEN** its baseline is `Unknown` and no placeholder number appears
-
-#### Scenario: Unfounded demand figure stays a hypothesis
-- **WHEN** a draft stores a demand figure with a hypothesis kind and no source reference
-- **THEN** the claim is stored only as a hypothesis and is not stored as a validated observation
 
 ### Requirement: Drafts are durable and saved with expected-revision checks
 Draft content SHALL be stored server-side and survive navigation, reconnect, and reload. A save SHALL carry the expected base revision and draft hash. A mismatch SHALL refuse the overwrite and leave the caller's unsaved text with the caller for resolution.

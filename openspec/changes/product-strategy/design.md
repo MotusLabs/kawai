@@ -91,7 +91,7 @@ Each has a recommended default the tasks assume unless the human says otherwise;
 | --- | --- | --- |
 | Product identity and repository bindings | One product per owning team (git common dir + its worktrees); human-chosen slug; no cross-repo bindings yet | Needs an access-scope model and binding validation in D5 |
 | Where approved revisions are stored | kawai-owned SQLite (`agentboard.db`) only; repo export later as a non-authoritative projection | File-backed authority would reopen S09; would need signing or a trusted writer |
-| Ownership and quorum for approval | Single authenticated human owner; no quorum or delegation | Needs multiple actor identities on `strategy_decisions` and a quorum rule |
+| Ownership and quorum for approval | Single human owner; no quorum or delegation | Needs multiple actor identities on `strategy_decisions` and a quorum rule |
 | Vision vs. strategy as separate records | One record; the template's Purpose/Approach cover both | Splitting adds a second entity and a link |
 | Competing drafts | Several drafts per product, one active approved revision; the human picks on approve | Auto-merge or "latest draft wins" would break S12/S17 |
 | Evidence threshold for "validated" | Requires a source reference; external research is the author's job | A research gate would need an evidence workflow |
