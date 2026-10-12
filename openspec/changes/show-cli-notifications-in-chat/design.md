@@ -76,7 +76,7 @@ Each check is one small synchronous file read, and the store reports changes onl
 
 - The manager keeps `Map<sessionId, Map<key, ChatNotification>>` and replaces entries by key.
 - A frame with `timeout_ms` arms a timer that removes that entry only if it is still the same instance (compared by `receivedAt`).
-- The whole session map and its timers are cleared from the paths that already tear down a driver: stop, archive, kill, and restart. This matches "until the agent process ends".
+- The whole session map and its timers are cleared when the emitting process ends: from the paths that already tear down a driver (stop, archive, kill, restart), and — because a crashed driver respawns internally without a new driver construction — from an `onProcessEnd` callback the driver fires when it marks itself dead. This matches "until the agent process ends".
 - Malformed frames (missing `key` or `text`) are ignored.
 - Wire capture already records the frames, so the Debug view needs no change.
 

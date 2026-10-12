@@ -3512,6 +3512,28 @@ describe('ChatSessionManager notifications', () => {
     expect(manager.getSnapshot(fresh)!.notifications).toEqual([])
   })
 
+  test('an unexpected exit clears untimed notices; the same session respawn starts clean', async () => {
+    const { manager, handles, pushes } = noticeHarness()
+    const id = await startedSession(manager, handles)
+    handles[0]!.push(notifyFrame({ timeout_ms: undefined }))
+    await drain()
+    expect(manager.getSnapshot(id)!.notifications).toHaveLength(1)
+
+    // The process exits on its own. The session keeps its dead driver, and
+    // the next send respawns inside the same driver object — no new
+    // construction, so only the process-end callback clears the notices
+    // the crashed process emitted.
+    handles[0]!.query.close()
+    await drain()
+    expect(manager.getSnapshot(id)!.notifications).toEqual([])
+    expect(pushes.at(-1)!.notifications).toEqual([])
+
+    await manager.send(id, 'after the crash')
+    await drain()
+    expect(handles).toHaveLength(2)
+    expect(manager.getSnapshot(id)!.notifications).toEqual([])
+  })
+
   test('the snapshot carries the account notice computed on attach', () => {
     writeCredentials(expiringCredentials(1.4))
     const { manager } = noticeHarness()

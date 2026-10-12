@@ -158,6 +158,15 @@ export interface ChatSessionDriverOptions {
     timeoutMs?: number
   ) => void
   /**
+   * The agent process ended on its own (notification strip design D4): an
+   * unexpected exit or stream failure — not kill/shutdown, whose callers
+   * already tear the session state down. Fired once, from the same
+   * markDead that settles workers; the notices this process emitted die
+   * with it, because the driver object survives and respawns internally
+   * (no new construction would otherwise clear them).
+   */
+  onProcessEnd?: () => void
+  /**
    * The spawned-worker roster (workers design D2): the full projection,
    * called whenever it changes — never per elapsed tick. Ephemeral like
    * activity: never sequenced, persisted only through the sidecar (D6).
@@ -702,6 +711,10 @@ export class ChatSessionDriver {
     this.feedWorkers({ type: 'process_end' })
     this.feedActivity({ type: 'turn_end' })
     this.cancelAllRequests('killed')
+    // Notification strip design D4: the notices this process emitted die
+    // with it — the same driver object respawns on the next send/start, so
+    // the manager must hear the process ended here.
+    this.options.onProcessEnd?.()
     this.emit({ type: 'error', message: reason })
     this.commands.markUnavailable()
     this.refreshStatus()

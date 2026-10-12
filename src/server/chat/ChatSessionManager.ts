@@ -531,8 +531,10 @@ export class ChatSessionManager {
   /**
    * Drop every agent notice and timer of a session (design D4): the notices
    * die with the agent process that emitted them — archive, kill, restart,
-   * and shutdown. `emit` pushes the now account-only list to subscribers
-   * (archive); kill and shutdown have no one left to tell.
+   * shutdown, and an unexpected exit (the driver's onProcessEnd, whose
+   * internal respawn would otherwise inherit them). `emit` pushes the now
+   * account-only list to subscribers (archive, unexpected exit); kill and
+   * shutdown have no one left to tell.
    */
   private clearAgentNotices(sessionId: string, options?: { emit?: boolean }): void {
     for (const timer of this.agentNoticeTimers.get(sessionId)?.values() ?? []) {
@@ -1278,6 +1280,10 @@ export class ChatSessionManager {
           this.handleDriverActivity(record.sessionId, activity),
         onNotification: (notification, timeoutMs) =>
           this.handleDriverNotification(record.sessionId, notification, timeoutMs),
+        // An unexpected exit ends the process but not the session: the same
+        // driver respawns internally on the next send/start, so the notices
+        // die here (design D4) instead of surviving into the replacement.
+        onProcessEnd: () => this.clearAgentNotices(record.sessionId, { emit: true }),
         onWorkers: (workers) =>
           this.handleDriverWorkers(record.sessionId, workers),
         onContextUsage: (usage, opts) =>

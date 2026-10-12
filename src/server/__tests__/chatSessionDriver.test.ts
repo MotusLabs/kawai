@@ -160,6 +160,8 @@ interface Harness {
   activities: Array<ChatActivity | null>
   /** Each agent notification (notification strip design D4) with its timeout. */
   notifications: Array<[ChatNotification, number | undefined]>
+  /** Process-end callback firings (notification strip design D4). */
+  processEnds: number[]
   /** Each roster publish (workers design D2): the full projection. */
   workers: ChatWorker[][]
   rateLimits: ChatUsageReport[]
@@ -200,12 +202,15 @@ function createHarness(
     recoveredWorkers?: ChatWorker[]
     /** Replaces the harness's notification capture. */
     onNotification?: (notification: ChatNotification, timeoutMs?: number) => void
+    /** Replaces the harness's process-end capture. */
+    onProcessEnd?: () => void
   } = {}
 ): Harness {
   const events: ChatEvent[] = []
   const statuses: SessionStatus[] = []
   const activities: Array<ChatActivity | null> = []
   const notifications: Array<[ChatNotification, number | undefined]> = []
+  const processEnds: number[] = []
   const workers: ChatWorker[][] = []
   const rateLimits: ChatUsageReport[] = []
   const usageReports: ChatUsageReport[] = []
@@ -238,6 +243,7 @@ function createHarness(
     onStatus: (status) => statuses.push(status),
     onActivity: (activity) => activities.push(activity),
     onNotification: overrides.onNotification ?? ((notification, timeoutMs) => notifications.push([notification, timeoutMs])),
+    onProcessEnd: overrides.onProcessEnd ?? (() => processEnds.push(1)),
     onWorkers: (list) => workers.push(list),
     onRateLimit: (report) => rateLimits.push(report),
     onUsageReport: (report) => usageReports.push(report),
@@ -263,6 +269,7 @@ function createHarness(
     statuses,
     activities,
     notifications,
+    processEnds,
     workers,
     rateLimits,
     usageReports,
@@ -1776,6 +1783,27 @@ describe('ChatSessionDriver notifications', () => {
     harness.fakes[0]!.push(notificationFrame())
     await flush()
     expect(harness.notifications).toHaveLength(1)
+  })
+
+  test('an unexpected process exit fires onProcessEnd once; the respawn does not', async () => {
+    const harness = createHarness()
+    await harness.driver.send('hello')
+    const fake = harness.fakes[0]!
+    fake.push(notificationFrame({ timeout_ms: undefined }))
+    await flush()
+    expect(harness.notifications).toHaveLength(1)
+
+    // The process dies on its own: the holder of the notices must hear it,
+    // because the same driver object respawns without a new construction.
+    fake.exit()
+    await flush()
+    expect(harness.processEnds).toHaveLength(1)
+    expect(harness.driver.isDead).toBe(true)
+
+    harness.driver.send('again')
+    await flush()
+    expect(harness.fakes).toHaveLength(2)
+    expect(harness.processEnds).toHaveLength(1)
   })
 })
 
