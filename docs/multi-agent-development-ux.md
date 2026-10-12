@@ -4,9 +4,9 @@ Date: 2026-10-12. Status: Proposed product design, revised from the supplied arc
 
 ## Outcome
 
-Make **Plan the central, durable entity in Kawai**. A human and a Lead/Architect agree on intent, strategy, 5–10 Changes, dependencies, constraints, and acceptance rules, validate the whole strategy, and authorize autonomous execution. In the morning, the human sees verified results, reproducible partial success, or specific decisions requiring involvement.
+Add **Product Strategy** as the durable, human-approved reference for purpose, primary users, and user outcomes above Plans. Make **Plan the central orchestration entity in Kawai**. A human and a Lead/Architect agree on intent, implementation strategy, 5–10 Changes, dependencies, constraints, and acceptance rules, validate the whole Plan, and authorize autonomous execution. In the morning, the human sees verified results, reproducible partial success, or specific decisions requiring involvement.
 
-A **Plan Execution** is one attempt to execute a Plan revision; a **Task Execution** is one attempt to perform a task. An OpenSpec Change holds requirements/design artifacts and is an optional binding, not the orchestration container. Plans, attempts, checkpoints, and results survive session deletion. Standalone tasks remain supported.
+Each Plan revision pins an approved Product Strategy revision and explains the outcomes/use cases it advances when a strategy exists; standalone work can remain explicitly unassessed. Product Strategy has no execution attempt and grants no execution permissions. The [Product Strategy design](product-strategy.md) defines capture, approval, alignment, revision impact, proposed skills, and S01–S18 tests. A Plan’s **implementation strategy** explains that bounded effort and is distinct from Product Strategy. A **Plan Execution** is one attempt to execute a Plan revision; a **Task Execution** is one attempt to perform a task. An OpenSpec Change holds requirements/design artifacts and is an optional binding, not the orchestration container. Plans, attempts, checkpoints, and results survive session deletion. Standalone tasks remain supported.
 
 Agents propose substantive decisions; a deterministic runtime enforces authority, revisions, leases, policy, and state transitions. Preserve asynchronous communication, durable tasks/mail, receipt recovery, and creator permissions until explicit grants are implemented. Local integration and PR readiness are the initial delivery boundary; production deployment requires a separate policy and stage.
 
@@ -16,7 +16,7 @@ Agents propose substantive decisions; a deterministic runtime enforces authority
 
 **Upstream proposal:** the original document proposed task assignment, team supervision, threads, results, revision notifications, and sequential handoffs. Its E01–E14 cases are retained below, with terminology aligned to publication and stage-specific gates.
 
-**Recommendation:** the supplied review extends that baseline to Plans, execution attempts, targeted publication, verifiable integration, recovery, and runtime safety. It cites a separate master snapshot, `6b3dff66d1db91ecf38a122edb24a45e5d6ae579`; that review boundary is distinct from this branch's implementation base. This revision does not reconstruct the unavailable earlier review artifact or claim continuity with its X01–X14 identifiers. New cases use R01–R24.
+**Recommendation:** the supplied review extends that baseline to Plans, execution attempts, targeted publication, verifiable integration, recovery, and runtime safety. It cites a separate master snapshot, `6b3dff66d1db91ecf38a122edb24a45e5d6ae579`; that review boundary is distinct from this branch's implementation base. This revision does not reconstruct the unavailable earlier review artifact or claim continuity with its X01–X14 identifiers. Autonomous execution cases use R01–R24; the subsequent Product Strategy extension adds S01–S18 in its linked design and makes no claim of an already approved Kawai strategy.
 
 This remains a documentation and selected-mechanism review, not a comprehensive audit, installed-version claim, or browser usability study. Relative source references identify the reviewed mechanisms; refresh them and the roadmap against implementation evidence when this proposal is merged. Specialized code/specifications do not by themselves establish complete autonomous orchestration.
 
@@ -37,7 +37,7 @@ A concrete visibility gap exists: the mailbox server includes `spawning` rows, b
 
 ## Product principles
 
-1. Organize supervision around Plans and their executions; retain standalone tasks and supporting chats.
+1. Ground Plans in human-approved Product Strategy revisions; organize execution around Plans and retain standalone tasks and supporting chats.
 2. Show the next action and who is responsible for it.
 3. Distinguish queued, received, acknowledged, completed, and accepted work.
 4. Explain waiting with an actionable reason rather than a generic status.
@@ -64,15 +64,13 @@ Baseline P1 capabilities should ship as a coherent supervision flow. Baseline P2
 
 ## Expected UI/UX
 
-**Recommendation:** all interactions in this section are proposed; Current behavior is described above.
+### 1. Team overview (recommendation)
 
-### 1. Team overview
-
-Add a **Team** entry at repository level in the navigator. It opens a full workspace view independent of the selected chat. Use **Plans | Tasks | Messages | Members**. Existing chat-side task access remains a shortcut; Tasks also contains work outside Plans.
+Add a **Team** entry at repository level in the navigator. It opens a full workspace view independent of the selected chat. Place **Product Strategy** at product/repository level above **Plans | Tasks | Messages | Members**. Its main view leads with purpose, users, outcomes, use cases, boundaries, and What we know / assume / have not decided; saving drafts and human approval are separate actions. Existing chat-side task access remains a shortcut; Tasks also contains work outside Plans.
 
 ```text
 +------------------------------------------------------------------------+
-| Team: kawai       Plans | Tasks | Messages | Members       Create Plan   |
+| Product Strategy    Team: Plans | Tasks | Messages | Members           |
 +------------------------------------------------------------------------+
 | Attention: human decisions | agent-owned waits | results for acceptance  |
 +----------------------------+-------------------------------------------+
@@ -83,7 +81,7 @@ Add a **Team** entry at repository level in the navigator. It opens a full works
 +----------------------------+-------------------------------------------+
 ```
 
-Plan detail shows intent, non-goals, strategy, constraints, success criteria, published revision, validation, policy, and Changes. Execution detail shows selected Changes, exact inputs, owners, stages, meaningful progress, budgets, holds, checkpoints, candidates, and previous attempts. Aggregate labels such as Executing and Paused refer to the selected execution, not a replacement for the Plan's definition lifecycle.
+Plan detail shows its pinned Product Strategy revision, a short alignment statement and report, intent, non-goals, implementation strategy, constraints, success criteria, published revision, validation, policy, and Changes. Show Alignment unassessed when no approved strategy exists; never fabricate historical bindings. Execution detail shows selected Changes, exact inputs, owners, stages, meaningful progress, budgets, holds, checkpoints, candidates, and previous attempts. Aggregate labels such as Executing and Paused refer to the selected execution, not a replacement for the Plan's definition lifecycle.
 
 Primary actions are **Create Plan**, **Explore**, **Generate proposals**, **Validate**, **Review policy**, **Start**, **Pause affected work**, **Publish and notify**, **Continue**, **Adapt**, **Restart task/plan**, **Accept candidate**, and **Archive eligible changes**. Availability follows server gates; disabled actions explain the blocker.
 
@@ -97,9 +95,9 @@ On mobile, use list/detail navigation with an explicit Back action. Opening a ch
 
 ### 2. Create, assign, and dispatch work
 
-**Create Plan** captures intent, success criteria, non-goals, strategy, Changes, relation graph, risks, constraints, and proposed topology. Human and Lead/Architect resolve mandatory questions before Ready. Research and draft generation can be automated without authorizing publication or implementation.
+**Create Plan** captures intent, success criteria, non-goals, implementation strategy, Changes, relation graph, risks, constraints, and proposed topology. Select the product and approved strategy revision when available; map intended outcomes/use cases and run Plan Alignment independently of technical validation. Human and Lead/Architect resolve mandatory questions before Ready. Research and draft generation can be automated without authorizing publication or implementation.
 
-**Validate** produces a report for pinned inputs. **Start** previews selected Changes, report revision/hash, baseline, worktrees/provisioning, topology, effective permissions, budgets, acceptance/archive policy, and unresolved questions. The server rechecks report identity and grants before recording a policy snapshot and execution. Later settings changes do not rewrite that snapshot; restrictive revocation still takes effect immediately. Worktree provisioning is a separate previewed, authorized, idempotent operation, never an implicit effect of sending mail.
+**Validate** produces a report for pinned inputs. **Start** previews pinned Product Strategy revision/hash and alignment decision (or explicit unassessed status), selected Changes, report revision/hash, baseline, worktrees/provisioning, topology, effective permissions, budgets, acceptance/archive policy, and unresolved questions. The server rechecks report identity and grants before recording a policy snapshot and execution. Later settings changes do not rewrite that snapshot; restrictive revocation still takes effect immediately. Worktree provisioning is a separate previewed, authorized, idempotent operation, never an implicit effect of sending mail.
 
 The task form retains title, direction, acceptance, and optional parent. Replace raw worktree and OpenSpec inputs with searchable choices scoped to the team. Show paths and branches for worktrees; show valid change names and their location. Permit advanced manual entry only with the same server validation.
 
@@ -203,29 +201,28 @@ An independent subset can be accepted/archived when policy and relation closure 
 
 ## Durable Plan and execution model
 
-**Recommendation:** these objects extend current task/mail durability. Additive migrations retain standalone tasks without inventing historical execution records.
+**Recommendation:** these objects extend current task/mail durability. ProductStrategy and immutable StrategyRevision are product-direction references, not orchestration attempts; [strategy bindings](product-strategy.md#data-model-and-revision-policy) pin direction without expanding authority. Additive migrations retain standalone tasks without inventing historical execution records.
 
 | Object | Minimum identity and content |
 | --- | --- |
-| Plan | id, teamId, title, currentRevision, lifecycle, owner, createdAt; durable intent container |
-| PlanRevision | planId/revision, intent, successCriteria, nonGoals, strategy, changeRefs, relationGraph, riskRegister, policyRef, topologyProposal, author, contentHash; published content immutable |
+| Plan | id, teamId, optional productId, title, currentRevision, lifecycle, owner, createdAt; durable intent container |
+| PlanRevision | planId/revision, optional PlanStrategyBinding, intent, successCriteria, nonGoals, implementationStrategy, changeRefs, relationGraph, riskRegister, policyRef, topologyProposal, author, contentHash; published content immutable |
 | ChangeBinding | planId/changeId, adapter, canonicalArtifactRef and revision/hash, worktreeRef, ownership; OpenSpec optional |
 | Task | Existing fields plus optional planId/changeId, Plan revision binding, stage, accountableOwner, assignmentGeneration |
 | PlanExecution | id, planId, initialRevision/revisionHistory, selectedChanges, baselineCommit, policySnapshot, status, timestamps, budget, outcome |
 | TaskExecution | id, optional planExecutionId for standalone work, taskId/revision, attemptNo, assignmentId, agentSessionId, inputManifest, leaseEpoch, status, checkpointRef, outputResultId, timestamps |
 | ContractRevision | contractId/revision, immutableRef/hash, schemaVersion, producers/consumers, compatibilityRules, publicationDecisionId |
-| ValidationReport | id, inputHash, planRevision, baselineCommit, adapterVersion, checks/findings/questions, decision; invalidated by input changes |
+| ValidationReport | id, inputHash, planRevision, optional pinned strategyBinding/alignmentReportRef, baselineCommit, adapterVersion, checks/findings/questions, decision; invalidated by input changes |
 | Result | id, executionId, commit/treeHash, inputManifest, summary, evidenceRefs, limitations, optional supersedesResultId |
 | IntegrationCandidate | id, baselineCommit, includedResults, contractSet, mergedTree/commit, validationEvidence, status, optional supersedesCandidateId |
 | Decision / Event | Rationale and immutable actor/transition history; corrections append new records |
 
 Start with exclusive active ownership of a canonical Change revision. Multiple Plan bindings require coordinated ownership; refuse conflicting concurrent executions without a shared coordinator. One active execution per Plan is the default. Explicit sandbox experiments may run in parallel but cannot publish the shared result.
 
-Example pinned input manifest:
-
 ```yaml
 planId: authentication-modernization
 planRevision: 3
+productStrategy: { id: kawai-direction, revision: 2, hash: <sha256> }
 planExecutionId: pe-002
 baselineCommit: <git-sha>
 policyRevision: 2
@@ -249,7 +246,7 @@ Pin retrievable snapshots, not mutable latest references. Context includes inten
 | Task Execution | Queued → Claimed → Running → Checkpointing → Paused → Running → Submitted → Finished; Blocked, Recovering, Failed, Superseded, Cancelled explicit |
 | Workflow stage | Explore / Propose / Implement / Review / QA / Integrate / Accept / Archive; separate from Task and session statuses |
 
-Editing Ready content creates a Draft revision. Completed records fulfillment against a published revision; Accepted records the policy-governed acceptance decision. Finishing an attempt is neither state. An extension with unchanged intent creates the next revision of the same Plan. Continue resumes the same attempt from a safe checkpoint; Adapt records authorized new inputs within it; Restart Task/Plan creates a new attempt linked to history. Selected verified results may be reused only after current gates pass. Strategy/dependency changes require affected-scope revalidation and an overall consistency check.
+Editing Ready content creates a Draft revision. Completed records fulfillment against a published revision; Accepted records the policy-governed acceptance decision. Finishing an attempt is neither state. An extension with unchanged intent creates the next revision of the same Plan. Continue resumes the same attempt from a safe checkpoint; Adapt records authorized new inputs within it; Restart Task/Plan creates a new attempt linked to history. Selected verified results may be reused only after current gates pass. Implementation strategy/dependency changes require affected-scope revalidation and an overall consistency check.
 
 ## OpenSpec adapter and lifecycle
 
@@ -272,7 +269,8 @@ Apply may return to Explore/Propose through controlled revision work. Automated 
 
 | Check | Required scope |
 | --- | --- |
-| Intent and strategy | Observable criteria, non-goals, ambiguities, trade-offs, rationale/alternatives, migrations, backwards compatibility, coherent partial delivery |
+| Product alignment | Pinned approved strategy/hash, outcome/use-case mapping, explicit alignment decision, constraints/non-goals, required experiments or unassessed status |
+| Intent and implementation strategy | Observable criteria, non-goals, ambiguities, trade-offs, rationale/alternatives, migrations, backwards compatibility, coherent partial delivery |
 | Scope and relations | Requirement-to-task/evidence mapping, duplicates/owners, blocking cycles, stage gates, semantic conflicts across API/schema/UI/config/specs |
 | Contracts | Producers/consumers, versions/compatibility, available immutable snapshots, publication order |
 | Readiness | Baseline/worktrees/provisioning, permissions/capacity/budgets, adapter/runtime capability, review/QA/integration environments |
@@ -280,7 +278,7 @@ Apply may return to Explore/Propose through controlled revision work. Automated 
 
 Relations include type and scope: UI consumes auth-api@3, admin E2E requires a verified backend result at integration, legacy/token authentication conflicts within users-schema, and token authentication supersedes legacy with explicit consumer treatment. API/frontend may run in parallel against a published contract while migration blocks integration; conflicting schema Changes prevent Ready even without a graph cycle.
 
-The report separates blocking errors, warnings, mandatory questions, evidence, and decisions. Resolve blockers/questions before Ready; warning acceptance requires authorized rationale. Scope, contract hash, baseline, policy, or adapter changes invalidate relevant checks. Start compares inputHash and current identities atomically to reject a Validate/Start race.
+The report separates blocking errors, warnings, mandatory questions, evidence, and decisions. Resolve blockers/questions before Ready; warning acceptance requires authorized rationale. Changes to strategy binding/alignment decisions, scope, contract hash, baseline, policy, or adapter invalidate relevant checks. Strategy publication opens an explicit impact review; it does not silently rebind Plans or interrupt executions. Affected binding changes follow Plan revision/hold/notification protocols. Existing Plans using a superseded strategy require a recorded impact disposition at the next Validate/Start; historical records retain the original pin. Start compares inputHash and current identities atomically to reject a Validate/Start race.
 
 ## Authority and execution safety
 
@@ -288,7 +286,7 @@ The report separates blocking errors, warnings, mandatory questions, evidence, a
 
 | Role | Responsibility and boundary |
 | --- | --- |
-| Human | Intent, constraints, delegation, acceptance policy; revoke grants and stop external actions |
+| Human | Product direction/strategy approval, intent, constraints, delegation, acceptance policy; revoke grants and stop external actions |
 | Lead | Decomposition, topology, owners, budgets, queues, escalation; cannot change intent/safety without authority |
 | Architect | Contracts, cross-change decisions, impact, publication; silence never acknowledges a revision |
 | Developer | Implementation/checkpoints/results and proposals; cannot publish canonical contracts independently |
@@ -467,6 +465,7 @@ Fault matrix for R17–R19 covers before/after writes, sends, receipts, checkpoi
 
 | Phase | Scope | Completion criterion |
 | --- | --- | --- |
+| Strategy documentation | Human-reviewed template and pinned references; no new execution layer | Purpose/users/outcomes and unknown evidence explicit; no fabricated product direction |
 | Baseline UX | Visible states/waits, dispatch/owner, Team/Messages, results, sequential handoff; E01–E14 | Human assigns/follows/accepts work without raw IDs; standalone tasks remain usable |
 | P0 Durable Plan core | Plans/revisions/attempts/manifests/policy snapshots/grants/CAS/idempotency/outbox | Start/restart/reconnect retain unambiguous identity and permissions |
 | P0 Revision control | Publication, targeted notifications, holds/checkpoints/fencing/barriers | Stale or in-flight work cannot pass gates accidentally |
@@ -477,11 +476,11 @@ Fault matrix for R17–R19 covers before/after writes, sends, receipts, checkpoi
 
 Start with one Plan, 2–3 Changes, one writer per worktree, automated QA/Candidate checks, and manual final acceptance. Expand to 5–10 Changes and bounded autonomous archive only after enabled-capability R01–R20 and applicable E-tests pass. R21–R24 plus a real desktop/mobile walkthrough are required before claiming complete overnight execution. Production deployment is excluded from the MVP.
 
-Recommended future OpenSpec Changes: `durable-plans`, `revision-control`, `integration-candidates`, `execution-safety-recovery`, and `plan-supervision`. Agree shared schemas/contracts before parallel implementation. This document does not create these Changes or implement their capabilities. Migrate additively, preserve task/mail receipt recovery, and preserve creator rights until explicit grants exist.
+Product Strategy delivery begins with documentation/manual approval, then guided discovery/synthesis, Plan alignment, explicit revision-impact review, and evidence-driven learning as specified in the [strategy implementation sequence](product-strategy.md#implementation-sequence). Strategy is not a prerequisite for every small task. Recommended future OpenSpec Changes: `product-strategy`, `durable-plans`, `revision-control`, `integration-candidates`, `execution-safety-recovery`, and `plan-supervision`. Agree shared schemas/contracts before parallel implementation. This document does not create these Changes or implement their capabilities. Migrate additively, preserve task/mail receipt recovery, and preserve creator rights until explicit grants exist.
 
 ## Metrics and decisions before implementation
 
-Measure time to first verified candidate, blocker localization, navigation to resolve attention, stale-result rejection, recovery success, duplicate effects, fix iterations, cost per accepted Change, partial outcomes, and false stall alerts. Establish baselines; agent/message counts are not quality objectives.
+Track alignment decision quality and strategy learning without treating activity as product value. Measure time to first verified candidate, blocker localization, navigation to resolve attention, stale-result rejection, recovery success, duplicate effects, fix iterations, cost per accepted Change, partial outcomes, and false stall alerts. Establish baselines; agent/message counts are not quality objectives.
 
 | Decision | Proposed starting point / question to resolve |
 | --- | --- |
