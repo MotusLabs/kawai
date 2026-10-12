@@ -2,17 +2,15 @@
 
 ## 1. Assignment data model
 
-- [ ] 1.1 Add the `team_task_assignments` table per design D1 (target kind/id, role, instruction, request key unique per team, creator, message id, claim, supersession, timestamps), the nullable `team_tasks.request_key` with its unique-per-team index, and `team_messages.from_kind` defaulting to `agent`, all through the additive PRAGMA-check migration pattern; verify migration tests cover a pre-existing database (existing tasks/messages untouched, `from_kind` backfills `agent`, keyless tasks read normally) and reopen/restart round-trips.
+- [ ] 1.1 Add the `team_task_assignments` table per design D1 (target kind/id, role, instruction, request key unique per team, creator, message id, claim, supersession, timestamps) and the nullable `team_tasks.request_key` with its unique-per-team index, both through the additive PRAGMA-check migration pattern; verify migration tests cover a pre-existing database (existing tasks untouched, keyless tasks read normally) and reopen/restart round-trips. The `team_messages` actor columns (`from_kind`, nullable `from_session`, `to_kind: 'human'`) come from `team-message-threads`, which has landed before this change implements — do not add them here.
 - [ ] 1.2 Implement the assignment store beside `taskStore.ts`: insert-with-request-key (insert-or-ignore then compare payload, returning the prior row for a same-payload replay and refusing a different payload), list-by-task oldest first, mark-claim, supersede, and cancel-instruction hooks; verify store tests cover first insert, same-payload replay, different-payload refusal, supersession chains, claim copies, and persistence across reopen.
 - [ ] 1.3 Derive assignment state at read time per design D5 (`queued`/`claimed`/`delivered`/`failed` from the instruction mail's state, `superseded` from the row) and expose the outstanding assignment on `TeamTaskSummary` plus the history on `TeamTaskDetail` additively; verify store/summary tests cover a queued group assignment with role and no claim, owner-after-claim, dead-lettered instructions showing failed with reason, and unassigned tasks showing no assignment.
 
 ## 2. Human-originated mail
 
-- [ ] 2.1 Extend `mailboxStore.ts` enqueue with a human sender (`from_kind 'human'`, `'human'` sentinel session, null group, origin = team main-checkout root) while agent paths stay byte-identical; verify store tests cover human rows persisted and listed, agent rows unchanged, and receipt/claim paths indifferent to sender kind.
-- [ ] 2.2 Extend `shared/team.ts` and the peer envelope (`envelope.ts`) with optional `senderKind` (absent = agent), including `parseEnvelope` acceptance of the optional field; verify format/parse round-trip tests cover both kinds, old transcripts without the field, and replayed history.
-- [ ] 2.3 Refuse replies to human-originated mail in `TeamMailbox.reply` with an error directing the agent to `task_note` on the task; verify handler tests cover the refusal (no message queued, error names the task journal) and that replies to agent-originated mail are unchanged.
-- [ ] 2.4 Render the human as sender on peer-message rows (`ChatMessages.tsx`) using `senderKind`; verify component tests cover a human-dispatched row ("Human" label, no session link) and an agent row unchanged.
-- [ ] 2.5 Document human-originated task mail in the How It Works section: the sender identity, the reply refusal with journal guidance, and that thread/composer surfaces land with `team-message-threads`; verify the documented behavior matches the handler tests.
+- [ ] 2.1 Extend `mailboxStore.ts` enqueue with a human sender on the relaxed schema `team-message-threads` ships (`from_kind 'human'`, null `from_session`, null group, origin = team main-checkout root) while agent paths stay byte-identical; verify store tests cover human rows persisted and listed, agent rows unchanged, and receipt/claim paths indifferent to sender kind.
+- [ ] 2.2 Verify dispatch instructions render through the sender plumbing `team-message-threads` adds (`senderKind`, Human label, no session link on `ChatMessages.tsx` rows) without this change adding rendering of its own; verify component tests cover a human-dispatched instruction row and an agent row unchanged.
+- [ ] 2.3 Document human-originated task mail in the How It Works section: the sender identity on the shared actor model, that an agent's reply in the dispatched thread reaches the human (settled on send, toast, thread row — owned by `team-message-threads`), and the task journal as the complementary record; verify the documented behavior matches the sibling change's `agent-mailbox` delta.
 
 ## 3. Assignment service: dispatch, idempotency, reassignment, preview
 
@@ -35,7 +33,7 @@
 - [ ] 5.2 Replace the typed worktree/change inputs in `TeamTasksPanel.tsx` with the pickers, add the assignment section (group or session target, instruction, group-dispatch explanation, preview on demand) and the **Create task** / **Create and assign** actions with one stable client request key minted per intent; verify component tests cover both actions, preview display, empty-instruction refusal keeping all fields, and double-click sending one request.
 - [ ] 5.3 Keep the assignment draft and its request key in `teamTaskStore.ts` across reconnects and failed results (never silently cleared on refusal), with **Retry assignment** reusing the existing task and key; verify store/component tests cover dispatch failure retaining the draft, successful retry delivering exactly one instruction, and reconnect resubmission deduplicated by the key.
 - [ ] 5.4 Add the assignment section to `TeamTaskDetail.tsx`: **Assign / send task**, the outstanding assignment (target, role, state, claimed agent, waiting label), assignment history, and the reassignment dialog requiring **notify** or **stop** with the outstanding assignment shown; verify component tests cover assign, reassignment choice enforcement, stop/notify outcomes, failed-assignment reason display, and disabled controls while disconnected.
-- [ ] 5.5 Show the assignment target and state on task list rows (or Unassigned) and the Human sender label on task instruction rows in the transcript; verify component tests cover row labels for queued/claimed/delivered/failed/unassigned.
+- [ ] 5.5 Show the assignment target and state on task list rows (or Unassigned) and confirm task instruction rows show the Human sender via `senderKind`; verify component tests cover row labels for queued/claimed/delivered/failed/unassigned.
 - [ ] 5.6 Document the UI affordances in the How It Works section (pickers, Create and assign, preview, Retry assignment, Assign / send task, reassignment choice); verify documented labels match the rendered components.
 
 ## 6. End-to-end and integration verification
@@ -48,6 +46,6 @@
 
 ## Workflow follow-up
 
-- Human decides open questions Q1–Q5 (design.md); Q1 (auto-`active` on dispatch) and Q3 (allow vs refuse cross-worktree session assignment) can flip spec scenarios — re-check the spec deltas if changed.
+- Human rulings of 2026-10-13 are recorded as decided in design.md (no open questions remain); the human mail-actor model and `team_messages` rebuild are owned by `team-message-threads`, which must land before this change implements.
 - Keep this change ahead of the Wave B2 units that reference assignments (`task-results-handoffs`, `task-revision-publication`); they build on the record shape decided here.
-- Archive after implementation, syncing `task-assignment` into main specs and the `agent-mailbox` modifications.
+- Archive after implementation, syncing `task-assignment` into main specs.

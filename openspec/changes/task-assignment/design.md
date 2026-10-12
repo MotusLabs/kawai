@@ -6,11 +6,13 @@
 
 Dispatch should reuse the mailbox rather than parallel it: atomic claims, idle-gated delivery, worktree filtering (`MailDispatcher.inWorktree`), bounded spawning, and transcript-confirmed receipts already exist and are specified in `agent-mailbox` / `team-worktree-staffing`. The new pieces are the record, the human as sender, and idempotency.
 
+The human mail-actor plumbing is owned by `team-message-threads` (its design D4/D5, `agent-mailbox` delta), which ships first: its guarded `team_messages` rebuild makes `from_session` nullable and adds `from_kind` (`'agent' | 'human'`, `TaskActor`'s vocabulary) and `to_kind: 'human'`, and its envelope gains `senderKind` with a nullable `senderSession`. This change is sequenced after it and only *produces* human-originated rows; it defines no sender schema of its own. (Ruled 2026-10-13: `from_kind` is an actor discriminator and `to_kind` a routing discriminator — deliberately different vocabularies, per `team-message-threads` D4.)
+
 ## Goals / Non-Goals
 
 **Goals:** one durable assignment record per dispatch with visible history; dispatch driven by the human from create-form and task detail; exactly-once task creation and instruction dispatch per user intent across reconnects and double clicks; previews computed from the same state the dispatcher uses; pickers fed by the same validators that gate creation.
 
-**Non-Goals** (beyond the proposal's): changing any delivery, claim, routing, or staffing rule — assignment dispatch is an ordinary producer of task mail; automatic task-status transitions on dispatch; a human reply surface (refusal + journal guidance only, until `team-message-threads`); assignment tooling for agents.
+**Non-Goals** (beyond the proposal's): changing any delivery, claim, routing, or staffing rule — assignment dispatch is an ordinary producer of task mail; automatic task-status transitions on dispatch; any human reply or composer surface (`team-message-threads` owns it); assignment tooling for agents.
 
 ## Decisions
 
@@ -44,9 +46,9 @@ CREATE INDEX team_task_assignments_task ON team_task_assignments (task_id, creat
 
 The outstanding assignment is the newest row for the task that is neither superseded nor settled; `TeamTaskSummary` gains `assignment` (target, role, state, claimedBy) and `TeamTaskDetail` gains `assignments` oldest-first. A task with no rows is unassigned. Association still happens the existing way: delivering the instruction mail calls `associateTask`, so the recipient's header/task badge works unchanged — the assignment is accountability, the association is context.
 
-### D2. Human-originated mail: `from_kind` on `team_messages`, no sender session
+### D2. Human-originated mail rides `team-message-threads`' actor model
 
-The instruction is a normal `team_messages` row so everything downstream applies unchanged. `team_messages` gains `from_kind TEXT NOT NULL DEFAULT 'agent'`; human rows store the sentinel `'human'` in the NOT NULL `from_session` (session ids are `chat-<uuid>`, so no collision), `from_group` NULL, and `origin_path` = the team's main checkout root — stable regardless of which chat's panel dispatched. The envelope (`messageEnvelope`) gains optional `senderKind: 'human'` (absent = agent, like `task`), so `ChatMessages` renders "Human" and old transcripts still parse; `parseEnvelope` accepts the optional field. `TeamMailbox.reply` refuses replies to human-originated mail with an error pointing at `task_note` and the task detail — without this the reply would dead-letter against a nonexistent sender session. *Alternative:* rebuilding `team_messages` to make `from_session` nullable — rejected for this change: a table rebuild is a heavier migration than one additive column, and the sentinel plus `from_kind` is unambiguous. *Alternative:* routing replies into the human's own chat session — rejected: that session is an agent conversation, not the human's inbox (`team-message-threads` owns that surface).
+The instruction is a normal `team_messages` row so everything downstream applies unchanged. Its sender is the human exactly as `team-message-threads` specifies and ships first: `from_kind: 'human'`, `from_session` NULL (the relaxed column its rebuild provides), `from_group` NULL, and `origin_path` = the team's main checkout root — stable regardless of which chat's panel dispatched. The envelope's `senderKind` and the peer row's Human label are that change's; dispatch instructions just carry them. An agent's reply in the human-started thread reaches the human (`to_kind: 'human'`, settled on send, toast to connected clients, thread row) per its D5 and `agent-mailbox` delta — this change adds nothing to those rules and must not disagree with them. The task journal stays what it already was: a complementary, always-visible record on the task itself, not the destination replies are redirected to. *Rejected alternative (ruled out 2026-10-13):* refusing replies to human-originated mail and steering to `task_note` — a thread the human can never get an answer in is broken. *Rejected alternative:* carrying an additive `from_kind` column with a sentinel `'human'` sender session — a design that exists only to avoid a migration the other change requires anyway; it would leave the sentinel for the rebuild to clean up.
 
 ### D3. Dispatch is one transaction: assignment row + instruction mail
 
@@ -76,24 +78,24 @@ Dispatch onto a task with an outstanding assignment requires `handling: 'notify'
 
 ### D9. No dispatch side effects on task state
 
-Dispatch writes the assignment, the mail, a journal entry ("assigned to <target> by human"), and nothing else. Task status stays under the existing rules (`team-tasks` "Task status and closing") — no automatic `open → active`. The assignment record, not a status value, is what shows responsibility; conflating them would make a queued assignment indistinguishable from a stuck task. (Q1 holds the alternative for the human to decide.)
+Dispatch writes the assignment, the mail, a journal entry ("assigned to <target> by human"), and nothing else. Task status stays under the existing rules (`team-tasks` "Task status and closing") — no automatic `open → active`, ruled 2026-10-13. The assignment record, not a status value, is what shows responsibility; conflating them would make a queued assignment indistinguishable from a stuck task.
 
 ## Risks / Trade-offs
 
-- [Sentinel `'human'` in `from_session`] → disambiguated by `from_kind`, unreachable by real session ids (`chat-<uuid>`); every sender resolution already tolerates a missing session. If it ever grates, a later rebuild migration can null the column without behavior change.
+- [This change cannot implement before `team-message-threads` lands its rebuild] → sequencing is ruled: threads ships first; its `agent-mailbox` delta already specifies the sender and reply behavior this change rides, so no interim shape is needed.
 - [Preview and dispatch race (member goes busy, cap fills)] → preview is explicitly informational; dispatch revalidates and refuses or queues as its outcome, which is then visible as the assignment state.
 - [Group assignment queues indefinitely when nobody is eligible and staffing cannot spawn (main-checkout tasks never spawn)] → correct per current staffing rules; visibility of *why* it waits is `team-waiting-reasons`, and the human can reassign or stop.
 - [Instruction text is stored twice (assignment row + mail body)] → deliberate: the assignment row is the durable historical record of what was sent; the mail row is the delivery vehicle.
-- [Dispatch adds human-originated mail before `team-message-threads` ships its surfaces] → reply refusal (D2) keeps agents from dead-lettering; peer rows already render the human sender; thread history arrives with the sibling change.
 
 ## Migration Plan
 
-Additive only: create `team_task_assignments`, `ALTER TABLE team_tasks ADD COLUMN request_key TEXT` + unique index, `ALTER TABLE team_messages ADD COLUMN from_kind TEXT NOT NULL DEFAULT 'agent'` (following `mailboxStore.migrateTable`'s PRAGMA-check pattern). Existing rows default to agent senders and keyless tasks. Rollback is dropping the new table/columns; no existing behavior reads them.
+Additive only, and only what this change owns: create `team_task_assignments` and `ALTER TABLE team_tasks ADD COLUMN request_key TEXT` with its unique-per-team index (the `mailboxStore.migrateTable` PRAGMA-check pattern). The `team_messages` rebuild (nullable `from_session`, `from_kind`, `to_kind: 'human'`) belongs to `team-message-threads` and has already landed when this change implements. Existing rows are keyless tasks; rollback is dropping the new table/column.
 
-## Open Questions
+## Decisions (human rulings, 2026-10-13)
 
-- **Q1 — dispatch and task status.** Default: no automatic status change (D9). Alternative: a successful dispatch sets `open → active` with a journal note. Recommend the default; status stays human/member-owned.
-- **Q2 — reassignment notify wording/priority.** Default: a normal-priority direct note ("Task <title> was reassigned to <target>; your work is not cancelled — report status with a journal note if still relevant"). Alternative: make it configurable. Recommend the default.
-- **Q3 — direct assignment to a session outside the task's worktree.** Default: preview warns, dispatch allows (D6). Alternative: refuse when the task targets a worktree and the session is resolved elsewhere. Recommend warn-but-allow — manual sessions move, and the human's choice is explicit.
-- **Q4 — may agents create assignment records via a tool later?** Default: not in this change; agents keep `send_message` with `task_id` (their dispatches remain ordinary task mail, participants-only). Revisit when Wave B2 result handoffs need machine-written assignments. Recommend deferring.
-- **Q5 — should plain **Create task** also accept a request key?** Default: yes, it already falls out of D4 (same mechanism, prevents duplicate tasks on reconnect/double click of the create button). Listed only because it widens `team-task-create` beyond assignment.
+- **Q1 — dispatch and task status: no automatic change** (D9). Dispatch never rewrites task status; the assignment record carries responsibility.
+- **Q2 — reassignment notify: a fixed normal-priority direct note** — "Task <title> was reassigned to <target>; your work is not cancelled — report status with a journal note if still relevant." Not configurable.
+- **Q3 — direct assignment to a session outside the task's worktree: preview warns, dispatch allows** (D6). Manual sessions move; the human's choice is explicit.
+- **Q4 — no agent-side assignment tool in this change.** Agents keep `send_message` with `task_id`; revisit at Wave B2 result handoffs.
+- **Q5 — plain Create task also takes a request key.** Falls out of D4 and kills duplicate tasks on reconnect or double click.
+- **Human mail actor and sequencing: `team-message-threads` owns the migration and ships first; replies in human-started threads are allowed** (settled on send, toast, thread row). Recorded in the Context and D2 above.

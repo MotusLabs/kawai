@@ -4,7 +4,7 @@
 
 Tasks record what must happen and mail delivers work, but nothing names who is responsible for a task. Today the human (or a lead acting by hand) creates a worktree, picks a session, and composes mail with a pasted task id — and a reconnect or a repeated click during that manual flow can silently duplicate instructions. Multi-agent work needs an accountable owner per task, recorded durably and separately from the participant list, plus a dispatch path the human can drive without typed paths or raw session ids.
 
-Depends on `team-tasks` (and the `agent-teams` / `agent-mailbox` machinery beneath it).
+Depends on `team-tasks` (and the `agent-teams` / `agent-mailbox` machinery beneath it) and on `team-message-threads`, which owns the `team_messages` human-actor migration (`from_kind`, nullable `from_session`, `to_kind: 'human'`) and ships first; this change is sequenced after it.
 
 ## What Changes
 
@@ -15,10 +15,10 @@ Depends on `team-tasks` (and the `agent-teams` / `agent-mailbox` machinery benea
 - **Retry assignment.** When creation succeeds and dispatch fails, the task and the assignment draft are kept, the error shows inline, and **Retry assignment** reuses the existing task. A refusal never silently erases form input.
 - **Assign from detail; explicit reassignment.** **Assign / send task** in the task detail dispatches to a group or session. Reassignment supersedes the outstanding assignment after the human chooses **notify** or **stop**: an undelivered instruction is cancelled only on stop, a previous recipient's delivered work is never auto-cancelled, and notify sends the previous assignee a direct note. Neither choice kills or archives anyone.
 - **Worktree routing through assignment.** A group assignment whose task targets a worktree reaches only members whose resolved worktree matches (existing staffing rules, caps, and bounded spawning); an idle developer in the main checkout never takes it. Kawai still never creates a worktree because mail was sent — the picker links into the existing worktree-creation flow and returns.
-- **Human-originated mail.** The instruction is an ordinary `team_messages` row so claims, receipts, routing, and spawning all apply; its sender is the human (additive `from_kind`; peer rows show the human as sender; replies to human-originated mail are refused with guidance to append a task journal note, which the human reads in the task detail).
+- **Human-originated mail.** The instruction is an ordinary `team_messages` row so claims, receipts, routing, and spawning all apply; its sender is the human on the actor model `team-message-threads` ships first (`from_kind: 'human'`, no sender session, `senderKind` in the envelope). An agent's reply in that thread reaches the human — settled on send, toast, thread row — exactly as `team-message-threads` specifies; `send_message` still cannot start mail to the human. The task journal stays a complementary record, not the reply redirect.
 - **No automatic status change.** A task starts unassigned; dispatch does not rewrite task status — assignment state is its own record.
 
-Non-goals: waiting-reason taxonomy and Starting-agent rows (`team-waiting-reasons`); delivered history, threads, and a human message composer (`team-message-threads`); Team view and attention queue, results/review/QA handoffs, Accept result, Release worktree, revision publication (Wave B2); Plans and Task Execution objects (`durable-plans`, Wave C); replacing the lead/devs role prompts; grants/leases; dependency graphs; on-demand worktree creation; urgent dispatch; agent-side assignment tooling (agents keep `send_message` with `task_id`).
+Non-goals: waiting-reason taxonomy and Starting-agent rows (`team-waiting-reasons`); delivered history, threads, the human composer, and the human reply surface (`team-message-threads`); Team view and attention queue, results/review/QA handoffs, Accept result, Release worktree, revision publication (Wave B2); Plans and Task Execution objects (`durable-plans`, Wave C); replacing the lead/devs role prompts; grants/leases; dependency graphs; on-demand worktree creation; urgent dispatch; agent-side assignment tooling (agents keep `send_message` with `task_id`).
 
 ## Capabilities
 
@@ -28,13 +28,13 @@ Non-goals: waiting-reason taxonomy and Starting-agent rows (`team-waiting-reason
 
 ### Modified Capabilities
 
-- `agent-mailbox`: messages may originate from the human (task dispatch) with a human sender identity that cannot be forged; replies to human-originated messages are refused with journal guidance until a human reply surface exists.
+None. The human mail-actor behavior this change builds on — the human as a sender (`from_kind`, nullable `from_session`), replies in human-started threads reaching the human, and `send_message` refusing to start mail to the human — is specified by `team-message-threads`'s `agent-mailbox` delta, which ships first; this change produces such rows and adds no requirements of its own there.
 
 ## Impact
 
-- Server: `src/server/team/` — a new assignment store beside `taskStore.ts` and dispatch/preview methods on `TaskService.ts` (`request_key` idempotency, reassignment, cancel-on-stop); `mailboxStore.ts` (additive `from_kind`, human-sender rows), `TeamMailbox.ts` (reply refusal for human-originated mail), `envelope.ts` and `src/shared/chat.ts` (optional `senderKind`), `taskConnections.ts` (`team-task-assign`/`team-task-preview`/`team-task-targets` actions; snapshots and details carry assignments), preview counts reusing `staffing.ts` and `worktreeRoots.ts` read-only, wiring in `ChatSessionManager.ts`.
-- Shared: `teamTasks.ts` (assignment types on summaries/details), `team.ts` (`fromKind`), `types.ts` (new client/server messages, `requestKey` on create).
-- Client: `TeamTasksPanel.tsx` (pickers, Create and assign), `TeamTaskDetail.tsx` (Assign / send task, outstanding assignment, history, reassignment choice), a new searchable-picker component, `teamTaskStore.ts` (assignment draft and request keys across reconnects), `ChatMessages.tsx` (Human sender label); the picker's create-worktree link reuses `CreateWorktreeModal.tsx` / `create-change-worktree`.
-- Data: additive SQLite migration — `team_task_assignments` table, nullable `team_tasks.request_key`, `team_messages.from_kind`.
+- Server: `src/server/team/` — a new assignment store beside `taskStore.ts` and dispatch/preview methods on `TaskService.ts` (`request_key` idempotency, reassignment, cancel-on-stop); `mailboxStore.ts` (enqueueing human-sender rows on the relaxed `team_messages` schema that `team-message-threads` ships), `taskConnections.ts` (`team-task-assign`/`team-task-preview`/`team-task-targets` actions; snapshots and details carry assignments), preview counts reusing `staffing.ts` and `worktreeRoots.ts` read-only, wiring in `ChatSessionManager.ts`.
+- Shared: `teamTasks.ts` (assignment types on summaries/details), `types.ts` (new client/server messages, `requestKey` on create); `team.ts`/`chat.ts` sender-kind types come from `team-message-threads`.
+- Client: `TeamTasksPanel.tsx` (pickers, Create and assign), `TeamTaskDetail.tsx` (Assign / send task, outstanding assignment, history, reassignment choice), a new searchable-picker component, `teamTaskStore.ts` (assignment draft and request keys across reconnects), `ChatMessages.tsx` (human-dispatched instruction rows render through the sender plumbing `team-message-threads` adds); the picker's create-worktree link reuses `CreateWorktreeModal.tsx` / `create-change-worktree`.
+- Data: additive SQLite migration — `team_task_assignments` table and nullable `team_tasks.request_key`; the `team_messages` rebuild is `team-message-threads`', already landed when this change implements.
 - Docs: How It Works (CLAUDE.md) bullets for assignment records, dispatch idempotency, and pickers.
 - Tests: unit coverage beside the existing `src/server/__tests__/team*` suites; E01–E03 browser coverage extending `tests/e2e/chat-teams.spec.ts` patterns.
