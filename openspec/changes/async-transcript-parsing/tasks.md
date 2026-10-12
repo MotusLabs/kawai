@@ -20,8 +20,8 @@ Each task ends with `bun run lint && bun run typecheck && bun run test` green an
 - [x] 2.1 `ChatSessionManager`: make `restorePersisted` async (per-row discovery + single
   meta pass, same title/cwd/worker-roster catch-up), kick it off un-awaited from the
   constructor, expose `whenRestored(): Promise<void>`; add a memoized async
-  `loadHistory(sessionId)` over `replayTranscriptFileAsync` (invalidate on turn completion,
-  mirroring `snapshotHistory` semantics — audit first and note the audit in-code)
+  `loadHistory(sessionId)` over `replayTranscriptFileAsync` (retain until kill alongside
+  live events, matching the audited `snapshotHistory` semantics noted in-code)
 - [x] 2.2 `ChatConnections` chat-attach path: `await manager.whenRestored()` then
   `await manager.loadHistory(sessionId)` before snapshot assembly; nothing else in the
   ordering changes; update tests that construct the manager and immediately assert restored

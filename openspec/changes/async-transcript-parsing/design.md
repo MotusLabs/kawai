@@ -61,8 +61,7 @@ stall this change removes.
 
 `ChatConnections`'s `chat-attach` path becomes: `await manager.whenRestored()` (resolves the
 D2 promise; also covers restart-restore), then `await manager.loadHistory(sessionId)` —
-an async memoized wrapper over `replayTranscriptFileAsync` (memo per session, invalidated on
-turn completion) — then snapshot assembly as today. `getSnapshot`'s synchronous assembly
+an async memoized wrapper over `replayTranscriptFileAsync` (memo per session, retained alongside live events) — then snapshot assembly as today. `getSnapshot`'s synchronous assembly
 contract is untouched: only the two awaits are inserted ahead of it, and `liveEvents` are
 already sequenced after the snapshot send, so the invariant holds by construction. The
 existing `captureHistory`-before-`start()` ordering is preserved because both happen after
@@ -83,10 +82,14 @@ remaining sync-fs caller gets an in-code note naming why sync is acceptable ther
 - [Chat rows appear a tick after boot] → Accepted: bounded by restorePersisted's completion;
   attach awaits it, so no client can observe a missing chat it is attaching to. The
   session-list broadcast fires as rows land, same as today's sequential restore.
-- [Memoized history serves stale events] → Mitigation: memo invalidation on turn completion
-  mirrors the existing `snapshotHistory` semantics (audit `captureHistory` before adoption);
-  if the audit shows the memo is unsafe, fall back to per-attach parse (async) — still
-  off the event loop.
+- [Memoized history serves stale events] → Mitigation: the audit confirms history is
+  captured before each driver starts, and subsequent turns are carried by `liveEvents`.
+  Keep the memo until kill; invalidating at turn completion would duplicate live turns.
+  A synchronous capture wins over a delayed async load, including its cwd catch-up.
+- [A transcript disappears during discovery] → Skip failed stat calls and continue
+  searching; one missing candidate must not abort restoration of the remaining sessions.
+- [Parsing blocks the event loop] → File IO is asynchronous, but JSON parsing still runs
+  on the event loop. Worker-based CPU parsing is outside this change.
 - [Test churn in the 3,006-line chatSessionManager suite] → Constructor-time restore becomes
   async; tests that construct the manager and immediately assert restored rows must await
   `whenRestored()` — a mechanical, reviewable diff.

@@ -2,8 +2,9 @@
 // transcript IO mirrors (async-transcript-parsing design D1): parity with the
 // sync readers, tolerance of unreadable files, discovery of nested transcripts
 // (newest wins), and replay parity.
-import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
+import { afterAll, beforeAll, describe, expect, spyOn, test } from 'bun:test'
 import fs from 'node:fs'
+import fsp from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import {
@@ -120,6 +121,19 @@ describe('findTranscriptPathAsync', () => {
     fs.utimesSync(newer, atime, new Date('2026-02-01T00:00:00Z'))
 
     await expect(findTranscriptPathAsync('sdk-find-2')).resolves.toBe(newer)
+  })
+
+  test('skips a candidate that disappears before stat and finds another copy', async () => {
+    const missing = writeTranscript('sdk-find-race', [userLine('u1')], '-race-a')
+    const remaining = writeTranscript('sdk-find-race', [userLine('u2')], '-race-b')
+    const originalStat = fsp.stat.bind(fsp)
+    const stat = spyOn(fsp, 'stat').mockImplementation(((file: string, ...args: unknown[]) => {
+      if (String(file) === missing) return Promise.reject(Object.assign(new Error('gone'), { code: 'ENOENT' }))
+      return originalStat(file, ...args as [])
+    }) as typeof fsp.stat)
+    try {
+      await expect(findTranscriptPathAsync('sdk-find-race')).resolves.toBe(remaining)
+    } finally { stat.mockRestore() }
   })
 
   test('resolves null for an unknown session', async () => {

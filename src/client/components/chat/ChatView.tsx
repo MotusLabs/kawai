@@ -9,6 +9,9 @@
 // The header carries the context meter beside the session status: the live
 // share of the autocompact threshold with `used / threshold` counts, hidden
 // until the first model request; archived chats keep the stored reading.
+// Under the header, the usage bar is joined by the notification strip
+// (notification strip design D7): the session's active notices, styled by
+// severity and closable, hidden when there are none.
 // Archived chats render read-only: the transcript and debug view stay, the
 // composer/Stop/request actions are replaced by a Restore bar, and archiving
 // a live turn asks for confirmation first (the server interrupts it).
@@ -37,11 +40,14 @@ import ChatContextMeter from './ChatContextMeter'
 import ChatDebugPanel from './ChatDebugPanel'
 import ChatMessages from './ChatMessages'
 import TeamMailboxPanel from './TeamMailboxPanel'
+import { useTeamGroups } from './useTeamGroups'
+import { parkedLabel } from '../../utils/parkedLabel'
 import { closedMailbox, useTeamMailboxStore } from '../../stores/teamMailboxStore'
 import TeamTasksPanel from './TeamTasksPanel'
 import { closedTaskView, useTeamTaskStore } from '../../stores/teamTaskStore'
 import ChatRequests from './ChatRequests'
 import ChatWorkersStrip from './ChatWorkersStrip'
+import NotificationStrip from './NotificationStrip'
 import SlashCommandMenu from './SlashCommandMenu'
 import UsageBar from './UsageBar'
 import { filterChatCommands, insertCommand, slashTokenAt } from './slashCommandFilter'
@@ -93,6 +99,7 @@ export default function ChatView({ session, sendMessage, subscribe, connectionSt
     else { useTeamMailboxStore.getState().close(session.id); useTeamTaskStore.getState().close(session.id); store.beginOpen(session.id) }
   }
   const mailbox = useTeamMailboxStore(state => state.views[session.id]) ?? CLOSED_MAILBOX
+  const teamGroups = useTeamGroups(mailbox.open, session.projectPath)
   useEffect(() => {
     if (!connected || !mailbox.open) return
     useTeamMailboxStore.getState().open(session.id)
@@ -325,6 +332,7 @@ export default function ChatView({ session, sendMessage, subscribe, connectionSt
           {session.spawned ? 'Spawned for task ' : 'Task '}
           <button className="hover:underline" data-testid="chat-task" onClick={() => openTasks(session.taskId)}>{session.taskTitle ?? session.taskId}</button>
         </p>}
+        {session.parked && <p className="truncate text-chat-meta text-amber-600" data-testid="chat-paused">{parkedLabel(session.parked)}</p>}
         <p className="truncate text-chat-meta text-secondary">{session.projectPath}</p></div>
       <span className="text-chat-meta text-secondary" data-testid="chat-status">{connected ? (archived ? 'archived' : session.status) : connectionStatus}</span>
       <ChatContextMeter usage={transcript.contextUsage} />
@@ -337,6 +345,19 @@ export default function ChatView({ session, sendMessage, subscribe, connectionSt
       <button className="btn text-chat-meta" onClick={onKill}>Kill session</button>
     </header>
     <UsageBar report={usage} />
+    {/* The notification strip (design D7): under the header, beside the
+        usage bar. Archived chats are read-only surfaces that no agent feeds,
+        so they render account notices only (design D4). */}
+    <NotificationStrip
+      notifications={
+        archived
+          ? transcript.notifications.filter((notice) => notice.source === 'account')
+          : transcript.notifications
+      }
+      onClose={(notice) =>
+        useChatStore.getState().closeNotification(session.id, notice, sendMessage)
+      }
+    />
     {error && <p role="alert" className="border-b border-border p-3 text-chat-body text-chat-danger">{error}</p>}
     <div className="flex min-h-0 flex-1">
       <div className={`min-h-0 min-w-0 flex-1 flex-col ${debugOpen || mailbox.open || tasks.open ? 'hidden md:flex' : 'flex'}`}>
@@ -394,7 +415,8 @@ export default function ChatView({ session, sendMessage, subscribe, connectionSt
           </form>
         )}
       </div>
-      {mailbox.open && <TeamMailboxPanel sessionId={session.id} view={mailbox} sendMessage={sendMessage} connected={connected} onClose={toggleMailbox} />}
+      {mailbox.open && <TeamMailboxPanel sessionId={session.id} view={mailbox} sendMessage={sendMessage} connected={connected} onClose={toggleMailbox}
+        groups={teamGroups.groups.map(group => group.id)} />}
       {tasks.open && <TeamTasksPanel sessionId={session.id} view={tasks} sendMessage={sendMessage} connected={connected} onClose={toggleTasks} />}
       {debugOpen && <ChatDebugPanel key={session.id} sessionId={session.id} view={debug} sendMessage={sendMessage}
         connected={connected} onClose={toggleDebug} />}

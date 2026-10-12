@@ -563,10 +563,16 @@ async function findNewestFileAsync(
       if (entry.isDirectory()) {
         if (depth < maxDepth) await walk(full, depth + 1)
       } else if (entry.isFile() && entry.name === fileName) {
-        const mtime = (await fsp.stat(full)).mtimeMs
-        if (mtime > best.mtime) {
-          best.path = full
-          best.mtime = mtime
+        // Transcripts can disappear between readdir and stat. Keep looking
+        // so one removed or unreadable file cannot abort every restored row.
+        try {
+          const mtime = (await fsp.stat(full)).mtimeMs
+          if (mtime > best.mtime) {
+            best.path = full
+            best.mtime = mtime
+          }
+        } catch {
+          continue
         }
       }
     }

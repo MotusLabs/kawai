@@ -3,6 +3,7 @@ export const HISTORY_MAX_AGE_MIN_HOURS = 1
 export const HISTORY_MAX_AGE_MAX_HOURS = 168 // 7 days
 
 import type { TeamMessage } from './team'
+import type { RuleLoadReport, TeamRoutingState } from './routing'
 import type { TaskStatus, TeamTask, TeamTaskDetail, TeamTaskSummary } from './teamTasks'
 import type {
   WorkspaceOperationResult,
@@ -15,6 +16,7 @@ import type {
   ChatCommandState,
   ChatContextUsage,
   ChatEvent,
+  ChatNotification,
   ChatPendingRequest,
   ChatQuestionAnswer,
   ChatUsageReport,
@@ -27,6 +29,10 @@ export type {
   ChatActivityPhase,
   ChatContextUsage,
   ChatEvent,
+  ChatNotification,
+  ChatNotificationSource,
+  ChatNotificationSeverity,
+  ChatNotificationPriority,
   ChatUsageReport,
   ChatUsageWindow,
   ChatUsageStatus,
@@ -142,6 +148,17 @@ export interface Session {
   taskTitle?: string
   /** Created by worktree staffing, not by the human (team-tasks D4). */
   spawned?: boolean
+  /** Paused after a provider limit with work parked on it (profile routing); null/absent = not paused. */
+  parked?: SessionParkedState | null
+}
+
+/** Why and until when a chat session is paused (profile routing). */
+export interface SessionParkedState {
+  messageId: string
+  /** When the scheduled resume is due; null when unknown. */
+  until: string | null
+  profileId: string
+  reason: string
 }
 
 export interface AgentSession {
@@ -291,6 +308,13 @@ export type ServerMessage =
        * snapshot time — running ones live, settled ones with their outcomes.
        */
       workers: ChatWorker[]
+      /**
+       * The session's active notices (notification strip design D1): its
+       * profile's account notices followed by its own agent notices, sorted by
+       * priority and newest. Additive and ephemeral — never persisted,
+       * sequenced, or replayed.
+       */
+      notifications: ChatNotification[]
     }
   // Replaced command list pushed to subscribed connections whenever the
   // agent reports a changed list (or the state changes). Additive: older
@@ -316,7 +340,11 @@ export type ServerMessage =
   // not deltas — a missed bookend must not wedge a stale running worker. Sent
   // whenever the roster projection changes; additive and ephemeral like
   // chat-activity, while settled outcomes also ride the snapshot and persist.
-  | { type: 'team-mailbox-snapshot'; sessionId: string; teamId: string; messages: TeamMessage[] }
+  | { type: 'team-mailbox-snapshot'; sessionId: string; teamId: string; messages: TeamMessage[]; routing?: TeamRoutingState }
+  | { type: 'team-mailbox-rules-result'; sessionId: string; ok: true; report: RuleLoadReport }
+  | { type: 'team-mailbox-rules-result'; sessionId: string; ok: false; error: string }
+  | { type: 'team-mailbox-hand-off-result'; sessionId: string; messageId: string; ok: true; forwardedId: string }
+  | { type: 'team-mailbox-hand-off-result'; sessionId: string; messageId: string; ok: false; error: string }
   | { type: 'team-mailbox-dead-letter'; teamId: string; messageId: string; senderSession: string }
   // Team tasks (team-tasks 6.1): authoritative snapshots for a session's
   // team — the list, and each task whose detail the connection has open.
@@ -326,6 +354,11 @@ export type ServerMessage =
   // task's id lets the view open it), `error` on refusal.
   | { type: 'team-task-result'; sessionId: string; requestId: string; task?: TeamTask; error?: string }
   | { type: 'chat-workers'; sessionId: string; workers: ChatWorker[] }
+  // A chat session's active notices (notification strip design D5): the full
+  // replace-semantics list, pushed to subscribed connections whenever it
+  // changes — a missed push heals on the next one. Additive and ephemeral
+  // like chat-activity: never sequenced, persisted, or replayed.
+  | { type: 'chat-notifications'; sessionId: string; notifications: ChatNotification[] }
   // A worker's body on expand (workers design D5): the reply to
   // chat-worker-transcript, read from the worker's on-disk transcript.
   // 'unavailable' reports a missing file or unknown worker (the row shows
@@ -437,6 +470,8 @@ export type ClientMessage =
     }
   | { type: 'team-mailbox-open' | 'team-mailbox-close'; sessionId: string }
   | { type: 'team-mailbox-cancel' | 'team-mailbox-retry' | 'team-mailbox-discard'; sessionId: string; messageId: string }
+  | { type: 'team-mailbox-reload-rules'; sessionId: string }
+  | { type: 'team-mailbox-hand-off'; sessionId: string; messageId: string; target: { kind: 'group' | 'session'; id: string } }
   // Team tasks (team-tasks 6.1/6.2): list and detail subscriptions scoped by
   // the session's team; human actions answer with team-task-result.
   | { type: 'team-tasks-open' | 'team-tasks-close'; sessionId: string }
@@ -461,6 +496,12 @@ export type ClientMessage =
   // A worker's expanded body (workers design D5): read the worker's on-disk
   // transcript live or after settle; the reply is chat-worker-transcript.
   | { type: 'chat-worker-transcript'; sessionId: string; workerId: string }
+  // Close an agent notice for its session on the server (notification strip
+  // design D6): the manager drops the key and pushes the new list to every
+  // attached client; unknown keys are a no-op. Account notices are closed
+  // client-side only and never send this. Additive: existing clients never
+  // send it.
+  | { type: 'chat-dismiss-notification'; sessionId: string; key: string }
   // Workspace messages are additive; existing clients never send them.
   | { type: 'workspace-refresh'; projectPath?: string }
   | {

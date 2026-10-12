@@ -189,14 +189,13 @@ function projectCatalogFiles(projectPath: string): string[] {
 }
 
 /**
- * Assemble the catalog for a session: base layer (user-level file, or the
- * shipped default when absent) beneath every `.kawai` directory from the
- * filesystem root down to the project path. Farther files merge first so
- * nearer entries win per key.
+ * The catalog files a context reads, farthest (trusted base) first: the
+ * user-level file — or the shipped default when it is absent — then every
+ * project `.kawai/profiles.json` from the filesystem root down to the path.
  */
-export function resolveProfileCatalog(
+export function profileCatalogLevels(
   ctx: ProfileCatalogContext = {}
-): ProfileCatalog {
+): Array<{ file: string; trusted: boolean }> {
   // HOME first, the POSIX way: os.homedir() may be cached by the runtime and
   // ignore later HOME changes, which tests rely on for isolation.
   const home = ctx.homeDir ?? process.env.HOME ?? os.homedir()
@@ -217,6 +216,19 @@ export function resolveProfileCatalog(
       levels.push({ file, trusted: false })
     }
   }
+  return levels
+}
+
+/**
+ * Assemble the catalog for a session: base layer (user-level file, or the
+ * shipped default when absent) beneath every `.kawai` directory from the
+ * filesystem root down to the project path. Farther files merge first so
+ * nearer entries win per key.
+ */
+export function resolveProfileCatalog(
+  ctx: ProfileCatalogContext = {}
+): ProfileCatalog {
+  const levels = profileCatalogLevels(ctx)
 
   const merged = new Map<string, PartialProfile>()
   const errors: string[] = []

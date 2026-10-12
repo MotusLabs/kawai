@@ -136,7 +136,7 @@ export function parseRateLimitEvent(
   if (single && !windows.some((window) => window.key === single.key)) {
     windows.push(single)
   }
-  return { status: pushStatus(info?.status), windows, receivedAt }
+  return { status: pushStatus(info?.status), windows, receivedAt, source: 'push' }
 }
 
 /** One fraction-scaled window, or null when its utilization is unusable. */
@@ -217,7 +217,7 @@ export function parseUsageReport(
     })
     status = worstStatus(status, severityStatus(row.severity))
   }
-  return { status, windows, receivedAt }
+  return { status, windows, receivedAt, source: 'report' }
 }
 
 // ----------------------------------------------------------------- pull: usage control
@@ -290,7 +290,7 @@ export function parseUsagePull(
       if (window) windows.push(window)
     }
   }
-  return { status: 'allowed', windows, receivedAt }
+  return { status: 'allowed', windows, receivedAt, source: 'pull' }
 }
 
 /** One percent-scaled window, or null when its utilization is unusable. */

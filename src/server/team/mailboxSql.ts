@@ -2,9 +2,11 @@
 export const mailboxSql = {
   enqueue: `INSERT INTO team_messages
       (id, team_id, to_kind, to_id, from_session, from_group, origin_path, priority, tags,
-       thread_id, in_reply_to, hop, body, state, deliver_at, created_at, reason, attach_thread, task_id)
+       thread_id, in_reply_to, hop, body, state, deliver_at, created_at, reason, attach_thread, task_id,
+       handoff, excluded_profile)
       VALUES ($id, $teamId, $toKind, $toId, $fromSession, $fromGroup, $originPath, $priority, $tags,
-       $threadId, $inReplyTo, $hop, $body, $state, $deliverAt, $createdAt, $reason, $attachThread, $taskId)`,
+       $threadId, $inReplyTo, $hop, $body, $state, $deliverAt, $createdAt, $reason, $attachThread, $taskId,
+       $handoff, $excludedProfile)`,
   get: 'SELECT * FROM team_messages WHERE id = $id',
   nextEligible: `SELECT * FROM team_messages
       WHERE team_id = $teamId AND state = 'queued'
@@ -31,6 +33,9 @@ export const mailboxSql = {
       ORDER BY created_at, rowid`,
   claimSpawned: `UPDATE team_messages SET state = 'claimed', claimed_by = $sessionId, claimed_at = $now
       WHERE id = $id AND state = 'spawning'`,
+  dueGroupMail: `SELECT * FROM team_messages
+      WHERE state = 'queued' AND to_kind = 'group' AND (deliver_at IS NULL OR deliver_at <= $now)
+      ORDER BY (priority = 'urgent') DESC, created_at, rowid`,
   claimsFor: `SELECT * FROM team_messages
       WHERE claimed_by = $sessionId AND state = 'claimed'
       ORDER BY created_at, rowid`,

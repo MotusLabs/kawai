@@ -29,6 +29,9 @@ import type {
   ChatCommandState,
   ChatContextUsage,
   ChatEvent,
+  ChatNotification,
+  ChatNotificationPriority,
+  ChatNotificationSeverity,
   ChatPendingRequest,
   ChatPeerMessage,
   ChatQuestion,
@@ -82,6 +85,12 @@ import { TEAM_ALLOWED_TOOLS } from '../team/mailboxTools'
 import { TEAM_MCP_SERVER } from '../team/teamPrompt'
 import { formatEnvelope } from '../team/envelope'
 import { createWireTappedSpawn, type ChatWireRecorder } from './wireTap'
+import {
+  assistantLimitSignal,
+  rejectedResetsAt,
+  retryLimitSignal,
+  type ChatLimitSignal,
+} from './limitSignals'
 
 /**
  * The SDK `query()` — injected so tests run against a fake. `wire` is the
@@ -145,6 +154,25 @@ export interface ChatSessionDriverOptions {
    */
   onActivity?: (activity: ChatActivity | null) => void
   /**
+   * An agent-emitted notification (notification strip design D4): the mapped
+   * ChatNotification for each `system`/`notification` frame, with the frame's
+   * `timeout_ms` when it carried one. Ephemeral like activity: the manager
+   * holds it per session, never the event stream.
+   */
+  onNotification?: (
+    notification: ChatNotification,
+    timeoutMs?: number
+  ) => void
+  /**
+   * The agent process ended on its own (notification strip design D4): an
+   * unexpected exit or stream failure — not kill/shutdown, whose callers
+   * already tear the session state down. Fired once, from the same
+   * markDead that settles workers; the notices this process emitted die
+   * with it, because the driver object survives and respawns internally
+   * (no new construction would otherwise clear them).
+   */
+  onProcessEnd?: () => void
+  /**
    * The spawned-worker roster (workers design D2): the full projection,
    * called whenever it changes — never per elapsed tick. Ephemeral like
    * activity: never sequenced, persisted only through the sidecar (D6).
@@ -194,6 +222,12 @@ export interface ChatSessionDriverOptions {
   onCommandState?: (state: ChatCommandState) => void
   /** Records the raw protocol of every spawned process (chat debug view). */
   wire?: ChatWireRecorder
+  /**
+   * Profile routing (design D6): a rate-limit, billing, or overload failure
+   * — a retried attempt or the turn's final failure — with the provider's
+   * reset time when a rejected rate_limit_event announced one.
+   */
+  onLimitEvent?: (signal: ChatLimitSignal) => void
 }
 
 interface PendingRequest {
@@ -247,6 +281,8 @@ export class ChatSessionDriver {
   private readonly agentToolCallIds = new Set<string>()
   /** Context-meter state (context meter designs D1–D3); see contextUsage.ts. */
   private readonly context = new ChatContextTracker()
+  /** Reset time from the latest rejected rate_limit_event (design D6). */
+  private limitResetsAt: string | null = null
   private dead = false
   /** Updated by the manager before a respawn; see setClaudeExecutablePath. */
   private claudeExecutablePath: string | undefined
@@ -689,6 +725,10 @@ export class ChatSessionDriver {
     this.feedWorkers({ type: 'process_end' })
     this.feedActivity({ type: 'turn_end' })
     this.cancelAllRequests('killed')
+    // Notification strip design D4: the notices this process emitted die
+    // with it — the same driver object respawns on the next send/start, so
+    // the manager must hear the process ended here.
+    this.options.onProcessEnd?.()
     this.emit({ type: 'error', message: reason })
     this.commands.markUnavailable()
     this.refreshStatus()
@@ -712,6 +752,7 @@ export class ChatSessionDriver {
         this.handleSystem(message)
         return
       case 'rate_limit_event':
+        this.limitResetsAt = rejectedResetsAt(message.rate_limit_info) ?? this.limitResetsAt
         // Plan usage rides these frames whatever the turn state; malformed
         // values degrade to a windowless report, never a session error.
         this.options.onRateLimit?.(
@@ -748,6 +789,10 @@ export class ChatSessionDriver {
     if (!turnId) return
     const messageId = message.message.id ?? message.uuid
     const subagent = isSubagentContentFrame(message)
+    if (message.error && !subagent) {
+      const text = message.message.content.map(block => block.type === 'text' ? block.text : '').join('\n')
+      this.reportLimit(assistantLimitSignal(message.error, text, this.currentResetsAt()))
+    }
     for (const block of message.message.content) {
       if (block.type === 'text') {
         // Worker chatter stays out of the parent transcript (design D4).
@@ -903,6 +948,9 @@ export class ChatSessionDriver {
   }
 
   private handleSystem(message: Extract<SDKMessage, { type: 'system' }>): void {
+    if (message.subtype === 'api_retry') {
+      this.reportLimit(retryLimitSignal(message, this.currentResetsAt()))
+    }
     if (message.subtype === 'init') {
       if (!this.capturedSdkSessionId && message.session_id) {
         this.capturedSdkSessionId = message.session_id
@@ -922,6 +970,26 @@ export class ChatSessionDriver {
       const turnId = this.activeTurnId
       if (turnId) {
         this.emit({ type: 'command_output', turnId, text: message.content })
+      }
+      return
+    }
+    if (message.subtype === 'notification') {
+      // A CLI-style notice (notification strip design D4): forwarded without
+      // a per-key allowlist, so new CLI notices appear without Kawai changes.
+      // Frames without a key or text are malformed and ignored; the wire
+      // capture still records the raw frame for the debug view.
+      if (typeof message.key === 'string' && message.key !== '' && typeof message.text === 'string' && message.text !== '') {
+        this.options.onNotification?.(
+          {
+            key: message.key,
+            source: 'agent',
+            severity: notificationSeverity(message.color),
+            priority: notificationPriority(message.priority),
+            text: message.text,
+            receivedAt: new Date().toISOString(),
+          },
+          typeof message.timeout_ms === 'number' ? message.timeout_ms : undefined
+        )
       }
       return
     }
@@ -954,6 +1022,21 @@ export class ChatSessionDriver {
     const input = systemFrameToInput(message)
     if (input) this.feedActivity(input)
     // Other system subtypes are informational; ignored.
+  }
+
+  /** The announced reset time while it is still ahead. */
+  private currentResetsAt(): string | null {
+    if (this.limitResetsAt && Date.parse(this.limitResetsAt) <= Date.now()) this.limitResetsAt = null
+    return this.limitResetsAt
+  }
+
+  private reportLimit(signal: ChatLimitSignal | null): void {
+    if (!signal) return
+    try {
+      this.options.onLimitEvent?.(signal)
+    } catch {
+      // Observational: recording a limit must never break the session.
+    }
   }
 
   /**
@@ -1229,6 +1312,21 @@ function isSubagentContentFrame(frame: object): boolean {
 /** The tools that spawn a worker (design D1): both names, current and old. */
 function isAgentSpawnTool(toolName: string): boolean {
   return toolName === 'Agent' || toolName === 'Task'
+}
+
+/** The agent's color vocabulary → strip severity; anything else reads as info. */
+function notificationSeverity(color: unknown): ChatNotificationSeverity {
+  if (color === 'warning') return 'warning'
+  if (color === 'error') return 'error'
+  return 'info'
+}
+
+/** A notification frame's priority, normalized; unknown values read as low. */
+function notificationPriority(priority: unknown): ChatNotificationPriority {
+  if (priority === 'immediate' || priority === 'high' || priority === 'medium' || priority === 'low') {
+    return priority
+  }
+  return 'low'
 }
 
 function validateAnswers(

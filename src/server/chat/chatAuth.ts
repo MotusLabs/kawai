@@ -6,9 +6,16 @@ import path from 'node:path'
 import { effectiveChatEnv, type ChatProviderEnv } from './chatProviderEnv'
 
 /** The Claude CLI's credentials file inside the config dir (Linux/Windows). */
-const CLI_CREDENTIALS_FILE = '.credentials.json'
+export const CLI_CREDENTIALS_FILE = '.credentials.json'
 
-function claudeConfigDir(env: Record<string, string | undefined> = process.env): string {
+/**
+ * The Claude CLI config dir an environment resolves to: CLAUDE_CONFIG_DIR
+ * when set, otherwise `~/.claude` (HOME or USERPROFILE). Shared with the
+ * account-notice check, which reads the same credentials file the CLI would.
+ */
+export function claudeConfigDir(
+  env: Record<string, string | undefined> = process.env
+): string {
   const override = env.CLAUDE_CONFIG_DIR?.trim()
   if (override) return override
   const home = env.HOME || env.USERPROFILE || ''

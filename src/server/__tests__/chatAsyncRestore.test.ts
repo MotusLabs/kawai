@@ -133,8 +133,15 @@ describe('async chat restore and history', () => {
     manager.getSnapshot(a)
     const captured = memo(manager).get(a)
     expect(captured).toHaveLength(2)
+    // A live cwd change after synchronous capture must beat the older
+    // transcript still being read by the asynchronous load.
+    const liveCwd = '/tmp/proj/new-worktree'
+    ;(manager as unknown as { handleDriverCwdChanged(id: string, cwd: string): void })
+      .handleDriverCwdChanged(a, liveCwd)
     await loading
     expect(memo(manager).get(a)).toBe(captured!)
+    expect(registry.get(a)?.projectPath).toBe(liveCwd)
+    expect(db.getChatSession(a)?.projectPath).toBe(liveCwd)
   })
 
   test('kill during a history load leaves no memo behind', async () => {

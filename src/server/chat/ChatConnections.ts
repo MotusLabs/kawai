@@ -11,6 +11,8 @@
 // Plan usage rides it too (usage bar design D4), scoped by profile instead
 // of session: one latest-value slot per connection and profile, sent to every
 // connection subscribed to at least one session of that profile.
+// Notifications ride it as well (notification strip design D5): the full
+// merged list per connection and session, replace semantics like the roster.
 // Debug-view subscriptions are separate: only connections that opened a
 // session's debug view receive its wire frames. They subscribe before the
 // async page read, so no frame is missed; clients merge pages and live frames
@@ -26,6 +28,7 @@ import type {
   ChatCommandState,
   ChatContextUsage,
   ChatEvent,
+  ChatNotification,
   ChatUsageReport,
   ChatWireFrame,
   ChatWorker,
@@ -56,6 +59,8 @@ export class ChatConnections {
   private readonly usageBatches = new Map<ChatConnection, Map<string, ChatUsageReport | null>>()
   /** Latest worker roster per connection and session (workers design D2). */
   private readonly workerBatches = new Map<ChatConnection, Map<string, ChatWorker[]>>()
+  /** Latest notice list per connection and session (notification strip D5). */
+  private readonly notificationBatches = new Map<ChatConnection, Map<string, ChatNotification[]>>()
   private readonly debugSubscriptions = new Map<ChatConnection, Map<string, () => void>>()
   private readonly debugBatches = new Map<ChatConnection, Map<string, ChatWireFrame[]>>()
   private scheduled = false
@@ -92,6 +97,7 @@ export class ChatConnections {
     this.contextBatches.delete(connection)
     this.usageBatches.delete(connection)
     this.workerBatches.delete(connection)
+    this.notificationBatches.delete(connection)
     for (const unsubscribe of this.debugSubscriptions.get(connection)?.values() ?? []) unsubscribe()
     this.debugSubscriptions.delete(connection)
     this.debugBatches.delete(connection)
@@ -102,6 +108,11 @@ export class ChatConnections {
    * session. Immediate (not batched): the state is replaceable, not ordered
    * history, so it never waits behind event batching.
    */
+  /** Routing rules reloaded: every open mailbox view shows the new status. */
+  publishRoutingRules(): void {
+    this.mailboxConnections.publishAll()
+  }
+
   publishMailbox(teamId: string, message?: TeamMessage): void {
     this.mailboxConnections.publish(teamId)
     // Task detail lists its mail; a task message changing state changes it.
@@ -204,6 +215,33 @@ export class ChatConnections {
     this.scheduleFlush()
   }
 
+  /**
+   * Queue a session's current notice list (notification strip design D5):
+   * replace semantics per connection and session, sent by the flush after
+   * that session's pending event batch — a level signal, never a delta.
+   */
+  publishNotifications(sessionId: string, notifications: ChatNotification[]): void {
+    for (const [connection, sessions] of this.subscriptions) {
+      if (!sessions.has(sessionId)) continue
+      const latest = this.notificationBatches.get(connection) ?? new Map<string, ChatNotification[]>()
+      latest.set(sessionId, notifications)
+      this.notificationBatches.set(connection, latest)
+    }
+    this.scheduleFlush()
+  }
+
+  /**
+   * The sessions at least one connection is currently subscribed to (the
+   * notification strip's slow account-notice recheck scope, design D3).
+   */
+  subscribedSessionIds(): Set<string> {
+    const ids = new Set<string>()
+    for (const sessions of this.subscriptions.values()) {
+      for (const sessionId of sessions) ids.add(sessionId)
+    }
+    return ids
+  }
+
   /** True when one of the subscribed sessions belongs to the profile. */
   private subscribesProfile(sessions: Set<string>, profileId: string): boolean {
     for (const sessionId of sessions) {
@@ -281,6 +319,15 @@ export class ChatConnections {
         }
       }
     }
+    const notificationBatches = new Map(this.notificationBatches)
+    this.notificationBatches.clear()
+    for (const [connection, sessions] of notificationBatches) {
+      for (const [sessionId, notifications] of sessions) {
+        if (this.subscriptions.get(connection)?.has(sessionId)) {
+          connection.send({ type: 'chat-notifications', sessionId, notifications })
+        }
+      }
+    }
     const debugBatches = new Map(this.debugBatches)
     this.debugBatches.clear()
     for (const [connection, sessions] of debugBatches) {
@@ -308,6 +355,7 @@ export class ChatConnections {
     this.activityBatches.get(connection)?.delete(sessionId)
     this.contextBatches.get(connection)?.delete(sessionId)
     this.workerBatches.get(connection)?.delete(sessionId)
+    this.notificationBatches.get(connection)?.delete(sessionId)
   }
 
   private closeDebug(connection: ChatConnection, sessionId: string): void {
@@ -379,6 +427,7 @@ export class ChatConnections {
         this.activityBatches.get(connection)?.delete(sessionId)
         this.contextBatches.get(connection)?.delete(sessionId)
         this.workerBatches.get(connection)?.delete(sessionId)
+        this.notificationBatches.get(connection)?.delete(sessionId)
         const sessions = this.subscriptions.get(connection) ?? new Set<string>()
         sessions.add(sessionId)
         this.subscriptions.set(connection, sessions)
@@ -429,6 +478,14 @@ export class ChatConnections {
       case 'chat-set-approval-policy': {
         // The manager validates the value; failures echo to the sender only.
         const result = this.manager.setApprovalPolicy(sessionId, message.policy)
+        if (!result.ok) connection.send({ type: 'error', message: result.error })
+        return
+      }
+      case 'chat-dismiss-notification': {
+        // The manager removes the key and pushes the new list to every
+        // subscribed connection (notification strip design D6); unknown keys
+        // are a no-op that pushes nothing.
+        const result = this.manager.dismissNotification(sessionId, message.key)
         if (!result.ok) connection.send({ type: 'error', message: result.error })
         return
       }
