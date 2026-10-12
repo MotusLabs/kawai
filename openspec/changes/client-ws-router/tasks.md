@@ -31,10 +31,10 @@ tick the checkbox in the same commit.
 - [x] 3.1 Add `src/client/__tests__/messageRouter.test.ts` dispatching every ServerMessage
   type through the router against store spies (cheap now that handlers are plain
   functions); suite green; commit (`test: dispatch every message type through the protocol router`)
-- [ ] 3.2 Mark S3 done in `docs/refactor-analysis/synthesis.md` (status note with commit
+- [x] 3.2 Mark S3 done in `docs/refactor-analysis/synthesis.md` (status note with commit
   hashes, mirroring the P0/S1/S2/S6 notes); commit
   (`docs: mark P1/S3 complete in refactor synthesis`)
-- [ ] 3.3 Push `client-ws-router` and open the PR; wait for merge before starting S4
+- [x] 3.3 Push `client-ws-router` and open the PR; wait for merge before starting S4
 
 ## Workflow follow-up
 
