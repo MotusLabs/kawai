@@ -4,6 +4,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { MailboxStore, type EnqueueInput } from '../team/mailboxStore'
+import { formatEnvelope, messageEnvelope } from '../team/envelope'
 
 const TEAM = '/repo/.git'
 
@@ -229,5 +230,71 @@ test('claimsFor returns one session\'s unacknowledged claims only', () => {
     store.markDelivered(mine.id)
     expect(store.claimsFor('chat-dev')).toEqual([])
     expect(store.claimsFor('chat-none')).toEqual([])
+  } finally { db.close() }
+})
+
+describe('profile routing columns', () => {
+  test('a pre-routing table gains claim, parking, and handoff columns without losing rows', () => {
+    const db = new Database(':memory:')
+    db.exec(`CREATE TABLE team_messages (id TEXT PRIMARY KEY, team_id TEXT NOT NULL, to_kind TEXT NOT NULL, to_id TEXT NOT NULL, from_session TEXT NOT NULL, from_group TEXT, origin_path TEXT NOT NULL, priority TEXT NOT NULL DEFAULT 'normal', tags TEXT NOT NULL DEFAULT '[]', thread_id TEXT NOT NULL, in_reply_to TEXT, hop INTEGER NOT NULL DEFAULT 1, body TEXT NOT NULL, state TEXT NOT NULL, claimed_by TEXT, claimed_at TEXT, deliver_at TEXT, created_at TEXT NOT NULL, pushed_at TEXT, delivered_at TEXT, reason TEXT, possible_duplicate INTEGER NOT NULL DEFAULT 0, attach_thread INTEGER NOT NULL DEFAULT 0, task_id TEXT);
+      INSERT INTO team_messages (id, team_id, to_kind, to_id, from_session, origin_path, thread_id, body, state, created_at) VALUES ('m1', '${TEAM}', 'group', 'devs', 'lead', '/repo', 'm1', 'hi', 'queued', '2026-01-01');`)
+    const store = new MailboxStore(db)
+    expect(store.get('m1')).toMatchObject({
+      body: 'hi', claimCommit: null, parkedUntil: null, parkCount: 0, resumeMessageId: null, handoff: null, excludedProfile: null,
+    })
+    db.close()
+  })
+
+  test('park, unpark, release, and forward transitions', () => {
+    const db = new Database(':memory:')
+    const store = new MailboxStore(db)
+    const send = () => store.enqueue({ teamId: TEAM, toKind: 'session', toId: 'dev', fromSession: 'lead', fromGroup: null, originPath: '/repo', body: 'b' })
+    const m = send()
+    store.claim(m.id, 'dev'); store.markPushed(m.id); store.markDelivered(m.id)
+    expect(store.setClaimCommit(m.id, 'abc')).toBe(true)
+    expect(store.setClaimCommit(m.id, 'def')).toBe(false)
+    const resume = send()
+    expect(store.park(m.id, '2026-10-12T13:00:00.000Z', resume.id)).toBe(true)
+    expect(store.get(m.id)).toMatchObject({ state: 'parked', parkCount: 1, resumeMessageId: resume.id })
+    expect(store.parkedBy('dev').map(row => row.id)).toEqual([m.id])
+    expect(store.parkedFor(resume.id)?.id).toBe(m.id)
+    expect(store.listForTeam(TEAM).some(row => row.id === m.id)).toBe(true)
+    expect(store.unpark(m.id)).toBe(true)
+    expect(store.get(m.id)).toMatchObject({ state: 'delivered', parkCount: 1, resumeMessageId: null })
+    expect(store.release(m.id, 'devs')).toBe(true)
+    expect(store.get(m.id)).toMatchObject({ state: 'queued', toKind: 'group', toId: 'devs', claimedBy: null, deliveredAt: null, claimCommit: null })
+    expect(store.markForwarded(m.id, 'forwarded: x')).toBe(false)
+    store.claim(m.id, 'dev'); store.markPushed(m.id); store.markDelivered(m.id)
+    expect(store.markForwarded(m.id, 'forwarded: x')).toBe(true)
+    expect(store.get(m.id)).toMatchObject({ state: 'forwarded', reason: 'forwarded: x' })
+    db.close()
+  })
+
+  test('a corrupt handoff column reads as none', () => {
+    const db = new Database(':memory:')
+    const store = new MailboxStore(db)
+    const m = store.enqueue({ teamId: TEAM, toKind: 'group', toId: 'devs', fromSession: 'lead', fromGroup: null, originPath: '/repo', body: 'b' })
+    db.prepare("UPDATE team_messages SET handoff = '{not json' WHERE id = ?").run(m.id)
+    expect(store.get(m.id)?.handoff).toBeNull()
+    db.close()
+  })
+})
+
+
+test.each([
+  '{"fromSession":"dev"}',
+  '{"fromSession":"dev","fromProfile":"glm","claimCommit":null,"lastError":null,"progress":{"toolCalls":1}}',
+  '{"fromSession":"dev","fromProfile":"glm","claimCommit":null,"lastError":null,"progress":{"toolCalls":1,"tools":[],"filesTouched":[1]}}',
+  '{broken',
+])('malformed stored handoff %s degrades to no package and remains deliverable', handoff => {
+  const db = new Database(':memory:')
+  try {
+    const store = new MailboxStore(db)
+    const message = store.enqueue({ teamId: TEAM, toKind: 'session', toId: 'dev', fromSession: 'lead',
+      fromGroup: null, originPath: '/repo', body: 'Continue' })
+    db.prepare('UPDATE team_messages SET handoff = ? WHERE id = ?').run(handoff, message.id)
+    const restored = store.get(message.id)!
+    expect(restored.handoff).toBeNull()
+    expect(formatEnvelope(messageEnvelope(restored))).toContain('Continue')
   } finally { db.close() }
 })

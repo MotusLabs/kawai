@@ -3,6 +3,7 @@ export const HISTORY_MAX_AGE_MIN_HOURS = 1
 export const HISTORY_MAX_AGE_MAX_HOURS = 168 // 7 days
 
 import type { TeamMessage } from './team'
+import type { RuleLoadReport, TeamRoutingState } from './routing'
 import type { TaskStatus, TeamTask, TeamTaskDetail, TeamTaskSummary } from './teamTasks'
 import type {
   WorkspaceOperationResult,
@@ -147,6 +148,17 @@ export interface Session {
   taskTitle?: string
   /** Created by worktree staffing, not by the human (team-tasks D4). */
   spawned?: boolean
+  /** Paused after a provider limit with work parked on it (profile routing); null/absent = not paused. */
+  parked?: SessionParkedState | null
+}
+
+/** Why and until when a chat session is paused (profile routing). */
+export interface SessionParkedState {
+  messageId: string
+  /** When the scheduled resume is due; null when unknown. */
+  until: string | null
+  profileId: string
+  reason: string
 }
 
 export interface AgentSession {
@@ -328,7 +340,11 @@ export type ServerMessage =
   // not deltas — a missed bookend must not wedge a stale running worker. Sent
   // whenever the roster projection changes; additive and ephemeral like
   // chat-activity, while settled outcomes also ride the snapshot and persist.
-  | { type: 'team-mailbox-snapshot'; sessionId: string; teamId: string; messages: TeamMessage[] }
+  | { type: 'team-mailbox-snapshot'; sessionId: string; teamId: string; messages: TeamMessage[]; routing?: TeamRoutingState }
+  | { type: 'team-mailbox-rules-result'; sessionId: string; ok: true; report: RuleLoadReport }
+  | { type: 'team-mailbox-rules-result'; sessionId: string; ok: false; error: string }
+  | { type: 'team-mailbox-hand-off-result'; sessionId: string; messageId: string; ok: true; forwardedId: string }
+  | { type: 'team-mailbox-hand-off-result'; sessionId: string; messageId: string; ok: false; error: string }
   | { type: 'team-mailbox-dead-letter'; teamId: string; messageId: string; senderSession: string }
   // Team tasks (team-tasks 6.1): authoritative snapshots for a session's
   // team — the list, and each task whose detail the connection has open.
@@ -454,6 +470,8 @@ export type ClientMessage =
     }
   | { type: 'team-mailbox-open' | 'team-mailbox-close'; sessionId: string }
   | { type: 'team-mailbox-cancel' | 'team-mailbox-retry' | 'team-mailbox-discard'; sessionId: string; messageId: string }
+  | { type: 'team-mailbox-reload-rules'; sessionId: string }
+  | { type: 'team-mailbox-hand-off'; sessionId: string; messageId: string; target: { kind: 'group' | 'session'; id: string } }
   // Team tasks (team-tasks 6.1/6.2): list and detail subscriptions scoped by
   // the session's team; human actions answer with team-task-result.
   | { type: 'team-tasks-open' | 'team-tasks-close'; sessionId: string }

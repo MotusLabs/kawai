@@ -6,6 +6,7 @@
 // the agent SDK.
 
 import type { ChatPeerTaskContext } from './teamTasks'
+import type { ChatHandoffPackage } from './team'
 
 /**
  * Base shape of every conversation event. `id` is stable and unique
@@ -106,6 +107,8 @@ export interface ChatPeerMessage {
   thread?: Array<{ messageId: string; senderSession: string; body: string }>
   /** The referenced team task as it was at delivery (team-tasks D3); absent = none. */
   task?: ChatPeerTaskContext
+  /** Work handed off after a provider limit (profile routing); absent = none. */
+  handoff?: ChatHandoffPackage
 }
 
 export type ChatEvent =
@@ -281,7 +284,15 @@ export interface ChatUsageReport {
   windows: ChatUsageWindow[]
   /** ISO timestamp of when the report was received. */
   receivedAt: string
+  /**
+   * Which shape it came from: a pushed rate_limit_event, a /usage report, or
+   * the SDK usage pull (which follows the host claude.ai login, not the
+   * session's provider). Absent on reports from older servers.
+   */
+  source?: ChatUsageSource
 }
+
+export type ChatUsageSource = 'push' | 'report' | 'pull'
 
 /** Where a chat notification came from. */
 export type ChatNotificationSource = 'account' | 'agent'

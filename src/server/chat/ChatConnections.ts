@@ -96,6 +96,11 @@ export class ChatConnections {
    * session. Immediate (not batched): the state is replaceable, not ordered
    * history, so it never waits behind event batching.
    */
+  /** Routing rules reloaded: every open mailbox view shows the new status. */
+  publishRoutingRules(): void {
+    this.mailboxConnections.publishAll()
+  }
+
   publishMailbox(teamId: string, message?: TeamMessage): void {
     this.mailboxConnections.publish(teamId)
     // Task detail lists its mail; a task message changing state changes it.

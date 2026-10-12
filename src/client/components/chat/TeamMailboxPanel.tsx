@@ -1,18 +1,25 @@
 // Human mailbox controls operate on durable rows, with authoritative server
 // snapshots after each action. Uncertain retries retain the original recipient.
+// Profile routing adds parked work (with Hand off), the routing rules and
+// their reload, and the routing decision log.
 import { useEffect, useState } from 'react'
 import type { TeamMessage } from '@shared/team'
 import type { SendClientMessage } from '@shared/types'
 import type { MailboxView } from '../../stores/teamMailboxStore'
+import ParkedHandOff from './ParkedHandOff'
+import TeamRoutingSection from './TeamRoutingSection'
 
-export default function TeamMailboxPanel({ sessionId, view, sendMessage, connected, onClose }: {
+export default function TeamMailboxPanel({ sessionId, view, sendMessage, connected, onClose, groups = [] }: {
   sessionId: string; view: MailboxView; sendMessage: SendClientMessage; connected: boolean; onClose: () => void
+  /** The team's group ids, suggested as hand-off targets. */
+  groups?: string[]
 }) {
   const [now, setNow] = useState(Date.now())
   useEffect(() => { const timer = setInterval(() => setNow(Date.now()), 30000); return () => clearInterval(timer) }, [])
   const categories: Array<[string, (message: TeamMessage) => boolean]> = [
     ['Queued', row => (row.state === 'queued' && (!row.deliverAt || Date.parse(row.deliverAt) <= now)) || row.state === 'awaiting-request'],
     ['Receiving', row => row.state === 'claimed'],
+    ['Parked', row => row.state === 'parked'],
     ['Scheduled', row => row.state === 'queued' && !!row.deliverAt && Date.parse(row.deliverAt) > now],
     ['Dead letters', row => row.state === 'dead'],
     ['Held for review', row => row.state === 'uncertain'],
@@ -23,6 +30,7 @@ export default function TeamMailboxPanel({ sessionId, view, sendMessage, connect
     {!connected && <p role="status" className="p-3 text-secondary">Disconnected — reconnect to update mail.</p>}
     {view.loading && <p role="status" className="p-3">Loading mailbox…</p>}
     <div className="min-h-0 flex-1 overflow-y-auto p-3">
+      <TeamRoutingSection sessionId={sessionId} view={view} sendMessage={sendMessage} connected={connected} />
       {categories.map(([label, matches]) => <section key={label} aria-label={label} className="mb-4">
         <h4 className="mb-2 font-medium">{label}</h4>
         {view.messages.filter(matches).length === 0 && <p className="text-chat-meta text-secondary">No messages</p>}
@@ -34,6 +42,15 @@ export default function TeamMailboxPanel({ sessionId, view, sendMessage, connect
           {row.reason && <p className="text-chat-meta text-secondary">{row.reason}</p>}
           {row.state === 'awaiting-request' && <p className="text-chat-meta">Waiting for the recipient’s approval or answer</p>}
           {row.state === 'uncertain' && <p className="text-chat-meta">Retry to {row.claimedBy} with a possible-duplicate notice, or discard.</p>}
+          {row.state === 'parked' && <p className="text-chat-meta">
+            Parked on {row.claimedBy} after a provider limit{row.parkedUntil ? `; resumes ${new Date(row.parkedUntil).toLocaleString()}` : ''}
+            {row.parkCount > 1 ? ` (parked ${row.parkCount} times)` : ''}
+          </p>}
+          {row.handoff && <p className="text-chat-meta text-secondary">
+            Handed off from {row.handoff.fromSession} ({row.handoff.fromProfile}) after {row.handoff.progress.toolCalls} tool calls
+          </p>}
+          {row.state === 'parked' && <ParkedHandOff sessionId={sessionId} messageId={row.id} groups={groups} sendMessage={sendMessage}
+            disabled={!connected || view.loading} {...(view.handOffResult ? { result: view.handOffResult } : {})} />}
           <div className="mt-2 flex gap-2">
             {(row.state === 'queued' || row.state === 'awaiting-request') && <button className="btn" disabled={!connected || view.loading}
               onClick={() => sendMessage({ type: 'team-mailbox-cancel', sessionId, messageId: row.id })}>Cancel</button>}

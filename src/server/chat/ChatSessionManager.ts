@@ -36,6 +36,7 @@ import type {
   ChatNameSource,
   ServerMessage,
   Session,
+  SessionParkedState,
   SessionStatus,
 } from '../../shared/types'
 import type { ChatSessionRecord, SessionDatabase } from '../db'
@@ -71,6 +72,9 @@ import { createMailboxServer } from '../team/mailboxTools'
 import type { TeamMessage } from '../../shared/team'
 import { MailDispatcher } from '../team/dispatcher'
 import { receiptMessageId } from '../team/receipt'
+import type { LimitEventStore } from '../team/routing/limitEvents'
+import type { HandoffTarget } from '../team/routing/limitOutcomes'
+import type { RuleLoadReport, TeamRoutingState } from '../../shared/routing'
 import { SessionMailbox } from '../team/sessionMailbox'
 import type { TaskService } from '../team/TaskService'
 import type { SpawnRequest, SpawnResult } from '../team/staffing'
@@ -91,6 +95,8 @@ export interface ChatSessionManagerOptions {
   registry: SessionRegistry
   db: SessionDatabase
   onMailboxChange?: (teamId: string, message?: TeamMessage) => void
+  /** Routing rules (re)loaded: every mailbox view refreshes its rule status. */
+  onRoutingRulesLoaded?: () => void
   /** Every committed team-task change (wired to the task view push in index.ts). */
   onTaskChange?: (teamId: string) => void
   /** Conversation-event sink (wired to the WS broadcast in index.ts). */
@@ -636,6 +642,8 @@ export class ChatSessionManager {
       },
       transcriptFor: id => { const sdkId = this.records.get(id)?.sdkSessionId; return sdkId ? findTranscriptPath(sdkId) : null },
       onChange: options.onMailboxChange,
+      usageOf: profileId => this.usageLimits.get(profileId),
+      onRulesLoaded: () => options.onRoutingRulesLoaded?.(),
       onError: error => logger.warn('team_mailbox_dispatch_failed', { error: String(error) }),
     })
     this.mailbox = this.teamMail.mailbox
@@ -647,11 +655,73 @@ export class ChatSessionManager {
         if (record.taskId === task.id) this.options.registry.updateSession(record.sessionId, this.taskFields(record))
       }
     })
+    // Parking pauses the session that holds the work; any change to a parked
+    // message (or to one that was) re-derives its holder's paused state.
+    this.mailbox.store.subscribe((_teamId, message) => {
+      if (!message) return
+      const holders = new Set<string>()
+      if (message.claimedBy) holders.add(message.claimedBy)
+      for (const [sessionId, parked] of this.parkedShown) if (parked.messageId === message.id) holders.add(sessionId)
+      for (const sessionId of holders) this.refreshParked(sessionId)
+    })
     this.dispatcher = this.teamMail.dispatcher
     this.restorePersisted()
     this.teamMail.start()
+    // Work parked before a restart keeps its sessions paused.
+    for (const sessionId of this.records.keys()) this.refreshParked(sessionId)
     // Logs of sessions deleted while the server was down are orphans now.
     void this.options.wireLogs?.pruneOrphans(new Set(this.records.keys()))
+  }
+
+  /** Recorded per-profile limit events (profile routing). */
+  get limitEvents(): LimitEventStore {
+    return this.teamMail.limits
+  }
+
+  /** Reload every user-level routing rule (Reload routing rules). */
+  reloadRoutingRules(): Promise<RuleLoadReport> {
+    return this.teamMail.rules.reload()
+  }
+
+  /** Rule load status and this team's routing decisions (mailbox view). */
+  routingState(teamId: string): TeamRoutingState {
+    return { rules: this.teamMail.rules.lastReport(), decisions: this.teamMail.router.decisions(teamId) }
+  }
+
+  /** The human hands parked work to a group or session of its team. */
+  handOff(messageId: string, target: HandoffTarget): TeamMessage {
+    return this.teamMail.handOff(messageId, target)
+  }
+
+  /** Live (non-archived) members of a team's group per profile, for cap warnings. */
+  groupProfileCounts(teamId: string, groupId: string): Record<string, number> {
+    const counts: Record<string, number> = {}
+    for (const record of this.records.values()) {
+      if (record.archivedAt != null || record.groupId !== groupId || this.teams.teamOf(record.sessionId)?.teamId !== teamId) continue
+      const profileId = record.claudeProfileId ?? 'default'
+      counts[profileId] = (counts[profileId] ?? 0) + 1
+    }
+    return counts
+  }
+
+  /** Paused state last pushed per session. */
+  private readonly parkedShown = new Map<string, SessionParkedState>()
+
+  private parkedState(sessionId: string): SessionParkedState | null {
+    const parked = this.mailbox.store.parkedBy(sessionId)[0]
+    if (!parked) return null
+    const profileId = this.records.get(sessionId)?.claudeProfileId ?? 'default'
+    return { messageId: parked.id, until: parked.parkedUntil, profileId, reason: `Provider limit on ${profileId}` }
+  }
+
+  private refreshParked(sessionId: string): void {
+    if (!this.records.has(sessionId)) return
+    const next = this.parkedState(sessionId)
+    const shown = this.parkedShown.get(sessionId)
+    if (JSON.stringify(next) === JSON.stringify(shown ?? null)) return
+    if (next) this.parkedShown.set(sessionId, next)
+    else this.parkedShown.delete(sessionId)
+    this.options.registry.updateSession(sessionId, { parked: next })
   }
 
   /** Each session's team (agent-teams); shared with the mailbox dispatcher. */
@@ -1354,6 +1424,15 @@ export class ChatSessionManager {
           this.applyPatch(record.sessionId, { sdkSessionId }),
         onCwdChanged: (newCwd) =>
           this.handleDriverCwdChanged(record.sessionId, newCwd),
+        // Profile routing (design D6): limit failures count against the
+        // session's profile, with its current group for context.
+        onLimitEvent: (signal) =>
+          this.teamMail.limits.record({
+            ...signal,
+            profileId: record.claudeProfileId ?? 'default',
+            sessionId: record.sessionId,
+            groupId: this.records.get(record.sessionId)?.groupId ?? null,
+          }),
       })
       if (
         !this.records.has(record.sessionId) ||
@@ -1508,6 +1587,9 @@ export class ChatSessionManager {
     this.options.onEvent(sessionId, event)
     if (event.type === 'request_resolved') this.dispatcher.notify()
     if (event.type === 'error' || event.type === 'turn_completed') this.teamMail.settleRecipient(sessionId)
+    // Profile routing: progress and limit outcomes for the mail a turn handles.
+    if (event.type === 'tool_call') this.teamMail.toolCall(sessionId, event.tool, event.input)
+    if (event.type === 'turn_completed') this.teamMail.turnEnded(sessionId, event.subtype === 'success')
     if (
       event.type === 'turn_completed' ||
       event.type === 'approval_request' ||
@@ -1726,6 +1808,7 @@ export class ChatSessionManager {
       ...this.groupFields(record),
       ...this.taskFields(record),
       ...(record.spawned ? { spawned: true } : {}),
+      ...(this.parkedShown.has(record.sessionId) ? { parked: this.parkedShown.get(record.sessionId)! } : {}),
     }
   }
 

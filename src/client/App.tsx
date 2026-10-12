@@ -559,6 +559,8 @@ export default function App() {
       if (message.type === 'chat-notifications') useChatStore.getState().setNotifications(message.sessionId, message.notifications)
       if (message.type === 'chat-worker-transcript') useChatStore.getState().setWorkerBody(message)
       if (message.type === 'team-mailbox-snapshot') useTeamMailboxStore.getState().apply(message)
+      if (message.type === 'team-mailbox-rules-result') useTeamMailboxStore.getState().applyRulesResult(message)
+      if (message.type === 'team-mailbox-hand-off-result') useTeamMailboxStore.getState().applyHandOffResult(message)
       if (message.type === 'team-mailbox-dead-letter') notifyMailboxDeadLetter(message)
       if (message.type === 'team-tasks-snapshot') useTeamTaskStore.getState().applySnapshot(message)
       if (message.type === 'team-task-detail') useTeamTaskStore.getState().applyDetail(message)

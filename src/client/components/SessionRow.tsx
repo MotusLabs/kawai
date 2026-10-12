@@ -28,6 +28,7 @@ import AgentIcon from './AgentIcon'
 import ProjectBadge from './ProjectBadge'
 import HostBadge from './HostBadge'
 import { spawnedNeedsAttention } from '../utils/teamTaskNotification'
+import { parkedLabel } from '../utils/parkedLabel'
 
 /** Status pill classes for the time/activity badge */
 export const statusPillClass: Record<Session['status'], string> = {
@@ -121,6 +122,8 @@ export const SESSION_FIELD_EQUALS: {
   taskId: strictEquals,
   taskTitle: strictEquals,
   spawned: strictEquals,
+  // A fresh object per push: compare the fields the row shows.
+  parked: (a, b) => a === b || (!!a && !!b && a.messageId === b.messageId && a.until === b.until && a.profileId === b.profileId && a.reason === b.reason),
   lastActivity: activityInSameBucket,
 }
 
@@ -463,7 +466,7 @@ export function SessionRow({
   const showHostBadge = showHostInfo && Boolean(hostLabel)
   const showMessage = showLastUserMessage && Boolean(session.lastUserMessage)
   // Team tasks: spawned/task badges ride line 2 so they never crowd out the name.
-  const showTaskBadges = session.kind === 'chat' && (session.spawned === true || Boolean(session.taskId))
+  const showTaskBadges = session.kind === 'chat' && (session.spawned === true || Boolean(session.taskId) || Boolean(session.parked))
 
   // Track previous status for transition animation
   const prevStatusRef = useRef<Session['status']>(session.status)
@@ -646,8 +649,8 @@ export function SessionRow({
           )}
         </div>
 
-        {/* Line 2: Project badge, team-task badges (spawned, task, needs
-            attention), and last user message (up to 2 lines total). */}
+        {/* Line 2: Project badge, team-task badges (spawned, task, paused,
+            needs attention), and last user message (up to 2 lines total). */}
         {(showDirectory || showHostBadge || showMessage || showTaskBadges) && (
           <div className="flex flex-wrap items-center gap-1 pl-[1.375rem]">
             {showHostBadge && <HostBadge name={hostLabel!} />}
@@ -661,6 +664,10 @@ export function SessionRow({
             {showTaskBadges && session.taskId && (
               <span data-testid="session-task-badge" className="max-w-40 truncate rounded border border-border px-1 text-[11px] text-secondary"
                 title={`Task: ${session.taskTitle ?? session.taskId}`}>{session.taskTitle ?? 'task'}</span>
+            )}
+            {session.parked && (
+              <span data-testid="session-paused-badge" className="shrink-0 rounded border border-amber-500 px-1 text-[11px] text-amber-600"
+                title={parkedLabel(session.parked)}>paused</span>
             )}
             {spawnedNeedsAttention(session) && (
               <span data-testid="session-attention-badge" className="shrink-0 rounded bg-amber-500/20 px-1 text-[11px] text-amber-600"

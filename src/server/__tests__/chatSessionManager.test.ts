@@ -2751,6 +2751,37 @@ describe('ChatSessionManager usage', () => {
     ])
   })
 
+  test('parked work pauses its session (with reason and resume time) until it is unparked', async () => {
+    const { manager, registry } = createHarness(db)
+    const created = manager.createSession({ projectPath: '/tmp/proj', claudeProfileId: 'glm' })
+    if (!created.ok) throw new Error('create failed')
+    const id = created.session.id
+    const store = manager.mailbox.store
+    const mail = store.enqueue({ teamId: 't', toKind: 'session', toId: id, fromSession: id, fromGroup: null, originPath: '/tmp/proj', body: 'work' })
+    store.claim(mail.id, id); store.markPushed(mail.id); store.markDelivered(mail.id)
+    const resume = store.enqueue({ teamId: 't', toKind: 'session', toId: id, fromSession: id, fromGroup: null, originPath: '/tmp/proj', body: 'resume', deliverAt: '2099-01-01T00:00:00.000Z' })
+    store.park(mail.id, '2099-01-01T00:00:00.000Z', resume.id)
+    expect(registry.get(id)?.parked).toEqual({ messageId: mail.id, until: '2099-01-01T00:00:00.000Z', profileId: 'glm', reason: 'Provider limit on glm' })
+    store.unpark(mail.id)
+    expect(registry.get(id)?.parked).toBeNull()
+  })
+
+  test('limit failures are recorded against the session profile and group', async () => {
+    const { manager, handles } = createHarness(db)
+    const created = manager.createSession({ projectPath: '/tmp/proj', claudeProfileId: 'glm' })
+    if (!created.ok) throw new Error('create failed')
+    await manager.send(created.session.id, 'hello')
+    handles[0]!.push({
+      type: 'system', subtype: 'api_retry', attempt: 1, max_retries: 10, retry_delay_ms: 100,
+      error_status: 429, error: 'rate_limit', uuid: 'r-uuid', session_id: 'sdk-1',
+    } as unknown as SDKMessage)
+    await flush()
+    expect(manager.limitEvents.forProfile('glm')).toMatchObject([
+      { profileId: 'glm', sessionId: created.session.id, groupId: null, kind: 'rate_limit', final: false, status: 429 },
+    ])
+    expect(manager.limitEvents.forProfile('default')).toEqual([])
+  })
+
   test('an assistant usage_report is stored for the session profile', async () => {
     const { manager, handles, usage } = createHarness(db)
     const created = manager.createSession({ projectPath: '/tmp/proj', claudeProfileId: 'glm' })

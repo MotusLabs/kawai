@@ -819,6 +819,7 @@ const chatSessionManager = new ChatSessionManager({
   db,
   onEvent: (sessionId, event) => chatConnections.publish(sessionId, event),
   onMailboxChange: (teamId, message) => chatConnections.publishMailbox(teamId, message),
+  onRoutingRulesLoaded: () => chatConnections.publishRoutingRules(),
   onTaskChange: teamId => chatConnections.publishTasks(teamId),
   onCommandState: (sessionId, state) => chatConnections.publishCommandState(sessionId, state),
   onActivity: (sessionId, activity) => chatConnections.publishActivity(sessionId, activity),
@@ -2011,7 +2012,9 @@ app.put('/api/settings/inactive-max-age-hours', putHistoryMaxAgeHours)
 
 app.route('/api/settings/chat-provider-env', chatProviderEnv.routes)
 app.route('/api/chat/profiles', createClaudeProfileRoutes())
-app.route('/api/chat/groups', createTeamGroupRoutes())
+app.route('/api/chat/groups', createTeamGroupRoutes({
+  groupProfileCounts: (teamId, groupId) => chatSessionManager.groupProfileCounts(teamId, groupId),
+}))
 
 // Allowed paste-image types; the extension written to /tmp comes from this map,
 // never from client-supplied values. Note Bun's multipart parser derives
@@ -2740,6 +2743,8 @@ function handleMessage(
     case 'team-mailbox-cancel':
     case 'team-mailbox-retry':
     case 'team-mailbox-discard':
+    case 'team-mailbox-reload-rules':
+    case 'team-mailbox-hand-off':
     case 'team-tasks-open':
     case 'team-tasks-close':
     case 'team-task-open':
