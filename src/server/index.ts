@@ -32,24 +32,16 @@ import { ChatWireLogs } from './chat/ChatWireLogs'
 import { ChatWorkerStore } from './chat/chatWorkerStore'
 import { chatFixtureEnabled, fixtureQueryFactory } from './chat/developmentFixture'
 import { parseApprovalPolicy } from './chat/approvalPolicy'
-import {
-  createTerminalProxy,
-  resolveTerminalMode,
-  TerminalProxyError,
-} from './terminal'
-import type { ITerminalProxy } from './terminal'
+import { resolveTerminalMode } from './terminal'
 import { TerminalOutputCoalescer } from './terminal/outputCoalescer'
 import { resolveProjectPath } from './paths'
 import {
   HISTORY_MAX_AGE_MIN_HOURS,
   HISTORY_MAX_AGE_MAX_HOURS,
   type ClientMessage,
-  type TerminalErrorCode,
   type DirectoryListing,
   type DirectoryErrorResponse,
-  type Session,
 } from '../shared/types'
-import { isTerminalSession } from '../shared/types'
 import { logger, logLevel } from './logger'
 import {
   SessionRefreshWorkerClient,
@@ -58,7 +50,6 @@ import { TmuxTimeoutError } from './tmuxTimeout'
 import {
   MAX_FIELD_LENGTH,
   isValidSessionId,
-  isValidTmuxTarget,
 } from './validators'
 import {
   parseCreateChangeWorktreePayload,
@@ -75,14 +66,18 @@ import { readLogLineWindow } from './logContent'
 import { SessionRefreshLoop } from './refresh/SessionRefreshLoop'
 import type { WSData } from './ws/wsTypes'
 import { ConnectionHub, createConnectionId, fireAndForget } from './ws/ConnectionHub'
-import {
-  CLIPBOARD_BUFFER_ARM_MS,
-  containsClipboardArmingMouseInput,
-  startClipboardBufferWatch,
-  stopClipboardBufferWatch,
-  type ClipboardWatchContext,
-} from './ws/clipboardWatch'
+import type { ClipboardWatchContext } from './ws/clipboardWatch'
 import { handleCancelCopyMode, handleCheckCopyMode, type CopyModeContext } from './ws/copyMode'
+import { clearAttachDedup, initializePersistentTerminal } from './ws/terminalProxy'
+import {
+  attachTerminalPersistent,
+  cleanupTerminals,
+  detachTerminalPersistent,
+  handleTerminalInputPersistent,
+  handleTerminalPastePersistent,
+  handleTerminalResizePersistent,
+  type TerminalAttachContext,
+} from './ws/terminalAttach'
 import { handleKill } from './sessions/kill'
 import { handleRename } from './sessions/rename'
 import { handleSessionHibernate } from './sessions/hibernate'
@@ -90,10 +85,7 @@ import { handleMoveToHistory } from './sessions/moveToHistory'
 import { handleSessionWake } from './sessions/wake'
 import type { SessionOpsContext } from './sessions/context'
 import { stampLocalSession } from './sessionStamp'
-import { readTmuxCapture } from './tmuxCapture'
 import { RemoteSessionService } from './remote/RemoteSessionService'
-import { SshTerminalProxy } from './terminal/SshTerminalProxy'
-import { normalizeCapturedHistory } from './terminal/tmuxText'
 import {
   buildTmuxFormat,
   splitTmuxFields,
@@ -407,6 +399,14 @@ const sessionOps: SessionOpsContext = {
   runRemoteTmux: (host, args) => remote.runTmux(host, args),
   remoteSessionNameOverrides: remote.remoteSessionNameOverrides,
   remoteSessionTombstones: remote.remoteSessionTombstones,
+}
+// Terminal attach/detach/input over each socket's tmux proxy (see ws/).
+const terminalCtx: TerminalAttachContext = {
+  hub,
+  remote,
+  registry,
+  refresh,
+  clipboard: clipboardCtx,
 }
 
 const logPoller = new LogPoller(db, registry, {
@@ -1229,7 +1229,7 @@ const websocketHandlers = {
     if (workspaceSnapshot) {
       send(ws, { type: 'workspace-snapshot', snapshot: workspaceSnapshot })
     }
-    initializePersistentTerminal(ws)
+    initializePersistentTerminal(terminalCtx, ws)
   },
   message(ws: ServerWebSocket<WSData>, message: string | BufferSource) {
     handleMessage(ws, message)
@@ -1323,27 +1323,6 @@ process.on('SIGINT', () => {
 process.on('SIGTERM', () => {
   void cleanupAllTerminals().finally(() => process.exit(0))
 })
-
-/** Clear attach dedup state so a new/replacement proxy doesn't inherit stale history. */
-function clearAttachDedup(ws: ServerWebSocket<WSData>) {
-  ws.data.lastAttachKey = null
-  ws.data.lastAttachTs = 0
-}
-
-function cleanupTerminals(ws: ServerWebSocket<WSData>) {
-  stopClipboardBufferWatch(ws)
-  if (ws.data.terminal) {
-    void ws.data.terminal.dispose()
-    ws.data.terminal = null
-  }
-  ws.data.currentSessionId = null
-  ws.data.currentTmuxTarget = null
-  ws.data.terminalHost = null
-  // Drop output buffered for the detached terminal; the coalescer itself stays
-  // alive so a later attach on this still-open socket delivers output again.
-  ws.data.outputCoalescer?.clearPending()
-  clearAttachDedup(ws)
-}
 
 /**
  * Actionable error for a project path that disappeared between discovery
@@ -1546,19 +1525,20 @@ function handleMessage(
       return
 	    case 'terminal-attach':
 	      ws.data.terminalAttachSeq += 1
-	      fireAndForget(attachTerminalPersistent(ws, message, ws.data.terminalAttachSeq), 'attachTerminalPersistent')
+	      fireAndForget(attachTerminalPersistent(terminalCtx, ws, message, ws.data.terminalAttachSeq), 'attachTerminalPersistent')
 	      return
 	    case 'terminal-detach':
 	      detachTerminalPersistent(ws, message.sessionId)
 	      return
     case 'terminal-input':
-      handleTerminalInputPersistent(ws, message.sessionId, message.data)
+      handleTerminalInputPersistent(terminalCtx, ws, message.sessionId, message.data)
       return
     case 'terminal-paste':
-      handleTerminalPastePersistent(ws, message.sessionId, message.data)
+      handleTerminalPastePersistent(terminalCtx, ws, message.sessionId, message.data)
       return
     case 'terminal-resize':
       handleTerminalResizePersistent(
+        terminalCtx,
         ws,
         message.sessionId,
         message.cols,
@@ -1605,579 +1585,4 @@ function handleMessage(
     default:
       send(ws, { type: 'error', message: 'Unknown message type' })
   }
-}
-
-function initializePersistentTerminal(ws: ServerWebSocket<WSData>) {
-  if (ws.data.terminal) {
-    return
-  }
-
-  const terminal = createPersistentTerminal(ws)
-  ws.data.terminal = terminal
-
-  void terminal.start().catch((error) => {
-    ws.data.terminal = null
-    clearAttachDedup(ws)
-    handleTerminalError(ws, null, error, 'ERR_TMUX_ATTACH_FAILED')
-  })
-}
-
-function createPersistentTerminal(ws: ServerWebSocket<WSData>) {
-  const sessionName = `${config.tmuxSession}-ws-${ws.data.connectionId}`
-
-  const terminal = createTerminalProxy({
-    connectionId: ws.data.connectionId,
-    sessionName,
-    baseSession: config.tmuxSession,
-    monitorTargets: config.terminalMonitorTargets,
-    onData: (data) => {
-      // Guard: ignore output from proxies that have been replaced.
-      if (ws.data.terminal !== terminal) return
-      const sessionId = ws.data.currentSessionId
-      if (!sessionId) {
-        return
-      }
-      send(ws, { type: 'terminal-output', sessionId, data })
-    },
-    onExit: () => {
-      // Guard: skip if this proxy was already replaced (e.g. by SSH proxy)
-      if (ws.data.terminal !== terminal) return
-      const sessionId = ws.data.currentSessionId
-      ws.data.currentSessionId = null
-      ws.data.currentTmuxTarget = null
-      ws.data.terminal = null
-      clearAttachDedup(ws)
-      void terminal.dispose()
-      if (sockets.has(ws)) {
-        sendTerminalError(
-          ws,
-          sessionId,
-          'ERR_TMUX_ATTACH_FAILED',
-          'tmux client exited',
-          true
-        )
-      }
-    },
-  })
-
-  return terminal
-}
-
-function isTerminalAttachCurrent(ws: ServerWebSocket<WSData>, attachSeq: number): boolean {
-  return ws.data.terminalAttachSeq === attachSeq
-}
-
-async function ensurePersistentTerminal(
-  ws: ServerWebSocket<WSData>,
-  attachSeq: number
-): Promise<ITerminalProxy | null> {
-  if (!isTerminalAttachCurrent(ws, attachSeq)) {
-    return null
-  }
-
-  if (!ws.data.terminal) {
-    const created = createPersistentTerminal(ws)
-    // If a newer attach/detach arrived while creating the proxy, dispose it.
-    if (!isTerminalAttachCurrent(ws, attachSeq)) {
-      await created.dispose()
-      return null
-    }
-    ws.data.terminal = created
-  }
-
-  const terminal = ws.data.terminal
-  try {
-    await terminal.start()
-    if (!isTerminalAttachCurrent(ws, attachSeq)) {
-      return null
-    }
-    return terminal
-  } catch (error) {
-    if (ws.data.terminal === terminal) {
-      ws.data.terminal = null
-      clearAttachDedup(ws)
-    }
-    throw error
-  }
-}
-
-async function ensureCorrectProxyType(
-  ws: ServerWebSocket<WSData>,
-  session: Session,
-  attachSeq: number
-): Promise<ITerminalProxy | null> {
-  if (!isTerminalAttachCurrent(ws, attachSeq)) {
-    return null
-  }
-
-  const needsSsh = session.remote === true && !!session.host
-  const currentHost = ws.data.terminalHost
-
-  // Same type — reuse existing proxy
-  if (!needsSsh && !currentHost) {
-    return ensurePersistentTerminal(ws, attachSeq)
-  }
-  if (needsSsh && currentHost === session.host) {
-    if (ws.data.terminal) {
-      const terminal = ws.data.terminal
-      try {
-        await terminal.start()
-        if (!isTerminalAttachCurrent(ws, attachSeq)) {
-          return null
-        }
-        return terminal
-      } catch (error) {
-        if (ws.data.terminal === terminal) {
-          ws.data.terminal = null
-          ws.data.terminalHost = null
-          clearAttachDedup(ws)
-        }
-        throw error
-      }
-    }
-  }
-
-  // Type mismatch — dispose old proxy and create new one
-  if (ws.data.terminal) {
-    const oldTerminal = ws.data.terminal
-    // Clear references BEFORE dispose so the onExit guard sees the proxy was replaced
-    // (dispose triggers process exit → onExit callback, which checks ws.data.terminal !== terminal)
-    if (isTerminalAttachCurrent(ws, attachSeq) && ws.data.terminal === oldTerminal) {
-      ws.data.terminal = null
-      ws.data.terminalHost = null
-      ws.data.currentSessionId = null
-      ws.data.currentTmuxTarget = null
-      clearAttachDedup(ws)
-    }
-    await oldTerminal.dispose()
-  }
-
-  if (!isTerminalAttachCurrent(ws, attachSeq)) {
-    return null
-  }
-
-  if (needsSsh) {
-    return createAndStartSshProxy(ws, session.host!, attachSeq)
-  } else {
-    return ensurePersistentTerminal(ws, attachSeq)
-  }
-}
-
-async function createAndStartSshProxy(
-  ws: ServerWebSocket<WSData>,
-  host: string,
-  attachSeq: number
-): Promise<ITerminalProxy | null> {
-  const sshOptions = remote.sshOptions()
-  const sessionName = `${config.tmuxSession}-ws-${ws.data.connectionId}`
-
-  const terminal = new SshTerminalProxy({
-    connectionId: ws.data.connectionId,
-    sessionName,
-    baseSession: '', // not used for SSH standalone sessions
-    host,
-    sshOptions,
-    commandTimeoutMs: config.remoteTimeoutMs,
-    onData: (data) => {
-      // Guard: ignore output from proxies that have been replaced.
-      if (ws.data.terminal !== terminal) return
-      const sessionId = ws.data.currentSessionId
-      if (!sessionId) return
-      send(ws, { type: 'terminal-output', sessionId, data })
-    },
-    onExit: () => {
-      // Guard: skip if this proxy was already replaced
-      if (ws.data.terminal !== terminal) return
-      const sessionId = ws.data.currentSessionId
-      logger.warn('ssh_proxy_onExit', {
-        sessionName,
-        sessionId,
-        host,
-        connectionId: ws.data.connectionId,
-      })
-      ws.data.currentSessionId = null
-      ws.data.currentTmuxTarget = null
-      ws.data.terminal = null
-      ws.data.terminalHost = null
-      clearAttachDedup(ws)
-      void terminal.dispose()
-      if (sockets.has(ws)) {
-        sendTerminalError(ws, sessionId, 'ERR_TMUX_ATTACH_FAILED', 'SSH tmux client exited', true)
-      }
-    },
-  })
-
-  if (!isTerminalAttachCurrent(ws, attachSeq)) {
-    await terminal.dispose()
-    return null
-  }
-
-  ws.data.terminal = terminal
-  ws.data.terminalHost = host
-
-  try {
-    await terminal.start()
-    if (!isTerminalAttachCurrent(ws, attachSeq)) {
-      await terminal.dispose()
-      return null
-    }
-    if (ws.data.terminal !== terminal) {
-      // Another attach request replaced this proxy while it was starting.
-      await terminal.dispose()
-      return null
-    }
-    return terminal
-  } catch (error) {
-    if (ws.data.terminal === terminal) {
-      ws.data.terminal = null
-      ws.data.terminalHost = null
-      clearAttachDedup(ws)
-    }
-    throw error
-  }
-}
-
-async function attachTerminalPersistent(
-  ws: ServerWebSocket<WSData>,
-  message: Extract<ClientMessage, { type: 'terminal-attach' }>,
-  attachSeq: number
-) {
-  const { sessionId, tmuxTarget, cols, rows } = message
-
-  if (!isTerminalAttachCurrent(ws, attachSeq)) {
-    return
-  }
-
-  if (!isValidSessionId(sessionId)) {
-    if (isTerminalAttachCurrent(ws, attachSeq)) {
-      sendTerminalError(ws, sessionId, 'ERR_INVALID_WINDOW', 'Invalid session id', false)
-    }
-    return
-  }
-
-  const session = registry.get(sessionId)
-  if (!session) {
-    if (isTerminalAttachCurrent(ws, attachSeq)) {
-      sendTerminalError(ws, sessionId, 'ERR_INVALID_WINDOW', 'Session not found', false)
-    }
-    return
-  }
-  // Chat sessions have no tmux window to attach a terminal to; the client
-  // renders ChatView for them and never sends terminal-attach, but refuse
-  // cleanly if one arrives (e.g. stale tab).
-  if (!isTerminalSession(session)) {
-    if (isTerminalAttachCurrent(ws, attachSeq)) {
-      sendTerminalError(ws, sessionId, 'ERR_INVALID_WINDOW', 'Chat sessions have no terminal', false)
-    }
-    return
-  }
-  if (session.remote && !config.remoteAllowAttach) {
-    const host = session.host ? ` on ${session.host}` : ''
-    if (isTerminalAttachCurrent(ws, attachSeq)) {
-      sendTerminalError(ws, sessionId, 'ERR_INVALID_WINDOW', `Remote session${host} is read-only`, false)
-    }
-    return
-  }
-  stopClipboardBufferWatch(ws)
-
-  const target = tmuxTarget ?? session.tmuxWindow
-  if (!isValidTmuxTarget(target)) {
-    if (isTerminalAttachCurrent(ws, attachSeq)) {
-      sendTerminalError(ws, sessionId, 'ERR_INVALID_WINDOW', 'Invalid tmux target', false)
-    }
-    return
-  }
-
-  const t0 = performance.now()
-
-  let terminal: ITerminalProxy | null = null
-  try {
-    terminal = await ensureCorrectProxyType(ws, session, attachSeq)
-    if (!terminal) return
-  } catch (error) {
-    if (sockets.has(ws) && isTerminalAttachCurrent(ws, attachSeq)) {
-      handleTerminalError(ws, sessionId, error, 'ERR_TMUX_ATTACH_FAILED')
-    }
-    return
-  }
-
-  const tProxy = performance.now()
-
-  if (!isTerminalAttachCurrent(ws, attachSeq)) {
-    return
-  }
-
-  if (typeof cols === 'number' && typeof rows === 'number') {
-    terminal.resize(cols, rows)
-  }
-
-  const effectiveTarget = terminal.ensureEffectiveTarget(target)
-
-  // Deduplicate rapid re-attaches to the same session+target (e.g. two
-  // terminal-attach messages arriving within ~34ms).  Skip the expensive
-  // scrollback capture and just acknowledge readiness.
-  const attachKey = `${sessionId}:${effectiveTarget}`
-  const now = performance.now()
-  const ATTACH_DEDUP_MS = 500
-
-  if (ws.data.lastAttachKey === attachKey &&
-      now - ws.data.lastAttachTs < ATTACH_DEDUP_MS) {
-    logger.debug('terminal_attach_dedup', {
-      sessionId, target, effectiveTarget, attachSeq,
-      elapsedMs: Math.round(now - ws.data.lastAttachTs),
-      connectionId: ws.data.connectionId,
-    })
-    try {
-      await terminal.switchTo(target)
-      if (!isTerminalAttachCurrent(ws, attachSeq)) {
-        return
-      }
-      ws.data.currentSessionId = sessionId
-      ws.data.currentTmuxTarget = effectiveTarget
-      startClipboardBufferWatch(clipboardCtx, ws, sessionId, session)
-      send(ws, { type: 'terminal-ready', sessionId })
-    } catch (error) {
-      if (sockets.has(ws) && isTerminalAttachCurrent(ws, attachSeq)) {
-        handleTerminalError(ws, sessionId, error, 'ERR_TMUX_SWITCH_FAILED')
-      }
-    }
-    return
-  }
-
-  // Capture scrollback history BEFORE switching to avoid race with live output
-  const history = session.remote && session.host
-    ? await remote.captureHistoryRemote(effectiveTarget, session.host)
-    : await captureTmuxHistory(effectiveTarget)
-
-  const tCapture = performance.now()
-
-  if (!isTerminalAttachCurrent(ws, attachSeq)) {
-    return
-  }
-
-  try {
-    await terminal.switchTo(target, () => {
-      if (!isTerminalAttachCurrent(ws, attachSeq)) return
-      ws.data.currentSessionId = sessionId
-      ws.data.currentTmuxTarget = effectiveTarget
-      // Send history in chunks sized to fit TCP's initial congestion window
-      // (~14.6KB). On high-latency connections (5G/Tailscale), the first chunk
-      // arrives before slow start ramps up, letting the client render partial
-      // content immediately instead of waiting for the full payload.
-      if (history) {
-        const HISTORY_CHUNK_SIZE = 12_000
-        const tStr = performance.now()
-        let totalBytes = 0
-        let chunks = 0
-        for (let offset = 0; offset < history.length; offset += HISTORY_CHUNK_SIZE) {
-          const chunk = history.slice(offset, offset + HISTORY_CHUNK_SIZE)
-          // Routed through send() so history chunks join the coalesced output
-          // stream; the terminal-ready acknowledgement drains them first.
-          send(ws, { type: 'terminal-output', sessionId, data: chunk })
-          totalBytes += Buffer.byteLength(chunk, 'utf8')
-          chunks += 1
-        }
-        const stringifyMs = Math.round(performance.now() - tStr)
-        logger.debug('terminal_history_send', {
-          sessionId,
-          stringifyMs,
-          payloadBytes: totalBytes,
-          historyChars: history.length,
-          chunks,
-          connectionId: ws.data.connectionId,
-        })
-      }
-    })
-    // Yield to flush WebSocket buffers immediately after sending history.
-    // Without this, Bun buffers the ws.send() data and doesn't flush until
-    // the event loop is free — which can be seconds if other sync work follows.
-    await new Promise<void>((resolve) => setTimeout(resolve, 0))
-    const tSwitch = performance.now()
-    if (!isTerminalAttachCurrent(ws, attachSeq)) {
-      return
-    }
-    ws.data.currentSessionId = sessionId
-    ws.data.currentTmuxTarget = effectiveTarget
-    // Record dedup key only after successful switch — prevents a second
-    // attach from hitting the dedup fast-path while the first is still in flight.
-    ws.data.lastAttachKey = attachKey
-    ws.data.lastAttachTs = performance.now()
-    startClipboardBufferWatch(clipboardCtx, ws, sessionId, session)
-    logger.info('terminal_attach_profile', {
-      sessionId,
-      target,
-      effectiveTarget,
-      remote: !!session.remote,
-      proxyMs: Math.round(tProxy - t0),
-      captureMs: Math.round(tCapture - tProxy),
-      switchMs: Math.round(tSwitch - tCapture),
-      totalMs: Math.round(tSwitch - t0),
-      historyBytes: history?.length ?? 0,
-      connectionId: ws.data.connectionId,
-    })
-    send(ws, { type: 'terminal-ready', sessionId })
-  } catch (error) {
-    if (!isTerminalAttachCurrent(ws, attachSeq)) {
-      return
-    }
-    logger.warn('terminal_switch_failed', {
-      sessionId,
-      target,
-      effectiveTarget,
-      error: error instanceof Error ? error.message : String(error),
-      connectionId: ws.data.connectionId,
-    })
-    if (sockets.has(ws) && isTerminalAttachCurrent(ws, attachSeq)) {
-      handleTerminalError(ws, sessionId, error, 'ERR_TMUX_SWITCH_FAILED')
-    }
-  }
-}
-
-async function captureTmuxHistory(target: string): Promise<string | null> {
-  try {
-    // Capture only the visible pane so initial attach paints the current view
-    // immediately instead of replaying the entire scrollback buffer.
-    // Async spawn: this runs on the main event loop during attach, and a sync
-    // spawnSync would block keystroke dispatch and output streaming for the
-    // full capture duration on text-heavy panes.
-    const colorArgs = config.terminalColorsEnabled ? ['-e'] : []
-    const output = await readTmuxCapture([
-      'capture-pane',
-      '-t',
-      target,
-      '-p',
-      '-J',
-      ...colorArgs,
-    ])
-    if (output === null) {
-      return null
-    }
-    // Only return if there's actual content
-    if (output.trim().length === 0) {
-      return null
-    }
-    return normalizeCapturedHistory(output)
-  } catch {
-    return null
-  }
-}
-
-function detachTerminalPersistent(ws: ServerWebSocket<WSData>, sessionId: string) {
-  // Cancel any in-flight attach/switch operations so stale completions don't
-  // clobber the newly-selected session.
-  ws.data.terminalAttachSeq += 1
-  stopClipboardBufferWatch(ws)
-  if (ws.data.currentSessionId === sessionId) {
-    ws.data.currentSessionId = null
-    ws.data.currentTmuxTarget = null
-  }
-  // Clear dedup so a fast A→B→A switch doesn't skip scrollback for A
-  clearAttachDedup(ws)
-}
-
-function handleTerminalInputPersistent(
-  ws: ServerWebSocket<WSData>,
-  sessionId: string,
-  data: string
-) {
-  if (sessionId !== ws.data.currentSessionId) {
-    return
-  }
-
-  const session = registry.get(sessionId)
-  if (session?.remote && !config.remoteAllowAttach) return
-
-  if (!session?.remote && containsClipboardArmingMouseInput(data)) {
-    const now = Date.now()
-    ws.data.clipboardBufferArmedUntil = now + CLIPBOARD_BUFFER_ARM_MS
-    // No slack: we arm here BEFORE forwarding the input to tmux below, so any
-    // buffer this gesture creates is stamped at/after this whole second. A
-    // slack would instead let a pre-existing buffer created just before the
-    // gesture be mis-offered as the user's copy.
-    ws.data.clipboardArmedAtSec = Math.floor(now / 1000)
-  }
-
-  ws.data.terminal?.write(data)
-
-  // On Enter key: immediately set "working" status and schedule refresh
-  if (data.includes('\r') || data.includes('\n')) {
-    if (!session?.remote) {
-      refresh.setForceWorking(sessionId)
-      refresh.scheduleEnterRefresh()
-      refresh.scheduleLastUserMessageCapture(sessionId)
-    }
-  }
-}
-
-function handleTerminalPastePersistent(
-  ws: ServerWebSocket<WSData>,
-  sessionId: string,
-  data: string
-) {
-  if (sessionId !== ws.data.currentSessionId) {
-    return
-  }
-
-  const session = registry.get(sessionId)
-  if (session?.remote && !config.remoteAllowAttach) return
-
-  // Pasting stages text in the pane's input; it is NOT a submit, so unlike
-  // terminal-input we deliberately skip the Enter/"working" status heuristics.
-  ws.data.terminal?.paste(data)
-}
-
-function handleTerminalResizePersistent(
-  ws: ServerWebSocket<WSData>,
-  sessionId: string,
-  cols: number,
-  rows: number
-) {
-  if (sessionId !== ws.data.currentSessionId) {
-    return
-  }
-
-  const session = registry.get(sessionId)
-  if (session?.remote && !config.remoteAllowAttach) return
-
-  ws.data.terminal?.resize(cols, rows)
-}
-
-
-function sendTerminalError(
-  ws: ServerWebSocket<WSData>,
-  sessionId: string | null,
-  code: TerminalErrorCode,
-  message: string,
-  retryable: boolean
-) {
-  logger.warn('sending_terminal_error', {
-    sessionId,
-    code,
-    message,
-    retryable,
-    connectionId: ws.data.connectionId,
-  })
-  send(ws, {
-    type: 'terminal-error',
-    sessionId,
-    code,
-    message,
-    retryable,
-  })
-}
-
-function handleTerminalError(
-  ws: ServerWebSocket<WSData>,
-  sessionId: string | null,
-  error: unknown,
-  fallbackCode: TerminalErrorCode
-) {
-  if (error instanceof TerminalProxyError) {
-    sendTerminalError(ws, sessionId, error.code, error.message, error.retryable)
-    return
-  }
-
-  const message =
-    error instanceof Error ? error.message : 'Terminal operation failed'
-  sendTerminalError(ws, sessionId, fallbackCode, message, true)
 }

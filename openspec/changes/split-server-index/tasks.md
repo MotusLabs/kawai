@@ -69,10 +69,15 @@ a commit; `indexHandlers.test.ts` must pass unchanged (design D5) throughout.
     copy mode follow the `sessions/` style — functions over a small context
     (`{ registry, hub }`, plus `runRemoteTmux` for copy mode) — since their race guards live
     on the per-socket `WSData`, not on a class.
-- [ ] 5.2 Create `src/server/ws/terminalAttach.ts` lifting the proxy lifecycle, SSH proxy
+- [x] 5.2 Create `src/server/ws/terminalAttach.ts` lifting the proxy lifecycle, SSH proxy
   creation, and attach/detach/input/paste/resize handling (~:4313–4948;
   `terminalAttachSeq` verbatim); commit (`refactor: lift terminal attach lifecycle into
   ws/terminalAttach`)
+  - Deviation: split in two to stay under the 500-LOC norm — `ws/terminalProxy.ts` (proxy
+    create/start/swap incl. SSH proxy, attach dedup reset, terminal-error reporting) and
+    `ws/terminalAttach.ts` (attach/detach/input/paste/resize, scrollback capture, socket
+    cleanup); both are functions over `TerminalAttachContext`
+    (`{ hub, remote, registry, refresh, clipboard }`).
 
 ## 6. HTTP routes
 
