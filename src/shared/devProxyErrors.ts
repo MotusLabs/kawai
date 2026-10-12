@@ -1,5 +1,8 @@
 // Classifies Vite dev-proxy errors that are expected during normal operation,
-// so the dev server can drop them instead of logging a stack trace.
+// so the dev server can drop them instead of logging a stack trace. Consumed
+// by `vite.config.ts` (its customLogger) at the repository root — outside
+// src/, so searches limited to src/server and src/client will not find it;
+// tsconfig includes vite.config.ts so a broken import fails typecheck.
 
 const BENIGN_PROXY_ERROR_CODES = [
   // Backend is restarting under `bun --watch`; the next request reconnects.

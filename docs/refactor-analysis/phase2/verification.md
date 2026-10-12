@@ -80,9 +80,10 @@ types/constants is mechanical.
 
 ### A.3 — bonus findings (same sweep)
 
-- `src/shared/devProxyErrors.ts` (40 LOC): **CONFIRMED-DEAD** — `isBenignProxyError`/`shouldSuppressProxyLog`
-  have zero consumers outside their own test (incl. `scripts/dev-server.ts`, which is the stated
-  consumer in the header comment).
+- `src/shared/devProxyErrors.ts` (40 LOC): ~~CONFIRMED-DEAD~~ **WRONG — LIVE.** `shouldSuppressProxyLog`
+  is imported by `vite.config.ts` at the repository root, which this sweep (src/ and scripts/ only)
+  never searched. Deleting it (`59c9272`) broke `bun run build` and `bun run dev`; restored, and
+  tsconfig now includes `vite.config.ts` so typecheck catches such a break.
 - Every fully-dead symbol above is still counted by `tsc` and oxlint; removal is mechanical.
 
 ## B. Test suite map

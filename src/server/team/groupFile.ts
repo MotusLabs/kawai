@@ -3,8 +3,12 @@
 // The frontmatter is a deliberately small YAML subset — flat `key: value`
 // scalars, optionally quoted, `#` comment lines — so the parser needs no YAML
 // dependency and an agent-written file cannot smuggle structure in. Known
-// keys are validated; unknown keys are ignored so later changes (team tasks,
-// profile routing) can add settings without breaking older readers.
+// keys are validated; unknown keys are ignored so later changes (profile
+// routing) can add settings without breaking older readers. Team tasks add
+// `canCreateTasks`, `max`, `profile`, and `approval` (team-tasks design D2/D6):
+// defaults are applied here so every reader sees the same effective values.
+import type { ChatApprovalPolicy } from '../../shared/chat'
+import { PROFILE_ID_PATTERN } from '../chat/profileCatalog'
 
 export interface GroupDefinition {
   id: string
@@ -14,6 +18,14 @@ export interface GroupDefinition {
   description: string
   /** Per-thread hop limit override (agent-mailbox); unset = default. */
   hopLimit?: number
+  /** Members may create team tasks (team-tasks); default false. */
+  canCreateTasks: boolean
+  /** Live-member cap for worktree staffing spawns; default 1. */
+  max: number
+  /** Profile for spawned members; unset = the default profile. */
+  profile?: string
+  /** Approval policy for spawned members; default manual. */
+  approval: ChatApprovalPolicy
   /** The role prompt appended to members' system prompts. */
   prompt: string
 }
@@ -48,6 +60,8 @@ export function parseGroupFile(id: string, content: string): GroupFileParse {
     }
     hopLimit = Number(rawHopLimit.trim())
   }
+  const settings = parseTaskSettings(fields)
+  if (!settings.ok) return settings
 
   return {
     ok: true,
@@ -56,9 +70,43 @@ export function parseGroupFile(id: string, content: string): GroupFileParse {
       label: label || id,
       description,
       ...(hopLimit !== undefined ? { hopLimit } : {}),
+      ...settings.settings,
       prompt: lines.slice(bodyStart).join('\n').trim(),
     },
   }
+}
+
+type TaskSettings = Pick<GroupDefinition, 'canCreateTasks' | 'max' | 'profile' | 'approval'>
+
+function parseTaskSettings(
+  fields: Map<string, string>
+): { ok: true; settings: TaskSettings } | { ok: false; error: string } {
+  const settings: TaskSettings = { canCreateTasks: false, max: 1, approval: 'manual' }
+  const canCreate = fields.get('canCreateTasks')?.trim()
+  if (canCreate !== undefined) {
+    if (canCreate !== 'true' && canCreate !== 'false') {
+      return { ok: false, error: `canCreateTasks must be true or false, got "${canCreate}"` }
+    }
+    settings.canCreateTasks = canCreate === 'true'
+  }
+  const max = fields.get('max')?.trim()
+  if (max !== undefined) {
+    if (!/^[1-9]\d*$/.test(max)) return { ok: false, error: `max must be a positive integer, got "${max}"` }
+    settings.max = Number(max)
+  }
+  const profile = fields.get('profile')?.trim()
+  if (profile !== undefined) {
+    if (!PROFILE_ID_PATTERN.test(profile)) return { ok: false, error: `profile "${profile}" is not a valid profile id` }
+    settings.profile = profile
+  }
+  const approval = fields.get('approval')?.trim()
+  if (approval !== undefined) {
+    if (approval !== 'manual' && approval !== 'auto') {
+      return { ok: false, error: `approval must be manual or auto, got "${approval}"` }
+    }
+    settings.approval = approval
+  }
+  return { ok: true, settings }
 }
 
 function parseFields(

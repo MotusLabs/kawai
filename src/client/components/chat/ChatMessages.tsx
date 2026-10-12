@@ -70,6 +70,14 @@ export default function ChatMessages({ events, projectPath, sessionId, sendMessa
             </div>
             <p className="break-all text-chat-meta text-secondary">{event.originPath}</p>
             {event.possibleDuplicate && <p role="status" className="text-chat-meta text-chat-danger">Possible duplicate — an already-seen message should be treated as a no-op.</p>}
+            {event.task && <details className="my-2 border border-border p-2 text-chat-meta" data-testid="peer-task">
+              <summary>Task: {event.task.title} · {event.task.status} · revision {event.task.revision}</summary>
+              {event.task.worktree && <p className="break-all">Worktree: {event.task.worktree}</p>}
+              {event.task.openspecChange && <p>Linked OpenSpec change {event.task.openspecChange} (authoritative)</p>}
+              <p className="mt-1 whitespace-pre-wrap">{event.task.direction}</p>
+              {event.task.acceptance && <p className="mt-1 whitespace-pre-wrap">Acceptance: {event.task.acceptance}</p>}
+              {event.task.journal.map(entry => <p key={`${entry.createdAt}:${entry.author}`} className="mt-1 whitespace-pre-wrap text-secondary">{entry.author}: {entry.text}</p>)}
+            </details>}
             <p className="whitespace-pre-wrap break-words text-chat-body">{event.body}</p>
             {event.thread && <details className="mt-2 text-chat-meta"><summary>Earlier messages in this thread</summary>
               {event.thread.map(message => <p key={message.messageId} className="whitespace-pre-wrap">{message.senderSession}: {message.body}</p>)}

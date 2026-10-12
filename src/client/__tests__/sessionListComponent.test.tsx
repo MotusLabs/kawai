@@ -451,6 +451,9 @@ describe('session comparator (design D6)', () => {
       groupId: 'devs',
       groupLabel: 'Developers',
       groupMissing: false,
+      taskId: 'task-1',
+      taskTitle: 'Export',
+      spawned: false,
     }
     // Compile-time exhaustiveness comes from the mapped type (a new Session
     // field without a comparator entry fails typecheck); this runtime check
@@ -483,6 +486,9 @@ describe('session comparator (design D6)', () => {
       groupId: 'qa',
       groupLabel: 'QA',
       groupMissing: true,
+      taskId: 'task-2',
+      taskTitle: 'Import',
+      spawned: true,
     }
     for (const field of Object.keys(fullSession)) {
       const changed = { ...fullSession } as Record<string, unknown>
@@ -534,6 +540,35 @@ describe('session comparator (design D6)', () => {
       card().props.onClick()
     })
     expect(selected).toEqual(['session-1'])
+    act(() => renderer.unmount())
+  })
+
+  test('spawned chats show spawned, task, and needs-attention badges; resolution clears the flag', () => {
+    const listProps = {
+      selectedSessionId: null, loading: false, error: null,
+      onSelect: () => {}, onRename: () => {},
+    }
+    const chat = (id: string, extra: Partial<Session>): Session =>
+      ({ ...baseSession, id, kind: 'chat', ...extra })
+    const sessions = (status: Session['status']) => [
+      chat('chat-spawned', { spawned: true, taskId: 'task-1', taskTitle: 'Export', status, projectPath: '/repo-feature/src' }),
+      chat('chat-member', { taskId: 'task-1', taskTitle: 'Export', status: 'permission' }),
+      chat('chat-solo', {}),
+    ]
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => {
+      renderer = TestRenderer.create(<SessionList sessions={sessions('permission')} {...listProps} />)
+    })
+    const badges = (testId: string) => renderer.root.findAllByProps({ 'data-testid': testId })
+    expect(badges('session-spawned-badge')).toHaveLength(1)
+    expect(badges('session-task-badge').map(badge => badge.children.join(''))).toEqual(['Export', 'Export'])
+    // Only the spawned session waiting on the human is flagged, not a member the human created.
+    expect(badges('session-attention-badge')).toHaveLength(1)
+    act(() => {
+      renderer.update(<SessionList sessions={sessions('working')} {...listProps} />)
+    })
+    expect(badges('session-attention-badge')).toHaveLength(0)
+    expect(badges('session-spawned-badge')).toHaveLength(1)
     act(() => renderer.unmount())
   })
 

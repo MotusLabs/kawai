@@ -81,7 +81,7 @@ import { ChatCommandTracker, type RawChatCommand } from './chatCommands'
 import { decideApproval } from './approvalPolicy'
 import { resolveClaudeProfile } from './ClaudeProfiles'
 import { TurnQueue } from './TurnQueue'
-import { MAILBOX_ALLOWED_TOOLS } from '../team/mailboxTools'
+import { TEAM_ALLOWED_TOOLS } from '../team/mailboxTools'
 import { TEAM_MCP_SERVER } from '../team/teamPrompt'
 import { formatEnvelope } from '../team/envelope'
 import { createWireTappedSpawn, type ChatWireRecorder } from './wireTap'
@@ -588,7 +588,7 @@ export class ChatSessionDriver {
       },
       ...(this.options.teamMcpServer ? {
         mcpServers: { [TEAM_MCP_SERVER]: this.options.teamMcpServer },
-        allowedTools: MAILBOX_ALLOWED_TOOLS,
+        allowedTools: TEAM_ALLOWED_TOOLS,
       } : {}),
       settingSources: ['user', 'project', 'local'],
       permissionMode: 'default',
@@ -1021,7 +1021,7 @@ export class ChatSessionDriver {
   }
 
   private readonly canUseTool: CanUseTool = (toolName, input, toolOptions) => {
-    if (this.options.teamMcpServer && MAILBOX_ALLOWED_TOOLS.includes(toolName)) {
+    if (this.options.teamMcpServer && TEAM_ALLOWED_TOOLS.includes(toolName)) {
       return Promise.resolve({ behavior: 'allow' } as PermissionResult)
     }
     const requestId = `req-${crypto.randomUUID()}`

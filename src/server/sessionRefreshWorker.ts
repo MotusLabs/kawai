@@ -7,7 +7,7 @@ import { inferAgentType, normalizePaneStartCommand } from './agentDetection'
 import { config } from './config'
 import { resolveExternalDisplayName } from './displayName'
 import { normalizeProjectPath } from './logDiscovery'
-import { extractRecentUserMessagesFromTmux } from './logMatcher'
+import { extractRecentUserMessagesFromTmux } from './logmatch'
 import {
   BOOTSTRAP_WINDOW_NAME,
   buildTmuxFormat,

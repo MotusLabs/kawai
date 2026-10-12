@@ -16,7 +16,7 @@ import {
   getLogTokenCount,
   isToolNotificationText,
   matchWindowsToLogsByExactRgAsync,
-} from './logMatcher'
+} from './logmatch'
 import { getEntriesNeedingMatch, shouldSkipMatching } from './logMatchGate'
 import {
   collectLogEntriesForPaths,

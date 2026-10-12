@@ -36,14 +36,20 @@ The debt is concentrated in **six god-units plus a handful of cheap hygiene item
 
 ### P0 — Hygiene (minutes each, do first)
 > **Status: DONE 2026-10-11** — all four items landed as commits `0c84ff7` (deps), `d820a0b`
-> (devProxyErrors + its test), `600ddf5` (logMatcher: 4 functions + 18 export keywords, net −48
+> (devProxyErrors + its test — **reverted**: the module is live via `vite.config.ts`, which the
+> dead-code sweep never searched; the deletion broke build/dev and was restored 2026-10-12), `600ddf5` (logMatcher: 4 functions + 18 export keywords, net −48
 > LOC), `75f4a49` (headers on the 14 largest modules that lacked them). Full suite green on
 > every commit via the pre-commit hook.
+> **Correction 2026-10-12**: item 2 was wrong — root `vite.config.ts` imports
+> `shouldSuppressProxyLog`; `bun run build` failed with UNRESOLVED_IMPORT and the module was
+> restored verbatim (`ad6b9b8` on `split-log-matcher`). Lesson recorded: grep repo-root
+> configs and scripts/, not just src/, before declaring a module dead.
 
 1. Remove dead dependencies `node-pty` and `@fontsource-variable/jetbrains-mono` (both verified:
    zero static/dynamic/require references; "pty" is a Bun.spawn'd tmux client; fonts are
    self-hosted via `@fontface`). [verification.md]
-2. Delete `src/shared/devProxyErrors.ts` (40 LOC, zero consumers incl. its stated consumer). [verification.md]
+2. ~~Delete `src/shared/devProxyErrors.ts`~~ — withdrawn: `vite.config.ts` imports it (root-level
+   consumers were outside the sweep). [verification.md]
 3. `logMatcher.ts`: delete the 4 never-called functions (~79 LOC:
    `getTerminalScrollback(Async)`, `extractLogText`, `verifyWindowLogAssociationAsync`) and strip
    18 dead `export` keywords (live internal helpers). NOTE: the bigger ~700-LOC sync-chain
@@ -64,6 +70,13 @@ Effort: L. Risk: med (mitigated by the existing indexHandlers harness — refact
 unreachable `verifyAssociations` branch, then ~700 LOC of sync twins (the match worker uses async
 variants exclusively). Split the remainder into scrollback / promptExtract / logText / exactMatch /
 verify modules. Effort: M. Risk: low — pure deletion with existing test coverage. [server-architecture.md §4]
+> **Status: DONE 2026-10-12** (branch `split-log-matcher`) — landed as `999c644` (unreachable
+> `verifyAssociations` branch + plumbing removed from hydration), `37eaf1e` (sync chain deleted,
+> net −898 LOC; sync-twin tests deleted or ported to the async twins per coverage), and `e9dbb62`
+> (split into `src/server/logmatch/`: common, scrollback, promptExtract, logText, candidateSearch,
+> exactMatch, verify + barrel). Candidate search became its own module — keeping it inside
+> exactMatch would have left that file at ~735 LOC, over the 500 norm; all modules landed at
+> 55–489 LOC. Full suite green on every commit via the pre-commit hook.
 
 **S3. Client WS router extraction.** Table-driven protocol module under `src/client/protocol/`
 (session/workspace/chat/server handler files, all via `getState()`), killing the

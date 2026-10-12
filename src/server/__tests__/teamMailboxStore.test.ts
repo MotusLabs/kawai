@@ -33,7 +33,7 @@ describe('MailboxStore', () => {
     expect(message).toMatchObject({
       teamId: TEAM, toKind: 'group', toId: 'devs', fromSession: 'chat-lead', fromGroup: 'leads',
       originPath: '/repo', priority: 'urgent', tags: ['ui'], threadId: message.id, inReplyTo: null,
-      hop: 1, state: 'queued', claimedBy: null, possibleDuplicate: false, attachThread: false,
+      hop: 1, state: 'queued', claimedBy: null, possibleDuplicate: false, attachThread: false, taskId: null,
     })
   })
 
