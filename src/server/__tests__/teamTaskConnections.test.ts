@@ -176,3 +176,54 @@ test('the human reopens and closes a task whose agent creator was killed', async
   await send({ type: 'team-task-status', sessionId: 'dev', requestId: 'r2', taskId: task.id, status: 'cancelled' })
   expect(tasks.store.get(task.id)!.status).toBe('cancelled')
 })
+
+test('list and detail opened together both subscribe (header link opens the panel on a task)', async () => {
+  const task = await tasks.create(human(), { title: 'Export', direction: 'd' })
+  let release!: () => void
+  resolveDelay = new Promise(resolve => { release = resolve })
+  const list = send({ type: 'team-tasks-open', sessionId: 'dev' })
+  const detail = send({ type: 'team-task-open', sessionId: 'dev', taskId: task.id })
+  release(); await Promise.all([list, detail])
+  expect(last('team-tasks-snapshot')!.tasks.map(row => row.id)).toEqual([task.id])
+  expect(last('team-task-detail')!.detail.task.id).toBe(task.id)
+  // The list stays subscribed: a later task change still pushes it.
+  resolveDelay = null
+  await tasks.create(human(), { title: 'Import', direction: 'd' })
+  expect(last('team-tasks-snapshot')!.tasks.map(row => row.title)).toEqual(['Export', 'Import'])
+})
+
+test('reconnect with a detail open resubscribes both list and detail', async () => {
+  const task = await tasks.create(human(), { title: 'Export', direction: 'd' })
+  await send({ type: 'team-tasks-open', sessionId: 'dev' })
+  await send({ type: 'team-task-open', sessionId: 'dev', taskId: task.id })
+  connections.disconnect(connection)
+  messages = []
+  // The client's effects re-run in order: both closes, then both opens, unawaited.
+  let release!: () => void
+  resolveDelay = new Promise(resolve => { release = resolve })
+  const pending = [
+    send({ type: 'team-tasks-close', sessionId: 'dev' }),
+    send({ type: 'team-task-close', sessionId: 'dev', taskId: task.id }),
+    send({ type: 'team-tasks-open', sessionId: 'dev' }),
+    send({ type: 'team-task-open', sessionId: 'dev', taskId: task.id }),
+  ]
+  release(); await Promise.all(pending)
+  expect(messages.map(message => message.type).sort()).toEqual(['team-task-detail', 'team-tasks-snapshot'])
+  resolveDelay = null
+  await tasks.note(human(), task.id, 'after reconnect')
+  expect(last('team-tasks-snapshot')).toBeDefined()
+  expect(last('team-task-detail')!.detail.journal.map(entry => entry.text)).toEqual(['after reconnect'])
+  expect(messages.filter(message => message.type === 'team-tasks-snapshot').length).toBeGreaterThan(1)
+})
+
+test('a close still supersedes a pending open of the same detail only', async () => {
+  const a = await tasks.create(human(), { title: 'A', direction: 'd' })
+  const b = await tasks.create(human(), { title: 'B', direction: 'd' })
+  let release!: () => void
+  resolveDelay = new Promise(resolve => { release = resolve })
+  const openA = send({ type: 'team-task-open', sessionId: 'dev', taskId: a.id })
+  const openB = send({ type: 'team-task-open', sessionId: 'dev', taskId: b.id })
+  await send({ type: 'team-task-close', sessionId: 'dev', taskId: a.id })
+  release(); await Promise.all([openA, openB])
+  expect(messages.filter(message => message.type === 'team-task-detail').map(message => (message as { detail: { task: { id: string } } }).detail.task.id)).toEqual([b.id])
+})

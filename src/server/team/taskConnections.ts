@@ -20,7 +20,12 @@ interface Subscription {
 
 export class TaskConnections {
   private readonly subscriptions = new Map<ChatConnection, Map<string, Subscription>>()
-  /** Latest open/close per connection and session; a superseded open is dropped. */
+  /**
+   * Latest open/close per connection and subscription target — a session's
+   * list, or one task detail of it. Only a later open/close of the same
+   * target supersedes a pending open: the list and a detail opened together
+   * (header link, reconnect) must both stand.
+   */
   private readonly pending = new Map<ChatConnection, Map<string, object>>()
 
   constructor(private readonly manager: ChatSessionManager) {}
@@ -52,23 +57,25 @@ export class TaskConnections {
 
   async handle(connection: ChatConnection, message: TaskClientMessage) {
     if ('requestId' in message) return this.act(connection, message)
-    // Subscription changes order against each other: the latest open/close
-    // for a session wins, even when an earlier open is still resolving.
+    // Opens and closes of one target order against each other: the latest
+    // wins, even when an earlier open is still resolving its team.
     const { sessionId } = message
+    const target = `${sessionId}\0${'taskId' in message ? message.taskId : ''}`
     const token = {}
     const pending = this.pending.get(connection) ?? new Map<string, object>()
-    pending.set(sessionId, token)
+    pending.set(target, token)
     this.pending.set(connection, pending)
-    const sessions = this.subscriptions.get(connection) ?? new Map<string, Subscription>()
     if (message.type === 'team-tasks-close' || message.type === 'team-task-close') {
-      const subscription = sessions.get(sessionId)
+      const sessions = this.subscriptions.get(connection)
+      const subscription = sessions?.get(sessionId)
       if ('taskId' in message) subscription?.details.delete(message.taskId)
       else if (subscription) subscription.list = false
-      if (subscription && !subscription.list && subscription.details.size === 0) sessions.delete(sessionId)
+      if (subscription && !subscription.list && subscription.details.size === 0) sessions!.delete(sessionId)
       return
     }
     const team = await this.manager.teams.resolvedTeamOf(sessionId)
-    if (this.pending.get(connection)?.get(sessionId) !== token) return
+    if (this.pending.get(connection)?.get(target) !== token) return
+    this.pending.get(connection)?.delete(target)
     if (!this.manager.has(sessionId) || !team) {
       connection.send({ type: 'error', message: 'Chat team is unavailable' })
       return
@@ -78,12 +85,15 @@ export class TaskConnections {
       connection.send({ type: 'error', message: 'Task does not belong to this team' })
       return
     }
+    // Read the connection's map only now: concurrent opens each awaited the
+    // team, and a map captured before that would overwrite the others'.
+    const sessions = this.subscriptions.get(connection) ?? new Map<string, Subscription>()
+    this.subscriptions.set(connection, sessions)
     const current = sessions.get(sessionId)
     const subscription = current?.teamId === team.teamId ? current : { teamId: team.teamId, list: false, details: new Set<string>() }
     if (taskId === undefined) subscription.list = true
     else subscription.details.add(taskId)
     sessions.set(sessionId, subscription)
-    this.subscriptions.set(connection, sessions)
     this.send(connection, sessionId, subscription, taskId)
   }
 
