@@ -58,8 +58,8 @@
 
 ## 9. Documentation and integration
 
-- [ ] 9.1 Document `profiles`, `strategy`, `onLimit`, routing rules (`~/.kawai/routing/`, `env`, timeouts, manual reload), limit events, cooldown, and park/release/forward in `CLAUDE.md`, plus an example rule using the published `.d.ts`; verify the example rule loads via the loader test fixture
-- [ ] 9.2 Run `bun run lint && bun run typecheck && bun run test` and an integration test (`teamRouting.integration.test.ts`) covering a mixed `glm`/`claude` group where `glm` hits a final limit, its member forwards with progress, and group mail goes to the `claude` member
+- [x] 9.1 Document `profiles`, `strategy`, `onLimit`, routing rules (`~/.kawai/routing/`, `env`, timeouts, manual reload), limit events, cooldown, and park/release/forward in `CLAUDE.md`, plus an example rule using the published `.d.ts`; verify the example rule loads via the loader test fixture
+- [x] 9.2 Run `bun run lint && bun run typecheck && bun run test` and an integration test (`teamRouting.integration.test.ts`) covering a mixed `glm`/`claude` group where `glm` hits a final limit, its member forwards with progress, and group mail goes to the `claude` member
 
 ## Workflow follow-up
 

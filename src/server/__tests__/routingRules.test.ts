@@ -188,6 +188,17 @@ export default {
     expect(registry!.rule('devs')).toBeUndefined()
   })
 
+  test('the documented example rule loads and routes', async () => {
+    fs.copyFileSync(path.resolve(import.meta.dir, '../../../docs/routing/devs.example.ts'), path.join(home, '.kawai', 'routing', 'devs.ts'))
+    const report = await open().reload()
+    expect(report.rules).toMatchObject([{ groupId: 'devs', ok: true }])
+    const host = registry!.rule('devs')!
+    expect(await host.route(CTX)).toEqual({ type: 'pick', candidateId: 'member:a' })
+    const cooling = { ...CTX, profiles: { glm: { usage: null, limitEvents: [], cooldownUntil: '2026-10-12T13:00:00.000Z' } } }
+    expect(await host.route(cooling)).toMatchObject({ type: 'hold', retryAfterMs: 600_000 })
+    expect(host.hasOnLimit).toBe(true)
+  })
+
   test('no routing directory is an empty report', async () => {
     fs.rmSync(path.join(home, '.kawai', 'routing'), { recursive: true })
     expect((await open().reload()).rules).toEqual([])
