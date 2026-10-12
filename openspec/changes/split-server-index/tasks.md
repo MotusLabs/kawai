@@ -81,12 +81,19 @@ a commit; `indexHandlers.test.ts` must pass unchanged (design D5) throughout.
 
 ## 6. HTTP routes
 
-- [ ] 6.1 Extract remaining endpoints into `src/server/routes/` following the
+- [x] 6.1 Extract remaining endpoints into `src/server/routes/` following the
   `routes/claudeProfiles.ts` pattern: `settings.ts` (~:1837–2012, collapsing the four
   copy-pasted setting blocks at ~:520–554), `sessionPreview.ts` (~:1572–1642, uses
   `./logContent`), `directories.ts`, `serverInfo.ts`, `updateInstall.ts`, `paste.ts`
   (~:2017–2168 incl. the Swift script constant); each route module receives its deps via the
   D3 context objects; commit (`refactor: extract HTTP routes into routes/ modules`)
+  - Notes: landed as two commits (settings first, then the rest). Each module returns a Hono
+    sub-app mounted with `app.route` (`/api/settings`, `/api/session-preview`,
+    `/api/directories`, `/api/update`; `serverInfo` and `paste` mount at `/api`).
+    `serverInfo.ts` also takes `/api/client-log`, `/api/health`, and `getTailscaleIp`; the
+    settings module owns the boot-time read (`loadStoredSettings`, the collapsed blocks via
+    one `readStoredBoolean` helper) and reaches the runtime history max age through a
+    get/set accessor rather than a module-scope `let`.
 
 ## 7. Composition root and close-out
 

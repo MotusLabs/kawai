@@ -7,20 +7,21 @@ import type { Server, ServerWebSocket } from 'bun'
 import fsSync from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import fs from 'node:fs/promises'
 import { Hono } from 'hono'
 import { serveStatic } from 'hono/bun'
 import { config } from './config'
 import { createPasteFileRoutes } from './routes/pasteFile'
 import { createSettingsRoutes, loadStoredSettings } from './routes/settings'
+import { createSessionPreviewRoutes } from './routes/sessionPreview'
+import { createDirectoryRoutes } from './routes/directories'
+import { createServerInfoRoutes, getTailscaleIp } from './routes/serverInfo'
+import { createUpdateInstallRoutes } from './routes/updateInstall'
+import { createPasteRoutes } from './routes/paste'
 import { createChatProviderEnvStore } from './routes/chatProviderEnv'
 import { ensureTmux } from './prerequisites'
 import { SessionManager } from './SessionManager'
 import { SessionRegistry } from './SessionRegistry'
-import { BUILD_VERSION } from './version'
 import { startUpdateChecker } from './updates/updateChecker'
-import { installUpdate } from './updates/updateInstaller'
-import { detectRestartContext, restartAfterInstall } from './updates/updateRestart'
 import {
   initDatabase,
   resolveDataDir,
@@ -36,19 +37,11 @@ import { parseApprovalPolicy } from './chat/approvalPolicy'
 import { resolveTerminalMode } from './terminal'
 import { TerminalOutputCoalescer } from './terminal/outputCoalescer'
 import { resolveProjectPath } from './paths'
-import {
-  type ClientMessage,
-  type DirectoryListing,
-  type DirectoryErrorResponse,
-} from '../shared/types'
+import type { ClientMessage } from '../shared/types'
 import { logger, logLevel } from './logger'
 import {
   SessionRefreshWorkerClient,
 } from './sessionRefreshWorkerClient'
-import {
-  MAX_FIELD_LENGTH,
-  isValidSessionId,
-} from './validators'
 import {
   parseCreateChangeWorktreePayload,
   parseCreateWorktreePayload,
@@ -60,7 +53,6 @@ import { createChangeWorktree } from './git/createChangeWorktree'
 import { WorkspaceCoordinator } from './workspace/workspaceCoordinator'
 import { WorkspaceWatcher, createNodeWatcherHost } from './workspace/workspaceWatcher'
 import { composeAutoStartCommand } from './applyCommand'
-import { readLogLineWindow } from './logContent'
 import { SessionRefreshLoop } from './refresh/SessionRefreshLoop'
 import type { WSData } from './ws/wsTypes'
 import { ConnectionHub, createConnectionId, fireAndForget } from './ws/ConnectionHub'
@@ -120,30 +112,6 @@ function checkPortAvailable(port: number): void {
     logger.error('port_in_use', { port, pid, processName })
     process.exit(1)
   }
-}
-
-function getTailscaleIp(): string | null {
-  // Try common Tailscale CLI paths (standalone CLI, then Mac App Store bundle)
-  const tailscalePaths = [
-    'tailscale',
-    '/Applications/Tailscale.app/Contents/MacOS/Tailscale',
-  ]
-
-  for (const tsPath of tailscalePaths) {
-    try {
-      const result = Bun.spawnSync([tsPath, 'ip', '-4'], {
-        stdout: 'pipe',
-        stderr: 'pipe',
-      })
-      if (result.exitCode === 0) {
-        const ip = result.stdout.toString().trim()
-        if (ip) return ip
-      }
-    } catch {
-      // Try next path
-    }
-  }
-  return null
 }
 
 function pruneOrphanedWsSessions(): void {
@@ -220,8 +188,6 @@ function pruneOrphanedWsSessions(): void {
     logger.info('ws_sessions_pruned', { count: pruned })
   }
 }
-
-const MAX_DIRECTORY_ENTRIES = 200
 
 checkPortAvailable(config.port)
 ensureTmux()
@@ -503,285 +469,26 @@ registry.on('sessions', () => refreshWorkspaceSeeds())
 registry.on('agent-sessions', () => refreshWorkspaceSeeds())
 refreshWorkspaceSeeds()
 
-app.post('/api/client-log', async (c) => {
-  try {
-    const body = await c.req.json() as { level?: string; event: string; data?: Record<string, unknown> }
-    const level = body.level === 'warn' || body.level === 'error' || body.level === 'info' ? body.level : 'debug'
-    logger[level]('client_' + body.event, body.data)
-  } catch {
-    // ignore malformed
-  }
-  return c.json({ ok: true })
-})
+const tlsEnabled = config.tlsCert && config.tlsKey
+const tlsOptions = tlsEnabled
+  ? { tls: { cert: Bun.file(config.tlsCert), key: Bun.file(config.tlsKey) } }
+  : {}
 
-app.get('/api/health', (c) => c.json({ ok: true }))
+// When bound to localhost, the server also listens on the Tailscale interface
+// if available (see below); server-info reports that address.
+let boundTailscaleIp: string | null = null
+
+app.route('/api', createServerInfoRoutes({
+  getBoundTailscaleIp: () => boundTailscaleIp,
+  tlsEnabled: Boolean(tlsEnabled),
+  updateChecker,
+}))
 app.get('/api/sessions', (c) => c.json(registry.getAll()))
 
-app.get('/api/session-preview/:sessionId', async (c) => {
-  const sessionId = c.req.param('sessionId')
-  if (!isValidSessionId(sessionId)) {
-    return c.json({ error: 'Invalid session id' }, 400)
-  }
+app.route('/api/session-preview', createSessionPreviewRoutes({ db }))
+app.route('/api/directories', createDirectoryRoutes())
 
-  const DEFAULT_LIMIT = 200
-  const MAX_LIMIT = 500
-  // Treat a missing OR empty `?limit=` as absent — `'' ?? DEFAULT` keeps '', and
-  // Number('') is 0, which would otherwise collapse the window to a single line.
-  const limitQuery = c.req.query('limit')
-  const rawLimit = limitQuery === undefined || limitQuery === ''
-    ? DEFAULT_LIMIT
-    : Number(limitQuery)
-  const limit = Number.isFinite(rawLimit)
-    ? Math.min(MAX_LIMIT, Math.max(1, Math.trunc(rawLimit)))
-    : DEFAULT_LIMIT
-
-  const record = db.getSessionById(sessionId)
-  if (!record) {
-    return c.json({ error: 'Session not found' }, 404)
-  }
-
-  const logPath = record.logFilePath
-  if (!logPath) {
-    return c.json({ error: 'No log file for session' }, 404)
-  }
-
-  try {
-    const stats = await fs.stat(logPath)
-    if (!stats.isFile()) {
-      return c.json({ error: 'Log file not found' }, 404)
-    }
-
-    const beforeLineQuery = c.req.query('beforeLine')
-    // Missing or empty means "latest window"; a non-numeric value falls back to
-    // the same (selectLineWindow treats a non-finite cursor as the end).
-    const rawBeforeLine = beforeLineQuery === undefined || beforeLineQuery === ''
-      ? Number.POSITIVE_INFINITY
-      : Number(beforeLineQuery)
-    const beforeByteQuery = c.req.query('beforeByte')
-    const rawBeforeByte = beforeByteQuery === undefined || beforeByteQuery === ''
-      ? undefined
-      : Number(beforeByteQuery)
-    const beforeByte = rawBeforeByte !== undefined && Number.isFinite(rawBeforeByte)
-      ? Math.max(0, Math.trunc(rawBeforeByte))
-      : undefined
-    const lineWindow = await readLogLineWindow(
-      logPath,
-      stats,
-      limit,
-      rawBeforeLine,
-      beforeByte
-    )
-
-    return c.json({
-      sessionId,
-      displayName: record.displayName,
-      projectPath: record.projectPath,
-      agentType: record.agentType,
-      lastActivityAt: record.lastActivityAt,
-      ...lineWindow,
-    })
-  } catch (error) {
-    const err = error as NodeJS.ErrnoException
-    if (err.code === 'ENOENT') {
-      return c.json({ error: 'Log file not found' }, 404)
-    }
-    return c.json({ error: 'Unable to read log file' }, 500)
-  }
-})
-app.get('/api/directories', async (c) => {
-  const requestedPath = c.req.query('path') ?? '~'
-
-  if (requestedPath.length > MAX_FIELD_LENGTH) {
-    const payload: DirectoryErrorResponse = {
-      error: 'invalid_path',
-      message: 'Path too long',
-    }
-    return c.json(payload, 400)
-  }
-
-  const trimmedPath = requestedPath.trim()
-  if (!trimmedPath) {
-    const payload: DirectoryErrorResponse = {
-      error: 'invalid_path',
-      message: 'Path is required',
-    }
-    return c.json(payload, 400)
-  }
-
-  const start = Date.now()
-  const resolved = resolveProjectPath(trimmedPath)
-
-  let stats: Awaited<ReturnType<typeof fs.stat>>
-  try {
-    stats = await fs.stat(resolved)
-  } catch (error) {
-    const err = error as NodeJS.ErrnoException
-    if (err.code === 'ENOENT' || err.code === 'ENOTDIR') {
-      const payload: DirectoryErrorResponse = {
-        error: 'not_found',
-        message: 'Path does not exist',
-      }
-      return c.json(payload, 404)
-    }
-    if (err.code === 'EACCES' || err.code === 'EPERM') {
-      const payload: DirectoryErrorResponse = {
-        error: 'forbidden',
-        message: 'Permission denied',
-      }
-      return c.json(payload, 403)
-    }
-    const payload: DirectoryErrorResponse = {
-      error: 'internal_error',
-      message: 'Unable to read directory',
-    }
-    return c.json(payload, 500)
-  }
-
-  if (!stats.isDirectory()) {
-    const payload: DirectoryErrorResponse = {
-      error: 'not_found',
-      message: 'Path is not a directory',
-    }
-    return c.json(payload, 404)
-  }
-
-  let directories: DirectoryListing['directories'] = []
-  try {
-    const entries = await fs.readdir(resolved, {
-      withFileTypes: true,
-      encoding: 'utf8',
-    })
-    directories = entries
-      .filter((entry) => entry.isDirectory())
-      .map((entry) => {
-        const name = entry.name.toString()
-        return {
-          name,
-          path: path.join(resolved, name),
-        }
-      })
-      .toSorted((a, b) => {
-        const aDot = a.name.startsWith('.')
-        const bDot = b.name.startsWith('.')
-        if (aDot !== bDot) {
-          return aDot ? -1 : 1
-        }
-        const aLower = a.name.toLowerCase()
-        const bLower = b.name.toLowerCase()
-        if (aLower < bLower) {
-          return -1
-        }
-        if (aLower > bLower) {
-          return 1
-        }
-        return a.name.localeCompare(b.name)
-      })
-  } catch (error) {
-    const err = error as NodeJS.ErrnoException
-    if (err.code === 'EACCES' || err.code === 'EPERM') {
-      const payload: DirectoryErrorResponse = {
-        error: 'forbidden',
-        message: 'Permission denied',
-      }
-      return c.json(payload, 403)
-    }
-    if (err.code === 'ENOENT' || err.code === 'ENOTDIR') {
-      const payload: DirectoryErrorResponse = {
-        error: 'not_found',
-        message: 'Path does not exist',
-      }
-      return c.json(payload, 404)
-    }
-    const payload: DirectoryErrorResponse = {
-      error: 'internal_error',
-      message: 'Unable to list directory',
-    }
-    return c.json(payload, 500)
-  }
-
-  const truncated = directories.length > MAX_DIRECTORY_ENTRIES
-  const limitedDirectories = truncated
-    ? directories.slice(0, MAX_DIRECTORY_ENTRIES)
-    : directories
-
-  const root = path.parse(resolved).root
-  const parent = resolved === root ? null : path.dirname(resolved)
-  const response: DirectoryListing = {
-    path: resolved,
-    parent,
-    directories: limitedDirectories,
-    truncated,
-  }
-
-  const durationMs = Date.now() - start
-  logger.debug('directories_request', {
-    path: resolved,
-    count: limitedDirectories.length,
-    truncated,
-    durationMs,
-  })
-
-  return c.json(response)
-})
-
-app.get('/api/server-info', (c) => {
-  // For 0.0.0.0, detect Tailscale IP for display (already listening on all interfaces).
-  // For localhost, only report if we successfully bound to the Tailscale IP.
-  const tsIp = config.hostname === '0.0.0.0' ? getTailscaleIp() : boundTailscaleIp
-  return c.json({
-    port: config.port,
-    tailscaleIp: tsIp,
-    protocol: tlsEnabled ? 'https' : 'http',
-    // Working directory of the server process; the fallback default project
-    // directory for new sessions.
-    cwd: process.cwd(),
-    // AGENTBOARD_PROJECT_DIR, when set: takes precedence over cwd as the
-    // default project directory. An explicit browser setting still wins.
-    defaultProjectDir: config.defaultProjectDir,
-    // Build version of this server (see ./version), shown in the UI.
-    version: BUILD_VERSION,
-    // Update availability (see ./updates); `target` is null while current.
-    update: updateChecker.getState(),
-  })
-})
-
-// The update verb (see ./updates): verify → download → swap → restart, driven
-// from the discovery state the chip was rendered against. Refusals fail
-// closed with the named error and leave the install unchanged.
-const UPDATE_RESTART_DELAY_MS = 500
-app.post('/api/update/install', async (c) => {
-  const release = updateChecker.getRelease()
-  if (updateChecker.getState().target === null || release === null) {
-    return c.json({ error: 'No update is currently available' }, 409)
-  }
-  let install
-  try {
-    install = await installUpdate({ release })
-  } catch (cause) {
-    const message = cause instanceof Error ? cause.message : String(cause)
-    logger.error('update_install_refused', { message, tag: release.tag })
-    return c.json({ error: message }, 500)
-  }
-  // Respond first: the restart verb may terminate this process (that is its
-  // job), and the client must hear the outcome before the connection drops.
-  // A source run restarts onto the installed release binary, not this
-  // process; under systemd the unit itself is adopted into that install —
-  // see restartAfterInstall.
-  const context = detectRestartContext()
-  const restartTimer = setTimeout(() => {
-    void restartAfterInstall(context, install).catch((cause) => {
-      // The install landed; only the takeover failed. Keep serving the old
-      // build and log loudly — a manual restart picks up the new files.
-      logger.error('update_restart_failed', {
-        message: cause instanceof Error ? cause.message : String(cause),
-        mode: context.mode,
-      })
-    })
-  }, UPDATE_RESTART_DELAY_MS)
-  restartTimer.unref?.()
-  return c.json({ ok: true, restarting: true })
-})
-
+app.route('/api/update', createUpdateInstallRoutes({ updateChecker }))
 app.route('/api/settings', createSettingsRoutes({
   db,
   sessionManager,
@@ -799,166 +506,12 @@ app.route('/api/chat/groups', createTeamGroupRoutes({
   groupProfileCounts: (teamId, groupId) => chatSessionManager.groupProfileCounts(teamId, groupId),
 }))
 
-// Allowed paste-image types; the extension written to /tmp comes from this map,
-// never from client-supplied values. Note Bun's multipart parser derives
-// File.type from the part filename's extension, not the declared blob type.
-const pasteImageExtensionByMime = new Map([
-  ['image/gif', 'gif'],
-  ['image/jpeg', 'jpg'],
-  ['image/png', 'png'],
-  ['image/webp', 'webp'],
-])
-
-const macPasteboardSwiftScript = `
-import AppKit
-import Foundation
-
-let maxBytes = Int(ProcessInfo.processInfo.environment["AGENTBOARD_PASTE_IMAGE_MAX_BYTES"] ?? "") ?? 0
-let imageExtensions: Set<String> = ["png", "jpg", "jpeg", "gif", "webp", "heic", "tif", "tiff"]
-
-func emit(path: String?, isImage: Bool) {
-  let payload: [String: Any?] = ["path": path, "isImage": isImage]
-  let data = try! JSONSerialization.data(withJSONObject: payload.compactMapValues { $0 })
-  print(String(data: data, encoding: .utf8)!)
-}
-
-let pasteboard = NSPasteboard.general
-let items = pasteboard.pasteboardItems ?? []
-
-for item in items {
-  if let fileURLString = item.string(forType: .fileURL),
-     let url = URL(string: fileURLString),
-     url.isFileURL {
-    let path = url.path
-    let lowerExt = url.pathExtension.lowercased()
-    let hasImageType = item.types.contains(.png) || item.types.contains(.tiff)
-    emit(path: path, isImage: hasImageType || imageExtensions.contains(lowerExt))
-    exit(0)
-  }
-}
-
-for item in items {
-  if let data = item.data(forType: .png), data.count > 0, (maxBytes <= 0 || data.count <= maxBytes) {
-    let path = NSTemporaryDirectory() + "agentboard-paste-" + UUID().uuidString + ".png"
-    try data.write(to: URL(fileURLWithPath: path), options: .atomic)
-    emit(path: path, isImage: true)
-    exit(0)
-  }
-}
-
-emit(path: nil, isImage: false)
-`
-
-const MAC_PASTEBOARD_TIMEOUT_MS = 10000
-
-function isImageFilePath(filePath: string): boolean {
-  return /\.(png|jpe?g|gif|webp|heic|tiff?)$/i.test(filePath)
-}
-
 app.route('/api/paste-file', createPasteFileRoutes())
 
-// Image upload endpoint for iOS clipboard paste
-app.post('/api/paste-image', async (c) => {
-  // Early reject before buffering the multipart body. The header is
-  // client-controlled, so image.size below remains the authoritative check.
-  const contentLength = Number(c.req.header('content-length'))
-  if (Number.isFinite(contentLength) && contentLength > config.pasteImageMaxBytes) {
-    return c.json({ error: 'Image too large' }, 413)
-  }
-
-  try {
-    const formData = await c.req.formData()
-    const image = formData.get('image')
-    if (!(image instanceof File)) {
-      return c.json({ error: 'No image provided' }, 400)
-    }
-    if (image.size > config.pasteImageMaxBytes) {
-      return c.json({ error: 'Image too large' }, 413)
-    }
-    const ext = pasteImageExtensionByMime.get(image.type)
-    if (!ext) {
-      return c.json({ error: 'Unsupported image type' }, 415)
-    }
-
-    // Generate unique filename in temp directory
-    const filename = `paste-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`
-    const filepath = `/tmp/${filename}`
-    await Bun.write(filepath, image)
-
-    return c.json({ path: filepath })
-  } catch (error) {
-    return c.json(
-      { error: error instanceof Error ? error.message : 'Upload failed' },
-      500
-    )
-  }
-})
-
-// Get file path from macOS clipboard (for Finder file copies and screenshot apps).
-// Browser paste events can hide AppKit pasteboard types such as public.file-url
-// and public.png, so this endpoint reads NSPasteboard directly.
-app.get('/api/clipboard-file-path', async (c) => {
-  if (process.platform !== 'darwin') {
-    return c.json({ path: null, isImage: false })
-  }
-  try {
-    // Finder file URLs do not need the Swift interpreter. Resolve them first
-    // so cold Swift startup cannot delay ordinary document pastes.
-    const fileProc = Bun.spawn(
-      ['osascript', '-e', 'POSIX path of (the clipboard as «class furl»)'],
-      { stdout: 'pipe', stderr: 'pipe', timeout: MAC_PASTEBOARD_TIMEOUT_MS }
-    )
-    const fileText = await new Response(fileProc.stdout).text()
-    const fileExitCode = await fileProc.exited
-    const filePath = fileText.trim()
-    if (fileExitCode === 0 && filePath.startsWith('/')) {
-      const file = Bun.file(filePath)
-      if (await file.exists()) {
-        c.header('Cache-Control', 'no-store')
-        return c.json({ path: filePath, isImage: isImageFilePath(filePath) })
-      }
-    }
-
-    const proc = Bun.spawn(
-      ['swift', '-e', macPasteboardSwiftScript],
-      {
-        stdout: 'pipe',
-        stderr: 'pipe',
-        timeout: MAC_PASTEBOARD_TIMEOUT_MS,
-        env: {
-          ...process.env,
-          AGENTBOARD_PASTE_IMAGE_MAX_BYTES: String(config.pasteImageMaxBytes),
-        },
-      }
-    )
-    const text = await new Response(proc.stdout).text()
-    const exitCode = await proc.exited
-    if (exitCode === 0) {
-      const payload = JSON.parse(text) as { path?: unknown; isImage?: unknown }
-      const filePath = typeof payload.path === 'string' ? payload.path : null
-      // Verify the file actually exists
-      if (filePath?.startsWith('/')) {
-        const file = Bun.file(filePath)
-        if (await file.exists()) {
-          c.header('Cache-Control', 'no-store')
-          return c.json({ path: filePath, isImage: payload.isImage === true })
-        }
-      }
-    }
-
-    return c.json({ path: null, isImage: false })
-  } catch {
-    return c.json({ path: null, isImage: false })
-  }
-})
+app.route('/api', createPasteRoutes())
 
 const staticDir = process.env.AGENTBOARD_STATIC_DIR || './dist/client'
 app.use('/*', serveStatic({ root: staticDir }))
-
-const tlsEnabled = config.tlsCert && config.tlsKey
-const tlsOptions = tlsEnabled
-  ? { tls: { cert: Bun.file(config.tlsCert), key: Bun.file(config.tlsKey) } }
-  : {}
 
 function serverFetch(req: Request, server: Server<WSData>) {
   const url = new URL(req.url)
@@ -1058,7 +611,6 @@ Bun.serve<WSData>({
 
 // When bound to localhost, also listen on the Tailscale interface if available.
 // This allows remote access over Tailscale without exposing the LAN interface.
-let boundTailscaleIp: string | null = null
 if (config.hostname === '127.0.0.1') {
   const detectedIp = getTailscaleIp()
   if (detectedIp) {
