@@ -28,7 +28,7 @@ tick the checkbox in the same commit.
 
 ## 3. Router unit tests + close-out
 
-- [ ] 3.1 Add `src/client/__tests__/messageRouter.test.ts` dispatching every ServerMessage
+- [x] 3.1 Add `src/client/__tests__/messageRouter.test.ts` dispatching every ServerMessage
   type through the router against store spies (cheap now that handlers are plain
   functions); suite green; commit (`test: dispatch every message type through the protocol router`)
 - [ ] 3.2 Mark S3 done in `docs/refactor-analysis/synthesis.md` (status note with commit
