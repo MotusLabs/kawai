@@ -20,6 +20,7 @@ import { WorktreeStaffing, type SpawnRequest, type SpawnResult } from './staffin
 import { TeamCaps } from './teamCaps'
 import { worktreeRootOf } from './worktreeRoots'
 import { LimitEventStore } from './routing/limitEvents'
+import { RuleRegistry, type RuleLoadReport } from './routing/ruleLoader'
 import type { Database } from 'bun:sqlite'
 
 export class SessionMailbox {
@@ -28,6 +29,7 @@ export class SessionMailbox {
   readonly dispatcher: MailDispatcher
   readonly staffing: WorktreeStaffing
   readonly limits: LimitEventStore
+  readonly rules: RuleRegistry
   private readonly catalogs = new Map<string, GroupCatalog>()
   private releaseSubscription?: () => void
 
@@ -49,10 +51,16 @@ export class SessionMailbox {
     transcriptFor: (id: string) => string | null
     homeDir?: string
     onChange?: (team: string, message?: TeamMessage) => void
+    /** Routing rules finished loading (start or reload). */
+    onRulesLoaded?: (report: RuleLoadReport) => void
     onError: (error: unknown) => void
   }) {
     const store = new MailboxStore(db, { recipientExists: id => !!options.getRecord(id) })
     this.limits = new LimitEventStore(db)
+    this.rules = new RuleRegistry({
+      ...(options.homeDir ? { homeDir: options.homeDir } : {}),
+      onLoaded: report => options.onRulesLoaded?.(report),
+    })
     const taskStore = new TaskStore(db, store)
     this.tasks = new TaskService(taskStore, { getSession: options.getRecord, homeDir: options.homeDir })
     this.mailbox = new TeamMailbox(store, {
@@ -128,6 +136,8 @@ export class SessionMailbox {
       this.dispatcher.notify()
     })
     this.dispatcher.notify()
+    // Rules load once at start; afterwards only an explicit reload changes them.
+    void this.rules.reload().then(() => this.dispatcher.notify(), this.options.onError)
   }
 
   private settle(mail: TeamMessage) {
@@ -144,5 +154,5 @@ export class SessionMailbox {
     }
   }
 
-  close() { this.dispatcher.close(); this.releaseSubscription?.() }
+  close() { this.dispatcher.close(); this.releaseSubscription?.(); this.rules.close() }
 }

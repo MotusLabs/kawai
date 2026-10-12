@@ -22,9 +22,9 @@
 
 ## 4. Rule runtime
 
-- [ ] 4.1 Implement the loader (`routing/ruleLoader.ts`) reading only `~/.kawai/routing/<group>.ts` (never project `.kawai/`): a bootstrap Worker with `env: {}` imports the module and reports `default.env`, then a serving Worker starts with exactly those variables; per-rule load results (ok / error text / file mtime) are kept; verify with tests using temp rule files for a valid rule, a syntax error, a missing `route`, and a project-level file that is never loaded
-- [ ] 4.2 Implement the Worker host call path: structured-clone `RouteContext` in, decision out, timeout from `timeoutMs` (default 3s, clamped to 10s), Worker terminated and restarted after repeated timeouts, module state kept between calls; verify with tests for a throwing rule, a hanging rule, an async rule, and that an undeclared env variable is absent while a declared one is present
-- [ ] 4.3 Load rules at server start and expose `reload()` that rebuilds all Workers and returns per-rule results including which files changed since the previous load; no file watching; verify a test that an edited file has no effect until `reload()`
+- [x] 4.1 Implement the loader (`routing/ruleLoader.ts`) reading only `~/.kawai/routing/<group>.ts` (never project `.kawai/`): a bootstrap Worker with `env: {}` imports the module and reports `default.env`, then a serving Worker starts with exactly those variables; per-rule load results (ok / error text / file mtime) are kept; verify with tests using temp rule files for a valid rule, a syntax error, a missing `route`, and a project-level file that is never loaded
+- [x] 4.2 Implement the Worker host call path: structured-clone `RouteContext` in, decision out, timeout from `timeoutMs` (default 3s, clamped to 10s), Worker terminated and restarted after repeated timeouts, module state kept between calls; verify with tests for a throwing rule, a hanging rule, an async rule, and that an undeclared env variable is absent while a declared one is present
+- [x] 4.3 Load rules at server start and expose `reload()` that rebuilds all Workers and returns per-rule results including which files changed since the previous load; no file watching; verify a test that an edited file has no effect until `reload()`
 
 ## 5. Dispatcher integration
 
