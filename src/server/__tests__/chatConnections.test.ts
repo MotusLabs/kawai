@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from 'bun:test'
-import type { ChatContextUsage, ChatEvent, ChatWorker } from '../../shared/chat'
+import type { ChatContextUsage, ChatEvent, ChatNotification, ChatWorker } from '../../shared/chat'
 import type { ServerMessage } from '../../shared/types'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -14,7 +14,7 @@ function harness(wireLogs?: ChatWireLogs) {
     type: 'chat-snapshot', sessionId: 'chat-1', profileId: 'default', events: [],
     pendingRequests: [{ kind: 'approval', requestId: 'approval-1', tool: 'Bash', input: {}, at: 'now' }],
     status: 'permission', throughSequence: 0,
-    commands: { status: 'unavailable', commands: [] }, activity: null, contextUsage: null, usage: null, workers: [],
+    commands: { status: 'unavailable', commands: [] }, activity: null, contextUsage: null, usage: null, workers: [], notifications: [],
   }
   let pending = true
   const manager = {
@@ -48,6 +48,10 @@ function harness(wireLogs?: ChatWireLogs) {
       if (policy !== 'manual' && policy !== 'auto') {
         return { ok: false, error: `Unsupported approval policy ${String(policy)}` }
       }
+      return { ok: true }
+    },
+    dismissNotification: (...args: unknown[]) => {
+      calls.push(['dismissNotification', ...args])
       return { ok: true }
     },
   } as unknown as ChatSessionManager
@@ -230,6 +234,17 @@ describe('chat WebSocket subscriptions', () => {
     expect(h.calls).toEqual([])
   })
 
+  test('notification dismissal routes to the manager; unknown sessions are refused', async () => {
+    const h = harness()
+    await h.connections.handle(h.connection, { type: 'chat-dismiss-notification', sessionId: 'chat-1', key: 'model-context-window' })
+    expect(h.calls).toEqual([['dismissNotification', 'chat-1', 'model-context-window']])
+    expect(h.messages).toEqual([])
+    // Unknown sessions fail before reaching the manager.
+    await h.connections.handle(h.connection, { type: 'chat-dismiss-notification', sessionId: 'missing', key: 'k' })
+    expect(h.messages).toEqual([{ type: 'error', message: 'Unknown chat session missing' }])
+    expect(h.calls).toHaveLength(1)
+  })
+
   test('archive and restore route to the manager; failures echo an error', async () => {
     const h = harness()
     await h.connections.handle(h.connection, { type: 'chat-archive', sessionId: 'chat-1' })
@@ -363,6 +378,39 @@ describe('chat WebSocket subscriptions', () => {
     await h.connections.handle(h.connection, { type: 'chat-detach', sessionId: 'chat-1' })
     await new Promise(resolve => setTimeout(resolve, 0))
     expect(h.messages.filter(message => message.type === 'chat-usage')).toHaveLength(1)
+  })
+
+  test('notifications coalesce to the latest list and replace, never merge', async () => {
+    const h = harness()
+    await h.connections.handle(h.connection, { type: 'chat-attach', sessionId: 'chat-1' })
+    const notice = (key: string, text: string): ChatNotification => ({
+      key,
+      source: 'agent',
+      severity: 'warning',
+      priority: 'high',
+      text,
+      receivedAt: '2026-10-12T00:00:00.000Z',
+    })
+    h.connections.publishNotifications('chat-1', [notice('a', 'one')])
+    h.connections.publishNotifications('chat-1', [notice('a', 'two'), notice('b', 'three')])
+    // A list for a session nobody subscribes to goes nowhere.
+    h.connections.publishNotifications('chat-3', [notice('c', 'orphan')])
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(h.messages.slice(1)).toEqual([
+      {
+        type: 'chat-notifications',
+        sessionId: 'chat-1',
+        notifications: [notice('a', 'two'), notice('b', 'three')],
+      },
+    ])
+    // The subscribed-session scope is live for the recheck timer.
+    expect(h.connections.subscribedSessionIds()).toEqual(new Set(['chat-1']))
+    // Detach stops the flow for that connection.
+    await h.connections.handle(h.connection, { type: 'chat-detach', sessionId: 'chat-1' })
+    h.connections.publishNotifications('chat-1', [notice('a', 'after')])
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(h.messages).toHaveLength(2)
+    expect(h.connections.subscribedSessionIds()).toEqual(new Set())
   })
 })
 

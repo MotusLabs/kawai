@@ -11,7 +11,7 @@ import { useChatStore } from '../stores/chatStore'
 import { toastManager } from '../components/Toast'
 import { notifyMailboxDeadLetter } from '../utils/teamMailboxNotification'
 
-afterEach(() => { useTeamMailboxStore.setState({ views: {} }); useChatStore.setState({ sessions: {} }) })
+afterEach(() => { useTeamMailboxStore.setState({ views: {} }); useChatStore.setState({ sessions: {}, closedAccountNotices: {} }) })
 const peer: ChatEvent = { type: 'peer_message', id: 'p1', sequence: 1, at: 'now', turnId: 'turn', messageId: 'mail',
   senderSession: 'lead', senderGroup: 'leads', priority: 'urgent', originPath: '/repo/worktree', tags: ['review', 'review'],
   threadId: 'thread', body: 'Review this change', possibleDuplicate: true }
@@ -26,7 +26,7 @@ test('peer row is distinct and restored by reconnect snapshot', () => {
   const events: ChatEvent[] = [{ type: 'user_message', id: 'u1', sequence: 0, at: 'now', turnId: 't', text: 'Human' }, peer]
   useChatStore.getState().snapshot({ type: 'chat-snapshot', sessionId: 'dev', profileId: 'default', events,
     pendingRequests: [], status: 'waiting', throughSequence: 1, commands: { status: 'unavailable', commands: [] },
-    activity: null, contextUsage: null, usage: null, workers: [] })
+    activity: null, contextUsage: null, usage: null, workers: [], notifications: [] })
   const renderer = TestRenderer.create(<ChatMessages events={useChatStore.getState().sessions.dev!.events} />)
   const row = renderer.root.findByProps({ 'data-chat-role': 'peer' })
   expect(row.props['data-chat-role']).toBe('peer')

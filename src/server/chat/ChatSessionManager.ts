@@ -5,8 +5,12 @@
 // immediate sdkSessionId capture so a restart can resume the same agent
 // conversation, the current in-flight-turn activity (phase plus start
 // time) surfaced through getSnapshot and the onActivity broadcast sink,
-// and the spawned-worker roster (rows plus outcomes) surfaced the same way
-// through onWorkers and recovered from a sidecar on restart. A
+// the spawned-worker roster (rows plus outcomes) surfaced the same way
+// through onWorkers and recovered from a sidecar on restart, and the
+// notification strip's two sources (notification strip design D4/D5): agent
+// notices held per session with same-key replacement and timeout expiry,
+// merged ahead of the profile's account notice and surfaced through
+// getSnapshot and the onNotifications broadcast sink. A
 // live session's transcript is tailed for the agent's generated title rows,
 // which replace any non-user-set name (chat-session-naming design D4). The
 // SDK import stays dynamic (injected as a queryFactory in tests) so a broken
@@ -21,6 +25,8 @@ import type {
   ChatCommandState,
   ChatContextUsage,
   ChatEvent,
+  ChatNotification,
+  ChatNotificationPriority,
   ChatPendingRequest,
   ChatQuestionAnswer,
   ChatUsageReport,
@@ -44,7 +50,7 @@ import {
   ensureClaudeExecutable,
   type ClaudeExecutableCheck,
 } from './claudeExecutable'
-import type { ChatProviderEnv } from './chatProviderEnv'
+import { effectiveChatEnv, type ChatProviderEnv } from './chatProviderEnv'
 import type { ChatWireLogs } from './ChatWireLogs'
 import type { ChatWorkerStore } from './chatWorkerStore'
 import {
@@ -56,6 +62,7 @@ import {
 } from './ClaudeProfiles'
 import { logger } from '../logger'
 import { probeSdkAvailability } from './sdkAvailability'
+import { AccountNoticeStore, credentialsPathFor } from './accountNotices'
 import { UsageLimitStore } from './usageLimits'
 import { readWorkerTranscript } from './chatWorkerTranscript'
 import { loadTeamGroups } from '../team/teamGroups'
@@ -122,6 +129,13 @@ export interface ChatSessionManagerOptions {
    * ephemeral in transit, persisted through the sidecar (design D6).
    */
   onWorkers?: (sessionId: string, workers: ChatWorker[]) => void
+  /**
+   * Notification sink (notification strip design D5): the session's full
+   * merged list (account notice first, then agent notices, sorted by
+   * priority and newest) whenever either source changes for it. Wired to the
+   * WS broadcast in index.ts; notices are ephemeral and never persisted.
+   */
+  onNotifications?: (sessionId: string, notifications: ChatNotification[]) => void
   /** Sidecar store for restart recovery of worker outcomes (design D6). */
   workerStore?: ChatWorkerStore
   /** Injected in tests; production resolves the SDK via dynamic import. */
@@ -204,6 +218,21 @@ function sdkLoadError(error: unknown): string {
   )
 }
 
+/** Strip display order (notification strip design D5): higher first. */
+const NOTICE_PRIORITY_RANK: Record<ChatNotificationPriority, number> = {
+  immediate: 3,
+  high: 2,
+  medium: 1,
+  low: 0,
+}
+
+/** Priority first (immediate highest), then newest arrival (design D5). */
+function compareNotices(a: ChatNotification, b: ChatNotification): number {
+  const byPriority = NOTICE_PRIORITY_RANK[b.priority] - NOTICE_PRIORITY_RANK[a.priority]
+  if (byPriority !== 0) return byPriority
+  return Date.parse(b.receivedAt) - Date.parse(a.receivedAt)
+}
+
 export class ChatSessionManager {
   private readonly options: ChatSessionManagerOptions
   private readonly records = new Map<string, ChatSessionRecord>()
@@ -248,6 +277,36 @@ export class ChatSessionManager {
    * memory only (usage bar design D3): a restart begins with none.
    */
   private readonly usageLimits = new UsageLimitStore()
+  /**
+   * Latest login-expiry notice per credentials path (notification strip
+   * design D2), in memory only: a restart begins with none until a check
+   * runs. Keyed by path, not profile id, so profiles sharing ~/.claude share
+   * one check while a profile pointing elsewhere gets its own file.
+   */
+  private readonly accountNotices = new AccountNoticeStore()
+  /**
+   * Credentials path each session's account notice is computed from
+   * (notification strip design D2): resolved from the session's effective
+   * launch environment on attach and agent start; null when the environment
+   * suppresses the stored-login check or the profile is unknown.
+   */
+  private readonly sessionCredentials = new Map<string, string | null>()
+  /**
+   * Active agent notices per session, by key (notification strip design D4):
+   * a newer frame with the same key replaces its entry. Cleared whole on
+   * archive, kill, restart, and shutdown — the notices die with the process
+   * that emitted them.
+   */
+  private readonly agentNotices = new Map<string, Map<string, ChatNotification>>()
+  /**
+   * Pending timeout_ms expiry timers per session and notice key (design D4):
+   * each removes only the entry it was armed for, and only if that entry is
+   * still the same instance it was armed against.
+   */
+  private readonly agentNoticeTimers = new Map<
+    string,
+    Map<string, ReturnType<typeof setTimeout>>
+  >()
   /**
    * Transcript title tails per live session (chat-session-naming design D4):
    * a handle is either an armed watcher or a pending locate retry, so exactly
@@ -307,6 +366,10 @@ export class ChatSessionManager {
   /** Synchronous capture: no driver callback can interleave with history loading. */
   getSnapshot(sessionId: string): Extract<ServerMessage, { type: 'chat-snapshot' }> | null {
     if (!this.records.has(sessionId)) return null
+    // Attach (live or archived) is one of the account-notice check points
+    // (notification strip design D3): resolve the session's credentials path
+    // and read it before the snapshot freezes the notice list.
+    this.refreshAccountNotice(sessionId)
     this.captureHistory(sessionId)
     const live = this.liveEvents.get(sessionId) ?? []
     const activity = this.getActivity(sessionId)
@@ -329,6 +392,9 @@ export class ChatSessionManager {
       // The spawned-worker roster (workers design D2); live entries hold the
       // session at working, settled ones carry their persisted outcomes.
       workers: this.getWorkers(sessionId),
+      // The notification strip's merged list (design D5): account notice
+      // first, then agent notices, sorted by priority and newest.
+      notifications: this.notificationsOf(sessionId),
     }
   }
 
@@ -363,6 +429,152 @@ export class ChatSessionManager {
       this.records.get(sessionId)?.sdkSessionId ?? null,
       workerId
     )
+  }
+
+  // ---------------------------------------------------------------- notifications
+
+  /**
+   * The session's merged notice list (notification strip design D5): its
+   * profile's account notice followed by its own agent notices, the whole
+   * list sorted by priority and newest — a stable sort keeps the account
+   * notice ahead of same-priority agent notices.
+   */
+  private notificationsOf(sessionId: string): ChatNotification[] {
+    const credentials = this.sessionCredentials.get(sessionId)
+    const account = credentials ? this.accountNotices.get(credentials) : null
+    const agents = [...(this.agentNotices.get(sessionId)?.values() ?? [])]
+    return [account, ...agents]
+      .filter((notice): notice is ChatNotification => notice !== null)
+      .sort(compareNotices)
+  }
+
+  /** Push the session's current merged list to the notification sink. */
+  private emitNotifications(sessionId: string): void {
+    if (!this.records.has(sessionId)) return
+    this.options.onNotifications?.(sessionId, this.notificationsOf(sessionId))
+  }
+
+  /**
+   * Resolve a session's credentials path from its effective launch
+   * environment and re-check the stored login (notification strip design
+   * D2/D3). An unresolvable profile (launchFor throws) maps to null: no
+   * notice, never an error — snapshots must not fail on a bad profile.
+   */
+  private refreshAccountNotice(sessionId: string): void {
+    const record = this.records.get(sessionId)
+    if (!record) return
+    let credentialsPath: string | null = null
+    try {
+      credentialsPath = credentialsPathFor(
+        this.launchEnvOf(record.claudeProfileId, record.projectPath)
+      )
+    } catch {
+      credentialsPath = null
+    }
+    this.sessionCredentials.set(sessionId, credentialsPath)
+    if (credentialsPath) this.accountNotices.check(credentialsPath)
+  }
+
+  /**
+   * Re-check account notices for the given sessions' credentials paths (the
+   * slow-timer check point of design D3). Change-only: unchanged results
+   * publish nothing, so an idle timer is a handful of file reads.
+   */
+  recheckAccountNotices(sessionIds: Iterable<string>): void {
+    for (const sessionId of sessionIds) {
+      if (this.records.has(sessionId)) this.refreshAccountNotice(sessionId)
+    }
+  }
+
+  /**
+   * Hold an agent-emitted notice (notification strip design D4): same-key
+   * replacement by the newer instance, an optional timeout_ms expiry, and a
+   * fan-out of the merged list. One session's notices never leak into
+   * another — the map is keyed by the emitting session.
+   */
+  private handleDriverNotification(
+    sessionId: string,
+    notification: ChatNotification,
+    timeoutMs?: number
+  ): void {
+    if (!this.records.has(sessionId)) return
+    const notices = this.agentNotices.get(sessionId) ?? new Map<string, ChatNotification>()
+    notices.set(notification.key, notification)
+    this.agentNotices.set(sessionId, notices)
+    this.armNoticeTimer(sessionId, notification, timeoutMs)
+    this.emitNotifications(sessionId)
+  }
+
+  /**
+   * (Re)arm a notice's expiry timer: a replacement clears the old timer, and
+   * only arms a new one when the frame carried a usable timeout. The armed
+   * timer removes its entry only if that entry is still the same instance
+   * (compared by receivedAt) — a replacement must not be expired by its
+   * predecessor's clock.
+   */
+  private armNoticeTimer(
+    sessionId: string,
+    notification: ChatNotification,
+    timeoutMs?: number
+  ): void {
+    const timers =
+      this.agentNoticeTimers.get(sessionId) ?? new Map<string, ReturnType<typeof setTimeout>>()
+    const existing = timers.get(notification.key)
+    if (existing) clearTimeout(existing)
+    if (typeof timeoutMs !== 'number' || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+      timers.delete(notification.key)
+    } else {
+      const timer = setTimeout(() => {
+        timers.delete(notification.key)
+        const notices = this.agentNotices.get(sessionId)
+        const current = notices?.get(notification.key)
+        if (current && current.receivedAt === notification.receivedAt) {
+          notices!.delete(notification.key)
+          this.emitNotifications(sessionId)
+        }
+      }, timeoutMs)
+      timer.unref?.()
+      timers.set(notification.key, timer)
+    }
+    this.agentNoticeTimers.set(sessionId, timers)
+  }
+
+  /**
+   * Drop every agent notice and timer of a session (design D4): the notices
+   * die with the agent process that emitted them — archive, kill, restart,
+   * shutdown, and an unexpected exit (the driver's onProcessEnd, whose
+   * internal respawn would otherwise inherit them). `emit` pushes the now
+   * account-only list to subscribers (archive, unexpected exit); kill and
+   * shutdown have no one left to tell.
+   */
+  private clearAgentNotices(sessionId: string, options?: { emit?: boolean }): void {
+    for (const timer of this.agentNoticeTimers.get(sessionId)?.values() ?? []) {
+      clearTimeout(timer)
+    }
+    this.agentNoticeTimers.delete(sessionId)
+    const had = this.agentNotices.delete(sessionId)
+    if (had && options?.emit) this.emitNotifications(sessionId)
+  }
+
+  /**
+   * Close an agent notice for its session (notification strip design D6):
+   * removes the key everywhere (the push reaches every attached client) and
+   * pushes the new list. Unknown keys — and account keys, which close
+   * client-side only — are a no-op.
+   */
+  dismissNotification(sessionId: string, key: string): ChatActionResult {
+    if (!this.records.has(sessionId)) {
+      return { ok: false, error: `Unknown chat session ${sessionId}` }
+    }
+    const notices = this.agentNotices.get(sessionId)
+    if (!notices?.has(key)) return { ok: true }
+    const timers = this.agentNoticeTimers.get(sessionId)
+    const timer = timers?.get(key)
+    if (timer) clearTimeout(timer)
+    timers?.delete(key)
+    notices.delete(key)
+    this.emitNotifications(sessionId)
+    return { ok: true }
   }
 
   private captureHistory(sessionId: string): void {
@@ -403,6 +615,13 @@ export class ChatSessionManager {
     this.usageLimits.subscribe((profileId, report) =>
       this.options.onUsage?.(profileId, report)
     )
+    // An account-notice change fans out to every session mapped to that
+    // credentials path (notification strip design D5).
+    this.accountNotices.subscribe((credentialsPath) => {
+      for (const [sessionId, path] of this.sessionCredentials) {
+        if (path === credentialsPath) this.emitNotifications(sessionId)
+      }
+    })
     this.teamMail = new SessionMailbox(options.db.db, {
       teams: this.teams, records: () => this.records.values(), getRecord: id => this.records.get(id),
       getDriver: id => this.drivers.get(id), homeDir: options.profileCatalogHome,
@@ -732,6 +951,9 @@ export class ChatSessionManager {
     // The archived chat shows no activity row (design D5): any in-flight
     // phase ended with the driver above.
     this.clearActivity(sessionId)
+    // Agent notices died with the process (notification strip design D4);
+    // the archived chat keeps only its profile's account notice.
+    this.clearAgentNotices(sessionId, { emit: true })
     // The archived header shows the stored reading, frozen with the agent:
     // write the freshest in-memory value, then forget the live slot so
     // snapshots fall back to the column.
@@ -871,6 +1093,8 @@ export class ChatSessionManager {
     this.activities.delete(sessionId)
     this.contextReadings.delete(sessionId)
     this.workerRows.delete(sessionId)
+    this.clearAgentNotices(sessionId)
+    this.sessionCredentials.delete(sessionId)
     this.teams.forget(sessionId)
     this.options.registry.removeChatSession(sessionId)
     this.options.db.deleteChatSession(sessionId)
@@ -889,6 +1113,12 @@ export class ChatSessionManager {
     this.drivers.clear()
     this.driverPromises.clear()
     this.activities.clear()
+    // Notices die with their processes (notification strip design D4); the
+    // account store holds nothing per session either, so nothing survives.
+    for (const sessionId of this.agentNotices.keys()) {
+      this.clearAgentNotices(sessionId)
+    }
+    this.sessionCredentials.clear()
     // Shutdown settles like kill, but the rows survive it: write each live
     // reading so a restart restores the last one seen (design D5).
     for (const [sessionId] of this.contextReadings) {
@@ -1120,6 +1350,9 @@ export class ChatSessionManager {
     const launch = this.launchFor(record.claudeProfileId, record.projectPath)
     if (launch.executable) verifyProfileExecutable(record.claudeProfileId ?? 'default', launch.executable)
     if (!this.authOk(record.claudeProfileId, record.projectPath)) throw new Error(chatAuthErrorMessage())
+    // Agent start is one of the account-notice check points (notification
+    // strip design D3).
+    this.refreshAccountNotice(record.sessionId)
     const promise = (async () => {
       // A profile executable replaces the standard binary (already verified
       // above); otherwise every spawn runs the checked Claude Code install.
@@ -1164,6 +1397,12 @@ export class ChatSessionManager {
           this.options.onCommandState?.(record.sessionId, state),
         onActivity: (activity) =>
           this.handleDriverActivity(record.sessionId, activity),
+        onNotification: (notification, timeoutMs) =>
+          this.handleDriverNotification(record.sessionId, notification, timeoutMs),
+        // An unexpected exit ends the process but not the session: the same
+        // driver respawns internally on the next send/start, so the notices
+        // die here (design D4) instead of surviving into the replacement.
+        onProcessEnd: () => this.clearAgentNotices(record.sessionId, { emit: true }),
         onWorkers: (workers) =>
           this.handleDriverWorkers(record.sessionId, workers),
         onContextUsage: (usage, opts) =>
@@ -1203,6 +1442,9 @@ export class ChatSessionManager {
         driver.kill()
         return null
       }
+      // A fresh process starts with a clean notice slate (design D4): any
+      // notices left from the crashed predecessor it replaces are gone.
+      this.clearAgentNotices(record.sessionId, { emit: true })
       this.drivers.set(record.sessionId, driver)
       // A restored conversation already has a transcript: its title tail
       // starts with the (re)spawn, before any attach or send.
@@ -1288,10 +1530,33 @@ export class ChatSessionManager {
   private authOk(profileId: string = 'default', projectPath?: string): boolean {
     return this.options.authCheck
       ? this.options.authCheck()
-      : hasClaudeAuth(Object.fromEntries(
-        Object.entries(this.launchFor(profileId, projectPath).env ?? {})
-          .filter((entry): entry is [string, string] => entry[1] !== undefined)
-      ))
+      : hasClaudeAuth(this.launchEnvOf(profileId, projectPath))
+  }
+
+  /**
+   * The effective environment a profile's spawn receives, inheritance
+   * expanded: an unset SDK `env` means the child inherits process.env, so the
+   * merged view is always process.env plus whatever the launch resolved.
+   * Shared by the auth gate and the account-notice credentials check, so the
+   * two can never disagree about which login applies. Undefined values
+   * (process.env holes) are dropped for the ChatProviderEnv-shaped consumers.
+   */
+  private launchEnvOf(
+    profileId: string | undefined,
+    projectPath?: string
+  ): Record<string, string> {
+    const launch = this.launchFor(profileId, projectPath)
+    const overrides = Object.fromEntries(
+      Object.entries(launch.env ?? {}).filter(
+        (entry): entry is [string, string] => entry[1] !== undefined
+      )
+    )
+    const merged = effectiveChatEnv(overrides)
+    return Object.fromEntries(
+      Object.entries(merged).filter(
+        (entry): entry is [string, string] => entry[1] !== undefined
+      )
+    )
   }
 
   /**

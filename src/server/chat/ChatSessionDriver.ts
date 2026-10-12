@@ -29,6 +29,9 @@ import type {
   ChatCommandState,
   ChatContextUsage,
   ChatEvent,
+  ChatNotification,
+  ChatNotificationPriority,
+  ChatNotificationSeverity,
   ChatPendingRequest,
   ChatPeerMessage,
   ChatQuestion,
@@ -150,6 +153,25 @@ export interface ChatSessionDriverOptions {
    * sequenced, buffered, or replayed like events.
    */
   onActivity?: (activity: ChatActivity | null) => void
+  /**
+   * An agent-emitted notification (notification strip design D4): the mapped
+   * ChatNotification for each `system`/`notification` frame, with the frame's
+   * `timeout_ms` when it carried one. Ephemeral like activity: the manager
+   * holds it per session, never the event stream.
+   */
+  onNotification?: (
+    notification: ChatNotification,
+    timeoutMs?: number
+  ) => void
+  /**
+   * The agent process ended on its own (notification strip design D4): an
+   * unexpected exit or stream failure — not kill/shutdown, whose callers
+   * already tear the session state down. Fired once, from the same
+   * markDead that settles workers; the notices this process emitted die
+   * with it, because the driver object survives and respawns internally
+   * (no new construction would otherwise clear them).
+   */
+  onProcessEnd?: () => void
   /**
    * The spawned-worker roster (workers design D2): the full projection,
    * called whenever it changes — never per elapsed tick. Ephemeral like
@@ -703,6 +725,10 @@ export class ChatSessionDriver {
     this.feedWorkers({ type: 'process_end' })
     this.feedActivity({ type: 'turn_end' })
     this.cancelAllRequests('killed')
+    // Notification strip design D4: the notices this process emitted die
+    // with it — the same driver object respawns on the next send/start, so
+    // the manager must hear the process ended here.
+    this.options.onProcessEnd?.()
     this.emit({ type: 'error', message: reason })
     this.commands.markUnavailable()
     this.refreshStatus()
@@ -944,6 +970,26 @@ export class ChatSessionDriver {
       const turnId = this.activeTurnId
       if (turnId) {
         this.emit({ type: 'command_output', turnId, text: message.content })
+      }
+      return
+    }
+    if (message.subtype === 'notification') {
+      // A CLI-style notice (notification strip design D4): forwarded without
+      // a per-key allowlist, so new CLI notices appear without Kawai changes.
+      // Frames without a key or text are malformed and ignored; the wire
+      // capture still records the raw frame for the debug view.
+      if (typeof message.key === 'string' && message.key !== '' && typeof message.text === 'string' && message.text !== '') {
+        this.options.onNotification?.(
+          {
+            key: message.key,
+            source: 'agent',
+            severity: notificationSeverity(message.color),
+            priority: notificationPriority(message.priority),
+            text: message.text,
+            receivedAt: new Date().toISOString(),
+          },
+          typeof message.timeout_ms === 'number' ? message.timeout_ms : undefined
+        )
       }
       return
     }
@@ -1266,6 +1312,21 @@ function isSubagentContentFrame(frame: object): boolean {
 /** The tools that spawn a worker (design D1): both names, current and old. */
 function isAgentSpawnTool(toolName: string): boolean {
   return toolName === 'Agent' || toolName === 'Task'
+}
+
+/** The agent's color vocabulary → strip severity; anything else reads as info. */
+function notificationSeverity(color: unknown): ChatNotificationSeverity {
+  if (color === 'warning') return 'warning'
+  if (color === 'error') return 'error'
+  return 'info'
+}
+
+/** A notification frame's priority, normalized; unknown values read as low. */
+function notificationPriority(priority: unknown): ChatNotificationPriority {
+  if (priority === 'immediate' || priority === 'high' || priority === 'medium' || priority === 'low') {
+    return priority
+  }
+  return 'low'
 }
 
 function validateAnswers(

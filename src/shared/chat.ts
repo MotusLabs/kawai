@@ -294,6 +294,40 @@ export interface ChatUsageReport {
 
 export type ChatUsageSource = 'push' | 'report' | 'pull'
 
+/** Where a chat notification came from. */
+export type ChatNotificationSource = 'account' | 'agent'
+
+/** How strongly a notification styles itself in the strip. */
+export type ChatNotificationSeverity = 'info' | 'warning' | 'error'
+
+/** The agent's own urgency ranking; higher sorts first in the strip. */
+export type ChatNotificationPriority = 'low' | 'medium' | 'high' | 'immediate'
+
+/**
+ * One CLI-style notice shown in the chat notification strip: either an
+ * account-level warning the server computes from the profile's stored login
+ * (login expiry), or a notice the agent emitted on the SDK notification
+ * channel. Ephemeral by design, like `ChatActivity` and `ChatUsageReport`:
+ * held in server memory only, carried by the snapshot and the additive
+ * `chat-notifications` push, never a `ChatEvent` — never sequenced,
+ * persisted, or replayed — and never part of the session-list status.
+ */
+export interface ChatNotification {
+  /**
+   * Stable within a session: a newer notice with the same key replaces the
+   * one it supersedes, and closing an agent notice names its key.
+   */
+  key: string
+  source: ChatNotificationSource
+  severity: ChatNotificationSeverity
+  priority: ChatNotificationPriority
+  text: string
+  /** Dimmed follow-up line (e.g. how to renew); omitted when there is none. */
+  hint?: string
+  /** ISO timestamp of when the notice was produced. */
+  receivedAt: string
+}
+
 /** Lifecycle outcome of an agent the chat session spawned (workers design D2). */
 export type ChatWorkerStatus = 'running' | 'completed' | 'failed' | 'stopped'
 
