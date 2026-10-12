@@ -10,7 +10,7 @@ import path from 'node:path'
 import fs from 'node:fs/promises'
 import { Hono, type Context } from 'hono'
 import { serveStatic } from 'hono/bun'
-import { config, isValidHostname } from './config'
+import { config } from './config'
 import { createPasteFileRoutes } from './routes/pasteFile'
 import { createChatProviderEnvStore } from './routes/chatProviderEnv'
 import { ensureTmux } from './prerequisites'
@@ -48,8 +48,6 @@ import {
   type TerminalErrorCode,
   type DirectoryListing,
   type DirectoryErrorResponse,
-  type AutoStartAgent,
-  type HostStatus,
   type Session,
   type TerminalSession,
 } from '../shared/types'
@@ -75,10 +73,6 @@ import { createChangeWorktree } from './git/createChangeWorktree'
 import { WorkspaceCoordinator } from './workspace/workspaceCoordinator'
 import { WorkspaceWatcher, createNodeWatcherHost } from './workspace/workspaceWatcher'
 import { composeAutoStartCommand } from './applyCommand'
-import { RemoteSessionPoller, splitSshOptions, buildRemoteSessionId } from './remoteSessions'
-import { normalizePaneStartCommand } from './agentDetection'
-import { generateSessionName } from './nameGenerator'
-import { shellQuote } from './shellQuote'
 import { readLogLineWindow } from './logContent'
 import { SessionRefreshLoop } from './refresh/SessionRefreshLoop'
 import type { WSData } from './ws/wsTypes'
@@ -88,8 +82,9 @@ import { handleSessionHibernate } from './sessions/hibernate'
 import { handleMoveToHistory } from './sessions/moveToHistory'
 import { handleSessionWake } from './sessions/wake'
 import type { SessionOpsContext } from './sessions/context'
-import { stampLocalSession, stampLocalSessions } from './sessionStamp'
+import { stampLocalSession } from './sessionStamp'
 import { readTmuxCapture } from './tmuxCapture'
+import { RemoteSessionService } from './remote/RemoteSessionService'
 import { SshTerminalProxy } from './terminal/SshTerminalProxy'
 import { normalizeCapturedHistory } from './terminal/tmuxText'
 import {
@@ -340,140 +335,9 @@ interface TmuxBufferSummary {
   key: string
 }
 
-const localHostLabel = config.hostLabel
-
-// Remote session create is optimistic (we broadcast `session-created` immediately),
-// but the remote poller snapshot can lag behind. Protect newly-created remote ids
-// so refresh cycles don't drop them until the poller catches up.
-const PROTECTED_REMOTE_SESSION_TTL_MS = 30_000
-const protectedRemoteSessionIds = new Map<string, number>()
-
-// Remote control operations (kill/rename) are also optimistic, but refresh cycles rebuild
-// remote sessions from the poller snapshot. Track short-lived overrides so stale snapshots
-// don't resurrect killed sessions or revert renames.
-const REMOTE_SESSION_MUTATION_TTL_MS = 30_000
-const remoteSessionTombstones = new Map<string, number>()
-const remoteSessionNameOverrides = new Map<string, { name: string; setAt: number }>()
-
-
-function mergeRemoteSessions(sessions: Session[]): Session[] {
-  const remoteSessions = remotePoller?.getSessions() ?? []
-  const needsMerge =
-    protectedRemoteSessionIds.size > 0 ||
-    remoteSessionTombstones.size > 0 ||
-    remoteSessionNameOverrides.size > 0
-  if (!needsMerge) {
-    return [...stampLocalSessions(sessions), ...remoteSessions]
-  }
-
-  const now = Date.now()
-  const remoteIds = new Set(remoteSessions.map((session) => session.id))
-  const remoteById = new Map(remoteSessions.map((session) => [session.id, session]))
-  const byId = new Map(registry.getAll().map((session) => [session.id, session]))
-  const protectedSessions: Session[] = []
-
-  for (const [id, killedAt] of remoteSessionTombstones) {
-    if (now - killedAt > REMOTE_SESSION_MUTATION_TTL_MS) {
-      remoteSessionTombstones.delete(id)
-      continue
-    }
-    if (!remoteIds.has(id)) {
-      // Poller has confirmed it's gone; no longer needs a tombstone.
-      remoteSessionTombstones.delete(id)
-    }
-  }
-
-  for (const [id, override] of remoteSessionNameOverrides) {
-    if (now - override.setAt > REMOTE_SESSION_MUTATION_TTL_MS) {
-      remoteSessionNameOverrides.delete(id)
-      continue
-    }
-    const polled = remoteById.get(id)
-    if (!polled) {
-      // Session disappeared (killed/host stale); stop overriding.
-      remoteSessionNameOverrides.delete(id)
-      continue
-    }
-    if (polled.name === override.name) {
-      // Poller has picked up the rename.
-      remoteSessionNameOverrides.delete(id)
-    }
-  }
-
-  for (const [id, addedAt] of protectedRemoteSessionIds) {
-    if (now - addedAt > PROTECTED_REMOTE_SESSION_TTL_MS) {
-      protectedRemoteSessionIds.delete(id)
-      continue
-    }
-    if (remoteIds.has(id)) {
-      // Poller has discovered it; no longer needs protection.
-      protectedRemoteSessionIds.delete(id)
-      continue
-    }
-    const existing = byId.get(id)
-    if (existing?.remote) {
-      protectedSessions.push(existing)
-    } else {
-      // Session disappeared from registry (killed/failed); stop protecting it.
-      protectedRemoteSessionIds.delete(id)
-    }
-  }
-
-  const mergedRemote: Session[] = []
-  for (const session of remoteSessions) {
-    const killedAt = remoteSessionTombstones.get(session.id)
-    if (killedAt && now - killedAt <= REMOTE_SESSION_MUTATION_TTL_MS) {
-      continue
-    }
-    const override = remoteSessionNameOverrides.get(session.id)
-    if (override && now - override.setAt <= REMOTE_SESSION_MUTATION_TTL_MS) {
-      mergedRemote.push({ ...session, name: override.name })
-    } else {
-      mergedRemote.push(session)
-    }
-  }
-
-  return [...stampLocalSessions(sessions), ...protectedSessions, ...mergedRemote]
-}
-
-let hostStatuses: HostStatus[] = []
-let hostStatusSnapshot = ''
-
-function updateHostStatuses(remoteStatuses: HostStatus[]) {
-  const next = [
-    {
-      host: localHostLabel,
-      ok: true,
-      lastUpdated: new Date().toISOString(),
-    },
-    ...remoteStatuses,
-  ]
-  const snapshot = JSON.stringify(next)
-  if (snapshot === hostStatusSnapshot) return
-  hostStatusSnapshot = snapshot
-  hostStatuses = next
-  broadcast({ type: 'host-status', hosts: hostStatuses })
-}
-
-const remotePoller = (config.remoteHosts?.length ?? 0) > 0
-  ? new RemoteSessionPoller({
-      hosts: config.remoteHosts,
-      pollIntervalMs: config.remotePollMs,
-      timeoutMs: config.remoteTimeoutMs,
-      staleAfterMs: config.remoteStaleMs,
-      sshOptions: config.remoteSshOpts,
-      tmuxSessionPrefix: config.tmuxSession,
-      discoverPrefixes: config.discoverPrefixes,
-      onUpdate: (statuses) => updateHostStatuses(statuses),
-    })
-  : null
-
-if (remotePoller) {
-  remotePoller.start()
-  updateHostStatuses(remotePoller.getHostStatuses())
-} else {
-  updateHostStatuses([])
-}
+// Remote session service: poller, host statuses, SSH/tmux control plane,
+// and the optimistic protection/tombstone/override maps (see remote/).
+const remote = new RemoteSessionService({ registry, broadcast, send })
 
 // Always-on raw protocol capture for the chat debug view, beside the DB.
 const chatWireLogs = new ChatWireLogs({ dir: path.join(resolveDataDir(), 'chat-wire') })
@@ -531,7 +395,7 @@ const refresh = new SessionRefreshLoop({
   sessionRefreshWorker,
   lastUserMessageWorker,
   broadcast: (message) => broadcast(message),
-  mergeRemoteSessions,
+  mergeRemoteSessions: (sessions) => remote.mergeSessions(sessions),
   historyMaxAgeHours: () => runtimeHistoryMaxAgeHours,
 })
 // Session operation handlers (kill/rename/hibernate/wake/move-to-history)
@@ -544,9 +408,9 @@ const sessionOps: SessionOpsContext = {
   chatSessionManager,
   broadcast,
   send,
-  runRemoteTmux,
-  remoteSessionNameOverrides,
-  remoteSessionTombstones,
+  runRemoteTmux: (host, args) => remote.runTmux(host, args),
+  remoteSessionNameOverrides: remote.remoteSessionNameOverrides,
+  remoteSessionTombstones: remote.remoteSessionTombstones,
 }
 
 const logPoller = new LogPoller(db, registry, {
@@ -1355,7 +1219,7 @@ const websocketHandlers = {
       isOpen: () => sockets.has(ws),
     })
     send(ws, { type: 'sessions', sessions: registry.getAll() })
-    send(ws, { type: 'host-status', hosts: hostStatuses })
+    send(ws, { type: 'host-status', hosts: remote.getHostStatuses() })
     send(ws, {
       type: 'server-config',
       remoteAllowControl: config.remoteAllowControl,
@@ -1456,7 +1320,7 @@ async function cleanupAllTerminals() {
   await Promise.allSettled(disposePromises)
   workspaceWatcherInstance.stop()
   logPoller.stop()
-  remotePoller?.stop()
+  remote.stop()
   chatSessionManager.shutdown()
   db.close()
 }
@@ -1855,7 +1719,7 @@ function handleMessage(
       }
       if (message.host) {
         fireAndForget(
-          handleRemoteCreate(
+          remote.handleCreate(
             message.host,
             message.projectPath,
             message.name,
@@ -1993,168 +1857,6 @@ function resolveCopyModeTarget(
   return session.tmuxWindow
 }
 
-async function handleRemoteCreate(
-  host: string,
-  projectPath: string,
-  name: string | undefined,
-  command: string | undefined,
-  autoStartAgent: AutoStartAgent | undefined,
-  autoStartChange: string | undefined,
-  ws: ServerWebSocket<WSData>
-) {
-  if (!config.remoteAllowControl) {
-    send(ws, { type: 'error', message: 'Remote session creation is disabled' })
-    return
-  }
-  if (!isValidHostname(host)) {
-    send(ws, { type: 'error', message: 'Invalid hostname' })
-    return
-  }
-  if (!config.remoteHosts.includes(host)) {
-    send(ws, { type: 'error', message: 'Host is not in the configured remote hosts list' })
-    return
-  }
-  const trimmedPath = projectPath.trim()
-  if (!trimmedPath) {
-    send(ws, { type: 'error', message: 'Project path is required' })
-    return
-  }
-  // Path must be absolute and not contain control characters
-  if (!trimmedPath.startsWith('/')) {
-    send(ws, { type: 'error', message: 'Project path must be an absolute path (starting with /)' })
-    return
-  }
-  if (trimmedPath.includes('\n') || trimmedPath.includes('\r') || trimmedPath.includes('\0')) {
-    send(ws, { type: 'error', message: 'Project path contains invalid characters' })
-    return
-  }
-
-  // Validate name format if provided (same rules as rename)
-  const windowName = name?.trim() || generateSessionName()
-  if (name?.trim() && !/^[\w-]+$/.test(windowName)) {
-    send(ws, { type: 'error', message: 'Name can only contain letters, numbers, hyphens, and underscores' })
-    return
-  }
-
-  try {
-    // Validate path exists on remote host
-    const testResult = await runRemoteSsh(host, `test -d ${shellQuote(trimmedPath)}`)
-    if (testResult.exitCode !== 0) {
-      send(ws, { type: 'error', message: `Directory does not exist on ${host}: ${trimmedPath}` })
-      return
-    }
-
-    // Check if tmux session already exists on remote
-    const tmuxSession = config.tmuxSession
-    const hasSessionResult = await runRemoteTmux(host, ['has-session', '-t', tmuxSession])
-    const sessionExists = hasSessionResult.exitCode === 0
-
-    // Same first-prompt composition as the local path: the selected agent's
-    // apply prompt rides in the start command as a launch argument, so the
-    // remote bash -lic wrapper re-quotes it without a pending-prompt store.
-    const startCommand = composeAutoStartCommand(command, autoStartAgent, autoStartChange)
-    const windowCommand = normalizePaneStartCommand(startCommand?.trim() || '') || 'claude'
-    // Wrap in interactive login shell so .bashrc PATH is available
-    // (non-interactive shells skip .bashrc due to [ -z "$PS1" ] && return guard).
-    // Fall back to raw command on systems without bash (e.g. Alpine).
-    const bashCheck = await runRemoteSsh(host, 'command -v bash')
-    const wrappedCommand = bashCheck.exitCode === 0
-      ? `bash -lic ${shellQuote(windowCommand)}`
-      : windowCommand
-    let createResult: { exitCode: number; stdout: string; stderr: string }
-
-    // Launch with Claude Code fullscreen ("no-flicker") rendering enabled so its
-    // mouse features work in the browser terminal. The login shell inherits the env.
-    const noFlickerEnv = config.claudeNoFlicker ? ['-e', 'CLAUDE_CODE_NO_FLICKER=1'] : []
-
-    if (sessionExists) {
-      // Session exists — add a new window to it
-      createResult = await runRemoteTmux(host, [
-        'new-window', '-P',
-        ...noFlickerEnv,
-        '-F', buildTmuxFormat(['#{window_index}', '#{window_id}']),
-        '-t', tmuxSession, '-n', windowName, '-c', trimmedPath, wrappedCommand,
-      ])
-    } else {
-      // Session doesn't exist — create it with the desired window directly
-      // (avoids an orphan window 0 from a separate new-session call)
-      createResult = await runRemoteTmux(host, [
-        'new-session', '-d', '-P',
-        ...noFlickerEnv,
-        '-F', buildTmuxFormat(['#{window_index}', '#{window_id}']),
-        '-s', tmuxSession, '-n', windowName, '-c', trimmedPath, wrappedCommand,
-      ])
-    }
-    if (createResult.exitCode !== 0) {
-      const stderr = createResult.stderr?.trim() ?? 'Unknown error'
-      send(ws, { type: 'error', message: `Failed to create remote window: ${stderr}` })
-      return
-    }
-
-    // Parse window info from -P output (e.g. "3\t@5")
-    const printOutput = createResult.stdout?.trim() ?? ''
-    const parts = splitTmuxFields(printOutput, 2)
-    const now = Date.now()
-
-    if (!parts || !parts[0]) {
-      send(ws, { type: 'error', message: 'Failed to verify remote session creation' })
-      return
-    }
-
-    const windowIndex = parts[0].trim()
-    const windowId = (parts[1] ?? '').trim()
-    const stableTarget = windowId || windowIndex
-
-    // Verify the window actually persists. When adding a new window to an existing session,
-    // `tmux has-session -t <session>` can still succeed even if the new window exited
-    // immediately (and was cleaned up by tmux).
-    const verifyResult = await runRemoteTmux(host, ['has-session', '-t', `${tmuxSession}:${stableTarget}`])
-    if (verifyResult.exitCode !== 0) {
-      logger.warn('remote_window_exited_immediately', {
-        host,
-        tmuxSession,
-        windowName,
-        windowIndex,
-        windowId: windowId || undefined,
-        stableTarget,
-        command: windowCommand,
-        wrappedCommand,
-      })
-      send(ws, {
-        type: 'error',
-        message: `Remote window exited immediately on ${host} — command "${windowCommand}" may have failed`,
-      })
-      return
-    }
-    const id = buildRemoteSessionId(host, tmuxSession, windowIndex, windowId)
-    const createdSession: Session = {
-      id,
-      name: windowName,
-      tmuxWindow: `${tmuxSession}:${stableTarget}`,
-      projectPath: trimmedPath,
-      status: 'unknown',
-      lastActivity: new Date(now).toISOString(),
-      createdAt: new Date(now).toISOString(),
-      source: 'managed',
-      host,
-      remote: true,
-      command: windowCommand,
-    }
-
-    protectedRemoteSessionIds.set(createdSession.id, now)
-
-    // Add to registry so it appears immediately
-    const currentSessions = registry.getAll()
-    registry.replaceSessions([createdSession, ...currentSessions])
-    send(ws, { type: 'session-created', session: createdSession })
-  } catch (error) {
-    send(ws, {
-      type: 'error',
-      message: error instanceof Error ? error.message : 'Unable to create remote session',
-    })
-  }
-}
-
 async function handleCancelCopyMode(sessionId: string, ws: ServerWebSocket<WSData>) {
   const session = registry.get(sessionId)
   if (!session || !isTerminalSession(session)) return
@@ -2169,7 +1871,7 @@ async function handleCancelCopyMode(sessionId: string, ws: ServerWebSocket<WSDat
     // that already existed on the remote path.
     const target = resolveCopyModeTarget(sessionId, ws, session)
     if (session.remote && session.host) {
-      await runRemoteTmux(session.host, ['send-keys', '-X', '-t', target, 'cancel'])
+      await remote.runTmux(session.host, ['send-keys', '-X', '-t', target, 'cancel'])
     } else {
       await readTmuxCapture(['send-keys', '-X', '-t', target, 'cancel'])
     }
@@ -2208,7 +1910,7 @@ async function handleCheckCopyMode(sessionId: string, ws: ServerWebSocket<WSData
     const fmt = '#{pane_in_mode},#{alternate_on},#{mouse_any_flag}'
     let output: string
     if (session.remote && session.host) {
-      const result = await runRemoteTmux(session.host, ['display-message', '-p', '-t', target, fmt])
+      const result = await remote.runTmux(session.host, ['display-message', '-p', '-t', target, fmt])
       output = result.stdout?.trim() ?? ''
     } else {
       output = (await readTmuxCapture(['display-message', '-p', '-t', target, fmt]))?.trim() ?? ''
@@ -2407,7 +2109,7 @@ async function createAndStartSshProxy(
   host: string,
   attachSeq: number
 ): Promise<ITerminalProxy | null> {
-  const sshOptions = sshOptionsForHost()
+  const sshOptions = remote.sshOptions()
   const sessionName = `${config.tmuxSession}-ws-${ws.data.connectionId}`
 
   const terminal = new SshTerminalProxy({
@@ -2585,7 +2287,7 @@ async function attachTerminalPersistent(
 
   // Capture scrollback history BEFORE switching to avoid race with live output
   const history = session.remote && session.host
-    ? await captureTmuxHistoryRemote(effectiveTarget, session.host)
+    ? await remote.captureHistoryRemote(effectiveTarget, session.host)
     : await captureTmuxHistory(effectiveTarget)
 
   const tCapture = performance.now()
@@ -2695,68 +2397,6 @@ async function captureTmuxHistory(target: string): Promise<string | null> {
     if (output.trim().length === 0) {
       return null
     }
-    return normalizeCapturedHistory(output)
-  } catch {
-    return null
-  }
-}
-
-function sshOptionsForHost(): string[] {
-  return [
-    '-o', 'BatchMode=yes',
-    '-o', 'ConnectTimeout=3',
-    // Avoid using stale multiplex control sockets for control-plane commands.
-    // Users can still enable multiplexing for poller connections via ~/.ssh/config.
-    '-o', 'ControlMaster=no',
-    '-o', 'ControlPath=none',
-    ...splitSshOptions(config.remoteSshOpts),
-  ]
-}
-
-async function runRemoteTmux(host: string, args: string[]): Promise<{ exitCode: number; stdout: string; stderr: string }> {
-  const remoteCmd = `tmux -u ${args.map(a => shellQuote(a)).join(' ')}`
-  const opts = sshOptionsForHost()
-  const proc = Bun.spawn(['ssh', ...opts, host, remoteCmd], { stdout: 'pipe', stderr: 'pipe' })
-
-  const timeout = setTimeout(() => { try { proc.kill() } catch {} }, 10_000)
-  try {
-    const [exitCode, stdout, stderr] = await Promise.all([
-      proc.exited,
-      new Response(proc.stdout!).text(),
-      new Response(proc.stderr!).text(),
-    ])
-    return { exitCode, stdout, stderr }
-  } finally {
-    clearTimeout(timeout)
-  }
-}
-
-async function runRemoteSsh(host: string, remoteCmd: string): Promise<{ exitCode: number; stdout: string; stderr: string }> {
-  const opts = sshOptionsForHost()
-  const proc = Bun.spawn(['ssh', ...opts, host, remoteCmd], { stdout: 'pipe', stderr: 'pipe' })
-
-  const timeout = setTimeout(() => { try { proc.kill() } catch {} }, 10_000)
-  try {
-    const [exitCode, stdout, stderr] = await Promise.all([
-      proc.exited,
-      new Response(proc.stdout!).text(),
-      new Response(proc.stderr!).text(),
-    ])
-    return { exitCode, stdout, stderr }
-  } finally {
-    clearTimeout(timeout)
-  }
-}
-
-async function captureTmuxHistoryRemote(target: string, host: string): Promise<string | null> {
-  try {
-    const colorArgs = config.terminalColorsEnabled ? ['-e'] : []
-    const result = await runRemoteTmux(host, [
-      'capture-pane', '-t', target, '-p', '-J', ...colorArgs,
-    ])
-    if (result.exitCode !== 0) return null
-    const output = result.stdout ?? ''
-    if (output.trim().length === 0) return null
     return normalizeCapturedHistory(output)
   } catch {
     return null

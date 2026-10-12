@@ -51,7 +51,7 @@ a commit; `indexHandlers.test.ts` must pass unchanged (design D5) throughout.
 
 ## 4. Remote session service
 
-- [ ] 4.1 Create `src/server/remote/RemoteSessionService.ts` owning the remote merge +
+- [x] 4.1 Create `src/server/remote/RemoteSessionService.ts` owning the remote merge +
   protection/tombstone/override maps, `runRemoteTmux`/`runRemoteSsh`/`sshOptionsForHost`,
   `handleRemoteCreate`, and the `RemoteSessionPoller` (constructor-owned; today
   ~index.ts:655–799 + 2912–3072 + 4768–4813); commit
