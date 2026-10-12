@@ -18,6 +18,9 @@
 // run a separately installed Claude Code executable: creation and every
 // (re)spawn first pass an executable check (KAWAI_CLAUDE_PATH/PATH, version
 // baseline) whose ClaudeExecutableError messages reach the user verbatim.
+// Restore-on-start and attach history read transcripts asynchronously
+// (async-transcript-parsing): whenRestored() resolves once every persisted
+// row is registered, and the team mailbox starts only after that.
 import type {
   ChatActivity,
   ChatApprovalDecision,
@@ -81,9 +84,10 @@ import type { SpawnRequest, SpawnResult } from '../team/staffing'
 import { TeamCaps } from '../team/teamCaps'
 import {
   findTranscriptPath,
-  readTranscriptCwd,
-  readTranscriptTitle,
+  findTranscriptPathAsync,
+  readTranscriptMetaAsync,
   replayTranscriptFile,
+  replayTranscriptFileAsync,
   type TranscriptReplay,
 } from './transcriptReplay'
 import { watchTranscriptTitle, type TranscriptTitleWatcher } from './transcriptTitleWatcher'
@@ -362,6 +366,17 @@ export class ChatSessionManager {
   }
   private readonly snapshotHistory = new Map<string, ChatEvent[]>()
   private readonly liveEvents = new Map<string, ChatEvent[]>()
+  /** In-flight async history loads, deduped per session (design D3). */
+  private readonly historyLoads = new Map<string, Promise<void>>()
+  /** Boot restore chain; chat-attach awaits it via whenRestored (design D2). */
+  private readonly restorePromise: Promise<void>
+  /**
+   * SDK ids of persisted rows the async restore has not registered yet:
+   * getSdkSessionIds reports them too, so log discovery never surfaces a
+   * chat transcript as an extra session during the restore window.
+   */
+  private readonly restoringSdkIds = new Set<string>()
+  private isShutDown = false
 
   /** Synchronous capture: no driver callback can interleave with history loading. */
   getSnapshot(sessionId: string): Extract<ServerMessage, { type: 'chat-snapshot' }> | null {
@@ -585,6 +600,53 @@ export class ChatSessionManager {
   }
 
   /**
+   * Load a session's transcript history off the event loop
+   * (async-transcript-parsing design D3): populates the snapshot-history
+   * memo once via the async replay; concurrent attaches share a single
+   * load. Kill during a load is safe: the row is re-checked after the
+   * awaits, so a killed session's memo is never (re-)written.
+   *
+   * Memo audit (design D3/D4): the memo IS `snapshotHistory`, and it is not
+   * invalidated on turn completion. captureHistory runs before every driver
+   * start (attach, send, start, mailbox prepare), so everything the agent
+   * appends to the transcript afterwards is also in `liveEvents`; snapshots
+   * are memo + live events, and re-reading the transcript at a turn boundary
+   * would duplicate those turns. Only kill drops the memo (with the live
+   * events). A synchronous captureHistory that wins the race (a send landing
+   * while this load awaits IO) keeps its result; this load then discards its
+   * own. getHistory stays synchronous as that fallback for the callers that
+   * must capture before a driver starts without an await (D4).
+   */
+  async loadHistory(sessionId: string): Promise<void> {
+    if (!this.records.has(sessionId) || this.snapshotHistory.has(sessionId)) return
+    const inFlight = this.historyLoads.get(sessionId)
+    if (inFlight) return inFlight
+    const load = (async () => {
+      const record = this.records.get(sessionId)
+      if (!record || this.snapshotHistory.has(sessionId)) return
+      if (record.sdkSessionId) {
+        const replay = await replayTranscriptFileAsync(
+          await findTranscriptPathAsync(record.sdkSessionId),
+          { excludeToolCallIds: this.liveToolCallIds(sessionId) }
+        )
+        // The transcript's last cwd is where the conversation actually is
+        // (worktree tracking design D3) — the same catch-up getHistory applies.
+        if (this.records.has(sessionId) && !this.snapshotHistory.has(sessionId)) {
+          if (replay.cwd) this.handleDriverCwdChanged(sessionId, replay.cwd)
+          this.snapshotHistory.set(sessionId, replay.events)
+        }
+      } else if (this.records.has(sessionId)) {
+        // Sessions that never started have no SDK id and replay as empty.
+        this.snapshotHistory.set(sessionId, [])
+      }
+    })().finally(() => {
+      this.historyLoads.delete(sessionId)
+    })
+    this.historyLoads.set(sessionId, load)
+    return load
+  }
+
+  /**
    * The session's command state for snapshots: a live driver's tracker, or
    * unavailable when no process can be asked (never started, blocked, dead,
    * archived — design D3: the client needs no special case).
@@ -640,6 +702,8 @@ export class ChatSessionManager {
         const record = this.records.get(id)
         if (record && !record.spawned && record.taskId !== taskId) this.applyPatch(id, { taskId })
       },
+      // Sync discovery is fine here: a per-event lookup, not the boot path
+      // (async-transcript-parsing design D4).
       transcriptFor: id => { const sdkId = this.records.get(id)?.sdkSessionId; return sdkId ? findTranscriptPath(sdkId) : null },
       onChange: options.onMailboxChange,
       usageOf: profileId => this.usageLimits.get(profileId),
@@ -665,12 +729,30 @@ export class ChatSessionManager {
       for (const sessionId of holders) this.refreshParked(sessionId)
     })
     this.dispatcher = this.teamMail.dispatcher
-    this.restorePersisted()
-    this.teamMail.start()
-    // Work parked before a restart keeps its sessions paused.
-    for (const sessionId of this.records.keys()) this.refreshParked(sessionId)
-    // Logs of sessions deleted while the server was down are orphans now.
-    void this.options.wireLogs?.pruneOrphans(new Set(this.records.keys()))
+    // Restore runs off the boot path (async-transcript-parsing design D2):
+    // persisted rows load without blocking server start, and the first
+    // chat-attach awaits them via whenRestored(). The mailbox and wire-log
+    // orphan pruning start only after the rows exist — pruning before the
+    // restore would see an empty registry and delete every chat's wire log.
+    this.restorePromise = this.restorePersisted()
+      .then(() => {
+        if (this.isShutDown) return
+        this.teamMail.start()
+        // Work parked before a restart keeps its sessions paused.
+        for (const sessionId of this.records.keys()) this.refreshParked(sessionId)
+        // Logs of sessions deleted while the server was down are orphans now.
+        void this.options.wireLogs?.pruneOrphans(new Set(this.records.keys()))
+      })
+      .catch(error => {
+        logger.error('chat_sessions_restore_failed', {
+          message: error instanceof Error ? error.message : String(error),
+        })
+      })
+  }
+
+  /** Resolves once persisted chat rows are restored (design D2). */
+  whenRestored(): Promise<void> {
+    return this.restorePromise
   }
 
   /** Recorded per-profile limit events (profile routing). */
@@ -1106,6 +1188,8 @@ export class ChatSessionManager {
 
   /** Server shutdown: settle every driver (callbacks cannot survive it). */
   shutdown(): void {
+    // A restore still in flight stops at its next row (design D2).
+    this.isShutDown = true
     this.teamMail.close()
     for (const driver of this.drivers.values()) {
       driver.shutdown()
@@ -1143,6 +1227,7 @@ export class ChatSessionManager {
     for (const record of this.records.values()) {
       if (record.sdkSessionId) ids.add(record.sdkSessionId)
     }
+    for (const id of this.restoringSdkIds) ids.add(id)
     return ids
   }
 
@@ -1160,6 +1245,8 @@ export class ChatSessionManager {
     const spawning = !this.driverPromises.has(record.sessionId)
     if (
       record.sdkSessionId &&
+      // Sync discovery acceptable: a per-request existence check, not the
+      // boot path (async-transcript-parsing design D4).
       !this.drivers.has(record.sessionId) &&
       spawning &&
       !findTranscriptPath(record.sdkSessionId)
@@ -1195,67 +1282,85 @@ export class ChatSessionManager {
   }
 
   /** Load chat_sessions rows into the registry as idle chat sessions. */
-  private restorePersisted(): void {
-    for (const row of this.options.db.getChatSessions()) {
-      let record = row
-      // Pending requests and in-flight turns died with the old process; a
-      // restored session is always idle.
-      if (record.status !== 'waiting') {
-        record = { ...record, status: 'waiting' }
-        this.options.db.updateChatSession(record.sessionId, {
-          status: 'waiting',
-        })
-      }
-      // Title catch-up (chat-session-naming design D4): a session whose name
-      // was never user-set adopts its transcript's latest title now, so the
-      // list is correct for sessions nobody opens. Nothing is persisted —
-      // the row re-derives on the next restart the same way.
-      // Cwd catch-up (worktree tracking design D3): the transcript's last
-      // cwd is where the conversation actually is — the agent may have
-      // entered a worktree before the restart. Unlike the title this is
-      // persisted, matching what the live CwdChanged firing would have
-      // written, so the row and the registry agree from here on.
-      if (record.sdkSessionId) {
-        const filePath = findTranscriptPath(record.sdkSessionId)
-        if (filePath) {
-          if ((record.nameSource ?? 'manual') !== 'manual') {
-            const title = readTranscriptTitle(filePath)
-            if (title) {
-              record = { ...record, name: title.title, nameSource: title.source }
-            }
-          }
-          const cwd = readTranscriptCwd(filePath)
-          if (cwd && cwd !== record.projectPath) {
-            record = { ...record, projectPath: cwd }
-            this.options.db.updateChatSession(record.sessionId, {
-              projectPath: cwd,
-            })
-          }
-        }
-      }
-      // Worker-roster recovery (workers design D6): a sidecar row still
-      // marked running can never gain an outcome — the process that owed it
-      // is gone — so it recovers as stopped. The corrected roster is
-      // rewritten so the file and the rows agree.
-      if (this.options.workerStore) {
-        const records = this.options.workerStore.read(record.sessionId)
-        if (records.length > 0) {
-          const recovered: ChatWorker[] = records.map((entry) => ({
-            ...entry,
-            ...(entry.status === 'running' ? { status: 'stopped' as const } : {}),
-            live: false,
-            elapsedMs: 0,
-          }))
-          this.workerRows.set(record.sessionId, recovered)
-          void this.options.workerStore
-            .write(record.sessionId, recovered)
-            .catch(() => {})
-        }
-      }
-      this.records.set(record.sessionId, record)
-      this.options.registry.setChatSession(this.toSession(record))
-      void this.teams.track(record.sessionId, record.projectPath)
+  private async restorePersisted(): Promise<void> {
+    // The rows are read synchronously, before the first await, so their SDK
+    // ids are excluded from log discovery from the constructor on.
+    const rows = this.options.db.getChatSessions()
+    for (const row of rows) {
+      if (row.sdkSessionId) this.restoringSdkIds.add(row.sdkSessionId)
     }
+    try {
+      for (const row of rows) {
+        if (this.isShutDown) return
+        await this.restoreRow(row)
+      }
+    } finally {
+      this.restoringSdkIds.clear()
+    }
+  }
+
+  /** Restore one persisted row (design D2): status, title/cwd catch-up, workers. */
+  private async restoreRow(row: ChatSessionRecord): Promise<void> {
+    let record = row
+    // Pending requests and in-flight turns died with the old process; a
+    // restored session is always idle.
+    if (record.status !== 'waiting') {
+      record = { ...record, status: 'waiting' }
+      this.options.db.updateChatSession(record.sessionId, {
+        status: 'waiting',
+      })
+    }
+    // Title catch-up (chat-session-naming design D4): a session whose name
+    // was never user-set adopts its transcript's latest title now, so the
+    // list is correct for sessions nobody opens. Nothing is persisted —
+    // the row re-derives on the next restart the same way.
+    // Cwd catch-up (worktree tracking design D3): the transcript's last
+    // cwd is where the conversation actually is — the agent may have
+    // entered a worktree before the restart. Unlike the title this is
+    // persisted, matching what the live CwdChanged firing would have
+    // written, so the row and the registry agree from here on.
+    // One async discovery + one single-pass meta read per session
+    // (async-transcript-parsing design D1/D2) — no sync fs on the event
+    // loop at boot.
+    if (record.sdkSessionId) {
+      const filePath = await findTranscriptPathAsync(record.sdkSessionId)
+      const meta = filePath ? await readTranscriptMetaAsync(filePath) : null
+      // Shut down mid-read: the database may be closed already.
+      if (this.isShutDown) return
+      if (meta) {
+        if ((record.nameSource ?? 'manual') !== 'manual' && meta.title) {
+          record = { ...record, name: meta.title.title, nameSource: meta.title.source }
+        }
+        if (meta.cwd && meta.cwd !== record.projectPath) {
+          record = { ...record, projectPath: meta.cwd }
+          this.options.db.updateChatSession(record.sessionId, {
+            projectPath: meta.cwd,
+          })
+        }
+      }
+    }
+    // Worker-roster recovery (workers design D6): a sidecar row still
+    // marked running can never gain an outcome — the process that owed it
+    // is gone — so it recovers as stopped. The corrected roster is
+    // rewritten so the file and the rows agree.
+    if (this.options.workerStore) {
+      const records = this.options.workerStore.read(record.sessionId)
+      if (records.length > 0) {
+        const recovered: ChatWorker[] = records.map((entry) => ({
+          ...entry,
+          ...(entry.status === 'running' ? { status: 'stopped' as const } : {}),
+          live: false,
+          elapsedMs: 0,
+        }))
+        this.workerRows.set(record.sessionId, recovered)
+        void this.options.workerStore
+          .write(record.sessionId, recovered)
+          .catch(() => {})
+      }
+    }
+    this.records.set(record.sessionId, record)
+    this.options.registry.setChatSession(this.toSession(record))
+    void this.teams.track(record.sessionId, record.projectPath)
   }
 
   /**
@@ -1287,6 +1392,8 @@ export class ChatSessionManager {
     if (this.titleWatchers.has(sessionId)) return
     const record = this.records.get(sessionId)
     if (!record || record.archivedAt != null || !record.sdkSessionId) return
+    // Sync discovery acceptable: a per-attach watcher setup, not the boot
+    // path (async-transcript-parsing design D4).
     const filePath = findTranscriptPath(record.sdkSessionId)
     if (!filePath) {
       const base = this.options.titleLocateIntervalMs ?? 2_000

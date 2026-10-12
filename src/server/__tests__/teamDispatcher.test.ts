@@ -85,6 +85,21 @@ test('scheduled self reminder becomes eligible once due and stays queued while b
   recipients[0]!.idle = true; await dispatch()
   expect(delivered[0]?.id).toBe(mail.id)
 })
+test('a held dispatcher records requests and dispatches only once released', async () => {
+  dispatcher.close()
+  recipients[0]!.idle = true
+  dispatcher = new MailDispatcher(store, {
+    recipients: () => recipients, prepare: async () => {}, interrupt: async () => {},
+    deliver: (id, peer) => { delivered.push({ recipient: id, id: peer.messageId }) }, watchReceipt: () => {},
+    held: true,
+  })
+  const mail = send(); await dispatch(); await dispatch()
+  expect(store.get(mail.id)?.state).toBe('queued')
+  dispatcher.release(); await dispatcher.settled()
+  expect(delivered).toEqual([{ recipient: 'dev', id: mail.id }])
+  dispatcher.release(); await dispatcher.settled()
+  expect(delivered).toHaveLength(1)
+})
 test('recipient becoming busy while startup is pending loses the claim', async () => {
   dispatcher.close()
   recipients[0]!.idle = true

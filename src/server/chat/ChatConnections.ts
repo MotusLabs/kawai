@@ -17,6 +17,12 @@
 // session's debug view receive its wire frames. They subscribe before the
 // async page read, so no frame is missed; clients merge pages and live frames
 // by sequence, which makes the resulting overlap harmless.
+// Persisted chat rows restore asynchronously at boot and attach history loads
+// off the event loop (async-transcript-parsing design D2/D3): every message
+// first awaits the one shared restore promise, so arrival order survives it;
+// an attach then awaits its history load, and the latest attach/detach of a
+// session wins over an attach still loading (the mailbox/task open idiom).
+// A disconnect while a message waits drops any subscription it would open.
 import type {
   ChatActivity,
   ChatCommandState,
@@ -58,6 +64,10 @@ export class ChatConnections {
   private readonly debugSubscriptions = new Map<ChatConnection, Map<string, () => void>>()
   private readonly debugBatches = new Map<ChatConnection, Map<string, ChatWireFrame[]>>()
   private scheduled = false
+  /** Latest in-flight attach per connection and session (cleared by detach). */
+  private readonly pendingAttach = new Map<ChatConnection, Map<string, object>>()
+  /** Replaced on disconnect, so messages that waited across it can tell. */
+  private readonly epochs = new WeakMap<ChatConnection, object>()
 
   private readonly mailboxConnections: MailboxConnections
   private readonly taskConnections: TaskConnections
@@ -77,6 +87,8 @@ export class ChatConnections {
   }
 
   disconnect(connection: ChatConnection): void {
+    this.epochs.set(connection, {})
+    this.pendingAttach.delete(connection)
     this.mailboxConnections.disconnect(connection)
     this.taskConnections.disconnect(connection)
     this.subscriptions.delete(connection)
@@ -337,6 +349,15 @@ export class ChatConnections {
     this.debugSubscriptions.set(connection, sessions)
   }
 
+  private unsubscribe(connection: ChatConnection, sessionId: string): void {
+    this.subscriptions.get(connection)?.delete(sessionId)
+    this.batches.get(connection)?.delete(sessionId)
+    this.activityBatches.get(connection)?.delete(sessionId)
+    this.contextBatches.get(connection)?.delete(sessionId)
+    this.workerBatches.get(connection)?.delete(sessionId)
+    this.notificationBatches.get(connection)?.delete(sessionId)
+  }
+
   private closeDebug(connection: ChatConnection, sessionId: string): void {
     this.debugSubscriptions.get(connection)?.get(sessionId)?.()
     this.debugSubscriptions.get(connection)?.delete(sessionId)
@@ -354,17 +375,52 @@ export class ChatConnections {
     connection.send({ type: 'chat-debug-frames', sessionId, frames: page.frames, page: true, hasOlder: page.hasOlder })
   }
 
+  private epochOf(connection: ChatConnection): object {
+    let epoch = this.epochs.get(connection)
+    if (!epoch) {
+      epoch = {}
+      this.epochs.set(connection, epoch)
+    }
+    return epoch
+  }
+
   async handle(connection: ChatConnection, message: ClientMessage): Promise<void> {
+    const epoch = this.epochOf(connection)
+    // Attaches and detaches of one session order against each other before
+    // any await: the latest wins, so a detach (applied right here) can never
+    // be overtaken by an earlier attach still loading history.
+    const token = {}
+    if (message.type === 'chat-attach') {
+      const pending = this.pendingAttach.get(connection) ?? new Map<string, object>()
+      pending.set(message.sessionId, token)
+      this.pendingAttach.set(connection, pending)
+    } else if (message.type === 'chat-detach') {
+      this.pendingAttach.get(connection)?.delete(message.sessionId)
+      this.unsubscribe(connection, message.sessionId)
+    }
+    await this.manager.whenRestored()
+    // Messages that open a subscription are moot once their connection went
+    // away while they waited; actions (send, approvals, …) still run.
+    if (this.epochs.get(connection) !== epoch && opensSubscription(message.type)) return
     if (message.type.startsWith('team-mailbox-')) return this.mailboxConnections.handle(connection, message)
     if (message.type.startsWith('team-task')) return this.taskConnections.handle(connection, message as Extract<ClientMessage, { type: `team-task${string}` }>)
     if (!message.type.startsWith('chat-') || !('sessionId' in message)) return
     const { sessionId } = message
     if (!this.manager.has(sessionId)) {
+      if (this.pendingAttach.get(connection)?.get(sessionId) === token) this.pendingAttach.get(connection)?.delete(sessionId)
       connection.send({ type: 'error', message: `Unknown chat session ${sessionId}` })
       return
     }
     switch (message.type) {
       case 'chat-attach': {
+        // History loads off the event loop (design D3) before the sync
+        // snapshot assembly; live events are already sequenced after the
+        // snapshot send, so the ordering invariant holds by construction.
+        // Superseded by a later attach/detach, or dropped by a disconnect.
+        await this.manager.loadHistory(sessionId)
+        const pending = this.pendingAttach.get(connection)
+        if (!pending || pending.get(sessionId) !== token) return
+        pending.delete(sessionId)
         const snapshot = this.manager.getSnapshot(sessionId)
         if (!snapshot) return
         this.batches.get(connection)?.delete(sessionId)
@@ -385,12 +441,7 @@ export class ChatConnections {
         return
       }
       case 'chat-detach':
-        this.subscriptions.get(connection)?.delete(sessionId)
-        this.batches.get(connection)?.delete(sessionId)
-        this.activityBatches.get(connection)?.delete(sessionId)
-        this.contextBatches.get(connection)?.delete(sessionId)
-        this.workerBatches.get(connection)?.delete(sessionId)
-        this.notificationBatches.get(connection)?.delete(sessionId)
+        // Already unsubscribed before the restore await.
         return
       case 'chat-send': {
         const result = await this.manager.send(sessionId, message.text)
@@ -465,4 +516,10 @@ export class ChatConnections {
       }
     }
   }
+}
+
+/** Message types whose only effect is a subscription for the asking connection. */
+function opensSubscription(type: ClientMessage['type']): boolean {
+  return type === 'chat-attach' || type === 'chat-debug-open' ||
+    type === 'team-mailbox-open' || type === 'team-tasks-open' || type === 'team-task-open'
 }

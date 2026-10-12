@@ -151,6 +151,9 @@ export class SessionMailbox {
         if (options.getRecord(mail.claimedBy)) options.watchReceipt(mail.claimedBy)
       },
       onError: options.onError,
+      // Nothing dispatches before start(): receipt recovery and the
+      // killed-recipient sweep need every restored record first.
+      held: true,
     })
   }
 
@@ -188,7 +191,7 @@ export class SessionMailbox {
     return forwarded
   }
 
-  /** Start only after persisted chat records are restored. */
+  /** Start only after persisted chat records are restored; dispatch is held until then. */
   start() {
     const store = this.mailbox.store
     reconcileMailbox(store, this.options.transcriptFor)
@@ -203,6 +206,7 @@ export class SessionMailbox {
       this.dispatcher.notify()
     })
     this.releaseLimitSubscription = this.limits.subscribe(() => this.dispatcher.notify())
+    this.dispatcher.release()
     this.dispatcher.notify()
     // Rules load once at start; afterwards only an explicit reload changes them.
     void this.rules.reload().then(() => this.dispatcher.notify(), this.options.onError)

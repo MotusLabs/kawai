@@ -165,10 +165,12 @@ export function startServer(): void {
     ...(chatFixtureEnabled ? { queryFactory: fixtureQueryFactory, authCheck: () => true } : {}),
   })
   const chatConnections = new ChatConnections(chatSessionManager, chatWireLogs, message => broadcast(message))
-  if (chatFixtureEnabled && !registry.getAll().some(session => session.name === 'Chat fixture')) {
+  // Restore persisted rows before checking whether the development fixture exists.
+  void chatSessionManager.whenRestored().then(() => {
+    if (!chatFixtureEnabled || registry.getAll().some(session => session.name === 'Chat fixture')) return
     const fixture = chatSessionManager.createSession({ projectPath: process.cwd(), name: 'Chat fixture' })
     if (fixture.ok) void chatSessionManager.send(fixture.session.id, 'Show an approval')
-  }
+  })
   const chatPeers = new WeakMap<ServerWebSocket<WSData>, ChatConnection>()
   function chatPeer(ws: ServerWebSocket<WSData>): ChatConnection {
     let peer = chatPeers.get(ws)

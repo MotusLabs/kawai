@@ -37,6 +37,8 @@ async function fixture() {
     watchReceipt: () => {}, transcriptFor: () => null, homeDir: root,
     onError: error => errors.push(error),
   })
+  // This fixture drives recovery and rule loading explicitly.
+  mailbox.dispatcher.release()
   const store = mailbox.mailbox.store
   const send = () => store.enqueue({ teamId: teams.teamOf('dev')!.teamId, toKind: 'group', toId: 'devs',
     fromSession: 'dev', fromGroup: 'devs', originPath: repo, body: 'Build export' })

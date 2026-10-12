@@ -1967,15 +1967,20 @@ describe('chat task header and tasks panel', () => {
   })
 
   test('a paused chat names its reason and resume time in the header', () => {
-    const until = new Date(Date.now() + 40 * 60_000).toISOString()
-    const session = { ...chatSession, parked: { messageId: 'm1', until, profileId: 'glm', reason: 'Provider limit on glm' } } as Session
-    let renderer!: TestRenderer.ReactTestRenderer
-    act(() => { renderer = TestRenderer.create(<ChatView session={session} sendMessage={() => {}} connectionStatus="connected" connectionEpoch={0} error={null} onClose={() => {}} onKill={() => {}} />) })
-    const time = new Date(until).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-    expect(textOf(renderer.root.findByProps({ 'data-testid': 'chat-paused' }))).toBe(`Paused: Provider limit on glm · resumes ${time}`)
-    act(() => renderer.update(<ChatView session={{ ...session, parked: null }} sendMessage={() => {}} connectionStatus="connected" connectionEpoch={0} error={null} onClose={() => {}} onKill={() => {}} />))
-    expect(renderer.root.findAllByProps({ 'data-testid': 'chat-paused' })).toHaveLength(0)
-    act(() => renderer.unmount())
+    jest.useFakeTimers()
+    // Keep the resume within the same local day even when tests run near midnight.
+    jest.setSystemTime(new Date(2026, 9, 12, 12, 0))
+    try {
+      const until = new Date(Date.now() + 40 * 60_000).toISOString()
+      const session = { ...chatSession, parked: { messageId: 'm1', until, profileId: 'glm', reason: 'Provider limit on glm' } } as Session
+      let renderer!: TestRenderer.ReactTestRenderer
+      act(() => { renderer = TestRenderer.create(<ChatView session={session} sendMessage={() => {}} connectionStatus="connected" connectionEpoch={0} error={null} onClose={() => {}} onKill={() => {}} />) })
+      const time = new Date(until).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+      expect(textOf(renderer.root.findByProps({ 'data-testid': 'chat-paused' }))).toBe(`Paused: Provider limit on glm · resumes ${time}`)
+      act(() => renderer.update(<ChatView session={{ ...session, parked: null }} sendMessage={() => {}} connectionStatus="connected" connectionEpoch={0} error={null} onClose={() => {}} onKill={() => {}} />))
+      expect(renderer.root.findAllByProps({ 'data-testid': 'chat-paused' })).toHaveLength(0)
+      act(() => renderer.unmount())
+    } finally { jest.useRealTimers() }
   })
 
   test('a chat without a task shows no task line', () => {

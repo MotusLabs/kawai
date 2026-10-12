@@ -37,6 +37,7 @@ beforeEach(() => {
   connection = { send: message => messages.push(message) }
   const manager = {
     has: (id: string) => sessions.has(id),
+    whenRestored: () => Promise.resolve(),
     teams: {
       teamOf: (id: string) => sessions.get(id),
       resolvedTeamOf: async (id: string) => { if (resolveDelay) await resolveDelay; return sessions.get(id) },
