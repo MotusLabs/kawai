@@ -51,6 +51,10 @@ While a message is reserved for an agent being spawned, its waiting reason SHALL
 - **WHEN** a reserved message's own spawn reservation fills a group, team, or worktree capacity count
 - **THEN** its waiting reason still identifies starting an agent as the immediate blocker, with those capacity facts among the other constraints
 
+#### Scenario: Starting agent is the blocker for an independent occupant
+- **WHEN** a reserved message is still starting and another live spawned member — not its own reservation — holds the target worktree
+- **THEN** its waiting reason still identifies starting an agent as the immediate blocker, listing that member's occupation of the worktree among the other constraints
+
 ### Requirement: Worktree occupancy is one read model
 The system SHALL expose, per team, the live non-archived sessions grouped by their resolved worktree root, each with group, profile, status, spawned identity, and associated task where present, together with pending spawn reservations and their groups and profiles. Delivery-blocking occupancy SHALL count only spawned sessions and pending reservations. The model SHALL be carried on the team mailbox snapshot and SHALL be the same facts the waiting reasons and staffing decisions use.
 
