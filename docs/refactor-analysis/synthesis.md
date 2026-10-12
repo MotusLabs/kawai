@@ -65,6 +65,19 @@ ws/{ConnectionHub, clipboardWatch, copyMode, terminalAttach}, remaining routes/,
 singletons live only in bootstrap. Kills the accidental init-order risk.
 Effort: L. Risk: med (mitigated by the existing indexHandlers harness — refactor it alongside).
 [server-architecture.md §4]
+> **Status: DONE 2026-10-12** (branch `split-server-index`, OpenSpec change of the same name) —
+> landed as `af9b778` (logContent), `be4053a` (refresh/SessionRefreshLoop + hydrateSessions;
+> dead workspace-coordinator hook deleted), `6e0d637` (ws/wsTypes), `73d7782` (sessions/
+> ops + resumeCommand, sessionStamp, tmuxCapture), `76d268f` (remote/RemoteSessionService),
+> `9514f3f` (ws/ConnectionHub, clipboardWatch, copyMode), `2654e67` (ws/terminalProxy +
+> terminalAttach), `030d41a` + `2cb6fd2` (routes/settings, sessionPreview, directories,
+> serverInfo, updateInstall, paste), `cf85202` (bootstrap.ts `startServer()` plus
+> ws/messageRouter, ws/socketHandlers, startupPreflight), and `a25b770` (log-line cache and
+> wake guard made boot-scoped). `index.ts` went from ~4,970 LOC to an 8-line boot-on-import
+> entry; `bootstrap.ts` is 498 LOC and every new module is under 500. Pure lifts: the
+> `indexHandlers` harness ran unmodified through every commit (it was not split — a follow-up
+> now that the modules are importable on their own); new direct tests cover logContent and
+> wake's claim-race branches. Full suite green on every commit via the pre-commit hook.
 
 **S2. Delete the dead sync matcher chain; split `logMatcher` by concern.** First remove the
 unreachable `verifyAssociations` branch, then ~700 LOC of sync twins (the match worker uses async

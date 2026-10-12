@@ -134,7 +134,7 @@ a commit; `indexHandlers.test.ts` must pass unchanged (design D5) throughout.
     `bun run test` 2,788 pass / 0 fail (incl. the real-tmux integration files);
     `chatRename.integration` 4/4 and `double-attach.integration` 3/3 run on their own with
     the runner's isolated env; `bun run lint`, `bun run typecheck`, `bun run build` clean.
-- [ ] 7.4 Mark S1 done in `docs/refactor-analysis/synthesis.md` (status note with commit
+- [x] 7.4 Mark S1 done in `docs/refactor-analysis/synthesis.md` (status note with commit
   hashes, mirroring the P0/S2 notes); commit (`docs: mark P1/S1 complete in refactor synthesis`)
 
 ## Workflow follow-up
