@@ -94,6 +94,16 @@ Terminal. Effort: M. Risk: med. [client-architecture.md §4]
 **S6. Transcript parsing off the main thread.** `restorePersisted` does 2 full transcript parses +
 recursive `readdirSync` per chat per boot; `chat-attach` adds a third — all synchronous on the
 event loop. Effort: S-M. Risk: low. [server-architecture.md §4]
+> **Status: DONE 2026-10-12** (branch `async-transcript-parsing`) — landed as `e818e69`
+> (single-pass `readTranscriptMeta` + async IO mirrors with parity tests), `94bce45`
+> (async `restorePersisted` + `whenRestored()`, memoized async `loadHistory`, chat-attach
+> awaits, dispatcher held-until-restore, fixture-creation ordering fix; test stubs await
+> restore), and the `chatAsyncRestore.test.ts` suite pinning the invariants: rows land
+> after construction, discovery exclusion during restore, shutdown aborts a restore,
+> single-read memoization, sync-capture race, kill-during-load, and the
+> attach-vs-assistant_delta ordering. Per-session boot cost drops from
+> readdir + 2 full parses to one async discovery + one single-pass read; the
+> attach parse leaves the event loop entirely.
 
 ### P2 — Worth doing, not urgent
 - **Terminal transport abstraction rework**: `TerminalProxyBase` abstracts lifecycle queueing +

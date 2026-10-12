@@ -368,6 +368,78 @@ describe('chat WebSocket subscriptions', () => {
   })
 })
 
+describe('chat attach across async restore and history', () => {
+  const tick = () => new Promise(resolve => setTimeout(resolve, 0))
+  const gate = () => {
+    let open!: () => void
+    const promise = new Promise<void>(resolve => { open = resolve })
+    return { promise, open }
+  }
+  type Stubbed = { whenRestored: () => Promise<void>; loadHistory: (id: string) => Promise<void>; has: (id: string) => boolean }
+
+  test('messages wait for the boot restore, in arrival order', async () => {
+    const h = harness()
+    const restore = gate()
+    let restored = false
+    const manager = h.manager as unknown as Stubbed
+    manager.whenRestored = () => restore.promise
+    manager.has = id => restored && id === 'chat-1'
+    const attach = h.connections.handle(h.connection, { type: 'chat-attach', sessionId: 'chat-1' })
+    const send = h.connections.handle(h.connection, { type: 'chat-send', sessionId: 'chat-1', text: 'hi' })
+    await tick()
+    expect(h.messages).toEqual([])
+    restored = true
+    restore.open()
+    await Promise.all([attach, send])
+    expect(h.messages.map(message => message.type)).toEqual(['chat-snapshot'])
+    expect(h.calls).toEqual([['send', 'chat-1', 'hi'], ['start', 'chat-1']])
+  })
+
+  test('a detach sent while the attach loads history wins', async () => {
+    const h = harness()
+    const history = gate()
+    ;(h.manager as unknown as Stubbed).loadHistory = () => history.promise
+    const attach = h.connections.handle(h.connection, { type: 'chat-attach', sessionId: 'chat-1' })
+    await h.connections.handle(h.connection, { type: 'chat-detach', sessionId: 'chat-1' })
+    history.open()
+    await attach
+    h.connections.publish('chat-1', delta(1))
+    await tick()
+    expect(h.messages).toEqual([])
+    expect(h.calls).toEqual([])
+  })
+
+  test('of two attaches racing their history loads only the latest subscribes', async () => {
+    const h = harness()
+    const loads = [gate(), gate()]
+    let call = 0
+    ;(h.manager as unknown as Stubbed).loadHistory = () => loads[call++]!.promise
+    const first = h.connections.handle(h.connection, { type: 'chat-attach', sessionId: 'chat-1' })
+    await tick()
+    const second = h.connections.handle(h.connection, { type: 'chat-attach', sessionId: 'chat-1' })
+    await tick()
+    loads[1]!.open(); await second
+    loads[0]!.open(); await first
+    expect(h.messages.map(message => message.type)).toEqual(['chat-snapshot'])
+    expect(h.calls).toEqual([['start', 'chat-1']])
+  })
+
+  test('a disconnect while the attach loads history drops it', async () => {
+    const h = harness()
+    const history = gate()
+    ;(h.manager as unknown as Stubbed).loadHistory = () => history.promise
+    const attach = h.connections.handle(h.connection, { type: 'chat-attach', sessionId: 'chat-1' })
+    await tick()
+    h.connections.disconnect(h.connection)
+    history.open()
+    await attach
+    h.connections.publish('chat-1', delta(1))
+    await tick()
+    expect(h.messages).toEqual([])
+    expect(h.calls).toEqual([])
+  })
+})
+
 describe('chat debug subscriptions', () => {
   const dirs: string[] = []
   function wireLogs(): ChatWireLogs {

@@ -5,13 +5,13 @@ Each task ends with `bun run lint && bun run typecheck && bun run test` green an
 
 ## 1. transcriptReplay: single-pass meta + async IO
 
-- [ ] 1.1 Add `readTranscriptMeta(filePath)` (one read + one parse, returns
+- [x] 1.1 Add `readTranscriptMeta(filePath)` (one read + one parse, returns
   `{ title, cwd }`) and async mirrors `findTranscriptPathAsync` and
   `readTranscriptMetaAsync` over `fs/promises` in `src/server/chat/transcriptReplay.ts`;
   add `replayTranscriptFileAsync` wrapping the existing parse with async read. Keep the
   sync exports intact for non-boot callers; unit-test the meta reader against a fixture
   transcript (title present/absent, cwd present/absent, unreadable file)
-- [ ] 1.2 Audit every caller of the sync fns (`ChatSessionManager`, `ChatConnections`,
+- [x] 1.2 Audit every caller of the sync fns (`ChatSessionManager`, `ChatConnections`,
   `transcriptTitleWatcher`, `chatWorkerTranscript`, tests): non-boot callers keep sync with
   an in-code note why; commit (`feat: single-pass transcript meta reader and async io`)
 
@@ -32,9 +32,9 @@ Each task ends with `bun run lint && bun run typecheck && bun run test` green an
 
 ## 3. Race test + close-out
 
-- [ ] 3.1 Add the race test: a `chat-attach` concurrent with a live `assistant_delta` still
+- [x] 3.1 Add the race test: a `chat-attach` concurrent with a live `assistant_delta` still
   yields the delta after the snapshot (pin the D3 invariant)
-- [ ] 3.2 Mark S6 done in `docs/refactor-analysis/synthesis.md` under a new P1/S6 status
+- [x] 3.2 Mark S6 done in `docs/refactor-analysis/synthesis.md` under a new P1/S6 status
   note with commit hashes, mirroring the P0/S2/S1 notes; commit
   (`docs: mark P1/S6 complete in refactor synthesis`)
 
