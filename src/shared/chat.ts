@@ -281,7 +281,15 @@ export interface ChatUsageReport {
   windows: ChatUsageWindow[]
   /** ISO timestamp of when the report was received. */
   receivedAt: string
+  /**
+   * Which shape it came from: a pushed rate_limit_event, a /usage report, or
+   * the SDK usage pull (which follows the host claude.ai login, not the
+   * session's provider). Absent on reports from older servers.
+   */
+  source?: ChatUsageSource
 }
+
+export type ChatUsageSource = 'push' | 'report' | 'pull'
 
 /** Lifecycle outcome of an agent the chat session spawned (workers design D2). */
 export type ChatWorkerStatus = 'running' | 'completed' | 'failed' | 'stopped'
