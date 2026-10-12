@@ -59,11 +59,16 @@ a commit; `indexHandlers.test.ts` must pass unchanged (design D5) throughout.
 
 ## 5. WebSocket modules
 
-- [ ] 5.1 Create `src/server/ws/ConnectionHub.ts` (sockets, `WSData`, `broadcast`, `send`,
+- [x] 5.1 Create `src/server/ws/ConnectionHub.ts` (sockets, `WSData`, `broadcast`, `send`,
   `fireAndForget`, registry→broadcast wiring; today ~:601–653 + 1476–1494 + 2615–2647);
   `ws/clipboardWatch.ts` (~:640s consts + 2351–2598; `clipboardWatchGen` verbatim);
   `ws/copyMode.ts` (~:2901–3163; `copyModeCheckInFlight` verbatim); commit
   (`refactor: lift ws hub, clipboard watch, and copy mode into ws/ modules`)
+  - Notes: `ConnectionHub` exposes `sockets` and arrow-bound `broadcast`/`send` (destructured
+    once in the composition root) and also takes `createConnectionId`; clipboard watch and
+    copy mode follow the `sessions/` style — functions over a small context
+    (`{ registry, hub }`, plus `runRemoteTmux` for copy mode) — since their race guards live
+    on the per-socket `WSData`, not on a class.
 - [ ] 5.2 Create `src/server/ws/terminalAttach.ts` lifting the proxy lifecycle, SSH proxy
   creation, and attach/detach/input/paste/resize handling (~:4313–4948;
   `terminalAttachSeq` verbatim); commit (`refactor: lift terminal attach lifecycle into

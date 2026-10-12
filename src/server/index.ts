@@ -44,12 +44,10 @@ import {
   HISTORY_MAX_AGE_MIN_HOURS,
   HISTORY_MAX_AGE_MAX_HOURS,
   type ClientMessage,
-  type ServerMessage,
   type TerminalErrorCode,
   type DirectoryListing,
   type DirectoryErrorResponse,
   type Session,
-  type TerminalSession,
 } from '../shared/types'
 import { isTerminalSession } from '../shared/types'
 import { logger, logLevel } from './logger'
@@ -76,6 +74,15 @@ import { composeAutoStartCommand } from './applyCommand'
 import { readLogLineWindow } from './logContent'
 import { SessionRefreshLoop } from './refresh/SessionRefreshLoop'
 import type { WSData } from './ws/wsTypes'
+import { ConnectionHub, createConnectionId, fireAndForget } from './ws/ConnectionHub'
+import {
+  CLIPBOARD_BUFFER_ARM_MS,
+  containsClipboardArmingMouseInput,
+  startClipboardBufferWatch,
+  stopClipboardBufferWatch,
+  type ClipboardWatchContext,
+} from './ws/clipboardWatch'
+import { handleCancelCopyMode, handleCheckCopyMode, type CopyModeContext } from './ws/copyMode'
 import { handleKill } from './sessions/kill'
 import { handleRename } from './sessions/rename'
 import { handleSessionHibernate } from './sessions/hibernate'
@@ -226,14 +233,6 @@ function pruneOrphanedWsSessions(): void {
 
 const MAX_DIRECTORY_ENTRIES = 200
 
-function createConnectionId(): string {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-    return crypto.randomUUID()
-  }
-
-  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
-}
-
 checkPortAvailable(config.port)
 ensureTmux()
 const resolvedTerminalMode = resolveTerminalMode()
@@ -315,29 +314,22 @@ try {
 
 const registry = new SessionRegistry()
 
-const sockets = new Set<ServerWebSocket<WSData>>()
-const CLIPBOARD_BUFFER_POLL_MS = 750
-const CLIPBOARD_BUFFER_MAX_BYTES = 512 * 1024
-const CLIPBOARD_BUFFER_ARM_MS = 5000
-const SGR_MOUSE_INPUT_RE = new RegExp(
-  `${String.fromCharCode(0x1b)}\\[<(\\d+);\\d+;\\d+[Mm]`,
-  'g'
-)
-
-interface TmuxBufferSummary {
-  name: string
-  created: number
-  size: number
-  // Monotonic index parsed from tmux's automatic buffer name (buffer0001,
-  // buffer0002, …); -1 for explicitly named buffers. Used as the recency
-  // tiebreaker when buffer_created collides at whole-second resolution.
-  order: number
-  key: string
-}
+// WebSocket connection hub: open sockets plus the broadcast/send primitives
+// every module reaches clients through (see ws/ConnectionHub).
+const hub = new ConnectionHub()
+const { sockets, broadcast, send } = hub
 
 // Remote session service: poller, host statuses, SSH/tmux control plane,
 // and the optimistic protection/tombstone/override maps (see remote/).
 const remote = new RemoteSessionService({ registry, broadcast, send })
+
+// Per-socket clipboard buffer watch and tmux copy-mode sync (see ws/).
+const clipboardCtx: ClipboardWatchContext = { registry, hub }
+const copyModeCtx: CopyModeContext = {
+  registry,
+  hub,
+  runRemoteTmux: (host, args) => remote.runTmux(host, args),
+}
 
 // Always-on raw protocol capture for the chat debug view, beside the DB.
 const chatWireLogs = new ChatWireLogs({ dir: path.join(resolveDataDir(), 'chat-wire') })
@@ -492,25 +484,7 @@ if (logLevel === 'debug') {
 }
 
 
-registry.on('session-update', (session) => {
-  broadcast({ type: 'session-update', session })
-})
-
-registry.on('sessions', (sessions) => {
-  broadcast({ type: 'sessions', sessions })
-})
-
-registry.on('session-removed', (sessionId) => {
-  broadcast({ type: 'session-removed', sessionId })
-})
-
-registry.on('agent-sessions', ({ active, hibernating, history }) => {
-  broadcast({ type: 'agent-sessions', active, hibernating, history })
-})
-
-registry.on('agent-sessions-active', (active) => {
-  broadcast({ type: 'agent-sessions-active', active })
-})
+hub.wireRegistry(registry)
 
 // Workspace discovery seeds: live local session paths plus persisted active,
 // hibernating, and history agent-session paths. Remote sessions never seed
@@ -1356,212 +1330,6 @@ function clearAttachDedup(ws: ServerWebSocket<WSData>) {
   ws.data.lastAttachTs = 0
 }
 
-function parseTmuxBufferSummaries(output: string): TmuxBufferSummary[] {
-  const summaries: TmuxBufferSummary[] = []
-  for (const line of splitTmuxLines(output)) {
-    const parts = splitTmuxFields(line, 3)
-    if (!parts) continue
-    const name = parts[0]?.trim()
-    const created = Number.parseInt(parts[1] ?? '', 10)
-    const size = Number.parseInt(parts[2] ?? '', 10)
-    if (!name || !Number.isFinite(created) || !Number.isFinite(size)) continue
-    // Only tmux's automatic buffers (buffer0001, buffer0002, …) carry a
-    // monotonic index. Explicitly named buffers (e.g. set-buffer -b snippet5)
-    // get -1 so their trailing digits don't masquerade as recency.
-    const orderMatch = name.match(/^buffer(\d+)$/)
-    const order = orderMatch ? Number.parseInt(orderMatch[1], 10) : -1
-    summaries.push({
-      name,
-      created,
-      size,
-      order,
-      key: `${name}:${created}:${size}`,
-    })
-  }
-  // Newest first. tmux's #{buffer_created} is whole-second resolution, so when
-  // two buffers share a second, tiebreak by the monotonic automatic-buffer
-  // index (buffer0002 newer than buffer0001) rather than size, which carries
-  // no recency information.
-  summaries.sort((a, b) => b.created - a.created || b.order - a.order || b.size - a.size)
-  return summaries
-}
-
-async function readLatestTmuxBufferSummary(): Promise<TmuxBufferSummary | null> {
-  const stdout = await readTmuxCapture([
-    'list-buffers',
-    '-F',
-    buildTmuxFormat(['#{buffer_name}', '#{buffer_created}', '#{buffer_size}']),
-  ])
-  if (stdout === null) return null
-  return parseTmuxBufferSummaries(stdout)[0] ?? null
-}
-
-async function readTmuxBufferText(summary: TmuxBufferSummary): Promise<string | null> {
-  if (summary.size <= 0 || summary.size > CLIPBOARD_BUFFER_MAX_BYTES) {
-    return null
-  }
-  const text = await readTmuxCapture(['show-buffer', '-b', summary.name])
-  if (text === null) return null
-  return text.trim() ? text : null
-}
-
-function stopClipboardBufferWatch(ws: ServerWebSocket<WSData>) {
-  if (ws.data.clipboardPollTimer !== null) {
-    clearInterval(ws.data.clipboardPollTimer)
-  }
-  // Bump the generation so any in-flight baseline read or poll from the watch
-  // we're tearing down can't write back into a later watch on this socket.
-  ws.data.clipboardWatchGen += 1
-  ws.data.clipboardPollTimer = null
-  ws.data.clipboardPollInFlight = false
-  ws.data.lastClipboardBufferKey = null
-  ws.data.clipboardBufferArmedUntil = 0
-  ws.data.clipboardArmedAtSec = 0
-}
-
-function startClipboardBufferWatch(
-  ws: ServerWebSocket<WSData>,
-  sessionId: string,
-  session: Session
-) {
-  stopClipboardBufferWatch(ws)
-
-  if (session.remote) {
-    return
-  }
-
-  const gen = ws.data.clipboardWatchGen
-  ws.data.clipboardPollTimer = setInterval(() => {
-    fireAndForget(pollClipboardBuffer(ws, sessionId, gen), 'pollClipboardBuffer')
-  }, CLIPBOARD_BUFFER_POLL_MS)
-  // Establish the baseline asynchronously so a pre-existing buffer isn't offered
-  // on the first poll. Skip if this watch was already armed (a copy may have
-  // landed before the read resolved — don't watermark the user's own buffer;
-  // the created-time gate handles a genuinely pre-existing one) or superseded.
-  fireAndForget(
-    (async () => {
-      const initial = await readLatestTmuxBufferSummary()
-      if (
-        ws.data.clipboardWatchGen === gen &&
-        ws.data.lastClipboardBufferKey === null &&
-        ws.data.clipboardBufferArmedUntil === 0
-      ) {
-        ws.data.lastClipboardBufferKey = initial?.key ?? null
-      }
-    })(),
-    'clipboardBaseline'
-  )
-}
-
-async function pollClipboardBuffer(
-  ws: ServerWebSocket<WSData>,
-  sessionId: string,
-  gen: number
-) {
-  if (ws.data.clipboardWatchGen !== gen) return
-  if (ws.data.clipboardPollInFlight) return
-  if (!sockets.has(ws)) return
-  if (ws.data.currentSessionId !== sessionId) return
-
-  const session = registry.get(sessionId)
-  if (!session || session.remote) return
-
-  ws.data.clipboardPollInFlight = true
-  try {
-    const latest = await readLatestTmuxBufferSummary()
-    // The read yields the event loop, so the watch may have been torn down or
-    // the socket may have switched sessions while tmux ran. Re-validate before
-    // touching state or offering.
-    if (ws.data.clipboardWatchGen !== gen) return
-    if (!sockets.has(ws) || ws.data.currentSessionId !== sessionId) return
-    if (!latest) {
-      ws.data.lastClipboardBufferKey = null
-      return
-    }
-    if (latest.key === ws.data.lastClipboardBufferKey) {
-      return
-    }
-
-    ws.data.lastClipboardBufferKey = latest.key
-    if (Date.now() > ws.data.clipboardBufferArmedUntil) {
-      logger.debug('clipboard_buffer_watermarked', {
-        sessionId,
-        bufferName: latest.name,
-        bytes: latest.size,
-        connectionId: ws.data.connectionId,
-      })
-      return
-    }
-
-    // Only offer buffers created at/after the arming gesture. A pre-existing or
-    // unrelated (cross-window) buffer that becomes "latest" while armed has an
-    // older creation time and is skipped, so it can't clobber the clipboard.
-    if (latest.created < ws.data.clipboardArmedAtSec) {
-      logger.debug('clipboard_buffer_precedes_arm', {
-        sessionId,
-        bufferName: latest.name,
-        createdSec: latest.created,
-        armedAtSec: ws.data.clipboardArmedAtSec,
-        connectionId: ws.data.connectionId,
-      })
-      return
-    }
-
-    const text = await readTmuxBufferText(latest)
-    if (!text) {
-      logger.debug('clipboard_buffer_skipped', {
-        sessionId,
-        bufferName: latest.name,
-        bytes: latest.size,
-        connectionId: ws.data.connectionId,
-      })
-      return
-    }
-
-    // Re-validate again after the second tmux read before delivering, so we
-    // never push a session A offer to a socket that has closed or moved to B.
-    if (ws.data.clipboardWatchGen !== gen) return
-    if (!sockets.has(ws) || ws.data.currentSessionId !== sessionId) return
-
-    logger.debug('clipboard_buffer_offer', {
-      sessionId,
-      bufferName: latest.name,
-      bytes: latest.size,
-      connectionId: ws.data.connectionId,
-    })
-    send(ws, { type: 'clipboard-offer', sessionId, text, source: 'tmux-buffer' })
-    ws.data.clipboardBufferArmedUntil = 0
-    ws.data.clipboardArmedAtSec = 0
-  } finally {
-    // Only release the in-flight guard if the watch is still ours. If it was
-    // stopped/restarted mid-poll, stopClipboardBufferWatch already reset the
-    // guard for the new generation and we must not clear it out from under it.
-    if (ws.data.clipboardWatchGen === gen) {
-      ws.data.clipboardPollInFlight = false
-    }
-  }
-}
-
-// Arm the clipboard buffer watch on any left-button mouse event (press, drag,
-// or release). This covers every selection style that copies to a tmux paste
-// buffer — drag-select, double-click (word) and triple-click (line), which
-// emit button-0 events with no motion bit. Bare taps also match, but they
-// can't clobber the clipboard: the poll additionally requires the buffer to
-// have been created at/after the gesture (see clipboardArmedAtSec), so a tap
-// that copies nothing simply never produces an offer.
-// SGR encoding: low 2 bits = button (0 = left), bits 6-7 (0xC0) = wheel/extended.
-function containsClipboardArmingMouseInput(data: string): boolean {
-  SGR_MOUSE_INPUT_RE.lastIndex = 0
-  let match: RegExpExecArray | null
-  while ((match = SGR_MOUSE_INPUT_RE.exec(data)) !== null) {
-    const button = Number(match[1])
-    if ((button & 3) === 0 && (button & 0xc0) === 0) {
-      return true
-    }
-  }
-  return false
-}
-
 function cleanupTerminals(ws: ServerWebSocket<WSData>) {
   stopClipboardBufferWatch(ws)
   if (ws.data.terminal) {
@@ -1575,40 +1343,6 @@ function cleanupTerminals(ws: ServerWebSocket<WSData>) {
   // alive so a later attach on this still-open socket delivers output again.
   ws.data.outputCoalescer?.clearPending()
   clearAttachDedup(ws)
-}
-
-function broadcast(message: ServerMessage) {
-  const payload = JSON.stringify(message)
-  for (const socket of sockets) {
-    // Drain pending terminal output first so a broadcast cannot overtake
-    // output already queued for that connection.
-    socket.data.outputCoalescer?.flush()
-    socket.send(payload)
-  }
-}
-
-function send(ws: ServerWebSocket<WSData>, message: ServerMessage) {
-  const coalescer = ws.data.outputCoalescer
-  if (!coalescer) {
-    ws.send(JSON.stringify(message))
-    return
-  }
-  if (message.type === 'terminal-output') {
-    // Coalesced per connection: one frame per event-loop turn, with every
-    // non-output message draining pending output first (see sendOrdered).
-    coalescer.enqueue(message.sessionId, message.data)
-    return
-  }
-  coalescer.sendOrdered(message)
-}
-
-function fireAndForget(promise: Promise<unknown>, context: string): void {
-  promise.catch((err) => {
-    logger.error('unhandled_async_error', {
-      context,
-      error: err instanceof Error ? err.message : String(err),
-    })
-  })
 }
 
 /**
@@ -1833,10 +1567,10 @@ function handleMessage(
       return
     case 'tmux-cancel-copy-mode':
       // Exit tmux copy-mode when user starts typing after scrolling
-      fireAndForget(handleCancelCopyMode(message.sessionId, ws), 'handleCancelCopyMode')
+      fireAndForget(handleCancelCopyMode(copyModeCtx, message.sessionId, ws), 'handleCancelCopyMode')
       return
     case 'tmux-check-copy-mode':
-      fireAndForget(handleCheckCopyMode(message.sessionId, ws), 'handleCheckCopyMode')
+      fireAndForget(handleCheckCopyMode(copyModeCtx, message.sessionId, ws), 'handleCheckCopyMode')
       return
     case 'session-wake':
       fireAndForget(handleSessionWake(sessionOps, message, ws), 'handleSessionWake')
@@ -1871,108 +1605,6 @@ function handleMessage(
     default:
       send(ws, { type: 'error', message: 'Unknown message type' })
   }
-}
-
-function resolveCopyModeTarget(
-  sessionId: string,
-  ws: ServerWebSocket<WSData>,
-  session: TerminalSession
-): string {
-  if (ws.data.currentSessionId === sessionId && ws.data.currentTmuxTarget) {
-    return ws.data.currentTmuxTarget
-  }
-  return session.tmuxWindow
-}
-
-async function handleCancelCopyMode(sessionId: string, ws: ServerWebSocket<WSData>) {
-  const session = registry.get(sessionId)
-  if (!session || !isTerminalSession(session)) return
-  if (session.remote && !config.remoteAllowAttach) return
-
-  try {
-    // Exit tmux copy-mode quietly. Async spawn: a sync spawnSync here stalls
-    // the event loop (and with it keystroke dispatch + terminal streaming)
-    // for the full command duration whenever the tmux server is slow.
-    // NOTE: async also means a keystroke racing this cancel can reach tmux
-    // first (worst case one key consumed by copy-mode navigation) — a race
-    // that already existed on the remote path.
-    const target = resolveCopyModeTarget(sessionId, ws, session)
-    if (session.remote && session.host) {
-      await remote.runTmux(session.host, ['send-keys', '-X', '-t', target, 'cancel'])
-    } else {
-      await readTmuxCapture(['send-keys', '-X', '-t', target, 'cancel'])
-    }
-  } catch {
-    // Ignore errors - copy-mode may not be active
-  }
-}
-
-async function handleCheckCopyMode(sessionId: string, ws: ServerWebSocket<WSData>) {
-  const session = registry.get(sessionId)
-  if (!session || !isTerminalSession(session)) return
-  if (session.remote && !config.remoteAllowAttach) return
-  // The client polls this every 750ms. With a loaded tmux server an async
-  // probe can outlast that period; letting a second probe race the first
-  // would let an older reply land after a newer one and stale-flip the
-  // copy-mode state. Skip instead — the next poll delivers fresh state.
-  if (ws.data.copyModeCheckInFlight) return
-  ws.data.copyModeCheckInFlight = true
-
-  // A probe can now outlive the attachment it was issued against (session
-  // switch, detach, socket close). Capture generation + resolved target before
-  // awaiting and discard the reply if either moved — the in-flight guard alone
-  // cannot stop a probe for an old attachment from completing after a switch.
-  const attachSeq = ws.data.terminalAttachSeq
-  const target = resolveCopyModeTarget(sessionId, ws, session)
-
-  try {
-    // Query tmux for pane copy-mode status plus fullscreen-app detection:
-    //   pane_in_mode  -> tmux copy-mode active
-    //   alternate_on  -> pane on the alternate screen buffer
-    //   mouse_any_flag-> the in-pane app requested mouse tracking (owns the mouse)
-    // Async spawn (readTmuxCapture) rather than Bun.spawnSync: this runs on
-    // the main event loop, and a sync spawn blocks keystroke dispatch and
-    // terminal-output sends for the full command duration whenever the tmux
-    // server is busy serving many windows.
-    const fmt = '#{pane_in_mode},#{alternate_on},#{mouse_any_flag}'
-    let output: string
-    if (session.remote && session.host) {
-      const result = await remote.runTmux(session.host, ['display-message', '-p', '-t', target, fmt])
-      output = result.stdout?.trim() ?? ''
-    } else {
-      output = (await readTmuxCapture(['display-message', '-p', '-t', target, fmt]))?.trim() ?? ''
-    }
-    const [inCopyModeField, altScreenField, appMouseField] = output.split(',')
-    const inCopyMode = inCopyModeField === '1'
-    const altScreen = altScreenField === '1'
-    const appMouse = appMouseField === '1'
-    if (!copyModeReplyStillCurrent(ws, sessionId, attachSeq, target)) return
-    send(ws, { type: 'tmux-copy-mode-status', sessionId, inCopyMode, altScreen, appMouse })
-  } catch {
-    // On error, assume not in copy mode and no fullscreen app
-    if (!copyModeReplyStillCurrent(ws, sessionId, attachSeq, target)) return
-    send(ws, { type: 'tmux-copy-mode-status', sessionId, inCopyMode: false, altScreen: false, appMouse: false })
-  } finally {
-    ws.data.copyModeCheckInFlight = false
-  }
-}
-
-/**
- * True when a copy-mode probe's reply still describes the attachment it was
- * issued against: the socket is still open, no new attachment started, and the
- * resolved pane target is unchanged.
- */
-function copyModeReplyStillCurrent(
-  ws: ServerWebSocket<WSData>,
-  sessionId: string,
-  attachSeq: number,
-  target: string
-): boolean {
-  if (!sockets.has(ws)) return false
-  if (ws.data.terminalAttachSeq !== attachSeq) return false
-  const session = registry.get(sessionId)
-  if (!session || !isTerminalSession(session)) return false
-  return resolveCopyModeTarget(sessionId, ws, session) === target
 }
 
 function initializePersistentTerminal(ws: ServerWebSocket<WSData>) {
@@ -2302,7 +1934,7 @@ async function attachTerminalPersistent(
       }
       ws.data.currentSessionId = sessionId
       ws.data.currentTmuxTarget = effectiveTarget
-      startClipboardBufferWatch(ws, sessionId, session)
+      startClipboardBufferWatch(clipboardCtx, ws, sessionId, session)
       send(ws, { type: 'terminal-ready', sessionId })
     } catch (error) {
       if (sockets.has(ws) && isTerminalAttachCurrent(ws, attachSeq)) {
@@ -2370,7 +2002,7 @@ async function attachTerminalPersistent(
     // attach from hitting the dedup fast-path while the first is still in flight.
     ws.data.lastAttachKey = attachKey
     ws.data.lastAttachTs = performance.now()
-    startClipboardBufferWatch(ws, sessionId, session)
+    startClipboardBufferWatch(clipboardCtx, ws, sessionId, session)
     logger.info('terminal_attach_profile', {
       sessionId,
       target,
