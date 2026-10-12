@@ -415,6 +415,8 @@ export class ChatSessionManager {
         const record = this.records.get(id)
         if (record && !record.spawned && record.taskId !== taskId) this.applyPatch(id, { taskId })
       },
+      // Sync discovery is fine here: a per-event lookup, not the boot path
+      // (async-transcript-parsing design D4).
       transcriptFor: id => { const sdkId = this.records.get(id)?.sdkSessionId; return sdkId ? findTranscriptPath(sdkId) : null },
       onChange: options.onMailboxChange,
       onError: error => logger.warn('team_mailbox_dispatch_failed', { error: String(error) }),
@@ -860,6 +862,8 @@ export class ChatSessionManager {
     const spawning = !this.driverPromises.has(record.sessionId)
     if (
       record.sdkSessionId &&
+      // Sync discovery acceptable: a per-request existence check, not the
+      // boot path (async-transcript-parsing design D4).
       !this.drivers.has(record.sessionId) &&
       spawning &&
       !findTranscriptPath(record.sdkSessionId)
@@ -987,6 +991,8 @@ export class ChatSessionManager {
     if (this.titleWatchers.has(sessionId)) return
     const record = this.records.get(sessionId)
     if (!record || record.archivedAt != null || !record.sdkSessionId) return
+    // Sync discovery acceptable: a per-attach watcher setup, not the boot
+    // path (async-transcript-parsing design D4).
     const filePath = findTranscriptPath(record.sdkSessionId)
     if (!filePath) {
       const base = this.options.titleLocateIntervalMs ?? 2_000

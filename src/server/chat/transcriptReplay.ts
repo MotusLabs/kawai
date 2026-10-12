@@ -6,6 +6,7 @@
 // request pairs that history immediately marks cancelled (design D7).
 import { parseEnvelope } from '../team/envelope'
 import fs from 'node:fs'
+import fsp from 'node:fs/promises'
 import path from 'node:path'
 import type { ChatEvent } from '../../shared/chat'
 import { getClaudeConfigDir } from '../logDiscovery'
@@ -511,6 +512,118 @@ export function readTranscriptCwd(filePath: string): string | null {
     return parseTranscriptContent(fs.readFileSync(filePath, 'utf8')).cwd
   } catch {
     return null
+  }
+}
+
+/** Boot catch-up fields extracted from one transcript parse pass. */
+export interface TranscriptMeta {
+  title: TranscriptTitle | null
+  cwd: string | null
+}
+
+/**
+ * Title and cwd from a SINGLE read + parse pass — the boot catch-up needs
+ * both (naming design D4, worktree tracking design D3), and reading the file
+ * twice would double the startup parse cost. Null fields when unreadable.
+ */
+export function readTranscriptMeta(filePath: string): TranscriptMeta {
+  try {
+    const parsed = parseTranscriptContent(fs.readFileSync(filePath, 'utf8'))
+    return { title: parsed.title, cwd: parsed.cwd }
+  } catch {
+    return { title: null, cwd: null }
+  }
+}
+
+/** Async mirror of {@link readTranscriptMeta} over fs/promises. */
+export async function readTranscriptMetaAsync(
+  filePath: string
+): Promise<TranscriptMeta> {
+  let content: string
+  try {
+    content = await fsp.readFile(filePath, 'utf8')
+  } catch {
+    return { title: null, cwd: null }
+  }
+  try {
+    const parsed = parseTranscriptContent(content)
+    return { title: parsed.title, cwd: parsed.cwd }
+  } catch {
+    return { title: null, cwd: null }
+  }
+}
+
+/** Async mirror of {@link findTranscriptPath} over fs/promises. */
+export async function findTranscriptPathAsync(
+  sdkSessionId: string
+): Promise<string | null> {
+  const name = `${sdkSessionId}.jsonl`
+  const root = path.join(getClaudeConfigDir(), 'projects')
+  return findNewestFileAsync(root, name, 3)
+}
+
+async function findNewestFileAsync(
+  root: string,
+  fileName: string,
+  maxDepth: number
+): Promise<string | null> {
+  // Mutable holder: the walk is recursive and TS cannot see those writes.
+  const best = { path: null as string | null, mtime: -1 }
+  const walk = async (dir: string, depth: number): Promise<void> => {
+    let entries: fs.Dirent[]
+    try {
+      entries = await fsp.readdir(dir, { withFileTypes: true })
+    } catch {
+      return
+    }
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name)
+      if (entry.isDirectory()) {
+        if (depth < maxDepth) await walk(full, depth + 1)
+      } else if (entry.isFile() && entry.name === fileName) {
+        const mtime = (await fsp.stat(full)).mtimeMs
+        if (mtime > best.mtime) {
+          best.path = full
+          best.mtime = mtime
+        }
+      }
+    }
+  }
+  await walk(root, 0)
+  return best.path
+}
+
+/** Async mirror of {@link replayTranscriptFile} over fs/promises. */
+export async function replayTranscriptFileAsync(
+  filePath: string | null,
+  options?: { excludeToolCallIds?: Set<string> }
+): Promise<TranscriptReplay> {
+  if (!filePath) return historyUnavailable('missing')
+  let content: string
+  try {
+    content = await fsp.readFile(filePath, 'utf8')
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code
+    return historyUnavailable(code === 'ENOENT' ? 'missing' : 'unparseable')
+  }
+  try {
+    const parsed = parseTranscriptContent(content)
+    // Content that produced no events at all but failed to parse is a parser
+    // failure; an empty or bookkeeping-only file is simply an empty history.
+    if (parsed.events.length === 0 && parsed.invalidLines > 0) {
+      return historyUnavailable('unparseable')
+    }
+    return {
+      status: 'ok',
+      events: withCancelledRequests(
+        parsed.events,
+        parsed.unmatchedToolCallIds,
+        options
+      ),
+      cwd: parsed.cwd,
+    }
+  } catch {
+    return historyUnavailable('unparseable')
   }
 }
 

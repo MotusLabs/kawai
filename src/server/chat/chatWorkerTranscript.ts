@@ -28,6 +28,8 @@ export function readWorkerTranscript(
   workerId: string
 ): WorkerTranscript {
   if (!sdkSessionId) return unavailable()
+  // Sync discovery acceptable: an on-demand worker-body read for one client
+  // request, not the boot path (async-transcript-parsing design D4).
   const parentPath = findTranscriptPath(sdkSessionId)
   if (!parentPath) return unavailable()
   // `<dir>/<sdkSessionId>.jsonl` → `<dir>/<sdkSessionId>/subagents`.
