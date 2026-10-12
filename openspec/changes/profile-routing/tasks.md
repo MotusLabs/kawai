@@ -2,10 +2,10 @@
 
 ## 1. Group frontmatter: profiles, strategy, onLimit
 
-- [ ] 1.1 Extend the `groupFile.ts` frontmatter subset with strict single-line flow values for `profiles` (`[a, b]` or `{ a: 2, b: 1 }`) and `onLimit` (`{ parkIfResetWithin: 3h, otherwise: forward, forwardTo: architects }`), still rejecting nested structure; verify with `teamGroupFile.test.ts` cases for both forms, a bare scalar, nesting, and unbalanced brackets
-- [ ] 1.2 Add `profiles: Array<{ profileId, cap? }>` (a single `profile` becomes a one-item list; `profile` and `profiles` together is an error), `strategy` (`first-available` | `profile-order`, default `first-available`), and the `max` default (sum of caps when every entry has a cap, else 1, explicit `max` still wins) to `GroupDefinition`; verify with parse tests for each form and the default/explicit `max` scenarios
-- [ ] 1.3 Parse `onLimit` into `{ parkIfResetWithin (ms, default 3h), otherwise (default forward), forwardTo? }` with `<n>m`/`<n>h` durations; invalid values add a per-group warning and fall back to defaults instead of rejecting the file; verify the `soon` → 3h scenario reports a warning
-- [ ] 1.4 Add `warnings` to `GroupDefinition`, and in the group catalog drop `profiles` ids that no profile catalog defines, recording a warning (catalog errors list includes them); verify with `teamGroupCatalog.test.ts` for the unknown-profile scenario and that existing callers (`groupId` validation, prompts) are unchanged
+- [x] 1.1 Extend the `groupFile.ts` frontmatter subset with strict single-line flow values for `profiles` (`[a, b]` or `{ a: 2, b: 1 }`) and `onLimit` (`{ parkIfResetWithin: 3h, otherwise: forward, forwardTo: architects }`), still rejecting nested structure; verify with `teamGroupFile.test.ts` cases for both forms, a bare scalar, nesting, and unbalanced brackets
+- [x] 1.2 Add `profiles: Array<{ profileId, cap? }>` (a single `profile` becomes a one-item list; `profile` and `profiles` together is an error), `strategy` (`first-available` | `profile-order`, default `first-available`), and the `max` default (sum of caps when every entry has a cap, else 1, explicit `max` still wins) to `GroupDefinition`; verify with parse tests for each form and the default/explicit `max` scenarios
+- [x] 1.3 Parse `onLimit` into `{ parkIfResetWithin (ms, default 3h), otherwise (default forward), forwardTo? }` with `<n>m`/`<n>h` durations; invalid values add a per-group warning and fall back to defaults instead of rejecting the file; verify the `soon` → 3h scenario reports a warning
+- [x] 1.4 Add `warnings` to `GroupDefinition`, and in the group catalog drop `profiles` ids that no profile catalog defines, recording a warning (catalog errors list includes them); verify with `teamGroupCatalog.test.ts` for the unknown-profile scenario and that existing callers (`groupId` validation, prompts) are unchanged
 
 ## 2. Limit events and cooldown
 

@@ -29,7 +29,15 @@ describe('team group routes', () => {
         { id: 'qa', label: 'qa', description: 'Tests' },
       ],
       errors: [],
+      warnings: [],
     })
+  })
+
+  test('reports fallback warnings such as unknown profiles', async () => {
+    fs.writeFileSync(path.join(project, '.kawai', 'groups', 'devs.md'), '---\nprofiles: [glm, nope]\n---\nBuild.')
+    const body = await get(`?projectPath=${encodeURIComponent(project)}`) as { warnings: string[] }
+    expect(body.warnings).toHaveLength(1)
+    expect(body.warnings[0]).toContain('profile "nope" is not defined')
   })
 
   test('reports a malformed group file', async () => {
@@ -40,7 +48,7 @@ describe('team group routes', () => {
   })
 
   test('a missing or nonexistent project yields no groups', async () => {
-    expect(await get('')).toEqual({ groups: [], errors: [] })
-    expect(await get(`?projectPath=${encodeURIComponent(path.join(root, 'nope'))}`)).toEqual({ groups: [], errors: [] })
+    expect(await get('')).toEqual({ groups: [], errors: [], warnings: [] })
+    expect(await get(`?projectPath=${encodeURIComponent(path.join(root, 'nope'))}`)).toEqual({ groups: [], errors: [], warnings: [] })
   })
 })

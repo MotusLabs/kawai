@@ -126,7 +126,7 @@ export class WorktreeStaffing {
     try {
       result = await this.options.spawn({
         projectPath: worktree, groupId: group.id, approvalPolicy: group.approval, taskId: message.taskId!,
-        ...(group.profile ? { profileId: group.profile } : {}),
+        ...(group.profiles[0] ? { profileId: group.profiles[0].profileId } : {}),
       })
     } catch (error) {
       result = { ok: false, error: error instanceof Error ? error.message : String(error) }
