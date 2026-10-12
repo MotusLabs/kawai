@@ -31,24 +31,25 @@
 
 ## 3. Split the remaining module into src/server/logmatch/
 
-- [ ] 3.1 Create `src/server/logmatch/` with `scrollback.ts`, `promptExtract.ts`,
-  `logText.ts`, `exactMatch.ts`, `verify.ts` (boundaries per design D2); move the live code
-  without modification, adding `common.ts` only for helpers shared by two or more modules
-- [ ] 3.2 Add `src/server/logmatch/index.ts` barrel re-exporting exactly the consumed surface
-  (verify the list against the five importers: index.ts, logPoller.ts, logMatchWorker.ts,
-  sessionRefreshWorker.ts, logPollData.ts — nothing more)
-- [ ] 3.3 Delete `src/server/logMatcher.ts`; update the five importers from `./logMatcher` to
+- [x] 3.1 Create `src/server/logmatch/` with `scrollback.ts`, `promptExtract.ts`,
+  `logText.ts`, `candidateSearch.ts`, `exactMatch.ts`, `verify.ts` (boundaries per design
+  D2, revised 2026-10-12 to six modules); move the live code without modification, adding
+  `common.ts` only for helpers shared by two or more modules
+- [x] 3.2 Add `src/server/logmatch/index.ts` barrel re-exporting exactly the consumed surface
+  (verify the list against the six importers: index.ts, logPoller.ts, logMatchWorker.ts,
+  logMatchWorkerTypes.ts, sessionRefreshWorker.ts, logPollData.ts — nothing more)
+- [x] 3.3 Delete `src/server/logMatcher.ts`; update the six importers from `./logMatcher` to
   `./logmatch`; update `logMatcher.test.ts` (and any other test importing the old path) to
   the new modules
-- [ ] 3.4 Add header comments to each new module (one to three lines, house style)
-- [ ] 3.5 Run lint, typecheck, and the full suite; commit
+- [x] 3.4 Add header comments to each new module (one to three lines, house style)
+- [x] 3.5 Run lint, typecheck, and the full suite; commit
   (`refactor: split logMatcher into concern-scoped logmatch modules`)
 
 ## 4. Verify and close out
 
 - [ ] 4.1 Grep the repo for lingering `logMatcher` references (imports, path strings in test
   configs or the runner's isolated-file sets) and clean them up
-- [ ] 4.2 Confirm LOC outcome: logMatcher.ts (~2.6k) replaced by five modules each under the
+- [ ] 4.2 Confirm LOC outcome: logMatcher.ts (~2.6k) replaced by six modules each under the
   500-LOC norm; record actual numbers in the commit or change notes
 - [ ] 4.3 Mark S2 done in `docs/refactor-analysis/synthesis.md` (status note with commit
   hashes, mirroring the P0 note); commit (`docs: mark P1/S2 complete in refactor synthesis`)

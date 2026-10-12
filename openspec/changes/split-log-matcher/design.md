@@ -46,13 +46,21 @@ once) was rejected: two small provable commits beat one large one when bisecting
 
 ### D2: New home is `src/server/logmatch/` with a barrel, not flat root files
 
-Five modules: `scrollback.ts` (tmux capture, ANSI + plain, async), `promptExtract.ts`
+Six modules: `scrollback.ts` (tmux capture, ANSI + plain, async), `promptExtract.ts`
 (message/prompt/trace extraction from captures and log lines — the pure string logic),
 `logText.ts` (log-file reading, role filtering, token counts, last-message/timestamp
-extraction), `exactMatch.ts` (profiler, candidate search, window→log exact matching),
-`verify.ts` (detailed association verification and its result types). Shared low-level bits
-(`runCommandAsync`, tmux flag helpers, `isSameOrChildPath`, `normalizeText`) live in the module
-that uses them; if used by two modules, a `common.ts` inside `logmatch/`.
+extraction), `candidateSearch.ts` (flexible-text pattern predicates, rg-based candidate
+search, ordered-message scoring), `exactMatch.ts` (window→log exact matching), `verify.ts`
+(detailed association verification and its result types). Shared low-level bits
+(`runCommandAsync`, `DEFAULT_SCROLLBACK_LINES`, `MIN_EXACT_MATCH_LENGTH`, the profiler and
+search-options types — consumed by two or more modules) live in a `common.ts` inside
+`logmatch/`; single-consumer helpers live in the module that uses them.
+
+Revised 2026-10-12 (user decision): the original plan put candidate search inside
+`exactMatch.ts`, which sized at ~735 LOC — well over the 500-LOC norm (the design had
+assumed an even ~380-line spread). Candidate search moved to its own module; the
+`hasMessageInValidUserContext` pattern-predicate cluster moved with it (its only consumer),
+keeping every module under the norm.
 
 An `index.ts` barrel re-exports the consumed surface, mirroring `src/server/terminal/index.ts`
 (precedent: all re-exports consumed, per the analysis). Importers change `./logMatcher` →

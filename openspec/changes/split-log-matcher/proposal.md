@@ -24,11 +24,11 @@ modules so the matching pipeline stops being a god-module.
   `getTerminalScrollbackWithAnsi`, `captureTerminalScrollback`, and any helpers orphaned by
   these deletions (e.g. sync command-running helpers used only by the chain).
 - Split the remaining live code into concern-scoped modules under `src/server/logmatch/`
-  (scrollback capture, prompt/message extraction, log-text reading, exact-match search,
-  association verification) with a barrel `index.ts`, following the existing `terminal/`
-  module pattern. Delete the root `logMatcher.ts`; update the five importers
-  (`index.ts`, `logPoller.ts`, `logMatchWorker.ts`, `sessionRefreshWorker.ts`,
-  `logPollData.ts`) to the new path.
+  (scrollback capture, prompt/message extraction, log-text reading, candidate search,
+  exact-match, association verification) with a barrel `index.ts`, following the existing
+  `terminal/` module pattern. Delete the root `logMatcher.ts`; update the six importers
+  (`index.ts`, `logPoller.ts`, `logMatchWorker.ts`, `logMatchWorkerTypes.ts`,
+  `sessionRefreshWorker.ts`, `logPollData.ts`) to the new path.
 - Update `src/server/__tests__/logMatcher.test.ts`: delete tests that exist only to cover
   removed sync twins (the async variants keep their own equivalent coverage); point remaining
   imports at the new modules.

@@ -43,7 +43,7 @@ import {
   stripPastePlaceholders,
   verifyWindowLogAssociationDetailedAsync,
   type WindowLogVerificationResult,
-} from './logMatcher'
+} from './logmatch'
 import {
   createTerminalProxy,
   resolveTerminalMode,

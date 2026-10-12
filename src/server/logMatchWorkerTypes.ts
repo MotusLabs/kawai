@@ -1,5 +1,5 @@
 import type { AgentType, TerminalSession } from '../shared/types'
-import type { ExactMatchProfiler } from './logMatcher'
+import type { ExactMatchProfiler } from './logmatch'
 import type { KnownSession, LogEntrySnapshot } from './logPollData'
 import type { SessionSnapshot } from './logMatchGate'
 

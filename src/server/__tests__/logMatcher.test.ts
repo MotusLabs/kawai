@@ -5,22 +5,26 @@ import path from 'node:path'
 import os from 'node:os'
 import type { TerminalSession } from '../../shared/types'
 import {
-  normalizeText,
   matchWindowsToLogsByExactRgAsync,
-  getLogTokenCount,
   verifyWindowLogAssociationDetailedAsync,
-  extractRecentTraceLinesFromTmux,
-  extractRecentUserMessagesFromTmux,
-  extractPiUserMessagesFromAnsi,
+} from '../logmatch'
+import { hasMessageInValidUserContext } from '../logmatch/candidateSearch'
+import {
+  extractLastEntryTimestamp,
+  extractLastUserMessageFromLog,
+  getLogTokenCount,
+  iterateLogLinesBackward,
+  normalizeText,
+} from '../logmatch/logText'
+import {
   extractActionFromUserAction,
   extractCommandInvocation,
-  extractLastUserMessageFromLog,
-  hasMessageInValidUserContext,
+  extractPiUserMessagesFromAnsi,
+  extractRecentTraceLinesFromTmux,
+  extractRecentUserMessagesFromTmux,
   isToolNotificationText,
-  extractLastEntryTimestamp,
-  iterateLogLinesBackward,
   stripPastePlaceholders,
-} from '../logMatcher'
+} from '../logmatch/promptExtract'
 
 const bunAny = Bun as typeof Bun & {
   spawn: typeof Bun.spawn
