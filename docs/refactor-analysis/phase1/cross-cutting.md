@@ -21,7 +21,7 @@ Repo: /home/coder/kawai. Production code = everything under src/ except `__tests
 
 Notes:
 - Import syntax differs per side: server uses relative `../shared/x`, client uses the `@shared/x` alias.
-- `dependencyRisk.ts` (466 LOC) and `devProxyErrors.ts` (40 LOC) are imported by neither src/server nor src/client production code (used by their own `src/shared/__tests__` only, outside the server/client grep).
+- `dependencyRisk.ts` (466 LOC) and `devProxyErrors.ts` (40 LOC) are imported by neither src/server nor src/client production code. Neither is dead: `devProxyErrors.ts` is imported by the root `vite.config.ts` (outside this grep), so root-level config files must be searched before declaring a src/shared module unused.
 
 ## 2. Layering Violations
 
