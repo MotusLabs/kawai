@@ -39,6 +39,10 @@ The debt is concentrated in **six god-units plus a handful of cheap hygiene item
 > (devProxyErrors + its test), `600ddf5` (logMatcher: 4 functions + 18 export keywords, net −48
 > LOC), `75f4a49` (headers on the 14 largest modules that lacked them). Full suite green on
 > every commit via the pre-commit hook.
+> **Correction 2026-10-12**: item 2 was wrong — root `vite.config.ts` imports
+> `shouldSuppressProxyLog`; `bun run build` failed with UNRESOLVED_IMPORT and the module was
+> restored verbatim (`ad6b9b8` on `split-log-matcher`). Lesson recorded: grep repo-root
+> configs and scripts/, not just src/, before declaring a module dead.
 
 1. Remove dead dependencies `node-pty` and `@fontsource-variable/jetbrains-mono` (both verified:
    zero static/dynamic/require references; "pty" is a Bun.spawn'd tmux client; fonts are
