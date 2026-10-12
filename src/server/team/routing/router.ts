@@ -51,6 +51,9 @@ export class ProfileRouter implements GroupRouter {
 
   constructor(private readonly options: ProfileRouterOptions) {}
 
+  /** A reload changes policy even when the candidates stay the same. */
+  invalidateHolds(): void { this.holds.clear() }
+
   /** Newest first, for one team. */
   decisions(teamId: string): RouteDecisionLogEntry[] {
     return [...this.log.entries()].filter(([key]) => key.startsWith(`${teamId}\0`))
@@ -172,5 +175,6 @@ function routeMessage(message: TeamMessage, worktree: string | null): RouteMessa
   return {
     id: message.id, priority: message.priority, senderGroup: message.fromGroup, tags: message.tags,
     worktree, taskId: message.taskId,
+    ...(message.handoff ? { forwardedFromProfile: message.handoff.fromProfile } : {}),
   }
 }

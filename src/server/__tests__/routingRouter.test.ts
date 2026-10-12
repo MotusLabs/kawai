@@ -212,3 +212,35 @@ describe('rules', () => {
     expect(router.decisions('other')).toEqual([])
   })
 })
+
+
+test('a rule reload invalidates indefinite holds with unchanged candidates', async () => {
+  rule = async () => ({ type: 'hold', reason: 'waiting for operator' })
+  const router = makeRouter()
+  const view = { eligible: [eligible('a')], attempt: 0 }
+  expect((await router.route(message(), view)).kind).toBe('hold')
+  rule = async () => ({ type: 'pick', candidateId: 'member:a' })
+  router.invalidateHolds()
+  expect(await router.route(message(), view)).toEqual({ kind: 'member', sessionId: 'a' })
+  expect(ruleCalls).toHaveLength(2)
+})
+
+test('route receives the profile that forwarded work', async () => {
+  rule = async ctx => {
+    expect(ctx.message.forwardedFromProfile).toBe('mimo')
+    return { type: 'default' }
+  }
+  await makeRouter().route(message({ handoff: { fromSession: 'prior', fromProfile: 'mimo', claimCommit: null,
+    lastError: null, progress: { toolCalls: 1, tools: ['Read'], filesTouched: [] } } }),
+  { eligible: [eligible('a')], attempt: 0 })
+})
+
+test('a zero-delay hold is reconsidered on the next cycle with unchanged candidates', async () => {
+  let calls = 0
+  rule = async () => ++calls === 1 ? { type: 'hold', reason: 'yield', retryAfterMs: 0 } : { type: 'default' }
+  const router = makeRouter()
+  const view = { eligible: [eligible('a')], attempt: 0 }
+  expect(await router.route(message(), view)).toEqual({ kind: 'hold', retryAt: T0 })
+  expect(await router.route(message(), view)).toEqual({ kind: 'member', sessionId: 'a' })
+  expect(calls).toBe(2)
+})

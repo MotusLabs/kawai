@@ -46,6 +46,8 @@ function makeOutcomes() {
     teamOf: id => (records.has(id) ? 'team' : undefined),
     groupOf: (_sessionId, groupId) => groups.get(groupId),
     taskTitle: id => (id === 'task-1' ? 'Export CSV' : null),
+    targetWorktree: message => message.taskId === 'task-1' ? '/repo/worktree' : null,
+    restoreSession: id => { records.get(id)!.archivedAt = null },
     onError: error => errors.push(error),
     now: () => now,
   })
@@ -298,4 +300,123 @@ describe('claim commit', () => {
       fs.rmSync(repo, { recursive: true, force: true })
     }
   })
+})
+
+describe('review regressions', () => {
+  test('unrelated direct mail leaves parked work and its scheduled resume intact', async () => {
+    const m = deliver()
+    work()
+    await hitLimit(40 * MIN)
+    const resumeId = store.get(m.id)!.resumeMessageId!
+    deliver('dev', { toKind: 'session', toId: 'dev', body: 'What is your name?' })
+    await outcomes.turnEnded('dev', true)
+    expect(store.get(m.id)?.state).toBe('parked')
+    expect(store.get(resumeId)?.state).toBe('queued')
+  })
+
+  test.each([20, 25])('forwarding accepted work at hop %i preserves its hop and thread', async hop => {
+    const m = deliver()
+    db.prepare('UPDATE team_messages SET hop = ? WHERE id = ?').run(hop, m.id)
+    work()
+    await hitLimit(5 * 60 * MIN)
+    const forwarded = store.get(store.get(m.id)!.reason!.replace('forwarded: ', ''))!
+    expect(forwarded).toMatchObject({ hop, threadId: m.threadId, inReplyTo: m.id, state: 'queued' })
+  })
+
+  test('manual handoff at the hop limit carries work without consuming another hop', async () => {
+    const m = deliver()
+    db.prepare('UPDATE team_messages SET hop = 20 WHERE id = ?').run(m.id)
+    work()
+    await hitLimit(40 * MIN)
+    expect(outcomes.handOff(m.id, { kind: 'group', id: 'devs' })).toMatchObject({ hop: 20, state: 'queued' })
+  })
+
+  test('manual handoff restores an archived recipient on a different profile', async () => {
+    records.set('dev2', record('dev2', { claudeProfileId: 'claude', archivedAt: iso(T0) }))
+    const m = deliver()
+    work()
+    await hitLimit(40 * MIN)
+    expect(outcomes.handOff(m.id, { kind: 'session', id: 'dev2' })).toMatchObject({ state: 'queued', toId: 'dev2' })
+    expect(records.get('dev2')?.archivedAt).toBeNull()
+  })
+
+  test('automatic forwardTo restores an archived recipient', async () => {
+    group('devs', 'onLimit: { forwardTo: dev2 }')
+    records.set('dev2', record('dev2', { claudeProfileId: 'claude', archivedAt: iso(T0) }))
+    const m = deliver()
+    work()
+    await hitLimit(5 * 60 * MIN)
+    expect(store.get(m.id)?.state).toBe('forwarded')
+    expect(records.get('dev2')?.archivedAt).toBeNull()
+  })
+
+  test('handoff to the limited profile refuses without cancelling the existing resume', async () => {
+    records.set('dev2', record('dev2', { archivedAt: iso(T0) }))
+    const m = deliver()
+    work()
+    await hitLimit(40 * MIN)
+    const resumeId = store.get(m.id)!.resumeMessageId!
+    expect(() => outcomes.handOff(m.id, { kind: 'session', id: 'dev2' })).toThrow('limited profile glm')
+    expect(store.get(m.id)?.state).toBe('parked')
+    expect(store.get(resumeId)?.state).toBe('queued')
+    expect(records.get('dev2')?.archivedAt).toBe(iso(T0))
+  })
+
+  test('an invalid automatic target forwards to the same group with its handoff', async () => {
+    group('devs', 'onLimit: { forwardTo: dev }')
+    const m = deliver()
+    work()
+    await hitLimit(5 * 60 * MIN)
+    expect(store.get(m.id)?.state).toBe('forwarded')
+    const forwarded = store.get(store.get(m.id)!.reason!.replace('forwarded: ', ''))
+    expect(forwarded).toMatchObject({ state: 'queued', toKind: 'group', toId: 'devs', handoff: { fromProfile: 'glm' } })
+    expect(String(errors.at(-1))).toContain('limited profile glm')
+  })
+
+  test('onLimit receives the task worktree and the previous handoff profile', async () => {
+    ruleOnLimit = async ctx => {
+      expect(ctx.message).toMatchObject({ worktree: '/repo/worktree', forwardedFromProfile: 'mimo' })
+      return { type: 'release' }
+    }
+    deliver('dev', { handoff: { fromSession: 'previous', fromProfile: 'mimo', claimCommit: null, lastError: null,
+      progress: { toolCalls: 1, tools: ['Edit'], filesTouched: ['x'] } } })
+    await hitLimit(40 * MIN)
+    expect(errors).toEqual([])
+  })
+
+  test.each([false, true])('no-group direct work with progress=%p is scheduled back to its original recipient', async progress => {
+    records.set('dev', record('dev', { groupId: null }))
+    const m = deliver('dev', { toKind: 'session', toId: 'dev' })
+    if (progress) work()
+    await hitLimit(5 * 60 * MIN)
+    expect(store.get(m.id)).toMatchObject({ state: 'queued', toKind: 'session', toId: 'dev', claimedBy: null,
+      deliverAt: iso(T0 + 5 * 60 * MIN) })
+    expect(store.listForTeam('team').map(row => row.id)).toContain(m.id)
+    expect(errors).toEqual([])
+  })
+
+  test('an expired reset retries progressed work without parking or incrementing parkCount', async () => {
+    const m = deliver()
+    work()
+    await hitLimit(-MIN)
+    expect(store.get(m.id)).toMatchObject({ state: 'queued', parkCount: 0, resumeMessageId: null })
+    expect(store.parkedBy('dev')).toEqual([])
+  })
+})
+
+test('manual handoff wins while a resume limit rule is still running', async () => {
+  const m = deliver()
+  work()
+  await hitLimit(40 * MIN)
+  const resumeId = store.get(m.id)!.resumeMessageId!
+  store.claim(resumeId, 'dev'); store.markPushed(resumeId); store.markDelivered(resumeId)
+  outcomes.delivered('dev', store.get(resumeId)!)
+  let finishRule!: (value: LimitOutcome) => void
+  ruleOnLimit = () => new Promise(resolve => { finishRule = resolve })
+  const pending = hitLimit(40 * MIN)
+  const forwarded = outcomes.handOff(m.id, { kind: 'group', id: 'architects' })
+  finishRule({ type: 'park' })
+  await pending
+  expect(store.get(m.id)?.state).toBe('forwarded')
+  expect(store.listForTeam('team').map(row => row.id)).toEqual([forwarded.id])
 })

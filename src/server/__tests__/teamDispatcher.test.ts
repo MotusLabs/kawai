@@ -245,3 +245,50 @@ test('direct mail, urgent or not, never consults the router', async () => {
   expect(calls).toBe(0)
   expect(delivered).toHaveLength(1)
 })
+
+test('direct mail stays queued during cooldown and wakes automatically at recovery', async () => {
+  dispatcher.close()
+  recipients[0]!.idle = true
+  recipients[0]!.cooldownUntil = new Date(Date.now() + 50).toISOString()
+  dispatcher = new MailDispatcher(store, {
+    recipients: () => recipients, prepare: async () => {}, interrupt: async () => {},
+    deliver: (id, peer) => delivered.push({ recipient: id, id: peer.messageId }), watchReceipt: () => {},
+  })
+  const mail = send({ toKind: 'session', toId: 'dev' })
+  await dispatch()
+  expect(store.get(mail.id)?.state).toBe('queued')
+  expect(delivered).toEqual([])
+  const deadline = Date.now() + 1000
+  while (delivered.length === 0 && Date.now() < deadline) await Bun.sleep(10)
+  expect(delivered).toEqual([{ recipient: 'dev', id: mail.id }])
+})
+
+test('urgent direct mail already queued before a limit cannot interrupt during cooldown', async () => {
+  recipients[0]!.cooldownUntil = new Date(Date.now() + 60_000).toISOString()
+  const mail = send({ toKind: 'session', toId: 'dev', priority: 'urgent' })
+  await dispatch()
+  expect(actions).toEqual([])
+  expect(store.get(mail.id)?.state).toBe('queued')
+})
+
+test('a profile entering cooldown during prepare cannot win a direct claim', async () => {
+  dispatcher.close()
+  recipients[0]!.idle = true
+  dispatcher = new MailDispatcher(store, {
+    recipients: () => recipients,
+    prepare: async () => { recipients[0]!.cooldownUntil = new Date(Date.now() + 60_000).toISOString() },
+    interrupt: async () => {}, deliver: () => { throw new Error('must not deliver') }, watchReceipt: () => {},
+  })
+  const mail = send({ toKind: 'session', toId: 'dev' })
+  await dispatch()
+  expect(store.get(mail.id)?.state).toBe('queued')
+})
+
+test('direct claims enforce the handoff profile exclusion', async () => {
+  recipients[0]!.idle = true
+  recipients[0]!.profileId = 'glm'
+  const mail = send({ toKind: 'session', toId: 'dev', excludedProfile: 'glm' })
+  await dispatch()
+  expect(delivered).toEqual([])
+  expect(store.get(mail.id)?.state).toBe('queued')
+})

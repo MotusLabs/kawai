@@ -45,13 +45,16 @@ files are never loaded. It default-exports `{ route, onLimit?, env?, timeoutMs? 
   allowed profile, already filtered by delivery, staffing, caps, and parking —
   cooling profiles are included with their `cooldownUntil`), the group's caps
   and live counts, and per-profile usage (with its source) and limit events.
-  It returns `pick`, `hold` (with an optional retry delay), or `default`.
+  It returns `pick`, `hold` (with an optional finite, non-negative retry delay
+  in milliseconds; zero retries next cycle), or `default`. Both `route` and
+  `onLimit` receive the task worktree and `forwardedFromProfile` on carried work.
 - Throws, timeouts (`timeoutMs`, default 3 s, at most 10 s), and unknown picks
   fall back to the built-in strategy and are logged. A pick that went stale
   before the claim is routed again once, then by the built-in strategy.
 - Rules load at server start and on **Reload routing rules** in the Mailbox
   panel only. Editing a file does nothing until you reload; the reload lists
-  each rule's result and which files changed.
+  each rule's result and which files changed. Reloading also clears existing
+  holds so queued work is evaluated under the new policy.
 
 ## Limits
 
@@ -63,12 +66,19 @@ turn handling a message fails that way, the message is:
 - **parked** on the same agent, with a resume message scheduled at the reset;
   the agent shows as paused and takes no group mail; a successful turn (yours
   or the resume) unparks it; after three parks the work is released;
-- **released** back to the group queue;
+- **released** back to the group queue; a session with no group keeps its
+  direct work queued for the same session at the reset time;
 - **forwarded** with a handoff package (progress digest, last error, claim
   commit, and an instruction to inspect `git status`/`git diff` first); it
   never routes back to the limited profile, and the original agent is told who
   took over once its profile recovers.
 
-Parked work can be handed to any group or session with **Hand off** in the
-Mailbox panel. Urgent direct mail to an agent whose profile is cooling is
-refused with the cooldown end time.
+A reset that has already passed retries work immediately without marking the
+agent paused. An unrelated peer message does not cancel parked work's resume.
+
+Parked work can be handed to a group or a session on another profile with
+**Hand off** in the Mailbox panel. An archived session is restored before
+receiving a handoff. Handoffs continue the original thread without consuming
+another reply hop. Invalid automatic targets fall back to the same group.
+Urgent direct mail to an agent whose profile is cooling is refused with the
+cooldown end time; normal direct mail waits in the queue until recovery.

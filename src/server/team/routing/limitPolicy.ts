@@ -32,7 +32,7 @@ export function resolveLimit(input: LimitPolicyInput): LimitResolution {
     if (ruled.type === 'forward') return { type: 'forward', to: ruled.to ?? null }
     return { type: ruled.type }
   }
-  if (input.toolCalls === 0) return { type: 'release' }
+  if (input.toolCalls === 0 || input.resetInMs <= 0) return { type: 'release' }
   if (input.resetInMs <= input.policy.parkIfResetWithinMs) return { type: 'park' }
   return input.policy.otherwise === 'release' ? { type: 'release' } : { type: 'forward', to: null }
 }

@@ -6,7 +6,8 @@
 // - park: the message stays on the agent (state `parked`, which keeps the
 //   agent out of group pickup) and a resume message to it is scheduled at
 //   the provider's reset;
-// - release: back to the group queue (direct mail goes to the agent's group);
+// - release: back to the group queue, or scheduled to the same session
+//   after recovery when direct mail's recipient belongs to no group;
 // - forward: a new message to a group or session carries the work on with a
 //   handoff package and never routes back to the limited profile; the
 //   original agent gets a note naming the task and its new owner once its
@@ -51,6 +52,8 @@ export interface LimitOutcomesOptions {
   /** A group of the session's team. */
   groupOf: (sessionId: string, groupId: string) => GroupDefinition | undefined
   taskTitle: (taskId: string) => string | null
+  targetWorktree?: (message: TeamMessage) => string | null
+  restoreSession?: (id: string) => void
   onError: (error: unknown) => void
   now?: () => number
 }
@@ -103,7 +106,10 @@ export class LimitOutcomes {
       return
     }
     if (success && !event) {
-      for (const parked of this.options.store.parkedBy(sessionId)) this.unpark(parked)
+      // Only a human turn or this work's own resume can complete parked work.
+      for (const parked of this.options.store.parkedBy(sessionId)) {
+        if (!workId || workId === parked.id) this.unpark(parked)
+      }
     }
   }
 
@@ -160,6 +166,7 @@ export class LimitOutcomes {
   }
 
   private unpark(message: TeamMessage) {
+    this.digests.delete(message.id)
     if (message.resumeMessageId) this.options.store.cancel(message.resumeMessageId)
     this.options.store.unpark(message.id)
   }
@@ -177,27 +184,49 @@ export class LimitOutcomes {
     const resetsAt = this.resetTime(event)
     const ruled = await this.askRule(group, {
       now: new Date(now).toISOString(), profileId: event.profileId, sessionId, groupId,
-      message: { id: message.id, priority: message.priority, senderGroup: message.fromGroup, tags: message.tags, worktree: null, taskId: message.taskId },
+      message: { id: message.id, priority: message.priority, senderGroup: message.fromGroup, tags: message.tags, worktree: this.options.targetWorktree?.(message) ?? null, taskId: message.taskId,
+        ...(message.handoff ? { forwardedFromProfile: message.handoff.fromProfile } : {}),
+      },
       kind: event.kind, status: event.status, error: event.message, resetsAt, parkCount: message.parkCount,
       progress: { toolCalls: digest.toolCalls, filesTouched: [...digest.files] },
     })
+    // A manual handoff can settle parked work while an async rule is running.
+    if (!['delivered', 'parked'].includes(store.get(workId)?.state ?? '')) return
     const resolution: LimitResolution = resolveLimit({
       toolCalls: digest.toolCalls, resetInMs: Date.parse(resetsAt) - now, parkCount: message.parkCount, policy,
       ...(ruled ? { ruled } : {}),
     })
-    if (resolution.type === 'park') {
+    // If recovery has already happened, retry without briefly pausing the agent.
+    if (resolution.type === 'park' && Date.parse(resetsAt) > this.now()) {
       this.park(message, sessionId, record, resetsAt)
-    } else if (resolution.type === 'release') {
-      if (groupId) {
-        if (message.resumeMessageId) store.cancel(message.resumeMessageId)
-        store.release(message.id, groupId)
-        this.digests.delete(workId)
-      } else this.options.onError(new Error(`Cannot release ${message.id}: ${sessionId} belongs to no group`))
-    } else {
+    } else if (resolution.type === 'forward') {
       const target = resolution.to ?? this.forwardTarget(sessionId, policy.forwardTo, groupId)
-      if (target) this.forward(message, sessionId, event.profileId, event.message, target)
-      else this.options.onError(new Error(`Cannot forward ${message.id}: no target group`))
+      try {
+        if (target) {
+          this.forward(message, sessionId, event.profileId, event.message, target)
+          return
+        }
+      } catch (error) {
+        this.options.onError(error)
+      }
+      // A bad explicit destination must not discard the handoff context.
+      if (groupId && !(target?.kind === 'group' && target.id === groupId)) {
+        try {
+          this.forward(message, sessionId, event.profileId, event.message, { kind: 'group', id: groupId })
+          return
+        } catch (error) { this.options.onError(error) }
+      }
+      this.release(message, groupId, resetsAt)
+    } else {
+      this.release(message, groupId, resetsAt)
     }
+  }
+
+  /** Without a group, retry direct work on its original session after recovery. */
+  private release(message: TeamMessage, groupId: string | null, resetsAt: string) {
+    if (message.resumeMessageId) this.options.store.cancel(message.resumeMessageId)
+    this.options.store.release(message.id, groupId, groupId ? null : resetsAt)
+    this.digests.delete(message.id)
   }
 
   private async askRule(group: GroupDefinition | undefined, ctx: LimitOutcomeContext): Promise<LimitOutcome | undefined> {
@@ -243,6 +272,17 @@ export class LimitOutcomes {
 
   private forward(message: TeamMessage, fromSession: string, profileId: string, lastError: string | null, target: HandoffTarget): TeamMessage {
     const store = this.options.store
+    if (target.kind === 'session') {
+      const recipient = this.options.getRecord(target.id)
+      if (!recipient || this.options.teamOf(target.id) !== message.teamId) throw new Error('Handoff recipient is not a session of this team')
+      if ((recipient.claudeProfileId ?? 'default') === profileId) throw new Error(`Cannot hand off work to its limited profile ${profileId}`)
+      if (recipient.archivedAt) {
+        if (!this.options.restoreSession) throw new Error('Restoring the handoff recipient is not available')
+        this.options.restoreSession(target.id)
+      }
+    } else if (!this.options.groupOf(fromSession, target.id)) {
+      throw new Error(`Unknown handoff group: ${target.id}`)
+    }
     const digest = this.digests.get(message.id) ?? new ProgressDigest()
     const handoff: ChatHandoffPackage = {
       fromSession, fromProfile: profileId, claimCommit: message.claimCommit, lastError, progress: digest.snapshot(),

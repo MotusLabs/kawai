@@ -39,6 +39,7 @@ export class SessionMailbox {
   readonly outcomes: LimitOutcomes
   private readonly catalogs = new Map<string, GroupCatalog>()
   private releaseSubscription?: () => void
+  private releaseLimitSubscription?: () => void
 
   constructor(db: Database, private readonly options: {
     teams: SessionTeams
@@ -70,7 +71,11 @@ export class SessionMailbox {
     this.limits = new LimitEventStore(db)
     this.rules = new RuleRegistry({
       ...(options.homeDir ? { homeDir: options.homeDir } : {}),
-      onLoaded: report => options.onRulesLoaded?.(report),
+      onLoaded: report => {
+        this.router.invalidateHolds()
+        options.onRulesLoaded?.(report)
+        this.dispatcher.notify()
+      },
     })
     const taskStore = new TaskStore(db, store)
     this.tasks = new TaskService(taskStore, { getSession: options.getRecord, homeDir: options.homeDir })
@@ -116,6 +121,7 @@ export class SessionMailbox {
       teamOf: id => options.teams.teamOf(id)?.teamId,
       groupOf: (sessionId, groupId) => options.teams.catalogOf(sessionId, this.catalogs)?.groups.get(groupId),
       taskTitle: taskId => taskStore.get(taskId)?.title ?? null,
+      targetWorktree, restoreSession: options.restore,
       onError: options.onError,
     })
     this.dispatcher = new MailDispatcher(this.mailbox.store, {
@@ -160,6 +166,8 @@ export class SessionMailbox {
       available: this.options.available(record),
       worktree: worktreeRootOf(record.projectPath),
       parked: this.mailbox.store.parkedBy(id).length > 0,
+      profileId: record.claudeProfileId ?? 'default',
+      cooldownUntil: this.limits.cooldownUntil(record.claudeProfileId ?? 'default'),
     }
   }
 
@@ -194,6 +202,7 @@ export class SessionMailbox {
       this.options.onChange?.(team, message)
       this.dispatcher.notify()
     })
+    this.releaseLimitSubscription = this.limits.subscribe(() => this.dispatcher.notify())
     this.dispatcher.notify()
     // Rules load once at start; afterwards only an explicit reload changes them.
     void this.rules.reload().then(() => this.dispatcher.notify(), this.options.onError)
@@ -213,5 +222,5 @@ export class SessionMailbox {
     }
   }
 
-  close() { this.dispatcher.close(); this.releaseSubscription?.(); this.rules.close() }
+  close() { this.dispatcher.close(); this.releaseSubscription?.(); this.releaseLimitSubscription?.(); this.rules.close() }
 }

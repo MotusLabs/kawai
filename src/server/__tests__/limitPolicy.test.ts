@@ -37,3 +37,7 @@ describe('resolveLimit', () => {
       .toEqual({ type: 'release' })
   })
 })
+
+test.each([-MIN, 0])('default policy releases when resetInMs is %i', resetInMs => {
+  expect(resolveLimit({ toolCalls: 2, resetInMs, parkCount: 0, policy: DEFAULTS })).toEqual({ type: 'release' })
+})

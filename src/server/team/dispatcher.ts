@@ -28,6 +28,9 @@ export interface MailRecipient {
   worktree?: string
   /** Holds a parked message: takes no group mail (profile-routing). */
   parked?: boolean
+  profileId?: string
+  /** Direct mail waits for provider recovery; custom group rules may override cooling. */
+  cooldownUntil?: string | null
 }
 
 /** Mail reserved for a freshly spawned member, to deliver as its first turn. */
@@ -156,6 +159,7 @@ export class MailDispatcher {
       for (const held of this.store.awaitingRequestFor(row.sessionId)) {
         if (!row.pendingRequest) this.store.requeue(held.id)
       }
+      if (this.cooling(this.current(row.sessionId))) continue
       const urgent = this.store.urgentDirectFor(row.sessionId)
       for (const message of urgent) {
         if (this.current(row.sessionId)?.pendingRequest) {
@@ -184,8 +188,13 @@ export class MailDispatcher {
       .flatMap(([id]) => { const row = this.current(id); return row ? [row] : [] })
   }
 
+  private cooling(recipient: MailRecipient | undefined): boolean {
+    return Date.parse(recipient?.cooldownUntil ?? '') > this.now()
+  }
+
   private async directPass(priority: 'urgent' | 'normal') {
     for (const row of this.idleRecipients()) {
+      if (this.cooling(row)) continue
       const message = this.store.nextEligible({ teamId: row.teamId, sessionId: row.sessionId, groupId: null },
         undefined, candidate => candidate.toKind === 'session' && candidate.priority === priority)
       if (message) await this.push(message, row, false)
@@ -257,6 +266,8 @@ export class MailDispatcher {
         const current = this.current(recipient.sessionId)
         return !!current?.available && !current.pendingRequest && current.teamId === message.teamId &&
           (interrupt || current.idle) &&
+          (!message.excludedProfile || (current.profileId ?? 'default') !== message.excludedProfile) &&
+          (message.toKind !== 'session' || !this.cooling(current)) &&
           (message.toKind === 'session' || (current.groupId === message.toId && (reserved || !current.parked))) &&
           this.inWorktree(current, message)
       }
@@ -313,7 +324,9 @@ export class MailDispatcher {
     this.timer = null
     if (this.closed) return
     const due = this.store.nextDueAt()
-    const times = [due ? Date.parse(due) : null, ...this.holds.values(), this.options.wakeAt?.() ?? null]
+    const cooldowns = this.options.recipients().map(row => Date.parse(row.cooldownUntil ?? ''))
+      .filter(at => Number.isFinite(at) && at > this.now())
+    const times = [due ? Date.parse(due) : null, ...cooldowns, ...this.holds.values(), this.options.wakeAt?.() ?? null]
       .filter((at): at is number => at !== null)
     if (times.length === 0) return
     this.timer = setTimeout(() => this.notify(), Math.min(2147483647, Math.max(0, Math.min(...times) - Date.now())))

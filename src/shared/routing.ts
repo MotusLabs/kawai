@@ -117,7 +117,12 @@ export interface RouteContext {
 
 export type RouteDecision =
   | { type: 'pick'; candidateId: string }
-  | { type: 'hold'; reason: string; retryAfterMs?: number }
+  | {
+    type: 'hold'
+    reason: string
+    /** Finite, non-negative milliseconds; zero retries next cycle. */
+    retryAfterMs?: number
+  }
   | { type: 'default' }
 
 /** A claimed message's turn failed on a limit. */
