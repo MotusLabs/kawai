@@ -7,7 +7,7 @@ Makes human approval of a strategy revision a runtime record binding an exact re
 ## ADDED Requirements
 
 ### Requirement: Only a human approves a strategy revision
-Approval and publication SHALL be possible only through the authenticated human UI connection. Agents SHALL have no tool or path that approves, publishes, or withdraws a revision. The runtime SHALL enforce this; prompt conventions are insufficient.
+Approval, publication, and withdrawal SHALL be possible only through the human UI action path. Agents SHALL have no tool that approves, publishes, or withdraws a revision. The runtime SHALL enforce this; prompt conventions are insufficient. The guarantee is that no agent tool surface can approve; it does not by itself distinguish a human browser from a local process speaking the UI connection protocol.
 
 #### Scenario: Human approves a reviewable draft (S04)
 - **WHEN** the human approves a draft through the strategy view
@@ -49,9 +49,9 @@ An approval SHALL carry the expected current revision state. If that state has c
 ### Requirement: At most one active approved revision
 A product SHALL have at most one active approved revision. Approval SHALL update the active revision in the same transaction that records the decision. Competing approvals SHALL NOT produce two active approved revisions.
 
-#### Scenario: Concurrent approvals settle on one
+#### Scenario: Concurrent approvals settle on one (S17)
 - **WHEN** two approval requests for different revisions race
-- **THEN** one becomes the active approved revision and the other is refused or supersedes it explicitly, never both active
+- **THEN** one becomes the active approved revision and the other is refused as stale, never both active
 
 ### Requirement: Publication grants nothing but one impact-review item
 Publishing a revision SHALL create exactly one impact-review item for the responsible owner, and SHALL NOT create a Plan, dispatch mail, grant tools, replace Plan inputs, interrupt writers, or reinterpret completed acceptance. The item SHALL be created with the approval, not afterwards.
@@ -76,8 +76,12 @@ A repository file, peer message, or draft content asserting that a revision is a
 - **THEN** the strategy view still shows the runtime approval state and nothing becomes active
 
 ### Requirement: Withdrawal preserves history
-Withdrawal of a revision SHALL leave its history, prior decisions, and any impact-review items in place. It SHALL NOT erase prior authority or outcomes, and it SHALL NOT retroactively invalidate what an earlier approval authorized at the time.
+Withdrawal is human-only, through the same UI action path as approval. It SHALL leave its history, prior decisions, and any impact-review items in place, SHALL NOT erase prior authority or outcomes, and SHALL NOT retroactively invalidate what an earlier approval authorized at the time.
 
 #### Scenario: Withdrawn revision keeps its record
 - **WHEN** the human withdraws a superseded revision
 - **THEN** its content, prior approval record, and impact-review item remain readable
+
+#### Scenario: Agent cannot withdraw
+- **WHEN** an agent attempts any call that would withdraw a revision
+- **THEN** the call is refused and the revision's status is unchanged

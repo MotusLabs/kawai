@@ -61,9 +61,9 @@ Success measures SHALL record outcome, proposed measure, known baseline, and agr
 - **WHEN** a success measure is saved with no measured baseline
 - **THEN** its baseline is `Unknown` and no placeholder number appears
 
-#### Scenario: Review flags an invented metric
-- **WHEN** a draft claims a validated demand figure with a hypothesis kind and no source
-- **THEN** review findings may flag it, and the claim remains labeled a hypothesis
+#### Scenario: Unfounded demand figure stays a hypothesis
+- **WHEN** a draft stores a demand figure with a hypothesis kind and no source reference
+- **THEN** the claim is stored only as a hypothesis and is not stored as a validated observation
 
 ### Requirement: Drafts are durable and saved with expected-revision checks
 Draft content SHALL be stored server-side and survive navigation, reconnect, and reload. A save SHALL carry the expected base revision and draft hash. A mismatch SHALL refuse the overwrite and leave the caller's unsaved text with the caller for resolution.
