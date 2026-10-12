@@ -5,6 +5,9 @@
 // stay in the driver; this file is SDK-agnostic so the client never imports
 // the agent SDK.
 
+import type { ChatPeerTaskContext } from './teamTasks'
+import type { ChatHandoffPackage } from './team'
+
 /**
  * Base shape of every conversation event. `id` is stable and unique
  * (clients suppress duplicates by id). Live events carry `sequence >= 1`,
@@ -102,6 +105,10 @@ export interface ChatPeerMessage {
   body: string
   possibleDuplicate: boolean
   thread?: Array<{ messageId: string; senderSession: string; body: string }>
+  /** The referenced team task as it was at delivery (team-tasks D3); absent = none. */
+  task?: ChatPeerTaskContext
+  /** Work handed off after a provider limit (profile routing); absent = none. */
+  handoff?: ChatHandoffPackage
 }
 
 export type ChatEvent =
@@ -276,6 +283,48 @@ export interface ChatUsageReport {
   status: ChatUsageStatus
   windows: ChatUsageWindow[]
   /** ISO timestamp of when the report was received. */
+  receivedAt: string
+  /**
+   * Which shape it came from: a pushed rate_limit_event, a /usage report, or
+   * the SDK usage pull (which follows the host claude.ai login, not the
+   * session's provider). Absent on reports from older servers.
+   */
+  source?: ChatUsageSource
+}
+
+export type ChatUsageSource = 'push' | 'report' | 'pull'
+
+/** Where a chat notification came from. */
+export type ChatNotificationSource = 'account' | 'agent'
+
+/** How strongly a notification styles itself in the strip. */
+export type ChatNotificationSeverity = 'info' | 'warning' | 'error'
+
+/** The agent's own urgency ranking; higher sorts first in the strip. */
+export type ChatNotificationPriority = 'low' | 'medium' | 'high' | 'immediate'
+
+/**
+ * One CLI-style notice shown in the chat notification strip: either an
+ * account-level warning the server computes from the profile's stored login
+ * (login expiry), or a notice the agent emitted on the SDK notification
+ * channel. Ephemeral by design, like `ChatActivity` and `ChatUsageReport`:
+ * held in server memory only, carried by the snapshot and the additive
+ * `chat-notifications` push, never a `ChatEvent` — never sequenced,
+ * persisted, or replayed — and never part of the session-list status.
+ */
+export interface ChatNotification {
+  /**
+   * Stable within a session: a newer notice with the same key replaces the
+   * one it supersedes, and closing an agent notice names its key.
+   */
+  key: string
+  source: ChatNotificationSource
+  severity: ChatNotificationSeverity
+  priority: ChatNotificationPriority
+  text: string
+  /** Dimmed follow-up line (e.g. how to renew); omitted when there is none. */
+  hint?: string
+  /** ISO timestamp of when the notice was produced. */
   receivedAt: string
 }
 

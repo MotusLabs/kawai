@@ -56,6 +56,7 @@ describe('parseRateLimitEvent', () => {
         },
       ],
       receivedAt: AT,
+      source: 'push',
     })
   })
 
@@ -98,6 +99,7 @@ describe('parseRateLimitEvent', () => {
         },
       ],
       receivedAt: AT,
+      source: 'push',
     })
   })
 
@@ -113,7 +115,7 @@ describe('parseRateLimitEvent', () => {
   test('the GLM status-only payload yields a windowless allowed report', () => {
     expect(
       parseRateLimitEvent({ status: 'allowed', isUsingOverage: false }, AT)
-    ).toEqual({ status: 'allowed', windows: [], receivedAt: AT })
+    ).toEqual({ status: 'allowed', windows: [], receivedAt: AT, source: 'push' })
   })
 
   test('malformed values are rejected, not rendered wrong', () => {
@@ -160,6 +162,7 @@ describe('parseRateLimitEvent', () => {
       status: 'allowed',
       windows: [],
       receivedAt: AT,
+      source: 'push',
     })
   })
 })
@@ -221,6 +224,7 @@ describe('parseUsageReport', () => {
         },
       ],
       receivedAt: AT,
+      source: 'report',
     })
   })
 
@@ -259,6 +263,7 @@ describe('parseUsageReport', () => {
       status: 'allowed',
       windows: [],
       receivedAt: AT,
+      source: 'report',
     })
     expect(parseUsageReport({ rate_limits: { limits: null } }, AT)).toBeNull()
     expect(parseUsageReport({ rate_limits: null }, AT)).toBeNull()
@@ -336,6 +341,7 @@ describe('parseUsagePull', () => {
         },
       ],
       receivedAt: AT,
+      source: 'pull',
     })
   })
 
@@ -351,6 +357,7 @@ describe('parseUsagePull', () => {
       status: 'allowed',
       windows: [],
       receivedAt: AT,
+      source: 'pull',
     })
   })
 })

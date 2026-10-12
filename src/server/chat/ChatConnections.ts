@@ -11,6 +11,8 @@
 // Plan usage rides it too (usage bar design D4), scoped by profile instead
 // of session: one latest-value slot per connection and profile, sent to every
 // connection subscribed to at least one session of that profile.
+// Notifications ride it as well (notification strip design D5): the full
+// merged list per connection and session, replace semantics like the roster.
 // Debug-view subscriptions are separate: only connections that opened a
 // session's debug view receive its wire frames. They subscribe before the
 // async page read, so no frame is missed; clients merge pages and live frames
@@ -20,6 +22,7 @@ import type {
   ChatCommandState,
   ChatContextUsage,
   ChatEvent,
+  ChatNotification,
   ChatUsageReport,
   ChatWireFrame,
   ChatWorker,
@@ -28,6 +31,7 @@ import type { ClientMessage, ServerMessage } from '../../shared/types'
 import type { ChatSessionManager } from './ChatSessionManager'
 import type { ChatWireLogs } from './ChatWireLogs'
 import { MailboxConnections } from '../team/mailboxConnections'
+import { TaskConnections } from '../team/taskConnections'
 import type { TeamMessage } from '../../shared/team'
 
 /** Frames per debug page reply. */
@@ -49,26 +53,39 @@ export class ChatConnections {
   private readonly usageBatches = new Map<ChatConnection, Map<string, ChatUsageReport | null>>()
   /** Latest worker roster per connection and session (workers design D2). */
   private readonly workerBatches = new Map<ChatConnection, Map<string, ChatWorker[]>>()
+  /** Latest notice list per connection and session (notification strip D5). */
+  private readonly notificationBatches = new Map<ChatConnection, Map<string, ChatNotification[]>>()
   private readonly debugSubscriptions = new Map<ChatConnection, Map<string, () => void>>()
   private readonly debugBatches = new Map<ChatConnection, Map<string, ChatWireFrame[]>>()
   private scheduled = false
 
   private readonly mailboxConnections: MailboxConnections
+  private readonly taskConnections: TaskConnections
 
   constructor(
     private readonly manager: ChatSessionManager,
     private readonly wireLogs?: ChatWireLogs,
     private readonly broadcastMailboxNotice?: (message: ServerMessage) => void
-  ) { this.mailboxConnections = new MailboxConnections(manager) }
+  ) {
+    this.mailboxConnections = new MailboxConnections(manager)
+    this.taskConnections = new TaskConnections(manager)
+  }
+
+  /** A committed task change: re-send that team's task snapshots. */
+  publishTasks(teamId: string): void {
+    this.taskConnections.publish(teamId)
+  }
 
   disconnect(connection: ChatConnection): void {
     this.mailboxConnections.disconnect(connection)
+    this.taskConnections.disconnect(connection)
     this.subscriptions.delete(connection)
     this.batches.delete(connection)
     this.activityBatches.delete(connection)
     this.contextBatches.delete(connection)
     this.usageBatches.delete(connection)
     this.workerBatches.delete(connection)
+    this.notificationBatches.delete(connection)
     for (const unsubscribe of this.debugSubscriptions.get(connection)?.values() ?? []) unsubscribe()
     this.debugSubscriptions.delete(connection)
     this.debugBatches.delete(connection)
@@ -79,8 +96,15 @@ export class ChatConnections {
    * session. Immediate (not batched): the state is replaceable, not ordered
    * history, so it never waits behind event batching.
    */
+  /** Routing rules reloaded: every open mailbox view shows the new status. */
+  publishRoutingRules(): void {
+    this.mailboxConnections.publishAll()
+  }
+
   publishMailbox(teamId: string, message?: TeamMessage): void {
     this.mailboxConnections.publish(teamId)
+    // Task detail lists its mail; a task message changing state changes it.
+    if (message?.taskId) this.taskConnections.publish(teamId)
     if (message?.state === 'dead' && message.reason === 'hop-limit') {
       const notice: ServerMessage = { type: 'team-mailbox-dead-letter', teamId, messageId: message.id, senderSession: message.fromSession }
       if (this.broadcastMailboxNotice) { this.broadcastMailboxNotice(notice); return }
@@ -179,6 +203,33 @@ export class ChatConnections {
     this.scheduleFlush()
   }
 
+  /**
+   * Queue a session's current notice list (notification strip design D5):
+   * replace semantics per connection and session, sent by the flush after
+   * that session's pending event batch — a level signal, never a delta.
+   */
+  publishNotifications(sessionId: string, notifications: ChatNotification[]): void {
+    for (const [connection, sessions] of this.subscriptions) {
+      if (!sessions.has(sessionId)) continue
+      const latest = this.notificationBatches.get(connection) ?? new Map<string, ChatNotification[]>()
+      latest.set(sessionId, notifications)
+      this.notificationBatches.set(connection, latest)
+    }
+    this.scheduleFlush()
+  }
+
+  /**
+   * The sessions at least one connection is currently subscribed to (the
+   * notification strip's slow account-notice recheck scope, design D3).
+   */
+  subscribedSessionIds(): Set<string> {
+    const ids = new Set<string>()
+    for (const sessions of this.subscriptions.values()) {
+      for (const sessionId of sessions) ids.add(sessionId)
+    }
+    return ids
+  }
+
   /** True when one of the subscribed sessions belongs to the profile. */
   private subscribesProfile(sessions: Set<string>, profileId: string): boolean {
     for (const sessionId of sessions) {
@@ -256,6 +307,15 @@ export class ChatConnections {
         }
       }
     }
+    const notificationBatches = new Map(this.notificationBatches)
+    this.notificationBatches.clear()
+    for (const [connection, sessions] of notificationBatches) {
+      for (const [sessionId, notifications] of sessions) {
+        if (this.subscriptions.get(connection)?.has(sessionId)) {
+          connection.send({ type: 'chat-notifications', sessionId, notifications })
+        }
+      }
+    }
     const debugBatches = new Map(this.debugBatches)
     this.debugBatches.clear()
     for (const [connection, sessions] of debugBatches) {
@@ -296,6 +356,7 @@ export class ChatConnections {
 
   async handle(connection: ChatConnection, message: ClientMessage): Promise<void> {
     if (message.type.startsWith('team-mailbox-')) return this.mailboxConnections.handle(connection, message)
+    if (message.type.startsWith('team-task')) return this.taskConnections.handle(connection, message as Extract<ClientMessage, { type: `team-task${string}` }>)
     if (!message.type.startsWith('chat-') || !('sessionId' in message)) return
     const { sessionId } = message
     if (!this.manager.has(sessionId)) {
@@ -310,6 +371,7 @@ export class ChatConnections {
         this.activityBatches.get(connection)?.delete(sessionId)
         this.contextBatches.get(connection)?.delete(sessionId)
         this.workerBatches.get(connection)?.delete(sessionId)
+        this.notificationBatches.get(connection)?.delete(sessionId)
         const sessions = this.subscriptions.get(connection) ?? new Set<string>()
         sessions.add(sessionId)
         this.subscriptions.set(connection, sessions)
@@ -328,6 +390,7 @@ export class ChatConnections {
         this.activityBatches.get(connection)?.delete(sessionId)
         this.contextBatches.get(connection)?.delete(sessionId)
         this.workerBatches.get(connection)?.delete(sessionId)
+        this.notificationBatches.get(connection)?.delete(sessionId)
         return
       case 'chat-send': {
         const result = await this.manager.send(sessionId, message.text)
@@ -364,6 +427,14 @@ export class ChatConnections {
       case 'chat-set-approval-policy': {
         // The manager validates the value; failures echo to the sender only.
         const result = this.manager.setApprovalPolicy(sessionId, message.policy)
+        if (!result.ok) connection.send({ type: 'error', message: result.error })
+        return
+      }
+      case 'chat-dismiss-notification': {
+        // The manager removes the key and pushes the new list to every
+        // subscribed connection (notification strip design D6); unknown keys
+        // are a no-op that pushes nothing.
+        const result = this.manager.dismissNotification(sessionId, message.key)
         if (!result.ok) connection.send({ type: 'error', message: result.error })
         return
       }

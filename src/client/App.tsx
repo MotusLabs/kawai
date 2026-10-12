@@ -1,7 +1,9 @@
 // Root component: app layout, keyboard shortcuts, and the WebSocket
 // subscription that routes every server message into stores and local state.
 import { useTeamMailboxStore } from './stores/teamMailboxStore'
+import { useTeamTaskStore } from './stores/teamTaskStore'
 import { notifyMailboxDeadLetter } from './utils/teamMailboxNotification'
+import { notifySpawnedAttention } from './utils/teamTaskNotification'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { AgentSession, AutoStartAgent, ChatApprovalPolicy, ServerMessage, Session, SessionKillSource, UpdateState } from '@shared/types'
 import { FALLBACK_ARCHIVE_SECTION_KEY, type WorkspaceBranch } from '@shared/workspace'
@@ -226,6 +228,9 @@ export default function App() {
         const currentSessions = useSessionStore.getState().sessions
         const { soundOnPermission, soundOnIdle } = useSettingsStore.getState()
 
+        for (const nextSession of message.sessions) {
+          notifySpawnedAttention(currentSessions.find((s) => s.id === nextSession.id), nextSession)
+        }
         if (soundOnPermission || soundOnIdle) {
           for (const nextSession of message.sessions) {
             const prevSession = currentSessions.find((s) => s.id === nextSession.id)
@@ -390,6 +395,7 @@ export default function App() {
         const nextStatus = message.session.status
 
         updateSession(message.session)
+        notifySpawnedAttention(prevSession, message.session)
 
         // Only play sounds for known sessions (skip new/unknown sessions)
         if (prevStatus) {
@@ -550,9 +556,15 @@ export default function App() {
       if (message.type === 'chat-context-usage') useChatStore.getState().setContextUsage(message.sessionId, message.usage)
       if (message.type === 'chat-usage') useChatStore.getState().setUsage(message.profileId, message.report)
       if (message.type === 'chat-workers') useChatStore.getState().setWorkers(message.sessionId, message.workers)
+      if (message.type === 'chat-notifications') useChatStore.getState().setNotifications(message.sessionId, message.notifications)
       if (message.type === 'chat-worker-transcript') useChatStore.getState().setWorkerBody(message)
       if (message.type === 'team-mailbox-snapshot') useTeamMailboxStore.getState().apply(message)
+      if (message.type === 'team-mailbox-rules-result') useTeamMailboxStore.getState().applyRulesResult(message)
+      if (message.type === 'team-mailbox-hand-off-result') useTeamMailboxStore.getState().applyHandOffResult(message)
       if (message.type === 'team-mailbox-dead-letter') notifyMailboxDeadLetter(message)
+      if (message.type === 'team-tasks-snapshot') useTeamTaskStore.getState().applySnapshot(message)
+      if (message.type === 'team-task-detail') useTeamTaskStore.getState().applyDetail(message)
+      if (message.type === 'team-task-result') useTeamTaskStore.getState().applyResult(message)
       if (message.type === 'chat-debug-frames') useChatDebugStore.getState().apply(message)
       if (message.type === 'kill-failed') {
         // Restore optimistically removed session from pending-kill snapshot

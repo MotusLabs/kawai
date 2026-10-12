@@ -351,11 +351,15 @@ const chatSessionManager = new ChatSessionManager({
   db,
   onEvent: (sessionId, event) => chatConnections.publish(sessionId, event),
   onMailboxChange: (teamId, message) => chatConnections.publishMailbox(teamId, message),
+  onRoutingRulesLoaded: () => chatConnections.publishRoutingRules(),
+  onTaskChange: teamId => chatConnections.publishTasks(teamId),
   onCommandState: (sessionId, state) => chatConnections.publishCommandState(sessionId, state),
   onActivity: (sessionId, activity) => chatConnections.publishActivity(sessionId, activity),
   onContextUsage: (sessionId, usage) => chatConnections.publishContextUsage(sessionId, usage),
   onUsage: (profileId, report) => chatConnections.publishUsage(profileId, report),
   onWorkers: (sessionId, workers) => chatConnections.publishWorkers(sessionId, workers),
+  onNotifications: (sessionId, notifications) =>
+    chatConnections.publishNotifications(sessionId, notifications),
   getProviderEnv: chatProviderEnv.current,
   wireLogs: chatWireLogs,
   workerStore: chatWorkerStore,
@@ -454,6 +458,16 @@ refresh.start()
 const updateChecker = startUpdateChecker({
   onChange: update => broadcast({ type: 'update-state', update }),
 })
+
+// Account-notice slow recheck (notification strip design D3): every 30
+// minutes, re-read the credentials of every session with an attached client,
+// so a renewal or a rolled-over day count shows without a reattach. Attach
+// and agent start check too; this timer only closes the gap between them.
+const ACCOUNT_NOTICE_RECHECK_MS = 30 * 60 * 1000
+const accountNoticeTimer = setInterval(() => {
+  chatSessionManager.recheckAccountNotices(chatConnections.subscribedSessionIds())
+}, ACCOUNT_NOTICE_RECHECK_MS)
+accountNoticeTimer.unref?.()
 
 // Event loop lag monitor — detects when spawnSync or other blocking work
 // starves the event loop, causing typing lag and slow WebSocket delivery.
@@ -1003,7 +1017,9 @@ app.put('/api/settings/inactive-max-age-hours', putHistoryMaxAgeHours)
 
 app.route('/api/settings/chat-provider-env', chatProviderEnv.routes)
 app.route('/api/chat/profiles', createClaudeProfileRoutes())
-app.route('/api/chat/groups', createTeamGroupRoutes())
+app.route('/api/chat/groups', createTeamGroupRoutes({
+  groupProfileCounts: (teamId, groupId) => chatSessionManager.groupProfileCounts(teamId, groupId),
+}))
 
 // Allowed paste-image types; the extension written to /tmp comes from this map,
 // never from client-supplied values. Note Bun's multipart parser derives
@@ -1321,6 +1337,7 @@ async function cleanupAllTerminals() {
   workspaceWatcherInstance.stop()
   logPoller.stop()
   remote.stop()
+  clearInterval(accountNoticeTimer)
   chatSessionManager.shutdown()
   db.close()
 }
@@ -1684,6 +1701,16 @@ function handleMessage(
     case 'team-mailbox-cancel':
     case 'team-mailbox-retry':
     case 'team-mailbox-discard':
+    case 'team-mailbox-reload-rules':
+    case 'team-mailbox-hand-off':
+    case 'team-tasks-open':
+    case 'team-tasks-close':
+    case 'team-task-open':
+    case 'team-task-close':
+    case 'team-task-create':
+    case 'team-task-amend':
+    case 'team-task-note':
+    case 'team-task-status':
     case 'chat-worker-transcript':
       fireAndForget(chatConnections.handle(chatPeer(ws), message), 'chatMessage')
       return

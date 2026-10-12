@@ -648,11 +648,31 @@ The system SHALL provide each attached client with the slash commands the sessio
 - **THEN** those commands are not included in the list sent to clients
 
 ### Requirement: The composer offers a slash-command menu
-The chat composer SHALL open a command menu when the message starts with `/`, filtering the session's commands by the typed text against names and aliases first and descriptions second. The menu SHALL be operable by keyboard and pointer. Choosing a command SHALL insert `/<name> ` into the composer without sending it and SHALL show the command's argument hint. The menu SHALL indicate when the list is loading and SHALL NOT block sending.
+The chat composer SHALL open a command menu while the caret is in a word that starts with `/` at the start of the message or after whitespace, filtering the session's commands by that word against names and aliases first and descriptions second. The menu SHALL be operable by keyboard and pointer. Choosing a command SHALL replace that word with `/<name> ` without sending and SHALL show the command's argument hint. The menu SHALL indicate when the list is loading and SHALL NOT block sending.
 
 #### Scenario: Filter and choose by keyboard
 - **WHEN** the user types `/re` and presses Enter while a matching command is highlighted
 - **THEN** the composer contains `/<chosen name> `, the argument hint is shown, and no message is sent
+
+#### Scenario: Open in the middle of a message
+- **WHEN** the composer contains `please run ` and the user types `/re` after it
+- **THEN** the menu opens and lists the commands matching `re`
+
+#### Scenario: Open at the start of a later line
+- **WHEN** the composer contains a first line and the user types `/` at the start of the second line
+- **THEN** the menu opens and lists all commands
+
+#### Scenario: Choose in the middle of a message
+- **WHEN** the composer contains `please run /re on this` with the caret just after `/re` and the user chooses a command
+- **THEN** the composer contains `please run /<chosen name> on this`, the caret sits just after `/<chosen name> `, the argument hint is shown, and no message is sent
+
+#### Scenario: A slash inside a word or path does not open the menu
+- **WHEN** the caret follows `and/or`, `https://example`, or `/usr/bin`
+- **THEN** the menu stays closed
+
+#### Scenario: Moving the caret away closes the menu
+- **WHEN** the menu is open for a `/` word and the user moves the caret out of that word or selects text
+- **THEN** the menu closes, and it opens again when the caret returns into a `/` word
 
 #### Scenario: Dismiss the menu
 - **WHEN** the menu is open and the user presses Escape
@@ -661,6 +681,10 @@ The chat composer SHALL open a command menu when the message starts with `/`, fi
 #### Scenario: Send while the menu has no match
 - **WHEN** the typed command matches no listed command and the user presses Enter
 - **THEN** the menu does not intercept Enter and the message is sent as typed
+
+#### Scenario: A command in the middle of a message is sent as typed
+- **WHEN** the user sends `please run /clear later`
+- **THEN** the message is sent to the agent as typed and no new chat is created
 
 #### Scenario: List still loading
 - **WHEN** the user types `/` before the command list is ready
@@ -994,3 +1018,105 @@ agent.
 #### Scenario: Archived chat keeps its last path
 - **WHEN** a chat session whose agent changed working directory is archived
 - **THEN** the archived session keeps the most recent working directory as its project path and still appears in `Archive`
+
+### Requirement: Chat views show distance to auto-compaction
+The chat view header SHALL show how much of the session's auto-compaction
+budget the conversation has used, as a percentage together with the used and
+auto-compaction-threshold token counts. The reading SHALL be absent until the
+session has produced a model request, rather than showing a zero reading.
+
+#### Scenario: Meter appears after the first model request
+- **WHEN** a chat session completes its first model request
+- **THEN** the chat view header shows the used token count, the auto-compaction-threshold token count, and the percentage of that threshold in use
+
+#### Scenario: No meter before any model request
+- **WHEN** a chat session has not yet produced a model request
+- **THEN** the chat view header shows no context meter
+
+#### Scenario: Conversation reset returns the meter to absent
+- **WHEN** a running conversation is reset (plan-mode clear-context, a fresh session, or onboarding) after a context usage has been reported
+- **THEN** the chat view header shows no context meter again, and a later server restart does not restore the reading the discarded conversation had
+
+#### Scenario: Meter coexists with header chrome
+- **WHEN** a chat view is open for a live session that has produced a model request
+- **THEN** the context meter is shown beside the session status and the profile, project path, and session controls remain present
+
+### Requirement: Context usage tracks the conversation as it grows
+The reported used-token count SHALL follow the conversation's prompt size as
+the turn proceeds, updating when each new model request's usage is observed,
+so the reading moves during a long turn and not only at turn completion.
+
+#### Scenario: Reading grows during a multi-step turn
+- **WHEN** a turn makes several model requests in sequence, each with a larger prompt than the last
+- **THEN** the reported used-token count rises after each request rather than only when the turn completes
+
+#### Scenario: Reading is the current prompt, not cumulative traffic
+- **WHEN** a turn has made many model requests so the session's cumulative token counts far exceed the window
+- **THEN** the reported used tokens stay within the session's context window and describe the latest request's prompt size
+
+### Requirement: Compaction resets the reported context usage
+When the agent compacts the conversation and the post-compaction size is
+known, the system SHALL report that size at the moment the compaction is
+signalled, so the meter drops alongside the compaction notice rather than
+waiting for the next model request. When the post-compaction size is not
+known, the system SHALL retain the previous reading.
+
+#### Scenario: Meter drops when the conversation auto-compacts
+- **WHEN** a running conversation reaches its auto-compaction threshold and auto-compaction summarises it, and the post-compaction size is known
+- **THEN** the reported context usage falls to the post-compaction size when the compaction is signalled to the chat view
+
+#### Scenario: Manual compaction drops the meter too
+- **WHEN** the conversation is compacted explicitly rather than by auto-compaction, and the post-compaction size is known
+- **THEN** the reported context usage falls to the post-compaction size in the same way
+
+#### Scenario: Compaction metadata without a post-compaction size keeps the prior reading
+- **WHEN** a compaction is signalled with metadata that carries no usable post-compaction size
+- **THEN** the reported context usage retains its previous value, and no zero, undefined, or placeholder reading is published
+
+#### Scenario: Compaction with no metadata keeps the prior reading
+- **WHEN** a compaction is signalled with no compaction metadata at all
+- **THEN** the reported context usage retains its previous value in the same way
+
+### Requirement: Context usage is measured against the auto-compaction threshold
+The percentage and threshold token count SHALL use the session's
+auto-compaction threshold — the used-token count at which its conversation
+would be compacted — rather than the model's full context window, so a
+session nearing compaction reports a high percentage.
+
+#### Scenario: Autocompact reserve is excluded from the threshold
+- **WHEN** a session whose context window is 200000 tokens holds a 33000-token autocompact reserve and has 157900 tokens in use
+- **THEN** its threshold token count reads 167000 and its percentage reads about 95 rather than the 79 that the full window would give
+
+#### Scenario: Smaller configured window overrides the model window
+- **WHEN** a chat session runs under a profile that configures a 100000-token auto-compaction window on a 200000-token model
+- **THEN** its threshold token count derives from the configured 100000-token window rather than the model's 200000 tokens, and a used count at that threshold reads about 100 percent rather than 50
+
+#### Scenario: Larger configured window overrides the model window
+- **WHEN** a chat session runs under a profile that configures a 1000000-token auto-compaction window on a 200000-token model
+- **THEN** its threshold token count derives from the configured 1000000-token window rather than the model's 200000 tokens
+
+#### Scenario: An approximate threshold is labelled as one
+- **WHEN** a session's threshold must come from the model's context window, or from a configured window with no observed autocompact reserve, because no context-usage report has shown the real reserve
+- **THEN** the reading is marked as approximate and the meter says so, so it is not taken for an observed threshold
+
+#### Scenario: A later report replaces the approximation
+- **WHEN** a session that was metered against an approximate threshold later produces a context-usage report that reveals the reserve
+- **THEN** the reading is recalculated against the observed auto-compaction threshold and is no longer marked approximate
+
+### Requirement: Context usage survives restarts and archives
+The latest context usage SHALL be stored with the chat session and kept
+across server restarts, conversation resume, archive, and restore. A restored
+session SHALL show its last known reading. An archived session SHALL show its
+final reading as history and SHALL NOT refresh it.
+
+#### Scenario: Reading survives server restart
+- **WHEN** a chat session has reported a context usage and the server restarts before the next model request
+- **THEN** the chat view shows the stored reading rather than an empty meter
+
+#### Scenario: Archived chat keeps its final reading
+- **WHEN** a chat session is archived after producing a context usage
+- **THEN** opening the archived chat shows that reading and no later update
+
+#### Scenario: Reading survives restore
+- **WHEN** an archived chat session is restored
+- **THEN** it shows its stored reading and the next model request updates it

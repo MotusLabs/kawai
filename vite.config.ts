@@ -6,8 +6,7 @@ import fs from 'node:fs'
 import { shouldSuppressProxyLog } from './src/shared/devProxyErrors'
 
 // Backend restarts and browser reloads tear down proxied sockets mid-write.
-// Vite logs the resulting ECONNREFUSED/EPIPE/ECONNRESET as a stack trace even
-// though it recovers on its own, so filter those lines out of the dev log.
+// Filter the expected socket errors while keeping unrelated Vite errors visible.
 function createDevLogger() {
   const logger = createLogger()
   const logError = logger.error.bind(logger)

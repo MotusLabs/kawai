@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, jest, test } from 'bun:test'
 import TestRenderer, { act, type ReactTestInstance } from 'react-test-renderer'
-import type { ChatActivity, ChatCommandState, ChatContextUsage, ChatEvent, ChatPendingRequest, ChatUsageReport, ChatWireFrame, ChatWorker } from '@shared/chat'
+import type { ChatActivity, ChatCommandState, ChatContextUsage, ChatEvent, ChatNotification, ChatPendingRequest, ChatUsageReport, ChatWireFrame, ChatWorker } from '@shared/chat'
 import type { ClientMessage, ServerMessage, Session } from '@shared/types'
 import ChatRequests from '../components/chat/ChatRequests'
 import ChatMessages from '../components/chat/ChatMessages'
@@ -10,9 +10,11 @@ import ChatActivityRow from '../components/chat/ChatActivityRow'
 import ChatWorkersStrip from '../components/chat/ChatWorkersStrip'
 import { formatContextTokens } from '../components/chat/ChatContextMeter'
 import UsageBar from '../components/chat/UsageBar'
+import NotificationStrip from '../components/chat/NotificationStrip'
 import { closedDebugView, useChatDebugStore, type ChatDebugView } from '../stores/chatDebugStore'
 import { emptyTranscript, useChatStore } from '../stores/chatStore'
 import { useSettingsStore } from '../stores/settingsStore'
+import { useTeamTaskStore } from '../stores/teamTaskStore'
 
 describe('chat components', () => {
   test('approval cards send allow and deny without hiding the pending request locally', () => {
@@ -362,7 +364,7 @@ describe('chat archive view', () => {
 })
 
 describe('chat composer drafts', () => {
-  afterEach(() => useChatStore.setState({ sessions: {}, drafts: {} }))
+  afterEach(() => useChatStore.setState({ sessions: {}, drafts: {}, closedAccountNotices: {} }))
 
   const chatB = { ...chatSession, id: 'chat-2', name: 'Chat B' } as Session
   function renderComposerView(session: Session) {
@@ -676,7 +678,7 @@ describe('slash-command menu', () => {
     ],
   }
 
-  afterEach(() => useChatStore.setState({ sessions: {}, drafts: {} }))
+  afterEach(() => useChatStore.setState({ sessions: {}, drafts: {}, closedAccountNotices: {} }))
 
   function renderComposer(commands: ChatCommandState, session: Session = chatSession) {
     useChatStore.getState().setCommands({ type: 'chat-commands', sessionId: session.id, state: commands })
@@ -691,12 +693,20 @@ describe('slash-command menu', () => {
     })
     const type = (value: string) =>
       act(() => { renderer.root.findByType('textarea').props.onChange({ target: { value } }) })
+    // Type with an explicit caret (collapsed at `caret`, or a selection).
+    const typeAt = (value: string, caret: number, selectionEnd: number = caret) =>
+      act(() => { renderer.root.findByType('textarea').props.onChange({
+        target: { value, selectionStart: caret, selectionEnd } }) })
+    // A caret move or selection without typing (arrows, clicks, dragging).
+    const moveCaret = (caret: number, selectionEnd: number = caret) =>
+      act(() => { renderer.root.findByType('textarea').props.onSelect({
+        target: { selectionStart: caret, selectionEnd } }) })
     const key = (keyName: string) =>
       act(() => { renderer.root.findByType('textarea').props.onKeyDown({
         key: keyName, preventDefault: () => {}, currentTarget: { form: { requestSubmit: () => submit() } } }) })
     const submit = () =>
       act(() => { renderer.root.findByType('form').props.onSubmit({ preventDefault: () => {} }) })
-    return { sent, renderer, type, key, submit }
+    return { sent, renderer, type, typeAt, moveCaret, key, submit }
   }
 
   test('opens on a bare slash, filters, and stays closed otherwise', () => {
@@ -766,6 +776,100 @@ describe('slash-command menu', () => {
     expect(option(1).props['aria-selected']).toBe(true)
     expect(classesOf(option(1))).toContain('text-accent')
     expect(classesOf(option(0))).toContain('hover:bg-hover')
+    h.renderer.unmount()
+  })
+
+  test('choosing mid-message replaces only the /word and sends nothing', () => {
+    const h = renderComposer(READY_COMMANDS)
+    // Caret just after `/re` inside `please run /re on this`.
+    h.typeAt('please run /re on this', 13)
+    expect(h.renderer.root.findAllByProps({ 'data-testid': 'slash-command-menu' })).toHaveLength(1)
+    h.key('Enter')
+    expect(h.renderer.root.findByType('textarea').props.value).toBe('please run /clear on this')
+    expect(useChatStore.getState().drafts['chat-1']).toBe('please run /clear on this')
+    expect(h.renderer.root.findAllByProps({ 'data-testid': 'slash-command-menu' })).toHaveLength(0)
+    expect(h.sent.filter(message => message.type === 'chat-send')).toEqual([])
+    h.renderer.unmount()
+  })
+
+  test('the argument hint follows a mid-message insertion and hides once args are typed', () => {
+    const h = renderComposer(READY_COMMANDS)
+    // Inserting mid-message leaves the caret just after `/clear ` — the only
+    // position where the hint may show (design D4).
+    h.typeAt('please run /cl later', 13)
+    h.key('Enter')
+    expect(h.renderer.root.findByType('textarea').props.value).toBe('please run /clear later')
+    expect(h.renderer.root.findByProps({ 'data-testid': 'command-argument-hint' }).children)
+      .toEqual(['/', 'clear', ' ', '[name]'])
+    // Typing arguments moves the caret past the inserted space: hint gone.
+    h.typeAt('please run /clear demo later', 19)
+    expect(h.renderer.root.findAllByProps({ 'data-testid': 'command-argument-hint' })).toHaveLength(0)
+    h.renderer.unmount()
+  })
+
+  test('opens mid-message and at the start of a later line', () => {
+    const h = renderComposer(READY_COMMANDS)
+    h.typeAt('please run /co', 14)
+    const menu = h.renderer.root.findByProps({ 'data-testid': 'slash-command-menu' })
+    expect(menu.findAllByProps({ role: 'option' }).map(option => option.props['data-command-name']))
+      .toEqual(['context', 'compact'])
+    // A `/` word on the second line lists everything, like a leading one.
+    h.typeAt('first line\n/', 12)
+    expect(h.renderer.root.findByProps({ 'data-testid': 'slash-command-menu' })
+      .findAllByProps({ role: 'option' })).toHaveLength(READY_COMMANDS.commands.length)
+    h.renderer.unmount()
+  })
+
+  test('stays closed for and/or and /usr/bin', () => {
+    const h = renderComposer(READY_COMMANDS)
+    h.typeAt('check and/or maybe', 11)
+    expect(h.renderer.root.findAllByProps({ 'data-testid': 'slash-command-menu' })).toHaveLength(0)
+    h.typeAt('look at /usr/bin now', 15)
+    expect(h.renderer.root.findAllByProps({ 'data-testid': 'slash-command-menu' })).toHaveLength(0)
+    h.renderer.unmount()
+  })
+
+  test('moving the caret out of the word or selecting text closes; returning reopens', () => {
+    const h = renderComposer(READY_COMMANDS)
+    h.typeAt('please run /re on this', 13)
+    expect(h.renderer.root.findAllByProps({ 'data-testid': 'slash-command-menu' })).toHaveLength(1)
+    // Arrow keys / a click move the caret into another word: closed.
+    h.moveCaret(17)
+    expect(h.renderer.root.findAllByProps({ 'data-testid': 'slash-command-menu' })).toHaveLength(0)
+    // Back into the `/` word: open again, filtered the same.
+    h.moveCaret(13)
+    expect(h.renderer.root.findAllByProps({ 'data-testid': 'slash-command-menu' })).toHaveLength(1)
+    // A selection (even inside the word) has no single caret: closed.
+    h.moveCaret(11, 13)
+    expect(h.renderer.root.findAllByProps({ 'data-testid': 'slash-command-menu' })).toHaveLength(0)
+    h.renderer.unmount()
+  })
+
+  test('a mid-message /clear is sent as typed without creating a new chat', () => {
+    const h = renderComposer(READY_COMMANDS)
+    h.type('please run /clear later')
+    h.submit()
+    expect(h.sent.filter(message => message.type === 'chat-send')).toEqual([
+      { type: 'chat-send', sessionId: 'chat-1', text: 'please run /clear later' },
+    ])
+    expect(h.sent.filter(message => message.type === 'session-create')).toEqual([])
+    h.renderer.unmount()
+  })
+
+  test('choosing the command already spelled out keeps the text and closes the menu', () => {
+    const h = renderComposer(READY_COMMANDS)
+    // Caret back inside the complete `/context ` word: choosing `context`
+    // reproduces the value exactly — no text commit may be needed for the
+    // caret to land after the inserted command.
+    h.typeAt('please run /context ', 15)
+    expect(h.renderer.root.findAllByProps({ 'data-testid': 'slash-command-menu' })).toHaveLength(1)
+    h.key('Enter')
+    expect(h.renderer.root.findByType('textarea').props.value).toBe('please run /context ')
+    expect(useChatStore.getState().drafts['chat-1']).toBe('please run /context ')
+    expect(h.renderer.root.findAllByProps({ 'data-testid': 'slash-command-menu' })).toHaveLength(0)
+    // Typing continues from the restored caret without a jump or corruption.
+    h.typeAt('please run /context x', 21)
+    expect(h.renderer.root.findByType('textarea').props.value).toBe('please run /context x')
     h.renderer.unmount()
   })
 
@@ -844,7 +948,7 @@ describe('slash-command menu', () => {
 })
 
 describe('/clear, /reset, /new', () => {
-  afterEach(() => useChatStore.setState({ sessions: {}, drafts: {} }))
+  afterEach(() => useChatStore.setState({ sessions: {}, drafts: {}, closedAccountNotices: {} }))
 
   function renderClearable(session: Session = chatSession) {
     const sent: ClientMessage[] = []
@@ -1157,7 +1261,7 @@ describe('chat activity row', () => {
     renderer = render(archived)
     expect(rows(renderer)).toHaveLength(0)
     renderer.unmount()
-    useChatStore.setState({ sessions: {} })
+    useChatStore.setState({ sessions: {}, closedAccountNotices: {} })
   })
 })
 
@@ -1421,7 +1525,7 @@ describe('chat context meter', () => {
   })
 
   test('no reading renders no meter', () => {
-    act(() => { useChatStore.setState({ sessions: {} }) })
+    act(() => { useChatStore.setState({ sessions: {}, closedAccountNotices: {} }) })
     const renderer = renderView()
     expect(renderer.root.findAllByProps({ 'data-testid': 'chat-context-meter' })).toHaveLength(0)
     renderer.unmount()
@@ -1497,7 +1601,7 @@ describe('chat workers', () => {
   const seedWorkers = (workers: ChatWorker[]) => {
     act(() => { useChatStore.getState().setWorkers(SESSION, workers) })
   }
-  afterEach(() => useChatStore.setState({ sessions: {}, workerBodies: {} }))
+  afterEach(() => useChatStore.setState({ sessions: {}, workerBodies: {}, closedAccountNotices: {} }))
 
   test('an Agent call with a roster entry renders the worker summary row', () => {
     seedWorkers([rosterWorker('toolu_w1')])
@@ -1721,7 +1825,7 @@ describe('chat workers', () => {
         events: [agentCall('toolu_done'), agentCall('toolu_live')],
         pendingRequests: [], status: 'waiting', throughSequence: 0,
         commands: { status: 'unavailable', commands: [] }, activity: null,
-        contextUsage: null, usage: null, workers,
+        contextUsage: null, usage: null, workers, notifications: [],
       })
     }
     const workers = [
@@ -1744,6 +1848,140 @@ describe('chat workers', () => {
     expect(renderer.root.findAllByProps({ 'data-testid': 'chat-worker-elapsed' })).toHaveLength(0)
     expect(textOf(renderer.root.findByProps({ 'data-testid': 'chat-worker-summary' }))).toBe('Ran out of budget')
     renderer.unmount()
-    useChatStore.setState({ sessions: {} })
+    useChatStore.setState({ sessions: {}, closedAccountNotices: {} })
+  })
+})
+
+describe('chat notification strip', () => {
+  const notice = (overrides: Partial<ChatNotification> = {}): ChatNotification => ({
+    key: 'model-context-window',
+    source: 'agent',
+    severity: 'warning',
+    priority: 'high',
+    text: 'Context left: less than 20%',
+    receivedAt: '2026-10-12T00:00:00.000Z',
+    ...overrides,
+  })
+  const closed: ChatNotification[] = []
+  function renderStrip(notifications: ChatNotification[]) {
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => {
+      renderer = TestRenderer.create(
+        <NotificationStrip notifications={notifications} onClose={n => closed.push(n)} />
+      )
+    })
+    return renderer
+  }
+  const rows = (renderer: TestRenderer.ReactTestRenderer) =>
+    renderer.root.findAllByProps({ 'data-testid': 'chat-notification' })
+
+  test('renders nothing when the session has no active notices', () => {
+    const renderer = renderStrip([])
+    expect(renderer.root.children).toEqual([])
+    renderer.unmount()
+  })
+
+  test('warning and error notices style by severity; a hint renders dimmed', () => {
+    const renderer = renderStrip([
+      notice({ severity: 'warning', hint: undefined }),
+      notice({ key: 'error-compacting-conversation', severity: 'error', text: 'Error compacting conversation' }),
+      notice({ key: 'memory-paused', severity: 'info', text: 'Memory is paused' }),
+    ])
+    const styled = rows(renderer)
+    expect(styled.map(row => row.props['data-severity'])).toEqual(['warning', 'error', 'info'])
+    expect(styled[0]!.props.className).toContain('text-approval')
+    expect(styled[1]!.props.className).toContain('text-chat-danger')
+    expect(styled[2]!.props.className).toContain('text-primary')
+    renderer.unmount()
+  })
+
+  test('the login notice shows its text with the dimmed renewal hint', () => {
+    const renderer = renderStrip([
+      notice({
+        key: 'login-expiry',
+        source: 'account',
+        severity: 'warning',
+        priority: 'high',
+        text: 'Your login expires in 2 days',
+        hint: 'run /login in a Claude terminal to renew',
+      }),
+    ])
+    const row = rows(renderer)[0]!
+    expect(textOf(row)).toContain('Your login expires in 2 days')
+    expect(textOf(row)).toContain('run /login in a Claude terminal to renew')
+    renderer.unmount()
+  })
+
+  test('rows render in the delivered (priority-sorted) order', () => {
+    const renderer = renderStrip([
+      notice({ key: 'urgent', priority: 'immediate', severity: 'error', text: 'now' }),
+      notice({ key: 'low', priority: 'low', severity: 'info', text: 'meh' }),
+    ])
+    expect(rows(renderer).map(row => row.props['data-key'])).toEqual(['urgent', 'low'])
+    renderer.unmount()
+  })
+
+  test('close buttons call onClose with their own notice', () => {
+    const list = [
+      notice({ key: 'a', text: 'first' }),
+      notice({ key: 'login-expiry', source: 'account', text: 'Your login expires in 2 days', hint: 'run /login in a Claude terminal to renew' }),
+    ]
+    const renderer = renderStrip(list)
+    const buttons = renderer.root.findAllByProps({ 'data-testid': 'chat-notification-close' })
+    act(() => buttons[0]!.props.onClick())
+    act(() => buttons[1]!.props.onClick())
+    expect(closed).toEqual([list[0], list[1]])
+    renderer.unmount()
+  })
+})
+
+describe('chat task header and tasks panel', () => {
+  afterEach(() => useTeamTaskStore.setState({ views: {} }))
+
+  test('the header names the task; clicking opens the tasks panel on it and subscribes; reconnect resubscribes', () => {
+    const sent: ClientMessage[] = []
+    const session = { ...chatSession, spawned: true, taskId: 'task-1', taskTitle: 'Export' } as Session
+    const props = { session, sendMessage: (message: ClientMessage) => { sent.push(message) }, connectionStatus: 'connected' as const, error: null, onClose: () => {}, onKill: () => {} }
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => { renderer = TestRenderer.create(<ChatView {...props} connectionEpoch={0} />) })
+    const link = renderer.root.findByProps({ 'data-testid': 'chat-task' })
+    expect(textOf(link.parent!)).toBe('Spawned for task Export')
+    act(() => link.props.onClick())
+    expect(renderer.root.findAllByProps({ 'data-testid': 'team-tasks' })).toHaveLength(1)
+    expect(sent.filter(message => message.type.startsWith('team-task'))).toEqual([
+      { type: 'team-tasks-open', sessionId: 'chat-1' },
+      { type: 'team-task-open', sessionId: 'chat-1', taskId: 'task-1' },
+    ])
+    sent.length = 0
+    act(() => renderer.update(<ChatView {...props} connectionEpoch={1} />))
+    expect(sent.filter(message => message.type.startsWith('team-task'))).toEqual([
+      { type: 'team-tasks-close', sessionId: 'chat-1' },
+      { type: 'team-task-close', sessionId: 'chat-1', taskId: 'task-1' },
+      { type: 'team-tasks-open', sessionId: 'chat-1' },
+      { type: 'team-task-open', sessionId: 'chat-1', taskId: 'task-1' },
+    ])
+    // Opening the mailbox replaces the tasks panel in the shared side slot.
+    act(() => renderer.root.find(node => node.type === 'button' && node.children.join('') === 'Mailbox').props.onClick())
+    expect(renderer.root.findAllByProps({ 'data-testid': 'team-tasks' })).toHaveLength(0)
+    act(() => renderer.unmount())
+  })
+
+  test('a paused chat names its reason and resume time in the header', () => {
+    const until = new Date(Date.now() + 40 * 60_000).toISOString()
+    const session = { ...chatSession, parked: { messageId: 'm1', until, profileId: 'glm', reason: 'Provider limit on glm' } } as Session
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => { renderer = TestRenderer.create(<ChatView session={session} sendMessage={() => {}} connectionStatus="connected" connectionEpoch={0} error={null} onClose={() => {}} onKill={() => {}} />) })
+    const time = new Date(until).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    expect(textOf(renderer.root.findByProps({ 'data-testid': 'chat-paused' }))).toBe(`Paused: Provider limit on glm · resumes ${time}`)
+    act(() => renderer.update(<ChatView session={{ ...session, parked: null }} sendMessage={() => {}} connectionStatus="connected" connectionEpoch={0} error={null} onClose={() => {}} onKill={() => {}} />))
+    expect(renderer.root.findAllByProps({ 'data-testid': 'chat-paused' })).toHaveLength(0)
+    act(() => renderer.unmount())
+  })
+
+  test('a chat without a task shows no task line', () => {
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => { renderer = TestRenderer.create(<ChatView session={chatSession} sendMessage={() => {}} connectionStatus="connected" connectionEpoch={0} error={null} onClose={() => {}} onKill={() => {}} />) })
+    expect(renderer.root.findAllByProps({ 'data-testid': 'chat-task' })).toHaveLength(0)
+    act(() => renderer.unmount())
   })
 })
