@@ -22,6 +22,7 @@ import type {
 } from '../../shared/chat'
 import type { SessionStatus } from '../../shared/types'
 import type { ChatWireRecorder } from '../chat/wireTap'
+import type { ChatLimitSignal } from '../chat/limitSignals'
 import {
   ChatSessionDriver,
   type ChatQueryFactory,
@@ -185,6 +186,7 @@ function createHarness(
     /** Replaces the harness's cwd capture (e.g. with a throwing observer). */
     onCwdChanged?: (newCwd: string) => void
     wire?: ChatWireRecorder
+    onLimitEvent?: (signal: ChatLimitSignal) => void
     /** Injected usage control on every spawned fake query. */
     usageImpl?: FakeUsageControl
     /** Injected context-usage control on every spawned fake query. */
@@ -2789,4 +2791,72 @@ test('peer delivery pushes a peer-origin turn and emits display metadata without
   expect(h.events.some(event => event.type === 'user_message')).toBe(false)
   expect(() => h.driver.deliver(PEER)).toThrow('not idle')
   h.driver.kill()
+})
+
+describe('ChatSessionDriver limit events', () => {
+  function frame(fields: Record<string, unknown>): SDKMessage {
+    return { uuid: 'f-uuid', session_id: 'sdk-1', ...fields } as unknown as SDKMessage
+  }
+  function failedAssistant(error: string, text: string, parent: string | null = null): SDKMessage {
+    return frame({
+      type: 'assistant',
+      error,
+      message: { id: 'msg_err', content: [{ type: 'text', text }], role: 'assistant' },
+      parent_tool_use_id: parent,
+    })
+  }
+  function limitHarness() {
+    const limits: ChatLimitSignal[] = []
+    const harness = createHarness({ onLimitEvent: (signal) => limits.push(signal) })
+    harness.driver.send('hello')
+    return { harness, limits, fake: harness.fakes[0]! }
+  }
+
+  test('a retried rate-limit attempt is a non-final event; an unrelated retry is not', async () => {
+    const { fake, limits } = limitHarness()
+    fake.push(frame({ type: 'system', subtype: 'api_retry', attempt: 1, max_retries: 10, retry_delay_ms: 500, error_status: 429, error: 'rate_limit' }))
+    fake.push(frame({ type: 'system', subtype: 'api_retry', attempt: 2, max_retries: 10, retry_delay_ms: 500, error_status: 504, error: 'server_error' }))
+    fake.push(result('success'))
+    await flush()
+    expect(limits).toEqual([{ kind: 'rate_limit', final: false, status: 429, message: null, resetsAt: null }])
+  })
+
+  test('a failed assistant message is the final event, with the reset a rejected rate_limit_event announced', async () => {
+    const { fake, limits } = limitHarness()
+    const reset = Math.floor(Date.now() / 1000) + 2400
+    fake.push(frame({ type: 'rate_limit_event', rate_limit_info: { status: 'rejected', resetsAt: reset } }))
+    fake.push(failedAssistant('rate_limit', 'API Error: 429 {"error":"quota"}'))
+    fake.push(result('success'))
+    await flush()
+    expect(limits).toEqual([{
+      kind: 'rate_limit', final: true, status: 429, message: 'API Error: 429 {"error":"quota"}',
+      resetsAt: new Date(reset * 1000).toISOString(),
+    }])
+  })
+
+  test('a gateway quota error classified otherwise still counts on status 429', async () => {
+    const { fake, limits } = limitHarness()
+    fake.push(failedAssistant('unknown', 'API Error: 429 quota exhausted'))
+    fake.push(result('success'))
+    await flush()
+    expect(limits).toMatchObject([{ kind: 'unknown', final: true, status: 429 }])
+  })
+
+  test('other errors and subagent failures record nothing', async () => {
+    const { fake, limits } = limitHarness()
+    fake.push(failedAssistant('invalid_request', 'API Error: 400 bad request'))
+    fake.push(failedAssistant('rate_limit', 'API Error: 429', 'toolu_agent'))
+    fake.push(result('success'))
+    await flush()
+    expect(limits).toEqual([])
+  })
+
+  test('a throwing observer does not break the turn', async () => {
+    const harness = createHarness({ onLimitEvent: () => { throw new Error('boom') } })
+    harness.driver.send('hello')
+    harness.fakes[0]!.push(failedAssistant('overloaded', 'API Error: 529 overloaded'))
+    harness.fakes[0]!.push(result('success'))
+    await flush()
+    expect(typesOf(harness.events)).toContain('turn_completed')
+  })
 })

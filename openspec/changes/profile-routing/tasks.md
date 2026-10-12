@@ -9,10 +9,10 @@
 
 ## 2. Limit events and cooldown
 
-- [ ] 2.1 Add `profile_limit_events(id, profile_id, session_id, group_id, at, kind, final, status, message, resets_at)` with a store (`src/server/team/routing/limitEvents.ts`) that records events, prunes rows older than 24h on write and at startup, and lists events per profile; verify with a store test covering insert, prune, and survival across reopening the DB
-- [ ] 2.2 Capture limit events in `ChatSessionDriver.ts` through a new `onLimitEvent` option: `system/api_retry` with error `rate_limit`/`billing_error`/`overloaded` as `final: false` (status from `error_status`), and failed assistant messages / error results with those classes or status 429 as `final: true` (message text, reset time from the latest `rate_limit_event` when known); verify with driver tests feeding each frame type, including a misclassified 429 and an unrelated `invalid_request` that records nothing
-- [ ] 2.3 Wire `onLimitEvent` in the chat session manager to the store with the session's profile and group; verify a manager-level test records an event with the right profile/group ids
-- [ ] 2.4 Implement computed cooldown (`cooldownUntil(profileId, now)`: latest final event's `resets_at`, else `at + 1h`; retries never cool), shared across all groups and teams; verify with tests for reset-known, reset-unknown, retry-only, and expiry
+- [x] 2.1 Add `profile_limit_events(id, profile_id, session_id, group_id, at, kind, final, status, message, resets_at)` with a store (`src/server/team/routing/limitEvents.ts`) that records events, prunes rows older than 24h on write and at startup, and lists events per profile; verify with a store test covering insert, prune, and survival across reopening the DB
+- [x] 2.2 Capture limit events in `ChatSessionDriver.ts` through a new `onLimitEvent` option: `system/api_retry` with error `rate_limit`/`billing_error`/`overloaded` as `final: false` (status from `error_status`), and failed assistant messages / error results with those classes or status 429 as `final: true` (message text, reset time from the latest `rate_limit_event` when known); verify with driver tests feeding each frame type, including a misclassified 429 and an unrelated `invalid_request` that records nothing
+- [x] 2.3 Wire `onLimitEvent` in the chat session manager to the store with the session's profile and group; verify a manager-level test records an event with the right profile/group ids
+- [x] 2.4 Implement computed cooldown (`cooldownUntil(profileId, now)`: latest final event's `resets_at`, else `at + 1h`; retries never cool), shared across all groups and teams; verify with tests for reset-known, reset-unknown, retry-only, and expiry
 
 ## 3. Route contract and built-in strategy
 

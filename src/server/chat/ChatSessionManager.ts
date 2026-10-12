@@ -64,6 +64,7 @@ import { createMailboxServer } from '../team/mailboxTools'
 import type { TeamMessage } from '../../shared/team'
 import { MailDispatcher } from '../team/dispatcher'
 import { receiptMessageId } from '../team/receipt'
+import type { LimitEventStore } from '../team/routing/limitEvents'
 import { SessionMailbox } from '../team/sessionMailbox'
 import type { TaskService } from '../team/TaskService'
 import type { SpawnRequest, SpawnResult } from '../team/staffing'
@@ -433,6 +434,11 @@ export class ChatSessionManager {
     this.teamMail.start()
     // Logs of sessions deleted while the server was down are orphans now.
     void this.options.wireLogs?.pruneOrphans(new Set(this.records.keys()))
+  }
+
+  /** Recorded per-profile limit events (profile routing). */
+  get limitEvents(): LimitEventStore {
+    return this.teamMail.limits
   }
 
   /** Each session's team (agent-teams); shared with the mailbox dispatcher. */
@@ -1115,6 +1121,15 @@ export class ChatSessionManager {
           this.applyPatch(record.sessionId, { sdkSessionId }),
         onCwdChanged: (newCwd) =>
           this.handleDriverCwdChanged(record.sessionId, newCwd),
+        // Profile routing (design D6): limit failures count against the
+        // session's profile, with its current group for context.
+        onLimitEvent: (signal) =>
+          this.teamMail.limits.record({
+            ...signal,
+            profileId: record.claudeProfileId ?? 'default',
+            sessionId: record.sessionId,
+            groupId: this.records.get(record.sessionId)?.groupId ?? null,
+          }),
       })
       if (
         !this.records.has(record.sessionId) ||

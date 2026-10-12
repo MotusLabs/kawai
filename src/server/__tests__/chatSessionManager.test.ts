@@ -2750,6 +2750,22 @@ describe('ChatSessionManager usage', () => {
     ])
   })
 
+  test('limit failures are recorded against the session profile and group', async () => {
+    const { manager, handles } = createHarness(db)
+    const created = manager.createSession({ projectPath: '/tmp/proj', claudeProfileId: 'glm' })
+    if (!created.ok) throw new Error('create failed')
+    await manager.send(created.session.id, 'hello')
+    handles[0]!.push({
+      type: 'system', subtype: 'api_retry', attempt: 1, max_retries: 10, retry_delay_ms: 100,
+      error_status: 429, error: 'rate_limit', uuid: 'r-uuid', session_id: 'sdk-1',
+    } as unknown as SDKMessage)
+    await flush()
+    expect(manager.limitEvents.forProfile('glm')).toMatchObject([
+      { profileId: 'glm', sessionId: created.session.id, groupId: null, kind: 'rate_limit', final: false, status: 429 },
+    ])
+    expect(manager.limitEvents.forProfile('default')).toEqual([])
+  })
+
   test('an assistant usage_report is stored for the session profile', async () => {
     const { manager, handles, usage } = createHarness(db)
     const created = manager.createSession({ projectPath: '/tmp/proj', claudeProfileId: 'glm' })

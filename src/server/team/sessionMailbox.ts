@@ -2,7 +2,8 @@
 // per team/cycle; receipt recovery runs before watchers or records are released.
 // Team tasks (task store/service) and worktree staffing are wired here too:
 // recipients carry their resolved worktree, task mail is routed by its
-// task's target, and the staffing pass spawns through the manager.
+// task's target, and the staffing pass spawns through the manager. Profile
+// limit events (profile routing) are recorded here for routing to read.
 import type { ChatSessionRecord } from '../db'
 import type { ChatSessionDriver } from '../chat/ChatSessionDriver'
 import type { TeamMessage } from '../../shared/team'
@@ -18,6 +19,7 @@ import { buildTaskContext } from './taskContext'
 import { WorktreeStaffing, type SpawnRequest, type SpawnResult } from './staffing'
 import { TeamCaps } from './teamCaps'
 import { worktreeRootOf } from './worktreeRoots'
+import { LimitEventStore } from './routing/limitEvents'
 import type { Database } from 'bun:sqlite'
 
 export class SessionMailbox {
@@ -25,6 +27,7 @@ export class SessionMailbox {
   readonly tasks: TaskService
   readonly dispatcher: MailDispatcher
   readonly staffing: WorktreeStaffing
+  readonly limits: LimitEventStore
   private readonly catalogs = new Map<string, GroupCatalog>()
   private releaseSubscription?: () => void
 
@@ -49,6 +52,7 @@ export class SessionMailbox {
     onError: (error: unknown) => void
   }) {
     const store = new MailboxStore(db, { recipientExists: id => !!options.getRecord(id) })
+    this.limits = new LimitEventStore(db)
     const taskStore = new TaskStore(db, store)
     this.tasks = new TaskService(taskStore, { getSession: options.getRecord, homeDir: options.homeDir })
     this.mailbox = new TeamMailbox(store, {

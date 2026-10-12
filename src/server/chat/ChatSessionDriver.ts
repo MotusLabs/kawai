@@ -82,6 +82,12 @@ import { TEAM_ALLOWED_TOOLS } from '../team/mailboxTools'
 import { TEAM_MCP_SERVER } from '../team/teamPrompt'
 import { formatEnvelope } from '../team/envelope'
 import { createWireTappedSpawn, type ChatWireRecorder } from './wireTap'
+import {
+  assistantLimitSignal,
+  rejectedResetsAt,
+  retryLimitSignal,
+  type ChatLimitSignal,
+} from './limitSignals'
 
 /**
  * The SDK `query()` — injected so tests run against a fake. `wire` is the
@@ -194,6 +200,12 @@ export interface ChatSessionDriverOptions {
   onCommandState?: (state: ChatCommandState) => void
   /** Records the raw protocol of every spawned process (chat debug view). */
   wire?: ChatWireRecorder
+  /**
+   * Profile routing (design D6): a rate-limit, billing, or overload failure
+   * — a retried attempt or the turn's final failure — with the provider's
+   * reset time when a rejected rate_limit_event announced one.
+   */
+  onLimitEvent?: (signal: ChatLimitSignal) => void
 }
 
 interface PendingRequest {
@@ -247,6 +259,8 @@ export class ChatSessionDriver {
   private readonly agentToolCallIds = new Set<string>()
   /** Context-meter state (context meter designs D1–D3); see contextUsage.ts. */
   private readonly context = new ChatContextTracker()
+  /** Reset time from the latest rejected rate_limit_event (design D6). */
+  private limitResetsAt: string | null = null
   private dead = false
   /** Updated by the manager before a respawn; see setClaudeExecutablePath. */
   private claudeExecutablePath: string | undefined
@@ -712,6 +726,7 @@ export class ChatSessionDriver {
         this.handleSystem(message)
         return
       case 'rate_limit_event':
+        this.limitResetsAt = rejectedResetsAt(message.rate_limit_info) ?? this.limitResetsAt
         // Plan usage rides these frames whatever the turn state; malformed
         // values degrade to a windowless report, never a session error.
         this.options.onRateLimit?.(
@@ -748,6 +763,10 @@ export class ChatSessionDriver {
     if (!turnId) return
     const messageId = message.message.id ?? message.uuid
     const subagent = isSubagentContentFrame(message)
+    if (message.error && !subagent) {
+      const text = message.message.content.map(block => block.type === 'text' ? block.text : '').join('\n')
+      this.reportLimit(assistantLimitSignal(message.error, text, this.currentResetsAt()))
+    }
     for (const block of message.message.content) {
       if (block.type === 'text') {
         // Worker chatter stays out of the parent transcript (design D4).
@@ -903,6 +922,9 @@ export class ChatSessionDriver {
   }
 
   private handleSystem(message: Extract<SDKMessage, { type: 'system' }>): void {
+    if (message.subtype === 'api_retry') {
+      this.reportLimit(retryLimitSignal(message, this.currentResetsAt()))
+    }
     if (message.subtype === 'init') {
       if (!this.capturedSdkSessionId && message.session_id) {
         this.capturedSdkSessionId = message.session_id
@@ -954,6 +976,21 @@ export class ChatSessionDriver {
     const input = systemFrameToInput(message)
     if (input) this.feedActivity(input)
     // Other system subtypes are informational; ignored.
+  }
+
+  /** The announced reset time while it is still ahead. */
+  private currentResetsAt(): string | null {
+    if (this.limitResetsAt && Date.parse(this.limitResetsAt) <= Date.now()) this.limitResetsAt = null
+    return this.limitResetsAt
+  }
+
+  private reportLimit(signal: ChatLimitSignal | null): void {
+    if (!signal) return
+    try {
+      this.options.onLimitEvent?.(signal)
+    } catch {
+      // Observational: recording a limit must never break the session.
+    }
   }
 
   /**
