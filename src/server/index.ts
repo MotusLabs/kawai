@@ -8,10 +8,11 @@ import fsSync from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import fs from 'node:fs/promises'
-import { Hono, type Context } from 'hono'
+import { Hono } from 'hono'
 import { serveStatic } from 'hono/bun'
 import { config } from './config'
 import { createPasteFileRoutes } from './routes/pasteFile'
+import { createSettingsRoutes, loadStoredSettings } from './routes/settings'
 import { createChatProviderEnvStore } from './routes/chatProviderEnv'
 import { ensureTmux } from './prerequisites'
 import { SessionManager } from './SessionManager'
@@ -36,8 +37,6 @@ import { resolveTerminalMode } from './terminal'
 import { TerminalOutputCoalescer } from './terminal/outputCoalescer'
 import { resolveProjectPath } from './paths'
 import {
-  HISTORY_MAX_AGE_MIN_HOURS,
-  HISTORY_MAX_AGE_MAX_HOURS,
   type ClientMessage,
   type DirectoryListing,
   type DirectoryErrorResponse,
@@ -46,7 +45,6 @@ import { logger, logLevel } from './logger'
 import {
   SessionRefreshWorkerClient,
 } from './sessionRefreshWorkerClient'
-import { TmuxTimeoutError } from './tmuxTimeout'
 import {
   MAX_FIELD_LENGTH,
   isValidSessionId,
@@ -236,39 +234,11 @@ logger.info('terminal_mode_resolved', {
 const app = new Hono()
 const db = initDatabase()
 
-// Read mouse mode setting from DB (default: true)
-const TMUX_MOUSE_MODE_KEY = 'tmux_mouse_mode'
-const storedMouseMode = db.getAppSetting(TMUX_MOUSE_MODE_KEY)
-const initialMouseMode = storedMouseMode === null ? true : storedMouseMode === 'true'
-
-// Read history max age hours setting from DB (default: 24). Keep the DB key
-// stable so existing settings survive the rename from Inactive to History.
-const HISTORY_MAX_AGE_HOURS_KEY = 'inactive_max_age_hours'
-const storedHistoryMaxAgeHours = db.getAppSetting(HISTORY_MAX_AGE_HOURS_KEY)
-let runtimeHistoryMaxAgeHours = storedHistoryMaxAgeHours !== null
-  ? Number(storedHistoryMaxAgeHours)
-  : config.historySessionMaxAgeHours
-if (!Number.isFinite(runtimeHistoryMaxAgeHours) || runtimeHistoryMaxAgeHours < 1) {
-  runtimeHistoryMaxAgeHours = 24
-}
-
-// Read prefer-window-name setting from DB. The env var
-// (AGENTBOARD_PREFER_WINDOW_NAME, already folded into config) is only the
-// initial default; once set from the UI the stored value wins.
-const PREFER_WINDOW_NAME_KEY = 'prefer_window_name'
-const storedPreferWindowName = db.getAppSetting(PREFER_WINDOW_NAME_KEY)
-if (storedPreferWindowName !== null) {
-  config.preferWindowName = storedPreferWindowName === 'true'
-}
-
-// Read the global terminal color setting from DB. Enabled by default so an
-// ambient NO_COLOR on the Agentboard process does not flatten every managed
-// terminal. Once saved from the UI, the persisted value wins.
-const TERMINAL_COLORS_ENABLED_KEY = 'terminal_colors_enabled'
-const storedTerminalColorsEnabled = db.getAppSetting(TERMINAL_COLORS_ENABLED_KEY)
-if (storedTerminalColorsEnabled !== null) {
-  config.terminalColorsEnabled = storedTerminalColorsEnabled === 'true'
-}
+// Persisted settings: mouse mode and history max age seed runtime state;
+// prefer-window-name and terminal colors fold into config (see routes/settings).
+const storedSettings = loadStoredSettings(db)
+const initialMouseMode = storedSettings.initialMouseMode
+let runtimeHistoryMaxAgeHours = storedSettings.historyMaxAgeHours
 
 // Chat provider environment: the Settings override wins over
 // AGENTBOARD_CHAT_ENV; read live by the chat manager at each SDK spawn.
@@ -812,182 +782,16 @@ app.post('/api/update/install', async (c) => {
   return c.json({ ok: true, restarting: true })
 })
 
-// Tmux mouse mode setting
-app.get('/api/settings/tmux-mouse-mode', (c) => {
-  const stored = db.getAppSetting(TMUX_MOUSE_MODE_KEY)
-  const enabled = stored === null ? true : stored === 'true'
-  return c.json({ enabled })
-})
-
-app.put('/api/settings/tmux-mouse-mode', async (c) => {
-  let body: { enabled?: unknown }
-  try {
-    body = await c.req.json()
-  } catch {
-    return c.json({ error: 'Invalid request body' }, 400)
-  }
-
-  if (typeof body.enabled !== 'boolean') {
-    return c.json({ error: 'enabled must be a boolean' }, 400)
-  }
-
-  const previousStored = db.getAppSetting(TMUX_MOUSE_MODE_KEY)
-  const previousEnabled = previousStored === null ? true : previousStored === 'true'
-
-  try {
-    sessionManager.setMouseMode(body.enabled)
-  } catch (error) {
-    if (error instanceof TmuxTimeoutError) {
-      return c.json({ error: 'Timed out applying tmux mouse mode' }, 504)
-    }
-    logger.warn('tmux_mouse_mode_update_failed', {
-      message: error instanceof Error ? error.message : String(error),
-    })
-    return c.json({ error: 'Unable to apply tmux mouse mode' }, 500)
-  }
-
-  try {
-    db.setAppSetting(TMUX_MOUSE_MODE_KEY, String(body.enabled))
-  } catch (error) {
-    logger.warn('tmux_mouse_mode_persist_failed', {
-      message: error instanceof Error ? error.message : String(error),
-    })
-    try {
-      sessionManager.setMouseMode(previousEnabled)
-    } catch (rollbackError) {
-      logger.warn('tmux_mouse_mode_rollback_failed', {
-        message: rollbackError instanceof Error ? rollbackError.message : String(rollbackError),
-      })
-    }
-    return c.json({ error: 'Unable to persist tmux mouse mode' }, 500)
-  }
-
-  return c.json({ enabled: body.enabled })
-})
-
-// Terminal ANSI color setting
-app.get('/api/settings/terminal-colors', (c) => {
-  return c.json({ enabled: config.terminalColorsEnabled })
-})
-
-app.put('/api/settings/terminal-colors', async (c) => {
-  let body: { enabled?: unknown }
-  try {
-    body = await c.req.json()
-  } catch {
-    return c.json({ error: 'Invalid request body' }, 400)
-  }
-
-  if (typeof body.enabled !== 'boolean') {
-    return c.json({ error: 'enabled must be a boolean' }, 400)
-  }
-
-  const previousValue = config.terminalColorsEnabled
-  try {
-    sessionManager.setTerminalColors(body.enabled)
-  } catch (error) {
-    if (error instanceof TmuxTimeoutError) {
-      return c.json({ error: 'Timed out applying terminal colors' }, 504)
-    }
-    logger.warn('terminal_colors_update_failed', {
-      message: error instanceof Error ? error.message : String(error),
-    })
-    return c.json({ error: 'Unable to apply terminal colors' }, 500)
-  }
-
-  config.terminalColorsEnabled = body.enabled
-  try {
-    db.setAppSetting(TERMINAL_COLORS_ENABLED_KEY, String(body.enabled))
-  } catch (error) {
-    config.terminalColorsEnabled = previousValue
-    logger.warn('terminal_colors_persist_failed', {
-      message: error instanceof Error ? error.message : String(error),
-    })
-    try {
-      sessionManager.setTerminalColors(previousValue)
-    } catch (rollbackError) {
-      logger.warn('terminal_colors_rollback_failed', {
-        message: rollbackError instanceof Error ? rollbackError.message : String(rollbackError),
-      })
-    }
-    return c.json({ error: 'Unable to persist terminal colors' }, 500)
-  }
-
-  return c.json({ enabled: body.enabled })
-})
-
-app.get('/api/settings/prefer-window-name', (c) => {
-  return c.json({ enabled: config.preferWindowName })
-})
-
-app.put('/api/settings/prefer-window-name', async (c) => {
-  let body: { enabled?: unknown }
-  try {
-    body = await c.req.json()
-  } catch {
-    return c.json({ error: 'Invalid request body' }, 400)
-  }
-
-  if (typeof body.enabled !== 'boolean') {
-    return c.json({ error: 'enabled must be a boolean' }, 400)
-  }
-
-  const previousValue = config.preferWindowName
-  config.preferWindowName = body.enabled
-  try {
-    db.setAppSetting(PREFER_WINDOW_NAME_KEY, String(body.enabled))
-  } catch (error) {
-    // Same contract as tmux-mouse-mode: never leave the runtime value
-    // diverging from what will be restored after a restart.
-    config.preferWindowName = previousValue
-    logger.warn('prefer_window_name_persist_failed', {
-      message: error instanceof Error ? error.message : String(error),
-    })
-    return c.json({ error: 'Unable to persist prefer window name' }, 500)
-  }
-  // Connected clients keep their own copy from the open-time server-config
-  // message (mobile tab labels read it); rebroadcast so they all converge.
-  broadcast({
-    type: 'server-config',
-    remoteAllowControl: config.remoteAllowControl,
-    remoteAllowAttach: config.remoteAllowAttach,
-    hostLabel: config.hostLabel,
-    preferWindowName: config.preferWindowName,
-    clientLogLevel: logLevel,
-  })
-  // Names are recomputed on refresh; schedule one so the sidebar updates
-  // promptly instead of waiting for the next poll tick.
-  refresh.scheduleEnterRefresh()
-  return c.json({ enabled: body.enabled })
-})
-
-// History sessions max age setting. The inactive route is kept as a
-// compatibility alias for older clients.
-const getHistoryMaxAgeHours = (c: Context) => {
-  return c.json({ hours: runtimeHistoryMaxAgeHours })
-}
-
-const putHistoryMaxAgeHours = async (c: Context) => {
-  try {
-    const body = await c.req.json()
-    const hours = Number(body.hours)
-    if (!Number.isFinite(hours) || hours < HISTORY_MAX_AGE_MIN_HOURS || hours > HISTORY_MAX_AGE_MAX_HOURS) {
-      return c.json({ error: `hours must be a number between ${HISTORY_MAX_AGE_MIN_HOURS} and ${HISTORY_MAX_AGE_MAX_HOURS}` }, 400)
-    }
-    runtimeHistoryMaxAgeHours = hours
-    db.setAppSetting(HISTORY_MAX_AGE_HOURS_KEY, String(hours))
-    // Re-broadcast agent sessions with new max age
-    refresh.updateDormantAgentSessions()
-    return c.json({ hours })
-  } catch {
-    return c.json({ error: 'Invalid request body' }, 400)
-  }
-}
-
-app.get('/api/settings/history-max-age-hours', getHistoryMaxAgeHours)
-app.put('/api/settings/history-max-age-hours', putHistoryMaxAgeHours)
-app.get('/api/settings/inactive-max-age-hours', getHistoryMaxAgeHours)
-app.put('/api/settings/inactive-max-age-hours', putHistoryMaxAgeHours)
+app.route('/api/settings', createSettingsRoutes({
+  db,
+  sessionManager,
+  refresh,
+  broadcast,
+  historyMaxAgeHours: {
+    get: () => runtimeHistoryMaxAgeHours,
+    set: (hours) => { runtimeHistoryMaxAgeHours = hours },
+  },
+}))
 
 app.route('/api/settings/chat-provider-env', chatProviderEnv.routes)
 app.route('/api/chat/profiles', createClaudeProfileRoutes())
