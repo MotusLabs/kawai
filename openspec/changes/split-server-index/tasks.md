@@ -6,11 +6,11 @@ a commit; `indexHandlers.test.ts` must pass unchanged (design D5) throughout.
 
 ## 1. logContent module (no dependencies)
 
-- [ ] 1.1 Create `src/server/logContent.ts` (header comment, house style) and lift the
+- [x] 1.1 Create `src/server/logContent.ts` (header comment, house style) and lift the
   log-line cache verbatim: `CachedLogLines`, `LOG_LINE_CACHE`, `MAX_CACHEABLE_LOG_BYTES`,
   `MAX_LOG_CACHE_BYTES`, `logLineCacheBytes`, the byte-accounting eviction, and the three
   readers (`getLogLinesWindow`-family, today ~index.ts:140–500)
-- [ ] 1.2 Rewire `index.ts` to import from `./logContent`; add a direct unit test for the
+- [x] 1.2 Rewire `index.ts` to import from `./logContent`; add a direct unit test for the
   window math and cache eviction (today covered only end-to-end); commit
   (`refactor: lift log content cache into logContent module`)
 
