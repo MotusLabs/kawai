@@ -41,10 +41,9 @@ import {
   DEFAULT_SCROLLBACK_LINES,
   matchWindowsToLogsByExactRgAsync,
   stripPastePlaceholders,
-  verifyWindowLogAssociationDetailed,
   verifyWindowLogAssociationDetailedAsync,
   type WindowLogVerificationResult,
-} from './logMatcher'
+} from './logmatch'
 import {
   createTerminalProxy,
   resolveTerminalMode,
@@ -938,7 +937,6 @@ interface VerificationDecision {
 }
 
 interface HydrateSessionsOptions {
-  verifyAssociations?: boolean
   precomputedVerifications?: Map<string, VerificationDecision>
 }
 
@@ -1014,7 +1012,7 @@ async function verifyAllSessions(
 
 export function hydrateSessionsWithAgentSessions(
   sessions: TerminalSession[],
-  { verifyAssociations = false, precomputedVerifications }: HydrateSessionsOptions = {}
+  { precomputedVerifications }: HydrateSessionsOptions = {}
 ): Session[] {
   const activeSessions = db.getActiveSessions()
   // Sanity guard: callers ultimately source `sessions` from a tmux query (e.g.
@@ -1035,9 +1033,6 @@ export function hydrateSessionsWithAgentSessions(
   const windowSet = new Set(sessions.map((session) => session.tmuxWindow))
   const activeMap = new Map<string, typeof activeSessions[number]>()
   const orphaned: AgentSession[] = []
-  const logDirs = verifyAssociations && !precomputedVerifications
-    ? getLogSearchDirs()
-    : []
 
   for (const agentSession of activeSessions) {
     const precomputed = precomputedVerifications?.get(agentSession.sessionId)
@@ -1071,26 +1066,6 @@ export function hydrateSessionsWithAgentSessions(
     if (precomputed) {
       verification = precomputed.verification
       nameMatches = precomputed.nameMatches
-    } else if (verifyAssociations) {
-      const otherSessionLogPaths = activeSessions
-        .filter((s) => s.sessionId !== agentSession.sessionId && s.currentWindow)
-        .map((s) => s.logFilePath)
-
-      verification = verifyWindowLogAssociationDetailed(
-        currentWindow,
-        agentSession.logFilePath,
-        logDirs,
-        {
-          context: {
-            agentType: agentSession.agentType,
-            projectPath: agentSession.projectPath,
-          },
-          excludeLogPaths: otherSessionLogPaths,
-        }
-      )
-
-      const window = sessions.find((s) => s.tmuxWindow === currentWindow)
-      nameMatches = Boolean(window && window.name === agentSession.displayName)
     }
 
     if (verification) {
@@ -1319,13 +1294,13 @@ function listWindowsSyncOrNull(context: string): TerminalSession[] | null {
 }
 
 // Sync version for startup - ensures sessions are ready before server starts
-function refreshSessionsSync({ verifyAssociations = false } = {}) {
+function refreshSessionsSync() {
   const sessions = listWindowsSyncOrNull('sync_refresh')
   if (!sessions) {
     return
   }
   recordSuccessfulRefreshWindowCount(countLocalSessions(sessions))
-  const hydrated = hydrateSessionsWithAgentSessions(sessions, { verifyAssociations })
+  const hydrated = hydrateSessionsWithAgentSessions(sessions)
   registry.replaceSessions(mergeRemoteSessions(hydrated))
 }
 
@@ -1467,7 +1442,6 @@ async function completeStartupVerification(): Promise<void> {
         getLogSearchDirs()
       )
       const hydrated = hydrateSessionsWithAgentSessions(localSessions, {
-        verifyAssociations: true,
         precomputedVerifications: verifications,
       })
       const withOverrides = applyForceWorkingOverrides(hydrated)

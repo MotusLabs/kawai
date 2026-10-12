@@ -10,7 +10,7 @@ import {
   isCodexSubagent,
   scanAllLogDirs,
 } from './logDiscovery'
-import { getLogTokenCount } from './logMatcher'
+import { getLogTokenCount } from './logmatch'
 
 export interface LogEntrySnapshot {
   logPath: string

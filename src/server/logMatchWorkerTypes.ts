@@ -1,5 +1,5 @@
 import type { AgentType, TerminalSession } from '../shared/types'
-import type { ExactMatchProfiler } from './logMatcher'
+import type { ExactMatchProfiler } from './logmatch'
 import type { KnownSession, LogEntrySnapshot } from './logPollData'
 import type { SessionSnapshot } from './logMatchGate'
 
@@ -55,7 +55,7 @@ export interface MatchWorkerRequest {
   skipMatchingPatterns?: string[]
 }
 
-/** A window where tryExactMatchWindowToLog returned null due to no extractable messages */
+/** A window where tryExactMatchWindowToLogAsync returned null due to no extractable messages */
 export interface NoMessageWindow {
   tmuxWindow: string
   projectPath: string | null
