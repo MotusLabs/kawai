@@ -67,6 +67,7 @@ import { logger } from '../logger'
 import { probeSdkAvailability } from './sdkAvailability'
 import { AccountNoticeStore, credentialsPathFor } from './accountNotices'
 import { UsageLimitStore } from './usageLimits'
+import { fetchZaiUsage } from './zaiUsage'
 import { readWorkerTranscript } from './chatWorkerTranscript'
 import { loadTeamGroups } from '../team/teamGroups'
 import { SessionTeams } from '../team/sessionTeams'
@@ -172,6 +173,13 @@ export interface ChatSessionManagerOptions {
    * in.
    */
   profileCatalogHome?: string
+  /**
+   * Injected in tests; production uses global fetch for the provider usage
+   * pull (the session provider's own quota endpoint).
+   */
+  providerUsageFetch?: typeof fetch
+  /** Provider usage refresh cadence (provider pull design D5); tests shrink it. */
+  providerUsageRefreshMs?: number
   /**
    * Base delay between transcript-locate retries (chat-session-naming D4).
    * The locator runs until the session goes away — the transcript appears
@@ -281,6 +289,16 @@ export class ChatSessionManager {
    * memory only (usage bar design D3): a restart begins with none.
    */
   private readonly usageLimits = new UsageLimitStore()
+  /**
+   * Profiles confirmed to serve the provider quota endpoint (provider usage
+   * pull): their usage comes from there, and the host-login SDK pull is
+   * skipped for the store lifetime. In memory only — a restart re-probes.
+   */
+  private readonly providerUsageProfiles = new Set<string>()
+  /** Refresh timer per routed profile (provider usage pull design D5). */
+  private readonly providerUsageTimers = new Map<string, ReturnType<typeof setInterval>>()
+  /** Provider usage refresh cadence (provider usage pull design D5). */
+  private readonly providerUsageRefreshMs: number
   /**
    * Latest login-expiry notice per credentials path (notification strip
    * design D2), in memory only: a restart begins with none until a check
@@ -660,6 +678,7 @@ export class ChatSessionManager {
 
   constructor(options: ChatSessionManagerOptions) {
     this.options = options
+    this.providerUsageRefreshMs = options.providerUsageRefreshMs ?? 10 * 60 * 1000
     // Team membership (agent-teams D6) resolves asynchronously; once a
     // session's team is known its group label/missing state is published.
     this.teams = new SessionTeams({
@@ -1521,7 +1540,7 @@ export class ChatSessionManager {
         onUsageReport: (report) =>
           this.usageLimits.record(record.claudeProfileId ?? 'default', report),
         claimUsagePull: () =>
-          this.usageLimits.claimPull(record.claudeProfileId ?? 'default'),
+          this.claimProfileUsagePull(record),
         onUsageNoData: () =>
           this.usageLimits.recordNoData(record.claudeProfileId ?? 'default'),
         onStatus: (status) => this.applyPatch(record.sessionId, { status }),
@@ -1664,6 +1683,117 @@ export class ChatSessionManager {
         (entry): entry is [string, string] => entry[1] !== undefined
       )
     )
+  }
+
+  // ----------------------------------------------------------- provider usage pull
+
+  /**
+   * The gap-fill pull slot (usage bar design D1, provider pull design D4):
+   * the profile's one pull per store lifetime. A profile whose base URL
+   * serves the provider quota endpoint is pulled here, marked routed, and
+   * the host-login SDK pull is skipped — its data would only mislead. A
+   * provider refusal records the no-data verdict; anything else falls
+   * through to the SDK pull exactly as before. An already-routed profile
+   * just restarts its refresh timer.
+   */
+  private async claimProfileUsagePull(record: ChatSessionRecord): Promise<boolean> {
+    const profileId = record.claudeProfileId ?? 'default'
+    if (this.providerUsageProfiles.has(profileId)) {
+      this.ensureProviderUsageRefresh(profileId)
+      return false
+    }
+    if (!this.usageLimits.claimPull(profileId)) return false
+    const target = this.providerUsageTarget(record)
+    // No provider base URL: the endpoint is never contacted, and the SDK
+    // pull answers as before.
+    if (!target) return true
+    const pull = await this.fetchProviderUsage(target)
+    if (pull.ok) {
+      this.providerUsageProfiles.add(profileId)
+      this.usageLimits.record(profileId, pull.report)
+      this.ensureProviderUsageRefresh(profileId)
+      return false
+    }
+    if (pull.outcome === 'provider-refused') {
+      this.usageLimits.recordNoData(profileId)
+      return false
+    }
+    // Not provider-shaped or unreachable: the host-login SDK pull applies.
+    return true
+  }
+
+  /**
+   * The quota pull target for a session's profile — the effective base URL
+   * and credentials its SDK spawns receive (the same resolution the auth
+   * gate and account notices read), or null when the profile has no
+   * provider base URL.
+   */
+  private providerUsageTarget(
+    record: ChatSessionRecord
+  ): { baseUrl: string; token?: string } | null {
+    const env = this.launchEnvOf(record.claudeProfileId, record.projectPath)
+    const baseUrl = env.ANTHROPIC_BASE_URL?.trim()
+    if (!baseUrl) return null
+    const token =
+      env.ANTHROPIC_AUTH_TOKEN?.trim() || env.ANTHROPIC_API_KEY?.trim() || undefined
+    return { baseUrl, token }
+  }
+
+  private fetchProviderUsage(target: { baseUrl: string; token?: string }) {
+    return fetchZaiUsage(target.baseUrl, target.token, this.options.providerUsageFetch ?? fetch)
+  }
+
+  /**
+   * Provider usage has no pushes (provider pull design D5): a timer per
+   * routed profile re-pulls on a fixed cadence while at least one of its
+   * sessions has a started agent. A tick without a qualifying session makes
+   * no request and stops the timer; the next spawn of a routed profile
+   * restarts it.
+   */
+  private ensureProviderUsageRefresh(profileId: string): void {
+    if (this.providerUsageTimers.has(profileId)) return
+    const timer = setInterval(
+      () => this.refreshProviderUsage(profileId),
+      this.providerUsageRefreshMs
+    )
+    timer.unref?.()
+    this.providerUsageTimers.set(profileId, timer)
+  }
+
+  private refreshProviderUsage(profileId: string): void {
+    if (!this.hasLiveSessionOf(profileId)) {
+      const timer = this.providerUsageTimers.get(profileId)
+      if (timer) clearInterval(timer)
+      this.providerUsageTimers.delete(profileId)
+      return
+    }
+    const record = [...this.records.values()].find(
+      (candidate) => (candidate.claudeProfileId ?? 'default') === profileId
+    )
+    if (!record) return
+    const target = this.providerUsageTarget(record)
+    if (!target) return
+    void this.fetchProviderUsage(target).then((pull) => {
+      // A failed refresh keeps the held report (store semantics); a lost
+      // routing just skips the tick.
+      if (pull.ok) this.usageLimits.record(profileId, pull.report)
+    })
+  }
+
+  /** Any non-archived session of the profile with a live driver (started agent). */
+  private hasLiveSessionOf(profileId: string): boolean {
+    for (const record of this.records.values()) {
+      if ((record.claudeProfileId ?? 'default') !== profileId) continue
+      if (record.archivedAt) continue
+      if (this.drivers.has(record.sessionId)) return true
+    }
+    return false
+  }
+
+  /** Stop every provider usage refresh timer (server shutdown). */
+  private stopProviderUsageRefresh(): void {
+    for (const timer of this.providerUsageTimers.values()) clearInterval(timer)
+    this.providerUsageTimers.clear()
   }
 
   /**
