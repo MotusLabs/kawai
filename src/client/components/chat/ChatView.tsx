@@ -175,22 +175,22 @@ export default function ChatView({ session, sendMessage, subscribe, connectionSt
   )
   // Choosing replaces only the token's word, in place (design D3): the caret
   // state lands just after the inserted `/name `, and the layout effect below
-  // restores the DOM caret there once the controlled value commits (a value
-  // update alone would drop it to the end).
+  // restores the DOM caret there after the choice commits. The restore is
+  // keyed on a fresh object per choice, not on the text: choosing a command
+  // that is already spelled out in the word leaves the value unchanged, so a
+  // text-keyed effect would never fire — the DOM caret would stay mid-word and
+  // the stale restore would land on the next keystroke instead.
   const composerRef = useRef<HTMLTextAreaElement>(null)
-  const restoreCaretRef = useRef<number | null>(null)
+  const [caretRestore, setCaretRestore] = useState<{ caret: number } | null>(null)
   useLayoutEffect(() => {
-    const pending = restoreCaretRef.current
-    if (pending == null) return
-    restoreCaretRef.current = null
-    composerRef.current?.setSelectionRange(pending, pending)
-  }, [text])
+    if (caretRestore) composerRef.current?.setSelectionRange(caretRestore.caret, caretRestore.caret)
+  }, [caretRestore])
   const chooseCommand = (name: string) => {
     if (!token) return
     const next = insertCommand(text, token, name)
-    restoreCaretRef.current = next.caret
     setText(next.text)
     setCaret(next.caret)
+    setCaretRestore({ caret: next.caret })
   }
   const handleComposerKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (matches.length > 0) {

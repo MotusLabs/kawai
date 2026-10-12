@@ -854,6 +854,23 @@ describe('slash-command menu', () => {
     h.renderer.unmount()
   })
 
+  test('choosing the command already spelled out keeps the text and closes the menu', () => {
+    const h = renderComposer(READY_COMMANDS)
+    // Caret back inside the complete `/context ` word: choosing `context`
+    // reproduces the value exactly — no text commit may be needed for the
+    // caret to land after the inserted command.
+    h.typeAt('please run /context ', 15)
+    expect(h.renderer.root.findAllByProps({ 'data-testid': 'slash-command-menu' })).toHaveLength(1)
+    h.key('Enter')
+    expect(h.renderer.root.findByType('textarea').props.value).toBe('please run /context ')
+    expect(useChatStore.getState().drafts['chat-1']).toBe('please run /context ')
+    expect(h.renderer.root.findAllByProps({ 'data-testid': 'slash-command-menu' })).toHaveLength(0)
+    // Typing continues from the restored caret without a jump or corruption.
+    h.typeAt('please run /context x', 21)
+    expect(h.renderer.root.findByType('textarea').props.value).toBe('please run /context x')
+    h.renderer.unmount()
+  })
+
   test('Tab also chooses; Escape closes without changing the text', () => {
     const h = renderComposer(READY_COMMANDS)
     h.type('/com')
