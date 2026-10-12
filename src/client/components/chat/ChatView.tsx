@@ -37,6 +37,8 @@ import ChatContextMeter from './ChatContextMeter'
 import ChatDebugPanel from './ChatDebugPanel'
 import ChatMessages from './ChatMessages'
 import TeamMailboxPanel from './TeamMailboxPanel'
+import { useTeamGroups } from './useTeamGroups'
+import { parkedLabel } from '../../utils/parkedLabel'
 import { closedMailbox, useTeamMailboxStore } from '../../stores/teamMailboxStore'
 import TeamTasksPanel from './TeamTasksPanel'
 import { closedTaskView, useTeamTaskStore } from '../../stores/teamTaskStore'
@@ -93,6 +95,7 @@ export default function ChatView({ session, sendMessage, subscribe, connectionSt
     else { useTeamMailboxStore.getState().close(session.id); useTeamTaskStore.getState().close(session.id); store.beginOpen(session.id) }
   }
   const mailbox = useTeamMailboxStore(state => state.views[session.id]) ?? CLOSED_MAILBOX
+  const teamGroups = useTeamGroups(mailbox.open, session.projectPath)
   useEffect(() => {
     if (!connected || !mailbox.open) return
     useTeamMailboxStore.getState().open(session.id)
@@ -325,6 +328,7 @@ export default function ChatView({ session, sendMessage, subscribe, connectionSt
           {session.spawned ? 'Spawned for task ' : 'Task '}
           <button className="hover:underline" data-testid="chat-task" onClick={() => openTasks(session.taskId)}>{session.taskTitle ?? session.taskId}</button>
         </p>}
+        {session.parked && <p className="truncate text-chat-meta text-amber-600" data-testid="chat-paused">{parkedLabel(session.parked)}</p>}
         <p className="truncate text-chat-meta text-secondary">{session.projectPath}</p></div>
       <span className="text-chat-meta text-secondary" data-testid="chat-status">{connected ? (archived ? 'archived' : session.status) : connectionStatus}</span>
       <ChatContextMeter usage={transcript.contextUsage} />
@@ -394,7 +398,8 @@ export default function ChatView({ session, sendMessage, subscribe, connectionSt
           </form>
         )}
       </div>
-      {mailbox.open && <TeamMailboxPanel sessionId={session.id} view={mailbox} sendMessage={sendMessage} connected={connected} onClose={toggleMailbox} />}
+      {mailbox.open && <TeamMailboxPanel sessionId={session.id} view={mailbox} sendMessage={sendMessage} connected={connected} onClose={toggleMailbox}
+        groups={teamGroups.groups.map(group => group.id)} />}
       {tasks.open && <TeamTasksPanel sessionId={session.id} view={tasks} sendMessage={sendMessage} connected={connected} onClose={toggleTasks} />}
       {debugOpen && <ChatDebugPanel key={session.id} sessionId={session.id} view={debug} sendMessage={sendMessage}
         connected={connected} onClose={toggleDebug} />}

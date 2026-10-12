@@ -573,6 +573,23 @@ describe('session comparator (design D6)', () => {
     act(() => renderer.unmount())
   })
 
+  test('a chat with parked work shows a paused badge with the reason and resume time', () => {
+    const listProps = {
+      selectedSessionId: null, loading: false, error: null,
+      onSelect: () => {}, onRename: () => {},
+    }
+    const parked = { messageId: 'm1', until: null, profileId: 'glm', reason: 'Provider limit on glm' }
+    const chat = (id: string, extra: Partial<Session>): Session => ({ ...baseSession, id, kind: 'chat', ...extra })
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => {
+      renderer = TestRenderer.create(<SessionList sessions={[chat('paused', { parked }), chat('busy', { parked: null })]} {...listProps} />)
+    })
+    const badges = renderer.root.findAllByProps({ 'data-testid': 'session-paused-badge' })
+    expect(badges).toHaveLength(1)
+    expect(badges[0]!.props.title).toBe('Paused: Provider limit on glm')
+    act(() => renderer.unmount())
+  })
+
   test('chat rows show their team group, marked when the group is missing', () => {
     const listProps = {
       selectedSessionId: null, loading: false, error: null,

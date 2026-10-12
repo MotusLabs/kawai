@@ -1531,6 +1531,24 @@ describe('NewSessionModal team group picker', () => {
     act(() => { dialog.renderer.unmount() })
   })
 
+  test('a group at its profile cap warns but still creates (user exceeds cap)', async () => {
+    const dialog = await groupDialog({
+      groups: [{ id: 'devs', label: 'devs', description: '', profiles: [{ profileId: 'default', cap: 1, live: 1 }, { profileId: 'glm', cap: 2, live: 0 }] }],
+      errors: [], warnings: ['/base/.kawai/groups/devs.md: profile "nope" is not defined; ignored'],
+    })
+    const warning = () => dialog.renderer.root.findAllByProps({ 'data-testid': 'group-cap-warning' })
+    expect(warning()).toHaveLength(0)
+    act(() => { dialog.select().props.onChange({ target: { value: 'devs' } }) })
+    expect(warning()).toHaveLength(1)
+    expect(String(warning()[0]!.children)).toContain('devs already has 1 live member on default (cap 1)')
+    // Fallback warnings ride along with errors.
+    expect(dialog.renderer.root.findAllByProps({ role: 'status' })
+      .some(node => String(node.children).includes('profile "nope" is not defined'))).toBe(true)
+    dialog.submit()
+    expect(dialog.created).toEqual([{ path: '/base', groupId: 'devs' }])
+    act(() => { dialog.renderer.unmount() })
+  })
+
   test('creating without choosing a group sends none, and catalog problems show as warnings', async () => {
     const dialog = await groupDialog({ groups: [], errors: ['/base/.kawai/groups/x.md: bad'] })
     expect(dialog.select().props.value).toBe('')
@@ -1539,5 +1557,17 @@ describe('NewSessionModal team group picker', () => {
     dialog.submit()
     expect(dialog.created).toEqual([{ path: '/base' }])
     act(() => { dialog.renderer.unmount() })
+  })
+})
+
+describe('capWarning', () => {
+  test('only a reached cap on the chosen profile warns', async () => {
+    const { capWarning } = await import('../components/chat/useTeamGroups')
+    const group = { id: 'devs', label: 'Developers', description: '', profiles: [{ profileId: 'glm', cap: 2, live: 2 }, { profileId: 'claude', live: 5 }] }
+    expect(capWarning(group, 'glm')).toContain('Developers already has 2 live members on glm (cap 2)')
+    expect(capWarning(group, 'claude')).toBeNull()
+    expect(capWarning(group, 'mimo')).toBeNull()
+    expect(capWarning({ ...group, profiles: [{ profileId: 'glm', cap: 2, live: 1 }] }, 'glm')).toBeNull()
+    expect(capWarning(undefined, 'glm')).toBeNull()
   })
 })

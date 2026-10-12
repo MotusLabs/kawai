@@ -1,7 +1,7 @@
 // New-session dialog: project/worktree/branch selection, agent and Claude
 // profile choice, and per-session approval policy.
 import { useClaudeProfiles } from './chat/useClaudeProfiles'
-import { useTeamGroups } from './chat/useTeamGroups'
+import { capWarning, useTeamGroups } from './chat/useTeamGroups'
 import { useEffect, useRef, useState } from 'react'
 import { type CommandPreset, getFullCommand, useSettingsStore } from '../stores/settingsStore'
 import { DirectoryBrowser } from './DirectoryBrowser'
@@ -507,6 +507,10 @@ export default function NewSessionModal({
               </select>
             </label>
             {teamGroups.warnings.map(warning => <p key={warning} role="status" className="mt-1 text-xs text-amber-400">{warning}</p>)}
+            {(() => {
+              const warning = capWarning(teamGroups.groups.find(group => group.id === groupId), claudeProfileId)
+              return warning && <p role="status" data-testid="group-cap-warning" className="mt-1 text-xs text-amber-400">{warning}</p>
+            })()}
             <label className="mt-3 flex items-center gap-2 text-xs text-secondary">
               <input
                 type="checkbox"

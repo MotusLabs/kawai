@@ -51,9 +51,9 @@
 
 ## 8. Client UI
 
-- [ ] 8.1 Mailbox panel: Reload routing rules button with per-rule load results and errors, the rule decision log, and a Hand off control on parked messages (group/agent picker), all disabled while disconnected; verify with component tests
-- [ ] 8.2 Show parked members as paused (reason and resume time) in the chat header and navigator; verify with component tests
-- [ ] 8.3 New-session dialog warns, without blocking, when the chosen group and profile are at the profile cap; verify with a `NewSessionModal` test for the user-exceeds-cap scenario
+- [x] 8.1 Mailbox panel: Reload routing rules button with per-rule load results and errors, the rule decision log, and a Hand off control on parked messages (group/agent picker), all disabled while disconnected; verify with component tests
+- [x] 8.2 Show parked members as paused (reason and resume time) in the chat header and navigator; verify with component tests
+- [x] 8.3 New-session dialog warns, without blocking, when the chosen group and profile are at the profile cap; verify with a `NewSessionModal` test for the user-exceeds-cap scenario
 - [ ] 8.4 Walk through reload, parked indicator, and hand off in the running app with the `dev-browser` skill (headless WS checks where chat turns are needed) and capture screenshots
 
 ## 9. Documentation and integration
