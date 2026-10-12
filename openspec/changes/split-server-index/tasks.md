@@ -32,12 +32,21 @@ a commit; `indexHandlers.test.ts` must pass unchanged (design D5) throughout.
 
 ## 3. Session ops (kill/rename/hibernate/wake/moveToHistory)
 
-- [ ] 3.1 Create `src/server/sessions/` with `kill.ts`, `rename.ts`, `hibernate.ts`,
+- [x] 3.1 Create `src/server/sessions/` with `kill.ts`, `rename.ts`, `hibernate.ts`,
   `wake.ts`, `moveToHistory.ts` as functions over a shared `SessionOpsContext`
   (`{ registry, db, sessionManager, config, refresh, broadcast, send }`); lift the handlers
   verbatim (today ~index.ts:3165–4311); `wake.ts` takes the resume-command builders
   (~:3763–3877) with it
-- [ ] 3.2 Add unit tests for `wake.ts` claim-race branches (~:4145–4256, today only covered
+  - Deviations: the resume builders live in `sessions/resumeCommand.ts` (wake.ts alone
+    would have exceeded the 500-LOC norm, per the split rule); `config` stays a direct
+    module import per design D3 (matching the phase-2 pattern), so the context carries
+    `{ registry, db, sessionManager, refresh, chatSessionManager, broadcast, send,
+    runRemoteTmux, remoteSessionNameOverrides, remoteSessionTombstones }` — the extra
+    members are the remote-control deps the kill/rename handlers verbatim-reference.
+    `WSData` moved to `ws/wsTypes.ts` (pre-stage for phase 5), the local-host stamp
+    helpers to `sessionStamp.ts`, and `readTmuxCapture` to `tmuxCapture.ts` (shared by
+    wake and the phase-5 clipboard/copy-mode/attach modules).
+- [x] 3.2 Add unit tests for `wake.ts` claim-race branches (~:4145–4256, today only covered
   end-to-end); commit (`refactor: lift session ops into sessions/ modules`)
 
 ## 4. Remote session service
