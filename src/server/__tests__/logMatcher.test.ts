@@ -231,7 +231,7 @@ afterEach(() => {
   tmuxOutputs.clear()
 })
 
-describe('logMatcher', () => {
+describe('logmatch', () => {
   test('captures tmux scrollback through a UTF-8 client', async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agentboard-logmatch-'))
     const logPath = path.join(tempDir, 'session.jsonl')

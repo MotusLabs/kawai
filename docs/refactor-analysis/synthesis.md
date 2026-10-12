@@ -64,6 +64,13 @@ Effort: L. Risk: med (mitigated by the existing indexHandlers harness — refact
 unreachable `verifyAssociations` branch, then ~700 LOC of sync twins (the match worker uses async
 variants exclusively). Split the remainder into scrollback / promptExtract / logText / exactMatch /
 verify modules. Effort: M. Risk: low — pure deletion with existing test coverage. [server-architecture.md §4]
+> **Status: DONE 2026-10-12** (branch `split-log-matcher`) — landed as `999c644` (unreachable
+> `verifyAssociations` branch + plumbing removed from hydration), `37eaf1e` (sync chain deleted,
+> net −898 LOC; sync-twin tests deleted or ported to the async twins per coverage), and `e9dbb62`
+> (split into `src/server/logmatch/`: common, scrollback, promptExtract, logText, candidateSearch,
+> exactMatch, verify + barrel). Candidate search became its own module — keeping it inside
+> exactMatch would have left that file at ~735 LOC, over the 500 norm; all modules landed at
+> 55–489 LOC. Full suite green on every commit via the pre-commit hook.
 
 **S3. Client WS router extraction.** Table-driven protocol module under `src/client/protocol/`
 (session/workspace/chat/server handler files, all via `getState()`), killing the

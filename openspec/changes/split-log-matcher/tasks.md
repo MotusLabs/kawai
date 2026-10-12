@@ -47,11 +47,13 @@
 
 ## 4. Verify and close out
 
-- [ ] 4.1 Grep the repo for lingering `logMatcher` references (imports, path strings in test
+- [x] 4.1 Grep the repo for lingering `logMatcher` references (imports, path strings in test
   configs or the runner's isolated-file sets) and clean them up
-- [ ] 4.2 Confirm LOC outcome: logMatcher.ts (~2.6k) replaced by six modules each under the
+- [x] 4.2 Confirm LOC outcome: logMatcher.ts (~2.6k) replaced by six modules each under the
   500-LOC norm; record actual numbers in the commit or change notes
-- [ ] 4.3 Mark S2 done in `docs/refactor-analysis/synthesis.md` (status note with commit
+  (actuals: common 113, scrollback 55, promptExtract 379, logText 489, candidateSearch 472,
+  exactMatch 376, verify 70, barrel 20)
+- [x] 4.3 Mark S2 done in `docs/refactor-analysis/synthesis.md` (status note with commit
   hashes, mirroring the P0 note); commit (`docs: mark P1/S2 complete in refactor synthesis`)
 
 ## Workflow follow-up
