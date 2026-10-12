@@ -107,12 +107,33 @@ a commit; `indexHandlers.test.ts` must pass unchanged (design D5) throughout.
     upgrade `fetch` and the Bun websocket open/message/close handlers), and
     `startupPreflight.ts` (`checkPortAvailable`, `pruneOrphanedWsSessions`). All state lives
     inside `startServer()`, so each harness re-import boots a fresh graph.
-- [ ] 7.2 Confirm the shape: every new module under 500 LOC with a header comment; no
+- [x] 7.2 Confirm the shape: every new module under 500 LOC with a header comment; no
   module-scope mutable singletons outside `bootstrap.ts`; record actual per-module LOC in the
   change notes
-- [ ] 7.3 Confirm the harness ran unmodified through every commit (design D5); run the full
+  - Result: every module has a header comment and is under 500 LOC. Two module-scope
+    singletons left over from earlier phases were moved into boot-scoped instances (commit
+    `a25b770`): the log-line cache became `LogLineCache` (constructed in `startServer()`,
+    passed to the session-preview route; its unit test now builds its own instance), and
+    wake's `wakeInFlight` set became `SessionOpsContext.wakeInFlight`. What remains at
+    module scope is immutable (constants, `sessionStamp`'s boot host label, the paste MIME
+    map) or the clipboard SGR regex, whose `lastIndex` is reset on every call.
+  - LOC: `index.ts` 8 (was ~4,970), `bootstrap.ts` 498, `startupPreflight.ts` 118,
+    `logContent.ts` 288, `sessionStamp.ts` 19, `tmuxCapture.ts` 47;
+    `refresh/` SessionRefreshLoop 433, hydrateSessions 243;
+    `sessions/` context 40, kill 264, rename 117, hibernate 220, wake 489, resumeCommand 92,
+    moveToHistory 50; `remote/RemoteSessionService.ts` 412;
+    `ws/` wsTypes 39, ConnectionHub 81, clipboardWatch 249, copyMode 132, terminalProxy 303,
+    terminalAttach 364, messageRouter 350, socketHandlers 126;
+    `routes/` settings 265, sessionPreview 95, directories 156, serverInfo 81,
+    updateInstall 55, paste 165.
+- [x] 7.3 Confirm the harness ran unmodified through every commit (design D5); run the full
   suite plus the two integration files (`chatRename.integration`, `double-attach.integration`)
   one final time
+  - Result: no commit on this branch touches `isolated/indexHandlers.test.ts` (it is identical
+    to master's); the pre-commit hook ran the full suite green on every commit. Final run:
+    `bun run test` 2,788 pass / 0 fail (incl. the real-tmux integration files);
+    `chatRename.integration` 4/4 and `double-attach.integration` 3/3 run on their own with
+    the runner's isolated env; `bun run lint`, `bun run typecheck`, `bun run build` clean.
 - [ ] 7.4 Mark S1 done in `docs/refactor-analysis/synthesis.md` (status note with commit
   hashes, mirroring the P0/S2 notes); commit (`docs: mark P1/S1 complete in refactor synthesis`)
 
