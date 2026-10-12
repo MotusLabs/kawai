@@ -62,6 +62,8 @@ export default rule`)
     const report = await open().reload()
     const byId = Object.fromEntries(report.rules.map(rule => [rule.groupId, rule]))
     expect(byId.broken).toMatchObject({ ok: false })
+    // The individual build errors are named, not just counted.
+    expect(byId.broken!.error!.split(': ').length).toBeGreaterThan(1)
     expect(byId.noroute).toMatchObject({ ok: false, error: 'the rule must have a route function' })
     expect(byId['Bad Name']).toMatchObject({ ok: false })
     expect(registry!.rule('broken')).toBeUndefined()

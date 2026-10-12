@@ -18,7 +18,13 @@ interface LoadedRule {
 
 let rule: LoadedRule | null = null
 
-const message = (error: unknown) => (error instanceof Error ? error.message : String(error))
+/** Build failures arrive as one error carrying the individual ones: name them all. */
+const message = (error: unknown): string => {
+  if (!(error instanceof Error)) return String(error)
+  const parts = (error as { errors?: unknown }).errors
+  if (!Array.isArray(parts) || parts.length === 0) return error.message
+  return `${error.message}: ${parts.map(part => (part instanceof Error ? part.message : String(part))).join('; ')}`
+}
 
 self.onmessage = async (event: MessageEvent<Inbound>) => {
   const data = event.data
