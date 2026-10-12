@@ -164,3 +164,31 @@ export interface RouteDecisionLogEntry {
   decision: string
   reason?: string
 }
+
+/** How a rule file compares with the previous load. */
+export type RuleChange = 'added' | 'changed' | 'removed' | 'unchanged'
+
+/** One rule file's load result (Reload routing rules). */
+export interface RuleLoadResult {
+  groupId: string
+  file: string
+  ok: boolean
+  error?: string
+  change: RuleChange
+  /** Variables the rule declared (and received). */
+  env?: string[]
+}
+
+export interface RuleLoadReport {
+  loadedAt: string
+  dir: string
+  rules: RuleLoadResult[]
+}
+
+/** Routing state the mailbox view shows for one team. */
+export interface TeamRoutingState {
+  /** Null until rules have loaded once. */
+  rules: RuleLoadReport | null
+  /** Newest first. */
+  decisions: RouteDecisionLogEntry[]
+}

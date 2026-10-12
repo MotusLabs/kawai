@@ -454,6 +454,7 @@ describe('session comparator (design D6)', () => {
       taskId: 'task-1',
       taskTitle: 'Export',
       spawned: false,
+      parked: null,
     }
     // Compile-time exhaustiveness comes from the mapped type (a new Session
     // field without a comparator entry fails typecheck); this runtime check

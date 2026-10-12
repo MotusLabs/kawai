@@ -25,8 +25,8 @@ describe('team group routes', () => {
     fs.writeFileSync(path.join(project, '.kawai', 'groups', 'devs.md'), '---\nlabel: Developers\n---\nBuild.')
     expect(await get(`?projectPath=${encodeURIComponent(project)}`)).toEqual({
       groups: [
-        { id: 'devs', label: 'Developers', description: '' },
-        { id: 'qa', label: 'qa', description: 'Tests' },
+        { id: 'devs', label: 'Developers', description: '', profiles: [] },
+        { id: 'qa', label: 'qa', description: 'Tests', profiles: [] },
       ],
       errors: [],
       warnings: [],
@@ -38,6 +38,21 @@ describe('team group routes', () => {
     const body = await get(`?projectPath=${encodeURIComponent(project)}`) as { warnings: string[] }
     expect(body.warnings).toHaveLength(1)
     expect(body.warnings[0]).toContain('profile "nope" is not defined')
+  })
+
+  test('lists allowed profiles with caps and live member counts', async () => {
+    fs.writeFileSync(path.join(project, '.kawai', 'groups', 'devs.md'), '---\nprofiles: { glm: 2, default: 1 }\n---\nBuild.')
+    const counts: Array<[string, string]> = []
+    const routes = createTeamGroupRoutes({
+      homeDir: home,
+      groupProfileCounts: (teamId, groupId) => { counts.push([teamId, groupId]); return { glm: 2 } },
+    })
+    const body = await (await routes.request(`/?projectPath=${encodeURIComponent(project)}`)).json() as { groups: unknown[] }
+    expect(body.groups).toEqual([{
+      id: 'devs', label: 'devs', description: '',
+      profiles: [{ profileId: 'glm', cap: 2, live: 2 }, { profileId: 'default', cap: 1, live: 0 }],
+    }])
+    expect(counts[0]![1]).toBe('devs')
   })
 
   test('reports a malformed group file', async () => {

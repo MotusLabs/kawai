@@ -45,9 +45,9 @@
 
 ## 7. Server API and WebSocket
 
-- [ ] 7.1 Add the authenticated **Reload routing rules** action over the chat WebSocket (request + result with per-rule status, errors, and changed files) and include current rule load status in the mailbox snapshot; verify with a connection test
-- [ ] 7.2 Expose parked state (reason, profile, resume time) on sessions and messages, the decision log in mailbox pushes, group warnings in the groups route, and a cap-exceeded flag in group/profile listings used by session creation; verify with route/connection tests
-- [ ] 7.3 Add the **Hand off** action for a parked message to a chosen group or session, forwarding with a handoff package and cancelling the resume; verify with the manual-handoff scenario test
+- [x] 7.1 Add the authenticated **Reload routing rules** action over the chat WebSocket (request + result with per-rule status, errors, and changed files) and include current rule load status in the mailbox snapshot; verify with a connection test
+- [x] 7.2 Expose parked state (reason, profile, resume time) on sessions and messages, the decision log in mailbox pushes, group warnings in the groups route, and a cap-exceeded flag in group/profile listings used by session creation; verify with route/connection tests
+- [x] 7.3 Add the **Hand off** action for a parked message to a chosen group or session, forwarding with a handoff package and cancelling the resume; verify with the manual-handoff scenario test
 
 ## 8. Client UI
 

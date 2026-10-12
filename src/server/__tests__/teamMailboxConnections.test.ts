@@ -11,13 +11,28 @@ let store: MailboxStore
 let connections: ChatConnections
 let messages: ServerMessage[]
 let connection: { send: (message: ServerMessage) => void }
+let reloads: number
+let handOffs: Array<{ messageId: string; target: { kind: string; id: string } }>
+const REPORT = { loadedAt: '2026-10-12T12:00:00.000Z', dir: '/home/.kawai/routing', rules: [{ groupId: 'devs', file: '/home/.kawai/routing/devs.ts', ok: false, error: 'boom', change: 'changed' as const }] }
 beforeEach(() => {
+  reloads = 0
+  handOffs = []
   db = new Database(':memory:'); store = new MailboxStore(db); messages = []
   connection = { send: message => messages.push(message) }
   const manager = {
     has: (id: string) => id === 'dev',
-    teams: { teamOf: () => ({ teamId: 'team' }), resolvedTeamOf: async () => ({ teamId: 'team' }) },
+    teams: {
+      teamOf: () => ({ teamId: 'team' }), resolvedTeamOf: async () => ({ teamId: 'team' }),
+      catalogOf: () => ({ groups: new Map([['architects', {}]]) }),
+    },
     mailbox: { store }, dispatcher: { notify: () => {} },
+    routingState: (teamId: string) => ({ rules: reloads > 0 ? REPORT : null, decisions: [{ at: 'now', teamId, groupId: 'devs', messageId: 'm', source: 'builtin', decision: 'none' }] }),
+    reloadRoutingRules: async () => { reloads++; return REPORT },
+    handOff: (messageId: string, target: { kind: string; id: string }) => {
+      handOffs.push({ messageId, target })
+      if (store.get(messageId)?.state !== 'parked') throw new Error('Only parked work can be handed off')
+      return { id: 'forwarded-1' }
+    },
     getSnapshot: () => ({ type: 'chat-snapshot', sessionId: 'dev', events: [], pendingRequests: [] }),
     isArchived: () => true,
   } as unknown as ChatSessionManager
@@ -90,4 +105,31 @@ test('close during asynchronous team resolution cannot resurrect a subscription'
   resolve({ teamId: 'team' }); await opening
   pendingConnections.publishMailbox('team')
   expect(messages).toEqual([])
+})
+
+test('snapshots carry the team routing state; reload answers with the report and refreshes every view', async () => {
+  await open()
+  expect(messages.at(-1)).toMatchObject({ type: 'team-mailbox-snapshot', routing: { rules: null, decisions: [{ teamId: 'team', decision: 'none' }] } })
+  await connections.handle(connection, { type: 'team-mailbox-reload-rules', sessionId: 'dev' })
+  expect(reloads).toBe(1)
+  expect(messages.at(-1)).toEqual({ type: 'team-mailbox-rules-result', sessionId: 'dev', ok: true, report: REPORT })
+  connections.publishRoutingRules()
+  expect(messages.at(-1)).toMatchObject({ type: 'team-mailbox-snapshot', routing: { rules: REPORT } })
+})
+
+test('hand off forwards parked work to a team group or session; bad targets and states are refused', async () => {
+  await open()
+  const mail = enqueue(); store.claim(mail.id, 'dev'); store.markPushed(mail.id); store.markDelivered(mail.id)
+  await connections.handle(connection, { type: 'team-mailbox-hand-off', sessionId: 'dev', messageId: mail.id, target: { kind: 'group', id: 'architects' } })
+  expect(messages.filter(m => m.type === 'team-mailbox-hand-off-result').at(-1)).toMatchObject({ ok: false, error: 'Only parked work can be handed off' })
+  const resume = enqueue(); store.park(mail.id, '2026-10-12T13:00:00.000Z', resume.id)
+  await connections.handle(connection, { type: 'team-mailbox-hand-off', sessionId: 'dev', messageId: mail.id, target: { kind: 'group', id: 'architects' } })
+  expect(messages.filter(m => m.type === 'team-mailbox-hand-off-result').at(-1)).toEqual({
+    type: 'team-mailbox-hand-off-result', sessionId: 'dev', messageId: mail.id, ok: true, forwardedId: 'forwarded-1',
+  })
+  await connections.handle(connection, { type: 'team-mailbox-hand-off', sessionId: 'dev', messageId: mail.id, target: { kind: 'group', id: 'nope' } })
+  expect(messages.filter(m => m.type === 'team-mailbox-hand-off-result').at(-1)).toMatchObject({ ok: false, error: 'Unknown group in this team: nope' })
+  await connections.handle(connection, { type: 'team-mailbox-hand-off', sessionId: 'dev', messageId: mail.id, target: { kind: 'session', id: 'stranger' } })
+  expect(messages.filter(m => m.type === 'team-mailbox-hand-off-result').at(-1)).toMatchObject({ ok: false, error: 'Unknown session in this team: stranger' })
+  expect(handOffs).toHaveLength(2)
 })

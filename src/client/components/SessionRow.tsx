@@ -121,6 +121,8 @@ export const SESSION_FIELD_EQUALS: {
   taskId: strictEquals,
   taskTitle: strictEquals,
   spawned: strictEquals,
+  // A fresh object per push: compare the fields the row shows.
+  parked: (a, b) => a === b || (!!a && !!b && a.messageId === b.messageId && a.until === b.until && a.profileId === b.profileId && a.reason === b.reason),
   lastActivity: activityInSameBucket,
 }
 

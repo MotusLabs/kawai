@@ -1,5 +1,7 @@
 // Team mailbox subscriptions and human actions. Every action resolves its
 // team's scope from an existing chat session and checks the target row.
+// Snapshots carry the team's routing state (rule load status, decisions);
+// the human reloads routing rules and hands parked work off from here.
 import type { ClientMessage } from '../../shared/types'
 import type { ChatSessionManager } from '../chat/ChatSessionManager'
 import type { ChatConnection } from '../chat/ChatConnections'
@@ -19,8 +21,43 @@ export class MailboxConnections {
     }
   }
 
+  /** Every open mailbox view (rule status is user-level, shared by all teams). */
+  publishAll() {
+    for (const [connection, sessions] of this.subscriptions) {
+      for (const [sessionId, teamId] of sessions) this.snapshot(connection, sessionId, teamId)
+    }
+  }
+
   private snapshot(connection: ChatConnection, sessionId: string, teamId: string) {
-    connection.send({ type: 'team-mailbox-snapshot', sessionId, teamId, messages: this.manager.mailbox.store.listForTeam(teamId) })
+    connection.send({
+      type: 'team-mailbox-snapshot', sessionId, teamId, messages: this.manager.mailbox.store.listForTeam(teamId),
+      routing: this.manager.routingState(teamId),
+    })
+  }
+
+  private async reloadRules(connection: ChatConnection, sessionId: string) {
+    try {
+      const report = await this.manager.reloadRoutingRules()
+      connection.send({ type: 'team-mailbox-rules-result', sessionId, ok: true, report })
+    } catch (error) {
+      connection.send({ type: 'team-mailbox-rules-result', sessionId, ok: false, error: error instanceof Error ? error.message : String(error) })
+    }
+    this.manager.dispatcher.notify()
+  }
+
+  private handOff(connection: ChatConnection, sessionId: string, teamId: string, messageId: string, target: { kind: 'group' | 'session'; id: string }) {
+    const fail = (error: string) => connection.send({ type: 'team-mailbox-hand-off-result', sessionId, messageId, ok: false, error })
+    const valid = target.kind === 'group'
+      ? this.manager.teams.catalogOf(sessionId)?.groups.has(target.id)
+      : target.kind === 'session' && this.manager.has(target.id) && this.manager.teams.teamOf(target.id)?.teamId === teamId
+    if (!valid) return fail(`Unknown ${target.kind === 'group' ? 'group' : 'session'} in this team: ${target.id}`)
+    try {
+      const forwarded = this.manager.handOff(messageId, target)
+      connection.send({ type: 'team-mailbox-hand-off-result', sessionId, messageId, ok: true, forwardedId: forwarded.id })
+    } catch (error) {
+      fail(error instanceof Error ? error.message : String(error))
+    }
+    this.publish(teamId)
   }
 
   async handle(connection: ChatConnection, message: ClientMessage) {
@@ -53,12 +90,14 @@ export class MailboxConnections {
       this.snapshot(connection, sessionId, team.teamId)
       return
     }
+    if (message.type === 'team-mailbox-reload-rules') return this.reloadRules(connection, sessionId)
     if (!('messageId' in message)) return
     const row = this.manager.mailbox.store.get(message.messageId)
     if (!row || row.teamId !== team.teamId) {
       connection.send({ type: 'error', message: 'Message does not belong to this team' })
       return
     }
+    if (message.type === 'team-mailbox-hand-off') return this.handOff(connection, sessionId, team.teamId, row.id, message.target)
     const action = message.type === 'team-mailbox-cancel' ? 'cancel'
       : message.type === 'team-mailbox-retry' ? 'retry' : message.type === 'team-mailbox-discard' ? 'discard' : null
     if (!action) return

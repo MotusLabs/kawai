@@ -11,25 +11,10 @@ import path from 'node:path'
 import { GROUP_ID_PATTERN } from '../groupCatalog'
 import { RuleHost } from './ruleHost'
 import { publishRuleTypes, RULE_TYPES_FILE } from './ruleTypes'
+import type { RuleChange, RuleLoadReport, RuleLoadResult } from '../../../shared/routing'
 
-export type RuleChange = 'added' | 'changed' | 'removed' | 'unchanged'
+export type { RuleChange, RuleLoadReport, RuleLoadResult } from '../../../shared/routing'
 
-export interface RuleLoadResult {
-  groupId: string
-  file: string
-  ok: boolean
-  error?: string
-  /** Compared with the previous load. */
-  change: RuleChange
-  /** Variables the rule declared (and received). */
-  env?: string[]
-}
-
-export interface RuleLoadReport {
-  loadedAt: string
-  dir: string
-  rules: RuleLoadResult[]
-}
 
 export class RuleRegistry {
   private hosts = new Map<string, RuleHost>()
