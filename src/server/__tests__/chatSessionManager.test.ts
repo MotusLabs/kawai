@@ -3314,11 +3314,10 @@ describe('ChatSessionManager notifications', () => {
   let tempDir: string
   let db: SessionDatabase
   const originals = {
-    apiKey: process.env.ANTHROPIC_API_KEY,
-    oauthToken: process.env.CLAUDE_CODE_OAUTH_TOKEN,
-    authToken: process.env.ANTHROPIC_AUTH_TOKEN,
-    configDir: process.env.CLAUDE_CONFIG_DIR,
-    home: process.env.HOME,
+    ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
+    CLAUDE_CODE_OAUTH_TOKEN: process.env.CLAUDE_CODE_OAUTH_TOKEN,
+    ANTHROPIC_AUTH_TOKEN: process.env.ANTHROPIC_AUTH_TOKEN,
+    CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR,
   }
 
   beforeEach(() => {
@@ -3331,7 +3330,6 @@ describe('ChatSessionManager notifications', () => {
     delete process.env.CLAUDE_CODE_OAUTH_TOKEN
     delete process.env.ANTHROPIC_AUTH_TOKEN
     process.env.CLAUDE_CONFIG_DIR = path.join(tempDir, 'claude-config')
-    process.env.HOME = tempDir
   })
 
   afterEach(() => {
@@ -3352,6 +3350,7 @@ describe('ChatSessionManager notifications', () => {
     const pushes: Array<{ sessionId: string; notifications: ChatNotification[] }> = []
     const manager = managedManager({
       isDirectory: anyDirectory,
+      profileCatalogHome: tempDir,
       registry: new SessionRegistry(),
       db,
       onEvent: () => {},
