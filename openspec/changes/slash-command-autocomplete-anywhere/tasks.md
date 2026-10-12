@@ -15,8 +15,8 @@
 
 ## 3. Integration check
 
-- [ ] 3.1 Run `bun run lint && bun run typecheck && bun run test` and verify all pass
-- [ ] 3.2 Check the composer in the running app with the `dev-browser` skill: type a sentence, then ` /co`, choose a command with Enter, and verify by screenshot that the command is inserted in place with the caret after it and nothing was sent
+- [x] 3.1 Run `bun run lint && bun run typecheck && bun run test` and verify all pass
+- [x] 3.2 Check the composer in the running app with the `dev-browser` skill: type a sentence, then ` /co`, choose a command with Enter, and verify by screenshot that the command is inserted in place with the caret after it and nothing was sent
 
 ## Workflow follow-up
 
