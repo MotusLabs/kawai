@@ -5,6 +5,8 @@
 // stay in the driver; this file is SDK-agnostic so the client never imports
 // the agent SDK.
 
+import type { ChatPeerTaskContext } from './teamTasks'
+
 /**
  * Base shape of every conversation event. `id` is stable and unique
  * (clients suppress duplicates by id). Live events carry `sequence >= 1`,
@@ -102,6 +104,8 @@ export interface ChatPeerMessage {
   body: string
   possibleDuplicate: boolean
   thread?: Array<{ messageId: string; senderSession: string; body: string }>
+  /** The referenced team task as it was at delivery (team-tasks D3); absent = none. */
+  task?: ChatPeerTaskContext
 }
 
 export type ChatEvent =

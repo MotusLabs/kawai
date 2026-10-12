@@ -154,6 +154,16 @@ describe('buildWorkspaceView sectioning', () => {
     expect(view.archive.entries.map((e) => e.kind)).toEqual(['hibernating', 'history'])
   })
 
+  test('a spawned chat in a worktree subdirectory sits under that worktree (team-tasks)', () => {
+    const view = buildWorkspaceView(
+      snapshot,
+      [liveSession('spawned', `${ADD_AUTH_WT}/src/deep`, { kind: 'chat', spawned: true, taskId: 'task-1', taskTitle: 'Auth', status: 'permission' })],
+      [],
+      []
+    )
+    expect(findSection(view, changeKey('add-auth'))?.entries.map((e) => e.key)).toEqual(['spawned'])
+  })
+
   test('a change section without a worktree exists with no sessions', () => {
     const view = buildWorkspaceView(
       snapshot,

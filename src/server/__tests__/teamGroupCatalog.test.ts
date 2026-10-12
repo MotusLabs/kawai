@@ -42,7 +42,25 @@ describe('loadGroupCatalog', () => {
     write(home, 'devs.md', '---\ndescription: home devs\n---\nHome prompt.')
     write(repo, 'devs.md', 'Project prompt.')
     const devs = loadGroupCatalog({ groupsRoot: repo, homeDir: home }).groups.get('devs')
-    expect(devs).toEqual({ id: 'devs', label: 'devs', description: '', prompt: 'Project prompt.' })
+    expect(devs).toEqual({
+      id: 'devs', label: 'devs', description: '', canCreateTasks: false, max: 1, approval: 'manual', prompt: 'Project prompt.',
+    })
+  })
+
+  test('project task settings replace user-level settings wholesale, never merge', () => {
+    write(home, 'leads.md', '---\ncanCreateTasks: true\nmax: 4\nprofile: glm\napproval: auto\n---\nHome.')
+    write(repo, 'leads.md', '---\nmax: 2\n---\nProject.')
+    const leads = loadGroupCatalog({ groupsRoot: repo, homeDir: home }).groups.get('leads')
+    expect(leads).toMatchObject({ canCreateTasks: false, max: 2, approval: 'manual', prompt: 'Project.' })
+    expect(leads?.profile).toBeUndefined()
+  })
+
+  test('a malformed task setting skips the project file and keeps the user-level group', () => {
+    write(home, 'leads.md', '---\ncanCreateTasks: true\n---\nHome.')
+    write(repo, 'leads.md', '---\nmax: lots\n---\nProject.')
+    const catalog = loadGroupCatalog({ groupsRoot: repo, homeDir: home })
+    expect(catalog.groups.get('leads')).toMatchObject({ canCreateTasks: true, prompt: 'Home.' })
+    expect(catalog.errors.some(error => error.includes('leads.md') && error.includes('max must be'))).toBe(true)
   })
 
   test('invalid ids and malformed files are reported with their path and skipped', () => {

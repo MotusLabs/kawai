@@ -65,6 +65,9 @@ import type { TeamMessage } from '../../shared/team'
 import { MailDispatcher } from '../team/dispatcher'
 import { receiptMessageId } from '../team/receipt'
 import { SessionMailbox } from '../team/sessionMailbox'
+import type { TaskService } from '../team/TaskService'
+import type { SpawnRequest, SpawnResult } from '../team/staffing'
+import { TeamCaps } from '../team/teamCaps'
 import {
   findTranscriptPath,
   readTranscriptCwd,
@@ -81,6 +84,8 @@ export interface ChatSessionManagerOptions {
   registry: SessionRegistry
   db: SessionDatabase
   onMailboxChange?: (teamId: string, message?: TeamMessage) => void
+  /** Every committed team-task change (wired to the task view push in index.ts). */
+  onTaskChange?: (teamId: string) => void
   /** Conversation-event sink (wired to the WS broadcast in index.ts). */
   onEvent: (sessionId: string, event: ChatEvent) => void
   /** Command-state sink (wired to the chat-commands push in index.ts). */
@@ -254,7 +259,7 @@ export class ChatSessionManager {
     { timer: ReturnType<typeof setTimeout>; path: string }
   >()
 
-  async createAvailableSession(input: { projectPath: string; name?: string; claudeProfileId?: string; approvalPolicy?: ChatApprovalPolicy; groupId?: string; cloneFromSessionId?: string }): Promise<ChatCreateResult> {
+  async createAvailableSession(input: { projectPath: string; name?: string; claudeProfileId?: string; approvalPolicy?: ChatApprovalPolicy; groupId?: string; cloneFromSessionId?: string; taskId?: string; spawned?: boolean }): Promise<ChatCreateResult> {
     // Refuse a bad path before the probe spends an SDK spawn on it.
     const project = resolveProjectDirectory(input.projectPath, this.options.isDirectory)
     if (!project.ok) return project
@@ -399,11 +404,30 @@ export class ChatSessionManager {
       prepare: async id => { this.captureHistory(id); const driver = await this.ensureDriver(id); if (!driver) throw new Error('Recipient disappeared'); driver.start() },
       restore: id => { const result = this.restore(id); if (!result.ok) throw new Error(result.error) },
       watchReceipt: id => this.watchSessionTitle(id),
+      spawn: request => this.spawnMember(request),
+      caps: new TeamCaps({
+        ...(options.profileCatalogHome ? { homeDir: options.profileCatalogHome } : {}),
+        onErrors: errors => logger.warn('team_caps_file_errors', { errors }),
+      }),
+      // A spawned member keeps the task it was spawned for; others follow
+      // the task of the mail they received last.
+      associateTask: (id, taskId) => {
+        const record = this.records.get(id)
+        if (record && !record.spawned && record.taskId !== taskId) this.applyPatch(id, { taskId })
+      },
       transcriptFor: id => { const sdkId = this.records.get(id)?.sdkSessionId; return sdkId ? findTranscriptPath(sdkId) : null },
       onChange: options.onMailboxChange,
       onError: error => logger.warn('team_mailbox_dispatch_failed', { error: String(error) }),
     })
     this.mailbox = this.teamMail.mailbox
+    this.tasks = this.teamMail.tasks
+    // A retitled task re-labels the headers of the sessions working on it.
+    this.tasks.store.subscribe(task => {
+      this.options.onTaskChange?.(task.teamId)
+      for (const record of this.records.values()) {
+        if (record.taskId === task.id) this.options.registry.updateSession(record.sessionId, this.taskFields(record))
+      }
+    })
     this.dispatcher = this.teamMail.dispatcher
     this.restorePersisted()
     this.teamMail.start()
@@ -414,8 +438,27 @@ export class ChatSessionManager {
   /** Each session's team (agent-teams); shared with the mailbox dispatcher. */
   readonly teams: SessionTeams
   readonly mailbox: TeamMailbox
+  /** Team tasks (team-tasks); the task tools and UI actions go through it. */
+  readonly tasks: TaskService
   readonly dispatcher: MailDispatcher
   private readonly teamMail: SessionMailbox
+
+  /**
+   * Worktree staffing's programmatic create (team-tasks D4): a group member
+   * in the task's worktree with the group's profile and approval policy,
+   * associated with the task and marked spawned. Resolves once the member's
+   * team is known, so the dispatcher can deliver its first turn at once.
+   */
+  private async spawnMember(request: SpawnRequest): Promise<SpawnResult> {
+    const result = await this.createAvailableSession({
+      projectPath: request.projectPath, groupId: request.groupId, approvalPolicy: request.approvalPolicy,
+      taskId: request.taskId, spawned: true,
+      ...(request.profileId ? { claudeProfileId: request.profileId } : {}),
+    })
+    if (!result.ok) return result
+    await this.teams.track(result.session.id, result.session.projectPath)
+    return { ok: true, sessionId: result.session.id }
+  }
 
   /** Create a chat session. Refused (no side effects) when auth is missing. */
   createSession(input: {
@@ -426,6 +469,10 @@ export class ChatSessionManager {
     approvalPolicy?: ChatApprovalPolicy
     /** Team group, already validated by createAvailableSession; absent = none. */
     groupId?: string
+    /** Team task the session starts on (worktree staffing); absent = none. */
+    taskId?: string
+    /** Created by worktree staffing rather than the human. */
+    spawned?: boolean
   }): ChatCreateResult {
     const project = resolveProjectDirectory(input.projectPath, this.options.isDirectory)
     if (!project.ok) return project
@@ -455,6 +502,8 @@ export class ChatSessionManager {
       // one the generator produced is a placeholder a later title may replace.
       nameSource: (suppliedName ? 'manual' : 'placeholder') as ChatNameSource,
       groupId: input.groupId ?? null,
+      taskId: input.taskId ?? null,
+      spawned: input.spawned === true,
       status: 'waiting' as SessionStatus,
       createdAt: now,
       lastActivityAt: now,
@@ -1008,7 +1057,7 @@ export class ChatSessionManager {
       const queryFactory = await this.resolveQueryFactory()
       // The team must be known before the first spawn reads its prompt.
       await this.teams.track(record.sessionId, this.records.get(record.sessionId)?.projectPath ?? record.projectPath)
-      const teamMcpServer = await createMailboxServer(this.mailbox, record.sessionId)
+      const teamMcpServer = await createMailboxServer(this.mailbox, record.sessionId, this.tasks)
       const driver = new ChatSessionDriver({
         sessionId: record.sessionId,
         projectPath: record.projectPath,
@@ -1387,6 +1436,7 @@ export class ChatSessionManager {
       ...(patch.nameSource !== undefined
         ? { nameSource: patch.nameSource }
         : {}),
+      ...(patch.taskId !== undefined ? this.taskFields(next) : {}),
     })
   }
 
@@ -1409,7 +1459,16 @@ export class ChatSessionManager {
       agentType: 'claude',
       ...(record.archivedAt != null ? { archivedAt: record.archivedAt } : {}),
       ...this.groupFields(record),
+      ...this.taskFields(record),
+      ...(record.spawned ? { spawned: true } : {}),
     }
+  }
+
+  /** Associated task id plus its current title (team-tasks header). */
+  private taskFields(record: ChatSessionRecord): Partial<Session> {
+    if (record.taskId == null) return {}
+    const title = this.tasks.store.get(record.taskId)?.title
+    return { taskId: record.taskId, ...(title !== undefined ? { taskTitle: title } : {}) }
   }
 
   /** Group id plus display state; label/missing only once the team is known. */

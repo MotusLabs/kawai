@@ -72,6 +72,10 @@ export interface ChatSessionRecord {
   contextUsage?: ChatContextUsage | null
   /** Team group (agent-teams): set at creation only; null/absent = none. */
   groupId?: string | null
+  /** Team task the session works on (team-tasks); null/absent = none. */
+  taskId?: string | null
+  /** Created by worktree staffing rather than by the human (team-tasks D4). */
+  spawned?: boolean
 }
 
 // last_user_message is a UI preview; unbounded values (giant pastes, tool
@@ -205,7 +209,9 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
   context_pct REAL,
   context_at TEXT,
   context_approx INTEGER,
-  group_id TEXT
+  group_id TEXT,
+  task_id TEXT,
+  spawned INTEGER NOT NULL DEFAULT 0
 );
 `
 
@@ -277,6 +283,12 @@ export function initDatabase(options: { path?: string } = {}): SessionDatabase {
   // Team group (agent-teams): nullable, so existing sessions have none.
   if (!chatColumns.some(column => column.name === 'group_id')) {
     db.exec('ALTER TABLE chat_sessions ADD COLUMN group_id TEXT')
+  }
+  if (!chatColumns.some(column => column.name === 'task_id')) {
+    db.exec('ALTER TABLE chat_sessions ADD COLUMN task_id TEXT')
+  }
+  if (!chatColumns.some(column => column.name === 'spawned')) {
+    db.exec('ALTER TABLE chat_sessions ADD COLUMN spawned INTEGER NOT NULL DEFAULT 0')
   }
   migrateLastUserMessageColumn(db)
   migrateChatNameSourceColumn(db)
@@ -367,8 +379,8 @@ export function initDatabase(options: { path?: string } = {}): SessionDatabase {
   // Chat sessions prepared statements
   const insertChatStmt = db.prepare(
     `INSERT INTO chat_sessions
-      (session_id, name, project_path, sdk_session_id, profile_id, status, created_at, last_activity_at, approval_policy, name_source, group_id)
-     VALUES ($sessionId, $name, $projectPath, $sdkSessionId, $profileId, $status, $createdAt, $lastActivityAt, $approvalPolicy, $nameSource, $groupId)`
+      (session_id, name, project_path, sdk_session_id, profile_id, status, created_at, last_activity_at, approval_policy, name_source, group_id, task_id, spawned)
+     VALUES ($sessionId, $name, $projectPath, $sdkSessionId, $profileId, $status, $createdAt, $lastActivityAt, $approvalPolicy, $nameSource, $groupId, $taskId, $spawned)`
   )
   const selectChatBySessionId = db.prepare(
     'SELECT * FROM chat_sessions WHERE session_id = $sessionId'
@@ -615,6 +627,8 @@ export function initDatabase(options: { path?: string } = {}): SessionDatabase {
         $approvalPolicy: session.approvalPolicy ?? 'manual',
         $nameSource: session.nameSource ?? 'manual',
         $groupId: session.groupId ?? null,
+        $taskId: session.taskId ?? null,
+        $spawned: session.spawned ? 1 : 0,
       })
       return session
     },
@@ -632,6 +646,7 @@ export function initDatabase(options: { path?: string } = {}): SessionDatabase {
         nameSource: 'name_source',
         // group_id is deliberately absent: a session's group is fixed at
         // creation (agent-teams), so no patch can change it.
+        taskId: 'task_id',
       }
       const fields: string[] = []
       const params: Record<string, string | number | null> = {
@@ -737,6 +752,8 @@ function mapChatRow(row: Record<string, unknown>): ChatSessionRecord {
     nameSource: parseChatNameSource(row.name_source),
     contextUsage: mapContextUsage(row),
     groupId: row.group_id === null || row.group_id === undefined ? null : String(row.group_id),
+    taskId: row.task_id === null || row.task_id === undefined ? null : String(row.task_id),
+    spawned: Number(row.spawned ?? 0) === 1,
   }
 }
 

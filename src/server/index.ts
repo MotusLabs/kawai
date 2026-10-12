@@ -819,6 +819,7 @@ const chatSessionManager = new ChatSessionManager({
   db,
   onEvent: (sessionId, event) => chatConnections.publish(sessionId, event),
   onMailboxChange: (teamId, message) => chatConnections.publishMailbox(teamId, message),
+  onTaskChange: teamId => chatConnections.publishTasks(teamId),
   onCommandState: (sessionId, state) => chatConnections.publishCommandState(sessionId, state),
   onActivity: (sessionId, activity) => chatConnections.publishActivity(sessionId, activity),
   onContextUsage: (sessionId, usage) => chatConnections.publishContextUsage(sessionId, usage),
@@ -2726,6 +2727,14 @@ function handleMessage(
     case 'team-mailbox-cancel':
     case 'team-mailbox-retry':
     case 'team-mailbox-discard':
+    case 'team-tasks-open':
+    case 'team-tasks-close':
+    case 'team-task-open':
+    case 'team-task-close':
+    case 'team-task-create':
+    case 'team-task-amend':
+    case 'team-task-note':
+    case 'team-task-status':
     case 'chat-worker-transcript':
       fireAndForget(chatConnections.handle(chatPeer(ws), message), 'chatMessage')
       return

@@ -28,6 +28,7 @@ import type { ClientMessage, ServerMessage } from '../../shared/types'
 import type { ChatSessionManager } from './ChatSessionManager'
 import type { ChatWireLogs } from './ChatWireLogs'
 import { MailboxConnections } from '../team/mailboxConnections'
+import { TaskConnections } from '../team/taskConnections'
 import type { TeamMessage } from '../../shared/team'
 
 /** Frames per debug page reply. */
@@ -54,15 +55,25 @@ export class ChatConnections {
   private scheduled = false
 
   private readonly mailboxConnections: MailboxConnections
+  private readonly taskConnections: TaskConnections
 
   constructor(
     private readonly manager: ChatSessionManager,
     private readonly wireLogs?: ChatWireLogs,
     private readonly broadcastMailboxNotice?: (message: ServerMessage) => void
-  ) { this.mailboxConnections = new MailboxConnections(manager) }
+  ) {
+    this.mailboxConnections = new MailboxConnections(manager)
+    this.taskConnections = new TaskConnections(manager)
+  }
+
+  /** A committed task change: re-send that team's task snapshots. */
+  publishTasks(teamId: string): void {
+    this.taskConnections.publish(teamId)
+  }
 
   disconnect(connection: ChatConnection): void {
     this.mailboxConnections.disconnect(connection)
+    this.taskConnections.disconnect(connection)
     this.subscriptions.delete(connection)
     this.batches.delete(connection)
     this.activityBatches.delete(connection)
@@ -81,6 +92,8 @@ export class ChatConnections {
    */
   publishMailbox(teamId: string, message?: TeamMessage): void {
     this.mailboxConnections.publish(teamId)
+    // Task detail lists its mail; a task message changing state changes it.
+    if (message?.taskId) this.taskConnections.publish(teamId)
     if (message?.state === 'dead' && message.reason === 'hop-limit') {
       const notice: ServerMessage = { type: 'team-mailbox-dead-letter', teamId, messageId: message.id, senderSession: message.fromSession }
       if (this.broadcastMailboxNotice) { this.broadcastMailboxNotice(notice); return }
@@ -296,6 +309,7 @@ export class ChatConnections {
 
   async handle(connection: ChatConnection, message: ClientMessage): Promise<void> {
     if (message.type.startsWith('team-mailbox-')) return this.mailboxConnections.handle(connection, message)
+    if (message.type.startsWith('team-task')) return this.taskConnections.handle(connection, message as Extract<ClientMessage, { type: `team-task${string}` }>)
     if (!message.type.startsWith('chat-') || !('sessionId' in message)) return
     const { sessionId } = message
     if (!this.manager.has(sessionId)) {

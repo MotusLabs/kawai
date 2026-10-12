@@ -1,0 +1,246 @@
+// Durable team tasks (team-tasks design D1): the record, its numbered
+// immutable revisions of direction/acceptance, and an append-only journal,
+// all in the server's SQLite database beside `team_messages` and
+// `chat_sessions`. Tasks outlive every session that touched them — nothing
+// here deletes a row. Participants are derived, never stored: the creator,
+// sessions associated with the task, senders/claimants of task mail, and
+// journal authors. The store is policy-free; who may do what is decided by
+// TaskService before it calls in.
+import type { Database } from 'bun:sqlite'
+import type {
+  TaskActor,
+  TaskJournalEntry,
+  TaskRevision,
+  TaskStatus,
+  TeamTask,
+  TeamTaskDetail,
+  TeamTaskSummary,
+} from '../../shared/teamTasks'
+import { TASK_STATUSES } from '../../shared/teamTasks'
+import type { MailboxStore } from './mailboxStore'
+
+const CREATE_TABLES_SQL = `
+CREATE TABLE IF NOT EXISTS team_tasks (
+  id TEXT PRIMARY KEY,
+  team_id TEXT NOT NULL,
+  title TEXT NOT NULL,
+  status TEXT NOT NULL,
+  creator_kind TEXT NOT NULL,
+  creator_session TEXT,
+  parent_id TEXT,
+  worktree TEXT,
+  openspec_change TEXT,
+  revision INTEGER NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS team_tasks_team ON team_tasks (team_id, created_at);
+CREATE INDEX IF NOT EXISTS team_tasks_parent ON team_tasks (parent_id);
+CREATE TABLE IF NOT EXISTS team_task_revisions (
+  task_id TEXT NOT NULL,
+  revision INTEGER NOT NULL,
+  direction TEXT NOT NULL,
+  acceptance TEXT,
+  author_kind TEXT NOT NULL,
+  author_session TEXT,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (task_id, revision)
+);
+CREATE TABLE IF NOT EXISTS team_task_journal (
+  id TEXT PRIMARY KEY,
+  task_id TEXT NOT NULL,
+  author_kind TEXT NOT NULL,
+  author_session TEXT,
+  text TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS team_task_journal_task ON team_task_journal (task_id, created_at);
+`
+
+export interface CreateTaskInput {
+  teamId: string
+  title: string
+  direction: string
+  acceptance?: string | null
+  creator: TaskActor
+  parentId?: string | null
+  worktree?: string | null
+  openspecChange?: string | null
+}
+
+const nowIso = () => new Date().toISOString()
+
+export class TaskStore {
+  private readonly listeners = new Set<(task: TeamTask) => void>()
+
+  constructor(private readonly db: Database, private readonly mail?: MailboxStore) {
+    db.exec(CREATE_TABLES_SQL)
+  }
+
+  /** Every committed change, with the task as it is now. */
+  subscribe(listener: (task: TeamTask) => void): () => void {
+    this.listeners.add(listener)
+    return () => this.listeners.delete(listener)
+  }
+
+  private changed(id: string): TeamTask {
+    const task = this.get(id)!
+    for (const listener of this.listeners) listener(task)
+    return task
+  }
+
+  create(input: CreateTaskInput, now = nowIso()): TeamTask {
+    const id = `task-${crypto.randomUUID()}`
+    this.db.transaction(() => {
+      this.db.prepare(`INSERT INTO team_tasks
+        (id, team_id, title, status, creator_kind, creator_session, parent_id, worktree, openspec_change, revision, created_at, updated_at)
+        VALUES (?, ?, ?, 'open', ?, ?, ?, ?, ?, 1, ?, ?)`).run(
+        id, input.teamId, input.title, input.creator.kind, input.creator.sessionId,
+        input.parentId ?? null, input.worktree ?? null, input.openspecChange ?? null, now, now,
+      )
+      this.insertRevision(id, 1, input.direction, input.acceptance ?? null, input.creator, now)
+    })()
+    return this.changed(id)
+  }
+
+  get(id: string): TeamTask | null {
+    const row = this.db.prepare(`SELECT t.*, r.direction, r.acceptance FROM team_tasks t
+      JOIN team_task_revisions r ON r.task_id = t.id AND r.revision = t.revision WHERE t.id = ?`).get(id)
+    return row ? mapTask(row as Record<string, unknown>) : null
+  }
+
+  /** A team's tasks, oldest first, each with its participants. */
+  list(teamId: string): TeamTaskSummary[] {
+    return this.selectTasks('t.team_id = ?', teamId).map(task => this.summary(task))
+  }
+
+  detail(id: string): TeamTaskDetail | null {
+    const task = this.get(id)
+    if (!task) return null
+    return {
+      task: this.summary(task),
+      revisions: this.revisions(id),
+      journal: this.journal(id),
+      subtasks: this.selectTasks('t.parent_id = ?', id).map(child => this.summary(child)),
+      messages: this.messages(id),
+    }
+  }
+
+  revisions(id: string): TaskRevision[] {
+    return (this.db.prepare('SELECT * FROM team_task_revisions WHERE task_id = ? ORDER BY revision').all(id) as Record<string, unknown>[])
+      .map(row => ({
+        revision: Number(row.revision),
+        direction: String(row.direction),
+        acceptance: text(row.acceptance),
+        author: actor(row.author_kind, row.author_session),
+        createdAt: String(row.created_at),
+      }))
+  }
+
+  /** Oldest first; `limit` keeps only the most recent entries. */
+  journal(id: string, limit?: number): TaskJournalEntry[] {
+    const rows = (limit === undefined
+      ? this.db.prepare('SELECT * FROM team_task_journal WHERE task_id = ? ORDER BY created_at, rowid').all(id)
+      : this.db.prepare('SELECT * FROM (SELECT *, rowid AS r FROM team_task_journal WHERE task_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?) ORDER BY created_at, r').all(id, limit)
+    ) as Record<string, unknown>[]
+    return rows.map(row => ({
+      id: String(row.id),
+      author: actor(row.author_kind, row.author_session),
+      text: String(row.text),
+      createdAt: String(row.created_at),
+    }))
+  }
+
+  /**
+   * A new revision of direction/acceptance. Omitted fields carry over from
+   * the current revision. The bump and the insert are one transaction, so
+   * competing amendments each get their own number and none is lost.
+   */
+  amend(id: string, change: { direction?: string; acceptance?: string | null }, author: TaskActor, now = nowIso()): TeamTask | null {
+    const committed = this.db.transaction(() => {
+      const current = this.get(id)
+      if (!current) return false
+      const revision = current.revision + 1
+      this.db.prepare('UPDATE team_tasks SET revision = ?, updated_at = ? WHERE id = ?').run(revision, now, id)
+      this.insertRevision(id, revision, change.direction ?? current.direction,
+        change.acceptance === undefined ? current.acceptance : change.acceptance, author, now)
+      return true
+    })()
+    return committed ? this.changed(id) : null
+  }
+
+  appendJournal(id: string, author: TaskActor, entry: string, now = nowIso()): TaskJournalEntry | null {
+    if (!this.get(id)) return null
+    const journalId = `note-${crypto.randomUUID()}`
+    this.db.prepare(`INSERT INTO team_task_journal (id, task_id, author_kind, author_session, text, created_at)
+      VALUES (?, ?, ?, ?, ?, ?)`).run(journalId, id, author.kind, author.sessionId, entry, now)
+    this.db.prepare('UPDATE team_tasks SET updated_at = ? WHERE id = ?').run(now, id)
+    this.changed(id)
+    return { id: journalId, author, text: entry, createdAt: now }
+  }
+
+  setStatus(id: string, status: TaskStatus, now = nowIso()): TeamTask | null {
+    const changes = this.db.prepare('UPDATE team_tasks SET status = ?, updated_at = ? WHERE id = ?').run(status, now, id).changes
+    return changes === 1 ? this.changed(id) : null
+  }
+
+  /** Re-announce a task whose derived data (participants, messages) changed. */
+  touch(id: string): void {
+    if (this.get(id)) this.changed(id)
+  }
+
+  private insertRevision(id: string, revision: number, direction: string, acceptance: string | null, author: TaskActor, now: string) {
+    this.db.prepare(`INSERT INTO team_task_revisions (task_id, revision, direction, acceptance, author_kind, author_session, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)`).run(id, revision, direction, acceptance, author.kind, author.sessionId, now)
+  }
+
+  private selectTasks(where: string, param: string): TeamTask[] {
+    return (this.db.prepare(`SELECT t.*, r.direction, r.acceptance FROM team_tasks t
+      JOIN team_task_revisions r ON r.task_id = t.id AND r.revision = t.revision
+      WHERE ${where} ORDER BY t.created_at, t.rowid`).all(param) as Record<string, unknown>[]).map(mapTask)
+  }
+
+  private messages(id: string) {
+    return this.mail?.forTask(id) ?? []
+  }
+
+  private summary(task: TeamTask): TeamTaskSummary {
+    const ids = new Set<string>()
+    if (task.creator.sessionId) ids.add(task.creator.sessionId)
+    const rows = this.db.prepare(`
+      SELECT session_id AS id FROM chat_sessions WHERE task_id = $id
+      UNION SELECT from_session FROM team_messages WHERE task_id = $id
+      UNION SELECT claimed_by FROM team_messages WHERE task_id = $id AND claimed_by IS NOT NULL
+      UNION SELECT author_session FROM team_task_journal WHERE task_id = $id AND author_session IS NOT NULL`)
+      .all({ $id: task.id }) as Array<{ id: string }>
+    for (const row of rows) ids.add(row.id)
+    return { ...task, participants: [...ids] }
+  }
+}
+
+function text(value: unknown): string | null {
+  return value === null || value === undefined ? null : String(value)
+}
+
+function actor(kind: unknown, session: unknown): TaskActor {
+  return kind === 'agent' && typeof session === 'string' ? { kind: 'agent', sessionId: session } : { kind: 'human', sessionId: null }
+}
+
+function mapTask(row: Record<string, unknown>): TeamTask {
+  const status = String(row.status) as TaskStatus
+  return {
+    id: String(row.id),
+    teamId: String(row.team_id),
+    title: String(row.title),
+    status: TASK_STATUSES.includes(status) ? status : 'open',
+    creator: actor(row.creator_kind, row.creator_session),
+    parentId: text(row.parent_id),
+    worktree: text(row.worktree),
+    openspecChange: text(row.openspec_change),
+    revision: Number(row.revision),
+    direction: String(row.direction),
+    acceptance: text(row.acceptance),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+  }
+}
