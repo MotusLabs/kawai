@@ -350,3 +350,36 @@ test('flowSendAssign records the payload once; later sends do not overwrite it',
   store.flowSendAssign('dev', { targetKind: 'group', targetId: 'devs', instruction: 'Second' })
   expect(useTeamTaskStore.getState().views.dev!.flow!.sentPayload).toMatchObject({ instruction: 'Second' })
 })
+
+test('an edited create after a lost result re-arms a fresh key; an unchanged one replays', () => {
+  useSessionStore.setState({ sessions: [sessionRow('dev', 'Dev one')] })
+  openView()
+  const store = useTeamTaskStore.getState()
+  store.setDraft('dev', { title: 'Export', direction: 'CSV' })
+  const { renderer, sentOf, rerender } = mountPanel()
+  const submit = () => renderer.root.findByType('form').props.onSubmit({ preventDefault: () => {} })
+  act(() => submit())
+  const first = sentOf('team-task-create')[0] as Extract<ClientMessage, { type: 'team-task-create' }>
+  // The result is lost with the connection; the reconnect clears the waiter.
+  rerender(false)
+  rerender(true)
+  rerender(true)
+  // An edit changes the intent: the next create must carry a NEW key — the
+  // armed one would be refused for a different payload forever otherwise.
+  useTeamTaskStore.getState().setDraft('dev', { title: 'Export v2' })
+  // The draft lives in the store: re-render so the form handler sees the edit.
+  rerender(true)
+  act(() => submit())
+  const creates = sentOf('team-task-create') as Array<Extract<ClientMessage, { type: 'team-task-create' }>>
+  expect(creates).toHaveLength(2)
+  expect(creates[1]!.requestKey).not.toBe(first.requestKey)
+  expect(creates[1]!.title).toBe('Export v2')
+  // Without further edits the key is stable again (a replay is safe).
+  rerender(false)
+  rerender(true)
+  rerender(true)
+  act(() => submit())
+  const after = sentOf('team-task-create') as Array<Extract<ClientMessage, { type: 'team-task-create' }>>
+  expect(after[2]!.requestKey).toBe(creates[1]!.requestKey)
+  act(() => renderer.unmount())
+})

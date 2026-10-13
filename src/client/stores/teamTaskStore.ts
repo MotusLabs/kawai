@@ -48,6 +48,18 @@ export interface TaskCreateFlow {
   assignFailed: boolean
   /** The dispatch payload the key was armed for, once its leg was sent. */
   sentPayload?: { targetKind: 'group' | 'session'; targetId: string; instruction: string }
+  /** The create payload the key was armed for, once its leg was sent. */
+  sentCreatePayload?: TaskCreatePayload
+}
+
+/** The normalized create fields a request key names (S1: re-key on change). */
+export interface TaskCreatePayload {
+  title: string
+  direction: string
+  acceptance: string | null
+  parentId: string | null
+  worktree: string | null
+  openspecChange: string | null
 }
 
 export interface TaskView {
@@ -93,6 +105,8 @@ interface TaskState {
   retryAssign: (sessionId: string) => void
   /** Record the dispatch payload the armed key is being used for. */
   flowSendAssign: (sessionId: string, payload: NonNullable<TaskCreateFlow['sentPayload']>) => void
+  /** Record the create payload the armed key is being used for. */
+  flowSendCreate: (sessionId: string, payload: TaskCreatePayload) => void
   /**
    * The connection came back: results for anything still pending were lost
    * with it, so their waiters are dropped. The armed flow keeps its request
@@ -190,6 +204,12 @@ export const useTeamTaskStore = create<TaskState>(set => ({
     // changed intent — overwriting here would blur which payload the key names.
     if (view.flow.sentPayload !== undefined) return state
     return { views: { ...state.views, [sessionId]: { ...view, flow: { ...view.flow, sentPayload: payload } } } }
+  }),
+  flowSendCreate: (sessionId, payload) => set(state => {
+    const view = state.views[sessionId]
+    if (!view?.open || !view.flow) return state
+    if (view.flow.sentCreatePayload !== undefined) return state
+    return { views: { ...state.views, [sessionId]: { ...view, flow: { ...view.flow, sentCreatePayload: payload } } } }
   }),
   reconnected: sessionId => set(state => {
     const view = state.views[sessionId]

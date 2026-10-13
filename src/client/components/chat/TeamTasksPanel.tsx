@@ -13,7 +13,7 @@ import { useEffect, useRef } from 'react'
 import type { SendClientMessage, Session } from '@shared/types'
 import type { TeamTaskAssignment } from '@shared/teamTasks'
 import { useSessionStore } from '../../stores/sessionStore'
-import { useTeamTaskStore, type TaskView } from '../../stores/teamTaskStore'
+import { useTeamTaskStore, type TaskCreatePayload, type TaskView } from '../../stores/teamTaskStore'
 import TeamTaskDetail from './TeamTaskDetail'
 import SearchablePicker from './SearchablePicker'
 import { TaskPreviewView, TaskTargetSelect } from './taskAssignFields'
@@ -69,10 +69,21 @@ export default function TeamTasksPanel({ sessionId, projectPath, view, sendMessa
     // would be safe besides.
     if (busy) return
     const mode = assign ? 'create-and-assign' : 'create'
-    if (!flow || flow.mode !== mode || flow.taskId) {
+    // An edit after a lost result is a changed intent: the armed key would
+    // be refused for a different payload, so re-arm a fresh one. An
+    // unchanged resubmit keeps the key and the server replays.
+    const payload: TaskCreatePayload = {
+      title: draft.title.trim(), direction: draft.direction.trim(),
+      acceptance: draft.acceptance.trim() || null, parentId: draft.parentId || null,
+      worktree: draft.worktree.trim() || null, openspecChange: draft.openspecChange.trim() || null,
+    }
+    const changed = flow?.sentCreatePayload &&
+      JSON.stringify(flow.sentCreatePayload) !== JSON.stringify(payload)
+    if (!flow || flow.mode !== mode || flow.taskId || changed) {
       useTeamTaskStore.getState().armFlow(sessionId, mode)
     }
     const armed = useTeamTaskStore.getState().views[sessionId]!.flow!
+    useTeamTaskStore.getState().flowSendCreate(sessionId, payload)
     const requestId = crypto.randomUUID()
     useTeamTaskStore.getState().begin(sessionId, requestId, assign ? 'create-assign' : 'create')
     sendMessage({
