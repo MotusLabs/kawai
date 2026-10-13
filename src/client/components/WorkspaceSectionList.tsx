@@ -541,9 +541,11 @@ function GroupedLiveRows({ entries, ctx, remountKey }: GroupedLiveRowsProps) {
     >
       <SortableContext items={sortableItemIds} strategy={verticalListSortingStrategy}>
         <div key={remountKey}>
-          {/* No AnimatePresence: exiting rows stay in `entries` (App merges
-              `exitingSessions` into the workspace view) and unmount when
-              cleanup drops them. The held-exit path left ghost cards. */}
+          {/* Removed rows are not re-rendered from `exitingSessions`: a killed
+              or externally-removed row unmounts with this map. Holding it for
+              an exit animation is what left ghost cards after a kill — the
+              node outlives the store. `exitingSessions` remains for
+              kill-failed rollback bookkeeping only (see SessionList). */}
           {liveSessions.map((session, index) => {
             const activeIndex = activeId
               ? liveSessions.findIndex((s) => s.id === activeId)
