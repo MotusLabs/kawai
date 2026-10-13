@@ -89,6 +89,7 @@ export default function ProductStrategyPanel({ sessionId, view, sendMessage, con
           connected={connected} busy={busy}
           error={view.pending && Object.values(view.pending).includes('save') ? null : view.error}
           conflict={view.conflict}
+          onReload={() => useStrategyStore.getState().adoptConflict(sessionId)}
           onSave={payload => request({
             type: 'strategy-save-draft', sessionId, requestId: crypto.randomUUID(),
             content: payload.content, impactProposal: payload.impactProposal ?? undefined,

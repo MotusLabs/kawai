@@ -206,6 +206,36 @@ test('a material draft keeps its unsaved text after a CAS refusal, with the stor
   expect(textOf(find(renderer, 'draft-conflict')[0]!)).toContain('Stored draft')
 })
 
+test('reload after a CAS refusal adopts the stored draft the server returned, and the next save carries its hash (S12)', () => {
+  openView()
+  act(() => useStrategyStore.getState().applySnapshot({ type: 'strategy-snapshot', sessionId: 'dev', teamId: 'team', strategy: strategy() }))
+  act(() => useStrategyStore.getState().applyDetail({ type: 'strategy-detail', sessionId: 'dev', teamId: 'team', detail: detail() }))
+  const { renderer, refresh } = mount()
+  const purposeOf = () => find(renderer, 'strategy-draft-editor')[0]!.findAll(node => node.props['aria-label'] === 'Purpose')[0]!
+  act(() => { purposeOf().props.onChange({ target: { value: 'My unsaved edit' } }) })
+  sent.length = 0
+  act(() => { find(renderer, 'draft-save')[0]!.props.onClick() })
+  // Another editor wrote the stored draft behind this client: no detail
+  // push arrived, so only the refusal carries the stored version.
+  const stored = draft({ content: content({ purpose: 'Stored by another editor' }), contentHash: hashOf('Stored by another editor'), updatedAt: '2026-10-13T04:00:00.000Z' })
+  act(() => useStrategyStore.getState().applyResult({
+    type: 'strategy-result', sessionId: 'dev', requestId: (sent.at(-1) as { requestId: string }).requestId,
+    error: 'Draft human changed while you edited', conflict: stored,
+  }))
+  refresh()
+  expect(purposeOf().props.value).toBe('My unsaved edit')
+  const reload = find(renderer, 'strategy-draft-editor')[0]!.findAll(node => node.type === 'button' && textOf(node) === 'Reload stored draft')[0]!
+  act(() => { reload.props.onClick() })
+  refresh()
+  expect(purposeOf().props.value).toBe('Stored by another editor')
+  expect(find(renderer, 'draft-conflict')).toHaveLength(0)
+  expect(useStrategyStore.getState().views.dev!.error).toBeNull()
+  // Saving now is based on the adopted draft, not the stale one.
+  sent.length = 0
+  act(() => { find(renderer, 'draft-save')[0]!.props.onClick() })
+  expect(sent.at(-1)).toMatchObject({ type: 'strategy-save-draft', expectedDraftHash: stored.contentHash })
+})
+
 test('review separates known, assumed, and not decided; approve carries the exact revision and hash with scope and open questions', () => {
   openView()
   act(() => useSessionStore.getState().setSessions([sessionRow('chat-dev', 'Dev')]))
