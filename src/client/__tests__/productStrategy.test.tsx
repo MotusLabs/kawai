@@ -139,7 +139,6 @@ test('an approved product leads with direction; revision, hash, owner, and statu
   act(() => useStrategyStore.getState().applySnapshot({ type: 'strategy-snapshot', sessionId: 'dev', teamId: 'team', strategy: strategy() }))
   act(() => useStrategyStore.getState().applyDetail({ type: 'strategy-detail', sessionId: 'dev', teamId: 'team', detail: detail() }))
   const { renderer } = mount()
-  const text = textOf(renderer.root)
   // Direction first: purpose, users, outcomes, use cases, trade-offs, boundaries.
   const direction = find(renderer, 'strategy-direction')[0]!
   const directionText = textOf(direction)
