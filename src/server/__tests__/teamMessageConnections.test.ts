@@ -70,6 +70,7 @@ beforeEach(async () => {
       resolvedTeamOf: async (id: string) => teams.get(id),
     },
     mailbox, messages: feed, tasks, dispatcher: { notify: () => {} },
+    directory: { list: () => [] },
   } as unknown as ChatSessionManager
   connections = new ChatConnections(manager)
 })
@@ -101,20 +102,24 @@ test('list open snapshots the team, changes push, close and disconnect unsubscri
   fromTeam({ kind: 'group', id: 'devs' }, 'Existing')
   fromTeam({ kind: 'group', id: 'devs' }, 'Theirs', teams.get('stranger')!.teamId)
   await send({ type: 'team-messages-open', sessionId: 'dev' })
+  // One open, one authoritative snapshot — never two, and never on change.
+  expect(count('team-messages-snapshot')).toBe(1)
   expect(last('team-messages-snapshot')!.teamId).toBe(team.teamId)
   expect(bodies(last('team-messages-snapshot')!.messages)).toEqual(['Existing'])
   fromTeam({ kind: 'group', id: 'devs' }, 'Second')
   expect(bodies(last('team-messages')!.messages)).toEqual(['Second'])
   fromTeam({ kind: 'group', id: 'devs' }, 'Elsewhere', teams.get('stranger')!.teamId)
   expect(bodies(last('team-messages')!.messages)).toEqual(['Second'])
-  // Change pushes the rows that moved; the page itself is not re-sent —
-  // only a (re)open gets a fresh authoritative snapshot.
-  expect(bodies(last('team-messages-snapshot')!.messages)).toEqual(['Existing'])
+  expect(count('team-messages-snapshot')).toBe(1)
   await send({ type: 'team-messages-close', sessionId: 'dev' })
   const afterClose = messages.length
   fromTeam({ kind: 'group', id: 'devs' }, 'Unseen')
   expect(messages.length).toBe(afterClose)
   await send({ type: 'team-messages-open', sessionId: 'dev' })
+  expect(count('team-messages-snapshot')).toBe(2)
+  // A re-open sees everything the team has, including the row that arrived
+  // while the view was closed — only pushes are subscription-scoped.
+  expect(bodies(last('team-messages-snapshot')!.messages)).toEqual(['Unseen', 'Second', 'Existing'])
   connections.disconnect(connection)
   const afterDisconnect = messages.length
   fromTeam({ kind: 'group', id: 'devs' }, 'Unseen too')
@@ -148,6 +153,8 @@ test('thread open sends the thread with its events and re-sends on change', asyn
   expect(last('team-thread')!.entries).toHaveLength(1)
   expect(last('team-thread')!.entries[0]!.events.map(event => event.kind))
     .toEqual(['sent', 'claimed', 'pushed', 'delivered'])
+  // A thread open answers with the thread only — it never disturbs a list.
+  expect(count('team-messages-snapshot')).toBe(0)
   // A change in the open thread re-sends it whole…
   await mailbox.reply({ kind: 'human', team }, { message_id: first.id, body: 'Follow-up' })
   expect(last('team-thread')!.entries).toHaveLength(2)
@@ -157,6 +164,22 @@ test('thread open sends the thread with its events and re-sends on change', asyn
   await send({ type: 'team-thread-close', sessionId: 'dev', threadId: first.threadId })
   store.cancel(elsewhereRow.id)
   expect(count('team-thread')).toBe(2)
+})
+
+test('a cursor open answers with that page and leaves an open thread alone', async () => {
+  const rows = ['First', 'Second', 'Third'].map(body => fromTeam({ kind: 'group', id: 'devs' }, body))
+  // A page of two is what a client would already have walked; its cursor is
+  // the keyset of the last row it holds.
+  const walked = feed.snapshot(team.teamId, {}, null, 2)
+  expect(bodies(walked.messages)).toEqual(['Third', 'Second'])
+  await send({ type: 'team-messages-open', sessionId: 'dev', cursor: walked.nextCursor! })
+  expect(count('team-messages-snapshot')).toBe(1)
+  expect(bodies(last('team-messages-snapshot')!.messages)).toEqual(['First'])
+  expect(last('team-messages-snapshot')!.nextCursor).toBeNull()
+  // Opening a thread beside that page must not re-send any list page.
+  await send({ type: 'team-thread-open', sessionId: 'dev', threadId: rows[0]!.threadId })
+  expect(count('team-messages-snapshot')).toBe(1)
+  expect(count('team-thread')).toBe(1)
 })
 
 test('a thread of another team is refused', async () => {

@@ -5,6 +5,7 @@ export const HISTORY_MAX_AGE_MAX_HOURS = 168 // 7 days
 import type {
   MessageCursor,
   MessageQueryFilters,
+  SessionDirectoryEntry,
   TeamMessage,
   ThreadEntry,
 } from './team'
@@ -373,6 +374,8 @@ export type ServerMessage =
       filters: MessageQueryFilters
       messages: TeamMessage[]
       nextCursor: MessageCursor | null
+      /** Last known identity of killed participants named by these rows. */
+      directory: SessionDirectoryEntry[]
     }
   | { type: 'team-messages'; sessionId: string; teamId: string; messages: TeamMessage[] }
   | {
@@ -381,6 +384,7 @@ export type ServerMessage =
       teamId: string
       threadId: string
       entries: ThreadEntry[]
+      directory: SessionDirectoryEntry[]
     }
   // Result of a human send or reply; `message` is set on success (the row the
   // composer's thread will show), `error` on refusal. `requestId` is the

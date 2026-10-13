@@ -25,6 +25,8 @@ interface Subscription {
   cursor: MessageCursor | null
   list: boolean
   threads: Set<string>
+  /** Filters the current watch is over; null when nothing is bound. */
+  bound: MessageQueryFilters | null
   /** The feed watch backing this subscription; null until something is open. */
   release: (() => void) | null
 }
@@ -120,17 +122,26 @@ export class MessageConnections {
     const current = sessions.get(sessionId)
     const subscription = current?.teamId === teamId
       ? current
-      : { teamId, filters: {}, cursor: null, list: false, threads: new Set<string>(), release: null }
+      : {
+        teamId, filters: {}, cursor: null, list: false, threads: new Set<string>(),
+        bound: null, release: null,
+      }
     sessions.set(sessionId, subscription)
     return subscription
   }
 
   /**
-   * Back the subscription with one feed watch. Re-bound whenever the list
-   * moves to new filters: the watch's first event is that page's snapshot.
+   * Back the subscription with one feed watch. Re-bound only when the filters
+   * move — opening a thread beside an open list must not disturb the page the
+   * client is already holding. The watch's own first event is a page-1
+   * snapshot, which is never the answer to a cursor page and never what a
+   * thread open asked for, so it is ignored here: each open sends the page it
+   * actually requested, and only that one.
    */
   private bind(connection: ChatConnection, sessionId: string, subscription: Subscription) {
+    if (subscription.release && subscription.bound === subscription.filters) return
     subscription.release?.()
+    subscription.bound = subscription.filters
     subscription.release = this.manager.messages.watch(subscription.teamId, subscription.filters, event =>
       this.push(connection, sessionId, subscription, event))
   }
@@ -142,10 +153,7 @@ export class MessageConnections {
     event: MessageFeedEvent,
   ) {
     if (this.subscriptions.get(connection)?.get(sessionId) !== subscription) return
-    if (event.kind === 'snapshot') {
-      if (subscription.list) this.sendSnapshot(connection, sessionId, subscription, event.page)
-      return
-    }
+    if (event.kind === 'snapshot') return
     // Unfiltered on purpose: a watcher on `state:queued` has to hear about
     // the claim that drops a row out of its list.
     if (subscription.list) {
@@ -168,6 +176,7 @@ export class MessageConnections {
     connection.send({
       type: 'team-messages-snapshot', sessionId, teamId: subscription.teamId,
       filters: subscription.filters, messages: page.messages, nextCursor: page.nextCursor,
+      directory: this.manager.directory.list(subscription.teamId),
     })
   }
 
@@ -175,6 +184,7 @@ export class MessageConnections {
     connection.send({
       type: 'team-thread', sessionId, teamId, threadId,
       entries: this.manager.messages.thread(teamId, threadId),
+      directory: this.manager.directory.list(teamId),
     })
   }
 
