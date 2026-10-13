@@ -53,6 +53,8 @@ afterAll(() => fs.rmSync(root, { recursive: true, force: true }))
 type SpawnMode = 'ok' | 'hold' | 'fail-once'
 let spawnMode: SpawnMode
 let spawnCalls: SpawnRequest[]
+/** Wall time of each spawn call, to compare retries against the backoff's end. */
+let spawnAt: number[]
 let spawnReleases: Array<(result: SpawnResult) => void> = []
 let records: Map<string, ChatSessionRecord>
 let catalog: GroupCatalog
@@ -109,6 +111,7 @@ beforeEach(async () => {
   deliveries = []
   spawnMode = 'ok'
   spawnCalls = []
+  spawnAt = []
   spawnReleases = []
   changeSnapshots = []
   reasonPublishes = []
@@ -131,6 +134,7 @@ beforeEach(async () => {
     watchReceipt: () => {},
     spawn: async (request): Promise<SpawnResult> => {
       spawnCalls.push(request)
+      spawnAt.push(Date.now())
       if (spawnMode === 'hold') return new Promise(resolve => { spawnReleases.push(resolve) })
       if (spawnMode === 'fail-once') {
         spawnMode = 'ok'
@@ -292,17 +296,24 @@ test('a failed spawn records its backoff before the requeue publishes and retrie
   const waiting = runtime.waitingFor(team.teamId)
   // After the failure pass the full diagnosis applies: the backoff carries
   // its retry time (the moment the retry runs), ranked among the constraints
-  // by the caps-first order (D1).
-  const backoff = [waiting[m.id]!.blocker, ...waiting[m.id]!.others].find(constraint => constraint.kind === 'spawn-backoff')
-  expect(backoff).toMatchObject({ kind: 'spawn-backoff', retryAt: expect.any(String) })
+  // by the caps-first order (D1). Captured before any asymmetric matcher:
+  // Bun's toMatchObject mutates the received object.
+  const backoffRetryAt = [waiting[m.id]!.blocker, ...waiting[m.id]!.others]
+    .find(constraint => constraint.kind === 'spawn-backoff')?.retryAt
+  expect(typeof backoffRetryAt).toBe('string')
   // The requeue's row-change snapshot already carried the backoff as its
   // reason (D3): the last captured change for this message is its requeue.
   const atRequeue = changeSnapshots.filter(snapshot => m.id in snapshot).at(-1)!
   expect(atRequeue[m.id]!.blocker.kind).toBe('spawn-backoff')
-  // Nothing else changes; the retry runs when the backoff ends.
-  const started = Date.now()
+  // Nothing else changes; the retry runs no earlier than the backoff's end —
+  // the retry time the reason shows is the moment the retry runs. Measured
+  // against the recorded retryAt, not wall time since an arbitrary point:
+  // part of the backoff elapses during the assertions above. A retry that
+  // ignored the backoff would spawn on the requeue-chained pass, far before
+  // retryAt, and fail this comparison.
+  const retryAt = Date.parse(backoffRetryAt!)
   expect(await until(() => spawnCalls.length === 2, 2_000)).toBe(true)
-  expect(Date.now() - started).toBeGreaterThanOrEqual(70)
+  expect(spawnAt[1]).toBeGreaterThanOrEqual(retryAt - 10)
   await settle()
   expect(deliveries.filter(delivery => delivery.messageId === m.id)).toHaveLength(1)
   confirmReceipts()
