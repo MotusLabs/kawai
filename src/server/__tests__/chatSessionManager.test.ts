@@ -3893,4 +3893,77 @@ describe('ChatSessionManager provider usage pull', () => {
     expect(usage).toHaveLength(1)
     expect(manager.getSnapshot(created.session.id)!.usage?.source).toBe('provider')
   })
+
+  /** A fetch the test resolves manually, to hold a pull in flight. */
+  function deferredFetch(): {
+    impl: typeof fetch
+    deferreds: Array<(response: Response) => void>
+  } {
+    const deferreds: Array<(response: Response) => void> = []
+    const impl = (async () =>
+      new Promise<Response>((resolve) => {
+        deferreds.push(resolve)
+      })) as unknown as typeof fetch
+    return { impl, deferreds }
+  }
+
+  async function createManualHarness(providerUsageFetch: typeof fetch) {
+    const handles: FakeHandle[] = []
+    const usage: Array<{ profileId: string; report: ChatUsageReport | null }> = []
+    const manager = await managedManager({
+      isDirectory: anyDirectory,
+      registry: new SessionRegistry(),
+      db,
+      onEvent: () => {},
+      onUsage: (profileId, report) => usage.push({ profileId, report }),
+      queryFactory: fakeQueryFactory(handles, () => Promise.resolve(SDK_PULL)),
+      getProviderEnv: () => ({
+        ANTHROPIC_BASE_URL: 'https://zai.test',
+        ANTHROPIC_AUTH_TOKEN: 'sk-glm-token',
+      }),
+      providerUsageFetch,
+      providerUsageRefreshMs: 25,
+    })
+    return { manager, usage }
+  }
+
+  test('an in-flight first pull publishes nothing after shutdown', async () => {
+    const { impl, deferreds } = deferredFetch()
+    const { manager, usage } = await createManualHarness(impl)
+    const created = manager.createSession({ projectPath: '/tmp/proj' })
+    if (!created.ok) throw new Error('create failed')
+    await manager.send(created.session.id, 'hello')
+    await flush()
+    expect(deferreds.length).toBe(1) // the spawn pull is in flight
+
+    manager.shutdown()
+    deferreds[0]!(jsonResponse(CAPTURE(2)))
+    await flush()
+    // The late answer publishes nothing and arms no refresh timer.
+    expect(usage).toEqual([])
+    await new Promise((resolve) => setTimeout(resolve, 75))
+    expect(deferreds.length).toBe(1)
+  })
+
+  test('an in-flight refresh publishes nothing after shutdown', async () => {
+    const { impl, deferreds } = deferredFetch()
+    const { manager, usage } = await createManualHarness(impl)
+    const created = manager.createSession({ projectPath: '/tmp/proj' })
+    if (!created.ok) throw new Error('create failed')
+    await manager.send(created.session.id, 'hello')
+    await flush()
+    deferreds[0]!(jsonResponse(CAPTURE(2)))
+    await flush()
+    expect(usage).toHaveLength(1)
+
+    // The next tick's refresh is in flight when the server shuts down.
+    await waitForCondition(() => deferreds.length >= 2)
+    manager.shutdown()
+    deferreds[1]!(jsonResponse(CAPTURE(99)))
+    await flush()
+    expect(usage).toHaveLength(1)
+    expect(manager.getSnapshot(created.session.id)!.usage?.windows[0]).toMatchObject({
+      percentUsed: 2,
+    })
+  })
 })

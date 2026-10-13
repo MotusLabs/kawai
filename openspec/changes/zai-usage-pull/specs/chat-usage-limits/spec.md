@@ -51,6 +51,10 @@ While at least one non-archived chat session of a provider-routed profile has a 
 - **WHEN** a refresh returns data older than what the profile already holds
 - **THEN** the held report is kept unchanged
 
+#### Scenario: Shutdown stops refreshes
+- **WHEN** the server shuts down while a pull or refresh is in flight
+- **THEN** nothing is published for it afterwards and no further quota requests are made
+
 ## MODIFIED Requirements
 
 ### Requirement: Usage is refreshed when no report has arrived

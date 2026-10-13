@@ -1210,6 +1210,9 @@ export class ChatSessionManager {
     // A restore still in flight stops at its next row (design D2).
     this.isShutDown = true
     this.teamMail.close()
+    // Provider usage refreshes die with the server: timers stop now, and the
+    // in-flight continuations check isShutDown before publishing.
+    this.stopProviderUsageRefresh()
     for (const driver of this.drivers.values()) {
       driver.shutdown()
     }
@@ -1708,6 +1711,8 @@ export class ChatSessionManager {
     // pull answers as before.
     if (!target) return true
     const pull = await this.fetchProviderUsage(target)
+    // Shutdown settles every callback: nothing publishes past it.
+    if (this.isShutDown) return false
     if (pull.ok) {
       this.providerUsageProfiles.add(profileId)
       this.usageLimits.record(profileId, pull.report)
@@ -1774,9 +1779,11 @@ export class ChatSessionManager {
     const target = this.providerUsageTarget(record)
     if (!target) return
     void this.fetchProviderUsage(target).then((pull) => {
-      // A failed refresh keeps the held report (store semantics); a lost
+      // Shutdown settles every callback (an in-flight refresh dies with it);
+      // a failed refresh keeps the held report (store semantics); a lost
       // routing just skips the tick.
-      if (pull.ok) this.usageLimits.record(profileId, pull.report)
+      if (this.isShutDown || !pull.ok) return
+      this.usageLimits.record(profileId, pull.report)
     })
   }
 
