@@ -232,7 +232,39 @@ test('reload after a CAS refusal adopts the stored draft the server returned, an
   // Saving now is based on the adopted draft, not the stale one.
   sent.length = 0
   act(() => { find(renderer, 'draft-save')[0]!.props.onClick() })
-  expect(sent.at(-1)).toMatchObject({ type: 'strategy-save-draft', expectedDraftHash: stored.contentHash })
+  expect(sent.at(-1)).toMatchObject({ type: 'strategy-save-draft', expectedDraftHash: stored.contentHash, expectedBaseRevision: stored.baseRevision })
+})
+
+test('a detail push after a CAS refusal supersedes its stored draft: the box and Reload follow the push', () => {
+  openView()
+  act(() => useStrategyStore.getState().applySnapshot({ type: 'strategy-snapshot', sessionId: 'dev', teamId: 'team', strategy: strategy() }))
+  act(() => useStrategyStore.getState().applyDetail({ type: 'strategy-detail', sessionId: 'dev', teamId: 'team', detail: detail() }))
+  const { renderer, refresh } = mount()
+  const purposeOf = () => find(renderer, 'strategy-draft-editor')[0]!.findAll(node => node.props['aria-label'] === 'Purpose')[0]!
+  act(() => { find(renderer, 'draft-save')[0]!.props.onClick() })
+  const refused = draft({ content: content({ purpose: 'Refusal snapshot C1' }), contentHash: hashOf('Refusal snapshot C1'), updatedAt: '2026-10-13T04:00:00.000Z' })
+  act(() => useStrategyStore.getState().applyResult({
+    type: 'strategy-result', sessionId: 'dev', requestId: (sent.at(-1) as { requestId: string }).requestId,
+    error: 'Draft human changed while you edited', conflict: refused,
+  }))
+  // Another writer saves through the server: its push carries C2.
+  const pushed = draft({ content: content({ purpose: 'Pushed later C2' }), contentHash: hashOf('Pushed later C2'), baseRevision: 3, updatedAt: '2026-10-13T05:00:00.000Z' })
+  act(() => useStrategyStore.getState().applyDetail({ type: 'strategy-detail', sessionId: 'dev', teamId: 'team', detail: detail({ drafts: [pushed] }) }))
+  refresh()
+  expect(textOf(find(renderer, 'draft-conflict')[0]!)).toContain('Pushed later C2')
+  const reload = find(renderer, 'strategy-draft-editor')[0]!.findAll(node => node.type === 'button' && textOf(node) === 'Reload stored draft')[0]!
+  act(() => { reload.props.onClick() })
+  refresh()
+  expect(purposeOf().props.value).toBe('Pushed later C2')
+  expect(useStrategyStore.getState().views.dev!.detail!.drafts.find(entry => entry.draftId === 'human')!.contentHash).toBe(pushed.contentHash)
+  // A push whose draft is gone (withdrawn elsewhere) drops the conflict with it.
+  act(() => { find(renderer, 'draft-save')[0]!.props.onClick() })
+  act(() => useStrategyStore.getState().applyResult({
+    type: 'strategy-result', sessionId: 'dev', requestId: (sent.at(-1) as { requestId: string }).requestId,
+    error: 'Draft human changed while you edited', conflict: refused,
+  }))
+  act(() => useStrategyStore.getState().applyDetail({ type: 'strategy-detail', sessionId: 'dev', teamId: 'team', detail: detail({ drafts: [] }) }))
+  expect(useStrategyStore.getState().views.dev!.conflict).toBeNull()
 })
 
 test('review separates known, assumed, and not decided; approve carries the exact revision and hash with scope and open questions', () => {

@@ -82,7 +82,15 @@ export const useStrategyStore = create<StrategyState>(set => ({
     detail: message.strategy ? state.views[message.sessionId]?.detail ?? null : null,
     reviewing: message.strategy ? state.views[message.sessionId]?.reviewing ?? null : null,
   })),
-  applyDetail: message => set(state => update(state, message.sessionId, { detail: message.detail })),
+  // A push supersedes the refusal's snapshot: the conflict follows the
+  // pushed stored draft (or goes with it), so the box always shows what
+  // Reload will adopt and Reload never reinstates an older copy.
+  applyDetail: message => set(state => {
+    const conflict = state.views[message.sessionId]?.conflict
+    if (!conflict) return update(state, message.sessionId, { detail: message.detail })
+    const stored = message.detail.drafts.find(draft => draft.draftId === conflict.draftId) ?? null
+    return update(state, message.sessionId, { detail: message.detail, conflict: stored })
+  }),
   applyResult: message => set(state => {
     const view = state.views[message.sessionId]
     if (!view?.open) return state
