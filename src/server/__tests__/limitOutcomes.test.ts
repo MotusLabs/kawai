@@ -300,6 +300,29 @@ describe('claim commit', () => {
       fs.rmSync(repo, { recursive: true, force: true })
     }
   })
+
+  test('a claim-commit write that throws is reported, never left unhandled', async () => {
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'kawai-claim-throw-'))
+    try {
+      const git = (...args: string[]) => spawnSync('git', args, { cwd: repo, encoding: 'utf8', env: cleanGitEnv() })
+      git('init', '-q')
+      git('-c', 'user.email=t@e', '-c', 'user.name=T', 'commit', '-q', '--allow-empty', '-m', 'init')
+      records.set('dev', record('dev', { projectPath: repo }))
+      const m = deliver()
+      // A store torn down before the git call resolves: the write throws, and
+      // must reach onError rather than an unhandled rejection (a `.then`
+      // rejection handler never sees a throw from its own fulfillment one).
+      ;(store as unknown as { setClaimCommit: () => void }).setClaimCommit = () => {
+        throw new RangeError('Cannot use a closed database')
+      }
+      outcomes.claimed(m, 'dev')
+      for (let i = 0; i < 50 && errors.length === 0; i++) await Bun.sleep(10)
+      expect(errors).toHaveLength(1)
+      expect(String(errors[0])).toContain('closed database')
+    } finally {
+      fs.rmSync(repo, { recursive: true, force: true })
+    }
+  })
 })
 
 describe('review regressions', () => {
