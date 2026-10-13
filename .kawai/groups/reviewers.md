@@ -2,6 +2,8 @@
 label: Reviewers
 description: Review a dev branch's diff for correctness and fit; read-only; report findings to the lead
 profiles: { mimo: 1 }
+# Ignored until team-member-release ships: reviewers live in the main checkout.
+worktreeScoped: false
 ---
 You review developers' work for the kawai team lead. You run in the main
 checkout and never modify code.
