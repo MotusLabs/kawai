@@ -50,7 +50,7 @@ import TeamTasksPanel from './TeamTasksPanel'
 import { closedTaskView, useTeamTaskStore } from '../../stores/teamTaskStore'
 import TeamMessagesPanel from './TeamMessagesPanel'
 import { closedMessageView, useTeamMessageStore } from '../../stores/teamMessageStore'
-import { closeOtherSideSlots } from './sideSlot'
+import { closeOtherSideSlots, toggleSideSlot } from './sideSlot'
 import { openParticipantChat } from './openParticipant'
 import { useSessionStore } from '../../stores/sessionStore'
 import ProductStrategyPanel from './ProductStrategyPanel'
@@ -105,11 +105,7 @@ export default function ChatView({ session, sendMessage, subscribe, connectionSt
     sendMessage({ type: 'chat-debug-open', sessionId: session.id })
     return () => sendMessage({ type: 'chat-debug-close', sessionId: session.id })
   }, [session.id, connected, connectionEpoch, debugOpen, sendMessage])
-  const toggleDebug = () => {
-    const store = useChatDebugStore.getState()
-    if (debugOpen) store.close(session.id)
-    else { closeOtherSideSlots('debug', session.id); store.beginOpen(session.id) }
-  }
+  const toggleDebug = () => toggleSideSlot('debug', session.id)
   const mailbox = useTeamMailboxStore(state => state.views[session.id]) ?? CLOSED_MAILBOX
   const teamGroups = useTeamGroups(mailbox.open, session.projectPath)
   useEffect(() => {
@@ -118,11 +114,7 @@ export default function ChatView({ session, sendMessage, subscribe, connectionSt
     sendMessage({ type: 'team-mailbox-open', sessionId: session.id })
     return () => sendMessage({ type: 'team-mailbox-close', sessionId: session.id })
   }, [session.id, connected, connectionEpoch, mailbox.open, sendMessage])
-  const toggleMailbox = () => {
-    const store = useTeamMailboxStore.getState()
-    if (mailbox.open) store.close(session.id)
-    else { closeOtherSideSlots('mailbox', session.id); store.open(session.id) }
-  }
+  const toggleMailbox = () => toggleSideSlot('mailbox', session.id)
   const tasks = useTeamTaskStore(state => state.views[session.id]) ?? CLOSED_TASKS
   useEffect(() => {
     if (!connected || !tasks.open) return
@@ -139,10 +131,7 @@ export default function ChatView({ session, sendMessage, subscribe, connectionSt
     closeOtherSideSlots('tasks', session.id)
     useTeamTaskStore.getState().open(session.id, taskId)
   }
-  const toggleTasks = () => {
-    if (tasks.open) useTeamTaskStore.getState().close(session.id)
-    else openTasks()
-  }
+  const toggleTasks = () => toggleSideSlot('tasks', session.id)
   // Messages (team-message-threads 5.4): the host-agnostic feed in the same
   // side slot. Its subscription is owned by the view itself, so this only
   // decides whether the panel is mounted.
@@ -152,11 +141,7 @@ export default function ChatView({ session, sendMessage, subscribe, connectionSt
   // team directory that names a killed one `Name (gone)`.
   const liveSessions = useSessionStore(state => state.sessions)
   const participantDirectory = messages.directory.length > 0 ? messages.directory : tasks.directory
-  const toggleMessages = () => {
-    const store = useTeamMessageStore.getState()
-    if (messages.open) store.close(session.id)
-    else { closeOtherSideSlots('messages', session.id); store.open(session.id) }
-  }
+  const toggleMessages = () => toggleSideSlot('messages', session.id)
   // A task's messages link into the thread in the Messages view (5.4): the
   // side slot flips to Messages and the thread opens.
   const openThread = (threadId: string) => {
@@ -172,11 +157,7 @@ export default function ChatView({ session, sendMessage, subscribe, connectionSt
     sendMessage({ type: 'strategy-open', sessionId: session.id })
     return () => sendMessage({ type: 'strategy-close', sessionId: session.id })
   }, [session.id, connected, connectionEpoch, strategy.open, sendMessage])
-  const toggleStrategy = () => {
-    const store = useStrategyStore.getState()
-    if (strategy.open) store.close(session.id)
-    else { closeOtherSideSlots('strategy', session.id); store.open(session.id) }
-  }
+  const toggleStrategy = () => toggleSideSlot('strategy', session.id)
   const handleArchive = () => { requestChatArchive(session, sendMessage) }
   // Approval policy (chat-auto-approve-tools design D6): rendered from the
   // broadcast Session so every client agrees; archived chats hide the control.

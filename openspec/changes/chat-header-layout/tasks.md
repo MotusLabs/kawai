@@ -2,8 +2,8 @@
 
 ## 1. One source for the open side panel
 
-- [ ] 1.1 In `src/client/components/chat/sideSlot.ts`, add `useOpenSideSlot(sessionId)` and `toggleSideSlot(which, sessionId)` over a `SideSlot → { open, close }` table (design D2), and update the header comment. Verify with unit tests: toggling each slot opens it and closes the others; toggling the open slot closes it; `useOpenSideSlot` returns `null` when nothing is open and the open slot after `openTasks(taskId)`-style opens.
-- [ ] 1.2 Replace the five hand-written toggles in `ChatView.tsx` with `toggleSideSlot`, keeping `openTasks(taskId)` and `openThread` as they are. Verify: `bun run test` passes with no change to the existing ChatView and teamMessagesHost tests.
+- [x] 1.1 In `src/client/components/chat/sideSlot.ts`, add `useOpenSideSlot(sessionId)` and `toggleSideSlot(which, sessionId)` over a `SideSlot → { open, close }` table (design D2), and update the header comment. Verify with unit tests: toggling each slot opens it and closes the others; toggling the open slot closes it; `useOpenSideSlot` returns `null` when nothing is open and the open slot after `openTasks(taskId)`-style opens.
+- [x] 1.2 Replace the five hand-written toggles in `ChatView.tsx` with `toggleSideSlot`, keeping `openTasks(taskId)` and `openThread` as they are. Verify: `bun run test` passes with no change to the existing ChatView and teamMessagesHost tests.
 
 ## 2. Extract the header
 
