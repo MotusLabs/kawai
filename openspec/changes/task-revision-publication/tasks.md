@@ -1,0 +1,41 @@
+# Tasks
+
+Prerequisite: `task-assignment` has landed (`team_task_assignments`, outstanding assignment, `claimed_by`, request-key pattern). Do not start section 3 before it.
+
+## 1. Data model
+
+- [ ] 1.1 Add the additive migration (design D1–D3, D6, Migration Plan): `team_task_drafts`, `team_task_notifications` (unique `(task_id, request_key, assignment_id)`), `team_task_acknowledgements` (PK `(task_id, session_id, revision)`), nullable `rationale`/`request_key`/`notify` on `team_task_revisions` with a partial unique `(task_id, request_key)`, and nullable `revision_notice` on `team_messages` (`messageSchema.ts` `migrateTable`); verify migration tests on a pre-existing database (old revisions read with null rationale, `notify` null) and reopen round-trips.
+- [ ] 1.2 Extend `src/shared/teamTasks.ts` additively: `TaskRevision.rationale`, `TaskDraft`, `TaskPublication`/`RevisionRecipient` (notice state, delivered revision, acknowledged revision, acknowledgement history), `TeamTaskDetail.draft` (human paths only) and `publications`; `ChatPeerMessage.revisionNotice` in `src/shared/chat.ts`; verify typecheck and that agent-facing `task_get` output types exclude the draft.
+
+## 2. Drafts and publication
+
+- [ ] 2.1 Add draft save/read/rebase/discard to `TaskStore` and `TaskService.saveDraft` (human caller only); a save republishes the human's task detail but changes neither `team_tasks.revision`/`updated_at` nor any mail; verify tests: draft saved at revision 1 leaves the task at revision 1, `buildTaskContext` and `task_get` carry no draft text, no `team_messages` row is written, draft survives reopen, rebase updates only the base revision.
+- [ ] 2.2 Replace `TaskStore.amend` with `publish` per design D2: key lookup and normalized-payload comparison, base-revision CAS (stale refusal naming the newer revision, draft kept), insert N+1 with rationale/key/notify, delete the source draft, all in one transaction; keep `TaskService.amend`'s creator-or-human check on the publish path; verify tests: one revision per key across replays, different payload refused naming the field, stale refusal, concurrent publishes from two bases produce exactly one success, rationale persisted, non-creator agent refused with nothing written.
+- [ ] 2.3 Add `TaskService.onRevisionPublished` (design D8), fired once after commit and never on replay, draft, notify, retry, or acknowledgement; verify tests count events across a publish, a replay, two retries, a draft save, and an acknowledgement (exactly one).
+
+## 3. Notices, notify, and retry
+
+- [ ] 3.1 Write notices inside the publication transaction (design D3): recipients from the outstanding assignment's `claimed_by`, none for unclaimed group assignments, direct normal-priority task mail tagged `task-revision` with `revision_notice` and the fixed body, sender = publisher (human or creating agent); verify tests: claimed holder gets one notice, unclaimed group assignment gets none and its later instruction carries the latest revision, plain publish writes none, a killed claimant's notice dead-letters while the revision stands, no group mail is ever written.
+- [ ] 3.2 Carry `revisionNotice` through `messageEnvelope`/`formatEnvelope`/`parseEnvelope` additively; verify envelope tests: round trip with a notice, older envelopes without it still parse, a notice queued at revision 2 and pushed after revision 3 names 2 with a revision-3 header.
+- [ ] 3.3 Implement `TaskService.notify(taskId, revision, requestKey)` (design D4): skip holders already delivered `task_revision >= revision` or with a pending notice; key replay returns the prior outcome; never writes a revision; verify tests: notify-later after plain publish, retry after a dead-lettered notice sends exactly one new notice, replay sends none, revision count unchanged throughout, uncertain notices left to the mailbox's Retry/Discard.
+
+## 4. Delivered and acknowledged
+
+- [ ] 4.1 Implement `publicationRecipients` (design D5): notice state from the newest notice's mail state, delivered revision as `MAX(task_revision)` of delivered task mail to the holder, acknowledged revision from the current claimant; verify tests: delivered-not-acknowledged, acknowledged later, delivered via a non-notice task message, failed reason shown.
+- [ ] 4.2 Add `task_acknowledge` to `TASK_TOOL_NAMES`/`taskSchemas` in `taskTools.ts` and `TaskService.acknowledge` (design D6): identity-bound, other-team and unpublished revisions refused, idempotent insert recording the outstanding assignment; verify tool tests: acknowledge, repeat is a no-op, revision > current refused (including while a draft exists), other team refused, no approval card under either policy.
+- [ ] 4.3 Show acknowledgement through the current claimant only: verify tests for reassignment (new claimant unacknowledged, old claimant's row in history), requeue to another member, and forwarded work after a provider limit.
+- [ ] 4.4 Update `teamPrompt.ts` (task note: when to call `task_acknowledge`; `task_amend` line names `rationale`/`notify`) and the `task_amend` tool description; extend `task_amend` with optional `rationale` and `notify` (design D7); verify prompt snapshot tests and a lead publish-and-notify test sending one notice from the lead.
+
+## 5. Connections and UI
+
+- [ ] 5.1 Add `team-task-draft`, `team-task-publish`, `team-task-notify` to `src/shared/types.ts`, `chatConnectionTypes.ts`, and `taskConnections.ts` `act` (human caller, results via `team-task-result`); remove `team-task-amend` from client, whitelist, and connection handling; republish task detail on notice mail changes and acknowledgements; verify connection tests for each action, cross-team refusal, stale and key-reuse refusals inline, and pushes on acknowledgement.
+- [ ] 5.2 Rework the direction section of `TeamTaskDetail.tsx`: draft editor (direction, acceptance, rationale) with **Save draft**, **Publish revision N**, **Publish and notify**; stale-base notice with **Rebase onto revision M**; rationale required to publish; revision history shows rationale; command keys minted per armed action and kept in `teamTaskStore.ts` across reconnects; verify component tests: draft does not change the shown revision, double-click publishes once, stale refusal keeps text, disabled while disconnected.
+- [ ] 5.3 Add publication detail per revision: recipients with notice state, delivered revision, acknowledged revision (never merged), acknowledgement history, **Notify** and **Retry notification**, and a link to the mailbox for Uncertain notices; verify component tests for each state combination and the retry flow.
+- [ ] 5.4 Show a revision-notice summary on peer rows in `ChatMessages.tsx` ("Revision N published" with rationale) beside the existing `peer-task` header; verify historical peer and thread rows keep their delivered revision after later publications.
+
+## 6. Verification and docs
+
+- [ ] 6.1 Verify E09 headlessly: assign a task, keep its developer busy, Save draft (assert no mail, no revision, no ack state), Publish and notify (revision increments once; earlier peer/thread rows keep revision 1; notice delivered after the turn carries the latest revision), delay acknowledgement (Delivered ≠ Acknowledged), then acknowledge; dead-letter a notice and retry (no new revision, one new notice); reassign and assert the replacement starts unacknowledged.
+- [ ] 6.2 Add the E09 browser walkthrough following `tests/e2e/chat-teams.spec.ts` fixture patterns (deterministic agents, isolated repository) and name it in `ci.yml`; verify DOM assertions on draft, publish, publication detail states, and retry, with screenshots.
+- [ ] 6.3 Document drafts, publication, notices, acknowledgement, and the revision-published contract in the How It Works section; mark E09 coverage in `docs/multi-agent-development-ux.md`; verify the documented labels match the components.
+- [ ] 6.4 Run `bun run lint && bun run typecheck && bun run test` and `openspec validate task-revision-publication --strict`; verify everything is green.
