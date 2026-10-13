@@ -53,6 +53,8 @@ import { closedMessageView, useTeamMessageStore } from '../../stores/teamMessage
 import { closeOtherSideSlots } from './sideSlot'
 import { openParticipantChat } from './openParticipant'
 import { useSessionStore } from '../../stores/sessionStore'
+import ProductStrategyPanel from './ProductStrategyPanel'
+import { closedStrategyView, useStrategyStore } from '../../stores/strategyStore'
 import ChatRequests from './ChatRequests'
 import ChatWorkersStrip from './ChatWorkersStrip'
 import NotificationStrip from './NotificationStrip'
@@ -66,6 +68,7 @@ const CLOSED_DEBUG = closedDebugView()
 const CLOSED_MAILBOX = closedMailbox()
 const CLOSED_TASKS = closedTaskView()
 const CLOSED_MESSAGES = closedMessageView()
+const CLOSED_STRATEGY = closedStrategyView()
 
 /** `/clear`, `/reset`, `/new` — optionally followed by the new chat's name. */
 const CLEAR_COMMAND = /^\/(clear|reset|new)(?:\s+(.*))?$/
@@ -161,6 +164,18 @@ export default function ChatView({ session, sendMessage, subscribe, connectionSt
     const store = useTeamMessageStore.getState()
     store.open(session.id)
     store.select(session.id, threadId)
+  }
+  // Product strategy (product-strategy 5.1): same side slot, team-scoped.
+  const strategy = useStrategyStore(state => state.views[session.id]) ?? CLOSED_STRATEGY
+  useEffect(() => {
+    if (!connected || !strategy.open) return
+    sendMessage({ type: 'strategy-open', sessionId: session.id })
+    return () => sendMessage({ type: 'strategy-close', sessionId: session.id })
+  }, [session.id, connected, connectionEpoch, strategy.open, sendMessage])
+  const toggleStrategy = () => {
+    const store = useStrategyStore.getState()
+    if (strategy.open) store.close(session.id)
+    else { closeOtherSideSlots('strategy', session.id); store.open(session.id) }
   }
   const handleArchive = () => { requestChatArchive(session, sendMessage) }
   // Approval policy (chat-auto-approve-tools design D6): rendered from the
@@ -365,11 +380,21 @@ export default function ChatView({ session, sendMessage, subscribe, connectionSt
         {session.parked && <p className="truncate text-chat-meta text-amber-600" data-testid="chat-paused">{parkedLabel(session.parked)}</p>}
         <p className="truncate text-chat-meta text-secondary">{session.projectPath}</p></div>
       <span className="text-chat-meta text-secondary" data-testid="chat-status">{connected ? (archived ? 'archived' : session.status) : connectionStatus}</span>
+      {transcript.model && (
+        <span
+          className="shrink-0 whitespace-nowrap text-chat-meta text-secondary"
+          data-testid="chat-model"
+          title={`Model reported by the agent: ${transcript.model}`}
+        >
+          {transcript.model}
+        </span>
+      )}
       <ChatContextMeter usage={transcript.contextUsage} />
       <button className={`btn text-chat-meta ${debugOpen ? 'btn-primary' : ''}`} aria-pressed={debugOpen} onClick={toggleDebug}>Debug</button>
       <button className={`btn text-chat-meta ${mailbox.open ? 'btn-primary' : ''}`} aria-pressed={mailbox.open} onClick={toggleMailbox}>Mailbox</button>
       <button className={`btn text-chat-meta ${tasks.open ? 'btn-primary' : ''}`} aria-pressed={tasks.open} onClick={toggleTasks}>Tasks</button>
       <button className={`btn text-chat-meta ${messages.open ? 'btn-primary' : ''}`} aria-pressed={messages.open} onClick={toggleMessages}>Messages</button>
+      <button className={`btn text-chat-meta ${strategy.open ? 'btn-primary' : ''}`} aria-pressed={strategy.open} onClick={toggleStrategy}>Strategy</button>
       {!archived && <button className={`btn text-chat-meta ${autoApprove ? 'btn-approval-on' : ''}`} aria-pressed={autoApprove}
         onClick={toggleApprovalPolicy} data-testid="chat-approval-policy">Auto-approve</button>}
       {!archived && <button className="btn text-chat-meta" onClick={handleArchive} data-testid="chat-archive-button">Archive</button>}
@@ -391,7 +416,7 @@ export default function ChatView({ session, sendMessage, subscribe, connectionSt
     />
     {error && <p role="alert" className="border-b border-border p-3 text-chat-body text-chat-danger">{error}</p>}
     <div className="flex min-h-0 flex-1">
-      <div className={`min-h-0 min-w-0 flex-1 flex-col ${debugOpen || mailbox.open || tasks.open || messages.open ? 'hidden md:flex' : 'flex'}`}>
+      <div className={`min-h-0 min-w-0 flex-1 flex-col ${debugOpen || mailbox.open || tasks.open || messages.open || strategy.open ? 'hidden md:flex' : 'flex'}`}>
         {/* The live-workers strip (design D8): live rows only, hidden in
             archived chats and when nothing runs (the strip hides itself). */}
         {!archived && <ChatWorkersStrip sessionId={session.id} />}
@@ -452,6 +477,7 @@ export default function ChatView({ session, sendMessage, subscribe, connectionSt
       {tasks.open && <TeamTasksPanel sessionId={session.id} view={tasks} sendMessage={sendMessage} connected={connected} onClose={toggleTasks} onOpenThread={openThread} />}
       {messages.open && <TeamMessagesPanel sessionId={session.id} projectPath={session.projectPath} sendMessage={sendMessage}
         connected={connected} connectionEpoch={connectionEpoch} onClose={toggleMessages} />}
+      {strategy.open && <ProductStrategyPanel sessionId={session.id} view={strategy} sendMessage={sendMessage} connected={connected} onClose={toggleStrategy} />}
       {debugOpen && <ChatDebugPanel key={session.id} sessionId={session.id} view={debug} sendMessage={sendMessage}
         connected={connected} onClose={toggleDebug} />}
     </div>

@@ -30,7 +30,7 @@ test('peer row is distinct and restored by reconnect snapshot', () => {
   const events: ChatEvent[] = [{ type: 'user_message', id: 'u1', sequence: 0, at: 'now', turnId: 't', text: 'Human' }, peer]
   useChatStore.getState().snapshot({ type: 'chat-snapshot', sessionId: 'dev', profileId: 'default', events,
     pendingRequests: [], status: 'waiting', throughSequence: 1, commands: { status: 'unavailable', commands: [] },
-    activity: null, contextUsage: null, usage: null, workers: [], notifications: [] })
+    activity: null, contextUsage: null, usage: null, workers: [], notifications: [], model: null })
   const renderer = TestRenderer.create(<ChatMessages events={useChatStore.getState().sessions.dev!.events} />)
   const row = renderer.root.findByProps({ 'data-chat-role': 'peer' })
   expect(row.props['data-chat-role']).toBe('peer')

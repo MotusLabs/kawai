@@ -39,6 +39,7 @@ import type { ChatWireLogs } from './ChatWireLogs'
 import { MailboxConnections } from '../team/mailboxConnections'
 import { TaskConnections } from '../team/taskConnections'
 import { MessageConnections } from '../team/messageConnections'
+import { StrategyConnections } from '../strategy/strategyConnections'
 import type { TeamMessage } from '../../shared/team'
 
 /** Frames per debug page reply. */
@@ -56,6 +57,8 @@ export class ChatConnections {
   private readonly activityBatches = new Map<ChatConnection, Map<string, ChatActivity | null>>()
   /** Latest context-usage reading per connection and session (design D5). */
   private readonly contextBatches = new Map<ChatConnection, Map<string, ChatContextUsage | null>>()
+  /** Latest reported model per connection and session (chat-session-model D3). */
+  private readonly modelBatches = new Map<ChatConnection, Map<string, string>>()
   /** Latest usage report per connection and profile, sent by the next flush. */
   private readonly usageBatches = new Map<ChatConnection, Map<string, ChatUsageReport | null>>()
   /** Latest worker roster per connection and session (workers design D2). */
@@ -73,6 +76,7 @@ export class ChatConnections {
   private readonly mailboxConnections: MailboxConnections
   private readonly taskConnections: TaskConnections
   private readonly messageConnections: MessageConnections
+  private readonly strategyConnections: StrategyConnections
 
   constructor(
     private readonly manager: ChatSessionManager,
@@ -82,11 +86,17 @@ export class ChatConnections {
     this.mailboxConnections = new MailboxConnections(manager)
     this.taskConnections = new TaskConnections(manager)
     this.messageConnections = new MessageConnections(manager)
+    this.strategyConnections = new StrategyConnections(manager)
   }
 
   /** A committed task change: re-send that team's task snapshots. */
   publishTasks(teamId: string): void {
     this.taskConnections.publish(teamId)
+  }
+
+  /** A committed strategy change: re-send that team's strategy snapshots. */
+  publishStrategies(teamId: string): void {
+    this.strategyConnections.publish(teamId)
   }
 
   disconnect(connection: ChatConnection): void {
@@ -95,10 +105,12 @@ export class ChatConnections {
     this.mailboxConnections.disconnect(connection)
     this.taskConnections.disconnect(connection)
     this.messageConnections.disconnect(connection)
+    this.strategyConnections.disconnect(connection)
     this.subscriptions.delete(connection)
     this.batches.delete(connection)
     this.activityBatches.delete(connection)
     this.contextBatches.delete(connection)
+    this.modelBatches.delete(connection)
     this.usageBatches.delete(connection)
     this.workerBatches.delete(connection)
     this.notificationBatches.delete(connection)
@@ -195,6 +207,22 @@ export class ChatConnections {
       const latest = this.contextBatches.get(connection) ?? new Map<string, ChatContextUsage | null>()
       latest.set(sessionId, usage)
       this.contextBatches.set(connection, latest)
+    }
+    this.scheduleFlush()
+  }
+
+  /**
+   * Queue the session's latest reported model (chat-session-model design D3):
+   * like context usage, only the latest value per connection and session
+   * survives until the flush. The manager sends only changes, and the value
+   * never clears, so each entry is a plain string.
+   */
+  publishModel(sessionId: string, model: string): void {
+    for (const [connection, sessions] of this.subscriptions) {
+      if (!sessions.has(sessionId)) continue
+      const latest = this.modelBatches.get(connection) ?? new Map<string, string>()
+      latest.set(sessionId, model)
+      this.modelBatches.set(connection, latest)
     }
     this.scheduleFlush()
   }
@@ -315,6 +343,15 @@ export class ChatConnections {
         }
       }
     }
+    const modelBatches = new Map(this.modelBatches)
+    this.modelBatches.clear()
+    for (const [connection, sessions] of modelBatches) {
+      for (const [sessionId, model] of sessions) {
+        if (this.subscriptions.get(connection)?.has(sessionId)) {
+          connection.send({ type: 'chat-model', sessionId, model })
+        }
+      }
+    }
     const usageBatches = new Map(this.usageBatches)
     this.usageBatches.clear()
     for (const [connection, profiles] of usageBatches) {
@@ -370,6 +407,7 @@ export class ChatConnections {
     this.batches.get(connection)?.delete(sessionId)
     this.activityBatches.get(connection)?.delete(sessionId)
     this.contextBatches.get(connection)?.delete(sessionId)
+    this.modelBatches.get(connection)?.delete(sessionId)
     this.workerBatches.get(connection)?.delete(sessionId)
     this.notificationBatches.get(connection)?.delete(sessionId)
   }
@@ -423,6 +461,7 @@ export class ChatConnections {
     if (message.type.startsWith('team-message') || message.type.startsWith('team-thread')) {
       return this.messageConnections.handle(connection, message as Extract<ClientMessage, { type: `team-message${string}` | `team-thread${string}` }>)
     }
+    if (message.type.startsWith('strategy-')) return this.strategyConnections.handle(connection, message as Extract<ClientMessage, { type: `strategy-${string}` }>)
     if (!message.type.startsWith('chat-') || !('sessionId' in message)) return
     const { sessionId } = message
     if (!this.manager.has(sessionId)) {
@@ -445,6 +484,7 @@ export class ChatConnections {
         this.batches.get(connection)?.delete(sessionId)
         this.activityBatches.get(connection)?.delete(sessionId)
         this.contextBatches.get(connection)?.delete(sessionId)
+        this.modelBatches.get(connection)?.delete(sessionId)
         this.workerBatches.get(connection)?.delete(sessionId)
         this.notificationBatches.get(connection)?.delete(sessionId)
         const sessions = this.subscriptions.get(connection) ?? new Set<string>()
@@ -541,5 +581,6 @@ export class ChatConnections {
 function opensSubscription(type: ClientMessage['type']): boolean {
   return type === 'chat-attach' || type === 'chat-debug-open' ||
     type === 'team-mailbox-open' || type === 'team-tasks-open' || type === 'team-task-open' ||
-    type === 'team-messages-open' || type === 'team-thread-open'
+    type === 'team-messages-open' || type === 'team-thread-open' ||
+    type === 'strategy-open'
 }

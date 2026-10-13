@@ -11,6 +11,7 @@ import type {
 } from './team'
 import type { RuleLoadReport, TeamRoutingState } from './routing'
 import type { TaskStatus, TeamTask, TeamTaskDetail, TeamTaskSummary } from './teamTasks'
+import type { ProductStrategy, StrategyDetail, StrategyDraft, StrategyRevision } from './productStrategy'
 import type {
   WorkspaceOperationResult,
   WorkspaceSnapshot,
@@ -307,6 +308,13 @@ export type ServerMessage =
        * `activity` — it also persists with the chat session.
        */
       contextUsage: ChatContextUsage | null
+      /**
+       * Model the agent last reported for the session (its init frame), or
+       * null before the first report — slow session state like
+       * `contextUsage`, persisted with the chat session, never a sequenced
+       * event.
+       */
+      model: string | null
       /** Latest plan-usage report for the session's profile, when one is held. */
       usage: ChatUsageReport | null
       /**
@@ -342,6 +350,11 @@ export type ServerMessage =
       sessionId: string
       usage: ChatContextUsage | null
     }
+  // Model the agent last reported for a chat session (its init frame): sent
+  // only when it changes — the value never clears, so the push carries a
+  // string. Coalesced like chat-context-usage; additive, never sequenced or
+  // replayed (the snapshot carries the current value instead).
+  | { type: 'chat-model'; sessionId: string; model: string }
   // Full worker roster of a chat session (workers design D2): a level signal,
   // not deltas — a missed bookend must not wedge a stale running worker. Sent
   // whenever the roster projection changes; additive and ephemeral like
@@ -404,6 +417,25 @@ export type ServerMessage =
       requestId: string
       message?: TeamMessage
       error?: string
+    }
+  // Product strategy (product-strategy 3.1/5.1): authoritative snapshots for
+  // a session's team — the summary (null = no record; the view offers
+  // capture) and, when a record exists, its full detail. Re-sent whole on
+  // every committed strategy change, so a reconnect needs no deltas.
+  | { type: 'strategy-snapshot'; sessionId: string; teamId: string; strategy: ProductStrategy | null }
+  | { type: 'strategy-detail'; sessionId: string; teamId: string; detail: StrategyDetail }
+  // Result of a human strategy action: the saved draft (its hash feeds the
+  // next save's CAS) or the submitted revision on success; `error` on
+  // refusal, with `conflict` carrying the stored draft when a CAS refusal
+  // leaves the caller's own text in place (S12).
+  | {
+      type: 'strategy-result'
+      sessionId: string
+      requestId: string
+      draft?: StrategyDraft
+      revision?: StrategyRevision
+      error?: string
+      conflict?: StrategyDraft | null
     }
   | { type: 'chat-workers'; sessionId: string; workers: ChatWorker[] }
   // A chat session's active notices (notification strip design D5): the full
@@ -569,6 +601,39 @@ export type ClientMessage =
       /** Message to answer; the reply joins its thread. */
       inReplyTo?: string
     }
+  // Product strategy (product-strategy 3.1/5.1): the view subscription
+  // scoped by the session's team, and the human actions. Approval and
+  // withdrawal arrive only here — there is no agent tool for them (D3).
+  | { type: 'strategy-open' | 'strategy-close'; sessionId: string }
+  | {
+      type: 'strategy-save-draft'
+      sessionId: string
+      requestId: string
+      /** Capture (no record yet, human only): the product slug and title. */
+      productId?: string
+      title?: string
+      draftId?: string
+      /** Template content object; normalized server-side. */
+      content: unknown
+      impactProposal?: string
+      expectedBaseRevision?: number | null
+      expectedDraftHash?: string | null
+    }
+  | { type: 'strategy-submit'; sessionId: string; requestId: string; draftId?: string }
+  | {
+      type: 'strategy-approve'
+      sessionId: string
+      requestId: string
+      revision: number
+      contentHash: string
+      /** Stable across retries: idempotency key (S17). */
+      commandId: string
+      /** CAS: the active approved revision the client saw (D4). */
+      expectedCurrentRevision: number | null
+      approvalScope?: string
+      openQuestions?: string
+    }
+  | { type: 'strategy-withdraw'; sessionId: string; requestId: string; revision?: number; draftId?: string; commandId: string }
   | { type: 'chat-debug-open'; sessionId: string }
   | { type: 'chat-debug-page'; sessionId: string; beforeSeq: number }
   | { type: 'chat-debug-close'; sessionId: string }

@@ -75,6 +75,8 @@ import { MessageFeed } from '../team/messageFeed'
 import { MessageQuery } from '../team/messageQuery'
 import { TeamMailbox } from '../team/TeamMailbox'
 import { createMailboxServer } from '../team/mailboxTools'
+import { StrategyService } from '../strategy/StrategyService'
+import { StrategyStore } from '../strategy/strategyStore'
 import type { TeamMessage } from '../../shared/team'
 import { MailDispatcher } from '../team/dispatcher'
 import { receiptMessageId } from '../team/receipt'
@@ -106,6 +108,8 @@ export interface ChatSessionManagerOptions {
   onRoutingRulesLoaded?: () => void
   /** Every committed team-task change (wired to the task view push in index.ts). */
   onTaskChange?: (teamId: string) => void
+  /** Every committed strategy change (wired to the strategy view push in bootstrap.ts). */
+  onStrategyChange?: (teamId: string) => void
   /** Conversation-event sink (wired to the WS broadcast in index.ts). */
   onEvent: (sessionId: string, event: ChatEvent) => void
   /** Command-state sink (wired to the chat-commands push in index.ts). */
@@ -124,6 +128,12 @@ export interface ChatSessionManagerOptions {
    * and the driver-flagged corrections.
    */
   onContextUsage?: (sessionId: string, usage: ChatContextUsage | null) => void
+  /**
+   * Model sink (chat-session-model design D5): called only when the driver
+   * reports a model different from the last one. Wired to the coalesced WS
+   * broadcast in index.ts; the value itself persists with the session row.
+   */
+  onModel?: (sessionId: string, model: string) => void
   /**
    * Plan-usage sink (usage bar design D4): called with the latest report
    * (or null) whenever a profile's held data changes. Wired to the WS
@@ -406,6 +416,9 @@ export class ChatSessionManager {
         this.contextReadings.get(sessionId) ??
         this.records.get(sessionId)?.contextUsage ??
         null,
+      // Stored with the row (design D4): applyPatch keeps the record current,
+      // so this is the last reported model, null before the first one.
+      model: this.records.get(sessionId)?.model ?? null,
       usage: this.usageLimits.get(this.profileIdOf(sessionId) ?? 'default'),
       // The spawned-worker roster (workers design D2); live entries hold the
       // session at working, settled ones carry their persisted outcomes.
@@ -719,6 +732,18 @@ export class ChatSessionManager {
     this.mailbox = this.teamMail.mailbox
     this.tasks = this.teamMail.tasks
     this.messages = new MessageFeed(this.mailbox.store, new MessageQuery(options.db.db))
+    // Product strategy (product-strategy): constructed here, beside the
+    // task service, against the same database. The strategy store's changes
+    // fan out to the strategy view pushes; the team comes from the record's
+    // team binding (design D5).
+    this.strategies = new StrategyService(new StrategyStore(options.db.db), {
+      getSession: id => this.records.get(id),
+      ...(options.profileCatalogHome ? { homeDir: options.profileCatalogHome } : {}),
+    })
+    this.strategies.store.subscribe(strategy => {
+      const teamId = strategy.repoBindings.find(binding => binding.kind === 'team')?.root
+      if (teamId) this.options.onStrategyChange?.(teamId)
+    })
     // A retitled task re-labels the headers of the sessions working on it.
     this.tasks.store.subscribe(task => {
       this.options.onTaskChange?.(task.teamId)
@@ -822,6 +847,8 @@ export class ChatSessionManager {
   readonly tasks: TaskService
   /** The Messages read model and its live feed (team-message-threads D1/4.3). */
   readonly messages: MessageFeed
+  /** Product strategy (product-strategy); the strategy tools and UI actions go through it. */
+  readonly strategies: StrategyService
   readonly dispatcher: MailDispatcher
   private readonly teamMail: SessionMailbox
 
@@ -1479,7 +1506,7 @@ export class ChatSessionManager {
       const queryFactory = await this.resolveQueryFactory()
       // The team must be known before the first spawn reads its prompt.
       await this.teams.track(record.sessionId, this.records.get(record.sessionId)?.projectPath ?? record.projectPath)
-      const teamMcpServer = await createMailboxServer(this.mailbox, record.sessionId, this.tasks)
+      const teamMcpServer = await createMailboxServer(this.mailbox, record.sessionId, this.tasks, this.strategies)
       const driver = new ChatSessionDriver({
         sessionId: record.sessionId,
         projectPath: record.projectPath,
@@ -1526,6 +1553,7 @@ export class ChatSessionManager {
           this.handleDriverWorkers(record.sessionId, workers),
         onContextUsage: (usage, opts) =>
           this.handleDriverContextUsage(record.sessionId, usage, opts),
+        onModel: (model) => this.handleDriverModel(record.sessionId, model),
         // Plan usage is recorded against the session's profile (design D3);
         // the store's change listener drives the onUsage broadcast.
         onRateLimit: (report) =>
@@ -1763,6 +1791,19 @@ export class ChatSessionManager {
     const usage = this.contextReadings.get(sessionId)
     if (!usage) return
     this.applyPatch(sessionId, { contextUsage: usage })
+  }
+
+  /**
+   * The driver reported a model different from the last one (chat-session-model
+   * design D5): record and persist it right away — model changes are rare (a
+   * /model switch), so there is no per-request churn to batch, and a crash
+   * before the next boundary must not lose the switch — then hand it to the
+   * broadcast sink. The driver already deduped, so this runs per change.
+   */
+  private handleDriverModel(sessionId: string, model: string): void {
+    if (!this.records.has(sessionId)) return
+    this.applyPatch(sessionId, { model })
+    this.options.onModel?.(sessionId, model)
   }
 
   /**

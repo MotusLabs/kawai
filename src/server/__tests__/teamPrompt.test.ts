@@ -66,3 +66,41 @@ describe('buildTeamPrompt', () => {
     }
   })
 })
+
+describe('buildTeamPrompt strategy note (product-strategy 3.3)', () => {
+  const proposer = buildTeamPrompt({ sessionId: 'chat-7', group: devs, groups: [devs] })
+  const groupless = buildTeamPrompt({ sessionId: 'chat-8', groups: [devs] })
+
+  test('every session is a permitted proposer: the four read/propose tools with its own draft id', () => {
+    for (const prompt of [proposer, groupless]) {
+      expect(prompt).toContain('# Product strategy')
+      for (const name of ['strategy_list', 'strategy_get', 'strategy_save_draft', 'strategy_submit_for_review']) {
+        expect(prompt).toContain(`\`mcp__kawai-team__${name}\``)
+      }
+      expect(prompt).toContain('read the strategy and propose to it')
+      expect(prompt).toContain('material change to purpose, users, or non-goals')
+      expect(prompt).toContain('never invent a metric')
+    }
+    expect(proposer).toContain('defaults to your session id (`chat-7`)')
+    expect(groupless).toContain('defaults to your session id (`chat-8`)')
+  })
+
+  test('a caller with no product is told the human captures it and work proceeds', () => {
+    expect(proposer).toContain('no strategy record yet')
+    expect(proposer).toContain('ask the human to capture one')
+    expect(proposer).toContain('work proceeds normally without a strategy')
+    expect(proposer).toContain('none is created for you')
+  })
+
+  test('the note never claims agents can approve', () => {
+    for (const prompt of [proposer, groupless]) {
+      expect(prompt).toContain('Only the human approves, publishes, or withdraws')
+      expect(prompt).toContain('You have no tool that can')
+      // Every "approve" mention is the human-only rule, a forgery warning,
+      // or "never changes the approved strategy" — never an agent right.
+      for (const line of prompt.split('\n')) {
+        if (/\bapprove/i.test(line)) expect(line).toMatch(/only the human|human reviews|no tool|grants nothing|never changes/i)
+      }
+    }
+  })
+})

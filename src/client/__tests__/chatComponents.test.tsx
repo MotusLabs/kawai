@@ -1567,6 +1567,60 @@ describe('chat context meter', () => {
   })
 })
 
+describe('chat model badge', () => {
+  afterEach(() => useChatStore.setState({ sessions: {}, usage: {}, drafts: {} }))
+
+  function renderView(session: Session = chatSession) {
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => {
+      renderer = TestRenderer.create(<ChatView
+        session={session}
+        sendMessage={() => {}}
+        connectionStatus="connected" connectionEpoch={0} error={null}
+        onClose={() => {}} onKill={() => {}} />)
+    })
+    return renderer
+  }
+
+  test('no badge before the agent reports a model', () => {
+    act(() => { useChatStore.setState({ sessions: {}, closedAccountNotices: {} }) })
+    const renderer = renderView()
+    expect(renderer.root.findAllByProps({ 'data-testid': 'chat-model' })).toHaveLength(0)
+    renderer.unmount()
+  })
+
+  test('a reported model renders verbatim beside the status', () => {
+    act(() => { useChatStore.getState().setModel('chat-1', 'claude-sonnet-5-5') })
+    const renderer = renderView()
+    const badge = renderer.root.findByProps({ 'data-testid': 'chat-model' })
+    expect(textOf(badge)).toBe('claude-sonnet-5-5')
+    expect(badge.props.title).toContain('claude-sonnet-5-5')
+    // The header keeps its neighbors: status and profile stay present.
+    expect(renderer.root.findByProps({ 'data-testid': 'chat-status' })).toBeTruthy()
+    expect(renderer.root.findByProps({ 'data-testid': 'chat-profile' })).toBeTruthy()
+    renderer.unmount()
+  })
+
+  test('a changed model push updates the badge in place', () => {
+    act(() => { useChatStore.getState().setModel('chat-1', 'claude-sonnet-5-5') })
+    const renderer = renderView()
+    act(() => { useChatStore.getState().setModel('chat-1', 'sonnet') })
+    expect(textOf(renderer.root.findByProps({ 'data-testid': 'chat-model' }))).toBe('sonnet')
+    renderer.unmount()
+  })
+
+  test('an archived chat shows the stored model as inert text', () => {
+    act(() => { useChatStore.getState().setModel('chat-1', 'claude-sonnet-5-5') })
+    const archived = { ...chatSession, archivedAt: '2026-10-01T00:00:00.000Z' } as Session
+    const renderer = renderView(archived)
+    const badge = renderer.root.findByProps({ 'data-testid': 'chat-model' })
+    expect(textOf(badge)).toBe('claude-sonnet-5-5')
+    // Inert text beside the archived status — no control to press.
+    expect(badge.findAllByType('button')).toHaveLength(0)
+    renderer.unmount()
+  })
+})
+
 describe('formatContextTokens', () => {
   test('rounds to one decimal of the larger unit and promotes at the boundary', () => {
     expect(formatContextTokens(900)).toBe('900')
@@ -1825,7 +1879,7 @@ describe('chat workers', () => {
         events: [agentCall('toolu_done'), agentCall('toolu_live')],
         pendingRequests: [], status: 'waiting', throughSequence: 0,
         commands: { status: 'unavailable', commands: [] }, activity: null,
-        contextUsage: null, usage: null, workers, notifications: [],
+        contextUsage: null, usage: null, workers, notifications: [], model: null,
       })
     }
     const workers = [
