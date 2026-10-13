@@ -82,7 +82,7 @@ Any team member SHALL submit review or QA findings with `task_submit_findings`, 
 - **THEN** acceptance requires a stated reason and the reason is journaled
 
 ### Requirement: Older-revision results are labeled Needs re-evaluation
-A result whose pinned task revision is older than the task's current revision SHALL be labeled Needs re-evaluation wherever results are shown. The label SHALL be derived at read time from the pinned revision; a direction change triggers it by bumping the revision, and nothing else does. The label SHALL NOT appear on results pinned to the current revision.
+A result whose pinned revision is older than the task's current revision SHALL be labeled Needs re-evaluation wherever results are shown. The label SHALL be derived at read time by comparing the pinned revision with the task's current revision number: a new task revision triggers it and nothing else does. The label SHALL NOT appear on results pinned to the current revision.
 
 #### Scenario: Amendment flags the result
 - **WHEN** the task's direction is amended after a result was submitted

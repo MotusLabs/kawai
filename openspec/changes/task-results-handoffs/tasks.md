@@ -4,7 +4,7 @@
 
 - [ ] 1.1 Add `team_task_results` and `team_task_findings` per design D1 through the additive PRAGMA-check migration pattern, and the nullable `handoff_kind`/`result_id`/`expected_response` columns on `team_task_assignments` (that table belongs to `task-assignment`, which has landed by now — extend, never rebuild it); verify migration tests cover a pre-existing database, plain assignments reading with null handoff fields, and reopen/restart round-trips.
 - [ ] 1.2 Implement the result/findings store beside `taskStore.ts`: insert-result (setting `supersedes_result_id` to the previous outstanding result inside the transaction, so only one is ever outstanding), insert-findings, mark-accepted, list-by-task newest-outstanding-first, and outstanding-result lookups; verify store tests cover first result, supersession chains preserving earlier rows, findings bound per result, acceptance marking one row, and persistence across reopen.
-- [ ] 1.3 Derive the needs-re-evaluation label at read time per design D6 (`result.task_revision < task.revision`) in the store's mappers, never stored; verify tests cover label after an amendment bump, no label at the current revision, and the label surviving further revisions.
+- [ ] 1.3 Derive the needs-re-evaluation label at read time per design D6: the revision-published contract's row comparison (`result.task_revision < task.revision`, `task-revision-publication` design D8) in the store's mappers — never stored, no `onRevisionPublished` subscription; verify tests cover the label after an amendment bump, no label at the current revision, the label surviving further revisions, and nothing but the revision number moving it.
 
 ## 2. Result submission
 
@@ -50,6 +50,6 @@
 ## Workflow follow-up
 
 - `task-assignment` and `team-member-release` must be merged before implementation starts; this change extends the former's table and dispatch and calls the latter's readiness, archive, and journal-entry paths without respecifying either.
-- `task-revision-publication` (parallel proposal) triggers the needs-re-evaluation label only through revision bumps — the derivation in 1.3 is the contract; if that change wants a labeling API instead, surface the conflict to the lead rather than widening this one.
+- The needs-re-evaluation label is bound to `task-revision-publication`'s revision-published contract (its design D8): durable `team_task_revisions` rows, `TaskService.onRevisionPublished` for in-process consumers, row comparison for missed events. This change uses only the row comparison and subscribes to no event, so it is correct before and after that change lands, with no ordering between them; their D8 leaves the label and its rules here and blocks on nothing in this change.
 - Keep `TeamTaskDetail.tsx` and any new server module under the file-size budget; extract rather than grow.
 - Archive after implementation, syncing `task-results` into main specs.
