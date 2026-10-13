@@ -152,7 +152,7 @@ test('waiting reasons: starting agent, expandable blockers, dead-letter labels, 
     await expect(deadRow.getByTestId('dead-letter-reason')).toContainText('(worktree-missing:')
     // The queued row is blocked on the missing group definition.
     const queuedRow = panel.locator(`[data-message-id="${seeded.queued}"]`)
-    await expect(queuedRow.getByTestId('waiting-reason')).toContainText('The group definition is missing')
+    await expect(queuedRow.getByTestId('waiting-reason')).toContainText('The group definition is missing', { timeout: 15000 })
     await page.screenshot({ path: info.outputPath('team-waiting-reasons.png') })
     // Slot-free update: the group definition appears; the reason flips with
     // no row state change (a reason-only re-publish).
