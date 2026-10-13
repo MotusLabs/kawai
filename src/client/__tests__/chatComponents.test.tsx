@@ -1825,7 +1825,7 @@ describe('chat workers', () => {
         events: [agentCall('toolu_done'), agentCall('toolu_live')],
         pendingRequests: [], status: 'waiting', throughSequence: 0,
         commands: { status: 'unavailable', commands: [] }, activity: null,
-        contextUsage: null, usage: null, workers, notifications: [],
+        contextUsage: null, usage: null, workers, backgroundTasks: [], notifications: [],
       })
     }
     const workers = [

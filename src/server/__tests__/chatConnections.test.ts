@@ -14,7 +14,7 @@ function harness(wireLogs?: ChatWireLogs) {
     type: 'chat-snapshot', sessionId: 'chat-1', profileId: 'default', events: [],
     pendingRequests: [{ kind: 'approval', requestId: 'approval-1', tool: 'Bash', input: {}, at: 'now' }],
     status: 'permission', throughSequence: 0,
-    commands: { status: 'unavailable', commands: [] }, activity: null, contextUsage: null, usage: null, workers: [], notifications: [],
+    commands: { status: 'unavailable', commands: [] }, activity: null, contextUsage: null, usage: null, workers: [], backgroundTasks: [], notifications: [],
   }
   let pending = true
   const manager = {

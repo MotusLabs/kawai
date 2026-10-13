@@ -239,6 +239,7 @@ describe('chat wire messages', () => {
           elapsedMs: 4_000,
         },
       ],
+      backgroundTasks: [],
       notifications: [
         {
           key: 'login-expiry',
@@ -272,6 +273,7 @@ describe('chat wire messages', () => {
       profileId: 'default',
       usage: null,
       workers: [],
+      backgroundTasks: [],
       notifications: [],
     }
 

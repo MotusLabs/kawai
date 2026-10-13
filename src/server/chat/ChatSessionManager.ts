@@ -407,6 +407,9 @@ export class ChatSessionManager {
       // The spawned-worker roster (workers design D2); live entries hold the
       // session at working, settled ones carry their persisted outcomes.
       workers: this.getWorkers(sessionId),
+      // The background-task roster (background tasks D2); wired up by the
+      // manager roster work — empty until the reducer publishes.
+      backgroundTasks: [],
       // The notification strip's merged list (design D5): account notice
       // first, then agent notices, sorted by priority and newest.
       notifications: this.notificationsOf(sessionId),
