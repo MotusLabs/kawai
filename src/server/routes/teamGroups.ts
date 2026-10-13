@@ -1,7 +1,7 @@
 // Team groups for the new-session picker (agent-teams): the groups of the
 // request's project team — `.kawai/groups/` in the repository's main working
 // tree layered over the user's home — with file failures riding along as
-// `errors` and fallback warnings (unknown profiles, bad onLimit) as
+// `errors` and fallback warnings (unknown profiles, bad onLimit or effort) as
 // `warnings`. Role prompts stay server-side; the picker needs labels only,
 // plus each group's allowed profiles with their caps and live member counts
 // so the dialog can warn before exceeding a cap (profile routing).

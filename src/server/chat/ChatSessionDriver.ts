@@ -137,6 +137,12 @@ export interface ChatSessionDriverOptions {
    * role + mailbox note, agent-teams D7). Omitted/empty = preset only.
    */
   getSystemPromptAppend?: () => string | undefined
+  /**
+   * Reasoning effort for the spawn, read at every spawn like the prompt
+   * (group-effort D2). Undefined = no `effort` option, so Claude Code's own
+   * settings decide.
+   */
+  getEffort?: () => Options['effort']
   teamMcpServer?: NonNullable<Options['mcpServers']>[string]
   /**
    * Recovered roster rows (workers design D6) seeding a fresh driver, so
@@ -604,6 +610,7 @@ export class ChatSessionDriver {
     const executablePath = profileExecutable ?? this.claudeExecutablePath
     const wire = this.options.wire
     const systemPromptAppend = this.options.getSystemPromptAppend?.()
+    const effort = this.options.getEffort?.()
     const options: Options = {
       cwd: this.sessionProjectPath,
       // Option parity with a terminal `claude` session in the project dir.
@@ -630,6 +637,9 @@ export class ChatSessionDriver {
         ? { pathToClaudeCodeExecutable: executablePath }
         : {}),
       ...(resume ? { resume } : {}),
+      // Before the profile's launch options, which carry no effort today, so
+      // any future override there is a deliberate choice (group-effort D3).
+      ...(effort ? { effort } : {}),
       ...launchOptions,
       ...(wire ? { spawnClaudeCodeProcess: createWireTappedSpawn(wire) } : {}),
     }
