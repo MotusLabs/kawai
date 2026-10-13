@@ -34,15 +34,25 @@ function SessionName({ sessionId, sessions, onOpen }: {
     : <span>{label.name}{label.gone ? ' (gone)' : ''}</span>
 }
 
-/** One constraint line: the label, with named sessions as links and the full worktree path available. */
+/** One constraint line: the label, with named sessions linked for every kind that implicates them. */
 function ConstraintLine({ constraint, sessions, onOpen }: {
   constraint: WaitingConstraint
   sessions: ReadonlyArray<LiveParticipant>
   onOpen?: (sessionId: string) => void
 }) {
-  return <li className="text-chat-meta">
-    {constraint.kind === 'worktree-occupied' && constraint.detail
-      ? <span title={constraint.detail}>
+  // Structured member breakdown (S1): each implicated member links.
+  if (constraint.members) {
+    return <li className="text-chat-meta">
+      {'No eligible member — '}
+      {constraint.members.map((member, index) => <span key={member.sessionId}>
+        {index > 0 ? '; ' : ''}<SessionName sessionId={member.sessionId} sessions={sessions} onOpen={onOpen} />{' '}
+        {member.cause}{member.detail ? ` (${basename(member.detail)})` : ''}
+      </span>)}
+    </li>
+  }
+  if (constraint.kind === 'worktree-occupied' && constraint.detail) {
+    return <li className="text-chat-meta">
+      <span title={constraint.detail}>
         Worktree {basename(constraint.detail)} is held by{' '}
         {(constraint.sessionIds ?? []).length > 0
           ? (constraint.sessionIds ?? []).map((sessionId, index) => <span key={sessionId}>
@@ -50,7 +60,18 @@ function ConstraintLine({ constraint, sessions, onOpen }: {
           </span>)
           : 'a pending spawn'}
       </span>
-      : constraintLabel(constraint, sessionId => sessionId)}
+    </li>
+  }
+  // Every other kind that names sessions links them too; kinds whose label
+  // already embeds the names above never reach here.
+  const embedsNames = constraint.kind === 'worktree-occupied' || constraint.kind === 'no-eligible-member'
+  return <li className="text-chat-meta">
+    {constraintLabel(constraint, sessionId => (embedsNames ? sessionId : resolveParticipant(sessionId, sessions, []).name))}
+    {!embedsNames && (constraint.sessionIds ?? []).length > 0 && <>{' '}
+      {(constraint.sessionIds ?? []).map((sessionId, index) => <span key={sessionId}>
+        {index > 0 ? ', ' : ''}<SessionName sessionId={sessionId} sessions={sessions} onOpen={onOpen} />
+      </span>)}
+    </>}
   </li>
 }
 

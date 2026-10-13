@@ -241,7 +241,7 @@ test('a group cap blocks with its count; freeing the slot updates the reason and
   expect(store().get(m.id)?.state).toBe('queued')
   const waiting = runtime.waitingFor(team.teamId)
   expect(waiting[m.id]!.blocker).toEqual({ kind: 'group-cap', counts: { live: 1, cap: 1 } })
-  expect(waiting[m.id]!.others[0]).toMatchObject({ kind: 'no-eligible-member', sessionIds: ['full'], detail: 'full working' })
+  expect(waiting[m.id]!.others[0]).toMatchObject({ kind: 'no-eligible-member', sessionIds: ['full'], members: [{ sessionId: 'full', cause: 'working' }] })
   // Archiving the member frees the slot: the reason updates and exactly one
   // agent (a spawn) receives the message.
   records.get('full')!.archivedAt = '2026-10-11'
@@ -274,7 +274,7 @@ test('the team spawn cap and an occupied worktree each block with the right fact
   expect(waiting[second.id]!.blocker).toEqual({
     kind: 'worktree-occupied', counts: { live: 1, cap: 1 }, sessionIds: ['writer'], detail: featX,
   })
-  expect(waiting[second.id]!.others[0]).toMatchObject({ kind: 'no-eligible-member', sessionIds: ['writer'], detail: 'writer working' })
+  expect(waiting[second.id]!.others[0]).toMatchObject({ kind: 'no-eligible-member', sessionIds: ['writer'], members: [{ sessionId: 'writer', cause: 'working' }] })
   // The first message waits on the same occupied worktree now that the team
   // cap was lifted.
   expect(waiting[m.id]!.blocker).toEqual({
@@ -339,7 +339,9 @@ test('reason-only changes re-publish; unchanged passes stay silent', async () =>
   await settle()
   expect(reasonPublishes.length).toBeGreaterThan(published)
   expect(runtime.waitingFor(team.teamId)[m.id]!.blocker).toMatchObject({
-    kind: 'no-eligible-member', sessionIds: ['a', 'b'], detail: 'a working; b unavailable',
+    kind: 'no-eligible-member', sessionIds: ['a', 'b'], members: [
+      { sessionId: 'a', cause: 'working' }, { sessionId: 'b', cause: 'unavailable' },
+    ],
   })
 })
 

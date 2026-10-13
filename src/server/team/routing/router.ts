@@ -194,12 +194,15 @@ const CAUSE_LABELS: Record<MemberExclusion['kind'], string> = {
 function noEligible(view: RouteView): WaitingConstraint[] {
   const exclusions = view.exclusions ?? []
   if (exclusions.length === 0) return [{ kind: 'no-eligible-member', detail: 'the group has no live members' }]
+  // Structured, not pre-joined: the client names and links each member (S1).
   return [{
     kind: 'no-eligible-member',
     sessionIds: exclusions.map(entry => entry.sessionId),
-    detail: exclusions.map(entry =>
-      `${entry.sessionId} ${CAUSE_LABELS[entry.kind]}${entry.kind === 'other-worktree' && entry.detail ? ` (${entry.detail})` : ''}`)
-      .join('; '),
+    members: exclusions.map(entry => ({
+      sessionId: entry.sessionId,
+      cause: CAUSE_LABELS[entry.kind],
+      ...(entry.kind === 'other-worktree' && entry.detail ? { detail: entry.detail } : {}),
+    })),
   }]
 }
 

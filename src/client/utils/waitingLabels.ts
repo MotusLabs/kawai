@@ -53,7 +53,9 @@ export function constraintLabel(constraint: WaitingConstraint, nameOf: (sessionI
     case 'startup-failed':
       return `Agent startup failed${constraint.detail ? `: ${constraint.detail}` : ''}`
     case 'no-eligible-member':
-      return `No eligible member${constraint.detail ? ` — ${constraint.detail}` : ''}`
+      return `No eligible member${constraint.members
+        ? ` — ${constraint.members.map(member => `${nameOf(member.sessionId)} ${member.cause}${member.detail ? ` (${member.detail})` : ''}`).join('; ')}`
+        : constraint.detail ? ` — ${constraint.detail}` : ''}`
     case 'spawn-backoff':
       return `A failed spawn retries${constraint.retryAt ? ` at ${new Date(constraint.retryAt).toLocaleTimeString()}` : ''}`
     case 'routing-hold':

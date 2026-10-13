@@ -159,7 +159,9 @@ describe('waiting-reason diagnosis', () => {
       kind: 'none',
       diagnosis: [
         { kind: 'group-cap', counts: { live: 2, cap: 2 } },
-        { kind: 'no-eligible-member', sessionIds: ['a', 'b'], detail: 'a working; b working' },
+        { kind: 'no-eligible-member', sessionIds: ['a', 'b'], members: [
+          { sessionId: 'a', cause: 'working' }, { sessionId: 'b', cause: 'working' },
+        ] },
       ],
     })
   })
@@ -172,7 +174,7 @@ describe('waiting-reason diagnosis', () => {
       kind: 'none',
       diagnosis: [
         { kind: 'profile-cap', counts: { live: 1, cap: 1 }, detail: 'glm' },
-        { kind: 'no-eligible-member', sessionIds: ['a'], detail: 'a awaiting an approval or answer' },
+        { kind: 'no-eligible-member', sessionIds: ['a'], members: [{ sessionId: 'a', cause: 'awaiting an approval or answer' }] },
       ],
     })
   })
@@ -228,7 +230,9 @@ describe('waiting-reason diagnosis', () => {
     ]
     expect(await diagnose()).toMatchObject({
       kind: 'none',
-      diagnosis: [{ kind: 'no-eligible-member', sessionIds: ['busy', 'card'], detail: 'busy working; card awaiting an approval or answer' }],
+      diagnosis: [{ kind: 'no-eligible-member', sessionIds: ['busy', 'card'], members: [
+        { sessionId: 'busy', cause: 'working' }, { sessionId: 'card', cause: 'awaiting an approval or answer' },
+      ] }],
     })
     exclusions = [{ sessionId: 'sick', kind: 'startup-failed' as const, detail: 'lost auth' }]
     members = [{ sessionId: 'sick', profileId: 'glm', cwd: '/wt' }]
@@ -236,7 +240,7 @@ describe('waiting-reason diagnosis', () => {
       kind: 'none',
       diagnosis: [
         { kind: 'startup-failed', detail: 'lost auth' },
-        { kind: 'no-eligible-member', sessionIds: ['sick'], detail: 'sick startup failed' },
+        { kind: 'no-eligible-member', sessionIds: ['sick'], members: [{ sessionId: 'sick', cause: 'startup failed' }] },
       ],
     })
   })

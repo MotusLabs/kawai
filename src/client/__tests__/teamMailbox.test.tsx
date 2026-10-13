@@ -158,6 +158,28 @@ test('a waiting row shows its blocker and expands to the other constraints with 
   renderer.unmount()
 })
 
+test('a no-eligible-member breakdown links every named member', () => {
+  const opened: string[] = []
+  const waiting = { blocked: reason({ kind: 'no-eligible-member', sessionIds: ['writer', 'other'], members: [
+    { sessionId: 'writer', cause: 'working' },
+    { sessionId: 'other', cause: 'in another worktree', detail: '/repo/feat-y' },
+  ] }) }
+  let renderer!: TestRenderer.ReactTestRenderer
+  act(() => { renderer = TestRenderer.create(<TeamMailboxPanel sessionId="lead" view={{ open: true, loading: false, messages: [mail('blocked', 'queued')], waiting }}
+    connected sendMessage={() => {}} onClose={() => {}} sessions={[...sessions, { id: 'other', name: 'Other Dev', groupId: 'devs' }]} onOpenSession={id => opened.push(id)} />) })
+  const article = renderer.root.findByProps({ 'data-message-id': 'blocked' })
+  const links = article.findAllByProps({ 'data-testid': 'waiting-session' })
+  expect(links.map(link => link.props.children)).toEqual(['Writer One', 'Other Dev'])
+  act(() => { for (const link of links) link.props.onClick() })
+  expect(opened).toEqual(['writer', 'other'])
+  // The per-member causes render beside their links, with the worktree short.
+  const text = allText(article.findByProps({ 'data-testid': 'waiting-reason' }))
+  expect(text).toContain('No eligible member —')
+  expect(text).toContain('Writer One working')
+  expect(text).toContain('Other Dev in another worktree (feat-y)')
+  renderer.unmount()
+})
+
 test('a dead letter reads as a sentence with the code still visible', () => {
   const dead = { ...mail('gone', 'dead'), reason: 'worktree-missing: /repo/gone' }
   let renderer!: TestRenderer.ReactTestRenderer

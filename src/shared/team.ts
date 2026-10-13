@@ -239,8 +239,10 @@ export interface WaitingConstraint {
   sessionIds?: string[]
   /** When the constraint clears on its own (cooldown end, retry time); ISO. */
   retryAt?: string
-  /** Free-form facts: a worktree path, a profile id, an error text, a rule reason, a member breakdown. */
+  /** Free-form facts: a worktree path, a profile id, an error text, a rule reason. */
   detail?: string
+  /** Per-member breakdown for `no-eligible-member`: each implicated member's cause (S1). */
+  members?: Array<{ sessionId: string; cause: string; detail?: string }>
   /** The spawn reservation behind `starting-agent` (D3): derived from `team_spawns`. */
   reservation?: { group: string; profile: string; worktree: string; startedAt: string }
 }
