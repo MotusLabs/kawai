@@ -67,6 +67,8 @@ export class SessionMailbox {
     spawn?: (request: SpawnRequest) => Promise<SpawnResult>
     /** Spawn-failure backoff (D5); tests shorten it to watch a retry run. */
     spawnRetryAfterMs?: number
+    /** Clock for the waiting-reason derivation; tests inject their own. */
+    now?: () => number
     /** User-level team caps; tests inject their own home. */
     caps?: TeamCaps
     transcriptFor: (id: string) => string | null
@@ -238,7 +240,7 @@ export class SessionMailbox {
     const out: Record<string, WaitingReason> = {}
     const ledger = this.reasons.forTeam(teamId)
     const pending = new Map(this.staffing.pendingFor(teamId).map(row => [row.messageId, row]))
-    const now = Date.now()
+    const now = this.options.now?.() ?? Date.now()
     for (const row of this.mailbox.store.listForTeam(teamId)) {
       if (row.state === 'spawning') {
         out[row.id] = this.startingAgentReason(teamId, row, pending.get(row.id) ?? null)
