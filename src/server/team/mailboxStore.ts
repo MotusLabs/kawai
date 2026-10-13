@@ -402,6 +402,23 @@ export class MailboxStore {
       .map(row => row.team_id)
   }
 
+  /**
+   * Direct mail on the waiting surface (team-waiting-reasons D2): queued and
+   * due now, or held for the recipient's pending approval or answer. The
+   * dispatcher's pass-end reason computation walks exactly these rows.
+   */
+  waitingDirectMail(now = nowIso()): TeamMessage[] {
+    return this.select(
+      `to_kind = 'session' AND (state = 'awaiting-request' OR (state = 'queued' AND (deliver_at IS NULL OR deliver_at <= $now)))`,
+      { $now: now }
+    )
+  }
+
+  /** Every row on the waiting surface, every team (queued, awaiting-request, spawning). */
+  waitingRows(): TeamMessage[] {
+    return this.select(`state IN ('queued', 'awaiting-request', 'spawning')`, {})
+  }
+
   /** Earliest future due time among scheduled rows; null when none. */
   nextDueAt(now = nowIso()): string | null {
     const row = this.statements.nextDueAt.get({ $now: now }) as { due: string | null }

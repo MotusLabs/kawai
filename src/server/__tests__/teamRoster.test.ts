@@ -86,8 +86,8 @@ test('archived sessions and other teams are excluded', () => {
 
 test('pending reservations list with their group and profile and count as writers', () => {
   const roster = rosterOf([], [
-    { teamId: team.teamId, groupId: 'devs', worktree: featX, profileId: 'glm' },
-    { teamId: 'other-team', groupId: 'devs', worktree: repo, profileId: 'glm' },
+    { teamId: team.teamId, groupId: 'devs', worktree: featX, profileId: 'glm', messageId: 'm1', createdAt: 'now' },
+    { teamId: 'other-team', groupId: 'devs', worktree: repo, profileId: 'glm', messageId: 'm2', createdAt: 'now' },
   ])
   expect(roster).toEqual([{ worktree: featX, sessions: [], pendingSpawns: [{ group: 'devs', profile: 'glm' }] }])
   expect(worktreeWriters(roster[0])).toEqual({ spawnedIds: [], pending: 1 })

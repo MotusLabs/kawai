@@ -18,6 +18,8 @@ export interface PendingSpawnRow {
   groupId: string
   worktree: string
   profileId: string
+  messageId: string
+  createdAt: string
 }
 
 export interface TeamRosterInput {

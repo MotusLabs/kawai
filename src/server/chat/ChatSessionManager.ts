@@ -77,7 +77,7 @@ import { TeamMailbox } from '../team/TeamMailbox'
 import { createMailboxServer } from '../team/mailboxTools'
 import { StrategyService } from '../strategy/StrategyService'
 import { StrategyStore } from '../strategy/strategyStore'
-import type { TeamMessage, TeamWorktreeOccupancy } from '../../shared/team'
+import type { TeamMessage, TeamWorktreeOccupancy, WaitingReason } from '../../shared/team'
 import { MailDispatcher } from '../team/dispatcher'
 import { receiptMessageId } from '../team/receipt'
 import type { LimitEventStore } from '../team/routing/limitEvents'
@@ -104,6 +104,8 @@ export interface ChatSessionManagerOptions {
   registry: SessionRegistry
   db: SessionDatabase
   onMailboxChange?: (teamId: string, message?: TeamMessage) => void
+  /** A team's waiting reasons structurally changed: re-publish its mailbox (team-waiting-reasons). */
+  onWaitingReasonsChange?: (teamId: string) => void
   /** Routing rules (re)loaded: every mailbox view refreshes its rule status. */
   onRoutingRulesLoaded?: () => void
   /** Every committed team-task change (wired to the task view push in index.ts). */
@@ -707,6 +709,8 @@ export class ChatSessionManager {
       teams: this.teams, records: () => this.records.values(), getRecord: id => this.records.get(id),
       getDriver: id => this.drivers.get(id), homeDir: options.profileCatalogHome,
       available: record => record.archivedAt == null && !this.startBlocker(record) && (options.isDirectory ?? isExistingDirectory)(record.projectPath),
+      // The same refusal text `available` rejects on, read-only (team-waiting-reasons D2).
+      startBlocker: record => this.startBlockerFor(record),
       prepare: async id => { this.captureHistory(id); const driver = await this.ensureDriver(id); if (!driver) throw new Error('Recipient disappeared'); driver.start() },
       restore: id => { const result = this.restore(id); if (!result.ok) throw new Error(result.error) },
       watchReceipt: id => this.watchSessionTitle(id),
@@ -725,6 +729,7 @@ export class ChatSessionManager {
       // (async-transcript-parsing design D4).
       transcriptFor: id => { const sdkId = this.records.get(id)?.sdkSessionId; return sdkId ? findTranscriptPath(sdkId) : null },
       onChange: options.onMailboxChange,
+      onReasonsChange: options.onWaitingReasonsChange,
       usageOf: profileId => this.usageLimits.get(profileId),
       onRulesLoaded: () => options.onRoutingRulesLoaded?.(),
       onError: error => logger.warn('team_mailbox_dispatch_failed', { error: String(error) }),
@@ -805,6 +810,20 @@ export class ChatSessionManager {
   /** The team's live sessions per worktree plus pending spawns (mailbox view). */
   teamRoster(teamId: string): TeamWorktreeOccupancy[] {
     return this.teamMail.roster(teamId)
+  }
+
+  /** The team's per-message waiting reasons (mailbox view, team-waiting-reasons D3). */
+  waitingFor(teamId: string): Record<string, WaitingReason> {
+    return this.teamMail.waitingFor(teamId)
+  }
+
+  /**
+   * The start guard's refusal text, read-only (team-waiting-reasons D2): the
+   * unavailable-recipient reason carries it; `available` keeps calling the
+   * guard itself, unchanged.
+   */
+  startBlockerFor(record: ChatSessionRecord): string | null {
+    return this.startBlocker(record)
   }
 
   /** The human hands parked work to a group or session of its team. */

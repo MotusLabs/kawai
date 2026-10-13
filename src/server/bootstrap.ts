@@ -141,6 +141,7 @@ export function startServer(): void {
     db,
     onEvent: (sessionId, event) => chatConnections.publish(sessionId, event),
     onMailboxChange: (teamId, message) => chatConnections.publishMailbox(teamId, message),
+    onWaitingReasonsChange: teamId => chatConnections.publishMailbox(teamId),
     onRoutingRulesLoaded: () => chatConnections.publishRoutingRules(),
     onTaskChange: teamId => chatConnections.publishTasks(teamId),
     onStrategyChange: teamId => chatConnections.publishStrategies(teamId),

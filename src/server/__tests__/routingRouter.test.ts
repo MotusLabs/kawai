@@ -1,7 +1,8 @@
-// ProfileRouter: rule decisions, fallbacks, holds, cooldown, and the log —
-// with stub staffing, rules, and limits.
+// ProfileRouter: rule decisions, fallbacks, holds, cooldown, the log, and
+// the waiting-reason diagnosis of `none`/`hold` — with stub staffing, rules,
+// and limits.
 import { beforeEach, describe, expect, test } from 'bun:test'
-import type { EligibleMember } from '../team/dispatcher'
+import type { EligibleMember, MemberExclusion } from '../team/dispatcher'
 import { parseGroupFile, type GroupDefinition } from '../team/groupFile'
 import type { TeamMessage } from '../team/mailboxStore'
 import { DECISION_LOG_SIZE, ProfileRouter, type GroupMemberRecord } from '../team/routing/router'
@@ -35,6 +36,9 @@ let ruleCalls: RouteContext[]
 let events: Record<string, LimitEvent[]>
 let spawnAllowed: boolean
 let spawns: string[]
+/** Staffing facts the stub reports (team-waiting-reasons diagnosis inputs). */
+let facts: { teamSpawned: number; teamCap: number; worktreeOccupants: string[]; worktreePending: number; backoffRetryAt: number | null }
+let exclusions: MemberExclusion[]
 
 function makeRouter() {
   return new ProfileRouter({
@@ -42,7 +46,7 @@ function makeRouter() {
     members: () => members,
     targetWorktree: () => '/wt',
     staffing: {
-      spawnContext: async () => ({ worktree: '/wt', allowed: spawnAllowed, pendingProfiles: [] }),
+      spawnContext: async () => ({ worktree: '/wt', allowed: spawnAllowed, pendingProfiles: [], facts }),
       spawnFor: async (m, _wt, _g, profileId) => {
         spawns.push(profileId)
         return { message: m, sessionId: `spawned-${profileId}` }
@@ -75,6 +79,8 @@ beforeEach(() => {
   events = {}
   spawnAllowed = false
   spawns = []
+  facts = { teamSpawned: 0, teamCap: 5, worktreeOccupants: [], worktreePending: 0, backoffRetryAt: null }
+  exclusions = []
 })
 
 describe('built-in routing', () => {
@@ -99,13 +105,13 @@ describe('built-in routing', () => {
     expect(await makeRouter().route(message({ excludedProfile: 'glm' }), { eligible: [eligible('a', 50), eligible('b', 5)], attempt: 0 }))
       .toEqual({ kind: 'member', sessionId: 'b' })
     expect(await makeRouter().route(message({ excludedProfile: 'glm' }), { eligible: [eligible('a', 50)], attempt: 0 }))
-      .toEqual({ kind: 'none' })
+      .toMatchObject({ kind: 'none' })
   })
 
   test('a cooling-only candidate set holds until the cooldown ends', async () => {
     events.glm = [finalEvent('glm', new Date(T0 + 40 * 60_000).toISOString())]
     expect(await makeRouter().route(message(), { eligible: [eligible('a')], attempt: 0 }))
-      .toEqual({ kind: 'hold', retryAt: T0 + 40 * 60_000 })
+      .toMatchObject({ kind: 'hold', retryAt: T0 + 40 * 60_000 })
   })
 
   test('a spawn slot is used when no member is eligible', async () => {
@@ -118,18 +124,173 @@ describe('built-in routing', () => {
 
   test('a full group (max reached) offers no spawn slot', async () => {
     spawnAllowed = true
-    expect(await makeRouter().route(message(), { eligible: [], attempt: 0 })).toEqual({ kind: 'none' })
+    expect(await makeRouter().route(message(), { eligible: [], attempt: 0 })).toMatchObject({ kind: 'none' })
     expect(spawns).toEqual([])
   })
 
   test('nothing eligible and no spawn: none', async () => {
-    expect(await makeRouter().route(message(), { eligible: [], attempt: 0 })).toEqual({ kind: 'none' })
+    expect(await makeRouter().route(message(), { eligible: [], attempt: 0 })).toMatchObject({ kind: 'none' })
   })
 
   test('a missing group falls back to the longest-idle eligible member', async () => {
     def = undefined
     expect(await makeRouter().route(message(), { eligible: [eligible('a')], attempt: 0 })).toEqual({ kind: 'member', sessionId: 'a' })
-    expect(await makeRouter().route(message(), { eligible: [], attempt: 0 })).toEqual({ kind: 'none' })
+    // With no member to take it, the missing definition is the blocker (4.2).
+    exclusions = [{ sessionId: 'a', kind: 'busy' }]
+    expect(await makeRouter().route(message(), { eligible: [], attempt: 0, exclusions })).toMatchObject({
+      kind: 'none',
+      diagnosis: [{ kind: 'group-missing' }, { kind: 'no-eligible-member' }],
+    })
+  })
+})
+
+describe('waiting-reason diagnosis', () => {
+  /** Route to `none` with the current members, facts, and exclusions. */
+  const diagnose = async () => makeRouter().route(message(), { eligible: [], attempt: 0, exclusions })
+
+  test('a full group reports the cap from the same tally the rule saw', async () => {
+    def = group('profiles: [claude, glm]\nmax: 2')
+    members = [
+      { sessionId: 'a', profileId: 'glm', cwd: '/wt' },
+      { sessionId: 'b', profileId: 'claude', cwd: '/wt' },
+    ]
+    exclusions = [{ sessionId: 'a', kind: 'busy' }, { sessionId: 'b', kind: 'busy' }]
+    expect(await diagnose()).toMatchObject({
+      kind: 'none',
+      diagnosis: [
+        { kind: 'group-cap', counts: { live: 2, cap: 2 } },
+        { kind: 'no-eligible-member', sessionIds: ['a', 'b'], detail: 'a working; b working' },
+      ],
+    })
+  })
+
+  test('a reached profile cap reports its profile and count', async () => {
+    def = group('profiles: { glm: 1, claude: 1 }\nmax: 5')
+    members = [{ sessionId: 'a', profileId: 'glm', cwd: '/wt' }]
+    exclusions = [{ sessionId: 'a', kind: 'pending-card' }]
+    expect(await diagnose()).toMatchObject({
+      kind: 'none',
+      diagnosis: [
+        { kind: 'profile-cap', counts: { live: 1, cap: 1 }, detail: 'glm' },
+        { kind: 'no-eligible-member', sessionIds: ['a'], detail: 'a awaiting an approval or answer' },
+      ],
+    })
+  })
+
+  test('the team spawn cap and an occupied worktree report counts and occupant names', async () => {
+    members = []
+    facts = { teamSpawned: 5, teamCap: 5, worktreeOccupants: ['writer-1'], worktreePending: 0, backoffRetryAt: null }
+    expect(await diagnose()).toMatchObject({
+      kind: 'none',
+      diagnosis: [
+        { kind: 'team-spawn-cap', counts: { live: 5, cap: 5 } },
+        { kind: 'worktree-occupied', counts: { live: 1, cap: 1 }, sessionIds: ['writer-1'], detail: '/wt' },
+        { kind: 'no-eligible-member', detail: 'the group has no live members' },
+      ],
+    })
+  })
+
+  test('a pending reservation holds the worktree with no session names', async () => {
+    members = []
+    facts = { teamSpawned: 1, teamCap: 5, worktreeOccupants: [], worktreePending: 1, backoffRetryAt: null }
+    const result = await diagnose()
+    expect(result).toMatchObject({
+      kind: 'none',
+      diagnosis: [
+        { kind: 'worktree-occupied', counts: { live: 1, cap: 1 }, detail: '/wt' },
+        { kind: 'no-eligible-member', detail: 'the group has no live members' },
+      ],
+    })
+    expect((result as { diagnosis: Array<{ sessionIds?: string[] }> }).diagnosis[0]!.sessionIds).toBeUndefined()
+  })
+
+  test('a spawn backoff reports its retry time', async () => {
+    members = []
+    facts = { teamSpawned: 0, teamCap: 5, worktreeOccupants: [], worktreePending: 0, backoffRetryAt: T0 + 30_000 }
+    expect(await diagnose()).toMatchObject({
+      kind: 'none',
+      diagnosis: [
+        { kind: 'no-eligible-member', detail: 'the group has no live members' },
+        { kind: 'spawn-backoff', retryAt: new Date(T0 + 30_000).toISOString() },
+      ],
+    })
+  })
+
+  test('the member breakdown names each member cause; a start failure is its own constraint with its error', async () => {
+    def = group('profiles: [claude, glm]\nmax: 5')
+    members = [
+      { sessionId: 'busy', profileId: 'glm', cwd: '/wt' },
+      { sessionId: 'card', profileId: 'claude', cwd: '/wt' },
+    ]
+    exclusions = [
+      { sessionId: 'busy', kind: 'busy' as const },
+      { sessionId: 'card', kind: 'pending-card' as const },
+    ]
+    expect(await diagnose()).toMatchObject({
+      kind: 'none',
+      diagnosis: [{ kind: 'no-eligible-member', sessionIds: ['busy', 'card'], detail: 'busy working; card awaiting an approval or answer' }],
+    })
+    exclusions = [{ sessionId: 'sick', kind: 'startup-failed' as const, detail: 'lost auth' }]
+    members = [{ sessionId: 'sick', profileId: 'glm', cwd: '/wt' }]
+    expect(await diagnose()).toMatchObject({
+      kind: 'none',
+      diagnosis: [
+        { kind: 'startup-failed', detail: 'lost auth' },
+        { kind: 'no-eligible-member', sessionIds: ['sick'], detail: 'sick startup failed' },
+      ],
+    })
+  })
+
+  test('an empty group reports no live members', async () => {
+    members = []
+    exclusions = []
+    expect(await diagnose()).toMatchObject({
+      kind: 'none',
+      diagnosis: [{ kind: 'no-eligible-member', detail: 'the group has no live members' }],
+    })
+  })
+
+  test('a rule hold and its cached replay carry the rule reason and retry time', async () => {
+    rule = async () => ({ type: 'hold', reason: 'quota low', retryAfterMs: 600_000 })
+    const router = makeRouter()
+    const view = { eligible: [eligible('a')], attempt: 0 }
+    expect(await router.route(message(), view)).toMatchObject({
+      kind: 'hold',
+      diagnosis: [{ kind: 'routing-hold', detail: 'quota low', retryAt: new Date(T0 + 600_000).toISOString() }],
+    })
+    // The cached hold replays the same diagnosis without re-asking the rule.
+    expect(await router.route(message(), view)).toMatchObject({
+      kind: 'hold',
+      diagnosis: [{ kind: 'routing-hold', detail: 'quota low' }],
+    })
+    expect(ruleCalls).toHaveLength(1)
+  })
+
+  test('every candidate cooling holds with the earliest end', async () => {
+    def = group('profiles: [glm]')
+    members = [{ sessionId: 'a', profileId: 'glm', cwd: '/wt' }]
+    events.glm = [finalEvent('glm', new Date(T0 + 40 * 60_000).toISOString())]
+    expect(await makeRouter().route(message(), { eligible: [eligible('a')], attempt: 0 })).toMatchObject({
+      kind: 'hold',
+      diagnosis: [{ kind: 'all-profiles-cooling', retryAt: new Date(T0 + 40 * 60_000).toISOString() }],
+    })
+  })
+
+  test('the built-in fallback after a rule throw still diagnoses', async () => {
+    def = group('profiles: [claude, glm]\nmax: 2')
+    members = [
+      { sessionId: 'a', profileId: 'glm', cwd: '/wt' },
+      { sessionId: 'b', profileId: 'claude', cwd: '/wt' },
+    ]
+    exclusions = [{ sessionId: 'a', kind: 'busy' }, { sessionId: 'b', kind: 'busy' }]
+    rule = async () => { throw new Error('route did not return within 3000 ms') }
+    expect(await diagnose()).toMatchObject({
+      kind: 'none',
+      diagnosis: [
+        { kind: 'group-cap', counts: { live: 2, cap: 2 } },
+        { kind: 'no-eligible-member', sessionIds: ['a', 'b'] },
+      ],
+    })
   })
 })
 
@@ -192,8 +353,8 @@ describe('rules', () => {
     rule = async () => ({ type: 'hold', reason: 'quota low', retryAfterMs: 600_000 })
     const router = makeRouter()
     const view = { eligible: [eligible('a')], attempt: 0 }
-    expect(await router.route(message(), view)).toEqual({ kind: 'hold', retryAt: T0 + 600_000 })
-    expect(await router.route(message(), view)).toEqual({ kind: 'hold', retryAt: T0 + 600_000 })
+    expect(await router.route(message(), view)).toMatchObject({ kind: 'hold', retryAt: T0 + 600_000 })
+    expect(await router.route(message(), view)).toMatchObject({ kind: 'hold', retryAt: T0 + 600_000 })
     expect(ruleCalls).toHaveLength(1)
     // Candidates changed: asked again.
     await router.route(message(), { eligible: [eligible('a'), eligible('b')], attempt: 0 })
@@ -240,7 +401,7 @@ test('a zero-delay hold is reconsidered on the next cycle with unchanged candida
   rule = async () => ++calls === 1 ? { type: 'hold', reason: 'yield', retryAfterMs: 0 } : { type: 'default' }
   const router = makeRouter()
   const view = { eligible: [eligible('a')], attempt: 0 }
-  expect(await router.route(message(), view)).toEqual({ kind: 'hold', retryAt: T0 })
+  expect(await router.route(message(), view)).toMatchObject({ kind: 'hold', retryAt: T0 })
   expect(await router.route(message(), view)).toEqual({ kind: 'member', sessionId: 'a' })
   expect(calls).toBe(2)
 })
