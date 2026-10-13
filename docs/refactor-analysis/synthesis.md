@@ -91,7 +91,15 @@ verify modules. Effort: M. Risk: low — pure deletion with existing test covera
 > exactMatch would have left that file at ~735 LOC, over the 500 norm; all modules landed at
 > 55–489 LOC. Full suite green on every commit via the pre-commit hook.
 
-**S3. Client WS router extraction.** Table-driven protocol module under `src/client/protocol/`
+**S3. Client WS router extraction.**
+> **Status: DONE 2026-10-13** (branch `client-ws-router`) — landed as `da3bc48` (protocol/
+> package: messageRouter + session/workspace/chat/team/server modules; App.tsx's WS effect
+> is a one-time subscription over stable deps — the selectedSessionId resubscribe and its
+> stale-closure window are gone), `6ae4dc8` (notifyStatusTransitions + settleLaunch +
+> single transient-error timer dedupes), `45a8e43` (messageRouter.test.ts: full dispatch
+> coverage + pendingKills epoch/rollback, pending-wake matching, worktree launch, transient
+> error tests). app.test.tsx passed unchanged through every commit. App.tsx: 1,372 → 1,022
+> LOC; the router and handlers are plain functions over stores. Table-driven protocol module under `src/client/protocol/`
 (session/workspace/chat/server handler files, all via `getState()`), killing the
 resubscribe-on-selection-change effect in App.tsx. Effort: M. Risk: low-med. [client-architecture.md §4]
 
