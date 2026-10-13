@@ -80,10 +80,15 @@ export default function ChatHeader({
   const headerRef = useRef<HTMLElement>(null)
   const measuredLayout = useHeaderLayout(headerRef, fontSizePx)
   const layout = forcedLayout ?? measuredLayout
-  const [killOpen, setKillOpen] = useState(false)
+  // The kill confirmation belongs to the session it was opened for: switching
+  // chats (e.g. the next-session shortcut) closes it, and it never shows, or
+  // confirms for, another session's name or kill callback.
+  const [killFor, setKillFor] = useState<string | null>(null)
+  useEffect(() => { setKillFor(null) }, [session.id])
+  const killOpen = killFor === session.id
   const menuEntries = sessionMenuEntries({
     archived, openSlot, foldPanels: layout === 'menu', onRename: () => setEditingName(true), onToggleSlot,
-    onArchive, onKill: () => setKillOpen(true),
+    onArchive, onKill: () => setKillFor(session.id),
   })
   return (
     <header ref={headerRef} className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-border p-3" data-layout={layout}>
@@ -128,8 +133,10 @@ export default function ChatHeader({
           <span aria-hidden="true">Auto-approve</span>
         </label>
       )}
-      <ChatSessionMenu entries={menuEntries} container={headerRef} />
-      <ChatKillDialog open={killOpen} name={session.name} container={headerRef} onOpenChange={setKillOpen} onConfirm={onKill} />
+      {/* Keyed by session so an open menu closes on a chat switch. */}
+      <ChatSessionMenu key={session.id} entries={menuEntries} container={headerRef} />
+      <ChatKillDialog open={killOpen} name={session.name} container={headerRef}
+        onOpenChange={open => setKillFor(open ? session.id : null)} onConfirm={() => { if (killOpen) onKill() }} />
     </header>
   )
 }

@@ -171,3 +171,31 @@ test('the header steps down by its own width without clipping a control', async 
   expect((await headerFacts(page)).clipped).toEqual([])
   await killChat(page)
 })
+
+test('switching chats closes an open kill confirmation instead of retargeting it', async ({ page }) => {
+  await createChat(page, 'Header switch A')
+  await createChat(page, 'Header switch B')
+  const dialog = page.getByRole('alertdialog')
+
+  // Open Kill for B, then switch chats with the keyboard (Ctrl+Shift+]).
+  await openSessionMenu(page)
+  await page.getByRole('menuitem', { name: 'Kill session', exact: true }).click()
+  await expect(dialog).toContainText('Kill “Header switch B”?')
+  const before = await page.getByTestId('chat-name').innerText()
+  await page.keyboard.press('Control+Shift+BracketRight')
+  await expect(page.getByTestId('chat-name')).not.toHaveText(before)
+  // The confirmation is gone rather than showing the other chat's name.
+  await expect(dialog).toHaveCount(0)
+  const switchedTo = await page.getByTestId('chat-name').innerText()
+
+  // Going back does not resurrect it, and both chats are still alive.
+  await page.locator('[data-session-id^="chat-"]').filter({ hasText: 'Header switch B' }).first().click()
+  await expect(page.getByTestId('chat-name')).toHaveText('Header switch B')
+  await expect(dialog).toHaveCount(0)
+  await expect(page.locator('[data-session-id^="chat-"]').filter({ hasText: switchedTo })).toHaveCount(1)
+
+  await killChat(page)
+  await page.locator('[data-session-id^="chat-"]').filter({ hasText: 'Header switch A' }).first().click()
+  await expect(page.getByTestId('chat-name')).toHaveText('Header switch A')
+  await killChat(page)
+})
