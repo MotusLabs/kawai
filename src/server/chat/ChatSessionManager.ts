@@ -85,6 +85,7 @@ import type { HandoffTarget } from '../team/routing/limitOutcomes'
 import type { RuleLoadReport, TeamRoutingState } from '../../shared/routing'
 import { SessionMailbox } from '../team/sessionMailbox'
 import type { TaskService } from '../team/TaskService'
+import type { AssignmentService } from '../team/AssignmentService'
 import type { SpawnRequest, SpawnResult } from '../team/staffing'
 import { TeamCaps } from '../team/teamCaps'
 import {
@@ -731,6 +732,7 @@ export class ChatSessionManager {
     })
     this.mailbox = this.teamMail.mailbox
     this.tasks = this.teamMail.tasks
+    this.assignments = this.teamMail.assignments
     this.messages = new MessageFeed(this.mailbox.store, new MessageQuery(options.db.db))
     // Product strategy (product-strategy): constructed here, beside the
     // task service, against the same database. The strategy store's changes
@@ -845,6 +847,8 @@ export class ChatSessionManager {
   readonly mailbox: TeamMailbox
   /** Team tasks (team-tasks); the task tools and UI actions go through it. */
   readonly tasks: TaskService
+  /** Task assignment (task-assignment); human dispatch, preview, and targets. */
+  readonly assignments: AssignmentService
   /** The Messages read model and its live feed (team-message-threads D1/4.3). */
   readonly messages: MessageFeed
   /** Product strategy (product-strategy); the strategy tools and UI actions go through it. */

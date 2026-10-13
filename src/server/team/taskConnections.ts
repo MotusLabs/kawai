@@ -111,6 +111,7 @@ export class TaskConnections {
     }
     const caller = { kind: 'human' as const, team }
     const tasks = this.manager.tasks
+    const result = (payload: Record<string, unknown>) => connection.send({ type: 'team-task-result', sessionId, requestId, ...payload })
     let task: TeamTask | undefined
     try {
       switch (message.type) {
@@ -118,6 +119,7 @@ export class TaskConnections {
           task = await tasks.create(caller, {
             title: message.title, direction: message.direction, acceptance: message.acceptance ?? null,
             parent_id: message.parentId || null, worktree: message.worktree || null, openspec_change: message.openspecChange || null,
+            ...(message.requestKey ? { requestKey: message.requestKey } : {}),
           })
           break
         case 'team-task-amend':
@@ -133,10 +135,41 @@ export class TaskConnections {
         case 'team-task-status':
           task = await tasks.setStatus(caller, message.taskId, message.status)
           break
+        case 'team-task-assign': {
+          const outcome = await this.manager.assignments.dispatch(caller, {
+            taskId: message.taskId, target: message.target, instruction: message.instruction,
+            requestKey: message.requestKey, ...(message.handling ? { handling: message.handling } : {}),
+          })
+          result({ assignment: outcome.assignment, ...(outcome.message?.taskId ? { task: tasks.store.get(outcome.message.taskId) ?? undefined } : {}) })
+          return
+        }
+        case 'team-task-preview': {
+          const preview = await this.manager.assignments.preview(caller, {
+            ...(message.taskId ? { taskId: message.taskId } : {}),
+            ...(message.worktree ? { worktree: message.worktree } : {}),
+            target: message.target,
+          })
+          connection.send({ type: 'team-task-preview-result', sessionId, requestId, preview })
+          return
+        }
+        case 'team-task-targets': {
+          const targets = await this.manager.assignments.targets(caller)
+          connection.send({ type: 'team-task-targets-result', sessionId, requestId, targets })
+          return
+        }
       }
-      connection.send({ type: 'team-task-result', sessionId, requestId, ...(task ? { task } : {}) })
+      result({ ...(task ? { task } : {}) })
     } catch (error) {
-      connection.send({ type: 'team-task-result', sessionId, requestId, error: error instanceof Error ? error.message : String(error) })
+      const text = error instanceof Error ? error.message : String(error)
+      if (message.type === 'team-task-preview') {
+        connection.send({ type: 'team-task-preview-result', sessionId, requestId, error: text })
+        return
+      }
+      if (message.type === 'team-task-targets') {
+        connection.send({ type: 'team-task-targets-result', sessionId, requestId, error: text })
+        return
+      }
+      result({ error: text })
     }
   }
 }

@@ -21,7 +21,7 @@ afterEach(() => {
 const summary = (id: string, extra: Partial<TeamTaskSummary> = {}): TeamTaskSummary => ({
   id, teamId: 'team', title: `Task ${id}`, status: 'open', creator: { kind: 'agent', sessionId: 'lead' }, parentId: null,
   worktree: null, openspecChange: null, revision: 1, direction: 'Build it', acceptance: null, createdAt: '2026-10-11T00:00:00.000Z',
-  updatedAt: '2026-10-11T00:00:00.000Z', participants: ['lead', 'dev'], ...extra,
+  updatedAt: '2026-10-11T00:00:00.000Z', participants: ['lead', 'dev'], assignment: null, ...extra,
 })
 const detail = (task: TeamTaskSummary, extra: Partial<Detail> = {}): Detail => ({
   task, revisions: [
@@ -30,6 +30,7 @@ const detail = (task: TeamTaskSummary, extra: Partial<Detail> = {}): Detail => (
   ],
   journal: [{ id: 'n1', author: { kind: 'agent', sessionId: 'dev' }, text: 'Picked option B', createdAt: '2026-10-11T02:00:00.000Z' }],
   subtasks: [summary('child', { title: 'Export button', parentId: task.id })],
+  assignments: [],
   messages: [{ id: 'm1', teamId: 'team', toKind: 'group', toId: 'devs', fromKind: 'agent', fromSession: 'lead', fromGroup: 'leads', originPath: '/repo', priority: 'normal',
     tags: [], threadId: 'm1', inReplyTo: null, hop: 1, body: 'Please build', state: 'delivered', claimedBy: 'dev', claimedAt: null, deliverAt: null,
     createdAt: '', pushedAt: null, deliveredAt: null, reason: null, possibleDuplicate: false, attachThread: false, taskId: task.id,

@@ -115,10 +115,10 @@ test('task detail names its message participants and links into each thread', ()
   const summary: TeamTaskSummary = {
     id: 't1', teamId: 'team', title: 'Export CSV', status: 'open', creator: { kind: 'human', sessionId: null },
     parentId: null, worktree: null, openspecChange: null, revision: 2, direction: 'Build it', acceptance: null,
-    createdAt: '2026-10-11T00:00:00.000Z', updatedAt: '2026-10-11T00:00:00.000Z', participants: ['dev'],
+    createdAt: '2026-10-11T00:00:00.000Z', updatedAt: '2026-10-11T00:00:00.000Z', participants: ['dev'], assignment: null,
   }
   const detail: Detail = {
-    task: summary, revisions: [], journal: [], subtasks: [],
+    task: summary, revisions: [], journal: [], subtasks: [], assignments: [],
     messages: [
       message('m1', { fromSession: 'chat-gone', threadId: 'th-one', body: 'From the killed helper' }),
       message('m2', { fromSession: 'dev', threadId: 'th-two', body: 'From the live one', taskRevision: null }),

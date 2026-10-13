@@ -164,6 +164,17 @@ export class WorktreeStaffing {
     return { message: this.store.get(message.id)!, sessionId: result.sessionId }
   }
 
+  /**
+   * The cap counts behind staffing, read-only (task-assignment D6 preview).
+   * Re-exposes exactly what `spawnFor` re-checks in its reservation
+   * transaction, without reserving anything: group live members (pending
+   * reservations included), the team's live spawned sessions, and the spawned
+   * writers already in the worktree.
+   */
+  previewCounts(teamId: string, groupId: string, worktree: string) {
+    return this.counts(teamId, groupId, worktree)
+  }
+
   /** Live counts behind every cap, pending reservations included. */
   private counts(teamId: string, groupId: string, worktree: string) {
     const live = [...this.options.records()].filter(record =>

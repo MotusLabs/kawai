@@ -24,26 +24,39 @@ export function worktreeRootOf(projectPath: string): string {
 
 export type WorktreeTarget = { ok: true; root: string } | { ok: false; error: string }
 
+/** One listed worktree: its root and checked-out branch (task-assignment D8). */
+export interface TeamWorktreeEntry {
+  root: string
+  branch?: string
+}
+
 const LIST_TTL_MS = 5_000
 
 export class TeamWorktrees {
-  private readonly lists = new Map<string, { at: number; roots: string[] }>()
+  private readonly lists = new Map<string, { at: number; entries: TeamWorktreeEntry[] }>()
 
   constructor(private readonly options: { ttlMs?: number; now?: () => number } = {}) {}
 
-  /** Live worktree roots of a team (its common git dir); [] for a plain directory. */
-  async list(teamId: string, fresh = false): Promise<string[]> {
+  /** Live worktree entries of a team (its common git dir); [] for a plain directory. */
+  async entries(teamId: string, fresh = false): Promise<TeamWorktreeEntry[]> {
     const now = this.options.now?.() ?? Date.now()
     const cached = this.lists.get(teamId)
-    if (!fresh && cached && now - cached.at < (this.options.ttlMs ?? LIST_TTL_MS)) return cached.roots
+    if (!fresh && cached && now - cached.at < (this.options.ttlMs ?? LIST_TTL_MS)) return cached.entries
     const result = await runGitAsync(['--git-dir', teamId, 'worktree', 'list', '--porcelain'])
     // A removed directory lingers as `prunable` until `git worktree prune`;
     // it is not a place an agent can run.
-    const roots = result.ok
-      ? parseWorktreePorcelain(result.stdout).filter(entry => !entry.prunable && fs.existsSync(entry.path)).map(entry => entry.path)
+    const entries = result.ok
+      ? parseWorktreePorcelain(result.stdout)
+        .filter(entry => !entry.prunable && fs.existsSync(entry.path))
+        .map(entry => ({ root: entry.path, ...(entry.branch !== undefined ? { branch: entry.branch } : {}) }))
       : []
-    this.lists.set(teamId, { at: now, roots })
-    return roots
+    this.lists.set(teamId, { at: now, entries })
+    return entries
+  }
+
+  /** Live worktree roots of a team (its common git dir); [] for a plain directory. */
+  async list(teamId: string, fresh = false): Promise<string[]> {
+    return (await this.entries(teamId, fresh)).map(entry => entry.root)
   }
 
   /** Normalize a task target to a listed root; any other path is refused by name. */
