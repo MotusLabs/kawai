@@ -227,3 +227,28 @@ export interface ThreadEntry {
   message: TeamMessage
   events: MessageEvent[]
 }
+
+/**
+ * Whether a row belongs in a list on these filters. The SQL in the server's
+ * `messageQuery.ts` is the other half of this contract — it pages the list —
+ * and the client applies this side to each unfiltered change push, so a row
+ * that has just left its filter is dropped rather than lingering.
+ */
+export function matchesMessageFilters(filters: MessageQueryFilters, message: TeamMessage): boolean {
+  if (filters.taskId !== undefined && message.taskId !== filters.taskId) return false
+  if (filters.threadId !== undefined && message.threadId !== filters.threadId) return false
+  if (filters.groupId !== undefined
+    && !((message.toKind === 'group' && message.toId === filters.groupId) || message.fromGroup === filters.groupId)) return false
+  if (filters.sessionId !== undefined
+    && message.fromSession !== filters.sessionId
+    && !(message.toKind === 'session' && message.toId === filters.sessionId)
+    && message.claimedBy !== filters.sessionId) return false
+  if (filters.priority !== undefined && message.priority !== filters.priority) return false
+  if (filters.state !== undefined) {
+    const states = Array.isArray(filters.state) ? filters.state : [filters.state]
+    if (!states.includes(message.state)) return false
+  }
+  if (filters.human === true && message.fromKind !== 'human' && message.toKind !== 'human') return false
+  if (filters.human === false && (message.fromKind !== 'agent' || message.toKind === 'human')) return false
+  return true
+}
