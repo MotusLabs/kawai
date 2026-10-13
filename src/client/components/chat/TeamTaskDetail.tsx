@@ -128,7 +128,7 @@ export default function TeamTaskDetail({ sessionId, projectPath, view, sendMessa
               onClick={previewAssign} data-testid="task-detail-preview-button">Preview</button>
             <button type="button" className="btn btn-primary" disabled={assignDisabled}
               onClick={() => (outstanding ? setChoosing(true) : sendAssign())} data-testid="task-assign-send">Assign / send task</button>
-            {form.requestKey && <button type="button" className="btn text-chat-meta" disabled={assignDisabled}
+            {form.requestKey && view.error && !outstanding && <button type="button" className="btn text-chat-meta" disabled={assignDisabled}
               onClick={() => sendAssign()} data-testid="task-retry-assign">Retry assignment</button>}
           </div>
         </div>

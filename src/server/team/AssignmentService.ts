@@ -97,7 +97,9 @@ export class AssignmentService {
     if (!instruction) throw new Error('An assignment instruction is needed')
     const requestKey = input.requestKey.trim()
     if (!requestKey) throw new Error('A dispatch needs a request key')
-    const group = input.target.kind === 'group' ? this.groupOf(team, input.target.id) : null
+    // Target validation before anything is written: a catalog group, or a
+    // live non-archived session of this team.
+    if (input.target.kind === 'group') this.groupOf(team, input.target.id)
     const recipient = await this.sessionTarget(team, input.target)
     const role = input.target.kind === 'group' ? input.target.id : recipient?.groupId ?? null
 
