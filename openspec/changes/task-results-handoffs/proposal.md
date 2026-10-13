@@ -1,0 +1,39 @@
+# Proposal
+
+## Why
+
+A finished agent turn proves nothing. Today completion is reported as free-form journal notes or mail — unverified, bound to no commit, invisible to anyone who wasn't mailed — and the pipeline from implementer to reviewer to QA is manual: the human composes review instructions by hand, the worktree stays occupied by a spawned developer that nothing releases, and "accepting" work means trusting an agent's claim. The UX doc's baseline P2 (docs/multi-agent-development-ux.md §5–§6, E07/E08/E10) asks that completion and acceptance become inspectable and that developer-to-reviewer pipelines stop stalling on hidden occupancy.
+
+Depends on `task-assignment` (on master, implementation in flight): its assignment record, request-key idempotency, and dispatch transaction are the delivery vehicle for every handoff here. Depends on `team-member-release` (unmerged proposal, branch `docs/team-member-release`): release-and-hand-off uses its release primitive — readiness, archive-never-kill, system journaling — and respecifies none of it. `team-message-threads` (landed) owns the actor model the mail rides; `team-waiting-reasons` (landing) renders the occupancy wait a queued review handoff shows.
+
+## What Changes
+
+- **Result record.** A durable result per submission, shown in a Results section in task detail: summary, a commit or diff reference, the worktree, tests performed with outcomes, known limitations, the task revision pinned at submission, and the submitting agent. Results and their evidence stay readable after the submitting session is archived or killed. An agent's claim of passing tests is never verified evidence: test outcomes render labeled **claimed**.
+- **Result submission tool.** `task_submit_result` on the `kawai-team` MCP server — the agent-side piece `task-assignment` deferred here (its ruling Q4). Any team member may submit; each submission is a new result that supersedes the task's previous outstanding one, and earlier results stay readable. Submission journals a note and changes no task status.
+- **Explicit handoffs.** **Request review**, **Request QA**, and **Return for fixes** create handoffs to a role: assignment records on `task-assignment`'s table, carrying the handoff kind, instructions, the referenced result, and the expected response, dispatched through its existing transaction and worktree routing. The human drives them from task detail under a client request key (idempotent like every dispatch); agents drive them with a `task_handoff` tool. A queued review handoff in an occupied worktree simply waits with the waiting reason `team-waiting-reasons` renders.
+- **Findings bound to the examined result.** Reviewers and QA report with `task_submit_findings`, always bound to the exact result examined; findings never transfer to a later commit or result. Each result and each attempt keeps its own identity — earlier results and their findings are preserved when fixes produce a newer result.
+- **Accept result.** A distinct action by the human or the task's creator on one result: it records acceptance and closes the task as `done`, but only under the existing closing rights — a contributor cannot close another creator's task. Before closure the UI shows the task's acceptance criteria and any open child work; closing past a flagged result or open children requires a stated reason, journaled. A parent task never auto-closes when its children finish.
+- **Needs re-evaluation.** A result whose pinned task revision is older than the task's current revision is labeled **Needs re-evaluation** — a read-time derivation this change owns; direction changes trigger it simply by bumping the revision (`task-revision-publication` builds its publication flow on that rule and owns nothing here).
+- **Release worktree and hand off.** After the developer's turn has ended and its pending requests resolved, the human can release the task's worktree: every live spawned member of the task is archived through `team-member-release`'s readiness and archive path (result and transcript kept), then the review handoff is dispatched into the freed slot. Release is refused with an actionable reason while anything is in flight, and other live (manual) sessions in the worktree are shown before dispatch.
+
+Non-goals: Plans, Task Executions, and delegated-closing grants (Wave C `durable-plans`); revision publication, notification, and acknowledgement (`task-revision-publication`); the Team view, attention queue, and workflow-stage labels (`team-workspace`); overlapping reviewer staffing and read-only enforcement (§6 keeps explicit sequential release); integration candidates; server-side verification of claimed tests; killing or restoring sessions; changing who may close tasks or amend direction.
+
+## Capabilities
+
+### New Capabilities
+
+- `task-results`: the durable result record and its submission tool; review/QA/fix handoffs as role assignments; findings bound to the examined result; acceptance under existing closing rights with pre-closure visibility; the needs-re-evaluation label; and release-worktree-and-hand-off composing `team-member-release`'s release with a review dispatch.
+
+### Modified Capabilities
+
+None. Acceptance closes through the existing `team-tasks` closing rights instead of changing them; handoff instructions are ordinary task mail (`agent-mailbox`, `team-tasks` unchanged); staffing caps and worktree routing are untouched — `team-member-release` already carries the capacity-freeing delta to `team-worktree-staffing`, and the occupancy wait a queued handoff shows belongs to `team-waiting-reasons`.
+
+## Impact
+
+- Server: `src/server/team/` — a new `taskResultStore.ts` (`team_task_results`, `team_task_findings` tables) beside `taskStore.ts`; a new `TaskResultService.ts` for submission, findings, acceptance (closing through `TaskService.setStatus`), handoff dispatch (extending the assignment record and dispatch path `task-assignment` adds with handoff kind, result reference, and expected response), and release-and-hand-off (readiness and archive reusing `team-member-release`'s `memberRelease.ts` and `ChatSessionManager.archive`); `taskTools.ts` (`task_submit_result`, `task_submit_findings`, `task_handoff` joining `TASK_TOOL_NAMES` — and so `TEAM_ALLOWED_TOOLS` in `mailboxTools.ts`); `taskConnections.ts` (`team-task-accept-result`, `team-task-handoff`, `team-task-release` human actions and results on task snapshots/details).
+- Shared: `src/shared/teamTasks.ts` (result and findings types on `TeamTaskDetail`, outstanding-result presence on `TeamTaskSummary`); `src/shared/types.ts` (new client/server messages) and the `src/server/ws/messageRouter.ts` whitelist they must join.
+- Client: `TeamTaskDetail.tsx` gains a Results section (likely a new `TaskResultsSection.tsx` component) with the claimed-evidence labeling, handoff actions, **Accept result**, and **Release worktree and hand off** (with its in-worktree session list and refusal reasons); `teamTaskStore.ts` (request keys for handoff/accept actions); labels in `teamTaskLabels.ts`.
+- Data: additive SQLite migration — `team_task_results` and `team_task_findings` tables, plus nullable handoff columns on `team_task_assignments` (that table is `task-assignment`'s; the columns are added here).
+- Docs: CLAUDE.md How It Works bullets for results, handoffs, acceptance, and release-and-hand-off.
+- Tests: unit coverage beside the existing `src/server/__tests__/team*` suites; E07/E08/E10 browser walkthroughs extending `tests/e2e/chat-teams.spec.ts` patterns.
+- Sequencing: `task-assignment` and `team-member-release` must land first; a conflict with the latter's proposal is reported to the lead rather than edited around.
