@@ -24,6 +24,7 @@ import type {
 import type { SessionStatus } from '../../shared/types'
 import type { ChatWireRecorder } from '../chat/wireTap'
 import type { ChatLimitSignal } from '../chat/limitSignals'
+import { consumerMessages } from './fixtures/backgroundTasks'
 import {
   ChatSessionDriver,
   type ChatQueryFactory,
@@ -2977,5 +2978,131 @@ describe('ChatSessionDriver limit events', () => {
     harness.fakes[0]!.push(result('success'))
     await flush()
     expect(typesOf(harness.events)).toContain('turn_completed')
+  })
+})
+
+describe('ChatSessionDriver agent-started turns (background tasks D5)', () => {
+  /** A background task_notification arriving while no turn is active. */
+  function taskNotification(taskId: string, status = 'completed'): SDKMessage {
+    return {
+      type: 'system',
+      subtype: 'task_notification',
+      task_id: taskId,
+      tool_use_id: 'call_task_1',
+      status,
+      summary: `Background command "${taskId}" completed (exit code 0)`,
+      uuid: 'n-uuid',
+      session_id: 'sdk-1',
+    } as unknown as SDKMessage
+  }
+
+  /** The turn-opening frame: one `init` per turn, consumer-visible. */
+  function initFrame(): SDKMessage {
+    return {
+      type: 'system',
+      subtype: 'init',
+      cwd: '/tmp/project',
+      session_id: 'sdk-1',
+      model: 'glm-5.3',
+      permissionMode: 'default',
+      tools: [],
+      slash_commands: [],
+    } as unknown as SDKMessage
+  }
+
+  test('the captured monitor wake replays into a triggered turn', async () => {
+    const harness = createHarness()
+    harness.driver.start()
+    // Real captured sequence: late first-turn frames (dropped — no turn),
+    // the settle, then the wake turn (init → status → stream → assistant →
+    // result). The sdk_host_only state frames are already filtered out.
+    for (const message of consumerMessages('monitor')) {
+      harness.fakes[0]!.push(message)
+    }
+    await flush(10)
+    const started = harness.events.filter((event) => event.type === 'turn_started')
+    expect(started).toHaveLength(1)
+    expect(started[0]).toMatchObject({
+      trigger: {
+        kind: 'task',
+        tasks: [{ taskId: 'b9cx4spe1', toolCallId: 'call_8b6144525600423b96c9e216', status: 'completed' }],
+      },
+    })
+    expect(typesOf(harness.events)).toContain('assistant_text')
+    expect(typesOf(harness.events)).toContain('turn_completed')
+    expect(harness.statuses).toContain('working')
+    expect(harness.statuses.at(-1)).toBe('waiting')
+  })
+
+  test('interrupt ends an agent-started turn like a user one', async () => {
+    const harness = createHarness()
+    harness.driver.start()
+    harness.fakes[0]!.push(taskNotification('btask_1'))
+    harness.fakes[0]!.push(initFrame())
+    await flush()
+    expect(harness.events.some((event) => event.type === 'turn_started')).toBe(true)
+    await harness.driver.interrupt()
+    await flush()
+    expect(typesOf(harness.events)).toContain('turn_interrupted')
+    expect(harness.statuses.at(-1)).toBe('waiting')
+  })
+
+  test('a send racing the self-start joins the open turn', async () => {
+    const harness = createHarness()
+    harness.driver.start()
+    harness.fakes[0]!.push(taskNotification('btask_1'))
+    harness.fakes[0]!.push(initFrame())
+    await flush()
+    const started = harness.events.filter((event) => event.type === 'turn_started')
+    expect(started).toHaveLength(1)
+    harness.driver.send('while you are at it')
+    harness.fakes[0]!.push(assistantText('joined answer'))
+    harness.fakes[0]!.push(result('success'))
+    await flush()
+    const turnId = (started[0] as { turnId: string }).turnId
+    const firstTwo = harness.events.slice(0, 2).map((event) => ({ type: event.type, turnId: (event as { turnId: string }).turnId }))
+    expect(firstTwo).toEqual([
+      { type: 'turn_started', turnId },
+      { type: 'user_message', turnId },
+    ])
+    expect(harness.events.filter((event) => event.type === 'turn_started')).toHaveLength(1)
+    expect(typesOf(harness.events)).toContain('turn_completed')
+  })
+
+  test('a self-start with no preceding notification carries the resumed trigger', async () => {
+    const harness = createHarness()
+    harness.driver.start()
+    harness.fakes[0]!.push(initFrame())
+    await flush()
+    const started = harness.events.filter((event) => event.type === 'turn_started')
+    expect(started).toHaveLength(1)
+    expect(started[0]).toMatchObject({ trigger: { kind: 'resumed' } })
+    harness.fakes[0]!.push(assistantText('picked up on my own'))
+    harness.fakes[0]!.push(result('success'))
+    await flush()
+    expect(typesOf(harness.events)).toContain('turn_completed')
+    // No user message bubble for a self-started turn.
+    expect(typesOf(harness.events)).not.toContain('user_message')
+  })
+
+  test('a user send consumes buffered notifications without a trigger', async () => {
+    const harness = createHarness()
+    harness.driver.start()
+    harness.fakes[0]!.push(taskNotification('btask_1'))
+    await flush()
+    harness.driver.send('my turn now')
+    harness.fakes[0]!.push(assistantText('answer'))
+    harness.fakes[0]!.push(result('success'))
+    await flush()
+    const started = harness.events.filter((event) => event.type === 'turn_started')
+    expect(started).toHaveLength(1)
+    expect((started[0] as { trigger?: unknown }).trigger).toBeUndefined()
+    expect(typesOf(harness.events)).toContain('turn_completed')
+    // The stale buffer cannot leak into a later self-start.
+    harness.fakes[0]!.push(initFrame())
+    await flush()
+    const later = harness.events.filter((event) => event.type === 'turn_started')
+    expect(later).toHaveLength(2)
+    expect(later[1]).toMatchObject({ trigger: { kind: 'resumed' } })
   })
 })

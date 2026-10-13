@@ -93,6 +93,19 @@ export interface ChatCommandState {
   commands: ChatCommand[]
 }
 
+/** One background-task notification that woke the agent (background tasks D5). */
+export interface ChatTurnTriggerTask {
+  taskId: string
+  toolCallId?: string
+  status: string
+  summary?: string
+}
+
+/** Why a turn the agent started on its own began. */
+export type ChatTurnTrigger =
+  | { kind: 'task'; tasks: ChatTurnTriggerTask[] }
+  | { kind: 'resumed' }
+
 /** Mail received from another chat agent; shared without SDK dependencies. */
 export interface ChatPeerMessage {
   messageId: string
@@ -112,7 +125,15 @@ export interface ChatPeerMessage {
 }
 
 export type ChatEvent =
-  | (ChatTurnEventBase & { type: 'turn_started' })
+  | (ChatTurnEventBase & {
+      type: 'turn_started'
+      /**
+       * Why the turn began (background tasks D5). Absent on user-started
+       * turns; `task` lists the notifications that woke the agent, `resumed`
+       * marks a self-start with no known cause.
+       */
+      trigger?: ChatTurnTrigger
+    })
   | (ChatTurnEventBase & { type: 'user_message'; text: string })
   | (ChatTurnEventBase & ChatPeerMessage & { type: 'peer_message' })
   | (ChatTurnEventBase & {

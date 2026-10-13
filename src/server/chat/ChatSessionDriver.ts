@@ -36,6 +36,8 @@ import type {
   ChatPeerMessage,
   ChatQuestion,
   ChatQuestionAnswer,
+  ChatTurnTrigger,
+  ChatTurnTriggerTask,
   ChatUsageReport,
   ChatWorker,
 } from '../../shared/chat'
@@ -258,6 +260,12 @@ export class ChatSessionDriver {
   private sequence = 0
   private turnCounter = 0
   private activeTurnId: string | null = null
+  /**
+   * Task notifications that arrived while no turn was active (background
+   * tasks D5): they become the next turn's trigger — user-started or
+   * agent-started alike — and are consumed when that turn opens.
+   */
+  private pendingTaskNotifications: ChatTurnTriggerTask[] = []
   private streamingMessageId: string | null = null
   private readonly pendingRequests = new Map<string, PendingRequest>()
   /** Tool use ids this live stream has seen (call or result). */
@@ -338,17 +346,28 @@ export class ChatSessionDriver {
     this.sessionProjectPath = path
   }
 
+  /**
+   * Open the next turn id and announce it, consuming any buffered task
+   * notifications as the trigger (background tasks D5). All three open
+   * paths — user send, peer delivery, agent self-start — funnel through
+   * here so the buffer can never outlive the turn it should name.
+   */
+  private startTurn(trigger?: ChatTurnTrigger): string {
+    this.turnCounter += 1
+    const turnId = `turn-${this.turnCounter}`
+    this.activeTurnId = turnId
+    this.pendingTaskNotifications = []
+    this.emit({ type: 'turn_started', turnId, ...(trigger ? { trigger } : {}) })
+    return turnId
+  }
+
   /** Submit a user turn. Spawns the SDK lazily on the first turn. */
   send(text: string): void {
     if (this.killed) return
     this.ensureQuery()
-    if (!this.activeTurnId) {
-      this.turnCounter += 1
-      this.activeTurnId = `turn-${this.turnCounter}`
-      this.emit({ type: 'turn_started', turnId: this.activeTurnId })
-    }
+    const turnId = this.activeTurnId ?? this.startTurn()
     this.trackEcho(text)
-    this.emit({ type: 'user_message', turnId: this.activeTurnId, text })
+    this.emit({ type: 'user_message', turnId, text })
     this.queue.push({
       type: 'user',
       message: { role: 'user', content: text },
@@ -364,12 +383,10 @@ export class ChatSessionDriver {
       throw new Error('Recipient is not idle')
     }
     this.ensureQuery()
-    this.turnCounter += 1
-    this.activeTurnId = `turn-${this.turnCounter}`
-    this.emit({ type: 'turn_started', turnId: this.activeTurnId })
+    const turnId = this.startTurn()
     const text = formatEnvelope(envelope)
     this.trackEcho(text)
-    this.emit({ type: 'peer_message', turnId: this.activeTurnId, ...envelope })
+    this.emit({ type: 'peer_message', turnId, ...envelope })
     this.queue.push({
       type: 'user', message: { role: 'user', content: text },
       parent_tool_use_id: null,
@@ -952,6 +969,20 @@ export class ChatSessionDriver {
       this.reportLimit(retryLimitSignal(message, this.currentResetsAt()))
     }
     if (message.subtype === 'init') {
+      // Agent-started turn (background tasks D5): `init` opens every turn
+      // and is the first frame of one that the SDK yields to consumers —
+      // `session_state_changed` is `sdk_host_only` and never reaches this
+      // loop. A spawn without a prompt emits no `init`, so an idle attach
+      // cannot open a phantom turn; a user `send()` has already set its turn
+      // id before the CLI gets the message.
+      if (!this.activeTurnId) {
+        this.startTurn(
+          this.pendingTaskNotifications.length > 0
+            ? { kind: 'task', tasks: this.pendingTaskNotifications.slice() }
+            : { kind: 'resumed' }
+        )
+        this.refreshStatus()
+      }
       if (!this.capturedSdkSessionId && message.session_id) {
         this.capturedSdkSessionId = message.session_id
         this.options.onSdkSessionId?.(message.session_id)
@@ -1013,6 +1044,25 @@ export class ChatSessionDriver {
     // The task_* edges and the background level set feed the worker roster
     // (design D3); they never reach the activity reducer, whose own inputs
     // are status and api_retry only.
+    if (
+      message.subtype === 'task_notification' &&
+      !this.activeTurnId &&
+      typeof message.task_id === 'string' &&
+      message.task_id
+    ) {
+      // No turn is running, so this notification is about to wake the agent
+      // (background tasks D5): hold it as the next turn's trigger.
+      this.pendingTaskNotifications.push({
+        taskId: message.task_id,
+        ...(typeof message.tool_use_id === 'string' && message.tool_use_id
+          ? { toolCallId: message.tool_use_id }
+          : {}),
+        status: typeof message.status === 'string' ? message.status : 'unknown',
+        ...(typeof message.summary === 'string' && message.summary
+          ? { summary: message.summary }
+          : {}),
+      })
+    }
     const rosterInput = taskFrameToInput(message)
     if (rosterInput) {
       this.feedWorkers(rosterInput)
