@@ -158,7 +158,7 @@ export class TaskConnections {
           return
         }
       }
-      result({ ...(task ? { task } : {}) })
+      result(task ? { task } : {})
     } catch (error) {
       const text = error instanceof Error ? error.message : String(error)
       if (message.type === 'team-task-preview') {

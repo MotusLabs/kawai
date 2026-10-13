@@ -162,7 +162,7 @@ describe('AssignmentStore', () => {
 
   test('a failed assignment is no longer outstanding, so the task can be reassigned', () => {
     const task = createTask()
-    const { assignment, message } = dispatch(task)
+    const { message } = dispatch(task)
     mail.deadLetter(message.id, 'worktree-missing: /gone')
     const rows = assignments.listByTask(task.id)
     expect(rows[0]).toMatchObject({ state: 'failed', reason: 'worktree-missing: /gone' })

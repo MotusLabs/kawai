@@ -79,8 +79,9 @@ test('human dispatch reaches one idle member idempotently, and worktree assignme
     const human = { kind: 'human' as const, team }
     // Two idle developers in the main checkout (E01's recipients).
     const members: string[] = []
-    for (const name of ['dev-a', 'dev-b']) {
-      const created = await manager.createAvailableSession({ projectPath: repo, groupId: 'devs' })
+    const createdA = await manager.createAvailableSession({ projectPath: repo, groupId: 'devs' })
+    const createdB = await manager.createAvailableSession({ projectPath: repo, groupId: 'devs' })
+    for (const created of [createdA, createdB]) {
       if (!created.ok) throw new Error(created.error)
       members.push(created.session.id)
     }
