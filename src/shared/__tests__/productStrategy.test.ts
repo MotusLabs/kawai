@@ -7,7 +7,6 @@ import { describe, expect, test } from 'bun:test'
 import {
   UNKNOWN,
   canonicalJson,
-  hashStrategyContent,
   normalizeStrategyContent,
   strategyContentErrors,
   type StrategyContent,
@@ -88,38 +87,21 @@ describe('normalizeStrategyContent', () => {
   })
 })
 
-describe('canonical hashing', () => {
-  test('stable across key order, different across content', () => {
-    const a = normalizeStrategyContent(content())
-    const reordered = normalizeStrategyContent({
-      openQuestions: ['Who owns strategy for multi-team repos?'],
-      decisions: content().decisions,
-      purpose: 'Supervised autonomous development',
-      claims: content().claims,
-      primaryUsers: 'Small platform teams',
-      needsOutcomes: 'Ship without babysitting agents',
-      useCases: content().useCases,
-      productApproach: 'One operator directing a team of agents',
-      principles: content().principles,
-      boundaries: ['No cross-repository scopes'],
-      successMeasures: content().successMeasures,
-    })
-    expect(hashStrategyContent(a)).toBe(hashStrategyContent(reordered))
+describe('canonical serialization', () => {
+  test('stable across key order', () => {
     expect(canonicalJson({ b: 1, a: 2 })).toBe(canonicalJson({ a: 2, b: 1 }))
-    const changed = normalizeStrategyContent(content({ purpose: 'A different purpose' }))
-    expect(hashStrategyContent(a)).not.toBe(hashStrategyContent(changed))
   })
 
-  test('the Unknown sentinel is preserved as itself in the hash input', () => {
+  test('the Unknown sentinel is preserved as itself', () => {
     expect(canonicalJson(UNKNOWN)).toBe('"Unknown"')
     const withUnknown = normalizeStrategyContent({ successMeasures: [{ outcome: 'A', measure: 'm' }] })
     expect(canonicalJson(withUnknown.successMeasures)).toContain('"baseline":"Unknown"')
   })
 
-  test('list order is semantic: reordering changes the hash', () => {
+  test('list order is semantic: reordering changes the serialization', () => {
     const a = normalizeStrategyContent({ boundaries: ['one', 'two'] })
     const b = normalizeStrategyContent({ boundaries: ['two', 'one'] })
-    expect(hashStrategyContent(a)).not.toBe(hashStrategyContent(b))
+    expect(canonicalJson(a)).not.toBe(canonicalJson(b))
   })
 })
 
@@ -150,6 +132,6 @@ describe('StrategyContent type round-trip', () => {
     const original: StrategyContent = normalizeStrategyContent(content())
     const parsed = normalizeStrategyContent(JSON.parse(JSON.stringify(original)))
     expect(parsed).toEqual(original)
-    expect(hashStrategyContent(parsed)).toBe(hashStrategyContent(original))
+    expect(canonicalJson(parsed)).toBe(canonicalJson(original))
   })
 })

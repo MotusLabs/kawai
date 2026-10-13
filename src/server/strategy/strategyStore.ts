@@ -22,10 +22,10 @@ import type {
   StrategyRevision,
 } from '../../shared/productStrategy'
 import {
-  hashStrategyContent,
   normalizeStrategyContent,
   strategyContentErrors,
 } from '../../shared/productStrategy'
+import { hashStrategyContent } from './strategyHash'
 import {
   CREATE_STRATEGY_TABLES_SQL,
   mapDecision,

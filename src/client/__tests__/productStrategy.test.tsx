@@ -8,7 +8,10 @@ import { afterEach, expect, test } from 'bun:test'
 import TestRenderer, { act } from 'react-test-renderer'
 import type { ClientMessage, SendClientMessage, Session } from '@shared/types'
 import type { ProductStrategy, StrategyDetail, StrategyDraft } from '@shared/productStrategy'
-import { UNKNOWN, hashStrategyContent, normalizeStrategyContent } from '@shared/productStrategy'
+import { UNKNOWN, normalizeStrategyContent } from '@shared/productStrategy'
+
+/** Opaque fixture hash — the components display and echo hashes, never compute them. */
+const hashOf = (seed: string): string => `h-${seed.replace(/[^a-z0-9]+/gi, '-').slice(0, 24)}`
 import ProductStrategyPanel from '../components/chat/ProductStrategyPanel'
 import { useSessionStore } from '../stores/sessionStore'
 import { useStrategyStore, closedStrategyView } from '../stores/strategyStore'
@@ -47,13 +50,13 @@ const content = (overrides: Record<string, unknown> = {}) => normalizeStrategyCo
 })
 
 const revision = (number: number, status: StrategyDetail['revisions'][number]['status'], body = content()) => ({
-  revision: number, status, content: body, contentHash: hashStrategyContent(body),
+  revision: number, status, content: body, contentHash: hashOf(JSON.stringify(body.purpose ?? body)),
   author: { kind: 'agent' as const, sessionId: 'chat-dev' }, impactProposal: null, createdAt: `2026-10-13T0${number}:00:00.000Z`,
 })
 
 const draft = (extra: Partial<StrategyDraft> = {}): StrategyDraft => ({
   draftId: 'human', baseRevision: 2, author: { kind: 'human', sessionId: null },
-  content: content({ purpose: 'A human draft in progress' }), contentHash: hashStrategyContent(content({ purpose: 'A human draft in progress' })),
+  content: content({ purpose: 'A human draft in progress' }), contentHash: hashOf('A human draft in progress'),
   impactProposal: null, updatedAt: '2026-10-13T03:00:00.000Z', ...extra,
 })
 
@@ -62,8 +65,8 @@ const detail = (extra: Partial<StrategyDetail> = {}): StrategyDetail => ({
   revisions: [revision(1, 'superseded', content({ purpose: 'v1' })), revision(2, 'approved')],
   drafts: [draft()],
   evidence: [{ id: 'e1', revision: 2, claimRef: 'c1', kind: 'owner_preference', sourceRef: null, observedAt: null, limitations: null, accessScope: null }],
-  decisions: [{ id: 'd1', revision: 2, contentHash: hashStrategyContent(content()), decision: 'approve', rationale: null, actor: { kind: 'human', sessionId: null }, approvalScope: 'Direction', openQuestions: 'baseline unknown', commandId: 'c1', createdAt: '2026-10-13T02:00:00.000Z' }],
-  impactReviews: [{ id: 'i1', revision: 2, contentHash: hashStrategyContent(content()), commandId: 'c1', state: 'pending', createdAt: '2026-10-13T02:00:00.000Z' }],
+  decisions: [{ id: 'd1', revision: 2, contentHash: hashOf('approved-body'), decision: 'approve', rationale: null, actor: { kind: 'human', sessionId: null }, approvalScope: 'Direction', openQuestions: 'baseline unknown', commandId: 'c1', createdAt: '2026-10-13T02:00:00.000Z' }],
+  impactReviews: [{ id: 'i1', revision: 2, contentHash: hashOf('approved-body'), commandId: 'c1', state: 'pending', createdAt: '2026-10-13T02:00:00.000Z' }],
   ...extra,
 })
 

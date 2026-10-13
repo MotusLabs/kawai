@@ -14,11 +14,11 @@ import { TaskStore } from '../team/taskStore'
 import { StrategyStore } from '../strategy/strategyStore'
 import {
   UNKNOWN,
-  hashStrategyContent,
   normalizeStrategyContent,
   type StrategyActor,
   type StrategyContent,
 } from '../../shared/productStrategy'
+import { hashStrategyContent } from '../strategy/strategyHash'
 
 const TEAM = '/repo/.git'
 const OTHER = '/other/.git'

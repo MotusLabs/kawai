@@ -1,9 +1,10 @@
 // SDK-free product strategy records (product-strategy design D2) shared by
 // server and client views. A revision's content is the structured template —
 // prose sections plus ordered lists of use cases, principles/trade-offs,
-// boundaries, success measures, claims, open questions, and decisions — and
-// is hashed over a canonical serialization (stable key order, the `Unknown`
-// sentinel preserved), so approval and CAS compare hashes instead of prose.
+// boundaries, success measures, claims, open questions, and decisions. The
+// canonical serialization below (stable key order, the `Unknown` sentinel
+// preserved) is what the server-side content hash (strategyHash.ts) digests,
+// so approval and CAS compare hashes instead of prose.
 // Measures that are not known or agreed are the sentinel `Unknown`: nothing
 // here or in the store ever invents a baseline, target, or metric (S08).
 
@@ -307,17 +308,6 @@ export function canonicalJson(value: unknown): string {
     return `{${entries.map(([key, v]) => `${JSON.stringify(key)}:${canonicalJson(v)}`).join(',')}}`
   }
   return JSON.stringify(value) ?? 'null'
-}
-
-/**
- * SHA-256 of the canonical serialization (design D2). The hash is computed
- * server-side only — the client displays hashes the server sent — so
- * node:crypto is loaded through `process.getBuiltinModule`, which keeps the
- * browser bundle free of a stubbed module import instead of bundling one.
- */
-export function hashStrategyContent(content: StrategyContent): string {
-  const { createHash } = process.getBuiltinModule('node:crypto') as typeof import('node:crypto')
-  return createHash('sha256').update(canonicalJson(content)).digest('hex')
 }
 
 /**
