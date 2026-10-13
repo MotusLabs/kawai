@@ -95,6 +95,31 @@ test('global hop-limit notifier works without a selected chat', () => {
   expect(broadcast).toEqual([{ type: 'team-mailbox-dead-letter', teamId: 'team', messageId: dead.id, senderSession: 'dev' }])
 })
 
+test('a reply delivered to the human notifies the attached team client', async () => {
+  await connections.handle(connection, { type: 'chat-attach', sessionId: 'dev' })
+  const reply = store.enqueue({ teamId: 'team', fromSession: 'dev', fromGroup: 'devs',
+    toKind: 'human', toId: null, originPath: '/repo', body: 'Done' })
+  store.deliverOnSend(reply.id)
+  expect(messages.filter(message => message.type === 'team-mailbox-delivered-to-human')).toEqual([{
+    type: 'team-mailbox-delivered-to-human', teamId: 'team', messageId: reply.id,
+    senderSession: 'dev', senderKind: 'agent',
+  }])
+})
+
+test('global delivered-to-human notifier carries the sender kind', () => {
+  const broadcast: ServerMessage[] = []
+  const manager = { mailbox: { store } } as unknown as ChatSessionManager
+  const globalConnections = new ChatConnections(manager, undefined, message => broadcast.push(message))
+  const reply = store.enqueue({ teamId: 'team', fromSession: null, fromKind: 'human', fromGroup: null,
+    toKind: 'human', toId: null, originPath: '/repo', body: 'Noted' })
+  store.deliverOnSend(reply.id)
+  globalConnections.publishMailbox('team', store.get(reply.id)!)
+  expect(broadcast.at(-1)).toEqual({
+    type: 'team-mailbox-delivered-to-human', teamId: 'team', messageId: reply.id,
+    senderSession: null, senderKind: 'human',
+  })
+})
+
 test('close during asynchronous team resolution cannot resurrect a subscription', async () => {
   let resolve!: (team: { teamId: string }) => void
   const manager = {

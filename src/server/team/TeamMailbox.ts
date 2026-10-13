@@ -1,23 +1,45 @@
-// Sender-bound mailbox operations. Identity always comes from the current
-// session record; tool arguments can only choose a recipient, content, and
-// (team-tasks) a task of the sender's own team. A reply without a task id
-// keeps the task of the message it answers. Urgent direct mail to an agent
-// whose profile is cooling after a provider limit is refused (profile
-// routing): it could neither interrupt usefully nor run.
+// Sender-bound mailbox operations. Identity always comes from the caller —
+// the agent's current session record, or the human through the authenticated
+// UI connection — never from tool arguments. The human is a first-class
+// sender (team-message-threads D4): `from_kind: 'human'` with no session, and
+// their reply to a human-started thread is the only mail that targets them
+// (D5, settled on send). A reply without a task id keeps the task of the
+// message it answers. Urgent direct mail to an agent whose profile is cooling
+// after a provider limit is refused (profile routing): it could neither
+// interrupt usefully nor run.
 import type { ChatSessionRecord } from '../db'
+import { loadGroupCatalog } from './groupCatalog'
 import { loadTeamGroups } from './teamGroups'
 import { resolveTeam, type TeamIdentity } from './teamIdentity'
 import { MailboxStore, type TeamMessage } from './mailboxStore'
 import type { TaskStore } from './taskStore'
 
+/** Who is sending: an agent session (identity bound) or the human for a team. */
+export type MailCaller = { kind: 'agent'; sessionId: string } | { kind: 'human'; team: TeamIdentity }
+
 export interface MailInput {
-  to_kind: 'group' | 'session'
-  to_id: string
+  /**
+   * Routing vocabulary (D4). `human` is accepted so the refusal can teach the
+   * reply path — neither agent nor human may *start* mail to the human.
+   */
+  to_kind: 'group' | 'session' | 'human'
+  /** Recipient id; absent for `to_kind: 'human'`. */
+  to_id?: string | null
   body: string
   urgent?: boolean
   tags?: string[]
   task_id?: string
 }
+
+export interface MailReplyInput {
+  message_id: string
+  body: string
+  urgent?: boolean
+  tags?: string[]
+  task_id?: string
+}
+
+const START_TO_HUMAN = 'New mail to the human is not a thing. Reply to a message they sent instead — that reply reaches them.'
 
 export class TeamMailbox {
   constructor(readonly store: MailboxStore, private readonly options: {
@@ -49,27 +71,41 @@ export class TeamMailbox {
     return task.id
   }
 
-  private async context(sessionId: string) {
-    const sender = this.options.getSession(sessionId)
-    if (!sender) throw new Error(`Unknown sending session: ${sessionId}`)
+  /** The sender's team, catalog, and the identity the row is stamped with. */
+  private async context(caller: MailCaller) {
+    if (caller.kind === 'human') {
+      const catalog = loadGroupCatalog({
+        groupsRoot: caller.team.groupsRoot, ...(this.options.homeDir ? { homeDir: this.options.homeDir } : {}),
+      })
+      return {
+        team: caller.team, catalog,
+        fromKind: 'human' as const, fromSession: null, fromGroup: null,
+        originPath: caller.team.groupsRoot, hopLimit: undefined,
+      }
+    }
+    const sender = this.options.getSession(caller.sessionId)
+    if (!sender) throw new Error(`Unknown sending session: ${caller.sessionId}`)
     const { team, catalog } = await loadTeamGroups(sender.projectPath, this.options.homeDir)
-    return { sender, team, catalog }
+    return {
+      team, catalog,
+      fromKind: 'agent' as const, fromSession: sender.sessionId, fromGroup: sender.groupId ?? null,
+      originPath: sender.projectPath,
+      hopLimit: sender.groupId ? catalog.groups.get(sender.groupId)?.hopLimit : undefined,
+    }
   }
 
-  async listGroups(sessionId: string) {
-    const { catalog } = await this.context(sessionId)
+  async listGroups(caller: MailCaller) {
+    const { catalog } = await this.context(caller)
     return [...catalog.groups.values()].map(({ id, label, description }) => ({ id, label, description }))
   }
 
-  async send(sessionId: string, input: MailInput, deliverAt?: string): Promise<TeamMessage> {
-    const { sender, team, catalog } = await this.context(sessionId)
-    const taskId = this.taskOf(team, input.task_id)
-    if (input.to_kind === 'group') {
-      if (!catalog.groups.has(input.to_id)) throw new Error(`Unknown group: ${input.to_id}`)
-    } else {
-      const recipient = this.options.getSession(input.to_id)
-      if (!recipient) throw new Error(`Unknown recipient session: ${input.to_id}`)
-      if ((await resolveTeam(recipient.projectPath)).teamId !== team.teamId) {
+  async send(caller: MailCaller, input: MailInput, deliverAt?: string): Promise<TeamMessage> {
+    const sender = await this.context(caller)
+    const taskId = this.taskOf(sender.team, input.task_id)
+    const target = this.targetOf(sender, input)
+    if (target.kind === 'session') {
+      const recipient = target.recipient
+      if ((await resolveTeam(recipient.projectPath)).teamId !== sender.team.teamId) {
         throw new Error('Recipient belongs to another team')
       }
       this.refuseCooling(recipient, input.urgent)
@@ -78,16 +114,15 @@ export class TeamMailbox {
       if (recipient.archivedAt) await this.options.restoreSession?.(recipient.sessionId)
     }
     return this.publish(this.store.enqueue({
-      teamId: team.teamId, toKind: input.to_kind, toId: input.to_id,
-      fromSession: sender.sessionId, fromGroup: sender.groupId ?? null,
-      originPath: sender.projectPath, body: input.body,
+      teamId: sender.team.teamId, toKind: target.kind, toId: target.id,
+      fromKind: sender.fromKind, fromSession: sender.fromSession, fromGroup: sender.fromGroup,
+      originPath: sender.originPath, body: input.body,
       priority: input.urgent ? 'urgent' : 'normal', tags: input.tags,
-      hopLimit: sender.groupId ? catalog.groups.get(sender.groupId)?.hopLimit : undefined,
-      deliverAt, taskId,
+      hopLimit: sender.hopLimit, deliverAt, taskId,
     }))
   }
 
-  async schedule(sessionId: string, input: MailInput & { deliver_at?: string; delay_seconds?: number }) {
+  async schedule(caller: MailCaller, input: MailInput & { deliver_at?: string; delay_seconds?: number }) {
     if ((input.deliver_at === undefined) === (input.delay_seconds === undefined)) {
       throw new Error('Provide exactly one of deliver_at or delay_seconds')
     }
@@ -96,14 +131,19 @@ export class TeamMailbox {
     if (!Number.isFinite(due) || (input.delay_seconds !== undefined && input.delay_seconds < 0)) {
       throw new Error('Invalid scheduled delivery time')
     }
-    return this.send(sessionId, input, new Date(due).toISOString())
+    return this.send(caller, input, new Date(due).toISOString())
   }
 
-  async reply(sessionId: string, input: { message_id: string; body: string; urgent?: boolean; tags?: string[]; task_id?: string }) {
-    const { sender, team, catalog } = await this.context(sessionId)
-    const explicitTask = this.taskOf(team, input.task_id)
+  async reply(caller: MailCaller, input: MailReplyInput) {
+    const sender = await this.context(caller)
+    const explicitTask = this.taskOf(sender.team, input.task_id)
     const original = this.store.get(input.message_id)
-    if (!original || original.teamId !== team.teamId || original.claimedBy !== sessionId || original.deliveredAt === null) {
+    if (!original || original.teamId !== sender.team.teamId) {
+      throw new Error('Can only reply to a message of this team')
+    }
+    // An agent answers only mail it actually received; the human sees the
+    // team's threads and may answer any of them.
+    if (caller.kind === 'agent' && (original.claimedBy !== caller.sessionId || original.deliveredAt === null)) {
       throw new Error('Can only reply to a message received by this session')
     }
     // A human sender has no session to claim or push the reply (D5): it is
@@ -111,30 +151,47 @@ export class TeamMailbox {
     const toHuman = original.fromKind === 'human' || original.fromSession === null
     const recipient = toHuman ? null
       : original.fromSession ? this.options.getSession(original.fromSession) : null
-    if (recipient && (await resolveTeam(recipient.projectPath)).teamId !== team.teamId) {
+    if (recipient && (await resolveTeam(recipient.projectPath)).teamId !== sender.team.teamId) {
       throw new Error('Recipient belongs to another team')
     }
     if (recipient) this.refuseCooling(recipient, input.urgent)
     if (recipient?.archivedAt) await this.options.restoreSession?.(recipient.sessionId)
     const fallback = !toHuman && !recipient && original.fromGroup !== null
     const message = this.store.enqueue({
-      teamId: team.teamId,
+      teamId: sender.team.teamId,
       toKind: toHuman ? 'human' : fallback ? 'group' : 'session',
       toId: toHuman ? null : fallback ? original.fromGroup : original.fromSession,
-      fromSession: sender.sessionId, fromGroup: sender.groupId ?? null,
-      originPath: sender.projectPath, body: input.body,
+      fromKind: sender.fromKind, fromSession: sender.fromSession, fromGroup: sender.fromGroup,
+      originPath: sender.originPath, body: input.body,
       priority: input.urgent ? 'urgent' : 'normal', tags: input.tags,
       inReplyTo: original, attachThread: fallback,
       taskId: explicitTask ?? original.taskId,
-      hopLimit: sender.groupId ? catalog.groups.get(sender.groupId)?.hopLimit : undefined,
+      hopLimit: sender.hopLimit,
     })
     if (toHuman) {
-      const task = this.options.tasks?.get(message.taskId ?? '')
+      const task = message.taskId ? this.options.tasks?.get(message.taskId) : null
       this.store.deliverOnSend(message.id, task?.revision ?? null)
-    } else if (!recipient && (!fallback || !catalog.groups.has(original.fromGroup!))) {
+    } else if (!recipient && (!fallback || !sender.catalog.groups.has(original.fromGroup!))) {
       this.store.deadLetter(message.id, 'killed-sender-without-group')
     }
     return this.publish(this.store.get(message.id)!)
+  }
+
+  /**
+   * Resolve a send's recipient. `human` is never a valid *start* — only a
+   * reply in a human-started thread may target them (D5).
+   */
+  private targetOf(sender: Awaited<ReturnType<TeamMailbox['context']>>, input: MailInput) {
+    if (input.to_kind === 'human') throw new Error(START_TO_HUMAN)
+    const id = input.to_id?.trim()
+    if (!id) throw new Error(`A ${input.to_kind} recipient needs an id`)
+    if (input.to_kind === 'group') {
+      if (!sender.catalog.groups.has(id)) throw new Error(`Unknown group: ${id}`)
+      return { kind: 'group' as const, id }
+    }
+    const recipient = this.options.getSession(id)
+    if (!recipient) throw new Error(`Unknown recipient session: ${id}`)
+    return { kind: 'session' as const, id, recipient }
   }
 
   private publish(message: TeamMessage) {

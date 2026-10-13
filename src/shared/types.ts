@@ -346,6 +346,9 @@ export type ServerMessage =
   | { type: 'team-mailbox-hand-off-result'; sessionId: string; messageId: string; ok: true; forwardedId: string }
   | { type: 'team-mailbox-hand-off-result'; sessionId: string; messageId: string; ok: false; error: string }
   | { type: 'team-mailbox-dead-letter'; teamId: string; messageId: string; senderSession: string | null }
+  // A reply reached the human (team-message-threads D5): settled on send, so
+  // a toast is the only client-side signal. Additive and ephemeral.
+  | { type: 'team-mailbox-delivered-to-human'; teamId: string; messageId: string; senderSession: string | null; senderKind: 'agent' | 'human' }
   // Team tasks (team-tasks 6.1): authoritative snapshots for a session's
   // team — the list, and each task whose detail the connection has open.
   | { type: 'team-tasks-snapshot'; sessionId: string; teamId: string; tasks: TeamTaskSummary[] }

@@ -12,7 +12,9 @@ export const MAILBOX_TOOL_NAMES = ['send_message', 'reply', 'schedule_message', 
 export const TEAM_ALLOWED_TOOLS = [...MAILBOX_TOOL_NAMES, ...TASK_TOOL_NAMES].map(name => `mcp__${TEAM_MCP_SERVER}__${name}`)
 
 const content = { body: z.string().min(1), urgent: z.boolean().optional(), tags: z.array(z.string()).optional(), task_id: z.string().min(1).optional() }
-const recipient = { to_kind: z.enum(['group', 'session']), to_id: z.string().min(1) }
+// `human` is accepted so the service can refuse it with the reply path,
+// rather than an opaque enum error (team-message-threads D5).
+const recipient = { to_kind: z.enum(['group', 'session', 'human']), to_id: z.string().min(1).optional() }
 export const mailboxSchemas = {
   send_message: z.object({ ...recipient, ...content }),
   reply: z.object({ message_id: z.string().min(1), ...content }),
@@ -21,11 +23,12 @@ export const mailboxSchemas = {
 }
 
 export function mailboxHandlers(mailbox: TeamMailbox, sessionId: string) {
+  const caller = { kind: 'agent', sessionId } as const
   return {
-    send_message: (input: unknown) => mailbox.send(sessionId, mailboxSchemas.send_message.parse(input)),
-    reply: (input: unknown) => mailbox.reply(sessionId, mailboxSchemas.reply.parse(input)),
-    schedule_message: (input: unknown) => mailbox.schedule(sessionId, mailboxSchemas.schedule_message.parse(input)),
-    list_groups: (_input: unknown) => mailbox.listGroups(sessionId),
+    send_message: (input: unknown) => mailbox.send(caller, mailboxSchemas.send_message.parse(input)),
+    reply: (input: unknown) => mailbox.reply(caller, mailboxSchemas.reply.parse(input)),
+    schedule_message: (input: unknown) => mailbox.schedule(caller, mailboxSchemas.schedule_message.parse(input)),
+    list_groups: (_input: unknown) => mailbox.listGroups(caller),
   }
 }
 
@@ -37,9 +40,9 @@ export async function createMailboxServer(mailbox: TeamMailbox, sessionId: strin
   }
   const schemas: Record<string, z.ZodObject> = { ...mailboxSchemas, ...(tasks ? taskSchemas : {}) }
   const descriptions: Record<string, string> = {
-    send_message: 'Send to a team group or session. Returns immediately with the message id. Optional task_id puts the message under a team task.',
-    reply: 'Reply to a received message in its thread. The reply keeps the original task unless task_id is given.',
-    schedule_message: 'Schedule mail at deliver_at (ISO date) or after delay_seconds. Use your session id for reminders. Optional task_id.',
+    send_message: 'Send to a team group or session. Returns immediately with the message id. Optional task_id puts the message under a team task. Mail to the human is refused: reply to a message they sent instead.',
+    reply: 'Reply to a received message in its thread. The reply keeps the original task unless task_id is given. A reply to a human-sent message reaches the human.',
+    schedule_message: 'Schedule mail at deliver_at (ISO date) or after delay_seconds. Use your session id for reminders. Optional task_id. Mail to the human is refused.',
     list_groups: 'List available team groups and their descriptions.',
     ...(tasks ? taskDescriptions : {}),
   }

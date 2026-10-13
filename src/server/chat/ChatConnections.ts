@@ -118,12 +118,24 @@ export class ChatConnections {
     // Task detail lists its mail; a task message changing state changes it.
     if (message?.taskId) this.taskConnections.publish(teamId)
     if (message?.state === 'dead' && message.reason === 'hop-limit') {
-      const notice: ServerMessage = { type: 'team-mailbox-dead-letter', teamId, messageId: message.id, senderSession: message.fromSession }
-      if (this.broadcastMailboxNotice) { this.broadcastMailboxNotice(notice); return }
-      for (const [connection, sessions] of this.subscriptions) {
-        if ([...sessions].some(id => this.manager.teams.teamOf(id)?.teamId === teamId)) {
-          connection.send(notice)
-        }
+      this.notice(teamId, { type: 'team-mailbox-dead-letter', teamId, messageId: message.id, senderSession: message.fromSession })
+    }
+    // A reply reached the human (team-message-threads D5): settled on send,
+    // no agent turn to show it in, so every connected client gets a toast.
+    if (message?.state === 'delivered' && message.toKind === 'human') {
+      this.notice(teamId, {
+        type: 'team-mailbox-delivered-to-human', teamId, messageId: message.id,
+        senderSession: message.fromSession, senderKind: message.fromKind,
+      })
+    }
+  }
+
+  /** A one-off toast for every connection attached to the team's sessions. */
+  private notice(teamId: string, notice: ServerMessage): void {
+    if (this.broadcastMailboxNotice) { this.broadcastMailboxNotice(notice); return }
+    for (const [connection, sessions] of this.subscriptions) {
+      if ([...sessions].some(id => this.manager.teams.teamOf(id)?.teamId === teamId)) {
+        connection.send(notice)
       }
     }
   }
