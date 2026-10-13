@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import type { ChatContextUsage, ChatEvent, ChatNotification } from '@shared/chat'
+import type { ChatBackgroundTask, ChatContextUsage, ChatEvent, ChatNotification } from '@shared/chat'
 import type { ClientMessage } from '@shared/types'
 import { applyChatEvents, emptyTranscript, useChatStore } from '../stores/chatStore'
 
@@ -478,5 +478,47 @@ describe('chat store notifications', () => {
     expect(useChatStore.getState().closedAccountNotices['chat-1']?.size).toBe(1)
     store.remove('chat-1')
     expect(useChatStore.getState().closedAccountNotices['chat-1']).toBeUndefined()
+  })
+})
+
+describe('chat store background tasks', () => {
+  const task = (overrides: Partial<ChatBackgroundTask> = {}): ChatBackgroundTask => ({
+    taskId: 'b1',
+    toolCallId: 'call_1',
+    kind: 'shell' as const,
+    description: 'Wait for CI',
+    status: 'running' as const,
+    live: true,
+    startedAtMs: 1_000,
+    elapsedMs: 4_000,
+    ...overrides,
+  })
+
+  afterEach(() => useChatStore.setState({ sessions: {}, workerBodies: {}, closedAccountNotices: {} }))
+
+  test('snapshots and pushes replace the roster wholesale; sessions are independent', () => {
+    const store = useChatStore.getState()
+    store.snapshot({
+      type: 'chat-snapshot', sessionId: 'chat-1', profileId: 'default',
+      events: [], pendingRequests: [], status: 'waiting', throughSequence: 0,
+      commands: { status: 'unavailable', commands: [] },
+      activity: null, contextUsage: null, usage: null,
+      workers: [], backgroundTasks: [task()], notifications: [],
+    })
+    // Epoch timestamps ride along for client-side ticking (D2).
+    expect(useChatStore.getState().sessions['chat-1'].backgroundTasks[0]).toMatchObject({
+      taskId: 'b1', startedAtMs: 1_000, live: true,
+    })
+
+    // A push replaces, never merges (level semantics).
+    store.setBackgroundTasks('chat-1', [task({ status: 'completed', live: false, endedAtMs: 5_000 })])
+    const roster = useChatStore.getState().sessions['chat-1'].backgroundTasks
+    expect(roster).toHaveLength(1)
+    expect(roster[0]).toMatchObject({ status: 'completed', live: false })
+
+    // Another session's roster stays its own.
+    store.setBackgroundTasks('chat-2', [task({ taskId: 'b2', description: 'dev server' })])
+    expect(useChatStore.getState().sessions['chat-2'].backgroundTasks[0]).toMatchObject({ taskId: 'b2' })
+    expect(useChatStore.getState().sessions['chat-1'].backgroundTasks[0]).toMatchObject({ taskId: 'b1' })
   })
 })

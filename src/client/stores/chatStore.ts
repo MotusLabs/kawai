@@ -26,6 +26,7 @@ import type {
   ChatPendingRequest,
   ChatUsageReport,
   ChatWorker,
+  ChatBackgroundTask,
 } from '@shared/chat'
 import type { SendClientMessage, ServerMessage, SessionStatus } from '@shared/types'
 
@@ -61,6 +62,11 @@ export interface ChatTranscript {
   contextUsage: ChatContextUsage | null
   /** Latest worker roster (workers design D2): replaced, never merged. */
   workers: ChatTranscriptWorker[]
+  /**
+   * Latest background-task roster (background tasks D2): replaced wholesale.
+   * Rows carry epoch startedAt/endedAt, so elapsed ticks client-side.
+   */
+  backgroundTasks: ChatBackgroundTask[]
   /** Active notices (notification strip design D6), closed account ones filtered. */
   notifications: ChatNotification[]
 }
@@ -68,7 +74,7 @@ export interface ChatTranscript {
 export const emptyTranscript = (): ChatTranscript => ({
   events: [], pendingRequests: [], status: 'waiting', throughSequence: 0,
   commands: { status: 'unavailable', commands: [] }, seen: new Set(), activity: null, contextUsage: null,
-  workers: [], notifications: [],
+  workers: [], backgroundTasks: [], notifications: [],
 })
 
 /** Anchor a server-reported activity on the client's clock (design D2). */
@@ -167,6 +173,8 @@ interface ChatStore {
   setUsage: (profileId: string, report: ChatUsageReport | null) => void
   /** Adopt the latest roster (chat-workers push / snapshot). */
   setWorkers: (sessionId: string, workers: ChatWorker[]) => void
+  /** Adopt the latest background-task roster (chat-background-tasks / snapshot). */
+  setBackgroundTasks: (sessionId: string, tasks: ChatBackgroundTask[]) => void
   /** Adopt the latest notice list (chat-notifications push / snapshot). */
   setNotifications: (sessionId: string, notifications: ChatNotification[]) => void
   /** Adopt a worker-body reply (chat-worker-transcript). */
@@ -216,6 +224,7 @@ export const useChatStore = create<ChatStore>((set) => ({
         // The roster is authoritative at attach time, live rows and settled
         // outcomes together (workers design D2).
         workers: anchorWorkers(message.workers),
+        backgroundTasks: message.backgroundTasks,
         // The notice list is authoritative at attach time, minus whatever
         // this tab closed (notification strip design D6).
         notifications: visibleNotifications(
@@ -256,6 +265,13 @@ export const useChatStore = create<ChatStore>((set) => ({
     return { sessions: { ...state.sessions, [sessionId]: {
       ...current,
       workers: anchorWorkers(workers),
+    } } }
+  }),
+  setBackgroundTasks: (sessionId, tasks) => set(state => {
+    const current = state.sessions[sessionId] ?? emptyTranscript()
+    return { sessions: { ...state.sessions, [sessionId]: {
+      ...current,
+      backgroundTasks: tasks,
     } } }
   }),
   setNotifications: (sessionId, notifications) => set(state => {
