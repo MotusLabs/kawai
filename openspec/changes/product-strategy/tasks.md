@@ -3,15 +3,15 @@
 ## 1. Shared types and data model
 
 - [x] 1.1 Add `src/shared/productStrategy.ts` with SDK-free types (`ProductStrategy`, `StrategyRevision`, `StrategyDraft`, `StrategyDecision`, `StrategyImpactReview`, claim kinds, template section shape, `Unknown` sentinel) matching design D2; verify typecheck and unit tests cover round-tripping a revision content object and canonical hashing stability across key order.
-- [ ] 1.2 Add the `product_strategies`, `strategy_revisions`, `strategy_drafts`, `strategy_evidence`, `strategy_decisions`, `strategy_impact_reviews`, and `strategy_repo_bindings` tables per design D1 beside `team_tasks`; verify migration tests preserve existing sessions/tasks and round-trip strategy references, authors, hashes, and timestamps.
+- [x] 1.2 Add the `product_strategies`, `strategy_revisions`, `strategy_drafts`, `strategy_evidence`, `strategy_decisions`, `strategy_impact_reviews`, and `strategy_repo_bindings` tables per design D1 beside `team_tasks`; verify migration tests preserve existing sessions/tasks and round-trip strategy references, authors, hashes, and timestamps.
 - [ ] 1.3 Document the strategy data model, revision lifecycle, claim kinds, and `Unknown` handling in the How It Works documentation; verify the documented fields match the shared types and table columns.
 
 ## 2. Strategy store
 
-- [ ] 2.1 Implement `StrategyStore` (`src/server/strategy/strategyStore.ts`) create/get/list and revision writes with content hashing and immutable approved rows; verify tests cover first record per product, template sections present, hash stability, and refusal to mutate an Approved revision.
-- [ ] 2.2 Implement draft save/get/list with `expectedBaseRevision`/`expectedDraftHash` CAS and retained client text on mismatch; verify tests cover two concurrent editors (first wins, second refused with conflicting state), draft survival across store reopen, and material-change impact proposals stored on the draft.
-- [ ] 2.3 Implement lifecycle transitions Draft → InReview → Approved → Superseded and explicit Withdrawn, keeping superseded and withdrawn rows readable; verify tests cover supersede-on-new-approval, withdrawn drafts being unrestorable, and history order across reopen.
-- [ ] 2.4 Implement evidence rows and the refusal of a validated observation without a source reference, plus `Unknown` passthrough for unknown baselines and targets; verify tests cover each claim kind, the missing-source refusal, and no invented metric being written.
+- [x] 2.1 Implement `StrategyStore` (`src/server/strategy/strategyStore.ts`) create/get/list and revision writes with content hashing and immutable approved rows; verify tests cover first record per product, template sections present, hash stability, and refusal to mutate an Approved revision.
+- [x] 2.2 Implement draft save/get/list with `expectedBaseRevision`/`expectedDraftHash` CAS and retained client text on mismatch; verify tests cover two concurrent editors (first wins, second refused with conflicting state), draft survival across store reopen, and material-change impact proposals stored on the draft.
+- [x] 2.3 Implement lifecycle transitions Draft → InReview → Approved → Superseded and explicit Withdrawn, keeping superseded and withdrawn rows readable; verify tests cover supersede-on-new-approval, withdrawn drafts being unrestorable, and history order across reopen.
+- [x] 2.4 Implement evidence rows and the refusal of a validated observation without a source reference, plus `Unknown` passthrough for unknown baselines and targets; verify tests cover each claim kind, the missing-source refusal, and no invented metric being written.
 
 ## 3. Strategy service and agent tools
 
