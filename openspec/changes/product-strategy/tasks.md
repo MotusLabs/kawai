@@ -2,7 +2,7 @@
 
 ## 1. Shared types and data model
 
-- [ ] 1.1 Add `src/shared/productStrategy.ts` with SDK-free types (`ProductStrategy`, `StrategyRevision`, `StrategyDraft`, `StrategyDecision`, `StrategyImpactReview`, claim kinds, template section shape, `Unknown` sentinel) matching design D2; verify typecheck and unit tests cover round-tripping a revision content object and canonical hashing stability across key order.
+- [x] 1.1 Add `src/shared/productStrategy.ts` with SDK-free types (`ProductStrategy`, `StrategyRevision`, `StrategyDraft`, `StrategyDecision`, `StrategyImpactReview`, claim kinds, template section shape, `Unknown` sentinel) matching design D2; verify typecheck and unit tests cover round-tripping a revision content object and canonical hashing stability across key order.
 - [ ] 1.2 Add the `product_strategies`, `strategy_revisions`, `strategy_drafts`, `strategy_evidence`, `strategy_decisions`, `strategy_impact_reviews`, and `strategy_repo_bindings` tables per design D1 beside `team_tasks`; verify migration tests preserve existing sessions/tasks and round-trip strategy references, authors, hashes, and timestamps.
 - [ ] 1.3 Document the strategy data model, revision lifecycle, claim kinds, and `Unknown` handling in the How It Works documentation; verify the documented fields match the shared types and table columns.
 
