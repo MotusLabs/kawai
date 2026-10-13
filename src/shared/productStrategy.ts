@@ -6,7 +6,6 @@
 // sentinel preserved), so approval and CAS compare hashes instead of prose.
 // Measures that are not known or agreed are the sentinel `Unknown`: nothing
 // here or in the store ever invents a baseline, target, or metric (S08).
-import { createHash } from 'node:crypto'
 
 /** Sentinel for a measure value that is not known or agreed (S08). */
 export const UNKNOWN = 'Unknown'
@@ -310,8 +309,14 @@ export function canonicalJson(value: unknown): string {
   return JSON.stringify(value) ?? 'null'
 }
 
-/** SHA-256 of the canonical serialization (design D2). */
+/**
+ * SHA-256 of the canonical serialization (design D2). The hash is computed
+ * server-side only — the client displays hashes the server sent — so
+ * node:crypto is loaded through `process.getBuiltinModule`, which keeps the
+ * browser bundle free of a stubbed module import instead of bundling one.
+ */
 export function hashStrategyContent(content: StrategyContent): string {
+  const { createHash } = process.getBuiltinModule('node:crypto') as typeof import('node:crypto')
   return createHash('sha256').update(canonicalJson(content)).digest('hex')
 }
 
