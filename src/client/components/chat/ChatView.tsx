@@ -314,7 +314,8 @@ export default function ChatView({ session, sendMessage, subscribe, connectionSt
     <ChatHeader session={session} profileLabel={profileLabel} model={transcript.model} contextUsage={transcript.contextUsage}
       connectionStatus={connectionStatus} openSlot={openSlot} onToggleSlot={slot => toggleSideSlot(slot, session.id)}
       onOpenTask={openTasks} onRename={name => sendMessage({ type: 'session-rename', sessionId: session.id, newName: name })}
-      onToggleApproval={toggleApprovalPolicy} onArchive={handleArchive} onKill={onKill} onClose={onClose} />
+      onToggleApproval={toggleApprovalPolicy} onArchive={handleArchive} onKill={onKill} onClose={onClose}
+      fontSizePx={chatFontSize} />
     <UsageBar report={usage} />
     {/* The notification strip (design D7): under the header, beside the
         usage bar. Archived chats are read-only surfaces that no agent feeds,

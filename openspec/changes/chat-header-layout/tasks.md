@@ -28,13 +28,13 @@
 
 ## 6. Width-driven layouts
 
-- [ ] 6.1 Add `useHeaderLayout(ref, fontSizePx)` (design D6) with `FULL_MIN_EM`/`ICONS_MIN_EM`, returning `'full'` without `ResizeObserver`, plus an optional `layout` prop on `ChatHeader`. Verify with unit tests on a stubbed `ResizeObserver`: each threshold side, the font-size scaling, and observer cleanup on unmount.
-- [ ] 6.2 Render the three layouts: labelled switcher; icons; and panel entries folded into the session menu with the compact context meter (`ChatContextMeter compact`, design D8). Verify with component tests for "Full layout on a wide header", "Icons on a medium header", "Switcher folds into the menu", and "Switch survives narrow headers".
+- [x] 6.1 Add `useHeaderLayout(ref, fontSizePx)` (design D6) with `FULL_MIN_EM`/`ICONS_MIN_EM`, returning `'full'` without `ResizeObserver`, plus an optional `layout` prop on `ChatHeader`. Verify with unit tests on a stubbed `ResizeObserver`: each threshold side, the font-size scaling, and observer cleanup on unmount.
+- [x] 6.2 Render the three layouts: labelled switcher; icons; and panel entries folded into the session menu with the compact context meter (`ChatContextMeter compact`, design D8). Verify with component tests for "Full layout on a wide header", "Icons on a medium header", "Switcher folds into the menu", and "Switch survives narrow headers".
 - [ ] 6.3 Tune the threshold constants from Playwright screenshots of a chat header at 1920/1440/1100/768 px windows, at the smallest and largest chat font sizes, and with the navigator widened ("Same window, narrower header"). Check that no control is clipped or outside the header and that the name keeps visible characters. Use an isolated server and attach only to an archived or already-live session. Verify: the screenshots are attached to the PR description.
 
 ## 7. Final verification
 
-- [ ] 7.1 Run `bun run lint && bun run typecheck && bun run test` and `openspec validate chat-header-layout --strict`; all pass.
+- [x] 7.1 Run `bun run lint && bun run typecheck && bun run test` and `openspec validate chat-header-layout --strict`; all pass.
 
 ## Workflow follow-up
 

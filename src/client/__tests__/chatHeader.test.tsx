@@ -13,7 +13,7 @@ import ChatView from '../components/chat/ChatView'
 import { Switch } from '../components/Switch'
 import { useTeamMailboxStore } from '../stores/teamMailboxStore'
 import { useTeamTaskStore } from '../stores/teamTaskStore'
-import { chooseSessionMenuEntry } from './support/sessionMenu'
+import { chooseSessionMenuEntry, sessionMenuEntriesOf } from './support/sessionMenu'
 
 const session = {
   id: 'chat-1', name: 'Kawai Chat header buttons', projectPath: '/home/coder/kawai', status: 'working', kind: 'chat',
@@ -279,5 +279,49 @@ describe('kill confirmation body', () => {
       renderer = TestRenderer.create(<ChatKillDialog open={false} name="My chat" container={{ current: null }} onOpenChange={() => {}} onConfirm={() => {}} />)
     })
     expect(renderer.toJSON()).toBeNull()
+  })
+})
+
+describe('width layouts', () => {
+  const usage = {
+    usedTokens: 47_700, thresholdTokens: 967_000, percentage: 4.93, thresholdApproximate: false, at: '2026-10-13T10:00:00.000Z',
+  } as unknown as NonNullable<ChatHeaderProps['contextUsage']>
+  const switcherButtons = (renderer: TestRenderer.ReactTestRenderer) =>
+    renderer.root.findAllByProps({ 'data-testid': 'chat-panel-switcher' }).flatMap(group => group.findAllByType('button'))
+
+  test('full: labelled entries and the full context meter', () => {
+    const { renderer, byId } = renderHeader({ layout: 'full', contextUsage: usage })
+    expect(switcherButtons(renderer).map(button => textOf(button))).toEqual(['Tasks', 'Mailbox', 'Messages', 'Strategy'])
+    expect(textOf(byId('chat-context-meter'))).toBe('Context 4.9% · 47.7k / 967k')
+    expect(sessionMenuEntriesOf(renderer.root).some(entry => entry.id.startsWith('panel-'))).toBe(false)
+  })
+
+  test('icons: icon entries named by their panel, full meter', () => {
+    const { renderer, byId } = renderHeader({ layout: 'icons', contextUsage: usage })
+    expect(switcherButtons(renderer).map(button => button.props['aria-label'])).toEqual(['Tasks', 'Mailbox', 'Messages', 'Strategy'])
+    expect(switcherButtons(renderer).map(button => textOf(button))).toEqual(['', '', '', ''])
+    expect(textOf(byId('chat-context-meter'))).toBe('Context 4.9% · 47.7k / 967k')
+  })
+
+  test('menu: panels fold into the session menu with their state, the meter shows its percentage, the rest stays', () => {
+    const { renderer, byId } = renderHeader({ layout: 'menu', contextUsage: usage, openSlot: 'tasks' })
+    expect(renderer.root.findAllByProps({ 'data-testid': 'chat-panel-switcher' })).toHaveLength(0)
+    const panels = sessionMenuEntriesOf(renderer.root).filter(entry => entry.id.startsWith('panel-'))
+    expect(panels.map(entry => entry.kind === 'check' && [entry.label, entry.checked])).toEqual([
+      ['Tasks', true], ['Mailbox', false], ['Messages', false], ['Strategy', false],
+    ])
+    const meter = byId('chat-context-meter')
+    expect(textOf(meter)).toBe('4.9%')
+    expect(meter.props.title).toContain('47700 of 967000 tokens')
+    // Name, status, the Auto-approve switch, and the menu stay in the header.
+    expect(textOf(byId('chat-name'))).toBe('Kawai Chat header buttons')
+    expect(textOf(byId('chat-status'))).toBe('working')
+    expect(renderer.root.findAllByType(Switch)).toHaveLength(1)
+    expect(renderer.root.findAll(node => typeof node.type === 'string' && node.props['data-testid'] === 'chat-session-menu')).toHaveLength(1)
+  })
+
+  test('an approximate threshold keeps its marker in the compact meter', () => {
+    const { byId } = renderHeader({ layout: 'menu', contextUsage: { ...usage, thresholdApproximate: true } })
+    expect(textOf(byId('chat-context-meter'))).toBe('4.9%~')
   })
 })

@@ -1,7 +1,10 @@
 // The chat view header (chat-header-layout D1): the session's identity and
 // status, the side-panel switcher, the Auto-approve switch (amber while on,
 // shown for live chats at every width), and the session menu (Rename, Debug,
-// Archive, and Kill session, which asks for confirmation first). It renders from props only — the WebSocket subscription
+// Archive, and Kill session, which asks for confirmation first). As the
+// header narrows (measured in chat-font ems, D6) the switcher drops to icons,
+// then folds into the session menu while the context meter shows only its
+// percentage; the name, status, switch, and menu always stay visible. It renders from props only — the WebSocket subscription
 // effects for each side panel stay in ChatView, which owns the attach
 // lifecycle — and keeps the in-place rename state (chat-session-naming): a
 // blank submit just exits editing, and the draft follows broadcast renames
@@ -15,6 +18,7 @@ import type { Session } from '@shared/types'
 import type { ConnectionStatus } from '../../stores/sessionStore'
 import { parkedLabel } from '../../utils/parkedLabel'
 import { chatStatusIndicator } from '../../utils/sessionStatus'
+import { useHeaderLayout, type HeaderLayout } from '../../hooks/useHeaderLayout'
 import { Switch } from '../Switch'
 import ChatContextMeter from './ChatContextMeter'
 import ChatKillDialog from './ChatKillDialog'
@@ -36,6 +40,10 @@ export interface ChatHeaderProps {
   onArchive: () => void
   onKill: () => void
   onClose: () => void
+  /** Chat font size in px; the width steps are measured in these ems. */
+  fontSizePx?: number
+  /** Forces a layout instead of measuring the header (tests). */
+  layout?: HeaderLayout
 }
 
 /** The project's last path segment; the full path rides in the title. */
@@ -45,7 +53,7 @@ export function projectName(projectPath: string): string {
 
 export default function ChatHeader({
   session, profileLabel, model, contextUsage, connectionStatus, openSlot,
-  onToggleSlot, onOpenTask, onRename, onToggleApproval, onArchive, onKill, onClose,
+  onToggleSlot, onOpenTask, onRename, onToggleApproval, onArchive, onKill, onClose, fontSizePx = 15, layout: forcedLayout,
 }: ChatHeaderProps) {
   const archived = session.archivedAt != null
   const autoApprove = session.approvalPolicy === 'auto'
@@ -70,15 +78,17 @@ export default function ChatHeader({
     }
   }
   const headerRef = useRef<HTMLElement>(null)
+  const measuredLayout = useHeaderLayout(headerRef, fontSizePx)
+  const layout = forcedLayout ?? measuredLayout
   const [killOpen, setKillOpen] = useState(false)
   const menuEntries = sessionMenuEntries({
-    archived, openSlot, foldPanels: false, onRename: () => setEditingName(true), onToggleSlot,
+    archived, openSlot, foldPanels: layout === 'menu', onRename: () => setEditingName(true), onToggleSlot,
     onArchive, onKill: () => setKillOpen(true),
   })
   return (
-    <header ref={headerRef} className="flex items-center gap-3 border-b border-border p-3">
+    <header ref={headerRef} className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-border p-3" data-layout={layout}>
       <button className="btn text-chat-meta md:hidden" onClick={onClose}>Sessions</button>
-      <div className="min-w-0 flex-1">
+      <div className="min-w-[8em] flex-1">
         <div className="flex min-w-0 items-center gap-2">
           <span className="flex shrink-0 items-center gap-1.5 text-chat-meta text-secondary">
             <span aria-hidden="true" className={`h-2 w-2 shrink-0 rounded-full ${status.dot}`} data-testid="chat-status-dot" />
@@ -109,8 +119,8 @@ export default function ChatHeader({
           {session.parked && <span className="min-w-0 truncate rounded border border-border px-1.5 text-amber-600" data-testid="chat-paused">{parkedLabel(session.parked)}</span>}
         </p>
       </div>
-      <ChatContextMeter usage={contextUsage} />
-      <ChatPanelSwitcher openSlot={openSlot} onToggle={onToggleSlot} />
+      <ChatContextMeter usage={contextUsage} compact={layout === 'menu'} />
+      {layout !== 'menu' && <ChatPanelSwitcher openSlot={openSlot} onToggle={onToggleSlot} iconsOnly={layout === 'icons'} />}
       {!archived && (
         <label className={`flex shrink-0 cursor-pointer items-center gap-1.5 whitespace-nowrap text-chat-meta ${autoApprove ? 'text-approval' : 'text-secondary'}`}>
           <Switch checked={autoApprove} onCheckedChange={onToggleApproval} ariaLabel="Auto-approve" testId="chat-approval-policy"
