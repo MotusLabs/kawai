@@ -136,7 +136,7 @@ test('the view composes a new message from the list and replies to a thread row'
   const ViewHost = () => {
     const view = useTeamMessageStore(state => state.views.dev) ?? closedMessageView()
     return <TeamMessagesView sessionId="dev" view={view} sendMessage={message => sent.push(message)} connected
-      sessions={sessions} groups={groups} tasks={tasks} onClose={() => {}} />
+      sessions={sessions} groups={groups} onClose={() => {}} />
   }
   act(() => {
     useTeamMessageStore.getState().open('dev')
@@ -156,7 +156,7 @@ test('the view composes a new message from the list and replies to a thread row'
   act(() => {
     useTeamMessageStore.getState().applySnapshot({
       type: 'team-messages-snapshot', sessionId: 'dev', teamId: 'team', filters: {},
-      messages: [parent], nextCursor: null, directory: [],
+      messages: [parent], nextCursor: null, directory: [], tasks,
     })
   })
   act(() => renderer.root.findByProps({ 'data-testid': 'message-open-thread' }).props.onClick())

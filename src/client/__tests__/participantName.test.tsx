@@ -126,3 +126,15 @@ test('ParticipantName alone resolves the same labels the row does', () => {
   expect(textOf(renderer.root.findByProps({ 'data-testid': 'participant-name' }))).toBe('Human')
   act(() => renderer.unmount())
 })
+
+test('a live session wins on name but may take its role from the directory', () => {
+  // The live row carries no group; only the directory recorded one.
+  const unnamed: Session[] = [{ ...sessionRow('chat-live', 'Renamed helper') }]
+  let renderer!: TestRenderer.ReactTestRenderer
+  act(() => {
+    renderer = TestRenderer.create(<ParticipantName sessionId="chat-live" sessions={unnamed} directory={directory} />)
+  })
+  expect(textOf(renderer.root.findByProps({ 'data-testid': 'participant-name' }))).toBe('Renamed helper')
+  expect(textOf(renderer.root.findByProps({ 'data-testid': 'participant-group' }))).toBe('devs')
+  act(() => renderer.unmount())
+})

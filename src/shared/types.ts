@@ -358,7 +358,14 @@ export type ServerMessage =
   // Team tasks (team-tasks 6.1): authoritative snapshots for a session's
   // team — the list, and each task whose detail the connection has open.
   | { type: 'team-tasks-snapshot'; sessionId: string; teamId: string; tasks: TeamTaskSummary[] }
-  | { type: 'team-task-detail'; sessionId: string; teamId: string; detail: TeamTaskDetail }
+  | {
+      type: 'team-task-detail'
+      sessionId: string
+      teamId: string
+      detail: TeamTaskDetail
+      /** Last known identity of killed participants named by its messages. */
+      directory: SessionDirectoryEntry[]
+    }
   // Result of a human task action; `task` is set on success (a created
   // task's id lets the view open it), `error` on refusal.
   | { type: 'team-task-result'; sessionId: string; requestId: string; task?: TeamTask; error?: string }
@@ -376,6 +383,8 @@ export type ServerMessage =
       nextCursor: MessageCursor | null
       /** Last known identity of killed participants named by these rows. */
       directory: SessionDirectoryEntry[]
+      /** The team's tasks, so the composer can attach one without the Tasks panel. */
+      tasks: { id: string; title: string }[]
     }
   | { type: 'team-messages'; sessionId: string; teamId: string; messages: TeamMessage[] }
   | {

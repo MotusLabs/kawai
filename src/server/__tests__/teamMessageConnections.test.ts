@@ -53,6 +53,9 @@ beforeEach(async () => {
   records = new Map([['dev', row('dev', project)], ['stranger', row('stranger', elsewhere)]])
   teams = new Map()
   db = new Database(':memory:')
+  // Task summaries join the session table for participants; the rest of the
+  // schema this test needs is created by the stores themselves.
+  db.run('CREATE TABLE IF NOT EXISTS chat_sessions (session_id TEXT PRIMARY KEY, task_id TEXT)')
   store = new MailboxStore(db)
   tasks = new TaskStore(db)
   mailbox = new TeamMailbox(store, { getSession: id => records.get(id), homeDir: dir, tasks })
@@ -69,8 +72,10 @@ beforeEach(async () => {
       teamOf: (id: string) => teams.get(id),
       resolvedTeamOf: async (id: string) => teams.get(id),
     },
-    mailbox, messages: feed, tasks, dispatcher: { notify: () => {} },
-    directory: { list: () => [] },
+    mailbox, messages: feed,
+    // The real manager exposes a TaskService, whose store lists summaries.
+    tasks: { store: tasks }, dispatcher: { notify: () => {} },
+    directory: { list: () => [{ sessionId: 'gone', name: 'Killed helper', group: 'qa' }] },
   } as unknown as ChatSessionManager
   connections = new ChatConnections(manager)
 })
@@ -101,11 +106,16 @@ const fromTeam = (to: { kind: 'group' | 'session'; id: string }, body: string, t
 test('list open snapshots the team, changes push, close and disconnect unsubscribe', async () => {
   fromTeam({ kind: 'group', id: 'devs' }, 'Existing')
   fromTeam({ kind: 'group', id: 'devs' }, 'Theirs', teams.get('stranger')!.teamId)
+  const task = tasks.create({ teamId: team.teamId, title: 'Export CSV', direction: 'd', creator: { kind: 'human', sessionId: null } })
   await send({ type: 'team-messages-open', sessionId: 'dev' })
   // One open, one authoritative snapshot — never two, and never on change.
   expect(count('team-messages-snapshot')).toBe(1)
   expect(last('team-messages-snapshot')!.teamId).toBe(team.teamId)
   expect(bodies(last('team-messages-snapshot')!.messages)).toEqual(['Existing'])
+  // The snapshot also names killed participants and offers the team's tasks,
+  // so the composer needs no other panel open.
+  expect(last('team-messages-snapshot')!.directory).toEqual([{ sessionId: 'gone', name: 'Killed helper', group: 'qa' }])
+  expect(last('team-messages-snapshot')!.tasks).toEqual([{ id: task.id, title: 'Export CSV' }])
   fromTeam({ kind: 'group', id: 'devs' }, 'Second')
   expect(bodies(last('team-messages')!.messages)).toEqual(['Second'])
   fromTeam({ kind: 'group', id: 'devs' }, 'Elsewhere', teams.get('stranger')!.teamId)

@@ -36,10 +36,13 @@ const event = (id: string, seq: number, kind: MessageEvent['kind'], extra: Parti
 })
 const at = (n: number) => `2026-10-13T10:00:${String(n).padStart(2, '0')}.000Z`
 const snapshot = (
-  messages: TeamMessage[], extra: { filters?: MessageQueryFilters; nextCursor?: MessageCursor | null; directory?: SessionDirectoryEntry[] } = {},
+  messages: TeamMessage[], extra: {
+    filters?: MessageQueryFilters; nextCursor?: MessageCursor | null
+    directory?: SessionDirectoryEntry[]; tasks?: { id: string; title: string }[]
+  } = {},
 ): Extract<ServerMessage, { type: 'team-messages-snapshot' }> => ({
   type: 'team-messages-snapshot', sessionId: 'dev', teamId: 'team', filters: extra.filters ?? {},
-  messages, nextCursor: extra.nextCursor ?? null, directory: extra.directory ?? [],
+  messages, nextCursor: extra.nextCursor ?? null, directory: extra.directory ?? [], tasks: extra.tasks ?? [],
 })
 const push = (messages: TeamMessage[]): Extract<ServerMessage, { type: 'team-messages' }> =>
   ({ type: 'team-messages', sessionId: 'dev', teamId: 'team', messages })

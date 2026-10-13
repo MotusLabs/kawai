@@ -6,11 +6,11 @@
 // reads the store the host feeds — so the chat side panel and the task embed
 // can both mount it.
 import { useEffect, useRef, useState } from 'react'
-import type { MessageQueryFilters, MessageState, SessionDirectoryEntry, TeamMessage, ThreadEntry } from '@shared/team'
+import type { MessageQueryFilters, MessageState, SessionDirectoryEntry, ThreadEntry } from '@shared/team'
 import type { SendClientMessage } from '@shared/types'
 import type { LiveParticipant } from '@shared/participants'
-import ParticipantName from './ParticipantName'
-import TeamMessageComposer, { type ComposerMode, type RecipientOption, type TaskOption } from './TeamMessageComposer'
+import MessageRow from './MessageRow'
+import TeamMessageComposer, { type ComposerMode, type RecipientOption } from './TeamMessageComposer'
 import { useTeamMessageStore, type MessageView } from '../../stores/teamMessageStore'
 
 /** Delivery states a list can be narrowed to; absent keeps everything. */
@@ -19,7 +19,7 @@ const STATES: MessageState[] = [
   'dead', 'uncertain', 'cancelled', 'discarded', 'parked', 'forwarded',
 ]
 
-export default function TeamMessagesView({ sessionId, view, sendMessage, connected, connectionEpoch = 0, sessions = [], directory = [], groups = [], tasks = [], onOpenSession, onClose }: {
+export default function TeamMessagesView({ sessionId, view, sendMessage, connected, connectionEpoch = 0, sessions = [], directory = [], groups = [], onOpenSession, onClose }: {
   sessionId: string
   view: MessageView
   sendMessage: SendClientMessage
@@ -31,8 +31,6 @@ export default function TeamMessagesView({ sessionId, view, sendMessage, connect
   directory?: ReadonlyArray<SessionDirectoryEntry>
   /** The team's groups, for the composer's recipient picker. */
   groups?: ReadonlyArray<RecipientOption>
-  /** Tasks the new-message composer may attach to. */
-  tasks?: ReadonlyArray<TaskOption>
   onOpenSession?: (sessionId: string) => void
   /** Omitted by hosts (a task embed) that own no close control. */
   onClose?: () => void
@@ -73,7 +71,7 @@ export default function TeamMessagesView({ sessionId, view, sendMessage, connect
   const target = (replyTo ? entries.find(entry => entry.message.id === replyTo)?.message : undefined) ?? entries.at(-1)?.message
   const reply: ComposerMode | undefined = target && {
     kind: 'reply', inReplyTo: target.id, fromSession: target.fromSession, fromKind: target.fromKind,
-    taskId: target.taskId, taskTitle: tasks.find(task => task.id === target.taskId)?.title ?? null,
+    taskId: target.taskId, taskTitle: view.tasks.find(task => task.id === target.taskId)?.title ?? null,
     body: target.body,
   }
 
@@ -122,53 +120,10 @@ export default function TeamMessagesView({ sessionId, view, sendMessage, connect
         {view.nextCursor && <button className="btn" data-testid="messages-load-more" disabled={!connected || view.loadingMore}
           onClick={loadMore}>{view.loadingMore ? 'Loading more…' : 'Load more'}</button>}
         <TeamMessageComposer sessionId={sessionId} mode={{ kind: 'new' }} groups={groups} sessions={sessions}
-          directory={names} tasks={tasks} view={view} sendMessage={sendMessage} connected={connected} />
+          directory={names} tasks={view.tasks} view={view} sendMessage={sendMessage} connected={connected} />
       </>}
     </div>
   </aside>
-}
-
-/** Sender → current recipient, delivery-state and priority badges, body. */
-function MessageRow({ row, sessions, names, onOpenSession }: {
-  row: TeamMessage
-  sessions: ReadonlyArray<LiveParticipant>
-  names: ReadonlyArray<SessionDirectoryEntry>
-  onOpenSession?: (sessionId: string) => void
-}) {
-  return <>
-    <p className="text-chat-meta text-secondary">
-      <ParticipantName sessionId={row.fromSession} senderKind={row.fromKind} sessions={sessions} directory={names} onOpen={onOpenSession} />
-      {' → '}
-      <Recipient row={row} sessions={sessions} names={names} onOpenSession={onOpenSession} />
-    </p>
-    <p className="text-chat-meta text-secondary">
-      <span data-testid="message-state">{row.state}</span>
-      {' · '}
-      <span data-testid="message-priority">{row.priority}</span>
-      {' · '}
-      <time dateTime={row.createdAt}>{new Date(row.createdAt).toLocaleString()}</time>
-      {row.possibleDuplicate && <span data-testid="message-possible-duplicate"> · possible duplicate</span>}
-    </p>
-    <p className="whitespace-pre-wrap text-chat-body" data-testid="message-body">{row.body}</p>
-    {row.taskRevision !== null && <p className="text-chat-meta text-secondary" data-testid="message-task-revision">
-      Task revision {row.taskRevision}
-    </p>}
-    {row.reason && <p className="text-chat-meta text-secondary" data-testid="message-reason">{row.reason}</p>}
-  </>
-}
-
-/** Where the row goes now — a group, a named session, or the human. */
-function Recipient({ row, sessions, names, onOpenSession }: {
-  row: TeamMessage
-  sessions: ReadonlyArray<LiveParticipant>
-  names: ReadonlyArray<SessionDirectoryEntry>
-  onOpenSession?: (sessionId: string) => void
-}) {
-  if (row.toKind === 'human') return <span data-testid="message-to">Human</span>
-  if (row.toKind === 'group') return <span data-testid="message-to">group {row.toId}</span>
-  return <span data-testid="message-to">
-    <ParticipantName sessionId={row.toId} sessions={sessions} directory={names} onOpen={onOpenSession} />
-  </span>
 }
 
 /**

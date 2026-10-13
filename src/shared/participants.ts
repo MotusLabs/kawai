@@ -21,9 +21,11 @@ export function resolveParticipant(
   sessions: ReadonlyArray<LiveParticipant>,
   directory: ReadonlyArray<SessionDirectoryEntry> = []
 ): ParticipantLabel {
-  const live = sessions.find(row => row.id === sessionId)
-  if (live) return { id: sessionId, name: live.name, group: live.groupId ?? null, gone: false }
   const recorded = directory.find(row => row.sessionId === sessionId)
+  const live = sessions.find(row => row.id === sessionId)
+  // A live session is authoritative for the name; its role may only be
+  // recorded in the directory, which is also where a killed one lives.
+  if (live) return { id: sessionId, name: live.name, group: live.groupId ?? recorded?.group ?? null, gone: false }
   if (recorded) return { id: sessionId, name: recorded.name, group: recorded.group, gone: true }
   return { id: sessionId, name: sessionId, group: null, gone: true }
 }

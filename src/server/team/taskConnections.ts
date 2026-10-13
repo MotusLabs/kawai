@@ -51,7 +51,11 @@ export class TaskConnections {
     for (const taskId of subscription.details) {
       if (only && taskId !== only) continue
       const detail = store.detail(taskId)
-      if (detail) connection.send({ type: 'team-task-detail', sessionId, teamId: subscription.teamId, detail })
+      if (detail) connection.send({
+        type: 'team-task-detail', sessionId, teamId: subscription.teamId, detail,
+        // Its messages name participants; the directory keeps a killed one's.
+        directory: this.manager.directory.list(subscription.teamId),
+      })
     }
   }
 

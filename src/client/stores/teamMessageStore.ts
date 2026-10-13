@@ -33,6 +33,8 @@ export interface MessageView {
   thread: ThreadEntry[] | null
   /** Last known identity of killed participants named by these rows. */
   directory: SessionDirectoryEntry[]
+  /** The team's tasks, for the composer's optional task picker. */
+  tasks: { id: string; title: string }[]
   /** In-flight human sends by request id, for the composer's pending state. */
   pending: Record<string, 'send'>
   /** The last refusal's message, until the next action or selection. */
@@ -42,7 +44,7 @@ export interface MessageView {
 export const closedMessageView = (): MessageView => ({
   open: false, loading: false, loadingMore: false, teamId: null, filters: {},
   messages: [], nextCursor: null, selectedThreadId: null, thread: null, directory: [],
-  pending: {}, error: null,
+  tasks: [], pending: {}, error: null,
 })
 
 interface MessageState {
@@ -132,7 +134,7 @@ export const useTeamMessageStore = create<MessageState>(set => ({
     return update(state, message.sessionId, {
       loading: false, loadingMore: false, teamId: message.teamId,
       filters: message.filters, messages: rows, nextCursor: message.nextCursor,
-      directory: message.directory,
+      directory: message.directory, tasks: message.tasks,
     })
   }),
   applyPush: message => set(state => {
