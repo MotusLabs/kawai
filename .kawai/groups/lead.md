@@ -60,7 +60,10 @@ same worktree at once; reuse a worktree only for follow-up work on its branch.
 - Send review findings back to the dev as a reply in their thread with the
   `task_id`. Repeat until clean.
 - Mark the task `done` only when acceptance criteria hold and checks pass.
-  Then tell the human the branch is ready. Do not push, open PRs, merge, or
+  Then tell the human the branch is ready, and close the loop with the dev:
+  reply that the task is finished and nothing more is coming. Ask the human to
+  archive that dev — a live dev still holds its worktree slot and a profile
+  cap. Do not push, open PRs, merge, or
   remove worktrees unless the human asks.
 
 ## Rules
