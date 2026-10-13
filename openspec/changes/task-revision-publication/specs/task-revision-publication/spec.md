@@ -65,7 +65,7 @@ A failed or missing notice SHALL NOT undo or alter the published revision. **Not
 - **THEN** each holder that has not received revision 2 gets one notice, and no revision is created
 
 ### Requirement: Publication detail separates queued, delivered, and acknowledged
-Each published revision SHALL show, per assignment holder: notice state (Not notified, Queued, Delivered, Failed with reason, Uncertain), the delivered revision — the highest task revision carried by task mail confirmed delivered to that session — and the acknowledged revision. Delivery SHALL NOT be shown as acknowledgement. The detail SHALL stay current as notices move and acknowledgements arrive.
+Each published revision SHALL show, per assignment holder: notice state (Not notified, Queued, Delivered, Failed with reason, Uncertain), the delivered revision — the highest task revision carried by task mail confirmed delivered to that session — and the acknowledged revision. Delivery SHALL NOT be shown as acknowledgement. The detail SHALL stay current as notices move and acknowledgements arrive. Checkpointed/Paused is Wave C's.
 
 #### Scenario: Delivered but not acknowledged
 - **WHEN** the revision 2 notice is confirmed delivered and the developer has not acknowledged

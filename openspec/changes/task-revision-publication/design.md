@@ -107,7 +107,7 @@ Nothing here updates `team_messages.task_revision` or rewrites a transcript. Pee
 
 ## Migration Plan
 
-Additive only, via the `migrateTable` PRAGMA-check pattern: create `team_task_drafts`, `team_task_notifications`, `team_task_acknowledgements`; add `rationale`, `request_key`, `notify` to `team_task_revisions` with the partial unique index; add nullable `revision_notice` to `team_messages`. Existing revisions read with no rationale and `notify` NULL (shown as "published before notifications"). Rollback drops the new tables and columns; delivered history is untouched.
+Additive only, via the `migrateTable` PRAGMA-check pattern: create `team_task_drafts`, `team_task_notifications`, `team_task_acknowledgements`; add `rationale`, `request_key`, `notify` to `team_task_revisions` with the partial unique index; add nullable `revision_notice` to `team_messages`. Existing revisions read with no rationale and `notify` NULL (shown as "published before notifications"). Rollback drops the new tables and columns; delivered history is untouched. A browser tab that has not reloaded since the upgrade still sends `team-task-amend` and gets an unknown-message-type error until it reloads; no compatibility shim is kept, since only this repository's client speaks the protocol.
 
 ## Decisions (made by the lead's delegation, 2026-10-14)
 
