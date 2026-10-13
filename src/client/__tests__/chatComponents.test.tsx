@@ -1990,3 +1990,45 @@ describe('chat task header and tasks panel', () => {
     act(() => renderer.unmount())
   })
 })
+
+describe('agent-started turn trigger lines (background tasks D5)', () => {
+  test('a task trigger lists each task summary in place of a user bubble', () => {
+    const renderer = TestRenderer.create(<ChatMessages events={[
+      { type: 'turn_started', id: 'ts', sequence: 0, at: 'now', turnId: 't1', trigger: { kind: 'task', tasks: [
+        { taskId: 'b1', toolCallId: 'call_1', status: 'completed', summary: 'Background command "Wait for CI" completed (exit code 0)' },
+        { taskId: 'b2', status: 'failed' },
+      ] } },
+      { type: 'assistant_text', id: 'a', sequence: 1, at: 'now', turnId: 't1', messageId: 'm', text: 'CI passed.' },
+    ]} />)
+    const trigger = renderer.root.findByProps({ 'data-testid': 'turn-trigger' })
+    const lines = trigger.findAllByType('span').map(span => textOf(span))
+    expect(lines).toEqual([
+      '⟲ Background command "Wait for CI" completed (exit code 0)',
+      '⟲ Task b2 failed',
+    ])
+    // No user bubble for an agent-started turn, and the reply streams after it.
+    expect(renderer.root.findAllByProps({ 'data-chat-role': 'user' })).toHaveLength(0)
+    expect(renderer.root.findAllByProps({ 'data-chat-role': 'assistant' })).toHaveLength(1)
+    expect(JSON.stringify(renderer.toJSON())).not.toContain('<task-notification>')
+    renderer.unmount()
+  })
+
+  test('a resumed trigger shows the generic continued line', () => {
+    const renderer = TestRenderer.create(<ChatMessages events={[
+      { type: 'turn_started', id: 'ts', sequence: 0, at: 'now', turnId: 't1', trigger: { kind: 'resumed' } },
+    ]} />)
+    const trigger = renderer.root.findByProps({ 'data-testid': 'turn-trigger' })
+    expect(textOf(trigger.findByType('span'))).toBe('⟲ Continued on its own')
+    renderer.unmount()
+  })
+
+  test('a user-started turn_started renders no trigger line', () => {
+    const renderer = TestRenderer.create(<ChatMessages events={[
+      { type: 'turn_started', id: 'ts', sequence: 0, at: 'now', turnId: 't1' },
+      { type: 'user_message', id: 'u', sequence: 1, at: 'now', turnId: 't1', text: 'hello' },
+    ]} />)
+    expect(renderer.root.findAllByProps({ 'data-testid': 'turn-trigger' })).toHaveLength(0)
+    expect(renderer.root.findAllByProps({ 'data-chat-role': 'user' })).toHaveLength(1)
+    renderer.unmount()
+  })
+})

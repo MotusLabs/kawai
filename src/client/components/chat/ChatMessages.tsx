@@ -113,6 +113,20 @@ export default function ChatMessages({ events, projectPath, sessionId, sendMessa
             <div className="mb-1 text-xs">Command output</div>
             <Markdown content={event.text} />
           </div>
+        case 'turn_started': {
+          // Agent-started turn (background tasks D5): a muted trigger line in
+          // place of the user bubble — the task summaries that woke the agent,
+          // or a generic marker when the cause is unknown. User-started turns
+          // carry no trigger and render nothing.
+          if (!event.trigger) return null
+          const lines =
+            event.trigger.kind === 'task'
+              ? event.trigger.tasks.map(task => `⟲ ${task.summary ?? `Task ${task.taskId} ${task.status}`}`)
+              : ['⟲ Continued on its own']
+          return <p key={event.id} data-testid="turn-trigger" className="text-chat-meta text-muted">
+            {lines.map((line, index) => <span key={index} className="block">{line}</span>)}
+          </p>
+        }
         case 'notice': return <p key={event.id} className="text-chat-meta text-secondary">{event.text}</p>
         case 'error': return <p key={event.id} role="alert" className="text-chat-body text-chat-danger">{event.message}</p>
         case 'turn_interrupted': return <p key={event.id} className="text-chat-meta text-secondary">Turn stopped</p>
