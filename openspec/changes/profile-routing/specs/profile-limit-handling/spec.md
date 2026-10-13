@@ -65,6 +65,10 @@ Parking SHALL keep the message with the agent and schedule a resume message to t
 - **WHEN** the parked agent's resume time arrives
 - **THEN** it receives a message to continue the task
 
+#### Scenario: Resume goes before other direct mail
+- **WHEN** the resume time arrives while older normal direct mail waits for the parked agent
+- **THEN** the agent receives the resume first, and the other mail after it
+
 #### Scenario: Parked agent skipped
 - **WHEN** a group message arrives while a member is parked
 - **THEN** the parked member does not receive it

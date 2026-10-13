@@ -167,7 +167,9 @@ export class MailboxStore {
 
   /**
    * The next message an idle recipient should get: urgent before normal,
-   * direct before group, then oldest. Scheduled rows count once due. An
+   * direct before group, a parked message's resume before other mail (so the
+   * held work continues first and its success unparks), then oldest.
+   * Scheduled rows count once due. An
    * `accept` filter (worktree staffing, team-tasks D4) skips rows this
    * recipient may not take, keeping that order for the rest.
    */

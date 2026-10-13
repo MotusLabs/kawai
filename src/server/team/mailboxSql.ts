@@ -13,7 +13,9 @@ export const mailboxSql = {
         AND (deliver_at IS NULL OR deliver_at <= $now)
         AND ((to_kind = 'session' AND to_id = $sessionId)
           OR (to_kind = 'group' AND $groupId IS NOT NULL AND to_id = $groupId))
-      ORDER BY (priority = 'urgent') DESC, (to_kind = 'session') DESC, created_at, rowid`,
+      ORDER BY (priority = 'urgent') DESC, (to_kind = 'session') DESC,
+        EXISTS (SELECT 1 FROM team_messages parked WHERE parked.state = 'parked' AND parked.resume_message_id = team_messages.id) DESC,
+        created_at, rowid`,
   claim: `UPDATE team_messages SET state = 'claimed', claimed_by = $sessionId, claimed_at = $now
       WHERE id = $id AND state IN ('queued', 'awaiting-request')`,
   markPushed: `UPDATE team_messages SET pushed_at = $now
