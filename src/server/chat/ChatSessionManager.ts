@@ -70,6 +70,7 @@ import { probeSdkAvailability } from './sdkAvailability'
 import { AccountNoticeStore, credentialsPathFor } from './accountNotices'
 import { UsageLimitStore } from './usageLimits'
 import { readWorkerTranscript } from './chatWorkerTranscript'
+import { isTaskOutputFile, readTaskOutputTail } from './taskOutputFile'
 import { loadTeamGroups } from '../team/teamGroups'
 import { SessionTeams } from '../team/sessionTeams'
 import { TeamMailbox } from '../team/TeamMailbox'
@@ -247,6 +248,11 @@ function compareNotices(a: ChatNotification, b: ChatNotification): number {
   if (byPriority !== 0) return byPriority
   return Date.parse(b.receivedAt) - Date.parse(a.receivedAt)
 }
+
+/** The chat-task-output reply payload (background tasks D3). */
+export type ChatTaskOutputResult =
+  | { state: 'ok'; output: string; totalBytes: number; truncated: boolean }
+  | { state: 'unavailable' }
 
 export class ChatSessionManager {
   private readonly options: ChatSessionManagerOptions
@@ -474,6 +480,83 @@ export class ChatSessionManager {
       this.records.get(sessionId)?.sdkSessionId ?? null,
       workerId
     )
+  }
+
+  // ------------------------------------------------------- background tasks
+
+  /** In-flight output reads, so concurrent requests coalesce (design D3). */
+  private readonly taskOutputReads = new Map<string, Promise<ChatTaskOutputResult>>()
+
+  /**
+   * A background task's output tail (background tasks D3): the live query's
+   * `get_task_output` while it answers, else the last 8 KiB of the recorded
+   * output file, else `unavailable` — never an error. Concurrent reads for
+   * the same task share one request.
+   */
+  readTaskOutput(sessionId: string, taskId: string): Promise<ChatTaskOutputResult> {
+    const key = `${sessionId}:${taskId}`
+    const inFlight = this.taskOutputReads.get(key)
+    if (inFlight) return inFlight
+    const read = this.readTaskOutputOnce(sessionId, taskId).finally(() => {
+      this.taskOutputReads.delete(key)
+    })
+    this.taskOutputReads.set(key, read)
+    return read
+  }
+
+  private async readTaskOutputOnce(sessionId: string, taskId: string): Promise<ChatTaskOutputResult> {
+    const driver = this.drivers.get(sessionId)
+    if (driver && !driver.isDead) {
+      const live = await driver.getTaskOutput(taskId)
+      if (live && typeof live.output === 'string') {
+        return {
+          state: 'ok',
+          output: live.output,
+          totalBytes: live.total_bytes,
+          truncated: live.truncated === true,
+        }
+      }
+    }
+    // The process is gone (or predates the control request): the sidecar's
+    // recorded output file answers instead, while it still exists.
+    const record = this.options.taskStore
+      ?.read(sessionId)
+      .find((entry) => entry.taskId === taskId)
+    const file = record?.outputFile
+    if (file !== undefined && isTaskOutputFile(file, taskId)) {
+      const tail = readTaskOutputTail(file)
+      if (tail) return { state: 'ok', ...tail }
+    }
+    return { state: 'unavailable' }
+  }
+
+  /**
+   * Stop one background task (background tasks D4): accepted only for a
+   * live, non-archived session and a task the roster knows as live. The
+   * settle arrives as a normal notification through the roster channel, so
+   * there is no reply; a refusal (already ended, unknown, archived) is
+   * logged and dropped, never a transcript error.
+   */
+  async stopBackgroundTask(sessionId: string, taskId: string): Promise<void> {
+    const record = this.records.get(sessionId)
+    if (!record || record.archivedAt) {
+      logger.warn('chat_task_stop_refused', { sessionId, taskId, reason: 'not_live' })
+      return
+    }
+    const live = this.getBackgroundTasks(sessionId).some(
+      (task) => task.taskId === taskId && task.live
+    )
+    if (!live) {
+      logger.warn('chat_task_stop_refused', { sessionId, taskId, reason: 'not_live_task' })
+      return
+    }
+    const driver = this.drivers.get(sessionId)
+    if (!driver || driver.isDead) {
+      logger.warn('chat_task_stop_refused', { sessionId, taskId, reason: 'no_driver' })
+      return
+    }
+    const stopped = await driver.stopTask(taskId)
+    if (!stopped) logger.warn('chat_task_stop_rejected', { sessionId, taskId })
   }
 
   // ---------------------------------------------------------------- notifications

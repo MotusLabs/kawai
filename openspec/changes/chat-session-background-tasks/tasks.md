@@ -28,7 +28,7 @@ Prerequisite: `chat-session-spawned-subagents` (PR #72) is merged. Branch from t
 
 ## 5. Output tail and stop (server)
 
-- [ ] 5.1 Handle `chat-task-output` in `ChatSessionManager.ts` per design D3: guarded `getTaskOutput` on a live query, falling back to the recorded `outputFile` tail (absolute path, `tasks/<taskId>.output` under the OS temp dir, last 8 KiB, UTF-8-safe), otherwise `unavailable`, with concurrent requests coalesced. Verify with tests for live, fallback, missing file, rejected path (traversal, wrong name, outside temp dir), a throwing or missing `getTaskOutput`, and the truncated flag
+- [x] 5.1 Handle `chat-task-output` in `ChatSessionManager.ts` per design D3: guarded `getTaskOutput` on a live query, falling back to the recorded `outputFile` tail (absolute path, `tasks/<taskId>.output` under the OS temp dir, last 8 KiB, UTF-8-safe), otherwise `unavailable`, with concurrent requests coalesced. Verify with tests for live, fallback, missing file, rejected path (traversal, wrong name, outside temp dir), a throwing or missing `getTaskOutput`, and the truncated flag
 - [ ] 5.2 Handle `chat-task-stop` per design D4: accept it only for a live non-archived session and a `live` task, call `stopTask`, and log and drop rejections. Verify with tests that stop settles via the notification, that archived or unknown or ended tasks are refused without a transcript error, and that the in-flight turn is untouched
 - [ ] 5.3 Add a background-shell scenario to `developmentFixture.ts` that starts, prints output, and completes and wakes the agent, plus a long-running one that can be stopped. Verify the fixture test exercises both
 

@@ -187,6 +187,8 @@ export function handleMessage(
     case 'team-task-note':
     case 'team-task-status':
     case 'chat-worker-transcript':
+    case 'chat-task-output':
+    case 'chat-task-stop':
       fireAndForget(chatConnections.handle(chatPeer(ws), message), 'chatMessage')
       return
     case 'ping':

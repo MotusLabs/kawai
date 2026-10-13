@@ -541,6 +541,23 @@ export class ChatConnections {
         })
         return
       }
+      case 'chat-task-output': {
+        // A read-only tail fetch (background tasks D3), answered to the
+        // asking connection only; concurrent asks coalesce server-side.
+        connection.send({
+          type: 'chat-task-output',
+          sessionId,
+          taskId: message.taskId,
+          ...await this.manager.readTaskOutput(sessionId, message.taskId),
+        })
+        return
+      }
+      case 'chat-task-stop': {
+        // Fire-and-forget by design (D4): the settle arrives through the
+        // roster channel, and refusals are logged, never surfaced.
+        await this.manager.stopBackgroundTask(sessionId, message.taskId)
+        return
+      }
     }
   }
 }

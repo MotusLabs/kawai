@@ -3841,4 +3841,69 @@ describe('ChatSessionManager background-task roster (background tasks D2)', () =
     await waitForCondition(() => !fs.existsSync(path.join(taskDir, `${id}.json`)))
     expect(store().read(id)).toEqual([])
   })
+
+  test('readTaskOutput prefers the live query and coalesces concurrent asks', async () => {
+    const handles: FakeHandle[] = []
+    const manager = await managedManager({
+      isDirectory: anyDirectory, db, registry: new SessionRegistry(),
+      onEvent: () => {}, queryFactory: fakeQueryFactory(handles),
+    })
+    const created = manager.createSession({ projectPath: '/tmp/proj' })
+    if (!created.ok) throw new Error('create failed')
+    const id = created.session.id
+    await manager.send(id, 'hi')
+    // The fake query grows the undeclared control (runtime shape only).
+    let calls = 0
+    let release: (() => void) | undefined
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    ;(handles[0]!.query as unknown as {
+      getTaskOutput?: (taskId: string) => Promise<{ output: string; total_bytes: number; truncated: boolean }>
+    }).getTaskOutput = async (taskId: string) => {
+      calls += 1
+      await gate
+      return { output: `tail of ${taskId}`, total_bytes: 42, truncated: false }
+    }
+    const first = manager.readTaskOutput(id, 'b1')
+    const second = manager.readTaskOutput(id, 'b1')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    release!()
+    const [a, b] = await Promise.all([first, second])
+    expect(calls).toBe(1)
+    expect(a).toEqual({ state: 'ok', output: 'tail of b1', totalBytes: 42, truncated: false })
+    expect(b).toEqual(a)
+    // A throwing control falls back (here: to unavailable — no file record).
+    ;(handles[0]!.query as unknown as { getTaskOutput?: unknown }).getTaskOutput = async () => {
+      throw new Error('control exploded')
+    }
+    await expect(manager.readTaskOutput(id, 'b2')).resolves.toEqual({ state: 'unavailable' })
+  })
+
+  test('readTaskOutput falls back to the recorded output file', async () => {
+    const taskDir = path.join(tempDir, 'chat-tasks-fallback')
+    fs.mkdirSync(path.join(taskDir, 'tasks'), { recursive: true })
+    const file = path.join(taskDir, 'tasks', 'b-file.output')
+    fs.writeFileSync(file, 'shell-a-done\n')
+    const store = () => new ChatTaskStore({ dir: path.join(tempDir, 'chat-tasks-store') })
+    await store().write('chat-fb', [{
+      taskId: 'b-file', kind: 'shell', status: 'completed', summary: 'done',
+      outputFile: file, startedAtMs: 1, endedAtMs: 2,
+    }])
+    // No session, no live driver: the sidecar record answers.
+    const manager = await managedManager({
+      isDirectory: anyDirectory, db, registry: new SessionRegistry(),
+      onEvent: () => {}, queryFactory: fakeQueryFactory([]), taskStore: store(),
+    })
+    await expect(manager.readTaskOutput('chat-fb', 'b-file')).resolves.toEqual({
+      state: 'ok', output: 'shell-a-done\n', totalBytes: 13, truncated: false,
+    })
+    // A record whose file is gone, and an unknown task: unavailable.
+    await store().write('chat-fb', [{ taskId: 'b-gone', kind: 'shell', status: 'completed', startedAtMs: 1, outputFile: path.join(taskDir, 'tasks', 'b-gone.output') }])
+    await expect(manager.readTaskOutput('chat-fb', 'b-gone')).resolves.toEqual({ state: 'unavailable' })
+    await expect(manager.readTaskOutput('chat-fb', 'b-unknown')).resolves.toEqual({ state: 'unavailable' })
+    // A path outside the recorded layout is never read, even if it exists.
+    const outside = path.join(tempDir, 'outside.output')
+    fs.writeFileSync(outside, 'secret')
+    await store().write('chat-fb', [{ taskId: 'b-bad', kind: 'shell', status: 'completed', startedAtMs: 1, outputFile: outside }])
+    await expect(manager.readTaskOutput('chat-fb', 'b-bad')).resolves.toEqual({ state: 'unavailable' })
+  })
 })

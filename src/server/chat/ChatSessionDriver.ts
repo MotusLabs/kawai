@@ -1318,6 +1318,44 @@ export class ChatSessionDriver {
   }
 
   /**
+   * A task's output tail through the SDK's `get_task_output` control
+   * (background tasks D3): at most the last 8 KiB, running or ended. The
+   * method exists at runtime but is not declared in sdk.d.ts (verified
+   * 2.1.296), so the call is structural; a missing method, a dead query, or
+   * a throw reads as null and the caller falls back to the output file.
+   */
+  async getTaskOutput(
+    taskId: string
+  ): Promise<{ output: string; total_bytes: number; truncated: boolean } | null> {
+    const query = this.query as {
+      getTaskOutput?: (id: string) => Promise<{ output: string; total_bytes: number; truncated: boolean }>
+    } | null
+    if (!query || typeof query.getTaskOutput !== 'function') return null
+    try {
+      return await query.getTaskOutput(taskId)
+    } catch {
+      return null
+    }
+  }
+
+  /**
+   * Stop one background task (background tasks D4): the settle arrives as a
+   * normal task_notification through the roster channel. False when there is
+   * no live query or the CLI refused (typically: the task just ended); both
+   * are logged and dropped by the caller, never a transcript error.
+   */
+  async stopTask(taskId: string): Promise<boolean> {
+    const query = this.query
+    if (!query) return false
+    try {
+      await query.stopTask(taskId)
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  /**
    * Per-request context usage (design D1): an assistant frame carries the
    * latest request's usage — input plus cache reads/creations plus output —
    * which is exactly what the next request pays, never the session total.
