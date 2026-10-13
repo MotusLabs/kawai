@@ -11,9 +11,9 @@
 
 ## 3. Launch plumbing
 
-- [ ] 3.1 Add `SessionTeams.effortFor(sessionId, groupId)` in `src/server/team/sessionTeams.ts`, using the same catalog lookup as `promptFor`. It returns `undefined` with no group, an unknown group, or no `effort`. Verify in `src/server/__tests__/teamSessionTeams.test.ts`, including that a file edit (stamp change) returns the new value on the next call.
-- [ ] 3.2 Give `ChatSessionDriver` an optional `getEffort` option, read when each spawn's `Options` is built. Spread `effort` only when it is defined, placed before `...launchOptions` (design D3). Verify in `src/server/__tests__/chatSessionDriver.test.ts`: the query factory receives `options.effort` when the getter returns a level, the key is absent when it returns `undefined`, and a respawn after the getter's value changes gets the new value.
-- [ ] 3.3 Wire `getEffort: () => this.teams.effortFor(record.sessionId, this.records.get(record.sessionId)?.groupId)` in `ChatSessionManager` beside `getSystemPromptAppend`. Verify with a manager-level test: a session in a group with `effort: max` launches with `max`, and a session without a group launches with no `effort`.
+- [x] 3.1 Add `SessionTeams.effortFor(sessionId, groupId)` in `src/server/team/sessionTeams.ts`, using the same catalog lookup as `promptFor`. It returns `undefined` with no group, an unknown group, or no `effort`. Verify in `src/server/__tests__/teamSessionTeams.test.ts`, including that a file edit (stamp change) returns the new value on the next call.
+- [x] 3.2 Give `ChatSessionDriver` an optional `getEffort` option, read when each spawn's `Options` is built. Spread `effort` only when it is defined, placed before `...launchOptions` (design D3). Verify in `src/server/__tests__/chatSessionDriver.test.ts`: the query factory receives `options.effort` when the getter returns a level, the key is absent when it returns `undefined`, and a respawn after the getter's value changes gets the new value.
+- [x] 3.3 Wire `getEffort: () => this.teams.effortFor(record.sessionId, this.records.get(record.sessionId)?.groupId)` in `ChatSessionManager` beside `getSystemPromptAppend`. Verify with a manager-level test: a session in a group with `effort: max` launches with `max`, and a session without a group launches with no `effort`.
 
 ## 4. Documentation and checks
 
