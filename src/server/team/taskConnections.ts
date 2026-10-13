@@ -153,7 +153,7 @@ export class TaskConnections {
           return
         }
         case 'team-task-targets': {
-          const targets = await this.manager.assignments.targets(caller)
+          const targets = await this.manager.assignments.targets(caller, message.worktree)
           connection.send({ type: 'team-task-targets-result', sessionId, requestId, targets })
           return
         }

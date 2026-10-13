@@ -352,4 +352,8 @@ test('targets list the team-scoped worktrees and changes', async () => {
   expect(targets.worktrees).toEqual([])
   await send({ type: 'team-task-targets', sessionId: 'stranger', requestId: 't2' })
   expect(last('team-task-targets-result')!.targets).toEqual({ worktrees: [], changes: [{ name: 'add-x', locations: [dir] }] })
+  // The change list narrows to the roots the chosen worktree validates for;
+  // an unknown worktree errors inline.
+  await send({ type: 'team-task-targets', sessionId: 'dev', requestId: 't3', worktree: '/nope' })
+  expect(last('team-task-targets-result')).toMatchObject({ requestId: 't3', error: expect.stringContaining('is not a worktree') })
 })

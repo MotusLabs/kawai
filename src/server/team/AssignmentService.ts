@@ -245,15 +245,21 @@ export class AssignmentService {
 
   /**
    * The pickers' data (D8): worktrees of the team's repository with their
-   * branches, and the active OpenSpec changes found under the main checkout
-   * root and each listed worktree — exactly the roots `validateChange`
-   * accepts, so a listed choice always validates. `archive` is excluded.
+   * branches, and the active OpenSpec changes found under exactly the roots
+   * `validateChange` accepts — the main checkout root plus, when a worktree
+   * is chosen, that worktree — so a listed choice always validates. The
+   * worktree list itself stays team-wide. `archive` is excluded.
    */
-  async targets(caller: TaskCaller): Promise<TaskTargetOptions> {
+  async targets(caller: TaskCaller, worktree?: string): Promise<TaskTargetOptions> {
     const team = await this.teamOf(caller)
     const worktrees = await this.options.worktrees.entries(team.teamId)
-    // The main checkout is itself a listed worktree; read each root once.
-    const roots = [...new Set([team.groupsRoot, ...worktrees.map(entry => entry.root)])]
+    let chosen: string | null = null
+    if (worktree?.trim()) {
+      const target = await this.options.worktrees.resolveTarget(team.teamId, worktree.trim())
+      if (!target.ok) throw new Error(target.error)
+      chosen = target.root
+    }
+    const roots = [team.groupsRoot, ...(chosen ? [chosen] : [])]
     const changes = new Map<string, string[]>()
     for (const root of roots) {
       let names: string[]

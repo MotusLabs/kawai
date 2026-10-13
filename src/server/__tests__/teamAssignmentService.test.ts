@@ -411,7 +411,7 @@ describe('preview', () => {
 })
 
 describe('targets', () => {
-  test('worktrees come with branches and changes with locations, archive excluded', async () => {
+  test('worktrees come with branches; changes list the roots validateChange accepts', async () => {
     const targets = await dispatcher.targets(human())
     const paths = targets.worktrees.map(entry => entry.root)
     expect(paths).toContain(repo)
@@ -420,13 +420,21 @@ describe('targets', () => {
     const linked = targets.worktrees.find(entry => entry.root === feature)!
     expect(['master', 'main']).toContain(main.branch ?? '')
     expect(linked.branch).toBe('feature')
-    const names = targets.changes.map(change => change.name)
-    expect(names).toContain('add-export')
+    // Without a chosen worktree only the main checkout's changes are listed
+    // — the worktree-only one would be refused by validateChange.
+    expect(targets.changes.map(change => change.name)).toEqual(['add-export'])
+    expect(targets.changes[0]!.locations).toEqual([repo])
+    expect(targets.changes.map(change => change.name)).not.toContain('archive')
+  })
+
+  test('a change that lives only in worktree W is listed iff W is the chosen worktree', async () => {
+    const narrowed = await dispatcher.targets(human(), feature)
+    const names = narrowed.changes.map(change => change.name)
     expect(names).toContain('branch-only')
-    expect(names).not.toContain('archive')
-    const branched = targets.changes.find(change => change.name === 'branch-only')!
-    expect(branched.locations).toEqual([feature])
-    const both = targets.changes.find(change => change.name === 'add-export')!
-    expect(both.locations).toEqual([repo])
+    expect(narrowed.changes.find(change => change.name === 'branch-only')!.locations).toEqual([feature])
+    expect(names).toContain('add-export')
+    const main = await dispatcher.targets(human(), repo)
+    expect(main.changes.map(change => change.name)).toEqual(['add-export'])
+    await expect(dispatcher.targets(human(), path.join(root, 'nope'))).rejects.toThrow('is not a worktree')
   })
 })

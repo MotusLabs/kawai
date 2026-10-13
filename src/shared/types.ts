@@ -626,7 +626,10 @@ export type ClientMessage =
       target: { kind: 'group' | 'session'; id: string }
     }
   // The pickers' data (worktrees with branches, changes with locations).
-  | { type: 'team-task-targets'; sessionId: string; requestId: string }
+  // `worktree` narrows the change list to the roots validateChange accepts
+  // for it (the main checkout plus that worktree); the worktree list stays
+  // team-wide.
+  | { type: 'team-task-targets'; sessionId: string; requestId: string; worktree?: string }
   // Messages view (team-message-threads 5.1): a list subscription carries the
   // filters (and optional page cursor) the view is on; a thread open carries
   // the thread to keep live. Human sends and replies are one message — `to`

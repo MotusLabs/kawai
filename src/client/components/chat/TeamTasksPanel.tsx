@@ -34,11 +34,15 @@ export default function TeamTasksPanel({ sessionId, projectPath, view, sendMessa
   const flow = view.flow
   const busy = Object.keys(view.pending).length > 0
   const setDraft = (patch: Partial<typeof draft>) => useTeamTaskStore.getState().setDraft(sessionId, patch)
+  // The change list narrows to the roots the server validates for the chosen
+  // worktree, so every request carries the draft's current worktree and the
+  // panel re-requests whenever it moves.
   const requestTargets = () => {
+    const worktree = useTeamTaskStore.getState().views[sessionId]?.draft.worktree.trim()
     useTeamTaskStore.getState().beginTargets(sessionId)
-    sendMessage({ type: 'team-task-targets', sessionId, requestId: crypto.randomUUID() })
+    sendMessage({ type: 'team-task-targets', sessionId, requestId: crypto.randomUUID(), ...(worktree ? { worktree } : {}) })
   }
-  useEffect(() => { if (connected) requestTargets() }, [connected, sessionId]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (connected) requestTargets() }, [connected, sessionId, draft.worktree]) // eslint-disable-line react-hooks/exhaustive-deps
   const preview = () => {
     const requestId = crypto.randomUUID()
     useTeamTaskStore.getState().beginPreview(sessionId, requestId)
