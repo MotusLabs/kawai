@@ -17,9 +17,10 @@
 
 ## 4. Documentation and checks
 
-- [ ] 4.1 Document `effort` in `CLAUDE.md` (the group-settings bullet: values, per-start read, warning on invalid, Claude Code precedence) and in `docs/routing/README.md`'s frontmatter example. Verify by reading the diff.
-- [ ] 4.2 Run `bun run lint && bun run typecheck && bun run test`; all pass.
-- [ ] 4.3 End-to-end check without browser e2e (never `test:e2e` against the live server). Start a dev server on a spare port with a scratch team whose group sets `effort: max`, create a member, and confirm its Debug panel or wire log shows `system/init` with `effort: "max"`. Then edit the file to `medium`, restart the agent, and confirm the new value appears. Record the result as a task journal or PR note.
+- [x] 4.1 Document `effort` in `CLAUDE.md` (the group-settings bullet: values, per-start read, warning on invalid, Claude Code precedence) and in `docs/routing/README.md`'s frontmatter example. Verify by reading the diff.
+- [x] 4.2 Run `bun run lint && bun run typecheck && bun run test`; all pass.
+- [x] 4.3 End-to-end check without browser e2e (never `test:e2e` against the live server). Start a dev server on a spare port with a scratch team whose group sets `effort: max`, create a member, and confirm its Debug panel or wire log shows `system/init` with `effort: "max"`. Then edit the file to `medium`, restart the agent, and confirm the new value appears. Record the result as a task journal or PR note.
+  - Result (2026-10-13, Claude Code 2.1.296): `system/init` carries no `effort` for SDK sessions, and the host login had expired, so the check drove `ChatSessionManager` directly with the real SDK in a scratch git repo and read the spawned CLI's argv (no prompt, so no model call). A `lead` member (`effort: max`) launched with `--effort max`. A `devs` member without `effort`, and a session without a group, launched with no `--effort`. Editing the file to `medium` left the running process unchanged. After archive, restore, and start, the lead launched with `--effort medium`.
 
 ## Workflow follow-up
 
