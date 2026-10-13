@@ -75,10 +75,15 @@ function seed(args: { dbPath: string; team: string; lead: string; dev: string; u
   }
 }
 
-/** Open the Messages side panel on the currently selected chat. */
+/** Open the Messages side panel on the currently selected chat.
+ *
+ * Idempotent: the view is per-session state with no unmount cleanup, so it can
+ * still be open when you come back to a chat — clicking the toggle again would
+ * close it. Only click when the panel is not already showing. */
 async function openMessages(page: Page) {
-  await page.getByRole('button', { name: 'Messages', exact: true }).click()
-  await expect(page.getByTestId('team-messages')).toBeVisible()
+  const panel = page.getByTestId('team-messages')
+  if (!(await panel.isVisible())) await page.getByRole('button', { name: 'Messages', exact: true }).click()
+  await expect(panel).toBeVisible()
 }
 
 /** Row with this id, in the Messages list or a thread. */
@@ -131,7 +136,7 @@ test('E06: named senders, chronological threads, task filtering, and a killed se
     await page.screenshot({ path: info.outputPath('task-messages.png') })
 
     // A live participant is a link into its chat; a gone one never is.
-    await page.getByRole('button', { name: 'Messages', exact: true }).click()
+    await openMessages(page)
     await row(page, ids.first).getByTestId('participant-name').first().click()
     await expect(page.getByTestId('chat-view')).toContainText('Browser team lead')
 
