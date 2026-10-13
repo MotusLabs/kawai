@@ -386,7 +386,8 @@ export class ChatSessionDriver {
     this.queue.push({
       type: 'user', message: { role: 'user', content: text },
       parent_tool_use_id: null,
-      origin: { kind: 'peer', from: envelope.senderSession },
+      // A human sender has no session id; the envelope's senderKind says so.
+      origin: { kind: 'peer', from: envelope.senderSession ?? 'human' },
     })
     this.refreshStatus()
   }

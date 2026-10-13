@@ -5,14 +5,18 @@ interface Session {
 }
 
 /**
- * Cleans up exiting session state after animations complete.
- * - Clears immediately if session reappears (kill failed/rolled back)
- * - Clears after delay if session is gone (normal exit)
+ * Clears `exitingSessions` after a removal settles.
+ * - Clears immediately if the session reappears (kill failed/rolled back)
+ * - Clears after a delay if it stays gone (normal removal)
+ *
+ * The map is bookkeeping for kill-failed rollback and for noticing a
+ * resurrected session; rows are not rendered from it (they unmount with the
+ * live list — holding them for an exit animation left ghost cards).
  *
  * @param sessions - Current list of sessions
- * @param exitingSessions - Map of sessions being killed
+ * @param exitingSessions - Map of sessions marked exiting on removal
  * @param clearExitingSession - Function to clear a session from exiting state
- * @param exitDuration - Duration in ms before cleanup
+ * @param exitDuration - Grace period in ms before cleanup
  */
 export function useExitCleanup(
   sessions: Session[],
@@ -36,7 +40,8 @@ export function useExitCleanup(
         }
         clearExitingSession(id)
       } else if (!exitCleanupTimers.current.has(id)) {
-        // Session is gone and no cleanup scheduled - schedule cleanup after animation
+        // Session is gone and no cleanup scheduled - schedule cleanup after the
+        // rollback window
         const timer = setTimeout(() => {
           exitCleanupTimers.current.delete(id)
           clearExitingSession(id)

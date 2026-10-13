@@ -1,10 +1,10 @@
 // Fixed statements compiled once when a mailbox store opens.
 export const mailboxSql = {
   enqueue: `INSERT INTO team_messages
-      (id, team_id, to_kind, to_id, from_session, from_group, origin_path, priority, tags,
+      (id, team_id, to_kind, to_id, from_session, from_kind, from_group, origin_path, priority, tags,
        thread_id, in_reply_to, hop, body, state, deliver_at, created_at, reason, attach_thread, task_id,
        handoff, excluded_profile)
-      VALUES ($id, $teamId, $toKind, $toId, $fromSession, $fromGroup, $originPath, $priority, $tags,
+      VALUES ($id, $teamId, $toKind, $toId, $fromSession, $fromKind, $fromGroup, $originPath, $priority, $tags,
        $threadId, $inReplyTo, $hop, $body, $state, $deliverAt, $createdAt, $reason, $attachThread, $taskId,
        $handoff, $excludedProfile)`,
   get: 'SELECT * FROM team_messages WHERE id = $id',
@@ -16,7 +16,7 @@ export const mailboxSql = {
       ORDER BY (priority = 'urgent') DESC, (to_kind = 'session') DESC, created_at, rowid`,
   claim: `UPDATE team_messages SET state = 'claimed', claimed_by = $sessionId, claimed_at = $now
       WHERE id = $id AND state IN ('queued', 'awaiting-request')`,
-  markPushed: `UPDATE team_messages SET pushed_at = $now
+  markPushed: `UPDATE team_messages SET pushed_at = $now, task_revision = $taskRevision
       WHERE id = $id AND state = 'claimed'`,
   markDelivered: `UPDATE team_messages SET state = 'delivered', delivered_at = $now
       WHERE id = $id AND state IN ('claimed', 'uncertain')`,

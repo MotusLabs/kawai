@@ -30,7 +30,11 @@ function overwriteDraftBehindServer(storedPurpose: string) {
   if (!dbPath.startsWith(process.env.E2E_TMUX_TMPDIR!)) throw new Error('Refuse seeding a non-isolated database')
   execFileSync('bun', ['-e', `
     import { Database } from 'bun:sqlite';
-    import { hashStrategyContent, normalizeStrategyContent } from './src/shared/productStrategy';
+    // Hashing is server-side by design (the browser never computes hashes), so
+    // the seed writes through the same module the store does — product-strategy
+    // review N3 moved it out of the shared template helpers.
+    import { hashStrategyContent } from './src/server/strategy/strategyHash';
+    import { normalizeStrategyContent } from './src/shared/productStrategy';
     const [file, purpose] = JSON.parse(await Bun.stdin.text());
     const db = new Database(file);
     const strategy = db.query('SELECT id FROM product_strategies').get();

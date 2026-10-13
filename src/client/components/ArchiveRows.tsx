@@ -19,7 +19,7 @@ import { SortableSessionItem } from './SessionRow'
 interface ArchiveRowsProps {
   entries: GroupedSessionEntry[]
   ctx: GroupedRowContext
-  /** Remounts AnimatePresence children when filters change (entry animation). */
+  /** Remounts rows when filters change (entry animation). */
   remountKey: string
   showHibernating: boolean
   showHistory: boolean

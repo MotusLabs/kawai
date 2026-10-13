@@ -71,6 +71,9 @@ import { fetchZaiUsage } from './zaiUsage'
 import { readWorkerTranscript } from './chatWorkerTranscript'
 import { loadTeamGroups } from '../team/teamGroups'
 import { SessionTeams } from '../team/sessionTeams'
+import { SessionDirectory } from '../team/sessionDirectory'
+import { MessageFeed } from '../team/messageFeed'
+import { MessageQuery } from '../team/messageQuery'
 import { TeamMailbox } from '../team/TeamMailbox'
 import { createMailboxServer } from '../team/mailboxTools'
 import { StrategyService } from '../strategy/StrategyService'
@@ -691,6 +694,7 @@ export class ChatSessionManager {
 
   constructor(options: ChatSessionManagerOptions) {
     this.options = options
+    this.directory = new SessionDirectory(options.db.db)
     this.providerUsageRefreshMs = options.providerUsageRefreshMs ?? 10 * 60 * 1000
     // Team membership (agent-teams D6) resolves asynchronously; once a
     // session's team is known its group label/missing state is published.
@@ -699,6 +703,8 @@ export class ChatSessionManager {
       onResolved: (sessionId) => {
         this.dispatcher?.notify()
         const record = this.records.get(sessionId)
+        // The directory keys by team, so it can only record once the team is known.
+        if (record) this.syncDirectory(sessionId)
         // Group-less sessions have nothing to show; skip the broadcast.
         if (record?.groupId != null) {
           this.options.registry.updateSession(sessionId, this.groupFields(record))
@@ -744,6 +750,7 @@ export class ChatSessionManager {
     })
     this.mailbox = this.teamMail.mailbox
     this.tasks = this.teamMail.tasks
+    this.messages = new MessageFeed(this.mailbox.store, new MessageQuery(options.db.db))
     // Product strategy (product-strategy): constructed here, beside the
     // task service, against the same database. The strategy store's changes
     // fan out to the strategy view pushes; the team comes from the record's
@@ -852,9 +859,13 @@ export class ChatSessionManager {
 
   /** Each session's team (agent-teams); shared with the mailbox dispatcher. */
   readonly teams: SessionTeams
+  /** Last known name/group of each team's sessions, kept past kill (team-message-threads D3). */
+  readonly directory: SessionDirectory
   readonly mailbox: TeamMailbox
   /** Team tasks (team-tasks); the task tools and UI actions go through it. */
   readonly tasks: TaskService
+  /** The Messages read model and its live feed (team-message-threads D1/4.3). */
+  readonly messages: MessageFeed
   /** Product strategy (product-strategy); the strategy tools and UI actions go through it. */
   readonly strategies: StrategyService
   readonly dispatcher: MailDispatcher
@@ -929,7 +940,8 @@ export class ChatSessionManager {
     this.options.db.insertChatSession(record)
     const session = this.toSession(record)
     this.options.registry.setChatSession(session)
-    void this.teams.track(sessionId, projectPath)
+    // The directory keys by team, so it records once resolution lands.
+    void this.teams.track(sessionId, projectPath).then(() => this.syncDirectory(sessionId))
     return { ok: true, session }
   }
 
@@ -2026,6 +2038,29 @@ export class ChatSessionManager {
     this.applyPatch(sessionId, { lastActivityAt: new Date().toISOString() })
   }
 
+  /**
+   * Record the session's current name and group under its team. The team is
+   * resolved asynchronously, so this runs again from `onResolved`; with no
+   * team yet there is nothing to record. Called from detached callbacks that
+   * can land after teardown has closed the database — a lost last-known-name
+   * write is preferable to an unhandled rejection, so the write is best-effort.
+   */
+  private syncDirectory(sessionId: string): void {
+    if (this.isShutDown) return
+    const record = this.records.get(sessionId)
+    const teamId = this.teams.teamOf(sessionId)?.teamId
+    if (!record || !teamId) return
+    try {
+      this.directory.upsert(teamId, {
+        sessionId,
+        name: record.name,
+        group: record.groupId ?? null,
+      })
+    } catch {
+      // Teardown closed the database under an in-flight team resolution.
+    }
+  }
+
   private applyPatch(
     sessionId: string,
     patch: Partial<ChatSessionRecord>
@@ -2034,6 +2069,9 @@ export class ChatSessionManager {
     if (!record) return
     const next = { ...record, ...patch }
     this.records.set(sessionId, next)
+    // Keep the directory's last known name and group (team-message-threads
+    // D3); kill and archive deliberately never write here.
+    if (patch.name !== undefined || patch.groupId !== undefined) this.syncDirectory(sessionId)
     if (
       (patch.status !== undefined && patch.status !== record.status) ||
       patch.projectPath !== undefined || patch.archivedAt !== undefined ||

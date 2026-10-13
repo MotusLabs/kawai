@@ -17,7 +17,9 @@ import type { MessageRouterDeps, SessionFormPrefill } from '../protocol/types'
 import { useSessionStore } from '../stores/sessionStore'
 import { useChatStore } from '../stores/chatStore'
 import { useStrategyStore } from '../stores/strategyStore'
+import { useTeamMessageStore } from '../stores/teamMessageStore'
 import type { ProductStrategy, StrategyDetail } from '@shared/productStrategy'
+import type { TeamMessage } from '@shared/team'
 
 const baseSession: TerminalSession = {
   id: 'session-1',
@@ -84,6 +86,7 @@ beforeEach(() => {
   useSessionStore.setState(initialSessionState, true)
   useChatStore.setState(initialChatState, true)
   useStrategyStore.setState({ views: {} })
+  useTeamMessageStore.setState({ views: {} })
 })
 
 describe('createMessageRouter dispatch coverage', () => {
@@ -127,8 +130,13 @@ describe('createMessageRouter dispatch coverage', () => {
       { type: 'chat-model', sessionId: 'chat-1', model: 'claude-sonnet-5-5' },
       { type: 'chat-notifications', sessionId: 'chat-1', notifications: [] },
       { type: 'team-mailbox-snapshot', teamId: 'team', messages: [] },
+      { type: 'team-mailbox-delivered-to-human', teamId: 'team', messageId: 'm-1', senderSession: 'chat-2', senderKind: 'agent' },
       { type: 'team-tasks-snapshot', teamId: 'team', tasks: [] },
       { type: 'team-task-result', sessionId: 'chat-1', ok: true },
+      { type: 'team-messages-snapshot', sessionId: 'chat-1', teamId: 'team', filters: {}, messages: [], nextCursor: null, directory: [], tasks: [] },
+      { type: 'team-messages', sessionId: 'chat-1', teamId: 'team', messages: [] },
+      { type: 'team-thread', sessionId: 'chat-1', teamId: 'team', threadId: 't-1', entries: [], directory: [] },
+      { type: 'team-message-send-result', sessionId: 'chat-1', requestId: 'r-1', error: 'nope' },
     ]
     for (const message of messages) {
       expect(() => route(message as ServerMessage)).not.toThrow()
@@ -324,5 +332,58 @@ describe('product strategy routing after extraction', () => {
     useStrategyStore.getState().close('chat-1')
     route({ type: 'strategy-snapshot', sessionId: 'chat-1', teamId: 'team', strategy })
     expect(useStrategyStore.getState().views['chat-1']).toBeUndefined()
+  })
+})
+
+describe('team messages routing after extraction', () => {
+  const row = (id: string): TeamMessage => ({
+    id, teamId: 'team', toKind: 'group', toId: 'devs', fromKind: 'agent',
+    fromSession: 'chat-2', fromGroup: 'leads', originPath: '/tmp',
+    priority: 'normal', tags: [], threadId: 't-1', inReplyTo: null, hop: 1,
+    body: 'hello', state: 'delivered', claimedBy: null, claimedAt: null,
+    deliverAt: null, createdAt: '2024-01-01T00:00:00.000Z', pushedAt: null,
+    deliveredAt: null, reason: null, possibleDuplicate: false, attachThread: false,
+    taskId: null, taskRevision: null, claimCommit: null, parkedUntil: null,
+    parkCount: 0, resumeMessageId: null, handoff: null, excludedProfile: null,
+  })
+
+  test('a snapshot opens the view, pushes and threads fold in, and a result settles the composer', () => {
+    const route = createMessageRouter(makeDeps().deps)
+    useTeamMessageStore.getState().open('chat-1')
+    route({
+      type: 'team-messages-snapshot', sessionId: 'chat-1', teamId: 'team', filters: {},
+      messages: [row('m-1')], nextCursor: null,
+      directory: [{ sessionId: 'chat-2', name: 'Dev', group: 'leads' }], tasks: [],
+    })
+    expect(useTeamMessageStore.getState().views['chat-1']).toMatchObject({
+      open: true, loading: false, teamId: 'team', nextCursor: null,
+    })
+    expect(useTeamMessageStore.getState().views['chat-1']!.messages.map(m => m.id)).toEqual(['m-1'])
+    expect(useTeamMessageStore.getState().views['chat-1']!.directory).toEqual([
+      { sessionId: 'chat-2', name: 'Dev', group: 'leads' },
+    ])
+
+    route({ type: 'team-messages', sessionId: 'chat-1', teamId: 'team', messages: [row('m-2')] })
+    expect(useTeamMessageStore.getState().views['chat-1']!.messages.map(m => m.id)).toEqual(['m-1', 'm-2'])
+
+    // A thread reply only folds into the thread the view has open (replace
+    // semantics) — select first, as TeamMessagesView does.
+    useTeamMessageStore.getState().select('chat-1', 't-1')
+    route({
+      type: 'team-thread', sessionId: 'chat-1', teamId: 'team', threadId: 't-1',
+      entries: [{ message: row('m-1'), events: [] }], directory: [],
+    })
+    expect(useTeamMessageStore.getState().views['chat-1']!.selectedThreadId).toBe('t-1')
+    expect(useTeamMessageStore.getState().views['chat-1']!.thread).toHaveLength(1)
+
+    useTeamMessageStore.getState().beginSend('chat-1', 'r-1')
+    expect(useTeamMessageStore.getState().views['chat-1']!.pending['r-1']).toBe('send')
+    route({ type: 'team-message-send-result', sessionId: 'chat-1', requestId: 'r-1', error: 'nope' })
+    expect(useTeamMessageStore.getState().views['chat-1']!.pending).toEqual({})
+    expect(useTeamMessageStore.getState().views['chat-1']!.error).toBe('nope')
+
+    useTeamMessageStore.getState().close('chat-1')
+    route({ type: 'team-messages-snapshot', sessionId: 'chat-1', teamId: 'team', filters: {}, messages: [], nextCursor: null, directory: [], tasks: [] })
+    expect(useTeamMessageStore.getState().views['chat-1']).toBeUndefined()
   })
 })

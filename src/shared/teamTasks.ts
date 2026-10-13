@@ -1,13 +1,17 @@
 // SDK-free team task records (team-tasks design D1) shared by server and
 // client views. A task's direction and acceptance criteria live in numbered,
 // immutable revisions; `TeamTask` carries the latest one inline.
-import type { TeamMessage } from './team'
+import type { TeamActor, TeamMessage } from './team'
 
 export type TaskStatus = 'open' | 'active' | 'blocked' | 'done' | 'cancelled'
 export const TASK_STATUSES: readonly TaskStatus[] = ['open', 'active', 'blocked', 'done', 'cancelled']
 
-/** Who did something to a task: the human (through the UI) or an agent session. */
-export type TaskActor = { kind: 'human'; sessionId: null } | { kind: 'agent'; sessionId: string }
+/**
+ * Who did something to a task: the human (through the UI) or an agent session.
+ * An alias of the shared actor vocabulary (`TeamActor`), which message senders
+ * use too — not of `TeamMessage['toKind']`'s routing vocabulary.
+ */
+export type TaskActor = TeamActor
 
 export interface TeamTask {
   id: string

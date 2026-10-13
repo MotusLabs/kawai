@@ -4,14 +4,23 @@
 // add a note, and set any status including reopening. The human may do all
 // of this whoever created the task, even a killed agent. Controls disable
 // while disconnected.
+// Its Messages section (team-message-threads D7) is the same rows the
+// Messages view draws — named participants, killed ones marked `(gone)` —
+// with a link into that message's thread. Task *participants* below keep the
+// older label, per the design's directory scope note.
 import { useEffect, useState } from 'react'
 import type { Session, SendClientMessage } from '@shared/types'
 import { TASK_STATUSES, type TaskStatus } from '@shared/teamTasks'
 import { useTeamTaskStore, type TaskAction, type TaskView } from '../../stores/teamTaskStore'
+import MessageRow from './MessageRow'
 import { actorLabel, sessionLabel } from './teamTaskLabels'
 
-export default function TeamTaskDetail({ sessionId, view, sendMessage, connected, sessions }: {
+export default function TeamTaskDetail({ sessionId, view, sendMessage, connected, sessions, onOpenThread, onOpenSession }: {
   sessionId: string; view: TaskView; sendMessage: SendClientMessage; connected: boolean; sessions: Session[]
+  /** Open this message's thread in the Messages view; omitted = no link. */
+  onOpenThread?: (threadId: string) => void
+  /** Open a message participant's chat; omitted = names only. */
+  onOpenSession?: (sessionId: string) => void
 }) {
   const detail = view.detail
   const task = detail?.task
@@ -100,9 +109,10 @@ export default function TeamTaskDetail({ sessionId, view, sendMessage, connected
     <section aria-label="Messages" className="mt-3">
       <h5 className="font-medium">Messages</h5>
       {detail.messages.length === 0 && <p className="text-chat-meta text-secondary">No messages</p>}
-      {detail.messages.map(message => <article key={message.id} data-message-id={message.id} className="mt-2 border border-border p-2">
-        <p className="text-chat-meta text-secondary">{sessionLabel(message.fromSession, sessions)} → {message.toKind}: {message.toKind === 'session' ? sessionLabel(message.toId, sessions) : message.toId} · {message.state}</p>
-        <p className="whitespace-pre-wrap break-words text-chat-body">{message.body}</p>
+      {detail.messages.map(message => <article key={message.id} data-message-id={message.id} data-testid="message-row" className="mt-2 border border-border p-2">
+        <MessageRow row={message} sessions={sessions} names={view.directory} onOpenSession={onOpenSession} />
+        {onOpenThread && <button className="btn mt-1 text-chat-meta" data-testid="message-open-thread"
+          onClick={() => onOpenThread(message.threadId)}>Open thread</button>}
       </article>)}
     </section>
 

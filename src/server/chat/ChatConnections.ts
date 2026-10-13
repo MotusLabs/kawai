@@ -38,6 +38,7 @@ import type { ChatSessionManager } from './ChatSessionManager'
 import type { ChatWireLogs } from './ChatWireLogs'
 import { MailboxConnections } from '../team/mailboxConnections'
 import { TaskConnections } from '../team/taskConnections'
+import { MessageConnections } from '../team/messageConnections'
 import { StrategyConnections } from '../strategy/strategyConnections'
 import type { TeamMessage } from '../../shared/team'
 
@@ -74,6 +75,7 @@ export class ChatConnections {
 
   private readonly mailboxConnections: MailboxConnections
   private readonly taskConnections: TaskConnections
+  private readonly messageConnections: MessageConnections
   private readonly strategyConnections: StrategyConnections
 
   constructor(
@@ -83,6 +85,7 @@ export class ChatConnections {
   ) {
     this.mailboxConnections = new MailboxConnections(manager)
     this.taskConnections = new TaskConnections(manager)
+    this.messageConnections = new MessageConnections(manager)
     this.strategyConnections = new StrategyConnections(manager)
   }
 
@@ -101,6 +104,7 @@ export class ChatConnections {
     this.pendingAttach.delete(connection)
     this.mailboxConnections.disconnect(connection)
     this.taskConnections.disconnect(connection)
+    this.messageConnections.disconnect(connection)
     this.strategyConnections.disconnect(connection)
     this.subscriptions.delete(connection)
     this.batches.delete(connection)
@@ -130,12 +134,24 @@ export class ChatConnections {
     // Task detail lists its mail; a task message changing state changes it.
     if (message?.taskId) this.taskConnections.publish(teamId)
     if (message?.state === 'dead' && message.reason === 'hop-limit') {
-      const notice: ServerMessage = { type: 'team-mailbox-dead-letter', teamId, messageId: message.id, senderSession: message.fromSession }
-      if (this.broadcastMailboxNotice) { this.broadcastMailboxNotice(notice); return }
-      for (const [connection, sessions] of this.subscriptions) {
-        if ([...sessions].some(id => this.manager.teams.teamOf(id)?.teamId === teamId)) {
-          connection.send(notice)
-        }
+      this.notice(teamId, { type: 'team-mailbox-dead-letter', teamId, messageId: message.id, senderSession: message.fromSession })
+    }
+    // A reply reached the human (team-message-threads D5): settled on send,
+    // no agent turn to show it in, so every connected client gets a toast.
+    if (message?.state === 'delivered' && message.toKind === 'human') {
+      this.notice(teamId, {
+        type: 'team-mailbox-delivered-to-human', teamId, messageId: message.id,
+        senderSession: message.fromSession, senderKind: message.fromKind,
+      })
+    }
+  }
+
+  /** A one-off toast for every connection attached to the team's sessions. */
+  private notice(teamId: string, notice: ServerMessage): void {
+    if (this.broadcastMailboxNotice) { this.broadcastMailboxNotice(notice); return }
+    for (const [connection, sessions] of this.subscriptions) {
+      if ([...sessions].some(id => this.manager.teams.teamOf(id)?.teamId === teamId)) {
+        connection.send(notice)
       }
     }
   }
@@ -442,6 +458,9 @@ export class ChatConnections {
     if (this.epochs.get(connection) !== epoch && opensSubscription(message.type)) return
     if (message.type.startsWith('team-mailbox-')) return this.mailboxConnections.handle(connection, message)
     if (message.type.startsWith('team-task')) return this.taskConnections.handle(connection, message as Extract<ClientMessage, { type: `team-task${string}` }>)
+    if (message.type.startsWith('team-message') || message.type.startsWith('team-thread')) {
+      return this.messageConnections.handle(connection, message as Extract<ClientMessage, { type: `team-message${string}` | `team-thread${string}` }>)
+    }
     if (message.type.startsWith('strategy-')) return this.strategyConnections.handle(connection, message as Extract<ClientMessage, { type: `strategy-${string}` }>)
     if (!message.type.startsWith('chat-') || !('sessionId' in message)) return
     const { sessionId } = message
@@ -562,5 +581,6 @@ export class ChatConnections {
 function opensSubscription(type: ClientMessage['type']): boolean {
   return type === 'chat-attach' || type === 'chat-debug-open' ||
     type === 'team-mailbox-open' || type === 'team-tasks-open' || type === 'team-task-open' ||
+    type === 'team-messages-open' || type === 'team-thread-open' ||
     type === 'strategy-open'
 }

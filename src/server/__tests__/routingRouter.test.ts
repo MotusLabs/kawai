@@ -16,10 +16,10 @@ function group(frontmatter: string): GroupDefinition {
 }
 
 const message = (over: Partial<TeamMessage> = {}): TeamMessage => ({
-  id: 'm1', teamId: 'team', toKind: 'group', toId: 'devs', fromSession: 'lead', fromGroup: 'leads', originPath: '/repo',
+  id: 'm1', teamId: 'team', toKind: 'group', toId: 'devs', fromKind: 'agent', fromSession: 'lead', fromGroup: 'leads', originPath: '/repo',
   priority: 'normal', tags: ['t'], threadId: 'm1', inReplyTo: null, hop: 1, body: 'SECRET BODY', state: 'queued',
   claimedBy: null, claimedAt: null, deliverAt: null, createdAt: '', pushedAt: null, deliveredAt: null, reason: null,
-  possibleDuplicate: false, attachThread: false, taskId: 'task-1',
+  possibleDuplicate: false, attachThread: false, taskId: 'task-1', taskRevision: null,
   claimCommit: null, parkedUntil: null, parkCount: 0, resumeMessageId: null, handoff: null, excludedProfile: null, ...over,
 })
 

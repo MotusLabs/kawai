@@ -77,9 +77,13 @@ export class LimitOutcomes {
   claimed(message: TeamMessage, sessionId: string): void {
     const cwd = this.options.getRecord(sessionId)?.projectPath
     if (!cwd || message.claimCommit) return
+    // A `.then` rejection handler does not see a throw from its own
+    // fulfillment handler, so the write that follows the git call has to hang
+    // off `.catch` — otherwise a store torn down before the call resolves
+    // surfaces as an unhandled rejection.
     void runGitAsync(['rev-parse', 'HEAD'], { cwd }).then(result => {
       if (result.ok && result.stdout.trim()) this.options.store.setClaimCommit(message.id, result.stdout.trim())
-    }, this.options.onError)
+    }).catch(this.options.onError)
   }
 
   /** Mail was pushed as the session's next turn. */

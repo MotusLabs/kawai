@@ -16,12 +16,16 @@ const peer: ChatEvent = { type: 'peer_message', id: 'p1', sequence: 1, at: 'now'
   senderSession: 'lead', senderGroup: 'leads', priority: 'urgent', originPath: '/repo/worktree', tags: ['review', 'review'],
   threadId: 'thread', body: 'Review this change', possibleDuplicate: true }
 const mail = (id: string, state: TeamMessage['state'], deliverAt: string | null = null): TeamMessage => ({
-  id, state, deliverAt, teamId: 'team', toKind: 'group', toId: 'devs', fromSession: 'lead', fromGroup: 'leads',
+  id, state, deliverAt, teamId: 'team', toKind: 'group', toId: 'devs', fromKind: 'agent', fromSession: 'lead', fromGroup: 'leads',
   originPath: '/repo', priority: 'normal', tags: [], threadId: id, inReplyTo: null, hop: 1, body: id,
   claimedBy: state === 'uncertain' ? 'dev' : null, claimedAt: null, createdAt: new Date().toISOString(),
   pushedAt: null, deliveredAt: null, reason: null, possibleDuplicate: false, attachThread: false, taskId: null,
-  claimCommit: null, parkedUntil: null, parkCount: 0, resumeMessageId: null, handoff: null, excludedProfile: null,
+  taskRevision: null, claimCommit: null, parkedUntil: null, parkCount: 0, resumeMessageId: null, handoff: null, excludedProfile: null,
 })
+/** Rendered text below a test instance (instances are cyclic; never stringify them). */
+const textOf = (node: TestRenderer.ReactTestInstance | string): string =>
+  typeof node === 'string' ? node : node.children.map(textOf).join('')
+
 test('peer row is distinct and restored by reconnect snapshot', () => {
   const events: ChatEvent[] = [{ type: 'user_message', id: 'u1', sequence: 0, at: 'now', turnId: 't', text: 'Human' }, peer]
   useChatStore.getState().snapshot({ type: 'chat-snapshot', sessionId: 'dev', profileId: 'default', events,
@@ -33,7 +37,8 @@ test('peer row is distinct and restored by reconnect snapshot', () => {
   for (const text of ['leads', 'urgent', '/repo/worktree', 'review', 'Possible duplicate', 'Review this change']) {
     expect(JSON.stringify(renderer.toJSON())).toContain(text)
   }
-  expect(row.findAllByType('span').filter(span => JSON.stringify(span.children) === '["#","review"]')).toHaveLength(1)
+  // Tags are deduped: two 'review' inputs render one #review chip.
+  expect(row.findAllByType('span').filter(span => textOf(span) === '#review')).toHaveLength(1)
   expect(renderer.root.findAllByProps({ 'data-chat-role': 'user' })).toHaveLength(1)
   renderer.unmount()
 })
