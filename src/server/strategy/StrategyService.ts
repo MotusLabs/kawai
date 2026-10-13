@@ -130,7 +130,8 @@ export class StrategyService {
   /**
    * Submit a draft for review: the draft's content becomes the next
    * numbered InReview revision with its impact proposal and evidence rows.
-   * An agent may submit only its own draft; the human may submit any
+   * An agent may submit only a draft it authored itself — never another
+   * agent's and never the human's working copy; the human may submit any
    * (they pick between competing drafts).
    */
   async submitForReview(caller: StrategyCaller, input: StrategySubmitInput) {
@@ -141,8 +142,9 @@ export class StrategyService {
     if (!draft) {
       throw new Error(`No draft "${draftId}" for this product. Save a draft first with strategy_save_draft.`)
     }
-    if (actor.kind === 'agent' && draft.author.kind === 'agent' && draft.author.sessionId !== actor.sessionId) {
-      throw new Error(`Draft "${draftId}" belongs to ${draft.author.sessionId}. Save and submit your own draft; the human chooses between competing drafts on approval.`)
+    if (actor.kind === 'agent' && !(draft.author.kind === 'agent' && draft.author.sessionId === actor.sessionId)) {
+      const owner = draft.author.kind === 'human' ? 'the human' : draft.author.sessionId
+      throw new Error(`Draft "${draftId}" belongs to ${owner}. Save and submit your own draft; the human chooses between competing drafts on approval.`)
     }
     return this.store.submitRevision(strategy.id, {
       author: draft.author,

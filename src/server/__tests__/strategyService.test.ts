@@ -166,6 +166,15 @@ describe('drafts and submission', () => {
     expect(humanPick.ok).toBe(true)
   })
 
+  test('an agent cannot submit the human draft either — only a draft it authored', async () => {
+    await capture() // the human's capture save creates the 'human' draft
+    await expect(service.submitForReview(agent('dev'), { draft_id: 'human' })).rejects.toThrow(/belongs to the human/)
+    // Nothing was promoted: no revisions exist yet.
+    expect((await service.get(human()))!.revisions).toEqual([])
+    // The human can submit their own working copy.
+    expect((await service.submitForReview(human(), { draft_id: 'human' })).ok).toBe(true)
+  })
+
   test('material-change impact proposals ride the draft into the revision', async () => {
     await capture()
     const saved = await service.saveDraft(agent('dev'), { content: content({ boundaries: ['new boundary'] }), impact_proposal: 'Narrows scope: drops multi-repo', expected_draft_hash: null })
