@@ -220,6 +220,52 @@ describe('worktree launches and transient errors', () => {
     expect(harness.deps.pendingWorktreeLaunch.current).toBeNull()
   })
 
+  test('an UNMATCHED successful create-worktree result keeps the pending launch intact', () => {
+    const harness = makeDeps()
+    harness.deps.pendingWorktreeLaunch.current = { repositoryId: 'r', branch: 'b' }
+    const route = createMessageRouter(harness.deps)
+
+    // A different client's worktree (or a second creation in flight)
+    // succeeds first — it must not consume our pending launch.
+    route({
+      type: 'workspace-operation-result',
+      result: { operation: 'create-worktree', ok: true, repositoryId: 'other', branch: 'zz', path: '/tmp/other' },
+    })
+
+    expect(harness.prefills).toEqual([])
+    expect(harness.transientErrors).toEqual([])
+    expect(harness.deps.pendingWorktreeLaunch.current).toEqual({ repositoryId: 'r', branch: 'b' })
+
+    // The matching result arriving afterwards still opens the form.
+    route({
+      type: 'workspace-operation-result',
+      result: { operation: 'create-worktree', ok: true, repositoryId: 'r', branch: 'b', path: '/tmp/wt' },
+    })
+    expect(harness.prefills).toEqual([{ host: undefined, path: '/tmp/wt', command: undefined, autoStartChange: undefined }])
+    expect(harness.deps.pendingWorktreeLaunch.current).toBeNull()
+  })
+
+  test('an unmatched successful create-change-worktree result keeps its pending launch intact', () => {
+    const harness = makeDeps()
+    harness.deps.pendingChangeLaunch.current = { repositoryId: 'r', change: 'c' }
+    const route = createMessageRouter(harness.deps)
+
+    route({
+      type: 'workspace-operation-result',
+      result: { operation: 'create-change-worktree', ok: true, repositoryId: 'other', change: 'zz', branch: 'b', path: '/tmp/other', commit: 'x', gitignoreUpdated: false },
+    })
+
+    expect(harness.prefills).toEqual([])
+    expect(harness.deps.pendingChangeLaunch.current).toEqual({ repositoryId: 'r', change: 'c' })
+
+    route({
+      type: 'workspace-operation-result',
+      result: { operation: 'create-change-worktree', ok: true, repositoryId: 'r', change: 'c', branch: 'b', path: '/tmp/wt', commit: 'x', gitignoreUpdated: false },
+    })
+    expect(harness.prefills).toEqual([{ host: undefined, path: '/tmp/wt', command: undefined, autoStartChange: 'c' }])
+    expect(harness.deps.pendingChangeLaunch.current).toBeNull()
+  })
+
   test('a failed create-worktree result surfaces the error and clears the pending launch', () => {
     const harness = makeDeps()
     harness.deps.pendingWorktreeLaunch.current = { repositoryId: 'r', branch: 'b' }

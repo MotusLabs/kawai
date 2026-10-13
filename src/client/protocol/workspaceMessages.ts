@@ -13,18 +13,28 @@ export function handleWorkspaceSnapshot(
   useWorkspaceStore.getState().applySnapshot(message.snapshot)
 }
 
-/** Settle a worktree launch: match its pending request, open the form, or surface the error (F7 dedupe). */
+/**
+ * Settle a worktree launch (F7 dedupe). The two outcome paths are NOT
+ * symmetric and must stay that way: a SUCCESS only acts when it matches the
+ * pending request — an unmatched success (another client's worktree, or a
+ * second creation in flight) leaves the pending launch alone so its own
+ * result can still open the form. A FAILURE always surfaces the error and
+ * clears any pending launch.
+ */
 function settleLaunch(
   deps: MessageRouterDeps,
+  ok: boolean,
+  error: string,
   pending: unknown,
   clearPending: () => void,
   matched: boolean,
-  launch: () => void,
-  error: string
+  launch: () => void
 ): void {
-  if (matched) {
-    clearPending()
-    launch()
+  if (ok) {
+    if (matched) {
+      clearPending()
+      launch()
+    }
     return
   }
   if (pending) clearPending()
@@ -43,13 +53,14 @@ export function handleWorkspaceOperationResult(
     const launchPath = result.ok ? result.path : ''
     settleLaunch(
       deps,
+      result.ok,
+      result.ok ? '' : result.error,
       pending,
       () => { deps.pendingWorktreeLaunch.current = null },
-      Boolean(result.ok && pending && pending.repositoryId === result.repositoryId && pending.branch === result.branch),
+      Boolean(pending && pending.repositoryId === result.repositoryId && pending.branch === result.branch),
       // Route a successful launch request through the normal session
       // form — presets, names, and hosts stay in play (§8.4).
-      () => deps.openSessionFormPrefilled({ path: launchPath }),
-      result.ok ? '' : result.error
+      () => deps.openSessionFormPrefilled({ path: launchPath })
     )
   }
   if (result.operation === 'create-change-worktree') {
@@ -58,13 +69,14 @@ export function handleWorkspaceOperationResult(
     const launchChange = result.ok ? result.change : ''
     settleLaunch(
       deps,
+      result.ok,
+      result.ok ? '' : result.error,
       pending,
       () => { deps.pendingChangeLaunch.current = null },
-      Boolean(result.ok && pending && pending.repositoryId === result.repositoryId && pending.change === result.change),
+      Boolean(pending && pending.repositoryId === result.repositoryId && pending.change === result.change),
       // Seeded creation succeeded: open the session form prefilled with
       // the new worktree root and the apply auto-start offered (§7.4).
-      () => deps.openSessionFormPrefilled({ path: launchPath, autoStartChange: launchChange }),
-      result.ok ? '' : result.error
+      () => deps.openSessionFormPrefilled({ path: launchPath, autoStartChange: launchChange })
     )
   }
 }
