@@ -143,6 +143,7 @@ export function startServer(): void {
     onMailboxChange: (teamId, message) => chatConnections.publishMailbox(teamId, message),
     onRoutingRulesLoaded: () => chatConnections.publishRoutingRules(),
     onTaskChange: teamId => chatConnections.publishTasks(teamId),
+    onStrategyChange: teamId => chatConnections.publishStrategies(teamId),
     onCommandState: (sessionId, state) => chatConnections.publishCommandState(sessionId, state),
     onActivity: (sessionId, activity) => chatConnections.publishActivity(sessionId, activity),
     onContextUsage: (sessionId, usage) => chatConnections.publishContextUsage(sessionId, usage),
