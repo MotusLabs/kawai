@@ -55,6 +55,8 @@ export class ChatConnections {
   private readonly activityBatches = new Map<ChatConnection, Map<string, ChatActivity | null>>()
   /** Latest context-usage reading per connection and session (design D5). */
   private readonly contextBatches = new Map<ChatConnection, Map<string, ChatContextUsage | null>>()
+  /** Latest reported model per connection and session (chat-session-model D3). */
+  private readonly modelBatches = new Map<ChatConnection, Map<string, string>>()
   /** Latest usage report per connection and profile, sent by the next flush. */
   private readonly usageBatches = new Map<ChatConnection, Map<string, ChatUsageReport | null>>()
   /** Latest worker roster per connection and session (workers design D2). */
@@ -95,6 +97,7 @@ export class ChatConnections {
     this.batches.delete(connection)
     this.activityBatches.delete(connection)
     this.contextBatches.delete(connection)
+    this.modelBatches.delete(connection)
     this.usageBatches.delete(connection)
     this.workerBatches.delete(connection)
     this.notificationBatches.delete(connection)
@@ -179,6 +182,22 @@ export class ChatConnections {
       const latest = this.contextBatches.get(connection) ?? new Map<string, ChatContextUsage | null>()
       latest.set(sessionId, usage)
       this.contextBatches.set(connection, latest)
+    }
+    this.scheduleFlush()
+  }
+
+  /**
+   * Queue the session's latest reported model (chat-session-model design D3):
+   * like context usage, only the latest value per connection and session
+   * survives until the flush. The manager sends only changes, and the value
+   * never clears, so each entry is a plain string.
+   */
+  publishModel(sessionId: string, model: string): void {
+    for (const [connection, sessions] of this.subscriptions) {
+      if (!sessions.has(sessionId)) continue
+      const latest = this.modelBatches.get(connection) ?? new Map<string, string>()
+      latest.set(sessionId, model)
+      this.modelBatches.set(connection, latest)
     }
     this.scheduleFlush()
   }
@@ -299,6 +318,15 @@ export class ChatConnections {
         }
       }
     }
+    const modelBatches = new Map(this.modelBatches)
+    this.modelBatches.clear()
+    for (const [connection, sessions] of modelBatches) {
+      for (const [sessionId, model] of sessions) {
+        if (this.subscriptions.get(connection)?.has(sessionId)) {
+          connection.send({ type: 'chat-model', sessionId, model })
+        }
+      }
+    }
     const usageBatches = new Map(this.usageBatches)
     this.usageBatches.clear()
     for (const [connection, profiles] of usageBatches) {
@@ -354,6 +382,7 @@ export class ChatConnections {
     this.batches.get(connection)?.delete(sessionId)
     this.activityBatches.get(connection)?.delete(sessionId)
     this.contextBatches.get(connection)?.delete(sessionId)
+    this.modelBatches.get(connection)?.delete(sessionId)
     this.workerBatches.get(connection)?.delete(sessionId)
     this.notificationBatches.get(connection)?.delete(sessionId)
   }
@@ -426,6 +455,7 @@ export class ChatConnections {
         this.batches.get(connection)?.delete(sessionId)
         this.activityBatches.get(connection)?.delete(sessionId)
         this.contextBatches.get(connection)?.delete(sessionId)
+        this.modelBatches.get(connection)?.delete(sessionId)
         this.workerBatches.get(connection)?.delete(sessionId)
         this.notificationBatches.get(connection)?.delete(sessionId)
         const sessions = this.subscriptions.get(connection) ?? new Set<string>()

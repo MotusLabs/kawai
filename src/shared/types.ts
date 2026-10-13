@@ -301,6 +301,13 @@ export type ServerMessage =
        * `activity` — it also persists with the chat session.
        */
       contextUsage: ChatContextUsage | null
+      /**
+       * Model the agent last reported for the session (its init frame), or
+       * null before the first report — slow session state like
+       * `contextUsage`, persisted with the chat session, never a sequenced
+       * event.
+       */
+      model: string | null
       /** Latest plan-usage report for the session's profile, when one is held. */
       usage: ChatUsageReport | null
       /**
@@ -336,6 +343,11 @@ export type ServerMessage =
       sessionId: string
       usage: ChatContextUsage | null
     }
+  // Model the agent last reported for a chat session (its init frame): sent
+  // only when it changes — the value never clears, so the push carries a
+  // string. Coalesced like chat-context-usage; additive, never sequenced or
+  // replayed (the snapshot carries the current value instead).
+  | { type: 'chat-model'; sessionId: string; model: string }
   // Full worker roster of a chat session (workers design D2): a level signal,
   // not deltas — a missed bookend must not wedge a stale running worker. Sent
   // whenever the roster projection changes; additive and ephemeral like
