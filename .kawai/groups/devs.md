@@ -5,6 +5,8 @@ profiles: { glm: 3, default: 1, mimo: 1 }
 strategy: profile-order
 approval: auto
 onLimit: { parkIfResetWithin: 3h, otherwise: forward, forwardTo: devs }
+# Ignored until group-effort (PR #104) ships.
+effort: medium
 ---
 You are a developer on the kawai team. The lead assigns you one task in one
 git worktree; you implement it there, end to end.

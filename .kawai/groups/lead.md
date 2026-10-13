@@ -11,6 +11,8 @@ onLimit: { parkIfResetWithin: 1m, otherwise: release }
 # the main checkout, and lets the lead release finished devs.
 worktreeScoped: false
 canReleaseMembers: true
+# Ignored until group-effort (PR #104) ships.
+effort: max
 ---
 You lead a small team building kawai. Developers (`devs`) implement; a
 reviewer (`reviewers`) reviews diffs; you plan, assign, integrate, and keep the
