@@ -15,6 +15,7 @@ import { closedDebugView, useChatDebugStore, type ChatDebugView } from '../store
 import { emptyTranscript, useChatStore } from '../stores/chatStore'
 import { useSettingsStore } from '../stores/settingsStore'
 import { useTeamTaskStore } from '../stores/teamTaskStore'
+import { Switch } from '../components/Switch'
 
 describe('chat components', () => {
   test('approval cards send allow and deny without hiding the pending request locally', () => {
@@ -221,6 +222,9 @@ const withClipboard = (run: () => void): string[] => {
 describe('chat approval policy', () => {
   afterEach(() => useChatDebugStore.setState({ views: {} }))
 
+  // The rendered switch element (role="switch"), not the Switch component.
+  const approvalSwitch = (renderer: TestRenderer.ReactTestRenderer) =>
+    renderer.root.find(node => typeof node.type === 'string' && node.props['data-testid'] === 'chat-approval-policy')
   function renderPolicyView(session: Session) {
     const sent: ClientMessage[] = []
     let renderer!: TestRenderer.ReactTestRenderer
@@ -236,10 +240,11 @@ describe('chat approval policy', () => {
 
   test('a manual session shows an unpressed toggle that switches to auto', () => {
     const { sent, renderer } = renderPolicyView(chatSession)
-    const toggle = renderer.root.findByProps({ 'data-testid': 'chat-approval-policy' })
-    expect(toggle.props['aria-pressed']).toBe(false)
-    expect(toggle.props.className).not.toContain('btn-approval-on')
-    act(() => { toggle.props.onClick() })
+    const toggle = approvalSwitch(renderer)
+    expect(toggle.props.role).toBe('switch')
+    expect(toggle.props['aria-checked']).toBe(false)
+    expect(toggle.props['aria-label']).toBe('Auto-approve')
+    act(() => { renderer.root.findByType(Switch).props.onCheckedChange(true) })
     expect(sent).toContainEqual({ type: 'chat-set-approval-policy', sessionId: 'chat-1', policy: 'auto' })
     renderer.unmount()
   })
@@ -247,10 +252,11 @@ describe('chat approval policy', () => {
   test('an auto session shows a pressed, amber toggle that switches back', () => {
     const auto = { ...chatSession, approvalPolicy: 'auto' } as Session
     const { sent, renderer } = renderPolicyView(auto)
-    const toggle = renderer.root.findByProps({ 'data-testid': 'chat-approval-policy' })
-    expect(toggle.props['aria-pressed']).toBe(true)
-    expect(toggle.props.className).toContain('btn-approval-on')
-    act(() => { toggle.props.onClick() })
+    const toggle = approvalSwitch(renderer)
+    expect(toggle.props['aria-checked']).toBe(true)
+    expect(toggle.props.className).toContain('data-[checked]:bg-approval')
+    expect(renderer.root.findAll(node => node.type === 'label' && String(node.props.className).includes('text-approval'))).toHaveLength(1)
+    act(() => { renderer.root.findByType(Switch).props.onCheckedChange(false) })
     expect(sent).toContainEqual({ type: 'chat-set-approval-policy', sessionId: 'chat-1', policy: 'manual' })
     renderer.unmount()
   })
@@ -258,7 +264,7 @@ describe('chat approval policy', () => {
   test('an archived chat hides the approval-policy control', () => {
     const archived = { ...chatSession, archivedAt: '2026-10-01T00:00:00.000Z' } as Session
     const { renderer } = renderPolicyView(archived)
-    expect(renderer.root.findAllByProps({ 'data-testid': 'chat-approval-policy' })).toHaveLength(0)
+    expect(renderer.root.findAllByType(Switch)).toHaveLength(0)
     renderer.unmount()
   })
 

@@ -33,7 +33,7 @@ const transcript = (page: Page) => page.getByTestId('chat-transcript')
 
 test('switching to auto resolves a pending approval and skips later cards', async ({ page }, info) => {
   await createChat(page, 'auto-policy')
-  await expect(toggle(page)).toHaveAttribute('aria-pressed', 'false')
+  await expect(toggle(page)).toHaveAttribute('aria-checked', 'false')
 
   // Manual: a Bash approval surfaces as a card.
   await send(page, 'approval')
@@ -43,7 +43,7 @@ test('switching to auto resolves a pending approval and skips later cards', asyn
   // Flip the switch: the card resolves, the notice and auto-approved mark
   // appear, and the fixture's tool use proceeds ("Request accepted.").
   await toggle(page).click()
-  await expect(toggle(page)).toHaveAttribute('aria-pressed', 'true')
+  await expect(toggle(page)).toHaveAttribute('aria-checked', 'true')
   await expect(page.getByRole('button', { name: 'Allow', exact: true })).toHaveCount(0)
   await expect(transcript(page)).toContainText('Auto-approve on')
   await expect(transcript(page)).toContainText('Auto-approved Bash')
@@ -62,7 +62,7 @@ test('switching to auto resolves a pending approval and skips later cards', asyn
 test('questions still ask under auto', async ({ page }, info) => {
   await createChat(page, 'auto-question')
   await toggle(page).click()
-  await expect(toggle(page)).toHaveAttribute('aria-pressed', 'true')
+  await expect(toggle(page)).toHaveAttribute('aria-checked', 'true')
 
   await send(page, 'question')
   await expect(page.getByRole('group', { name: 'Which color?' })).toBeVisible()
@@ -80,11 +80,11 @@ test('a second tab sees the same policy switch', async ({ page, context }, info)
   await other.goto('/')
   await other.getByText('auto-two-tabs', { exact: false }).first().click()
   await expect(other.getByTestId('chat-view')).toContainText('auto-two-tabs')
-  await expect(toggle(other)).toHaveAttribute('aria-pressed', 'false')
+  await expect(toggle(other)).toHaveAttribute('aria-checked', 'false')
 
   await toggle(page).click()
-  await expect(toggle(page)).toHaveAttribute('aria-pressed', 'true')
-  await expect(toggle(other)).toHaveAttribute('aria-pressed', 'true')
+  await expect(toggle(page)).toHaveAttribute('aria-checked', 'true')
+  await expect(toggle(other)).toHaveAttribute('aria-checked', 'true')
   await expect(transcript(other)).toContainText('Auto-approve on')
   await page.screenshot({ path: info.outputPath('4-second-tab-sees-switch.png') })
 
@@ -95,7 +95,7 @@ test('a second tab sees the same policy switch', async ({ page, context }, info)
 test('the archived read-only view hides the approval-policy control', async ({ page }, info) => {
   await createChat(page, 'auto-archive')
   await toggle(page).click()
-  await expect(toggle(page)).toHaveAttribute('aria-pressed', 'true')
+  await expect(toggle(page)).toHaveAttribute('aria-checked', 'true')
 
   await page.getByTestId('chat-archive-button').click()
   // Archiving moves the session to the docked Archive pane and the app

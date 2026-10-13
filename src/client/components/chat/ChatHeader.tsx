@@ -1,6 +1,6 @@
 // The chat view header (chat-header-layout D1): the session's identity and
-// status, the side-panel toggles, the approval-policy control, and the
-// session actions. It renders from props only — the WebSocket subscription
+// status, the side-panel switcher, the Auto-approve switch (amber while on,
+// shown for live chats at every width), and the session actions. It renders from props only — the WebSocket subscription
 // effects for each side panel stay in ChatView, which owns the attach
 // lifecycle — and keeps the in-place rename state (chat-session-naming): a
 // blank submit just exits editing, and the draft follows broadcast renames
@@ -14,7 +14,9 @@ import type { Session } from '@shared/types'
 import type { ConnectionStatus } from '../../stores/sessionStore'
 import { parkedLabel } from '../../utils/parkedLabel'
 import { chatStatusIndicator } from '../../utils/sessionStatus'
+import { Switch } from '../Switch'
 import ChatContextMeter from './ChatContextMeter'
+import ChatPanelSwitcher from './ChatPanelSwitcher'
 import type { SideSlot } from './sideSlot'
 
 export interface ChatHeaderProps {
@@ -103,13 +105,15 @@ export default function ChatHeader({
         </p>
       </div>
       <ChatContextMeter usage={contextUsage} />
+      <ChatPanelSwitcher openSlot={openSlot} onToggle={onToggleSlot} />
       {slotButton('debug', 'Debug')}
-      {slotButton('mailbox', 'Mailbox')}
-      {slotButton('tasks', 'Tasks')}
-      {slotButton('messages', 'Messages')}
-      {slotButton('strategy', 'Strategy')}
-      {!archived && <button className={`btn text-chat-meta ${autoApprove ? 'btn-approval-on' : ''}`} aria-pressed={autoApprove}
-        onClick={onToggleApproval} data-testid="chat-approval-policy">Auto-approve</button>}
+      {!archived && (
+        <label className={`flex shrink-0 cursor-pointer items-center gap-1.5 whitespace-nowrap text-chat-meta ${autoApprove ? 'text-approval' : 'text-secondary'}`}>
+          <Switch checked={autoApprove} onCheckedChange={onToggleApproval} ariaLabel="Auto-approve" testId="chat-approval-policy"
+            className="data-[checked]:bg-approval" />
+          <span aria-hidden="true">Auto-approve</span>
+        </label>
+      )}
       {!archived && <button className="btn text-chat-meta" onClick={onArchive} data-testid="chat-archive-button">Archive</button>}
       <button className="btn text-chat-meta" onClick={onKill}>Kill session</button>
     </header>

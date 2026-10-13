@@ -102,7 +102,7 @@ test('the approval default commits on Save and seeds the New Session checkbox', 
   await dialog.getByRole('button', { name: 'Create', exact: true }).click()
   await expect(page.getByTestId('chat-view')).toContainText('Unchecked manual start')
 
-  await expect(page.getByTestId('chat-approval-policy')).toHaveAttribute('aria-pressed', 'false')
+  await expect(page.getByTestId('chat-approval-policy')).toHaveAttribute('aria-checked', 'false')
 
   await page.getByLabel('Message Claude').fill('approval')
   await page.getByRole('button', { name: 'Send', exact: true }).click()

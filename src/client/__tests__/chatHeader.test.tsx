@@ -1,8 +1,14 @@
-// The chat header (chat-header-layout): identity and status block.
-import { describe, expect, test } from 'bun:test'
+// The chat header (chat-header-layout): identity and status block, panel
+// switcher, and the Auto-approve switch.
+import { afterEach, describe, expect, test } from 'bun:test'
 import TestRenderer, { act } from 'react-test-renderer'
 import type { Session } from '@shared/types'
 import ChatHeader, { projectName, type ChatHeaderProps } from '../components/chat/ChatHeader'
+import ChatPanelSwitcher from '../components/chat/ChatPanelSwitcher'
+import ChatView from '../components/chat/ChatView'
+import { Switch } from '../components/Switch'
+import { useTeamMailboxStore } from '../stores/teamMailboxStore'
+import { useTeamTaskStore } from '../stores/teamTaskStore'
 
 const session = {
   id: 'chat-1', name: 'Kawai Chat header buttons', projectPath: '/home/coder/kawai', status: 'working', kind: 'chat',
@@ -88,5 +94,99 @@ describe('identity block', () => {
     expect(projectName('/home/coder/kawai')).toBe('kawai')
     expect(projectName('/home/coder/kawai/.worktrees/docs-chat-header-layout/')).toBe('docs-chat-header-layout')
     expect(projectName('/')).toBe('/')
+  })
+})
+
+const pressedOf = (button: TestRenderer.ReactTestInstance) => button.props['aria-pressed']
+
+describe('panel switcher', () => {
+  test('the group lists Tasks, Mailbox, Messages, and Strategy and presses the open one', () => {
+    const toggled: string[] = []
+    const { byId, update } = renderHeader({ openSlot: 'mailbox', onToggleSlot: slot => toggled.push(slot) })
+    const group = byId('chat-panel-switcher')
+    expect(group.props.role).toBe('group')
+    expect(group.props['aria-label']).toBe('Side panels')
+    const buttons = group.findAllByType('button')
+    expect(buttons.map(button => textOf(button))).toEqual(['Tasks', 'Mailbox', 'Messages', 'Strategy'])
+    expect(buttons.map(pressedOf)).toEqual([false, true, false, false])
+    act(() => byId('chat-panel-tasks').props.onClick())
+    expect(toggled).toEqual(['tasks'])
+    update({ openSlot: 'tasks' })
+    expect(byId('chat-panel-switcher').findAllByType('button').map(pressedOf)).toEqual([true, false, false, false])
+  })
+
+  test('choosing the open entry toggles it; nothing is pressed when no panel is open', () => {
+    const toggled: string[] = []
+    const { byId, update } = renderHeader({ openSlot: 'strategy', onToggleSlot: slot => toggled.push(slot) })
+    act(() => byId('chat-panel-strategy').props.onClick())
+    expect(toggled).toEqual(['strategy'])
+    update({ openSlot: null })
+    expect(byId('chat-panel-switcher').findAllByType('button').map(pressedOf)).toEqual([false, false, false, false])
+  })
+
+  test('the debug panel presses no switcher entry', () => {
+    const { byId } = renderHeader({ openSlot: 'debug' })
+    expect(byId('chat-panel-switcher').findAllByType('button').map(pressedOf)).toEqual([false, false, false, false])
+  })
+})
+
+describe('icon-only switcher', () => {
+  test('icon entries keep the panel name as accessible name and tooltip, and their pressed state', () => {
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => { renderer = TestRenderer.create(<ChatPanelSwitcher openSlot="messages" onToggle={() => {}} iconsOnly />) })
+    const buttons = renderer.root.findAllByType('button')
+    expect(buttons.map(button => button.props['aria-label'])).toEqual(['Tasks', 'Mailbox', 'Messages', 'Strategy'])
+    expect(buttons.map(button => button.props.title)).toEqual(['Tasks', 'Mailbox', 'Messages', 'Strategy'])
+    expect(buttons.map(pressedOf)).toEqual([false, false, true, false])
+    for (const button of buttons) expect(button.findAll(node => typeof node === 'string' || node.type === 'svg').length).toBeGreaterThan(0)
+    expect(buttons.map(button => textOf(button))).toEqual(['', '', '', ''])
+  })
+})
+
+describe('approval switch', () => {
+  const host = (renderer: TestRenderer.ReactTestRenderer) =>
+    renderer.root.findAll(node => typeof node.type === 'string' && node.props['data-testid'] === 'chat-approval-policy')
+
+  test('the switch reflects the policy and toggles it', () => {
+    let toggles = 0
+    const { renderer, update } = renderHeader({ onToggleApproval: () => { toggles += 1 } })
+    expect(host(renderer)[0]!.props['aria-checked']).toBe(false)
+    act(() => renderer.root.findByType(Switch).props.onCheckedChange(true))
+    expect(toggles).toBe(1)
+    update({ session: { ...session, approvalPolicy: 'auto' } as Session })
+    expect(host(renderer)[0]!.props['aria-checked']).toBe(true)
+    expect(host(renderer)[0]!.props.className).toContain('data-[checked]:bg-approval')
+  })
+
+  test('an archived chat shows no switch', () => {
+    const { renderer } = renderHeader({ session: { ...session, archivedAt: '2026-10-01T00:00:00.000Z' } as Session })
+    expect(host(renderer)).toHaveLength(0)
+  })
+})
+
+describe('in ChatView', () => {
+  afterEach(() => {
+    act(() => {
+      useTeamTaskStore.setState({ views: {} })
+      useTeamMailboxStore.setState({ views: {} })
+    })
+  })
+
+  test('the task chip opens the Tasks panel and presses Tasks in the switcher', () => {
+    const chat = { ...session, taskId: 'task-1', taskTitle: 'Export' } as Session
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => {
+      renderer = TestRenderer.create(<ChatView session={chat} sendMessage={() => {}} connectionStatus="connected"
+        connectionEpoch={0} error={null} onClose={() => {}} onKill={() => {}} />)
+    })
+    const pressed = () => renderer.root.findByProps({ 'data-testid': 'chat-panel-switcher' }).findAllByType('button').map(pressedOf)
+    expect(pressed()).toEqual([false, false, false, false])
+    act(() => renderer.root.findByProps({ 'data-testid': 'chat-task' }).props.onClick())
+    expect(pressed()).toEqual([true, false, false, false])
+    expect(useTeamTaskStore.getState().views['chat-1']?.selectedTaskId).toBe('task-1')
+    act(() => renderer.root.findByProps({ 'data-testid': 'chat-panel-mailbox' }).props.onClick())
+    expect(pressed()).toEqual([false, true, false, false])
+    expect(useTeamTaskStore.getState().views['chat-1']?.open ?? false).toBe(false)
+    act(() => renderer.unmount())
   })
 })
