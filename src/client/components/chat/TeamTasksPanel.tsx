@@ -9,7 +9,7 @@
 // **Retry assignment** reuses the existing task. Rows come from
 // authoritative server snapshots; actions disable while disconnected and
 // refusals show inline.
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import type { SendClientMessage, Session } from '@shared/types'
 import type { TeamTaskAssignment } from '@shared/teamTasks'
 import { useSessionStore } from '../../stores/sessionStore'
@@ -43,6 +43,15 @@ export default function TeamTasksPanel({ sessionId, projectPath, view, sendMessa
     sendMessage({ type: 'team-task-targets', sessionId, requestId: crypto.randomUUID(), ...(worktree ? { worktree } : {}) })
   }
   useEffect(() => { if (connected) requestTargets() }, [connected, sessionId, draft.worktree]) // eslint-disable-line react-hooks/exhaustive-deps
+  // A reconnect drops the waiters for results lost with the connection: the
+  // armed flow keeps its key, the dispatch effect re-sends the assign leg
+  // under it, and a human resubmit of the create reuses it — either way the
+  // server replays instead of duplicating (spec: reconnect resubmission).
+  const wasConnected = useRef(connected)
+  useEffect(() => {
+    if (wasConnected.current === false && connected) useTeamTaskStore.getState().reconnected(sessionId)
+    wasConnected.current = connected
+  }, [connected, sessionId])
   const preview = () => {
     const requestId = crypto.randomUUID()
     useTeamTaskStore.getState().beginPreview(sessionId, requestId)

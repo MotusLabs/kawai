@@ -93,6 +93,14 @@ interface TaskState {
   retryAssign: (sessionId: string) => void
   /** Record the dispatch payload the armed key is being used for. */
   flowSendAssign: (sessionId: string, payload: NonNullable<TaskCreateFlow['sentPayload']>) => void
+  /**
+   * The connection came back: results for anything still pending were lost
+   * with it, so their waiters are dropped. The armed flow keeps its request
+   * key — the dispatch effect re-sends the assign leg under it (the server
+   * replays the committed outcome), and the human's resubmit of a create
+   * reuses the armed key the same way.
+   */
+  reconnected: (sessionId: string) => void
   beginPreview: (sessionId: string, requestId: string) => void
   applyPreviewResult: (message: Extract<ServerMessage, { type: 'team-task-preview-result' }>) => void
   beginTargets: (sessionId: string) => void
@@ -178,6 +186,11 @@ export const useTeamTaskStore = create<TaskState>(set => ({
     const view = state.views[sessionId]
     if (!view?.open || !view.flow) return state
     return { views: { ...state.views, [sessionId]: { ...view, flow: { ...view.flow, sentPayload: payload } } } }
+  }),
+  reconnected: sessionId => set(state => {
+    const view = state.views[sessionId]
+    if (!view?.open || Object.keys(view.pending).length === 0) return state
+    return { views: { ...state.views, [sessionId]: { ...view, pending: {} } } }
   }),
   beginTargets: sessionId => set(state => update(state, sessionId, { targetsLoading: true })),
   applyTargetsResult: message => set(state => {

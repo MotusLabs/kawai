@@ -187,6 +187,41 @@ test('panel: a refused dispatch keeps every field and offers Retry assignment on
   act(() => renderer.unmount())
 })
 
+test('a lost result plus reconnect clears the waiters and the dispatch leg re-sends under the same key', () => {
+  useSessionStore.setState({ sessions: [sessionRow('dev', 'Dev one')] })
+  openView()
+  const store = useTeamTaskStore.getState()
+  store.setDraft('dev', { title: 'Export', direction: 'CSV', targetKind: 'group', targetId: 'devs', instruction: 'Please build' })
+  const { renderer, sentOf, store: live, rerender } = mountPanel()
+  act(() => renderer.root.findByProps({ 'data-testid': 'task-create-assign-button' }).props.onClick())
+  const create = sentOf('team-task-create')[0] as Extract<ClientMessage, { type: 'team-task-create' }>
+  // The result is lost with the connection; the reconnect drops the waiter
+  // so the form is usable again, and the human resubmit reuses the armed key.
+  rerender(false)
+  expect(live().pending).toMatchObject({ [create.requestId]: 'create-assign' })
+  rerender(true)
+  expect(live().pending).toEqual({})
+  // The cleared pending reaches the panel on the next render (the effect
+  // runs after the reconnect render itself).
+  rerender(true)
+  act(() => renderer.root.findByProps({ 'data-testid': 'task-create-assign-button' }).props.onClick())
+  const creates = sentOf('team-task-create') as Array<Extract<ClientMessage, { type: 'team-task-create' }>>
+  expect(creates).toHaveLength(2)
+  expect(creates[1]!.requestKey).toBe(create.requestKey)
+  // The create commits; its assign leg is sent, its result is lost too, and
+  // the reconnect re-arms the dispatch effect to re-send under the same key.
+  act(() => useTeamTaskStore.getState().applyResult({ type: 'team-task-result', sessionId: 'dev', requestId: creates[1]!.requestId, task: summary('t1') }))
+  rerender()
+  const firstAssign = (sentOf('team-task-assign') as Array<Extract<ClientMessage, { type: 'team-task-assign' }>>)[0]!
+  rerender(false)
+  rerender(true)
+  rerender()
+  const assigns = sentOf('team-task-assign') as Array<Extract<ClientMessage, { type: 'team-task-assign' }>>
+  expect(assigns).toHaveLength(2)
+  expect(assigns[1]).toMatchObject({ taskId: 't1', requestKey: firstAssign.requestKey, target: { kind: 'group', id: 'devs' } })
+  act(() => renderer.unmount())
+})
+
 test('detail: Assign / send task dispatches; an outstanding assignment forces the notify/stop choice', () => {
   useSessionStore.setState({ sessions: [sessionRow('dev', 'Dev one'), sessionRow('qa', 'QA helper')] })
   const outstanding = assignment('as1', { claimedBy: 'dev' })
