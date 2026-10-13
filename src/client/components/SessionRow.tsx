@@ -353,14 +353,10 @@ export const SortableSessionItem = memo(
         prefersReducedMotion
           ? { duration: 0 }
           : useSafariLayoutFallback
-            ? {
-              opacity: { duration: exitDuration / 1000 },
-              height: { duration: exitDuration / 1000, ease: 'easeOut' },
-            }
+            ? { opacity: { duration: exitDuration / 1000 } }
             : {
               opacity: { duration: exitDuration / 1000 },
               scale: { duration: exitDuration / 1000, ease: [0.34, 1.56, 0.64, 1] },
-              height: { duration: exitDuration / 1000, ease: 'easeOut' },
             }
       }
       {...attributes}
