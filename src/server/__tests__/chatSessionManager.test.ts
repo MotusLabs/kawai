@@ -58,7 +58,18 @@ type FakeContextControl = (opts: {
 
 const testManagers = new Set<ChatSessionManager>()
 async function managedManager(options: ConstructorParameters<typeof ChatSessionManager>[0]) {
-  const manager = new ChatSessionManager(options)
+  const manager = new ChatSessionManager({
+    // Provider usage pulls must never leave the tests: a harness that does
+    // not inject a fetch gets one that fails, so the claim falls back to the
+    // SDK pull exactly as an unreachable endpoint would — even when the
+    // machine's real environment exports a provider base URL.
+    providerUsageFetch:
+      options.providerUsageFetch ??
+      (async () => {
+        throw new Error('provider usage pull not expected in this harness')
+      }) as unknown as typeof fetch,
+    ...options,
+  })
   // Restore is async (async-transcript-parsing design D2): block until the
   // persisted rows are in, matching the pre-change synchronous constructor.
   await manager.whenRestored()
@@ -3891,5 +3902,284 @@ describe('ChatSessionManager notifications', () => {
     const keys = manager.getSnapshot(id)!.notifications.map((notice) => notice.key)
     // immediate agent, then the account notice (high), then the low agent.
     expect(keys).toEqual(['urgent-note', 'login-expiry', 'low-note'])
+  })
+})
+
+describe('ChatSessionManager provider usage pull', () => {
+  let tempDir: string
+  let db: SessionDatabase
+  const original = {
+    apiKey: process.env.ANTHROPIC_API_KEY,
+    configDir: process.env.CLAUDE_CONFIG_DIR,
+    home: process.env.HOME,
+    baseUrl: process.env.ANTHROPIC_BASE_URL,
+    authToken: process.env.ANTHROPIC_AUTH_TOKEN,
+  }
+
+  beforeEach(() => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentboard-chatmgr-zai-'))
+    db = initDatabase({ path: path.join(tempDir, 'test.db') })
+    process.env.ANTHROPIC_API_KEY = 'sk-test-key'
+    process.env.CLAUDE_CONFIG_DIR = path.join(tempDir, 'claude-config')
+    process.env.HOME = tempDir
+    // The provider routing comes from getProviderEnv per test, never from
+    // the machine's real environment.
+    delete process.env.ANTHROPIC_BASE_URL
+    delete process.env.ANTHROPIC_AUTH_TOKEN
+  })
+
+  afterEach(() => {
+    if (original.apiKey === undefined) delete process.env.ANTHROPIC_API_KEY
+    else process.env.ANTHROPIC_API_KEY = original.apiKey
+    if (original.configDir === undefined) delete process.env.CLAUDE_CONFIG_DIR
+    else process.env.CLAUDE_CONFIG_DIR = original.configDir
+    if (original.home === undefined) delete process.env.HOME
+    else process.env.HOME = original.home
+    if (original.baseUrl === undefined) delete process.env.ANTHROPIC_BASE_URL
+    else process.env.ANTHROPIC_BASE_URL = original.baseUrl
+    if (original.authToken === undefined) delete process.env.ANTHROPIC_AUTH_TOKEN
+    else process.env.ANTHROPIC_AUTH_TOKEN = original.authToken
+    closeDispatchers()
+    db.close()
+    fs.rmSync(tempDir, { recursive: true, force: true })
+  })
+
+  function jsonResponse(body: unknown, status = 200): Response {
+    return new Response(JSON.stringify(body), {
+      status,
+      headers: { 'Content-Type': 'application/json' },
+    })
+  }
+
+  /** The 2026-10-12 quota capture, first at 2% and then at 50% after a refresh. */
+  const CAPTURE = (percentage: number) => ({
+    code: 200,
+    msg: 'Operation successful',
+    data: {
+      limits: [{ type: 'TIME_LIMIT', percentage, nextResetTime: 1793701399997 }],
+      level: 'pro',
+    },
+    success: true,
+  })
+
+  const SDK_PULL = {
+    subscription_type: 'max',
+    rate_limits_available: true,
+    rate_limits: {
+      five_hour: { utilization: 22.37, resets_at: '2026-10-07T18:11:04.000Z' },
+    },
+  }
+
+  interface ProviderHarness {
+    manager: ChatSessionManager
+    handles: FakeHandle[]
+    usage: Array<{ profileId: string; report: ChatUsageReport | null }>
+    fetchCalls: Array<{ url: string; auth?: string }>
+  }
+
+  async function createProviderHarness(
+    providerEnv: Record<string, string>,
+    responses: Array<Response>
+  ): Promise<ProviderHarness> {
+    const fetchCalls: Array<{ url: string; auth?: string }> = []
+    const canned = [...responses]
+    const providerUsageFetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const headers = (init?.headers ?? {}) as Record<string, string>
+      fetchCalls.push({ url: String(input), auth: headers.Authorization })
+      const next = canned.shift() ?? canned[canned.length - 1]
+      if (!next) throw new Error('no canned response left')
+      return next
+    }) as unknown as typeof fetch
+    const handles: FakeHandle[] = []
+    const usage: Array<{ profileId: string; report: ChatUsageReport | null }> = []
+    const manager = await managedManager({
+      isDirectory: anyDirectory,
+      registry: new SessionRegistry(),
+      db,
+      onEvent: () => {},
+      onUsage: (profileId, report) => usage.push({ profileId, report }),
+      queryFactory: fakeQueryFactory(handles, () => Promise.resolve(SDK_PULL)),
+      ...(Object.keys(providerEnv).length > 0 ? { getProviderEnv: () => providerEnv } : {}),
+      providerUsageFetch,
+      providerUsageRefreshMs: 50,
+    })
+    return { manager, handles, usage, fetchCalls }
+  }
+
+  test('a profile with no base URL is never probed; the SDK pull answers', async () => {
+    const { manager, handles, usage, fetchCalls } = await createProviderHarness({}, [])
+    const created = manager.createSession({ projectPath: '/tmp/proj' })
+    if (!created.ok) throw new Error('create failed')
+    await manager.send(created.session.id, 'hello')
+    await flush()
+
+    expect(fetchCalls).toEqual([])
+    // The fake query's usage control answered; no provider request was made.
+    expect(handles[0]!.usageCalls).toHaveLength(1)
+    expect(usage.some((entry) => entry.report?.source === 'pull')).toBe(true)
+  })
+
+  test('a quota-shaped base URL records a provider report and suppresses the SDK pull', async () => {
+    const { manager, handles, usage, fetchCalls } = await createProviderHarness(
+      { ANTHROPIC_BASE_URL: 'https://zai.test', ANTHROPIC_AUTH_TOKEN: 'sk-glm-token' },
+      [jsonResponse(CAPTURE(2))]
+    )
+    const created = manager.createSession({ projectPath: '/tmp/proj' })
+    if (!created.ok) throw new Error('create failed')
+    await manager.send(created.session.id, 'hello')
+    await flush()
+
+    expect(fetchCalls).toEqual([
+      { url: 'https://zai.test/api/monitor/usage/quota/limit', auth: 'sk-glm-token' },
+    ])
+    // Exactly one broadcast — the provider report; the host-login SDK pull
+    // never ran.
+    expect(usage).toHaveLength(1)
+    expect(usage[0]!.report?.source).toBe('provider')
+    expect(usage[0]!.report?.windows[0]).toMatchObject({ key: 'zai:time_limit', percentUsed: 2 })
+    expect(handles[0]!.usageCalls).toEqual([])
+    expect(manager.getSnapshot(created.session.id)!.usage?.source).toBe('provider')
+  })
+
+  test('a provider refusal records the no-data verdict and skips the SDK pull', async () => {
+    const { manager, handles, usage } = await createProviderHarness(
+      { ANTHROPIC_BASE_URL: 'https://zai.test', ANTHROPIC_AUTH_TOKEN: 'sk-glm-token' },
+      [jsonResponse({ code: 1001, msg: 'Authentication parameter not received', success: false })]
+    )
+    const created = manager.createSession({ projectPath: '/tmp/proj' })
+    if (!created.ok) throw new Error('create failed')
+    await manager.send(created.session.id, 'hello')
+    await flush()
+
+    expect(usage).toEqual([{ profileId: 'default', report: null }])
+    expect(handles[0]!.usageCalls).toEqual([])
+    expect(manager.getSnapshot(created.session.id)!.usage).toBeNull()
+  })
+
+  test('a base URL without the endpoint falls back to the host-login SDK pull', async () => {
+    const { manager, handles, usage, fetchCalls } = await createProviderHarness(
+      { ANTHROPIC_BASE_URL: 'https://other-gateway.test' },
+      [new Response('nope', { status: 404 })]
+    )
+    const created = manager.createSession({ projectPath: '/tmp/proj' })
+    if (!created.ok) throw new Error('create failed')
+    await manager.send(created.session.id, 'hello')
+    await flush()
+
+    expect(fetchCalls).toHaveLength(1) // probed exactly once
+    expect(handles[0]!.usageCalls).toHaveLength(1) // then the SDK pull ran
+    expect(usage.some((entry) => entry.report?.source === 'pull')).toBe(true)
+  })
+
+  test('a routed profile refreshes on the cadence without a turn', async () => {
+    const { manager, usage } = await createProviderHarness(
+      { ANTHROPIC_BASE_URL: 'https://zai.test', ANTHROPIC_AUTH_TOKEN: 'sk-glm-token' },
+      [jsonResponse(CAPTURE(2)), jsonResponse(CAPTURE(50))]
+    )
+    const created = manager.createSession({ projectPath: '/tmp/proj' })
+    if (!created.ok) throw new Error('create failed')
+    await manager.send(created.session.id, 'hello')
+    await flush()
+    expect(usage[0]!.report?.windows[0]).toMatchObject({ percentUsed: 2 })
+
+    // No turn runs; the timer re-pulls and the new percentage replaces the old.
+    await waitForCondition(() => usage.length >= 2)
+    expect(usage[1]!.report?.windows[0]).toMatchObject({ percentUsed: 50 })
+    expect(manager.getSnapshot(created.session.id)!.usage?.windows[0]).toMatchObject({
+      percentUsed: 50,
+    })
+  })
+
+  test('archiving the last live session stops the pulls', async () => {
+    const { manager, usage, fetchCalls } = await createProviderHarness(
+      { ANTHROPIC_BASE_URL: 'https://zai.test', ANTHROPIC_AUTH_TOKEN: 'sk-glm-token' },
+      [jsonResponse(CAPTURE(2))]
+    )
+    const created = manager.createSession({ projectPath: '/tmp/proj' })
+    if (!created.ok) throw new Error('create failed')
+    await manager.send(created.session.id, 'hello')
+    await flush()
+    expect(fetchCalls).toHaveLength(1)
+
+    await manager.archive(created.session.id)
+    // Several cadences pass: the tick clears the timer without a request,
+    // and the held report stays visible.
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    expect(fetchCalls).toHaveLength(1)
+    expect(usage).toHaveLength(1)
+    expect(manager.getSnapshot(created.session.id)!.usage?.source).toBe('provider')
+  })
+
+  /** A fetch the test resolves manually, to hold a pull in flight. */
+  function deferredFetch(): {
+    impl: typeof fetch
+    deferreds: Array<(response: Response) => void>
+  } {
+    const deferreds: Array<(response: Response) => void> = []
+    const impl = (async () =>
+      new Promise<Response>((resolve) => {
+        deferreds.push(resolve)
+      })) as unknown as typeof fetch
+    return { impl, deferreds }
+  }
+
+  async function createManualHarness(providerUsageFetch: typeof fetch) {
+    const handles: FakeHandle[] = []
+    const usage: Array<{ profileId: string; report: ChatUsageReport | null }> = []
+    const manager = await managedManager({
+      isDirectory: anyDirectory,
+      registry: new SessionRegistry(),
+      db,
+      onEvent: () => {},
+      onUsage: (profileId, report) => usage.push({ profileId, report }),
+      queryFactory: fakeQueryFactory(handles, () => Promise.resolve(SDK_PULL)),
+      getProviderEnv: () => ({
+        ANTHROPIC_BASE_URL: 'https://zai.test',
+        ANTHROPIC_AUTH_TOKEN: 'sk-glm-token',
+      }),
+      providerUsageFetch,
+      providerUsageRefreshMs: 25,
+    })
+    return { manager, usage }
+  }
+
+  test('an in-flight first pull publishes nothing after shutdown', async () => {
+    const { impl, deferreds } = deferredFetch()
+    const { manager, usage } = await createManualHarness(impl)
+    const created = manager.createSession({ projectPath: '/tmp/proj' })
+    if (!created.ok) throw new Error('create failed')
+    await manager.send(created.session.id, 'hello')
+    await flush()
+    expect(deferreds.length).toBe(1) // the spawn pull is in flight
+
+    manager.shutdown()
+    deferreds[0]!(jsonResponse(CAPTURE(2)))
+    await flush()
+    // The late answer publishes nothing and arms no refresh timer.
+    expect(usage).toEqual([])
+    await new Promise((resolve) => setTimeout(resolve, 75))
+    expect(deferreds.length).toBe(1)
+  })
+
+  test('an in-flight refresh publishes nothing after shutdown', async () => {
+    const { impl, deferreds } = deferredFetch()
+    const { manager, usage } = await createManualHarness(impl)
+    const created = manager.createSession({ projectPath: '/tmp/proj' })
+    if (!created.ok) throw new Error('create failed')
+    await manager.send(created.session.id, 'hello')
+    await flush()
+    deferreds[0]!(jsonResponse(CAPTURE(2)))
+    await flush()
+    expect(usage).toHaveLength(1)
+
+    // The next tick's refresh is in flight when the server shuts down.
+    await waitForCondition(() => deferreds.length >= 2)
+    manager.shutdown()
+    deferreds[1]!(jsonResponse(CAPTURE(99)))
+    await flush()
+    expect(usage).toHaveLength(1)
+    expect(manager.getSnapshot(created.session.id)!.usage?.windows[0]).toMatchObject({
+      percentUsed: 2,
+    })
   })
 })

@@ -2,8 +2,8 @@
 // strategy snapshot (null record = the capture affordance), its full
 // detail, and in-flight human actions. Server snapshots are authoritative
 // and replace local state whole; closed views ignore late pushes. A CAS
-// conflict keeps the caller's text client-side — the store only records
-// the stored draft for display (S12).
+// conflict keeps the caller's text client-side — the store records the
+// stored draft for display until the author explicitly adopts it (S12).
 import { create } from 'zustand'
 import type { ServerMessage } from '@shared/types'
 import type { ProductStrategy, StrategyDetail, StrategyDraft } from '@shared/productStrategy'
@@ -37,6 +37,8 @@ interface StrategyState {
   open: (sessionId: string) => void
   close: (sessionId: string) => void
   review: (sessionId: string, revision: number | null) => void
+  /** Reload after a CAS refusal: the stored draft it returned replaces the stale copy in detail. */
+  adoptConflict: (sessionId: string) => void
   begin: (sessionId: string, requestId: string, action: StrategyAction) => void
   applySnapshot: (message: Extract<ServerMessage, { type: 'strategy-snapshot' }>) => void
   applyDetail: (message: Extract<ServerMessage, { type: 'strategy-detail' }>) => void
@@ -61,6 +63,16 @@ export const useStrategyStore = create<StrategyState>(set => ({
     return { views }
   }),
   review: (sessionId, revision) => set(state => update(state, sessionId, { reviewing: revision })),
+  // A draft written behind this client (another editor, another tab) sends
+  // no detail push, so the refusal's stored draft is the freshest server
+  // copy; adopting it rebases the editor and its next save's CAS hash.
+  adoptConflict: sessionId => set(state => {
+    const view = state.views[sessionId]
+    const stored = view?.conflict
+    if (!stored || !view.detail) return update(state, sessionId, { conflict: null, error: null })
+    const drafts = [...view.detail.drafts.filter(draft => draft.draftId !== stored.draftId), stored]
+    return update(state, sessionId, { detail: { ...view.detail, drafts }, conflict: null, error: null })
+  }),
   begin: (sessionId, requestId, action) => set(state => update(state, sessionId, {
     pending: { ...state.views[sessionId]?.pending, [requestId]: action }, error: null, conflict: null,
   })),
@@ -70,7 +82,15 @@ export const useStrategyStore = create<StrategyState>(set => ({
     detail: message.strategy ? state.views[message.sessionId]?.detail ?? null : null,
     reviewing: message.strategy ? state.views[message.sessionId]?.reviewing ?? null : null,
   })),
-  applyDetail: message => set(state => update(state, message.sessionId, { detail: message.detail })),
+  // A push supersedes the refusal's snapshot: the conflict follows the
+  // pushed stored draft (or goes with it), so the box always shows what
+  // Reload will adopt and Reload never reinstates an older copy.
+  applyDetail: message => set(state => {
+    const conflict = state.views[message.sessionId]?.conflict
+    if (!conflict) return update(state, message.sessionId, { detail: message.detail })
+    const stored = message.detail.drafts.find(draft => draft.draftId === conflict.draftId) ?? null
+    return update(state, message.sessionId, { detail: message.detail, conflict: stored })
+  }),
   applyResult: message => set(state => {
     const view = state.views[message.sessionId]
     if (!view?.open) return state
