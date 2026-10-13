@@ -34,6 +34,7 @@ import type {
   ChatQuestionAnswer,
   ChatUsageReport,
   ChatWorker,
+  ChatBackgroundTask,
 } from '../../shared/chat'
 import type {
   ChatNameSource,
@@ -133,6 +134,13 @@ export interface ChatSessionManagerOptions {
    * ephemeral in transit, persisted through the sidecar (design D6).
    */
   onWorkers?: (sessionId: string, workers: ChatWorker[]) => void
+  /**
+   * Background-task roster sink (background tasks design D2): the full
+   * projection whenever a live session's task roster changes. Wired to the
+   * WS broadcast like onWorkers; ephemeral in transit, persisted through the
+   * sidecar (design D6).
+   */
+  onBackgroundTasks?: (sessionId: string, tasks: ChatBackgroundTask[]) => void
   /**
    * Notification sink (notification strip design D5): the session's full
    * merged list (account notice first, then agent notices, sorted by
@@ -269,6 +277,12 @@ export class ChatSessionManager {
    * what archived and restored sessions read.
    */
   private readonly workerRows = new Map<string, ChatWorker[]>()
+  /**
+   * Latest background-task roster per session (background tasks D2): the
+   * last publish of a live driver, or the recovered sidecar rows of a
+   * restarted one (design D6), mirroring the worker rows.
+   */
+  private readonly backgroundTaskRows = new Map<string, ChatBackgroundTask[]>()
   /**
    * Availability probes for resolved provider configurations. Keyed so a provider
    * change in Settings re-probes the new endpoint; a failed probe is dropped so
@@ -407,9 +421,9 @@ export class ChatSessionManager {
       // The spawned-worker roster (workers design D2); live entries hold the
       // session at working, settled ones carry their persisted outcomes.
       workers: this.getWorkers(sessionId),
-      // The background-task roster (background tasks D2); wired up by the
-      // manager roster work — empty until the reducer publishes.
-      backgroundTasks: [],
+      // The background-task roster (background tasks D2): running tasks
+      // fresh from the driver, settled ones from the last publish.
+      backgroundTasks: this.getBackgroundTasks(sessionId),
       // The notification strip's merged list (design D5): account notice
       // first, then agent notices, sorted by priority and newest.
       notifications: this.notificationsOf(sessionId),
@@ -425,6 +439,16 @@ export class ChatSessionManager {
     const driver = this.drivers.get(sessionId)
     if (driver && !driver.isDead) return driver.getWorkers()
     return this.workerRows.get(sessionId) ?? []
+  }
+
+  /**
+   * The session's background-task roster: a live driver's fresh projection,
+   * else the last publish (or the recovered sidecar rows, design D6).
+   */
+  private getBackgroundTasks(sessionId: string): ChatBackgroundTask[] {
+    const driver = this.drivers.get(sessionId)
+    if (driver && !driver.isDead) return driver.getBackgroundTasks()
+    return this.backgroundTaskRows.get(sessionId) ?? []
   }
 
   /** Current activity with a live-computed elapsed time, or null when idle. */
@@ -1178,6 +1202,7 @@ export class ChatSessionManager {
     this.activities.delete(sessionId)
     this.contextReadings.delete(sessionId)
     this.workerRows.delete(sessionId)
+    this.backgroundTaskRows.delete(sessionId)
     this.clearAgentNotices(sessionId)
     this.sessionCredentials.delete(sessionId)
     this.teams.forget(sessionId)
@@ -1515,6 +1540,8 @@ export class ChatSessionManager {
         onProcessEnd: () => this.clearAgentNotices(record.sessionId, { emit: true }),
         onWorkers: (workers) =>
           this.handleDriverWorkers(record.sessionId, workers),
+        onBackgroundTasks: (tasks) =>
+          this.handleDriverBackgroundTasks(record.sessionId, tasks),
         onContextUsage: (usage, opts) =>
           this.handleDriverContextUsage(record.sessionId, usage, opts),
         // Plan usage is recorded against the session's profile (design D3);
@@ -1831,6 +1858,17 @@ export class ChatSessionManager {
    * or outcome changed — spawn, fill, settle. Write failures are logged by
    * the store and never fail the session.
    */
+  /**
+   * Hold the latest background-task roster (design D2) and forward it to the
+   * broadcast sink. Settled outcomes persist through the sidecar (design D6),
+   * wired by the persistence task.
+   */
+  private handleDriverBackgroundTasks(sessionId: string, tasks: ChatBackgroundTask[]): void {
+    if (!this.records.has(sessionId)) return
+    this.backgroundTaskRows.set(sessionId, tasks)
+    this.options.onBackgroundTasks?.(sessionId, tasks)
+  }
+
   private handleDriverWorkers(sessionId: string, workers: ChatWorker[]): void {
     if (!this.records.has(sessionId)) return
     this.workerRows.set(sessionId, workers)

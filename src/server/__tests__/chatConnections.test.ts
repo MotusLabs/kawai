@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from 'bun:test'
-import type { ChatContextUsage, ChatEvent, ChatNotification, ChatWorker } from '../../shared/chat'
+import type { ChatBackgroundTask, ChatContextUsage, ChatEvent, ChatNotification, ChatWorker } from '../../shared/chat'
 import type { ServerMessage } from '../../shared/types'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -79,6 +79,16 @@ const worker = (status: 'running' | 'completed', live: boolean): ChatWorker => (
   elapsedMs: 4_000,
 })
 
+const bgTask = (status: 'running' | 'completed', live: boolean): ChatBackgroundTask => ({
+  taskId: 'b1',
+  toolCallId: 'call_1',
+  kind: 'shell',
+  description: 'Wait for CI',
+  status,
+  live,
+  elapsedMs: 4_000,
+})
+
 describe('chat WebSocket subscriptions', () => {
   test('routes send, interrupt, approval, and question answers', async () => {
     const h = harness()
@@ -146,6 +156,24 @@ describe('chat WebSocket subscriptions', () => {
     // Detach stops the flow for that connection.
     await h.connections.handle(h.connection, { type: 'chat-detach', sessionId: 'chat-1' })
     h.connections.publishWorkers('chat-1', [worker('running', true)])
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(h.messages).toHaveLength(2)
+  })
+
+  test('background-task rosters coalesce to the latest and replace, never merge', async () => {
+    const h = harness()
+    await h.connections.handle(h.connection, { type: 'chat-attach', sessionId: 'chat-1' })
+    h.connections.publishBackgroundTasks('chat-1', [bgTask('running', true)])
+    h.connections.publishBackgroundTasks('chat-1', [bgTask('completed', false)])
+    // A roster for a session nobody subscribes to goes nowhere.
+    h.connections.publishBackgroundTasks('chat-3', [bgTask('running', true)])
+    await new Promise(resolve => setTimeout(resolve, 0))
+    // One message, the latest full set (background tasks D2).
+    expect(h.messages.slice(1)).toEqual([
+      { type: 'chat-background-tasks', sessionId: 'chat-1', tasks: [bgTask('completed', false)] },
+    ])
+    await h.connections.handle(h.connection, { type: 'chat-detach', sessionId: 'chat-1' })
+    h.connections.publishBackgroundTasks('chat-1', [bgTask('running', true)])
     await new Promise(resolve => setTimeout(resolve, 0))
     expect(h.messages).toHaveLength(2)
   })

@@ -16,6 +16,7 @@ import type {
   ChatNotification,
   ChatUsageReport,
   ChatWorker,
+  ChatBackgroundTask,
 } from '../../shared/chat'
 import type { ClaudeLaunchConfiguration } from '../chat/ClaudeProfiles'
 import { initDatabase, type SessionDatabase } from '../db'
@@ -162,6 +163,8 @@ interface ManagerHarness {
   usage: Array<{ profileId: string; report: ChatUsageReport | null }>
   /** Worker-roster publishes, in order (workers design D2). */
   workers: Array<{ sessionId: string; workers: ChatWorker[] }>
+  /** Background-task roster publishes, in order (background tasks D2). */
+  backgroundTasks: Array<{ sessionId: string; tasks: ChatBackgroundTask[] }>
   /** Scoped workspace refreshes fired after cwd moves (worktree tracking D2). */
   refreshes: string[]
 }
@@ -182,6 +185,7 @@ async function createHarness(
   const contextUsage: Array<{ sessionId: string; usage: ChatContextUsage | null }> = []
   const usage: Array<{ profileId: string; report: ChatUsageReport | null }> = []
   const workers: Array<{ sessionId: string; workers: ChatWorker[] }> = []
+  const backgroundTasks: Array<{ sessionId: string; tasks: ChatBackgroundTask[] }> = []
   const refreshes: string[] = []
   const manager = await managedManager({
     isDirectory,
@@ -192,13 +196,14 @@ async function createHarness(
     onContextUsage: (sessionId, reading) => contextUsage.push({ sessionId, usage: reading }),
     onUsage: (profileId, report) => usage.push({ profileId, report }),
     onWorkers: (sessionId, roster) => workers.push({ sessionId, workers: roster }),
+    onBackgroundTasks: (sessionId, tasks) => backgroundTasks.push({ sessionId, tasks }),
     queryFactory: fakeQueryFactory(handles, usageImpl, contextImpl),
     titleLocateIntervalMs,
     ...(cwdRefreshDebounceMs !== undefined ? { cwdRefreshDebounceMs } : {}),
     requestWorkspaceRefresh: (projectPath) => refreshes.push(projectPath),
     ...(workerStore !== undefined ? { workerStore } : {}),
   })
-  return { manager, registry, handles, events, activities, contextUsage, usage, workers, refreshes }
+  return { manager, registry, handles, events, activities, contextUsage, usage, workers, backgroundTasks, refreshes }
 }
 
 /** Let the driver's stream loop drain pushed messages. */
@@ -3675,5 +3680,83 @@ describe('ChatSessionManager notifications', () => {
     const keys = manager.getSnapshot(id)!.notifications.map((notice) => notice.key)
     // immediate agent, then the account notice (high), then the low agent.
     expect(keys).toEqual(['urgent-note', 'login-expiry', 'low-note'])
+  })
+})
+
+describe('ChatSessionManager background-task roster (background tasks D2)', () => {
+  let tempDir: string
+  let db: SessionDatabase
+  const originalApiKey = process.env.ANTHROPIC_API_KEY
+  const originalConfigDir = process.env.CLAUDE_CONFIG_DIR
+  const originalHome = process.env.HOME
+
+  beforeEach(() => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentboard-chatbgtasks-'))
+    db = initDatabase({ path: path.join(tempDir, 'test.db') })
+    delete process.env.ANTHROPIC_API_KEY
+    process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'
+    process.env.CLAUDE_CONFIG_DIR = path.join(tempDir, 'claude-config')
+    process.env.HOME = tempDir
+  })
+  afterEach(() => {
+    if (originalApiKey !== undefined) process.env.ANTHROPIC_API_KEY = originalApiKey
+    else delete process.env.ANTHROPIC_API_KEY
+    if (originalConfigDir !== undefined) process.env.CLAUDE_CONFIG_DIR = originalConfigDir
+    else delete process.env.CLAUDE_CONFIG_DIR
+    if (originalHome !== undefined) process.env.HOME = originalHome
+    else delete process.env.HOME
+    delete process.env.CLAUDE_CODE_OAUTH_TOKEN
+  })
+
+  test('a live session publishes its roster and snapshots the fresh projection', async () => {
+    const { manager, handles, backgroundTasks } = await createHarness(db)
+    const created = manager.createSession({ projectPath: '/tmp/proj' })
+    if (!created.ok) throw new Error('create failed')
+    const id = created.session.id
+    await manager.send(id, 'run things')
+    const handle = handles[0]!
+    handle.push({
+      type: 'system', subtype: 'task_started', task_id: 'b1', tool_use_id: 'call_1',
+      task_type: 'local_bash', description: 'dev server', is_backgrounded: true, uuid: 'u', session_id: 's',
+    } as unknown as SDKMessage)
+    await flush()
+    // The sink saw the full-set publish...
+    expect(backgroundTasks.at(-1)?.tasks).toMatchObject([
+      { taskId: 'b1', kind: 'shell', description: 'dev server', status: 'running', live: true },
+    ])
+    // ...and a reconnecting client's snapshot carries the same roster.
+    expect(manager.getSnapshot(id)!.backgroundTasks).toMatchObject([
+      { taskId: 'b1', status: 'running', live: true },
+    ])
+    handle.push({
+      type: 'system', subtype: 'task_notification', task_id: 'b1', tool_use_id: 'call_1',
+      status: 'completed', summary: 'done (exit code 0)', uuid: 'u2', session_id: 's',
+    } as unknown as SDKMessage)
+    await flush()
+    expect(backgroundTasks.at(-1)?.tasks).toMatchObject([
+      { taskId: 'b1', status: 'completed', live: false, summary: 'done (exit code 0)' },
+    ])
+    expect(manager.getSnapshot(id)!.backgroundTasks).toMatchObject([
+      { taskId: 'b1', status: 'completed' },
+    ])
+  })
+
+  test('an archived session keeps its last roster, settled as stopped', async () => {
+    const { manager, handles } = await createHarness(db)
+    const created = manager.createSession({ projectPath: '/tmp/proj' })
+    if (!created.ok) throw new Error('create failed')
+    const id = created.session.id
+    await manager.send(id, 'run things')
+    handles[0]!.push({
+      type: 'system', subtype: 'task_started', task_id: 'b2', task_type: 'local_bash',
+      description: 'sleep', is_backgrounded: true, uuid: 'u', session_id: 's',
+    } as unknown as SDKMessage)
+    await flush()
+    await manager.archive(id)
+    // Archived read-only: archiving ended the process, so the running task
+    // settles as stopped, and the last roster still answers the snapshot.
+    expect(manager.getSnapshot(id)!.backgroundTasks).toMatchObject([
+      { taskId: 'b2', status: 'stopped', live: false },
+    ])
   })
 })

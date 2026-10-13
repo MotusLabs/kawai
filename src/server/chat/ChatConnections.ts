@@ -25,6 +25,7 @@
 // A disconnect while a message waits drops any subscription it would open.
 import type {
   ChatActivity,
+  ChatBackgroundTask,
   ChatCommandState,
   ChatContextUsage,
   ChatEvent,
@@ -59,6 +60,8 @@ export class ChatConnections {
   private readonly usageBatches = new Map<ChatConnection, Map<string, ChatUsageReport | null>>()
   /** Latest worker roster per connection and session (workers design D2). */
   private readonly workerBatches = new Map<ChatConnection, Map<string, ChatWorker[]>>()
+  /** Latest background-task roster per connection and session (background tasks D2). */
+  private readonly backgroundTaskBatches = new Map<ChatConnection, Map<string, ChatBackgroundTask[]>>()
   /** Latest notice list per connection and session (notification strip D5). */
   private readonly notificationBatches = new Map<ChatConnection, Map<string, ChatNotification[]>>()
   private readonly debugSubscriptions = new Map<ChatConnection, Map<string, () => void>>()
@@ -200,6 +203,21 @@ export class ChatConnections {
   }
 
   /**
+   * Queue the session's current background-task roster (background tasks
+   * D2): the same replace-semantics level signal as the worker roster — the
+   * full set on every change, never a delta.
+   */
+  publishBackgroundTasks(sessionId: string, tasks: ChatBackgroundTask[]): void {
+    for (const [connection, sessions] of this.subscriptions) {
+      if (!sessions.has(sessionId)) continue
+      const latest = this.backgroundTaskBatches.get(connection) ?? new Map<string, ChatBackgroundTask[]>()
+      latest.set(sessionId, tasks)
+      this.backgroundTaskBatches.set(connection, latest)
+    }
+    this.scheduleFlush()
+  }
+
+  /**
    * Queue a profile's latest plan-usage report (usage bar design D4): one
    * message per connection subscribed to at least one session of that
    * profile — every session of the profile renders the same data, so the
@@ -316,6 +334,15 @@ export class ChatConnections {
       for (const [sessionId, workers] of sessions) {
         if (this.subscriptions.get(connection)?.has(sessionId)) {
           connection.send({ type: 'chat-workers', sessionId, workers })
+        }
+      }
+    }
+    const backgroundTaskBatches = new Map(this.backgroundTaskBatches)
+    this.backgroundTaskBatches.clear()
+    for (const [connection, sessions] of backgroundTaskBatches) {
+      for (const [sessionId, tasks] of sessions) {
+        if (this.subscriptions.get(connection)?.has(sessionId)) {
+          connection.send({ type: 'chat-background-tasks', sessionId, tasks })
         }
       }
     }
