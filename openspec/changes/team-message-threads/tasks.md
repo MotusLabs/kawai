@@ -2,10 +2,10 @@
 
 ## 1. Append-only message history
 
-- [ ] 1.1 Add the `team_message_events` table (message id, team, per-message sequence, timestamp, event kind, actor kind, previous state/claimant/recipient/reason where the transition overwrote them) and shared event types; verify migration tests create it beside existing `team_messages` without touching message rows.
-- [ ] 1.2 Record an event inside every `MailboxStore` transition — enqueue (sent or dead-lettered), reserve-for-spawn, claim, hold-for-request, push, deliver, requeue, hold-uncertain, retry, cancel, discard, dead-letter, park, unpark, release, forward — with the human as actor for user actions and the system otherwise; verify tests assert one event per transition, ordered sequences, and that retry/requeue/release events retain the claimant and reason the row update clears.
-- [ ] 1.3 Expose history queries (events for one message, events within a thread) and verify they return durable rows after closing and reopening the database.
-- [ ] 1.4 Document the event log in the How It Works mail paragraphs; verify each documented event kind matches a recorded transition.
+- [x] 1.1 Add the `team_message_events` table (message id, team, per-message sequence, timestamp, event kind, actor kind, previous state/claimant/recipient/reason where the transition overwrote them) and shared event types; verify migration tests create it beside existing `team_messages` without touching message rows.
+- [x] 1.2 Record an event inside every `MailboxStore` transition — enqueue (sent or dead-lettered), reserve-for-spawn, claim, hold-for-request, push, deliver, requeue, hold-uncertain, retry, cancel, discard, dead-letter, park, unpark, release, forward — with the human as actor for user actions and the system otherwise; verify tests assert one event per transition, ordered sequences, and that retry/requeue/release events retain the claimant and reason the row update clears.
+- [x] 1.3 Expose history queries (events for one message, events within a thread) and verify they return durable rows after closing and reopening the database.
+- [x] 1.4 Document the event log in the How It Works mail paragraphs; verify each documented event kind matches a recorded transition.
 
 ## 2. Named participants, including killed sessions
 

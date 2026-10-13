@@ -77,3 +77,54 @@ export interface ChatHandoffPackage {
   }
 }
 
+/**
+ * One recorded message state change (team-message-threads D2). Written inside
+ * the store's transitions, so no change can escape logging; durable rows that
+ * survive restart with the messages they describe.
+ */
+export type MessageEventKind =
+  | 'sent'
+  | 'reserved'
+  | 'claimed'
+  | 'held-for-request'
+  | 'pushed'
+  | 'delivered'
+  | 'requeued'
+  | 'held-uncertain'
+  | 'retried'
+  | 'cancelled'
+  | 'discarded'
+  | 'dead-lettered'
+  | 'parked'
+  | 'unparked'
+  | 'released'
+  | 'forwarded'
+
+/**
+ * Who caused the change: the human through a UI action, or the system on
+ * behalf of delivery, recovery, or a limit outcome. Deliberately not the
+ * sender vocabulary of `from_kind` — an agent's send is a system action here,
+ * and the message row already names its sender.
+ */
+export type MessageEventActor = 'system' | 'human'
+
+export interface MessageEvent {
+  messageId: string
+  teamId: string
+  /** 1-based order within the message. */
+  seq: number
+  createdAt: string
+  kind: MessageEventKind
+  actor: MessageEventActor
+  /** State the transition moved off of. */
+  prevState: MessageState | null
+  /** Claimant the row update cleared (retry, requeue, release). */
+  prevClaimedBy: string | null
+  /** `to_id` before the change (release may retarget). */
+  prevRecipient: string | null
+  /** Reason the row carried before the change — what a clear overwrote. */
+  prevReason: string | null
+  /** Reason the transition wrote (hold, dead letter, forward); else null. */
+  reason: string | null
+}
+

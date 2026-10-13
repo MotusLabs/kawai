@@ -8,10 +8,19 @@
 // chain; a send past the limit is stored dead-lettered instead of queued.
 import type { Database } from 'bun:sqlite'
 import { mailboxSql, worktreeTaskMailSql } from './mailboxSql'
-import { isHandoffPackage } from './routing/handoff'
+import { mapRow } from './messageRow'
+import { MessageEventLog } from './messageEvents'
 
-import type { ChatHandoffPackage, MessageState, MessagePriority, TeamMessage } from '../../shared/team'
-export type { MessageState, MessagePriority, TeamMessage } from '../../shared/team'
+import type {
+  ChatHandoffPackage,
+  MessageEvent,
+  MessageEventActor,
+  MessageEventKind,
+  MessageState,
+  MessagePriority,
+  TeamMessage,
+} from '../../shared/team'
+export type { MessageState, MessagePriority, TeamMessage, MessageEvent } from '../../shared/team'
 
 export interface EnqueueInput {
   teamId: string
@@ -34,6 +43,8 @@ export interface EnqueueInput {
   /** Forwarded work after a limit (profile routing). */
   handoff?: ChatHandoffPackage | null
   excludedProfile?: string | null
+  /** Who caused the send (event log): the human through a composer, else the system. */
+  actor?: MessageEventActor
 }
 
 export const DEFAULT_HOP_LIMIT = 20
@@ -111,9 +122,12 @@ export class MailboxStore {
 
   private readonly statements: Record<keyof typeof mailboxSql, ReturnType<Database['prepare']>>
   private readonly dynamicStatements = new Map<string, ReturnType<Database['prepare']>>()
+  /** Append-only history of every transition (team-message-threads D2). */
+  readonly events: MessageEventLog
   constructor(private readonly db: Database, private readonly options: { recipientExists?: (id: string) => boolean } = {}) {
     db.exec(CREATE_TABLE_SQL)
     migrateTable(db)
+    this.events = new MessageEventLog(db)
     this.statements = Object.fromEntries(Object.entries(mailboxSql).map(([key, sql]) => [key, db.prepare(sql)])) as typeof this.statements
   }
 
@@ -157,7 +171,14 @@ export class MailboxStore {
       $excludedProfile: input.excludedProfile ?? null,
     })
     this.changed(id, true)
-    return this.get(id)!
+    const message = this.get(id)!
+    // A new row: nothing was overwritten; the hop-limit reason is the one written.
+    this.events.record({
+      messageId: id, teamId: message.teamId, kind: overLimit ? 'dead-lettered' : 'sent',
+      actor: input.actor ?? 'system', at: now,
+      facts: { prevState: null, prevClaimedBy: null, prevRecipient: null, prevReason: null, reason: message.reason },
+    })
+    return message
   }
 
   get(id: string): TeamMessage | null {
@@ -196,14 +217,14 @@ export class MailboxStore {
 
   /** Claim a row reserved for a spawn by the session spawned for it. */
   claimSpawned(id: string, sessionId: string, now = nowIso()): boolean {
-    return this.changed(id, this.statements.claimSpawned.run({
+    return this.logged(id, () => this.changed(id, this.statements.claimSpawned.run({
       $id: id, $sessionId: sessionId, $now: now,
-    }).changes === 1)
+    }).changes === 1), 'claimed', 'system', now)
   }
 
   /** Reserve queued mail for a spawn (inside the cap transaction). */
   reserveForSpawn(id: string): boolean {
-    return this.transition(id, ['queued'], { state: 'spawning' })
+    return this.transition(id, ['queued'], { state: 'spawning' }, 'reserved')
   }
 
   /**
@@ -222,9 +243,9 @@ export class MailboxStore {
 
   /** Atomic claim: true for exactly one caller per queued (or held) message. */
   claim(id: string, sessionId: string, now = nowIso()): boolean {
-    return this.changed(id, this.statements.claim.run({
+    return this.logged(id, () => this.changed(id, this.statements.claim.run({
       $id: id, $sessionId: sessionId, $now: now,
-    }).changes === 1)
+    }).changes === 1), 'claimed', 'system', now)
   }
 
   /** Re-check recipient availability inside the transaction that wins the claim. */
@@ -235,33 +256,33 @@ export class MailboxStore {
 
   /** Urgent direct mail held while the recipient's card awaits the human. */
   holdForRequest(id: string): boolean {
-    return this.transition(id, ['queued'], { state: 'awaiting-request' })
+    return this.transition(id, ['queued'], { state: 'awaiting-request' }, 'held-for-request')
   }
 
   /** Written immediately before the turn push (D10 step 2). */
   markPushed(id: string, now = nowIso()): boolean {
-    return this.changed(id, this.statements.markPushed.run({ $id: id, $now: now }).changes === 1)
+    return this.logged(id, () => this.changed(id, this.statements.markPushed.run({ $id: id, $now: now }).changes === 1), 'pushed', 'system', now)
   }
 
   /** The acknowledgement boundary (D10 step 3): the transcript carried the id. */
   markDelivered(id: string, now = nowIso()): boolean {
-    return this.changed(id, this.statements.markDelivered.run({ $id: id, $now: now }).changes === 1)
+    return this.logged(id, () => this.changed(id, this.statements.markDelivered.run({ $id: id, $now: now }).changes === 1), 'delivered', 'system', now)
   }
 
   /** Back to the queue; the claim, push, and any spawn reservation are forgotten. */
   requeue(id: string): boolean {
     return this.transition(id, ['claimed', 'awaiting-request', 'spawning'], {
       state: 'queued', claimed_by: null, claimed_at: null, pushed_at: null,
-    })
+    }, 'requeued')
   }
 
-  deadLetter(id: string, reason: string): boolean {
-    return this.transition(id, ['queued', 'claimed', 'awaiting-request', 'spawning'], { state: 'dead', reason })
+  deadLetter(id: string, reason: string, actor: MessageEventActor = 'system'): boolean {
+    return this.transition(id, ['queued', 'claimed', 'awaiting-request', 'spawning'], { state: 'dead', reason }, 'dead-lettered', actor)
   }
 
   /** Receipt neither confirmed nor refuted (D10): out of automatic delivery. */
   holdUncertain(id: string, reason: string): boolean {
-    return this.transition(id, ['claimed'], { state: 'uncertain', reason })
+    return this.transition(id, ['claimed'], { state: 'uncertain', reason }, 'held-uncertain')
   }
 
   /** HEAD of the claimant's directory, recorded once after the claim. */
@@ -276,12 +297,12 @@ export class MailboxStore {
     if (!message) return false
     return this.transition(id, ['delivered', 'parked'], {
       state: 'parked', parked_until: until, resume_message_id: resumeMessageId, park_count: message.parkCount + 1,
-    })
+    }, 'parked')
   }
 
   /** The parked agent worked again successfully: the work is simply delivered. */
   unpark(id: string): boolean {
-    return this.transition(id, ['parked'], { state: 'delivered', parked_until: null, resume_message_id: null })
+    return this.transition(id, ['parked'], { state: 'delivered', parked_until: null, resume_message_id: null }, 'unparked')
   }
 
   /**
@@ -294,12 +315,12 @@ export class MailboxStore {
       state: 'queued', ...(groupId ? { to_kind: 'group', to_id: groupId } : {}),
       deliver_at: deliverAt, claimed_by: null, claimed_at: null, pushed_at: null,
       delivered_at: null, parked_until: null, resume_message_id: null, claim_commit: null,
-    })
+    }, 'released')
   }
 
   /** Handed off: `reason` names the message that carries the work on. */
   markForwarded(id: string, reason: string): boolean {
-    return this.transition(id, ['delivered', 'parked'], { state: 'forwarded', reason, parked_until: null, resume_message_id: null })
+    return this.transition(id, ['delivered', 'parked'], { state: 'forwarded', reason, parked_until: null, resume_message_id: null }, 'forwarded')
   }
 
   /** Messages an agent holds parked. */
@@ -314,7 +335,7 @@ export class MailboxStore {
 
   /** The user cancels a queued or scheduled message. */
   cancel(id: string): boolean {
-    return this.transition(id, ['queued', 'awaiting-request'], { state: 'cancelled' })
+    return this.transition(id, ['queued', 'awaiting-request'], { state: 'cancelled' }, 'cancelled', 'human')
   }
 
   /**
@@ -329,34 +350,41 @@ export class MailboxStore {
       this.transition(id, ['dead', 'uncertain'], {
         state: 'dead', reason: 'killed-recipient', to_kind: 'session', to_id: recipient,
         ...(message.state === 'uncertain' ? { possible_duplicate: 1 } : {}),
-      })
+      }, 'dead-lettered', 'human')
       return false
     }
     if (message?.state === 'dead') {
-      return this.transition(id, ['dead'], { state: 'queued', hop: 1, reason: null })
+      return this.transition(id, ['dead'], { state: 'queued', hop: 1, reason: null }, 'retried', 'human')
     }
     if (message?.state === 'uncertain' && message.claimedBy) {
       return this.transition(id, ['uncertain'], {
         state: 'queued', to_kind: 'session', to_id: message.claimedBy,
         claimed_by: null, claimed_at: null, pushed_at: null, reason: null, possible_duplicate: 1,
-      })
+      }, 'retried', 'human')
     }
     return false
   }
 
   /** The user discards a dead or uncertain message for good. */
   discard(id: string): boolean {
-    return this.transition(id, ['dead', 'uncertain'], { state: 'discarded' })
+    return this.transition(id, ['dead', 'uncertain'], { state: 'discarded' }, 'discarded', 'human')
   }
 
   /** Direct mail queued for a killed session can never arrive: dead-letter it. */
   deadLetterDirectTo(sessionId: string, reason: string): number {
-    const affected = this.statements.directIds.all({ $sessionId: sessionId }) as Array<{ id: string }>
-    const count = this.statements.deadLetterDirectTo.run({
-      $sessionId: sessionId, $reason: reason,
-    }).changes
-    for (const row of affected) this.changed(row.id, true)
-    return count
+    return this.db.transaction(() => {
+      const affected = this.select(`to_kind = 'session' AND to_id = $sessionId AND state IN ('queued', 'awaiting-request')`, {
+        $sessionId: sessionId,
+      })
+      const count = this.statements.deadLetterDirectTo.run({
+        $sessionId: sessionId, $reason: reason,
+      }).changes
+      for (const before of affected) {
+        this.changed(before.id, true)
+        this.recordEvent(before, 'dead-lettered', 'system', nowIso(), reason)
+      }
+      return count
+    })()
   }
 
   /** Claimed rows not yet acknowledged (startup reconciliation, D10). */
@@ -420,67 +448,57 @@ export class MailboxStore {
       .all(params) as Record<string, unknown>[]).map(mapRow)
   }
 
-  private transition(id: string, from: MessageState[], set: Record<string, string | number | null>): boolean {
+  /**
+   * Run one state change and log it. The before-row is read inside the same
+   * transaction so the event keeps the facts the update overwrites.
+   */
+  private logged(id: string, run: () => boolean, kind: MessageEventKind, actor: MessageEventActor = 'system', at = nowIso(), reason: string | null = null): boolean {
+    return this.db.transaction(() => {
+      const before = this.get(id)
+      const changed = run()
+      if (changed && before) this.recordEvent(before, kind, actor, at, reason)
+      return changed
+    })()
+  }
+
+  private recordEvent(before: TeamMessage, kind: MessageEventKind, actor: MessageEventActor, at: string, reason: string | null = null) {
+    this.events.record({
+      messageId: before.id, teamId: before.teamId, kind, actor, at,
+      facts: {
+        prevState: before.state,
+        prevClaimedBy: before.claimedBy,
+        prevRecipient: before.toId,
+        prevReason: before.reason,
+        reason,
+      },
+    })
+  }
+
+  /** One message's append-only history, oldest first. */
+  eventsFor(messageId: string): MessageEvent[] {
+    return this.events.forMessage(messageId)
+  }
+
+  /** Every recorded event of a thread's messages. */
+  threadEvents(threadId: string): MessageEvent[] {
+    return this.events.forThread(threadId)
+  }
+
+  private transition(
+    id: string,
+    from: MessageState[],
+    set: Record<string, string | number | null>,
+    kind: MessageEventKind,
+    actor: MessageEventActor = 'system'
+  ): boolean {
     const assignments = Object.keys(set).map(column => `${column} = $${column}`).join(', ')
     const states = from.map((_, index) => `$from${index}`).join(', ')
     const params: Record<string, string | number | null> = { $id: id }
     for (const [column, value] of Object.entries(set)) params[`$${column}`] = value
     from.forEach((state, index) => { params[`$from${index}`] = state })
-    return this.changed(id, this.cachedStatement(`UPDATE team_messages SET ${assignments} WHERE id = $id AND state IN (${states})`)
-      .run(params).changes === 1)
-  }
-}
-
-function mapRow(row: Record<string, unknown>): TeamMessage {
-  const text = (value: unknown) => (value === null || value === undefined ? null : String(value))
-  let tags: string[] = []
-  try {
-    const parsed: unknown = JSON.parse(String(row.tags ?? '[]'))
-    if (Array.isArray(parsed)) tags = parsed.filter((tag): tag is string => typeof tag === 'string')
-  } catch {
-    // A corrupt tag list reads as none; the message itself stays usable.
-  }
-  return {
-    id: String(row.id),
-    teamId: String(row.team_id),
-    toKind: row.to_kind === 'group' ? 'group' : 'session',
-    toId: String(row.to_id),
-    fromSession: String(row.from_session),
-    fromGroup: text(row.from_group),
-    originPath: String(row.origin_path),
-    priority: row.priority === 'urgent' ? 'urgent' : 'normal',
-    tags,
-    threadId: String(row.thread_id),
-    inReplyTo: text(row.in_reply_to),
-    hop: Number(row.hop ?? 1),
-    body: String(row.body),
-    state: String(row.state) as MessageState,
-    claimedBy: text(row.claimed_by),
-    claimedAt: text(row.claimed_at),
-    deliverAt: text(row.deliver_at),
-    createdAt: String(row.created_at),
-    pushedAt: text(row.pushed_at),
-    deliveredAt: text(row.delivered_at),
-    reason: text(row.reason),
-    possibleDuplicate: Number(row.possible_duplicate ?? 0) === 1,
-    attachThread: Number(row.attach_thread ?? 0) === 1,
-    taskId: text(row.task_id),
-    claimCommit: text(row.claim_commit),
-    parkedUntil: text(row.parked_until),
-    parkCount: Number(row.park_count ?? 0),
-    resumeMessageId: text(row.resume_message_id),
-    handoff: parseHandoff(row.handoff),
-    excludedProfile: text(row.excluded_profile),
-  }
-}
-
-function parseHandoff(value: unknown): ChatHandoffPackage | null {
-  if (typeof value !== 'string') return null
-  try {
-    const parsed: unknown = JSON.parse(value)
-    return isHandoffPackage(parsed) ? parsed : null
-  } catch {
-    // A corrupt package reads as none; the message itself stays usable.
-    return null
+    const newReason = 'reason' in set ? (set.reason as string | null) : null
+    return this.logged(id, () => this.changed(id, this.cachedStatement(
+      `UPDATE team_messages SET ${assignments} WHERE id = $id AND state IN (${states})`
+    ).run(params).changes === 1), kind, actor, nowIso(), newReason)
   }
 }
