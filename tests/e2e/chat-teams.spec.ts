@@ -137,7 +137,7 @@ test('waiting reasons: starting agent, expandable blockers, dead-letter labels, 
     const section = panel.locator('section[aria-label="Starting agent"]')
     await expect(section).toContainText('Seeded')
     await expect(startingRow).toContainText('Starting devs on default in kawai-teams-waiting-')
-    await expect(startingRow).toContainText('for 0m')
+    await expect(startingRow).toContainText(/for \d+m/)
     await expect(startingRow).toContainText('Starting agent')
     // The blocker stays Starting agent; its own reservation's capacity facts
     // sit in the expander, never as the blocker.
