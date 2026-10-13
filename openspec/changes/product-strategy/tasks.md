@@ -30,10 +30,10 @@
 
 ## 5. Strategy UI
 
-- [ ] 5.1 Add `src/client/components/chat/ProductStrategyPanel.tsx` and a client strategy store in the ChatView side slot beside Tasks/Mailbox/Debug, scoped by the session's team, leading with purpose, users, outcomes, use cases, trade-offs, and boundaries, with revision/hash/owner/status in detail; verify component tests cover an approved product and a product with no record (capture offered, never a forced wizard).
-- [ ] 5.2 Add `StrategyDraftEditor.tsx` with template sections, claim-kind labels, `Unknown` measures, and an impact proposal field for material changes; verify component tests cover labeled hypotheses, a refused validated observation without source, and a material draft retaining its unsaved text after a CAS refusal (S12).
-- [ ] 5.3 Add `StrategyRevisionHistory.tsx` and the review view showing findings, contradictions, and what is known / assumed / not decided, plus human Approve (exact diff/hash, scope, open questions), Submit, and Withdraw controls disabled while disconnected; verify component tests cover every control, stale-approval errors shown inline, and superseded/withdrawn revisions staying accessible.
-- [ ] 5.4 Document where capture, draft, review, approve, revision history, and evidence appear in the UI; verify documented labels match the rendered components.
+- [x] 5.1 Add `src/client/components/chat/ProductStrategyPanel.tsx` and a client strategy store in the ChatView side slot beside Tasks/Mailbox/Debug, scoped by the session's team, leading with purpose, users, outcomes, use cases, trade-offs, and boundaries, with revision/hash/owner/status in detail; verify component tests cover an approved product and a product with no record (capture offered, never a forced wizard).
+- [x] 5.2 Add `StrategyDraftEditor.tsx` with template sections, claim-kind labels, `Unknown` measures, and an impact proposal field for material changes; verify component tests cover labeled hypotheses, a refused validated observation without source, and a material draft retaining its unsaved text after a CAS refusal (S12).
+- [x] 5.3 Add `StrategyRevisionHistory.tsx` and the review view showing findings, contradictions, and what is known / assumed / not decided, plus human Approve (exact diff/hash, scope, open questions), Submit, and Withdraw controls disabled while disconnected; verify component tests cover every control, stale-approval errors shown inline, and superseded/withdrawn revisions staying accessible.
+- [x] 5.4 Document where capture, draft, review, approve, revision history, and evidence appear in the UI; verify documented labels match the rendered components.
 
 ## 6. Integration
 
