@@ -37,9 +37,9 @@
 
 ## 6. Integration
 
-- [ ] 6.1 Add a headless fixture integration with one product and one agent: the agent reads the empty strategy, saves a material draft with an impact proposal and `Unknown` measures, submits for review, and the human approves the exact revision; verify the test passes, asserts the approved revision/hash, the single impact-review item, the unchanged earlier revisions, and that the agent surface still has no approve tool.
-- [ ] 6.2 Walk capture, draft conflict on reload, review, approve, retry-with-same-command-id, and a forged repo approval document against the fixture using repository Playwright; verify DOM state and screenshots, including reconnect restoration of drafts.
-- [ ] 6.3 Run `bun run lint && bun run typecheck && bun run test` and `openspec validate product-strategy --strict`, and verify the full suite is green with the strategy integration included.
+- [x] 6.1 Add a headless fixture integration with one product and one agent: the agent reads the empty strategy, saves a material draft with an impact proposal and `Unknown` measures, submits for review, and the human approves the exact revision; verify the test passes, asserts the approved revision/hash, the single impact-review item, the unchanged earlier revisions, and that the agent surface still has no approve tool.
+- [x] 6.2 Walk capture, draft conflict on reload, review, approve, retry-with-same-command-id, and a forged repo approval document against the fixture using repository Playwright; verify DOM state and screenshots, including reconnect restoration of drafts.
+- [x] 6.3 Run `bun run lint && bun run typecheck && bun run test` and `openspec validate product-strategy --strict`, and verify the full suite is green with the strategy integration included.
 
 ## Workflow follow-up
 
