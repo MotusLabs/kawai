@@ -3741,6 +3741,31 @@ describe('ChatSessionManager background-task roster (background tasks D2)', () =
     ])
   })
 
+  test('a turn ending while a shell is live leaves the session waiting (D7)', async () => {
+    const { manager, handles, registry } = await createHarness(db)
+    const created = manager.createSession({ projectPath: '/tmp/proj' })
+    if (!created.ok) throw new Error('create failed')
+    const id = created.session.id
+    await manager.send(id, 'start a dev server')
+    const handle = handles[0]!
+    handle.push({
+      type: 'system', subtype: 'task_started', task_id: 'b3', tool_use_id: 'call_3',
+      task_type: 'local_bash', description: 'dev server', is_backgrounded: true, uuid: 'u', session_id: 's',
+    } as unknown as SDKMessage)
+    handle.push({
+      type: 'system', subtype: 'background_tasks_changed', tasks: [{ task_id: 'b3' }], uuid: 'u4', session_id: 's',
+    } as unknown as SDKMessage)
+    // The turn completes; the shell keeps running.
+    handle.push({
+      type: 'result', subtype: 'success', result: 'started', uuid: 'u5', session_id: 's',
+    } as unknown as SDKMessage)
+    await flush()
+    expect(registry.get(id)?.status).toBe('waiting')
+    expect(manager.getSnapshot(id)!.backgroundTasks).toMatchObject([
+      { taskId: 'b3', status: 'running', live: true },
+    ])
+  })
+
   test('an archived session keeps its last roster, settled as stopped', async () => {
     const { manager, handles } = await createHarness(db)
     const created = manager.createSession({ projectPath: '/tmp/proj' })
