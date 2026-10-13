@@ -2,7 +2,7 @@
 import { afterEach, expect, spyOn, test } from 'bun:test'
 import TestRenderer, { act } from 'react-test-renderer'
 import type { ChatEvent } from '@shared/chat'
-import type { TeamMessage } from '@shared/team'
+import type { TeamMessage, TeamWorktreeOccupancy, WaitingReason } from '@shared/team'
 import type { ClientMessage } from '@shared/types'
 import ChatMessages from '../components/chat/ChatMessages'
 import TeamMailboxPanel from '../components/chat/TeamMailboxPanel'
@@ -47,7 +47,7 @@ test('mailbox lists all categories and sends cancel, retry, discard; offline act
   const view = { open: true, loading: false, messages: [mail('queued', 'queued'), mail('future', 'queued', new Date(Date.now()+60000).toISOString()), mail('dead', 'dead'), mail('held', 'uncertain')] }
   const props = { sessionId: 'dev', view, connected: true, sendMessage: (message: ClientMessage) => sent.push(message), onClose: () => {} }
   const renderer = TestRenderer.create(<TeamMailboxPanel {...props} />)
-  expect(renderer.root.findAllByType('section').map(section => section.props['aria-label'])).toEqual(['Routing rules', 'Routing decisions', 'Queued', 'Receiving', 'Parked', 'Scheduled', 'Dead letters', 'Held for review'])
+  expect(renderer.root.findAllByType('section').map(section => section.props['aria-label'])).toEqual(['Routing rules', 'Routing decisions', 'Queued', 'Starting agent', 'Receiving', 'Parked', 'Scheduled', 'Dead letters', 'Held for review'])
   // Close mailbox and Reload routing rules come first.
   const actions = renderer.root.findAllByType('button').slice(2)
   act(() => { for (const button of actions) button.props.onClick() })
@@ -77,6 +77,113 @@ test('claimed mail stays visible while waiting for the durable receipt', () => {
   const renderer = TestRenderer.create(<TeamMailboxPanel sessionId="dev" view={{ open: true, loading: false, messages: [mail('in flight', 'claimed')] }} connected sendMessage={() => {}} onClose={() => {}} />)
   expect(JSON.stringify(renderer.root.findByProps({ 'aria-label': 'Receiving' }).findByType('article').findAllByType('p').map(p => p.children))).toContain('in flight')
   renderer.unmount()
+})
+
+// Waiting reasons (team-waiting-reasons): every unsettled state on
+// listForTeam's surface matches exactly one section, a spawning row shows
+// its reservation's facts, and waiting rows render blocker-first with the
+// other constraints expandable.
+const sessions = [{ id: 'writer', name: 'Writer One', groupId: 'devs' }]
+const reason = (blocker: WaitingReason['blocker'], others: WaitingReason['others'] = []) => ({ blocker, others })
+
+test('every unsettled state renders in exactly one section', () => {
+  const messages = [
+    mail('queued-due', 'queued'),
+    mail('awaiting', 'awaiting-request'),
+    mail('starting', 'spawning'),
+    mail('receiving', 'claimed'),
+    mail('parked', 'parked'),
+    mail('future', 'queued', new Date(Date.now() + 60_000).toISOString()),
+    mail('dead', 'dead'),
+    mail('uncertain', 'uncertain'),
+  ]
+  const renderer = TestRenderer.create(<TeamMailboxPanel sessionId="dev" view={{ open: true, loading: false, messages }} connected sendMessage={() => {}} onClose={() => {}} />)
+  const sections = renderer.root.findAllByType('section').filter(section => section.props['aria-label'] !== 'Routing rules' && section.props['aria-label'] !== 'Routing decisions')
+  const placed = sections.flatMap(section => section.findAllByType('article').map(() => section.props['aria-label']))
+  expect(sections.map(section => section.props['aria-label'])).toEqual(['Queued', 'Starting agent', 'Receiving', 'Parked', 'Scheduled', 'Dead letters', 'Held for review'])
+  // Eight rows, each in exactly one section: queued-due and awaiting share Queued.
+  expect(placed).toHaveLength(8)
+  const count = (id: string) => renderer.root.findAllByProps({ 'data-message-id': id }).length
+  for (const id of ['queued-due', 'awaiting', 'starting', 'receiving', 'parked', 'future', 'dead', 'uncertain']) expect(count(id)).toBe(1)
+  renderer.unmount()
+})
+
+test('a spawning row shows Starting agent with its reservation facts, then Receiving', () => {
+  const waiting = { starting: reason({ kind: 'starting-agent', reservation: { group: 'devs', profile: 'glm', worktree: '/repo/feat-x', startedAt: new Date(Date.now() - 90_000).toISOString() } },
+    [{ kind: 'group-cap', counts: { live: 1, cap: 1 } }, { kind: 'worktree-occupied', counts: { live: 1, cap: 1 }, detail: '/repo/feat-x' }]) }
+  const props = { sessionId: 'lead', connected: true, sendMessage: () => {}, onClose: () => {} }
+  let renderer!: TestRenderer.ReactTestRenderer
+  act(() => { renderer = TestRenderer.create(<TeamMailboxPanel {...props} view={{ open: true, loading: false, messages: [mail('starting', 'spawning')], waiting }} />) })
+  const section = renderer.root.findByProps({ 'aria-label': 'Starting agent' })
+  expect(section.findByType('article').findByProps({ 'data-testid': 'waiting-reason' })).toBeDefined()
+  const text = allText(renderer.toJSON())
+  expect(text).toContain('Starting devs on glm in feat-x')
+  expect(text).toContain('for 1m')
+  // Its own reservation's capacity facts sit in the expander, never as the blocker.
+  expect(section.findByProps({ 'data-testid': 'waiting-reason' }).findByProps({ 'data-testid': 'waiting-others' })).toBeDefined()
+  expect(allText(renderer.toJSON())).toContain('1/1')
+  // A spawning row carries no controls (Q2).
+  expect(section.findAllByType('button')).toHaveLength(0)
+  // The spawn landed: the row moves to Receiving.
+  act(() => renderer.update(<TeamMailboxPanel {...props} view={{ open: true, loading: false, messages: [mail('starting', 'claimed')], waiting: {} }} />))
+  expect(renderer.root.findByProps({ 'aria-label': 'Receiving' }).findByProps({ 'data-message-id': 'starting' })).toBeDefined()
+  expect(() => renderer.root.findByProps({ 'aria-label': 'Starting agent' }).findByType('article')).toThrow()
+  renderer.unmount()
+})
+
+test('a waiting row shows its blocker and expands to the other constraints with links', () => {
+  const opened: string[] = []
+  const waiting = { blocked: reason(
+    { kind: 'worktree-occupied', counts: { live: 1, cap: 1 }, sessionIds: ['writer'], detail: '/repo/feat-x' },
+    [{ kind: 'no-eligible-member', sessionIds: ['writer'], detail: 'writer working' }, { kind: 'spawn-backoff', retryAt: new Date(Date.now() + 30_000).toISOString() }]) }
+  let renderer!: TestRenderer.ReactTestRenderer
+  act(() => { renderer = TestRenderer.create(<TeamMailboxPanel sessionId="lead" view={{ open: true, loading: false, messages: [mail('blocked', 'queued')], waiting }}
+    connected sendMessage={() => {}} onClose={() => {}} sessions={sessions} onOpenSession={id => opened.push(id)} />) })
+  const article = renderer.root.findByProps({ 'data-message-id': 'blocked' })
+  // The blocker is one line: worktree basename, occupant named and linked.
+  const blocker = article.findByProps({ 'data-testid': 'waiting-reason' }).children[0] as TestRenderer.ReactTestInstance
+  const holder = article.findByProps({ 'data-testid': 'waiting-session' })
+  expect(holder.props.children).toBe('Writer One')
+  act(() => holder.props.onClick())
+  expect(opened).toEqual(['writer'])
+  expect(allText(blocker)).toContain('feat-x')
+  // The worktree shows its basename with the full path available (title).
+  expect(blocker.findByProps({ title: '/repo/feat-x' })).toBeDefined()
+  // The other constraints are expandable.
+  const others = article.findByProps({ 'data-testid': 'waiting-others' })
+  const othersText = allText(others)
+  expect(othersText).toContain('No eligible member')
+  expect(othersText).toContain('writer working')
+  expect(othersText).toContain('failed spawn retries')
+  renderer.unmount()
+})
+
+test('a dead letter reads as a sentence with the code still visible', () => {
+  const dead = { ...mail('gone', 'dead'), reason: 'worktree-missing: /repo/gone' }
+  let renderer!: TestRenderer.ReactTestRenderer
+  act(() => { renderer = TestRenderer.create(<TeamMailboxPanel sessionId="lead" view={{ open: true, loading: false, messages: [dead] }} connected sendMessage={() => {}} onClose={() => {}} />) })
+  const line = renderer.root.findByProps({ 'data-testid': 'dead-letter-reason' })
+  const text = allText(line)
+  expect(text).toContain('The target worktree is missing')
+  expect(text).toContain('(worktree-missing: /repo/gone)')
+  renderer.unmount()
+})
+
+test('snapshot updates reasons and the roster without row changes', () => {
+  const store = useTeamMailboxStore.getState()
+  store.open('dev')
+  const snapshot = (waiting?: Record<string, WaitingReason>, worktrees?: TeamWorktreeOccupancy[]) =>
+    store.apply({ type: 'team-mailbox-snapshot', sessionId: 'dev', teamId: 'team', messages: [mail('m', 'queued')], ...waiting ? { waiting } : {}, ...worktrees ? { worktrees } : {} })
+  snapshot({ m: reason({ kind: 'group-cap', counts: { live: 2, cap: 2 } }) })
+  expect(useTeamMailboxStore.getState().views.dev!.waiting).toEqual({ m: { blocker: { kind: 'group-cap', counts: { live: 2, cap: 2 } }, others: [] } })
+  // A reason-only re-publish replaces the reasons; rows untouched.
+  snapshot({ m: reason({ kind: 'no-eligible-member', detail: 'a working' }) })
+  expect(useTeamMailboxStore.getState().views.dev!.waiting!.m!.blocker.kind).toBe('no-eligible-member')
+  expect(useTeamMailboxStore.getState().views.dev!.messages).toHaveLength(1)
+  // A roster update lands the same way.
+  const roster: TeamWorktreeOccupancy[] = [{ worktree: '/repo', sessions: [], pendingSpawns: [] }]
+  snapshot(undefined, roster)
+  expect(useTeamMailboxStore.getState().views.dev!.worktrees).toEqual(roster)
 })
 
 /** Every text leaf of a rendered tree, joined: JSX splits text into children. */

@@ -30,15 +30,15 @@
 
 ## 6. Mailbox panel
 
-- [ ] 6.1 Add the Starting agent section to `TeamMailboxPanel.tsx` covering `spawning` rows with reservation facts and elapsed time, so every state on `listForTeam`'s surface (queued, awaiting-request, spawning, claimed, parked, dead, uncertain) matches exactly one category; verify component tests cover a spawning row rendering, its transition to Receiving, and that no state on that surface renders in zero sections.
-- [ ] 6.2 Render each waiting row's immediate blocker as one line with the other constraints expandable, named sessions linking to their chats and worktrees showing basename with full path, and readable dead-letter labels beside the code; verify component tests cover blocker-plus-expansion, links, label fallbacks, and unchanged Cancel/Retry/Discard/Hand off controls.
-- [ ] 6.3 Store the new snapshot fields in `teamMailboxStore.ts`; verify store tests cover reason-only snapshot updates and roster updates without row changes.
+- [x] 6.1 Add the Starting agent section to `TeamMailboxPanel.tsx` covering `spawning` rows with reservation facts and elapsed time, so every state on `listForTeam`'s surface (queued, awaiting-request, spawning, claimed, parked, dead, uncertain) matches exactly one category; verify component tests cover a spawning row rendering, its transition to Receiving, and that no state on that surface renders in zero sections.
+- [x] 6.2 Render each waiting row's immediate blocker as one line with the other constraints expandable, named sessions linking to their chats and worktrees showing basename with full path, and readable dead-letter labels beside the code; verify component tests cover blocker-plus-expansion, links, label fallbacks, and unchanged Cancel/Retry/Discard/Hand off controls.
+- [x] 6.3 Store the new snapshot fields in `teamMailboxStore.ts`; verify store tests cover reason-only snapshot updates and roster updates without row changes.
 
 ## 7. Integration and validation
 
 - [x] 7.1 Add a headless integration test of the E04 sequence with a fixture knob that holds spawned-agent startup open: the message stays visible as Starting agent, then group cap, team cap, and occupied worktree each show the right reason and counts when exercised independently, and freeing the blocking slot updates the reason and delivers to exactly one agent; verify the failed-spawn path retries at its backoff end with nothing else changing, using `cleanGitEnv()` for every test git command.
-- [ ] 7.2 Add Playwright scenarios in `tests/e2e/chat-teams.spec.ts` walking the Starting agent section, blocker lines with expandable constraints, dead-letter labels, and the slot-free update; verify DOM state and screenshots against the fixture.
-- [ ] 7.3 Document in the How It Works section of `CLAUDE.md`: the mailbox panel's full state list including Starting agent, waiting reasons with their blocker-first rendering and deterministic caps-first order, dead-letter labels, and the failed-spawn 30 s backoff now being woken at its end; verify the documented states match `listForTeam`'s surface and the panel's sections, and the backoff wording replaces "retries no sooner than 30s later" with the woken retry.
+- [x] 7.2 Add Playwright scenarios in `tests/e2e/chat-teams.spec.ts` walking the Starting agent section, blocker lines with expandable constraints, dead-letter labels, and the slot-free update; verify DOM state and screenshots against the fixture.
+- [x] 7.3 Document in the How It Works section of `CLAUDE.md`: the mailbox panel's full state list including Starting agent, waiting reasons with their blocker-first rendering and deterministic caps-first order, dead-letter labels, and the failed-spawn 30 s backoff now being woken at its end; verify the documented states match `listForTeam`'s surface and the panel's sections, and the backoff wording replaces "retries no sooner than 30s later" with the woken retry.
 - [ ] 7.4 Run `bun run lint && bun run typecheck && bun run test` and `openspec validate team-waiting-reasons --strict`; verify the full suite is green and the change validates.
 
 ## Workflow follow-up
