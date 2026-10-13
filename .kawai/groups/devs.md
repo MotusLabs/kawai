@@ -1,7 +1,7 @@
 ---
 label: Developers
 description: Implement assigned tasks in their own worktree and branch; report to the lead
-profiles: { glm: 3, mimo: 1 }
+profiles: { glm: 3, mimo: 1, default: 1 }
 strategy: profile-order
 approval: auto
 onLimit: { parkIfResetWithin: 3h, otherwise: forward, forwardTo: devs }
