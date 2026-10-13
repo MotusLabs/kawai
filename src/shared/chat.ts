@@ -291,14 +291,20 @@ export interface ChatUsageReport {
   /** ISO timestamp of when the report was received. */
   receivedAt: string
   /**
-   * Which shape it came from: a pushed rate_limit_event, a /usage report, or
-   * the SDK usage pull (which follows the host claude.ai login, not the
-   * session's provider). Absent on reports from older servers.
+   * Which shape it came from: a pushed rate_limit_event, a /usage report, the
+   * SDK usage pull (which follows the host claude.ai login, not the session's
+   * provider), or a pull from the session provider's own quota endpoint.
+   * Absent on reports from older servers.
    */
   source?: ChatUsageSource
 }
 
-export type ChatUsageSource = 'push' | 'report' | 'pull'
+export type ChatUsageSource =
+  | 'push'
+  | 'report'
+  | 'pull'
+  /** Pulled from the session provider's own quota endpoint (provider usage pull). */
+  | 'provider'
 
 /** Where a chat notification came from. */
 export type ChatNotificationSource = 'account' | 'agent'
