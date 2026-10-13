@@ -15,10 +15,12 @@ import { useTeamTaskStore, type TaskAction, type TaskView } from '../../stores/t
 import MessageRow from './MessageRow'
 import { actorLabel, sessionLabel } from './teamTaskLabels'
 
-export default function TeamTaskDetail({ sessionId, view, sendMessage, connected, sessions, onOpenThread }: {
+export default function TeamTaskDetail({ sessionId, view, sendMessage, connected, sessions, onOpenThread, onOpenSession }: {
   sessionId: string; view: TaskView; sendMessage: SendClientMessage; connected: boolean; sessions: Session[]
   /** Open this message's thread in the Messages view; omitted = no link. */
   onOpenThread?: (threadId: string) => void
+  /** Open a message participant's chat; omitted = names only. */
+  onOpenSession?: (sessionId: string) => void
 }) {
   const detail = view.detail
   const task = detail?.task
@@ -108,7 +110,7 @@ export default function TeamTaskDetail({ sessionId, view, sendMessage, connected
       <h5 className="font-medium">Messages</h5>
       {detail.messages.length === 0 && <p className="text-chat-meta text-secondary">No messages</p>}
       {detail.messages.map(message => <article key={message.id} data-message-id={message.id} data-testid="message-row" className="mt-2 border border-border p-2">
-        <MessageRow row={message} sessions={sessions} names={view.directory} />
+        <MessageRow row={message} sessions={sessions} names={view.directory} onOpenSession={onOpenSession} />
         {onOpenThread && <button className="btn mt-1 text-chat-meta" data-testid="message-open-thread"
           onClick={() => onOpenThread(message.threadId)}>Open thread</button>}
       </article>)}

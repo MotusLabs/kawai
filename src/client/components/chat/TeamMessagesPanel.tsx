@@ -8,6 +8,7 @@ import type { SendClientMessage } from '@shared/types'
 import { useSessionStore } from '../../stores/sessionStore'
 import { closedMessageView, useTeamMessageStore } from '../../stores/teamMessageStore'
 import TeamMessagesView from './TeamMessagesView'
+import { openParticipantChat } from './openParticipant'
 import { useTeamGroups } from './useTeamGroups'
 
 export default function TeamMessagesPanel({ sessionId, projectPath, sendMessage, connected, connectionEpoch, onClose }: {
@@ -25,5 +26,6 @@ export default function TeamMessagesPanel({ sessionId, projectPath, sendMessage,
     connectionEpoch={connectionEpoch}
     sessions={sessions.map(row => ({ id: row.id, name: row.name, groupId: row.groupId ?? null }))}
     groups={groups.groups.map(group => ({ id: group.id, label: group.label }))}
+    onOpenSession={openParticipantChat}
     onClose={onClose} />
 }

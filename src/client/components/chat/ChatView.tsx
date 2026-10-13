@@ -51,6 +51,8 @@ import { closedTaskView, useTeamTaskStore } from '../../stores/teamTaskStore'
 import TeamMessagesPanel from './TeamMessagesPanel'
 import { closedMessageView, useTeamMessageStore } from '../../stores/teamMessageStore'
 import { closeOtherSideSlots } from './sideSlot'
+import { openParticipantChat } from './openParticipant'
+import { useSessionStore } from '../../stores/sessionStore'
 import ChatRequests from './ChatRequests'
 import ChatWorkersStrip from './ChatWorkersStrip'
 import NotificationStrip from './NotificationStrip'
@@ -142,6 +144,11 @@ export default function ChatView({ session, sendMessage, subscribe, connectionSt
   // side slot. Its subscription is owned by the view itself, so this only
   // decides whether the panel is mounted.
   const messages = useTeamMessageStore(state => state.views[session.id]) ?? CLOSED_MESSAGES
+  // Naming message participants (team-message-threads D3): live rows come from
+  // the session list, and whichever side panel has been open last supplies the
+  // team directory that names a killed one `Name (gone)`.
+  const liveSessions = useSessionStore(state => state.sessions)
+  const participantDirectory = messages.directory.length > 0 ? messages.directory : tasks.directory
   const toggleMessages = () => {
     const store = useTeamMessageStore.getState()
     if (messages.open) store.close(session.id)
@@ -391,7 +398,8 @@ export default function ChatView({ session, sendMessage, subscribe, connectionSt
         <div className="min-h-0 flex-1 overflow-y-auto p-4">
           <div className="mx-auto max-w-3xl space-y-4">
             <ChatMessages events={transcript.events} projectPath={session.projectPath}
-              sessionId={session.id} sendMessage={sendMessage} connected={connected} />
+              sessionId={session.id} sendMessage={sendMessage} connected={connected}
+              sessions={liveSessions} directory={participantDirectory} onOpenParticipant={openParticipantChat} />
             {showActivity && (
               <ChatActivityRow activity={activity.value} phaseStartedAt={activity.phaseStartedAt} />
             )}

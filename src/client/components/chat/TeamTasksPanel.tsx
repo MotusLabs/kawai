@@ -8,6 +8,7 @@ import type { SendClientMessage } from '@shared/types'
 import { useSessionStore } from '../../stores/sessionStore'
 import { useTeamTaskStore, type TaskView } from '../../stores/teamTaskStore'
 import TeamTaskDetail from './TeamTaskDetail'
+import { openParticipantChat } from './openParticipant'
 import { actorLabel, sessionLabel } from './teamTaskLabels'
 
 export default function TeamTasksPanel({ sessionId, view, sendMessage, connected, onClose, onOpenThread }: {
@@ -43,7 +44,7 @@ export default function TeamTasksPanel({ sessionId, view, sendMessage, connected
     <div className="min-h-0 flex-1 overflow-y-auto p-3">
       {view.selectedTaskId ? (
         <TeamTaskDetail sessionId={sessionId} view={view} sendMessage={sendMessage} connected={connected} sessions={sessions}
-          onOpenThread={onOpenThread} />
+          onOpenThread={onOpenThread} onOpenSession={openParticipantChat} />
       ) : <>
         <details className="mb-4 border border-border p-2" data-testid="task-create">
           <summary className="cursor-pointer font-medium">New task</summary>

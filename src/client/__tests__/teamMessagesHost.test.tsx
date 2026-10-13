@@ -5,15 +5,19 @@
 // view is read plus compose, never retry/discard/cancel/hand-off.
 import { afterEach, expect, test } from 'bun:test'
 import TestRenderer, { act } from 'react-test-renderer'
+import type { ChatEvent } from '@shared/chat'
 import type { ClientMessage, Session } from '@shared/types'
 import type { TeamMessage } from '@shared/team'
 import type { TeamTaskDetail as Detail, TeamTaskSummary } from '@shared/teamTasks'
 import ChatView from '../components/chat/ChatView'
 import TeamMailboxPanel from '../components/chat/TeamMailboxPanel'
+import TeamMessagesPanel from '../components/chat/TeamMessagesPanel'
 import TeamMessagesView from '../components/chat/TeamMessagesView'
 import TeamTaskDetail from '../components/chat/TeamTaskDetail'
 import { closeOtherSideSlots } from '../components/chat/sideSlot'
 import { useChatDebugStore } from '../stores/chatDebugStore'
+import { emptyTranscript, useChatStore } from '../stores/chatStore'
+import { useSessionStore } from '../stores/sessionStore'
 import { closedMessageView, useTeamMessageStore } from '../stores/teamMessageStore'
 import { useTeamMailboxStore, type MailboxView } from '../stores/teamMailboxStore'
 import { useTeamTaskStore, type TaskView } from '../stores/teamTaskStore'
@@ -24,6 +28,8 @@ afterEach(() => {
     useTeamMailboxStore.setState({ views: {} })
     useTeamTaskStore.setState({ views: {} })
     useTeamMessageStore.setState({ views: {} })
+    useSessionStore.setState({ sessions: [], selectedSessionId: null, selectedHibernatingSessionId: null })
+    useChatStore.setState({ sessions: {} })
   })
 })
 
@@ -181,4 +187,58 @@ test('the Messages view composes and reads; delivery operations stay with the Ma
   })
   expect(sent.map(message => message.type)).toEqual(['team-mailbox-retry', 'team-mailbox-discard', 'team-mailbox-retry', 'team-mailbox-discard'])
   act(() => mailbox.unmount())
+})
+
+test('a live message participant opens its chat; a killed one is a name and no link', () => {
+  act(() => {
+    useTeamMessageStore.setState({
+      views: { 'chat-1': { ...closedMessageView(), open: true, teamId: 'team', messages: [
+        message('m1', { fromSession: 'dev', toKind: 'session', toId: 'chat-gone', body: 'Live to gone' }),
+      ], directory } },
+    })
+    useSessionStore.setState({ sessions: [chatSession, { ...chatSession, id: 'dev', name: 'Dev one', groupId: 'devs' }] })
+  })
+  let renderer!: TestRenderer.ReactTestRenderer
+  act(() => {
+    renderer = TestRenderer.create(<TeamMessagesPanel sessionId="chat-1" projectPath="/tmp/project"
+      sendMessage={() => {}} connected connectionEpoch={0} onClose={() => {}} />)
+  })
+  const byName = (name: string) =>
+    renderer.root.findAllByProps({ 'data-testid': 'participant-name' }).find(node => textOf(node) === name)!
+  // D3: only a participant that still exists is a button.
+  expect(byName('Dev one').type).toBe('button')
+  expect(byName('Killed helper (gone)').type).toBe('span')
+  act(() => { (byName('Dev one') as TestRenderer.ReactTestInstance).props.onClick() })
+  expect(useSessionStore.getState().selectedSessionId).toBe('dev')
+  act(() => renderer.unmount())
+})
+
+test('the transcript names its peer senders and opens a live one, never a gone one', () => {
+  const peer: ChatEvent = {
+    type: 'peer_message', id: 'p1', sequence: 1, at: 'now', turnId: 't1',
+    messageId: 'm1', senderSession: 'dev', senderGroup: 'devs', senderKind: 'agent',
+    priority: 'normal', originPath: '/repo', tags: [], threadId: 'm1', body: 'Please review',
+    possibleDuplicate: false,
+  }
+  act(() => {
+    useChatStore.setState({ sessions: { 'chat-1': { ...emptyTranscript(), events: [peer] } } })
+    useSessionStore.setState({ sessions: [chatSession, { ...chatSession, id: 'dev', name: 'Dev one', groupId: 'devs' }] })
+    useTeamMessageStore.setState({
+      views: { 'chat-1': { ...closedMessageView(), open: true, teamId: 'team', directory } },
+    })
+  })
+  let renderer!: TestRenderer.ReactTestRenderer
+  act(() => {
+    renderer = TestRenderer.create(<ChatView session={chatSession} sendMessage={() => {}}
+      connectionStatus="connected" connectionEpoch={0} error={null} onClose={() => {}} onKill={() => {}} />)
+  })
+  const names = renderer.root.findAllByProps({ 'data-testid': 'participant-name' }).map(node => textOf(node))
+  // Without the host wiring this read `dev (gone)` — a live sender is named.
+  expect(names).toContain('Dev one')
+  expect(names).not.toContain('dev (gone)')
+  const live = renderer.root.findAllByProps({ 'data-testid': 'participant-name' }).find(node => textOf(node) === 'Dev one')!
+  expect(live.type).toBe('button')
+  act(() => { live.props.onClick() })
+  expect(useSessionStore.getState().selectedSessionId).toBe('dev')
+  act(() => renderer.unmount())
 })
