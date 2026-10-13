@@ -22,9 +22,9 @@
 
 ## 5. Session menu and kill confirmation
 
-- [ ] 5.1 Add `ChatSessionMenu.tsx` on Base UI `Menu` (design D4) and move Debug out of the header row into it: Rename, Debug as a checkbox item, a separator, Archive (live only), and Kill session (danger, last), keeping `chat-archive-button`. Verify with component tests for "Menu actions for a live chat", "Debug from the menu", "Menu for an archived chat", and "Keyboard through the session menu".
-- [ ] 5.2 Add `ChatKillDialog.tsx` on Base UI `AlertDialog` (design D5), with Cancel focused first; Kill session opens it and only Kill calls `onKill`. Verify with component tests for "Confirmed kill" and "Cancelled kill" (both Cancel and Escape).
-- [ ] 5.3 Update the e2e specs and unit tests that click Debug, Archive, or Kill session directly (`chat.spec.ts`, `chat-real.spec.ts`, `chat-drafts.spec.ts`, `chat-workers.spec.ts`, `chat-activity.spec.ts`, `chat-external-cli.spec.ts`, `chatComponents.test.tsx`, `claudeProfileUi.test.tsx`; re-grep before editing) to go through the menu, and confirm the kill. Update the CLAUDE.md archive and Debug wording. Verify the touched fixture e2e specs pass in isolation.
+- [x] 5.1 Add `ChatSessionMenu.tsx` on Base UI `Menu` (design D4) and move Debug out of the header row into it: Rename, Debug as a checkbox item, a separator, Archive (live only), and Kill session (danger, last), keeping `chat-archive-button`. Verify with unit tests on the entry model and the header's wiring (the open popup needs a DOM the test renderer lacks), and with the fixture e2e spec `tests/e2e/chat-header.spec.ts` (added to the CI fixture list) for "Menu actions for a live chat", "Debug from the menu", "Menu for an archived chat", and "Keyboard through the session menu".
+- [x] 5.2 Add `ChatKillDialog.tsx` on Base UI `AlertDialog` (design D5), with Cancel focused first; Kill session opens it and only Kill calls `onKill`. Verify with a unit test of the dialog body and with `chat-header.spec.ts` for "Confirmed kill" and "Cancelled kill" (both Cancel and Escape).
+- [x] 5.3 Update the e2e specs and unit tests that click Debug, Archive, or Kill session directly (`chat.spec.ts`, `chat-real.spec.ts`, `chat-drafts.spec.ts`, `chat-workers.spec.ts`, `chat-activity.spec.ts`, `chat-external-cli.spec.ts`, `chatComponents.test.tsx`, `claudeProfileUi.test.tsx`; re-grep before editing) to go through the menu, and confirm the kill. Update the CLAUDE.md archive and Debug wording. Verify the touched fixture e2e specs pass in isolation.
 
 ## 6. Width-driven layouts
 

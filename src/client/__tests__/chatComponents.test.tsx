@@ -16,6 +16,7 @@ import { emptyTranscript, useChatStore } from '../stores/chatStore'
 import { useSettingsStore } from '../stores/settingsStore'
 import { useTeamTaskStore } from '../stores/teamTaskStore'
 import { Switch } from '../components/Switch'
+import { chooseSessionMenuEntry, sessionMenuEntry } from './support/sessionMenu'
 
 describe('chat components', () => {
   test('approval cards send allow and deny without hiding the pending request locally', () => {
@@ -320,7 +321,7 @@ describe('chat archive view', () => {
   test('archiving an idle chat sends chat-archive without confirmation', () => {
     const { sent, renderer } = renderArchiveView(chatSession)
     expect(confirmCalls).toHaveLength(0)
-    act(() => { renderer.root.findByProps({ 'data-testid': 'chat-archive-button' }).props.onClick() })
+    act(() => { chooseSessionMenuEntry(renderer.root, 'archive') })
     expect(confirmCalls).toHaveLength(0)
     expect(sent).toContainEqual({ type: 'chat-archive', sessionId: 'chat-1' })
     renderer.unmount()
@@ -330,7 +331,7 @@ describe('chat archive view', () => {
     const working = { ...chatSession, status: 'working' } as Session
     confirmResult = true
     const { sent, renderer } = renderArchiveView(working)
-    act(() => { renderer.root.findByProps({ 'data-testid': 'chat-archive-button' }).props.onClick() })
+    act(() => { chooseSessionMenuEntry(renderer.root, 'archive') })
     expect(confirmCalls).toHaveLength(1)
     expect(sent).toContainEqual({ type: 'chat-archive', sessionId: 'chat-1' })
     renderer.unmount()
@@ -340,7 +341,7 @@ describe('chat archive view', () => {
     const working = { ...chatSession, status: 'working' } as Session
     confirmResult = false
     const { sent, renderer } = renderArchiveView(working)
-    act(() => { renderer.root.findByProps({ 'data-testid': 'chat-archive-button' }).props.onClick() })
+    act(() => { chooseSessionMenuEntry(renderer.root, 'archive') })
     expect(confirmCalls).toHaveLength(1)
     expect(sent.filter(message => message.type === 'chat-archive')).toEqual([])
     renderer.unmount()
@@ -352,15 +353,15 @@ describe('chat archive view', () => {
 
     // Attach still requests a snapshot; no agent is started for it.
     expect(sent).toContainEqual({ type: 'chat-attach', sessionId: 'chat-1' })
-    // Read-only: no composer, Stop, Archive button, or request actions.
+    // Read-only: no composer, Stop, Archive action, or request actions.
     expect(renderer.root.findAllByType('textarea')).toHaveLength(0)
     expect(renderer.root.findAllByType('form')).toHaveLength(0)
     expect(buttonNamed(renderer.root, 'Stop')).toBeUndefined()
-    expect(renderer.root.findAllByProps({ 'data-testid': 'chat-archive-button' })).toHaveLength(0)
+    expect(sessionMenuEntry(renderer.root, 'archive')).toBeUndefined()
     expect(textOf(renderer.root.findByProps({ 'data-testid': 'chat-archived-bar' }))).toContain('Archived')
     expect(renderer.root.findByProps({ 'data-testid': 'chat-status' }).children).toContain('archived')
     // Kill stays available for archived chats.
-    expect(buttonNamed(renderer.root, 'Kill session')).toBeTruthy()
+    expect(sessionMenuEntry(renderer.root, 'kill')).toBeTruthy()
 
     // Restore sends chat-restore.
     act(() => { buttonNamed(renderer.root, 'Restore').props.onClick() })
@@ -456,11 +457,11 @@ describe('chat debug view', () => {
     const { sent, renderer } = renderView()
     expect(renderer.root.findAllByProps({ 'data-testid': 'chat-debug-panel' })).toHaveLength(0)
     expect(debugMessages(sent)).toEqual([])
-    act(() => buttonNamed(renderer.root, 'Debug').props.onClick())
-    expect(buttonNamed(renderer.root, 'Debug').props['aria-pressed']).toBe(true)
+    act(() => chooseSessionMenuEntry(renderer.root, 'debug'))
+    expect(sessionMenuEntry(renderer.root, 'debug')).toMatchObject({ kind: 'check', checked: true })
     expect(renderer.root.findAllByProps({ 'data-testid': 'chat-debug-panel' })).toHaveLength(1)
     expect(debugMessages(sent)).toEqual([{ type: 'chat-debug-open', sessionId: 'chat-1' }])
-    act(() => buttonNamed(renderer.root, 'Debug').props.onClick())
+    act(() => chooseSessionMenuEntry(renderer.root, 'debug'))
     expect(renderer.root.findAllByProps({ 'data-testid': 'chat-debug-panel' })).toHaveLength(0)
     expect(debugMessages(sent)).toEqual([
       { type: 'chat-debug-open', sessionId: 'chat-1' }, { type: 'chat-debug-close', sessionId: 'chat-1' },
@@ -472,7 +473,7 @@ describe('chat debug view', () => {
 
   test('a reconnect re-opens the debug subscription and awaits a fresh page', () => {
     const { sent, renderer, props } = renderView()
-    act(() => buttonNamed(renderer.root, 'Debug').props.onClick())
+    act(() => chooseSessionMenuEntry(renderer.root, 'debug'))
     act(() => { useChatDebugStore.getState().apply({ type: 'chat-debug-frames', sessionId: 'chat-1', frames: [], page: true, hasOlder: false }) })
     expect(useChatDebugStore.getState().views['chat-1']!.awaitingOpen).toBe(false)
     act(() => renderer.update(<ChatView {...props} connectionEpoch={1} />))

@@ -1,14 +1,19 @@
 // The chat header (chat-header-layout): identity and status block, panel
-// switcher, and the Auto-approve switch.
+// switcher, the Auto-approve switch, the session menu, and the kill
+// confirmation. Opening the menu or dialog needs a DOM; those flows run in
+// tests/e2e/chat-header.spec.ts.
 import { afterEach, describe, expect, test } from 'bun:test'
 import TestRenderer, { act } from 'react-test-renderer'
 import type { Session } from '@shared/types'
 import ChatHeader, { projectName, type ChatHeaderProps } from '../components/chat/ChatHeader'
+import ChatKillDialog, { KillConfirmBody } from '../components/chat/ChatKillDialog'
 import ChatPanelSwitcher from '../components/chat/ChatPanelSwitcher'
+import { sessionMenuEntries, type SessionMenuEntry } from '../components/chat/ChatSessionMenu'
 import ChatView from '../components/chat/ChatView'
 import { Switch } from '../components/Switch'
 import { useTeamMailboxStore } from '../stores/teamMailboxStore'
 import { useTeamTaskStore } from '../stores/teamTaskStore'
+import { chooseSessionMenuEntry } from './support/sessionMenu'
 
 const session = {
   id: 'chat-1', name: 'Kawai Chat header buttons', projectPath: '/home/coder/kawai', status: 'working', kind: 'chat',
@@ -188,5 +193,91 @@ describe('in ChatView', () => {
     expect(pressed()).toEqual([false, true, false, false])
     expect(useTeamTaskStore.getState().views['chat-1']?.open ?? false).toBe(false)
     act(() => renderer.unmount())
+  })
+})
+
+describe('session menu entries', () => {
+  const noop = () => {}
+  const base = { openSlot: null, foldPanels: false, onRename: noop, onToggleSlot: noop, onArchive: noop, onKill: noop }
+  const shape = (entries: SessionMenuEntry[]) =>
+    entries.map(entry => entry.kind === 'separator' ? '---' : `${entry.label}${entry.kind === 'check' && entry.checked ? ' ✓' : ''}${entry.kind === 'item' && entry.danger ? ' !' : ''}`)
+
+  test('a live chat lists Rename, Debug, Archive, and Kill session last and destructive', () => {
+    expect(shape(sessionMenuEntries({ ...base, archived: false }))).toEqual(['Rename', 'Debug', '---', 'Archive', 'Kill session !'])
+  })
+
+  test('an archived chat has no Archive entry', () => {
+    expect(shape(sessionMenuEntries({ ...base, archived: true }))).toEqual(['Rename', 'Debug', '---', 'Kill session !'])
+  })
+
+  test('Debug is checked while the debug panel is open and toggles the debug slot', () => {
+    const toggled: string[] = []
+    const entries = sessionMenuEntries({ ...base, archived: false, openSlot: 'debug', onToggleSlot: slot => toggled.push(slot) })
+    const debug = entries.find(entry => entry.id === 'debug')!
+    expect(debug).toMatchObject({ kind: 'check', checked: true })
+    if (debug.kind === 'check') debug.onToggle()
+    expect(toggled).toEqual(['debug'])
+  })
+
+  test('folded panels come first with their selected state', () => {
+    const toggled: string[] = []
+    const entries = sessionMenuEntries({ ...base, archived: false, openSlot: 'messages', foldPanels: true, onToggleSlot: slot => toggled.push(slot) })
+    expect(shape(entries)).toEqual(['Tasks', 'Mailbox', 'Messages ✓', 'Strategy', '---', 'Rename', 'Debug', '---', 'Archive', 'Kill session !'])
+    const tasks = entries[0]!
+    if (tasks.kind === 'check') tasks.onToggle()
+    expect(toggled).toEqual(['tasks'])
+  })
+
+  test('Rename keeps focus for the name field; other items return it to the trigger', () => {
+    const entries = sessionMenuEntries({ ...base, archived: false })
+    const items = entries.filter(entry => entry.kind === 'item')
+    expect(items.map(entry => [entry.id, entry.kind === 'item' && (entry.keepFocus ?? false)])).toEqual([
+      ['rename', true], ['archive', false], ['kill', false],
+    ])
+  })
+})
+
+describe('header session menu', () => {
+  test('the header hands the menu its entries behind a labelled trigger; Rename opens the name field', () => {
+    const archives: number[] = []
+    const { renderer, allById } = renderHeader({ onArchive: () => archives.push(1) })
+    const trigger = renderer.root.find(node => typeof node.type === 'string' && node.props['data-testid'] === 'chat-session-menu')
+    expect(trigger.props['aria-label']).toBe('Session actions')
+    expect(trigger.props['aria-haspopup']).toBe('menu')
+    // Debug, Archive, and Kill session are no longer header buttons.
+    for (const name of ['Debug', 'Archive', 'Kill session']) {
+      expect(renderer.root.findAllByType('button').filter(button => textOf(button) === name)).toHaveLength(0)
+    }
+    act(() => chooseSessionMenuEntry(renderer.root, 'archive'))
+    expect(archives).toEqual([1])
+    act(() => chooseSessionMenuEntry(renderer.root, 'rename'))
+    expect(allById('chat-name-input')).toHaveLength(1)
+  })
+})
+
+describe('kill confirmation body', () => {
+  test('names the session, says the removal is permanent, and only Kill confirms', () => {
+    const calls: string[] = []
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => {
+      renderer = TestRenderer.create(<KillConfirmBody name="My chat" onCancel={() => calls.push('cancel')} onConfirm={() => calls.push('kill')} />)
+    })
+    expect(textOf(renderer.root.findByType('p'))).toBe('Kill “My chat”? This permanently removes the chat session from kawai. Archive keeps it instead.')
+    const [cancel, kill] = renderer.root.findAllByType('button')
+    expect(textOf(cancel!)).toBe('Cancel')
+    expect(textOf(kill!)).toBe('Kill')
+    expect(kill!.props.className).toContain('btn-danger')
+    act(() => cancel!.props.onClick())
+    expect(calls).toEqual(['cancel'])
+    act(() => kill!.props.onClick())
+    expect(calls).toEqual(['cancel', 'kill'])
+  })
+
+  test('the closed dialog renders nothing', () => {
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => {
+      renderer = TestRenderer.create(<ChatKillDialog open={false} name="My chat" container={{ current: null }} onOpenChange={() => {}} onConfirm={() => {}} />)
+    })
+    expect(renderer.toJSON()).toBeNull()
   })
 })

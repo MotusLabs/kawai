@@ -1,6 +1,7 @@
 // The chat view header (chat-header-layout D1): the session's identity and
 // status, the side-panel switcher, the Auto-approve switch (amber while on,
-// shown for live chats at every width), and the session actions. It renders from props only — the WebSocket subscription
+// shown for live chats at every width), and the session menu (Rename, Debug,
+// Archive, and Kill session, which asks for confirmation first). It renders from props only — the WebSocket subscription
 // effects for each side panel stay in ChatView, which owns the attach
 // lifecycle — and keeps the in-place rename state (chat-session-naming): a
 // blank submit just exits editing, and the draft follows broadcast renames
@@ -8,7 +9,7 @@
 // The context meter sits beside the session status, hidden until the first
 // model request; archived chats keep the stored reading and hide the
 // approval and archive controls.
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { ChatContextUsage } from '@shared/chat'
 import type { Session } from '@shared/types'
 import type { ConnectionStatus } from '../../stores/sessionStore'
@@ -16,7 +17,9 @@ import { parkedLabel } from '../../utils/parkedLabel'
 import { chatStatusIndicator } from '../../utils/sessionStatus'
 import { Switch } from '../Switch'
 import ChatContextMeter from './ChatContextMeter'
+import ChatKillDialog from './ChatKillDialog'
 import ChatPanelSwitcher from './ChatPanelSwitcher'
+import ChatSessionMenu, { sessionMenuEntries } from './ChatSessionMenu'
 import type { SideSlot } from './sideSlot'
 
 export interface ChatHeaderProps {
@@ -66,12 +69,14 @@ export default function ChatHeader({
       setEditingName(false)
     }
   }
-  const slotButton = (slot: SideSlot, label: string) => (
-    <button className={`btn text-chat-meta ${openSlot === slot ? 'btn-primary' : ''}`} aria-pressed={openSlot === slot}
-      onClick={() => onToggleSlot(slot)}>{label}</button>
-  )
+  const headerRef = useRef<HTMLElement>(null)
+  const [killOpen, setKillOpen] = useState(false)
+  const menuEntries = sessionMenuEntries({
+    archived, openSlot, foldPanels: false, onRename: () => setEditingName(true), onToggleSlot,
+    onArchive, onKill: () => setKillOpen(true),
+  })
   return (
-    <header className="flex items-center gap-3 border-b border-border p-3">
+    <header ref={headerRef} className="flex items-center gap-3 border-b border-border p-3">
       <button className="btn text-chat-meta md:hidden" onClick={onClose}>Sessions</button>
       <div className="min-w-0 flex-1">
         <div className="flex min-w-0 items-center gap-2">
@@ -106,7 +111,6 @@ export default function ChatHeader({
       </div>
       <ChatContextMeter usage={contextUsage} />
       <ChatPanelSwitcher openSlot={openSlot} onToggle={onToggleSlot} />
-      {slotButton('debug', 'Debug')}
       {!archived && (
         <label className={`flex shrink-0 cursor-pointer items-center gap-1.5 whitespace-nowrap text-chat-meta ${autoApprove ? 'text-approval' : 'text-secondary'}`}>
           <Switch checked={autoApprove} onCheckedChange={onToggleApproval} ariaLabel="Auto-approve" testId="chat-approval-policy"
@@ -114,8 +118,8 @@ export default function ChatHeader({
           <span aria-hidden="true">Auto-approve</span>
         </label>
       )}
-      {!archived && <button className="btn text-chat-meta" onClick={onArchive} data-testid="chat-archive-button">Archive</button>}
-      <button className="btn text-chat-meta" onClick={onKill}>Kill session</button>
+      <ChatSessionMenu entries={menuEntries} container={headerRef} />
+      <ChatKillDialog open={killOpen} name={session.name} container={headerRef} onOpenChange={setKillOpen} onConfirm={onKill} />
     </header>
   )
 }

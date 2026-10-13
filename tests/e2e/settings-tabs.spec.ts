@@ -4,6 +4,7 @@
 // env; and a chat created with the box unchecked starts manual — its first
 // tool use asks with an approval card instead of auto-approving.
 import { expect, test, type Page } from '@playwright/test'
+import { killChat } from './support/chatHeader'
 
 // The chat walkthrough needs a working backend: the e2e server pins auth
 // empty, so chat creation only succeeds with the development fixture's
@@ -109,5 +110,5 @@ test('the approval default commits on Save and seeds the New Session checkbox', 
   await expect(page.getByRole('button', { name: 'Allow', exact: true })).toBeVisible()
   await expect(page.getByTestId('chat-transcript').getByText('Auto-approved')).toHaveCount(0)
 
-  await page.getByRole('button', { name: 'Kill session', exact: true }).click()
+  await killChat(page)
 })
