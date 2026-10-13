@@ -25,6 +25,14 @@
 
 A flag is a launch default: settings caps still clamp it, and the user can still change it with `/effort` in a running chat.
 
+*Precedence check (task 1.1, Claude Code 2.1.296).* A live probe was blocked because the host login had expired, so this was read from the CLI bundle instead:
+- `--effort` seeds the session effort as a `level` (`sessionEffort: be(Qyr(flag))`).
+- The resolver returns a `level` session effort before it consults the settings table. A settings `effortLevel`, including one saved by `/effort`, applies only when no level was given (`inherit`). So the flag beats a persisted default.
+- `CLAUDE_CODE_EFFORT_LEVEL` is a separate override (`VM()`), which `/effort` reports as "overrides effort this session".
+- The settings maximum's documented behavior clamps `--effort` as well.
+
+D1 stands.
+
 **D2 — Resolve through `SessionTeams`, read per spawn.** Add `SessionTeams.effortFor(sessionId, groupId)`, returning the group's `effort` or `undefined`, using the same catalog lookup as `promptFor`. `ChatSessionManager` passes a `getEffort` getter to the driver beside `getSystemPromptAppend`, and the driver spreads `effort` into `Options` only when it is defined. Reading per spawn gives the spec's "running agent unchanged, next start uses the edit" behavior for free, and covers spawned members, human-created members, restarts, and resumes through one path. Alternative: persist effort on the session row at creation. Rejected because edits would never reach existing members, and the role prompt already established live re-reading.
 
 **D3 — Placement in `Options`.** Put `effort` before `...launchOptions`. Profile launch options never carry `effort` today, so order is moot. But if a future operator-owned profile setting adds one, a later spread should be a deliberate decision, not an accident. The test asserts the getter's value reaches `Options.effort`.

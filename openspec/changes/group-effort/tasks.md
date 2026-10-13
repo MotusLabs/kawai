@@ -2,12 +2,12 @@
 
 ## 1. Precedence check
 
-- [ ] 1.1 With the pinned Claude Code CLI, confirm that `--effort` beats a settings `effortLevel` default and that `CLAUDE_CODE_EFFORT_LEVEL` and a settings maximum still override or clamp it. One way: launch a throwaway SDK query with `effort: 'high'` under a temporary settings file holding `effortLevel: low`, and read `effort` from its `system/init` frame. Record the outcome as a note in `design.md` D1. If the flag loses, stop and revisit D1 before continuing.
+- [x] 1.1 With the pinned Claude Code CLI, confirm that `--effort` beats a settings `effortLevel` default and that `CLAUDE_CODE_EFFORT_LEVEL` and a settings maximum still override or clamp it. One way: launch a throwaway SDK query with `effort: 'high'` under a temporary settings file holding `effortLevel: low`, and read `effort` from its `system/init` frame. Record the outcome as a note in `design.md` D1. If the flag loses, stop and revisit D1 before continuing.
 
 ## 2. Group file
 
-- [ ] 2.1 In `src/server/team/groupFile.ts`, add the optional `effort?: EffortLevel` to `GroupDefinition` (low/medium/high/xhigh/max, using the SDK-independent type or a local literal union). Parse it in `parseTaskSettings`; an invalid value adds the D4 warning and leaves `effort` unset. Update the header comment. Verify with new cases in `src/server/__tests__/teamGroupFile.test.ts`: each valid level is parsed, absent means `undefined`, quoted values work, an invalid value gives a warning plus `undefined` while the rest of the file still parses, and `auto` is invalid.
-- [ ] 2.2 Confirm that the invalid-effort warning reaches the catalog warnings with its file prefix, as served by the team groups route. Verify with a `groupCatalog` or route test asserting the prefixed warning.
+- [x] 2.1 In `src/server/team/groupFile.ts`, add the optional `effort?: EffortLevel` to `GroupDefinition` (low/medium/high/xhigh/max, using the SDK-independent type or a local literal union). Parse it in `parseTaskSettings`; an invalid value adds the D4 warning and leaves `effort` unset. Update the header comment. Verify with new cases in `src/server/__tests__/teamGroupFile.test.ts`: each valid level is parsed, absent means `undefined`, quoted values work, an invalid value gives a warning plus `undefined` while the rest of the file still parses, and `auto` is invalid.
+- [x] 2.2 Confirm that the invalid-effort warning reaches the catalog warnings with its file prefix, as served by the team groups route. Verify with a `groupCatalog` or route test asserting the prefixed warning.
 
 ## 3. Launch plumbing
 
