@@ -185,6 +185,10 @@ export const useTeamTaskStore = create<TaskState>(set => ({
   flowSendAssign: (sessionId, payload) => set(state => {
     const view = state.views[sessionId]
     if (!view?.open || !view.flow) return state
+    // Set on the first send only: re-sends under the same key carry the same
+    // payload by construction, and retryAssign re-keys and re-records on a
+    // changed intent — overwriting here would blur which payload the key names.
+    if (view.flow.sentPayload !== undefined) return state
     return { views: { ...state.views, [sessionId]: { ...view, flow: { ...view.flow, sentPayload: payload } } } }
   }),
   reconnected: sessionId => set(state => {

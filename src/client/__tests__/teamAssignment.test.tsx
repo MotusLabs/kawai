@@ -334,3 +334,19 @@ test('dispatched instruction rows show the Human sender; agent rows are unchange
   expect(textOf(live.root.findByProps({ 'data-chat-role': 'peer' }))).toContain('Human')
   act(() => live.unmount())
 })
+
+test('flowSendAssign records the payload once; later sends do not overwrite it', () => {
+  openView()
+  const store = useTeamTaskStore.getState()
+  store.armFlow('dev', 'create-and-assign')
+  store.flowSendAssign('dev', { targetKind: 'group', targetId: 'devs', instruction: 'First' })
+  store.flowSendAssign('dev', { targetKind: 'group', targetId: 'devs', instruction: 'Overwrite attempt' })
+  expect(useTeamTaskStore.getState().views.dev!.flow!.sentPayload).toMatchObject({ instruction: 'First' })
+  // retryAssign re-keys and re-records on a changed intent, as designed.
+  store.setDraft('dev', { targetKind: 'group', targetId: 'devs', instruction: 'Second' })
+  store.begin('dev', 'a1', 'assign')
+  store.applyResult({ type: 'team-task-result', sessionId: 'dev', requestId: 'a1', error: 'nope' })
+  store.retryAssign('dev')
+  store.flowSendAssign('dev', { targetKind: 'group', targetId: 'devs', instruction: 'Second' })
+  expect(useTeamTaskStore.getState().views.dev!.flow!.sentPayload).toMatchObject({ instruction: 'Second' })
+})
