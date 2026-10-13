@@ -109,7 +109,7 @@ Publishing, notifying, and acknowledging SHALL NOT change the task revision reco
 - **THEN** the notice names revision 2 as announced and its task context carries revision 3
 
 ### Requirement: Publication emits a revision-published fact
-Each publication SHALL produce a durable, ordered fact — task, team, new revision, previous revision, author, rationale, time — readable from the revision history and announced to in-process consumers after commit. Drafts, notices, retries, and acknowledgements SHALL NOT produce it. Consumers decide its effect on earlier results.
+Each publication SHALL produce a durable, ordered fact — task, team, new revision, previous revision, author, rationale, time — as its published revision record, with the task naming its current revision; consumers SHALL compare against these records. An in-process announcement after commit MAY be offered and SHALL NOT be required. Drafts, notices, retries, and acknowledgements SHALL NOT produce it. Consumers decide its effect on earlier results.
 
 #### Scenario: One fact per publication
 - **WHEN** revision 2 is published and its notice is retried twice
