@@ -8,7 +8,7 @@
 // kawai (its teardown would kill it).
 import { expect, test, type Page } from '@playwright/test'
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
-import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -171,6 +171,11 @@ test('E11 slice: uncertain retry keeps its recipient, history, and survives a re
   let server: ChildProcess | null = null
   let diagnostics = ''
   const start = async () => {
+    // Same guard as playwright.config.ts's webServer command: the server pins
+    // AGENTBOARD_STATIC_DIR, so a clean tree has to build before it can serve.
+    if (!existsSync(join(process.cwd(), 'dist/client'))) {
+      execFileSync('bun', ['run', 'build'], { cwd: process.cwd(), stdio: 'inherit' })
+    }
     server = spawn('bun', ['src/server/index.ts'], {
       cwd: process.cwd(), stdio: ['ignore', 'pipe', 'pipe'],
       env: {
