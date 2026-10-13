@@ -54,8 +54,8 @@ one, so for each task:
 3. `send_message` to the `devs` group with the `task_id`: what to do first,
    anything not in the task, and to reply when done or blocked.
 
-A dev is spawned in the worktree (GLM first, MiMo when GLM is full or cooling,
-then one Claude Code dev on the default profile).
+A dev is spawned in the worktree (GLM first, then one Claude Code dev on the
+default profile, then MiMo, each when the earlier ones are full or cooling).
 Only one spawned member lives per worktree, so never send two tasks to the
 same worktree at once; reuse a worktree only for follow-up work on its branch.
 
