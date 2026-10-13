@@ -175,6 +175,16 @@ describe('request-key idempotency', () => {
     expect(mail.forTask(task.id)).toHaveLength(1)
   })
 
+  test('the same key aimed at a different task is refused naming the task', async () => {
+    const first = await service.create(human(), { title: 'Export', direction: 'CSV' })
+    const second = await service.create(human(), { title: 'Other', direction: 'd' })
+    await dispatcher.dispatch(human(), { taskId: first.id, target: { kind: 'group', id: 'devs' }, instruction: 'Go', requestKey: 'cross-task' })
+    await expect(dispatcher.dispatch(human(), {
+      taskId: second.id, target: { kind: 'group', id: 'devs' }, instruction: 'Go', requestKey: 'cross-task',
+    })).rejects.toThrow('different task')
+    expect(assignments.listByTask(second.id)).toEqual([])
+  })
+
   test('the same key with a different target or instruction is refused; the original stands', async () => {
     const task = await service.create(human(), { title: 'Export', direction: 'CSV' })
     await dispatcher.dispatch(human(), { taskId: task.id, target: { kind: 'group', id: 'devs' }, instruction: 'Go', requestKey: 'intent-9' })

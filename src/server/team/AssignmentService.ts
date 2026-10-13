@@ -108,7 +108,7 @@ export class AssignmentService {
     // never add a second instruction (D4).
     const existing = this.store.byKey(team.teamId, requestKey)
     if (existing) {
-      const diff = this.payloadDiff(existing, { target: input.target, instruction })
+      const diff = this.payloadDiff(existing, task.id, { target: input.target, instruction })
       if (diff) throw new Error(`Request key already used with a different ${diff}`)
       return { replay: true, assignment: existing, message: existing.messageId ? this.mail.get(existing.messageId) : null }
     }
@@ -309,7 +309,8 @@ export class AssignmentService {
   }
 
   /** Which normalized request field differs between a stored dispatch and a replayed intent (D4). */
-  private payloadDiff(existing: TeamTaskAssignment, input: { target: AssignmentTarget; instruction: string }): string | null {
+  private payloadDiff(existing: TeamTaskAssignment, taskId: string, input: { target: AssignmentTarget; instruction: string }): string | null {
+    if (existing.taskId !== taskId) return 'task'
     if (existing.targetKind !== input.target.kind || existing.targetId !== input.target.id) return 'target'
     if (existing.instruction !== input.instruction.trim()) return 'instruction'
     return null
