@@ -9,6 +9,9 @@
 // the holds via AGENTBOARD_CHAT_FIXTURE_HOLD_MS. Tool turns exercise short
 // Bash handles; "tool fail" adds a failed result and a project-relative Read.
 import type { Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import type { ChatQueryFactory } from './ChatSessionDriver'
 
 export const chatFixtureEnabled =
@@ -27,6 +30,8 @@ export const fixtureQueryFactory: ChatQueryFactory = ({ prompt, options, wire })
   let closed = false
   let generation = 0
   const controller = new AbortController()
+  /** The background scenario's tasks, answering getTaskOutput/stopTask. */
+  const backgroundTasks = new Map<string, { output: string; lines: string[]; stopped?: boolean }>()
   const push = (message: Record<string, unknown>) => {
     if (closed) return
     const sdkMessage = { uuid: crypto.randomUUID(), session_id: 'fixture', ...message } as SDKMessage
@@ -139,6 +144,43 @@ export const fixtureQueryFactory: ChatQueryFactory = ({ prompt, options, wire })
       await hold(900)
       if (closed || turn !== generation) return
       push({ type: 'system', subtype: 'compact_boundary', compact_metadata: { trigger: 'auto', pre_tokens: 157_900, post_tokens: 12_000 } })
+    }
+    if (/background/i.test(text)) {
+      // Background-task walkthrough (background tasks D9): a quick shell that
+      // settles and wakes the agent into a triggered turn, beside a dev
+      // server that keeps running until it is stopped from the UI. The
+      // output file is real, so the tail reader (live and fallback) works.
+      const tasksDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kawai-fixture-tasks-'))
+      const quickTool = `toolu_fixture_${crypto.randomUUID()}`
+      const longTool = `toolu_fixture_${crypto.randomUUID()}`
+      const quickId = `bq_${crypto.randomUUID().slice(0, 8)}`
+      const longId = `bl_${crypto.randomUUID().slice(0, 8)}`
+      const quickOutput = path.join(tasksDir, 'tasks', `${quickId}.output`)
+      const longOutput = path.join(tasksDir, 'tasks', `${longId}.output`)
+      fs.mkdirSync(path.join(tasksDir, 'tasks'), { recursive: true })
+      backgroundTasks.set(longId, { output: longOutput, lines: ['dev server starting…', 'listening on :5173'] })
+      backgroundTasks.set(quickId, { output: quickOutput, lines: ['waiting…', 'fixture-shell-done'] })
+      push({ type: 'assistant', message: { id: crypto.randomUUID(), role: 'assistant', content: [{ type: 'tool_use', id: quickTool, name: 'Bash', input: { description: 'Wait then print a marker', command: 'sleep 2; echo fixture-shell-done', run_in_background: true } }] } })
+      push({ type: 'assistant', message: { id: crypto.randomUUID(), role: 'assistant', content: [{ type: 'tool_use', id: longTool, name: 'Bash', input: { description: 'Fixture dev server', command: 'bun run dev --fixture', run_in_background: true } }] } })
+      push({ type: 'system', subtype: 'task_started', task_id: quickId, tool_use_id: quickTool, description: 'Wait then print a marker', task_type: 'local_bash', is_backgrounded: true })
+      push({ type: 'system', subtype: 'task_started', task_id: longId, tool_use_id: longTool, description: 'Fixture dev server', task_type: 'local_bash', is_backgrounded: true })
+      push({ type: 'system', subtype: 'background_tasks_changed', tasks: [{ task_id: quickId }, { task_id: longId }] })
+      assistant('Both tasks are running; the marker one will report back.')
+      // The turn ends here (the shared result below); the quick task then
+      // settles, its notification wakes the agent into a triggered turn.
+      setTimeout(() => {
+        if (closed) return
+        const quick = backgroundTasks.get(quickId)
+        if (quick) quick.stopped = true // settled: its tail no longer grows
+        fs.writeFileSync(quickOutput, 'fixture-shell-done\n')
+        push({ type: 'system', subtype: 'task_updated', task_id: quickId, patch: { status: 'completed', end_time: Date.now() } })
+        push({ type: 'system', subtype: 'task_notification', task_id: quickId, tool_use_id: quickTool, status: 'completed', summary: 'Background command "Wait then print a marker" completed (exit code 0)', output_file: quickOutput })
+        push({ type: 'system', subtype: 'background_tasks_changed', tasks: [{ task_id: longId }] })
+        push({ type: 'system', subtype: 'init', cwd: options.cwd ?? '/tmp', session_id: 'fixture', model: 'fixture-model', tools: [], slash_commands: [] })
+        push({ type: 'system', subtype: 'status', status: 'requesting' })
+        push({ type: 'assistant', message: { id: crypto.randomUUID(), role: 'assistant', content: [{ type: 'text', text: 'The marker printed fixture-shell-done.' }] } })
+        push({ type: 'result', subtype: 'success', result: '', total_cost_usd: 0, num_turns: 1 })
+      }, Number(process.env.AGENTBOARD_CHAT_FIXTURE_HOLD_MS ?? 1200))
     }
     if (/worker/i.test(text)) {
       // Spawned-worker walkthrough (workers design D9): a top-level Agent call
@@ -261,6 +303,35 @@ export const fixtureQueryFactory: ChatQueryFactory = ({ prompt, options, wire })
     interrupt: async () => {
       frame('out', { type: 'control_request', request_id: crypto.randomUUID(), request: { subtype: 'interrupt' } })
       generation++
+    },
+    // The background-task controls (background tasks D3/D4), shaped like the
+    // real CLI's runtime surface: getTaskOutput reads the scenario's real
+    // output file (the long task keeps appending, so the polled tail grows),
+    // stopTask settles through the normal notification.
+    getTaskOutput: async (taskId: string) => {
+      const task = backgroundTasks.get(taskId)
+      if (!task) throw new Error(`Unknown task: ${taskId}`)
+      // A running task prints a line per poll, so the expanded tail grows
+      // in the browser; a stopped or settled one reads its final output.
+      if (!task.stopped && backgroundTasks.has(taskId)) {
+        const next = task.lines.length > 0 ? task.lines.shift()! : `GET /health 200 at ${new Date().toISOString()}`
+        try { fs.appendFileSync(task.output, `${next}\n`) } catch { /* dev-only */ }
+      }
+      let output = ''
+      try { output = fs.readFileSync(task.output, 'utf8') } catch { output = '' }
+      const bytes = Buffer.byteLength(output, 'utf8')
+      return { output: bytes > 8192 ? output.slice(-8192) : output, total_bytes: bytes, truncated: bytes > 8192 }
+    },
+    stopTask: async (taskId: string) => {
+      const task = backgroundTasks.get(taskId)
+      if (!task) throw new Error(`Unknown task: ${taskId}`)
+      if (task.stopped) return
+      task.stopped = true
+      try { fs.writeFileSync(task.output, '[killed]') } catch { /* dev-only */ }
+      frame('out', { type: 'control_request', request_id: crypto.randomUUID(), request: { subtype: 'stop_task', task_id: taskId } })
+      push({ type: 'system', subtype: 'task_updated', task_id: taskId, patch: { status: 'killed', end_time: Date.now() } })
+      push({ type: 'system', subtype: 'task_notification', task_id: taskId, status: 'stopped', summary: 'Stopped from the chat view' })
+      push({ type: 'system', subtype: 'background_tasks_changed', tasks: [...backgroundTasks.entries()].filter(([, t]) => !t.stopped).map(([id]) => ({ task_id: id })) })
     },
     close: () => {
       if (!closed) frame('lifecycle', { event: 'exit', code: 0, signal: null })
