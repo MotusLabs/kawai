@@ -209,6 +209,75 @@ export interface MessageQueryFilters {
   human?: boolean
 }
 
+/**
+ * One reason a waiting message cannot move (team-waiting-reasons D1). A
+ * constraint is a typed fact from the dispatch, staffing, or routing state
+ * that made the delivery decision — never an inference from session badges.
+ */
+export type WaitingConstraintKind =
+  | 'recipient-busy'
+  | 'recipient-pending-request'
+  | 'recipient-unavailable'
+  | 'profile-cooling'
+  | 'startup-failed'
+  | 'no-eligible-member'
+  | 'group-cap'
+  | 'profile-cap'
+  | 'team-spawn-cap'
+  | 'worktree-occupied'
+  | 'spawn-backoff'
+  | 'routing-hold'
+  | 'all-profiles-cooling'
+  | 'group-missing'
+  | 'starting-agent'
+
+export interface WaitingConstraint {
+  kind: WaitingConstraintKind
+  /** Capacity facts as `live of cap` (group, profile, team, worktree). */
+  counts?: { live: number; cap: number }
+  /** Sessions the constraint implicates: a worktree's occupant, the excluded members. */
+  sessionIds?: string[]
+  /** When the constraint clears on its own (cooldown end, retry time); ISO. */
+  retryAt?: string
+  /** Free-form facts: a worktree path, a profile id, an error text, a rule reason, a member breakdown. */
+  detail?: string
+  /** The spawn reservation behind `starting-agent` (D3): derived from `team_spawns`. */
+  reservation?: { group: string; profile: string; worktree: string; startedAt: string }
+}
+
+/**
+ * Why a message waits (D1): the immediate blocker plus every other constraint
+ * that also applies, ordered deterministically — a missing group definition,
+ * then capacity (group, per-profile, team spawn, worktree occupancy), then
+ * member facts, then spawn and routing specifics. A `spawning` row always
+ * carries `starting-agent` as its blocker, its own reservation's capacity
+ * effects among `others`.
+ */
+export interface WaitingReason {
+  blocker: WaitingConstraint
+  others: WaitingConstraint[]
+}
+
+/**
+ * A team's live (non-archived) sessions grouped by resolved worktree root
+ * (team-waiting-reasons D4): the one occupancy read model the waiting
+ * reasons, staffing decisions, and the mailbox snapshot share. Manual and
+ * spawned sessions are listed; only spawned sessions and pending
+ * reservations block spawning.
+ */
+export interface TeamWorktreeOccupancy {
+  worktree: string
+  sessions: Array<{
+    sessionId: string
+    group: string | null
+    profile: string
+    status: string
+    spawned: boolean
+    taskId: string | null
+  }>
+  pendingSpawns: Array<{ group: string; profile: string }>
+}
+
 /** Keyset position: the row after which the next (older) page starts. */
 export interface MessageCursor {
   createdAt: string

@@ -2,8 +2,8 @@
 
 ## 1. Shared reason model
 
-- [ ] 1.1 Add `WaitingConstraint` (typed kind with optional counts, session names, retry time, detail) and `WaitingReason` (ordered constraints, first is the immediate blocker) to `src/shared/team.ts`, and the optional additive `waiting` and `worktrees` fields to the `team-mailbox-snapshot` message in `src/shared/types.ts`; verify type-level tests or compilation cover every constraint kind's fields and that the snapshot stays optional-field compatible with older clients.
-- [ ] 1.2 Add the dead-letter reason label map (`worktree-missing`, `killed-recipient`, `killed-sender-without-group`, `hop-limit`) with a verbatim fallback for unknown codes; verify unit tests cover each known code rendering a readable label with the code visible and an unknown code passing through unchanged.
+- [x] 1.1 Add `WaitingConstraint` (typed kind with optional counts, session names, retry time, detail) and `WaitingReason` (ordered constraints, first is the immediate blocker) to `src/shared/team.ts`, and the optional additive `waiting` and `worktrees` fields to the `team-mailbox-snapshot` message in `src/shared/types.ts`; verify type-level tests or compilation cover every constraint kind's fields and that the snapshot stays optional-field compatible with older clients.
+- [x] 1.2 Add the dead-letter reason label map (`worktree-missing`, `killed-recipient`, `killed-sender-without-group`, `hop-limit`) with a verbatim fallback for unknown codes; verify unit tests cover each known code rendering a readable label with the code visible and an unknown code passing through unchanged.
 
 ## 2. Worktree occupancy read model
 
