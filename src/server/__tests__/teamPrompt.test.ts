@@ -42,6 +42,15 @@ describe('buildTeamPrompt', () => {
     expect(prompt).not.toContain('You cannot create tasks')
   })
 
+  test('a member and a session without a group both learn the human is reply-only', () => {
+    for (const prompt of [
+      buildTeamPrompt({ sessionId: 'chat-7', group: devs, groups: [devs] }),
+      buildTeamPrompt({ sessionId: 'chat-8', groups: [devs] }),
+    ]) {
+      expect(prompt).toContain('New mail to them is refused: only a reply to a message they sent reaches them.')
+    }
+  })
+
   test('ordinary contributors and group-less sessions get the tools, journal role, and change authority but no creation right', () => {
     for (const prompt of [
       buildTeamPrompt({ sessionId: 'chat-5', group: devs, groups: [devs] }),

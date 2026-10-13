@@ -76,6 +76,8 @@ function mailboxNote({ sessionId, group, groups }: TeamPromptInput): string {
     `- \`${tool('schedule_message')}\`: deliver a message later — to a group, a session, or yourself as a reminder.`,
     `- \`${tool('list_groups')}\`: list the team's groups.`,
     '',
+    'The human works alongside you. New mail to them is refused: only a reply to a message they sent reaches them.',
+    '',
     'Sending returns a message id immediately; it never waits for an answer. Replies arrive as later turns. Do not spin waiting for them — finish your turn.',
   ].join('\n')
 }
