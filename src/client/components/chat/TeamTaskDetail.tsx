@@ -101,7 +101,7 @@ export default function TeamTaskDetail({ sessionId, view, sendMessage, connected
       <h5 className="font-medium">Messages</h5>
       {detail.messages.length === 0 && <p className="text-chat-meta text-secondary">No messages</p>}
       {detail.messages.map(message => <article key={message.id} data-message-id={message.id} className="mt-2 border border-border p-2">
-        <p className="text-chat-meta text-secondary">{sessionLabel(message.fromSession, sessions)} → {message.toKind}: {message.toKind === 'session' ? sessionLabel(message.toId, sessions) : message.toId} · {message.state}</p>
+        <p className="text-chat-meta text-secondary">{message.fromSession === null ? 'Human' : sessionLabel(message.fromSession, sessions)} → {message.toKind}: {message.toKind === 'human' ? 'Human' : message.toId === null ? '—' : message.toKind === 'session' ? sessionLabel(message.toId, sessions) : message.toId} · {message.state}</p>
         <p className="whitespace-pre-wrap break-words text-chat-body">{message.body}</p>
       </article>)}
     </section>

@@ -16,11 +16,11 @@ const peer: ChatEvent = { type: 'peer_message', id: 'p1', sequence: 1, at: 'now'
   senderSession: 'lead', senderGroup: 'leads', priority: 'urgent', originPath: '/repo/worktree', tags: ['review', 'review'],
   threadId: 'thread', body: 'Review this change', possibleDuplicate: true }
 const mail = (id: string, state: TeamMessage['state'], deliverAt: string | null = null): TeamMessage => ({
-  id, state, deliverAt, teamId: 'team', toKind: 'group', toId: 'devs', fromSession: 'lead', fromGroup: 'leads',
+  id, state, deliverAt, teamId: 'team', toKind: 'group', toId: 'devs', fromKind: 'agent', fromSession: 'lead', fromGroup: 'leads',
   originPath: '/repo', priority: 'normal', tags: [], threadId: id, inReplyTo: null, hop: 1, body: id,
   claimedBy: state === 'uncertain' ? 'dev' : null, claimedAt: null, createdAt: new Date().toISOString(),
   pushedAt: null, deliveredAt: null, reason: null, possibleDuplicate: false, attachThread: false, taskId: null,
-  claimCommit: null, parkedUntil: null, parkCount: 0, resumeMessageId: null, handoff: null, excludedProfile: null,
+  taskRevision: null, claimCommit: null, parkedUntil: null, parkCount: 0, resumeMessageId: null, handoff: null, excludedProfile: null,
 })
 /** Rendered text below a test instance (instances are cyclic; never stringify them). */
 const textOf = (node: TestRenderer.ReactTestInstance | string): string =>

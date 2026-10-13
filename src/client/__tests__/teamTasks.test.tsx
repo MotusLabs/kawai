@@ -30,10 +30,10 @@ const detail = (task: TeamTaskSummary, extra: Partial<Detail> = {}): Detail => (
   ],
   journal: [{ id: 'n1', author: { kind: 'agent', sessionId: 'dev' }, text: 'Picked option B', createdAt: '2026-10-11T02:00:00.000Z' }],
   subtasks: [summary('child', { title: 'Export button', parentId: task.id })],
-  messages: [{ id: 'm1', teamId: 'team', toKind: 'group', toId: 'devs', fromSession: 'lead', fromGroup: 'leads', originPath: '/repo', priority: 'normal',
+  messages: [{ id: 'm1', teamId: 'team', toKind: 'group', toId: 'devs', fromKind: 'agent', fromSession: 'lead', fromGroup: 'leads', originPath: '/repo', priority: 'normal',
     tags: [], threadId: 'm1', inReplyTo: null, hop: 1, body: 'Please build', state: 'delivered', claimedBy: 'dev', claimedAt: null, deliverAt: null,
     createdAt: '', pushedAt: null, deliveredAt: null, reason: null, possibleDuplicate: false, attachThread: false, taskId: task.id,
-    claimCommit: null, parkedUntil: null, parkCount: 0, resumeMessageId: null, handoff: null, excludedProfile: null }],
+    taskRevision: null, claimCommit: null, parkedUntil: null, parkCount: 0, resumeMessageId: null, handoff: null, excludedProfile: null }],
   ...extra,
 })
 const sessionRow = (id: string, name: string) => ({ id, name, projectPath: '/repo', status: 'waiting', lastActivity: '', createdAt: '', source: 'managed', kind: 'chat' } as Session)

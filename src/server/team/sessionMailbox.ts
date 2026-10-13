@@ -96,6 +96,8 @@ export class SessionMailbox {
       // Read through a live team member's cached catalog (one read per team
       // per cycle); with no live member, resolve from the message's origin.
       groupOf: async message => {
+        // Routing only ever asks about group mail; a null target is not a group.
+        if (message.toId === null) return undefined
         const records = [...options.records()]
         const peer = records.find(record => record.sessionId === message.fromSession && options.teams.teamOf(record.sessionId)?.teamId === message.teamId) ??
           records.find(record => options.teams.teamOf(record.sessionId)?.teamId === message.teamId)
@@ -198,7 +200,7 @@ export class SessionMailbox {
     this.staffing.reconcile()
     for (const team of store.teamsWithQueuedMail()) {
       for (const mail of store.listForTeam(team)) {
-        if (mail.toKind === 'session' && !this.options.getRecord(mail.toId)) store.deadLetter(mail.id, 'killed-recipient')
+        if (mail.toKind === 'session' && mail.toId !== null && !this.options.getRecord(mail.toId)) store.deadLetter(mail.id, 'killed-recipient')
       }
     }
     this.releaseSubscription = store.subscribe((team, message) => {

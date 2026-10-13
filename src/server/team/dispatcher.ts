@@ -298,13 +298,13 @@ export class MailDispatcher {
         if (current?.pendingRequest) this.store.holdForRequest(message.id)
         return true
       }
-      const envelope = messageEnvelope(message, message.attachThread ? this.store.thread(message.threadId) : undefined,
-        this.options.taskContext?.(message.taskId))
+      const task = this.options.taskContext?.(message.taskId)
+      const envelope = messageEnvelope(message, message.attachThread ? this.store.thread(message.threadId) : undefined, task)
       // The awaited interrupt can also let a turn end or the driver die, which
       // settles the recipient and requeues this claim. A refused markPushed
       // means exactly that: the row is queued again, so delivering here would
       // duplicate it on the next pass.
-      if (!this.store.markPushed(message.id)) return true
+      if (!this.store.markPushed(message.id, undefined, task?.revision ?? null)) return true
       this.options.deliver(recipient.sessionId, envelope)
       this.options.delivered?.(recipient.sessionId, message)
       if (message.taskId) this.options.associateTask?.(recipient.sessionId, message.taskId)

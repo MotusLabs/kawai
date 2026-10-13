@@ -1,4 +1,15 @@
 // SDK-free durable mailbox rows shared by server and client views.
+
+/**
+ * Who acted (team-message-threads D4): the human, or an agent session. The
+ * actor vocabulary of task creators and message senders — deliberately not
+ * the routing vocabulary of `TeamMessage['toKind']`, which answers where a
+ * row goes. `TaskActor` is an alias of this.
+ */
+export type TeamActor =
+  | { kind: 'human'; sessionId: null }
+  | { kind: 'agent'; sessionId: string }
+
 export type MessageState =
   | 'queued'
   | 'claimed'
@@ -20,9 +31,17 @@ export type MessagePriority = 'normal' | 'urgent'
 export interface TeamMessage {
   id: string
   teamId: string
-  toKind: 'group' | 'session'
-  toId: string
-  fromSession: string
+  /**
+   * Routing vocabulary (D4): where the row goes. `human` is the human's
+   * composer — there is no agent session to claim or push a reply to it.
+   */
+  toKind: 'group' | 'session' | 'human'
+  /** Recipient id; null for `toKind: 'human'`. */
+  toId: string | null
+  /** Actor vocabulary (D4): who sent it. Alias of `TeamActor['kind']`. */
+  fromKind: 'agent' | 'human'
+  /** Sender session; null for a human sender. */
+  fromSession: string | null
   fromGroup: string | null
   originPath: string
   priority: MessagePriority
@@ -48,6 +67,12 @@ export interface TeamMessage {
   attachThread: boolean
   /** The team task this message works under (team-tasks); null = none. */
   taskId: string | null
+  /**
+   * Task revision the delivery carried (D6), recorded at push time beside the
+   * delivery-time task context. A later amendment does not rewrite it; null
+   * for taskless messages and rows pushed before this column existed.
+   */
+  taskRevision: number | null
   /** Repository HEAD in the claimant's directory at claim time (profile routing). */
   claimCommit: string | null
   /** While parked: when the scheduled resume is due. */

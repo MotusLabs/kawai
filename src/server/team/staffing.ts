@@ -103,7 +103,7 @@ export class WorktreeStaffing {
    * `spawnFor` re-checks everything inside its reservation transaction.
    */
   async spawnContext(message: TeamMessage, worktree: string | null): Promise<SpawnContext | 'worktree-missing' | null> {
-    if (message.toKind !== 'group' || !message.taskId || worktree === null) return null
+    if (message.toKind !== 'group' || message.toId === null || !message.taskId || worktree === null) return null
     if (!(await this.options.worktrees.exists(message.teamId, worktree))) {
       this.store.deadLetter(message.id, `worktree-missing: ${worktree}`)
       return 'worktree-missing'

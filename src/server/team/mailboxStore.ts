@@ -8,6 +8,7 @@
 // chain; a send past the limit is stored dead-lettered instead of queued.
 import type { Database } from 'bun:sqlite'
 import { mailboxSql, worktreeTaskMailSql } from './mailboxSql'
+import { createMessageTable } from './messageSchema'
 import { mapRow } from './messageRow'
 import { MessageEventLog } from './messageEvents'
 
@@ -18,15 +19,21 @@ import type {
   MessageEventKind,
   MessageState,
   MessagePriority,
+  TeamActor,
   TeamMessage,
 } from '../../shared/team'
 export type { MessageState, MessagePriority, TeamMessage, MessageEvent } from '../../shared/team'
 
 export interface EnqueueInput {
   teamId: string
-  toKind: 'group' | 'session'
-  toId: string
-  fromSession: string
+  /** Routing vocabulary (D4): `human` settles on send and never reaches the dispatcher. */
+  toKind: 'group' | 'session' | 'human'
+  /** Recipient id; null for `toKind: 'human'`. */
+  toId: string | null
+  /** Actor vocabulary (D4). Absent on agent sends; never merged with `toKind`. */
+  fromKind?: TeamActor['kind']
+  /** Sender session; null for a human sender. */
+  fromSession: string | null
   fromGroup: string | null
   originPath: string
   priority?: MessagePriority
@@ -48,59 +55,6 @@ export interface EnqueueInput {
 }
 
 export const DEFAULT_HOP_LIMIT = 20
-
-const CREATE_TABLE_SQL = `
-CREATE TABLE IF NOT EXISTS team_messages (
-  id TEXT PRIMARY KEY,
-  team_id TEXT NOT NULL,
-  to_kind TEXT NOT NULL,
-  to_id TEXT NOT NULL,
-  from_session TEXT NOT NULL,
-  from_group TEXT,
-  origin_path TEXT NOT NULL,
-  priority TEXT NOT NULL DEFAULT 'normal',
-  tags TEXT NOT NULL DEFAULT '[]',
-  thread_id TEXT NOT NULL,
-  in_reply_to TEXT,
-  hop INTEGER NOT NULL DEFAULT 1,
-  body TEXT NOT NULL,
-  state TEXT NOT NULL,
-  claimed_by TEXT,
-  claimed_at TEXT,
-  deliver_at TEXT,
-  created_at TEXT NOT NULL,
-  pushed_at TEXT,
-  delivered_at TEXT,
-  reason TEXT,
-  possible_duplicate INTEGER NOT NULL DEFAULT 0,
-  attach_thread INTEGER NOT NULL DEFAULT 0,
-  task_id TEXT,
-  claim_commit TEXT,
-  parked_until TEXT,
-  park_count INTEGER NOT NULL DEFAULT 0,
-  resume_message_id TEXT,
-  handoff TEXT,
-  excluded_profile TEXT
-);
-CREATE INDEX IF NOT EXISTS team_messages_queue ON team_messages (team_id, state);
-CREATE INDEX IF NOT EXISTS team_messages_thread ON team_messages (thread_id);
-CREATE INDEX IF NOT EXISTS team_messages_recipient ON team_messages (to_id, state);
-CREATE INDEX IF NOT EXISTS team_messages_claimant ON team_messages (claimed_by, state);
-`
-
-/** Columns added after the table first shipped, for databases that predate them. */
-function migrateTable(db: Database) {
-  const columns = db.prepare('PRAGMA table_info(team_messages)').all() as Array<{ name: string }>
-  if (!columns.some(column => column.name === 'task_id')) db.exec('ALTER TABLE team_messages ADD COLUMN task_id TEXT')
-  db.exec('CREATE INDEX IF NOT EXISTS team_messages_task ON team_messages (task_id)')
-  // Profile routing: claim commit, parking, and handoff.
-  for (const [name, type] of [
-    ['claim_commit', 'TEXT'], ['parked_until', 'TEXT'], ['park_count', 'INTEGER NOT NULL DEFAULT 0'],
-    ['resume_message_id', 'TEXT'], ['handoff', 'TEXT'], ['excluded_profile', 'TEXT'],
-  ] as const) {
-    if (!columns.some(column => column.name === name)) db.exec(`ALTER TABLE team_messages ADD COLUMN ${name} ${type}`)
-  }
-}
 
 const nowIso = () => new Date().toISOString()
 
@@ -125,8 +79,7 @@ export class MailboxStore {
   /** Append-only history of every transition (team-message-threads D2). */
   readonly events: MessageEventLog
   constructor(private readonly db: Database, private readonly options: { recipientExists?: (id: string) => boolean } = {}) {
-    db.exec(CREATE_TABLE_SQL)
-    migrateTable(db)
+    createMessageTable(db)
     this.events = new MessageEventLog(db)
     this.statements = Object.fromEntries(Object.entries(mailboxSql).map(([key, sql]) => [key, db.prepare(sql)])) as typeof this.statements
   }
@@ -153,6 +106,8 @@ export class MailboxStore {
       $toKind: input.toKind,
       $toId: input.toId,
       $fromSession: input.fromSession,
+      // A sender with no session is the human; anything else is an agent.
+      $fromKind: input.fromKind ?? (input.fromSession === null ? 'human' : 'agent'),
       $fromGroup: input.fromGroup,
       $originPath: input.originPath,
       $priority: input.priority ?? 'normal',
@@ -259,9 +214,26 @@ export class MailboxStore {
     return this.transition(id, ['queued'], { state: 'awaiting-request' }, 'held-for-request')
   }
 
-  /** Written immediately before the turn push (D10 step 2). */
-  markPushed(id: string, now = nowIso()): boolean {
-    return this.logged(id, () => this.changed(id, this.statements.markPushed.run({ $id: id, $now: now }).changes === 1), 'pushed', 'system', now)
+  /**
+   * Written immediately before the turn push (D10 step 2). `taskRevision` is
+   * the revision the delivered task context carried (team-message-threads D6);
+   * it is snapshotted here so a later amendment never rewrites it.
+   */
+  markPushed(id: string, now = nowIso(), taskRevision: number | null = null): boolean {
+    return this.logged(id, () => this.changed(id, this.statements.markPushed.run({
+      $id: id, $now: now, $taskRevision: taskRevision,
+    }).changes === 1), 'pushed', 'system', now)
+  }
+
+  /**
+   * Human-directed mail has no agent to claim or push it: recorded delivered
+   * on send (team-message-threads D5), still carrying the task revision the
+   * delivery would have.
+   */
+  deliverOnSend(id: string, taskRevision: number | null = null, now = nowIso()): boolean {
+    return this.transition(id, ['queued'], {
+      state: 'delivered', delivered_at: now, task_revision: taskRevision,
+    }, 'delivered')
   }
 
   /** The acknowledgement boundary (D10 step 3): the transcript carried the id. */

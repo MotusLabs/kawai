@@ -106,16 +106,21 @@ export class TeamMailbox {
     if (!original || original.teamId !== team.teamId || original.claimedBy !== sessionId || original.deliveredAt === null) {
       throw new Error('Can only reply to a message received by this session')
     }
-    const recipient = this.options.getSession(original.fromSession)
+    // A human sender has no session to claim or push the reply (D5): it is
+    // addressed to the human and settled on send. Never a "killed sender".
+    const toHuman = original.fromKind === 'human' || original.fromSession === null
+    const recipient = toHuman ? null
+      : original.fromSession ? this.options.getSession(original.fromSession) : null
     if (recipient && (await resolveTeam(recipient.projectPath)).teamId !== team.teamId) {
       throw new Error('Recipient belongs to another team')
     }
     if (recipient) this.refuseCooling(recipient, input.urgent)
     if (recipient?.archivedAt) await this.options.restoreSession?.(recipient.sessionId)
-    const fallback = !recipient && original.fromGroup !== null
+    const fallback = !toHuman && !recipient && original.fromGroup !== null
     const message = this.store.enqueue({
-      teamId: team.teamId, toKind: fallback ? 'group' : 'session',
-      toId: fallback ? original.fromGroup! : original.fromSession,
+      teamId: team.teamId,
+      toKind: toHuman ? 'human' : fallback ? 'group' : 'session',
+      toId: toHuman ? null : fallback ? original.fromGroup : original.fromSession,
       fromSession: sender.sessionId, fromGroup: sender.groupId ?? null,
       originPath: sender.projectPath, body: input.body,
       priority: input.urgent ? 'urgent' : 'normal', tags: input.tags,
@@ -123,7 +128,10 @@ export class TeamMailbox {
       taskId: explicitTask ?? original.taskId,
       hopLimit: sender.groupId ? catalog.groups.get(sender.groupId)?.hopLimit : undefined,
     })
-    if (!recipient && (!fallback || !catalog.groups.has(original.fromGroup!))) {
+    if (toHuman) {
+      const task = this.options.tasks?.get(message.taskId ?? '')
+      this.store.deliverOnSend(message.id, task?.revision ?? null)
+    } else if (!recipient && (!fallback || !catalog.groups.has(original.fromGroup!))) {
       this.store.deadLetter(message.id, 'killed-sender-without-group')
     }
     return this.publish(this.store.get(message.id)!)

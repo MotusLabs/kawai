@@ -87,7 +87,7 @@ const makeStaffing = (onError?: (error: unknown) => void) => new WorktreeStaffin
 })
 const targetWorktree = (message: { taskId: string | null }) => (message.taskId ? tasks.get(message.taskId)?.worktree ?? null : null)
 const makeRouter = (staff: WorktreeStaffing) => new ProfileRouter({
-  groupOf: async message => (await loadTeamGroups(repo, home)).catalog.groups.get(message.toId),
+  groupOf: async message => (await loadTeamGroups(repo, home)).catalog.groups.get(message.toId ?? ''),
   members: (_teamId, groupId) => [...records.values()]
     .filter(row => row.archivedAt == null && row.groupId === groupId)
     .map(row => ({ sessionId: row.sessionId, profileId: row.claudeProfileId ?? 'default', cwd: row.projectPath })),

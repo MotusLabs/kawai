@@ -96,7 +96,8 @@ export interface ChatCommandState {
 /** Mail received from another chat agent; shared without SDK dependencies. */
 export interface ChatPeerMessage {
   messageId: string
-  senderSession: string
+  /** Sender session; null for a human sender (team-message-threads D4). */
+  senderSession: string | null
   /**
    * Actor kind of the sender (team-message-threads D4): the human composing
    * mail, or an agent session. Absent on recorded envelopes = agent.
@@ -109,7 +110,7 @@ export interface ChatPeerMessage {
   threadId: string
   body: string
   possibleDuplicate: boolean
-  thread?: Array<{ messageId: string; senderSession: string; body: string; senderKind?: 'agent' | 'human' }>
+  thread?: Array<{ messageId: string; senderSession: string | null; body: string; senderKind?: 'agent' | 'human' }>
   /** The referenced team task as it was at delivery (team-tasks D3); absent = none. */
   task?: ChatPeerTaskContext
   /** Work handed off after a provider limit (profile routing); absent = none. */
