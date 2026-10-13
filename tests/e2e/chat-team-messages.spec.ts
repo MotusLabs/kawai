@@ -6,7 +6,7 @@
 // possible-duplicate explanation, retained retry/discard history, and survival
 // across a server restart. Written for CI; not run locally against a live
 // kawai (its teardown would kill it).
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type Locator, type Page } from '@playwright/test'
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
 import { existsSync, mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -88,6 +88,30 @@ async function openMessages(page: Page) {
 
 /** Row with this id, in the Messages list or a thread. */
 const row = (page: Page, id: string) => page.locator(`[data-message-id="${id}"]`)
+
+/**
+ * The retried message's history is two real holds, not one hold recorded twice.
+ *
+ * Retry requeues the row to the same recipient; the live dispatcher re-claims
+ * and re-pushes it, and the receipt is still unconfirmable (the fixture
+ * transcript carries no envelope row with the id), so it is held again. Each
+ * hold follows a claim — both rows therefore say "was claimed · claimed by …"
+ * — and the reasons name what happened: the seed's torn transcript first, then
+ * the unconfirmed receipt of the re-delivery (or, if the recipient went
+ * unavailable in the push, that hold instead).
+ */
+async function expectHeldHistory(thread: Locator) {
+  const held = thread.locator('[data-kind="held-uncertain"]')
+  await expect(held).toHaveCount(2)
+  await expect(held.nth(0)).toContainText('transcript-unavailable-or-torn')
+  await expect(held.nth(1)).toContainText(/receipt-unconfirmed-after-delivery|recipient-unavailable-after-push/)
+  await expect(thread.locator('[data-kind="retried"]')).toHaveCount(1)
+  expect(await thread.locator('[data-kind]').evaluateAll(
+    nodes => nodes.map(node => node.getAttribute('data-kind')))).toEqual([
+    'sent', 'claimed', 'pushed', 'held-uncertain',
+    'retried', 'claimed', 'pushed', 'held-uncertain',
+  ])
+}
 
 test('E06: named senders, chronological threads, task filtering, and a killed sender', async ({ page }, info) => {
   const root = teamRoot()
@@ -235,8 +259,7 @@ test('E11 slice: uncertain retry keeps its recipient, history, and survives a re
     await retried.getByRole('button', { name: 'Open thread' }).click()
     const thread = page.getByTestId('thread-detail')
     await thread.getByTestId('message-events').first().locator('summary').click()
-    await expect(thread.locator('[data-kind="held-uncertain"]')).toBeVisible()
-    await expect(thread.locator('[data-kind="retried"]')).toBeVisible()
+    await expectHeldHistory(thread)
     await page.screenshot({ path: info.outputPath('retry-history.png') })
 
     // A discard keeps its history too — the thread is the record, not the row.
@@ -264,8 +287,7 @@ test('E11 slice: uncertain retry keeps its recipient, history, and survives a re
     await row(page, ids.held!).getByRole('button', { name: 'Open thread' }).click()
     const after = page.getByTestId('thread-detail')
     await after.getByTestId('message-events').first().locator('summary').click()
-    await expect(after.locator('[data-kind="held-uncertain"]')).toBeVisible()
-    await expect(after.locator('[data-kind="retried"]')).toBeVisible()
+    await expectHeldHistory(after)
     await page.screenshot({ path: info.outputPath('after-restart.png') })
   } catch (error) {
     throw new Error(`${error instanceof Error ? error.message : String(error)}\n--- server ---\n${diagnostics}`)
