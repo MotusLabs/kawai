@@ -20,7 +20,7 @@ import { emptyTranscript, useChatStore } from '../stores/chatStore'
 import { useSessionStore } from '../stores/sessionStore'
 import { closedMessageView, useTeamMessageStore } from '../stores/teamMessageStore'
 import { useTeamMailboxStore, type MailboxView } from '../stores/teamMailboxStore'
-import { useTeamTaskStore, type TaskView } from '../stores/teamTaskStore'
+import { emptyDraft, useTeamTaskStore, type TaskView } from '../stores/teamTaskStore'
 
 afterEach(() => {
   act(() => {
@@ -126,10 +126,11 @@ test('task detail names its message participants and links into each thread', ()
   }
   const view: TaskView = {
     open: true, loading: false, tasks: [summary], selectedTaskId: 't1', detail, directory, pending: {}, error: null,
+    draft: emptyDraft(), flow: null, preview: null, previewPending: {}, targets: null, targetsLoading: false,
   }
   let renderer!: TestRenderer.ReactTestRenderer
   act(() => {
-    renderer = TestRenderer.create(<TeamTaskDetail sessionId="chat-1" view={view} sendMessage={() => {}}
+    renderer = TestRenderer.create(<TeamTaskDetail sessionId="chat-1" projectPath="/repo" view={view} sendMessage={() => {}}
       connected sessions={[{ ...chatSession, id: 'dev', name: 'Dev one', groupId: 'devs' } as Session]}
       onOpenThread={threadId => opened.push(threadId)} />)
   })

@@ -73,10 +73,12 @@ const CLOSED_STRATEGY = closedStrategyView()
 /** `/clear`, `/reset`, `/new` — optionally followed by the new chat's name. */
 const CLEAR_COMMAND = /^\/(clear|reset|new)(?:\s+(.*))?$/
 
-export default function ChatView({ session, sendMessage, subscribe, connectionStatus, connectionEpoch, error, onClose, onKill }: {
+export default function ChatView({ session, sendMessage, subscribe, connectionStatus, connectionEpoch, error, onClose, onKill, onCreateWorktree }: {
   session: Session; sendMessage: SendClientMessage; connectionStatus: ConnectionStatus; connectionEpoch: number
   error: string | null; onClose: () => void; onKill: () => void
   subscribe?: (listener: (message: ServerMessage) => void) => () => void
+  /** Opens the worktree-creation flow for the session's repository (task pickers). */
+  onCreateWorktree?: () => void
 }) {
   const catalog = useClaudeProfiles(true, session.projectPath)
   const profileId = session.claudeProfileId ?? 'default'
@@ -474,7 +476,8 @@ export default function ChatView({ session, sendMessage, subscribe, connectionSt
       </div>
       {mailbox.open && <TeamMailboxPanel sessionId={session.id} view={mailbox} sendMessage={sendMessage} connected={connected} onClose={toggleMailbox}
         groups={teamGroups.groups.map(group => group.id)} />}
-      {tasks.open && <TeamTasksPanel sessionId={session.id} view={tasks} sendMessage={sendMessage} connected={connected} onClose={toggleTasks} onOpenThread={openThread} />}
+      {tasks.open && <TeamTasksPanel sessionId={session.id} projectPath={session.projectPath} view={tasks} sendMessage={sendMessage}
+        connected={connected} onClose={toggleTasks} onOpenThread={openThread} onCreateWorktree={onCreateWorktree} />}
       {messages.open && <TeamMessagesPanel sessionId={session.id} projectPath={session.projectPath} sendMessage={sendMessage}
         connected={connected} connectionEpoch={connectionEpoch} onClose={toggleMessages} />}
       {strategy.open && <ProductStrategyPanel sessionId={session.id} view={strategy} sendMessage={sendMessage} connected={connected} onClose={toggleStrategy} />}
