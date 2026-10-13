@@ -13,6 +13,7 @@ import type { ChatContextUsage } from '@shared/chat'
 import type { Session } from '@shared/types'
 import type { ConnectionStatus } from '../../stores/sessionStore'
 import { parkedLabel } from '../../utils/parkedLabel'
+import { chatStatusIndicator } from '../../utils/sessionStatus'
 import ChatContextMeter from './ChatContextMeter'
 import type { SideSlot } from './sideSlot'
 
@@ -32,13 +33,18 @@ export interface ChatHeaderProps {
   onClose: () => void
 }
 
+/** The project's last path segment; the full path rides in the title. */
+export function projectName(projectPath: string): string {
+  return projectPath.split('/').filter(Boolean).at(-1) ?? projectPath
+}
+
 export default function ChatHeader({
   session, profileLabel, model, contextUsage, connectionStatus, openSlot,
   onToggleSlot, onOpenTask, onRename, onToggleApproval, onArchive, onKill, onClose,
 }: ChatHeaderProps) {
-  const connected = connectionStatus === 'connected'
   const archived = session.archivedAt != null
   const autoApprove = session.approvalPolicy === 'auto'
+  const status = chatStatusIndicator(session.status, connectionStatus, archived)
   const [editingName, setEditingName] = useState(false)
   const [nameDraft, setNameDraft] = useState(session.name)
   useEffect(() => { setEditingName(false); setNameDraft(session.name) }, [session.id])
@@ -66,32 +72,36 @@ export default function ChatHeader({
     <header className="flex items-center gap-3 border-b border-border p-3">
       <button className="btn text-chat-meta md:hidden" onClick={onClose}>Sessions</button>
       <div className="min-w-0 flex-1">
-        {editingName ? (
-          <input data-testid="chat-name-input" autoFocus aria-label="Session name"
-            className="w-full rounded border border-border bg-surface px-1.5 py-0.5 text-chat-body font-medium text-primary outline-none focus:border-accent"
-            value={nameDraft} onChange={event => setNameDraft(event.target.value)}
-            onBlur={submitName} onKeyDown={handleNameKeyDown} />
-        ) : (
-          <h2 className="cursor-text truncate text-chat-body font-medium" title="Rename"
-            data-testid="chat-name" onClick={() => setEditingName(true)}>{session.name} · Chat</h2>
-        )}
-        <p className="text-chat-meta text-secondary" data-testid="chat-profile">Profile: {profileLabel}</p>
-        {session.taskId && <p className="truncate text-chat-meta text-secondary">
-          {session.spawned ? 'Spawned for task ' : 'Task '}
-          <button className="hover:underline" data-testid="chat-task" onClick={() => onOpenTask(session.taskId!)}>{session.taskTitle ?? session.taskId}</button>
-        </p>}
-        {session.parked && <p className="truncate text-chat-meta text-amber-600" data-testid="chat-paused">{parkedLabel(session.parked)}</p>}
-        <p className="truncate text-chat-meta text-secondary">{session.projectPath}</p></div>
-      <span className="text-chat-meta text-secondary" data-testid="chat-status">{connected ? (archived ? 'archived' : session.status) : connectionStatus}</span>
-      {model && (
-        <span
-          className="shrink-0 whitespace-nowrap text-chat-meta text-secondary"
-          data-testid="chat-model"
-          title={`Model reported by the agent: ${model}`}
-        >
-          {model}
-        </span>
-      )}
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="flex shrink-0 items-center gap-1.5 text-chat-meta text-secondary">
+            <span aria-hidden="true" className={`h-2 w-2 shrink-0 rounded-full ${status.dot}`} data-testid="chat-status-dot" />
+            <span data-testid="chat-status">{status.word}</span>
+          </span>
+          {editingName ? (
+            <input data-testid="chat-name-input" autoFocus aria-label="Session name"
+              className="min-w-0 flex-1 rounded border border-border bg-surface px-1.5 py-0.5 text-chat-body font-medium text-primary outline-none focus:border-accent"
+              value={nameDraft} onChange={event => setNameDraft(event.target.value)}
+              onBlur={submitName} onKeyDown={handleNameKeyDown} />
+          ) : (
+            <h2 className="min-w-[4ch] cursor-text truncate text-chat-body font-medium" title={`${session.name} — click to rename`}
+              data-testid="chat-name" onClick={() => setEditingName(true)}>{session.name}</h2>
+          )}
+        </div>
+        <p className="flex min-w-0 items-center gap-1.5 whitespace-nowrap text-chat-meta text-secondary" data-testid="chat-identity">
+          <span className="shrink-0" data-testid="chat-profile" title={`Profile: ${profileLabel}`}>{profileLabel}</span>
+          {model && <>
+            <span aria-hidden="true">·</span>
+            <span className="min-w-0 truncate" data-testid="chat-model" title={`Model reported by the agent: ${model}`}>{model}</span>
+          </>}
+          <span aria-hidden="true">·</span>
+          <span className="min-w-0 truncate" data-testid="chat-project" title={session.projectPath}>{projectName(session.projectPath)}</span>
+          {session.taskId && <span className="min-w-0 truncate rounded border border-border px-1.5" data-testid="chat-task-chip">
+            {session.spawned ? 'Spawned for task ' : 'Task '}
+            <button className="hover:underline" data-testid="chat-task" onClick={() => onOpenTask(session.taskId!)}>{session.taskTitle ?? session.taskId}</button>
+          </span>}
+          {session.parked && <span className="min-w-0 truncate rounded border border-border px-1.5 text-amber-600" data-testid="chat-paused">{parkedLabel(session.parked)}</span>}
+        </p>
+      </div>
       <ChatContextMeter usage={contextUsage} />
       {slotButton('debug', 'Debug')}
       {slotButton('mailbox', 'Mailbox')}

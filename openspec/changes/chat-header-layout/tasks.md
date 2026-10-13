@@ -11,8 +11,8 @@
 
 ## 3. Identity and status block
 
-- [ ] 3.1 Extract the `statusDot` map from `TerminalControls.tsx` into `src/client/utils/sessionStatus.ts` (with the connection and archived mappings, design D7) and import it in both places. Verify with a unit test for each status, connection state, and archived.
-- [ ] 3.2 Render the two-line identity block: status dot and word plus name (no ` · Chat`) on line one; profile · model · project name, with full values in titles, and the task and paused chips on line two; existing test ids kept. Verify with component tests for the spec's "Live session identity", "Status indicator follows the session", "Task and paused chips", and "Rename from the name" scenarios, then update the e2e assertions that expect `· Chat`, `Profile: …`, or a separate model column (`grep -rn "· Chat\|Profile:" tests/e2e`).
+- [x] 3.1 Extract the `statusDot` map from `TerminalControls.tsx` into `src/client/utils/sessionStatus.ts` (with the connection and archived mappings, design D7) and import it in both places. Verify with a unit test for each status, connection state, and archived.
+- [x] 3.2 Render the two-line identity block: status dot and word plus name (no ` · Chat`) on line one; profile · model · project name, with full values in titles, and the task and paused chips on line two; existing test ids kept. Verify with component tests for the spec's "Live session identity", "Status indicator follows the session", "Task and paused chips", and "Rename from the name" scenarios, then update the e2e assertions that expect `· Chat`, `Profile: …`, or a separate model column (`grep -rn "· Chat\|Profile:" tests/e2e`).
 
 ## 4. Panel switcher and approval switch
 

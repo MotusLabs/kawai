@@ -106,7 +106,7 @@ test('chat header label resolves from the session project path catalog', async (
   })
   renderers.push(renderer)
   expect(urls.some(url => url.includes(`projectPath=${encodeURIComponent('/work/proj')}`))).toBe(true)
-  expect(renderer.root.findByProps({ 'data-testid': 'chat-profile' }).children.join('')).toBe('Profile: GLM')
+  expect(renderer.root.findByProps({ 'data-testid': 'chat-profile' }).children.join('')).toBe('GLM')
 })
 
 test('loading and catalog error block submission and Retry recovers without losing selection', async () => {
@@ -137,15 +137,15 @@ test('chat header displays labels, legacy Default, unknown ID fallback and recon
   await act(async () => { renderer = TestRenderer.create(<ChatView {...props} />); await settle() })
   renderers.push(renderer)
   const label = () => renderer.root.findByProps({ 'data-testid': 'chat-profile' }).children.join('')
-  expect(label()).toBe('Profile: GLM')
+  expect(label()).toBe('GLM')
   act(() => renderer.update(<ChatView {...props} connectionEpoch={2} />))
-  expect(label()).toBe('Profile: GLM')
+  expect(label()).toBe('GLM')
   expect(sent.filter((message: any) => message.type === 'chat-attach')).toHaveLength(2)
   act(() => renderer.update(<ChatView {...props} session={{ ...session, claudeProfileId: undefined }} />))
-  expect(label()).toBe('Profile: Default')
+  expect(label()).toBe('Default')
   globalThis.fetch = (async () => { throw new Error('offline') }) as unknown as typeof fetch
   act(() => renderer.update(<ChatView {...props} session={{ ...session, claudeProfileId: 'removed' }} />))
-  expect(label()).toBe('Profile: removed')
+  expect(label()).toBe('removed')
 })
 
 

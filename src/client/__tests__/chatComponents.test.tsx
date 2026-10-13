@@ -1436,7 +1436,7 @@ describe('chat header rename', () => {
   test('shows the name; clicking it opens an input that submits a rename', () => {
     const { sent, renderer } = renderNameView(chatSession)
     const title = renderer.root.findByProps({ 'data-testid': 'chat-name' })
-    expect(textOf(title)).toBe('Chat · Chat')
+    expect(textOf(title)).toBe('Chat')
     act(() => { title.props.onClick() })
     const input = renderer.root.findByProps({ 'data-testid': 'chat-name-input' })
     act(() => { input.props.onChange({ target: { value: 'Claude Code Chat subscription usage metrics spec' } }) })
@@ -1476,7 +1476,7 @@ describe('chat header rename', () => {
       sendMessage={message => { sent.push(message) }}
       connectionStatus="connected" connectionEpoch={0} error={null}
       onClose={() => {}} onKill={() => {}} />) })
-    expect(textOf(renderer.root.findByProps({ 'data-testid': 'chat-name' }))).toBe('renamed elsewhere · Chat')
+    expect(textOf(renderer.root.findByProps({ 'data-testid': 'chat-name' }))).toBe('renamed elsewhere')
     renderer.unmount()
   })
 })
