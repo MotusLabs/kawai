@@ -3906,4 +3906,71 @@ describe('ChatSessionManager background-task roster (background tasks D2)', () =
     await store().write('chat-fb', [{ taskId: 'b-bad', kind: 'shell', status: 'completed', startedAtMs: 1, outputFile: outside }])
     await expect(manager.readTaskOutput('chat-fb', 'b-bad')).resolves.toEqual({ state: 'unavailable' })
   })
+
+  test('stopBackgroundTask stops one live task; the settle rides the roster, the turn is untouched', async () => {
+    const handles: FakeHandle[] = []
+    const events: Array<{ sessionId: string; event: ChatEvent }> = []
+    const manager = await managedManager({
+      isDirectory: anyDirectory, db, registry: new SessionRegistry(),
+      onEvent: (sessionId, event) => events.push({ sessionId, event }),
+      queryFactory: fakeQueryFactory(handles),
+    })
+    const created = manager.createSession({ projectPath: '/tmp/proj' })
+    if (!created.ok) throw new Error('create failed')
+    const id = created.session.id
+    // A turn is in flight (no result yet) while two tasks run.
+    await manager.send(id, 'run two')
+    const handle = handles[0]!
+    handle.push({ type: 'system', subtype: 'task_started', task_id: 'b-stop', task_type: 'local_bash', is_backgrounded: true, uuid: 'u1', session_id: 's' } as unknown as SDKMessage)
+    handle.push({ type: 'system', subtype: 'task_started', task_id: 'b-keep', task_type: 'local_bash', is_backgrounded: true, uuid: 'u2', session_id: 's' } as unknown as SDKMessage)
+    await flush()
+    const stopped: string[] = []
+    ;(handle.query as unknown as { stopTask?: (taskId: string) => Promise<void> }).stopTask = async (taskId: string) => {
+      stopped.push(taskId)
+    }
+    await manager.stopBackgroundTask(id, 'b-stop')
+    expect(stopped).toEqual(['b-stop'])
+    // The CLI's settle: one notification, only for the stopped task.
+    handle.push({ type: 'system', subtype: 'task_notification', task_id: 'b-stop', status: 'stopped', summary: 'Sleep', uuid: 'u3', session_id: 's' } as unknown as SDKMessage)
+    await flush()
+    expect(manager.getSnapshot(id)!.backgroundTasks).toMatchObject([
+      { taskId: 'b-stop', status: 'stopped', live: false },
+      { taskId: 'b-keep', status: 'running', live: true },
+    ])
+    // No transcript error, and the in-flight turn never ended.
+    expect(events.some(({ event }) => event.type === 'error')).toBe(false)
+    expect(events.some(({ event }) => event.type === 'turn_completed')).toBe(false)
+  })
+
+  test('stopBackgroundTask refuses archived sessions and ended or unknown tasks, without a transcript error', async () => {
+    const handles: FakeHandle[] = []
+    const events: Array<{ sessionId: string; event: ChatEvent }> = []
+    const manager = await managedManager({
+      isDirectory: anyDirectory, db, registry: new SessionRegistry(),
+      onEvent: (sessionId, event) => events.push({ sessionId, event }),
+      queryFactory: fakeQueryFactory(handles),
+    })
+    const created = manager.createSession({ projectPath: '/tmp/proj' })
+    if (!created.ok) throw new Error('create failed')
+    const id = created.session.id
+    await manager.send(id, 'run one')
+    const handle = handles[0]!
+    handle.push({ type: 'system', subtype: 'task_started', task_id: 'b-done', task_type: 'local_bash', is_backgrounded: true, uuid: 'u1', session_id: 's' } as unknown as SDKMessage)
+    handle.push({ type: 'system', subtype: 'task_notification', task_id: 'b-done', status: 'completed', summary: 'done', uuid: 'u2', session_id: 's' } as unknown as SDKMessage)
+    await flush()
+    const stopped: string[] = []
+    ;(handle.query as unknown as { stopTask?: (taskId: string) => Promise<void> }).stopTask = async (taskId: string) => {
+      stopped.push(taskId)
+    }
+    // Ended task, and one the roster never knew.
+    await manager.stopBackgroundTask(id, 'b-done')
+    await manager.stopBackgroundTask(id, 'b-unknown')
+    expect(stopped).toEqual([])
+    // Archive ends the process: even a row the roster still holds as live
+    // (none here after settle) could not be stopped.
+    await manager.archive(id)
+    await manager.stopBackgroundTask(id, 'b-done')
+    expect(stopped).toEqual([])
+    expect(events.some(({ event }) => event.type === 'error')).toBe(false)
+  })
 })
