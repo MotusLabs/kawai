@@ -7,7 +7,7 @@
 
 ## 2. Extract the header
 
-- [ ] 2.1 Move the header JSX and rename state into `src/client/components/chat/ChatHeader.tsx`, with props per design D1, leaving subscription effects in `ChatView`. Behavior is unchanged in this step. Update both files' header comments. Verify: `ChatView.tsx` is under 450 lines, and `bun run lint && bun run typecheck && bun run test` passes unchanged.
+- [x] 2.1 Move the header JSX and rename state into `src/client/components/chat/ChatHeader.tsx`, with props per design D1, leaving subscription effects in `ChatView`. Behavior is unchanged in this step. Update both files' header comments. Verify: `ChatView.tsx` is under 450 lines, and `bun run lint && bun run typecheck && bun run test` passes unchanged.
 
 ## 3. Identity and status block
 
