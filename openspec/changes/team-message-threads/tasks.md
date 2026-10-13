@@ -38,7 +38,7 @@
 
 ## 6. Integration
 
-- [ ] 6.1 Add a headless fixture integration in one temporary repository with a linked worktree: task-linked mail and replies through different sessions build a thread; a kill leaves the sender named; an uncertain hold and retry keeps both events; a human send and an agent reply back reach their targets; verify the test passes with `cleanGitEnv()` for git commands.
+- [x] 6.1 Add a headless fixture integration in one temporary repository with a linked worktree: task-linked mail and replies through different sessions build a thread; a kill leaves the sender named; an uncertain hold and retry keeps both events; a human send and an agent reply back reach their targets; verify the test passes with `cleanGitEnv()` for git commands.
 - [ ] 6.2 Walk E06 (named senders, chronological thread order, task filtering, delivered history, sender/participant navigation, reload with one sender killed) and the E11 slice (uncertain retry to the same recipient with a possible-duplicate explanation, no reassignment, retained retry/discard history, restart survival) against the fixture using repository Playwright; verify DOM state and screenshots.
 - [ ] 6.3 Run `bun run lint && bun run typecheck && bun run test` and `openspec validate team-message-threads --strict`; verify the full suite is green.
 
