@@ -33,13 +33,16 @@ export interface MessageView {
   thread: ThreadEntry[] | null
   /** Last known identity of killed participants named by these rows. */
   directory: SessionDirectoryEntry[]
+  /** In-flight human sends by request id, for the composer's pending state. */
+  pending: Record<string, 'send'>
   /** The last refusal's message, until the next action or selection. */
   error: string | null
 }
 
 export const closedMessageView = (): MessageView => ({
   open: false, loading: false, loadingMore: false, teamId: null, filters: {},
-  messages: [], nextCursor: null, selectedThreadId: null, thread: null, directory: [], error: null,
+  messages: [], nextCursor: null, selectedThreadId: null, thread: null, directory: [],
+  pending: {}, error: null,
 })
 
 interface MessageState {
@@ -50,9 +53,12 @@ interface MessageState {
   /** The component is asking for the next page; its snapshot appends. */
   beginMore: (sessionId: string) => void
   select: (sessionId: string, threadId: string | null) => void
+  /** A human send is on the wire; the result settles it. */
+  beginSend: (sessionId: string, requestId: string) => void
   applySnapshot: (message: Extract<ServerMessage, { type: 'team-messages-snapshot' }>) => void
   applyPush: (message: Extract<ServerMessage, { type: 'team-messages' }>) => void
   applyThread: (message: Extract<ServerMessage, { type: 'team-thread' }>) => void
+  applyResult: (message: Extract<ServerMessage, { type: 'team-message-send-result' }>) => void
 }
 
 const update = (state: MessageState, sessionId: string, patch: Partial<MessageView>) => {
@@ -105,6 +111,13 @@ export const useTeamMessageStore = create<MessageState>(set => ({
     filters, messages: [], nextCursor: null, loading: true, loadingMore: false, error: null,
   })),
   beginMore: sessionId => set(state => update(state, sessionId, { loadingMore: true })),
+  beginSend: (sessionId, requestId) => set(state => {
+    const view = state.views[sessionId]
+    if (!view?.open) return state
+    return update(state, sessionId, {
+      pending: { ...view.pending, [requestId]: 'send' as const }, error: null,
+    })
+  }),
   select: (sessionId, threadId) => set(state => update(state, sessionId, {
     selectedThreadId: threadId, error: null,
     thread: state.views[sessionId]?.selectedThreadId === threadId ? state.views[sessionId]!.thread : null,
@@ -133,5 +146,12 @@ export const useTeamMessageStore = create<MessageState>(set => ({
     const view = state.views[message.sessionId]
     if (!view?.open || view.selectedThreadId !== message.threadId) return state
     return update(state, message.sessionId, { thread: message.entries, directory: message.directory })
+  }),
+  applyResult: message => set(state => {
+    const view = state.views[message.sessionId]
+    if (!view?.open) return state
+    const pending = { ...view.pending }
+    delete pending[message.requestId]
+    return update(state, message.sessionId, { pending, error: message.error ?? null })
   }),
 }))

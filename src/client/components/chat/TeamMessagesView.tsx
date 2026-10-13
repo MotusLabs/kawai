@@ -1,14 +1,16 @@
-// The Messages view (team-message-threads 5.2): one filterable, paged list of
-// the team's delivered and pending mail, and a thread detail that shows each
-// message's reply relation, current recipient, the task revision it carried
-// at delivery, and its append-only history. Host-agnostic — it drives the wire
-// protocol itself and reads the store the host feeds — so the chat side panel
-// and the task embed can both mount it. The composer is a separate concern.
-import { useEffect, useRef } from 'react'
+// The Messages view (team-message-threads 5.2–5.3): one filterable, paged
+// list of the team's delivered and pending mail, and a thread detail that
+// shows each message's reply relation, current recipient, the task revision
+// it carried at delivery, and its append-only history — with the human's
+// composer under both. Host-agnostic — it drives the wire protocol itself and
+// reads the store the host feeds — so the chat side panel and the task embed
+// can both mount it.
+import { useEffect, useRef, useState } from 'react'
 import type { MessageQueryFilters, MessageState, SessionDirectoryEntry, TeamMessage, ThreadEntry } from '@shared/team'
 import type { SendClientMessage } from '@shared/types'
 import type { LiveParticipant } from '@shared/participants'
 import ParticipantName from './ParticipantName'
+import TeamMessageComposer, { type ComposerMode, type RecipientOption, type TaskOption } from './TeamMessageComposer'
 import { useTeamMessageStore, type MessageView } from '../../stores/teamMessageStore'
 
 /** Delivery states a list can be narrowed to; absent keeps everything. */
@@ -17,7 +19,7 @@ const STATES: MessageState[] = [
   'dead', 'uncertain', 'cancelled', 'discarded', 'parked', 'forwarded',
 ]
 
-export default function TeamMessagesView({ sessionId, view, sendMessage, connected, connectionEpoch = 0, sessions = [], directory = [], onOpenSession, onClose }: {
+export default function TeamMessagesView({ sessionId, view, sendMessage, connected, connectionEpoch = 0, sessions = [], directory = [], groups = [], tasks = [], onOpenSession, onClose }: {
   sessionId: string
   view: MessageView
   sendMessage: SendClientMessage
@@ -27,10 +29,16 @@ export default function TeamMessagesView({ sessionId, view, sendMessage, connect
   sessions?: ReadonlyArray<LiveParticipant>
   /** Filled by the snapshot; pass it only when rendering rows without one. */
   directory?: ReadonlyArray<SessionDirectoryEntry>
+  /** The team's groups, for the composer's recipient picker. */
+  groups?: ReadonlyArray<RecipientOption>
+  /** Tasks the new-message composer may attach to. */
+  tasks?: ReadonlyArray<TaskOption>
   onOpenSession?: (sessionId: string) => void
   /** Omitted by hosts (a task embed) that own no close control. */
   onClose?: () => void
 }) {
+  /** Which thread row the composer replies to; absent = the newest. */
+  const [replyTo, setReplyTo] = useState<string | null>(null)
   // A host's callback may be a fresh closure every render; the subscription
   // must depend only on what it is actually over, never on that identity.
   const send = useRef(sendMessage)
@@ -61,6 +69,13 @@ export default function TeamMessagesView({ sessionId, view, sendMessage, connect
     send.current({ type: 'team-messages-open', sessionId, filters: view.filters, cursor: view.nextCursor })
   }
   const names = view.directory.length > 0 ? view.directory : directory
+  const entries = view.thread ?? []
+  const target = (replyTo ? entries.find(entry => entry.message.id === replyTo)?.message : undefined) ?? entries.at(-1)?.message
+  const reply: ComposerMode | undefined = target && {
+    kind: 'reply', inReplyTo: target.id, fromSession: target.fromSession, fromKind: target.fromKind,
+    taskId: target.taskId, taskTitle: tasks.find(task => task.id === target.taskId)?.title ?? null,
+    body: target.body,
+  }
 
   return <aside data-testid="team-messages" className="flex min-h-0 w-full flex-col border-l border-border md:w-[28rem]">
     <header className="flex items-center justify-between border-b border-border p-3">
@@ -69,7 +84,6 @@ export default function TeamMessagesView({ sessionId, view, sendMessage, connect
     </header>
     {!connected && <p role="status" className="p-3 text-secondary">Disconnected — reconnect to update messages.</p>}
     {view.loading && <p role="status" className="p-3">Loading messages…</p>}
-    {view.error && <p role="alert" className="border-b border-border p-3 text-chat-meta text-chat-danger">{view.error}</p>}
 
     <div className="flex flex-wrap gap-2 border-b border-border p-3 text-chat-meta">
       <select className="input text-chat-body" aria-label="Filter by delivery state"
@@ -96,7 +110,8 @@ export default function TeamMessagesView({ sessionId, view, sendMessage, connect
 
     <div className="min-h-0 flex-1 overflow-y-auto p-3">
       {view.selectedThreadId ? (
-        <ThreadDetail sessionId={sessionId} view={view} sessions={sessions} names={names} onOpenSession={onOpenSession} />
+        <ThreadDetail sessionId={sessionId} view={view} sessions={sessions} names={names} onOpenSession={onOpenSession}
+          onReply={setReplyTo} reply={reply} sendMessage={sendMessage} connected={connected} />
       ) : <>
         {view.messages.length === 0 && !view.loading && <p className="text-chat-meta text-secondary">No messages</p>}
         {view.messages.map(row => <article key={row.id} data-message-id={row.id} data-testid="message-row" className="mb-2 border border-border p-2">
@@ -106,6 +121,8 @@ export default function TeamMessagesView({ sessionId, view, sendMessage, connect
         </article>)}
         {view.nextCursor && <button className="btn" data-testid="messages-load-more" disabled={!connected || view.loadingMore}
           onClick={loadMore}>{view.loadingMore ? 'Loading more…' : 'Load more'}</button>}
+        <TeamMessageComposer sessionId={sessionId} mode={{ kind: 'new' }} groups={groups} sessions={sessions}
+          directory={names} tasks={tasks} view={view} sendMessage={sendMessage} connected={connected} />
       </>}
     </div>
   </aside>
@@ -159,12 +176,16 @@ function Recipient({ row, sessions, names, onOpenSession }: {
  * task revision its delivery carried. Re-sent whole when the thread moves, so
  * this is always the complete history, never a delta.
  */
-function ThreadDetail({ sessionId, view, sessions, names, onOpenSession }: {
+function ThreadDetail({ sessionId, view, sessions, names, onOpenSession, onReply, reply, sendMessage, connected }: {
   sessionId: string
   view: MessageView
   sessions: ReadonlyArray<LiveParticipant>
   names: ReadonlyArray<SessionDirectoryEntry>
   onOpenSession?: (sessionId: string) => void
+  onReply: (messageId: string) => void
+  reply: ComposerMode | undefined
+  sendMessage: SendClientMessage
+  connected: boolean
 }) {
   const entries = view.thread ?? []
   const bodyOf = (id: string) => entries.find(entry => entry.message.id === id)?.message.body
@@ -172,25 +193,29 @@ function ThreadDetail({ sessionId, view, sessions, names, onOpenSession }: {
     <button className="btn mb-3" data-testid="thread-back"
       onClick={() => useTeamMessageStore.getState().select(sessionId, null)}>All messages</button>
     {view.thread === null && <p role="status">Loading thread…</p>}
-    {entries.map(entry => <ThreadRow key={entry.message.id} entry={entry}
-      replyTo={entry.message.inReplyTo ? bodyOf(entry.message.inReplyTo) : undefined}
-      sessions={sessions} names={names} onOpenSession={onOpenSession} />)}
+    {entries.map(entry => <ThreadRow key={entry.message.id} entry={entry} sessions={sessions} names={names} onOpenSession={onOpenSession}
+      parentBody={entry.message.inReplyTo ? bodyOf(entry.message.inReplyTo) : undefined} onReply={onReply} />)}
+    {reply && <TeamMessageComposer sessionId={sessionId} mode={reply} sessions={sessions} directory={names}
+      view={view} sendMessage={sendMessage} connected={connected} />}
   </div>
 }
 
-function ThreadRow({ entry, replyTo, sessions, names, onOpenSession }: {
+function ThreadRow({ entry, parentBody, sessions, names, onOpenSession, onReply }: {
   entry: ThreadEntry
-  replyTo?: string
+  parentBody?: string
   sessions: ReadonlyArray<LiveParticipant>
   names: ReadonlyArray<SessionDirectoryEntry>
   onOpenSession?: (sessionId: string) => void
+  onReply: (messageId: string) => void
 }) {
   const row = entry.message
   return <article data-message-id={row.id} data-testid="thread-entry" data-hop={row.hop} className="mb-3 border-l-2 border-border pl-2">
     <MessageRow row={row} sessions={sessions} names={names} onOpenSession={onOpenSession} />
     {row.inReplyTo && <p className="text-chat-meta" data-testid="message-reply-to">
-      In reply to {replyTo ?? row.inReplyTo}
+      In reply to {parentBody ?? row.inReplyTo}
     </p>}
+    <button className="btn mt-1 text-chat-meta" data-testid="message-reply"
+      onClick={() => onReply(row.id)}>Reply</button>
     <details className="mt-1 text-chat-meta" data-testid="message-events">
       <summary>History ({entry.events.length})</summary>
       {entry.events.map(event => <div key={event.seq} data-seq={event.seq} data-kind={event.kind} className="mt-1 border-l-2 border-border pl-2">
