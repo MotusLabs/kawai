@@ -180,3 +180,50 @@ export interface MessageEvent {
   reason: string | null
 }
 
+
+/**
+ * What a Messages list is on (team-message-threads D1): every filter is
+ * optional and absent means "keep everything". Shared because the client
+ * sends these on open and the server echoes them back on the snapshot, so a
+ * reconnect can see which filters its page is the answer to.
+ */
+export interface MessageQueryFilters {
+  /** Task the message works under. */
+  taskId?: string
+  /** Thread the message belongs to. */
+  threadId?: string
+  /**
+   * Role involvement (the spec's "role"): the recipient group of group mail,
+   * or the sender's group.
+   */
+  groupId?: string
+  /** Session involvement: sender, current recipient, or claimant. */
+  sessionId?: string
+  priority?: MessagePriority
+  /** One state or several; absent keeps every delivery state. */
+  state?: MessageState | MessageState[]
+  /**
+   * Human involvement: `true` keeps only mail to or from the human, `false`
+   * only agent-to-agent mail. Absent keeps both.
+   */
+  human?: boolean
+}
+
+/** Keyset position: the row after which the next (older) page starts. */
+export interface MessageCursor {
+  createdAt: string
+  rowid: number
+}
+
+/** One page of a Messages list: the rows and how to ask for the next one. */
+export interface MessagePage {
+  messages: TeamMessage[]
+  /** Key of the last row, for the next older page; null when exhausted. */
+  nextCursor: MessageCursor | null
+}
+
+/** One thread row with the history that happened to it. */
+export interface ThreadEntry {
+  message: TeamMessage
+  events: MessageEvent[]
+}

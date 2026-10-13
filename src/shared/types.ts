@@ -2,7 +2,12 @@
 export const HISTORY_MAX_AGE_MIN_HOURS = 1
 export const HISTORY_MAX_AGE_MAX_HOURS = 168 // 7 days
 
-import type { TeamMessage } from './team'
+import type {
+  MessageCursor,
+  MessageQueryFilters,
+  TeamMessage,
+  ThreadEntry,
+} from './team'
 import type { RuleLoadReport, TeamRoutingState } from './routing'
 import type { TaskStatus, TeamTask, TeamTaskDetail, TeamTaskSummary } from './teamTasks'
 import type {
@@ -356,6 +361,37 @@ export type ServerMessage =
   // Result of a human task action; `task` is set on success (a created
   // task's id lets the view open it), `error` on refusal.
   | { type: 'team-task-result'; sessionId: string; requestId: string; task?: TeamTask; error?: string }
+  // Messages view (team-message-threads 5.1): the authoritative page of a
+  // subscription's filters on open and reconnect, then pushes of the rows
+  // that changed. Pushes are unfiltered — a watcher on `state:queued` has to
+  // hear about the claim that drops a row out of its list. Thread detail is
+  // its own replace-semantics reply, re-sent when its thread changes.
+  | {
+      type: 'team-messages-snapshot'
+      sessionId: string
+      teamId: string
+      filters: MessageQueryFilters
+      messages: TeamMessage[]
+      nextCursor: MessageCursor | null
+    }
+  | { type: 'team-messages'; sessionId: string; teamId: string; messages: TeamMessage[] }
+  | {
+      type: 'team-thread'
+      sessionId: string
+      teamId: string
+      threadId: string
+      entries: ThreadEntry[]
+    }
+  // Result of a human send or reply; `message` is set on success (the row the
+  // composer's thread will show), `error` on refusal. `requestId` is the
+  // client's own and never lands in a durable row.
+  | {
+      type: 'team-message-send-result'
+      sessionId: string
+      requestId: string
+      message?: TeamMessage
+      error?: string
+    }
   | { type: 'chat-workers'; sessionId: string; workers: ChatWorker[] }
   // A chat session's active notices (notification strip design D5): the full
   // replace-semantics list, pushed to subscribed connections whenever it
@@ -493,6 +529,33 @@ export type ClientMessage =
   | { type: 'team-task-amend'; sessionId: string; requestId: string; taskId: string; direction?: string; acceptance?: string }
   | { type: 'team-task-note'; sessionId: string; requestId: string; taskId: string; text: string }
   | { type: 'team-task-status'; sessionId: string; requestId: string; taskId: string; status: TaskStatus }
+  // Messages view (team-message-threads 5.1): a list subscription carries the
+  // filters (and optional page cursor) the view is on; a thread open carries
+  // the thread to keep live. Human sends and replies are one message — `to`
+  // starts mail, `inReplyTo` answers it — carrying a client request id the
+  // result echoes. Request ids live on the wire only.
+  | {
+      type: 'team-messages-open'
+      sessionId: string
+      filters?: MessageQueryFilters
+      cursor?: MessageCursor
+    }
+  | { type: 'team-messages-close'; sessionId: string }
+  | { type: 'team-thread-open'; sessionId: string; threadId: string }
+  | { type: 'team-thread-close'; sessionId: string; threadId: string }
+  | {
+      type: 'team-message-send'
+      sessionId: string
+      requestId: string
+      body: string
+      urgent?: boolean
+      tags?: string[]
+      taskId?: string
+      /** Recipient of new mail. Mutually exclusive with `inReplyTo`. */
+      to?: { kind: 'group' | 'session'; id: string }
+      /** Message to answer; the reply joins its thread. */
+      inReplyTo?: string
+    }
   | { type: 'chat-debug-open'; sessionId: string }
   | { type: 'chat-debug-page'; sessionId: string; beforeSeq: number }
   | { type: 'chat-debug-close'; sessionId: string }

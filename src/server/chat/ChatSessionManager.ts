@@ -71,6 +71,8 @@ import { readWorkerTranscript } from './chatWorkerTranscript'
 import { loadTeamGroups } from '../team/teamGroups'
 import { SessionTeams } from '../team/sessionTeams'
 import { SessionDirectory } from '../team/sessionDirectory'
+import { MessageFeed } from '../team/messageFeed'
+import { MessageQuery } from '../team/messageQuery'
 import { TeamMailbox } from '../team/TeamMailbox'
 import { createMailboxServer } from '../team/mailboxTools'
 import type { TeamMessage } from '../../shared/team'
@@ -716,6 +718,7 @@ export class ChatSessionManager {
     })
     this.mailbox = this.teamMail.mailbox
     this.tasks = this.teamMail.tasks
+    this.messages = new MessageFeed(this.mailbox.store, new MessageQuery(options.db.db))
     // A retitled task re-labels the headers of the sessions working on it.
     this.tasks.store.subscribe(task => {
       this.options.onTaskChange?.(task.teamId)
@@ -817,6 +820,8 @@ export class ChatSessionManager {
   readonly mailbox: TeamMailbox
   /** Team tasks (team-tasks); the task tools and UI actions go through it. */
   readonly tasks: TaskService
+  /** The Messages read model and its live feed (team-message-threads D1/4.3). */
+  readonly messages: MessageFeed
   readonly dispatcher: MailDispatcher
   private readonly teamMail: SessionMailbox
 

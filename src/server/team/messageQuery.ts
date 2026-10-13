@@ -7,56 +7,16 @@
 // another team's rows are unreachable by construction.
 import type { Database } from 'bun:sqlite'
 import type {
+  MessageCursor,
   MessageEvent,
-  MessagePriority,
-  MessageState,
-  TeamMessage,
+  MessagePage,
+  MessageQueryFilters,
+  ThreadEntry,
 } from '../../shared/team'
 import { MessageEventLog } from './messageEvents'
 import { mapRow } from './messageRow'
 
-export interface MessageQueryFilters {
-  /** Task the message works under. */
-  taskId?: string
-  /** Thread the message belongs to. */
-  threadId?: string
-  /**
-   * Role involvement (the spec's "role"): the recipient group of group mail,
-   * or the sender's group. Absent keeps every role.
-   */
-  groupId?: string
-  /**
-   * Session involvement: sender, current recipient, or claimant. Absent keeps
-   * every session.
-   */
-  sessionId?: string
-  priority?: MessagePriority
-  /** One state or several; absent keeps every delivery state. */
-  state?: MessageState | MessageState[]
-  /**
-   * Human involvement: `true` keeps only mail to or from the human, `false`
-   * only agent-to-agent mail. Absent keeps both.
-   */
-  human?: boolean
-}
-
-/** Keyset position: the row after which the next (older) page starts. */
-export interface MessageCursor {
-  createdAt: string
-  rowid: number
-}
-
-export interface MessagePage {
-  messages: TeamMessage[]
-  /** Key of the last row, for the next older page; null when exhausted. */
-  nextCursor: MessageCursor | null
-}
-
-/** One thread row with the history that happened to it. */
-export interface ThreadEntry {
-  message: TeamMessage
-  events: MessageEvent[]
-}
+export type { MessageCursor, MessagePage, MessageQueryFilters, ThreadEntry }
 
 /** How many rows one page holds when the caller does not say. */
 export const DEFAULT_PAGE_SIZE = 50
