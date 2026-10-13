@@ -1,10 +1,11 @@
 // SessionRow.tsx - Session row rendering shared by the flat session list and
 // the grouped workspace navigator: SortableSessionItem wraps SessionRow with
-// dnd-kit drag behavior and framer-motion enter/exit animations; SessionRow
+// dnd-kit drag behavior and framer-motion enter animations; SessionRow
 // renders the row content with rename editing and the long-press context menu.
 // SortableSessionItem is memoized behind a field-comparing comparator
 // (design D6): parents pass stable id-taking handlers that are bound per row
 // with useCallback, so activity churn inside a 30s bucket re-renders nothing.
+// A removed row unmounts with the live list — no exit hold. See `animate`.
 
 import { useCallback, useEffect, useRef, useState, forwardRef, memo } from 'react'
 import { motion } from 'motion/react'
@@ -311,6 +312,19 @@ export const SortableSessionItem = memo(
     [onDuplicate, session.id],
   )
 
+  // No exit animation: a removed row unmounts with the live list (see
+  // SessionList). Holding the node for a fade — AnimatePresence's `exit`
+  // handshake or a merge from `exitingSessions` — left ghost cards after a
+  // kill, because the node outlived the store and `toHaveCount(0)` still saw
+  // it. Enter still animates.
+  const animate = prefersReducedMotion
+    ? { opacity: 1 }
+    : isNew
+      ? useSafariLayoutFallback
+        ? { opacity: 1 }
+        : { opacity: 1, scale: [1.02, 0.99, 1] }
+      : { opacity: 1, scale: 1 }
+
   return (
     // Deliberately no framer `layout` prop: animated resorts slide rows through
     // each other, overlapping two sessions' text mid-flight (#159). Rows snap to
@@ -334,20 +348,7 @@ export const SortableSessionItem = memo(
             ? { opacity: 0 }
             : { opacity: 0, scale: 0.97 }
       }
-      animate={
-        prefersReducedMotion
-          ? { opacity: 1 }
-          : isNew
-            ? useSafariLayoutFallback
-              ? { opacity: 1 }
-              : { opacity: 1, scale: [1.02, 0.99, 1] }
-            : { opacity: 1, scale: 1 }
-      }
-      exit={prefersReducedMotion
-        ? { opacity: 0 }
-        : useSafariLayoutFallback
-          ? { opacity: 0, height: 0 }
-          : { opacity: 0, height: 0, scale: 0.97 }}
+      animate={animate}
       transition={
         prefersReducedMotion
           ? { duration: 0 }

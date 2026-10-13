@@ -1,7 +1,7 @@
 // Session list rendering: flat and grouped rows, collapsible section
 // headers, and fallback panes for empty navigator states.
 import { useState, useRef, useEffect, useCallback, useMemo, Fragment } from 'react'
-import { motion, AnimatePresence, useReducedMotion } from 'motion/react'
+import { motion, useReducedMotion } from 'motion/react'
 import {
   DndContext,
   closestCenter,
@@ -260,8 +260,12 @@ export default function SessionList({
     [sessions, sessionSortMode, sessionSortDirection, manualSessionOrder]
   )
 
-  // Don't add exiting sessions back to the list - let AnimatePresence handle
-  // the exit animation naturally. This prevents the 250ms delay before animation starts.
+  // Removed sessions are not re-rendered from `exitingSessions`: a killed or
+  // externally-removed row unmounts with the live list. Holding it for an exit
+  // animation (AnimatePresence's `exit`, or a merge back into this list) is
+  // what left ghost cards after a kill — the node outlives the store and
+  // `toHaveCount(0)` sees it. `exitingSessions` remains for kill-failed
+  // rollback bookkeeping only.
   const sortedSessions = sortedActive
 
   const uniqueProjects = useMemo(
@@ -759,51 +763,49 @@ export default function SessionList({
                     strategy={verticalListSortingStrategy}
                   >
                     <div key={filterKey}>
-                      {/* sync (not popLayout): without per-row layout animation,
-                          popLayout would overlap an exiting row with the sibling
-                          snapping into its place */}
-                      <AnimatePresence initial={false} mode="sync">
-                        {filteredSessions.map((session, index) => {
-                          const isTrulyNew = newlyActiveIds.has(session.id)
-                          const isFilteredIn = newlyFilteredInIds.has(session.id)
-                          // Calculate drop indicator position
-                          const activeIndex = activeId
-                            ? filteredSessions.findIndex((s) => s.id === activeId)
-                            : -1
-                          const isOver = overId === session.id && activeId !== session.id
-                          const showDropIndicator = isOver ? (activeIndex > index ? 'above' : 'below') : null
-                          // Show bounce for both new and filter-in, but delay only for truly new
-                          const isNew = isTrulyNew || isFilteredIn
-                          return (
-                            <SortableSessionItem
-                              key={session.id}
-                              session={session}
-                              isNew={isNew}
-                              exitDuration={EXIT_DURATION}
-                              prefersReducedMotion={prefersReducedMotion}
-                              useSafariLayoutFallback={useSafariLayoutFallback}
-                              isSelected={session.id === selectedSessionId}
-                              isEditing={session.id === editingSessionId}
-                              showSessionIdPrefix={showSessionIdPrefix}
-                              showProjectName={showProjectName}
-                              showLastUserMessage={showLastUserMessage}
-                              showHostInfo={showHostInfo}
-                              dropIndicator={showDropIndicator}
-                              nowTick={nowTick}
-                              remoteAllowControl={remoteAllowControl}
-                              onSelect={onSelect}
-                              onStartEdit={setEditingSessionId}
-                              onCancelEdit={cancelEdit}
-                              onRename={handleRename}
-                              onHibernate={onHibernate}
-                              onArchiveChat={onArchiveChat}
-                              onRestoreChat={onRestoreChat}
-                              onKill={onKill ? killFromContextMenu : undefined}
-                              onDuplicate={onDuplicate}
-                            />
-                          )
-                        })}
-                      </AnimatePresence>
+                      {/* No AnimatePresence: a removed row unmounts with
+                          this map. AnimatePresence's held-exit path is what
+                          left ghost cards behind after a kill. */}
+                      {filteredSessions.map((session, index) => {
+                        const isTrulyNew = newlyActiveIds.has(session.id)
+                        const isFilteredIn = newlyFilteredInIds.has(session.id)
+                        // Calculate drop indicator position
+                        const activeIndex = activeId
+                          ? filteredSessions.findIndex((s) => s.id === activeId)
+                          : -1
+                        const isOver = overId === session.id && activeId !== session.id
+                        const showDropIndicator = isOver ? (activeIndex > index ? 'above' : 'below') : null
+                        // Show bounce for both new and filter-in, but delay only for truly new
+                        const isNew = isTrulyNew || isFilteredIn
+                        return (
+                          <SortableSessionItem
+                            key={session.id}
+                            session={session}
+                            isNew={isNew}
+                            exitDuration={EXIT_DURATION}
+                            prefersReducedMotion={prefersReducedMotion}
+                            useSafariLayoutFallback={useSafariLayoutFallback}
+                            isSelected={session.id === selectedSessionId}
+                            isEditing={session.id === editingSessionId}
+                            showSessionIdPrefix={showSessionIdPrefix}
+                            showProjectName={showProjectName}
+                            showLastUserMessage={showLastUserMessage}
+                            showHostInfo={showHostInfo}
+                            dropIndicator={showDropIndicator}
+                            nowTick={nowTick}
+                            remoteAllowControl={remoteAllowControl}
+                            onSelect={onSelect}
+                            onStartEdit={setEditingSessionId}
+                            onCancelEdit={cancelEdit}
+                            onRename={handleRename}
+                            onHibernate={onHibernate}
+                            onArchiveChat={onArchiveChat}
+                            onRestoreChat={onRestoreChat}
+                            onKill={onKill ? killFromContextMenu : undefined}
+                            onDuplicate={onDuplicate}
+                          />
+                        )
+                      })}
                     </div>
                   </SortableContext>
                 </DndContext>
