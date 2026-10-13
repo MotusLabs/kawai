@@ -3,7 +3,8 @@
 // proposal field for material changes. Local state is seeded from the
 // stored draft when the editor opens or the author reloads — a CAS refusal
 // never overwrites it, so the caller's unsaved text survives for
-// reconciliation (S12); the stored draft is shown beside it.
+// reconciliation (S12); the stored draft is shown beside it, and Reload
+// adopts that refused-with copy (the `draft` prop may predate it).
 import { useEffect, useState } from 'react'
 import type { StrategyContent, StrategyDraft } from '@shared/productStrategy'
 import { UNKNOWN, STRATEGY_CLAIM_KINDS, normalizeStrategyContent, strategyContentErrors } from '@shared/productStrategy'
@@ -19,13 +20,15 @@ export interface DraftSavePayload {
 const EMPTY: StrategyContent = normalizeStrategyContent({})
 const blank = <T extends object>(fields: T): T => ({ ...fields })
 
-export default function StrategyDraftEditor({ draft, connected, busy, error, conflict, onSave }: {
+export default function StrategyDraftEditor({ draft, connected, busy, error, conflict, onSave, onReload }: {
   draft: StrategyDraft | null
   connected: boolean
   busy: boolean
   error: string | null
   conflict: StrategyDraft | null
   onSave: (payload: DraftSavePayload) => void
+  /** Adopt `conflict` as the stored draft; the reseed below then follows the new `draft` prop. */
+  onReload: () => void
 }) {
   const [body, setBody] = useState<StrategyContent>(() => draft?.content ?? EMPTY)
   const [impact, setImpact] = useState(draft?.impactProposal ?? '')
@@ -37,11 +40,13 @@ export default function StrategyDraftEditor({ draft, connected, busy, error, con
     setBody(draft?.content ?? EMPTY)
     setImpact(draft?.impactProposal ?? '')
     setLocalError(null)
-  }, [draft?.draftId, draft?.updatedAt])
+  }, [draft?.draftId, draft?.updatedAt, draft?.contentHash])
   const reload = () => {
-    setBody(draft?.content ?? EMPTY)
-    setImpact(draft?.impactProposal ?? '')
+    const stored = conflict ?? draft
+    setBody(stored?.content ?? EMPTY)
+    setImpact(stored?.impactProposal ?? '')
     setLocalError(null)
+    onReload()
   }
 
   const patch = (fields: Partial<StrategyContent>) => setBody(current => ({ ...current, ...fields }))
@@ -184,7 +189,7 @@ export default function StrategyDraftEditor({ draft, connected, busy, error, con
     </div>}
     <div className="mt-2 flex gap-2">
       <button type="button" className="btn btn-primary text-chat-meta" disabled={!connected || busy} data-testid="draft-save" onClick={save}>Save draft</button>
-      {draft && <button type="button" className="btn text-chat-meta" disabled={!connected} onClick={reload}>Reload stored draft</button>}
+      {(draft || conflict) && <button type="button" className="btn text-chat-meta" disabled={!connected} onClick={reload}>Reload stored draft</button>}
     </div>
   </section>
 }

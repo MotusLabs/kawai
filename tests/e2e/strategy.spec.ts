@@ -95,7 +95,7 @@ test('capture, durable drafts with a CAS conflict, review and human approval, an
 
     // Submit for review: findings separate known, assumed, and not decided.
     await editor2.getByLabel('Purpose').fill('Direction C: reviewed direction')
-    await editor2.getByLabel('Open questions (one per line)').fill('Who owns the baseline?')
+    await editor2.getByLabel('Open questions', { exact: true }).fill('Who owns the baseline?')
     await editor2.getByTestId('draft-save').click()
     await page.getByTestId('strategy-submit').click()
     const review = page.getByTestId('product-strategy').getByTestId(/^strategy-review-1$/)
