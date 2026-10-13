@@ -100,6 +100,11 @@ export type DecisionOutcome =
 
 const nowIso = () => new Date().toISOString()
 
+/** Thrown when a decision INSERT loses the UNIQUE(strategy_id, command_id) race; rolls the transaction back for a replay. */
+class CommandRaceError extends Error {
+  constructor() { super('strategy command race') }
+}
+
 export class StrategyStore {
   private readonly listeners = new Set<(strategy: ProductStrategy) => void>()
 
@@ -334,7 +339,7 @@ export class StrategyStore {
    * repeated approval can neither land twice nor leave two actives.
    */
   approve(strategyId: string, input: ApproveInput, now = nowIso()): DecisionOutcome {
-    const outcome = this.db.transaction((): DecisionOutcome => {
+    return this.decide(strategyId, input, (): DecisionOutcome => {
       const strategy = this.get(strategyId)
       if (!strategy) return { ok: false, reason: 'stale', message: `No strategy record: ${strategyId}` }
       const prior = this.decisionByCommand(strategyId, input.commandId)
@@ -364,12 +369,11 @@ export class StrategyStore {
       }
       this.db.prepare(`UPDATE strategy_revisions SET status = 'approved' WHERE strategy_id = ? AND revision = ?`).run(strategyId, input.revision)
       const decisionId = `decision-${crypto.randomUUID()}`
-      this.db.prepare(`INSERT INTO strategy_decisions
-        (id, strategy_id, revision, content_hash, decision, rationale, actor_kind, actor_session, approval_scope, open_questions, command_id, created_at)
-        VALUES (?, ?, ?, ?, 'approve', NULL, ?, ?, ?, ?, ?, ?)`).run(
-        decisionId, strategyId, input.revision, input.contentHash,
-        input.actor.kind, input.actor.sessionId, input.approvalScope?.trim() || null, input.openQuestions?.trim() || null, input.commandId, now,
-      )
+      this.insertDecision(strategyId, {
+        id: decisionId, revision: input.revision, contentHash: input.contentHash, decision: 'approve',
+        actor: input.actor, approvalScope: input.approvalScope?.trim() || null, openQuestions: input.openQuestions?.trim() || null,
+        commandId: input.commandId,
+      }, now)
       const reviewId = `impact-${crypto.randomUUID()}`
       this.db.prepare(`INSERT INTO strategy_impact_reviews
         (id, strategy_id, revision, content_hash, command_id, state, created_at)
@@ -381,9 +385,7 @@ export class StrategyStore {
         impactReview: this.impactReviews(strategyId).find(review => review.id === reviewId)!,
         strategy: this.get(strategyId)!,
       }
-    })()
-    if (outcome.ok) this.changed(strategyId)
-    return outcome
+    })
   }
 
   /**
@@ -393,7 +395,7 @@ export class StrategyStore {
    * pointer in the same transaction — approval records are never erased.
    */
   withdrawRevision(strategyId: string, input: WithdrawRevisionInput, now = nowIso()): DecisionOutcome {
-    const outcome = this.db.transaction((): DecisionOutcome => {
+    return this.decide(strategyId, input, (): DecisionOutcome => {
       const strategy = this.get(strategyId)
       if (!strategy) return { ok: false, reason: 'stale', message: `No strategy record: ${strategyId}` }
       const prior = this.decisionByCommand(strategyId, input.commandId)
@@ -410,11 +412,10 @@ export class StrategyStore {
       }
       this.db.prepare(`UPDATE strategy_revisions SET status = 'withdrawn' WHERE strategy_id = ? AND revision = ?`).run(strategyId, input.revision)
       const decisionId = `decision-${crypto.randomUUID()}`
-      this.db.prepare(`INSERT INTO strategy_decisions
-        (id, strategy_id, revision, content_hash, decision, rationale, actor_kind, actor_session, approval_scope, open_questions, command_id, created_at)
-        VALUES (?, ?, ?, NULL, 'withdraw', NULL, ?, ?, NULL, NULL, ?, ?)`).run(
-        decisionId, strategyId, input.revision, input.actor.kind, input.actor.sessionId, input.commandId, now,
-      )
+      this.insertDecision(strategyId, {
+        id: decisionId, revision: input.revision, contentHash: null, decision: 'withdraw',
+        actor: input.actor, approvalScope: null, openQuestions: null, commandId: input.commandId,
+      }, now)
       return {
         ok: true, replayed: false,
         decision: this.decisions(strategyId).find(decision => decision.id === decisionId)!,
@@ -422,9 +423,52 @@ export class StrategyStore {
         impactReview: null,
         strategy: this.get(strategyId)!,
       }
-    })()
+    })
+  }
+
+  /**
+   * Run a decision transaction. A decision INSERT that loses the
+   * UNIQUE(strategy_id, command_id) race rolls the whole transaction back
+   * and answers from the recorded row instead — the same mapping saveDraft
+   * applies to its own unique collision (review N2).
+   */
+  private decide(strategyId: string, input: ApproveInput | WithdrawRevisionInput, body: () => DecisionOutcome): DecisionOutcome {
+    let outcome: DecisionOutcome
+    try {
+      outcome = this.db.transaction(body)()
+    } catch (error) {
+      if (!(error instanceof CommandRaceError)) throw error
+      return this.commandRaceOutcome(strategyId, input)
+    }
     if (outcome.ok) this.changed(strategyId)
     return outcome
+  }
+
+  /** Insert a decision row; a unique collision becomes the CommandRaceError the transaction maps to a replay. */
+  private insertDecision(strategyId: string, row: {
+    id: string; revision: number; contentHash: string | null; decision: 'approve' | 'withdraw'
+    actor: StrategyActor; approvalScope: string | null; openQuestions: string | null; commandId: string
+  }, now: string): void {
+    try {
+      this.db.prepare(`INSERT INTO strategy_decisions
+        (id, strategy_id, revision, content_hash, decision, rationale, actor_kind, actor_session, approval_scope, open_questions, command_id, created_at)
+        VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)`).run(
+        row.id, strategyId, row.revision, row.contentHash, row.decision,
+        row.actor.kind, row.actor.sessionId, row.approvalScope, row.openQuestions, row.commandId, now,
+      )
+    } catch (error) {
+      if (String(error).includes('UNIQUE constraint failed')) throw new CommandRaceError()
+      throw error
+    }
+  }
+
+  /** The constraint won a race the pre-check missed: replay or refuse the recorded decision. */
+  private commandRaceOutcome(strategyId: string, input: ApproveInput | WithdrawRevisionInput): DecisionOutcome {
+    const strategy = this.get(strategyId)
+    const row = this.db.prepare('SELECT * FROM strategy_decisions WHERE strategy_id = ? AND command_id = ?')
+      .get(strategyId, input.commandId) as Record<string, unknown> | null
+    if (!strategy || !row) throw new Error(`No recorded decision after a command-id race: ${input.commandId}`)
+    return this.replayOrRefuse(strategy, mapDecision(row), input)
   }
 
   /** Same command id again: same payload replays the prior result, different payload is refused (S17). */

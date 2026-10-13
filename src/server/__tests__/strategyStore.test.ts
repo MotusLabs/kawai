@@ -347,6 +347,36 @@ describe('StrategyStore', () => {
     expect(detail.evidence).toHaveLength(1)
     expect(strategies.detail('strategy-missing')).toBeNull()
   })
+test('a decision insert that loses the command-id race replays the recorded row and rolls back', () => {
+  const strategy = create()
+  const first = submitted(strategy.id, content({ purpose: 'v1' }))
+  const rev1 = first.ok ? first.revision : null
+  strategies.approve(strategy.id, { revision: 1, contentHash: rev1!.contentHash, commandId: 'shared', expectedCurrentRevision: null, actor: human })
+  const second = submitted(strategy.id, content({ purpose: 'v2' }), agent('chat-2'))
+  const rev2 = second.ok ? second.revision : null
+  // Simulate the lost race: the pre-check misses the recorded decision, so
+  // the INSERT itself meets UNIQUE(strategy_id, command_id).
+  class Racing extends StrategyStore {
+    decisionByCommand(): null { return null }
+  }
+  const racing = new Racing(db.db)
+  const outcome = racing.approve(strategy.id, { revision: 2, contentHash: rev2!.contentHash, commandId: 'shared', expectedCurrentRevision: 1, actor: human })
+  expect(outcome).toMatchObject({ ok: false, reason: 'payload' })
+  // The refused insert rolled the whole transaction back: one active, one
+  // decision, one impact item, revision 2 still in review.
+  expect(strategies.get(strategy.id)!.currentApprovedRevision).toBe(1)
+  expect(strategies.revision(strategy.id, 1)).toMatchObject({ status: 'approved' })
+  expect(strategies.revision(strategy.id, 2)).toMatchObject({ status: 'in_review' })
+  expect(strategies.decisions(strategy.id)).toHaveLength(1)
+  expect(strategies.impactReviews(strategy.id)).toHaveLength(1)
+  // The same race on a withdraw lands the same way: replayed or refused
+  // from the recorded row, never a second decision.
+  const withdrawn = racing.withdrawRevision(strategy.id, { revision: 2, commandId: 'shared', actor: human })
+  expect(withdrawn).toMatchObject({ ok: false, reason: 'payload' })
+  expect(strategies.revision(strategy.id, 2)).toMatchObject({ status: 'in_review' })
+  expect(strategies.decisions(strategy.id)).toHaveLength(1)
+})
+
 })
 
 describe('StrategyContent round-trip through the store', () => {
@@ -367,4 +397,5 @@ describe('StrategyContent round-trip through the store', () => {
     db.close()
     fs.rmSync(dir, { recursive: true, force: true })
   })
+
 })
