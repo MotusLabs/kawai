@@ -414,6 +414,10 @@ export interface ChatBackgroundTask {
    * `status`: the level set and the settle notification arrive separately.
    */
   live: boolean
+  /** Epoch ms of task_started; the sidecar persists it (design D6). */
+  startedAtMs: number
+  /** Epoch ms of the settle; absent while running. */
+  endedAtMs?: number
   elapsedMs: number
   /** Settled tasks only: the one-line outcome the agent received. */
   summary?: string

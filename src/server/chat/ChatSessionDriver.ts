@@ -72,7 +72,10 @@ import {
   backgroundInputFromWorkersInput,
   initialChatBackgroundTasksState,
   projectBackgroundTasks,
+  projectBackgroundTaskRecords,
+  recoveredBackgroundTasksState,
   reduceBackgroundTasks,
+  type BackgroundTaskRecord,
   type ChatBackgroundTasksInput,
   type ChatBackgroundTasksState,
 } from './chatBackgroundTasks'
@@ -155,6 +158,11 @@ export interface ChatSessionDriverOptions {
    * and the sidecar instead of being replaced by the first publish.
    */
   recoveredWorkers?: ChatWorker[]
+  /**
+   * Recovered background-task rows (background tasks D6) seeding a fresh
+   * driver, so settled outcomes survive a restart or an archive/restore.
+   */
+  recoveredBackgroundTasks?: ChatBackgroundTask[]
   onEvent: (event: ChatEvent) => void
   /** Applied immediately on every derived status change. */
   onStatus: (status: SessionStatus) => void
@@ -323,6 +331,10 @@ export class ChatSessionDriver {
     // Workers design D6: carry the recovered outcomes into the fresh roster.
     if (options.recoveredWorkers?.length) {
       this.workersState = recoveredWorkersState(options.recoveredWorkers)
+    }
+    // Background tasks D6: same contract for the task roster.
+    if (options.recoveredBackgroundTasks?.length) {
+      this.backgroundTasksState = recoveredBackgroundTasksState(options.recoveredBackgroundTasks)
     }
   }
 
@@ -1297,6 +1309,12 @@ export class ChatSessionDriver {
   /** Current background-task projection with elapsed times computed now (D2). */
   getBackgroundTasks(): ChatBackgroundTask[] {
     return projectBackgroundTasks(this.backgroundTasksState)
+  }
+
+  /** Sidecar records for the task store (D6): identity and outcome, plus the
+   * server-only output-file path. */
+  getBackgroundTaskRecords(): BackgroundTaskRecord[] {
+    return projectBackgroundTaskRecords(this.backgroundTasksState)
   }
 
   /**

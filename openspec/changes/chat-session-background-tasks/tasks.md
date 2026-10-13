@@ -23,8 +23,8 @@ Prerequisite: `chat-session-spawned-subagents` (PR #72) is merged. Branch from t
 
 ## 4. Persistence
 
-- [ ] 4.1 Add a `chat-tasks/` sidecar store (design D6), reusing or generalizing `ChatWorkerStore`'s safe-id check and per-session operation chain. Write on promotion and settle, recover running entries as stopped, delete on kill, keep on archive. Verify with store tests for each, plus a manager test showing restart → replay keeps a completed task's summary on its tool row
-- [ ] 4.2 Document `chat-tasks/` in the data-directory line of `CLAUDE.md`. Verify the line lists `chat-wire/`, `chat-workers/` and `chat-tasks/`
+- [x] 4.1 Add a `chat-tasks/` sidecar store (design D6), reusing or generalizing `ChatWorkerStore`'s safe-id check and per-session operation chain. Write on promotion and settle, recover running entries as stopped, delete on kill, keep on archive. Verify with store tests for each, plus a manager test showing restart → replay keeps a completed task's summary on its tool row
+- [x] 4.2 Document `chat-tasks/` in the data-directory line of `CLAUDE.md`. Verify the line lists `chat-wire/`, `chat-workers/` and `chat-tasks/`
 
 ## 5. Output tail and stop (server)
 

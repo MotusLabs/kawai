@@ -64,7 +64,7 @@ Run `bun run lint && bun run typecheck && bun run test` after changes.
 - src/shared/     Shared types
   - `src/shared/chat.ts` - SDK-independent chat events and request contracts
 
-- Data directory: `~/.agentboard/` contains `agentboard.db` (session data), `agentboard.log`, and `chat-wire/` (per-chat-session raw protocol logs, beside the DB)
+- Data directory: `~/.agentboard/` contains `agentboard.db` (session data), `agentboard.log`, `chat-wire/` (per-chat-session raw protocol logs), `chat-workers/` (worker-outcome sidecars), and `chat-tasks/` (background-task-outcome sidecars), all beside the DB
 
 ## Git
 

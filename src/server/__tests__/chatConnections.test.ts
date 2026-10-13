@@ -86,6 +86,8 @@ const bgTask = (status: 'running' | 'completed', live: boolean): ChatBackgroundT
   description: 'Wait for CI',
   status,
   live,
+  startedAtMs: 1_000,
+  ...(status === 'completed' ? { endedAtMs: 5_000 } : {}),
   elapsedMs: 4_000,
 })
 

@@ -295,7 +295,67 @@ export function projectBackgroundTasks(
       ...(entry.description !== undefined ? { description: entry.description } : {}),
       status: entry.status,
       live: entry.live,
+      startedAtMs: entry.startedAtMs,
+      ...(entry.endedAtMs !== undefined ? { endedAtMs: entry.endedAtMs } : {}),
       elapsedMs: Math.max(0, (entry.endedAtMs ?? now) - entry.startedAtMs),
       ...(entry.summary !== undefined ? { summary: entry.summary } : {}),
     }))
+}
+
+/**
+ * The server-side record: identity, outcome, and timing plus the recorded
+ * output-file path (design D3), which stays behind the WS boundary — only
+ * the sidecar (D6) and the output-tail reader ever see it.
+ */
+export interface BackgroundTaskRecord {
+  taskId: string
+  toolCallId?: string
+  kind: ChatBackgroundTaskKind
+  description?: string
+  status: ChatBackgroundTaskStatus
+  summary?: string
+  outputFile?: string
+  startedAtMs: number
+  endedAtMs?: number
+}
+
+/** Records for the sidecar (design D6): identity and outcome, never live state. */
+export function projectBackgroundTaskRecords(state: ChatBackgroundTasksState): BackgroundTaskRecord[] {
+  return state.tasks
+    .filter((entry) => entry.visible)
+    .map((entry) => ({
+      taskId: entry.taskId,
+      ...(entry.toolCallId !== undefined ? { toolCallId: entry.toolCallId } : {}),
+      kind: entry.kind,
+      ...(entry.description !== undefined ? { description: entry.description } : {}),
+      status: entry.status,
+      ...(entry.summary !== undefined ? { summary: entry.summary } : {}),
+      ...(entry.outputFile !== undefined ? { outputFile: entry.outputFile } : {}),
+      startedAtMs: entry.startedAtMs,
+      ...(entry.endedAtMs !== undefined ? { endedAtMs: entry.endedAtMs } : {}),
+    }))
+}
+
+/**
+ * Seed a fresh state from persisted rows (design D6): recovered entries are
+ * never live, and the sidecar's recovery pass has already rewritten rows
+ * still marked running as stopped.
+ */
+export function recoveredBackgroundTasksState(tasks: ChatBackgroundTask[]): ChatBackgroundTasksState {
+  return {
+    tasks: tasks.map((task) => ({
+      taskId: task.taskId,
+      ...(task.toolCallId !== undefined ? { toolCallId: task.toolCallId } : {}),
+      kind: task.kind,
+      kindKnown: true,
+      ...(task.description !== undefined ? { description: task.description } : {}),
+      status: task.status,
+      live: false,
+      visible: true,
+      startedAtMs: task.startedAtMs,
+      ...(task.endedAtMs !== undefined ? { endedAtMs: task.endedAtMs } : {}),
+      ...(task.summary !== undefined ? { summary: task.summary } : {}),
+    })),
+    toolKinds: {},
+  }
 }

@@ -29,6 +29,7 @@ import { ChatSessionManager } from './chat/ChatSessionManager'
 import { ChatConnections, type ChatConnection } from './chat/ChatConnections'
 import { ChatWireLogs } from './chat/ChatWireLogs'
 import { ChatWorkerStore } from './chat/chatWorkerStore'
+import { ChatTaskStore } from './chat/chatTaskStore'
 import { chatFixtureEnabled, fixtureQueryFactory } from './chat/developmentFixture'
 import { WorkspaceCoordinator } from './workspace/workspaceCoordinator'
 import { WorkspaceWatcher, createNodeWatcherHost } from './workspace/workspaceWatcher'
@@ -134,6 +135,8 @@ export function startServer(): void {
   // Worker-outcome sidecars for restart recovery (workers design D6), likewise
   // beside the DB; kill removes a session's file with its record.
   const chatWorkerStore = new ChatWorkerStore({ dir: path.join(resolveDataDir(), 'chat-workers') })
+  // Background-task-outcome sidecars (background tasks D6), same contract.
+  const chatTaskStore = new ChatTaskStore({ dir: path.join(resolveDataDir(), 'chat-tasks') })
   // SDK-driven chat sessions own their transcripts; log discovery must not
   // surface those files as extra sessions (design D6).
   const chatSessionManager = new ChatSessionManager({
@@ -154,6 +157,7 @@ export function startServer(): void {
     getProviderEnv: chatProviderEnv.current,
     wireLogs: chatWireLogs,
     workerStore: chatWorkerStore,
+    taskStore: chatTaskStore,
     // Scoped workspace discovery after the agent moves (worktree tracking D2);
     // the closure runs only once a live agent reports a new cwd, by which time
     // the coordinator below exists.

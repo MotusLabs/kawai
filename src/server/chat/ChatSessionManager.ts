@@ -57,6 +57,7 @@ import {
 import { effectiveChatEnv, type ChatProviderEnv } from './chatProviderEnv'
 import type { ChatWireLogs } from './ChatWireLogs'
 import type { ChatWorkerStore } from './chatWorkerStore'
+import type { ChatTaskStore } from './chatTaskStore'
 import {
   resolveClaudeProfile,
   claudeLaunchKey,
@@ -150,6 +151,8 @@ export interface ChatSessionManagerOptions {
   onNotifications?: (sessionId: string, notifications: ChatNotification[]) => void
   /** Sidecar store for restart recovery of worker outcomes (design D6). */
   workerStore?: ChatWorkerStore
+  /** Sidecar store for restart recovery of background-task outcomes (D6). */
+  taskStore?: ChatTaskStore
   /** Injected in tests; production resolves the SDK via dynamic import. */
   queryFactory?: ChatQueryFactory
   /** Receives the provider env so it probes the endpoint sessions will use. */
@@ -1211,6 +1214,7 @@ export class ChatSessionManager {
     void this.options.wireLogs?.delete(sessionId).catch(() => {})
     // The session is gone for good; its worker rows go with it (D6).
     void this.options.workerStore?.delete(sessionId).catch(() => {})
+    void this.options.taskStore?.delete(sessionId).catch(() => {})
     return true
   }
 
@@ -1386,6 +1390,30 @@ export class ChatSessionManager {
           .catch(() => {})
       }
     }
+    // Background-task recovery (background tasks D6), same contract: a row
+    // still running recovers as stopped, and the corrected roster is
+    // rewritten so the file and the rows agree.
+    if (this.options.taskStore) {
+      const taskRecords = this.options.taskStore.read(record.sessionId)
+      if (taskRecords.length > 0) {
+        const corrected = taskRecords.map((entry) =>
+          entry.status === 'running' ? { ...entry, status: 'stopped' as const } : entry
+        )
+        this.backgroundTaskRows.set(record.sessionId, corrected.map((entry) => ({
+          taskId: entry.taskId,
+          ...(entry.toolCallId !== undefined ? { toolCallId: entry.toolCallId } : {}),
+          kind: entry.kind,
+          ...(entry.description !== undefined ? { description: entry.description } : {}),
+          status: entry.status,
+          live: false,
+          startedAtMs: entry.startedAtMs,
+          ...(entry.endedAtMs !== undefined ? { endedAtMs: entry.endedAtMs } : {}),
+          elapsedMs: entry.endedAtMs !== undefined ? Math.max(0, entry.endedAtMs - entry.startedAtMs) : 0,
+          ...(entry.summary !== undefined ? { summary: entry.summary } : {}),
+        })))
+        void this.options.taskStore.write(record.sessionId, corrected).catch(() => {})
+      }
+    }
     this.records.set(record.sessionId, record)
     this.options.registry.setChatSession(this.toSession(record))
     void this.teams.track(record.sessionId, record.projectPath)
@@ -1526,6 +1554,9 @@ export class ChatSessionManager {
         // the sidecar instead of replacing them with an empty one.
         ...(this.workerRows.has(record.sessionId)
           ? { recoveredWorkers: this.workerRows.get(record.sessionId) ?? [] }
+          : {}),
+        ...(this.backgroundTaskRows.has(record.sessionId)
+          ? { recoveredBackgroundTasks: this.backgroundTaskRows.get(record.sessionId) ?? [] }
           : {}),
         onEvent: (event) => this.handleDriverEvent(record.sessionId, event),
         onCommandState: (state) =>
@@ -1860,13 +1891,24 @@ export class ChatSessionManager {
    */
   /**
    * Hold the latest background-task roster (design D2) and forward it to the
-   * broadcast sink. Settled outcomes persist through the sidecar (design D6),
-   * wired by the persistence task.
+   * broadcast sink. The sidecar write (design D6) is keyed on the persisted
+   * shape, so `live` toggles never touch the disk; write failures are
+   * logged by the store and never fail the session.
    */
   private handleDriverBackgroundTasks(sessionId: string, tasks: ChatBackgroundTask[]): void {
     if (!this.records.has(sessionId)) return
     this.backgroundTaskRows.set(sessionId, tasks)
     this.options.onBackgroundTasks?.(sessionId, tasks)
+    const store = this.options.taskStore
+    const driver = this.drivers.get(sessionId)
+    if (store && driver && !driver.isDead) {
+      store.write(sessionId, driver.getBackgroundTaskRecords()).catch((error) => {
+        logger.warn('chat_task_sidecar_write_failed', {
+          sessionId,
+          error: error instanceof Error ? error.message : String(error),
+        })
+      })
+    }
   }
 
   private handleDriverWorkers(sessionId: string, workers: ChatWorker[]): void {

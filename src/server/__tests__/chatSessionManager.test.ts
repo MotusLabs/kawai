@@ -23,6 +23,7 @@ import { initDatabase, type SessionDatabase } from '../db'
 import { SessionRegistry } from '../SessionRegistry'
 import { ChatWireLogs } from '../chat/ChatWireLogs'
 import { ChatWorkerStore } from '../chat/chatWorkerStore'
+import { ChatTaskStore } from '../chat/chatTaskStore'
 import { ClaudeExecutableError } from '../chat/claudeExecutable'
 import type { ChatWireRecorder } from '../chat/wireTap'
 import {
@@ -3783,5 +3784,61 @@ describe('ChatSessionManager background-task roster (background tasks D2)', () =
     expect(manager.getSnapshot(id)!.backgroundTasks).toMatchObject([
       { taskId: 'b2', status: 'stopped', live: false },
     ])
+  })
+
+  test('restart keeps a settled outcome and recovers a running task as stopped', async () => {
+    const taskDir = path.join(tempDir, 'chat-tasks')
+    const store = () => new ChatTaskStore({ dir: taskDir })
+    const handles: FakeHandle[] = []
+    const manager = await managedManager({
+      isDirectory: anyDirectory, db, registry: new SessionRegistry(),
+      onEvent: () => {}, queryFactory: fakeQueryFactory(handles), taskStore: store(),
+    })
+    const created = manager.createSession({ projectPath: '/tmp/proj' })
+    if (!created.ok) throw new Error('create failed')
+    const id = created.session.id
+    await manager.send(id, 'run two tasks')
+    const handle = handles[0]!
+    // One task settles before the restart; the other is still running.
+    handle.push({ type: 'system', subtype: 'task_started', task_id: 'b-done', tool_use_id: 'c1', task_type: 'local_bash', description: 'quick', is_backgrounded: true, uuid: 'u1', session_id: 's' } as unknown as SDKMessage)
+    handle.push({ type: 'system', subtype: 'task_notification', task_id: 'b-done', tool_use_id: 'c1', status: 'completed', summary: 'done (exit code 0)', output_file: '/tmp/claude-1000/x/tasks/b-done.output', uuid: 'u2', session_id: 's' } as unknown as SDKMessage)
+    handle.push({ type: 'system', subtype: 'task_started', task_id: 'b-live', tool_use_id: 'c2', task_type: 'local_bash', description: 'dev server', is_backgrounded: true, uuid: 'u3', session_id: 's' } as unknown as SDKMessage)
+    await waitForCondition(() => store().read(id).length === 2)
+    // Abrupt stop, as a crash would leave things.
+    const restored = await managedManager({
+      isDirectory: anyDirectory, db, registry: new SessionRegistry(),
+      onEvent: () => {}, queryFactory: fakeQueryFactory([]), taskStore: store(),
+    })
+    expect(restored.getSnapshot(id)!.backgroundTasks).toMatchObject([
+      { taskId: 'b-done', status: 'completed', summary: 'done (exit code 0)', live: false },
+      { taskId: 'b-live', status: 'stopped', live: false },
+    ])
+    // The corrected roster is rewritten so the file and the rows agree, and
+    // the recorded output path survives for the tail reader (D3).
+    await waitForCondition(() => store().read(id).every(task => task.status !== 'running'))
+    expect(store().read(id)).toMatchObject([
+      { taskId: 'b-done', outputFile: '/tmp/claude-1000/x/tasks/b-done.output' },
+      { taskId: 'b-live', status: 'stopped' },
+    ])
+    restored.shutdown()
+  })
+
+  test('kill removes the task sidecar with the session', async () => {
+    const taskDir = path.join(tempDir, 'chat-tasks-kill')
+    const store = () => new ChatTaskStore({ dir: taskDir })
+    const handles: FakeHandle[] = []
+    const manager = await managedManager({
+      isDirectory: anyDirectory, db, registry: new SessionRegistry(),
+      onEvent: () => {}, queryFactory: fakeQueryFactory(handles), taskStore: store(),
+    })
+    const created = manager.createSession({ projectPath: '/tmp/proj' })
+    if (!created.ok) throw new Error('create failed')
+    const id = created.session.id
+    await manager.send(id, 'run one task')
+    handles[0]!.push({ type: 'system', subtype: 'task_started', task_id: 'b-kill', task_type: 'local_bash', is_backgrounded: true, uuid: 'u', session_id: 's' } as unknown as SDKMessage)
+    await waitForCondition(() => store().read(id).length === 1)
+    manager.kill(id)
+    await waitForCondition(() => !fs.existsSync(path.join(taskDir, `${id}.json`)))
+    expect(store().read(id)).toEqual([])
   })
 })
