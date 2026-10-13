@@ -52,8 +52,11 @@ export class MessageQuery {
       bound.$cursorAt = cursor.createdAt
       bound.$cursorRowid = cursor.rowid
     }
+    // `rowid` is the tie-break of the keyset and is not part of `SELECT *`:
+    // it has to be named, or the cursor's rowid is undefined and a page of
+    // rows that share a timestamp has no next page at all.
     const rows = this.db.prepare(
-      `SELECT * FROM team_messages WHERE ${where.join(' AND ')}
+      `SELECT *, rowid FROM team_messages WHERE ${where.join(' AND ')}
        ORDER BY created_at DESC, rowid DESC LIMIT $limit`
     ).all(bound) as Record<string, unknown>[]
     // Fetch one past the page: its presence says an older page exists. The

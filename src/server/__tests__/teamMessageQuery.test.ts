@@ -158,6 +158,22 @@ describe('list', () => {
     expect(tail.nextCursor).toBeNull()
   })
 
+  test('rows sharing a timestamp page by rowid, with no repeats or gaps', () => {
+    // One millisecond is enough for several enqueues, so the keyset's
+    // tie-break is the row that decides whether a page boundary holds.
+    for (const body of ['One', 'Two', 'Three', 'Four']) send({ body }, T(1))
+    const seen: string[] = []
+    let cursor: MessageCursor | null = null
+    for (let page = 0; page < 4; page++) {
+      const result = query.list(TEAM, {}, cursor, 2)
+      seen.push(...result.messages.map(message => message.body))
+      cursor = result.nextCursor
+      if (!cursor) break
+    }
+    expect(seen).toEqual(['Four', 'Three', 'Two', 'One'])
+    expect(cursor).toBeNull()
+  })
+
   test('an empty team is an empty page with no cursor', () => {
     seed()
     expect(query.list(EMPTY)).toEqual({ messages: [], nextCursor: null })
