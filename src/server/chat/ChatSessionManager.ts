@@ -77,7 +77,7 @@ import { TeamMailbox } from '../team/TeamMailbox'
 import { createMailboxServer } from '../team/mailboxTools'
 import { StrategyService } from '../strategy/StrategyService'
 import { StrategyStore } from '../strategy/strategyStore'
-import type { TeamMessage } from '../../shared/team'
+import type { TeamMessage, TeamWorktreeOccupancy } from '../../shared/team'
 import { MailDispatcher } from '../team/dispatcher'
 import { receiptMessageId } from '../team/receipt'
 import type { LimitEventStore } from '../team/routing/limitEvents'
@@ -800,6 +800,11 @@ export class ChatSessionManager {
   /** Rule load status and this team's routing decisions (mailbox view). */
   routingState(teamId: string): TeamRoutingState {
     return { rules: this.teamMail.rules.lastReport(), decisions: this.teamMail.router.decisions(teamId) }
+  }
+
+  /** The team's live sessions per worktree plus pending spawns (mailbox view). */
+  teamRoster(teamId: string): TeamWorktreeOccupancy[] {
+    return this.teamMail.roster(teamId)
   }
 
   /** The human hands parked work to a group or session of its team. */

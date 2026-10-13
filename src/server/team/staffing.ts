@@ -16,13 +16,15 @@
 // no longer exists is dead-lettered.
 import type { Database } from 'bun:sqlite'
 import type { ChatApprovalPolicy } from '../../shared/chat'
+import type { TeamWorktreeOccupancy } from '../../shared/team'
 import type { ChatSessionRecord } from '../db'
 import type { SpawnAssignment } from './dispatcher'
 import type { MailboxStore, TeamMessage } from './mailboxStore'
 import type { TeamCaps } from './teamCaps'
 import type { GroupDefinition } from './groupFile'
 import type { TeamIdentity } from './teamIdentity'
-import { worktreeRootOf, type TeamWorktrees } from './worktreeRoots'
+import { teamRoster, worktreeWriters, type PendingSpawnRow } from './teamRoster'
+import type { TeamWorktrees } from './worktreeRoots'
 
 const CREATE_TABLE_SQL = `
 CREATE TABLE IF NOT EXISTS team_spawns (
@@ -115,7 +117,8 @@ export class WorktreeStaffing {
     return {
       worktree,
       allowed: !backingOff && counts.teamSpawned < teamCap && counts.worktreeWriters < 1,
-      pendingProfiles: counts.pending.filter(row => row.group_id === message.toId).map(row => row.profile_id),
+      pendingProfiles: counts.roster.flatMap(entry => entry.pendingSpawns)
+        .filter(pending => pending.group === message.toId).map(pending => pending.profile),
     }
   }
 
@@ -131,8 +134,9 @@ export class WorktreeStaffing {
     const reservation = `spawn-${crypto.randomUUID()}`
     const reserved = this.db.transaction(() => {
       const counts = this.counts(message.teamId, group.id, worktree)
-      const onProfile = counts.groupLive.filter(record => (record.claudeProfileId ?? 'default') === profileId).length +
-        counts.pending.filter(row => row.group_id === group.id && row.profile_id === profileId).length
+      const onProfile = counts.groupLive.filter(session => session.profile === profileId).length +
+        counts.roster.flatMap(entry => entry.pendingSpawns)
+          .filter(pending => pending.group === group.id && pending.profile === profileId).length
       if (counts.groupMembers >= group.max || counts.teamSpawned >= teamCap || counts.worktreeWriters >= 1) return false
       if (cap !== undefined && onProfile >= cap) return false
       if (!this.store.reserveForSpawn(message.id)) return false
@@ -166,19 +170,37 @@ export class WorktreeStaffing {
 
   /** Live counts behind every cap, pending reservations included. */
   private counts(teamId: string, groupId: string, worktree: string) {
-    const live = [...this.options.records()].filter(record =>
-      record.archivedAt == null && this.options.teamOf(record.sessionId)?.teamId === teamId)
-    const pending = this.db.prepare('SELECT group_id, worktree, profile_id FROM team_spawns WHERE team_id = ?')
-      .all(teamId) as Array<{ group_id: string; worktree: string; profile_id: string }>
-    const spawned = live.filter(record => record.spawned)
-    const groupLive = live.filter(record => record.groupId === groupId)
+    const roster = this.roster(teamId)
+    const writers = worktreeWriters(roster.find(entry => entry.worktree === worktree))
+    const groupLive = roster.flatMap(entry => entry.sessions).filter(session => session.group === groupId)
+    const pendingOfGroup = roster.reduce((count, entry) => count + entry.pendingSpawns.filter(pending => pending.group === groupId).length, 0)
     return {
-      pending,
+      roster,
       groupLive,
-      groupMembers: groupLive.length + pending.filter(row => row.group_id === groupId).length,
-      teamSpawned: spawned.length + pending.length,
-      worktreeWriters: spawned.filter(record => worktreeRootOf(record.projectPath) === worktree).length +
-        pending.filter(row => row.worktree === worktree).length,
+      groupMembers: groupLive.length + pendingOfGroup,
+      teamSpawned: roster.reduce((count, entry) =>
+        count + entry.sessions.filter(session => session.spawned).length + entry.pendingSpawns.length, 0),
+      worktreeWriters: writers.spawnedIds.length + writers.pending,
     }
+  }
+
+  /**
+   * The team's occupancy read model (team-waiting-reasons D4): live sessions
+   * per resolved worktree root plus this module's pending reservations. The
+   * worktree-writer count and the `worktree-occupied` reason both read it,
+   * so the occupant a reason names is the fact that blocked the spawn.
+   */
+  roster(teamId: string): TeamWorktreeOccupancy[] {
+    return teamRoster(teamId, {
+      records: [...this.options.records()],
+      teamOf: id => this.options.teamOf(id),
+      pendingSpawns: this.pendingFor(teamId),
+    })
+  }
+
+  /** Pending `team_spawns` reservations of a team. */
+  pendingFor(teamId: string): PendingSpawnRow[] {
+    return this.db.prepare('SELECT team_id AS teamId, group_id AS groupId, worktree, profile_id AS profileId FROM team_spawns WHERE team_id = ?')
+      .all(teamId) as PendingSpawnRow[]
   }
 }

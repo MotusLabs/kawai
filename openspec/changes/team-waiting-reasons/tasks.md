@@ -7,9 +7,9 @@
 
 ## 2. Worktree occupancy read model
 
-- [ ] 2.1 Add pure `teamRoster(teamId)` in `src/server/team/teamRoster.ts` grouping live non-archived sessions by resolved worktree root with group, profile, status, spawned identity, and task, plus pending `team_spawns` reservations; verify unit tests cover manual and spawned sessions, members in subdirectories, missing group definitions, archived exclusion, and pending reservations.
-- [ ] 2.2 Make `WorktreeStaffing`'s worktree-writer count read the roster so the occupant named in a reason is the same fact that blocks the spawn, while manual sessions stay listed-but-not-blocking; verify staffing tests (caps, one writer per worktree, reservation accounting) still pass unchanged and roster tests show a manual session not occupying.
-- [ ] 2.3 Carry the roster on the team mailbox snapshot for every subscribed client; verify connection tests cover open, change, and reconnect snapshots including `worktrees`, and that teams without sessions serialize an empty list.
+- [x] 2.1 Add pure `teamRoster(teamId)` in `src/server/team/teamRoster.ts` grouping live non-archived sessions by resolved worktree root with group, profile, status, spawned identity, and task, plus pending `team_spawns` reservations; verify unit tests cover manual and spawned sessions, members in subdirectories, missing group definitions, archived exclusion, and pending reservations.
+- [x] 2.2 Make `WorktreeStaffing`'s worktree-writer count read the roster so the occupant named in a reason is the same fact that blocks the spawn, while manual sessions stay listed-but-not-blocking; verify staffing tests (caps, one writer per worktree, reservation accounting) still pass unchanged and roster tests show a manual session not occupying.
+- [x] 2.3 Carry the roster on the team mailbox snapshot for every subscribed client; verify connection tests cover open, change, and reconnect snapshots including `worktrees`, and that teams without sessions serialize an empty list.
 
 ## 3. Dispatcher diagnosis and spawn-backoff wake-up
 

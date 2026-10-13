@@ -13,10 +13,12 @@ let messages: ServerMessage[]
 let connection: { send: (message: ServerMessage) => void }
 let reloads: number
 let handOffs: Array<{ messageId: string; target: { kind: string; id: string } }>
+let roster: import('../../shared/team').TeamWorktreeOccupancy[]
 const REPORT = { loadedAt: '2026-10-12T12:00:00.000Z', dir: '/home/.kawai/routing', rules: [{ groupId: 'devs', file: '/home/.kawai/routing/devs.ts', ok: false, error: 'boom', change: 'changed' as const }] }
 beforeEach(() => {
   reloads = 0
   handOffs = []
+  roster = [{ worktree: '/repo/feat-x', sessions: [{ sessionId: 'dev', group: 'devs', profile: 'glm', status: 'waiting', spawned: true, taskId: 'task-1' }], pendingSpawns: [{ group: 'qa', profile: 'default' }] }]
   db = new Database(':memory:'); store = new MailboxStore(db); messages = []
   connection = { send: message => messages.push(message) }
   const manager = {
@@ -29,6 +31,7 @@ beforeEach(() => {
     },
     mailbox: { store }, dispatcher: { notify: () => {} },
     routingState: (teamId: string) => ({ rules: reloads > 0 ? REPORT : null, decisions: [{ at: 'now', teamId, groupId: 'devs', messageId: 'm', source: 'builtin', decision: 'none' }] }),
+    teamRoster: () => roster,
     reloadRoutingRules: async () => { reloads++; return REPORT },
     handOff: (messageId: string, target: { kind: string; id: string }) => {
       handOffs.push({ messageId, target })
@@ -53,6 +56,22 @@ test('open snapshots, enqueue pushes, close and disconnect unsubscribe', async (
   const count = messages.length; enqueue(); expect(messages).toHaveLength(count)
   await open(); connections.disconnect(connection)
   const disconnected = messages.length; enqueue(); expect(messages).toHaveLength(disconnected)
+})
+
+test('every snapshot carries the worktree occupancy roster, empty without sessions', async () => {
+  await open()
+  expect(messages.at(-1)).toMatchObject({ type: 'team-mailbox-snapshot', worktrees: [{ worktree: '/repo/feat-x' }] })
+  // A row-state change re-publishes the roster alongside the rows.
+  enqueue()
+  expect(messages.at(-1)).toMatchObject({ worktrees: [{ worktree: '/repo/feat-x', pendingSpawns: [{ group: 'qa', profile: 'default' }] }] })
+  // A reconnect snapshot carries it too.
+  await connections.handle(connection, { type: 'team-mailbox-close', sessionId: 'dev' })
+  await open()
+  expect(messages.at(-1)).toMatchObject({ worktrees: [{ worktree: '/repo/feat-x' }] })
+  // A team with no live sessions serializes an empty list, not a missing field.
+  roster = []
+  connections.publishMailbox('team')
+  expect(messages.at(-1)).toMatchObject({ type: 'team-mailbox-snapshot', worktrees: [] })
 })
 test('cancel, retry, discard push updated snapshots; cross-team actions are refused', async () => {
   await open()

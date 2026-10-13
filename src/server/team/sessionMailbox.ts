@@ -176,6 +176,9 @@ export class SessionMailbox {
     }
   }
 
+  /** The team's worktree occupancy read model (mailbox snapshot, D4). */
+  roster(teamId: string) { return this.staffing.roster(teamId) }
+
   /** A tool call in a session's transcript (limit progress). */
   toolCall(sessionId: string, tool: string, input: unknown) {
     this.outcomes.toolCall(sessionId, tool, input)
