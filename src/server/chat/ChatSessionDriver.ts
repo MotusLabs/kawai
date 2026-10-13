@@ -193,6 +193,13 @@ export interface ChatSessionDriverOptions {
     opts?: { persist?: boolean }
   ) => void
   /**
+   * Current model (chat-session-model design D5): the model string of an
+   * init frame, fired only when it is non-empty and differs from the last
+   * fired one — init opens every turn, so an unchanged model never re-fires
+   * and a mid-session /model switch lands on the next turn.
+   */
+  onModel?: (model: string) => void
+  /**
    * Plan usage (usage bar design D3): parsed report from a pushed
    * rate_limit_event frame, whatever turn state the session is in.
    */
@@ -265,6 +272,8 @@ export class ChatSessionDriver {
   /** Echo suppression: texts we submitted that the SDK may echo back. */
   private readonly sentEchoTexts = new Map<string, number>()
   private capturedSdkSessionId: string | undefined
+  /** Last model reported to onModel; undefined before the first report. */
+  private lastReportedModel: string | undefined
   private lastStatus: SessionStatus = 'waiting'
   /** Live-turn activity state (design D3); null phase when no turn runs. */
   private activityState: ChatActivityState = initialChatActivityState()
@@ -955,6 +964,18 @@ export class ChatSessionDriver {
       if (!this.capturedSdkSessionId && message.session_id) {
         this.capturedSdkSessionId = message.session_id
         this.options.onSdkSessionId?.(message.session_id)
+      }
+      // The model in effect for the coming turn (design D1/D5): init opens
+      // every turn, so a /model switch lands here on the next one. Only a
+      // changed, non-empty value fires — a missing or empty string on an
+      // older CLI never reports a placeholder.
+      if (
+        typeof message.model === 'string' &&
+        message.model !== '' &&
+        message.model !== this.lastReportedModel
+      ) {
+        this.lastReportedModel = message.model
+        this.options.onModel?.(message.model)
       }
       // The authoritative terminal-bound set; until here the tracker used the
       // observed fallback (verified 2026-10-06: init only arrives once a turn

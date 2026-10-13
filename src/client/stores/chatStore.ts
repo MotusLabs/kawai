@@ -59,6 +59,8 @@ export interface ChatTranscript {
   activity: ChatTranscriptActivity | null
   /** Latest context-usage reading; null before the first model request. */
   contextUsage: ChatContextUsage | null
+  /** Model the agent last reported (init frame); null before the first turn. */
+  model: string | null
   /** Latest worker roster (workers design D2): replaced, never merged. */
   workers: ChatTranscriptWorker[]
   /** Active notices (notification strip design D6), closed account ones filtered. */
@@ -68,7 +70,7 @@ export interface ChatTranscript {
 export const emptyTranscript = (): ChatTranscript => ({
   events: [], pendingRequests: [], status: 'waiting', throughSequence: 0,
   commands: { status: 'unavailable', commands: [] }, seen: new Set(), activity: null, contextUsage: null,
-  workers: [], notifications: [],
+  model: null, workers: [], notifications: [],
 })
 
 /** Anchor a server-reported activity on the client's clock (design D2). */
@@ -163,6 +165,8 @@ interface ChatStore {
   setActivity: (sessionId: string, activity: ChatActivity | null) => void
   /** Adopt the latest context reading (chat-context-usage push); null clears. */
   setContextUsage: (sessionId: string, usage: ChatContextUsage | null) => void
+  /** Adopt the latest reported model (chat-model push); never clears. */
+  setModel: (sessionId: string, model: string) => void
   /** Adopt a profile's latest usage report (chat-usage / snapshot). */
   setUsage: (profileId: string, report: ChatUsageReport | null) => void
   /** Adopt the latest roster (chat-workers push / snapshot). */
@@ -213,6 +217,8 @@ export const useChatStore = create<ChatStore>((set) => ({
         activity: message.activity ? anchorActivity(message.activity) : null,
         // Authoritative replace: a restart or unread session clears to null.
         contextUsage: message.contextUsage,
+        // Authoritative at attach: the last reported model or null (design D3).
+        model: message.model,
         // The roster is authoritative at attach time, live rows and settled
         // outcomes together (workers design D2).
         workers: anchorWorkers(message.workers),
@@ -249,6 +255,13 @@ export const useChatStore = create<ChatStore>((set) => ({
     return { sessions: { ...state.sessions, [sessionId]: {
       ...current,
       contextUsage: usage,
+    } } }
+  }),
+  setModel: (sessionId, model) => set(state => {
+    const current = state.sessions[sessionId] ?? emptyTranscript()
+    return { sessions: { ...state.sessions, [sessionId]: {
+      ...current,
+      model,
     } } }
   }),
   setWorkers: (sessionId, workers) => set(state => {

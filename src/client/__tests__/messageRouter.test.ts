@@ -121,6 +121,7 @@ describe('createMessageRouter dispatch coverage', () => {
       { type: 'chat-context-usage', sessionId: 'chat-1', usage: null },
       { type: 'chat-usage', profileId: 'default', report: null },
       { type: 'chat-workers', sessionId: 'chat-1', workers: [] },
+      { type: 'chat-model', sessionId: 'chat-1', model: 'claude-sonnet-5-5' },
       { type: 'chat-notifications', sessionId: 'chat-1', notifications: [] },
       { type: 'team-mailbox-snapshot', teamId: 'team', messages: [] },
       { type: 'team-tasks-snapshot', teamId: 'team', tasks: [] },
