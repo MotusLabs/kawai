@@ -97,6 +97,11 @@ export interface ChatCommandState {
 export interface ChatPeerMessage {
   messageId: string
   senderSession: string
+  /**
+   * Actor kind of the sender (team-message-threads D4): the human composing
+   * mail, or an agent session. Absent on recorded envelopes = agent.
+   */
+  senderKind?: 'agent' | 'human'
   senderGroup: string | null
   priority: 'normal' | 'urgent'
   originPath: string
@@ -104,7 +109,7 @@ export interface ChatPeerMessage {
   threadId: string
   body: string
   possibleDuplicate: boolean
-  thread?: Array<{ messageId: string; senderSession: string; body: string }>
+  thread?: Array<{ messageId: string; senderSession: string; body: string; senderKind?: 'agent' | 'human' }>
   /** The referenced team task as it was at delivery (team-tasks D3); absent = none. */
   task?: ChatPeerTaskContext
   /** Work handed off after a provider limit (profile routing); absent = none. */

@@ -9,10 +9,10 @@
 
 ## 2. Named participants, including killed sessions
 
-- [ ] 2.1 Add the `team_session_directory` table keyed by team and session id (last known name and group) and upsert it from session creation and rename paths; verify tests cover create, generated and manual renames, repeated upserts, and no writes on kill or archive.
-- [ ] 2.2 Add a resolver that labels a participant from live sessions first and the directory second, rendering `Name (gone)` with the role badge and exposing the id as metadata; verify tests cover live, archived, killed-with-directory-entry, and never-seen sessions, and that archived and killed rows never resurrect a session.
-- [ ] 2.3 Keep the participants derivation correct for human senders: filter null senders in the task participants query and any other query that assumed `from_session` was present; verify tests show a human sender never becomes a participant id.
-- [ ] 2.4 Extend the peer-message row to label senders through the resolver (role badge, expandable id, human label for human senders); verify component tests cover an agent sender, a human sender, and a killed sender keeping its recorded name.
+- [x] 2.1 Add the `team_session_directory` table keyed by team and session id (last known name and group) and upsert it from session creation and rename paths; verify tests cover create, generated and manual renames, repeated upserts, and no writes on kill or archive.
+- [x] 2.2 Add a resolver that labels a participant from live sessions first and the directory second, rendering `Name (gone)` with the role badge and exposing the id as metadata; verify tests cover live, archived, killed-with-directory-entry, and never-seen sessions, and that archived and killed rows never resurrect a session.
+- [x] 2.3 Keep the participants derivation correct for human senders: filter null senders in the task participants query and any other query that assumed `from_session` was present; verify tests show a human sender never becomes a participant id.
+- [x] 2.4 Extend the peer-message row to label senders through the resolver (role badge, expandable id, human label for human senders); verify component tests cover an agent sender, a human sender, and a killed sender keeping its recorded name.
 
 ## 3. The human as sender and recipient
 

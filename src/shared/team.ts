@@ -78,6 +78,33 @@ export interface ChatHandoffPackage {
 }
 
 /**
+ * Last known identity of a team chat session (`team_session_directory`,
+ * team-message-threads D3). Written on create and rename; kept after kill so
+ * history can still name the participant.
+ */
+export interface SessionDirectoryEntry {
+  sessionId: string
+  /** Last known session name. */
+  name: string
+  /** Last known team group id; null = none. */
+  group: string | null
+}
+
+/**
+ * A participant resolved for display: a live session's current name, or the
+ * directory's last known name marked gone once the session was killed.
+ */
+export interface ParticipantLabel {
+  /** Null for the human, who has no session. */
+  id: string | null
+  name: string
+  /** Role (team group id) recorded for the participant; null = none. */
+  group: string | null
+  /** Killed or never seen: render `Name (gone)` and never navigate. */
+  gone: boolean
+}
+
+/**
  * One recorded message state change (team-message-threads D2). Written inside
  * the store's transitions, so no change can escape logging; durable rows that
  * survive restart with the messages they describe.
