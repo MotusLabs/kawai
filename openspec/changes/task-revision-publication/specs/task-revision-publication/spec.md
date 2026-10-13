@@ -19,8 +19,12 @@ The human SHALL be able to save a draft of a task's direction, acceptance, and r
 Publishing SHALL record the next numbered revision with direction, acceptance, rationale, author, and time, and SHALL discard the published draft. A publication SHALL carry the revision it was based on and SHALL be refused as stale, keeping the draft, when a newer revision exists. A publication SHALL carry a command key; replaying the same key and payload SHALL return the prior revision, and the same key with a different payload SHALL be refused.
 
 #### Scenario: Revision increments once
-- **WHEN** the human publishes a draft based on revision 1 and the request is resent after a reconnect with the same command key
-- **THEN** exactly one revision 2 exists and the replay returns it
+- **WHEN** the human publishes and notifies a draft based on revision 1 and the request is resent after a reconnect with the same command key
+- **THEN** exactly one revision 2 exists, the replay returns it, the claimed holder has exactly one notice for revision 2, and exactly one revision-published fact exists for revision 2
+
+#### Scenario: Concurrent same-key publishes
+- **WHEN** two requests with the same command key and payload are processed at the same time
+- **THEN** exactly one revision, one notice per holder, and one revision-published fact are written, and both requests return that revision
 
 #### Scenario: Stale draft is refused
 - **WHEN** the human publishes a draft based on revision 1 after another revision 2 was published
@@ -109,10 +113,10 @@ Publishing, notifying, and acknowledging SHALL NOT change the task revision reco
 - **THEN** the notice names revision 2 as announced and its task context carries revision 3
 
 ### Requirement: Publication emits a revision-published fact
-Each publication SHALL produce a durable, ordered fact — task, team, new revision, previous revision, author, rationale, time — as its published revision record, with the task naming its current revision; consumers SHALL compare against these records. An in-process announcement after commit MAY be offered and SHALL NOT be required. Drafts, notices, retries, and acknowledgements SHALL NOT produce it. Consumers decide its effect on earlier results.
+Each publication SHALL produce a durable, ordered fact — task, team, new revision, previous revision, author, rationale, time — as its published revision record, with the task naming its current revision; consumers SHALL compare against these records. An in-process announcement after commit MAY be offered and SHALL NOT be required. A replayed publication, drafts, notices, retries, and acknowledgements SHALL NOT produce it. Consumers decide its effect on earlier results.
 
 #### Scenario: One fact per publication
-- **WHEN** revision 2 is published and its notice is retried twice
+- **WHEN** revision 2 is published, the publication is replayed with the same command key, and its notice is retried twice
 - **THEN** exactly one revision-published fact exists for revision 2
 
 #### Scenario: Draft emits nothing
