@@ -1,0 +1,50 @@
+# Design
+
+## Context
+
+- Spawned members are `chat_sessions` rows with `spawned = 1` and the `task_id` they were spawned for; `associateTask` never rewrites a spawned member's task (`ChatSessionManager.ts`), so "the members spawned for task T" is a stable query.
+- Every staffing count treats any non-archived member as live (`staffing.ts` `counts`, `sessionMailbox.ts` `members`). Archiving is therefore the whole capacity mechanism; nothing else needs to change for a release to free slots.
+- `ChatSessionManager.archive` already does the safe stop: interrupt, kill the process, settle recipient claims (`settleRecipient`), clear activity/notices, persist context usage, set `archived_at`. `applyPatch` notifies the dispatcher on status, path, and archive changes; `request_resolved` and mailbox changes notify it too. A dispatch pass therefore follows every event that can make a member ready.
+- Task status changes go through `TaskService.setStatus` (agent tools and human WebSocket action alike) and `TaskStore` publishes every change to subscribers.
+- Worktree scoping is one function, `targetWorktree(message)` in `sessionMailbox.ts`, shared by the dispatcher (`inWorktree`), router, staffing (`spawnContext` returns null when it is null), and limit outcomes. Returning null means "any member, no spawn".
+- Journal authors are stored as `author_kind TEXT` + `author_session`; `TaskActor` is `human | agent`.
+
+## Goals / Non-Goals
+
+**Goals:** a single release primitive (readiness check + archive + journal) used by both the task-close trigger and the agent tool; no new process lifecycle (release = archive); per-group opt-outs read from the current group file.
+
+**Non-Goals:** UI for pending releases beyond the journal entry and the existing Archive pane; changing who may close tasks; worktree or branch cleanup.
+
+## Decisions
+
+**D1 — Pending releases are rows, written at the close transition.** A new `team_member_releases` table (`session_id` PK, `task_id`, `team_id`, `reason`, `requested_by_kind`, `requested_by_session`, `requested_at`) is filled in the same transaction that sets the task to `done`/`cancelled`, for each live spawned member of that task whose group does not opt out. A status change out of `done`/`cancelled` deletes the task's rows. Archiving or killing the session by any path, and a human restore, delete the session's row.
+*Why edge-triggered rows over a level rule ("spawned, live, task closed ⇒ archive"):* the level rule would immediately re-archive a member the human restored on purpose, and it would retroactively archive members of tasks closed before this change. Rows make restore and reopen simple cancellations and survive restart without recomputation.
+*Group opt-out read at close time and again at release time* (the current file wins; a group that opts out after the close keeps its member).
+
+**D2 — Release runs inside the dispatch cycle, before routing.** `MemberRelease.evaluate()` runs from the dispatcher's `beginCycle` hook. For each pending row it checks readiness and, if ready, archives through an injected `archive(sessionId)` (the manager's existing method), appends the journal entry, and deletes the row. Running before routing lets the freed capacity serve mail in the same pass; the archive's own `applyPatch` notification queues one more pass, which is harmless.
+*Alternative considered:* a separate timer or per-event hooks. Rejected: the dispatcher is already notified by every event that changes readiness (status, request resolution, mail changes, archive), so a second scheduler would duplicate that wiring. A task closing must notify the dispatcher too; `SessionMailbox` subscribes to task changes for that.
+
+**D3 — Readiness reuses the dispatcher's recipient view plus mail facts.** Ready ⇔ `recipient.idle && !recipient.pendingRequest` (the same `MailRecipient` the dispatcher builds), `store.claimsFor(id)` is empty (no claimed or pushed-unsettled mail), `store.parkedBy(id)` is empty, and no `queued` direct mail addressed to the session is due. Unavailable members (missing directory, start blocker) count as ready — they hold capacity but can do nothing. Parked work is not released implicitly: the human can Hand off or discard it, after which release proceeds.
+
+**D4 — `system` journal author, separate from `TaskActor`.** `TaskJournalEntry.author` becomes `JournalAuthor = TaskActor | { kind: 'system'; sessionId: null }`; creators and revision authors stay `TaskActor`. Stored as `author_kind = 'system'` (TEXT, no migration). The client renders it as "Kawai". Participants derivation skips system authors. Entry text: `Released <name> (<session id>): task <status> by <actor>.` or `Released <name> (<id>) at the request of <agent name> (<id>): <reason>.`
+*Why not widen `TaskActor`:* `team-message-threads` re-types `TaskActor` as an alias of its `TeamActor`; keeping the journal-only kind separate avoids a merge conflict and keeps "a task's creator is never the system" true by type.
+
+**D5 — `worktreeScoped: false` makes `targetWorktree` return null for that group.** `targetWorktree(message)` gains the receiving group's definition: when the message is group mail and the group's current file sets `worktreeScoped: false`, it returns null. Every consumer (dispatcher eligibility, router candidates, staffing spawn context, limit outcomes) then treats the mail as unscoped and never spawns for it. The group definition is read from the per-cycle catalog cache the router already uses (`groupOf`), made available synchronously by resolving it at cycle start for groups with queued mail.
+*Alternative considered:* lifting scoping for every killed-sender reply fallback (`attachThread`). Rejected: when a dev is killed, a reply falling back to `devs` should stay in the dev's worktree so a fresh dev is spawned there, not handed to a dev working elsewhere. The opt-out puts the choice with the receiving group, which is where the "my members never live in task worktrees" fact belongs.
+
+**D6 — `release_member` is a `kawai-team` tool, gated at call time.** Input `{ session_id, reason? }`. The caller's group's current file must set `canReleaseMembers: true`; the target must be a live, spawned session of the caller's team, not the caller, and ready per D3. Otherwise the tool throws with a specific reason (not permitted / not spawned / other team / archived or unknown / busy / awaiting a request / holds mail). Success archives synchronously and journals on the target's task (if it has one). Added to `TEAM_ALLOWED_TOOLS` like the other team tools. `teamPrompt.ts` describes the tool only to permitted groups. No `restore` or `kill` tool is added.
+*Refuse, not defer:* an agent needs a definite answer; a deferred release would hide work the agent thinks is gone (UX doc E08 asks for an actionable refusal).
+
+**D7 — Group file keys.** `releaseOnTaskClose` (default true), `worktreeScoped` (default true), `canReleaseMembers` (default false): strict `true|false`, invalid values reject the file like `canCreateTasks`. Existing kawai group files with these keys are already accepted today (unknown keys are ignored), so repositories can add them before the change ships.
+
+## Risks / Trade-offs
+
+- [A dev is released while the lead still wants to send it follow-up work] → The lead can send direct mail, which restores an archived recipient; the journal entry says who was released. Groups can opt out with `releaseOnTaskClose: false`.
+- [Release archives a member mid-way through uncommitted work after a human closes a task by mistake] → Release waits for the turn to end and never touches the worktree; reopen before the turn ends cancels it, and Restore resumes the same conversation afterwards.
+- [`worktreeScoped: false` on a group that does spawn removes its spawning] → Documented: unscoped groups are staffed by humans; the default is unchanged.
+- [A member that never becomes ready (stuck pending request) keeps its pending row forever] → The row is visible through the journal's absence and the member's needs-attention badge; the human resolves the request or archives by hand, which deletes the row (D1).
+- [Re-entrant dispatch passes after each archive] → Bounded by the number of pending releases; each archive removes its row before notifying.
+
+## Migration Plan
+
+Additive table and frontmatter keys; no backfill (tasks already closed are not released — a non-goal). Rollback: older code ignores the table and the new keys, but reads `author_kind = 'system'` journal rows through its two-kind actor mapper; verify during implementation how that mapper treats an unknown kind, and if it would throw, roll back by deleting `system` journal rows first (they only record releases already visible in the Archive pane).
