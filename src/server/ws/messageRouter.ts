@@ -186,6 +186,9 @@ export function handleMessage(
     case 'team-task-amend':
     case 'team-task-note':
     case 'team-task-status':
+    case 'team-task-assign':
+    case 'team-task-preview':
+    case 'team-task-targets':
     case 'chat-worker-transcript':
       fireAndForget(chatConnections.handle(chatPeer(ws), message), 'chatMessage')
       return
