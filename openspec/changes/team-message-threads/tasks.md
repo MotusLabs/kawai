@@ -24,8 +24,8 @@
 
 ## 4. One Messages read model
 
-- [ ] 4.1 Add a query layer over `team_messages` returning delivered and pending mail together — newest first, paged over `created_at, rowid` — with filters for task, thread, group, session, priority, delivery state, and human involvement, plus one thread's messages with their events; verify tests cover each filter, filter combinations, paging boundaries, and team scoping (another team's rows never returned).
-- [ ] 4.2 Record the task revision at push time beside the delivery-time task context and surface it on thread rows; verify tests show a later amendment does not rewrite the recorded revision and taskless messages record none.
+- [x] 4.1 Add a query layer over `team_messages` returning delivered and pending mail together — newest first, paged over `created_at, rowid` — with filters for task, thread, group, session, priority, delivery state, and human involvement, plus one thread's messages with their events; verify tests cover each filter, filter combinations, paging boundaries, and team scoping (another team's rows never returned).
+- [x] 4.2 Record the task revision at push time beside the delivery-time task context and surface it on thread rows; verify tests show a later amendment does not rewrite the recorded revision and taskless messages record none.
 - [ ] 4.3 Subscribe the query layer to store changes and publish snapshots and pushes per team; verify tests cover change notification for send, delivery, retry, and cancel, and that reconnect receives an authoritative snapshot of the current filters.
 
 ## 5. Messages wire protocol and client views
