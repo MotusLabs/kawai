@@ -8,114 +8,33 @@
 // decided by StrategyService before it calls in. Repository bindings
 // (`strategy_repo_bindings`) are the product's team scope: the owning
 // team's git common dir plus its listed worktrees, one product per team
-// (the unique root index enforces it).
+// (the unique root index enforces it). The DDL and row mappers live in
+// `strategySchema.ts`.
 import type { Database } from 'bun:sqlite'
 import type {
   ProductStrategy,
   StrategyActor,
-  StrategyClaimKind,
   StrategyDecision,
   StrategyDraft,
   StrategyDetail,
   StrategyEvidence,
   StrategyImpactReview,
   StrategyRevision,
-  StrategyRevisionStatus,
 } from '../../shared/productStrategy'
 import {
-  STRATEGY_CLAIM_KINDS,
-  STRATEGY_REVISION_STATUSES,
   hashStrategyContent,
   normalizeStrategyContent,
   strategyContentErrors,
 } from '../../shared/productStrategy'
-
-export const CREATE_STRATEGY_TABLES_SQL = `
-CREATE TABLE IF NOT EXISTS product_strategies (
-  id TEXT PRIMARY KEY,
-  product_id TEXT NOT NULL,
-  title TEXT NOT NULL,
-  owner_kind TEXT NOT NULL,
-  owner_session TEXT,
-  lifecycle TEXT NOT NULL,
-  current_approved_revision INTEGER,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
-);
-CREATE UNIQUE INDEX IF NOT EXISTS product_strategies_product ON product_strategies (product_id);
-CREATE TABLE IF NOT EXISTS strategy_revisions (
-  strategy_id TEXT NOT NULL,
-  revision INTEGER NOT NULL,
-  status TEXT NOT NULL,
-  content_json TEXT NOT NULL,
-  content_hash TEXT NOT NULL,
-  author_kind TEXT NOT NULL,
-  author_session TEXT,
-  impact_proposal TEXT,
-  created_at TEXT NOT NULL,
-  PRIMARY KEY (strategy_id, revision)
-);
-CREATE TABLE IF NOT EXISTS strategy_drafts (
-  strategy_id TEXT NOT NULL,
-  draft_id TEXT NOT NULL,
-  base_revision INTEGER,
-  author_kind TEXT NOT NULL,
-  author_session TEXT,
-  content_json TEXT NOT NULL,
-  content_hash TEXT NOT NULL,
-  impact_proposal TEXT,
-  updated_at TEXT NOT NULL,
-  PRIMARY KEY (strategy_id, draft_id)
-);
-CREATE TABLE IF NOT EXISTS strategy_evidence (
-  id TEXT PRIMARY KEY,
-  strategy_id TEXT NOT NULL,
-  revision INTEGER NOT NULL,
-  claim_ref TEXT NOT NULL,
-  kind TEXT NOT NULL,
-  source_ref TEXT,
-  observed_at TEXT,
-  limitations TEXT,
-  access_scope TEXT
-);
-CREATE INDEX IF NOT EXISTS strategy_evidence_revision ON strategy_evidence (strategy_id, revision);
--- Idempotency is a database fact (design D1/D4): a retried approve or
--- withdraw cannot insert a second decision, and S14's "impact-review item
--- once" is the same constraint one table over.
-CREATE TABLE IF NOT EXISTS strategy_decisions (
-  id TEXT PRIMARY KEY,
-  strategy_id TEXT NOT NULL,
-  revision INTEGER,
-  content_hash TEXT,
-  decision TEXT NOT NULL,
-  rationale TEXT,
-  actor_kind TEXT NOT NULL,
-  actor_session TEXT,
-  approval_scope TEXT,
-  open_questions TEXT,
-  command_id TEXT NOT NULL,
-  created_at TEXT NOT NULL,
-  UNIQUE (strategy_id, command_id)
-);
-CREATE TABLE IF NOT EXISTS strategy_impact_reviews (
-  id TEXT PRIMARY KEY,
-  strategy_id TEXT NOT NULL,
-  revision INTEGER NOT NULL,
-  content_hash TEXT NOT NULL,
-  command_id TEXT NOT NULL,
-  state TEXT NOT NULL,
-  created_at TEXT NOT NULL,
-  UNIQUE (strategy_id, command_id)
-);
-CREATE TABLE IF NOT EXISTS strategy_repo_bindings (
-  strategy_id TEXT NOT NULL,
-  root TEXT NOT NULL,
-  kind TEXT NOT NULL,
-  created_at TEXT NOT NULL,
-  PRIMARY KEY (strategy_id, root)
-);
-CREATE UNIQUE INDEX IF NOT EXISTS strategy_repo_bindings_root ON strategy_repo_bindings (root);
-`
+import {
+  CREATE_STRATEGY_TABLES_SQL,
+  mapDecision,
+  mapDraft,
+  mapEvidence,
+  mapImpactReview,
+  mapRevision,
+  mapStrategy,
+} from './strategySchema'
 
 export interface CreateStrategyInput {
   productId: string
@@ -219,12 +138,12 @@ export class StrategyStore {
 
   get(id: string): ProductStrategy | null {
     const row = this.db.prepare('SELECT * FROM product_strategies WHERE id = ?').get(id)
-    return row ? this.mapStrategy(row as Record<string, unknown>) : null
+    return row ? mapStrategy(this.db, row as Record<string, unknown>) : null
   }
 
   getByProductId(productId: string): ProductStrategy | null {
     const row = this.db.prepare('SELECT * FROM product_strategies WHERE product_id = ?').get(productId)
-    return row ? this.mapStrategy(row as Record<string, unknown>) : null
+    return row ? mapStrategy(this.db, row as Record<string, unknown>) : null
   }
 
   /** The team's strategies, oldest first (one per team by the binding rule). */
@@ -232,7 +151,7 @@ export class StrategyStore {
     return (this.db.prepare(`SELECT s.* FROM product_strategies s
       JOIN strategy_repo_bindings b ON b.strategy_id = s.id AND b.kind = 'team'
       WHERE b.root = ? ORDER BY s.created_at, s.rowid`).all(teamId) as Record<string, unknown>[])
-      .map(row => this.mapStrategy(row))
+      .map(row => mapStrategy(this.db, row))
   }
 
   /** The strategy bound to a team's repository, if the team has one. */
@@ -286,44 +205,17 @@ export class StrategyStore {
       ? this.db.prepare('SELECT * FROM strategy_evidence WHERE strategy_id = ? ORDER BY revision, rowid').all(strategyId)
       : this.db.prepare('SELECT * FROM strategy_evidence WHERE strategy_id = ? AND revision = ? ORDER BY rowid').all(strategyId, revision)
     ) as Record<string, unknown>[]
-    return rows.map(row => ({
-      id: String(row.id),
-      revision: Number(row.revision),
-      claimRef: String(row.claim_ref),
-      kind: claimKind(row.kind),
-      sourceRef: text(row.source_ref),
-      observedAt: text(row.observed_at),
-      limitations: text(row.limitations),
-      accessScope: text(row.access_scope),
-    }))
+    return rows.map(mapEvidence)
   }
 
   decisions(strategyId: string): StrategyDecision[] {
     return (this.db.prepare('SELECT * FROM strategy_decisions WHERE strategy_id = ? ORDER BY created_at, rowid').all(strategyId) as Record<string, unknown>[])
-      .map(row => ({
-        id: String(row.id),
-        revision: row.revision === null ? null : Number(row.revision),
-        contentHash: text(row.content_hash),
-        decision: row.decision === 'withdraw' ? 'withdraw' as const : 'approve' as const,
-        rationale: text(row.rationale),
-        actor: actor(row.actor_kind, row.actor_session),
-        approvalScope: text(row.approval_scope),
-        openQuestions: text(row.open_questions),
-        commandId: String(row.command_id),
-        createdAt: String(row.created_at),
-      }))
+      .map(mapDecision)
   }
 
   impactReviews(strategyId: string): StrategyImpactReview[] {
     return (this.db.prepare('SELECT * FROM strategy_impact_reviews WHERE strategy_id = ? ORDER BY created_at, rowid').all(strategyId) as Record<string, unknown>[])
-      .map(row => ({
-        id: String(row.id),
-        revision: Number(row.revision),
-        contentHash: String(row.content_hash),
-        commandId: String(row.command_id),
-        state: 'pending' as const,
-        createdAt: String(row.created_at),
-      }))
+      .map(mapImpactReview)
   }
 
   decisionByCommand(strategyId: string, commandId: string): StrategyDecision | null {
@@ -553,66 +445,5 @@ export class StrategyStore {
       impactReview: this.impactReviews(strategy.id).find(review => review.commandId === input.commandId) ?? null,
       strategy: this.get(strategy.id)!,
     }
-  }
-
-  private mapStrategy(row: Record<string, unknown>): ProductStrategy {
-    const bindings = (this.db.prepare('SELECT root, kind FROM strategy_repo_bindings WHERE strategy_id = ? ORDER BY kind, root')
-      .all(String(row.id)) as Record<string, unknown>[])
-    return {
-      id: String(row.id),
-      productId: String(row.product_id),
-      title: String(row.title),
-      owner: actor(row.owner_kind, row.owner_session),
-      lifecycle: 'active',
-      currentApprovedRevision: row.current_approved_revision === null || row.current_approved_revision === undefined ? null : Number(row.current_approved_revision),
-      repoBindings: bindings.map(binding => ({
-        root: String(binding.root),
-        kind: binding.kind === 'team' ? 'team' as const : 'worktree' as const,
-      })),
-      createdAt: String(row.created_at),
-      updatedAt: String(row.updated_at),
-    }
-  }
-}
-
-function text(value: unknown): string | null {
-  return value === null || value === undefined ? null : String(value)
-}
-
-function actor(kind: unknown, session: unknown): StrategyActor {
-  return kind === 'agent' && typeof session === 'string' ? { kind: 'agent', sessionId: session } : { kind: 'human', sessionId: null }
-}
-
-function revisionStatus(value: unknown): StrategyRevisionStatus {
-  const status = String(value) as StrategyRevisionStatus
-  return STRATEGY_REVISION_STATUSES.includes(status) ? status : 'in_review'
-}
-
-function claimKind(value: unknown): StrategyClaimKind {
-  const kind = String(value) as StrategyClaimKind
-  return STRATEGY_CLAIM_KINDS.includes(kind) ? kind : 'hypothesis'
-}
-
-function mapRevision(row: Record<string, unknown>): StrategyRevision {
-  return {
-    revision: Number(row.revision),
-    status: revisionStatus(row.status),
-    content: normalizeStrategyContent(JSON.parse(String(row.content_json))),
-    contentHash: String(row.content_hash),
-    author: actor(row.author_kind, row.author_session),
-    impactProposal: text(row.impact_proposal),
-    createdAt: String(row.created_at),
-  }
-}
-
-function mapDraft(row: Record<string, unknown>): StrategyDraft {
-  return {
-    draftId: String(row.draft_id),
-    baseRevision: row.base_revision === null || row.base_revision === undefined ? null : Number(row.base_revision),
-    author: actor(row.author_kind, row.author_session),
-    content: normalizeStrategyContent(JSON.parse(String(row.content_json))),
-    contentHash: String(row.content_hash),
-    impactProposal: text(row.impact_proposal),
-    updatedAt: String(row.updated_at),
   }
 }
