@@ -34,7 +34,7 @@ import type { TaskStore } from './taskStore'
 import type { TaskCaller } from './TaskService'
 import type { GroupDefinition } from './groupFile'
 import type { TeamCaps } from './teamCaps'
-import type { WorktreeStaffing } from './staffing'
+import type { StaffingPreview, WorktreeStaffing } from './staffing'
 import { worktreeRootOf, type TeamWorktrees } from './worktreeRoots'
 
 /** How an outstanding assignment is handled by a reassignment (D7). */
@@ -196,15 +196,15 @@ export class AssignmentService {
       record.archivedAt == null && record.groupId === target.id && this.options.teamOf(record.sessionId)?.teamId === team.teamId)
     const inWorktree = worktree === null ? members : members.filter(record => worktreeRootOf(record.projectPath) === worktree)
     const idleMembers = inWorktree.filter(record => record.status === 'waiting').map(record => record.sessionId)
-    const spawnProfile = this.spawnProfile(group, team)
+    const facts = this.options.staffing.preview(team.teamId, target.id, worktree)
+    const spawnProfile = this.spawnProfile(group, facts)
     let blockedBy: string | null = null
     if (worktree === null) blockedBy = 'the task has no target worktree'
     else {
-      const counts = this.options.staffing.previewCounts(team.teamId, target.id, worktree)
       const teamCap = await this.options.caps.maxSpawnedSessions(team.teamId)
-      if (counts.groupMembers >= group.max) blockedBy = `group ${target.id} is at its max of ${group.max} live members`
-      else if (counts.teamSpawned >= teamCap) blockedBy = `the team is at its cap of ${teamCap} spawned sessions`
-      else if (counts.worktreeWriters >= 1) blockedBy = `a spawned member already works in ${worktree}`
+      if (facts.groupMembers >= group.max) blockedBy = `group ${target.id} is at its max of ${group.max} live members`
+      else if (facts.teamSpawned >= teamCap) blockedBy = `the team is at its cap of ${teamCap} spawned sessions`
+      else if (facts.worktreeWriters >= 1) blockedBy = `a spawned member already works in ${worktree}`
       else if (spawnProfile === null) blockedBy = 'every allowed profile is at its cap or cooling down'
     }
     return {
@@ -229,21 +229,14 @@ export class AssignmentService {
   }
 
   /** The first profile a spawn could use: group preference order, caps and cooldowns applied. */
-  private spawnProfile(group: GroupDefinition, team: TeamIdentity): string | null {
+  private spawnProfile(group: GroupDefinition, facts: StaffingPreview): string | null {
     const allowed = group.profiles.length > 0 ? group.profiles : [{ profileId: 'default' }]
-    const counts = this.options.staffing.previewCounts(team.teamId, group.id, '')
-    const liveOn = new Map<string, number>()
-    for (const member of counts.groupLive) {
-      const profileId = member.claudeProfileId ?? 'default'
-      liveOn.set(profileId, (liveOn.get(profileId) ?? 0) + 1)
-    }
-    for (const row of counts.pending) if (row.group_id === group.id) liveOn.set(row.profile_id, (liveOn.get(row.profile_id) ?? 0) + 1)
     const cooling = (profileId: string) => {
       const until = this.options.cooldownUntil?.(profileId) ?? null
       return until !== null && Date.parse(until) > Date.now()
     }
     for (const entry of allowed) {
-      if (entry.cap !== undefined && (liveOn.get(entry.profileId) ?? 0) >= entry.cap) continue
+      if (entry.cap !== undefined && (facts.liveOnProfile[entry.profileId] ?? 0) >= entry.cap) continue
       if (cooling(entry.profileId)) continue
       return entry.profileId
     }

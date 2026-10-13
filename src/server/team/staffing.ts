@@ -62,6 +62,18 @@ export interface SpawnRequest {
   taskId: string
 }
 
+/** Read-only staffing facts for the dispatch preview (task-assignment D6). */
+export interface StaffingPreview {
+  /** Live members of the group per profile, pending reservations included. */
+  liveOnProfile: Record<string, number>
+  /** Live members plus pending reservations of the group. */
+  groupMembers: number
+  /** The team's live spawned sessions, pending reservations included. */
+  teamSpawned: number
+  /** Spawned writers already in the worktree; 0 when no worktree is targeted. */
+  worktreeWriters: number
+}
+
 export type SpawnResult = { ok: true; sessionId: string } | { ok: false; error: string }
 
 /** A failed spawn is not retried for this long, so a broken profile cannot spin. */
@@ -165,14 +177,24 @@ export class WorktreeStaffing {
   }
 
   /**
-   * The cap counts behind staffing, read-only (task-assignment D6 preview).
-   * Re-exposes exactly what `spawnFor` re-checks in its reservation
-   * transaction, without reserving anything: group live members (pending
-   * reservations included), the team's live spawned sessions, and the spawned
-   * writers already in the worktree.
+   * Read-only staffing facts for the dispatch preview (task-assignment D6),
+   * in a shape this module owns: the counts `spawnFor` re-checks in its
+   * reservation transaction, plus the group's live members per profile —
+   * derived here from whatever internal read model staffing keeps, so
+   * callers never touch `counts()`'s private shape. Reserves nothing.
    */
-  previewCounts(teamId: string, groupId: string, worktree: string) {
-    return this.counts(teamId, groupId, worktree)
+  preview(teamId: string, groupId: string, worktree: string | null): StaffingPreview {
+    const counts = this.counts(teamId, groupId, worktree ?? '')
+    const liveOnProfile: Record<string, number> = {}
+    const count = (profileId: string) => { liveOnProfile[profileId] = (liveOnProfile[profileId] ?? 0) + 1 }
+    for (const member of counts.groupLive) count(member.claudeProfileId ?? 'default')
+    for (const row of counts.pending) if (row.group_id === groupId) count(row.profile_id)
+    return {
+      liveOnProfile,
+      groupMembers: counts.groupMembers,
+      teamSpawned: counts.teamSpawned,
+      worktreeWriters: worktree === null ? 0 : counts.worktreeWriters,
+    }
   }
 
   /** Live counts behind every cap, pending reservations included. */
