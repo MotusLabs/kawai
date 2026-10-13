@@ -72,6 +72,8 @@ import { loadTeamGroups } from '../team/teamGroups'
 import { SessionTeams } from '../team/sessionTeams'
 import { TeamMailbox } from '../team/TeamMailbox'
 import { createMailboxServer } from '../team/mailboxTools'
+import { StrategyService } from '../strategy/StrategyService'
+import { StrategyStore } from '../strategy/strategyStore'
 import type { TeamMessage } from '../../shared/team'
 import { MailDispatcher } from '../team/dispatcher'
 import { receiptMessageId } from '../team/receipt'
@@ -103,6 +105,8 @@ export interface ChatSessionManagerOptions {
   onRoutingRulesLoaded?: () => void
   /** Every committed team-task change (wired to the task view push in index.ts). */
   onTaskChange?: (teamId: string) => void
+  /** Every committed strategy change (wired to the strategy view push in bootstrap.ts). */
+  onStrategyChange?: (teamId: string) => void
   /** Conversation-event sink (wired to the WS broadcast in index.ts). */
   onEvent: (sessionId: string, event: ChatEvent) => void
   /** Command-state sink (wired to the chat-commands push in index.ts). */
@@ -721,6 +725,18 @@ export class ChatSessionManager {
     })
     this.mailbox = this.teamMail.mailbox
     this.tasks = this.teamMail.tasks
+    // Product strategy (product-strategy): constructed here, beside the
+    // task service, against the same database. The strategy store's changes
+    // fan out to the strategy view pushes; the team comes from the record's
+    // team binding (design D5).
+    this.strategies = new StrategyService(new StrategyStore(options.db.db), {
+      getSession: id => this.records.get(id),
+      ...(options.profileCatalogHome ? { homeDir: options.profileCatalogHome } : {}),
+    })
+    this.strategies.store.subscribe(strategy => {
+      const teamId = strategy.repoBindings.find(binding => binding.kind === 'team')?.root
+      if (teamId) this.options.onStrategyChange?.(teamId)
+    })
     // A retitled task re-labels the headers of the sessions working on it.
     this.tasks.store.subscribe(task => {
       this.options.onTaskChange?.(task.teamId)
@@ -820,6 +836,8 @@ export class ChatSessionManager {
   readonly mailbox: TeamMailbox
   /** Team tasks (team-tasks); the task tools and UI actions go through it. */
   readonly tasks: TaskService
+  /** Product strategy (product-strategy); the strategy tools and UI actions go through it. */
+  readonly strategies: StrategyService
   readonly dispatcher: MailDispatcher
   private readonly teamMail: SessionMailbox
 
@@ -1476,7 +1494,7 @@ export class ChatSessionManager {
       const queryFactory = await this.resolveQueryFactory()
       // The team must be known before the first spawn reads its prompt.
       await this.teams.track(record.sessionId, this.records.get(record.sessionId)?.projectPath ?? record.projectPath)
-      const teamMcpServer = await createMailboxServer(this.mailbox, record.sessionId, this.tasks)
+      const teamMcpServer = await createMailboxServer(this.mailbox, record.sessionId, this.tasks, this.strategies)
       const driver = new ChatSessionDriver({
         sessionId: record.sessionId,
         projectPath: record.projectPath,

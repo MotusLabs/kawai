@@ -87,12 +87,6 @@ export default function App() {
     (state) => state.selectedHibernatingSessionId
   )
   const setSessions = useSessionStore((state) => state.setSessions)
-  const setAgentSessions = useSessionStore((state) => state.setAgentSessions)
-  const setActiveAgentSessions = useSessionStore(
-    (state) => state.setActiveAgentSessions
-  )
-  const setHostStatuses = useSessionStore((state) => state.setHostStatuses)
-  const updateSession = useSessionStore((state) => state.updateSession)
   const setSelectedSessionId = useSessionStore(
     (state) => state.setSelectedSessionId
   )
@@ -104,12 +98,7 @@ export default function App() {
     (state) => state.connectionStatus
   )
   const connectionError = useSessionStore((state) => state.connectionError)
-  const clearExitingSession = useSessionStore((state) => state.clearExitingSession)
   const markSessionExiting = useSessionStore((state) => state.markSessionExiting)
-  const setRemoteAllowControl = useSessionStore((state) => state.setRemoteAllowControl)
-  const setRemoteAllowAttach = useSessionStore((state) => state.setRemoteAllowAttach)
-  const setHostLabel = useSessionStore((state) => state.setHostLabel)
-  const setPreferWindowName = useSessionStore((state) => state.setPreferWindowName)
   const hostStatuses = useSessionStore((state) => state.hostStatuses)
   const remoteAllowControl = useSessionStore((state) => state.remoteAllowControl)
   const hostLabel = useSessionStore((state) => state.hostLabel)
@@ -125,7 +114,6 @@ export default function App() {
   const setLastProjectPath = useSettingsStore(
     (state) => state.setLastProjectPath
   )
-  const addRecentPath = useSettingsStore((state) => state.addRecentPath)
   const shortcutModifier = useSettingsStore((state) => state.shortcutModifier)
   const sidebarWidth = useSettingsStore((state) => state.sidebarWidth)
   const setSidebarWidth = useSettingsStore((state) => state.setSidebarWidth)

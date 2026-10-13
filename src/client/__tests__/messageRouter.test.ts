@@ -16,6 +16,8 @@ import { createMessageRouter } from '../protocol/messageRouter'
 import type { MessageRouterDeps, SessionFormPrefill } from '../protocol/types'
 import { useSessionStore } from '../stores/sessionStore'
 import { useChatStore } from '../stores/chatStore'
+import { useStrategyStore } from '../stores/strategyStore'
+import type { ProductStrategy, StrategyDetail } from '@shared/productStrategy'
 
 const baseSession: TerminalSession = {
   id: 'session-1',
@@ -81,6 +83,7 @@ function makeDeps(): DepsHarness {
 beforeEach(() => {
   useSessionStore.setState(initialSessionState, true)
   useChatStore.setState(initialChatState, true)
+  useStrategyStore.setState({ views: {} })
 })
 
 describe('createMessageRouter dispatch coverage', () => {
@@ -292,5 +295,34 @@ describe('worktree launches and transient errors', () => {
 
     route({ type: 'terminal-ready', sessionId: 'session-1' })
     expect(harness.cleared).toBe(1)
+  })
+})
+
+
+describe('product strategy routing after extraction', () => {
+  test('snapshots and detail populate an open view, and refusals settle pending actions', () => {
+    const route = createMessageRouter(makeDeps().deps)
+    const strategy: ProductStrategy = {
+      id: 'strategy-1', productId: 'kawai', title: 'Kawai',
+      owner: { kind: 'human', sessionId: null }, lifecycle: 'active',
+      currentApprovedRevision: null, repoBindings: [], createdAt: '', updatedAt: '',
+    }
+    const detail: StrategyDetail = {
+      strategy, revisions: [], drafts: [], evidence: [], decisions: [], impactReviews: [],
+    }
+    useStrategyStore.getState().open('chat-1')
+    route({ type: 'strategy-snapshot', sessionId: 'chat-1', teamId: 'team', strategy })
+    route({ type: 'strategy-detail', sessionId: 'chat-1', teamId: 'team', detail })
+    expect(useStrategyStore.getState().views['chat-1']).toMatchObject({
+      seen: true, loading: false, strategy, detail,
+    })
+    useStrategyStore.getState().begin('chat-1', 'save-1', 'save')
+    route({ type: 'strategy-result', sessionId: 'chat-1', requestId: 'save-1', error: 'Draft changed' })
+    expect(useStrategyStore.getState().views['chat-1']).toMatchObject({
+      pending: {}, error: 'Draft changed',
+    })
+    useStrategyStore.getState().close('chat-1')
+    route({ type: 'strategy-snapshot', sessionId: 'chat-1', teamId: 'team', strategy })
+    expect(useStrategyStore.getState().views['chat-1']).toBeUndefined()
   })
 })

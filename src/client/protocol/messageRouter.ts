@@ -7,6 +7,7 @@ import type { ServerMessage } from '@shared/types'
 import type { MessageRouterDeps } from './types'
 import { handleChatMessage } from './chatMessages'
 import { handleTeamMessage } from './teamMessages'
+import { handleStrategyMessage } from './strategyMessages'
 import {
   handleError,
   handleHostStatus,
@@ -69,6 +70,9 @@ export function createMessageRouter(
       case 'host-status': return handleHostStatus(message, deps)
       case 'server-config': return handleServerConfig(message, deps)
       case 'update-state': return handleUpdateState(message, deps)
+      case 'strategy-snapshot':
+      case 'strategy-detail':
+      case 'strategy-result': return handleStrategyMessage(message, deps)
       case 'error': return handleError(message, deps)
       case 'terminal-error': return handleTerminalError(message, deps)
       case 'terminal-ready': return handleTerminalReady(message, deps)
