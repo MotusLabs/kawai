@@ -38,7 +38,6 @@ CREATE TABLE IF NOT EXISTS team_tasks (
 );
 CREATE INDEX IF NOT EXISTS team_tasks_team ON team_tasks (team_id, created_at);
 CREATE INDEX IF NOT EXISTS team_tasks_parent ON team_tasks (parent_id);
-CREATE UNIQUE INDEX IF NOT EXISTS team_tasks_request_key ON team_tasks (team_id, request_key);
 CREATE TABLE IF NOT EXISTS team_task_revisions (
   task_id TEXT NOT NULL,
   revision INTEGER NOT NULL,
@@ -65,8 +64,10 @@ function migrateTable(db: Database) {
   const columns = db.prepare('PRAGMA table_info(team_tasks)').all() as Array<{ name: string }>
   if (!columns.some(column => column.name === 'request_key')) {
     db.exec('ALTER TABLE team_tasks ADD COLUMN request_key TEXT')
-    db.exec('CREATE UNIQUE INDEX IF NOT EXISTS team_tasks_request_key ON team_tasks (team_id, request_key)')
   }
+  // Created here, not in CREATE_TABLES_SQL: a legacy table gains the column
+  // only in the ALTER above, after the DDL block has already run.
+  db.exec('CREATE UNIQUE INDEX IF NOT EXISTS team_tasks_request_key ON team_tasks (team_id, request_key)')
 }
 
 export interface CreateTaskInput {
@@ -116,7 +117,7 @@ export class TaskStore {
     if (input.requestKey) {
       const existing = this.byRequestKey(input.teamId, input.requestKey)
       if (existing) {
-        const diff = createPayloadDiff(existing, input)
+        const diff = createPayloadDiff(existing, this.revisions(existing.id)[0], input)
         if (diff) throw new Error(`Request key already used with a different ${diff}`)
         return existing
       }
@@ -256,11 +257,16 @@ export class TaskStore {
   }
 }
 
-/** Which normalized create field differs between a stored task and a replayed intent (D4). */
-function createPayloadDiff(existing: TeamTask, input: CreateTaskInput): string | null {
+/**
+ * Which normalized create field differs between a stored task and a replayed
+ * intent (D4). Direction and acceptance compare against revision 1 — what
+ * this create wrote — so later amendments are never payload differences.
+ */
+function createPayloadDiff(existing: TeamTask, firstRevision: TaskRevision | undefined, input: CreateTaskInput): string | null {
   if (existing.title !== input.title) return 'title'
-  if (existing.direction !== input.direction) return 'direction'
-  if ((existing.acceptance ?? null) !== (input.acceptance?.trim() ? input.acceptance.trim() : null)) return 'acceptance'
+  if ((firstRevision?.direction ?? existing.direction) !== input.direction) return 'direction'
+  const acceptance = input.acceptance?.trim() ? input.acceptance.trim() : null
+  if ((firstRevision?.acceptance ?? existing.acceptance ?? null) !== acceptance) return 'acceptance'
   if ((existing.parentId ?? null) !== (input.parentId || null)) return 'parent'
   if ((existing.worktree ?? null) !== (input.worktree ?? null)) return 'worktree'
   if ((existing.openspecChange ?? null) !== (input.openspecChange ?? null)) return 'OpenSpec change'

@@ -128,8 +128,8 @@ export class AssignmentService {
         taskId: task.id, actor: 'human',
       })
       this.store.setMessage(inserted.assignment.id, enqueued.id)
-      if (outstanding && input.handling) this.replace(outstanding, input.handling, task, input.target, team, inserted.assignment.id)
       this.tasks.appendJournal(task.id, creator, `Assigned to ${targetLabel(input.target)} by human`)
+      if (outstanding && input.handling) this.replace(outstanding, input.handling, task, input.target, team, inserted.assignment.id)
       return enqueued
     })()
     const assignment = this.store.byKey(team.teamId, requestKey)!
@@ -257,7 +257,8 @@ export class AssignmentService {
   async targets(caller: TaskCaller): Promise<TaskTargetOptions> {
     const team = await this.teamOf(caller)
     const worktrees = await this.options.worktrees.entries(team.teamId)
-    const roots = [team.groupsRoot, ...worktrees.map(entry => entry.root)]
+    // The main checkout is itself a listed worktree; read each root once.
+    const roots = [...new Set([team.groupsRoot, ...worktrees.map(entry => entry.root)])]
     const changes = new Map<string, string[]>()
     for (const root of roots) {
       let names: string[]
