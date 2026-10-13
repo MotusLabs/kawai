@@ -75,6 +75,19 @@ an actionable error before any agent starts.
 Terminal commands are unaffected: kawai writes no executables, and existing
 `claude-*` wrapper scripts remain yours to maintain or delete.
 
+## Provider reset time zone
+
+Some gateways put the limit reset in the error text without a zone (GLM:
+`Your limit will reset at 2026-10-13 17:17:00`). An entry's
+`limitResetTimeZone` — an IANA zone (`Asia/Shanghai`) or a fixed `±HH:MM`
+offset — says how to read it, so the profile's cooldown and parked work's
+resume use the real reset instead of the one-hour fallback. A reset the
+provider announces itself always wins; without the field the text is ignored.
+
+```json
+{ "glm": { "label": "GLM", "limitResetTimeZone": "Asia/Shanghai" } }
+```
+
 Resolution starts with the server environment, applies global provider
 Settings (or AGENTBOARD_CHAT_ENV when no Settings override exists), then
 cleans and applies named-profile controlled variables. Controlled variables

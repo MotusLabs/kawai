@@ -2785,6 +2785,28 @@ describe('ChatSessionManager usage', () => {
     expect(manager.limitEvents.forProfile('default')).toEqual([])
   })
 
+  test("a zone-less reset in the error text is read in the profile's limitResetTimeZone", async () => {
+    process.env.ANTHROPIC_AUTH_TOKEN = 'test-token'
+    const project = path.join(tempDir, 'proj')
+    fs.mkdirSync(path.join(project, '.kawai'), { recursive: true })
+    fs.writeFileSync(path.join(project, '.kawai', 'profiles.json'), JSON.stringify({
+      'glm-cn': { label: 'GLM CN', limitResetTimeZone: 'Asia/Shanghai' },
+    }))
+    const { manager, handles } = await createHarness(db)
+    const created = manager.createSession({ projectPath: project, claudeProfileId: 'glm-cn' })
+    if (!created.ok) throw new Error(created.error)
+    await manager.send(created.session.id, 'hello')
+    handles[0]!.push({
+      type: 'assistant', error: 'rate_limit', parent_tool_use_id: null, session_id: 'sdk-1', uuid: 'a-uuid',
+      message: { id: 'msg_err', role: 'assistant', content: [{ type: 'text', text: 'API Error: [1308][Your limit will reset at 2026-10-13 17:17:00]' }] },
+    } as unknown as SDKMessage)
+    await flush()
+    expect(manager.limitEvents.forProfile('glm-cn')).toMatchObject([
+      { final: true, resetsAt: '2026-10-13T09:17:00.000Z' },
+    ])
+    manager.shutdown()
+  })
+
   test('an assistant usage_report is stored for the session profile', async () => {
     const { manager, handles, usage } = await createHarness(db)
     const created = manager.createSession({ projectPath: '/tmp/proj', claudeProfileId: 'glm' })

@@ -13,6 +13,10 @@ The system SHALL record a limit event when a chat agent's request fails with a r
 - **WHEN** a `glm` agent's turn ends with a rate-limit error after retries
 - **THEN** a final limit event for `glm` is recorded
 
+#### Scenario: Reset written in the error text
+- **WHEN** a `glm` agent's final error says its limit resets at `2026-10-13 17:17:00` and the `glm` profile sets `limitResetTimeZone: Asia/Shanghai`
+- **THEN** the event's reset time is 09:17 UTC that day; without the field the text sets no reset time
+
 #### Scenario: Survives restart
 - **WHEN** the server restarts 10 minutes after a final limit event
 - **THEN** routing still sees the event

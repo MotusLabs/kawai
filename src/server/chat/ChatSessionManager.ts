@@ -58,6 +58,7 @@ import type { ChatWireLogs } from './ChatWireLogs'
 import type { ChatWorkerStore } from './chatWorkerStore'
 import {
   resolveClaudeProfile,
+  profileLimitResetTimeZone,
   claudeLaunchKey,
   verifyProfileExecutable,
   type ClaudeLaunchConfiguration,
@@ -67,6 +68,7 @@ import { logger } from '../logger'
 import { probeSdkAvailability } from './sdkAvailability'
 import { AccountNoticeStore, credentialsPathFor } from './accountNotices'
 import { UsageLimitStore } from './usageLimits'
+import { withTextReset } from './limitSignals'
 import { readWorkerTranscript } from './chatWorkerTranscript'
 import { loadTeamGroups } from '../team/teamGroups'
 import { SessionTeams } from '../team/sessionTeams'
@@ -1532,10 +1534,13 @@ export class ChatSessionManager {
         onCwdChanged: (newCwd) =>
           this.handleDriverCwdChanged(record.sessionId, newCwd),
         // Profile routing (design D6): limit failures count against the
-        // session's profile, with its current group for context.
+        // session's profile, with its current group for context. A gateway
+        // that writes its reset into the error text without a zone is read in
+        // the profile's `limitResetTimeZone`.
         onLimitEvent: (signal) =>
           this.teamMail.limits.record({
-            ...signal,
+            ...withTextReset(signal, profileLimitResetTimeZone(
+              record.claudeProfileId, this.catalogCtx(this.records.get(record.sessionId)?.projectPath ?? record.projectPath))),
             profileId: record.claudeProfileId ?? 'default',
             sessionId: record.sessionId,
             groupId: this.records.get(record.sessionId)?.groupId ?? null,

@@ -3,6 +3,7 @@
   "glm": {
     "label": "GLM",
     "model": "sonnet",
+    "limitResetTimeZone": "Asia/Shanghai",
     "env": {
       "ANTHROPIC_BASE_URL": "https://zai.ruslan.casa/api/anthropic",
       "ANTHROPIC_DEFAULT_SONNET_MODEL": "glm-5.3-flash[1m]",

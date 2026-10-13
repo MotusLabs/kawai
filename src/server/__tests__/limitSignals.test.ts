@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { assistantLimitSignal, rejectedResetsAt, retryLimitSignal } from '../chat/limitSignals'
+import { assistantLimitSignal, isResetTimeZone, rejectedResetsAt, retryLimitSignal, textResetsAt, withTextReset } from '../chat/limitSignals'
 
 describe('limit signals', () => {
   test('retries count for limit classes or status 429', () => {
@@ -17,6 +17,38 @@ describe('limit signals', () => {
     expect(assistantLimitSignal('invalid_request', 'API Error: 429 x', null)).toMatchObject({ status: 429 })
     expect(assistantLimitSignal('invalid_request', 'API Error: 400 x', null)).toBeNull()
     expect(assistantLimitSignal(undefined, 'API Error: 429', null)).toBeNull()
+  })
+
+  test('a zone-less reset in the error text is read in the profile zone', () => {
+    const glm = 'API Error: Server is temporarily limiting requests (not your usage limit) · [1308][Usage limit reached for 5 hour. Your limit will reset at 2026-10-13 17:17:00][2026101316]'
+    expect(textResetsAt(glm, 'Asia/Shanghai')).toBe('2026-10-13T09:17:00.000Z')
+    expect(textResetsAt(glm, '+08:00')).toBe('2026-10-13T09:17:00.000Z')
+    expect(textResetsAt(glm, '-03:30')).toBe('2026-10-13T20:47:00.000Z')
+    expect(textResetsAt(glm, 'UTC')).toBe('2026-10-13T17:17:00.000Z')
+    expect(textResetsAt('resets at 2026-07-01 12:00', 'Europe/Berlin')).toBe('2026-07-01T10:00:00.000Z')
+    expect(textResetsAt('resets at 2026-01-01 12:00', 'Europe/Berlin')).toBe('2026-01-01T11:00:00.000Z')
+    expect(textResetsAt(glm, 'Mars/Olympus')).toBeNull()
+    expect(textResetsAt('API Error: 429 slow down', '+08:00')).toBeNull()
+  })
+
+  test('an announced reset wins; the text is read only with a profile zone', () => {
+    const signal = assistantLimitSignal('rate_limit', 'Your limit will reset at 2026-10-13 17:17:00', null)!
+    expect(withTextReset(signal, '+08:00').resetsAt).toBe('2026-10-13T09:17:00.000Z')
+    expect(withTextReset(signal, undefined)).toBe(signal)
+    const announced = { ...signal, resetsAt: '2026-10-13T10:00:00.000Z' }
+    expect(withTextReset(announced, '+08:00')).toBe(announced)
+    const retry = retryLimitSignal({ error: 'rate_limit' }, null)!
+    expect(withTextReset(retry, '+08:00')).toBe(retry)
+    const noTime = assistantLimitSignal('rate_limit', 'API Error: 429', null)!
+    expect(withTextReset(noTime, '+08:00')).toBe(noTime)
+  })
+
+  test('reset zones are IANA names or ±HH:MM offsets', () => {
+    expect(isResetTimeZone('Asia/Shanghai')).toBe(true)
+    expect(isResetTimeZone('+08:00')).toBe(true)
+    expect(isResetTimeZone('UTC+8')).toBe(false)
+    expect(isResetTimeZone('+24:00')).toBe(false)
+    expect(isResetTimeZone('')).toBe(false)
   })
 
   test('only a rejected rate_limit_event with a time announces a reset', () => {
