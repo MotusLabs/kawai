@@ -98,6 +98,48 @@ export type ChatBackgroundTasksInput =
 const settled = (status: string): ChatBackgroundTaskStatus | null =>
   status === 'completed' || status === 'failed' || status === 'stopped' ? status : null
 
+/**
+ * The driver feeds both rosters from one frame parse (`taskFrameToInput` in
+ * chatWorkers — ambient and housekeeping tasks are already dropped there).
+ * This maps that shared input onto this roster's; worker-only edges
+ * (progress, spawn bookkeeping) have no background-task meaning.
+ */
+export function backgroundInputFromWorkersInput(
+  input: import('./chatWorkers').ChatWorkersInput
+): ChatBackgroundTasksInput | null {
+  switch (input.type) {
+    case 'task_started':
+      return {
+        type: 'task_started',
+        taskId: input.taskId,
+        ...(input.toolUseId !== undefined ? { toolUseId: input.toolUseId } : {}),
+        ...(input.description !== undefined ? { description: input.description } : {}),
+        ...(input.taskType !== undefined ? { taskType: input.taskType } : {}),
+        ...(input.background === true ? { background: true } : {}),
+      }
+    case 'task_updated':
+      return {
+        type: 'task_updated',
+        taskId: input.taskId,
+        ...(input.status !== undefined ? { status: input.status } : {}),
+        ...(input.backgrounded === true ? { backgrounded: true } : {}),
+      }
+    case 'task_notification':
+      return {
+        type: 'task_notification',
+        taskId: input.taskId,
+        ...(input.toolUseId !== undefined ? { toolUseId: input.toolUseId } : {}),
+        status: input.status,
+        ...(input.summary !== undefined ? { summary: input.summary } : {}),
+        ...(input.outputFile !== undefined ? { outputFile: input.outputFile } : {}),
+      }
+    case 'background_tasks':
+      return { type: 'level_set', taskIds: input.taskIds }
+    default:
+      return null
+  }
+}
+
 export function reduceBackgroundTasks(
   state: ChatBackgroundTasksState,
   input: ChatBackgroundTasksInput,

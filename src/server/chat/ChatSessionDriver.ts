@@ -26,6 +26,7 @@ import type {
   ChatActivity,
   ChatApprovalDecision,
   ChatApprovalPolicy,
+  ChatBackgroundTask,
   ChatCommandState,
   ChatContextUsage,
   ChatEvent,
@@ -67,6 +68,14 @@ import {
   type ChatWorkersInput,
   type ChatWorkersState,
 } from './chatWorkers'
+import {
+  backgroundInputFromWorkersInput,
+  initialChatBackgroundTasksState,
+  projectBackgroundTasks,
+  reduceBackgroundTasks,
+  type ChatBackgroundTasksInput,
+  type ChatBackgroundTasksState,
+} from './chatBackgroundTasks'
 import {
   ChatContextTracker,
   parsePositiveTokens,
@@ -181,6 +190,13 @@ export interface ChatSessionDriverOptions {
    */
   onWorkers?: (workers: ChatWorker[]) => void
   /**
+   * The background-task roster (background tasks design D2): the full
+   * projection, called whenever it changes. Like the worker roster it is
+   * ephemeral on the wire; settled outcomes persist through the sidecar
+   * (D6). Never consulted for status (D7).
+   */
+  onBackgroundTasks?: (tasks: ChatBackgroundTask[]) => void
+  /**
    * Context usage (context meter designs D1/D7): the latest reading, fired
    * when a new per-request usage lands, when compaction adopts a
    * post-compaction size, or when a threshold correction re-scales the
@@ -281,6 +297,7 @@ export class ChatSessionDriver {
    * edge stream and the background level set, projected on change.
    */
   private workersState: ChatWorkersState = initialChatWorkersState()
+  private backgroundTasksState: ChatBackgroundTasksState = initialChatBackgroundTasksState()
   /**
    * Agent/Task tool_use ids, parent and nested alike (design D4): the only
    * worker traffic kept in the parent transcript, and the join keys that say
@@ -428,8 +445,11 @@ export class ChatSessionDriver {
     this.cancelAllRequests('killed')
     this.activeTurnId = null
     // Archive and kill both end the process (design D3): every worker still
-    // without an outcome settles as stopped, nothing survives as live.
+    // without an outcome settles as stopped, nothing survives as live. The
+    // background tasks die with the process too (background tasks D1) — but
+    // not on a turn interrupt, which they survive by design.
     this.feedWorkers({ type: 'process_end' })
+    this.feedBackgroundTasks({ type: 'process_end' })
     this.commands.markUnavailable()
     const query = this.query
     this.query = null
@@ -739,7 +759,9 @@ export class ChatSessionDriver {
     this.activeTurnId = null
     // The process is gone (design D3): workers cannot have outcomes any
     // more, so any still-open row settles as stopped rather than wedging.
+    // Background tasks settle the same way (D1) — the respawn starts clean.
     this.feedWorkers({ type: 'process_end' })
+    this.feedBackgroundTasks({ type: 'process_end' })
     this.feedActivity({ type: 'turn_end' })
     this.cancelAllRequests('killed')
     // Notification strip design D4: the notices this process emitted die
@@ -837,6 +859,11 @@ export class ChatSessionDriver {
           this.agentToolCallIds.add(block.id)
           // The row anchor (design D1): the spawning call's id is the workerId.
           this.feedWorkers({ type: 'spawn', toolCallId: block.id })
+        }
+        if (block.name === 'Bash' || block.name === 'Monitor') {
+          // The kind join (background tasks D1): the tool_use block streams
+          // before the task_started it will anchor.
+          this.feedBackgroundTasks({ type: 'tool_call', toolCallId: block.id, tool: block.name })
         }
         if (!subagent) {
           this.feedActivity({
@@ -1066,6 +1093,8 @@ export class ChatSessionDriver {
     const rosterInput = taskFrameToInput(message)
     if (rosterInput) {
       this.feedWorkers(rosterInput)
+      const backgroundInput = backgroundInputFromWorkersInput(rosterInput)
+      if (backgroundInput) this.feedBackgroundTasks(backgroundInput)
       return
     }
     if (isSubagentContentFrame(message)) return
@@ -1248,9 +1277,26 @@ export class ChatSessionDriver {
     this.refreshStatus()
   }
 
+  /**
+   * Feed the background-task roster (background tasks D1). Unlike workers,
+   * a change never touches status (D7): a running dev server must not pin
+   * the session to working.
+   */
+  private feedBackgroundTasks(input: ChatBackgroundTasksInput): void {
+    const next = reduceBackgroundTasks(this.backgroundTasksState, input)
+    if (next === this.backgroundTasksState) return
+    this.backgroundTasksState = next
+    this.options.onBackgroundTasks?.(projectBackgroundTasks(this.backgroundTasksState))
+  }
+
   /** Current roster projection with elapsed times computed now (design D2). */
   getWorkers(): ChatWorker[] {
     return projectWorkers(this.workersState)
+  }
+
+  /** Current background-task projection with elapsed times computed now (D2). */
+  getBackgroundTasks(): ChatBackgroundTask[] {
+    return projectBackgroundTasks(this.backgroundTasksState)
   }
 
   /**
