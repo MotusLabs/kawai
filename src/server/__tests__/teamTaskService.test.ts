@@ -205,7 +205,10 @@ describe('spawn-time registration', () => {
     const registered = Object.keys((server.instance as unknown as { _registeredTools: Record<string, unknown> })._registeredTools)
     const expected = ['send_message', 'reply', 'schedule_message', 'list_groups', 'task_create', 'task_get', 'task_note', 'task_update_status', 'task_amend', 'task_list']
     expect(registered.sort()).toEqual([...expected].sort())
-    expect(TEAM_ALLOWED_TOOLS).toEqual(expected.map(name => `mcp__kawai-team__${name}`))
+    // Product strategy (product-strategy 3.2) rides the same allowed list —
+    // read/propose only, no approve/publish/withdraw tool anywhere.
+    expect(TEAM_ALLOWED_TOOLS).toEqual([...expected, 'strategy_list', 'strategy_get', 'strategy_save_draft', 'strategy_submit_for_review']
+      .map(name => `mcp__kawai-team__${name}`))
     await server.instance.close()
   })
 })

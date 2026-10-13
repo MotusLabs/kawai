@@ -5,6 +5,7 @@ export const HISTORY_MAX_AGE_MAX_HOURS = 168 // 7 days
 import type { TeamMessage } from './team'
 import type { RuleLoadReport, TeamRoutingState } from './routing'
 import type { TaskStatus, TeamTask, TeamTaskDetail, TeamTaskSummary } from './teamTasks'
+import type { ProductStrategy, StrategyDetail, StrategyDraft, StrategyRevision } from './productStrategy'
 import type {
   WorkspaceOperationResult,
   WorkspaceSnapshot,
@@ -353,6 +354,25 @@ export type ServerMessage =
   // Result of a human task action; `task` is set on success (a created
   // task's id lets the view open it), `error` on refusal.
   | { type: 'team-task-result'; sessionId: string; requestId: string; task?: TeamTask; error?: string }
+  // Product strategy (product-strategy 3.1/5.1): authoritative snapshots for
+  // a session's team — the summary (null = no record; the view offers
+  // capture) and, when a record exists, its full detail. Re-sent whole on
+  // every committed strategy change, so a reconnect needs no deltas.
+  | { type: 'strategy-snapshot'; sessionId: string; teamId: string; strategy: ProductStrategy | null }
+  | { type: 'strategy-detail'; sessionId: string; teamId: string; detail: StrategyDetail }
+  // Result of a human strategy action: the saved draft (its hash feeds the
+  // next save's CAS) or the submitted revision on success; `error` on
+  // refusal, with `conflict` carrying the stored draft when a CAS refusal
+  // leaves the caller's own text in place (S12).
+  | {
+      type: 'strategy-result'
+      sessionId: string
+      requestId: string
+      draft?: StrategyDraft
+      revision?: StrategyRevision
+      error?: string
+      conflict?: StrategyDraft | null
+    }
   | { type: 'chat-workers'; sessionId: string; workers: ChatWorker[] }
   // A chat session's active notices (notification strip design D5): the full
   // replace-semantics list, pushed to subscribed connections whenever it
@@ -490,6 +510,39 @@ export type ClientMessage =
   | { type: 'team-task-amend'; sessionId: string; requestId: string; taskId: string; direction?: string; acceptance?: string }
   | { type: 'team-task-note'; sessionId: string; requestId: string; taskId: string; text: string }
   | { type: 'team-task-status'; sessionId: string; requestId: string; taskId: string; status: TaskStatus }
+  // Product strategy (product-strategy 3.1/5.1): the view subscription
+  // scoped by the session's team, and the human actions. Approval and
+  // withdrawal arrive only here — there is no agent tool for them (D3).
+  | { type: 'strategy-open' | 'strategy-close'; sessionId: string }
+  | {
+      type: 'strategy-save-draft'
+      sessionId: string
+      requestId: string
+      /** Capture (no record yet, human only): the product slug and title. */
+      productId?: string
+      title?: string
+      draftId?: string
+      /** Template content object; normalized server-side. */
+      content: unknown
+      impactProposal?: string
+      expectedBaseRevision?: number | null
+      expectedDraftHash?: string | null
+    }
+  | { type: 'strategy-submit'; sessionId: string; requestId: string; draftId?: string }
+  | {
+      type: 'strategy-approve'
+      sessionId: string
+      requestId: string
+      revision: number
+      contentHash: string
+      /** Stable across retries: idempotency key (S17). */
+      commandId: string
+      /** CAS: the active approved revision the client saw (D4). */
+      expectedCurrentRevision: number | null
+      approvalScope?: string
+      openQuestions?: string
+    }
+  | { type: 'strategy-withdraw'; sessionId: string; requestId: string; revision?: number; draftId?: string; commandId: string }
   | { type: 'chat-debug-open'; sessionId: string }
   | { type: 'chat-debug-page'; sessionId: string; beforeSeq: number }
   | { type: 'chat-debug-close'; sessionId: string }

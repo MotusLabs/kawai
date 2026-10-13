@@ -38,6 +38,7 @@ import type { ChatSessionManager } from './ChatSessionManager'
 import type { ChatWireLogs } from './ChatWireLogs'
 import { MailboxConnections } from '../team/mailboxConnections'
 import { TaskConnections } from '../team/taskConnections'
+import { StrategyConnections } from '../strategy/strategyConnections'
 import type { TeamMessage } from '../../shared/team'
 
 /** Frames per debug page reply. */
@@ -71,6 +72,7 @@ export class ChatConnections {
 
   private readonly mailboxConnections: MailboxConnections
   private readonly taskConnections: TaskConnections
+  private readonly strategyConnections: StrategyConnections
 
   constructor(
     private readonly manager: ChatSessionManager,
@@ -79,6 +81,7 @@ export class ChatConnections {
   ) {
     this.mailboxConnections = new MailboxConnections(manager)
     this.taskConnections = new TaskConnections(manager)
+    this.strategyConnections = new StrategyConnections(manager)
   }
 
   /** A committed task change: re-send that team's task snapshots. */
@@ -86,11 +89,17 @@ export class ChatConnections {
     this.taskConnections.publish(teamId)
   }
 
+  /** A committed strategy change: re-send that team's strategy snapshots. */
+  publishStrategies(teamId: string): void {
+    this.strategyConnections.publish(teamId)
+  }
+
   disconnect(connection: ChatConnection): void {
     this.epochs.set(connection, {})
     this.pendingAttach.delete(connection)
     this.mailboxConnections.disconnect(connection)
     this.taskConnections.disconnect(connection)
+    this.strategyConnections.disconnect(connection)
     this.subscriptions.delete(connection)
     this.batches.delete(connection)
     this.activityBatches.delete(connection)
@@ -404,6 +413,7 @@ export class ChatConnections {
     if (this.epochs.get(connection) !== epoch && opensSubscription(message.type)) return
     if (message.type.startsWith('team-mailbox-')) return this.mailboxConnections.handle(connection, message)
     if (message.type.startsWith('team-task')) return this.taskConnections.handle(connection, message as Extract<ClientMessage, { type: `team-task${string}` }>)
+    if (message.type.startsWith('strategy-')) return this.strategyConnections.handle(connection, message as Extract<ClientMessage, { type: `strategy-${string}` }>)
     if (!message.type.startsWith('chat-') || !('sessionId' in message)) return
     const { sessionId } = message
     if (!this.manager.has(sessionId)) {
@@ -521,5 +531,6 @@ export class ChatConnections {
 /** Message types whose only effect is a subscription for the asking connection. */
 function opensSubscription(type: ClientMessage['type']): boolean {
   return type === 'chat-attach' || type === 'chat-debug-open' ||
-    type === 'team-mailbox-open' || type === 'team-tasks-open' || type === 'team-task-open'
+    type === 'team-mailbox-open' || type === 'team-tasks-open' || type === 'team-task-open' ||
+    type === 'strategy-open'
 }
