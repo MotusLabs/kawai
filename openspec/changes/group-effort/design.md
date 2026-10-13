@@ -31,6 +31,15 @@ A flag is a launch default: settings caps still clamp it, and the user can still
 - `CLAUDE_CODE_EFFORT_LEVEL` is a separate override (`VM()`), which `/effort` reports as "overrides effort this session".
 - The settings maximum's documented behavior clamps `--effort` as well.
 
+A live probe later confirmed all four points (2026-10-14). It read the effort the CLI applied from PreToolUse hook input:
+
+| Launch | Applied effort |
+|---|---|
+| settings `low` only | `low` |
+| `--effort high` + settings `low` | `high` |
+| `--effort high` + `CLAUDE_CODE_EFFORT_LEVEL=medium` | `medium` |
+| `--effort max` + settings maximum `high` | `high` |
+
 D1 stands.
 
 **D2 — Resolve through `SessionTeams`, read per spawn.** Add `SessionTeams.effortFor(sessionId, groupId)`, returning the group's `effort` or `undefined`, using the same catalog lookup as `promptFor`. `ChatSessionManager` passes a `getEffort` getter to the driver beside `getSystemPromptAppend`, and the driver spreads `effort` into `Options` only when it is defined. Reading per spawn gives the spec's "running agent unchanged, next start uses the edit" behavior for free, and covers spawned members, human-created members, restarts, and resumes through one path. Alternative: persist effort on the session row at creation. Rejected because edits would never reach existing members, and the role prompt already established live re-reading.
