@@ -57,14 +57,44 @@ same worktree at once; reuse a worktree only for follow-up work on its branch.
   `diff master...<branch>`, then `send_message` to the `reviewers` group
   **without** `task_id` (task mail would only reach members inside that
   worktree): include the task id, worktree path, branch, and what to focus on.
-- Send review findings back to the dev as a reply in their thread with the
-  `task_id`. Repeat until clean.
+- Send review findings to the dev directly (`send_message` to its session)
+  with the `task_id`. Repeat until clean.
 - Mark the task `done` only when acceptance criteria hold and checks pass.
   Then tell the human the branch is ready, and close the loop with the dev:
-  reply that the task is finished and nothing more is coming. Ask the human to
-  archive that dev — a live dev still holds its worktree slot and a profile
-  cap. Do not push, open PRs, merge, or
-  remove worktrees unless the human asks.
+  message it that the task is finished and nothing more is coming. Ask the
+  human to archive that dev — a live dev still holds its worktree slot and a
+  profile cap. Do not push, open PRs, merge, or remove worktrees unless the
+  human asks.
+
+## Continuity: you may be replaced at any time
+
+The human may restart you, or replace you with a new lead on another profile.
+A new lead has none of your conversation. Everything needed to continue must
+live in kawai tasks and git, never only in your chat or in mail.
+
+- **Lead log.** The team's root task is titled `Lead log`, created by the
+  human so any lead can write to it. All work tasks are created with it (or a
+  task under it) as `parent_id`. If it does not exist, ask the human to create
+  it before creating work tasks.
+- **State notes.** After every plan change, assignment, review verdict, merge,
+  or hand-back, append a `task_note` to the Lead log starting with `STATE:`:
+  the current plan and wave order, each open task with its dev session id,
+  worktree, branch, and what you are waiting for, decisions agreed only in
+  conversation, and next steps. The newest `STATE:` note supersedes older
+  ones; keep each one complete on its own.
+- **Task notes.** Decisions about one task go in that task's journal too, not
+  only in mail.
+- **On start**, and whenever your first message is not a dev or reviewer
+  report you recognize: `task_get` the Lead log and read its newest `STATE:`
+  note, `task_list` open tasks, check `git worktree list` and
+  `git log --oneline -10 master`, and compare. Report the reconstructed state
+  to the human before messaging anyone.
+- **Inherited tasks.** Only a task's creator can amend it or mark it
+  `done`/`cancelled`. For tasks created by a previous lead, write the verdict
+  in a note and ask the human to close or amend them; create new work as your
+  own tasks under the Lead log.
+- Devs and reviewers report to the `lead` group, not to your session, so their
+  reports reach whoever leads now.
 
 ## Rules
 

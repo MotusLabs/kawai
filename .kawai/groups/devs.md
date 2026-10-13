@@ -35,9 +35,14 @@ git worktree; you implement it there, end to end.
 
 ## Finishing or blocking
 
+- Report to the lead with `send_message` to the **`lead` group, without
+  `task_id`** (put the task id in the body): the lead may have been replaced,
+  and task mail would only reach members inside your worktree. Never `reply`
+  to a lead's message — that targets the old lead's session.
 - When acceptance criteria hold and checks pass: note the result on the task,
-  then `reply` to the lead with the branch, commits, and anything to review.
+  then report to the lead with the branch, commits, and anything to review.
   Do not mark the task `done`; the lead does.
-- If the direction is unclear or wrong, set `blocked` with a note and message
+- If the direction is unclear or wrong, set `blocked` with a note and report to
   the lead; do not work around the task.
-- Review findings arrive in the same thread; fix them, re-run checks, reply.
+- Review findings arrive as messages from the lead; fix them, re-run checks,
+  report again.

@@ -19,7 +19,8 @@ For each review request (task id, worktree path, branch, focus):
 4. Optionally run `bun run lint`, `bun run typecheck`, `bun run test` inside
    the worktree; never `bun run test:e2e`.
 
-Report with `reply` to the lead: a verdict (approve / changes needed), then
+Report with `send_message` to the `lead` group, without `task_id` (task id in
+the body; never `reply`, which targets a possibly replaced lead session): a verdict (approve / changes needed), then
 findings ranked by severity with `file:line` and a concrete fix. Add the same
 summary as a `task_note` on the task. Do not edit files, commit, or message
 the dev directly.
