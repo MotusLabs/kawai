@@ -10,7 +10,7 @@ import type { Database } from 'bun:sqlite'
 import { mailboxSql, worktreeTaskMailSql } from './mailboxSql'
 import { createMessageTable } from './messageSchema'
 import { mapRow } from './messageRow'
-import { MessageEventLog } from './messageEvents'
+import { MessageEventLog, storeActor, type StoreActor } from './messageEvents'
 
 import type {
   ChatHandoffPackage,
@@ -57,6 +57,10 @@ export interface EnqueueInput {
 export const DEFAULT_HOP_LIMIT = 20
 
 const nowIso = () => new Date().toISOString()
+const SYSTEM: StoreActor = { kind: 'system' }
+const HUMAN: StoreActor = { kind: 'human' }
+/** Longest agent-supplied cancel or discard text kept on a row. */
+export const REASON_LIMIT = 300
 
 export class MailboxStore {
   private readonly listeners = new Set<(teamId: string, message?: TeamMessage) => void>()
@@ -130,7 +134,7 @@ export class MailboxStore {
     // A new row: nothing was overwritten; the hop-limit reason is the one written.
     this.events.record({
       messageId: id, teamId: message.teamId, kind: overLimit ? 'dead-lettered' : 'sent',
-      actor: input.actor ?? 'system', at: now,
+      actor: storeActor(input.actor), at: now,
       facts: { prevState: null, prevClaimedBy: null, prevRecipient: null, prevReason: null, reason: message.reason },
     })
     return message
@@ -174,7 +178,7 @@ export class MailboxStore {
   claimSpawned(id: string, sessionId: string, now = nowIso()): boolean {
     return this.logged(id, () => this.changed(id, this.statements.claimSpawned.run({
       $id: id, $sessionId: sessionId, $now: now,
-    }).changes === 1), 'claimed', 'system', now)
+    }).changes === 1), 'claimed', SYSTEM, now)
   }
 
   /** Reserve queued mail for a spawn (inside the cap transaction). */
@@ -200,7 +204,7 @@ export class MailboxStore {
   claim(id: string, sessionId: string, now = nowIso()): boolean {
     return this.logged(id, () => this.changed(id, this.statements.claim.run({
       $id: id, $sessionId: sessionId, $now: now,
-    }).changes === 1), 'claimed', 'system', now)
+    }).changes === 1), 'claimed', SYSTEM, now)
   }
 
   /** Re-check recipient availability inside the transaction that wins the claim. */
@@ -222,7 +226,7 @@ export class MailboxStore {
   markPushed(id: string, now = nowIso(), taskRevision: number | null = null): boolean {
     return this.logged(id, () => this.changed(id, this.statements.markPushed.run({
       $id: id, $now: now, $taskRevision: taskRevision,
-    }).changes === 1), 'pushed', 'system', now)
+    }).changes === 1), 'pushed', SYSTEM, now)
   }
 
   /**
@@ -238,7 +242,7 @@ export class MailboxStore {
 
   /** The acknowledgement boundary (D10 step 3): the transcript carried the id. */
   markDelivered(id: string, now = nowIso()): boolean {
-    return this.logged(id, () => this.changed(id, this.statements.markDelivered.run({ $id: id, $now: now }).changes === 1), 'delivered', 'system', now)
+    return this.logged(id, () => this.changed(id, this.statements.markDelivered.run({ $id: id, $now: now }).changes === 1), 'delivered', SYSTEM, now)
   }
 
   /** Back to the queue; the claim, push, and any spawn reservation are forgotten. */
@@ -248,7 +252,7 @@ export class MailboxStore {
     }, 'requeued')
   }
 
-  deadLetter(id: string, reason: string, actor: MessageEventActor = 'system'): boolean {
+  deadLetter(id: string, reason: string, actor: StoreActor = SYSTEM): boolean {
     return this.transition(id, ['queued', 'claimed', 'awaiting-request', 'spawning'], { state: 'dead', reason }, 'dead-lettered', actor)
   }
 
@@ -305,9 +309,37 @@ export class MailboxStore {
     return this.select(`state = 'parked' AND resume_message_id = $resume`, { $resume: resumeMessageId })[0] ?? null
   }
 
-  /** The user cancels a queued or scheduled message. */
-  cancel(id: string): boolean {
-    return this.transition(id, ['queued', 'awaiting-request'], { state: 'cancelled' }, 'cancelled', 'human')
+  /**
+   * Cancel undelivered mail: queued, scheduled, held for a request, or parked.
+   * A parked message is cancelled with its resume message in one transaction
+   * (team-mailbox-management D2): a still-undelivered resume is cancelled
+   * too, an already delivered one is left alone, and one a recipient has
+   * claimed refuses the whole cancel so the resume can never deliver after it.
+   * An agent actor's `reason` is written on the row, cut and attributed (D4).
+   */
+  cancel(id: string, actor: StoreActor, reason?: string): boolean {
+    return this.db.transaction(() => {
+      const before = this.get(id)
+      if (!before) return false
+      const resume = before.state === 'parked' && before.resumeMessageId ? this.get(before.resumeMessageId) : null
+      if (resume && ['claimed', 'spawning'].includes(resume.state)) return false
+      const cancelled = this.transition(id, ['queued', 'awaiting-request', 'parked'], {
+        state: 'cancelled', parked_until: null, resume_message_id: null,
+        ...this.actionReason(actor, 'cancelled', reason),
+      }, 'cancelled', actor)
+      if (cancelled && resume && ['queued', 'awaiting-request'].includes(resume.state)) {
+        this.transition(resume.id, ['queued', 'awaiting-request'], {
+          state: 'cancelled', reason: `parked work ${id} cancelled`,
+        }, 'cancelled', actor)
+      }
+      return cancelled
+    })()
+  }
+
+  /** `reason` column update for an agent's cancel or discard; humans write none. */
+  private actionReason(actor: StoreActor, verb: 'cancelled' | 'discarded', reason?: string): { reason?: string } {
+    if (actor.kind !== 'agent') return {}
+    return { reason: `${verb} by ${actor.sessionId}: ${(reason ?? '').trim().slice(0, REASON_LIMIT)}` }
   }
 
   /**
@@ -322,24 +354,24 @@ export class MailboxStore {
       this.transition(id, ['dead', 'uncertain'], {
         state: 'dead', reason: 'killed-recipient', to_kind: 'session', to_id: recipient,
         ...(message.state === 'uncertain' ? { possible_duplicate: 1 } : {}),
-      }, 'dead-lettered', 'human')
+      }, 'dead-lettered', HUMAN)
       return false
     }
     if (message?.state === 'dead') {
-      return this.transition(id, ['dead'], { state: 'queued', hop: 1, reason: null }, 'retried', 'human')
+      return this.transition(id, ['dead'], { state: 'queued', hop: 1, reason: null }, 'retried', HUMAN)
     }
     if (message?.state === 'uncertain' && message.claimedBy) {
       return this.transition(id, ['uncertain'], {
         state: 'queued', to_kind: 'session', to_id: message.claimedBy,
         claimed_by: null, claimed_at: null, pushed_at: null, reason: null, possible_duplicate: 1,
-      }, 'retried', 'human')
+      }, 'retried', HUMAN)
     }
     return false
   }
 
-  /** The user discards a dead or uncertain message for good. */
-  discard(id: string): boolean {
-    return this.transition(id, ['dead', 'uncertain'], { state: 'discarded' }, 'discarded', 'human')
+  /** Discard a dead or uncertain message for good (human, or a mailbox manager). */
+  discard(id: string, actor: StoreActor, reason?: string): boolean {
+    return this.transition(id, ['dead', 'uncertain'], { state: 'discarded', ...this.actionReason(actor, 'discarded', reason) }, 'discarded', actor)
   }
 
   /** Direct mail queued for a killed session can never arrive: dead-letter it. */
@@ -353,7 +385,7 @@ export class MailboxStore {
       }).changes
       for (const before of affected) {
         this.changed(before.id, true)
-        this.recordEvent(before, 'dead-lettered', 'system', nowIso(), reason)
+        this.recordEvent(before, 'dead-lettered', SYSTEM, nowIso(), reason)
       }
       return count
     })()
@@ -441,7 +473,7 @@ export class MailboxStore {
    * Run one state change and log it. The before-row is read inside the same
    * transaction so the event keeps the facts the update overwrites.
    */
-  private logged(id: string, run: () => boolean, kind: MessageEventKind, actor: MessageEventActor = 'system', at = nowIso(), reason: string | null = null): boolean {
+  private logged(id: string, run: () => boolean, kind: MessageEventKind, actor: StoreActor = SYSTEM, at = nowIso(), reason: string | null = null): boolean {
     return this.db.transaction(() => {
       const before = this.get(id)
       const changed = run()
@@ -450,7 +482,7 @@ export class MailboxStore {
     })()
   }
 
-  private recordEvent(before: TeamMessage, kind: MessageEventKind, actor: MessageEventActor, at: string, reason: string | null = null) {
+  private recordEvent(before: TeamMessage, kind: MessageEventKind, actor: StoreActor, at: string, reason: string | null = null) {
     this.events.record({
       messageId: before.id, teamId: before.teamId, kind, actor, at,
       facts: {
@@ -478,7 +510,7 @@ export class MailboxStore {
     from: MessageState[],
     set: Record<string, string | number | null>,
     kind: MessageEventKind,
-    actor: MessageEventActor = 'system'
+    actor: StoreActor = SYSTEM
   ): boolean {
     const assignments = Object.keys(set).map(column => `${column} = $${column}`).join(', ')
     const states = from.map((_, index) => `$from${index}`).join(', ')

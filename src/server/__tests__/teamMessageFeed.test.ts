@@ -63,7 +63,7 @@ describe('MessageFeed', () => {
     store.deadLetter(retried.id, 'uncertain')
     store.retry(retried.id)
     const cancelled = send('Never mind', T(6))
-    store.cancel(cancelled.id)
+    store.cancel(cancelled.id, { kind: 'human' })
     // One push per transition, each carrying the row as it stands after it.
     // A push keeps its row in `claimed`: it records pushed_at, not a state.
     expect(changed().map(row => row.state)).toEqual([
@@ -91,7 +91,7 @@ describe('MessageFeed', () => {
     expect(pages(reconnected)[0]?.nextCursor).toBeNull()
     // The new registration keeps receiving pushes; the old one no longer does.
     events = []
-    store.cancel(second.id)
+    store.cancel(second.id, { kind: 'human' })
     expect(changed()).toHaveLength(0)
     expect(changed(reconnected)).toHaveLength(1)
   })

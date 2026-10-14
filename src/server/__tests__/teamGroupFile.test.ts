@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { DEFAULT_PARK_IF_RESET_WITHIN_MS, parseDuration, parseGroupFile, type GroupDefinition, type GroupEffort } from '../team/groupFile'
 
 const ROUTING_DEFAULTS = {
+  canManageMailbox: false,
   profiles: [],
   strategy: 'first-available',
   onLimit: { parkIfResetWithinMs: DEFAULT_PARK_IF_RESET_WITHIN_MS, otherwise: 'forward' },
@@ -186,5 +187,22 @@ describe('parseGroupFile', () => {
     expect(parseDuration('90m')).toBe(5_400_000)
     expect(parseDuration('3h')).toBe(10_800_000)
     for (const bad of ['0h', '1d', 'h', '1.5h', 'soon']) expect(parseDuration(bad)).toBeNull()
+  })
+})
+
+describe('canManageMailbox', () => {
+  const parse = (value?: string) => parseGroupFile('lead', `---\n${value === undefined ? '' : `canManageMailbox: ${value}\n`}---\nLead.`)
+
+  test('true, false, and absent', () => {
+    for (const [value, expected] of [['true', true], ['false', false], [undefined, false]] as const) {
+      const parsed = parse(value)
+      expect(parsed.ok && parsed.group).toMatchObject({ canManageMailbox: expected, warnings: [] })
+    }
+  })
+
+  test('an invalid value is a warning that keeps the group and the right off', () => {
+    const parsed = parse('maybe')
+    expect(parsed.ok && parsed.group).toMatchObject({ canManageMailbox: false, prompt: 'Lead.' })
+    expect(parsed.ok && parsed.group.warnings).toEqual(['canManageMailbox must be true or false, got "maybe"; ignored'])
   })
 })

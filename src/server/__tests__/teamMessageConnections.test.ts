@@ -177,7 +177,7 @@ test('thread open sends the thread with its events and re-sends on change', asyn
   const elsewhereRow = fromTeam({ kind: 'group', id: 'devs' }, 'Elsewhere')
   expect(count('team-thread')).toBe(2)
   await send({ type: 'team-thread-close', teamPath: project, threadId: first.threadId })
-  store.cancel(elsewhereRow.id)
+  store.cancel(elsewhereRow.id, { kind: 'human' })
   expect(count('team-thread')).toBe(2)
 })
 

@@ -5,7 +5,8 @@
 // dependency and an agent-written file cannot smuggle structure in. Known
 // keys are validated; unknown keys are ignored so later changes can add
 // settings without breaking older readers. Team tasks add `canCreateTasks`,
-// `max`, `profile`, and `approval` (team-tasks design D2/D6); profile routing
+// `max`, `profile`, and `approval` (team-tasks design D2/D6); team mailbox
+// management adds `canManageMailbox`; profile routing
 // adds `profiles`, `strategy`, and `onLimit`; group effort adds `effort`, the
 // reasoning effort members' agents launch with. `profiles` and `onLimit` take
 // one single-line flow value (`[a, b]` or `{ k: v }`, scalars only — never
@@ -50,6 +51,8 @@ export interface GroupDefinition {
   hopLimit?: number
   /** Members may create team tasks (team-tasks); default false. */
   canCreateTasks: boolean
+  /** Members may cancel any team message and discard dead/uncertain mail (team-mailbox-management); default false. */
+  canManageMailbox: boolean
   /** Live-member cap for worktree staffing spawns; default the sum of profile caps, else 1. */
   max: number
   /** Profiles spawned members may use, preferred first; empty = the default profile. */
@@ -115,7 +118,7 @@ export function parseGroupFile(id: string, content: string): GroupFileParse {
 }
 
 type TaskSettings = Pick<GroupDefinition,
-  'canCreateTasks' | 'max' | 'profiles' | 'strategy' | 'onLimit' | 'approval' | 'effort' | 'warnings'>
+  'canCreateTasks' | 'canManageMailbox' | 'max' | 'profiles' | 'strategy' | 'onLimit' | 'approval' | 'effort' | 'warnings'>
 
 type Parsed<T> = { ok: true; value: T } | { ok: false; error: string }
 
@@ -124,7 +127,7 @@ function parseTaskSettings(
 ): { ok: true; settings: TaskSettings } | { ok: false; error: string } {
   const warnings: string[] = []
   const settings: TaskSettings = {
-    canCreateTasks: false, max: 1, profiles: [], strategy: 'first-available',
+    canCreateTasks: false, canManageMailbox: false, max: 1, profiles: [], strategy: 'first-available',
     onLimit: parseOnLimit(fields.get('onLimit'), warnings), approval: 'manual', warnings,
   }
   const canCreate = fields.get('canCreateTasks')?.trim()
@@ -133,6 +136,12 @@ function parseTaskSettings(
       return { ok: false, error: `canCreateTasks must be true or false, got "${canCreate}"` }
     }
     settings.canCreateTasks = canCreate === 'true'
+  }
+  // A rights flag degrades alone: a typo must not drop the group's role or membership.
+  const manage = fields.get('canManageMailbox')?.trim()
+  if (manage !== undefined) {
+    if (manage === 'true' || manage === 'false') settings.canManageMailbox = manage === 'true'
+    else warnings.push(`canManageMailbox must be true or false, got "${manage}"; ignored`)
   }
   const profile = fields.get('profile')?.trim()
   const profiles = fields.get('profiles')?.trim()

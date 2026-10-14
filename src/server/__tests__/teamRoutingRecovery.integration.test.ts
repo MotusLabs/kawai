@@ -90,7 +90,7 @@ test('no-group direct work is retried automatically after the provider reset', a
   try {
     f.records.get('dev')!.groupId = null
     const seed = f.send()
-    f.store.cancel(seed.id)
+    f.store.cancel(seed.id, { kind: 'human' })
     const message = f.store.enqueue({ teamId: seed.teamId, toKind: 'session', toId: 'dev', fromSession: 'other',
       fromGroup: 'devs', originPath: seed.originPath, body: 'Build export' })
     f.store.claim(message.id, 'dev'); f.store.markPushed(message.id); f.store.markDelivered(message.id)

@@ -111,7 +111,7 @@ export class MailboxConnections {
     const action = message.type === 'team-mailbox-cancel' ? 'cancel'
       : message.type === 'team-mailbox-retry' ? 'retry' : message.type === 'team-mailbox-discard' ? 'discard' : null
     if (!action) return
-    if (!this.manager.mailbox.store[action](row.id)) {
+    if (!this.manager.mailbox.store[action](row.id, { kind: 'human' })) {
       connection.send({ type: 'error', message: action === 'retry' && this.manager.mailbox.store.get(row.id)?.reason === 'killed-recipient' ? 'Cannot retry: the recipient session no longer exists' : 'Message state changed; this action is no longer available' })
     }
     this.manager.dispatcher.notify()

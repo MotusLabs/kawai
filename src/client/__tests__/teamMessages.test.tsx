@@ -31,7 +31,7 @@ const message = (id: string, extra: Partial<TeamMessage> = {}): TeamMessage => (
   ...extra,
 })
 const event = (id: string, seq: number, kind: MessageEvent['kind'], extra: Partial<MessageEvent> = {}): MessageEvent => ({
-  messageId: id, teamId: 'team', seq, createdAt: `2026-10-13T10:00:0${seq}.000Z`, kind, actor: 'system',
+  messageId: id, teamId: 'team', seq, createdAt: `2026-10-13T10:00:0${seq}.000Z`, kind, actor: 'system', actorSession: null,
   prevState: null, prevClaimedBy: null, prevRecipient: null, prevReason: null, reason: null, ...extra,
 })
 const at = (n: number) => `2026-10-13T10:00:${String(n).padStart(2, '0')}.000Z`

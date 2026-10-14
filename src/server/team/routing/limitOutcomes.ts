@@ -40,6 +40,8 @@ CREATE TABLE IF NOT EXISTS team_handoff_notes (
 );
 `
 
+const SYSTEM = { kind: 'system' } as const
+
 export type HandoffTarget = { kind: 'group' | 'session'; id: string }
 
 export interface LimitOutcomesOptions {
@@ -171,7 +173,7 @@ export class LimitOutcomes {
 
   private unpark(message: TeamMessage) {
     this.digests.delete(message.id)
-    if (message.resumeMessageId) this.options.store.cancel(message.resumeMessageId)
+    if (message.resumeMessageId) this.options.store.cancel(message.resumeMessageId, SYSTEM)
     this.options.store.unpark(message.id)
   }
 
@@ -228,7 +230,7 @@ export class LimitOutcomes {
 
   /** Without a group, retry direct work on its original session after recovery. */
   private release(message: TeamMessage, groupId: string | null, resetsAt: string) {
-    if (message.resumeMessageId) this.options.store.cancel(message.resumeMessageId)
+    if (message.resumeMessageId) this.options.store.cancel(message.resumeMessageId, SYSTEM)
     this.options.store.release(message.id, groupId, groupId ? null : resetsAt)
     this.digests.delete(message.id)
   }
@@ -252,7 +254,7 @@ export class LimitOutcomes {
 
   private park(message: TeamMessage, sessionId: string, record: ChatSessionRecord | undefined, resetsAt: string) {
     const store = this.options.store
-    if (message.resumeMessageId) store.cancel(message.resumeMessageId)
+    if (message.resumeMessageId) store.cancel(message.resumeMessageId, SYSTEM)
     const resume = store.enqueue({
       teamId: message.teamId, toKind: 'session', toId: sessionId, fromSession: sessionId,
       fromGroup: record?.groupId ?? null, originPath: record?.projectPath ?? message.originPath,
@@ -260,7 +262,7 @@ export class LimitOutcomes {
       body: `Your provider limit has reset. Continue the work from message ${message.id}` +
         `${message.taskId ? ` (task ${message.taskId})` : ''} where you left off; check \`git status\` first.`,
     })
-    if (!store.park(message.id, resetsAt, resume.id)) store.cancel(resume.id)
+    if (!store.park(message.id, resetsAt, resume.id)) store.cancel(resume.id, SYSTEM)
   }
 
   /** Resolve a frontmatter `forwardTo`: a team group, else a team session, else the same group. */
@@ -297,7 +299,7 @@ export class LimitOutcomes {
       body: message.body, inReplyTo: message, attachThread: true, taskId: message.taskId,
       handoff, excludedProfile: profileId,
     })
-    if (message.resumeMessageId) store.cancel(message.resumeMessageId)
+    if (message.resumeMessageId) store.cancel(message.resumeMessageId, SYSTEM)
     store.markForwarded(message.id, `forwarded: ${forwarded.id}`)
     this.digests.delete(message.id)
     this.db.prepare(`INSERT INTO team_handoff_notes (id, team_id, from_session, profile_id, original_id, forwarded_id, created_at)

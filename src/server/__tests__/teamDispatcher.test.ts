@@ -46,7 +46,7 @@ test('urgent group precedes normal direct; direct precedes older group at equal 
     const direct = send({ toKind: 'session', toId: 'dev' })
     recipients[0]!.idle = true; await dispatch()
     expect(delivered.at(-1)?.id).toBe(urgent ? group.id : direct.id)
-    store.cancel(urgent ? direct.id : group.id)
+    store.cancel(urgent ? direct.id : group.id, { kind: 'human' })
   }
 })
 test('longest idle member wins once despite simultaneous notifications', async () => {
@@ -441,7 +441,7 @@ test('a start failure persists across passes with its error until the message le
   await dispatch(); await dispatch()
   for (const outcome of outcomes) expect(outcome.reasons.get(mail.id)).toEqual([{ kind: 'startup-failed', detail: 'lost auth' }])
   // Cancelled: the failure leaves with the message.
-  store.cancel(mail.id); await dispatch()
+  store.cancel(mail.id, { kind: 'human' }); await dispatch()
   expect(outcomes.at(-1)!.reasons.has(mail.id)).toBe(false)
   expect(outcomes.at(-1)!.waiting.has(mail.id)).toBe(false)
 })

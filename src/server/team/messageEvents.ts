@@ -24,10 +24,18 @@ CREATE TABLE IF NOT EXISTS team_message_events (
   prev_recipient TEXT,
   prev_reason TEXT,
   reason TEXT,
+  actor_session TEXT,
   PRIMARY KEY (message_id, seq)
 );
 CREATE INDEX IF NOT EXISTS team_message_events_team ON team_message_events (team_id, created_at);
 `
+
+/** Who ran a store transition; `agent` carries the acting session. */
+export type StoreActor = { kind: 'system' } | { kind: 'human' } | { kind: 'agent'; sessionId: string }
+
+/** An event-log actor from the composer's plain vocabulary. */
+export const storeActor = (actor: MessageEventActor | StoreActor | undefined): StoreActor =>
+  typeof actor === 'object' ? actor : actor === 'human' ? { kind: 'human' } : { kind: 'system' }
 
 /** The facts a transition overwrote, taken from the row before it ran. */
 export interface EventFacts {
@@ -42,26 +50,32 @@ export interface EventFacts {
 export class MessageEventLog {
   constructor(private readonly db: Database) {
     db.exec(CREATE_EVENTS_SQL)
+    // Additive column (team-mailbox-management D3): old rows keep it null.
+    const columns = db.prepare('PRAGMA table_info(team_message_events)').all() as Array<{ name: string }>
+    if (!columns.some(column => column.name === 'actor_session')) {
+      db.exec('ALTER TABLE team_message_events ADD COLUMN actor_session TEXT')
+    }
   }
 
   record(input: {
     messageId: string
     teamId: string
     kind: MessageEventKind
-    actor: MessageEventActor
+    actor: StoreActor
     at: string
     facts: EventFacts
   }): void {
     this.db.prepare(`INSERT INTO team_message_events
-      (message_id, team_id, seq, created_at, kind, actor, prev_state, prev_claimed_by, prev_recipient, prev_reason, reason)
+      (message_id, team_id, seq, created_at, kind, actor, prev_state, prev_claimed_by, prev_recipient, prev_reason, reason, actor_session)
       VALUES ($messageId, $teamId,
         (SELECT COALESCE(MAX(seq), 0) + 1 FROM team_message_events WHERE message_id = $messageId),
-        $createdAt, $kind, $actor, $prevState, $prevClaimedBy, $prevRecipient, $prevReason, $reason)`).run({
+        $createdAt, $kind, $actor, $prevState, $prevClaimedBy, $prevRecipient, $prevReason, $reason, $actorSession)`).run({
       $messageId: input.messageId,
       $teamId: input.teamId,
       $createdAt: input.at,
       $kind: input.kind,
-      $actor: input.actor,
+      $actor: input.actor.kind,
+      $actorSession: input.actor.kind === 'agent' ? input.actor.sessionId : null,
       $prevState: input.facts.prevState,
       $prevClaimedBy: input.facts.prevClaimedBy,
       $prevRecipient: input.facts.prevRecipient,
@@ -94,7 +108,8 @@ function mapEvent(row: Record<string, unknown>): MessageEvent {
     seq: Number(row.seq),
     createdAt: String(row.created_at),
     kind: String(row.kind) as MessageEventKind,
-    actor: row.actor === 'human' ? 'human' : 'system',
+    actor: row.actor === 'human' ? 'human' : row.actor === 'agent' && text(row.actor_session) ? 'agent' : 'system',
+    actorSession: row.actor === 'agent' ? text(row.actor_session) : null,
     prevState: text(row.prev_state) as MessageState | null,
     prevClaimedBy: text(row.prev_claimed_by),
     prevRecipient: text(row.prev_recipient),
