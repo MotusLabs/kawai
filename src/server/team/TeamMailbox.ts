@@ -90,13 +90,13 @@ export class TeamMailbox {
       team, catalog,
       fromKind: 'agent' as const, fromSession: sender.sessionId, fromGroup: sender.groupId ?? null,
       originPath: sender.projectPath,
-      hopLimit: sender.groupId ? catalog.groups.get(sender.groupId)?.hopLimit : undefined,
+      hopLimit: sender.groupId ? catalog.groups.get(sender.groupId)?.group?.hopLimit : undefined,
     }
   }
 
   async listGroups(caller: MailCaller) {
     const { catalog } = await this.context(caller)
-    return [...catalog.groups.values()].map(({ id, label, description }) => ({ id, label, description }))
+    return [...catalog.groups.values()].map(({ group: { id, label, description } }) => ({ id, label, description }))
   }
 
   async send(caller: MailCaller, input: MailInput, deliverAt?: string): Promise<TeamMessage> {

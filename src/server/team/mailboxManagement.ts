@@ -90,7 +90,7 @@ export class MailboxManagement {
     const session = this.options.getSession(sessionId)
     if (!session) throw new Error(`Unknown calling session: ${sessionId}`)
     const { team, catalog } = await loadTeamGroups(session.projectPath, this.options.homeDir)
-    const group = session.groupId ? catalog.groups.get(session.groupId) : undefined
+    const group = session.groupId ? catalog.groups.get(session.groupId)?.group : undefined
     return { team, manager: group?.canManageMailbox === true }
   }
 

@@ -290,7 +290,7 @@ export class AssignmentService {
 
   private groupOf(team: TeamIdentity, id: string): GroupDefinition {
     const catalog = loadGroupCatalog({ groupsRoot: team.groupsRoot, ...(this.options.homeDir ? { homeDir: this.options.homeDir } : {}) })
-    const group = catalog.groups.get(id)
+    const group = catalog.groups.get(id)?.group
     if (!group) throw new Error(`Unknown group: ${id}`)
     return group
   }

@@ -17,9 +17,32 @@ import { parseGroupFile, type GroupDefinition } from './groupFile'
 /** Group ids name mailboxes and badges; same shape as profile ids. */
 export const GROUP_ID_PATTERN = /^[a-z0-9][a-z0-9-]*$/
 
+/** One layer's file for a group id (team-workspace D7). */
+export interface GroupSourceFile {
+  file: string
+  /** Which layer read this file: the user's home or the project tree. */
+  layer: 'user' | 'project'
+  /** Whether this layer's definition is the one in effect (project wins). */
+  inEffect: boolean
+}
+
+/**
+ * One group as the catalog holds it (team-workspace D7): the definition in
+ * effect plus every layer's file for the id, so Members can name the source
+ * file and, when both layers define the id, both paths with the winner
+ * marked. One file defines a whole group, so this is the whole provenance.
+ */
+export interface GroupCatalogEntry {
+  group: GroupDefinition
+  /** The file whose definition is in effect. */
+  file: string
+  /** Each layer's file for the id, user first; exactly one is in effect. */
+  sources: GroupSourceFile[]
+}
+
 export interface GroupCatalog {
   /** Groups by id, in id order. */
-  groups: Map<string, GroupDefinition>
+  groups: Map<string, GroupCatalogEntry>
   /** One line per skipped file, naming its path. */
   errors: string[]
   /** Problems in loaded files that fell back to defaults, naming the path. */
@@ -44,16 +67,28 @@ export function groupCatalogDirs(ctx: GroupCatalogContext): string[] {
 }
 
 export function loadGroupCatalog(ctx: GroupCatalogContext): GroupCatalog {
-  const merged = new Map<string, { file: string; group: GroupDefinition }>()
+  // User level first so the project layer replaces same-id groups wholesale;
+  // every layer's file is kept beside the winner (D7).
+  const merged = new Map<string, { files: Array<{ file: string; layer: 'user' | 'project' }>; group: GroupDefinition }>()
   const errors: string[] = []
-  // User level first so the project layer replaces same-id groups.
-  for (const dir of groupCatalogDirs(ctx)) {
-    for (const [id, entry] of readGroupDir(dir, errors)) merged.set(id, entry)
-  }
+  groupCatalogDirs(ctx).forEach((dir, index) => {
+    const layer = index === 0 ? 'user' : 'project'
+    for (const [id, entry] of readGroupDir(dir, errors)) {
+      const existing = merged.get(id)
+      if (existing) {
+        existing.files.push({ file: entry.file, layer })
+        existing.group = entry.group
+      } else {
+        merged.set(id, { files: [{ file: entry.file, layer }], group: entry.group })
+      }
+    }
+  })
   const known = new Set(resolveProfileCatalog(profileContext(ctx)).profiles.keys())
   const warnings: string[] = []
-  const groups = new Map<string, GroupDefinition>()
-  for (const [id, { file, group }] of [...merged].sort(([a], [b]) => a.localeCompare(b))) {
+  const groups = new Map<string, GroupCatalogEntry>()
+  for (const [id, { files, group }] of [...merged].sort(([a], [b]) => a.localeCompare(b))) {
+    // The last file is the winning layer's (the project layer, when both define the id).
+    const file = files.at(-1)!.file
     const unknown = group.profiles.filter(entry => !known.has(entry.profileId))
     const checked = unknown.length === 0 ? group : {
       ...group,
@@ -61,7 +96,10 @@ export function loadGroupCatalog(ctx: GroupCatalogContext): GroupCatalog {
       warnings: [...group.warnings, ...unknown.map(entry => `profile "${entry.profileId}" is not defined; ignored`)],
     }
     for (const warning of checked.warnings) warnings.push(`${file}: ${warning}`)
-    groups.set(id, checked)
+    groups.set(id, {
+      group: checked, file,
+      sources: files.map((source, position) => ({ ...source, inEffect: position === files.length - 1 })),
+    })
   }
   return { groups, errors, warnings }
 }

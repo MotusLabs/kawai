@@ -122,7 +122,7 @@ export class SessionMailbox {
       getRecord: options.getRecord,
       teamOf: id => options.teams.teamOf(id),
       definition: (teamId, groupId, originPath) => this.groupDefinition(teamId, groupId, originPath),
-      cachedDefinition: (teamId, groupId) => this.catalogs.get(teamId)?.groups.get(groupId),
+      cachedDefinition: (teamId, groupId) => this.catalogs.get(teamId)?.groups.get(groupId)?.group,
       recipient: id => this.recipient(id),
       hasLiveWorkers: options.hasLiveWorkers,
       hasRunningBackgroundTasks: options.hasRunningBackgroundTasks,
@@ -173,7 +173,7 @@ export class SessionMailbox {
     const targetWorktree = (message: TeamMessage): string | null => {
       const worktree = message.taskId ? taskStore.get(message.taskId)?.worktree ?? null : null
       if (worktree === null || message.toKind !== 'group' || message.toId === null) return worktree
-      return this.catalogs.get(message.teamId)?.groups.get(message.toId)?.worktreeScoped === false ? null : worktree
+      return this.catalogs.get(message.teamId)?.groups.get(message.toId)?.group.worktreeScoped === false ? null : worktree
     }
     this.router = new ProfileRouter({
       // Read through a live team member's cached catalog (one read per team
@@ -184,9 +184,9 @@ export class SessionMailbox {
         const records = [...options.records()]
         const peer = records.find(record => record.sessionId === message.fromSession && options.teams.teamOf(record.sessionId)?.teamId === message.teamId) ??
           records.find(record => options.teams.teamOf(record.sessionId)?.teamId === message.teamId)
-        if (peer) return options.teams.catalogOf(peer.sessionId, this.catalogs)?.groups.get(message.toId)
+        if (peer) return options.teams.catalogOf(peer.sessionId, this.catalogs)?.groups.get(message.toId)?.group
         const { team, catalog } = await loadTeamGroups(message.originPath, options.homeDir)
-        return team.teamId === message.teamId ? catalog.groups.get(message.toId) : undefined
+        return team.teamId === message.teamId ? catalog.groups.get(message.toId)?.group : undefined
       },
       members: (teamId, groupId) => [...options.records()].flatMap(record =>
         record.archivedAt == null && record.groupId === groupId && options.teams.teamOf(record.sessionId)?.teamId === teamId
@@ -204,7 +204,7 @@ export class SessionMailbox {
       store, limits: this.limits, rules: this.rules,
       getRecord: options.getRecord,
       teamOf: id => options.teams.teamOf(id)?.teamId,
-      groupOf: (sessionId, groupId) => options.teams.catalogOf(sessionId, this.catalogs)?.groups.get(groupId),
+      groupOf: (sessionId, groupId) => options.teams.catalogOf(sessionId, this.catalogs)?.groups.get(groupId)?.group,
       taskTitle: taskId => taskStore.get(taskId)?.title ?? null,
       targetWorktree, restoreSession: options.restore,
       onError: options.onError,
@@ -365,7 +365,7 @@ export class SessionMailbox {
   private groupOfTeam(teamId: string, groupId: string): GroupDefinition | undefined {
     for (const record of this.options.records()) {
       if (this.options.teams.teamOf(record.sessionId)?.teamId !== teamId) continue
-      return this.options.teams.catalogOf(record.sessionId, this.catalogs)?.groups.get(groupId)
+      return this.options.teams.catalogOf(record.sessionId, this.catalogs)?.groups.get(groupId)?.group
     }
     return undefined
   }
@@ -379,11 +379,11 @@ export class SessionMailbox {
   private async groupDefinition(teamId: string, groupId: string, originPath?: string): Promise<GroupDefinition | undefined> {
     for (const record of this.options.records()) {
       if (this.options.teams.teamOf(record.sessionId)?.teamId !== teamId) continue
-      return this.options.teams.catalogOf(record.sessionId, this.catalogs)?.groups.get(groupId)
+      return this.options.teams.catalogOf(record.sessionId, this.catalogs)?.groups.get(groupId)?.group
     }
     if (!originPath) return undefined
     const { team, catalog } = await loadTeamGroups(originPath, this.options.homeDir)
-    return team.teamId === teamId ? catalog.groups.get(groupId) : undefined
+    return team.teamId === teamId ? catalog.groups.get(groupId)?.group : undefined
   }
 
   /**
