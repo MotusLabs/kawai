@@ -19,7 +19,7 @@ export function sendPlanCommand(teamPath: string, sendMessage: SendClientMessage
   sendMessage(build({ requestId, commandId }))
 }
 
-export default function PlanCommandDialog({ teamPath, slot, openLabel, confirmLabel, testId, connected, busy, disabled = false, reason, primary = false, children, onConfirm }: {
+export default function PlanCommandDialog({ teamPath, slot, openLabel, confirmLabel, testId, connected, busy, disabled = false, reason, primary = false, children, onOpen, onConfirm }: {
   teamPath: string
   slot: string
   openLabel: string
@@ -32,6 +32,8 @@ export default function PlanCommandDialog({ teamPath, slot, openLabel, confirmLa
   reason?: { label: string; required: boolean }
   primary?: boolean
   children?: ReactNode
+  /** Runs when the dialog opens: the place to capture the state the human is shown. */
+  onOpen?: () => void
   onConfirm: (reason: string) => void
 }) {
   const [open, setOpen] = useState(false)
@@ -63,6 +65,7 @@ export default function PlanCommandDialog({ teamPath, slot, openLabel, confirmLa
     return <button ref={opener} type="button" className={`btn text-chat-meta ${primary ? 'btn-primary' : ''}`} data-testid={testId}
       disabled={!connected || busy || disabled} onClick={() => {
         useTeamPlanStore.getState().arm(teamPath, slot)
+        onOpen?.()
         setOpen(true)
       }}>{openLabel}</button>
   }

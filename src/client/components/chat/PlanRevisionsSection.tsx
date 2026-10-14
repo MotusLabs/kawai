@@ -2,9 +2,11 @@
 // revision in review shows its diff summary against the approved revision —
 // changed sections, added, removed, and reordered changes, and a changed
 // strategy pin — with Approve (naming the exact revision, content hash, pin,
-// and the approved revision the human saw) and Withdraw. Drafts can be
+// and the approved revision the human saw when the dialog opened, so an
+// approval that lands meanwhile makes this one stale) and Withdraw. Drafts can be
 // discarded; every revision stays listed with its status, and the event
 // history lists every command with its actor and reason.
+import { useState } from 'react'
 import type { Session, SendClientMessage } from '@shared/types'
 import { planDiffSummary, type PlanDetail, type PlanRevision } from '@shared/plans'
 import PlanCommandDialog, { sendPlanCommand } from './PlanCommandDialog'
@@ -22,6 +24,9 @@ export default function PlanRevisionsSection({ teamPath, detail, sessions, sendM
   const approved = detail.revisions.find(revision => revision.revision === plan.currentApprovedRevision) ?? null
   const inReview = detail.revisions.filter(revision => revision.status === 'in_review')
   const isOpen = plan.lifecycle === 'open'
+  // The approved revision each open Approve dialog was shown, per revision.
+  const [seen, setSeen] = useState<Record<number, number | null>>({})
+  const seenApproved = (number: number) => (number in seen ? seen[number] ?? null : plan.currentApprovedRevision)
   return <section data-testid="plan-revisions" aria-labelledby="plan-revisions-heading" className="mt-3">
     <h4 id="plan-revisions-heading" className="font-medium">Revisions</h4>
     {inReview.length === 0 && <p className="text-chat-meta text-secondary">No revision is waiting for review.</p>}
@@ -32,13 +37,15 @@ export default function PlanRevisionsSection({ teamPath, detail, sessions, sendM
       <div className="mt-2 flex flex-wrap gap-2">
         <PlanCommandDialog teamPath={teamPath} slot={`approve:${plan.id}:${revision.revision}`} openLabel={`Approve revision ${revision.revision}`}
           confirmLabel="Approve" testId={`plan-approve-${revision.revision}`} primary connected={connected} busy={busy} disabled={!isOpen}
+          onOpen={() => setSeen(current => ({ ...current, [revision.revision]: plan.currentApprovedRevision }))}
           onConfirm={() => {
-            const payload = { planId: plan.id, revision: revision.revision, contentHash: revision.contentHash, expectedApprovedRevision: plan.currentApprovedRevision }
+            const expectedApprovedRevision = seenApproved(revision.revision)
+            const payload = { planId: plan.id, revision: revision.revision, contentHash: revision.contentHash, expectedApprovedRevision }
             sendPlanCommand(teamPath, sendMessage, 'approve', `approve:${plan.id}:${revision.revision}`, payload,
               ids => ({ type: 'team-plan-approve', teamPath, ...ids, ...payload }))
           }}>
           <p className="text-chat-meta">Approve exactly revision {revision.revision}, content hash <code>{revision.contentHash}</code>, pinned to {pinLabel(revision.pin).toLowerCase()}.</p>
-          <p className="text-chat-meta text-secondary">It becomes the plan's direction{approved ? `, superseding revision ${approved.revision}` : ''}. Approval starts no work: nothing is dispatched, and no task or mail is created.</p>
+          <p className="text-chat-meta text-secondary">It becomes the plan's direction{seenApproved(revision.revision) !== null ? `, superseding revision ${seenApproved(revision.revision)}` : ''}. Approval starts no work: nothing is dispatched, and no task or mail is created.</p>
         </PlanCommandDialog>
         <PlanCommandDialog teamPath={teamPath} slot={`withdraw:${plan.id}:${revision.revision}`} openLabel="Withdraw" confirmLabel={`Withdraw revision ${revision.revision}`}
           testId={`plan-withdraw-${revision.revision}`} connected={connected} busy={busy}

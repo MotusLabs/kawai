@@ -4,7 +4,8 @@
 // checks, the diff summary; Approve / Withdraw, draft discard, history, close
 // and reopen with reasons; disabled controls while disconnected; refusals
 // inline; focus moving into the detail and labelled dialogs; the one-column
-// list → detail → back flow; and the view owning its subscriptions.
+// list → detail → back flow; the view owning its subscriptions; and an open
+// Approve dialog pinning the approved revision it was shown.
 import { afterEach, expect, test } from 'bun:test'
 import TestRenderer, { act } from 'react-test-renderer'
 import type { ClientMessage } from '@shared/types'
@@ -249,4 +250,18 @@ test('every control disables while disconnected; reconnecting re-subscribes and 
   rerender({ connected: true, epoch: 1 })
   expect(sent.slice(before)).toEqual([{ type: 'team-plans-open', teamPath: '/repo' }, { type: 'team-plan-open', teamPath: '/repo', planId: 'p1' }])
   expect(useTeamPlanStore.getState().views['/repo']!.pending).toEqual({})
+})
+
+test('an open Approve dialog keeps the approved revision it was shown, so an approval landing meanwhile makes it stale', () => {
+  const { sent, byId, rerender } = openDetail()
+  act(() => byId('plan-approve-2').props.onClick())
+  rerender()
+  // Another tab approves revision 3 meanwhile; the push reaches this view.
+  const moved = approvedDetail()
+  moved.plan = { ...moved.plan, currentApprovedRevision: 3 }
+  act(() => useTeamPlanStore.getState().applyDetail({ type: 'team-plan-detail', teamPath: '/repo', teamId: 't', detail: moved }))
+  rerender()
+  expect(textOf(byId('plan-approve-2-dialog'))).toContain('superseding revision 1')
+  act(() => byId('plan-approve-2-confirm').props.onClick())
+  expect(sent.find(message => message.type === 'team-plan-approve')).toMatchObject({ revision: 2, expectedApprovedRevision: 1 })
 })
