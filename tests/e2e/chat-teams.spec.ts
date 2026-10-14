@@ -19,16 +19,10 @@ async function createChat(page: Page, root: string, name: string, group: string)
   await page.getByRole('button', { name: 'New session', exact: true }).first().click()
   const dialog = page.getByRole('dialog', { name: 'New Session' })
   const projectPath = dialog.getByLabel('Project Path')
+  // The dialog initializes its fields during the open render, so a fill can
+  // no longer be lost to a late open-transition reset (see NewSessionModal).
   await projectPath.fill(root)
-  // Hydration-race hardening (CI run 38460411348): on a busy first load the
-  // filled path can be lost to the dialog's late open-transition reset (the
-  // failure snapshot showed the dialog back on the workspace default path,
-  // its group list empty for it, with the root echoed into the terminal
-  // input), so verify the path stuck and refill until it does.
-  await expect(async () => {
-    if ((await projectPath.inputValue()) !== root) await projectPath.fill(root)
-    await expect(projectPath).toHaveValue(root)
-  }).toPass({ timeout: 5000 })
+  await expect(projectPath).toHaveValue(root)
   await expect(dialog.getByLabel('Group').locator('option', { hasText: 'Developers' })).toHaveCount(1)
   await expect(dialog.getByLabel('Group')).toHaveValue('')
   await dialog.getByLabel('Group').selectOption(group)
