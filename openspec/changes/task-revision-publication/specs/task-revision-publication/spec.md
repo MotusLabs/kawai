@@ -26,6 +26,10 @@ Publishing SHALL record the next numbered revision with direction, acceptance, r
 - **WHEN** two requests with the same command key and payload are processed at the same time
 - **THEN** exactly one revision, one notice per holder, and one revision-published fact are written, and both requests return that revision
 
+#### Scenario: Reused key with a different payload is refused
+- **WHEN** a publication arrives with the command key of an earlier publication but a different direction, acceptance, rationale, notify choice, or base revision
+- **THEN** it is refused naming the differing field, and no revision, notice, or revision-published fact is written
+
 #### Scenario: Stale draft is refused
 - **WHEN** the human publishes a draft based on revision 1 after another revision 2 was published
 - **THEN** the publication is refused naming revision 2, nothing is published, and the draft remains
