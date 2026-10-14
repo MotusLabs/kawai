@@ -139,4 +139,4 @@ Implement after Wave B2 (`task-revision-publication`, `task-results-handoffs`) h
   5. complete the plan.
 
   Also cover a stale approval from a second tab being refused inline. Run it locally as the only spec, after `bun run build`, on a spare `E2E_PORT`; never `bun run test:e2e`. Afterwards http://localhost:4040/ must still answer.
-- [ ] 9.2 Run `bun run lint && bun run typecheck && bun run test` and `openspec validate durable-plans --strict`. Verify all are green on the final head.
+- [x] 9.2 Run `bun run lint && bun run typecheck && bun run test` and `openspec validate durable-plans --strict`. Verify all are green on the final head.
