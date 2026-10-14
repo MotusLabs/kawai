@@ -104,14 +104,14 @@ describe('a failed late-spawn mark (MM LOW 3)', () => {
   let warn: ReturnType<typeof spyOn>
   let error: ReturnType<typeof spyOn>
   /** A closed task with a late-spawned member, and a task store whose `get` throws `failures` times. */
-  const setup = (failures: number) => {
+  const setup = (failures: number, overrides: Partial<MemberReleaseOptions> = {}) => {
     const t = task()
     tasks.setStatus(t.id, 'done')
     records.set('spawned-9', record('spawned-9', { projectPath: featX, spawned: true, taskId: t.id }))
     const get = tasks.get.bind(tasks)
     let left = failures
     tasks.get = id => { if (left > 0) { left -= 1; throw new Error('database is locked') } return get(id) }
-    return { t, releases: makeReleases({ lateMarkRetryDelaysMs: [1, 1, 1] }) }
+    return { t, releases: makeReleases({ lateMarkRetryDelaysMs: [1, 1, 1], ...overrides }) }
   }
   beforeEach(() => {
     warn = spyOn(logger, 'warn').mockImplementation(() => {})
@@ -150,6 +150,23 @@ describe('a failed late-spawn mark (MM LOW 3)', () => {
       expect({ change, pending: releases.pending() }).toEqual({ change, pending: [] })
       expect(error).not.toHaveBeenCalled()
     }
+  })
+
+  test('a second markLateSpawn over a pending retry cannot orphan it: cancel still stops the mark', async () => {
+    const archived: string[] = []
+    const { t, releases } = setup(1, {
+      lateMarkRetryDelaysMs: [20],
+      archive: id => { archived.push(id); return { ok: true } },
+    })
+    // The first attempt fails and schedules a 20 ms retry; the second call
+    // runs over it, succeeds, and marks the member — then it is cancelled.
+    releases.markLateSpawn('spawned-9', t.id)
+    releases.markLateSpawn('spawned-9', t.id)
+    releases.cancel('spawned-9')
+    await new Promise(resolve => setTimeout(resolve, 100))
+    expect(releases.pending()).toEqual([])
+    await releases.evaluate()
+    expect(archived).toEqual([])
   })
 
   test('shutdown drops a pending retry', async () => {
