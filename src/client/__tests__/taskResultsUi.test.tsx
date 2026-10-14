@@ -130,6 +130,22 @@ test('the release dialog lists the members to archive and the other live session
   expect(textOf(one('task-release-unavailable'))).toContain('No live spawned member holds the worktree.')
 })
 
+test('the release dialog closes once its listed members are released, even when a reviewer now holds the worktree', async () => {
+  const preview = (sessionId: string) => ({ members: [{ sessionId, name: sessionId, ready: true, reason: null }], others: [], outstandingResultId: 'r1', unavailable: null })
+  const { rerender } = await mount(detail({ release: preview('dev') }))
+  act(() => one('task-release').props.onClick())
+  expect(byTestId('task-release-confirm')).toHaveLength(1)
+  // A refusal push keeps the same member: the dialog stays open.
+  act(() => useTeamTaskStore.getState().applyDetail({ type: 'team-task-detail', teamPath: 'dev', teamId: 'team', detail: detail({ release: preview('dev') }), directory: [] }))
+  rerender()
+  expect(byTestId('task-release-confirm')).toHaveLength(1)
+  act(() => useTeamTaskStore.getState().applyDetail({ type: 'team-task-detail', teamPath: 'dev', teamId: 'team', detail: detail({ release: preview('reviewer') }), directory: [] }))
+  rerender()
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
+  expect(byTestId('task-release-confirm')).toHaveLength(0)
+  expect(byTestId('task-release')).toHaveLength(1)
+})
+
 test('list rows badge a submitted, flagged, or accepted result, and nothing for an unsubmitted task', () => {
   useTeamTaskStore.getState().open('dev')
   const rows = [
