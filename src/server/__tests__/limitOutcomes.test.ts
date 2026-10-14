@@ -503,3 +503,53 @@ describe('parked work cancelled mid-resume (team-mailbox-management)', () => {
     expect(mailCount()).toBe(before)
   })
 })
+
+describe('resume replacement leaves no live resume (team-mailbox-management S1/S2)', () => {
+  const liveResumes = () => store.listForTeam('team').filter(row => row.tags.includes('resume') && ['queued', 'awaiting-request'].includes(row.state))
+
+  test('unpark by a successful turn cancels the linked resume', async () => {
+    const m = deliver(); work()
+    await hitLimit(40 * MIN)
+    const resumeId = store.get(m.id)!.resumeMessageId!
+    await outcomes.turnEnded('dev', true)
+    expect(store.get(m.id)).toMatchObject({ state: 'delivered', resumeMessageId: null })
+    expect(store.get(resumeId)?.state).toBe('cancelled')
+    expect(liveResumes()).toEqual([])
+  })
+
+  test('release after the third park cancels the linked resume', async () => {
+    const m = deliver(); work()
+    for (let round = 1; round <= 3; round++) {
+      await hitLimit(10 * MIN)
+      const resumeId = store.get(m.id)!.resumeMessageId!
+      store.claim(resumeId, 'dev'); store.markPushed(resumeId); store.markDelivered(resumeId)
+      outcomes.delivered('dev', store.get(resumeId)!)
+    }
+    await hitLimit(10 * MIN)
+    expect(store.get(m.id)).toMatchObject({ state: 'queued', resumeMessageId: null })
+    expect(liveResumes()).toEqual([])
+  })
+
+  test('forwarding parked work cancels the linked resume', async () => {
+    const m = deliver(); work()
+    await hitLimit(40 * MIN)
+    const resumeId = store.get(m.id)!.resumeMessageId!
+    outcomes.handOff(m.id, { kind: 'group', id: 'architects' })
+    expect(store.get(m.id)).toMatchObject({ state: 'forwarded', resumeMessageId: null })
+    expect(store.get(resumeId)?.state).toBe('cancelled')
+    expect(liveResumes()).toEqual([])
+  })
+
+  test('re-parking leaves a delivered old resume alone and links a fresh one', async () => {
+    const m = deliver(); work()
+    await hitLimit(40 * MIN)
+    const oldId = store.get(m.id)!.resumeMessageId!
+    store.claim(oldId, 'dev'); store.markPushed(oldId); store.markDelivered(oldId)
+    outcomes.delivered('dev', store.get(oldId)!)
+    await hitLimit(40 * MIN)
+    const fresh = store.get(m.id)!.resumeMessageId!
+    expect(fresh).not.toBe(oldId)
+    expect(store.get(oldId)?.state).toBe('delivered')
+    expect(store.get(fresh)?.state).toBe('queued')
+  })
+})

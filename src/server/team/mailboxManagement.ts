@@ -126,7 +126,7 @@ export class MailboxManagement {
       const refusal = cancelRefusalText(result)
       throw new Error(refusal
         ? `Message ${message.id} was not cancelled. ${refusal} Nothing changed.`
-        : `Message ${message.id} state changed to ${result.code === 'unavailable' ? result.state ?? 'unknown' : 'unknown'}; nothing was cancelled.`)
+        : `Message ${message.id} state changed to ${result.code === 'state-changed' ? result.state ?? 'unknown' : 'unknown'}; nothing was cancelled.`)
     }
     await this.journal(sessionId, message, 'Cancelled', reason)
     return { id: message.id, state: 'cancelled' as const, ...(resumeId ? { resumeMessage: resumeId } : {}) }

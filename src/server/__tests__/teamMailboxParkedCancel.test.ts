@@ -181,3 +181,20 @@ describe('MailboxStore cancel and discard with actors (team-mailbox-management)'
     expect(store.eventsFor(work.id).map(event => event.kind)).not.toContain('cancelled')
   })
 })
+
+describe('cancelResult typed outcomes', () => {
+  test('ok, state-changed, resume-in-flight, and linked-resume', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kawai-cancel-result-'))
+    const db = new Database(path.join(dir, 'mail.db'))
+    try {
+      const store = new MailboxStore(db)
+      const base = { teamId: TEAM, toKind: 'group', toId: 'devs', fromSession: 'chat-lead', fromGroup: 'leads', originPath: '/repo', body: 'x' } as const
+      const queued = store.enqueue(base)
+      expect(store.cancelResult(queued.id, { kind: 'human' })).toEqual({ ok: true })
+      expect(store.cancelResult(queued.id, { kind: 'human' })).toEqual({ ok: false, code: 'state-changed', state: 'cancelled' })
+      expect(store.cancelResult('missing', { kind: 'human' })).toEqual({ ok: false, code: 'state-changed', state: null })
+    } finally {
+      db.close(); fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})

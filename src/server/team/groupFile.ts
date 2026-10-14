@@ -137,12 +137,7 @@ function parseTaskSettings(
     }
     settings.canCreateTasks = canCreate === 'true'
   }
-  // A rights flag degrades alone: a typo must not drop the group's role or membership.
-  const manage = fields.get('canManageMailbox')?.trim()
-  if (manage !== undefined) {
-    if (manage === 'true' || manage === 'false') settings.canManageMailbox = manage === 'true'
-    else warnings.push(`canManageMailbox must be true or false, got "${manage}"; ignored`)
-  }
+  settings.canManageMailbox = parseCanManageMailbox(fields.get('canManageMailbox'), warnings)
   const profile = fields.get('profile')?.trim()
   const profiles = fields.get('profiles')?.trim()
   if (profile !== undefined && profiles !== undefined) {
@@ -186,6 +181,19 @@ function parseTaskSettings(
     else warnings.push(`effort must be ${GROUP_EFFORTS.join(', ')}, got "${effort}"; ignored`)
   }
   return { ok: true, settings }
+}
+
+/**
+ * A rights flag degrades alone: a typo warns and leaves the right off rather
+ * than dropping the group's role and membership. The one place to change if an
+ * invalid value should reject the file instead.
+ */
+function parseCanManageMailbox(raw: string | undefined, warnings: string[]): boolean {
+  const value = raw?.trim()
+  if (value === undefined || value === 'false') return false
+  if (value === 'true') return true
+  warnings.push(`canManageMailbox must be true or false, got "${value}"; ignored`)
+  return false
 }
 
 /** `[a, b]` (no caps) or `{ a: 2, b: 1 }` (caps); order is preference. */

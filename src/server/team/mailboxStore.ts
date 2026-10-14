@@ -59,7 +59,7 @@ export type CancelResult =
   | { ok: true }
   | { ok: false; code: 'resume-in-flight'; holder: string | null; resumeId: string }
   | { ok: false; code: 'linked-resume'; parkedId: string }
-  | { ok: false; code: 'unavailable'; state: MessageState | null }
+  | { ok: false; code: 'state-changed'; state: MessageState | null }
 
 export const DEFAULT_HOP_LIMIT = 20
 
@@ -337,8 +337,8 @@ export class MailboxStore {
   cancelResult(id: string, actor: StoreActor, reason?: string): CancelResult {
     return this.db.transaction((): CancelResult => {
       const before = this.get(id)
-      const unavailable: CancelResult = { ok: false, code: 'unavailable', state: before?.state ?? null }
-      if (!before) return unavailable
+      const changed: CancelResult = { ok: false, code: 'state-changed', state: before?.state ?? null }
+      if (!before) return changed
       const resume = before.state === 'parked' && before.resumeMessageId ? this.get(before.resumeMessageId) : null
       if (resume && ['claimed', 'delivered'].includes(resume.state)) {
         return { ok: false, code: 'resume-in-flight', holder: before.claimedBy, resumeId: resume.id }
@@ -349,7 +349,7 @@ export class MailboxStore {
         state: 'cancelled', parked_until: null, resume_message_id: null,
         ...this.actionReason(actor, 'cancelled', reason),
       }, 'cancelled', actor)
-      if (!cancelled) return { ...unavailable, state: this.get(id)?.state ?? null }
+      if (!cancelled) return { ...changed, state: this.get(id)?.state ?? null }
       if (resume && ['queued', 'awaiting-request'].includes(resume.state)) {
         this.transition(resume.id, ['queued', 'awaiting-request'], {
           state: 'cancelled', reason: `parked work ${id} cancelled`,
