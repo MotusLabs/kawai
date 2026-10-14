@@ -44,6 +44,14 @@ Each task row SHALL show its title, task status, workflow stage, accountable ses
 - **WHEN** a result's review handoff is outstanding
 - **THEN** the row shows a workflow stage of In review alongside the unchanged task status
 
+#### Scenario: A queued review handoff already shows In review
+- **WHEN** a review handoff is dispatched and still queued while its result is unaccepted
+- **THEN** the row shows In review — the ladder's handoff order precedes Awaiting acceptance
+
+#### Scenario: A closed task shows no stage
+- **WHEN** a task's status is done while its last assignment stands delivered
+- **THEN** the row shows no workflow stage, not Implementing
+
 #### Scenario: Accountability falls back to the requested role
 - **WHEN** a group assignment is queued with no claimed agent
 - **THEN** the row shows the requested role as the accountable party and names no session

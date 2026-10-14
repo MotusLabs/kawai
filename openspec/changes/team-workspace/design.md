@@ -30,18 +30,19 @@ The workspace renders **Product Strategy** as a top band (compact summary of the
 
 ### D4. Workflow stage is a pure projection over sibling state, never a stored value
 
-`teamTaskStage.ts` maps a task's facts to a display stage, reading the sibling changes' real contracts (all merged as proposals; still absence-safe because they are not implemented yet):
+`teamTaskStage.ts` maps a task's facts to one display stage through an ordered ladder — first match wins — reading the sibling changes' real contracts (all merged as proposals; still absence-safe because they are not implemented yet):
 
-| Stage | Source | Field consumed |
-| --- | --- | --- |
-| Unstarted | `task-assignment` D5 | no outstanding assignment, or one whose derived state is `queued`/`failed`/`superseded` |
-| Implementing | `task-assignment` D5 | outstanding assignment state `claimed`/`delivered`/`parked`/`forwarded`/`uncertain` |
-| In review / Ready for QA / Fixes requested | `task-results-handoffs` D3 | a `team_task_assignments` row with `handoff_kind` `review`/`qa`/`fix` set, plus `result_id` and `expected_response`; its open/claimed/failed standing is that assignment's own D5 state, not a separate entity |
-| Awaiting acceptance | `task-results-handoffs` D1/D5 | the **outstanding result** (newest row nothing supersedes) with `accepted_by_kind`/`accepted_by_session`/`accepted_at` all NULL |
-| Needs re-evaluation (badge, not a stage) | `task-results-handoffs` D6 | derived at read: `result.task_revision < team_tasks.revision` — never stored |
-| Awaiting acknowledgement | `task-revision-publication` D5 | outstanding claimant's `acknowledged revision < task.revision`; notice state (Not notified / Queued / Delivered / Failed / Uncertain) is derived per holder per revision, and "Delivered rev 2 · Acknowledged rev 1" is a normal display |
+| # | Stage | Source | Field consumed |
+| --- | --- | --- | --- |
+| 1 | — (no stage) | the task itself | status `done` or `cancelled` |
+| 2 | In review / Ready for QA / Fixes requested | `task-results-handoffs` D3 | an outstanding `team_task_assignments` row with `handoff_kind` `review`/`qa`/`fix` set, plus `result_id` and `expected_response`; its standing is that assignment's own task-assignment D5 state, not a separate entity |
+| 3 | Awaiting acceptance | `task-results-handoffs` D1/D5 | the **outstanding result** (newest row nothing supersedes) with `accepted_by_kind`/`accepted_by_session`/`accepted_at` all NULL |
+| 4 | Implementing | `task-assignment` D5 | outstanding assignment state `claimed`/`delivered`/`parked`/`forwarded`/`uncertain` |
+| 5 | Unstarted | `task-assignment` D5 | otherwise: no outstanding assignment, or one whose derived state is `queued`/`failed`/`superseded` |
 
-There is no acceptance enum and acknowledgement is not a notice state. The envelope's `revisionNotice` is `{revision, previousRevision, assignmentId, rationale}` — publication metadata, not a stage input. The stage is never `done`, and a finished agent turn never moves it (product strategy P9/P10). If a sibling field is absent, the row falls back to the assignment-derived stage and the next action says why.
+Badges render beside the stage and are never stages themselves: **Needs re-evaluation** (`task-results-handoffs` D6, derived at read: `result.task_revision < team_tasks.revision` — never stored) and **Awaiting acknowledgement** (`task-revision-publication` D5: outstanding claimant's `acknowledged revision < task.revision`; notice state (Not notified / Queued / Delivered / Failed / Uncertain) is derived per holder per revision, and "Delivered rev 2 · Acknowledged rev 1" is a normal display).
+
+The order is the semantics: a closed task shows no stage whatever its assignment history says; an outstanding handoff outranks the unaccepted result it refers to; only when neither exists does the assignment's own state name the stage. There is no acceptance enum and acknowledgement is not a notice state. The envelope's `revisionNotice` is `{revision, previousRevision, assignmentId, rationale}` — publication metadata, not a stage input. The stage is never `done`, and a finished agent turn never moves it (product strategy P9/P10). If a sibling field is absent, the row falls back to the assignment-derived stage and the next action says why.
 
 ### D5. Attention items: one shape, a kind enum, and a card link
 
