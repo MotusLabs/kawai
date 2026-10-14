@@ -202,3 +202,94 @@ test('notify refuses an unpublished revision and a missing key', async () => {
   await expect(service.notify(human, task.id, 2, 'notify-1')).rejects.toThrow('Revision 2 of this task is not published')
   await expect(service.notify(human, task.id, 1, ' ')).rejects.toThrow('request key')
 })
+
+// Delivered and acknowledged (4.1, D5): separate facts, never merged.
+test('delivered but not acknowledged, then acknowledged later', async () => {
+  const { task, instructionId } = assignedTask()
+  deliver(instructionId, 'dev', 1)
+  store.acknowledgements.record(task.id, 'dev', 1, null)
+  await publish(task.id)
+  const [notice] = noticeRows(task.id)
+  deliver(notice!.id, 'dev', 2)
+  expect(recipient(task.id)).toMatchObject([{ noticeState: 'delivered', deliveredRevision: 2, acknowledgedRevision: 1 }])
+  store.acknowledgements.record(task.id, 'dev', 2, null)
+  expect(recipient(task.id)).toMatchObject([{ noticeState: 'delivered', deliveredRevision: 2, acknowledgedRevision: 2 }])
+})
+
+test('a non-notice task message counts as delivering its revision', async () => {
+  const { task, instructionId } = assignedTask()
+  deliver(instructionId, 'dev', 1)
+  await publish(task.id, { notify: false })
+  const note = mail.enqueue({ teamId: team.teamId, toKind: 'session', toId: 'dev', fromKind: 'human', fromSession: null,
+    fromGroup: null, originPath: '/repo', body: 'one more thing', taskId: task.id })
+  deliver(note.id, 'dev', 2)
+  expect(recipient(task.id)).toMatchObject([{ noticeState: 'not-notified', deliveredRevision: 2, acknowledgedRevision: null }])
+})
+
+// Replacement claimants (4.3, D6): only the current claimant's acknowledgement shows.
+test('a reassigned task starts unacknowledged; the earlier claimant\'s acknowledgement stays in history', async () => {
+  const { task, assignmentId, instructionId } = assignedTask()
+  deliver(instructionId, 'dev', 1)
+  await publish(task.id, { notify: false })
+  store.acknowledgements.record(task.id, 'dev', 2, assignmentId)
+  const { assignment: next } = assignments.insert({ teamId: team.teamId, taskId: task.id, requestKey: 'assign-2', targetKind: 'session',
+    targetId: 'dev2', role: 'devs', instruction: 'Take over', creator: { kind: 'human', sessionId: null } })
+  const handover = mail.enqueue({ teamId: team.teamId, toKind: 'session', toId: 'dev2', fromKind: 'human', fromSession: null,
+    fromGroup: null, originPath: '/repo', body: 'Take over', taskId: task.id })
+  assignments.setMessage(next.id, handover.id)
+  assignments.supersede(assignmentId, next.id)
+  deliver(handover.id, 'dev2', 2)
+  expect(recipient(task.id)).toMatchObject([{ sessionId: 'dev2', assignmentId: next.id, deliveredRevision: 2, acknowledgedRevision: null }])
+  expect(store.detail(task.id)!.acknowledgements).toMatchObject([{ sessionId: 'dev', revision: 2, assignmentId }])
+  store.acknowledgements.record(task.id, 'dev2', 2, next.id)
+  expect(recipient(task.id)).toMatchObject([{ sessionId: 'dev2', acknowledgedRevision: 2 }])
+})
+
+test('work requeued to another member starts unacknowledged for the new claimant', async () => {
+  const { task, instructionId } = assignedTask()
+  mail.claim(instructionId, 'dev')
+  store.acknowledgements.record(task.id, 'dev', 1, null)
+  await publish(task.id, { notify: false })
+  mail.requeue(instructionId)
+  expect(recipient(task.id)).toEqual([])
+  mail.claim(instructionId, 'dev2')
+  expect(recipient(task.id)).toMatchObject([{ sessionId: 'dev2', acknowledgedRevision: null }])
+})
+
+test('work forwarded after a provider limit must be re-acknowledged by its new holder', async () => {
+  const { task, assignmentId, instructionId } = assignedTask()
+  deliver(instructionId, 'dev', 1)
+  store.acknowledgements.record(task.id, 'dev', 1, assignmentId)
+  await publish(task.id, { notify: false })
+  mail.markForwarded(instructionId, 'limit')
+  const original = mail.get(instructionId)!
+  const successor = mail.enqueue({ teamId: team.teamId, toKind: 'group', toId: 'devs', fromSession: 'dev', fromGroup: 'devs',
+    originPath: '/repo', body: 'Build it', inReplyTo: original, attachThread: true, taskId: task.id,
+    handoff: { fromSession: 'dev', fromProfile: 'default', claimCommit: null, lastError: 'limit', progress: { toolCalls: 0, tools: [], digest: '' } } as never })
+  mail.claim(successor.id, 'dev2')
+  expect(recipient(task.id)).toMatchObject([{ sessionId: 'dev2', assignmentId, acknowledgedRevision: null }])
+  // A notice for the publication now reaches the forwarded holder.
+  await service.notify(human, task.id, 2, 'notify-forwarded')
+  expect(noticeRows(task.id)).toMatchObject([{ toId: 'dev2' }])
+})
+
+// The revision-published fact (2.3, D8): the revision row is the contract.
+test('one revision-published fact per publication: replays, retries, drafts, and acknowledgements add none', async () => {
+  const { task, instructionId } = assignedTask()
+  deliver(instructionId, 'dev', 1)
+  const heard: number[] = []
+  service.onRevisionPublished(event => heard.push(event.revision))
+  const rows = () => (session.db.prepare('SELECT COUNT(*) AS n FROM team_task_revisions WHERE task_id = ?').get(task.id) as { n: number }).n
+  const before = rows()
+  await publish(task.id)
+  await publish(task.id)
+  const [notice] = noticeRows(task.id)
+  mail.deadLetter(notice!.id, 'hop-limit')
+  await service.notify(human, task.id, 2, 'retry-1')
+  await service.notify(human, task.id, 2, 'retry-2')
+  await service.saveDraft(human, task.id, { direction: 'next idea' })
+  store.acknowledgements.record(task.id, 'dev', 2, null)
+  expect(rows()).toBe(before + 1)
+  expect(store.get(task.id)?.revision).toBe(2)
+  expect(heard).toEqual([2])
+})
