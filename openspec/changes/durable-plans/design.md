@@ -186,7 +186,7 @@ Any team agent may save to any draft id of its team's plans, so a replacement le
 `plan_submit_for_review(plan_id, draft_id?)` runs in one transaction:
 1. Refuse if the plan is not `open`.
 2. Normalize the draft and run D3's checks.
-3. Resolve the team's strategy through `strategy_repo_bindings` and read its current approved revision and hash. With no strategy record, or no approved revision, the pin is empty.
+3. Resolve the team's strategy through `strategy_repo_bindings` and pin its current approved `{strategyId, revision, hash}`. With no strategy record, or no approved revision, the pin is empty.
 4. Refuse alignment references that the pinned revision does not define. The defined refs are the use-case, principle, success-measure, and decision refs. Claims are evidence rather than direction, and `needsOutcomes` is prose without refs, so neither can be cited. With an empty pin, every ref is refused.
 5. Compute the revision hash. If an `in_review` or `approved` revision of the plan already has that hash, return its number and write nothing (a retried submit is a no-op).
 6. Otherwise insert revision `max + 1` as `in_review` and record a `submitted` event.
@@ -200,7 +200,7 @@ The pin is server-derived because a pin to an unapproved, withdrawn, or invented
 The human sends `team-plan-approve { teamPath, planId, revision, contentHash, expectedApprovedRevision, commandId }`. `PlanService.approve` refuses non-human actors first. Then, in one SQLite transaction:
 
 1. **Replay.** Look up `plan_events` by `(plan_id, command_id)`. With the same payload, return the stored outcome. With a different payload, refuse naming the first differing field. The compared payload is the command name plus that command's own fields (see the end of this section).
-2. **Preconditions.** Evaluate `APPROVAL_PRECONDITIONS` from `planPreconditions.ts`, in order. Each entry is `{ name, check(ctx) → string | null }`; `ctx` holds the plan, the revision (if any), the request, the team's current approved strategy revision and hash, and `pinDisposition(planId, revision)`. Every entry runs; every failing entry contributes `{ name, message }`. Any failure refuses the request and writes nothing. The shipped list:
+2. **Preconditions.** Evaluate `APPROVAL_PRECONDITIONS` from `planPreconditions.ts`, in order. Each entry is `{ name, check(ctx) → string | null }`; `ctx` holds the plan, the revision (if any), the request, the team's current approved `{strategyId, revision, hash}`, and `pinDisposition(planId, revision)`. Every entry runs; every failing entry contributes `{ name, message }`. Any failure refuses the request and writes nothing. The shipped list:
    - `plan-open`: the plan is `open`.
    - `revision-in-review`: the revision exists and is `in_review`.
    - `hash-matches`: its `content_hash` equals the request's.
