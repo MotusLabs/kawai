@@ -44,11 +44,18 @@ export function teamHashOf(location: TeamLocation): string {
   return segments.join('/')
 }
 
+/** Decode one segment; null on a malformed escape, so a bad hash is never an error (D3). */
+const decodeSegment = (value: string | undefined): string | null => {
+  if (!value) return null
+  try { return decodeURIComponent(value) } catch { return null }
+}
+
 export function parseTeamHash(hash: string): TeamLocation | null {
   // Test-window mocks may leave `location.hash` undefined; that is no route.
   if (typeof hash !== 'string' || !hash.startsWith(TEAM_HASH_PREFIX)) return null
   const parts = hash.slice(TEAM_HASH_PREFIX.length).split('/')
-  const teamKey = decodeURIComponent(parts[0] ?? '')
+  // A malformed key is no route at all; a malformed id is dropped.
+  const teamKey = decodeSegment(parts[0])
   if (!teamKey) return null
   const tab = WORKSPACE_TABS.includes(parts[1] as WorkspaceTab)
     ? parts[1] as WorkspaceTab
@@ -58,6 +65,6 @@ export function parseTeamHash(hash: string): TeamLocation | null {
     ? parts[2] as StrategySubView
     : undefined
   const rawId = sub !== undefined ? parts[3] : parts[2]
-  const id = rawId ? decodeURIComponent(rawId) : undefined
+  const id = decodeSegment(rawId) ?? undefined
   return { teamKey, tab, ...(sub !== undefined ? { sub } : {}), ...(id !== undefined ? { id } : {}) }
 }

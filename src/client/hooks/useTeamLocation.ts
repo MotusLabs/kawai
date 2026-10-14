@@ -7,9 +7,17 @@
 // `hashchange` (a typed or edited hash) and `popstate` (Back/Forward) sync
 // the store from the URL, and `leave()` — selecting a session — pushes the
 // hashless URL so Back returns to the page.
-import { useEffect } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 import { create } from 'zustand'
-import { parseTeamHash, teamHashOf, type TeamLocation } from '../utils/teamLocation'
+import { useSessionStore } from '../stores/sessionStore'
+import { useTeamWorkspaceStore } from '../stores/teamWorkspaceStore'
+import {
+  DEFAULT_WORKSPACE_TAB,
+  RENDERED_WORKSPACE_TABS,
+  parseTeamHash,
+  teamHashOf,
+  type TeamLocation,
+} from '../utils/teamLocation'
 
 interface TeamLocationState {
   location: TeamLocation | null
@@ -30,12 +38,14 @@ export const useTeamLocationStore = create<TeamLocationState>(() => ({
   // import time.
   location: null,
   navigate: (location, options) => {
+    // Navigating to the location already shown (clicking the active tab, or
+    // the status line while on that review) adds no history entry, so Back
+    // needs no extra presses.
+    if (sameLocation(useTeamLocationStore.getState().location, location)) return
     const hash = teamHashOf(location)
     if (options?.replace) historyApi()?.replaceState(null, '', hash)
     else historyApi()?.pushState(null, '', hash)
-    if (!sameLocation(useTeamLocationStore.getState().location, location)) {
-      useTeamLocationStore.setState({ location })
-    }
+    useTeamLocationStore.setState({ location })
   },
   leave: () => {
     if (useTeamLocationStore.getState().location === null) return
@@ -71,4 +81,29 @@ export function useTeamLocation(): TeamLocation | null {
 /** Reset for tests: forget the location without touching history. */
 export function resetTeamLocationForTests(): void {
   useTeamLocationStore.setState({ location: null })
+}
+
+/**
+ * The Team page route as App uses it (team-workspace-pages D3, team-workspace
+ * D10): the current location, the entry points' shared opener — a team's
+ * page opens on the tab last used for that team, Tasks the first time — and
+ * the leave-on-selection rule. A selection *act* after mount (selectionEpoch,
+ * never persisted) leaves the route so Back returns to the same tab and item,
+ * while a reload's restored selection must not.
+ */
+export function useTeamPageRoute(): { teamLocation: TeamLocation | null; openTeamPage: (teamKey: string) => void } {
+  const teamLocation = useTeamLocation()
+  const selectionEpoch = useSessionStore(state => state.selectionEpoch)
+  const selectionEpochAtMount = useRef(selectionEpoch)
+  useEffect(() => {
+    if (selectionEpoch > selectionEpochAtMount.current) {
+      useTeamLocationStore.getState().leave()
+    }
+  }, [selectionEpoch])
+  const openTeamPage = useCallback((teamKey: string) => {
+    const last = useTeamWorkspaceStore.getState().views[teamKey]?.tab
+    const tab = last !== undefined && RENDERED_WORKSPACE_TABS.includes(last) ? last : DEFAULT_WORKSPACE_TAB
+    useTeamLocationStore.getState().navigate({ teamKey, tab })
+  }, [])
+  return { teamLocation, openTeamPage }
 }

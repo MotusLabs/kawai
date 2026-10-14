@@ -92,3 +92,20 @@ test('leave pushes the hashless URL once and is a no-op off the page', () => {
   useTeamLocationStore.getState().leave()
   expect(pushed).toHaveLength(2)
 })
+
+test('a malformed key escape is no route, never an error', () => {
+  expect(parseTeamHash('#/team/%E0')).toBeNull()
+  expect(parseTeamHash('#/team/%E0/tasks')).toBeNull()
+  expect(parseTeamHash('#/team/%2Frepo/tasks/%E0')).toEqual({ teamKey: '/repo', tab: 'tasks' })
+})
+
+test('navigating to the location already shown pushes no history entry', () => {
+  const store = useTeamLocationStore.getState()
+  store.navigate({ teamKey: '/repo', tab: 'mailbox' })
+  store.navigate({ teamKey: '/repo', tab: 'mailbox' })
+  store.navigate({ teamKey: '/repo', tab: 'mailbox' })
+  expect(pushed).toEqual(['#/team/%2Frepo/mailbox'])
+  // A different location still pushes.
+  store.navigate({ teamKey: '/repo', tab: 'mailbox', id: 'm-1' })
+  expect(pushed).toEqual(['#/team/%2Frepo/mailbox', '#/team/%2Frepo/mailbox/m-1'])
+})
