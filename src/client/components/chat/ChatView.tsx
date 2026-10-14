@@ -367,7 +367,8 @@ export default function ChatView({ session, sendMessage, subscribe, connectionSt
         <div className="min-h-0 flex-1 overflow-y-auto p-4">
           <div className="mx-auto max-w-3xl space-y-4">
             <ChatMessages events={transcript.events} projectPath={session.projectPath}
-              sessionId={session.id} sendMessage={sendMessage} connected={connected} />
+              sessionId={session.id} sendMessage={sendMessage} connected={connected}
+              archived={archived} />
             {showActivity && (
               <ChatActivityRow activity={activity.value} phaseStartedAt={activity.phaseStartedAt} />
             )}

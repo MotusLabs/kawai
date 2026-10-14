@@ -44,6 +44,12 @@ export interface ChatTranscriptWorker extends Omit<ChatWorker, 'elapsedMs'> {
 }
 
 /** A worker's expanded body: in flight, delivered, or reported missing. */
+/** A background task's output tail (background tasks D3): latest reply, or a fetch marker. */
+export type ChatTaskOutput =
+  | { status: 'fetching' }
+  | { status: 'ok'; output: string; truncated: boolean }
+  | { status: 'unavailable' }
+
 export type ChatWorkerBody =
   | { status: 'fetching' }
   | { status: 'ok'; events: ChatEvent[] }
@@ -154,6 +160,8 @@ interface ChatStore {
   usage: Record<string, ChatUsageReport | null>
   /** Worker bodies per session and worker (workers design D5, on expand). */
   workerBodies: Record<string, Record<string, ChatWorkerBody>>
+  /** Output tails per session and task (background tasks D3, on expand/poll). */
+  taskOutputs: Record<string, Record<string, ChatTaskOutput>>
   /**
    * Account notices this browser tab closed (notification strip design D6),
    * keyed per session by `${key}:${text}`: a changed day count changes the
@@ -196,6 +204,12 @@ interface ChatStore {
   requestWorkerBody: (sessionId: string, workerId: string) => boolean
   /** Roll back a fetching marker a dead socket stranded (request or reply lost). */
   resetWorkerBody: (sessionId: string, workerId: string) => void
+  /** Adopt a tail reply (chat-task-output push). */
+  setTaskOutput: (message: Extract<ServerMessage, { type: 'chat-task-output' }>) => void
+  /** Claim the next tail fetch; false while one is already in flight. */
+  requestTaskOutput: (sessionId: string, taskId: string) => boolean
+  /** Drop a stranded fetch marker (a dead socket lost the reply). */
+  resetTaskOutput: (sessionId: string, taskId: string) => void
   setDraft: (sessionId: string, text: string) => void
   remove: (sessionId: string) => void
 }
@@ -205,6 +219,7 @@ export const useChatStore = create<ChatStore>((set) => ({
   drafts: {},
   usage: {},
   workerBodies: {},
+  taskOutputs: {},
   closedAccountNotices: {},
   apply: (sessionId, events) => set(state => ({ sessions: {
     ...state.sessions, [sessionId]: applyChatEvents(state.sessions[sessionId] ?? emptyTranscript(), events),
@@ -349,6 +364,36 @@ export const useChatStore = create<ChatStore>((set) => ({
     delete next[workerId]
     return { workerBodies: { ...state.workerBodies, [sessionId]: next } }
   }),
+  setTaskOutput: message => set(state => ({
+    taskOutputs: {
+      ...state.taskOutputs,
+      [message.sessionId]: {
+        ...state.taskOutputs[message.sessionId],
+        [message.taskId]: message.state === 'ok'
+          ? { status: 'ok', output: message.output ?? '', truncated: message.truncated === true }
+          : { status: 'unavailable' },
+      },
+    },
+  })),
+  requestTaskOutput: (sessionId, taskId) => {
+    let claimed = false
+    set(state => {
+      if (state.taskOutputs[sessionId]?.[taskId]?.status === 'fetching') return state
+      claimed = true
+      return { taskOutputs: { ...state.taskOutputs, [sessionId]: {
+        ...state.taskOutputs[sessionId],
+        [taskId]: { status: 'fetching' },
+      } } }
+    })
+    return claimed
+  },
+  resetTaskOutput: (sessionId, taskId) => set(state => {
+    const tails = state.taskOutputs[sessionId]
+    if (tails?.[taskId]?.status !== 'fetching') return state
+    const next = { ...tails }
+    delete next[taskId]
+    return { taskOutputs: { ...state.taskOutputs, [sessionId]: next } }
+  }),
   setDraft: (sessionId, text) => set(state => {
     const drafts = { ...state.drafts }
     if (text === '') delete drafts[sessionId]
@@ -363,8 +408,10 @@ export const useChatStore = create<ChatStore>((set) => ({
     delete drafts[sessionId]
     const workerBodies = { ...state.workerBodies }
     delete workerBodies[sessionId]
+    const taskOutputs = { ...state.taskOutputs }
+    delete taskOutputs[sessionId]
     const closedAccountNotices = { ...state.closedAccountNotices }
     delete closedAccountNotices[sessionId]
-    return { sessions, drafts, workerBodies, closedAccountNotices }
+    return { sessions, drafts, workerBodies, taskOutputs, closedAccountNotices }
   }),
 }))

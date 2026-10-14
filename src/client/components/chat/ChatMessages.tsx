@@ -6,6 +6,7 @@
 import type { ChatEvent } from '@shared/chat'
 import type { SendClientMessage } from '@shared/types'
 import Markdown from '../Markdown'
+import ChatTaskRow from './ChatTaskRow'
 import ChatWorkerRow from './ChatWorkerRow'
 import { toolCallDetail } from './toolCallLabel'
 
@@ -48,10 +49,12 @@ function toolEntries(events: ChatEvent[]): TranscriptEntry[] {
   return entries
 }
 
-export default function ChatMessages({ events, projectPath, sessionId, sendMessage, connected }: {
+export default function ChatMessages({ events, projectPath, sessionId, sendMessage, connected, archived }: {
   events: ChatEvent[]; projectPath?: string
   /** Present in the app (not in isolated tests): worker rows join the store. */
   sessionId?: string; sendMessage?: SendClientMessage; connected?: boolean
+  /** Archived chats never offer a task's Stop control (background tasks D4). */
+  archived?: boolean
 }) {
   return <div className="space-y-4" data-testid="chat-transcript">
     {toolEntries(events).map(({ event, result }) => {
@@ -95,7 +98,16 @@ export default function ChatMessages({ events, projectPath, sessionId, sendMessa
             <pre className="mt-2 overflow-auto whitespace-pre-wrap">{JSON.stringify(event.input, null, 2)}</pre>
             {result && <pre className="mt-2 overflow-auto whitespace-pre-wrap">{result.output}</pre>}
           </details>
-          if (sessionId === undefined || (event.tool !== 'Agent' && event.tool !== 'Task')) return card
+          if (sessionId === undefined || (event.tool !== 'Agent' && event.tool !== 'Task')) {
+            // A backgrounded Bash or Monitor joins the task roster by its call
+            // id (background tasks D2); everything else stays the plain card.
+            if (sessionId !== undefined && (event.tool === 'Bash' || event.tool === 'Monitor')) {
+              return <ChatTaskRow key={`tool:${event.toolCallId}`} sessionId={sessionId}
+                toolCallId={event.toolCallId} tool={event.tool} fallback={card}
+                sendMessage={sendMessage} connected={connected} archived={archived} />
+            }
+            return card
+          }
           return <ChatWorkerRow key={`tool:${event.toolCallId}`} sessionId={sessionId}
             workerId={event.toolCallId} tool={event.tool} fallback={card}
             renderBody={body => <ChatMessages events={body} projectPath={projectPath} />}

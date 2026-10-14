@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, jest, test } from 'bun:test'
 import TestRenderer, { act, type ReactTestInstance } from 'react-test-renderer'
-import type { ChatActivity, ChatCommandState, ChatContextUsage, ChatEvent, ChatNotification, ChatPendingRequest, ChatUsageReport, ChatWireFrame, ChatWorker } from '@shared/chat'
+import type { ChatActivity, ChatBackgroundTask, ChatCommandState, ChatContextUsage, ChatEvent, ChatNotification, ChatPendingRequest, ChatUsageReport, ChatWireFrame, ChatWorker } from '@shared/chat'
 import type { ClientMessage, ServerMessage, Session } from '@shared/types'
 import ChatRequests from '../components/chat/ChatRequests'
 import ChatMessages from '../components/chat/ChatMessages'
@@ -2030,5 +2030,141 @@ describe('agent-started turn trigger lines (background tasks D5)', () => {
     expect(renderer.root.findAllByProps({ 'data-testid': 'turn-trigger' })).toHaveLength(0)
     expect(renderer.root.findAllByProps({ 'data-chat-role': 'user' })).toHaveLength(1)
     renderer.unmount()
+  })
+})
+
+describe('chat task rows (background tasks)', () => {
+  const bashCall = {
+    type: 'tool_call' as const, id: 't1', sequence: 0, at: 'now', turnId: 'turn-1',
+    toolCallId: 'call_1', tool: 'Bash', input: { command: 'sleep 20; echo done', run_in_background: true },
+  }
+  const monitorCall = {
+    type: 'tool_call' as const, id: 't2', sequence: 0, at: 'now', turnId: 'turn-1',
+    toolCallId: 'call_m', tool: 'Monitor', input: { command: 'tail -f build.log' },
+  }
+
+  const seedTasks = (tasks: ChatBackgroundTask[]) => {
+    useChatStore.getState().snapshot({
+      type: 'chat-snapshot', sessionId: 'chat-1', profileId: 'default',
+      events: [], pendingRequests: [], status: 'waiting', throughSequence: 0,
+      commands: { status: 'unavailable', commands: [] }, activity: null,
+      contextUsage: null, usage: null, workers: [], backgroundTasks: tasks, notifications: [],
+    })
+  }
+  const liveTask = (overrides: Partial<ChatBackgroundTask> = {}): ChatBackgroundTask => ({
+    taskId: 'b1', toolCallId: 'call_1', kind: 'shell', description: 'Wait for CI',
+    status: 'running', live: true, startedAtMs: Date.now() - 5_000, elapsedMs: 5_000, ...overrides,
+  })
+
+  afterEach(() => useChatStore.setState({ sessions: {}, workerBodies: {}, taskOutputs: {}, closedAccountNotices: {} }))
+
+  const rowOf = (renderer: TestRenderer.ReactTestRenderer) =>
+    renderer.root.findByProps({ 'data-testid': 'chat-task-row' })
+  const open = (renderer: TestRenderer.ReactTestRenderer, state: boolean) => {
+    act(() => { rowOf(renderer).props.onToggle({ currentTarget: { open: state } }) })
+  }
+
+  test('a live task shows the running mark, ticking elapsed, and Stop', () => {
+    const sent: unknown[] = []
+    seedTasks([liveTask()])
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => { renderer = TestRenderer.create(<ChatMessages events={[bashCall]} sessionId="chat-1" sendMessage={m => sent.push(m)} connected />) })
+    const row = rowOf(renderer)
+    expect(row.props['data-status']).toBe('running')
+    expect(renderer.root.findByProps({ 'data-testid': 'chat-task-elapsed' }).children.join('')).toMatch(/5s/)
+    expect(renderer.root.findByProps({ 'data-testid': 'chat-task-stop' })).toBeDefined()
+    // No roster-driven fetch happened: expanding is what asks for the tail.
+    expect(sent).toEqual([])
+    act(() => renderer.unmount())
+  })
+
+  test('expanding fetches the tail, strips ANSI, and re-polls only while live and open', () => {
+    jest.useFakeTimers()
+    try {
+      const sent: unknown[] = []
+      seedTasks([liveTask()])
+      let renderer!: TestRenderer.ReactTestRenderer
+      act(() => { renderer = TestRenderer.create(<ChatMessages events={[bashCall]} sessionId="chat-1" sendMessage={m => sent.push(m)} connected />) })
+      open(renderer, true)
+      expect(sent).toEqual([{ type: 'chat-task-output', sessionId: 'chat-1', taskId: 'b1' }])
+      act(() => { useChatStore.getState().setTaskOutput({
+        type: 'chat-task-output', sessionId: 'chat-1', taskId: 'b1', state: 'ok',
+        output: '\u001b[32mbuilding\u001b[0m 42%\n', totalBytes: 99, truncated: false,
+      }) })
+      const outputPre = renderer.root.findByProps({ 'data-testid': 'chat-task-output' }).findByType('pre')
+      expect(outputPre.children.join('')).toContain('building 42%')
+      expect(JSON.stringify(renderer.toJSON())).not.toContain('\\u001b')
+      // The reply landed: the next interval tick re-fetches while open+live…
+      act(() => { jest.advanceTimersByTime(2_000) })
+      expect(sent.length).toBe(2)
+      // The poll's reply must land, or its in-flight marker blocks re-fetches.
+      act(() => { useChatStore.getState().setTaskOutput({
+        type: 'chat-task-output', sessionId: 'chat-1', taskId: 'b1', state: 'ok',
+        output: 'building 90%\n', totalBytes: 120, truncated: false,
+      }) })
+      // …collapsing stops the requests (openRef gates the tick)…
+      open(renderer, false)
+      act(() => { jest.advanceTimersByTime(6_000) })
+      expect(sent.length).toBe(2)
+      // …and settling stops them outright: the roster going not-live removes
+      // the interval and a new expand fetches exactly once.
+      act(() => { useChatStore.getState().setBackgroundTasks('chat-1', [liveTask({ status: 'completed', live: false, endedAtMs: Date.now(), summary: 'done (exit code 0)' })]) })
+      open(renderer, true)
+      expect(sent.length).toBe(3)
+      act(() => { jest.advanceTimersByTime(6_000) })
+      expect(sent.length).toBe(3)
+      act(() => renderer.unmount())
+    } finally {
+      jest.useRealTimers()
+    }
+  })
+
+  test('a settled task shows its outcome, ✗ on failed, and no Stop; truncation and unavailable notes', () => {
+    seedTasks([
+      liveTask({ taskId: 'bf', status: 'failed', live: false, endedAtMs: Date.now(), summary: 'exit 1' }),
+      liveTask({ taskId: 'bt', toolCallId: 'call_m', kind: 'monitor', status: 'completed', live: false, endedAtMs: Date.now(), summary: 'Monitor "tail" stream ended' }),
+    ])
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => { renderer = TestRenderer.create(<ChatMessages events={[bashCall, monitorCall]} sessionId="chat-1" connected />) })
+    const rows = renderer.root.findAllByProps({ 'data-testid': 'chat-task-row' })
+    expect(rows[0]!.props['data-status']).toBe('failed')
+    const labels = renderer.root.findAllByProps({ 'data-testid': 'chat-task-status' }).map(node => node.children.join(''))
+    expect(labels.some(text => text.includes('✗'))).toBe(true)
+    expect(labels.some(text => text.includes('done') || text === '')).toBe(true)
+    expect(renderer.root.findAllByProps({ 'data-testid': 'chat-task-stop' })).toHaveLength(0)
+    expect(rows[1]!.props['data-kind']).toBe('monitor')
+    // A truncated tail notes the omission; unavailable says so.
+    act(() => { useChatStore.getState().setTaskOutput({ type: 'chat-task-output', sessionId: 'chat-1', taskId: 'bt', state: 'ok', output: 'x'.repeat(10), totalBytes: 9_000, truncated: true }) })
+    expect(renderer.root.findByProps({ 'data-testid': 'chat-task-output-truncated' })).toBeDefined()
+    act(() => { useChatStore.getState().setTaskOutput({ type: 'chat-task-output', sessionId: 'chat-1', taskId: 'bf', state: 'unavailable' }) })
+    const statuses = renderer.root.findAllByProps({ 'data-testid': 'chat-task-output-status' }).map(node => node.children.join(''))
+    expect(statuses.some(text => text.includes('unavailable'))).toBe(true)
+    act(() => renderer.unmount())
+  })
+
+  test('archived chats and unknown calls never offer Stop or a task row', () => {
+    seedTasks([liveTask()])
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => { renderer = TestRenderer.create(<ChatMessages events={[bashCall]} sessionId="chat-1" archived connected />) })
+    expect(renderer.root.findAllByProps({ 'data-testid': 'chat-task-stop' })).toHaveLength(0)
+    act(() => renderer.unmount())
+    // No roster entry (a foreground call): the plain tool card renders.
+    seedTasks([])
+    act(() => { renderer = TestRenderer.create(<ChatMessages events={[bashCall]} sessionId="chat-1" connected />) })
+    expect(renderer.root.findAllByProps({ 'data-testid': 'chat-task-row' })).toHaveLength(0)
+    expect(renderer.root.findAllByType('details').length).toBeGreaterThan(0)
+    act(() => renderer.unmount())
+  })
+
+  test('Stop sends the stop message once and re-arms after the settle', () => {
+    const sent: unknown[] = []
+    seedTasks([liveTask()])
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => { renderer = TestRenderer.create(<ChatMessages events={[bashCall]} sessionId="chat-1" sendMessage={m => sent.push(m)} connected />) })
+    const button = renderer.root.findByProps({ 'data-testid': 'chat-task-stop' })
+    act(() => { button.props.onClick({ stopPropagation: () => {} }) })
+    act(() => { button.props.onClick({ stopPropagation: () => {} }) })
+    expect(sent).toEqual([{ type: 'chat-task-stop', sessionId: 'chat-1', taskId: 'b1' }])
+    act(() => renderer.unmount())
   })
 })
