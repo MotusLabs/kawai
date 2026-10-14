@@ -173,7 +173,7 @@ export class LimitOutcomes {
 
   private unpark(message: TeamMessage) {
     this.digests.delete(message.id)
-    if (message.resumeMessageId) this.options.store.cancel(message.resumeMessageId, SYSTEM)
+    this.options.store.replaceResume(message.id)
     this.options.store.unpark(message.id)
   }
 
@@ -232,7 +232,7 @@ export class LimitOutcomes {
 
   /** Without a group, retry direct work on its original session after recovery. */
   private release(message: TeamMessage, groupId: string | null, resetsAt: string) {
-    if (message.resumeMessageId) this.options.store.cancel(message.resumeMessageId, SYSTEM)
+    this.options.store.replaceResume(message.id)
     this.options.store.release(message.id, groupId, groupId ? null : resetsAt)
     this.digests.delete(message.id)
   }
@@ -256,7 +256,7 @@ export class LimitOutcomes {
 
   private park(message: TeamMessage, sessionId: string, record: ChatSessionRecord | undefined, resetsAt: string) {
     const store = this.options.store
-    if (message.resumeMessageId) store.cancel(message.resumeMessageId, SYSTEM)
+    store.replaceResume(message.id)
     const resume = store.enqueue({
       teamId: message.teamId, toKind: 'session', toId: sessionId, fromSession: sessionId,
       fromGroup: record?.groupId ?? null, originPath: record?.projectPath ?? message.originPath,
@@ -301,7 +301,7 @@ export class LimitOutcomes {
       body: message.body, inReplyTo: message, attachThread: true, taskId: message.taskId,
       handoff, excludedProfile: profileId,
     })
-    if (message.resumeMessageId) store.cancel(message.resumeMessageId, SYSTEM)
+    store.replaceResume(message.id)
     store.markForwarded(message.id, `forwarded: ${forwarded.id}`)
     this.digests.delete(message.id)
     this.db.prepare(`INSERT INTO team_handoff_notes (id, team_id, from_session, profile_id, original_id, forwarded_id, created_at)

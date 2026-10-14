@@ -54,6 +54,13 @@ export interface EnqueueInput {
   actor?: MessageEventActor
 }
 
+/** Outcome of {@link MailboxStore.cancelResult}: cancelled, or why not (nothing changed). */
+export type CancelResult =
+  | { ok: true }
+  | { ok: false; code: 'resume-in-flight'; holder: string | null; resumeId: string }
+  | { ok: false; code: 'linked-resume'; parkedId: string }
+  | { ok: false; code: 'unavailable'; state: MessageState | null }
+
 export const DEFAULT_HOP_LIMIT = 20
 
 const nowIso = () => new Date().toISOString()
@@ -309,30 +316,62 @@ export class MailboxStore {
     return this.select(`state = 'parked' AND resume_message_id = $resume`, { $resume: resumeMessageId })[0] ?? null
   }
 
+  /** Boolean form of {@link cancelResult}: whether the message was cancelled. */
+  cancel(id: string, actor: StoreActor, reason?: string): boolean {
+    return this.cancelResult(id, actor, reason).ok
+  }
+
   /**
    * Cancel undelivered mail: queued, scheduled, held for a request, or parked.
-   * A parked message is cancelled with its resume message in one transaction
-   * (team-mailbox-management D2): a still-undelivered resume is cancelled
-   * too, an already delivered one is left alone, and one a recipient has
-   * claimed refuses the whole cancel so the resume can never deliver after it.
+   * One invariant holds for every caller (team-mailbox-management D2): parked
+   * work always has a live resume, or is cancelled together with it.
+   * - Parked: a `queued`/`awaiting-request` resume is cancelled with the work
+   *   in one transaction, so it can never be claimed afterwards. A `claimed`
+   *   or `delivered` resume means the resume turn is in flight: refused
+   *   (`resume-in-flight`), nothing changed. Work with no live resume is
+   *   cancelled alone.
+   * - A resume linked to parked work is refused (`linked-resume`) for every
+   *   actor; kawai's own replacement goes through {@link replaceResume}.
    * An agent actor's `reason` is written on the row, cut and attributed (D4).
    */
-  cancel(id: string, actor: StoreActor, reason?: string): boolean {
-    return this.db.transaction(() => {
+  cancelResult(id: string, actor: StoreActor, reason?: string): CancelResult {
+    return this.db.transaction((): CancelResult => {
       const before = this.get(id)
-      if (!before) return false
+      const unavailable: CancelResult = { ok: false, code: 'unavailable', state: before?.state ?? null }
+      if (!before) return unavailable
       const resume = before.state === 'parked' && before.resumeMessageId ? this.get(before.resumeMessageId) : null
-      if (resume && ['claimed', 'spawning'].includes(resume.state)) return false
+      if (resume && ['claimed', 'delivered'].includes(resume.state)) {
+        return { ok: false, code: 'resume-in-flight', holder: before.claimedBy, resumeId: resume.id }
+      }
+      const linked = ['queued', 'awaiting-request'].includes(before.state) ? this.parkedFor(id) : null
+      if (linked) return { ok: false, code: 'linked-resume', parkedId: linked.id }
       const cancelled = this.transition(id, ['queued', 'awaiting-request', 'parked'], {
         state: 'cancelled', parked_until: null, resume_message_id: null,
         ...this.actionReason(actor, 'cancelled', reason),
       }, 'cancelled', actor)
-      if (cancelled && resume && ['queued', 'awaiting-request'].includes(resume.state)) {
+      if (!cancelled) return { ...unavailable, state: this.get(id)?.state ?? null }
+      if (resume && ['queued', 'awaiting-request'].includes(resume.state)) {
         this.transition(resume.id, ['queued', 'awaiting-request'], {
           state: 'cancelled', reason: `parked work ${id} cancelled`,
         }, 'cancelled', actor)
       }
-      return cancelled
+      return { ok: true }
+    })()
+  }
+
+  /**
+   * Kawai's own resume bookkeeping (re-park, unpark, release, forward): unlink
+   * the parked row's resume and cancel it if nobody has taken it. The
+   * `linked-resume` refusal is for outside callers, not for this.
+   */
+  replaceResume(parkedId: string): void {
+    this.db.transaction(() => {
+      const parked = this.get(parkedId)
+      if (!parked?.resumeMessageId) return
+      const resumeId = parked.resumeMessageId
+      this.cachedStatement('UPDATE team_messages SET resume_message_id = NULL WHERE id = $id').run({ $id: parkedId })
+      this.transition(resumeId, ['queued', 'awaiting-request'], { state: 'cancelled' }, 'cancelled')
+      this.changed(parkedId, true)
     })()
   }
 

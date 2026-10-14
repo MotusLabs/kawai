@@ -445,48 +445,57 @@ test('manual handoff wins while a resume limit rule is still running', async () 
 })
 
 describe('parked work cancelled mid-resume (team-mailbox-management)', () => {
-  /** Parked work whose resume turn has started, then cancelled by a manager. */
-  async function cancelledDuringResume() {
+  /** Parked work whose resume turn has started (the resume is delivered). */
+  async function resuming() {
     const m = deliver()
     work()
     await hitLimit(40 * MIN)
     const resumeId = store.get(m.id)!.resumeMessageId!
     store.claim(resumeId, 'dev'); store.markPushed(resumeId); store.markDelivered(resumeId)
     outcomes.delivered('dev', store.get(resumeId)!)
-    expect(store.cancel(m.id, { kind: 'agent', sessionId: 'lead' }, 'obsolete')).toBe(true)
     return { m, resumeId }
   }
   const mailCount = () => store.listForTeam('team').length
+  const manager = { kind: 'agent', sessionId: 'lead' } as const
 
-  test('a final limit in the resume turn drops the cancelled work: no park, forward, or resume mail', async () => {
-    const { m, resumeId } = await cancelledDuringResume()
+  test('a cancel during the resume turn is refused; the limit again re-parks with a fresh resume and a second cancel succeeds', async () => {
+    const { m, resumeId } = await resuming()
+    expect(store.cancelResult(m.id, manager, 'x')).toMatchObject({ ok: false, code: 'resume-in-flight', holder: 'dev' })
+    await hitLimit(40 * MIN)
+    const reparked = store.get(m.id)!
+    expect(reparked).toMatchObject({ state: 'parked', parkCount: 2 })
+    expect(reparked.resumeMessageId).not.toBe(resumeId)
+    expect(store.get(resumeId)?.state).toBe('delivered')
+    expect(store.cancel(m.id, manager, 'now')).toBe(true)
+    expect(store.get(reparked.resumeMessageId!)?.state).toBe('cancelled')
+    expect(store.get(m.id)?.state).toBe('cancelled')
+  })
+
+  test('work forced to cancelled during its resume turn is dropped: no park, forward, or resume mail', async () => {
+    const { m } = await resuming()
+    db.prepare("UPDATE team_messages SET state = 'cancelled' WHERE id = ?").run(m.id)
     const before = mailCount()
     await hitLimit(40 * MIN)
     expect(store.get(m.id)).toMatchObject({ state: 'cancelled', parkCount: 1 })
-    expect(store.get(resumeId)?.state).toBe('delivered')
     expect(mailCount()).toBe(before)
     expect(store.parkedBy('dev')).toEqual([])
     expect(db.prepare('SELECT COUNT(*) AS n FROM team_handoff_notes').get()).toEqual({ n: 0 })
   })
 
-  test('a successful resume turn leaves the cancelled row cancelled', async () => {
-    const { m } = await cancelledDuringResume()
+  test('a successful turn leaves forced-cancelled work cancelled', async () => {
+    const { m } = await resuming()
+    db.prepare("UPDATE team_messages SET state = 'cancelled' WHERE id = ?").run(m.id)
     work('dev', 1)
     await outcomes.turnEnded('dev', true)
     expect(store.get(m.id)?.state).toBe('cancelled')
   })
 
-  test('a cancel while the onLimit rule is still running is respected', async () => {
-    const m = deliver()
-    work()
-    await hitLimit(40 * MIN)
-    const resumeId = store.get(m.id)!.resumeMessageId!
-    store.claim(resumeId, 'dev'); store.markPushed(resumeId); store.markDelivered(resumeId)
-    outcomes.delivered('dev', store.get(resumeId)!)
+  test('work settled while the onLimit rule is still running is respected', async () => {
+    const { m } = await resuming()
     let finishRule!: (value: LimitOutcome) => void
     ruleOnLimit = () => new Promise(resolve => { finishRule = resolve })
     const pending = hitLimit(40 * MIN)
-    expect(store.cancel(m.id, { kind: 'human' })).toBe(true)
+    db.prepare("UPDATE team_messages SET state = 'cancelled' WHERE id = ?").run(m.id)
     const before = mailCount()
     finishRule({ type: 'park' })
     await pending

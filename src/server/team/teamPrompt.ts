@@ -113,7 +113,7 @@ function managementLines(group: GroupDefinition | undefined, tool: (name: string
   ]
   if (group?.canManageMailbox) {
     lines.push(
-      '- Your group may manage the mailbox: you can also cancel parked work (its scheduled resume mail is cancelled with it; the holder is not restored or resumed) and, with `' +
+      '- Your group may manage the mailbox: you can also cancel parked work (its waiting resume mail is cancelled with it and the holder is not restored or resumed; refused while the holder is running the resume turn, and a linked resume message is cancelled only through its parked work) and, with `' +
         `${tool('discard_message')}\`, discard dead or uncertain mail, each with a reason. Retry and hand-off stay with the human.`,
       '- Before archiving or replacing a stuck agent, list and cancel the mail that would restore or respawn it.',
     )

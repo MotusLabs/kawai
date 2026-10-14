@@ -126,7 +126,7 @@ describe('buildTeamPrompt mailbox management note (team-mailbox-management D8)',
     const prompt = buildTeamPrompt({ sessionId: 'chat-11', group: manager, groups: [manager] })
     expect(prompt).toContain("the whole team's")
     expect(prompt).toContain('withdraw any team message')
-    expect(prompt).toContain('cancel parked work (its scheduled resume mail is cancelled with it')
+    expect(prompt).toContain('cancel parked work (its waiting resume mail is cancelled with it')
     expect(prompt).toContain('`mcp__kawai-team__discard_message`')
     expect(prompt).toContain('Retry and hand-off stay with the human')
     expect(prompt).toContain('Before archiving or replacing a stuck agent, list and cancel the mail that would restore or respawn it.')

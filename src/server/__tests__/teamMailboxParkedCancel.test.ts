@@ -99,12 +99,62 @@ describe('MailboxStore cancel and discard with actors (team-mailbox-management)'
     expect(store.nextEligible({ teamId: TEAM, sessionId: 'chat-dev', groupId: 'devs' }, '2100-01-01T00:00:00.000Z')).toBeNull()
   })
 
-  test('a resume already delivered stays delivered when the parked work is cancelled', () => {
+  test('an awaiting-request resume is cancelled with the work', () => {
     const { work, resume } = parked()
-    store.claim(resume.id, 'chat-dev', '2099-01-02T00:00:00.000Z'); store.markPushed(resume.id); store.markDelivered(resume.id)
-    expect(store.cancel(work.id, { kind: 'human' })).toBe(true)
+    store.holdForRequest(resume.id)
+    expect(store.cancel(work.id, lead, 'x')).toBe(true)
+    expect(store.get(resume.id)?.state).toBe('cancelled')
+    expect(store.claim(resume.id, 'chat-dev')).toBe(false)
+  })
+
+  test('a claimed or delivered resume means the resume turn is in flight: refused, both rows unchanged', () => {
+    for (const settle of [(id: string) => store.claim(id, 'chat-dev'), (id: string) => { store.claim(id, 'chat-dev'); store.markPushed(id); store.markDelivered(id) }]) {
+      const { work, resume } = parked()
+      settle(resume.id)
+      const before = [JSON.stringify(store.get(work.id)), JSON.stringify(store.get(resume.id)), store.eventsFor(work.id).length]
+      expect(store.cancelResult(work.id, { kind: 'human' })).toEqual({ ok: false, code: 'resume-in-flight', holder: 'chat-dev', resumeId: resume.id })
+      expect(store.cancel(work.id, lead, 'x')).toBe(false)
+      expect([JSON.stringify(store.get(work.id)), JSON.stringify(store.get(resume.id)), store.eventsFor(work.id).length]).toEqual(before)
+    }
+  })
+
+  test('work with a settled resume (rows from before this change) is cancelled alone', () => {
+    const { work, resume } = parked()
+    store.cancel(resume.id, { kind: 'human' }) // refused while linked, so settle it the legacy way
+    db.prepare("UPDATE team_messages SET state = 'cancelled' WHERE id = ?").run(resume.id)
+    expect(store.cancel(work.id, lead, 'x')).toBe(true)
     expect(store.get(work.id)?.state).toBe('cancelled')
-    expect(store.get(resume.id)?.state).toBe('delivered')
+  })
+
+  test('a resume linked to parked work cannot be cancelled by anyone; once the work is unparked it can', () => {
+    const { work, resume } = parked()
+    for (const actor of [{ kind: 'human' } as const, lead, { kind: 'agent', sessionId: 'chat-dev' } as const]) {
+      const before = JSON.stringify([store.get(resume.id), store.eventsFor(resume.id)])
+      expect(store.cancelResult(resume.id, actor, 'x')).toEqual({ ok: false, code: 'linked-resume', parkedId: work.id })
+      expect(JSON.stringify([store.get(resume.id), store.eventsFor(resume.id)])).toBe(before)
+    }
+    store.replaceResume(work.id)
+    store.unpark(work.id)
+    const stray = parked()
+    store.unpark(stray.work.id)
+    expect(store.get(stray.resume.id)?.state).toBe('queued')
+    expect(store.cancel(stray.resume.id, { kind: 'human' })).toBe(true)
+  })
+
+  test('replaceResume unlinks and cancels an undelivered resume as the system, and leaves a delivered one', () => {
+    const { work, resume } = parked()
+    store.replaceResume(work.id)
+    expect(store.get(work.id)).toMatchObject({ state: 'parked', resumeMessageId: null })
+    expect(store.get(resume.id)?.state).toBe('cancelled')
+    expect(store.eventsFor(resume.id).at(-1)).toMatchObject({ kind: 'cancelled', actor: 'system' })
+
+    const second = parked()
+    store.claim(second.resume.id, 'chat-dev'); store.markPushed(second.resume.id); store.markDelivered(second.resume.id)
+    store.replaceResume(second.work.id)
+    expect(store.get(second.work.id)?.resumeMessageId).toBeNull()
+    expect(store.get(second.resume.id)?.state).toBe('delivered')
+    store.replaceResume('missing')
+    store.replaceResume(second.work.id)
   })
 
   test('race: a resume claimed first refuses the cancel; a cancel first leaves nothing to claim', () => {

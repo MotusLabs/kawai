@@ -169,15 +169,28 @@ describe('manager cancel and discard', () => {
     expect(journal[0]!.text).toBe(`Cancelled message ${work.id} to session dev (parked): dev is stuck`)
   })
 
-  test('a parked cancel whose resume is already being delivered is refused with that reason', async () => {
+  test('a parked cancel while the resume turn is in flight is refused naming the holder', async () => {
     const work = send({ toKind: 'session', toId: 'dev' })
     deliver(work.id)
     const resume = send({ toKind: 'session', toId: 'dev', fromSession: 'dev' })
     store.park(work.id, '2099-01-01T00:00:00.000Z', resume.id)
     claim(resume.id)
     const before = snapshot(work.id)
-    await expect(management.cancel('lead', { message_id: work.id, reason: 'x' })).rejects.toThrow('resume message is already being delivered')
+    await expect(management.cancel('lead', { message_id: work.id, reason: 'x' })).rejects.toThrow('dev is resuming this parked work now')
     expect(snapshot(work.id)).toBe(before)
+  })
+
+  test('a holder cannot strand its parked work by cancelling its own resume; a manager cannot either', async () => {
+    const work = send({ toKind: 'session', toId: 'dev' })
+    deliver(work.id)
+    const resume = send({ toKind: 'session', toId: 'dev', fromSession: 'dev', fromGroup: 'devs', deliverAt: '2099-01-01T00:00:00.000Z' })
+    store.park(work.id, '2099-01-01T00:00:00.000Z', resume.id)
+    for (const caller of ['dev', 'lead']) {
+      const before = snapshot(resume.id)
+      await expect(management.cancel(caller, { message_id: resume.id, reason: 'x' })).rejects.toThrow(`Cancel the parked message ${work.id} instead`)
+      expect(snapshot(resume.id)).toBe(before)
+    }
+    expect(store.get(work.id)?.state).toBe('parked')
   })
 
   test('a journal failure is logged and does not undo the cancel', async () => {

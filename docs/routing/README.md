@@ -42,7 +42,7 @@ canManageMailbox: true                     # default false
   ignored. Gateway models (GLM, MiMo, ...) may ignore effort.
 - `canManageMailbox` (`true`/`false`, default `false`) lets a group's members
   cancel any team message that is still undelivered (queued, scheduled, or
-  awaiting a request) and parked work (its scheduled resume mail is cancelled
+  awaiting a request) and parked work (its waiting resume mail is cancelled
   with it), and discard dead or uncertain mail, through the `cancel_message` and
   `discard_message` tools, each with a reason. Every agent can list the mail it
   sent, received, or holds with `list_mailbox` (managers see the whole team) and

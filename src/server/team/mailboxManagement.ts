@@ -10,7 +10,7 @@ import type { MessageState, TeamMessage, WaitingConstraint, WaitingReason } from
 import { logger } from '../logger'
 import { loadTeamGroups } from './teamGroups'
 import type { TeamIdentity } from './teamIdentity'
-import type { MailboxStore } from './mailboxStore'
+import type { CancelResult, MailboxStore } from './mailboxStore'
 import type { TaskService } from './TaskService'
 
 /** Longest body returned by `list`; cap on rows per call. */
@@ -52,6 +52,18 @@ export interface MailboxListResult {
   scope: 'team' | 'own'
   messages: MailboxListEntry[]
   omitted: number
+}
+
+/** The store's integrity refusals as sentences; null for a plain state change. */
+export function cancelRefusalText(result: CancelResult): string | null {
+  if (result.ok) return null
+  if (result.code === 'resume-in-flight') {
+    return `${result.holder ?? 'its holder'} is resuming this parked work now. The cancel is refused until that turn ends: message the holder directly (urgent mail interrupts) or try again afterwards.`
+  }
+  if (result.code === 'linked-resume') {
+    return `This is the resume message of parked work ${result.parkedId}. Cancel the parked message ${result.parkedId} instead; it cancels the resume with it.`
+  }
+  return null
 }
 
 const stateText = (message: TeamMessage): string => {
@@ -109,12 +121,12 @@ export class MailboxManagement {
       throw new Error(`Message ${message.id} cannot be cancelled: it is ${stateText(message)}. Only queued, scheduled, or awaiting-request mail${manager ? ', or parked work,' : ''} can be cancelled.`)
     }
     const resumeId = message.state === 'parked' ? message.resumeMessageId : null
-    if (!this.store.cancel(message.id, { kind: 'agent', sessionId }, reason)) {
-      const now = this.store.get(message.id)
-      const resume = resumeId ? this.store.get(resumeId) : null
-      throw new Error(resume && ['claimed', 'spawning'].includes(resume.state)
-        ? `Message ${message.id} was not cancelled: its resume message is already being delivered to ${message.claimedBy ?? 'the holder'}. Nothing changed.`
-        : `Message ${message.id} state changed to ${now?.state ?? 'unknown'}; nothing was cancelled.`)
+    const result = this.store.cancelResult(message.id, { kind: 'agent', sessionId }, reason)
+    if (!result.ok) {
+      const refusal = cancelRefusalText(result)
+      throw new Error(refusal
+        ? `Message ${message.id} was not cancelled. ${refusal} Nothing changed.`
+        : `Message ${message.id} state changed to ${result.code === 'unavailable' ? result.state ?? 'unknown' : 'unknown'}; nothing was cancelled.`)
     }
     await this.journal(sessionId, message, 'Cancelled', reason)
     return { id: message.id, state: 'cancelled' as const, ...(resumeId ? { resumeMessage: resumeId } : {}) }
