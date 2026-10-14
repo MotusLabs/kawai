@@ -30,7 +30,7 @@ The workspace renders **Product Strategy** as a top band (compact summary of the
 
 ### D4. Workflow stage is a pure projection over sibling state, never a stored value
 
-`teamTaskStage.ts` maps a task's facts to one display stage through an ordered ladder — first match wins — reading the sibling changes' real contracts (all merged as proposals; still absence-safe because they are not implemented yet):
+`teamTaskStage.ts` maps a task's facts to one display stage through an ordered ladder — first match wins — reading the sibling changes' real contracts:
 
 | # | Stage | Source | Field consumed |
 | --- | --- | --- | --- |
@@ -42,7 +42,9 @@ The workspace renders **Product Strategy** as a top band (compact summary of the
 
 Badges render beside the stage and are never stages themselves: **Needs re-evaluation** (`task-results-handoffs` D6, derived at read: `result.task_revision < team_tasks.revision` — never stored) and **Awaiting acknowledgement** (`task-revision-publication` D5: outstanding claimant's `acknowledged revision < task.revision`; notice state (Not notified / Queued / Delivered / Failed / Uncertain) is derived per holder per revision, and "Delivered rev 2 · Acknowledged rev 1" is a normal display).
 
-The order is the semantics: a closed task shows no stage whatever its assignment history says; an outstanding handoff outranks the unaccepted result it refers to; only when neither exists does the assignment's own state name the stage. There is no acceptance enum and acknowledgement is not a notice state. The envelope's `revisionNotice` is `{revision, previousRevision, assignmentId, rationale}` — publication metadata, not a stage input. The stage is never `done`, and a finished agent turn never moves it (product strategy P9/P10). If a sibling field is absent, the row falls back to the assignment-derived stage and the next action says why.
+The order is the semantics: a closed task shows no stage whatever its assignment history says; an outstanding handoff outranks the unaccepted result it refers to; only when neither exists does the assignment's own state name the stage. There is no acceptance enum and acknowledgement is not a notice state. The envelope's `revisionNotice` is `{revision, previousRevision, assignmentId, rationale}` — publication metadata, not a stage input. The stage is never `done`, and a finished agent turn never moves it (product strategy P9/P10).
+
+Two phases. Phase 1 lands beside the B2 server chain and computes the ladder from the sources that exist then — the task's own status and its assignment state (orders 1, 4, 5). The sibling-dependent orders and both badges (2, 3, Needs re-evaluation, Awaiting acknowledgement) join in Phase 2, the final section of tasks.md, once `task-results-handoffs` and `task-revision-publication` land; until then those stages and their attention items are simply not produced and the ladder falls through to the assignment-derived stage. There is no runtime feature detection — Phase 2 adds sources to the same projection, it does not add table sniffs.
 
 ### D5. Attention items: one shape, a kind enum, and a card link
 
@@ -89,7 +91,7 @@ The window is a rolling 24 hours ending at read time, recomputed while the works
 
 ## Risks / Trade-offs
 
-- [`task-results-handoffs` and `task-revision-publication` are merged proposals but not implemented, so D4's fields may still shift during their implementation] → D4 binds to their design text (D3/D5/D6/D8 and D5 respectively) and keeps absence-safe fallbacks; a missing field degrades to the assignment-derived stage rather than blocking this change. If their implementers move a field, the projection is the only place to update.
+- [`task-results-handoffs` and `task-revision-publication` are merged proposals but not implemented, so D4's fields may still shift during their implementation] → D4 binds to their design text (D3/D5/D6/D8 and D5 respectively) and Phase 1 never reads them: the sibling-dependent ladder orders, badges, attention items, and the completed-results bucket are Phase 2 tasks (tasks.md's final section) that start from the siblings' landed tables, so a field that moved surfaces the moment Phase 2 compiles against it. If their implementers move a field, the projection is the only place to update.
 - [The morning summary's capacity-wait bucket loses history across restart] → stated in the spec as a scenario; the other four buckets are durable. Revisit only if the human needs restart-surviving wait history.
 - [Extracting `TeamTasksView`/`ProductStrategyView` touches panels the side slot depends on] → keep the panels' public props unchanged, add the view underneath, and cover both mounts with the existing panel tests.
 - [Attention item identity collides across sources] → ids are `kind:sourceId` with source ids already unique per store (request id, message id, task id); a collision is a bug in a source, not a queue behaviour.

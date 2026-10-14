@@ -15,6 +15,8 @@ Kawai can run a team — tasks, routed mail, worktree staffing, a product strate
 
 Consumed, not redefined: `task-assignment` (assignment record and state), `team-waiting-reasons` (waiting reasons and the worktree roster), `team-message-threads` (`team-message-history` Messages read model), `product-strategy` (the strategy panel), `task-results-handoffs` (results, handoff columns on an assignment, **Accept result**, the derived **Needs re-evaluation** label) and `task-revision-publication` (per-holder notice state, separate delivered and acknowledged revisions). Their design texts are the contracts this change reads (design D4); nothing here restates them.
 
+Delivery is two phases. Phase 1 lands beside the B2 server chain from the sources that exist then — assignment, waiting reasons, threads, strategy, approvals/questions, uncertain deliveries. The sibling-dependent sources — handoff stages, results and acceptance, acknowledgements — are the final section of tasks.md, implemented after `task-results-handoffs` and `task-revision-publication` land; until then the stage ladder falls through to assignment-derived stages and no pending-acceptance items are produced. There is no runtime feature detection.
+
 Non-goals: Plans, executions, candidates, holds, and budgets (Wave C `plan-supervision`, `durable-plans`); editing group settings from the UI; the E12 dependency graph; any new staffing rule; re-specifying assignment, waiting-reason, message, result, or revision state.
 
 ## Capabilities
