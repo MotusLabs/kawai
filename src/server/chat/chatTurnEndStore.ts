@@ -2,15 +2,18 @@
 // D8): one row per completed turn of a task-bound session, written from the
 // server-side event path whether or not any view is open. The summary reads
 // its 24-hour window straight from SQL, so the bucket survives a restart
-// with no transcript replay at all. Rows age out after seven days — well
-// past the window — pruned once at startup and at most hourly on write.
+// with no transcript replay at all. `ok` marks the turn's outcome — only a
+// successful turn is summary material; an errored one records 0 and never
+// counts as finished work. Rows age out after seven days — well past the
+// window — pruned once at startup and at most hourly on write.
 import type { Database } from 'bun:sqlite'
 
 export const CREATE_TURN_ENDS_SQL = `
 CREATE TABLE IF NOT EXISTS chat_turn_ends (
   session_id TEXT NOT NULL,
   task_id TEXT NOT NULL,
-  ended_at TEXT NOT NULL
+  ended_at TEXT NOT NULL,
+  ok INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS chat_turn_ends_ended_at ON chat_turn_ends (ended_at);
 `
@@ -23,12 +26,14 @@ export interface TurnEndRow {
   sessionId: string
   taskId: string
   endedAt: string
+  ok: boolean
 }
 
 const mapRow = (row: Record<string, unknown>): TurnEndRow => ({
   sessionId: String(row.session_id),
   taskId: String(row.task_id),
   endedAt: String(row.ended_at),
+  ok: Number(row.ok) === 1,
 })
 
 export class ChatTurnEndStore {
@@ -43,20 +48,35 @@ export class ChatTurnEndStore {
     this.prune()
   }
 
-  /** One completed turn of a task-bound session, at the event's timestamp. */
-  record(sessionId: string, taskId: string, endedAt: string): void {
-    this.db.prepare('INSERT INTO chat_turn_ends (session_id, task_id, ended_at) VALUES (?, ?, ?)')
-      .run(sessionId, taskId, endedAt)
+  /** One completed turn of a task-bound session; `ok` is the outcome the driver reported. */
+  record(sessionId: string, taskId: string, endedAt: string, ok: boolean): void {
+    this.db.prepare('INSERT INTO chat_turn_ends (session_id, task_id, ended_at, ok) VALUES (?, ?, ?, ?)')
+      .run(sessionId, taskId, endedAt, ok ? 1 : 0)
     if (this.now() - this.lastPruneAt >= PRUNE_INTERVAL_MS) {
       this.lastPruneAt = this.now()
       this.prune()
     }
   }
 
-  /** Rows at or after the window's start, oldest first. */
+  /** Rows at or after the window's start, oldest first, every outcome included. */
   since(endedAt: string): TurnEndRow[] {
-    return (this.db.prepare('SELECT session_id, task_id, ended_at FROM chat_turn_ends WHERE ended_at >= ? ORDER BY ended_at')
+    return (this.db.prepare('SELECT session_id, task_id, ended_at, ok FROM chat_turn_ends WHERE ended_at >= ? ORDER BY ended_at')
       .all(endedAt) as Record<string, unknown>[]).map(mapRow)
+  }
+
+  /**
+   * Successful turn ends of one team's tasks, at or after the window's start.
+   * The join keeps a killed agent's finished turns in its team's window —
+   * the session need not be live — and stops other teams' rows being read.
+   */
+  finishedForTeam(teamId: string, endedAt: string): TurnEndRow[] {
+    return (this.db.prepare(`
+      SELECT e.session_id, e.task_id, e.ended_at, e.ok
+      FROM chat_turn_ends e
+      JOIN team_tasks t ON t.id = e.task_id
+      WHERE t.team_id = ? AND e.ended_at >= ? AND e.ok = 1
+      ORDER BY e.ended_at`)
+      .all(teamId, endedAt) as Record<string, unknown>[]).map(mapRow)
   }
 
   private prune(): void {

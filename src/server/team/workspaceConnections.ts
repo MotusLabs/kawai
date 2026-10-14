@@ -69,7 +69,9 @@ export class WorkspaceConnections {
           this.publishNow(teamId)
         } catch (error) {
           logger.warn('team_workspace_publish_failed', {
-            teamId, error: error instanceof Error ? error.message : String(error),
+            teamId,
+            error: error instanceof Error ? error.message : String(error),
+            ...(error instanceof Error && error.stack ? { stack: error.stack } : {}),
           })
         }
       }

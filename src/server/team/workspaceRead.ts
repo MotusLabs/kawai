@@ -378,7 +378,6 @@ export class WorkspaceRead {
       .map(record => ({ record, requests: manager.getPendingRequests(record.sessionId) }))
     const attention = attentionItems({ sessions, messages, waiting, taskTitle, nameOf })
     const now = new Date().toISOString()
-    const teamSessions = new Set(records.map(record => record.sessionId))
     return {
       tasks: taskRows({ summaries, waiting, attention, nameOf }),
       attention,
@@ -391,9 +390,10 @@ export class WorkspaceRead {
         messageEvents: messageId => manager.mailbox.store.eventsFor(messageId)
           .map(event => ({ kind: event.kind, createdAt: event.createdAt })),
         waiting,
+        // The store's join keeps a killed agent's turns in the team's window
+        // and reads only this team's rows; ok = 1 is built into the query.
         turnEnds: manager.turnEnds
-          .since(new Date(Date.parse(now) - 24 * 60 * 60 * 1000).toISOString())
-          .filter(row => teamSessions.has(row.sessionId))
+          .finishedForTeam(teamId, new Date(Date.parse(now) - 24 * 60 * 60 * 1000).toISOString())
           .map(row => ({ sessionId: row.sessionId, taskId: row.taskId, at: row.endedAt })),
         nameOf,
         // Phase 1 has no result rows; task 11.2 replaces this with the real read.

@@ -67,7 +67,11 @@ beforeEach(() => {
     directory: { list: () => [] },
     getPendingRequests: (sessionId: string) => pendingRequests.get(sessionId) ?? [],
     groupProfileCounts: () => ({}),
-    turnEnds: { since: () => turnEndRows },
+    turnEnds: {
+      // Team scoping is the store's SQL join in production; the fake honors it.
+      finishedForTeam: (teamId: string) => (teamId === 'team' ? turnEndRows.filter(row => row.sessionId === 'our-dev') : []),
+      since: () => turnEndRows,
+    },
     recordOf: (sessionId: string) => records.find(record => record.sessionId === sessionId),
     teams: {
       catalogForTeam: () => catalog,

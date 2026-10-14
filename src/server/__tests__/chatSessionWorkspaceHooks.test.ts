@@ -10,6 +10,7 @@ import path from 'node:path'
 import { ChatSessionManager } from '../chat/ChatSessionManager'
 import { initDatabase, type SessionDatabase } from '../db'
 import { SessionRegistry } from '../SessionRegistry'
+import { resolveTeam } from '../team/teamIdentity'
 
 let tempDir: string
 let project: string
@@ -102,22 +103,67 @@ test('a status move reaches the hook; usage and activity stamps do not', async (
   } finally { manager.shutdown() }
 })
 
-test('a task-bound turn end writes a durable row; a taskless one writes nothing', async () => {
+test('a task-bound turn end writes a durable row with its outcome; a taskless one writes nothing', async () => {
   const { manager } = createManager()
   try {
-    const bound = await manager.createAvailableSession({ projectPath: project, groupId: 'devs', taskId: 'task-1' })
+    // A real task row: the summary's team scoping joins team_tasks on it.
+    const caller = { kind: 'human' as const, team: await resolveTeam(project) }
+    const task = await manager.tasks.create(caller, { title: 'Worked on', direction: 'd' })
+    const bound = await manager.createAvailableSession({ projectPath: project, groupId: 'devs', taskId: task.id })
     const free = await manager.createAvailableSession({ projectPath: project, groupId: 'devs' })
     expect(bound.ok && free.ok).toBe(true)
     if (!bound.ok || !free.ok) return
+    await Bun.sleep(1) // team resolution lands
     const feed = (manager as unknown as { handleDriverEvent: (sessionId: string, event: Record<string, unknown>) => void })
       .handleDriverEvent.bind(manager)
-    const turnEnd = (id: string, at: string) => ({
-      type: 'turn_completed', subtype: 'success', id: `evt-${id}`, sequence: 1, turnId: `t-${id}`, at,
+    const turnEnd = (id: string, at: string, subtype = 'success') => ({
+      type: 'turn_completed', subtype, id: `evt-${id}`, sequence: 1, turnId: `t-${id}`, at,
     })
     feed(bound.session.id, turnEnd('bound', '2026-10-14T08:00:00Z'))
+    feed(bound.session.id, turnEnd('errored', '2026-10-14T08:30:00Z', 'error_during_execution'))
     feed(free.session.id, turnEnd('free', '2026-10-14T08:01:00Z'))
     expect(manager.turnEnds.since('2026-10-13T00:00:00Z')).toEqual([
-      { sessionId: bound.session.id, taskId: 'task-1', endedAt: '2026-10-14T08:00:00Z' },
+      { sessionId: bound.session.id, taskId: task.id, endedAt: '2026-10-14T08:00:00Z', ok: true },
+      { sessionId: bound.session.id, taskId: task.id, endedAt: '2026-10-14T08:30:00Z', ok: false },
     ])
+    // The errored turn is recorded but never counts as finished work, and
+    // the team's rows are the join's, not the live session set's.
+    const teamId = manager.teams.teamOf(bound.session.id)!.teamId
+    expect(manager.turnEnds.finishedForTeam(teamId, '2026-10-13T00:00:00Z')).toEqual([
+      { sessionId: bound.session.id, taskId: task.id, endedAt: '2026-10-14T08:00:00Z', ok: true },
+    ])
+  } finally { manager.shutdown() }
+})
+
+test('a failing turn-end write is contained: the turn bookkeeping still runs, nothing escapes', async () => {
+  const { manager } = createManager()
+  try {
+    const bound = await manager.createAvailableSession({ projectPath: project, groupId: 'devs', taskId: 'task-1' })
+    expect(bound.ok).toBe(true)
+    if (!bound.ok) return
+    const { id } = bound.session
+    // A store whose every write blows up (disk full, busy past the timeout).
+    ;(manager as unknown as { turnEnds: unknown }).turnEnds = {
+      record: () => { throw new Error('disk full') },
+      since: () => [],
+      finishedForTeam: () => [],
+    }
+    const feed = (manager as unknown as { handleDriverEvent: (sessionId: string, event: Record<string, unknown>) => void })
+      .handleDriverEvent.bind(manager)
+    const activityAt = () =>
+      (manager as unknown as { records: Map<string, { lastActivityAt: string }> }).records.get(id)!.lastActivityAt
+    // A stale stamp, so touch() moving it to now is unambiguous even within
+    // one millisecond.
+    ;(manager as unknown as { applyPatch: (sessionId: string, patch: Record<string, unknown>) => void })
+      .applyPatch(id, { lastActivityAt: '2020-01-01T00:00:00Z' })
+    const before = activityAt()
+    let escaped: unknown = null
+    try {
+      feed(id, { type: 'turn_completed', subtype: 'success', id: 'evt-1', sequence: 1, turnId: 't-1', at: '2026-10-14T08:00:00Z' })
+    } catch (error) { escaped = error }
+    expect(escaped).toBeNull()
+    // touch() ran after the failing write: the activity stamp moved.
+    expect(activityAt()).not.toBe(before)
+    expect(Date.parse(activityAt())).toBeGreaterThan(Date.UTC(2021, 0, 1))
   } finally { manager.shutdown() }
 })

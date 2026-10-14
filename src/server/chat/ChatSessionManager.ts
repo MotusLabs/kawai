@@ -2156,10 +2156,24 @@ export class ChatSessionManager {
     if (event.type === 'turn_completed') this.teamMail.turnEnded(sessionId, event.subtype === 'success')
     // The morning summary's durable turn-end row (team-workspace D8): only a
     // task-bound session's turn is summary material; the task is the one the
-    // session worked under at the moment the turn ended.
+    // session worked under at the moment the turn ended, and only a
+    // successful turn counts as finished work. A summary row is never worth
+    // a turn: a failing write is logged here and must not skip the
+    // bookkeeping below or escape into the driver's emit.
     if (event.type === 'turn_completed') {
       const taskId = this.records.get(sessionId)?.taskId
-      if (taskId) this.turnEnds.record(sessionId, taskId, event.at)
+      if (taskId) {
+        try {
+          this.turnEnds.record(sessionId, taskId, event.at, event.subtype === 'success')
+        } catch (error) {
+          logger.warn('chat_turn_end_record_failed', {
+            sessionId,
+            taskId,
+            error: error instanceof Error ? error.message : String(error),
+            ...(error instanceof Error && error.stack ? { stack: error.stack } : {}),
+          })
+        }
+      }
     }
     if (
       event.type === 'turn_completed' ||
