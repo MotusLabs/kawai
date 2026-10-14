@@ -40,7 +40,7 @@ When a task is `done` or `cancelled`, its undelivered group mail (queued, awaiti
 - **THEN** the lead receives the report
 
 #### Scenario: Group note to a scoped group after close
-- **WHEN** a task is `done` and a member sends the `reviewers` group, which does not set `worktreeScoped`, a note referencing that task
+- **WHEN** a task is `done` and a member sends a `qa` group, which does not set `worktreeScoped`, a note referencing that task
 - **THEN** the note is dead-lettered `task-closed`, no session is spawned, and it stays in the Mailbox, retryable once the task is reopened
 
 ### Requirement: Release waits until the member is ready
