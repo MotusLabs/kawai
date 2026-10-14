@@ -33,7 +33,9 @@ Current state that shapes the approach:
 
 Every human `team-*` and `strategy-*` client message, plus `team-workspace-open`/`close`, takes `teamPath`: a directory the client already knows, either a repository's main checkout from the workspace snapshot or a chat's `projectPath`. The server resolves it with `resolveTeam`. It then authorizes the result: the `teamId` must equal the team of a discovered workspace repository (its `commonDir`), or the team of a chat session record that is not killed (archived ones included). Otherwise it refuses with `unknown-team`.
 
-Subscriptions are keyed `connection -> teamPath`, the path the client addressed, and each one is bound to its resolved `teamId`. Fan-out on change matches by `teamId`. Because every chat of one team computes the same team key (D2), one connection holds one subscription per team. Server replies echo `teamPath` beside `teamId` and drop `sessionId`, so the client routes each reply to the view that asked. Agent tools are untouched; they still bind identity to the calling session.
+Subscriptions are keyed `connection -> teamPath`, the path the client addressed, and each one is bound to its resolved `teamId`. Fan-out on change matches by `teamId`, so every subscription of the team receives every change. The client normally sends one key per team (D2), but two different paths of one team on one connection hold two subscriptions and each gets its own copy. That is deliberate: each copy answers the view that asked. Server replies echo `teamPath` beside `teamId` and drop `sessionId`, so the client routes each reply to that view.
+
+This widens who may address what: any UI connection may open or act on any team the server already knows, not only the team of a chat it names. That matches the existing human-action boundary (the `team-task-*` and `strategy-*` actions already trust the UI connection), and the acceptance rule keeps arbitrary directories out. Agent tools are untouched; they still bind identity to the calling session.
 
 *Alternatives:*
 - Keep `sessionId` and pick any chat of the team. Rejected: a repository with only terminal sessions has no chat to pick, and the page would silently depend on a session's lifetime.
@@ -48,7 +50,7 @@ The client derives a **team key** before any snapshot arrives:
 
 The navigator Team entry, the header Team button, and the task chip all compute the same key for the same team. That key is the `teamPath` sent in D1, the key of every team store (`teamTaskStore`, `teamMessageStore`, `teamMailboxStore`, `strategyStore`, `teamWorkspaceStore`), and the repository segment of the URL. Two keys for one team (for example, a chat whose path discovery has not reported yet) only produce two views of the same data; both stay correct because the server resolves each path itself. *Alternative:* key stores by server `teamId` only. Rejected: the URL and the first render need a key before the server answers.
 
-Until the Team page exists, the chat side slot keeps hosting the team panels, keyed by the chat's team key. Debug stays keyed by session. Every chat of one team therefore shows the same open team panel. When a team panel is open beside a chat's own Debug, the slot shows Debug, so a chat still shows one panel at a time.
+Until the Team page exists, the chat side slot keeps hosting the team panels, keyed by the chat's team key. Debug stays keyed by session. Every chat of one team therefore shows the same open team panel. Opening Debug leaves the team's panel open for the team's other chats; the slot shows Debug first, so a chat still shows one panel at a time, and closing Debug shows the panel again. Opening a team panel closes this chat's Debug. When discovery moves a chat's key (a worktree chat keys by its own path until its repository is discovered), its open team views move to the new key and re-subscribe there.
 
 ### D3. One hash route: `#/team/<key>/<tab>[/<sub>][/<id>]`
 
