@@ -21,19 +21,19 @@ let strategies: StrategyService
 let connections: ChatConnections
 let messages: ServerMessage[]
 let connection: { send: (message: ServerMessage) => void }
-let sessions: Map<string, TeamIdentity>
+let teams: Map<string, TeamIdentity>
 
 beforeEach(() => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kawai-strategy-connections-'))
   db = initDatabase({ path: path.join(dir, 'db.sqlite') })
-  sessions = new Map([['dev', { teamId: 'team', groupsRoot: dir }], ['stranger', { teamId: 'other', groupsRoot: dir }]])
+  // Known team paths (team-workspace-pages D1): this repository and another team's.
+  teams = new Map([['/repo', { teamId: 'team', groupsRoot: dir }], ['/other', { teamId: 'other', groupsRoot: dir }]])
   strategies = new StrategyService(new StrategyStore(db.db), { getSession: () => undefined })
   messages = []
   connection = { send: message => messages.push(message) }
   const manager = {
-    has: (id: string) => sessions.has(id),
     whenRestored: () => Promise.resolve(),
-    teams: { teamOf: (id: string) => sessions.get(id), resolvedTeamOf: async (id: string) => sessions.get(id) },
+    teamScopes: { resolve: async (teamPath: string) => teams.get(teamPath) },
     strategies,
   } as unknown as ChatSessionManager
   connections = new ChatConnections(manager)
@@ -56,30 +56,30 @@ const content = (overrides: Record<string, unknown> = {}): Record<string, unknow
 })
 
 test('open snapshots the team: null when no record, detail once captured, pushes on change', async () => {
-  await send({ type: 'strategy-open', sessionId: 'dev' })
-  expect(last('strategy-snapshot')).toMatchObject({ sessionId: 'dev', teamId: 'team', strategy: null })
+  await send({ type: 'strategy-open', teamPath: '/repo' })
+  expect(last('strategy-snapshot')).toMatchObject({ teamPath: '/repo', teamId: 'team', strategy: null })
   // Capture through the first human save creates the record and pushes.
-  await send({ type: 'strategy-save-draft', sessionId: 'dev', requestId: 'r1', productId: 'kawai', title: 'Kawai', content: content(), expectedDraftHash: null })
-  expect(last('strategy-result')).toMatchObject({ sessionId: 'dev', requestId: 'r1', draft: { draftId: 'human' } })
+  await send({ type: 'strategy-save-draft', teamPath: '/repo', requestId: 'r1', productId: 'kawai', title: 'Kawai', content: content(), expectedDraftHash: null })
+  expect(last('strategy-result')).toMatchObject({ teamPath: '/repo', requestId: 'r1', draft: { draftId: 'human' } })
   expect(last('strategy-snapshot')!.strategy).toMatchObject({ productId: 'kawai', owner: { kind: 'human', sessionId: null } })
   expect(last('strategy-detail')!.detail.strategy.productId).toBe('kawai')
   // A change in another team does not reach this subscriber.
-  await send({ type: 'strategy-open', sessionId: 'stranger' })
+  await send({ type: 'strategy-open', teamPath: '/other' })
   const count = messages.length
   const stored = strategies.store.getDraft(strategies.store.forTeam('team')!.id, 'human')!
   await strategies.saveDraft(human(), { content: content({ purpose: 'second save' }), expected_draft_hash: stored.contentHash })
   expect(last('strategy-detail')!.detail.drafts.find(draft => draft.draftId === 'human')!.content.purpose).toBe('second save')
   expect(messages.length).toBeGreaterThan(count)
-  await send({ type: 'strategy-close', sessionId: 'dev' })
+  await send({ type: 'strategy-close', teamPath: '/repo' })
   connections.disconnect(connection)
 })
 
 test('a CAS conflict answers with the stored draft and keeps the caller out of the write (S12)', async () => {
-  await send({ type: 'strategy-open', sessionId: 'dev' })
-  await send({ type: 'strategy-save-draft', sessionId: 'dev', requestId: 'r1', productId: 'kawai', title: 'Kawai', content: content({ purpose: 'first' }), expectedDraftHash: null })
+  await send({ type: 'strategy-open', teamPath: '/repo' })
+  await send({ type: 'strategy-save-draft', teamPath: '/repo', requestId: 'r1', productId: 'kawai', title: 'Kawai', content: content({ purpose: 'first' }), expectedDraftHash: null })
   const first = last('strategy-result')!.draft!
   // A second editor saving from the same base (no expectation of the change).
-  await send({ type: 'strategy-save-draft', sessionId: 'dev', requestId: 'r2', content: content({ purpose: 'second' }), expectedDraftHash: null })
+  await send({ type: 'strategy-save-draft', teamPath: '/repo', requestId: 'r2', content: content({ purpose: 'second' }), expectedDraftHash: null })
   expect(last('strategy-result')).toMatchObject({ requestId: 'r2', error: expect.stringContaining('changed while you edited') })
   expect(last('strategy-result')!.conflict).toMatchObject({ draftId: 'human', contentHash: first.contentHash })
   // The stored draft is the first editor's text.
@@ -87,13 +87,13 @@ test('a CAS conflict answers with the stored draft and keeps the caller out of t
 })
 
 test('submit, approve with command id, and withdraw run as the human; approve retry replays', async () => {
-  await send({ type: 'strategy-open', sessionId: 'dev' })
-  await send({ type: 'strategy-save-draft', sessionId: 'dev', requestId: 'r1', productId: 'kawai', title: 'Kawai', content: content(), expectedDraftHash: null })
-  await send({ type: 'strategy-submit', sessionId: 'dev', requestId: 'r2' })
+  await send({ type: 'strategy-open', teamPath: '/repo' })
+  await send({ type: 'strategy-save-draft', teamPath: '/repo', requestId: 'r1', productId: 'kawai', title: 'Kawai', content: content(), expectedDraftHash: null })
+  await send({ type: 'strategy-submit', teamPath: '/repo', requestId: 'r2' })
   expect(last('strategy-result')).toMatchObject({ requestId: 'r2', revision: { revision: 1, status: 'in_review' } })
   const revision = last('strategy-result')!.revision!
   await send({
-    type: 'strategy-approve', sessionId: 'dev', requestId: 'r3', revision: 1, contentHash: revision.contentHash,
+    type: 'strategy-approve', teamPath: '/repo', requestId: 'r3', revision: 1, contentHash: revision.contentHash,
     commandId: 'approve-1', expectedCurrentRevision: null, approvalScope: 'Direction', openQuestions: 'baseline unknown',
   })
   expect(last('strategy-result')).toMatchObject({ requestId: 'r3' })
@@ -102,14 +102,14 @@ test('submit, approve with command id, and withdraw run as the human; approve re
   expect(last('strategy-detail')!.detail.impactReviews).toHaveLength(1)
   // Retry with the same command id replays without a second record.
   await send({
-    type: 'strategy-approve', sessionId: 'dev', requestId: 'r4', revision: 1, contentHash: revision.contentHash,
+    type: 'strategy-approve', teamPath: '/repo', requestId: 'r4', revision: 1, contentHash: revision.contentHash,
     commandId: 'approve-1', expectedCurrentRevision: null,
   })
   expect(last('strategy-result')).toMatchObject({ requestId: 'r4' })
   expect(last('strategy-detail')!.detail.decisions).toHaveLength(1)
   expect(last('strategy-detail')!.detail.impactReviews).toHaveLength(1)
   // Withdraw the revision.
-  await send({ type: 'strategy-withdraw', sessionId: 'dev', requestId: 'r5', revision: 1, commandId: 'withdraw-1' })
+  await send({ type: 'strategy-withdraw', teamPath: '/repo', requestId: 'r5', revision: 1, commandId: 'withdraw-1' })
   expect(last('strategy-result')).toMatchObject({ requestId: 'r5' })
   expect(last('strategy-detail')!.detail.revisions[0]!.status).toBe('withdrawn')
   expect(last('strategy-snapshot')!.strategy!.currentApprovedRevision).toBeNull()
@@ -119,23 +119,30 @@ test('submit, approve with command id, and withdraw run as the human; approve re
 })
 
 test('a stale approval is answered as an error, inline for the client (S17)', async () => {
-  await send({ type: 'strategy-open', sessionId: 'dev' })
-  await send({ type: 'strategy-save-draft', sessionId: 'dev', requestId: 'r1', productId: 'kawai', title: 'Kawai', content: content(), expectedDraftHash: null })
-  await send({ type: 'strategy-submit', sessionId: 'dev', requestId: 'r2' })
+  await send({ type: 'strategy-open', teamPath: '/repo' })
+  await send({ type: 'strategy-save-draft', teamPath: '/repo', requestId: 'r1', productId: 'kawai', title: 'Kawai', content: content(), expectedDraftHash: null })
+  await send({ type: 'strategy-submit', teamPath: '/repo', requestId: 'r2' })
   const revision = last('strategy-result')!.revision!
-  await send({ type: 'strategy-withdraw', sessionId: 'dev', requestId: 'r3', revision: 1, commandId: 'w' })
+  await send({ type: 'strategy-withdraw', teamPath: '/repo', requestId: 'r3', revision: 1, commandId: 'w' })
   await send({
-    type: 'strategy-approve', sessionId: 'dev', requestId: 'r4', revision: 1, contentHash: revision.contentHash,
+    type: 'strategy-approve', teamPath: '/repo', requestId: 'r4', revision: 1, contentHash: revision.contentHash,
     commandId: 'late', expectedCurrentRevision: null,
   })
   expect(last('strategy-result')).toMatchObject({ requestId: 'r4', error: expect.stringContaining('withdrawn') })
 })
 
 test('refusals answer with the service message and nothing is written', async () => {
-  await send({ type: 'strategy-open', sessionId: 'dev' })
-  await send({ type: 'strategy-approve', sessionId: 'dev', requestId: 'r1', revision: 1, contentHash: '0'.repeat(64), commandId: 'x', expectedCurrentRevision: null })
+  await send({ type: 'strategy-open', teamPath: '/repo' })
+  await send({ type: 'strategy-approve', teamPath: '/repo', requestId: 'r1', revision: 1, contentHash: '0'.repeat(64), commandId: 'x', expectedCurrentRevision: null })
   expect(last('strategy-result')).toMatchObject({ requestId: 'r1', error: expect.stringContaining('no strategy record') })
   // A session whose team cannot be resolved is refused, not crashed.
-  await send({ type: 'strategy-save-draft', sessionId: 'ghost', requestId: 'r2', productId: 'kawai', title: 'K', content: content(), expectedDraftHash: null })
-  expect(last('strategy-result')).toMatchObject({ requestId: 'r2', error: 'Chat team is unavailable' })
+  await send({ type: 'strategy-save-draft', teamPath: '/elsewhere', requestId: 'r2', productId: 'kawai', title: 'K', content: content(), expectedDraftHash: null })
+  expect(last('strategy-result')).toMatchObject({ requestId: 'r2', error: 'unknown-team: /elsewhere' })
+})
+
+test('opening a team path that names no known team is refused and subscribes nothing', async () => {
+  await send({ type: 'strategy-open', teamPath: '/elsewhere' })
+  expect(messages).toEqual([{ type: 'error', message: 'unknown-team: /elsewhere' }])
+  await strategies.saveDraft(human(), { product_id: 'kawai', title: 'Kawai', content: content(), expected_draft_hash: null })
+  expect(messages).toHaveLength(1)
 })

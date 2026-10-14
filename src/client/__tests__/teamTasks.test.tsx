@@ -49,25 +49,25 @@ const openView = (): TaskView => {
 
 test('store: snapshots replace rows, closed views ignore pushes, results select a created task or show the refusal', () => {
   const store = useTeamTaskStore.getState()
-  store.applySnapshot({ type: 'team-tasks-snapshot', sessionId: 'dev', teamId: 'team', tasks: [summary('a')] })
+  store.applySnapshot({ type: 'team-tasks-snapshot', teamPath: 'dev', teamId: 'team', tasks: [summary('a')] })
   expect(useTeamTaskStore.getState().views.dev).toBeUndefined()
   openView()
   expect(useTeamTaskStore.getState().views.dev!.loading).toBe(true)
-  store.applySnapshot({ type: 'team-tasks-snapshot', sessionId: 'dev', teamId: 'team', tasks: [summary('a'), summary('b')] })
-  store.applySnapshot({ type: 'team-tasks-snapshot', sessionId: 'dev', teamId: 'team', tasks: [summary('b')] })
+  store.applySnapshot({ type: 'team-tasks-snapshot', teamPath: 'dev', teamId: 'team', tasks: [summary('a'), summary('b')] })
+  store.applySnapshot({ type: 'team-tasks-snapshot', teamPath: 'dev', teamId: 'team', tasks: [summary('b')] })
   expect(useTeamTaskStore.getState().views.dev).toMatchObject({ loading: false, tasks: [{ id: 'b' }] })
   store.begin('dev', 'r1', 'create')
-  store.applyResult({ type: 'team-task-result', sessionId: 'dev', requestId: 'r1', task: summary('new') })
+  store.applyResult({ type: 'team-task-result', teamPath: 'dev', requestId: 'r1', task: summary('new') })
   expect(useTeamTaskStore.getState().views.dev).toMatchObject({ selectedTaskId: 'new', pending: {}, error: null })
-  store.applyDetail({ type: 'team-task-detail', sessionId: 'dev', teamId: 'team', detail: detail(summary('other')), directory: [] })
+  store.applyDetail({ type: 'team-task-detail', teamPath: 'dev', teamId: 'team', detail: detail(summary('other')), directory: [] })
   expect(useTeamTaskStore.getState().views.dev!.detail).toBeNull()
-  store.applyDetail({ type: 'team-task-detail', sessionId: 'dev', teamId: 'team', detail: detail(summary('new')), directory: [] })
+  store.applyDetail({ type: 'team-task-detail', teamPath: 'dev', teamId: 'team', detail: detail(summary('new')), directory: [] })
   expect(useTeamTaskStore.getState().views.dev!.detail?.task.id).toBe('new')
   store.begin('dev', 'r2', 'status')
-  store.applyResult({ type: 'team-task-result', sessionId: 'dev', requestId: 'r2', error: 'Task not found in this team: x' })
+  store.applyResult({ type: 'team-task-result', teamPath: 'dev', requestId: 'r2', error: 'Task not found in this team: x' })
   expect(useTeamTaskStore.getState().views.dev).toMatchObject({ error: 'Task not found in this team: x', pending: {} })
   store.close('dev')
-  store.applyResult({ type: 'team-task-result', sessionId: 'dev', requestId: 'r3', error: 'late' })
+  store.applyResult({ type: 'team-task-result', teamPath: 'dev', requestId: 'r3', error: 'late' })
   expect(useTeamTaskStore.getState().views.dev).toBeUndefined()
 })
 
@@ -75,7 +75,7 @@ test('list shows title, status, creator, and participants; a killed creator is m
   useSessionStore.setState({ sessions: [sessionRow('dev', 'Dev one')] })
   const view = { ...openView(), loading: false, tasks: [summary('a', { status: 'blocked' }), summary('b', { creator: { kind: 'human', sessionId: null }, participants: [] })] }
   let renderer!: TestRenderer.ReactTestRenderer
-  act(() => { renderer = TestRenderer.create(<TeamTasksPanel sessionId="dev" projectPath="/repo" view={view} sendMessage={() => {}} connected onClose={() => {}} />) })
+  act(() => { renderer = TestRenderer.create(<TeamTasksPanel teamPath="dev" projectPath="/repo" view={view} sendMessage={() => {}} connected onClose={() => {}} />) })
   const rows = renderer.root.findAll(node => node.type === 'article' && !!node.props['data-task-id'])
   expect(rows.map(row => row.props['data-task-id'])).toEqual(['a', 'b'])
   expect(textOf(rows[0]!.findByProps({ 'data-testid': 'task-status' }))).toBe('blocked')
@@ -91,7 +91,7 @@ test('create sends every field with a request id; disconnected disables it; erro
   openView()
   let renderer!: TestRenderer.ReactTestRenderer
   // The draft lives in the store; render from it so typing re-renders.
-  const render = (connected: boolean) => <TeamTasksPanel sessionId="dev" projectPath="/repo"
+  const render = (connected: boolean) => <TeamTasksPanel teamPath="dev" projectPath="/repo"
     view={{ ...useTeamTaskStore.getState().views.dev!, loading: false, tasks: [summary('parent')], error: connected ? null : '/nowhere is not a worktree of this team\'s repository' }}
     sendMessage={message => sent.push(message)} connected={connected} onClose={() => {}} />
   act(() => { renderer = TestRenderer.create(render(true)) })
@@ -107,7 +107,7 @@ test('create sends every field with a request id; disconnected disables it; erro
   // The draft lives in the store: re-render so the typed values reach the form.
   act(() => renderer.update(render(true)))
   act(() => renderer.root.findByType('form').props.onSubmit({ preventDefault: () => {} }))
-  expect(sent.filter(message => message.type === 'team-task-create')).toEqual([{ type: 'team-task-create', sessionId: 'dev', requestId: expect.any(String), requestKey: expect.any(String),
+  expect(sent.filter(message => message.type === 'team-task-create')).toEqual([{ type: 'team-task-create', teamPath: 'dev', requestId: expect.any(String), requestKey: expect.any(String),
     title: 'Export', direction: 'CSV',
     acceptance: 'Downloads', parentId: 'parent', worktree: '/repo-feature', openspecChange: 'add-export' }])
   expect(Object.values(useTeamTaskStore.getState().views.dev!.pending)).toEqual(['create'])
@@ -124,7 +124,7 @@ test('detail shows direction, retained revisions, journal, subtasks, messages; c
   const task = summary('t1', { status: 'done', revision: 2, direction: 'Current plan', acceptance: 'Ships', openspecChange: 'add-export', worktree: '/repo-feature' })
   const view: TaskView = { ...openView(), loading: false, tasks: [task], selectedTaskId: 't1', detail: detail(task) }
   let renderer!: TestRenderer.ReactTestRenderer
-  const render = (connected: boolean) => <TeamTasksPanel sessionId="dev" projectPath="/repo" view={view} sendMessage={message => sent.push(message)} connected={connected} onClose={() => {}} />
+  const render = (connected: boolean) => <TeamTasksPanel teamPath="dev" projectPath="/repo" view={view} sendMessage={message => sent.push(message)} connected={connected} onClose={() => {}} />
   act(() => { renderer = TestRenderer.create(render(true)) })
   expect(renderer.root.findAllByType('section').map(section => section.props['aria-label'])).toEqual(['Assignment', 'Direction', 'Status', 'Journal', 'Subtasks', 'Messages'])
   expect(renderer.root.findByProps({ 'data-testid': 'task-direction' }).children.join('')).toBe('Current plan')
@@ -147,10 +147,10 @@ test('detail shows direction, retained revisions, journal, subtasks, messages; c
   // Exactly one targets request per mount, not one per effect pass (N2).
   expect(sent.filter(message => message.type === 'team-task-targets')).toHaveLength(1)
   expect(sent.filter(message => message.type.startsWith('team-task-') && message.type !== 'team-task-targets').map(message => ({ ...message, requestId: undefined }) as Record<string, unknown>)).toEqual([
-    { type: 'team-task-status', sessionId: 'dev', taskId: 't1', status: 'open' },
-    { type: 'team-task-status', sessionId: 'dev', taskId: 't1', status: 'cancelled' },
-    { type: 'team-task-amend', sessionId: 'dev', taskId: 't1', direction: 'Revised plan', acceptance: 'Ships' },
-    { type: 'team-task-note', sessionId: 'dev', taskId: 't1', text: 'Human note' },
+    { type: 'team-task-status', teamPath: 'dev', taskId: 't1', status: 'open' },
+    { type: 'team-task-status', teamPath: 'dev', taskId: 't1', status: 'cancelled' },
+    { type: 'team-task-amend', teamPath: 'dev', taskId: 't1', direction: 'Revised plan', acceptance: 'Ships' },
+    { type: 'team-task-note', teamPath: 'dev', taskId: 't1', text: 'Human note' },
   ].map(message => ({ ...message, requestId: undefined })))
   expect(button('Save as revision 3')).toBeDefined()
   act(() => renderer.update(render(false)))

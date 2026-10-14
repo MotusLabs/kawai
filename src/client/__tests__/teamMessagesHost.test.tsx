@@ -73,13 +73,13 @@ test('the side slot holds one panel at a time: Messages closes the others and is
   expect(panel('team-mailbox')).toHaveLength(0)
   expect(panel('team-tasks')).toHaveLength(0)
   expect(panel('chat-debug-panel')).toHaveLength(0)
-  expect(useTeamMessageStore.getState().views['chat-1']!.open).toBe(true)
+  expect(useTeamMessageStore.getState().views['/tmp/project']!.open).toBe(true)
 
   // Opening another side panel closes Messages.
   act(() => buttonNamed(renderer, 'Mailbox').props.onClick())
   expect(panel('team-messages')).toHaveLength(0)
   expect(panel('team-mailbox')).toHaveLength(1)
-  expect(useTeamMessageStore.getState().views['chat-1']).toBeUndefined()
+  expect(useTeamMessageStore.getState().views['/tmp/project']).toBeUndefined()
   act(() => buttonNamed(renderer, 'Tasks').props.onClick())
   expect(panel('team-mailbox')).toHaveLength(0)
   expect(panel('team-tasks')).toHaveLength(1)
@@ -90,25 +90,25 @@ test('the side slot holds one panel at a time: Messages closes the others and is
   act(() => buttonNamed(renderer, 'Messages').props.onClick())
   expect(panel('chat-debug-panel')).toHaveLength(0)
   expect(panel('team-messages')).toHaveLength(1)
-  expect(useTeamMailboxStore.getState().views['chat-1']).toBeUndefined()
-  expect(useTeamTaskStore.getState().views['chat-1']).toBeUndefined()
+  expect(useTeamMailboxStore.getState().views['/tmp/project']).toBeUndefined()
+  expect(useTeamTaskStore.getState().views['/tmp/project']).toBeUndefined()
   expect(useChatDebugStore.getState().views['chat-1']?.open).not.toBe(true)
   act(() => renderer.unmount())
 })
 
-test('closeOtherSideSlots keeps the named panel and drops the rest, one chat at a time', () => {
+test('closeOtherSideSlots keeps the named panel and drops the rest, one chat and team at a time', () => {
   act(() => {
     useChatDebugStore.getState().beginOpen('chat-1')
-    useTeamMailboxStore.getState().open('chat-1')
-    useTeamTaskStore.getState().open('chat-1')
-    useTeamMessageStore.getState().open('chat-2')
-    closeOtherSideSlots('messages', 'chat-1')
+    useTeamMailboxStore.getState().open('/repo')
+    useTeamTaskStore.getState().open('/repo')
+    useTeamMessageStore.getState().open('/other')
+    closeOtherSideSlots('messages', { sessionId: 'chat-1', teamKey: '/repo' })
   })
   expect(useChatDebugStore.getState().views['chat-1']).toBeUndefined()
-  expect(useTeamMailboxStore.getState().views['chat-1']).toBeUndefined()
-  expect(useTeamTaskStore.getState().views['chat-1']).toBeUndefined()
-  // Another chat's panel is untouched.
-  expect(useTeamMessageStore.getState().views['chat-2']!.open).toBe(true)
+  expect(useTeamMailboxStore.getState().views['/repo']).toBeUndefined()
+  expect(useTeamTaskStore.getState().views['/repo']).toBeUndefined()
+  // Another team's panel is untouched.
+  expect(useTeamMessageStore.getState().views['/other']!.open).toBe(true)
 })
 
 test('task detail names its message participants and links into each thread', () => {
@@ -131,7 +131,7 @@ test('task detail names its message participants and links into each thread', ()
   }
   let renderer!: TestRenderer.ReactTestRenderer
   act(() => {
-    renderer = TestRenderer.create(<TeamTaskDetail sessionId="chat-1" projectPath="/repo" view={view} sendMessage={() => {}}
+    renderer = TestRenderer.create(<TeamTaskDetail teamPath="chat-1" projectPath="/repo" view={view} sendMessage={() => {}}
       connected sessions={[{ ...chatSession, id: 'dev', name: 'Dev one', groupId: 'devs' } as Session]}
       onOpenThread={threadId => opened.push(threadId)} />)
   })
@@ -161,7 +161,7 @@ test('the Messages view composes and reads; delivery operations stay with the Ma
   }
   let messages!: TestRenderer.ReactTestRenderer
   act(() => {
-    messages = TestRenderer.create(<TeamMessagesView sessionId="chat-1" view={messageView}
+    messages = TestRenderer.create(<TeamMessagesView teamPath="chat-1" view={messageView}
       sendMessage={message => sent.push(message)} connected sessions={sessions} groups={[]} />)
   })
   const labels = messages.root.findAllByType('button').map(button => textOf(button))
@@ -179,7 +179,7 @@ test('the Messages view composes and reads; delivery operations stay with the Ma
   const mailboxView: MailboxView = { open: true, loading: false, messages: [uncertain, dead] }
   let mailbox!: TestRenderer.ReactTestRenderer
   act(() => {
-    mailbox = TestRenderer.create(<TeamMailboxPanel sessionId="chat-1" view={mailboxView}
+    mailbox = TestRenderer.create(<TeamMailboxPanel teamPath="chat-1" view={mailboxView}
       sendMessage={message => sent.push(message)} connected onClose={() => {}} />)
   })
   act(() => {
@@ -202,7 +202,7 @@ test('a live message participant opens its chat; a killed one is a name and no l
   })
   let renderer!: TestRenderer.ReactTestRenderer
   act(() => {
-    renderer = TestRenderer.create(<TeamMessagesPanel sessionId="chat-1" projectPath="/tmp/project"
+    renderer = TestRenderer.create(<TeamMessagesPanel teamPath="chat-1" projectPath="/tmp/project"
       sendMessage={() => {}} connected connectionEpoch={0} onClose={() => {}} />)
   })
   const byName = (name: string) =>

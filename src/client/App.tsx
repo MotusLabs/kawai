@@ -34,6 +34,7 @@ import { requestChatArchive } from './utils/chatArchive'
 import { flushSync } from 'react-dom'
 import { primeAudio, needsUserGesture } from './utils/sound'
 import { getEffectiveModifier, matchesModifier } from './utils/device'
+import { startTeamViewMigration } from './stores/teamViewMigration'
 
 interface ServerInfo {
   port: number
@@ -158,6 +159,10 @@ export default function App() {
 
   // Handle mobile keyboard viewport adjustments
   useVisualViewport()
+
+  // Team panel views follow workspace discovery to their team's key, for every
+  // chat — not only the selected one (team-workspace-pages D2).
+  useEffect(() => startTeamViewMigration(), [])
 
   // Prime audio on user interaction. Persistent listener (not once) because Safari
   // suspends AudioContext after sleep/wake and needs a fresh gesture to resume.
