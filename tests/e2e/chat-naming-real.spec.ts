@@ -104,7 +104,7 @@ test('placeholder names adopt generated titles and keep manual renames', async (
     expect(sessionId).toBeTruthy()
     const placeholder = (await row.innerText()).split('\n')[0]!.trim()
     expect(placeholder).toMatch(/^[a-z]+-[a-z]+$/)
-    await expect(page.getByTestId('chat-name')).toContainText(`${placeholder} · Chat`)
+    await expect(page.getByTestId('chat-name')).toHaveText(placeholder)
     results.push(`Unnamed chat started on the placeholder "${placeholder}".`)
 
     await send('Without using any tools, reply with exactly KAWAI_NAME_OK and nothing else.')
@@ -117,13 +117,13 @@ test('placeholder names adopt generated titles and keep manual renames', async (
       timeout: 120_000,
     }).not.toBe(placeholder)
     const adopted = (await row.innerText()).split('\n')[0]!.trim()
-    await expect(page.getByTestId('chat-name')).toContainText(`${adopted} · Chat`)
+    await expect(page.getByTestId('chat-name')).toHaveText(adopted)
     results.push(`Unclaimed session adopted the generated title "${adopted}".`)
 
     await page.getByTestId('chat-name').click()
     await page.getByTestId('chat-name-input').fill('My manual name')
     await page.keyboard.press('Enter')
-    await expect(page.getByTestId('chat-name')).toContainText('My manual name · Chat')
+    await expect(page.getByTestId('chat-name')).toHaveText('My manual name')
     await expect.poll(async () => (await row.innerText()).split('\n')[0]!.trim()).toBe('My manual name')
     results.push('Manual rename reached the header and the navigator row.')
 
@@ -135,7 +135,7 @@ test('placeholder names adopt generated titles and keep manual renames', async (
     // A later retitle must not touch the manual name; give it the chance.
     await page.waitForTimeout(15_000)
     await expect.poll(async () => (await row.innerText()).split('\n')[0]!.trim()).toBe('My manual name')
-    await expect(page.getByTestId('chat-name')).toContainText('My manual name · Chat')
+    await expect(page.getByTestId('chat-name')).toHaveText('My manual name')
     results.push('A manual rename survived later generated titles.')
 
     await stop()

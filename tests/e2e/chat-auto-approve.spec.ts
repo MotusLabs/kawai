@@ -4,6 +4,7 @@
 // ask under auto, a second tab sees the switch, and the archived read-only
 // view hides the control.
 import { expect, test, type Page } from '@playwright/test'
+import { killChat, archiveChat } from './support/chatHeader'
 
 // Serial: the app selects every newly created session on every client
 // (App.tsx session-created), so parallel chat creations yank each test's
@@ -33,7 +34,7 @@ const transcript = (page: Page) => page.getByTestId('chat-transcript')
 
 test('switching to auto resolves a pending approval and skips later cards', async ({ page }, info) => {
   await createChat(page, 'auto-policy')
-  await expect(toggle(page)).toHaveAttribute('aria-pressed', 'false')
+  await expect(toggle(page)).toHaveAttribute('aria-checked', 'false')
 
   // Manual: a Bash approval surfaces as a card.
   await send(page, 'approval')
@@ -43,7 +44,7 @@ test('switching to auto resolves a pending approval and skips later cards', asyn
   // Flip the switch: the card resolves, the notice and auto-approved mark
   // appear, and the fixture's tool use proceeds ("Request accepted.").
   await toggle(page).click()
-  await expect(toggle(page)).toHaveAttribute('aria-pressed', 'true')
+  await expect(toggle(page)).toHaveAttribute('aria-checked', 'true')
   await expect(page.getByRole('button', { name: 'Allow', exact: true })).toHaveCount(0)
   await expect(transcript(page)).toContainText('Auto-approve on')
   await expect(transcript(page)).toContainText('Auto-approved Bash')
@@ -56,13 +57,13 @@ test('switching to auto resolves a pending approval and skips later cards', asyn
   await expect(transcript(page).getByText('Auto-approved Bash')).toHaveCount(2)
   await page.screenshot({ path: info.outputPath('2-auto-no-cards.png') })
 
-  await page.getByRole('button', { name: 'Kill session', exact: true }).click()
+  await killChat(page)
 })
 
 test('questions still ask under auto', async ({ page }, info) => {
   await createChat(page, 'auto-question')
   await toggle(page).click()
-  await expect(toggle(page)).toHaveAttribute('aria-pressed', 'true')
+  await expect(toggle(page)).toHaveAttribute('aria-checked', 'true')
 
   await send(page, 'question')
   await expect(page.getByRole('group', { name: 'Which color?' })).toBeVisible()
@@ -71,7 +72,7 @@ test('questions still ask under auto', async ({ page }, info) => {
   await expect(transcript(page)).toContainText('Request accepted.')
   await page.screenshot({ path: info.outputPath('3-question-under-auto.png') })
 
-  await page.getByRole('button', { name: 'Kill session', exact: true }).click()
+  await killChat(page)
 })
 
 test('a second tab sees the same policy switch', async ({ page, context }, info) => {
@@ -80,24 +81,24 @@ test('a second tab sees the same policy switch', async ({ page, context }, info)
   await other.goto('/')
   await other.getByText('auto-two-tabs', { exact: false }).first().click()
   await expect(other.getByTestId('chat-view')).toContainText('auto-two-tabs')
-  await expect(toggle(other)).toHaveAttribute('aria-pressed', 'false')
+  await expect(toggle(other)).toHaveAttribute('aria-checked', 'false')
 
   await toggle(page).click()
-  await expect(toggle(page)).toHaveAttribute('aria-pressed', 'true')
-  await expect(toggle(other)).toHaveAttribute('aria-pressed', 'true')
+  await expect(toggle(page)).toHaveAttribute('aria-checked', 'true')
+  await expect(toggle(other)).toHaveAttribute('aria-checked', 'true')
   await expect(transcript(other)).toContainText('Auto-approve on')
   await page.screenshot({ path: info.outputPath('4-second-tab-sees-switch.png') })
 
   await other.close()
-  await page.getByRole('button', { name: 'Kill session', exact: true }).click()
+  await killChat(page)
 })
 
 test('the archived read-only view hides the approval-policy control', async ({ page }, info) => {
   await createChat(page, 'auto-archive')
   await toggle(page).click()
-  await expect(toggle(page)).toHaveAttribute('aria-pressed', 'true')
+  await expect(toggle(page)).toHaveAttribute('aria-checked', 'true')
 
-  await page.getByTestId('chat-archive-button').click()
+  await archiveChat(page)
   // Archiving moves the session to the docked Archive pane and the app
   // auto-selects another live session (pre-existing navigator behavior).
   // Open the archived chat from the Archive pane to reach its read-only view.
@@ -115,5 +116,5 @@ test('the archived read-only view hides the approval-policy control', async ({ p
   await page.screenshot({ path: info.outputPath('5-archived-hides-toggle.png') })
 
   // Kill remains the only permanent removal; it also cleans the session up.
-  await page.getByRole('button', { name: 'Kill session', exact: true }).click()
+  await killChat(page)
 })

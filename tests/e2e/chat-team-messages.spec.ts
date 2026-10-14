@@ -11,6 +11,7 @@ import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
 import { existsSync, mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { killChat } from './support/chatHeader'
 
 test.skip(process.env.AGENTBOARD_CHAT_FIXTURE !== '1', 'Requires development chat fixture')
 
@@ -171,7 +172,7 @@ test('E06: named senders, chronological threads, task filtering, and a killed se
     await openMessages(page)
     await expect(row(page, ids.first)).toBeVisible()
     await page.locator(`[data-session-id="${lead}"]`).click()
-    await page.getByRole('button', { name: 'Kill session', exact: true }).click()
+    await killChat(page)
     await expect(page.locator(`[data-session-id="${lead}"]`)).toHaveCount(0)
     await page.locator(`[data-session-id="${dev}"]`).click()
     await openMessages(page)

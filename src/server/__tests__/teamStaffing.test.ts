@@ -67,24 +67,27 @@ const writeGroup = (id: string, frontmatter: string) => {
 const record = (sessionId: string, extra: Partial<ChatSessionRecord>): ChatSessionRecord => ({
   sessionId, name: sessionId, projectPath: repo, sdkSessionId: null, status: 'working', createdAt: '', lastActivityAt: '', groupId: 'devs', ...extra,
 })
-const makeStaffing = (onError?: (error: unknown) => void) => new WorktreeStaffing(db.db, store, {
-  records: () => records.values(),
-  teamOf: () => team,
-  caps: new TeamCaps({ homeDir: home }),
-  worktrees: new TeamWorktrees({ ttlMs: 0 }),
-  ...(onError ? { onError } : {}),
-  now: () => clock,
-  spawn: async (request): Promise<SpawnResult> => {
-    spawned.push(request)
-    if (spawnFails) return { ok: false, error: spawnFails }
-    const sessionId = `spawned-${spawned.length}`
-    records.set(sessionId, record(sessionId, {
-      projectPath: request.projectPath, groupId: request.groupId, spawned: true, taskId: request.taskId, status: 'waiting',
-      ...(request.profileId ? { claudeProfileId: request.profileId } : {}),
-    }))
-    return { ok: true, sessionId }
-  },
-})
+const makeStaffing = (onError?: (error: unknown) => void, extra: { retryAfterMs?: number; onSpawnBackoff?: (message: { id: string; state: string }, retryAt: number) => void } = {}) =>
+  new WorktreeStaffing(db.db, store, {
+    records: () => records.values(),
+    teamOf: () => team,
+    caps: new TeamCaps({ homeDir: home }),
+    worktrees: new TeamWorktrees({ ttlMs: 0 }),
+    ...(onError ? { onError } : {}),
+    ...(extra.retryAfterMs !== undefined ? { retryAfterMs: extra.retryAfterMs } : {}),
+    ...(extra.onSpawnBackoff ? { onSpawnBackoff: extra.onSpawnBackoff } : {}),
+    now: () => clock,
+    spawn: async (request): Promise<SpawnResult> => {
+      spawned.push(request)
+      if (spawnFails) return { ok: false, error: spawnFails }
+      const sessionId = `spawned-${spawned.length}`
+      records.set(sessionId, record(sessionId, {
+        projectPath: request.projectPath, groupId: request.groupId, spawned: true, taskId: request.taskId, status: 'waiting',
+        ...(request.profileId ? { claudeProfileId: request.profileId } : {}),
+      }))
+      return { ok: true, sessionId }
+    },
+  })
 const targetWorktree = (message: { taskId: string | null }) => (message.taskId ? tasks.get(message.taskId)?.worktree ?? null : null)
 const makeRouter = (staff: WorktreeStaffing) => new ProfileRouter({
   groupOf: async message => (await loadTeamGroups(repo, home)).catalog.groups.get(message.toId ?? ''),
@@ -307,6 +310,75 @@ describe('failure, restart, and removal', () => {
     clock += 31_000
     spawnFails = null
     expect(await pass()).toHaveLength(1)
+  })
+
+  test('a failed reserve throws inside the transaction, rolls the reservation insert back, and keeps the end state', async () => {
+    const group = (await loadTeamGroups(repo, home)).catalog.groups.get('devs')!
+    const m = mail(task(featX).id)
+    // The message left the queue before the reserve ran (e.g. cancelled
+    // during the awaited group resolution).
+    store.cancel(m.id)
+    let thrown: unknown = null
+    try {
+      await staffing.spawnFor(m, featX, group, 'glm')
+    } catch (error) { thrown = error }
+    expect(String(thrown)).toContain('Reserving')
+    // The insert rolled back with the transaction: no leaked reservation.
+    expect(db.db.prepare('SELECT COUNT(*) AS n FROM team_spawns').get()).toEqual({ n: 0 })
+    expect(store.get(m.id)?.state).toBe('cancelled')
+  })
+
+  test('a failed reserve reaches the dispatcher error path, not a quiet return', async () => {
+    const group = (await loadTeamGroups(repo, home)).catalog.groups.get('devs')!
+    const m = mail(task(featX).id)
+    const errors: unknown[] = []
+    const dispatcher = new MailDispatcher(store, {
+      recipients: () => [], prepare: async () => {}, interrupt: async () => {}, deliver: () => {}, watchReceipt: () => {},
+      // The router plays the role ProfileRouter does: spawnFor inside
+      // route(). The human cancels while that decision is awaited — the
+      // message is queued when the pass enumerates it, gone when the
+      // reserve runs.
+      router: { route: async () => {
+        store.cancel(m.id)
+        const assignment = await staffing.spawnFor(store.get(m.id)!, featX, group, 'glm')
+        return assignment ? { kind: 'spawned', assignment } : { kind: 'none' }
+      } },
+      onError: error => errors.push(error),
+    })
+    try {
+      dispatcher.notify(); await dispatcher.settled()
+    } finally { dispatcher.close() }
+    // The throw reached the dispatcher's error path (groupPass catch → onError).
+    expect(errors).toHaveLength(1)
+    expect(String(errors[0])).toContain('Reserving')
+    expect(db.db.prepare('SELECT COUNT(*) AS n FROM team_spawns').get()).toEqual({ n: 0 })
+    expect(store.get(m.id)?.state).toBe('cancelled')
+  })
+
+  test('a spawn backoff exposes its retry time and is recorded before the requeue', async () => {
+    spawnFails = 'nope'
+    const backoffAt: Array<{ rowState: string; retryAt: number }> = []
+    staffing = makeStaffing(undefined, {
+      retryAfterMs: 25_000,
+      onSpawnBackoff: (message, retryAt) => backoffAt.push({ rowState: message.state, retryAt }),
+    })
+    const m = mail(task(featX).id)
+    expect(await pass()).toEqual([])
+    // Recorded while the row was still `spawning`: before the requeue notify.
+    expect(backoffAt).toEqual([{ rowState: 'spawning', retryAt: clock + 25_000 }])
+    expect(staffing.nextRetryAt()).toBe(clock + 25_000)
+    // A cleared (dead) backoff never arms the timer again.
+    staffing.clearBackoff(m.id)
+    expect(staffing.nextRetryAt()).toBeNull()
+  })
+
+  test('an expired backoff is not reported by nextRetryAt', async () => {
+    spawnFails = 'nope'
+    staffing = makeStaffing(undefined, { retryAfterMs: 10_000 })
+    mail(task(featX).id)
+    expect(await pass()).toEqual([])
+    clock += 11_000
+    expect(staffing.nextRetryAt()).toBeNull()
   })
 
   test('startup reconciliation drops interrupted reservations and requeues reserved mail', () => {

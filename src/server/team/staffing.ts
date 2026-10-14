@@ -16,13 +16,15 @@
 // no longer exists is dead-lettered.
 import type { Database } from 'bun:sqlite'
 import type { ChatApprovalPolicy } from '../../shared/chat'
+import type { TeamWorktreeOccupancy } from '../../shared/team'
 import type { ChatSessionRecord } from '../db'
 import type { SpawnAssignment } from './dispatcher'
 import type { MailboxStore, TeamMessage } from './mailboxStore'
-import type { TeamCaps } from './teamCaps'
+import { DEFAULT_MAX_SPAWNED_SESSIONS, type TeamCaps } from './teamCaps'
 import type { GroupDefinition } from './groupFile'
 import type { TeamIdentity } from './teamIdentity'
-import { worktreeRootOf, type TeamWorktrees } from './worktreeRoots'
+import { teamRoster, worktreeWriters, type PendingSpawnRow } from './teamRoster'
+import type { TeamWorktrees } from './worktreeRoots'
 
 const CREATE_TABLE_SQL = `
 CREATE TABLE IF NOT EXISTS team_spawns (
@@ -51,6 +53,28 @@ export interface SpawnContext {
   allowed: boolean
   /** Profiles of the group's pending reservations (they count toward caps). */
   pendingProfiles: string[]
+  /** The staffing facts behind `allowed`, for the waiting reasons (D3/D4). */
+  facts: StaffingFacts
+}
+
+/** Staffing facts a waiting reason reports: counts, occupants, backoff. */
+export interface StaffingFacts {
+  teamSpawned: number
+  teamCap: number
+  /** Spawned sessions holding the target worktree's writer slot. */
+  worktreeOccupants: string[]
+  /** Pending reservations for the target worktree. */
+  worktreePending: number
+  /** When a failed spawn for this message retries (epoch ms); null = none. */
+  backoffRetryAt: number | null
+}
+
+/** Capacity facts behind a waiting reason (D3): the same counts the caps use. */
+export interface StaffingCapacity extends StaffingFacts {
+  /** Live group members plus the group's pending reservations. */
+  groupMembers: number
+  /** Live-plus-pending group members per profile. */
+  onProfile: Record<string, number>
 }
 
 /** A spawn request: where, which group, and the group's member settings. */
@@ -69,6 +93,8 @@ const RETRY_AFTER_MS = 30_000
 
 export class WorktreeStaffing {
   private readonly failedAt = new Map<string, number>()
+  /** Last-read team spawn caps (team-waiting-reasons D3): sync reads for reasons. */
+  private readonly teamCapCache = new Map<string, number>()
 
   constructor(private readonly db: Database, private readonly store: MailboxStore, private readonly options: {
     /** Every live chat session record (archived ones included; filtered here). */
@@ -78,11 +104,30 @@ export class WorktreeStaffing {
     caps: TeamCaps
     worktrees: TeamWorktrees
     spawn: (request: SpawnRequest) => Promise<SpawnResult>
+    /** A spawn failed: its backoff reason is recorded before the requeue publishes (D3). */
+    onSpawnBackoff?: (message: TeamMessage, retryAt: number) => void
     onError?: (error: unknown) => void
     now?: () => number
+    /** Failure backoff; overridable so tests can watch a retry happen. */
+    retryAfterMs?: number
   }) {
     db.exec(CREATE_TABLE_SQL)
     migrateTable(db)
+  }
+
+  /** The failure backoff duration (D5); tests may shorten it to observe retries. */
+  private get retryAfterMs(): number { return this.options.retryAfterMs ?? RETRY_AFTER_MS }
+
+  /** The team cap, cached for the sync reason reads (async callers refresh it). */
+  private async teamCapOf(teamId: string): Promise<number> {
+    const cap = await this.options.caps.maxSpawnedSessions(teamId)
+    this.teamCapCache.set(teamId, cap)
+    return cap
+  }
+
+  /** Last-read team spawn cap; the default until the first async read lands. */
+  cachedTeamCap(teamId: string): number {
+    return this.teamCapCache.get(teamId) ?? DEFAULT_MAX_SPAWNED_SESSIONS
   }
 
   /**
@@ -109,13 +154,23 @@ export class WorktreeStaffing {
       return 'worktree-missing'
     }
     const now = this.options.now?.() ?? Date.now()
-    const backingOff = now - (this.failedAt.get(message.id) ?? -Infinity) < RETRY_AFTER_MS
-    const teamCap = await this.options.caps.maxSpawnedSessions(message.teamId)
+    const failedAt = this.failedAt.get(message.id) ?? null
+    const backingOff = failedAt !== null && now - failedAt < this.retryAfterMs
+    const teamCap = await this.teamCapOf(message.teamId)
     const counts = this.counts(message.teamId, message.toId, worktree)
+    const writers = worktreeWriters(counts.roster.find(entry => entry.worktree === worktree))
     return {
       worktree,
       allowed: !backingOff && counts.teamSpawned < teamCap && counts.worktreeWriters < 1,
-      pendingProfiles: counts.pending.filter(row => row.group_id === message.toId).map(row => row.profile_id),
+      pendingProfiles: counts.roster.flatMap(entry => entry.pendingSpawns)
+        .filter(pending => pending.group === message.toId).map(pending => pending.profile),
+      facts: {
+        teamSpawned: counts.teamSpawned,
+        teamCap,
+        worktreeOccupants: writers.spawnedIds,
+        worktreePending: writers.pending,
+        backoffRetryAt: backingOff && failedAt !== null ? failedAt + this.retryAfterMs : null,
+      },
     }
   }
 
@@ -126,19 +181,30 @@ export class WorktreeStaffing {
    */
   async spawnFor(message: TeamMessage, worktree: string, group: GroupDefinition, profileId: string): Promise<SpawnAssignment | null> {
     if (message.toId !== group.id || !message.taskId) return null
-    const teamCap = await this.options.caps.maxSpawnedSessions(message.teamId)
+    const teamCap = await this.teamCapOf(message.teamId)
     const cap = group.profiles.find(entry => entry.profileId === profileId)?.cap
     const reservation = `spawn-${crypto.randomUUID()}`
     const reserved = this.db.transaction(() => {
       const counts = this.counts(message.teamId, group.id, worktree)
-      const onProfile = counts.groupLive.filter(record => (record.claudeProfileId ?? 'default') === profileId).length +
-        counts.pending.filter(row => row.group_id === group.id && row.profile_id === profileId).length
+      const onProfile = counts.groupLive.filter(session => session.profile === profileId).length +
+        counts.roster.flatMap(entry => entry.pendingSpawns)
+          .filter(pending => pending.group === group.id && pending.profile === profileId).length
       if (counts.groupMembers >= group.max || counts.teamSpawned >= teamCap || counts.worktreeWriters >= 1) return false
       if (cap !== undefined && onProfile >= cap) return false
-      if (!this.store.reserveForSpawn(message.id)) return false
+      // The reservation row is inserted before the message flips to
+      // `spawning`, so the store notify inside that flip — the only guaranteed
+      // `spawning` snapshot — already sees it (team-waiting-reasons D3). A
+      // failed reserve throws *inside this transaction*, rolling the insert
+      // back; the error reaches the dispatcher's error path instead of
+      // returning quietly (review pin): today's silent `return false` would
+      // leave the notify unseen either way, but the throw keeps the persisted
+      // end state identical to today's reserve-then-insert on both paths.
       this.db.prepare(`INSERT INTO team_spawns (id, message_id, team_id, group_id, worktree, created_at, profile_id)
         VALUES (?, ?, ?, ?, ?, ?, ?)`)
         .run(reservation, message.id, message.teamId, group.id, worktree, new Date().toISOString(), profileId)
+      if (!this.store.reserveForSpawn(message.id)) {
+        throw new Error(`Reserving ${message.id} for a spawn failed: the message left the queue`)
+      }
       return true
     })()
     if (!reserved) return null
@@ -155,7 +221,12 @@ export class WorktreeStaffing {
     // The new member (a live spawned record) now holds the slot itself.
     this.db.prepare('DELETE FROM team_spawns WHERE id = ?').run(reservation)
     if (!result.ok) {
-      this.failedAt.set(message.id, this.options.now?.() ?? Date.now())
+      const failedAt = this.options.now?.() ?? Date.now()
+      this.failedAt.set(message.id, failedAt)
+      // The backoff reason is recorded before the requeue notify publishes,
+      // so the failure snapshot already carries it with its retry time (D3).
+      // The row is read fresh: it is still `spawning` here.
+      this.options.onSpawnBackoff?.(this.store.get(message.id) ?? message, failedAt + this.retryAfterMs)
       this.store.requeue(message.id)
       this.options.onError?.(new Error(`Spawning a ${group.id} member on ${profileId} in ${worktree} failed: ${result.error}`))
       return null
@@ -164,21 +235,100 @@ export class WorktreeStaffing {
     return { message: this.store.get(message.id)!, sessionId: result.sessionId }
   }
 
+  /**
+   * Earliest unexpired failed-spawn retry (epoch ms), for the dispatcher's
+   * timer (D5): the minimum-wins `armTimer` learns the backoff's end, so the
+   * retry time a reason shows is the moment the retry runs. Re-read on every
+   * re-arm; stale entries are cleared when their message leaves the surface.
+   */
+  nextRetryAt(): number | null {
+    const now = this.options.now?.() ?? Date.now()
+    let earliest: number | null = null
+    for (const at of this.failedAt.values()) {
+      const retry = at + this.retryAfterMs
+      if (retry <= now) continue
+      if (earliest === null || retry < earliest) earliest = retry
+    }
+    return earliest
+  }
+
+  /** The message's backoff retry time (epoch ms), when one is running. */
+  backoffRetryAt(messageId: string): number | null {
+    const at = this.failedAt.get(messageId)
+    return at === undefined ? null : at + this.retryAfterMs
+  }
+
+  /** Drop a message's failure backoff: it left the queued surface (D5). */
+  clearBackoff(messageId: string): void {
+    this.failedAt.delete(messageId)
+  }
+
+  /** Drop every backoff whose message left the waiting surface (D5). */
+  pruneBackoffs(keep: ReadonlySet<string>): void {
+    for (const id of this.failedAt.keys()) if (!keep.has(id)) this.failedAt.delete(id)
+  }
+
+  /**
+   * Capacity facts for a waiting reason (D3): the same roster counts the caps
+   * use, minus `excludeMessageId`'s own pending reservation where the caller
+   * needs to see independent occupants separately.
+   */
+  capacity(teamId: string, groupId: string, worktree: string, excludeMessageId?: string): StaffingCapacity {
+    const roster = this.roster(teamId)
+    const pending = this.pendingFor(teamId)
+    const writers = worktreeWriters(roster.find(entry => entry.worktree === worktree))
+    const groupLive = roster.flatMap(entry => entry.sessions).filter(session => session.group === groupId)
+    const onProfile: Record<string, number> = {}
+    for (const session of groupLive) onProfile[session.profile] = (onProfile[session.profile] ?? 0) + 1
+    for (const row of pending.filter(row => row.groupId === groupId)) {
+      onProfile[row.profileId] = (onProfile[row.profileId] ?? 0) + 1
+    }
+    return {
+      groupMembers: groupLive.length + pending.filter(row => row.groupId === groupId).length,
+      teamSpawned: roster.reduce((count, entry) =>
+        count + entry.sessions.filter(session => session.spawned).length, 0) + pending.length,
+      teamCap: this.cachedTeamCap(teamId),
+      worktreeOccupants: writers.spawnedIds,
+      worktreePending: pending.filter(row => row.worktree === worktree && row.messageId !== excludeMessageId).length,
+      onProfile,
+      backoffRetryAt: null,
+    }
+  }
+
   /** Live counts behind every cap, pending reservations included. */
   private counts(teamId: string, groupId: string, worktree: string) {
-    const live = [...this.options.records()].filter(record =>
-      record.archivedAt == null && this.options.teamOf(record.sessionId)?.teamId === teamId)
-    const pending = this.db.prepare('SELECT group_id, worktree, profile_id FROM team_spawns WHERE team_id = ?')
-      .all(teamId) as Array<{ group_id: string; worktree: string; profile_id: string }>
-    const spawned = live.filter(record => record.spawned)
-    const groupLive = live.filter(record => record.groupId === groupId)
+    const roster = this.roster(teamId)
+    const writers = worktreeWriters(roster.find(entry => entry.worktree === worktree))
+    const groupLive = roster.flatMap(entry => entry.sessions).filter(session => session.group === groupId)
+    const pendingOfGroup = roster.reduce((count, entry) => count + entry.pendingSpawns.filter(pending => pending.group === groupId).length, 0)
     return {
-      pending,
+      roster,
       groupLive,
-      groupMembers: groupLive.length + pending.filter(row => row.group_id === groupId).length,
-      teamSpawned: spawned.length + pending.length,
-      worktreeWriters: spawned.filter(record => worktreeRootOf(record.projectPath) === worktree).length +
-        pending.filter(row => row.worktree === worktree).length,
+      groupMembers: groupLive.length + pendingOfGroup,
+      teamSpawned: roster.reduce((count, entry) =>
+        count + entry.sessions.filter(session => session.spawned).length + entry.pendingSpawns.length, 0),
+      worktreeWriters: writers.spawnedIds.length + writers.pending,
     }
+  }
+
+  /**
+   * The team's occupancy read model (team-waiting-reasons D4): live sessions
+   * per resolved worktree root plus this module's pending reservations. The
+   * worktree-writer count and the `worktree-occupied` reason both read it,
+   * so the occupant a reason names is the fact that blocked the spawn.
+   */
+  roster(teamId: string): TeamWorktreeOccupancy[] {
+    return teamRoster(teamId, {
+      records: [...this.options.records()],
+      teamOf: id => this.options.teamOf(id),
+      pendingSpawns: this.pendingFor(teamId),
+    })
+  }
+
+  /** Pending `team_spawns` reservations of a team. */
+  pendingFor(teamId: string): PendingSpawnRow[] {
+    return this.db.prepare(`SELECT team_id AS teamId, group_id AS groupId, worktree, profile_id AS profileId,
+      message_id AS messageId, created_at AS createdAt FROM team_spawns WHERE team_id = ?`)
+      .all(teamId) as PendingSpawnRow[]
   }
 }

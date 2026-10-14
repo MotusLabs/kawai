@@ -32,6 +32,12 @@ export class MailboxConnections {
     connection.send({
       type: 'team-mailbox-snapshot', sessionId, teamId, messages: this.manager.mailbox.store.listForTeam(teamId),
       routing: this.manager.routingState(teamId),
+      // Worktree occupancy read model (team-waiting-reasons D3/D4): additive,
+      // carried on every snapshot, empty for a team with no live sessions.
+      worktrees: this.manager.teamRoster(teamId),
+      // Per-message waiting reasons (D3): additive; absent until the first
+      // dispatch pass after a restart rebuilds them (in-memory only).
+      waiting: this.manager.waitingFor(teamId),
     })
   }
 
