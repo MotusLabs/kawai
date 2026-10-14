@@ -54,8 +54,17 @@ test('an agent proposes and the human approves: exact revision, one impact item,
       })()
       const fixture = fixtureQueryFactory({ ...params, prompt })
       const stream = (async function* () {
-        yield { type: 'system', subtype: 'init', session_id: sdkId } as SDKMessage
-        yield* fixture
+        // A real CLI emits `init` when a turn starts, never at spawn (and
+        // agent-started turns open on it — background tasks D5), so the
+        // frame must lead the first streamed turn, not the stream itself.
+        let turnStarted = false
+        for await (const message of fixture) {
+          if (!turnStarted) {
+            turnStarted = true
+            yield { type: 'system', subtype: 'init', session_id: sdkId } as SDKMessage
+          }
+          yield message
+        }
       })()
       return Object.assign(stream, { interrupt: () => fixture.interrupt(), close: () => fixture.close() }) as Query
     },
