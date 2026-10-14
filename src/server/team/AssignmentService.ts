@@ -149,7 +149,7 @@ export class AssignmentService {
   private replace(outstanding: TeamTaskAssignment, handling: ReassignHandling, task: TeamTask, target: AssignmentTarget, team: TeamIdentity, newId: string): void {
     const previous = { kind: outstanding.targetKind as 'group' | 'session', id: outstanding.targetId }
     if (handling === 'stop') {
-      if (outstanding.messageId) this.mail.cancel(outstanding.messageId)
+      if (outstanding.messageId) this.mail.cancel(outstanding.messageId, { kind: 'human' })
     } else if (outstanding.claimedBy && this.options.getSession(outstanding.claimedBy)) {
       this.mail.enqueue({
         teamId: task.teamId, toKind: 'session', toId: outstanding.claimedBy,

@@ -49,11 +49,48 @@ test('mailbox lists all categories and sends cancel, retry, discard; offline act
   const renderer = TestRenderer.create(<TeamMailboxPanel {...props} />)
   expect(renderer.root.findAllByType('section').map(section => section.props['aria-label'])).toEqual(['Routing rules', 'Routing decisions', 'Queued', 'Starting agent', 'Receiving', 'Parked', 'Scheduled', 'Dead letters', 'Held for review'])
   // Close mailbox and Reload routing rules come first.
-  const actions = renderer.root.findAllByType('button').slice(2)
+  const actions = renderer.root.findAllByType('button').slice(2).filter(button => !String(button.props['aria-label']).startsWith('Copy message id'))
   act(() => { for (const button of actions) button.props.onClick() })
   expect(sent.map(message => message.type)).toEqual(['team-mailbox-cancel', 'team-mailbox-cancel', 'team-mailbox-retry', 'team-mailbox-discard', 'team-mailbox-retry', 'team-mailbox-discard'])
   act(() => renderer.update(<TeamMailboxPanel {...props} connected={false} />))
-  expect(renderer.root.findAllByType('button').slice(1).every(button => button.props.disabled)).toBe(true)
+  expect(renderer.root.findAllByType('button').slice(1).filter(button => !String(button.props['aria-label']).startsWith('Copy message id')).every(button => button.props.disabled)).toBe(true)
+  renderer.unmount()
+})
+test('parked rows offer Cancel beside Hand off and send team-mailbox-cancel', () => {
+  const sent: ClientMessage[] = []
+  const parked = { ...mail('parked-1', 'parked'), claimedBy: 'dev', parkedUntil: new Date(Date.now() + 3_600_000).toISOString(), resumeMessageId: 'resume-1' }
+  const view = { open: true, loading: false, messages: [parked, mail('queued-1', 'queued')] }
+  const renderer = TestRenderer.create(<TeamMailboxPanel teamPath="dev" view={view} connected={true} sendMessage={(message: ClientMessage) => sent.push(message)} onClose={() => {}} />)
+  const row = renderer.root.findByProps({ 'data-message-id': 'parked-1' })
+  const labels = row.findAllByType('button').map(button => textOf(button))
+  expect(labels).toContain('Cancel')
+  expect(labels).toContain('Hand off')
+  act(() => { row.findAllByType('button').find(button => textOf(button) === 'Cancel')!.props.onClick() })
+  expect(sent).toEqual([{ type: 'team-mailbox-cancel', teamPath: 'dev', messageId: 'parked-1' }])
+  // A disconnected panel disables it like every other control.
+  act(() => renderer.update(<TeamMailboxPanel teamPath="dev" view={view} connected={false} sendMessage={() => {}} onClose={() => {}} />))
+  expect(renderer.root.findByProps({ 'data-message-id': 'parked-1' }).findAllByType('button').find(button => textOf(button) === 'Cancel')!.props.disabled).toBe(true)
+  renderer.unmount()
+})
+test('every row shows its short id with the full id in the title, and copy yields the full id', () => {
+  const id = '0e849a2e-5025-4a8c-9f0b-123456789abc'
+  const view = { open: true, loading: false, messages: [mail(id, 'queued'), mail('abcdef12-0000-0000-0000-000000000000', 'dead')] }
+  const renderer = TestRenderer.create(<TeamMailboxPanel teamPath="dev" view={view} connected={true} sendMessage={() => {}} onClose={() => {}} />)
+  const shown = renderer.root.findAllByProps({ 'data-testid': 'message-id' }).filter(node => typeof node.type === 'string')
+  expect(shown.map(node => textOf(node))).toEqual(['0e849a2e', 'abcdef12'])
+  expect(shown[0]!.props.title).toBe(id)
+  const copied: string[] = []
+  const realDocument = (globalThis as { document?: unknown }).document
+  ;(globalThis as { document?: unknown }).document = {
+    createElement: () => ({ value: '', style: {}, focus() {}, select() {} }),
+    body: { appendChild: (node: { value: string }) => copied.push(node.value), removeChild() {} },
+    execCommand: () => true,
+  }
+  try {
+    const copy = renderer.root.findByProps({ 'data-message-id': id }).findByProps({ 'aria-label': 'Copy message id 0e849a2e' })
+    act(() => { copy.props.onClick() })
+  } finally { (globalThis as { document?: unknown }).document = realDocument }
+  expect(copied).toEqual([id])
   renderer.unmount()
 })
 test('snapshot replaces stale mailbox rows and ignores closed views', () => {
@@ -123,7 +160,7 @@ test('a spawning row shows Starting agent with its reservation facts, then Recei
   expect(section.findByProps({ 'data-testid': 'waiting-reason' }).findByProps({ 'data-testid': 'waiting-others' })).toBeDefined()
   expect(allText(renderer.toJSON())).toContain('1/1')
   // A spawning row carries no controls (Q2).
-  expect(section.findAllByType('button')).toHaveLength(0)
+  expect(section.findAllByType('button').filter(button => !String(button.props['aria-label']).startsWith('Copy message id'))).toHaveLength(0)
   // The spawn landed: the row moves to Receiving.
   act(() => renderer.update(<TeamMailboxPanel {...props} view={{ open: true, loading: false, messages: [mail('starting', 'claimed')], waiting: {} }} />))
   expect(renderer.root.findByProps({ 'aria-label': 'Receiving' }).findByProps({ 'data-message-id': 'starting' })).toBeDefined()

@@ -165,7 +165,7 @@ test('the view composes a new message from the list and replies to a thread row'
   act(() => {
     useTeamMessageStore.getState().applyThread({
       type: 'team-thread', teamPath: 'dev', teamId: 'team', threadId: 'th',
-      entries: [{ message: parent, events: [{ messageId: 'q1', teamId: 'team', seq: 1, createdAt: '2026-10-13T10:00:00.000Z', kind: 'sent', actor: 'system', prevState: null, prevClaimedBy: null, prevRecipient: null, prevReason: null, reason: null }] }],
+      entries: [{ message: parent, events: [{ messageId: 'q1', teamId: 'team', seq: 1, createdAt: '2026-10-13T10:00:00.000Z', kind: 'sent', actor: 'system', actorSession: null, prevState: null, prevClaimedBy: null, prevRecipient: null, prevReason: null, reason: null }] }],
       directory: [],
     })
   })

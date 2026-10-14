@@ -33,6 +33,13 @@ describe('team group routes', () => {
     })
   })
 
+  test('reports an invalid canManageMailbox as a warning and keeps the group', async () => {
+    fs.writeFileSync(path.join(project, '.kawai', 'groups', 'lead.md'), '---\ncanManageMailbox: maybe\n---\nLead.')
+    const body = await get(`?projectPath=${encodeURIComponent(project)}`) as { groups: Array<{ id: string }>; warnings: string[] }
+    expect(body.groups.map(group => group.id)).toEqual(['lead'])
+    expect(body.warnings.join()).toContain('canManageMailbox must be true or false, got "maybe"')
+  })
+
   test('reports fallback warnings such as unknown profiles', async () => {
     fs.writeFileSync(path.join(project, '.kawai', 'groups', 'devs.md'), '---\nprofiles: [glm, nope]\n---\nBuild.')
     const body = await get(`?projectPath=${encodeURIComponent(project)}`) as { warnings: string[] }

@@ -317,7 +317,7 @@ describe('failure, restart, and removal', () => {
     const m = mail(task(featX).id)
     // The message left the queue before the reserve ran (e.g. cancelled
     // during the awaited group resolution).
-    store.cancel(m.id)
+    store.cancel(m.id, { kind: 'human' })
     let thrown: unknown = null
     try {
       await staffing.spawnFor(m, featX, group, 'glm')
@@ -339,7 +339,7 @@ describe('failure, restart, and removal', () => {
       // message is queued when the pass enumerates it, gone when the
       // reserve runs.
       router: { route: async () => {
-        store.cancel(m.id)
+        store.cancel(m.id, { kind: 'human' })
         const assignment = await staffing.spawnFor(store.get(m.id)!, featX, group, 'glm')
         return assignment ? { kind: 'spawned', assignment } : { kind: 'none' }
       } },

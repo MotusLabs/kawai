@@ -13,6 +13,7 @@ profiles: { glm: 2, mimo: 1, claude: 1 }   # or a list: [claude, glm]
 strategy: first-available                  # or profile-order
 onLimit: { parkIfResetWithin: 3h, otherwise: forward, forwardTo: architects }
 effort: medium                             # low, medium, high, xhigh, max
+canManageMailbox: true                     # default false
 ---
 ```
 
@@ -39,6 +40,15 @@ effort: medium                             # low, medium, high, xhigh, max
   environment overrides it and a settings maximum clamps it. `/effort` in a
   chat still changes that running agent. An invalid value is reported and
   ignored. Gateway models (GLM, MiMo, ...) may ignore effort.
+- `canManageMailbox` (`true`/`false`, default `false`) lets a group's members
+  cancel any team message that is still undelivered (queued, scheduled, or
+  awaiting a request) and parked work (its waiting resume mail is cancelled
+  with it), and discard dead or uncertain mail, through the `cancel_message` and
+  `discard_message` tools, each with a reason. Every agent can list the mail it
+  sent, received, or holds with `list_mailbox` (managers see the whole team) and
+  withdraw its own undelivered mail. Retry and hand-off stay with the human. It
+  is read from the group file at each call, so an edit applies to running
+  members. An invalid value is reported as a warning and treated as `false`.
 
 ## Routing rules
 
