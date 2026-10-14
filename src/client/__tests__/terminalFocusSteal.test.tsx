@@ -133,6 +133,29 @@ describe('terminal focus under an open dialog', () => {
     expect(calls).toEqual(['enable', 'terminal-focus'])
     act(() => renderer.unmount())
   })
+
+  test('reopening Settings within 300 ms cancels the pending terminal focus', async () => {
+    const calls = terminalDom()
+    const settings = (settingsOpen: boolean) => tree({ projectDir: '/a', settingsOpen, newSessionOpen: false })
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => {
+      renderer = TestRenderer.create(settings(true))
+    })
+    await act(async () => {
+      await Promise.resolve()
+    })
+    act(() => renderer.update(settings(false)))
+    // Reopen before the close-side 300 ms timer fires.
+    act(() => renderer.update(settings(true)))
+    calls.length = 0
+    await act(async () => {
+      await pastCloseWindow()
+    })
+    // The stale timer was cancelled: it neither re-enabled nor focused the
+    // terminal under the reopened dialog.
+    expect(calls).toEqual([])
+    act(() => renderer.unmount())
+  })
 })
 
 describe('Display Name field', () => {

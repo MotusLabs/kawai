@@ -162,7 +162,6 @@ export default function SettingsModal({
   const prevOpenRef = useRef(false)
 
   useEffect(() => {
-
     if (isOpen) {
       setDraftDir(defaultProjectDir)
       setDraftPresets(commandPresets)
