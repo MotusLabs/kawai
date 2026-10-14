@@ -147,6 +147,7 @@ export class TaskConnections {
           const outcome = await tasks.publish(caller, message.taskId, {
             direction: message.direction, acceptance: message.acceptance ?? null, rationale: message.rationale,
             baseRevision: message.baseRevision, requestKey: message.requestKey, notify: message.notify,
+            ...(message.fromDraft ? { fromDraft: true } : {}),
           })
           result({ task: outcome.task, revision: outcome.revision.revision, replay: outcome.replay })
           return

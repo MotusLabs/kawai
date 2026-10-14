@@ -67,7 +67,7 @@ test('the same key with a different payload is refused naming the field, and wri
   await publish(task.id)
   await expect(publish(task.id, { direction: 'something else' })).rejects.toThrow('Request key already used with a different direction')
   await expect(publish(task.id, { rationale: 'other reason' })).rejects.toThrow('different rationale')
-  await expect(publish(task.id, { notify: true })).rejects.toThrow('different notify')
+  await expect(publish(task.id, { acceptance: 'other' })).rejects.toThrow('different acceptance')
   expect(revisionRows(task.id)).toBe(2)
   expect(store.get(task.id)?.revision).toBe(2)
   expect(changes).toEqual([2])
@@ -134,15 +134,28 @@ test('the unique key rejects a second same-key insert, which resolves as the rep
   expect(changes).toEqual([])
 })
 
-test('a human publication keeps its rationale and author, and drops the draft it came from', async () => {
+test('a human publication keeps its rationale and author, and drops the draft only when it came from it', async () => {
   const task = create()
   await service.saveDraft(human, task.id, { direction: 'v2', rationale: 'Scope changed' })
-  await publish(task.id)
+  // Another publish path (not from the draft) leaves the draft alone.
+  await publish(task.id, { direction: 'v2 elsewhere', requestKey: 'publish-elsewhere' })
+  expect(store.drafts.get(task.id)).toMatchObject({ direction: 'v2' })
+  await service.rebaseDraft(human, task.id)
+  await publish(task.id, { baseRevision: 2, requestKey: 'publish-from-draft', fromDraft: true })
   expect(store.revisions(task.id)).toMatchObject([
     { revision: 1, direction: 'v1', rationale: null },
-    { revision: 2, direction: 'v2', rationale: 'Scope changed', author: { kind: 'human', sessionId: null }, notify: false },
+    { revision: 2, direction: 'v2 elsewhere' },
+    { revision: 3, direction: 'v2', rationale: 'Scope changed', author: { kind: 'human', sessionId: null }, notify: false },
   ])
   expect(store.drafts.get(task.id)).toBeNull()
+})
+
+test('without a notice store, publish and notify is refused before anything is written, as notify() is', async () => {
+  const task = create()
+  await expect(publish(task.id, { notify: true })).rejects.toThrow('Revision notices are not available')
+  await expect(service.notify(human, task.id, 1, 'notify-1')).rejects.toThrow('Revision notices are not available')
+  expect(revisionRows(task.id)).toBe(1)
+  expect(changes).toEqual([])
 })
 
 test('publication works with no revision-published subscriber; a subscriber hears each new revision once', async () => {

@@ -78,7 +78,7 @@ export default function TaskDirectionEditor({ task, draft, connected, disabled, 
   const publish = (notify: boolean) => {
     const fields = { baseRevision: base, direction: direction.trim(), acceptance: acceptance.trim(), rationale: rationale.trim(), notify }
     sent({ kind: 'publish', direction: fields.direction, acceptance: fields.acceptance, rationale: fields.rationale })
-    act('publish', { type: 'team-task-publish', ...fields }, { slot: `publish:${task.id}`, payload: JSON.stringify(fields) })
+    act('publish', { type: 'team-task-publish', ...fields, fromDraft: !!draft }, { slot: `publish:${task.id}`, payload: JSON.stringify(fields) })
   }
 
   return <div className="mt-2 flex flex-col gap-2" data-testid="task-direction-editor">

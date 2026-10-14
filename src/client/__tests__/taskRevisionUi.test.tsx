@@ -59,6 +59,9 @@ test('a saved draft never moves the shown revision: the direction is the publish
   expect(field('Draft direction').props.value).toBe('CSV and JSON')
   expect(textOf(testId('task-draft-status'))).toContain('based on revision 2 · not published')
   expect(textOf(testId('task-revisions'))).toContain('Rationale: Scope changed')
+  // Publishing from the saved draft says so; the server discards that draft with it.
+  act(() => button('Publish revision 3').props.onClick())
+  expect(publishes()).toMatchObject([{ fromDraft: true, direction: 'CSV and JSON', rationale: 'Asked' }])
 })
 
 test('a double click publishes once: the second send is disabled and both would carry one key', () => {

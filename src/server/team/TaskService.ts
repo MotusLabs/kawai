@@ -45,6 +45,8 @@ export interface TaskAmendInput {
 export interface TaskPublishInput extends TaskAmendInput {
   baseRevision?: number
   requestKey?: string
+  /** The human published their saved draft: it is discarded with the publication (D2). */
+  fromDraft?: boolean
 }
 
 /**
@@ -153,6 +155,8 @@ export class TaskService {
     }
     if (input.direction === undefined && input.acceptance === undefined) throw new Error('Nothing to amend: give a direction or acceptance criteria')
     if (input.direction !== undefined && !input.direction.trim()) throw new Error('A task needs a direction')
+    // Refused before anything is written, as notify() refuses: never a notify revision without its notices.
+    if (input.notify && !this.store.notices) throw new Error('Revision notices are not available')
     const sender = this.noticeSender(team, actor)
     const requestKey = input.requestKey?.trim() || undefined
     let sent: SentNotice[] = []
@@ -163,7 +167,8 @@ export class TaskService {
       ...(input.baseRevision !== undefined ? { baseRevision: input.baseRevision } : {}),
       ...(input.requestKey?.trim() ? { requestKey: input.requestKey.trim() } : {}),
       notify: input.notify === true,
-      discardDraft: actor.kind === 'human',
+      // Only the publication that came from the draft discards it (D2).
+      discardDraft: actor.kind === 'human' && input.fromDraft === true,
       // Publish and notify (D3): the notices commit or roll back with the revision.
       ...(input.notify && this.store.notices ? {
         within: (revision, current) => {

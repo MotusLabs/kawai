@@ -102,6 +102,15 @@ test('an unclaimed group assignment gets no notice; its instruction carries the 
   expect(mail.get(instructionId)?.taskRevision).toBe(2)
 })
 
+test('a replay of a notifying publication under its key with notify off is refused, and sends nothing more', async () => {
+  const { task, instructionId } = assignedTask()
+  deliver(instructionId, 'dev', 1)
+  await publish(task.id)
+  await expect(publish(task.id, { notify: false })).rejects.toThrow('different notify')
+  expect(noticeRows(task.id)).toHaveLength(1)
+  expect(store.revisions(task.id)).toHaveLength(2)
+})
+
 test('plain publish sends nothing and its recipients show Not notified', async () => {
   const { task, instructionId } = assignedTask()
   deliver(instructionId, 'dev', 1)

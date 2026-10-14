@@ -187,7 +187,7 @@ test('human create with parent and change, draft and publish, note, and status a
   await send({ type: 'team-task-draft', teamPath: '/repo', requestId: 'd1', taskId: id, action: 'save', direction: 'v2', rationale: 'Scope' })
   expect(last('team-task-result')).toMatchObject({ requestId: 'd1', task: { revision: 1 } })
   expect(last('team-task-detail')!.detail).toMatchObject({ task: { revision: 1 }, draft: { baseRevision: 1, direction: 'v2' } })
-  await send({ type: 'team-task-publish', teamPath: '/repo', requestId: 'a1', taskId: id, baseRevision: 1, requestKey: 'publish-a1', direction: 'v2', rationale: 'Scope', notify: false })
+  await send({ type: 'team-task-publish', teamPath: '/repo', requestId: 'a1', taskId: id, baseRevision: 1, requestKey: 'publish-a1', direction: 'v2', rationale: 'Scope', notify: false, fromDraft: true })
   expect(last('team-task-result')).toMatchObject({ requestId: 'a1', task: { revision: 2 }, revision: 2, replay: false })
   expect(last('team-task-detail')!.detail.revisions.map(revision => revision.direction)).toEqual(['v1', 'v2'])
   expect(last('team-task-detail')!.detail.draft).toBeNull()

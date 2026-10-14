@@ -109,7 +109,7 @@ test('E09: draft, publish and notify a busy developer, delayed acknowledgement, 
     expect(store.detail(task.id)).toMatchObject({ publications: [], acknowledgements: [] })
 
     // Publish and notify, then the same command again (a reconnect resend): one revision, one notice.
-    const publishInput = { direction: 'CSV and JSON export', rationale: 'Customer asked for JSON', baseRevision: 1, requestKey: 'e09-publish', notify: true }
+    const publishInput = { direction: 'CSV and JSON export', rationale: 'Customer asked for JSON', baseRevision: 1, requestKey: 'e09-publish', notify: true, fromDraft: true }
     expect((await manager.tasks.publish(human, task.id, publishInput)).replay).toBe(false)
     expect((await manager.tasks.publish(human, task.id, publishInput)).replay).toBe(true)
     expect(store.revisions(task.id)).toHaveLength(2)

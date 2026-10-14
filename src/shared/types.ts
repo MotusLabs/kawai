@@ -679,6 +679,8 @@ export type ClientMessage =
       acceptance?: string
       rationale: string
       notify: boolean
+      /** Published from the human's saved draft, which is discarded with it. */
+      fromDraft?: boolean
     }
   | { type: 'team-task-notify'; teamPath: string; requestId: string; taskId: string; revision: number; requestKey: string }
   | { type: 'team-task-note'; teamPath: string; requestId: string; taskId: string; text: string }

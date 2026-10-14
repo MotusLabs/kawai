@@ -159,7 +159,7 @@ test('detail shows direction, retained revisions, journal, subtasks, messages; c
     { type: 'team-task-status', teamPath: 'dev', taskId: 't1', status: 'open' },
     { type: 'team-task-status', teamPath: 'dev', taskId: 't1', status: 'cancelled' },
     { type: 'team-task-draft', teamPath: 'dev', taskId: 't1', action: 'save', baseRevision: 2, direction: 'Revised plan', acceptance: 'Ships', rationale: '' },
-    { type: 'team-task-publish', teamPath: 'dev', taskId: 't1', baseRevision: 2, direction: 'Revised plan', acceptance: 'Ships', rationale: 'Customer asked', notify: false },
+    { type: 'team-task-publish', teamPath: 'dev', taskId: 't1', baseRevision: 2, direction: 'Revised plan', acceptance: 'Ships', rationale: 'Customer asked', notify: false, fromDraft: false },
     { type: 'team-task-note', teamPath: 'dev', taskId: 't1', text: 'Human note' },
   ].map(message => ({ ...message, requestId: undefined, requestKey: undefined })))
   expect(typeof (actions[3] as { requestKey?: string }).requestKey).toBe('string')
