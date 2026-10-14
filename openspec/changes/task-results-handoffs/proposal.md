@@ -26,7 +26,9 @@ Non-goals: Plans, Task Executions, and delegated-closing grants (Wave C `durable
 
 ### Modified Capabilities
 
-None. Acceptance closes through the existing `team-tasks` closing rights instead of changing them; handoff instructions are ordinary task mail (`agent-mailbox`, `team-tasks` unchanged); staffing caps and worktree routing are untouched — `team-member-release` already carries the capacity-freeing delta to `team-worktree-staffing`, and the occupancy wait a queued handoff shows belongs to `team-waiting-reasons`. One deliberate extension below requirement text: `task-assignment` design D4's dispatch payload identity grows the handoff fields (kind, result reference, expected response, when set) so replayed keys cannot return the wrong handoff; its spec requirements are unchanged, and this change — implementing after it merges — extends both comparison sites named in Impact.
+- `task-assignment` — a design-level extension only: design D4's dispatch payload identity grows the handoff fields (kind, result reference, expected response, when set), so a replayed key carrying a different result is refused instead of returning the earlier handoff. No requirement text changes; this change — implementing after `task-assignment` merges — extends both comparison sites named in Impact.
+
+No other modifications, at any level: acceptance closes through the existing `team-tasks` closing rights instead of changing them; handoff instructions are ordinary task mail (`agent-mailbox`, `team-tasks` unchanged); staffing caps and worktree routing are untouched — `team-member-release` already carries the capacity-freeing delta to `team-worktree-staffing`, and the occupancy wait a queued handoff shows belongs to `team-waiting-reasons`.
 
 ## Impact
 
