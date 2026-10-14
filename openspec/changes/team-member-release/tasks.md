@@ -25,6 +25,8 @@
 - [ ] 4.4 Spawns in flight (D1): in the close transaction dead-letter the task's `spawning` mail as `task-closed`; when `ChatSessionManager` creates a spawned session whose task is already `done`/`cancelled`, write its pending-release row (group opt-out honored).
 - [ ] 4.5 Tests in a new `memberRelease.test.ts`: only spawned members of the closed task are marked; human-created and other-task members are not; opted-out groups are not; reopen and restore cancel; rows survive a store reopen (restart); a spawn completing after its task closed gets no first turn, is marked, and is released when idle, freeing its worktree slot.
 
+- [ ] 4.6 Closed-task mail (D8): in the close transaction dead-letter the task's `queued`/`awaiting-request`/`spawning` group mail to worktree-scoped groups as `task-closed`; in the dispatcher, dead-letter such mail for a `done`/`cancelled` task before claim or spawn. Tests: a queued instruction is dead-lettered and nothing spawns; direct mail and mail to an unscoped group are still delivered; reopening does not revive the dead letter.
+
 ## 5. Release execution
 
 - [ ] 5.1 Implement readiness (D3), the one definition every release path uses, from the dispatcher's recipient view, worker roster, and mailbox facts: idle, no pending request, no live background worker (`getWorkers`), no claims, no parked mail, no due queued direct mail; unavailable members count as ready. Export it for `release_member` and `task-results-handoffs`. Add a `MailboxStore` query for due queued direct mail to a session if none exists. Notify the dispatcher from the `onWorkers` sink when a pending member's last live worker ends.

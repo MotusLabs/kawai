@@ -28,6 +28,17 @@ When a task closes while a member is being spawned for it, the system SHALL with
 - **WHEN** group mail for a task has reserved a spawn in worktree `feat-x` and the lead marks the task `done` before the new dev starts
 - **THEN** the dev starts without receiving the task's message, is archived once its agent is idle, and `feat-x` no longer holds a live spawned member
 
+### Requirement: A closed task's undelivered worktree mail is withdrawn
+When a task is `done` or `cancelled`, its undelivered group mail (queued, awaiting a request, or reserved for a spawn) to a worktree-scoped group SHALL be dead-lettered with reason `task-closed`, at the close and whenever such mail later waits, and SHALL NOT be delivered or cause a spawn. Direct mail and mail to groups that opt out of worktree scoping SHALL be delivered as usual. A release SHALL NOT requeue mail for delivery.
+
+#### Scenario: Queued instruction for a done task
+- **WHEN** an instruction for a task waits in the `devs` queue and the human marks the task `done`
+- **THEN** the instruction is dead-lettered `task-closed` and no dev is spawned for it
+
+#### Scenario: Report to the lead still arrives
+- **WHEN** the `lead` group sets `worktreeScoped: false` and a dev sends it a report for its task just after the task is marked `done`
+- **THEN** the lead receives the report
+
 ### Requirement: Release waits until the member is ready
 A member SHALL be ready for release only when it is idle in the sense mail delivery uses, has no pending approval or question, has no live background worker, holds no claimed or parked mail, and has no due direct mail queued for it. Every release path SHALL use this one definition. A pending member that is not ready SHALL be released once it becomes ready, without further action.
 
@@ -92,6 +103,10 @@ A group file SHALL accept `canReleaseMembers: true|false` (default `false`). Mem
 #### Scenario: Lead releases a finished dev
 - **WHEN** a member of the `lead` group, which sets `canReleaseMembers: true`, releases an idle spawned dev with reason "merged"
 - **THEN** the dev is archived and its task journal records the release by that lead with reason "merged"
+
+#### Scenario: Settled member of an open task
+- **WHEN** the lead releases an idle spawned dev whose task is still `active` and whose instruction was delivered
+- **THEN** the dev is archived, the task stays `active`, and its delivered instruction is left as it is
 
 #### Scenario: Group without the right
 - **WHEN** a `devs` member calls `release_member`
