@@ -33,7 +33,7 @@ When a worktree task message has no idle member in its worktree and spawning is 
 - **THEN** the spawned session uses the `glm` profile and the auto approval policy
 
 ### Requirement: Spawning is bounded
-The system SHALL NOT spawn when the group already has `max` live members (default 1 unless the group's profile settings derive another), when the team already has its maximum live spawned sessions, or when the worktree — identified by the same worktree-root resolution as delivery — already has a live spawned member of any group that is not archived. A message that cannot spawn SHALL wait and be re-evaluated when a member becomes idle or a slot frees.
+The system SHALL NOT spawn when the group has `max` live members (default 1, or its profile caps' sum), the team has its maximum live spawned sessions, or the worktree (resolved as for delivery) already has a live spawned member of any group. A message that cannot spawn SHALL wait and be re-evaluated when a member idles or a slot frees. A failed spawn SHALL back off per message and be re-evaluated on its own when the backoff ends; waiting reasons SHALL report that end as the retry time.
 
 #### Scenario: Group cap
 - **WHEN** `devs` has `max: 2` and two live members, both busy in other worktrees
@@ -42,6 +42,10 @@ The system SHALL NOT spawn when the group already has `max` live members (defaul
 #### Scenario: One spawned writer per worktree
 - **WHEN** a spawned `devs` member already runs in `feat-x` and is busy
 - **THEN** a second task message for `feat-x` waits for it instead of spawning another
+
+#### Scenario: A failed spawn retries on its own
+- **WHEN** a spawn fails, its message is queued again under a 30-second backoff, and nothing else changes in the team
+- **THEN** the spawn is retried when the backoff ends, and the waiting reason's retry time is the moment the retry runs
 
 ### Requirement: Team spawn caps are user-level settings
 The system SHALL read team spawn caps from `~/.kawai/teams.json`: a top-level `maxSpawnedSessions` (positive integer, default 5) applying to every team, and an optional `teams` map from repository path to `{ "maxSpawnedSessions": n }` overriding it for that repository. Project files SHALL NOT set team caps. An invalid file SHALL be reported and the defaults used.
