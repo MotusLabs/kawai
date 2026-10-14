@@ -73,18 +73,18 @@ Implement after Wave B2 (`task-revision-publication`, `task-results-handoffs`) h
 
 ## 5. Plan-change link on tasks
 
-- [ ] 5.1 Extend `TaskService.create`, `task_create` (`plan_id`, `plan_change`), and `team-task-targets` (open plans with approved revisions and their changes) per D9. Add `planId`/`planChange`/`planTitle` to the task summary and detail types. Verify with tests:
+- [x] 5.1 Extend `TaskService.create`, `task_create` (`plan_id`, `plan_change`), and `team-task-targets` (open plans with approved revisions and their changes) per D9. Add `planId`/`planChange`/`planTitle` to the task summary and detail types. Verify with tests:
   - a valid link is recorded;
   - giving only one of the pair is refused;
   - a plan without an approved revision is refused;
   - an unknown change is refused;
   - another team's plan reads as not found;
   - amending a task leaves its link unchanged.
-- [ ] 5.2 Add the plan reference to `taskContext.ts` per D9: metadata `plan: { id, title, revision, change }` with the revision read at delivery, plus the header line. Verify with envelope tests:
+- [x] 5.2 Add the plan reference to `taskContext.ts` per D9: metadata `plan: { id, title, revision, change }` with the revision read at delivery, plus the header line. Verify with envelope tests:
   - a linked task's mail shows the plan line;
   - approving a new revision between send and delivery shows the new revision;
   - an unlinked task's envelope is byte-identical to the old shape.
-- [ ] 5.3 Add the AGENTS.md task-link bullet and extend the task-mail bullet with the plan reference. Verify by reading it against D9.
+- [x] 5.3 Add the AGENTS.md task-link bullet and extend the task-mail bullet with the plan reference. Verify by reading it against D9.
 
 ## 6. Agent tools and prompt
 

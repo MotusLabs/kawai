@@ -657,6 +657,9 @@ export type ClientMessage =
       parentId?: string
       worktree?: string
       openspecChange?: string
+      /** The plan-change link (durable-plans D9): both or neither. */
+      planId?: string
+      planChange?: string
       /** Stable per intent (task-assignment D4): a replay returns the prior task. */
       requestKey?: string
     }

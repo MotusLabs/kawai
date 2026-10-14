@@ -13,6 +13,9 @@ import { AssignmentService } from '../team/AssignmentService'
 import { AssignmentStore } from '../team/assignmentStore'
 import { MailboxStore } from '../team/mailboxStore'
 import { TaskStore } from '../team/taskStore'
+import { PlanStore } from '../plans/planStore'
+import { normalizePlanContent } from '../../shared/plans'
+import { planInput } from '../../shared/__tests__/planFixtures'
 import { TaskService, type TaskCaller } from '../team/TaskService'
 import { WorktreeStaffing } from '../team/staffing'
 import { TeamCaps } from '../team/teamCaps'
@@ -102,7 +105,7 @@ beforeEach(() => {
     getSession: id => records.get(id),
     records: () => records.values(),
     teamOf,
-    staffing, caps, worktrees, homeDir: home,
+    staffing, caps, worktrees, homeDir: home, plans: new PlanStore(db.db),
     cooldownUntil: profileId => cooldowns.get(profileId) ?? null,
   })
 })
@@ -446,5 +449,19 @@ describe('targets', () => {
     const main = await dispatcher.targets(human(), repo)
     expect(main.changes.map(change => change.name)).toEqual(['add-export'])
     await expect(dispatcher.targets(human(), path.join(root, 'nope'))).rejects.toThrow('is not a worktree')
+  })
+
+  test('plans: only open plans with an approved revision, with that revision\'s change names', async () => {
+    const plans = new PlanStore(db.db)
+    const add = (title: string, approve: boolean) => {
+      const id = plans.insertPlan({ teamId: team.teamId, title, creator: { kind: 'human', sessionId: null } })
+      plans.insertRevision(id, { content: normalizePlanContent(planInput()), contentHash: 'h', pin: null, author: { kind: 'human', sessionId: null } })
+      if (approve) { plans.setRevisionStatus(id, 1, 'approved'); plans.setCurrentApproved(id, 1) }
+      return id
+    }
+    const approved = add('Approved', true)
+    add('In review', false)
+    plans.setLifecycle(add('Closed', true), 'cancelled')
+    expect((await dispatcher.targets(human())).plans).toEqual([{ id: approved, title: 'Approved', revision: 1, changes: ['api', 'ui'] }])
   })
 })

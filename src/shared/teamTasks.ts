@@ -296,6 +296,11 @@ export interface ChatPeerTaskContext {
   worktree: string | null
   /** The most recent journal entries (at most five, each truncated), oldest first. */
   journal: Array<{ author: string; text: string; createdAt: string }>
+  /**
+   * The plan change the task serves (durable-plans D9), with the plan's
+   * approved revision at delivery; absent for an unlinked task.
+   */
+  plan?: { id: string; title: string; revision: number | null; change: string }
 }
 
 /** An assignment's addressee: a group (its role) or one named session. */
@@ -330,4 +335,6 @@ export interface TaskDispatchPreview {
 export interface TaskTargetOptions {
   worktrees: Array<{ root: string; branch?: string }>
   changes: Array<{ name: string; locations: string[] }>
+  /** Open plans with an approved revision and that revision's change names (durable-plans D9). */
+  plans?: Array<{ id: string; title: string; revision: number; changes: string[] }>
 }

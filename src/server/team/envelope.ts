@@ -119,5 +119,13 @@ function isTaskContext(value: unknown): value is ChatPeerTaskContext {
     TASK_STATUSES.includes(task.status as never) && typeof task.revision === 'number' &&
     ['acceptance', 'openspecChange', 'worktree'].every(nullableString) &&
     Array.isArray(task.journal) && task.journal.every((entry: Record<string, unknown>) =>
-      !!entry && ['author', 'text', 'createdAt'].every(key => typeof entry[key] === 'string'))
+      !!entry && ['author', 'text', 'createdAt'].every(key => typeof entry[key] === 'string')) &&
+    (task.plan === undefined || isPlanReference(task.plan))
+}
+
+/** The plan reference of a linked task's context (durable-plans D9). */
+function isPlanReference(value: unknown): boolean {
+  const plan = value as Record<string, unknown> | null
+  return !!plan && typeof plan === 'object' && ['id', 'title', 'change'].every(key => typeof plan[key] === 'string') &&
+    (plan.revision === null || typeof plan.revision === 'number')
 }
