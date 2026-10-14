@@ -33,7 +33,7 @@ Any team member SHALL be able to submit a result for a task of its team with the
 - **THEN** the tool is allowed without an approval card, like the other team task tools
 
 ### Requirement: Handoffs are explicit role assignments
-Task detail SHALL offer **Request review**, **Request QA**, and **Return for fixes** as handoffs: assignment records carrying the kind, requested role, instructions, referenced result, and expected response. Human handoffs dispatch under a client request key with task-assignment's idempotency and worktree routing. Agents dispatch with `task_handoff`; while an equivalent handoff (same task, result, kind) is outstanding, a duplicate call SHALL return it with a notice instead of dispatching again.
+Task detail SHALL offer **Request review**, **Request QA**, and **Return for fixes** as handoffs: assignment records carrying the kind, requested role, instructions, referenced result, and expected response. Human handoffs dispatch under a client request key with task-assignment's idempotency and worktree routing. Agents dispatch with `task_handoff`; while an equivalent handoff (same task, result, kind) is outstanding, a duplicate call returns it with a notice, not a second dispatch.
 
 #### Scenario: Human requests review
 - **WHEN** the human requests review of the outstanding result from task detail
@@ -54,6 +54,10 @@ Task detail SHALL offer **Request review**, **Request QA**, and **Return for fix
 #### Scenario: A duplicated handoff call dispatches once
 - **WHEN** `task_handoff` is retried while the handoff it created is still outstanding
 - **THEN** the outstanding handoff is returned with a duplicate notice and no second instruction is dispatched
+
+#### Scenario: Return for fixes dispatches a fix handoff
+- **WHEN** findings fail and the requester returns the examined result for fixes to the developer role
+- **THEN** a fix handoff carries that result's reference, and its expected response is a new result
 
 ### Requirement: Findings are bound to the result examined
 Any team member SHALL submit review or QA findings with `task_submit_findings`, naming the exact result examined and a verdict. Findings SHALL apply only to the result they name: a newer result or commit SHALL NOT inherit them. When a newer result supersedes an earlier one, the earlier result and its findings SHALL remain readable with their binding unchanged.
@@ -81,6 +85,10 @@ Any team member SHALL submit review or QA findings with `task_submit_findings`, 
 - **WHEN** the last child task's result is accepted and the child closes
 - **THEN** the parent task remains open
 
+#### Scenario: An accepted task reopens normally
+- **WHEN** the human reopens a task whose result was accepted
+- **THEN** the task is open again, the result remains accepted, and no acceptance is cleared
+
 #### Scenario: Flagged result needs a reason
 - **WHEN** the human accepts a result labeled Needs re-evaluation
 - **THEN** acceptance requires a stated reason and the reason is journaled
@@ -89,7 +97,7 @@ Any team member SHALL submit review or QA findings with `task_submit_findings`, 
 A result whose pinned revision is older than the task's current revision SHALL be labeled Needs re-evaluation wherever results are shown. The label SHALL be derived at read time by comparing the pinned revision with the task's current revision number: a new task revision triggers it and nothing else does. The label SHALL NOT appear on results pinned to the current revision.
 
 #### Scenario: Amendment flags the result
-- **WHEN** the task's direction is amended after a result was submitted
+- **WHEN** the task's direction or acceptance criteria are amended after a result was submitted
 - **THEN** that result is labeled Needs re-evaluation in the Results section
 
 #### Scenario: A fresh result carries no label
