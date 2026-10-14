@@ -12,7 +12,7 @@ import type {
   WaitingReason,
 } from './team'
 import type { RuleLoadReport, TeamRoutingState } from './routing'
-import type { TaskDispatchPreview, TaskStatus, TaskTargetOptions, TeamTask, TeamTaskAssignment, TeamTaskDetail, TeamTaskSummary } from './teamTasks'
+import type { HumanTaskDetail, TaskDispatchPreview, TaskStatus, TaskTargetOptions, TeamTask, TeamTaskAssignment, TeamTaskSummary } from './teamTasks'
 import type { ProductStrategy, StrategyDetail, StrategyDraft, StrategyRevision } from './productStrategy'
 import type {
   WorkspaceOperationResult,
@@ -397,7 +397,8 @@ export type ServerMessage =
       type: 'team-task-detail'
       teamPath: string
       teamId: string
-      detail: TeamTaskDetail
+      /** The human's view: the task detail plus its draft (task-revision-publication D1). */
+      detail: HumanTaskDetail
       /** Last known identity of killed participants named by its messages. */
       directory: SessionDirectoryEntry[]
     }

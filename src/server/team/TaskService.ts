@@ -13,7 +13,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import type { ChatSessionRecord } from '../db'
-import type { TaskActor, TaskStatus, TeamTask, TeamTaskDetail, TeamTaskSummary } from '../../shared/teamTasks'
+import type { TaskActor, TaskDraft, TaskStatus, TeamTask, TeamTaskDetail, TeamTaskSummary } from '../../shared/teamTasks'
 import { TASK_STATUSES } from '../../shared/teamTasks'
 import { loadTeamGroups } from './teamGroups'
 import type { TeamIdentity } from './teamIdentity'
@@ -34,6 +34,15 @@ export interface TaskCreateInput {
 export interface TaskAmendInput {
   direction?: string
   acceptance?: string | null
+}
+
+/** The human's draft of a new direction (task-revision-publication D1). */
+export interface TaskDraftInput {
+  /** The published revision it edits; the current one when omitted. */
+  baseRevision?: number
+  direction: string
+  acceptance?: string | null
+  rationale?: string | null
 }
 
 /** Who is calling: an agent session (identity bound) or the human for a team. */
@@ -109,6 +118,37 @@ export class TaskService {
     }, actor)!
   }
 
+  /**
+   * Save the human's draft (D1). Agents have none — their working context is
+   * already a draft, so they publish with task_amend. Nothing is published,
+   * mailed, or announced as a task change; only the human's view refreshes.
+   */
+  async saveDraft(caller: TaskCaller, taskId: string, input: TaskDraftInput): Promise<TaskDraft> {
+    const task = await this.humanTask(caller, taskId)
+    const direction = input.direction.trim()
+    if (!direction) throw new Error('A draft needs a direction')
+    const baseRevision = input.baseRevision ?? task.revision
+    if (!Number.isInteger(baseRevision) || baseRevision < 1 || baseRevision > task.revision) {
+      throw new Error(`A draft must be based on a published revision (1–${task.revision})`)
+    }
+    return this.store.drafts.save(taskId, {
+      baseRevision, direction, acceptance: emptyToNull(input.acceptance), rationale: emptyToNull(input.rationale),
+    })
+  }
+
+  /** Move the draft onto the current revision, keeping its text (D1). */
+  async rebaseDraft(caller: TaskCaller, taskId: string): Promise<TaskDraft> {
+    const task = await this.humanTask(caller, taskId)
+    const draft = this.store.drafts.rebase(taskId, task.revision)
+    if (!draft) throw new Error('This task has no draft to rebase')
+    return draft
+  }
+
+  async discardDraft(caller: TaskCaller, taskId: string): Promise<void> {
+    await this.humanTask(caller, taskId)
+    this.store.drafts.discard(taskId)
+  }
+
   async note(caller: TaskCaller, taskId: string, text: string) {
     const { team, actor } = await this.context(caller)
     this.sameTeamTask(team, taskId)
@@ -168,6 +208,13 @@ export class TaskService {
       actor: { kind: 'agent', sessionId: session.sessionId } as TaskActor,
       canCreate: group?.canCreateTasks === true,
     }
+  }
+
+  /** A task of the human caller's team; agents are refused (drafts are the human's, D1/D7). */
+  private async humanTask(caller: TaskCaller, taskId: string): Promise<TeamTask> {
+    if (caller.kind !== 'human') throw new Error("Drafts are the human's; agents publish directly with task_amend")
+    const { team } = await this.context(caller)
+    return this.sameTeamTask(team, taskId)
   }
 
   /** The task, if it belongs to the team; otherwise an error that leaks nothing. */

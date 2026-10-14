@@ -944,6 +944,12 @@ export class ChatSessionManager {
         if (record.taskId === task.id) this.options.registry.updateSession(record.sessionId, this.taskFields(record))
       }
     })
+    // A draft save refreshes the human's task view only (task-revision-publication
+    // D1): never a task change, so nothing above or in the mailbox reacts to it.
+    this.tasks.store.drafts.subscribe(taskId => {
+      const teamId = this.tasks.store.get(taskId)?.teamId
+      if (teamId) this.options.onTaskChange?.(teamId)
+    })
     // Parking pauses the session that holds the work; any change to a parked
     // message (or to one that was) re-derives its holder's paused state.
     this.mailbox.store.subscribe((_teamId, message) => {

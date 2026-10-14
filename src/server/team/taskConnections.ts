@@ -52,7 +52,8 @@ export class TaskConnections {
     }
     for (const taskId of subscription.details) {
       if (only && taskId !== only) continue
-      const detail = store.detail(taskId)
+      // The human's view carries the task's draft (task-revision-publication D1).
+      const detail = store.humanDetail(taskId)
       if (detail) connection.send({
         type: 'team-task-detail', teamPath, teamId: subscription.teamId, detail,
         // Its messages name participants; the directory keeps a killed one's.

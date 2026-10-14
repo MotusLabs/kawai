@@ -13,6 +13,7 @@ import type {
   TaskJournalEntry,
   TaskRevision,
   TaskStatus,
+  HumanTaskDetail,
   TeamTask,
   TeamTaskDetail,
   TeamTaskSummary,
@@ -21,6 +22,7 @@ import { TASK_STATUSES } from '../../shared/teamTasks'
 import { outstandingOf, type AssignmentStore } from './assignmentStore'
 import type { MailboxStore } from './mailboxStore'
 import { migrateRevisionSchema } from './taskRevisionSchema'
+import { TaskDraftStore } from './taskDrafts'
 
 const CREATE_TABLES_SQL = `
 CREATE TABLE IF NOT EXISTS team_tasks (
@@ -93,11 +95,14 @@ const nowIso = () => new Date().toISOString()
 
 export class TaskStore {
   private readonly listeners = new Set<(task: TeamTask) => void>()
+  /** The human's drafts (task-revision-publication D1): never read by agent paths. */
+  readonly drafts: TaskDraftStore
 
   constructor(private readonly db: Database, private readonly mail?: MailboxStore, private readonly assignments?: AssignmentStore) {
     db.exec(CREATE_TABLES_SQL)
     migrateTable(db)
     migrateRevisionSchema(db)
+    this.drafts = new TaskDraftStore(db)
   }
 
   /** Every committed change, with the task as it is now. */
@@ -166,6 +171,12 @@ export class TaskStore {
       assignments: this.assignments?.listByTask(id) ?? [],
       messages: this.messages(id),
     }
+  }
+
+  /** The human's view (D1): the detail plus the task's draft. Never for agent paths. */
+  humanDetail(id: string): HumanTaskDetail | null {
+    const detail = this.detail(id)
+    return detail ? { ...detail, draft: this.drafts.get(id) } : null
   }
 
   revisions(id: string): TaskRevision[] {
