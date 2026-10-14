@@ -215,17 +215,16 @@ export class SessionMailbox {
       beginCycle: async () => {
         this.catalogs.clear()
         this.outcomes.processNotes()
-        this.releases.retryLateMarks()
         await this.loadCycleDefinitions()
         await this.releases.evaluate()
       },
       claimed: (message, id) => this.outcomes.claimed(message, id),
       delivered: (id, message) => this.outcomes.delivered(id, message),
-      // Recovery notes, failed-spawn backoffs, and late-mark retries share the minimum-wins timer (D5).
+      // Recovery notes and failed-spawn backoffs share the minimum-wins timer (D5).
       wakeAt: () => {
-        const times = [this.outcomes.nextNoteAt(), this.staffing.nextRetryAt(), this.releases.nextLateMarkRetryAt()]
-          .filter((at): at is number => at !== null)
-        return times.length > 0 ? Math.min(...times) : null
+        const note = this.outcomes.nextNoteAt()
+        const retry = this.staffing.nextRetryAt()
+        return note !== null && (retry === null || note < retry) ? note : retry
       },
       afterPass: outcome => this.applyReasons(outcome),
       recipients: () => [...options.records()].flatMap(record => {
@@ -482,5 +481,5 @@ export class SessionMailbox {
     this.releases.markLateSpawn(id, taskId)
   }
 
-  close() { this.dispatcher.close(); this.releaseSubscription?.(); this.releaseLimitSubscription?.(); this.releaseTaskSubscription?.(); this.rules.close() }
+  close() { this.dispatcher.close(); this.releases.close(); this.releaseSubscription?.(); this.releaseLimitSubscription?.(); this.releaseTaskSubscription?.(); this.rules.close() }
 }

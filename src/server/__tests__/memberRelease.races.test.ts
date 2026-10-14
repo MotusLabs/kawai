@@ -3,7 +3,7 @@
 // in-memory stores, so a test can pause the definition resolver
 // mid-transition and mutate the mailbox, the roster, or the task underneath
 // it — and inject a failing store or an archive that refuses.
-import { afterEach, beforeEach, expect, spyOn, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
 import type { ChatSessionRecord } from '../db'
 import { logger } from '../logger'
@@ -99,30 +99,67 @@ test('a late-spawn mark is synchronous: an opted-out group is marked, then kept 
   expect(archived).toEqual([])
 })
 
-test('a failed late-spawn mark is logged with both ids and retried until it lands (MM LOW 3)', () => {
-  const t = task()
-  tasks.setStatus(t.id, 'done')
-  records.set('spawned-9', record('spawned-9', { projectPath: featX, spawned: true, taskId: t.id }))
-  const releases = makeReleases()
-  const get = tasks.get.bind(tasks)
-  let failures = 2
-  tasks.get = id => { if (failures > 0) { failures -= 1; throw new Error('database is locked') } return get(id) }
-  const warn = spyOn(logger, 'warn').mockImplementation(() => {})
-  try {
-    releases.markLateSpawn('spawned-9', t.id)
-    expect(warn).toHaveBeenLastCalledWith('member_release_mark_failed', { sessionId: 'spawned-9', taskId: t.id, error: 'database is locked' })
-    expect(releases.pending()).toEqual([])
-    expect(releases.nextLateMarkRetryAt()).toBeGreaterThan(Date.now())
-    // A cycle that fails again keeps it outstanding; the next one lands it.
-    releases.retryLateMarks()
-    expect(warn).toHaveBeenCalledTimes(2)
-    expect(releases.pending()).toEqual([])
-    releases.retryLateMarks()
-    expect(releases.pending().map(row => row.sessionId)).toEqual(['spawned-9'])
-    expect(releases.nextLateMarkRetryAt()).toBeNull()
-  } finally {
-    warn.mockRestore()
+describe('a failed late-spawn mark (MM LOW 3)', () => {
+  const settle = () => new Promise(resolve => setTimeout(resolve, 30))
+  let warn: ReturnType<typeof spyOn>
+  let error: ReturnType<typeof spyOn>
+  /** A closed task with a late-spawned member, and a task store whose `get` throws `failures` times. */
+  const setup = (failures: number) => {
+    const t = task()
+    tasks.setStatus(t.id, 'done')
+    records.set('spawned-9', record('spawned-9', { projectPath: featX, spawned: true, taskId: t.id }))
+    const get = tasks.get.bind(tasks)
+    let left = failures
+    tasks.get = id => { if (left > 0) { left -= 1; throw new Error('database is locked') } return get(id) }
+    return { t, releases: makeReleases({ lateMarkRetryDelaysMs: [1, 1, 1] }) }
   }
+  beforeEach(() => {
+    warn = spyOn(logger, 'warn').mockImplementation(() => {})
+    error = spyOn(logger, 'error').mockImplementation(() => {})
+  })
+  afterEach(() => { warn.mockRestore(); error.mockRestore() })
+
+  test('a rejection then a success marks the member and logs the warning', async () => {
+    const { t, releases } = setup(1)
+    releases.markLateSpawn('spawned-9', t.id)
+    expect(warn).toHaveBeenCalledWith('member_release_mark_failed', { sessionId: 'spawned-9', taskId: t.id, attempt: 1, error: 'database is locked' })
+    expect(releases.pending()).toEqual([])
+    await settle()
+    expect(releases.pending().map(row => row.sessionId)).toEqual(['spawned-9'])
+    expect(error).not.toHaveBeenCalled()
+  })
+
+  test('exhausted retries log an error naming both ids, then stop', async () => {
+    const { t, releases } = setup(Infinity)
+    releases.markLateSpawn('spawned-9', t.id)
+    await settle()
+    expect(warn).toHaveBeenCalledTimes(3)
+    expect(error).toHaveBeenCalledTimes(1)
+    expect(error).toHaveBeenCalledWith('member_release_mark_gave_up', { sessionId: 'spawned-9', taskId: t.id, attempts: 4, error: 'database is locked' })
+    expect(releases.pending()).toEqual([])
+  })
+
+  test('a member restored, archived, or re-associated between attempts is not marked', async () => {
+    for (const change of ['restored', 'archived', 're-associated'] as const) {
+      const { t, releases } = setup(1)
+      releases.markLateSpawn('spawned-9', t.id)
+      if (change === 'restored') releases.cancel('spawned-9')
+      if (change === 'archived') records.get('spawned-9')!.archivedAt = new Date().toISOString()
+      if (change === 're-associated') records.get('spawned-9')!.taskId = 'task-other'
+      await settle()
+      expect({ change, pending: releases.pending() }).toEqual({ change, pending: [] })
+      expect(error).not.toHaveBeenCalled()
+    }
+  })
+
+  test('shutdown drops a pending retry', async () => {
+    const { t, releases } = setup(1)
+    releases.markLateSpawn('spawned-9', t.id)
+    releases.close()
+    await settle()
+    expect(releases.pending()).toEqual([])
+    expect(warn).toHaveBeenCalledTimes(1)
+  })
 })
 
 test('a refused archive journals no release: the row drops and release_member reports the error (F4)', async () => {

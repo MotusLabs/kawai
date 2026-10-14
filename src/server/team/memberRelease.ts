@@ -55,6 +55,8 @@ export interface MemberReleaseOptions {
   archive: (sessionId: string) => ArchiveResult
   /** Re-run the dispatch cycle (freed capacity serves mail in the next pass). */
   notify: () => void
+  /** Backoffs before each retry of a failed late-spawn mark; default 1 s, 5 s, 30 s. */
+  lateMarkRetryDelaysMs?: readonly number[]
 }
 
 const CREATE_TABLE_SQL = `
@@ -75,8 +77,8 @@ CREATE TABLE IF NOT EXISTS team_task_closers (
 );
 `
 
-/** Backoff before a failed late-spawn mark is retried (the dispatcher wakes for it). */
-const LATE_MARK_RETRY_MS = 5_000
+/** Backoffs before each retry of a failed late-spawn mark: bounded, then given up with an error. */
+const LATE_MARK_RETRY_DELAYS_MS = [1_000, 5_000, 30_000] as const
 
 const isClosed = (status: TaskStatus) => status === 'done' || status === 'cancelled'
 
@@ -84,9 +86,8 @@ const actorText = (actor: JournalAuthor): string =>
   actor.kind === 'human' ? 'the human' : actor.kind === 'system' ? 'kawai' : actor.sessionId
 
 export class MemberRelease {
-  /** Late-spawn marks that failed: session id → task id, retried until they land or stop applying. */
-  private readonly lateMarks = new Map<string, string>()
-  private lateMarkRetryAt: number | null = null
+  /** Scheduled retries of failed late-spawn marks, by session id. */
+  private readonly lateMarkRetries = new Map<string, ReturnType<typeof setTimeout>>()
 
   constructor(private readonly db: Database, private readonly options: MemberReleaseOptions) {
     db.exec(CREATE_TABLE_SQL)
@@ -111,9 +112,19 @@ export class MemberRelease {
     return this.db.prepare('SELECT 1 FROM team_member_releases WHERE session_id = ?').get(sessionId) !== null
   }
 
-  /** The session was archived, killed, or restored by any path: its row is moot (D1). */
+  /**
+   * The session was archived, killed, or restored by any path: its row is
+   * moot (D1), and so is a late-spawn mark still waiting to be retried.
+   */
   cancel(sessionId: string): void {
     this.db.prepare('DELETE FROM team_member_releases WHERE session_id = ?').run(sessionId)
+    this.dropLateMarkRetry(sessionId)
+  }
+
+  /** Shutdown: pending late-mark retries are dropped. */
+  close(): void {
+    for (const timer of this.lateMarkRetries.values()) clearTimeout(timer)
+    this.lateMarkRetries.clear()
   }
 
   /**
@@ -207,33 +218,34 @@ export class MemberRelease {
   }
 
   /**
-   * The spawn path's entry for {@link markSpawnedForClosedTask}: a failure
-   * is logged with both ids and retried — at the start of every dispatch
-   * cycle, and on a short backoff the dispatcher wakes for — until the mark
-   * lands or no longer applies (task reopened, member archived).
+   * The spawn path's entry for {@link markSpawnedForClosedTask}. A failure
+   * is logged with both ids and retried a bounded number of times (1 s, 5 s,
+   * 30 s), each attempt through the same re-checks — so a member reopened,
+   * archived, restored, or re-associated meanwhile is not marked — and an
+   * error is logged once the attempts are exhausted. Archive, kill, restore,
+   * and shutdown drop a pending retry.
    */
-  markLateSpawn(sessionId: string, taskId: string): void {
-    this.lateMarks.set(sessionId, taskId)
-    this.retryLateMarks()
-  }
-
-  /** Retry every outstanding late-spawn mark (called at each cycle's start). */
-  retryLateMarks(): void {
-    this.lateMarkRetryAt = null
-    for (const [sessionId, taskId] of this.lateMarks) {
-      try {
-        this.markSpawnedForClosedTask(sessionId, taskId)
-        this.lateMarks.delete(sessionId)
-      } catch (error) {
-        logger.warn('member_release_mark_failed', { sessionId, taskId, error: error instanceof Error ? error.message : String(error) })
-        this.lateMarkRetryAt = Date.now() + LATE_MARK_RETRY_MS
+  markLateSpawn(sessionId: string, taskId: string, attempt = 0): void {
+    this.lateMarkRetries.delete(sessionId)
+    try {
+      this.markSpawnedForClosedTask(sessionId, taskId)
+    } catch (error) {
+      const delays = this.options.lateMarkRetryDelaysMs ?? LATE_MARK_RETRY_DELAYS_MS
+      const reason = error instanceof Error ? error.message : String(error)
+      if (attempt >= delays.length) {
+        logger.error('member_release_mark_gave_up', { sessionId, taskId, attempts: attempt + 1, error: reason })
+        return
       }
+      logger.warn('member_release_mark_failed', { sessionId, taskId, attempt: attempt + 1, error: reason })
+      this.lateMarkRetries.set(sessionId, setTimeout(() => this.markLateSpawn(sessionId, taskId, attempt + 1), delays[attempt]))
     }
   }
 
-  /** When the dispatcher should wake to retry failed marks; null when none are outstanding. */
-  nextLateMarkRetryAt(): number | null {
-    return this.lateMarkRetryAt
+  private dropLateMarkRetry(sessionId: string): void {
+    const timer = this.lateMarkRetries.get(sessionId)
+    if (timer === undefined) return
+    clearTimeout(timer)
+    this.lateMarkRetries.delete(sessionId)
   }
 
   /**
