@@ -3,7 +3,9 @@
 // controls from props; this view owns the side-slot subscriptions, which
 // follow the same reconnect rules. The side slot beside the transcript (in
 // place of it on narrow screens) holds one panel at a time — Debug, Mailbox,
-// Tasks, Messages, or Strategy — opened through `toggleSideSlot`; a chat
+// Tasks, Messages, or Strategy — opened through `toggleSideSlot`. The team
+// panels are keyed by the chat's team key (team-workspace-pages D2) and
+// address the server by it, so every chat of one team shares them; a chat
 // working on a task opens that task from the header (team-tasks 7.3), and
 // the Mailbox panel keeps its delivery operations (team-message-threads 5.4).
 // The approval policy renders from the broadcast Session, never local state.
@@ -56,6 +58,8 @@ import SlashCommandMenu from './SlashCommandMenu'
 import UsageBar from './UsageBar'
 import { filterChatCommands, insertCommand, slashTokenAt } from './slashCommandFilter'
 import { requestChatArchive } from '../../utils/chatArchive'
+import { teamKeyOf } from '../../utils/teamKey'
+import { useWorkspaceStore } from '../../stores/workspaceStore'
 
 const EMPTY = emptyTranscript()
 const CLOSED_DEBUG = closedDebugView()
@@ -101,60 +105,66 @@ export default function ChatView({ session, sendMessage, subscribe, connectionSt
     sendMessage({ type: 'chat-debug-open', sessionId: session.id })
     return () => sendMessage({ type: 'chat-debug-close', sessionId: session.id })
   }, [session.id, connected, connectionEpoch, debugOpen, sendMessage])
-  const toggleDebug = () => toggleSideSlot('debug', session.id)
-  const mailbox = useTeamMailboxStore(state => state.views[session.id]) ?? CLOSED_MAILBOX
+  // The team the side panels show and address (team-workspace-pages D2).
+  const repositories = useWorkspaceStore(state => state.snapshot?.repositories)
+  const teamKey = useMemo(() => teamKeyOf(session.projectPath, repositories), [session.projectPath, repositories])
+  const owner = useMemo(() => ({ sessionId: session.id, teamKey }), [session.id, teamKey])
+  // Views move with discovery on their own (teamViewMigration.ts), so a key
+  // change here only re-subscribes under the new key.
+  const toggleDebug = () => toggleSideSlot('debug', owner)
+  const mailbox = useTeamMailboxStore(state => state.views[teamKey]) ?? CLOSED_MAILBOX
   const teamGroups = useTeamGroups(mailbox.open, session.projectPath)
   useEffect(() => {
     if (!connected || !mailbox.open) return
-    useTeamMailboxStore.getState().open(session.id)
-    sendMessage({ type: 'team-mailbox-open', sessionId: session.id })
-    return () => sendMessage({ type: 'team-mailbox-close', sessionId: session.id })
-  }, [session.id, connected, connectionEpoch, mailbox.open, sendMessage])
-  const toggleMailbox = () => toggleSideSlot('mailbox', session.id)
-  const tasks = useTeamTaskStore(state => state.views[session.id]) ?? CLOSED_TASKS
+    useTeamMailboxStore.getState().open(teamKey)
+    sendMessage({ type: 'team-mailbox-open', teamPath: teamKey })
+    return () => sendMessage({ type: 'team-mailbox-close', teamPath: teamKey })
+  }, [teamKey, connected, connectionEpoch, mailbox.open, sendMessage])
+  const toggleMailbox = () => toggleSideSlot('mailbox', owner)
+  const tasks = useTeamTaskStore(state => state.views[teamKey]) ?? CLOSED_TASKS
   useEffect(() => {
     if (!connected || !tasks.open) return
-    sendMessage({ type: 'team-tasks-open', sessionId: session.id })
-    return () => sendMessage({ type: 'team-tasks-close', sessionId: session.id })
-  }, [session.id, connected, connectionEpoch, tasks.open, sendMessage])
+    sendMessage({ type: 'team-tasks-open', teamPath: teamKey })
+    return () => sendMessage({ type: 'team-tasks-close', teamPath: teamKey })
+  }, [teamKey, connected, connectionEpoch, tasks.open, sendMessage])
   const selectedTaskId = tasks.open ? tasks.selectedTaskId : null
   useEffect(() => {
     if (!connected || !selectedTaskId) return
-    sendMessage({ type: 'team-task-open', sessionId: session.id, taskId: selectedTaskId })
-    return () => sendMessage({ type: 'team-task-close', sessionId: session.id, taskId: selectedTaskId })
-  }, [session.id, connected, connectionEpoch, selectedTaskId, sendMessage])
+    sendMessage({ type: 'team-task-open', teamPath: teamKey, taskId: selectedTaskId })
+    return () => sendMessage({ type: 'team-task-close', teamPath: teamKey, taskId: selectedTaskId })
+  }, [teamKey, connected, connectionEpoch, selectedTaskId, sendMessage])
   const openTasks = (taskId?: string) => {
-    closeOtherSideSlots('tasks', session.id)
-    useTeamTaskStore.getState().open(session.id, taskId)
+    closeOtherSideSlots('tasks', owner)
+    useTeamTaskStore.getState().open(teamKey, taskId)
   }
-  const toggleTasks = () => toggleSideSlot('tasks', session.id)
+  const toggleTasks = () => toggleSideSlot('tasks', owner)
   // Messages (team-message-threads 5.4): the host-agnostic feed in the same
   // side slot. Its subscription is owned by the view itself, so this only
   // decides whether the panel is mounted.
-  const messages = useTeamMessageStore(state => state.views[session.id]) ?? CLOSED_MESSAGES
+  const messages = useTeamMessageStore(state => state.views[teamKey]) ?? CLOSED_MESSAGES
   // Naming message participants (team-message-threads D3): live rows come from
   // the session list, and whichever side panel has been open last supplies the
   // team directory that names a killed one `Name (gone)`.
   const liveSessions = useSessionStore(state => state.sessions)
   const participantDirectory = messages.directory.length > 0 ? messages.directory : tasks.directory
-  const toggleMessages = () => toggleSideSlot('messages', session.id)
+  const toggleMessages = () => toggleSideSlot('messages', owner)
   // A task's messages link into the thread in the Messages view (5.4): the
   // side slot flips to Messages and the thread opens.
   const openThread = (threadId: string) => {
-    closeOtherSideSlots('messages', session.id)
+    closeOtherSideSlots('messages', owner)
     const store = useTeamMessageStore.getState()
-    store.open(session.id)
-    store.select(session.id, threadId)
+    store.open(teamKey)
+    store.select(teamKey, threadId)
   }
   // Product strategy (product-strategy 5.1): same side slot, team-scoped.
-  const strategy = useStrategyStore(state => state.views[session.id]) ?? CLOSED_STRATEGY
+  const strategy = useStrategyStore(state => state.views[teamKey]) ?? CLOSED_STRATEGY
   useEffect(() => {
     if (!connected || !strategy.open) return
-    sendMessage({ type: 'strategy-open', sessionId: session.id })
-    return () => sendMessage({ type: 'strategy-close', sessionId: session.id })
-  }, [session.id, connected, connectionEpoch, strategy.open, sendMessage])
-  const toggleStrategy = () => toggleSideSlot('strategy', session.id)
-  const openSlot = useOpenSideSlot(session.id)
+    sendMessage({ type: 'strategy-open', teamPath: teamKey })
+    return () => sendMessage({ type: 'strategy-close', teamPath: teamKey })
+  }, [teamKey, connected, connectionEpoch, strategy.open, sendMessage])
+  const toggleStrategy = () => toggleSideSlot('strategy', owner)
+  const openSlot = useOpenSideSlot(owner)
   const handleArchive = () => { requestChatArchive(session, sendMessage) }
   // Approval policy (chat-auto-approve-tools design D6): rendered from the
   // broadcast Session so every client agrees; archived chats hide the control.
@@ -314,7 +324,7 @@ export default function ChatView({ session, sendMessage, subscribe, connectionSt
   return <main className="chat-palette chat-root flex min-h-0 min-w-0 flex-1 flex-col bg-base text-primary" data-testid="chat-view"
     style={{ '--chat-font-size': `${chatFontSize}px` } as CSSProperties}>
     <ChatHeader session={session} profileLabel={profileLabel} model={transcript.model} contextUsage={transcript.contextUsage}
-      connectionStatus={connectionStatus} openSlot={openSlot} onToggleSlot={slot => toggleSideSlot(slot, session.id)}
+      connectionStatus={connectionStatus} openSlot={openSlot} onToggleSlot={slot => toggleSideSlot(slot, owner)}
       onOpenTask={openTasks} onRename={name => sendMessage({ type: 'session-rename', sessionId: session.id, newName: name })}
       onToggleApproval={toggleApprovalPolicy} onArchive={handleArchive} onKill={onKill} onClose={onClose}
       fontSizePx={chatFontSize} />
@@ -391,14 +401,15 @@ export default function ChatView({ session, sendMessage, subscribe, connectionSt
           </form>
         )}
       </div>
-      {mailbox.open && <TeamMailboxPanel sessionId={session.id} view={mailbox} sendMessage={sendMessage} connected={connected} onClose={toggleMailbox}
+      {/* One panel at a time: a team panel opened from another chat of the team can be open beside this chat's Debug. */}
+      {openSlot === 'mailbox' && <TeamMailboxPanel teamPath={teamKey} view={mailbox} sendMessage={sendMessage} connected={connected} onClose={toggleMailbox}
         groups={teamGroups.groups.map(group => group.id)} sessions={liveSessions} onOpenSession={openParticipantChat} />}
-      {tasks.open && <TeamTasksPanel sessionId={session.id} projectPath={session.projectPath} view={tasks} sendMessage={sendMessage}
+      {openSlot === 'tasks' && <TeamTasksPanel teamPath={teamKey} projectPath={session.projectPath} view={tasks} sendMessage={sendMessage}
         connected={connected} onClose={toggleTasks} onOpenThread={openThread} onCreateWorktree={onCreateWorktree} />}
-      {messages.open && <TeamMessagesPanel sessionId={session.id} projectPath={session.projectPath} sendMessage={sendMessage}
+      {openSlot === 'messages' && <TeamMessagesPanel teamPath={teamKey} projectPath={session.projectPath} sendMessage={sendMessage}
         connected={connected} connectionEpoch={connectionEpoch} onClose={toggleMessages} />}
-      {strategy.open && <ProductStrategyPanel sessionId={session.id} view={strategy} sendMessage={sendMessage} connected={connected} onClose={toggleStrategy} />}
-      {debugOpen && <ChatDebugPanel key={session.id} sessionId={session.id} view={debug} sendMessage={sendMessage}
+      {openSlot === 'strategy' && <ProductStrategyPanel teamPath={teamKey} view={strategy} sendMessage={sendMessage} connected={connected} onClose={toggleStrategy} />}
+      {openSlot === 'debug' && <ChatDebugPanel key={session.id} sessionId={session.id} view={debug} sendMessage={sendMessage}
         connected={connected} onClose={toggleDebug} />}
     </div>
   </main>

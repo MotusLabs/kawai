@@ -37,8 +37,8 @@ export type ComposerMode =
     body: string
   }
 
-export default function TeamMessageComposer({ sessionId, mode, groups = [], sessions = [], directory = [], tasks = [], view, sendMessage, connected }: {
-  sessionId: string
+export default function TeamMessageComposer({ teamPath, mode, groups = [], sessions = [], directory = [], tasks = [], view, sendMessage, connected }: {
+  teamPath: string
   mode: ComposerMode
   groups?: ReadonlyArray<RecipientOption>
   sessions?: ReadonlyArray<LiveParticipant>
@@ -57,9 +57,9 @@ export default function TeamMessageComposer({ sessionId, mode, groups = [], sess
   const send = () => {
     if (disabled) return
     const requestId = crypto.randomUUID()
-    useTeamMessageStore.getState().beginSend(sessionId, requestId)
+    useTeamMessageStore.getState().beginSend(teamPath, requestId)
     sendMessage({
-      type: 'team-message-send', sessionId, requestId, body: body.trim(),
+      type: 'team-message-send', teamPath, requestId, body: body.trim(),
       // A reply is addressed to its parent's sender and inherits its task;
       // only a new message names a recipient and a task of its own.
       ...(mode.kind === 'reply' ? { inReplyTo: mode.inReplyTo } : recipient(to)),

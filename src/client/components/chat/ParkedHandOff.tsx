@@ -5,8 +5,8 @@ import { useState } from 'react'
 import type { SendClientMessage } from '@shared/types'
 import type { HandOffResult } from '../../stores/teamMailboxStore'
 
-export default function ParkedHandOff({ sessionId, messageId, groups, sendMessage, disabled, result }: {
-  sessionId: string
+export default function ParkedHandOff({ teamPath, messageId, groups, sendMessage, disabled, result }: {
+  teamPath: string
   messageId: string
   /** Group ids of the team, offered as suggestions. */
   groups: string[]
@@ -17,7 +17,7 @@ export default function ParkedHandOff({ sessionId, messageId, groups, sendMessag
   const [kind, setKind] = useState<'group' | 'session'>('group')
   const [target, setTarget] = useState('')
   const listId = `handoff-groups-${messageId}`
-  const send = () => sendMessage({ type: 'team-mailbox-hand-off', sessionId, messageId, target: { kind, id: target.trim() } })
+  const send = () => sendMessage({ type: 'team-mailbox-hand-off', teamPath, messageId, target: { kind, id: target.trim() } })
   // `.input` is full width: the kind picker takes its own line, the target
   // and the button share the next one.
   return <div className="mt-2 flex flex-col gap-1" data-testid="parked-hand-off">
