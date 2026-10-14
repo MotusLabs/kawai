@@ -31,7 +31,7 @@ beforeEach(async () => {
   runtime = new SessionMailbox(db, {
     teams, records: () => records.values(), getRecord: id => records.get(id), available: record => !record.archivedAt,
     getDriver: id => ({ getPendingRequests: () => [], deliver: () => { records.get(id)!.status = 'working' } }) as unknown as ChatSessionDriver,
-    prepare: async () => {}, restore: () => {}, watchReceipt: () => {}, archive: () => ({ ok: true }), hasLiveWorkers: () => false, transcriptFor: () => file, onError: error => { throw error },
+    prepare: async () => {}, restore: () => {}, watchReceipt: () => {}, archive: () => ({ ok: true }), hasLiveWorkers: () => false, hasRunningBackgroundTasks: () => false, transcriptFor: () => file, onError: error => { throw error },
   })
   // These tests drive dispatch directly, without start()'s recovery pass.
   runtime.dispatcher.release()

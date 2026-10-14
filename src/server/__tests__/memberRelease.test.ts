@@ -52,6 +52,7 @@ let teams: SessionTeams
 let runtime: SessionMailbox
 let archived: string[]
 let liveWorkers: Set<string>
+let runningTasks: Set<string>
 let pendingCards: Set<string>
 type DeliveredEnvelope = { session: string; messageId: string; thread: number; task: string | null }
 let received: DeliveredEnvelope[]
@@ -86,6 +87,7 @@ const makeRuntime = () => {
   watchReceipt: () => {},
   archive: id => { archived.push(id); records.get(id)!.archivedAt = new Date().toISOString(); return { ok: true } },
   hasLiveWorkers: id => liveWorkers.has(id),
+  hasRunningBackgroundTasks: id => runningTasks.has(id),
   spawn: async request => {
     spawnCalls.push(request)
     const sessionId = `spawned-${spawnCalls.length}`
@@ -123,7 +125,7 @@ beforeEach(async () => {
   db = new Database(':memory:')
   records = new Map()
   teams = new SessionTeams({ homeDir: dir })
-  archived = []; liveWorkers = new Set(); pendingCards = new Set(); received = []; spawnCalls = []
+  archived = []; liveWorkers = new Set(); runningTasks = new Set(); pendingCards = new Set(); received = []; spawnCalls = []
   runtime = makeRuntime()
   runtime.dispatcher.release()
 })
@@ -159,7 +161,7 @@ test('an opted-out group keeps its members (releaseOnTaskClose: false)', async (
   expect(runtime.releases.pending()).toEqual([])
 })
 
-test('a busy member is released once its turn ends; approvals, workers, and mail hold it (D3)', async () => {
+test('a busy member is released once its turn ends; approvals, workers, and background tasks hold it (D3)', async () => {
   const t = task(featX)
   records.set('dev-1', record('dev-1', { name: 'Dev one', projectPath: featX, spawned: true, taskId: t.id }))
   await trackAll()
@@ -176,6 +178,12 @@ test('a busy member is released once its turn ends; approvals, workers, and mail
   await pass()
   expect(archived).toEqual([])
   liveWorkers.delete('dev-1')
+  // A running background task (a run_in_background shell) holds it too.
+  runningTasks.add('dev-1')
+  await pass()
+  expect(archived).toEqual([])
+  expect(runtime.releases.readiness('dev-1')).toEqual({ ready: false, reason: 'it has a running background task' })
+  runningTasks.delete('dev-1')
   await pass()
   expect(archived).toEqual(['dev-1'])
   expect(records.get('dev-1')!.archivedAt).toBeTruthy()
@@ -332,6 +340,9 @@ test('release_member: permitted by default, archives and journals; refusals name
   liveWorkers.add('dev-1')
   await expect(release('dev-1')).rejects.toThrow('background worker')
   liveWorkers.delete('dev-1')
+  runningTasks.add('dev-1')
+  await expect(release('dev-1')).rejects.toThrow('not ready for release: it has a running background task')
+  runningTasks.delete('dev-1')
   const result = await release('dev-1', 'merged')
   expect(result).toEqual({ sessionId: 'dev-1', taskId: t.id })
   expect(archived).toEqual(['dev-1'])
@@ -418,6 +429,7 @@ test('the close transition re-reads state at the commit: a claim during the awai
     cachedDefinition: () => undefined,
     recipient: () => ({ idle: true, pendingRequest: false }),
     hasLiveWorkers: () => false,
+    hasRunningBackgroundTasks: () => false,
     archive: () => ({ ok: true }),
     notify: () => {},
   })
@@ -452,6 +464,7 @@ test('markSpawnedForClosedTask re-checks after the await: a reopen during the de
     cachedDefinition: () => undefined,
     recipient: () => ({ idle: true, pendingRequest: false }),
     hasLiveWorkers: () => false,
+    hasRunningBackgroundTasks: () => false,
     archive: () => ({ ok: true }),
     notify: () => {},
   })
@@ -477,6 +490,7 @@ test('a refused archive journals no release: the row drops and release_member re
     cachedDefinition: () => undefined,
     recipient: () => ({ idle: true, pendingRequest: false }),
     hasLiveWorkers: () => false,
+    hasRunningBackgroundTasks: () => false,
     archive: () => ({ ok: false, error: 'Unknown chat session dev-1' }),
     notify: () => {},
   })

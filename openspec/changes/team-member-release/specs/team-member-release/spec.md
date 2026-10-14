@@ -44,7 +44,7 @@ When a task is `done` or `cancelled`, its undelivered group mail (queued, awaiti
 - **THEN** the note is dead-lettered `task-closed`, no session is spawned, and it stays in the Mailbox, retryable once the task is reopened
 
 ### Requirement: Release waits until the member is ready
-A member SHALL be ready for release only when it is idle in the sense mail delivery uses, has no pending approval or question, has no live background worker, holds no claimed or parked mail, and has no due direct mail queued for it. Every release path SHALL use this one definition. A pending member that is not ready SHALL be released once it becomes ready, without further action.
+A member SHALL be ready for release only when it is idle in the sense mail delivery uses, has no pending approval or question, has no live background worker or running background task, holds no claimed or parked mail, and has no due direct mail queued for it. Every release path SHALL use this one definition. A pending member that is not ready SHALL be released once it becomes ready, without further action.
 
 #### Scenario: Busy dev released after its turn
 - **WHEN** a task is marked done while its dev is mid-turn writing a final report
@@ -57,6 +57,10 @@ A member SHALL be ready for release only when it is idle in the sense mail deliv
 #### Scenario: Live background worker holds the release
 - **WHEN** a task is done while its dev is idle but a background worker it started is still running
 - **THEN** the dev is not archived until the worker stops
+
+#### Scenario: Running background task holds the release
+- **WHEN** a task is done while its dev is idle but a background shell it started with `run_in_background` is still running
+- **THEN** the dev is not archived until the background task settles, and is then archived without further action
 
 #### Scenario: Queued direct mail is delivered first
 - **WHEN** the lead closes a task and then sends its dev a closing direct message
@@ -126,6 +130,10 @@ A group file SHALL accept `canReleaseMembers: true|false` (default `true`). Memb
 #### Scenario: Member with a live background worker refused
 - **WHEN** the lead releases an idle dev whose background worker is still running
 - **THEN** the tool returns an error naming the live background worker, and nothing is archived
+
+#### Scenario: Member with a running background task refused
+- **WHEN** the lead releases an idle dev whose background shell is still running
+- **THEN** the tool returns an error saying the dev has a running background task, and nothing is archived
 
 #### Scenario: Human-created session refused
 - **WHEN** the lead releases the human-created reviewer session

@@ -515,12 +515,22 @@ export class ChatSessionManager {
   }
 
   /**
-   * A session's worker roster changed. A pending release's readiness
-   * includes live workers (member-release D3): a change on a pending member
-   * re-runs the dispatch cycle (D2), since no status change follows a worker
-   * that ends while the session is already idle.
+   * Whether the session has a running background task (member-release D3):
+   * a `run_in_background` shell or Monitor keeps writing to the worktree
+   * after its turn ends, and archiving would end it. Process end settles
+   * every running entry as stopped, so a dead agent never holds this.
    */
-  private workersChanged(sessionId: string): void {
+  hasRunningBackgroundTasks(sessionId: string): boolean {
+    return this.getBackgroundTasks(sessionId).some(task => task.status === 'running')
+  }
+
+  /**
+   * A session's worker or background-task roster changed. A pending
+   * release's readiness includes both (member-release D3): a change on a
+   * pending member re-runs the dispatch cycle (D2), since no status change
+   * follows a worker or task that ends while the session is already idle.
+   */
+  private rosterChanged(sessionId: string): void {
     if (this.teamMail.releases.pendingFor(sessionId)) this.dispatcher.notify()
   }
 
@@ -876,6 +886,7 @@ export class ChatSessionManager {
       watchReceipt: id => this.watchSessionTitle(id),
       archive: id => this.archive(id),
       hasLiveWorkers: id => this.hasLiveWorkers(id),
+      hasRunningBackgroundTasks: id => this.hasRunningBackgroundTasks(id),
       spawn: request => this.spawnMember(request),
       caps: new TeamCaps({
         ...(options.profileCatalogHome ? { homeDir: options.profileCatalogHome } : {}),
@@ -2247,6 +2258,7 @@ export class ChatSessionManager {
     if (!this.records.has(sessionId)) return
     this.backgroundTaskRows.set(sessionId, tasks)
     this.options.onBackgroundTasks?.(sessionId, tasks)
+    this.rosterChanged(sessionId)
     const store = this.options.taskStore
     const driver = this.drivers.get(sessionId)
     if (driver && !driver.isDead) {
@@ -2266,7 +2278,7 @@ export class ChatSessionManager {
     if (!this.records.has(sessionId)) return
     this.workerRows.set(sessionId, workers)
     this.options.onWorkers?.(sessionId, workers)
-    this.workersChanged(sessionId)
+    this.rosterChanged(sessionId)
     const store = this.options.workerStore
     if (store) {
       store.write(sessionId, workers).catch((error) => {

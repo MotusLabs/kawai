@@ -45,7 +45,8 @@ canReleaseMembers: true                    # default; false opts out of release_
 - `releaseOnTaskClose` (default `true`): when a task becomes `done` or
   `cancelled`, its live spawned members are released — archived, never killed —
   once each has settled (idle, no pending approval or answer, no live
-  background worker, no claimed or parked mail, no due direct mail). The
+  background worker or running background task, no claimed or parked mail,
+  no due direct mail). The
   pending release is durable across a restart, is cancelled by reopening the
   task or restoring the member, and is journaled on the task by kawai. A group
   setting `false` keeps its spawned members after their tasks close.

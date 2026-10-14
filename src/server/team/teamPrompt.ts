@@ -61,7 +61,7 @@ function taskNote({ group }: TeamPromptInput): string {
   const release = group?.canReleaseMembers === false ? '' : [
     '',
     'Releasing members:',
-    `- \`${tool('release_member')}\`: release one spawned member of your team by session id (optional reason). It is archived — never killed — and only once it has settled: idle, no pending approval or answer, no running background worker, no held mail. Busy or unsettled members are refused with the reason, so finish coordination first. You cannot release yourself or human-created sessions; a released member's task journal records the release, and direct mail to an archived member restores it.`,
+    `- \`${tool('release_member')}\`: release one spawned member of your team by session id (optional reason). It is archived — never killed — and only once it has settled: idle, no pending approval or answer, no running background worker or background task, no held mail. Busy or unsettled members are refused with the reason, so finish coordination first. You cannot release yourself or human-created sessions; a released member's task journal records the release, and direct mail to an archived member restores it.`,
   ].join('\n')
   return [
     '# Team tasks',

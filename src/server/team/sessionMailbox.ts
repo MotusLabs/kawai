@@ -72,6 +72,8 @@ export class SessionMailbox {
     archive: (id: string) => ArchiveResult
     /** Whether the session has a live background worker (member-release D3). */
     hasLiveWorkers: (id: string) => boolean
+    /** Whether the session has a running background task (member-release D3). */
+    hasRunningBackgroundTasks: (id: string) => boolean
     /** The session received mail under this task (its header shows it). */
     associateTask?: (id: string, taskId: string) => void
     /** Create a group member in a worktree for staffing (team-tasks D4). */
@@ -121,6 +123,7 @@ export class SessionMailbox {
       cachedDefinition: (teamId, groupId) => this.catalogs.get(teamId)?.groups.get(groupId),
       recipient: id => this.recipient(id),
       hasLiveWorkers: options.hasLiveWorkers,
+      hasRunningBackgroundTasks: options.hasRunningBackgroundTasks,
       archive: options.archive,
       notify: () => this.dispatcher.notify(),
     })

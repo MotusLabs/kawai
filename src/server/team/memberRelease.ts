@@ -48,6 +48,8 @@ export interface MemberReleaseOptions {
   recipient: (id: string) => { idle: boolean; pendingRequest: boolean } | undefined
   /** Whether the session has a live background worker (D3). */
   hasLiveWorkers: (id: string) => boolean
+  /** Whether the session has a running background task (a `run_in_background` shell or Monitor; D3). */
+  hasRunningBackgroundTasks: (id: string) => boolean
   /** The manager's archive: the whole release mechanism (D2). */
   archive: (sessionId: string) => ArchiveResult
   /** Re-run the dispatch cycle (freed capacity serves mail in the next pass). */
@@ -235,7 +237,8 @@ export class MemberRelease {
   /**
    * The one readiness definition (D3): idle in the sense mail delivery
    * uses, no pending approval or question, no live background worker, no
-   * claimed or parked mail, and no due direct mail waiting. Unavailable
+   * running background task, no claimed or parked mail, and no due direct
+   * mail waiting. Unavailable
    * members (missing directory, start blocker) count as ready — they hold
    * capacity but can do nothing.
    */
@@ -246,6 +249,7 @@ export class MemberRelease {
       if (recipient.pendingRequest) return { ready: false, reason: 'it is awaiting an approval or answer' }
     }
     if (this.options.hasLiveWorkers(sessionId)) return { ready: false, reason: 'a background worker it started is still running' }
+    if (this.options.hasRunningBackgroundTasks(sessionId)) return { ready: false, reason: 'it has a running background task' }
     if (this.options.store.claimsFor(sessionId).length > 0) return { ready: false, reason: 'it holds claimed mail' }
     if (this.options.store.parkedBy(sessionId).length > 0) return { ready: false, reason: 'it holds parked work' }
     // Direct mail on the waiting surface (queued and due, or held for its
