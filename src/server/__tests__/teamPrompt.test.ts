@@ -3,7 +3,8 @@ import type { GroupDefinition } from '../team/groupFile'
 import { buildTeamPrompt } from '../team/teamPrompt'
 
 const settings: Omit<GroupDefinition, 'id' | 'label' | 'description' | 'prompt'> = {
-  canCreateTasks: false, max: 1, approval: 'manual', profiles: [], strategy: 'first-available',
+  canCreateTasks: false, releaseOnTaskClose: true, worktreeScoped: true, canReleaseMembers: true,
+  max: 1, approval: 'manual', profiles: [], strategy: 'first-available',
   onLimit: { parkIfResetWithinMs: 3 * 3_600_000, otherwise: 'forward' }, warnings: [],
 }
 const qa: GroupDefinition = { id: 'qa', label: 'QA', description: 'Tests releases', ...settings, prompt: 'You test everything.' }

@@ -2,8 +2,8 @@
 
 ## 1. Group settings
 
-- [ ] 1.1 Parse `releaseOnTaskClose` (default true), `worktreeScoped` (default true), and `canReleaseMembers` (default true; opt out with `false`) in `src/server/team/groupFile.ts` as strict `true|false`, rejecting other values like `canCreateTasks`; extend `GroupDefinition` and update the header comment.
-- [ ] 1.2 Cover defaults, explicit values, and invalid values in `teamGroupFile.test.ts`.
+- [x] 1.1 Parse `releaseOnTaskClose` (default true), `worktreeScoped` (default true), and `canReleaseMembers` (default true; opt out with `false`) in `src/server/team/groupFile.ts` as strict `true|false`, rejecting other values like `canCreateTasks`; extend `GroupDefinition` and update the header comment.
+- [x] 1.2 Cover defaults, explicit values, and invalid values in `teamGroupFile.test.ts`.
 
 ## 2. Worktree scoping opt-out
 
