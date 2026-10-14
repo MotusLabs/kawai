@@ -167,12 +167,18 @@ export class MemberRelease {
     if (!record || !record.spawned || record.taskId !== taskId || record.archivedAt != null) return
     if (record.groupId
       && (await this.options.definition(task.teamId, record.groupId, record.projectPath))?.releaseOnTaskClose === false) return
+    // Re-read after the await: a reopen during the definition load must not
+    // leave a pending row for an open task (the member would be archived).
+    const still = this.options.tasks.get(taskId)
+    const fresh = this.options.getRecord(sessionId)
+    if (!still || !isClosed(still.status)) return
+    if (!fresh || !fresh.spawned || fresh.taskId !== taskId || fresh.archivedAt != null) return
     const closer = this.options.tasks.journal(taskId).findLast(entry =>
-      entry.author.kind !== 'system' && entry.text === `Task ${task.status}.`)
+      entry.author.kind !== 'system' && entry.text === `Task ${still.status}.`)
     this.db.prepare(`INSERT OR REPLACE INTO team_member_releases
       (session_id, task_id, team_id, reason, requested_by_kind, requested_by_session, requested_at)
       VALUES (?, ?, ?, ?, ?, ?, ?)`)
-      .run(sessionId, task.id, task.teamId, `task ${task.status}`,
+      .run(sessionId, still.id, still.teamId, `task ${still.status}`,
         closer?.author.kind ?? 'system', closer?.author.sessionId ?? null, new Date().toISOString())
     this.options.notify()
   }

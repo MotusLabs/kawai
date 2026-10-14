@@ -418,3 +418,31 @@ test('the close transition re-reads state at the commit: a claim during the awai
   // Both live spawned members — including the one created during the await — are marked.
   expect(releases.pending().map(row => row.sessionId).sort()).toEqual(['dev-1', 'dev-2'])
 })
+
+test('markSpawnedForClosedTask re-checks after the await: a reopen during the definition load marks nothing (F2)', async () => {
+  const MemberRelease = (await import('../team/memberRelease')).MemberRelease
+  const TaskStoreMod = await import('../team/taskStore')
+  const tasks = new TaskStoreMod.TaskStore(db, runtime.mailbox.store)
+  const t = tasks.create({ teamId: team.teamId, title: 't', direction: 'd', creator: { kind: 'human', sessionId: null }, worktree: featX })
+  tasks.setStatus(t.id, 'done')
+  records.set('spawned-9', record('spawned-9', { projectPath: featX, spawned: true, taskId: t.id }))
+  let releaseDefinitions!: () => void
+  const releases = new MemberRelease(db, {
+    store: runtime.mailbox.store, tasks,
+    records: () => records.values(), getRecord: id => records.get(id),
+    teamOf: id => (records.has(id) ? team : undefined),
+    definition: () => new Promise(resolve => { releaseDefinitions = () => resolve(undefined) }),
+    cachedDefinition: () => undefined,
+    recipient: () => ({ idle: true, pendingRequest: false }),
+    hasLiveWorkers: () => false,
+    archive: () => true,
+    notify: () => {},
+  })
+  const marking = releases.markSpawnedForClosedTask('spawned-9', t.id)
+  await new Promise(resolve => setImmediate(resolve))
+  // The task is reopened while the definition load is suspended.
+  tasks.setStatus(t.id, 'active')
+  releaseDefinitions()
+  await marking
+  expect(releases.pending()).toEqual([])
+})
