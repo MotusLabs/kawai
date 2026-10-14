@@ -20,7 +20,7 @@ import MessageRow from './MessageRow'
 import { TaskPreviewView, TaskTargetSelect, type AssignTargetKind } from './taskAssignFields'
 import { useTeamGroups } from './useTeamGroups'
 import { assignmentLabel } from './TeamTasksPanel'
-import { actorLabel, sessionLabel } from './teamTaskLabels'
+import { actorLabel, journalAuthorLabel, sessionLabel } from './teamTaskLabels'
 
 interface DetailAssignForm {
   kind: AssignTargetKind
@@ -187,7 +187,7 @@ export default function TeamTaskDetail({ sessionId, projectPath, view, sendMessa
       <h5 className="font-medium">Journal</h5>
       {detail.journal.length === 0 && <p className="text-chat-meta text-secondary">No notes yet</p>}
       {detail.journal.map(entry => <article key={entry.id} className="mt-2 border-l-2 border-border pl-2">
-        <p className="text-chat-meta text-secondary">{actorLabel(entry.author, sessions)} · {new Date(entry.createdAt).toLocaleString()}</p>
+        <p className="text-chat-meta text-secondary">{journalAuthorLabel(entry.author, sessions)} · {new Date(entry.createdAt).toLocaleString()}</p>
         <p className="whitespace-pre-wrap text-chat-body">{entry.text}</p>
       </article>)}
       <form className="mt-2 flex gap-2" onSubmit={event => {

@@ -28,7 +28,10 @@ const detail = (task: TeamTaskSummary, extra: Partial<Detail> = {}): Detail => (
     { revision: 1, direction: 'First plan', acceptance: null, author: { kind: 'agent', sessionId: 'lead' }, createdAt: '2026-10-11T00:00:00.000Z' },
     { revision: 2, direction: task.direction, acceptance: task.acceptance, author: { kind: 'human', sessionId: null }, createdAt: '2026-10-11T01:00:00.000Z' },
   ],
-  journal: [{ id: 'n1', author: { kind: 'agent', sessionId: 'dev' }, text: 'Picked option B', createdAt: '2026-10-11T02:00:00.000Z' }],
+  journal: [
+    { id: 'n1', author: { kind: 'agent', sessionId: 'dev' }, text: 'Picked option B', createdAt: '2026-10-11T02:00:00.000Z' },
+    { id: 'n2', author: { kind: 'system', sessionId: null }, text: 'Released Dev one (dev): task done by human.', createdAt: '2026-10-11T03:00:00.000Z' },
+  ],
   subtasks: [summary('child', { title: 'Export button', parentId: task.id })],
   assignments: [],
   messages: [{ id: 'm1', teamId: 'team', toKind: 'group', toId: 'devs', fromKind: 'agent', fromSession: 'lead', fromGroup: 'leads', originPath: '/repo', priority: 'normal',
@@ -136,6 +139,8 @@ test('detail shows direction, retained revisions, journal, subtasks, messages; c
   for (const fragment of ['Picked option B', 'Dev one', 'Export button', 'Please build', 'add-export', 'authoritative direction', '/repo-feature']) {
     expect(text(renderer)).toContain(fragment)
   }
+  // A system journal entry renders as kawai (member-release D4).
+  expect(text(renderer)).toContain('Kawai')
   const button = (label: string) => renderer.root.find(node => node.type === 'button' && node.children.join('') === label)
   act(() => button('Reopen').props.onClick())
   act(() => button('Mark cancelled').props.onClick())

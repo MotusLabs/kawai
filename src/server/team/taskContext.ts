@@ -23,7 +23,7 @@ export function buildTaskContext(store: TaskStore, taskId: string | null): ChatP
     openspecChange: task.openspecChange,
     worktree: task.worktree,
     journal: store.journal(task.id, TASK_CONTEXT_JOURNAL_ENTRIES).map(entry => ({
-      author: entry.author.sessionId ?? 'human',
+      author: entry.author.sessionId ?? entry.author.kind,
       text: entry.text.length > TASK_CONTEXT_ENTRY_CHARS ? `${entry.text.slice(0, TASK_CONTEXT_ENTRY_CHARS)}…` : entry.text,
       createdAt: entry.createdAt,
     })),
