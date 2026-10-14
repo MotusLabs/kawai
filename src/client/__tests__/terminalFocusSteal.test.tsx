@@ -373,12 +373,17 @@ describe('with the always-mounted session drawer (mobile layout)', () => {
 
   test('a closed drawer panel is inert; an open one is not when it takes focus', () => {
     const { set } = setup()
-    // Mock DOM nodes whose focus records how inert the panel was at that moment.
-    const focusedNodes: Array<{ inert: boolean }> = []
+    // Mock DOM nodes whose focus records how inert the panel was at that
+    // moment, plus the last node so the closed state can be read afterwards.
+    const inertAtFocus: boolean[] = []
+    let focusedNode: { inert: boolean } | null = null
     const createNodeMock = () => {
       const node = {
         inert: false,
-        focus: () => void focusedNodes.push(node),
+        focus: () => {
+          focusedNode = node
+          inertAtFocus.push(node.inert)
+        },
         addEventListener: () => {},
         removeEventListener: () => {},
       }
@@ -394,13 +399,12 @@ describe('with the always-mounted session drawer (mobile layout)', () => {
     act(() => {
       renderer.update(mobileTree(false, true))
     })
-    expect(focusedNodes.length).toBe(1)
-    expect(focusedNodes[0].inert).toBe(false)
+    expect(inertAtFocus).toEqual([false])
     // Closing: the panel goes inert again while it stays mounted off-canvas.
     act(() => {
       renderer.update(mobileTree(false, false))
     })
-    expect(focusedNodes[0].inert).toBe(true)
+    expect(focusedNode!.inert).toBe(true)
     act(() => renderer.unmount())
   })
 })
