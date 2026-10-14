@@ -3549,6 +3549,27 @@ describe('ChatSessionManager worker sidecar', () => {
     expect(recovered).toEqual([])
   })
 
+  test('a worker roster change on a pending release re-runs the dispatch cycle (member-release D2/D3)', async () => {
+    process.env.ANTHROPIC_API_KEY = 'test-key'
+    const harness = await createHarness(db, anyDirectory)
+    const created = harness.manager.createSession({ projectPath: '/tmp/proj' })
+    if (!created.ok) throw new Error(created.error)
+    const id = created.session.id
+    await harness.manager.send(id, 'research')
+    const handle = harness.handles[0]!
+    handle.push(initMessage('sdk-workers-release'))
+    await spawnWorker(handle, 'toolu_rel', 'task_rel', 'Map the workspace')
+    expect(harness.manager.hasLiveWorkers(id)).toBe(true)
+    db.db.prepare(`INSERT INTO team_member_releases (session_id, task_id, team_id, reason, requested_by_kind, requested_at)
+      VALUES (?, 'task-1', 'team-1', 'task done', 'human', ?)`).run(id, new Date().toISOString())
+    let notified = 0
+    harness.manager.dispatcher.notify = () => { notified += 1 }
+    await settleWorker(handle, 'toolu_rel', 'task_rel', 'completed', 'Mapped')
+    expect(harness.manager.hasLiveWorkers(id)).toBe(false)
+    expect(notified).toBeGreaterThan(0)
+    harness.manager.shutdown()
+  })
+
   test('kill removes the sidecar with the session', async () => {
     process.env.ANTHROPIC_API_KEY = 'test-key'
     const store = new ChatWorkerStore({ dir: sidecarDir })

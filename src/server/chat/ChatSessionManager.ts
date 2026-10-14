@@ -470,9 +470,14 @@ export class ChatSessionManager {
     return this.getWorkers(sessionId).some(worker => worker.live)
   }
 
-  /** Whether the session is pending release (D2): worker roster changes re-check readiness. */
-  hasPendingRelease(sessionId: string): boolean {
-    return this.teamMail.releases.pendingFor(sessionId)
+  /**
+   * A session's worker roster changed. A pending release's readiness
+   * includes live workers (member-release D3): a change on a pending member
+   * re-runs the dispatch cycle (D2), since no status change follows a worker
+   * that ends while the session is already idle.
+   */
+  private workersChanged(sessionId: string): void {
+    if (this.teamMail.releases.pendingFor(sessionId)) this.dispatcher.notify()
   }
 
   /** Current activity with a live-computed elapsed time, or null when idle. */
@@ -2082,6 +2087,7 @@ export class ChatSessionManager {
     if (!this.records.has(sessionId)) return
     this.workerRows.set(sessionId, workers)
     this.options.onWorkers?.(sessionId, workers)
+    this.workersChanged(sessionId)
     const store = this.options.workerStore
     if (store) {
       store.write(sessionId, workers).catch((error) => {
