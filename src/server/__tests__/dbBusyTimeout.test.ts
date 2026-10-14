@@ -40,9 +40,14 @@ describe('initDatabase busy_timeout', () => {
   })
 
   // Mirrors the CI failure: another process holds BEGIN EXCLUSIVE while the
-  // server connection reads. The child writes a marker only after the lock is
-  // granted, so the parent's read provably starts while the lock is held —
-  // with the default timeout 0 it would throw SQLITE_BUSY immediately.
+  // server connection reads. The child writes its lock timestamp into the
+  // marker once the lock is granted, so the parent can prove its read really
+  // blocked until the child's release — with the default timeout 0 the read
+  // throws SQLITE_BUSY immediately instead. The hold is 150 ms to keep the
+  // file comfortably under 1 s even at load; if the parent polls the marker
+  // too late to overlap the hold window the observation proves nothing, so
+  // it retries once with a fresh child and then fails rather than passing
+  // vacuously.
   test('a read waits out another process holding an exclusive lock', async () => {
     const dbPath = path.join(tempDir, 'cross-process.db')
     const db = initDatabase({ path: dbPath })
@@ -65,37 +70,68 @@ describe('initDatabase busy_timeout', () => {
       launchCommand: null,
     })
 
-    const marker = path.join(tempDir, 'lock-held.marker')
-    const child = Bun.spawn({
-      cmd: [
-        'bun',
-        '-e',
-        [
-          "import { Database } from 'bun:sqlite'",
-          "import { writeFileSync } from 'node:fs'",
-          'const db = new Database(process.env.LOCK_DB_PATH!)',
-          "db.exec('BEGIN EXCLUSIVE')",
-          "writeFileSync(process.env.LOCK_MARKER!, 'held')",
-          'await Bun.sleep(300)',
-          "db.exec('COMMIT')",
-          'db.close()',
-        ].join('\n'),
-      ],
-      env: { ...process.env, LOCK_DB_PATH: dbPath, LOCK_MARKER: marker },
-      cwd: process.cwd(),
-      stdout: 'ignore',
-      stderr: 'inherit',
-    })
-
-    const deadline = Date.now() + 5000
-    while (!fs.existsSync(marker)) {
-      if (Date.now() > deadline) throw new Error('child never acquired the exclusive lock')
-      await Bun.sleep(2)
+    const HOLD_MS = 150
+    const SLACK_MS = 20
+    let proved = false
+    let lateReason = ''
+    for (let attempt = 1; attempt <= 2 && !proved; attempt++) {
+      const marker = path.join(tempDir, `lock-held-${attempt}.marker`)
+      const child = Bun.spawn({
+        cmd: [
+          'bun',
+          '-e',
+          [
+            "import { Database } from 'bun:sqlite'",
+            "import { writeFileSync } from 'node:fs'",
+            'const db = new Database(process.env.LOCK_DB_PATH!)',
+            "db.exec('BEGIN EXCLUSIVE')",
+            "writeFileSync(process.env.LOCK_MARKER!, String(Date.now()))",
+            'await Bun.sleep(Number(process.env.LOCK_HOLD_MS!))',
+            "db.exec('COMMIT')",
+            'db.close()',
+          ].join('\n'),
+        ],
+        env: {
+          ...process.env,
+          LOCK_DB_PATH: dbPath,
+          LOCK_MARKER: marker,
+          LOCK_HOLD_MS: String(HOLD_MS),
+        },
+        cwd: process.cwd(),
+        stdout: 'ignore',
+        stderr: 'inherit',
+      })
+      let childDone = false
+      try {
+        const deadline = Date.now() + 5000
+        while (!fs.existsSync(marker)) {
+          if (Date.now() > deadline) throw new Error('child never acquired the exclusive lock')
+          await Bun.sleep(2)
+        }
+        const lockedAt = Number(fs.readFileSync(marker, 'utf8'))
+        const start = Date.now()
+        if (start >= lockedAt + HOLD_MS) {
+          lateReason = `observed the lock ${start - lockedAt} ms after it was granted, too late to overlap the ${HOLD_MS} ms hold`
+          // Let this child commit and release cleanly before any retry.
+          expect(await child.exited).toBe(0)
+          childDone = true
+          continue
+        }
+        expect(() => db.getActiveSessions()).not.toThrow()
+        // The read can only return after the child's COMMIT, which happens
+        // no earlier than lockedAt + HOLD_MS.
+        const end = Date.now()
+        expect(end).toBeGreaterThanOrEqual(lockedAt + HOLD_MS - SLACK_MS)
+        expect(end - start).toBeLessThan(5000)
+        expect(await child.exited).toBe(0)
+        childDone = true
+        proved = true
+      } finally {
+        if (!childDone) child.kill()
+      }
     }
-
-    const start = Date.now()
-    expect(() => db.getActiveSessions()).not.toThrow()
-    expect(Date.now() - start).toBeLessThan(5000)
-    expect(await child.exited).toBe(0)
+    if (!proved) {
+      throw new Error(`could not prove the read waited for the lock: ${lateReason}`)
+    }
   })
 })
