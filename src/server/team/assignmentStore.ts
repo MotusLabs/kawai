@@ -135,7 +135,8 @@ export class AssignmentStore {
    * Insert one dispatch under its request key (design D4): insert-then-read.
    * A same-payload replay returns the prior row as the outcome; a different
    * payload under the same key is refused naming the differing field. Payload
-   * identity covers the request fields only — target and instruction.
+   * identity covers the request fields — target and instruction — and, for a
+   * handoff, its kind, referenced result, and expected response.
    */
   insert(input: DispatchInsert, now = nowIso()): InsertOutcome {
     const id = `assignment-${crypto.randomUUID()}`

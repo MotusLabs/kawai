@@ -320,6 +320,11 @@ export class TaskStore {
     return { replay: true, task: this.get(id)!, revision }
   }
 
+  /** Run writes as one transaction (nested store transactions become savepoints). */
+  atomically<T>(write: () => T): T {
+    return this.db.transaction(write)()
+  }
+
   appendJournal(id: string, author: JournalAuthor, entry: string, now = nowIso()): TaskJournalEntry | null {
     if (!this.get(id)) return null
     const journalId = `note-${crypto.randomUUID()}`

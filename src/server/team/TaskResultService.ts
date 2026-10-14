@@ -113,12 +113,16 @@ export class TaskResultService {
     const tests = (input.tests ?? []).map(row => ({ description: row.description.trim(), outcome: row.outcome.trim() }))
     if (tests.some(row => !row.description || !row.outcome)) throw new Error('Each test needs a description and an outcome')
     const session = this.options.getSession(actor.sessionId)
-    const result = this.store.results.insert({
-      teamId: team.teamId, taskId, summary, commit, diff,
-      worktree: task.worktree ?? (session ? worktreeRootOf(session.projectPath) : null),
-      tests, limitations: blankToNull(input.limitations), taskRevision: task.revision, submittedBy: actor,
+    // The result and its journal note commit together, as a dispatch and its journal entry do.
+    const result = this.store.atomically(() => {
+      const inserted = this.store.results.insert({
+        teamId: team.teamId, taskId, summary, commit, diff,
+        worktree: task.worktree ?? (session ? worktreeRootOf(session.projectPath) : null),
+        tests, limitations: blankToNull(input.limitations), taskRevision: task.revision, submittedBy: actor,
+      })
+      this.store.appendJournal(taskId, actor, `Submitted result ${inserted.id}: ${summary}`)
+      return inserted
     })
-    this.store.appendJournal(taskId, actor, `Submitted result ${result.id}: ${summary}`)
     return this.store.results.get(result.id)!
   }
 

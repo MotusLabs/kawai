@@ -85,6 +85,17 @@ test('submission pins the current revision and the task worktree, journals a not
   expect(tasks.store.journal(task.id).at(-1)).toMatchObject({ author: { kind: 'agent', sessionId: 'dev' }, text: `Submitted result ${result.id}: CSV export` })
 })
 
+test('a submission whose journal note fails leaves no result behind (one transaction)', async () => {
+  const task = await tasks.create(agent('lead'), { title: 'Export', direction: 'v1' })
+  const earlier = await results.submit(agent('dev'), task.id, submission)
+  const append = tasks.store.appendJournal.bind(tasks.store)
+  tasks.store.appendJournal = () => { throw new Error('disk full') }
+  await expect(results.submit(agent('dev'), task.id, { ...submission, summary: 'v2' })).rejects.toThrow('disk full')
+  tasks.store.appendJournal = append
+  // Neither the new row nor its supersession of the earlier result survived.
+  expect(tasks.store.results.listByTask(task.id).map(row => [row.id, row.supersededBy])).toEqual([[earlier.id, null]])
+})
+
 test('without a task worktree, the submitter\'s resolved worktree is pinned', async () => {
   const task = await tasks.create(agent('lead'), { title: 'Export', direction: 'v1' })
   expect((await results.submit(agent('dev'), task.id, submission)).worktree).toBe(feature)
