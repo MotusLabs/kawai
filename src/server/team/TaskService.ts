@@ -27,6 +27,8 @@ export interface TaskCreateInput {
   parent_id?: string | null
   worktree?: string | null
   openspec_change?: string | null
+  /** Stable client request key (task-assignment D4): replays deduplicate. */
+  requestKey?: string | null
 }
 
 export interface TaskAmendInput {
@@ -70,6 +72,7 @@ export class TaskService {
     return this.store.create({
       teamId: team.teamId, title, direction, acceptance: emptyToNull(input.acceptance), creator: actor,
       parentId: input.parent_id || null, worktree, openspecChange,
+      ...(input.requestKey ? { requestKey: input.requestKey } : {}),
     })
   }
 

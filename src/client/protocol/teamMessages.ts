@@ -24,6 +24,8 @@ export function handleTeamMessage(message: TeamMessage, _deps: MessageRouterDeps
     case 'team-tasks-snapshot': useTeamTaskStore.getState().applySnapshot(message); return
     case 'team-task-detail': useTeamTaskStore.getState().applyDetail(message); return
     case 'team-task-result': useTeamTaskStore.getState().applyResult(message); return
+    case 'team-task-preview-result': useTeamTaskStore.getState().applyPreviewResult(message); return
+    case 'team-task-targets-result': useTeamTaskStore.getState().applyTargetsResult(message); return
     case 'team-messages-snapshot': messages.applySnapshot(message); return
     case 'team-messages': messages.applyPush(message); return
     case 'team-thread': messages.applyThread(message); return

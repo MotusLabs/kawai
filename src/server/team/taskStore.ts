@@ -17,6 +17,7 @@ import type {
   TeamTaskSummary,
 } from '../../shared/teamTasks'
 import { TASK_STATUSES } from '../../shared/teamTasks'
+import { outstandingOf, type AssignmentStore } from './assignmentStore'
 import type { MailboxStore } from './mailboxStore'
 
 const CREATE_TABLES_SQL = `
@@ -30,6 +31,7 @@ CREATE TABLE IF NOT EXISTS team_tasks (
   parent_id TEXT,
   worktree TEXT,
   openspec_change TEXT,
+  request_key TEXT,
   revision INTEGER NOT NULL,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
@@ -57,6 +59,17 @@ CREATE TABLE IF NOT EXISTS team_task_journal (
 CREATE INDEX IF NOT EXISTS team_task_journal_task ON team_task_journal (task_id, created_at);
 `
 
+/** Columns added after the table first shipped (task-assignment D4). */
+function migrateTable(db: Database) {
+  const columns = db.prepare('PRAGMA table_info(team_tasks)').all() as Array<{ name: string }>
+  if (!columns.some(column => column.name === 'request_key')) {
+    db.exec('ALTER TABLE team_tasks ADD COLUMN request_key TEXT')
+  }
+  // Created here, not in CREATE_TABLES_SQL: a legacy table gains the column
+  // only in the ALTER above, after the DDL block has already run.
+  db.exec('CREATE UNIQUE INDEX IF NOT EXISTS team_tasks_request_key ON team_tasks (team_id, request_key)')
+}
+
 export interface CreateTaskInput {
   teamId: string
   title: string
@@ -66,6 +79,12 @@ export interface CreateTaskInput {
   parentId?: string | null
   worktree?: string | null
   openspecChange?: string | null
+  /**
+   * The client's request identity for this create (task-assignment D4): a
+   * replay under the same key and payload returns the prior task instead of
+   * a duplicate; the same key with a different payload is refused.
+   */
+  requestKey?: string | null
 }
 
 const nowIso = () => new Date().toISOString()
@@ -73,8 +92,9 @@ const nowIso = () => new Date().toISOString()
 export class TaskStore {
   private readonly listeners = new Set<(task: TeamTask) => void>()
 
-  constructor(private readonly db: Database, private readonly mail?: MailboxStore) {
+  constructor(private readonly db: Database, private readonly mail?: MailboxStore, private readonly assignments?: AssignmentStore) {
     db.exec(CREATE_TABLES_SQL)
+    migrateTable(db)
   }
 
   /** Every committed change, with the task as it is now. */
@@ -90,17 +110,35 @@ export class TaskStore {
   }
 
   create(input: CreateTaskInput, now = nowIso()): TeamTask {
+    // Request identity (task-assignment D4): insert-then-read by the unique
+    // key. A same-payload replay returns the prior task; a different payload
+    // under the key is refused naming the differing field. Post-create
+    // mutations (status, later revisions) are never payload differences.
+    if (input.requestKey) {
+      const existing = this.byRequestKey(input.teamId, input.requestKey)
+      if (existing) {
+        const diff = createPayloadDiff(existing, this.revisions(existing.id)[0], input)
+        if (diff) throw new Error(`Request key already used with a different ${diff}`)
+        return existing
+      }
+    }
     const id = `task-${crypto.randomUUID()}`
     this.db.transaction(() => {
       this.db.prepare(`INSERT INTO team_tasks
-        (id, team_id, title, status, creator_kind, creator_session, parent_id, worktree, openspec_change, revision, created_at, updated_at)
-        VALUES (?, ?, ?, 'open', ?, ?, ?, ?, ?, 1, ?, ?)`).run(
+        (id, team_id, title, status, creator_kind, creator_session, parent_id, worktree, openspec_change, request_key, revision, created_at, updated_at)
+        VALUES (?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, 1, ?, ?)`).run(
         id, input.teamId, input.title, input.creator.kind, input.creator.sessionId,
-        input.parentId ?? null, input.worktree ?? null, input.openspecChange ?? null, now, now,
+        input.parentId ?? null, input.worktree ?? null, input.openspecChange ?? null, input.requestKey ?? null, now, now,
       )
       this.insertRevision(id, 1, input.direction, input.acceptance ?? null, input.creator, now)
     })()
     return this.changed(id)
+  }
+
+  /** The task a team stored under a request key (idempotency reads). */
+  byRequestKey(teamId: string, requestKey: string): TeamTask | null {
+    const row = this.db.prepare('SELECT id FROM team_tasks WHERE team_id = ? AND request_key = ?').get(teamId, requestKey)
+    return row ? this.get(String((row as Record<string, unknown>).id)) : null
   }
 
   get(id: string): TeamTask | null {
@@ -122,6 +160,7 @@ export class TaskStore {
       revisions: this.revisions(id),
       journal: this.journal(id),
       subtasks: this.selectTasks('t.parent_id = ?', id).map(child => this.summary(child)),
+      assignments: this.assignments?.listByTask(id) ?? [],
       messages: this.messages(id),
     }
   }
@@ -214,8 +253,24 @@ export class TaskStore {
       UNION SELECT author_session FROM team_task_journal WHERE task_id = $id AND author_session IS NOT NULL`)
       .all({ $id: task.id }) as Array<{ id: string }>
     for (const row of rows) ids.add(row.id)
-    return { ...task, participants: [...ids] }
+    return { ...task, participants: [...ids], assignment: this.assignments ? outstandingOf(this.assignments.listByTask(task.id)) : null }
   }
+}
+
+/**
+ * Which normalized create field differs between a stored task and a replayed
+ * intent (D4). Direction and acceptance compare against revision 1 — what
+ * this create wrote — so later amendments are never payload differences.
+ */
+function createPayloadDiff(existing: TeamTask, firstRevision: TaskRevision | undefined, input: CreateTaskInput): string | null {
+  if (existing.title !== input.title) return 'title'
+  if ((firstRevision?.direction ?? existing.direction) !== input.direction) return 'direction'
+  const acceptance = input.acceptance?.trim() ? input.acceptance.trim() : null
+  if ((firstRevision?.acceptance ?? existing.acceptance ?? null) !== acceptance) return 'acceptance'
+  if ((existing.parentId ?? null) !== (input.parentId || null)) return 'parent'
+  if ((existing.worktree ?? null) !== (input.worktree ?? null)) return 'worktree'
+  if ((existing.openspecChange ?? null) !== (input.openspecChange ?? null)) return 'OpenSpec change'
+  return null
 }
 
 function text(value: unknown): string | null {

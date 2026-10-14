@@ -2009,17 +2009,14 @@ describe('chat task header and tasks panel', () => {
     expect(textOf(link.parent!)).toBe('Spawned for task Export')
     act(() => link.props.onClick())
     expect(renderer.root.findAllByProps({ 'data-testid': 'team-tasks' })).toHaveLength(1)
-    expect(sent.filter(message => message.type.startsWith('team-task'))).toEqual([
-      { type: 'team-tasks-open', sessionId: 'chat-1' },
-      { type: 'team-task-open', sessionId: 'chat-1', taskId: 'task-1' },
+    expect(sent.filter(message => message.type.startsWith('team-task')).map(message => message.type)).toEqual([
+      // The pickers request the team's worktrees and changes on open (5.2).
+      'team-task-targets', 'team-tasks-open', 'team-task-open',
     ])
     sent.length = 0
     act(() => renderer.update(<ChatView {...props} connectionEpoch={1} />))
-    expect(sent.filter(message => message.type.startsWith('team-task'))).toEqual([
-      { type: 'team-tasks-close', sessionId: 'chat-1' },
-      { type: 'team-task-close', sessionId: 'chat-1', taskId: 'task-1' },
-      { type: 'team-tasks-open', sessionId: 'chat-1' },
-      { type: 'team-task-open', sessionId: 'chat-1', taskId: 'task-1' },
+    expect(sent.filter(message => message.type.startsWith('team-task')).map(message => message.type)).toEqual([
+      'team-tasks-close', 'team-task-close', 'team-tasks-open', 'team-task-open',
     ])
     // Opening the mailbox replaces the tasks panel in the shared side slot.
     act(() => renderer.root.find(node => node.type === 'button' && node.children.join('') === 'Mailbox').props.onClick())

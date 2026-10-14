@@ -1,7 +1,8 @@
 // Task subscriptions and human actions over the chat connection (team-tasks
-// 6.1/6.2): team-scoped list/detail snapshots, delayed team resolution,
-// cross-team refusal, and every human action including reopening a task
-// whose creator was killed.
+// 6.1/6.2, task-assignment 4.2/4.3): team-scoped list/detail snapshots,
+// delayed team resolution, cross-team refusal, every human action including
+// reopening a task whose creator was killed, and assignment dispatch,
+// preview, and targets with their result messages.
 import { afterEach, beforeEach, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -9,9 +10,14 @@ import path from 'node:path'
 import type { ChatSessionManager } from '../chat/ChatSessionManager'
 import { ChatConnections } from '../chat/ChatConnections'
 import { initDatabase, type SessionDatabase } from '../db'
+import { AssignmentService } from '../team/AssignmentService'
+import { AssignmentStore } from '../team/assignmentStore'
 import { MailboxStore } from '../team/mailboxStore'
 import { TaskStore } from '../team/taskStore'
 import { TaskService } from '../team/TaskService'
+import { WorktreeStaffing } from '../team/staffing'
+import { TeamCaps } from '../team/teamCaps'
+import { TeamWorktrees } from '../team/worktreeRoots'
 import type { TeamIdentity } from '../team/teamIdentity'
 import type { ClientMessage, ServerMessage } from '../../shared/types'
 
@@ -19,6 +25,7 @@ let dir: string
 let db: SessionDatabase
 let mail: MailboxStore
 let tasks: TaskService
+let assignments: AssignmentService
 let connections: ChatConnections
 let messages: ServerMessage[]
 let connection: { send: (message: ServerMessage) => void }
@@ -27,11 +34,29 @@ let resolveDelay: Promise<void> | null
 
 beforeEach(() => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kawai-task-connections-'))
+  fs.mkdirSync(path.join(dir, '.kawai', 'groups'), { recursive: true })
+  fs.writeFileSync(path.join(dir, '.kawai', 'groups', 'devs.md'), '---\nlabel: Developers\n---\nBuild features')
   fs.mkdirSync(path.join(dir, 'openspec', 'changes', 'add-x'), { recursive: true })
   db = initDatabase({ path: path.join(dir, 'db.sqlite') })
   mail = new MailboxStore(db.db)
   sessions = new Map([['dev', { teamId: 'team', groupsRoot: dir }], ['stranger', { teamId: 'other', groupsRoot: dir }]])
-  tasks = new TaskService(new TaskStore(db.db, mail), { getSession: () => undefined })
+  const assignmentStore = new AssignmentStore(db.db, mail)
+  const taskStore = new TaskStore(db.db, mail, assignmentStore)
+  tasks = new TaskService(taskStore, { getSession: () => undefined })
+  const worktrees = new TeamWorktrees()
+  const staffing = new WorktreeStaffing(db.db, mail, {
+    records: () => [],
+    teamOf: () => undefined,
+    caps: new TeamCaps({}),
+    worktrees,
+    spawn: () => Promise.resolve({ ok: false, error: 'no spawn in tests' }),
+  })
+  assignments = new AssignmentService(db.db, assignmentStore, taskStore, mail, {
+    getSession: () => undefined,
+    records: () => [],
+    teamOf: () => undefined,
+    staffing, caps: new TeamCaps({}), worktrees,
+  })
   resolveDelay = null
   messages = []
   connection = { send: message => messages.push(message) }
@@ -42,11 +67,11 @@ beforeEach(() => {
       teamOf: (id: string) => sessions.get(id),
       resolvedTeamOf: async (id: string) => { if (resolveDelay) await resolveDelay; return sessions.get(id) },
     },
-    mailbox: { store: mail }, dispatcher: { notify: () => {} }, tasks,
+    mailbox: { store: mail }, dispatcher: { notify: () => {} }, tasks, assignments,
     directory: { list: () => [{ sessionId: 'gone', name: 'Killed helper', group: 'qa' }] },
   } as unknown as ChatSessionManager
   connections = new ChatConnections(manager)
-  tasks.store.subscribe(task => connections.publishTasks(task.teamId))
+  taskStore.subscribe(task => connections.publishTasks(task.teamId))
   mail.subscribe((team, message) => connections.publishMailbox(team, message))
 })
 afterEach(() => { db.close(); fs.rmSync(dir, { recursive: true, force: true }) })
@@ -230,4 +255,105 @@ test('a close still supersedes a pending open of the same detail only', async ()
   await send({ type: 'team-task-close', sessionId: 'dev', taskId: a.id })
   release(); await Promise.all([openA, openB])
   expect(messages.filter(message => message.type === 'team-task-detail').map(message => (message as { detail: { task: { id: string } } }).detail.task.id)).toEqual([b.id])
+})
+
+test('human dispatch assigns a task and returns its assignment; snapshots carry it', async () => {
+  await send({ type: 'team-tasks-open', sessionId: 'dev' })
+  await send({ type: 'team-task-create', sessionId: 'dev', requestId: 'c1', title: 'Export', direction: 'CSV', requestKey: 'intent-1' })
+  const task = last('team-task-result')!.task!
+  await send({
+    type: 'team-task-assign', sessionId: 'dev', requestId: 'a1', taskId: task.id,
+    target: { kind: 'group', id: 'devs' }, instruction: 'Please build it', requestKey: 'intent-1',
+  })
+  const result = last('team-task-result')!
+  expect(result).toMatchObject({ requestId: 'a1', assignment: { targetKind: 'group', targetId: 'devs', state: 'queued', role: 'devs' } })
+  expect(result.task!.id).toBe(task.id)
+  expect(last('team-tasks-snapshot')!.tasks[0]!.assignment!.id).toBe(result.assignment!.id)
+  // A same-key replay returns the first assignment; the list still has one instruction.
+  await send({
+    type: 'team-task-assign', sessionId: 'dev', requestId: 'a2', taskId: task.id,
+    target: { kind: 'group', id: 'devs' }, instruction: 'Please build it', requestKey: 'intent-1',
+  })
+  expect(last('team-task-result')!.assignment!.id).toBe(result.assignment!.id)
+  expect(mail.forTask(task.id)).toHaveLength(1)
+})
+
+test('dispatch refusals answer inline and create nothing', async () => {
+  const task = await tasks.create(human(), { title: 'Export', direction: 'CSV' })
+  for (const [requestId, message, error] of [
+    ['a1', { type: 'team-task-assign', sessionId: 'dev', requestId: 'a1', taskId: task.id, target: { kind: 'group', id: 'ghosts' }, instruction: 'Go', requestKey: 'k' }, 'Unknown group'],
+    ['a2', { type: 'team-task-assign', sessionId: 'dev', requestId: 'a2', taskId: 'task-missing', target: { kind: 'group', id: 'devs' }, instruction: 'Go', requestKey: 'k2' }, 'not found in this team'],
+    ['a3', { type: 'team-task-assign', sessionId: 'stranger', requestId: 'a3', taskId: task.id, target: { kind: 'group', id: 'devs' }, instruction: 'Go', requestKey: 'k3' }, 'not found in this team'],
+    ['a4', { type: 'team-task-assign', sessionId: 'dev', requestId: 'a4', taskId: task.id, target: { kind: 'group', id: 'devs' }, instruction: '  ', requestKey: 'k4' }, 'instruction'],
+  ] as Array<[string, ClientMessage, string]>) {
+    await send(message)
+    expect(last('team-task-result')).toMatchObject({ requestId, error: expect.stringContaining(error) })
+  }
+  expect(mail.forTask(task.id)).toEqual([])
+  expect(tasks.store.list('team')[0]!.assignment).toBeNull()
+})
+
+test('a reassignment without handling is refused naming the outstanding assignment', async () => {
+  const task = await tasks.create(human(), { title: 'Export', direction: 'CSV' })
+  await send({
+    type: 'team-task-assign', sessionId: 'dev', requestId: 'a1', taskId: task.id,
+    target: { kind: 'group', id: 'devs' }, instruction: 'Go', requestKey: 'k1',
+  })
+  await send({
+    type: 'team-task-assign', sessionId: 'dev', requestId: 'a2', taskId: task.id,
+    target: { kind: 'group', id: 'devs' }, instruction: 'Redo', requestKey: 'k2',
+  })
+  expect(last('team-task-result')!.error).toContain('outstanding assignment: group devs, queued')
+})
+
+test('assignment state transitions arrive as refreshed snapshots through the mail republish path', async () => {
+  await send({ type: 'team-tasks-open', sessionId: 'dev' })
+  const task = await tasks.create(human(), { title: 'Export', direction: 'CSV' })
+  await send({
+    type: 'team-task-assign', sessionId: 'dev', requestId: 'a1', taskId: task.id,
+    target: { kind: 'group', id: 'devs' }, instruction: 'Go', requestKey: 'k1',
+  })
+  const assignment = last('team-task-result')!.assignment!
+  // Claim, requeue, dead-letter: each mail change republishes the task snapshot.
+  mail.claim(assignment.messageId!, 'chat-dev')
+  expect(last('team-tasks-snapshot')!.tasks[0]!.assignment).toMatchObject({ state: 'claimed', claimedBy: 'chat-dev' })
+  mail.requeue(assignment.messageId!)
+  expect(last('team-tasks-snapshot')!.tasks[0]!.assignment).toMatchObject({ state: 'queued', claimedBy: null })
+  mail.deadLetter(assignment.messageId!, 'killed-recipient')
+  // Failed is not outstanding: the list shows the task unassigned again.
+  expect(last('team-tasks-snapshot')!.tasks[0]!.assignment).toBeNull()
+  await send({ type: 'team-task-open', sessionId: 'dev', taskId: task.id })
+  expect(last('team-task-detail')!.detail.assignments[0]).toMatchObject({ state: 'failed', reason: 'killed-recipient' })
+})
+
+test('preview answers through its result message; an invalid worktree errors inline', async () => {
+  const task = await tasks.create(human(), { title: 'Export', direction: 'CSV' })
+  await send({
+    type: 'team-task-preview', sessionId: 'dev', requestId: 'p1', taskId: task.id, target: { kind: 'group', id: 'devs' },
+  })
+  expect(last('team-task-preview-result')).toMatchObject({
+    requestId: 'p1',
+    preview: { worktree: null, target: { kind: 'group', id: 'devs' }, role: 'Developers', idleMembers: [] },
+  })
+  await send({
+    type: 'team-task-preview', sessionId: 'dev', requestId: 'p2', worktree: path.join(dir, 'nowhere'), target: { kind: 'group', id: 'devs' },
+  })
+  expect(last('team-task-preview-result')).toMatchObject({ requestId: 'p2', error: expect.stringContaining('is not a worktree') })
+  await send({ type: 'team-task-preview', sessionId: 'dev', requestId: 'p3', target: { kind: 'group', id: 'ghosts' } })
+  expect(last('team-task-preview-result')!.error).toContain('Unknown group')
+})
+
+test('targets list the team-scoped worktrees and changes', async () => {
+  await send({ type: 'team-task-targets', sessionId: 'dev', requestId: 't1' })
+  const targets = last('team-task-targets-result')!.targets!
+  expect(targets.changes.map(change => change.name)).toEqual(['add-x'])
+  expect(targets.changes[0]!.locations).toEqual([dir])
+  // A plain directory: no git worktrees to list.
+  expect(targets.worktrees).toEqual([])
+  await send({ type: 'team-task-targets', sessionId: 'stranger', requestId: 't2' })
+  expect(last('team-task-targets-result')!.targets).toEqual({ worktrees: [], changes: [{ name: 'add-x', locations: [dir] }] })
+  // The change list narrows to the roots the chosen worktree validates for;
+  // an unknown worktree errors inline.
+  await send({ type: 'team-task-targets', sessionId: 'dev', requestId: 't3', worktree: '/nope' })
+  expect(last('team-task-targets-result')).toMatchObject({ requestId: 't3', error: expect.stringContaining('is not a worktree') })
 })
