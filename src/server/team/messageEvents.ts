@@ -6,7 +6,6 @@
 import type { Database } from 'bun:sqlite'
 import type {
   MessageEvent,
-  MessageEventActor,
   MessageEventKind,
   MessageState,
 } from '../../shared/team'
@@ -33,8 +32,8 @@ CREATE INDEX IF NOT EXISTS team_message_events_team ON team_message_events (team
 /** Who ran a store transition; `agent` carries the acting session. */
 export type StoreActor = { kind: 'system' } | { kind: 'human' } | { kind: 'agent'; sessionId: string }
 
-/** An event-log actor from the composer's plain vocabulary. */
-export const storeActor = (actor: MessageEventActor | StoreActor | undefined): StoreActor =>
+/** An event-log actor from the composer's plain vocabulary; an agent actor must carry its session, so only `StoreActor` can name one. */
+export const storeActor = (actor: 'system' | 'human' | StoreActor | undefined): StoreActor =>
   typeof actor === 'object' ? actor : actor === 'human' ? { kind: 'human' } : { kind: 'system' }
 
 /** The facts a transition overwrote, taken from the row before it ran. */

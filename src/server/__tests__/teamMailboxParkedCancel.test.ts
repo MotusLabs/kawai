@@ -198,3 +198,20 @@ describe('cancelResult typed outcomes', () => {
     }
   })
 })
+
+describe('enqueue actor typing', () => {
+  test('a sessionless agent actor does not type-check on enqueue', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kawai-actor-typing-'))
+    const db = new Database(path.join(dir, 'mail.db'))
+    try {
+      const store = new MailboxStore(db)
+      const base = { teamId: TEAM, toKind: 'group', toId: 'devs', fromSession: 'chat-lead', fromGroup: 'leads', originPath: '/repo', body: 'x' } as const
+      // @ts-expect-error 'agent' needs a session, so enqueue accepts only 'system' | 'human'
+      const message = store.enqueue({ ...base, actor: 'agent' })
+      expect(store.eventsFor(message.id)[0]).toMatchObject({ actor: 'system', actorSession: null })
+      expect(store.eventsFor(store.enqueue({ ...base, actor: 'human' }).id)[0]).toMatchObject({ actor: 'human' })
+    } finally {
+      db.close(); fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})

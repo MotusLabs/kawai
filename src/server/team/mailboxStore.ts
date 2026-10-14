@@ -15,7 +15,6 @@ import { MessageEventLog, storeActor, type StoreActor } from './messageEvents'
 import type {
   ChatHandoffPackage,
   MessageEvent,
-  MessageEventActor,
   MessageEventKind,
   MessageState,
   MessagePriority,
@@ -51,7 +50,7 @@ export interface EnqueueInput {
   handoff?: ChatHandoffPackage | null
   excludedProfile?: string | null
   /** Who caused the send (event log): the human through a composer, else the system. */
-  actor?: MessageEventActor
+  actor?: 'system' | 'human'
 }
 
 /** Outcome of {@link MailboxStore.cancelResult}: cancelled, or why not (nothing changed). */
