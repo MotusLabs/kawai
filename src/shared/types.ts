@@ -412,6 +412,10 @@ export type ServerMessage =
       task?: TeamTask
       /** The assignment a `team-task-assign` created or replayed. */
       assignment?: TeamTaskAssignment
+      /** The revision a `team-task-publish` published or replayed. */
+      revision?: number
+      /** True when a keyed publish or notify had already run: nothing new was written. */
+      replay?: boolean
       error?: string
     }
   // Read-only dispatch preview (task-assignment 4.1): informational — the
@@ -649,7 +653,34 @@ export type ClientMessage =
       /** Stable per intent (task-assignment D4): a replay returns the prior task. */
       requestKey?: string
     }
-  | { type: 'team-task-amend'; teamPath: string; requestId: string; taskId: string; direction?: string; acceptance?: string }
+  // Task-revision publication (D1, D2, D4): the human's draft (save, rebase
+  // onto the current revision, discard), a keyed publication from a named
+  // base, and keyed notify/retry of a published revision.
+  | {
+      type: 'team-task-draft'
+      teamPath: string
+      requestId: string
+      taskId: string
+      action: 'save' | 'rebase' | 'discard'
+      baseRevision?: number
+      direction?: string
+      acceptance?: string
+      rationale?: string
+    }
+  | {
+      type: 'team-task-publish'
+      teamPath: string
+      requestId: string
+      taskId: string
+      baseRevision: number
+      /** Minted when the action arms; reused on every resend, so a replay returns the prior revision. */
+      requestKey: string
+      direction: string
+      acceptance?: string
+      rationale: string
+      notify: boolean
+    }
+  | { type: 'team-task-notify'; teamPath: string; requestId: string; taskId: string; revision: number; requestKey: string }
   | { type: 'team-task-note'; teamPath: string; requestId: string; taskId: string; text: string }
   | { type: 'team-task-status'; teamPath: string; requestId: string; taskId: string; status: TaskStatus }
   // Human dispatch of a task's instruction (task-assignment 4.1): idempotent

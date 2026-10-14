@@ -68,6 +68,15 @@ describe('WS router forwards every ChatConnections type', () => {
     }
   })
 
+  test('a stale tab\'s retired team-task-amend gets "Unknown message type"; its replacements are forwarded (task-revision-publication)', () => {
+    const h = harness()
+    h.route(JSON.stringify({ type: 'team-task-amend', teamPath: '/repo', requestId: 'r', taskId: 'task-1', direction: 'x' }))
+    expect(h.handled).toEqual([])
+    expect(h.sent).toEqual([{ type: 'error', message: 'Unknown message type' }])
+    expect(CHAT_CONNECTION_TYPES).toEqual(expect.arrayContaining(['team-task-draft', 'team-task-publish', 'team-task-notify']))
+    expect(CHAT_CONNECTION_TYPES).not.toContain('team-task-amend' as never)
+  })
+
   test('an unlisted type still answers "Unknown message type"', () => {
     const h = harness()
     h.route(JSON.stringify({ type: 'not-a-real-message' }))
