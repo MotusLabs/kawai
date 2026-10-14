@@ -127,6 +127,20 @@ test('a handoff over a still-queued instruction cancels it, leaving exactly one 
   expect(mail.eventsFor(taskMail(task.id)[0]!.id).at(-1)).toMatchObject({ kind: 'cancelled', actor: 'agent', actorSession: 'lead' })
 })
 
+test('a handoff over parked work supersedes it but never cancels it, nor its resume', async () => {
+  const task = await tasks.create(agent('lead'), { title: 'Export', direction: 'v1' })
+  const plain = await assignments.dispatch(human(), { taskId: task.id, target: { kind: 'group', id: 'devs' }, instruction: 'Build it', requestKey: 'assign-1' })
+  const id = plain.message!.id
+  mail.claim(id, 'dev'); mail.markPushed(id); mail.markDelivered(id)
+  const resume = mail.enqueue({ teamId: team.teamId, toKind: 'session', toId: 'dev', fromKind: 'human', fromSession: null, fromGroup: null,
+    originPath: repo, body: 'Resume', deliverAt: new Date(Date.now() + 3_600_000).toISOString() })
+  mail.park(id, resume.deliverAt!, resume.id)
+  const result = await results.submit(agent('dev'), task.id, submission)
+  await results.handoff(human(), task.id, review(result.id))
+  expect([mail.get(id)?.state, mail.get(resume.id)?.state]).toEqual(['parked', 'queued'])
+  expect(tasks.store.assignmentsOf(task.id)[0]!.supersededBy).not.toBeNull()
+})
+
 test('a double-clicked handoff or a retried task_handoff never supersedes its own handoff', async () => {
   const task = await tasks.create(agent('lead'), { title: 'Export', direction: 'v1' })
   await assignments.dispatch(human(), { taskId: task.id, target: { kind: 'group', id: 'devs' }, instruction: 'Build it', requestKey: 'assign-1' })

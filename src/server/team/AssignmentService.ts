@@ -177,7 +177,9 @@ export class AssignmentService {
     newId: string, actor: TaskActor, supersededBy: string): void {
     const previous = { kind: outstanding.targetKind as 'group' | 'session', id: outstanding.targetId }
     if (handling === 'stop') {
-      if (outstanding.messageId) this.mail.cancel(outstanding.messageId, actor.kind === 'agent' ? { kind: 'agent', sessionId: actor.sessionId! } : { kind: 'human' })
+      // Only while queued or awaiting a request: the store's cancel also takes parked work, which stop never touches.
+      const state = outstanding.messageId ? this.mail.get(outstanding.messageId)?.state : undefined
+      if (state === 'queued' || state === 'awaiting-request') this.mail.cancel(outstanding.messageId!, actor.kind === 'agent' ? { kind: 'agent', sessionId: actor.sessionId! } : { kind: 'human' })
     } else if (outstanding.claimedBy && this.options.getSession(outstanding.claimedBy)) {
       this.mail.enqueue({
         teamId: task.teamId, toKind: 'session', toId: outstanding.claimedBy,
