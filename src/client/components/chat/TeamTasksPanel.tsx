@@ -42,7 +42,18 @@ export default function TeamTasksPanel({ sessionId, projectPath, view, sendMessa
     useTeamTaskStore.getState().beginTargets(sessionId)
     sendMessage({ type: 'team-task-targets', sessionId, requestId: crypto.randomUUID(), ...(worktree ? { worktree } : {}) })
   }
-  useEffect(() => { if (connected) requestTargets() }, [connected, sessionId, draft.worktree]) // eslint-disable-line react-hooks/exhaustive-deps
+  // StrictMode fires an effect twice on mount with identical deps; the
+  // per-signature ref keeps the request single. A disconnect clears the
+  // signature so a reconnect refreshes the pickers' data once (the pickers
+  // also re-request on focus, on demand).
+  const requestedTargets = useRef('')
+  useEffect(() => {
+    if (!connected) { requestedTargets.current = ''; return }
+    const signature = `${sessionId}\0${draft.worktree}`
+    if (requestedTargets.current === signature) return
+    requestedTargets.current = signature
+    requestTargets()
+  }, [connected, sessionId, draft.worktree]) // eslint-disable-line react-hooks/exhaustive-deps
   // A reconnect drops the waiters for results lost with the connection: the
   // armed flow keeps its key, the dispatch effect re-sends the assign leg
   // under it, and a human resubmit of the create reuses it — either way the

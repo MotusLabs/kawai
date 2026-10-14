@@ -144,6 +144,8 @@ test('detail shows direction, retained revisions, journal, subtasks, messages; c
   act(() => renderer.root.findByProps({ 'data-testid': 'task-amend' }).props.onSubmit({ preventDefault: () => {} }))
   act(() => field('Journal note').props.onChange({ target: { value: 'Human note' } }))
   act(() => renderer.root.findAllByType('form').at(-1)!.props.onSubmit({ preventDefault: () => {} }))
+  // Exactly one targets request per mount, not one per effect pass (N2).
+  expect(sent.filter(message => message.type === 'team-task-targets')).toHaveLength(1)
   expect(sent.filter(message => message.type.startsWith('team-task-') && message.type !== 'team-task-targets').map(message => ({ ...message, requestId: undefined }) as Record<string, unknown>)).toEqual([
     { type: 'team-task-status', sessionId: 'dev', taskId: 't1', status: 'open' },
     { type: 'team-task-status', sessionId: 'dev', taskId: 't1', status: 'cancelled' },
