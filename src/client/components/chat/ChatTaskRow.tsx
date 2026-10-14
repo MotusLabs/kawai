@@ -40,21 +40,40 @@ export default function ChatTaskRow({ sessionId, toolCallId, tool, fallback, sen
   const now = useTickingClock(task?.live === true)
   const [stopping, setStopping] = useState(false)
   const openRef = useRef(false)
+  /** A request was skipped because one was in flight; run it on its reply. */
+  const retryOnReply = useRef(false)
   const live = task?.live === true
 
   const requestTail = () => {
     if (task === undefined || connected === false) return
     if (useChatStore.getState().requestTaskOutput(sessionId, task.taskId)) {
       sendMessage?.({ type: 'chat-task-output', sessionId, taskId: task.taskId })
+    } else {
+      // Blocked by the in-flight request: queue this one, or a settle-time
+      // fetch would be silently dropped and the in-flight (running-time)
+      // reply would stand as the final output.
+      retryOnReply.current = true
     }
   }
 
   // Hooks must run before the fallback return below.
   useEffect(() => {
     // A socket that dies mid-fetch strands the marker: roll it back so the
-    // reopened socket can request the tail again.
-    if (connected === false && task !== undefined) useChatStore.getState().resetTaskOutput(sessionId, task.taskId)
+    // reopened socket can request the tail again. Its reply is gone, so any
+    // queued retry goes with it — the reconnect effect re-fetches.
+    if (connected === false && task !== undefined) {
+      useChatStore.getState().resetTaskOutput(sessionId, task.taskId)
+      retryOnReply.current = false
+    }
   }, [connected, sessionId, task])
+  // The in-flight reply landed (the marker left 'fetching'): run one queued
+  // request, if any — the settle's final refresh after a blocked poll.
+  useEffect(() => {
+    if (retryOnReply.current && tail !== undefined && tail.status !== 'fetching') {
+      retryOnReply.current = false
+      if (openRef.current) requestTail()
+    }
+  }, [tail])
   useEffect(() => {
     // Reconnect retries the fetch for the row the user still has open.
     if (connected !== true || !openRef.current || task === undefined) return
@@ -90,6 +109,7 @@ export default function ChatTaskRow({ sessionId, toolCallId, tool, fallback, sen
   const handleToggle = (event: React.SyntheticEvent<HTMLDetailsElement>) => {
     openRef.current = event.currentTarget.open
     if (event.currentTarget.open) requestTail()
+    else retryOnReply.current = false
   }
 
   const stop = () => {

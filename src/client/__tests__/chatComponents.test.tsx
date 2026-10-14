@@ -2287,6 +2287,51 @@ describe('chat task rows (background tasks)', () => {
     }
   })
 
+  test('a settle during an in-flight poll still refreshes the final output', () => {
+    jest.useFakeTimers()
+    try {
+      const sent: ClientMessage[] = []
+      seedTasks([liveTask()])
+      let renderer!: TestRenderer.ReactTestRenderer
+      act(() => { renderer = TestRenderer.create(<ChatMessages events={[bashCall]} sessionId="chat-1" sendMessage={m => sent.push(m)} connected />) })
+      open(renderer, true)
+      expect(sent.length).toBe(1)
+      // The task settles while that poll is still in flight: the settle-time
+      // fetch is blocked by the in-flight marker and must queue, not drop.
+      act(() => { useChatStore.getState().setBackgroundTasks('chat-1', [liveTask({ status: 'completed', live: false, endedAtMs: Date.now(), summary: 'done (exit code 0)' })]) })
+      expect(sent.length).toBe(1)
+      // The stale running-time reply lands — and flushes the queued refresh.
+      act(() => { useChatStore.getState().setTaskOutput({ type: 'chat-task-output', sessionId: 'chat-1', taskId: 'b1', state: 'ok', output: 'building…\n', totalBytes: 20, truncated: false }) })
+      expect(sent.length).toBe(2)
+      // The final reply renders; nothing further fires.
+      act(() => { useChatStore.getState().setTaskOutput({ type: 'chat-task-output', sessionId: 'chat-1', taskId: 'b1', state: 'ok', output: 'fixture-shell-done\n', totalBytes: 40, truncated: false }) })
+      const outputPre = renderer.root.findByProps({ 'data-testid': 'chat-task-output' }).findByType('pre')
+      expect(outputPre.children.join('')).toContain('fixture-shell-done')
+      expect(outputPre.children.join('')).not.toContain('building')
+      act(() => { jest.advanceTimersByTime(6_000) })
+      expect(sent.length).toBe(2)
+      act(() => renderer.unmount())
+    } finally {
+      jest.useRealTimers()
+    }
+  })
+
+  test('collapsing cancels a final refresh queued behind an in-flight poll', () => {
+    const sent: ClientMessage[] = []
+    seedTasks([liveTask()])
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => { renderer = TestRenderer.create(<ChatMessages events={[bashCall]} sessionId="chat-1" sendMessage={m => sent.push(m)} connected />) })
+    open(renderer, true)
+    act(() => { useChatStore.getState().setBackgroundTasks('chat-1', [liveTask({ status: 'completed', live: false, endedAtMs: Date.now() })]) })
+    expect(sent.length).toBe(1)
+    open(renderer, false)
+    act(() => { useChatStore.getState().setTaskOutput({ type: 'chat-task-output', sessionId: 'chat-1', taskId: 'b1', state: 'ok', output: 'building…', totalBytes: 20, truncated: false }) })
+    expect(sent.length).toBe(1)
+    open(renderer, true)
+    expect(sent.length).toBe(2)
+    act(() => renderer.unmount())
+  })
+
   test('polling resumes after a reconnect', () => {
     jest.useFakeTimers()
     try {
