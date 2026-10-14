@@ -41,6 +41,9 @@ export type TaskCaller = { kind: 'agent'; sessionId: string } | { kind: 'human';
 
 const CHANGE_NAME = /^[a-z0-9][a-z0-9-]*$/
 
+/** How often setStatus re-prepares when the status moves during its hook's await. */
+const STATUS_ATTEMPTS = 3
+
 export class TaskService {
   readonly worktrees: TeamWorktrees
 
@@ -124,13 +127,30 @@ export class TaskService {
         throw new Error(`Only the task's creator can set it to ${status}. Report your result in a journal note or a message to the creator instead.`)
       }
     }
-    if (note?.trim()) this.store.appendJournal(taskId, actor, note.trim())
-    const closedBefore = task.status === 'done' || task.status === 'cancelled'
-    const closedAfter = status === 'done' || status === 'cancelled'
-    const within = this.options.onStatusTransition && task.status !== status && (closedBefore !== closedAfter)
-      ? await this.options.onStatusTransition(task, status, actor)
-      : undefined
-    return this.store.setStatus(taskId, status, within)!
+    // The closed/open boundary is decided on a snapshot; preparing its hook
+    // awaits group definitions, so the status may move meanwhile. Re-read
+    // after the await and commit in the same tick only if it held; else
+    // prepare again on the fresh status, and refuse as stale after a few.
+    let current = task
+    for (let attempt = 0; attempt < STATUS_ATTEMPTS; attempt++) {
+      const within = this.crossesBoundary(current.status, status)
+        ? await this.options.onStatusTransition!(current, status, actor)
+        : undefined
+      const fresh = this.store.get(taskId)
+      if (!fresh) throw new Error(`Unknown task: ${taskId}`)
+      if (fresh.status === current.status) {
+        if (note?.trim()) this.store.appendJournal(taskId, actor, note.trim())
+        return this.store.setStatus(taskId, status, within)!
+      }
+      current = fresh
+    }
+    throw new Error(`Task ${taskId} kept changing status while this update was prepared (now ${current.status}); nothing changed. Try again.`)
+  }
+
+  /** Whether moving from `from` to `to` crosses the closed/open boundary the transition hook handles. */
+  private crossesBoundary(from: TaskStatus, to: TaskStatus): boolean {
+    if (!this.options.onStatusTransition || from === to) return false
+    return (from === 'done' || from === 'cancelled') !== (to === 'done' || to === 'cancelled')
   }
 
   /** The caller's team, actor identity, and current creation right. */

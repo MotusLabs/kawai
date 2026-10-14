@@ -1084,10 +1084,6 @@ export class ChatSessionManager {
     })
     if (!result.ok) return result
     await this.teams.track(result.session.id, result.session.projectPath)
-    // The task closed while this spawn was in flight (member-release D1):
-    // its mail was dead-lettered, so the member starts with no turn — mark
-    // it and it is released once it settles.
-    this.teamMail.markSpawnedForClosedTask(result.session.id, request.taskId)
     return { ok: true, sessionId: result.session.id }
   }
 
@@ -1141,6 +1137,11 @@ export class ChatSessionManager {
     }
     this.records.set(sessionId, record)
     this.options.db.insertChatSession(record)
+    // Spawned for a task that already closed (member-release D1): its mail
+    // was dead-lettered, so it starts with no turn. Marked in the same tick
+    // that persists it, so no restart can leave it unmarked; it is released
+    // once it settles.
+    if (record.spawned && record.taskId) this.teamMail.markSpawnedForClosedTask(sessionId, record.taskId)
     const session = this.toSession(record)
     this.options.registry.setChatSession(session)
     // The directory keys by team, so it records once resolution lands.

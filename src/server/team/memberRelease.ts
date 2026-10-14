@@ -8,6 +8,7 @@
 // a reason, never deferred. Reopening the task or restoring the member
 // cancels a pending release; a human-created session is never released.
 import type { Database } from 'bun:sqlite'
+import { logger } from '../logger'
 import type { ChatSessionRecord } from '../db'
 import type { JournalAuthor, TaskActor, TaskStatus, TeamTask } from '../../shared/teamTasks'
 import type { GroupDefinition } from './groupFile'
@@ -54,6 +55,8 @@ export interface MemberReleaseOptions {
   archive: (sessionId: string) => ArchiveResult
   /** Re-run the dispatch cycle (freed capacity serves mail in the next pass). */
   notify: () => void
+  /** Backoffs before each retry of a failed late-spawn mark; default 1 s, 5 s, 30 s. */
+  lateMarkRetryDelaysMs?: readonly number[]
 }
 
 const CREATE_TABLE_SQL = `
@@ -74,12 +77,18 @@ CREATE TABLE IF NOT EXISTS team_task_closers (
 );
 `
 
+/** Backoffs before each retry of a failed late-spawn mark: bounded, then given up with an error. */
+const LATE_MARK_RETRY_DELAYS_MS = [1_000, 5_000, 30_000] as const
+
 const isClosed = (status: TaskStatus) => status === 'done' || status === 'cancelled'
 
 const actorText = (actor: JournalAuthor): string =>
   actor.kind === 'human' ? 'the human' : actor.kind === 'system' ? 'kawai' : actor.sessionId
 
 export class MemberRelease {
+  /** Scheduled retries of failed late-spawn marks, by session id. */
+  private readonly lateMarkRetries = new Map<string, ReturnType<typeof setTimeout>>()
+
   constructor(private readonly db: Database, private readonly options: MemberReleaseOptions) {
     db.exec(CREATE_TABLE_SQL)
   }
@@ -103,9 +112,19 @@ export class MemberRelease {
     return this.db.prepare('SELECT 1 FROM team_member_releases WHERE session_id = ?').get(sessionId) !== null
   }
 
-  /** The session was archived, killed, or restored by any path: its row is moot (D1). */
+  /**
+   * The session was archived, killed, or restored by any path: its row is
+   * moot (D1), and so is a late-spawn mark still waiting to be retried.
+   */
   cancel(sessionId: string): void {
     this.db.prepare('DELETE FROM team_member_releases WHERE session_id = ?').run(sessionId)
+    this.dropLateMarkRetry(sessionId)
+  }
+
+  /** Shutdown: pending late-mark retries are dropped. */
+  close(): void {
+    for (const timer of this.lateMarkRetries.values()) clearTimeout(timer)
+    this.lateMarkRetries.clear()
   }
 
   /**
@@ -176,29 +195,57 @@ export class MemberRelease {
    * A session was created spawned for a task that is already closed (D1):
    * its spawn's mail was dead-lettered at the close, so it starts with no
    * turn — mark it now and it is released once it settles. The closer is
-   * the actor the close stored, else kawai.
+   * the actor the close stored, else kawai. Synchronous, so the caller can
+   * mark in the same tick that persists the session: the group's opt-out is
+   * not read here — `evaluate()` applies the current file's
+   * `releaseOnTaskClose: false` before any archive. Returns whether a
+   * pending row was written; throws only if the database does.
    */
-  async markSpawnedForClosedTask(sessionId: string, taskId: string): Promise<void> {
+  markSpawnedForClosedTask(sessionId: string, taskId: string): boolean {
     const task = this.options.tasks.get(taskId)
-    if (!task || !isClosed(task.status)) return
+    if (!task || !isClosed(task.status)) return false
     const record = this.options.getRecord(sessionId)
-    if (!record || !record.spawned || record.taskId !== taskId || record.archivedAt != null) return
-    if (record.groupId
-      && (await this.options.definition(task.teamId, record.groupId, record.projectPath))?.releaseOnTaskClose === false) return
-    // Re-read after the await: a reopen during the definition load must not
-    // leave a pending row for an open task (the member would be archived).
-    const still = this.options.tasks.get(taskId)
-    const fresh = this.options.getRecord(sessionId)
-    if (!still || !isClosed(still.status)) return
-    if (!fresh || !fresh.spawned || fresh.taskId !== taskId || fresh.archivedAt != null) return
+    if (!record || !record.spawned || record.taskId !== taskId || record.archivedAt != null) return false
     const closer = this.db.prepare('SELECT closed_by_kind, closed_by_session FROM team_task_closers WHERE task_id = ?')
       .get(taskId) as { closed_by_kind: string; closed_by_session: string | null } | null
     this.db.prepare(`INSERT OR REPLACE INTO team_member_releases
       (session_id, task_id, team_id, reason, requested_by_kind, requested_by_session, requested_at)
       VALUES (?, ?, ?, ?, ?, ?, ?)`)
-      .run(sessionId, still.id, still.teamId, `task ${still.status}`,
+      .run(sessionId, task.id, task.teamId, `task ${task.status}`,
         closer?.closed_by_kind ?? 'system', closer?.closed_by_session ?? null, new Date().toISOString())
     this.options.notify()
+    return true
+  }
+
+  /**
+   * The spawn path's entry for {@link markSpawnedForClosedTask}. A failure
+   * is logged with both ids and retried a bounded number of times (1 s, 5 s,
+   * 30 s), each attempt through the same re-checks — so a member reopened,
+   * archived, restored, or re-associated meanwhile is not marked — and an
+   * error is logged once the attempts are exhausted. Archive, kill, restore,
+   * and shutdown drop a pending retry.
+   */
+  markLateSpawn(sessionId: string, taskId: string, attempt = 0): void {
+    this.lateMarkRetries.delete(sessionId)
+    try {
+      this.markSpawnedForClosedTask(sessionId, taskId)
+    } catch (error) {
+      const delays = this.options.lateMarkRetryDelaysMs ?? LATE_MARK_RETRY_DELAYS_MS
+      const reason = error instanceof Error ? error.message : String(error)
+      if (attempt >= delays.length) {
+        logger.error('member_release_mark_gave_up', { sessionId, taskId, attempts: attempt + 1, error: reason })
+        return
+      }
+      logger.warn('member_release_mark_failed', { sessionId, taskId, attempt: attempt + 1, error: reason })
+      this.lateMarkRetries.set(sessionId, setTimeout(() => this.markLateSpawn(sessionId, taskId, attempt + 1), delays[attempt]))
+    }
+  }
+
+  private dropLateMarkRetry(sessionId: string): void {
+    const timer = this.lateMarkRetries.get(sessionId)
+    if (timer === undefined) return
+    clearTimeout(timer)
+    this.lateMarkRetries.delete(sessionId)
   }
 
   /**

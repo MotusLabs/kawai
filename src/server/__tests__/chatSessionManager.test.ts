@@ -4047,6 +4047,47 @@ describe('ChatSessionManager background-task roster (background tasks D2)', () =
     manager.shutdown()
   })
 
+  test('a member spawned for an already-closed task is marked pending release by its creation (member-release D1)', async () => {
+    const { manager } = await createHarness(db)
+    const t = manager.tasks.store.create({ teamId: 'team-1', title: 't', direction: 'd', creator: { kind: 'human', sessionId: null } })
+    manager.tasks.store.setStatus(t.id, 'done')
+    const created = manager.createSession({ projectPath: '/tmp/proj', spawned: true, taskId: t.id })
+    if (!created.ok) throw new Error('create failed')
+    // Same tick as the insert: no await sits between persisting the session and its mark.
+    const row = db.db.prepare('SELECT task_id FROM team_member_releases WHERE session_id = ?').get(created.session.id)
+    expect(row).toEqual({ task_id: t.id })
+    manager.shutdown()
+  })
+
+  test('process end frees a pending member: the stopped roster re-checks readiness and the next pass archives it (member-release D3)', async () => {
+    const { manager, handles } = await createHarness(db)
+    const created = manager.createSession({ projectPath: '/tmp/proj', spawned: true })
+    if (!created.ok) throw new Error('create failed')
+    const id = created.session.id
+    await manager.send(id, 'start a dev server')
+    const handle = handles[0]!
+    handle.push({
+      type: 'system', subtype: 'task_started', task_id: 'b-end', tool_use_id: 'call_end',
+      task_type: 'local_bash', description: 'dev server', is_backgrounded: true, uuid: 'u', session_id: 's',
+    } as unknown as SDKMessage)
+    // The turn ends; the shell keeps running, so only D3's task condition holds the member.
+    handle.push({ type: 'result', subtype: 'success', result: 'started', uuid: 'u2', session_id: 's' } as unknown as SDKMessage)
+    await flush()
+    db.db.prepare(`INSERT INTO team_member_releases (session_id, task_id, team_id, reason, requested_by_kind, requested_at)
+      VALUES (?, 'task-1', 'team-1', 'task done', 'human', ?)`).run(id, new Date().toISOString())
+    manager.dispatcher.release()
+    manager.dispatcher.notify()
+    await manager.dispatcher.settled()
+    expect(manager.isArchived(id)).toBe(false)
+    // The process ends (EOF): the driver settles the shell as stopped and
+    // publishes that roster; nothing else asks the dispatcher to look again.
+    handle.query.close()
+    await waitForCondition(() => manager.getSnapshot(id)!.backgroundTasks[0]?.status === 'stopped')
+    await manager.dispatcher.settled()
+    await waitForCondition(() => manager.isArchived(id))
+    manager.shutdown()
+  })
+
   test('a turn ending while a shell is live leaves the session waiting (D7)', async () => {
     const { manager, handles, registry } = await createHarness(db)
     const created = manager.createSession({ projectPath: '/tmp/proj' })

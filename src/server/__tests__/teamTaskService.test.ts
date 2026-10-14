@@ -216,3 +216,51 @@ describe('spawn-time registration', () => {
     await server.instance.close()
   })
 })
+
+describe('status boundary re-check (member-release, MM INFO 4)', () => {
+  /** A service whose transition hook pauses until `resume()`, recording each snapshot and closure run. */
+  const pausedService = (duringAwait: (store: TaskStore, taskId: string) => void) => {
+    const store = new TaskStore(db.db, new MailboxStore(db.db))
+    const prepared: string[] = []
+    const ran: string[] = []
+    const paused = new TaskService(store, {
+      getSession: id => records.get(id), homeDir: home,
+      onStatusTransition: async (task, status) => {
+        prepared.push(`${task.status}->${status}`)
+        await new Promise(resolve => setImmediate(resolve))
+        duringAwait(store, task.id)
+        return () => { ran.push(`${task.status}->${status}`) }
+      },
+    })
+    return { store, paused, prepared, ran }
+  }
+
+  test('a status change during the hook await is re-read: the boundary is decided on the fresh status', async () => {
+    let moved = false
+    const { store, paused, prepared, ran } = pausedService((s, id) => {
+      if (!moved) { moved = true; s.setStatus(id, 'cancelled') }
+    })
+    const task = store.create({ teamId: team.teamId, title: 't', direction: 'd', creator: { kind: 'human', sessionId: null } })
+    store.setStatus(task.id, 'active')
+    const done = await paused.setStatus(human(), task.id, 'done', 'shipped')
+    // The task was closed (cancelled) while the close hook prepared: cancelled -> done
+    // crosses no boundary, so the stale close closure never runs.
+    expect(prepared).toEqual(['active->done'])
+    expect(ran).toEqual([])
+    expect(done.status).toBe('done')
+    expect(store.journal(task.id).map(entry => entry.text)).toEqual(['shipped'])
+  })
+
+  test('a status that keeps moving is refused as stale, and nothing is written', async () => {
+    const { store, paused, ran } = pausedService((s, id) => {
+      s.setStatus(id, s.get(id)!.status === 'active' ? 'open' : 'active')
+    })
+    const task = store.create({ teamId: team.teamId, title: 't', direction: 'd', creator: { kind: 'human', sessionId: null } })
+    let refusal = ''
+    try { await paused.setStatus(human(), task.id, 'done', 'shipped') } catch (error) { refusal = String(error) }
+    expect(refusal).toContain('kept changing status')
+    expect(ran).toEqual([])
+    expect(store.get(task.id)!.status).not.toBe('done')
+    expect(store.journal(task.id)).toEqual([])
+  })
+})
