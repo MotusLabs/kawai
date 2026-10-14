@@ -184,6 +184,28 @@ test('snapshots carry the team routing state; reload answers with the report and
   expect(messages.at(-1)).toMatchObject({ type: 'team-mailbox-snapshot', routing: { rules: REPORT } })
 })
 
+test('the human cancels parked work with its resume mail; a row unparked meanwhile is refused', async () => {
+  await open()
+  const parkedWork = () => {
+    const work = enqueue(); store.claim(work.id, 'dev'); store.markPushed(work.id); store.markDelivered(work.id)
+    const resume = store.enqueue({ teamId: 'team', toKind: 'session', toId: 'dev', fromSession: 'dev', fromGroup: null, originPath: '/repo', body: 'resume', deliverAt: '2099-01-01T00:00:00.000Z' })
+    store.park(work.id, '2099-01-01T00:00:00.000Z', resume.id)
+    return { work, resume }
+  }
+  const { work, resume } = parkedWork()
+  await connections.handle(connection, { type: 'team-mailbox-cancel', teamPath: '/repo', messageId: work.id })
+  expect(store.get(work.id)?.state).toBe('cancelled')
+  expect(store.get(resume.id)?.state).toBe('cancelled')
+  expect(store.eventsFor(work.id).at(-1)).toMatchObject({ kind: 'cancelled', actor: 'human', actorSession: null, prevState: 'parked' })
+  expect(store.eventsFor(resume.id).at(-1)).toMatchObject({ kind: 'cancelled', actor: 'human' })
+  expect(messages.at(-1)).toMatchObject({ type: 'team-mailbox-snapshot', messages: [] })
+  // Unparked a moment earlier: the cancel finds delivered work and says so.
+  const second = parkedWork()
+  store.unpark(second.work.id)
+  await connections.handle(connection, { type: 'team-mailbox-cancel', teamPath: '/repo', messageId: second.work.id })
+  expect(store.get(second.work.id)?.state).toBe('delivered')
+  expect(messages.filter(m => m.type === 'error').at(-1)).toEqual({ type: 'error', message: 'Message state changed; this action is no longer available' })
+})
 test('hand off forwards parked work to a team group or session; bad targets and states are refused', async () => {
   await open()
   const mail = enqueue(); store.claim(mail.id, 'dev'); store.markPushed(mail.id); store.markDelivered(mail.id)
