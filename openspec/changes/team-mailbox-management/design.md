@@ -29,7 +29,7 @@ See proposal.md (Why). The relevant current state:
 A new `src/server/team/mailboxManagement.ts` exposes `cancel(caller, {message_id, reason})`, `discard(caller, {message_id, reason})`, and `list(caller, filters)`. For each call it:
 1. Resolves the caller's record and team (`resolveTeam(projectPath)`), and loads its group through `loadTeamGroups`, as `TeamMailbox.context` does.
 2. Loads the message. If it is absent or belongs to another team, it refuses with "Message not found in this team: <id>", never revealing that the message exists elsewhere.
-3. Decides the right: the caller is the sender (`from_kind = 'agent' AND from_session = caller`), or it holds management (`group.canManageMailbox`). Parked cancels and all discards require management.
+3. Decides the right: the caller is the sender (`from_kind = 'agent' AND from_session = caller`), or it holds management (`group.canManageMailbox`). Parked cancels and all discards require management. Sender rights never reach a resume linked to parked work: the store refuses that cancel for every actor (D2), so a holder cannot strand its own parked work.
 4. Checks the state against the action's allowed set before writing, and refuses with the current state named (for example "claimed by <session>" or "a member is starting for it"). The store's conditional update remains the authority under races. A `false` from the store maps to "Message state changed to <state>; nothing was cancelled".
 5. Calls the store with `actor: { kind: 'agent', sessionId }` and the reason, then appends the task journal note (D5).
 
@@ -37,17 +37,20 @@ The alternative was putting the rights checks in `TeamMailbox`, next to send. It
 
 ### D2. Parked cancel is one store transaction that also cancels the resume message
 
-`MailboxStore.cancel(id, actor, reason)` widens its accepted states to `queued`, `awaiting-request`, and `parked`. When the row is parked, the same transaction:
-- transitions the row `parked → cancelled`, clearing `parked_until` and `resume_message_id`;
-- transitions the resume message `queued → cancelled` with the same actor and the reason "parked work <id> cancelled", if it is still queued.
+`MailboxStore.cancel(id, actor, reason)` widens its accepted states to `queued`, `awaiting-request`, and `parked`. It enforces one invariant for every caller: **parked work always has a live resume, or is cancelled together with it.** Inside one transaction:
 
-If the resume message is already delivered, it is left alone (spec scenario "Resume already delivered"). If a recipient has claimed it but not yet delivered it, the whole cancel is refused with a reason and nothing changes, so a resume can never deliver after the cancel: either the cancel wins and nothing delivers, or the claim wins and the cancel is refused. Internal callers in `limitOutcomes.ts` cancel only resume messages, which are never parked, so widening the accepted states does not change their behavior.
+1. **Parked row.** Read its resume message (`resume_message_id`).
+   - If the resume is `queued` (scheduled or due) or `awaiting-request`, transition the parked row `parked → cancelled` (clearing `parked_until` and `resume_message_id`) and the resume `→ cancelled`, both with the caller's actor; the resume's reason is "parked work <id> cancelled". Committing both in one transaction means the dispatcher can never claim the resume afterwards: its claim is a conditional `UPDATE … WHERE state = 'queued'`.
+   - If the resume is `claimed` or `delivered`, the resume turn is in flight. Refuse with `resume-in-flight` (holder named) and change nothing. A pushed turn cannot be recalled without interrupting the agent, which only urgent direct mail may do. Cancelling the row anyway would report success while the agent keeps working the cancelled task. The refusal is short-lived: the turn ends by unparking the work (nothing left to cancel) or parking it again with a fresh queued resume (cancel then succeeds).
+   - A parked row with no resume, or one whose resume is already settled (only reachable through rows written before this change), is cancelled alone.
+2. **Linked resume.** A `queued` or `awaiting-request` row that some parked row names as its `resume_message_id` is refused with `linked-resume` (the parked id named) for every actor. This closes two paths that strand parked work: the holder withdrawing its own resume under sender rights, since `park()` records the holder as the resume's sender, and the human's existing Cancel on the Scheduled row. Once the work is unparked, forwarded, or cancelled, nothing names the resume anymore, and it cancels normally.
+3. **Anything else.** The plain conditional transition, as today.
 
-Rights do not live in the store: the human panel may cancel parked rows, and agents need management, which D1 enforces. `LimitOutcomes` must tolerate a cancelled row:
-- `resolve()` on a final limit for work that is no longer `parked` or `delivered` drops the work (its `active` entry and digest) instead of re-parking or forwarding it;
-- a successful turn's `unpark` is already a no-op.
+Internal resume replacement goes through a separate store method, `replaceResume(parkedId)`: `park()` (re-park cancels the previous resume) and `forward()` both call it. That method clears the link and cancels the old resume in one transaction with actor `system`, so the invariant's refusal never blocks kawai's own bookkeeping. The `linked-resume` and `resume-in-flight` refusals are store results that `MailboxConnections` and D1's service map to their messages. They are the store's integrity rules, not rights.
 
-The alternative was a separate `cancelParked` method. It was rejected because two cancel entry points with different state sets is exactly the drift D1's goal forbids.
+`LimitOutcomes` keeps one defensive tolerance: `resolve()` on a final limit for work that is no longer `parked` or `delivered` drops the work (its `active` entry and digest) instead of re-parking or forwarding it. A successful turn's `unpark` is already a no-op. With the in-flight refusal, neither case should arise; the tolerance guards against a future path that settles parked work some other way.
+
+The alternative was a separate `cancelParked` method. It was rejected because two cancel entry points with different state sets is exactly the drift D1's goal forbids. Interrupting the holder's resume turn to make the cancel total was also rejected: it breaks the mailbox rule that only urgent direct mail interrupts.
 
 ### D3. Agent actors in the event log: `agent` plus a nullable `actor_session` column
 
@@ -85,7 +88,7 @@ Group mail to the caller's group is deliberately excluded for non-managers. It i
 
 ### D8. Prompt note
 
-`mailboxNote` gains lines for `list_mailbox` and `cancel_message` (own undelivered mail) for every agent. When `group.canManageMailbox` is true, it also gains lines for managing any team message (including parked work, whose resume message is cancelled with it) and `discard_message` (dead or uncertain), plus the rule "retry and hand-off stay with the human". It also advises: "before archiving or replacing a stuck agent, list and cancel the mail that would restore or respawn it". That sentence turns the incident in the proposal into standing guidance.
+`mailboxNote` gains lines for `list_mailbox` and `cancel_message` (own undelivered mail) for every agent. When `group.canManageMailbox` is true, it also gains lines for managing any team message (including parked work, whose resume message is cancelled with it; refused while the resume turn runs) and `discard_message` (dead or uncertain), plus the rule "retry and hand-off stay with the human". It also advises: "before archiving or replacing a stuck agent, list and cancel the mail that would restore or respawn it". That sentence turns the incident in the proposal into standing guidance.
 
 ### D9. Human panel
 
@@ -96,7 +99,8 @@ Group mail to the caller's group is deliberately excluded for non-managers. It i
 ## Risks / Trade-offs
 
 - [A manager cancels parked work that was about to resume successfully] → The cancel is deliberate and attributed. The holder keeps its working tree, and the journal note and history show what was dropped. The human can re-send.
-- [A delivered resume turn keeps running after its parked message is cancelled] → It cannot be stopped without interrupting an agent, which this change does not do. Its outcome is ignored (D2), and the cancel's journal note tells the lead to message the holder if needed.
+- [A manager wants to stop parked work while its resume turn runs] → Refused for the duration of that turn (D2). The manager can send the holder an urgent direct message, which interrupts under the normal mailbox rules, or retry after the turn.
+- [The linked-resume refusal changes today's human panel behavior] → Today the human can cancel a resume row from Scheduled, leaving the work parked forever with no resume. The refusal names the parked row to cancel instead, which removes a latent bug rather than a capability.
 - [Non-managers see less than the panel shows] → Intentional. The panel is the human's whole-team view, and agents get the least visibility they need.
 - [Overlap with `team-member-release`'s `release_member`] → Independent. This change only makes "holds no claimed or parked mail" reachable without the human. Shared files are rebased by whichever change merges second.
 - [Event-log consumers that assume the actor is `system` or `human`] → `mapEvent` and the client label switch are updated in the same task. Unknown actors render as `system`.

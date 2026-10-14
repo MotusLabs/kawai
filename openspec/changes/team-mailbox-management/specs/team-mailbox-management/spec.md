@@ -55,19 +55,45 @@ A member of a group with `canManageMailbox: true` SHALL be able to cancel any me
 - **THEN** the tool returns a not-found error and the message is unchanged
 
 ### Requirement: Cancelling parked work ends the park
-Cancelling a parked message SHALL cancel it together with its scheduled resume message, if that resume is still undelivered, in one step. The holder SHALL then no longer show as paused for that message. It SHALL NOT be restored, resumed, or sent anything because of the cancel, and the message SHALL no longer count as mail it holds.
+Cancelling a parked message whose resume message is still waiting (queued, scheduled, or held awaiting a request) SHALL cancel both in one step, so the resume can never be claimed afterwards. The holder SHALL then no longer show as paused for that message. It SHALL NOT be restored, resumed, or sent anything because of the cancel, and the message SHALL no longer count as mail it holds.
 
 #### Scenario: Limited dev's parked work cancelled
 - **WHEN** a mailbox manager cancels work parked on an archived dev after a provider limit
 - **THEN** the work and its resume message are both cancelled, the dev stays archived, and nothing is delivered to it at the reset time
 
+#### Scenario: Resume held awaiting a request
+- **WHEN** parked work is cancelled while its resume message is held until the holder's pending approval is answered
+- **THEN** the resume message is cancelled with the work and is not delivered after the approval is answered
+
 #### Scenario: Holder no longer paused
 - **WHEN** the only message parked on a live agent is cancelled
 - **THEN** the agent's paused badge clears and it may take group mail again
 
-#### Scenario: Resume already delivered
-- **WHEN** a parked message is cancelled after its resume message was already delivered
-- **THEN** the parked message is cancelled, the delivered resume stays delivered, and a later outcome of that resume turn changes neither message
+### Requirement: Parked work resuming now cannot be cancelled
+While a parked message's resume message is claimed or delivered and the work is still parked, its resume turn is in flight. Cancelling the parked message SHALL then be refused, and both messages left unchanged. The refusal SHALL name the holder and say to message it directly or retry after its turn, when the work is either delivered or parked again with a new resume.
+
+#### Scenario: Cancel during the resume turn refused
+- **WHEN** a mailbox manager cancels parked work while its holder is running the resume turn
+- **THEN** the tool returns an error naming the holder, and the work and its resume stay as they were
+
+#### Scenario: Retry after the resume hit the limit again
+- **WHEN** that resume turn ends on another provider limit and the work is parked again with a new resume
+- **THEN** cancelling the parked work succeeds and cancels the new resume with it
+
+### Requirement: A resume message is cancelled only with its parked work
+A resume message linked to parked work SHALL NOT be cancelled on its own by anyone: not by the holder that is its recorded sender, not by a mailbox manager, and not by the human. Such a cancel SHALL be refused, naming the parked message to cancel instead, so parked work never remains parked without a resume.
+
+#### Scenario: Holder withdraws its own resume
+- **WHEN** a dev without mailbox management cancels the resume message scheduled for its own parked work
+- **THEN** the tool returns an error naming the parked message, and the work stays parked with its resume
+
+#### Scenario: Human cancels a resume row
+- **WHEN** the user cancels a scheduled resume message from the Mailbox view while its work is parked
+- **THEN** the view reports that the resume belongs to parked work and names it, and both messages are unchanged
+
+#### Scenario: Resume of work no longer parked
+- **WHEN** a queued resume message's work was already unparked or handed off
+- **THEN** the resume can be cancelled like any other message, by its sender, a mailbox manager, or the human
 
 ### Requirement: Mailbox managers can discard dead and uncertain mail
 A mailbox manager SHALL have a tool to discard a dead-lettered or uncertain message of its team, given the message id and a reason. A discarded message SHALL never be retried or delivered. Discarding any other state SHALL be refused. Agents SHALL have no tool to retry or hand off a message.
