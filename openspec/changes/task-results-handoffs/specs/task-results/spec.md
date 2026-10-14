@@ -109,7 +109,7 @@ A result whose pinned revision is older than the task's current revision SHALL b
 - **THEN** it is shown without the Needs re-evaluation label
 
 ### Requirement: Release worktree and hand off
-Task detail SHALL offer **Release worktree and hand off** for a task with a worktree and an outstanding result. It SHALL archive the task's live spawned members through the release readiness and archive path — never kill — keeping results and transcripts, then dispatch the review handoff. It SHALL be refused with an actionable reason while a member is mid-turn, awaits a request, holds mail, or runs a background worker. Other live sessions in the worktree SHALL be shown before dispatch.
+Task detail SHALL offer **Release worktree and hand off** for a task with a worktree and an outstanding result. It SHALL archive its live spawned members via the release readiness and archive path — never kill — keeping results and transcripts, then dispatch the review handoff, reusing one already standing. It SHALL be refused with an actionable reason while a member is mid-turn, awaits a request, holds mail, or runs a background worker. Other live sessions in the worktree SHALL be shown first.
 
 #### Scenario: Release hands the worktree to review
 - **WHEN** the human releases the worktree after the developer's turn has ended and its requests resolved
@@ -130,6 +130,10 @@ Task detail SHALL offer **Release worktree and hand off** for a task with a work
 #### Scenario: Concurrent manual sessions are shown
 - **WHEN** another live manual session works in the task's worktree
 - **THEN** release shows it before dispatching, without claiming the cap prevents concurrent edits
+
+#### Scenario: A review already queued is not doubled
+- **WHEN** review was requested while the developer occupied the worktree, and the human then releases the worktree
+- **THEN** the developer is archived and the queued review proceeds in the freed worktree; no second review is dispatched
 
 ### Requirement: Results persist and remain inspectable
 Results, their findings, and acceptance SHALL persist across server restart and SHALL remain readable after any submitting or reviewing session is archived or killed, with the submitter named. Task detail SHALL show a Results section listing every result with its findings, and the task record agents read SHALL include the task's results and findings.
