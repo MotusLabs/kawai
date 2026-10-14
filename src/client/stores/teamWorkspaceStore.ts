@@ -78,8 +78,9 @@ const patchTab = (
   tab: WorkspaceTab,
   update: (view: TeamTabViewState) => TeamTabViewState,
 ): Partial<TeamWorkspaceState> => {
-  const view = state.views[teamKey]
-  if (!view) return state
+  // Tab state is lazily created: a view hosted outside the Team page (the
+  // chat side slot, a task embed) keeps its per-tab state too (D8).
+  const view = state.views[teamKey] ?? closedWorkspaceView()
   return { views: { ...state.views, [teamKey]: { ...view, tabs: { ...view.tabs, [tab]: update(view.tabs[tab] ?? emptyTabViewState()) } } } }
 }
 

@@ -11,10 +11,13 @@ import { useEffect, useMemo } from 'react'
 import type { SendClientMessage } from '@shared/types'
 import { useSessionStore } from '../../stores/sessionStore'
 import { useStrategyStore, type StrategyView } from '../../stores/strategyStore'
+import { useTeamMessageStore } from '../../stores/teamMessageStore'
 import { useTeamWorkspaceStore } from '../../stores/teamWorkspaceStore'
 import { useWorkspaceStore } from '../../stores/workspaceStore'
 import { useTeamLocationStore } from '../../hooks/useTeamLocation'
 import { knownTeamKeys } from '../../utils/teamKey'
+import { useTeamGroups } from '../chat/useTeamGroups'
+import TeamMessagesView from './TeamMessagesView'
 import {
   RENDERED_WORKSPACE_TABS,
   type TeamLocation,
@@ -87,6 +90,29 @@ export default function TeamWorkspaceView({ teamKey, location, sendMessage, conn
     return () => sendMessage({ type: 'strategy-close', teamPath: teamKey })
   }, [teamKey, connected, connectionEpoch, unknown, sendMessage])
 
+  // Messages (5.4): the tab mounts the host-agnostic view, which owns its
+  // wire subscription; the store view stays open across tab switches so the
+  // selection and search survive. The URL names the selected thread (D3).
+  const messagesOpen = location.tab === 'messages' && !unknown
+  const messages = useTeamMessageStore(state => state.views[teamKey])
+  useEffect(() => {
+    if (!messagesOpen) return
+    useTeamMessageStore.getState().open(teamKey)
+  }, [messagesOpen, teamKey])
+  useEffect(() => {
+    if (!messagesOpen) return
+    // URL → store: a reloaded or linked location selects its thread.
+    const store = useTeamMessageStore.getState()
+    if ((location.id ?? null) !== store.views[teamKey]?.selectedThreadId) {
+      store.select(teamKey, location.id ?? null)
+    }
+  }, [messagesOpen, teamKey, location.id])
+  const liveSessions = useMemo(
+    () => sessions.map(row => ({ id: row.id, name: row.name, groupId: row.groupId ?? null })),
+    [sessions],
+  )
+  const groups = useTeamGroups(messagesOpen, teamKey)
+
   const status = strategyStatusLine(strategy)
   const openTab = (tab: WorkspaceTab) => navigate({ teamKey, tab })
   const openStrategyStatus = () => navigate({
@@ -119,8 +145,15 @@ export default function TeamWorkspaceView({ teamKey, location, sendMessage, conn
       ))}
     </nav>
     {/* The active tab's view; reserved keys render nothing (no placeholder). */}
-    <div className="min-h-0 flex-1 overflow-y-auto" data-testid={`team-tab-body-${location.tab}`}>
-      {location.tab === 'strategy' && <p className="p-3 text-sm text-secondary" role="status">Loading…</p>}
+    <div className="flex min-h-0 flex-1 flex-col" data-testid={`team-tab-body-${location.tab}`}>
+      {messagesOpen && messages && <TeamMessagesView
+        teamPath={teamKey} view={messages} sendMessage={sendMessage} connected={connected}
+        connectionEpoch={connectionEpoch} sessions={liveSessions}
+        groups={groups.groups.map(group => ({ id: group.id, label: group.label }))}
+        onThreadSelected={threadId => navigate(threadId
+          ? { teamKey, tab: 'messages', id: threadId }
+          : { teamKey, tab: 'messages' })}
+      />}
     </div>
   </main>
 }

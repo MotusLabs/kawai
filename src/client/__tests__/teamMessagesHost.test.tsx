@@ -12,7 +12,7 @@ import type { TeamTaskDetail as Detail, TeamTaskSummary } from '@shared/teamTask
 import ChatView from '../components/chat/ChatView'
 import TeamMailboxPanel from '../components/chat/TeamMailboxPanel'
 import TeamMessagesPanel from '../components/chat/TeamMessagesPanel'
-import TeamMessagesView from '../components/chat/TeamMessagesView'
+import TeamMessagesView from '../components/team/TeamMessagesView'
 import TeamTaskDetail from '../components/chat/TeamTaskDetail'
 import { closeOtherSideSlots } from '../components/chat/sideSlot'
 import { chooseSessionMenuEntry } from './support/sessionMenu'
