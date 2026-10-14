@@ -427,3 +427,35 @@ describe('Strategy sub-views (team-workspace-pages 5.2)', () => {
     act(() => { again.renderer.unmount() })
   })
 })
+
+test('each review dialog keeps its own command id and starts with empty scope inputs', () => {
+  openView()
+  const rev3 = revision(3, 'in_review', content({ purpose: 'v3' }))
+  const rev4 = revision(4, 'in_review', content({ purpose: 'v4' }))
+  act(() => useStrategyStore.getState().applySnapshot({ type: 'strategy-snapshot', teamPath: 'dev', teamId: 'team', strategy: strategy({ currentApprovedRevision: 2 }) }))
+  act(() => useStrategyStore.getState().applyDetail({
+    type: 'strategy-detail', teamPath: 'dev', teamId: 'team',
+    detail: detail({ revisions: [revision(1, 'superseded', content({ purpose: 'v1' })), revision(2, 'approved'), rev3, rev4] }),
+  }))
+  const { renderer, go } = mount()
+  go('review-3')
+  const scopeOf = () => renderer.root.findByProps({ 'data-testid': 'strategy-review-3' })
+    .findAll(node => node.props['aria-label'] === 'Approval scope')[0]!
+  act(() => { scopeOf().props.onChange({ target: { value: 'Direction only' } }) })
+  sent.length = 0
+  act(() => { renderer.root.findByProps({ 'data-testid': 'approve-3' }).props.onClick() })
+  const firstCommand = (sent.at(-1) as { commandId: string }).commandId
+  // Moving to Review 4 is a new dialog: fresh inputs, a fresh command id.
+  go('review-4')
+  expect(renderer.root.findByProps({ 'data-testid': 'strategy-review-4' })
+    .findAll(node => node.props['aria-label'] === 'Approval scope')[0]!.props.value).toBe('')
+  act(() => { renderer.root.findByProps({ 'data-testid': 'approve-4' }).props.onClick() })
+  const secondCommand = (sent.at(-1) as { commandId: string }).commandId
+  expect(secondCommand).not.toBe(firstCommand)
+  expect((sent.at(-1) as { revision: number }).revision).toBe(4)
+  expect(sent.at(-1)).not.toMatchObject({ approvalScope: 'Direction only' })
+  // A retry within the same dialog still reuses its command id.
+  act(() => { renderer.root.findByProps({ 'data-testid': 'approve-4' }).props.onClick() })
+  expect((sent.at(-1) as { commandId: string }).commandId).toBe(secondCommand)
+  act(() => { renderer.unmount() })
+})

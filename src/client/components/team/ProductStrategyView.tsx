@@ -43,11 +43,14 @@ export default function ProductStrategyView({ teamPath, view, sendMessage, conne
   onNavigate?: (next: { sub: StrategySubView; revision?: number }) => void
 }) {
   const sessions = useSessionStore(state => state.sessions)
-  const [localSub, setLocalSub] = useState<StrategySubView>(sub ?? 'overview')
-  const activeSub = onNavigate ? (sub ?? 'overview') : localSub
+  // A host without the URL keeps its own sub-view route, revision included,
+  // so its Review buttons open the revision they name.
+  const [localRoute, setLocalRoute] = useState<{ sub: StrategySubView; revision?: number }>({ sub: sub ?? 'overview' })
+  const activeSub = onNavigate ? (sub ?? 'overview') : localRoute.sub
+  const activeRevision = onNavigate ? revision : localRoute.revision !== undefined ? String(localRoute.revision) : revision
   const goto = (next: { sub: StrategySubView; revision?: number }) => {
     if (onNavigate) onNavigate(next)
-    else setLocalSub(next.sub)
+    else setLocalRoute({ sub: next.sub, ...(next.revision !== undefined ? { revision: next.revision } : {}) })
   }
   const [capture, setCapture] = useState({ productId: '', title: '', purpose: '' })
   const busy = Object.keys(view.pending).length > 0
@@ -69,7 +72,7 @@ export default function ProductStrategyView({ teamPath, view, sendMessage, conne
       <button type="button" className={`btn text-sm ${activeSub === 'overview' ? 'btn-primary' : ''}`} data-testid="strategy-sub-overview"
         onClick={() => goto({ sub: 'overview' })}>Overview</button>
       {inReview.map(entry => <button key={entry.revision} type="button"
-        className={`btn text-sm ${activeSub === 'review' && revision === String(entry.revision) ? 'btn-primary' : ''}`}
+        className={`btn text-sm ${activeSub === 'review' && activeRevision === String(entry.revision) ? 'btn-primary' : ''}`}
         data-testid={`strategy-sub-review-${entry.revision}`}
         onClick={() => goto({ sub: 'review', revision: entry.revision })}>Review {entry.revision}</button>)}
       <button type="button" className={`btn text-sm ${activeSub === 'draft' ? 'btn-primary' : ''}`} data-testid="strategy-sub-draft"
@@ -92,7 +95,7 @@ export default function ProductStrategyView({ teamPath, view, sendMessage, conne
       ) : <>
         {activeSub === 'overview' && <Overview detail={detail} sessions={sessions} teamPath={teamPath} />}
         {activeSub === 'review' && <Review detail={detail} sessions={sessions} connected={connected} busy={busy}
-          request={request} teamPath={teamPath} revisionNumber={revision} onWithdrawRevision={withdrawRevision} />}
+          request={request} teamPath={teamPath} revisionNumber={activeRevision} onWithdrawRevision={withdrawRevision} />}
         {activeSub === 'draft' && <DraftSubView detail={detail} view={view} teamPath={teamPath} connected={connected} busy={busy} request={request} />}
         {activeSub === 'history' && <StrategyRevisionHistory detail={detail} sessions={sessions} connected={connected} busy={busy} onWithdrawRevision={withdrawRevision} />}
       </>}
@@ -178,12 +181,29 @@ function Review({ detail, sessions, connected, busy, request, teamPath, revision
   const wanted = revisionNumber !== undefined ? Number(revisionNumber) : NaN
   const revision = inReview.find(entry => entry.revision === wanted) ?? inReview.at(-1) ?? null
   if (!revision) return <p className="text-sm text-secondary" data-testid="strategy-review-none">No revision is in review.</p>
+  // Keyed by the revision: moving to another review is a new dialog, with
+  // its own command id and its own scope inputs (one command id per dialog,
+  // so a retry replays — product-strategy 5.3).
+  return <ReviewBody key={revision.revision} revision={revision} detail={detail} sessions={sessions}
+    connected={connected} busy={busy} request={request} teamPath={teamPath} onWithdrawRevision={onWithdrawRevision} />
+}
+
+function ReviewBody({ revision, detail, sessions, connected, busy, request, teamPath, onWithdrawRevision }: {
+  revision: StrategyRevision
+  detail: StrategyDetail
+  sessions: Session[]
+  connected: boolean
+  busy: boolean
+  request: (message: Parameters<SendClientMessage>[0], action: StrategyAction) => void
+  teamPath: string
+  onWithdrawRevision: (revision: number) => void
+}) {
   const known = revision.content.claims.filter(claim => claim.kind === 'validated_observation' || claim.kind === 'explicit_user_statement')
   const assumed = revision.content.claims.filter(claim => claim.kind === 'hypothesis' || claim.kind === 'agent_interpretation' || claim.kind === 'proposed_choice' || claim.kind === 'owner_preference')
   const diff = detail.strategy.currentApprovedRevision != null
     ? detail.revisions.find(entry => entry.revision === detail.strategy.currentApprovedRevision)
     : null
-  // One command id per (revision, mount) — a retry reuses it, so the server replays.
+  // One command id per (revision, dialog) — a retry reuses it, so the server replays.
   const [commandId] = useState(() => crypto.randomUUID())
   const [scope, setScope] = useState('')
   const [openQuestions, setOpenQuestions] = useState('')
