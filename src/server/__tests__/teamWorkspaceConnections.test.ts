@@ -234,9 +234,17 @@ test('observeChatEvent maps request and turn events to workspace pushes (review 
 /** A read that counts projections instead of computing them. */
 class CountingRead extends WorkspaceRead {
   reads = 0
+  failNext = false
+  /** Keep throwing for this team id (per-team containment tests). */
+  failFor: string | null = null
   constructor(public payload: TeamWorkspaceSnapshot, private readonly moveClock = false) { super(null as never) }
-  snapshot(): TeamWorkspaceSnapshot {
+  snapshot(team: { teamId: string }): TeamWorkspaceSnapshot {
     this.reads += 1
+    if (this.failFor !== null && team.teamId === this.failFor) throw new Error('projection blew up')
+    if (this.failNext) {
+      this.failNext = false
+      throw new Error('projection blew up')
+    }
     // A moving window edge on every read: exactly what the diff must ignore.
     return { ...this.payload, summary: { ...this.payload.summary, since: this.moveClock ? new Date().toISOString() : this.payload.summary.since } }
   }
@@ -291,6 +299,61 @@ describe('publishes coalesce and share one read per team', () => {
     workspace.publish('team')
     await workspace.settled()
     expect(sent.at(-1)).toMatchObject({ type: 'team-workspace', tasks: [{ id: 'task-1' }] })
+  })
+
+  test('a throwing read is contained: nothing escapes and the next publish still sends', async () => {
+    const { workspace, read } = make()
+    const sent: ServerMessage[] = []
+    await workspace.handle({ send: message => sent.push(message) }, { type: 'team-workspace-open', teamPath: '/repo' })
+    read.failNext = true
+    read.payload = { ...read.payload, tasks: [{ ...emptyRow() }] }
+    let escaped: unknown = null
+    try {
+      workspace.publish('team')
+      await workspace.settled()
+    } catch (error) { escaped = error }
+    // The throw was swallowed inside the coalescing microtask (an uncaught
+    // one would exit Bun), and the failed team's message never went out.
+    expect(escaped).toBeNull()
+    expect(sent.filter(message => message.type === 'team-workspace')).toHaveLength(0)
+    // The schedule survives: the next publish reads and sends again.
+    workspace.publish('team')
+    await workspace.settled()
+    expect(sent.at(-1)).toMatchObject({ type: 'team-workspace', tasks: [{ id: 'task-1' }] })
+  })
+
+  test('one failing team in a burst does not wedge the other team', async () => {
+    const { workspace, read } = make()
+    const sent: ServerMessage[] = []
+    await workspace.handle({ send: message => sent.push(message) }, { type: 'team-workspace-open', teamPath: '/repo' })
+    await workspace.handle({ send: message => sent.push(message) }, { type: 'team-workspace-open', teamPath: '/other' })
+    read.failFor = 'team'
+    read.payload = { ...read.payload, tasks: [{ ...emptyRow() }] }
+    const count = sent.length
+    let escaped: unknown = null
+    try {
+      workspace.publish('team')
+      workspace.publish('other')
+      await workspace.settled()
+    } catch (error) { escaped = error }
+    expect(escaped).toBeNull()
+    // The failing team sent nothing; the healthy one in the same burst did.
+    const pushes = sent.slice(count).filter(message => message.type === 'team-workspace')
+    expect(pushes.map(push => push.teamPath)).toEqual(['/other'])
+  })
+
+  test('opening a second team view keeps the first view diff keys (review nit)', async () => {
+    const { workspace } = make()
+    const sent: ServerMessage[] = []
+    const open = (teamPath: string) => workspace.handle({ send: message => sent.push(message) }, { type: 'team-workspace-open', teamPath })
+    await open('/repo')
+    await open('/other')
+    // Unchanged payload: the first view's publish must stay quiet. Under the
+    // old code the second open replaced the connection's whole key map, so
+    // this pushed a redundant full set.
+    workspace.publish('team')
+    await workspace.settled()
+    expect(sent.filter(message => message.type === 'team-workspace')).toHaveLength(0)
   })
 })
 

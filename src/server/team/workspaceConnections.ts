@@ -13,6 +13,7 @@
 import type { ClientMessage } from '../../shared/types'
 import { unknownTeamError } from '../../shared/team'
 import type { TeamWorkspaceSnapshot } from '../../shared/teamWorkspace'
+import { logger } from '../logger'
 import type { ChatSessionManager } from '../chat/ChatSessionManager'
 import type { ChatConnection } from '../chat/ChatConnections'
 import type { TeamIdentity } from './teamIdentity'
@@ -59,7 +60,19 @@ export class WorkspaceConnections {
       this.publishScheduled = false
       const teams = this.pendingTeams
       this.pendingTeams = new Set()
-      for (const teamId of teams) this.publishNow(teamId)
+      for (const teamId of teams) {
+        // One team's failed projection must neither wedge the schedule nor
+        // escape the microtask — on Bun an uncaught throw here exits the
+        // process. Log it; the remaining teams still publish, and the next
+        // trigger (or an open) retries.
+        try {
+          this.publishNow(teamId)
+        } catch (error) {
+          logger.warn('team_workspace_publish_failed', {
+            teamId, error: error instanceof Error ? error.message : String(error),
+          })
+        }
+      }
     })
   }
 
@@ -129,7 +142,9 @@ export class WorkspaceConnections {
     this.subscriptions.set(connection, views)
     // An open always sends: the snapshot is authoritative, never assumed.
     const payload = this.read.snapshot(team)
-    this.lastSent.set(connection, new Map([[teamPath, this.diffKey(payload)]]))
+    const sent = this.lastSent.get(connection) ?? new Map<string, string>()
+    sent.set(teamPath, this.diffKey(payload))
+    this.lastSent.set(connection, sent)
     connection.send({ type: 'team-workspace-snapshot', teamPath, teamId: team.teamId, ...payload })
   }
 }
