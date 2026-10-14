@@ -63,11 +63,11 @@ Any team member SHALL submit review or QA findings with `task_submit_findings`, 
 - **THEN** the earlier findings do not approve or transfer to the new result
 
 ### Requirement: Accepting a result closes it under existing rights
-**Accept result** SHALL be available only to the human or the task's creator, and SHALL close the task as done only under the existing closing rights. Before closure the UI SHALL show the task's acceptance criteria and any child tasks not done or cancelled. Accepting a result labeled Needs re-evaluation, or closing despite open child work, SHALL require a stated reason that is journaled. A parent SHALL never auto-close when its children finish.
+**Accept result** SHALL be available only to the human or the task's creator, and SHALL close the task as done only under the existing closing rights; a refusal SHALL write nothing. Before closure the UI SHALL show the task's acceptance criteria and any child tasks not done or cancelled. Accepting a result labeled Needs re-evaluation, or closing despite open child work, SHALL require a stated reason that is journaled. A parent SHALL never auto-close when its children finish.
 
 #### Scenario: Contributor cannot accept
 - **WHEN** a contributor that is not the creator accepts its result for a human-created task
-- **THEN** the action is refused and the task stays open until the human accepts
+- **THEN** the action is refused with nothing written, and the task stays open until the human accepts
 
 #### Scenario: Open child work needs a reason
 - **WHEN** the human accepts a result while a child task is still open

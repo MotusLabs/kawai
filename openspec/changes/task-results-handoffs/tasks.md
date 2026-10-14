@@ -24,7 +24,7 @@
 
 ## 5. Acceptance
 
-- [ ] 5.1 Implement **Accept result** on `TaskResultService` per design D5: human always, agent only the creator (the existing `setStatus` rights check refuses a contributor), guardrails — reason required and journaled when the result is labeled Needs re-evaluation or child tasks are not done/cancelled — then `accepted_*` written, acceptance journaled, and the task closed through the existing `TaskService.setStatus` path; verify service tests cover contributor refusal (E10), human accept closing, reason enforcement and journaling, acceptance criteria shown in the result payload, and that a child's acceptance never changes its parent.
+- [ ] 5.1 Implement **Accept result** on `TaskResultService` per design D5: evaluate the closing right first (the exact `setStatus` rule — a contributor is refused with nothing written: no `accepted_*`, no journal entry, no status change), then commit `accepted_*`, the acceptance journal entry, and the `done` status in one transaction; guardrails — reason required and journaled when the result is labeled Needs re-evaluation or child tasks are not done/cancelled; verify service tests cover contributor refusal writing nothing (E10), human accept closing atomically, reason enforcement and journaling, acceptance criteria shown in the result payload, and that a child's acceptance never changes its parent.
 - [ ] 5.2 Add the human action `team-task-accept-result` in `taskConnections.ts` and the messageRouter whitelist entry; verify connection tests cover accept, refusal rendering, and the refreshed snapshot.
 
 ## 6. Release worktree and hand off
