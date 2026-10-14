@@ -13,7 +13,7 @@
 ## 3. System journal author
 
 - [ ] 3.1 Add `JournalAuthor = TaskActor | { kind: 'system'; sessionId: null }` in `src/shared/teamTasks.ts` for journal entries only; map `author_kind = 'system'` in `taskStore.ts`; skip system authors when deriving participants.
-- [ ] 3.2 Check how the pre-change actor mapper reads an unknown `author_kind` and record the rollback consequence in design.md's Migration Plan.
+- [x] 3.2 Check how the pre-change actor mapper reads an unknown `author_kind` and record the rollback consequence in design.md's Migration Plan. (Done in review: `actor()` coerces it to the human without throwing; rollback deletes `system` rows first.)
 - [ ] 3.3 Render system entries as "Kawai" in `TeamTaskDetail.tsx` (and wherever the journal author label is formatted, `teamTaskLabels.ts`).
 - [ ] 3.4 Tests: store round-trip and participants in `teamTaskStore.test.ts`; label rendering in the task detail tests.
 
