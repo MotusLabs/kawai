@@ -23,6 +23,8 @@ import { outstandingOf, type AssignmentStore } from './assignmentStore'
 import type { MailboxStore } from './mailboxStore'
 import { migrateRevisionSchema } from './taskRevisionSchema'
 import { TaskDraftStore } from './taskDrafts'
+import { TaskAcknowledgements } from './taskAcknowledgements'
+import { TaskNotices } from './taskNotices'
 
 const CREATE_TABLES_SQL = `
 CREATE TABLE IF NOT EXISTS team_tasks (
@@ -121,12 +123,18 @@ export class TaskStore {
   private readonly listeners = new Set<(task: TeamTask) => void>()
   /** The human's drafts (task-revision-publication D1): never read by agent paths. */
   readonly drafts: TaskDraftStore
+  /** Agents' acknowledged revisions (D6). */
+  readonly acknowledgements: TaskAcknowledgements
+  /** Revision notices and derived recipients (D3–D5); null without mail and assignments. */
+  readonly notices: TaskNotices | null
 
   constructor(private readonly db: Database, private readonly mail?: MailboxStore, private readonly assignments?: AssignmentStore) {
     db.exec(CREATE_TABLES_SQL)
     migrateTable(db)
     migrateRevisionSchema(db)
     this.drafts = new TaskDraftStore(db)
+    this.acknowledgements = new TaskAcknowledgements(db)
+    this.notices = mail && assignments ? new TaskNotices(db, mail, assignments, this.acknowledgements) : null
   }
 
   /** Every committed change, with the task as it is now. */
@@ -187,13 +195,16 @@ export class TaskStore {
   detail(id: string): TeamTaskDetail | null {
     const task = this.get(id)
     if (!task) return null
+    const revisions = this.revisions(id)
     return {
       task: this.summary(task),
-      revisions: this.revisions(id),
+      revisions,
       journal: this.journal(id),
       subtasks: this.selectTasks('t.parent_id = ?', id).map(child => this.summary(child)),
       assignments: this.assignments?.listByTask(id) ?? [],
       messages: this.messages(id),
+      publications: this.notices?.publications(task, revisions) ?? [],
+      acknowledgements: this.acknowledgements.list(id),
     }
   }
 

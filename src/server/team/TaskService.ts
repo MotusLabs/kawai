@@ -18,6 +18,7 @@ import { TASK_STATUSES } from '../../shared/teamTasks'
 import { loadTeamGroups } from './teamGroups'
 import type { TeamIdentity } from './teamIdentity'
 import type { PublishOutcome, TaskStore } from './taskStore'
+import type { NoticeSender, SentNotice } from './taskNotices'
 import { TeamWorktrees } from './worktreeRoots'
 
 export interface TaskCreateInput {
@@ -91,6 +92,8 @@ export class TaskService {
      * D1/D8): resolved first, then run inside the status transaction.
      */
     onStatusTransition?: (task: TeamTask, status: TaskStatus, actor: TaskActor) => Promise<() => void>
+    /** Restore an archived notice recipient after commit (direct mail resumes it, D3/Q8). */
+    restoreSession?: (id: string) => void | Promise<void>
   }) {
     this.worktrees = options.worktrees ?? new TeamWorktrees()
   }
@@ -150,6 +153,9 @@ export class TaskService {
     }
     if (input.direction === undefined && input.acceptance === undefined) throw new Error('Nothing to amend: give a direction or acceptance criteria')
     if (input.direction !== undefined && !input.direction.trim()) throw new Error('A task needs a direction')
+    const sender = this.noticeSender(team, actor)
+    const requestKey = input.requestKey?.trim() || undefined
+    let sent: SentNotice[] = []
     const outcome = this.store.publish(taskId, {
       ...(input.direction !== undefined ? { direction: input.direction.trim() } : {}),
       ...(input.acceptance !== undefined ? { acceptance: emptyToNull(input.acceptance) } : {}),
@@ -158,10 +164,57 @@ export class TaskService {
       ...(input.requestKey?.trim() ? { requestKey: input.requestKey.trim() } : {}),
       notify: input.notify === true,
       discardDraft: actor.kind === 'human',
+      // Publish and notify (D3): the notices commit or roll back with the revision.
+      ...(input.notify && this.store.notices ? {
+        within: (revision, current) => {
+          sent = this.store.notices!.write(current, revision, {
+            sender, requestKey: requestKey ?? `publish-r${revision.revision}`, sessionExists: id => !!this.options.getSession(id),
+          })
+        },
+      } : {}),
     }, actor)
     if (!outcome) throw new Error(`Task not found in this team: ${taskId}`)
     if (!outcome.replay) this.announce(outcome)
+    await this.restoreRecipients(sent)
     return outcome
+  }
+
+  /**
+   * Notify, or retry a failed notice (D4): send the published revision to
+   * each assignment holder that has neither received it nor holds a pending
+   * notice for it, under the command's key; a replay sends nothing more.
+   * Never creates a revision. The creator or the human.
+   */
+  async notify(caller: TaskCaller, taskId: string, revision: number, requestKey: string): Promise<{ replay: boolean; notices: SentNotice[]; task: TeamTask }> {
+    const { team, actor } = await this.context(caller)
+    const task = this.sameTeamTask(team, taskId)
+    if (actor.kind === 'agent' && task.creator.sessionId !== actor.sessionId) {
+      throw new Error("Only the task's creator or the human can send revision notices.")
+    }
+    const key = requestKey.trim()
+    if (!key) throw new Error('A notification needs a request key')
+    const published = this.store.revisions(taskId).find(entry => entry.revision === revision)
+    if (!published) throw new Error(`Revision ${revision} of this task is not published`)
+    if (!this.store.notices) throw new Error('Revision notices are not available')
+    const outcome = this.store.notices.notify(task, published, {
+      sender: this.noticeSender(team, actor), requestKey: key, sessionExists: id => !!this.options.getSession(id),
+    })
+    if (!outcome.replay) await this.restoreRecipients(outcome.notices)
+    return { ...outcome, task: this.store.get(taskId)! }
+  }
+
+  /** The publisher as the notice's sender (D3): the human, or the creating agent from its session. */
+  private noticeSender(team: TeamIdentity, actor: TaskActor): NoticeSender {
+    if (actor.kind === 'human') return { actor, fromGroup: null, originPath: team.groupsRoot }
+    const session = this.options.getSession(actor.sessionId)
+    return { actor, fromGroup: session?.groupId ?? null, originPath: session?.projectPath ?? team.groupsRoot }
+  }
+
+  /** Direct mail resumes an archived recipient (agent-mailbox), after the notice committed. */
+  private async restoreRecipients(sent: SentNotice[]): Promise<void> {
+    for (const notice of sent) {
+      if (this.options.getSession(notice.sessionId)?.archivedAt) await this.options.restoreSession?.(notice.sessionId)
+    }
   }
 
   /** Subscribe to new revisions (D8); optional — no consumer may depend on it. */
