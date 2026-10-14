@@ -40,7 +40,11 @@ A revision with an empty strategy pin SHALL show Alignment unassessed. Unassesse
 - **THEN** it is refused as "no approved strategy: alignment is unassessed"
 
 ### Requirement: The newest assessment decides, with its conditions
-The newest alignment assessment of a revision SHALL be effective. `aligned` SHALL pass. `aligned-with-conditions` SHALL pass once the owner resolves each `ready` condition, and its `start` and `acceptance` conditions SHALL be carried in the report. `exploratory` and `insufficient-information` SHALL pass only with the owner's exploration authorization naming its bounds. No assessment SHALL block.
+The newest alignment assessment of a revision SHALL be effective. `aligned` SHALL pass. `aligned-with-conditions` SHALL pass once the owner resolves each `ready` condition, and its `start` and `acceptance` conditions SHALL be carried in the report. `exploratory` and `insufficient-information` SHALL pass only with the owner's exploration authorization naming its bounds. A revision whose strategy pin is not empty and that has no alignment assessment SHALL be blocked as not assessed.
+
+#### Scenario: Not assessed
+- **WHEN** a revision whose strategy pin is not empty is validated before any alignment assessment is recorded
+- **THEN** the report is not ready and names its alignment as not assessed
 
 #### Scenario: Ready condition open
 - **WHEN** the effective assessment has an unresolved `ready` condition

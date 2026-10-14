@@ -7,7 +7,7 @@ Makes validating a plan revision produce an immutable report over pinned inputs:
 ## ADDED Requirements
 
 ### Requirement: Validating a plan revision produces an immutable report
-The human and any team agent SHALL be able to validate an `in_review` or `approved` revision of an open plan of their team. Validation SHALL store an immutable report with its inputs, input hash, findings, relations, alignment state, the assessments and decisions it read, and its readiness. Validating unchanged inputs again SHALL return the newest report and write nothing. Concurrent requests for one revision SHALL share one run.
+The human and any team agent SHALL be able to validate an `in_review` or `approved` revision of an open plan of their team. Validation SHALL store an immutable report with its inputs, input hash, findings, relations, alignment state, the ids of the assessments and decisions it read, and its readiness. Validating unchanged inputs again SHALL return the newest report and write nothing. Concurrent requests for one revision SHALL share one run.
 
 #### Scenario: Unchanged inputs write nothing
 - **WHEN** a revision is validated twice and nothing it reads changed in between
@@ -21,7 +21,7 @@ The human and any team agent SHALL be able to validate an `in_review` or `approv
 - **WHEN** the human and an agent request validation of the same revision at the same time
 - **THEN** one run executes and both receive its report
 
-### Requirement: The input hash covers exactly what the checks read
+### Requirement: The input hash covers every input the checks read
 A report's input hash SHALL cover the revision and its content hash, the strategy impact state, each change's resolution status, artifact digests, root OpenSpec config, and touched base specs, the named groups' definitions, the known profile ids, other open plans' claims on its changes and branch, the OpenSpec adapter version and capabilities, the checks version, and the revision's assessment and decision ids. Baseline commits and change locations SHALL be evidence only.
 
 #### Scenario: An artifact edit changes the hash
@@ -63,7 +63,7 @@ Each change of the plan SHALL be registered in the main worktree's OpenSpec root
 - **THEN** `change-registered` reports an error naming the archive directory
 
 ### Requirement: Conflicting changes prevent Ready unless ordered
-Validation SHALL derive typed relations from the changes' spec deltas. Two changes touching the same requirement of a capability SHALL be a conflict error unless `dependsOn` orders one before the other, transitively. Two changes touching the same capability without a shared requirement SHALL be an overlap warning unless ordered. Ordered pairs SHALL be recorded as serialized. This SHALL hold without any dependency cycle.
+Validation SHALL derive typed relations from the changes' spec deltas. Two changes touching the same requirement of a capability SHALL be a conflict error unless `dependsOn` orders one before the other, transitively. Unordered changes touching the same capability without a shared requirement SHALL raise one overlap warning for that capability, naming those changes. Ordered pairs SHALL be recorded as serialized. This SHALL hold without any dependency cycle.
 
 #### Scenario: Acyclic plan with conflicting schema changes
 - **WHEN** two changes with no `dependsOn` path between them both modify the same requirement
@@ -76,6 +76,14 @@ Validation SHALL derive typed relations from the changes' spec deltas. Two chang
 #### Scenario: Same capability, different requirements
 - **WHEN** two unordered changes touch different requirements of one capability
 - **THEN** the report has an overlap warning that must be accepted before the report is ready
+
+#### Scenario: Many changes on one capability
+- **WHEN** four unordered changes touch different requirements of one capability
+- **THEN** the report has one overlap warning for that capability naming all four changes, and one acceptance clears it
+
+#### Scenario: The overlapping set grows
+- **WHEN** the owner has accepted a capability's overlap warning and an edit makes another change of the revision touch that capability
+- **THEN** the next report raises a new overlap warning naming every overlapping change, which must be accepted before the report is ready
 
 ### Requirement: Environment checks cover groups, profiles, branches, and claims
 Validation SHALL report an error for a role, change, or review group missing from the team's catalog; a role profile that is not a known profile; and an integration branch that another open plan's `in_review` or `approved` revision lands on. It SHALL warn when a role profile is outside its group's declared profiles and when another open plan names the same change. Capacity SHALL be evidence only and never block.

@@ -10,15 +10,17 @@ Implement after `durable-plans` and `strategy-revision-impact` have landed on ma
 
   Verify by reading `durable-plans` D7 and D13 and `strategy-revision-impact` D11 against D2, D3, and D9 here.
 - [ ] 1.2 Create `src/shared/planValidation.ts` with the D2, D3, D5, and D7 types, `VALIDATION_CHECKS_VERSION = 1`, the finding-key builders, and `inputHash` over `canonicalJson`. Verify with unit tests:
-  - the hash is stable under key order;
+  - the hash is stable under key order, and under the order of every array except `changes` (capabilities, claims, records);
   - the hash changes with each top-level input part;
   - location and baseline evidence never enter it.
 - [ ] 1.3 Implement `deriveRelations(changes, deltas, dependsOn)` (D4). Verify with unit tests:
   - a conflict on one requirement, unordered: an error;
   - the same pair ordered directly and transitively: serialized, with its order;
   - an overlap on one capability with different requirements: a warning;
-  - RENAMED deltas: both names count;
-  - three changes pairwise;
+  - several unordered overlaps on one capability: one warning keyed by the sorted change set, whose detail lists the pairs, while the per-pair relations remain;
+  - a grown overlap set: a new key;
+  - a rename, given as its two touches: conflicts with a change touching either name;
+  - three changes: one relation per pair;
   - no shared capability: no relation;
   - keys are sorted and stable.
 - [ ] 1.4 Implement `validationReadiness` (D7). Verify one test per alignment rule and per blocker kind:
@@ -36,6 +38,7 @@ Implement after `durable-plans` and `strategy-revision-impact` have landed on ma
 - [ ] 2.1 Add `src/server/plans/validation/validationSchema.ts` with the D1 DDL. Verify with migration tests on a fresh database and on one created by the `durable-plans` schema: plan rows read back unchanged, and a reopen round-trips every new row.
 - [ ] 2.2 Implement `validationStore.ts`: report insert with `seq = max + 1`, the newest report per revision, assessments and decisions per revision, and command-id lookups. Verify with store tests:
   - `UNIQUE (plan_id, revision, seq)` and both `UNIQUE (plan_id, command_id)` constraints refuse duplicates at the database;
+  - two assessment rows with a null `command_id` (two agent calls) are both accepted;
   - rows are never updated (there is no update path);
   - a reopened store reads everything back.
 
@@ -51,7 +54,7 @@ Implement after `durable-plans` and `strategy-revision-impact` have landed on ma
   - a valid and an invalid change;
   - a timeout;
   - an unknown JSON shape: an error;
-  - a RENAMED delta;
+  - a RENAMED delta in the CLI's shape (`rename: { from, to }`, no `requirement`): two touches, one per name; one missing a name: an error;
   - more than four calls at once wait for the pool.
 
 ## 4. Inputs and identity
@@ -85,8 +88,8 @@ Implement after `durable-plans` and `strategy-revision-impact` have landed on ma
   - the per-value shape rules;
   - an undefined ref is refused, naming it;
   - the 2,000-character limit is refused, never cut;
-  - the 20-item caps;
-  - the owner's form replays by command id;
+  - the 20-item caps on agent calls;
+  - the owner's form writes exactly one alignment assessment per command id and replays by it;
   - an agent retry appends.
 - [ ] 6.2 Implement `ValidationService.decide` (D6). Verify:
   - an agent actor is refused before any read;

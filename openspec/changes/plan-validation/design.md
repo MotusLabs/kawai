@@ -6,14 +6,14 @@ See proposal.md (Why). This change binds to contracts that are already published
 - **`durable-plans`.**
   - C1 `PlanContent`: changes, `dependsOn`, groups, roles, landing.
   - C2: the strategy pin, and the `openPlans(teamId)` read.
-  - C4: the ordered `APPROVAL_PRECONDITIONS`, whose entries are `{ name, check(ctx) → string | null }` and run inside one SQLite transaction. D7 reserves `validation-current` for this change.
+  - C4: the ordered `APPROVAL_PRECONDITIONS`, whose entries are `{ name, check(ctx) → string | null }` and run inside one SQLite transaction. D7 reserves `validation-current` for this change. The `durable-plans` implementation also leaves an awaited, empty pre-transaction step in `PlanService.approve` whose results feed `ctx`; D9 fills it.
   - D3 keeps environment checks, artifact pins, and typed relations out of plan content.
 - **`strategy-revision-impact`.**
   - C-I1 `ImpactService.gate(planId, revision)`.
   - C-I2 `ImpactService.stateKey(planId)`, which is named as this change's input identity.
 
 Code facts this design relies on:
-- **OpenSpec CLI.** `src/server/workspace/openspecDiscovery.ts` runs only `openspec list --json`, with a 15 s timeout. Nothing on the server runs `openspec validate` or `openspec show`. The installed CLI, 1.14.1, supports `validate <change> --strict --json`, which reports per-item `valid` and `issues`. It also supports `show <change> --json --deltas-only`, which gives deltas as `{ spec, operation, requirement: { name } }`.
+- **OpenSpec CLI.** `src/server/workspace/openspecDiscovery.ts` runs only `openspec list --json`, with a 15 s timeout. Nothing on the server runs `openspec validate` or `openspec show`. The installed CLI, 1.14.1, supports `validate <change> --strict --json`, which reports per-item `valid` and `issues`. It also supports `show <change> --json --deltas-only`, which gives deltas as `{ spec, operation, description, requirement?, requirements?, rename? }` (`change.schema.js`). ADDED, MODIFIED, and REMOVED deltas name their requirement in `requirement.name`. A RENAMED delta carries `rename: { from, to }` and no `requirement`.
 - **Change registry.** `changeRegistry.ts` lists the unarchived changes from the main worktree's OpenSpec root. The convention worktree `<main>/.worktrees/<change>` is canonical once it exists and contains the change.
 - **Group and profile catalogs.**
   - `groupCatalog.ts` has `loadGroupCatalog`. Its `groupCatalogStamp` is mtime-based, so it is a change detector, not a content identity.
@@ -73,7 +73,7 @@ plan_assessments (
   payload_json TEXT NOT NULL,
   author_kind TEXT NOT NULL,           -- 'human' | 'agent'
   author_session TEXT,
-  command_id TEXT,                     -- the owner's form; null for agent tool calls
+  command_id TEXT,                     -- the owner's form; null for agent tool calls (NULLs never collide)
   created_at TEXT NOT NULL,
   UNIQUE (plan_id, command_id)
 );
@@ -122,6 +122,8 @@ type ValidationInputs = {
 inputHash = sha256(canonicalJson(inputs))
 ```
 
+`canonicalJson` sorts object keys but keeps array order, so every array except `changes` is sorted before hashing: `adapter.capabilities`, `claims.branch`, each list in `claims.changes`, and both `records` lists. `changes` keeps plan order, which the revision's content already fixes. The same claims and records therefore hash the same way whatever order `openPlans` or the store returns them in.
+
 The inputs come from two places:
 - **File-held:** `adapter`, `changes`, and `catalog`. These are read without a transaction or the CLI, except the adapter probe, which is cached for ten minutes.
   - A change's artifacts are hashed where it resolves (D3).
@@ -146,7 +148,7 @@ type Finding = {
   key: string                      // `${check}:${subject}`, stable within a revision
   severity: 'error' | 'warning' | 'evidence'
   row: 'alignment' | 'intent' | 'scope' | 'readiness'
-  subject: string                  // a change, group, profile, branch, or pair
+  subject: string                  // a change, group, profile, branch, pair, or capability
   message: string
   detail?: unknown                 // bounded; CLI issues are capped at 50 per change
 }
@@ -172,8 +174,8 @@ Rules:
 - **CLI calls.** They run in the change's canonical root, with the discovery timeout (15 s) and at most four at once. A timeout is an error for that change.
 - **The adapter** (`openspecAdapter.ts`) is the only module that spawns the CLI for validation:
   - `probe()` runs `openspec --version` and returns the version and the capability names `validate-strict-json` and `show-deltas-json`, granted from the supported version floor.
-  - `validate(root, change)` and `showDeltas(root, change)` normalize the JSON. RENAMED deltas list both names.
-  - Unknown shapes are errors.
+  - `validate(root, change)` and `showDeltas(root, change)` normalize the JSON. `showDeltas` returns `(capability, operation, requirement)` touches. It expands one RENAMED delta (`rename: { from, to }`) into two touches, one per name, before D4 pairs them.
+  - Unknown shapes are errors, including a RENAMED delta without both names and any other delta without `requirement.name`.
 
 ### D4. Typed relations from spec deltas
 
@@ -183,8 +185,11 @@ For each change, the adapter's deltas give `(capability, operation, requirement)
   - unordered, it is an **error**, keyed `relations:conflict:<a>+<b>:<capability>/<requirement>` (R04: conflicting changes prevent Ready without any cycle);
   - ordered, it is a `serialized` relation, recorded as evidence.
 - If both touch the same capability but no shared requirement, the pair overlaps:
-  - unordered, it is a **warning**, keyed `relations:overlap:<a>+<b>:<capability>`;
+  - unordered, it is an `overlap` relation;
   - ordered, it is `serialized`.
+- A capability's unordered overlap pairs raise one **warning**, keyed `relations:overlap:<changes>:<capability>`. `<changes>` is the sorted set of changes in those pairs, joined by `+`. The warning's detail lists the pairs, and the per-pair rows stay in `relations_json`.
+  - One warning per capability means one owner acceptance. Pairwise warnings would need C(N,2) acceptances for N changes on one capability, while the overlap stays advisory and the conflict error is what enforces R04.
+  - The change set is part of the key. If an artifact edit makes another change of the revision touch that capability, the next report raises a new key. An earlier acceptance therefore never covers a change it did not name.
 
 ```ts
 type PlanRelation = {
@@ -228,8 +233,8 @@ Write rules (one transaction per call):
   - `conflicting` needs at least one conflict;
   - the rationale must be non-empty;
   - every ref must be defined by the pinned revision.
-- **Limits.** Every text field is at most 2,000 characters; longer text is refused, never cut. A call carries at most 20 questions and 20 findings.
-- **Replay.** The owner's form carries a command id and replays like D6. Agent calls have none, so a retried agent call appends again, as `strategy_impact_propose` does.
+- **Limits.** Every text field is at most 2,000 characters; longer text is refused, never cut. An agent call carries at most 20 questions and 20 findings.
+- **Replay.** The owner's form (`team-plan-assess`, D11) records exactly one alignment assessment per command id and replays like D6. Questions and findings come only from agents. Agent calls carry no command id, so their rows have a null `command_id`, and a retried agent call appends again, as `strategy_impact_propose` does.
 
 The newest alignment assessment is the effective one, except for D7's sticky conflict. Questions and findings accumulate. A question is keyed by its id, and a finding is a warning keyed `finding:<id>`.
 
@@ -315,6 +320,7 @@ The report carries `dryRun: true`, and it satisfies no gate.
 
 This extends `durable-plans` D7 the way `pinDisposition` does:
 - **File-held parts.** Before its transaction, `PlanService.approve` awaits `ValidationService.prepareStanding(planId, revision)`. That call reads only D2's file-held parts: hashes, and the cached adapter probe. It runs no CLI.
+  - This pre-transaction gather is a third extension point beside D7's two, the precondition list and `pinDisposition`. It feeds `ctx.validation` only, and it is not a gate: only the `validation-current` entry decides. The shipped entries never read it.
 - **DB-held parts.** `ctx` gains `validation`, computed inside the transaction by `ValidationService.standing(prepared)`. It reads the newest report, recomputes the DB-held parts, and compares the current input hash with the report's.
 - **The entry.** `validation-current` is appended after the shipped entries. Every entry still runs, and failures still accumulate. It passes when a report exists, the report is ready, and its input hash is current. Its messages:
   - "not validated: run Validate";
@@ -369,7 +375,7 @@ No tool answers, accepts, resolves, excepts, authorizes, or approves.
 | Contract | What it fixes | Bound by |
 | --- | --- | --- |
 | V1 Validation identity | D2 `ValidationInputs` and `inputHash`; `prepareStanding` and `standing` | `plan-execution` (Start's atomic comparison, R06), `revision-control` (the standing of a published revision) |
-| V2 Reports and readiness | D1 report rows; D7 `validationReadiness` and carried conditions | `plan-execution` (Start- and acceptance-gated conditions), `plan-supervision` (cards), `integration-candidates` (acceptance conditions) |
+| V2 Reports and readiness | D1 report rows; D3 `Finding` and the finding-key builders (D3–D5); D7 `validationReadiness` and carried conditions | `plan-execution` (Start- and acceptance-gated conditions), `plan-supervision` (cards), `integration-candidates` (acceptance conditions) |
 | V3 Relations | D4 `PlanRelation` | `plan-execution` (serialized pairs order scheduling), `integration-candidates` (overlapping capabilities validated together) |
 | V4 OpenSpec adapter | D3 `probe`, capability names, `validate`, `showDeltas` | `plan-execution` (Apply and Archive operations), `execution-safety-recovery` (an adapter change during an attempt) |
 | V5 `validation-current` | D9 entry name and message format | `plan-execution` (Start reuses the entry) |

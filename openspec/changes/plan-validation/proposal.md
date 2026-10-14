@@ -45,7 +45,7 @@ Strategy revision 2 states the owner's side: "the owner owns intent and the plan
   - the version of kawai's own check set;
   - the assessments and decisions recorded for the revision.
 
-  The repository baseline commit is recorded as evidence, never as identity. Master moves with every merge, including the plan's own landed changes. The identity therefore covers exactly the files and records the checks read.
+  The repository baseline commit is recorded as evidence, never as identity. Master moves with every merge, including the plan's own landed changes. The identity therefore covers every file and record the checks read.
 - **Technical checks**, mechanical and deterministic:
   - the OpenSpec adapter is available;
   - every change is registered and unarchived;
@@ -58,7 +58,7 @@ Strategy revision 2 states the owner's side: "the owner owns intent and the plan
   Capacity (caps, live members, cooling profiles) is evidence only.
 - **Typed relations from spec deltas.** For each pair of changes:
   - two changes that modify, remove, rename, or add the same requirement conflict, an error (R04), unless `dependsOn` orders one before the other;
-  - two changes that touch the same capability unordered overlap, a warning;
+  - unordered changes that touch the same capability overlap: one warning per capability, naming those changes;
   - an ordered pair is recorded as serialized.
 - **Assessment.** Agents and the owner record the judgment kawai cannot compute. Each record is bound to the plan revision.
   - An alignment assessment takes one of five values: aligned, aligned-with-conditions, exploratory, conflicting, or insufficient-information. It maps the plan to the pinned strategy's outcomes, and its conditions are gated at Ready, Start, or acceptance.
