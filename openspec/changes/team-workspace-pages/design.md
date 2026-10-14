@@ -33,7 +33,7 @@ Current state that shapes the approach:
 
 Every human `team-*` and `strategy-*` client message, plus `team-workspace-open`/`close`, takes `teamPath`: a directory the client already knows, either a repository's main checkout from the workspace snapshot or a chat's `projectPath`. The server resolves it with `resolveTeam`. It then authorizes the result: the `teamId` must equal the team of a discovered workspace repository (its `commonDir`), or the team of a chat session record that is not killed (archived ones included). Otherwise it refuses with `unknown-team`.
 
-Subscriptions become `connection -> teamId`, one per team rather than one per session. Fan-out on change is then a single lookup, and two chats of the same team no longer double-subscribe. Server messages keep carrying `teamId` and drop `sessionId`. Agent tools are untouched; they still bind identity to the calling session.
+Subscriptions are keyed `connection -> teamPath`, the path the client addressed, and each one is bound to its resolved `teamId`. Fan-out on change matches by `teamId`. Because every chat of one team computes the same team key (D2), one connection holds one subscription per team. Server replies echo `teamPath` beside `teamId` and drop `sessionId`, so the client routes each reply to the view that asked. Agent tools are untouched; they still bind identity to the calling session.
 
 *Alternatives:*
 - Keep `sessionId` and pick any chat of the team. Rejected: a repository with only terminal sessions has no chat to pick, and the page would silently depend on a session's lifetime.
@@ -46,7 +46,9 @@ The client derives a **team key** before any snapshot arrives:
 - the main-checkout path of the discovered repository containing the path (`WorkspaceRepository` and its worktrees), or
 - the plain directory, for a chat outside any repository.
 
-The navigator Team entry, the header Team button, and the task chip all compute the same key for the same team. That key is the `teamPath` sent in D1, the key of every team store (`teamTaskStore`, `teamMessageStore`, `teamMailboxStore`, `strategyStore`, `teamWorkspaceStore`), and the repository segment of the URL. Snapshots echo the server `teamId`, and the store checks it against the one it first received, so two keys can never alias one team unnoticed. *Alternative:* key stores by server `teamId` only. Rejected: the URL and the first render need a key before the server answers.
+The navigator Team entry, the header Team button, and the task chip all compute the same key for the same team. That key is the `teamPath` sent in D1, the key of every team store (`teamTaskStore`, `teamMessageStore`, `teamMailboxStore`, `strategyStore`, `teamWorkspaceStore`), and the repository segment of the URL. Two keys for one team (for example, a chat whose path discovery has not reported yet) only produce two views of the same data; both stay correct because the server resolves each path itself. *Alternative:* key stores by server `teamId` only. Rejected: the URL and the first render need a key before the server answers.
+
+Until the Team page exists, the chat side slot keeps hosting the team panels, keyed by the chat's team key. Debug stays keyed by session. Every chat of one team therefore shows the same open team panel. When a team panel is open beside a chat's own Debug, the slot shows Debug, so a chat still shows one panel at a time.
 
 ### D3. One hash route: `#/team/<key>/<tab>[/<sub>][/<id>]`
 
