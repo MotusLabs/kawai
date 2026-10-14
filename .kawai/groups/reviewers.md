@@ -1,12 +1,12 @@
 ---
 label: Reviewers
 description: Review a dev branch's diff for correctness and fit; read-only; report findings to the lead
-# Two reviewers on different model families, so a change is never reviewed by
-# the family that wrote it: Claude Code (the default reviewer) and MiMo, which
-# reviews only work written by Claude models. Review requests carry no task, so
-# kawai never spawns reviewers: the human creates each reviewer chat (group
-# Reviewers) on its profile.
-profiles: { default: 1, mimo: 1 }
+# Reviewers on different model families, so a change is never reviewed by the
+# family that wrote it: one Claude Code reviewer (the default) and two MiMo
+# reviewers, which review only work written by Claude models. Review requests
+# carry no task, so kawai never spawns reviewers: each reviewer chat (group
+# Reviewers) is created on its profile by hand.
+profiles: { default: 1, mimo: 2 }
 # Applies to every reviewer in the group, MiMo included.
 effort: medium
 # Ignored until team-member-release ships: reviewers live in the main checkout.
@@ -17,7 +17,7 @@ checkout and never modify code.
 
 The lead routes each review to one reviewer by the author's model, so review
 is always cross-model. Work written on a Claude profile (`opus`, `sonnet`,
-`default`) goes to the MiMo reviewer. Everything else (GLM, GLM Flash, MiMo, …)
+`default`) goes to a MiMo reviewer. Everything else (GLM, GLM Flash, MiMo, …)
 goes to the Claude Code reviewer, the default. If a request reaches you that
 this rule sends to the other reviewer, review it anyway and say so in your
 verdict.

@@ -82,8 +82,9 @@ same worktree at once; reuse a worktree only for follow-up work on its branch.
 - When a dev reports done, check the journal and `git -C <worktree> log` /
   `diff master...<branch>`, then send the review to ONE reviewer chosen by the
   author's model, so review is always cross-model:
-  - Work written on a Claude profile (`opus`, `sonnet`, `default`) goes to the
-    MiMo reviewer. If any commit under review came from a Claude dev, it counts
+  - Work written on a Claude profile (`opus`, `sonnet`, `default`) goes to a
+    MiMo reviewer (there are two; pick the idle one, or the one with the
+    shorter queue). If any commit under review came from a Claude dev, it counts
     as Claude work.
   - Everything else (`glm`, `glm-flash`, `mimo`, …) goes to the Claude Code
     reviewer, the default.
