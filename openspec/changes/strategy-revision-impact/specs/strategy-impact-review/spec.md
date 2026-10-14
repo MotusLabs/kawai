@@ -34,7 +34,7 @@ An affected revision with no pin SHALL be marked unassessed. Earlier reviews SHA
 The human SHALL be able to record one disposition, with a non-empty rationale, for a plan that is affected in the current review:
 - `continue`: the plan's existing revisions keep their pins;
 - `adapt`: the plan proceeds only through a new revision pinned to the current strategy;
-- `reconsider`: the plan's existing revisions are held until a later decision.
+- `reconsider`: the plan's existing revisions stay refused until a later decision.
 
 A later decision for the same plan SHALL supersede the earlier one, and both SHALL stay readable.
 
@@ -74,7 +74,7 @@ An agent of the team SHALL be able to read the current review's assessment and p
 
 #### Scenario: Owner records a proposal
 - **WHEN** the owner records the Lead's proposal for P
-- **THEN** P's decision has the proposal's disposition and rationale and names the proposal it came from
+- **THEN** P's decision has the proposal's disposition and names the proposal it came from, with the proposal's rationale unless the owner edited it
 
 #### Scenario: Proposal on a superseded review refused
 - **WHEN** an agent proposes a disposition in a review whose revision is no longer the current approved revision
@@ -92,11 +92,11 @@ Each decision SHALL carry a command id and name the effective decision it replac
 - **THEN** the request is refused naming the disposition, and the recorded decision is unchanged
 
 #### Scenario: Concurrent decisions settle on one
-- **WHEN** two windows record different decisions for P, each naming no predecessor
-- **THEN** the first is recorded and the second is refused as stale
+- **WHEN** two windows record different decisions for P at the same moment, each naming no predecessor
+- **THEN** exactly one is recorded, and the other is refused as stale naming the recorded decision
 
 ### Requirement: Only continue lets a non-current pin pass plan approval
-Approving a plan revision whose strategy pin is not the current approved revision SHALL pass the strategy-pin check only when the plan's effective decision in the current review is `continue`. With `adapt`, `reconsider`, or no decision the refusal SHALL stand and SHALL name which of them applies. Resubmitting SHALL still re-pin the plan to the current revision.
+Approving a plan revision whose strategy pin is an older revision of the current strategy record, or empty while a revision is approved, SHALL pass the strategy-pin check only when the plan's effective decision in the current review is `continue`. With `adapt`, `reconsider`, or no decision the refusal SHALL stand and SHALL name which of them applies. Resubmitting SHALL still re-pin the plan to the current revision.
 
 #### Scenario: Continue lets the old pin pass
 - **WHEN** the owner recorded `continue` for plan P, and P's in-review revision is pinned to strategy revision 2 while revision 3 is current
@@ -110,8 +110,12 @@ Approving a plan revision whose strategy pin is not the current approved revisio
 - **WHEN** the owner approves an affected plan's revision before any decision is recorded for that plan
 - **THEN** approval is refused naming that a decision is required
 
+#### Scenario: Reconsider refuses the old revisions without stopping the plan
+- **WHEN** the owner recorded `reconsider` for plan P and approves P's revision pinned to strategy revision 2 while revision 3 is current
+- **THEN** approval is refused naming `reconsider`, the plan stays open, and a resubmitted revision pinned to revision 3 passes the strategy-pin check
+
 ### Requirement: A withdrawn direction is never continued
-A plan revision pinned to a withdrawn strategy revision, or to any revision while the strategy has no approved revision, SHALL be refused at every plan gate whatever disposition exists. It SHALL be shown as pinned to a withdrawn direction until it is resubmitted. Already approved plan revisions, running work, and history SHALL be left unchanged.
+A plan revision pinned to a withdrawn strategy revision, to another strategy record, to content matching no revision, or to any revision while the strategy has no approved revision, SHALL be refused at every plan gate whatever disposition exists. It SHALL be shown as pinned to a withdrawn direction until it is resubmitted. Already approved plan revisions, running work, and history SHALL be left unchanged.
 
 #### Scenario: Continue does not survive withdrawal
 - **WHEN** the owner recorded `continue` for plan P, and then the strategy revision P's in-review revision is pinned to is withdrawn
@@ -120,6 +124,10 @@ A plan revision pinned to a withdrawn strategy revision, or to any revision whil
 #### Scenario: Active strategy revision withdrawn
 - **WHEN** the active approved strategy revision is withdrawn and no other revision is approved
 - **THEN** plan revisions pinned to it show a withdrawn direction, and a resubmitted revision has no pin and can be approved
+
+#### Scenario: A pin to another strategy record is never current
+- **WHEN** a plan revision is pinned to revision 1 of another strategy record whose content hash equals that of the current approved revision 1
+- **THEN** it shows a withdrawn direction, and approving it is refused whatever disposition exists
 
 ### Requirement: Decisions count only in the current review
 A decision SHALL count only while its review belongs to the strategy's current approved revision. When another revision becomes current, earlier decisions SHALL stop counting and stay readable. Plans still pinned to another revision SHALL need a decision in the new review. Decisions and proposals SHALL be refused on any review that is not current.
@@ -160,7 +168,7 @@ Recording, superseding, or proposing a disposition, and any change in a review's
 - **THEN** the completed plan's lifecycle, revisions, and pins are unchanged
 
 ### Requirement: The owner can ask an agent group to assess
-From the current review, the human SHALL be able to send one normal-priority message to a group of the team (`lead` preselected when present), under a command id. It SHALL name the review, the strategy revision, and each affected plan with its pins and effective decision. Repeating the command id SHALL NOT send a second message. This SHALL be the only mail the impact review sends.
+From the current review, the human SHALL be able to send one normal-priority message to a group of the team (`lead` preselected when present), under a command id. It SHALL name the review, the strategy revision, and each affected plan with its pins and effective decision. Repeating the command id SHALL NOT send a second message. Such requests SHALL be the only kind of mail the impact review sends.
 
 #### Scenario: One message to the Lead
 - **WHEN** the owner asks the `lead` group to assess the current review
@@ -174,12 +182,16 @@ From the current review, the human SHALL be able to send one normal-priority mes
 - **WHEN** the owner asks a group that the team does not define
 - **THEN** the request is refused naming the group, and no message is created
 
+#### Scenario: Asking again sends a new message
+- **WHEN** the owner asks again under a new command id, after the first request was delivered
+- **THEN** a second message is sent, and both requests are recorded with their message ids
+
 ### Requirement: Plan gates read one impact state
 For any plan revision, the system SHALL answer one impact state with the review and decision it rests on:
-- passes: the pin is current, or the team has no strategy;
+- passes: the pin is the current approved revision, or empty while none is approved;
 - passes by `continue`;
 - decision required;
-- held by `adapt` or `reconsider`;
+- refused under `adapt` or `reconsider`;
 - withdrawn direction.
 
 Plan approval and the Plans view SHALL use this state, never a separate derivation.

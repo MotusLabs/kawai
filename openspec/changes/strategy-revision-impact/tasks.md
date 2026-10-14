@@ -11,6 +11,8 @@ Implement after `durable-plans` has landed on master, then rebase this branch on
   - an older pin with each effective disposition and with none;
   - an empty pin while a revision is approved;
   - a pin to a withdrawn revision, to another strategy record, and to any revision while none is approved, each ignoring a recorded `continue`;
+  - a pin to another strategy record with the current revision number and hash, which must be `withdrawn-direction` (this forces rule 1 to compare `strategyId`);
+  - a pin whose hash matches no revision, ignoring a recorded `continue`;
   - a missing current review;
   - groups for closed, affected, unaffected, and draft-only plans;
   - review states: needs decisions, reviewed (including no affected plans), superseded, and withdrawn.
@@ -34,19 +36,22 @@ Implement after `durable-plans` has landed on master, then rebase this branch on
   - each refusal writing nothing, with its named reason;
   - a same-payload retry returning the decision;
   - a changed payload refused naming the field;
-  - two decisions racing on one database leaving one effective decision;
+  - two decisions racing on one database leaving one effective decision. The loser is refused as stale, naming the decision that committed, including when the chain index is what refuses it;
+  - a concurrent resend of the same command resolving as its replay;
   - a later decision superseding an earlier one, both readable;
   - row counts of plans, plan revisions, tasks, messages, and spawns unchanged.
 - [ ] 3.3 Implement `propose` per D5. Verify with service tests: a recorded proposal changing no gate, a stale review refused, an unaffected plan refused, another team's plan read as not found, and the rationale rules.
 - [ ] 3.4 Implement `gate`, `pinDisposition`, and `stateKey` per D6 and D11, and wire `pinDisposition` into `durable-plans`' approval context. Verify with tests through `PlanService.approve`:
   - `continue` lets a non-current pin pass;
   - `adapt`, `reconsider`, and no decision keep the `strategy-pin-current` refusal;
+  - under `adapt` and under `reconsider`, a resubmitted revision passes and the plan stays open;
   - a withdrawn pinned revision is refused despite `continue`;
   - a newer strategy approval makes the old `continue` stop counting;
   - `stateKey` changing exactly when a gate result changes.
 - [ ] 3.5 Implement `requestAssessment` per D8. Verify with service tests:
   - exactly one human, normal-priority group message with no task, whose body names the review, the strategy revision, and each affected plan;
   - a retry returning the same message id;
+  - a second request under a new command id sending a second message;
   - an unknown group and a stale review refused with no message;
   - an agent caller refused.
 - [ ] 3.6 Add the AGENTS.md How It Works bullet for impact reviews: groups, dispositions, the gate and withdrawn directions, idempotency and the chain index, the request, and "triggers nothing". Verify by reading it against D1–D8.
@@ -84,7 +89,8 @@ Implement after `durable-plans` has landed on master, then rebase this branch on
   - each review state;
   - the groups with pins, gates, and the unassessed mark;
   - the decision history;
-  - the Decide dialog requiring a rationale, and **Use proposal** pre-filling it;
+  - the Decide dialog requiring a rationale;
+  - **Use proposal** pre-filling the dialog. Changing the disposition afterwards drops the proposal id, and editing only the rationale keeps it.
   - the Ask to assess dialog preselecting `lead`;
   - controls disabled while disconnected;
   - refusals inline;
@@ -94,7 +100,13 @@ Implement after `durable-plans` has landed on master, then rebase this branch on
 
 ## 7. Integration walkthrough
 
-- [ ] 7.1 Add `tests/e2e/chat-strategy-impact.spec.ts` and name it in `.github/workflows/ci.yml`. Seed only prerequisites: strategy revision 1 approved, a plan approved under it, and strategy revision 2 in review, written through the store and tool paths. Then drive the rest through the UI:
+- [ ] 7.1 Add `tests/e2e/chat-strategy-impact.spec.ts` and name it in `.github/workflows/ci.yml`, in the `AGENTBOARD_CHAT_FIXTURE=1` fixture step's spec list beside `strategy.spec.ts`. Seed only prerequisites, written through the store and tool paths:
+  - a `lead` group definition in the fixture team;
+  - strategy revision 1 approved;
+  - a plan approved under it;
+  - strategy revision 2 in review.
+
+  Then drive the rest through the UI:
   1. approve strategy revision 2 and see the review in Needs decisions, with the plan affected;
   2. open the plan from the Plans badge link;
   3. record `continue` with a rationale and see Reviewed;

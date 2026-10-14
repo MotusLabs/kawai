@@ -19,24 +19,26 @@ Approving a strategy revision creates one `strategy_impact_reviews` row in state
 - **Dispositions per affected plan, recorded by the owner.**
   - `continue` keeps the plan on its older pin.
   - `adapt` requires a new plan revision pinned to the current strategy.
-  - `reconsider` holds the plan until the owner decides again.
+  - `reconsider` keeps the plan's existing revisions refused until the owner decides again.
+
+  `adapt` and `reconsider` gate the same way: both refuse the old revisions, and neither stops the plan. A resubmitted revision is current, so it passes under any disposition. The two differ in what they ask for: a re-pinned revision, or a later decision. A real hold on a plan arrives with `revision-control`.
 
   Each disposition needs a rationale and is idempotent under a command id. A later disposition for the same plan supersedes the earlier one, and both stay readable.
 - **Agents propose.** Agents (in practice the Lead) read assessments and propose a disposition with a rationale through two new `kawai-team` tools, `strategy_impact_get` and `strategy_impact_propose`. A proposal changes no gate. The owner's controls show it beside the decision, and the owner can accept it with one action. No agent tool records a disposition.
 - **The gate.** A plan revision whose pin is not the current approved strategy revision (an older pin, or none) passes `durable-plans`' `strategy-pin-current` precondition only under the owner's `continue`, recorded in the review of the current approved revision. The precondition is supplied through that change's `pinDisposition` lookup.
   - `adapt`, `reconsider`, and no disposition all leave the refusal in place, and the refusal names which applies. Resubmitting re-pins as before.
   - Dispositions count only under the current review. When another strategy revision becomes current, earlier reviews show as superseded, and plans still pinned elsewhere need a new decision.
-- **A withdrawn direction is never continued.** A plan revision pinned to a withdrawn strategy revision, or to any revision while the strategy has no approved revision, is refused at every plan gate whatever disposition exists, until it is resubmitted. Already approved revisions and running work are left alone.
+- **A withdrawn direction is never continued.** Some plan revisions are refused at every plan gate whatever disposition exists, until they are resubmitted: one pinned to a withdrawn strategy revision, to another strategy record, to content that matches no revision, or to any revision while the strategy has no approved revision. Already approved revisions and running work are left alone.
 - **One impact-state read for plan gates.** A plan revision's impact state is one of:
-  - passes (the pin is current, or the team has no strategy);
+  - passes (the pin is the current approved revision, or empty while none is approved);
   - passes by `continue`;
   - decision required;
-  - held by `adapt` or `reconsider`;
+  - refused under `adapt` or `reconsider`;
   - withdrawn direction.
 
   Plan approval and the Plans view consult this state now. `plan-validation` (its input identity) and `plan-execution` (its Start gate) bind to the same read later.
 - **Derived review state.** A review shows **Needs decisions**, **Reviewed**, **Superseded**, or **Withdrawn**, derived at read time. The stored row stays exactly as approval created it.
-- **Ask an agent group to assess.** From the current review, the owner can send one ordinary normal-priority message to a group of the team, under a command id. The `lead` group is preselected when the team defines one. The message names the review and its affected plans. This is the only mail the impact review ever sends, and only on that explicit request.
+- **Ask an agent group to assess.** From the current review, the owner can send one ordinary normal-priority message to a group of the team, under a command id. The `lead` group is preselected when the team defines one. The message names the review and its affected plans. Such requests are the only kind of mail the impact review sends, and only when the owner asks. Asking again under a new command id sends another message.
 - **Views.**
   - The Strategy view shows each review with its state. For the current review it adds the grouped plans with pins and impact states, proposals, decisions and their history, the decision controls, and the assessment request.
   - The Plans view marks each affected plan with its impact state and a link to the review.
@@ -66,7 +68,7 @@ Non-goals:
 
 ### Modified Capabilities
 
-None. Strategy approval still creates exactly one impact-review row and nothing else. The impact-review rows are only read here, never rewritten. `durable-plans`' `strategy-pin-current` precondition and its `pinDisposition` extension point already define where a recorded disposition lets an older pin pass, so `plan-approval`'s requirements are unchanged. The two new agent tools read and propose only; no strategy tool gains approve, publish, withdraw, or delete rights.
+None. Strategy approval still creates exactly one impact-review row and nothing else. The impact-review rows are only read here, never rewritten. `durable-plans`' `strategy-pin-current` precondition and its `pinDisposition` extension point already define where a recorded disposition lets an older pin pass, so `plan-approval`'s requirements are unchanged. The two new agent tools read and propose only; no strategy tool gains approve, publish, withdraw, or delete rights. `product-strategy`'s "Agent has no approve tool" scenario therefore stays true whether "its strategy tools" means the four strategy tools or all six.
 
 ## Impact
 
@@ -88,5 +90,5 @@ None. Strategy approval still creates exactly one impact-review row and nothing 
   - Unit coverage of grouping, dispositions, idempotency, the gate (with durable-plans' approval), withdrawn directions, supersession, derived state, the request, cross-team refusals, and persistence.
   - One browser walkthrough, named in `.github/workflows/ci.yml`.
 - **Sequencing.**
-  - Implement after `durable-plans`, whose pins, plan reads, lifecycle, and `pinDisposition` lookup it binds to (its design D13: C2, C3, C4, and C6).
+  - Implement after `durable-plans`, whose pins, plan reads, lifecycle, and `pinDisposition` lookup it binds to (its design D13: C2, C3, and C4).
   - It can run in parallel with `plan-validation`.

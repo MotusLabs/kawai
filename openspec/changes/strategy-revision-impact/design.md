@@ -12,9 +12,10 @@ See proposal.md for the motivation. Facts that shape the approach:
 - **Agent strategy tools.** `strategyTools.ts` registers exactly four, and its header forbids approve, publish, withdraw, and delete tools. `product-strategy` requires only that no agent tool approves, publishes, withdraws, or deletes a revision.
 - **`durable-plans` (lands first).** It publishes, in its design D13:
   - C2: per-revision pins `{strategyId, revision, hash}` or empty, plus `PlanStore.revisionsPinnedTo(strategyId)` and `openPlans(teamId)`;
-  - C3: `PlanService` as the only plan writer;
-  - C4: the ordered `APPROVAL_PRECONDITIONS` and a `pinDisposition(planId, revision)` lookup, which `strategy-pin-current` consults and which returns null until this change;
-  - C6: append-only `plan_events`.
+  - C3: `PlanService` as the only plan writer. Its after-commit change announcement, which the Plans view's pushes follow, therefore sees every plan write.
+  - C4: the ordered `APPROVAL_PRECONDITIONS` and a `pinDisposition(planId, revision)` lookup, which `strategy-pin-current` consults and which returns null until this change.
+
+  This change neither reads nor writes `plan_events` (C6).
 
   Submission always pins the current approved strategy revision, or nothing when none is approved. So every revision submitted after an approval is current, and every non-current revision predates the current review.
 - **Human mail.** `AssignmentService` sends human mail inside its own transaction with `MailboxStore.enqueue({ fromKind: 'human', fromSession: null, fromGroup: null, originPath: team.groupsRoot, priority: 'normal', actor: 'human', … })`, after checking the group against the team's catalog.
@@ -105,15 +106,21 @@ type ImpactReviewState = 'needs-decisions' | 'reviewed' | 'superseded' | 'withdr
 ```
 
 `impactGate(pin, strategy, currentReview, effectiveDecision)` applies these rules in order:
-1. If the pin equals the current approved revision and hash, it is `current`. With no strategy record, or no approved revision, the current pin is empty, and an empty pin then matches.
-2. If the pin is non-empty and names another strategy record, a withdrawn revision, or a strategy that has no approved revision, it is `withdrawn-direction`.
-3. Otherwise the pin is non-current: an older pin, or an empty pin while a revision is approved. The effective decision in the current review decides:
+1. If the pin equals the team's current approved `{strategyId, revision, hash}` as a whole, it is `current`. With no strategy record, or no approved revision, the current pin is empty, and an empty pin then matches. Revision numbers restart at 1 in every strategy record, so the comparison must include `strategyId`. Matching revision and hash alone is not enough.
+2. If the pin is non-empty, it is `withdrawn-direction` when either holds:
+   - the strategy has no approved revision;
+   - the pin does not name a `superseded` revision of the team's strategy record with that revision's stored hash. This covers another strategy record, a withdrawn revision, and a hash that matches no revision's content.
+
+   Pins are server-derived and revisions are immutable, so the last case is defensive. It still keeps `continue` from covering a pin that names no real direction.
+3. Otherwise the pin is non-current: an older revision of the current record, or an empty pin while a revision is approved. The effective decision in the current review decides:
    - `continue` → `continue`;
    - `adapt` → `adapt`;
    - `reconsider` → `reconsider`;
    - no decision → `decision-required`.
 
    If no review exists for the current revision (never expected), the state is `decision-required` with a null review id. Then the only path is resubmission.
+
+`adapt` and `reconsider` gate identically. Both refuse the plan's non-current revisions, and neither stops the plan. Rule 1 runs first, so a resubmitted revision, pinned to the current revision, passes whatever disposition exists; resubmission is the intended way forward for both. They differ in what the owner asks for: a re-pinned revision, or a later decision. That difference shows in the label, the refusal, and C-I3, where `revision-control` may later hold a plan on `reconsider`. This change adds no hold.
 
 `impactGroup(plan, revisions, strategy)`:
 - A completed or cancelled plan is `historical`.
@@ -162,7 +169,9 @@ The human sends `strategy-impact-decide { teamPath, requestId, reviewId, planId,
 4. **Rationale.** It must be non-empty after trimming and at most 2,000 characters. Text over the limit is refused, never cut, because the owner's words are the record.
 5. **Proposal.** If `proposalId` is given, it must be a proposal of this review and plan with the same disposition. The rationale may be edited.
 6. **Predecessor.** `expectedDecisionId` must equal the current chain head, or both are null. Otherwise refuse as stale, naming the decision recorded meanwhile.
-7. **Insert.** Write the row with `supersedes_decision_id = expectedDecisionId` and the snapshot of the plan's non-current revisions. The chain index backs step 6 at the database.
+7. **Insert.** Write the row with `supersedes_decision_id = expectedDecisionId` and the snapshot of the plan's non-current revisions. The chain index backs step 6 at the database. In a true race, both writers read the same chain head and pass step 6, then the loser's insert hits an index:
+   - On `strategy_impact_decisions_chain`, the transaction rolls back and the decision is refused as step 6's stale-predecessor failure, naming the decision that committed. It is never surfaced as a raw constraint error.
+   - On `UNIQUE (strategy_id, command_id)`, step 1 runs again, so a concurrent resend of the same command resolves as its replay.
 
 Then publish strategies and plans for the team (D9).
 
@@ -181,9 +190,11 @@ It then inserts a proposal. There is no compare-and-swap, because proposals neve
 
 `durable-plans`' `pinDisposition(planId, revision)` is supplied by `ImpactService.pinDisposition`. It returns the effective `continue` decision when `gate.state === 'continue'`, and null in every other state. So `strategy-pin-current` passes exactly when the spec allows, and the shipped precondition list stays untouched.
 
-The refusal names its reason without editing the shipped messages. When a `team-plan-approve` is refused with `strategy-pin-current` among its failures, the plan connection adds `impact: ImpactGate` for that revision to `team-plan-result`. The Plans view renders that as "Strategy impact: decision required / adapt / reconsider / withdrawn direction — Open review".
+The shipped `strategy-pin-current` message stays unchanged. The reason is carried instead by an `impact` field beside the refusal, which the UI renders. When a `team-plan-approve` is refused with `strategy-pin-current` among its failures, the plan connection adds `impact: ImpactGate` for that revision to `team-plan-result`. The Plans view renders that as "Strategy impact: decision required / adapt / reconsider / withdrawn direction — Open review".
 
 The Plans view's badge comes from the same function. `team-plans-snapshot` entries gain `impact: { group, gate }`, using the gate of the approved revision when there is one, else of the newest in-review revision. `team-plan-detail` gains `impact` per `approved` or `in_review` revision. One function means the badge and the refusal cannot disagree.
+
+As with `strategy-detail` (D9), the connection composes these `impact` fields beside the plan store's reads. `durable-plans`' stored plan types stay untouched, and the messages only gain additive fields.
 
 ### D7. Withdrawn directions
 
@@ -194,7 +205,7 @@ Already approved plan revisions keep their `approved` status. Nothing rebinds, p
 ### D8. The assessment request: one human message in one transaction
 
 The human sends `strategy-impact-request { teamPath, requestId, reviewId, group, commandId }`. `ImpactService.requestAssessment` refuses agent callers. Then, in one transaction:
-1. Replay by `(strategy_id, command_id)`: the same `reviewId` and `group` returns the stored message id; anything else is refused naming the field.
+1. Replay by `(strategy_id, command_id)`: the same `reviewId` and `group` returns the stored message id; anything else is refused naming the field. As in D4, if the request row's insert hits the command-id unique key, this step runs again. A new command id is a new request, so asking again, or asking another group, sends another message.
 2. The review must be current.
 3. The group must be in the team's catalog. The check is the same one `AssignmentService` uses, and an unknown group is refused by name.
 4. Build the body from the current assessment:
@@ -214,7 +225,7 @@ The client preselects `lead` when the team defines that group and lets the owner
 - **Messages.** Add `strategy-impact-decide` and `strategy-impact-request`. Both carry `requestId`, so `StrategyConnections.act` handles them and answers with `strategy-result` (`decision` or `messageId` on success). Both are listed in `CHAT_CONNECTION_TYPES`. The `strategy-detail` message gains `impact: StrategyImpactDetail | null`, composed beside `store.detail(...)` so the stored strategy detail type is untouched.
 - **Pushes.**
   - Every impact write calls `publishStrategies(teamId)` and `publishPlans(teamId)`.
-  - Every committed plan write also calls `publishStrategies(teamId)`, because the assessment derives from plans. The hook is `durable-plans`' plan-change notification.
+  - Every committed plan write also calls `publishStrategies(teamId)`, because the assessment derives from plans. The hook is C3's after-commit change announcement. `PlanService` is the only plan writer, so the hook misses no write.
   - Every strategy store change also calls `publishPlans(teamId)`, because approvals and withdrawals change every plan's gate.
 
   Pushes go only to subscribed connections, as today.
@@ -222,7 +233,10 @@ The client preselects `lead` when the team defines that group and lets the owner
   - the current review's state;
   - the three groups;
   - per affected row: pins, gates, the unassessed mark, the effective decision with its history, and the newest proposal;
-  - a **Decide** dialog: a disposition radio and a required rationale, with **Use proposal**, minting one command id per dialog and re-minting only after a payload change following a lost result, as the strategy approve dialog does;
+  - a **Decide** dialog:
+    - a disposition radio and a required rationale;
+    - **Use proposal**, which fills in the disposition and rationale and sets `proposalId`. Changing the disposition afterwards drops `proposalId`, so D4 step 5 never refuses a mismatch the owner cannot see. Editing only the rationale keeps it.
+    - one command id per dialog, re-minted only after a payload change following a lost result, as the strategy approve dialog does;
   - an **Ask to assess** dialog with a group picker.
 
   `StrategyRevisionHistory` lists every review with its state and recorded decisions.
@@ -257,7 +271,7 @@ The client preselects `lead` when the team defines that group and lets the owner
 - [`continue` cannot revive a withdrawn direction] → Deliberate. Approved revisions and running work are untouched, and resubmission is one tool call.
 - [The assessment can change between render and decision] → Step 3 of D4 re-checks affectedness inside the transaction, and pushes refresh the view.
 - [Plan writes now push strategy detail] → Only to subscribed connections, and the payloads are small. Strategy and plan writes are rare compared with mail.
-- [`durable-plans` may shift in its own review or implementation] → This change binds to C2, C3, C4, and C6 by name. Task 1.1 starts by reconciling names with the merged `durable-plans` design.
+- [`durable-plans` may shift in its own review or implementation] → This change binds to C2, C3, and C4 by name. Task 1.1 starts by reconciling names with the merged `durable-plans` design.
 
 ## Migration Plan
 
