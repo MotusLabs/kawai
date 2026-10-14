@@ -24,24 +24,27 @@ Constraints that shape the approach: the product strategy (revision 2) says revi
 
 The workspace renders **Product Strategy** as a top band (compact summary of the approved revision — title, status, revision, hash, purpose line — expanding into the full `ProductStrategyView`), the attention queue beneath it, then **Tasks | Messages | Members**. Plans joins the tab strip later as a registered entry; today the strip's registry accepts a future key and renders nothing for it. *Alternative:* Product Strategy as a fourth tab — rejected: the direction and `docs/multi-agent-development-ux.md` §1 place it at product/repository level **above** the tabs so direction is always visible while supervising.
 
-### D3. Reuse by extraction, not by forking: `TeamTasksView` and `ProductStrategyView`
+### D3. Reuse by extraction, not by forking — keyed by team id, not by the host chat
 
-`team-message-threads` already made `TeamMessagesView.tsx` host-agnostic for exactly this change. Follow it: extract `TeamTasksView.tsx` from `TeamTasksPanel.tsx` and `ProductStrategyView.tsx` from `ProductStrategyPanel.tsx`, leaving both panels as thin side-slot wrappers around the view plus a close button. `TeamMailboxPanel.tsx` is not restyled — the workspace links to it as a shortcut from an attention item. *Alternative:* mount the panels directly and thread `onClose`-optional props through — rejected: it makes the side slot's lifetime a hidden dependency of a full-page view.
+`team-message-threads` already made `TeamMessagesView.tsx` host-agnostic for exactly this change, but all three views still key their store state and wire messages by the chat `sessionId` they are mounted in (`useTeamMessageStore`/`useTeamTaskStore`/`useStrategyStore` slices keyed by session, `sessionId` on every message). The workspace cannot inherit that key: switching or losing the host chat would reset "same tab and selection". The extracted views therefore take a **team key** — the `teamPath` a client addresses a team by (a repository's main checkout or a chat's project path), which the server resolves with `TeamScopes.resolve` to the team id (the git common dir) — as their state key, and the chat `sessionId` stops being the team's address: the workspace opens and requests by `teamPath`, so no live chat is needed. Extract `TeamTasksView.tsx` from `TeamTasksPanel.tsx` and `ProductStrategyView.tsx` from `ProductStrategyPanel.tsx` on that contract, leaving both panels as thin side-slot wrappers around the view plus a close button. `TeamMailboxPanel.tsx` is not restyled — the workspace links to it as a shortcut from an attention item. *Alternative:* mount the panels directly and thread `onClose`-optional props through — rejected: it makes the side slot's lifetime a hidden dependency of a full-page view.
 
 ### D4. Workflow stage is a pure projection over sibling state, never a stored value
 
-`teamTaskStage.ts` maps a task's facts to a display stage, reading the sibling changes' real contracts (all merged as proposals; still absence-safe because they are not implemented yet):
+`teamTaskStage.ts` maps a task's facts to one display stage through an ordered ladder — first match wins — reading the sibling changes' real contracts:
 
-| Stage | Source | Field consumed |
-| --- | --- | --- |
-| Unstarted | `task-assignment` D5 | no outstanding assignment, or one whose derived state is `queued`/`failed`/`superseded` |
-| Implementing | `task-assignment` D5 | outstanding assignment state `claimed`/`delivered`/`parked`/`forwarded`/`uncertain` |
-| In review / Ready for QA / Fixes requested | `task-results-handoffs` D3 | a `team_task_assignments` row with `handoff_kind` `review`/`qa`/`fix` set, plus `result_id` and `expected_response`; its open/claimed/failed standing is that assignment's own D5 state, not a separate entity |
-| Awaiting acceptance | `task-results-handoffs` D1/D5 | the **outstanding result** (newest row nothing supersedes) with `accepted_by_kind`/`accepted_by_session`/`accepted_at` all NULL |
-| Needs re-evaluation (badge, not a stage) | `task-results-handoffs` D6 | derived at read: `result.task_revision < team_tasks.revision` — never stored |
-| Awaiting acknowledgement | `task-revision-publication` D5 | outstanding claimant's `acknowledged revision < task.revision`; notice state (Not notified / Queued / Delivered / Failed / Uncertain) is derived per holder per revision, and "Delivered rev 2 · Acknowledged rev 1" is a normal display |
+| # | Stage | Source | Field consumed |
+| --- | --- | --- | --- |
+| 1 | — (no stage) | the task itself | status `done` or `cancelled` |
+| 2 | In review / Ready for QA / Fixes requested | `task-results-handoffs` D3 | an outstanding `team_task_assignments` row with `handoff_kind` `review`/`qa`/`fix` set, plus `result_id` and `expected_response`; its standing is that assignment's own task-assignment D5 state, not a separate entity |
+| 3 | Awaiting acceptance | `task-results-handoffs` D1/D5 | the **outstanding result** (newest row nothing supersedes) with `accepted_by_kind`/`accepted_by_session`/`accepted_at` all NULL |
+| 4 | Implementing | `task-assignment` D5 | outstanding assignment state `claimed`/`delivered`/`parked`/`forwarded`/`uncertain` |
+| 5 | Unstarted | `task-assignment` D1/D5 | otherwise: no outstanding assignment, or one whose derived state is `queued` (failed and superseded assignments are never outstanding — D1) |
 
-There is no acceptance enum and acknowledgement is not a notice state. The envelope's `revisionNotice` is `{revision, previousRevision, assignmentId, rationale}` — publication metadata, not a stage input. The stage is never `done`, and a finished agent turn never moves it (product strategy P9/P10). If a sibling field is absent, the row falls back to the assignment-derived stage and the next action says why.
+Badges render beside the stage and are never stages themselves: **Needs re-evaluation** (`task-results-handoffs` D6, derived at read: `result.task_revision < team_tasks.revision` — never stored) and **Awaiting acknowledgement** (`task-revision-publication` D5: outstanding claimant's `acknowledged revision < task.revision`; notice state (Not notified / Queued / Delivered / Failed / Uncertain) is derived per holder per revision, and "Delivered rev 2 · Acknowledged rev 1" is a normal display).
+
+The order is the semantics: a closed task shows no stage whatever its assignment history says; an outstanding handoff outranks the unaccepted result it refers to; only when neither exists does the assignment's own state name the stage. There is no acceptance enum and acknowledgement is not a notice state. The envelope's `revisionNotice` is `{revision, previousRevision, assignmentId, rationale}` — publication metadata, not a stage input. The stage is never `done`, and a finished agent turn never moves it (`docs/multi-agent-development-ux.md` §1, `task-results-handoffs` D2).
+
+Two phases. Phase 1 lands beside the B2 server chain and computes the ladder from the sources that exist then — the task's own status and its assignment state (orders 1, 4, 5). The sibling-dependent orders and both badges (2, 3, Needs re-evaluation, Awaiting acknowledgement) join in Phase 2, the final section of tasks.md, once `task-results-handoffs` and `task-revision-publication` land; until then those stages and their attention items are simply not produced and the ladder falls through to the assignment-derived stage. There is no runtime feature detection — Phase 2 adds sources to the same projection, it does not add table sniffs.
 
 ### D5. Attention items: one shape, a kind enum, and a card link
 
@@ -60,11 +63,11 @@ interface AttentionItem {
 }
 ```
 
-Sources are a small registry of pure functions over existing state; adding a Wave C source adds a function and a kind, not a shape change. The `link.kind: 'card'` case exists today only so a strategy-P2/D3 Lead decision card can land without a migration of the item type. An unknown kind renders its cause/next action and is never dropped. *Alternative:* a discriminated union per kind — rejected: the queue would need a new render branch per source, which is exactly what the extension point must not require.
+Sources are a small registry of pure functions over existing state; adding a Wave C source adds a function and a kind, not a shape change. The `link.kind: 'card'` case exists today only so a strategy-P2/D3 Lead decision card can land without a migration of the item type. An unknown kind renders its cause/next action and is never dropped. No item carries a `deadline`: deadlines are deferred to Wave C holds and stalls, where a deadline is a fact the hold owns — today an item is never late, only waiting. *Alternative:* a discriminated union per kind — rejected: the queue would need a new render branch per source, which is exactly what the extension point must not require.
 
 ### D6. Counts replace; toasts key on identity
 
-The snapshot is authoritative: `teamWorkspaceStore` replaces `items` and the derived counts wholesale. Change pushes are unfiltered and the client filters, matching `team-message-threads`' Messages contract. Toasts fire on an item identity's transition into a human-required state and are remembered in a set of seen identities for the session's lifetime; a reconnect replay is a no-op because the identity is already seen and the count is replaced rather than incremented. This is what E05/E13's "counts converge and toasts do not duplicate" means operationally.
+The snapshot is authoritative: `teamWorkspaceStore` replaces `items` and the derived counts wholesale. Change pushes are unfiltered and the client filters, matching `team-message-threads`' Messages contract. Toasts fire on an item identity's transition into a human-required state and are remembered in a set of seen identities for the **client session's** lifetime — the page's lifetime, not the connection's (a reconnect replay is a no-op because the identity is already seen) and not the team's (a second tab is its own client session and gets its own one toast) — and the count is replaced rather than incremented. This is what E05/E13's "counts converge and toasts do not duplicate" means operationally.
 
 ### D7. Members reads the catalog and keeps the file path each group came from
 
@@ -76,7 +79,7 @@ The window is a rolling 24 hours ending at read time, recomputed while the works
 
 ### D9. Connections follow the existing team-scoped pattern
 
-`workspaceConnections.ts` resolves the team from the calling session (`loadTeamGroups(session.projectPath).team`) exactly as `TaskConnections`/`MessageConnections`/`StrategyConnections` do, and refuses any id that does not belong to it. Requests are `team-workspace-open`/`team-workspace-close` over the chat WebSocket; answers are `team-workspace-snapshot` (authoritative on open and reconnect) and `team-workspace` change pushes. New `ClientMessage` types go in `CHAT_CONNECTION_TYPES` (`src/server/chat/chatConnectionTypes.ts`) — the router whitelist only consults it. Cross-team refusal is server-side and is the E14 guarantee; the client simply never lists another team.
+`workspaceConnections.ts` resolves the team from the calling session (`loadTeamGroups(session.projectPath).team`) exactly as `TaskConnections`/`MessageConnections`/`StrategyConnections` do, and refuses any id that does not belong to it. The connection and its data are keyed by **team id**: the requesting `sessionId` is transport only, and the server accepts `team-workspace-*` from any session of that team, so the workspace keeps serving "same tab and selection" when the chat whose transport it borrowed is killed — the client re-opens through another live session of the team, or shows a disconnected state when none is left. Requests are `team-workspace-open`/`team-workspace-close` over the chat WebSocket; answers are `team-workspace-snapshot` (authoritative on open and reconnect) and `team-workspace` change pushes. New `ClientMessage` types go in `CHAT_CONNECTION_TYPES` (`src/server/chat/chatConnectionTypes.ts`) — the router whitelist only consults it. Cross-team refusal is server-side and is the E14 guarantee; the client simply never lists another team.
 
 ### D10. The navigator Team entry is a view-model row, not a session
 
@@ -88,7 +91,7 @@ The window is a rolling 24 hours ending at read time, recomputed while the works
 
 ## Risks / Trade-offs
 
-- [`task-results-handoffs` and `task-revision-publication` are merged proposals but not implemented, so D4's fields may still shift during their implementation] → D4 binds to their design text (D3/D5/D6/D8 and D5 respectively) and keeps absence-safe fallbacks; a missing field degrades to the assignment-derived stage rather than blocking this change. If their implementers move a field, the projection is the only place to update.
+- [`task-results-handoffs` and `task-revision-publication` are merged proposals but not implemented, so D4's fields may still shift during their implementation] → D4 binds to their design text (D3/D5/D6/D8 and D5 respectively) and Phase 1 never reads them: the sibling-dependent ladder orders, badges, attention items, and the completed-results bucket are Phase 2 tasks (tasks.md's final section) that start from the siblings' landed tables, so a field that moved surfaces the moment Phase 2 compiles against it. If their implementers move a field, the projection is the only place to update.
 - [The morning summary's capacity-wait bucket loses history across restart] → stated in the spec as a scenario; the other four buckets are durable. Revisit only if the human needs restart-surviving wait history.
 - [Extracting `TeamTasksView`/`ProductStrategyView` touches panels the side slot depends on] → keep the panels' public props unchanged, add the view underneath, and cover both mounts with the existing panel tests.
 - [Attention item identity collides across sources] → ids are `kind:sourceId` with source ids already unique per store (request id, message id, task id); a collision is a bug in a source, not a queue behaviour.
@@ -96,7 +99,7 @@ The window is a rolling 24 hours ending at read time, recomputed while the works
 
 ## Migration Plan
 
-None. No table, column, or file format changes. The only server change that alters an existing shape is `GroupCatalog` carrying each group's source file (D7), which is additive to a TypeScript object and touches its callers (`teamGroups.ts`, `routes/teamGroups.ts`, `sessionMailbox.ts`, `TaskService.ts`) with an extra field. Rollback is removing the workspace route and the navigator entry.
+None. No table, column, or file format changes. The only server change that alters an existing shape is `GroupCatalog` carrying each group's source file (D7), which is additive to a TypeScript object and touches its callers (`teamGroups.ts`, `routes/teamGroups.ts`, `sessionMailbox.ts`, `TeamMailbox.ts`, `sessionTeams.ts`, `TaskService.ts`) with an extra field. Rollback is removing the workspace route and the navigator entry.
 
 ## Decisions (recorded 2026-10-14)
 

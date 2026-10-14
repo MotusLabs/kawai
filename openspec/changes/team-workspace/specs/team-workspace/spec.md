@@ -16,12 +16,16 @@ The system SHALL open a full workspace view for a repository's team from its nav
 - **WHEN** the human selects a different chat while the workspace is open
 - **THEN** the workspace stays open on the same team with the same tab and selection
 
+#### Scenario: The workspace survives its transport chat being killed
+- **WHEN** the chat session carrying the workspace's wire transport is killed while the workspace is open
+- **THEN** the workspace stays open keyed by its team, moving transport to another live session of the team, and shows a disconnected state only when none is left
+
 #### Scenario: No placeholder Plans
 - **WHEN** the workspace renders its tab strip
 - **THEN** no Plans tab content or placeholder row is shown, and the place a future Plans tab occupies is a documented extension point
 
 ### Requirement: The workspace reuses the chat-side task, message, and strategy views
-Tasks, Messages, and Product Strategy in the workspace SHALL be the same views the chat side slot mounts, not parallel copies. The chat-side Tasks, Mailbox, Messages, and Strategy panels SHALL remain available as shortcuts. The Mailbox panel SHALL keep its delivery operations and SHALL NOT be restyled by this view.
+Tasks, Messages, and Product Strategy in the workspace SHALL be the same views the chat side slot mounts, not parallel copies, keyed by team id rather than by the chat that hosts them. The chat-side Tasks, Mailbox, Messages, and Strategy panels SHALL remain available as shortcuts. The Mailbox panel SHALL keep its delivery operations and SHALL NOT be restyled by this view.
 #### Scenario: A task opens the same way from either surface
 - **WHEN** the human opens a task from the workspace and from a chat's Tasks panel
 - **THEN** both show the same task record with the same revisions, journal, and messages
@@ -39,6 +43,14 @@ Each task row SHALL show its title, task status, workflow stage, accountable ses
 #### Scenario: A review request moves the stage
 - **WHEN** a result's review handoff is outstanding
 - **THEN** the row shows a workflow stage of In review alongside the unchanged task status
+
+#### Scenario: A queued review handoff already shows In review
+- **WHEN** a review handoff is dispatched and still queued while its result is unaccepted
+- **THEN** the row shows In review — the ladder's handoff order precedes Awaiting acceptance
+
+#### Scenario: A closed task shows no stage
+- **WHEN** a task's status is done while its last assignment stands delivered
+- **THEN** the row shows no workflow stage, not Implementing
 
 #### Scenario: Accountability falls back to the requested role
 - **WHEN** a group assignment is queued with no claimed agent
@@ -87,7 +99,7 @@ Each attention item SHALL carry a kind, a stable identity, and a link that MAY t
 - **THEN** the item renders and its link opens that card
 
 ### Requirement: Attention counts reconcile after reconnect without duplicate toasts
-On open and on reconnect the workspace SHALL replace its attention items and counts with the authoritative snapshot rather than incrementing them. Each item identity SHALL raise at most one toast across its transitions; a reconnect that replays unchanged state SHALL raise no toast.
+On open and on reconnect the workspace SHALL replace its attention items and counts with the authoritative snapshot rather than incrementing them. Each item identity SHALL raise at most one toast per client session across its transitions; a reconnect that replays unchanged state SHALL raise no toast.
 #### Scenario: Reconnect converges the counts (E05, E13)
 - **WHEN** the connection drops while two approvals are pending and one is resolved, then the client reconnects
 - **THEN** the workspace shows one attention item, not two and not three
@@ -138,6 +150,10 @@ A summary band SHALL list completed results, capacity waits, approvals, uncertai
 - **WHEN** the server restarts and the workspace opens
 - **THEN** completed results and uncertain deliveries in the window are still listed, while capacity waits list only waits the running server has observed
 
+#### Scenario: Capacity waits state their runtime bound (E13)
+- **WHEN** the summary shows the capacity-waits bucket
+- **THEN** the bucket carries a label naming it runtime-only — it lists only waits the running server has observed
+
 ### Requirement: The workspace supports one-handed list and detail navigation
 At a narrow viewport the workspace SHALL use list and detail panes with an explicit **Back** action. Opening a chat SHALL preserve the task selection and filters. Unsubmitted composer drafts and the current selection SHALL survive navigation within the workspace.
 #### Scenario: Back returns to the preserved list (E14)
@@ -155,14 +171,14 @@ Every workspace control SHALL be reachable and operable from the keyboard, show 
 - **THEN** each control shows visible focus, is named, and the item's state change is announced as text
 
 ### Requirement: Workspace reads are team-scoped and refuse cross-team access
-Every workspace read and action SHALL be scoped to the calling session's team. Another team's task, message, strategy, session, or worktree SHALL be refused server-side and SHALL NOT appear in the workspace.
+Every workspace read SHALL be scoped to the calling session's team. Another team's task, message, strategy, session, or worktree SHALL be refused server-side and SHALL NOT appear in the workspace.
 #### Scenario: A second repository stays isolated (E14)
 - **WHEN** a second repository's team is open beside the first
 - **THEN** each workspace lists only its own team's tasks, members, messages, attention counts, and worktrees
 
-#### Scenario: Cross-team ids are refused (E14)
-- **WHEN** a workspace request names a task id belonging to another team
-- **THEN** the server refuses it and no data for that task is returned
+#### Scenario: Cross-team links are refused (E14)
+- **WHEN** a workspace link names a task, message, or strategy of another team
+- **THEN** the owning connection refuses it and the workspace shows no data for it
 
 ### Requirement: The workspace stays current without a manual refresh
 The workspace SHALL receive one authoritative snapshot on open and on reconnect, and unfiltered change pushes the client applies. A new attention item or a stage change SHALL appear without a manual reload.
