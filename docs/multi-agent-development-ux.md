@@ -398,9 +398,13 @@ Send task-linked mail and reply through different sessions. Assert named senders
 
 Submit a developer result in a worktree occupied by its spawned session. Request review and assert the occupancy reason. Release and hand off after the turn finishes; assert the developer is archived, its result persists, and one reviewer receives the result reference. Return findings for fixes, submit a new result, and request QA against that result. Assert old review findings do not imply approval of the new commit.
 
+**Coverage (task-results-handoffs):** headless in `src/server/__tests__/taskResultsE07.integration.test.ts` (spawned developer's result, review queued with the `worktree-occupied` reason naming it, release archives the developer and the queued review reaches one spawned reviewer with the result and commit, findings bound to the examined result and none on a newer one); in the browser by the E07 walkthrough in `tests/e2e/chat-teams.spec.ts`.
+
 ### E08 — Release refuses active operations (P2)
 
 Attempt worktree release while a developer is busy or awaiting approval. Assert an actionable refusal and no archive or review dispatch. After resolving the request and ending the turn, retry and assert one successful transition.
+
+**Coverage (task-results-handoffs):** headless in `src/server/__tests__/taskResultsE08.integration.test.ts` (release refused naming the developer while it is mid-turn and while it awaits an approval, nothing archived or dispatched; after resolution and turn end one release and one review dispatch); in the browser by the E08 walkthrough in `tests/e2e/chat-teams.spec.ts`.
 
 ### E09 — Revision delivery versus acknowledgement (P2)
 
@@ -411,6 +415,8 @@ Amend a task while its developer is busy. Ordinary Save Draft must not publish o
 ### E10 — Results, acceptance, and permissions (P2)
 
 Have a contributor without a closing grant submit a result for a human-created task. Assert the task stays open/active until human acceptance and the contributor cannot close it. Accept as human, then reopen. Amend after an earlier result and assert Needs re-evaluation. A completed child must not silently close its parent.
+
+**Coverage (task-results-handoffs):** headless in `src/server/__tests__/taskResultsE10.integration.test.ts` (contributor's result leaves the task open and its accept writes nothing, amendment flags Needs re-evaluation, a finished child leaves the parent open, the human's accept over open child work needs a journaled reason, restart keeps results, findings, and acceptance); in the browser by the E10 walkthrough in `tests/e2e/chat-teams.spec.ts`.
 
 ### E11 — Recovery and possible duplicates (P1)
 
