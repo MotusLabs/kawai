@@ -2216,11 +2216,13 @@ export class ChatSessionManager {
     this.options.onBackgroundTasks?.(sessionId, tasks)
     const store = this.options.taskStore
     const driver = this.drivers.get(sessionId)
-    if (driver && !driver.isDead) {
-      this.backgroundTaskRecords.set(sessionId, driver.getBackgroundTaskRecords())
-    }
-    if (store && driver && !driver.isDead) {
-      store.write(sessionId, driver.getBackgroundTaskRecords()).catch((error) => {
+    if (!driver) return
+    // A crashing driver is already dead when process_end publishes stopped
+    // tasks. Save those final records so archive/restore cannot revive them.
+    const records = driver.getBackgroundTaskRecords()
+    this.backgroundTaskRecords.set(sessionId, records)
+    if (store) {
+      store.write(sessionId, records).catch((error) => {
         logger.warn('chat_task_sidecar_write_failed', {
           sessionId,
           error: error instanceof Error ? error.message : String(error),

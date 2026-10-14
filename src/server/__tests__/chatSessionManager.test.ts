@@ -4013,6 +4013,40 @@ describe('ChatSessionManager background-task roster (background tasks D2)', () =
     ])
   })
 
+  test('a process crash persists stopped tasks through archive and restore', async () => {
+    const store = new ChatTaskStore({ dir: path.join(tempDir, 'chat-tasks-crash') })
+    const handles: FakeHandle[] = []
+    const manager = await managedManager({
+      isDirectory: anyDirectory, db, registry: new SessionRegistry(),
+      onEvent: () => {}, queryFactory: fakeQueryFactory(handles), taskStore: store,
+    })
+    const created = manager.createSession({ projectPath: '/tmp/proj' })
+    if (!created.ok) throw new Error('create failed')
+    const id = created.session.id
+    await manager.send(id, 'start a background task')
+    handles[0]!.push({
+      type: 'system', subtype: 'task_started', task_id: 'b-crash', tool_use_id: 'c1',
+      task_type: 'local_bash', is_backgrounded: true, uuid: 'u1', session_id: 's',
+    } as unknown as SDKMessage)
+    await waitForCondition(() => store.read(id).some(task => task.status === 'running'))
+
+    // An unexpected EOF marks the driver dead before it publishes process_end.
+    handles[0]!.query.close()
+    await waitForCondition(() => manager.getSnapshot(id)!.backgroundTasks[0]?.status === 'stopped')
+    const stopped = manager.getSnapshot(id)!.backgroundTasks[0]!
+    expect(stopped.live).toBe(false)
+    expect(stopped.endedAtMs).toBeDefined()
+    await waitForCondition(() => store.read(id)[0]?.status === 'stopped')
+    expect(store.read(id)[0]?.endedAtMs).toBe(stopped.endedAtMs)
+
+    // Recreating the driver must seed the stopped records, not the old running ones.
+    expect(manager.archive(id)).toEqual({ ok: true })
+    expect(manager.restore(id)).toEqual({ ok: true })
+    await manager.send(id, 'continue after the crash')
+    expect(manager.getSnapshot(id)!.backgroundTasks).toEqual([stopped])
+    manager.shutdown()
+  })
+
   test('restart keeps a settled outcome and recovers a running task as stopped', async () => {
     const taskDir = path.join(tempDir, 'chat-tasks')
     const store = () => new ChatTaskStore({ dir: taskDir })
