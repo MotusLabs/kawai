@@ -11,13 +11,13 @@ export const SHOWN_DECISIONS = 15
 
 const CHANGE_LABELS = { added: 'new', changed: 'changed', removed: 'removed', unchanged: 'unchanged' } as const
 
-export default function TeamRoutingSection({ sessionId, view, sendMessage, connected }: {
-  sessionId: string; view: MailboxView; sendMessage: SendClientMessage; connected: boolean
+export default function TeamRoutingSection({ teamPath, view, sendMessage, connected }: {
+  teamPath: string; view: MailboxView; sendMessage: SendClientMessage; connected: boolean
 }) {
   const report = view.rulesResult?.ok ? view.rulesResult.report : view.routing?.rules ?? null
   const reload = () => {
-    useTeamMailboxStore.getState().beginReload(sessionId)
-    sendMessage({ type: 'team-mailbox-reload-rules', sessionId })
+    useTeamMailboxStore.getState().beginReload(teamPath)
+    sendMessage({ type: 'team-mailbox-reload-rules', teamPath })
   }
   const decisions = (view.routing?.decisions ?? []).slice(0, SHOWN_DECISIONS)
   return <>

@@ -19,8 +19,8 @@ const STATES: MessageState[] = [
   'dead', 'uncertain', 'cancelled', 'discarded', 'parked', 'forwarded',
 ]
 
-export default function TeamMessagesView({ sessionId, view, sendMessage, connected, connectionEpoch = 0, sessions = [], directory = [], groups = [], onOpenSession, onClose }: {
-  sessionId: string
+export default function TeamMessagesView({ teamPath, view, sendMessage, connected, connectionEpoch = 0, sessions = [], directory = [], groups = [], onOpenSession, onClose }: {
+  teamPath: string
   view: MessageView
   sendMessage: SendClientMessage
   connected: boolean
@@ -47,24 +47,24 @@ export default function TeamMessagesView({ sessionId, view, sendMessage, connect
   useEffect(() => {
     if (!connected || !view.open) return
     const filters = JSON.parse(filtersKey) as MessageQueryFilters
-    send.current({ type: 'team-messages-open', sessionId, filters })
-    return () => send.current({ type: 'team-messages-close', sessionId })
-  }, [sessionId, connected, connectionEpoch, view.open, filtersKey])
+    send.current({ type: 'team-messages-open', teamPath, filters })
+    return () => send.current({ type: 'team-messages-close', teamPath })
+  }, [teamPath, connected, connectionEpoch, view.open, filtersKey])
   const threadId = view.selectedThreadId
   useEffect(() => {
     if (!connected || !view.open || !threadId) return
-    send.current({ type: 'team-thread-open', sessionId, threadId })
-    return () => send.current({ type: 'team-thread-close', sessionId, threadId })
-  }, [sessionId, connected, connectionEpoch, view.open, threadId])
+    send.current({ type: 'team-thread-open', teamPath, threadId })
+    return () => send.current({ type: 'team-thread-close', teamPath, threadId })
+  }, [teamPath, connected, connectionEpoch, view.open, threadId])
 
   const store = useTeamMessageStore.getState()
   /** Only the keys the controls own; a host's base filters (a task) survive. */
   const filter = (patch: Partial<MessageQueryFilters>) =>
-    store.setFilters(sessionId, { ...view.filters, ...patch })
+    store.setFilters(teamPath, { ...view.filters, ...patch })
   const loadMore = () => {
     if (!view.nextCursor) return
-    store.beginMore(sessionId)
-    send.current({ type: 'team-messages-open', sessionId, filters: view.filters, cursor: view.nextCursor })
+    store.beginMore(teamPath)
+    send.current({ type: 'team-messages-open', teamPath, filters: view.filters, cursor: view.nextCursor })
   }
   const names = view.directory.length > 0 ? view.directory : directory
   const entries = view.thread ?? []
@@ -108,18 +108,18 @@ export default function TeamMessagesView({ sessionId, view, sendMessage, connect
 
     <div className="min-h-0 flex-1 overflow-y-auto p-3">
       {view.selectedThreadId ? (
-        <ThreadDetail sessionId={sessionId} view={view} sessions={sessions} names={names} onOpenSession={onOpenSession}
+        <ThreadDetail teamPath={teamPath} view={view} sessions={sessions} names={names} onOpenSession={onOpenSession}
           onReply={setReplyTo} reply={reply} sendMessage={sendMessage} connected={connected} />
       ) : <>
         {view.messages.length === 0 && !view.loading && <p className="text-chat-meta text-secondary">No messages</p>}
         {view.messages.map(row => <article key={row.id} data-message-id={row.id} data-testid="message-row" className="mb-2 border border-border p-2">
           <MessageRow row={row} sessions={sessions} names={names} onOpenSession={onOpenSession} />
           <button className="btn mt-1 text-chat-meta" data-testid="message-open-thread"
-            onClick={() => useTeamMessageStore.getState().select(sessionId, row.threadId)}>Open thread</button>
+            onClick={() => useTeamMessageStore.getState().select(teamPath, row.threadId)}>Open thread</button>
         </article>)}
         {view.nextCursor && <button className="btn" data-testid="messages-load-more" disabled={!connected || view.loadingMore}
           onClick={loadMore}>{view.loadingMore ? 'Loading more…' : 'Load more'}</button>}
-        <TeamMessageComposer sessionId={sessionId} mode={{ kind: 'new' }} groups={groups} sessions={sessions}
+        <TeamMessageComposer teamPath={teamPath} mode={{ kind: 'new' }} groups={groups} sessions={sessions}
           directory={names} tasks={view.tasks} view={view} sendMessage={sendMessage} connected={connected} />
       </>}
     </div>
@@ -131,8 +131,8 @@ export default function TeamMessagesView({ sessionId, view, sendMessage, connect
  * task revision its delivery carried. Re-sent whole when the thread moves, so
  * this is always the complete history, never a delta.
  */
-function ThreadDetail({ sessionId, view, sessions, names, onOpenSession, onReply, reply, sendMessage, connected }: {
-  sessionId: string
+function ThreadDetail({ teamPath, view, sessions, names, onOpenSession, onReply, reply, sendMessage, connected }: {
+  teamPath: string
   view: MessageView
   sessions: ReadonlyArray<LiveParticipant>
   names: ReadonlyArray<SessionDirectoryEntry>
@@ -146,11 +146,11 @@ function ThreadDetail({ sessionId, view, sessions, names, onOpenSession, onReply
   const bodyOf = (id: string) => entries.find(entry => entry.message.id === id)?.message.body
   return <div data-testid="thread-detail" data-thread-id={view.selectedThreadId}>
     <button className="btn mb-3" data-testid="thread-back"
-      onClick={() => useTeamMessageStore.getState().select(sessionId, null)}>All messages</button>
+      onClick={() => useTeamMessageStore.getState().select(teamPath, null)}>All messages</button>
     {view.thread === null && <p role="status">Loading thread…</p>}
     {entries.map(entry => <ThreadRow key={entry.message.id} entry={entry} sessions={sessions} names={names} onOpenSession={onOpenSession}
       parentBody={entry.message.inReplyTo ? bodyOf(entry.message.inReplyTo) : undefined} onReply={onReply} />)}
-    {reply && <TeamMessageComposer sessionId={sessionId} mode={reply} sessions={sessions} directory={names}
+    {reply && <TeamMessageComposer teamPath={teamPath} mode={reply} sessions={sessions} directory={names}
       view={view} sendMessage={sendMessage} connected={connected} />}
   </div>
 }

@@ -21,8 +21,8 @@ import { useTeamGroups } from './useTeamGroups'
 import { openParticipantChat } from './openParticipant'
 import { actorLabel, sessionLabel } from './teamTaskLabels'
 
-export default function TeamTasksPanel({ sessionId, projectPath, view, sendMessage, connected, onClose, onOpenThread, onCreateWorktree }: {
-  sessionId: string; projectPath: string; view: TaskView; sendMessage: SendClientMessage; connected: boolean; onClose: () => void
+export default function TeamTasksPanel({ teamPath, projectPath, view, sendMessage, connected, onClose, onOpenThread, onCreateWorktree }: {
+  teamPath: string; projectPath: string; view: TaskView; sendMessage: SendClientMessage; connected: boolean; onClose: () => void
   /** Handed to a task's messages: open that message's thread (5.4). */
   onOpenThread?: (threadId: string) => void
   /** Opens the existing worktree-creation flow; the pickers refresh on return. */
@@ -33,14 +33,14 @@ export default function TeamTasksPanel({ sessionId, projectPath, view, sendMessa
   const draft = view.draft
   const flow = view.flow
   const busy = Object.keys(view.pending).length > 0
-  const setDraft = (patch: Partial<typeof draft>) => useTeamTaskStore.getState().setDraft(sessionId, patch)
+  const setDraft = (patch: Partial<typeof draft>) => useTeamTaskStore.getState().setDraft(teamPath, patch)
   // The change list narrows to the roots the server validates for the chosen
   // worktree, so every request carries the draft's current worktree and the
   // panel re-requests whenever it moves.
   const requestTargets = () => {
-    const worktree = useTeamTaskStore.getState().views[sessionId]?.draft.worktree.trim()
-    useTeamTaskStore.getState().beginTargets(sessionId)
-    sendMessage({ type: 'team-task-targets', sessionId, requestId: crypto.randomUUID(), ...(worktree ? { worktree } : {}) })
+    const worktree = useTeamTaskStore.getState().views[teamPath]?.draft.worktree.trim()
+    useTeamTaskStore.getState().beginTargets(teamPath)
+    sendMessage({ type: 'team-task-targets', teamPath, requestId: crypto.randomUUID(), ...(worktree ? { worktree } : {}) })
   }
   // StrictMode fires an effect twice on mount with identical deps; the
   // per-signature ref keeps the request single. A disconnect clears the
@@ -49,25 +49,25 @@ export default function TeamTasksPanel({ sessionId, projectPath, view, sendMessa
   const requestedTargets = useRef('')
   useEffect(() => {
     if (!connected) { requestedTargets.current = ''; return }
-    const signature = `${sessionId}\0${draft.worktree}`
+    const signature = `${teamPath}\0${draft.worktree}`
     if (requestedTargets.current === signature) return
     requestedTargets.current = signature
     requestTargets()
-  }, [connected, sessionId, draft.worktree]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [connected, teamPath, draft.worktree]) // eslint-disable-line react-hooks/exhaustive-deps
   // A reconnect drops the waiters for results lost with the connection: the
   // armed flow keeps its key, the dispatch effect re-sends the assign leg
   // under it, and a human resubmit of the create reuses it — either way the
   // server replays instead of duplicating (spec: reconnect resubmission).
   const wasConnected = useRef(connected)
   useEffect(() => {
-    if (wasConnected.current === false && connected) useTeamTaskStore.getState().reconnected(sessionId)
+    if (wasConnected.current === false && connected) useTeamTaskStore.getState().reconnected(teamPath)
     wasConnected.current = connected
-  }, [connected, sessionId])
+  }, [connected, teamPath])
   const preview = () => {
     const requestId = crypto.randomUUID()
-    useTeamTaskStore.getState().beginPreview(sessionId, requestId)
+    useTeamTaskStore.getState().beginPreview(teamPath, requestId)
     sendMessage({
-      type: 'team-task-preview', sessionId, requestId,
+      type: 'team-task-preview', teamPath, requestId,
       ...(draft.worktree.trim() ? { worktree: draft.worktree.trim() } : {}),
       target: { kind: draft.targetKind as 'group' | 'session', id: draft.targetId },
     })
@@ -91,14 +91,14 @@ export default function TeamTasksPanel({ sessionId, projectPath, view, sendMessa
     const changed = flow?.sentCreatePayload &&
       JSON.stringify(flow.sentCreatePayload) !== JSON.stringify(payload)
     if (!flow || flow.mode !== mode || flow.taskId || changed) {
-      useTeamTaskStore.getState().armFlow(sessionId, mode)
+      useTeamTaskStore.getState().armFlow(teamPath, mode)
     }
-    const armed = useTeamTaskStore.getState().views[sessionId]!.flow!
-    useTeamTaskStore.getState().flowSendCreate(sessionId, payload)
+    const armed = useTeamTaskStore.getState().views[teamPath]!.flow!
+    useTeamTaskStore.getState().flowSendCreate(teamPath, payload)
     const requestId = crypto.randomUUID()
-    useTeamTaskStore.getState().begin(sessionId, requestId, assign ? 'create-assign' : 'create')
+    useTeamTaskStore.getState().begin(teamPath, requestId, assign ? 'create-assign' : 'create')
     sendMessage({
-      type: 'team-task-create', sessionId, requestId, requestKey: armed.requestKey,
+      type: 'team-task-create', teamPath, requestId, requestKey: armed.requestKey,
       title: draft.title.trim(), direction: draft.direction.trim(),
       ...(draft.acceptance.trim() ? { acceptance: draft.acceptance.trim() } : {}),
       ...(draft.parentId ? { parentId: draft.parentId } : {}),
@@ -112,17 +112,17 @@ export default function TeamTasksPanel({ sessionId, projectPath, view, sendMessa
   useEffect(() => {
     if (!flow || flow.mode !== 'create-and-assign' || !flow.taskId || flow.assignFailed || busy) return
     const payload = { kind: draft.targetKind as 'group' | 'session', id: draft.targetId }
-    useTeamTaskStore.getState().flowSendAssign(sessionId, { targetKind: payload.kind, targetId: payload.id, instruction: draft.instruction })
+    useTeamTaskStore.getState().flowSendAssign(teamPath, { targetKind: payload.kind, targetId: payload.id, instruction: draft.instruction })
     const requestId = crypto.randomUUID()
-    useTeamTaskStore.getState().begin(sessionId, requestId, 'assign')
+    useTeamTaskStore.getState().begin(teamPath, requestId, 'assign')
     sendMessage({
-      type: 'team-task-assign', sessionId, requestId, taskId: flow.taskId, requestKey: flow.requestKey,
+      type: 'team-task-assign', teamPath, requestId, taskId: flow.taskId, requestKey: flow.requestKey,
       target: payload, instruction: draft.instruction,
     })
   }, [flow?.taskId, flow?.assignFailed, busy]) // eslint-disable-line react-hooks/exhaustive-deps
   const retryAssign = () => {
     if (!flow?.taskId) return
-    useTeamTaskStore.getState().retryAssign(sessionId)
+    useTeamTaskStore.getState().retryAssign(teamPath)
   }
   const targetReady = draft.targetKind !== '' && draft.targetId !== ''
   const createCommitted = flow?.taskId != null
@@ -134,7 +134,7 @@ export default function TeamTasksPanel({ sessionId, projectPath, view, sendMessa
     {view.error && <p role="alert" className="border-b border-border p-3 text-chat-meta text-chat-danger">{view.error}</p>}
     <div className="min-h-0 flex-1 overflow-y-auto p-3">
       {view.selectedTaskId ? (
-        <TeamTaskDetail sessionId={sessionId} projectPath={projectPath} view={view} sendMessage={sendMessage} connected={connected} sessions={sessions}
+        <TeamTaskDetail teamPath={teamPath} projectPath={projectPath} view={view} sendMessage={sendMessage} connected={connected} sessions={sessions}
           onOpenThread={onOpenThread} onOpenSession={openParticipantChat} />
       ) : <>
         <details className="mb-4 border border-border p-2" data-testid="task-create">
@@ -190,7 +190,7 @@ export default function TeamTasksPanel({ sessionId, projectPath, view, sendMessa
         </details>
         {view.tasks.length === 0 && !view.loading && <p className="text-chat-meta text-secondary">No tasks yet</p>}
         {view.tasks.map(task => <article key={task.id} data-task-id={task.id} className="mb-2 border border-border p-2">
-          <button className="text-left font-medium hover:underline" onClick={() => useTeamTaskStore.getState().select(sessionId, task.id)}>{task.title}</button>
+          <button className="text-left font-medium hover:underline" onClick={() => useTeamTaskStore.getState().select(teamPath, task.id)}>{task.title}</button>
           <p className="text-chat-meta text-secondary">
             <span data-testid="task-status">{task.status}</span> · created by {actorLabel(task.creator, sessions)}
             {task.parentId ? ' · subtask' : ''}

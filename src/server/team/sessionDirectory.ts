@@ -18,9 +18,14 @@ CREATE TABLE IF NOT EXISTS team_session_directory (
 
 const nowIso = () => new Date().toISOString()
 
+/** Create the table if needed; readers that join it (message search) call this too. */
+export function ensureSessionDirectory(db: Database): void {
+  db.exec(CREATE_TABLE_SQL)
+}
+
 export class SessionDirectory {
   constructor(private readonly db: Database) {
-    db.exec(CREATE_TABLE_SQL)
+    ensureSessionDirectory(db)
   }
 
   /** Record (or re-record) a session's name and group for its team. */
