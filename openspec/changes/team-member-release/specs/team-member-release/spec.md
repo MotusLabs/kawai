@@ -39,6 +39,10 @@ When a task is `done` or `cancelled`, its undelivered group mail (queued, awaiti
 - **WHEN** the `lead` group sets `worktreeScoped: false` and a dev sends it a report for its task just after the task is marked `done`
 - **THEN** the lead receives the report
 
+#### Scenario: Group note to a scoped group after close
+- **WHEN** a task is `done` and a member sends the `reviewers` group, which does not set `worktreeScoped`, a note referencing that task
+- **THEN** the note is dead-lettered `task-closed`, no session is spawned, and it stays in the Mailbox, retryable once the task is reopened
+
 ### Requirement: Release waits until the member is ready
 A member SHALL be ready for release only when it is idle in the sense mail delivery uses, has no pending approval or question, has no live background worker, holds no claimed or parked mail, and has no due direct mail queued for it. Every release path SHALL use this one definition. A pending member that is not ready SHALL be released once it becomes ready, without further action.
 
