@@ -7,7 +7,7 @@
 
 ## 2. Worktree scoping opt-out
 
-- [ ] 2.1 Make `targetWorktree` in `sessionMailbox.ts` return null for group mail whose receiving group's current definition sets `worktreeScoped: false`, resolving definitions into a per-cycle map in the order D5 names (clear cache → await definitions of groups with waiting mail or pending releases → `evaluate()` → route; `beginCycle` becomes async and awaited); a missing definition stays scoped (returns the task's worktree); keep direct mail and scoped groups unchanged.
+- [ ] 2.1 Make `targetWorktree` in `sessionMailbox.ts` return null for group mail whose receiving group's current definition sets `worktreeScoped: false`, resolving definitions into a per-cycle map in the order D5 names (clear cache → await definitions of groups with waiting mail or pending releases → `evaluate()` → route; widen `beginCycle` in `dispatcher.ts` to `() => void | Promise<void>` and await it before `passDiagnoses.clear()`, keeping `outcomes.processNotes()` in `sessionMailbox.ts`'s hook; test that a release and a D8 dead letter in the hook finish before routing and that `afterPass` does not report the dead-lettered row as waiting); a missing definition stays scoped (returns the task's worktree); keep direct mail and scoped groups unchanged.
 - [ ] 2.2 Tests in `sessionMailbox.test.ts`/`teamStaffing.test.ts`: task mail to an unscoped group reaches an idle member in the main checkout; an unscoped group never spawns for it; a killed-sender reply falling back to an unscoped group is delivered with its thread; `devs` without the key keeps worktree routing and spawning.
 
 ## 3. System journal author
