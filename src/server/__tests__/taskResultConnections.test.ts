@@ -12,6 +12,8 @@ import { initDatabase, type SessionDatabase } from '../db'
 import { AssignmentService } from '../team/AssignmentService'
 import { AssignmentStore } from '../team/assignmentStore'
 import { MailboxStore } from '../team/mailboxStore'
+import { MemberRelease } from '../team/memberRelease'
+import type { ChatSessionRecord } from '../db'
 import { TaskStore } from '../team/taskStore'
 import { TaskService } from '../team/TaskService'
 import { TaskResultService } from '../team/TaskResultService'
@@ -28,6 +30,9 @@ let results: TaskResultService
 let assignments: AssignmentService
 let connections: ChatConnections
 let messages: ServerMessage[]
+let records: Map<string, ChatSessionRecord>
+let busy: Set<string>
+let archived: string[]
 const connection = { send: (message: ServerMessage) => { messages.push(message) } }
 
 beforeEach(() => {
@@ -49,7 +54,16 @@ beforeEach(() => {
   assignments = new AssignmentService(db.db, assignmentStore, taskStore, mail, {
     getSession: () => undefined, records: () => [], teamOf: () => undefined, staffing, caps: new TeamCaps({}), worktrees,
   })
-  results = new TaskResultService(tasks, { getSession: () => undefined, assignments })
+  records = new Map()
+  busy = new Set()
+  archived = []
+  const releases = new MemberRelease(db.db, {
+    store: mail, tasks: taskStore, records: () => records.values(), getRecord: id => records.get(id), teamOf: () => undefined,
+    definition: async () => undefined, cachedDefinition: () => undefined,
+    recipient: id => ({ idle: !busy.has(id), pendingRequest: false }), hasLiveWorkers: () => false, hasRunningBackgroundTasks: () => false,
+    archive: id => { archived.push(id); records.get(id)!.archivedAt = 'now'; return { ok: true } }, notify: () => {},
+  })
+  results = new TaskResultService(tasks, { getSession: () => undefined, assignments, releases, records: () => records.values() })
   messages = []
   const manager = {
     whenRestored: () => Promise.resolve(),
@@ -120,4 +134,47 @@ test('handoff on another team\'s task is refused and dispatches nothing', async 
     target: { kind: 'group', id: 'reviewers' }, instructions: 'Review', requestKey: 'k' })
   expect(last('team-task-result')!.error).toContain('not found in this team')
   expect(mail.forTask(foreign.id)).toEqual([])
+})
+
+/** A task in a worktree, its spawned developer, a manual session beside it, and a result. */
+async function developed() {
+  const task = await tasks.create(human(), { title: 'Export', direction: 'v1' })
+  const worktree = path.join(dir, 'wt')
+  fs.mkdirSync(path.join(worktree, '.git'), { recursive: true })
+  db.db.prepare('UPDATE team_tasks SET worktree = ? WHERE id = ?').run(worktree, task.id)
+  const session = (sessionId: string, extra: Partial<ChatSessionRecord>): ChatSessionRecord => ({ sessionId, name: sessionId,
+    projectPath: worktree, sdkSessionId: null, status: 'waiting', createdAt: '', lastActivityAt: '', groupId: 'devs', ...extra })
+  records.set('dev', session('dev', { spawned: true, taskId: task.id }))
+  records.set('manual', session('manual', { name: 'Manual session' }))
+  return { task, result: resultFor(task.id) }
+}
+const release = (taskId: string, requestId: string) => send({ type: 'team-task-release', teamPath: '/repo', requestId, taskId,
+  target: 'reviewers', instructions: 'Review the export', requestKey: 'release-1' })
+
+test('the detail carries the release dialog\'s data; a busy developer refuses inline; then one release and one review handoff', async () => {
+  const { task, result } = await developed()
+  await send({ type: 'team-task-open', teamPath: '/repo', taskId: task.id })
+  expect(last('team-task-detail')!.detail.release).toEqual({
+    members: [{ sessionId: 'dev', name: 'dev', ready: true, reason: null }], others: [{ sessionId: 'manual', name: 'Manual session' }],
+    outstandingResultId: result.id, unavailable: null,
+  })
+  busy.add('dev')
+  await release(task.id, 'r1')
+  expect(last('team-task-result')!.error).toContain('Cannot release the worktree yet — nothing was archived or dispatched. dev (dev): it is busy')
+  expect(archived).toEqual([])
+  busy.delete('dev')
+  await release(task.id, 'r2')
+  expect(last('team-task-result')).toMatchObject({ requestId: 'r2', replay: false, assignment: { handoffKind: 'review', resultId: result.id } })
+  expect(archived).toEqual(['dev'])
+  expect(mail.forTask(task.id).filter(message => message.toId === 'reviewers')).toHaveLength(1)
+  expect(last('team-task-detail')!.detail.release).toMatchObject({ members: [], unavailable: expect.stringContaining('No live spawned member') })
+})
+
+test('release on another team\'s task is refused and archives nothing', async () => {
+  const foreign = await tasks.create(human('other'), { title: 'Foreign', direction: 'd' })
+  records.set('dev', { sessionId: 'dev', name: 'dev', projectPath: dir, sdkSessionId: null, status: 'waiting', createdAt: '', lastActivityAt: '',
+    spawned: true, taskId: foreign.id })
+  await release(foreign.id, 'x')
+  expect(last('team-task-result')!.error).toContain('not found in this team')
+  expect(archived).toEqual([])
 })

@@ -54,8 +54,11 @@ export class TaskConnections {
     }
     for (const taskId of subscription.details) {
       if (only && taskId !== only) continue
-      // The human's view carries the task's draft (task-revision-publication D1).
-      const detail = store.humanDetail(taskId)
+      // The human's view carries the task's draft (task-revision-publication D1)
+      // and the release confirmation's data (task-results-handoffs D7).
+      const human = store.humanDetail(taskId)
+      const release = human ? this.manager.results?.release?.preview(taskId) : undefined
+      const detail = human && release ? { ...human, release } : human
       if (detail) connection.send({
         type: 'team-task-detail', teamPath, teamId: subscription.teamId, detail,
         // Its messages name participants; the directory keeps a killed one's.
@@ -158,6 +161,15 @@ export class TaskConnections {
             expectedResponse: message.expectedResponse ?? null, requestKey: message.requestKey,
           })
           result({ assignment: outcome.assignment, replay: outcome.duplicate, task: tasks.store.get(message.taskId) ?? undefined })
+          return
+        }
+        case 'team-task-release': {
+          if (!this.manager.results.release) throw new Error('Release worktree and hand off is not available')
+          const outcome = await this.manager.results.release.release(caller, message.taskId, {
+            target: message.target, instructions: message.instructions, expectedResponse: message.expectedResponse ?? null,
+            requestKey: message.requestKey,
+          })
+          result({ assignment: outcome.handoff.assignment, replay: outcome.handoff.duplicate, task: tasks.store.get(message.taskId) ?? undefined })
           return
         }
         case 'team-task-accept-result':

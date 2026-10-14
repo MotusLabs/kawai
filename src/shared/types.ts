@@ -701,6 +701,18 @@ export type ClientMessage =
       expectedResponse?: string
       requestKey: string
     }
+  // Release worktree and hand off (D7): archive the task's ready spawned
+  // members, then dispatch the review handoff to a reviewer group.
+  | {
+      type: 'team-task-release'
+      teamPath: string
+      requestId: string
+      taskId: string
+      target: string
+      instructions: string
+      expectedResponse?: string
+      requestKey: string
+    }
   | { type: 'team-task-note'; teamPath: string; requestId: string; taskId: string; text: string }
   | { type: 'team-task-status'; teamPath: string; requestId: string; taskId: string; status: TaskStatus }
   // Human dispatch of a task's instruction (task-assignment 4.1): idempotent

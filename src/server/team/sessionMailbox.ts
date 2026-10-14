@@ -171,7 +171,8 @@ export class SessionMailbox {
       ...(options.homeDir ? { homeDir: options.homeDir } : {}),
       cooldownUntil: profileId => this.limits.cooldownUntil(profileId),
     })
-    this.results = new TaskResultService(this.tasks, { getSession: options.getRecord, assignments: this.assignments })
+    this.results = new TaskResultService(this.tasks, { getSession: options.getRecord, assignments: this.assignments,
+      releases: this.releases, records: options.records, ...(options.homeDir ? { homeDir: options.homeDir } : {}) })
     // Worktree scoping (member-release D5): an unscoped group's task mail goes
     // to any member and never spawns; a missing definition stays scoped.
     const targetWorktree = (message: TeamMessage): string | null => {

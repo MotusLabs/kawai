@@ -260,6 +260,22 @@ export interface TeamTaskDetail {
  */
 export interface HumanTaskDetail extends TeamTaskDetail {
   draft?: TaskDraft | null
+  /** What **Release worktree and hand off** would do now (task-results-handoffs D7). */
+  release?: TaskReleasePreview
+}
+
+/**
+ * The release confirmation's data (task-results-handoffs D7): the task's live
+ * spawned members it would archive, each with its readiness, and every other
+ * live session working in the task's worktree — shown, never archived, and
+ * not covered by the spawned-writer cap.
+ */
+export interface TaskReleasePreview {
+  members: Array<{ sessionId: string; name: string; ready: boolean; reason: string | null }>
+  others: Array<{ sessionId: string; name: string }>
+  outstandingResultId: string | null
+  /** Why the action is not offered (no worktree, no result, no spawned member); null when it is. */
+  unavailable: string | null
 }
 
 /** The task section of a delivered peer message (design D3), built at delivery. */

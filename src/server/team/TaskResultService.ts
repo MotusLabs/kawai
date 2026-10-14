@@ -10,6 +10,8 @@ import type { ChatSessionRecord } from '../db'
 import type { AssignmentTarget, TaskFindings, TaskHandoffKind, TaskResult, TaskTestClaim, TeamTask, TeamTaskAssignment, TeamTaskSummary } from '../../shared/teamTasks'
 import { TASK_HANDOFF_KINDS } from '../../shared/teamTasks'
 import type { AssignmentService } from './AssignmentService'
+import type { MemberRelease } from './memberRelease'
+import { TaskRelease } from './taskRelease'
 import { statusRefusal, type TaskCaller, type TaskService } from './TaskService'
 import { worktreeRootOf } from './worktreeRoots'
 
@@ -73,11 +75,22 @@ export interface AcceptOutcome {
 }
 
 export class TaskResultService {
+  /** Release worktree and hand off (D7); null without team-member-release. */
+  readonly release: TaskRelease | null
+
   constructor(readonly tasks: TaskService, private readonly options: {
     getSession: (id: string) => ChatSessionRecord | null | undefined
     /** Handoffs dispatch through task-assignment's transaction (D3). */
     assignments?: AssignmentService
-  }) {}
+    /** Release-and-hand-off composes team-member-release's readiness, archive, and journal (D7). */
+    releases?: MemberRelease
+    records?: () => Iterable<ChatSessionRecord>
+    homeDir?: string
+  }) {
+    this.release = options.releases && options.records
+      ? new TaskRelease(this, { releases: options.releases, records: options.records, ...(options.homeDir ? { homeDir: options.homeDir } : {}) })
+      : null
+  }
 
   private get store() { return this.tasks.store }
 
