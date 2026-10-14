@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Frees team capacity held by spawned members whose work is over: kawai archives (never kills) a task's spawned members once the task closes and they have settled, and opted-in agents can release a settled spawned member on request.
+Frees team capacity held by spawned members whose work is over: kawai archives (never kills) a task's spawned members once the task closes and they have settled, and agents can release a settled spawned member on request unless their group opts out.
 
 ## ADDED Requirements
 
@@ -102,10 +102,10 @@ A group file SHALL accept `releaseOnTaskClose: true|false` (default `true`). Spa
 - **THEN** the `qa` member stays live
 
 ### Requirement: Permitted agents can release spawned members
-A group file SHALL accept `canReleaseMembers: true|false` (default `false`). Members of a permitted group SHALL be able to release a spawned member of their own team with a `release_member` tool, giving a session id and an optional reason; it archives at once. The tool SHALL be allowed without an approval card.
+A group file SHALL accept `canReleaseMembers: true|false` (default `true`). Members of a group that has not opted out SHALL be able to release a spawned member of their own team with a `release_member` tool, giving a session id and an optional reason; it archives at once. The tool SHALL be allowed without an approval card.
 
 #### Scenario: Lead releases a finished dev
-- **WHEN** a member of the `lead` group, which sets `canReleaseMembers: true`, releases an idle spawned dev with reason "merged"
+- **WHEN** a member of the `lead` group, which does not opt out, releases an idle spawned dev with reason "merged"
 - **THEN** the dev is archived and its task journal records the release by that lead with reason "merged"
 
 #### Scenario: Settled member of an open task
@@ -113,8 +113,8 @@ A group file SHALL accept `canReleaseMembers: true|false` (default `false`). Mem
 - **THEN** the dev is archived, the task stays `active`, and its delivered instruction is left as it is
 
 #### Scenario: Group without the right
-- **WHEN** a `devs` member calls `release_member`
-- **THEN** the tool returns an error saying its group may not release members, and nothing is archived
+- **WHEN** a `devs` member, whose group file sets `canReleaseMembers: false`, calls `release_member`
+- **THEN** the tool returns an error saying its group has opted out of releasing members, and nothing is archived
 
 ### Requirement: Agent releases are refused unless safe
 `release_member` SHALL refuse, with a reason and without archiving, when the target is the caller itself, a human-created session, a session of another team, an archived or unknown session, or a member that is not ready for release. Agents SHALL NOT be able to kill or restore sessions.

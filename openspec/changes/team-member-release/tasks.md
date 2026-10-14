@@ -2,7 +2,7 @@
 
 ## 1. Group settings
 
-- [ ] 1.1 Parse `releaseOnTaskClose` (default true), `worktreeScoped` (default true), and `canReleaseMembers` (default false) in `src/server/team/groupFile.ts` as strict `true|false`, rejecting other values like `canCreateTasks`; extend `GroupDefinition` and update the header comment.
+- [ ] 1.1 Parse `releaseOnTaskClose` (default true), `worktreeScoped` (default true), and `canReleaseMembers` (default true; opt out with `false`) in `src/server/team/groupFile.ts` as strict `true|false`, rejecting other values like `canCreateTasks`; extend `GroupDefinition` and update the header comment.
 - [ ] 1.2 Cover defaults, explicit values, and invalid values in `teamGroupFile.test.ts`.
 
 ## 2. Worktree scoping opt-out
@@ -36,7 +36,7 @@
 
 ## 6. `release_member` tool
 
-- [ ] 6.1 Add `release_member` (`session_id`, optional `reason`) to the `kawai-team` server and `TEAM_ALLOWED_TOOLS`; gate on the caller group's current `canReleaseMembers`; refuse self, human-created, other-team, archived/unknown, and not-ready targets (busy, awaiting a request, live background worker, holds mail) with specific messages (D6); archive and journal on success.
+- [ ] 6.1 Add `release_member` (`session_id`, optional `reason`) to the `kawai-team` server and `TEAM_ALLOWED_TOOLS`; gate on the caller group's current `canReleaseMembers` (permitted by default; a group opts out with `false`); refuse self, human-created, other-team, archived/unknown, and not-ready targets (busy, awaiting a request, live background worker, holds mail) with specific messages (D6); archive and journal on success.
 - [ ] 6.2 Describe the tool in `teamPrompt.ts` only for permitted groups, stating that it archives, never kills, and is refused for busy members.
 - [ ] 6.3 Tests in `teamMailboxTools.test.ts` and `teamPrompt.test.ts`: every refusal reason, a successful release with its journal entry, prompt text present only for permitted groups.
 
