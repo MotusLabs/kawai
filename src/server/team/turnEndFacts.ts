@@ -44,9 +44,8 @@ export class TurnEndFacts {
    */
   forRecords(records: ChatSessionRecord[]): TurnEndFact[] {
     const present = new Set(records.map(record => record.sessionId))
-    for (const sessionId of [...this.entries.keys()]) {
-      if (!present.has(sessionId)) this.entries.delete(sessionId)
-    }
+    const gone = [...this.entries.keys()].filter(sessionId => !present.has(sessionId))
+    for (const sessionId of gone) this.entries.delete(sessionId)
     const out: TurnEndFact[] = []
     for (const record of records) {
       const { sessionId } = record

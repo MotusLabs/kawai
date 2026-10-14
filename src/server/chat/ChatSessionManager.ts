@@ -120,6 +120,13 @@ export interface ChatSessionManagerOptions {
   onTaskChange?: (teamId: string) => void
   /** Every committed strategy change (wired to the strategy view push in bootstrap.ts). */
   onStrategyChange?: (teamId: string) => void
+  /**
+   * A chat session's record changed in a way a team view shows — created,
+   * archived, restored, killed, or its status/name/group/task moved
+   * (team-workspace: live membership). Wired to the workspace push; cheap
+   * there because publishes coalesce per team.
+   */
+  onSessionRecordChange?: (sessionId: string) => void
   /** Conversation-event sink (wired to the WS broadcast in index.ts). */
   onEvent: (sessionId: string, event: ChatEvent) => void
   /** Command-state sink (wired to the chat-commands push in index.ts). */
@@ -867,6 +874,9 @@ export class ChatSessionManager {
         const record = this.records.get(sessionId)
         // The directory keys by team, so it can only record once the team is known.
         if (record) this.syncDirectory(sessionId)
+        // A session's team landing (creation, or a cwd move) is membership a
+        // team view shows (team-workspace); the team is resolvable from here on.
+        this.options.onSessionRecordChange?.(sessionId)
         // Group-less sessions have nothing to show; skip the broadcast.
         if (record?.groupId != null) {
           this.options.registry.updateSession(sessionId, this.groupFields(record))
@@ -1039,6 +1049,11 @@ export class ChatSessionManager {
   /** Every record (live and archived) resolved to this team; the workspace reads it. */
   teamRecords(teamId: string): ChatSessionRecord[] {
     return [...this.records.values()].filter(record => this.teams.teamOf(record.sessionId)?.teamId === teamId)
+  }
+
+  /** One session's record, read-only; undefined once killed. */
+  recordOf(sessionId: string): ChatSessionRecord | undefined {
+    return this.records.get(sessionId)
   }
 
   /** Paused state last pushed per session. */
@@ -1460,6 +1475,8 @@ export class ChatSessionManager {
     this.backgroundTaskRecords.delete(sessionId)
     this.clearAgentNotices(sessionId)
     this.sessionCredentials.delete(sessionId)
+    // While the team entry still exists, so the callback can resolve it.
+    this.options.onSessionRecordChange?.(sessionId)
     this.teams.forget(sessionId)
     this.options.registry.removeChatSession(sessionId)
     this.options.db.deleteChatSession(sessionId)
@@ -2368,6 +2385,12 @@ export class ChatSessionManager {
       patch.projectPath !== undefined || patch.archivedAt !== undefined ||
       (patch.sdkSessionId !== undefined && patch.sdkSessionId !== record.sdkSessionId)
     ) this.dispatcher?.notify()
+    // Fields a team view shows (team-workspace: live membership); other
+    // patches (usage, activity stamps) stay silent.
+    if (
+      patch.status !== undefined || patch.archivedAt !== undefined || patch.projectPath !== undefined ||
+      patch.name !== undefined || patch.groupId !== undefined || patch.taskId !== undefined
+    ) this.options.onSessionRecordChange?.(sessionId)
     this.options.db.updateChatSession(sessionId, patch)
     // The first SDK session id makes a transcript followable: start the
     // title tail for the now-live conversation (design D4).

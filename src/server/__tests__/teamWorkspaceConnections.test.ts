@@ -66,7 +66,14 @@ beforeEach(() => {
     getPendingRequests: (sessionId: string) => pendingRequests.get(sessionId) ?? [],
     groupProfileCounts: () => ({}),
     getHistory: () => null,
-    teams: { catalogForTeam: () => catalog },
+    recordOf: (sessionId: string) => records.find(record => record.sessionId === sessionId),
+    teams: {
+      catalogForTeam: () => catalog,
+      teamOf: (sessionId: string) => {
+        const record = records.find(candidate => candidate.sessionId === sessionId)
+        return record ? { teamId: record.teamId } : undefined
+      },
+    },
   } as unknown as ChatSessionManager
   connections = new ChatConnections(manager)
   taskStore.subscribe(task => connections.publishTasks(task.teamId))
@@ -189,6 +196,39 @@ test('a pending approval appears live when the workspace is open', async () => {
   connections.publishWorkspace('team')
   await connections.flushWorkspace()
   expect(last('team-workspace')!.attention.map(item => item.id)).toEqual(['approval:our-dev:req-1'])
+})
+
+test('observeChatEvent maps request and turn events to workspace pushes (review item 4)', async () => {
+  records = [recordOf({ sessionId: 'our-dev', groupId: 'devs', taskId: 'task-9' })]
+  const task = await tasks.create(human(), { title: 'Worked on', direction: 'd' })
+  records[0]!.taskId = task.id
+  await send({ type: 'team-workspace-open', teamPath: '/repo' })
+  expect(last('team-workspace-snapshot')!.attention).toEqual([])
+  // An approval event becomes a human-required attention item on the next push.
+  pendingRequests.set('our-dev', [{
+    kind: 'approval', requestId: 'req-1', tool: 'Bash', input: {},
+    at: '2026-10-14T06:00:00Z',
+  }])
+  connections.observeChatEvent('our-dev', {
+    type: 'approval_request', requestId: 'req-1', tool: 'Bash', input: {},
+    id: 'evt-1', sequence: 1, turnId: 't-1', at: '2026-10-14T06:00:00Z',
+  })
+  await connections.flushWorkspace()
+  expect(last('team-workspace')!.attention.map(item => item.id)).toEqual(['approval:our-dev:req-1'])
+  // A turn completion feeds the summary's ledger live — no transcript here,
+  // so the recorded fact is the only source the bucket can have.
+  connections.observeChatEvent('our-dev', {
+    type: 'turn_completed', subtype: 'success',
+    id: 'evt-2', sequence: 2, turnId: 't-1', at: '2026-10-14T06:05:00Z',
+  })
+  await connections.flushWorkspace()
+  const push = last('team-workspace')!
+  expect(push.summary.finishedTurnsWithoutResult.items.map(item => item.id)).toEqual(['finished-turn:our-dev'])
+  // A foreign session's event never touches this team's views.
+  const count = messages.length
+  connections.observeChatEvent('nobody', { type: 'turn_started', id: 'evt-3', sequence: 3, turnId: 't-2', at: '2026-10-14T06:06:00Z' })
+  await connections.flushWorkspace()
+  expect(messages).toHaveLength(count)
 })
 
 /** A read that counts projections instead of computing them. */

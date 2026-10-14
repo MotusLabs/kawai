@@ -110,6 +110,32 @@ export class ChatConnections {
     this.workspaceConnections.publish(teamId)
   }
 
+  /** Publish the workspace of whichever team the session belongs to. */
+  publishWorkspaceOf(sessionId: string): void {
+    const teamId = this.manager.teams.teamOf(sessionId)?.teamId
+    if (teamId) this.publishWorkspace(teamId)
+  }
+
+  /**
+   * A chat event that changes workspace facts (team-workspace), the one place
+   * the mapping lives so bootstrap's onEvent stays a forward: a turn
+   * completion appends to the summary's turn-end ledger, and request and turn
+   * events refresh the team's open views — approvals and questions are the
+   * queue's human-required items, `request_resolved` removes one, and turn
+   * starts move the membership's working/waiting status.
+   */
+  observeChatEvent(sessionId: string, event: ChatEvent): void {
+    if (event.type === 'turn_completed') {
+      const taskId = this.manager.recordOf(sessionId)?.taskId
+      if (taskId) this.workspaceConnections.recordTurnEnd(sessionId, taskId, event.at)
+    }
+    if (
+      event.type === 'approval_request' || event.type === 'question_request' ||
+      event.type === 'request_resolved' || event.type === 'turn_completed' ||
+      event.type === 'turn_started'
+    ) this.publishWorkspaceOf(sessionId)
+  }
+
   /** Resolves once every scheduled workspace publish has run (test seam). */
   flushWorkspace(): Promise<void> {
     return this.workspaceConnections.settled()

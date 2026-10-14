@@ -144,14 +144,12 @@ export function startServer(): void {
     db,
     onEvent: (sessionId, event) => {
       chatConnections.publish(sessionId, event)
-      // The workspace's attention queue and summary read pending requests and
-      // turn ends live (team-workspace): those events are their trigger.
-      if (event.type === 'approval_request' || event.type === 'question_request' ||
-        event.type === 'request_resolved' || event.type === 'turn_completed') {
-        const teamId = chatSessionManager.teams.teamOf(sessionId)?.teamId
-        if (teamId) chatConnections.publishWorkspace(teamId)
-      }
+      // The workspace's request and turn triggers live in one mapping (team-workspace).
+      chatConnections.observeChatEvent(sessionId, event)
     },
+    // Live membership (team-workspace): create, archive, restore, kill, and
+    // status/name/group/task moves refresh the team's workspace.
+    onSessionRecordChange: sessionId => chatConnections.publishWorkspaceOf(sessionId),
     onMailboxChange: (teamId, message) => chatConnections.publishMailbox(teamId, message),
     onWaitingReasonsChange: teamId => chatConnections.publishMailbox(teamId),
     onRoutingRulesLoaded: () => chatConnections.publishRoutingRules(),
