@@ -15,6 +15,7 @@ import { useStrategyStore } from './strategyStore'
 import { useTeamMailboxStore } from './teamMailboxStore'
 import { useTeamMessageStore } from './teamMessageStore'
 import { useTeamTaskStore } from './teamTaskStore'
+import { useTeamWorkspaceStore } from './teamWorkspaceStore'
 import { useWorkspaceStore } from './workspaceStore'
 
 const viewKeys = () => new Set([
@@ -22,6 +23,7 @@ const viewKeys = () => new Set([
   ...Object.keys(useTeamTaskStore.getState().views),
   ...Object.keys(useTeamMessageStore.getState().views),
   ...Object.keys(useStrategyStore.getState().views),
+  ...Object.keys(useTeamWorkspaceStore.getState().views),
 ])
 
 /** Move every team view whose key now maps elsewhere within its own team. */

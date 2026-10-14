@@ -12,6 +12,7 @@ import { useStrategyStore } from '../../stores/strategyStore'
 import { useTeamMailboxStore } from '../../stores/teamMailboxStore'
 import { useTeamMessageStore } from '../../stores/teamMessageStore'
 import { useTeamTaskStore } from '../../stores/teamTaskStore'
+import { useTeamWorkspaceStore } from '../../stores/teamWorkspaceStore'
 import { aliasTeamKey } from '../../utils/teamKeyAliases'
 
 export type SideSlot = 'debug' | 'mailbox' | 'tasks' | 'messages' | 'strategy'
@@ -108,4 +109,5 @@ export function rekeyTeamViews(from: string, to: string) {
   useTeamTaskStore.getState().rekey(from, to)
   useTeamMessageStore.getState().rekey(from, to)
   useStrategyStore.getState().rekey(from, to)
+  useTeamWorkspaceStore.getState().rekey(from, to)
 }
