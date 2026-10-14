@@ -142,3 +142,63 @@ test('an archived claimant is restored after its notice commits', async () => {
   expect(restored).toEqual(['dev'])
   expect(noticeRows(task.id)).toMatchObject([{ toId: 'dev', state: 'queued' }])
 })
+
+// Notify and retry (3.3, D4): one keyed command, never a revision.
+const notificationRows = () => (session.db.prepare('SELECT COUNT(*) AS n FROM team_task_notifications').get() as { n: number }).n
+
+test('notify later after a plain publish sends one notice; its replay sends none; no revision is written', async () => {
+  const { task, instructionId } = assignedTask()
+  deliver(instructionId, 'dev', 1)
+  await publish(task.id, { notify: false })
+  const first = await service.notify(human, task.id, 2, 'notify-1')
+  const replay = await service.notify(human, task.id, 2, 'notify-1')
+  expect(first).toMatchObject({ replay: false, notices: [{ sessionId: 'dev' }] })
+  expect(replay).toMatchObject({ replay: true, notices: first.notices })
+  expect(noticeRows(task.id)).toHaveLength(1)
+  expect(store.revisions(task.id)).toHaveLength(2)
+  expect(store.get(task.id)?.revision).toBe(2)
+})
+
+test('retry after a dead-lettered notice sends exactly one new notice; the failed one stays in history', async () => {
+  const { task, instructionId } = assignedTask()
+  deliver(instructionId, 'dev', 1)
+  await publish(task.id)
+  const [failed] = noticeRows(task.id)
+  mail.deadLetter(failed!.id, 'hop-limit')
+  expect(recipient(task.id)).toMatchObject([{ noticeState: 'failed', reason: 'hop-limit', noticeMessageId: failed!.id }])
+  await service.notify(human, task.id, 2, 'retry-1')
+  await service.notify(human, task.id, 2, 'retry-1')
+  const notices = noticeRows(task.id)
+  expect(notices.map(row => row.state)).toEqual(['dead', 'queued'])
+  expect(notificationRows()).toBe(2)
+  // The newest notice decides the state; the revision count never moved.
+  expect(recipient(task.id)).toMatchObject([{ noticeState: 'queued', noticeMessageId: notices[1]!.id }])
+  expect(store.revisions(task.id)).toHaveLength(2)
+})
+
+test('notify skips a holder already delivered the revision, or holding a pending or uncertain notice', async () => {
+  const { task, instructionId } = assignedTask()
+  deliver(instructionId, 'dev', 1)
+  await publish(task.id)
+  // Pending: the queued notice already covers it.
+  expect((await service.notify(human, task.id, 2, 'notify-pending')).notices).toEqual([])
+  // Uncertain: the mailbox's own Retry/Discard resolves it, not a duplicate here.
+  const [notice] = noticeRows(task.id)
+  deliver(notice!.id, 'dev', 2, false)
+  mail.holdUncertain(notice!.id, 'transcript-unreadable')
+  expect((await service.notify(human, task.id, 2, 'notify-uncertain')).notices).toEqual([])
+  expect(recipient(task.id)).toMatchObject([{ noticeState: 'uncertain', reason: 'transcript-unreadable' }])
+  // Delivered: other task mail carrying revision 2 reached the developer.
+  mail.discard(notice!.id, { kind: 'human' })
+  const other = mail.enqueue({ teamId: team.teamId, toKind: 'session', toId: 'dev', fromKind: 'human', fromSession: null,
+    fromGroup: null, originPath: '/repo', body: 'more', taskId: task.id })
+  deliver(other.id, 'dev', 2)
+  expect((await service.notify(human, task.id, 2, 'notify-delivered')).notices).toEqual([])
+  expect(store.revisions(task.id)).toHaveLength(2)
+})
+
+test('notify refuses an unpublished revision and a missing key', async () => {
+  const { task } = assignedTask()
+  await expect(service.notify(human, task.id, 2, 'notify-1')).rejects.toThrow('Revision 2 of this task is not published')
+  await expect(service.notify(human, task.id, 1, ' ')).rejects.toThrow('request key')
+})
