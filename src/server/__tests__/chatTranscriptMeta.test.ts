@@ -2,7 +2,7 @@
 // transcript IO mirrors (async-transcript-parsing design D1): parity with the
 // sync readers, tolerance of unreadable files, discovery of nested transcripts
 // (newest wins), and replay parity.
-import { afterAll, beforeAll, describe, expect, spyOn, test } from 'bun:test'
+import { afterAll, beforeAll, describe, expect, setSystemTime, spyOn, test } from 'bun:test'
 import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import os from 'node:os'
@@ -143,11 +143,17 @@ describe('findTranscriptPathAsync', () => {
 
 describe('replayTranscriptFileAsync', () => {
   test('reports a missing transcript the same way as the sync reader', async () => {
-    const sync = replayTranscriptFile(null)
-    const asyncResult = await replayTranscriptFileAsync(null)
+    // The notice is stamped with the current time; pin the clock so both
+    // readers stamp the same millisecond instead of racing a boundary.
+    setSystemTime(new Date('2026-10-13T19:14:05.721Z'))
+    try {
+      const sync = replayTranscriptFile(null)
+      const asyncResult = await replayTranscriptFileAsync(null)
 
-    expect(asyncResult).toEqual(sync)
-    expect(asyncResult.status).toBe('missing')
+      expect(asyncResult).toEqual(sync)
+      expect(asyncResult.status).toBe('missing')
+      expect(asyncResult.events[0]?.at).toBe('2026-10-13T19:14:05.721Z')
+    } finally { setSystemTime() }
   })
 
   test('parses a transcript identically to the sync reader', async () => {
