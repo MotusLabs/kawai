@@ -86,6 +86,8 @@ mock.module('../hooks/useWebSocket', () => ({
 }))
 
 
+const { resetTeamLocationForTests } = await import('../hooks/useTeamLocation')
+
 const { default: App } = await import('../App')
 
 function createStorage(): Storage {
@@ -144,6 +146,10 @@ function setupDom() {
       removeEventListener: () => {},
     }),
     devicePixelRatio: 1,
+    // The Team page route (team-workspace-pages D3) reads and writes these;
+    // plain mutable objects so a test can move the hash and fire popstate.
+    location: { hash: '', pathname: '/', search: '' },
+    history: { pushState: () => {}, replaceState: () => {} },
   } as unknown as Window & typeof globalThis
 
   globalAny.ResizeObserver = class ResizeObserverMock {
@@ -205,6 +211,7 @@ afterEach(() => {
       activeRenderer?.unmount()
     })
   }
+  resetTeamLocationForTests()
   globalAny.window = originalWindow
   globalAny.document = originalDocument
   globalAny.navigator = originalNavigator
@@ -2391,5 +2398,116 @@ describe('App', () => {
     })
 
     act(() => renderer.unmount())
+  })
+})
+
+describe('App team route (team-workspace-pages D3, team-workspace D10)', () => {
+  const chatSession: Session = {
+    id: 'chat-1',
+    name: 'dev',
+    projectPath: '/proj/main',
+    status: 'waiting' as const,
+    lastActivity: '2026-10-09T00:00:00.000Z',
+    createdAt: '2026-10-09T00:00:00.000Z',
+    source: 'managed' as const,
+    kind: 'chat' as const,
+  }
+
+  function seedWorkspaceSnapshot(listener: (message: ServerMessage) => void) {
+    act(() => {
+      listener({
+        type: 'workspace-snapshot',
+        snapshot: {
+          repositories: [
+            {
+              id: '/proj/.git',
+              name: 'proj',
+              commonDir: '/proj/.git',
+              stale: false,
+              worktrees: [
+                {
+                  id: '/proj/.git::/proj/main',
+                  repositoryId: '/proj/.git',
+                  path: '/proj/main',
+                  branch: 'main',
+                  headRevision: 'aaaaaaa',
+                  detached: false,
+                  isMain: true,
+                  dirty: false,
+                  openspec: { changes: [], stale: false },
+                },
+              ],
+              branches: [],
+            },
+          ],
+          generatedAt: '2026-01-01T00:00:00.000Z',
+        },
+      })
+    })
+  }
+
+  test('the Team entry opens the Team page without changing the selection; selecting a chat leaves it; Back returns', async () => {
+    useSessionStore.setState({ sessions: [chatSession], selectedSessionId: null, hasLoaded: true })
+
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => { renderer = TestRenderer.create(<App />) })
+    activeRenderer = renderer
+
+    if (!subscribeListener) {
+      throw new Error('Expected websocket subscription')
+    }
+    seedWorkspaceSnapshot(subscribeListener)
+
+    // One Team entry per repository; clicking it opens the Team page on the
+    // default tab and leaves the session selection alone (D10).
+    const entry = renderer.root.findByProps({ 'data-testid': 'team-entry' })
+    expect(entry.props['data-team-key']).toBe('/proj/main')
+    act(() => { entry.props.onClick() })
+    expect(renderer.root.findAllByProps({ 'data-testid': 'team-workspace' })).toHaveLength(1)
+    expect(renderer.root.findAllByProps({ 'data-testid': 'team-tab-body-tasks' })).toHaveLength(1)
+    expect(useSessionStore.getState().selectedSessionId).toBeNull()
+
+    // Moving within the page (a task opened) is a pushed location.
+    const { useTeamLocationStore } = await import('../hooks/useTeamLocation')
+    const { useTeamWorkspaceStore } = await import('../stores/teamWorkspaceStore')
+    act(() => {
+      useTeamLocationStore.getState().navigate({ teamKey: '/proj/main', tab: 'tasks', id: 't-12' })
+    })
+    expect(useTeamLocationStore.getState().location).toEqual({ teamKey: '/proj/main', tab: 'tasks', id: 't-12' })
+    // The page records the last-used tab for the header Team button.
+    expect(useTeamWorkspaceStore.getState().views['/proj/main']?.tab).toBe('tasks')
+
+    // Selecting a session shows the chat and leaves the team route.
+    act(() => { useSessionStore.getState().setSelectedSessionId('chat-1') })
+    expect(useTeamLocationStore.getState().location).toBeNull()
+    expect(renderer.root.findAllByProps({ 'data-testid': 'chat-view' })).toHaveLength(1)
+    expect(renderer.root.findAllByProps({ 'data-testid': 'team-workspace' })).toHaveLength(0)
+
+    // Back: popstate with the team hash restores the same tab and selection.
+    const windowAny = globalAny.window as unknown as { location: { hash: string } }
+    windowAny.location.hash = '#/team/%2Fproj%2Fmain/tasks/t-12'
+    const popstate = keyHandlers.get('popstate')
+    if (!popstate) throw new Error('Expected popstate handler')
+    act(() => { popstate({} as Event) })
+    expect(useTeamLocationStore.getState().location).toEqual({ teamKey: '/proj/main', tab: 'tasks', id: 't-12' })
+    expect(renderer.root.findAllByProps({ 'data-testid': 'team-workspace' })).toHaveLength(1)
+    expect(useSessionStore.getState().selectedSessionId).toBe('chat-1')
+  })
+
+  test('a reload restores the location: a team hash on mount renders the Team page', async () => {
+    useSessionStore.setState({ sessions: [chatSession], selectedSessionId: 'chat-1', hasLoaded: true })
+    const windowAny = globalAny.window as unknown as { location: { hash: string } }
+    windowAny.location.hash = '#/team/%2Fproj%2Fmain/mailbox'
+
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => { renderer = TestRenderer.create(<App />) })
+    activeRenderer = renderer
+    await act(async () => {})
+
+    // The persisted selection survives too (D10); the page owns the pane.
+    const { useTeamLocationStore } = await import('../hooks/useTeamLocation')
+    expect(useTeamLocationStore.getState().location).toEqual({ teamKey: '/proj/main', tab: 'mailbox' })
+    expect(renderer.root.findAllByProps({ 'data-testid': 'team-workspace' })).toHaveLength(1)
+    expect(useSessionStore.getState().selectedSessionId).toBe('chat-1')
   })
 })
