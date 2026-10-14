@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test'
+import { useLayoutEffect } from 'react'
 import TestRenderer, { act, type ReactTestInstance } from 'react-test-renderer'
 import NewSessionModal from '../components/NewSessionModal'
 import { DEFAULT_PRESETS, useSettingsStore } from '../stores/settingsStore'
@@ -928,6 +929,171 @@ describe('NewSessionModal project path validation', () => {
     act(() => {
       renderer.unmount()
     })
+  })
+})
+
+/**
+ * Open-transition race harness. CI e2e intermittently saw a freshly filled
+ * Project Path revert to the default: the dialog's defaults were applied by a
+ * passive effect that fires after paint, so a fill landing between the open
+ * commit and that effect (Playwright under load) was overwritten. The probe
+ * reproduces that window exactly: `createNodeMock` captures the Project Path
+ * input's props during the open commit (refs attach before layout effects),
+ * and a layout effect — the first moment the input is interactive and still
+ * strictly before any passive effect — performs the user's fill.
+ */
+describe('NewSessionModal open-transition race', () => {
+  interface RaceHarness {
+    open: () => void
+    committedAtOpen: () => string | undefined
+    pathValue: () => string
+    pathError: () => string | null
+    deliverLateData: (props: Record<string, unknown>) => void
+    settleFetches: () => Promise<void>
+    submit: () => void
+    created: Array<{ path: string }>
+    unmount: () => void
+  }
+
+  function mountRaceDialog(fill: string, entry: Record<string, unknown> = {}): RaceHarness {
+    setupDom()
+    globalThis.fetch = (async (url: string) =>
+      String(url).startsWith('/api/chat/groups')
+        ? Response.json({ groups: [], errors: [] })
+        : Response.json({ profiles: [{ id: 'default', label: 'Default' }], errors: [] })) as unknown as typeof fetch
+
+    let renderer!: TestRenderer.ReactTestRenderer
+    let pathProps: Record<string, unknown> | null = null
+    let committed: string | undefined
+    const created: Array<{ path: string }> = []
+    /** Set before the open update: the probe fills once, at the open commit. */
+    let probeNextOpen = false
+
+    // Refs attach during the commit, so the captured props carry the value
+    // the input was committed with — before any effect could initialize it.
+    const createNodeMock = (element: { type?: unknown; props?: Record<string, unknown> }) => {
+      if (element.type === 'input' && element.props?.['aria-label'] === 'Project Path') {
+        pathProps = element.props
+      }
+      return { focus: () => {} }
+    }
+
+    function CommitProbe() {
+      useLayoutEffect(() => {
+        if (!probeNextOpen || !pathProps) return
+        probeNextOpen = false
+        committed = pathProps.value as string
+        ;(pathProps.onChange as (event: { target: { value: string } }) => void)({
+          target: { value: fill },
+        })
+      })
+      return null
+    }
+
+    const form = (isOpen: boolean, props: Record<string, unknown> = {}) => (
+      <>
+        <NewSessionModal
+          isOpen={isOpen}
+          onClose={() => {}}
+          onCreate={(path) => {
+            created.push({ path })
+          }}
+          defaultProjectDir="/base"
+          commandPresets={DEFAULT_PRESETS}
+          defaultPresetId="claude"
+          {...entry}
+          {...props}
+        />
+        <CommitProbe />
+      </>
+    )
+
+    act(() => {
+      renderer = TestRenderer.create(form(false), { createNodeMock })
+    })
+
+    return {
+      open: () => {
+        probeNextOpen = true
+        act(() => {
+          renderer.update(form(true))
+        })
+      },
+      committedAtOpen: () => committed,
+      pathValue: () =>
+        renderer.root.findAllByProps({ 'aria-label': 'Project Path' })[0]!.props.value as string,
+      pathError: () => {
+        const matches = renderer.root.findAllByProps({ 'data-testid': 'project-path-error' })
+        return matches.length > 0 ? String(matches[0].props.children) : null
+      },
+      deliverLateData: (props: Record<string, unknown>) => {
+        act(() => {
+          renderer.update(form(true, props))
+        })
+      },
+      settleFetches: async () => {
+        await act(async () => {
+          for (let i = 0; i < 12; i++) await Promise.resolve()
+        })
+      },
+      created,
+      submit: () => {
+        act(() => {
+          renderer.root.findByType('form').props.onSubmit({ preventDefault: () => {} })
+        })
+      },
+      unmount: () => {
+        act(() => {
+          renderer.unmount()
+        })
+      },
+    }
+  }
+
+  test('a fill landing at the first interactive moment is never overwritten by the open init', async () => {
+    const dialog = mountRaceDialog('/typed/by/user')
+    dialog.open()
+
+    // The open commit must already carry the default: a dialog that paints
+    // interactive with an uninitialized path invites the fill-then-init race.
+    expect(dialog.committedAtOpen()).toBe('/base')
+    // The fill survived the open init that flushes right after the commit.
+    expect(dialog.pathValue()).toBe('/typed/by/user')
+
+    // Late first-load hydration (server default dir, last path, sessions'
+    // active path, presets) must not touch the edited field either.
+    dialog.deliverLateData({
+      defaultProjectDir: '/late/default',
+      lastProjectPath: '/late/last',
+      activeProjectPath: '/late/active',
+      commandPresets: DEFAULT_PRESETS,
+    })
+    expect(dialog.pathValue()).toBe('/typed/by/user')
+
+    await dialog.settleFetches()
+    dialog.submit()
+    expect(dialog.created).toEqual([{ path: '/typed/by/user' }])
+
+    dialog.unmount()
+  })
+
+  test('clearing the path at the first interactive moment is never refilled by the open init', () => {
+    const dialog = mountRaceDialog('', { initialPath: '/pre/from/duplicate' })
+    dialog.open()
+
+    expect(dialog.committedAtOpen()).toBe('/pre/from/duplicate')
+    // Edited to empty stays empty — an empty edit is still an edit.
+    expect(dialog.pathValue()).toBe('')
+
+    dialog.deliverLateData({ defaultProjectDir: '/late/default', lastProjectPath: '/late/last' })
+    expect(dialog.pathValue()).toBe('')
+
+    // An empty path refuses create with the inline reason instead of
+    // silently submitting whatever the init would have refilled.
+    dialog.submit()
+    expect(dialog.pathError()).toBe('Enter a project path to create the session.')
+
+    dialog.unmount()
   })
 })
 
