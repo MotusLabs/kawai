@@ -88,13 +88,13 @@ Implement after Wave B2 (`task-revision-publication`, `task-results-handoffs`) h
 
 ## 6. Agent tools and prompt
 
-- [ ] 6.1 Add `planTools.ts` per D11 (`plan_list`, `plan_get`, `plan_create`, `plan_save_draft`, `plan_submit_for_review`) joining `TEAM_ALLOWED_TOOLS`, with identity bound to the calling session and `canCreatePlans` read from the caller's current group file at each call. Verify with tool tests:
+- [x] 6.1 Add `planTools.ts` per D11 (`plan_list`, `plan_get`, `plan_create`, `plan_save_draft`, `plan_submit_for_review`) joining `TEAM_ALLOWED_TOOLS`, with identity bound to the calling session and `canCreatePlans` read from the caller's current group file at each call. Verify with tool tests:
   - refusals: right missing, other team's id read as not found, CAS mismatch returning the stored draft;
   - a create → save → submit round trip;
   - `plan_get` returning progress;
   - the tool list containing no approve, withdraw, close, or reopen tool.
-- [ ] 6.2 Add the plan note to `teamPrompt.ts`: tools, the creation right, owner-only approval, the approved revision as the direction, and linking tasks. Verify with a prompt test asserting the rights text and that it never claims an agent can approve.
-- [ ] 6.3 Add the AGENTS.md agent-tools bullet for plans. Verify by reading it against D11.
+- [x] 6.2 Add the plan note to `teamPrompt.ts`: tools, the creation right, owner-only approval, the approved revision as the direction, and linking tasks. Verify with a prompt test asserting the rights text and that it never claims an agent can approve.
+- [x] 6.3 Add the AGENTS.md agent-tools bullet for plans. Verify by reading it against D11.
 
 ## 7. Human protocol
 

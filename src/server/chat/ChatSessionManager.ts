@@ -87,6 +87,7 @@ import { createMailboxServer } from '../team/mailboxTools'
 import type { MailboxManagement } from '../team/mailboxManagement'
 import { StrategyService } from '../strategy/StrategyService'
 import { StrategyStore } from '../strategy/strategyStore'
+import { PlanService } from '../plans/PlanService'
 import type { TeamMessage, TeamWorktreeOccupancy, WaitingReason } from '../../shared/team'
 import { MailDispatcher } from '../team/dispatcher'
 import { receiptMessageId } from '../team/receipt'
@@ -951,6 +952,13 @@ export class ChatSessionManager {
       getSession: id => this.records.get(id),
       ...(options.profileCatalogHome ? { homeDir: options.profileCatalogHome } : {}),
     })
+    // Durable plans: the service over the mailbox's plan store (the same one
+    // the task link reads), pinning against the strategy store above.
+    this.plans = new PlanService(this.teamMail.plans, {
+      getSession: id => this.records.get(id),
+      strategies: this.strategies.store,
+      ...(options.profileCatalogHome ? { homeDir: options.profileCatalogHome } : {}),
+    })
     this.strategies.store.subscribe(strategy => {
       const teamId = strategy.repoBindings.find(binding => binding.kind === 'team')?.root
       if (teamId) this.options.onStrategyChange?.(teamId)
@@ -1100,6 +1108,8 @@ export class ChatSessionManager {
   readonly strategies: StrategyService
   /** Completed turns of task-bound sessions (team-workspace D8): the summary's durable source. */
   readonly turnEnds: ChatTurnEndStore
+  /** Durable plans (durable-plans); the plan tools and UI actions go through it. */
+  readonly plans: PlanService
   readonly dispatcher: MailDispatcher
   private readonly teamMail: SessionMailbox
 
@@ -1804,7 +1814,7 @@ export class ChatSessionManager {
       // The team must be known before the first spawn reads its prompt.
       await this.teams.track(record.sessionId, this.records.get(record.sessionId)?.projectPath ?? record.projectPath)
       const teamMcpServer = await createMailboxServer(this.mailbox, record.sessionId, {
-        tasks: this.tasks, results: this.results, strategies: this.strategies, releases: this.teamMail.releases, management: this.management,
+        tasks: this.tasks, results: this.results, strategies: this.strategies, plans: this.plans, releases: this.teamMail.releases, management: this.management,
       })
       const driver = new ChatSessionDriver({
         sessionId: record.sessionId,

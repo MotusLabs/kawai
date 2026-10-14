@@ -1,8 +1,8 @@
 // One in-process MCP server per agent start, carrying the mailbox tools,
 // (team-tasks) the task tools, (member-release) the release tool, and
-// (product-strategy) the strategy tools. Handlers bind the actual session
-// id and strip unknown arguments before passing content to the mailbox,
-// task, release, or strategy service.
+// (product-strategy) the strategy tools, and (durable-plans) the plan tools.
+// Handlers bind the actual session id and strip unknown arguments before
+// passing content to the mailbox, task, release, strategy, or plan service.
 import { z } from 'zod'
 import type { TeamMailbox } from './TeamMailbox'
 import type { TaskService } from './TaskService'
@@ -11,6 +11,8 @@ import type { MemberRelease } from './memberRelease'
 import { TASK_TOOL_NAMES, taskDescriptions, taskHandlers, taskSchemas } from './taskTools'
 import type { StrategyService } from '../strategy/StrategyService'
 import { STRATEGY_TOOL_NAMES, strategyDescriptions, strategyHandlers, strategySchemas } from '../strategy/strategyTools'
+import type { PlanService } from '../plans/PlanService'
+import { PLAN_TOOL_NAMES, planDescriptions, planHandlers, planSchemas } from '../plans/planTools'
 import type { MailboxManagement } from './mailboxManagement'
 import { TEAM_MCP_SERVER } from './teamPrompt'
 
@@ -19,7 +21,7 @@ export const RELEASE_TOOL_NAMES = ['release_member'] as const
 /** Mailbox management (team-mailbox-management): always registered, refused by right. */
 export const MANAGEMENT_TOOL_NAMES = ['list_mailbox', 'cancel_message', 'discard_message'] as const
 /** Every team tool, allowed without approval cards under either policy. */
-export const TEAM_ALLOWED_TOOLS = [...MAILBOX_TOOL_NAMES, ...MANAGEMENT_TOOL_NAMES, ...RELEASE_TOOL_NAMES, ...TASK_TOOL_NAMES, ...STRATEGY_TOOL_NAMES].map(name => `mcp__${TEAM_MCP_SERVER}__${name}`)
+export const TEAM_ALLOWED_TOOLS = [...MAILBOX_TOOL_NAMES, ...MANAGEMENT_TOOL_NAMES, ...RELEASE_TOOL_NAMES, ...TASK_TOOL_NAMES, ...STRATEGY_TOOL_NAMES, ...PLAN_TOOL_NAMES].map(name => `mcp__${TEAM_MCP_SERVER}__${name}`)
 
 const content = { body: z.string().min(1), urgent: z.boolean().optional(), tags: z.array(z.string()).optional(), task_id: z.string().min(1).optional() }
 // `human` is accepted so the service can refuse it with the reply path,
@@ -90,12 +92,14 @@ export interface MailboxServerServices {
   /** Result, findings, and handoff tools (task-results-handoffs); registered beside the task tools. */
   results?: TaskResultService
   strategies?: StrategyService
+  /** Plan read/create/draft/submit tools (durable-plans D11); never approve or lifecycle. */
+  plans?: PlanService
   releases?: MemberRelease
   management?: MailboxManagement
 }
 
 export async function createMailboxServer(mailbox: TeamMailbox, sessionId: string, services: MailboxServerServices = {}) {
-  const { tasks, results, strategies, releases, management } = services
+  const { tasks, results, strategies, plans, releases, management } = services
   const { createSdkMcpServer, tool } = await import('@anthropic-ai/claude-agent-sdk')
   const handlers: Record<string, (input: unknown) => Promise<unknown>> = {
     ...mailboxHandlers(mailbox, sessionId),
@@ -105,10 +109,12 @@ export async function createMailboxServer(mailbox: TeamMailbox, sessionId: strin
     // Product strategy: read/propose only — the approve/publish/withdraw
     // surface deliberately does not exist here (design D3).
     ...(strategies ? strategyHandlers(strategies, sessionId) : {}),
+    // Plans: no approve, withdraw, close, or reopen tool exists (D11).
+    ...(plans ? planHandlers(plans, sessionId) : {}),
   }
   const schemas: Record<string, z.ZodObject> = {
     ...mailboxSchemas, ...(management ? managementSchemas : {}), ...(tasks ? taskSchemas : {}),
-    ...(releases ? releaseSchemas : {}), ...(strategies ? strategySchemas : {}),
+    ...(releases ? releaseSchemas : {}), ...(strategies ? strategySchemas : {}), ...(plans ? planSchemas : {}),
   }
   const descriptions: Record<string, string> = {
     send_message: 'Send to a team group or session. Returns immediately with the message id. Optional task_id puts the message under a team task. Mail to the human is refused: reply to a message they sent instead.',
@@ -119,6 +125,7 @@ export async function createMailboxServer(mailbox: TeamMailbox, sessionId: strin
     ...(tasks ? taskDescriptions : {}),
     ...(releases ? releaseDescriptions : {}),
     ...(strategies ? strategyDescriptions : {}),
+    ...(plans ? planDescriptions : {}),
   }
   return createSdkMcpServer({ name: TEAM_MCP_SERVER, version: '1.0.0', tools: Object.keys(handlers).map(name =>
     tool(name, descriptions[name]!, schemas[name]!.shape, async (input) => {
