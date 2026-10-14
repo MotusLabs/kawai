@@ -35,7 +35,7 @@ Non-goals:
 
 ## Impact
 
-- Server: `src/server/chat/ChatSessionDriver.ts` consumes `task_*` and `background_tasks_changed` frames for non-agent tasks, opens a turn on `session_state_changed: running` when none is active, and calls `getTaskOutput` / `stopTask`. A new pure reducer, `src/server/chat/chatBackgroundTasks.ts`, holds the task roster. `ChatSessionManager.ts` adds the roster to snapshots and persists outcomes in a sidecar. `ChatConnections.ts` fans updates out. `developmentFixture.ts` gets a background-shell scenario.
+- Server: `src/server/chat/ChatSessionDriver.ts` consumes `task_*` and `background_tasks_changed` frames for non-agent tasks, opens a turn on a `system/init` frame when none is active (`session_state_changed` never reaches SDK consumers), and calls `getTaskOutput` / `stopTask`. A new pure reducer, `src/server/chat/chatBackgroundTasks.ts`, holds the task roster. `ChatSessionManager.ts` adds the roster to snapshots and persists outcomes in a sidecar. `ChatConnections.ts` fans updates out. `developmentFixture.ts` gets a background-shell scenario.
 - Shared: `src/shared/chat.ts` gets the `ChatBackgroundTask` type and an optional trigger on `turn_started`. `src/shared/types.ts` gets the `chat-background-tasks` push, `chat-snapshot.backgroundTasks`, `chat-task-output` request/reply and `chat-task-stop`. All additive.
 - Client: the tool row in `src/client/components/chat/ChatMessages.tsx` gains a task status mark, output tail and Stop control. The live strip from PR #72 lists tasks. `src/client/stores/chatStore.ts` stores the task roster.
 - Storage: no DB schema change. Outcomes and output-file paths go in a `chat-tasks/` sidecar beside `chat-wire/` and `chat-workers/`.

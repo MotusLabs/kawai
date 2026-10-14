@@ -31,6 +31,7 @@ import type {
   ChatUsageReport,
   ChatWireFrame,
   ChatWorker,
+  ChatBackgroundTask,
 } from './chat'
 
 export type {
@@ -60,6 +61,7 @@ export type {
   ChatWireFrame,
   ChatWorker,
   ChatWorkerStatus,
+  ChatBackgroundTask,
 } from './chat'
 
 export type {
@@ -325,6 +327,11 @@ export type ServerMessage =
        */
       workers: ChatWorker[]
       /**
+       * Background shells and Monitors the agent started (background tasks
+       * D2): the full roster at snapshot time, running and settled alike.
+       */
+      backgroundTasks: ChatBackgroundTask[]
+      /**
        * The session's active notices (notification strip design D1): its
        * profile's account notices followed by its own agent notices, sorted by
        * priority and newest. Additive and ephemeral — never persisted,
@@ -479,6 +486,24 @@ export type ServerMessage =
       conflict?: StrategyDraft | null
     }
   | { type: 'chat-workers'; sessionId: string; workers: ChatWorker[] }
+  // Full background-task roster of a chat session (background tasks D2): a
+  // level signal like chat-workers — the whole set on every change, additive
+  // and ephemeral on the wire, while settled outcomes persist in the sidecar.
+  | { type: 'chat-background-tasks'; sessionId: string; tasks: ChatBackgroundTask[] }
+  // A background task's output tail (background tasks D3): the reply to
+  // chat-task-output. 'ok' carries at most the last 8 KiB as plain text
+  // (truncated notes that earlier output was cut); 'unavailable' covers a
+  // missing method, a throwing read, and a cleaned-up output file — the row
+  // shows the panel as unavailable, never an error.
+  | {
+      type: 'chat-task-output'
+      sessionId: string
+      taskId: string
+      state: 'ok' | 'unavailable'
+      output?: string
+      totalBytes?: number
+      truncated?: boolean
+    }
   // A chat session's active notices (notification strip design D5): the full
   // replace-semantics list, pushed to subscribed connections whenever it
   // changes — a missed push heals on the next one. Additive and ephemeral
@@ -711,6 +736,15 @@ export type ClientMessage =
   // A worker's expanded body (workers design D5): read the worker's on-disk
   // transcript live or after settle; the reply is chat-worker-transcript.
   | { type: 'chat-worker-transcript'; sessionId: string; workerId: string }
+  // A background task's output tail (background tasks D3): at most the last
+  // 8 KiB, live via the SDK or from the recorded output file after the
+  // process ended; the reply is the chat-task-output server message.
+  | { type: 'chat-task-output'; sessionId: string; taskId: string }
+  // Stop one background task (background tasks D4): only that task ends; the
+  // in-flight turn and other tasks are untouched. Settle arrives through the
+  // normal roster channel, so there is no dedicated reply — a rejection for
+  // an already-ended task is logged and dropped server-side.
+  | { type: 'chat-task-stop'; sessionId: string; taskId: string }
   // Close an agent notice for its session on the server (notification strip
   // design D6): the manager drops the key and pushes the new list to every
   // attached client; unknown keys are a no-op. Account notices are closed

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import type { SDKMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
-import type { ChatEvent, ChatWireDirection, ChatWorker } from '../../shared/chat'
+import type { ChatBackgroundTask, ChatEvent, ChatWireDirection, ChatWorker } from '../../shared/chat'
 import { ChatSessionDriver } from '../chat/ChatSessionDriver'
 import { fixtureQueryFactory } from '../chat/developmentFixture'
 import { TurnQueue } from '../chat/TurnQueue'
@@ -219,6 +219,62 @@ describe('development fixture worker turn', () => {
     expect(top).toMatchObject({ status: 'completed', live: false, agentType: 'Explore' })
     expect(top!.summary).toBe('Found three packages: client, server, shared.')
     expect(nested).toMatchObject({ status: 'completed', depth: 2 })
+    expect(statuses.at(-1)).toBe('waiting')
+    driver.kill()
+  })
+})
+
+describe('development fixture background turn', () => {
+  beforeEach(() => {
+    process.env.AGENTBOARD_CHAT_FIXTURE_HOLD_MS = '1'
+  })
+  afterEach(() => {
+    delete process.env.AGENTBOARD_CHAT_FIXTURE_HOLD_MS
+  })
+
+  test('a shell settles and wakes the agent while a dev server keeps running until stopped', async () => {
+    const events: ChatEvent[] = []
+    const rosters: ChatBackgroundTask[][] = []
+    const statuses: string[] = []
+    const driver = new ChatSessionDriver({
+      sessionId: 'chat-fixture-background',
+      projectPath: '/tmp/project',
+      queryFactory: fixtureQueryFactory,
+      onEvent: (event) => events.push(event),
+      onStatus: (status) => statuses.push(status),
+      onBackgroundTasks: (tasks) => rosters.push(tasks),
+    })
+    driver.send('show background tasks')
+    // First the user turn, then the settle-woken triggered turn.
+    const deadline = Date.now() + 3_000
+    while (events.filter((event) => event.type === 'turn_completed').length < 2 && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 5))
+    }
+    const starts = events.filter((event) => event.type === 'turn_started')
+    expect(starts).toHaveLength(2)
+    expect(starts[1]).toMatchObject({ trigger: { kind: 'task', tasks: [{ status: 'completed' }] } })
+
+    const final = rosters.at(-1)!
+    expect(final).toMatchObject([
+      { kind: 'shell', status: 'completed', live: false, summary: expect.stringContaining('Wait then print a marker') },
+      { kind: 'shell', status: 'running', live: true, description: 'Fixture dev server' },
+    ])
+    // The settled shell's output reads through the live control; the dev
+    // server's tail grows per poll.
+    const [quick, long] = final
+    const settledTail = await driver.getTaskOutput(quick!.taskId)
+    expect(settledTail?.output).toContain('fixture-shell-done')
+    const firstRead = await driver.getTaskOutput(long!.taskId)
+    const secondRead = await driver.getTaskOutput(long!.taskId)
+    expect(firstRead?.output.length ?? 0).toBeLessThan(secondRead?.output.length ?? 0)
+    // Stopping the dev server settles it through the normal notification.
+    expect(await driver.stopTask(long!.taskId)).toBe(true)
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(rosters.at(-1)).toMatchObject([
+      { taskId: quick!.taskId, status: 'completed' },
+      { taskId: long!.taskId, status: 'stopped', live: false },
+    ])
+    // D7: nothing but turns ever held the session at working.
     expect(statuses.at(-1)).toBe('waiting')
     driver.kill()
   })

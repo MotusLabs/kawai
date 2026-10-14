@@ -7,6 +7,7 @@ import type { ChatEvent } from '@shared/chat'
 import type { SendClientMessage, Session } from '@shared/types'
 import type { SessionDirectoryEntry } from '@shared/team'
 import Markdown from '../Markdown'
+import ChatTaskRow from './ChatTaskRow'
 import ChatWorkerRow from './ChatWorkerRow'
 import ParticipantName from './ParticipantName'
 import { toolCallDetail } from './toolCallLabel'
@@ -50,10 +51,12 @@ function toolEntries(events: ChatEvent[]): TranscriptEntry[] {
   return entries
 }
 
-export default function ChatMessages({ events, projectPath, sessionId, sendMessage, connected, sessions, directory, onOpenParticipant }: {
+export default function ChatMessages({ events, projectPath, sessionId, sendMessage, connected, archived, sessions, directory, onOpenParticipant }: {
   events: ChatEvent[]; projectPath?: string
   /** Present in the app (not in isolated tests): worker rows join the store. */
   sessionId?: string; sendMessage?: SendClientMessage; connected?: boolean
+  /** Archived chats never offer a task's Stop control (background tasks D4). */
+  archived?: boolean
   /** Live/archived sessions and the team directory, for naming senders. */
   sessions?: Session[]; directory?: SessionDirectoryEntry[]
   /** Open a participant's chat; omit to disable click-through. */
@@ -105,10 +108,20 @@ export default function ChatMessages({ events, projectPath, sessionId, sendMessa
             <pre className="mt-2 overflow-auto whitespace-pre-wrap">{JSON.stringify(event.input, null, 2)}</pre>
             {result && <pre className="mt-2 overflow-auto whitespace-pre-wrap">{result.output}</pre>}
           </details>
-          if (sessionId === undefined || (event.tool !== 'Agent' && event.tool !== 'Task')) return card
+          if (sessionId === undefined || (event.tool !== 'Agent' && event.tool !== 'Task')) {
+            // A backgrounded Bash or Monitor joins the task roster by its call
+            // id (background tasks D2); everything else stays the plain card.
+            if (sessionId !== undefined && (event.tool === 'Bash' || event.tool === 'Monitor')) {
+              return <ChatTaskRow key={`tool:${event.toolCallId}`} sessionId={sessionId}
+                toolCallId={event.toolCallId} tool={event.tool} fallback={card}
+                sendMessage={sendMessage} connected={connected} archived={archived} />
+            }
+            return card
+          }
           return <ChatWorkerRow key={`tool:${event.toolCallId}`} sessionId={sessionId}
             workerId={event.toolCallId} tool={event.tool} fallback={card}
-            renderBody={body => <ChatMessages events={body} projectPath={projectPath} />}
+            renderBody={body => <ChatMessages events={body} projectPath={projectPath}
+              sessions={sessions} directory={directory} onOpenParticipant={onOpenParticipant} />}
             sendMessage={sendMessage} connected={connected} />
         }
         case 'tool_result': {
@@ -123,6 +136,20 @@ export default function ChatMessages({ events, projectPath, sessionId, sendMessa
             <div className="mb-1 text-xs">Command output</div>
             <Markdown content={event.text} />
           </div>
+        case 'turn_started': {
+          // Agent-started turn (background tasks D5): a muted trigger line in
+          // place of the user bubble — the task summaries that woke the agent,
+          // or a generic marker when the cause is unknown. User-started turns
+          // carry no trigger and render nothing.
+          if (!event.trigger) return null
+          const lines =
+            event.trigger.kind === 'task'
+              ? event.trigger.tasks.map(task => `⟲ ${task.summary ?? `Task ${task.taskId} ${task.status}`}`)
+              : ['⟲ Continued on its own']
+          return <p key={event.id} data-testid="turn-trigger" className="text-chat-meta text-muted">
+            {lines.map((line, index) => <span key={index} className="block">{line}</span>)}
+          </p>
+        }
         case 'notice': return <p key={event.id} className="text-chat-meta text-secondary">{event.text}</p>
         case 'error': return <p key={event.id} role="alert" className="text-chat-body text-chat-danger">{event.message}</p>
         case 'turn_interrupted': return <p key={event.id} className="text-chat-meta text-secondary">Turn stopped</p>
