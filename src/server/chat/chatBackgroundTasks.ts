@@ -341,20 +341,28 @@ export function projectBackgroundTaskRecords(state: ChatBackgroundTasksState): B
  * never live, and the sidecar's recovery pass has already rewritten rows
  * still marked running as stopped.
  */
-export function recoveredBackgroundTasksState(tasks: ChatBackgroundTask[]): ChatBackgroundTasksState {
+/**
+ * Seed a fresh state from the persisted server-side records (design D6):
+ * recovered entries are never live, the sidecar's recovery pass has already
+ * rewritten rows still marked running as stopped, and the recorded
+ * output-file paths ride along so the next roster write keeps them (a fresh
+ * projection would drop them — the wire shape never carries a path).
+ */
+export function recoveredBackgroundTasksState(records: BackgroundTaskRecord[]): ChatBackgroundTasksState {
   return {
-    tasks: tasks.map((task) => ({
-      taskId: task.taskId,
-      ...(task.toolCallId !== undefined ? { toolCallId: task.toolCallId } : {}),
-      kind: task.kind,
+    tasks: records.map((record) => ({
+      taskId: record.taskId,
+      ...(record.toolCallId !== undefined ? { toolCallId: record.toolCallId } : {}),
+      kind: record.kind,
       kindKnown: true,
-      ...(task.description !== undefined ? { description: task.description } : {}),
-      status: task.status,
+      ...(record.description !== undefined ? { description: record.description } : {}),
+      status: record.status,
       live: false,
       visible: true,
-      startedAtMs: task.startedAtMs,
-      ...(task.endedAtMs !== undefined ? { endedAtMs: task.endedAtMs } : {}),
-      ...(task.summary !== undefined ? { summary: task.summary } : {}),
+      startedAtMs: record.startedAtMs,
+      ...(record.endedAtMs !== undefined ? { endedAtMs: record.endedAtMs } : {}),
+      ...(record.summary !== undefined ? { summary: record.summary } : {}),
+      ...(record.outputFile !== undefined ? { outputFile: record.outputFile } : {}),
     })),
     toolKinds: {},
   }

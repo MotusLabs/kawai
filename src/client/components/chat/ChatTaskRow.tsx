@@ -62,14 +62,24 @@ export default function ChatTaskRow({ sessionId, toolCallId, tool, fallback, sen
   }, [connected, sessionId, task?.taskId])
 
   // Re-poll while expanded and live (design D3): the interval fires through
-  // the one-shot marker, so an in-flight request never doubles up.
+  // the one-shot marker, so an in-flight request never doubles up. The
+  // connection is a dependency so a row mounted (or last re-created) while
+  // disconnected refreshes its callback — otherwise the interval keeps a
+  // `connected: false` closure and never polls again after a reconnect.
   useEffect(() => {
     if (!live) return
     const id = setInterval(() => {
       if (openRef.current) requestTail()
     }, 2_000)
     return () => clearInterval(id)
-  }, [live, task?.taskId])
+  }, [live, task?.taskId, connected])
+
+  // A row still open when the task settles fetches the final tail once
+  // (design D3: ended tasks fetch once) instead of keeping the last running
+  // snapshot until it is collapsed and reopened.
+  useEffect(() => {
+    if (!live && openRef.current) requestTail()
+  }, [live])
 
   // The settle arrives through the roster; any change re-arms the control.
   useEffect(() => { setStopping(false) }, [task?.status, task?.live])

@@ -4069,6 +4069,43 @@ describe('ChatSessionManager background-task roster (background tasks D2)', () =
     expect(store().read(id)).toEqual([])
   })
 
+  test('a resume keeps recovered output paths through later roster writes', async () => {
+    const taskDir = path.join(tempDir, 'chat-tasks-resume')
+    const store = () => new ChatTaskStore({ dir: taskDir })
+    const first: FakeHandle[] = []
+    const managerA = await managedManager({
+      isDirectory: anyDirectory, db, registry: new SessionRegistry(),
+      onEvent: () => {}, queryFactory: fakeQueryFactory(first), taskStore: store(),
+    })
+    const created = managerA.createSession({ projectPath: '/tmp/proj' })
+    if (!created.ok) throw new Error('create failed')
+    const id = created.session.id
+    await managerA.send(id, 'run a task')
+    first[0]!.push({ type: 'system', subtype: 'task_started', task_id: 'b-old', tool_use_id: 'c1', task_type: 'local_bash', description: 'old task', is_backgrounded: true, uuid: 'u1', session_id: 's' } as unknown as SDKMessage)
+    first[0]!.push({ type: 'system', subtype: 'task_notification', task_id: 'b-old', tool_use_id: 'c1', status: 'completed', summary: 'done before restart', output_file: '/tmp/claude-1000/x/tasks/b-old.output', uuid: 'u2', session_id: 's' } as unknown as SDKMessage)
+    await waitForCondition(() => store().read(id).some(entry => entry.outputFile !== undefined))
+    // Restart: the persisted row recovers at boot...
+    const handles: FakeHandle[] = []
+    const manager = await managedManager({
+      isDirectory: anyDirectory, db, registry: new SessionRegistry(),
+      onEvent: () => {}, queryFactory: fakeQueryFactory(handles), taskStore: store(),
+    })
+    expect(manager.getSnapshot(id)!.backgroundTasks).toMatchObject([
+      { taskId: 'b-old', status: 'completed', summary: 'done before restart' },
+    ])
+    // ...and a resume spawns a driver seeded from the server-side records:
+    // a new task's roster publish must not rewrite the old one without its
+    // recorded output path.
+    await manager.send(id, 'another turn')
+    handles[0]!.push({ type: 'system', subtype: 'task_started', task_id: 'b-new', tool_use_id: 'c9', task_type: 'local_bash', description: 'new task', is_backgrounded: true, uuid: 'u9', session_id: 's' } as unknown as SDKMessage)
+    await waitForCondition(() => store().read(id).some(entry => entry.taskId === 'b-new'))
+    expect(store().read(id)).toMatchObject([
+      { taskId: 'b-old', outputFile: '/tmp/claude-1000/x/tasks/b-old.output', summary: 'done before restart' },
+      { taskId: 'b-new', description: 'new task' },
+    ])
+    manager.shutdown()
+  })
+
   test('readTaskOutput prefers the live query and coalesces concurrent asks', async () => {
     const handles: FakeHandle[] = []
     const manager = await managedManager({

@@ -2261,6 +2261,55 @@ describe('chat task rows (background tasks)', () => {
     act(() => renderer.unmount())
   })
 
+  test('a row still open when the task settles fetches the final tail once', () => {
+    jest.useFakeTimers()
+    try {
+      const sent: ClientMessage[] = []
+      seedTasks([liveTask()])
+      let renderer!: TestRenderer.ReactTestRenderer
+      act(() => { renderer = TestRenderer.create(<ChatMessages events={[bashCall]} sessionId="chat-1" sendMessage={m => sent.push(m)} connected />) })
+      open(renderer, true)
+      expect(sent.length).toBe(1)
+      act(() => { useChatStore.getState().setTaskOutput({ type: 'chat-task-output', sessionId: 'chat-1', taskId: 'b1', state: 'ok', output: 'building…\n', totalBytes: 20, truncated: false }) })
+      // The task settles while the row stays open: one more fetch replaces
+      // the last running snapshot with the final output.
+      act(() => { useChatStore.getState().setBackgroundTasks('chat-1', [liveTask({ status: 'completed', live: false, endedAtMs: Date.now(), summary: 'done (exit code 0)' })]) })
+      expect(sent.length).toBe(2)
+      act(() => { useChatStore.getState().setTaskOutput({ type: 'chat-task-output', sessionId: 'chat-1', taskId: 'b1', state: 'ok', output: 'fixture-shell-done\n', totalBytes: 40, truncated: false }) })
+      const outputPre = renderer.root.findByProps({ 'data-testid': 'chat-task-output' }).findByType('pre')
+      expect(outputPre.children.join('')).toContain('fixture-shell-done')
+      // And no interval keeps firing after the settle.
+      act(() => { jest.advanceTimersByTime(6_000) })
+      expect(sent.length).toBe(2)
+      act(() => renderer.unmount())
+    } finally {
+      jest.useRealTimers()
+    }
+  })
+
+  test('polling resumes after a reconnect', () => {
+    jest.useFakeTimers()
+    try {
+      const sent: ClientMessage[] = []
+      seedTasks([liveTask()])
+      let renderer!: TestRenderer.ReactTestRenderer
+      // Mounted while disconnected: expanding sends nothing.
+      act(() => { renderer = TestRenderer.create(<ChatMessages events={[bashCall]} sessionId="chat-1" sendMessage={m => sent.push(m)} connected={false} />) })
+      open(renderer, true)
+      expect(sent).toEqual([])
+      // The socket comes back: the reconnect effect fetches once, and the
+      // interval's callback must see the new connection state too.
+      act(() => { renderer.update(<ChatMessages events={[bashCall]} sessionId="chat-1" sendMessage={m => sent.push(m)} connected />) })
+      expect(sent.length).toBe(1)
+      act(() => { useChatStore.getState().setTaskOutput({ type: 'chat-task-output', sessionId: 'chat-1', taskId: 'b1', state: 'ok', output: 'ok\n', totalBytes: 3, truncated: false }) })
+      act(() => { jest.advanceTimersByTime(2_000) })
+      expect(sent.length).toBe(2)
+      act(() => renderer.unmount())
+    } finally {
+      jest.useRealTimers()
+    }
+  })
+
   test('Stop sends the stop message once and re-arms after the settle', () => {
     const sent: unknown[] = []
     seedTasks([liveTask()])

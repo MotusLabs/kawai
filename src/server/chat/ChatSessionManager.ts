@@ -72,6 +72,7 @@ import { UsageLimitStore } from './usageLimits'
 import { fetchZaiUsage } from './zaiUsage'
 import { readWorkerTranscript } from './chatWorkerTranscript'
 import { isTaskOutputFile, readTaskOutputTail } from './taskOutputFile'
+import type { BackgroundTaskRecord } from './chatBackgroundTasks'
 import { loadTeamGroups } from '../team/teamGroups'
 import { SessionTeams } from '../team/sessionTeams'
 import { SessionDirectory } from '../team/sessionDirectory'
@@ -315,6 +316,13 @@ export class ChatSessionManager {
    * restarted one (design D6), mirroring the worker rows.
    */
   private readonly backgroundTaskRows = new Map<string, ChatBackgroundTask[]>()
+  /**
+   * Latest server-side task records per session (background tasks D6): the
+   * rows plus the recorded output-file paths the wire shape never carries.
+   * Recovery seeds the driver from these so the next roster write keeps the
+   * paths; a live driver's records replace them wholesale on every publish.
+   */
+  private readonly backgroundTaskRecords = new Map<string, BackgroundTaskRecord[]>()
   /**
    * Availability probes for resolved provider configurations. Keyed so a provider
    * change in Settings re-probes the new endpoint; a failed probe is dropped so
@@ -1371,6 +1379,7 @@ export class ChatSessionManager {
     this.contextReadings.delete(sessionId)
     this.workerRows.delete(sessionId)
     this.backgroundTaskRows.delete(sessionId)
+    this.backgroundTaskRecords.delete(sessionId)
     this.clearAgentNotices(sessionId)
     this.sessionCredentials.delete(sessionId)
     this.teams.forget(sessionId)
@@ -1567,6 +1576,7 @@ export class ChatSessionManager {
         const corrected = taskRecords.map((entry) =>
           entry.status === 'running' ? { ...entry, status: 'stopped' as const } : entry
         )
+        this.backgroundTaskRecords.set(record.sessionId, corrected)
         this.backgroundTaskRows.set(record.sessionId, corrected.map((entry) => ({
           taskId: entry.taskId,
           ...(entry.toolCallId !== undefined ? { toolCallId: entry.toolCallId } : {}),
@@ -1727,8 +1737,8 @@ export class ChatSessionManager {
         ...(this.workerRows.has(record.sessionId)
           ? { recoveredWorkers: this.workerRows.get(record.sessionId) ?? [] }
           : {}),
-        ...(this.backgroundTaskRows.has(record.sessionId)
-          ? { recoveredBackgroundTasks: this.backgroundTaskRows.get(record.sessionId) ?? [] }
+        ...(this.backgroundTaskRecords.has(record.sessionId)
+          ? { recoveredBackgroundTasks: this.backgroundTaskRecords.get(record.sessionId) ?? [] }
           : {}),
         onEvent: (event) => this.handleDriverEvent(record.sessionId, event),
         onCommandState: (state) =>
@@ -2202,6 +2212,9 @@ export class ChatSessionManager {
     this.options.onBackgroundTasks?.(sessionId, tasks)
     const store = this.options.taskStore
     const driver = this.drivers.get(sessionId)
+    if (driver && !driver.isDead) {
+      this.backgroundTaskRecords.set(sessionId, driver.getBackgroundTaskRecords())
+    }
     if (store && driver && !driver.isDead) {
       store.write(sessionId, driver.getBackgroundTaskRecords()).catch((error) => {
         logger.warn('chat_task_sidecar_write_failed', {

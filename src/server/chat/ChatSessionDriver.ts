@@ -168,7 +168,7 @@ export interface ChatSessionDriverOptions {
    * Recovered background-task rows (background tasks D6) seeding a fresh
    * driver, so settled outcomes survive a restart or an archive/restore.
    */
-  recoveredBackgroundTasks?: ChatBackgroundTask[]
+  recoveredBackgroundTasks?: BackgroundTaskRecord[]
   onEvent: (event: ChatEvent) => void
   /** Applied immediately on every derived status change. */
   onStatus: (status: SessionStatus) => void
