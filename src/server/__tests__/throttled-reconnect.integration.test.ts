@@ -27,6 +27,18 @@
  *
  * The fix halves the data, which through a throttled pipe means measurably
  * faster time-to-first-output.
+ *
+ * Only the attach may cross the pipe while the clock runs. Every connection
+ * first receives snapshot messages (sessions, agent-sessions, and a
+ * workspace-snapshot once discovery finishes), and those drain through the
+ * same throttle ahead of the scrollback. So the server runs against a
+ * throwaway home and the tmux pane against an empty working directory, which
+ * keeps the snapshots small and identical on every machine. Each measurement
+ * also waits for its connection's snapshot burst to go quiet before it
+ * attaches. Without both, a developer machine with a busy ~/.claude and a
+ * repository full of worktrees added tens of KB of snapshots to some trials
+ * (whichever connected after discovery finished) and failed the timing
+ * assertion.
  */
 
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
@@ -70,6 +82,12 @@ if (!tmuxAvailable || !localhostBindable) {
     let serverProcess: ReturnType<typeof Bun.spawn> | null = null
     let serverPort = 0
     let tmuxTmpDir: string | null = null
+    // Throwaway home (server) and working directory (tmux pane): see header.
+    const sandboxDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentboard-tt-sandbox-'))
+    const sandboxHome = path.join(sandboxDir, 'home')
+    const sandboxWork = path.join(sandboxDir, 'work')
+    fs.mkdirSync(sandboxHome)
+    fs.mkdirSync(sandboxWork)
     let tmuxWindowTarget = ''
     let discoveredSessionId = ''
 
@@ -89,6 +107,8 @@ if (!tmuxAvailable || !localhostBindable) {
           '-d',
           '-s',
           sessionName,
+          '-c',
+          sandboxWork,
           '-x',
           '120',
           '-y',
@@ -125,6 +145,9 @@ if (!tmuxAvailable || !localhostBindable) {
         cwd: process.cwd(),
         env: {
           ...process.env,
+          HOME: sandboxHome,
+          CLAUDE_CONFIG_DIR: path.join(sandboxHome, '.claude'),
+          CODEX_HOME: path.join(sandboxHome, '.codex'),
           PORT: String(serverPort),
           TMUX_SESSION: sessionName,
           DISCOVER_PREFIXES: '',
@@ -193,9 +216,10 @@ if (!tmuxAvailable || !localhostBindable) {
         }
       }
 
-      if (tmuxTmpDir) {
+      for (const dir of [tmuxTmpDir, sandboxDir]) {
+        if (!dir) continue
         try {
-          fs.rmSync(tmuxTmpDir, { recursive: true, force: true })
+          fs.rmSync(dir, { recursive: true, force: true })
         } catch {
           // ignore
         }
@@ -219,11 +243,7 @@ if (!tmuxAvailable || !localhostBindable) {
       targetPort: number,
       bytesPerSecond: number,
       latencyMs = 0
-    ): Promise<{
-      port: number
-      close: () => void
-      getTotalServerToClientBytes: () => number
-    }> {
+    ): Promise<ThrottleProxy> {
       return new Promise((resolve, reject) => {
         const CHUNK_INTERVAL_MS = 10
         const chunkSize = Math.max(
@@ -372,10 +392,13 @@ if (!tmuxAvailable || !localhostBindable) {
       await waitUntil(
         () =>
           messages.some((m) => m.type === 'sessions') &&
-          messages.some((m) => m.type === 'server-config'),
+          messages.some((m) => m.type === 'agent-sessions'),
         15000,
-        `${label}: initial sessions/config`
+        `${label}: initial sessions/agent-sessions`
       )
+      // The rest of the snapshot burst (workspace-snapshot, late pushes) must
+      // have drained through the throttle before the clock starts.
+      await waitForQuiet(messages, 400, 15000, `${label}: snapshot burst`)
 
       return { ws, messages }
     }
@@ -391,12 +414,12 @@ if (!tmuxAvailable || !localhostBindable) {
      * terminal-output (the worst-case client experience).
      */
     async function measureDoubleAttach(
-      proxyPort: number,
+      proxy: ThrottleProxy,
       label: string
-    ): Promise<{ timeMs: number; totalOutputBytes: number }> {
+    ): Promise<AttachMeasurement> {
       // Connect two WebSocket clients through the same proxy
-      const conn1 = await connectAndHandshake(proxyPort, `${label}-ws1`)
-      const conn2 = await connectAndHandshake(proxyPort, `${label}-ws2`)
+      const conn1 = await connectAndHandshake(proxy.port, `${label}-ws1`)
+      const conn2 = await connectAndHandshake(proxy.port, `${label}-ws2`)
 
       // Clear handshake messages
       conn1.messages.length = 0
@@ -411,6 +434,7 @@ if (!tmuxAvailable || !localhostBindable) {
       })
 
       // Send attach on first connection, then second 34ms later
+      const proxyBytesAtAttach = proxy.getTotalServerToClientBytes()
       const t0 = performance.now()
       conn1.ws.send(attachMsg)
       await delay(34)
@@ -451,7 +475,7 @@ if (!tmuxAvailable || !localhostBindable) {
       conn1.ws.close()
       conn2.ws.close()
 
-      return { timeMs, totalOutputBytes }
+      return { timeMs, totalOutputBytes, proxyBytesAtAttach }
     }
 
     /**
@@ -460,10 +484,10 @@ if (!tmuxAvailable || !localhostBindable) {
      * payload drains through the throttled pipe.
      */
     async function measureSingleAttach(
-      proxyPort: number,
+      proxy: ThrottleProxy,
       label: string
-    ): Promise<{ timeMs: number; totalOutputBytes: number }> {
-      const conn = await connectAndHandshake(proxyPort, label)
+    ): Promise<AttachMeasurement> {
+      const conn = await connectAndHandshake(proxy.port, label)
       conn.messages.length = 0
 
       const attachMsg = JSON.stringify({
@@ -474,6 +498,7 @@ if (!tmuxAvailable || !localhostBindable) {
         rows: 40,
       })
 
+      const proxyBytesAtAttach = proxy.getTotalServerToClientBytes()
       const t0 = performance.now()
       conn.ws.send(attachMsg)
 
@@ -499,7 +524,7 @@ if (!tmuxAvailable || !localhostBindable) {
 
       conn.ws.close()
 
-      return { timeMs, totalOutputBytes }
+      return { timeMs, totalOutputBytes, proxyBytesAtAttach }
     }
 
     // ----------------------------------------------------------------
@@ -517,11 +542,12 @@ if (!tmuxAvailable || !localhostBindable) {
         const LATENCY_MS = 100
 
         const TRIALS = 3
-        const doubleResults: Array<{ timeMs: number; totalOutputBytes: number }> = []
-        const singleResults: Array<{ timeMs: number; totalOutputBytes: number }> = []
-        // Bytes the server pushed into each proxy. Counted before throttling,
-        // so unlike client-side totals they don't depend on how much has
-        // drained when the wait condition fires.
+        const doubleResults: AttachMeasurement[] = []
+        const singleResults: AttachMeasurement[] = []
+        // Bytes the server pushed into each proxy from the attach on. Counted
+        // before throttling, so unlike client-side totals they don't depend on
+        // how much has drained when the wait condition fires; and counted from
+        // the attach, so the connections' snapshot bursts are excluded.
         const doubleProxyBytes: number[] = []
         const singleProxyBytes: number[] = []
 
@@ -532,15 +558,17 @@ if (!tmuxAvailable || !localhostBindable) {
             // Wait for dedup window to expire
             await delay(600)
             const result = await measureDoubleAttach(
-              proxyA.port,
+              proxyA,
               `double-trial-${trial + 1}`
             )
             doubleResults.push(result)
-            doubleProxyBytes.push(proxyA.getTotalServerToClientBytes())
+            const attachBytes = proxyA.getTotalServerToClientBytes() - result.proxyBytesAtAttach
+            doubleProxyBytes.push(attachBytes)
             console.log(
               `  [trial ${trial + 1}] double-attach: ${Math.round(result.timeMs)}ms, ` +
                 `${result.totalOutputBytes} bytes, ` +
-                `proxy sent ${proxyA.getTotalServerToClientBytes()} bytes total`
+                `proxy sent ${attachBytes} bytes after attach ` +
+                `(${proxyA.getTotalServerToClientBytes()} total)`
             )
           } finally {
             proxyA.close()
@@ -551,23 +579,25 @@ if (!tmuxAvailable || !localhostBindable) {
           try {
             await delay(600)
             const result = await measureSingleAttach(
-              proxyB.port,
+              proxyB,
               `single-trial-${trial + 1}`
             )
             singleResults.push(result)
-            singleProxyBytes.push(proxyB.getTotalServerToClientBytes())
+            const attachBytes = proxyB.getTotalServerToClientBytes() - result.proxyBytesAtAttach
+            singleProxyBytes.push(attachBytes)
             console.log(
               `  [trial ${trial + 1}] single-attach: ${Math.round(result.timeMs)}ms, ` +
                 `${result.totalOutputBytes} bytes, ` +
-                `proxy sent ${proxyB.getTotalServerToClientBytes()} bytes total`
+                `proxy sent ${attachBytes} bytes after attach ` +
+                `(${proxyB.getTotalServerToClientBytes()} total)`
             )
           } finally {
             proxyB.close()
           }
         }
 
-        // Summarise with the mean, not the median. A trial is bimodal: it can
-        // land ~1.1s slower depending on how tmux and the throttle interleave,
+        // Summarise with the mean, not the median. A trial can still land
+        // ~1.1s slower depending on how tmux and the throttle interleave,
         // so the median of three is a single sample of a mixed distribution.
         // One arm slipping mode then moves the ratio by ~20% and fails a run
         // that still shows the benefit; averaging all three damps the slip.
@@ -681,6 +711,31 @@ async function waitUntil(
   throw new Error(`Timed out waiting for: ${description}`)
 }
 
+/**
+ * Resolves once `messages` has not grown for `quietMs`: the connection's
+ * initial snapshot burst has fully arrived through the throttle.
+ */
+async function waitForQuiet(
+  messages: unknown[],
+  quietMs: number,
+  timeoutMs: number,
+  description: string
+): Promise<void> {
+  const start = Date.now()
+  let count = messages.length
+  let lastChange = Date.now()
+  while (Date.now() - start < timeoutMs) {
+    await delay(50)
+    if (messages.length !== count) {
+      count = messages.length
+      lastChange = Date.now()
+    } else if (Date.now() - lastChange >= quietMs) {
+      return
+    }
+  }
+  throw new Error(`Timed out waiting for quiet: ${description}`)
+}
+
 function drainStream(
   stream: ReadableStream<Uint8Array> | number | null | undefined
 ) {
@@ -697,4 +752,17 @@ function drainStream(
 
 function delay(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+interface ThrottleProxy {
+  port: number
+  close: () => void
+  getTotalServerToClientBytes: () => number
+}
+
+interface AttachMeasurement {
+  timeMs: number
+  totalOutputBytes: number
+  /** The proxy's server->client byte count just before the attach was sent. */
+  proxyBytesAtAttach: number
 }
