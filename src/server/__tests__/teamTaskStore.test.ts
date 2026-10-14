@@ -134,6 +134,16 @@ describe('TaskStore', () => {
     expect(tasks.appendJournal('task-missing', human, 'lost')).toBeNull()
   })
 
+  test('system journal entries round-trip and never count as participants (member-release D4)', () => {
+    const task = create()
+    const entry = tasks.appendJournal(task.id, { kind: 'system', sessionId: null }, 'Released Dev (chat-dev-1): task done by human.')
+    expect(entry).toMatchObject({ author: { kind: 'system', sessionId: null } })
+    reopen()
+    expect(tasks.journal(task.id)).toEqual([expect.objectContaining({ id: entry!.id })])
+    // A system entry has no session, so it adds no participant id.
+    expect(tasks.list(TEAM)[0].participants).toEqual(['chat-lead'])
+  })
+
   test('status updates are recorded; listeners see every committed change', () => {
     const task = create()
     const seen: string[] = []

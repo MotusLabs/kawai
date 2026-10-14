@@ -13,6 +13,14 @@ export const TASK_STATUSES: readonly TaskStatus[] = ['open', 'active', 'blocked'
  */
 export type TaskActor = TeamActor
 
+/**
+ * A journal entry's author: a team actor, or kawai itself for actions the
+ * system takes on a task's behalf (member release). Journal-only — creators
+ * and revision authors stay `TaskActor`, so the system is never a sender or
+ * task creator (member-release design D4).
+ */
+export type JournalAuthor = TaskActor | { kind: 'system'; sessionId: null }
+
 export interface TeamTask {
   id: string
   teamId: string
@@ -42,7 +50,7 @@ export interface TaskRevision {
 
 export interface TaskJournalEntry {
   id: string
-  author: TaskActor
+  author: JournalAuthor
   text: string
   createdAt: string
 }

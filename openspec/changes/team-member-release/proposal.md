@@ -15,7 +15,7 @@ This is the first step of the UX doc's "Worktree release and reviewer staffing" 
 - **Release is recorded.** Each release appends a journal entry to the task, authored by kawai (a new `system` journal author), naming the session and why it was released. The freed capacity is re-evaluated at once, so waiting mail can spawn.
 - **Group opt-out.** A group sets `releaseOnTaskClose: false` to keep its spawned members after their tasks close (default `true`).
 - **Groups outside worktrees.** A group whose file sets `worktreeScoped: false` takes task mail on any idle member regardless of the task's worktree, and is never staffed by worktree spawning. The default stays `true` (today's behavior), so `devs` keeps worktree routing and spawning; a `lead` or `reviewers` group sets `false` so task mail and killed-sender reply fallbacks reach the member in the main checkout.
-- **Agent release tool (opt-in).** A new `kawai-team` tool, `release_member`, lets members of groups whose file sets `canReleaseMembers: true` release one spawned member of their team immediately. It archives only; it is refused, with the reason, for the caller itself, human-created sessions, sessions of another team, archived sessions, and members that are busy, awaiting an approval or answer, running a background worker, or holding mail. A release is journaled on the released member's task. Agents still cannot kill or restore sessions.
+- **Agent release tool (on by default).** A new `kawai-team` tool, `release_member`, lets members release one spawned member of their team immediately. It is permitted by default; a group opts out with `canReleaseMembers: false`. It archives only; it is refused, with the reason, for the caller itself, human-created sessions, sessions of another team, archived sessions, and members that are busy, awaiting an approval or answer, running a background worker, or holding mail. A release is journaled on the released member's task. Agents still cannot kill or restore sessions.
 
 Non-goals:
 - Killing sessions, removing worktrees, or deleting branches.
@@ -28,7 +28,7 @@ Non-goals:
 
 ### New Capabilities
 
-- `team-member-release`: when and how spawned team members are released (archived) — on task close and by an opted-in agent tool — the readiness conditions, durability across restart, cancellation on reopen, journaling, and the group settings `releaseOnTaskClose` and `canReleaseMembers`.
+- `team-member-release`: when and how spawned team members are released (archived) — on task close and by an opted-in agent tool — the readiness conditions, durability across restart, cancellation on reopen, journaling, and the group settings `releaseOnTaskClose` and `canReleaseMembers` (permitted by default).
 
 ### Modified Capabilities
 

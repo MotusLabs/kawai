@@ -8,6 +8,7 @@
 // TaskService before it calls in.
 import type { Database } from 'bun:sqlite'
 import type {
+  JournalAuthor,
   TaskActor,
   TaskJournalEntry,
   TaskRevision,
@@ -184,7 +185,7 @@ export class TaskStore {
     ) as Record<string, unknown>[]
     return rows.map(row => ({
       id: String(row.id),
-      author: actor(row.author_kind, row.author_session),
+      author: journalAuthor(row.author_kind, row.author_session),
       text: String(row.text),
       createdAt: String(row.created_at),
     }))
@@ -208,7 +209,7 @@ export class TaskStore {
     return committed ? this.changed(id) : null
   }
 
-  appendJournal(id: string, author: TaskActor, entry: string, now = nowIso()): TaskJournalEntry | null {
+  appendJournal(id: string, author: JournalAuthor, entry: string, now = nowIso()): TaskJournalEntry | null {
     if (!this.get(id)) return null
     const journalId = `note-${crypto.randomUUID()}`
     this.db.prepare(`INSERT INTO team_task_journal (id, task_id, author_kind, author_session, text, created_at)
@@ -218,8 +219,17 @@ export class TaskStore {
     return { id: journalId, author, text: entry, createdAt: now }
   }
 
-  setStatus(id: string, status: TaskStatus, now = nowIso()): TeamTask | null {
-    const changes = this.db.prepare('UPDATE team_tasks SET status = ?, updated_at = ? WHERE id = ?').run(status, now, id).changes
+  /**
+   * Set a task's status. `within` runs inside the same transaction as the
+   * update (member-release D1/D8): a transition into `done`/`cancelled`
+   * records pending releases and dead-letters waiting mail atomically with
+   * the new status, and a transition out cancels them.
+   */
+  setStatus(id: string, status: TaskStatus, within?: () => void, now = nowIso()): TeamTask | null {
+    const changes = this.db.transaction(() => {
+      if (within) within()
+      return this.db.prepare('UPDATE team_tasks SET status = ?, updated_at = ? WHERE id = ?').run(status, now, id).changes
+    })()
     return changes === 1 ? this.changed(id) : null
   }
 
@@ -279,6 +289,11 @@ function text(value: unknown): string | null {
 
 function actor(kind: unknown, session: unknown): TaskActor {
   return kind === 'agent' && typeof session === 'string' ? { kind: 'agent', sessionId: session } : { kind: 'human', sessionId: null }
+}
+
+/** A journal row's author: like `actor`, but `system` stays itself (D4). */
+function journalAuthor(kind: unknown, session: unknown): JournalAuthor {
+  return kind === 'system' ? { kind: 'system', sessionId: null } : actor(kind, session)
 }
 
 function mapTask(row: Record<string, unknown>): TeamTask {

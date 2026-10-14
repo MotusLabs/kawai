@@ -514,6 +514,35 @@ export class ChatSessionManager {
     return this.backgroundTaskRows.get(sessionId) ?? []
   }
 
+  /**
+   * Whether the session has a live background worker (member-release D3):
+   * `idle` alone is only `status === 'waiting'`, and a worker keeps running
+   * — and writing to the worktree — after the turn that started it ends.
+   */
+  hasLiveWorkers(sessionId: string): boolean {
+    return this.getWorkers(sessionId).some(worker => worker.live)
+  }
+
+  /**
+   * Whether the session has a running background task (member-release D3):
+   * a `run_in_background` shell or Monitor keeps writing to the worktree
+   * after its turn ends, and archiving would end it. Process end settles
+   * every running entry as stopped, so a dead agent never holds this.
+   */
+  hasRunningBackgroundTasks(sessionId: string): boolean {
+    return this.getBackgroundTasks(sessionId).some(task => task.status === 'running')
+  }
+
+  /**
+   * A session's worker or background-task roster changed. A pending
+   * release's readiness includes both (member-release D3): a change on a
+   * pending member re-runs the dispatch cycle (D2), since no status change
+   * follows a worker or task that ends while the session is already idle.
+   */
+  private rosterChanged(sessionId: string): void {
+    if (this.teamMail.releases.pendingFor(sessionId)) this.dispatcher.notify()
+  }
+
   /** Current activity with a live-computed elapsed time, or null when idle. */
   private getActivity(sessionId: string): ChatActivity | null {
     const entry = this.activities.get(sessionId)
@@ -868,6 +897,9 @@ export class ChatSessionManager {
       prepare: async id => { this.captureHistory(id); const driver = await this.ensureDriver(id); if (!driver) throw new Error('Recipient disappeared'); driver.start() },
       restore: id => { const result = this.restore(id); if (!result.ok) throw new Error(result.error) },
       watchReceipt: id => this.watchSessionTitle(id),
+      archive: id => this.archive(id),
+      hasLiveWorkers: id => this.hasLiveWorkers(id),
+      hasRunningBackgroundTasks: id => this.hasRunningBackgroundTasks(id),
       spawn: request => this.spawnMember(request),
       caps: new TeamCaps({
         ...(options.profileCatalogHome ? { homeDir: options.profileCatalogHome } : {}),
@@ -1052,6 +1084,10 @@ export class ChatSessionManager {
     })
     if (!result.ok) return result
     await this.teams.track(result.session.id, result.session.projectPath)
+    // The task closed while this spawn was in flight (member-release D1):
+    // its mail was dead-lettered, so the member starts with no turn — mark
+    // it and it is released once it settles.
+    this.teamMail.markSpawnedForClosedTask(result.session.id, request.taskId)
     return { ok: true, sessionId: result.session.id }
   }
 
@@ -1271,6 +1307,9 @@ export class ChatSessionManager {
       archivedAt: new Date().toISOString(),
       status: 'waiting',
     })
+    // Archived by any path: a pending release is settled by the archive
+    // itself (member-release D1); a later restore starts clean.
+    this.teamMail.cancelPendingRelease(sessionId)
     return { ok: true }
   }
 
@@ -1285,6 +1324,9 @@ export class ChatSessionManager {
     }
     if (record.archivedAt == null) return { ok: true }
     this.applyPatch(sessionId, { archivedAt: null })
+    // A restored member stays live: it is never released again for the same
+    // close (member-release D1).
+    this.teamMail.cancelPendingRelease(sessionId)
     return { ok: true }
   }
 
@@ -1392,6 +1434,8 @@ export class ChatSessionManager {
     this.driverPromises.delete(sessionId)
     this.releaseTitleWatch(sessionId)
     this.cancelCwdRefresh(sessionId)
+    // A killed session never releases; its pending row is moot (member-release D1).
+    this.teamMail.cancelPendingRelease(sessionId)
     this.records.delete(sessionId)
     this.mailbox.store.deadLetterDirectTo(sessionId, 'killed-recipient')
     this.dispatcher.notify()
@@ -1723,7 +1767,9 @@ export class ChatSessionManager {
       const queryFactory = await this.resolveQueryFactory()
       // The team must be known before the first spawn reads its prompt.
       await this.teams.track(record.sessionId, this.records.get(record.sessionId)?.projectPath ?? record.projectPath)
-      const teamMcpServer = await createMailboxServer(this.mailbox, record.sessionId, this.tasks, this.strategies, this.management)
+      const teamMcpServer = await createMailboxServer(this.mailbox, record.sessionId, {
+        tasks: this.tasks, strategies: this.strategies, releases: this.teamMail.releases, management: this.management,
+      })
       const driver = new ChatSessionDriver({
         sessionId: record.sessionId,
         projectPath: record.projectPath,
@@ -2232,6 +2278,7 @@ export class ChatSessionManager {
     if (!this.records.has(sessionId)) return
     this.backgroundTaskRows.set(sessionId, tasks)
     this.options.onBackgroundTasks?.(sessionId, tasks)
+    this.rosterChanged(sessionId)
     const store = this.options.taskStore
     const driver = this.drivers.get(sessionId)
     if (!driver) return
@@ -2253,6 +2300,7 @@ export class ChatSessionManager {
     if (!this.records.has(sessionId)) return
     this.workerRows.set(sessionId, workers)
     this.options.onWorkers?.(sessionId, workers)
+    this.rosterChanged(sessionId)
     const store = this.options.workerStore
     if (store) {
       store.write(sessionId, workers).catch((error) => {

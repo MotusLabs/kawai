@@ -3585,6 +3585,27 @@ describe('ChatSessionManager worker sidecar', () => {
     expect(recovered).toEqual([])
   })
 
+  test('a worker roster change on a pending release re-runs the dispatch cycle (member-release D2/D3)', async () => {
+    process.env.ANTHROPIC_API_KEY = 'test-key'
+    const harness = await createHarness(db, anyDirectory)
+    const created = harness.manager.createSession({ projectPath: '/tmp/proj' })
+    if (!created.ok) throw new Error(created.error)
+    const id = created.session.id
+    await harness.manager.send(id, 'research')
+    const handle = harness.handles[0]!
+    handle.push(initMessage('sdk-workers-release'))
+    await spawnWorker(handle, 'toolu_rel', 'task_rel', 'Map the workspace')
+    expect(harness.manager.hasLiveWorkers(id)).toBe(true)
+    db.db.prepare(`INSERT INTO team_member_releases (session_id, task_id, team_id, reason, requested_by_kind, requested_at)
+      VALUES (?, 'task-1', 'team-1', 'task done', 'human', ?)`).run(id, new Date().toISOString())
+    let notified = 0
+    harness.manager.dispatcher.notify = () => { notified += 1 }
+    await settleWorker(handle, 'toolu_rel', 'task_rel', 'completed', 'Mapped')
+    expect(harness.manager.hasLiveWorkers(id)).toBe(false)
+    expect(notified).toBeGreaterThan(0)
+    harness.manager.shutdown()
+  })
+
   test('kill removes the sidecar with the session', async () => {
     process.env.ANTHROPIC_API_KEY = 'test-key'
     const store = new ChatWorkerStore({ dir: sidecarDir })
@@ -3997,6 +4018,33 @@ describe('ChatSessionManager background-task roster (background tasks D2)', () =
     expect(manager.getSnapshot(id)!.backgroundTasks).toMatchObject([
       { taskId: 'b1', status: 'completed' },
     ])
+  })
+
+  test('a settling task on a pending release re-runs the dispatch cycle (member-release D2/D3)', async () => {
+    const { manager, handles } = await createHarness(db)
+    const created = manager.createSession({ projectPath: '/tmp/proj' })
+    if (!created.ok) throw new Error('create failed')
+    const id = created.session.id
+    await manager.send(id, 'run things')
+    const handle = handles[0]!
+    handle.push({
+      type: 'system', subtype: 'task_started', task_id: 'b9', tool_use_id: 'call_9',
+      task_type: 'local_bash', description: 'dev server', is_backgrounded: true, uuid: 'u', session_id: 's',
+    } as unknown as SDKMessage)
+    await flush()
+    expect(manager.hasRunningBackgroundTasks(id)).toBe(true)
+    db.db.prepare(`INSERT INTO team_member_releases (session_id, task_id, team_id, reason, requested_by_kind, requested_at)
+      VALUES (?, 'task-1', 'team-1', 'task done', 'human', ?)`).run(id, new Date().toISOString())
+    let notified = 0
+    manager.dispatcher.notify = () => { notified += 1 }
+    handle.push({
+      type: 'system', subtype: 'task_notification', task_id: 'b9', tool_use_id: 'call_9',
+      status: 'completed', summary: 'done (exit code 0)', uuid: 'u2', session_id: 's',
+    } as unknown as SDKMessage)
+    await flush()
+    expect(manager.hasRunningBackgroundTasks(id)).toBe(false)
+    expect(notified).toBeGreaterThan(0)
+    manager.shutdown()
   })
 
   test('a turn ending while a shell is live leaves the session waiting (D7)', async () => {

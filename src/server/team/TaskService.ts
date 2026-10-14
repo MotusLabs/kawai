@@ -48,6 +48,11 @@ export class TaskService {
     getSession: (id: string) => ChatSessionRecord | null | undefined
     homeDir?: string
     worktrees?: TeamWorktrees
+    /**
+     * A status transition into or out of `done`/`cancelled` (member-release
+     * D1/D8): resolved first, then run inside the status transaction.
+     */
+    onStatusTransition?: (task: TeamTask, status: TaskStatus, actor: TaskActor) => Promise<() => void>
   }) {
     this.worktrees = options.worktrees ?? new TeamWorktrees()
   }
@@ -120,7 +125,12 @@ export class TaskService {
       }
     }
     if (note?.trim()) this.store.appendJournal(taskId, actor, note.trim())
-    return this.store.setStatus(taskId, status)!
+    const closedBefore = task.status === 'done' || task.status === 'cancelled'
+    const closedAfter = status === 'done' || status === 'cancelled'
+    const within = this.options.onStatusTransition && task.status !== status && (closedBefore !== closedAfter)
+      ? await this.options.onStatusTransition(task, status, actor)
+      : undefined
+    return this.store.setStatus(taskId, status, within)!
   }
 
   /** The caller's team, actor identity, and current creation right. */

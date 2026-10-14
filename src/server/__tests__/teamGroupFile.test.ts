@@ -33,6 +33,9 @@ describe('parseGroupFile', () => {
         description: 'Owns system design',
         hopLimit: 8,
         canCreateTasks: false,
+        releaseOnTaskClose: true,
+        worktreeScoped: true,
+        canReleaseMembers: true,
         max: 1,
         approval: 'manual',
         ...ROUTING_DEFAULTS,
@@ -44,7 +47,7 @@ describe('parseGroupFile', () => {
   test('a body-only file defaults the label to the id', () => {
     expect(parseGroupFile('qa', 'Test everything.\n')).toEqual({
       ok: true,
-      group: { id: 'qa', label: 'qa', description: '', canCreateTasks: false, max: 1, approval: 'manual', ...ROUTING_DEFAULTS, prompt: 'Test everything.' },
+      group: { id: 'qa', label: 'qa', description: '', canCreateTasks: false, releaseOnTaskClose: true, worktreeScoped: true, canReleaseMembers: true, max: 1, approval: 'manual', ...ROUTING_DEFAULTS, prompt: 'Test everything.' },
     })
   })
 
@@ -101,8 +104,23 @@ describe('parseGroupFile', () => {
   test('task settings default to no creation right, one member, default profile, manual approval', () => {
     const parsed = parseGroupFile('devs', '---\ncanCreateTasks: false\n---\nBuild.')
     expect(parsed.ok && parsed.group).toEqual({
-      id: 'devs', label: 'devs', description: '', canCreateTasks: false, max: 1, approval: 'manual', ...ROUTING_DEFAULTS, prompt: 'Build.',
+      id: 'devs', label: 'devs', description: '', canCreateTasks: false, releaseOnTaskClose: true, worktreeScoped: true, canReleaseMembers: true, max: 1, approval: 'manual', ...ROUTING_DEFAULTS, prompt: 'Build.',
     })
+  })
+
+  test('release settings read explicit opt-outs', () => {
+    const parsed = parseGroupFile('qa', '---\nreleaseOnTaskClose: false\nworktreeScoped: false\ncanReleaseMembers: false\n---\nCheck.')
+    expect(parsed.ok && parsed.group).toMatchObject({
+      releaseOnTaskClose: false, worktreeScoped: false, canReleaseMembers: false,
+    })
+  })
+
+  test('release settings reject values other than true or false', () => {
+    for (const key of ['releaseOnTaskClose', 'worktreeScoped', 'canReleaseMembers']) {
+      const parsed = parseGroupFile('x', `---\n${key}: maybe\n---\nBody.`)
+      expect(parsed.ok).toBe(false)
+      if (!parsed.ok) expect(parsed.error).toContain(`${key} must be true or false`)
+    }
   })
 
   test('profiles list: preference order, no caps, max stays 1', () => {

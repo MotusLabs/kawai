@@ -3,7 +3,8 @@ import type { GroupDefinition } from '../team/groupFile'
 import { buildTeamPrompt } from '../team/teamPrompt'
 
 const settings: Omit<GroupDefinition, 'id' | 'label' | 'description' | 'prompt'> = {
-  canCreateTasks: false, canManageMailbox: false, max: 1, approval: 'manual', profiles: [], strategy: 'first-available',
+  canCreateTasks: false, canManageMailbox: false, releaseOnTaskClose: true, worktreeScoped: true, canReleaseMembers: true,
+  max: 1, approval: 'manual', profiles: [], strategy: 'first-available',
   onLimit: { parkIfResetWithinMs: 3 * 3_600_000, otherwise: 'forward' }, warnings: [],
 }
 const qa: GroupDefinition = { id: 'qa', label: 'QA', description: 'Tests releases', ...settings, prompt: 'You test everything.' }
@@ -102,6 +103,19 @@ describe('buildTeamPrompt strategy note (product-strategy 3.3)', () => {
         if (/\bapprove/i.test(line)) expect(line).toMatch(/only the human|human reviews|no tool|grants nothing|never changes/i)
       }
     }
+  })
+})
+
+describe('release_member note', () => {
+  test('every permitted group is told about the tool; an opted-out group is not', () => {
+    const permitted = buildTeamPrompt({ sessionId: 'chat-r1', group: qa, groups: [devs, qa] })
+    expect(permitted).toContain('`mcp__kawai-team__release_member`')
+    expect(permitted).toContain('archived — never killed')
+    // Default is permitted (member-release D7): a group without the key hears too.
+    const bare = buildTeamPrompt({ sessionId: 'chat-r2', group: { ...qa, canReleaseMembers: true }, groups: [] })
+    expect(bare).toContain('`mcp__kawai-team__release_member`')
+    const optedOut = buildTeamPrompt({ sessionId: 'chat-r3', group: { ...qa, canReleaseMembers: false }, groups: [] })
+    expect(optedOut).not.toContain('release_member')
   })
 })
 

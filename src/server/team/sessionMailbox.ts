@@ -21,6 +21,7 @@ import { MailDispatcher, type MailRecipient, type PassOutcome } from './dispatch
 import { reconcileMailbox, transcriptReceipt } from './receipt'
 import { TaskStore } from './taskStore'
 import { TaskService } from './TaskService'
+import { MemberRelease, type ArchiveResult } from './memberRelease'
 import { MailboxManagement } from './mailboxManagement'
 import { AssignmentStore } from './assignmentStore'
 import { AssignmentService } from './AssignmentService'
@@ -49,11 +50,14 @@ export class SessionMailbox {
   readonly rules: RuleRegistry
   readonly router: ProfileRouter
   readonly outcomes: LimitOutcomes
+  /** Pending member releases (member-release); the release tool and task-close hook. */
+  readonly releases: MemberRelease
   /** Per-team waiting reasons (D3): in-memory, rebuilt by the first pass. */
   private readonly reasons = new ReasonLedger()
   private readonly catalogs = new Map<string, GroupCatalog>()
   private releaseSubscription?: () => void
   private releaseLimitSubscription?: () => void
+  private releaseTaskSubscription?: () => void
 
   constructor(db: Database, private readonly options: {
     teams: SessionTeams
@@ -66,6 +70,12 @@ export class SessionMailbox {
     prepare: (id: string) => Promise<void>
     restore: (id: string) => void
     watchReceipt: (id: string) => void
+    /** Archive a session the safe way (member-release D2: release = archive). */
+    archive: (id: string) => ArchiveResult
+    /** Whether the session has a live background worker (member-release D3). */
+    hasLiveWorkers: (id: string) => boolean
+    /** Whether the session has a running background task (member-release D3). */
+    hasRunningBackgroundTasks: (id: string) => boolean
     /** The session received mail under this task (its header shows it). */
     associateTask?: (id: string, taskId: string) => void
     /** Create a group member in a worktree for staffing (team-tasks D4). */
@@ -104,7 +114,25 @@ export class SessionMailbox {
     // and feeds the task summaries beside the derived participants.
     const assignments = new AssignmentStore(db, store)
     const taskStore = new TaskStore(db, store, assignments)
-    this.tasks = new TaskService(taskStore, { getSession: options.getRecord, homeDir: options.homeDir })
+    // Pending member releases (member-release D1/D2): durable rows the close
+    // writes, evaluated inside the dispatch cycle before routing.
+    this.releases = new MemberRelease(db, {
+      store, tasks: taskStore,
+      records: options.records,
+      getRecord: options.getRecord,
+      teamOf: id => options.teams.teamOf(id),
+      definition: (teamId, groupId, originPath) => this.groupDefinition(teamId, groupId, originPath),
+      cachedDefinition: (teamId, groupId) => this.catalogs.get(teamId)?.groups.get(groupId),
+      recipient: id => this.recipient(id),
+      hasLiveWorkers: options.hasLiveWorkers,
+      hasRunningBackgroundTasks: options.hasRunningBackgroundTasks,
+      archive: options.archive,
+      notify: () => this.dispatcher.notify(),
+    })
+    this.tasks = new TaskService(taskStore, {
+      getSession: options.getRecord, homeDir: options.homeDir,
+      onStatusTransition: (task, status, actor) => this.releases.transitionHook(task, status, actor),
+    })
     this.management = new MailboxManagement(store, {
       getSession: options.getRecord, tasks: this.tasks, homeDir: options.homeDir,
       waitingFor: teamId => this.waitingFor(teamId), ...(options.now ? { now: options.now } : {}),
@@ -139,7 +167,13 @@ export class SessionMailbox {
       ...(options.homeDir ? { homeDir: options.homeDir } : {}),
       cooldownUntil: profileId => this.limits.cooldownUntil(profileId),
     })
-    const targetWorktree = (message: TeamMessage) => (message.taskId ? taskStore.get(message.taskId)?.worktree ?? null : null)
+    // Worktree scoping (member-release D5): an unscoped group's task mail goes
+    // to any member and never spawns; a missing definition stays scoped.
+    const targetWorktree = (message: TeamMessage): string | null => {
+      const worktree = message.taskId ? taskStore.get(message.taskId)?.worktree ?? null : null
+      if (worktree === null || message.toKind !== 'group' || message.toId === null) return worktree
+      return this.catalogs.get(message.teamId)?.groups.get(message.toId)?.worktreeScoped === false ? null : worktree
+    }
     this.router = new ProfileRouter({
       // Read through a live team member's cached catalog (one read per team
       // per cycle); with no live member, resolve from the message's origin.
@@ -175,7 +209,15 @@ export class SessionMailbox {
       onError: options.onError,
     })
     this.dispatcher = new MailDispatcher(this.mailbox.store, {
-      beginCycle: () => { this.catalogs.clear(); this.outcomes.processNotes() },
+      // Cycle start (member-release D5): clear the catalog cache, keep the
+      // limit-recovery notes flowing, seed this cycle's group definitions,
+      // then run the release pass — all awaited before routing.
+      beginCycle: async () => {
+        this.catalogs.clear()
+        this.outcomes.processNotes()
+        await this.loadCycleDefinitions()
+        await this.releases.evaluate()
+      },
       claimed: (message, id) => this.outcomes.claimed(message, id),
       delivered: (id, message) => this.outcomes.delivered(id, message),
       // Recovery notes and failed-spawn backoffs share the minimum-wins timer (D5).
@@ -327,6 +369,47 @@ export class SessionMailbox {
     return undefined
   }
 
+  /**
+   * A group's definition from the current file (member-release D5): a live
+   * team member's stamp-validated catalog first, else the mail's origin —
+   * so a group with no live member still resolves for the close transition
+   * and the release tool.
+   */
+  private async groupDefinition(teamId: string, groupId: string, originPath?: string): Promise<GroupDefinition | undefined> {
+    for (const record of this.options.records()) {
+      if (this.options.teams.teamOf(record.sessionId)?.teamId !== teamId) continue
+      return this.options.teams.catalogOf(record.sessionId, this.catalogs)?.groups.get(groupId)
+    }
+    if (!originPath) return undefined
+    const { team, catalog } = await loadTeamGroups(originPath, this.options.homeDir)
+    return team.teamId === teamId ? catalog.groups.get(groupId) : undefined
+  }
+
+  /**
+   * Seed this cycle's catalogs (member-release D5): every team with waiting
+   * group mail or a pending release gets its definitions resolved before
+   * `targetWorktree`, release evaluation, or routing reads them.
+   */
+  private async loadCycleDefinitions(): Promise<void> {
+    const teams = new Set<string>()
+    const origins = new Map<string, string>()
+    for (const message of this.mailbox.store.waitingRows()) {
+      if (message.toKind !== 'group' || message.toId === null) continue
+      teams.add(message.teamId)
+      origins.set(message.teamId, message.originPath)
+    }
+    for (const row of this.releases.pending()) teams.add(row.teamId)
+    for (const teamId of teams) {
+      if (this.catalogs.has(teamId)) continue
+      const member = [...this.options.records()].find(record => this.options.teams.teamOf(record.sessionId)?.teamId === teamId)
+      if (member) { this.options.teams.catalogOf(member.sessionId, this.catalogs); continue }
+      const origin = origins.get(teamId)
+      if (!origin) continue
+      const { team, catalog } = await loadTeamGroups(origin, this.options.homeDir)
+      if (team.teamId === teamId) this.catalogs.set(teamId, catalog)
+    }
+  }
+
   /** A tool call in a session's transcript (limit progress). */
   toolCall(sessionId: string, tool: string, input: unknown) {
     this.outcomes.toolCall(sessionId, tool, input)
@@ -359,6 +442,9 @@ export class SessionMailbox {
       this.dispatcher.notify()
     })
     this.releaseLimitSubscription = this.limits.subscribe(() => this.dispatcher.notify())
+    // A task close marks pending releases and dead-letters mail (D2): the
+    // next cycle evaluates them.
+    this.releaseTaskSubscription = this.tasks.store.subscribe(() => this.dispatcher.notify())
     this.dispatcher.release()
     this.dispatcher.notify()
     // Rules load once at start; afterwards only an explicit reload changes them.
@@ -379,5 +465,15 @@ export class SessionMailbox {
     }
   }
 
-  close() { this.dispatcher.close(); this.releaseSubscription?.(); this.releaseLimitSubscription?.(); this.rules.close() }
+  /** A session was archived, killed, or restored: its pending release is moot (D1). */
+  cancelPendingRelease(id: string) {
+    this.releases.cancel(id)
+  }
+
+  /** A spawned session was created for an already-closed task (D1): mark it pending release. */
+  markSpawnedForClosedTask(id: string, taskId: string) {
+    void this.releases.markSpawnedForClosedTask(id, taskId).catch(this.options.onError)
+  }
+
+  close() { this.dispatcher.close(); this.releaseSubscription?.(); this.releaseLimitSubscription?.(); this.releaseTaskSubscription?.(); this.rules.close() }
 }

@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Frees team capacity held by spawned members whose work is over: kawai archives (never kills) a task's spawned members once the task closes and they have settled, and opted-in agents can release a settled spawned member on request.
+Frees team capacity held by spawned members whose work is over: kawai archives (never kills) a task's spawned members once the task closes and they have settled, and agents can release a settled spawned member on request unless their group opts out.
 
 ## ADDED Requirements
 
@@ -44,7 +44,7 @@ When a task is `done` or `cancelled`, its undelivered group mail (queued, awaiti
 - **THEN** the note is dead-lettered `task-closed`, no session is spawned, and it stays in the Mailbox, retryable once the task is reopened
 
 ### Requirement: Release waits until the member is ready
-A member SHALL be ready for release only when it is idle in the sense mail delivery uses, has no pending approval or question, has no live background worker, holds no claimed or parked mail, and has no due direct mail queued for it. Every release path SHALL use this one definition. A pending member that is not ready SHALL be released once it becomes ready, without further action.
+A member SHALL be ready for release only when it is idle in the sense mail delivery uses, has no pending approval or question, has no live background worker or running background task, holds no claimed or parked mail, and has no due direct mail queued for it. Every release path SHALL use this one definition. A pending member that is not ready SHALL be released once it becomes ready, without further action.
 
 #### Scenario: Busy dev released after its turn
 - **WHEN** a task is marked done while its dev is mid-turn writing a final report
@@ -57,6 +57,10 @@ A member SHALL be ready for release only when it is idle in the sense mail deliv
 #### Scenario: Live background worker holds the release
 - **WHEN** a task is done while its dev is idle but a background worker it started is still running
 - **THEN** the dev is not archived until the worker stops
+
+#### Scenario: Running background task holds the release
+- **WHEN** a task is done while its dev is idle but a background shell it started with `run_in_background` is still running
+- **THEN** the dev is not archived until the background task settles, and is then archived without further action
 
 #### Scenario: Queued direct mail is delivered first
 - **WHEN** the lead closes a task and then sends its dev a closing direct message
@@ -102,10 +106,10 @@ A group file SHALL accept `releaseOnTaskClose: true|false` (default `true`). Spa
 - **THEN** the `qa` member stays live
 
 ### Requirement: Permitted agents can release spawned members
-A group file SHALL accept `canReleaseMembers: true|false` (default `false`). Members of a permitted group SHALL be able to release a spawned member of their own team with a `release_member` tool, giving a session id and an optional reason; it archives at once. The tool SHALL be allowed without an approval card.
+A group file SHALL accept `canReleaseMembers: true|false` (default `true`). Members of a group that has not opted out SHALL be able to release a spawned member of their own team with a `release_member` tool, giving a session id and an optional reason; it archives at once. The tool SHALL be allowed without an approval card.
 
 #### Scenario: Lead releases a finished dev
-- **WHEN** a member of the `lead` group, which sets `canReleaseMembers: true`, releases an idle spawned dev with reason "merged"
+- **WHEN** a member of the `lead` group, which does not opt out, releases an idle spawned dev with reason "merged"
 - **THEN** the dev is archived and its task journal records the release by that lead with reason "merged"
 
 #### Scenario: Settled member of an open task
@@ -113,8 +117,8 @@ A group file SHALL accept `canReleaseMembers: true|false` (default `false`). Mem
 - **THEN** the dev is archived, the task stays `active`, and its delivered instruction is left as it is
 
 #### Scenario: Group without the right
-- **WHEN** a `devs` member calls `release_member`
-- **THEN** the tool returns an error saying its group may not release members, and nothing is archived
+- **WHEN** a `devs` member, whose group file sets `canReleaseMembers: false`, calls `release_member`
+- **THEN** the tool returns an error saying its group has opted out of releasing members, and nothing is archived
 
 ### Requirement: Agent releases are refused unless safe
 `release_member` SHALL refuse, with a reason and without archiving, when the target is the caller itself, a human-created session, a session of another team, an archived or unknown session, or a member that is not ready for release. Agents SHALL NOT be able to kill or restore sessions.
@@ -126,6 +130,10 @@ A group file SHALL accept `canReleaseMembers: true|false` (default `false`). Mem
 #### Scenario: Member with a live background worker refused
 - **WHEN** the lead releases an idle dev whose background worker is still running
 - **THEN** the tool returns an error naming the live background worker, and nothing is archived
+
+#### Scenario: Member with a running background task refused
+- **WHEN** the lead releases an idle dev whose background shell is still running
+- **THEN** the tool returns an error saying the dev has a running background task, and nothing is archived
 
 #### Scenario: Human-created session refused
 - **WHEN** the lead releases the human-created reviewer session
