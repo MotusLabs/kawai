@@ -439,6 +439,8 @@ export type ServerMessage =
       directory: SessionDirectoryEntry[]
       /** The team's tasks, so the composer can attach one without the Tasks panel. */
       tasks: { id: string; title: string }[]
+      /** Whole-thread message counts for the threads on this page (team-workspace-pages D7). */
+      threadSizes: Record<string, number>
     }
   | { type: 'team-messages'; teamPath: string; teamId: string; messages: TeamMessage[] }
   | {

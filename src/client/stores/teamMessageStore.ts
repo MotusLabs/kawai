@@ -74,11 +74,19 @@ const update = (state: MessageState, teamKey: string, patch: Partial<MessageView
  * creation order, a row that has left the filter is dropped. Order of the
  * rows already on the page is never disturbed.
  */
-function mergePush(list: TeamMessage[], incoming: TeamMessage[], filters: MessageQueryFilters): TeamMessage[] {
+function mergePush(
+  list: TeamMessage[],
+  incoming: TeamMessage[],
+  filters: MessageQueryFilters,
+  directory: SessionDirectoryEntry[],
+): TeamMessage[] {
   const next = [...list]
+  // A text search also matches participant names: the team directory holds
+  // every recorded session's name, the same table the server's search reads.
+  const labelOf = (sessionId: string) => directory.find(entry => entry.sessionId === sessionId)?.name
   for (const row of incoming) {
     const index = next.findIndex(known => known.id === row.id)
-    if (!matchesMessageFilters(filters, row)) {
+    if (!matchesMessageFilters(filters, row, labelOf)) {
       if (index >= 0) next.splice(index, 1)
       continue
     }
@@ -141,7 +149,7 @@ export const useTeamMessageStore = create<MessageState>(set => ({
     const view = state.views[message.teamPath]
     if (!view?.open) return state
     return update(state, message.teamPath, {
-      messages: mergePush(view.messages, message.messages, view.filters),
+      messages: mergePush(view.messages, message.messages, view.filters, view.directory),
     })
   }),
   applyThread: message => set(state => {

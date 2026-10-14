@@ -13,8 +13,10 @@ import type {
   MessageQueryFilters,
   ThreadEntry,
 } from '../../shared/team'
+import { messageSearchText } from '../../shared/team'
 import { MessageEventLog } from './messageEvents'
 import { mapRow } from './messageRow'
+import { ensureSessionDirectory } from './sessionDirectory'
 
 export type { MessageCursor, MessagePage, MessageQueryFilters, ThreadEntry }
 
@@ -28,6 +30,8 @@ export class MessageQuery {
 
   constructor(private readonly db: Database) {
     this.events = new MessageEventLog(db)
+    // Text search joins participants' recorded names (team-workspace-pages D7).
+    ensureSessionDirectory(db)
   }
 
   /**
@@ -69,7 +73,24 @@ export class MessageQuery {
       nextCursor: rows.length > limit && last
         ? { createdAt: String(last.created_at), rowid: Number(last.rowid) }
         : null,
+      threadSizes: this.threadSizes(teamId, messages.map(message => message.threadId)),
     }
+  }
+
+  /** Whole-thread message counts, unfiltered, for the threads named. */
+  private threadSizes(teamId: string, threadIds: string[]): Record<string, number> {
+    const unique = [...new Set(threadIds)]
+    if (unique.length === 0) return {}
+    const params: Record<string, string> = { $teamId: teamId }
+    const names = unique.map((threadId, index) => {
+      params[`$thread${index}`] = threadId
+      return `$thread${index}`
+    })
+    const rows = this.db.prepare(
+      `SELECT thread_id, COUNT(*) AS size FROM team_messages
+       WHERE team_id = $teamId AND thread_id IN (${names.join(', ')}) GROUP BY thread_id`
+    ).all(params) as { thread_id: string; size: number }[]
+    return Object.fromEntries(rows.map(row => [row.thread_id, Number(row.size)]))
   }
 
   /**
@@ -132,6 +153,32 @@ export class MessageQuery {
     if (filters.human === false) {
       where.push({ clause: '(from_kind = \'agent\' AND to_kind <> \'human\')', params: {} })
     }
+    const text = messageSearchText(filters)
+    if (text !== null) where.push(textClause(text))
     return where
   }
+}
+
+/**
+ * The text search (team-workspace-pages D7), matching `matchesMessageText`:
+ * a case-insensitive (ASCII, as SQLite's `LIKE`) substring of the body, a
+ * group id on either side, a participant's recorded name in the team's
+ * session directory, or `Human` for mail to or from the human. `%`, `_`,
+ * and the escape character in the text match literally.
+ */
+function textClause(text: string): SqlFragment {
+  const pattern = `%${text.replace(/[\\%_]/g, character => `\\${character}`)}%`
+  const like = (column: string) => `${column} LIKE $text ESCAPE '\\'`
+  const human = 'human'.includes(text.replace(/[A-Z]/g, letter => letter.toLowerCase()))
+  const clauses = [
+    like('body'),
+    like('from_group'),
+    `(to_kind = 'group' AND ${like('to_id')})`,
+    `EXISTS (SELECT 1 FROM team_session_directory directory
+      WHERE directory.team_id = team_messages.team_id
+        AND directory.session_id IN (team_messages.from_session, team_messages.to_id, team_messages.claimed_by)
+        AND ${like('directory.name')})`,
+    ...(human ? [`(from_kind = 'human' OR to_kind = 'human')`] : []),
+  ]
+  return { clause: `(${clauses.join(' OR ')})`, params: { $text: pattern } }
 }

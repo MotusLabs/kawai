@@ -177,7 +177,7 @@ export class MessageConnections {
   ) {
     connection.send({
       type: 'team-messages-snapshot', teamPath, teamId: subscription.teamId,
-      filters: subscription.filters, messages: page.messages, nextCursor: page.nextCursor,
+      filters: subscription.filters, messages: page.messages, nextCursor: page.nextCursor, threadSizes: page.threadSizes,
       directory: this.manager.directory.list(subscription.teamId),
       tasks: this.manager.tasks.store.list(subscription.teamId).map(task => ({ id: task.id, title: task.title })),
     })

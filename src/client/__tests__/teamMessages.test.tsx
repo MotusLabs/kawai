@@ -42,7 +42,7 @@ const snapshot = (
   } = {},
 ): Extract<ServerMessage, { type: 'team-messages-snapshot' }> => ({
   type: 'team-messages-snapshot', teamPath: 'dev', teamId: 'team', filters: extra.filters ?? {},
-  messages, nextCursor: extra.nextCursor ?? null, directory: extra.directory ?? [], tasks: extra.tasks ?? [],
+  messages, nextCursor: extra.nextCursor ?? null, directory: extra.directory ?? [], tasks: extra.tasks ?? [], threadSizes: {},
 })
 const push = (messages: TeamMessage[]): Extract<ServerMessage, { type: 'team-messages' }> =>
   ({ type: 'team-messages', teamPath: 'dev', teamId: 'team', messages })
@@ -99,6 +99,21 @@ test('store: snapshots replace, a cursor page appends, pushes merge and drop row
   store.applyPush(push([message('late')]))
   store.applySnapshot(snapshot([message('late')]))
   expect(useTeamMessageStore.getState().views.dev).toBeUndefined()
+})
+
+test('store: under a text search, a push is kept when its body or a directory name matches, and dropped otherwise', () => {
+  const store = useTeamMessageStore.getState()
+  act(() => { store.open('dev', { text: 'ui dev' }) })
+  store.applySnapshot(snapshot([], {
+    filters: { text: 'ui dev' },
+    directory: [{ sessionId: 'dev-1', name: 'Strategy UI dev', group: 'devs' }],
+  }))
+  store.applyPush(push([
+    message('named', { createdAt: at(1), toKind: 'session', toId: 'dev-1', fromGroup: null }),
+    message('body', { createdAt: at(2), body: 'ask the UI dev' }),
+    message('other', { createdAt: at(3), body: 'unrelated' }),
+  ]))
+  expect(useTeamMessageStore.getState().views.dev!.messages.map(row => row.id)).toEqual(['body', 'named'])
 })
 
 test('rows name their participants, carry delivery-state and priority badges, and show the delivered revision', () => {

@@ -156,7 +156,7 @@ test('the view composes a new message from the list and replies to a thread row'
   act(() => {
     useTeamMessageStore.getState().applySnapshot({
       type: 'team-messages-snapshot', teamPath: 'dev', teamId: 'team', filters: {},
-      messages: [parent], nextCursor: null, directory: [], tasks,
+      messages: [parent], nextCursor: null, directory: [], tasks, threadSizes: {},
     })
   })
   act(() => renderer.root.findByProps({ 'data-testid': 'message-open-thread' }).props.onClick())

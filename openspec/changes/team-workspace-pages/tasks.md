@@ -11,8 +11,8 @@ Implement after `team-workspace` (or as its final tasks); file and store names b
 
 ## 2. Messages text search and thread size
 
-- [ ] 2.1 Add `text` to `MessageQueryFilters`. In `messageQuery.ts`, add the escaped, case-insensitive `LIKE` clause over body, sender and recipient group ids, and `team_session_directory` names of sender, recipient, or claimant. Add `threadSize` to each list row. Verify with `messageQuery` tests: an old message is found past the first page, `%` and `_` match literally, search combines with priority, keyset paging stays within the results, and `threadSize` counts the whole thread.
-- [ ] 2.2 Extend `matchesMessageFilters` with the same `text` match over body, group ids, and caller-supplied participant labels. Verify with a shared test: a change push outside the search is dropped and one inside is kept.
+- [x] 2.1 Add `text` to `MessageQueryFilters`. In `messageQuery.ts`, add the escaped, case-insensitive `LIKE` clause over body, sender and recipient group ids, and `team_session_directory` names of sender, recipient, or claimant. Add whole-thread `threadSizes` to each page and Messages snapshot. Verify with `messageQuery` tests: an old message is found past the first page, `%` and `_` match literally, search combines with priority, keyset paging stays within the results, and `threadSizes` counts the whole thread.
+- [x] 2.2 Extend `matchesMessageFilters` with the same `text` match over body, group ids, and caller-supplied participant labels. Verify with a shared test: a change push outside the search is dropped and one inside is kept.
 
 ## 3. Client team key, stores, and URL location
 

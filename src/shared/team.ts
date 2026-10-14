@@ -207,6 +207,12 @@ export interface MessageQueryFilters {
    * only agent-to-agent mail. Absent keeps both.
    */
   human?: boolean
+  /**
+   * Text search (team-workspace-pages D7): a case-insensitive substring of
+   * the body, a sender or recipient group id, or a participant's name (a
+   * session's recorded name, or `Human`). Blank text keeps everything.
+   */
+  text?: string
 }
 
 /**
@@ -291,6 +297,12 @@ export interface MessagePage {
   messages: TeamMessage[]
   /** Key of the last row, for the next older page; null when exhausted. */
   nextCursor: MessageCursor | null
+  /**
+   * Whole-thread message counts for every thread on the page, regardless of
+   * the filters (team-workspace-pages D7), so a collapsed thread row can
+   * state its size without loading the thread.
+   */
+  threadSizes: Record<string, number>
 }
 
 /** One thread row with the history that happened to it. */
@@ -305,7 +317,39 @@ export interface ThreadEntry {
  * and the client applies this side to each unfiltered change push, so a row
  * that has just left its filter is dropped rather than lingering.
  */
-export function matchesMessageFilters(filters: MessageQueryFilters, message: TeamMessage): boolean {
+/** ASCII-only case folding: the same comparison SQLite's `LIKE` makes. */
+const foldAscii = (value: string) => value.replace(/[A-Z]/g, letter => letter.toLowerCase())
+
+/** The search text a filter carries, or null when it keeps everything. */
+export function messageSearchText(filters: MessageQueryFilters): string | null {
+  const text = filters.text?.trim()
+  return text ? text : null
+}
+
+/**
+ * Whether a message matches a text search: its body, a sender or recipient
+ * group id, a participant's name from `labelOf`, or `Human` for the human
+ * side. The server's SQL makes the same match over the recorded names.
+ */
+export function matchesMessageText(
+  text: string,
+  message: TeamMessage,
+  labelOf: (sessionId: string) => string | undefined = () => undefined,
+): boolean {
+  const needle = foldAscii(text)
+  const has = (value: string | null | undefined) => value != null && foldAscii(value).includes(needle)
+  if (has(message.body) || has(message.fromGroup)) return true
+  if (message.toKind === 'group' && has(message.toId)) return true
+  if ((message.fromKind === 'human' || message.toKind === 'human') && has('Human')) return true
+  const participants = [message.fromSession, message.toKind === 'session' ? message.toId : null, message.claimedBy]
+  return participants.some(sessionId => sessionId != null && has(labelOf(sessionId)))
+}
+
+export function matchesMessageFilters(
+  filters: MessageQueryFilters,
+  message: TeamMessage,
+  labelOf?: (sessionId: string) => string | undefined,
+): boolean {
   if (filters.taskId !== undefined && message.taskId !== filters.taskId) return false
   if (filters.threadId !== undefined && message.threadId !== filters.threadId) return false
   if (filters.groupId !== undefined
@@ -321,6 +365,8 @@ export function matchesMessageFilters(filters: MessageQueryFilters, message: Tea
   }
   if (filters.human === true && message.fromKind !== 'human' && message.toKind !== 'human') return false
   if (filters.human === false && (message.fromKind !== 'agent' || message.toKind === 'human')) return false
+  const text = messageSearchText(filters)
+  if (text !== null && !matchesMessageText(text, message, labelOf)) return false
   return true
 }
 

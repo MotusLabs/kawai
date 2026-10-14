@@ -133,7 +133,7 @@ describe('createMessageRouter dispatch coverage', () => {
       { type: 'team-mailbox-delivered-to-human', teamId: 'team', messageId: 'm-1', senderSession: 'chat-2', senderKind: 'agent' },
       { type: 'team-tasks-snapshot', teamId: 'team', tasks: [] },
       { type: 'team-task-result', teamPath: 'chat-1', ok: true },
-      { type: 'team-messages-snapshot', teamPath: 'chat-1', teamId: 'team', filters: {}, messages: [], nextCursor: null, directory: [], tasks: [] },
+      { type: 'team-messages-snapshot', teamPath: 'chat-1', teamId: 'team', filters: {}, messages: [], nextCursor: null, threadSizes: {}, directory: [], tasks: [] },
       { type: 'team-messages', teamPath: 'chat-1', teamId: 'team', messages: [] },
       { type: 'team-thread', teamPath: 'chat-1', teamId: 'team', threadId: 't-1', entries: [], directory: [] },
       { type: 'team-message-send-result', teamPath: 'chat-1', requestId: 'r-1', error: 'nope' },
@@ -353,7 +353,7 @@ describe('team messages routing after extraction', () => {
     route({
       type: 'team-messages-snapshot', teamPath: 'chat-1', teamId: 'team', filters: {},
       messages: [row('m-1')], nextCursor: null,
-      directory: [{ sessionId: 'chat-2', name: 'Dev', group: 'leads' }], tasks: [],
+      directory: [{ sessionId: 'chat-2', name: 'Dev', group: 'leads' }], tasks: [], threadSizes: {},
     })
     expect(useTeamMessageStore.getState().views['chat-1']).toMatchObject({
       open: true, loading: false, teamId: 'team', nextCursor: null,
@@ -383,7 +383,7 @@ describe('team messages routing after extraction', () => {
     expect(useTeamMessageStore.getState().views['chat-1']!.error).toBe('nope')
 
     useTeamMessageStore.getState().close('chat-1')
-    route({ type: 'team-messages-snapshot', teamPath: 'chat-1', teamId: 'team', filters: {}, messages: [], nextCursor: null, directory: [], tasks: [] })
+    route({ type: 'team-messages-snapshot', teamPath: 'chat-1', teamId: 'team', filters: {}, messages: [], nextCursor: null, threadSizes: {}, directory: [], tasks: [] })
     expect(useTeamMessageStore.getState().views['chat-1']).toBeUndefined()
   })
 })
