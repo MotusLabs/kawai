@@ -226,7 +226,7 @@ export class MemberRelease {
    * and shutdown drop a pending retry.
    */
   markLateSpawn(sessionId: string, taskId: string, attempt = 0): void {
-    this.lateMarkRetries.delete(sessionId)
+    this.dropLateMarkRetry(sessionId)
     try {
       this.markSpawnedForClosedTask(sessionId, taskId)
     } catch (error) {
@@ -237,7 +237,10 @@ export class MemberRelease {
         return
       }
       logger.warn('member_release_mark_failed', { sessionId, taskId, attempt: attempt + 1, error: reason })
-      this.lateMarkRetries.set(sessionId, setTimeout(() => this.markLateSpawn(sessionId, taskId, attempt + 1), delays[attempt]))
+      // Unref'd, so a pending retry never holds the process open without shutdown().
+      const timer = setTimeout(() => this.markLateSpawn(sessionId, taskId, attempt + 1), delays[attempt])
+      timer.unref?.()
+      this.lateMarkRetries.set(sessionId, timer)
     }
   }
 
