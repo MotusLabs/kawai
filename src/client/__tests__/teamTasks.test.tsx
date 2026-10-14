@@ -129,7 +129,7 @@ test('detail shows direction, retained revisions, journal, subtasks, messages; c
   let renderer!: TestRenderer.ReactTestRenderer
   const render = (connected: boolean) => <TeamTasksPanel teamPath="dev" projectPath="/repo" view={view} sendMessage={message => sent.push(message)} connected={connected} onClose={() => {}} />
   act(() => { renderer = TestRenderer.create(render(true)) })
-  expect(renderer.root.findAllByType('section').map(section => section.props['aria-label'])).toEqual(['Assignment', 'Direction', 'Status', 'Journal', 'Subtasks', 'Messages'])
+  expect(renderer.root.findAllByType('section').map(section => section.props['aria-label'])).toEqual(['Assignment', 'Direction', 'Results', 'Status', 'Journal', 'Subtasks', 'Messages'])
   expect(renderer.root.findByProps({ 'data-testid': 'task-direction' }).children.join('')).toBe('Current plan')
   expect(renderer.root.findByProps({ 'data-testid': 'task-acceptance' }).children.join('')).toBe('Ships')
   expect(renderer.root.findByProps({ 'data-testid': 'task-creator' }).children.join('')).toBe('lead (gone)')
