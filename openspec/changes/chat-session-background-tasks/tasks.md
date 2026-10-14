@@ -42,7 +42,7 @@ Prerequisite: `chat-session-spawned-subagents` (PR #72) is merged. Branch from t
 
 - [x] 7.1 Run `bun run lint && bun run typecheck && bun run test` and confirm all pass
 - [x] 7.2 Headlessly over WebSocket against a dev server (not `test:e2e` while the user's kawai is live), run a chat turn that starts `sleep 20; echo done` in the background. Confirm the task appears in the snapshot and push, the output tail returns `done` after completion, the self-started turn streams with a trigger, and the session is `waiting` while the task runs. Repeat with a Stop mid-run
-- [ ] 7.3 Use the `dev-browser` skill to screenshot the tool row (running, expanded with output, completed), the live strip with a shell row, and the trigger line. Check them against the spec scenarios
+- [x] 7.3 Use the `dev-browser` skill to screenshot the tool row (running, expanded with output, completed), the live strip with a shell row, and the trigger line. Check them against the spec scenarios
 - [ ] 7.4 Update the `CLAUDE.md` "How It Works" list with a background-tasks bullet and an agent-started-turns note. Verify both read correctly against the shipped behavior
 
 ## Workflow follow-up
