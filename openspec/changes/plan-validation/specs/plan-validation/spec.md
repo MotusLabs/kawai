@@ -63,7 +63,7 @@ Each change of the plan SHALL be registered in the main worktree's OpenSpec root
 - **THEN** `change-registered` reports an error naming the archive directory
 
 ### Requirement: Conflicting changes prevent Ready unless ordered
-Validation SHALL derive typed relations from the changes' spec deltas. Two changes touching the same requirement of a capability SHALL be a conflict error unless `dependsOn` orders one before the other, transitively. Unordered changes touching the same capability without a shared requirement SHALL raise one overlap warning for that capability, naming those changes. Ordered pairs SHALL be recorded as serialized. This SHALL hold without any dependency cycle.
+Validation SHALL derive typed relations from the changes' spec deltas. Two changes touching the same requirement of a capability SHALL be a conflict error unless `dependsOn` orders one before the other, transitively. Unordered pairs of changes touching one capability without a shared requirement SHALL raise one overlap warning for that capability, naming every change in such a pair. Ordered pairs SHALL be recorded as serialized. This SHALL hold without any dependency cycle.
 
 #### Scenario: Acyclic plan with conflicting schema changes
 - **WHEN** two changes with no `dependsOn` path between them both modify the same requirement

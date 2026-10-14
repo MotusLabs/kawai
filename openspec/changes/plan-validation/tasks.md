@@ -18,7 +18,8 @@ Implement after `durable-plans` and `strategy-revision-impact` have landed on ma
   - the same pair ordered directly and transitively: serialized, with its order;
   - an overlap on one capability with different requirements: a warning;
   - several unordered overlaps on one capability: one warning keyed by the sorted change set, whose detail lists the pairs, while the per-pair relations remain;
-  - a grown overlap set: a new key;
+  - a grown or shrunk overlap set: a new key;
+  - one capability where a is ordered before b and c, and b and c are unordered: one warning naming only b and c;
   - a rename, given as its two touches: conflicts with a change touching either name;
   - three changes: one relation per pair;
   - no shared capability: no relation;

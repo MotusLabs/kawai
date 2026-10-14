@@ -6,7 +6,7 @@ See proposal.md (Why). This change binds to contracts that are already published
 - **`durable-plans`.**
   - C1 `PlanContent`: changes, `dependsOn`, groups, roles, landing.
   - C2: the strategy pin, and the `openPlans(teamId)` read.
-  - C4: the ordered `APPROVAL_PRECONDITIONS`, whose entries are `{ name, check(ctx) → string | null }` and run inside one SQLite transaction. D7 reserves `validation-current` for this change. The `durable-plans` implementation also leaves an awaited, empty pre-transaction step in `PlanService.approve` whose results feed `ctx`; D9 fills it.
+  - C4: the ordered `APPROVAL_PRECONDITIONS`, whose entries are `{ name, check(ctx) → string | null }` and run inside one SQLite transaction. D7 reserves `validation-current` for this change. C4 names the precondition list and `pinDisposition` as its extension points, but no pre-transaction gather. D9 adds one that feeds `ctx.validation` only. The `durable-plans` implementation is asked to leave an empty awaited step in `PlanService.approve` for it; where it has not, tasks 8.1 adds the await.
   - D3 keeps environment checks, artifact pins, and typed relations out of plan content.
 - **`strategy-revision-impact`.**
   - C-I1 `ImpactService.gate(planId, revision)`.
