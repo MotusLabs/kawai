@@ -171,3 +171,13 @@ test('no result, or no worktree, refuses with the reason the preview gives', asy
   expect(results.release!.preview(unsubmitted.id).unavailable).toBe('No result has been submitted yet.')
   await expect(results.release!.release(human(), unsubmitted.id, request)).rejects.toThrow('No result has been submitted yet')
 })
+
+test('a review already queued behind the occupied worktree is not doubled: the release frees its slot', async () => {
+  const { task, result } = await developed()
+  const queued = await results.handoff(human(), task.id, { kind: 'review', resultId: result.id, target: { kind: 'group', id: 'reviewers' },
+    instructions: 'Review', requestKey: 'review-early' })
+  const outcome = await results.release!.release(human(), task.id, request)
+  expect(outcome).toMatchObject({ released: ['dev'], handoff: { duplicate: true, assignment: { id: queued.assignment.id } } })
+  expect(outcome.handoff.notice).toContain('proceeds in the freed worktree')
+  expect(reviewMail(task.id)).toHaveLength(1)
+})

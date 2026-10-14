@@ -8,7 +8,9 @@
 // nothing archived or dispatched); archive each (never kill); then dispatch.
 // A dispatch failure after the archive is surfaced with the release already
 // done: archive is the human's intent and is never rolled back; Request
-// review retries the dispatch alone. Release is immediate — it refuses
+// review retries the dispatch alone. A review handoff of the result that
+// already stands (queued behind the occupied worktree) is not doubled: the
+// release frees the slot it waits for. Release is immediate — it refuses
 // rather than defers, unlike the pending release a task close records.
 import type { ChatSessionRecord } from '../db'
 import type { TaskReleasePreview } from '../../shared/teamTasks'
@@ -103,7 +105,16 @@ export class TaskRelease {
       if (!archived.ok) throw new Error(`Released ${released.length} of ${members.length}; ${member.name} (${member.sessionId}) could not be archived: ${archived.error}`)
       released.push(member.sessionId)
     }
-    // 4. Dispatch the review handoff into the freed slot.
+    // 4. Dispatch the review handoff into the freed slot — unless one of this
+    // result already stands (Request review queued it behind the occupied
+    // worktree): the release frees the slot it waits for, and a second
+    // review would double the reviewers.
+    const standing = this.results.tasks.store.assignmentsOf(taskId).find(row => row.handoffKind === 'review' &&
+      row.resultId === outstanding.id && row.supersededBy === null && row.state !== 'failed')
+    if (standing) {
+      return { released, handoff: { assignment: standing, duplicate: true,
+        notice: `The review handoff already queued for result ${outstanding.id} (${standing.id}) proceeds in the freed worktree; nothing new was dispatched.` } }
+    }
     try {
       return { released, handoff: await this.results.handoff(caller, taskId, handoff) }
     } catch (error) {
