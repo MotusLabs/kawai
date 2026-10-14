@@ -284,6 +284,9 @@ describe('text search (team-workspace-pages D7)', () => {
     expect(bodies({ text: 'hum' })).toEqual(['from the human'])
     // Another team's directory never names this team's participants.
     expect(bodies({ text: 'Elsewhere' })).toEqual([])
+    // A group recipient's id is not a session: a session sharing that id does not name it.
+    directory.upsert(TEAM, { sessionId: 'reviewers', name: 'Odd session', group: null })
+    expect(bodies({ text: 'Odd session' })).toEqual([])
   })
 
   test('another team’s matching rows stay out', () => {

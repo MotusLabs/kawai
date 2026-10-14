@@ -176,7 +176,9 @@ function textClause(text: string): SqlFragment {
     `(to_kind = 'group' AND ${like('to_id')})`,
     `EXISTS (SELECT 1 FROM team_session_directory directory
       WHERE directory.team_id = team_messages.team_id
-        AND directory.session_id IN (team_messages.from_session, team_messages.to_id, team_messages.claimed_by)
+        AND (directory.session_id = team_messages.from_session
+          OR (team_messages.to_kind = 'session' AND directory.session_id = team_messages.to_id)
+          OR directory.session_id = team_messages.claimed_by)
         AND ${like('directory.name')})`,
     ...(human ? [`(from_kind = 'human' OR to_kind = 'human')`] : []),
   ]
