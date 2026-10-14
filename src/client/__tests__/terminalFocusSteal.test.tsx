@@ -12,6 +12,7 @@ import SessionDrawer from '../components/SessionDrawer'
 import SettingsModal from '../components/SettingsModal'
 import type { Session } from '@shared/types'
 import { DEFAULT_PRESETS, useSettingsStore } from '../stores/settingsStore'
+import { cancelTerminalFocusRestore, restoreTerminalFocus } from '../utils/terminalFocus'
 
 const globalAny = globalThis as typeof globalThis & {
   window?: Window & typeof globalThis
@@ -37,6 +38,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  cancelTerminalFocusRestore()
   globalAny.window = originalWindow
   globalAny.document = originalDocument
   globalAny.localStorage = originalLocalStorage
@@ -202,6 +204,29 @@ describe('terminal focus under an open dialog', () => {
     expect(calls).toEqual([])
     act(() => renderer.unmount())
   })
+
+  test('a restore landing while an input outside any dialog is focused does not steal it', () => {
+    const calls = terminalDom()
+    Object.assign(globalAny.document as object, { activeElement: { tagName: 'INPUT' } })
+    restoreTerminalFocus()
+    expect(calls).toEqual([])
+  })
+
+  test('a focused button does not block the restore (the drawer hands focus to its trigger)', () => {
+    const calls = terminalDom()
+    Object.assign(globalAny.document as object, { activeElement: { tagName: 'BUTTON' } })
+    restoreTerminalFocus()
+    expect(calls).toEqual(['enable', 'terminal-focus'])
+  })
+
+  test('the xterm textarea already holding focus still restores as before', () => {
+    const calls = terminalDom()
+    // In a real DOM the focused textarea IS the one the selector finds.
+    const doc = globalAny.document as unknown as Document
+    Object.assign(doc, { activeElement: doc.querySelector('.xterm-helper-textarea') })
+    restoreTerminalFocus()
+    expect(calls).toEqual(['enable', 'terminal-focus'])
+  })
 })
 
 describe('Display Name field', () => {
@@ -331,6 +356,78 @@ describe('with the always-mounted session drawer (mobile layout)', () => {
       await pastCloseWindow()
     })
     expect(calls).toEqual([])
+    act(() => renderer.unmount())
+  })
+
+  test('the restore retries until the last dialog closes: the drawer closing later still restores focus', async () => {
+    const { calls, set } = setup()
+
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => {
+      renderer = TestRenderer.create(mobileTree(true, true))
+      set(renderer)
+    })
+    await act(async () => {
+      await Promise.resolve()
+    })
+    calls.length = 0
+    // Settings closes while the drawer stays open: several retry periods pass
+    // with nothing touching the terminal.
+    act(() => renderer.update(mobileTree(false, true)))
+    await act(async () => {
+      await pastCloseWindow()
+    })
+    await act(async () => {
+      await pastCloseWindow()
+    })
+    await act(async () => {
+      await pastCloseWindow()
+    })
+    expect(calls).toEqual([])
+    // The drawer closes last: within about one retry period the terminal is
+    // enabled and focused exactly once.
+    act(() => renderer.update(mobileTree(false, false)))
+    await act(async () => {
+      await pastCloseWindow()
+    })
+    expect(calls).toEqual(['enable', 'terminal-focus'])
+    act(() => renderer.unmount())
+  })
+
+  test('a closed drawer panel is inert; an open one is not when it takes focus', () => {
+    const { set } = setup()
+    // Mock DOM nodes whose focus records how inert the panel was at that
+    // moment, plus the last node so the closed state can be read afterwards.
+    const inertAtFocus: boolean[] = []
+    let focusedNode: { inert: boolean } | null = null
+    const createNodeMock = () => {
+      const node = {
+        inert: false,
+        focus: () => {
+          focusedNode = node
+          inertAtFocus.push(node.inert)
+        },
+        addEventListener: () => {},
+        removeEventListener: () => {},
+      }
+      return node
+    }
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => {
+      renderer = TestRenderer.create(mobileTree(false, false), { createNodeMock })
+      set(renderer)
+    })
+    // Opening: the inert effect runs before the focus effect, so the panel is
+    // already not inert when focus() is called.
+    act(() => {
+      renderer.update(mobileTree(false, true))
+    })
+    expect(inertAtFocus).toEqual([false])
+    // Closing: the panel goes inert again while it stays mounted off-canvas.
+    act(() => {
+      renderer.update(mobileTree(false, false))
+    })
+    expect(focusedNode!.inert).toBe(true)
     act(() => renderer.unmount())
   })
 })

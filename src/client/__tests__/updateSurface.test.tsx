@@ -81,6 +81,7 @@ describe('update panel', () => {
     let renderer!: TestRenderer.ReactTestRenderer
     act(() => { renderer = TestRenderer.create(<UpdatePanel />) })
     const dialog = renderer.root.findByProps({ role: 'dialog' })
+    expect(dialog.props['aria-modal']).toBe('true')
     expect(textOf(dialog)).toContain('1.2.0')
     expect(textOf(dialog)).toContain('v1.2.0-7')
     expect(textOf(renderer.root.findByProps({ 'data-testid': 'update-install' }))).toBe('Update now')

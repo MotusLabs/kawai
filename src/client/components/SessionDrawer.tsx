@@ -86,6 +86,18 @@ export default function SessionDrawer({
     return () => document.removeEventListener('keydown', handleEscape)
   }, [isOpen, onClose])
 
+  // While closed the panel stays mounted off-canvas: keep it `inert` as well as
+  // `aria-hidden`, so its session buttons also drop out of the tab order.
+  // Declared before the focus effect below, so `inert` is already false when
+  // the open drawer is focused (an inert element cannot take focus). React 18
+  // has no `inert` prop, so set it imperatively.
+  useEffect(() => {
+    const drawer = drawerRef.current
+    if (drawer) {
+      drawer.inert = !isOpen
+    }
+  }, [isOpen])
+
   // Focus management - focus drawer when open, return focus when closed
   useEffect(() => {
     if (isOpen) {
