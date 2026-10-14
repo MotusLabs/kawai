@@ -24,7 +24,6 @@ import type { ChatSessionRecord } from '../db'
 import type { ChatSessionManager } from '../chat/ChatSessionManager'
 import type { GroupCatalog } from './groupCatalog'
 import type { TeamIdentity } from './teamIdentity'
-import { TurnEndFacts, type TurnEndFact } from './turnEndFacts'
 
 /**
  * The constraint kinds that make mail wait on capacity (team-waiting-reasons
@@ -260,7 +259,8 @@ export interface SummaryInput {
   messageEvents: (messageId: string) => Array<{ kind: string; createdAt: string }>
   waiting: Record<string, WaitingReason>
   /** Persisted turn-end events of the team's task-bound sessions. */
-  turnEnds: TurnEndFact[]
+  /** Persisted turn-end rows of the team's task-bound sessions (D8). */
+  turnEnds: Array<{ sessionId: string; taskId: string | null; at: string }>
   nameOf: (sessionId: string) => string
   /**
    * Whether a result row exists for a session's task (task-results-handoffs).
@@ -352,22 +352,12 @@ export function morningSummary(input: SummaryInput): MorningSummary {
 /**
  * The manager-facing read: one snapshot over everything the pure projections
  * above need. Held by the connection layer, which recomputes on the triggers
- * the mailbox and task views already use. Turn-end facts append live from
- * `turn_completed` events (`recordTurnEnd`); each task-bound session's
- * transcript is replayed once, at the first snapshot that needs it — see
- * `TurnEndFacts`.
+ * the mailbox and task views already use. Turn ends come from the durable
+ * `chat_turn_ends` table the manager's event path writes (D8) — no transcript
+ * is replayed here.
  */
 export class WorkspaceRead {
-  private readonly turnEnds: TurnEndFacts
-
-  constructor(private readonly manager: ChatSessionManager) {
-    this.turnEnds = new TurnEndFacts(sessionId => manager.getHistory(sessionId)?.events ?? null)
-  }
-
-  /** A live `turn_completed` event: append to the summary's ledger, never replay. */
-  recordTurnEnd(sessionId: string, taskId: string, at: string): void {
-    this.turnEnds.record(sessionId, taskId, at)
-  }
+  constructor(private readonly manager: ChatSessionManager) {}
 
   snapshot(team: TeamIdentity): TeamWorkspaceSnapshot {
     const manager = this.manager
@@ -387,19 +377,24 @@ export class WorkspaceRead {
       .filter(record => record.archivedAt == null)
       .map(record => ({ record, requests: manager.getPendingRequests(record.sessionId) }))
     const attention = attentionItems({ sessions, messages, waiting, taskTitle, nameOf })
+    const now = new Date().toISOString()
+    const teamSessions = new Set(records.map(record => record.sessionId))
     return {
       tasks: taskRows({ summaries, waiting, attention, nameOf }),
       attention,
       members: memberRows(manager.teams.catalogForTeam(team), records, groupId =>
         manager.groupProfileCounts(teamId, groupId)),
       summary: morningSummary({
-        now: new Date().toISOString(),
+        now,
         sessions,
         messages,
         messageEvents: messageId => manager.mailbox.store.eventsFor(messageId)
           .map(event => ({ kind: event.kind, createdAt: event.createdAt })),
         waiting,
-        turnEnds: this.turnEnds.forRecords(records),
+        turnEnds: manager.turnEnds
+          .since(new Date(Date.parse(now) - 24 * 60 * 60 * 1000).toISOString())
+          .filter(row => teamSessions.has(row.sessionId))
+          .map(row => ({ sessionId: row.sessionId, taskId: row.taskId, at: row.endedAt })),
         nameOf,
         // Phase 1 has no result rows; task 11.2 replaces this with the real read.
         hasResult: () => false,

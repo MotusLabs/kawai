@@ -79,6 +79,7 @@ import { TeamScopes } from '../team/teamScope'
 import { SessionDirectory } from '../team/sessionDirectory'
 import { MessageFeed } from '../team/messageFeed'
 import { MessageQuery } from '../team/messageQuery'
+import { ChatTurnEndStore } from './chatTurnEndStore'
 import { TeamMailbox } from '../team/TeamMailbox'
 import { createMailboxServer } from '../team/mailboxTools'
 import type { MailboxManagement } from '../team/mailboxManagement'
@@ -935,6 +936,9 @@ export class ChatSessionManager {
     this.management = this.teamMail.management
     this.assignments = this.teamMail.assignments
     this.messages = new MessageFeed(this.mailbox.store, new MessageQuery(options.db.db))
+    // Written from the event path below, independent of any open view; the
+    // workspace summary reads its window from this table (team-workspace D8).
+    this.turnEnds = new ChatTurnEndStore(options.db.db)
     // Product strategy (product-strategy): constructed here, beside the
     // task service, against the same database. The strategy store's changes
     // fan out to the strategy view pushes; the team comes from the record's
@@ -1051,11 +1055,6 @@ export class ChatSessionManager {
     return [...this.records.values()].filter(record => this.teams.teamOf(record.sessionId)?.teamId === teamId)
   }
 
-  /** One session's record, read-only; undefined once killed. */
-  recordOf(sessionId: string): ChatSessionRecord | undefined {
-    return this.records.get(sessionId)
-  }
-
   /** Paused state last pushed per session. */
   private readonly parkedShown = new Map<string, SessionParkedState>()
 
@@ -1093,6 +1092,8 @@ export class ChatSessionManager {
   readonly messages: MessageFeed
   /** Product strategy (product-strategy); the strategy tools and UI actions go through it. */
   readonly strategies: StrategyService
+  /** Completed turns of task-bound sessions (team-workspace D8): the summary's durable source. */
+  readonly turnEnds: ChatTurnEndStore
   readonly dispatcher: MailDispatcher
   private readonly teamMail: SessionMailbox
 
@@ -2153,6 +2154,13 @@ export class ChatSessionManager {
     // Profile routing: progress and limit outcomes for the mail a turn handles.
     if (event.type === 'tool_call') this.teamMail.toolCall(sessionId, event.tool, event.input)
     if (event.type === 'turn_completed') this.teamMail.turnEnded(sessionId, event.subtype === 'success')
+    // The morning summary's durable turn-end row (team-workspace D8): only a
+    // task-bound session's turn is summary material; the task is the one the
+    // session worked under at the moment the turn ended.
+    if (event.type === 'turn_completed') {
+      const taskId = this.records.get(sessionId)?.taskId
+      if (taskId) this.turnEnds.record(sessionId, taskId, event.at)
+    }
     if (
       event.type === 'turn_completed' ||
       event.type === 'approval_request' ||

@@ -32,6 +32,7 @@ let messages: ServerMessage[]
 let connection: { send: (message: ServerMessage) => void }
 let records: Array<ChatSessionRecord & { teamId: string }>
 let pendingRequests: Map<string, unknown[]>
+let turnEndRows: Array<{ sessionId: string; taskId: string; endedAt: string }>
 let catalog: GroupCatalog
 
 beforeEach(() => {
@@ -46,6 +47,7 @@ beforeEach(() => {
   catalog = loadGroupCatalog({ groupsRoot: dir })
   records = []
   pendingRequests = new Map()
+  turnEndRows = []
   messages = []
   connection = { send: message => messages.push(message) }
   // Known team paths (team-workspace-pages D1): this repository (two paths,
@@ -65,7 +67,7 @@ beforeEach(() => {
     directory: { list: () => [] },
     getPendingRequests: (sessionId: string) => pendingRequests.get(sessionId) ?? [],
     groupProfileCounts: () => ({}),
-    getHistory: () => null,
+    turnEnds: { since: () => turnEndRows },
     recordOf: (sessionId: string) => records.find(record => record.sessionId === sessionId),
     teams: {
       catalogForTeam: () => catalog,
@@ -215,8 +217,13 @@ test('observeChatEvent maps request and turn events to workspace pushes (review 
   })
   await connections.flushWorkspace()
   expect(last('team-workspace')!.attention.map(item => item.id)).toEqual(['approval:our-dev:req-1'])
-  // A turn completion feeds the summary's ledger live — no transcript here,
-  // so the recorded fact is the only source the bucket can have.
+  // A turn completion publishes, and the summary reads its bucket from the
+  // durable chat_turn_ends table (written by the manager's event path, not
+  // by the connection) — rows of this team's sessions only.
+  turnEndRows = [
+    { sessionId: 'our-dev', taskId: task.id, endedAt: '2026-10-14T06:05:00Z' },
+    { sessionId: 'other-dev', taskId: task.id, endedAt: '2026-10-14T06:05:00Z' },
+  ]
   connections.observeChatEvent('our-dev', {
     type: 'turn_completed', subtype: 'success',
     id: 'evt-2', sequence: 2, turnId: 't-1', at: '2026-10-14T06:05:00Z',
@@ -354,6 +361,30 @@ describe('publishes coalesce and share one read per team', () => {
     workspace.publish('team')
     await workspace.settled()
     expect(sent.filter(message => message.type === 'team-workspace')).toHaveLength(0)
+  })
+
+  test('one teamId split across groups roots (a bare repository) reads once per identity', async () => {
+    // teamIdentity.test pins the ordinary case: a main checkout and a linked
+    // worktree resolve to one identity, so one read covers both. A bare
+    // repository's worktrees share the teamId but not the groups root.
+    const read = new CountingRead(emptySnapshot())
+    const manager = {
+      teamScopes: {
+        resolve: async (teamPath: string) =>
+          teamPath === '/wt-a' ? { teamId: 'bare', groupsRoot: '/wt-a' } : { teamId: 'bare', groupsRoot: '/wt-b' },
+      },
+    } as unknown as ChatSessionManager
+    const workspace = new WorkspaceConnections(manager, read)
+    const sent: ServerMessage[] = []
+    await workspace.handle({ send: message => sent.push(message) }, { type: 'team-workspace-open', teamPath: '/wt-a' })
+    await workspace.handle({ send: message => sent.push(message) }, { type: 'team-workspace-open', teamPath: '/wt-b' })
+    const afterOpens = read.reads
+    read.payload = { ...read.payload, tasks: [{ ...emptyRow() }] }
+    workspace.publish('bare')
+    await workspace.settled()
+    expect(read.reads - afterOpens).toBe(2) // one projection per identity
+    const pushes = sent.filter(message => message.type === 'team-workspace')
+    expect(pushes.map(push => push.teamPath).sort()).toEqual(['/wt-a', '/wt-b'])
   })
 })
 

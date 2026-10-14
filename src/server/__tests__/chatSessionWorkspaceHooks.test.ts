@@ -101,3 +101,23 @@ test('a status move reaches the hook; usage and activity stamps do not', async (
     expect(changed).toEqual([id])
   } finally { manager.shutdown() }
 })
+
+test('a task-bound turn end writes a durable row; a taskless one writes nothing', async () => {
+  const { manager } = createManager()
+  try {
+    const bound = await manager.createAvailableSession({ projectPath: project, groupId: 'devs', taskId: 'task-1' })
+    const free = await manager.createAvailableSession({ projectPath: project, groupId: 'devs' })
+    expect(bound.ok && free.ok).toBe(true)
+    if (!bound.ok || !free.ok) return
+    const feed = (manager as unknown as { handleDriverEvent: (sessionId: string, event: Record<string, unknown>) => void })
+      .handleDriverEvent.bind(manager)
+    const turnEnd = (id: string, at: string) => ({
+      type: 'turn_completed', subtype: 'success', id: `evt-${id}`, sequence: 1, turnId: `t-${id}`, at,
+    })
+    feed(bound.session.id, turnEnd('bound', '2026-10-14T08:00:00Z'))
+    feed(free.session.id, turnEnd('free', '2026-10-14T08:01:00Z'))
+    expect(manager.turnEnds.since('2026-10-13T00:00:00Z')).toEqual([
+      { sessionId: bound.session.id, taskId: 'task-1', endedAt: '2026-10-14T08:00:00Z' },
+    ])
+  } finally { manager.shutdown() }
+})

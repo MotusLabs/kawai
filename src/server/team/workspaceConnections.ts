@@ -83,11 +83,6 @@ export class WorkspaceConnections {
       : Promise.resolve()
   }
 
-  /** A live turn end for the summary's ledger: appended, never replayed. */
-  recordTurnEnd(sessionId: string, taskId: string, at: string): void {
-    this.read.recordTurnEnd(sessionId, taskId, at)
-  }
-
   private publishNow(teamId: string) {
     const targets: Array<[ChatConnection, string, TeamIdentity]> = []
     for (const [connection, views] of this.subscriptions) {
@@ -96,15 +91,27 @@ export class WorkspaceConnections {
       }
     }
     if (targets.length === 0) return
-    // One read per team per publish, shared by every subscriber.
-    const payload = this.read.snapshot(targets[0]![2])
-    const key = this.diffKey(payload)
-    for (const [connection, teamPath] of targets) {
-      const sent = this.lastSent.get(connection)
-      if (sent?.get(teamPath) === key) continue
-      if (sent) sent.set(teamPath, key)
-      else this.lastSent.set(connection, new Map([[teamPath, key]]))
-      connection.send({ type: 'team-workspace', teamPath, teamId, ...payload })
+    // One read per resolved identity, shared by every subscriber of it. An
+    // ordinary team's paths all resolve to one identity (teamIdentity pins
+    // the shared groupsRoot); a bare repository's worktrees share a teamId
+    // while carrying different groups roots, so they project separately.
+    const byIdentity = new Map<string, { team: TeamIdentity; targets: Array<[ChatConnection, string]> }>()
+    for (const [connection, teamPath, team] of targets) {
+      const identity = `${team.teamId}\0${team.groupsRoot}`
+      const group = byIdentity.get(identity) ?? { team, targets: [] }
+      group.targets.push([connection, teamPath])
+      byIdentity.set(identity, group)
+    }
+    for (const { team, targets } of byIdentity.values()) {
+      const payload = this.read.snapshot(team)
+      const key = this.diffKey(payload)
+      for (const [connection, teamPath] of targets) {
+        const sent = this.lastSent.get(connection)
+        if (sent?.get(teamPath) === key) continue
+        if (sent) sent.set(teamPath, key)
+        else this.lastSent.set(connection, new Map([[teamPath, key]]))
+        connection.send({ type: 'team-workspace', teamPath, teamId, ...payload })
+      }
     }
   }
 

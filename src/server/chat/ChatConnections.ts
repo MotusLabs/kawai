@@ -118,17 +118,13 @@ export class ChatConnections {
 
   /**
    * A chat event that changes workspace facts (team-workspace), the one place
-   * the mapping lives so bootstrap's onEvent stays a forward: a turn
-   * completion appends to the summary's turn-end ledger, and request and turn
+   * the mapping lives so bootstrap's onEvent stays a forward: request and turn
    * events refresh the team's open views — approvals and questions are the
    * queue's human-required items, `request_resolved` removes one, and turn
-   * starts move the membership's working/waiting status.
+   * boundaries move the membership's working/waiting status. Turn-end rows
+   * themselves are written by the manager's event path (chat_turn_ends, D8).
    */
   observeChatEvent(sessionId: string, event: ChatEvent): void {
-    if (event.type === 'turn_completed') {
-      const taskId = this.manager.recordOf(sessionId)?.taskId
-      if (taskId) this.workspaceConnections.recordTurnEnd(sessionId, taskId, event.at)
-    }
     if (
       event.type === 'approval_request' || event.type === 'question_request' ||
       event.type === 'request_resolved' || event.type === 'turn_completed' ||
