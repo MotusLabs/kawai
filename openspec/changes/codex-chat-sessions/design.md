@@ -45,6 +45,7 @@ Introduce `ChatAgentDriver` in `src/server/chat/provider/driver.ts`. It is the s
 - `start`, `send`, `deliver(envelope)`, `interrupt`, `kill`, `shutdown`
 - `resolveApproval`, `answerQuestion`, `onApprovalPolicyChanged`, `setProjectPath`
 - `getPendingRequests`, `getSeenToolCallIds`, `getWorkers`, `getBackgroundTasks`, `getCommandState`, `isDead`
+- `getBackgroundTaskRecords`, `getTaskOutput`, `stopTask`: the background-task methods the manager calls for the task roster, `chat-task-output`, and `chat-task-stop`. Codex has no background tasks (Non-Goals), so its driver returns no records, `null` output, and `false` from stop.
 
 Output callbacks are a provider-neutral `ChatDriverCallbacks` type. These are today's `on*` options minus the SDK-typed ones. `ChatSessionDriver` implements the contract unchanged. `TurnQueue` becomes generic over its item type. `sessionMailbox` and `ChatSessionManager` hold `ChatAgentDriver`.
 
@@ -62,7 +63,7 @@ The refactor lands first as its own commit with no behavior change, which keeps 
 - notifications go to a handler
 - server requests go to a handler whose result becomes the reply
 
-Every inbound and outbound line goes through the existing `ChatWireRecorder`, so the Debug panel works for Codex chats unchanged. Initialization sends `clientInfo` and `capabilities: { experimentalApi: true }`. A child exit ends the driver like a Claude process end: `onProcessEnd`, notices cleared, and pending requests cancelled. The next send respawns and resumes.
+Every inbound and outbound line goes through the existing `ChatWireRecorder`, so the Debug panel captures Codex chats. Its frame labels know only Claude's frame types, though: a JSON-RPC line has no `type` and would read as `json` under a "Claude" direction. `chatWireFrames.ts` therefore labels JSON-RPC frames by `method`, or `response #<id>` / `error #<id>`, and its direction labels name the chat's provider. Initialization sends `clientInfo` and `capabilities: { experimentalApi: true }`. A child exit ends the driver like a Claude process end: `onProcessEnd`, notices cleared, and pending requests cancelled. The next send respawns and resumes.
 
 *Alternatives:*
 - `@openai/codex-sdk`: rejected because it wraps `codex exec` and has no approval or question requests.
@@ -95,7 +96,14 @@ Resolution returns a discriminated union: `{ provider: 'claude', …SDK launch c
 - `env`: the server's environment with `CODEX_HOME` set
 - `-c` overrides for the sandbox (D5)
 
-`chat_sessions` gains `provider TEXT NOT NULL DEFAULT 'claude'`, written at creation, and `transcript_path TEXT`. The manager refuses to start a chat whose stored provider differs from its profile's current provider.
+Kawai never writes into a Codex home: not `config.toml`, not exec-policy rules, not auth. It passes only `CODEX_HOME`, `-c` overrides, and thread parameters. Anything else in a home, such as a rule that allows `git`, is operator action.
+
+`chat_sessions` gains three columns:
+- `provider TEXT NOT NULL DEFAULT 'claude'`, written at creation;
+- `codex_home TEXT`, the resolved absolute Codex home, written at creation for Codex chats and null for Claude chats;
+- `transcript_path TEXT`.
+
+The manager refuses to start a chat whose stored provider differs from its profile's current provider. It also refuses a Codex chat whose stored home differs from the home its profile resolves to now, because the chat's thread and login live in the stored home. Resuming against another home would look for the thread where it does not exist. The refusal names neither path, since homes never reach browsers. Usage and limit fan-out (D9) key a session by its stored home, so a profile edit never moves an existing chat's usage or cooldown to another home.
 
 The Codex thread id lives in `sdk_session_id`, so resume, the discovery exclusion, and existing queries keep working. Renaming the column is not worth a migration.
 
@@ -123,7 +131,7 @@ Every Codex request reads `getApprovalPolicy()` when it arrives, so a live toggl
 
 ### D6: Team tools as dynamic tools
 
-`team/mailboxTools.ts` gains `teamToolTable(mailbox, sessionId, services)`, returning `{ name, description, schema, handler }[]`. `createMailboxServer` (Claude) and `codexTools.ts` (Codex) both consume it, so the tool list cannot drift between providers.
+`team/mailboxTools.ts` gains `teamToolTable(mailbox, sessionId, services)`, returning `{ name, description, schema, handler }[]`. `createMailboxServer` (Claude) and `codexTools.ts` (Codex) both consume it, so the tool list cannot drift between providers. The table is built from the tools on master at implementation time. That includes the result, handoff, and findings tools that `task-results-handoffs` (PR #136) adds to `taskTools`/`mailboxTools`; a branch cut before that merge expects a textual conflict in `mailboxTools.ts` and rebuilds on top of it.
 
 `codexTools.ts` builds one `{ type: "namespace", name: "kawai-team", tools: [...] }` `DynamicToolSpec`. Each tool's `inputSchema` comes from Zod 4's `z.toJSONSchema`.
 
@@ -157,6 +165,8 @@ If `thread/start` rejects `dynamicTools`, the start fails with a chat error, so 
 
 `userMessage` items echo what Kawai sent and are suppressed, like Claude's user echoes. Tool names reuse the transcript's existing renderers, so no client change is needed for Codex tool rows.
 
+A `fileChange` item can change several files. Its `Edit`-like input carries every changed path: `file_path` holds the first, and `paths` holds all of them. `ProgressDigest` (`team/routing/handoff.ts`) reads only `file_path`, `notebook_path`, and `path` today, so it also learns to read a `paths` string array. A forwarded handoff then lists every file a Codex member changed.
+
 ### D8: Receipts and replay from the rollout file
 
 `thread/start` and `thread/resume` return `Thread.path`. The driver stores it through a new `onTranscriptPath` callback into `transcript_path`, as soon as it is known.
@@ -167,7 +177,9 @@ Replay works as follows:
 - With a live driver, use `thread/read` with turns for the history.
 - For archived chats, or when no agent is running, `codexRollout.ts` parses the rollout file (`response_item` messages, function calls and outputs, `event_msg` items) into the same replay entries `transcriptReplay.ts` produces.
 
-The title watcher ignores Codex chats, because their names come from Kawai.
+Both replay paths emit the turn boundaries a live turn emits, `turn_completed` included. History readers such as `team-workspace`'s finished-turn bucket, which reads persisted turn-end events, therefore count Codex turns.
+
+Live receipts keep working. Today the title watcher's tail also confirms mail: `watchReceipt` calls `watchSessionTitle`, whose line handler runs `receiptMessageId`. For a Codex chat that tail follows `transcript_path` and parses rows with `codexReceiptMessageId`. Only the title half is skipped, because Codex chat names come from Kawai. Pushed mail therefore settles as soon as its rollout row lands, not only at turn end or startup reconciliation.
 
 `logPoller`'s chat exclusion set already holds every chat's `sdk_session_id`. The Codex log matcher has to honor `excludeSessionIds` against `session_meta.id`, so a Codex chat rollout in `~/.codex/sessions` never becomes a terminal session.
 
@@ -179,14 +191,18 @@ The title watcher ignores Codex chats, because their names come from Kawai.
 - a label from `windowDurationMins` (300 → 5-hour, 10080 → weekly) plus `limitName`
 - status `limited` when `rateLimitReachedType` is set
 
-Reports are cached per Codex home, the resolved absolute `codexHome`, so every Codex profile and session on that home shares them. The fill-in uses `account/rateLimits/read` on the session's app-server when its home holds nothing.
+Reports are cached per Codex home, the resolved absolute `codexHome` (a session's stored home, D4), so every Codex profile and session on that home shares them. The fill-in uses `account/rateLimits/read` on the session's app-server when its home holds nothing.
 
 `codexLimits.ts` maps limit signals:
 - A `turn/completed` whose `codexErrorInfo` is `usageLimitExceeded`, `rateLimitExceeded`, `sessionBudgetExceeded`, or `serverOverloaded` becomes a final `ChatLimitSignal`.
 - An item `error` notification marked as retrying becomes a non-final signal.
 - The reset is the latest known `resetsAt` among all applicable exhausted windows in the latest snapshot, else none (the 1 h default then applies). For example, if the five-hour and weekly windows are both exhausted and reset in 1 hour and 2 days respectively, the cooldown and any parked-work resume use the 2-day reset. A non-exhausted window does not extend the cooldown.
 
-The manager writes the event for every Codex profile whose resolved `codexHome` equals the session's. Cooldown, park, release, forward, and the urgent-mail refusal then work unchanged.
+Each signal also carries its scope:
+- `usageLimitExceeded`, `rateLimitExceeded`, and `serverOverloaded` belong to the login or provider, so they are login-scoped.
+- `sessionBudgetExceeded` names a session or thread budget, not the shared plan, so it is session-scoped. Fanning it out would cool every profile on the home and park unrelated members. It becomes login-scoped only if the spike shows the budget is account-wide (Open Questions).
+
+The manager writes a login-scoped event for every Codex profile whose resolved `codexHome` equals the session's stored home. It writes a session-scoped event for the session's own profile only. Cooldown, park, release, forward, and the urgent-mail refusal then work unchanged.
 
 ### D10: Role context and effort
 
@@ -214,7 +230,7 @@ The first task is a scripted spike against the baseline, recorded in this design
   - Registration refusal fails the start loudly.
   - The smoke script runs on each bump.
   - The HTTP-MCP design is documented as the fallback (D6 alternative).
-- **[Risk] `.git` may be read-only under `workspace-write` even with a writable-root override, so commits from linked worktrees escalate.** → Mitigation: the spike checks this. If it holds, members get one card or auto-accept per commit, and a `git` exec-policy rule in the Codex home can allow it. Both are acceptable; neither changes the specs' sandbox requirement.
+- **[Risk] `.git` may be read-only under `workspace-write` even with a writable-root override, so commits from linked worktrees escalate.** → Mitigation: the spike checks this. If it holds, members get one card or auto-accept per commit, and an operator can add a `git` exec-policy rule to the Codex home (Kawai never writes one, D4). Both are acceptable; neither changes the specs' sandbox requirement.
 - **[Trade-off] Manual Codex chats ask less than manual Claude chats,** because commands inside the sandbox run without a card. → Mitigation: this is accepted (exploration decision) and documented in CLAUDE.md, so the policy label is not misread.
 - **[Risk] With network on, auto-accept means a Codex member can reach the network and escalate freely.** → Mitigation: this matches Claude auto today. Profiles can set `network: false`.
 - **[Risk] Rollout rows may be written later than the turn push (buffering), briefly making receipts look absent.** → Mitigation: reconciliation already runs only at turn end, failure, archive, kill, and startup, and Codex flushes by turn end. The spike confirms this; otherwise reconciliation waits for `turn/completed`.
@@ -223,7 +239,7 @@ The first task is a scripted spike against the baseline, recorded in this design
 
 ## Migration Plan
 
-- The `provider` and `transcript_path` columns are additive (default `claude` / null). Existing chats restore as Claude.
+- The `provider`, `codex_home`, and `transcript_path` columns are additive (default `claude` / null / null). Existing chats restore as Claude.
 - No Codex profile ships in `config/profiles.default.json`. Operators add one to `~/.kawai/profiles.json`, so nothing changes for installations without Codex.
 - Rollback: removing Codex profiles makes Codex chats refuse to start with a provider-mismatch or unknown-profile error. Their history stays readable from `transcript_path`. Reverting the code leaves the extra columns unused.
 
@@ -237,3 +253,4 @@ Each answer changes only a mapping detail inside a decision above, not the specs
 - Do localhost-binding tests pass inside the sandbox with network on?
 - How do `dynamicToolCall` and `commandExecution` items appear in `thread/read` and in rollout rows for replay?
 - Which retry signal marks a non-final limit event: a `willRetry`-style flag on the `error` notification, or only HTTP status?
+- Is `sessionBudgetExceeded` scoped to the session or thread, or to the account (D9)? Until the spike answers, it cools only the session's own profile.

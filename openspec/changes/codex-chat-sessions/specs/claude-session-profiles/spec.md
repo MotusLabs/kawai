@@ -54,11 +54,15 @@ A Codex entry SHALL use `~/.codex` (or the server's `CODEX_HOME`) as its Codex h
 - **THEN** that file is reported and profiles from the remaining files stay available
 
 ### Requirement: A chat's provider is fixed at creation
-The system SHALL store each chat session's provider when the session is created and SHALL run that provider for every later start, resume, and restore. Chats created before providers existed SHALL restore as Claude. If the stored profile now resolves to a different provider, the chat's agent SHALL NOT start, and the chat SHALL state the mismatch.
+The system SHALL store each chat session's provider, and for a Codex chat its resolved Codex home, when the session is created, and SHALL use them for every later start, resume, and restore. Chats created before providers existed SHALL restore as Claude. If the stored profile now resolves to a different provider or Codex home, the chat's agent SHALL NOT start, and the chat SHALL state the mismatch without naming the home.
 
 #### Scenario: Profile edited to another provider
 - **WHEN** a Claude chat's profile is redefined as a Codex profile and the user reopens the chat
 - **THEN** the agent does not start and the chat states that its profile changed provider
+
+#### Scenario: Profile edited to another Codex home
+- **WHEN** a Codex chat's profile is changed at the user level to name another Codex home and the user reopens the chat
+- **THEN** the agent does not start, and the chat states that its profile's Codex home changed
 
 #### Scenario: Legacy chat
 - **WHEN** a chat created before providers existed resumes

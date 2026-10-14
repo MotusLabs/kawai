@@ -22,7 +22,7 @@ A Codex turn failing on a usage, rate, spend, credit, or overload limit SHALL re
 - **THEN** no limit event is recorded
 
 ### Requirement: Codex limits cool every profile sharing the login
-A Codex limit event SHALL be recorded for every Codex profile whose Codex home is the same as the limited session's, because those profiles share one login and one plan. Each of them SHALL then cool down under the existing cooldown rules. Claude profiles and Codex profiles on other homes SHALL NOT be affected.
+A Codex limit event of the login or plan SHALL be recorded for every Codex profile whose Codex home is the same as the limited session's, because those profiles share one login and one plan. Each of them SHALL then cool down under the existing cooldown rules. A limit scoped to one session's own budget SHALL be recorded for that session's profile only. Claude profiles and Codex profiles on other homes SHALL NOT be affected.
 
 #### Scenario: Two profiles on one home
 - **WHEN** `codex` and `codex-fast` both use `~/.codex` and a `codex` member hits its usage limit
@@ -31,6 +31,10 @@ A Codex limit event SHALL be recorded for every Codex profile whose Codex home i
 #### Scenario: Separate homes
 - **WHEN** `codex` uses `~/.codex`, `codex-2` uses `~/.codex-2`, and a `codex` member hits its limit
 - **THEN** only `codex` cools down
+
+#### Scenario: Session budget
+- **WHEN** `codex` and `codex-fast` both use `~/.codex` and a `codex` member's turn fails because its own session budget is exhausted
+- **THEN** only `codex` cools down, and members on `codex-fast` keep receiving group mail
 
 #### Scenario: Forwarding avoids the shared login
 - **WHEN** work from a limited `codex` member is forwarded to a group with members on `codex-fast` and `default`

@@ -20,10 +20,10 @@ Every Kawai chat session, and so every team member, is Claude Code. When the sha
   - Role and team context arrive as `developerInstructions`.
   - Mail receipts are read from the Codex rollout file.
   - Groups spawn Codex members through `profile: <codex-profile>`.
-- **Provider on the profile.** A user-level catalog entry may declare `provider: "codex"` with Codex fields: model, `codexHome` (default `~/.codex`), and network. Each provider has its own field allowlist. The provider is stored on the chat row at creation and reused on resume, so a profile edit never changes the driver of an existing chat.
+- **Provider on the profile.** A user-level catalog entry may declare `provider: "codex"` with Codex fields: model, `codexHome` (default `~/.codex`), and network. Each provider has its own field allowlist. The provider, and for Codex the resolved Codex home, are stored on the chat row at creation and reused on resume, so a profile edit never moves an existing chat to another driver or home; a mismatch refuses the start. Kawai never writes into a Codex home: it passes only `CODEX_HOME` and `-c` overrides.
 - **Codex limits and usage.**
   - Codex usage-limit, rate-limit, and overload failures feed `profile_limit_events`, so Codex members park, release, or forward through the existing limit outcomes.
-  - One limit event is written for every Codex profile that shares the limited profile's `codexHome`, because those profiles share one login. When multiple applicable quota windows are exhausted, the cooldown and parked-work resume use the latest known reset among them.
+  - A login-wide limit event is written for every Codex profile that shares the limited session's `codexHome`, because those profiles share one login. A limit on one session's own budget cools only that session's profile. When multiple applicable quota windows are exhausted, the cooldown and parked-work resume use the latest known reset among them.
   - The usage bar shows Codex rate-limit windows, kept per Codex home.
 
 Non-goals:
@@ -64,15 +64,16 @@ Non-goals:
   - Generated protocol types are vendored under `src/server/chat/codex/protocol/` with the generating version recorded.
 - **Server, modified files:**
   - `ChatSessionDriver.ts` implements the contract.
-  - `ChatSessionManager.ts` chooses the driver by provider, and adds the Codex executable and auth checks, usage, and notices keyed by Codex home.
+  - `ChatSessionManager.ts` chooses the driver by provider, and adds the Codex executable and auth checks, usage, and notices keyed by Codex home. Its transcript tail confirms Codex mail receipts live from the rollout file.
   - `TurnQueue.ts` and `team/sessionMailbox.ts` drop their Claude SDK types.
   - `team/mailboxTools.ts` exposes a provider-neutral tool table beside the Claude MCP server.
   - `team/receipt.ts` takes a receipt-row parser per provider.
   - `profileCatalog.ts` and `ClaudeProfiles.ts` gain per-provider entries.
   - `limitSignals.ts` and `usageLimits.ts` gain Codex inputs.
+  - `team/routing/handoff.ts` reads every path of a multi-file change into the handoff digest.
   - `logPoller.ts` adds Codex thread ids to the chat exclusion set.
-- **Data:** an additive `provider` column on `chat_sessions` (default `claude`) and a nullable `transcript_path` column. The existing `sdk_session_id` holds the Codex thread id.
-- **Client:** profile options carry their provider. The New Session dialog and chat header label Codex profiles. The usage bar labels Codex windows. No new controls.
+- **Data:** an additive `provider` column on `chat_sessions` (default `claude`) and nullable `codex_home` and `transcript_path` columns. The existing `sdk_session_id` holds the Codex thread id.
+- **Client:** profile options carry their provider. The New Session dialog and chat header label Codex profiles. The usage bar labels Codex windows. The Debug panel labels Codex JSON-RPC frames by method. No new controls.
 - **Dependencies:** none added. A Codex CLI at or above the pinned baseline must be installed on the host (`KAWAI_CODEX_PATH` or `codex` on `PATH`) only for Codex profiles.
 - **Docs:** CLAUDE.md "How It Works" gets bullets for Codex chats, Codex profiles, and Codex limits. `docs/routing/README.md` gets a note that Codex profiles are ordinary profile ids.
 - **Tests:**

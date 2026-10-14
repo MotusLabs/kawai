@@ -161,6 +161,10 @@ A Codex chat that belongs to a group SHALL receive the same role body, mailbox n
 ### Requirement: Mail receipt for Codex recipients comes from the Codex transcript
 Delivery to a Codex recipient SHALL be acknowledged only by a complete user-message row in its Codex transcript file that carries the envelope's message id. A missing, unreadable, or torn file SHALL hold the message as uncertain, as for Claude recipients. Receipt SHALL be checkable without a running agent.
 
+#### Scenario: Receipt while the turn runs
+- **WHEN** a Codex member's transcript records the envelope row while its turn is still running
+- **THEN** the message shows delivered without waiting for the turn to end
+
 #### Scenario: Restart after delivery
 - **WHEN** the backend restarts after pushing mail to a Codex member whose transcript holds the envelope row
 - **THEN** startup reconciliation marks the message delivered without starting the agent
