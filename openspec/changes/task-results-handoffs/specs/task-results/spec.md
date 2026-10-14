@@ -59,6 +59,10 @@ Task detail SHALL offer **Request review**, **Request QA**, and **Return for fix
 - **WHEN** findings fail and the requester returns the examined result for fixes to the developer role
 - **THEN** a fix handoff carries that result's reference, and its expected response is a new result
 
+#### Scenario: A handoff supersedes the outstanding assignment as the next stage
+- **WHEN** a handoff is dispatched while the task has an outstanding assignment
+- **THEN** that assignment is superseded through task-assignment's stop branch with a journal line naming the handoff kind, its instruction is cancelled only while queued or awaiting a request, and no reassignment note is sent
+
 ### Requirement: Findings are bound to the result examined
 Any team member SHALL submit review or QA findings with `task_submit_findings`, naming the exact result examined and a verdict. Findings SHALL apply only to the result they name: a newer result or commit SHALL NOT inherit them. When a newer result supersedes an earlier one, the earlier result and its findings SHALL remain readable with their binding unchanged.
 

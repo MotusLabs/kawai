@@ -54,7 +54,7 @@ export interface DispatchInput {
    * A handoff (task-results-handoffs D3): its kind, referenced result, and
    * expected response, recorded on the assignment and part of the key's
    * payload identity. A handoff is the task's next stage: it supersedes the
-   * outstanding assignment without a reassignment note or cancel.
+   * outstanding assignment through the **stop** branch, with no choice asked.
    */
   handoff?: DispatchHandoff
 }
@@ -150,13 +150,14 @@ export class AssignmentService {
       this.tasks.appendJournal(task.id, creator, input.handoff
         ? `${HANDOFF_LABELS[input.handoff.kind]} handoff of result ${input.handoff.resultId} to ${targetLabel(input.target)} by ${by}`
         : `Assigned to ${targetLabel(input.target)} by ${by}`)
-      if (outstanding && input.handling) this.replace(outstanding, input.handling, task, input.target, team, inserted.assignment.id)
-      else if (outstanding && input.handoff) {
-        // The handoff is the task's next stage: the previous assignment is
-        // superseded, its delivered work untouched — no note, no cancel.
-        this.store.supersede(outstanding.id, inserted.assignment.id, nowIso())
-        this.tasks.appendJournal(task.id, creator,
-          `Assignment to ${targetLabel({ kind: outstanding.targetKind, id: outstanding.targetId })} superseded by the ${input.handoff.kind} handoff`)
+      // A handoff is the task's next stage (pin 11): the stop branch, so an
+      // undelivered predecessor never delivers later. The key replay above
+      // and task_handoff's equivalent check run first, so a retry never
+      // supersedes its own handoff.
+      const handling = input.handoff ? 'stop' : input.handling
+      if (outstanding && handling) {
+        this.replace(outstanding, handling, task, input.target, team, inserted.assignment.id, creator,
+          input.handoff ? `the ${input.handoff.kind} handoff` : `reassignment (${handling})`)
       }
       return enqueued
     })()
@@ -172,10 +173,11 @@ export class AssignmentService {
    * never touched, nobody is killed or archived) or send the previous claimed
    * agent a fixed normal-priority direct note.
    */
-  private replace(outstanding: TeamTaskAssignment, handling: ReassignHandling, task: TeamTask, target: AssignmentTarget, team: TeamIdentity, newId: string): void {
+  private replace(outstanding: TeamTaskAssignment, handling: ReassignHandling, task: TeamTask, target: AssignmentTarget, team: TeamIdentity,
+    newId: string, actor: TaskActor, supersededBy: string): void {
     const previous = { kind: outstanding.targetKind as 'group' | 'session', id: outstanding.targetId }
     if (handling === 'stop') {
-      if (outstanding.messageId) this.mail.cancel(outstanding.messageId, { kind: 'human' })
+      if (outstanding.messageId) this.mail.cancel(outstanding.messageId, actor.kind === 'agent' ? { kind: 'agent', sessionId: actor.sessionId! } : { kind: 'human' })
     } else if (outstanding.claimedBy && this.options.getSession(outstanding.claimedBy)) {
       this.mail.enqueue({
         teamId: task.teamId, toKind: 'session', toId: outstanding.claimedBy,
@@ -186,8 +188,7 @@ export class AssignmentService {
       })
     }
     this.store.supersede(outstanding.id, newId, nowIso())
-    this.tasks.appendJournal(task.id, { kind: 'human', sessionId: null },
-      `Assignment to ${targetLabel(previous)} superseded by reassignment (${handling})`)
+    this.tasks.appendJournal(task.id, actor, `Assignment to ${targetLabel(previous)} superseded by ${supersededBy}`)
   }
 
   /**

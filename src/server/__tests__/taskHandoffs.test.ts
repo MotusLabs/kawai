@@ -87,9 +87,12 @@ const review = (resultId: string, extra: Record<string, unknown> = {}) => ({
 })
 const taskMail = (taskId: string) => mail.forTask(taskId)
 
-test('a handoff supersedes the outstanding plain assignment as the next stage — no note, no cancel — and records its fields', async () => {
+// Pin 11: every handoff supersedes the outstanding assignment through task-assignment's stop branch.
+test('a handoff over a delivered assignment supersedes it — no note, no cancel — and records its fields', async () => {
   const task = await tasks.create(agent('lead'), { title: 'Export', direction: 'v1' })
   const plain = await assignments.dispatch(human(), { taskId: task.id, target: { kind: 'group', id: 'devs' }, instruction: 'Build it', requestKey: 'assign-1' })
+  const plainMail = plain.message!.id
+  mail.claim(plainMail, 'dev'); mail.markPushed(plainMail); mail.markDelivered(plainMail)
   const result = await results.submit(agent('dev'), task.id, submission)
   const handed = await results.handoff(human(), task.id, review(result.id))
   expect(handed).toMatchObject({ duplicate: false, notice: null,
@@ -97,8 +100,8 @@ test('a handoff supersedes the outstanding plain assignment as the next stage �
   expect(tasks.store.assignmentsOf(task.id).map(row => [row.id, row.supersededBy])).toEqual([
     [plain.assignment.id, handed.assignment.id], [handed.assignment.id, null]])
   expect(tasks.store.outstandingAssignment(task.id)?.id).toBe(handed.assignment.id)
-  // Two instructions, nothing else: no reassignment note to the developer, and the plain one is not cancelled.
-  expect(taskMail(task.id).map(row => [row.toId, row.state])).toEqual([['devs', 'queued'], ['reviewers', 'queued']])
+  // Two instructions, nothing else: no reassignment note to the developer, and its delivered work is untouched.
+  expect(taskMail(task.id).map(row => [row.toId, row.state])).toEqual([['devs', 'delivered'], ['reviewers', 'queued']])
   const instruction = taskMail(task.id)[1]!
   expect(instruction.body).toBe(`Review the export\n\nReview of result ${result.id} (commit abc123): CSV export\n` +
     'Expected response: findings with task_submit_findings (kind review) on this result')
@@ -106,6 +109,36 @@ test('a handoff supersedes the outstanding plain assignment as the next stage �
     `Review handoff of result ${result.id} to group reviewers by human`,
     'Assignment to group devs superseded by the review handoff',
   ])
+})
+
+test('a handoff over a still-queued instruction cancels it, leaving exactly one deliverable instruction', async () => {
+  const task = await tasks.create(agent('lead'), { title: 'Export', direction: 'v1' })
+  const result = await results.submit(agent('dev'), task.id, submission)
+  // A review queued behind the developer, then Return for fixes: the review must never deliver later.
+  const queued = await results.handoff(human(), task.id, review(result.id))
+  const fix = await results.handoff(agent('lead'), task.id, {
+    kind: 'fix', resultId: result.id, target: { kind: 'group', id: 'devs' }, instructions: 'Fix the quoting', expectedResponse: null,
+  })
+  expect(taskMail(task.id).map(row => [row.toId, row.state])).toEqual([['reviewers', 'cancelled'], ['devs', 'queued']])
+  expect(tasks.store.assignmentsOf(task.id).map(row => [row.id, row.supersededBy])).toEqual([
+    [queued.assignment.id, fix.assignment.id], [fix.assignment.id, null]])
+  // The dispatching agent supersedes and cancels as itself.
+  expect(tasks.store.journal(task.id).at(-1)).toMatchObject({ author: { kind: 'agent', sessionId: 'lead' }, text: 'Assignment to group reviewers superseded by the fix handoff' })
+  expect(mail.eventsFor(taskMail(task.id)[0]!.id).at(-1)).toMatchObject({ kind: 'cancelled', actor: 'agent', actorSession: 'lead' })
+})
+
+test('a double-clicked handoff or a retried task_handoff never supersedes its own handoff', async () => {
+  const task = await tasks.create(agent('lead'), { title: 'Export', direction: 'v1' })
+  await assignments.dispatch(human(), { taskId: task.id, target: { kind: 'group', id: 'devs' }, instruction: 'Build it', requestKey: 'assign-1' })
+  const result = await results.submit(agent('dev'), task.id, submission)
+  const first = await results.handoff(human(), task.id, review(result.id))
+  const again = await results.handoff(human(), task.id, review(result.id))
+  expect(again).toMatchObject({ duplicate: true, assignment: { id: first.assignment.id, supersededBy: null } })
+  const lead = taskHandlers(tasks, 'lead', results)
+  const call = { task_id: task.id, kind: 'review', result_id: result.id, target: 'reviewers', instructions: 'Review the export' }
+  expect(await lead.task_handoff!(call)).toMatchObject({ duplicate: true, assignment: { id: first.assignment.id } })
+  expect(tasks.store.outstandingAssignment(task.id)?.id).toBe(first.assignment.id)
+  expect(taskMail(task.id).map(row => [row.toId, row.state])).toEqual([['devs', 'cancelled'], ['reviewers', 'queued']])
 })
 
 test('a replayed handoff key returns the prior handoff; another result, kind, or expected response under it is refused, writing nothing', async () => {
