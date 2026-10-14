@@ -2,7 +2,7 @@
 // shared by the server's projections and the client's Team page. The
 // workspace owns no tables: every type here is a display-shaped projection of
 // facts other stores own, so nothing in this file is persisted or sequenced.
-import type { SessionDirectoryEntry } from './team'
+import type { SessionDirectoryEntry, WaitingReason } from './team'
 import type { TaskStatus } from './teamTasks'
 
 /**
@@ -98,8 +98,11 @@ export interface TeamTaskRow {
   /** The assignment's target group (the requested role); null when none. */
   groupId: string | null
   worktree: string | null
-  /** The instruction mail's current waiting reason as text; null when none. */
-  waitingReason: string | null
+  /**
+   * The instruction mail's current waiting reason, structured so the client
+   * labels it with the same helper the mailbox uses; null when none applies.
+   */
+  waitingReason: WaitingReason | null
   /** D11 verb phrase; null when no next action is derivable. */
   nextAction: string | null
   /** Whether some human-required attention item blocks this task. */

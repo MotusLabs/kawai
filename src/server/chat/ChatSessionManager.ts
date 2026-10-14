@@ -1036,6 +1036,11 @@ export class ChatSessionManager {
     return counts
   }
 
+  /** Every record (live and archived) resolved to this team; the workspace reads it. */
+  teamRecords(teamId: string): ChatSessionRecord[] {
+    return [...this.records.values()].filter(record => this.teams.teamOf(record.sessionId)?.teamId === teamId)
+  }
+
   /** Paused state last pushed per session. */
   private readonly parkedShown = new Map<string, SessionParkedState>()
 
