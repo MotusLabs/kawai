@@ -1,6 +1,7 @@
 // Strategy subscriptions and human strategy actions (product-strategy
-// 3.1/5.1). Like the task view, every request names a chat session; its
-// resolved team scopes what may be seen or changed. Snapshots are
+// 3.1/5.1). Like the task view, every request names the team's directory
+// (`teamPath`, team-workspace-pages D1); its resolved team scopes what may be
+// seen or changed, and an unknown path is refused. Snapshots are
 // authoritative and re-sent whole on every committed change, so a
 // reconnecting client needs no deltas. Human actions run through
 // StrategyService as the human caller and answer with `strategy-result`;
@@ -8,10 +9,11 @@
 //
 // Draft B boundary (design D3b, ruled 2026-10-13): the forged-WS-client
 // vector is explicitly accepted, exactly as for `team-task-*` — human
-// actions are trusted from the UI connection's session. The guarantee the
+// actions are trusted from the UI connection. The guarantee the
 // spec carries is that no agent tool surface can approve, publish, or
 // withdraw; the nonce assurance step (Draft A) is documented, not built.
 import type { ClientMessage } from '../../shared/types'
+import { unknownTeamError } from '../../shared/team'
 import type { ChatSessionManager } from '../chat/ChatSessionManager'
 import type { ChatConnection } from '../chat/ChatConnections'
 
@@ -23,7 +25,7 @@ interface Subscription {
 
 export class StrategyConnections {
   private readonly subscriptions = new Map<ChatConnection, Map<string, Subscription>>()
-  /** Latest open/close per connection and session; only a later one supersedes a pending open. */
+  /** Latest open/close per connection and team path; only a later one supersedes a pending open. */
   private readonly pending = new Map<ChatConnection, Map<string, object>>()
 
   constructor(private readonly manager: ChatSessionManager) {}
@@ -34,54 +36,54 @@ export class StrategyConnections {
   }
 
   publish(teamId: string) {
-    for (const [connection, sessions] of this.subscriptions) {
-      for (const [sessionId, subscription] of sessions) {
-        if (subscription.teamId === teamId) this.send(connection, sessionId, subscription)
+    for (const [connection, views] of this.subscriptions) {
+      for (const [teamPath, subscription] of views) {
+        if (subscription.teamId === teamId) this.send(connection, teamPath, subscription)
       }
     }
   }
 
-  private send(connection: ChatConnection, sessionId: string, subscription: Subscription) {
+  private send(connection: ChatConnection, teamPath: string, subscription: Subscription) {
     const strategy = this.manager.strategies.store.forTeam(subscription.teamId)
-    connection.send({ type: 'strategy-snapshot', sessionId, teamId: subscription.teamId, strategy })
-    if (strategy) connection.send({ type: 'strategy-detail', sessionId, teamId: subscription.teamId, detail: this.manager.strategies.store.detail(strategy.id)! })
+    connection.send({ type: 'strategy-snapshot', teamPath, teamId: subscription.teamId, strategy })
+    if (strategy) connection.send({ type: 'strategy-detail', teamPath, teamId: subscription.teamId, detail: this.manager.strategies.store.detail(strategy.id)! })
   }
 
   async handle(connection: ChatConnection, message: StrategyClientMessage) {
     if ('requestId' in message) return this.act(connection, message)
-    const { sessionId } = message
-    const target = `${sessionId}\0strategy`
+    const { teamPath } = message
+    const target = `${teamPath}\0strategy`
     const token = {}
     const pending = this.pending.get(connection) ?? new Map<string, object>()
     pending.set(target, token)
     this.pending.set(connection, pending)
     if (message.type === 'strategy-close') {
-      this.subscriptions.get(connection)?.delete(sessionId)
+      this.subscriptions.get(connection)?.delete(teamPath)
       return
     }
-    const team = await this.manager.teams.resolvedTeamOf(sessionId)
+    const team = await this.manager.teamScopes.resolve(teamPath)
     if (this.pending.get(connection)?.get(target) !== token) return
     this.pending.get(connection)?.delete(target)
-    if (!this.manager.has(sessionId) || !team) {
-      connection.send({ type: 'error', message: 'Chat team is unavailable' })
+    if (!team) {
+      connection.send({ type: 'error', message: unknownTeamError(teamPath) })
       return
     }
-    const sessions = this.subscriptions.get(connection) ?? new Map<string, Subscription>()
-    this.subscriptions.set(connection, sessions)
-    sessions.set(sessionId, { teamId: team.teamId })
-    this.send(connection, sessionId, { teamId: team.teamId })
+    const views = this.subscriptions.get(connection) ?? new Map<string, Subscription>()
+    this.subscriptions.set(connection, views)
+    views.set(teamPath, { teamId: team.teamId })
+    this.send(connection, teamPath, { teamId: team.teamId })
   }
 
-  /** A human strategy action, as the human caller for the session's team. */
+  /** A human strategy action, as the human caller for the addressed team. */
   private async act(connection: ChatConnection, message: Extract<StrategyClientMessage, { requestId: string }>) {
-    const { sessionId, requestId } = message
-    const team = await this.manager.teams.resolvedTeamOf(sessionId)
+    const { teamPath, requestId } = message
+    const team = await this.manager.teamScopes.resolve(teamPath)
     const fail = (error: unknown) => connection.send({
-      type: 'strategy-result', sessionId, requestId,
+      type: 'strategy-result', teamPath, requestId,
       error: error instanceof Error ? error.message : String(error),
     })
-    if (!this.manager.has(sessionId) || !team) {
-      fail('Chat team is unavailable')
+    if (!team) {
+      fail(unknownTeamError(teamPath))
       return
     }
     const caller = { kind: 'human' as const, team }
@@ -101,19 +103,19 @@ export class StrategyConnections {
           if (!outcome.ok) {
             // A CAS refusal keeps the caller's text client-side; the stored
             // draft rides along for reconciliation (S12).
-            connection.send({ type: 'strategy-result', sessionId, requestId, error: outcome.message, conflict: outcome.stored })
+            connection.send({ type: 'strategy-result', teamPath, requestId, error: outcome.message, conflict: outcome.stored })
             return
           }
-          connection.send({ type: 'strategy-result', sessionId, requestId, draft: outcome.draft })
+          connection.send({ type: 'strategy-result', teamPath, requestId, draft: outcome.draft })
           return
         }
         case 'strategy-submit': {
           const outcome = await strategies.submitForReview(caller, message.draftId !== undefined ? { draft_id: message.draftId } : {})
           if (!outcome.ok) {
-            connection.send({ type: 'strategy-result', sessionId, requestId, error: outcome.message })
+            connection.send({ type: 'strategy-result', teamPath, requestId, error: outcome.message })
             return
           }
-          connection.send({ type: 'strategy-result', sessionId, requestId, revision: outcome.revision })
+          connection.send({ type: 'strategy-result', teamPath, requestId, revision: outcome.revision })
           return
         }
         case 'strategy-approve': {
@@ -126,10 +128,10 @@ export class StrategyConnections {
             ...(message.openQuestions !== undefined ? { open_questions: message.openQuestions } : {}),
           })
           if (!outcome.ok) {
-            connection.send({ type: 'strategy-result', sessionId, requestId, error: outcome.message })
+            connection.send({ type: 'strategy-result', teamPath, requestId, error: outcome.message })
             return
           }
-          connection.send({ type: 'strategy-result', sessionId, requestId })
+          connection.send({ type: 'strategy-result', teamPath, requestId })
           return
         }
         case 'strategy-withdraw': {
@@ -139,10 +141,10 @@ export class StrategyConnections {
             command_id: message.commandId,
           })
           if (!outcome.ok) {
-            connection.send({ type: 'strategy-result', sessionId, requestId, error: outcome.message })
+            connection.send({ type: 'strategy-result', teamPath, requestId, error: outcome.message })
             return
           }
-          connection.send({ type: 'strategy-result', sessionId, requestId })
+          connection.send({ type: 'strategy-result', teamPath, requestId })
           return
         }
       }

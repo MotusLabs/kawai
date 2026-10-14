@@ -68,9 +68,12 @@ beforeEach(async () => {
   const manager = {
     has: (id: string) => records.has(id),
     whenRestored: () => Promise.resolve(),
-    teams: {
-      teamOf: (id: string) => teams.get(id),
-      resolvedTeamOf: async (id: string) => teams.get(id),
+    teams: { teamOf: (id: string) => teams.get(id) },
+    // The project and the stranger's directory are the known team paths
+    // (team-workspace-pages D1); anything else is refused.
+    teamScopes: {
+      resolve: async (teamPath: string) => teamPath === project ? teams.get('dev')
+        : teamPath === elsewhere ? teams.get('stranger') : undefined,
     },
     mailbox, messages: feed,
     // The real manager exposes a TaskService, whose store lists summaries.
@@ -107,7 +110,7 @@ test('list open snapshots the team, changes push, close and disconnect unsubscri
   fromTeam({ kind: 'group', id: 'devs' }, 'Existing')
   fromTeam({ kind: 'group', id: 'devs' }, 'Theirs', teams.get('stranger')!.teamId)
   const task = tasks.create({ teamId: team.teamId, title: 'Export CSV', direction: 'd', creator: { kind: 'human', sessionId: null } })
-  await send({ type: 'team-messages-open', sessionId: 'dev' })
+  await send({ type: 'team-messages-open', teamPath: project })
   // One open, one authoritative snapshot — never two, and never on change.
   expect(count('team-messages-snapshot')).toBe(1)
   expect(last('team-messages-snapshot')!.teamId).toBe(team.teamId)
@@ -118,14 +121,16 @@ test('list open snapshots the team, changes push, close and disconnect unsubscri
   expect(last('team-messages-snapshot')!.tasks).toEqual([{ id: task.id, title: 'Export CSV' }])
   fromTeam({ kind: 'group', id: 'devs' }, 'Second')
   expect(bodies(last('team-messages')!.messages)).toEqual(['Second'])
+  // Pushes name participants like the snapshot does (team-workspace-pages D7).
+  expect(last('team-messages')!.directory).toEqual([{ sessionId: 'gone', name: 'Killed helper', group: 'qa' }])
   fromTeam({ kind: 'group', id: 'devs' }, 'Elsewhere', teams.get('stranger')!.teamId)
   expect(bodies(last('team-messages')!.messages)).toEqual(['Second'])
   expect(count('team-messages-snapshot')).toBe(1)
-  await send({ type: 'team-messages-close', sessionId: 'dev' })
+  await send({ type: 'team-messages-close', teamPath: project })
   const afterClose = messages.length
   fromTeam({ kind: 'group', id: 'devs' }, 'Unseen')
   expect(messages.length).toBe(afterClose)
-  await send({ type: 'team-messages-open', sessionId: 'dev' })
+  await send({ type: 'team-messages-open', teamPath: project })
   expect(count('team-messages-snapshot')).toBe(2)
   // A re-open sees everything the team has, including the row that arrived
   // while the view was closed — only pushes are subscription-scoped.
@@ -138,7 +143,7 @@ test('list open snapshots the team, changes push, close and disconnect unsubscri
 
 test('a reconnect is an authoritative snapshot of the current filters', async () => {
   fromTeam({ kind: 'group', id: 'devs' }, 'Queued')
-  await send({ type: 'team-messages-open', sessionId: 'dev', filters: { state: 'queued' } })
+  await send({ type: 'team-messages-open', teamPath: project, filters: { state: 'queued' } })
   expect(bodies(last('team-messages-snapshot')!.messages)).toEqual(['Queued'])
   connections.disconnect(connection)
   const delivered = fromTeam({ kind: 'group', id: 'devs' }, 'Delivered')
@@ -147,7 +152,7 @@ test('a reconnect is an authoritative snapshot of the current filters', async ()
   store.markDelivered(delivered.id)
   const reconnected: ServerMessage[] = []
   await connections.handle({ send: message => reconnected.push(message) }, {
-    type: 'team-messages-open', sessionId: 'dev', filters: { state: 'queued' },
+    type: 'team-messages-open', teamPath: project, filters: { state: 'queued' },
   })
   const snapshot = reconnected.find(message => message.type === 'team-messages-snapshot')!
   expect(snapshot.type).toBe('team-messages-snapshot')
@@ -158,7 +163,7 @@ test('a reconnect is an authoritative snapshot of the current filters', async ()
 test('thread open sends the thread with its events and re-sends on change', async () => {
   const first = fromTeam({ kind: 'group', id: 'devs' }, 'Question')
   store.claim(first.id, 'dev'); store.markPushed(first.id); store.markDelivered(first.id)
-  await send({ type: 'team-thread-open', sessionId: 'dev', threadId: first.threadId })
+  await send({ type: 'team-thread-open', teamPath: project, threadId: first.threadId })
   expect(last('team-thread')!.threadId).toBe(first.threadId)
   expect(last('team-thread')!.entries).toHaveLength(1)
   expect(last('team-thread')!.entries[0]!.events.map(event => event.kind))
@@ -171,7 +176,7 @@ test('thread open sends the thread with its events and re-sends on change', asyn
   // …while a change in another thread does not.
   const elsewhereRow = fromTeam({ kind: 'group', id: 'devs' }, 'Elsewhere')
   expect(count('team-thread')).toBe(2)
-  await send({ type: 'team-thread-close', sessionId: 'dev', threadId: first.threadId })
+  await send({ type: 'team-thread-close', teamPath: project, threadId: first.threadId })
   store.cancel(elsewhereRow.id)
   expect(count('team-thread')).toBe(2)
 })
@@ -182,26 +187,26 @@ test('a cursor open answers with that page and leaves an open thread alone', asy
   // the keyset of the last row it holds.
   const walked = feed.snapshot(team.teamId, {}, null, 2)
   expect(bodies(walked.messages)).toEqual(['Third', 'Second'])
-  await send({ type: 'team-messages-open', sessionId: 'dev', cursor: walked.nextCursor! })
+  await send({ type: 'team-messages-open', teamPath: project, cursor: walked.nextCursor! })
   expect(count('team-messages-snapshot')).toBe(1)
   expect(bodies(last('team-messages-snapshot')!.messages)).toEqual(['First'])
   expect(last('team-messages-snapshot')!.nextCursor).toBeNull()
   // Opening a thread beside that page must not re-send any list page.
-  await send({ type: 'team-thread-open', sessionId: 'dev', threadId: rows[0]!.threadId })
+  await send({ type: 'team-thread-open', teamPath: project, threadId: rows[0]!.threadId })
   expect(count('team-messages-snapshot')).toBe(1)
   expect(count('team-thread')).toBe(1)
 })
 
 test('a thread of another team is refused', async () => {
   const theirs = fromTeam({ kind: 'group', id: 'devs' }, 'Theirs', teams.get('stranger')!.teamId)
-  await send({ type: 'team-thread-open', sessionId: 'dev', threadId: theirs.threadId })
+  await send({ type: 'team-thread-open', teamPath: project, threadId: theirs.threadId })
   expect(last('error')?.message).toBe('Message does not belong to this team')
   expect(count('team-thread')).toBe(0)
 })
 
 test('a send to a group is stored and answered with the row', async () => {
   await send({
-    type: 'team-message-send', sessionId: 'dev', requestId: REQUEST,
+    type: 'team-message-send', teamPath: project, requestId: REQUEST,
     to: { kind: 'group', id: 'devs' }, body: 'Build it', taskId: undefined,
   })
   const result = sendResult()
@@ -221,7 +226,7 @@ test('a reply to a human message reaches them, settled on send', async () => {
   })
   store.claim(question.id, 'dev'); store.markPushed(question.id); store.markDelivered(question.id)
   await send({
-    type: 'team-message-send', sessionId: 'dev', requestId: REQUEST,
+    type: 'team-message-send', teamPath: project, requestId: REQUEST,
     inReplyTo: question.id, body: 'Done',
   })
   const reply = sendResult().message!
@@ -234,26 +239,34 @@ test('a reply to a human message reaches them, settled on send', async () => {
 })
 
 test('a send needs exactly one of to and inReplyTo', async () => {
-  await send({ type: 'team-message-send', sessionId: 'dev', requestId: 'both', body: 'x', to: { kind: 'group', id: 'devs' }, inReplyTo: 'y' })
-  await send({ type: 'team-message-send', sessionId: 'dev', requestId: 'neither', body: 'x' })
+  await send({ type: 'team-message-send', teamPath: project, requestId: 'both', body: 'x', to: { kind: 'group', id: 'devs' }, inReplyTo: 'y' })
+  await send({ type: 'team-message-send', teamPath: project, requestId: 'neither', body: 'x' })
   expect(failOf('both')).toBe('Provide exactly one of to or inReplyTo')
   expect(failOf('neither')).toBe('Provide exactly one of to or inReplyTo')
   expect(store.listForTeam(team.teamId)).toHaveLength(0)
 })
 
 test('send results report refusals and request ids never persist', async () => {
-  await send({ type: 'team-message-send', sessionId: 'dev', requestId: REQUEST, to: { kind: 'group', id: 'nope' }, body: 'x' })
+  await send({ type: 'team-message-send', teamPath: project, requestId: REQUEST, to: { kind: 'group', id: 'nope' }, body: 'x' })
   expect(failOf()).toContain('Unknown group')
-  await send({ type: 'team-message-send', sessionId: 'dev', requestId: REQUEST, to: { kind: 'group', id: 'devs' }, body: 'Forged', taskId: 'task-missing' })
+  await send({ type: 'team-message-send', teamPath: project, requestId: REQUEST, to: { kind: 'group', id: 'devs' }, body: 'Forged', taskId: 'task-missing' })
   expect(failOf()).toContain('Task not found')
-  await send({ type: 'team-message-send', sessionId: 'stranger', requestId: REQUEST, to: { kind: 'group', id: 'devs' }, body: 'From afar' })
+  await send({ type: 'team-message-send', teamPath: elsewhere, requestId: REQUEST, to: { kind: 'group', id: 'devs' }, body: 'From afar' })
   // A stranger's send is stamped with its own team, never this one.
   expect(store.listForTeam(team.teamId)).toHaveLength(0)
   const accepted = await mailbox.send({ kind: 'human', team }, { to_kind: 'group', to_id: 'devs', body: 'Kept' })
-  await send({ type: 'team-message-send', sessionId: 'dev', requestId: REQUEST, to: { kind: 'group', id: 'devs' }, body: 'Stored' })
+  await send({ type: 'team-message-send', teamPath: project, requestId: REQUEST, to: { kind: 'group', id: 'devs' }, body: 'Stored' })
   const rows = store.listForTeam(team.teamId)
   expect(bodies(rows)).toEqual(['Kept', 'Stored'])
   for (const row of rows) expect(JSON.stringify(row)).not.toContain(REQUEST)
   expect(JSON.stringify(feed.thread(team.teamId, accepted.threadId))).not.toContain(REQUEST)
   expect(store.eventsFor(accepted.id).map(event => event.kind)).toEqual(['sent'])
+})
+
+test('a team path that names no known team is refused with no data', async () => {
+  await send({ type: 'team-messages-open', teamPath: path.join(dir, 'unknown') })
+  expect(messages).toEqual([{ type: 'error', message: `unknown-team: ${path.join(dir, 'unknown')}` }])
+  await send({ type: 'team-message-send', teamPath: path.join(dir, 'unknown'), requestId: REQUEST, to: { kind: 'group', id: 'devs' }, body: 'x' })
+  expect(failOf()).toBe(`unknown-team: ${path.join(dir, 'unknown')}`)
+  expect(store.listForTeam(team.teamId)).toHaveLength(0)
 })

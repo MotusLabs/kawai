@@ -35,13 +35,13 @@ test('every constraint kind carries its fields', () => {
 
 test('the snapshot accepts the new optional fields and stays compatible without them', () => {
   const withFields: Extract<ServerMessage, { type: 'team-mailbox-snapshot' }> = {
-    type: 'team-mailbox-snapshot', sessionId: 'dev', teamId: 'team', messages: [],
+    type: 'team-mailbox-snapshot', teamPath: 'dev', teamId: 'team', messages: [],
     waiting: { m1: { blocker: { kind: 'group-cap', counts: { live: 2, cap: 2 } }, others: [] } },
     worktrees: [{ worktree: '/repo', sessions: [{ sessionId: 'dev', group: 'devs', profile: 'default', status: 'waiting', spawned: false, taskId: null }], pendingSpawns: [] }],
   }
   // An older payload (no `waiting`, no `worktrees`) is still a valid snapshot.
   const legacy: Extract<ServerMessage, { type: 'team-mailbox-snapshot' }> = {
-    type: 'team-mailbox-snapshot', sessionId: 'dev', teamId: 'team', messages: [],
+    type: 'team-mailbox-snapshot', teamPath: 'dev', teamId: 'team', messages: [],
   }
   expect(withFields.waiting!.m1!.blocker.kind).toBe('group-cap')
   expect(legacy.waiting).toBeUndefined()

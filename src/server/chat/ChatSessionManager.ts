@@ -75,6 +75,7 @@ import { isTaskOutputFile, readTaskOutputTail } from './taskOutputFile'
 import type { BackgroundTaskRecord } from './chatBackgroundTasks'
 import { loadTeamGroups } from '../team/teamGroups'
 import { SessionTeams } from '../team/sessionTeams'
+import { TeamScopes } from '../team/teamScope'
 import { SessionDirectory } from '../team/sessionDirectory'
 import { MessageFeed } from '../team/messageFeed'
 import { MessageQuery } from '../team/messageQuery'
@@ -225,6 +226,13 @@ export interface ChatSessionManagerOptions {
    * Wired to the workspace coordinator in index.ts.
    */
   requestWorkspaceRefresh?: (projectPath: string) => void
+  /**
+   * Canonical common git dirs of the discovered workspace repositories
+   * (team-workspace-pages D1): a human team view may address any of them,
+   * even with no chat in it. Wired to the workspace coordinator in
+   * bootstrap.ts; absent means only chat sessions' teams are addressable.
+   */
+  workspaceRepositories?: () => readonly string[]
   /**
    * Debounce window for those refreshes (default 500ms): a fast cd chain
    * collapses into one discovery pass for its final directory.
@@ -864,6 +872,10 @@ export class ChatSessionManager {
         }
       },
     })
+    this.teamScopes = new TeamScopes({
+      teams: this.teams,
+      repositories: () => options.workspaceRepositories?.() ?? [],
+    })
     // Profile usage changes drive the chat-usage broadcast (design D4).
     this.usageLimits.subscribe((profileId, report) =>
       this.options.onUsage?.(profileId, report)
@@ -1038,6 +1050,8 @@ export class ChatSessionManager {
 
   /** Each session's team (agent-teams); shared with the mailbox dispatcher. */
   readonly teams: SessionTeams
+  /** The team a human team view's `teamPath` addresses (team-workspace-pages D1). */
+  readonly teamScopes: TeamScopes
   /** Last known name/group of each team's sessions, kept past kill (team-message-threads D3). */
   readonly directory: SessionDirectory
   readonly mailbox: TeamMailbox
@@ -2261,11 +2275,13 @@ export class ChatSessionManager {
     this.rosterChanged(sessionId)
     const store = this.options.taskStore
     const driver = this.drivers.get(sessionId)
-    if (driver && !driver.isDead) {
-      this.backgroundTaskRecords.set(sessionId, driver.getBackgroundTaskRecords())
-    }
-    if (store && driver && !driver.isDead) {
-      store.write(sessionId, driver.getBackgroundTaskRecords()).catch((error) => {
+    if (!driver) return
+    // A crashing driver is already dead when process_end publishes stopped
+    // tasks. Save those final records so archive/restore cannot revive them.
+    const records = driver.getBackgroundTaskRecords()
+    this.backgroundTaskRecords.set(sessionId, records)
+    if (store) {
+      store.write(sessionId, records).catch((error) => {
         logger.warn('chat_task_sidecar_write_failed', {
           sessionId,
           error: error instanceof Error ? error.message : String(error),

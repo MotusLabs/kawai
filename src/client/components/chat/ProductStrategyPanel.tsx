@@ -18,8 +18,8 @@ import { useStrategyStore, type StrategyView } from '../../stores/strategyStore'
 
 const DIRECTION_SECTIONS = ['purpose', 'primaryUsers', 'needsOutcomes', 'productApproach'] as const
 
-export default function ProductStrategyPanel({ sessionId, view, sendMessage, connected, onClose }: {
-  sessionId: string; view: StrategyView; sendMessage: SendClientMessage; connected: boolean; onClose: () => void
+export default function ProductStrategyPanel({ teamPath, view, sendMessage, connected, onClose }: {
+  teamPath: string; view: StrategyView; sendMessage: SendClientMessage; connected: boolean; onClose: () => void
 }) {
   const sessions = useSessionStore(state => state.sessions)
   const [capture, setCapture] = useState({ productId: '', title: '', purpose: '' })
@@ -35,11 +35,11 @@ export default function ProductStrategyPanel({ sessionId, view, sendMessage, con
 
   const request = (message: Parameters<SendClientMessage>[0], action: 'save' | 'submit' | 'approve' | 'withdraw') => {
     if (!('requestId' in message)) return
-    useStrategyStore.getState().begin(sessionId, message.requestId, action)
+    useStrategyStore.getState().begin(teamPath, message.requestId, action)
     sendMessage(message)
   }
   const withdrawRevision = (revision: number) => {
-    request({ type: 'strategy-withdraw', sessionId, requestId: crypto.randomUUID(), revision, commandId: crypto.randomUUID() }, 'withdraw')
+    request({ type: 'strategy-withdraw', teamPath, requestId: crypto.randomUUID(), revision, commandId: crypto.randomUUID() }, 'withdraw')
   }
 
   return <aside data-testid="product-strategy" className="flex min-h-0 w-full flex-col border-l border-border md:w-[28rem]">
@@ -52,7 +52,7 @@ export default function ProductStrategyPanel({ sessionId, view, sendMessage, con
       {!view.seen ? <p className="text-chat-meta text-secondary">Loading…</p> : !detail ? <CaptureForm capture={capture} setCapture={setCapture} connected={connected} busy={busy}
         onCapture={() => {
           request({
-            type: 'strategy-save-draft', sessionId, requestId: crypto.randomUUID(),
+            type: 'strategy-save-draft', teamPath, requestId: crypto.randomUUID(),
             productId: capture.productId.trim(), title: capture.title.trim(), content: { purpose: capture.purpose.trim() },
             expectedDraftHash: null,
           }, 'save')
@@ -82,25 +82,25 @@ export default function ProductStrategyPanel({ sessionId, view, sendMessage, con
         </section>
 
         {detail.revisions.filter(revision => revision.status === 'in_review').map(revision => <ReviewSection key={revision.revision} revision={revision} detail={detail}
-          connected={connected} busy={busy} request={request} sessionId={sessionId} />)}
+          connected={connected} busy={busy} request={request} teamPath={teamPath} />)}
 
         <StrategyDraftEditor
           draft={detail.drafts.find(draft => draft.draftId === 'human') ?? null}
           connected={connected} busy={busy}
           error={view.pending && Object.values(view.pending).includes('save') ? null : view.error}
           conflict={view.conflict}
-          onReload={() => useStrategyStore.getState().adoptConflict(sessionId)}
+          onReload={() => useStrategyStore.getState().adoptConflict(teamPath)}
           onSave={payload => request({
-            type: 'strategy-save-draft', sessionId, requestId: crypto.randomUUID(),
+            type: 'strategy-save-draft', teamPath, requestId: crypto.randomUUID(),
             content: payload.content, impactProposal: payload.impactProposal ?? undefined,
             expectedDraftHash: payload.expectedDraftHash, expectedBaseRevision: payload.expectedBaseRevision,
           }, 'save')} />
         <div className="mt-2 flex gap-2">
           <button type="button" className="btn text-chat-meta" disabled={!connected || busy} data-testid="strategy-submit"
-            onClick={() => request({ type: 'strategy-submit', sessionId, requestId: crypto.randomUUID() }, 'submit')}>Submit draft for review</button>
+            onClick={() => request({ type: 'strategy-submit', teamPath, requestId: crypto.randomUUID() }, 'submit')}>Submit draft for review</button>
           {detail.drafts.find(draft => draft.draftId === 'human') && connected && <button type="button" className="btn text-chat-meta" disabled={busy}
             data-testid="strategy-withdraw-draft"
-            onClick={() => request({ type: 'strategy-withdraw', sessionId, requestId: crypto.randomUUID(), draftId: 'human', commandId: crypto.randomUUID() }, 'withdraw')}>Withdraw draft</button>}
+            onClick={() => request({ type: 'strategy-withdraw', teamPath, requestId: crypto.randomUUID(), draftId: 'human', commandId: crypto.randomUUID() }, 'withdraw')}>Withdraw draft</button>}
         </div>
 
         <StrategyRevisionHistory detail={detail} sessions={sessions} connected={connected} busy={busy} onWithdrawRevision={withdrawRevision} />
@@ -110,13 +110,13 @@ export default function ProductStrategyPanel({ sessionId, view, sendMessage, con
 }
 
 /** Review of one InReview revision: findings by knowledge state, and the human Approve control (5.3). */
-function ReviewSection({ revision, detail, connected, busy, request, sessionId }: {
+function ReviewSection({ revision, detail, connected, busy, request, teamPath }: {
   revision: StrategyRevision
   detail: StrategyDetail
   connected: boolean
   busy: boolean
   request: (message: Parameters<SendClientMessage>[0], action: 'save' | 'submit' | 'approve' | 'withdraw') => void
-  sessionId: string
+  teamPath: string
 }) {
   // One command id per (revision, dialog) — a retry after a refusal reuses
   // it, which is what makes the server's replay the intended path.
@@ -144,7 +144,7 @@ function ReviewSection({ revision, detail, connected, busy, request, sessionId }
         onChange={event => setOpenQuestions(event.target.value)} />
       <button type="button" className="btn btn-primary self-start text-chat-meta" disabled={!connected || busy} data-testid={`approve-${revision.revision}`}
         onClick={() => request({
-          type: 'strategy-approve', sessionId, requestId: crypto.randomUUID(),
+          type: 'strategy-approve', teamPath, requestId: crypto.randomUUID(),
           revision: revision.revision, contentHash: revision.contentHash, commandId,
           expectedCurrentRevision: detail.strategy.currentApprovedRevision,
           ...(scope.trim() ? { approvalScope: scope.trim() } : {}),

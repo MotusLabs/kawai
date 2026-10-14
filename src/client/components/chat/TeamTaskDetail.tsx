@@ -35,8 +35,8 @@ interface DetailAssignForm {
 
 const emptyAssignForm = (): DetailAssignForm => ({ kind: '', id: '', instruction: '', requestKey: null, preview: false })
 
-export default function TeamTaskDetail({ sessionId, projectPath, view, sendMessage, connected, sessions, onOpenThread, onOpenSession }: {
-  sessionId: string; projectPath: string; view: TaskView; sendMessage: SendClientMessage; connected: boolean; sessions: Session[]
+export default function TeamTaskDetail({ teamPath, projectPath, view, sendMessage, connected, sessions, onOpenThread, onOpenSession }: {
+  teamPath: string; projectPath: string; view: TaskView; sendMessage: SendClientMessage; connected: boolean; sessions: Session[]
   /** Open this message's thread in the Messages view; omitted = no link. */
   onOpenThread?: (threadId: string) => void
   /** Open a message participant's chat; omitted = names only. */
@@ -56,15 +56,15 @@ export default function TeamTaskDetail({ sessionId, projectPath, view, sendMessa
     setDirection(task?.direction ?? '')
     setAcceptance(task?.acceptance ?? '')
   }, [task?.id, task?.revision, task?.direction, task?.acceptance])
-  const back = () => useTeamTaskStore.getState().select(sessionId, null)
+  const back = () => useTeamTaskStore.getState().select(teamPath, null)
   if (!detail || !task) {
     return <div><button className="btn mb-3" onClick={back}>All tasks</button><p role="status">Loading task…</p></div>
   }
   const disabled = !connected || Object.keys(view.pending).length > 0
   const act = (action: TaskAction, message: Record<string, unknown>) => {
     const requestId = crypto.randomUUID()
-    useTeamTaskStore.getState().begin(sessionId, requestId, action)
-    sendMessage({ sessionId, requestId, taskId: task.id, ...message } as Parameters<SendClientMessage>[0])
+    useTeamTaskStore.getState().begin(teamPath, requestId, action)
+    sendMessage({ teamPath, requestId, taskId: task.id, ...message } as Parameters<SendClientMessage>[0])
   }
   const closed = task.status === 'done' || task.status === 'cancelled'
   const statusLabel = (status: TaskStatus) => (status === 'open' && closed ? 'Reopen' : `Mark ${status}`)
@@ -76,10 +76,10 @@ export default function TeamTaskDetail({ sessionId, projectPath, view, sendMessa
 
   const previewAssign = () => {
     const requestId = crypto.randomUUID()
-    useTeamTaskStore.getState().beginPreview(sessionId, requestId)
+    useTeamTaskStore.getState().beginPreview(teamPath, requestId)
     setForm(current => ({ ...current, preview: true }))
     sendMessage({
-      type: 'team-task-preview', sessionId, requestId, taskId: task.id,
+      type: 'team-task-preview', teamPath, requestId, taskId: task.id,
       target: { kind: form.kind as 'group' | 'session', id: form.id },
     })
   }
@@ -103,7 +103,7 @@ export default function TeamTaskDetail({ sessionId, projectPath, view, sendMessa
     <button className="btn mb-3" onClick={back}>All tasks</button>
     <h4 className="font-medium">{task.title}</h4>
     <p className="text-chat-meta text-secondary"><span data-testid="task-detail-status">{task.status}</span> · revision {task.revision} · created by <span data-testid="task-creator">{actorLabel(task.creator, sessions)}</span></p>
-    {task.parentId && <p className="text-chat-meta">Subtask of <button className="hover:underline" onClick={() => useTeamTaskStore.getState().select(sessionId, task.parentId)}>
+    {task.parentId && <p className="text-chat-meta">Subtask of <button className="hover:underline" onClick={() => useTeamTaskStore.getState().select(teamPath, task.parentId)}>
       {view.tasks.find(row => row.id === task.parentId)?.title ?? task.parentId}</button></p>}
     {task.worktree && <p className="break-all text-chat-meta">Worktree: {task.worktree}</p>}
     {task.openspecChange && <p className="text-chat-meta">Linked OpenSpec change <code>{task.openspecChange}</code> — its proposal, design, and tasks are the authoritative direction.</p>}
@@ -204,7 +204,7 @@ export default function TeamTaskDetail({ sessionId, projectPath, view, sendMessa
       <h5 className="font-medium">Subtasks</h5>
       {detail.subtasks.length === 0 && <p className="text-chat-meta text-secondary">No subtasks</p>}
       {detail.subtasks.map(child => <p key={child.id} className="text-chat-meta">
-        <button className="hover:underline" onClick={() => useTeamTaskStore.getState().select(sessionId, child.id)}>{child.title}</button> · {child.status} · {assignmentLabel(child.assignment, sessions)}
+        <button className="hover:underline" onClick={() => useTeamTaskStore.getState().select(teamPath, child.id)}>{child.title}</button> · {child.status} · {assignmentLabel(child.assignment, sessions)}
       </p>)}
     </section>
 
