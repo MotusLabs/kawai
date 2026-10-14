@@ -271,7 +271,9 @@ describe('spawn-time registration', () => {
     // read/propose only, no approve/publish/withdraw tool anywhere — and so
     // does release_member (member-release D6; registered when a MemberRelease
     // is wired, always allowed).
-    expect(TEAM_ALLOWED_TOOLS).toEqual([...expected.slice(0, 7), 'release_member', ...expected.slice(7), 'strategy_list', 'strategy_get', 'strategy_save_draft', 'strategy_submit_for_review']
+    // Result tools (task-results-handoffs) are allowed too, registered only with a result service.
+    const resultTools = ['task_submit_result']
+    expect(TEAM_ALLOWED_TOOLS).toEqual([...expected.slice(0, 7), 'release_member', ...expected.slice(7), ...resultTools, 'strategy_list', 'strategy_get', 'strategy_save_draft', 'strategy_submit_for_review']
       .map(name => `mcp__kawai-team__${name}`))
     await server.instance.close()
   })

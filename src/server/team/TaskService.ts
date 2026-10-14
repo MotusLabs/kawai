@@ -332,8 +332,8 @@ export class TaskService {
     return (from === 'done' || from === 'cancelled') !== (to === 'done' || to === 'cancelled')
   }
 
-  /** The caller's team, actor identity, and current creation right. */
-  private async context(caller: TaskCaller) {
+  /** The caller's team, actor identity, and current creation right (TaskResultService resolves callers here too). */
+  async context(caller: TaskCaller) {
     if (caller.kind === 'human') {
       return { team: caller.team, actor: { kind: 'human', sessionId: null } as TaskActor, canCreate: true }
     }
@@ -357,7 +357,7 @@ export class TaskService {
   }
 
   /** The task, if it belongs to the team; otherwise an error that leaks nothing. */
-  private sameTeamTask(team: TeamIdentity, taskId: string, label = 'Task'): TeamTask {
+  sameTeamTask(team: TeamIdentity, taskId: string, label = 'Task'): TeamTask {
     const task = this.store.get(taskId)
     if (!task || task.teamId !== team.teamId) throw new Error(`${label} not found in this team: ${taskId}`)
     return task

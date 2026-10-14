@@ -8,8 +8,8 @@
 
 ## 2. Result submission
 
-- [ ] 2.1 Implement submission on the new `TaskResultService`: any team member of the task's team, `summary` plus at least one of `commit`/`diff` required, server pins `task_revision` and `worktree` (task's worktree, else the submitting session's resolved worktree) and appends the submitter-authored journal note; verify service tests cover missing-reference refusals, pinning at the current revision, the journal entry, and that task status is untouched.
-- [ ] 2.2 Add `task_submit_result` to `taskTools.ts` (schemas, descriptions, handlers bound to the calling session) so it joins `TASK_TOOL_NAMES` and thus `TEAM_ALLOWED_TOOLS` — allowed without an approval card; verify tool tests cover the refusal paths and a successful submission round-trip.
+- [x] 2.1 Implement submission on the new `TaskResultService`: any team member of the task's team, `summary` plus at least one of `commit`/`diff` required, server pins `task_revision` and `worktree` (task's worktree, else the submitting session's resolved worktree) and appends the submitter-authored journal note; verify service tests cover missing-reference refusals, pinning at the current revision, the journal entry, and that task status is untouched.
+- [x] 2.2 Add `task_submit_result` to `taskTools.ts` (schemas, descriptions, handlers bound to the calling session) so it joins `TASK_TOOL_NAMES` and thus `TEAM_ALLOWED_TOOLS` — allowed without an approval card; verify tool tests cover the refusal paths and a successful submission round-trip.
 
 ## 3. Handoffs
 

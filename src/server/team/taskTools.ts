@@ -4,8 +4,10 @@
 import { z } from 'zod'
 import { TASK_STATUSES, type TaskStatus } from '../../shared/teamTasks'
 import type { TaskService } from './TaskService'
+import type { TaskResultService } from './TaskResultService'
 
-export const TASK_TOOL_NAMES = ['task_create', 'task_get', 'task_note', 'task_update_status', 'task_amend', 'task_list', 'task_acknowledge'] as const
+export const TASK_TOOL_NAMES = ['task_create', 'task_get', 'task_note', 'task_update_status', 'task_amend', 'task_list', 'task_acknowledge',
+  'task_submit_result'] as const
 
 const status = z.enum(TASK_STATUSES as [TaskStatus, ...TaskStatus[]])
 const taskId = { task_id: z.string().min(1) }
@@ -23,6 +25,11 @@ export const taskSchemas = {
   }),
   task_list: z.object({ status: status.optional() }),
   task_acknowledge: z.object({ ...taskId, revision: z.number().int().min(1) }),
+  task_submit_result: z.object({
+    ...taskId, summary: z.string().min(1), commit: z.string().optional(), diff: z.string().optional(),
+    tests: z.array(z.object({ description: z.string().min(1), outcome: z.string().min(1) })).optional(),
+    limitations: z.string().optional(),
+  }),
 }
 
 export const taskDescriptions: Record<(typeof TASK_TOOL_NAMES)[number], string> = {
@@ -33,9 +40,10 @@ export const taskDescriptions: Record<(typeof TASK_TOOL_NAMES)[number], string> 
   task_amend: "Publish a new revision of a task's direction or acceptance criteria (its creator only). Optional rationale says why; notify: true also sends the assignment's claimed agent a revision notice.",
   task_list: "List this team's tasks, optionally by status.",
   task_acknowledge: 'State the published task revision you are now working from (the revision in the task header). Call it when you start or take over work on a task, and after a revision notice.',
+  task_submit_result: 'Submit a result for a task: a summary, a commit and/or diff reference (at least one), the tests you ran with their outcomes, and known limitations. Your test outcomes are shown as claimed, not verified. Supersedes the task\'s previous result; does not close the task.',
 }
 
-export function taskHandlers(tasks: TaskService, sessionId: string) {
+export function taskHandlers(tasks: TaskService, sessionId: string, results?: TaskResultService) {
   const caller = { kind: 'agent' as const, sessionId }
   return {
     task_create: async (input: unknown) => tasks.create(caller, taskSchemas.task_create.parse(input)),
@@ -56,6 +64,13 @@ export function taskHandlers(tasks: TaskService, sessionId: string) {
       const { task_id, revision } = taskSchemas.task_acknowledge.parse(input)
       return tasks.acknowledge(caller, task_id, revision)
     },
+    // Results (task-results-handoffs): registered only where the server has a result service.
+    ...(results ? {
+      task_submit_result: async (input: unknown) => {
+        const { task_id, ...submission } = taskSchemas.task_submit_result.parse(input)
+        return results.submit(caller, task_id, submission)
+      },
+    } : {}),
     task_list: async (input: unknown) => tasks.list(caller, taskSchemas.task_list.parse(input).status),
   }
 }
