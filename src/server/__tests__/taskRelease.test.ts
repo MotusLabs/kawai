@@ -181,3 +181,15 @@ test('a review already queued behind the occupied worktree is not doubled: the r
   expect(outcome.handoff.notice).toContain('proceeds in the freed worktree')
   expect(reviewMail(task.id)).toHaveLength(1)
 })
+
+test('a resend of a release that took the standing-review path replays that review: no throw, no second archive or dispatch', async () => {
+  const { task, result } = await developed()
+  const queued = await results.handoff(human(), task.id, { kind: 'review', resultId: result.id, target: { kind: 'group', id: 'reviewers' },
+    instructions: 'Review', requestKey: 'review-early' })
+  await results.release!.release(human(), task.id, request)
+  const journal = tasks.store.journal(task.id).length
+  const resend = await results.release!.release(human(), task.id, request)
+  expect(resend).toMatchObject({ released: [], handoff: { duplicate: true, assignment: { id: queued.assignment.id } } })
+  expect(reviewMail(task.id)).toHaveLength(1)
+  expect(tasks.store.journal(task.id)).toHaveLength(journal)
+})
