@@ -29,7 +29,7 @@ When a task closes while a member is being spawned for it, the system SHALL with
 - **THEN** the dev starts without receiving the task's message, is archived once its agent is idle, and `feat-x` no longer holds a live spawned member
 
 ### Requirement: Release waits until the member is ready
-A member SHALL be ready for release only when it is idle in the sense mail delivery uses, has no pending approval or question, holds no claimed or parked mail, and has no due direct mail queued for it. A pending member that is not ready SHALL be released once it becomes ready, without further action.
+A member SHALL be ready for release only when it is idle in the sense mail delivery uses, has no pending approval or question, has no live background worker, holds no claimed or parked mail, and has no due direct mail queued for it. Every release path SHALL use this one definition. A pending member that is not ready SHALL be released once it becomes ready, without further action.
 
 #### Scenario: Busy dev released after its turn
 - **WHEN** a task is marked done while its dev is mid-turn writing a final report
@@ -38,6 +38,10 @@ A member SHALL be ready for release only when it is idle in the sense mail deliv
 #### Scenario: Pending approval holds the release
 - **WHEN** a task is done while its dev awaits a tool approval
 - **THEN** the dev is not archived until the approval is answered and its turn ends
+
+#### Scenario: Live background worker holds the release
+- **WHEN** a task is done while its dev is idle but a background worker it started is still running
+- **THEN** the dev is not archived until the worker stops
 
 #### Scenario: Queued direct mail is delivered first
 - **WHEN** the lead closes a task and then sends its dev a closing direct message
@@ -99,6 +103,10 @@ A group file SHALL accept `canReleaseMembers: true|false` (default `false`). Mem
 #### Scenario: Busy member refused
 - **WHEN** the lead releases a dev that is mid-turn
 - **THEN** the tool returns an error saying the dev is busy and the dev keeps working
+
+#### Scenario: Member with a live background worker refused
+- **WHEN** the lead releases an idle dev whose background worker is still running
+- **THEN** the tool returns an error naming the live background worker, and nothing is archived
 
 #### Scenario: Human-created session refused
 - **WHEN** the lead releases the human-created reviewer session
