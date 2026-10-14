@@ -12,6 +12,7 @@ import { useStrategyStore } from '../../stores/strategyStore'
 import { useTeamMailboxStore } from '../../stores/teamMailboxStore'
 import { useTeamMessageStore } from '../../stores/teamMessageStore'
 import { useTeamTaskStore } from '../../stores/teamTaskStore'
+import { aliasTeamKey } from '../../utils/teamKeyAliases'
 
 export type SideSlot = 'debug' | 'mailbox' | 'tasks' | 'messages' | 'strategy'
 
@@ -101,6 +102,8 @@ export function useOpenSideSlot(owner: SlotOwner): SideSlot | null {
 /** Move every team panel's view from a chat's old team key to its new one. */
 export function rekeyTeamViews(from: string, to: string) {
   if (from === to) return
+  // Replies still in flight for the old key follow the views (teamKeyAliases).
+  aliasTeamKey(from, to)
   useTeamMailboxStore.getState().rekey(from, to)
   useTeamTaskStore.getState().rekey(from, to)
   useTeamMessageStore.getState().rekey(from, to)
