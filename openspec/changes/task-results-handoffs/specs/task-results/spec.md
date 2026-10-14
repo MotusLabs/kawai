@@ -33,7 +33,7 @@ Any team member SHALL be able to submit a result for a task of its team with the
 - **THEN** the tool is allowed without an approval card, like the other team task tools
 
 ### Requirement: Handoffs are explicit role assignments
-Task detail SHALL offer **Request review**, **Request QA**, and **Return for fixes** as handoffs: assignment records carrying the handoff kind, the requested role, instructions, the referenced result, and the expected response. Human handoffs SHALL dispatch under a stable client request key with task-assignment's idempotency, and SHALL follow its worktree routing. Agents SHALL dispatch handoffs with a `task_handoff` tool.
+Task detail SHALL offer **Request review**, **Request QA**, and **Return for fixes** as handoffs: assignment records carrying the kind, requested role, instructions, referenced result, and expected response. Human handoffs dispatch under a client request key with task-assignment's idempotency and worktree routing. Agents dispatch with `task_handoff`; while an equivalent handoff (same task, result, kind) is outstanding, a duplicate call SHALL return it with a notice instead of dispatching again.
 
 #### Scenario: Human requests review
 - **WHEN** the human requests review of the outstanding result from task detail
@@ -50,6 +50,10 @@ Task detail SHALL offer **Request review**, **Request QA**, and **Return for fix
 #### Scenario: Lead requests QA by tool
 - **WHEN** a lead agent calls `task_handoff` with kind `qa` for a result
 - **THEN** a QA handoff assignment is dispatched to the named role with the result reference
+
+#### Scenario: A duplicated handoff call dispatches once
+- **WHEN** `task_handoff` is retried while the handoff it created is still outstanding
+- **THEN** the outstanding handoff is returned with a duplicate notice and no second instruction is dispatched
 
 ### Requirement: Findings are bound to the result examined
 Any team member SHALL submit review or QA findings with `task_submit_findings`, naming the exact result examined and a verdict. Findings SHALL apply only to the result they name: a newer result or commit SHALL NOT inherit them. When a newer result supersedes an earlier one, the earlier result and its findings SHALL remain readable with their binding unchanged.
