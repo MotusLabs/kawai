@@ -63,7 +63,7 @@ interface AttentionItem {
 }
 ```
 
-Sources are a small registry of pure functions over existing state; adding a Wave C source adds a function and a kind, not a shape change. The `link.kind: 'card'` case exists today only so a strategy-P2/D3 Lead decision card can land without a migration of the item type. An unknown kind renders its cause/next action and is never dropped. *Alternative:* a discriminated union per kind — rejected: the queue would need a new render branch per source, which is exactly what the extension point must not require.
+Sources are a small registry of pure functions over existing state; adding a Wave C source adds a function and a kind, not a shape change. The `link.kind: 'card'` case exists today only so a strategy-P2/D3 Lead decision card can land without a migration of the item type. An unknown kind renders its cause/next action and is never dropped. No item carries a `deadline`: deadlines are deferred to Wave C holds and stalls, where a deadline is a fact the hold owns — today an item is never late, only waiting. *Alternative:* a discriminated union per kind — rejected: the queue would need a new render branch per source, which is exactly what the extension point must not require.
 
 ### D6. Counts replace; toasts key on identity
 
