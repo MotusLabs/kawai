@@ -62,6 +62,11 @@ CREATE TABLE IF NOT EXISTS team_member_releases (
   requested_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS team_member_releases_task ON team_member_releases (task_id);
+CREATE TABLE IF NOT EXISTS team_task_closers (
+  task_id TEXT PRIMARY KEY,
+  closed_by_kind TEXT NOT NULL,
+  closed_by_session TEXT
+);
 `
 
 const isClosed = (status: TaskStatus) => status === 'done' || status === 'cancelled'
@@ -128,8 +133,10 @@ export class MemberRelease {
       const waiting = (row: { toKind: string; state: string }) =>
         row.state === 'queued' || row.state === 'awaiting-request' || row.state === 'spawning'
       return () => {
-        // Who closed the task: a spawn completing after the close reads this back.
         this.options.tasks.appendJournal(task.id, actor, `Task ${status}.`)
+        // Who closed the task: a spawn completing after the close reads this back.
+        this.db.prepare(`INSERT OR REPLACE INTO team_task_closers (task_id, closed_by_kind, closed_by_session)
+          VALUES (?, ?, ?)`).run(task.id, actor.kind, actor.sessionId)
         // Only rows still undelivered at the commit: a message claimed, pushed,
         // or delivered while the definitions resolved stays the recipient's.
         for (const message of this.options.store.forTask(task.id)) {
@@ -149,7 +156,10 @@ export class MemberRelease {
       }
     }
     if (isClosed(task.status) && !isClosed(status)) {
-      return () => { this.db.prepare('DELETE FROM team_member_releases WHERE task_id = ?').run(task.id) }
+      return () => {
+        this.db.prepare('DELETE FROM team_member_releases WHERE task_id = ?').run(task.id)
+        this.db.prepare('DELETE FROM team_task_closers WHERE task_id = ?').run(task.id)
+      }
     }
     return () => {}
   }
@@ -157,8 +167,8 @@ export class MemberRelease {
   /**
    * A session was created spawned for a task that is already closed (D1):
    * its spawn's mail was dead-lettered at the close, so it starts with no
-   * turn — mark it now and it is released once it settles. The closer comes
-   * from the close's status journal entry, else kawai.
+   * turn — mark it now and it is released once it settles. The closer is
+   * the actor the close stored, else kawai.
    */
   async markSpawnedForClosedTask(sessionId: string, taskId: string): Promise<void> {
     const task = this.options.tasks.get(taskId)
@@ -173,13 +183,13 @@ export class MemberRelease {
     const fresh = this.options.getRecord(sessionId)
     if (!still || !isClosed(still.status)) return
     if (!fresh || !fresh.spawned || fresh.taskId !== taskId || fresh.archivedAt != null) return
-    const closer = this.options.tasks.journal(taskId).findLast(entry =>
-      entry.author.kind !== 'system' && entry.text === `Task ${still.status}.`)
+    const closer = this.db.prepare('SELECT closed_by_kind, closed_by_session FROM team_task_closers WHERE task_id = ?')
+      .get(taskId) as { closed_by_kind: string; closed_by_session: string | null } | null
     this.db.prepare(`INSERT OR REPLACE INTO team_member_releases
       (session_id, task_id, team_id, reason, requested_by_kind, requested_by_session, requested_at)
       VALUES (?, ?, ?, ?, ?, ?, ?)`)
       .run(sessionId, still.id, still.teamId, `task ${still.status}`,
-        closer?.author.kind ?? 'system', closer?.author.sessionId ?? null, new Date().toISOString())
+        closer?.closed_by_kind ?? 'system', closer?.closed_by_session ?? null, new Date().toISOString())
     this.options.notify()
   }
 

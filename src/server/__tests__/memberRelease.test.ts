@@ -269,6 +269,23 @@ test('a spawn in flight at close gets no first turn, is marked, and is released 
   expect(archived).toEqual(['spawned-1'])
 })
 
+test('a late spawn records the stored closer, not a look-alike journal note (F3)', async () => {
+  const t = task(featX)
+  const within = await runtime.releases.transitionHook(t, 'done', { kind: 'agent', sessionId: 'lead-1' })
+  runtime.tasks.store.setStatus(t.id, 'done', within)
+  // A later human note with the same text must not be taken for the close.
+  runtime.tasks.store.appendJournal(t.id, { kind: 'human', sessionId: null }, 'Task done.')
+  records.set('spawned-1', record('spawned-1', { projectPath: featX, spawned: true, taskId: t.id }))
+  await runtime.releases.markSpawnedForClosedTask('spawned-1', t.id)
+  expect(runtime.releases.pending()[0]?.requestedBy).toEqual({ kind: 'agent', sessionId: 'lead-1' })
+  // Reopen forgets the closer: a direct close without the hook falls back to kawai.
+  runtime.tasks.store.setStatus(t.id, 'active', await runtime.releases.transitionHook(runtime.tasks.store.get(t.id)!, 'active', { kind: 'human', sessionId: null }))
+  runtime.tasks.store.setStatus(t.id, 'done')
+  records.set('spawned-2', record('spawned-2', { projectPath: featX, spawned: true, taskId: t.id }))
+  await runtime.releases.markSpawnedForClosedTask('spawned-2', t.id)
+  expect(runtime.releases.pending().find(row => row.sessionId === 'spawned-2')?.requestedBy).toEqual({ kind: 'system', sessionId: null })
+})
+
 test('closed-task group mail is dead-lettered at close and for late arrivals; direct and unscoped mail pass (D8)', async () => {
   writeGroup('leads', 'worktreeScoped: false')
   records.set('lead-1', record('lead-1', { groupId: 'leads', projectPath: repo }))
