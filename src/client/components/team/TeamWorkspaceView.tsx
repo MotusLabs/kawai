@@ -111,12 +111,6 @@ export default function TeamWorkspaceView({ teamKey, location, sendMessage, conn
       store.select(teamKey, location.id ?? null)
     }
   }, [messagesOpen, teamKey, location.id])
-  const liveSessions = useMemo(
-    () => sessions.map(row => ({ id: row.id, name: row.name, groupId: row.groupId ?? null })),
-    [sessions],
-  )
-  const groups = useTeamGroups(messagesOpen, teamKey)
-
   // Mailbox (5.3): the tab's snapshot subscription, mirroring the chat host.
   const mailboxOpen = location.tab === 'mailbox' && !unknown
   const mailbox = useTeamMailboxStore(state => state.views[teamKey])
@@ -126,6 +120,13 @@ export default function TeamWorkspaceView({ teamKey, location, sendMessage, conn
     sendMessage({ type: 'team-mailbox-open', teamPath: teamKey })
     return () => sendMessage({ type: 'team-mailbox-close', teamPath: teamKey })
   }, [teamKey, connected, connectionEpoch, mailboxOpen, sendMessage])
+
+  const liveSessions = useMemo(
+    () => sessions.map(row => ({ id: row.id, name: row.name, groupId: row.groupId ?? null })),
+    [sessions],
+  )
+  // The groups list feeds the Messages composer and the Mailbox hand-off.
+  const groups = useTeamGroups(messagesOpen || mailboxOpen, teamKey)
 
   const status = strategyStatusLine(strategy)
   const openTab = (tab: WorkspaceTab) => navigate({ teamKey, tab })
