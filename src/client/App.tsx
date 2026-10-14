@@ -36,9 +36,7 @@ import { flushSync } from 'react-dom'
 import { primeAudio, needsUserGesture } from './utils/sound'
 import { getEffectiveModifier, matchesModifier } from './utils/device'
 import { startTeamViewMigration } from './stores/teamViewMigration'
-import { useTeamLocation, useTeamLocationStore } from './hooks/useTeamLocation'
-import { useTeamWorkspaceStore } from './stores/teamWorkspaceStore'
-import { DEFAULT_WORKSPACE_TAB, RENDERED_WORKSPACE_TABS } from './utils/teamLocation'
+import { useTeamPageRoute } from './hooks/useTeamLocation'
 
 interface ServerInfo {
   port: number
@@ -169,14 +167,7 @@ export default function App() {
   // while leaving `selectedSessionId` alone (team-workspace D10). A reload
   // restores the location; a selection act after mount leaves it, so Back
   // returns to the same tab and item.
-  const teamLocation = useTeamLocation()
-  const selectionEpoch = useSessionStore((state) => state.selectionEpoch)
-  const selectionEpochAtMount = useRef(selectionEpoch)
-  useEffect(() => {
-    if (selectionEpoch > selectionEpochAtMount.current) {
-      useTeamLocationStore.getState().leave()
-    }
-  }, [selectionEpoch])
+  const { teamLocation, openTeamPage: handleOpenTeamPage } = useTeamPageRoute()
 
   // Team panel views follow workspace discovery to their team's key, for every
   // chat — not only the selected one (team-workspace-pages D2).
@@ -659,15 +650,6 @@ export default function App() {
     },
     [sendMessage]
   )
-
-  // The navigator's Team entry opens the repository's Team page on the tab
-  // last used for that team, Tasks the first time (team-workspace-pages 4.1);
-  // the session selection is untouched (team-workspace D10).
-  const handleOpenTeamPage = useCallback((teamKey: string) => {
-    const last = useTeamWorkspaceStore.getState().views[teamKey]?.tab
-    const tab = last !== undefined && RENDERED_WORKSPACE_TABS.includes(last) ? last : DEFAULT_WORKSPACE_TAB
-    useTeamLocationStore.getState().navigate({ teamKey, tab })
-  }, [])
 
   useEffect(() => {
     const effectiveModifier = getEffectiveModifier(shortcutModifier)
