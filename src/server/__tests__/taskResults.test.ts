@@ -159,3 +159,71 @@ test('findings answering the caller\'s outstanding handoff for that result recor
   const unrelated = await results.submitFindings(agent('lead'), task.id, { resultId: result.id, kind: 'qa', verdict: 'pass', findings: 'ok' })
   expect(unrelated.handoffId).toBeNull()
 })
+
+// Acceptance (5.1, D5): closing rights first; one transaction; guardrail reasons journaled.
+const accepted = (resultId: string) => tasks.store.results.get(resultId)!.acceptedAt !== null
+
+test('a contributor cannot accept a result of a human-created task: refused, and nothing is written', async () => {
+  const task = await tasks.create(human(), { title: 'Export', direction: 'v1' })
+  const result = await results.submit(agent('dev'), task.id, submission)
+  const journal = tasks.store.journal(task.id).length
+  await expect(results.accept(agent('dev'), task.id, result.id)).rejects.toThrow("Only the task's creator can accept its results and close it")
+  expect(accepted(result.id)).toBe(false)
+  expect(tasks.store.journal(task.id)).toHaveLength(journal)
+  expect(tasks.store.get(task.id)?.status).toBe('open')
+})
+
+test('the human accepts: the mark, the journal entry, and done commit together, with the criteria shown', async () => {
+  const task = await tasks.create(human(), { title: 'Export', direction: 'v1', acceptance: 'A CSV downloads' })
+  const result = await results.submit(agent('dev'), task.id, submission)
+  const outcome = await results.accept(human(), task.id, result.id)
+  expect(outcome).toMatchObject({ task: { status: 'done' }, result: { id: result.id, acceptedBy: { kind: 'human', sessionId: null } },
+    acceptanceCriteria: 'A CSV downloads', openChildren: [] })
+  expect(tasks.store.journal(task.id).at(-1)).toMatchObject({ author: { kind: 'human' }, text: `Accepted result ${result.id}` })
+  // Reopening keeps the acceptance: nothing clears it.
+  await tasks.setStatus(human(), task.id, 'open')
+  expect(tasks.store.get(task.id)?.status).toBe('open')
+  expect(accepted(result.id)).toBe(true)
+})
+
+test('the creating agent may accept; a failure inside the transaction leaves no mark and no status', async () => {
+  const task = await tasks.create(agent('lead'), { title: 'Export', direction: 'v1' })
+  const result = await results.submit(agent('dev'), task.id, submission)
+  const append = tasks.store.appendJournal.bind(tasks.store)
+  tasks.store.appendJournal = () => { throw new Error('disk full') }
+  await expect(results.accept(agent('lead'), task.id, result.id)).rejects.toThrow('disk full')
+  tasks.store.appendJournal = append
+  expect(accepted(result.id)).toBe(false)
+  expect(tasks.store.get(task.id)?.status).toBe('open')
+  await results.accept(agent('lead'), task.id, result.id)
+  expect(tasks.store.get(task.id)?.status).toBe('done')
+})
+
+test('open child work and a flagged result need a journaled reason; a child\'s acceptance never closes its parent', async () => {
+  const parent = await tasks.create(human(), { title: 'Exports', direction: 'v1' })
+  const child = await tasks.create(human(), { title: 'CSV', direction: 'v1', parent_id: parent.id })
+  const parentResult = await results.submit(agent('dev'), parent.id, submission)
+  await expect(results.accept(human(), parent.id, parentResult.id)).rejects.toThrow('1 open child task needs a stated reason')
+  expect(accepted(parentResult.id)).toBe(false)
+  // The child's own acceptance closes the child, never the parent.
+  const childResult = await results.submit(agent('dev'), child.id, submission)
+  await results.accept(human(), child.id, childResult.id)
+  expect(tasks.store.get(child.id)?.status).toBe('done')
+  expect(tasks.store.get(parent.id)?.status).toBe('open')
+  // A newer revision flags the parent's result: a reason is needed again, and journaled.
+  await tasks.amend(human(), parent.id, { direction: 'v2' })
+  await expect(results.accept(human(), parent.id, parentResult.id, '  ')).rejects.toThrow('needs re-evaluation (pinned at revision 1, task at 2)')
+  await results.accept(human(), parent.id, parentResult.id, 'Scope change is cosmetic')
+  expect(tasks.store.journal(parent.id).at(-1)?.text)
+    .toBe(`Accepted result ${parentResult.id} despite needs re-evaluation (pinned at revision 1, task at 2): Scope change is cosmetic`)
+  expect(tasks.store.get(parent.id)?.status).toBe('done')
+})
+
+test('accepting a result of another task, or another team\'s task, is refused', async () => {
+  const task = await tasks.create(human(), { title: 'Export', direction: 'v1' })
+  const otherTask = await tasks.create(human(), { title: 'Import', direction: 'v1' })
+  const result = await results.submit(agent('dev'), otherTask.id, submission)
+  await expect(results.accept(human(), task.id, result.id)).rejects.toThrow('is not a result of task')
+  await expect(results.accept(agent('stranger'), otherTask.id, result.id)).rejects.toThrow('not found in this team')
+  expect(accepted(result.id)).toBe(false)
+})

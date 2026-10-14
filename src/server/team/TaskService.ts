@@ -295,26 +295,27 @@ export class TaskService {
     return this.store.appendJournal(taskId, actor, text.trim())!
   }
 
-  async setStatus(caller: TaskCaller, taskId: string, status: TaskStatus, note?: string): Promise<TeamTask> {
+  /**
+   * Set a task's status. `alsoWithin` runs inside the status transaction,
+   * after the transition hook's closure — acceptance (task-results-handoffs
+   * D5) commits its result mark and journal entry with the `done` status.
+   */
+  async setStatus(caller: TaskCaller, taskId: string, status: TaskStatus, note?: string, alsoWithin?: () => void): Promise<TeamTask> {
     const { team, actor } = await this.context(caller)
     const task = this.sameTeamTask(team, taskId)
     if (!TASK_STATUSES.includes(status)) throw new Error(`Unknown task status: ${String(status)}`)
-    if (actor.kind === 'agent') {
-      const isCreator = task.creator.sessionId === actor.sessionId
-      if (status === 'open') throw new Error('Only the human can reopen a task')
-      if ((status === 'done' || status === 'cancelled') && !isCreator) {
-        throw new Error(`Only the task's creator can set it to ${status}. Report your result in a journal note or a message to the creator instead.`)
-      }
-    }
+    const refusal = statusRefusal(actor, task, status)
+    if (refusal) throw new Error(refusal)
     // The closed/open boundary is decided on a snapshot; preparing its hook
     // awaits group definitions, so the status may move meanwhile. Re-read
     // after the await and commit in the same tick only if it held; else
     // prepare again on the fresh status, and refuse as stale after a few.
     let current = task
     for (let attempt = 0; attempt < STATUS_ATTEMPTS; attempt++) {
-      const within = this.crossesBoundary(current.status, status)
+      const hook = this.crossesBoundary(current.status, status)
         ? await this.options.onStatusTransition!(current, status, actor)
         : undefined
+      const within = hook && alsoWithin ? () => { hook(); alsoWithin() } : hook ?? alsoWithin
       const fresh = this.store.get(taskId)
       if (!fresh) throw new Error(`Unknown task: ${taskId}`)
       if (fresh.status === current.status) {
@@ -375,6 +376,20 @@ export class TaskService {
     }
     throw new Error(`OpenSpec change not found: ${name} (looked in ${roots.map(root => path.join(root, 'openspec', 'changes')).join(' and ')})`)
   }
+}
+
+/**
+ * The status rights (team-tasks D2): an agent sets `done`/`cancelled` only on
+ * a task it created and never reopens; the human sets anything. The one rule
+ * every closing path — status changes and result acceptance — checks first.
+ */
+export function statusRefusal(actor: TaskActor, task: TeamTask, status: TaskStatus): string | null {
+  if (actor.kind !== 'agent') return null
+  if (status === 'open') return 'Only the human can reopen a task'
+  if ((status === 'done' || status === 'cancelled') && task.creator.sessionId !== actor.sessionId) {
+    return `Only the task's creator can set it to ${status}. Report your result in a journal note or a message to the creator instead.`
+  }
+  return null
 }
 
 function emptyToNull(value: string | null | undefined): string | null {

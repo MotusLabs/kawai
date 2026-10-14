@@ -683,6 +683,10 @@ export type ClientMessage =
       fromDraft?: boolean
     }
   | { type: 'team-task-notify'; teamPath: string; requestId: string; taskId: string; revision: number; requestKey: string }
+  // Task results (task-results-handoffs D5): accept one result and close the
+  // task under the existing closing rights; a reason when it is flagged or
+  // child work is open.
+  | { type: 'team-task-accept-result'; teamPath: string; requestId: string; taskId: string; resultId: string; reason?: string }
   | { type: 'team-task-note'; teamPath: string; requestId: string; taskId: string; text: string }
   | { type: 'team-task-status'; teamPath: string; requestId: string; taskId: string; status: TaskStatus }
   // Human dispatch of a task's instruction (task-assignment 4.1): idempotent

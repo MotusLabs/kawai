@@ -24,8 +24,8 @@
 
 ## 5. Acceptance
 
-- [ ] 5.1 Implement **Accept result** on `TaskResultService` per design D5: evaluate the closing right first (the exact `setStatus` rule — a contributor is refused with nothing written: no `accepted_*`, no journal entry, no status change), then commit `accepted_*`, the acceptance journal entry, and the `done` status in one transaction; guardrails — reason required and journaled when the result is labeled Needs re-evaluation or child tasks are not done/cancelled; verify service tests cover contributor refusal writing nothing (E10), human accept closing atomically, reason enforcement and journaling, acceptance criteria shown in the result payload, and that a child's acceptance never changes its parent.
-- [ ] 5.2 Add the human action `team-task-accept-result` in `taskConnections.ts` and its `CHAT_CONNECTION_TYPES` entry in `src/server/chat/chatConnectionTypes.ts` (which `ws/messageRouter.ts` consults); verify connection tests cover accept, refusal rendering, and the refreshed snapshot.
+- [x] 5.1 Implement **Accept result** on `TaskResultService` per design D5: evaluate the closing right first (the exact `setStatus` rule — a contributor is refused with nothing written: no `accepted_*`, no journal entry, no status change), then commit `accepted_*`, the acceptance journal entry, and the `done` status in one transaction; guardrails — reason required and journaled when the result is labeled Needs re-evaluation or child tasks are not done/cancelled; verify service tests cover contributor refusal writing nothing (E10), human accept closing atomically, reason enforcement and journaling, acceptance criteria shown in the result payload, and that a child's acceptance never changes its parent.
+- [x] 5.2 Add the human action `team-task-accept-result` in `taskConnections.ts` and its `CHAT_CONNECTION_TYPES` entry in `src/server/chat/chatConnectionTypes.ts` (which `ws/messageRouter.ts` consults); verify connection tests cover accept, refusal rendering, and the refreshed snapshot.
 
 ## 6. Release worktree and hand off
 

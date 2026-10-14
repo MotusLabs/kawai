@@ -7,8 +7,8 @@
 // evaluated before acceptance writes anything. Test outcomes and verdicts are
 // claims: nothing here stores or implies verification.
 import type { ChatSessionRecord } from '../db'
-import type { TaskFindings, TaskResult, TaskTestClaim } from '../../shared/teamTasks'
-import type { TaskCaller, TaskService } from './TaskService'
+import type { TaskFindings, TaskResult, TaskTestClaim, TeamTask, TeamTaskSummary } from '../../shared/teamTasks'
+import { statusRefusal, type TaskCaller, type TaskService } from './TaskService'
 import { worktreeRootOf } from './worktreeRoots'
 
 export interface ResultSubmission {
@@ -27,6 +27,16 @@ export interface FindingsSubmission {
 }
 
 const blankToNull = (value: string | null | undefined) => (value?.trim() ? value.trim() : null)
+
+/** What an acceptance closed, with what the human was shown before it (D5). */
+export interface AcceptOutcome {
+  task: TeamTask
+  result: TaskResult
+  /** The task's acceptance criteria — free text the system shows, never resolves. */
+  acceptanceCriteria: string | null
+  /** Child tasks not done or cancelled at acceptance. */
+  openChildren: TeamTaskSummary[]
+}
 
 export class TaskResultService {
   constructor(readonly tasks: TaskService, private readonly options: {
@@ -86,5 +96,37 @@ export class TaskResultService {
     })
     this.store.appendJournal(taskId, actor, `${input.kind === 'qa' ? 'QA' : 'Review'} findings on result ${result.id}: ${input.verdict}`)
     return stored
+  }
+
+  /**
+   * Accept a result (D5): the human, or the task's creator agent — the exact
+   * closing rule TaskService.setStatus enforces, checked first, so a refusal
+   * writes nothing. A result labeled Needs re-evaluation, or child tasks
+   * still open, require a stated reason. Then the result's acceptance, the
+   * acceptor's journal entry, and the `done` status commit in one
+   * transaction (setStatus's own, with its transition hook). Acceptance is
+   * per task: no parent is touched.
+   */
+  async accept(caller: TaskCaller, taskId: string, resultId: string, reason?: string): Promise<AcceptOutcome> {
+    const { team, actor } = await this.tasks.context(caller)
+    const task = this.tasks.sameTeamTask(team, taskId)
+    const refusal = statusRefusal(actor, task, 'done')
+    if (refusal) throw new Error(refusal.replace(`set it to done`, 'accept its results and close it'))
+    const result = this.store.results.get(resultId)
+    if (!result || result.taskId !== taskId) throw new Error(`Result ${resultId} is not a result of task ${taskId}`)
+    const openChildren = this.store.list(team.teamId).filter(child =>
+      child.parentId === taskId && child.status !== 'done' && child.status !== 'cancelled')
+    const flags = [
+      ...(result.needsReevaluation ? [`needs re-evaluation (pinned at revision ${result.taskRevision}, task at ${task.revision})`] : []),
+      ...(openChildren.length > 0 ? [`${openChildren.length} open child task${openChildren.length === 1 ? '' : 's'}`] : []),
+    ]
+    const stated = reason?.trim()
+    if (flags.length > 0 && !stated) throw new Error(`Accepting despite ${flags.join(' and ')} needs a stated reason; nothing was accepted.`)
+    const entry = flags.length > 0 ? `Accepted result ${resultId} despite ${flags.join(' and ')}: ${stated}` : `Accepted result ${resultId}`
+    const closed = await this.tasks.setStatus(caller, taskId, 'done', undefined, () => {
+      this.store.results.markAccepted(resultId, actor)
+      this.store.appendJournal(taskId, actor, entry)
+    })
+    return { task: closed, result: this.store.results.get(resultId)!, acceptanceCriteria: task.acceptance, openChildren }
   }
 }
