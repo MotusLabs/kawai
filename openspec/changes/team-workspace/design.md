@@ -67,7 +67,7 @@ Sources are a small registry of pure functions over existing state; adding a Wav
 
 ### D6. Counts replace; toasts key on identity
 
-The snapshot is authoritative: `teamWorkspaceStore` replaces `items` and the derived counts wholesale. Change pushes are unfiltered and the client filters, matching `team-message-threads`' Messages contract. Toasts fire on an item identity's transition into a human-required state and are remembered in a set of seen identities for the session's lifetime; a reconnect replay is a no-op because the identity is already seen and the count is replaced rather than incremented. This is what E05/E13's "counts converge and toasts do not duplicate" means operationally.
+The snapshot is authoritative: `teamWorkspaceStore` replaces `items` and the derived counts wholesale. Change pushes are unfiltered and the client filters, matching `team-message-threads`' Messages contract. Toasts fire on an item identity's transition into a human-required state and are remembered in a set of seen identities for the **client session's** lifetime — the page's lifetime, not the connection's (a reconnect replay is a no-op because the identity is already seen) and not the team's (a second tab is its own client session and gets its own one toast) — and the count is replaced rather than incremented. This is what E05/E13's "counts converge and toasts do not duplicate" means operationally.
 
 ### D7. Members reads the catalog and keeps the file path each group came from
 

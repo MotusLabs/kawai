@@ -19,7 +19,7 @@
 ## 4. Attention queue and morning summary
 
 - [ ] 4.1 Add the attention source registry in `src/server/team/workspaceRead.ts` — approvals/questions from pending chat requests, uncertain deliveries from `team_message_events`, staffing waits from the `team-waiting-reasons` ledger — each producing `AttentionItem`s with cause, owner, impact, next action, and link; verify unit tests cover one item per source kind, the `requiresHuman` split, and an unrecognized kind rendering rather than being dropped.
-- [ ] 4.2 Wire count reconciliation and toast identity: replace items/counts from the snapshot, key toasts on `kind:sourceId` transitions into human-required, and suppress toasts for already-seen identities; verify unit tests cover a reconnect converging counts and a replayed snapshot raising no toast.
+- [ ] 4.2 Wire count reconciliation and toast identity: replace items/counts from the snapshot, key toasts on `kind:sourceId` transitions into human-required, and suppress toasts for identities already seen in that client session; verify unit tests cover a reconnect converging counts and a replayed snapshot raising no toast.
 - [ ] 4.3 Add the 24-hour morning summary (capacity waits, approvals, uncertain deliveries, finished-turn-without-result) per D8's sources, with the runtime-only capacity bucket labelled; verify unit tests cover each bucket, that a finished turn with no result never lands in a completion bucket, and that durable buckets survive a simulated restart.
 
 ## 5. Workspace connections and team isolation

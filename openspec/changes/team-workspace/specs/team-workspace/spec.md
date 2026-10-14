@@ -99,7 +99,7 @@ Each attention item SHALL carry a kind, a stable identity, and a link that MAY t
 - **THEN** the item renders and its link opens that card
 
 ### Requirement: Attention counts reconcile after reconnect without duplicate toasts
-On open and on reconnect the workspace SHALL replace its attention items and counts with the authoritative snapshot rather than incrementing them. Each item identity SHALL raise at most one toast across its transitions; a reconnect that replays unchanged state SHALL raise no toast.
+On open and on reconnect the workspace SHALL replace its attention items and counts with the authoritative snapshot rather than incrementing them. Each item identity SHALL raise at most one toast per client session across its transitions; a reconnect that replays unchanged state SHALL raise no toast.
 #### Scenario: Reconnect converges the counts (E05, E13)
 - **WHEN** the connection drops while two approvals are pending and one is resolved, then the client reconnects
 - **THEN** the workspace shows one attention item, not two and not three
@@ -149,6 +149,10 @@ A summary band SHALL list completed results, capacity waits, approvals, uncertai
 #### Scenario: A restart keeps durable buckets (E13)
 - **WHEN** the server restarts and the workspace opens
 - **THEN** completed results and uncertain deliveries in the window are still listed, while capacity waits list only waits the running server has observed
+
+#### Scenario: Capacity waits state their runtime bound (E13)
+- **WHEN** the summary shows the capacity-waits bucket
+- **THEN** the bucket carries a label naming it runtime-only — it lists only waits the running server has observed
 
 ### Requirement: The workspace supports one-handed list and detail navigation
 At a narrow viewport the workspace SHALL use list and detail panes with an explicit **Back** action. Opening a chat SHALL preserve the task selection and filters. Unsubmitted composer drafts and the current selection SHALL survive navigation within the workspace.
