@@ -216,7 +216,7 @@ test('Withdraw, draft discard, cancel with a required reason, and complete namin
   rerender()
   expect(byId('plan-cancel-confirm').props.disabled).toBe(false)
   act(() => byId('plan-cancel-confirm').props.onClick())
-  expect(last()).toMatchObject({ type: 'team-plan-close', planId: 'p1', outcome: 'cancelled', reason: 'Superseded by wave D' })
+  expect(last()).toMatchObject({ type: 'team-plan-finish', planId: 'p1', outcome: 'cancelled', reason: 'Superseded by wave D' })
   act(() => useTeamPlanStore.getState().reconnected('/repo'))
   rerender()
   act(() => byId('plan-complete').props.onClick())

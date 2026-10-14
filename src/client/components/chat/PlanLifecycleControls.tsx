@@ -28,7 +28,7 @@ export default function PlanLifecycleControls({ teamPath, detail, sendMessage, c
   const close = (outcome: 'completed' | 'cancelled') => (reason: string) => {
     const payload = { planId: plan.id, outcome, reason: reason || null }
     sendPlanCommand(teamPath, sendMessage, 'close', `close:${plan.id}:${outcome}`, payload,
-      ids => ({ type: 'team-plan-close', teamPath, ...ids, ...payload }))
+      ids => ({ type: 'team-plan-finish', teamPath, ...ids, ...payload }))
   }
   return <div className="mt-3 flex flex-wrap gap-2" data-testid="plan-lifecycle">
     <PlanCommandDialog teamPath={teamPath} slot={`close:${plan.id}:completed`} openLabel="Complete plan" confirmLabel="Complete" testId="plan-complete"

@@ -208,7 +208,7 @@ The human sends `team-plan-approve { teamPath, planId, revision, contentHash, ex
    - `strategy-pin-current`: the pin equals the team's current approved `{strategyId, revision, hash}` as a whole (both empty counts as equal), or `pinDisposition` returns non-null, meaning a recorded disposition keeps this older pin. In this change `pinDisposition` always returns null.
 3. **Commit.** Mark the previously approved revision `superseded` and this one `approved`, set `current_approved_revision`, and insert the `approved` event carrying the command id and payload. If the write hits `plan_revisions_one_approved` (another approval committed first), the transaction rolls back and the request is refused as `approved-revision-unchanged`. The constraint error never reaches the client raw.
 
-Withdraw (`team-plan-withdraw { revision | draftId, commandId }`), close (`team-plan-close { outcome, reason, commandId }`), and reopen (`team-plan-reopen { commandId }`) follow the same replay rule. The compared payload per command, stored in `payload_json`:
+Withdraw (`team-plan-withdraw { revision | draftId, commandId }`), finish (`team-plan-finish { outcome, reason, commandId }`, completing or cancelling the plan), and reopen (`team-plan-reopen { commandId }`) follow the same replay rule. The compared payload per command, stored in `payload_json`:
 - `approve`: `revision`, `contentHash`, `expectedApprovedRevision`;
 - `withdraw`: `revision` or `draftId`;
 - `close`: `outcome` and `reason`. The reason is compared after the same trimming the store applies, so a resend replays instead of wedging the dialog, and a reused command id with another outcome is refused naming `outcome`.
@@ -270,7 +270,7 @@ The structural boundary is that no approve, withdraw, close, or reopen tool exis
 
 ### D12. Human protocol and the Plans view
 
-- **Messages.** `team-plans-open`/`close` (the list, pushed as `team-plans-snapshot`), `team-plan-open`/`close` (a detail, pushed as `team-plan-detail`), `team-plan-approve`, `team-plan-withdraw`, `team-plan-close`, and `team-plan-reopen`, each answered by `team-plan-result`.
+- **Messages.** `team-plans-open`/`close` (the list, pushed as `team-plans-snapshot`), `team-plan-open`/`close` (a detail, pushed as `team-plan-detail`), `team-plan-approve`, `team-plan-withdraw`, `team-plan-finish` (complete or cancel), and `team-plan-reopen`, each answered by `team-plan-result`. Every type has one meaning: `team-plan-close` only ends a detail subscription.
 - **Addressing.** Every message carries `teamPath` and is resolved by the shared team-scope resolver. Every type is listed in `CHAT_CONNECTION_TYPES`.
 - **Pushes.** They follow every committed plan write and every change to a task linked to an open subscribed plan. The task service's existing change notification is the hook, filtered by `plan_id`.
 - **Client store.** `teamPlanStore.ts` is keyed by team key. Every store method that applies server state has a WS dispatch caller.

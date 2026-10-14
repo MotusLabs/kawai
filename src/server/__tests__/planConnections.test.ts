@@ -124,9 +124,9 @@ describe('human commands', () => {
     expect(last('team-plan-detail')!.detail.revisions[0]!.status).toBe('withdrawn')
     await send({ type: 'team-plan-withdraw', teamPath: world.repo, requestId: 'w2', planId, draftId: 'lead', commandId: 'd' })
     expect(last('team-plan-result')).toMatchObject({ requestId: 'w2', event: { kind: 'draft-discarded' } })
-    await send({ type: 'team-plan-close', teamPath: world.repo, requestId: 'c1', planId, outcome: 'cancelled', commandId: 'c' })
+    await send({ type: 'team-plan-finish', teamPath: world.repo, requestId: 'c1', planId, outcome: 'cancelled', commandId: 'c' })
     expect(last('team-plan-result')).toMatchObject({ requestId: 'c1', reason: 'invalid', error: 'Cancelling a plan needs a reason.' })
-    await send({ type: 'team-plan-close', teamPath: world.repo, requestId: 'c2', planId, outcome: 'cancelled', reason: 'Dropped', commandId: 'c' })
+    await send({ type: 'team-plan-finish', teamPath: world.repo, requestId: 'c2', planId, outcome: 'cancelled', reason: 'Dropped', commandId: 'c' })
     expect(last('team-plan-result')).toMatchObject({ requestId: 'c2', plan: { lifecycle: 'cancelled', state: 'cancelled' }, event: { kind: 'cancelled', reason: 'Dropped' } })
     expect(last('team-plan-detail')!.detail.plan.lifecycle).toBe('cancelled')
     await send({ type: 'team-plan-reopen', teamPath: world.repo, requestId: 'r1', planId, commandId: 'r' })
@@ -145,7 +145,7 @@ describe('human commands', () => {
 })
 
 test('every new plan client type is listed for the WS router', () => {
-  for (const type of ['team-plans-open', 'team-plans-close', 'team-plan-open', 'team-plan-close', 'team-plan-approve', 'team-plan-withdraw', 'team-plan-reopen']) {
+  for (const type of ['team-plans-open', 'team-plans-close', 'team-plan-open', 'team-plan-close', 'team-plan-approve', 'team-plan-withdraw', 'team-plan-finish', 'team-plan-reopen']) {
     expect(CHAT_CONNECTION_TYPES as readonly string[]).toContain(type)
   }
 })

@@ -10,7 +10,7 @@
 // `team-plan-result`; the changes they cause reach every subscriber.
 //
 // The boundary is the one `team-task-*` and `strategy-*` human actions
-// have: no agent tool surface can approve, withdraw, close, or reopen; a
+// have: no agent tool surface can approve, withdraw, finish, or reopen; a
 // local process speaking the UI protocol is trusted like the browser.
 import type { ClientMessage } from '../../shared/types'
 import { unknownTeamError } from '../../shared/team'
@@ -19,7 +19,12 @@ import type { ChatConnection } from '../chat/ChatConnections'
 import type { PlanCommandOutcome } from './planCommands'
 
 type PlanClientMessage = Extract<ClientMessage, { type: `team-plan${string}` }>
-type PlanCommandMessage = Extract<PlanClientMessage, { requestId: string }>
+type PlanCommandMessage = Extract<PlanClientMessage, { type: (typeof PLAN_COMMAND_TYPES)[number] }>
+
+/** The human commands; every other plan type opens or closes a subscription. */
+const PLAN_COMMAND_TYPES = ['team-plan-approve', 'team-plan-withdraw', 'team-plan-finish', 'team-plan-reopen'] as const
+const isCommand = (message: PlanClientMessage): message is PlanCommandMessage =>
+  (PLAN_COMMAND_TYPES as readonly string[]).includes(message.type)
 
 interface Subscription {
   teamId: string
@@ -64,7 +69,7 @@ export class PlanConnections {
   }
 
   async handle(connection: ChatConnection, message: PlanClientMessage) {
-    if ('requestId' in message) return this.act(connection, message)
+    if (isCommand(message)) return this.act(connection, message)
     const { teamPath } = message
     const planId = 'planId' in message ? message.planId : undefined
     const target = `${teamPath}\0${planId ?? ''}`
@@ -133,7 +138,7 @@ export class PlanConnections {
             ...(message.draftId !== undefined ? { draftId: message.draftId } : {}),
           })
           break
-        case 'team-plan-close':
+        case 'team-plan-finish':
           outcome = await plans.close(caller, { planId: message.planId, outcome: message.outcome, reason: message.reason ?? null, commandId: message.commandId })
           break
         case 'team-plan-reopen':

@@ -81,6 +81,7 @@ export const CHAT_CONNECTION_TYPES = [
   'team-plan-close',
   'team-plan-approve',
   'team-plan-withdraw',
+  'team-plan-finish',
   'team-plan-reopen',
 ] as const satisfies readonly ChatConnectionMessage['type'][]
 
