@@ -46,6 +46,76 @@ export interface TaskRevision {
   acceptance: string | null
   author: TaskActor
   createdAt: string
+  /** Why it was published (task-revision-publication D2); null for agents without one and older rows. */
+  rationale?: string | null
+  /** Published with notices; null for rows published before notifications existed. */
+  notify?: boolean | null
+}
+
+/**
+ * The human's unpublished edit of a task's direction (task-revision-publication
+ * D1): one per task, based on a named published revision. Never a revision,
+ * never shown to agents, never mailed.
+ */
+export interface TaskDraft {
+  taskId: string
+  /** The published revision this draft edits. */
+  baseRevision: number
+  direction: string
+  acceptance: string | null
+  rationale: string | null
+  updatedAt: string
+}
+
+/** The revision a notice announces (D3), carried on its mail row and envelope. */
+export interface RevisionNotice {
+  revision: number
+  previousRevision: number
+  assignmentId: string
+  rationale: string | null
+}
+
+/** A recipient's notice for a revision (D5), derived from the notice mail's state. */
+export type RevisionNoticeState = 'not-notified' | 'queued' | 'delivered' | 'failed' | 'uncertain'
+
+/** An agent's statement that it works from a published revision (D6). */
+export interface TaskAcknowledgement {
+  sessionId: string
+  revision: number
+  /** The session's outstanding assignment for the task then, if any. */
+  assignmentId: string | null
+  createdAt: string
+}
+
+/**
+ * One assignment holder of a published revision (D5). Notice state, delivered
+ * revision, and acknowledged revision are separate facts — receipt is not
+ * acknowledgement — and are never merged.
+ */
+export interface RevisionRecipient {
+  assignmentId: string
+  /** The outstanding assignment's current claimant. */
+  sessionId: string
+  noticeState: RevisionNoticeState
+  /** The newest notice for this revision to this holder; null when none. */
+  noticeMessageId: string | null
+  /** Why a Failed or Uncertain notice is so; null otherwise. */
+  reason: string | null
+  /** Highest task revision carried by task mail confirmed delivered to the holder. */
+  deliveredRevision: number | null
+  /** The holder's highest acknowledged revision. */
+  acknowledgedRevision: number | null
+}
+
+/** A published revision with its recipients (D5). */
+export interface TaskPublication {
+  revision: number
+  previousRevision: number
+  author: TaskActor
+  rationale: string | null
+  notify: boolean | null
+  publishedAt: string
+  recipients: RevisionRecipient[]
 }
 
 export interface TaskJournalEntry {
@@ -111,6 +181,19 @@ export interface TeamTaskDetail {
   assignments: TeamTaskAssignment[]
   /** Mail referencing the task, oldest first. */
   messages: TeamMessage[]
+  /** Published revisions with their recipients, oldest first (task-revision-publication D5). */
+  publications?: TaskPublication[]
+  /** Every acknowledgement of the task, oldest first: the history behind each recipient's latest. */
+  acknowledgements?: TaskAcknowledgement[]
+}
+
+/**
+ * The detail the human's UI receives: the agent-visible detail plus the
+ * human's draft (D1). Agent paths (`task_get`) return `TeamTaskDetail`, which
+ * has no draft field at all.
+ */
+export interface HumanTaskDetail extends TeamTaskDetail {
+  draft?: TaskDraft | null
 }
 
 /** The task section of a delivered peer message (design D3), built at delivery. */

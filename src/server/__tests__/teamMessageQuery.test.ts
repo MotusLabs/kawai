@@ -213,7 +213,7 @@ describe('task revision at push time (D6)', () => {
     store.markPushed(message.id, T(3), created.revision)
     store.markDelivered(message.id, T(4))
     expect(store.get(message.id)?.taskRevision).toBe(1)
-    tasks.amend(created.id, { direction: 'JSON' }, { kind: 'agent', sessionId: 'lead' })
+    tasks.publish(created.id, { direction: 'JSON', notify: false }, { kind: 'agent', sessionId: 'lead' })
     expect(tasks.get(created.id)?.revision).toBe(2)
     const row = store.get(message.id)
     expect(row?.taskRevision).toBe(1)

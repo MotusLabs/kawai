@@ -16,45 +16,14 @@ import { ParkedCancel, actionReason, type CancelResult } from './parkedCancel'
 export type { CancelResult } from './parkedCancel'
 
 import type {
-  ChatHandoffPackage,
   MessageEvent,
   MessageEventKind,
   MessageState,
-  MessagePriority,
-  TeamActor,
   TeamMessage,
 } from '../../shared/team'
 export type { MessageState, MessagePriority, TeamMessage, MessageEvent } from '../../shared/team'
-
-export interface EnqueueInput {
-  teamId: string
-  /** Routing vocabulary (D4): `human` settles on send and never reaches the dispatcher. */
-  toKind: 'group' | 'session' | 'human'
-  /** Recipient id; null for `toKind: 'human'`. */
-  toId: string | null
-  /** Actor vocabulary (D4). Absent on agent sends; never merged with `toKind`. */
-  fromKind?: TeamActor['kind']
-  /** Sender session; null for a human sender. */
-  fromSession: string | null
-  fromGroup: string | null
-  originPath: string
-  priority?: MessagePriority
-  tags?: string[]
-  body: string
-  /** The message being replied to; absent starts a new thread. */
-  inReplyTo?: TeamMessage
-  deliverAt?: string | null
-  attachThread?: boolean
-  /** Sender group's hopLimit, else the default. */
-  hopLimit?: number
-  /** Team task the message works under (validated by the caller). */
-  taskId?: string | null
-  /** Forwarded work after a limit (profile routing). */
-  handoff?: ChatHandoffPackage | null
-  excludedProfile?: string | null
-  /** Who caused the send (event log): the human through a composer, else the system. */
-  actor?: 'system' | 'human'
-}
+import type { EnqueueInput } from './enqueueInput'
+export type { EnqueueInput } from './enqueueInput'
 
 export const DEFAULT_HOP_LIMIT = 20
 
@@ -138,6 +107,7 @@ export class MailboxStore {
       $taskId: input.taskId ?? null,
       $handoff: input.handoff ? JSON.stringify(input.handoff) : null,
       $excludedProfile: input.excludedProfile ?? null,
+      $revisionNotice: input.revisionNotice ? JSON.stringify(input.revisionNotice) : null,
     })
     this.changed(id, true)
     const message = this.get(id)!

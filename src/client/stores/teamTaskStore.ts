@@ -6,12 +6,22 @@
 // here — never in component state — so a refusal, a reconnect, or a remount
 // keeps every entered field, and a retry reuses the same key: the server
 // replays the prior outcome instead of duplicating a task or an instruction.
+// Publication and notify command keys (task-revision-publication D2/D4) live
+// here too, per armed slot: reused while the payload is unchanged — a resend
+// after a reconnect replays — and cleared when the server answers success, so
+// a later Retry notification is a new command.
 import { create } from 'zustand'
 import type { ServerMessage } from '@shared/types'
 import type { SessionDirectoryEntry } from '@shared/team'
-import type { TaskDispatchPreview, TaskTargetOptions, TeamTaskDetail, TeamTaskSummary } from '@shared/teamTasks'
+import type { HumanTaskDetail, TaskDispatchPreview, TaskTargetOptions, TeamTaskSummary } from '@shared/teamTasks'
 
-export type TaskAction = 'create' | 'create-assign' | 'assign' | 'amend' | 'note' | 'status'
+export type TaskAction = 'create' | 'create-assign' | 'assign' | 'draft' | 'publish' | 'notify' | 'note' | 'status'
+
+/** An armed publish or notify command: its key and the payload it names. */
+export interface ArmedCommand {
+  requestKey: string
+  payload: string
+}
 
 /** The create/assign form, kept across failures and reconnects (5.3). */
 export interface TaskFormDraft {
@@ -68,7 +78,8 @@ export interface TaskView {
   tasks: TeamTaskSummary[]
   /** The task whose detail is shown; null = the list. */
   selectedTaskId: string | null
-  detail: TeamTaskDetail | null
+  /** The human's view of the task: detail plus its draft. */
+  detail: HumanTaskDetail | null
   /** Last known identity of killed participants named by its messages. */
   directory: SessionDirectoryEntry[]
   /** Actions awaiting their `team-task-result`, by request id. */
@@ -85,11 +96,16 @@ export interface TaskView {
   /** The pickers' team-scoped worktrees and changes (team-task-targets). */
   targets: TaskTargetOptions | null
   targetsLoading: boolean
+  /** Armed publish/notify commands by slot (`publish:<task>`, `notify:<task>:<revision>`); kept across reconnects. */
+  commands: Record<string, ArmedCommand>
+  /** Which slot each pending publish/notify request was sent under, by request id. */
+  commandRequests: Record<string, string>
 }
 
 export const closedTaskView = (): TaskView => ({
   open: false, loading: false, tasks: [], selectedTaskId: null, detail: null, directory: [], pending: {}, error: null,
   draft: emptyDraft(), flow: null, preview: null, previewPending: {}, targets: null, targetsLoading: false,
+  commands: {}, commandRequests: {},
 })
 
 interface TaskState {
@@ -104,6 +120,11 @@ interface TaskState {
   rekey: (from: string, to: string) => void
   select: (teamKey: string, taskId: string | null) => void
   begin: (teamKey: string, requestId: string, action: TaskAction) => void
+  /**
+   * The command key for a slot: the armed one while the payload is the same
+   * (a resend replays), else a fresh one. Records the request it goes out with.
+   */
+  command: (teamKey: string, slot: string, payload: string, requestId: string) => string
   setDraft: (teamKey: string, patch: Partial<TaskFormDraft>) => void
   /** Arm a create intent with a freshly minted request key. */
   armFlow: (teamKey: string, mode: TaskCreateFlow['mode']) => void
@@ -166,6 +187,20 @@ export const useTeamTaskStore = create<TaskState>(set => ({
   begin: (teamKey, requestId, action) => set(state => update(state, teamKey, {
     pending: { ...state.views[teamKey]?.pending, [requestId]: action }, error: null,
   })),
+  command: (teamKey, slot, payload, requestId) => {
+    let requestKey: string = crypto.randomUUID()
+    set(state => {
+      const view = state.views[teamKey]
+      if (!view?.open) return state
+      const armed = view.commands[slot]
+      if (armed && armed.payload === payload) requestKey = armed.requestKey
+      return { views: { ...state.views, [teamKey]: { ...view,
+        commands: { ...view.commands, [slot]: { requestKey, payload } },
+        commandRequests: { ...view.commandRequests, [requestId]: slot },
+      } } }
+    })
+    return requestKey
+  },
   setDraft: (teamKey, patch) => set(state => {
     const view = state.views[teamKey]
     if (!view?.open) return state
@@ -251,6 +286,15 @@ export const useTeamTaskStore = create<TaskState>(set => ({
     const pending = { ...view.pending }
     const action = pending[message.requestId]
     delete pending[message.requestId]
+    // A command that landed is done: the next press is a new intent.
+    const slot = view.commandRequests[message.requestId]
+    if (slot !== undefined) {
+      const commandRequests = { ...view.commandRequests }
+      delete commandRequests[message.requestId]
+      const commands = { ...view.commands }
+      if (!message.error) delete commands[slot]
+      state = { ...state, views: { ...state.views, [message.teamPath]: { ...view, commands, commandRequests } } }
+    }
     if (message.error) {
       // A refused assign keeps the flow armed for Retry assignment; any
       // refusal keeps the draft exactly as entered.

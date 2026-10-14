@@ -139,6 +139,9 @@ describe('permission matrix', () => {
     const task = await service.create(agent('lead'), { title: 'x', direction: 'v1' })
     await expect(service.amend(agent('dev'), task.id, { direction: 'hijack' })).rejects.toThrow(/task_note.*message the creator \(lead\)/)
     await expect(service.amend(agent('lead2'), task.id, { direction: 'hijack' })).rejects.toThrow('creator')
+    // A refused amendment writes nothing (task-revision-publication 2.2).
+    expect(service.store.revisions(task.id)).toHaveLength(1)
+    expect(service.store.get(task.id)?.revision).toBe(1)
     expect((await service.amend(agent('lead'), task.id, { direction: 'v2' })).revision).toBe(2)
     expect((await service.amend(human(), task.id, { acceptance: 'ships' })).revision).toBe(3)
     expect((await service.get(human(), task.id)).revisions.map(revision => revision.direction)).toEqual(['v1', 'v2', 'v2'])
@@ -196,6 +199,63 @@ describe('task tools', () => {
   })
 })
 
+describe('task_acknowledge (task-revision-publication 4.2, D6)', () => {
+  test('records the calling session once; a repeat is a no-op and pushes nothing', async () => {
+    const task = await service.create(agent('lead'), { title: 'x', direction: 'v1' })
+    const changes: number[] = []
+    service.store.subscribe(changed => changes.push(changed.revision))
+    const dev = taskHandlers(service, 'dev')
+    expect(await dev.task_acknowledge({ task_id: task.id, revision: 1, session_id: 'lead' })).toEqual({ taskId: task.id, revision: 1, alreadyAcknowledged: false })
+    expect(await dev.task_acknowledge({ task_id: task.id, revision: 1 })).toMatchObject({ alreadyAcknowledged: true })
+    expect(service.store.acknowledgements.list(task.id)).toMatchObject([{ sessionId: 'dev', revision: 1, assignmentId: null }])
+    // The detail republishes on the new acknowledgement only.
+    expect(changes).toEqual([1])
+  })
+
+  test('refuses a revision that is not published, even while a draft of it exists, and another team\'s task', async () => {
+    const task = await service.create(agent('lead'), { title: 'x', direction: 'v1' })
+    await service.saveDraft(human(), task.id, { direction: 'draft of revision 2' })
+    await expect(taskHandlers(service, 'dev').task_acknowledge({ task_id: task.id, revision: 2 })).rejects.toThrow('Revision 2 of task')
+    await expect(taskHandlers(service, 'stranger').task_acknowledge({ task_id: task.id, revision: 1 })).rejects.toThrow('not found in this team')
+    await expect(service.acknowledge(human(), task.id, 1)).rejects.toThrow('Only agents')
+    expect(service.store.acknowledgements.list(task.id)).toEqual([])
+  })
+
+  test('task_acknowledge is a team tool allowed without an approval card', async () => {
+    const { TEAM_ALLOWED_TOOLS } = await import('../team/mailboxTools')
+    expect(TEAM_ALLOWED_TOOLS).toContain('mcp__kawai-team__task_acknowledge')
+  })
+})
+
+describe('task_amend publishes with rationale and notify (task-revision-publication 4.4, D7)', () => {
+  test('the creating lead publishes and notifies: the claimed developer gets one notice from the lead', async () => {
+    const { AssignmentStore } = await import('../team/assignmentStore')
+    const mail = new MailboxStore(db.db)
+    const assignments = new AssignmentStore(db.db, mail)
+    const notifying = new TaskService(new TaskStore(db.db, mail, assignments), { getSession: id => records.get(id), homeDir: home })
+    const lead = taskHandlers(notifying, 'lead')
+    const task = await lead.task_create({ title: 'Export', direction: 'CSV' })
+    const { assignment } = assignments.insert({ teamId: team.teamId, taskId: task.id, requestKey: 'assign-1', targetKind: 'session',
+      targetId: 'dev', role: 'devs', instruction: 'Build it', creator: { kind: 'human', sessionId: null } })
+    const instruction = mail.enqueue({ teamId: team.teamId, toKind: 'session', toId: 'dev', fromSession: null, fromGroup: null,
+      originPath: repo, body: 'Build it', taskId: task.id })
+    assignments.setMessage(assignment.id, instruction.id)
+    mail.claim(instruction.id, 'dev')
+    const published = await lead.task_amend({ task_id: task.id, direction: 'CSV and JSON', rationale: 'Customer asked', notify: true })
+    expect(published.revision).toBe(2)
+    expect(notifying.store.revisions(task.id).at(-1)).toMatchObject({ rationale: 'Customer asked', notify: true, author: agent('lead') })
+    const notices = mail.forTask(task.id).filter(message => message.tags.includes('task-revision'))
+    expect(notices).toMatchObject([{ toKind: 'session', toId: 'dev', fromKind: 'agent', fromSession: 'lead', fromGroup: 'leads', originPath: repo,
+      revisionNotice: { revision: 2, assignmentId: assignment.id, rationale: 'Customer asked' } }])
+    expect(notices[0]!.body).toContain('revision 2 published by lead: Customer asked')
+    // A non-creator still cannot: no revision, no notice.
+    await expect(taskHandlers(notifying, 'dev').task_amend({ task_id: task.id, direction: 'mine', notify: true })).rejects.toThrow('creator')
+    expect(notifying.store.revisions(task.id)).toHaveLength(2)
+    expect(mail.forTask(task.id).filter(message => message.tags.includes('task-revision'))).toHaveLength(1)
+    assignments.close()
+  })
+})
+
 describe('spawn-time registration', () => {
   test('the team MCP server carries mailbox and task tools, all allowed without cards', async () => {
     const { createMailboxServer, TEAM_ALLOWED_TOOLS } = await import('../team/mailboxTools')
@@ -205,7 +265,7 @@ describe('spawn-time registration', () => {
     const management = new MailboxManagement(mailbox.store, { getSession: id => records.get(id), tasks: service, homeDir: home })
     const server = await createMailboxServer(mailbox, 'lead', { tasks: service, management })
     const registered = Object.keys((server.instance as unknown as { _registeredTools: Record<string, unknown> })._registeredTools)
-    const expected = ['send_message', 'reply', 'schedule_message', 'list_groups', 'list_mailbox', 'cancel_message', 'discard_message', 'task_create', 'task_get', 'task_note', 'task_update_status', 'task_amend', 'task_list']
+    const expected = ['send_message', 'reply', 'schedule_message', 'list_groups', 'list_mailbox', 'cancel_message', 'discard_message', 'task_create', 'task_get', 'task_note', 'task_update_status', 'task_amend', 'task_list', 'task_acknowledge']
     expect(registered.sort()).toEqual([...expected].sort())
     // Product strategy (product-strategy 3.2) rides the same allowed list —
     // read/propose only, no approve/publish/withdraw tool anywhere — and so

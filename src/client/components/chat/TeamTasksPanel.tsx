@@ -21,12 +21,14 @@ import { useTeamGroups } from './useTeamGroups'
 import { openParticipantChat } from './openParticipant'
 import { actorLabel, sessionLabel } from './teamTaskLabels'
 
-export default function TeamTasksPanel({ teamPath, projectPath, view, sendMessage, connected, onClose, onOpenThread, onCreateWorktree }: {
+export default function TeamTasksPanel({ teamPath, projectPath, view, sendMessage, connected, onClose, onOpenThread, onCreateWorktree, onOpenMailbox }: {
   teamPath: string; projectPath: string; view: TaskView; sendMessage: SendClientMessage; connected: boolean; onClose: () => void
   /** Handed to a task's messages: open that message's thread (5.4). */
   onOpenThread?: (threadId: string) => void
   /** Opens the existing worktree-creation flow; the pickers refresh on return. */
   onCreateWorktree?: () => void
+  /** Opens the team mailbox, where an uncertain revision notice is resolved. */
+  onOpenMailbox?: () => void
 }) {
   const sessions = useSessionStore(state => state.sessions)
   const { groups } = useTeamGroups(connected, projectPath)
@@ -135,7 +137,7 @@ export default function TeamTasksPanel({ teamPath, projectPath, view, sendMessag
     <div className="min-h-0 flex-1 overflow-y-auto p-3">
       {view.selectedTaskId ? (
         <TeamTaskDetail teamPath={teamPath} projectPath={projectPath} view={view} sendMessage={sendMessage} connected={connected} sessions={sessions}
-          onOpenThread={onOpenThread} onOpenSession={openParticipantChat} />
+          onOpenThread={onOpenThread} onOpenSession={openParticipantChat} onOpenMailbox={onOpenMailbox} />
       ) : <>
         <details className="mb-4 border border-border p-2" data-testid="task-create">
           <summary className="cursor-pointer font-medium">New task</summary>

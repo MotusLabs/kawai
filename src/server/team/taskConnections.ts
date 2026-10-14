@@ -5,7 +5,9 @@
 // Snapshots are authoritative and re-sent whole on every change of the
 // team's tasks (and of task mail), so a reconnecting client needs no deltas.
 // Human actions run through TaskService as the human caller and answer with
-// `team-task-result`; the changes they cause reach every subscriber.
+// `team-task-result`; the changes they cause reach every subscriber. Direction
+// changes go through a draft and a keyed publication (task-revision-publication
+// D1/D2) — there is no direct amend from the UI.
 import type { ClientMessage } from '../../shared/types'
 import { unknownTeamError } from '../../shared/team'
 import type { TeamTask } from '../../shared/teamTasks'
@@ -52,7 +54,8 @@ export class TaskConnections {
     }
     for (const taskId of subscription.details) {
       if (only && taskId !== only) continue
-      const detail = store.detail(taskId)
+      // The human's view carries the task's draft (task-revision-publication D1).
+      const detail = store.humanDetail(taskId)
       if (detail) connection.send({
         type: 'team-task-detail', teamPath, teamId: subscription.teamId, detail,
         // Its messages name participants; the directory keeps a killed one's.
@@ -127,12 +130,33 @@ export class TaskConnections {
             ...(message.requestKey ? { requestKey: message.requestKey } : {}),
           })
           break
-        case 'team-task-amend':
-          task = await tasks.amend(caller, message.taskId, {
-            ...(message.direction !== undefined ? { direction: message.direction } : {}),
-            ...(message.acceptance !== undefined ? { acceptance: message.acceptance } : {}),
-          })
+        case 'team-task-draft':
+          // A draft refreshes the human's view through its own listener (D1).
+          if (message.action === 'save') {
+            await tasks.saveDraft(caller, message.taskId, {
+              direction: message.direction ?? '', acceptance: message.acceptance ?? null, rationale: message.rationale ?? null,
+              ...(message.baseRevision !== undefined ? { baseRevision: message.baseRevision } : {}),
+            })
+          } else if (message.action === 'rebase') await tasks.rebaseDraft(caller, message.taskId)
+          else await tasks.discardDraft(caller, message.taskId)
+          task = tasks.store.get(message.taskId) ?? undefined
           break
+        case 'team-task-publish': {
+          // The human form requires a rationale (Q6); the store keeps it optional.
+          if (!message.rationale.trim()) throw new Error('A publication needs a rationale')
+          const outcome = await tasks.publish(caller, message.taskId, {
+            direction: message.direction, acceptance: message.acceptance ?? null, rationale: message.rationale,
+            baseRevision: message.baseRevision, requestKey: message.requestKey, notify: message.notify,
+            ...(message.fromDraft ? { fromDraft: true } : {}),
+          })
+          result({ task: outcome.task, revision: outcome.revision.revision, replay: outcome.replay })
+          return
+        }
+        case 'team-task-notify': {
+          const outcome = await tasks.notify(caller, message.taskId, message.revision, message.requestKey)
+          result({ task: outcome.task, replay: outcome.replay })
+          return
+        }
         case 'team-task-note':
           await tasks.note(caller, message.taskId, message.text)
           task = tasks.store.get(message.taskId) ?? undefined

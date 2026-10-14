@@ -132,6 +132,7 @@ export class SessionMailbox {
     this.tasks = new TaskService(taskStore, {
       getSession: options.getRecord, homeDir: options.homeDir,
       onStatusTransition: (task, status, actor) => this.releases.transitionHook(task, status, actor),
+      restoreSession: options.restore,
     })
     this.management = new MailboxManagement(store, {
       getSession: options.getRecord, tasks: this.tasks, homeDir: options.homeDir,

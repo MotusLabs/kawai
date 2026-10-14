@@ -13,6 +13,7 @@ import type {
   TaskJournalEntry,
   TaskRevision,
   TaskStatus,
+  HumanTaskDetail,
   TeamTask,
   TeamTaskDetail,
   TeamTaskSummary,
@@ -20,6 +21,10 @@ import type {
 import { TASK_STATUSES } from '../../shared/teamTasks'
 import { outstandingOf, type AssignmentStore } from './assignmentStore'
 import type { MailboxStore } from './mailboxStore'
+import { migrateRevisionSchema } from './taskRevisionSchema'
+import { TaskDraftStore } from './taskDrafts'
+import { TaskAcknowledgements } from './taskAcknowledgements'
+import { TaskNotices } from './taskNotices'
 
 const CREATE_TABLES_SQL = `
 CREATE TABLE IF NOT EXISTS team_tasks (
@@ -88,14 +93,48 @@ export interface CreateTaskInput {
   requestKey?: string | null
 }
 
+/** One publication (task-revision-publication D2); fields are normalized by the caller. */
+export interface PublishInput {
+  /** Omitted fields carry over from the current revision. */
+  direction?: string
+  acceptance?: string | null
+  rationale?: string | null
+  /** The revision the draft was based on; a newer current revision refuses it as stale. */
+  baseRevision?: number
+  /** The client command key: a replay with the same payload returns the prior revision. */
+  requestKey?: string
+  notify: boolean
+  /** Drop the human's draft in the same transaction (the publication came from it). */
+  discardDraft?: boolean
+  /** Runs inside the publication transaction after the revision row (the notices, D3). */
+  within?: (revision: TaskRevision, task: TeamTask) => void
+}
+
+export interface PublishOutcome {
+  /** True when the key had already published: nothing was written. */
+  replay: boolean
+  task: TeamTask
+  revision: TaskRevision
+}
+
 const nowIso = () => new Date().toISOString()
 
 export class TaskStore {
   private readonly listeners = new Set<(task: TeamTask) => void>()
+  /** The human's drafts (task-revision-publication D1): never read by agent paths. */
+  readonly drafts: TaskDraftStore
+  /** Agents' acknowledged revisions (D6). */
+  readonly acknowledgements: TaskAcknowledgements
+  /** Revision notices and derived recipients (D3–D5); null without mail and assignments. */
+  readonly notices: TaskNotices | null
 
   constructor(private readonly db: Database, private readonly mail?: MailboxStore, private readonly assignments?: AssignmentStore) {
     db.exec(CREATE_TABLES_SQL)
     migrateTable(db)
+    migrateRevisionSchema(db)
+    this.drafts = new TaskDraftStore(db)
+    this.acknowledgements = new TaskAcknowledgements(db)
+    this.notices = mail && assignments ? new TaskNotices(db, mail, assignments, this.acknowledgements) : null
   }
 
   /** Every committed change, with the task as it is now. */
@@ -156,14 +195,23 @@ export class TaskStore {
   detail(id: string): TeamTaskDetail | null {
     const task = this.get(id)
     if (!task) return null
+    const revisions = this.revisions(id)
     return {
       task: this.summary(task),
-      revisions: this.revisions(id),
+      revisions,
       journal: this.journal(id),
       subtasks: this.selectTasks('t.parent_id = ?', id).map(child => this.summary(child)),
       assignments: this.assignments?.listByTask(id) ?? [],
       messages: this.messages(id),
+      publications: this.notices?.publications(task, revisions) ?? [],
+      acknowledgements: this.acknowledgements.list(id),
     }
+  }
+
+  /** The human's view (D1): the detail plus the task's draft. Never for agent paths. */
+  humanDetail(id: string): HumanTaskDetail | null {
+    const detail = this.detail(id)
+    return detail ? { ...detail, draft: this.drafts.get(id) } : null
   }
 
   revisions(id: string): TaskRevision[] {
@@ -174,6 +222,8 @@ export class TaskStore {
         acceptance: text(row.acceptance),
         author: actor(row.author_kind, row.author_session),
         createdAt: String(row.created_at),
+        rationale: text(row.rationale),
+        notify: row.notify === null || row.notify === undefined ? null : Number(row.notify) === 1,
       }))
   }
 
@@ -192,21 +242,66 @@ export class TaskStore {
   }
 
   /**
-   * A new revision of direction/acceptance. Omitted fields carry over from
-   * the current revision. The bump and the insert are one transaction, so
-   * competing amendments each get their own number and none is lost.
+   * Publish the next revision (task-revision-publication D2): one write
+   * transaction that (1) resolves a keyed request against committed rows — a
+   * same-payload replay returns the prior revision, a different payload is
+   * refused naming the field — then (2) refuses a stale base naming the newer
+   * revision, (3) inserts revision N+1 with its rationale, key, and notify
+   * flag, bumps the task, and drops the draft it came from, and (4) runs
+   * `within` (the notices, D3) before commit. The key check precedes the stale
+   * check, so a replay after its own success is never refused as stale. The
+   * `(task_id, request_key)` unique index is the arbiter: a concurrent
+   * same-key insert rolls this one back and it resolves as a replay. Only a
+   * new revision announces a change, after commit; a replay or a refusal
+   * does not. Null for an unknown task.
    */
-  amend(id: string, change: { direction?: string; acceptance?: string | null }, author: TaskActor, now = nowIso()): TeamTask | null {
-    const committed = this.db.transaction(() => {
-      const current = this.get(id)
-      if (!current) return false
-      const revision = current.revision + 1
-      this.db.prepare('UPDATE team_tasks SET revision = ?, updated_at = ? WHERE id = ?').run(revision, now, id)
-      this.insertRevision(id, revision, change.direction ?? current.direction,
-        change.acceptance === undefined ? current.acceptance : change.acceptance, author, now)
-      return true
-    })()
-    return committed ? this.changed(id) : null
+  publish(id: string, input: PublishInput, author: TaskActor, now = nowIso()): PublishOutcome | null {
+    let outcome: PublishOutcome | null
+    try {
+      outcome = this.db.transaction((): PublishOutcome | null => {
+        const prior = this.resolveKey(id, input)
+        if (prior) return prior
+        const current = this.get(id)
+        if (!current) return null
+        if (input.baseRevision !== undefined && input.baseRevision !== current.revision) {
+          throw new Error(`Stale: revision ${current.revision} was published since revision ${input.baseRevision}; nothing was published. Rebase the draft onto revision ${current.revision}.`)
+        }
+        const next = current.revision + 1
+        this.db.prepare('UPDATE team_tasks SET revision = ?, updated_at = ? WHERE id = ?').run(next, now, id)
+        this.db.prepare(`INSERT INTO team_task_revisions
+          (task_id, revision, direction, acceptance, author_kind, author_session, created_at, rationale, request_key, notify)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+          id, next, input.direction ?? current.direction,
+          input.acceptance === undefined ? current.acceptance : input.acceptance,
+          author.kind, author.sessionId, now, input.rationale ?? null, input.requestKey ?? null, input.notify ? 1 : 0,
+        )
+        if (input.discardDraft) this.drafts.discard(id, false)
+        const revision = this.revisions(id).at(-1)!
+        input.within?.(revision, this.get(id)!)
+        return { replay: false, task: this.get(id)!, revision }
+      })()
+    } catch (error) {
+      // The arbiter (D2): a same-key publication committed between this
+      // request's read and its write — the unique key rejected the insert, or
+      // its revision made this base stale. Rolled back; resolve as its replay.
+      const replay = this.resolveKey(id, input)
+      if (replay) return replay
+      throw error
+    }
+    if (!outcome || outcome.replay) return outcome
+    return { ...outcome, task: this.changed(id) }
+  }
+
+  /** The committed revision a keyed publication already wrote, or null (D2 step 1). */
+  private resolveKey(id: string, input: PublishInput): PublishOutcome | null {
+    if (!input.requestKey) return null
+    const row = this.db.prepare('SELECT revision FROM team_task_revisions WHERE task_id = ? AND request_key = ?')
+      .get(id, input.requestKey) as { revision: number } | null
+    if (!row) return null
+    const revision = this.revisions(id).find(entry => entry.revision === row.revision)!
+    const diff = publishPayloadDiff(revision, input)
+    if (diff) throw new Error(`Request key already used with a different ${diff}; nothing was published`)
+    return { replay: true, task: this.get(id)!, revision }
   }
 
   appendJournal(id: string, author: JournalAuthor, entry: string, now = nowIso()): TaskJournalEntry | null {
@@ -280,6 +375,20 @@ function createPayloadDiff(existing: TeamTask, firstRevision: TaskRevision | und
   if ((existing.parentId ?? null) !== (input.parentId || null)) return 'parent'
   if ((existing.worktree ?? null) !== (input.worktree ?? null)) return 'worktree'
   if ((existing.openspecChange ?? null) !== (input.openspecChange ?? null)) return 'OpenSpec change'
+  return null
+}
+
+/**
+ * Which normalized publication field differs between the revision a key
+ * published and a replayed request (D2). Base revision compares with the
+ * revision it was published over.
+ */
+function publishPayloadDiff(revision: TaskRevision, input: PublishInput): string | null {
+  if (input.direction !== undefined && input.direction !== revision.direction) return 'direction'
+  if (input.acceptance !== undefined && input.acceptance !== revision.acceptance) return 'acceptance'
+  if ((input.rationale ?? null) !== (revision.rationale ?? null)) return 'rationale'
+  if (input.notify !== (revision.notify === true)) return 'notify'
+  if (input.baseRevision !== undefined && input.baseRevision !== revision.revision - 1) return 'base revision'
   return null
 }
 

@@ -1,4 +1,5 @@
 // SDK-free durable mailbox rows shared by server and client views.
+import type { RevisionNotice } from './teamTasks'
 
 /**
  * Who acted (team-message-threads D4): the human, or an agent session. The
@@ -85,6 +86,8 @@ export interface TeamMessage {
   handoff: ChatHandoffPackage | null
   /** Forwarded work never goes back to the profile that hit the limit. */
   excludedProfile: string | null
+  /** A revision notice (task-revision-publication D3): the revision it announces; absent = not a notice. */
+  revisionNotice?: RevisionNotice | null
 }
 
 /** Progress of the agent that hit a limit, handed to whoever takes over. */

@@ -405,7 +405,7 @@ export default function ChatView({ session, sendMessage, subscribe, connectionSt
       {openSlot === 'mailbox' && <TeamMailboxPanel teamPath={teamKey} view={mailbox} sendMessage={sendMessage} connected={connected} onClose={toggleMailbox}
         groups={teamGroups.groups.map(group => group.id)} sessions={liveSessions} onOpenSession={openParticipantChat} />}
       {openSlot === 'tasks' && <TeamTasksPanel teamPath={teamKey} projectPath={session.projectPath} view={tasks} sendMessage={sendMessage}
-        connected={connected} onClose={toggleTasks} onOpenThread={openThread} onCreateWorktree={onCreateWorktree} />}
+        connected={connected} onClose={toggleTasks} onOpenThread={openThread} onCreateWorktree={onCreateWorktree} onOpenMailbox={toggleMailbox} />}
       {openSlot === 'messages' && <TeamMessagesPanel teamPath={teamKey} projectPath={session.projectPath} sendMessage={sendMessage}
         connected={connected} connectionEpoch={connectionEpoch} onClose={toggleMessages} />}
       {openSlot === 'strategy' && <ProductStrategyPanel teamPath={teamKey} view={strategy} sendMessage={sendMessage} connected={connected} onClose={toggleStrategy} />}

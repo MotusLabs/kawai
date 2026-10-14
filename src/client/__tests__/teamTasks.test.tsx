@@ -145,21 +145,26 @@ test('detail shows direction, retained revisions, journal, subtasks, messages; c
   act(() => button('Reopen').props.onClick())
   act(() => button('Mark cancelled').props.onClick())
   const field = (label: string) => renderer.root.find(node => node.props['aria-label'] === label)
-  act(() => field('Amend direction').props.onChange({ target: { value: 'Revised plan' } }))
-  act(() => renderer.root.findByProps({ 'data-testid': 'task-amend' }).props.onSubmit({ preventDefault: () => {} }))
+  // A draft first, then its publication (task-revision-publication 5.1/5.2).
+  act(() => field('Draft direction').props.onChange({ target: { value: 'Revised plan' } }))
+  act(() => button('Save draft').props.onClick())
+  act(() => field('Rationale').props.onChange({ target: { value: 'Customer asked' } }))
+  act(() => button('Publish revision 3').props.onClick())
   act(() => field('Journal note').props.onChange({ target: { value: 'Human note' } }))
   act(() => renderer.root.findAllByType('form').at(-1)!.props.onSubmit({ preventDefault: () => {} }))
   // Exactly one targets request per mount, not one per effect pass (N2).
   expect(sent.filter(message => message.type === 'team-task-targets')).toHaveLength(1)
-  expect(sent.filter(message => message.type.startsWith('team-task-') && message.type !== 'team-task-targets').map(message => ({ ...message, requestId: undefined }) as Record<string, unknown>)).toEqual([
+  const actions = sent.filter(message => message.type.startsWith('team-task-') && message.type !== 'team-task-targets')
+  expect(actions.map(message => ({ ...message, requestId: undefined, requestKey: undefined }) as Record<string, unknown>)).toEqual([
     { type: 'team-task-status', teamPath: 'dev', taskId: 't1', status: 'open' },
     { type: 'team-task-status', teamPath: 'dev', taskId: 't1', status: 'cancelled' },
-    { type: 'team-task-amend', teamPath: 'dev', taskId: 't1', direction: 'Revised plan', acceptance: 'Ships' },
+    { type: 'team-task-draft', teamPath: 'dev', taskId: 't1', action: 'save', baseRevision: 2, direction: 'Revised plan', acceptance: 'Ships', rationale: '' },
+    { type: 'team-task-publish', teamPath: 'dev', taskId: 't1', baseRevision: 2, direction: 'Revised plan', acceptance: 'Ships', rationale: 'Customer asked', notify: false, fromDraft: false },
     { type: 'team-task-note', teamPath: 'dev', taskId: 't1', text: 'Human note' },
-  ].map(message => ({ ...message, requestId: undefined })))
-  expect(button('Save as revision 3')).toBeDefined()
+  ].map(message => ({ ...message, requestId: undefined, requestKey: undefined })))
+  expect(typeof (actions[3] as { requestKey?: string }).requestKey).toBe('string')
   act(() => renderer.update(render(false)))
-  for (const node of renderer.root.findAll(node => node.type === 'button' && (/^Mark |^Reopen|^Save as|^Add note/).test(node.children.join('')))) {
+  for (const node of renderer.root.findAll(node => node.type === 'button' && (/^Mark |^Reopen|^Save draft|^Publish|^Add note/).test(node.children.join('')))) {
     expect(node.props.disabled).toBe(true)
   }
   act(() => button('All tasks').props.onClick())

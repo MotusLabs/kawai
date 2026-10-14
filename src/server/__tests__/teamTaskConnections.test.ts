@@ -71,6 +71,8 @@ beforeEach(() => {
   } as unknown as ChatSessionManager
   connections = new ChatConnections(manager)
   taskStore.subscribe(task => connections.publishTasks(task.teamId))
+  // As ChatSessionManager wires it: a draft refreshes the human's views only (task-revision-publication D1).
+  taskStore.drafts.subscribe(taskId => { const task = taskStore.get(taskId); if (task) connections.publishTasks(task.teamId) })
   mail.subscribe((team, message) => connections.publishMailbox(team, message))
 })
 afterEach(() => { db.close(); fs.rmSync(dir, { recursive: true, force: true }) })
@@ -136,13 +138,16 @@ test('another team’s task cannot be opened or acted on', async () => {
   for (const action of [
     { type: 'team-task-note', teamPath: '/repo', requestId: 'r1', taskId: foreign.id, text: 'x' },
     { type: 'team-task-status', teamPath: '/repo', requestId: 'r2', taskId: foreign.id, status: 'done' },
-    { type: 'team-task-amend', teamPath: '/repo', requestId: 'r3', taskId: foreign.id, direction: 'x' },
+    { type: 'team-task-draft', teamPath: '/repo', requestId: 'r3', taskId: foreign.id, action: 'save', direction: 'x' },
+    { type: 'team-task-publish', teamPath: '/repo', requestId: 'r4', taskId: foreign.id, baseRevision: 1, requestKey: 'k', direction: 'x', rationale: 'r', notify: true },
+    { type: 'team-task-notify', teamPath: '/repo', requestId: 'r5', taskId: foreign.id, revision: 1, requestKey: 'k' },
   ] as ClientMessage[]) {
     await send(action)
     expect(last('team-task-result')!.error).toContain('not found in this team')
   }
   expect(tasks.store.get(foreign.id)).toMatchObject({ status: 'open', revision: 1 })
   expect(tasks.store.journal(foreign.id)).toEqual([])
+  expect(tasks.store.drafts.get(foreign.id)).toBeNull()
 })
 
 test('delayed team resolution: a close sent meanwhile wins over the earlier open', async () => {
@@ -169,7 +174,7 @@ test('a team path that names no known team is refused, with each action answered
   expect(last('team-task-targets-result')).toEqual({ type: 'team-task-targets-result', teamPath: '/elsewhere', requestId: 't', error: 'unknown-team: /elsewhere' })
 })
 
-test('human create with parent and change, amend, note, and status answer by request id and push revisions', async () => {
+test('human create with parent and change, draft and publish, note, and status answer by request id and push revisions', async () => {
   await send({ type: 'team-tasks-open', teamPath: '/repo' })
   await send({ type: 'team-task-create', teamPath: '/repo', requestId: 'c1', title: 'Parent', direction: 'p' })
   const parent = last('team-task-result')!.task!
@@ -178,9 +183,14 @@ test('human create with parent and change, amend, note, and status answer by req
   expect(created).toMatchObject({ requestId: 'c2', task: { title: 'Child', parentId: parent.id, openspecChange: 'add-x', creator: { kind: 'human' } } })
   const id = created.task!.id
   await send({ type: 'team-task-open', teamPath: '/repo', taskId: id })
-  await send({ type: 'team-task-amend', teamPath: '/repo', requestId: 'a1', taskId: id, direction: 'v2' })
-  expect(last('team-task-result')).toMatchObject({ requestId: 'a1', task: { revision: 2 } })
+  // The draft is pushed in the human detail and publishes nothing (task-revision-publication D1).
+  await send({ type: 'team-task-draft', teamPath: '/repo', requestId: 'd1', taskId: id, action: 'save', direction: 'v2', rationale: 'Scope' })
+  expect(last('team-task-result')).toMatchObject({ requestId: 'd1', task: { revision: 1 } })
+  expect(last('team-task-detail')!.detail).toMatchObject({ task: { revision: 1 }, draft: { baseRevision: 1, direction: 'v2' } })
+  await send({ type: 'team-task-publish', teamPath: '/repo', requestId: 'a1', taskId: id, baseRevision: 1, requestKey: 'publish-a1', direction: 'v2', rationale: 'Scope', notify: false, fromDraft: true })
+  expect(last('team-task-result')).toMatchObject({ requestId: 'a1', task: { revision: 2 }, revision: 2, replay: false })
   expect(last('team-task-detail')!.detail.revisions.map(revision => revision.direction)).toEqual(['v1', 'v2'])
+  expect(last('team-task-detail')!.detail.draft).toBeNull()
   await send({ type: 'team-task-note', teamPath: '/repo', requestId: 'n1', taskId: id, text: 'Human note' })
   expect(last('team-task-detail')!.detail.journal).toMatchObject([{ text: 'Human note', author: { kind: 'human' } }])
   await send({ type: 'team-task-status', teamPath: '/repo', requestId: 's1', taskId: id, status: 'blocked' })
@@ -360,4 +370,39 @@ test('targets list the team-scoped worktrees and changes', async () => {
   // an unknown worktree errors inline.
   await send({ type: 'team-task-targets', teamPath: '/repo', requestId: 't3', worktree: '/nope' })
   expect(last('team-task-targets-result')).toMatchObject({ requestId: 't3', error: expect.stringContaining('is not a worktree') })
+})
+
+test('publish refusals come back inline; replays, notify, rebase, and acknowledgements answer and push (task-revision-publication 5.1)', async () => {
+  const task = await tasks.create(human(), { title: 'Export', direction: 'v1' })
+  await send({ type: 'team-task-open', teamPath: '/repo', taskId: task.id })
+  const publish = (requestId: string, extra: Record<string, unknown> = {}) => send({
+    type: 'team-task-publish', teamPath: '/repo', requestId, taskId: task.id, baseRevision: 1, requestKey: 'publish-1',
+    direction: 'v2', rationale: 'Scope', notify: false, ...extra,
+  } as ClientMessage)
+  await publish('p0', { rationale: '  ' })
+  expect(last('team-task-result')).toMatchObject({ requestId: 'p0', error: 'A publication needs a rationale' })
+  await publish('p1')
+  await publish('p2')
+  expect(last('team-task-result')).toMatchObject({ requestId: 'p2', revision: 2, replay: true })
+  await publish('p3', { direction: 'other' })
+  expect(last('team-task-result')!.error).toContain('Request key already used with a different direction')
+  // A draft based on revision 1 is now stale: publishing it is refused, the draft kept, and rebase fixes the base.
+  await send({ type: 'team-task-draft', teamPath: '/repo', requestId: 'd1', taskId: task.id, action: 'save', baseRevision: 1, direction: 'v3' })
+  await publish('p4', { requestKey: 'publish-2', direction: 'v3' })
+  expect(last('team-task-result')!.error).toContain('revision 2 was published since revision 1')
+  expect(last('team-task-detail')!.detail.draft).toMatchObject({ baseRevision: 1, direction: 'v3' })
+  await send({ type: 'team-task-draft', teamPath: '/repo', requestId: 'd2', taskId: task.id, action: 'rebase' })
+  expect(last('team-task-detail')!.detail.draft).toMatchObject({ baseRevision: 2, direction: 'v3' })
+  await send({ type: 'team-task-draft', teamPath: '/repo', requestId: 'd3', taskId: task.id, action: 'discard' })
+  expect(last('team-task-detail')!.detail.draft).toBeNull()
+  await send({ type: 'team-task-notify', teamPath: '/repo', requestId: 'n1', taskId: task.id, revision: 2, requestKey: 'notify-1' })
+  expect(last('team-task-result')).toMatchObject({ requestId: 'n1', replay: false, task: { revision: 2 } })
+  await send({ type: 'team-task-notify', teamPath: '/repo', requestId: 'n2', taskId: task.id, revision: 3, requestKey: 'notify-2' })
+  expect(last('team-task-result')!.error).toContain('Revision 3 of this task is not published')
+  // An acknowledgement republishes the detail with the new history.
+  const before = messages.filter(message => message.type === 'team-task-detail').length
+  tasks.store.acknowledgements.record(task.id, 'dev', 2, null)
+  tasks.store.touch(task.id)
+  expect(messages.filter(message => message.type === 'team-task-detail')).toHaveLength(before + 1)
+  expect(last('team-task-detail')!.detail.acknowledgements).toMatchObject([{ sessionId: 'dev', revision: 2 }])
 })

@@ -5,9 +5,11 @@
 // and as a readable header above the body; envelopes without one keep the
 // original shape, so older transcripts still parse. Work forwarded after a
 // provider limit (profile routing) carries its handoff package the same way,
-// below the task header.
+// below the task header. A revision notice (task-revision-publication D3)
+// adds `revisionNotice` to the metadata only — the revision it announces,
+// which may be older than the task header built at delivery.
 import type { ChatPeerMessage } from '../../shared/chat'
-import type { ChatPeerTaskContext } from '../../shared/teamTasks'
+import type { ChatPeerTaskContext, RevisionNotice } from '../../shared/teamTasks'
 import { TASK_STATUSES } from '../../shared/teamTasks'
 import { ENVELOPE_TAG } from './teamPrompt'
 import type { TeamMessage } from './mailboxStore'
@@ -33,6 +35,7 @@ export function messageEnvelope(message: TeamMessage, thread?: TeamMessage[], ta
     })) } : {}),
     ...(task ? { task } : {}),
     ...(message.handoff ? { handoff: message.handoff } : {}),
+    ...(message.revisionNotice ? { revisionNotice: message.revisionNotice } : {}),
   }
 }
 
@@ -63,6 +66,7 @@ export function parseEnvelope(text: string): ChatPeerMessage | null {
       (row.senderKind === undefined || row.senderKind === 'agent' || row.senderKind === 'human')))) return null
     if (meta.task !== undefined && !isTaskContext(meta.task)) return null
     if (meta.handoff !== undefined && !isHandoffPackage(meta.handoff)) return null
+    if (meta.revisionNotice !== undefined && !isRevisionNotice(meta.revisionNotice)) return null
     let body = match[2]!
     if (meta.possibleDuplicate) {
       if (!body.startsWith(`${DUPLICATE_NOTE}\n`)) return null
@@ -95,8 +99,16 @@ export function parseEnvelope(text: string): ChatPeerMessage | null {
       } : {}),
       ...(meta.task ? { task: meta.task } : {}),
       ...(meta.handoff ? { handoff: meta.handoff } : {}),
+      ...(meta.revisionNotice ? { revisionNotice: meta.revisionNotice } : {}),
     }
   } catch { return null }
+}
+
+function isRevisionNotice(value: unknown): value is RevisionNotice {
+  const notice = value as Record<string, unknown> | null
+  return !!notice && typeof notice === 'object' &&
+    Number.isInteger(notice.revision) && Number.isInteger(notice.previousRevision) &&
+    typeof notice.assignmentId === 'string' && (notice.rationale === null || typeof notice.rationale === 'string')
 }
 
 function isTaskContext(value: unknown): value is ChatPeerTaskContext {

@@ -5,7 +5,7 @@
 // stay in the driver; this file is SDK-agnostic so the client never imports
 // the agent SDK.
 
-import type { ChatPeerTaskContext } from './teamTasks'
+import type { ChatPeerTaskContext, RevisionNotice } from './teamTasks'
 import type { ChatHandoffPackage } from './team'
 
 /**
@@ -128,6 +128,11 @@ export interface ChatPeerMessage {
   task?: ChatPeerTaskContext
   /** Work handed off after a provider limit (profile routing); absent = none. */
   handoff?: ChatHandoffPackage
+  /**
+   * A revision notice (task-revision-publication D3): the revision it
+   * announces, which may be older than `task.revision` built at delivery.
+   */
+  revisionNotice?: RevisionNotice
 }
 
 export type ChatEvent =

@@ -83,3 +83,34 @@ test('a malformed handoff package is not mail', () => {
   const text = formatEnvelope({ ...PEER, handoff: HANDOFF }).replace('&quot;toolCalls&quot;:3', '&quot;toolCalls&quot;:&quot;3&quot;')
   expect(parseEnvelope(text)).toBeNull()
 })
+
+// Revision notices (task-revision-publication 3.2, D3/D9): additive metadata.
+const NOTICE = { revision: 2, previousRevision: 1, assignmentId: 'assignment-1', rationale: 'Scope changed' }
+const TASK = {
+  id: 'task-1', title: 'Export', status: 'active' as const, revision: 3, direction: 'v3', acceptance: null,
+  openspecChange: null, worktree: null, journal: [],
+}
+test('a revision notice round-trips with its task header; an older envelope without one still parses', () => {
+  const notice: ChatPeerMessage = { ...PEER, priority: 'normal', task: TASK, revisionNotice: NOTICE }
+  expect(parseEnvelope(formatEnvelope(notice))).toEqual(notice)
+  const older = parseEnvelope(formatEnvelope(PEER))!
+  expect('revisionNotice' in older).toBe(false)
+})
+test('a notice queued for revision 2 and pushed after revision 3 names 2 under a revision-3 header', async () => {
+  const { messageEnvelope } = await import('../team/envelope')
+  const row = {
+    id: 'notice-1', teamId: '/repo/.git', toKind: 'session', toId: 'dev', fromKind: 'human', fromSession: null, fromGroup: null,
+    originPath: '/repo', priority: 'normal', tags: ['task-revision'], threadId: 'notice-1', inReplyTo: null, hop: 1,
+    body: 'Task Export revision 2 published', state: 'claimed', claimedBy: 'dev', claimedAt: null, deliverAt: null, createdAt: '',
+    pushedAt: null, deliveredAt: null, reason: null, possibleDuplicate: false, attachThread: false, taskId: 'task-1',
+    taskRevision: null, claimCommit: null, parkedUntil: null, parkCount: 0, resumeMessageId: null, handoff: null,
+    excludedProfile: null, revisionNotice: NOTICE,
+  } as const
+  const text = formatEnvelope(messageEnvelope({ ...row, tags: [...row.tags] }, undefined, TASK))
+  expect(text).toContain('[Task task-1: Export] status active, revision 3')
+  expect(parseEnvelope(text)).toMatchObject({ revisionNotice: { revision: 2 }, task: { revision: 3 } })
+})
+test('a malformed revision notice is not mail', () => {
+  const text = formatEnvelope({ ...PEER, revisionNotice: { ...NOTICE, revision: 'two' } as never })
+  expect(parseEnvelope(text)).toBeNull()
+})

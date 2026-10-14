@@ -57,7 +57,7 @@ describe('TaskStore', () => {
     })
     expect(task.id.startsWith('task-')).toBe(true)
     expect(tasks.revisions(task.id)).toEqual([
-      { revision: 1, direction: 'CSV export of reports', acceptance: 'Downloads a file', author: agent('chat-lead'), createdAt: task.createdAt },
+      { revision: 1, direction: 'CSV export of reports', acceptance: 'Downloads a file', author: agent('chat-lead'), createdAt: task.createdAt, rationale: null, notify: null },
     ])
   })
 
@@ -91,21 +91,21 @@ describe('TaskStore', () => {
 
   test('amendments create numbered revisions and keep the earlier ones', () => {
     const task = create({ acceptance: 'v1 criteria' })
-    tasks.amend(task.id, { direction: 'JSON export too' }, agent('chat-lead'))
-    const amended = tasks.amend(task.id, { acceptance: null }, human)!
+    tasks.publish(task.id, { direction: 'JSON export too', notify: false }, agent('chat-lead'))
+    const amended = tasks.publish(task.id, { acceptance: null, notify: false }, human)!.task
     expect(amended).toMatchObject({ revision: 3, direction: 'JSON export too', acceptance: null })
     expect(tasks.revisions(task.id).map(({ revision, direction, acceptance, author }) => ({ revision, direction, acceptance, author }))).toEqual([
       { revision: 1, direction: 'CSV export of reports', acceptance: 'v1 criteria', author: agent('chat-lead') },
       { revision: 2, direction: 'JSON export too', acceptance: 'v1 criteria', author: agent('chat-lead') },
       { revision: 3, direction: 'JSON export too', acceptance: null, author: human },
     ])
-    expect(tasks.amend('task-missing', { direction: 'x' }, human)).toBeNull()
+    expect(tasks.publish('task-missing', { direction: 'x', notify: false }, human)).toBeNull()
   })
 
   test('competing amendments each get their own revision number', async () => {
     const task = create()
     await Promise.all(Array.from({ length: 10 }, (_, index) =>
-      Promise.resolve().then(() => tasks.amend(task.id, { direction: `take ${index}` }, agent(`chat-${index}`)))))
+      Promise.resolve().then(() => tasks.publish(task.id, { direction: `take ${index}`, notify: false }, agent(`chat-${index}`)))))
     const numbers = tasks.revisions(task.id).map(revision => revision.revision)
     expect(numbers).toEqual(Array.from({ length: 11 }, (_, index) => index + 1))
     expect(tasks.get(task.id)!.revision).toBe(11)
@@ -115,8 +115,8 @@ describe('TaskStore', () => {
     const task = create()
     const otherConnection = new Database(dbPath)
     const second = new TaskStore(otherConnection)
-    second.amend(task.id, { direction: 'from connection two' }, human)
-    tasks.amend(task.id, { direction: 'from connection one' }, human)
+    second.publish(task.id, { direction: 'from connection two', notify: false }, human)
+    tasks.publish(task.id, { direction: 'from connection one', notify: false }, human)
     otherConnection.close()
     expect(tasks.revisions(task.id).map(revision => revision.direction)).toEqual([
       'CSV export of reports', 'from connection two', 'from connection one',
@@ -149,7 +149,7 @@ describe('TaskStore', () => {
     const seen: string[] = []
     tasks.subscribe(changed => seen.push(`${changed.status}@${changed.revision}`))
     tasks.setStatus(task.id, 'active')
-    tasks.amend(task.id, { direction: 'more' }, human)
+    tasks.publish(task.id, { direction: 'more', notify: false }, human)
     tasks.appendJournal(task.id, human, 'note')
     tasks.setStatus(task.id, 'done')
     expect(seen).toEqual(['active@1', 'active@2', 'active@2', 'done@2'])
@@ -159,7 +159,7 @@ describe('TaskStore', () => {
   test('tasks, revisions, and journal persist across reopening and outlive their sessions', () => {
     const task = create({ parentId: null, worktree: '/repo-feature', openspecChange: 'add-export' })
     db.insertChatSession(chatRow('chat-lead', { taskId: task.id }))
-    tasks.amend(task.id, { direction: 'v2' }, agent('chat-lead'))
+    tasks.publish(task.id, { direction: 'v2', notify: false }, agent('chat-lead'))
     tasks.appendJournal(task.id, agent('chat-lead'), 'decided')
     tasks.setStatus(task.id, 'blocked')
     db.updateChatSession('chat-lead', { archivedAt: '2026-10-11T01:00:00.000Z' })
