@@ -2,7 +2,7 @@
 
 ## Context
 
-See proposal.md for why. Wave B1 gave Kawai the parts of a team: `team-tasks` stores work, `agent-mailbox`/`profile-routing` deliver it, `team-worktree-staffing` staffs worktrees, `product-strategy` records direction. Wave B2 adds the records that name responsibility and outcome — `task-assignment`, `team-waiting-reasons`, `team-message-threads` (already landed), `task-results-handoffs`, `task-revision-publication`. Every one of them is read today through a per-chat side panel (`TeamTasksPanel.tsx`, `TeamMailboxPanel.tsx`, `TeamMessagesPanel.tsx`, `ProductStrategyPanel.tsx` sharing `sideSlot.ts`), so the human supervises one chat at a time and cannot see the team as a whole.
+See proposal.md for why. Wave B1 gave Kawai the parts of a team: `team-tasks` stores work, `agent-mailbox`/`profile-routing` deliver it, `team-worktree-staffing` staffs worktrees, `product-strategy` records direction. Wave B2 adds the records that name responsibility and outcome — `task-assignment`, `team-waiting-reasons`, `team-message-threads`, `task-results-handoffs`, `task-revision-publication`, `team-member-release` (all merged as change proposals; D4 binds to their design text). Every one of them is read today through a per-chat side panel (`TeamTasksPanel.tsx`, `TeamMailboxPanel.tsx`, `TeamMessagesPanel.tsx`, `ProductStrategyPanel.tsx` sharing `sideSlot.ts`), so the human supervises one chat at a time and cannot see the team as a whole.
 
 The runtime already holds the facts a workspace needs. `TaskStore.summary` derives participants; `AssignmentService` (sibling) names the accountable party; `waitingReasons.ts`/`teamRoster.ts`/`memberCauses.ts` explain why mail waits and who sits in which worktree; `messageFeed.ts`/`messageQuery.ts` list mail with named participants; `groupCatalog.ts`/`groupFile.ts` hold group settings; `ChatConnections`/`TaskConnections`/`MessageConnections`/`StrategyConnections` already push authoritative snapshots scoped by a session's team. The gap is one view and one read model, not new durable state.
 
@@ -30,18 +30,18 @@ The workspace renders **Product Strategy** as a top band (compact summary of the
 
 ### D4. Workflow stage is a pure projection over sibling state, never a stored value
 
-`teamTaskStage.ts` maps a task's facts to a display stage. Sources and the minimal fields consumed, named now because two siblings are still unwritten:
+`teamTaskStage.ts` maps a task's facts to a display stage, reading the sibling changes' real contracts (all merged as proposals; still absence-safe because they are not implemented yet):
 
-| Stage | Source | Minimal field needed |
+| Stage | Source | Field consumed |
 | --- | --- | --- |
-| Unstarted | `task-assignment` | `assignment` absent, or state `queued`/`failed`/`superseded` with nothing outstanding |
-| Implementing | `task-assignment` | `assignment.state` in `claimed`/`delivered`/`parked`/`forwarded`/`uncertain` |
-| In review / Ready for QA | `task-results-handoffs` | an open handoff `{ id, kind: 'review' \| 'qa' \| 'fixes', taskId, resultId, requestedRole, state }` |
-| Fixes requested | `task-results-handoffs` | a handoff `kind: 'fixes'` still open |
-| Awaiting acceptance | `task-results-handoffs` | a result `{ id, taskId, taskRevision, submittingSession, createdAt, acceptance: 'pending' \| 'accepted' \| 'needs-reevaluation' }` |
-| Awaiting acknowledgement | `task-revision-publication` | `revisionNotice { revision, state: 'queued' \| 'delivered' \| 'acknowledged' }` |
+| Unstarted | `task-assignment` D5 | no outstanding assignment, or one whose derived state is `queued`/`failed`/`superseded` |
+| Implementing | `task-assignment` D5 | outstanding assignment state `claimed`/`delivered`/`parked`/`forwarded`/`uncertain` |
+| In review / Ready for QA / Fixes requested | `task-results-handoffs` D3 | a `team_task_assignments` row with `handoff_kind` `review`/`qa`/`fix` set, plus `result_id` and `expected_response`; its open/claimed/failed standing is that assignment's own D5 state, not a separate entity |
+| Awaiting acceptance | `task-results-handoffs` D1/D5 | the **outstanding result** (newest row nothing supersedes) with `accepted_by_kind`/`accepted_by_session`/`accepted_at` all NULL |
+| Needs re-evaluation (badge, not a stage) | `task-results-handoffs` D6 | derived at read: `result.task_revision < team_tasks.revision` — never stored |
+| Awaiting acknowledgement | `task-revision-publication` D5 | outstanding claimant's `acknowledged revision < task.revision`; notice state (Not notified / Queued / Delivered / Failed / Uncertain) is derived per holder per revision, and "Delivered rev 2 · Acknowledged rev 1" is a normal display |
 
-The stage is never `done`, and a finished agent turn never moves it: turn completion is not a fact about the work (product strategy P9/P10 — durable records and trustworthy results over throughput). If a sibling's field is absent, the row falls back to the assignment-derived stage and the next action says why.
+There is no acceptance enum and acknowledgement is not a notice state. The envelope's `revisionNotice` is `{revision, previousRevision, assignmentId, rationale}` — publication metadata, not a stage input. The stage is never `done`, and a finished agent turn never moves it (product strategy P9/P10). If a sibling field is absent, the row falls back to the assignment-derived stage and the next action says why.
 
 ### D5. Attention items: one shape, a kind enum, and a card link
 
@@ -72,7 +72,7 @@ The snapshot is authoritative: `teamWorkspaceStore` replaces `items` and the der
 
 ### D8. The morning summary is a 24-hour window over durable rows plus the runtime ledger
 
-The window is a rolling 24 hours ending at read time, recomputed while the workspace is open. Buckets and their sources: **completed results** (result rows in the window, each with its acceptance state — a result is completed work, not accepted work), **capacity waits**, **approvals**, **uncertain deliveries** (`team_message_events` rows of kind `held-uncertain`/`held-for-request` in the window), **finished-turn-without-result** (persisted chat turn-end events in the window with no result row for that session and task). Capacity waits come from the in-memory diagnosis ledger `team-waiting-reasons` keeps, so after a restart that bucket lists only waits the running server has observed — the same contract waiting reasons already have. *Alternatives:* a durable `team_wait_history` table (rejected: a summary does not justify a migration) and a "since last open" window (rejected: it needs hidden per-human state and a second browser would disagree with the first).
+The window is a rolling 24 hours ending at read time, recomputed while the workspace is open. Buckets and their sources: **completed results** (outstanding result rows in the window, each carrying whether `accepted_*` is set — a submitted result is completed work, not accepted work), **capacity waits**, **approvals**, **uncertain deliveries** (`team_message_events` rows of kind `held-uncertain`/`held-for-request` in the window), **finished-turn-without-result** (persisted chat turn-end events in the window with no result row for that session and task). Capacity waits come from the in-memory diagnosis ledger `team-waiting-reasons` keeps, so after a restart that bucket lists only waits the running server has observed — the same contract waiting reasons already have. *Alternatives:* a durable `team_wait_history` table (rejected: a summary does not justify a migration) and a "since last open" window (rejected: it needs hidden per-human state and a second browser would disagree with the first).
 
 ### D9. Connections follow the existing team-scoped pattern
 
@@ -88,7 +88,7 @@ The window is a rolling 24 hours ending at read time, recomputed while the works
 
 ## Risks / Trade-offs
 
-- [`task-results-handoffs` and `task-revision-publication` are unwritten, so D4's minimal fields are a request, not a reading] → name the fields in the change and implement the projection with absence-safe fallbacks; a missing sibling degrades to the assignment-derived stage rather than blocking this change.
+- [`task-results-handoffs` and `task-revision-publication` are merged proposals but not implemented, so D4's fields may still shift during their implementation] → D4 binds to their design text (D3/D5/D6/D8 and D5 respectively) and keeps absence-safe fallbacks; a missing field degrades to the assignment-derived stage rather than blocking this change. If their implementers move a field, the projection is the only place to update.
 - [The morning summary's capacity-wait bucket loses history across restart] → stated in the spec as a scenario; the other four buckets are durable. Revisit only if the human needs restart-surviving wait history.
 - [Extracting `TeamTasksView`/`ProductStrategyView` touches panels the side slot depends on] → keep the panels' public props unchanged, add the view underneath, and cover both mounts with the existing panel tests.
 - [Attention item identity collides across sources] → ids are `kind:sourceId` with source ids already unique per store (request id, message id, task id); a collision is a bug in a source, not a queue behaviour.
@@ -106,7 +106,10 @@ The human delegated Wave B2 decisions to the lead. Each open question is decided
 - **Q2 — Product Strategy is a band above the tabs, not a tab** (D2). Matches the direction and UX doc §1 literally; direction stays visible while supervising.
 - **Q3 — Members shows the role description and the source file, not the prompt body** (D7). The body is long, already at the linked file, and the panel is settings inspection.
 - **Q4 — no Plans tab and no placeholder** (D2). The tab registry reserves the key; rendering nothing is the honest extension point.
-- **Q5 — "completed results" in the summary means submitted results, with acceptance state shown** (D8). Acceptance is a separate attention item (`pending-acceptance`); conflating them would make an unaccepted result look done.
+- **Q5 — "completed results" in the summary means submitted results, with whether `accepted_*` is set shown beside each** (D8). Acceptance is a separate attention item (`pending-acceptance`); conflating them would make an unaccepted result look done.
 - **Q6 — the workspace adds no write path** (D11). Every action navigates to the control that already owns it, so this change cannot grant, dispatch, or accept anything.
 - **Q7 — capability split: one new `team-workspace` plus a single `workspace-navigation` requirement** (D1/D10). Splitting Members or the attention queue into their own capabilities would create near-duplicates of `agent-teams` and `team-waiting-reasons`.
 - **Q8 — stay on base 3620a84's content, merged to current `origin/master`.** The lead's "based on origin/master 3620a84" is the change's origin; the branch is fast-forwarded so the delta is written against what the siblings actually shipped.
+- **Q9 — the summary window is a rolling 24 h** (D8). Lead ruling 2026-10-14 under the B2 delegation; the "since last open" alternative is closed.
+- **Q10 — Members shows the role description and the source file, not the prompt body** (D7). Lead ruling 2026-10-14; closed.
+- **Q11 — the chat-header side-slot buttons stay as shortcuts beside the Team workspace** (D3). Lead ruling 2026-10-14; they are not replaced by it, and D3's extraction keeps both mounts on one view.
