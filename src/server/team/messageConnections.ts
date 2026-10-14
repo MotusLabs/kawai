@@ -161,6 +161,7 @@ export class MessageConnections {
     if (subscription.list) {
       connection.send({
         type: 'team-messages', teamPath, teamId: subscription.teamId, messages: event.messages,
+        directory: this.manager.directory.list(subscription.teamId),
       })
     }
     const touched = new Set(event.messages.map(message => message.threadId))

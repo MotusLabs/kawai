@@ -121,6 +121,8 @@ test('list open snapshots the team, changes push, close and disconnect unsubscri
   expect(last('team-messages-snapshot')!.tasks).toEqual([{ id: task.id, title: 'Export CSV' }])
   fromTeam({ kind: 'group', id: 'devs' }, 'Second')
   expect(bodies(last('team-messages')!.messages)).toEqual(['Second'])
+  // Pushes name participants like the snapshot does (team-workspace-pages D7).
+  expect(last('team-messages')!.directory).toEqual([{ sessionId: 'gone', name: 'Killed helper', group: 'qa' }])
   fromTeam({ kind: 'group', id: 'devs' }, 'Elsewhere', teams.get('stranger')!.teamId)
   expect(bodies(last('team-messages')!.messages)).toEqual(['Second'])
   expect(count('team-messages-snapshot')).toBe(1)

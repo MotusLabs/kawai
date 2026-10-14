@@ -44,8 +44,8 @@ const snapshot = (
   type: 'team-messages-snapshot', teamPath: 'dev', teamId: 'team', filters: extra.filters ?? {},
   messages, nextCursor: extra.nextCursor ?? null, directory: extra.directory ?? [], tasks: extra.tasks ?? [], threadSizes: {},
 })
-const push = (messages: TeamMessage[]): Extract<ServerMessage, { type: 'team-messages' }> =>
-  ({ type: 'team-messages', teamPath: 'dev', teamId: 'team', messages })
+const push = (messages: TeamMessage[], directory: SessionDirectoryEntry[] = []): Extract<ServerMessage, { type: 'team-messages' }> =>
+  ({ type: 'team-messages', teamPath: 'dev', teamId: 'team', messages, directory })
 const thread = (threadId: string, entries: ThreadEntry[], directory: SessionDirectoryEntry[] = []): Extract<ServerMessage, { type: 'team-thread' }> =>
   ({ type: 'team-thread', teamPath: 'dev', teamId: 'team', threadId, entries, directory })
 
@@ -101,19 +101,19 @@ test('store: snapshots replace, a cursor page appends, pushes merge and drop row
   expect(useTeamMessageStore.getState().views.dev).toBeUndefined()
 })
 
-test('store: under a text search, a push is kept when its body or a directory name matches, and dropped otherwise', () => {
+test('store: under a text search, a push is kept when its body or a name in the push’s directory matches, and dropped otherwise', () => {
   const store = useTeamMessageStore.getState()
   act(() => { store.open('dev', { text: 'ui dev' }) })
-  store.applySnapshot(snapshot([], {
-    filters: { text: 'ui dev' },
-    directory: [{ sessionId: 'dev-1', name: 'Strategy UI dev', group: 'devs' }],
-  }))
+  // The snapshot predates the participant: only the push's directory names it.
+  store.applySnapshot(snapshot([], { filters: { text: 'ui dev' }, directory: [] }))
+  const named = [{ sessionId: 'dev-1', name: 'Strategy UI dev', group: 'devs' }]
   store.applyPush(push([
     message('named', { createdAt: at(1), toKind: 'session', toId: 'dev-1', fromGroup: null }),
     message('body', { createdAt: at(2), body: 'ask the UI dev' }),
     message('other', { createdAt: at(3), body: 'unrelated' }),
-  ]))
+  ], named))
   expect(useTeamMessageStore.getState().views.dev!.messages.map(row => row.id)).toEqual(['body', 'named'])
+  expect(useTeamMessageStore.getState().views.dev!.directory).toEqual(named)
 })
 
 test('rows name their participants, carry delivery-state and priority badges, and show the delivered revision', () => {

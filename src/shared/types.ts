@@ -442,7 +442,9 @@ export type ServerMessage =
       /** Whole-thread message counts for the threads on this page (team-workspace-pages D7). */
       threadSizes: Record<string, number>
     }
-  | { type: 'team-messages'; teamPath: string; teamId: string; messages: TeamMessage[] }
+  // Carries the team directory like the snapshot, so a text search names a
+  // participant recorded since the last snapshot (team-workspace-pages D7).
+  | { type: 'team-messages'; teamPath: string; teamId: string; messages: TeamMessage[]; directory: SessionDirectoryEntry[] }
   | {
       type: 'team-thread'
       teamPath: string

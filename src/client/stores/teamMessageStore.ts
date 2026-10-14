@@ -163,7 +163,8 @@ export const useTeamMessageStore = create<MessageState>(set => ({
     const view = state.views[message.teamPath]
     if (!view?.open) return state
     return update(state, message.teamPath, {
-      messages: mergePush(view.messages, message.messages, view.filters, view.directory),
+      messages: mergePush(view.messages, message.messages, view.filters, message.directory),
+      directory: message.directory,
     })
   }),
   applyThread: message => set(state => {

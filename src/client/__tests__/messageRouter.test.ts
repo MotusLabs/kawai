@@ -363,7 +363,7 @@ describe('team messages routing after extraction', () => {
       { sessionId: 'chat-2', name: 'Dev', group: 'leads' },
     ])
 
-    route({ type: 'team-messages', teamPath: 'chat-1', teamId: 'team', messages: [row('m-2')] })
+    route({ type: 'team-messages', teamPath: 'chat-1', teamId: 'team', messages: [row('m-2')], directory: [] })
     expect(useTeamMessageStore.getState().views['chat-1']!.messages.map(m => m.id)).toEqual(['m-1', 'm-2'])
 
     // A thread reply only folds into the thread the view has open (replace
