@@ -4,17 +4,17 @@ Implement after Wave B2 (`task-revision-publication`, `task-results-handoffs`) h
 
 ## 1. Shared content model
 
-- [ ] 1.1 Create `src/shared/plans.ts` with the D2 types, `normalizePlanContent`, `PLAN_CHECK_FLOOR`, the draft hash, and the revision hash over canonical `{content, pin}`, reusing `canonicalJson` (or moving it to a small shared helper). Verify with unit tests:
+- [x] 1.1 Create `src/shared/plans.ts` with the D2 types, `normalizePlanContent`, `PLAN_CHECK_FLOOR`, the draft hash, and the revision hash over canonical `{content, pin}`, reusing `canonicalJson` (or moving it to a small shared helper). Verify with unit tests:
   - unknown fields are dropped;
   - missing fields are defaulted;
   - a new draft defaults to direct landing;
   - two key orders hash equally;
   - changing only the pin changes the revision hash.
-- [ ] 1.2 Implement `planStructureErrors` and `planSubmitErrors` per D3, both returning every violation. Verify with one test per rule:
+- [x] 1.2 Implement `planStructureErrors` and `planSubmitErrors` per D3, both returning every violation. Verify with one test per rule:
   - change names, dependencies, the cycle reported as its path, check-name scope and floor reservation, branch format, roles, groups outside the roles, and alignment duplicates;
   - completeness gaps listed together;
   - an incomplete draft passing the structure checks.
-- [ ] 1.3 Implement `planProgress` per D10. Verify with tests covering:
+- [x] 1.3 Implement `planProgress` per D10. Verify with tests covering:
   - not started, in progress, done (one done plus one cancelled), and cancelled;
   - `waitsOn` clearing when a dependency is done;
   - a cancelled dependency keeping its dependents waiting;
