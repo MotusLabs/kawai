@@ -79,8 +79,8 @@ test('a draft survives a reopen with its base revision and rationale', async () 
 test('rebase moves only the base revision onto the current one, keeping the text', async () => {
   const task = create()
   const saved = await service.saveDraft(human, task.id, { direction: DRAFT_TEXT, rationale: 'Customer asked' })
-  // Another revision is published meanwhile; the draft keeps its old base.
-  await service.amend(human, task.id, { direction: 'Build the export, PDF too' })
+  // An agent creator publishes another revision meanwhile; the draft keeps its old base.
+  store.publish(task.id, { direction: 'Build the export, PDF too', notify: false }, { kind: 'agent', sessionId: 'lead' })
   expect(store.drafts.get(task.id)?.baseRevision).toBe(1)
   const rebased = await service.rebaseDraft(human, task.id)
   expect(rebased).toMatchObject({ baseRevision: 2, direction: saved.direction, rationale: saved.rationale })

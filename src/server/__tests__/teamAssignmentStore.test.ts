@@ -240,7 +240,7 @@ describe('task request keys', () => {
     const first = tasks.create({ teamId: TEAM, title: 'Export', direction: 'CSV', creator: human, requestKey: 'k1', worktree: '/w', parentId: null, openspecChange: null })
     // Post-create mutations are never payload differences.
     tasks.setStatus(first.id, 'active')
-    tasks.amend(first.id, { direction: 'v2' }, human)
+    tasks.publish(first.id, { direction: 'v2', notify: false }, human)
     const replay = tasks.create({ teamId: TEAM, title: 'Export', direction: 'CSV', creator: human, requestKey: 'k1', worktree: '/w', parentId: null, openspecChange: null })
     expect(replay.id).toBe(first.id)
     expect(replay.revision).toBe(2)

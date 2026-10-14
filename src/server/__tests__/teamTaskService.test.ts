@@ -139,6 +139,9 @@ describe('permission matrix', () => {
     const task = await service.create(agent('lead'), { title: 'x', direction: 'v1' })
     await expect(service.amend(agent('dev'), task.id, { direction: 'hijack' })).rejects.toThrow(/task_note.*message the creator \(lead\)/)
     await expect(service.amend(agent('lead2'), task.id, { direction: 'hijack' })).rejects.toThrow('creator')
+    // A refused amendment writes nothing (task-revision-publication 2.2).
+    expect(service.store.revisions(task.id)).toHaveLength(1)
+    expect(service.store.get(task.id)?.revision).toBe(1)
     expect((await service.amend(agent('lead'), task.id, { direction: 'v2' })).revision).toBe(2)
     expect((await service.amend(human(), task.id, { acceptance: 'ships' })).revision).toBe(3)
     expect((await service.get(human(), task.id)).revisions.map(revision => revision.direction)).toEqual(['v1', 'v2', 'v2'])

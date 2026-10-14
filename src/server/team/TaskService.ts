@@ -17,7 +17,7 @@ import type { TaskActor, TaskDraft, TaskStatus, TeamTask, TeamTaskDetail, TeamTa
 import { TASK_STATUSES } from '../../shared/teamTasks'
 import { loadTeamGroups } from './teamGroups'
 import type { TeamIdentity } from './teamIdentity'
-import type { TaskStore } from './taskStore'
+import type { PublishOutcome, TaskStore } from './taskStore'
 import { TeamWorktrees } from './worktreeRoots'
 
 export interface TaskCreateInput {
@@ -34,6 +34,31 @@ export interface TaskCreateInput {
 export interface TaskAmendInput {
   direction?: string
   acceptance?: string | null
+  /** Why (task-revision-publication D2); required by the human form, optional for agents. */
+  rationale?: string | null
+  /** Publish and notify (D3): direct notices to the outstanding assignment's claimant. */
+  notify?: boolean
+}
+
+/** A publication (D2): an amendment plus the human UI's base revision and command key. */
+export interface TaskPublishInput extends TaskAmendInput {
+  baseRevision?: number
+  requestKey?: string
+}
+
+/**
+ * The optional in-process revision-published announcement (D8), fired once
+ * after a new revision commits. It carries nothing the revision rows lack:
+ * consumers compare against `team_task_revisions` and `team_tasks.revision`.
+ */
+export interface RevisionPublishedEvent {
+  teamId: string
+  taskId: string
+  revision: number
+  previousRevision: number
+  author: TaskActor
+  rationale: string | null
+  publishedAt: string
 }
 
 /** The human's draft of a new direction (task-revision-publication D1). */
@@ -55,6 +80,7 @@ const STATUS_ATTEMPTS = 3
 
 export class TaskService {
   readonly worktrees: TeamWorktrees
+  private readonly publishedListeners = new Set<(event: RevisionPublishedEvent) => void>()
 
   constructor(readonly store: TaskStore, private readonly options: {
     getSession: (id: string) => ChatSessionRecord | null | undefined
@@ -104,18 +130,52 @@ export class TaskService {
     return this.store.list(team.teamId).filter(task => !status || task.status === status)
   }
 
+  /** The agent tool's path (D7): publish immediately, with optional rationale and notify. */
   async amend(caller: TaskCaller, taskId: string, change: TaskAmendInput): Promise<TeamTask> {
+    return (await this.publish(caller, taskId, change)).task
+  }
+
+  /**
+   * Publish the next revision (D2): the creator or the human only. The human
+   * UI sends the draft's base revision and a command key, so a resend is a
+   * replay and a stale base is refused; the agent tool sends neither. A
+   * human publication drops the draft it came from. Announced once after a
+   * new revision commits — never on a replay.
+   */
+  async publish(caller: TaskCaller, taskId: string, input: TaskPublishInput): Promise<PublishOutcome> {
     const { team, actor } = await this.context(caller)
     const task = this.sameTeamTask(team, taskId)
     if (actor.kind === 'agent' && task.creator.sessionId !== actor.sessionId) {
       throw new Error(`Only the task's creator or the human can amend its direction. Add a journal note with task_note, or message the creator${task.creator.sessionId ? ` (${task.creator.sessionId})` : ' (the human)'} instead.`)
     }
-    if (change.direction === undefined && change.acceptance === undefined) throw new Error('Nothing to amend: give a direction or acceptance criteria')
-    if (change.direction !== undefined && !change.direction.trim()) throw new Error('A task needs a direction')
-    return this.store.amend(taskId, {
-      ...(change.direction !== undefined ? { direction: change.direction.trim() } : {}),
-      ...(change.acceptance !== undefined ? { acceptance: emptyToNull(change.acceptance) } : {}),
-    }, actor)!
+    if (input.direction === undefined && input.acceptance === undefined) throw new Error('Nothing to amend: give a direction or acceptance criteria')
+    if (input.direction !== undefined && !input.direction.trim()) throw new Error('A task needs a direction')
+    const outcome = this.store.publish(taskId, {
+      ...(input.direction !== undefined ? { direction: input.direction.trim() } : {}),
+      ...(input.acceptance !== undefined ? { acceptance: emptyToNull(input.acceptance) } : {}),
+      rationale: emptyToNull(input.rationale),
+      ...(input.baseRevision !== undefined ? { baseRevision: input.baseRevision } : {}),
+      ...(input.requestKey?.trim() ? { requestKey: input.requestKey.trim() } : {}),
+      notify: input.notify === true,
+      discardDraft: actor.kind === 'human',
+    }, actor)
+    if (!outcome) throw new Error(`Task not found in this team: ${taskId}`)
+    if (!outcome.replay) this.announce(outcome)
+    return outcome
+  }
+
+  /** Subscribe to new revisions (D8); optional — no consumer may depend on it. */
+  onRevisionPublished(listener: (event: RevisionPublishedEvent) => void): () => void {
+    this.publishedListeners.add(listener)
+    return () => this.publishedListeners.delete(listener)
+  }
+
+  private announce({ task, revision }: PublishOutcome): void {
+    const event: RevisionPublishedEvent = {
+      teamId: task.teamId, taskId: task.id, revision: revision.revision, previousRevision: revision.revision - 1,
+      author: revision.author, rationale: revision.rationale ?? null, publishedAt: revision.createdAt,
+    }
+    for (const listener of this.publishedListeners) listener(event)
   }
 
   /**
