@@ -4,7 +4,12 @@
 // terminal must stay disabled and unfocused, or it steals the focus — and the
 // text being typed — from the dialog's fields.
 
-/** True while any dialog overlay is mounted (each modal renders `role="dialog"` only while open). */
+/**
+ * True while any dialog is open. Relies on every `role="dialog"` renderer
+ * exposing the role only while open (modals return null when closed; the
+ * always-mounted SessionDrawer drops the role while closed). A new always-mounted
+ * dialog must do the same, or this helper never restores terminal focus.
+ */
 function isDialogOpen(): boolean {
   return typeof document.querySelector === 'function' && document.querySelector('[role="dialog"]') !== null
 }

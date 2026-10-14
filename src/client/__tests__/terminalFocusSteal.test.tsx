@@ -8,7 +8,9 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import TestRenderer, { act } from 'react-test-renderer'
 import NewSessionModal from '../components/NewSessionModal'
+import SessionDrawer from '../components/SessionDrawer'
 import SettingsModal from '../components/SettingsModal'
+import type { Session } from '@shared/types'
 import { DEFAULT_PRESETS, useSettingsStore } from '../stores/settingsStore'
 
 const globalAny = globalThis as typeof globalThis & {
@@ -243,6 +245,92 @@ describe('Settings overlay', () => {
     expect(overlay.props['aria-modal']).toBe('true')
     const title = renderer.root.findByProps({ id: overlay.props['aria-labelledby'] })
     expect(title.children).toContain('Settings')
+    act(() => renderer.unmount())
+  })
+})
+
+describe('with the always-mounted session drawer (mobile layout)', () => {
+  const session = {
+    id: 'session-1', name: 'alpha', tmuxWindow: 'agentboard:1', projectPath: '/tmp/alpha', status: 'working',
+    lastActivity: '2024-01-01T00:00:00.000Z', createdAt: '2024-01-01T00:00:00.000Z', source: 'managed',
+  } as unknown as Session
+  const originalSetInterval = globalThis.setInterval
+  const originalClearInterval = globalThis.clearInterval
+  const originalNavigator = globalAny.navigator
+  afterEach(() => {
+    globalThis.setInterval = originalSetInterval
+    globalThis.clearInterval = originalClearInterval
+    globalAny.navigator = originalNavigator
+  })
+
+  function mobileTree(settingsOpen: boolean, drawerOpen: boolean) {
+    return (
+      <>
+        <SettingsModal isOpen={settingsOpen} onClose={() => {}} />
+        <SessionDrawer
+          isOpen={drawerOpen}
+          onClose={() => {}}
+          sessions={[session]}
+          selectedSessionId={null}
+          onSelect={() => {}}
+          onRename={() => {}}
+          onNewSession={() => {}}
+          loading={false}
+          error={null}
+        />
+      </>
+    )
+  }
+
+  /** The terminal DOM stub whose dialog probe reads the dialogs actually rendered. */
+  function setup() {
+    let renderer: TestRenderer.ReactTestRenderer | null = null
+    const calls = terminalDom(() => (renderer?.root.findAllByProps({ role: 'dialog' }).length ?? 0) > 0)
+    ;(globalAny.window as unknown as Record<string, unknown>).matchMedia = () => ({
+      matches: false, addEventListener: () => {}, removeEventListener: () => {}, addListener: () => {}, removeListener: () => {},
+    })
+    Object.assign(globalAny.document as object, { activeElement: null, addEventListener: () => {}, removeEventListener: () => {} })
+    globalAny.navigator = { platform: 'Win32', userAgent: 'Chrome', maxTouchPoints: 0 } as unknown as Navigator
+    globalThis.setInterval = (() => 1) as unknown as typeof setInterval
+    globalThis.clearInterval = (() => {}) as typeof clearInterval
+    return { calls, set: (r: TestRenderer.ReactTestRenderer) => { renderer = r } }
+  }
+
+  test('a closed drawer does not block restoring terminal focus after Settings closes', async () => {
+    const { calls, set } = setup()
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => {
+      renderer = TestRenderer.create(mobileTree(true, false))
+      set(renderer)
+    })
+    await act(async () => {
+      await Promise.resolve()
+    })
+    calls.length = 0
+    act(() => renderer.update(mobileTree(false, false)))
+    await act(async () => {
+      await pastCloseWindow()
+    })
+    expect(calls).toEqual(['enable', 'terminal-focus'])
+    act(() => renderer.unmount())
+  })
+
+  test('an open drawer suppresses the restore', async () => {
+    const { calls, set } = setup()
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => {
+      renderer = TestRenderer.create(mobileTree(true, true))
+      set(renderer)
+    })
+    await act(async () => {
+      await Promise.resolve()
+    })
+    calls.length = 0
+    act(() => renderer.update(mobileTree(false, true)))
+    await act(async () => {
+      await pastCloseWindow()
+    })
+    expect(calls).toEqual([])
     act(() => renderer.unmount())
   })
 })
