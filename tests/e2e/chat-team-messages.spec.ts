@@ -1,11 +1,13 @@
-// Browser walk of the Messages view against the SDK-free fixture (E06 and the
+// Browser walk of the Messages tab against the SDK-free fixture (E06 and the
 // E11 slice): named senders, chronological thread order, task filtering, the
 // delivered history in each row, click-through to a live participant, a reload
-// with one sender killed, and — beside the Mailbox panel's unchanged delivery
+// with one sender killed, and — beside the Mailbox tab's unchanged delivery
 // operations — an uncertain retry to the same recipient with its
 // possible-duplicate explanation, retained retry/discard history, and survival
-// across a server restart. Written for CI; not run locally against a live
-// kawai (its teardown would kill it).
+// across a server restart. The views are reached through the Team page's
+// `#/team/<key>/…` routes (team-workspace-pages 6.1), not chat header panels.
+// Written for CI; not run locally against a live kawai (its teardown would
+// kill it).
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
 import { existsSync, mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
@@ -76,19 +78,39 @@ function seed(args: { dbPath: string; team: string; lead: string; dev: string; u
   }
 }
 
-/** Open the Messages side panel on the currently selected chat.
- *
- * Idempotent: the view is per-session state with no unmount cleanup, so it can
- * still be open when you come back to a chat — clicking the toggle again would
- * close it. Only click when the panel is not already showing. */
-async function openMessages(page: Page) {
-  const panel = page.getByTestId('team-messages')
-  if (!(await panel.isVisible())) await page.getByRole('button', { name: 'Messages', exact: true }).click()
-  await expect(panel).toBeVisible()
+/**
+ * Open the team's Messages tab through its URL route (6.1): the Team page
+ * replaces the chat pane while the selection stays, so returning to a chat is
+ * one navigator click (or one Back). Idempotent — re-navigating the same hash
+ * pushes no new history entry.
+ */
+async function openTeamMessages(page: Page, root: string) {
+  await page.evaluate(teamKey => { window.location.hash = `#/team/${encodeURIComponent(teamKey)}/messages` }, root)
+  const view = page.getByTestId('team-messages')
+  await expect(view).toBeVisible()
+  return view
 }
 
-/** Row with this id, in the Messages list or a thread. */
+/** Open the team's Mailbox tab the same way. */
+async function openTeamMailbox(page: Page, root: string) {
+  await page.evaluate(teamKey => { window.location.hash = `#/team/${encodeURIComponent(teamKey)}/mailbox` }, root)
+  const view = page.getByTestId('team-mailbox')
+  await expect(view).toBeVisible()
+  return view
+}
+
+/** The thread row a message belongs to — its id is the thread's root id. */
+const threadRow = (page: Page, threadId: string) =>
+  page.locator(`[data-testid="thread-row"][data-thread-id="${threadId}"]`)
+
+/** Row with this id, in a thread's expansion or detail. */
 const row = (page: Page, id: string) => page.locator(`[data-message-id="${id}"]`)
+
+/** Expand a thread row in place so every loaded message of it renders — idempotent, since kept expansion survives the open. */
+async function expandThread(page: Page, threadId: string) {
+  const toggle = threadRow(page, threadId).getByTestId('thread-toggle')
+  if ((await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.click()
+}
 
 /**
  * The retried message's history is two real holds, not one hold recorded twice.
@@ -124,12 +146,14 @@ test('E06: named senders, chronological threads, task filtering, and a killed se
       dbPath: process.env.AGENTBOARD_DB_PATH!, team: root, lead, dev,
     })
 
-    // The developer's Messages list is delivered history and pending mail
-    // together, newest first, naming people rather than ids.
-    await page.locator(`[data-session-id="${dev}"]`).click()
-    await openMessages(page)
-    const panel = page.getByTestId('team-messages')
-    for (const id of [ids.other, ids.reply, ids.first]) await expect(row(page, id)).toBeVisible()
+    // The team's Messages tab is delivered history and pending mail together,
+    // grouped by thread — the collapsed row shows each thread's newest
+    // message, naming people rather than ids.
+    const panel = await openTeamMessages(page, root)
+    await expect(row(page, ids.other)).toBeVisible()
+    await expect(row(page, ids.reply)).toBeVisible()
+    await expandThread(page, ids.first)
+    await expect(row(page, ids.first)).toBeVisible()
     const names = panel.getByTestId('participant-name')
     await expect(names.filter({ hasText: 'Browser team lead' }).first()).toBeVisible()
     await expect(names.filter({ hasText: 'Browser developer' }).first()).toBeVisible()
@@ -138,7 +162,7 @@ test('E06: named senders, chronological threads, task filtering, and a killed se
 
     // Thread detail is chronological with the reply relation and each row's
     // append-only history.
-    await row(page, ids.first).getByRole('button', { name: 'Open thread' }).click()
+    await threadRow(page, ids.first).getByRole('button', { name: 'Open thread' }).click()
     const thread = page.getByTestId('thread-detail')
     await expect(thread).toBeVisible()
     await expect(thread.getByTestId('thread-entry')).toHaveCount(2)
@@ -151,8 +175,13 @@ test('E06: named senders, chronological threads, task filtering, and a killed se
     await expect(thread.locator('[data-kind="sent"]').first()).toBeVisible()
     await page.screenshot({ path: info.outputPath('thread-history.png') })
 
-    // Task detail embeds the task-filtered subset: its own two rows, never the
-    // unrelated ping.
+    // A live participant in the thread is a link into its chat: following it
+    // leaves the Team page (the pane returns to the chat).
+    await thread.getByTestId('participant-name').first().click()
+    await expect(page.getByTestId('chat-view')).toContainText('Browser team lead')
+
+    // Task detail (still the chat-side Tasks panel until 5.5 moves it) embeds
+    // the task-filtered subset: its own two rows, never the unrelated ping.
     await page.getByRole('button', { name: 'Tasks', exact: true }).click()
     await page.locator('[data-task-id]').getByRole('button', { name: 'Export CSV' }).click()
     const detail = page.getByTestId('task-detail')
@@ -160,29 +189,28 @@ test('E06: named senders, chronological threads, task filtering, and a killed se
     await expect(detail.locator(`[data-message-id="${ids.other}"]`)).toHaveCount(0)
     await page.screenshot({ path: info.outputPath('task-messages.png') })
 
-    // A live participant is a link into its chat; a gone one never is.
-    await openMessages(page)
-    await row(page, ids.first).getByTestId('participant-name').first().click()
-    await expect(page.getByTestId('chat-view')).toContainText('Browser team lead')
-
-    // Reload, then kill that sender: its identity and the thread survive, and
-    // navigation stays sound — the gone label is text, the live one still opens.
+    // Reload: the hash reopens the Team page on Messages; the selection is
+    // untouched (D10), so the lead's chat is one click away.
+    await openTeamMessages(page, root)
     await page.reload()
-    await page.locator(`[data-session-id="${dev}"]`).click()
-    await openMessages(page)
+    await expect(page.getByTestId('team-messages')).toBeVisible()
+    // In-memory expansion does not survive the reload; expand again.
+    await expandThread(page, ids.first)
     await expect(row(page, ids.first)).toBeVisible()
     await page.locator(`[data-session-id="${lead}"]`).click()
     await killChat(page)
     await expect(page.locator(`[data-session-id="${lead}"]`)).toHaveCount(0)
     await page.locator(`[data-session-id="${dev}"]`).click()
-    await openMessages(page)
-    const panelNames = panel.getByTestId('participant-name')
+    const revived = await openTeamMessages(page, root)
+    await expandThread(page, ids.first)
+    await expect(row(page, ids.first)).toBeVisible()
+    const panelNames = revived.getByTestId('participant-name')
     const gone = panelNames.filter({ hasText: 'Browser team lead' }).first()
     await expect(gone).toHaveText('Browser team lead (gone)')
     // D3: a killed participant is a label and no link; a live one still opens.
-    await expect(panel.getByRole('button', { name: 'Browser team lead' })).toHaveCount(0)
-    await expect(panel.getByRole('button', { name: 'Browser developer' }).first()).toBeVisible()
-    await row(page, ids.first).getByRole('button', { name: 'Open thread' }).click()
+    await expect(revived.getByRole('button', { name: 'Browser team lead' })).toHaveCount(0)
+    await expect(revived.getByRole('button', { name: 'Browser developer' }).first()).toBeVisible()
+    await threadRow(page, ids.first).getByRole('button', { name: 'Open thread' }).click()
     await expect(page.getByTestId('thread-detail').getByTestId('thread-entry')).toHaveCount(2)
     await page.screenshot({ path: info.outputPath('killed-sender.png') })
   } finally { rmSync(root, { recursive: true, force: true }) }
@@ -237,39 +265,38 @@ test('E11 slice: uncertain retry keeps its recipient, history, and survives a re
     expect(ids.held).toBeTruthy()
     expect(ids.torn).toBeTruthy()
 
-    // The Mailbox keeps its delivery operations and explains the retry.
-    await page.locator(`[data-session-id="${dev}"]`).click()
-    await page.getByRole('button', { name: 'Mailbox', exact: true }).click()
-    const mailbox = page.getByTestId('team-mailbox')
-    await expect(mailbox.locator(`[data-message-id="${ids.held}"]`)).toContainText(
-      `Retry to ${dev} with a possible-duplicate notice, or discard.`)
+    // The Mailbox tab keeps its delivery operations and explains the retry.
+    const mailbox = await openTeamMailbox(page, root)
+    const held = mailbox.locator(`[data-message-id="${ids.held}"]`)
+    await held.getByTestId('mailbox-row-toggle').click()
+    await expect(held).toContainText(`Retry to ${dev} with a possible-duplicate notice, or discard.`)
     await page.screenshot({ path: info.outputPath('uncertain-mailbox.png') })
 
     // Retry goes back to the same recipient and explains itself on the row.
     // The row itself stays in the Mailbox — queued again, or back in review if
     // dispatch re-holds an unconfirmed receipt — so disappearance is not the
     // signal; the possible-duplicate flag and the unchanged recipient are.
-    await mailbox.locator(`[data-message-id="${ids.held}"]`).getByRole('button', { name: 'Retry' }).click()
-    await openMessages(page)
+    await held.getByRole('button', { name: 'Retry' }).click()
+    const panel = await openTeamMessages(page, root)
     const retried = row(page, ids.held!)
     await expect(retried).toBeVisible()
     await expect(retried.getByTestId('message-to')).toContainText('Recovery developer')
     await expect(retried.getByTestId('message-to')).not.toContainText('Recovery lead')
     await expect(retried.getByTestId('message-possible-duplicate')).toBeVisible()
     await expect(retried.getByTestId('message-body')).toHaveText('Receipt evidence missing')
-    await retried.getByRole('button', { name: 'Open thread' }).click()
+    await threadRow(page, ids.held!).getByRole('button', { name: 'Open thread' }).click()
     const thread = page.getByTestId('thread-detail')
     await thread.getByTestId('message-events').first().locator('summary').click()
     await expectHeldHistory(thread)
     await page.screenshot({ path: info.outputPath('retry-history.png') })
 
     // A discard keeps its history too — the thread is the record, not the row.
-    await page.getByRole('button', { name: 'Mailbox', exact: true }).click()
-    await page.getByTestId('team-mailbox').locator(`[data-message-id="${ids.torn}"]`)
+    const mailboxAgain = await openTeamMailbox(page, root)
+    await mailboxAgain.locator(`[data-message-id="${ids.torn}"]`)
       .getByRole('button', { name: 'Discard' }).click()
-    await expect(page.getByTestId('team-mailbox').locator(`[data-message-id="${ids.torn}"]`)).toHaveCount(0)
-    await openMessages(page)
-    await row(page, ids.torn!).getByRole('button', { name: 'Open thread' }).click()
+    await expect(mailboxAgain.locator(`[data-message-id="${ids.torn}"]`)).toHaveCount(0)
+    await openTeamMessages(page, root)
+    await threadRow(page, ids.torn!).getByRole('button', { name: 'Open thread' }).click()
     const discarded = page.getByTestId('thread-detail')
     await discarded.getByTestId('message-events').first().locator('summary').click()
     await expect(discarded.locator('[data-kind="held-uncertain"]')).toBeVisible()
@@ -280,12 +307,11 @@ test('E11 slice: uncertain retry keeps its recipient, history, and survives a re
     await stop()
     await start()
     await page.goto(url)
-    await page.locator(`[data-session-id="${dev}"]`).click()
-    await openMessages(page)
+    await openTeamMessages(page, root)
     await expect(row(page, ids.held!)).toBeVisible()
     await expect(row(page, ids.held!).getByTestId('message-possible-duplicate')).toBeVisible()
     await expect(row(page, ids.torn!)).toBeVisible()
-    await row(page, ids.held!).getByRole('button', { name: 'Open thread' }).click()
+    await threadRow(page, ids.held!).getByRole('button', { name: 'Open thread' }).click()
     const after = page.getByTestId('thread-detail')
     await after.getByTestId('message-events').first().locator('summary').click()
     await expectHeldHistory(after)

@@ -165,6 +165,7 @@ export default function TeamWorkspaceView({ teamKey, location, sendMessage, conn
         teamPath={teamKey} view={messages} sendMessage={sendMessage} connected={connected}
         connectionEpoch={connectionEpoch} sessions={liveSessions}
         groups={groups.groups.map(group => ({ id: group.id, label: group.label }))}
+        onOpenSession={openParticipantChat}
         onThreadSelected={threadId => navigate(threadId
           ? { teamKey, tab: 'messages', id: threadId }
           : { teamKey, tab: 'messages' })}
