@@ -36,7 +36,7 @@ Prerequisite: `chat-session-spawned-subagents` (PR #72) is merged. Branch from t
 
 - [x] 6.1 Store the roster per session in `chatStore.ts`, indexed by `toolCallId`, from snapshot and push. Verify with store tests for replacement semantics and session switching
 - [x] 6.2 Extend the tool row in `ChatMessages.tsx`: running mark plus ticking elapsed, or the outcome mark and summary (`✗` on failed). On expand, show the output panel below the result (plain `<pre>`, ANSI stripped, truncation note, `unavailable` message), polling every 2 s only while expanded and live and fetching once when ended. Add a Stop button while live and not archived. Verify with component tests for each scenario in "A background task's tool entry shows its state", "Users can read a background task's recent output" and "Users can stop a single background task", including that polling stops on collapse and on settle
-- [ ] 6.3 Add background-task rows (`Shell` / `Monitor` label, description, elapsed, Stop) to the live strip from #72, showing the strip when any worker or task is live and hiding it when archived. Verify with strip tests for mixed worker/task membership and a task leaving the strip when it settles
+- [x] 6.3 Add background-task rows (`Shell` / `Monitor` label, description, elapsed, Stop) to the live strip from #72, showing the strip when any worker or task is live and hiding it when archived. Verify with strip tests for mixed worker/task membership and a task leaving the strip when it settles
 
 ## 7. Integration checks
 

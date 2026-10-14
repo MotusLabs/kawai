@@ -1690,6 +1690,50 @@ describe('chat workers', () => {
     renderer!.unmount()
   })
 
+  test('the strip mixes live workers with Shell and Monitor task rows, and a settling task leaves it', () => {
+    const sent: ClientMessage[] = []
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => { renderer = TestRenderer.create(<ChatWorkersStrip sessionId={SESSION} sendMessage={m => sent.push(m)} connected />) })
+    expect(renderer.toJSON()).toBeNull()
+    act(() => {
+      useChatStore.getState().setWorkers(SESSION, [rosterWorker('toolu_w1', { lastTool: 'Grep' })])
+      useChatStore.getState().setBackgroundTasks(SESSION, [
+        { taskId: 'b-shell', kind: 'shell', description: 'Wait for CI', status: 'running', live: true, startedAtMs: Date.now() - 4_000, elapsedMs: 4_000 },
+        { taskId: 'b-mon', kind: 'monitor', description: 'Watch deploy.log', status: 'running', live: true, startedAtMs: Date.now() - 1_000, elapsedMs: 1_000 },
+        { taskId: 'b-done', kind: 'shell', status: 'completed', live: false, startedAtMs: 1, endedAtMs: 2, elapsedMs: 1 },
+      ])
+    })
+    expect(renderer.root.findAllByProps({ 'data-testid': 'chat-worker-strip-row' })).toHaveLength(1)
+    const taskRows = renderer.root.findAllByProps({ 'data-testid': 'chat-task-strip-row' })
+    expect(taskRows.map(row => row.props['data-task-id'])).toEqual(['b-shell', 'b-mon'])
+    expect(textOf(taskRows[0]!)).toContain('Shell')
+    expect(textOf(taskRows[0]!)).toContain('Wait for CI')
+    expect(textOf(taskRows[1]!)).toContain('Monitor')
+    // Each task row carries its own elapsed and its own Stop.
+    expect(renderer.root.findAllByProps({ 'data-testid': 'chat-task-strip-elapsed' })).toHaveLength(2)
+    const stops = renderer.root.findAllByProps({ 'data-testid': 'chat-task-strip-stop' })
+    act(() => { stops[0]!.props.onClick() })
+    expect(sent).toEqual([{ type: 'chat-task-stop', sessionId: SESSION, taskId: 'b-shell' }])
+    // The CI task settles: its row leaves, the monitor stays, the strip holds.
+    act(() => {
+      useChatStore.getState().setBackgroundTasks(SESSION, [
+        { taskId: 'b-shell', kind: 'shell', status: 'completed', live: false, startedAtMs: 1, endedAtMs: 2, elapsedMs: 1, summary: 'done' },
+        { taskId: 'b-mon', kind: 'monitor', description: 'Watch deploy.log', status: 'running', live: true, startedAtMs: Date.now() - 1_000, elapsedMs: 1_000 },
+        { taskId: 'b-done', kind: 'shell', status: 'completed', live: false, startedAtMs: 1, endedAtMs: 2, elapsedMs: 1 },
+      ])
+    })
+    expect(renderer.root.findAllByProps({ 'data-testid': 'chat-task-strip-row' })).toHaveLength(1)
+    // Everything settles: the strip hides again.
+    act(() => {
+      useChatStore.getState().setWorkers(SESSION, [rosterWorker('toolu_w1', { status: 'completed', live: false })])
+      useChatStore.getState().setBackgroundTasks(SESSION, [
+        { taskId: 'b-mon', kind: 'monitor', status: 'completed', live: false, startedAtMs: 1, endedAtMs: 2, elapsedMs: 1 },
+      ])
+    })
+    expect(renderer.toJSON()).toBeNull()
+    renderer.unmount()
+  })
+
   test('expanding fetches the body once and renders it; a missing file reports unavailable', () => {
     seedWorkers([rosterWorker('toolu_w1')])
     const sent: ClientMessage[] = []
