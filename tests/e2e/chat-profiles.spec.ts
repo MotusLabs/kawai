@@ -19,13 +19,13 @@ test('select named profile, create, display, reconnect, and retain terminal form
   await dialog.getByLabel('Project Path').fill(process.cwd())
   await dialog.locator('input').last().fill('GLM profile browser check')
   await dialog.getByRole('button', { name: 'Create', exact: true }).click()
-  await expect(page.getByTestId('chat-profile')).toHaveText('Profile: GLM')
+  await expect(page.getByTestId('chat-profile')).toHaveText('GLM')
   await page.getByLabel('Message Claude').fill('Hello profile')
   await page.getByRole('button', { name: 'Send', exact: true }).click()
   await page.screenshot({ path: info.outputPath('profile-chat.png') })
   await page.reload()
   await page.getByText('GLM profile browser check', { exact: true }).first().click()
-  await expect(page.getByTestId('chat-profile')).toHaveText('Profile: GLM')
+  await expect(page.getByTestId('chat-profile')).toHaveText('GLM')
   await page.screenshot({ path: info.outputPath('profile-reconnect.png') })
   await page.getByRole('button', { name: 'New session', exact: true }).first().click()
   // Reopening defaults to Claude chat; switching to Terminal still restores
@@ -62,7 +62,7 @@ test('project-level .kawai catalog extends the picker for that path', async ({ p
     await dialog.locator('input').last().fill('GLM Flash project catalog check')
     await page.screenshot({ path: info.outputPath('project-catalog-picker.png') })
     await dialog.getByRole('button', { name: 'Create', exact: true }).click()
-    await expect(page.getByTestId('chat-profile')).toHaveText('Profile: GLM Flash')
+    await expect(page.getByTestId('chat-profile')).toHaveText('GLM Flash')
     await page.getByLabel('Message Claude').fill('Hello flash')
     await page.getByRole('button', { name: 'Send', exact: true }).click()
     await page.screenshot({ path: info.outputPath('project-catalog-chat.png') })
@@ -89,7 +89,7 @@ test('invalid project catalog file warns without blocking creation', async ({ pa
     await dialog.locator('input').last().fill('Invalid catalog check')
     await page.screenshot({ path: info.outputPath('catalog-warning.png') })
     await dialog.getByRole('button', { name: 'Create', exact: true }).click()
-    await expect(page.getByTestId('chat-profile')).toHaveText('Profile: Default')
+    await expect(page.getByTestId('chat-profile')).toHaveText('Default')
   } finally {
     await rm(project, { recursive: true, force: true })
   }

@@ -4,14 +4,20 @@
 // recipients carry their resolved worktree, task mail is routed by its
 // task's target, and the staffing pass spawns through the manager. Profile
 // limit events (profile routing) are recorded here for routing to read.
+// Waiting reasons (team-waiting-reasons D3/D5): the per-team reason ledger
+// lives here, fed by the dispatcher's afterPass outcome and the spawn
+// failure backoff, published when it structurally changes; the failed-spawn
+// backoff's end folds into the dispatcher's wake time.
 import type { ChatSessionRecord } from '../db'
 import type { ChatSessionDriver } from '../chat/ChatSessionDriver'
-import type { TeamMessage } from '../../shared/team'
+import type { TeamMessage, WaitingConstraint, WaitingReason } from '../../shared/team'
 import type { GroupCatalog } from './groupCatalog'
+import type { GroupDefinition } from './groupFile'
+import type { PendingSpawnRow } from './teamRoster'
 import { SessionTeams } from './sessionTeams'
 import { TeamMailbox } from './TeamMailbox'
 import { MailboxStore } from './mailboxStore'
-import { MailDispatcher, type MailRecipient } from './dispatcher'
+import { MailDispatcher, type MailRecipient, type PassOutcome } from './dispatcher'
 import { reconcileMailbox, transcriptReceipt } from './receipt'
 import { TaskStore } from './taskStore'
 import { TaskService } from './TaskService'
@@ -25,6 +31,7 @@ import { LimitEventStore } from './routing/limitEvents'
 import { RuleRegistry, type RuleLoadReport } from './routing/ruleLoader'
 import { ProfileRouter } from './routing/router'
 import { LimitOutcomes, type HandoffTarget } from './routing/limitOutcomes'
+import { ReasonLedger, orderConstraints, toReason } from './waitingReasons'
 import { loadTeamGroups } from './teamGroups'
 import type { ChatUsageReport } from '../../shared/chat'
 import type { RouteDecisionLogEntry } from '../../shared/routing'
@@ -40,6 +47,8 @@ export class SessionMailbox {
   readonly rules: RuleRegistry
   readonly router: ProfileRouter
   readonly outcomes: LimitOutcomes
+  /** Per-team waiting reasons (D3): in-memory, rebuilt by the first pass. */
+  private readonly reasons = new ReasonLedger()
   private readonly catalogs = new Map<string, GroupCatalog>()
   private releaseSubscription?: () => void
   private releaseLimitSubscription?: () => void
@@ -50,6 +59,8 @@ export class SessionMailbox {
     getRecord: (id: string) => ChatSessionRecord | undefined
     getDriver: (id: string) => ChatSessionDriver | undefined
     available: (record: ChatSessionRecord) => boolean
+    /** The manager's start refusal text for the unavailable reason (D2); `available` keeps deciding. */
+    startBlocker?: (record: ChatSessionRecord) => string | null
     prepare: (id: string) => Promise<void>
     restore: (id: string) => void
     watchReceipt: (id: string) => void
@@ -57,11 +68,17 @@ export class SessionMailbox {
     associateTask?: (id: string, taskId: string) => void
     /** Create a group member in a worktree for staffing (team-tasks D4). */
     spawn?: (request: SpawnRequest) => Promise<SpawnResult>
+    /** Spawn-failure backoff (D5); tests shorten it to watch a retry run. */
+    spawnRetryAfterMs?: number
+    /** Clock for the waiting-reason derivation; tests inject their own. */
+    now?: () => number
     /** User-level team caps; tests inject their own home. */
     caps?: TeamCaps
     transcriptFor: (id: string) => string | null
     homeDir?: string
     onChange?: (team: string, message?: TeamMessage) => void
+    /** A team's waiting reasons structurally changed: re-publish its snapshot (D3). */
+    onReasonsChange?: (team: string) => void
     /** Routing rules finished loading (start or reload). */
     onRulesLoaded?: (report: RuleLoadReport) => void
     /** A profile's latest plan usage, for routing rules. */
@@ -96,6 +113,14 @@ export class SessionMailbox {
       caps,
       worktrees: this.tasks.worktrees,
       spawn: request => options.spawn ? options.spawn(request) : Promise.resolve({ ok: false, error: 'Spawning is not available' }),
+      ...(options.spawnRetryAfterMs !== undefined ? { retryAfterMs: options.spawnRetryAfterMs } : {}),
+      // Recorded before the requeue notify publishes (D3), so the failure
+      // snapshot already carries the backoff reason with its retry time.
+      onSpawnBackoff: (message, retryAt) => {
+        if (this.reasons.set(message.teamId, message.id, toReason([{ kind: 'spawn-backoff', retryAt: new Date(retryAt).toISOString() }]))) {
+          this.options.onReasonsChange?.(message.teamId)
+        }
+      },
       onError: options.onError,
     })
     this.assignments = new AssignmentService(db, assignments, taskStore, store, {
@@ -147,7 +172,13 @@ export class SessionMailbox {
       beginCycle: () => { this.catalogs.clear(); this.outcomes.processNotes() },
       claimed: (message, id) => this.outcomes.claimed(message, id),
       delivered: (id, message) => this.outcomes.delivered(id, message),
-      wakeAt: () => this.outcomes.nextNoteAt(),
+      // Recovery notes and failed-spawn backoffs share the minimum-wins timer (D5).
+      wakeAt: () => {
+        const note = this.outcomes.nextNoteAt()
+        const retry = this.staffing.nextRetryAt()
+        return note !== null && (retry === null || note < retry) ? note : retry
+      },
+      afterPass: outcome => this.applyReasons(outcome),
       recipients: () => [...options.records()].flatMap(record => {
         const recipient = this.recipient(record.sessionId)
         return recipient ? [recipient] : []
@@ -186,11 +217,108 @@ export class SessionMailbox {
       idle: record.status === 'waiting',
       pendingRequest: (this.options.getDriver(id)?.getPendingRequests().length ?? 0) > 0,
       available: this.options.available(record),
+      blockedBy: this.options.startBlocker?.(record) ?? null,
       worktree: worktreeRootOf(record.projectPath),
       parked: this.mailbox.store.parkedBy(id).length > 0,
       profileId: record.claudeProfileId ?? 'default',
       cooldownUntil: this.limits.cooldownUntil(record.claudeProfileId ?? 'default'),
     }
+  }
+
+  /** The team's worktree occupancy read model (mailbox snapshot, D4). */
+  roster(teamId: string) { return this.staffing.roster(teamId) }
+
+  /**
+   * Pass end (D3): merge the pass's diagnoses into the ledger, drop entries
+   * (and spawn backoffs) for messages that left the waiting surface, and
+   * re-publish a team's snapshot when its reasons structurally changed —
+   * the cases where no row state changed and nothing else would publish.
+   */
+  private applyReasons(outcome: PassOutcome) {
+    const changedTeams = this.reasons.prune(outcome.waiting)
+    // A backoff whose message left the waiting surface is dead: the timer
+    // re-reads nextRetryAt on every re-arm and must never arm on it (D5).
+    this.staffing.pruneBackoffs(outcome.waiting)
+    for (const [id, constraints] of outcome.reasons) {
+      const row = this.mailbox.store.get(id)
+      if (!row) continue
+      if (this.reasons.set(row.teamId, id, toReason(constraints))) changedTeams.add(row.teamId)
+    }
+    for (const teamId of changedTeams) this.options.onReasonsChange?.(teamId)
+  }
+
+  /**
+   * The team's waiting reasons for the mailbox snapshot (D3): ledger entries
+   * for queued-due and awaiting-request rows, live derivation for `spawning`
+   * rows (they leave the state inside one awaited pass, so no pass-end hook
+   * can diagnose them — the reservation row is the source).
+   */
+  waitingFor(teamId: string): Record<string, WaitingReason> {
+    const out: Record<string, WaitingReason> = {}
+    const ledger = this.reasons.forTeam(teamId)
+    const pending = new Map(this.staffing.pendingFor(teamId).map(row => [row.messageId, row]))
+    const now = this.options.now?.() ?? Date.now()
+    for (const row of this.mailbox.store.listForTeam(teamId)) {
+      if (row.state === 'spawning') {
+        out[row.id] = this.startingAgentReason(teamId, row, pending.get(row.id) ?? null)
+        continue
+      }
+      const due = row.state === 'awaiting-request' ||
+        (row.state === 'queued' && (row.deliverAt === null || Date.parse(row.deliverAt) <= now))
+      if (due && ledger[row.id]) out[row.id] = ledger[row.id]!
+    }
+    return out
+  }
+
+  /**
+   * A `spawning` row's reason (D1/D3): Starting agent is always the blocker
+   * — its own reservation fills caps and holds the worktree, so those facts
+   * it creates itself sit among the other constraints, and an independent
+   * occupant is named there.
+   */
+  private startingAgentReason(teamId: string, row: TeamMessage, reservation: PendingSpawnRow | null): WaitingReason {
+    const blocker: WaitingConstraint = {
+      kind: 'starting-agent',
+      ...(reservation ? { reservation: {
+        group: reservation.groupId, profile: reservation.profileId,
+        worktree: reservation.worktree, startedAt: reservation.createdAt,
+      } } : {}),
+    }
+    const others: WaitingConstraint[] = []
+    if (reservation && row.toId !== null) {
+      const group = this.groupOfTeam(teamId, row.toId)
+      const capacity = this.staffing.capacity(teamId, row.toId, reservation.worktree, row.id)
+      if (group && capacity.groupMembers >= group.max) {
+        others.push({ kind: 'group-cap', counts: { live: capacity.groupMembers, cap: group.max } })
+      }
+      for (const entry of group?.profiles ?? []) {
+        const live = capacity.onProfile[entry.profileId] ?? 0
+        if (entry.cap !== undefined && live >= entry.cap) {
+          others.push({ kind: 'profile-cap', counts: { live, cap: entry.cap }, detail: entry.profileId })
+        }
+      }
+      if (capacity.teamSpawned >= capacity.teamCap) {
+        others.push({ kind: 'team-spawn-cap', counts: { live: capacity.teamSpawned, cap: capacity.teamCap } })
+      }
+      // Its own pending reservation holds the writer slot; independent
+      // occupants (spawned members, other reservations) are named.
+      const live = capacity.worktreeOccupants.length + capacity.worktreePending + 1
+      others.push({
+        kind: 'worktree-occupied', counts: { live, cap: 1 },
+        ...(capacity.worktreeOccupants.length > 0 ? { sessionIds: capacity.worktreeOccupants } : {}),
+        detail: reservation.worktree,
+      })
+    }
+    return { blocker, others: orderConstraints(others) }
+  }
+
+  /** The group definition from a live member's cached catalog, when one exists. */
+  private groupOfTeam(teamId: string, groupId: string): GroupDefinition | undefined {
+    for (const record of this.options.records()) {
+      if (this.options.teams.teamOf(record.sessionId)?.teamId !== teamId) continue
+      return this.options.teams.catalogOf(record.sessionId, this.catalogs)?.groups.get(groupId)
+    }
+    return undefined
   }
 
   /** A tool call in a session's transcript (limit progress). */

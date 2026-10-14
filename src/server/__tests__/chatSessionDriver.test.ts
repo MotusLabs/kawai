@@ -190,6 +190,7 @@ function createHarness(
     getApprovalPolicy?: () => ChatApprovalPolicy
     teamMcpServer?: NonNullable<Options['mcpServers']>[string]
     getSystemPromptAppend?: () => string | undefined
+    getEffort?: () => Options['effort']
     /** Replaces the harness's cwd capture (e.g. with a throwing observer). */
     onCwdChanged?: (newCwd: string) => void
     wire?: ChatWireRecorder
@@ -617,6 +618,37 @@ describe('ChatSessionDriver', () => {
     harness.driver.send('after exit')
     expect(harness.fakes[1]!.options.systemPrompt).toMatchObject({ append: '# Your role: QA\n\nTest it twice.' })
     expect(reads).toBe(2)
+    harness.driver.kill()
+  })
+
+  test('the group effort is a launch option, re-read only at the next spawn', async () => {
+    let effort: Options['effort'] = 'medium'
+    let reads = 0
+    const harness = createHarness({ getEffort: () => { reads++; return effort } })
+    harness.driver.send('hello')
+    expect(harness.fakes[0]!.options.effort).toBe('medium')
+    // An edit while the process runs changes nothing for it.
+    effort = 'max'
+    harness.driver.send('again')
+    expect(reads).toBe(1)
+    harness.fakes[0]!.exit()
+    await flush()
+    harness.driver.send('after exit')
+    expect(harness.fakes[1]!.options.effort).toBe('max')
+    // Removing it leaves Claude Code's settings in force: no effort key.
+    effort = undefined
+    harness.fakes[1]!.exit()
+    await flush()
+    harness.driver.send('after removal')
+    expect('effort' in harness.fakes[2]!.options).toBe(false)
+    expect(reads).toBe(3)
+    harness.driver.kill()
+  })
+
+  test('without a getter no effort option is passed', () => {
+    const harness = createHarness()
+    harness.driver.send('hello')
+    expect('effort' in harness.fakes[0]!.options).toBe(false)
     harness.driver.kill()
   })
 

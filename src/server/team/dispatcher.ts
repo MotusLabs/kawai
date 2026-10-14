@@ -13,11 +13,18 @@
 // pick that went stale before the claim is routed again (attempt 1), then by
 // the built-in strategy (attempt 2). Without a router the longest-idle
 // eligible member takes the message.
+// Waiting reasons (team-waiting-reasons D2): a cause reporter over the
+// shared recipient fields sits beneath the eligibility and claim predicates,
+// which keep their exact boolean shapes by rejecting different subsets of
+// its causes; every pass ends in an `afterPass` outcome carrying fresh
+// constraints per still-waiting message plus the waiting surface itself.
 import type { ChatPeerMessage } from '../../shared/chat'
 import type { ChatPeerTaskContext } from '../../shared/teamTasks'
+import type { WaitingConstraint } from '../../shared/team'
 import type { TeamMessage } from './mailboxStore'
 import { MailboxStore } from './mailboxStore'
 import { messageEnvelope } from './envelope'
+import { memberExclusions, type MemberExclusion, type MemberExclusionKind } from './memberCauses'
 
 export interface MailRecipient {
   sessionId: string
@@ -26,6 +33,8 @@ export interface MailRecipient {
   idle: boolean
   pendingRequest: boolean
   available: boolean
+  /** The manager's start refusal text when `available` is false (D2: unavailable reason). */
+  blockedBy?: string | null
   /** The worktree root containing the member's current project path. */
   worktree?: string
   /** Holds a parked message: takes no group mail (profile-routing). */
@@ -34,6 +43,10 @@ export interface MailRecipient {
   /** Direct mail waits for provider recovery; custom group rules may override cooling. */
   cooldownUntil?: string | null
 }
+
+// The member-state cause reporter lives beside the predicates it sits beneath.
+export { memberExclusions }
+export type { MemberExclusion, MemberExclusionKind }
 
 /** Mail reserved for a freshly spawned member, to deliver as its first turn. */
 export interface SpawnAssignment {
@@ -51,14 +64,24 @@ export interface RouteView {
   eligible: EligibleMember[]
   /** 0 first decision, 1 after a stale pick, 2 built-in only. */
   attempt: number
+  /** Why each live member of the group cannot take the message (D2). */
+  exclusions?: MemberExclusion[]
 }
 
 export type RouteResult =
   | { kind: 'member'; sessionId: string }
   | { kind: 'spawned'; assignment: SpawnAssignment }
   /** Leave it queued; `retryAt` (epoch ms) re-arms the timer. */
-  | { kind: 'hold'; retryAt: number | null }
-  | { kind: 'none' }
+  | { kind: 'hold'; retryAt: number | null; diagnosis?: WaitingConstraint[] }
+  | { kind: 'none'; diagnosis?: WaitingConstraint[] }
+
+/** What one dispatch pass learned about waiting mail (team-waiting-reasons D3). */
+export interface PassOutcome {
+  /** Fresh constraints per still-waiting message the pass diagnosed. */
+  reasons: Map<string, WaitingConstraint[]>
+  /** Every message still on the waiting surface (queued due, awaiting-request, spawning). */
+  waiting: Set<string>
+}
 
 export interface GroupRouter {
   route(message: TeamMessage, view: RouteView): Promise<RouteResult>
@@ -76,6 +99,10 @@ export class MailDispatcher {
   private holds = new Map<string, number | null>()
   /** Recipients whose startup failed this pass: routing skips them. */
   private failedThisPass = new Set<string>()
+  /** Router diagnoses collected this pass, per message (D2/D3). */
+  private passDiagnoses = new Map<string, WaitingConstraint[]>()
+  /** Agent-start failures with their error text, until the message leaves the queued surface (D2). */
+  private readonly startFailures = new Map<string, { sessionId: string; error: string }>()
   private requested = false
   private running: Promise<void> | null = null
   private closed = false
@@ -105,6 +132,8 @@ export class MailDispatcher {
     delivered?: (sessionId: string, message: TeamMessage) => void
     /** Another time the dispatcher must wake (e.g. a recovery note), epoch ms. */
     wakeAt?: () => number | null
+    /** Pass end: fresh waiting constraints and the waiting surface (D3). */
+    afterPass?: (outcome: PassOutcome) => void
     onError?: (error: unknown) => void
     /** Start held (see release): the owner still has recovery to run first. */
     held?: boolean
@@ -115,10 +144,15 @@ export class MailDispatcher {
 
   private now() { return this.options.now?.() ?? Date.now() }
 
+  /** The message's target worktree root, or null when any member may take it. */
+  private targetOf(message: TeamMessage): string | null {
+    if (message.toKind !== 'group' || !this.options.targetWorktree) return null
+    return this.options.targetWorktree(message)
+  }
+
   /** Whether a member may take a message given its task's target worktree. */
   private inWorktree(recipient: MailRecipient | undefined, message: TeamMessage): boolean {
-    if (message.toKind !== 'group' || !this.options.targetWorktree) return true
-    const target = this.options.targetWorktree(message)
+    const target = this.targetOf(message)
     return target === null || recipient?.worktree === target
   }
 
@@ -161,6 +195,7 @@ export class MailDispatcher {
   private async dispatch() {
     this.options.beginCycle?.()
     this.failedThisPass.clear()
+    this.passDiagnoses.clear()
     const recipients = this.options.recipients()
     const ids = new Set(recipients.map(row => row.sessionId))
     for (const id of this.idleSince.keys()) if (!ids.has(id)) this.idleSince.delete(id)
@@ -195,6 +230,58 @@ export class MailDispatcher {
       await this.directPass(priority)
       await this.groupPass(groupMail.filter(message => message.priority === priority))
     }
+    this.finishPass()
+  }
+
+  /**
+   * Pass end (team-waiting-reasons D3): merge the router diagnoses and the
+   * direct-mail reasons into one outcome, plus the waiting surface so the
+   * owner can clear ledger entries and start-failure backoffs for messages
+   * that left it (delivered, cancelled, dead-lettered, discarded).
+   */
+  private finishPass() {
+    if (!this.options.afterPass) return
+    const reasons = this.directWaiting(this.now())
+    for (const [id, constraints] of this.passDiagnoses) {
+      if (reasons.has(id)) continue
+      if (this.store.get(id)?.state === 'queued') reasons.set(id, constraints)
+    }
+    const waiting = new Set<string>(reasons.keys())
+    for (const message of this.store.waitingRows()) waiting.add(message.id)
+    for (const id of this.startFailures.keys()) if (!waiting.has(id)) this.startFailures.delete(id)
+    this.options.afterPass({ reasons, waiting })
+  }
+
+  /** Direct-mail waiting constraints from the recipient view (D2). */
+  private directWaiting(now: number): Map<string, WaitingConstraint[]> {
+    const out = new Map<string, WaitingConstraint[]>()
+    for (const message of this.store.waitingDirectMail()) {
+      const constraints: WaitingConstraint[] = []
+      const row = message.toId !== null ? this.current(message.toId) : undefined
+      const failure = this.startFailures.get(message.id)
+      if (failure && (!row || failure.sessionId === row.sessionId)) {
+        constraints.push({ kind: 'startup-failed', ...(failure.error ? { detail: failure.error } : {}) })
+      }
+      if (message.state === 'awaiting-request') constraints.push({ kind: 'recipient-pending-request' })
+      else if (!row || row.teamId !== message.teamId) {
+        constraints.push({ kind: 'recipient-unavailable', detail: 'the recipient is not a live member of this team' })
+      } else {
+        // Parked recipients still take direct mail; every other cause is a reason.
+        for (const cause of memberExclusions(row, message, { targetWorktree: null, now, startupFailed: false })) {
+          if (cause.kind === 'unavailable') {
+            constraints.push({ kind: 'recipient-unavailable', ...(row.blockedBy ? { detail: row.blockedBy } : {}) })
+          } else if (cause.kind === 'pending-card') constraints.push({ kind: 'recipient-pending-request' })
+          else if (cause.kind === 'busy') constraints.push({ kind: 'recipient-busy' })
+          else if (cause.kind === 'excluded-profile') {
+            constraints.push({ kind: 'recipient-unavailable', detail: `the recipient is on the excluded profile ${message.excludedProfile}` })
+          } else if (cause.kind === 'profile-cooling') {
+            constraints.push({ kind: 'profile-cooling', ...(row.cooldownUntil ? { retryAt: row.cooldownUntil } : {}) })
+          }
+        }
+      }
+      if (constraints.length > 0) out.set(message.id, constraints)
+    }
+    return out
   }
 
   /** Idle recipients in idle order (longest idle first). */
@@ -235,28 +322,73 @@ export class MailDispatcher {
     }))
   }
 
+  /**
+   * Eligible members, rebuilt unchanged on the cause reporter: the group
+   * path rejects every cause except the direct-only ones (`excluded-profile`
+   * is the candidate builder's filter; cooling members stay candidates).
+   */
   private eligibleFor(message: TeamMessage): EligibleMember[] {
     const now = this.now()
+    const target = this.targetOf(message)
     return this.idleRecipients().flatMap(row => {
       const idle = this.idleSince.get(row.sessionId)
-      if (!idle || !row.available || row.pendingRequest || !row.idle || row.parked) return []
-      if (this.failedThisPass.has(row.sessionId)) return []
-      if (row.teamId !== message.teamId || row.groupId !== message.toId || !this.inWorktree(row, message)) return []
-      return [{ ...row, idleForMs: now - idle.at }]
+      if (!idle) return []
+      if (row.teamId !== message.teamId || row.groupId !== message.toId) return []
+      const groupPath = memberExclusions(row, message, { targetWorktree: target, now, startupFailed: this.failedThisPass.has(row.sessionId) })
+        .some(cause => cause.kind !== 'excluded-profile' && cause.kind !== 'profile-cooling')
+      return groupPath ? [] : [{ ...row, idleForMs: now - idle.at }]
     })
+  }
+
+  /**
+   * Why each live member of the message's group cannot take it (D2): the
+   * router's `none`/`hold` diagnosis is built from this breakdown. A member
+   * that missed this pass's idle order reports busy — it was working when
+   * the pass began.
+   */
+  private exclusionsFor(message: TeamMessage): MemberExclusion[] {
+    const eligible = new Set(this.eligibleFor(message).map(row => row.sessionId))
+    const target = this.targetOf(message)
+    const failure = this.startFailures.get(message.id)
+    const out: MemberExclusion[] = []
+    for (const row of this.options.recipients()) {
+      if (row.teamId !== message.teamId || row.groupId !== message.toId) continue
+      // A member on the excluded profile passes `eligibleFor` (the candidate
+      // builder drops it instead), so its breakdown entry is added here.
+      if (eligible.has(row.sessionId)) {
+        if (message.excludedProfile && (row.profileId ?? 'default') === message.excludedProfile) {
+          out.push({ sessionId: row.sessionId, kind: 'excluded-profile' })
+        }
+        continue
+      }
+      const causes = memberExclusions(row, message, { targetWorktree: target, now: this.now(), startupFailed: this.failedThisPass.has(row.sessionId) })
+      // Cooling is never a breakdown cause (it is the separate all-profiles-
+      // cooling constraint); every other cause — excluded profile included —
+      // names this member's reason for not taking the message. A start
+      // failure carries its error text for the standalone constraint.
+      const cause = causes.find(entry => entry.kind !== 'profile-cooling')
+        ?? causes[0] ?? { sessionId: row.sessionId, kind: 'busy' as const, detail: 'became idle after this pass began' }
+      out.push(cause.kind === 'startup-failed' && failure?.sessionId === cause.sessionId ? { ...cause, detail: failure.error } : cause)
+    }
+    return out
   }
 
   private async routeOne(message: TeamMessage) {
     const router = this.options.router ?? longestIdle
     for (let attempt = 0; attempt <= 2; attempt++) {
       if (this.store.get(message.id)?.state !== 'queued') return
-      const result = await router.route(message, { eligible: this.eligibleFor(message), attempt })
+      const result = await router.route(message, { eligible: this.eligibleFor(message), attempt, exclusions: this.exclusionsFor(message) })
       if (result.kind === 'hold') {
         this.holds.set(message.id, result.retryAt)
+        this.passDiagnoses.set(message.id, result.diagnosis ?? [])
         return
       }
       this.holds.delete(message.id)
-      if (result.kind === 'none') return
+      if (result.kind === 'none') {
+        this.passDiagnoses.set(message.id, result.diagnosis ?? [])
+        return
+      }
+      this.passDiagnoses.delete(message.id)
       if (result.kind === 'spawned') {
         const { assignment } = result
         const recipient = this.current(assignment.sessionId)
@@ -278,13 +410,20 @@ export class MailDispatcher {
       await this.options.prepare(recipient.sessionId)
       if (this.closed) return true
       const eligible = () => {
+        // Rebuilt unchanged on the cause reporter (D2): this predicate rejects
+        // its own subset — busy unless interrupting, cooling only for direct
+        // mail, parked only for unreserved group mail — never startup failures
+        // or idle order, which belong to `eligibleFor`.
         const current = this.current(recipient.sessionId)
-        return !!current?.available && !current.pendingRequest && current.teamId === message.teamId &&
-          (interrupt || current.idle) &&
-          (!message.excludedProfile || (current.profileId ?? 'default') !== message.excludedProfile) &&
-          (message.toKind !== 'session' || !this.cooling(current)) &&
-          (message.toKind === 'session' || (current.groupId === message.toId && (reserved || !current.parked))) &&
-          this.inWorktree(current, message)
+        if (!current || current.teamId !== message.teamId) return false
+        const causes = memberExclusions(current, message, { targetWorktree: this.targetOf(message), now: this.now(), startupFailed: false })
+        const has = (kind: MemberExclusionKind) => causes.some(cause => cause.kind === kind)
+        if (has('unavailable') || has('pending-card') || has('other-worktree')) return false
+        if (!interrupt && has('busy')) return false
+        if (message.excludedProfile && has('excluded-profile')) return false
+        if (message.toKind === 'session' && has('profile-cooling')) return false
+        if (message.toKind === 'group' && (current.groupId !== message.toId || (!reserved && has('parked')))) return false
+        return true
       }
       if (!this.store.claimWhen(message.id, recipient.sessionId, eligible, reserved)) return false
       this.idleSince.delete(recipient.sessionId)
@@ -305,6 +444,7 @@ export class MailDispatcher {
       // means exactly that: the row is queued again, so delivering here would
       // duplicate it on the next pass.
       if (!this.store.markPushed(message.id, undefined, task?.revision ?? null)) return true
+      this.startFailures.delete(message.id)
       this.options.deliver(recipient.sessionId, envelope)
       this.options.delivered?.(recipient.sessionId, message)
       if (message.taskId) this.options.associateTask?.(recipient.sessionId, message.taskId)
@@ -325,9 +465,11 @@ export class MailDispatcher {
       }
       this.options.onError?.(error)
       // Failed before claiming (e.g. the agent would not start): let routing
-      // try someone else this pass.
+      // try someone else this pass, and keep the error with the message until
+      // it leaves the queued surface (D2).
       if (this.store.get(message.id)?.state === 'queued') {
         this.failedThisPass.add(recipient.sessionId)
+        this.startFailures.set(message.id, { sessionId: recipient.sessionId, error: error instanceof Error ? error.message : String(error) })
         return false
       }
       return true

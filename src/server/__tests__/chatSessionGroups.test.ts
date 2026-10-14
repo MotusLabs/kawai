@@ -157,4 +157,28 @@ describe('chat session groups', () => {
     expect(systemPrompt.append).toContain('- `qa` (qa): Tests releases')
     manager.shutdown()
   })
+
+  test('a member launches with its group effort; a session without a group gets none', async () => {
+    fs.writeFileSync(path.join(project, '.kawai', 'groups', 'lead.md'), '---\neffort: max\n---\nLead.')
+    const spawned: Options[] = []
+    const manager = new ChatSessionManager({
+      db, registry: new SessionRegistry(), onEvent: () => {}, profileCatalogHome: home,
+      availabilityProbe: async () => {},
+      queryFactory: (args) => { spawned.push(args.options); return fixtureQueryFactory(args) },
+    })
+    try {
+      const lead = await manager.createAvailableSession({ projectPath: project, groupId: 'lead' })
+      if (!lead.ok) throw new Error(lead.error)
+      expect(await manager.start(lead.session.id)).toEqual({ ok: true })
+      expect(spawned[0]?.effort).toBe('max')
+
+      const loose = await manager.createAvailableSession({ projectPath: project })
+      if (!loose.ok) throw new Error(loose.error)
+      expect(await manager.start(loose.session.id)).toEqual({ ok: true })
+      expect(spawned).toHaveLength(2)
+      expect('effort' in spawned[1]!).toBe(false)
+    } finally {
+      manager.shutdown()
+    }
+  })
 })

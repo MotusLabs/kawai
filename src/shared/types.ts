@@ -7,7 +7,9 @@ import type {
   MessageQueryFilters,
   SessionDirectoryEntry,
   TeamMessage,
+  TeamWorktreeOccupancy,
   ThreadEntry,
+  WaitingReason,
 } from './team'
 import type { RuleLoadReport, TeamRoutingState } from './routing'
 import type { TaskDispatchPreview, TaskStatus, TaskTargetOptions, TeamTask, TeamTaskAssignment, TeamTaskDetail, TeamTaskSummary } from './teamTasks'
@@ -359,7 +361,20 @@ export type ServerMessage =
   // not deltas — a missed bookend must not wedge a stale running worker. Sent
   // whenever the roster projection changes; additive and ephemeral like
   // chat-activity, while settled outcomes also ride the snapshot and persist.
-  | { type: 'team-mailbox-snapshot'; sessionId: string; teamId: string; messages: TeamMessage[]; routing?: TeamRoutingState }
+  // Team mailbox snapshot. `waiting` and `worktrees` are additive optional
+  // fields (team-waiting-reasons D3): per-message waiting reasons and the
+  // worktree occupancy read model, ignored by older clients (the precedent
+  // is `routing`). Reasons are in-memory state — absent until the first
+  // dispatch pass after a restart rebuilds them.
+  | {
+      type: 'team-mailbox-snapshot'
+      sessionId: string
+      teamId: string
+      messages: TeamMessage[]
+      routing?: TeamRoutingState
+      waiting?: Record<string, WaitingReason>
+      worktrees?: TeamWorktreeOccupancy[]
+    }
   | { type: 'team-mailbox-rules-result'; sessionId: string; ok: true; report: RuleLoadReport }
   | { type: 'team-mailbox-rules-result'; sessionId: string; ok: false; error: string }
   | { type: 'team-mailbox-hand-off-result'; sessionId: string; messageId: string; ok: true; forwardedId: string }

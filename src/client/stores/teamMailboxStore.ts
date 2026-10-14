@@ -1,10 +1,13 @@
 // Per-chat mailbox views follow selection and reconnect. A snapshot replaces
 // stale rows; closed views ignore late pushes. Snapshots also carry the
-// team's routing state (rule load status, decisions); a rules reload and a
-// hand off answer with results the panel shows inline (profile routing).
+// team's routing state (rule load status, decisions) and, additively, the
+// per-message waiting reasons and the worktree occupancy roster
+// (team-waiting-reasons D3/D4) — a reason-only re-publish updates the view
+// with no row change; a rules reload and a hand off answer with results the
+// panel shows inline (profile routing).
 import { create } from 'zustand'
 import type { TeamRoutingState } from '@shared/routing'
-import type { TeamMessage } from '@shared/team'
+import type { TeamMessage, TeamWorktreeOccupancy, WaitingReason } from '@shared/team'
 import type { ServerMessage } from '@shared/types'
 
 export type RulesResult = Extract<ServerMessage, { type: 'team-mailbox-rules-result' }>
@@ -15,6 +18,10 @@ export interface MailboxView {
   loading: boolean
   messages: TeamMessage[]
   routing?: TeamRoutingState
+  /** Per-message waiting reasons, keyed by message id (in-memory, additive). */
+  waiting?: Record<string, WaitingReason>
+  /** Live sessions per worktree plus pending spawns (occupancy read model). */
+  worktrees?: TeamWorktreeOccupancy[]
   /** Set while a reload is in flight. */
   reloading?: boolean
   rulesResult?: RulesResult
@@ -40,7 +47,10 @@ export const useTeamMailboxStore = create<MailboxState>(set => ({
   open: id => set(state => ({ views: { ...state.views, [id]: { ...(state.views[id] ?? closedMailbox()), open: true, loading: true } } })),
   close: id => set(state => { const views = { ...state.views }; delete views[id]; return { views } }),
   apply: message => set(state => patch(state, message.sessionId, {
-    loading: false, messages: message.messages, ...(message.routing ? { routing: message.routing } : {}),
+    loading: false, messages: message.messages,
+    ...(message.routing ? { routing: message.routing } : {}),
+    ...(message.waiting ? { waiting: message.waiting } : {}),
+    ...(message.worktrees ? { worktrees: message.worktrees } : {}),
   })),
   beginReload: id => set(state => patch(state, id, { reloading: true })),
   applyRulesResult: message => set(state => patch(state, message.sessionId, { reloading: false, rulesResult: message })),

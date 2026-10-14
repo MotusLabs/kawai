@@ -116,6 +116,9 @@ async function main() {
       // Grouped-navigator tests render SessionList (framer-motion) with the
       // same window-stub pattern; same isolation requirement as above.
       'sessionListGrouped.test.tsx',
+      // Same: drives the shipped SessionList (flat and grouped) to lock the
+      // killed-row unmount contract.
+      'sessionRowExit.test.tsx',
       'SectionHeader.test.tsx',
       // The grouped navigator also puts motion components into whole-app and
       // Terminal renders: main.test.ts mounts the full App (SessionList),

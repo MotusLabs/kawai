@@ -137,6 +137,12 @@ export interface ChatSessionDriverOptions {
    * role + mailbox note, agent-teams D7). Omitted/empty = preset only.
    */
   getSystemPromptAppend?: () => string | undefined
+  /**
+   * Reasoning effort for the spawn, read at every spawn like the prompt
+   * (group-effort D2). Undefined = no `effort` option, so Claude Code's own
+   * settings decide.
+   */
+  getEffort?: () => Options['effort']
   teamMcpServer?: NonNullable<Options['mcpServers']>[string]
   /**
    * Recovered roster rows (workers design D6) seeding a fresh driver, so
@@ -212,9 +218,13 @@ export interface ChatSessionDriverOptions {
   onUsageReport?: (report: ChatUsageReport) => void
   /**
    * Claims the profile's one usage pull after a spawn (design D1); when it
-   * returns false the pull is skipped for this driver's whole lifetime.
+   * resolves false the pull is skipped for this driver's whole lifetime. The
+   * claim may be async so the manager can route the pull to the session
+   * provider's own quota endpoint first (provider usage pull) and only fall
+   * back to this SDK pull when that endpoint does not answer for the
+   * profile.
    */
-  claimUsagePull?: () => boolean
+  claimUsagePull?: () => boolean | Promise<boolean>
   /** A pull that yielded no windows (or failed) records the no-data verdict. */
   onUsageNoData?: () => void
   /** Fired once when the SDK init message reveals the session id. */
@@ -600,6 +610,7 @@ export class ChatSessionDriver {
     const executablePath = profileExecutable ?? this.claudeExecutablePath
     const wire = this.options.wire
     const systemPromptAppend = this.options.getSystemPromptAppend?.()
+    const effort = this.options.getEffort?.()
     const options: Options = {
       cwd: this.sessionProjectPath,
       // Option parity with a terminal `claude` session in the project dir.
@@ -626,6 +637,9 @@ export class ChatSessionDriver {
         ? { pathToClaudeCodeExecutable: executablePath }
         : {}),
       ...(resume ? { resume } : {}),
+      // Before the profile's launch options, which carry no effort today, so
+      // any future override there is a deliberate choice (group-effort D3).
+      ...(effort ? { effort } : {}),
       ...launchOptions,
       ...(wire ? { spawnClaudeCodeProcess: createWireTappedSpawn(wire) } : {}),
     }
@@ -650,7 +664,7 @@ export class ChatSessionDriver {
     this.commands.beginLoading()
     void this.fetchInitializationCommands(query)
     void this.runQueryLoop(query)
-    this.maybePullUsage(query)
+    void this.maybePullUsage(query)
     // Attach-time threshold probe (design D2): the report can answer before
     // the first request does.
     this.refreshContextThreshold()
@@ -659,14 +673,15 @@ export class ChatSessionDriver {
   /**
    * The usage pull fallback (design D1): right after a spawn, when the
    * profile holds no data at all, ask the CLI for its plan windows so the
-   * bar can appear before the first turn reports anything. Everything is
-   * wrapped: the control API is explicitly unstable, and a throw, an absent
-   * method, or a shape change records the no-data verdict instead of
-   * disturbing the session.
+   * bar can appear before the first turn reports anything. The claim is
+   * awaited (it may route to the provider quota endpoint first, provider
+   * usage pull); everything else is wrapped: the control API is explicitly
+   * unstable, and a throw, an absent method, or a shape change records the
+   * no-data verdict instead of disturbing the session.
    */
-  private maybePullUsage(query: Query): void {
+  private async maybePullUsage(query: Query): Promise<void> {
     const { claimUsagePull, onUsageReport, onUsageNoData } = this.options
-    if (!claimUsagePull || !onUsageReport || !claimUsagePull()) return
+    if (!claimUsagePull || !onUsageReport || !(await claimUsagePull())) return
     const pull = query.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET
     if (typeof pull !== 'function') {
       onUsageNoData?.()

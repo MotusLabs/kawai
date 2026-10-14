@@ -15,6 +15,7 @@ import TeamMessagesPanel from '../components/chat/TeamMessagesPanel'
 import TeamMessagesView from '../components/chat/TeamMessagesView'
 import TeamTaskDetail from '../components/chat/TeamTaskDetail'
 import { closeOtherSideSlots } from '../components/chat/sideSlot'
+import { chooseSessionMenuEntry } from './support/sessionMenu'
 import { useChatDebugStore } from '../stores/chatDebugStore'
 import { emptyTranscript, useChatStore } from '../stores/chatStore'
 import { useSessionStore } from '../stores/sessionStore'
@@ -82,7 +83,7 @@ test('the side slot holds one panel at a time: Messages closes the others and is
   act(() => buttonNamed(renderer, 'Tasks').props.onClick())
   expect(panel('team-mailbox')).toHaveLength(0)
   expect(panel('team-tasks')).toHaveLength(1)
-  act(() => buttonNamed(renderer, 'Debug').props.onClick())
+  act(() => chooseSessionMenuEntry(renderer.root, 'debug'))
   expect(panel('team-tasks')).toHaveLength(0)
   expect(panel('chat-debug-panel')).toHaveLength(1)
   // Messages closes Debug again.

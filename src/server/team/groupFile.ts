@@ -6,11 +6,12 @@
 // keys are validated; unknown keys are ignored so later changes can add
 // settings without breaking older readers. Team tasks add `canCreateTasks`,
 // `max`, `profile`, and `approval` (team-tasks design D2/D6); profile routing
-// adds `profiles`, `strategy`, and `onLimit`. `profiles` and `onLimit` take
+// adds `profiles`, `strategy`, and `onLimit`; group effort adds `effort`, the
+// reasoning effort members' agents launch with. `profiles` and `onLimit` take
 // one single-line flow value (`[a, b]` or `{ k: v }`, scalars only — never
 // nested). Defaults are applied here so every reader sees the same effective
-// values. Bad `onLimit` values are warnings (the defaults apply) rather than
-// a rejected file, as the profile-routing spec asks.
+// values. Bad `onLimit` and `effort` values are warnings (the defaults apply)
+// rather than a rejected file, as the profile-routing spec asks.
 import type { ChatApprovalPolicy } from '../../shared/chat'
 import { PROFILE_ID_PATTERN } from '../chat/profileCatalog'
 
@@ -32,6 +33,10 @@ export interface GroupLimitPolicy {
   /** Group id or team session id; unset = the same group. */
   forwardTo?: string
 }
+
+/** Reasoning effort a group's members launch with (the SDK's `effort` option). */
+export type GroupEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+export const GROUP_EFFORTS: readonly GroupEffort[] = ['low', 'medium', 'high', 'xhigh', 'max']
 
 export const DEFAULT_PARK_IF_RESET_WITHIN_MS = 3 * 60 * 60 * 1000
 
@@ -55,6 +60,8 @@ export interface GroupDefinition {
   onLimit: GroupLimitPolicy
   /** Approval policy for spawned members; default manual. */
   approval: ChatApprovalPolicy
+  /** Effort every member's agent launches with; unset = Claude Code settings decide. */
+  effort?: GroupEffort
   /** Problems that fell back to defaults instead of rejecting the file. */
   warnings: string[]
   /** The role prompt appended to members' system prompts. */
@@ -108,7 +115,7 @@ export function parseGroupFile(id: string, content: string): GroupFileParse {
 }
 
 type TaskSettings = Pick<GroupDefinition,
-  'canCreateTasks' | 'max' | 'profiles' | 'strategy' | 'onLimit' | 'approval' | 'warnings'>
+  'canCreateTasks' | 'max' | 'profiles' | 'strategy' | 'onLimit' | 'approval' | 'effort' | 'warnings'>
 
 type Parsed<T> = { ok: true; value: T } | { ok: false; error: string }
 
@@ -163,6 +170,11 @@ function parseTaskSettings(
       return { ok: false, error: `approval must be manual or auto, got "${approval}"` }
     }
     settings.approval = approval
+  }
+  const effort = fields.get('effort')?.trim()
+  if (effort !== undefined) {
+    if (GROUP_EFFORTS.includes(effort as GroupEffort)) settings.effort = effort as GroupEffort
+    else warnings.push(`effort must be ${GROUP_EFFORTS.join(', ')}, got "${effort}"; ignored`)
   }
   return { ok: true, settings }
 }

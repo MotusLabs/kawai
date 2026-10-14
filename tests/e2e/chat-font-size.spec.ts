@@ -3,6 +3,7 @@
 // the 13px root and the terminal font size; the composer stays at 16px or more
 // on coarse pointers so iOS does not zoom on focus.
 import { expect, test, type Locator, type Page } from '@playwright/test'
+import { killChat } from './support/chatHeader'
 
 test.skip(process.env.AGENTBOARD_CHAT_FIXTURE !== '1', 'Requires the development chat fixture')
 
@@ -27,10 +28,6 @@ async function sendMarkdown(page: Page) {
   await page.getByRole('button', { name: 'Send', exact: true }).click()
   await expect(page.getByTestId('chat-transcript').getByRole('heading', { name: 'Markdown showcase' })).toBeVisible()
   await expect(page.getByTestId('chat-transcript').getByText(/Turn complete/)).toBeVisible()
-}
-
-async function killChat(page: Page) {
-  await page.getByRole('button', { name: 'Kill session', exact: true }).click()
 }
 
 function storedSettings(page: Page) {

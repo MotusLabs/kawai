@@ -30,7 +30,11 @@ function overwriteDraftBehindServer(storedPurpose: string) {
   if (!dbPath.startsWith(process.env.E2E_TMUX_TMPDIR!)) throw new Error('Refuse seeding a non-isolated database')
   execFileSync('bun', ['-e', `
     import { Database } from 'bun:sqlite';
-    import { hashStrategyContent, normalizeStrategyContent } from './src/shared/productStrategy';
+    // Hashing is server-side by design (the browser never computes hashes), so
+    // the seed writes through the same module the store does — product-strategy
+    // review N3 moved it out of the shared template helpers.
+    import { hashStrategyContent } from './src/server/strategy/strategyHash';
+    import { normalizeStrategyContent } from './src/shared/productStrategy';
     const [file, purpose] = JSON.parse(await Bun.stdin.text());
     const db = new Database(file);
     const strategy = db.query('SELECT id FROM product_strategies').get();
@@ -91,7 +95,7 @@ test('capture, durable drafts with a CAS conflict, review and human approval, an
 
     // Submit for review: findings separate known, assumed, and not decided.
     await editor2.getByLabel('Purpose').fill('Direction C: reviewed direction')
-    await editor2.getByLabel('Open questions (one per line)').fill('Who owns the baseline?')
+    await editor2.getByLabel('Open questions', { exact: true }).fill('Who owns the baseline?')
     await editor2.getByTestId('draft-save').click()
     await page.getByTestId('strategy-submit').click()
     const review = page.getByTestId('product-strategy').getByTestId(/^strategy-review-1$/)
