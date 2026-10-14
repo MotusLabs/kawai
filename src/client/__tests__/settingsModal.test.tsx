@@ -292,6 +292,41 @@ describe('SettingsModal', () => {
     })
   })
 
+  test('a store update while open does not overwrite unsaved edits', async () => {
+    let renderer!: TestRenderer.ReactTestRenderer
+    const onClose = () => {}
+
+    await act(async () => {
+      renderer = TestRenderer.create(
+        <SettingsModal isOpen onClose={onClose} />
+      )
+    })
+
+    const dirInput = renderer.root.findAllByType('input')[0]
+    await act(async () => {
+      dirInput.props.onChange({ target: { value: '/my-edits' } })
+    })
+
+    // A persisted setting (or server default) arriving mid-edit must never
+    // re-initialize the draft while the modal is open.
+    await act(async () => {
+      useSettingsStore.setState({
+        defaultProjectDir: '/changed-underneath',
+        sessionSortMode: 'status',
+      })
+    })
+
+    const inputs = renderer.root.findAllByType('input')
+    expect(inputs[0].props.value).toBe('/my-edits')
+
+    // The untouched field still picks up the new store value on the next open.
+    await act(async () => { renderer.update(<SettingsModal isOpen={false} onClose={onClose} />) })
+    await act(async () => { renderer.update(<SettingsModal isOpen onClose={onClose} />) })
+    expect(renderer.root.findAllByType('input')[0].props.value).toBe('/changed-underneath')
+
+    await act(async () => { renderer.unmount() })
+  })
+
   test('chat font size stepper stops at 12 and 20 and saves without touching the terminal size', async () => {
     useSettingsStore.setState({ chatFontSize: 13, fontSize: 13 })
     let renderer!: TestRenderer.ReactTestRenderer

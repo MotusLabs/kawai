@@ -153,17 +153,35 @@ export default function SettingsModal({
   const submittingRef = useRef(false)
 
   /**
-   * The open state the focus effect below last saw. Handing focus back to the
+   * The open state the effects below last saw. Handing focus back to the
    * terminal belongs to a real open→close transition only: this modal is
    * mounted closed on every page load and its draft effect re-runs on every
    * setting change, so a timer armed by those runs fired 300 ms later under
    * whatever dialog the user had opened since, re-enabling the xterm textarea
-   * and stealing the focus (and the typed text) from its fields.
+   * and stealing the focus (and the typed text) from its fields. The same
+   * ref guards the draft init: a store or server-default update while the
+   * modal is open must never re-initialize the draft and overwrite unsaved
+   * edits (the #112 fix, applied here too).
    */
   const prevOpenRef = useRef(false)
 
   useEffect(() => {
-    if (isOpen) {
+    // The draft is initialized on the closed→open transition only (see the
+    // guard above); the dependency list stays complete so that run sees the
+    // latest persisted values, but re-runs while open fall through.
+    const wasOpen = prevOpenRef.current
+    prevOpenRef.current = isOpen
+    if (!isOpen || wasOpen) {
+      // Not a transition to open. The close side effect below only runs on a
+      // real open→close transition.
+      if (isOpen || !wasOpen || typeof document === 'undefined') return
+      // Re-enable terminal textarea when modal closes
+      const timer = setTimeout(restoreTerminalFocus, 300)
+      // Reopening before it fires cancels it, so it never lands under the
+      // dialog; a different dialog opened meanwhile makes it a no-op.
+      return () => clearTimeout(timer)
+    }
+    {
       setDraftDir(defaultProjectDir)
       setDraftPresets(commandPresets)
       setDraftDefaultPresetId(defaultPresetId)
@@ -217,18 +235,6 @@ export default function SettingsModal({
     soundOnIdle,
     isOpen,
   ])
-
-  useEffect(() => {
-    const wasOpen = prevOpenRef.current
-    prevOpenRef.current = isOpen
-    // A mount while closed, or any rerun while closed, is no transition.
-    if (isOpen || !wasOpen || typeof document === 'undefined') return
-    // Re-enable terminal textarea when modal closes
-    const timer = setTimeout(restoreTerminalFocus, 300)
-    // Reopening before it fires cancels it, so it never lands under the dialog;
-    // a different dialog opened meanwhile makes it a no-op.
-    return () => clearTimeout(timer)
-  }, [isOpen])
 
   // Handle Escape key to close modal
   useEffect(() => {
