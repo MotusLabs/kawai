@@ -5,7 +5,9 @@
 // text being typed — from the dialog's fields. The restore also waits until
 // the LAST open dialog has closed: while any dialog is open it retries every
 // 300 ms, so a dialog that closes later (the mobile drawer, the update panel,
-// the branch browser) still gets the terminal its focus back.
+// the branch browser) still gets the terminal its focus back. And because the
+// retry can land after the user has already clicked into a field outside any
+// dialog, it never takes focus from an editable element.
 
 const RETRY_DELAY_MS = 300
 
@@ -33,6 +35,16 @@ export function cancelTerminalFocusRestore(): void {
   clearRetry()
 }
 
+/**
+ * True for elements a user types into. Focused buttons are excluded: the
+ * drawer hands focus back to its trigger button on close, and that must not
+ * block the restore.
+ */
+function isEditable(element: HTMLElement): boolean {
+  const tag = element.tagName
+  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || element.isContentEditable === true
+}
+
 export function restoreTerminalFocus(): void {
   if (typeof document === 'undefined' || typeof document.querySelector !== 'function') return
   if (isDialogOpen()) {
@@ -48,6 +60,11 @@ export function restoreTerminalFocus(): void {
   clearRetry()
   const textarea = document.querySelector('.xterm-helper-textarea') as HTMLTextAreaElement | null
   if (!textarea) return
+  // The user may have focused a field after the last dialog closed; leave
+  // their focus (and typed text) alone. A missing activeElement (test stubs)
+  // counts as not editable. The terminal re-enables itself on click.
+  const active = document.activeElement as HTMLElement | null
+  if (active && active !== textarea && isEditable(active)) return
   textarea.removeAttribute('disabled')
   textarea.focus()
 }

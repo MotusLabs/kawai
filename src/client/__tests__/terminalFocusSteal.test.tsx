@@ -12,7 +12,7 @@ import SessionDrawer from '../components/SessionDrawer'
 import SettingsModal from '../components/SettingsModal'
 import type { Session } from '@shared/types'
 import { DEFAULT_PRESETS, useSettingsStore } from '../stores/settingsStore'
-import { cancelTerminalFocusRestore } from '../utils/terminalFocus'
+import { cancelTerminalFocusRestore, restoreTerminalFocus } from '../utils/terminalFocus'
 
 const globalAny = globalThis as typeof globalThis & {
   window?: Window & typeof globalThis
@@ -203,6 +203,29 @@ describe('terminal focus under an open dialog', () => {
     // terminal under the reopened dialog.
     expect(calls).toEqual([])
     act(() => renderer.unmount())
+  })
+
+  test('a restore landing while an input outside any dialog is focused does not steal it', () => {
+    const calls = terminalDom()
+    Object.assign(globalAny.document as object, { activeElement: { tagName: 'INPUT' } })
+    restoreTerminalFocus()
+    expect(calls).toEqual([])
+  })
+
+  test('a focused button does not block the restore (the drawer hands focus to its trigger)', () => {
+    const calls = terminalDom()
+    Object.assign(globalAny.document as object, { activeElement: { tagName: 'BUTTON' } })
+    restoreTerminalFocus()
+    expect(calls).toEqual(['enable', 'terminal-focus'])
+  })
+
+  test('the xterm textarea already holding focus still restores as before', () => {
+    const calls = terminalDom()
+    // In a real DOM the focused textarea IS the one the selector finds.
+    const doc = globalAny.document as unknown as Document
+    Object.assign(doc, { activeElement: doc.querySelector('.xterm-helper-textarea') })
+    restoreTerminalFocus()
+    expect(calls).toEqual(['enable', 'terminal-focus'])
   })
 })
 
