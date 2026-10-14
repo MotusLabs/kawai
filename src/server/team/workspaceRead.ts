@@ -24,6 +24,7 @@ import type { ChatSessionRecord } from '../db'
 import type { ChatSessionManager } from '../chat/ChatSessionManager'
 import type { GroupCatalog } from './groupCatalog'
 import type { TeamIdentity } from './teamIdentity'
+import { TurnEndFacts, type TurnEndFact } from './turnEndFacts'
 
 /**
  * The constraint kinds that make mail wait on capacity (team-waiting-reasons
@@ -249,13 +250,6 @@ export function attentionItems(
   return sources.flatMap(source => source(input)).sort((a, b) => a.id.localeCompare(b.id))
 }
 
-/** One turn-end fact the summary reads, pre-extracted from a transcript. */
-export interface TurnEndFact {
-  sessionId: string
-  taskId: string | null
-  at: string
-}
-
 /** What the morning summary reads (D8): durable rows plus the runtime ledger. */
 export interface SummaryInput {
   /** Read time, ISO; the window is the 24 hours before it. */
@@ -358,15 +352,22 @@ export function morningSummary(input: SummaryInput): MorningSummary {
 /**
  * The manager-facing read: one snapshot over everything the pure projections
  * above need. Held by the connection layer, which recomputes on the triggers
- * the mailbox and task views already use. Turn-end facts replay each task
- * bound session's transcript, so they are cached per session and invalidated
- * by `lastActivityAt` — turn-end events only append while the session is
- * active, and activity moves that stamp.
+ * the mailbox and task views already use. Turn-end facts append live from
+ * `turn_completed` events (`recordTurnEnd`); each task-bound session's
+ * transcript is replayed once, at the first snapshot that needs it — see
+ * `TurnEndFacts`.
  */
 export class WorkspaceRead {
-  private readonly turnEndCache = new Map<string, { lastActivityAt: string; facts: TurnEndFact[] }>()
+  private readonly turnEnds: TurnEndFacts
 
-  constructor(private readonly manager: ChatSessionManager) {}
+  constructor(private readonly manager: ChatSessionManager) {
+    this.turnEnds = new TurnEndFacts(sessionId => manager.getHistory(sessionId)?.events ?? null)
+  }
+
+  /** A live `turn_completed` event: append to the summary's ledger, never replay. */
+  recordTurnEnd(sessionId: string, taskId: string, at: string): void {
+    this.turnEnds.record(sessionId, taskId, at)
+  }
 
   snapshot(team: TeamIdentity): TeamWorkspaceSnapshot {
     const manager = this.manager
@@ -398,32 +399,12 @@ export class WorkspaceRead {
         messageEvents: messageId => manager.mailbox.store.eventsFor(messageId)
           .map(event => ({ kind: event.kind, createdAt: event.createdAt })),
         waiting,
-        turnEnds: this.turnEnds(records),
+        turnEnds: this.turnEnds.forRecords(records),
         nameOf,
         // Phase 1 has no result rows; task 11.2 replaces this with the real read.
         hasResult: () => false,
       }),
       directory,
     }
-  }
-
-  private turnEnds(records: ChatSessionRecord[]): TurnEndFact[] {
-    const facts: TurnEndFact[] = []
-    for (const record of records) {
-      if (!record.taskId) continue
-      const cached = this.turnEndCache.get(record.sessionId)
-      if (cached && cached.lastActivityAt === record.lastActivityAt) {
-        facts.push(...cached.facts)
-        continue
-      }
-      // `getHistory` replays the transcript synchronously; only task-bound
-      // sessions reach here, and the cache holds across quiet recomputes.
-      const ends = (this.manager.getHistory(record.sessionId)?.events ?? [])
-        .filter(event => event.type === 'turn_completed')
-        .map(event => ({ sessionId: record.sessionId, taskId: record.taskId!, at: event.at }))
-      this.turnEndCache.set(record.sessionId, { lastActivityAt: record.lastActivityAt, facts: ends })
-      facts.push(...ends)
-    }
-    return facts
   }
 }

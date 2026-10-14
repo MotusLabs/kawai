@@ -70,6 +70,11 @@ export class WorkspaceConnections {
       : Promise.resolve()
   }
 
+  /** A live turn end for the summary's ledger: appended, never replayed. */
+  recordTurnEnd(sessionId: string, taskId: string, at: string): void {
+    this.read.recordTurnEnd(sessionId, taskId, at)
+  }
+
   private publishNow(teamId: string) {
     const targets: Array<[ChatConnection, string, TeamIdentity]> = []
     for (const [connection, views] of this.subscriptions) {
