@@ -12,6 +12,7 @@ import SessionDrawer from '../components/SessionDrawer'
 import SettingsModal from '../components/SettingsModal'
 import type { Session } from '@shared/types'
 import { DEFAULT_PRESETS, useSettingsStore } from '../stores/settingsStore'
+import { cancelTerminalFocusRestore } from '../utils/terminalFocus'
 
 const globalAny = globalThis as typeof globalThis & {
   window?: Window & typeof globalThis
@@ -37,6 +38,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  cancelTerminalFocusRestore()
   globalAny.window = originalWindow
   globalAny.document = originalDocument
   globalAny.localStorage = originalLocalStorage
@@ -331,6 +333,40 @@ describe('with the always-mounted session drawer (mobile layout)', () => {
       await pastCloseWindow()
     })
     expect(calls).toEqual([])
+    act(() => renderer.unmount())
+  })
+
+  test('the restore retries until the last dialog closes: the drawer closing later still restores focus', async () => {
+    const { calls, set } = setup()
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => {
+      renderer = TestRenderer.create(mobileTree(true, true))
+      set(renderer)
+    })
+    await act(async () => {
+      await Promise.resolve()
+    })
+    calls.length = 0
+    // Settings closes while the drawer stays open: several retry periods pass
+    // with nothing touching the terminal.
+    act(() => renderer.update(mobileTree(false, true)))
+    await act(async () => {
+      await pastCloseWindow()
+    })
+    await act(async () => {
+      await pastCloseWindow()
+    })
+    await act(async () => {
+      await pastCloseWindow()
+    })
+    expect(calls).toEqual([])
+    // The drawer closes last: within about one retry period the terminal is
+    // enabled and focused exactly once.
+    act(() => renderer.update(mobileTree(false, false)))
+    await act(async () => {
+      await pastCloseWindow()
+    })
+    expect(calls).toEqual(['enable', 'terminal-focus'])
     act(() => renderer.unmount())
   })
 })
