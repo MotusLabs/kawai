@@ -113,7 +113,8 @@ export class MailDispatcher {
   constructor(private readonly store: MailboxStore, private readonly options: {
     recipients: () => MailRecipient[]
     recipient?: (id: string) => MailRecipient | undefined
-    beginCycle?: () => void
+    /** Cycle start (member-release D5): awaited before this pass's diagnoses clear and routing begins. */
+    beginCycle?: () => void | Promise<void>
     prepare: (sessionId: string) => Promise<void>
     interrupt: (sessionId: string) => Promise<void>
     deliver: (sessionId: string, envelope: ChatPeerMessage) => void
@@ -193,7 +194,10 @@ export class MailDispatcher {
   private current(id: string) { return this.options.recipient ? this.options.recipient(id) : this.options.recipients().find(row => row.sessionId === id) }
 
   private async dispatch() {
-    this.options.beginCycle?.()
+    // Awaited (member-release D5): release evaluation and closed-task
+    // dead-lettering finish before this pass's diagnoses are cleared and
+    // collected, so `afterPass` never reports a dead-lettered row as waiting.
+    await this.options.beginCycle?.()
     this.failedThisPass.clear()
     this.passDiagnoses.clear()
     const recipients = this.options.recipients()

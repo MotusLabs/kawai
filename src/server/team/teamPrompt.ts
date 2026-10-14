@@ -56,6 +56,13 @@ function taskNote({ group }: TeamPromptInput): string {
   const creation = group?.canCreateTasks
     ? `Your group may create tasks: \`${tool('task_create')}\` makes you the task's creator, which means you own its direction and decide when it is done or cancelled.`
     : 'You cannot create tasks; a team lead or the human does. You contribute to tasks others created.'
+  // Permitted by default (member-release D7): only a group whose file sets
+  // canReleaseMembers: false is not told about the tool.
+  const release = group?.canReleaseMembers === false ? '' : [
+    '',
+    'Releasing members:',
+    `- \`${tool('release_member')}\`: release one spawned member of your team by session id (optional reason). It is archived — never killed — and only once it has settled: idle, no pending approval or answer, no running background worker, no held mail. Busy or unsettled members are refused with the reason, so finish coordination first. You cannot release yourself or human-created sessions; a released member's task journal records the release, and direct mail to an archived member restores it.`,
+  ].join('\n')
   return [
     '# Team tasks',
     '',
@@ -67,6 +74,7 @@ function taskNote({ group }: TeamPromptInput): string {
     `- \`${tool('task_note')}\`: append a journal note. Record decisions, findings, and handoff state here; notes are permanent and every participant sees them.`,
     `- \`${tool('task_update_status')}\`: set \`active\` or \`blocked\` (anyone); \`done\` or \`cancelled\` (the creator only).`,
     `- \`${tool('task_amend')}\`: change direction or acceptance criteria (the creator only; each change is a new revision).`,
+    release,
     '',
     "Only a task's creator (or the human) changes its direction. If you disagree with the direction or find it wrong, add a journal note or message the creator — do not work around it. When a task links an OpenSpec change, that change's proposal, design, and tasks are the authoritative direction; the task's own direction text only summarizes it.",
   ].join('\n')

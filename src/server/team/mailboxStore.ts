@@ -414,6 +414,18 @@ export class MailboxStore {
     )
   }
 
+  /**
+   * Direct mail waiting for one session — queued and due now, or held for
+   * its pending request — so release readiness (member-release D3) can hold
+   * a member until its last direct mail is delivered.
+   */
+  waitingDirectFor(sessionId: string, now = nowIso()): TeamMessage[] {
+    return this.select(
+      `to_kind = 'session' AND to_id = $sessionId AND (state = 'awaiting-request' OR (state = 'queued' AND (deliver_at IS NULL OR deliver_at <= $now)))`,
+      { $sessionId: sessionId, $now: now }
+    )
+  }
+
   /** Every row on the waiting surface, every team (queued, awaiting-request, spawning). */
   waitingRows(): TeamMessage[] {
     return this.select(`state IN ('queued', 'awaiting-request', 'spawning')`, {})

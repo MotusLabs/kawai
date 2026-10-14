@@ -150,7 +150,14 @@ export function startServer(): void {
     onContextUsage: (sessionId, usage) => chatConnections.publishContextUsage(sessionId, usage),
     onModel: (sessionId, model) => chatConnections.publishModel(sessionId, model),
     onUsage: (profileId, report) => chatConnections.publishUsage(profileId, report),
-    onWorkers: (sessionId, workers) => chatConnections.publishWorkers(sessionId, workers),
+    onWorkers: (sessionId, workers) => {
+      chatConnections.publishWorkers(sessionId, workers)
+      // A pending release's readiness includes live workers (member-release
+      // D3): a roster change on a pending member re-runs the dispatch cycle
+      // (D2), since no status change follows a worker that ends while the
+      // session is already idle.
+      if (chatSessionManager.hasPendingRelease(sessionId)) chatSessionManager.dispatcher.notify()
+    },
     onNotifications: (sessionId, notifications) =>
       chatConnections.publishNotifications(sessionId, notifications),
     getProviderEnv: chatProviderEnv.current,

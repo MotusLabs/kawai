@@ -122,3 +122,62 @@ test('urgent direct mail to an agent whose profile is cooling is refused; normal
   // Group mail is never refused for cooldown.
   expect(await handlers.send_message({ ...groupMail, urgent: true })).toMatchObject({ state: 'queued' })
 })
+
+// release_member (member-release D6): the tool name is allowed without a
+// card, and the handler binds the caller and delegates to MemberRelease.
+import { MemberRelease } from '../team/memberRelease'
+import { TaskStore } from '../team/taskStore'
+import { RELEASE_TOOL_NAMES, TEAM_ALLOWED_TOOLS, releaseHandlers } from '../team/mailboxTools'
+import type { GroupDefinition } from '../team/groupFile'
+
+const groupDef = (overrides: Partial<GroupDefinition> = {}): GroupDefinition => ({
+  id: 'devs', label: 'devs', description: '', canCreateTasks: false,
+  releaseOnTaskClose: true, worktreeScoped: true, canReleaseMembers: true,
+  max: 1, profiles: [], strategy: 'first-available',
+  onLimit: { parkIfResetWithinMs: 3 * 3_600_000, otherwise: 'forward' }, approval: 'manual', warnings: [], prompt: '',
+  ...overrides,
+})
+const makeReleases = (definition: (groupId: string) => Promise<GroupDefinition | undefined>, opts: { idle?: boolean } = {}) => {
+  const archived: string[] = []
+  const tasks = new TaskStore(db, store)
+  const releases = new MemberRelease(db, {
+    store, tasks,
+    records: () => records.values(),
+    getRecord: id => records.get(id),
+    teamOf: id => (records.has(id) ? ({ teamId: 'team', groupsRoot: '' } as never) : undefined),
+    definition: async (_teamId, groupId) => definition(groupId),
+    cachedDefinition: () => undefined,
+    recipient: _id => ({ idle: opts.idle ?? true, pendingRequest: false }),
+    hasLiveWorkers: () => false,
+    archive: id => { archived.push(id); records.get(id)!.archivedAt = new Date().toISOString() },
+    notify: () => {},
+  })
+  return { releases, archived, tasks }
+}
+
+test('release_member is a team tool allowed without approval and archives through MemberRelease', async () => {
+  expect(TEAM_ALLOWED_TOOLS).toContain('mcp__kawai-team__release_member')
+  expect(RELEASE_TOOL_NAMES).toEqual(['release_member'])
+  const task = new TaskStore(db, store).create({ teamId: 'team', title: 't', direction: 'd', creator: { kind: 'human', sessionId: null } })
+  records.get('dev')!.spawned = true
+  records.get('dev')!.taskId = task.id
+  const { releases, archived, tasks } = makeReleases(async () => undefined)
+  const result = await releaseHandlers(releases, 'lead').release_member({ session_id: 'dev', reason: 'merged' })
+  expect(result).toEqual({ sessionId: 'dev', taskId: task.id })
+  expect(archived).toEqual(['dev'])
+  // The release is journaled on the member's task, authored by kawai.
+  expect(tasks.journal(task.id).at(-1)).toMatchObject({ author: { kind: 'system', sessionId: null }, text: expect.stringContaining('Released dev (dev) at the request of lead (lead): merged.') })
+})
+
+test('release_member refusals: not permitted, not spawned, and not ready', async () => {
+  records.get('lead')!.groupId = 'leads'
+  const { releases } = makeReleases(async groupId =>
+    groupId === 'leads' ? groupDef({ id: 'leads', canReleaseMembers: false }) : undefined)
+  await expect(releaseHandlers(releases, 'lead').release_member({ session_id: 'dev' })).rejects.toThrow('opted out of releasing members')
+  records.get('lead')!.groupId = 'devs'
+  records.get('dev')!.spawned = false
+  await expect(releaseHandlers(releases, 'lead').release_member({ session_id: 'dev' })).rejects.toThrow('Only spawned members can be released')
+  records.get('dev')!.spawned = true
+  await expect(releaseHandlers(releases, 'lead').release_member({ session_id: 'dev' })).resolves.toMatchObject({ sessionId: 'dev' })
+  await expect(releaseHandlers(releases, 'lead').release_member({ session_id: 'nope' })).rejects.toThrow('archived or unknown')
+})
