@@ -41,6 +41,7 @@ import { MailboxConnections } from '../team/mailboxConnections'
 import { TaskConnections } from '../team/taskConnections'
 import { MessageConnections } from '../team/messageConnections'
 import { StrategyConnections } from '../strategy/strategyConnections'
+import { WorkspaceConnections } from '../team/workspaceConnections'
 import type { TeamMessage } from '../../shared/team'
 
 /** Frames per debug page reply. */
@@ -80,6 +81,7 @@ export class ChatConnections {
   private readonly taskConnections: TaskConnections
   private readonly messageConnections: MessageConnections
   private readonly strategyConnections: StrategyConnections
+  private readonly workspaceConnections: WorkspaceConnections
 
   constructor(
     private readonly manager: ChatSessionManager,
@@ -90,11 +92,22 @@ export class ChatConnections {
     this.taskConnections = new TaskConnections(manager)
     this.messageConnections = new MessageConnections(manager)
     this.strategyConnections = new StrategyConnections(manager)
+    this.workspaceConnections = new WorkspaceConnections(manager)
   }
 
-  /** A committed task change: re-send that team's task snapshots. */
+  /**
+   * A committed task change: re-send that team's task snapshots. The
+   * workspace read model derives its rows from tasks and mail, so it rides
+   * the same triggers (its own diff keeps an unchanged team quiet).
+   */
   publishTasks(teamId: string): void {
     this.taskConnections.publish(teamId)
+    this.workspaceConnections.publish(teamId)
+  }
+
+  /** A live workspace fact changed outside the task and mailbox paths. */
+  publishWorkspace(teamId: string): void {
+    this.workspaceConnections.publish(teamId)
   }
 
   /** A committed strategy change: re-send that team's strategy snapshots. */
@@ -109,6 +122,7 @@ export class ChatConnections {
     this.taskConnections.disconnect(connection)
     this.messageConnections.disconnect(connection)
     this.strategyConnections.disconnect(connection)
+    this.workspaceConnections.disconnect(connection)
     this.subscriptions.delete(connection)
     this.batches.delete(connection)
     this.activityBatches.delete(connection)
@@ -136,6 +150,8 @@ export class ChatConnections {
     this.mailboxConnections.publish(teamId)
     // Task detail lists its mail; a task message changing state changes it.
     if (message?.taskId) this.taskConnections.publish(teamId)
+    // The workspace reads mail state and waiting reasons; see publishTasks.
+    this.workspaceConnections.publish(teamId)
     if (message?.state === 'dead' && message.reason === 'hop-limit') {
       this.notice(teamId, { type: 'team-mailbox-dead-letter', teamId, messageId: message.id, senderSession: message.fromSession })
     }
@@ -489,6 +505,7 @@ export class ChatConnections {
       return this.messageConnections.handle(connection, message as Extract<ClientMessage, { type: `team-message${string}` | `team-thread${string}` }>)
     }
     if (message.type.startsWith('strategy-')) return this.strategyConnections.handle(connection, message as Extract<ClientMessage, { type: `strategy-${string}` }>)
+    if (message.type.startsWith('team-workspace-')) return this.workspaceConnections.handle(connection, message as Extract<ClientMessage, { type: `team-workspace-${string}` }>)
     if (!message.type.startsWith('chat-') || !('sessionId' in message)) return
     const { sessionId } = message
     if (!this.manager.has(sessionId)) {
@@ -626,5 +643,5 @@ function opensSubscription(type: ClientMessage['type']): boolean {
   return type === 'chat-attach' || type === 'chat-debug-open' ||
     type === 'team-mailbox-open' || type === 'team-tasks-open' || type === 'team-task-open' ||
     type === 'team-messages-open' || type === 'team-thread-open' ||
-    type === 'strategy-open'
+    type === 'strategy-open' || type === 'team-workspace-open'
 }

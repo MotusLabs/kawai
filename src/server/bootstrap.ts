@@ -142,7 +142,16 @@ export function startServer(): void {
   const chatSessionManager = new ChatSessionManager({
     registry,
     db,
-    onEvent: (sessionId, event) => chatConnections.publish(sessionId, event),
+    onEvent: (sessionId, event) => {
+      chatConnections.publish(sessionId, event)
+      // The workspace's attention queue and summary read pending requests and
+      // turn ends live (team-workspace): those events are their trigger.
+      if (event.type === 'approval_request' || event.type === 'question_request' ||
+        event.type === 'request_resolved' || event.type === 'turn_completed') {
+        const teamId = chatSessionManager.teams.teamOf(sessionId)?.teamId
+        if (teamId) chatConnections.publishWorkspace(teamId)
+      }
+    },
     onMailboxChange: (teamId, message) => chatConnections.publishMailbox(teamId, message),
     onWaitingReasonsChange: teamId => chatConnections.publishMailbox(teamId),
     onRoutingRulesLoaded: () => chatConnections.publishRoutingRules(),
