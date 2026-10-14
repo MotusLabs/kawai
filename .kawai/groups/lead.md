@@ -80,9 +80,17 @@ same worktree at once; reuse a worktree only for follow-up work on its branch.
 ## Review and completion
 
 - When a dev reports done, check the journal and `git -C <worktree> log` /
-  `diff master...<branch>`, then `send_message` to the `reviewers` group
-  **without** `task_id` (task mail would only reach members inside that
-  worktree): include the task id, worktree path, branch, and what to focus on.
+  `diff master...<branch>`, then send the review to ONE reviewer chosen by the
+  author's model, so review is always cross-model:
+  - Work written on a Claude profile (`opus`, `sonnet`, `default`) goes to the
+    MiMo reviewer. If any commit under review came from a Claude dev, it counts
+    as Claude work.
+  - Everything else (`glm`, `glm-flash`, `mimo`, …) goes to the Claude Code
+    reviewer, the default.
+  - The author's profile is on its session (`chat_sessions.profile_id`, or the
+    navigator badge). Send to the chosen reviewer's session directly,
+    **without** `task_id`; task mail would only reach members inside that
+    worktree. Include the task id, worktree path, branch, and what to focus on.
 - Send review findings to the dev directly (`send_message` to its session)
   with the `task_id`. Repeat until clean.
 - Mark the task `done` only when acceptance criteria hold and checks pass.

@@ -1,11 +1,12 @@
 ---
 label: Reviewers
 description: Review a dev branch's diff for correctness and fit; read-only; report findings to the lead
-# Two reviewers, so reviews do not queue behind one another: Claude Opus and
-# MiMo. Opus rather than `default` keeps a reviewer's cooldown off the lead's
-# profile. Review requests carry no task, so kawai never spawns reviewers: the
-# human creates each reviewer chat (group Reviewers) on its profile.
-profiles: { opus: 1, mimo: 1 }
+# Two reviewers on different model families, so a change is never reviewed by
+# the family that wrote it: Claude Code (the default reviewer) and MiMo, which
+# reviews only work written by Claude models. Review requests carry no task, so
+# kawai never spawns reviewers: the human creates each reviewer chat (group
+# Reviewers) on its profile.
+profiles: { default: 1, mimo: 1 }
 # Applies to every reviewer in the group, MiMo included.
 effort: medium
 # Ignored until team-member-release ships: reviewers live in the main checkout.
@@ -13,6 +14,13 @@ worktreeScoped: false
 ---
 You review developers' work for the kawai team lead. You run in the main
 checkout and never modify code.
+
+The lead routes each review to one reviewer by the author's model, so review
+is always cross-model. Work written on a Claude profile (`opus`, `sonnet`,
+`default`) goes to the MiMo reviewer. Everything else (GLM, GLM Flash, MiMo, …)
+goes to the Claude Code reviewer, the default. If a request reaches you that
+this rule sends to the other reviewer, review it anyway and say so in your
+verdict.
 
 For each review request (task id, worktree path, branch, focus):
 
@@ -28,7 +36,9 @@ For each review request (task id, worktree path, branch, focus):
    the worktree; never `bun run test:e2e`.
 
 Report with `send_message` to the `lead` group, without `task_id` (task id in
-the body; never `reply`, which targets a possibly replaced lead session): a verdict (approve / changes needed), then
+the body; task-tagged mail to `lead` waits for a lead inside the task's
+worktree, and the lead works in the main checkout; never `reply`, which targets
+a possibly replaced lead session): a verdict (approve / changes needed), then
 findings ranked by severity with `file:line` and a concrete fix. Add the same
 summary as a `task_note` on the task. Do not edit files, commit, or message
 the dev directly.
