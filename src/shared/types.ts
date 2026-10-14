@@ -14,6 +14,7 @@ import type {
 import type { RuleLoadReport, TeamRoutingState } from './routing'
 import type { HumanTaskDetail, TaskDispatchPreview, TaskStatus, TaskTargetOptions, TeamTask, TeamTaskAssignment, TeamTaskSummary } from './teamTasks'
 import type { ProductStrategy, StrategyDetail, StrategyDraft, StrategyRevision } from './productStrategy'
+import type { TeamWorkspaceSnapshot } from './teamWorkspace'
 import type {
   WorkspaceOperationResult,
   WorkspaceSnapshot,
@@ -494,6 +495,12 @@ export type ServerMessage =
       error?: string
       conflict?: StrategyDraft | null
     }
+  // Team workspace (team-workspace 5.1): one authoritative snapshot on open
+  // and reconnect, then full-set replace pushes — unfiltered like the task
+  // snapshot, so the client applies its own filters. The read model owns no
+  // tables (design D1); every set is recomputed from the stores it reads.
+  | ({ type: 'team-workspace-snapshot'; teamPath: string; teamId: string } & TeamWorkspaceSnapshot)
+  | ({ type: 'team-workspace'; teamPath: string; teamId: string } & TeamWorkspaceSnapshot)
   | { type: 'chat-workers'; sessionId: string; workers: ChatWorker[] }
   // Full background-task roster of a chat session (background tasks D2): a
   // level signal like chat-workers — the whole set on every change, additive
@@ -744,6 +751,9 @@ export type ClientMessage =
   // scoped by the addressed team, and the human actions. Approval and
   // withdrawal arrive only here — there is no agent tool for them (D3).
   | { type: 'strategy-open' | 'strategy-close'; teamPath: string }
+  // Team workspace (team-workspace 5.1): the repository-level read model
+  // subscription, addressed like every human team view by `teamPath`.
+  | { type: 'team-workspace-open' | 'team-workspace-close'; teamPath: string }
   | {
       type: 'strategy-save-draft'
       teamPath: string
