@@ -38,7 +38,7 @@ The workspace renders **Product Strategy** as a top band (compact summary of the
 | 2 | In review / Ready for QA / Fixes requested | `task-results-handoffs` D3 | an outstanding `team_task_assignments` row with `handoff_kind` `review`/`qa`/`fix` set, plus `result_id` and `expected_response`; its standing is that assignment's own task-assignment D5 state, not a separate entity |
 | 3 | Awaiting acceptance | `task-results-handoffs` D1/D5 | the **outstanding result** (newest row nothing supersedes) with `accepted_by_kind`/`accepted_by_session`/`accepted_at` all NULL |
 | 4 | Implementing | `task-assignment` D5 | outstanding assignment state `claimed`/`delivered`/`parked`/`forwarded`/`uncertain` |
-| 5 | Unstarted | `task-assignment` D5 | otherwise: no outstanding assignment, or one whose derived state is `queued`/`failed`/`superseded` |
+| 5 | Unstarted | `task-assignment` D1/D5 | otherwise: no outstanding assignment, or one whose derived state is `queued` (failed and superseded assignments are never outstanding — D1) |
 
 Badges render beside the stage and are never stages themselves: **Needs re-evaluation** (`task-results-handoffs` D6, derived at read: `result.task_revision < team_tasks.revision` — never stored) and **Awaiting acknowledgement** (`task-revision-publication` D5: outstanding claimant's `acknowledged revision < task.revision`; notice state (Not notified / Queued / Delivered / Failed / Uncertain) is derived per holder per revision, and "Delivered rev 2 · Acknowledged rev 1" is a normal display).
 
