@@ -1,5 +1,6 @@
-// docsOnlyStaged.test.ts - pre-commit docs-only gate. Staged renames must not
-// hide a source-path side: git's rename detection reports only the
+// docsOnlyChanges.test.ts - docs-only gate for the pre-commit hook (staged
+// index) and CI (a PR's commit range). Renames must not hide a source-path
+// side: git's rename detection reports only the
 // destination, so `git mv src/runtime.ts docs/runtime.txt` would otherwise be
 // classified as a docs-only commit and skip the unit suite while removing
 // runtime code.
@@ -10,7 +11,7 @@ import path from 'node:path'
 import { cleanGitEnv, runGit } from '../git/gitCommand'
 
 const repoRoot = path.resolve(import.meta.dir, '../../..')
-const classifier = path.join(repoRoot, 'scripts/docs-only-staged.sh')
+const classifier = path.join(repoRoot, 'scripts/docs-only-changes.sh')
 
 let tempRoot: string
 let repo: string
@@ -23,9 +24,9 @@ function git(...args: string[]) {
   return result.stdout
 }
 
-function isDocsOnly() {
+function classify(...args: string[]) {
   const proc = Bun.spawnSync({
-    cmd: [classifier],
+    cmd: [classifier, ...args],
     cwd: repo,
     // Scrub the git hook exports (GIT_DIR/GIT_INDEX_FILE/…): without this,
     // a run under the pre-commit hook classifies the real commit's index
@@ -34,7 +35,16 @@ function isDocsOnly() {
     stdout: 'pipe',
     stderr: 'pipe',
   })
-  return proc.exitCode === 0
+  return proc.exitCode
+}
+
+function isDocsOnly() {
+  return classify() === 0
+}
+
+function commit(message: string) {
+  git('add', '-A')
+  git('-c', 'user.name=test', '-c', 'user.email=test@example.com', 'commit', '-m', message)
 }
 
 function write(relativePath: string, contents: string) {
@@ -58,7 +68,7 @@ afterEach(() => {
   fs.rmSync(tempRoot, { recursive: true, force: true })
 })
 
-describe('docs-only-staged', () => {
+describe('docs-only-changes', () => {
   test('markdown-only changes are docs-only', () => {
     write('openspec/changes/demo/proposal.md', '# proposal\n')
     write('docs/guide.md', '# guide\n')
@@ -166,5 +176,46 @@ describe('docs-only-staged', () => {
     } finally {
       fs.rmSync(foreignRoot, { recursive: true, force: true })
     }
+  })
+})
+
+describe('docs-only-changes with a commit range', () => {
+  beforeEach(() => {
+    git('checkout', '-b', 'feature')
+  })
+
+  test('a range of docs-only commits is docs-only', () => {
+    write('openspec/changes/demo/proposal.md', '# proposal\n')
+    commit('docs: proposal')
+    write('docs/guide.md', '# guide\n')
+    commit('docs: guide')
+    expect(classify('main...HEAD')).toBe(0)
+  })
+
+  test('one source commit in the range is not docs-only', () => {
+    write('docs/guide.md', '# guide\n')
+    commit('docs: guide')
+    write('src/extra.ts', 'export const extra = 1\n')
+    commit('feat: extra')
+    expect(classify('main...HEAD')).toBe(1)
+  })
+
+  test('a source-to-docs rename in the range is not docs-only', () => {
+    fs.mkdirSync(path.join(repo, 'docs'))
+    git('mv', 'src/runtime.ts', 'docs/runtime.txt')
+    commit('move runtime')
+    expect(classify('main...HEAD')).toBe(1)
+  })
+
+  test('the staged index is ignored in range mode', () => {
+    write('docs/guide.md', '# guide\n')
+    commit('docs: guide')
+    write('src/staged.ts', 'export const staged = 1\n')
+    git('add', 'src/staged.ts')
+    expect(classify('main...HEAD')).toBe(0)
+  })
+
+  test('an unknown range fails instead of reading as docs-only', () => {
+    expect(classify('0000000000000000000000000000000000000000...HEAD')).toBe(2)
   })
 })
