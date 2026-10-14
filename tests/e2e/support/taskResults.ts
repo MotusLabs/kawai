@@ -47,8 +47,22 @@ export async function say(page: Page, session: string, text: string) {
   await page.getByRole('button', { name: 'Send', exact: true }).click()
 }
 
-export async function openTasks(page: Page) {
-  await page.getByRole('button', { name: 'Tasks', exact: true }).click()
+/** Open the Team page on a tab (team-workspace-pages 4.1): the chat header's Team button when a chat shows, else the navigator's Team entry. */
+export async function openTeamView(page: Page, tab: 'tasks' | 'mailbox' | 'messages' | 'strategy', teamKey?: string) {
+  const button = page.getByTestId('chat-team-button')
+  if (await button.isVisible().catch(() => false)) await button.click()
+  else {
+    const entry = teamKey
+      ? page.locator(`[data-testid="team-entry"][data-team-key="${teamKey}"]`)
+      : page.getByTestId('team-entry').first()
+    await entry.click()
+  }
+  await page.getByTestId(`team-tab-${tab}`).click()
+  await expect(page.getByTestId('team-workspace')).toBeVisible()
+}
+
+export async function openTasks(page: Page, teamKey?: string) {
+  await openTeamView(page, 'tasks', teamKey)
   await expect(page.getByTestId('team-tasks')).toBeVisible()
 }
 
@@ -74,11 +88,14 @@ export async function createTask(page: Page, input: { title: string; direction: 
   await expect(page.getByTestId('task-detail')).toContainText(input.title, { timeout: 15_000 })
 }
 
-/** Reopen the Tasks panel (a fresh list snapshot) and a task's detail, by id (`task-…`) or title. */
+/** Reopen the Tasks view (a fresh list snapshot) and a task's detail, by id (`task-…`) or title. */
 export async function reopenTask(page: Page, key: string) {
   const panel = page.getByTestId('team-tasks')
-  if (await panel.isVisible().catch(() => false)) await page.getByRole('button', { name: 'Tasks', exact: true }).click()
-  await openTasks(page)
+  if (!(await panel.isVisible().catch(() => false))) await openTasks(page)
+  else {
+    const back = panel.getByRole('button', { name: 'All tasks' })
+    if (await back.isVisible().catch(() => false)) await back.click()
+  }
   const row = key.startsWith('task-') ? panel.locator(`[data-task-id="${key}"]`) : panel.locator('[data-task-id]').filter({ hasText: key })
   await row.first().locator('button').first().click()
   if (key.startsWith('task-')) await expect(page.getByTestId('task-detail')).toHaveAttribute('data-task-id', key)

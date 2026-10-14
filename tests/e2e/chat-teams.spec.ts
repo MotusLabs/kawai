@@ -12,7 +12,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { killChat } from './support/chatHeader'
-import { createChat as createResultsChat, createTask, openTasks, openTaskId, reopenTask, resultsTeam, say, seedResult, spawnedSession } from './support/taskResults'
+import { createChat as createResultsChat, createTask, openTeamView, openTasks, openTaskId, reopenTask, resultsTeam, say, seedResult, spawnedSession } from './support/taskResults'
 
 test.skip(process.env.AGENTBOARD_CHAT_FIXTURE !== '1', 'Requires development chat fixture')
 
@@ -69,8 +69,11 @@ test('group picker, badge, peer replay and mailbox controls', async ({ page }, i
     await page.reload()
     await expect(peer).toHaveCount(1)
     await expect(peer).toContainText('Browser peer greeting')
-    await page.getByRole('button', { name: 'Mailbox', exact: true }).click()
+    await openTeamView(page, 'mailbox')
     const panel = page.getByTestId('team-mailbox')
+    // Queued, Dead letters, and Held for review start expanded; Scheduled
+    // sits collapsed behind its count until expanded.
+    await panel.getByTestId('mailbox-section-toggle-Scheduled').click()
     for (const text of ['Queued browser mail', 'Scheduled browser mail', 'Dead browser mail', 'Held browser mail']) await expect(panel).toContainText(text)
     await page.screenshot({ path: info.outputPath('team-mailbox.png') })
     await panel.locator(`[data-message-id="${seeded.queued}"]`).getByRole('button', { name: 'Cancel' }).click()
@@ -81,8 +84,11 @@ test('group picker, badge, peer replay and mailbox controls', async ({ page }, i
     // The SDK-free fixture writes no CLI transcript: even after retry, the
     // unconfirmed receipt stays visible for review instead of vanishing.
     await expect(page.locator('[data-chat-role="peer"]').filter({ hasText: 'Held browser mail' })).toContainText('Possible duplicate')
+    await panel.locator(`[data-message-id="${seeded.held}"]`).getByTestId('mailbox-row-toggle').click()
     await expect(panel.locator(`[data-message-id="${seeded.held}"]`)).toContainText('receipt-unconfirmed-after-delivery')
-    await page.getByRole('button', { name: 'Close mailbox' }).click()
+    // Back to the chat through its navigator row (there is no close button
+    // on the Team page; the selection leaves the route).
+    await page.locator(`[data-session-id="${dev}"]`).click()
     await expect(page.locator('[data-chat-role="peer"]').filter({ hasText: 'Held browser mail' })).toContainText('Possible duplicate')
     await page.screenshot({ path: info.outputPath('team-peer-retry.png') })
     // Clearing a member still works after its group file is removed.
@@ -136,9 +142,12 @@ test('waiting reasons: starting agent, expandable blockers, dead-letter labels, 
     // A fixture turn ends and wakes dispatch: the queued row gets its reason.
     await page.getByLabel('Message Claude').fill('hello')
     await page.getByRole('button', { name: 'Send', exact: true }).click()
-    await page.getByRole('button', { name: 'Mailbox', exact: true }).click()
+    await openTeamView(page, 'mailbox')
     const panel = page.getByTestId('team-mailbox')
+    // Starting agent starts collapsed behind its count; expand it and the row.
+    await panel.getByTestId('mailbox-section-toggle-Starting agent').click()
     const startingRow = panel.locator(`[data-message-id="${seeded.starting}"]`)
+    await startingRow.getByTestId('mailbox-row-toggle').click()
     // Starting agent: the section, the reservation's facts, the elapsed time.
     const section = panel.locator('section[aria-label="Starting agent"]')
     await expect(section).toContainText('Seeded')
@@ -154,20 +163,24 @@ test('waiting reasons: starting agent, expandable blockers, dead-letter labels, 
     await expect(expander).toContainText('held by a pending spawn')
     // A dead letter reads as a sentence with the code still visible.
     const deadRow = panel.locator(`[data-message-id="${seeded.dead}"]`)
+    await deadRow.getByTestId('mailbox-row-toggle').click()
     await expect(deadRow.getByTestId('dead-letter-reason')).toContainText('The target worktree is missing')
     await expect(deadRow.getByTestId('dead-letter-reason')).toContainText('(worktree-missing:')
     // The queued row is blocked on the missing group definition.
+    await panel.getByTestId('mailbox-section-toggle-Queued').click()
     const queuedRow = panel.locator(`[data-message-id="${seeded.queued}"]`)
+    await queuedRow.getByTestId('mailbox-row-toggle').click()
     await expect(queuedRow.getByTestId('waiting-reason')).toContainText('The group definition is missing', { timeout: 15000 })
     await page.screenshot({ path: info.outputPath('team-waiting-reasons.png') })
     // Slot-free update: the group definition appears; the reason flips with
     // no row state change (a reason-only re-publish).
     writeFileSync(join(root, '.kawai/groups/unstaffed.md'), '---\nlabel: Unstaffed\n---\nWork.')
-    await page.getByRole('button', { name: 'Close mailbox', exact: true }).click()
+    // Back to the lead's chat for the fixture turn that wakes dispatch.
+    await page.locator(`[data-session-id="${lead}"]`).click()
     await page.getByLabel('Message Claude').fill('hello again')
     await page.getByRole('button', { name: 'Send', exact: true }).click()
-    await page.getByRole('button', { name: 'Mailbox', exact: true }).click()
-    await expect(panel.locator(`[data-message-id="${seeded.queued}"]`).getByTestId('waiting-reason')).toContainText('No eligible member', { timeout: 15000 })
+    await openTeamView(page, 'mailbox')
+    await expect(page.getByTestId('team-mailbox').locator(`[data-message-id="${seeded.queued}"]`).getByTestId('waiting-reason')).toContainText('No eligible member', { timeout: 15000 })
     await page.screenshot({ path: info.outputPath('team-waiting-updated.png') })
   } finally { rmSync(root, { recursive: true, force: true }) }
 })
@@ -206,8 +219,9 @@ test('E07: a result, a review queued behind the developer, and release and hand 
     await form.getByTestId('task-handoff-send').click()
     await expect(page.getByTestId('task-outstanding-assignment')).toContainText('group reviewers')
     await expect(form).toHaveCount(0)
-    await page.getByRole('button', { name: 'Mailbox', exact: true }).click()
+    await page.getByTestId('team-tab-mailbox').click()
     const review = page.getByTestId('team-mailbox').locator('article').filter({ hasText: 'Review the export' })
+    await review.getByTestId('mailbox-row-toggle').click()
     await expect(review.getByTestId('waiting-reason')).toContainText('is held by', { timeout: 15_000 })
 
     // Release and hand off: the developer is archived; the queued review is the one that proceeds.
@@ -307,8 +321,7 @@ test('E10: a contributor result stays open; amendment flags it; children never c
     await detail.getByRole('button', { name: 'Mark done', exact: true }).click()
     await expect(detail.getByTestId('task-detail-status')).toHaveText('done')
     await createTask(page, { title: 'Docs', direction: 'Document it', parent: 'Report' })
-    await page.getByRole('button', { name: 'Tasks', exact: true }).click()
-    await openTasks(page)
+    await page.getByTestId('team-tasks').getByRole('button', { name: 'All tasks' }).click()
     await expect(page.getByTestId('team-tasks').locator('[data-task-id]').filter({ hasText: 'Report' }).getByTestId('task-result-badge')).toHaveAttribute('data-state', 'flagged')
     await reopenTask(page, 'Report')
     await expect(detail.getByTestId('task-detail-status')).toHaveText('open')

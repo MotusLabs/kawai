@@ -193,24 +193,24 @@ test('the Tasks tab mounts the view, follows the URL selection, and notices a mi
   useSessionStore.setState({ sessions: [chatAt('/repo'), chatAt('/repo')], hasLoaded: true })
   const workspace = { open: true, loading: false, tasks: [], selectedTaskId: null, detail: null, directory: [],
     pending: {}, error: null, draft: { title: '', direction: '', acceptance: '', parentId: '', worktree: '', openspecChange: '', targetKind: '', targetId: '', instruction: '' },
-    flow: null, preview: null, previewPending: {}, targets: null, targetsLoading: false, commands: {}, commandRequests: {} } as never
-  act(() => { useTeamTaskStore.setState({ views: { '/repo': workspace } }) })
+    flow: null, preview: null, previewPending: {}, targets: null, targetsLoading: false, commands: {}, commandRequests: {} } as unknown as Record<string, unknown>
+  act(() => { useTeamTaskStore.setState({ views: { '/repo': workspace as never } }) })
   const taskSummary = {
     id: 't-1', teamId: 'team', title: 'Export', status: 'open', creator: { kind: 'human', sessionId: null },
     parentId: null, worktree: null, openspecChange: null, revision: 1, direction: 'Build it', acceptance: null,
     createdAt: '2026-10-11T00:00:00.000Z', updatedAt: '2026-10-11T00:00:00.000Z', participants: [], assignment: null,
   }
-  const selected = { ...workspace, tasks: [taskSummary], selectedTaskId: 't-1' } as never
+  const selected: Record<string, unknown> = { ...workspace, tasks: [taskSummary], selectedTaskId: 't-1' }
   const { renderer, update } = mountPage({ teamKey: '/repo', tab: 'tasks' })
   expect(find(renderer, 'team-tasks')).toHaveLength(1)
   // The URL names a task the team has: it is selected.
   act(() => { useTeamLocationStore.getState().navigate({ teamKey: '/repo', tab: 'tasks', id: 't-1' }) })
-  act(() => { useTeamTaskStore.setState({ views: { '/repo': selected } }) })
+  act(() => { useTeamTaskStore.setState({ views: { '/repo': selected as never } }) })
   update()
   expect(useTeamTaskStore.getState().views['/repo']?.selectedTaskId).toBe('t-1')
   // A URL naming a task the team does not have opens the list with a notice.
   act(() => { useTeamLocationStore.getState().navigate({ teamKey: '/repo', tab: 'tasks', id: 'gone-task' }) })
-  act(() => { useTeamTaskStore.setState({ views: { '/repo': { ...selected, loading: false } } }) })
+  act(() => { useTeamTaskStore.setState({ views: { '/repo': { ...selected, loading: false } as never } }) })
   update()
   expect(useTeamTaskStore.getState().views['/repo']?.selectedTaskId).toBeNull()
   expect(textOf(renderer.root.findByProps({ 'data-testid': 'team-workspace-notice' }))).toContain('Task gone-task was not found')

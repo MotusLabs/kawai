@@ -181,6 +181,22 @@ test('a terminal-only repository opens its Team page; view state survives a chat
     await expect(page.getByTestId('team-tab-body-mailbox')).toBeVisible()
     await expect(page.getByTestId('team-mailbox').getByLabel('Search mailbox')).toHaveValue('')
     await page.screenshot({ path: info.outputPath('team-page-reloaded.png') })
+
+    // The selected task rides the URL too (5.5): create one, let its detail
+    // open, and a reload restores the same selection.
+    await page.getByTestId('team-tab-tasks').click()
+    const tasks = page.getByTestId('team-tasks')
+    await tasks.locator('summary', { hasText: 'New task' }).click()
+    await tasks.getByLabel('Task title').fill('Team page probe')
+    await tasks.getByLabel('Task direction').fill('Check the URL selection')
+    await tasks.getByTestId('task-create-button').click()
+    const detail = page.getByTestId('task-detail')
+    await expect(detail).toContainText('Team page probe', { timeout: 15_000 })
+    const taskId = (await detail.getAttribute('data-task-id'))!
+    await page.reload()
+    await expect(page.getByTestId('team-workspace')).toBeVisible()
+    await expect(page.getByTestId('task-detail')).toHaveAttribute('data-task-id', taskId)
+    await page.screenshot({ path: info.outputPath('team-page-task-restored.png') })
   } catch (error) {
     throw new Error(`${error instanceof Error ? error.message : String(error)}\n--- server ---\n${isolated.diagnostics()}`)
   } finally {
