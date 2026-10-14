@@ -2,9 +2,10 @@
 // 5.5): a search over title and current direction with marked matches — a
 // matching subtask keeps its ancestors so the tree stays connected — a
 // collapsible parent/subtask tree, the New task form (searchable worktree
-// and OpenSpec-change pickers, an optional assignment with dispatch preview,
-// **Create task** / **Create and assign** armed with one stable client
-// request key whose draft lives in the store), and rows with status,
+// and OpenSpec-change pickers, plan and plan-change pickers listing only
+// open plans' approved changes (durable-plans D9), an optional assignment
+// with dispatch preview, **Create task** / **Create and assign** armed with
+// one stable client request key whose draft lives in the store), and rows with status,
 // creator, participants, the assignment target and state, and the result
 // badge (task-results-handoffs). Rows come from authoritative server
 // snapshots; actions disable while disconnected and refusals show inline.
@@ -195,6 +196,7 @@ export default function TeamTasksView({ teamPath, projectPath, view, sendMessage
       title: draft.title.trim(), direction: draft.direction.trim(),
       acceptance: draft.acceptance.trim() || null, parentId: draft.parentId || null,
       worktree: draft.worktree.trim() || null, openspecChange: draft.openspecChange.trim() || null,
+      planId: draft.planId || null, planChange: draft.planId ? draft.planChange || null : null,
     }
     const changed = flow?.sentCreatePayload &&
       JSON.stringify(flow.sentCreatePayload) !== JSON.stringify(payload)
@@ -212,6 +214,7 @@ export default function TeamTasksView({ teamPath, projectPath, view, sendMessage
       ...(draft.parentId ? { parentId: draft.parentId } : {}),
       ...(draft.worktree.trim() ? { worktree: draft.worktree.trim() } : {}),
       ...(draft.openspecChange.trim() ? { openspecChange: draft.openspecChange.trim() } : {}),
+      ...(payload.planId ? { planId: payload.planId, ...(payload.planChange ? { planChange: payload.planChange } : {}) } : {}),
     })
   }
   // The dispatch leg of an armed create-and-assign flow: sent as soon as the
@@ -233,6 +236,8 @@ export default function TeamTasksView({ teamPath, projectPath, view, sendMessage
     useTeamTaskStore.getState().retryAssign(teamPath)
   }
   const targetReady = draft.targetKind !== '' && draft.targetId !== ''
+  // A plan link names both halves; a chosen plan waits for its change.
+  const planIncomplete = draft.planId !== '' && draft.planChange === ''
   const createCommitted = flow?.taskId != null
   return <div data-testid="team-tasks" className="flex h-full min-h-0 flex-col">
     {!connected && <p role="status" className="p-3 text-secondary">Disconnected — reconnect to update tasks.</p>}
@@ -276,6 +281,17 @@ export default function TeamTasksView({ teamPath, projectPath, view, sendMessage
               options={(view.targets?.changes ?? []).map(change => ({
                 value: change.name, label: change.name, hint: change.locations.join(' and '),
               }))} />
+            {/* Plan link (durable-plans D9): only open plans' approved changes are offered. */}
+            <select className="input" aria-label="Plan" data-testid="task-plan-picker" value={draft.planId}
+              disabled={!connected} onFocus={requestTargets} onChange={event => setDraft({ planId: event.target.value, planChange: '' })}>
+              <option value="">No plan</option>
+              {(view.targets?.plans ?? []).map(plan => <option key={plan.id} value={plan.id}>{plan.title} (revision {plan.revision})</option>)}
+            </select>
+            {draft.planId && <select className="input" aria-label="Plan change" data-testid="task-plan-change-picker" value={draft.planChange}
+              disabled={!connected} onChange={event => setDraft({ planChange: event.target.value })}>
+              <option value="">Choose a change of the plan</option>
+              {(view.targets?.plans?.find(plan => plan.id === draft.planId)?.changes ?? []).map(change => <option key={change} value={change}>{change}</option>)}
+            </select>}
             <fieldset className="flex flex-col gap-2 border-t border-border pt-2" data-testid="task-assign-section">
               <legend>Assignment (optional)</legend>
               <TaskTargetSelect testId="task-assign-target" kind={draft.targetKind} id={draft.targetId}
@@ -293,9 +309,9 @@ export default function TeamTasksView({ teamPath, projectPath, view, sendMessage
               ? <button type="button" className="btn btn-primary self-start" disabled={!connected || busy || !flow.assignFailed || !draft.instruction.trim()}
                 onClick={retryAssign} data-testid="task-retry-assign">Retry assignment</button>
               : <>
-                <button type="submit" className="btn self-start" disabled={!connected || busy || !draft.title.trim() || !draft.direction.trim()}
+                <button type="submit" className="btn self-start" disabled={!connected || busy || !draft.title.trim() || !draft.direction.trim() || planIncomplete}
                   data-testid="task-create-button">Create task</button>
-                <button type="button" className="btn btn-primary self-start" disabled={!connected || busy || !draft.title.trim() || !draft.direction.trim() || !targetReady || !draft.instruction.trim()}
+                <button type="button" className="btn btn-primary self-start" disabled={!connected || busy || !draft.title.trim() || !draft.direction.trim() || planIncomplete || !targetReady || !draft.instruction.trim()}
                   onClick={() => create(true)} data-testid="task-create-assign-button">Create and assign</button>
               </>}
           </form>

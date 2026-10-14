@@ -20,6 +20,7 @@ import { useStrategyStore } from './strategyStore'
 import { useTeamMailboxStore } from './teamMailboxStore'
 import { useTeamMessageStore } from './teamMessageStore'
 import { useTeamTaskStore } from './teamTaskStore'
+import { useTeamPlanStore } from './teamPlanStore'
 import { useTeamWorkspaceStore } from './teamWorkspaceStore'
 import { useWorkspaceStore } from './workspaceStore'
 
@@ -29,6 +30,7 @@ const viewKeys = () => new Set([
   ...Object.keys(useTeamMessageStore.getState().views),
   ...Object.keys(useStrategyStore.getState().views),
   ...Object.keys(useTeamWorkspaceStore.getState().views),
+  ...Object.keys(useTeamPlanStore.getState().views),
 ])
 
 /** Move every team view from a chat's old team key to its new one. */
@@ -47,6 +49,7 @@ function rekeyTeamViews(from: string, to: string) {
   if (location?.teamKey === from) {
     useTeamLocationStore.getState().navigate({ ...location, teamKey: to }, { replace: true })
   }
+  useTeamPlanStore.getState().rekey(from, to)
 }
 
 /** Move every team view whose key now maps elsewhere within its own team. */

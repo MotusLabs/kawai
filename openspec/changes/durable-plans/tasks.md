@@ -108,12 +108,12 @@ Implement after Wave B2 (`task-revision-publication`, `task-results-handoffs`) h
 
 ## 8. Client
 
-- [ ] 8.1 Add `teamPlanStore.ts` keyed by team key, with WS dispatch for every store method that applies server state (grep the join). Approve and close dialogs mint one command id per dialog, reuse it while the payload is unchanged, and re-mint after a payload change following a lost result. Verify with store tests:
+- [x] 8.1 Add `teamPlanStore.ts` keyed by team key, with WS dispatch for every store method that applies server state (grep the join). Approve and close dialogs mint one command id per dialog, reuse it while the payload is unchanged, and re-mint after a payload change following a lost result. Verify with store tests:
   - snapshot and detail application;
   - reconnect replacing state;
   - key reuse and re-mint;
   - a lost result never leaving `busy` set.
-- [ ] 8.2 Build `TeamPlansView.tsx` with `PlanIntentSection`, `PlanChangesSection`, `PlanPolicySection`, and `PlanRevisionsSection` per D12. The view shows:
+- [x] 8.2 Build `TeamPlansView.tsx` with `PlanIntentSection`, `PlanChangesSection`, `PlanPolicySection`, and `PlanRevisionsSection` per D12. The view shows:
   - list and detail;
   - the claimed alignment label, and Alignment unassessed;
   - progress, waits, and tasks outside the revision;
@@ -123,11 +123,11 @@ Implement after Wave B2 (`task-revision-publication`, `task-results-handoffs`) h
   - controls disabled while disconnected, and refusals inline.
 
   Verify with component tests for each of these states, keyboard focus and labels, and the mobile list/detail/back flow.
-- [ ] 8.3 Mount the view per D12's host rule (the Team page `plans` tab when `useTeamLocation` is on master, else a `plans` side-slot panel beside Strategy). Add plan and change pickers to the task form. Verify with tests:
+- [x] 8.3 Mount the view per D12's host rule (the Team page `plans` tab when `useTeamLocation` is on master, else a `plans` side-slot panel beside Strategy). Add plan and change pickers to the task form. Verify with tests:
   - the mount opens from the host;
   - the pickers list only approved changes;
   - creating a linked task sends `plan_id`/`plan_change`.
-- [ ] 8.4 Add the AGENTS.md Plans view bullet and the Structure entries for the new files. Verify by reading it against D12.
+- [x] 8.4 Add the AGENTS.md Plans view bullet and the Structure entries for the new files. Verify by reading it against D12.
 
 ## 9. Integration walkthrough
 
