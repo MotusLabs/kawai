@@ -325,9 +325,10 @@ export class MailboxStore {
    * One invariant holds for every caller (team-mailbox-management D2): parked
    * work always has a live resume, or is cancelled together with it.
    * - Parked: a `queued`/`awaiting-request` resume is cancelled with the work
-   *   in one transaction, so it can never be claimed afterwards. A `claimed`
-   *   or `delivered` resume means the resume turn is in flight: refused
-   *   (`resume-in-flight`), nothing changed. Work with no live resume is
+   *   in one transaction, so it can never be claimed afterwards. A `claimed`,
+   *   `delivered`, or `uncertain` (possibly delivered) resume means the resume
+   *   turn may be in flight: refused (`resume-in-flight`), nothing changed. A
+   *   `dead` resume is discarded with the work. Work with no resume is
    *   cancelled alone.
    * - A resume linked to parked work is refused (`linked-resume`) for every
    *   actor; kawai's own replacement goes through {@link replaceResume}.
@@ -339,7 +340,7 @@ export class MailboxStore {
       const changed: CancelResult = { ok: false, code: 'state-changed', state: before?.state ?? null }
       if (!before) return changed
       const resume = before.state === 'parked' && before.resumeMessageId ? this.get(before.resumeMessageId) : null
-      if (resume && ['claimed', 'delivered'].includes(resume.state)) {
+      if (resume && ['claimed', 'delivered', 'uncertain'].includes(resume.state)) {
         return { ok: false, code: 'resume-in-flight', holder: before.claimedBy, resumeId: resume.id }
       }
       const linked = ['queued', 'awaiting-request'].includes(before.state) ? this.parkedFor(id) : null
@@ -349,11 +350,7 @@ export class MailboxStore {
         ...this.actionReason(actor, 'cancelled', reason),
       }, 'cancelled', actor)
       if (!cancelled) return { ...changed, state: this.get(id)?.state ?? null }
-      if (resume && ['queued', 'awaiting-request'].includes(resume.state)) {
-        this.transition(resume.id, ['queued', 'awaiting-request'], {
-          state: 'cancelled', reason: `parked work ${id} cancelled`,
-        }, 'cancelled', actor)
-      }
+      if (resume) this.settleResume(resume, `parked work ${id} cancelled`, actor)
       return { ok: true }
     })()
   }
@@ -369,9 +366,24 @@ export class MailboxStore {
       if (!parked?.resumeMessageId) return
       const resumeId = parked.resumeMessageId
       this.cachedStatement('UPDATE team_messages SET resume_message_id = NULL WHERE id = $id').run({ $id: parkedId })
-      this.transition(resumeId, ['queued', 'awaiting-request'], { state: 'cancelled' }, 'cancelled')
+      const resume = this.get(resumeId)
+      if (resume) this.settleResume(resume, null, SYSTEM)
       this.changed(parkedId, true)
     })()
+  }
+
+  /**
+   * End a resume nobody has taken: a waiting one is cancelled, a dead one is
+   * discarded so a later human Retry cannot revive it for work that moved on.
+   * Claimed, delivered, and uncertain resumes may have run and are left alone.
+   */
+  private settleResume(resume: TeamMessage, reason: string | null, actor: StoreActor): void {
+    const set: Record<string, string> = reason ? { reason } : {}
+    if (['queued', 'awaiting-request'].includes(resume.state)) {
+      this.transition(resume.id, ['queued', 'awaiting-request'], { state: 'cancelled', ...set }, 'cancelled', actor)
+    } else if (resume.state === 'dead') {
+      this.transition(resume.id, ['dead'], { state: 'discarded', ...set }, 'discarded', actor)
+    }
   }
 
   /** `reason` column update for an agent's cancel or discard; humans write none. */

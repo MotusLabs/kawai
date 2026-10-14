@@ -118,6 +118,31 @@ describe('MailboxStore cancel and discard with actors (team-mailbox-management)'
     }
   })
 
+  test('an uncertain resume may have run: the cancel is refused; a dead resume is discarded with the work', () => {
+    const held = parked()
+    store.claim(held.resume.id, 'chat-dev'); store.holdUncertain(held.resume.id, 'torn')
+    expect(store.cancelResult(held.work.id, lead, 'x')).toMatchObject({ ok: false, code: 'resume-in-flight', resumeId: held.resume.id })
+    expect(store.get(held.work.id)?.state).toBe('parked')
+    expect(store.get(held.resume.id)?.state).toBe('uncertain')
+
+    const stale = parked()
+    store.deadLetter(stale.resume.id, 'killed-recipient')
+    expect(store.cancel(stale.work.id, lead, 'x')).toBe(true)
+    expect(store.get(stale.resume.id)).toMatchObject({ state: 'discarded', reason: `parked work ${stale.work.id} cancelled` })
+    expect(store.retry(stale.resume.id)).toBe(false)
+    expect(store.eventsFor(stale.resume.id).at(-1)).toMatchObject({ kind: 'discarded', actor: 'agent', actorSession: 'chat-lead' })
+  })
+
+  test('replaceResume discards a dead resume and leaves an uncertain one', () => {
+    const dead = parked(); store.deadLetter(dead.resume.id, 'killed-recipient')
+    store.replaceResume(dead.work.id)
+    expect(store.get(dead.resume.id)?.state).toBe('discarded')
+    const held = parked(); store.claim(held.resume.id, 'chat-dev'); store.holdUncertain(held.resume.id, 'torn')
+    store.replaceResume(held.work.id)
+    expect(store.get(held.resume.id)?.state).toBe('uncertain')
+    expect(store.get(held.work.id)?.resumeMessageId).toBeNull()
+  })
+
   test('work with a settled resume (rows from before this change) is cancelled alone', () => {
     const { work, resume } = parked()
     store.cancel(resume.id, { kind: 'human' }) // refused while linked, so settle it the legacy way
