@@ -205,7 +205,7 @@ The human sends `team-plan-approve { teamPath, planId, revision, contentHash, ex
    - `revision-in-review`: the revision exists and is `in_review`.
    - `hash-matches`: its `content_hash` equals the request's.
    - `approved-revision-unchanged`: `current_approved_revision` equals `expectedApprovedRevision`, or both are null.
-   - `strategy-pin-current`: the pin equals the team's current approved strategy revision and hash (both empty counts as equal), or `pinDisposition` returns a recorded disposition. In this change `pinDisposition` always returns null.
+   - `strategy-pin-current`: the pin equals the team's current approved `{strategyId, revision, hash}` as a whole (both empty counts as equal), or `pinDisposition` returns non-null, meaning a recorded disposition keeps this older pin. In this change `pinDisposition` always returns null.
 3. **Commit.** Mark the previously approved revision `superseded` and this one `approved`, set `current_approved_revision`, and insert the `approved` event carrying the command id and payload. If the write hits `plan_revisions_one_approved` (another approval committed first), the transaction rolls back and the request is refused as `approved-revision-unchanged`. The constraint error never reaches the client raw.
 
 Withdraw (`team-plan-withdraw { revision | draftId, commandId }`), close (`team-plan-close { outcome, reason, commandId }`), and reopen (`team-plan-reopen { commandId }`) follow the same replay rule. The compared payload per command, stored in `payload_json`:
@@ -286,10 +286,10 @@ The structural boundary is that no approve, withdraw, close, or reopen tool exis
 | --- | --- | --- |
 | C1 `PlanContent` | D2 template, normalization, `planStructureErrors`/`planSubmitErrors`, hashing | `plan-validation` (adds environment checks; artifact pins and relations stay in its report, D3), `plan-execution` (reads changes, dependencies, groups, checks, landing, roles), `integration-candidates` (landing mode and branch), `revision-control` (compares the revisions it publishes to running work) |
 | C2 Strategy pin | Per-revision `{strategyId, revision, hash}` or empty; `PlanStore.revisionsPinnedTo(strategyId)` and `openPlans(teamId)` reads | `strategy-revision-impact`, `plan-validation` (alignment), `revision-control` (the pin a published revision carries) |
-| C3 Lifecycle and `PlanService` | D8 stored and displayed states; `PlanService` as the only writer, with command ids and CAS | `plan-execution` (system completion in both landing modes, execution records keyed by plan and revision), `plan-supervision`, `strategy-revision-impact` (closed plans are historical), `execution-safety-recovery` (recovers executions against the stored lifecycle) |
+| C3 Lifecycle and `PlanService` | D8 stored and displayed states; `PlanService` as the only writer, with command ids and CAS | `plan-execution` (system completion in both landing modes, execution records keyed by plan and revision), `plan-supervision`, `strategy-revision-impact` (closed plans are historical; its pushes follow every committed plan write, D12), `execution-safety-recovery` (recovers executions against the stored lifecycle) |
 | C4 Approval preconditions | D7 ordered list and the `pinDisposition` lookup | `plan-validation` (`validation-current`), `strategy-revision-impact` (dispositions) |
 | C5 Plan-change link and progress | D9 columns and checks; D10 `planProgress` | `plan-execution` (creates linked tasks; owns landing facts in both modes, calling `integration-candidates` for `integration-branch`), `plan-supervision` |
-| C6 `plan_events` | Append-only kinds; later changes add kinds and never redefine shipped ones | all, in particular `revision-control` (publication events), `execution-safety-recovery` (audit), and `strategy-revision-impact` |
+| C6 `plan_events` | Append-only kinds; later changes add kinds and never redefine shipped ones | any later change that adds event kinds, in particular `revision-control` (publication events) and `execution-safety-recovery` (audit) |
 | C7 `PLAN_CHECK_FLOOR` | D4 names | `plan-execution`'s gate, `plan-supervision` |
 
 Each of the seven later changes binds to at least one named row, so none has to reopen this design to find its inputs.
