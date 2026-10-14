@@ -19,7 +19,7 @@ async function createChat(page: Page, root: string, name: string, group: string)
   const dialog = page.getByRole('dialog', { name: 'New Session' })
   await dialog.getByLabel('Project Path').fill(root)
   await dialog.getByLabel('Group').selectOption(group)
-  await dialog.locator('input').last().fill(name)
+  await dialog.getByLabel('Display Name').fill(name)
   await dialog.getByRole('button', { name: 'Create', exact: true }).click()
   await expect(page.getByTestId('chat-view')).toContainText(name)
 }

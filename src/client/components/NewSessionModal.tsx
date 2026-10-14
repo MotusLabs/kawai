@@ -740,6 +740,7 @@ export default function NewSessionModal({
               Display Name
             </label>
             <input
+              aria-label="Display Name"
               value={name}
               onChange={(event) => setName(event.target.value)}
               placeholder="auto-generated"

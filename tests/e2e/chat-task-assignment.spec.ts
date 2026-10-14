@@ -41,7 +41,7 @@ async function createChat(page: Page, root: string, name: string, group: string)
   await dialog.getByLabel('Project Path').fill(root)
   await expect(dialog.getByLabel('Group').locator('option', { hasText: 'Developers' })).toHaveCount(1)
   await dialog.getByLabel('Group').selectOption(group)
-  await dialog.locator('input').last().fill(name)
+  await dialog.getByLabel('Display Name').fill(name)
   await dialog.getByRole('button', { name: 'Create', exact: true }).click()
   await expect(page.getByTestId('chat-view')).toContainText(name)
   return (await page.locator('[data-session-id^="chat-"]').filter({ hasText: name }).first().getAttribute('data-session-id'))!
