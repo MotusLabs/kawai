@@ -111,3 +111,51 @@ test('task_submit_result binds the calling session and round-trips; it registers
   const { TEAM_ALLOWED_TOOLS } = await import('../team/mailboxTools')
   expect(TEAM_ALLOWED_TOOLS).toContain('mcp__kawai-team__task_submit_result')
 })
+
+// Findings (4.1/4.2, D4): bound to the examined result, never inherited.
+test('findings attach to the named result with author and verdict; a newer result has none until its own are submitted', async () => {
+  const task = await tasks.create(agent('lead'), { title: 'Export', direction: 'v1' })
+  const first = await results.submit(agent('dev'), task.id, submission)
+  const reviewer = taskHandlers(tasks, 'reviewer', results)
+  const findings = await reviewer.task_submit_findings!({ task_id: task.id, result_id: first.id, kind: 'review', verdict: 'fail', findings: 'Header row missing' })
+  expect(findings).toMatchObject({ resultId: first.id, kind: 'review', verdict: 'fail', author: { kind: 'agent', sessionId: 'reviewer' }, handoffId: null })
+  const second = await results.submit(agent('dev'), task.id, { ...submission, summary: 'CSV export, header fixed' })
+  expect(tasks.store.results.get(second.id)!.findings).toEqual([])
+  // The earlier result keeps its findings, readable beside it.
+  expect(tasks.store.results.get(first.id)!.findings).toMatchObject([{ findings: 'Header row missing' }])
+  await reviewer.task_submit_findings!({ task_id: task.id, result_id: second.id, kind: 'review', verdict: 'pass', findings: 'Looks right' })
+  expect(tasks.store.results.get(second.id)!.findings).toMatchObject([{ verdict: 'pass' }])
+  expect(tasks.store.results.get(first.id)!.findings).toHaveLength(1)
+  expect(tasks.store.journal(task.id).at(-1)?.text).toBe(`Review findings on result ${second.id}: pass`)
+})
+
+test('findings refusals: a result of another task, empty text, another team, and the human', async () => {
+  const task = await tasks.create(agent('lead'), { title: 'Export', direction: 'v1' })
+  const otherTask = await tasks.create(agent('lead'), { title: 'Import', direction: 'v1' })
+  const result = await results.submit(agent('dev'), otherTask.id, submission)
+  const input = { resultId: result.id, kind: 'review' as const, verdict: 'pass' as const, findings: 'ok' }
+  await expect(results.submitFindings(agent('reviewer'), task.id, input)).rejects.toThrow(`is not a result of task ${task.id}`)
+  await expect(results.submitFindings(agent('reviewer'), otherTask.id, { ...input, findings: ' ' })).rejects.toThrow('need text')
+  await expect(results.submitFindings(agent('stranger'), otherTask.id, input)).rejects.toThrow('not found in this team')
+  await expect(results.submitFindings(human(), otherTask.id, input)).rejects.toThrow('task_submit_findings')
+  expect(tasks.store.results.get(result.id)!.findings).toEqual([])
+})
+
+test('findings answering the caller\'s outstanding handoff for that result record its id', async () => {
+  const task = await tasks.create(agent('lead'), { title: 'Export', direction: 'v1' })
+  const result = await results.submit(agent('dev'), task.id, submission)
+  // An outstanding review handoff of this result, its instruction claimed by the reviewer.
+  const mail = new MailboxStore(db.db)
+  const instruction = mail.enqueue({ teamId: team.teamId, toKind: 'group', toId: 'reviewers', fromSession: null, fromGroup: null,
+    originPath: repo, body: 'Review it', taskId: task.id })
+  mail.claim(instruction.id, 'reviewer')
+  db.db.prepare(`INSERT INTO team_task_assignments (id, team_id, task_id, request_key, target_kind, target_id, role, instruction,
+    created_by_kind, message_id, claimed_by, handoff_kind, result_id, created_at, updated_at)
+    VALUES ('handoff-1', ?, ?, 'k', 'group', 'reviewers', 'reviewers', 'Review it', 'human', ?, 'reviewer', 'review', ?, 'now', 'now')`)
+    .run(team.teamId, task.id, instruction.id, result.id)
+  const answered = await results.submitFindings(agent('reviewer'), task.id, { resultId: result.id, kind: 'review', verdict: 'pass', findings: 'ok' })
+  expect(answered.handoffId).toBe('handoff-1')
+  // Someone else's findings on the same result answer no handoff of theirs.
+  const unrelated = await results.submitFindings(agent('lead'), task.id, { resultId: result.id, kind: 'qa', verdict: 'pass', findings: 'ok' })
+  expect(unrelated.handoffId).toBeNull()
+})

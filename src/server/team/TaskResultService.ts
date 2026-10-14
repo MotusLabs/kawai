@@ -62,4 +62,29 @@ export class TaskResultService {
     this.store.appendJournal(taskId, actor, `Submitted result ${result.id}: ${summary}`)
     return this.store.results.get(result.id)!
   }
+
+  /**
+   * Submit review or QA findings (D4), bound to the exact result examined —
+   * a result of this task — and never to a later one. Open to any agent of
+   * the team; the record names its author, so independence from the
+   * submitter is visible. Answering the caller's outstanding handoff for that
+   * result records its id (the attempt's identity).
+   */
+  async submitFindings(caller: TaskCaller, taskId: string, input: FindingsSubmission): Promise<TaskFindings> {
+    const { team, actor } = await this.tasks.context(caller)
+    if (actor.kind !== 'agent') throw new Error('Findings are submitted by the reviewing agent, with task_submit_findings')
+    this.tasks.sameTeamTask(team, taskId)
+    const result = this.store.results.get(input.resultId)
+    if (!result || result.taskId !== taskId) throw new Error(`Result ${input.resultId} is not a result of task ${taskId}`)
+    const findings = input.findings.trim()
+    if (!findings) throw new Error('Findings need text')
+    const handoff = this.store.outstandingAssignment(taskId)
+    const answers = handoff?.handoffKind && handoff.resultId === result.id && handoff.claimedBy === actor.sessionId
+    const stored = this.store.results.insertFindings({
+      teamId: team.teamId, taskId, resultId: result.id, handoffId: answers ? handoff.id : null,
+      kind: input.kind, verdict: input.verdict, findings, author: actor,
+    })
+    this.store.appendJournal(taskId, actor, `${input.kind === 'qa' ? 'QA' : 'Review'} findings on result ${result.id}: ${input.verdict}`)
+    return stored
+  }
 }

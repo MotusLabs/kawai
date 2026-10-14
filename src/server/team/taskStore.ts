@@ -15,6 +15,7 @@ import type {
   TaskStatus,
   HumanTaskDetail,
   TeamTask,
+  TeamTaskAssignment,
   TeamTaskDetail,
   TeamTaskSummary,
 } from '../../shared/teamTasks'
@@ -211,6 +212,11 @@ export class TaskStore {
       acknowledgements: this.acknowledgements.list(id),
       results: this.results.listByTask(id),
     }
+  }
+
+  /** The task's outstanding assignment (task-assignment D1); null without one or without an assignment store. */
+  outstandingAssignment(id: string): TeamTaskAssignment | null {
+    return this.assignments ? outstandingOf(this.assignments.listByTask(id)) : null
   }
 
   /** The human's view (D1): the detail plus the task's draft. Never for agent paths. */

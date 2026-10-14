@@ -7,7 +7,7 @@ import type { TaskService } from './TaskService'
 import type { TaskResultService } from './TaskResultService'
 
 export const TASK_TOOL_NAMES = ['task_create', 'task_get', 'task_note', 'task_update_status', 'task_amend', 'task_list', 'task_acknowledge',
-  'task_submit_result'] as const
+  'task_submit_result', 'task_submit_findings'] as const
 
 const status = z.enum(TASK_STATUSES as [TaskStatus, ...TaskStatus[]])
 const taskId = { task_id: z.string().min(1) }
@@ -30,6 +30,9 @@ export const taskSchemas = {
     tests: z.array(z.object({ description: z.string().min(1), outcome: z.string().min(1) })).optional(),
     limitations: z.string().optional(),
   }),
+  task_submit_findings: z.object({
+    ...taskId, result_id: z.string().min(1), kind: z.enum(['review', 'qa']), verdict: z.enum(['pass', 'fail']), findings: z.string().min(1),
+  }),
 }
 
 export const taskDescriptions: Record<(typeof TASK_TOOL_NAMES)[number], string> = {
@@ -41,6 +44,7 @@ export const taskDescriptions: Record<(typeof TASK_TOOL_NAMES)[number], string> 
   task_list: "List this team's tasks, optionally by status.",
   task_acknowledge: 'State the published task revision you are now working from (the revision in the task header). Call it when you start or take over work on a task, and after a revision notice.',
   task_submit_result: 'Submit a result for a task: a summary, a commit and/or diff reference (at least one), the tests you ran with their outcomes, and known limitations. Your test outcomes are shown as claimed, not verified. Supersedes the task\'s previous result; does not close the task.',
+  task_submit_findings: 'Report review or QA findings on one exact result (result_id from task_get): kind review|qa, verdict pass|fail, and the findings. They stay bound to that result — a newer result inherits nothing.',
 }
 
 export function taskHandlers(tasks: TaskService, sessionId: string, results?: TaskResultService) {
@@ -69,6 +73,10 @@ export function taskHandlers(tasks: TaskService, sessionId: string, results?: Ta
       task_submit_result: async (input: unknown) => {
         const { task_id, ...submission } = taskSchemas.task_submit_result.parse(input)
         return results.submit(caller, task_id, submission)
+      },
+      task_submit_findings: async (input: unknown) => {
+        const { task_id, result_id, kind, verdict, findings } = taskSchemas.task_submit_findings.parse(input)
+        return results.submitFindings(caller, task_id, { resultId: result_id, kind, verdict, findings })
       },
     } : {}),
     task_list: async (input: unknown) => tasks.list(caller, taskSchemas.task_list.parse(input).status),

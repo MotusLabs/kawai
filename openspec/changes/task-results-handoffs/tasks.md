@@ -19,8 +19,8 @@
 
 ## 4. Findings
 
-- [ ] 4.1 Implement findings submission on `TaskResultService`: `task_id` + `result_id` (of that task) + kind + verdict + text, open to any member, storing `handoff_id` when the caller's outstanding handoff for the task matches the result; verify service tests cover a wrong-task result refused, findings attached per result, and the handoff link recorded.
-- [ ] 4.2 Add the `task_submit_findings` tool beside the others; verify tool tests cover refusals and the stored binding, and store/service tests that a newer result has no findings until new ones are submitted (E07's no-inheritance assertion).
+- [x] 4.1 Implement findings submission on `TaskResultService`: `task_id` + `result_id` (of that task) + kind + verdict + text, open to any member, storing `handoff_id` when the caller's outstanding handoff for the task matches the result; verify service tests cover a wrong-task result refused, findings attached per result, and the handoff link recorded.
+- [x] 4.2 Add the `task_submit_findings` tool beside the others; verify tool tests cover refusals and the stored binding, and store/service tests that a newer result has no findings until new ones are submitted (E07's no-inheritance assertion).
 
 ## 5. Acceptance
 
