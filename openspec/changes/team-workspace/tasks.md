@@ -25,7 +25,7 @@
 ## 5. Workspace connections and team isolation
 
 - [ ] 5.1 Add `src/server/team/workspaceConnections.ts` (`team-workspace-open`/`close`, authoritative snapshot on open and reconnect, unfiltered change pushes) on the `TaskConnections` pattern, resolving the team via `loadTeamGroups(session.projectPath).team`; wire it in `ChatSessionManager.ts` beside the existing connections; verify connection tests cover open, change, reconnect, and close, and that a team with no tasks serializes empty lists.
-- [ ] 5.2 Enforce server-side team scoping: every workspace read and any id argument is checked against the calling session's team, and a foreign task/message/strategy/session/worktree id is refused; verify tests cover a second repository staying isolated and a cross-team id returning a refusal with no data.
+- [ ] 5.2 Enforce server-side team scoping: every workspace read is checked against the calling session's team, and a foreign task, message, or strategy named by a link is refused; verify tests cover a second repository staying isolated and a cross-team link returning a refusal with no data.
 
 ## 6. Views and the Team workspace UI
 

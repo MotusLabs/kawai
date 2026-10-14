@@ -167,14 +167,14 @@ Every workspace control SHALL be reachable and operable from the keyboard, show 
 - **THEN** each control shows visible focus, is named, and the item's state change is announced as text
 
 ### Requirement: Workspace reads are team-scoped and refuse cross-team access
-Every workspace read and action SHALL be scoped to the calling session's team. Another team's task, message, strategy, session, or worktree SHALL be refused server-side and SHALL NOT appear in the workspace.
+Every workspace read SHALL be scoped to the calling session's team. Another team's task, message, strategy, session, or worktree SHALL be refused server-side and SHALL NOT appear in the workspace.
 #### Scenario: A second repository stays isolated (E14)
 - **WHEN** a second repository's team is open beside the first
 - **THEN** each workspace lists only its own team's tasks, members, messages, attention counts, and worktrees
 
-#### Scenario: Cross-team ids are refused (E14)
-- **WHEN** a workspace request names a task id belonging to another team
-- **THEN** the server refuses it and no data for that task is returned
+#### Scenario: Cross-team links are refused (E14)
+- **WHEN** a workspace link names a task, message, or strategy of another team
+- **THEN** the owning connection refuses it and the workspace shows no data for it
 
 ### Requirement: The workspace stays current without a manual refresh
 The workspace SHALL receive one authoritative snapshot on open and on reconnect, and unfiltered change pushes the client applies. A new attention item or a stage change SHALL appear without a manual reload.
