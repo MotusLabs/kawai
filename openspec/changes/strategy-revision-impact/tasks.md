@@ -37,7 +37,7 @@ Implement after `durable-plans` has landed on master, then rebase this branch on
   - a same-payload retry returning the decision;
   - a changed payload refused naming the field;
   - two decisions racing on one database leaving one effective decision. The loser is refused as stale, naming the decision that committed, including when the chain index is what refuses it;
-  - a concurrent resend of the same command resolving as its replay;
+  - a concurrent resend of the same command resolving as its replay, including when the chain index is the constraint reported;
   - a later decision superseding an earlier one, both readable;
   - row counts of plans, plan revisions, tasks, messages, and spawns unchanged.
 - [ ] 3.3 Implement `propose` per D5. Verify with service tests: a recorded proposal changing no gate, a stale review refused, an unaffected plan refused, another team's plan read as not found, and the rationale rules.

@@ -169,9 +169,11 @@ The human sends `strategy-impact-decide { teamPath, requestId, reviewId, planId,
 4. **Rationale.** It must be non-empty after trimming and at most 2,000 characters. Text over the limit is refused, never cut, because the owner's words are the record.
 5. **Proposal.** If `proposalId` is given, it must be a proposal of this review and plan with the same disposition. The rationale may be edited.
 6. **Predecessor.** `expectedDecisionId` must equal the current chain head, or both are null. Otherwise refuse as stale, naming the decision recorded meanwhile.
-7. **Insert.** Write the row with `supersedes_decision_id = expectedDecisionId` and the snapshot of the plan's non-current revisions. The chain index backs step 6 at the database. In a true race, both writers read the same chain head and pass step 6, then the loser's insert hits an index:
-   - On `strategy_impact_decisions_chain`, the transaction rolls back and the decision is refused as step 6's stale-predecessor failure, naming the decision that committed. It is never surfaced as a raw constraint error.
-   - On `UNIQUE (strategy_id, command_id)`, step 1 runs again, so a concurrent resend of the same command resolves as its replay.
+7. **Insert.** Write the row with `supersedes_decision_id = expectedDecisionId` and the snapshot of the plan's non-current revisions. The chain index backs step 6 at the database. In a true race, both writers read the same chain head and pass step 6, then the loser's insert hits a unique index. A concurrent resend of the same command violates both the chain index and `UNIQUE (strategy_id, command_id)`, and SQLite names only one, so the mapping never branches on the index name. On any unique-constraint hit the transaction rolls back and step 1 runs again:
+   - If a row carries this command id, the request resolves as step 1 does: a replay, or a refusal naming the differing field.
+   - Otherwise the decision is refused as step 6's stale-predecessor failure, naming the decision that committed.
+
+   A constraint error never reaches the client raw.
 
 Then publish strategies and plans for the team (D9).
 
