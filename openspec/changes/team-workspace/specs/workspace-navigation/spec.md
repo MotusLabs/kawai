@@ -13,6 +13,6 @@ The navigator SHALL show one **Team** entry at repository level for each discove
 - **WHEN** the human opens the **Team** entry
 - **THEN** the team workspace for that repository's team opens and the selected chat is unchanged
 
-#### Scenario: Session filters do not hide the entry
+#### Scenario: Session filters do not hide the entry (E14)
 - **WHEN** a project or host filter leaves no visible session rows
 - **THEN** the **Team** entry for a repository that still has a team remains available

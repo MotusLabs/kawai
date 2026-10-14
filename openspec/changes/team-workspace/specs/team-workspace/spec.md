@@ -60,11 +60,11 @@ The task list SHALL filter by active, blocked, awaiting human, awaiting acceptan
 
 ### Requirement: The attention queue lists what needs a human or is waiting on an agent
 The attention queue SHALL consolidate pending approvals and questions, uncertain deliveries, staffing waits, and pending acceptance. Each item SHALL show its cause, owner, impact scope, next action, and a link to its card, task, or message. Human-required items SHALL be separated from agent-owned waits.
-#### Scenario: An open approval is a human-required item
+#### Scenario: An open approval is a human-required item (E05)
 - **WHEN** a session has a pending approval
 - **THEN** the queue lists it as human-required with the session as owner, its task as impact scope, and a link to that chat's approval card
 
-#### Scenario: A staffing wait is agent-owned
+#### Scenario: A staffing wait is agent-owned (E05)
 - **WHEN** a message waits on a group cap
 - **THEN** the queue lists it under agent-owned waits with the capacity as its cause and a link to the message
 
@@ -88,11 +88,11 @@ Each attention item SHALL carry a kind, a stable identity, and a link that MAY t
 
 ### Requirement: Attention counts reconcile after reconnect without duplicate toasts
 On open and on reconnect the workspace SHALL replace its attention items and counts with the authoritative snapshot rather than incrementing them. Each item identity SHALL raise at most one toast across its transitions; a reconnect that replays unchanged state SHALL raise no toast.
-#### Scenario: Reconnect converges the counts
+#### Scenario: Reconnect converges the counts (E05, E13)
 - **WHEN** the connection drops while two approvals are pending and one is resolved, then the client reconnects
 - **THEN** the workspace shows one attention item, not two and not three
 
-#### Scenario: Replaying state does not re-toast
+#### Scenario: Replaying state does not re-toast (E05, E13)
 - **WHEN** a reconnect resends a snapshot whose items are unchanged
 - **THEN** no toast is raised for those items
 
@@ -122,45 +122,45 @@ Each group row SHALL name the file that defines it and, when both layers define 
 
 ### Requirement: The morning summary groups the interval's outcomes
 A summary band SHALL list completed results, capacity waits, approvals, uncertain deliveries, and finished turns without a result over the last 24 hours, each bucket naming its items with links. A finished turn with no submitted result SHALL NOT be counted as a completed result.
-#### Scenario: Each bucket is populated
+#### Scenario: Each bucket is populated (E13)
 - **WHEN** the last 24 hours hold a submitted result, a cap wait, an open approval, an uncertain delivery, and an agent that finished a turn with no result
 - **THEN** the summary shows one item in each of the five buckets
 
-#### Scenario: A finished turn is not a completion
+#### Scenario: A finished turn is not a completion (E13)
 - **WHEN** an agent finishes a turn and submits no result
 - **THEN** it appears only in the finished-turn-without-result bucket and never among completed results
 
-#### Scenario: Resolved items leave the buckets
+#### Scenario: Resolved items leave the buckets (E13)
 - **WHEN** an approval in the summary window is answered
 - **THEN** the recomputed summary no longer lists it as an open approval
 
-#### Scenario: A restart keeps durable buckets
+#### Scenario: A restart keeps durable buckets (E13)
 - **WHEN** the server restarts and the workspace opens
 - **THEN** completed results and uncertain deliveries in the window are still listed, while capacity waits list only waits the running server has observed
 
 ### Requirement: The workspace supports one-handed list and detail navigation
 At a narrow viewport the workspace SHALL use list and detail panes with an explicit **Back** action. Opening a chat SHALL preserve the task selection and filters. Unsubmitted composer drafts and the current selection SHALL survive navigation within the workspace.
-#### Scenario: Back returns to the preserved list
+#### Scenario: Back returns to the preserved list (E14)
 - **WHEN** the human filters tasks, opens one on a narrow viewport, then uses **Back**
 - **THEN** the filtered list and selection are as they were
 
-#### Scenario: Opening a chat preserves workspace state
+#### Scenario: Opening a chat preserves workspace state (E14)
 - **WHEN** the human opens a session from an attention item and returns
 - **THEN** the workspace tab, filters, and selection are unchanged
 
 ### Requirement: The workspace is keyboard accessible
 Every workspace control SHALL be reachable and operable from the keyboard, show a visible focus indicator, and have an accessible name. Every state SHALL carry a text label in addition to any color or icon.
-#### Scenario: Keyboard-only attention handling
+#### Scenario: Keyboard-only attention handling (E14)
 - **WHEN** the human uses only the keyboard to open the workspace and resolve an attention item
 - **THEN** each control shows visible focus, is named, and the item's state change is announced as text
 
 ### Requirement: Workspace reads are team-scoped and refuse cross-team access
 Every workspace read and action SHALL be scoped to the calling session's team. Another team's task, message, strategy, session, or worktree SHALL be refused server-side and SHALL NOT appear in the workspace.
-#### Scenario: A second repository stays isolated
+#### Scenario: A second repository stays isolated (E14)
 - **WHEN** a second repository's team is open beside the first
 - **THEN** each workspace lists only its own team's tasks, members, messages, attention counts, and worktrees
 
-#### Scenario: Cross-team ids are refused
+#### Scenario: Cross-team ids are refused (E14)
 - **WHEN** a workspace request names a task id belonging to another team
 - **THEN** the server refuses it and no data for that task is returned
 
