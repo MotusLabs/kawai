@@ -1,10 +1,12 @@
-// Team member release races (team-member-release review F1, F2, F4): a
-// MemberRelease driven directly over in-memory stores, so a test can pause
-// the definition resolver mid-transition and mutate the mailbox, the roster,
-// or the task underneath it — and inject an archive that refuses.
-import { afterEach, beforeEach, expect, test } from 'bun:test'
+// Team member release races (team-member-release review F1, F2, F4, and the
+// late-spawn mark's failure retry): a MemberRelease driven directly over
+// in-memory stores, so a test can pause the definition resolver
+// mid-transition and mutate the mailbox, the roster, or the task underneath
+// it — and inject a failing store or an archive that refuses.
+import { afterEach, beforeEach, expect, spyOn, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
 import type { ChatSessionRecord } from '../db'
+import { logger } from '../logger'
 import { MailboxStore, type EnqueueInput } from '../team/mailboxStore'
 import { MemberRelease, type MemberReleaseOptions } from '../team/memberRelease'
 import { TaskStore } from '../team/taskStore'
@@ -79,19 +81,48 @@ test('the close transition re-reads state at the commit: a claim during the awai
   expect(releases.pending().map(row => row.sessionId).sort()).toEqual(['dev-1', 'dev-2'])
 })
 
-test('markSpawnedForClosedTask re-checks after the await: a reopen during the definition load marks nothing (F2)', async () => {
+test('a late-spawn mark is synchronous: an opted-out group is marked, then kept by the next cycle (F2, no await window)', async () => {
+  const t = task()
+  tasks.setStatus(t.id, 'done')
+  records.set('spawned-9', record('spawned-9', { groupId: 'qa', projectPath: featX, spawned: true, taskId: t.id }))
+  const archived: string[] = []
+  const releases = makeReleases({
+    cachedDefinition: (_team, groupId) => (groupId === 'qa' ? { releaseOnTaskClose: false } as never : undefined),
+    archive: id => { archived.push(id); return { ok: true } },
+  })
+  // No definition load, so no reopen can slip in between check and write.
+  expect(releases.markSpawnedForClosedTask('spawned-9', t.id)).toBe(true)
+  expect(releases.pending().map(row => row.sessionId)).toEqual(['spawned-9'])
+  // The cycle reads the current file before any archive: the opt-out keeps it.
+  await releases.evaluate()
+  expect(releases.pending()).toEqual([])
+  expect(archived).toEqual([])
+})
+
+test('a failed late-spawn mark is logged with both ids and retried until it lands (MM LOW 3)', () => {
   const t = task()
   tasks.setStatus(t.id, 'done')
   records.set('spawned-9', record('spawned-9', { projectPath: featX, spawned: true, taskId: t.id }))
-  const paused = pausedDefinitions()
-  const releases = makeReleases({ definition: paused.definition })
-  const marking = releases.markSpawnedForClosedTask('spawned-9', t.id)
-  await suspended()
-  // The task is reopened while the definition load is suspended.
-  tasks.setStatus(t.id, 'active')
-  paused.release()
-  await marking
-  expect(releases.pending()).toEqual([])
+  const releases = makeReleases()
+  const get = tasks.get.bind(tasks)
+  let failures = 2
+  tasks.get = id => { if (failures > 0) { failures -= 1; throw new Error('database is locked') } return get(id) }
+  const warn = spyOn(logger, 'warn').mockImplementation(() => {})
+  try {
+    releases.markLateSpawn('spawned-9', t.id)
+    expect(warn).toHaveBeenLastCalledWith('member_release_mark_failed', { sessionId: 'spawned-9', taskId: t.id, error: 'database is locked' })
+    expect(releases.pending()).toEqual([])
+    expect(releases.nextLateMarkRetryAt()).toBeGreaterThan(Date.now())
+    // A cycle that fails again keeps it outstanding; the next one lands it.
+    releases.retryLateMarks()
+    expect(warn).toHaveBeenCalledTimes(2)
+    expect(releases.pending()).toEqual([])
+    releases.retryLateMarks()
+    expect(releases.pending().map(row => row.sessionId)).toEqual(['spawned-9'])
+    expect(releases.nextLateMarkRetryAt()).toBeNull()
+  } finally {
+    warn.mockRestore()
+  }
 })
 
 test('a refused archive journals no release: the row drops and release_member reports the error (F4)', async () => {

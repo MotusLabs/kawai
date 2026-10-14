@@ -4047,6 +4047,18 @@ describe('ChatSessionManager background-task roster (background tasks D2)', () =
     manager.shutdown()
   })
 
+  test('a member spawned for an already-closed task is marked pending release by its creation (member-release D1)', async () => {
+    const { manager } = await createHarness(db)
+    const t = manager.tasks.store.create({ teamId: 'team-1', title: 't', direction: 'd', creator: { kind: 'human', sessionId: null } })
+    manager.tasks.store.setStatus(t.id, 'done')
+    const created = manager.createSession({ projectPath: '/tmp/proj', spawned: true, taskId: t.id })
+    if (!created.ok) throw new Error('create failed')
+    // Same tick as the insert: no await sits between persisting the session and its mark.
+    const row = db.db.prepare('SELECT task_id FROM team_member_releases WHERE session_id = ?').get(created.session.id)
+    expect(row).toEqual({ task_id: t.id })
+    manager.shutdown()
+  })
+
   test('process end frees a pending member: the stopped roster re-checks readiness and the next pass archives it (member-release D3)', async () => {
     const { manager, handles } = await createHarness(db)
     const created = manager.createSession({ projectPath: '/tmp/proj', spawned: true })

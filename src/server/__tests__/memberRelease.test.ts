@@ -300,6 +300,25 @@ test('a spawn in flight at close gets no first turn, is marked, and is released 
   expect(archived).toEqual(['spawned-1'])
 })
 
+test('a failed late-spawn mark is retried by the next dispatch cycle, which then releases the member', async () => {
+  const t = task(featX)
+  await close(t.id)
+  records.set('spawned-1', record('spawned-1', { projectPath: featX, spawned: true, taskId: t.id }))
+  await teams.track('spawned-1', featX)
+  const mark = runtime.releases.markSpawnedForClosedTask.bind(runtime.releases)
+  let failures = 1
+  runtime.releases.markSpawnedForClosedTask = (id, taskId) => {
+    if (failures-- > 0) throw new Error('database is locked')
+    return mark(id, taskId)
+  }
+  runtime.markSpawnedForClosedTask('spawned-1', t.id)
+  expect(runtime.releases.pending()).toEqual([])
+  // The cycle's start retries it before evaluating; the settled member goes.
+  await pass()
+  expect(archived).toEqual(['spawned-1'])
+  expect(runtime.releases.nextLateMarkRetryAt()).toBeNull()
+})
+
 test('a late spawn records the stored closer, not a look-alike journal note (F3)', async () => {
   const t = task(featX)
   const within = await runtime.releases.transitionHook(t, 'done', { kind: 'agent', sessionId: 'lead-1' })

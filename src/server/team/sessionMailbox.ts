@@ -215,16 +215,17 @@ export class SessionMailbox {
       beginCycle: async () => {
         this.catalogs.clear()
         this.outcomes.processNotes()
+        this.releases.retryLateMarks()
         await this.loadCycleDefinitions()
         await this.releases.evaluate()
       },
       claimed: (message, id) => this.outcomes.claimed(message, id),
       delivered: (id, message) => this.outcomes.delivered(id, message),
-      // Recovery notes and failed-spawn backoffs share the minimum-wins timer (D5).
+      // Recovery notes, failed-spawn backoffs, and late-mark retries share the minimum-wins timer (D5).
       wakeAt: () => {
-        const note = this.outcomes.nextNoteAt()
-        const retry = this.staffing.nextRetryAt()
-        return note !== null && (retry === null || note < retry) ? note : retry
+        const times = [this.outcomes.nextNoteAt(), this.staffing.nextRetryAt(), this.releases.nextLateMarkRetryAt()]
+          .filter((at): at is number => at !== null)
+        return times.length > 0 ? Math.min(...times) : null
       },
       afterPass: outcome => this.applyReasons(outcome),
       recipients: () => [...options.records()].flatMap(record => {
@@ -398,7 +399,13 @@ export class SessionMailbox {
       teams.add(message.teamId)
       origins.set(message.teamId, message.originPath)
     }
-    for (const row of this.releases.pending()) teams.add(row.teamId)
+    // A pending member's own path resolves its team when nothing else does,
+    // so the release pass always reads the group's current opt-out (D1).
+    for (const row of this.releases.pending()) {
+      teams.add(row.teamId)
+      const member = this.options.getRecord(row.sessionId)
+      if (member && !origins.has(row.teamId)) origins.set(row.teamId, member.projectPath)
+    }
     for (const teamId of teams) {
       if (this.catalogs.has(teamId)) continue
       const member = [...this.options.records()].find(record => this.options.teams.teamOf(record.sessionId)?.teamId === teamId)
@@ -470,9 +477,9 @@ export class SessionMailbox {
     this.releases.cancel(id)
   }
 
-  /** A spawned session was created for an already-closed task (D1): mark it pending release. */
+  /** A spawned session was created for an already-closed task (D1): mark it pending release, retrying on failure. */
   markSpawnedForClosedTask(id: string, taskId: string) {
-    void this.releases.markSpawnedForClosedTask(id, taskId).catch(this.options.onError)
+    this.releases.markLateSpawn(id, taskId)
   }
 
   close() { this.dispatcher.close(); this.releaseSubscription?.(); this.releaseLimitSubscription?.(); this.releaseTaskSubscription?.(); this.rules.close() }

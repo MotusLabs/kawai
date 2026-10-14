@@ -8,6 +8,7 @@
 // a reason, never deferred. Reopening the task or restoring the member
 // cancels a pending release; a human-created session is never released.
 import type { Database } from 'bun:sqlite'
+import { logger } from '../logger'
 import type { ChatSessionRecord } from '../db'
 import type { JournalAuthor, TaskActor, TaskStatus, TeamTask } from '../../shared/teamTasks'
 import type { GroupDefinition } from './groupFile'
@@ -74,12 +75,19 @@ CREATE TABLE IF NOT EXISTS team_task_closers (
 );
 `
 
+/** Backoff before a failed late-spawn mark is retried (the dispatcher wakes for it). */
+const LATE_MARK_RETRY_MS = 5_000
+
 const isClosed = (status: TaskStatus) => status === 'done' || status === 'cancelled'
 
 const actorText = (actor: JournalAuthor): string =>
   actor.kind === 'human' ? 'the human' : actor.kind === 'system' ? 'kawai' : actor.sessionId
 
 export class MemberRelease {
+  /** Late-spawn marks that failed: session id → task id, retried until they land or stop applying. */
+  private readonly lateMarks = new Map<string, string>()
+  private lateMarkRetryAt: number | null = null
+
   constructor(private readonly db: Database, private readonly options: MemberReleaseOptions) {
     db.exec(CREATE_TABLE_SQL)
   }
@@ -176,29 +184,56 @@ export class MemberRelease {
    * A session was created spawned for a task that is already closed (D1):
    * its spawn's mail was dead-lettered at the close, so it starts with no
    * turn — mark it now and it is released once it settles. The closer is
-   * the actor the close stored, else kawai.
+   * the actor the close stored, else kawai. Synchronous, so the caller can
+   * mark in the same tick that persists the session: the group's opt-out is
+   * not read here — `evaluate()` applies the current file's
+   * `releaseOnTaskClose: false` before any archive. Returns whether a
+   * pending row was written; throws only if the database does.
    */
-  async markSpawnedForClosedTask(sessionId: string, taskId: string): Promise<void> {
+  markSpawnedForClosedTask(sessionId: string, taskId: string): boolean {
     const task = this.options.tasks.get(taskId)
-    if (!task || !isClosed(task.status)) return
+    if (!task || !isClosed(task.status)) return false
     const record = this.options.getRecord(sessionId)
-    if (!record || !record.spawned || record.taskId !== taskId || record.archivedAt != null) return
-    if (record.groupId
-      && (await this.options.definition(task.teamId, record.groupId, record.projectPath))?.releaseOnTaskClose === false) return
-    // Re-read after the await: a reopen during the definition load must not
-    // leave a pending row for an open task (the member would be archived).
-    const still = this.options.tasks.get(taskId)
-    const fresh = this.options.getRecord(sessionId)
-    if (!still || !isClosed(still.status)) return
-    if (!fresh || !fresh.spawned || fresh.taskId !== taskId || fresh.archivedAt != null) return
+    if (!record || !record.spawned || record.taskId !== taskId || record.archivedAt != null) return false
     const closer = this.db.prepare('SELECT closed_by_kind, closed_by_session FROM team_task_closers WHERE task_id = ?')
       .get(taskId) as { closed_by_kind: string; closed_by_session: string | null } | null
     this.db.prepare(`INSERT OR REPLACE INTO team_member_releases
       (session_id, task_id, team_id, reason, requested_by_kind, requested_by_session, requested_at)
       VALUES (?, ?, ?, ?, ?, ?, ?)`)
-      .run(sessionId, still.id, still.teamId, `task ${still.status}`,
+      .run(sessionId, task.id, task.teamId, `task ${task.status}`,
         closer?.closed_by_kind ?? 'system', closer?.closed_by_session ?? null, new Date().toISOString())
     this.options.notify()
+    return true
+  }
+
+  /**
+   * The spawn path's entry for {@link markSpawnedForClosedTask}: a failure
+   * is logged with both ids and retried — at the start of every dispatch
+   * cycle, and on a short backoff the dispatcher wakes for — until the mark
+   * lands or no longer applies (task reopened, member archived).
+   */
+  markLateSpawn(sessionId: string, taskId: string): void {
+    this.lateMarks.set(sessionId, taskId)
+    this.retryLateMarks()
+  }
+
+  /** Retry every outstanding late-spawn mark (called at each cycle's start). */
+  retryLateMarks(): void {
+    this.lateMarkRetryAt = null
+    for (const [sessionId, taskId] of this.lateMarks) {
+      try {
+        this.markSpawnedForClosedTask(sessionId, taskId)
+        this.lateMarks.delete(sessionId)
+      } catch (error) {
+        logger.warn('member_release_mark_failed', { sessionId, taskId, error: error instanceof Error ? error.message : String(error) })
+        this.lateMarkRetryAt = Date.now() + LATE_MARK_RETRY_MS
+      }
+    }
+  }
+
+  /** When the dispatcher should wake to retry failed marks; null when none are outstanding. */
+  nextLateMarkRetryAt(): number | null {
+    return this.lateMarkRetryAt
   }
 
   /**
