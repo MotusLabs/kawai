@@ -21,6 +21,7 @@ import { MailDispatcher, type MailRecipient, type PassOutcome } from './dispatch
 import { reconcileMailbox, transcriptReceipt } from './receipt'
 import { TaskStore } from './taskStore'
 import { TaskService } from './TaskService'
+import { MailboxManagement } from './mailboxManagement'
 import { AssignmentStore } from './assignmentStore'
 import { AssignmentService } from './AssignmentService'
 import { buildTaskContext } from './taskContext'
@@ -40,6 +41,7 @@ import type { Database } from 'bun:sqlite'
 export class SessionMailbox {
   readonly mailbox: TeamMailbox
   readonly tasks: TaskService
+  readonly management: MailboxManagement
   readonly assignments: AssignmentService
   readonly dispatcher: MailDispatcher
   readonly staffing: WorktreeStaffing
@@ -103,6 +105,10 @@ export class SessionMailbox {
     const assignments = new AssignmentStore(db, store)
     const taskStore = new TaskStore(db, store, assignments)
     this.tasks = new TaskService(taskStore, { getSession: options.getRecord, homeDir: options.homeDir })
+    this.management = new MailboxManagement(store, {
+      getSession: options.getRecord, tasks: this.tasks, homeDir: options.homeDir,
+      waitingFor: teamId => this.waitingFor(teamId), ...(options.now ? { now: options.now } : {}),
+    })
     this.mailbox = new TeamMailbox(store, {
       getSession: options.getRecord, homeDir: options.homeDir, restoreSession: options.restore, tasks: taskStore,
       cooldownUntil: profileId => this.limits.cooldownUntil(profileId),

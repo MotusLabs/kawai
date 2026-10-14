@@ -104,3 +104,31 @@ describe('buildTeamPrompt strategy note (product-strategy 3.3)', () => {
     }
   })
 })
+
+describe('buildTeamPrompt mailbox management note (team-mailbox-management D8)', () => {
+  const manager: GroupDefinition = { ...qa, id: 'leads', canManageMailbox: true }
+
+  test('every agent learns to list its mail and withdraw its own, and is not offered cancel-any', () => {
+    for (const prompt of [
+      buildTeamPrompt({ sessionId: 'chat-9', group: devs, groups: [devs] }),
+      buildTeamPrompt({ sessionId: 'chat-10', groups: [devs] }),
+    ]) {
+      expect(prompt).toContain('`mcp__kawai-team__list_mailbox`')
+      expect(prompt).toContain('only mail you sent, mail addressed to you, and mail you hold')
+      expect(prompt).toContain('withdraw a message you sent')
+      expect(prompt).not.toContain('discard_message')
+      expect(prompt).not.toContain('parked work')
+      expect(prompt).not.toContain('replacing a stuck agent')
+    }
+  })
+
+  test('a manager group learns cancel-any, parked work, discard, the human-only retry rule, and the replace advice', () => {
+    const prompt = buildTeamPrompt({ sessionId: 'chat-11', group: manager, groups: [manager] })
+    expect(prompt).toContain("the whole team's")
+    expect(prompt).toContain('withdraw any team message')
+    expect(prompt).toContain('cancel parked work (its scheduled resume mail is cancelled with it')
+    expect(prompt).toContain('`mcp__kawai-team__discard_message`')
+    expect(prompt).toContain('Retry and hand-off stay with the human')
+    expect(prompt).toContain('Before archiving or replacing a stuck agent, list and cancel the mail that would restore or respawn it.')
+  })
+})

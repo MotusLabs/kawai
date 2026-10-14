@@ -1719,7 +1719,7 @@ export class ChatSessionManager {
       const queryFactory = await this.resolveQueryFactory()
       // The team must be known before the first spawn reads its prompt.
       await this.teams.track(record.sessionId, this.records.get(record.sessionId)?.projectPath ?? record.projectPath)
-      const teamMcpServer = await createMailboxServer(this.mailbox, record.sessionId, this.tasks, this.strategies)
+      const teamMcpServer = await createMailboxServer(this.mailbox, record.sessionId, this.tasks, this.strategies, this.teamMail.management)
       const driver = new ChatSessionDriver({
         sessionId: record.sessionId,
         projectPath: record.projectPath,
