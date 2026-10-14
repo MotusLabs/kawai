@@ -41,8 +41,12 @@ afterEach(() => {
   globalThis.fetch = originalFetch
 })
 
-/** One xterm textarea that records how the modals touch it, in order. */
-function terminalDom() {
+/**
+ * One xterm textarea that records how the modals touch it, in order.
+ * `dialogOpen` answers the `[role="dialog"]` probe: react-test-renderer has no
+ * DOM, so the test says which dialogs are mounted at that moment.
+ */
+function terminalDom(dialogOpen: () => boolean = () => false) {
   const calls: string[] = []
   const textarea = {
     setAttribute: () => void calls.push('disable'),
@@ -50,7 +54,9 @@ function terminalDom() {
     focus: () => void calls.push('terminal-focus'),
     blur: () => {},
   }
-  globalAny.document = { querySelector: () => textarea } as unknown as Document
+  globalAny.document = {
+    querySelector: (selector: string) => (selector.includes('dialog') ? (dialogOpen() ? {} : null) : textarea),
+  } as unknown as Document
   globalAny.window = { addEventListener: () => {}, removeEventListener: () => {} } as unknown as Window & typeof globalThis
   return calls
 }
@@ -134,6 +140,44 @@ describe('terminal focus under an open dialog', () => {
     act(() => renderer.unmount())
   })
 
+  test('closing only Settings under an open New Session leaves the terminal alone', async () => {
+    let newSessionOpen = true
+    const calls = terminalDom(() => newSessionOpen)
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => {
+      renderer = TestRenderer.create(tree({ projectDir: '/a', settingsOpen: true, newSessionOpen: true }))
+    })
+    await act(async () => {
+      await Promise.resolve()
+    })
+    calls.length = 0
+    act(() => renderer.update(tree({ projectDir: '/a', settingsOpen: false, newSessionOpen: true })))
+    await act(async () => {
+      await pastCloseWindow()
+    })
+    expect(calls).toEqual([])
+    newSessionOpen = false
+    act(() => renderer.unmount())
+  })
+
+  test('closing only New Session under an open Settings leaves the terminal alone', async () => {
+    const calls = terminalDom(() => true)
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => {
+      renderer = TestRenderer.create(tree({ projectDir: '/a', settingsOpen: true, newSessionOpen: true }))
+    })
+    await act(async () => {
+      await Promise.resolve()
+    })
+    calls.length = 0
+    act(() => renderer.update(tree({ projectDir: '/a', settingsOpen: true, newSessionOpen: false })))
+    await act(async () => {
+      await pastCloseWindow()
+    })
+    expect(calls).toEqual([])
+    act(() => renderer.unmount())
+  })
+
   test('reopening Settings within 300 ms cancels the pending terminal focus', async () => {
     const calls = terminalDom()
     const settings = (settingsOpen: boolean) => tree({ projectDir: '/a', settingsOpen, newSessionOpen: false })
@@ -185,6 +229,20 @@ describe('Display Name field', () => {
       renderer.root.findByType('form').props.onSubmit({ preventDefault: () => {} })
     })
     expect(created).toEqual(['background-fixture'])
+    act(() => renderer.unmount())
+  })
+})
+
+describe('Settings overlay', () => {
+  test('is an accessible modal dialog named Settings, so other dialogs can see it is open', () => {
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => {
+      renderer = TestRenderer.create(<SettingsModal isOpen onClose={() => {}} />)
+    })
+    const overlay = renderer.root.findByProps({ role: 'dialog' })
+    expect(overlay.props['aria-modal']).toBe('true')
+    const title = renderer.root.findByProps({ id: overlay.props['aria-labelledby'] })
+    expect(title.children).toContain('Settings')
     act(() => renderer.unmount())
   })
 })

@@ -14,6 +14,7 @@ import ChatSettings from './settings/ChatSettings'
 import type { ChatProviderSettingsHandle } from './ChatProviderSettings'
 import TerminalSettings from './settings/TerminalSettings'
 import GeneralSettings from './settings/GeneralSettings'
+import { restoreTerminalFocus } from '../utils/terminalFocus'
 
 interface SettingsChangeFlags {
   webglChanged: boolean
@@ -223,15 +224,9 @@ export default function SettingsModal({
     // A mount while closed, or any rerun while closed, is no transition.
     if (isOpen || !wasOpen || typeof document === 'undefined') return
     // Re-enable terminal textarea when modal closes
-    const timer = setTimeout(() => {
-      if (typeof document === 'undefined') return
-      const textarea = document.querySelector('.xterm-helper-textarea') as HTMLTextAreaElement | null
-      if (textarea) {
-        textarea.removeAttribute('disabled')
-        textarea.focus()
-      }
-    }, 300)
-    // Reopening before it fires cancels it, so it never lands under the dialog.
+    const timer = setTimeout(restoreTerminalFocus, 300)
+    // Reopening before it fires cancels it, so it never lands under the dialog;
+    // a different dialog opened meanwhile makes it a no-op.
     return () => clearTimeout(timer)
   }, [isOpen])
 
@@ -295,6 +290,9 @@ export default function SettingsModal({
 
   return (
     <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="settings-title"
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
       onClick={(event) => {
         if (event.target === event.currentTarget) onClose()
@@ -306,7 +304,7 @@ export default function SettingsModal({
       >
         <div className="p-6 pb-0">
           <div className="flex items-baseline justify-between gap-4">
-            <h2 className="text-sm font-semibold uppercase tracking-wider text-primary text-balance">
+            <h2 id="settings-title" className="text-sm font-semibold uppercase tracking-wider text-primary text-balance">
               Settings
             </h2>
             {version && (
