@@ -36,6 +36,12 @@ interface StrategyState {
   views: Record<string, StrategyView>
   open: (teamKey: string) => void
   close: (teamKey: string) => void
+  /**
+   * Move a view to the chat's new team key (team-workspace-pages D2): a key
+   * changes when workspace discovery first places the chat in a repository.
+   * A view already open under the new key wins; the old one is dropped.
+   */
+  rekey: (from: string, to: string) => void
   review: (teamKey: string, revision: number | null) => void
   /** Reload after a CAS refusal: the stored draft it returned replaces the stale copy in detail. */
   adoptConflict: (teamKey: string) => void
@@ -56,6 +62,14 @@ export const useStrategyStore = create<StrategyState>(set => ({
   open: teamKey => set(state => {
     const view = state.views[teamKey] ?? closedStrategyView()
     return { views: { ...state.views, [teamKey]: { ...view, open: true, loading: !view.seen, error: null, conflict: null } } }
+  }),
+  rekey: (from, to) => set(state => {
+    const view = state.views[from]
+    if (!view || from === to) return state
+    const views = { ...state.views }
+    delete views[from]
+    if (!views[to]) views[to] = view
+    return { views }
   }),
   close: teamKey => set(state => {
     const views = { ...state.views }

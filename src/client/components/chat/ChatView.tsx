@@ -46,7 +46,7 @@ import TeamTasksPanel from './TeamTasksPanel'
 import { closedTaskView, useTeamTaskStore } from '../../stores/teamTaskStore'
 import TeamMessagesPanel from './TeamMessagesPanel'
 import { closedMessageView, useTeamMessageStore } from '../../stores/teamMessageStore'
-import { closeOtherSideSlots, toggleSideSlot, useOpenSideSlot } from './sideSlot'
+import { closeOtherSideSlots, rekeyTeamViews, toggleSideSlot, useOpenSideSlot } from './sideSlot'
 import { openParticipantChat } from './openParticipant'
 import { useSessionStore } from '../../stores/sessionStore'
 import ProductStrategyPanel from './ProductStrategyPanel'
@@ -109,6 +109,16 @@ export default function ChatView({ session, sendMessage, subscribe, connectionSt
   const repositories = useWorkspaceStore(state => state.snapshot?.repositories)
   const teamKey = useMemo(() => teamKeyOf(session.projectPath, repositories), [session.projectPath, repositories])
   const owner = useMemo(() => ({ sessionId: session.id, teamKey }), [session.id, teamKey])
+  // The key moves when discovery first places this chat in a repository (a
+  // worktree chat then keys by the main checkout): carry an open team panel
+  // along instead of letting it read as closed under the new key. Same chat
+  // only — a selection change starts from the next chat's own key.
+  const keyed = useRef({ sessionId: session.id, teamKey })
+  useLayoutEffect(() => {
+    const previous = keyed.current
+    keyed.current = { sessionId: session.id, teamKey }
+    if (previous.sessionId === session.id && previous.teamKey !== teamKey) rekeyTeamViews(previous.teamKey, teamKey)
+  }, [session.id, teamKey])
   const toggleDebug = () => toggleSideSlot('debug', owner)
   const mailbox = useTeamMailboxStore(state => state.views[teamKey]) ?? CLOSED_MAILBOX
   const teamGroups = useTeamGroups(mailbox.open, session.projectPath)

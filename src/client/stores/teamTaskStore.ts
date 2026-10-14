@@ -96,6 +96,12 @@ interface TaskState {
   views: Record<string, TaskView>
   open: (teamKey: string, taskId?: string) => void
   close: (teamKey: string) => void
+  /**
+   * Move a view to the chat's new team key (team-workspace-pages D2): a key
+   * changes when workspace discovery first places the chat in a repository.
+   * A view already open under the new key wins; the old one is dropped.
+   */
+  rekey: (from: string, to: string) => void
   select: (teamKey: string, taskId: string | null) => void
   begin: (teamKey: string, requestId: string, action: TaskAction) => void
   setDraft: (teamKey: string, patch: Partial<TaskFormDraft>) => void
@@ -139,6 +145,14 @@ export const useTeamTaskStore = create<TaskState>(set => ({
       ...view, open: true, loading: !view.open, selectedTaskId,
       detail: view.detail?.task.id === selectedTaskId ? view.detail : null,
     } } }
+  }),
+  rekey: (from, to) => set(state => {
+    const view = state.views[from]
+    if (!view || from === to) return state
+    const views = { ...state.views }
+    delete views[from]
+    if (!views[to]) views[to] = view
+    return { views }
   }),
   close: teamKey => set(state => {
     const views = { ...state.views }

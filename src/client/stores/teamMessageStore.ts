@@ -51,6 +51,12 @@ interface MessageState {
   views: Record<string, MessageView>
   open: (teamKey: string, filters?: MessageQueryFilters) => void
   close: (teamKey: string) => void
+  /**
+   * Move a view to the chat's new team key (team-workspace-pages D2): a key
+   * changes when workspace discovery first places the chat in a repository.
+   * A view already open under the new key wins; the old one is dropped.
+   */
+  rekey: (from: string, to: string) => void
   setFilters: (teamKey: string, filters: MessageQueryFilters) => void
   /** The component is asking for the next page; its snapshot appends. */
   beginMore: (teamKey: string) => void
@@ -111,6 +117,14 @@ export const useTeamMessageStore = create<MessageState>(set => ({
         ...(filters ? { filters, messages: [], nextCursor: null, loadingMore: false } : {}),
       } },
     }
+  }),
+  rekey: (from, to) => set(state => {
+    const view = state.views[from]
+    if (!view || from === to) return state
+    const views = { ...state.views }
+    delete views[from]
+    if (!views[to]) views[to] = view
+    return { views }
   }),
   close: teamKey => set(state => {
     const views = { ...state.views }

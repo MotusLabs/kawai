@@ -32,6 +32,12 @@ interface MailboxState {
   views: Record<string, MailboxView>
   open: (teamKey: string) => void
   close: (teamKey: string) => void
+  /**
+   * Move a view to the chat's new team key (team-workspace-pages D2): a key
+   * changes when workspace discovery first places the chat in a repository.
+   * A view already open under the new key wins; the old one is dropped.
+   */
+  rekey: (from: string, to: string) => void
   apply: (message: Extract<ServerMessage, { type: 'team-mailbox-snapshot' }>) => void
   beginReload: (teamKey: string) => void
   applyRulesResult: (message: RulesResult) => void
@@ -45,6 +51,14 @@ const patch = (state: MailboxState, teamKey: string, update: Partial<MailboxView
 export const useTeamMailboxStore = create<MailboxState>(set => ({
   views: {},
   open: id => set(state => ({ views: { ...state.views, [id]: { ...(state.views[id] ?? closedMailbox()), open: true, loading: true } } })),
+  rekey: (from, to) => set(state => {
+    const view = state.views[from]
+    if (!view || from === to) return state
+    const views = { ...state.views }
+    delete views[from]
+    if (!views[to]) views[to] = view
+    return { views }
+  }),
   close: id => set(state => { const views = { ...state.views }; delete views[id]; return { views } }),
   apply: message => set(state => patch(state, message.teamPath, {
     loading: false, messages: message.messages,

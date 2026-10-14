@@ -97,3 +97,12 @@ export function useOpenSideSlot(owner: SlotOwner): SideSlot | null {
   if (strategy) return 'strategy'
   return null
 }
+
+/** Move every team panel's view from a chat's old team key to its new one. */
+export function rekeyTeamViews(from: string, to: string) {
+  if (from === to) return
+  useTeamMailboxStore.getState().rekey(from, to)
+  useTeamTaskStore.getState().rekey(from, to)
+  useTeamMessageStore.getState().rekey(from, to)
+  useStrategyStore.getState().rekey(from, to)
+}
