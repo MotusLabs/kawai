@@ -17,8 +17,10 @@ export function handleChatMessage(message: ChatMessage, _deps: MessageRouterDeps
     case 'chat-context-usage': chat.setContextUsage(message.sessionId, message.usage); return
     case 'chat-usage': chat.setUsage(message.profileId, message.report); return
     case 'chat-workers': chat.setWorkers(message.sessionId, message.workers); return
+    case 'chat-background-tasks': chat.setBackgroundTasks(message.sessionId, message.tasks); return
     case 'chat-notifications': chat.setNotifications(message.sessionId, message.notifications); return
     case 'chat-worker-transcript': chat.setWorkerBody(message); return
+    case 'chat-task-output': chat.setTaskOutput(message); return
     case 'chat-model': chat.setModel(message.sessionId, message.model); return
     case 'chat-debug-frames': useChatDebugStore.getState().apply(message); return
   }

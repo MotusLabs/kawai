@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test'
+import { useLayoutEffect } from 'react'
 import TestRenderer, { act, type ReactTestInstance } from 'react-test-renderer'
 import NewSessionModal from '../components/NewSessionModal'
 import { DEFAULT_PRESETS, useSettingsStore } from '../stores/settingsStore'
@@ -924,6 +925,302 @@ describe('NewSessionModal project path validation', () => {
       renderer.root.findByType('form').props.onSubmit({ preventDefault: () => {} })
     })
     expect(created).toEqual([{ path: '/typed/by/user', name: 'My name' }])
+
+    act(() => {
+      renderer.unmount()
+    })
+  })
+})
+
+/**
+ * Open-transition race harness. CI e2e intermittently saw a freshly filled
+ * Project Path revert to the default: the dialog's defaults were applied by a
+ * passive effect that fires after paint, so a fill landing between the open
+ * commit and that effect (Playwright under load) was overwritten. The probe
+ * reproduces that window exactly: `createNodeMock` captures the Project Path
+ * input's props during the open commit (refs attach before layout effects),
+ * and a layout effect — the first moment the input is interactive and still
+ * strictly before any passive effect — performs the user's fill.
+ */
+describe('NewSessionModal open-transition race', () => {
+  interface RaceHarness {
+    open: () => void
+    committedAtOpen: () => string | undefined
+    pathValue: () => string
+    pathError: () => string | null
+    deliverLateData: (props: Record<string, unknown>) => void
+    settleFetches: () => Promise<void>
+    submit: () => void
+    created: Array<{ path: string }>
+    unmount: () => void
+  }
+
+  function mountRaceDialog(fill: string, entry: Record<string, unknown> = {}): RaceHarness {
+    setupDom()
+    globalThis.fetch = (async (url: string) =>
+      String(url).startsWith('/api/chat/groups')
+        ? Response.json({ groups: [], errors: [] })
+        : Response.json({ profiles: [{ id: 'default', label: 'Default' }], errors: [] })) as unknown as typeof fetch
+
+    let renderer!: TestRenderer.ReactTestRenderer
+    let pathProps: Record<string, unknown> | null = null
+    let committed: string | undefined
+    const created: Array<{ path: string }> = []
+    /** Set before the open update: the probe fills once, at the open commit. */
+    let probeNextOpen = false
+
+    // Refs attach during the commit, so the captured props carry the value
+    // the input was committed with — before any effect could initialize it.
+    const createNodeMock = (element: { type?: unknown; props?: Record<string, unknown> }) => {
+      if (element.type === 'input' && element.props?.['aria-label'] === 'Project Path') {
+        pathProps = element.props
+      }
+      return { focus: () => {} }
+    }
+
+    function CommitProbe() {
+      useLayoutEffect(() => {
+        if (!probeNextOpen || !pathProps) return
+        probeNextOpen = false
+        committed = pathProps.value as string
+        ;(pathProps.onChange as (event: { target: { value: string } }) => void)({
+          target: { value: fill },
+        })
+      })
+      return null
+    }
+
+    const form = (isOpen: boolean, props: Record<string, unknown> = {}) => (
+      <>
+        <NewSessionModal
+          isOpen={isOpen}
+          onClose={() => {}}
+          onCreate={(path) => {
+            created.push({ path })
+          }}
+          defaultProjectDir="/base"
+          commandPresets={DEFAULT_PRESETS}
+          defaultPresetId="claude"
+          {...entry}
+          {...props}
+        />
+        <CommitProbe />
+      </>
+    )
+
+    act(() => {
+      renderer = TestRenderer.create(form(false), { createNodeMock })
+    })
+
+    return {
+      open: () => {
+        probeNextOpen = true
+        act(() => {
+          renderer.update(form(true))
+        })
+      },
+      committedAtOpen: () => committed,
+      pathValue: () =>
+        renderer.root.findAllByProps({ 'aria-label': 'Project Path' })[0]!.props.value as string,
+      pathError: () => {
+        const matches = renderer.root.findAllByProps({ 'data-testid': 'project-path-error' })
+        return matches.length > 0 ? String(matches[0].props.children) : null
+      },
+      deliverLateData: (props: Record<string, unknown>) => {
+        act(() => {
+          renderer.update(form(true, props))
+        })
+      },
+      settleFetches: async () => {
+        await act(async () => {
+          for (let i = 0; i < 12; i++) await Promise.resolve()
+        })
+      },
+      created,
+      submit: () => {
+        act(() => {
+          renderer.root.findByType('form').props.onSubmit({ preventDefault: () => {} })
+        })
+      },
+      unmount: () => {
+        act(() => {
+          renderer.unmount()
+        })
+      },
+    }
+  }
+
+  test('a fill landing at the first interactive moment is never overwritten by the open init', async () => {
+    const dialog = mountRaceDialog('/typed/by/user')
+    dialog.open()
+
+    // The open commit must already carry the default: a dialog that paints
+    // interactive with an uninitialized path invites the fill-then-init race.
+    expect(dialog.committedAtOpen()).toBe('/base')
+    // The fill survived the open init that flushes right after the commit.
+    expect(dialog.pathValue()).toBe('/typed/by/user')
+
+    // Late first-load hydration (server default dir, last path, sessions'
+    // active path, presets) must not touch the edited field either.
+    dialog.deliverLateData({
+      defaultProjectDir: '/late/default',
+      lastProjectPath: '/late/last',
+      activeProjectPath: '/late/active',
+      commandPresets: DEFAULT_PRESETS,
+    })
+    expect(dialog.pathValue()).toBe('/typed/by/user')
+
+    await dialog.settleFetches()
+    dialog.submit()
+    expect(dialog.created).toEqual([{ path: '/typed/by/user' }])
+
+    dialog.unmount()
+  })
+
+  test('clearing the path at the first interactive moment is never refilled by the open init', () => {
+    const dialog = mountRaceDialog('', { initialPath: '/pre/from/duplicate' })
+    dialog.open()
+
+    expect(dialog.committedAtOpen()).toBe('/pre/from/duplicate')
+    // Edited to empty stays empty — an empty edit is still an edit.
+    expect(dialog.pathValue()).toBe('')
+
+    dialog.deliverLateData({ defaultProjectDir: '/late/default', lastProjectPath: '/late/last' })
+    expect(dialog.pathValue()).toBe('')
+
+    // An empty path refuses create with the inline reason instead of
+    // silently submitting whatever the init would have refilled.
+    dialog.submit()
+    expect(dialog.pathError()).toBe('Enter a project path to create the session.')
+
+    dialog.unmount()
+  })
+
+  test('opening fetches the per-project catalog and groups exactly once, for the initialized path', () => {
+    setupDom()
+    const urls: string[] = []
+    globalThis.fetch = (async (url: string) => {
+      urls.push(url)
+      return String(url).startsWith('/api/chat/groups')
+        ? Response.json({ groups: [], errors: [] })
+        : Response.json({ profiles: [{ id: 'default', label: 'Default' }], errors: [] })
+    }) as unknown as typeof fetch
+
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => {
+      renderer = TestRenderer.create(
+        <NewSessionModal
+          isOpen
+          onClose={() => {}}
+          onCreate={() => {}}
+          defaultProjectDir="/base"
+          commandPresets={DEFAULT_PRESETS}
+          defaultPresetId="claude"
+        />
+      )
+    })
+
+    // Master fetched the catalog twice on open (stale path from the first
+    // render, refetch after the init effect set the default); the render-phase
+    // init means one fetch per endpoint, for the right path.
+    expect(urls.filter((url) => url.startsWith('/api/chat/profiles'))).toEqual([
+      '/api/chat/profiles?projectPath=%2Fbase',
+    ])
+    expect(urls.filter((url) => url.startsWith('/api/chat/groups'))).toEqual([
+      '/api/chat/groups?projectPath=%2Fbase',
+    ])
+
+    act(() => {
+      renderer.unmount()
+    })
+  })
+
+  /**
+   * Terminal-focus harness: the xterm helper textarea stands in for the
+   * terminal, recording the disable/enable/focus touches the modal's
+   * open/close side effects make on it.
+   */
+  function terminalFocusDom() {
+    const calls: string[] = []
+    const textarea = {
+      setAttribute: (_name: string, _value: string) => {
+        calls.push('disable')
+      },
+      removeAttribute: (_name: string) => {
+        calls.push('enable')
+      },
+      focus: () => {
+        calls.push('terminal-focus')
+      },
+      blur: () => {},
+    }
+    globalAny.document = { querySelector: () => textarea } as unknown as Document
+    globalAny.window = {
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    } as unknown as Window & typeof globalThis
+    return { calls }
+  }
+
+  /** The close-side terminal focus waits 300 ms; run past it. */
+  const afterCloseWindow = () => new Promise((resolve) => setTimeout(resolve, 340))
+
+  test('a mount while closed schedules no terminal focus', async () => {
+    const terminal = terminalFocusDom()
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => {
+      renderer = TestRenderer.create(
+        <NewSessionModal
+          isOpen={false}
+          onClose={() => {}}
+          onCreate={() => {}}
+          defaultProjectDir="/base"
+          commandPresets={DEFAULT_PRESETS}
+          defaultPresetId="claude"
+        />
+      )
+    })
+
+    await act(async () => {
+      await afterCloseWindow()
+    })
+    expect(terminal.calls).toEqual([])
+
+    act(() => {
+      renderer.unmount()
+    })
+  })
+
+  test('a close→reopen within 300 ms never re-enables or focuses the terminal textarea', async () => {
+    const terminal = terminalFocusDom()
+    const form = (isOpen: boolean) => (
+      <NewSessionModal
+        isOpen={isOpen}
+        onClose={() => {}}
+        onCreate={() => {}}
+        defaultProjectDir="/base"
+        commandPresets={DEFAULT_PRESETS}
+        defaultPresetId="claude"
+      />
+    )
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => {
+      renderer = TestRenderer.create(form(true))
+    })
+    act(() => {
+      renderer.update(form(false))
+    })
+    // Reopen before the close-side 300 ms terminal focus fires.
+    act(() => {
+      renderer.update(form(true))
+    })
+
+    await act(async () => {
+      await afterCloseWindow()
+    })
+    // Both opens disabled the textarea; the stale close timeout was cancelled
+    // instead of re-enabling and focusing the terminal under the open dialog.
+    expect(terminal.calls).toEqual(['disable', 'disable'])
 
     act(() => {
       renderer.unmount()
