@@ -151,6 +151,12 @@ export interface ChatSessionDriverOptions {
    * role + mailbox note, agent-teams D7). Omitted/empty = preset only.
    */
   getSystemPromptAppend?: () => string | undefined
+  /**
+   * Reasoning effort for the spawn, read at every spawn like the prompt
+   * (group-effort D2). Undefined = no `effort` option, so Claude Code's own
+   * settings decide.
+   */
+  getEffort?: () => Options['effort']
   teamMcpServer?: NonNullable<Options['mcpServers']>[string]
   /**
    * Recovered roster rows (workers design D6) seeding a fresh driver, so
@@ -219,6 +225,13 @@ export interface ChatSessionDriverOptions {
     opts?: { persist?: boolean }
   ) => void
   /**
+   * Current model (chat-session-model design D5): the model string of an
+   * init frame, fired only when it is non-empty and differs from the last
+   * fired one — init opens every turn, so an unchanged model never re-fires
+   * and a mid-session /model switch lands on the next turn.
+   */
+  onModel?: (model: string) => void
+  /**
    * Plan usage (usage bar design D3): parsed report from a pushed
    * rate_limit_event frame, whatever turn state the session is in.
    */
@@ -231,9 +244,13 @@ export interface ChatSessionDriverOptions {
   onUsageReport?: (report: ChatUsageReport) => void
   /**
    * Claims the profile's one usage pull after a spawn (design D1); when it
-   * returns false the pull is skipped for this driver's whole lifetime.
+   * resolves false the pull is skipped for this driver's whole lifetime. The
+   * claim may be async so the manager can route the pull to the session
+   * provider's own quota endpoint first (provider usage pull) and only fall
+   * back to this SDK pull when that endpoint does not answer for the
+   * profile.
    */
-  claimUsagePull?: () => boolean
+  claimUsagePull?: () => boolean | Promise<boolean>
   /** A pull that yielded no windows (or failed) records the no-data verdict. */
   onUsageNoData?: () => void
   /** Fired once when the SDK init message reveals the session id. */
@@ -297,6 +314,8 @@ export class ChatSessionDriver {
   /** Echo suppression: texts we submitted that the SDK may echo back. */
   private readonly sentEchoTexts = new Map<string, number>()
   private capturedSdkSessionId: string | undefined
+  /** Last model reported to onModel; undefined before the first report. */
+  private lastReportedModel: string | undefined
   private lastStatus: SessionStatus = 'waiting'
   /** Live-turn activity state (design D3); null phase when no turn runs. */
   private activityState: ChatActivityState = initialChatActivityState()
@@ -419,7 +438,8 @@ export class ChatSessionDriver {
     this.queue.push({
       type: 'user', message: { role: 'user', content: text },
       parent_tool_use_id: null,
-      origin: { kind: 'peer', from: envelope.senderSession },
+      // A human sender has no session id; the envelope's senderKind says so.
+      origin: { kind: 'peer', from: envelope.senderSession ?? 'human' },
     })
     this.refreshStatus()
   }
@@ -639,6 +659,7 @@ export class ChatSessionDriver {
     const executablePath = profileExecutable ?? this.claudeExecutablePath
     const wire = this.options.wire
     const systemPromptAppend = this.options.getSystemPromptAppend?.()
+    const effort = this.options.getEffort?.()
     const options: Options = {
       cwd: this.sessionProjectPath,
       // Option parity with a terminal `claude` session in the project dir.
@@ -665,6 +686,9 @@ export class ChatSessionDriver {
         ? { pathToClaudeCodeExecutable: executablePath }
         : {}),
       ...(resume ? { resume } : {}),
+      // Before the profile's launch options, which carry no effort today, so
+      // any future override there is a deliberate choice (group-effort D3).
+      ...(effort ? { effort } : {}),
       ...launchOptions,
       ...(wire ? { spawnClaudeCodeProcess: createWireTappedSpawn(wire) } : {}),
     }
@@ -689,7 +713,7 @@ export class ChatSessionDriver {
     this.commands.beginLoading()
     void this.fetchInitializationCommands(query)
     void this.runQueryLoop(query)
-    this.maybePullUsage(query)
+    void this.maybePullUsage(query)
     // Attach-time threshold probe (design D2): the report can answer before
     // the first request does.
     this.refreshContextThreshold()
@@ -698,14 +722,15 @@ export class ChatSessionDriver {
   /**
    * The usage pull fallback (design D1): right after a spawn, when the
    * profile holds no data at all, ask the CLI for its plan windows so the
-   * bar can appear before the first turn reports anything. Everything is
-   * wrapped: the control API is explicitly unstable, and a throw, an absent
-   * method, or a shape change records the no-data verdict instead of
-   * disturbing the session.
+   * bar can appear before the first turn reports anything. The claim is
+   * awaited (it may route to the provider quota endpoint first, provider
+   * usage pull); everything else is wrapped: the control API is explicitly
+   * unstable, and a throw, an absent method, or a shape change records the
+   * no-data verdict instead of disturbing the session.
    */
-  private maybePullUsage(query: Query): void {
+  private async maybePullUsage(query: Query): Promise<void> {
     const { claimUsagePull, onUsageReport, onUsageNoData } = this.options
-    if (!claimUsagePull || !onUsageReport || !claimUsagePull()) return
+    if (!claimUsagePull || !onUsageReport || !(await claimUsagePull())) return
     const pull = query.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET
     if (typeof pull !== 'function') {
       onUsageNoData?.()
@@ -1025,6 +1050,18 @@ export class ChatSessionDriver {
       if (!this.capturedSdkSessionId && message.session_id) {
         this.capturedSdkSessionId = message.session_id
         this.options.onSdkSessionId?.(message.session_id)
+      }
+      // The model in effect for the coming turn (design D1/D5): init opens
+      // every turn, so a /model switch lands here on the next one. Only a
+      // changed, non-empty value fires — a missing or empty string on an
+      // older CLI never reports a placeholder.
+      if (
+        typeof message.model === 'string' &&
+        message.model !== '' &&
+        message.model !== this.lastReportedModel
+      ) {
+        this.lastReportedModel = message.model
+        this.options.onModel?.(message.model)
       }
       // The authoritative terminal-bound set; until here the tracker used the
       // observed fallback (verified 2026-10-06: init only arrives once a turn

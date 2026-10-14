@@ -209,7 +209,7 @@ export class TaskStore {
     if (task.creator.sessionId) ids.add(task.creator.sessionId)
     const rows = this.db.prepare(`
       SELECT session_id AS id FROM chat_sessions WHERE task_id = $id
-      UNION SELECT from_session FROM team_messages WHERE task_id = $id
+      UNION SELECT from_session FROM team_messages WHERE task_id = $id AND from_session IS NOT NULL
       UNION SELECT claimed_by FROM team_messages WHERE task_id = $id AND claimed_by IS NOT NULL
       UNION SELECT author_session FROM team_task_journal WHERE task_id = $id AND author_session IS NOT NULL`)
       .all({ $id: task.id }) as Array<{ id: string }>

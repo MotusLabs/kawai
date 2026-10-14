@@ -60,7 +60,18 @@ type FakeContextControl = (opts: {
 
 const testManagers = new Set<ChatSessionManager>()
 async function managedManager(options: ConstructorParameters<typeof ChatSessionManager>[0]) {
-  const manager = new ChatSessionManager(options)
+  const manager = new ChatSessionManager({
+    // Provider usage pulls must never leave the tests: a harness that does
+    // not inject a fetch gets one that fails, so the claim falls back to the
+    // SDK pull exactly as an unreachable endpoint would — even when the
+    // machine's real environment exports a provider base URL.
+    providerUsageFetch:
+      options.providerUsageFetch ??
+      (async () => {
+        throw new Error('provider usage pull not expected in this harness')
+      }) as unknown as typeof fetch,
+    ...options,
+  })
   // Restore is async (async-transcript-parsing design D2): block until the
   // persisted rows are in, matching the pre-change synchronous constructor.
   await manager.whenRestored()
@@ -161,6 +172,8 @@ interface ManagerHarness {
   events: Array<{ sessionId: string; event: ChatEvent }>
   activities: Array<{ sessionId: string; activity: ChatActivity | null }>
   contextUsage: Array<{ sessionId: string; usage: ChatContextUsage | null }>
+  /** Model publishes (chat-session-model design D5), in order. */
+  models: Array<{ sessionId: string; model: string }>
   usage: Array<{ profileId: string; report: ChatUsageReport | null }>
   /** Worker-roster publishes, in order (workers design D2). */
   workers: Array<{ sessionId: string; workers: ChatWorker[] }>
@@ -184,6 +197,7 @@ async function createHarness(
   const events: Array<{ sessionId: string; event: ChatEvent }> = []
   const activities: Array<{ sessionId: string; activity: ChatActivity | null }> = []
   const contextUsage: Array<{ sessionId: string; usage: ChatContextUsage | null }> = []
+  const models: Array<{ sessionId: string; model: string }> = []
   const usage: Array<{ profileId: string; report: ChatUsageReport | null }> = []
   const workers: Array<{ sessionId: string; workers: ChatWorker[] }> = []
   const backgroundTasks: Array<{ sessionId: string; tasks: ChatBackgroundTask[] }> = []
@@ -195,6 +209,7 @@ async function createHarness(
     onEvent: (sessionId, event) => events.push({ sessionId, event }),
     onActivity: (sessionId, activity) => activities.push({ sessionId, activity }),
     onContextUsage: (sessionId, reading) => contextUsage.push({ sessionId, usage: reading }),
+    onModel: (sessionId, model) => models.push({ sessionId, model }),
     onUsage: (profileId, report) => usage.push({ profileId, report }),
     onWorkers: (sessionId, roster) => workers.push({ sessionId, workers: roster }),
     onBackgroundTasks: (sessionId, tasks) => backgroundTasks.push({ sessionId, tasks }),
@@ -204,7 +219,7 @@ async function createHarness(
     requestWorkspaceRefresh: (projectPath) => refreshes.push(projectPath),
     ...(workerStore !== undefined ? { workerStore } : {}),
   })
-  return { manager, registry, handles, events, activities, contextUsage, usage, workers, backgroundTasks, refreshes }
+  return { manager, registry, handles, events, activities, contextUsage, models, usage, workers, backgroundTasks, refreshes }
 }
 
 /** Let the driver's stream loop drain pushed messages. */
@@ -228,11 +243,12 @@ async function waitForCondition(
   }
 }
 
-function initMessage(sessionId: string): SDKMessage {
+function initMessage(sessionId: string, model?: string): SDKMessage {
   return {
     type: 'system',
     subtype: 'init',
     session_id: sessionId,
+    ...(model !== undefined ? { model } : {}),
   } as unknown as SDKMessage
 }
 
@@ -1057,6 +1073,14 @@ describe('ChatSessionManager', () => {
         error: 'This chat session is archived. Restore it to continue the conversation.',
       })
       expect(handles).toHaveLength(0)
+      // The refusal text is exposed read-only for the unavailable-recipient
+      // waiting reason (team-waiting-reasons D2): same text `available`
+      // rejects on, null for a session that may start.
+      const record = db.getChatSession(created.session.id)!
+      expect(manager.startBlockerFor(record)).toBe('This chat session is archived. Restore it to continue the conversation.')
+      const fresh = manager.createSession({ projectPath: '/tmp/proj' })
+      if (!fresh.ok) throw new Error('create failed')
+      expect(manager.startBlockerFor(db.getChatSession(fresh.session.id)!)).toBeNull()
     })
 
     test('start is refused when the project directory is missing', async () => {
@@ -2547,6 +2571,138 @@ describe('ChatSessionManager', () => {
   })
 })
 
+/**
+ * Last-known identity (team-message-threads D3): creation and every rename
+ * path keep `team_session_directory` current, and kill or archive never write
+ * there — the row is what still names a participant after the session is gone.
+ */
+describe('ChatSessionManager team session directory', () => {
+  let tempDir: string
+  let db: SessionDatabase
+  const originalApiKey = process.env.ANTHROPIC_API_KEY
+  const originalConfigDir = process.env.CLAUDE_CONFIG_DIR
+  const originalHome = process.env.HOME
+
+  beforeEach(() => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentboard-chatdir-'))
+    db = initDatabase({ path: path.join(tempDir, 'test.db') })
+    process.env.ANTHROPIC_API_KEY = 'sk-test-key'
+    process.env.CLAUDE_CONFIG_DIR = path.join(tempDir, 'claude-config')
+    process.env.HOME = tempDir
+  })
+
+  afterEach(() => {
+    if (originalApiKey !== undefined) process.env.ANTHROPIC_API_KEY = originalApiKey
+    else delete process.env.ANTHROPIC_API_KEY
+    if (originalConfigDir !== undefined) process.env.CLAUDE_CONFIG_DIR = originalConfigDir
+    else delete process.env.CLAUDE_CONFIG_DIR
+    if (originalHome !== undefined) process.env.HOME = originalHome
+    else delete process.env.HOME
+  })
+
+  /** The durable row, including the write timestamp a no-op must not move. */
+  function directoryRow(sessionId: string) {
+    return db.db.prepare(
+      'SELECT name, group_id, updated_at FROM team_session_directory WHERE session_id = ?'
+    ).get(sessionId) as { name: string; group_id: string | null; updated_at: string } | null
+  }
+
+  test('create records the session name and group once its team is known', async () => {
+    const { manager } = await createHarness(db)
+    const created = manager.createSession({ projectPath: '/tmp/proj', name: 'Export button', groupId: 'devs' })
+    if (!created.ok) throw new Error(created.error)
+    await waitForCondition(() => directoryRow(created.session.id) !== null)
+    expect(directoryRow(created.session.id)).toMatchObject({
+      name: 'Export button', group_id: 'devs',
+    })
+    manager.shutdown()
+  })
+
+  test('a generated title rename re-records the name', async () => {
+    const harness = await createHarness(db)
+    const created = harness.manager.createSession({ projectPath: '/tmp/proj' })
+    if (!created.ok) throw new Error(created.error)
+    const id = created.session.id
+    await waitForCondition(() => directoryRow(id) !== null)
+    expect(directoryRow(id)!.name).toBe(created.session.name)
+
+    writeTranscript(
+      'dir-title',
+      JSON.stringify({ type: 'ai-title', aiTitle: 'adopted title', sessionId: 'dir-title' }) + '\n'
+    )
+    await harness.manager.send(id, 'hello')
+    harness.handles[0]!.push(initMessage('dir-title'))
+    await waitForCondition(() => directoryRow(id)?.name === 'adopted title')
+    expect(directoryRow(id)!.group_id).toBeNull()
+    harness.manager.shutdown()
+  })
+
+  test('a manual rename re-records the name and pins it against later titles', async () => {
+    const harness = await createHarness(db)
+    const created = harness.manager.createSession({ projectPath: '/tmp/proj', name: 'Placeholder' })
+    if (!created.ok) throw new Error(created.error)
+    const id = created.session.id
+    await waitForCondition(() => directoryRow(id) !== null)
+
+    expect(harness.manager.rename(id, 'My own name').ok).toBe(true)
+    expect(directoryRow(id)!.name).toBe('My own name')
+
+    writeTranscript(
+      'dir-manual',
+      JSON.stringify({ type: 'ai-title', aiTitle: 'too late', sessionId: 'dir-manual' }) + '\n'
+    )
+    await harness.manager.send(id, 'hello')
+    harness.handles[0]!.push(initMessage('dir-manual'))
+    await flush(10)
+    expect(directoryRow(id)!.name).toBe('My own name')
+    harness.manager.shutdown()
+  })
+
+  test('repeated renames overwrite the recorded entry rather than adding rows', async () => {
+    const { manager } = await createHarness(db)
+    const created = manager.createSession({ projectPath: '/tmp/proj', name: 'First' })
+    if (!created.ok) throw new Error(created.error)
+    const id = created.session.id
+    await waitForCondition(() => directoryRow(id) !== null)
+    for (const name of ['Second', 'Third']) {
+      expect(manager.rename(id, name).ok).toBe(true)
+    }
+    expect(directoryRow(id)!.name).toBe('Third')
+    expect(db.db.prepare('SELECT COUNT(*) AS n FROM team_session_directory').get()).toEqual({ n: 1 })
+    manager.shutdown()
+  })
+
+  test('kill leaves the last known identity in place and writes nothing new', async () => {
+    const { manager } = await createHarness(db)
+    const created = manager.createSession({ projectPath: '/tmp/proj', name: 'Doomed helper', groupId: 'devs' })
+    if (!created.ok) throw new Error(created.error)
+    const id = created.session.id
+    await waitForCondition(() => directoryRow(id) !== null)
+    expect(manager.rename(id, 'Renamed helper').ok).toBe(true)
+    const before = directoryRow(id)!
+    expect(before.name).toBe('Renamed helper')
+
+    expect(manager.kill(id)).toBe(true)
+    await flush(6)
+    expect(directoryRow(id)).toEqual(before)
+    manager.shutdown()
+  })
+
+  test('archive leaves the last known identity in place and writes nothing new', async () => {
+    const { manager } = await createHarness(db)
+    const created = manager.createSession({ projectPath: '/tmp/proj', name: 'Parked work', groupId: 'qa' })
+    if (!created.ok) throw new Error(created.error)
+    const id = created.session.id
+    await waitForCondition(() => directoryRow(id) !== null)
+    const before = directoryRow(id)!
+
+    expect(manager.archive(id).ok).toBe(true)
+    await flush(6)
+    expect(directoryRow(id)).toEqual(before)
+    manager.shutdown()
+  })
+})
+
 describe('ChatSessionManager activity', () => {
   let tempDir: string
   let db: SessionDatabase
@@ -3102,6 +3258,77 @@ describe('ChatSessionManager context usage', () => {
       .map((entry) => entry.event)
       .find((event) => event.type === 'notice')
     expect(notice).toMatchObject({ type: 'notice', kind: 'compacted' })
+    harness.manager.shutdown()
+  })
+})
+
+describe('ChatSessionManager model', () => {
+  let tempDir: string
+  let db: SessionDatabase
+  const originalHome = process.env.HOME
+  beforeEach(() => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentboard-chatmgr-model-'))
+    db = initDatabase({ path: path.join(tempDir, 'test.db') })
+    process.env.ANTHROPIC_API_KEY = 'sk-test-key'
+    process.env.CLAUDE_CONFIG_DIR = path.join(tempDir, 'claude-config')
+    process.env.HOME = tempDir
+  })
+  afterEach(() => {
+    if (originalHome !== undefined) process.env.HOME = originalHome
+    else delete process.env.HOME
+    fs.rmSync(tempDir, { recursive: true, force: true })
+  })
+
+  test('a reported model persists immediately, snapshots, and pushes once', async () => {
+    const harness = await createHarness(db)
+    const created = harness.manager.createSession({ projectPath: '/tmp/proj' })
+    if (!created.ok) throw new Error('create failed')
+    const id = created.session.id
+    // Before the first report the snapshot carries an explicit null.
+    expect(harness.manager.getSnapshot(id)!.model).toBeNull()
+
+    await harness.manager.send(id, 'turn')
+    const fake = harness.handles[0]!
+    fake.push(initMessage('sdk-model-1', 'claude-sonnet-5-5'))
+    await flush()
+    // No turn boundary yet, but the write is immediate (design D5): model
+    // changes are rare, so they never wait for one.
+    expect(db.getChatSession(id)!.model).toBe('claude-sonnet-5-5')
+    expect(harness.manager.getSnapshot(id)!.model).toBe('claude-sonnet-5-5')
+    expect(harness.models).toEqual([{ sessionId: id, model: 'claude-sonnet-5-5' }])
+
+    // An unchanged model on the next turn never re-fires the sink.
+    fake.push(resultWithWindow())
+    await flush()
+    await harness.manager.send(id, 'second')
+    fake.push(initMessage('sdk-model-1', 'claude-sonnet-5-5'))
+    await flush()
+    expect(harness.models).toHaveLength(1)
+    harness.manager.shutdown()
+  })
+
+  test('the snapshot falls back to the stored column after a restart', async () => {
+    const seed = await createHarness(db)
+    const created = seed.manager.createSession({ projectPath: '/tmp/proj' })
+    if (!created.ok) throw new Error('create failed')
+    const id = created.session.id
+    await seed.manager.send(id, 'turn')
+    seed.handles[0]!.push(initMessage('sdk-model-1', 'claude-sonnet-5-5'))
+    seed.handles[0]!.push(resultWithWindow())
+    await flush()
+    // The restarted manager resumes from the SDK transcript, which must exist.
+    writeTranscript('sdk-model-1', '[]')
+    seed.manager.shutdown()
+
+    const harness = await createHarness(db)
+    expect(harness.manager.getSnapshot(id)!.model).toBe('claude-sonnet-5-5')
+
+    // A /model switch after the restart updates record, row, and snapshot.
+    await harness.manager.send(id, 'switched')
+    harness.handles[0]!.push(initMessage('sdk-model-1', 'sonnet'))
+    await flush()
+    expect(db.getChatSession(id)!.model).toBe('sonnet')
+    expect(harness.manager.getSnapshot(id)!.model).toBe('sonnet')
     harness.manager.shutdown()
   })
 })
@@ -3972,5 +4199,284 @@ describe('ChatSessionManager background-task roster (background tasks D2)', () =
     await manager.stopBackgroundTask(id, 'b-done')
     expect(stopped).toEqual([])
     expect(events.some(({ event }) => event.type === 'error')).toBe(false)
+  })
+})
+
+describe('ChatSessionManager provider usage pull', () => {
+  let tempDir: string
+  let db: SessionDatabase
+  const original = {
+    apiKey: process.env.ANTHROPIC_API_KEY,
+    configDir: process.env.CLAUDE_CONFIG_DIR,
+    home: process.env.HOME,
+    baseUrl: process.env.ANTHROPIC_BASE_URL,
+    authToken: process.env.ANTHROPIC_AUTH_TOKEN,
+  }
+
+  beforeEach(() => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentboard-chatmgr-zai-'))
+    db = initDatabase({ path: path.join(tempDir, 'test.db') })
+    process.env.ANTHROPIC_API_KEY = 'sk-test-key'
+    process.env.CLAUDE_CONFIG_DIR = path.join(tempDir, 'claude-config')
+    process.env.HOME = tempDir
+    // The provider routing comes from getProviderEnv per test, never from
+    // the machine's real environment.
+    delete process.env.ANTHROPIC_BASE_URL
+    delete process.env.ANTHROPIC_AUTH_TOKEN
+  })
+
+  afterEach(() => {
+    if (original.apiKey === undefined) delete process.env.ANTHROPIC_API_KEY
+    else process.env.ANTHROPIC_API_KEY = original.apiKey
+    if (original.configDir === undefined) delete process.env.CLAUDE_CONFIG_DIR
+    else process.env.CLAUDE_CONFIG_DIR = original.configDir
+    if (original.home === undefined) delete process.env.HOME
+    else process.env.HOME = original.home
+    if (original.baseUrl === undefined) delete process.env.ANTHROPIC_BASE_URL
+    else process.env.ANTHROPIC_BASE_URL = original.baseUrl
+    if (original.authToken === undefined) delete process.env.ANTHROPIC_AUTH_TOKEN
+    else process.env.ANTHROPIC_AUTH_TOKEN = original.authToken
+    closeDispatchers()
+    db.close()
+    fs.rmSync(tempDir, { recursive: true, force: true })
+  })
+
+  function jsonResponse(body: unknown, status = 200): Response {
+    return new Response(JSON.stringify(body), {
+      status,
+      headers: { 'Content-Type': 'application/json' },
+    })
+  }
+
+  /** The 2026-10-12 quota capture, first at 2% and then at 50% after a refresh. */
+  const CAPTURE = (percentage: number) => ({
+    code: 200,
+    msg: 'Operation successful',
+    data: {
+      limits: [{ type: 'TIME_LIMIT', percentage, nextResetTime: 1793701399997 }],
+      level: 'pro',
+    },
+    success: true,
+  })
+
+  const SDK_PULL = {
+    subscription_type: 'max',
+    rate_limits_available: true,
+    rate_limits: {
+      five_hour: { utilization: 22.37, resets_at: '2026-10-07T18:11:04.000Z' },
+    },
+  }
+
+  interface ProviderHarness {
+    manager: ChatSessionManager
+    handles: FakeHandle[]
+    usage: Array<{ profileId: string; report: ChatUsageReport | null }>
+    fetchCalls: Array<{ url: string; auth?: string }>
+  }
+
+  async function createProviderHarness(
+    providerEnv: Record<string, string>,
+    responses: Array<Response>
+  ): Promise<ProviderHarness> {
+    const fetchCalls: Array<{ url: string; auth?: string }> = []
+    const canned = [...responses]
+    const providerUsageFetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const headers = (init?.headers ?? {}) as Record<string, string>
+      fetchCalls.push({ url: String(input), auth: headers.Authorization })
+      const next = canned.shift() ?? canned[canned.length - 1]
+      if (!next) throw new Error('no canned response left')
+      return next
+    }) as unknown as typeof fetch
+    const handles: FakeHandle[] = []
+    const usage: Array<{ profileId: string; report: ChatUsageReport | null }> = []
+    const manager = await managedManager({
+      isDirectory: anyDirectory,
+      registry: new SessionRegistry(),
+      db,
+      onEvent: () => {},
+      onUsage: (profileId, report) => usage.push({ profileId, report }),
+      queryFactory: fakeQueryFactory(handles, () => Promise.resolve(SDK_PULL)),
+      ...(Object.keys(providerEnv).length > 0 ? { getProviderEnv: () => providerEnv } : {}),
+      providerUsageFetch,
+      providerUsageRefreshMs: 50,
+    })
+    return { manager, handles, usage, fetchCalls }
+  }
+
+  test('a profile with no base URL is never probed; the SDK pull answers', async () => {
+    const { manager, handles, usage, fetchCalls } = await createProviderHarness({}, [])
+    const created = manager.createSession({ projectPath: '/tmp/proj' })
+    if (!created.ok) throw new Error('create failed')
+    await manager.send(created.session.id, 'hello')
+    await flush()
+
+    expect(fetchCalls).toEqual([])
+    // The fake query's usage control answered; no provider request was made.
+    expect(handles[0]!.usageCalls).toHaveLength(1)
+    expect(usage.some((entry) => entry.report?.source === 'pull')).toBe(true)
+  })
+
+  test('a quota-shaped base URL records a provider report and suppresses the SDK pull', async () => {
+    const { manager, handles, usage, fetchCalls } = await createProviderHarness(
+      { ANTHROPIC_BASE_URL: 'https://zai.test', ANTHROPIC_AUTH_TOKEN: 'sk-glm-token' },
+      [jsonResponse(CAPTURE(2))]
+    )
+    const created = manager.createSession({ projectPath: '/tmp/proj' })
+    if (!created.ok) throw new Error('create failed')
+    await manager.send(created.session.id, 'hello')
+    await flush()
+
+    expect(fetchCalls).toEqual([
+      { url: 'https://zai.test/api/monitor/usage/quota/limit', auth: 'sk-glm-token' },
+    ])
+    // Exactly one broadcast — the provider report; the host-login SDK pull
+    // never ran.
+    expect(usage).toHaveLength(1)
+    expect(usage[0]!.report?.source).toBe('provider')
+    expect(usage[0]!.report?.windows[0]).toMatchObject({ key: 'zai:time_limit', percentUsed: 2 })
+    expect(handles[0]!.usageCalls).toEqual([])
+    expect(manager.getSnapshot(created.session.id)!.usage?.source).toBe('provider')
+  })
+
+  test('a provider refusal records the no-data verdict and skips the SDK pull', async () => {
+    const { manager, handles, usage } = await createProviderHarness(
+      { ANTHROPIC_BASE_URL: 'https://zai.test', ANTHROPIC_AUTH_TOKEN: 'sk-glm-token' },
+      [jsonResponse({ code: 1001, msg: 'Authentication parameter not received', success: false })]
+    )
+    const created = manager.createSession({ projectPath: '/tmp/proj' })
+    if (!created.ok) throw new Error('create failed')
+    await manager.send(created.session.id, 'hello')
+    await flush()
+
+    expect(usage).toEqual([{ profileId: 'default', report: null }])
+    expect(handles[0]!.usageCalls).toEqual([])
+    expect(manager.getSnapshot(created.session.id)!.usage).toBeNull()
+  })
+
+  test('a base URL without the endpoint falls back to the host-login SDK pull', async () => {
+    const { manager, handles, usage, fetchCalls } = await createProviderHarness(
+      { ANTHROPIC_BASE_URL: 'https://other-gateway.test' },
+      [new Response('nope', { status: 404 })]
+    )
+    const created = manager.createSession({ projectPath: '/tmp/proj' })
+    if (!created.ok) throw new Error('create failed')
+    await manager.send(created.session.id, 'hello')
+    await flush()
+
+    expect(fetchCalls).toHaveLength(1) // probed exactly once
+    expect(handles[0]!.usageCalls).toHaveLength(1) // then the SDK pull ran
+    expect(usage.some((entry) => entry.report?.source === 'pull')).toBe(true)
+  })
+
+  test('a routed profile refreshes on the cadence without a turn', async () => {
+    const { manager, usage } = await createProviderHarness(
+      { ANTHROPIC_BASE_URL: 'https://zai.test', ANTHROPIC_AUTH_TOKEN: 'sk-glm-token' },
+      [jsonResponse(CAPTURE(2)), jsonResponse(CAPTURE(50))]
+    )
+    const created = manager.createSession({ projectPath: '/tmp/proj' })
+    if (!created.ok) throw new Error('create failed')
+    await manager.send(created.session.id, 'hello')
+    await flush()
+    expect(usage[0]!.report?.windows[0]).toMatchObject({ percentUsed: 2 })
+
+    // No turn runs; the timer re-pulls and the new percentage replaces the old.
+    await waitForCondition(() => usage.length >= 2)
+    expect(usage[1]!.report?.windows[0]).toMatchObject({ percentUsed: 50 })
+    expect(manager.getSnapshot(created.session.id)!.usage?.windows[0]).toMatchObject({
+      percentUsed: 50,
+    })
+  })
+
+  test('archiving the last live session stops the pulls', async () => {
+    const { manager, usage, fetchCalls } = await createProviderHarness(
+      { ANTHROPIC_BASE_URL: 'https://zai.test', ANTHROPIC_AUTH_TOKEN: 'sk-glm-token' },
+      [jsonResponse(CAPTURE(2))]
+    )
+    const created = manager.createSession({ projectPath: '/tmp/proj' })
+    if (!created.ok) throw new Error('create failed')
+    await manager.send(created.session.id, 'hello')
+    await flush()
+    expect(fetchCalls).toHaveLength(1)
+
+    await manager.archive(created.session.id)
+    // Several cadences pass: the tick clears the timer without a request,
+    // and the held report stays visible.
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    expect(fetchCalls).toHaveLength(1)
+    expect(usage).toHaveLength(1)
+    expect(manager.getSnapshot(created.session.id)!.usage?.source).toBe('provider')
+  })
+
+  /** A fetch the test resolves manually, to hold a pull in flight. */
+  function deferredFetch(): {
+    impl: typeof fetch
+    deferreds: Array<(response: Response) => void>
+  } {
+    const deferreds: Array<(response: Response) => void> = []
+    const impl = (async () =>
+      new Promise<Response>((resolve) => {
+        deferreds.push(resolve)
+      })) as unknown as typeof fetch
+    return { impl, deferreds }
+  }
+
+  async function createManualHarness(providerUsageFetch: typeof fetch) {
+    const handles: FakeHandle[] = []
+    const usage: Array<{ profileId: string; report: ChatUsageReport | null }> = []
+    const manager = await managedManager({
+      isDirectory: anyDirectory,
+      registry: new SessionRegistry(),
+      db,
+      onEvent: () => {},
+      onUsage: (profileId, report) => usage.push({ profileId, report }),
+      queryFactory: fakeQueryFactory(handles, () => Promise.resolve(SDK_PULL)),
+      getProviderEnv: () => ({
+        ANTHROPIC_BASE_URL: 'https://zai.test',
+        ANTHROPIC_AUTH_TOKEN: 'sk-glm-token',
+      }),
+      providerUsageFetch,
+      providerUsageRefreshMs: 25,
+    })
+    return { manager, usage }
+  }
+
+  test('an in-flight first pull publishes nothing after shutdown', async () => {
+    const { impl, deferreds } = deferredFetch()
+    const { manager, usage } = await createManualHarness(impl)
+    const created = manager.createSession({ projectPath: '/tmp/proj' })
+    if (!created.ok) throw new Error('create failed')
+    await manager.send(created.session.id, 'hello')
+    await flush()
+    expect(deferreds.length).toBe(1) // the spawn pull is in flight
+
+    manager.shutdown()
+    deferreds[0]!(jsonResponse(CAPTURE(2)))
+    await flush()
+    // The late answer publishes nothing and arms no refresh timer.
+    expect(usage).toEqual([])
+    await new Promise((resolve) => setTimeout(resolve, 75))
+    expect(deferreds.length).toBe(1)
+  })
+
+  test('an in-flight refresh publishes nothing after shutdown', async () => {
+    const { impl, deferreds } = deferredFetch()
+    const { manager, usage } = await createManualHarness(impl)
+    const created = manager.createSession({ projectPath: '/tmp/proj' })
+    if (!created.ok) throw new Error('create failed')
+    await manager.send(created.session.id, 'hello')
+    await flush()
+    deferreds[0]!(jsonResponse(CAPTURE(2)))
+    await flush()
+    expect(usage).toHaveLength(1)
+
+    // The next tick's refresh is in flight when the server shuts down.
+    await waitForCondition(() => deferreds.length >= 2)
+    manager.shutdown()
+    deferreds[1]!(jsonResponse(CAPTURE(99)))
+    await flush()
+    expect(usage).toHaveLength(1)
+    expect(manager.getSnapshot(created.session.id)!.usage?.windows[0]).toMatchObject({
+      percentUsed: 2,
+    })
   })
 })

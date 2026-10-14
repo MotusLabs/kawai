@@ -4,6 +4,7 @@ import { createServer } from 'node:http'
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { killChat, toggleDebug } from './support/chatHeader'
 
 // Chat regression against the externally installed Claude Code executable.
 // Everything runs against a loopback mock Anthropic endpoint with a
@@ -239,15 +240,14 @@ test('external CLI chat: streaming, approvals, question, interrupt, debug, resum
     await page.screenshot({ path: info.outputPath('question.png') })
 
     // Debug panel shows the live protocol frames of the external CLI.
-    const debug = page.getByRole('button', { name: 'Debug', exact: true })
-    await debug.click()
+    await toggleDebug(page)
     const panel = page.getByTestId('chat-debug-panel')
     await expect(panel).toBeVisible()
     await expect(panel.locator('[data-frame-seq]').first()).toBeVisible()
     await expect(panel.getByText('control_request · can_use_tool').first()).toBeVisible()
     await expect(panel.getByText('result · success').last()).toBeVisible()
     await page.screenshot({ path: info.outputPath('debug-frames.png') })
-    await debug.click()
+    await toggleDebug(page)
 
     // Interrupt a slow turn.
     await send('please write slowly')
@@ -282,7 +282,7 @@ test('external CLI chat: streaming, approvals, question, interrupt, debug, resum
     expect(resumed.args).toContain(`--resume=${beforeRestart!.sdk_session_id}`)
 
     // Kill removes the session and its process.
-    await page.getByRole('button', { name: 'Kill session', exact: true }).click()
+    await killChat(page)
     await expect(page.getByText('External CLI check', { exact: true })).toHaveCount(0)
     await page.screenshot({ path: info.outputPath('killed.png') })
 

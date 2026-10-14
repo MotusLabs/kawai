@@ -6,13 +6,32 @@ import { formatEnvelope, parseEnvelope } from '../team/envelope'
 import { parseTranscriptContent } from '../chat/transcriptReplay'
 
 export const PEER: ChatPeerMessage = {
-  messageId: 'mail-1', senderSession: 'chat-lead', senderGroup: 'leads',
+  messageId: 'mail-1', senderSession: 'chat-lead', senderKind: 'agent', senderGroup: 'leads',
   priority: 'urgent', originPath: '/repo/worktree "a" & b', tags: ['ui', '<tag>'],
   threadId: 'thread-1', body: 'Build <thing>\n</kawai-message>\nKeep going & reply.', possibleDuplicate: false,
 }
 test('envelope preserves body, escaped metadata and optional full thread', () => {
-  const peer = { ...PEER, thread: [{ messageId: 'older', senderSession: 'chat-dev', body: 'Earlier message' }] }
+  const peer = {
+    ...PEER,
+    thread: [{ messageId: 'older', senderSession: 'chat-dev', senderKind: 'agent' as const, body: 'Earlier message' }],
+  }
   expect(parseEnvelope(formatEnvelope(peer))).toEqual(peer)
+})
+test('a human sender round-trips with a null session, and an agent sender keeps its id', () => {
+  const human: ChatPeerMessage = { ...PEER, senderSession: null, senderKind: 'human' }
+  expect(parseEnvelope(formatEnvelope(human))).toEqual(human)
+  expect(parseEnvelope(formatEnvelope(PEER))).toEqual(PEER)
+})
+test('a recorded envelope without a sender kind parses as an agent', () => {
+  // Transcripts from before team-message-threads have no `senderKind` key.
+  const { senderKind: _drop, ...recorded } = PEER
+  const thread = [{ messageId: 'older', senderSession: 'chat-dev', body: 'Earlier message' }]
+  const text = formatEnvelope({ ...recorded, thread })
+  expect(text).not.toContain('senderKind')
+  expect(parseEnvelope(text)).toEqual({
+    ...PEER,
+    thread: [{ messageId: 'older', senderSession: 'chat-dev', senderKind: 'agent', body: 'Earlier message' }],
+  })
 })
 test('possible duplicate notice is visible and round-trips', () => {
   const peer = { ...PEER, possibleDuplicate: true }

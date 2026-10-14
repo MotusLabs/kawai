@@ -14,7 +14,7 @@ function harness(wireLogs?: ChatWireLogs) {
     type: 'chat-snapshot', sessionId: 'chat-1', profileId: 'default', events: [],
     pendingRequests: [{ kind: 'approval', requestId: 'approval-1', tool: 'Bash', input: {}, at: 'now' }],
     status: 'permission', throughSequence: 0,
-    commands: { status: 'unavailable', commands: [] }, activity: null, contextUsage: null, usage: null, workers: [], backgroundTasks: [], notifications: [],
+    commands: { status: 'unavailable', commands: [] }, activity: null, contextUsage: null, usage: null, workers: [], backgroundTasks: [], notifications: [], model: null,
   }
   let pending = true
   const manager = {
@@ -364,6 +364,30 @@ describe('chat WebSocket subscriptions', () => {
     expect(h.messages.slice(2)).toEqual([
       { type: 'chat-context-usage', sessionId: 'chat-1', usage: reading(96_000) },
     ])
+  })
+
+  test('model pushes reach only subscribed connections, latest once per flush', async () => {
+    const h = harness()
+    const otherMessages: ServerMessage[] = []
+    const other = { send: (message: ServerMessage) => otherMessages.push(message) }
+    await h.connections.handle(h.connection, { type: 'chat-attach', sessionId: 'chat-1' })
+    await h.connections.handle(other, { type: 'chat-attach', sessionId: 'chat-2' })
+    // Two changes inside one tick: only the latest survives the flush, once.
+    h.connections.publishModel('chat-1', 'claude-sonnet-5-5')
+    h.connections.publishModel('chat-1', 'sonnet')
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(h.messages.slice(1)).toEqual([
+      { type: 'chat-model', sessionId: 'chat-1', model: 'sonnet' },
+    ])
+    expect(otherMessages).toEqual([])
+
+    // A later change arrives as its own message.
+    h.connections.publishModel('chat-1', 'opus')
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(h.messages.slice(2)).toEqual([
+      { type: 'chat-model', sessionId: 'chat-1', model: 'opus' },
+    ])
+    expect(otherMessages).toEqual([])
   })
 
   test('usage reaches a connection once for two sessions of one profile', async () => {

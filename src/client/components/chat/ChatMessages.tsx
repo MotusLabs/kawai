@@ -4,10 +4,12 @@
 // session context is given: the row joins the roster by workerId and falls
 // back to the plain paired card without one.
 import type { ChatEvent } from '@shared/chat'
-import type { SendClientMessage } from '@shared/types'
+import type { SendClientMessage, Session } from '@shared/types'
+import type { SessionDirectoryEntry } from '@shared/team'
 import Markdown from '../Markdown'
 import ChatTaskRow from './ChatTaskRow'
 import ChatWorkerRow from './ChatWorkerRow'
+import ParticipantName from './ParticipantName'
 import { toolCallDetail } from './toolCallLabel'
 
 /**
@@ -49,13 +51,21 @@ function toolEntries(events: ChatEvent[]): TranscriptEntry[] {
   return entries
 }
 
-export default function ChatMessages({ events, projectPath, sessionId, sendMessage, connected, archived }: {
+export default function ChatMessages({ events, projectPath, sessionId, sendMessage, connected, archived, sessions, directory, onOpenParticipant }: {
   events: ChatEvent[]; projectPath?: string
   /** Present in the app (not in isolated tests): worker rows join the store. */
   sessionId?: string; sendMessage?: SendClientMessage; connected?: boolean
   /** Archived chats never offer a task's Stop control (background tasks D4). */
   archived?: boolean
+  /** Live/archived sessions and the team directory, for naming senders. */
+  sessions?: Session[]; directory?: SessionDirectoryEntry[]
+  /** Open a participant's chat; omit to disable click-through. */
+  onOpenParticipant?: (sessionId: string) => void
 }) {
+  const names = (id: string | null, senderKind?: 'agent' | 'human') =>
+    <ParticipantName sessionId={id} senderKind={senderKind} sessions={sessions} directory={directory}
+      {...(onOpenParticipant ? { onOpen: onOpenParticipant } : {})} />
+
   return <div className="space-y-4" data-testid="chat-transcript">
     {toolEntries(events).map(({ event, result }) => {
       switch (event.type) {
@@ -67,7 +77,7 @@ export default function ChatMessages({ events, projectPath, sessionId, sendMessa
         case 'peer_message':
           return <article key={event.id} data-chat-role="peer" className="border-l-2 border-primary bg-elevated p-3">
             <div className="mb-1 flex flex-wrap gap-2 text-chat-meta text-secondary">
-              <span>Peer · {event.senderSession}</span>
+              <span>Peer · {names(event.senderSession, event.senderKind)}</span>
               <span>{event.senderGroup ?? 'No group'}</span><span>{event.priority}</span>
               {[...new Set(event.tags)].map(tag => <span key={tag}>#{tag}</span>)}
             </div>
@@ -83,7 +93,7 @@ export default function ChatMessages({ events, projectPath, sessionId, sendMessa
             </details>}
             <p className="whitespace-pre-wrap break-words text-chat-body">{event.body}</p>
             {event.thread && <details className="mt-2 text-chat-meta"><summary>Earlier messages in this thread</summary>
-              {event.thread.map(message => <p key={message.messageId} className="whitespace-pre-wrap">{message.senderSession}: {message.body}</p>)}
+              {event.thread.map(message => <p key={message.messageId} className="whitespace-pre-wrap">{names(message.senderSession, message.senderKind)}: {message.body}</p>)}
             </details>}
           </article>
         case 'assistant_text':
@@ -110,7 +120,8 @@ export default function ChatMessages({ events, projectPath, sessionId, sendMessa
           }
           return <ChatWorkerRow key={`tool:${event.toolCallId}`} sessionId={sessionId}
             workerId={event.toolCallId} tool={event.tool} fallback={card}
-            renderBody={body => <ChatMessages events={body} projectPath={projectPath} />}
+            renderBody={body => <ChatMessages events={body} projectPath={projectPath}
+              sessions={sessions} directory={directory} onOpenParticipant={onOpenParticipant} />}
             sendMessage={sendMessage} connected={connected} />
         }
         case 'tool_result': {

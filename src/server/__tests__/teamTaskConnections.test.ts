@@ -43,6 +43,7 @@ beforeEach(() => {
       resolvedTeamOf: async (id: string) => { if (resolveDelay) await resolveDelay; return sessions.get(id) },
     },
     mailbox: { store: mail }, dispatcher: { notify: () => {} }, tasks,
+    directory: { list: () => [{ sessionId: 'gone', name: 'Killed helper', group: 'qa' }] },
   } as unknown as ChatSessionManager
   connections = new ChatConnections(manager)
   tasks.store.subscribe(task => connections.publishTasks(task.teamId))
@@ -92,6 +93,8 @@ test('detail open sends revisions, journal, subtasks, participants, and task mai
   await tasks.amend(human(), task.id, { direction: 'v2' })
   const sent = mail.enqueue({ teamId: 'team', toKind: 'group', toId: 'devs', fromSession: 'lead', fromGroup: null, originPath: dir, body: 'go', taskId: task.id })
   const detail = last('team-task-detail')!.detail
+  // The detail names its message participants; a killed one keeps its name.
+  expect(last('team-task-detail')!.directory).toEqual([{ sessionId: 'gone', name: 'Killed helper', group: 'qa' }])
   expect(detail.revisions.map(revision => revision.direction)).toEqual(['v1', 'v2'])
   expect(detail.subtasks.map(child => child.title)).toEqual(['Child'])
   expect(detail.messages.map(row => row.id)).toEqual([sent.id])

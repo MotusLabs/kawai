@@ -12,6 +12,7 @@ Group files (`.kawai/groups/<id>.md`) accept, besides the team-task settings:
 profiles: { glm: 2, mimo: 1, claude: 1 }   # or a list: [claude, glm]
 strategy: first-available                  # or profile-order
 onLimit: { parkIfResetWithin: 3h, otherwise: forward, forwardTo: architects }
+effort: medium                             # low, medium, high, xhigh, max
 ---
 ```
 
@@ -30,6 +31,14 @@ onLimit: { parkIfResetWithin: 3h, otherwise: forward, forwardTo: architects }
   otherwise `forward` (default) or `release`; with no progress, release.
   `forwardTo` is a group id or a team session id (default: the same group).
   Invalid values are reported and the defaults used.
+- `effort` is the reasoning effort every member's agent launches with (the
+  Claude Code `--effort` flag), whether a member was spawned or created by you.
+  It is read at each agent start, restart, or resume, so an edit reaches only
+  later starts. Without it, Claude Code's own settings decide. The flag beats a
+  saved `effortLevel` default, but `CLAUDE_CODE_EFFORT_LEVEL` in the server
+  environment overrides it and a settings maximum clamps it. `/effort` in a
+  chat still changes that running agent. An invalid value is reported and
+  ignored. Gateway models (GLM, MiMo, ...) may ignore effort.
 
 ## Routing rules
 

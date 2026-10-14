@@ -52,6 +52,10 @@ export const fixtureQueryFactory: ChatQueryFactory = ({ prompt, options, wire })
   })
   const run = async (text: string) => {
     const turn = generation
+    // Session metadata opens every turn in a real stream; the fixture reports
+    // the same model each time so the header badge (chat-session-model D1)
+    // lights up like a live agent's would.
+    push({ type: 'system', subtype: 'init', model: 'claude-sonnet-4-5' })
     // Activity turns hold the initial request first so the "Waiting for
     // model…" phase is long enough to observe in a browser.
     if (/thinking|tool|retry/i.test(text)) {

@@ -13,10 +13,14 @@ let messages: ServerMessage[]
 let connection: { send: (message: ServerMessage) => void }
 let reloads: number
 let handOffs: Array<{ messageId: string; target: { kind: string; id: string } }>
+let roster: import('../../shared/team').TeamWorktreeOccupancy[]
+let waiting: Record<string, import('../../shared/team').WaitingReason>
 const REPORT = { loadedAt: '2026-10-12T12:00:00.000Z', dir: '/home/.kawai/routing', rules: [{ groupId: 'devs', file: '/home/.kawai/routing/devs.ts', ok: false, error: 'boom', change: 'changed' as const }] }
 beforeEach(() => {
   reloads = 0
   handOffs = []
+  roster = [{ worktree: '/repo/feat-x', sessions: [{ sessionId: 'dev', group: 'devs', profile: 'glm', status: 'waiting', spawned: true, taskId: 'task-1' }], pendingSpawns: [{ group: 'qa', profile: 'default' }] }]
+  waiting = { m1: { blocker: { kind: 'group-cap', counts: { live: 2, cap: 2 } }, others: [] } }
   db = new Database(':memory:'); store = new MailboxStore(db); messages = []
   connection = { send: message => messages.push(message) }
   const manager = {
@@ -29,6 +33,8 @@ beforeEach(() => {
     },
     mailbox: { store }, dispatcher: { notify: () => {} },
     routingState: (teamId: string) => ({ rules: reloads > 0 ? REPORT : null, decisions: [{ at: 'now', teamId, groupId: 'devs', messageId: 'm', source: 'builtin', decision: 'none' }] }),
+    teamRoster: () => roster,
+    waitingFor: () => waiting,
     reloadRoutingRules: async () => { reloads++; return REPORT },
     handOff: (messageId: string, target: { kind: string; id: string }) => {
       handOffs.push({ messageId, target })
@@ -53,6 +59,38 @@ test('open snapshots, enqueue pushes, close and disconnect unsubscribe', async (
   const count = messages.length; enqueue(); expect(messages).toHaveLength(count)
   await open(); connections.disconnect(connection)
   const disconnected = messages.length; enqueue(); expect(messages).toHaveLength(disconnected)
+})
+
+test('every snapshot carries the waiting reasons beside the roster', async () => {
+  await open()
+  expect(messages.at(-1)).toMatchObject({
+    type: 'team-mailbox-snapshot',
+    waiting: { m1: { blocker: { kind: 'group-cap' } } },
+  })
+  // A reason-only change re-publishes with the new reasons.
+  waiting = { m1: { blocker: { kind: 'no-eligible-member', detail: 'a working' }, others: [] } }
+  connections.publishMailbox('team')
+  expect(messages.at(-1)).toMatchObject({ waiting: { m1: { blocker: { kind: 'no-eligible-member' } } } })
+  // A team with no reasons carries an empty map, not a missing field.
+  waiting = {}
+  connections.publishMailbox('team')
+  expect(messages.at(-1)).toMatchObject({ type: 'team-mailbox-snapshot', waiting: {} })
+})
+
+test('every snapshot carries the worktree occupancy roster, empty without sessions', async () => {
+  await open()
+  expect(messages.at(-1)).toMatchObject({ type: 'team-mailbox-snapshot', worktrees: [{ worktree: '/repo/feat-x' }] })
+  // A row-state change re-publishes the roster alongside the rows.
+  enqueue()
+  expect(messages.at(-1)).toMatchObject({ worktrees: [{ worktree: '/repo/feat-x', pendingSpawns: [{ group: 'qa', profile: 'default' }] }] })
+  // A reconnect snapshot carries it too.
+  await connections.handle(connection, { type: 'team-mailbox-close', sessionId: 'dev' })
+  await open()
+  expect(messages.at(-1)).toMatchObject({ worktrees: [{ worktree: '/repo/feat-x' }] })
+  // A team with no live sessions serializes an empty list, not a missing field.
+  roster = []
+  connections.publishMailbox('team')
+  expect(messages.at(-1)).toMatchObject({ type: 'team-mailbox-snapshot', worktrees: [] })
 })
 test('cancel, retry, discard push updated snapshots; cross-team actions are refused', async () => {
   await open()
@@ -93,6 +131,31 @@ test('global hop-limit notifier works without a selected chat', () => {
     body: 'Loop', inReplyTo: first, hopLimit: 1 })
   globalConnections.publishMailbox('team', dead)
   expect(broadcast).toEqual([{ type: 'team-mailbox-dead-letter', teamId: 'team', messageId: dead.id, senderSession: 'dev' }])
+})
+
+test('a reply delivered to the human notifies the attached team client', async () => {
+  await connections.handle(connection, { type: 'chat-attach', sessionId: 'dev' })
+  const reply = store.enqueue({ teamId: 'team', fromSession: 'dev', fromGroup: 'devs',
+    toKind: 'human', toId: null, originPath: '/repo', body: 'Done' })
+  store.deliverOnSend(reply.id)
+  expect(messages.filter(message => message.type === 'team-mailbox-delivered-to-human')).toEqual([{
+    type: 'team-mailbox-delivered-to-human', teamId: 'team', messageId: reply.id,
+    senderSession: 'dev', senderKind: 'agent',
+  }])
+})
+
+test('global delivered-to-human notifier carries the sender kind', () => {
+  const broadcast: ServerMessage[] = []
+  const manager = { mailbox: { store } } as unknown as ChatSessionManager
+  const globalConnections = new ChatConnections(manager, undefined, message => broadcast.push(message))
+  const reply = store.enqueue({ teamId: 'team', fromSession: null, fromKind: 'human', fromGroup: null,
+    toKind: 'human', toId: null, originPath: '/repo', body: 'Noted' })
+  store.deliverOnSend(reply.id)
+  globalConnections.publishMailbox('team', store.get(reply.id)!)
+  expect(broadcast.at(-1)).toEqual({
+    type: 'team-mailbox-delivered-to-human', teamId: 'team', messageId: reply.id,
+    senderSession: null, senderKind: 'human',
+  })
 })
 
 test('close during asynchronous team resolution cannot resurrect a subscription', async () => {

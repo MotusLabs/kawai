@@ -15,6 +15,8 @@ import { closedDebugView, useChatDebugStore, type ChatDebugView } from '../store
 import { emptyTranscript, useChatStore } from '../stores/chatStore'
 import { useSettingsStore } from '../stores/settingsStore'
 import { useTeamTaskStore } from '../stores/teamTaskStore'
+import { Switch } from '../components/Switch'
+import { chooseSessionMenuEntry, sessionMenuEntry } from './support/sessionMenu'
 
 describe('chat components', () => {
   test('approval cards send allow and deny without hiding the pending request locally', () => {
@@ -221,6 +223,9 @@ const withClipboard = (run: () => void): string[] => {
 describe('chat approval policy', () => {
   afterEach(() => useChatDebugStore.setState({ views: {} }))
 
+  // The rendered switch element (role="switch"), not the Switch component.
+  const approvalSwitch = (renderer: TestRenderer.ReactTestRenderer) =>
+    renderer.root.find(node => typeof node.type === 'string' && node.props['data-testid'] === 'chat-approval-policy')
   function renderPolicyView(session: Session) {
     const sent: ClientMessage[] = []
     let renderer!: TestRenderer.ReactTestRenderer
@@ -236,10 +241,11 @@ describe('chat approval policy', () => {
 
   test('a manual session shows an unpressed toggle that switches to auto', () => {
     const { sent, renderer } = renderPolicyView(chatSession)
-    const toggle = renderer.root.findByProps({ 'data-testid': 'chat-approval-policy' })
-    expect(toggle.props['aria-pressed']).toBe(false)
-    expect(toggle.props.className).not.toContain('btn-approval-on')
-    act(() => { toggle.props.onClick() })
+    const toggle = approvalSwitch(renderer)
+    expect(toggle.props.role).toBe('switch')
+    expect(toggle.props['aria-checked']).toBe(false)
+    expect(toggle.props['aria-label']).toBe('Auto-approve')
+    act(() => { renderer.root.findByType(Switch).props.onCheckedChange(true) })
     expect(sent).toContainEqual({ type: 'chat-set-approval-policy', sessionId: 'chat-1', policy: 'auto' })
     renderer.unmount()
   })
@@ -247,10 +253,11 @@ describe('chat approval policy', () => {
   test('an auto session shows a pressed, amber toggle that switches back', () => {
     const auto = { ...chatSession, approvalPolicy: 'auto' } as Session
     const { sent, renderer } = renderPolicyView(auto)
-    const toggle = renderer.root.findByProps({ 'data-testid': 'chat-approval-policy' })
-    expect(toggle.props['aria-pressed']).toBe(true)
-    expect(toggle.props.className).toContain('btn-approval-on')
-    act(() => { toggle.props.onClick() })
+    const toggle = approvalSwitch(renderer)
+    expect(toggle.props['aria-checked']).toBe(true)
+    expect(toggle.props.className).toContain('data-[checked]:bg-approval')
+    expect(renderer.root.findAll(node => node.type === 'label' && String(node.props.className).includes('text-approval'))).toHaveLength(1)
+    act(() => { renderer.root.findByType(Switch).props.onCheckedChange(false) })
     expect(sent).toContainEqual({ type: 'chat-set-approval-policy', sessionId: 'chat-1', policy: 'manual' })
     renderer.unmount()
   })
@@ -258,7 +265,7 @@ describe('chat approval policy', () => {
   test('an archived chat hides the approval-policy control', () => {
     const archived = { ...chatSession, archivedAt: '2026-10-01T00:00:00.000Z' } as Session
     const { renderer } = renderPolicyView(archived)
-    expect(renderer.root.findAllByProps({ 'data-testid': 'chat-approval-policy' })).toHaveLength(0)
+    expect(renderer.root.findAllByType(Switch)).toHaveLength(0)
     renderer.unmount()
   })
 
@@ -314,7 +321,7 @@ describe('chat archive view', () => {
   test('archiving an idle chat sends chat-archive without confirmation', () => {
     const { sent, renderer } = renderArchiveView(chatSession)
     expect(confirmCalls).toHaveLength(0)
-    act(() => { renderer.root.findByProps({ 'data-testid': 'chat-archive-button' }).props.onClick() })
+    act(() => { chooseSessionMenuEntry(renderer.root, 'archive') })
     expect(confirmCalls).toHaveLength(0)
     expect(sent).toContainEqual({ type: 'chat-archive', sessionId: 'chat-1' })
     renderer.unmount()
@@ -324,7 +331,7 @@ describe('chat archive view', () => {
     const working = { ...chatSession, status: 'working' } as Session
     confirmResult = true
     const { sent, renderer } = renderArchiveView(working)
-    act(() => { renderer.root.findByProps({ 'data-testid': 'chat-archive-button' }).props.onClick() })
+    act(() => { chooseSessionMenuEntry(renderer.root, 'archive') })
     expect(confirmCalls).toHaveLength(1)
     expect(sent).toContainEqual({ type: 'chat-archive', sessionId: 'chat-1' })
     renderer.unmount()
@@ -334,7 +341,7 @@ describe('chat archive view', () => {
     const working = { ...chatSession, status: 'working' } as Session
     confirmResult = false
     const { sent, renderer } = renderArchiveView(working)
-    act(() => { renderer.root.findByProps({ 'data-testid': 'chat-archive-button' }).props.onClick() })
+    act(() => { chooseSessionMenuEntry(renderer.root, 'archive') })
     expect(confirmCalls).toHaveLength(1)
     expect(sent.filter(message => message.type === 'chat-archive')).toEqual([])
     renderer.unmount()
@@ -346,15 +353,15 @@ describe('chat archive view', () => {
 
     // Attach still requests a snapshot; no agent is started for it.
     expect(sent).toContainEqual({ type: 'chat-attach', sessionId: 'chat-1' })
-    // Read-only: no composer, Stop, Archive button, or request actions.
+    // Read-only: no composer, Stop, Archive action, or request actions.
     expect(renderer.root.findAllByType('textarea')).toHaveLength(0)
     expect(renderer.root.findAllByType('form')).toHaveLength(0)
     expect(buttonNamed(renderer.root, 'Stop')).toBeUndefined()
-    expect(renderer.root.findAllByProps({ 'data-testid': 'chat-archive-button' })).toHaveLength(0)
+    expect(sessionMenuEntry(renderer.root, 'archive')).toBeUndefined()
     expect(textOf(renderer.root.findByProps({ 'data-testid': 'chat-archived-bar' }))).toContain('Archived')
     expect(renderer.root.findByProps({ 'data-testid': 'chat-status' }).children).toContain('archived')
     // Kill stays available for archived chats.
-    expect(buttonNamed(renderer.root, 'Kill session')).toBeTruthy()
+    expect(sessionMenuEntry(renderer.root, 'kill')).toBeTruthy()
 
     // Restore sends chat-restore.
     act(() => { buttonNamed(renderer.root, 'Restore').props.onClick() })
@@ -450,11 +457,11 @@ describe('chat debug view', () => {
     const { sent, renderer } = renderView()
     expect(renderer.root.findAllByProps({ 'data-testid': 'chat-debug-panel' })).toHaveLength(0)
     expect(debugMessages(sent)).toEqual([])
-    act(() => buttonNamed(renderer.root, 'Debug').props.onClick())
-    expect(buttonNamed(renderer.root, 'Debug').props['aria-pressed']).toBe(true)
+    act(() => chooseSessionMenuEntry(renderer.root, 'debug'))
+    expect(sessionMenuEntry(renderer.root, 'debug')).toMatchObject({ kind: 'check', checked: true })
     expect(renderer.root.findAllByProps({ 'data-testid': 'chat-debug-panel' })).toHaveLength(1)
     expect(debugMessages(sent)).toEqual([{ type: 'chat-debug-open', sessionId: 'chat-1' }])
-    act(() => buttonNamed(renderer.root, 'Debug').props.onClick())
+    act(() => chooseSessionMenuEntry(renderer.root, 'debug'))
     expect(renderer.root.findAllByProps({ 'data-testid': 'chat-debug-panel' })).toHaveLength(0)
     expect(debugMessages(sent)).toEqual([
       { type: 'chat-debug-open', sessionId: 'chat-1' }, { type: 'chat-debug-close', sessionId: 'chat-1' },
@@ -466,7 +473,7 @@ describe('chat debug view', () => {
 
   test('a reconnect re-opens the debug subscription and awaits a fresh page', () => {
     const { sent, renderer, props } = renderView()
-    act(() => buttonNamed(renderer.root, 'Debug').props.onClick())
+    act(() => chooseSessionMenuEntry(renderer.root, 'debug'))
     act(() => { useChatDebugStore.getState().apply({ type: 'chat-debug-frames', sessionId: 'chat-1', frames: [], page: true, hasOlder: false }) })
     expect(useChatDebugStore.getState().views['chat-1']!.awaitingOpen).toBe(false)
     act(() => renderer.update(<ChatView {...props} connectionEpoch={1} />))
@@ -1436,7 +1443,7 @@ describe('chat header rename', () => {
   test('shows the name; clicking it opens an input that submits a rename', () => {
     const { sent, renderer } = renderNameView(chatSession)
     const title = renderer.root.findByProps({ 'data-testid': 'chat-name' })
-    expect(textOf(title)).toBe('Chat · Chat')
+    expect(textOf(title)).toBe('Chat')
     act(() => { title.props.onClick() })
     const input = renderer.root.findByProps({ 'data-testid': 'chat-name-input' })
     act(() => { input.props.onChange({ target: { value: 'Claude Code Chat subscription usage metrics spec' } }) })
@@ -1476,7 +1483,7 @@ describe('chat header rename', () => {
       sendMessage={message => { sent.push(message) }}
       connectionStatus="connected" connectionEpoch={0} error={null}
       onClose={() => {}} onKill={() => {}} />) })
-    expect(textOf(renderer.root.findByProps({ 'data-testid': 'chat-name' }))).toBe('renamed elsewhere · Chat')
+    expect(textOf(renderer.root.findByProps({ 'data-testid': 'chat-name' }))).toBe('renamed elsewhere')
     renderer.unmount()
   })
 })
@@ -1563,6 +1570,60 @@ describe('chat context meter', () => {
     expect(renderer.root.findByProps({ 'data-testid': 'chat-context-meter' })).toBeTruthy()
     act(() => { useChatStore.getState().setContextUsage('chat-1', null) })
     expect(renderer.root.findAllByProps({ 'data-testid': 'chat-context-meter' })).toHaveLength(0)
+    renderer.unmount()
+  })
+})
+
+describe('chat model badge', () => {
+  afterEach(() => useChatStore.setState({ sessions: {}, usage: {}, drafts: {} }))
+
+  function renderView(session: Session = chatSession) {
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => {
+      renderer = TestRenderer.create(<ChatView
+        session={session}
+        sendMessage={() => {}}
+        connectionStatus="connected" connectionEpoch={0} error={null}
+        onClose={() => {}} onKill={() => {}} />)
+    })
+    return renderer
+  }
+
+  test('no badge before the agent reports a model', () => {
+    act(() => { useChatStore.setState({ sessions: {}, closedAccountNotices: {} }) })
+    const renderer = renderView()
+    expect(renderer.root.findAllByProps({ 'data-testid': 'chat-model' })).toHaveLength(0)
+    renderer.unmount()
+  })
+
+  test('a reported model renders verbatim beside the status', () => {
+    act(() => { useChatStore.getState().setModel('chat-1', 'claude-sonnet-5-5') })
+    const renderer = renderView()
+    const badge = renderer.root.findByProps({ 'data-testid': 'chat-model' })
+    expect(textOf(badge)).toBe('claude-sonnet-5-5')
+    expect(badge.props.title).toContain('claude-sonnet-5-5')
+    // The header keeps its neighbors: status and profile stay present.
+    expect(renderer.root.findByProps({ 'data-testid': 'chat-status' })).toBeTruthy()
+    expect(renderer.root.findByProps({ 'data-testid': 'chat-profile' })).toBeTruthy()
+    renderer.unmount()
+  })
+
+  test('a changed model push updates the badge in place', () => {
+    act(() => { useChatStore.getState().setModel('chat-1', 'claude-sonnet-5-5') })
+    const renderer = renderView()
+    act(() => { useChatStore.getState().setModel('chat-1', 'sonnet') })
+    expect(textOf(renderer.root.findByProps({ 'data-testid': 'chat-model' }))).toBe('sonnet')
+    renderer.unmount()
+  })
+
+  test('an archived chat shows the stored model as inert text', () => {
+    act(() => { useChatStore.getState().setModel('chat-1', 'claude-sonnet-5-5') })
+    const archived = { ...chatSession, archivedAt: '2026-10-01T00:00:00.000Z' } as Session
+    const renderer = renderView(archived)
+    const badge = renderer.root.findByProps({ 'data-testid': 'chat-model' })
+    expect(textOf(badge)).toBe('claude-sonnet-5-5')
+    // Inert text beside the archived status — no control to press.
+    expect(badge.findAllByType('button')).toHaveLength(0)
     renderer.unmount()
   })
 })
@@ -1869,7 +1930,7 @@ describe('chat workers', () => {
         events: [agentCall('toolu_done'), agentCall('toolu_live')],
         pendingRequests: [], status: 'waiting', throughSequence: 0,
         commands: { status: 'unavailable', commands: [] }, activity: null,
-        contextUsage: null, usage: null, workers, backgroundTasks: [], notifications: [],
+        contextUsage: null, usage: null, workers, backgroundTasks: [], notifications: [], model: null,
       })
     }
     const workers = [
@@ -2092,7 +2153,7 @@ describe('chat task rows (background tasks)', () => {
       type: 'chat-snapshot', sessionId: 'chat-1', profileId: 'default',
       events: [], pendingRequests: [], status: 'waiting', throughSequence: 0,
       commands: { status: 'unavailable', commands: [] }, activity: null,
-      contextUsage: null, usage: null, workers: [], backgroundTasks: tasks, notifications: [],
+      contextUsage: null, usage: null, workers: [], backgroundTasks: tasks, notifications: [], model: null,
     })
   }
   const liveTask = (overrides: Partial<ChatBackgroundTask> = {}): ChatBackgroundTask => ({
