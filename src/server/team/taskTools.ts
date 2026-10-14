@@ -5,7 +5,7 @@ import { z } from 'zod'
 import { TASK_STATUSES, type TaskStatus } from '../../shared/teamTasks'
 import type { TaskService } from './TaskService'
 
-export const TASK_TOOL_NAMES = ['task_create', 'task_get', 'task_note', 'task_update_status', 'task_amend', 'task_list'] as const
+export const TASK_TOOL_NAMES = ['task_create', 'task_get', 'task_note', 'task_update_status', 'task_amend', 'task_list', 'task_acknowledge'] as const
 
 const status = z.enum(TASK_STATUSES as [TaskStatus, ...TaskStatus[]])
 const taskId = { task_id: z.string().min(1) }
@@ -17,8 +17,12 @@ export const taskSchemas = {
   task_get: z.object(taskId),
   task_note: z.object({ ...taskId, text: z.string().min(1) }),
   task_update_status: z.object({ ...taskId, status, note: z.string().optional() }),
-  task_amend: z.object({ ...taskId, direction: z.string().optional(), acceptance: z.string().optional() }),
+  task_amend: z.object({
+    ...taskId, direction: z.string().optional(), acceptance: z.string().optional(),
+    rationale: z.string().optional(), notify: z.boolean().optional(),
+  }),
   task_list: z.object({ status: status.optional() }),
+  task_acknowledge: z.object({ ...taskId, revision: z.number().int().min(1) }),
 }
 
 export const taskDescriptions: Record<(typeof TASK_TOOL_NAMES)[number], string> = {
@@ -26,8 +30,9 @@ export const taskDescriptions: Record<(typeof TASK_TOOL_NAMES)[number], string> 
   task_get: 'Read a task in full: current direction and acceptance, every revision, the whole journal, subtasks, and its messages.',
   task_note: "Append a note to a task's journal (decisions, findings, progress). Notes are permanent.",
   task_update_status: 'Set a task to active or blocked (any member); done or cancelled (its creator only). Optional note is journaled.',
-  task_amend: "Change a task's direction or acceptance criteria (its creator only); creates a new revision.",
+  task_amend: "Publish a new revision of a task's direction or acceptance criteria (its creator only). Optional rationale says why; notify: true also sends the assignment's claimed agent a revision notice.",
   task_list: "List this team's tasks, optionally by status.",
+  task_acknowledge: 'State the published task revision you are now working from (the revision in the task header). Call it when you start or take over work on a task, and after a revision notice.',
 }
 
 export function taskHandlers(tasks: TaskService, sessionId: string) {
@@ -44,8 +49,12 @@ export function taskHandlers(tasks: TaskService, sessionId: string) {
       return tasks.setStatus(caller, task_id, next, note)
     },
     task_amend: async (input: unknown) => {
-      const { task_id, direction, acceptance } = taskSchemas.task_amend.parse(input)
-      return tasks.amend(caller, task_id, { direction, acceptance })
+      const { task_id, direction, acceptance, rationale, notify } = taskSchemas.task_amend.parse(input)
+      return tasks.amend(caller, task_id, { direction, acceptance, rationale, notify })
+    },
+    task_acknowledge: async (input: unknown) => {
+      const { task_id, revision } = taskSchemas.task_acknowledge.parse(input)
+      return tasks.acknowledge(caller, task_id, revision)
     },
     task_list: async (input: unknown) => tasks.list(caller, taskSchemas.task_list.parse(input).status),
   }

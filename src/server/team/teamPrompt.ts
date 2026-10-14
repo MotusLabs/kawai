@@ -73,10 +73,13 @@ function taskNote({ group }: TeamPromptInput): string {
     `- \`${tool('task_list')}\`: the team's tasks, optionally by status.`,
     `- \`${tool('task_note')}\`: append a journal note. Record decisions, findings, and handoff state here; notes are permanent and every participant sees them.`,
     `- \`${tool('task_update_status')}\`: set \`active\` or \`blocked\` (anyone); \`done\` or \`cancelled\` (the creator only).`,
-    `- \`${tool('task_amend')}\`: change direction or acceptance criteria (the creator only; each change is a new revision).`,
+    `- \`${tool('task_amend')}\`: publish a new revision of direction or acceptance criteria (the creator only), with an optional \`rationale\` saying why; \`notify: true\` also sends the assignment's claimed agent a revision notice.`,
+    `- \`${tool('task_acknowledge')}\`: state the published revision you are working from.`,
     release,
     '',
     "Only a task's creator (or the human) changes its direction. If you disagree with the direction or find it wrong, add a journal note or message the creator — do not work around it. When a task links an OpenSpec change, that change's proposal, design, and tasks are the authoritative direction; the task's own direction text only summarizes it.",
+    '',
+    `When you start or take over work on a task, or receive a revision notice (mail tagged \`task-revision\`), call \`${tool('task_acknowledge')}\` with the revision in the task header once you are working from it. Delivery is not acknowledgement: until you acknowledge, the human sees the new revision as unacknowledged.`,
   ].join('\n')
 }
 

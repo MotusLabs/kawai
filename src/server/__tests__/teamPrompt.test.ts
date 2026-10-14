@@ -58,12 +58,16 @@ describe('buildTeamPrompt', () => {
       buildTeamPrompt({ sessionId: 'chat-6', groups: [devs] }),
     ]) {
       expect(prompt).toContain('You cannot create tasks')
-      for (const name of ['task_get', 'task_list', 'task_note', 'task_update_status', 'task_amend']) {
+      for (const name of ['task_get', 'task_list', 'task_note', 'task_update_status', 'task_amend', 'task_acknowledge']) {
         expect(prompt).toContain(`\`mcp__kawai-team__${name}\``)
       }
       expect(prompt).toContain('add a journal note or message the creator')
       expect(prompt).toContain("that change's proposal, design, and tasks are the authoritative direction")
       expect(prompt).toContain('`done` or `cancelled` (the creator only)')
+      // task-revision-publication 4.4: when to acknowledge, and task_amend's new options.
+      expect(prompt).toContain('or receive a revision notice (mail tagged `task-revision`), call `mcp__kawai-team__task_acknowledge` with the revision in the task header')
+      expect(prompt).toContain('Delivery is not acknowledgement')
+      expect(prompt).toContain('optional `rationale` saying why; `notify: true` also sends the assignment\'s claimed agent a revision notice')
     }
   })
 })

@@ -22,9 +22,9 @@ Prerequisite: `task-assignment` has landed (`team_task_assignments`, outstanding
 ## 4. Delivered and acknowledged
 
 - [ ] 4.1 Implement `publicationRecipients` (design D5): notice state from the newest notice's mail state, delivered revision as `MAX(task_revision)` of delivered task mail to the holder, acknowledged revision from the current claimant; verify tests: delivered-not-acknowledged, acknowledged later, delivered via a non-notice task message, failed reason shown.
-- [ ] 4.2 Add `task_acknowledge` to `TASK_TOOL_NAMES`/`taskSchemas` in `taskTools.ts` and `TaskService.acknowledge` (design D6): identity-bound, other-team and unpublished revisions refused, idempotent insert recording the outstanding assignment; verify tool tests: acknowledge, repeat is a no-op, revision > current refused (including while a draft exists), other team refused, no approval card under either policy.
+- [x] 4.2 Add `task_acknowledge` to `TASK_TOOL_NAMES`/`taskSchemas` in `taskTools.ts` and `TaskService.acknowledge` (design D6): identity-bound, other-team and unpublished revisions refused, idempotent insert recording the outstanding assignment; verify tool tests: acknowledge, repeat is a no-op, revision > current refused (including while a draft exists), other team refused, no approval card under either policy.
 - [ ] 4.3 Show acknowledgement through the current claimant only: verify tests for reassignment (new claimant unacknowledged, old claimant's row in history), requeue to another member, and forwarded work after a provider limit.
-- [ ] 4.4 Update `teamPrompt.ts` (task note: when to call `task_acknowledge`; `task_amend` line names `rationale`/`notify`) and the `task_amend` tool description; extend `task_amend` with optional `rationale` and `notify` (design D7); verify prompt snapshot tests and a lead publish-and-notify test sending one notice from the lead.
+- [x] 4.4 Update `teamPrompt.ts` (task note: when to call `task_acknowledge`; `task_amend` line names `rationale`/`notify`) and the `task_amend` tool description; extend `task_amend` with optional `rationale` and `notify` (design D7); verify prompt snapshot tests and a lead publish-and-notify test sending one notice from the lead.
 
 ## 5. Connections and UI
 

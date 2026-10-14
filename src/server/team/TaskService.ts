@@ -203,6 +203,27 @@ export class TaskService {
     return { ...outcome, task: this.store.get(taskId)! }
   }
 
+  /**
+   * An agent states the published revision it works from (D6): bound to the
+   * calling session, refused for another team's task and for any revision
+   * not yet published — so a draft can never be acknowledged. Recorded with
+   * the session's outstanding assignment, if it holds one; a repeat is a
+   * no-op. Older revisions are recorded too: that is true information.
+   */
+  async acknowledge(caller: TaskCaller, taskId: string, revision: number): Promise<{ taskId: string; revision: number; alreadyAcknowledged: boolean }> {
+    const { team, actor } = await this.context(caller)
+    if (actor.kind !== 'agent') throw new Error('Only agents acknowledge revisions')
+    const task = this.sameTeamTask(team, taskId)
+    if (!Number.isInteger(revision) || revision < 1 || revision > task.revision) {
+      throw new Error(`Revision ${revision} of task ${taskId} is not published; its current revision is ${task.revision}.`)
+    }
+    const holder = this.store.notices?.holders(taskId).find(entry => entry.sessionId === actor.sessionId)
+    const recorded = this.store.acknowledgements.record(taskId, actor.sessionId, revision, holder?.assignmentId ?? null)
+    // The publication detail shows acknowledgements live (D5).
+    if (recorded) this.store.touch(taskId)
+    return { taskId, revision, alreadyAcknowledged: !recorded }
+  }
+
   /** The publisher as the notice's sender (D3): the human, or the creating agent from its session. */
   private noticeSender(team: TeamIdentity, actor: TaskActor): NoticeSender {
     if (actor.kind === 'human') return { actor, fromGroup: null, originPath: team.groupsRoot }
