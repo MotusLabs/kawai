@@ -1,13 +1,14 @@
 // Team task UI (team-tasks 7.1–7.3): the store's authoritative snapshots,
 // the list/create view, the detail with its sections and human controls,
 // and task context on live and replayed peer rows.
-import { afterEach, expect, test } from 'bun:test'
+import { afterEach, describe, expect, test } from 'bun:test'
 import TestRenderer, { act } from 'react-test-renderer'
 import type { ChatEvent } from '@shared/chat'
 import type { ClientMessage, Session } from '@shared/types'
 import type { TeamTaskDetail as Detail, TeamTaskSummary } from '@shared/teamTasks'
 import ChatMessages from '../components/chat/ChatMessages'
-import TeamTasksPanel from '../components/chat/TeamTasksPanel'
+import TeamTasksPanel from '../components/team/TeamTasksView'
+import { useTeamWorkspaceStore } from '../stores/teamWorkspaceStore'
 import { useChatStore } from '../stores/chatStore'
 import { useSessionStore } from '../stores/sessionStore'
 import { useTeamTaskStore, type TaskView } from '../stores/teamTaskStore'
@@ -78,7 +79,7 @@ test('list shows title, status, creator, and participants; a killed creator is m
   useSessionStore.setState({ sessions: [sessionRow('dev', 'Dev one')] })
   const view = { ...openView(), loading: false, tasks: [summary('a', { status: 'blocked' }), summary('b', { creator: { kind: 'human', sessionId: null }, participants: [] })] }
   let renderer!: TestRenderer.ReactTestRenderer
-  act(() => { renderer = TestRenderer.create(<TeamTasksPanel teamPath="dev" projectPath="/repo" view={view} sendMessage={() => {}} connected onClose={() => {}} />) })
+  act(() => { renderer = TestRenderer.create(<TeamTasksPanel teamPath="dev" projectPath="/repo" view={view} sendMessage={() => {}} connected />) })
   const rows = renderer.root.findAll(node => node.type === 'article' && !!node.props['data-task-id'])
   expect(rows.map(row => row.props['data-task-id'])).toEqual(['a', 'b'])
   expect(textOf(rows[0]!.findByProps({ 'data-testid': 'task-status' }))).toBe('blocked')
@@ -96,7 +97,7 @@ test('create sends every field with a request id; disconnected disables it; erro
   // The draft lives in the store; render from it so typing re-renders.
   const render = (connected: boolean) => <TeamTasksPanel teamPath="dev" projectPath="/repo"
     view={{ ...useTeamTaskStore.getState().views.dev!, loading: false, tasks: [summary('parent')], error: connected ? null : '/nowhere is not a worktree of this team\'s repository' }}
-    sendMessage={message => sent.push(message)} connected={connected} onClose={() => {}} />
+    sendMessage={message => sent.push(message)} connected={connected} />
   act(() => { renderer = TestRenderer.create(render(true)) })
   const input = (label: string) => renderer.root.find(node => node.props['aria-label'] === label)
   act(() => {
@@ -127,9 +128,9 @@ test('detail shows direction, retained revisions, journal, subtasks, messages; c
   const task = summary('t1', { status: 'done', revision: 2, direction: 'Current plan', acceptance: 'Ships', openspecChange: 'add-export', worktree: '/repo-feature' })
   const view: TaskView = { ...openView(), loading: false, tasks: [task], selectedTaskId: 't1', detail: detail(task) }
   let renderer!: TestRenderer.ReactTestRenderer
-  const render = (connected: boolean) => <TeamTasksPanel teamPath="dev" projectPath="/repo" view={view} sendMessage={message => sent.push(message)} connected={connected} onClose={() => {}} />
+  const render = (connected: boolean) => <TeamTasksPanel teamPath="dev" projectPath="/repo" view={view} sendMessage={message => sent.push(message)} connected={connected} />
   act(() => { renderer = TestRenderer.create(render(true)) })
-  expect(renderer.root.findAllByType('section').map(section => section.props['aria-label'])).toEqual(['Assignment', 'Direction', 'Results', 'Status', 'Journal', 'Subtasks', 'Messages'])
+  expect(renderer.root.findAllByType('section').map(section => section.props['aria-label'])).toEqual(['Assignment', 'Direction', 'Results', 'Release', 'Publications', 'Status', 'Journal', 'Subtasks', 'Messages'])
   expect(renderer.root.findByProps({ 'data-testid': 'task-direction' }).children.join('')).toBe('Current plan')
   expect(renderer.root.findByProps({ 'data-testid': 'task-acceptance' }).children.join('')).toBe('Ships')
   expect(renderer.root.findByProps({ 'data-testid': 'task-creator' }).children.join('')).toBe('lead (gone)')
@@ -191,4 +192,73 @@ test('peer rows show task context, live and after replay', () => {
   act(() => { plain = TestRenderer.create(<ChatMessages events={[{ ...peer, task: undefined } as ChatEvent]} />) })
   expect(plain.root.findAllByProps({ 'data-testid': 'peer-task' })).toHaveLength(0)
   act(() => plain.unmount())
+})
+
+describe('search and collapse (team-workspace-pages 5.5)', () => {
+  afterEach(() => {
+    useTeamWorkspaceStore.setState({ views: {} })
+    useTeamTaskStore.setState({ views: {} })
+  })
+
+  const parent = summary('parent', { title: 'Export CSV', direction: 'Ship a CSV export' })
+  const child = summary('child-1', { title: 'Usage bar polish', parentId: 'parent', direction: 'Polish the usage bar' })
+  const other = summary('other', { title: 'Unrelated work', direction: 'Something else' })
+  const view = (): TaskView => ({ ...openView(), loading: false, tasks: [parent, child, other] })
+  const mount = () => {
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => { renderer = TestRenderer.create(<TeamTasksPanel teamPath="dev" projectPath="/repo" view={view()} sendMessage={() => {}} connected />) })
+    return renderer
+  }
+  const rows = (renderer: TestRenderer.ReactTestRenderer) =>
+    renderer.root.findAllByProps({ 'data-testid': 'task-row' }).map(row => row.props['data-task-id'])
+
+  test('search matches title and direction with the match marked, and a matching subtask keeps its parent', () => {
+    const renderer = mount()
+    expect(rows(renderer)).toEqual(['parent', 'child-1', 'other'])
+    act(() => { renderer.root.findByProps({ 'aria-label': 'Search tasks' }).props.onChange({ target: { value: 'usage bar' } }) })
+    act(() => { renderer.update(<TeamTasksPanel teamPath="dev" projectPath="/repo" view={view()} sendMessage={() => {}} connected />) })
+    // The matching subtask stays under its parent; the unrelated task drops.
+    expect(rows(renderer)).toEqual(['parent', 'child-1'])
+    expect(renderer.root.findAllByProps({ 'data-testid': 'task-no-matches' })).toHaveLength(0)
+    // The matches themselves are marked, wherever they occur.
+    const marks = renderer.root.findAllByProps({ 'data-testid': 'task-match' }).map(mark => mark.children.join(''))
+    expect(marks).toContain('Usage bar')
+    expect(marks).toContain('usage bar')
+    // A needle nothing matches states it.
+    act(() => { renderer.root.findByProps({ 'aria-label': 'Search tasks' }).props.onChange({ target: { value: 'no such text' } }) })
+    act(() => { renderer.update(<TeamTasksPanel teamPath="dev" projectPath="/repo" view={view()} sendMessage={() => {}} connected />) })
+    expect(rows(renderer)).toEqual([])
+    expect(renderer.root.findAllByProps({ 'data-testid': 'task-no-matches' })).toHaveLength(1)
+    act(() => { renderer.unmount() })
+  })
+
+  test('collapsing a parent hides its subtasks and states their count', () => {
+    const renderer = mount()
+    const toggle = renderer.root.findAllByProps({ 'data-testid': 'task-parent-toggle' })[0]!
+    expect(toggle.props['aria-expanded']).toBe(true)
+    act(() => { toggle.props.onClick() })
+    expect(rows(renderer)).toEqual(['parent', 'other'])
+    expect(toggle.children.join('')).toContain('1 subtask')
+    // The kept collapse state survives a remount (per-team view state, D8).
+    act(() => { renderer.unmount() })
+    const again = mount()
+    expect(rows(again)).toEqual(['parent', 'other'])
+    act(() => { again.unmount() })
+  })
+
+  test('detail sections collapse independently and stay collapsed across tasks', () => {
+    const first = { ...view(), selectedTaskId: 'parent', detail: detail(parent) }
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => { renderer = TestRenderer.create(<TeamTasksPanel teamPath="dev" projectPath="/repo" view={first} sendMessage={() => {}} connected />) })
+    expect(renderer.root.findByProps({ 'data-testid': 'task-section-toggle-Journal' }).props['aria-expanded']).toBe(true)
+    act(() => { renderer.root.findByProps({ 'data-testid': 'task-section-toggle-Journal' }).props.onClick() })
+    expect(renderer.root.findByProps({ 'data-testid': 'task-section-toggle-Journal' }).props['aria-expanded']).toBe(false)
+    // Direction keeps its own state while Journal stays collapsed…
+    expect(renderer.root.findByProps({ 'data-testid': 'task-section-toggle-Direction' }).props['aria-expanded']).toBe(true)
+    // …and opening another task finds Journal collapsed there too (5.5).
+    const second = { ...view(), selectedTaskId: 'other', detail: detail(other) }
+    act(() => { renderer.update(<TeamTasksPanel teamPath="dev" projectPath="/repo" view={second} sendMessage={() => {}} connected />) })
+    expect(renderer.root.findByProps({ 'data-testid': 'task-section-toggle-Journal' }).props['aria-expanded']).toBe(false)
+    act(() => { renderer.unmount() })
+  })
 })

@@ -14,6 +14,7 @@ import { useStrategyStore, type StrategyView } from '../../stores/strategyStore'
 import { useTeamMessageStore } from '../../stores/teamMessageStore'
 import { useTeamWorkspaceStore } from '../../stores/teamWorkspaceStore'
 import { useTeamMailboxStore } from '../../stores/teamMailboxStore'
+import { useTeamTaskStore } from '../../stores/teamTaskStore'
 import { useWorkspaceStore } from '../../stores/workspaceStore'
 import { useTeamLocationStore } from '../../hooks/useTeamLocation'
 import { knownTeamKeys } from '../../utils/teamKey'
@@ -22,6 +23,7 @@ import { useTeamGroups } from '../chat/useTeamGroups'
 import ProductStrategyView from './ProductStrategyView'
 import TeamMailboxView from './TeamMailboxView'
 import TeamMessagesView from './TeamMessagesView'
+import TeamTasksView from './TeamTasksView'
 import {
   RENDERED_WORKSPACE_TABS,
   type TeamLocation,
@@ -52,12 +54,14 @@ export function strategyStatusLine(view: StrategyView | undefined): { text: stri
     : { text: `Strategy: ${approvalText}${reviewText}`, sub: 'overview' }
 }
 
-export default function TeamWorkspaceView({ teamKey, location, sendMessage, connected, connectionEpoch }: {
+export default function TeamWorkspaceView({ teamKey, location, sendMessage, connected, connectionEpoch, onCreateWorktree }: {
   teamKey: string
   location: TeamLocation
   sendMessage: SendClientMessage
   connected: boolean
   connectionEpoch: number
+  /** Opens the repository branch browser (the task pickers' worktree creation). */
+  onCreateWorktree?: (projectPath: string) => void
 }) {
   const sessions = useSessionStore(state => state.sessions)
   const hasLoaded = useSessionStore(state => state.hasLoaded)
@@ -121,6 +125,45 @@ export default function TeamWorkspaceView({ teamKey, location, sendMessage, conn
     return () => sendMessage({ type: 'team-mailbox-close', teamPath: teamKey })
   }, [teamKey, connected, connectionEpoch, mailboxOpen, sendMessage])
 
+  // Tasks (5.5): the list subscription plus the selected task's detail, as
+  // the chat host had them. The URL names the selection (D3): a reload or a
+  // link re-selects it, and a location naming a task the team does not have
+  // opens the list with a notice instead.
+  const tasksOpen = location.tab === 'tasks' && !unknown
+  const tasks = useTeamTaskStore(state => state.views[teamKey])
+  useEffect(() => {
+    if (!connected || !tasksOpen) return
+    useTeamTaskStore.getState().open(teamKey)
+    sendMessage({ type: 'team-tasks-open', teamPath: teamKey })
+    return () => sendMessage({ type: 'team-tasks-close', teamPath: teamKey })
+  }, [teamKey, connected, connectionEpoch, tasksOpen, sendMessage])
+  useEffect(() => {
+    if (!connected || !tasksOpen) return
+    const store = useTeamTaskStore.getState()
+    const view = store.views[teamKey]
+    if (location.id === undefined) {
+      if (view && view.selectedTaskId != null) store.select(teamKey, null)
+      return
+    }
+    // Wait for the list before judging a named task: a reload's snapshot has
+    // not arrived yet, and a task that exists must not read as missing.
+    if (!view || view.loading) return
+    const known = view.tasks.some(task => task.id === location.id)
+    if (known) {
+      if (view.selectedTaskId !== location.id) store.select(teamKey, location.id)
+    } else {
+      // A missing task falls back to the list with a notice (D3).
+      useTeamWorkspaceStore.getState().setNotice(teamKey, `Task ${location.id} was not found`)
+      if (view.selectedTaskId != null) store.select(teamKey, null)
+    }
+  }, [tasksOpen, teamKey, location.id, connected, tasks?.loading, tasks?.tasks]) // eslint-disable-line react-hooks/exhaustive-deps
+  const selectedTaskId = tasks?.selectedTaskId ?? null
+  useEffect(() => {
+    if (!connected || !tasksOpen || !selectedTaskId) return
+    sendMessage({ type: 'team-task-open', teamPath: teamKey, taskId: selectedTaskId })
+    return () => sendMessage({ type: 'team-task-close', teamPath: teamKey, taskId: selectedTaskId })
+  }, [teamKey, connected, connectionEpoch, tasksOpen, selectedTaskId, sendMessage])
+
   const liveSessions = useMemo(
     () => sessions.map(row => ({ id: row.id, name: row.name, groupId: row.groupId ?? null })),
     [sessions],
@@ -182,6 +225,16 @@ export default function TeamWorkspaceView({ teamKey, location, sendMessage, conn
         teamPath={teamKey} view={mailbox} sendMessage={sendMessage} connected={connected}
         groups={groups.groups.map(group => group.id)} sessions={liveSessions}
         onOpenSession={openParticipantChat}
+      />}
+      {tasksOpen && tasks && <TeamTasksView
+        teamPath={teamKey} projectPath={teamKey} view={tasks} sendMessage={sendMessage} connected={connected}
+        onSelectedTask={taskId => navigate(taskId
+          ? { teamKey, tab: 'tasks', id: taskId }
+          : { teamKey, tab: 'tasks' })}
+        onOpenThread={threadId => navigate({ teamKey, tab: 'messages', id: threadId })}
+        onOpenMailbox={() => navigate({ teamKey, tab: 'mailbox' })}
+        onOpenSession={openParticipantChat}
+        {...(onCreateWorktree ? { onCreateWorktree: () => onCreateWorktree(teamKey) } : {})}
       />}
     </div>
   </main>

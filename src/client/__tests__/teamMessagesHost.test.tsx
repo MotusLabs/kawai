@@ -1,8 +1,9 @@
-// Where the Messages view is hosted (team-message-threads 5.4): the chat side
-// slot holds one of Debug / Mailbox / Tasks / Messages at a time, task detail
-// draws the same message rows with named participants and a link into each
-// thread, and the Mailbox panel keeps every delivery operation — the Messages
-// view is read plus compose, never retry/discard/cancel/hand-off.
+// Where the team views are hosted (team-message-threads 5.4,
+// team-workspace-pages D4): the chat side slot hosts only the debug panel —
+// no team view ever mounts in a chat — while task detail draws the same
+// message rows with named participants and a link into each thread, and the
+// Mailbox view keeps every delivery operation the Messages view is read
+// plus compose over.
 import { afterEach, expect, test } from 'bun:test'
 import TestRenderer, { act } from 'react-test-renderer'
 import type { ChatEvent } from '@shared/chat'
@@ -10,11 +11,9 @@ import type { ClientMessage, Session } from '@shared/types'
 import type { TeamMessage } from '@shared/team'
 import type { TeamTaskDetail as Detail, TeamTaskSummary } from '@shared/teamTasks'
 import ChatView from '../components/chat/ChatView'
-import TeamMailboxPanel from '../components/team/TeamMailboxPanel'
-import TeamMessagesPanel from '../components/chat/TeamMessagesPanel'
+import TeamMailboxView from '../components/team/TeamMailboxView'
 import TeamMessagesView from '../components/team/TeamMessagesView'
-import TeamTaskDetail from '../components/chat/TeamTaskDetail'
-import { closeOtherSideSlots } from '../components/chat/sideSlot'
+import TeamTaskDetail from '../components/team/TeamTaskDetail'
 import { chooseSessionMenuEntry } from './support/sessionMenu'
 import { useChatDebugStore } from '../stores/chatDebugStore'
 import { emptyTranscript, useChatStore } from '../stores/chatStore'
@@ -22,6 +21,7 @@ import { useSessionStore } from '../stores/sessionStore'
 import { closedMessageView, useTeamMessageStore } from '../stores/teamMessageStore'
 import { useTeamMailboxStore, type MailboxView } from '../stores/teamMailboxStore'
 import { emptyDraft, useTeamTaskStore, type TaskView } from '../stores/teamTaskStore'
+import { useTeamWorkspaceStore } from '../stores/teamWorkspaceStore'
 
 afterEach(() => {
   act(() => {
@@ -29,6 +29,7 @@ afterEach(() => {
     useTeamMailboxStore.setState({ views: {} })
     useTeamTaskStore.setState({ views: {} })
     useTeamMessageStore.setState({ views: {} })
+    useTeamWorkspaceStore.setState({ views: {} })
     useSessionStore.setState({ sessions: [], selectedSessionId: null, selectedHibernatingSessionId: null })
     useChatStore.setState({ sessions: {} })
   })
@@ -42,8 +43,6 @@ const textOf = (node: TestRenderer.ReactTestInstance | string | TestRenderer.Rea
   typeof node === 'string' ? node
     : Array.isArray(node) ? node.map(textOf).join('')
       : (node.children ?? []).map(textOf).join('')
-const buttonNamed = (renderer: TestRenderer.ReactTestRenderer, name: string) =>
-  renderer.root.findAllByType('button').find(button => textOf(button) === name)!
 
 const message = (id: string, extra: Partial<TeamMessage> = {}): TeamMessage => ({
   id, teamId: 'team', toKind: 'group', toId: 'devs', fromKind: 'agent', fromSession: 'chat-gone',
@@ -57,7 +56,7 @@ const message = (id: string, extra: Partial<TeamMessage> = {}): TeamMessage => (
 const sessions = [{ id: 'dev', name: 'Dev one', groupId: 'devs' }]
 const directory = [{ sessionId: 'chat-gone', name: 'Killed helper', group: 'qa' }]
 
-test('the side slot holds one panel at a time: Messages closes the others and is closed by them', () => {
+test('the side slot hosts only Debug: no team view mounts in a chat', () => {
   const sent: ClientMessage[] = []
   let renderer!: TestRenderer.ReactTestRenderer
   act(() => {
@@ -66,49 +65,14 @@ test('the side slot holds one panel at a time: Messages closes the others and is
       connectionStatus="connected" connectionEpoch={0} error={null}
       onClose={() => {}} onKill={() => {}} />)
   })
-  const panel = (id: string) => renderer.root.findAllByProps({ 'data-testid': id })
-
-  act(() => buttonNamed(renderer, 'Messages').props.onClick())
-  expect(panel('team-messages')).toHaveLength(1)
-  expect(panel('team-mailbox')).toHaveLength(0)
-  expect(panel('team-tasks')).toHaveLength(0)
-  expect(panel('chat-debug-panel')).toHaveLength(0)
-  expect(useTeamMessageStore.getState().views['/tmp/project']!.open).toBe(true)
-
-  // Opening another side panel closes Messages.
-  act(() => buttonNamed(renderer, 'Mailbox').props.onClick())
-  expect(panel('team-messages')).toHaveLength(0)
-  expect(panel('team-mailbox')).toHaveLength(1)
-  expect(useTeamMessageStore.getState().views['/tmp/project']).toBeUndefined()
-  act(() => buttonNamed(renderer, 'Tasks').props.onClick())
-  expect(panel('team-mailbox')).toHaveLength(0)
-  expect(panel('team-tasks')).toHaveLength(1)
   act(() => chooseSessionMenuEntry(renderer.root, 'debug'))
-  expect(panel('team-tasks')).toHaveLength(0)
-  expect(panel('chat-debug-panel')).toHaveLength(1)
-  // Messages closes Debug again.
-  act(() => buttonNamed(renderer, 'Messages').props.onClick())
-  expect(panel('chat-debug-panel')).toHaveLength(0)
-  expect(panel('team-messages')).toHaveLength(1)
-  expect(useTeamMailboxStore.getState().views['/tmp/project']).toBeUndefined()
-  expect(useTeamTaskStore.getState().views['/tmp/project']).toBeUndefined()
-  expect(useChatDebugStore.getState().views['chat-1']?.open).not.toBe(true)
-  act(() => renderer.unmount())
-})
-
-test('closeOtherSideSlots keeps the named panel and drops the rest, one chat and team at a time', () => {
-  act(() => {
-    useChatDebugStore.getState().beginOpen('chat-1')
-    useTeamMailboxStore.getState().open('/repo')
-    useTeamTaskStore.getState().open('/repo')
-    useTeamMessageStore.getState().open('/other')
-    closeOtherSideSlots('messages', { sessionId: 'chat-1', teamKey: '/repo' })
-  })
-  expect(useChatDebugStore.getState().views['chat-1']).toBeUndefined()
-  expect(useTeamMailboxStore.getState().views['/repo']).toBeUndefined()
-  expect(useTeamTaskStore.getState().views['/repo']).toBeUndefined()
-  // Another team's panel is untouched.
-  expect(useTeamMessageStore.getState().views['/other']!.open).toBe(true)
+  expect(renderer.root.findAllByProps({ 'data-testid': 'chat-debug-panel' })).toHaveLength(1)
+  for (const view of ['team-tasks', 'team-messages', 'team-mailbox', 'product-strategy']) {
+    expect(renderer.root.findAllByProps({ 'data-testid': view })).toHaveLength(0)
+  }
+  // Team subscriptions stay untouched by a chat: nothing team-shaped is sent.
+  expect(sent.filter(each => each.type.startsWith('team-'))).toHaveLength(0)
+  act(() => { renderer.unmount() })
 })
 
 test('task detail names its message participants and links into each thread', () => {
@@ -149,10 +113,10 @@ test('task detail names its message participants and links into each thread', ()
   expect(links.map(link => link.parent!.props['data-message-id'])).toEqual(['m1', 'm2'])
   act(() => { links[1].props.onClick() })
   expect(opened).toEqual(['th-two'])
-  act(() => renderer.unmount())
+  act(() => { renderer.unmount() })
 })
 
-test('the Messages view composes and reads; delivery operations stay with the Mailbox panel', () => {
+test('the Messages view composes and reads; delivery operations stay with the Mailbox view', () => {
   const uncertain = message('u1', { state: 'uncertain', claimedBy: 'dev', reason: 'Transcript unreadable' })
   const dead = message('d1', { state: 'dead', reason: 'worktree-missing: /gone' })
   const sent: ClientMessage[] = []
@@ -172,16 +136,29 @@ test('the Messages view composes and reads; delivery operations stay with the Ma
   }
   expect(labels).toContain('Send message')
   expect(labels).toContain('Open thread')
-  act(() => messages.unmount())
-  // The view's own subscription opened and closed around that render.
+  act(() => { messages.unmount() })
   sent.length = 0
 
-  // The Mailbox panel still runs those operations on the same rows.
+  // The Mailbox view still runs those operations on the same rows.
   const mailboxView: MailboxView = { open: true, loading: false, messages: [uncertain, dead] }
+  act(() => {
+    useTeamWorkspaceStore.setState({ views: { 'chat-1': {
+      open: true, tab: 'mailbox',
+      tabs: {
+        strategy: { search: '', filters: {}, expanded: [], collapsedSections: [] },
+        tasks: { search: '', filters: {}, expanded: [], collapsedSections: [] },
+        messages: { search: '', filters: {}, expanded: [], collapsedSections: [] },
+        mailbox: { search: '', filters: {}, expanded: ['u1', 'd1'], collapsedSections: ['#defaults'] },
+        members: { search: '', filters: {}, expanded: [], collapsedSections: [] },
+        plans: { search: '', filters: {}, expanded: [], collapsedSections: [] },
+      },
+      notice: null,
+    } } })
+  })
   let mailbox!: TestRenderer.ReactTestRenderer
   act(() => {
-    mailbox = TestRenderer.create(<TeamMailboxPanel teamPath="chat-1" view={mailboxView}
-      sendMessage={message => sent.push(message)} connected onClose={() => {}} />)
+    mailbox = TestRenderer.create(<TeamMailboxView teamPath="chat-1" view={mailboxView}
+      sendMessage={message => sent.push(message)} connected />)
   })
   act(() => {
     for (const button of mailbox.root.findAllByType('button')) {
@@ -189,7 +166,7 @@ test('the Messages view composes and reads; delivery operations stay with the Ma
     }
   })
   expect(sent.map(message => message.type)).toEqual(['team-mailbox-retry', 'team-mailbox-discard', 'team-mailbox-retry', 'team-mailbox-discard'])
-  act(() => mailbox.unmount())
+  act(() => { mailbox.unmount() })
 })
 
 test('a live message participant opens its chat; a killed one is a name and no link', () => {
@@ -203,8 +180,8 @@ test('a live message participant opens its chat; a killed one is a name and no l
   })
   let renderer!: TestRenderer.ReactTestRenderer
   act(() => {
-    renderer = TestRenderer.create(<TeamMessagesPanel teamPath="chat-1" projectPath="/tmp/project"
-      sendMessage={() => {}} connected connectionEpoch={0} onClose={() => {}} />)
+    renderer = TestRenderer.create(<TeamMessagesView teamPath="chat-1" view={useTeamMessageStore.getState().views['chat-1']!}
+      sendMessage={() => {}} connected sessions={sessions} onOpenSession={id => useSessionStore.getState().setSelectedSessionId(id)} />)
   })
   const byName = (name: string) =>
     renderer.root.findAllByProps({ 'data-testid': 'participant-name' }).find(node => textOf(node) === name)!
@@ -213,7 +190,7 @@ test('a live message participant opens its chat; a killed one is a name and no l
   expect(byName('Killed helper (gone)').type).toBe('span')
   act(() => { (byName('Dev one') as TestRenderer.ReactTestInstance).props.onClick() })
   expect(useSessionStore.getState().selectedSessionId).toBe('dev')
-  act(() => renderer.unmount())
+  act(() => { renderer.unmount() })
 })
 
 test('the transcript names its peer senders and opens a live one, never a gone one', () => {
@@ -243,5 +220,5 @@ test('the transcript names its peer senders and opens a live one, never a gone o
   expect(live.type).toBe('button')
   act(() => { live.props.onClick() })
   expect(useSessionStore.getState().selectedSessionId).toBe('dev')
-  act(() => renderer.unmount())
+  act(() => { renderer.unmount() })
 })

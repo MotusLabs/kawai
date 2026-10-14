@@ -12,8 +12,8 @@ import type { TeamTaskAssignment, TeamTaskDetail as Detail, TeamTaskSummary } fr
 import type { TeamMessage } from '@shared/team'
 import ChatMessages from '../components/chat/ChatMessages'
 import MessageRow from '../components/team/MessageRow'
-import TeamTasksPanel from '../components/chat/TeamTasksPanel'
-import { assignmentLabel } from '../components/chat/TeamTasksPanel'
+import TeamTasksPanel from '../components/team/TeamTasksView'
+import { assignmentLabel } from '../components/team/assignmentLabel'
 import { useChatStore } from '../stores/chatStore'
 import { useSessionStore } from '../stores/sessionStore'
 import { emptyDraft, useTeamTaskStore, type TaskView } from '../stores/teamTaskStore'
@@ -60,7 +60,7 @@ const mountPanel = (patch: Partial<TaskView> = {}) => {
   let renderer!: TestRenderer.ReactTestRenderer
   const element = (connected = true) => <TeamTasksPanel teamPath="dev" projectPath="/repo"
     view={{ ...useTeamTaskStore.getState().views.dev!, loading: false, ...patch }}
-    sendMessage={message => sent.push(message)} connected={connected} onClose={() => {}} />
+    sendMessage={message => sent.push(message)} connected={connected} />
   act(() => { renderer = TestRenderer.create(element(true)) })
   const rerender = (connected = true) => act(() => { renderer.update(element(connected)) })
   const store = () => useTeamTaskStore.getState().views.dev!
@@ -232,7 +232,7 @@ test('detail: Assign / send task dispatches; an outstanding assignment forces th
   act(() => {
     renderer = TestRenderer.create(<TeamTasksPanel teamPath="dev" projectPath="/repo"
       view={{ ...useTeamTaskStore.getState().views.dev!, loading: false }}
-      sendMessage={message => sent.push(message)} connected onClose={() => {}} />)
+      sendMessage={message => sent.push(message)} connected />)
   })
   expect(renderer.root.findByProps({ 'data-testid': 'task-outstanding-assignment' }).children.join('')).toContain('group devs')
   const form = renderer.root.findByProps({ 'data-testid': 'task-assign-form' })
@@ -267,7 +267,7 @@ test('detail: an unassigned task sends directly; a failed assignment shows its r
   let renderer!: TestRenderer.ReactTestRenderer
   const element = (connected: boolean) => <TeamTasksPanel teamPath="dev" projectPath="/repo"
     view={{ ...useTeamTaskStore.getState().views.dev!, loading: false }}
-    sendMessage={message => sent.push(message)} connected={connected} onClose={() => {}} />
+    sendMessage={message => sent.push(message)} connected={connected} />
   act(() => { renderer = TestRenderer.create(element(true)) })
   const history = renderer.root.findByProps({ 'data-testid': 'task-assignment-history' })
   expect(textOf(history)).toContain('failed')

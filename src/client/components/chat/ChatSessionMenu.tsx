@@ -1,51 +1,45 @@
-// The chat header's session menu (chat-header-layout D4): Rename, Debug (a
-// checkbox item, on while the debug panel is open), Archive for live chats,
-// and Kill session last, styled as destructive. In the narrowest header
-// layout the side-panel entries fold in first, with their selected state.
-// The entries are a pure model (`sessionMenuEntries`) so their order and
-// presence are testable without a DOM; Base UI's Menu supplies roving focus,
-// typeahead, Escape, and focus return to the trigger. Rename skips that
-// focus return so the name field keeps the focus it takes. The popup renders
-// into the header so the chat palette and font size still apply.
+// The chat header's session menu (chat-header-layout D4, team-workspace-pages
+// 4.1): Rename, Debug (a checkbox item, on while the debug panel is open),
+// Archive for live chats, and Kill session last, styled as destructive. In
+// the narrowest header layout the Team button folds in first, as a plain
+// item. The entries are a pure model (`sessionMenuEntries`) so their order
+// and presence are testable without a DOM; Base UI's Menu supplies roving
+// focus, typeahead, Escape, and focus return to the trigger. Rename skips
+// that focus return so the name field keeps the focus it takes. The popup
+// renders into the header so the chat palette and font size still apply.
 import { useRef, type RefObject } from 'react'
 import { Menu } from '@base-ui/react/menu'
 import DotsHorizontalIcon from '@untitledui-icons/react/line/esm/DotsHorizontalIcon'
-import { PANEL_ENTRIES } from './ChatPanelSwitcher'
-import type { SideSlot } from './sideSlot'
 
 export type SessionMenuEntry =
   | { kind: 'item'; id: string; label: string; onSelect: () => void; danger?: boolean; keepFocus?: boolean }
   | { kind: 'check'; id: string; label: string; checked: boolean; onToggle: () => void }
   | { kind: 'separator'; id: string }
 
-export function sessionMenuEntries({ archived, openSlot, foldPanels, onRename, onToggleSlot, onArchive, onKill }: {
+export function sessionMenuEntries({ archived, debugOpen, foldTeam, onOpenTeam, onRename, onToggleDebug, onArchive, onKill }: {
   archived: boolean
-  openSlot: SideSlot | null
-  foldPanels: boolean
+  debugOpen: boolean
+  foldTeam: boolean
+  onOpenTeam: () => void
   onRename: () => void
-  onToggleSlot: (slot: SideSlot) => void
+  onToggleDebug: () => void
   onArchive: () => void
   onKill: () => void
 }): SessionMenuEntry[] {
-  const panels: SessionMenuEntry[] = foldPanels
-    ? [
-        ...PANEL_ENTRIES.map(({ slot, label }): SessionMenuEntry => ({
-          kind: 'check', id: `panel-${slot}`, label, checked: openSlot === slot, onToggle: () => onToggleSlot(slot),
-        })),
-        { kind: 'separator', id: 'after-panels' },
-      ]
+  const team: SessionMenuEntry[] = foldTeam
+    ? [{ kind: 'item', id: 'team', label: 'Team', onSelect: onOpenTeam }, { kind: 'separator', id: 'after-team' }]
     : []
   return [
-    ...panels,
+    ...team,
     { kind: 'item', id: 'rename', label: 'Rename', onSelect: onRename, keepFocus: true },
-    { kind: 'check', id: 'debug', label: 'Debug', checked: openSlot === 'debug', onToggle: () => onToggleSlot('debug') },
+    { kind: 'check', id: 'debug', label: 'Debug', checked: debugOpen, onToggle: onToggleDebug },
     { kind: 'separator', id: 'before-lifecycle' },
     ...(archived ? [] : [{ kind: 'item', id: 'archive', label: 'Archive', onSelect: onArchive } as const]),
     { kind: 'item', id: 'kill', label: 'Kill session', onSelect: onKill, danger: true },
   ]
 }
 
-const TEST_IDS: Record<string, string> = { archive: 'chat-archive-button', kill: 'chat-kill-button', debug: 'chat-debug-toggle' }
+const TEST_IDS: Record<string, string> = { archive: 'chat-archive-button', kill: 'chat-kill-button', debug: 'chat-debug-toggle', team: 'chat-team-button' }
 const ROW = 'flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-left text-chat-meta outline-none data-[highlighted]:bg-hover'
 
 export default function ChatSessionMenu({ entries, container }: {

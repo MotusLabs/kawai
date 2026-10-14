@@ -1,34 +1,95 @@
-// The team's tasks beside a chat (team-tasks 7.1, task-assignment 5.2): a
-// list with title, status, creator, participants, and the assignment target
-// and state (or Unassigned), plus the New task form — searchable worktree
-// and OpenSpec-change pickers, an optional assignment section (group or
-// session plus the initial instruction; group dispatch selects one eligible
-// member), an on-demand dispatch preview, and **Create task** /
-// **Create and assign** armed with one stable client request key. The form
-// draft and the key live in the store, so a refusal keeps every field and
-// **Retry assignment** reuses the existing task. Rows come from
-// authoritative server snapshots; actions disable while disconnected and
-// refusals show inline.
-import { useEffect, useRef } from 'react'
+// The Tasks tab (team-tasks 7.1, task-assignment 5.2, team-workspace-pages
+// 5.5): a search over title and current direction with marked matches — a
+// matching subtask keeps its ancestors so the tree stays connected — a
+// collapsible parent/subtask tree, the New task form (searchable worktree
+// and OpenSpec-change pickers, an optional assignment with dispatch preview,
+// **Create task** / **Create and assign** armed with one stable client
+// request key whose draft lives in the store), and rows with status,
+// creator, participants, the assignment target and state, and the result
+// badge (task-results-handoffs). Rows come from authoritative server
+// snapshots; actions disable while disconnected and refusals show inline.
+import { useEffect, useMemo, useRef } from 'react'
 import type { SendClientMessage, Session } from '@shared/types'
-import type { TeamTaskAssignment } from '@shared/teamTasks'
+import type { TeamTaskSummary } from '@shared/teamTasks'
 import { useSessionStore } from '../../stores/sessionStore'
 import { useTeamTaskStore, type TaskCreatePayload, type TaskView } from '../../stores/teamTaskStore'
+import { useTeamWorkspaceStore } from '../../stores/teamWorkspaceStore'
 import TeamTaskDetail from './TeamTaskDetail'
 import SearchablePicker from './SearchablePicker'
 import { TaskPreviewView, TaskTargetSelect } from './taskAssignFields'
-import { useTeamGroups } from './useTeamGroups'
-import { openParticipantChat } from './openParticipant'
+import { useTeamGroups } from '../chat/useTeamGroups'
+import { openParticipantChat } from '../chat/openParticipant'
+import { assignmentLabel } from './assignmentLabel'
 import { actorLabel, sessionLabel } from './teamTaskLabels'
 
-export default function TeamTasksPanel({ teamPath, projectPath, view, sendMessage, connected, onClose, onOpenThread, onCreateWorktree, onOpenMailbox }: {
-  teamPath: string; projectPath: string; view: TaskView; sendMessage: SendClientMessage; connected: boolean; onClose: () => void
-  /** Handed to a task's messages: open that message's thread (5.4). */
+/** One tree node: a task with the children whose parentId names it. */
+interface TaskNode {
+  task: TeamTaskSummary
+  children: TaskNode[]
+}
+
+/**
+ * Build the roots-and-children forest; a task whose parent is absent from
+ * the list (filtered out or gone) is a root itself, so no row disappears.
+ */
+export function buildTaskTree(tasks: TeamTaskSummary[]): TaskNode[] {
+  const byParent = new Map<string, TeamTaskSummary[]>()
+  const ids = new Set(tasks.map(task => task.id))
+  const roots: TeamTaskSummary[] = []
+  for (const task of tasks) {
+    if (task.parentId && ids.has(task.parentId)) {
+      const list = byParent.get(task.parentId) ?? []
+      list.push(task)
+      byParent.set(task.parentId, list)
+    } else {
+      roots.push(task)
+    }
+  }
+  const nodeOf = (task: TeamTaskSummary): TaskNode => ({ task, children: (byParent.get(task.id) ?? []).map(nodeOf) })
+  return roots.map(nodeOf)
+}
+
+/** Whether a task's title or current direction contains the needle (D6). */
+function taskMatches(task: TeamTaskSummary, needle: string): boolean {
+  if (!needle) return true
+  const hay = `${task.title}\n${task.direction}`.toLowerCase()
+  return hay.includes(needle.toLowerCase())
+}
+
+/** The search keeps a matching task's ancestors, so the tree stays connected. */
+export function filterTree(nodes: TaskNode[], needle: string): TaskNode[] {
+  if (!needle) return nodes
+  const keep = (node: TaskNode): TaskNode | null => {
+    const children = node.children.map(child => keep(child)).filter((child): child is TaskNode => child !== null)
+    return children.length > 0 || taskMatches(node.task, needle) ? { task: node.task, children } : null
+  }
+  return nodes.map(keep).filter((node): node is TaskNode => node !== null)
+}
+
+/** Text with the needle's first occurrence marked (5.5). */
+export function MarkedText({ text, needle }: { text: string; needle: string }) {
+  if (!needle) return <>{text}</>
+  const at = text.toLowerCase().indexOf(needle.toLowerCase())
+  if (at < 0) return <>{text}</>
+  return <>{text.slice(0, at)}<mark data-testid="task-match">{text.slice(at, at + needle.length)}</mark>{text.slice(at + needle.length)}</>
+}
+
+export default function TeamTasksView({ teamPath, projectPath, view, sendMessage, connected, onSelectedTask, onOpenThread, onCreateWorktree, onOpenMailbox, onOpenSession }: {
+  teamPath: string
+  projectPath: string
+  view: TaskView
+  sendMessage: SendClientMessage
+  connected: boolean
+  /** Reports selection moves to the host (the Team page's URL, D3). */
+  onSelectedTask?: (taskId: string | null) => void
+  /** Open this message's thread in the Messages tab. */
   onOpenThread?: (threadId: string) => void
   /** Opens the existing worktree-creation flow; the pickers refresh on return. */
   onCreateWorktree?: () => void
   /** Opens the team mailbox, where an uncertain revision notice is resolved. */
   onOpenMailbox?: () => void
+  /** Open a participant's chat; the Team page passes the navigator's opener. */
+  onOpenSession?: (sessionId: string) => void
 }) {
   const sessions = useSessionStore(state => state.sessions)
   const { groups } = useTeamGroups(connected, projectPath)
@@ -36,9 +97,21 @@ export default function TeamTasksPanel({ teamPath, projectPath, view, sendMessag
   const flow = view.flow
   const busy = Object.keys(view.pending).length > 0
   const setDraft = (patch: Partial<typeof draft>) => useTeamTaskStore.getState().setDraft(teamPath, patch)
+  const select = (taskId: string | null) => {
+    useTeamTaskStore.getState().select(teamPath, taskId)
+    onSelectedTask?.(taskId)
+  }
+  // Search and tree collapse are the team's kept view state (D8). Parents
+  // render expanded by default; a collapsed one is recorded by name.
+  const search = useTeamWorkspaceStore(state => state.views[teamPath]?.tabs.tasks.search) ?? ''
+  const collapsedParents = useTeamWorkspaceStore(state => state.views[teamPath]?.tabs.tasks.collapsedSections) ?? NONE_COLLAPSED
+  const collapsedSet = useMemo(() => new Set(collapsedParents), [collapsedParents])
+  const toggleParent = (taskId: string) => useTeamWorkspaceStore.getState().toggleSectionCollapsed(teamPath, 'tasks', `parent:${taskId}`)
+  const tree = useMemo(() => filterTree(buildTaskTree(view.tasks), search.trim()), [view.tasks, search])
+
   // The change list narrows to the roots the server validates for the chosen
   // worktree, so every request carries the draft's current worktree and the
-  // panel re-requests whenever it moves.
+  // view re-requests whenever it moves.
   const requestTargets = () => {
     const worktree = useTeamTaskStore.getState().views[teamPath]?.draft.worktree.trim()
     useTeamTaskStore.getState().beginTargets(teamPath)
@@ -128,27 +201,31 @@ export default function TeamTasksPanel({ teamPath, projectPath, view, sendMessag
   }
   const targetReady = draft.targetKind !== '' && draft.targetId !== ''
   const createCommitted = flow?.taskId != null
-  return <aside data-testid="team-tasks" className="flex min-h-0 w-full flex-col border-l border-border md:w-[28rem]">
-    <header className="flex items-center justify-between border-b border-border p-3"><h3>Team tasks</h3>
-      <button className="btn" onClick={onClose}>Close tasks</button></header>
+  return <div data-testid="team-tasks" className="flex h-full min-h-0 flex-col">
     {!connected && <p role="status" className="p-3 text-secondary">Disconnected — reconnect to update tasks.</p>}
     {view.loading && <p role="status" className="p-3">Loading tasks…</p>}
-    {view.error && <p role="alert" className="border-b border-border p-3 text-chat-meta text-chat-danger">{view.error}</p>}
-    <div className="min-h-0 flex-1 overflow-y-auto p-3">
-      {view.selectedTaskId ? (
+    {view.error && <p role="alert" className="border-b border-border p-3 text-sm text-danger">{view.error}</p>}
+    {view.selectedTaskId ? (
+      <div className="min-h-0 flex-1 overflow-y-auto p-3">
         <TeamTaskDetail teamPath={teamPath} projectPath={projectPath} view={view} sendMessage={sendMessage} connected={connected} sessions={sessions}
-          onOpenThread={onOpenThread} onOpenSession={openParticipantChat} onOpenMailbox={onOpenMailbox} />
-      ) : <>
+          onBack={() => select(null)} onNavigate={select} onOpenThread={onOpenThread} onOpenSession={onOpenSession ?? openParticipantChat} onOpenMailbox={onOpenMailbox} />
+      </div>
+    ) : <>
+      <div className="border-b border-border p-3">
+        <input className="input" type="search" aria-label="Search tasks" placeholder="Search title and direction"
+          value={search} onChange={event => useTeamWorkspaceStore.getState().setSearch(teamPath, 'tasks', event.target.value)} />
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto p-3">
         <details className="mb-4 border border-border p-2" data-testid="task-create">
           <summary className="cursor-pointer font-medium">New task</summary>
           <form className="mt-2 flex flex-col gap-2" onSubmit={event => { event.preventDefault(); create(draft.targetKind !== '' && draft.instruction.trim() !== '') }}>
-            <input className="input text-chat-body" aria-label="Task title" placeholder="Title" value={draft.title}
+            <input className="input" aria-label="Task title" placeholder="Title" value={draft.title}
               disabled={!connected} onChange={event => setDraft({ title: event.target.value })} />
-            <textarea className="input min-h-16 text-chat-body" aria-label="Task direction" placeholder="Direction" value={draft.direction}
+            <textarea className="input min-h-16" aria-label="Task direction" placeholder="Direction" value={draft.direction}
               disabled={!connected} onChange={event => setDraft({ direction: event.target.value })} />
-            <textarea className="input min-h-12 text-chat-body" aria-label="Acceptance criteria" placeholder="Acceptance criteria (optional)" value={draft.acceptance}
+            <textarea className="input min-h-12" aria-label="Acceptance criteria" placeholder="Acceptance criteria (optional)" value={draft.acceptance}
               disabled={!connected} onChange={event => setDraft({ acceptance: event.target.value })} />
-            <select className="input text-chat-body" aria-label="Parent task" value={draft.parentId}
+            <select className="input" aria-label="Parent task" value={draft.parentId}
               disabled={!connected} onChange={event => setDraft({ parentId: event.target.value })}>
               <option value="">No parent task</option>
               {view.tasks.map(task => <option key={task.id} value={task.id}>{task.title}</option>)}
@@ -167,15 +244,15 @@ export default function TeamTasksPanel({ teamPath, projectPath, view, sendMessag
                 value: change.name, label: change.name, hint: change.locations.join(' and '),
               }))} />
             <fieldset className="flex flex-col gap-2 border-t border-border pt-2" data-testid="task-assign-section">
-              <legend className="text-chat-meta">Assignment (optional)</legend>
+              <legend>Assignment (optional)</legend>
               <TaskTargetSelect testId="task-assign-target" kind={draft.targetKind} id={draft.targetId}
                 onKind={kind => setDraft({ targetKind: kind })} onId={id => setDraft({ targetId: id })}
                 groups={groups} sessions={sessions.filter(session => session.kind === 'chat')} disabled={!connected} />
-              <textarea className="input min-h-12 text-chat-body" aria-label="Assignment instruction" placeholder="Initial instruction"
+              <textarea className="input min-h-12" aria-label="Assignment instruction" placeholder="Initial instruction"
                 value={draft.instruction} disabled={!connected}
                 onChange={event => setDraft({ instruction: event.target.value })} />
-              <p className="text-chat-meta text-secondary">Group dispatch selects one eligible member of the group.</p>
-              <button type="button" className="btn self-start text-chat-meta" disabled={!connected || !targetReady || Object.keys(view.previewPending).length > 0}
+              <p className="text-sm text-secondary">Group dispatch selects one eligible member of the group.</p>
+              <button type="button" className="btn self-start" disabled={!connected || !targetReady || Object.keys(view.previewPending).length > 0}
                 onClick={preview} data-testid="task-assign-preview-button">Preview dispatch</button>
               {view.preview && <TaskPreviewView preview={view.preview} />}
             </fieldset>
@@ -190,33 +267,58 @@ export default function TeamTasksPanel({ teamPath, projectPath, view, sendMessag
               </>}
           </form>
         </details>
-        {view.tasks.length === 0 && !view.loading && <p className="text-chat-meta text-secondary">No tasks yet</p>}
-        {view.tasks.map(task => <article key={task.id} data-task-id={task.id} className="mb-2 border border-border p-2">
-          <button className="text-left font-medium hover:underline" onClick={() => useTeamTaskStore.getState().select(teamPath, task.id)}>{task.title}</button>
-          <p className="text-chat-meta text-secondary">
-            <span data-testid="task-status">{task.status}</span> · created by {actorLabel(task.creator, sessions)}
-            {task.parentId ? ' · subtask' : ''}
-          </p>
-          <p className="text-chat-meta text-secondary" data-testid="task-participants">
-            Participants: {task.participants.length > 0 ? task.participants.map(id => sessionLabel(id, sessions)).join(', ') : 'none yet'}
-          </p>
-          <p className="text-chat-meta text-secondary" data-testid="task-assignment">{assignmentLabel(task.assignment, sessions)}</p>
-          {task.outstandingResult && <p className="text-chat-meta" data-testid="task-result-badge"
-            data-state={task.outstandingResult.accepted ? 'accepted' : task.outstandingResult.needsReevaluation ? 'flagged' : 'submitted'}>
-            {task.outstandingResult.accepted ? 'Result accepted' : task.outstandingResult.needsReevaluation ? 'Result needs re-evaluation' : 'Result submitted'}
-          </p>}
-        </article>)}
-      </>}
-    </div>
-  </aside>
+        {view.tasks.length === 0 && !view.loading && <p className="text-sm text-secondary">No tasks yet</p>}
+        {tree.length === 0 && view.tasks.length > 0 && <p className="text-sm text-secondary" data-testid="task-no-matches">No tasks match the search</p>}
+        {tree.map(node => <TaskRow key={node.task.id} node={node} needle={search.trim()} depth={0}
+          sessions={sessions} collapsedParents={collapsedSet} onToggleParent={toggleParent} onSelect={select} />)}
+      </div>
+    </>}
+  </div>
 }
 
-/** A list row's assignment line: target and state, or Unassigned (5.5). */
-export function assignmentLabel(assignment: TeamTaskAssignment | null, sessions: Session[]): string {
-  if (!assignment) return 'Unassigned'
-  const target = assignment.targetKind === 'group'
-    ? `group ${assignment.targetId}`
-    : sessionLabel(assignment.targetId, sessions)
-  const owner = assignment.claimedBy ? ` (claimed by ${sessionLabel(assignment.claimedBy, sessions)})` : ''
-  return `Assigned: ${target} · ${assignment.state}${owner}`
+/** Stable empty list so absent view state never re-renders (getSnapshot caching). */
+const NONE_COLLAPSED: string[] = []
+
+/** One tree row with its nested subtasks; a collapsed parent hides them and states their count. */
+function TaskRow({ node, needle, depth, sessions, collapsedParents, onToggleParent, onSelect }: {
+  node: TaskNode
+  needle: string
+  depth: number
+  sessions: Session[]
+  collapsedParents: Set<string>
+  onToggleParent: (taskId: string) => void
+  onSelect: (taskId: string) => void
+}) {
+  const { task, children } = node
+  const collapsed = children.length > 0 && collapsedParents.has(`parent:${task.id}`)
+  return <>
+    <article data-task-id={task.id} data-testid="task-row" className={`mb-2 border border-border p-2 ${depth > 0 ? 'ml-4' : ''}`}>
+      <div className="flex items-start justify-between gap-2">
+        <button className="text-left font-medium hover:underline" onClick={() => onSelect(task.id)}>
+          <MarkedText text={task.title} needle={needle} />
+        </button>
+        {children.length > 0 && <button type="button" className="btn shrink-0" data-testid="task-parent-toggle"
+          aria-expanded={!collapsed} onClick={() => onToggleParent(task.id)}>
+          {collapsed ? `▸ ${children.length} subtask${children.length === 1 ? '' : 's'}` : '▾'}
+        </button>}
+      </div>
+      <p className="text-sm text-secondary">
+        <span data-testid="task-status">{task.status}</span> · created by {actorLabel(task.creator, sessions)}
+        {task.parentId ? ' · subtask' : ''}
+      </p>
+      <p className="text-sm text-secondary" data-testid="task-direction-line">
+        <MarkedText text={task.direction.split('\n')[0] ?? ''} needle={needle} />
+      </p>
+      <p className="text-sm text-secondary" data-testid="task-participants">
+        Participants: {task.participants.length > 0 ? task.participants.map(id => sessionLabel(id, sessions)).join(', ') : 'none yet'}
+      </p>
+      <p className="text-sm text-secondary" data-testid="task-assignment">{assignmentLabel(task.assignment, sessions)}</p>
+      {task.outstandingResult && <p className="text-sm" data-testid="task-result-badge"
+        data-state={task.outstandingResult.accepted ? 'accepted' : task.outstandingResult.needsReevaluation ? 'flagged' : 'submitted'}>
+        {task.outstandingResult.accepted ? 'Result accepted' : task.outstandingResult.needsReevaluation ? 'Result needs re-evaluation' : 'Result submitted'}
+      </p>}
+    </article>
+    {!collapsed && children.map(child => <TaskRow key={child.task.id} node={child} needle={needle} depth={depth + 1}
+      sessions={sessions} collapsedParents={collapsedParents} onToggleParent={onToggleParent} onSelect={onSelect} />)}
+  </>
 }

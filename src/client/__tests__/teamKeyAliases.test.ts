@@ -1,7 +1,7 @@
 // A reply in flight across a team-key move (team-workspace-pages D2) still
 // reaches its view: one-shot request results must settle their action.
 import { afterEach, describe, expect, test } from 'bun:test'
-import { rekeyTeamViews } from '../components/chat/sideSlot'
+import { rekeyTeamViewsForTests } from '../stores/teamViewMigration'
 import { handleStrategyMessage } from '../protocol/strategyMessages'
 import { handleTeamMessage } from '../protocol/teamMessages'
 import type { MessageRouterDeps } from '../protocol/types'
@@ -40,7 +40,7 @@ test('a task action result sent before a rekey settles under the new key', () =>
   const tasks = useTeamTaskStore.getState()
   tasks.open('/repo/wt')
   tasks.begin('/repo/wt', 'r1', 'note')
-  rekeyTeamViews('/repo/wt', '/repo')
+  rekeyTeamViewsForTests('/repo/wt', '/repo')
   expect(useTeamTaskStore.getState().views['/repo']!.pending).toEqual({ r1: 'note' })
   handleTeamMessage({ type: 'team-task-result', teamPath: '/repo/wt', requestId: 'r1', error: 'refused' }, deps)
   expect(useTeamTaskStore.getState().views['/repo']).toMatchObject({ pending: {}, error: 'refused' })
@@ -50,7 +50,7 @@ test('a strategy action result sent before a rekey settles under the new key', (
   const strategy = useStrategyStore.getState()
   strategy.open('/repo/wt')
   strategy.begin('/repo/wt', 'r1', 'submit')
-  rekeyTeamViews('/repo/wt', '/repo')
+  rekeyTeamViewsForTests('/repo/wt', '/repo')
   handleStrategyMessage({ type: 'strategy-result', teamPath: '/repo/wt', requestId: 'r1', error: 'stale' }, deps)
   const view = useStrategyStore.getState().views['/repo']!
   expect(Object.keys(view.pending)).toEqual([])

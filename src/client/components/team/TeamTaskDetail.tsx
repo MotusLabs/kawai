@@ -18,10 +18,11 @@ import { useState } from 'react'
 import type { Session, SendClientMessage } from '@shared/types'
 import { TASK_STATUSES, type TaskStatus } from '@shared/teamTasks'
 import { useTeamTaskStore, type TaskAction, type TaskView } from '../../stores/teamTaskStore'
-import MessageRow from '../team/MessageRow'
+import { useTeamWorkspaceStore } from '../../stores/teamWorkspaceStore'
+import MessageRow from './MessageRow'
 import { TaskPreviewView, TaskTargetSelect, type AssignTargetKind } from './taskAssignFields'
-import { useTeamGroups } from './useTeamGroups'
-import { assignmentLabel } from './TeamTasksPanel'
+import { useTeamGroups } from '../chat/useTeamGroups'
+import { assignmentLabel } from './assignmentLabel'
 import { actorLabel, journalAuthorLabel, sessionLabel } from './teamTaskLabels'
 import TaskDirectionEditor, { type TaskActFn } from './TaskDirectionEditor'
 import TaskPublications from './TaskPublications'
@@ -41,8 +42,27 @@ interface DetailAssignForm {
 
 const emptyAssignForm = (): DetailAssignForm => ({ kind: '', id: '', instruction: '', requestKey: null, preview: false })
 
-export default function TeamTaskDetail({ teamPath, projectPath, view, sendMessage, connected, sessions, onOpenThread, onOpenSession, onOpenMailbox }: {
+/**
+ * A detail section that collapses on its own, keyed by name in the team's
+ * kept view state so a collapsed section stays collapsed across tasks (5.5).
+ */
+function Section({ teamPath, name, children }: { teamPath: string; name: string; children: React.ReactNode }) {
+  const collapsed = useTeamWorkspaceStore(state => state.views[teamPath]?.tabs.tasks.collapsedSections.includes(name)) ?? false
+  return <section aria-label={name} className="mt-3" data-testid="task-detail-section" data-section={name}>
+    <button type="button" className="font-medium" data-testid={`task-section-toggle-${name}`}
+      aria-expanded={!collapsed} onClick={() => useTeamWorkspaceStore.getState().toggleSectionCollapsed(teamPath, 'tasks', name)}>
+      {collapsed ? `▸ ${name}` : `▾ ${name}`}
+    </button>
+    {!collapsed && children}
+  </section>
+}
+
+export default function TeamTaskDetail({ teamPath, projectPath, view, sendMessage, connected, sessions, onBack, onNavigate, onOpenThread, onOpenSession, onOpenMailbox }: {
   teamPath: string; projectPath: string; view: TaskView; sendMessage: SendClientMessage; connected: boolean; sessions: Session[]
+  /** Leave the detail for the list; the Team page also clears its URL. */
+  onBack?: () => void
+  /** Selection moves the host reports (the Team page's URL); internal by default. */
+  onNavigate?: (taskId: string | null) => void
   /** Open this message's thread in the Messages view; omitted = no link. */
   onOpenThread?: (threadId: string) => void
   /** Open a message participant's chat; omitted = names only. */
@@ -57,7 +77,12 @@ export default function TeamTaskDetail({ teamPath, projectPath, view, sendMessag
   const [form, setForm] = useState<DetailAssignForm>(emptyAssignForm)
   const [choice, setChoice] = useState<'notify' | 'stop'>('notify')
   const [choosing, setChoosing] = useState(false)
-  const back = () => useTeamTaskStore.getState().select(teamPath, null)
+  // Every selection move goes through one place so the URL follows it.
+  const go = (taskId: string | null) => {
+    useTeamTaskStore.getState().select(teamPath, taskId)
+    onNavigate?.(taskId)
+  }
+  const back = () => go(null)
   if (!detail || !task) {
     return <div><button className="btn mb-3" onClick={back}>All tasks</button><p role="status">Loading task…</p></div>
   }
@@ -106,13 +131,13 @@ export default function TeamTaskDetail({ teamPath, projectPath, view, sendMessag
     <button className="btn mb-3" onClick={back}>All tasks</button>
     <h4 className="font-medium">{task.title}</h4>
     <p className="text-chat-meta text-secondary"><span data-testid="task-detail-status">{task.status}</span> · revision {task.revision} · created by <span data-testid="task-creator">{actorLabel(task.creator, sessions)}</span></p>
-    {task.parentId && <p className="text-chat-meta">Subtask of <button className="hover:underline" onClick={() => useTeamTaskStore.getState().select(teamPath, task.parentId)}>
+    {task.parentId && <p className="text-chat-meta">Subtask of <button className="hover:underline" onClick={() => go(task.parentId!)}>
       {view.tasks.find(row => row.id === task.parentId)?.title ?? task.parentId}</button></p>}
     {task.worktree && <p className="break-all text-chat-meta">Worktree: {task.worktree}</p>}
     {task.openspecChange && <p className="text-chat-meta">Linked OpenSpec change <code>{task.openspecChange}</code> — its proposal, design, and tasks are the authoritative direction.</p>}
 
-    <section aria-label="Assignment" className="mt-3" data-testid="task-assignment-section">
-      <h5 className="font-medium">Assignment</h5>
+    <Section teamPath={teamPath} name="Assignment">
+      <div data-testid="task-assignment-section" className="mt-1">
       {outstanding
         ? <p className="text-chat-meta" data-testid="task-outstanding-assignment">
             Outstanding: {outstandingLabel(outstanding)} · role {outstanding.role ?? 'none'}
@@ -157,11 +182,11 @@ export default function TeamTaskDetail({ teamPath, projectPath, view, sendMessag
           {row.reason ? ` · ${row.reason}` : ''}
         </p>)}
       </details>}
-    </section>
+      </div>
+    </Section>
 
-    <section aria-label="Direction" className="mt-3">
-      <h5 className="font-medium">Direction</h5>
-      <p className="whitespace-pre-wrap text-chat-body" data-testid="task-direction">{task.direction}</p>
+    <Section teamPath={teamPath} name="Direction">
+      <p className="mt-1 whitespace-pre-wrap text-chat-body" data-testid="task-direction">{task.direction}</p>
       {task.acceptance && <><h5 className="mt-2 font-medium">Acceptance criteria</h5>
         <p className="whitespace-pre-wrap text-chat-body" data-testid="task-acceptance">{task.acceptance}</p></>}
       <details className="mt-2 text-chat-meta" data-testid="task-revisions"><summary>Revision history ({detail.revisions.length})</summary>
@@ -173,21 +198,28 @@ export default function TeamTaskDetail({ teamPath, projectPath, view, sendMessag
         </div>)}
       </details>
       <TaskDirectionEditor task={task} draft={detail.draft} connected={connected} disabled={disabled} act={act} />
-    </section>
+    </Section>
 
-    <TaskResultsSection detail={detail} groups={groups} sessions={sessions} connected={connected} disabled={disabled} act={act} />
-    <TaskReleaseDialog detail={detail} groups={groups} connected={connected} disabled={disabled} act={act} />
+    <Section teamPath={teamPath} name="Results">
+      <TaskResultsSection detail={detail} groups={groups} sessions={sessions} connected={connected} disabled={disabled} act={act} />
+    </Section>
+    <Section teamPath={teamPath} name="Release">
+      <TaskReleaseDialog detail={detail} groups={groups} connected={connected} disabled={disabled} act={act} />
+    </Section>
 
-    <TaskPublications task={task} publications={detail.publications ?? []} acknowledgements={detail.acknowledgements ?? []}
-      sessions={sessions} disabled={disabled} act={act} onOpenMailbox={onOpenMailbox} />
+    <Section teamPath={teamPath} name="Publications">
+      <TaskPublications task={task} publications={detail.publications ?? []} acknowledgements={detail.acknowledgements ?? []}
+        sessions={sessions} disabled={disabled} act={act} onOpenMailbox={onOpenMailbox} />
+    </Section>
 
-    <section aria-label="Status" className="mt-3 flex flex-wrap gap-2">
-      {TASK_STATUSES.filter(status => status !== task.status).map(status =>
-        <button key={status} className="btn text-chat-meta" disabled={disabled} onClick={() => act('status', { type: 'team-task-status', status })}>{statusLabel(status)}</button>)}
-    </section>
+    <Section teamPath={teamPath} name="Status">
+      <div className="mt-1 flex flex-wrap gap-2">
+        {TASK_STATUSES.filter(status => status !== task.status).map(status =>
+          <button key={status} className="btn text-chat-meta" disabled={disabled} onClick={() => act('status', { type: 'team-task-status', status })}>{statusLabel(status)}</button>)}
+      </div>
+    </Section>
 
-    <section aria-label="Journal" className="mt-3">
-      <h5 className="font-medium">Journal</h5>
+    <Section teamPath={teamPath} name="Journal">
       {detail.journal.length === 0 && <p className="text-chat-meta text-secondary">No notes yet</p>}
       {detail.journal.map(entry => <article key={entry.id} className="mt-2 border-l-2 border-border pl-2">
         <p className="text-chat-meta text-secondary">{journalAuthorLabel(entry.author, sessions)} · {new Date(entry.createdAt).toLocaleString()}</p>
@@ -201,25 +233,23 @@ export default function TeamTaskDetail({ teamPath, projectPath, view, sendMessag
         <input className="input flex-1 text-chat-body" aria-label="Journal note" placeholder="Add a note" value={note} disabled={!connected} onChange={event => setNote(event.target.value)} />
         <button className="btn" disabled={disabled || !note.trim()}>Add note</button>
       </form>
-    </section>
+    </Section>
 
-    <section aria-label="Subtasks" className="mt-3">
-      <h5 className="font-medium">Subtasks</h5>
+    <Section teamPath={teamPath} name="Subtasks">
       {detail.subtasks.length === 0 && <p className="text-chat-meta text-secondary">No subtasks</p>}
       {detail.subtasks.map(child => <p key={child.id} className="text-chat-meta">
-        <button className="hover:underline" onClick={() => useTeamTaskStore.getState().select(teamPath, child.id)}>{child.title}</button> · {child.status} · {assignmentLabel(child.assignment, sessions)}
+        <button className="hover:underline" onClick={() => go(child.id)}>{child.title}</button> · {child.status} · {assignmentLabel(child.assignment, sessions)}
       </p>)}
-    </section>
+    </Section>
 
-    <section aria-label="Messages" className="mt-3">
-      <h5 className="font-medium">Messages</h5>
+    <Section teamPath={teamPath} name="Messages">
       {detail.messages.length === 0 && <p className="text-chat-meta text-secondary">No messages</p>}
       {detail.messages.map(message => <article key={message.id} data-message-id={message.id} data-testid="message-row" className="mt-2 border border-border p-2">
         <MessageRow row={message} sessions={sessions} names={view.directory} onOpenSession={onOpenSession} />
         {onOpenThread && <button className="btn mt-1 text-chat-meta" data-testid="message-open-thread"
           onClick={() => onOpenThread(message.threadId)}>Open thread</button>}
       </article>)}
-    </section>
+    </Section>
 
     <p className="mt-3 text-chat-meta text-secondary">Participants: {task.participants.length > 0 ? task.participants.map(id => sessionLabel(id, sessions)).join(', ') : 'none yet'}</p>
   </div>

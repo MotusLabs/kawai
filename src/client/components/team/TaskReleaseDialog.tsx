@@ -10,7 +10,7 @@ import { useEffect, useState } from 'react'
 import type { HumanTaskDetail } from '@shared/teamTasks'
 import type { TaskActFn } from './TaskDirectionEditor'
 import { RoleRequestFields, emptyRoleRequest, requestPayload, requestReady, type RoleRequest } from './TaskHandoffForm'
-import type { TeamGroupOption } from './useTeamGroups'
+import type { TeamGroupOption } from '../chat/useTeamGroups'
 
 export default function TaskReleaseDialog({ detail, groups, connected, disabled, act }: {
   detail: HumanTaskDetail

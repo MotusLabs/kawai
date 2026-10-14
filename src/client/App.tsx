@@ -36,7 +36,7 @@ import { flushSync } from 'react-dom'
 import { primeAudio, needsUserGesture } from './utils/sound'
 import { getEffectiveModifier, matchesModifier } from './utils/device'
 import { startTeamViewMigration } from './stores/teamViewMigration'
-import { useTeamPageRoute } from './hooks/useTeamLocation'
+import { useTeamLocationStore, useTeamPageRoute } from './hooks/useTeamLocation'
 
 interface ServerInfo {
   port: number
@@ -965,12 +965,14 @@ export default function App() {
         sendMessage={sendMessage}
         connected={connectionStatus === 'connected'}
         connectionEpoch={connectionEpoch}
+        onCreateWorktree={handleBrowseBranchesForPath}
       /> : selectedSession?.kind === 'chat' ? <ChatView
         session={selectedSession} sendMessage={sendMessage} subscribe={subscribe}
         connectionStatus={connectionStatus} connectionEpoch={connectionEpoch}
         error={connectionError || serverError} onClose={() => setSelectedSessionId(null)}
         onKill={() => handleKillSession(selectedSession.id)}
-        onCreateWorktree={() => handleBrowseBranchesForPath(selectedSession.projectPath)}
+        onOpenTeam={handleOpenTeamPage}
+        onOpenTask={(teamKey, taskId) => useTeamLocationStore.getState().navigate({ teamKey, tab: 'tasks', id: taskId })}
       /> : <Terminal
         session={selectedSession}
         sessions={navigationLiveSessions}
