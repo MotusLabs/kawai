@@ -205,6 +205,35 @@ export class SessionRefreshLoop {
     return nextEstimate
   }
 
+  /**
+   * Hydrate the listed windows and swap the registry. Guarded: a hydration or
+   * DB error (SQLITE_BUSY from a concurrent connection was the CI trigger)
+   * logs `session_refresh_hydrate_failed` and ends the cycle — the next
+   * scheduled refresh retries — instead of throwing to the caller.
+   */
+  private hydrateAndReplaceSessions(
+    sessions: TerminalSession[],
+    source: 'worker' | 'fallback'
+  ): void {
+    const tHydrate = performance.now()
+    this.recordSuccessfulRefreshWindowCount(this.countLocalSessions(sessions))
+    try {
+      const hydrated = this.hydrateSessionsWithAgentSessions(sessions)
+      const withOverrides = applyForceWorkingOverrides(hydrated)
+      this.registry.replaceSessions(this.mergeRemoteSessions(withOverrides))
+    } catch (error) {
+      logger.warn('session_refresh_hydrate_failed', {
+        source,
+        message: error instanceof Error ? error.message : String(error),
+      })
+      return
+    }
+    const hydrateMs = Math.round(performance.now() - tHydrate)
+    if (hydrateMs > 50) {
+      logger.debug('session_refresh_hydrate_slow', { hydrateMs, sessionCount: sessions.length })
+    }
+  }
+
   private async refreshSessionsAsync(): Promise<void> {
     if (this.refreshInFlight) return
     this.refreshInFlight = true
@@ -217,8 +246,10 @@ export class SessionRefreshLoop {
       // the next scheduled refresh will pick it up.
       for (let attempt = 0; attempt < 2; attempt++) {
         const gen = this.refreshGeneration
+        let sessions: TerminalSession[] | null = null
+        let source: 'worker' | 'fallback' = 'worker'
         try {
-          const sessions = await this.sessionRefreshWorker.refresh(
+          sessions = await this.sessionRefreshWorker.refresh(
             config.tmuxSession,
             config.discoverPrefixes,
             {
@@ -231,19 +262,11 @@ export class SessionRefreshLoop {
           // Yield before blocking SQLite work so pending WebSocket buffers flush
           await new Promise<void>((resolve) => setTimeout(resolve, 0))
           if (gen !== this.refreshGeneration) continue
-          const tHydrate = performance.now()
-          this.recordSuccessfulRefreshWindowCount(this.countLocalSessions(sessions))
-          const hydrated = this.hydrateSessionsWithAgentSessions(sessions)
-          const withOverrides = applyForceWorkingOverrides(hydrated)
-          this.registry.replaceSessions(this.mergeRemoteSessions(withOverrides))
-          const hydrateMs = Math.round(performance.now() - tHydrate)
-          if (hydrateMs > 50) {
-            logger.debug('session_refresh_hydrate_slow', { hydrateMs, sessionCount: sessions.length })
-          }
-          return
         } catch (error) {
-          // Fallback to sync on worker failure — sync listWindows sees
-          // post-mutation state so no generation check needed here.
+          // Only a failure of the worker refresh may fall back to the sync
+          // tmux listing; hydration runs outside this catch, so a hydration
+          // or DB error never reaches it (it used to, re-running the same
+          // locked read and throwing out of the fallback too).
           logger.warn('session_refresh_worker_error', {
             message: error instanceof Error ? error.message : String(error),
           })
@@ -255,17 +278,25 @@ export class SessionRefreshLoop {
             })
             return
           }
-          const sessions = this.listWindowsSyncOrNull('worker_fallback')
+          // Fallback to sync on worker failure — sync listWindows sees
+          // post-mutation state so no generation check needed here.
+          source = 'fallback'
+          sessions = this.listWindowsSyncOrNull('worker_fallback')
           if (!sessions) {
             return
           }
-          this.recordSuccessfulRefreshWindowCount(this.countLocalSessions(sessions))
-          const hydrated = this.hydrateSessionsWithAgentSessions(sessions)
-          const withOverrides = applyForceWorkingOverrides(hydrated)
-          this.registry.replaceSessions(this.mergeRemoteSessions(withOverrides))
-          return
         }
+        if (sessions) {
+          this.hydrateAndReplaceSessions(sessions, source)
+        }
+        return
       }
+    } catch (error) {
+      // refreshSessions() fires this cycle with void, so any escaping throw
+      // would be an unhandled rejection that kills the server — log instead.
+      logger.warn('session_refresh_unexpected_error', {
+        message: error instanceof Error ? error.message : String(error),
+      })
     } finally {
       this.refreshInFlight = false
     }
