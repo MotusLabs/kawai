@@ -50,7 +50,7 @@ function seed() {
     body: 'Answer', toKind: 'human', toId: null, fromSession: 'dev', fromGroup: 'devs', taskId: exportTask.id,
   }, T(9))
   store.deliverOnSend(toHuman.id, exportTask.revision, T(10))
-  const cancelled = send({ body: 'Never mind' }, T(11)); store.cancel(cancelled.id)
+  const cancelled = send({ body: 'Never mind' }, T(11)); store.cancel(cancelled.id, { kind: 'human' })
   const theirs = store.enqueue({
     teamId: OTHER, toKind: 'group', toId: 'devs', fromSession: 'x', fromGroup: 'devs',
     originPath: '/other', body: 'Another team',

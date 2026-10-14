@@ -105,8 +105,26 @@ function mailboxNote({ sessionId, group, groups }: TeamPromptInput): string {
     `- \`${tool('schedule_message')}\`: deliver a message later — to a group, a session, or yourself as a reminder.`,
     `- \`${tool('list_groups')}\`: list the team's groups.`,
     '',
+    ...managementLines(group, tool),
     'The human works alongside you. New mail to them is refused: only a reply to a message they sent reaches them.',
     '',
     'Sending returns a message id immediately; it never waits for an answer. Replies arrive as later turns. Do not spin waiting for them — finish your turn.',
   ].join('\n')
+}
+
+/** Inspect and withdraw for everyone; cancel-any and discard only for `canManageMailbox` groups (team-mailbox-management D8). */
+function managementLines(group: GroupDefinition | undefined, tool: (name: string) => string): string[] {
+  const lines = [
+    'Managing mail:',
+    `- \`${tool('list_mailbox')}\`: list unsettled mail with ids, state, and why it waits${group?.canManageMailbox ? ' — the whole team\'s' : ' — only mail you sent, mail addressed to you, and mail you hold'}.`,
+    `- \`${tool('cancel_message')}\`: withdraw ${group?.canManageMailbox ? 'any team message' : 'a message you sent'} that is still undelivered (queued, scheduled, or awaiting a request) by id, with a reason. Claimed and delivered mail cannot be cancelled.`,
+  ]
+  if (group?.canManageMailbox) {
+    lines.push(
+      '- Your group may manage the mailbox: you can also cancel parked work (its waiting resume mail is cancelled with it and the holder is not restored or resumed; refused while the holder is running the resume turn, and a linked resume message is cancelled only through its parked work) and, with `' +
+        `${tool('discard_message')}\`, discard dead or uncertain mail, each with a reason. Retry and hand-off stay with the human.`,
+      '- Before archiving or replacing a stuck agent, list and cancel the mail that would restore or respawn it.',
+    )
+  }
+  return [...lines, '']
 }

@@ -5,7 +5,8 @@
 // dependency and an agent-written file cannot smuggle structure in. Known
 // keys are validated; unknown keys are ignored so later changes can add
 // settings without breaking older readers. Team tasks add `canCreateTasks`,
-// `max`, `profile`, and `approval` (team-tasks design D2/D6); profile routing
+// `max`, `profile`, and `approval` (team-tasks design D2/D6); team mailbox
+// management adds `canManageMailbox`; profile routing
 // adds `profiles`, `strategy`, and `onLimit`; group effort adds `effort`, the
 // reasoning effort members' agents launch with; member release adds
 // `releaseOnTaskClose`, `worktreeScoped`, and `canReleaseMembers` (all strict
@@ -58,6 +59,8 @@ export interface GroupDefinition {
   worktreeScoped: boolean
   /** Members may call `release_member` (member-release); default true. */
   canReleaseMembers: boolean
+  /** Members may cancel any team message and discard dead/uncertain mail (team-mailbox-management); default false. */
+  canManageMailbox: boolean
   /** Live-member cap for worktree staffing spawns; default the sum of profile caps, else 1. */
   max: number
   /** Profiles spawned members may use, preferred first; empty = the default profile. */
@@ -123,7 +126,7 @@ export function parseGroupFile(id: string, content: string): GroupFileParse {
 }
 
 type TaskSettings = Pick<GroupDefinition,
-  'canCreateTasks' | 'releaseOnTaskClose' | 'worktreeScoped' | 'canReleaseMembers'
+  'canCreateTasks' | 'canManageMailbox' | 'releaseOnTaskClose' | 'worktreeScoped' | 'canReleaseMembers'
   | 'max' | 'profiles' | 'strategy' | 'onLimit' | 'approval' | 'effort' | 'warnings'>
 
 type Parsed<T> = { ok: true; value: T } | { ok: false; error: string }
@@ -133,7 +136,7 @@ function parseTaskSettings(
 ): { ok: true; settings: TaskSettings } | { ok: false; error: string } {
   const warnings: string[] = []
   const settings: TaskSettings = {
-    canCreateTasks: false, releaseOnTaskClose: true, worktreeScoped: true, canReleaseMembers: true,
+    canCreateTasks: false, canManageMailbox: false, releaseOnTaskClose: true, worktreeScoped: true, canReleaseMembers: true,
     max: 1, profiles: [], strategy: 'first-available',
     onLimit: parseOnLimit(fields.get('onLimit'), warnings), approval: 'manual', warnings,
   }
@@ -144,6 +147,7 @@ function parseTaskSettings(
     }
     settings.canCreateTasks = canCreate === 'true'
   }
+  settings.canManageMailbox = parseCanManageMailbox(fields.get('canManageMailbox'), warnings)
   for (const key of ['releaseOnTaskClose', 'worktreeScoped', 'canReleaseMembers'] as const) {
     const raw = fields.get(key)?.trim()
     if (raw === undefined) continue
@@ -195,6 +199,19 @@ function parseTaskSettings(
     else warnings.push(`effort must be ${GROUP_EFFORTS.join(', ')}, got "${effort}"; ignored`)
   }
   return { ok: true, settings }
+}
+
+/**
+ * A rights flag degrades alone: a typo warns and leaves the right off rather
+ * than dropping the group's role and membership. The one place to change if an
+ * invalid value should reject the file instead.
+ */
+function parseCanManageMailbox(raw: string | undefined, warnings: string[]): boolean {
+  const value = raw?.trim()
+  if (value === undefined || value === 'false') return false
+  if (value === 'true') return true
+  warnings.push(`canManageMailbox must be true or false, got "${value}"; ignored`)
+  return false
 }
 
 /** `[a, b]` (no caps) or `{ a: 2, b: 1 }` (caps); order is preference. */

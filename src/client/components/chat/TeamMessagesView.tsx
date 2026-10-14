@@ -6,9 +6,9 @@
 // reads the store the host feeds — so the chat side panel and the task embed
 // can both mount it.
 import { useEffect, useRef, useState } from 'react'
-import type { MessageQueryFilters, MessageState, SessionDirectoryEntry, ThreadEntry } from '@shared/team'
+import type { MessageEvent, MessageQueryFilters, MessageState, SessionDirectoryEntry, ThreadEntry } from '@shared/team'
 import type { SendClientMessage } from '@shared/types'
-import type { LiveParticipant } from '@shared/participants'
+import { participantName, resolveParticipant, type LiveParticipant } from '@shared/participants'
 import MessageRow from './MessageRow'
 import TeamMessageComposer, { type ComposerMode, type RecipientOption } from './TeamMessageComposer'
 import { useTeamMessageStore, type MessageView } from '../../stores/teamMessageStore'
@@ -175,7 +175,7 @@ function ThreadRow({ entry, parentBody, sessions, names, onOpenSession, onReply 
       <summary>History ({entry.events.length})</summary>
       {entry.events.map(event => <div key={event.seq} data-seq={event.seq} data-kind={event.kind} className="mt-1 border-l-2 border-border pl-2">
         <p className="text-secondary">
-          {event.kind} · {event.actor} · {new Date(event.createdAt).toLocaleString()}
+          {event.kind} · {actorLabel(event, sessions, names)} · {new Date(event.createdAt).toLocaleString()}
           {event.prevState ? ` · was ${event.prevState}` : ''}
           {event.prevClaimedBy ? ` · claimed by ${event.prevClaimedBy}` : ''}
         </p>
@@ -184,4 +184,11 @@ function ThreadRow({ entry, parentBody, sessions, names, onOpenSession, onReply 
       </div>)}
     </details>
   </article>
+}
+
+/** An agent actor reads as its participant name (live or `(gone)`); anything unknown reads as `system`. */
+function actorLabel(event: MessageEvent, sessions: ReadonlyArray<LiveParticipant>, names: ReadonlyArray<SessionDirectoryEntry>): string {
+  if (event.actor === 'human') return 'human'
+  if (event.actor === 'agent' && event.actorSession) return participantName(resolveParticipant(event.actorSession, sessions, names))
+  return 'system'
 }

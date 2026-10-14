@@ -299,7 +299,7 @@ describe('the agent tool surface', () => {
     }
     // The composed SDK server builds from that same surface and starts.
     const mailbox = new TeamMailbox(new MailboxStore(db.db), { getSession: id => records.get(id), homeDir: home })
-    const server = await createMailboxServer(mailbox, 'dev', undefined, service)
+    const server = await createMailboxServer(mailbox, 'dev', { strategies: service })
     expect(server.type).toBe('sdk')
     expect(server.name).toBe('kawai-team')
     const registered = Object.keys((server.instance as unknown as { _registeredTools: Record<string, unknown> })._registeredTools)

@@ -44,7 +44,7 @@ describe('loadGroupCatalog', () => {
     write(repo, 'devs.md', 'Project prompt.')
     const devs = loadGroupCatalog({ groupsRoot: repo, homeDir: home }).groups.get('devs')
     expect(devs).toEqual({
-      id: 'devs', label: 'devs', description: '', canCreateTasks: false, releaseOnTaskClose: true, worktreeScoped: true, canReleaseMembers: true, max: 1, approval: 'manual', prompt: 'Project prompt.',
+      id: 'devs', label: 'devs', description: '', canCreateTasks: false, canManageMailbox: false, releaseOnTaskClose: true, worktreeScoped: true, canReleaseMembers: true, max: 1, approval: 'manual', prompt: 'Project prompt.',
       profiles: [], strategy: 'first-available', warnings: [],
       onLimit: { parkIfResetWithinMs: DEFAULT_PARK_IF_RESET_WITHIN_MS, otherwise: 'forward' },
     })

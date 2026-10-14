@@ -131,7 +131,7 @@ import { RELEASE_TOOL_NAMES, TEAM_ALLOWED_TOOLS, releaseHandlers } from '../team
 import type { GroupDefinition } from '../team/groupFile'
 
 const groupDef = (overrides: Partial<GroupDefinition> = {}): GroupDefinition => ({
-  id: 'devs', label: 'devs', description: '', canCreateTasks: false,
+  id: 'devs', label: 'devs', description: '', canCreateTasks: false, canManageMailbox: false,
   releaseOnTaskClose: true, worktreeScoped: true, canReleaseMembers: true,
   max: 1, profiles: [], strategy: 'first-available',
   onLimit: { parkIfResetWithinMs: 3 * 3_600_000, otherwise: 'forward' }, approval: 'manual', warnings: [], prompt: '',
@@ -181,4 +181,31 @@ test('release_member refusals: not permitted, not spawned, and not ready', async
   records.get('dev')!.spawned = true
   await expect(releaseHandlers(releases, 'lead').release_member({ session_id: 'dev' })).resolves.toMatchObject({ sessionId: 'dev' })
   await expect(releaseHandlers(releases, 'lead').release_member({ session_id: 'nope' })).rejects.toThrow('archived or unknown')
+})
+
+test('management tools bind the caller session, ignore forged ids, and are allowed without cards', async () => {
+  const { MailboxManagement } = await import('../team/mailboxManagement')
+  const { TaskService } = await import('../team/TaskService')
+  const { TaskStore } = await import('../team/taskStore')
+  const { managementHandlers, TEAM_ALLOWED_TOOLS } = await import('../team/mailboxTools')
+  const management = new MailboxManagement(store, {
+    getSession: id => records.get(id), homeDir: dir, tasks: new TaskService(new TaskStore(db, store), { getSession: id => records.get(id), homeDir: dir }),
+  })
+  const mine = await handlers.send_message(groupMail)
+  const theirs = await mailboxHandlers(mailbox, 'dev').send_message({ to_kind: 'session', to_id: 'lead', body: 'Hi' })
+  const asDev = managementHandlers(management, 'dev')
+  // A forged session argument is stripped: the handler still acts as 'dev'.
+  const listed = await asDev.list_mailbox({ session_id: 'lead', sessionId: 'lead' }) as { messages: Array<{ id: string }> }
+  expect(listed.messages.map(message => message.id)).toEqual([theirs.id])
+  await expect(asDev.cancel_message({ message_id: mine.id, reason: 'forged', sessionId: 'lead' })).rejects.toThrow('Only its sender')
+  expect(store.get(mine.id)?.state).toBe('queued')
+  await expect(asDev.discard_message({ message_id: mine.id, reason: 'x' })).rejects.toThrow('Only a group with mailbox management')
+  expect(await asDev.cancel_message({ message_id: theirs.id, reason: 'oops' })).toMatchObject({ id: theirs.id, state: 'cancelled' })
+  for (const name of ['list_mailbox', 'cancel_message', 'discard_message']) {
+    expect(TEAM_ALLOWED_TOOLS).toContain(`mcp__kawai-team__${name}`)
+  }
+  const server = await createMailboxServer(mailbox, 'lead', { management })
+  expect(Object.keys((server.instance as unknown as { _registeredTools: Record<string, unknown> })._registeredTools).sort())
+    .toEqual(['cancel_message', 'discard_message', 'list_groups', 'list_mailbox', 'reply', 'schedule_message', 'send_message'])
+  await server.instance.close()
 })

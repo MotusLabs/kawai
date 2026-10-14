@@ -31,7 +31,7 @@ const message = (id: string, extra: Partial<TeamMessage> = {}): TeamMessage => (
   ...extra,
 })
 const event = (id: string, seq: number, kind: MessageEvent['kind'], extra: Partial<MessageEvent> = {}): MessageEvent => ({
-  messageId: id, teamId: 'team', seq, createdAt: `2026-10-13T10:00:0${seq}.000Z`, kind, actor: 'system',
+  messageId: id, teamId: 'team', seq, createdAt: `2026-10-13T10:00:0${seq}.000Z`, kind, actor: 'system', actorSession: null,
   prevState: null, prevClaimedBy: null, prevRecipient: null, prevReason: null, reason: null, ...extra,
 })
 const at = (n: number) => `2026-10-13T10:00:${String(n).padStart(2, '0')}.000Z`
@@ -268,5 +268,33 @@ test('a reconnect re-opens the current filters and the selected thread', () => {
   act(() => renderer.root.findByProps({ 'data-testid': 'thread-back' }).props.onClick())
   const list = renderer.root.findAllByProps({ 'data-testid': 'message-row' })
   expect(list.map(entry => entry.props['data-message-id'])).toEqual(['r2', 'r1'])
+  act(() => renderer.unmount())
+})
+
+test('thread history labels agent actors by name, live or gone; human reads human and unknown reads system', () => {
+  const sent: ClientMessage[] = []
+  const renderer = render(sent)
+  const first = message('q1', { createdAt: at(1), threadId: 'th', state: 'cancelled' })
+  act(() => { useTeamMessageStore.getState().applySnapshot(snapshot([first], { directory })) })
+  act(() => renderer.root.findAllByProps({ 'data-testid': 'message-open-thread' })[0]!.props.onClick())
+  act(() => {
+    useTeamMessageStore.getState().applyThread(thread('th', [{
+      message: first,
+      events: [
+        event('q1', 1, 'sent'),
+        event('q1', 2, 'cancelled', { actor: 'agent', actorSession: 'dev', reason: 'cancelled by dev: stale' }),
+        event('q1', 3, 'discarded', { actor: 'agent', actorSession: 'gone' }),
+        event('q1', 4, 'retried', { actor: 'human' }),
+        event('q1', 5, 'requeued', { actor: 'weird' as MessageEvent['actor'] }),
+      ],
+    }], directory))
+  })
+  const history = renderer.root.findByProps({ 'data-testid': 'message-events' })
+  const line = (seq: number) => textOf(history.findByProps({ 'data-seq': seq }).findAllByType('p')[0]!)
+  expect(line(1)).toContain('sent · system')
+  expect(line(2)).toContain('cancelled · Dev one')
+  expect(line(3)).toContain('discarded · Killed one (gone)')
+  expect(line(4)).toContain('retried · human')
+  expect(line(5)).toContain('requeued · system')
   act(() => renderer.unmount())
 })

@@ -7,7 +7,10 @@
 // waiting row shows its immediate blocker on one line with the other
 // constraints expandable; dead letters read as sentences with the code
 // visible. Named sessions link to their chats; worktrees show their basename
-// with the full path available.
+// with the full path available. Every row leads with its short message id
+// (first 8 characters, full id in the title and copyable) so an id an agent
+// quotes matches a row; parked rows offer Cancel beside Hand off
+// (team-mailbox-management D9).
 import { useEffect, useState } from 'react'
 import type { LiveParticipant } from '@shared/participants'
 import { resolveParticipant } from '@shared/participants'
@@ -15,6 +18,7 @@ import type { TeamMessage, WaitingConstraint, WaitingReason } from '@shared/team
 import type { SendClientMessage } from '@shared/types'
 import type { MailboxView } from '../../stores/teamMailboxStore'
 import { constraintLabel, deadLetterLabel, elapsedLabel } from '../../utils/waitingLabels'
+import { copyText } from '../../utils/copyText'
 import ParkedHandOff from './ParkedHandOff'
 import TeamRoutingSection from './TeamRoutingSection'
 
@@ -123,6 +127,10 @@ export default function TeamMailboxPanel({ teamPath, view, sendMessage, connecte
         <h4 className="mb-2 font-medium">{label}</h4>
         {view.messages.filter(matches).length === 0 && <p className="text-chat-meta text-secondary">No messages</p>}
         {view.messages.filter(matches).map(row => <article key={row.id} data-message-id={row.id} className="mb-2 border border-border p-2">
+          <div className="flex items-center gap-2 text-chat-meta">
+            <code className="font-mono" data-testid="message-id" title={row.id}>{row.id.slice(0, 8)}</code>
+            <button className="btn" aria-label={`Copy message id ${row.id.slice(0, 8)}`} onClick={() => copyText(row.id)}>Copy id</button>
+          </div>
           <p className="break-all text-chat-meta">{row.fromSession}{row.fromGroup ? ` (${row.fromGroup})` : ''} → {row.toKind}: {row.toId}</p>
           <p className="text-chat-meta text-secondary">{row.priority} · {Math.max(0, Math.floor((now - Date.parse(row.createdAt)) / 60000))}m ago</p>
           {row.deliverAt && <p className="text-chat-meta">Due {new Date(row.deliverAt).toLocaleString()}</p>}
@@ -148,7 +156,7 @@ export default function TeamMailboxPanel({ teamPath, view, sendMessage, connecte
           {row.state === 'parked' && <ParkedHandOff teamPath={teamPath} messageId={row.id} groups={groups} sendMessage={sendMessage}
             disabled={!connected || view.loading} {...(view.handOffResult ? { result: view.handOffResult } : {})} />}
           <div className="mt-2 flex gap-2">
-            {(row.state === 'queued' || row.state === 'awaiting-request') && <button className="btn" disabled={!connected || view.loading}
+            {(row.state === 'queued' || row.state === 'awaiting-request' || row.state === 'parked') && <button className="btn" disabled={!connected || view.loading}
               onClick={() => sendMessage({ type: 'team-mailbox-cancel', teamPath, messageId: row.id })}>Cancel</button>}
             {(row.state === 'dead' || row.state === 'uncertain') && <>
               <button className="btn" disabled={!connected || view.loading} onClick={() => sendMessage({ type: 'team-mailbox-retry', teamPath, messageId: row.id })}>Retry</button>

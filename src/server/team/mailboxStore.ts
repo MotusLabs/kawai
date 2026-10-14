@@ -10,12 +10,14 @@ import type { Database } from 'bun:sqlite'
 import { mailboxSql, worktreeTaskMailSql } from './mailboxSql'
 import { createMessageTable } from './messageSchema'
 import { mapRow } from './messageRow'
-import { MessageEventLog } from './messageEvents'
+import { MessageEventLog, storeActor, type StoreActor } from './messageEvents'
+import { retryMessage } from './mailboxRetry'
+import { ParkedCancel, actionReason, type CancelResult } from './parkedCancel'
+export type { CancelResult } from './parkedCancel'
 
 import type {
   ChatHandoffPackage,
   MessageEvent,
-  MessageEventActor,
   MessageEventKind,
   MessageState,
   MessagePriority,
@@ -51,12 +53,13 @@ export interface EnqueueInput {
   handoff?: ChatHandoffPackage | null
   excludedProfile?: string | null
   /** Who caused the send (event log): the human through a composer, else the system. */
-  actor?: MessageEventActor
+  actor?: 'system' | 'human'
 }
 
 export const DEFAULT_HOP_LIMIT = 20
 
 const nowIso = () => new Date().toISOString()
+const SYSTEM: StoreActor = { kind: 'system' }
 
 export class MailboxStore {
   private readonly listeners = new Set<(teamId: string, message?: TeamMessage) => void>()
@@ -78,9 +81,20 @@ export class MailboxStore {
   private readonly dynamicStatements = new Map<string, ReturnType<Database['prepare']>>()
   /** Append-only history of every transition (team-message-threads D2). */
   readonly events: MessageEventLog
+  private readonly parkedCancel: ParkedCancel
   constructor(private readonly db: Database, private readonly options: { recipientExists?: (id: string) => boolean } = {}) {
     createMessageTable(db)
     this.events = new MessageEventLog(db)
+    this.parkedCancel = new ParkedCancel({
+      transaction: run => db.transaction(run)(),
+      get: id => this.get(id),
+      parkedFor: id => this.parkedFor(id),
+      transition: (id, from, set, kind, actor) => this.transition(id, from, set, kind, actor),
+      unlinkResume: id => {
+        this.cachedStatement('UPDATE team_messages SET resume_message_id = NULL WHERE id = $id').run({ $id: id })
+        this.changed(id, true)
+      },
+    })
     this.statements = Object.fromEntries(Object.entries(mailboxSql).map(([key, sql]) => [key, db.prepare(sql)])) as typeof this.statements
   }
 
@@ -130,7 +144,7 @@ export class MailboxStore {
     // A new row: nothing was overwritten; the hop-limit reason is the one written.
     this.events.record({
       messageId: id, teamId: message.teamId, kind: overLimit ? 'dead-lettered' : 'sent',
-      actor: input.actor ?? 'system', at: now,
+      actor: storeActor(input.actor), at: now,
       facts: { prevState: null, prevClaimedBy: null, prevRecipient: null, prevReason: null, reason: message.reason },
     })
     return message
@@ -174,7 +188,7 @@ export class MailboxStore {
   claimSpawned(id: string, sessionId: string, now = nowIso()): boolean {
     return this.logged(id, () => this.changed(id, this.statements.claimSpawned.run({
       $id: id, $sessionId: sessionId, $now: now,
-    }).changes === 1), 'claimed', 'system', now)
+    }).changes === 1), 'claimed', SYSTEM, now)
   }
 
   /** Reserve queued mail for a spawn (inside the cap transaction). */
@@ -200,7 +214,7 @@ export class MailboxStore {
   claim(id: string, sessionId: string, now = nowIso()): boolean {
     return this.logged(id, () => this.changed(id, this.statements.claim.run({
       $id: id, $sessionId: sessionId, $now: now,
-    }).changes === 1), 'claimed', 'system', now)
+    }).changes === 1), 'claimed', SYSTEM, now)
   }
 
   /** Re-check recipient availability inside the transaction that wins the claim. */
@@ -222,7 +236,7 @@ export class MailboxStore {
   markPushed(id: string, now = nowIso(), taskRevision: number | null = null): boolean {
     return this.logged(id, () => this.changed(id, this.statements.markPushed.run({
       $id: id, $now: now, $taskRevision: taskRevision,
-    }).changes === 1), 'pushed', 'system', now)
+    }).changes === 1), 'pushed', SYSTEM, now)
   }
 
   /**
@@ -238,7 +252,7 @@ export class MailboxStore {
 
   /** The acknowledgement boundary (D10 step 3): the transcript carried the id. */
   markDelivered(id: string, now = nowIso()): boolean {
-    return this.logged(id, () => this.changed(id, this.statements.markDelivered.run({ $id: id, $now: now }).changes === 1), 'delivered', 'system', now)
+    return this.logged(id, () => this.changed(id, this.statements.markDelivered.run({ $id: id, $now: now }).changes === 1), 'delivered', SYSTEM, now)
   }
 
   /** Back to the queue; the claim, push, and any spawn reservation are forgotten. */
@@ -248,7 +262,7 @@ export class MailboxStore {
     }, 'requeued')
   }
 
-  deadLetter(id: string, reason: string, actor: MessageEventActor = 'system'): boolean {
+  deadLetter(id: string, reason: string, actor: StoreActor = SYSTEM): boolean {
     return this.transition(id, ['queued', 'claimed', 'awaiting-request', 'spawning'], { state: 'dead', reason }, 'dead-lettered', actor)
   }
 
@@ -305,41 +319,32 @@ export class MailboxStore {
     return this.select(`state = 'parked' AND resume_message_id = $resume`, { $resume: resumeMessageId })[0] ?? null
   }
 
-  /** The user cancels a queued or scheduled message. */
-  cancel(id: string): boolean {
-    return this.transition(id, ['queued', 'awaiting-request'], { state: 'cancelled' }, 'cancelled', 'human')
+  /** Boolean form of {@link cancelResult}: whether the message was cancelled. */
+  cancel(id: string, actor: StoreActor, reason?: string): boolean {
+    return this.cancelResult(id, actor, reason).ok
   }
 
-  /**
-   * The user retries a dead letter (queued again, its hop reset so the
-   * thread may continue) or an uncertain message (to the same recipient only,
-   * as direct mail flagged as a possible duplicate).
-   */
+  /** Cancel undelivered or parked mail; see `parkedCancel.ts` for the resume rules. */
+  cancelResult(id: string, actor: StoreActor, reason?: string): CancelResult {
+    return this.parkedCancel.cancel(id, actor, reason)
+  }
+
+  /** Kawai's own resume bookkeeping (re-park, unpark, release, forward). */
+  replaceResume(parkedId: string): void {
+    this.parkedCancel.replaceResume(parkedId)
+  }
+
+  /** The user retries a dead or uncertain message; see `mailboxRetry.ts`. */
   retry(id: string): boolean {
-    const message = this.get(id)
-    const recipient = message?.state === 'uncertain' ? message.claimedBy : message?.toKind === 'session' ? message.toId : null
-    if (message && ['dead', 'uncertain'].includes(message.state) && recipient && this.options.recipientExists && !this.options.recipientExists(recipient)) {
-      this.transition(id, ['dead', 'uncertain'], {
-        state: 'dead', reason: 'killed-recipient', to_kind: 'session', to_id: recipient,
-        ...(message.state === 'uncertain' ? { possible_duplicate: 1 } : {}),
-      }, 'dead-lettered', 'human')
-      return false
-    }
-    if (message?.state === 'dead') {
-      return this.transition(id, ['dead'], { state: 'queued', hop: 1, reason: null }, 'retried', 'human')
-    }
-    if (message?.state === 'uncertain' && message.claimedBy) {
-      return this.transition(id, ['uncertain'], {
-        state: 'queued', to_kind: 'session', to_id: message.claimedBy,
-        claimed_by: null, claimed_at: null, pushed_at: null, reason: null, possible_duplicate: 1,
-      }, 'retried', 'human')
-    }
-    return false
+    return retryMessage({
+      get: key => this.get(key), transition: (...args) => this.transition(...args),
+      ...(this.options.recipientExists ? { recipientExists: this.options.recipientExists } : {}),
+    }, id)
   }
 
-  /** The user discards a dead or uncertain message for good. */
-  discard(id: string): boolean {
-    return this.transition(id, ['dead', 'uncertain'], { state: 'discarded' }, 'discarded', 'human')
+  /** Discard a dead or uncertain message for good (human, or a mailbox manager). */
+  discard(id: string, actor: StoreActor, reason?: string): boolean {
+    return this.transition(id, ['dead', 'uncertain'], { state: 'discarded', ...actionReason(actor, 'discarded', reason) }, 'discarded', actor)
   }
 
   /** Direct mail queued for a killed session can never arrive: dead-letter it. */
@@ -353,7 +358,7 @@ export class MailboxStore {
       }).changes
       for (const before of affected) {
         this.changed(before.id, true)
-        this.recordEvent(before, 'dead-lettered', 'system', nowIso(), reason)
+        this.recordEvent(before, 'dead-lettered', SYSTEM, nowIso(), reason)
       }
       return count
     })()
@@ -441,7 +446,7 @@ export class MailboxStore {
    * Run one state change and log it. The before-row is read inside the same
    * transaction so the event keeps the facts the update overwrites.
    */
-  private logged(id: string, run: () => boolean, kind: MessageEventKind, actor: MessageEventActor = 'system', at = nowIso(), reason: string | null = null): boolean {
+  private logged(id: string, run: () => boolean, kind: MessageEventKind, actor: StoreActor = SYSTEM, at = nowIso(), reason: string | null = null): boolean {
     return this.db.transaction(() => {
       const before = this.get(id)
       const changed = run()
@@ -450,7 +455,7 @@ export class MailboxStore {
     })()
   }
 
-  private recordEvent(before: TeamMessage, kind: MessageEventKind, actor: MessageEventActor, at: string, reason: string | null = null) {
+  private recordEvent(before: TeamMessage, kind: MessageEventKind, actor: StoreActor, at: string, reason: string | null = null) {
     this.events.record({
       messageId: before.id, teamId: before.teamId, kind, actor, at,
       facts: {
@@ -478,7 +483,7 @@ export class MailboxStore {
     from: MessageState[],
     set: Record<string, string | number | null>,
     kind: MessageEventKind,
-    actor: MessageEventActor = 'system'
+    actor: StoreActor = SYSTEM
   ): boolean {
     const assignments = Object.keys(set).map(column => `${column} = $${column}`).join(', ')
     const states = from.map((_, index) => `$from${index}`).join(', ')

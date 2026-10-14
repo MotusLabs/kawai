@@ -73,7 +73,7 @@ test('human uncertain retry stays with recipient and carries duplicate notice; d
   expect(store.nextEligible({ teamId: 'team', sessionId: 'other', groupId: 'devs' })).toBeNull()
   expect(formatEnvelope(messageEnvelope(store.get(mail.id)!))).toContain('Possible duplicate')
   const held = claim(); reconcileMailbox(store, () => null)
-  expect(store.discard(held.id)).toBe(true)
+  expect(store.discard(held.id, { kind: 'human' })).toBe(true)
   expect(store.get(held.id)?.state).toBe('discarded')
 })
 test('assistant and sidechain echoes never prove receipt', () => {

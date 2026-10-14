@@ -325,7 +325,7 @@ test('a backoff whose message left the surface never arms the timer again', asyn
   const m = mail((await task(featX)).id)
   await settle()
   expect(runtime.staffing.nextRetryAt()).not.toBeNull()
-  store().cancel(m.id)
+  store().cancel(m.id, { kind: 'human' })
   await settle()
   expect(runtime.staffing.nextRetryAt()).toBeNull()
 })

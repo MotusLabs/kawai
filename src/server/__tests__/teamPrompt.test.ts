@@ -3,7 +3,7 @@ import type { GroupDefinition } from '../team/groupFile'
 import { buildTeamPrompt } from '../team/teamPrompt'
 
 const settings: Omit<GroupDefinition, 'id' | 'label' | 'description' | 'prompt'> = {
-  canCreateTasks: false, releaseOnTaskClose: true, worktreeScoped: true, canReleaseMembers: true,
+  canCreateTasks: false, canManageMailbox: false, releaseOnTaskClose: true, worktreeScoped: true, canReleaseMembers: true,
   max: 1, approval: 'manual', profiles: [], strategy: 'first-available',
   onLimit: { parkIfResetWithinMs: 3 * 3_600_000, otherwise: 'forward' }, warnings: [],
 }
@@ -116,5 +116,33 @@ describe('release_member note', () => {
     expect(bare).toContain('`mcp__kawai-team__release_member`')
     const optedOut = buildTeamPrompt({ sessionId: 'chat-r3', group: { ...qa, canReleaseMembers: false }, groups: [] })
     expect(optedOut).not.toContain('release_member')
+  })
+})
+
+describe('buildTeamPrompt mailbox management note (team-mailbox-management D8)', () => {
+  const manager: GroupDefinition = { ...qa, id: 'leads', canManageMailbox: true }
+
+  test('every agent learns to list its mail and withdraw its own, and is not offered cancel-any', () => {
+    for (const prompt of [
+      buildTeamPrompt({ sessionId: 'chat-9', group: devs, groups: [devs] }),
+      buildTeamPrompt({ sessionId: 'chat-10', groups: [devs] }),
+    ]) {
+      expect(prompt).toContain('`mcp__kawai-team__list_mailbox`')
+      expect(prompt).toContain('only mail you sent, mail addressed to you, and mail you hold')
+      expect(prompt).toContain('withdraw a message you sent')
+      expect(prompt).not.toContain('discard_message')
+      expect(prompt).not.toContain('parked work')
+      expect(prompt).not.toContain('replacing a stuck agent')
+    }
+  })
+
+  test('a manager group learns cancel-any, parked work, discard, the human-only retry rule, and the replace advice', () => {
+    const prompt = buildTeamPrompt({ sessionId: 'chat-11', group: manager, groups: [manager] })
+    expect(prompt).toContain("the whole team's")
+    expect(prompt).toContain('withdraw any team message')
+    expect(prompt).toContain('cancel parked work (its waiting resume mail is cancelled with it')
+    expect(prompt).toContain('`mcp__kawai-team__discard_message`')
+    expect(prompt).toContain('Retry and hand-off stay with the human')
+    expect(prompt).toContain('Before archiving or replacing a stuck agent, list and cancel the mail that would restore or respawn it.')
   })
 })

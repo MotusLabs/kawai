@@ -155,10 +155,11 @@ export type MessageEventKind =
 /**
  * Who caused the change: the human through a UI action, or the system on
  * behalf of delivery, recovery, or a limit outcome. Deliberately not the
- * sender vocabulary of `from_kind` — an agent's send is a system action here,
- * and the message row already names its sender.
+ * sender vocabulary of `from_kind`, nor the task journal's author: `agent` is
+ * an agent's mailbox management (cancel, discard) and names its session in
+ * `MessageEvent.actorSession`; an agent's plain send is still a system action.
  */
-export type MessageEventActor = 'system' | 'human'
+export type MessageEventActor = 'system' | 'human' | 'agent'
 
 export interface MessageEvent {
   messageId: string
@@ -168,6 +169,8 @@ export interface MessageEvent {
   createdAt: string
   kind: MessageEventKind
   actor: MessageEventActor
+  /** The acting agent's session; non-null only when `actor` is `agent`. */
+  actorSession: string | null
   /** State the transition moved off of. */
   prevState: MessageState | null
   /** Claimant the row update cleared (retry, requeue, release). */

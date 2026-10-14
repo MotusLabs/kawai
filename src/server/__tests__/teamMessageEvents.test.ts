@@ -100,7 +100,7 @@ describe('team_message_events', () => {
 
   test('human actions are actor human; system delivery is actor system', () => {
     const queued = send()
-    expect(store.cancel(queued.id)).toBe(true)
+    expect(store.cancel(queued.id, { kind: 'human' })).toBe(true)
     expect(store.eventsFor(queued.id).at(-1)).toMatchObject({ kind: 'cancelled', actor: 'human' })
 
     const dead = send()
@@ -109,7 +109,7 @@ describe('team_message_events', () => {
     expect(store.retry(dead.id)).toBe(true)
     expect(store.eventsFor(dead.id).at(-1)).toMatchObject({ kind: 'retried', actor: 'human' })
     store.deadLetter(dead.id, 'again')
-    expect(store.discard(dead.id)).toBe(true)
+    expect(store.discard(dead.id, { kind: 'human' })).toBe(true)
     expect(store.eventsFor(dead.id).at(-1)).toMatchObject({ kind: 'discarded', actor: 'human' })
 
     const humanSent = send({ actor: 'human' })
@@ -197,8 +197,8 @@ describe('team_message_events', () => {
     store.release(parked.id, 'devs'); walk(parked)
     const forwarded = walk(send()); store.claim(forwarded.id, 'chat-dev'); store.markPushed(forwarded.id)
     store.markDelivered(forwarded.id); store.markForwarded(forwarded.id, 'forwarded: next'); walk(forwarded)
-    const cancelled = walk(send()); store.cancel(cancelled.id); walk(cancelled)
-    const discarded = walk(send()); store.deadLetter(discarded.id, 'killed'); store.discard(discarded.id); walk(discarded)
+    const cancelled = walk(send()); store.cancel(cancelled.id, { kind: 'human' }); walk(cancelled)
+    const discarded = walk(send()); store.deadLetter(discarded.id, 'killed'); store.discard(discarded.id, { kind: 'human' }); walk(discarded)
     const reserved = walk(send()); store.reserveForSpawn(reserved.id); store.claimSpawned(reserved.id, 'spawned'); walk(reserved)
     const killed = walk(send({ toKind: 'session', toId: 'chat-gone' }))
     store.deadLetterDirectTo('chat-gone', 'killed-recipient'); walk(killed)

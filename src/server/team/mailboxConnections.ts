@@ -8,6 +8,7 @@ import { unknownTeamError } from '../../shared/team'
 import type { ChatSessionManager } from '../chat/ChatSessionManager'
 import type { ChatConnection } from '../chat/ChatConnections'
 import type { TeamIdentity } from './teamIdentity'
+import { cancelRefusalText } from './mailboxManagement'
 
 export class MailboxConnections {
   private pendingOpen = new Map<ChatConnection, Map<string, object>>()
@@ -111,8 +112,13 @@ export class MailboxConnections {
     const action = message.type === 'team-mailbox-cancel' ? 'cancel'
       : message.type === 'team-mailbox-retry' ? 'retry' : message.type === 'team-mailbox-discard' ? 'discard' : null
     if (!action) return
-    if (!this.manager.mailbox.store[action](row.id)) {
-      connection.send({ type: 'error', message: action === 'retry' && this.manager.mailbox.store.get(row.id)?.reason === 'killed-recipient' ? 'Cannot retry: the recipient session no longer exists' : 'Message state changed; this action is no longer available' })
+    const store = this.manager.mailbox.store
+    const stale = 'Message state changed; this action is no longer available'
+    if (action === 'cancel') {
+      const result = store.cancelResult(row.id, { kind: 'human' })
+      if (!result.ok) connection.send({ type: 'error', message: cancelRefusalText(result) ?? stale })
+    } else if (!store[action](row.id, { kind: 'human' })) {
+      connection.send({ type: 'error', message: action === 'retry' && store.get(row.id)?.reason === 'killed-recipient' ? 'Cannot retry: the recipient session no longer exists' : stale })
     }
     this.manager.dispatcher.notify()
     this.publish(team.teamId)

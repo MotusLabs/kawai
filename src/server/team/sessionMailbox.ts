@@ -22,6 +22,7 @@ import { reconcileMailbox, transcriptReceipt } from './receipt'
 import { TaskStore } from './taskStore'
 import { TaskService } from './TaskService'
 import { MemberRelease, type ArchiveResult } from './memberRelease'
+import { MailboxManagement } from './mailboxManagement'
 import { AssignmentStore } from './assignmentStore'
 import { AssignmentService } from './AssignmentService'
 import { buildTaskContext } from './taskContext'
@@ -41,6 +42,7 @@ import type { Database } from 'bun:sqlite'
 export class SessionMailbox {
   readonly mailbox: TeamMailbox
   readonly tasks: TaskService
+  readonly management: MailboxManagement
   readonly assignments: AssignmentService
   readonly dispatcher: MailDispatcher
   readonly staffing: WorktreeStaffing
@@ -130,6 +132,10 @@ export class SessionMailbox {
     this.tasks = new TaskService(taskStore, {
       getSession: options.getRecord, homeDir: options.homeDir,
       onStatusTransition: (task, status, actor) => this.releases.transitionHook(task, status, actor),
+    })
+    this.management = new MailboxManagement(store, {
+      getSession: options.getRecord, tasks: this.tasks, homeDir: options.homeDir,
+      waitingFor: teamId => this.waitingFor(teamId), ...(options.now ? { now: options.now } : {}),
     })
     this.mailbox = new TeamMailbox(store, {
       getSession: options.getRecord, homeDir: options.homeDir, restoreSession: options.restore, tasks: taskStore,
