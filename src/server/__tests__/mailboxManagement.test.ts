@@ -284,7 +284,9 @@ describe('list', () => {
     expect(entry.body).toHaveLength(LIST_BODY_LIMIT)
     expect(entry.ageMinutes).toBeGreaterThanOrEqual(0)
     expect(messages.find(message => message.id === dead.id)).toMatchObject({ reason: 'killed-recipient', waiting: null, bodyTruncated: false })
-    for (let i = 0; i < LIST_ROW_LIMIT + 5; i++) send()
+    // One transaction: each send() commits on its own, and 100+ synced commits
+    // blow the 5 s per-test timeout when the suite runs under load.
+    db.transaction(() => { for (let i = 0; i < LIST_ROW_LIMIT + 5; i++) send() })()
     const capped = await management.list('lead')
     expect(capped.messages).toHaveLength(LIST_ROW_LIMIT)
     expect(capped.omitted).toBe(7)
