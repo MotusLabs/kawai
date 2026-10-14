@@ -7,7 +7,7 @@
 
 ## 2. Group settings read model (Members)
 
-- [ ] 2.1 Make `readGroupDir`/`loadGroupCatalog` in `src/server/team/groupCatalog.ts` retain each group's defining file path and, when both layers define the id, both paths with the winning layer marked; update the `GroupCatalog` type and every caller (`teamGroups.ts`, `routes/teamGroups.ts`, `sessionMailbox.ts`, `TaskService.ts`, `StrategyService.ts`); verify unit tests cover a single-layer group naming one file, a project file overriding a user file, and a skipped file appearing only in `errors`.
+- [ ] 2.1 Make `readGroupDir`/`loadGroupCatalog` in `src/server/team/groupCatalog.ts` retain each group's defining file path and, when both layers define the id, both paths with the winning layer marked; update the `GroupCatalog` type and every caller (`teamGroups.ts`, `routes/teamGroups.ts`, `sessionMailbox.ts`, `TeamMailbox.ts`, `sessionTeams.ts`, `TaskService.ts`, `StrategyService.ts`); verify unit tests cover a single-layer group naming one file, a project file overriding a user file, and a skipped file appearing only in `errors`.
 - [ ] 2.2 Add a Members read model that returns per group: `description`, live membership (name, spawned/manual, profile, status, task), `canCreateTasks`, effective `profiles` with caps and live counts, `approval`, `max`, `strategy`, `onLimit`, `effort`, `warnings`, and the source paths from 2.1; expose it on the workspace snapshot; verify unit tests cover caps with live counts, a warning naming what fell back, and that no field is writable.
 
 ## 3. Workflow stage and task rows

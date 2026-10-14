@@ -99,7 +99,7 @@ The window is a rolling 24 hours ending at read time, recomputed while the works
 
 ## Migration Plan
 
-None. No table, column, or file format changes. The only server change that alters an existing shape is `GroupCatalog` carrying each group's source file (D7), which is additive to a TypeScript object and touches its callers (`teamGroups.ts`, `routes/teamGroups.ts`, `sessionMailbox.ts`, `TaskService.ts`) with an extra field. Rollback is removing the workspace route and the navigator entry.
+None. No table, column, or file format changes. The only server change that alters an existing shape is `GroupCatalog` carrying each group's source file (D7), which is additive to a TypeScript object and touches its callers (`teamGroups.ts`, `routes/teamGroups.ts`, `sessionMailbox.ts`, `TeamMailbox.ts`, `sessionTeams.ts`, `TaskService.ts`) with an extra field. Rollback is removing the workspace route and the navigator entry.
 
 ## Decisions (recorded 2026-10-14)
 
