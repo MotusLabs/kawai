@@ -748,7 +748,7 @@ export class ChatSessionManager {
       prepare: async id => { this.captureHistory(id); const driver = await this.ensureDriver(id); if (!driver) throw new Error('Recipient disappeared'); driver.start() },
       restore: id => { const result = this.restore(id); if (!result.ok) throw new Error(result.error) },
       watchReceipt: id => this.watchSessionTitle(id),
-      archive: id => { this.archive(id) },
+      archive: id => this.archive(id),
       hasLiveWorkers: id => this.hasLiveWorkers(id),
       spawn: request => this.spawnMember(request),
       caps: new TeamCaps({

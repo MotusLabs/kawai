@@ -149,7 +149,7 @@ const makeReleases = (definition: (groupId: string) => Promise<GroupDefinition |
     cachedDefinition: () => undefined,
     recipient: _id => ({ idle: opts.idle ?? true, pendingRequest: false }),
     hasLiveWorkers: () => false,
-    archive: id => { archived.push(id); records.get(id)!.archivedAt = new Date().toISOString() },
+    archive: id => { archived.push(id); records.get(id)!.archivedAt = new Date().toISOString(); return { ok: true } },
     notify: () => {},
   })
   return { releases, archived, tasks }

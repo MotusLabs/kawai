@@ -34,7 +34,7 @@ async function fixture() {
     } }) as unknown as ChatSessionDriver,
     available: record => record.archivedAt == null, prepare: async () => {},
     restore: id => { records.get(id)!.archivedAt = null },
-    watchReceipt: () => {}, archive: id => { const row = records.get(id); if (row) row.archivedAt = new Date().toISOString() }, hasLiveWorkers: () => false, transcriptFor: () => null, homeDir: root,
+    watchReceipt: () => {}, archive: id => { const row = records.get(id); if (row) row.archivedAt = new Date().toISOString(); return { ok: true } }, hasLiveWorkers: () => false, transcriptFor: () => null, homeDir: root,
     onError: error => errors.push(error),
   })
   // This fixture drives recovery and rule loading explicitly.

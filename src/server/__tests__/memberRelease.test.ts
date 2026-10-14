@@ -84,7 +84,7 @@ const makeRuntime = () => {
   prepare: async () => {},
   restore: () => {},
   watchReceipt: () => {},
-  archive: id => { archived.push(id); records.get(id)!.archivedAt = new Date().toISOString() },
+  archive: id => { archived.push(id); records.get(id)!.archivedAt = new Date().toISOString(); return { ok: true } },
   hasLiveWorkers: id => liveWorkers.has(id),
   spawn: async request => {
     spawnCalls.push(request)
@@ -418,7 +418,7 @@ test('the close transition re-reads state at the commit: a claim during the awai
     cachedDefinition: () => undefined,
     recipient: () => ({ idle: true, pendingRequest: false }),
     hasLiveWorkers: () => false,
-    archive: () => true,
+    archive: () => ({ ok: true }),
     notify: () => {},
   })
   const hook = releases.transitionHook(t, 'done', { kind: 'human', sessionId: null })
@@ -452,7 +452,7 @@ test('markSpawnedForClosedTask re-checks after the await: a reopen during the de
     cachedDefinition: () => undefined,
     recipient: () => ({ idle: true, pendingRequest: false }),
     hasLiveWorkers: () => false,
-    archive: () => true,
+    archive: () => ({ ok: true }),
     notify: () => {},
   })
   const marking = releases.markSpawnedForClosedTask('spawned-9', t.id)
@@ -462,4 +462,30 @@ test('markSpawnedForClosedTask re-checks after the await: a reopen during the de
   releaseDefinitions()
   await marking
   expect(releases.pending()).toEqual([])
+})
+
+test('a refused archive journals no release: the row drops and release_member reports the error (F4)', async () => {
+  const MemberRelease = (await import('../team/memberRelease')).MemberRelease
+  const t = task(featX)
+  records.set('dev-1', record('dev-1', { projectPath: featX, spawned: true, taskId: t.id }))
+  records.set('lead-1', record('lead-1', { groupId: 'leads' }))
+  const releases = new MemberRelease(db, {
+    store: runtime.mailbox.store, tasks: runtime.tasks.store,
+    records: () => records.values(), getRecord: id => records.get(id),
+    teamOf: id => (records.has(id) ? team : undefined),
+    definition: async () => undefined,
+    cachedDefinition: () => undefined,
+    recipient: () => ({ idle: true, pendingRequest: false }),
+    hasLiveWorkers: () => false,
+    archive: () => ({ ok: false, error: 'Unknown chat session dev-1' }),
+    notify: () => {},
+  })
+  let refusal = ''
+  try { await releases.releaseByAgent('lead-1', 'dev-1') } catch (error) { refusal = String(error) }
+  expect(refusal).toContain('could not be archived: Unknown chat session dev-1')
+  runtime.tasks.store.setStatus(t.id, 'done', await releases.transitionHook(t, 'done', { kind: 'human', sessionId: null }))
+  expect(releases.pending().map(row => row.sessionId)).toEqual(['dev-1'])
+  await releases.evaluate()
+  expect(releases.pending()).toEqual([])
+  expect(runtime.tasks.store.journal(t.id).map(entry => entry.text)).toEqual(['Task done.'])
 })

@@ -28,6 +28,9 @@ export interface PendingReleaseRow {
 /** The one release-readiness answer (D3); `reason` names the first blocker. */
 export type ReleaseReadiness = { ready: true } | { ready: false; reason: string }
 
+/** The archive outcome: the manager's `ChatActionResult` shape. */
+export type ArchiveResult = { ok: true } | { ok: false; error: string }
+
 export interface MemberReleaseOptions {
   store: MailboxStore
   tasks: TaskStore
@@ -46,7 +49,7 @@ export interface MemberReleaseOptions {
   /** Whether the session has a live background worker (D3). */
   hasLiveWorkers: (id: string) => boolean
   /** The manager's archive: the whole release mechanism (D2). */
-  archive: (sessionId: string) => void
+  archive: (sessionId: string) => ArchiveResult
   /** Re-run the dispatch cycle (freed capacity serves mail in the next pass). */
   notify: () => void
 }
@@ -221,7 +224,8 @@ export class MemberRelease {
         continue
       }
       if (!this.readiness(row.sessionId).ready) continue
-      this.options.archive(row.sessionId)
+      // A refused archive released nothing: drop the row without a journal entry.
+      if (!this.options.archive(row.sessionId).ok) { this.cancel(row.sessionId); continue }
       const status = this.options.tasks.get(row.taskId)?.status ?? 'closed'
       this.journalRelease(row.taskId, `Released ${record.name} (${row.sessionId}): task ${status} by ${actorText(row.requestedBy)}.`)
       this.cancel(row.sessionId)
@@ -272,7 +276,8 @@ export class MemberRelease {
     if (!team || team.teamId !== callerTeam.teamId) throw new Error(`${sessionId} is not a member of your team.`)
     const readiness = this.readiness(sessionId)
     if (!readiness.ready) throw new Error(`${record.name} (${sessionId}) is not ready for release: ${readiness.reason}.`)
-    this.options.archive(sessionId)
+    const archived = this.options.archive(sessionId)
+    if (!archived.ok) throw new Error(`${record.name} (${sessionId}) could not be archived: ${archived.error}`)
     if (record.taskId) {
       this.journalRelease(record.taskId,
         `Released ${record.name} (${sessionId}) at the request of ${caller.name} (${callerSessionId}): ${reason?.trim() || 'no reason given'}.`)

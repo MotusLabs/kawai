@@ -131,7 +131,7 @@ beforeEach(async () => {
     startBlocker: rec => rec.archivedAt != null ? 'This chat is archived and read-only' : null,
     prepare: async () => {},
     restore: () => {},
-    watchReceipt: () => {}, archive: () => {}, hasLiveWorkers: () => false,
+    watchReceipt: () => {}, archive: () => ({ ok: true }), hasLiveWorkers: () => false,
     spawn: async (request): Promise<SpawnResult> => {
       spawnCalls.push(request)
       spawnAt.push(Date.now())

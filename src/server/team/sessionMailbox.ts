@@ -21,7 +21,7 @@ import { MailDispatcher, type MailRecipient, type PassOutcome } from './dispatch
 import { reconcileMailbox, transcriptReceipt } from './receipt'
 import { TaskStore } from './taskStore'
 import { TaskService } from './TaskService'
-import { MemberRelease } from './memberRelease'
+import { MemberRelease, type ArchiveResult } from './memberRelease'
 import { AssignmentStore } from './assignmentStore'
 import { AssignmentService } from './AssignmentService'
 import { buildTaskContext } from './taskContext'
@@ -69,7 +69,7 @@ export class SessionMailbox {
     restore: (id: string) => void
     watchReceipt: (id: string) => void
     /** Archive a session the safe way (member-release D2: release = archive). */
-    archive: (id: string) => void
+    archive: (id: string) => ArchiveResult
     /** Whether the session has a live background worker (member-release D3). */
     hasLiveWorkers: (id: string) => boolean
     /** The session received mail under this task (its header shows it). */
