@@ -443,3 +443,54 @@ test('manual handoff wins while a resume limit rule is still running', async () 
   expect(store.get(m.id)?.state).toBe('forwarded')
   expect(store.listForTeam('team').map(row => row.id)).toEqual([forwarded.id])
 })
+
+describe('parked work cancelled mid-resume (team-mailbox-management)', () => {
+  /** Parked work whose resume turn has started, then cancelled by a manager. */
+  async function cancelledDuringResume() {
+    const m = deliver()
+    work()
+    await hitLimit(40 * MIN)
+    const resumeId = store.get(m.id)!.resumeMessageId!
+    store.claim(resumeId, 'dev'); store.markPushed(resumeId); store.markDelivered(resumeId)
+    outcomes.delivered('dev', store.get(resumeId)!)
+    expect(store.cancel(m.id, { kind: 'agent', sessionId: 'lead' }, 'obsolete')).toBe(true)
+    return { m, resumeId }
+  }
+  const mailCount = () => store.listForTeam('team').length
+
+  test('a final limit in the resume turn drops the cancelled work: no park, forward, or resume mail', async () => {
+    const { m, resumeId } = await cancelledDuringResume()
+    const before = mailCount()
+    await hitLimit(40 * MIN)
+    expect(store.get(m.id)).toMatchObject({ state: 'cancelled', parkCount: 1 })
+    expect(store.get(resumeId)?.state).toBe('delivered')
+    expect(mailCount()).toBe(before)
+    expect(store.parkedBy('dev')).toEqual([])
+    expect(db.prepare('SELECT COUNT(*) AS n FROM team_handoff_notes').get()).toEqual({ n: 0 })
+  })
+
+  test('a successful resume turn leaves the cancelled row cancelled', async () => {
+    const { m } = await cancelledDuringResume()
+    work('dev', 1)
+    await outcomes.turnEnded('dev', true)
+    expect(store.get(m.id)?.state).toBe('cancelled')
+  })
+
+  test('a cancel while the onLimit rule is still running is respected', async () => {
+    const m = deliver()
+    work()
+    await hitLimit(40 * MIN)
+    const resumeId = store.get(m.id)!.resumeMessageId!
+    store.claim(resumeId, 'dev'); store.markPushed(resumeId); store.markDelivered(resumeId)
+    outcomes.delivered('dev', store.get(resumeId)!)
+    let finishRule!: (value: LimitOutcome) => void
+    ruleOnLimit = () => new Promise(resolve => { finishRule = resolve })
+    const pending = hitLimit(40 * MIN)
+    expect(store.cancel(m.id, { kind: 'human' })).toBe(true)
+    const before = mailCount()
+    finishRule({ type: 'park' })
+    await pending
+    expect(store.get(m.id)?.state).toBe('cancelled')
+    expect(mailCount()).toBe(before)
+  })
+})

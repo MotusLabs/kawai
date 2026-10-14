@@ -2931,6 +2931,36 @@ describe('ChatSessionManager usage', () => {
     expect(registry.get(id)?.parked).toBeNull()
   })
 
+  test('cancelling a holder\'s only parked message clears its paused state, and an archived holder stays archived', async () => {
+    const { manager, registry } = await createHarness(db)
+    const parkWork = (id: string) => {
+      const store = manager.mailbox.store
+      const mail = store.enqueue({ teamId: 't', toKind: 'session', toId: id, fromSession: id, fromGroup: null, originPath: '/tmp/proj', body: 'work' })
+      store.claim(mail.id, id); store.markPushed(mail.id); store.markDelivered(mail.id)
+      const resume = store.enqueue({ teamId: 't', toKind: 'session', toId: id, fromSession: id, fromGroup: null, originPath: '/tmp/proj', body: 'resume', deliverAt: '2099-01-01T00:00:00.000Z' })
+      store.park(mail.id, '2099-01-01T00:00:00.000Z', resume.id)
+      return { mail, resume }
+    }
+    const live = manager.createSession({ projectPath: '/tmp/proj', claudeProfileId: 'glm' })
+    const archived = manager.createSession({ projectPath: '/tmp/proj', claudeProfileId: 'glm' })
+    if (!live.ok || !archived.ok) throw new Error('create failed')
+    const liveWork = parkWork(live.session.id)
+    const archivedWork = parkWork(archived.session.id)
+    expect(manager.archive(archived.session.id).ok).toBe(true)
+    expect(registry.get(live.session.id)?.parked).not.toBeNull()
+
+    const store = manager.mailbox.store
+    expect(store.cancel(liveWork.mail.id, { kind: 'human' })).toBe(true)
+    expect(store.cancel(archivedWork.mail.id, { kind: 'human' })).toBe(true)
+    expect(registry.get(live.session.id)?.parked).toBeNull()
+    expect(registry.get(archived.session.id)?.parked).toBeNull()
+    expect(registry.get(archived.session.id)?.archivedAt).toBeTruthy()
+    expect(db.getChatSession(archived.session.id)?.archivedAt).toBeTruthy()
+    expect(store.get(archivedWork.resume.id)?.state).toBe('cancelled')
+    // Nothing pends for the live holder either, so group mail may reach it again.
+    expect(store.parkedBy(live.session.id)).toEqual([])
+  })
+
   test('limit failures are recorded against the session profile and group', async () => {
     const { manager, handles } = await createHarness(db)
     const created = manager.createSession({ projectPath: '/tmp/proj', claudeProfileId: 'glm' })

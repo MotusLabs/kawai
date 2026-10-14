@@ -180,7 +180,9 @@ export class LimitOutcomes {
   private async resolve(workId: string, sessionId: string, event: LimitEvent): Promise<void> {
     const store = this.options.store
     const message = store.get(workId)
-    if (!message || !['delivered', 'parked'].includes(message.state)) return
+    // Work cancelled mid-resume (team-mailbox-management D2) is simply dropped:
+    // no park, release, or forward, and no digest left behind.
+    if (!message || !['delivered', 'parked'].includes(message.state)) { this.digests.delete(workId); return }
     const record = this.options.getRecord(sessionId)
     const groupId = message.toKind === 'group' ? message.toId : record?.groupId ?? null
     const group = groupId ? this.options.groupOf(sessionId, groupId) : undefined
@@ -196,8 +198,8 @@ export class LimitOutcomes {
       kind: event.kind, status: event.status, error: event.message, resetsAt, parkCount: message.parkCount,
       progress: { toolCalls: digest.toolCalls, filesTouched: [...digest.files] },
     })
-    // A manual handoff can settle parked work while an async rule is running.
-    if (!['delivered', 'parked'].includes(store.get(workId)?.state ?? '')) return
+    // A manual handoff or cancel can settle parked work while an async rule is running.
+    if (!['delivered', 'parked'].includes(store.get(workId)?.state ?? '')) { this.digests.delete(workId); return }
     const resolution: LimitResolution = resolveLimit({
       toolCalls: digest.toolCalls, resetInMs: Date.parse(resetsAt) - now, parkCount: message.parkCount, policy,
       ...(ruled ? { ruled } : {}),
