@@ -1067,6 +1067,14 @@ describe('ChatSessionManager', () => {
         error: 'This chat session is archived. Restore it to continue the conversation.',
       })
       expect(handles).toHaveLength(0)
+      // The refusal text is exposed read-only for the unavailable-recipient
+      // waiting reason (team-waiting-reasons D2): same text `available`
+      // rejects on, null for a session that may start.
+      const record = db.getChatSession(created.session.id)!
+      expect(manager.startBlockerFor(record)).toBe('This chat session is archived. Restore it to continue the conversation.')
+      const fresh = manager.createSession({ projectPath: '/tmp/proj' })
+      if (!fresh.ok) throw new Error('create failed')
+      expect(manager.startBlockerFor(db.getChatSession(fresh.session.id)!)).toBeNull()
     })
 
     test('start is refused when the project directory is missing', async () => {

@@ -389,7 +389,7 @@ export default function ChatView({ session, sendMessage, subscribe, connectionSt
         )}
       </div>
       {mailbox.open && <TeamMailboxPanel sessionId={session.id} view={mailbox} sendMessage={sendMessage} connected={connected} onClose={toggleMailbox}
-        groups={teamGroups.groups.map(group => group.id)} />}
+        groups={teamGroups.groups.map(group => group.id)} sessions={liveSessions} onOpenSession={openParticipantChat} />}
       {tasks.open && <TeamTasksPanel sessionId={session.id} view={tasks} sendMessage={sendMessage} connected={connected} onClose={toggleTasks} onOpenThread={openThread} />}
       {messages.open && <TeamMessagesPanel sessionId={session.id} projectPath={session.projectPath} sendMessage={sendMessage}
         connected={connected} connectionEpoch={connectionEpoch} onClose={toggleMessages} />}
