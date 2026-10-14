@@ -36,6 +36,6 @@ Prerequisite: `task-assignment` has landed (`team_task_assignments`, outstanding
 ## 6. Verification and docs
 
 - [x] 6.1 Verify E09 headlessly: assign a task, keep its developer busy, Save draft (assert no mail, no revision, no ack state), Publish and notify (revision increments once; earlier peer/thread rows keep revision 1; notice delivered after the turn carries the latest revision), delay acknowledgement (Delivered ≠ Acknowledged), then acknowledge; dead-letter a notice and retry (no new revision, one new notice); reassign and assert the replacement starts unacknowledged.
-- [ ] 6.2 Add the E09 browser walkthrough following `tests/e2e/chat-teams.spec.ts` fixture patterns (deterministic agents, isolated repository) and name it in `ci.yml`; verify DOM assertions on draft, publish, publication detail states, and retry, with screenshots.
+- [x] 6.2 Add the E09 browser walkthrough following `tests/e2e/chat-teams.spec.ts` fixture patterns (deterministic agents, isolated repository) and name it in `ci.yml`; verify DOM assertions on draft, publish, publication detail states, and retry, with screenshots.
 - [ ] 6.3 Document drafts, publication, notices, acknowledgement, and the revision-published contract in the How It Works section; mark E09 coverage in `docs/multi-agent-development-ux.md`; verify the documented labels match the components.
 - [ ] 6.4 Run `bun run lint && bun run typecheck && bun run test` and `openspec validate task-revision-publication --strict`; verify everything is green.
