@@ -73,6 +73,17 @@ test('the same key with a different payload is refused naming the field, and wri
   expect(changes).toEqual([2])
 })
 
+test('fromDraft is not payload identity: a same-key replay differing only in it replays, not refused', async () => {
+  const task = create()
+  await service.saveDraft(human, task.id, { direction: 'v2', rationale: 'Scope changed' })
+  const first = await publish(task.id, { fromDraft: true })
+  const replay = await publish(task.id, { fromDraft: false })
+  expect(first).toMatchObject({ replay: false, revision: { revision: 2 } })
+  expect(replay).toMatchObject({ replay: true, revision: { revision: 2 } })
+  expect(revisionRows(task.id)).toBe(2)
+  expect(changes).toEqual([2])
+})
+
 test('a stale base is refused naming the newer revision; nothing is published and the draft remains', async () => {
   const task = create()
   await service.saveDraft(human, task.id, { direction: 'draft text', rationale: 'r' })

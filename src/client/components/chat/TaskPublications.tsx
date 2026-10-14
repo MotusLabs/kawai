@@ -31,8 +31,11 @@ export default function TaskPublications({ task, publications, acknowledgements,
   onOpenMailbox?: () => void
 }) {
   if (publications.length === 0) return null
-  const notify = (revision: number) => act('notify', { type: 'team-task-notify', revision },
-    { slot: `notify:${task.id}:${revision}`, payload: 'notify' })
+  // Notify and Retry notification are separate intents with their own keys: a
+  // Retry after a lost Notify result must not replay that Notify (which sent
+  // the notice that failed). A double click of either still reuses its key.
+  const notify = (revision: number, intent: 'notify' | 'retry') => act('notify', { type: 'team-task-notify', revision },
+    { slot: `notify:${task.id}:${revision}`, payload: intent })
   return <section aria-label="Publications" className="mt-3" data-testid="task-publications">
     <h5 className="font-medium">Publications</h5>
     {[...publications].reverse().map(publication => {
@@ -55,9 +58,9 @@ export default function TaskPublications({ task, publications, acknowledgements,
           </p>)}
         <div className="mt-1 flex gap-2">
           {missing && <button type="button" className="btn text-chat-meta" data-testid="task-notify" disabled={disabled}
-            onClick={() => notify(publication.revision)}>Notify</button>}
+            onClick={() => notify(publication.revision, 'notify')}>Notify</button>}
           {failed && <button type="button" className="btn text-chat-meta" data-testid="task-retry-notification" disabled={disabled}
-            onClick={() => notify(publication.revision)}>Retry notification</button>}
+            onClick={() => notify(publication.revision, 'retry')}>Retry notification</button>}
         </div>
       </article>
     })}

@@ -110,7 +110,7 @@ test('E09: draft, publish, notify, an uncertain notice resolved in the Mailbox, 
     // Retry notification: exactly one new notice, and still revision 2.
     await publication.getByTestId('task-retry-notification').click()
     await expect(recipient.getByTestId('recipient-notice')).toHaveText(/Queued|Uncertain/, { timeout: 15_000 })
-    await expect(detail.getByTestId('message-row').filter({ hasText: 'revision 2 published by the human' })).toHaveCount(2)
+    await expect(detail.getByTestId('message-row').filter({ hasText: 'revision 2 published by the human' })).toHaveCount(2, { timeout: 15_000 })
     await expect(detail).toContainText('revision 2')
     await expect(detail.locator('[data-testid="task-publication"]')).toHaveCount(1)
     await page.screenshot({ path: info.outputPath('retried.png') })

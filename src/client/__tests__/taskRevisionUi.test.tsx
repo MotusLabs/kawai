@@ -62,6 +62,11 @@ test('a saved draft never moves the shown revision: the direction is the publish
   // Publishing from the saved draft says so; the server discards that draft with it.
   act(() => button('Publish revision 3').props.onClick())
   expect(publishes()).toMatchObject([{ fromDraft: true, direction: 'CSV and JSON', rationale: 'Asked' }])
+  // Edits beyond the saved draft still publish from it: the one draft is replaced, so fromDraft holds.
+  act(() => useTeamTaskStore.getState().reconnected('dev'))
+  act(() => field('Draft direction').props.onChange({ target: { value: 'CSV, JSON, and XML' } }))
+  act(() => button('Publish revision 3').props.onClick())
+  expect(publishes()[1]).toMatchObject({ fromDraft: true, direction: 'CSV, JSON, and XML' })
 })
 
 test('a double click publishes once: the second send is disabled and both would carry one key', () => {
@@ -77,8 +82,14 @@ test('a double click publishes once: the second send is disabled and both would 
   expect(publishes()).toHaveLength(2)
   expect(publishes()[0]).toMatchObject({ baseRevision: 2, direction: 'CSV and JSON', rationale: 'Customer asked', notify: true })
   expect(publishes()[1]!.requestKey).toBe(publishes()[0]!.requestKey)
+  // An edited payload after a lost result is a new intent: a new key.
+  act(() => useTeamTaskStore.getState().reconnected('dev'))
+  rerender()
+  act(() => field('Draft direction').props.onChange({ target: { value: 'CSV, JSON, and XML' } }))
+  act(() => button('Publish and notify').props.onClick())
+  expect(publishes()[2]!.requestKey).not.toBe(publishes()[0]!.requestKey)
   // Success retires the key: the next publication is a new intent.
-  const requestId = publishes()[1]!.requestId
+  const requestId = publishes()[2]!.requestId
   act(() => useTeamTaskStore.getState().applyResult({ type: 'team-task-result', teamPath: 'dev', requestId, task: task({ revision: 3 }), revision: 3 }))
   expect(useTeamTaskStore.getState().views.dev!.commands).toEqual({})
 })
@@ -194,4 +205,23 @@ test('a notice row shows "Revision N published" with its rationale beside the ta
   expect(headers).toEqual(['Task: Export · active · revision 1', 'Task: Export · active · revision 3'])
   expect(view.root.findAllByProps({ 'data-testid': 'peer-revision-notice' })).toHaveLength(1)
   act(() => view.unmount())
+})
+
+test('Retry after a lost Notify result is a new command on the first click; a double click of Retry reuses its key', () => {
+  const view = (state: Partial<RevisionRecipient>) => detail(task(), { publications: [publication([recipientRow(state)])] })
+  const { rerender } = mount(view({}))
+  const notifies = () => sent.filter((message): message is Extract<ClientMessage, { type: 'team-task-notify' }> => message.type === 'team-task-notify')
+  act(() => testId('task-notify').props.onClick())
+  // Its result is lost with the connection; the notice it sent later fails.
+  act(() => useTeamTaskStore.getState().reconnected('dev'))
+  act(() => useTeamTaskStore.getState().applyDetail({ type: 'team-task-detail', teamPath: 'dev', teamId: 'team', detail: view({ noticeState: 'failed', reason: 'hop-limit' }), directory: [] }))
+  rerender()
+  act(() => testId('task-retry-notification').props.onClick())
+  expect(notifies()).toHaveLength(2)
+  expect(notifies()[1]!.requestKey).not.toBe(notifies()[0]!.requestKey)
+  // The Retry's own resend replays under its own key.
+  act(() => useTeamTaskStore.getState().reconnected('dev'))
+  rerender()
+  act(() => testId('task-retry-notification').props.onClick())
+  expect(notifies()[2]!.requestKey).toBe(notifies()[1]!.requestKey)
 })
