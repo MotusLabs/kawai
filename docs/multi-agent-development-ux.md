@@ -406,6 +406,8 @@ Attempt worktree release while a developer is busy or awaiting approval. Assert 
 
 Amend a task while its developer is busy. Ordinary Save Draft must not publish or show acknowledgement. Use Publish and notify; assert revision increments once, historical peer context remains unchanged, and notification carries the latest revision. Delay acknowledgement and assert separate delivered/acknowledged states. Fail notification and retry without creating another revision.
 
+**Coverage (task-revision-publication):** headless in `src/server/__tests__/taskRevisionE09.integration.test.ts` (busy fixture developer through the real dispatcher: draft writes nothing, publish-and-notify increments once and its notice is delivered after the turn with the latest revision while the instruction's peer row keeps revision 1, delivered ≠ acknowledged until `task_acknowledge`, dead-lettered notice retried with no new revision, reassignment starts unacknowledged); in the browser by `tests/e2e/chat-task-revision.spec.ts` (draft, publish, notify, retry through the UI — the fixture confirms no receipts, so there a notice settles Uncertain and is failed through the Mailbox's Discard before **Retry notification**).
+
 ### E10 — Results, acceptance, and permissions (P2)
 
 Have a contributor without a closing grant submit a result for a human-created task. Assert the task stays open/active until human acceptance and the contributor cannot close it. Accept as human, then reopen. Amend after an earlier result and assert Needs re-evaluation. A completed child must not silently close its parent.
