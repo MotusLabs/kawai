@@ -20,14 +20,6 @@ import { resolveTeam } from '../team/teamIdentity'
 import { cleanGitEnv } from '../git/gitCommand'
 import type { ChatEvent } from '../../shared/chat'
 
-const waitFor = async (check: () => boolean, label: string) => {
-  const start = Date.now()
-  while (!check()) {
-    if (Date.now() - start > 5000) throw new Error(`Timed out waiting for ${label}`)
-    await new Promise(resolve => setTimeout(resolve, 10))
-  }
-}
-
 function git(args: string[], cwd?: string) {
   const result = spawnSync('git', args, { cwd, encoding: 'utf8', env: cleanGitEnv() })
   if (result.status !== 0) throw new Error(`git ${args.join(' ')}: ${result.stderr}`)
