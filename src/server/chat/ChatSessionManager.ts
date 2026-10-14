@@ -81,6 +81,7 @@ import { MessageFeed } from '../team/messageFeed'
 import { MessageQuery } from '../team/messageQuery'
 import { TeamMailbox } from '../team/TeamMailbox'
 import { createMailboxServer } from '../team/mailboxTools'
+import type { MailboxManagement } from '../team/mailboxManagement'
 import { StrategyService } from '../strategy/StrategyService'
 import { StrategyStore } from '../strategy/strategyStore'
 import type { TeamMessage, TeamWorktreeOccupancy, WaitingReason } from '../../shared/team'
@@ -889,6 +890,7 @@ export class ChatSessionManager {
     })
     this.mailbox = this.teamMail.mailbox
     this.tasks = this.teamMail.tasks
+    this.management = this.teamMail.management
     this.assignments = this.teamMail.assignments
     this.messages = new MessageFeed(this.mailbox.store, new MessageQuery(options.db.db))
     // Product strategy (product-strategy): constructed here, beside the
@@ -1025,6 +1027,8 @@ export class ChatSessionManager {
   readonly mailbox: TeamMailbox
   /** Team tasks (team-tasks); the task tools and UI actions go through it. */
   readonly tasks: TaskService
+  /** Agent mailbox management (team-mailbox-management): rights, cancel, discard, list. */
+  readonly management: MailboxManagement
   /** Task assignment (task-assignment); human dispatch, preview, and targets. */
   readonly assignments: AssignmentService
   /** The Messages read model and its live feed (team-message-threads D1/4.3). */
@@ -1719,7 +1723,7 @@ export class ChatSessionManager {
       const queryFactory = await this.resolveQueryFactory()
       // The team must be known before the first spawn reads its prompt.
       await this.teams.track(record.sessionId, this.records.get(record.sessionId)?.projectPath ?? record.projectPath)
-      const teamMcpServer = await createMailboxServer(this.mailbox, record.sessionId, this.tasks, this.strategies, this.teamMail.management)
+      const teamMcpServer = await createMailboxServer(this.mailbox, record.sessionId, this.tasks, this.strategies, this.management)
       const driver = new ChatSessionDriver({
         sessionId: record.sessionId,
         projectPath: record.projectPath,

@@ -41,7 +41,7 @@ The alternative was putting the rights checks in `TeamMailbox`, next to send. It
 - transitions the row `parked → cancelled`, clearing `parked_until` and `resume_message_id`;
 - transitions the resume message `queued → cancelled` with the same actor and the reason "parked work <id> cancelled", if it is still queued.
 
-If the resume message is already claimed or delivered, it is left alone (spec scenario "Resume already delivered"). Internal callers in `limitOutcomes.ts` cancel only resume messages, which are never parked, so widening the accepted states does not change their behavior.
+If the resume message is already delivered, it is left alone (spec scenario "Resume already delivered"). If a recipient has claimed it but not yet delivered it, the whole cancel is refused with a reason and nothing changes, so a resume can never deliver after the cancel: either the cancel wins and nothing delivers, or the claim wins and the cancel is refused. Internal callers in `limitOutcomes.ts` cancel only resume messages, which are never parked, so widening the accepted states does not change their behavior.
 
 Rights do not live in the store: the human panel may cancel parked rows, and agents need management, which D1 enforces. `LimitOutcomes` must tolerate a cancelled row:
 - `resolve()` on a final limit for work that is no longer `parked` or `delivered` drops the work (its `active` entry and digest) instead of re-parking or forwarding it;
