@@ -23,12 +23,12 @@ Implement after Wave B2 (`task-revision-publication`, `task-results-handoffs`) h
 
 ## 2. Plan store
 
-- [ ] 2.1 Add `src/server/plans/planSchema.ts` with the D1 DDL, including the partial unique index. Add `plan_id`/`plan_change` to `team_tasks` through `migrateTable`, with the index created after the `ALTER`. Verify with migration tests on a fresh database and on a pre-existing one whose `team_tasks` lacks the columns: existing tasks read back unlinked, and a reopen round-trips.
-- [ ] 2.2 Implement `planStore.ts`: plan rows, draft upsert with CAS inputs, revision insert and status updates, event insert keyed by command id, and the reads (team list, full plan, `revisionsPinnedTo(strategyId)`, `openPlans(teamId)`, linked tasks of a plan). Verify with store tests:
+- [x] 2.1 Add `src/server/plans/planSchema.ts` with the D1 DDL, including the partial unique index. Add `plan_id`/`plan_change` to `team_tasks` through `migrateTable`, with the index created after the `ALTER`. Verify with migration tests on a fresh database and on a pre-existing one whose `team_tasks` lacks the columns: existing tasks read back unlinked, and a reopen round-trips.
+- [x] 2.2 Implement `planStore.ts`: plan rows, draft upsert with CAS inputs, revision insert and status updates, event insert keyed by command id, and the reads (team list, full plan, `revisionsPinnedTo(strategyId)`, `openPlans(teamId)`, linked tasks of a plan). Verify with store tests:
   - the partial index refuses a second `approved` row;
   - a duplicate command id is refused at the database;
   - every row survives a reopen.
-- [ ] 2.3 Add the AGENTS.md How It Works bullet for plan records: tables, revisions and hashing, drafts, the strategy pin, and the fixed check floor. Verify by reading it against D1–D6.
+- [x] 2.3 Add the AGENTS.md How It Works bullet for plan records: tables, revisions and hashing, drafts, the strategy pin, and the fixed check floor. Verify by reading it against D1–D6.
 
 ## 3. Drafting and submission
 

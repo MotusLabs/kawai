@@ -32,6 +32,12 @@ export interface TeamTask {
   worktree: string | null
   /** Linked OpenSpec change name; null = none. */
   openspecChange: string | null
+  /** The plan this task serves (durable-plans D9); fixed at creation, null = unlinked. */
+  planId?: string | null
+  /** The change of that plan; set exactly when `planId` is. */
+  planChange?: string | null
+  /** The linked plan's title, read with the task; null when unlinked. */
+  planTitle?: string | null
   /** Latest revision number; starts at 1. */
   revision: number
   direction: string
