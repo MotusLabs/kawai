@@ -86,6 +86,18 @@ export interface SpawnRequest {
   taskId: string
 }
 
+/** Read-only staffing facts for the dispatch preview (task-assignment D6). */
+export interface StaffingPreview {
+  /** Live members of the group per profile, pending reservations included. */
+  liveOnProfile: Record<string, number>
+  /** Live members plus pending reservations of the group. */
+  groupMembers: number
+  /** The team's live spawned sessions, pending reservations included. */
+  teamSpawned: number
+  /** Spawned writers already in the worktree; 0 when no worktree is targeted. */
+  worktreeWriters: number
+}
+
 export type SpawnResult = { ok: true; sessionId: string } | { ok: false; error: string }
 
 /** A failed spawn is not retried for this long, so a broken profile cannot spin. */
@@ -266,6 +278,30 @@ export class WorktreeStaffing {
   /** Drop every backoff whose message left the waiting surface (D5). */
   pruneBackoffs(keep: ReadonlySet<string>): void {
     for (const id of this.failedAt.keys()) if (!keep.has(id)) this.failedAt.delete(id)
+  }
+
+  /**
+   * Read-only staffing facts for the dispatch preview (task-assignment D6),
+   * in a shape this module owns: the same roster counts `spawnFor` re-checks
+   * in its reservation transaction, plus the group's live members per
+   * profile. Reserves nothing.
+   */
+  preview(teamId: string, groupId: string, worktree: string | null): StaffingPreview {
+    const counts = this.counts(teamId, groupId, worktree ?? '')
+    const liveOnProfile: Record<string, number> = {}
+    for (const session of counts.groupLive) {
+      liveOnProfile[session.profile] = (liveOnProfile[session.profile] ?? 0) + 1
+    }
+    for (const pending of counts.roster.flatMap(entry => entry.pendingSpawns)) {
+      if (pending.group !== groupId) continue
+      liveOnProfile[pending.profile] = (liveOnProfile[pending.profile] ?? 0) + 1
+    }
+    return {
+      liveOnProfile,
+      groupMembers: counts.groupMembers,
+      teamSpawned: counts.teamSpawned,
+      worktreeWriters: worktree === null ? 0 : counts.worktreeWriters,
+    }
   }
 
   /**

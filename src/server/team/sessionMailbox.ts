@@ -21,6 +21,8 @@ import { MailDispatcher, type MailRecipient, type PassOutcome } from './dispatch
 import { reconcileMailbox, transcriptReceipt } from './receipt'
 import { TaskStore } from './taskStore'
 import { TaskService } from './TaskService'
+import { AssignmentStore } from './assignmentStore'
+import { AssignmentService } from './AssignmentService'
 import { buildTaskContext } from './taskContext'
 import { WorktreeStaffing, type SpawnRequest, type SpawnResult } from './staffing'
 import { TeamCaps } from './teamCaps'
@@ -38,6 +40,7 @@ import type { Database } from 'bun:sqlite'
 export class SessionMailbox {
   readonly mailbox: TeamMailbox
   readonly tasks: TaskService
+  readonly assignments: AssignmentService
   readonly dispatcher: MailDispatcher
   readonly staffing: WorktreeStaffing
   readonly limits: LimitEventStore
@@ -94,7 +97,11 @@ export class SessionMailbox {
         this.dispatcher.notify()
       },
     })
-    const taskStore = new TaskStore(db, store)
+    const caps = options.caps ?? new TeamCaps({ homeDir: options.homeDir })
+    // The assignment store rides the mailbox (claim copies follow the mail)
+    // and feeds the task summaries beside the derived participants.
+    const assignments = new AssignmentStore(db, store)
+    const taskStore = new TaskStore(db, store, assignments)
     this.tasks = new TaskService(taskStore, { getSession: options.getRecord, homeDir: options.homeDir })
     this.mailbox = new TeamMailbox(store, {
       getSession: options.getRecord, homeDir: options.homeDir, restoreSession: options.restore, tasks: taskStore,
@@ -103,7 +110,7 @@ export class SessionMailbox {
     this.staffing = new WorktreeStaffing(db, store, {
       records: options.records,
       teamOf: id => options.teams.teamOf(id),
-      caps: options.caps ?? new TeamCaps({ homeDir: options.homeDir }),
+      caps,
       worktrees: this.tasks.worktrees,
       spawn: request => options.spawn ? options.spawn(request) : Promise.resolve({ ok: false, error: 'Spawning is not available' }),
       ...(options.spawnRetryAfterMs !== undefined ? { retryAfterMs: options.spawnRetryAfterMs } : {}),
@@ -115,6 +122,16 @@ export class SessionMailbox {
         }
       },
       onError: options.onError,
+    })
+    this.assignments = new AssignmentService(db, assignments, taskStore, store, {
+      getSession: options.getRecord,
+      records: options.records,
+      teamOf: id => options.teams.teamOf(id),
+      staffing: this.staffing,
+      caps,
+      worktrees: this.tasks.worktrees,
+      ...(options.homeDir ? { homeDir: options.homeDir } : {}),
+      cooldownUntil: profileId => this.limits.cooldownUntil(profileId),
     })
     const targetWorktree = (message: TeamMessage) => (message.taskId ? taskStore.get(message.taskId)?.worktree ?? null : null)
     this.router = new ProfileRouter({
