@@ -454,3 +454,17 @@ test('parked work shows its resume time and hands off to a chosen group or sessi
   ])
   act(() => { renderer.unmount() })
 })
+
+test('search matches the resolved participant names a row displays, not only raw ids', () => {
+  const named = { ...mail('from-writer', 'queued'), fromSession: 'writer', body: 'unrelated body text' }
+  const { renderer } = mountView({ open: true, loading: false, messages: [named, mail('other', 'queued')] }, {
+    collapsedSections: [], sessions,
+  })
+  act(() => {
+    renderer.root.findByProps({ 'aria-label': 'Search mailbox' }).props.onChange({ target: { value: 'writer one' } })
+  })
+  act(() => { renderer.update(<TeamMailboxView teamPath="dev" view={{ open: true, loading: false, messages: [named, mail('other', 'queued')] } as never} connected sendMessage={() => {}} sessions={sessions as never} />) })
+  expect(renderer.root.findByProps({ 'data-testid': 'mailbox-section-count-Queued' }).children.join('')).toBe('1 message')
+  expect(renderer.root.findByProps({ 'data-mailbox-section': 'Queued' }).findAllByType('article').map(article => article.props['data-message-id'])).toEqual(['from-writer'])
+  act(() => renderer.unmount())
+})

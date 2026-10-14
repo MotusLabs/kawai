@@ -60,11 +60,26 @@ function blockerLine(row: TeamMessage, reason: WaitingReason | undefined): strin
   return row.state
 }
 
-/** Everything a search matches over (D6): participants, body, reason text. */
-function searchableText(row: TeamMessage, reason: WaitingReason | undefined): string {
+/** Everything a search matches over (D6): participants (ids and resolved names), body, reason text. */
+function searchableText(row: TeamMessage, reason: WaitingReason | undefined, sessions: ReadonlyArray<LiveParticipant>): string {
+  // The names a row displays: its sender and recipient, and every session a
+  // waiting constraint names — resolved the same way the row renders them.
+  const named: string[] = []
+  const nameOf = (sessionId: string | null | undefined) => {
+    if (sessionId) named.push(resolveParticipant(sessionId, sessions, []).name)
+  }
+  nameOf(row.fromSession)
+  if (row.toKind === 'session') nameOf(row.toId)
+  if (reason) {
+    for (const constraint of [reason.blocker, ...reason.others]) {
+      for (const sessionId of constraint.sessionIds ?? []) nameOf(sessionId)
+      for (const member of constraint.members ?? []) nameOf(member.sessionId)
+    }
+  }
   return [
     row.fromSession ?? '', row.fromGroup ?? '',
     row.toKind === 'human' ? 'Human' : row.toId,
+    ...named,
     row.body, blockerLine(row, reason),
     ...(reason?.others ?? []).map(constraint => constraintLabel(constraint)),
     ...(row.reason ? [row.reason, deadLetterLabel(row.reason)] : []),
@@ -105,7 +120,7 @@ export default function TeamMailboxView({ teamPath, view, sendMessage, connected
   const rowsFor = (section: MailboxSection) => {
     const needle = search.trim().toLowerCase()
     return view.messages.filter(row => section.matches(row, now) &&
-      (needle === '' || searchableText(row, view.waiting?.[row.id]).includes(needle)))
+      (needle === '' || searchableText(row, view.waiting?.[row.id], sessions).includes(needle)))
   }
 
   return <div data-testid="team-mailbox" className="flex h-full min-h-0 flex-col">
