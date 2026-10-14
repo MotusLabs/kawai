@@ -21,7 +21,7 @@ import { emptyTranscript, useChatStore } from '../stores/chatStore'
 import { useSessionStore } from '../stores/sessionStore'
 import { closedMessageView, useTeamMessageStore } from '../stores/teamMessageStore'
 import { useTeamMailboxStore, type MailboxView } from '../stores/teamMailboxStore'
-import { useTeamTaskStore, type TaskView } from '../stores/teamTaskStore'
+import { emptyDraft, useTeamTaskStore, type TaskView } from '../stores/teamTaskStore'
 
 afterEach(() => {
   act(() => {
@@ -116,10 +116,10 @@ test('task detail names its message participants and links into each thread', ()
   const summary: TeamTaskSummary = {
     id: 't1', teamId: 'team', title: 'Export CSV', status: 'open', creator: { kind: 'human', sessionId: null },
     parentId: null, worktree: null, openspecChange: null, revision: 2, direction: 'Build it', acceptance: null,
-    createdAt: '2026-10-11T00:00:00.000Z', updatedAt: '2026-10-11T00:00:00.000Z', participants: ['dev'],
+    createdAt: '2026-10-11T00:00:00.000Z', updatedAt: '2026-10-11T00:00:00.000Z', participants: ['dev'], assignment: null,
   }
   const detail: Detail = {
-    task: summary, revisions: [], journal: [], subtasks: [],
+    task: summary, revisions: [], journal: [], subtasks: [], assignments: [],
     messages: [
       message('m1', { fromSession: 'chat-gone', threadId: 'th-one', body: 'From the killed helper' }),
       message('m2', { fromSession: 'dev', threadId: 'th-two', body: 'From the live one', taskRevision: null }),
@@ -127,10 +127,11 @@ test('task detail names its message participants and links into each thread', ()
   }
   const view: TaskView = {
     open: true, loading: false, tasks: [summary], selectedTaskId: 't1', detail, directory, pending: {}, error: null,
+    draft: emptyDraft(), flow: null, preview: null, previewPending: {}, targets: null, targetsLoading: false,
   }
   let renderer!: TestRenderer.ReactTestRenderer
   act(() => {
-    renderer = TestRenderer.create(<TeamTaskDetail sessionId="chat-1" view={view} sendMessage={() => {}}
+    renderer = TestRenderer.create(<TeamTaskDetail sessionId="chat-1" projectPath="/repo" view={view} sendMessage={() => {}}
       connected sessions={[{ ...chatSession, id: 'dev', name: 'Dev one', groupId: 'devs' } as Session]}
       onOpenThread={threadId => opened.push(threadId)} />)
   })

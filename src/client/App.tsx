@@ -766,6 +766,14 @@ export default function App() {
     setBranchBrowserRepositoryId(repositoryId)
     setCreateWorktreeBranch(null)
   }, [])
+  // The task pickers' create-worktree link (task-assignment D8): opens the
+  // same branch-browser flow for the repository containing the project path;
+  // the pickers refresh their lists when they regain focus on return.
+  const handleBrowseBranchesForPath = useCallback((projectPath: string) => {
+    const repository = workspaceSnapshot?.repositories.find(row =>
+      row.worktrees.some(worktree => projectPath === worktree.path || projectPath.startsWith(`${worktree.path}/`)))
+    if (repository) handleBrowseBranches(repository.id)
+  }, [workspaceSnapshot, handleBrowseBranches])
   const handleCloseBranchBrowser = useCallback(() => {
     setBranchBrowserRepositoryId(null)
     setCreateWorktreeBranch(null)
@@ -928,6 +936,7 @@ export default function App() {
         connectionStatus={connectionStatus} connectionEpoch={connectionEpoch}
         error={connectionError || serverError} onClose={() => setSelectedSessionId(null)}
         onKill={() => handleKillSession(selectedSession.id)}
+        onCreateWorktree={() => handleBrowseBranchesForPath(selectedSession.projectPath)}
       /> : <Terminal
         session={selectedSession}
         sessions={navigationLiveSessions}

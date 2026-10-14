@@ -12,7 +12,7 @@ import type {
   WaitingReason,
 } from './team'
 import type { RuleLoadReport, TeamRoutingState } from './routing'
-import type { TaskStatus, TeamTask, TeamTaskDetail, TeamTaskSummary } from './teamTasks'
+import type { TaskDispatchPreview, TaskStatus, TaskTargetOptions, TeamTask, TeamTaskAssignment, TeamTaskDetail, TeamTaskSummary } from './teamTasks'
 import type { ProductStrategy, StrategyDetail, StrategyDraft, StrategyRevision } from './productStrategy'
 import type {
   WorkspaceOperationResult,
@@ -402,8 +402,34 @@ export type ServerMessage =
       directory: SessionDirectoryEntry[]
     }
   // Result of a human task action; `task` is set on success (a created
-  // task's id lets the view open it), `error` on refusal.
-  | { type: 'team-task-result'; sessionId: string; requestId: string; task?: TeamTask; error?: string }
+  // task's id lets the view open it), `error` on refusal. A dispatch
+  // additionally returns its assignment (task-assignment 4.1).
+  | {
+      type: 'team-task-result'
+      sessionId: string
+      requestId: string
+      task?: TeamTask
+      /** The assignment a `team-task-assign` created or replayed. */
+      assignment?: TeamTaskAssignment
+      error?: string
+    }
+  // Read-only dispatch preview (task-assignment 4.1): informational — the
+  // same request revalidated at dispatch.
+  | {
+      type: 'team-task-preview-result'
+      sessionId: string
+      requestId: string
+      preview?: TaskDispatchPreview
+      error?: string
+    }
+  // The pickers' team-scoped worktrees and OpenSpec changes (task-assignment 4.1).
+  | {
+      type: 'team-task-targets-result'
+      sessionId: string
+      requestId: string
+      targets?: TaskTargetOptions
+      error?: string
+    }
   // Messages view (team-message-threads 5.1): the authoritative page of a
   // subscription's filters on open and reconnect, then pushes of the rows
   // that changed. Pushes are unfiltered — a watcher on `state:queued` has to
@@ -610,10 +636,40 @@ export type ClientMessage =
       parentId?: string
       worktree?: string
       openspecChange?: string
+      /** Stable per intent (task-assignment D4): a replay returns the prior task. */
+      requestKey?: string
     }
   | { type: 'team-task-amend'; sessionId: string; requestId: string; taskId: string; direction?: string; acceptance?: string }
   | { type: 'team-task-note'; sessionId: string; requestId: string; taskId: string; text: string }
   | { type: 'team-task-status'; sessionId: string; requestId: string; taskId: string; status: TaskStatus }
+  // Human dispatch of a task's instruction (task-assignment 4.1): idempotent
+  // under `requestKey`; `handling` is required when the task has an
+  // outstanding assignment (the refusal names it).
+  | {
+      type: 'team-task-assign'
+      sessionId: string
+      requestId: string
+      taskId: string
+      target: { kind: 'group' | 'session'; id: string }
+      instruction: string
+      requestKey: string
+      handling?: 'notify' | 'stop'
+    }
+  // Read-only preview of a dispatch: the task's stored worktree, or the
+  // worktree the create form has (resolved by the same server rules).
+  | {
+      type: 'team-task-preview'
+      sessionId: string
+      requestId: string
+      taskId?: string
+      worktree?: string
+      target: { kind: 'group' | 'session'; id: string }
+    }
+  // The pickers' data (worktrees with branches, changes with locations).
+  // `worktree` narrows the change list to the roots validateChange accepts
+  // for it (the main checkout plus that worktree); the worktree list stays
+  // team-wide.
+  | { type: 'team-task-targets'; sessionId: string; requestId: string; worktree?: string }
   // Messages view (team-message-threads 5.1): a list subscription carries the
   // filters (and optional page cursor) the view is on; a thread open carries
   // the thread to keep live. Human sends and replies are one message — `to`

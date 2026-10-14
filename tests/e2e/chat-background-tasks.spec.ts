@@ -6,6 +6,7 @@
 // the settle wakes the agent into a triggered turn whose line replaces the
 // user bubble, and stopping from the strip settles through the roster.
 import { expect, test, type Page } from '@playwright/test'
+import { killChat } from './support/chatHeader'
 
 test.describe.configure({ mode: 'serial' })
 
@@ -63,5 +64,5 @@ test('a background turn shows running rows, the strip, the tail, the trigger lin
   await expect(strip).toHaveCount(0)
   await page.screenshot({ path: info.outputPath('3-stopped.png') })
 
-  await page.getByRole('button', { name: 'Kill session', exact: true }).click()
+  await killChat(page)
 })
