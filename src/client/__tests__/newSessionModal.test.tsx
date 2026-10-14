@@ -1095,6 +1095,137 @@ describe('NewSessionModal open-transition race', () => {
 
     dialog.unmount()
   })
+
+  test('opening fetches the per-project catalog and groups exactly once, for the initialized path', () => {
+    setupDom()
+    const urls: string[] = []
+    globalThis.fetch = (async (url: string) => {
+      urls.push(url)
+      return String(url).startsWith('/api/chat/groups')
+        ? Response.json({ groups: [], errors: [] })
+        : Response.json({ profiles: [{ id: 'default', label: 'Default' }], errors: [] })
+    }) as unknown as typeof fetch
+
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => {
+      renderer = TestRenderer.create(
+        <NewSessionModal
+          isOpen
+          onClose={() => {}}
+          onCreate={() => {}}
+          defaultProjectDir="/base"
+          commandPresets={DEFAULT_PRESETS}
+          defaultPresetId="claude"
+        />
+      )
+    })
+
+    // Master fetched the catalog twice on open (stale path from the first
+    // render, refetch after the init effect set the default); the render-phase
+    // init means one fetch per endpoint, for the right path.
+    expect(urls.filter((url) => url.startsWith('/api/chat/profiles'))).toEqual([
+      '/api/chat/profiles?projectPath=%2Fbase',
+    ])
+    expect(urls.filter((url) => url.startsWith('/api/chat/groups'))).toEqual([
+      '/api/chat/groups?projectPath=%2Fbase',
+    ])
+
+    act(() => {
+      renderer.unmount()
+    })
+  })
+
+  /**
+   * Terminal-focus harness: the xterm helper textarea stands in for the
+   * terminal, recording the disable/enable/focus touches the modal's
+   * open/close side effects make on it.
+   */
+  function terminalFocusDom() {
+    const calls: string[] = []
+    const textarea = {
+      setAttribute: (_name: string, _value: string) => {
+        calls.push('disable')
+      },
+      removeAttribute: (_name: string) => {
+        calls.push('enable')
+      },
+      focus: () => {
+        calls.push('terminal-focus')
+      },
+      blur: () => {},
+    }
+    globalAny.document = { querySelector: () => textarea } as unknown as Document
+    globalAny.window = {
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    } as unknown as Window & typeof globalThis
+    return { calls }
+  }
+
+  /** The close-side terminal focus waits 300 ms; run past it. */
+  const afterCloseWindow = () => new Promise((resolve) => setTimeout(resolve, 340))
+
+  test('a mount while closed schedules no terminal focus', async () => {
+    const terminal = terminalFocusDom()
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => {
+      renderer = TestRenderer.create(
+        <NewSessionModal
+          isOpen={false}
+          onClose={() => {}}
+          onCreate={() => {}}
+          defaultProjectDir="/base"
+          commandPresets={DEFAULT_PRESETS}
+          defaultPresetId="claude"
+        />
+      )
+    })
+
+    await act(async () => {
+      await afterCloseWindow()
+    })
+    expect(terminal.calls).toEqual([])
+
+    act(() => {
+      renderer.unmount()
+    })
+  })
+
+  test('a close→reopen within 300 ms never re-enables or focuses the terminal textarea', async () => {
+    const terminal = terminalFocusDom()
+    const form = (isOpen: boolean) => (
+      <NewSessionModal
+        isOpen={isOpen}
+        onClose={() => {}}
+        onCreate={() => {}}
+        defaultProjectDir="/base"
+        commandPresets={DEFAULT_PRESETS}
+        defaultPresetId="claude"
+      />
+    )
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => {
+      renderer = TestRenderer.create(form(true))
+    })
+    act(() => {
+      renderer.update(form(false))
+    })
+    // Reopen before the close-side 300 ms terminal focus fires.
+    act(() => {
+      renderer.update(form(true))
+    })
+
+    await act(async () => {
+      await afterCloseWindow()
+    })
+    // Both opens disabled the textarea; the stale close timeout was cancelled
+    // instead of re-enabling and focusing the terminal under the open dialog.
+    expect(terminal.calls).toEqual(['disable', 'disable'])
+
+    act(() => {
+      renderer.unmount()
+    })
+  })
 })
 
 /**

@@ -181,7 +181,8 @@ export default function NewSessionModal({
     if (!isOpen) {
       // `kind` is deliberately left alone: the next open re-derives it from its
       // own entry point (see `defaultKind`), so a reset here would only record
-      // the open that just ended.
+      // the open that just ended. `claudeProfileId` and `groupId` likewise come
+      // from their useState seeds plus this close reset, never the open block.
       setClaudeProfileId('default')
       setGroupId('')
       setProjectPath('')
@@ -235,13 +236,26 @@ export default function NewSessionModal({
     }
   }
 
+  /**
+   * The open state this effect last saw. Its branches must run only on a real
+   * closed↔open transition: App mounts the modal with `isOpen=false`, so a
+   * mount-while-closed close branch would schedule the terminal-focus timeout
+   * on every page load, and a close→reopen within 300 ms would let that stale
+   * timeout re-enable the terminal textarea under the open dialog.
+   */
+  const prevOpenRef = useRef(false)
+
   useEffect(() => {
     // Imperative open/close side effects only; every field default is applied
     // during render on the transition (see the block above), never here.
+    const wasOpen = prevOpenRef.current
+    prevOpenRef.current = isOpen
     if (!isOpen) {
+      // A mount while closed is no transition: nothing to restore.
+      if (!wasOpen) return
       provisionalFocusRef.current = null
       // Focus terminal after modal closes
-      setTimeout(() => {
+      const closeTimer = setTimeout(() => {
         if (typeof document === 'undefined' || typeof document.querySelector !== 'function') return
         const textarea = document.querySelector('.xterm-helper-textarea') as HTMLTextAreaElement | null
         if (textarea) {
@@ -249,7 +263,9 @@ export default function NewSessionModal({
           textarea.focus()
         }
       }, 300)
-      return
+      // Reopening before the timeout fires cancels it, so it can never
+      // re-enable the terminal textarea under the open dialog.
+      return () => clearTimeout(closeTimer)
     }
     // Disable terminal textarea when modal opens to prevent keyboard capture
     if (typeof document !== 'undefined' && typeof document.querySelector === 'function') {
@@ -265,7 +281,7 @@ export default function NewSessionModal({
     // take focus, otherwise the always-enabled session-kind select. Whichever
     // lands is recorded as provisional so the catalog catch-up can promote it.
     const focusBeforeAttempt = typeof document === 'undefined' ? null : document.activeElement
-    setTimeout(() => {
+    const focusTimer = setTimeout(() => {
       // This attempt is deferred, so it can arrive after the user has already
       // picked a control of their own — inside the form or out of it, such as
       // the directory browser that sits outside the form. Take focus only while
@@ -289,6 +305,7 @@ export default function NewSessionModal({
         input.scrollLeft = input.scrollWidth
       }
     }, 50)
+    return () => clearTimeout(focusTimer)
   }, [isOpen])
 
   // Keep the deferred focus attempt's view of Create current; that attempt is
