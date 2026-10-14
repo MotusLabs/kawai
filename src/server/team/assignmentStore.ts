@@ -12,8 +12,10 @@
 // sender columns it reads are `team-message-threads`', used as shipped.
 import type { Database } from 'bun:sqlite'
 import type { MessageState, TeamMessage } from '../../shared/team'
-import type { TaskActor, TeamTaskAssignment } from '../../shared/teamTasks'
+import type { TaskActor, TaskHandoffKind, TeamTaskAssignment } from '../../shared/teamTasks'
+import { TASK_HANDOFF_KINDS } from '../../shared/teamTasks'
 import type { MailboxStore } from './mailboxStore'
+import { migrateHandoffColumns } from './taskResultSchema'
 
 /** Derived at read time from the instruction mail (design D5). */
 export type AssignmentState = 'queued' | 'claimed' | 'delivered' | 'failed' | 'superseded' | 'parked' | 'forwarded' | 'uncertain'
@@ -53,6 +55,29 @@ export interface DispatchInsert {
   creator: TaskActor
   /** The enqueued instruction mail, once the dispatch transaction adds it. */
   messageId?: string | null
+  /** A handoff's kind, referenced result, and expected response (task-results-handoffs D1). */
+  handoff?: DispatchHandoff
+}
+
+/** A handoff's fields on its assignment (task-results-handoffs D3). */
+export interface DispatchHandoff {
+  kind: TaskHandoffKind
+  resultId: string
+  expectedResponse: string | null
+}
+
+/**
+ * Which handoff field differs between a stored assignment and a replayed
+ * intent (task-results-handoffs D3, extending D4's payload identity): a
+ * replay carrying another result, kind, or expected response is refused. The
+ * one comparison both D4 sites — this store's insert-then-read and
+ * AssignmentService's pre-check — use.
+ */
+export function handoffDiff(existing: Pick<TeamTaskAssignment, 'handoffKind' | 'resultId' | 'expectedResponse'>, handoff: DispatchHandoff | null): string | null {
+  if ((existing.handoffKind ?? null) !== (handoff?.kind ?? null)) return 'handoff kind'
+  if ((existing.resultId ?? null) !== (handoff?.resultId ?? null)) return 'result'
+  if ((existing.expectedResponse ?? null) !== (handoff?.expectedResponse ?? null)) return 'expected response'
+  return null
 }
 
 export type InsertOutcome =
@@ -93,6 +118,8 @@ export function outstandingOf(rows: TeamTaskAssignment[]): TeamTaskAssignment | 
 export class AssignmentStore {
   constructor(private readonly db: Database, private readonly mail?: MailboxStore) {
     db.exec(CREATE_TABLE_SQL)
+    // Handoff columns (task-results-handoffs D1): this store owns the table's reads.
+    migrateHandoffColumns(db)
     // Claim copies follow the mail wherever its claim moves (design D5):
     // set when the dispatcher claims, cleared again by release or requeue.
     this.mailSubscription = mail?.subscribe((_teamId, message) => { if (message) this.syncFromMail(message) })
@@ -108,15 +135,18 @@ export class AssignmentStore {
    * Insert one dispatch under its request key (design D4): insert-then-read.
    * A same-payload replay returns the prior row as the outcome; a different
    * payload under the same key is refused naming the differing field. Payload
-   * identity covers the request fields only — target and instruction.
+   * identity covers the request fields — target and instruction — and, for a
+   * handoff, its kind, referenced result, and expected response.
    */
   insert(input: DispatchInsert, now = nowIso()): InsertOutcome {
     const id = `assignment-${crypto.randomUUID()}`
     const inserted = this.db.prepare(`INSERT OR IGNORE INTO team_task_assignments
-      (id, team_id, task_id, request_key, target_kind, target_id, role, instruction, created_by_kind, created_by_session, message_id, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+      (id, team_id, task_id, request_key, target_kind, target_id, role, instruction, created_by_kind, created_by_session, message_id,
+       handoff_kind, result_id, expected_response, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
       id, input.teamId, input.taskId, input.requestKey, input.targetKind, input.targetId, input.role,
-      input.instruction, input.creator.kind, input.creator.sessionId, input.messageId ?? null, now, now,
+      input.instruction, input.creator.kind, input.creator.sessionId, input.messageId ?? null,
+      input.handoff?.kind ?? null, input.handoff?.resultId ?? null, input.handoff?.expectedResponse ?? null, now, now,
     ).changes
     if (inserted === 1) return { replay: false, assignment: this.row(id)! }
     const existing = this.byKey(input.teamId, input.requestKey)
@@ -181,6 +211,9 @@ export class AssignmentStore {
       reason,
       createdAt: String(raw.created_at),
       updatedAt: String(raw.updated_at),
+      handoffKind: TASK_HANDOFF_KINDS.includes(raw.handoff_kind as TaskHandoffKind) ? raw.handoff_kind as TaskHandoffKind : null,
+      resultId: raw.result_id === null || raw.result_id === undefined ? null : String(raw.result_id),
+      expectedResponse: raw.expected_response === null || raw.expected_response === undefined ? null : String(raw.expected_response),
     }
   }
 
@@ -189,7 +222,7 @@ export class AssignmentStore {
     if (existing.targetKind !== input.targetKind) return 'target'
     if (existing.targetId !== input.targetId) return 'target'
     if (existing.instruction !== input.instruction) return 'instruction'
-    return null
+    return handoffDiff(existing, input.handoff ?? null)
   }
 
   /**

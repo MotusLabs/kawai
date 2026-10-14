@@ -93,6 +93,7 @@ import type { RuleLoadReport, TeamRoutingState } from '../../shared/routing'
 import { SessionMailbox } from '../team/sessionMailbox'
 import type { TaskService } from '../team/TaskService'
 import type { AssignmentService } from '../team/AssignmentService'
+import type { TaskResultService } from '../team/TaskResultService'
 import type { SpawnRequest, SpawnResult } from '../team/staffing'
 import { TeamCaps } from '../team/teamCaps'
 import {
@@ -924,6 +925,7 @@ export class ChatSessionManager {
     this.tasks = this.teamMail.tasks
     this.management = this.teamMail.management
     this.assignments = this.teamMail.assignments
+    this.results = this.teamMail.results
     this.messages = new MessageFeed(this.mailbox.store, new MessageQuery(options.db.db))
     // Product strategy (product-strategy): constructed here, beside the
     // task service, against the same database. The strategy store's changes
@@ -1069,6 +1071,8 @@ export class ChatSessionManager {
   readonly management: MailboxManagement
   /** Task assignment (task-assignment); human dispatch, preview, and targets. */
   readonly assignments: AssignmentService
+  /** Task results, findings, acceptance, handoffs, and release (task-results-handoffs). */
+  readonly results: TaskResultService
   /** The Messages read model and its live feed (team-message-threads D1/4.3). */
   readonly messages: MessageFeed
   /** Product strategy (product-strategy); the strategy tools and UI actions go through it. */
@@ -1775,7 +1779,7 @@ export class ChatSessionManager {
       // The team must be known before the first spawn reads its prompt.
       await this.teams.track(record.sessionId, this.records.get(record.sessionId)?.projectPath ?? record.projectPath)
       const teamMcpServer = await createMailboxServer(this.mailbox, record.sessionId, {
-        tasks: this.tasks, strategies: this.strategies, releases: this.teamMail.releases, management: this.management,
+        tasks: this.tasks, results: this.results, strategies: this.strategies, releases: this.teamMail.releases, management: this.management,
       })
       const driver = new ChatSessionDriver({
         sessionId: record.sessionId,

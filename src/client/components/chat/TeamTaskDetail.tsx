@@ -2,8 +2,9 @@
 // and acceptance with the revision history behind it, the append-only
 // journal, subtasks, and the task's messages, plus the human's controls —
 // a direction draft published as a new revision (TaskDirectionEditor), the
-// publication detail per revision (TaskPublications), add a note, and set
-// any status including reopening. The human may do all of this whoever created the task, even a
+// results with acceptance and handoffs (TaskResultsSection), release-and-
+// hand-off (TaskReleaseDialog), the publication detail per revision
+// (TaskPublications), add a note, and set any status including reopening. The human may do all of this whoever created the task, even a
 // killed agent. Controls disable while disconnected.
 // Assignment (task-assignment): the outstanding assignment with its target,
 // role, state, and claimed agent, the assignment history, and **Assign /
@@ -24,6 +25,8 @@ import { assignmentLabel } from './TeamTasksPanel'
 import { actorLabel, journalAuthorLabel, sessionLabel } from './teamTaskLabels'
 import TaskDirectionEditor, { type TaskActFn } from './TaskDirectionEditor'
 import TaskPublications from './TaskPublications'
+import TaskResultsSection from './TaskResultsSection'
+import TaskReleaseDialog from './TaskReleaseDialog'
 
 interface DetailAssignForm {
   kind: AssignTargetKind
@@ -171,6 +174,9 @@ export default function TeamTaskDetail({ teamPath, projectPath, view, sendMessag
       </details>
       <TaskDirectionEditor task={task} draft={detail.draft} connected={connected} disabled={disabled} act={act} />
     </section>
+
+    <TaskResultsSection detail={detail} groups={groups} sessions={sessions} connected={connected} disabled={disabled} act={act} />
+    <TaskReleaseDialog detail={detail} groups={groups} connected={connected} disabled={disabled} act={act} />
 
     <TaskPublications task={task} publications={detail.publications ?? []} acknowledgements={detail.acknowledgements ?? []}
       sessions={sessions} disabled={disabled} act={act} onOpenMailbox={onOpenMailbox} />

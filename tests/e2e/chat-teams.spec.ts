@@ -12,6 +12,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { killChat } from './support/chatHeader'
+import { createChat as createResultsChat, createTask, openTasks, openTaskId, reopenTask, resultsTeam, say, seedResult, spawnedSession } from './support/taskResults'
 
 test.skip(process.env.AGENTBOARD_CHAT_FIXTURE !== '1', 'Requires development chat fixture')
 
@@ -168,5 +169,164 @@ test('waiting reasons: starting agent, expandable blockers, dead-letter labels, 
     await page.getByRole('button', { name: 'Mailbox', exact: true }).click()
     await expect(panel.locator(`[data-message-id="${seeded.queued}"]`).getByTestId('waiting-reason')).toContainText('No eligible member', { timeout: 15000 })
     await page.screenshot({ path: info.outputPath('team-waiting-updated.png') })
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
+// Task results and handoffs (task-results-handoffs 8.4). Fixture agents
+// cannot call task_submit_result, so each result is seeded through the
+// server's own store and the task view reopened; the fixture confirms no
+// receipts, so delivered instructions settle Uncertain (still outstanding).
+// Headless coverage (taskResultsE07/E08/E10) adds what a browser cannot
+// drive: a contributor's refused accept, findings, and a restart.
+test('E07: a result, a review queued behind the developer, and release and hand off to one reviewer', async ({ page }, info) => {
+  test.setTimeout(120_000)
+  const { root, worktree } = resultsTeam()
+  try {
+    await page.goto('/')
+    await createResultsChat(page, root, 'Results lead', 'leads')
+    await openTasks(page)
+    await createTask(page, { title: 'Export', direction: 'Ship a CSV export', worktree, assign: 'devs' })
+    const dev = await spawnedSession(page, worktree)
+    await expect(page.getByTestId('task-outstanding-assignment')).toContainText(/claimed|delivered|uncertain/, { timeout: 30_000 })
+    const taskId = await openTaskId(page)
+    seedResult(taskId, dev, worktree)
+    await reopenTask(page, taskId)
+    const detail = page.getByTestId('task-detail')
+    const card = detail.getByTestId('task-result')
+    await expect(card).toContainText('CSV export')
+    await expect(card).toContainText('abc1234')
+    await expect(card.getByTestId('result-test')).toContainText('(claimed)')
+    await page.getByTestId('task-results').screenshot({ path: info.outputPath('task-results-section.png') })
+
+    // Request review: it waits behind the developer occupying the worktree.
+    await detail.getByTestId('task-handoff-review').click()
+    const form = detail.getByTestId('task-handoff-form')
+    await form.getByLabel('Request review role').selectOption('reviewers')
+    await form.getByLabel('Request review instructions').fill('Review the export')
+    await form.getByTestId('task-handoff-send').click()
+    await expect(page.getByTestId('task-outstanding-assignment')).toContainText('group reviewers')
+    await expect(form).toHaveCount(0)
+    await page.getByRole('button', { name: 'Mailbox', exact: true }).click()
+    const review = page.getByTestId('team-mailbox').locator('article').filter({ hasText: 'Review the export' })
+    await expect(review.getByTestId('waiting-reason')).toContainText('is held by', { timeout: 15_000 })
+
+    // Release and hand off: the developer is archived; the queued review is the one that proceeds.
+    await reopenTask(page, taskId)
+    await detail.getByTestId('task-release').click()
+    const confirm = detail.getByTestId('task-release-confirm')
+    await expect(confirm.getByTestId('release-member')).toHaveAttribute('data-ready', 'true', { timeout: 30_000 })
+    await confirm.getByLabel('Review instructions').fill('Review the export')
+    await page.getByTestId('task-release-confirm').screenshot({ path: info.outputPath('task-release-confirm.png') })
+    await confirm.getByTestId('task-release-confirm-button').click()
+    await expect(confirm).toHaveCount(0, { timeout: 15_000 })
+    await expect(page.getByTestId('task-outstanding-assignment')).toContainText(/group reviewers.*(claimed|delivered|uncertain)/, { timeout: 30_000 })
+    await expect(detail.getByTestId('task-assignment-history').locator('summary')).toHaveText('Assignment history (2)')
+    await expect(detail.getByRole('region', { name: 'Journal' }).getByText(/worktree released for review/)).toHaveCount(1)
+    await page.screenshot({ path: info.outputPath('task-released.png') })
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
+test('E08: release is refused while the developer is busy or awaiting approval, then succeeds once', async ({ page }, info) => {
+  test.setTimeout(120_000)
+  const { root, worktree } = resultsTeam()
+  try {
+    await page.goto('/')
+    const lead = await createResultsChat(page, root, 'Release lead', 'leads')
+    await openTasks(page)
+    await createTask(page, { title: 'Export', direction: 'Ship a CSV export', worktree, assign: 'devs' })
+    const dev = await spawnedSession(page, worktree)
+    await expect(page.getByTestId('task-outstanding-assignment')).toContainText(/claimed|delivered|uncertain/, { timeout: 30_000 })
+    const taskId = await openTaskId(page)
+    seedResult(taskId, dev, worktree)
+    await reopenTask(page, taskId)
+    const detail = page.getByTestId('task-detail')
+    const alert = page.getByTestId('team-tasks').locator('[role="alert"]')
+    const history = detail.getByTestId('task-assignment-history').locator('summary')
+    await detail.getByTestId('task-release').click()
+    const confirm = detail.getByTestId('task-release-confirm')
+    await confirm.getByLabel('Review instructions').fill('Review the export')
+
+    // Mid-turn: refused naming the developer; nothing archived or dispatched; the input stays.
+    await say(page, dev, 'keep thinking about edge cases')
+    await expect(page.getByTestId('chat-status')).toHaveText('working', { timeout: 15_000 })
+    await confirm.getByTestId('task-release-confirm-button').click()
+    await expect(alert).toContainText('nothing was archived or dispatched')
+    await expect(alert).toContainText('it is busy')
+    await expect(confirm.getByLabel('Review instructions')).toHaveValue('Review the export')
+    await expect(history).toHaveText('Assignment history (1)')
+    await page.screenshot({ path: info.outputPath('task-release-refused-busy.png') })
+    await expect(page.getByTestId('chat-status')).toHaveText('waiting', { timeout: 30_000 })
+
+    // Awaiting an approval: refused, naming it.
+    await say(page, dev, 'approval')
+    await expect(page.getByRole('button', { name: 'Allow', exact: true })).toBeVisible({ timeout: 15_000 })
+    await confirm.getByTestId('task-release-confirm-button').click()
+    await expect(alert).toContainText('awaiting an approval or answer')
+    await expect(history).toHaveText('Assignment history (1)')
+
+    // Resolved and the turn ended: one release, one review dispatch.
+    await page.getByRole('button', { name: 'Allow', exact: true }).click()
+    await expect(page.getByTestId('chat-transcript')).toContainText('Request accepted.')
+    await expect(page.getByTestId('chat-status')).toHaveText('waiting', { timeout: 15_000 })
+    // Retry from the lead's chat: archiving the selected developer chat would deselect it.
+    await page.locator(`[data-session-id="${lead}"]`).first().click()
+    await reopenTask(page, taskId)
+    await detail.getByTestId('task-release').click()
+    await confirm.getByLabel('Review instructions').fill('Review the export')
+    await confirm.getByTestId('task-release-confirm-button').click()
+    await expect(confirm).toHaveCount(0, { timeout: 15_000 })
+    await expect(history).toHaveText('Assignment history (2)')
+    await expect(detail.getByRole('region', { name: 'Journal' }).getByText(/worktree released for review/)).toHaveCount(1)
+    await page.screenshot({ path: info.outputPath('task-release-succeeded.png') })
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
+test('E10: a contributor result stays open; amendment flags it; children never close the parent; accept needs a reason', async ({ page }, info) => {
+  const { root } = resultsTeam()
+  try {
+    await page.goto('/')
+    const contributor = await createResultsChat(page, root, 'Results contributor', 'devs')
+    await createResultsChat(page, root, 'Acceptance lead', 'leads')
+    await openTasks(page)
+    await createTask(page, { title: 'Report', direction: 'CSV export', acceptance: 'Exports every row' })
+    seedResult(await openTaskId(page), contributor, null)
+    await reopenTask(page, 'Report')
+    const detail = page.getByTestId('task-detail')
+    // The contributor's result leaves the task open.
+    await expect(detail.getByTestId('task-detail-status')).toHaveText('open')
+    await expect(detail.getByTestId('task-result')).toContainText('CSV export')
+
+    // An amendment flags the earlier result Needs re-evaluation.
+    await detail.getByLabel('Draft direction').fill('CSV and TSV export')
+    await detail.getByLabel('Rationale').fill('TSV too')
+    await detail.getByTestId('task-publish').click()
+    await expect(detail.getByTestId('result-reevaluation')).toHaveText('Needs re-evaluation')
+
+    // A finished child never closes its parent; an open one stays listed.
+    await createTask(page, { title: 'Headers', direction: 'Header row', parent: 'Report' })
+    await detail.getByRole('button', { name: 'Mark done', exact: true }).click()
+    await expect(detail.getByTestId('task-detail-status')).toHaveText('done')
+    await createTask(page, { title: 'Docs', direction: 'Document it', parent: 'Report' })
+    await page.getByRole('button', { name: 'Tasks', exact: true }).click()
+    await openTasks(page)
+    await expect(page.getByTestId('team-tasks').locator('[data-task-id]').filter({ hasText: 'Report' }).getByTestId('task-result-badge')).toHaveAttribute('data-state', 'flagged')
+    await reopenTask(page, 'Report')
+    await expect(detail.getByTestId('task-detail-status')).toHaveText('open')
+
+    // Accept: criteria and open children shown; a reason is required and journaled.
+    await detail.getByTestId('task-accept').click()
+    await expect(detail.getByTestId('accept-criteria')).toHaveText('Exports every row')
+    await expect(detail.getByTestId('accept-open-children')).toContainText('Docs')
+    await expect(detail.getByTestId('accept-open-children')).not.toContainText('Headers')
+    await expect(detail.getByTestId('task-accept-confirm-button')).toBeDisabled()
+    await detail.getByLabel('Acceptance reason').fill('TSV follows in Docs')
+    await page.getByTestId('task-accept-confirm').screenshot({ path: info.outputPath('task-accept-confirm.png') })
+    await detail.getByTestId('task-accept-confirm-button').click()
+    await expect(detail.getByTestId('task-detail-status')).toHaveText('done')
+    await expect(detail.getByTestId('result-accepted')).toHaveText('Accepted by Human')
+    await expect(detail.getByRole('region', { name: 'Journal' })).toContainText('TSV follows in Docs')
+    await reopenTask(page, 'Docs')
+    await expect(detail.getByTestId('task-detail-status')).toHaveText('open')
+    await page.screenshot({ path: info.outputPath('task-accepted.png') })
   } finally { rmSync(root, { recursive: true, force: true }) }
 })

@@ -6,6 +6,7 @@
 import { z } from 'zod'
 import type { TeamMailbox } from './TeamMailbox'
 import type { TaskService } from './TaskService'
+import type { TaskResultService } from './TaskResultService'
 import type { MemberRelease } from './memberRelease'
 import { TASK_TOOL_NAMES, taskDescriptions, taskHandlers, taskSchemas } from './taskTools'
 import type { StrategyService } from '../strategy/StrategyService'
@@ -86,18 +87,20 @@ export function releaseHandlers(releases: MemberRelease, sessionId: string) {
 /** The optional services a session's team server exposes; each absent one registers no tools. */
 export interface MailboxServerServices {
   tasks?: TaskService
+  /** Result, findings, and handoff tools (task-results-handoffs); registered beside the task tools. */
+  results?: TaskResultService
   strategies?: StrategyService
   releases?: MemberRelease
   management?: MailboxManagement
 }
 
 export async function createMailboxServer(mailbox: TeamMailbox, sessionId: string, services: MailboxServerServices = {}) {
-  const { tasks, strategies, releases, management } = services
+  const { tasks, results, strategies, releases, management } = services
   const { createSdkMcpServer, tool } = await import('@anthropic-ai/claude-agent-sdk')
   const handlers: Record<string, (input: unknown) => Promise<unknown>> = {
     ...mailboxHandlers(mailbox, sessionId),
     ...(management ? managementHandlers(management, sessionId) : {}),
-    ...(tasks ? taskHandlers(tasks, sessionId) : {}),
+    ...(tasks ? taskHandlers(tasks, sessionId, results) : {}),
     ...(releases ? releaseHandlers(releases, sessionId) : {}),
     // Product strategy: read/propose only — the approve/publish/withdraw
     // surface deliberately does not exist here (design D3).

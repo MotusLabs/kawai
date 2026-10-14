@@ -12,7 +12,7 @@ import type {
   WaitingReason,
 } from './team'
 import type { RuleLoadReport, TeamRoutingState } from './routing'
-import type { HumanTaskDetail, TaskDispatchPreview, TaskStatus, TaskTargetOptions, TeamTask, TeamTaskAssignment, TeamTaskSummary } from './teamTasks'
+import type { HumanTaskDetail, TaskDispatchPreview, TaskHandoffKind, TaskStatus, TaskTargetOptions, TeamTask, TeamTaskAssignment, TeamTaskSummary } from './teamTasks'
 import type { ProductStrategy, StrategyDetail, StrategyDraft, StrategyRevision } from './productStrategy'
 import type {
   WorkspaceOperationResult,
@@ -683,6 +683,36 @@ export type ClientMessage =
       fromDraft?: boolean
     }
   | { type: 'team-task-notify'; teamPath: string; requestId: string; taskId: string; revision: number; requestKey: string }
+  // Task results (task-results-handoffs D5): accept one result and close the
+  // task under the existing closing rights; a reason when it is flagged or
+  // child work is open.
+  | { type: 'team-task-accept-result'; teamPath: string; requestId: string; taskId: string; resultId: string; reason?: string }
+  // Request review / Request QA / Return for fixes (D3): a handoff of one
+  // result to a role, idempotent under the client's request key.
+  | {
+      type: 'team-task-handoff'
+      teamPath: string
+      requestId: string
+      taskId: string
+      kind: TaskHandoffKind
+      resultId: string
+      target: { kind: 'group' | 'session'; id: string }
+      instructions: string
+      expectedResponse?: string
+      requestKey: string
+    }
+  // Release worktree and hand off (D7): archive the task's ready spawned
+  // members, then dispatch the review handoff to a reviewer group.
+  | {
+      type: 'team-task-release'
+      teamPath: string
+      requestId: string
+      taskId: string
+      target: string
+      instructions: string
+      expectedResponse?: string
+      requestKey: string
+    }
   | { type: 'team-task-note'; teamPath: string; requestId: string; taskId: string; text: string }
   | { type: 'team-task-status'; teamPath: string; requestId: string; taskId: string; status: TaskStatus }
   // Human dispatch of a task's instruction (task-assignment 4.1): idempotent

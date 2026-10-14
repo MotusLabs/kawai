@@ -25,6 +25,7 @@ import { MemberRelease, type ArchiveResult } from './memberRelease'
 import { MailboxManagement } from './mailboxManagement'
 import { AssignmentStore } from './assignmentStore'
 import { AssignmentService } from './AssignmentService'
+import { TaskResultService } from './TaskResultService'
 import { buildTaskContext } from './taskContext'
 import { WorktreeStaffing, type SpawnRequest, type SpawnResult } from './staffing'
 import { TeamCaps } from './teamCaps'
@@ -44,6 +45,8 @@ export class SessionMailbox {
   readonly tasks: TaskService
   readonly management: MailboxManagement
   readonly assignments: AssignmentService
+  /** Results, findings, acceptance, handoffs, and release-and-hand-off (task-results-handoffs). */
+  readonly results: TaskResultService
   readonly dispatcher: MailDispatcher
   readonly staffing: WorktreeStaffing
   readonly limits: LimitEventStore
@@ -168,6 +171,8 @@ export class SessionMailbox {
       ...(options.homeDir ? { homeDir: options.homeDir } : {}),
       cooldownUntil: profileId => this.limits.cooldownUntil(profileId),
     })
+    this.results = new TaskResultService(this.tasks, { getSession: options.getRecord, assignments: this.assignments,
+      releases: this.releases, records: options.records, ...(options.homeDir ? { homeDir: options.homeDir } : {}) })
     // Worktree scoping (member-release D5): an unscoped group's task mail goes
     // to any member and never spawns; a missing definition stays scoped.
     const targetWorktree = (message: TeamMessage): string | null => {

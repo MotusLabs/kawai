@@ -15,7 +15,7 @@ import type { ServerMessage } from '@shared/types'
 import type { SessionDirectoryEntry } from '@shared/team'
 import type { HumanTaskDetail, TaskDispatchPreview, TaskTargetOptions, TeamTaskSummary } from '@shared/teamTasks'
 
-export type TaskAction = 'create' | 'create-assign' | 'assign' | 'draft' | 'publish' | 'notify' | 'note' | 'status'
+export type TaskAction = 'create' | 'create-assign' | 'assign' | 'draft' | 'publish' | 'notify' | 'note' | 'status' | 'handoff' | 'accept' | 'release'
 
 /** An armed publish or notify command: its key and the payload it names. */
 export interface ArmedCommand {

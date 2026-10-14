@@ -298,8 +298,9 @@ export class MemberRelease {
   readiness(sessionId: string): ReleaseReadiness {
     const recipient = this.options.recipient(sessionId)
     if (recipient) {
-      if (!recipient.idle) return { ready: false, reason: 'it is busy' }
+      // A pending card holds the turn open, so it is named first: it is the actionable blocker.
       if (recipient.pendingRequest) return { ready: false, reason: 'it is awaiting an approval or answer' }
+      if (!recipient.idle) return { ready: false, reason: 'it is busy' }
     }
     if (this.options.hasLiveWorkers(sessionId)) return { ready: false, reason: 'a background worker it started is still running' }
     if (this.options.hasRunningBackgroundTasks(sessionId)) return { ready: false, reason: 'it has a running background task' }
@@ -335,15 +336,32 @@ export class MemberRelease {
     if (!team || team.teamId !== callerTeam.teamId) throw new Error(`${sessionId} is not a member of your team.`)
     const readiness = this.readiness(sessionId)
     if (!readiness.ready) throw new Error(`${record.name} (${sessionId}) is not ready for release: ${readiness.reason}.`)
-    const archived = this.options.archive(sessionId)
+    const archived = this.releaseNow(sessionId, ` at the request of ${caller.name} (${callerSessionId}): ${reason?.trim() || 'no reason given'}`)
     if (!archived.ok) throw new Error(`${record.name} (${sessionId}) could not be archived: ${archived.error}`)
-    if (record.taskId) {
-      this.journalRelease(record.taskId,
-        `Released ${record.name} (${sessionId}) at the request of ${caller.name} (${callerSessionId}): ${reason?.trim() || 'no reason given'}.`)
-    }
+    return { sessionId, taskId: record.taskId ?? null }
+  }
+
+  /** Live spawned members of a task (the D1 query), for paths that compose a release (task-results-handoffs D7). */
+  membersOf(taskId: string): ChatSessionRecord[] {
+    return [...this.options.records()].filter(record =>
+      record.taskId === taskId && record.spawned === true && record.archivedAt == null)
+  }
+
+  /**
+   * Release one member now (D2's mechanism, D4's entry): archive through the
+   * same path as a human archive — never kill — then journal the system
+   * entry "Released <name> (<id>)<detail>." on its task. Callers check
+   * readiness first; a refused archive journals nothing.
+   */
+  releaseNow(sessionId: string, detail: string): ArchiveResult {
+    const record = this.options.getRecord(sessionId)
+    if (!record || record.archivedAt != null) return { ok: false, error: `No live session ${sessionId}` }
+    const archived = this.options.archive(sessionId)
+    if (!archived.ok) return archived
+    if (record.taskId) this.journalRelease(record.taskId, `Released ${record.name} (${sessionId})${detail}.`)
     this.cancel(sessionId)
     this.options.notify()
-    return { sessionId, taskId: record.taskId ?? null }
+    return { ok: true }
   }
 
   /** The system journal entry naming the session and why it was released (D4). */
@@ -353,7 +371,6 @@ export class MemberRelease {
 
   /** Live spawned sessions of a task: `associateTask` never rewrites a spawned member's task. */
   private spawnedMembersOf(task: TeamTask): ChatSessionRecord[] {
-    return [...this.options.records()].filter(record =>
-      record.taskId === task.id && record.spawned === true && record.archivedAt == null)
+    return this.membersOf(task.id)
   }
 }

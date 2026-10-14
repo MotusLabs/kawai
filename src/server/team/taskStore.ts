@@ -15,6 +15,7 @@ import type {
   TaskStatus,
   HumanTaskDetail,
   TeamTask,
+  TeamTaskAssignment,
   TeamTaskDetail,
   TeamTaskSummary,
 } from '../../shared/teamTasks'
@@ -25,6 +26,7 @@ import { migrateRevisionSchema } from './taskRevisionSchema'
 import { TaskDraftStore } from './taskDrafts'
 import { TaskAcknowledgements } from './taskAcknowledgements'
 import { TaskNotices } from './taskNotices'
+import { TaskResultStore } from './taskResultStore'
 
 const CREATE_TABLES_SQL = `
 CREATE TABLE IF NOT EXISTS team_tasks (
@@ -127,6 +129,8 @@ export class TaskStore {
   readonly acknowledgements: TaskAcknowledgements
   /** Revision notices and derived recipients (D3–D5); null without mail and assignments. */
   readonly notices: TaskNotices | null
+  /** Submitted results and their findings (task-results-handoffs D1). */
+  readonly results: TaskResultStore
 
   constructor(private readonly db: Database, private readonly mail?: MailboxStore, private readonly assignments?: AssignmentStore) {
     db.exec(CREATE_TABLES_SQL)
@@ -135,6 +139,7 @@ export class TaskStore {
     this.drafts = new TaskDraftStore(db)
     this.acknowledgements = new TaskAcknowledgements(db)
     this.notices = mail && assignments ? new TaskNotices(db, mail, assignments, this.acknowledgements) : null
+    this.results = new TaskResultStore(db)
   }
 
   /** Every committed change, with the task as it is now. */
@@ -205,7 +210,18 @@ export class TaskStore {
       messages: this.messages(id),
       publications: this.notices?.publications(task, revisions) ?? [],
       acknowledgements: this.acknowledgements.list(id),
+      results: this.results.listByTask(id),
     }
+  }
+
+  /** Every assignment of a task, oldest first; empty without an assignment store. */
+  assignmentsOf(id: string): TeamTaskAssignment[] {
+    return this.assignments?.listByTask(id) ?? []
+  }
+
+  /** The task's outstanding assignment (task-assignment D1); null without one or without an assignment store. */
+  outstandingAssignment(id: string): TeamTaskAssignment | null {
+    return this.assignments ? outstandingOf(this.assignments.listByTask(id)) : null
   }
 
   /** The human's view (D1): the detail plus the task's draft. Never for agent paths. */
@@ -304,6 +320,11 @@ export class TaskStore {
     return { replay: true, task: this.get(id)!, revision }
   }
 
+  /** Run writes as one transaction (nested store transactions become savepoints). */
+  atomically<T>(write: () => T): T {
+    return this.db.transaction(write)()
+  }
+
   appendJournal(id: string, author: JournalAuthor, entry: string, now = nowIso()): TaskJournalEntry | null {
     if (!this.get(id)) return null
     const journalId = `note-${crypto.randomUUID()}`
@@ -358,7 +379,11 @@ export class TaskStore {
       UNION SELECT author_session FROM team_task_journal WHERE task_id = $id AND author_session IS NOT NULL`)
       .all({ $id: task.id }) as Array<{ id: string }>
     for (const row of rows) ids.add(row.id)
-    return { ...task, participants: [...ids], assignment: this.assignments ? outstandingOf(this.assignments.listByTask(task.id)) : null }
+    const result = this.results.outstanding(task.id)
+    return {
+      ...task, participants: [...ids], assignment: this.assignments ? outstandingOf(this.assignments.listByTask(task.id)) : null,
+      outstandingResult: result ? { id: result.id, needsReevaluation: result.needsReevaluation, accepted: result.acceptedAt !== null } : null,
+    }
   }
 }
 

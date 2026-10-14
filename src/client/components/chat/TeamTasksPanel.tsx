@@ -201,6 +201,10 @@ export default function TeamTasksPanel({ teamPath, projectPath, view, sendMessag
             Participants: {task.participants.length > 0 ? task.participants.map(id => sessionLabel(id, sessions)).join(', ') : 'none yet'}
           </p>
           <p className="text-chat-meta text-secondary" data-testid="task-assignment">{assignmentLabel(task.assignment, sessions)}</p>
+          {task.outstandingResult && <p className="text-chat-meta" data-testid="task-result-badge"
+            data-state={task.outstandingResult.accepted ? 'accepted' : task.outstandingResult.needsReevaluation ? 'flagged' : 'submitted'}>
+            {task.outstandingResult.accepted ? 'Result accepted' : task.outstandingResult.needsReevaluation ? 'Result needs re-evaluation' : 'Result submitted'}
+          </p>}
         </article>)}
       </>}
     </div>
