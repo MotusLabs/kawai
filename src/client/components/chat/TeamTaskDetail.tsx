@@ -1,8 +1,9 @@
 // One task in full (team-tasks 7.2, task-assignment 5.4): current direction
 // and acceptance with the revision history behind it, the append-only
 // journal, subtasks, and the task's messages, plus the human's controls —
-// amend (a new revision), add a note, and set any status including
-// reopening. The human may do all of this whoever created the task, even a
+// a direction draft published as a new revision (TaskDirectionEditor), the
+// publication detail per revision (TaskPublications), add a note, and set
+// any status including reopening. The human may do all of this whoever created the task, even a
 // killed agent. Controls disable while disconnected.
 // Assignment (task-assignment): the outstanding assignment with its target,
 // role, state, and claimed agent, the assignment history, and **Assign /
@@ -12,7 +13,7 @@
 // Messages view draws — named participants, killed ones marked `(gone)` —
 // with a link into that message's thread. Task *participants* below keep the
 // older label, per the design's directory scope note.
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import type { Session, SendClientMessage } from '@shared/types'
 import { TASK_STATUSES, type TaskStatus } from '@shared/teamTasks'
 import { useTeamTaskStore, type TaskAction, type TaskView } from '../../stores/teamTaskStore'
@@ -21,6 +22,8 @@ import { TaskPreviewView, TaskTargetSelect, type AssignTargetKind } from './task
 import { useTeamGroups } from './useTeamGroups'
 import { assignmentLabel } from './TeamTasksPanel'
 import { actorLabel, journalAuthorLabel, sessionLabel } from './teamTaskLabels'
+import TaskDirectionEditor, { type TaskActFn } from './TaskDirectionEditor'
+import TaskPublications from './TaskPublications'
 
 interface DetailAssignForm {
   kind: AssignTargetKind
@@ -35,40 +38,37 @@ interface DetailAssignForm {
 
 const emptyAssignForm = (): DetailAssignForm => ({ kind: '', id: '', instruction: '', requestKey: null, preview: false })
 
-export default function TeamTaskDetail({ teamPath, projectPath, view, sendMessage, connected, sessions, onOpenThread, onOpenSession }: {
+export default function TeamTaskDetail({ teamPath, projectPath, view, sendMessage, connected, sessions, onOpenThread, onOpenSession, onOpenMailbox }: {
   teamPath: string; projectPath: string; view: TaskView; sendMessage: SendClientMessage; connected: boolean; sessions: Session[]
   /** Open this message's thread in the Messages view; omitted = no link. */
   onOpenThread?: (threadId: string) => void
   /** Open a message participant's chat; omitted = names only. */
   onOpenSession?: (sessionId: string) => void
+  /** Open the team mailbox (an uncertain revision notice is resolved there). */
+  onOpenMailbox?: () => void
 }) {
   const detail = view.detail
   const task = detail?.task
   const { groups } = useTeamGroups(connected, projectPath)
-  const [direction, setDirection] = useState('')
-  const [acceptance, setAcceptance] = useState('')
   const [note, setNote] = useState('')
   const [form, setForm] = useState<DetailAssignForm>(emptyAssignForm)
   const [choice, setChoice] = useState<'notify' | 'stop'>('notify')
   const [choosing, setChoosing] = useState(false)
-  // A new revision (ours or anyone's) resets the amend form to it.
-  useEffect(() => {
-    setDirection(task?.direction ?? '')
-    setAcceptance(task?.acceptance ?? '')
-  }, [task?.id, task?.revision, task?.direction, task?.acceptance])
   const back = () => useTeamTaskStore.getState().select(teamPath, null)
   if (!detail || !task) {
     return <div><button className="btn mb-3" onClick={back}>All tasks</button><p role="status">Loading task…</p></div>
   }
   const disabled = !connected || Object.keys(view.pending).length > 0
-  const act = (action: TaskAction, message: Record<string, unknown>) => {
+  const act: TaskActFn = (action: TaskAction, message, command) => {
     const requestId = crypto.randomUUID()
-    useTeamTaskStore.getState().begin(teamPath, requestId, action)
-    sendMessage({ teamPath, requestId, taskId: task.id, ...message } as Parameters<SendClientMessage>[0])
+    const store = useTeamTaskStore.getState()
+    // Publish and notify carry the armed command key (task-revision-publication D2/D4).
+    const requestKey = command ? store.command(teamPath, command.slot, command.payload, requestId) : undefined
+    store.begin(teamPath, requestId, action)
+    sendMessage({ teamPath, requestId, taskId: task.id, ...message, ...(requestKey ? { requestKey } : {}) } as Parameters<SendClientMessage>[0])
   }
   const closed = task.status === 'done' || task.status === 'cancelled'
   const statusLabel = (status: TaskStatus) => (status === 'open' && closed ? 'Reopen' : `Mark ${status}`)
-  const amended = direction.trim() !== task.direction || acceptance.trim() !== (task.acceptance ?? '')
   const outstanding = task.assignment
   const outstandingLabel = (row: NonNullable<typeof outstanding>) =>
     `${row.targetKind === 'group' ? `group ${row.targetId}` : sessionLabel(row.targetId, sessions)} · ${row.state}` +
@@ -164,19 +164,16 @@ export default function TeamTaskDetail({ teamPath, projectPath, view, sendMessag
       <details className="mt-2 text-chat-meta" data-testid="task-revisions"><summary>Revision history ({detail.revisions.length})</summary>
         {detail.revisions.map(revision => <div key={revision.revision} data-revision={revision.revision} className="mt-2 border-l-2 border-border pl-2">
           <p className="text-secondary">Revision {revision.revision} · {actorLabel(revision.author, sessions)} · {new Date(revision.createdAt).toLocaleString()}</p>
+          {revision.rationale && <p className="italic" data-testid="revision-rationale">Rationale: {revision.rationale}</p>}
           <p className="whitespace-pre-wrap">{revision.direction}</p>
           {revision.acceptance && <p className="whitespace-pre-wrap text-secondary">Acceptance: {revision.acceptance}</p>}
         </div>)}
       </details>
-      <form className="mt-2 flex flex-col gap-2" data-testid="task-amend" onSubmit={event => {
-        event.preventDefault()
-        act('amend', { type: 'team-task-amend', direction: direction.trim(), acceptance: acceptance.trim() })
-      }}>
-        <textarea className="input min-h-16 text-chat-body" aria-label="Amend direction" value={direction} disabled={!connected} onChange={event => setDirection(event.target.value)} />
-        <textarea className="input min-h-12 text-chat-body" aria-label="Amend acceptance criteria" value={acceptance} disabled={!connected} onChange={event => setAcceptance(event.target.value)} />
-        <button className="btn self-start" disabled={disabled || !amended || !direction.trim()}>Save as revision {task.revision + 1}</button>
-      </form>
+      <TaskDirectionEditor task={task} draft={detail.draft} connected={connected} disabled={disabled} act={act} />
     </section>
+
+    <TaskPublications task={task} publications={detail.publications ?? []} acknowledgements={detail.acknowledgements ?? []}
+      sessions={sessions} disabled={disabled} act={act} onOpenMailbox={onOpenMailbox} />
 
     <section aria-label="Status" className="mt-3 flex flex-wrap gap-2">
       {TASK_STATUSES.filter(status => status !== task.status).map(status =>
