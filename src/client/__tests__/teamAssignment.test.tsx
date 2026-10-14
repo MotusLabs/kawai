@@ -58,7 +58,7 @@ const openView = (patch: Partial<TaskView> = {}): TaskView => {
 const mountPanel = (patch: Partial<TaskView> = {}) => {
   const sent: ClientMessage[] = []
   let renderer!: TestRenderer.ReactTestRenderer
-  const element = (connected = true) => <TeamTasksPanel sessionId="dev" projectPath="/repo"
+  const element = (connected = true) => <TeamTasksPanel teamPath="dev" projectPath="/repo"
     view={{ ...useTeamTaskStore.getState().views.dev!, loading: false, ...patch }}
     sendMessage={message => sent.push(message)} connected={connected} onClose={() => {}} />
   act(() => { renderer = TestRenderer.create(element(true)) })
@@ -74,12 +74,12 @@ test('store: create-and-assign commits the task, then the dispatch leg under the
   store.armFlow('dev', 'create-and-assign')
   const key = useTeamTaskStore.getState().views.dev!.flow!.requestKey
   store.begin('dev', 'c1', 'create-assign')
-  store.applyResult({ type: 'team-task-result', sessionId: 'dev', requestId: 'c1', task: summary('t1') })
+  store.applyResult({ type: 'team-task-result', teamPath: 'dev', requestId: 'c1', task: summary('t1') })
   expect(useTeamTaskStore.getState().views.dev!.flow).toMatchObject({ requestKey: key, taskId: 't1' })
   // The draft is retained until the assign leg lands.
   expect(useTeamTaskStore.getState().views.dev!.draft).toEqual(emptyDraft())
   store.begin('dev', 'a1', 'assign')
-  store.applyResult({ type: 'team-task-result', sessionId: 'dev', requestId: 'a1', assignment: assignment('as1'), task: summary('t1') })
+  store.applyResult({ type: 'team-task-result', teamPath: 'dev', requestId: 'a1', assignment: assignment('as1'), task: summary('t1') })
   expect(useTeamTaskStore.getState().views.dev!.flow).toBeNull()
   expect(useTeamTaskStore.getState().views.dev!.selectedTaskId).toBe('t1')
   void view
@@ -93,14 +93,14 @@ test('store: a refused assign keeps the draft and the flow; retry reuses the key
   store.setDraft('dev', { title: 'Export', direction: 'CSV', targetKind: 'group', targetId: 'devs', instruction: 'Go' })
   store.flowSendAssign('dev', { targetKind: 'group', targetId: 'devs', instruction: 'Go' })
   store.begin('dev', 'a1', 'assign')
-  store.applyResult({ type: 'team-task-result', sessionId: 'dev', requestId: 'a1', error: 'Unknown group: ghosts' })
+  store.applyResult({ type: 'team-task-result', teamPath: 'dev', requestId: 'a1', error: 'Unknown group: ghosts' })
   expect(useTeamTaskStore.getState().views.dev!.flow).toMatchObject({ requestKey: flow.requestKey, assignFailed: true })
   expect(useTeamTaskStore.getState().views.dev!.draft.instruction).toBe('Go')
   // An unchanged retry reuses the key; an edited instruction re-keys.
   store.retryAssign('dev')
   expect(useTeamTaskStore.getState().views.dev!.flow).toMatchObject({ requestKey: flow.requestKey, assignFailed: false })
   store.begin('dev', 'a2', 'assign')
-  store.applyResult({ type: 'team-task-result', sessionId: 'dev', requestId: 'a2', error: 'nope' })
+  store.applyResult({ type: 'team-task-result', teamPath: 'dev', requestId: 'a2', error: 'nope' })
   store.setDraft('dev', { instruction: 'Different wording' })
   store.retryAssign('dev')
   expect(useTeamTaskStore.getState().views.dev!.flow!.requestKey).not.toBe(flow.requestKey)
@@ -124,7 +124,7 @@ test('panel: create and assign sends create then assign under one key; a double 
   act(() => button('task-create-assign-button').props.onClick())
   expect(sentOf('team-task-create')).toHaveLength(1)
   // The create commits; the dispatch leg goes out under the same key.
-  act(() => useTeamTaskStore.getState().applyResult({ type: 'team-task-result', sessionId: 'dev', requestId: create.requestId, task: summary('t1') }))
+  act(() => useTeamTaskStore.getState().applyResult({ type: 'team-task-result', teamPath: 'dev', requestId: create.requestId, task: summary('t1') }))
   rerender()
   expect(live().flow).toMatchObject({ taskId: 't1' })
   const assigns = sentOf('team-task-assign') as Array<Extract<ClientMessage, { type: 'team-task-assign' }>>
@@ -145,7 +145,7 @@ test('panel: empty instruction keeps Create and assign disabled; the preview ren
   const preview = sentOf('team-task-preview')[0] as Extract<ClientMessage, { type: 'team-task-preview' }>
   expect(preview.target).toEqual({ kind: 'group', id: 'devs' })
   act(() => useTeamTaskStore.getState().applyPreviewResult({
-    type: 'team-task-preview-result', sessionId: 'dev', requestId: preview.requestId,
+    type: 'team-task-preview-result', teamPath: 'dev', requestId: preview.requestId,
     preview: {
       worktree: null, target: { kind: 'group', id: 'devs' }, role: 'Developers', profile: 'default', approval: 'manual',
       sessionWorktree: null, idleMembers: ['dev'], spawn: { allowed: false, profile: null, blockedBy: 'group devs is at its max' }, warning: null,
@@ -167,12 +167,12 @@ test('panel: a refused dispatch keeps every field and offers Retry assignment on
   const { renderer, sentOf, store: live, rerender } = mountPanel()
   act(() => renderer.root.findByProps({ 'data-testid': 'task-create-assign-button' }).props.onClick())
   const create = sentOf('team-task-create')[0] as Extract<ClientMessage, { type: 'team-task-create' }>
-  act(() => useTeamTaskStore.getState().applyResult({ type: 'team-task-result', sessionId: 'dev', requestId: create.requestId, task: summary('t1') }))
+  act(() => useTeamTaskStore.getState().applyResult({ type: 'team-task-result', teamPath: 'dev', requestId: create.requestId, task: summary('t1') }))
   rerender()
   // The assign leg is refused (E02): the error shows inline, the task stays,
   // and every field remains as entered.
   const assigns = () => sentOf('team-task-assign') as Array<Extract<ClientMessage, { type: 'team-task-assign' }>>
-  act(() => useTeamTaskStore.getState().applyResult({ type: 'team-task-result', sessionId: 'dev', requestId: assigns()[0]!.requestId, error: 'Unknown group: devs' }))
+  act(() => useTeamTaskStore.getState().applyResult({ type: 'team-task-result', teamPath: 'dev', requestId: assigns()[0]!.requestId, error: 'Unknown group: devs' }))
   rerender()
   expect(live().flow).toMatchObject({ taskId: 't1', assignFailed: true })
   expect(live().draft).toMatchObject({ title: 'Export', direction: 'CSV', acceptance: 'Ships', instruction: 'Please build' })
@@ -210,7 +210,7 @@ test('a lost result plus reconnect clears the waiters and the dispatch leg re-se
   expect(creates[1]!.requestKey).toBe(create.requestKey)
   // The create commits; its assign leg is sent, its result is lost too, and
   // the reconnect re-arms the dispatch effect to re-send under the same key.
-  act(() => useTeamTaskStore.getState().applyResult({ type: 'team-task-result', sessionId: 'dev', requestId: creates[1]!.requestId, task: summary('t1') }))
+  act(() => useTeamTaskStore.getState().applyResult({ type: 'team-task-result', teamPath: 'dev', requestId: creates[1]!.requestId, task: summary('t1') }))
   rerender()
   const firstAssign = (sentOf('team-task-assign') as Array<Extract<ClientMessage, { type: 'team-task-assign' }>>)[0]!
   rerender(false)
@@ -230,7 +230,7 @@ test('detail: Assign / send task dispatches; an outstanding assignment forces th
   const sent: ClientMessage[] = []
   let renderer!: TestRenderer.ReactTestRenderer
   act(() => {
-    renderer = TestRenderer.create(<TeamTasksPanel sessionId="dev" projectPath="/repo"
+    renderer = TestRenderer.create(<TeamTasksPanel teamPath="dev" projectPath="/repo"
       view={{ ...useTeamTaskStore.getState().views.dev!, loading: false }}
       sendMessage={message => sent.push(message)} connected onClose={() => {}} />)
   })
@@ -265,7 +265,7 @@ test('detail: an unassigned task sends directly; a failed assignment shows its r
   openView({ tasks: [tasked], selectedTaskId: 't1', detail: detail(tasked, { assignments: [failed, superseded, standing] }) })
   const sent: ClientMessage[] = []
   let renderer!: TestRenderer.ReactTestRenderer
-  const element = (connected: boolean) => <TeamTasksPanel sessionId="dev" projectPath="/repo"
+  const element = (connected: boolean) => <TeamTasksPanel teamPath="dev" projectPath="/repo"
     view={{ ...useTeamTaskStore.getState().views.dev!, loading: false }}
     sendMessage={message => sent.push(message)} connected={connected} onClose={() => {}} />
   act(() => { renderer = TestRenderer.create(element(true)) })
@@ -278,9 +278,9 @@ test('detail: an unassigned task sends directly; a failed assignment shows its r
   // An unassigned task sends directly (no dialog): use the second task in the list.
   act(() => useTeamTaskStore.getState().select('dev', null))
   const plain = summary('t2')
-  act(() => useTeamTaskStore.getState().applySnapshot({ type: 'team-tasks-snapshot', sessionId: 'dev', teamId: 'team', tasks: [tasked, plain] }))
+  act(() => useTeamTaskStore.getState().applySnapshot({ type: 'team-tasks-snapshot', teamPath: 'dev', teamId: 'team', tasks: [tasked, plain] }))
   act(() => useTeamTaskStore.getState().select('dev', 't2'))
-  act(() => useTeamTaskStore.getState().applyDetail({ type: 'team-task-detail', sessionId: 'dev', teamId: 'team', detail: detail(plain), directory: [] }))
+  act(() => useTeamTaskStore.getState().applyDetail({ type: 'team-task-detail', teamPath: 'dev', teamId: 'team', detail: detail(plain), directory: [] }))
   act(() => renderer.update(element(true)))
   const form = renderer.root.findByProps({ 'data-testid': 'task-assign-form' })
   act(() => form.findByProps({ 'aria-label': 'Assignment target kind' }).props.onChange({ target: { value: 'group' } }))
@@ -345,7 +345,7 @@ test('flowSendAssign records the payload once; later sends do not overwrite it',
   // retryAssign re-keys and re-records on a changed intent, as designed.
   store.setDraft('dev', { targetKind: 'group', targetId: 'devs', instruction: 'Second' })
   store.begin('dev', 'a1', 'assign')
-  store.applyResult({ type: 'team-task-result', sessionId: 'dev', requestId: 'a1', error: 'nope' })
+  store.applyResult({ type: 'team-task-result', teamPath: 'dev', requestId: 'a1', error: 'nope' })
   store.retryAssign('dev')
   store.flowSendAssign('dev', { targetKind: 'group', targetId: 'devs', instruction: 'Second' })
   expect(useTeamTaskStore.getState().views.dev!.flow!.sentPayload).toMatchObject({ instruction: 'Second' })

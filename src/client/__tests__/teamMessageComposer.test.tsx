@@ -26,7 +26,7 @@ function Host({ sent, mode, connected = true }: {
   sent: ClientMessage[]; mode: ComposerMode; connected?: boolean
 }) {
   const view = useTeamMessageStore(state => state.views.dev) ?? closedMessageView()
-  return <TeamMessageComposer sessionId="dev" mode={mode} groups={groups} sessions={sessions} tasks={tasks}
+  return <TeamMessageComposer teamPath="dev" mode={mode} groups={groups} sessions={sessions} tasks={tasks}
     view={view} sendMessage={message => sent.push(message)} connected={connected} />
 }
 
@@ -60,7 +60,7 @@ test('a new message addresses a group or session with a task and an optional urg
   act(() => renderer.root.findByType('form').props.onSubmit({ preventDefault: () => {} }))
   const request = sent[0] as Extract<ClientMessage, { type: 'team-message-send' }>
   expect(request.type).toBe('team-message-send')
-  expect(request.sessionId).toBe('dev')
+  expect(request.teamPath).toBe('dev')
   expect(typeof request.requestId).toBe('string')
   expect(request.body).toBe('Build it')
   expect(request.to).toEqual({ kind: 'group', id: 'devs' })
@@ -69,7 +69,7 @@ test('a new message addresses a group or session with a task and an optional urg
   // Pending until the result lands, then the form is free again.
   expect(textOf(button(renderer, 'Sending…'))).toBe('Sending…')
   act(() => useTeamMessageStore.getState().applyResult({
-    type: 'team-message-send-result', sessionId: 'dev', requestId: request.requestId, message: undefined,
+    type: 'team-message-send-result', teamPath: 'dev', requestId: request.requestId, message: undefined,
   }))
   expect(textOf(button(renderer, 'Send message'))).toBe('Send message')
   expect(field(renderer, 'Urgent').props.checked).toBe(false)
@@ -106,7 +106,7 @@ test('a refusal renders inline and clears the pending state', () => {
   act(() => renderer.root.findByType('form').props.onSubmit({ preventDefault: () => {} }))
   const requestId = (sent[0] as Extract<ClientMessage, { type: 'team-message-send' }>).requestId
   act(() => useTeamMessageStore.getState().applyResult({
-    type: 'team-message-send-result', sessionId: 'dev', requestId,
+    type: 'team-message-send-result', teamPath: 'dev', requestId,
     error: 'Unknown group: nope',
   }))
   expect(renderer.root.findByProps({ 'data-testid': 'composer-error' }).children.join('')).toBe('Unknown group: nope')
@@ -135,7 +135,7 @@ test('the view composes a new message from the list and replies to a thread row'
   let renderer!: TestRenderer.ReactTestRenderer
   const ViewHost = () => {
     const view = useTeamMessageStore(state => state.views.dev) ?? closedMessageView()
-    return <TeamMessagesView sessionId="dev" view={view} sendMessage={message => sent.push(message)} connected
+    return <TeamMessagesView teamPath="dev" view={view} sendMessage={message => sent.push(message)} connected
       sessions={sessions} groups={groups} onClose={() => {}} />
   }
   act(() => {
@@ -155,8 +155,8 @@ test('the view composes a new message from the list and replies to a thread row'
   }
   act(() => {
     useTeamMessageStore.getState().applySnapshot({
-      type: 'team-messages-snapshot', sessionId: 'dev', teamId: 'team', filters: {},
-      messages: [parent], nextCursor: null, directory: [], tasks,
+      type: 'team-messages-snapshot', teamPath: 'dev', teamId: 'team', filters: {},
+      messages: [parent], nextCursor: null, directory: [], tasks, threadSizes: {},
     })
   })
   act(() => renderer.root.findByProps({ 'data-testid': 'message-open-thread' }).props.onClick())
@@ -164,7 +164,7 @@ test('the view composes a new message from the list and replies to a thread row'
   expect(renderer.root.findAllByProps({ 'data-testid': 'message-composer' })).toHaveLength(0)
   act(() => {
     useTeamMessageStore.getState().applyThread({
-      type: 'team-thread', sessionId: 'dev', teamId: 'team', threadId: 'th',
+      type: 'team-thread', teamPath: 'dev', teamId: 'team', threadId: 'th',
       entries: [{ message: parent, events: [{ messageId: 'q1', teamId: 'team', seq: 1, createdAt: '2026-10-13T10:00:00.000Z', kind: 'sent', actor: 'system', prevState: null, prevClaimedBy: null, prevRecipient: null, prevReason: null, reason: null }] }],
       directory: [],
     })

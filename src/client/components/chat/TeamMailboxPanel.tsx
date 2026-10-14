@@ -92,8 +92,8 @@ function WaitingReasonLines({ reason, sessions, onOpen }: {
   </div>
 }
 
-export default function TeamMailboxPanel({ sessionId, view, sendMessage, connected, onClose, groups = [], sessions = [], onOpenSession }: {
-  sessionId: string; view: MailboxView; sendMessage: SendClientMessage; connected: boolean; onClose: () => void
+export default function TeamMailboxPanel({ teamPath, view, sendMessage, connected, onClose, groups = [], sessions = [], onOpenSession }: {
+  teamPath: string; view: MailboxView; sendMessage: SendClientMessage; connected: boolean; onClose: () => void
   /** The team's group ids, suggested as hand-off targets. */
   groups?: string[]
   /** Live team sessions, for naming and linking occupants (waiting reasons). */
@@ -118,7 +118,7 @@ export default function TeamMailboxPanel({ sessionId, view, sendMessage, connect
     {!connected && <p role="status" className="p-3 text-secondary">Disconnected — reconnect to update mail.</p>}
     {view.loading && <p role="status" className="p-3">Loading mailbox…</p>}
     <div className="min-h-0 flex-1 overflow-y-auto p-3">
-      <TeamRoutingSection sessionId={sessionId} view={view} sendMessage={sendMessage} connected={connected} />
+      <TeamRoutingSection teamPath={teamPath} view={view} sendMessage={sendMessage} connected={connected} />
       {categories.map(([label, matches]) => <section key={label} aria-label={label} className="mb-4">
         <h4 className="mb-2 font-medium">{label}</h4>
         {view.messages.filter(matches).length === 0 && <p className="text-chat-meta text-secondary">No messages</p>}
@@ -145,14 +145,14 @@ export default function TeamMailboxPanel({ sessionId, view, sendMessage, connect
           {row.handoff && <p className="text-chat-meta text-secondary">
             Handed off from {row.handoff.fromSession} ({row.handoff.fromProfile}) after {row.handoff.progress.toolCalls} tool calls
           </p>}
-          {row.state === 'parked' && <ParkedHandOff sessionId={sessionId} messageId={row.id} groups={groups} sendMessage={sendMessage}
+          {row.state === 'parked' && <ParkedHandOff teamPath={teamPath} messageId={row.id} groups={groups} sendMessage={sendMessage}
             disabled={!connected || view.loading} {...(view.handOffResult ? { result: view.handOffResult } : {})} />}
           <div className="mt-2 flex gap-2">
             {(row.state === 'queued' || row.state === 'awaiting-request') && <button className="btn" disabled={!connected || view.loading}
-              onClick={() => sendMessage({ type: 'team-mailbox-cancel', sessionId, messageId: row.id })}>Cancel</button>}
+              onClick={() => sendMessage({ type: 'team-mailbox-cancel', teamPath, messageId: row.id })}>Cancel</button>}
             {(row.state === 'dead' || row.state === 'uncertain') && <>
-              <button className="btn" disabled={!connected || view.loading} onClick={() => sendMessage({ type: 'team-mailbox-retry', sessionId, messageId: row.id })}>Retry</button>
-              <button className="btn" disabled={!connected || view.loading} onClick={() => sendMessage({ type: 'team-mailbox-discard', sessionId, messageId: row.id })}>Discard</button>
+              <button className="btn" disabled={!connected || view.loading} onClick={() => sendMessage({ type: 'team-mailbox-retry', teamPath, messageId: row.id })}>Retry</button>
+              <button className="btn" disabled={!connected || view.loading} onClick={() => sendMessage({ type: 'team-mailbox-discard', teamPath, messageId: row.id })}>Discard</button>
             </>}
           </div>
         </article>)}

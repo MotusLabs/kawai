@@ -8,6 +8,7 @@ import { Database } from 'bun:sqlite'
 import { MailboxStore, type TeamMessage } from '../team/mailboxStore'
 import { MessageQuery, type MessageCursor, type MessageQueryFilters } from '../team/messageQuery'
 import { TaskStore } from '../team/taskStore'
+import { SessionDirectory } from '../team/sessionDirectory'
 
 const TEAM = '/repo/.git'
 const OTHER = '/other/.git'
@@ -176,8 +177,8 @@ describe('list', () => {
 
   test('an empty team is an empty page with no cursor', () => {
     seed()
-    expect(query.list(EMPTY)).toEqual({ messages: [], nextCursor: null })
-    expect(query.list(TEAM, { taskId: 'task-missing' })).toEqual({ messages: [], nextCursor: null })
+    expect(query.list(EMPTY)).toEqual({ messages: [], nextCursor: null, threadSizes: {} })
+    expect(query.list(TEAM, { taskId: 'task-missing' })).toEqual({ messages: [], nextCursor: null, threadSizes: {} })
   })
 })
 
@@ -227,5 +228,83 @@ describe('task revision at push time (D6)', () => {
     const taskless = send({ body: 'Ping' }, T(3))
     store.claim(taskless.id, 'dev', T(4)); store.markPushed(taskless.id, T(5))
     expect(store.get(taskless.id)?.taskRevision).toBeNull()
+  })
+})
+
+describe('text search (team-workspace-pages D7)', () => {
+  const bodies = (filters: MessageQueryFilters, cursor: MessageCursor | null = null, limit?: number) =>
+    query.list(TEAM, filters, cursor, limit).messages.map(message => message.body)
+
+  test('finds a message older than every first page', () => {
+    send({ body: 'The needle is here' }, T(1))
+    for (let n = 2; n < 60; n++) send({ body: `Filler ${n}` }, T(n % 60))
+    expect(query.list(TEAM, {}, null, 50).messages.map(message => message.body)).not.toContain('The needle is here')
+    expect(bodies({ text: 'needle' })).toEqual(['The needle is here'])
+  })
+
+  test('is case-insensitive and treats %, _, and backslash literally', () => {
+    send({ body: 'Coverage at 100% now' }, T(1))
+    send({ body: 'Coverage at 1000 now' }, T(2))
+    send({ body: 'rename snake_case' }, T(3))
+    send({ body: 'rename snakeXcase' }, T(4))
+    send({ body: 'path C:\\temp' }, T(5))
+    expect(bodies({ text: 'COVERAGE AT 100%' })).toEqual(['Coverage at 100% now'])
+    expect(bodies({ text: 'snake_case' })).toEqual(['rename snake_case'])
+    expect(bodies({ text: 'C:\\temp' })).toEqual(['path C:\\temp'])
+  })
+
+  test('blank text keeps everything', () => {
+    send({ body: 'One' }, T(1))
+    send({ body: 'Two' }, T(2))
+    expect(bodies({ text: '   ' })).toEqual(['Two', 'One'])
+  })
+
+  test('combines with the other filters and pages within its results', () => {
+    send({ body: 'review A', priority: 'urgent' }, T(1))
+    send({ body: 'review B' }, T(2))
+    send({ body: 'review C', priority: 'urgent' }, T(3))
+    send({ body: 'other', priority: 'urgent' }, T(4))
+    send({ body: 'review D', priority: 'urgent' }, T(5))
+    expect(bodies({ text: 'review', priority: 'urgent' })).toEqual(['review D', 'review C', 'review A'])
+    const first = query.list(TEAM, { text: 'review', priority: 'urgent' }, null, 2)
+    expect(first.messages.map(message => message.body)).toEqual(['review D', 'review C'])
+    expect(bodies({ text: 'review', priority: 'urgent' }, first.nextCursor, 2)).toEqual(['review A'])
+  })
+
+  test('matches group ids, recorded participant names, and Human', () => {
+    const directory = new SessionDirectory(db)
+    directory.upsert(TEAM, { sessionId: 'dev', name: 'Strategy UI dev', group: 'devs' })
+    directory.upsert(OTHER, { sessionId: 'lead', name: 'Elsewhere lead', group: null })
+    send({ body: 'to the group', toId: 'reviewers' }, T(1))
+    send({ body: 'to a session', toKind: 'session', toId: 'dev' }, T(2))
+    send({ body: 'from the human', fromKind: 'human', fromSession: null, fromGroup: null }, T(3))
+    send({ body: 'plain' }, T(4))
+    expect(bodies({ text: 'reviewers' })).toEqual(['to the group'])
+    expect(bodies({ text: 'strategy ui' })).toEqual(['to a session'])
+    expect(bodies({ text: 'hum' })).toEqual(['from the human'])
+    // Another team's directory never names this team's participants.
+    expect(bodies({ text: 'Elsewhere' })).toEqual([])
+    // A group recipient's id is not a session: a session sharing that id does not name it.
+    directory.upsert(TEAM, { sessionId: 'reviewers', name: 'Odd session', group: null })
+    expect(bodies({ text: 'Odd session' })).toEqual([])
+  })
+
+  test('another team’s matching rows stay out', () => {
+    send({ body: 'shared word' }, T(1))
+    store.enqueue({ teamId: OTHER, toKind: 'group', toId: 'devs', fromSession: 'x', fromGroup: 'devs', originPath: '/other', body: 'shared word' }, T(2))
+    expect(query.list(TEAM, { text: 'shared' }).messages.map(message => message.teamId)).toEqual([TEAM])
+  })
+})
+
+describe('thread sizes (team-workspace-pages D7)', () => {
+  test('count whole threads, regardless of the page’s filters', () => {
+    const root = send({ body: 'root' }, T(1))
+    store.enqueue({ teamId: TEAM, toKind: 'group', toId: 'devs', fromSession: 'dev', fromGroup: 'devs', originPath: '/repo', body: 'reply one', inReplyTo: root }, T(2))
+    store.enqueue({ teamId: TEAM, toKind: 'group', toId: 'devs', fromSession: 'dev', fromGroup: 'devs', originPath: '/repo', body: 'reply two', inReplyTo: root }, T(3))
+    const lone = send({ body: 'lone' }, T(4))
+    const page = query.list(TEAM, { text: 'reply two' })
+    expect(page.messages.map(message => message.body)).toEqual(['reply two'])
+    expect(page.threadSizes).toEqual({ [root.threadId]: 3 })
+    expect(query.list(TEAM).threadSizes).toEqual({ [root.threadId]: 3, [lone.threadId]: 1 })
   })
 })
