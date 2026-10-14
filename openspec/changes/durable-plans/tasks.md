@@ -17,6 +17,7 @@ Implement after Wave B2 (`task-revision-publication`, `task-results-handoffs`) h
 - [ ] 1.3 Implement `planProgress` per D10. Verify with tests covering:
   - not started, in progress, done (one done plus one cancelled), and cancelled;
   - `waitsOn` clearing when a dependency is done;
+  - a cancelled dependency keeping its dependents waiting;
   - `outsideRevision` for a change dropped by a newer revision;
   - content order preserved.
 
@@ -44,6 +45,7 @@ Implement after Wave B2 (`task-revision-publication`, `task-results-handoffs`) h
   - the pin is the current approved strategy revision, whatever the draft says;
   - no strategy record, and a strategy without an approved revision, both give an empty pin;
   - an unknown reference is refused, as is any reference without a pin;
+  - a decision ref is accepted, and a claim ref is refused;
   - an unchanged resubmission returns the existing number;
   - a cancelled plan refuses submission.
 - [ ] 3.3 Add the strict boolean `canCreatePlans` (default false) to `groupFile.ts` beside `canCreateTasks`. Document it in the AGENTS.md group-settings bullet. Verify with parse tests: true, false, missing, and an invalid value rejecting the file.
@@ -57,13 +59,16 @@ Implement after Wave B2 (`task-revision-publication`, `task-results-handoffs`) h
   - a disposition stub that lets a stale pin pass, proving the extension point.
 - [ ] 4.2 Implement `PlanService.approve` per D7: agent actors refused first, then replay by command id, the preconditions, and the commit (supersede, approve, set current, record the event) in one transaction. Verify with tests:
   - hash mismatch, withdrawn revision, and stale expected revision are each refused;
-  - two approvals interleaved on one database leave exactly one `approved`;
+  - two approvals interleaved on one database leave exactly one `approved`, and the losing one is refused as `approved-revision-unchanged`, including when the partial unique index is what refuses it;
   - the same command id and payload returns the prior result;
   - a changed payload is refused naming the field;
   - row counts of tasks, assignments, messages, and spawns are unchanged by approval.
-- [ ] 4.3 Implement withdraw and discard, then complete, cancel, and reopen per D8, each with command-id replay and its event. Cover the reason rules (cancel always; complete when any change of the approved revision is not done) and the closed-plan refusals of submission and approval. Verify with service tests, including:
+- [ ] 4.3 Implement withdraw and discard, then complete, cancel, and reopen per D8, each with command-id replay over D7's per-command payload and its event. Cover the reason rules (cancel always; complete when any change of the approved revision is not done) and the closed-plan refusals of submission and approval. Verify with service tests, including:
   - approved and superseded revisions cannot be withdrawn;
-  - closing never touches linked tasks.
+  - closing never touches linked tasks;
+  - a same-payload resend replaying for withdraw, close, and reopen;
+  - a close reusing a command id with another outcome refused naming `outcome`;
+  - a close resend whose reason differs only in surrounding whitespace replaying.
 - [ ] 4.4 Add the AGENTS.md bullet for plan approval and lifecycle: human-only approval, preconditions, idempotency, "grants and triggers nothing else", closing, and reopening. Verify by reading it against D7–D8.
 
 ## 5. Plan-change link on tasks

@@ -4,7 +4,12 @@
 
 The approved product strategy (`kawai` revision 2) organizes work in two modes. In planning, the owner and a Lead agent agree an implementation plan for one repository: an ordered set of OpenSpec changes with dependencies, acceptance rules, any checks beyond the mandatory floor, a landing mode, and the roles and provider profiles that execute it. In execution, Kawai delivers that plan. Today none of this has a record. Plans live in chat scrollback and in the Lead's memory. They are lost or re-explained whenever a session is replaced, a provider limit hits, or the server restarts (strategy P9: durable records over chat memory). Nothing ties a task to the part of a plan it serves.
 
-This change is the Wave C foundation (docs/multi-agent-development-ux.md: Durable Plan and execution model, and Delivery phases "P0 Durable Plan core"). It gives plans a durable, human-approved record that the later Wave C changes bind to. The record supports planning mode (strategy UC1) end to end: the Lead drafts, the owner approves, and the Lead executes the approved plan by hand through the existing task tools until `plan-execution` automates it.
+This change is the Wave C foundation (docs/multi-agent-development-ux.md: Durable Plan and execution model, and Delivery phases "P0 Durable Plan core"). It is the record half of P0:
+- attempts, manifests, and the outbox go to `plan-execution`;
+- the constant check floor (design D4) replaces policy snapshots;
+- strategy P4 drops grants.
+
+It gives plans a durable, human-approved record that the later Wave C changes bind to. The record supports planning mode (strategy UC1) end to end: the Lead drafts, the owner approves, and the Lead executes the approved plan by hand through the existing task tools until `plan-execution` automates it.
 
 ## What Changes
 
@@ -13,7 +18,7 @@ This change is the Wave C foundation (docs/multi-agent-development-ux.md: Durabl
   - a stored lifecycle of `open`, `completed`, or `cancelled`;
   - numbered, immutable revisions.
 
-  The human owns every plan; the strategy names the owner as the only human. Archiving or killing the creating session leaves the plan in place.
+  The human is every plan's owner and only approver, whichever session created it; the strategy names the owner as the only human. Archiving or killing the creating session leaves the plan in place.
 - **Plan content.** Each revision carries a structured, canonically hashed template:
   - intent: goal, success criteria, non-goals, and approach;
   - an alignment statement with references into the pinned strategy;
@@ -46,16 +51,20 @@ This change is the Wave C foundation (docs/multi-agent-development-ux.md: Durabl
 
   The view mounts as the Team page's `plans` tab when `team-workspace-pages` has landed, and otherwise as a side-slot panel beside Strategy.
 
-Non-goals belong to the other Wave C changes, which this change only names. Each binds to the contracts its design publishes (D12):
-- `plan-validation`: technical and alignment validation reports, change-existence and artifact pinning, and environment checks for groups and profiles.
-- `plan-execution`: Start, plan and task execution attempts, dependency-ordered dispatch, gating on the floor and extra checks, direct landing, and the three-round stop.
-- `integration-candidates`: integration-branch landing.
+Non-goals belong to the other Wave C changes, which this change only names. Each binds to the contracts its design publishes (D13):
+- `plan-validation`: technical and alignment validation reports. These cover change existence, the artifact revisions a report was computed against, typed relations between changes read from their artifacts, and environment checks for groups and profiles. Artifact pins and relations are report inputs, not plan content.
+- `plan-execution`: Start, plan and task execution attempts, dependency-ordered dispatch, gating on the floor and extra checks, direct landing, and the three-round stop. It owns the landing-fact record and system completion for both landing modes.
+- `integration-candidates`: the integration-branch landing mechanism that `plan-execution` calls when a plan's landing mode is `integration-branch`.
 - `plan-supervision`: Lead decision cards, overrides that become fix tasks, execution progress, and usage per role and profile.
 - `revision-control`: holds, checkpoints, and publishing plan revisions to running work.
 - `execution-safety-recovery`: security rules in every system prompt, the outbound-action audit log, and execution recovery.
 - `strategy-revision-impact`: impact review and dispositions for stale pins.
 
-Also out of scope: a structured plan editor for the human (the owner plans through the Lead in this change); multi-repository plans (strategy boundary); and plan budgets (strategy P8).
+Also out of scope:
+- a structured plan editor for the human (the owner plans through the Lead in this change);
+- multi-repository plans (strategy boundary);
+- plan budgets (strategy P8);
+- the UX doc's risk register, policy reference, topology proposal, and contract revisions (producers, consumers, versions), which strategy revision 2 does not require.
 
 ## Capabilities
 
@@ -106,3 +115,5 @@ Also out of scope: a structured plan editor for the human (the owner plans throu
   - Implement after Wave B2 (`task-revision-publication`, `task-results-handoffs`).
   - `strategy-revision-impact` and `plan-validation` build on this change and may proceed in parallel after it.
   - `plan-execution` follows `plan-validation`.
+  - `integration-candidates` follows `plan-execution`, which calls it.
+  - `plan-supervision`, `revision-control`, and `execution-safety-recovery` build on `plan-execution`.

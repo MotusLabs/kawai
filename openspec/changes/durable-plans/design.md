@@ -30,11 +30,12 @@ The motivation is in proposal.md (Why). The requirements are in `specs/plans`, `
 - A plan record that mirrors the proven strategy module, so implementers copy known patterns.
 - A content template the later Wave C changes consume unchanged.
 - One approval path, with its preconditions as an explicit extension point.
-- Named contracts (D12) that the later changes bind to without reopening this design.
+- Named contracts (D13) that the later changes bind to without reopening this design.
 
 **Non-Goals** (beyond the proposal's):
 - plan or task execution attempt records (`plan-execution`);
-- validation reports (`plan-validation`);
+- validation reports, artifact pins, and typed relations between changes (`plan-validation`, D3);
+- the UX doc's risk register, policy reference, topology proposal, and contract revisions. Strategy revision 2 does not require them, so the Validate Plan table's Contracts and Scope-and-relations rows have no plan content to read until a later strategy revision asks for it;
 - exporting plans to repository files (the UX doc's open "Plan storage/export" decision; SQLite stays the authority);
 - revisable plan titles;
 - a generic reviewed-document store shared with strategy (a later refactor, if ever).
@@ -156,6 +157,12 @@ The draft hash is `sha256(canonicalJson(content))`. The revision hash is `sha256
 
 Checks against the environment run only at validation (`plan-validation`): whether the named OpenSpec changes exist, whether the groups and profiles are known, and whether the branch is free. A plan legitimately names changes still being proposed, and the environment changes between save and execution.
 
+Artifact pins and typed relations are validation inputs, not plan content:
+- An artifact pin is the revision or hash of each change's proposal, design, and tasks.
+- A typed relation is, for example, a UI change consuming an API change's contract.
+
+`plan-validation` reads both from the OpenSpec artifacts and records them in its report. `dependsOn` stays an untyped ordering edge, and C1 needs no field for either.
+
 ### D4. The check floor is a constant, never content
 
 ```ts
@@ -180,7 +187,7 @@ Any team agent may save to any draft id of its team's plans, so a replacement le
 1. Refuse if the plan is not `open`.
 2. Normalize the draft and run D3's checks.
 3. Resolve the team's strategy through `strategy_repo_bindings` and read its current approved revision and hash. With no strategy record, or no approved revision, the pin is empty.
-4. Refuse alignment references that the pinned revision does not define. The defined refs are the use-case, principle, and success-measure refs; with an empty pin, every ref is refused.
+4. Refuse alignment references that the pinned revision does not define. The defined refs are the use-case, principle, success-measure, and decision refs. Claims are evidence rather than direction, and `needsOutcomes` is prose without refs, so neither can be cited. With an empty pin, every ref is refused.
 5. Compute the revision hash. If an `in_review` or `approved` revision of the plan already has that hash, return its number and write nothing (a retried submit is a no-op).
 6. Otherwise insert revision `max + 1` as `in_review` and record a `submitted` event.
 
@@ -192,16 +199,22 @@ The pin is server-derived because a pin to an unapproved, withdrawn, or invented
 
 The human sends `team-plan-approve { teamPath, planId, revision, contentHash, expectedApprovedRevision, commandId }`. `PlanService.approve` refuses non-human actors first. Then, in one SQLite transaction:
 
-1. **Replay.** Look up `plan_events` by `(plan_id, command_id)`. With the same payload (`kind`, `revision`, `contentHash`, `expectedApprovedRevision`), return the stored outcome. With a different payload, refuse naming the first differing field.
+1. **Replay.** Look up `plan_events` by `(plan_id, command_id)`. With the same payload, return the stored outcome. With a different payload, refuse naming the first differing field. The compared payload is the command name plus that command's own fields (see the end of this section).
 2. **Preconditions.** Evaluate `APPROVAL_PRECONDITIONS` from `planPreconditions.ts`, in order. Each entry is `{ name, check(ctx) → string | null }`; `ctx` holds the plan, the revision (if any), the request, the team's current approved strategy revision and hash, and `pinDisposition(planId, revision)`. Every entry runs; every failing entry contributes `{ name, message }`. Any failure refuses the request and writes nothing. The shipped list:
    - `plan-open`: the plan is `open`.
    - `revision-in-review`: the revision exists and is `in_review`.
    - `hash-matches`: its `content_hash` equals the request's.
    - `approved-revision-unchanged`: `current_approved_revision` equals `expectedApprovedRevision`, or both are null.
    - `strategy-pin-current`: the pin equals the team's current approved strategy revision and hash (both empty counts as equal), or `pinDisposition` returns a recorded disposition. In this change `pinDisposition` always returns null.
-3. **Commit.** Mark the previously approved revision `superseded` and this one `approved`, set `current_approved_revision`, and insert the `approved` event carrying the command id and payload.
+3. **Commit.** Mark the previously approved revision `superseded` and this one `approved`, set `current_approved_revision`, and insert the `approved` event carrying the command id and payload. If the write hits `plan_revisions_one_approved` (another approval committed first), the transaction rolls back and the request is refused as `approved-revision-unchanged`. The constraint error never reaches the client raw.
 
-Withdraw (`team-plan-withdraw { revision | draftId, commandId }`), close (`team-plan-close { outcome, reason, commandId }`), and reopen (`team-plan-reopen { commandId }`) follow the same replay rule.
+Withdraw (`team-plan-withdraw { revision | draftId, commandId }`), close (`team-plan-close { outcome, reason, commandId }`), and reopen (`team-plan-reopen { commandId }`) follow the same replay rule. The compared payload per command, stored in `payload_json`:
+- `approve`: `revision`, `contentHash`, `expectedApprovedRevision`;
+- `withdraw`: `revision` or `draftId`;
+- `close`: `outcome` and `reason`. The reason is compared after the same trimming the store applies, so a resend replays instead of wedging the dialog, and a reused command id with another outcome is refused naming `outcome`.
+- `reopen`: the command name alone.
+
+The dialogs re-mint their command id only when this compared payload changes (D12), so the set is part of the contract, not an implementation detail.
 
 Approval writes nothing outside the plan tables, which `plan-approval`'s "grants and triggers nothing else" requires. Snapshot pushes are a view refresh, not a side effect.
 
@@ -216,7 +229,7 @@ Closing is human-only in this change:
 - **Cancel** always requires a reason.
 - **Reopen** returns to `open` from either closed state.
 
-Closing never touches linked tasks: they have their own creators and closing rights, and a plan closing them would cross the `team-tasks` rules. *Why no reopen restriction:* strategy P3 favors forward fixes, and reopening to add a revision is the UX doc's "extension with unchanged intent". `plan-execution` will complete plans as `system` when every change lands, since landing is acceptance (P5).
+Closing never touches linked tasks: they have their own creators and closing rights, and a plan closing them would cross the `team-tasks` rules. *Why no reopen restriction:* strategy P3 favors forward fixes, and reopening to add a revision is the UX doc's "extension with unchanged intent". `plan-execution` will complete plans as `system` when every change lands, in either landing mode, since landing is acceptance (P5).
 
 ### D9. The plan-change link lives on the task and is fixed at creation
 
@@ -239,9 +252,9 @@ The link is immutable afterwards, like `parent_id`, and amending a task does not
 - `in-progress`: any linked task is open, active, or blocked;
 - otherwise `done` if at least one is done, else `cancelled`.
 
-It also returns `waitsOn`: the change's dependencies that are not `done`. Linked tasks whose `plan_change` is absent from the current revision are returned separately as `outsideRevision`.
+It also returns `waitsOn`: the change's dependencies that are not `done`. A `cancelled` dependency deliberately keeps its dependents waiting: proceeding without it takes a new plan revision that drops or replaces the dependency, which the owner approves. Linked tasks whose `plan_change` is absent from the current revision are returned separately as `outsideRevision`.
 
-The function is pure and runs on the server (plan detail, `plan_get`) and on the client (live updates from task pushes). Nothing is stored, so no subscriber can drift. The view labels a change's `done` as "tasks done", not "landed": landing facts arrive with `plan-execution`, which replaces the proxy for the plans it executes.
+The function is pure and runs on the server (plan detail, `plan_get`) and on the client (live updates from task pushes). Nothing is stored, so no subscriber can drift. The view labels a change's `done` as "tasks done", not "landed". Landing facts arrive with `plan-execution`, which replaces the proxy for the plans it executes. It owns the landing-fact record and system completion for both landing modes; `integration-candidates` is the mechanism it calls for `integration-branch`.
 
 ### D11. Agent tools, the creation right, and the prompt note
 
@@ -271,13 +284,15 @@ The structural boundary is that no approve, withdraw, close, or reopen tool exis
 
 | Contract | What it fixes | Bound by |
 | --- | --- | --- |
-| C1 `PlanContent` | D2 template, normalization, `planStructureErrors`/`planSubmitErrors`, hashing | `plan-validation` (adds environment checks), `plan-execution` (reads changes, dependencies, groups, checks, landing, roles) |
-| C2 Strategy pin | Per-revision `{strategyId, revision, hash}` or empty; `PlanStore.revisionsPinnedTo(strategyId)` and `openPlans(teamId)` reads | `strategy-revision-impact`, `plan-validation` (alignment) |
-| C3 Lifecycle and `PlanService` | D8 stored and displayed states; `PlanService` as the only writer, with command ids and CAS | `plan-execution` (system completion, execution records keyed by plan and revision), `plan-supervision` |
+| C1 `PlanContent` | D2 template, normalization, `planStructureErrors`/`planSubmitErrors`, hashing | `plan-validation` (adds environment checks; artifact pins and relations stay in its report, D3), `plan-execution` (reads changes, dependencies, groups, checks, landing, roles), `integration-candidates` (landing mode and branch), `revision-control` (compares the revisions it publishes to running work) |
+| C2 Strategy pin | Per-revision `{strategyId, revision, hash}` or empty; `PlanStore.revisionsPinnedTo(strategyId)` and `openPlans(teamId)` reads | `strategy-revision-impact`, `plan-validation` (alignment), `revision-control` (the pin a published revision carries) |
+| C3 Lifecycle and `PlanService` | D8 stored and displayed states; `PlanService` as the only writer, with command ids and CAS | `plan-execution` (system completion in both landing modes, execution records keyed by plan and revision), `plan-supervision`, `strategy-revision-impact` (closed plans are historical), `execution-safety-recovery` (recovers executions against the stored lifecycle) |
 | C4 Approval preconditions | D7 ordered list and the `pinDisposition` lookup | `plan-validation` (`validation-current`), `strategy-revision-impact` (dispositions) |
-| C5 Plan-change link and progress | D9 columns and checks; D10 `planProgress` | `plan-execution` (creates linked tasks; adds landing facts), `plan-supervision` |
-| C6 `plan_events` | Append-only kinds; later changes add kinds and never redefine shipped ones | all |
+| C5 Plan-change link and progress | D9 columns and checks; D10 `planProgress` | `plan-execution` (creates linked tasks; owns landing facts in both modes, calling `integration-candidates` for `integration-branch`), `plan-supervision` |
+| C6 `plan_events` | Append-only kinds; later changes add kinds and never redefine shipped ones | all, in particular `revision-control` (publication events), `execution-safety-recovery` (audit), and `strategy-revision-impact` |
 | C7 `PLAN_CHECK_FLOOR` | D4 names | `plan-execution`'s gate, `plan-supervision` |
+
+Each of the seven later changes binds to at least one named row, so none has to reopen this design to find its inputs.
 
 ## Risks / Trade-offs
 

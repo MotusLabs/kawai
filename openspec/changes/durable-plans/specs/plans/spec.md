@@ -7,7 +7,7 @@ Gives a team a durable, human-owned plan record for one repository. A plan holds
 ## ADDED Requirements
 
 ### Requirement: A plan is a durable, team-scoped record
-A plan SHALL be a kawai-owned record of one team holding its title, creator, lifecycle (`open`, `completed`, or `cancelled`), and current approved revision; the human owns every plan. Plans, revisions, drafts, and events SHALL persist across server restart and SHALL remain when the sessions that created or drafted them are archived or killed. A repository file describing a plan SHALL NOT be read as the record.
+A plan SHALL be a kawai-owned record of one team holding its title, creator, lifecycle (`open`, `completed`, or `cancelled`), and current approved revision; the human is every plan's owner and only approver. Plans, revisions, drafts, and events SHALL persist across server restart and SHALL remain when the sessions that created or drafted them are archived or killed. A repository file describing a plan SHALL NOT be read as the record.
 
 #### Scenario: Creator killed
 - **WHEN** the agent session that created a plan is killed
@@ -140,6 +140,10 @@ The human SHALL complete, cancel, or reopen a plan. Cancelling SHALL require a r
 - **WHEN** the human reopens a cancelled plan
 - **THEN** the plan is open again, accepts submissions and approvals, and its history shows both events
 
+#### Scenario: Close is idempotent by command id
+- **WHEN** a close command is resent after its result was lost, and later the same command id is sent with the other outcome
+- **THEN** the resend returns the recorded close without a second event, and the other outcome is refused naming `outcome`
+
 ### Requirement: Plan state is derived from lifecycle, approval, and links
 A plan's displayed state SHALL be Draft while it is open without an approved revision, Ready while it is open with one and no linked tasks, and In progress while it is open with linked tasks; otherwise Completed or Cancelled. Only the lifecycle SHALL be stored; the displayed state SHALL be derived when read.
 
@@ -152,7 +156,7 @@ A plan's displayed state SHALL be Draft while it is open without an approved rev
 - **THEN** it shows Draft
 
 ### Requirement: Change progress is derived from linked tasks
-For each change of the current approved revision, the plan SHALL show its linked tasks and a progress derived from their statuses when read: not started, in progress, done, or cancelled. It SHALL also show the dependencies the change still waits on. Progress SHALL never be stored or set by hand. Linked tasks naming a change absent from the current revision SHALL be listed separately.
+For each change of the current approved revision, the plan SHALL show its linked tasks and a progress derived from their statuses when read: not started, in progress, done, or cancelled. It SHALL also show the dependencies the change still waits on; a cancelled dependency keeps it waiting. Progress SHALL never be stored or set by hand. Linked tasks naming a change absent from the current revision SHALL be listed separately.
 
 #### Scenario: Done when every linked task is closed and one is done
 - **WHEN** change `api` has one done task and one cancelled task
@@ -161,6 +165,10 @@ For each change of the current approved revision, the plan SHALL show its linked
 #### Scenario: Waiting on a dependency
 - **WHEN** change `ui` depends on `api`, whose linked task is active
 - **THEN** `ui` shows that it waits on `api`
+
+#### Scenario: Cancelled dependency keeps its dependents waiting
+- **WHEN** change `ui` depends on `api`, whose only linked task is cancelled
+- **THEN** `api` shows cancelled and `ui` still waits on it until a newer approved revision drops or replaces the dependency
 
 #### Scenario: Change dropped by a newer revision
 - **WHEN** a newer approved revision removes change `legacy`, which has linked tasks
