@@ -701,7 +701,8 @@ export default function App() {
       // New session: [mod]+N
       if (isShortcut && code === 'KeyN') {
         event.preventDefault()
-        if (!isModalOpen && settingsHydrated) {
+        // Never stack over Settings: its close would restore terminal focus under this dialog.
+        if (!isModalOpen && !isSettingsOpen && settingsHydrated) {
           setIsModalOpen(true)
         }
         return
@@ -721,6 +722,7 @@ export default function App() {
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [
     isModalOpen,
+    isSettingsOpen,
     selectedSessionId,
     selectedHibernatingSessionId,
     setSelectedSessionId,

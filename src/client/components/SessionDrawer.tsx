@@ -171,8 +171,12 @@ export default function SessionDrawer({
         ref={drawerRef}
         className={`session-drawer ${isOpen ? 'open' : ''}`}
         style={transitionStyle}
-        role="dialog"
-        aria-modal="true"
+        // Exposed as a modal dialog only while open: the panel stays mounted
+        // off-canvas when closed, and a closed drawer must neither be announced
+        // as a dialog nor make restoreTerminalFocus() think a dialog is open.
+        role={isOpen ? 'dialog' : undefined}
+        aria-modal={isOpen ? 'true' : undefined}
+        aria-hidden={isOpen ? undefined : 'true'}
         aria-label="Session list"
         tabIndex={-1}
       >

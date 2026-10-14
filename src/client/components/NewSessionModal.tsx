@@ -9,6 +9,7 @@ import AgentIcon from './AgentIcon'
 import { shortRevision } from '@shared/workspace'
 import { autoStartAgentFromToken, resolveAgentToken } from '@shared/agentToken'
 import { getPathLeaf } from '../utils/sessionLabel'
+import { restoreTerminalFocus } from '../utils/terminalFocus'
 import type { AutoStartAgent, ChatApprovalPolicy, HostStatus } from '@shared/types'
 
 /** A discovered local worktree offered by the picker. */
@@ -255,14 +256,7 @@ export default function NewSessionModal({
       if (!wasOpen) return
       provisionalFocusRef.current = null
       // Focus terminal after modal closes
-      const closeTimer = setTimeout(() => {
-        if (typeof document === 'undefined' || typeof document.querySelector !== 'function') return
-        const textarea = document.querySelector('.xterm-helper-textarea') as HTMLTextAreaElement | null
-        if (textarea) {
-          textarea.removeAttribute('disabled')
-          textarea.focus()
-        }
-      }, 300)
+      const closeTimer = setTimeout(restoreTerminalFocus, 300)
       // Reopening before the timeout fires cancels it, so it can never
       // re-enable the terminal textarea under the open dialog.
       return () => clearTimeout(closeTimer)
@@ -740,6 +734,7 @@ export default function NewSessionModal({
               Display Name
             </label>
             <input
+              aria-label="Display Name"
               value={name}
               onChange={(event) => setName(event.target.value)}
               placeholder="auto-generated"

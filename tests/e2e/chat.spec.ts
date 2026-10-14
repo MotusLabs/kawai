@@ -29,7 +29,7 @@ test('chat modal toggles local chat fields and creates a chat session', async ({
   await dialog.getByLabel('Session kind').selectOption('chat')
   await expect(dialog.getByTestId('command-select')).toHaveCount(0)
   await dialog.getByLabel('Project Path').fill(process.cwd())
-  await dialog.locator('input').last().fill('Browser chat')
+  await dialog.getByLabel('Display Name').fill('Browser chat')
   await dialog.getByRole('button', { name: 'Create', exact: true }).click()
   await expect.poll(() => creations).toEqual([{ kind: 'chat', name: 'Browser chat' }])
   await expect(page.getByTestId('chat-view')).toContainText('Browser chat')

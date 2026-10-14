@@ -632,4 +632,34 @@ describe('SessionDrawer', () => {
       renderer!.unmount()
     })
   })
+
+  test('is exposed as a modal dialog only while open, and hidden from assistive tech while closed', () => {
+    const drawer = (isOpen: boolean) => (
+      <SessionDrawer
+        isOpen={isOpen}
+        onClose={() => {}}
+        sessions={[baseSession]}
+        selectedSessionId={null}
+        onSelect={() => {}}
+        onRename={() => {}}
+        onNewSession={() => {}}
+        loading={false}
+        error={null}
+      />
+    )
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => {
+      renderer = TestRenderer.create(drawer(false))
+    })
+    expect(renderer.root.findAllByProps({ role: 'dialog' })).toHaveLength(0)
+    const closed = renderer.root.findByProps({ 'aria-label': 'Session list' })
+    expect(closed.props['aria-hidden']).toBe('true')
+    expect(closed.props['aria-modal']).toBeUndefined()
+
+    act(() => renderer.update(drawer(true)))
+    const open = renderer.root.findByProps({ role: 'dialog' })
+    expect(open.props['aria-modal']).toBe('true')
+    expect(open.props['aria-hidden']).toBeUndefined()
+    act(() => renderer.unmount())
+  })
 })

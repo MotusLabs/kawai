@@ -186,7 +186,7 @@ test('external CLI chat: streaming, approvals, question, interrupt, debug, resum
     const modal = page.getByRole('dialog', { name: 'New Session' })
     await modal.getByLabel('Session kind').selectOption('chat')
     await modal.getByLabel('Project Path').fill(project)
-    await modal.locator('input').last().fill('External CLI check')
+    await modal.getByLabel('Display Name').fill('External CLI check')
     await modal.getByRole('button', { name: 'Create', exact: true }).click()
     await expect(page.getByTestId('chat-view')).toBeVisible()
     await page.screenshot({ path: info.outputPath('created.png') })
