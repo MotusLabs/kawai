@@ -36,7 +36,7 @@ function overwriteDraftBehindServer(storedPurpose: string) {
     import { hashStrategyContent } from './src/server/strategy/strategyHash';
     import { normalizeStrategyContent } from './src/shared/productStrategy';
     const [file, purpose] = JSON.parse(await Bun.stdin.text());
-    const db = new Database(file);
+    const db = new Database(file); db.exec('PRAGMA busy_timeout = 5000');
     const strategy = db.query('SELECT id FROM product_strategies').get();
     if (!strategy) throw new Error('no strategy record');
     const content = normalizeStrategyContent({ purpose });

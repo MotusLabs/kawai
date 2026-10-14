@@ -112,6 +112,7 @@ function readChatSessions(dbPath: string): Array<{ session_id: string; sdk_sessi
   const result = spawnSync('bun', ['-e', [
     'import { Database } from "bun:sqlite"',
     `const db = new Database(process.env.DB_PATH!, { readonly: true })`,
+    `db.exec('PRAGMA busy_timeout = 5000')`,
     'console.log(JSON.stringify(db.query("select session_id, sdk_session_id from chat_sessions").all()))',
   ].join('\n')], { env: { ...process.env, DB_PATH: dbPath }, encoding: 'utf8' })
   return JSON.parse(result.stdout)
