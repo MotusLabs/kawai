@@ -31,6 +31,9 @@ git worktree; you implement it there, end to end.
   teardown kills the live kawai server). Tests that spawn git need
   `cleanGitEnv`.
 - Keep files under 500 lines; fix root causes; add tests for new behavior.
+- Write large new files in pieces: about 40 lines of new content per tool call.
+  Some provider gateways cut a response that stays silent for 60 seconds while
+  a large tool input is generated, and the retry loops forever.
 - Journal (`task_note`) decisions, surprises, and where you stopped, so a
   replacement can continue.
 

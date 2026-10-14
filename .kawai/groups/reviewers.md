@@ -1,8 +1,11 @@
 ---
 label: Reviewers
 description: Review a dev branch's diff for correctness and fit; read-only; report findings to the lead
-# One reviewer: Claude Code on the default profile, MiMo while it is cooling.
-profiles: [default, mimo]
+# Two reviewers, so reviews do not queue behind one another: Claude Sonnet and
+# MiMo. Sonnet rather than `default` keeps a reviewer's cooldown off the lead's
+# profile. Review requests carry no task, so kawai never spawns reviewers: the
+# human creates each reviewer chat (group Reviewers) on its profile.
+profiles: { sonnet: 1, mimo: 1 }
 # Ignored until team-member-release ships: reviewers live in the main checkout.
 worktreeScoped: false
 ---

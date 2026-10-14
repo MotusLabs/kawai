@@ -1,7 +1,10 @@
 ---
 label: Junior Dev
 description: Small, well-specified tasks in their own worktree and branch; report to the lead
-profiles: { glm-flash: 3, opus: 3 }
+# GLM-5.3-flash only. `opus` and `sonnet` run on the host Claude login that the
+# lead, the senior dev, middle devs' Sonnet, and a reviewer already share, and
+# kawai tracks cooldowns per profile, not per account.
+profiles: { glm-flash: 3 }
 strategy: profile-order
 approval: auto
 onLimit: { parkIfResetWithin: 3h, otherwise: forward, forwardTo: junior-devs }
@@ -34,6 +37,9 @@ with a note and tell the lead rather than pushing on.
   teardown kills the live kawai server). Tests that spawn git need
   `cleanGitEnv`.
 - Keep files under 500 lines; fix root causes; add tests for new behavior.
+- Write large new files in pieces: about 40 lines of new content per tool call.
+  Some provider gateways cut a response that stays silent for 60 seconds while
+  a large tool input is generated, and the retry loops forever.
 - Journal (`task_note`) decisions, surprises, and where you stopped, so a
   replacement can continue.
 
