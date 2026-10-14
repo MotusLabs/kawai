@@ -37,7 +37,7 @@ test('parked rows show a short id and Cancel; cancelling removes the work and it
       import { Database } from 'bun:sqlite';
       import { MailboxStore } from './src/server/team/mailboxStore';
       const [file, team, dev] = JSON.parse(await Bun.stdin.text());
-      const db = new Database(file); const store = new MailboxStore(db);
+      const db = new Database(file); db.exec('PRAGMA busy_timeout = 5000'); const store = new MailboxStore(db);
       const base = { teamId: team, fromSession: 'chat-lead', fromGroup: 'leads', originPath: team };
       const work = store.enqueue({ ...base, toKind: 'session', toId: dev, body: 'Parked browser work' });
       store.claim(work.id, dev); store.markPushed(work.id); store.markDelivered(work.id);

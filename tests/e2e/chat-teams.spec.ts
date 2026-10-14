@@ -49,7 +49,7 @@ test('group picker, badge, peer replay and mailbox controls', async ({ page }, i
       import { Database } from 'bun:sqlite';
       import { MailboxStore } from './src/server/team/mailboxStore';
       const [file, team, lead, dev] = JSON.parse(await Bun.stdin.text());
-      const db = new Database(file); const store = new MailboxStore(db);
+      const db = new Database(file); db.exec('PRAGMA busy_timeout = 5000'); const store = new MailboxStore(db);
       const base = { teamId: team, fromSession: lead, fromGroup: 'leads', originPath: team, body: 'Browser peer greeting', toKind: 'session', toId: dev, tags: ['review'] };
       const peer = store.enqueue(base);
       const queued = store.enqueue({ ...base, body: 'Queued browser mail', toKind: 'group', toId: 'unstaffed' });
@@ -118,7 +118,7 @@ test('waiting reasons: starting agent, expandable blockers, dead-letter labels, 
       import { Database } from 'bun:sqlite';
       import { MailboxStore } from './src/server/team/mailboxStore';
       const [file, team, lead, rootDir] = JSON.parse(await Bun.stdin.text());
-      const db = new Database(file); const store = new MailboxStore(db);
+      const db = new Database(file); db.exec('PRAGMA busy_timeout = 5000'); const store = new MailboxStore(db);
       const base = { teamId: team, fromSession: lead, fromGroup: 'leads', originPath: team, toKind: 'group', toId: 'devs', body: 'Seeded', tags: [] };
       // A spawn held open forever (no live spawn attached): state spawning +
       // its durable reservation, exactly what the snapshot derivation reads.

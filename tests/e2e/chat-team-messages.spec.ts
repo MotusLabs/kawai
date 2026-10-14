@@ -54,7 +54,7 @@ function seed(args: { dbPath: string; team: string; lead: string; dev: string; u
     import { MailboxStore } from './src/server/team/mailboxStore';
     import { TaskStore } from './src/server/team/taskStore';
     const { dbPath, team, lead, dev, uncertain } = JSON.parse(await Bun.stdin.text());
-    const db = new Database(dbPath); const store = new MailboxStore(db); const tasks = new TaskStore(db, store);
+    const db = new Database(dbPath); db.exec('PRAGMA busy_timeout = 5000'); const store = new MailboxStore(db); const tasks = new TaskStore(db, store);
     const task = tasks.create({ teamId: team, title: 'Export CSV', direction: 'Ship a CSV export', creator: { kind: 'human', sessionId: null } });
     const sent = { teamId: team, fromSession: lead, fromGroup: 'leads', originPath: team, taskId: task.id };
     const first = store.enqueue({ ...sent, toKind: 'group', toId: 'devs', body: 'Please build the CSV export' });
