@@ -113,6 +113,7 @@ type ValidationInputs = {
     status: 'registered' | 'unregistered' | 'archived' | 'missing'
     artifacts: Record<string, string>            // relative path → sha256: proposal.md, design.md, tasks.md, specs/**/spec.md
     baseSpecs: Record<string, string | null>     // capability path → sha256 of openspec/specs/<path>/spec.md, null if absent
+    config: string | null                        // sha256 of the root's openspec/config.yaml (else config.yml), null if absent
   }>
   catalog: { groups: Record<string, string | null>; profiles: string }  // named groups' parsed-definition digests; digest of known profile ids
   claims: { branch: string[]; changes: Record<string, string[]> }      // other open plans' ids
@@ -131,7 +132,7 @@ Only content enters the identity:
 - The change's location (main checkout or convention worktree) is evidence. A proposal that moves from a worktree into the main checkout with unchanged content leaves the report current.
 - The repository baseline commit (each root's `HEAD`) is evidence too.
 
-The CLI's verdicts depend only on the artifacts, the base specs, and the CLI version. So a stored verdict stays valid for as long as the identity holds.
+The CLI's verdicts depend only on the artifacts, the base specs, the root's OpenSpec config (which selects the schema), and the CLI version. So a stored verdict stays valid for as long as the identity holds.
 
 *Alternative:* put the main checkout's `HEAD` in the identity. Rejected: master moves with every merge, including the plan's own landed changes. Every report would go stale within minutes in an active team, and the owner would learn to click through revalidation, which defeats the gate. A baseline change still invalidates a report whenever it changes a file the checks read (R06). `plan-execution` records the baseline it actually builds on.
 
@@ -318,7 +319,7 @@ This extends `durable-plans` D7 the way `pinDisposition` does:
 - **The entry.** `validation-current` is appended after the shipped entries. Every entry still runs, and failures still accumulate. It passes when a report exists, the report is ready, and its input hash is current. Its messages:
   - "not validated: run Validate";
   - "report N not ready: <e> errors, <q> unanswered questions, <w> unaccepted warnings, alignment <reason>";
-  - "inputs changed since report N: <parts>", naming each differing part: the artifacts of a change, a base spec, a group, profiles, the adapter, the strategy impact, claims, assessments or decisions, or the checks version.
+  - "inputs changed since report N: <parts>", naming each differing part: the artifacts of a change, a base spec, an OpenSpec config, a group, profiles, the adapter, the strategy impact, claims, assessments or decisions, or the checks version.
 
 Approval writes nothing new, so `plan-approval`'s "grants and triggers nothing else" holds. The report an approval rested on is derivable: the revision's newest report created before its `approved` event.
 

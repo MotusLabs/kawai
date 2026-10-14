@@ -22,7 +22,7 @@ The human and any team agent SHALL be able to validate an `in_review` or `approv
 - **THEN** one run executes and both receive its report
 
 ### Requirement: The input hash covers exactly what the checks read
-A report's input hash SHALL cover the revision and its content hash, the strategy impact state, each change's resolution status and artifact digests, the base specs its deltas touch, the named groups' definitions, the known profile ids, other open plans' claims on its changes and branch, the OpenSpec adapter version and capabilities, the checks version, and the revision's assessment and decision ids. Baseline commits and change locations SHALL be evidence only.
+A report's input hash SHALL cover the revision and its content hash, the strategy impact state, each change's resolution status, artifact digests, root OpenSpec config, and touched base specs, the named groups' definitions, the known profile ids, other open plans' claims on its changes and branch, the OpenSpec adapter version and capabilities, the checks version, and the revision's assessment and decision ids. Baseline commits and change locations SHALL be evidence only.
 
 #### Scenario: An artifact edit changes the hash
 - **WHEN** a change's `design.md` is edited after a report

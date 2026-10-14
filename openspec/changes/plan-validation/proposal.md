@@ -38,7 +38,7 @@ Strategy revision 2 states the owner's side: "the owner owns intent and the plan
   - the plan revision and content hash (which already binds the strategy pin);
   - the strategy impact state (`strategy-revision-impact` C-I2);
   - each change's artifact digests (proposal, design, tasks, and delta specs);
-  - the base specs those deltas touch;
+  - the base specs those deltas touch, and the OpenSpec config of the root each change resolves in;
   - the definitions of the named groups and the known profile ids;
   - the other open plans' claims on the plan's changes and branch;
   - the OpenSpec adapter's version and capabilities;

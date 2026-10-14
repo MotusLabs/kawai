@@ -56,7 +56,7 @@ Implement after `durable-plans` and `strategy-revision-impact` have landed on ma
 
 ## 4. Inputs and identity
 
-- [ ] 4.1 Implement `validationInputs.ts`, the file-held parts of D2. It resolves changes from fresh `discoverRepository` state with `changeRegistry`'s canonical rule, plus the archive lookup. It hashes `proposal.md`, `design.md`, `tasks.md`, and `specs/**/spec.md`, and the base specs at `openspec/specs/<path>/spec.md` for the change's own capability paths. It computes the catalog digests over the named groups' parsed definitions and the known profile ids. Verify with tests on temporary git repositories:
+- [ ] 4.1 Implement `validationInputs.ts`, the file-held parts of D2. It resolves changes from fresh `discoverRepository` state with `changeRegistry`'s canonical rule, plus the archive lookup. It hashes `proposal.md`, `design.md`, `tasks.md`, and `specs/**/spec.md`, the base specs at `openspec/specs/<path>/spec.md` for the change's own capability paths, and the root's `openspec/config.yaml` (else `config.yml`). It computes the catalog digests over the named groups' parsed definitions and the known profile ids. Verify with tests on temporary git repositories:
   - a registered change in the main checkout, and in its convention worktree;
   - a change only in another worktree;
   - an archived change;
@@ -116,7 +116,7 @@ Implement after `durable-plans` and `strategy-revision-impact` have landed on ma
 - [ ] 8.1 Add `prepareStanding` and `standing` (D9). Have `PlanService.approve` await `prepareStanding` before its transaction, and append `validation-current` to `APPROVAL_PRECONDITIONS`. Verify with `durable-plans`' approval:
   - not validated;
   - blocked (the message carries the counts and the alignment reason);
-  - each changed input part, named: a change's artifacts, a base spec, a group, profiles, the adapter, the strategy impact, claims, records, and the checks version;
+  - each changed input part, named: a change's artifacts, a base spec, an OpenSpec config, a group, profiles, the adapter, the strategy impact, claims, records, and the checks version;
   - current and ready: approval commits;
   - the shipped preconditions still run, and their failures accumulate with this one;
   - `prepareStanding` spawns no CLI process;
