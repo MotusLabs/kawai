@@ -35,16 +35,20 @@ const openFlags = (owner: SlotOwner) => ({
   strategy: useStrategyStore.getState().views[owner.teamKey]?.open ?? false,
 })
 
-test('toggling a slot opens it and closes every other slot', () => {
+test('toggling a slot shows it and closes the others — except that Debug leaves the team’s panel open beneath it', () => {
   for (const first of SLOTS) {
     for (const second of SLOTS) {
       if (first === second) continue
       act(() => { toggleSideSlot(first, chat1) })
       act(() => { toggleSideSlot(second, chat1) })
       const flags = openFlags(chat1)
-      for (const slot of SLOTS) expect(flags[slot]).toBe(slot === second)
+      const kept = second === 'debug' ? first : null
+      for (const slot of SLOTS) expect(flags[slot]).toBe(slot === second || slot === kept)
       expect(readOpenSideSlot(chat1)).toBe(second)
       act(() => { toggleSideSlot(second, chat1) })
+      // Closing Debug shows the team panel it was opened over.
+      expect(readOpenSideSlot(chat1)).toBe(kept)
+      if (kept) act(() => { toggleSideSlot(kept, chat1) })
     }
   }
 })
@@ -69,13 +73,14 @@ test('a team panel is shared by every chat of the team; Debug stays with its cha
   act(() => { toggleSideSlot('tasks', chat1) })
   expect(readOpenSideSlot(chat3)).toBe('tasks')
   act(() => { toggleSideSlot('debug', chat1) })
-  // chat-1's Debug closed the team's Tasks; chat-3 has nothing open now.
-  expect(readOpenSideSlot(chat3)).toBeNull()
-  act(() => { toggleSideSlot('debug', chat3) })
+  // chat-1 shows its own Debug; the team's Tasks stays open for chat-3.
+  expect(readOpenSideSlot(chat1)).toBe('debug')
+  expect(readOpenSideSlot(chat3)).toBe('tasks')
+  // Choosing Tasks in chat-1 closes chat-1's Debug and keeps the team's Tasks.
   act(() => { toggleSideSlot('tasks', chat1) })
-  // Tasks is open for the team again, beside chat-3's own Debug: Debug is shown there.
   expect(readOpenSideSlot(chat1)).toBe('tasks')
-  expect(readOpenSideSlot(chat3)).toBe('debug')
+  expect(openFlags(chat1).debug).toBe(false)
+  expect(readOpenSideSlot(chat3)).toBe('tasks')
 })
 
 test('useOpenSideSlot follows opens from outside the toggle, such as a task link', () => {

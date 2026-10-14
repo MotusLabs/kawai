@@ -46,9 +46,17 @@ const SLOTS: Record<SideSlot, { open: (owner: SlotOwner) => void; close: (owner:
 
 const SLOT_NAMES = Object.keys(SLOTS) as SideSlot[]
 
-/** Close every side-slot panel but `which`, for the chat and its team. */
+/**
+ * Close every side-slot panel but `which`, for the chat and its team. Debug
+ * is this chat's own, so opening it leaves the team's shared panel open for
+ * the team's other chats; it simply shows first here (`readOpenSideSlot`).
+ * Opening a team panel still closes this chat's Debug.
+ */
 export function closeOtherSideSlots(which: SideSlot, owner: SlotOwner) {
-  for (const slot of SLOT_NAMES) if (slot !== which) SLOTS[slot].close(owner)
+  for (const slot of SLOT_NAMES) {
+    if (slot === which || (which === 'debug' && slot !== 'debug')) continue
+    SLOTS[slot].close(owner)
+  }
 }
 
 /** Open `which` (closing the others), or close it when it is the open one. */
