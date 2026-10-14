@@ -88,16 +88,32 @@ test('E01/E02: create and assign reaches one member; a refusal keeps the form; a
     await page.screenshot({ path: info.outputPath('refusal-keeps-form.png') })
 
     // Fix the field (empty worktree) and dispatch for real: exactly one
-    // instruction, taken by one member, from the Human sender.
+    // instruction, taken by one member, from the Human sender. A successful
+    // create-and-assign opens the created task's detail (the documented
+    // "opens the created task" behavior), so the assignment is asserted on
+    // the detail's outstanding line.
     await panel.getByLabel('Target worktree').fill('')
     await panel.getByTestId('task-create-assign-button').click()
-    await expect(panel.getByTestId('task-assignment').first()).toContainText('Assigned: group devs')
+    const outstanding = page.getByTestId('task-outstanding-assignment')
+    await expect(outstanding).toContainText('group devs', { timeout: 20_000 })
     await page.screenshot({ path: info.outputPath('create-and-assign.png') })
+    // The task names its owner once claimed. The browser fixture confirms no
+    // receipt, so the assignment settles at `uncertain` — its own name, with
+    // the claimant still recorded.
+    await expect(outstanding).toContainText(/claimed|delivered|uncertain/, { timeout: 20_000 })
+    await expect(outstanding).toContainText('claimed by Browser developer')
+    // The instruction row lives in the taker's chat: switch to the member the
+    // outstanding line names, then check the Human-sent peer row there.
+    const outstandingText = (await outstanding.textContent()) ?? ''
+    const taker = /claimed by (.+?) ·/.exec(outstandingText)?.[1] ?? 'Browser developer'
+    await page.locator('[data-session-id^="chat-"]').filter({ hasText: taker }).first().click()
     const peer = page.locator('[data-chat-role="peer"]').filter({ hasText: 'Please build it' }).first()
     await expect(peer).toBeVisible({ timeout: 20_000 })
     await expect(peer).toContainText('Human')
-    // The task names its owner once claimed.
-    await expect(panel.getByTestId('task-assignment').first()).toContainText(/claimed|delivered/, { timeout: 20_000 })
+    await page.locator(`[data-session-id="${lead}"]`).click()
+    // Back on the list, the row shows the assignment too.
+    await panel.getByRole('button', { name: 'All tasks' }).click()
+    await expect(panel.getByTestId('task-assignment').first()).toContainText('Assigned: group devs')
 
     // E01's replay: after a reload (the reconnect stand-in) the task still
     // has exactly one instruction under it.
@@ -129,11 +145,14 @@ test('reassignment requires an explicit choice; stop supersedes and keeps histor
     await panel.getByLabel('Assignment group').selectOption('devs')
     await panel.getByLabel('Assignment instruction').fill('First try')
     await panel.getByTestId('task-create-assign-button').click()
-    await expect(panel.getByTestId('task-assignment').first()).toContainText('Assigned: group devs')
-    await panel.locator('[data-task-id]').first().locator('button').first().click()
-    await expect(page.getByTestId('task-outstanding-assignment')).toContainText('group devs')
+    // The created task's detail is open; its outstanding line shows the
+    // assignment the dispatch just made.
+    await expect(page.getByTestId('task-outstanding-assignment')).toContainText('group devs', { timeout: 20_000 })
 
-    // A new dispatch over the outstanding assignment opens the choice.
+    // A new dispatch over the outstanding assignment opens the choice. The
+    // detail's assign form starts empty: choose the target, then instruct.
+    await page.getByTestId('task-assign-form').getByLabel('Assignment target kind').selectOption('group')
+    await page.getByTestId('task-assign-form').getByLabel('Assignment group').selectOption('devs')
     await page.getByTestId('task-assign-form').getByLabel('Assignment instruction').fill('Second try')
     await page.getByTestId('task-assign-send').click()
     const choice = page.getByTestId('task-reassign-choice')
@@ -167,13 +186,24 @@ test('E03: worktree-targeted subtasks reach only matching members and create no 
     await openTasks(page)
     const panel = page.getByTestId('team-tasks')
 
-    await panel.locator('summary', { hasText: 'New task' }).click()
+    // Every creation — plain or with assignment — opens the created task's
+    // detail (the documented behavior), so each subtask round-trips through
+    // "All tasks" back to the form.
+    const newTaskForm = async () => {
+      // A creation leaves the panel on the created task's detail; go back
+      // to the list only when one is open.
+      const back = panel.getByRole('button', { name: 'All tasks' })
+      if (await back.isVisible().catch(() => false)) await back.click()
+      await panel.locator('summary', { hasText: 'New task' }).click()
+    }
+    await newTaskForm()
     await panel.getByLabel('Task title').fill('Reporting revamp')
     await panel.getByLabel('Task direction').fill('Split the work')
     await panel.getByTestId('task-create-button').click()
-    await expect(panel.getByTestId('task-status').first()).toHaveText('open')
+    await expect(page.getByTestId('task-detail-status')).toHaveText('open', { timeout: 15_000 })
 
     const subtask = async (title: string, worktree: string) => {
+      await newTaskForm()
       await panel.getByLabel('Task title').fill(title)
       await panel.getByLabel('Task direction').fill(`Implement ${title}`)
       await panel.getByLabel('Parent task').selectOption({ label: 'Reporting revamp' })
@@ -184,7 +214,9 @@ test('E03: worktree-targeted subtasks reach only matching members and create no 
       await panel.getByLabel('Assignment group').selectOption('devs')
       await panel.getByLabel('Assignment instruction').fill(`Build ${title} here`)
       await panel.getByTestId('task-create-assign-button').click()
-      await expect(panel.getByTestId('task-assignment').first()).toContainText('Assigned: group devs · queued', { timeout: 15_000 })
+      // The created subtask's detail shows its assignment (the fixture's
+      // unconfirmed receipts may already have settled it to `uncertain`).
+      await expect(page.getByTestId('task-outstanding-assignment')).toContainText('group devs', { timeout: 15_000 })
     }
     await subtask('API endpoints', apiRoot)
     await subtask('Report UI', uiRoot)
@@ -193,13 +225,13 @@ test('E03: worktree-targeted subtasks reach only matching members and create no 
     // Each instruction spawns one member in its own worktree; the idle
     // main-checkout developer takes neither. No worktree is created.
     await expect.poll(async () => page.getByTestId('session-spawned-badge').count(), { timeout: 30_000 }).toBeGreaterThanOrEqual(2)
-    await expect(panel.getByTestId('task-assignment').first()).toContainText(/claimed|delivered/, { timeout: 30_000 })
+    await expect(page.getByTestId('task-outstanding-assignment')).toContainText(/claimed|delivered|uncertain/, { timeout: 30_000 })
     const devPeers = page.locator('[data-chat-role="peer"]').filter({ hasText: /Build (API endpoints|Report UI) here/ })
     await expect(devPeers).toHaveCount(0)
     expect(git(['worktree', 'list', '--porcelain'], root)).toBe(worktreesBefore)
 
     // The parent lists both children with their assignments.
-    await panel.locator('button', { hasText: 'All tasks' }).click()
+    await panel.getByRole('button', { name: 'All tasks' }).click()
     await panel.locator('[data-task-id]').first().locator('button').first().click()
     await expect(page.getByTestId('task-detail')).toContainText('API endpoints')
     await expect(page.getByTestId('task-detail')).toContainText('Report UI')
