@@ -22,7 +22,8 @@
 - [ ] 4.1 Create `src/server/team/memberRelease.ts` with the `team_member_releases` table (D1) and methods to mark a task's live spawned members (honoring the group opt-out), cancel by task, and cancel by session.
 - [ ] 4.2 In `TaskService.setStatus`, mark pending releases in the same transaction as a transition into `done`/`cancelled` (any actor) and cancel them on a transition out; record who closed the task.
 - [ ] 4.3 Cancel a session's pending release when it is archived or killed by any path and when the human restores it (`ChatSessionManager.archive`/`kill`/`restore`).
-- [ ] 4.4 Tests in a new `memberRelease.test.ts`: only spawned members of the closed task are marked; human-created and other-task members are not; opted-out groups are not; reopen and restore cancel; rows survive a store reopen (restart).
+- [ ] 4.4 Spawns in flight (D1): in the close transaction dead-letter the task's `spawning` mail as `task-closed`; when `ChatSessionManager` creates a spawned session whose task is already `done`/`cancelled`, write its pending-release row (group opt-out honored).
+- [ ] 4.5 Tests in a new `memberRelease.test.ts`: only spawned members of the closed task are marked; human-created and other-task members are not; opted-out groups are not; reopen and restore cancel; rows survive a store reopen (restart); a spawn completing after its task closed gets no first turn, is marked, and is released when idle, freeing its worktree slot.
 
 ## 5. Release execution
 

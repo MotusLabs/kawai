@@ -21,6 +21,13 @@ When a task becomes `done` or `cancelled`, the system SHALL mark every live spaw
 - **WHEN** a task is done and a spawned member of a different, open task runs in the same group
 - **THEN** that member stays live
 
+### Requirement: A member still spawning at close is released
+When a task closes while a member is being spawned for it, the system SHALL withdraw the spawn's reserved message so the new member never receives it. A session spawned for a task that is already `done` or `cancelled` when its spawn completes SHALL be marked pending release, unless its group opts out, and released once ready.
+
+#### Scenario: Task closed while its dev is starting
+- **WHEN** group mail for a task has reserved a spawn in worktree `feat-x` and the lead marks the task `done` before the new dev starts
+- **THEN** the dev starts without receiving the task's message, is archived once its agent is idle, and `feat-x` no longer holds a live spawned member
+
 ### Requirement: Release waits until the member is ready
 A member SHALL be ready for release only when it is idle in the sense mail delivery uses, has no pending approval or question, holds no claimed or parked mail, and has no due direct mail queued for it. A pending member that is not ready SHALL be released once it becomes ready, without further action.
 
