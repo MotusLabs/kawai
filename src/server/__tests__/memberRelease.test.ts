@@ -234,6 +234,29 @@ test('parked work holds the release', async () => {
   expect(archived).toEqual(['dev-1'])
 })
 
+test('cancelling parked work (team-mailbox-management) makes its holder releasable', async () => {
+  const t = task(featX)
+  records.set('dev-1', record('dev-1', { projectPath: featX, spawned: true, taskId: t.id }))
+  await trackAll()
+  const instruction = mail({ taskId: t.id })
+  runtime.mailbox.store.claim(instruction.id, 'dev-1')
+  runtime.mailbox.store.markPushed(instruction.id)
+  runtime.mailbox.store.markDelivered(instruction.id)
+  runtime.mailbox.store.park(instruction.id, new Date(Date.now() + 3600_000).toISOString(), 'resume-1')
+  const readiness = runtime.releases.readiness('dev-1')
+  expect(readiness.ready).toBe(false)
+  if (!readiness.ready) expect(readiness.reason).toContain('cancel it with cancel_message')
+  await close(t.id)
+  await pass()
+  expect(archived).toEqual([])
+  // A cancelled parked message is no longer held: the release proceeds.
+  expect(runtime.mailbox.store.cancel(instruction.id, { kind: 'human' }, 'abandoned')).toBe(true)
+  expect(runtime.mailbox.store.get(instruction.id)?.state).toBe('cancelled')
+  expect(runtime.releases.readiness('dev-1')).toEqual({ ready: true })
+  await pass()
+  expect(archived).toEqual(['dev-1'])
+})
+
 test('pending releases survive a restart and free capacity for waiting mail (D1/D2)', async () => {
   writeGroup('devs', 'max: 1')
   const t1 = task(featX)

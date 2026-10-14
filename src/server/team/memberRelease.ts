@@ -254,7 +254,7 @@ export class MemberRelease {
     if (this.options.hasLiveWorkers(sessionId)) return { ready: false, reason: 'a background worker it started is still running' }
     if (this.options.hasRunningBackgroundTasks(sessionId)) return { ready: false, reason: 'it has a running background task' }
     if (this.options.store.claimsFor(sessionId).length > 0) return { ready: false, reason: 'it holds claimed mail' }
-    if (this.options.store.parkedBy(sessionId).length > 0) return { ready: false, reason: 'it holds parked work' }
+    if (this.options.store.parkedBy(sessionId).length > 0) return { ready: false, reason: 'it holds parked work (a mailbox manager can cancel it with cancel_message, or the human can cancel or hand it off)' }
     // Direct mail on the waiting surface (queued and due, or held for its
     // pending request) reaches it before it may go.
     if (this.options.store.waitingDirectMail().some(row => row.toId === sessionId)) return { ready: false, reason: 'direct mail is waiting to reach it first' }
