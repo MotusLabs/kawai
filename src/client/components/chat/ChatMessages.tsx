@@ -83,6 +83,11 @@ export default function ChatMessages({ events, projectPath, sessionId, sendMessa
             </div>
             <p className="break-all text-chat-meta text-secondary">{event.originPath}</p>
             {event.possibleDuplicate && <p role="status" className="text-chat-meta text-chat-danger">Possible duplicate — an already-seen message should be treated as a no-op.</p>}
+            {/* A revision notice (task-revision-publication D9) names the revision it announces; the task header is the one delivered. */}
+            {event.revisionNotice && <p role="status" className="my-1 text-chat-meta" data-testid="peer-revision-notice">
+              Revision {event.revisionNotice.revision} published{event.revisionNotice.rationale ? `: ${event.revisionNotice.rationale}` : ''}
+              {event.task && event.task.revision !== event.revisionNotice.revision ? ` · delivered under revision ${event.task.revision}` : ''}
+            </p>}
             {event.task && <details className="my-2 border border-border p-2 text-chat-meta" data-testid="peer-task">
               <summary>Task: {event.task.title} · {event.task.status} · revision {event.task.revision}</summary>
               {event.task.worktree && <p className="break-all">Worktree: {event.task.worktree}</p>}

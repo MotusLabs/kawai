@@ -172,3 +172,23 @@ test('a publication made before notifications says so, and the acknowledgement h
   expect(text).toContain('No claimed agent holds the assignment')
   expect(textOf(testId('task-acknowledgement-history'))).toContain('Acknowledgement history (2)')
 })
+
+// Peer rows (5.4, D9): the notice names its revision; the header is the one delivered.
+test('a notice row shows "Revision N published" with its rationale beside the task header it was delivered under', async () => {
+  const { default: ChatMessages } = await import('../components/chat/ChatMessages')
+  const base = { type: 'peer_message' as const, sequence: 1, at: 'now', turnId: 't', senderSession: null, senderKind: 'human' as const,
+    senderGroup: null, priority: 'normal' as const, originPath: '/repo', tags: ['task-revision'], body: 'Task Export revision 2 published', possibleDuplicate: false }
+  const taskContext = (revision: number) => ({ id: 't1', title: 'Export', status: 'active' as const, revision, direction: `v${revision}`,
+    acceptance: null, openspecChange: null, worktree: null, journal: [] })
+  const notice = { ...base, id: 'p1', messageId: 'n1', threadId: 'n1', task: taskContext(3),
+    revisionNotice: { revision: 2, previousRevision: 1, assignmentId: 'a1', rationale: 'Scope changed' } }
+  // An earlier instruction delivered at revision 1 keeps its header after later publications.
+  const instruction = { ...base, id: 'p0', messageId: 'i1', threadId: 'i1', tags: [], body: 'Build it', task: taskContext(1) }
+  let view!: TestRenderer.ReactTestRenderer
+  act(() => { view = TestRenderer.create(<ChatMessages events={[instruction, notice]} />) })
+  expect(textOf(view.root.findByProps({ 'data-testid': 'peer-revision-notice' }))).toBe('Revision 2 published: Scope changed · delivered under revision 3')
+  const headers = view.root.findAllByProps({ 'data-testid': 'peer-task' }).map(node => textOf(node.findByType('summary')))
+  expect(headers).toEqual(['Task: Export · active · revision 1', 'Task: Export · active · revision 3'])
+  expect(view.root.findAllByProps({ 'data-testid': 'peer-revision-notice' })).toHaveLength(1)
+  act(() => view.unmount())
+})

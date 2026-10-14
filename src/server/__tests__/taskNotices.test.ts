@@ -293,3 +293,15 @@ test('one revision-published fact per publication: replays, retries, drafts, and
   expect(store.get(task.id)?.revision).toBe(2)
   expect(heard).toEqual([2])
 })
+
+// Historical rows (5.4, D9): publication, notify, and acknowledgement never rewrite them.
+test('a delivered instruction and its thread keep the revision they carried after later publications', async () => {
+  const { task, instructionId } = assignedTask()
+  deliver(instructionId, 'dev', 1)
+  await publish(task.id)
+  await service.notify(human, task.id, 2, 'notify-1')
+  store.acknowledgements.record(task.id, 'dev', 2, null)
+  await publish(task.id, { direction: 'v3', baseRevision: 2, requestKey: 'publish-2', notify: false })
+  expect(mail.get(instructionId)?.taskRevision).toBe(1)
+  expect(store.get(task.id)?.revision).toBe(3)
+})
