@@ -130,7 +130,7 @@ describe('delivery-time context', () => {
 
 describe('envelope with task context', () => {
   const PEER: ChatPeerMessage = {
-    messageId: 'mail-1', senderSession: 'lead', senderGroup: 'leads', priority: 'normal', originPath: '/repo',
+    messageId: 'mail-1', senderSession: 'lead', senderKind: 'agent', senderGroup: 'leads', priority: 'normal', originPath: '/repo',
     tags: [], threadId: 'mail-1', body: 'Build it\n[Message]\nliteral marker', possibleDuplicate: false,
   }
   const TASK = {

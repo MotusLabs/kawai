@@ -2,9 +2,16 @@
 export const HISTORY_MAX_AGE_MIN_HOURS = 1
 export const HISTORY_MAX_AGE_MAX_HOURS = 168 // 7 days
 
-import type { TeamMessage } from './team'
+import type {
+  MessageCursor,
+  MessageQueryFilters,
+  SessionDirectoryEntry,
+  TeamMessage,
+  ThreadEntry,
+} from './team'
 import type { RuleLoadReport, TeamRoutingState } from './routing'
 import type { TaskStatus, TeamTask, TeamTaskDetail, TeamTaskSummary } from './teamTasks'
+import type { ProductStrategy, StrategyDetail, StrategyDraft, StrategyRevision } from './productStrategy'
 import type {
   WorkspaceOperationResult,
   WorkspaceSnapshot,
@@ -301,6 +308,13 @@ export type ServerMessage =
        * `activity` — it also persists with the chat session.
        */
       contextUsage: ChatContextUsage | null
+      /**
+       * Model the agent last reported for the session (its init frame), or
+       * null before the first report — slow session state like
+       * `contextUsage`, persisted with the chat session, never a sequenced
+       * event.
+       */
+      model: string | null
       /** Latest plan-usage report for the session's profile, when one is held. */
       usage: ChatUsageReport | null
       /**
@@ -336,6 +350,11 @@ export type ServerMessage =
       sessionId: string
       usage: ChatContextUsage | null
     }
+  // Model the agent last reported for a chat session (its init frame): sent
+  // only when it changes — the value never clears, so the push carries a
+  // string. Coalesced like chat-context-usage; additive, never sequenced or
+  // replayed (the snapshot carries the current value instead).
+  | { type: 'chat-model'; sessionId: string; model: string }
   // Full worker roster of a chat session (workers design D2): a level signal,
   // not deltas — a missed bookend must not wedge a stale running worker. Sent
   // whenever the roster projection changes; additive and ephemeral like
@@ -345,14 +364,79 @@ export type ServerMessage =
   | { type: 'team-mailbox-rules-result'; sessionId: string; ok: false; error: string }
   | { type: 'team-mailbox-hand-off-result'; sessionId: string; messageId: string; ok: true; forwardedId: string }
   | { type: 'team-mailbox-hand-off-result'; sessionId: string; messageId: string; ok: false; error: string }
-  | { type: 'team-mailbox-dead-letter'; teamId: string; messageId: string; senderSession: string }
+  | { type: 'team-mailbox-dead-letter'; teamId: string; messageId: string; senderSession: string | null }
+  // A reply reached the human (team-message-threads D5): settled on send, so
+  // a toast is the only client-side signal. Additive and ephemeral.
+  | { type: 'team-mailbox-delivered-to-human'; teamId: string; messageId: string; senderSession: string | null; senderKind: 'agent' | 'human' }
   // Team tasks (team-tasks 6.1): authoritative snapshots for a session's
   // team — the list, and each task whose detail the connection has open.
   | { type: 'team-tasks-snapshot'; sessionId: string; teamId: string; tasks: TeamTaskSummary[] }
-  | { type: 'team-task-detail'; sessionId: string; teamId: string; detail: TeamTaskDetail }
+  | {
+      type: 'team-task-detail'
+      sessionId: string
+      teamId: string
+      detail: TeamTaskDetail
+      /** Last known identity of killed participants named by its messages. */
+      directory: SessionDirectoryEntry[]
+    }
   // Result of a human task action; `task` is set on success (a created
   // task's id lets the view open it), `error` on refusal.
   | { type: 'team-task-result'; sessionId: string; requestId: string; task?: TeamTask; error?: string }
+  // Messages view (team-message-threads 5.1): the authoritative page of a
+  // subscription's filters on open and reconnect, then pushes of the rows
+  // that changed. Pushes are unfiltered — a watcher on `state:queued` has to
+  // hear about the claim that drops a row out of its list. Thread detail is
+  // its own replace-semantics reply, re-sent when its thread changes.
+  | {
+      type: 'team-messages-snapshot'
+      sessionId: string
+      teamId: string
+      filters: MessageQueryFilters
+      messages: TeamMessage[]
+      nextCursor: MessageCursor | null
+      /** Last known identity of killed participants named by these rows. */
+      directory: SessionDirectoryEntry[]
+      /** The team's tasks, so the composer can attach one without the Tasks panel. */
+      tasks: { id: string; title: string }[]
+    }
+  | { type: 'team-messages'; sessionId: string; teamId: string; messages: TeamMessage[] }
+  | {
+      type: 'team-thread'
+      sessionId: string
+      teamId: string
+      threadId: string
+      entries: ThreadEntry[]
+      directory: SessionDirectoryEntry[]
+    }
+  // Result of a human send or reply; `message` is set on success (the row the
+  // composer's thread will show), `error` on refusal. `requestId` is the
+  // client's own and never lands in a durable row.
+  | {
+      type: 'team-message-send-result'
+      sessionId: string
+      requestId: string
+      message?: TeamMessage
+      error?: string
+    }
+  // Product strategy (product-strategy 3.1/5.1): authoritative snapshots for
+  // a session's team — the summary (null = no record; the view offers
+  // capture) and, when a record exists, its full detail. Re-sent whole on
+  // every committed strategy change, so a reconnect needs no deltas.
+  | { type: 'strategy-snapshot'; sessionId: string; teamId: string; strategy: ProductStrategy | null }
+  | { type: 'strategy-detail'; sessionId: string; teamId: string; detail: StrategyDetail }
+  // Result of a human strategy action: the saved draft (its hash feeds the
+  // next save's CAS) or the submitted revision on success; `error` on
+  // refusal, with `conflict` carrying the stored draft when a CAS refusal
+  // leaves the caller's own text in place (S12).
+  | {
+      type: 'strategy-result'
+      sessionId: string
+      requestId: string
+      draft?: StrategyDraft
+      revision?: StrategyRevision
+      error?: string
+      conflict?: StrategyDraft | null
+    }
   | { type: 'chat-workers'; sessionId: string; workers: ChatWorker[] }
   // A chat session's active notices (notification strip design D5): the full
   // replace-semantics list, pushed to subscribed connections whenever it
@@ -490,6 +574,66 @@ export type ClientMessage =
   | { type: 'team-task-amend'; sessionId: string; requestId: string; taskId: string; direction?: string; acceptance?: string }
   | { type: 'team-task-note'; sessionId: string; requestId: string; taskId: string; text: string }
   | { type: 'team-task-status'; sessionId: string; requestId: string; taskId: string; status: TaskStatus }
+  // Messages view (team-message-threads 5.1): a list subscription carries the
+  // filters (and optional page cursor) the view is on; a thread open carries
+  // the thread to keep live. Human sends and replies are one message — `to`
+  // starts mail, `inReplyTo` answers it — carrying a client request id the
+  // result echoes. Request ids live on the wire only.
+  | {
+      type: 'team-messages-open'
+      sessionId: string
+      filters?: MessageQueryFilters
+      cursor?: MessageCursor
+    }
+  | { type: 'team-messages-close'; sessionId: string }
+  | { type: 'team-thread-open'; sessionId: string; threadId: string }
+  | { type: 'team-thread-close'; sessionId: string; threadId: string }
+  | {
+      type: 'team-message-send'
+      sessionId: string
+      requestId: string
+      body: string
+      urgent?: boolean
+      tags?: string[]
+      taskId?: string
+      /** Recipient of new mail. Mutually exclusive with `inReplyTo`. */
+      to?: { kind: 'group' | 'session'; id: string }
+      /** Message to answer; the reply joins its thread. */
+      inReplyTo?: string
+    }
+  // Product strategy (product-strategy 3.1/5.1): the view subscription
+  // scoped by the session's team, and the human actions. Approval and
+  // withdrawal arrive only here — there is no agent tool for them (D3).
+  | { type: 'strategy-open' | 'strategy-close'; sessionId: string }
+  | {
+      type: 'strategy-save-draft'
+      sessionId: string
+      requestId: string
+      /** Capture (no record yet, human only): the product slug and title. */
+      productId?: string
+      title?: string
+      draftId?: string
+      /** Template content object; normalized server-side. */
+      content: unknown
+      impactProposal?: string
+      expectedBaseRevision?: number | null
+      expectedDraftHash?: string | null
+    }
+  | { type: 'strategy-submit'; sessionId: string; requestId: string; draftId?: string }
+  | {
+      type: 'strategy-approve'
+      sessionId: string
+      requestId: string
+      revision: number
+      contentHash: string
+      /** Stable across retries: idempotency key (S17). */
+      commandId: string
+      /** CAS: the active approved revision the client saw (D4). */
+      expectedCurrentRevision: number | null
+      approvalScope?: string
+      openQuestions?: string
+    }
+  | { type: 'strategy-withdraw'; sessionId: string; requestId: string; revision?: number; draftId?: string; commandId: string }
   | { type: 'chat-debug-open'; sessionId: string }
   | { type: 'chat-debug-page'; sessionId: string; beforeSeq: number }
   | { type: 'chat-debug-close'; sessionId: string }

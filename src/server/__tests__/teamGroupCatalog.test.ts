@@ -119,6 +119,16 @@ describe('loadGroupCatalog', () => {
     expect(catalog.warnings[0]).toContain('devs.md: onLimit.parkIfResetWithin "soon"')
   })
 
+  test('an invalid effort is a path-prefixed warning; the group stays available', () => {
+    write(repo, 'devs.md', '---\neffort: extreme\n---\nBuild.')
+    const catalog = loadGroupCatalog({ groupsRoot: repo, homeDir: home })
+    expect(catalog.errors).toEqual([])
+    expect(catalog.groups.get('devs')?.effort).toBeUndefined()
+    expect(catalog.warnings).toEqual([
+      `${path.join(repo, '.kawai', 'groups', 'devs.md')}: effort must be low, medium, high, xhigh, max, got "extreme"; ignored`,
+    ])
+  })
+
   test('the change stamp moves when a profile catalog file changes', () => {
     write(repo, 'devs.md', 'Build.')
     const before = groupCatalogStamp({ groupsRoot: repo, homeDir: home })

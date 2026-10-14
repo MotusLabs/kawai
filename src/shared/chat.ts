@@ -96,7 +96,13 @@ export interface ChatCommandState {
 /** Mail received from another chat agent; shared without SDK dependencies. */
 export interface ChatPeerMessage {
   messageId: string
-  senderSession: string
+  /** Sender session; null for a human sender (team-message-threads D4). */
+  senderSession: string | null
+  /**
+   * Actor kind of the sender (team-message-threads D4): the human composing
+   * mail, or an agent session. Absent on recorded envelopes = agent.
+   */
+  senderKind?: 'agent' | 'human'
   senderGroup: string | null
   priority: 'normal' | 'urgent'
   originPath: string
@@ -104,7 +110,7 @@ export interface ChatPeerMessage {
   threadId: string
   body: string
   possibleDuplicate: boolean
-  thread?: Array<{ messageId: string; senderSession: string; body: string }>
+  thread?: Array<{ messageId: string; senderSession: string | null; body: string; senderKind?: 'agent' | 'human' }>
   /** The referenced team task as it was at delivery (team-tasks D3); absent = none. */
   task?: ChatPeerTaskContext
   /** Work handed off after a provider limit (profile routing); absent = none. */
@@ -285,14 +291,20 @@ export interface ChatUsageReport {
   /** ISO timestamp of when the report was received. */
   receivedAt: string
   /**
-   * Which shape it came from: a pushed rate_limit_event, a /usage report, or
-   * the SDK usage pull (which follows the host claude.ai login, not the
-   * session's provider). Absent on reports from older servers.
+   * Which shape it came from: a pushed rate_limit_event, a /usage report, the
+   * SDK usage pull (which follows the host claude.ai login, not the session's
+   * provider), or a pull from the session provider's own quota endpoint.
+   * Absent on reports from older servers.
    */
   source?: ChatUsageSource
 }
 
-export type ChatUsageSource = 'push' | 'report' | 'pull'
+export type ChatUsageSource =
+  | 'push'
+  | 'report'
+  | 'pull'
+  /** Pulled from the session provider's own quota endpoint (provider usage pull). */
+  | 'provider'
 
 /** Where a chat notification came from. */
 export type ChatNotificationSource = 'account' | 'agent'

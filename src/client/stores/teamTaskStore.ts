@@ -4,6 +4,7 @@
 // pushes, and a detail push for a task that is no longer selected is dropped.
 import { create } from 'zustand'
 import type { ServerMessage } from '@shared/types'
+import type { SessionDirectoryEntry } from '@shared/team'
 import type { TeamTaskDetail, TeamTaskSummary } from '@shared/teamTasks'
 
 export type TaskAction = 'create' | 'amend' | 'note' | 'status'
@@ -15,6 +16,8 @@ export interface TaskView {
   /** The task whose detail is shown; null = the list. */
   selectedTaskId: string | null
   detail: TeamTaskDetail | null
+  /** Last known identity of killed participants named by its messages. */
+  directory: SessionDirectoryEntry[]
   /** Actions awaiting their `team-task-result`, by request id. */
   pending: Record<string, TaskAction>
   /** The last refused action's message, until the next action or selection. */
@@ -22,7 +25,7 @@ export interface TaskView {
 }
 
 export const closedTaskView = (): TaskView => ({
-  open: false, loading: false, tasks: [], selectedTaskId: null, detail: null, pending: {}, error: null,
+  open: false, loading: false, tasks: [], selectedTaskId: null, detail: null, directory: [], pending: {}, error: null,
 })
 
 interface TaskState {
@@ -67,7 +70,7 @@ export const useTeamTaskStore = create<TaskState>(set => ({
   applySnapshot: message => set(state => update(state, message.sessionId, { loading: false, tasks: message.tasks })),
   applyDetail: message => set(state =>
     state.views[message.sessionId]?.selectedTaskId === message.detail.task.id
-      ? update(state, message.sessionId, { detail: message.detail })
+      ? update(state, message.sessionId, { detail: message.detail, directory: message.directory })
       : state),
   applyResult: message => set(state => {
     const view = state.views[message.sessionId]

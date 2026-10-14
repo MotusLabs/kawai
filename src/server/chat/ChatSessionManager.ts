@@ -67,11 +67,17 @@ import { logger } from '../logger'
 import { probeSdkAvailability } from './sdkAvailability'
 import { AccountNoticeStore, credentialsPathFor } from './accountNotices'
 import { UsageLimitStore } from './usageLimits'
+import { fetchZaiUsage } from './zaiUsage'
 import { readWorkerTranscript } from './chatWorkerTranscript'
 import { loadTeamGroups } from '../team/teamGroups'
 import { SessionTeams } from '../team/sessionTeams'
+import { SessionDirectory } from '../team/sessionDirectory'
+import { MessageFeed } from '../team/messageFeed'
+import { MessageQuery } from '../team/messageQuery'
 import { TeamMailbox } from '../team/TeamMailbox'
 import { createMailboxServer } from '../team/mailboxTools'
+import { StrategyService } from '../strategy/StrategyService'
+import { StrategyStore } from '../strategy/strategyStore'
 import type { TeamMessage } from '../../shared/team'
 import { MailDispatcher } from '../team/dispatcher'
 import { receiptMessageId } from '../team/receipt'
@@ -103,6 +109,8 @@ export interface ChatSessionManagerOptions {
   onRoutingRulesLoaded?: () => void
   /** Every committed team-task change (wired to the task view push in index.ts). */
   onTaskChange?: (teamId: string) => void
+  /** Every committed strategy change (wired to the strategy view push in bootstrap.ts). */
+  onStrategyChange?: (teamId: string) => void
   /** Conversation-event sink (wired to the WS broadcast in index.ts). */
   onEvent: (sessionId: string, event: ChatEvent) => void
   /** Command-state sink (wired to the chat-commands push in index.ts). */
@@ -121,6 +129,12 @@ export interface ChatSessionManagerOptions {
    * and the driver-flagged corrections.
    */
   onContextUsage?: (sessionId: string, usage: ChatContextUsage | null) => void
+  /**
+   * Model sink (chat-session-model design D5): called only when the driver
+   * reports a model different from the last one. Wired to the coalesced WS
+   * broadcast in index.ts; the value itself persists with the session row.
+   */
+  onModel?: (sessionId: string, model: string) => void
   /**
    * Plan-usage sink (usage bar design D4): called with the latest report
    * (or null) whenever a profile's held data changes. Wired to the WS
@@ -172,6 +186,13 @@ export interface ChatSessionManagerOptions {
    * in.
    */
   profileCatalogHome?: string
+  /**
+   * Injected in tests; production uses global fetch for the provider usage
+   * pull (the session provider's own quota endpoint).
+   */
+  providerUsageFetch?: typeof fetch
+  /** Provider usage refresh cadence (provider pull design D5); tests shrink it. */
+  providerUsageRefreshMs?: number
   /**
    * Base delay between transcript-locate retries (chat-session-naming D4).
    * The locator runs until the session goes away — the transcript appears
@@ -281,6 +302,16 @@ export class ChatSessionManager {
    * memory only (usage bar design D3): a restart begins with none.
    */
   private readonly usageLimits = new UsageLimitStore()
+  /**
+   * Profiles confirmed to serve the provider quota endpoint (provider usage
+   * pull): their usage comes from there, and the host-login SDK pull is
+   * skipped for the store lifetime. In memory only — a restart re-probes.
+   */
+  private readonly providerUsageProfiles = new Set<string>()
+  /** Refresh timer per routed profile (provider usage pull design D5). */
+  private readonly providerUsageTimers = new Map<string, ReturnType<typeof setInterval>>()
+  /** Provider usage refresh cadence (provider usage pull design D5). */
+  private readonly providerUsageRefreshMs: number
   /**
    * Latest login-expiry notice per credentials path (notification strip
    * design D2), in memory only: a restart begins with none until a check
@@ -403,6 +434,9 @@ export class ChatSessionManager {
         this.contextReadings.get(sessionId) ??
         this.records.get(sessionId)?.contextUsage ??
         null,
+      // Stored with the row (design D4): applyPatch keeps the record current,
+      // so this is the last reported model, null before the first one.
+      model: this.records.get(sessionId)?.model ?? null,
       usage: this.usageLimits.get(this.profileIdOf(sessionId) ?? 'default'),
       // The spawned-worker roster (workers design D2); live entries hold the
       // session at working, settled ones carry their persisted outcomes.
@@ -660,6 +694,8 @@ export class ChatSessionManager {
 
   constructor(options: ChatSessionManagerOptions) {
     this.options = options
+    this.directory = new SessionDirectory(options.db.db)
+    this.providerUsageRefreshMs = options.providerUsageRefreshMs ?? 10 * 60 * 1000
     // Team membership (agent-teams D6) resolves asynchronously; once a
     // session's team is known its group label/missing state is published.
     this.teams = new SessionTeams({
@@ -667,6 +703,8 @@ export class ChatSessionManager {
       onResolved: (sessionId) => {
         this.dispatcher?.notify()
         const record = this.records.get(sessionId)
+        // The directory keys by team, so it can only record once the team is known.
+        if (record) this.syncDirectory(sessionId)
         // Group-less sessions have nothing to show; skip the broadcast.
         if (record?.groupId != null) {
           this.options.registry.updateSession(sessionId, this.groupFields(record))
@@ -712,6 +750,19 @@ export class ChatSessionManager {
     })
     this.mailbox = this.teamMail.mailbox
     this.tasks = this.teamMail.tasks
+    this.messages = new MessageFeed(this.mailbox.store, new MessageQuery(options.db.db))
+    // Product strategy (product-strategy): constructed here, beside the
+    // task service, against the same database. The strategy store's changes
+    // fan out to the strategy view pushes; the team comes from the record's
+    // team binding (design D5).
+    this.strategies = new StrategyService(new StrategyStore(options.db.db), {
+      getSession: id => this.records.get(id),
+      ...(options.profileCatalogHome ? { homeDir: options.profileCatalogHome } : {}),
+    })
+    this.strategies.store.subscribe(strategy => {
+      const teamId = strategy.repoBindings.find(binding => binding.kind === 'team')?.root
+      if (teamId) this.options.onStrategyChange?.(teamId)
+    })
     // A retitled task re-labels the headers of the sessions working on it.
     this.tasks.store.subscribe(task => {
       this.options.onTaskChange?.(task.teamId)
@@ -808,9 +859,15 @@ export class ChatSessionManager {
 
   /** Each session's team (agent-teams); shared with the mailbox dispatcher. */
   readonly teams: SessionTeams
+  /** Last known name/group of each team's sessions, kept past kill (team-message-threads D3). */
+  readonly directory: SessionDirectory
   readonly mailbox: TeamMailbox
   /** Team tasks (team-tasks); the task tools and UI actions go through it. */
   readonly tasks: TaskService
+  /** The Messages read model and its live feed (team-message-threads D1/4.3). */
+  readonly messages: MessageFeed
+  /** Product strategy (product-strategy); the strategy tools and UI actions go through it. */
+  readonly strategies: StrategyService
   readonly dispatcher: MailDispatcher
   private readonly teamMail: SessionMailbox
 
@@ -883,7 +940,8 @@ export class ChatSessionManager {
     this.options.db.insertChatSession(record)
     const session = this.toSession(record)
     this.options.registry.setChatSession(session)
-    void this.teams.track(sessionId, projectPath)
+    // The directory keys by team, so it records once resolution lands.
+    void this.teams.track(sessionId, projectPath).then(() => this.syncDirectory(sessionId))
     return { ok: true, session }
   }
 
@@ -1191,6 +1249,9 @@ export class ChatSessionManager {
     // A restore still in flight stops at its next row (design D2).
     this.isShutDown = true
     this.teamMail.close()
+    // Provider usage refreshes die with the server: timers stop now, and the
+    // in-flight continuations check isShutDown before publishing.
+    this.stopProviderUsageRefresh()
     for (const driver of this.drivers.values()) {
       driver.shutdown()
     }
@@ -1467,13 +1528,17 @@ export class ChatSessionManager {
       const queryFactory = await this.resolveQueryFactory()
       // The team must be known before the first spawn reads its prompt.
       await this.teams.track(record.sessionId, this.records.get(record.sessionId)?.projectPath ?? record.projectPath)
-      const teamMcpServer = await createMailboxServer(this.mailbox, record.sessionId, this.tasks)
+      const teamMcpServer = await createMailboxServer(this.mailbox, record.sessionId, this.tasks, this.strategies)
       const driver = new ChatSessionDriver({
         sessionId: record.sessionId,
         projectPath: record.projectPath,
         queryFactory,
         teamMcpServer,
         getSystemPromptAppend: () => this.teams.promptFor(
+          record.sessionId,
+          this.records.get(record.sessionId)?.groupId
+        ),
+        getEffort: () => this.teams.effortFor(
           record.sessionId,
           this.records.get(record.sessionId)?.groupId
         ),
@@ -1514,6 +1579,7 @@ export class ChatSessionManager {
           this.handleDriverWorkers(record.sessionId, workers),
         onContextUsage: (usage, opts) =>
           this.handleDriverContextUsage(record.sessionId, usage, opts),
+        onModel: (model) => this.handleDriverModel(record.sessionId, model),
         // Plan usage is recorded against the session's profile (design D3);
         // the store's change listener drives the onUsage broadcast.
         onRateLimit: (report) =>
@@ -1521,7 +1587,7 @@ export class ChatSessionManager {
         onUsageReport: (report) =>
           this.usageLimits.record(record.claudeProfileId ?? 'default', report),
         claimUsagePull: () =>
-          this.usageLimits.claimPull(record.claudeProfileId ?? 'default'),
+          this.claimProfileUsagePull(record),
         onUsageNoData: () =>
           this.usageLimits.recordNoData(record.claudeProfileId ?? 'default'),
         onStatus: (status) => this.applyPatch(record.sessionId, { status }),
@@ -1666,6 +1732,121 @@ export class ChatSessionManager {
     )
   }
 
+  // ----------------------------------------------------------- provider usage pull
+
+  /**
+   * The gap-fill pull slot (usage bar design D1, provider pull design D4):
+   * the profile's one pull per store lifetime. A profile whose base URL
+   * serves the provider quota endpoint is pulled here, marked routed, and
+   * the host-login SDK pull is skipped — its data would only mislead. A
+   * provider refusal records the no-data verdict; anything else falls
+   * through to the SDK pull exactly as before. An already-routed profile
+   * just restarts its refresh timer.
+   */
+  private async claimProfileUsagePull(record: ChatSessionRecord): Promise<boolean> {
+    const profileId = record.claudeProfileId ?? 'default'
+    if (this.providerUsageProfiles.has(profileId)) {
+      this.ensureProviderUsageRefresh(profileId)
+      return false
+    }
+    if (!this.usageLimits.claimPull(profileId)) return false
+    const target = this.providerUsageTarget(record)
+    // No provider base URL: the endpoint is never contacted, and the SDK
+    // pull answers as before.
+    if (!target) return true
+    const pull = await this.fetchProviderUsage(target)
+    // Shutdown settles every callback: nothing publishes past it.
+    if (this.isShutDown) return false
+    if (pull.ok) {
+      this.providerUsageProfiles.add(profileId)
+      this.usageLimits.record(profileId, pull.report)
+      this.ensureProviderUsageRefresh(profileId)
+      return false
+    }
+    if (pull.outcome === 'provider-refused') {
+      this.usageLimits.recordNoData(profileId)
+      return false
+    }
+    // Not provider-shaped or unreachable: the host-login SDK pull applies.
+    return true
+  }
+
+  /**
+   * The quota pull target for a session's profile — the effective base URL
+   * and credentials its SDK spawns receive (the same resolution the auth
+   * gate and account notices read), or null when the profile has no
+   * provider base URL.
+   */
+  private providerUsageTarget(
+    record: ChatSessionRecord
+  ): { baseUrl: string; token?: string } | null {
+    const env = this.launchEnvOf(record.claudeProfileId, record.projectPath)
+    const baseUrl = env.ANTHROPIC_BASE_URL?.trim()
+    if (!baseUrl) return null
+    const token =
+      env.ANTHROPIC_AUTH_TOKEN?.trim() || env.ANTHROPIC_API_KEY?.trim() || undefined
+    return { baseUrl, token }
+  }
+
+  private fetchProviderUsage(target: { baseUrl: string; token?: string }) {
+    return fetchZaiUsage(target.baseUrl, target.token, this.options.providerUsageFetch ?? fetch)
+  }
+
+  /**
+   * Provider usage has no pushes (provider pull design D5): a timer per
+   * routed profile re-pulls on a fixed cadence while at least one of its
+   * sessions has a started agent. A tick without a qualifying session makes
+   * no request and stops the timer; the next spawn of a routed profile
+   * restarts it.
+   */
+  private ensureProviderUsageRefresh(profileId: string): void {
+    if (this.providerUsageTimers.has(profileId)) return
+    const timer = setInterval(
+      () => this.refreshProviderUsage(profileId),
+      this.providerUsageRefreshMs
+    )
+    timer.unref?.()
+    this.providerUsageTimers.set(profileId, timer)
+  }
+
+  private refreshProviderUsage(profileId: string): void {
+    if (!this.hasLiveSessionOf(profileId)) {
+      const timer = this.providerUsageTimers.get(profileId)
+      if (timer) clearInterval(timer)
+      this.providerUsageTimers.delete(profileId)
+      return
+    }
+    const record = [...this.records.values()].find(
+      (candidate) => (candidate.claudeProfileId ?? 'default') === profileId
+    )
+    if (!record) return
+    const target = this.providerUsageTarget(record)
+    if (!target) return
+    void this.fetchProviderUsage(target).then((pull) => {
+      // Shutdown settles every callback (an in-flight refresh dies with it);
+      // a failed refresh keeps the held report (store semantics); a lost
+      // routing just skips the tick.
+      if (this.isShutDown || !pull.ok) return
+      this.usageLimits.record(profileId, pull.report)
+    })
+  }
+
+  /** Any non-archived session of the profile with a live driver (started agent). */
+  private hasLiveSessionOf(profileId: string): boolean {
+    for (const record of this.records.values()) {
+      if ((record.claudeProfileId ?? 'default') !== profileId) continue
+      if (record.archivedAt) continue
+      if (this.drivers.has(record.sessionId)) return true
+    }
+    return false
+  }
+
+  /** Stop every provider usage refresh timer (server shutdown). */
+  private stopProviderUsageRefresh(): void {
+    for (const timer of this.providerUsageTimers.values()) clearInterval(timer)
+    this.providerUsageTimers.clear()
+  }
+
   /**
    * Resolve the SDK query() once per process. The import is dynamic so a
    * missing/broken install surfaces as a send-time error, not a crash; the
@@ -1751,6 +1932,19 @@ export class ChatSessionManager {
     const usage = this.contextReadings.get(sessionId)
     if (!usage) return
     this.applyPatch(sessionId, { contextUsage: usage })
+  }
+
+  /**
+   * The driver reported a model different from the last one (chat-session-model
+   * design D5): record and persist it right away — model changes are rare (a
+   * /model switch), so there is no per-request churn to batch, and a crash
+   * before the next boundary must not lose the switch — then hand it to the
+   * broadcast sink. The driver already deduped, so this runs per change.
+   */
+  private handleDriverModel(sessionId: string, model: string): void {
+    if (!this.records.has(sessionId)) return
+    this.applyPatch(sessionId, { model })
+    this.options.onModel?.(sessionId, model)
   }
 
   /**
@@ -1848,6 +2042,29 @@ export class ChatSessionManager {
     this.applyPatch(sessionId, { lastActivityAt: new Date().toISOString() })
   }
 
+  /**
+   * Record the session's current name and group under its team. The team is
+   * resolved asynchronously, so this runs again from `onResolved`; with no
+   * team yet there is nothing to record. Called from detached callbacks that
+   * can land after teardown has closed the database — a lost last-known-name
+   * write is preferable to an unhandled rejection, so the write is best-effort.
+   */
+  private syncDirectory(sessionId: string): void {
+    if (this.isShutDown) return
+    const record = this.records.get(sessionId)
+    const teamId = this.teams.teamOf(sessionId)?.teamId
+    if (!record || !teamId) return
+    try {
+      this.directory.upsert(teamId, {
+        sessionId,
+        name: record.name,
+        group: record.groupId ?? null,
+      })
+    } catch {
+      // Teardown closed the database under an in-flight team resolution.
+    }
+  }
+
   private applyPatch(
     sessionId: string,
     patch: Partial<ChatSessionRecord>
@@ -1856,6 +2073,9 @@ export class ChatSessionManager {
     if (!record) return
     const next = { ...record, ...patch }
     this.records.set(sessionId, next)
+    // Keep the directory's last known name and group (team-message-threads
+    // D3); kill and archive deliberately never write here.
+    if (patch.name !== undefined || patch.groupId !== undefined) this.syncDirectory(sessionId)
     if (
       (patch.status !== undefined && patch.status !== record.status) ||
       patch.projectPath !== undefined || patch.archivedAt !== undefined ||

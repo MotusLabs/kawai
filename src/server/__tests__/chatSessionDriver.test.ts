@@ -177,6 +177,8 @@ interface Harness {
   sdkSessionIds: string[]
   factoryWires: Array<ChatWireRecorder | undefined>
   commandStates: ChatCommandState[]
+  /** Each onModel firing (chat-session-model design D5), in order. */
+  models: string[]
 }
 
 function createHarness(
@@ -188,6 +190,7 @@ function createHarness(
     getApprovalPolicy?: () => ChatApprovalPolicy
     teamMcpServer?: NonNullable<Options['mcpServers']>[string]
     getSystemPromptAppend?: () => string | undefined
+    getEffort?: () => Options['effort']
     /** Replaces the harness's cwd capture (e.g. with a throwing observer). */
     onCwdChanged?: (newCwd: string) => void
     wire?: ChatWireRecorder
@@ -224,6 +227,7 @@ function createHarness(
   const sdkSessionIds: string[] = []
   const factoryWires: Array<ChatWireRecorder | undefined> = []
   const commandStates: ChatCommandState[] = []
+  const models: string[] = []
   // usageImpl/contextImpl/claimUsagePull/initializationCommands feed the fake
   // factory; the rest pass to the driver.
   const { usageImpl, contextImpl, claimUsagePull, initializationCommands, ...driverOverrides } = overrides
@@ -261,6 +265,7 @@ function createHarness(
     ...(claimUsagePull ? { claimUsagePull } : {}),
     onUsageNoData: () => noData.push(1),
     onSdkSessionId: (id) => sdkSessionIds.push(id),
+    onModel: (model) => models.push(model),
     onCwdChanged: (cwd) => cwds.push(cwd),
     onCommandState: (state) => commandStates.push(state),
     ...driverOverrides,
@@ -283,6 +288,7 @@ function createHarness(
     sdkSessionIds,
     factoryWires,
     commandStates,
+    models,
   }
 }
 
@@ -612,6 +618,37 @@ describe('ChatSessionDriver', () => {
     harness.driver.send('after exit')
     expect(harness.fakes[1]!.options.systemPrompt).toMatchObject({ append: '# Your role: QA\n\nTest it twice.' })
     expect(reads).toBe(2)
+    harness.driver.kill()
+  })
+
+  test('the group effort is a launch option, re-read only at the next spawn', async () => {
+    let effort: Options['effort'] = 'medium'
+    let reads = 0
+    const harness = createHarness({ getEffort: () => { reads++; return effort } })
+    harness.driver.send('hello')
+    expect(harness.fakes[0]!.options.effort).toBe('medium')
+    // An edit while the process runs changes nothing for it.
+    effort = 'max'
+    harness.driver.send('again')
+    expect(reads).toBe(1)
+    harness.fakes[0]!.exit()
+    await flush()
+    harness.driver.send('after exit')
+    expect(harness.fakes[1]!.options.effort).toBe('max')
+    // Removing it leaves Claude Code's settings in force: no effort key.
+    effort = undefined
+    harness.fakes[1]!.exit()
+    await flush()
+    harness.driver.send('after removal')
+    expect('effort' in harness.fakes[2]!.options).toBe(false)
+    expect(reads).toBe(3)
+    harness.driver.kill()
+  })
+
+  test('without a getter no effort option is passed', () => {
+    const harness = createHarness()
+    harness.driver.send('hello')
+    expect('effort' in harness.fakes[0]!.options).toBe(false)
     harness.driver.kill()
   })
 
@@ -2349,6 +2386,70 @@ describe('ChatSessionDriver context usage', () => {
     const reading = harness.contextUsage.at(-1)
     expect(reading).toMatchObject({ thresholdTokens: 167_000 })
     expect(reading?.thresholdApproximate).toBeUndefined()
+  })
+})
+
+describe('ChatSessionDriver model', () => {
+  /** An init frame carrying a model, in the shape the SDK delivers it. */
+  function initFrame(model?: string): SDKMessage {
+    return {
+      type: 'system',
+      subtype: 'init',
+      session_id: 'sdk-model-1',
+      ...(model !== undefined ? { model } : {}),
+    } as unknown as SDKMessage
+  }
+
+  test('the first init fires once with its model', async () => {
+    const harness = createHarness()
+    harness.driver.send('hello')
+    harness.fakes[0]!.push(initFrame('claude-sonnet-5-5'))
+    await flush()
+    expect(harness.models).toEqual(['claude-sonnet-5-5'])
+    harness.driver.kill()
+  })
+
+  test('an unchanged model on the next turn does not re-fire', async () => {
+    const harness = createHarness()
+    harness.driver.send('hello')
+    const fake = harness.fakes[0]!
+    fake.push(initFrame('claude-sonnet-5-5'))
+    fake.push(result('success'))
+    await flush()
+    // The next turn's init names the same model: no second firing.
+    harness.driver.send('again')
+    fake.push(initFrame('claude-sonnet-5-5'))
+    fake.push(result('success'))
+    await flush()
+    expect(harness.models).toEqual(['claude-sonnet-5-5'])
+    harness.driver.kill()
+  })
+
+  test('a changed model re-fires with the new value', async () => {
+    const harness = createHarness()
+    harness.driver.send('hello')
+    const fake = harness.fakes[0]!
+    fake.push(initFrame('claude-sonnet-5-5'))
+    fake.push(result('success'))
+    await flush()
+    // A mid-session /model switch: the next turn's init carries the alias.
+    harness.driver.send('switched')
+    fake.push(initFrame('sonnet'))
+    fake.push(result('success'))
+    await flush()
+    expect(harness.models).toEqual(['claude-sonnet-5-5', 'sonnet'])
+    harness.driver.kill()
+  })
+
+  test('an empty or missing model never fires', async () => {
+    const harness = createHarness()
+    harness.driver.send('hello')
+    const fake = harness.fakes[0]!
+    fake.push(initFrame())
+    fake.push(initFrame(''))
+    await flush()
+    expect(harness.models).toEqual([])
+    harness.driver.kill()
   })
 })
 

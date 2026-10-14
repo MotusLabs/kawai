@@ -36,15 +36,15 @@ export interface RouteUsageWindow {
 
 /**
  * A profile's latest plan usage. `source` tells where it came from: a pushed
- * rate_limit_event, a /usage report, or the SDK usage pull — the pull follows
- * the host claude.ai login, so for gateway profiles it describes that account,
- * not the gateway's.
+ * rate_limit_event, a /usage report, the SDK usage pull — which follows the
+ * host claude.ai login, so for gateway profiles it describes that account,
+ * not the gateway's — or the provider quota pull, which is the gateway's own.
  */
 export interface RouteUsage {
   status: 'allowed' | 'warning' | 'limited'
   windows: RouteUsageWindow[]
   receivedAt: string
-  source: 'push' | 'report' | 'pull' | 'unknown'
+  source: 'push' | 'report' | 'pull' | 'provider' | 'unknown'
 }
 
 export interface RouteProfileState {

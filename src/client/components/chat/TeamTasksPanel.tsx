@@ -8,10 +8,13 @@ import type { SendClientMessage } from '@shared/types'
 import { useSessionStore } from '../../stores/sessionStore'
 import { useTeamTaskStore, type TaskView } from '../../stores/teamTaskStore'
 import TeamTaskDetail from './TeamTaskDetail'
+import { openParticipantChat } from './openParticipant'
 import { actorLabel, sessionLabel } from './teamTaskLabels'
 
-export default function TeamTasksPanel({ sessionId, view, sendMessage, connected, onClose }: {
+export default function TeamTasksPanel({ sessionId, view, sendMessage, connected, onClose, onOpenThread }: {
   sessionId: string; view: TaskView; sendMessage: SendClientMessage; connected: boolean; onClose: () => void
+  /** Handed to a task's messages: open that message's thread (5.4). */
+  onOpenThread?: (threadId: string) => void
 }) {
   const sessions = useSessionStore(state => state.sessions)
   const [draft, setDraft] = useState({ title: '', direction: '', acceptance: '', parentId: '', worktree: '', openspecChange: '' })
@@ -40,7 +43,8 @@ export default function TeamTasksPanel({ sessionId, view, sendMessage, connected
     {view.error && <p role="alert" className="border-b border-border p-3 text-chat-meta text-chat-danger">{view.error}</p>}
     <div className="min-h-0 flex-1 overflow-y-auto p-3">
       {view.selectedTaskId ? (
-        <TeamTaskDetail sessionId={sessionId} view={view} sendMessage={sendMessage} connected={connected} sessions={sessions} />
+        <TeamTaskDetail sessionId={sessionId} view={view} sendMessage={sendMessage} connected={connected} sessions={sessions}
+          onOpenThread={onOpenThread} onOpenSession={openParticipantChat} />
       ) : <>
         <details className="mb-4 border border-border p-2" data-testid="task-create">
           <summary className="cursor-pointer font-medium">New task</summary>
