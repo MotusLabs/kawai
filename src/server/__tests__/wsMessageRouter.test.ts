@@ -29,15 +29,15 @@ const deliver = (message: ClientMessage) => handleMessage(context, ws, JSON.stri
 describe('messageRouter task-assignment forwarding', () => {
   test('every assignment client message reaches ChatConnections, never the unknown-type error', async () => {
     const assign: ClientMessage = {
-      type: 'team-task-assign', sessionId: 'dev', requestId: 'r1', taskId: 'task-1',
+      type: 'team-task-assign', teamPath: '/repo', requestId: 'r1', taskId: 'task-1',
       target: { kind: 'group', id: 'devs' }, instruction: 'Go', requestKey: 'k1',
     }
     const preview: ClientMessage = {
-      type: 'team-task-preview', sessionId: 'dev', requestId: 'r2', target: { kind: 'group', id: 'devs' },
+      type: 'team-task-preview', teamPath: '/repo', requestId: 'r2', target: { kind: 'group', id: 'devs' },
     }
-    const targets: ClientMessage = { type: 'team-task-targets', sessionId: 'dev', requestId: 'r3' }
+    const targets: ClientMessage = { type: 'team-task-targets', teamPath: '/repo', requestId: 'r3' }
     const create: ClientMessage = {
-      type: 'team-task-create', sessionId: 'dev', requestId: 'r4', title: 'T', direction: 'D', requestKey: 'k2',
+      type: 'team-task-create', teamPath: '/repo', requestId: 'r4', title: 'T', direction: 'D', requestKey: 'k2',
     }
     deliver(assign)
     deliver(preview)
@@ -52,7 +52,7 @@ describe('messageRouter task-assignment forwarding', () => {
   })
 
   test('an unknown type still errors instead of forwarding', async () => {
-    deliver({ type: 'team-task-nonsense', sessionId: 'dev' } as unknown as ClientMessage)
+    deliver({ type: 'team-task-nonsense', teamPath: '/repo' } as unknown as ClientMessage)
     await Promise.resolve()
     expect(forwarded.map(message => message.type)).not.toContain('team-task-nonsense')
     expect(sent.at(-1)).toMatchObject({ type: 'error', message: 'Unknown message type' })

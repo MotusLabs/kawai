@@ -45,7 +45,7 @@ test('peer row is distinct and restored by reconnect snapshot', () => {
 test('mailbox lists all categories and sends cancel, retry, discard; offline actions disabled', () => {
   const sent: ClientMessage[] = []
   const view = { open: true, loading: false, messages: [mail('queued', 'queued'), mail('future', 'queued', new Date(Date.now()+60000).toISOString()), mail('dead', 'dead'), mail('held', 'uncertain')] }
-  const props = { sessionId: 'dev', view, connected: true, sendMessage: (message: ClientMessage) => sent.push(message), onClose: () => {} }
+  const props = { teamPath: 'dev', view, connected: true, sendMessage: (message: ClientMessage) => sent.push(message), onClose: () => {} }
   const renderer = TestRenderer.create(<TeamMailboxPanel {...props} />)
   expect(renderer.root.findAllByType('section').map(section => section.props['aria-label'])).toEqual(['Routing rules', 'Routing decisions', 'Queued', 'Starting agent', 'Receiving', 'Parked', 'Scheduled', 'Dead letters', 'Held for review'])
   // Close mailbox and Reload routing rules come first.
@@ -58,11 +58,11 @@ test('mailbox lists all categories and sends cancel, retry, discard; offline act
 })
 test('snapshot replaces stale mailbox rows and ignores closed views', () => {
   const store = useTeamMailboxStore.getState()
-  store.open('dev'); store.apply({ type: 'team-mailbox-snapshot', sessionId: 'dev', teamId: 'team', messages: [mail('old', 'dead')] })
+  store.open('dev'); store.apply({ type: 'team-mailbox-snapshot', teamPath: 'dev', teamId: 'team', messages: [mail('old', 'dead')] })
   store.open('dev'); expect(useTeamMailboxStore.getState().views.dev!.loading).toBe(true)
-  store.apply({ type: 'team-mailbox-snapshot', sessionId: 'dev', teamId: 'team', messages: [] })
+  store.apply({ type: 'team-mailbox-snapshot', teamPath: 'dev', teamId: 'team', messages: [] })
   expect(useTeamMailboxStore.getState().views.dev).toMatchObject({ messages: [], loading: false })
-  store.close('dev'); store.apply({ type: 'team-mailbox-snapshot', sessionId: 'dev', teamId: 'team', messages: [mail('late', 'queued')] })
+  store.close('dev'); store.apply({ type: 'team-mailbox-snapshot', teamPath: 'dev', teamId: 'team', messages: [mail('late', 'queued')] })
   expect(useTeamMailboxStore.getState().views.dev).toBeUndefined()
 })
 test('hop-limit notice adds a human toast', () => {
@@ -74,7 +74,7 @@ test('hop-limit notice adds a human toast', () => {
 })
 
 test('claimed mail stays visible while waiting for the durable receipt', () => {
-  const renderer = TestRenderer.create(<TeamMailboxPanel sessionId="dev" view={{ open: true, loading: false, messages: [mail('in flight', 'claimed')] }} connected sendMessage={() => {}} onClose={() => {}} />)
+  const renderer = TestRenderer.create(<TeamMailboxPanel teamPath="dev" view={{ open: true, loading: false, messages: [mail('in flight', 'claimed')] }} connected sendMessage={() => {}} onClose={() => {}} />)
   expect(JSON.stringify(renderer.root.findByProps({ 'aria-label': 'Receiving' }).findByType('article').findAllByType('p').map(p => p.children))).toContain('in flight')
   renderer.unmount()
 })
@@ -97,7 +97,7 @@ test('every unsettled state renders in exactly one section', () => {
     mail('dead', 'dead'),
     mail('uncertain', 'uncertain'),
   ]
-  const renderer = TestRenderer.create(<TeamMailboxPanel sessionId="dev" view={{ open: true, loading: false, messages }} connected sendMessage={() => {}} onClose={() => {}} />)
+  const renderer = TestRenderer.create(<TeamMailboxPanel teamPath="dev" view={{ open: true, loading: false, messages }} connected sendMessage={() => {}} onClose={() => {}} />)
   const sections = renderer.root.findAllByType('section').filter(section => section.props['aria-label'] !== 'Routing rules' && section.props['aria-label'] !== 'Routing decisions')
   const placed = sections.flatMap(section => section.findAllByType('article').map(() => section.props['aria-label']))
   expect(sections.map(section => section.props['aria-label'])).toEqual(['Queued', 'Starting agent', 'Receiving', 'Parked', 'Scheduled', 'Dead letters', 'Held for review'])
@@ -111,7 +111,7 @@ test('every unsettled state renders in exactly one section', () => {
 test('a spawning row shows Starting agent with its reservation facts, then Receiving', () => {
   const waiting = { starting: reason({ kind: 'starting-agent', reservation: { group: 'devs', profile: 'glm', worktree: '/repo/feat-x', startedAt: new Date(Date.now() - 90_000).toISOString() } },
     [{ kind: 'group-cap', counts: { live: 1, cap: 1 } }, { kind: 'worktree-occupied', counts: { live: 1, cap: 1 }, detail: '/repo/feat-x' }]) }
-  const props = { sessionId: 'lead', connected: true, sendMessage: () => {}, onClose: () => {} }
+  const props = { teamPath: 'lead', connected: true, sendMessage: () => {}, onClose: () => {} }
   let renderer!: TestRenderer.ReactTestRenderer
   act(() => { renderer = TestRenderer.create(<TeamMailboxPanel {...props} view={{ open: true, loading: false, messages: [mail('starting', 'spawning')], waiting }} />) })
   const section = renderer.root.findByProps({ 'aria-label': 'Starting agent' })
@@ -137,7 +137,7 @@ test('a waiting row shows its blocker and expands to the other constraints with 
     { kind: 'worktree-occupied', counts: { live: 1, cap: 1 }, sessionIds: ['writer'], detail: '/repo/feat-x' },
     [{ kind: 'no-eligible-member', sessionIds: ['writer'], detail: 'writer working' }, { kind: 'spawn-backoff', retryAt: new Date(Date.now() + 30_000).toISOString() }]) }
   let renderer!: TestRenderer.ReactTestRenderer
-  act(() => { renderer = TestRenderer.create(<TeamMailboxPanel sessionId="lead" view={{ open: true, loading: false, messages: [mail('blocked', 'queued')], waiting }}
+  act(() => { renderer = TestRenderer.create(<TeamMailboxPanel teamPath="lead" view={{ open: true, loading: false, messages: [mail('blocked', 'queued')], waiting }}
     connected sendMessage={() => {}} onClose={() => {}} sessions={sessions} onOpenSession={id => opened.push(id)} />) })
   const article = renderer.root.findByProps({ 'data-message-id': 'blocked' })
   // The blocker is one line: worktree basename, occupant named and linked.
@@ -165,7 +165,7 @@ test('a no-eligible-member breakdown links every named member', () => {
     { sessionId: 'other', cause: 'in another worktree', detail: '/repo/feat-y' },
   ] }) }
   let renderer!: TestRenderer.ReactTestRenderer
-  act(() => { renderer = TestRenderer.create(<TeamMailboxPanel sessionId="lead" view={{ open: true, loading: false, messages: [mail('blocked', 'queued')], waiting }}
+  act(() => { renderer = TestRenderer.create(<TeamMailboxPanel teamPath="lead" view={{ open: true, loading: false, messages: [mail('blocked', 'queued')], waiting }}
     connected sendMessage={() => {}} onClose={() => {}} sessions={[...sessions, { id: 'other', name: 'Other Dev', groupId: 'devs' }]} onOpenSession={id => opened.push(id)} />) })
   const article = renderer.root.findByProps({ 'data-message-id': 'blocked' })
   const links = article.findAllByProps({ 'data-testid': 'waiting-session' })
@@ -183,7 +183,7 @@ test('a no-eligible-member breakdown links every named member', () => {
 test('a dead letter reads as a sentence with the code still visible', () => {
   const dead = { ...mail('gone', 'dead'), reason: 'worktree-missing: /repo/gone' }
   let renderer!: TestRenderer.ReactTestRenderer
-  act(() => { renderer = TestRenderer.create(<TeamMailboxPanel sessionId="lead" view={{ open: true, loading: false, messages: [dead] }} connected sendMessage={() => {}} onClose={() => {}} />) })
+  act(() => { renderer = TestRenderer.create(<TeamMailboxPanel teamPath="lead" view={{ open: true, loading: false, messages: [dead] }} connected sendMessage={() => {}} onClose={() => {}} />) })
   const line = renderer.root.findByProps({ 'data-testid': 'dead-letter-reason' })
   const text = allText(line)
   expect(text).toContain('The target worktree is missing')
@@ -195,7 +195,7 @@ test('snapshot updates reasons and the roster without row changes', () => {
   const store = useTeamMailboxStore.getState()
   store.open('dev')
   const snapshot = (waiting?: Record<string, WaitingReason>, worktrees?: TeamWorktreeOccupancy[]) =>
-    store.apply({ type: 'team-mailbox-snapshot', sessionId: 'dev', teamId: 'team', messages: [mail('m', 'queued')], ...waiting ? { waiting } : {}, ...worktrees ? { worktrees } : {} })
+    store.apply({ type: 'team-mailbox-snapshot', teamPath: 'dev', teamId: 'team', messages: [mail('m', 'queued')], ...waiting ? { waiting } : {}, ...worktrees ? { worktrees } : {} })
   snapshot({ m: reason({ kind: 'group-cap', counts: { live: 2, cap: 2 } }) })
   expect(useTeamMailboxStore.getState().views.dev!.waiting).toEqual({ m: { blocker: { kind: 'group-cap', counts: { live: 2, cap: 2 } }, others: [] } })
   // A reason-only re-publish replaces the reasons; rows untouched.
@@ -228,10 +228,10 @@ test('routing rules: reload sends once, shows per-rule results and load errors, 
   const sent: ClientMessage[] = []
   const store = useTeamMailboxStore.getState()
   store.open('dev')
-  store.apply({ type: 'team-mailbox-snapshot', sessionId: 'dev', teamId: 'team', messages: [], routing: {
+  store.apply({ type: 'team-mailbox-snapshot', teamPath: 'dev', teamId: 'team', messages: [], routing: {
     rules: null, decisions: [{ at: '2026-10-12T12:00:00.000Z', teamId: 'team', groupId: 'devs', messageId: 'm1', source: 'fallback', decision: 'built-in', reason: 'rule failed: timeout' }],
   } })
-  const render = (connected = true) => <TeamMailboxPanel sessionId="dev" view={useTeamMailboxStore.getState().views.dev!} connected={connected}
+  const render = (connected = true) => <TeamMailboxPanel teamPath="dev" view={useTeamMailboxStore.getState().views.dev!} connected={connected}
     sendMessage={message => sent.push(message)} onClose={() => {}} />
   let renderer!: TestRenderer.ReactTestRenderer
   act(() => { renderer = TestRenderer.create(render()) })
@@ -240,17 +240,17 @@ test('routing rules: reload sends once, shows per-rule results and load errors, 
   expect(text()).toContain('rule failed: timeout')
   const reload = () => renderer.root.findAllByType('button').find(button => JSON.stringify(button.children).includes('routing rules'))!
   act(() => reload().props.onClick())
-  expect(sent).toEqual([{ type: 'team-mailbox-reload-rules', sessionId: 'dev' }])
+  expect(sent).toEqual([{ type: 'team-mailbox-reload-rules', teamPath: 'dev' }])
   act(() => renderer.update(render()))
   expect(text()).toContain('Reloading…')
-  act(() => { useTeamMailboxStore.getState().applyRulesResult({ type: 'team-mailbox-rules-result', sessionId: 'dev', ok: true, report: REPORT }) })
+  act(() => { useTeamMailboxStore.getState().applyRulesResult({ type: 'team-mailbox-rules-result', teamPath: 'dev', ok: true, report: REPORT }) })
   act(() => renderer.update(render()))
   expect(renderer.root.findByProps({ 'data-rule-group': 'devs' })).toBeDefined()
   expect(text()).toContain('GLM_API_KEY')
   expect(text()).toContain('SyntaxError: Unexpected token')
   act(() => renderer.update(render(false)))
   expect(reload().props.disabled).toBe(true)
-  act(() => { useTeamMailboxStore.getState().applyRulesResult({ type: 'team-mailbox-rules-result', sessionId: 'dev', ok: false, error: 'reload failed' }) })
+  act(() => { useTeamMailboxStore.getState().applyRulesResult({ type: 'team-mailbox-rules-result', teamPath: 'dev', ok: false, error: 'reload failed' }) })
   act(() => renderer.update(render()))
   expect(text()).toContain('reload failed')
   renderer.unmount()
@@ -261,7 +261,7 @@ test('parked work shows its resume time and hands off to a chosen group or sessi
   const parked = { ...mail('parked', 'parked'), claimedBy: 'dev', parkedUntil: '2026-10-12T15:40:00.000Z', parkCount: 2 }
   const forwarded = { ...mail('fwd', 'queued'), handoff: { fromSession: 'dev', fromProfile: 'glm', claimCommit: null, lastError: null, progress: { toolCalls: 4, tools: [], filesTouched: [] } } }
   const view = { open: true, loading: false, messages: [parked, forwarded] }
-  const props = { sessionId: 'lead', view, connected: true, sendMessage: (message: ClientMessage) => sent.push(message), onClose: () => {}, groups: ['architects', 'devs'] }
+  const props = { teamPath: 'lead', view, connected: true, sendMessage: (message: ClientMessage) => sent.push(message), onClose: () => {}, groups: ['architects', 'devs'] }
   let renderer!: TestRenderer.ReactTestRenderer
   act(() => { renderer = TestRenderer.create(<TeamMailboxPanel {...props} />) })
   const text = allText(renderer.toJSON())
@@ -277,10 +277,10 @@ test('parked work shows its resume time and hands off to a chosen group or sessi
   act(() => control.findByProps({ 'aria-label': 'Hand off target' }).props.onChange({ target: { value: ' dev2 ' } }))
   act(() => handOff().props.onClick())
   expect(sent).toEqual([
-    { type: 'team-mailbox-hand-off', sessionId: 'lead', messageId: 'parked', target: { kind: 'group', id: 'architects' } },
-    { type: 'team-mailbox-hand-off', sessionId: 'lead', messageId: 'parked', target: { kind: 'session', id: 'dev2' } },
+    { type: 'team-mailbox-hand-off', teamPath: 'lead', messageId: 'parked', target: { kind: 'group', id: 'architects' } },
+    { type: 'team-mailbox-hand-off', teamPath: 'lead', messageId: 'parked', target: { kind: 'session', id: 'dev2' } },
   ])
-  act(() => renderer.update(<TeamMailboxPanel {...props} view={{ ...view, handOffResult: { type: 'team-mailbox-hand-off-result', sessionId: 'lead', messageId: 'parked', ok: false, error: 'Unknown group in this team: x' } }} />))
+  act(() => renderer.update(<TeamMailboxPanel {...props} view={{ ...view, handOffResult: { type: 'team-mailbox-hand-off-result', teamPath: 'lead', messageId: 'parked', ok: false, error: 'Unknown group in this team: x' } }} />))
   expect(allText(renderer.toJSON())).toContain('Unknown group in this team: x')
   act(() => renderer.update(<TeamMailboxPanel {...props} connected={false} />))
   expect(handOff().props.disabled).toBe(true)

@@ -165,6 +165,10 @@ export function startServer(): void {
         'workspaceChatCwdRefresh'
       )
     },
+    // Human team views may address any discovered repository, chat or not
+    // (team-workspace-pages D1); read lazily, like the refresh above.
+    workspaceRepositories: () =>
+      workspaceCoordinatorInstance.getSnapshot()?.repositories.map(repository => repository.commonDir) ?? [],
     ...(chatFixtureEnabled ? { queryFactory: fixtureQueryFactory, authCheck: () => true } : {}),
   })
   const chatConnections = new ChatConnections(chatSessionManager, chatWireLogs, message => broadcast(message))

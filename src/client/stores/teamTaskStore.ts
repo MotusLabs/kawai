@@ -1,4 +1,4 @@
-// Per-chat team task views (team-tasks 7.1/7.2, task-assignment 5.3): the
+// Per-team task views (team-tasks 7.1/7.2, task-assignment 5.3): the
 // team's task list, the selected task's detail, and in-flight human actions.
 // Server snapshots are authoritative and replace local rows whole; closed
 // views ignore late pushes, and a detail push for a task that is no longer
@@ -94,19 +94,19 @@ export const closedTaskView = (): TaskView => ({
 
 interface TaskState {
   views: Record<string, TaskView>
-  open: (sessionId: string, taskId?: string) => void
-  close: (sessionId: string) => void
-  select: (sessionId: string, taskId: string | null) => void
-  begin: (sessionId: string, requestId: string, action: TaskAction) => void
-  setDraft: (sessionId: string, patch: Partial<TaskFormDraft>) => void
+  open: (teamKey: string, taskId?: string) => void
+  close: (teamKey: string) => void
+  select: (teamKey: string, taskId: string | null) => void
+  begin: (teamKey: string, requestId: string, action: TaskAction) => void
+  setDraft: (teamKey: string, patch: Partial<TaskFormDraft>) => void
   /** Arm a create intent with a freshly minted request key. */
-  armFlow: (sessionId: string, mode: TaskCreateFlow['mode']) => void
+  armFlow: (teamKey: string, mode: TaskCreateFlow['mode']) => void
   /** Clear the last assign refusal so the retry effect re-sends it. */
-  retryAssign: (sessionId: string) => void
+  retryAssign: (teamKey: string) => void
   /** Record the dispatch payload the armed key is being used for. */
-  flowSendAssign: (sessionId: string, payload: NonNullable<TaskCreateFlow['sentPayload']>) => void
+  flowSendAssign: (teamKey: string, payload: NonNullable<TaskCreateFlow['sentPayload']>) => void
   /** Record the create payload the armed key is being used for. */
-  flowSendCreate: (sessionId: string, payload: TaskCreatePayload) => void
+  flowSendCreate: (teamKey: string, payload: TaskCreatePayload) => void
   /**
    * The connection came back: results for anything still pending were lost
    * with it, so their waiters are dropped. The armed flow keeps its request
@@ -114,59 +114,59 @@ interface TaskState {
    * replays the committed outcome), and the human's resubmit of a create
    * reuses the armed key the same way.
    */
-  reconnected: (sessionId: string) => void
-  beginPreview: (sessionId: string, requestId: string) => void
+  reconnected: (teamKey: string) => void
+  beginPreview: (teamKey: string, requestId: string) => void
   applyPreviewResult: (message: Extract<ServerMessage, { type: 'team-task-preview-result' }>) => void
-  beginTargets: (sessionId: string) => void
+  beginTargets: (teamKey: string) => void
   applyTargetsResult: (message: Extract<ServerMessage, { type: 'team-task-targets-result' }>) => void
   applySnapshot: (message: Extract<ServerMessage, { type: 'team-tasks-snapshot' }>) => void
   applyDetail: (message: Extract<ServerMessage, { type: 'team-task-detail' }>) => void
   applyResult: (message: Extract<ServerMessage, { type: 'team-task-result' }>) => void
 }
 
-const update = (state: TaskState, sessionId: string, patch: Partial<TaskView>) => {
-  const view = state.views[sessionId]
+const update = (state: TaskState, teamKey: string, patch: Partial<TaskView>) => {
+  const view = state.views[teamKey]
   if (!view?.open) return state
-  return { views: { ...state.views, [sessionId]: { ...view, ...patch } } }
+  return { views: { ...state.views, [teamKey]: { ...view, ...patch } } }
 }
 
 export const useTeamTaskStore = create<TaskState>(set => ({
   views: {},
-  open: (sessionId, taskId) => set(state => {
-    const view = state.views[sessionId] ?? closedTaskView()
+  open: (teamKey, taskId) => set(state => {
+    const view = state.views[teamKey] ?? closedTaskView()
     const selectedTaskId = taskId ?? view.selectedTaskId
-    return { views: { ...state.views, [sessionId]: {
+    return { views: { ...state.views, [teamKey]: {
       ...view, open: true, loading: !view.open, selectedTaskId,
       detail: view.detail?.task.id === selectedTaskId ? view.detail : null,
     } } }
   }),
-  close: sessionId => set(state => {
+  close: teamKey => set(state => {
     const views = { ...state.views }
-    delete views[sessionId]
+    delete views[teamKey]
     return { views }
   }),
-  select: (sessionId, taskId) => set(state => update(state, sessionId, {
+  select: (teamKey, taskId) => set(state => update(state, teamKey, {
     selectedTaskId: taskId, error: null, preview: null,
-    detail: state.views[sessionId]?.detail?.task.id === taskId ? state.views[sessionId]!.detail : null,
+    detail: state.views[teamKey]?.detail?.task.id === taskId ? state.views[teamKey]!.detail : null,
   })),
-  begin: (sessionId, requestId, action) => set(state => update(state, sessionId, {
-    pending: { ...state.views[sessionId]?.pending, [requestId]: action }, error: null,
+  begin: (teamKey, requestId, action) => set(state => update(state, teamKey, {
+    pending: { ...state.views[teamKey]?.pending, [requestId]: action }, error: null,
   })),
-  setDraft: (sessionId, patch) => set(state => {
-    const view = state.views[sessionId]
+  setDraft: (teamKey, patch) => set(state => {
+    const view = state.views[teamKey]
     if (!view?.open) return state
-    return { views: { ...state.views, [sessionId]: { ...view, draft: { ...view.draft, ...patch } } } }
+    return { views: { ...state.views, [teamKey]: { ...view, draft: { ...view.draft, ...patch } } } }
   }),
-  armFlow: (sessionId, mode) => set(state => {
-    const view = state.views[sessionId]
+  armFlow: (teamKey, mode) => set(state => {
+    const view = state.views[teamKey]
     if (!view?.open) return state
-    return { views: { ...state.views, [sessionId]: { ...view,
+    return { views: { ...state.views, [teamKey]: { ...view,
       flow: { requestKey: crypto.randomUUID(), mode, taskId: null, assignFailed: false },
       error: null,
     } } }
   }),
-  retryAssign: sessionId => set(state => {
-    const view = state.views[sessionId]
+  retryAssign: teamKey => set(state => {
+    const view = state.views[teamKey]
     if (!view?.open || !view.flow?.assignFailed) return state
     // Reuse the key for a true retry (the server replays the committed
     // outcome). An edited target or instruction is a new intent on the same
@@ -179,60 +179,60 @@ export const useTeamTaskStore = create<TaskState>(set => ({
         view.flow.sentPayload.instruction !== payload.instruction)
     const flow = { ...view.flow, assignFailed: false, sentPayload: payload,
       ...(changed ? { requestKey: crypto.randomUUID() } : {}) }
-    return { views: { ...state.views, [sessionId]: { ...view, flow, error: null } } }
+    return { views: { ...state.views, [teamKey]: { ...view, flow, error: null } } }
   }),
-  beginPreview: (sessionId, requestId) => set(state => {
-    const view = state.views[sessionId]
+  beginPreview: (teamKey, requestId) => set(state => {
+    const view = state.views[teamKey]
     if (!view?.open) return state
-    return { views: { ...state.views, [sessionId]: { ...view, previewPending: { ...view.previewPending, [requestId]: true } } } }
+    return { views: { ...state.views, [teamKey]: { ...view, previewPending: { ...view.previewPending, [requestId]: true } } } }
   }),
   applyPreviewResult: message => set(state => {
-    const view = state.views[message.sessionId]
+    const view = state.views[message.teamPath]
     if (!view?.open) return state
     const previewPending = { ...view.previewPending }
     delete previewPending[message.requestId]
-    return { views: { ...state.views, [message.sessionId]: { ...view, previewPending,
+    return { views: { ...state.views, [message.teamPath]: { ...view, previewPending,
       preview: message.error || message.preview === undefined ? null : message.preview,
       error: message.error ?? view.error,
     } } }
   }),
-  flowSendAssign: (sessionId, payload) => set(state => {
-    const view = state.views[sessionId]
+  flowSendAssign: (teamKey, payload) => set(state => {
+    const view = state.views[teamKey]
     if (!view?.open || !view.flow) return state
     // Set on the first send only: re-sends under the same key carry the same
     // payload by construction, and retryAssign re-keys and re-records on a
     // changed intent — overwriting here would blur which payload the key names.
     if (view.flow.sentPayload !== undefined) return state
-    return { views: { ...state.views, [sessionId]: { ...view, flow: { ...view.flow, sentPayload: payload } } } }
+    return { views: { ...state.views, [teamKey]: { ...view, flow: { ...view.flow, sentPayload: payload } } } }
   }),
-  flowSendCreate: (sessionId, payload) => set(state => {
-    const view = state.views[sessionId]
+  flowSendCreate: (teamKey, payload) => set(state => {
+    const view = state.views[teamKey]
     if (!view?.open || !view.flow) return state
     if (view.flow.sentCreatePayload !== undefined) return state
-    return { views: { ...state.views, [sessionId]: { ...view, flow: { ...view.flow, sentCreatePayload: payload } } } }
+    return { views: { ...state.views, [teamKey]: { ...view, flow: { ...view.flow, sentCreatePayload: payload } } } }
   }),
-  reconnected: sessionId => set(state => {
-    const view = state.views[sessionId]
+  reconnected: teamKey => set(state => {
+    const view = state.views[teamKey]
     if (!view?.open || Object.keys(view.pending).length === 0) return state
-    return { views: { ...state.views, [sessionId]: { ...view, pending: {} } } }
+    return { views: { ...state.views, [teamKey]: { ...view, pending: {} } } }
   }),
-  beginTargets: sessionId => set(state => update(state, sessionId, { targetsLoading: true })),
+  beginTargets: teamKey => set(state => update(state, teamKey, { targetsLoading: true })),
   applyTargetsResult: message => set(state => {
-    const view = state.views[message.sessionId]
+    const view = state.views[message.teamPath]
     if (!view?.open) return state
-    return { views: { ...state.views, [message.sessionId]: { ...view,
+    return { views: { ...state.views, [message.teamPath]: { ...view,
       targetsLoading: false,
       targets: message.targets ?? view.targets,
       error: message.error ?? view.error,
     } } }
   }),
-  applySnapshot: message => set(state => update(state, message.sessionId, { loading: false, tasks: message.tasks })),
+  applySnapshot: message => set(state => update(state, message.teamPath, { loading: false, tasks: message.tasks })),
   applyDetail: message => set(state =>
-    state.views[message.sessionId]?.selectedTaskId === message.detail.task.id
-      ? update(state, message.sessionId, { detail: message.detail, directory: message.directory })
+    state.views[message.teamPath]?.selectedTaskId === message.detail.task.id
+      ? update(state, message.teamPath, { detail: message.detail, directory: message.directory })
       : state),
   applyResult: message => set(state => {
-    const view = state.views[message.sessionId]
+    const view = state.views[message.teamPath]
     if (!view?.open) return state
     const pending = { ...view.pending }
     const action = pending[message.requestId]
@@ -241,26 +241,26 @@ export const useTeamTaskStore = create<TaskState>(set => ({
       // A refused assign keeps the flow armed for Retry assignment; any
       // refusal keeps the draft exactly as entered.
       const flow = action === 'assign' && view.flow ? { ...view.flow, assignFailed: true } : view.flow
-      return update(state, message.sessionId, { pending, error: message.error, flow })
+      return update(state, message.teamPath, { pending, error: message.error, flow })
     }
     if (action === 'assign') {
       // The dispatch leg completed the whole intent (or a detail-side assign
       // succeeded): clear the form and open the task.
-      if (view.flow) return update(state, message.sessionId, {
+      if (view.flow) return update(state, message.teamPath, {
         pending, error: null, draft: emptyDraft(), flow: null, preview: null,
         selectedTaskId: view.flow.taskId ?? view.selectedTaskId,
         detail: view.flow.taskId ? null : view.detail,
       })
-      return update(state, message.sessionId, { pending, error: null, preview: null })
+      return update(state, message.teamPath, { pending, error: null, preview: null })
     }
     if ((action === 'create' || action === 'create-assign') && message.task) {
       // A create-and-assign flow keeps the form until its assign leg lands;
       // its create leg only records the committed task for the retry.
       if (view.flow && action === 'create-assign') {
-        return update(state, message.sessionId, { pending, error: null, flow: { ...view.flow, taskId: message.task.id } })
+        return update(state, message.teamPath, { pending, error: null, flow: { ...view.flow, taskId: message.task.id } })
       }
-      return update(state, message.sessionId, { pending, error: null, draft: emptyDraft(), flow: null, preview: null, selectedTaskId: message.task.id, detail: null })
+      return update(state, message.teamPath, { pending, error: null, draft: emptyDraft(), flow: null, preview: null, selectedTaskId: message.task.id, detail: null })
     }
-    return update(state, message.sessionId, { pending, error: null })
+    return update(state, message.teamPath, { pending, error: null })
   }),
 }))

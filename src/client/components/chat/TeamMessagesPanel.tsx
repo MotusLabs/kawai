@@ -11,18 +11,18 @@ import TeamMessagesView from './TeamMessagesView'
 import { openParticipantChat } from './openParticipant'
 import { useTeamGroups } from './useTeamGroups'
 
-export default function TeamMessagesPanel({ sessionId, projectPath, sendMessage, connected, connectionEpoch, onClose }: {
-  sessionId: string
+export default function TeamMessagesPanel({ teamPath, projectPath, sendMessage, connected, connectionEpoch, onClose }: {
+  teamPath: string
   projectPath: string
   sendMessage: SendClientMessage
   connected: boolean
   connectionEpoch: number
   onClose: () => void
 }) {
-  const view = useTeamMessageStore(state => state.views[sessionId]) ?? closedMessageView()
+  const view = useTeamMessageStore(state => state.views[teamPath]) ?? closedMessageView()
   const sessions = useSessionStore(state => state.sessions)
   const groups = useTeamGroups(view.open, projectPath)
-  return <TeamMessagesView sessionId={sessionId} view={view} sendMessage={sendMessage} connected={connected}
+  return <TeamMessagesView teamPath={teamPath} view={view} sendMessage={sendMessage} connected={connected}
     connectionEpoch={connectionEpoch}
     sessions={sessions.map(row => ({ id: row.id, name: row.name, groupId: row.groupId ?? null }))}
     groups={groups.groups.map(group => ({ id: group.id, label: group.label }))}

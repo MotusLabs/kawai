@@ -132,11 +132,11 @@ describe('createMessageRouter dispatch coverage', () => {
       { type: 'team-mailbox-snapshot', teamId: 'team', messages: [] },
       { type: 'team-mailbox-delivered-to-human', teamId: 'team', messageId: 'm-1', senderSession: 'chat-2', senderKind: 'agent' },
       { type: 'team-tasks-snapshot', teamId: 'team', tasks: [] },
-      { type: 'team-task-result', sessionId: 'chat-1', ok: true },
-      { type: 'team-messages-snapshot', sessionId: 'chat-1', teamId: 'team', filters: {}, messages: [], nextCursor: null, directory: [], tasks: [] },
-      { type: 'team-messages', sessionId: 'chat-1', teamId: 'team', messages: [] },
-      { type: 'team-thread', sessionId: 'chat-1', teamId: 'team', threadId: 't-1', entries: [], directory: [] },
-      { type: 'team-message-send-result', sessionId: 'chat-1', requestId: 'r-1', error: 'nope' },
+      { type: 'team-task-result', teamPath: 'chat-1', ok: true },
+      { type: 'team-messages-snapshot', teamPath: 'chat-1', teamId: 'team', filters: {}, messages: [], nextCursor: null, directory: [], tasks: [] },
+      { type: 'team-messages', teamPath: 'chat-1', teamId: 'team', messages: [] },
+      { type: 'team-thread', teamPath: 'chat-1', teamId: 'team', threadId: 't-1', entries: [], directory: [] },
+      { type: 'team-message-send-result', teamPath: 'chat-1', requestId: 'r-1', error: 'nope' },
     ]
     for (const message of messages) {
       expect(() => route(message as ServerMessage)).not.toThrow()
@@ -319,18 +319,18 @@ describe('product strategy routing after extraction', () => {
       strategy, revisions: [], drafts: [], evidence: [], decisions: [], impactReviews: [],
     }
     useStrategyStore.getState().open('chat-1')
-    route({ type: 'strategy-snapshot', sessionId: 'chat-1', teamId: 'team', strategy })
-    route({ type: 'strategy-detail', sessionId: 'chat-1', teamId: 'team', detail })
+    route({ type: 'strategy-snapshot', teamPath: 'chat-1', teamId: 'team', strategy })
+    route({ type: 'strategy-detail', teamPath: 'chat-1', teamId: 'team', detail })
     expect(useStrategyStore.getState().views['chat-1']).toMatchObject({
       seen: true, loading: false, strategy, detail,
     })
     useStrategyStore.getState().begin('chat-1', 'save-1', 'save')
-    route({ type: 'strategy-result', sessionId: 'chat-1', requestId: 'save-1', error: 'Draft changed' })
+    route({ type: 'strategy-result', teamPath: 'chat-1', requestId: 'save-1', error: 'Draft changed' })
     expect(useStrategyStore.getState().views['chat-1']).toMatchObject({
       pending: {}, error: 'Draft changed',
     })
     useStrategyStore.getState().close('chat-1')
-    route({ type: 'strategy-snapshot', sessionId: 'chat-1', teamId: 'team', strategy })
+    route({ type: 'strategy-snapshot', teamPath: 'chat-1', teamId: 'team', strategy })
     expect(useStrategyStore.getState().views['chat-1']).toBeUndefined()
   })
 })
@@ -351,7 +351,7 @@ describe('team messages routing after extraction', () => {
     const route = createMessageRouter(makeDeps().deps)
     useTeamMessageStore.getState().open('chat-1')
     route({
-      type: 'team-messages-snapshot', sessionId: 'chat-1', teamId: 'team', filters: {},
+      type: 'team-messages-snapshot', teamPath: 'chat-1', teamId: 'team', filters: {},
       messages: [row('m-1')], nextCursor: null,
       directory: [{ sessionId: 'chat-2', name: 'Dev', group: 'leads' }], tasks: [],
     })
@@ -363,14 +363,14 @@ describe('team messages routing after extraction', () => {
       { sessionId: 'chat-2', name: 'Dev', group: 'leads' },
     ])
 
-    route({ type: 'team-messages', sessionId: 'chat-1', teamId: 'team', messages: [row('m-2')] })
+    route({ type: 'team-messages', teamPath: 'chat-1', teamId: 'team', messages: [row('m-2')] })
     expect(useTeamMessageStore.getState().views['chat-1']!.messages.map(m => m.id)).toEqual(['m-1', 'm-2'])
 
     // A thread reply only folds into the thread the view has open (replace
     // semantics) — select first, as TeamMessagesView does.
     useTeamMessageStore.getState().select('chat-1', 't-1')
     route({
-      type: 'team-thread', sessionId: 'chat-1', teamId: 'team', threadId: 't-1',
+      type: 'team-thread', teamPath: 'chat-1', teamId: 'team', threadId: 't-1',
       entries: [{ message: row('m-1'), events: [] }], directory: [],
     })
     expect(useTeamMessageStore.getState().views['chat-1']!.selectedThreadId).toBe('t-1')
@@ -378,12 +378,12 @@ describe('team messages routing after extraction', () => {
 
     useTeamMessageStore.getState().beginSend('chat-1', 'r-1')
     expect(useTeamMessageStore.getState().views['chat-1']!.pending['r-1']).toBe('send')
-    route({ type: 'team-message-send-result', sessionId: 'chat-1', requestId: 'r-1', error: 'nope' })
+    route({ type: 'team-message-send-result', teamPath: 'chat-1', requestId: 'r-1', error: 'nope' })
     expect(useTeamMessageStore.getState().views['chat-1']!.pending).toEqual({})
     expect(useTeamMessageStore.getState().views['chat-1']!.error).toBe('nope')
 
     useTeamMessageStore.getState().close('chat-1')
-    route({ type: 'team-messages-snapshot', sessionId: 'chat-1', teamId: 'team', filters: {}, messages: [], nextCursor: null, directory: [], tasks: [] })
+    route({ type: 'team-messages-snapshot', teamPath: 'chat-1', teamId: 'team', filters: {}, messages: [], nextCursor: null, directory: [], tasks: [] })
     expect(useTeamMessageStore.getState().views['chat-1']).toBeUndefined()
   })
 })

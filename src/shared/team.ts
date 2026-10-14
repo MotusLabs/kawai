@@ -323,3 +323,14 @@ export function matchesMessageFilters(filters: MessageQueryFilters, message: Tea
   if (filters.human === false && (message.fromKind !== 'agent' || message.toKind === 'human')) return false
   return true
 }
+
+/**
+ * Refusal of a human team view whose `teamPath` names no known team
+ * (team-workspace-pages D1): not a discovered repository, one of its
+ * worktrees, or an existing chat's directory.
+ */
+export const UNKNOWN_TEAM = 'unknown-team'
+
+export function unknownTeamError(teamPath: string): string {
+  return `${UNKNOWN_TEAM}: ${teamPath}`
+}

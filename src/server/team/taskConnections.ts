@@ -1,11 +1,13 @@
 // Team task subscriptions and human task actions (team-tasks 6.1/6.2). Like
-// the mailbox view, every request names a chat session; its resolved team
-// scopes what may be seen or changed, so a task of another team is refused.
+// the mailbox view, every request names the team's directory (`teamPath`,
+// team-workspace-pages D1); its resolved team scopes what may be seen or
+// changed, so a task of another team is refused and an unknown path too.
 // Snapshots are authoritative and re-sent whole on every change of the
 // team's tasks (and of task mail), so a reconnecting client needs no deltas.
 // Human actions run through TaskService as the human caller and answer with
 // `team-task-result`; the changes they cause reach every subscriber.
 import type { ClientMessage } from '../../shared/types'
+import { unknownTeamError } from '../../shared/team'
 import type { TeamTask } from '../../shared/teamTasks'
 import type { ChatSessionManager } from '../chat/ChatSessionManager'
 import type { ChatConnection } from '../chat/ChatConnections'
@@ -21,7 +23,7 @@ interface Subscription {
 export class TaskConnections {
   private readonly subscriptions = new Map<ChatConnection, Map<string, Subscription>>()
   /**
-   * Latest open/close per connection and subscription target — a session's
+   * Latest open/close per connection and subscription target — a team's
    * list, or one task detail of it. Only a later open/close of the same
    * target supersedes a pending open: the list and a detail opened together
    * (header link, reconnect) must both stand.
@@ -36,23 +38,23 @@ export class TaskConnections {
   }
 
   publish(teamId: string) {
-    for (const [connection, sessions] of this.subscriptions) {
-      for (const [sessionId, subscription] of sessions) {
-        if (subscription.teamId === teamId) this.send(connection, sessionId, subscription)
+    for (const [connection, views] of this.subscriptions) {
+      for (const [teamPath, subscription] of views) {
+        if (subscription.teamId === teamId) this.send(connection, teamPath, subscription)
       }
     }
   }
 
-  private send(connection: ChatConnection, sessionId: string, subscription: Subscription, only?: string) {
+  private send(connection: ChatConnection, teamPath: string, subscription: Subscription, only?: string) {
     const store = this.manager.tasks.store
     if (subscription.list && !only) {
-      connection.send({ type: 'team-tasks-snapshot', sessionId, teamId: subscription.teamId, tasks: store.list(subscription.teamId) })
+      connection.send({ type: 'team-tasks-snapshot', teamPath, teamId: subscription.teamId, tasks: store.list(subscription.teamId) })
     }
     for (const taskId of subscription.details) {
       if (only && taskId !== only) continue
       const detail = store.detail(taskId)
       if (detail) connection.send({
-        type: 'team-task-detail', sessionId, teamId: subscription.teamId, detail,
+        type: 'team-task-detail', teamPath, teamId: subscription.teamId, detail,
         // Its messages name participants; the directory keeps a killed one's.
         directory: this.manager.directory.list(subscription.teamId),
       })
@@ -63,25 +65,25 @@ export class TaskConnections {
     if ('requestId' in message) return this.act(connection, message)
     // Opens and closes of one target order against each other: the latest
     // wins, even when an earlier open is still resolving its team.
-    const { sessionId } = message
-    const target = `${sessionId}\0${'taskId' in message ? message.taskId : ''}`
+    const { teamPath } = message
+    const target = `${teamPath}\0${'taskId' in message ? message.taskId : ''}`
     const token = {}
     const pending = this.pending.get(connection) ?? new Map<string, object>()
     pending.set(target, token)
     this.pending.set(connection, pending)
     if (message.type === 'team-tasks-close' || message.type === 'team-task-close') {
-      const sessions = this.subscriptions.get(connection)
-      const subscription = sessions?.get(sessionId)
+      const views = this.subscriptions.get(connection)
+      const subscription = views?.get(teamPath)
       if ('taskId' in message) subscription?.details.delete(message.taskId)
       else if (subscription) subscription.list = false
-      if (subscription && !subscription.list && subscription.details.size === 0) sessions!.delete(sessionId)
+      if (subscription && !subscription.list && subscription.details.size === 0) views!.delete(teamPath)
       return
     }
-    const team = await this.manager.teams.resolvedTeamOf(sessionId)
+    const team = await this.manager.teamScopes.resolve(teamPath)
     if (this.pending.get(connection)?.get(target) !== token) return
     this.pending.get(connection)?.delete(target)
-    if (!this.manager.has(sessionId) || !team) {
-      connection.send({ type: 'error', message: 'Chat team is unavailable' })
+    if (!team) {
+      connection.send({ type: 'error', message: unknownTeamError(teamPath) })
       return
     }
     const taskId = 'taskId' in message ? message.taskId : undefined
@@ -91,27 +93,30 @@ export class TaskConnections {
     }
     // Read the connection's map only now: concurrent opens each awaited the
     // team, and a map captured before that would overwrite the others'.
-    const sessions = this.subscriptions.get(connection) ?? new Map<string, Subscription>()
-    this.subscriptions.set(connection, sessions)
-    const current = sessions.get(sessionId)
+    const views = this.subscriptions.get(connection) ?? new Map<string, Subscription>()
+    this.subscriptions.set(connection, views)
+    const current = views.get(teamPath)
     const subscription = current?.teamId === team.teamId ? current : { teamId: team.teamId, list: false, details: new Set<string>() }
     if (taskId === undefined) subscription.list = true
     else subscription.details.add(taskId)
-    sessions.set(sessionId, subscription)
-    this.send(connection, sessionId, subscription, taskId)
+    views.set(teamPath, subscription)
+    this.send(connection, teamPath, subscription, taskId)
   }
 
-  /** A human task action, as the human caller for the session's team. */
+  /** A human task action, as the human caller for the addressed team. */
   private async act(connection: ChatConnection, message: Extract<TaskClientMessage, { requestId: string }>) {
-    const { sessionId, requestId } = message
-    const team = await this.manager.teams.resolvedTeamOf(sessionId)
-    if (!this.manager.has(sessionId) || !team) {
-      connection.send({ type: 'team-task-result', sessionId, requestId, error: 'Chat team is unavailable' })
+    const { teamPath, requestId } = message
+    const team = await this.manager.teamScopes.resolve(teamPath)
+    if (!team) {
+      const error = unknownTeamError(teamPath)
+      if (message.type === 'team-task-preview') connection.send({ type: 'team-task-preview-result', teamPath, requestId, error })
+      else if (message.type === 'team-task-targets') connection.send({ type: 'team-task-targets-result', teamPath, requestId, error })
+      else connection.send({ type: 'team-task-result', teamPath, requestId, error })
       return
     }
     const caller = { kind: 'human' as const, team }
     const tasks = this.manager.tasks
-    const result = (payload: Record<string, unknown>) => connection.send({ type: 'team-task-result', sessionId, requestId, ...payload })
+    const result = (payload: Record<string, unknown>) => connection.send({ type: 'team-task-result', teamPath, requestId, ...payload })
     let task: TeamTask | undefined
     try {
       switch (message.type) {
@@ -149,12 +154,12 @@ export class TaskConnections {
             ...(message.worktree ? { worktree: message.worktree } : {}),
             target: message.target,
           })
-          connection.send({ type: 'team-task-preview-result', sessionId, requestId, preview })
+          connection.send({ type: 'team-task-preview-result', teamPath, requestId, preview })
           return
         }
         case 'team-task-targets': {
           const targets = await this.manager.assignments.targets(caller, message.worktree)
-          connection.send({ type: 'team-task-targets-result', sessionId, requestId, targets })
+          connection.send({ type: 'team-task-targets-result', teamPath, requestId, targets })
           return
         }
       }
@@ -162,11 +167,11 @@ export class TaskConnections {
     } catch (error) {
       const text = error instanceof Error ? error.message : String(error)
       if (message.type === 'team-task-preview') {
-        connection.send({ type: 'team-task-preview-result', sessionId, requestId, error: text })
+        connection.send({ type: 'team-task-preview-result', teamPath, requestId, error: text })
         return
       }
       if (message.type === 'team-task-targets') {
-        connection.send({ type: 'team-task-targets-result', sessionId, requestId, error: text })
+        connection.send({ type: 'team-task-targets-result', teamPath, requestId, error: text })
         return
       }
       result({ error: text })

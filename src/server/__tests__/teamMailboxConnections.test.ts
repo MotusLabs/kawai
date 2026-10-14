@@ -28,9 +28,11 @@ beforeEach(() => {
     whenRestored: () => Promise.resolve(),
     loadHistory: async () => {},
     teams: {
-      teamOf: () => ({ teamId: 'team' }), resolvedTeamOf: async () => ({ teamId: 'team' }),
-      catalogOf: () => ({ groups: new Map([['architects', {}]]) }),
+      teamOf: () => ({ teamId: 'team' }),
+      catalogForTeam: () => ({ groups: new Map([['architects', {}]]) }),
     },
+    // `/repo` is the only known team path (team-workspace-pages D1).
+    teamScopes: { resolve: async (teamPath: string) => teamPath === '/repo' ? { teamId: 'team', groupsRoot: '/repo' } : undefined },
     mailbox: { store }, dispatcher: { notify: () => {} },
     routingState: (teamId: string) => ({ rules: reloads > 0 ? REPORT : null, decisions: [{ at: 'now', teamId, groupId: 'devs', messageId: 'm', source: 'builtin', decision: 'none' }] }),
     teamRoster: () => roster,
@@ -50,12 +52,12 @@ beforeEach(() => {
 afterEach(() => db.close())
 const enqueue = (teamId = 'team', hopLimit?: number) => store.enqueue({ teamId, fromSession: 'lead', fromGroup: null,
   toKind: 'group', toId: 'devs', originPath: '/repo', body: 'Work', hopLimit })
-const open = () => connections.handle(connection, { type: 'team-mailbox-open', sessionId: 'dev' })
+const open = () => connections.handle(connection, { type: 'team-mailbox-open', teamPath: '/repo' })
 
 test('open snapshots, enqueue pushes, close and disconnect unsubscribe', async () => {
   await open(); expect(messages.at(-1)).toMatchObject({ type: 'team-mailbox-snapshot', messages: [] })
   const mail = enqueue(); expect(messages.at(-1)).toMatchObject({ messages: [{ id: mail.id, state: 'queued' }] })
-  await connections.handle(connection, { type: 'team-mailbox-close', sessionId: 'dev' })
+  await connections.handle(connection, { type: 'team-mailbox-close', teamPath: '/repo' })
   const count = messages.length; enqueue(); expect(messages).toHaveLength(count)
   await open(); connections.disconnect(connection)
   const disconnected = messages.length; enqueue(); expect(messages).toHaveLength(disconnected)
@@ -84,7 +86,7 @@ test('every snapshot carries the worktree occupancy roster, empty without sessio
   enqueue()
   expect(messages.at(-1)).toMatchObject({ worktrees: [{ worktree: '/repo/feat-x', pendingSpawns: [{ group: 'qa', profile: 'default' }] }] })
   // A reconnect snapshot carries it too.
-  await connections.handle(connection, { type: 'team-mailbox-close', sessionId: 'dev' })
+  await connections.handle(connection, { type: 'team-mailbox-close', teamPath: '/repo' })
   await open()
   expect(messages.at(-1)).toMatchObject({ worktrees: [{ worktree: '/repo/feat-x' }] })
   // A team with no live sessions serializes an empty list, not a missing field.
@@ -95,22 +97,22 @@ test('every snapshot carries the worktree occupancy roster, empty without sessio
 test('cancel, retry, discard push updated snapshots; cross-team actions are refused', async () => {
   await open()
   const mail = enqueue()
-  await connections.handle(connection, { type: 'team-mailbox-cancel', sessionId: 'dev', messageId: mail.id })
+  await connections.handle(connection, { type: 'team-mailbox-cancel', teamPath: '/repo', messageId: mail.id })
   expect(store.get(mail.id)?.state).toBe('cancelled')
   const dead = enqueue(); store.deadLetter(dead.id, 'killed-recipient')
-  await connections.handle(connection, { type: 'team-mailbox-retry', sessionId: 'dev', messageId: dead.id })
+  await connections.handle(connection, { type: 'team-mailbox-retry', teamPath: '/repo', messageId: dead.id })
   expect(store.get(dead.id)?.state).toBe('queued')
   store.deadLetter(dead.id, 'killed-recipient')
-  await connections.handle(connection, { type: 'team-mailbox-discard', sessionId: 'dev', messageId: dead.id })
+  await connections.handle(connection, { type: 'team-mailbox-discard', teamPath: '/repo', messageId: dead.id })
   expect(store.get(dead.id)?.state).toBe('discarded')
   const foreign = enqueue('other')
-  await connections.handle(connection, { type: 'team-mailbox-cancel', sessionId: 'dev', messageId: foreign.id })
+  await connections.handle(connection, { type: 'team-mailbox-cancel', teamPath: '/repo', messageId: foreign.id })
   expect(store.get(foreign.id)?.state).toBe('queued')
   expect(messages.at(-1)).toMatchObject({ type: 'error', message: 'Message does not belong to this team' })
 })
 test('uncertain retry stays direct to the original recipient with duplicate notice', async () => {
   await open(); const mail = enqueue(); store.claim(mail.id, 'dev'); store.markPushed(mail.id); store.holdUncertain(mail.id, 'torn')
-  await connections.handle(connection, { type: 'team-mailbox-retry', sessionId: 'dev', messageId: mail.id })
+  await connections.handle(connection, { type: 'team-mailbox-retry', teamPath: '/repo', messageId: mail.id })
   expect(store.get(mail.id)).toMatchObject({ state: 'queued', toKind: 'session', toId: 'dev', possibleDuplicate: true })
   expect(messages.at(-1)).toMatchObject({ type: 'team-mailbox-snapshot' })
 })
@@ -161,12 +163,12 @@ test('global delivered-to-human notifier carries the sender kind', () => {
 test('close during asynchronous team resolution cannot resurrect a subscription', async () => {
   let resolve!: (team: { teamId: string }) => void
   const manager = {
-    has: () => true, whenRestored: () => Promise.resolve(), teams: { resolvedTeamOf: () => new Promise<{ teamId: string }>(done => { resolve = done }) },
+    has: () => true, whenRestored: () => Promise.resolve(), teamScopes: { resolve: () => new Promise<{ teamId: string }>(done => { resolve = done }) },
     mailbox: { store },
   } as unknown as ChatSessionManager
   const pendingConnections = new ChatConnections(manager)
-  const opening = pendingConnections.handle(connection, { type: 'team-mailbox-open', sessionId: 'dev' })
-  await pendingConnections.handle(connection, { type: 'team-mailbox-close', sessionId: 'dev' })
+  const opening = pendingConnections.handle(connection, { type: 'team-mailbox-open', teamPath: '/repo' })
+  await pendingConnections.handle(connection, { type: 'team-mailbox-close', teamPath: '/repo' })
   resolve({ teamId: 'team' }); await opening
   pendingConnections.publishMailbox('team')
   expect(messages).toEqual([])
@@ -175,9 +177,9 @@ test('close during asynchronous team resolution cannot resurrect a subscription'
 test('snapshots carry the team routing state; reload answers with the report and refreshes every view', async () => {
   await open()
   expect(messages.at(-1)).toMatchObject({ type: 'team-mailbox-snapshot', routing: { rules: null, decisions: [{ teamId: 'team', decision: 'none' }] } })
-  await connections.handle(connection, { type: 'team-mailbox-reload-rules', sessionId: 'dev' })
+  await connections.handle(connection, { type: 'team-mailbox-reload-rules', teamPath: '/repo' })
   expect(reloads).toBe(1)
-  expect(messages.at(-1)).toEqual({ type: 'team-mailbox-rules-result', sessionId: 'dev', ok: true, report: REPORT })
+  expect(messages.at(-1)).toEqual({ type: 'team-mailbox-rules-result', teamPath: '/repo', ok: true, report: REPORT })
   connections.publishRoutingRules()
   expect(messages.at(-1)).toMatchObject({ type: 'team-mailbox-snapshot', routing: { rules: REPORT } })
 })
@@ -185,16 +187,26 @@ test('snapshots carry the team routing state; reload answers with the report and
 test('hand off forwards parked work to a team group or session; bad targets and states are refused', async () => {
   await open()
   const mail = enqueue(); store.claim(mail.id, 'dev'); store.markPushed(mail.id); store.markDelivered(mail.id)
-  await connections.handle(connection, { type: 'team-mailbox-hand-off', sessionId: 'dev', messageId: mail.id, target: { kind: 'group', id: 'architects' } })
+  await connections.handle(connection, { type: 'team-mailbox-hand-off', teamPath: '/repo', messageId: mail.id, target: { kind: 'group', id: 'architects' } })
   expect(messages.filter(m => m.type === 'team-mailbox-hand-off-result').at(-1)).toMatchObject({ ok: false, error: 'Only parked work can be handed off' })
   const resume = enqueue(); store.park(mail.id, '2026-10-12T13:00:00.000Z', resume.id)
-  await connections.handle(connection, { type: 'team-mailbox-hand-off', sessionId: 'dev', messageId: mail.id, target: { kind: 'group', id: 'architects' } })
+  await connections.handle(connection, { type: 'team-mailbox-hand-off', teamPath: '/repo', messageId: mail.id, target: { kind: 'group', id: 'architects' } })
   expect(messages.filter(m => m.type === 'team-mailbox-hand-off-result').at(-1)).toEqual({
-    type: 'team-mailbox-hand-off-result', sessionId: 'dev', messageId: mail.id, ok: true, forwardedId: 'forwarded-1',
+    type: 'team-mailbox-hand-off-result', teamPath: '/repo', messageId: mail.id, ok: true, forwardedId: 'forwarded-1',
   })
-  await connections.handle(connection, { type: 'team-mailbox-hand-off', sessionId: 'dev', messageId: mail.id, target: { kind: 'group', id: 'nope' } })
+  await connections.handle(connection, { type: 'team-mailbox-hand-off', teamPath: '/repo', messageId: mail.id, target: { kind: 'group', id: 'nope' } })
   expect(messages.filter(m => m.type === 'team-mailbox-hand-off-result').at(-1)).toMatchObject({ ok: false, error: 'Unknown group in this team: nope' })
-  await connections.handle(connection, { type: 'team-mailbox-hand-off', sessionId: 'dev', messageId: mail.id, target: { kind: 'session', id: 'stranger' } })
+  await connections.handle(connection, { type: 'team-mailbox-hand-off', teamPath: '/repo', messageId: mail.id, target: { kind: 'session', id: 'stranger' } })
   expect(messages.filter(m => m.type === 'team-mailbox-hand-off-result').at(-1)).toMatchObject({ ok: false, error: 'Unknown session in this team: stranger' })
   expect(handOffs).toHaveLength(2)
+})
+
+test('a team path that names no known team is refused with no data and no subscription', async () => {
+  await connections.handle(connection, { type: 'team-mailbox-open', teamPath: '/elsewhere' })
+  expect(messages).toEqual([{ type: 'error', message: 'unknown-team: /elsewhere' }])
+  const mail = enqueue()
+  expect(messages).toHaveLength(1)
+  await connections.handle(connection, { type: 'team-mailbox-cancel', teamPath: '/elsewhere', messageId: mail.id })
+  expect(store.get(mail.id)?.state).toBe('queued')
+  expect(messages.at(-1)).toEqual({ type: 'error', message: 'unknown-team: /elsewhere' })
 })

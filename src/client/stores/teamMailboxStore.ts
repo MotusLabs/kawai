@@ -1,4 +1,4 @@
-// Per-chat mailbox views follow selection and reconnect. A snapshot replaces
+// Per-team mailbox views follow selection and reconnect. A snapshot replaces
 // stale rows; closed views ignore late pushes. Snapshots also carry the
 // team's routing state (rule load status, decisions) and, additively, the
 // per-message waiting reasons and the worktree occupancy roster
@@ -30,29 +30,29 @@ export interface MailboxView {
 export const closedMailbox = (): MailboxView => ({ open: false, loading: false, messages: [] })
 interface MailboxState {
   views: Record<string, MailboxView>
-  open: (sessionId: string) => void
-  close: (sessionId: string) => void
+  open: (teamKey: string) => void
+  close: (teamKey: string) => void
   apply: (message: Extract<ServerMessage, { type: 'team-mailbox-snapshot' }>) => void
-  beginReload: (sessionId: string) => void
+  beginReload: (teamKey: string) => void
   applyRulesResult: (message: RulesResult) => void
   applyHandOffResult: (message: HandOffResult) => void
 }
 
-const patch = (state: MailboxState, sessionId: string, update: Partial<MailboxView>) => state.views[sessionId]?.open
-  ? { views: { ...state.views, [sessionId]: { ...state.views[sessionId]!, ...update } } }
+const patch = (state: MailboxState, teamKey: string, update: Partial<MailboxView>) => state.views[teamKey]?.open
+  ? { views: { ...state.views, [teamKey]: { ...state.views[teamKey]!, ...update } } }
   : state
 
 export const useTeamMailboxStore = create<MailboxState>(set => ({
   views: {},
   open: id => set(state => ({ views: { ...state.views, [id]: { ...(state.views[id] ?? closedMailbox()), open: true, loading: true } } })),
   close: id => set(state => { const views = { ...state.views }; delete views[id]; return { views } }),
-  apply: message => set(state => patch(state, message.sessionId, {
+  apply: message => set(state => patch(state, message.teamPath, {
     loading: false, messages: message.messages,
     ...(message.routing ? { routing: message.routing } : {}),
     ...(message.waiting ? { waiting: message.waiting } : {}),
     ...(message.worktrees ? { worktrees: message.worktrees } : {}),
   })),
   beginReload: id => set(state => patch(state, id, { reloading: true })),
-  applyRulesResult: message => set(state => patch(state, message.sessionId, { reloading: false, rulesResult: message })),
-  applyHandOffResult: message => set(state => patch(state, message.sessionId, { handOffResult: message })),
+  applyRulesResult: message => set(state => patch(state, message.teamPath, { reloading: false, rulesResult: message })),
+  applyHandOffResult: message => set(state => patch(state, message.teamPath, { handOffResult: message })),
 }))

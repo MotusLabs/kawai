@@ -1,4 +1,4 @@
-// Per-chat Messages views (team-message-threads 5.2): the filtered, paged
+// Per-team Messages views (team-message-threads 5.2): the filtered, paged
 // list, the selected thread with its append-only history, and the recorded
 // identity of the participants those rows name. A snapshot is authoritative
 // for the page it answers — the first page replaces, a cursor page appends —
@@ -49,24 +49,24 @@ export const closedMessageView = (): MessageView => ({
 
 interface MessageState {
   views: Record<string, MessageView>
-  open: (sessionId: string, filters?: MessageQueryFilters) => void
-  close: (sessionId: string) => void
-  setFilters: (sessionId: string, filters: MessageQueryFilters) => void
+  open: (teamKey: string, filters?: MessageQueryFilters) => void
+  close: (teamKey: string) => void
+  setFilters: (teamKey: string, filters: MessageQueryFilters) => void
   /** The component is asking for the next page; its snapshot appends. */
-  beginMore: (sessionId: string) => void
-  select: (sessionId: string, threadId: string | null) => void
+  beginMore: (teamKey: string) => void
+  select: (teamKey: string, threadId: string | null) => void
   /** A human send is on the wire; the result settles it. */
-  beginSend: (sessionId: string, requestId: string) => void
+  beginSend: (teamKey: string, requestId: string) => void
   applySnapshot: (message: Extract<ServerMessage, { type: 'team-messages-snapshot' }>) => void
   applyPush: (message: Extract<ServerMessage, { type: 'team-messages' }>) => void
   applyThread: (message: Extract<ServerMessage, { type: 'team-thread' }>) => void
   applyResult: (message: Extract<ServerMessage, { type: 'team-message-send-result' }>) => void
 }
 
-const update = (state: MessageState, sessionId: string, patch: Partial<MessageView>) => {
-  const view = state.views[sessionId]
+const update = (state: MessageState, teamKey: string, patch: Partial<MessageView>) => {
+  const view = state.views[teamKey]
   if (!view?.open) return state
-  return { views: { ...state.views, [sessionId]: { ...view, ...patch } } }
+  return { views: { ...state.views, [teamKey]: { ...view, ...patch } } }
 }
 
 /**
@@ -95,65 +95,65 @@ function mergePush(list: TeamMessage[], incoming: TeamMessage[], filters: Messag
 
 export const useTeamMessageStore = create<MessageState>(set => ({
   views: {},
-  open: (sessionId, filters) => set(state => {
-    const view = state.views[sessionId] ?? closedMessageView()
+  open: (teamKey, filters) => set(state => {
+    const view = state.views[teamKey] ?? closedMessageView()
     return {
-      views: { ...state.views, [sessionId]: {
+      views: { ...state.views, [teamKey]: {
         ...view, open: true, loading: !view.open,
         ...(filters ? { filters, messages: [], nextCursor: null, loadingMore: false } : {}),
       } },
     }
   }),
-  close: sessionId => set(state => {
+  close: teamKey => set(state => {
     const views = { ...state.views }
-    delete views[sessionId]
+    delete views[teamKey]
     return { views }
   }),
-  setFilters: (sessionId, filters) => set(state => update(state, sessionId, {
+  setFilters: (teamKey, filters) => set(state => update(state, teamKey, {
     filters, messages: [], nextCursor: null, loading: true, loadingMore: false, error: null,
   })),
-  beginMore: sessionId => set(state => update(state, sessionId, { loadingMore: true })),
-  beginSend: (sessionId, requestId) => set(state => {
-    const view = state.views[sessionId]
+  beginMore: teamKey => set(state => update(state, teamKey, { loadingMore: true })),
+  beginSend: (teamKey, requestId) => set(state => {
+    const view = state.views[teamKey]
     if (!view?.open) return state
-    return update(state, sessionId, {
+    return update(state, teamKey, {
       pending: { ...view.pending, [requestId]: 'send' as const }, error: null,
     })
   }),
-  select: (sessionId, threadId) => set(state => update(state, sessionId, {
+  select: (teamKey, threadId) => set(state => update(state, teamKey, {
     selectedThreadId: threadId, error: null,
-    thread: state.views[sessionId]?.selectedThreadId === threadId ? state.views[sessionId]!.thread : null,
+    thread: state.views[teamKey]?.selectedThreadId === threadId ? state.views[teamKey]!.thread : null,
   })),
   applySnapshot: message => set(state => {
-    const view = state.views[message.sessionId]
+    const view = state.views[message.teamPath]
     if (!view?.open) return state
     const append = view.loadingMore
     const rows = append
       ? [...view.messages, ...message.messages.filter(row => !view.messages.some(known => known.id === row.id))]
       : message.messages
-    return update(state, message.sessionId, {
+    return update(state, message.teamPath, {
       loading: false, loadingMore: false, teamId: message.teamId,
       filters: message.filters, messages: rows, nextCursor: message.nextCursor,
       directory: message.directory, tasks: message.tasks,
     })
   }),
   applyPush: message => set(state => {
-    const view = state.views[message.sessionId]
+    const view = state.views[message.teamPath]
     if (!view?.open) return state
-    return update(state, message.sessionId, {
+    return update(state, message.teamPath, {
       messages: mergePush(view.messages, message.messages, view.filters),
     })
   }),
   applyThread: message => set(state => {
-    const view = state.views[message.sessionId]
+    const view = state.views[message.teamPath]
     if (!view?.open || view.selectedThreadId !== message.threadId) return state
-    return update(state, message.sessionId, { thread: message.entries, directory: message.directory })
+    return update(state, message.teamPath, { thread: message.entries, directory: message.directory })
   }),
   applyResult: message => set(state => {
-    const view = state.views[message.sessionId]
+    const view = state.views[message.teamPath]
     if (!view?.open) return state
     const pending = { ...view.pending }
     delete pending[message.requestId]
-    return update(state, message.sessionId, { pending, error: message.error ?? null })
+    return update(state, message.teamPath, { pending, error: message.error ?? null })
   }),
 }))

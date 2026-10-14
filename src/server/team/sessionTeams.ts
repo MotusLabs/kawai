@@ -89,6 +89,19 @@ export class SessionTeams {
     return [...this.entries].filter(([, entry]) => entry.team?.teamId === teamId).map(([id]) => id)
   }
 
+  /**
+   * Whether any tracked session (live or archived; killed ones are forgotten)
+   * belongs to `teamId`, once every in-flight resolution has settled — a view
+   * opened right after a restart must not be refused while teams resolve.
+   */
+  async hasTeam(teamId: string): Promise<boolean> {
+    if (this.membersOf(teamId).length > 0) return true
+    // One settle pass: a rejected resolution never clears its `pending`, so
+    // looping until none remain could spin forever.
+    await Promise.allSettled([...this.entries.values()].flatMap(entry => entry.pending ? [entry.pending] : []))
+    return this.membersOf(teamId).length > 0
+  }
+
   /** Display state of a session's group; undefined until its team is known. */
   groupInfo(sessionId: string, groupId: string, cache?: Map<string, GroupCatalog>): SessionGroupInfo | undefined {
     const group = this.catalogOf(sessionId, cache)?.groups.get(groupId)
@@ -125,7 +138,11 @@ export class SessionTeams {
    */
   catalogOf(sessionId: string, cache?: Map<string, GroupCatalog>): GroupCatalog | undefined {
     const team = this.teamOf(sessionId)
-    if (!team) return undefined
+    return team ? this.catalogForTeam(team, cache) : undefined
+  }
+
+  /** A team's catalog, for callers that hold the team rather than a session. */
+  catalogForTeam(team: TeamIdentity, cache?: Map<string, GroupCatalog>): GroupCatalog {
     const cached = cache?.get(team.teamId)
     if (cached) return cached
     const context = {
