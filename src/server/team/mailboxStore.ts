@@ -11,6 +11,9 @@ import { mailboxSql, worktreeTaskMailSql } from './mailboxSql'
 import { createMessageTable } from './messageSchema'
 import { mapRow } from './messageRow'
 import { MessageEventLog, storeActor, type StoreActor } from './messageEvents'
+import { retryMessage } from './mailboxRetry'
+import { ParkedCancel, actionReason, type CancelResult } from './parkedCancel'
+export type { CancelResult } from './parkedCancel'
 
 import type {
   ChatHandoffPackage,
@@ -53,20 +56,10 @@ export interface EnqueueInput {
   actor?: 'system' | 'human'
 }
 
-/** Outcome of {@link MailboxStore.cancelResult}: cancelled, or why not (nothing changed). */
-export type CancelResult =
-  | { ok: true }
-  | { ok: false; code: 'resume-in-flight'; holder: string | null; resumeId: string }
-  | { ok: false; code: 'linked-resume'; parkedId: string }
-  | { ok: false; code: 'state-changed'; state: MessageState | null }
-
 export const DEFAULT_HOP_LIMIT = 20
 
 const nowIso = () => new Date().toISOString()
 const SYSTEM: StoreActor = { kind: 'system' }
-const HUMAN: StoreActor = { kind: 'human' }
-/** Longest agent-supplied cancel or discard text kept on a row. */
-export const REASON_LIMIT = 300
 
 export class MailboxStore {
   private readonly listeners = new Set<(teamId: string, message?: TeamMessage) => void>()
@@ -88,9 +81,20 @@ export class MailboxStore {
   private readonly dynamicStatements = new Map<string, ReturnType<Database['prepare']>>()
   /** Append-only history of every transition (team-message-threads D2). */
   readonly events: MessageEventLog
+  private readonly parkedCancel: ParkedCancel
   constructor(private readonly db: Database, private readonly options: { recipientExists?: (id: string) => boolean } = {}) {
     createMessageTable(db)
     this.events = new MessageEventLog(db)
+    this.parkedCancel = new ParkedCancel({
+      transaction: run => db.transaction(run)(),
+      get: id => this.get(id),
+      parkedFor: id => this.parkedFor(id),
+      transition: (id, from, set, kind, actor) => this.transition(id, from, set, kind, actor),
+      unlinkResume: id => {
+        this.cachedStatement('UPDATE team_messages SET resume_message_id = NULL WHERE id = $id').run({ $id: id })
+        this.changed(id, true)
+      },
+    })
     this.statements = Object.fromEntries(Object.entries(mailboxSql).map(([key, sql]) => [key, db.prepare(sql)])) as typeof this.statements
   }
 
@@ -320,108 +324,27 @@ export class MailboxStore {
     return this.cancelResult(id, actor, reason).ok
   }
 
-  /**
-   * Cancel undelivered mail: queued, scheduled, held for a request, or parked.
-   * One invariant holds for every caller (team-mailbox-management D2): parked
-   * work always has a live resume, or is cancelled together with it.
-   * - Parked: a `queued`/`awaiting-request` resume is cancelled with the work
-   *   in one transaction, so it can never be claimed afterwards. A `claimed`,
-   *   `delivered`, or `uncertain` (possibly delivered) resume means the resume
-   *   turn may be in flight: refused (`resume-in-flight`), nothing changed. A
-   *   `dead` resume is discarded with the work. Work with no resume is
-   *   cancelled alone.
-   * - A resume linked to parked work is refused (`linked-resume`) for every
-   *   actor; kawai's own replacement goes through {@link replaceResume}.
-   * An agent actor's `reason` is written on the row, cut and attributed (D4).
-   */
+  /** Cancel undelivered or parked mail; see `parkedCancel.ts` for the resume rules. */
   cancelResult(id: string, actor: StoreActor, reason?: string): CancelResult {
-    return this.db.transaction((): CancelResult => {
-      const before = this.get(id)
-      const changed: CancelResult = { ok: false, code: 'state-changed', state: before?.state ?? null }
-      if (!before) return changed
-      const resume = before.state === 'parked' && before.resumeMessageId ? this.get(before.resumeMessageId) : null
-      if (resume && ['claimed', 'delivered', 'uncertain'].includes(resume.state)) {
-        return { ok: false, code: 'resume-in-flight', holder: before.claimedBy, resumeId: resume.id }
-      }
-      const linked = ['queued', 'awaiting-request'].includes(before.state) ? this.parkedFor(id) : null
-      if (linked) return { ok: false, code: 'linked-resume', parkedId: linked.id }
-      const cancelled = this.transition(id, ['queued', 'awaiting-request', 'parked'], {
-        state: 'cancelled', parked_until: null, resume_message_id: null,
-        ...this.actionReason(actor, 'cancelled', reason),
-      }, 'cancelled', actor)
-      if (!cancelled) return { ...changed, state: this.get(id)?.state ?? null }
-      if (resume) this.settleResume(resume, `parked work ${id} cancelled`, actor)
-      return { ok: true }
-    })()
+    return this.parkedCancel.cancel(id, actor, reason)
   }
 
-  /**
-   * Kawai's own resume bookkeeping (re-park, unpark, release, forward): unlink
-   * the parked row's resume and cancel it if nobody has taken it. The
-   * `linked-resume` refusal is for outside callers, not for this.
-   */
+  /** Kawai's own resume bookkeeping (re-park, unpark, release, forward). */
   replaceResume(parkedId: string): void {
-    this.db.transaction(() => {
-      const parked = this.get(parkedId)
-      if (!parked?.resumeMessageId) return
-      const resumeId = parked.resumeMessageId
-      this.cachedStatement('UPDATE team_messages SET resume_message_id = NULL WHERE id = $id').run({ $id: parkedId })
-      const resume = this.get(resumeId)
-      if (resume) this.settleResume(resume, null, SYSTEM)
-      this.changed(parkedId, true)
-    })()
+    this.parkedCancel.replaceResume(parkedId)
   }
 
-  /**
-   * End a resume nobody has taken: a waiting one is cancelled, a dead one is
-   * discarded so a later human Retry cannot revive it for work that moved on.
-   * Claimed, delivered, and uncertain resumes may have run and are left alone.
-   */
-  private settleResume(resume: TeamMessage, reason: string | null, actor: StoreActor): void {
-    const set: Record<string, string> = reason ? { reason } : {}
-    if (['queued', 'awaiting-request'].includes(resume.state)) {
-      this.transition(resume.id, ['queued', 'awaiting-request'], { state: 'cancelled', ...set }, 'cancelled', actor)
-    } else if (resume.state === 'dead') {
-      this.transition(resume.id, ['dead'], { state: 'discarded', ...set }, 'discarded', actor)
-    }
-  }
-
-  /** `reason` column update for an agent's cancel or discard; humans write none. */
-  private actionReason(actor: StoreActor, verb: 'cancelled' | 'discarded', reason?: string): { reason?: string } {
-    if (actor.kind !== 'agent') return {}
-    return { reason: `${verb} by ${actor.sessionId}: ${(reason ?? '').trim().slice(0, REASON_LIMIT)}` }
-  }
-
-  /**
-   * The user retries a dead letter (queued again, its hop reset so the
-   * thread may continue) or an uncertain message (to the same recipient only,
-   * as direct mail flagged as a possible duplicate).
-   */
+  /** The user retries a dead or uncertain message; see `mailboxRetry.ts`. */
   retry(id: string): boolean {
-    const message = this.get(id)
-    const recipient = message?.state === 'uncertain' ? message.claimedBy : message?.toKind === 'session' ? message.toId : null
-    if (message && ['dead', 'uncertain'].includes(message.state) && recipient && this.options.recipientExists && !this.options.recipientExists(recipient)) {
-      this.transition(id, ['dead', 'uncertain'], {
-        state: 'dead', reason: 'killed-recipient', to_kind: 'session', to_id: recipient,
-        ...(message.state === 'uncertain' ? { possible_duplicate: 1 } : {}),
-      }, 'dead-lettered', HUMAN)
-      return false
-    }
-    if (message?.state === 'dead') {
-      return this.transition(id, ['dead'], { state: 'queued', hop: 1, reason: null }, 'retried', HUMAN)
-    }
-    if (message?.state === 'uncertain' && message.claimedBy) {
-      return this.transition(id, ['uncertain'], {
-        state: 'queued', to_kind: 'session', to_id: message.claimedBy,
-        claimed_by: null, claimed_at: null, pushed_at: null, reason: null, possible_duplicate: 1,
-      }, 'retried', HUMAN)
-    }
-    return false
+    return retryMessage({
+      get: key => this.get(key), transition: (...args) => this.transition(...args),
+      ...(this.options.recipientExists ? { recipientExists: this.options.recipientExists } : {}),
+    }, id)
   }
 
   /** Discard a dead or uncertain message for good (human, or a mailbox manager). */
   discard(id: string, actor: StoreActor, reason?: string): boolean {
-    return this.transition(id, ['dead', 'uncertain'], { state: 'discarded', ...this.actionReason(actor, 'discarded', reason) }, 'discarded', actor)
+    return this.transition(id, ['dead', 'uncertain'], { state: 'discarded', ...actionReason(actor, 'discarded', reason) }, 'discarded', actor)
   }
 
   /** Direct mail queued for a killed session can never arrive: dead-letter it. */
