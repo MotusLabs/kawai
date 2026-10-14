@@ -12,8 +12,10 @@
 // sender columns it reads are `team-message-threads`', used as shipped.
 import type { Database } from 'bun:sqlite'
 import type { MessageState, TeamMessage } from '../../shared/team'
-import type { TaskActor, TeamTaskAssignment } from '../../shared/teamTasks'
+import type { TaskActor, TaskHandoffKind, TeamTaskAssignment } from '../../shared/teamTasks'
+import { TASK_HANDOFF_KINDS } from '../../shared/teamTasks'
 import type { MailboxStore } from './mailboxStore'
+import { migrateHandoffColumns } from './taskResultSchema'
 
 /** Derived at read time from the instruction mail (design D5). */
 export type AssignmentState = 'queued' | 'claimed' | 'delivered' | 'failed' | 'superseded' | 'parked' | 'forwarded' | 'uncertain'
@@ -93,6 +95,8 @@ export function outstandingOf(rows: TeamTaskAssignment[]): TeamTaskAssignment | 
 export class AssignmentStore {
   constructor(private readonly db: Database, private readonly mail?: MailboxStore) {
     db.exec(CREATE_TABLE_SQL)
+    // Handoff columns (task-results-handoffs D1): this store owns the table's reads.
+    migrateHandoffColumns(db)
     // Claim copies follow the mail wherever its claim moves (design D5):
     // set when the dispatcher claims, cleared again by release or requeue.
     this.mailSubscription = mail?.subscribe((_teamId, message) => { if (message) this.syncFromMail(message) })
@@ -181,6 +185,9 @@ export class AssignmentStore {
       reason,
       createdAt: String(raw.created_at),
       updatedAt: String(raw.updated_at),
+      handoffKind: TASK_HANDOFF_KINDS.includes(raw.handoff_kind as TaskHandoffKind) ? raw.handoff_kind as TaskHandoffKind : null,
+      resultId: raw.result_id === null || raw.result_id === undefined ? null : String(raw.result_id),
+      expectedResponse: raw.expected_response === null || raw.expected_response === undefined ? null : String(raw.expected_response),
     }
   }
 

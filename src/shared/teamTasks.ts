@@ -134,6 +134,8 @@ export interface TeamTaskSummary extends TeamTask {
    * is neither superseded nor failed; null when the task is unassigned.
    */
   assignment: TeamTaskAssignment | null
+  /** The outstanding result's presence (task-results-handoffs D8); null when none was submitted. */
+  outstandingResult?: { id: string; needsReevaluation: boolean; accepted: boolean } | null
 }
 
 /**
@@ -168,6 +170,68 @@ export interface TeamTaskAssignment {
   reason: string | null
   createdAt: string
   updatedAt: string
+  /** A handoff (task-results-handoffs D1): its kind; null/absent for a plain dispatch. */
+  handoffKind?: TaskHandoffKind | null
+  /** The result a handoff references; null/absent for a plain dispatch. */
+  resultId?: string | null
+  /** What the handoff expects back (e.g. findings, a new result); null when unstated. */
+  expectedResponse?: string | null
+}
+
+/** A handoff's kind (task-results-handoffs D3): review, QA, or a return for fixes. */
+export type TaskHandoffKind = 'review' | 'qa' | 'fix'
+export const TASK_HANDOFF_KINDS: readonly TaskHandoffKind[] = ['review', 'qa', 'fix']
+
+/** One test a submitter reports running — a claim, never verified evidence (D2). */
+export interface TaskTestClaim {
+  description: string
+  outcome: string
+}
+
+/** Review or QA findings, bound to the exact result examined (D4). */
+export interface TaskFindings {
+  id: string
+  taskId: string
+  resultId: string
+  /** The handoff the findings answer, when there was one. */
+  handoffId: string | null
+  kind: 'review' | 'qa'
+  verdict: 'pass' | 'fail'
+  findings: string
+  author: TaskActor
+  createdAt: string
+}
+
+/**
+ * One submitted result (task-results-handoffs D1/D2): what was delivered, as
+ * the submitter's claim. The newest result nothing supersedes is the task's
+ * outstanding one; earlier results stay readable with their own findings.
+ */
+export interface TaskResult {
+  id: string
+  taskId: string
+  summary: string
+  commit: string | null
+  diff: string | null
+  /** Pinned at submission: the task's worktree, else the submitter's. */
+  worktree: string | null
+  /** Claimed test outcomes — shown labeled claimed, never verified. */
+  tests: TaskTestClaim[]
+  limitations: string | null
+  /** The task revision pinned at submission. */
+  taskRevision: number
+  submittedBy: TaskActor
+  /** The outstanding result this one superseded, if any. */
+  supersedesResultId: string | null
+  /** The result that superseded this one; null while it is outstanding. */
+  supersededBy: string | null
+  acceptedBy: TaskActor | null
+  acceptedAt: string | null
+  /** Derived at read time (D6): pinned revision older than the task's current one. */
+  needsReevaluation: boolean
+  /** Findings bound to this result, oldest first. */
+  findings: TaskFindings[]
+  createdAt: string
 }
 
 export interface TeamTaskDetail {
@@ -185,6 +249,8 @@ export interface TeamTaskDetail {
   publications?: TaskPublication[]
   /** Every acknowledgement of the task, oldest first: the history behind each recipient's latest. */
   acknowledgements?: TaskAcknowledgement[]
+  /** Results, outstanding first, then superseded ones newest first (task-results-handoffs D8). */
+  results?: TaskResult[]
 }
 
 /**
