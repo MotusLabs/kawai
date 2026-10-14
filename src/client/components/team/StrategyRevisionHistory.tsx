@@ -5,7 +5,7 @@
 import type { StrategyDecision, StrategyDetail, StrategyRevision } from '@shared/productStrategy'
 import type { Session } from '@shared/types'
 import { useState } from 'react'
-import { REVISION_STATUS_LABELS, actorLabel, shortHash } from './strategyLabels'
+import { REVISION_STATUS_LABELS, actorLabel, shortHash } from '../chat/strategyLabels'
 
 export default function StrategyRevisionHistory({ detail, sessions, onWithdrawRevision, connected, busy }: {
   detail: StrategyDetail

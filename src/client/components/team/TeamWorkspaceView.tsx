@@ -19,6 +19,7 @@ import { useTeamLocationStore } from '../../hooks/useTeamLocation'
 import { knownTeamKeys } from '../../utils/teamKey'
 import { openParticipantChat } from '../chat/openParticipant'
 import { useTeamGroups } from '../chat/useTeamGroups'
+import ProductStrategyView from './ProductStrategyView'
 import TeamMailboxView from './TeamMailboxView'
 import TeamMessagesView from './TeamMessagesView'
 import {
@@ -166,6 +167,14 @@ export default function TeamWorkspaceView({ teamKey, location, sendMessage, conn
         onThreadSelected={threadId => navigate(threadId
           ? { teamKey, tab: 'messages', id: threadId }
           : { teamKey, tab: 'messages' })}
+      />}
+      {location.tab === 'strategy' && !unknown && strategy && <ProductStrategyView
+        teamPath={teamKey} view={strategy} sendMessage={sendMessage} connected={connected}
+        sub={location.sub ?? 'overview'} revision={location.id}
+        onNavigate={next => navigate({
+          teamKey, tab: 'strategy', sub: next.sub,
+          ...(next.revision !== undefined ? { id: String(next.revision) } : {}),
+        })}
       />}
       {mailboxOpen && mailbox && <TeamMailboxView
         teamPath={teamKey} view={mailbox} sendMessage={sendMessage} connected={connected}

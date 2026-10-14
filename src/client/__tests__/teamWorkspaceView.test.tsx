@@ -172,3 +172,18 @@ test('disconnected shows a status line but sends nothing', () => {
   expect(sent).toHaveLength(0)
   expect(find(renderer, 'team-strategy-status')).toHaveLength(1)
 })
+
+test('the Strategy tab mounts the strategy view and routes its sub-views through the location', () => {
+  const { renderer, update } = mountPage({ teamKey: '/repo', tab: 'strategy', sub: 'overview' })
+  expect(find(renderer, 'strategy-subnav')).toHaveLength(1)
+  // Moving to the draft sub-view pushes the location.
+  act(() => { renderer.root.findByProps({ 'data-testid': 'strategy-sub-draft' }).props.onClick() })
+  expect(locationNow()).toEqual({ teamKey: '/repo', tab: 'strategy', sub: 'draft' })
+  update()
+  // The URL names the review of a revision, and the view follows it back.
+  act(() => {
+    useTeamLocationStore.getState().navigate({ teamKey: '/repo', tab: 'strategy', sub: 'review', id: '3' })
+  })
+  update()
+  expect(locationNow()).toEqual({ teamKey: '/repo', tab: 'strategy', sub: 'review', id: '3' })
+})
