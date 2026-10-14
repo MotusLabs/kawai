@@ -259,6 +259,19 @@ describe('attentionItems (4.1)', () => {
     })
   })
 
+  test('session owners carry the participant name, never the raw id (review item 5)', () => {
+    const items = new Map(attentionItems(input()).map(item => [item.kind, item]))
+    // The uncertain row's sender and the waiting row's recipient are sessions.
+    expect(items.get('uncertain-delivery')!.owner).toEqual({ kind: 'session', id: 'chat-9', label: 'Name of chat-9' })
+    const direct = attentionItems({
+      ...input(),
+      messages: [message({ id: 'wait-2', state: 'queued', toKind: 'session', toId: 'chat-2' })],
+      waiting: { 'wait-2': reason({ kind: 'profile-cap', counts: { live: 1, cap: 1 }, detail: 'glm' }) },
+    })
+    expect(direct.find(item => item.id === 'staffing-wait:wait-2')!.owner)
+      .toEqual({ kind: 'session', id: 'chat-2', label: 'Name of chat-2' })
+  })
+
   test('requiresHuman splits human blocking from agent-owned waits', () => {
     const byKind = new Map(attentionItems(input()).map(item => [item.kind, item]))
     expect(byKind.get('approval')!.requiresHuman).toBe(true)

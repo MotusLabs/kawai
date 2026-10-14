@@ -190,7 +190,7 @@ const requestItems: AttentionSource = ({ sessions, taskTitle }) =>
   )
 
 /** Messages held as uncertain deliveries: only the human can retry or discard. */
-const uncertainItems: AttentionSource = ({ messages, taskTitle }) =>
+const uncertainItems: AttentionSource = ({ messages, taskTitle, nameOf }) =>
   messages
     .filter(message => message.state === 'uncertain')
     .map(message => {
@@ -199,7 +199,7 @@ const uncertainItems: AttentionSource = ({ messages, taskTitle }) =>
         kind: 'uncertain-delivery' as const,
         cause: `Delivery uncertain${message.reason ? `: ${message.reason}` : ''}`,
         owner: message.fromSession
-          ? { kind: 'session' as const, id: message.fromSession, label: message.fromSession }
+          ? { kind: 'session' as const, id: message.fromSession, label: nameOf(message.fromSession) }
           : { kind: 'human' as const, id: null, label: 'Human' },
         impact: {
           ...taskImpact(message.taskId, taskTitle),
@@ -212,7 +212,7 @@ const uncertainItems: AttentionSource = ({ messages, taskTitle }) =>
     })
 
 /** Mail waiting on capacity: agent-owned waits, not human blocking (E05). */
-const staffingItems: AttentionSource = ({ messages, waiting, taskTitle }) => {
+const staffingItems: AttentionSource = ({ messages, waiting, taskTitle, nameOf }) => {
   const byId = new Map(messages.map(message => [message.id, message]))
   return Object.entries(waiting)
     .filter(([, reason]) => CAPACITY_CONSTRAINT_KINDS.has(reason.blocker.kind))
@@ -225,7 +225,7 @@ const staffingItems: AttentionSource = ({ messages, waiting, taskTitle }) => {
         cause: capacityConstraintLabel(reason.blocker),
         owner: message.toKind === 'group' && message.toId
           ? { kind: 'group' as const, id: message.toId, label: message.toId }
-          : { kind: 'session' as const, id: message.toId, label: message.toId ?? '' },
+          : { kind: 'session' as const, id: message.toId, label: message.toId ? nameOf(message.toId) : '' },
         impact: taskImpact(message.taskId, taskTitle),
         nextAction: 'Wait for capacity',
         link: { kind: 'message' as const, id: messageId },
