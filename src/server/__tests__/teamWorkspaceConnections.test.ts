@@ -3,7 +3,7 @@
 // resolver, authoritative snapshots on open and reconnect, diffed full-set
 // change pushes, close and disconnect, and team isolation between two
 // repositories.
-import { afterEach, beforeEach, expect, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -15,7 +15,10 @@ import { TaskStore } from '../team/taskStore'
 import { TaskService } from '../team/TaskService'
 import { AssignmentStore } from '../team/assignmentStore'
 import { loadGroupCatalog, type GroupCatalog } from '../team/groupCatalog'
+import { WorkspaceConnections } from '../team/workspaceConnections'
+import { WorkspaceRead } from '../team/workspaceRead'
 import type { TeamIdentity } from '../team/teamIdentity'
+import type { TeamTaskRow, TeamWorkspaceSnapshot } from '../../shared/teamWorkspace'
 import type { ClientMessage, ServerMessage } from '../../shared/types'
 import type { ChatSessionRecord } from '../db'
 
@@ -23,6 +26,7 @@ let dir: string
 let db: SessionDatabase
 let mail: MailboxStore
 let tasks: TaskService
+let manager: ChatSessionManager
 let connections: ChatConnections
 let messages: ServerMessage[]
 let connection: { send: (message: ServerMessage) => void }
@@ -51,7 +55,7 @@ beforeEach(() => {
     ['/repo/.worktrees/feat-x', { teamId: 'team', groupsRoot: dir }],
     ['/other', { teamId: 'other', groupsRoot: dir }],
   ])
-  const manager = {
+  manager = {
     whenRestored: () => Promise.resolve(),
     teamScopes: { resolve: async (teamPath: string) => teams.get(teamPath) },
     mailbox: { store: mail },
@@ -91,23 +95,30 @@ test('open snapshots the team; a team with no tasks serializes empty lists', asy
 test('changes push full sets, an unchanged read stays quiet, close and disconnect unsubscribe', async () => {
   await send({ type: 'team-workspace-open', teamPath: '/repo' })
   const task = await tasks.create(human(), { title: 'Existing', direction: 'd' })
+  await connections.flushWorkspace()
   expect(last('team-workspace')!.tasks.map(row => row.title)).toEqual(['Existing'])
-  // The same unchanged state pushes nothing (diff before sending).
+  // The same unchanged state pushes nothing (diff before sending) — including
+  // across a millisecond boundary: the window edge moves with every read, so
+  // the diff key must not compare it.
+  await Bun.sleep(5)
   const count = messages.length
   connections.publishWorkspace('team')
+  await connections.flushWorkspace()
   expect(messages).toHaveLength(count)
   // A meaningful change pushes again.
   await tasks.setStatus(human(), task.id, 'active')
+  await connections.flushWorkspace()
   expect(last('team-workspace')!.tasks[0]!.status).toBe('active')
   await send({ type: 'team-workspace-close', teamPath: '/repo' })
-  const afterClose = messages.length
   await tasks.create(human(), { title: 'Unseen', direction: 'd' })
-  expect(messages).toHaveLength(afterClose)
+  await connections.flushWorkspace()
+  const afterClose = messages.length
   await send({ type: 'team-workspace-open', teamPath: '/repo' })
+  expect(messages).toHaveLength(afterClose + 1) // the re-open's snapshot only
   connections.disconnect(connection)
-  const afterDisconnect = messages.length
   await tasks.create(human(), { title: 'Unseen too', direction: 'd' })
-  expect(messages).toHaveLength(afterDisconnect)
+  await connections.flushWorkspace()
+  expect(messages).toHaveLength(afterClose + 1)
 })
 
 test('a reconnect gets a fresh authoritative snapshot', async () => {
@@ -133,6 +144,7 @@ test('a worktree path and the main checkout reach the same team; each subscripti
   // One change fans out to both subscriptions of the team, each under its own teamPath.
   messages.length = 0
   await tasks.create(human(), { title: 'Second', direction: 'd' })
+  await connections.flushWorkspace()
   const pushes = messages.filter(message => message.type === 'team-workspace')
   expect(pushes.map(push => push.teamPath).sort()).toEqual(['/repo', '/repo/.worktrees/feat-x'])
 })
@@ -175,5 +187,74 @@ test('a pending approval appears live when the workspace is open', async () => {
     at: '2026-10-14T06:00:00Z',
   }])
   connections.publishWorkspace('team')
+  await connections.flushWorkspace()
   expect(last('team-workspace')!.attention.map(item => item.id)).toEqual(['approval:our-dev:req-1'])
+})
+
+/** A read that counts projections instead of computing them. */
+class CountingRead extends WorkspaceRead {
+  reads = 0
+  constructor(public payload: TeamWorkspaceSnapshot, private readonly moveClock = false) { super(null as never) }
+  snapshot(): TeamWorkspaceSnapshot {
+    this.reads += 1
+    // A moving window edge on every read: exactly what the diff must ignore.
+    return { ...this.payload, summary: { ...this.payload.summary, since: this.moveClock ? new Date().toISOString() : this.payload.summary.since } }
+  }
+}
+
+describe('publishes coalesce and share one read per team', () => {
+  const emptySnapshot = (): TeamWorkspaceSnapshot => ({
+    tasks: [], attention: [], members: [], directory: [],
+    summary: {
+      since: '2026-10-13T00:00:00Z', completedResults: { items: [] }, capacityWaits: { items: [] },
+      approvals: { items: [] }, uncertainDeliveries: { items: [] }, finishedTurnsWithoutResult: { items: [] },
+    },
+  })
+  const make = () => {
+    const read = new CountingRead(emptySnapshot(), true)
+    const workspace = new WorkspaceConnections(manager, read)
+    return { workspace, read }
+  }
+
+  test('two subscribers on one team trigger one read', async () => {
+    const { workspace, read } = make()
+    const first: ServerMessage[] = []
+    const second: ServerMessage[] = []
+    await workspace.handle({ send: message => first.push(message) }, { type: 'team-workspace-open', teamPath: '/repo' })
+    await workspace.handle({ send: message => second.push(message) }, { type: 'team-workspace-open', teamPath: '/repo' })
+    expect(read.reads).toBe(2) // one per open — opens always read fresh
+    read.reads = 0
+    read.payload = { ...read.payload, tasks: [emptyRow()] } // a change worth pushing
+    workspace.publish('team')
+    await workspace.settled()
+    expect(read.reads).toBe(1)
+    expect(first.filter(message => message.type === 'team-workspace')).toHaveLength(1)
+    expect(second.filter(message => message.type === 'team-workspace')).toHaveLength(1)
+  })
+
+  test('several publishes in one tick project the team once, and a moving clock does not re-send', async () => {
+    const { workspace, read } = make()
+    const sent: ServerMessage[] = []
+    await workspace.handle({ send: message => sent.push(message) }, { type: 'team-workspace-open', teamPath: '/repo' })
+    read.reads = 0
+    const count = sent.length
+    workspace.publish('team')
+    workspace.publish('team')
+    workspace.publish('team')
+    await workspace.settled()
+    expect(read.reads).toBe(1)
+    // The read moved `since` between the open and this publish; the payload
+    // is unchanged, so nothing is sent.
+    expect(sent).toHaveLength(count)
+    // A changed payload does send.
+    read.payload = { ...emptySnapshot(), tasks: [{ ...emptyRow() }] }
+    workspace.publish('team')
+    await workspace.settled()
+    expect(sent.at(-1)).toMatchObject({ type: 'team-workspace', tasks: [{ id: 'task-1' }] })
+  })
+})
+
+const emptyRow = (): TeamTaskRow => ({
+  id: 'task-1', title: 'T', status: 'open', stage: 'unstarted', accountable: null, groupId: null,
+  worktree: null, waitingReason: null, nextAction: null, requiresHuman: false,
 })

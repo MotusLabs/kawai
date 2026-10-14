@@ -7,9 +7,12 @@
 // action that could name a foreign one (links resolve through the task,
 // message, and chat views, which keep their own refusals). Open answers with
 // one authoritative snapshot; later pushes are full-set replaces the client
-// applies, diffed before sending so an unchanged read stays quiet.
+// applies, diffed before sending so an unchanged read stays quiet. Publishes
+// coalesce per team on a microtask and share one read, so a dispatch pass's
+// burst of mailbox changes costs a single projection.
 import type { ClientMessage } from '../../shared/types'
 import { unknownTeamError } from '../../shared/team'
+import type { TeamWorkspaceSnapshot } from '../../shared/teamWorkspace'
 import type { ChatSessionManager } from '../chat/ChatSessionManager'
 import type { ChatConnection } from '../chat/ChatConnections'
 import type { TeamIdentity } from './teamIdentity'
@@ -22,12 +25,18 @@ export class WorkspaceConnections {
   private readonly subscriptions = new Map<ChatConnection, Map<string, TeamIdentity>>()
   /** Latest open per connection and teamPath, so a close beats a slow open. */
   private readonly pendingOpen = new Map<ChatConnection, Map<string, object>>()
-  /** Last payload sent per connection and teamPath; an equal read is not re-sent. */
+  /** Last diff key sent per connection and teamPath; an equal read is not re-sent. */
   private readonly lastSent = new Map<ChatConnection, Map<string, string>>()
-  private readonly read: WorkspaceRead
+  /** Teams with a publish waiting for the coalescing microtask. */
+  private pendingTeams: Set<string> = new Set()
+  private publishScheduled = false
+  readonly read: WorkspaceRead
 
-  constructor(private readonly manager: ChatSessionManager) {
-    this.read = new WorkspaceRead(manager)
+  constructor(
+    private readonly manager: ChatSessionManager,
+    read: WorkspaceRead = new WorkspaceRead(manager),
+  ) {
+    this.read = read
   }
 
   disconnect(connection: ChatConnection) {
@@ -36,34 +45,59 @@ export class WorkspaceConnections {
     this.lastSent.delete(connection)
   }
 
-  /** A committed change of the team's tasks, mail, or waiting reasons. */
-  publish(teamId: string) {
+  /**
+   * A committed change of the team's tasks, mail, waiting reasons, or session
+   * facts. The read is deferred to a microtask and deduplicated per team, so
+   * several triggers in one tick — one dispatch pass, one turn — project the
+   * team once.
+   */
+  publish(teamId: string): void {
+    this.pendingTeams.add(teamId)
+    if (this.publishScheduled) return
+    this.publishScheduled = true
+    queueMicrotask(() => {
+      this.publishScheduled = false
+      const teams = this.pendingTeams
+      this.pendingTeams = new Set()
+      for (const teamId of teams) this.publishNow(teamId)
+    })
+  }
+
+  /** Resolves once every publish scheduled so far has been projected and sent. */
+  settled(): Promise<void> {
+    return this.publishScheduled
+      ? new Promise(resolve => queueMicrotask(() => resolve()))
+      : Promise.resolve()
+  }
+
+  private publishNow(teamId: string) {
+    const targets: Array<[ChatConnection, string, TeamIdentity]> = []
     for (const [connection, views] of this.subscriptions) {
       for (const [teamPath, team] of views) {
-        if (team.teamId === teamId) this.send(connection, teamPath, team, 'team-workspace')
+        if (team.teamId === teamId) targets.push([connection, teamPath, team])
       }
+    }
+    if (targets.length === 0) return
+    // One read per team per publish, shared by every subscriber.
+    const payload = this.read.snapshot(targets[0]![2])
+    const key = this.diffKey(payload)
+    for (const [connection, teamPath] of targets) {
+      const sent = this.lastSent.get(connection)
+      if (sent?.get(teamPath) === key) continue
+      if (sent) sent.set(teamPath, key)
+      else this.lastSent.set(connection, new Map([[teamPath, key]]))
+      connection.send({ type: 'team-workspace', teamPath, teamId, ...payload })
     }
   }
 
-  private send(
-    connection: ChatConnection,
-    teamPath: string,
-    team: TeamIdentity,
-    type: 'team-workspace-snapshot' | 'team-workspace',
-  ) {
-    const payload = this.read.snapshot(team)
-    // Diff before pushing (design's churn risk): the read recomputes on the
-    // mailbox and task triggers, and an unchanged team must stay quiet. An
-    // open always sends — the snapshot is authoritative, never assumed.
-    const key = JSON.stringify(payload)
-    const sent = this.lastSent.get(connection)
-    if (sent) {
-      if (type === 'team-workspace' && sent.get(teamPath) === key) return
-      sent.set(teamPath, key)
-    } else {
-      this.lastSent.set(connection, new Map([[teamPath, key]]))
-    }
-    connection.send({ type, teamPath, teamId: team.teamId, ...payload })
+  /**
+   * The diff key: the payload with read-time-derived fields blanked. The
+   * summary's window edge (`since`) moves with every read at millisecond
+   * precision; comparing it would push a full snapshot on every trigger, so
+   * it is exactly what the diff must ignore.
+   */
+  private diffKey(payload: TeamWorkspaceSnapshot): string {
+    return JSON.stringify({ ...payload, summary: { ...payload.summary, since: '' } })
   }
 
   async handle(connection: ChatConnection, message: WorkspaceClientMessage) {
@@ -88,6 +122,9 @@ export class WorkspaceConnections {
     const views = this.subscriptions.get(connection) ?? new Map<string, TeamIdentity>()
     views.set(teamPath, team)
     this.subscriptions.set(connection, views)
-    this.send(connection, teamPath, team, 'team-workspace-snapshot')
+    // An open always sends: the snapshot is authoritative, never assumed.
+    const payload = this.read.snapshot(team)
+    this.lastSent.set(connection, new Map([[teamPath, this.diffKey(payload)]]))
+    connection.send({ type: 'team-workspace-snapshot', teamPath, teamId: team.teamId, ...payload })
   }
 }

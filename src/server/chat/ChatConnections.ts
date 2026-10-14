@@ -110,6 +110,11 @@ export class ChatConnections {
     this.workspaceConnections.publish(teamId)
   }
 
+  /** Resolves once every scheduled workspace publish has run (test seam). */
+  flushWorkspace(): Promise<void> {
+    return this.workspaceConnections.settled()
+  }
+
   /** A committed strategy change: re-send that team's strategy snapshots. */
   publishStrategies(teamId: string): void {
     this.strategyConnections.publish(teamId)
