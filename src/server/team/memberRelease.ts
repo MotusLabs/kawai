@@ -144,15 +144,18 @@ export class MemberRelease {
           VALUES (?, ?, ?)`).run(task.id, actor.kind, actor.sessionId)
         // Only rows still undelivered at the commit: a message claimed, pushed,
         // or delivered while the definitions resolved stays the recipient's.
+        // A group whose first row arrived during the await has no resolved
+        // definition here; the next cycle's evaluate() settles it (D8).
         for (const message of this.options.store.forTask(task.id)) {
           if (message.toKind !== 'group' || message.toId === null || !waiting(message)) continue
-          if ((definitions.get(message.toId) ?? undefined)?.worktreeScoped !== false) {
+          if (!definitions.has(message.toId)) continue
+          if (definitions.get(message.toId)?.worktreeScoped !== false) {
             this.options.store.deadLetter(message.id, 'task-closed')
           }
         }
         const now = new Date().toISOString()
         for (const record of this.spawnedMembersOf(task)) {
-          if ((definitions.get(record.groupId ?? '') ?? undefined)?.releaseOnTaskClose === false) continue
+          if (definitions.get(record.groupId ?? '')?.releaseOnTaskClose === false) continue
           this.db.prepare(`INSERT OR REPLACE INTO team_member_releases
             (session_id, task_id, team_id, reason, requested_by_kind, requested_by_session, requested_at)
             VALUES (?, ?, ?, ?, ?, ?, ?)`)

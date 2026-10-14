@@ -503,3 +503,34 @@ test('a refused archive journals no release: the row drops and release_member re
   expect(releases.pending()).toEqual([])
   expect(runtime.tasks.store.journal(t.id).map(entry => entry.text)).toEqual(['Task done.'])
 })
+
+test('a group first seen during the close await is left to the next cycle: an unscoped group keeps its mail', async () => {
+  const MemberRelease = (await import('../team/memberRelease')).MemberRelease
+  writeGroup('leads', 'worktreeScoped: false')
+  const t = task(featX)
+  records.set('dev-1', record('dev-1', { projectPath: featX, spawned: true, taskId: t.id }))
+  let releaseDefinitions!: () => void
+  const leads = { worktreeScoped: false } as never
+  const releases = new MemberRelease(db, {
+    store: runtime.mailbox.store, tasks: runtime.tasks.store,
+    records: () => records.values(), getRecord: id => records.get(id),
+    teamOf: id => (records.has(id) ? team : undefined),
+    definition: () => new Promise(resolve => { releaseDefinitions = () => resolve(undefined) }),
+    cachedDefinition: (_team, groupId) => (groupId === 'leads' ? leads : undefined),
+    recipient: () => ({ idle: false, pendingRequest: false }),
+    hasLiveWorkers: () => false,
+    hasRunningBackgroundTasks: () => false,
+    archive: () => ({ ok: true }),
+    notify: () => {},
+  })
+  const hook = releases.transitionHook(t, 'done', { kind: 'human', sessionId: null })
+  await new Promise(resolve => setImmediate(resolve))
+  // The unscoped group's first waiting row arrives while the hook awaits.
+  const late = mail({ toId: 'leads', taskId: t.id })
+  releaseDefinitions()
+  runtime.tasks.store.setStatus(t.id, 'done', await hook)
+  expect(runtime.mailbox.store.get(late.id)?.state).toBe('queued')
+  // The next cycle reads the current file: worktreeScoped: false keeps it.
+  await releases.evaluate()
+  expect(runtime.mailbox.store.get(late.id)?.state).toBe('queued')
+})
