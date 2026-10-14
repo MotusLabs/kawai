@@ -13,6 +13,9 @@ profiles: { glm: 2, mimo: 1, claude: 1 }   # or a list: [claude, glm]
 strategy: first-available                  # or profile-order
 onLimit: { parkIfResetWithin: 3h, otherwise: forward, forwardTo: architects }
 effort: medium                             # low, medium, high, xhigh, max
+releaseOnTaskClose: true                   # default; false keeps spawned members
+worktreeScoped: true                       # default; false takes task mail anywhere
+canReleaseMembers: true                    # default; false opts out of release_member
 ---
 ```
 
@@ -39,6 +42,23 @@ effort: medium                             # low, medium, high, xhigh, max
   environment overrides it and a settings maximum clamps it. `/effort` in a
   chat still changes that running agent. An invalid value is reported and
   ignored. Gateway models (GLM, MiMo, ...) may ignore effort.
+- `releaseOnTaskClose` (default `true`): when a task becomes `done` or
+  `cancelled`, its live spawned members are released — archived, never killed —
+  once each has settled (idle, no pending approval or answer, no live
+  background worker, no claimed or parked mail, no due direct mail). The
+  pending release is durable across a restart, is cancelled by reopening the
+  task or restoring the member, and is journaled on the task by kawai. A group
+  setting `false` keeps its spawned members after their tasks close.
+- `worktreeScoped` (default `true`): task mail to a group setting `false` goes
+  to any idle member of the group wherever it runs, and never causes a spawn.
+  Use it for groups whose members never live in task worktrees (a lead or
+  reviewer group working in the main checkout), so reports and killed-sender
+  reply fallbacks reach them; the default keeps worktree routing and spawning.
+- `canReleaseMembers` (default `true`): members of the group may call the
+  `release_member` tool, archiving one settled spawned member of the team
+  immediately (never themselves, never human-created sessions; refused with
+  the reason when the member is busy, awaiting an answer, running a background
+  worker, or holding mail). A group setting `false` opts out.
 
 ## Routing rules
 
