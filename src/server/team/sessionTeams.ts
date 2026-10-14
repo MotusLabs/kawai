@@ -104,7 +104,7 @@ export class SessionTeams {
 
   /** Display state of a session's group; undefined until its team is known. */
   groupInfo(sessionId: string, groupId: string, cache?: Map<string, GroupCatalog>): SessionGroupInfo | undefined {
-    const group = this.catalogOf(sessionId, cache)?.groups.get(groupId)
+    const group = this.catalogOf(sessionId, cache)?.groups.get(groupId)?.group
     if (!this.teamOf(sessionId)) return undefined
     return group ? { label: group.label, missing: false } : { label: groupId, missing: true }
   }
@@ -116,8 +116,8 @@ export class SessionTeams {
    */
   promptFor(sessionId: string, groupId: string | null | undefined): string {
     const catalog = this.catalogOf(sessionId)
-    const groups = [...(catalog?.groups.values() ?? [])]
-    const group = groupId ? catalog?.groups.get(groupId) : undefined
+    const groups = [...(catalog?.groups.values() ?? [])].map(entry => entry.group)
+    const group = groupId ? catalog?.groups.get(groupId)?.group : undefined
     return buildTeamPrompt({ sessionId, groups, ...(group ? { group } : {}) })
   }
 
@@ -127,7 +127,7 @@ export class SessionTeams {
    * `effort`, leaving Claude Code's own settings to decide.
    */
   effortFor(sessionId: string, groupId: string | null | undefined): GroupEffort | undefined {
-    return groupId ? this.catalogOf(sessionId)?.groups.get(groupId)?.effort : undefined
+    return groupId ? this.catalogOf(sessionId)?.groups.get(groupId)?.group.effort : undefined
   }
 
   /**

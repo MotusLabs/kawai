@@ -16,6 +16,7 @@ export type ChatConnectionMessage = Extract<
       | `team-task${string}`
       | `team-message${string}`
       | `team-thread${string}`
+      | `team-workspace-${string}`
       | `strategy-${string}`
   }
 >
@@ -71,6 +72,8 @@ export const CHAT_CONNECTION_TYPES = [
   'strategy-submit',
   'strategy-approve',
   'strategy-withdraw',
+  'team-workspace-open',
+  'team-workspace-close',
 ] as const satisfies readonly ChatConnectionMessage['type'][]
 
 // Compile-time completeness: every handled type is listed above. The alias

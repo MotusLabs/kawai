@@ -29,20 +29,20 @@ describe('loadGroupCatalog', () => {
     write(repo, 'notes.txt', 'not a group')
     const catalog = loadGroupCatalog({ groupsRoot: repo, homeDir: home })
     expect([...catalog.groups.keys()]).toEqual(['architects', 'devs'])
-    expect(catalog.groups.get('architects')?.label).toBe('Architects')
+    expect(catalog.groups.get('architects')?.group.label).toBe('Architects')
     expect(catalog.errors).toEqual([])
   })
 
   test('user-level groups are available when the project does not define them', () => {
     write(home, 'qa.md', 'Test.')
     const catalog = loadGroupCatalog({ groupsRoot: repo, homeDir: home })
-    expect(catalog.groups.get('qa')?.prompt).toBe('Test.')
+    expect(catalog.groups.get('qa')?.group.prompt).toBe('Test.')
   })
 
   test('a project file replaces the user-level file with the same id', () => {
     write(home, 'devs.md', '---\ndescription: home devs\n---\nHome prompt.')
     write(repo, 'devs.md', 'Project prompt.')
-    const devs = loadGroupCatalog({ groupsRoot: repo, homeDir: home }).groups.get('devs')
+    const devs = loadGroupCatalog({ groupsRoot: repo, homeDir: home }).groups.get('devs')?.group
     expect(devs).toEqual({
       id: 'devs', label: 'devs', description: '', canCreateTasks: false, canManageMailbox: false, releaseOnTaskClose: true, worktreeScoped: true, canReleaseMembers: true, max: 1, approval: 'manual', prompt: 'Project prompt.',
       profiles: [], strategy: 'first-available', warnings: [],
@@ -53,7 +53,7 @@ describe('loadGroupCatalog', () => {
   test('project task settings replace user-level settings wholesale, never merge', () => {
     write(home, 'leads.md', '---\ncanCreateTasks: true\nmax: 4\nprofile: glm\napproval: auto\n---\nHome.')
     write(repo, 'leads.md', '---\nmax: 2\n---\nProject.')
-    const leads = loadGroupCatalog({ groupsRoot: repo, homeDir: home }).groups.get('leads')
+    const leads = loadGroupCatalog({ groupsRoot: repo, homeDir: home }).groups.get('leads')?.group
     expect(leads).toMatchObject({ canCreateTasks: false, max: 2, approval: 'manual', prompt: 'Project.' })
     expect(leads?.profiles).toEqual([])
   })
@@ -62,7 +62,7 @@ describe('loadGroupCatalog', () => {
     write(home, 'leads.md', '---\ncanCreateTasks: true\n---\nHome.')
     write(repo, 'leads.md', '---\nmax: lots\n---\nProject.')
     const catalog = loadGroupCatalog({ groupsRoot: repo, homeDir: home })
-    expect(catalog.groups.get('leads')).toMatchObject({ canCreateTasks: true, prompt: 'Home.' })
+    expect(catalog.groups.get('leads')?.group).toMatchObject({ canCreateTasks: true, prompt: 'Home.' })
     expect(catalog.errors.some(error => error.includes('leads.md') && error.includes('max must be'))).toBe(true)
   })
 
@@ -97,7 +97,7 @@ describe('loadGroupCatalog', () => {
   test('profile ids the profile catalog does not define are dropped with a warning', () => {
     write(repo, 'devs.md', '---\nprofiles: { glm: 2, nope: 1, default: 1 }\n---\nBuild.')
     const catalog = loadGroupCatalog({ groupsRoot: repo, homeDir: home })
-    const devs = catalog.groups.get('devs')!
+    const devs = catalog.groups.get('devs')!.group
     expect(devs.profiles).toEqual([{ profileId: 'glm', cap: 2 }, { profileId: 'default', cap: 1 }])
     expect(devs.warnings).toEqual(['profile "nope" is not defined; ignored'])
     expect(catalog.warnings).toEqual([`${path.join(repo, '.kawai', 'groups', 'devs.md')}: profile "nope" is not defined; ignored`])
@@ -108,7 +108,7 @@ describe('loadGroupCatalog', () => {
     write(repo, 'devs.md', '---\nprofiles: [mine]\n---\nBuild.')
     fs.writeFileSync(path.join(repo, '.kawai', 'profiles.json'), JSON.stringify({ mine: { label: 'Mine' } }))
     const catalog = loadGroupCatalog({ groupsRoot: repo, homeDir: home })
-    expect(catalog.groups.get('devs')?.profiles).toEqual([{ profileId: 'mine' }])
+    expect(catalog.groups.get('devs')?.group.profiles).toEqual([{ profileId: 'mine' }])
     expect(catalog.warnings).toEqual([])
   })
 
@@ -123,7 +123,7 @@ describe('loadGroupCatalog', () => {
     write(repo, 'devs.md', '---\neffort: extreme\n---\nBuild.')
     const catalog = loadGroupCatalog({ groupsRoot: repo, homeDir: home })
     expect(catalog.errors).toEqual([])
-    expect(catalog.groups.get('devs')?.effort).toBeUndefined()
+    expect(catalog.groups.get('devs')?.group.effort).toBeUndefined()
     expect(catalog.warnings).toEqual([
       `${path.join(repo, '.kawai', 'groups', 'devs.md')}: effort must be low, medium, high, xhigh, max, got "extreme"; ignored`,
     ])
@@ -134,5 +134,42 @@ describe('loadGroupCatalog', () => {
     const before = groupCatalogStamp({ groupsRoot: repo, homeDir: home })
     fs.writeFileSync(path.join(repo, '.kawai', 'profiles.json'), '{}')
     expect(groupCatalogStamp({ groupsRoot: repo, homeDir: home })).not.toBe(before)
+  })
+
+  // team-workspace 2.1: the catalog keeps the file each group came from, so
+  // Members can name the source of every setting (design D7).
+  test('a single-layer group names one source file in effect', () => {
+    write(home, 'qa.md', 'Test.')
+    write(repo, 'devs.md', 'Build.')
+    const catalog = loadGroupCatalog({ groupsRoot: repo, homeDir: home })
+    expect(catalog.groups.get('qa')?.sources).toEqual([
+      { file: path.join(home, '.kawai', 'groups', 'qa.md'), layer: 'user', inEffect: true },
+    ])
+    expect(catalog.groups.get('devs')?.sources).toEqual([
+      { file: path.join(repo, '.kawai', 'groups', 'devs.md'), layer: 'project', inEffect: true },
+    ])
+  })
+
+  test('a project file overriding a user file lists both sources, the project one in effect', () => {
+    write(home, 'devs.md', 'Home prompt.')
+    write(repo, 'devs.md', 'Project prompt.')
+    const devs = loadGroupCatalog({ groupsRoot: repo, homeDir: home }).groups.get('devs')
+    expect(devs?.file).toBe(path.join(repo, '.kawai', 'groups', 'devs.md'))
+    expect(devs?.sources).toEqual([
+      { file: path.join(home, '.kawai', 'groups', 'devs.md'), layer: 'user', inEffect: false },
+      { file: path.join(repo, '.kawai', 'groups', 'devs.md'), layer: 'project', inEffect: true },
+    ])
+  })
+
+  test('a skipped file appears only in errors, never as a source', () => {
+    write(home, 'leads.md', '---\ncanCreateTasks: true\n---\nHome.')
+    write(repo, 'leads.md', '---\nmax: lots\n---\nProject.')
+    const catalog = loadGroupCatalog({ groupsRoot: repo, homeDir: home })
+    const leads = catalog.groups.get('leads')
+    expect(leads?.group.prompt).toBe('Home.')
+    expect(leads?.sources.map(source => source.layer)).toEqual(['user'])
+    const projectFile = path.join(repo, '.kawai', 'groups', 'leads.md')
+    expect(catalog.errors.some(error => error.startsWith(projectFile))).toBe(true)
+    expect(leads?.sources.some(source => source.file === projectFile)).toBe(false)
   })
 })

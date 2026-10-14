@@ -28,7 +28,7 @@ export function createTeamGroupRoutes(options: {
     // No (or no existing) project yet: the dialog is still being filled in.
     if (!project.ok) return c.json({ groups: [], errors: [], warnings: [] })
     const { team, catalog } = await loadTeamGroups(project.path, options.homeDir)
-    const groups: TeamGroupSummary[] = [...catalog.groups.values()].map(group => {
+    const groups: TeamGroupSummary[] = [...catalog.groups.values()].map(({ group }) => {
       const live = options.groupProfileCounts?.(team.teamId, group.id) ?? {}
       return {
         id: group.id, label: group.label, description: group.description,

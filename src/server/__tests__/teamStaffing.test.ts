@@ -90,7 +90,7 @@ const makeStaffing = (onError?: (error: unknown) => void, extra: { retryAfterMs?
   })
 const targetWorktree = (message: { taskId: string | null }) => (message.taskId ? tasks.get(message.taskId)?.worktree ?? null : null)
 const makeRouter = (staff: WorktreeStaffing) => new ProfileRouter({
-  groupOf: async message => (await loadTeamGroups(repo, home)).catalog.groups.get(message.toId ?? ''),
+  groupOf: async message => (await loadTeamGroups(repo, home)).catalog.groups.get(message.toId ?? '')?.group,
   members: (_teamId, groupId) => [...records.values()]
     .filter(row => row.archivedAt == null && row.groupId === groupId)
     .map(row => ({ sessionId: row.sessionId, profileId: row.claudeProfileId ?? 'default', cwd: row.projectPath })),
@@ -273,7 +273,7 @@ describe('per-profile caps (profile routing)', () => {
 
   test('concurrent spawns on one profile re-count inside the reservation and never overshoot', async () => {
     writeGroup('devs', 'profiles: { glm: 1 }\nmax: 5')
-    const group = (await loadTeamGroups(repo, home)).catalog.groups.get('devs')!
+    const group = (await loadTeamGroups(repo, home)).catalog.groups.get('devs')!.group
     const first = mail(task(featX).id)
     const second = mail(task(featY).id)
     const other = makeStaffing()
@@ -313,7 +313,7 @@ describe('failure, restart, and removal', () => {
   })
 
   test('a failed reserve throws inside the transaction, rolls the reservation insert back, and keeps the end state', async () => {
-    const group = (await loadTeamGroups(repo, home)).catalog.groups.get('devs')!
+    const group = (await loadTeamGroups(repo, home)).catalog.groups.get('devs')!.group
     const m = mail(task(featX).id)
     // The message left the queue before the reserve ran (e.g. cancelled
     // during the awaited group resolution).
@@ -329,7 +329,7 @@ describe('failure, restart, and removal', () => {
   })
 
   test('a failed reserve reaches the dispatcher error path, not a quiet return', async () => {
-    const group = (await loadTeamGroups(repo, home)).catalog.groups.get('devs')!
+    const group = (await loadTeamGroups(repo, home)).catalog.groups.get('devs')!.group
     const m = mail(task(featX).id)
     const errors: unknown[] = []
     const dispatcher = new MailDispatcher(store, {

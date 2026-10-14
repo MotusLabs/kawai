@@ -111,4 +111,17 @@ describe('the handled set matches ChatConnections dispatch', () => {
       expect(isChatConnectionMessage({ type } as ClientMessage)).toBe(true)
     }
   })
+
+  // The workspace subscription (team-workspace 1.2) rides the same whitelist;
+  // pin it by name so removing it fails a test as well as the compile.
+  test('the team workspace types are listed and forwarded', () => {
+    for (const type of ['team-workspace-open', 'team-workspace-close'] as const) {
+      expect(CHAT_CONNECTION_TYPES).toContain(type)
+      expect(isChatConnectionMessage({ type } as ClientMessage)).toBe(true)
+      const h = harness()
+      h.route(JSON.stringify({ type, teamPath: '/repo' }))
+      expect(h.handled.map((m) => m.type)).toEqual([type])
+      expect(h.sent).toEqual([])
+    }
+  })
 })

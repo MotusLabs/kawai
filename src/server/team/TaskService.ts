@@ -342,7 +342,7 @@ export class TaskService {
     if (!session) throw new Error(`Unknown calling session: ${caller.sessionId}`)
     // Read at call time: an edited group file applies to the next call.
     const { team, catalog } = await loadTeamGroups(session.projectPath, this.options.homeDir)
-    const group = session.groupId ? catalog.groups.get(session.groupId) : undefined
+    const group = session.groupId ? catalog.groups.get(session.groupId)?.group : undefined
     return {
       team,
       actor: { kind: 'agent', sessionId: session.sessionId } as TaskActor,
