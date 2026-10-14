@@ -41,7 +41,8 @@ const TABLE_BODY = `
   park_count INTEGER NOT NULL DEFAULT 0,
   resume_message_id TEXT,
   handoff TEXT,
-  excluded_profile TEXT
+  excluded_profile TEXT,
+  revision_notice TEXT
 `
 
 /**
@@ -70,6 +71,8 @@ const ADDED_COLUMNS: ReadonlyArray<readonly [string, string]> = [
   // Human senders and the revision a delivery carried (team-message-threads).
   ['from_kind', "TEXT NOT NULL DEFAULT 'agent'"],
   ['task_revision', 'INTEGER'],
+  // The revision a notice announces (task-revision-publication D3).
+  ['revision_notice', 'TEXT'],
 ]
 
 /** Every column of the final shape, in table order. */

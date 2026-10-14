@@ -2,6 +2,7 @@
 // messages query layer. Null-safe: a missing id column maps to null, never
 // to the string "null".
 import type { ChatHandoffPackage, MessageState, TeamMessage } from '../../shared/team'
+import type { RevisionNotice } from '../../shared/teamTasks'
 import { isHandoffPackage } from './routing/handoff'
 
 export function mapRow(row: Record<string, unknown>): TeamMessage {
@@ -46,6 +47,21 @@ export function mapRow(row: Record<string, unknown>): TeamMessage {
     resumeMessageId: text(row.resume_message_id),
     handoff: parseHandoff(row.handoff),
     excludedProfile: text(row.excluded_profile),
+    revisionNotice: parseRevisionNotice(row.revision_notice),
+  }
+}
+
+/** A notice row's announced revision (task-revision-publication D3); null for every other row. */
+function parseRevisionNotice(value: unknown): RevisionNotice | null {
+  if (typeof value !== 'string') return null
+  try {
+    const parsed = JSON.parse(value) as Record<string, unknown> | null
+    if (!parsed || typeof parsed.revision !== 'number' || typeof parsed.previousRevision !== 'number' ||
+      typeof parsed.assignmentId !== 'string' || !(parsed.rationale === null || typeof parsed.rationale === 'string')) return null
+    return { revision: parsed.revision, previousRevision: parsed.previousRevision, assignmentId: parsed.assignmentId, rationale: parsed.rationale }
+  } catch {
+    // A corrupt notice reads as none; the message itself stays usable.
+    return null
   }
 }
 

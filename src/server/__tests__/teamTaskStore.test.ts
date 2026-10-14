@@ -57,7 +57,7 @@ describe('TaskStore', () => {
     })
     expect(task.id.startsWith('task-')).toBe(true)
     expect(tasks.revisions(task.id)).toEqual([
-      { revision: 1, direction: 'CSV export of reports', acceptance: 'Downloads a file', author: agent('chat-lead'), createdAt: task.createdAt },
+      { revision: 1, direction: 'CSV export of reports', acceptance: 'Downloads a file', author: agent('chat-lead'), createdAt: task.createdAt, rationale: null, notify: null },
     ])
   })
 

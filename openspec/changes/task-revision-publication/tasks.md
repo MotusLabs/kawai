@@ -4,8 +4,8 @@ Prerequisite: `task-assignment` has landed (`team_task_assignments`, outstanding
 
 ## 1. Data model
 
-- [ ] 1.1 Add the additive migration (design D1–D3, D6, Migration Plan): `team_task_drafts`, `team_task_notifications` (unique `(task_id, request_key, assignment_id)`), `team_task_acknowledgements` (PK `(task_id, session_id, revision)`), nullable `rationale`/`request_key`/`notify` on `team_task_revisions` with a partial unique `(task_id, request_key)`, and nullable `revision_notice` on `team_messages` (`messageSchema.ts` `migrateTable`); verify migration tests on a pre-existing database (old revisions read with null rationale, `notify` null) and reopen round-trips.
-- [ ] 1.2 Extend `src/shared/teamTasks.ts` additively: `TaskRevision.rationale`, `TaskDraft`, `TaskPublication`/`RevisionRecipient` (notice state, delivered revision, acknowledged revision, acknowledgement history), `TeamTaskDetail.draft` (human paths only) and `publications`; `ChatPeerMessage.revisionNotice` in `src/shared/chat.ts`; verify typecheck and that agent-facing `task_get` output types exclude the draft.
+- [x] 1.1 Add the additive migration (design D1–D3, D6, Migration Plan): `team_task_drafts`, `team_task_notifications` (unique `(task_id, request_key, assignment_id)`), `team_task_acknowledgements` (PK `(task_id, session_id, revision)`), nullable `rationale`/`request_key`/`notify` on `team_task_revisions` with a partial unique `(task_id, request_key)`, and nullable `revision_notice` on `team_messages` (`messageSchema.ts` `migrateTable`); verify migration tests on a pre-existing database (old revisions read with null rationale, `notify` null) and reopen round-trips.
+- [x] 1.2 Extend `src/shared/teamTasks.ts` additively: `TaskRevision.rationale`, `TaskDraft`, `TaskPublication`/`RevisionRecipient` (notice state, delivered revision, acknowledged revision, acknowledgement history), `TeamTaskDetail.draft` (human paths only) and `publications`; `ChatPeerMessage.revisionNotice` in `src/shared/chat.ts`; verify typecheck and that agent-facing `task_get` output types exclude the draft.
 
 ## 2. Drafts and publication
 

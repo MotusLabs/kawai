@@ -20,6 +20,7 @@ import type {
 import { TASK_STATUSES } from '../../shared/teamTasks'
 import { outstandingOf, type AssignmentStore } from './assignmentStore'
 import type { MailboxStore } from './mailboxStore'
+import { migrateRevisionSchema } from './taskRevisionSchema'
 
 const CREATE_TABLES_SQL = `
 CREATE TABLE IF NOT EXISTS team_tasks (
@@ -96,6 +97,7 @@ export class TaskStore {
   constructor(private readonly db: Database, private readonly mail?: MailboxStore, private readonly assignments?: AssignmentStore) {
     db.exec(CREATE_TABLES_SQL)
     migrateTable(db)
+    migrateRevisionSchema(db)
   }
 
   /** Every committed change, with the task as it is now. */
@@ -174,6 +176,8 @@ export class TaskStore {
         acceptance: text(row.acceptance),
         author: actor(row.author_kind, row.author_session),
         createdAt: String(row.created_at),
+        rationale: text(row.rationale),
+        notify: row.notify === null || row.notify === undefined ? null : Number(row.notify) === 1,
       }))
   }
 
