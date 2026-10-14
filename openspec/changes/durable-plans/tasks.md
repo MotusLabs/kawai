@@ -98,7 +98,7 @@ Implement after Wave B2 (`task-revision-publication`, `task-results-handoffs`) h
 
 ## 7. Human protocol
 
-- [ ] 7.1 Add the D12 messages to `src/shared/types.ts`, list every new client type in `CHAT_CONNECTION_TYPES`, and implement `planConnections.ts` on the shared team-scope resolver. The list and detail subscriptions push on every plan write and on every change to a task linked to an open subscribed plan. Verify with connection tests:
+- [x] 7.1 Add the D12 messages to `src/shared/types.ts`, list every new client type in `CHAT_CONNECTION_TYPES`, and implement `planConnections.ts` on the shared team-scope resolver. The list and detail subscriptions push on every plan write and on every change to a task linked to an open subscribed plan. Verify with connection tests:
   - open by repository path and by worktree path (same team);
   - unknown path refused;
   - another team's plan id refused with no data;

@@ -132,6 +132,8 @@ export interface ChatSessionManagerOptions {
    * there because publishes coalesce per team.
    */
   onSessionRecordChange?: (sessionId: string) => void
+  /** Every committed plan write, and every change to a task linked to a plan (wired to the Plans view push in bootstrap.ts). */
+  onPlanChange?: (teamId: string, planId: string) => void
   /** Conversation-event sink (wired to the WS broadcast in index.ts). */
   onEvent: (sessionId: string, event: ChatEvent) => void
   /** Command-state sink (wired to the chat-commands push in index.ts). */
@@ -959,6 +961,7 @@ export class ChatSessionManager {
       strategies: this.strategies.store,
       ...(options.profileCatalogHome ? { homeDir: options.profileCatalogHome } : {}),
     })
+    this.plans.store.subscribe(plan => this.options.onPlanChange?.(plan.teamId, plan.id))
     this.strategies.store.subscribe(strategy => {
       const teamId = strategy.repoBindings.find(binding => binding.kind === 'team')?.root
       if (teamId) this.options.onStrategyChange?.(teamId)
@@ -966,6 +969,8 @@ export class ChatSessionManager {
     // A retitled task re-labels the headers of the sessions working on it.
     this.tasks.store.subscribe(task => {
       this.options.onTaskChange?.(task.teamId)
+      // A linked task's change moves its plan's progress (durable-plans D12).
+      if (task.planId) this.options.onPlanChange?.(task.teamId, task.planId)
       for (const record of this.records.values()) {
         if (record.taskId === task.id) this.options.registry.updateSession(record.sessionId, this.taskFields(record))
       }

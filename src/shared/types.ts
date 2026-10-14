@@ -15,6 +15,7 @@ import type { RuleLoadReport, TeamRoutingState } from './routing'
 import type { HumanTaskDetail, TaskDispatchPreview, TaskHandoffKind, TaskStatus, TaskTargetOptions, TeamTask, TeamTaskAssignment, TeamTaskSummary } from './teamTasks'
 import type { ProductStrategy, StrategyDetail, StrategyDraft, StrategyRevision } from './productStrategy'
 import type { TeamWorkspaceSnapshot } from './teamWorkspace'
+import type { PlanClientMessage, PlanServerMessage } from './planMessages'
 import type {
   WorkspaceOperationResult,
   WorkspaceSnapshot,
@@ -235,6 +236,8 @@ export interface UpdateState {
 }
 
 export type ServerMessage =
+  // Durable plans (durable-plans D12): see planMessages.ts.
+  | PlanServerMessage
   | { type: 'sessions'; sessions: Session[] }
   | { type: 'session-update'; session: Session }
   | { type: 'session-created'; session: Session }
@@ -556,6 +559,8 @@ export interface WakeError {
 }
 
 export type ClientMessage =
+  // Durable plans (durable-plans D12): see planMessages.ts.
+  | PlanClientMessage
   | {
       type: 'terminal-attach'
       sessionId: string

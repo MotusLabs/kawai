@@ -1,0 +1,51 @@
+// The Plans view's wire messages (durable-plans design D12), unioned into
+// ServerMessage and ClientMessage in `types.ts`. Every message names the
+// team's directory (`teamPath`), resolved by the shared team-scope resolver;
+// replies echo it beside `teamId`. Snapshots and details are authoritative
+// and re-sent whole after every committed plan write and every change to a
+// task linked to a subscribed plan, so a reconnect needs no deltas. The four
+// human commands each carry a command id minted when their dialog opens
+// (D7), so a resend replays instead of repeating.
+//
+// D12 names `team-plan-close` twice — the detail subscription's close and the
+// complete/cancel command. Both keep that name: a message with a `requestId`
+// is the command (answered by `team-plan-result`), one without it closes the
+// subscription, the same split every connection handler already makes.
+import type { PlanDetail, PlanEvent, PlanSummary } from './plans'
+
+export type PlanServerMessage =
+  | { type: 'team-plans-snapshot'; teamPath: string; teamId: string; plans: PlanSummary[] }
+  | { type: 'team-plan-detail'; teamPath: string; teamId: string; detail: PlanDetail }
+  // Result of a human plan command: the plan after it and the recorded event
+  // (`replayed` when the command id already stood); `error` on refusal, with
+  // the failing preconditions named when approval was refused.
+  | {
+      type: 'team-plan-result'
+      teamPath: string
+      requestId: string
+      plan?: PlanSummary
+      event?: PlanEvent
+      replayed?: boolean
+      error?: string
+      reason?: string
+      failures?: Array<{ name: string; message: string }>
+    }
+
+export type PlanClientMessage =
+  | { type: 'team-plans-open' | 'team-plans-close'; teamPath: string }
+  | { type: 'team-plan-open' | 'team-plan-close'; teamPath: string; planId: string }
+  | {
+      type: 'team-plan-approve'
+      teamPath: string
+      requestId: string
+      planId: string
+      revision: number
+      /** The content hash the human reviewed. */
+      contentHash: string
+      /** The approved revision the human saw (null: none). */
+      expectedApprovedRevision: number | null
+      commandId: string
+    }
+  | { type: 'team-plan-withdraw'; teamPath: string; requestId: string; planId: string; revision?: number; draftId?: string; commandId: string }
+  | { type: 'team-plan-close'; teamPath: string; requestId: string; planId: string; outcome: 'completed' | 'cancelled'; reason?: string | null; commandId: string }
+  | { type: 'team-plan-reopen'; teamPath: string; requestId: string; planId: string; commandId: string }

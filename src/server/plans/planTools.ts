@@ -31,7 +31,7 @@ export const planSchemas = {
 }
 
 export const planDescriptions: Record<(typeof PLAN_TOOL_NAMES)[number], string> = {
-  plan_list: "List this team's plans with lifecycle (open/completed/cancelled), displayed state, approved revision, strategy pin, and linked-task count. Optional status filters by lifecycle or state (draft, in-review, approved, in-progress, completed, cancelled).",
+  plan_list: "List this team's plans with lifecycle (open/completed/cancelled), displayed state, approved revision, strategy pin, and linked-task count. Optional status filters by lifecycle or state (draft, ready, in-progress, completed, cancelled).",
   plan_get: 'Read one plan in full: the record, every revision with content, hash, and strategy pin, the drafts, the event history, linked tasks, and per-change progress of the approved revision.',
   plan_create: 'Create a plan (only if your group sets canCreatePlans: true): a title and optional template content (goal, success criteria, non-goals, approach, alignment, changes, acceptance, checks, landing, roles, review group). Your draft holds the content; nothing is approved.',
   plan_save_draft: 'Save a plan draft (template content; structural faults are refused with every violation). Pass expected_draft_hash (and optionally expected_base_revision) from your last read: a mismatch writes nothing and returns the stored draft — reconcile, do not overwrite. Never changes an approved revision.',
