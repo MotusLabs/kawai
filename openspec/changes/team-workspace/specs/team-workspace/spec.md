@@ -16,12 +16,16 @@ The system SHALL open a full workspace view for a repository's team from its nav
 - **WHEN** the human selects a different chat while the workspace is open
 - **THEN** the workspace stays open on the same team with the same tab and selection
 
+#### Scenario: The workspace survives its transport chat being killed
+- **WHEN** the chat session carrying the workspace's wire transport is killed while the workspace is open
+- **THEN** the workspace stays open keyed by its team, moving transport to another live session of the team, and shows a disconnected state only when none is left
+
 #### Scenario: No placeholder Plans
 - **WHEN** the workspace renders its tab strip
 - **THEN** no Plans tab content or placeholder row is shown, and the place a future Plans tab occupies is a documented extension point
 
 ### Requirement: The workspace reuses the chat-side task, message, and strategy views
-Tasks, Messages, and Product Strategy in the workspace SHALL be the same views the chat side slot mounts, not parallel copies. The chat-side Tasks, Mailbox, Messages, and Strategy panels SHALL remain available as shortcuts. The Mailbox panel SHALL keep its delivery operations and SHALL NOT be restyled by this view.
+Tasks, Messages, and Product Strategy in the workspace SHALL be the same views the chat side slot mounts, not parallel copies, keyed by team id rather than by the chat that hosts them. The chat-side Tasks, Mailbox, Messages, and Strategy panels SHALL remain available as shortcuts. The Mailbox panel SHALL keep its delivery operations and SHALL NOT be restyled by this view.
 #### Scenario: A task opens the same way from either surface
 - **WHEN** the human opens a task from the workspace and from a chat's Tasks panel
 - **THEN** both show the same task record with the same revisions, journal, and messages
