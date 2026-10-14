@@ -34,6 +34,8 @@ export const CHAT_CONNECTION_TYPES = [
   'chat-debug-page',
   'chat-debug-close',
   'chat-worker-transcript',
+  'chat-task-output',
+  'chat-task-stop',
   'chat-dismiss-notification',
   'team-mailbox-open',
   'team-mailbox-close',

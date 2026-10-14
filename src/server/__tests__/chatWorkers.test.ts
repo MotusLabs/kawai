@@ -132,6 +132,9 @@ describe('taskFrameToInput', () => {
       toolUseId: TOOL_USE_ID,
       status: 'completed',
       summary: 'Mapped 14 files across 3 packages',
+      // The recorded output rides along for the background-task roster (D3);
+      // the worker reducer itself ignores it.
+      outputFile: '/home/user/.claude/projects/-proj/subagents/agent-b01c9a58.jsonl',
     })
     expect(
       taskFrameToInput(

@@ -56,16 +56,18 @@ Request: `chat-task-output { sessionId, taskId }`. Reply: `chat-task-output { se
 
 We do not declare `perTaskStopAffordance`. That flag changes interrupt semantics for agents and workflows, which PR #72 deliberately left alone. The header Stop keeps its current behavior.
 
-### D5. Agent-started turns open on `session_state_changed: running`
+### D5. Agent-started turns open on `system/init`
 
-In `handleSystem`, `session_state_changed` with `state: "running"` while `activeTurnId === null` opens a turn. It increments `turnCounter`, sets `activeTurnId`, and emits `turn_started` with a new optional field, `trigger`. Every existing path then applies unchanged: streaming, tool rows, approvals, the activity reducer, `result` → `turn_completed`, interrupt, and status (`working` follows `activeTurnId`, as it does today).
+In `handleSystem`, a `system/init` frame while `activeTurnId === null` opens a turn. It increments `turnCounter`, sets `activeTurnId`, and emits `turn_started` with a new optional field, `trigger`. Every existing path then applies unchanged: streaming, tool rows, approvals, the activity reducer, `result` → `turn_completed`, interrupt, and status (`working` follows `activeTurnId`, as it does today).
+
+*Why not `session_state_changed: running` (the original plan):* the live capture (task 1.1 fixtures) shows those frames are `sdk_host_only` — the SDK consumes them internally (`this.sessionState`) and never yields them to the message iterator, so the driver's stream loop cannot see them. `system/init` opens **every** turn (user-started and agent-started alike, one per turn, before `status: requesting` and before any approval can fire) and does reach the consumer. A spawn with no prompt emits no `init`, so an idle attach cannot open a phantom turn.
 
 - `trigger` is `{ kind: 'task', tasks: { taskId, toolCallId?, status, summary }[] }` when one or more background `task_notification`s (shell, Monitor or worker) arrived since the last turn ended, with one entry per notification. Otherwise it is `{ kind: 'resumed' }`. The driver keeps a small "notifications since last turn end" buffer and clears it on `turn_started`.
 - The client renders the trigger in place of the user bubble as a muted line, for example `⟲ Background command "Wait for CI" completed (exit code 0)`.
 - **Replay:** `transcriptReplay.ts` treats a `type: "user"` record whose `origin.kind === "task-notification"`, or whose string content is wholly `<task-notification>` markup, as a turn trigger. It parses `<task-id>`, `<tool-use-id>`, `<status>` and `<summary>` into the same `trigger` shape, and never emits it as `user_message`.
 - **Guard against double turns:** if `send()` races a self-start, the existing "turn already active" branch absorbs the user message into the open turn, which is today's behavior for queued sends.
 
-*Alternative considered:* opening the turn lazily on the first assistant frame. Rejected. Approvals (`canUseTool`) can arrive before any assistant frame is processed, and the activity row should show "Waiting for model…" from the moment the CLI reports `running`.
+*Alternative considered:* opening the turn lazily on the first assistant frame. Rejected. Approvals (`canUseTool`) can arrive before any assistant frame is processed, and the activity row should show "Waiting for model…" from the moment the turn starts — `init` is the earliest consumer-visible marker of that.
 
 ### D6. Persistence: `chat-tasks/` sidecar mirroring `chat-workers/`
 
@@ -79,7 +81,7 @@ Each session gets one JSON file holding `{ taskId, toolCallId?, kind, descriptio
 
 - **[`getTaskOutput` is undeclared in the SDK types]** → It is called through a structural guard and falls back to the recorded file or `unavailable`. A unit test pins the guard. If a future SDK declares it, the guard becomes a normal call.
 - **[The baseline CLI (2.1.289) may predate `get_task_output`]** → A refusal or error degrades to the file fallback, then to `unavailable`. Nothing else depends on it.
-- **[`session_state_changed` is marked `sdk_host_only` and could change shape]** → The driver matches only `subtype` + `state === 'running'`. Missing frames leave today's behavior (the turn is dropped) rather than breaking anything. A fixture test pins the captured sequence.
+- **[`session_state_changed` is marked `sdk_host_only` and is swallowed by the SDK]** → Confirmed by the live capture: the SDK consumes those frames internally and never yields them to the message iterator. D5 therefore triggers on `system/init` (consumer-visible, one per turn, before any approval). A fixture test pins the captured wake sequence (`task_notification` → `background_tasks_changed` → `init` → `status: requesting` → stream → `result`).
 - **[Monitors that fire often wake the agent many times]** → Each wake is a real turn and is shown as one. Collapsing them is out of scope.
 - **[Polling cost]** → It runs only while expanded and live, every 2 s, coalesced server-side. The 8 KiB cap bounds the payload.
 - **[Output files in `/tmp` can be cleaned by the OS]** → The panel shows `unavailable`. The outcome and summary still persist in the sidecar.
@@ -91,5 +93,6 @@ All additive. Older clients ignore `chat-background-tasks`, `chat-snapshot.backg
 
 ## Open Questions
 
-- Does CLI 2.1.289, the pinned baseline, answer `get_task_output`? This decides only whether the fallback path is hit in practice, not the design. Check during implementation with a fixture or a live probe.
-- The exact `task_started` shape for a `Monitor` call has not been captured (no Monitor in the existing wire logs). The design relies only on `tool_use_id` + `task_type`. The first implementation task captures one to confirm.
+- ~~Does CLI 2.1.289, the pinned baseline, answer `get_task_output`?~~ Answered for CLI 2.1.296 (task 1.1 live probe): yes, `{ output, total_bytes, truncated }`, also while the task runs. The 2.1.289 baseline keeps the guarded call + file fallback as designed.
+- ~~The exact `task_started` shape for a `Monitor` call has not been captured.~~ Answered (task 1.1 fixtures): `task_type: "local_bash"`, `is_backgrounded: true` — indistinguishable from a backgrounded shell except through the tool-call join, as D1 assumes.
+- Settled during implementation: `session_state_changed` never reaches SDK consumers (see D5), foreground tasks also emit `task_notification` (visibility stays keyed on `is_backgrounded`), and `stopTask` settles via `patch.status: "killed"` + `task_notification` `status: "stopped"`.
