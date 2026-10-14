@@ -69,6 +69,8 @@ interface TeamWorkspaceState {
   /** Replace the expanded list (Expand all / Collapse all). */
   setExpanded: (teamKey: string, tab: WorkspaceTab, ids: string[]) => void
   toggleSectionCollapsed: (teamKey: string, tab: WorkspaceTab, section: string) => void
+  /** Replace the collapsed set (a tab's default section state on first open). */
+  setCollapsedSections: (teamKey: string, tab: WorkspaceTab, sections: string[]) => void
   setNotice: (teamKey: string, notice: string | null) => void
 }
 
@@ -128,6 +130,9 @@ export const useTeamWorkspaceStore = create<TeamWorkspaceState>(set => ({
     collapsedSections: view.collapsedSections.includes(section)
       ? view.collapsedSections.filter(entry => entry !== section)
       : [...view.collapsedSections, section],
+  }))),
+  setCollapsedSections: (teamKey, tab, sections) => set(state => patchTab(state, teamKey, tab, view => ({
+    ...view, collapsedSections: sections,
   }))),
   setNotice: (teamKey, notice) => set(state => {
     const view = state.views[teamKey]

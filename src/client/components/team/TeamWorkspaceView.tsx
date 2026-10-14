@@ -13,10 +13,13 @@ import { useSessionStore } from '../../stores/sessionStore'
 import { useStrategyStore, type StrategyView } from '../../stores/strategyStore'
 import { useTeamMessageStore } from '../../stores/teamMessageStore'
 import { useTeamWorkspaceStore } from '../../stores/teamWorkspaceStore'
+import { useTeamMailboxStore } from '../../stores/teamMailboxStore'
 import { useWorkspaceStore } from '../../stores/workspaceStore'
 import { useTeamLocationStore } from '../../hooks/useTeamLocation'
 import { knownTeamKeys } from '../../utils/teamKey'
+import { openParticipantChat } from '../chat/openParticipant'
 import { useTeamGroups } from '../chat/useTeamGroups'
+import TeamMailboxView from './TeamMailboxView'
 import TeamMessagesView from './TeamMessagesView'
 import {
   RENDERED_WORKSPACE_TABS,
@@ -113,6 +116,16 @@ export default function TeamWorkspaceView({ teamKey, location, sendMessage, conn
   )
   const groups = useTeamGroups(messagesOpen, teamKey)
 
+  // Mailbox (5.3): the tab's snapshot subscription, mirroring the chat host.
+  const mailboxOpen = location.tab === 'mailbox' && !unknown
+  const mailbox = useTeamMailboxStore(state => state.views[teamKey])
+  useEffect(() => {
+    if (!connected || !mailboxOpen) return
+    useTeamMailboxStore.getState().open(teamKey)
+    sendMessage({ type: 'team-mailbox-open', teamPath: teamKey })
+    return () => sendMessage({ type: 'team-mailbox-close', teamPath: teamKey })
+  }, [teamKey, connected, connectionEpoch, mailboxOpen, sendMessage])
+
   const status = strategyStatusLine(strategy)
   const openTab = (tab: WorkspaceTab) => navigate({ teamKey, tab })
   const openStrategyStatus = () => navigate({
@@ -153,6 +166,11 @@ export default function TeamWorkspaceView({ teamKey, location, sendMessage, conn
         onThreadSelected={threadId => navigate(threadId
           ? { teamKey, tab: 'messages', id: threadId }
           : { teamKey, tab: 'messages' })}
+      />}
+      {mailboxOpen && mailbox && <TeamMailboxView
+        teamPath={teamKey} view={mailbox} sendMessage={sendMessage} connected={connected}
+        groups={groups.groups.map(group => group.id)} sessions={liveSessions}
+        onOpenSession={openParticipantChat}
       />}
     </div>
   </main>
