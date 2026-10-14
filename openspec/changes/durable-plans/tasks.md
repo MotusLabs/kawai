@@ -131,7 +131,7 @@ Implement after Wave B2 (`task-revision-publication`, `task-results-handoffs`) h
 
 ## 9. Integration walkthrough
 
-- [ ] 9.1 Add `tests/e2e/chat-plans.spec.ts` and name it in `.github/workflows/ci.yml`. Seed only prerequisites: a plan with an in-review revision written through the agent tool path. Then drive the rest through the UI:
+- [x] 9.1 Add `tests/e2e/chat-plans.spec.ts` and name it in `.github/workflows/ci.yml`. Seed only prerequisites: a plan with an in-review revision written through the agent tool path. Then drive the rest through the UI:
   1. open Plans and inspect the floor and pin;
   2. approve the revision and see Ready;
   3. create a linked task from the form and see In progress;
