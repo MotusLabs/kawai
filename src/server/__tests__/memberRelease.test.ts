@@ -381,3 +381,40 @@ test('a killed sender\'s reply falls back to its unscoped group and arrives with
   await pass()
   expect(received).toEqual([{ session: 'lead-1', messageId: reply.id, thread: 1, task: t.id }])
 })
+
+test('the close transition re-reads state at the commit: a claim during the await survives, a late member is marked (F1)', async () => {
+  // Drive MemberRelease directly so the definition resolver can pause the
+  // hook mid-transition and mutate the mailbox and roster underneath it.
+  const MemberRelease = (await import('../team/memberRelease')).MemberRelease
+  const TaskStoreMod = await import('../team/taskStore')
+  const tasks = new TaskStoreMod.TaskStore(db, runtime.mailbox.store)
+  const t = tasks.create({ teamId: team.teamId, title: 't', direction: 'd', creator: { kind: 'human', sessionId: null }, worktree: featX })
+  const instruction = runtime.mailbox.store.enqueue({ teamId: team.teamId, toKind: 'group', toId: 'devs', fromSession: null, fromGroup: null, originPath: repo, body: 'work', taskId: t.id })
+  records.set('dev-1', record('dev-1', { projectPath: featX, spawned: true, taskId: t.id }))
+  await teams.track('dev-1', featX)
+  let releaseDefinitions!: () => void
+  const releases = new MemberRelease(db, {
+    store: runtime.mailbox.store, tasks,
+    records: () => records.values(), getRecord: id => records.get(id),
+    teamOf: id => (records.has(id) ? team : undefined),
+    definition: () => new Promise(resolve => { releaseDefinitions = () => resolve(undefined) }),
+    cachedDefinition: () => undefined,
+    recipient: () => ({ idle: true, pendingRequest: false }),
+    hasLiveWorkers: () => false,
+    archive: () => true,
+    notify: () => {},
+  })
+  const hook = releases.transitionHook(t, 'done', { kind: 'human', sessionId: null })
+  await new Promise(resolve => setImmediate(resolve))
+  // While the hook awaits the group definitions, the instruction is claimed
+  // and pushed (a dispatch pass won it) and a second spawned member appears.
+  runtime.mailbox.store.claim(instruction.id, 'dev-1')
+  runtime.mailbox.store.markPushed(instruction.id)
+  records.set('dev-2', record('dev-2', { name: 'Dev two', projectPath: featX, spawned: true, taskId: t.id }))
+  releaseDefinitions()
+  ;(await hook)()
+  // The claimed instruction was already delivered as a turn: it survives.
+  expect(runtime.mailbox.store.get(instruction.id)).toMatchObject({ state: 'claimed', claimedBy: 'dev-1', pushedAt: expect.any(String) })
+  // Both live spawned members — including the one created during the await — are marked.
+  expect(releases.pending().map(row => row.sessionId).sort()).toEqual(['dev-1', 'dev-2'])
+})

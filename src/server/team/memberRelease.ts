@@ -107,25 +107,40 @@ export class MemberRelease {
    */
   async transitionHook(task: TeamTask, status: TaskStatus, actor: TaskActor): Promise<() => void> {
     if (isClosed(status) && !isClosed(task.status)) {
-      const mail = this.options.store.forTask(task.id).filter(row =>
-        row.toKind === 'group' && row.toId !== null
-        && (row.state === 'queued' || row.state === 'awaiting-request' || row.state === 'spawning'))
-      const scoped = await Promise.all(mail.map(async message =>
-        (await this.options.definition(task.teamId, message.toId!, message.originPath))?.worktreeScoped !== false))
-      const members = this.spawnedMembersOf(task)
-      const marked = await Promise.all(members.map(async record => ({
-        record,
-        optedOut: record.groupId
-          ? (await this.options.definition(task.teamId, record.groupId, record.projectPath))?.releaseOnTaskClose === false
-          : false,
-      })))
+      // Definitions resolve per group id while we can await; everything that
+      // can change during that window (a dispatch pass claiming and pushing
+      // mail, a spawn completing) is re-read inside the synchronous closure,
+      // so the close only ever settles what is still waiting and marks every
+      // member that is live at the commit.
+      const origins = new Map<string, string>()
+      for (const row of this.options.store.forTask(task.id)) {
+        if (row.toKind === 'group' && row.toId !== null
+          && (row.state === 'queued' || row.state === 'awaiting-request' || row.state === 'spawning')) {
+          origins.set(row.toId, row.originPath)
+        }
+      }
+      const groupIds = new Set<string>([
+        ...origins.keys(),
+        ...this.spawnedMembersOf(task).flatMap(record => (record.groupId ? [record.groupId] : [])),
+      ])
+      const definitions = new Map<string, GroupDefinition | undefined>(await Promise.all([...groupIds].map(
+        async groupId => [groupId, await this.options.definition(task.teamId, groupId, origins.get(groupId))] as const)))
+      const waiting = (row: { toKind: string; state: string }) =>
+        row.state === 'queued' || row.state === 'awaiting-request' || row.state === 'spawning'
       return () => {
         // Who closed the task: a spawn completing after the close reads this back.
         this.options.tasks.appendJournal(task.id, actor, `Task ${status}.`)
-        mail.forEach((message, index) => { if (scoped[index]) this.options.store.deadLetter(message.id, 'task-closed') })
+        // Only rows still undelivered at the commit: a message claimed, pushed,
+        // or delivered while the definitions resolved stays the recipient's.
+        for (const message of this.options.store.forTask(task.id)) {
+          if (message.toKind !== 'group' || message.toId === null || !waiting(message)) continue
+          if ((definitions.get(message.toId) ?? undefined)?.worktreeScoped !== false) {
+            this.options.store.deadLetter(message.id, 'task-closed')
+          }
+        }
         const now = new Date().toISOString()
-        for (const { record, optedOut } of marked) {
-          if (optedOut) continue
+        for (const record of this.spawnedMembersOf(task)) {
+          if ((definitions.get(record.groupId ?? '') ?? undefined)?.releaseOnTaskClose === false) continue
           this.db.prepare(`INSERT OR REPLACE INTO team_member_releases
             (session_id, task_id, team_id, reason, requested_by_kind, requested_by_session, requested_at)
             VALUES (?, ?, ?, ?, ?, ?, ?)`)
