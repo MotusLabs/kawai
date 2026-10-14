@@ -107,7 +107,7 @@ Every Codex turn SHALL run with workspace-write file access limited to the sessi
 - **THEN** the command runs only after an approval request is granted
 
 ### Requirement: Codex approval requests follow the chat approval policy
-Under the manual policy, each Codex request to run a command, change files, or gain permissions SHALL appear as an approval card with what is requested; allow SHALL accept that one request and deny SHALL decline it. Under auto, the system SHALL accept each such request without a card. Changing the policy SHALL apply to later requests without restarting the thread.
+On thread start and resume under either policy, the system SHALL set `approvalsReviewer: "user"` so escalations reach Kawai regardless of Codex home settings. Under manual, each command, file-change, or permission request SHALL show an approval card describing the request; allow SHALL accept it and deny SHALL decline it. Under auto, Kawai SHALL accept without a card. Policy changes SHALL apply to later requests without restarting the thread.
 
 #### Scenario: Manual approval
 - **WHEN** a manual Codex chat requests to run a command outside the sandbox and the user allows it
@@ -116,6 +116,14 @@ Under the manual policy, each Codex request to run a command, change files, or g
 #### Scenario: Auto approval
 - **WHEN** an auto Codex chat requests to change files outside the sandbox
 - **THEN** the request is accepted without a card
+
+#### Scenario: Codex home uses automatic review
+- **WHEN** a Codex home's configuration selects `auto_review` and a manual Kawai chat starts or resumes
+- **THEN** Kawai overrides the reviewer to `user`, and each escalation waits for a Kawai approval card decision
+
+#### Scenario: Auto policy owns escalation decisions
+- **WHEN** a Codex home's configuration selects `auto_review` and an auto Kawai chat starts or resumes
+- **THEN** Kawai overrides the reviewer to `user` and accepts escalations itself without cards
 
 #### Scenario: Live policy switch
 - **WHEN** the user switches a Codex chat from manual to auto during a turn

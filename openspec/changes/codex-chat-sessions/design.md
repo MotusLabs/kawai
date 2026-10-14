@@ -101,9 +101,10 @@ The Codex thread id lives in `sdk_session_id`, so resume, the discovery exclusio
 
 ### D5: One sandbox, policy decides who answers
 
-Each Codex chat's threads start with these settings:
+Each Codex chat's threads start and resume with these settings:
 - `sandbox: "workspace-write"`
 - `approvalPolicy: "on-request"`
+- `approvalsReviewer: "user"` under both Kawai policies, overriding the Codex home's reviewer setting so every escalation reaches Kawai; Kawai decides whether to show a card or accept it
 - `config` holding:
   - `sandbox_workspace_write.writable_roots = [<git common dir>]`, from `git rev-parse --git-common-dir` resolved absolute; omitted outside a repository
   - `sandbox_workspace_write.network_access = <profile.network>`
@@ -183,7 +184,7 @@ Reports are cached per Codex home, the resolved absolute `codexHome`, so every C
 `codexLimits.ts` maps limit signals:
 - A `turn/completed` whose `codexErrorInfo` is `usageLimitExceeded`, `rateLimitExceeded`, `sessionBudgetExceeded`, or `serverOverloaded` becomes a final `ChatLimitSignal`.
 - An item `error` notification marked as retrying becomes a non-final signal.
-- The reset is the earliest `resetsAt` of a window that the latest snapshot marks as reached, else none (the 1 h default then applies).
+- The reset is the latest known `resetsAt` among all applicable exhausted windows in the latest snapshot, else none (the 1 h default then applies). For example, if the five-hour and weekly windows are both exhausted and reset in 1 hour and 2 days respectively, the cooldown and any parked-work resume use the 2-day reset. A non-exhausted window does not extend the cooldown.
 
 The manager writes the event for every Codex profile whose resolved `codexHome` equals the session's. Cooldown, park, release, forward, and the urgent-mail refusal then work unchanged.
 

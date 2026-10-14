@@ -9,7 +9,7 @@ Every Kawai chat session, and so every team member, is Claude Code. When the sha
 - **A provider interface for chat drivers.** The session manager, mailbox, and turn queue depend on a provider-neutral driver contract instead of the concrete Claude `ChatSessionDriver`. Claude behavior does not change.
 - **A Codex app-server driver.** Each Codex chat runs its own `codex app-server` child over stdio JSON-RPC. Kawai never attaches to an installed app-server daemon. The driver starts or resumes a thread, runs turns, streams agent text and reasoning, interrupts with `turn/interrupt`, and maps Codex items onto the existing `ChatEvent`, activity, context-usage, and status contracts. Protocol types are generated from a pinned Codex version, and a version gate refuses older executables before a session is created. `@openai/codex-sdk` is not used: it wraps `codex exec`, and that path cannot raise approval or question requests.
 - **Approvals and questions keep Kawai's cards.**
-  - Both approval policies run the same sandbox: `workspace-write`, network on, and the repository's git common directory added as a writable root so commits from linked worktrees work. Codex runs with `approvalPolicy: on-request`.
+  - Both approval policies run the same sandbox: `workspace-write`, network on, and the repository's git common directory added as a writable root so commits from linked worktrees work. Codex starts and resumes with `approvalPolicy: on-request` and `approvalsReviewer: user` under both Kawai policies, so escalations reach Kawai regardless of the Codex home's reviewer setting.
   - Under manual, each Codex escalation (`commandExecution`, `fileChange`, or `permissions`) becomes an allow/deny card; allow maps to `accept`, deny to `decline`.
   - Under auto, Kawai accepts each escalation itself.
   - `item/tool/requestUserInput` becomes a question card and is never answered automatically.
@@ -23,7 +23,7 @@ Every Kawai chat session, and so every team member, is Claude Code. When the sha
 - **Provider on the profile.** A user-level catalog entry may declare `provider: "codex"` with Codex fields: model, `codexHome` (default `~/.codex`), and network. Each provider has its own field allowlist. The provider is stored on the chat row at creation and reused on resume, so a profile edit never changes the driver of an existing chat.
 - **Codex limits and usage.**
   - Codex usage-limit, rate-limit, and overload failures feed `profile_limit_events`, so Codex members park, release, or forward through the existing limit outcomes.
-  - One limit event is written for every Codex profile that shares the limited profile's `codexHome`, because those profiles share one login.
+  - One limit event is written for every Codex profile that shares the limited profile's `codexHome`, because those profiles share one login. When multiple applicable quota windows are exhausted, the cooldown and parked-work resume use the latest known reset among them.
   - The usage bar shows Codex rate-limit windows, kept per Codex home.
 
 Non-goals:

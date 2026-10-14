@@ -3,11 +3,19 @@
 ## ADDED Requirements
 
 ### Requirement: Codex limit failures are recorded as limit events
-A Codex chat turn that fails because a usage limit, rate limit, spend or credit limit, or server overload was reached SHALL record a final limit event, with the reset time Codex reports for the reached window when known. Codex retrying a request on its own SHALL record a non-final event only. Other Codex failures SHALL NOT record limit events.
+A Codex turn failing on a usage, rate, spend, credit, or overload limit SHALL record a final limit event. Its reset SHALL be the latest known reset among applicable exhausted windows; cooldown and parked-work resume SHALL use that reset. Non-exhausted windows SHALL NOT extend it. Codex retries SHALL record non-final events only. Other failures SHALL NOT record limit events.
 
 #### Scenario: Usage limit ends the turn
 - **WHEN** a Codex member's turn fails because its plan's usage limit was reached and the weekly window resets in 2 days
 - **THEN** a final limit event is recorded with that reset time, and the message it was handling is resolved as park, release, or forward
+
+#### Scenario: Multiple exhausted windows
+- **WHEN** a Codex turn fails with both the five-hour and weekly windows exhausted, resetting in 1 hour and 2 days respectively
+- **THEN** the final limit event and shared-home cooldown use the 2-day reset, and if the work is parked its resume is scheduled for that reset rather than the five-hour reset
+
+#### Scenario: Only one exhausted window
+- **WHEN** a Codex turn fails with the five-hour window exhausted and resetting in 1 hour, while the weekly window is below its limit and resets in 2 days
+- **THEN** the final limit event and cooldown use the 1-hour reset
 
 #### Scenario: Unrelated failure
 - **WHEN** a Codex turn fails because the context window was exceeded

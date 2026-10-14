@@ -46,7 +46,7 @@
 
   Verify the driver tests against the fake app-server for the persistence, resume, streaming, activity, and interrupt scenarios.
 - [ ] 5.3 Add `codexSandbox.ts` (design D5): `workspace-write`, the git common dir writable root (absolute; none outside a repository), and network from the profile. Verify unit tests for main checkout, linked worktree, non-repository, and `network: false`.
-- [ ] 5.4 Map approval and question server requests to cards under manual, and accept them automatically under auto, reading the policy per request. Answers return keyed by question id. Verify driver tests for the manual, auto, live-switch, and question-under-auto scenarios.
+- [ ] 5.4 Set `approvalsReviewer: "user"` explicitly on thread start and resume under both Kawai policies, overriding the Codex home's reviewer configuration. Map approval and question server requests to cards under manual, and accept them automatically under auto, reading the policy per request. Answers return keyed by question id. Verify driver tests for the manual, auto, live-switch, and question-under-auto scenarios, plus start and resume under both policies with a Codex home configured for `auto_review`: assert the reviewer override and that Kawai owns the escalation decision.
 - [ ] 5.5 Pass `developerInstructions` from `getSystemPromptAppend` at start and resume, and the group effort as `turn/start.effort`. Verify a driver test asserting both, and a spawn test showing a Codex member's first turn is the task mail.
 - [ ] 5.6 Wire `createChatDriver` for `codex` in `ChatSessionManager`. Verify a manager test that creates, attaches, sends, archives, restores, and kills a Codex chat against the fake app-server.
 
@@ -67,7 +67,7 @@
 ## 7. Usage and limits
 
 - [ ] 7.1 Add `codexUsage.ts`: normalize `RateLimitSnapshot` to `ChatUsageReport` with duration and name labels and the limited status. Cache per resolved Codex home, and fill in with `account/rateLimits/read`. Verify unit tests for the `chat-usage-limits` delta scenarios and a `UsageBar` test showing the Codex labels.
-- [ ] 7.2 Add `codexLimits.ts`: map `codexErrorInfo` limit classes to final signals and retries to non-final ones, taking the reset from the latest snapshot's reached window. In the manager, fan out each event to every Codex profile on the same home. Verify unit tests for the `profile-limit-handling` delta scenarios, including a park and a forward that avoids the shared login.
+- [ ] 7.2 Add `codexLimits.ts`: map `codexErrorInfo` limit classes to final signals and retries to non-final ones, taking the latest known reset among all applicable exhausted windows in the latest snapshot (ignoring non-exhausted windows). In the manager, fan out each event to every Codex profile on the same home. Verify unit tests for the `profile-limit-handling` delta scenarios, including a park and a forward that avoids the shared login. Cover simultaneous five-hour and weekly exhaustion: the event, shared-home cooldown, and parked-work resume all use the later reset. Also cover a non-exhausted weekly window with a later reset, which must not extend the cooldown.
 - [ ] 7.3 Document Codex limits and usage in CLAUDE.md (usage keyed per home, cooldown fan-out) and in `docs/routing/README.md` (Codex profiles are ordinary profile ids). Verify the docs name the same behaviors the tests cover.
 
 ## 8. Integration checks
