@@ -6,6 +6,7 @@
 // approved tool restarts its clock so the card's wait never reads as tool
 // time.
 import { expect, test, type Page } from '@playwright/test'
+import { killChat } from './support/chatHeader'
 
 // Serial: the app selects every newly created session on every client, so
 // parallel chat creations yank each test's open view.
@@ -73,7 +74,7 @@ test('a thinking turn shows waiting and thinking, ticks, survives reload, then c
   await expect(row(page)).toHaveCount(0)
   await page.screenshot({ path: info.outputPath('4-turn-completed.png') })
 
-  await page.getByRole('button', { name: 'Kill session', exact: true }).click()
+  await killChat(page)
 })
 
 test('a tool turn prepares, runs, and hides while text streams', async ({ page }, info) => {
@@ -95,7 +96,7 @@ test('a tool turn prepares, runs, and hides while text streams', async ({ page }
   await expect(row(page)).toHaveCount(0)
   await page.screenshot({ path: info.outputPath('7-hidden-while-streaming.png') })
 
-  await page.getByRole('button', { name: 'Kill session', exact: true }).click()
+  await killChat(page)
 })
 
 test('an approved tool restarts its clock without the approval wait', async ({ page }, info) => {
@@ -118,7 +119,7 @@ test('an approved tool restarts its clock without the approval wait', async ({ p
   await expect(page.getByTestId('chat-transcript')).toContainText('Request accepted.')
   await expect(row(page)).toHaveCount(0)
 
-  await page.getByRole('button', { name: 'Kill session', exact: true }).click()
+  await killChat(page)
 })
 
 test('a retry turn counts attempts and statuses, then recovers', async ({ page }, info) => {
@@ -134,5 +135,5 @@ test('a retry turn counts attempts and statuses, then recovers', async ({ page }
   await expect(page.getByTestId('chat-transcript')).toContainText('Recovered from the retry.')
   await expect(row(page)).toHaveCount(0)
 
-  await page.getByRole('button', { name: 'Kill session', exact: true }).click()
+  await killChat(page)
 })

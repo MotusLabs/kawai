@@ -11,6 +11,7 @@ import { execFileSync } from 'node:child_process'
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { killChat } from './support/chatHeader'
 
 test.skip(process.env.AGENTBOARD_CHAT_FIXTURE !== '1', 'Requires development chat fixture')
 
@@ -96,13 +97,13 @@ test('group picker, badge, peer replay and mailbox controls', async ({ page }, i
     await expect(page.getByTestId('chat-transcript')).not.toContainText('Browser peer greeting')
     await expect(page.getByTestId('session-group-badge').filter({ hasText: 'devs' }).first()).toHaveAttribute('data-missing', 'true')
     await page.screenshot({ path: info.outputPath('team-clear-missing-group.png') })
-    await page.getByRole('button', { name: 'Kill session', exact: true }).click()
+    await killChat(page)
     await page.getByRole('button', { name: 'Expand Archive section' }).click()
     // Archived rows use a drag-disabled wrapper, as in chat-drafts.spec.ts.
     await page.getByTestId('archive-rows').locator(`[data-session-id="${dev}"]`).click({ force: true })
-    await page.getByRole('button', { name: 'Kill session', exact: true }).click()
+    await killChat(page)
     await page.locator(`[data-session-id="${lead}"]`).click()
-    await page.getByRole('button', { name: 'Kill session', exact: true }).click()
+    await killChat(page)
   } finally { rmSync(root, { recursive: true, force: true }) }
 })
 

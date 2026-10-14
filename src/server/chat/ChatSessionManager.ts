@@ -1562,6 +1562,10 @@ export class ChatSessionManager {
           record.sessionId,
           this.records.get(record.sessionId)?.groupId
         ),
+        getEffort: () => this.teams.effortFor(
+          record.sessionId,
+          this.records.get(record.sessionId)?.groupId
+        ),
         getProviderEnv: () => this.providerEnv(),
         // Read per request so a live policy switch reaches the next
         // canUseTool call without a respawn (design D2).

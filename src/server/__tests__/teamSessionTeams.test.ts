@@ -54,6 +54,22 @@ describe('SessionTeams', () => {
     expect(teams.promptFor('s1', null)).toContain('You belong to no group')
   })
 
+  test('effortFor reads the group effort at call time and is unset otherwise', async () => {
+    const teams = new SessionTeams({ homeDir: home })
+    const devs = path.join(a, '.kawai', 'groups', 'devs.md')
+    fs.writeFileSync(devs, '---\neffort: medium\n---\nBuild.')
+    expect(teams.effortFor('s1', 'devs')).toBeUndefined()
+    await teams.track('s1', a)
+    expect(teams.effortFor('s1', 'devs')).toBe('medium')
+    fs.writeFileSync(devs, '---\nlabel: Developers\neffort: max\n---\nBuild it.')
+    expect(teams.effortFor('s1', 'devs')).toBe('max')
+    fs.writeFileSync(devs, '---\nlabel: Developers\n---\nBuild it.')
+    expect(teams.effortFor('s1', 'devs')).toBeUndefined()
+    expect(teams.effortFor('s1', 'gone')).toBeUndefined()
+    expect(teams.effortFor('s1', null)).toBeUndefined()
+    expect(teams.effortFor('s1', undefined)).toBeUndefined()
+  })
+
   test('a superseded resolution is dropped', async () => {
     const resolved: string[] = []
     const teams = new SessionTeams({ homeDir: home, onResolved: id => resolved.push(id) })

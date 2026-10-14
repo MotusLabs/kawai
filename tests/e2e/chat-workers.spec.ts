@@ -8,6 +8,7 @@
 // sends system/init, so its chats have no SDK transcript and the body reports
 // unavailable (rendering a delivered body is pinned by the component tests).
 import { expect, test, type Page } from '@playwright/test'
+import { killChat } from './support/chatHeader'
 
 test.describe.configure({ mode: 'serial' })
 
@@ -61,5 +62,5 @@ test('a worker turn shows the row, the live strip, the body, and the settled out
   await expect(rows.nth(1).getByTestId('chat-worker-body-status')).toContainText('Body unavailable')
   await page.screenshot({ path: info.outputPath('3-settled-expanded.png') })
 
-  await page.getByRole('button', { name: 'Kill session', exact: true }).click()
+  await killChat(page)
 })

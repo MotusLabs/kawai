@@ -3,6 +3,7 @@ import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import { mkdtempSync, mkdirSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { killChat } from './support/chatHeader'
 
 test.skip(process.env.KAWAI_REAL_CHAT_TEST !== '1', 'Opt-in test makes real Claude requests')
 
@@ -134,7 +135,7 @@ test('real chat approvals, questions, interrupt, reconnect, restart, recovery, a
     await page.locator(`[data-session-id="${sessionId}"]`).first().click()
     results.push('Missing transcript produced an actionable error; restored the original file.')
 
-    await page.getByRole('button', { name: 'Kill session', exact: true }).click()
+    await killChat(page)
     await expect(page.locator(`[data-session-id="${sessionId}"]`)).toHaveCount(0)
     await stop()
     await start()

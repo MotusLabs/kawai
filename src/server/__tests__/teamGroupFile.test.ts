@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { DEFAULT_PARK_IF_RESET_WITHIN_MS, parseDuration, parseGroupFile, type GroupDefinition } from '../team/groupFile'
+import { DEFAULT_PARK_IF_RESET_WITHIN_MS, parseDuration, parseGroupFile, type GroupDefinition, type GroupEffort } from '../team/groupFile'
 
 const ROUTING_DEFAULTS = {
   profiles: [],
@@ -152,6 +152,33 @@ describe('parseGroupFile', () => {
       const parsed = parseGroupFile('devs', `---\nonLimit: ${raw}\n---\nBuild.`)
       expect(parsed.ok && parsed.group.warnings).toHaveLength(1)
       expect(parsed.ok && parsed.group.onLimit.otherwise).toBe('forward')
+    }
+  })
+
+  test('effort: every level is read, quoted or not; absent is unset', () => {
+    for (const level of ['low', 'medium', 'high', 'xhigh', 'max']) {
+      for (const raw of [level, `"${level}"`, `'${level}'`]) {
+        const parsed = parseGroupFile('devs', `---\neffort: ${raw}\n---\nBuild.`)
+        expect(parsed.ok).toBe(true)
+        if (!parsed.ok) return
+        expect(parsed.group.effort).toBe(level as GroupEffort)
+        expect(parsed.group.warnings).toEqual([])
+      }
+    }
+    const parsed = parseGroupFile('devs', '---\nlabel: Developers\n---\nBuild.')
+    expect(parsed.ok && 'effort' in parsed.group).toBe(false)
+  })
+
+  test('effort: an invalid level warns, stays unset, and the rest of the file applies', () => {
+    for (const raw of ['extreme', 'auto', 'ultracode', 'MAX', '']) {
+      const parsed = parseGroupFile('devs', `---\nlabel: Developers\neffort: ${raw}\napproval: auto\n---\nBuild.`)
+      expect(parsed.ok).toBe(true)
+      if (!parsed.ok) return
+      expect(parsed.group.effort).toBeUndefined()
+      expect(parsed.group).toMatchObject({ label: 'Developers', approval: 'auto', prompt: 'Build.' })
+      expect(parsed.group.warnings).toEqual([
+        `effort must be low, medium, high, xhigh, max, got "${raw}"; ignored`,
+      ])
     }
   })
 

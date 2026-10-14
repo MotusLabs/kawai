@@ -6,6 +6,7 @@
 // from the team's catalog on demand, so a removed or edited file shows up the
 // next time the session is published.
 import { groupCatalogStamp, loadGroupCatalog, type GroupCatalog } from './groupCatalog'
+import type { GroupEffort } from './groupFile'
 import { buildTeamPrompt } from './teamPrompt'
 import { resolveTeam, type TeamIdentity } from './teamIdentity'
 
@@ -105,6 +106,15 @@ export class SessionTeams {
     const groups = [...(catalog?.groups.values() ?? [])]
     const group = groupId ? catalog?.groups.get(groupId) : undefined
     return buildTeamPrompt({ sessionId, groups, ...(group ? { group } : {}) })
+  }
+
+  /**
+   * The launch effort for a spawn (group-effort D2), read from the files as
+   * they are now like `promptFor`; undefined without a group, team, or
+   * `effort`, leaving Claude Code's own settings to decide.
+   */
+  effortFor(sessionId: string, groupId: string | null | undefined): GroupEffort | undefined {
+    return groupId ? this.catalogOf(sessionId)?.groups.get(groupId)?.effort : undefined
   }
 
   /**
