@@ -7,7 +7,9 @@
 // evaluated before acceptance writes anything. Test outcomes and verdicts are
 // claims: nothing here stores or implies verification.
 import type { ChatSessionRecord } from '../db'
-import type { TaskFindings, TaskResult, TaskTestClaim, TeamTask, TeamTaskSummary } from '../../shared/teamTasks'
+import type { AssignmentTarget, TaskFindings, TaskHandoffKind, TaskResult, TaskTestClaim, TeamTask, TeamTaskAssignment, TeamTaskSummary } from '../../shared/teamTasks'
+import { TASK_HANDOFF_KINDS } from '../../shared/teamTasks'
+import type { AssignmentService } from './AssignmentService'
 import { statusRefusal, type TaskCaller, type TaskService } from './TaskService'
 import { worktreeRootOf } from './worktreeRoots'
 
@@ -28,6 +30,38 @@ export interface FindingsSubmission {
 
 const blankToNull = (value: string | null | undefined) => (value?.trim() ? value.trim() : null)
 
+export interface HandoffRequest {
+  kind: TaskHandoffKind
+  resultId: string
+  target: AssignmentTarget
+  instructions: string
+  expectedResponse?: string | null
+  /** The human's client request key; agents send none (D3). */
+  requestKey?: string
+}
+
+export interface HandoffOutcome {
+  assignment: TeamTaskAssignment
+  /** True when an equivalent handoff already stood (agent retry) or the key replayed. */
+  duplicate: boolean
+  /** Why nothing new was dispatched; null when this call dispatched. */
+  notice: string | null
+}
+
+const KIND_LABELS: Record<TaskHandoffKind, string> = { review: 'Review', qa: 'QA', fix: 'Fix' }
+const DEFAULT_RESPONSE: Record<TaskHandoffKind, string> = {
+  review: 'findings with task_submit_findings (kind review) on this result',
+  qa: 'findings with task_submit_findings (kind qa) on this result',
+  fix: 'a new result with task_submit_result',
+}
+
+/** The instruction a handoff carries: the request, the result it references, and what to send back (D3). */
+export function handoffInstruction(kind: TaskHandoffKind, result: TaskResult, instructions: string, expectedResponse: string | null): string {
+  const reference = [result.commit ? `commit ${result.commit}` : null, result.diff ? `diff ${result.diff}` : null].filter(Boolean).join(', ')
+  return `${instructions}\n\n${KIND_LABELS[kind]} of result ${result.id} (${reference}): ${result.summary}\n` +
+    `Expected response: ${expectedResponse ?? DEFAULT_RESPONSE[kind]}`
+}
+
 /** What an acceptance closed, with what the human was shown before it (D5). */
 export interface AcceptOutcome {
   task: TeamTask
@@ -41,6 +75,8 @@ export interface AcceptOutcome {
 export class TaskResultService {
   constructor(readonly tasks: TaskService, private readonly options: {
     getSession: (id: string) => ChatSessionRecord | null | undefined
+    /** Handoffs dispatch through task-assignment's transaction (D3). */
+    assignments?: AssignmentService
   }) {}
 
   private get store() { return this.tasks.store }
@@ -128,5 +164,43 @@ export class TaskResultService {
       this.store.appendJournal(taskId, actor, entry)
     })
     return { task: closed, result: this.store.results.get(resultId)!, acceptanceCriteria: task.acceptance, openChildren }
+  }
+
+  /**
+   * Hand a result off (D3): a review, QA, or fix assignment to a role,
+   * dispatched through task-assignment's transaction with the handoff fields
+   * in its payload identity. The human sends a client request key (a replay
+   * returns the prior handoff; another result under it is refused). Agents
+   * send none: while an equivalent handoff — same task, result, and kind —
+   * stands (not superseded, not failed), a retried call returns it with a
+   * notice instead of dispatching again; a failed one loses standing.
+   */
+  async handoff(caller: TaskCaller, taskId: string, request: HandoffRequest): Promise<HandoffOutcome> {
+    const { team } = await this.tasks.context(caller)
+    this.tasks.sameTeamTask(team, taskId)
+    if (!TASK_HANDOFF_KINDS.includes(request.kind)) throw new Error(`Unknown handoff kind: ${String(request.kind)}`)
+    const result = this.store.results.get(request.resultId)
+    if (!result || result.taskId !== taskId) throw new Error(`Result ${request.resultId} is not a result of task ${taskId}`)
+    const instructions = request.instructions.trim()
+    if (!instructions) throw new Error('A handoff needs instructions')
+    if (!this.options.assignments) throw new Error('Handoffs are not available')
+    const expectedResponse = request.expectedResponse?.trim() || null
+    if (caller.kind === 'agent') {
+      const standing = this.tasks.store.assignmentsOf(taskId).find(row => row.handoffKind === request.kind &&
+        row.resultId === result.id && row.supersededBy === null && row.state !== 'failed')
+      if (standing) {
+        return { assignment: standing, duplicate: true,
+          notice: `An equivalent ${request.kind} handoff of result ${result.id} is already outstanding (${standing.id}, dispatched by ` +
+            `${standing.createdBy.kind === 'human' ? 'the human' : standing.createdBy.sessionId}, ${standing.state}); nothing was dispatched again.` }
+      }
+    }
+    const outcome = await this.options.assignments.dispatch(caller, {
+      taskId, target: request.target,
+      instruction: handoffInstruction(request.kind, result, instructions, expectedResponse),
+      requestKey: request.requestKey?.trim() || `handoff-${crypto.randomUUID()}`,
+      handoff: { kind: request.kind, resultId: result.id, expectedResponse },
+    })
+    return { assignment: outcome.assignment, duplicate: outcome.replay,
+      notice: outcome.replay ? 'This request was already dispatched; the earlier handoff is returned.' : null }
   }
 }

@@ -49,7 +49,7 @@ beforeEach(() => {
   assignments = new AssignmentService(db.db, assignmentStore, taskStore, mail, {
     getSession: () => undefined, records: () => [], teamOf: () => undefined, staffing, caps: new TeamCaps({}), worktrees,
   })
-  results = new TaskResultService(tasks, { getSession: () => undefined })
+  results = new TaskResultService(tasks, { getSession: () => undefined, assignments })
   messages = []
   const manager = {
     whenRestored: () => Promise.resolve(),
@@ -92,4 +92,32 @@ test('accept-result on another team\'s task is refused and writes nothing', asyn
   expect(last('team-task-result')!.error).toContain('not found in this team')
   expect(tasks.store.results.get(result.id)!.acceptedAt).toBeNull()
   expect(tasks.store.get(foreign.id)?.status).toBe('open')
+})
+
+test('handoff dispatches a review of a result to a role; the same key replays; the detail shows the handoff assignment', async () => {
+  const task = await tasks.create(human(), { title: 'Export', direction: 'v1' })
+  const result = resultFor(task.id)
+  await send({ type: 'team-task-open', teamPath: '/repo', taskId: task.id })
+  const request = { type: 'team-task-handoff' as const, teamPath: '/repo', taskId: task.id, kind: 'review' as const, resultId: result.id,
+    target: { kind: 'group' as const, id: 'reviewers' }, instructions: 'Review the export', requestKey: 'handoff-1' }
+  await send({ ...request, requestId: 'h1' })
+  const first = last('team-task-result')!
+  expect(first).toMatchObject({ requestId: 'h1', replay: false, assignment: { handoffKind: 'review', resultId: result.id, targetId: 'reviewers' } })
+  await send({ ...request, requestId: 'h2' })
+  expect(last('team-task-result')).toMatchObject({ requestId: 'h2', replay: true, assignment: { id: first.assignment!.id } })
+  expect(mail.forTask(task.id)).toHaveLength(1)
+  expect(last('team-task-detail')!.detail.assignments).toMatchObject([{ id: first.assignment!.id, handoffKind: 'review', state: 'queued' }])
+  // A replay of the key for another result is refused inline.
+  const newer = resultFor(task.id)
+  await send({ ...request, requestId: 'h3', resultId: newer.id })
+  expect(last('team-task-result')!.error).toContain('Request key already used with a different')
+})
+
+test('handoff on another team\'s task is refused and dispatches nothing', async () => {
+  const foreign = await tasks.create(human('other'), { title: 'Foreign', direction: 'd' })
+  const result = resultFor(foreign.id)
+  await send({ type: 'team-task-handoff', teamPath: '/repo', requestId: 'x', taskId: foreign.id, kind: 'review', resultId: result.id,
+    target: { kind: 'group', id: 'reviewers' }, instructions: 'Review', requestKey: 'k' })
+  expect(last('team-task-result')!.error).toContain('not found in this team')
+  expect(mail.forTask(foreign.id)).toEqual([])
 })

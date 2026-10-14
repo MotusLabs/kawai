@@ -55,6 +55,29 @@ export interface DispatchInsert {
   creator: TaskActor
   /** The enqueued instruction mail, once the dispatch transaction adds it. */
   messageId?: string | null
+  /** A handoff's kind, referenced result, and expected response (task-results-handoffs D1). */
+  handoff?: DispatchHandoff
+}
+
+/** A handoff's fields on its assignment (task-results-handoffs D3). */
+export interface DispatchHandoff {
+  kind: TaskHandoffKind
+  resultId: string
+  expectedResponse: string | null
+}
+
+/**
+ * Which handoff field differs between a stored assignment and a replayed
+ * intent (task-results-handoffs D3, extending D4's payload identity): a
+ * replay carrying another result, kind, or expected response is refused. The
+ * one comparison both D4 sites — this store's insert-then-read and
+ * AssignmentService's pre-check — use.
+ */
+export function handoffDiff(existing: Pick<TeamTaskAssignment, 'handoffKind' | 'resultId' | 'expectedResponse'>, handoff: DispatchHandoff | null): string | null {
+  if ((existing.handoffKind ?? null) !== (handoff?.kind ?? null)) return 'handoff kind'
+  if ((existing.resultId ?? null) !== (handoff?.resultId ?? null)) return 'result'
+  if ((existing.expectedResponse ?? null) !== (handoff?.expectedResponse ?? null)) return 'expected response'
+  return null
 }
 
 export type InsertOutcome =
@@ -117,10 +140,12 @@ export class AssignmentStore {
   insert(input: DispatchInsert, now = nowIso()): InsertOutcome {
     const id = `assignment-${crypto.randomUUID()}`
     const inserted = this.db.prepare(`INSERT OR IGNORE INTO team_task_assignments
-      (id, team_id, task_id, request_key, target_kind, target_id, role, instruction, created_by_kind, created_by_session, message_id, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+      (id, team_id, task_id, request_key, target_kind, target_id, role, instruction, created_by_kind, created_by_session, message_id,
+       handoff_kind, result_id, expected_response, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
       id, input.teamId, input.taskId, input.requestKey, input.targetKind, input.targetId, input.role,
-      input.instruction, input.creator.kind, input.creator.sessionId, input.messageId ?? null, now, now,
+      input.instruction, input.creator.kind, input.creator.sessionId, input.messageId ?? null,
+      input.handoff?.kind ?? null, input.handoff?.resultId ?? null, input.handoff?.expectedResponse ?? null, now, now,
     ).changes
     if (inserted === 1) return { replay: false, assignment: this.row(id)! }
     const existing = this.byKey(input.teamId, input.requestKey)
@@ -196,7 +221,7 @@ export class AssignmentStore {
     if (existing.targetKind !== input.targetKind) return 'target'
     if (existing.targetId !== input.targetId) return 'target'
     if (existing.instruction !== input.instruction) return 'instruction'
-    return null
+    return handoffDiff(existing, input.handoff ?? null)
   }
 
   /**

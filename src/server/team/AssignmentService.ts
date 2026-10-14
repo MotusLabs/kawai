@@ -21,6 +21,7 @@ import type {
   AssignmentTarget,
   TaskDispatchPreview,
   TaskTargetOptions,
+  TaskHandoffKind,
   TeamTask,
   TeamTaskAssignment,
 } from '../../shared/teamTasks'
@@ -28,7 +29,8 @@ import type { TaskActor } from '../../shared/teamTasks'
 import { loadGroupCatalog } from './groupCatalog'
 import { resolveTeam, type TeamIdentity } from './teamIdentity'
 import type { AssignmentStore } from './assignmentStore'
-import { outstandingOf } from './assignmentStore'
+import { handoffDiff, outstandingOf, type DispatchHandoff } from './assignmentStore'
+export type { DispatchHandoff } from './assignmentStore'
 import type { MailboxStore, TeamMessage } from './mailboxStore'
 import type { TaskStore } from './taskStore'
 import type { TaskCaller } from './TaskService'
@@ -46,9 +48,17 @@ export interface DispatchInput {
   instruction: string
   /** The dispatch identity (D4): stable across retries of one user intent. */
   requestKey: string
-  /** Required when the task has an outstanding assignment (D7). */
+  /** Required when the task has an outstanding assignment (D7) — except for a handoff. */
   handling?: ReassignHandling
+  /**
+   * A handoff (task-results-handoffs D3): its kind, referenced result, and
+   * expected response, recorded on the assignment and part of the key's
+   * payload identity. A handoff is the task's next stage: it supersedes the
+   * outstanding assignment without a reassignment note or cancel.
+   */
+  handoff?: DispatchHandoff
 }
+
 
 export interface DispatchOutcome {
   /** True when the request key returned a prior, identical dispatch. */
@@ -60,6 +70,8 @@ export interface DispatchOutcome {
 
 const CHANGE_NAME = /^[a-z0-9][a-z0-9-]*$/
 const nowIso = () => new Date().toISOString()
+
+const HANDOFF_LABELS: Record<TaskHandoffKind, string> = { review: 'Review', qa: 'QA', fix: 'Fix' }
 
 const targetLabel = (target: AssignmentTarget) => (target.kind === 'group' ? `group ${target.id}` : `session ${target.id}`)
 
@@ -108,30 +120,44 @@ export class AssignmentService {
     // never add a second instruction (D4).
     const existing = this.store.byKey(team.teamId, requestKey)
     if (existing) {
-      const diff = this.payloadDiff(existing, task.id, { target: input.target, instruction })
+      const diff = this.payloadDiff(existing, task.id, { target: input.target, instruction, handoff: input.handoff ?? null })
       if (diff) throw new Error(`Request key already used with a different ${diff}`)
       return { replay: true, assignment: existing, message: existing.messageId ? this.mail.get(existing.messageId) : null }
     }
 
-    const creator: TaskActor = { kind: 'human', sessionId: null }
+    // The dispatcher: the human, or an agent (task_handoff) sending as itself.
+    const caller_ = caller.kind === 'agent' ? this.options.getSession(caller.sessionId) : null
+    const creator: TaskActor = caller_ ? { kind: 'agent', sessionId: caller_.sessionId } : { kind: 'human', sessionId: null }
+    const sender = caller_
+      ? { fromKind: 'agent' as const, fromSession: caller_.sessionId, fromGroup: caller_.groupId ?? null, originPath: caller_.projectPath }
+      : { fromKind: 'human' as const, fromSession: null, fromGroup: null, originPath: team.groupsRoot, actor: 'human' as const }
     const message = this.db.transaction(() => {
       const outstanding = outstandingOf(this.store.listByTask(task.id))
-      if (outstanding && !input.handling) {
+      if (outstanding && !input.handling && !input.handoff) {
         throw new Error(`Task already has an outstanding assignment: ${targetLabel({ kind: outstanding.targetKind, id: outstanding.targetId })}, ${stateLabel(outstanding)}. Choose notify or stop to reassign.`)
       }
       const inserted = this.store.insert({
         teamId: team.teamId, taskId: task.id, requestKey,
         targetKind: input.target.kind, targetId: input.target.id, role, instruction, creator,
+        ...(input.handoff ? { handoff: input.handoff } : {}),
       })
       const enqueued = this.mail.enqueue({
         teamId: team.teamId, toKind: input.target.kind, toId: input.target.id,
-        fromKind: 'human', fromSession: null, fromGroup: null,
-        originPath: team.groupsRoot, priority: 'normal', body: instruction,
-        taskId: task.id, actor: 'human',
+        ...sender, priority: 'normal', body: instruction, taskId: task.id,
       })
       this.store.setMessage(inserted.assignment.id, enqueued.id)
-      this.tasks.appendJournal(task.id, creator, `Assigned to ${targetLabel(input.target)} by human`)
+      const by = creator.kind === 'human' ? 'human' : creator.sessionId
+      this.tasks.appendJournal(task.id, creator, input.handoff
+        ? `${HANDOFF_LABELS[input.handoff.kind]} handoff of result ${input.handoff.resultId} to ${targetLabel(input.target)} by ${by}`
+        : `Assigned to ${targetLabel(input.target)} by ${by}`)
       if (outstanding && input.handling) this.replace(outstanding, input.handling, task, input.target, team, inserted.assignment.id)
+      else if (outstanding && input.handoff) {
+        // The handoff is the task's next stage: the previous assignment is
+        // superseded, its delivered work untouched — no note, no cancel.
+        this.store.supersede(outstanding.id, inserted.assignment.id, nowIso())
+        this.tasks.appendJournal(task.id, creator,
+          `Assignment to ${targetLabel({ kind: outstanding.targetKind, id: outstanding.targetId })} superseded by the ${input.handoff.kind} handoff`)
+      }
       return enqueued
     })()
     const assignment = this.store.byKey(team.teamId, requestKey)!
@@ -309,10 +335,12 @@ export class AssignmentService {
   }
 
   /** Which normalized request field differs between a stored dispatch and a replayed intent (D4). */
-  private payloadDiff(existing: TeamTaskAssignment, taskId: string, input: { target: AssignmentTarget; instruction: string }): string | null {
+  private payloadDiff(existing: TeamTaskAssignment, taskId: string,
+    input: { target: AssignmentTarget; instruction: string; handoff: DispatchHandoff | null }): string | null {
     if (existing.taskId !== taskId) return 'task'
     if (existing.targetKind !== input.target.kind || existing.targetId !== input.target.id) return 'target'
     if (existing.instruction !== input.instruction.trim()) return 'instruction'
-    return null
+    // Handoff identity (task-results-handoffs D3): a replay carrying another result is refused.
+    return handoffDiff(existing, input.handoff)
   }
 }

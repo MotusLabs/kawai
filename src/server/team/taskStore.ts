@@ -214,6 +214,11 @@ export class TaskStore {
     }
   }
 
+  /** Every assignment of a task, oldest first; empty without an assignment store. */
+  assignmentsOf(id: string): TeamTaskAssignment[] {
+    return this.assignments?.listByTask(id) ?? []
+  }
+
   /** The task's outstanding assignment (task-assignment D1); null without one or without an assignment store. */
   outstandingAssignment(id: string): TeamTaskAssignment | null {
     return this.assignments ? outstandingOf(this.assignments.listByTask(id)) : null

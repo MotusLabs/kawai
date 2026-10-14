@@ -152,6 +152,14 @@ export class TaskConnections {
           result({ task: outcome.task, revision: outcome.revision.revision, replay: outcome.replay })
           return
         }
+        case 'team-task-handoff': {
+          const outcome = await this.manager.results.handoff(caller, message.taskId, {
+            kind: message.kind, resultId: message.resultId, target: message.target, instructions: message.instructions,
+            expectedResponse: message.expectedResponse ?? null, requestKey: message.requestKey,
+          })
+          result({ assignment: outcome.assignment, replay: outcome.duplicate, task: tasks.store.get(message.taskId) ?? undefined })
+          return
+        }
         case 'team-task-accept-result':
           task = (await this.manager.results.accept(caller, message.taskId, message.resultId, message.reason)).task
           break
