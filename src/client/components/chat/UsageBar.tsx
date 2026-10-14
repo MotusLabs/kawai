@@ -36,7 +36,7 @@ export default function UsageBar({ report }: { report: ChatUsageReport | null })
       data-testid="chat-usage"
       data-status={report.status}
     >
-      <div className="mx-auto flex max-w-3xl flex-col gap-1.5">
+      <div className="mx-auto flex max-w-2xl flex-col gap-1.5">
         {report.windows.map((window) => (
           <UsageMeter key={window.key} window={window} />
         ))}

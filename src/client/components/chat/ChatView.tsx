@@ -391,7 +391,7 @@ export default function ChatView({ session, sendMessage, subscribe, connectionSt
             archived chats and when nothing runs (the strip hides itself). */}
         {!archived && <ChatWorkersStrip sessionId={session.id} />}
         <div className="min-h-0 flex-1 overflow-y-auto p-4">
-          <div className="mx-auto max-w-3xl space-y-4">
+          <div className="mx-auto max-w-4xl space-y-4">
             <ChatMessages events={transcript.events} projectPath={session.projectPath}
               sessionId={session.id} sendMessage={sendMessage} connected={connected} />
             {showActivity && (
@@ -403,7 +403,7 @@ export default function ChatView({ session, sendMessage, subscribe, connectionSt
         </div>
         {archived ? (
           <div className="border-t border-border p-3" data-testid="chat-archived-bar">
-            <div className="mx-auto flex max-w-3xl items-center justify-between gap-2">
+            <div className="mx-auto flex max-w-4xl items-center justify-between gap-2">
               <p className="text-chat-meta text-secondary">Archived — read-only. Restore to continue this conversation.</p>
               <button className="btn btn-primary text-chat-meta" onClick={() => sendMessage({ type: 'chat-restore', sessionId: session.id })}
                 disabled={!connected}>Restore</button>
@@ -416,7 +416,7 @@ export default function ChatView({ session, sendMessage, subscribe, connectionSt
             submitText(text.trim())
             setText('')
           }}>
-            <div className="mx-auto max-w-3xl">
+            <div className="mx-auto max-w-4xl">
               {menuOpen && (
                 <div className="mb-2">
                   <SlashCommandMenu matches={matches} loading={commandState.status === 'loading'}
