@@ -3,11 +3,15 @@
 ## ADDED Requirements
 
 ### Requirement: The human can cancel parked mail
-The Mailbox view SHALL offer Cancel on a parked message beside Hand off. Cancelling SHALL cancel the parked message together with its undelivered resume message, SHALL record the cancellation as the human's action, and SHALL neither restore nor resume the holder.
+The Mailbox view SHALL offer Cancel on a parked message beside Hand off. Cancelling SHALL cancel the parked message together with its waiting resume message, SHALL record the cancellation as the human's action, and SHALL neither restore nor resume the holder. While the resume turn is in flight, the cancel SHALL be refused with the holder named.
 
 #### Scenario: Cancel work parked on an archived agent
 - **WHEN** the user cancels a parked message whose holder is archived
 - **THEN** the message and its resume message are cancelled, the row leaves the Parked section, and the holder stays archived
+
+#### Scenario: Resume turn in flight
+- **WHEN** the user cancels a parked message while its holder is running the resume turn
+- **THEN** the view reports that the holder is resuming the work now, and both messages are unchanged
 
 #### Scenario: Parked state changed meanwhile
 - **WHEN** the user cancels a parked message that was unparked or handed off a moment earlier
