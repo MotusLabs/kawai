@@ -42,7 +42,7 @@
 ## 8. Verification
 
 - [x] 8.1 Verify E07 headlessly: a spawned dev submits a result in its occupied worktree; a review handoff queues with the occupancy waiting reason; release-and-hand-off archives the dev, keeps the result and transcript, and delivers the result reference to one reviewer; findings on the old result and a new result demonstrate no inherited approval.
-- [ ] 8.2 Verify E08 headlessly: release refused with actionable reasons while the dev is mid-turn and while it awaits an approval, nothing archived or dispatched; after resolution and turn end, exactly one release and one dispatch.
+- [x] 8.2 Verify E08 headlessly: release refused with actionable reasons while the dev is mid-turn and while it awaits an approval, nothing archived or dispatched; after resolution and turn end, exactly one release and one dispatch.
 - [ ] 8.3 Verify E10 headlessly: a contributor's result on a human-created task leaves the task open and its accept action refused; the human accepts with open child work requiring a journaled reason; an amendment flags the earlier result Needs re-evaluation; a finished child never closes its parent; restart preserves results, findings, and acceptance.
 - [ ] 8.4 Add the E07/E08/E10 browser walkthroughs to `tests/e2e/chat-teams.spec.ts` (deterministic SDK-free agents, isolated repository with a linked worktree) following the existing fixture patterns; verify DOM assertions on the Results section, handoff states, release refusal and success, and the accept flow, with screenshots for the results section and the release confirmation.
 - [ ] 8.5 Run `bun run lint && bun run typecheck && bun run test` and `openspec validate task-results-handoffs --strict`; verify everything is green.

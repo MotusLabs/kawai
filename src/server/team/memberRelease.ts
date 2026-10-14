@@ -298,8 +298,9 @@ export class MemberRelease {
   readiness(sessionId: string): ReleaseReadiness {
     const recipient = this.options.recipient(sessionId)
     if (recipient) {
-      if (!recipient.idle) return { ready: false, reason: 'it is busy' }
+      // A pending card holds the turn open, so it is named first: it is the actionable blocker.
       if (recipient.pendingRequest) return { ready: false, reason: 'it is awaiting an approval or answer' }
+      if (!recipient.idle) return { ready: false, reason: 'it is busy' }
     }
     if (this.options.hasLiveWorkers(sessionId)) return { ready: false, reason: 'a background worker it started is still running' }
     if (this.options.hasRunningBackgroundTasks(sessionId)) return { ready: false, reason: 'it has a running background task' }
