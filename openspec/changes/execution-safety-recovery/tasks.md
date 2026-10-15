@@ -33,7 +33,7 @@ Group 7's matrix rows for plan execution, integration, supervision, and revision
 
 ## 3. Capture, classification, and records
 
-- [ ] 3.1 Implement the pure `src/server/outbound/parse.ts` (tokenizer, segments, one-level `-c` unwrap, `cd`/`-C` tracking) and `classify.ts` (`parseSends`, `judge`, the D4 rules, verdicts, and `CLASSIFIER_VERSION`). Verify with unit tests over a corpus from the spike's command shapes, rewritten with example names:
+- [x] 3.1 Implement the pure `src/server/outbound/parse.ts` (tokenizer, segments, one-level `-c` unwrap, `cd`/`-C` tracking) and `classify.ts` (`parseSends`, `judge`, the D4 rules, verdicts, and `CLASSIFIER_VERSION`). Verify with unit tests over a corpus from the spike's command shapes, rewritten with example names:
   - each rule's send and non-send forms;
   - origin-implicit and `-R` gh;
   - `--body`, `--body-file`, `-F body=@file`, and heredoc values never being targets;
@@ -45,7 +45,7 @@ Group 7's matrix rows for plan execution, integration, supervision, and revision
   - mail;
   - variables and `$(…)` reading unknown;
   - the strongest verdict and the match list of compound commands.
-- [ ] 3.2 Implement `redact.ts` (D8). Verify with a fixture corpus: every listed secret shape, including query-string credentials and JSON and form body fields, is redacted in the command, each match segment, the destination, and outcome details; a non-secret command is unchanged; and truncation at 4096 characters is marked.
+- [x] 3.2 Implement `redact.ts` (D8). Verify with a fixture corpus: every listed secret shape, including query-string credentials and JSON and form body fields, is redacted in the command, each match segment, the destination, and outcome details; a non-secret command is unchanged; and truncation at 4096 characters is marked.
 - [ ] 3.3 Add migration 2 `outbound-audit` (D6) to `MIGRATIONS`, and `OutboundStore` as the only writer, with header comments saying so. Verify with tests:
   - migration on a fresh database and on a baseline copy, run twice;
   - the duplicate `(session_id, tool_use_id)` call and duplicate outcome are no-ops;

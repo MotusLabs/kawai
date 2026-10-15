@@ -1,0 +1,372 @@
+// Command parsing for the outbound classifier (execution-safety-recovery
+// D4): tokenize with shell quoting rules (single and double quotes,
+// backslash escapes, `$(…)` and backticks kept as opaque words), split into
+// segments on `;`, `&&`, `||`, `|`, `&`, and newlines, unwrap one level of
+// `bash -c` / `sh -c` / `env … cmd`, and track `cd <dir>` and `git -C <dir>`
+// so every segment carries its effective cwd. Heredoc bodies are consumed,
+// never segments. Pure: no I/O, and unexpanded shell text — variables,
+// command substitution — stays opaque for the classifier to read as
+// unresolved. Redirects are dropped from argv; rule matching reads argument
+// positions and flags, never raw text.
+export interface Token {
+  kind: 'word' | 'op'
+  text: string
+  /** A word holding unexpanded shell text (`$VAR`, `$(…)`, backticks). */
+  opaque?: boolean
+}
+
+/** Tokenize one command string; operators stand alone, quoting is unwound. */
+export function tokenize(input: string): Token[] {
+  const tokens: Token[] = []
+  let word = ''
+  let opaque = false
+  let atWordStart = true
+  const flush = () => {
+    if (word !== '' || opaque) {
+      tokens.push({ kind: 'word', text: word, ...(opaque ? { opaque: true } : {}) })
+    }
+    word = ''
+    opaque = false
+    atWordStart = true
+  }
+  const pushOp = (text: string) => { flush(); tokens.push({ kind: 'op', text }) }
+  let i = 0
+  while (i < input.length) {
+    const char = input[i]!
+    if (char === "'") {
+      // Literal until the closing quote; a word made only of it stays one.
+      const end = input.indexOf("'", i + 1)
+      if (end === -1) { word += input.slice(i + 1); i = input.length } else { word += input.slice(i + 1, end); i = end + 1 }
+      atWordStart = false
+      continue
+    }
+    if (char === '"') {
+      atWordStart = false
+      i++
+      while (i < input.length && input[i] !== '"') {
+        if (input[i] === '\\' && (input[i + 1] === '"' || input[i + 1] === '\\' || input[i + 1] === '$')) {
+          word += input[i + 1]!
+          i += 2
+          continue
+        }
+        const expansion = readExpansion(input, i)
+        if (expansion) {
+          word += expansion.text
+          opaque = true
+          i = expansion.next
+          continue
+        }
+        word += input[i]!
+        i++
+      }
+      i++ // the closing quote
+      continue
+    }
+    if (char === '\\') {
+      // Outside quotes a backslash escapes anything, including newlines.
+      if (input[i + 1] !== undefined) { word += input[i + 1]!; i += 2; atWordStart = false; continue }
+      i++
+      continue
+    }
+    if (char === '$' || char === '`') {
+      const expansion = readExpansion(input, i)
+      if (expansion) { word += expansion.text; opaque = true; i = expansion.next; atWordStart = false; continue }
+    }
+    if (/\s/.test(char)) {
+      if (char === '\n') pushOp('\n')
+      else flush()
+      i++
+      continue
+    }
+    if (char === '#' && atWordStart) {
+      // A comment runs to the end of the line.
+      const end = input.indexOf('\n', i)
+      i = end === -1 ? input.length : end
+      continue
+    }
+    if (char === ';' || char === '|' || char === '&') {
+      const two = input.slice(i, i + 2)
+      if (two === '&&' || two === '||') { pushOp(two); i += 2; continue }
+      pushOp(char)
+      i++
+      continue
+    }
+    if (char === '<' || char === '>') {
+      // A redirect is one word: an fd prefix, the arrows, maybe `&fd`, maybe
+      // an attached target. `2>&1` stands alone; `>/dev/null` carries its
+      // target; `<<EOF` yields the arrows and the attached delimiter word.
+      const fd = /^\d+$/.test(word) ? word : ''
+      if (fd === '') flush()
+      else word = ''
+      let blob = fd + char
+      i++
+      if ((char === '<' || char === '>') && (input[i] === '<' || input[i] === '>' || input[i] === '&')) {
+        blob += input[i]!
+        i++
+        if (blob.endsWith('&')) {
+          while (/[0-9]/.test(input[i] ?? '')) { blob += input[i]!; i++ }
+        }
+      }
+      if (blob.endsWith('<<')) {
+        if (input[i] === '-') { blob += '-'; i++ }
+        flush()
+        tokens.push({ kind: 'word', text: blob })
+        let delimiter = ''
+        while (i < input.length && !/[\s;|&<>"']/.test(input[i]!)) { delimiter += input[i]!; i++ }
+        if (delimiter !== '') tokens.push({ kind: 'word', text: delimiter })
+        atWordStart = false
+        continue
+      }
+      while (i < input.length && !/[\s;|&<>"']/.test(input[i]!)) { blob += input[i]!; i++ }
+      word = blob
+      opaque = false
+      atWordStart = false
+      continue
+    }
+    // Any other character joins the current word.
+    word += char
+    atWordStart = false
+    i++
+  }
+  flush()
+  return tokens
+}
+
+/** An unexpanded region starting at `i` (`$(`…`)`, `${`…`}`, `$name`, backticks); its text kept verbatim. */
+function readExpansion(input: string, i: number): { text: string; next: number } | null {
+  const char = input[i]!
+  if (char !== '$' && char !== '`') return null
+  if (char === '`') {
+    const end = input.indexOf('`', i + 1)
+    if (end === -1) return { text: input.slice(i), next: input.length }
+    return { text: input.slice(i, end + 1), next: end + 1 }
+  }
+  if (input[i + 1] === '(') {
+    let depth = 0
+    for (let j = i + 1; j < input.length; j++) {
+      if (input[j] === '(') depth++
+      else if (input[j] === ')' && --depth === 0) return { text: input.slice(i, j + 1), next: j + 1 }
+    }
+    return { text: input.slice(i), next: input.length }
+  }
+  if (input[i + 1] === '{') {
+    const end = input.indexOf('}', i + 2)
+    if (end === -1) return { text: input.slice(i), next: input.length }
+    return { text: input.slice(i, end + 1), next: end + 1 }
+  }
+  const name = /^[a-zA-Z_][a-zA-Z0-9_]*/.exec(input.slice(i + 1))
+  if (name) return { text: input.slice(i, i + 1 + name[0].length), next: i + 1 + name[0].length }
+  return null
+}
+
+/** One command between shell operators, ready for rule matching. */
+export interface CommandSegment {
+  /** The command words after one-level unwrap and redirect removal. */
+  argv: string[]
+  /** The segment as reconstructed words, for the audit record. */
+  text: string
+  /** The effective cwd: the initial one, moved by `cd`, pinned by `git -C`. */
+  cwd: string
+  /** Literal environment assignments in effect (`NAME` → value; null = set to unexpanded text). */
+  env: ReadonlyMap<string, string | null>
+}
+
+const ASSIGNMENT = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/
+const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash'])
+const REDIRECT_ALONE = /^(?:\d*(?:>>?|<>)&\d*|>&\d+)$/
+const HEREDOC = /^<<-?$/
+
+function resolveDir(dir: string, cwd: string): string {
+  if (dir === '~') return process.env.HOME ?? '~'
+  if (dir.startsWith('~/')) return process.env.HOME ? dir.replace(/^~/, process.env.HOME) : dir
+  if (dir.startsWith('/')) return dir
+  return cwd.replace(/\/$/, '') + '/' + dir
+}
+
+/** Drop redirect words (and their targets) from raw segment words. */
+function withoutRedirects(words: Array<{ text: string; opaque: boolean }>): Array<{ text: string; opaque: boolean }> {
+  const kept: typeof words = []
+  for (let i = 0; i < words.length; i++) {
+    const word = words[i]!
+    if (HEREDOC.test(word.text)) continue
+    if (REDIRECT_ALONE.test(word.text)) continue
+    if (/^(?:\d*)>>?$|^(?:\d*)<$|^<>$|^&>>$/.test(word.text)) {
+      i++ // the redirect target is never a command word
+      continue
+    }
+    kept.push(word)
+  }
+  return kept
+}
+
+interface Built {
+  segments: CommandSegment[]
+  /** Persistent environment changes an assignment-only or `export` segment makes. */
+  envUpdates: Map<string, string | null>
+  /** Names an `env -u` segment removed for its own command. */
+  envDeletes: string[]
+  /** A persistent cwd change (`cd`); a subshell never moves the parent. */
+  chdir?: string
+}
+
+/** Build one segment (or a subshell's segments) from its raw words. */
+function buildSegment(
+  words: Array<{ text: string; opaque: boolean }>,
+  runningEnv: ReadonlyMap<string, string | null>,
+  cwd: string,
+  depth: number
+): Built {
+  const cleaned = withoutRedirects(words)
+  const env = new Map(runningEnv)
+  const envUpdates = new Map<string, string | null>()
+  const envDeletes: string[] = []
+  let rest = cleaned
+  // Leading `NAME=value` words prefix their command alone; assignment-only
+  // segments (no command left) persist, exactly as the shell runs them.
+  while (rest.length > 0 && ASSIGNMENT.test(rest[0]!.text)) {
+    const [, name, value] = ASSIGNMENT.exec(rest[0]!.text)!
+    const literal = rest[0]!.opaque ? null : value
+    env.set(name, literal)
+    rest = rest.slice(1)
+  }
+  if (rest.length === 0) {
+    for (const word of cleaned) {
+      if (ASSIGNMENT.test(word.text)) {
+        const [, name, value] = ASSIGNMENT.exec(word.text)!
+        envUpdates.set(name, word.opaque ? null : value)
+      }
+    }
+  }
+  // `env [-i] [-u NAME] [NAME=value…] cmd…` unwraps one level.
+  if (rest[0]?.text === 'env') {
+    rest = rest.slice(1)
+    let cleared = false
+    while (rest.length > 0) {
+      const word = rest[0]!
+      if (!word.opaque && ASSIGNMENT.test(word.text)) {
+        const [, name, value] = ASSIGNMENT.exec(word.text)!
+        env.set(name, value)
+        rest = rest.slice(1)
+        continue
+      }
+      if (word.text === '-i' || word.text === '--ignore-environment') {
+        cleared = true
+        rest = rest.slice(1)
+        continue
+      }
+      if (word.text === '-u' || word.text === '--unset') {
+        if (rest[1] !== undefined) { env.delete(rest[1]!.text); envDeletes.push(rest[1]!.text) }
+        rest = rest.slice(2)
+        continue
+      }
+      break
+    }
+    if (cleared) for (const key of env.keys()) if (!envUpdates.has(key)) env.delete(key)
+  }
+  // `bash -c 'inner'` unwraps one level, with the prefix assignments overlaid.
+  if (depth === 0 && rest[0] !== undefined && SHELLS.has(rest[0]!.text) && rest[1]?.text === '-c' && rest[2] !== undefined && !rest[2]!.opaque) {
+    const inner = parseSegments(rest[2]!.text, cwd, env, depth + 1)
+    return {
+      segments: inner.map(segment => ({ ...segment, env: mergeEnv(env, segment.env) })),
+      envUpdates: new Map(),
+      envDeletes: [],
+    }
+  }
+  // `export NAME=value…` and bare assignments persist; neither is a command.
+  if (rest[0]?.text === 'export' || rest.length === 0) {
+    if (rest[0]?.text === 'export') {
+      for (const word of rest.slice(1)) {
+        if (!word.opaque && ASSIGNMENT.test(word.text)) {
+          const [, name, value] = ASSIGNMENT.exec(word.text)!
+          envUpdates.set(name, value)
+        }
+      }
+    }
+    return { segments: [], envUpdates, envDeletes }
+  }
+  const argv = rest.map(word => word.text)
+  // `git -C <dir>` pins this segment alone.
+  let segmentCwd = cwd
+  if (argv[0] === 'git') {
+    const dashC = argv.findIndex((word, index) => index > 0 && (word === '-C') && argv.length > index + 1)
+    if (dashC > 0) segmentCwd = resolveDir(argv[dashC + 1]!, cwd)
+  }
+  // `cd <dir>` moves every later segment.
+  let chdir: string | undefined
+  if (argv[0] === 'cd' && argv[1] !== undefined && !argv[1]!.startsWith('-') && !rest[1]!.opaque) {
+    chdir = resolveDir(argv[1]!, cwd)
+  }
+  return {
+    segments: [{ argv, text: argv.join(' '), cwd: segmentCwd, env }],
+    envUpdates,
+    envDeletes,
+    ...(chdir === undefined ? {} : { chdir }),
+  }
+}
+
+function mergeEnv(base: ReadonlyMap<string, string | null>, overlay: ReadonlyMap<string, string | null>): Map<string, string | null> {
+  return new Map([...base, ...overlay])
+}
+
+/**
+ * Split a command into segments: operators and heredoc bodies dropped, `cd`
+ * tracked across segments, `git -C` pinning its own, one level of `env …` and
+ * `bash -c` unwrapped, and each segment carrying the literal assignments that
+ * precede it or that an earlier assignment or `export` segment set.
+ */
+export function parseCommand(command: string, initialCwd: string): CommandSegment[] {
+  return parseSegments(command, initialCwd, new Map(), 0)
+}
+
+function parseSegments(
+  command: string,
+  initialCwd: string,
+  baseEnv: ReadonlyMap<string, string | null>,
+  depth: number
+): CommandSegment[] {
+  const tokens = tokenize(command)
+  const segments: CommandSegment[] = []
+  const runningEnv = new Map(baseEnv)
+  let cwd = initialCwd
+  let words: Array<{ text: string; opaque: boolean }> = []
+  let expectDelimiter = false
+  let heredocDelimiter: string | null = null
+  let pendingBody = false
+  let delimiter = ''
+  const finish = () => {
+    const built = buildSegment(words, runningEnv, cwd, depth)
+    words = []
+    for (const name of built.envDeletes) runningEnv.delete(name)
+    for (const [name, value] of built.envUpdates) runningEnv.set(name, value)
+    if (built.chdir !== undefined) cwd = built.chdir
+    segments.push(...built.segments)
+  }
+  for (const token of tokens) {
+    if (heredocDelimiter !== null) {
+      if (token.kind === 'word' && token.text === heredocDelimiter) heredocDelimiter = null
+      continue
+    }
+    if (token.kind === 'op') {
+      finish()
+      // A heredoc body starts at the newline that ends its command line.
+      if (token.text === '\n' && pendingBody) {
+        heredocDelimiter = delimiter
+        pendingBody = false
+      }
+      continue
+    }
+    if (expectDelimiter) {
+      delimiter = token.text
+      expectDelimiter = false
+      pendingBody = true
+      continue
+    }
+    if (token.text === '<<' || token.text === '<<-') {
+      expectDelimiter = true
+      continue
+    }
+    words.push({ text: token.text, opaque: token.opaque ?? false })
+  }
+  finish()
+  return segments
+}

@@ -33,6 +33,9 @@ export function outboundFile(homeDir?: string): string {
   return path.join(homeDir ?? process.env.HOME ?? os.homedir(), '.kawai', 'outbound.json')
 }
 
+/** How often the hot matching path may revalidate its stamp (CC #161 review). */
+const MATCH_REVALIDATE_MS = 1000
+
 /** Loopback and the private ranges are always internal (D2). */
 const DEFAULT_INTERNAL_CIDRS = [
   '127.0.0.0/8', '::1/128', '10.0.0.0/8', '172.16.0.0/12',
@@ -209,8 +212,14 @@ interface OutboundSnapshot {
 }
 
 export class OutboundDestinations {
-  /** The last read, keyed by the stamp it was read under. */
-  private cache: { stamp: string; snapshot: OutboundSnapshot } | null = null
+  /**
+   * The last read, keyed by the stamp it was read under; `matchedAt` gates
+   * the matching path's re-validation (below), because classification runs
+   * on every audited tool call and must not stat files per call.
+   */
+  private cache: { stamp: string; snapshot: OutboundSnapshot; matchedAt: number } | null = null
+  /** The error lines last reported, so one content change reports once. */
+  private lastReportedErrors: string | null = null
 
   constructor(private readonly options: {
     homeDir?: string
@@ -218,6 +227,8 @@ export class OutboundDestinations {
     onErrors?: (errors: string[]) => void
     /** Base URL every profile without one inherits (the server's provider env). */
     globalBaseUrl?: () => string | undefined
+    /** The matching path's revalidation window; tests shrink it to zero. */
+    matchRevalidateMs?: number
   } = {}) {
     // Startup read; later calls re-read only when the files changed.
     void this.current()
@@ -238,7 +249,7 @@ export class OutboundDestinations {
   isInternal(host: string, port?: number): boolean {
     const normalized = normalizeHost(host)
     const literal = queryLiteral(normalized)
-    for (const entry of this.current().entries) {
+    for (const entry of this.currentForMatch().entries) {
       if (entry.port !== undefined && entry.port !== port) continue
       if (entry.kind === 'cidr') {
         if (literal === null || entry.ipv6 !== literal.ipv6) continue
@@ -257,12 +268,12 @@ export class OutboundDestinations {
 
   /** Whether a host counts as a model provider (D2 defaults plus the file). */
   isModelProvider(host: string): boolean {
-    return this.current().modelHosts.has(normalizeHost(host))
+    return this.currentForMatch().modelHosts.has(normalizeHost(host))
   }
 
   /** Whether an external MCP server's calls count as allowed (D5). */
   isAllowedMcpServer(server: string): boolean {
-    return this.current().mcpServers.has(server)
+    return this.currentForMatch().mcpServers.has(server)
   }
 
   private fileStamp(): string {
@@ -292,8 +303,24 @@ export class OutboundDestinations {
   private current(): OutboundSnapshot {
     // The global base URL joins the stamp: a Settings change re-derives too.
     const stamp = `${this.fileStamp()}\n${this.catalogStamp()}\n${this.options.globalBaseUrl?.() ?? ''}`
-    if (this.cache?.stamp !== stamp) this.cache = { stamp, snapshot: this.load() }
+    if (this.cache?.stamp !== stamp) this.cache = { stamp, snapshot: this.load(), matchedAt: this.cache?.matchedAt ?? 0 }
     return this.cache.snapshot
+  }
+
+  /**
+   * The matching path's snapshot: identical to `current`'s, but it revalidates
+   * the stamp at most once per `MATCH_REVALIDATE_MS`, so classifying every
+   * audited tool call never stats a file or calls `globalBaseUrl` per call.
+   * An edit reaches the next classification after the window, and `facts()`
+   * (each agent start) always reads exact.
+   */
+  private currentForMatch(): OutboundSnapshot {
+    const now = Date.now()
+    const window = this.options.matchRevalidateMs ?? MATCH_REVALIDATE_MS
+    if (window > 0 && this.cache !== null && now - this.cache.matchedAt < window) return this.cache.snapshot
+    const snapshot = this.current()
+    if (this.cache !== null) this.cache.matchedAt = now
+    return snapshot
   }
 
   private load(): OutboundSnapshot {
@@ -358,7 +385,11 @@ export class OutboundDestinations {
         }
       }
     }
-    if (errors.length > 0) this.options.onErrors?.(errors)
+    // Report a file's errors once per content change: a catalog or provider
+    // stamp change alone re-derives without re-reporting the same lines.
+    const signature = errors.length > 0 ? errors.join('\n') : null
+    if (signature !== null && signature !== this.lastReportedErrors) this.options.onErrors?.(errors)
+    this.lastReportedErrors = signature
     // Derived model-provider hosts: every configured profile's base URL from
     // the home-scoped catalog (never a project file) plus the global one.
     const modelHosts = new Set<string>(DEFAULT_MODEL_PROVIDER_HOSTS)
