@@ -3,6 +3,7 @@
 // Ordering-sensitive blocks (pendingKills epoch discard, pending-wake
 // matching) moved verbatim from App.tsx — see the inline comments.
 import { useSessionStore } from '../stores/sessionStore'
+import { useTeamLocationStore } from '../hooks/useTeamLocation'
 import { useSettingsStore } from '../stores/settingsStore'
 import { useChatStore } from '../stores/chatStore'
 import { invalidateSnapshotCache } from '../hooks/useTerminal'
@@ -13,13 +14,15 @@ import type { ServerMessage } from '@shared/types'
 import type { MessageRouterDeps } from './types'
 
 /** Play the sounds a status transition decides on (F7 dedupe). The idle
- * sound is suppressed for the selected session while the page is visible —
- * the user is already watching it (skip-idle-sound-for-selected-session). */
+ * sound is suppressed only for the session the user is actually watching:
+ * selected, no Team page open, and a visible page
+ * (skip-idle-sound-for-selected-session). */
 function notifyStatusTransitions(
   prevStatus: string | undefined,
   nextStatus: string,
   isSelected: boolean,
-  pageVisible: boolean
+  pageVisible: boolean,
+  teamPageOpen: boolean
 ): void {
   const { soundOnPermission, soundOnIdle } = useSettingsStore.getState()
   const sounds = decideTransitionSounds(
@@ -28,7 +31,8 @@ function notifyStatusTransitions(
     isSelected,
     pageVisible,
     soundOnPermission,
-    soundOnIdle
+    soundOnIdle,
+    teamPageOpen
   )
   if (sounds.permission) void playPermissionSound()
   if (sounds.idle) void playIdleSound()
@@ -40,12 +44,13 @@ export function handleSessions(
 ): void {
   const session = useSessionStore.getState()
   // Detect status transitions for sound notifications before updating;
-  // read selection/visibility before the new list is applied (selection may
-  // be rewritten later in this handler, e.g. after a hibernate/wake).
+  // read selection/visibility/team location before the new list is applied
+  // (selection may be rewritten later in this handler, e.g. after a wake).
   const currentSessions = session.sessions
   const { soundOnPermission, soundOnIdle } = useSettingsStore.getState()
   const selectedSessionId = session.selectedSessionId
   const pageVisible = pageIsVisible()
+  const teamPageOpen = useTeamLocationStore.getState().location !== null
 
   for (const nextSession of message.sessions) {
     notifySpawnedAttention(currentSessions.find((s) => s.id === nextSession.id), nextSession)
@@ -58,7 +63,8 @@ export function handleSessions(
           prevSession.status,
           nextSession.status,
           nextSession.id === selectedSessionId,
-          pageVisible
+          pageVisible,
+          teamPageOpen
         )
       }
     }
@@ -152,9 +158,10 @@ export function handleSessionUpdate(
   const prevSession = currentSessions.find((s) => s.id === message.session.id)
   const prevStatus = prevSession?.status
   const nextStatus = message.session.status
-  // Read selection/visibility before the update is applied
+  // Read selection/visibility/team location before the update is applied
   const { selectedSessionId } = useSessionStore.getState()
   const pageVisible = pageIsVisible()
+  const teamPageOpen = useTeamLocationStore.getState().location !== null
 
   useSessionStore.getState().updateSession(message.session)
   notifySpawnedAttention(prevSession, message.session)
@@ -164,7 +171,8 @@ export function handleSessionUpdate(
     prevStatus,
     nextStatus,
     message.session.id === selectedSessionId,
-    pageVisible
+    pageVisible,
+    teamPageOpen
   )
 }
 

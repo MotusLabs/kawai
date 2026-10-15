@@ -6,8 +6,8 @@
 
 ## 2. App wiring
 
-- [x] 2.1 Route the `sessions` handler in `src/client/protocol/sessionMessages.ts` through the decision function, using the pre-update `selectedSessionId` and `document.visibilityState`; verify the mixed-snapshot scenario (selected and background session idle together still chimes for the background one) via the unit tests and that the existing app tests pass
-- [x] 2.2 Route the `session-update` handler in `src/client/protocol/sessionMessages.ts` through the same function with the same selection/visibility inputs; verify the inline transition conditions are gone (`grep -n "'waiting' && soundOnIdle" src/client/protocol/sessionMessages.ts` returns nothing) and app tests pass
+- [x] 2.1 Route the `sessions` handler in `src/client/protocol/sessionMessages.ts` through the decision function, using the pre-update `selectedSessionId`, team location, and `document.visibilityState`; verified by the `status transition sounds` cases in `src/client/__tests__/messageRouter.test.ts`, which drive the real handler (the mixed snapshot — a selected and a background session idle together — plays exactly one chime)
+- [x] 2.2 Route the `session-update` handler in `src/client/protocol/sessionMessages.ts` through the same function with the same selection/location/visibility inputs; verified by the same messageRouter wiring tests, and the inline transition conditions are gone (`grep -n "'waiting' && soundOnIdle" src/client/protocol/sessionMessages.ts` returns nothing)
 - [x] 2.3 Note the selected-session exception in the Idle Sound description in `src/client/components/settings/GeneralSettings.tsx` and in the `CLAUDE.md` "How It Works" list; verify the settings test (if it asserts the description) is updated and passes
 
 ## 3. Verification

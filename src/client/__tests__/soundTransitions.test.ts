@@ -75,4 +75,19 @@ describe('decideTransitionSounds', () => {
       idle: false,
     })
   })
+
+  test('selected session finishing while the Team page is open still plays', () => {
+    expect(
+      decideTransitionSounds('working', 'waiting', true, true, PERM, IDLE, true)
+    ).toEqual({ permission: false, idle: true })
+  })
+
+  test('Team page open does not suppress a background session or the permission sound', () => {
+    expect(
+      decideTransitionSounds('working', 'waiting', false, true, PERM, IDLE, true)
+    ).toEqual({ permission: false, idle: true })
+    expect(
+      decideTransitionSounds('working', 'permission', true, true, PERM, IDLE, true)
+    ).toEqual({ permission: true, idle: false })
+  })
 })
