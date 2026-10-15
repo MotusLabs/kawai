@@ -51,7 +51,7 @@ Group 7's matrix rows for plan execution, integration, supervision, and revision
   - the duplicate `(session_id, tool_use_id)` call and duplicate outcome are no-ops;
   - the store exposes no update or delete;
   - keyset paging and the filters.
-- [ ] 3.4 Register the four hooks in `ChatSessionDriver` (D3), and add `OutboundObserver` with the repository facts resolver and the `spawn_id` live set (D7). Verify with tests:
+- [x] 3.4 Register the four hooks in `ChatSessionDriver` (D3), and add `OutboundObserver` with the repository facts resolver and the `spawn_id` live set (D7). Verify with tests:
   - **The no-decision test:** across every audited event, tool, and an observer that throws, the hook's output deep-equals `{ continue: true }`.
   - the hook returns before the store write;
   - `kawai-team` calls and non-sends write nothing;
@@ -62,7 +62,7 @@ Group 7's matrix rows for plan execution, integration, supervision, and revision
   - an outcome that lands before its queued call row is recorded and joins the row once written.
 
   Measure the added per-call hook round trip with the fixture adapter and record it in the recovery matrix.
-- [ ] 3.5 Implement `outcomeState` (D7). Verify with unit tests: the precedence of every outcome, pending while the spawn lives, and outcome unknown once it ends. Add the AGENTS.md audit bullet; that is the docs for group 3.
+- [x] 3.5 Implement `outcomeState` (D7). Verify with unit tests: the precedence of every outcome, pending while the spawn lives, and outcome unknown once it ends. Add the AGENTS.md audit bullet; that is the docs for group 3.
 
 ## 4. Audit view and attention
 

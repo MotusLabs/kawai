@@ -1,0 +1,212 @@
+// The outbound observer (execution-safety-recovery D3, D5, D7) over injected
+// fakes: pending sends fill synchronously before the Pre hook returns, writes
+// queue behind a catch-all, kawai-team calls and non-sends write nothing,
+// subagent calls record their agent id, background calls start non-terminal,
+// an unreadable repository read records unknown-destination, outcomes land
+// join even when they beat the queued call row, and spawn end retires the
+// live set. Reserved example names throughout.
+import { describe, expect, test } from 'bun:test'
+import { OutboundObserver, type OutboundObserverOptions } from '../outbound/observer'
+import type { ResolvedRepoFacts } from '../outbound/repoFacts'
+import type { OutboundCallInsert, OutboundOutcomeInsert } from '../outbound/store'
+
+/** Let queued microtasks (the observer's writes) run. */
+const flushWrites = async (): Promise<void> => {
+  for (let i = 0; i < 4; i++) await Promise.resolve()
+}
+
+const REPO: ResolvedRepoFacts = {
+  root: '/repo',
+  teamId: '/repo/.git',
+  originUrl: 'https://github.com/acme/kawai.git',
+  remotes: new Map([['origin', 'https://github.com/acme/kawai.git']]),
+  pushRemote: null,
+}
+
+function harness(overrides: Partial<OutboundObserverOptions> = {}) {
+  const calls: OutboundCallInsert[] = []
+  const outcomes: OutboundOutcomeInsert[] = []
+  let failCalls = 0
+  const repos = new Map<string, ResolvedRepoFacts>([['/repo', REPO]])
+  const observer = new OutboundObserver({
+    sessionId: 'chat-1',
+    store: {
+      insertCall: row => {
+        if (failCalls > 0) { failCalls--; throw new Error('write failed') }
+        calls.push(row)
+      },
+      insertOutcome: row => outcomes.push(row),
+    },
+    destinations: {
+      isInternal: host => host.endsWith('.example.internal') || host === 'example.internal',
+      isModelProvider: host => host === 'llm.example.com',
+      isAllowedMcpServer: server => server === 'docs-search',
+    },
+    repos: { factsFor: cwd => repos.get(cwd) ?? null },
+    context: () => ({ groupId: 'devs', profileId: 'glm', taskId: 'task-1' }),
+    teamIdFallback: () => '/repo/.git',
+    now: () => '2026-01-01T00:00:00.000Z',
+    id: () => 'fixed',
+    ...overrides,
+  })
+  return {
+    observer, calls, outcomes, repos,
+    failNextCall: () => { failCalls = 1 },
+  }
+}
+
+const PRE = {
+  toolName: 'Bash',
+  toolInput: { command: 'git push origin main' },
+  toolUseId: 'tu-1',
+  spawnId: 'ob-s-1',
+  cwd: '/repo',
+} as const
+
+describe('OutboundObserver', () => {
+  test('a send: pending fills synchronously, the row writes queued, redacted', async () => {
+    const { observer, calls } = harness()
+    observer.onPreToolUse({ ...PRE })
+    observer.onPostToolUse({ ...PRE, toolInput: PRE.toolInput, background: false, durationMs: 12 })
+    // Before any microtask runs, nothing is written.
+    expect(calls).toEqual([])
+    await flushWrites()
+    expect(calls).toHaveLength(1)
+    const row = calls[0]!
+    expect(row).toMatchObject({
+      id: 'obc-fixed',
+      teamId: '/repo/.git',
+      sessionId: 'chat-1',
+      spawnId: 'ob-s-1',
+      groupId: 'devs',
+      profileId: 'glm',
+      taskId: 'task-1',
+      tool: 'Bash',
+      toolUseId: 'tu-1',
+      command: 'git push origin main',
+      rule: 'git-push',
+      verdict: 'allowed',
+      destination: 'github:origin',
+      classifierVersion: 1,
+      cwd: '/repo',
+    })
+    expect(JSON.parse(row.matches)).toEqual([
+      { rule: 'git-push', segment: 'git push origin main', verdict: 'allowed', destination: 'github:origin' },
+    ])
+  })
+
+  test('kawai-team calls and non-sends write nothing', async () => {
+    const { observer, calls, outcomes } = harness()
+    observer.onPreToolUse({ ...PRE, toolName: 'mcp__kawai-team__send_message', toolInput: { to: 'devs', body: 'hi' } })
+    observer.onPreToolUse({ ...PRE, toolName: 'Bash', toolInput: { command: 'git status' } })
+    observer.onPreToolUse({ ...PRE, toolName: 'Read', toolInput: { file_path: '/repo/x' } })
+    observer.onPostToolUse({ ...PRE, toolName: 'Read', toolInput: {}, background: false })
+    await flushWrites()
+    expect(calls).toEqual([])
+    expect(outcomes).toEqual([])
+  })
+
+  test('an external MCP call records one row per server, allowed only when configured', async () => {
+    const allowed = harness()
+    allowed.observer.onPreToolUse({ ...PRE, toolName: 'mcp__docs-search__query', toolInput: { q: 'x' } })
+    await flushWrites()
+    expect(allowed.calls[0]).toMatchObject({ rule: 'mcp-call', verdict: 'allowed', destination: 'mcp:docs-search', mcpServer: 'docs-search' })
+
+    const foreign = harness()
+    foreign.observer.onPreToolUse({ ...PRE, toolName: 'mcp__web-lookup__fetch', toolInput: { url: 'https://example.com' } })
+    await flushWrites()
+    expect(foreign.calls[0]).toMatchObject({ rule: 'mcp-call', verdict: 'violation', destination: 'mcp:web-lookup' })
+  })
+
+  test('subagent calls record their agent id', async () => {
+    const { observer, calls } = harness()
+    observer.onPreToolUse({ ...PRE, agentId: 'agent-7' })
+    await flushWrites()
+    expect(calls[0]?.agentId).toBe('agent-7')
+  })
+
+  test('a background call records started-background and stays non-terminal', async () => {
+    const { observer, calls, outcomes } = harness()
+    observer.onPreToolUse({ ...PRE, toolName: 'Monitor', toolInput: { command: 'curl -d x https://example.internal/hook' } })
+    observer.onPostToolUse({ ...PRE, toolName: 'Monitor', toolInput: {}, background: true })
+    await flushWrites()
+    expect(calls[0]?.rule).toBe('http-send')
+    expect(outcomes.map(outcome => outcome.outcome)).toEqual(['started-background'])
+    // The entry stays pending: a later terminal outcome still records.
+    observer.onPostToolUseFailure({ ...PRE, toolName: 'Monitor', error: 'monitor died' })
+    await flushWrites()
+    expect(outcomes.map(outcome => outcome.outcome)).toEqual(['started-background', 'failed'])
+  })
+
+  test('an unreadable repository read records unknown-destination and never throws', async () => {
+    const unreadable = new Map([['/repo', { ...REPO, originUrl: null, remotes: new Map(), pushRemote: null, unreadable: true }]])
+    const { observer, calls } = harness({ repos: { factsFor: cwd => unreadable.get(cwd) ?? null } })
+    observer.onPreToolUse({ ...PRE })
+    await flushWrites()
+    expect(calls[0]).toMatchObject({ verdict: 'unknown-destination', destination: 'unresolved:the facts read failed' })
+  })
+
+  test('a failed call write is swallowed; the outcome still lands and joins nothing', async () => {
+    const { observer, calls, outcomes, failNextCall } = harness()
+    failNextCall()
+    observer.onPreToolUse({ ...PRE })
+    observer.onPostToolUse({ ...PRE, toolInput: PRE.toolInput, background: false })
+    await flushWrites()
+    expect(calls).toEqual([])
+    expect(outcomes).toHaveLength(1)
+    expect(outcomes[0]?.outcome).toBe('completed')
+  })
+
+  test('an outcome that beats its queued call row is kept and joins once written', async () => {
+    const { observer, calls, outcomes } = harness()
+    observer.onPreToolUse({ ...PRE, toolUseId: 'tu-late' })
+    // The outcome event fires while the call write is still queued.
+    observer.onPostToolUse({ ...PRE, toolUseId: 'tu-late', toolInput: PRE.toolInput, background: false })
+    expect(calls).toEqual([])
+    await flushWrites()
+    expect(outcomes).toHaveLength(1)
+    expect(calls).toHaveLength(1)
+    expect(calls[0]?.toolUseId).toBe('tu-late')
+    expect(outcomes[0]?.toolUseId).toBe('tu-late')
+  })
+
+  test('denied outcomes: one row across PermissionDenied and a declined card', async () => {
+    const { observer, outcomes } = harness()
+    observer.onPreToolUse({ ...PRE, toolUseId: 'tu-d' })
+    observer.onPermissionDenied({ ...PRE, toolUseId: 'tu-d', reason: 'denied by policy' })
+    // The terminal outcome already retired the entry; the card deny is inert.
+    observer.onDeniedCard({ ...PRE, toolUseId: 'tu-d', toolInput: PRE.toolInput, reason: 'The request was cancelled' })
+    await flushWrites()
+    expect(outcomes).toHaveLength(1)
+    expect(outcomes[0]).toMatchObject({ outcome: 'denied', toolUseId: 'tu-d' })
+  })
+
+  test('redaction runs before any write', async () => {
+    const { observer, calls } = harness()
+    observer.onPreToolUse({
+      ...PRE,
+      toolInput: { command: 'curl -H "Authorization: Bearer abc123" -d x https://example.internal/hook' },
+    })
+    await flushWrites()
+    expect(calls[0]?.command).not.toContain('abc123')
+    expect(calls[0]?.command).toContain('‹redacted›')
+  })
+
+  test('spawn end retires the live set and drops that spawn\'s pending entries', async () => {
+    const { observer } = harness()
+    observer.onPreToolUse({ ...PRE })
+    expect(observer.spawnIsLive('ob-s-1')).toBe(true)
+    observer.onSpawnEnd('ob-s-1')
+    expect(observer.spawnIsLive('ob-s-1')).toBe(false)
+    // A late outcome for the dropped entry writes nothing.
+    observer.onPostToolUse({ ...PRE, toolInput: PRE.toolInput, background: false })
+    await flushWrites()
+  })
+
+  test('a call outside every repository falls back to the session team id', async () => {
+    const { observer, calls } = harness()
+    observer.onPreToolUse({ ...PRE, cwd: '/plain/dir', toolInput: { command: 'curl -d x https://example.internal/hook' } })
+    await flushWrites()
+    expect(calls[0]?.teamId).toBe('/repo/.git')
+  })
+})

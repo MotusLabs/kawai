@@ -25,6 +25,7 @@ import type {
 import type { SessionStatus } from '../../shared/types'
 import type { ChatWireRecorder } from '../chat/wireTap'
 import type { ChatLimitSignal } from '../chat/limitSignals'
+import type { OutboundAuditSink } from '../outbound/observer'
 import { outboundFile } from '../outbound/destinations'
 import { SessionTeams } from '../team/sessionTeams'
 import { consumerMessages } from './fixtures/backgroundTasks'
@@ -196,6 +197,7 @@ function createHarness(
     getApprovalPolicy?: () => ChatApprovalPolicy
     teamMcpServer?: NonNullable<Options['mcpServers']>[string]
     getSystemPromptAppend?: () => string | undefined
+    outbound?: OutboundAuditSink
     getEffort?: () => Options['effort']
     /** Replaces the harness's cwd capture (e.g. with a throwing observer). */
     onCwdChanged?: (newCwd: string) => void
@@ -638,6 +640,94 @@ describe('ChatSessionDriver', () => {
     harness.driver.send('after exit')
     expect(harness.fakes[1]!.options.systemPrompt).toMatchObject({ append: '# Your role: QA\n\nTest it twice.' })
     expect(reads).toBe(2)
+    harness.driver.kill()
+  })
+
+  test('audit hooks (execution-safety-recovery D3): registered for the audited tools, observational only', () => {
+    const harness = createHarness()
+    harness.driver.send('hello')
+    const hooks = harness.fakes[0]!.options.hooks as Record<string, Array<{ matcher?: string; hooks: Array<(input: unknown) => Promise<unknown>> }>>
+    expect(hooks.CwdChanged).toHaveLength(1)
+    for (const event of ['PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'PermissionDenied']) {
+      expect(hooks[event]).toHaveLength(1)
+      expect(hooks[event]![0]!.matcher).toBe('^(Bash|Monitor|mcp__.+)$')
+    }
+    harness.driver.kill()
+  })
+
+  test('the no-decision test: every event and tool returns exactly { continue: true }, observer included', async () => {
+    const throws: OutboundAuditSink = {
+      onPreToolUse: () => { throw new Error('sink down') },
+      onPostToolUse: () => { throw new Error('sink down') },
+      onPostToolUseFailure: () => { throw new Error('sink down') },
+      onPermissionDenied: () => { throw new Error('sink down') },
+      onDeniedCard: () => { throw new Error('sink down') },
+      onSpawnEnd: () => { throw new Error('sink down') },
+    }
+    const harness = createHarness({ outbound: throws })
+    harness.driver.send('hello')
+    const hooks = harness.fakes[0]!.options.hooks as Record<string, Array<{ hooks: Array<(input: unknown) => Promise<unknown>> }>>
+    const inputs = [
+      { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'git push' }, tool_use_id: 'tu-1', agent_id: 'agent-1' },
+      { hook_event_name: 'PreToolUse', tool_name: 'mcp__web-lookup__fetch', tool_input: { url: 'https://example.com' }, tool_use_id: 'tu-2' },
+      { hook_event_name: 'PostToolUse', tool_name: 'Monitor', tool_input: { command: 'x' }, tool_response: '', tool_use_id: 'tu-3', duration_ms: 5 },
+      { hook_event_name: 'PostToolUseFailure', tool_name: 'Bash', tool_input: { command: 'x' }, tool_use_id: 'tu-4', error: 'boom', is_interrupt: true },
+      { hook_event_name: 'PermissionDenied', tool_name: 'Bash', tool_input: { command: 'x' }, tool_use_id: 'tu-5', reason: 'policy' },
+    ]
+    for (const [event, uses] of [
+      ['PreToolUse', inputs.slice(0, 2)],
+      ['PostToolUse', [inputs[2]]],
+      ['PostToolUseFailure', [inputs[3]]],
+      ['PermissionDenied', [inputs[4]]],
+    ] as const) {
+      for (const input of uses) {
+        const result = await hooks[event]![0]!.hooks[0]!(input)
+        expect(result).toEqual({ continue: true })
+      }
+    }
+    harness.driver.kill()
+  })
+
+  test('the hook returns before the store write: the sink sees the call only after a microtask', async () => {
+    const seen: string[] = []
+    const sink: OutboundAuditSink = {
+      onPreToolUse: use => { seen.push(`pre:${use.toolName}`) },
+      onPostToolUse: use => { seen.push(`post:${use.toolName}`) },
+      onPostToolUseFailure: use => { seen.push(`fail:${use.toolName}`) },
+      onPermissionDenied: use => { seen.push(`denied:${use.toolName}`) },
+      onDeniedCard: use => { seen.push(`card:${use.toolUseId}`) },
+      onSpawnEnd: () => { seen.push('spawn-end') },
+    }
+    const harness = createHarness({ outbound: sink })
+    harness.driver.send('hello')
+    const hooks = harness.fakes[0]!.options.hooks as { PreToolUse: Array<{ hooks: Array<(input: unknown) => Promise<unknown>> }> }
+    const input = { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'git push' }, tool_use_id: 'tu-9' }
+    await hooks.PreToolUse[0]!.hooks[0]!(input)
+    // The hook resolved before any queued write of the observer ran.
+    expect(seen).toEqual(['pre:Bash'])
+    harness.driver.kill()
+  })
+
+  test('a declined card reports one denied outcome (D3)', async () => {
+    const denied: string[] = []
+    const sink: OutboundAuditSink = {
+      onPreToolUse: () => {},
+      onPostToolUse: () => {},
+      onPostToolUseFailure: () => {},
+      onPermissionDenied: () => {},
+      onDeniedCard: use => { denied.push(use.toolUseId) },
+      onSpawnEnd: () => {},
+    }
+    const harness = createHarness({ outbound: sink })
+    harness.driver.send('go')
+    const fake = harness.fakes[0]!
+    const approval = sendApproval(fake, { command: 'git push' })
+    await flush()
+    const event = harness.events.find(e => e.type === 'approval_request') as { requestId: string }
+    harness.driver.resolveApproval(event.requestId, 'deny')
+    await expect(approval).resolves.toMatchObject({ behavior: 'deny' })
+    await flush()
+    expect(denied).toHaveLength(1)
     harness.driver.kill()
   })
 

@@ -100,6 +100,7 @@ import { decideApproval } from './approvalPolicy'
 import { resolveClaudeProfile } from './ClaudeProfiles'
 import { TurnQueue } from './TurnQueue'
 import { TEAM_ALLOWED_TOOLS } from '../team/mailboxTools'
+import type { OutboundAuditSink } from '../outbound/observer'
 import { TEAM_MCP_SERVER } from '../team/teamPrompt'
 import { formatEnvelope } from '../team/envelope'
 import { createWireTappedSpawn, type ChatWireRecorder } from './wireTap'
@@ -155,6 +156,13 @@ export interface ChatSessionDriverOptions {
    * role + mailbox note, agent-teams D7). Omitted/empty = preset only.
    */
   getSystemPromptAppend?: () => string | undefined
+  /**
+   * Observes audited tool use (execution-safety-recovery D3): Bash, Monitor,
+   * and external MCP calls, subagents included. Purely observational — the
+   * sink never blocks, delays, or decides a tool call, and the hooks swallow
+   * its failures.
+   */
+  outbound?: OutboundAuditSink
   /**
    * Reasoning effort for the spawn, read at every spawn like the prompt
    * (group-effort D2). Undefined = no `effort` option, so Claude Code's own
@@ -296,6 +304,9 @@ type DistributiveOmit<T, K extends PropertyKey> = T extends unknown
   : never
 type ChatEventDraft = DistributiveOmit<ChatEvent, 'id' | 'sequence' | 'at'>
 
+/** The audited tools (execution-safety-recovery D3): shells, monitors, MCP. */
+const AUDITED_TOOLS = '^(Bash|Monitor|mcp__.+)$'
+
 export class ChatSessionDriver {
   private readonly options: ChatSessionDriverOptions
   private readonly queue = new TurnQueue()
@@ -349,6 +360,8 @@ export class ChatSessionDriver {
   /** Reset time from the latest rejected rate_limit_event (design D6). */
   private limitResetsAt: string | null = null
   private dead = false
+  /** The audit id of the agent process this driver currently runs (D7). */
+  private currentSpawnId = 'ob-s-none'
   /** Updated by the manager before a respawn; see setClaudeExecutablePath. */
   private claudeExecutablePath: string | undefined
   /** The agent's current working directory; see setProjectPath. */
@@ -495,6 +508,7 @@ export class ChatSessionDriver {
     // not on a turn interrupt, which they survive by design.
     this.feedWorkers({ type: 'process_end' })
     this.feedBackgroundTasks({ type: 'process_end' })
+    this.notifySpawnEnd()
     this.commands.markUnavailable()
     const query = this.query
     this.query = null
@@ -645,6 +659,9 @@ export class ChatSessionDriver {
   }
 
   private spawnQuery(): void {
+    // D7: a fresh id per agent process; the observer holds it live until the
+    // process ends, so a call with no outcome reads pending, then unknown.
+    this.currentSpawnId = `ob-s-${crypto.randomUUID()}`
     const resume = this.capturedSdkSessionId ?? this.options.resumeSessionId
     const launch = resolveClaudeProfile(
       this.options.claudeProfileId,
@@ -694,7 +711,13 @@ export class ChatSessionDriver {
       // Worktree tracking (design D1): every cwd change — EnterWorktree,
       // a shell cd, anything Claude Code records — reports the session's
       // new working directory. Observational only; never blocks the agent.
-      hooks: { CwdChanged: [{ hooks: [this.cwdChangedHook] }] },
+      hooks: {
+        CwdChanged: [{ hooks: [this.cwdChangedHook] }],
+        PreToolUse: [{ matcher: AUDITED_TOOLS, hooks: [this.auditHook('PreToolUse')] }],
+        PostToolUse: [{ matcher: AUDITED_TOOLS, hooks: [this.auditHook('PostToolUse')] }],
+        PostToolUseFailure: [{ matcher: AUDITED_TOOLS, hooks: [this.auditHook('PostToolUseFailure')] }],
+        PermissionDenied: [{ matcher: AUDITED_TOOLS, hooks: [this.auditHook('PermissionDenied')] }],
+      },
       ...(executablePath
         ? { pathToClaudeCodeExecutable: executablePath }
         : {}),
@@ -802,6 +825,15 @@ export class ChatSessionDriver {
     }
   }
 
+  /** The process ended: retire its audit spawn (D7), observationally only. */
+  private notifySpawnEnd(): void {
+    try {
+      this.options.outbound?.onSpawnEnd(this.currentSpawnId)
+    } catch {
+      // Observational only: an audit failure never breaks the session.
+    }
+  }
+
   /** Only a session crash marks the driver dead; per-turn errors do not. */
   private markDead(reason: string): void {
     this.dead = true
@@ -812,6 +844,7 @@ export class ChatSessionDriver {
     // Background tasks settle the same way (D1) — the respawn starts clean.
     this.feedWorkers({ type: 'process_end' })
     this.feedBackgroundTasks({ type: 'process_end' })
+    this.notifySpawnEnd()
     this.feedActivity({ type: 'turn_end' })
     this.cancelAllRequests('killed')
     // Notification strip design D4: the notices this process emitted die
@@ -1202,6 +1235,68 @@ export class ChatSessionDriver {
     return { continue: true }
   }
 
+  /**
+   * One observational audit hook per event (execution-safety-recovery D3):
+   * it hands the use to the sink inside try/catch and returns exactly
+   * `{ continue: true }` — no decision, no input update, no retry, no
+   * message — before any file read or database write the sink queued.
+   */
+  private readonly auditHook = (event: 'PreToolUse' | 'PostToolUse' | 'PostToolUseFailure' | 'PermissionDenied'): HookCallback =>
+    async (input) => {
+      const sink = this.options.outbound
+      if (sink !== undefined) {
+        try {
+          const use = input as {
+            tool_name: string
+            tool_input?: unknown
+            tool_use_id?: string
+            agent_id?: string
+            error?: string
+            is_interrupt?: boolean
+            reason?: string
+            duration_ms?: number
+          }
+          const common = {
+            toolName: use.tool_name,
+            toolInput: use.tool_input,
+            toolUseId: use.tool_use_id ?? '',
+            spawnId: this.currentSpawnId,
+            ...(use.agent_id === undefined ? {} : { agentId: use.agent_id }),
+            cwd: this.sessionProjectPath,
+          }
+          const toolInput = use.tool_input
+          if (event === 'PreToolUse') {
+            sink.onPreToolUse({ ...common, toolInput })
+          } else if (event === 'PostToolUse') {
+            sink.onPostToolUse({
+              ...common,
+              toolInput,
+              background: this.callRanInBackground(use.tool_name, use.tool_input),
+              ...(use.duration_ms === undefined ? {} : { durationMs: use.duration_ms }),
+            })
+          } else if (event === 'PostToolUseFailure') {
+            sink.onPostToolUseFailure({
+              ...common,
+              error: use.error ?? '',
+              ...(use.is_interrupt === undefined ? {} : { isInterrupt: use.is_interrupt }),
+              ...(use.duration_ms === undefined ? {} : { durationMs: use.duration_ms }),
+            })
+          } else {
+            sink.onPermissionDenied({ ...common, reason: use.reason ?? '' })
+          }
+        } catch {
+          // Observational only: an audit failure never fails the tool call.
+        }
+      }
+      return { continue: true }
+    }
+
+  /** D3: a `run_in_background` Bash or any Monitor starts in the background. */
+  private callRanInBackground(toolName: string, toolInput: unknown): boolean {
+    if (toolName === 'Monitor') return true
+    return toolName === 'Bash' && (toolInput as { run_in_background?: unknown } | null)?.run_in_background === true
+  }
+
   private readonly canUseTool: CanUseTool = (toolName, input, toolOptions) => {
     if (this.options.teamMcpServer && TEAM_ALLOWED_TOOLS.includes(toolName)) {
       return Promise.resolve({ behavior: 'allow' } as PermissionResult)
@@ -1271,7 +1366,23 @@ export class ChatSessionDriver {
         })
       })
     })
-    return Promise.race([answer, cancellation])
+    return Promise.race([answer, cancellation]).then(result => {
+      if (result.behavior === 'deny') {
+        try {
+          this.options.outbound?.onDeniedCard({
+            toolName,
+            toolInput: input,
+            toolUseId: toolOptions.toolUseID,
+            spawnId: this.currentSpawnId,
+            ...(toolOptions.agentID === undefined ? {} : { agentId: toolOptions.agentID }),
+            cwd: this.sessionProjectPath,
+          })
+        } catch {
+          // Observational only.
+        }
+      }
+      return result
+    })
   }
 
   private cancelRequest(requestId: string, reason: string): void {
