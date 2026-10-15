@@ -47,8 +47,9 @@ const TABLE_BODY = `
 
 /**
  * The table and the four indexes that shipped with it. `team_messages_task` is
- * *not* here: a database that predates `task_id` would fail this block before
- * `migrateTable` could add the column. `createMessageTable` creates it last.
+ * and `team_messages_resume` are *not* here: a database that predates `task_id`
+ * or `resume_message_id` would fail this block before `migrateTable` could add
+ * the column. `createMessageTable` creates them last.
  */
 export const CREATE_TABLE_SQL = `
 CREATE TABLE IF NOT EXISTS team_messages (${TABLE_BODY});
@@ -98,6 +99,8 @@ export function createMessageTable(db: Database): MessageSchemaResult {
   // `task_id` yet), `migrateTable` runs before the rebuild, and the rebuild's
   // DROP discards whatever index existed.
   db.exec('CREATE INDEX IF NOT EXISTS team_messages_task ON team_messages (task_id)')
+  // Serves the parked-resume EXISTS in the claim order (`mailboxSql.nextEligible`).
+  db.exec('CREATE INDEX IF NOT EXISTS team_messages_resume ON team_messages (resume_message_id)')
   return result
 }
 
@@ -112,7 +115,7 @@ function migrateTable(db: Database) {
 /**
  * SQLite cannot relax NOT NULL with `ALTER TABLE`, so a database that
  * predates human senders is rebuilt: copy into the final shape, drop, rename,
- * and re-create the five indexes the drop discarded. Skipped when the columns
+ * and re-create the six indexes the drop discarded. Skipped when the columns
  * are already nullable — including every fresh database. `migrateTable` has
  * already added every column, so the copy reads them straight across
  * (`from_kind` keeps its 'agent' default; `task_revision` stays null).
@@ -135,6 +138,7 @@ function rebuildIfConstrained(db: Database): MessageSchemaResult {
     db.exec(`CREATE INDEX team_messages_recipient ON team_messages (to_id, state)`)
     db.exec(`CREATE INDEX team_messages_claimant ON team_messages (claimed_by, state)`)
     db.exec(`CREATE INDEX team_messages_task ON team_messages (task_id)`)
+    db.exec(`CREATE INDEX team_messages_resume ON team_messages (resume_message_id)`)
   })()
   return { rebuilt: true }
 }

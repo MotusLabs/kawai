@@ -83,7 +83,10 @@ export function textResetsAt(text: string, timeZone: string): string | null {
   if (!match) return null
   const [year, month, day, hour, minute, second] = match.slice(1).map(part => Number(part ?? 0))
   const wall = Date.UTC(year, month - 1, day, hour, minute, second)
-  if (!Number.isFinite(wall)) return null
+  // Out-of-range parts (month 13, day 45, hour 25) roll over in Date.UTC; refuse them.
+  const check = new Date(wall)
+  if (check.getUTCFullYear() !== year || check.getUTCMonth() !== month - 1 || check.getUTCDate() !== day
+    || check.getUTCHours() !== hour || check.getUTCMinutes() !== minute || check.getUTCSeconds() !== second) return null
   // The offset depends on the instant (DST); one correction settles it.
   const first = offsetMinutes(timeZone, wall)
   if (first === null) return null
@@ -92,9 +95,9 @@ export function textResetsAt(text: string, timeZone: string): string | null {
   return new Date(wall - offset * 60_000).toISOString()
 }
 
-/** An announced reset wins; otherwise the profile zone reads one from the final error text. */
+/** An announced reset wins; otherwise the profile zone reads one from a final signal's error text. */
 export function withTextReset(signal: ChatLimitSignal, timeZone: string | undefined): ChatLimitSignal {
-  if (signal.resetsAt || !signal.message || !timeZone) return signal
+  if (signal.resetsAt || !signal.final || !signal.message || !timeZone) return signal
   const resetsAt = textResetsAt(signal.message, timeZone)
   return resetsAt ? { ...signal, resetsAt } : signal
 }

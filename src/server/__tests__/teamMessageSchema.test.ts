@@ -47,7 +47,7 @@ CREATE INDEX team_messages_claimant ON team_messages (claimed_by, state);
 
 const INDEXES = [
   'team_messages_queue', 'team_messages_thread', 'team_messages_recipient',
-  'team_messages_claimant', 'team_messages_task',
+  'team_messages_claimant', 'team_messages_task', 'team_messages_resume',
 ]
 
 describe('team_messages schema migration', () => {
@@ -179,7 +179,7 @@ describe('team_messages schema migration', () => {
     // A legacy table has no `task_id` yet, so the DDL block must not name it.
     db.exec(LEGACY_TABLE)
     db.exec(CREATE_TABLE_SQL)
-    expect(indexNames()).toEqual(INDEXES.filter(name => name !== 'team_messages_task').sort())
+    expect(indexNames()).toEqual(INDEXES.filter(name => name !== 'team_messages_task' && name !== 'team_messages_resume').sort())
     createMessageTable(db)
     expect(indexNames()).toEqual([...INDEXES].sort())
   })
