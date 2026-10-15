@@ -57,6 +57,7 @@ Strategy revision 2 states how execution works:
   - Kawai dispatches it through task assignment to the change's group. Kawai is the mail's sender, with no session, and a reply to Kawai is refused with guidance.
   - Each dispatch is an **attempt** (implement, fix, or update) with an immutable input manifest. It records the plan revision and hash, the task revision, the report and input hash, the baseline, and the change's artifact digests. A fix attempt also records the result and findings it answers.
   - Execution mail routes only to profiles that both the group and the plan role allow, in the role's order (P8). Review mail is tagged with the result authors' profiles, so a routing rule can pick another model family.
+  - While an execution owns a change, only Kawai links tasks to it, dispatches its task, and hands it off. The human steers through Stop, Retry, and closing the task, and an instruction that fails stops the change rather than being replaced silently.
 - **Results.** For an execution task, `task_submit_result` refuses three kinds of result, so a malformed result costs no round:
   - a result without a commit;
   - a commit that is not on the change's branch;
@@ -66,7 +67,7 @@ Strategy revision 2 states how execution works:
   - **CI.** Every check reported for the head must pass or be skipped. Each floor check (lint, typecheck, unit tests, CI end-to-end) must be covered by a mapped check. Failed checks are rerun once on the same commit. A check that then passes is recorded as flaky and fails nothing; this is how Kawai applies P7's "known flaky tests".
   - **Review.** Once CI passes, Kawai hands the result to the change's review group. The floor's clean reviewer verdict requires a `pass` on that exact result from the handoff's claimant, and the claimant must not be an author of the change's results. A worktree-scoped review group first gets the worktree through member release.
   - **Extra checks.** An extra check named like a reported CI check is satisfied by that check. Any other extra check is listed for the reviewer, along with the acceptance rules, and is shown as attested.
-  - A verdict never transfers to another commit, except over Kawai's clean base merge (below).
+  - A verdict never transfers to another commit, except over Kawai's clean base merge (below). A newer result, or a task revision the human publishes before the merge, supersedes the round.
 - **Fix rounds and the stop.** A failed round returns the change to its group with the failing checks and findings. When three consecutive fix rounds fail, the change stops and reports. Dependents wait, and independent changes continue. The owner can **Retry** a stopped change, which starts a new count, or **Stop** the execution.
 - **Direct landing.** Passed changes land one at a time per team.
   - **Up to date.** The branch must contain the base branch's current commit. If it does not, Kawai updates the branch on GitHub with a base merge.
@@ -117,11 +118,11 @@ Non-goals:
 
 ### Modified Capabilities
 
-- `team-tasks`: Kawai creates and closes execution tasks, and while an execution runs, only Kawai links tasks to its changes.
-- `task-assignment`: Kawai can be a dispatcher.
+- `team-tasks`: Kawai creates and closes execution tasks, linked to the execution's revision. While an execution owns a change, only Kawai links tasks to it. Delivered mail names the execution.
+- `task-assignment`: Kawai can be a dispatcher, and only Kawai dispatches a running change's task.
 - `agent-mailbox`: Kawai can be a sender, and replies to its mail are refused with guidance.
-- `task-results`: results for execution tasks are checked at submission.
-- `team-routing-rules`: plan roles narrow the profiles that execution mail may use.
+- `task-results`: results for execution tasks are checked at submission, and Kawai owns a running change's handoffs.
+- `team-routing-rules`: plan roles narrow the profiles that execution mail may use, and review mail names its authors' profiles.
 
 ## Impact
 
