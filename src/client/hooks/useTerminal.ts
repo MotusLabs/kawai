@@ -246,8 +246,7 @@ export function useTerminal({
       onPasteError: (message) => onPasteErrorRef.current?.(message),
       canReadHostClipboard,
       isIOS: isiOS,
-      isInCopyMode: () => inTmuxCopyModeRef.current,
-      setCopyMode: (value) => copyMode.set(value),
+      exitCopyMode: (sessionId) => copyMode.exit(sessionId),
     })
   }
   const pasteChannel = pasteChannelRef.current

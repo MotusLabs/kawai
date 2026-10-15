@@ -68,28 +68,11 @@ export function syncWebglPreference(
   if (useWebGL) {
     // Enable WebGL
     if (!webglAddonRef.current) {
-      try {
-        const webglAddon = new WebglAddon()
-        webglAddon.onContextLoss(() => {
-          try { webglAddon.dispose() } catch { /* ignore */ }
-          webglAddonRef.current = null
-        })
-        terminal.loadAddon(webglAddon)
-        webglAddonRef.current = webglAddon
-      } catch {
-        // WebGL addon is optional
-      }
+      loadWebglAddon(terminal, webglAddonRef)
     }
   } else {
     // Disable WebGL - dispose addon to fall back to canvas
-    if (webglAddonRef.current) {
-      try {
-        webglAddonRef.current.dispose()
-      } catch {
-        // Ignore disposal errors
-      }
-      webglAddonRef.current = null
-    }
+    disposeWebglAddon(webglAddonRef)
   }
 }
 
@@ -108,21 +91,12 @@ export function recreateWebglAddonIfLive(
   trigger: string
 ): void {
   if (terminal && webglAddonRef.current && useWebGLRef.current) {
-    try {
-      webglAddonRef.current.dispose()
-    } catch { /* ignore */ }
-    webglAddonRef.current = null
-    try {
-      const webglAddon = new WebglAddon()
-      webglAddon.onContextLoss(() => {
-        clientLog('webgl_context_loss', { sessionId: getSessionId() }, 'info')
-        try { webglAddon.dispose() } catch { /* ignore */ }
-        webglAddonRef.current = null
-      })
-      terminal.loadAddon(webglAddon)
-      webglAddonRef.current = webglAddon
+    disposeWebglAddon(webglAddonRef)
+    if (loadWebglAddon(terminal, webglAddonRef, () => {
+      clientLog('webgl_context_loss', { sessionId: getSessionId() }, 'info')
+    })) {
       clientLog('ios_webgl_recreated', { trigger }, 'info')
-    } catch {
+    } else {
       clientLog('ios_webgl_recreate_failed', { trigger }, 'info')
     }
   }

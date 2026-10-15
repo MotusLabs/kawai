@@ -145,8 +145,8 @@ export interface PasteChannelDeps {
   onPasteError: (message: string) => void
   canReadHostClipboard: () => boolean
   isIOS: boolean
-  isInCopyMode: () => boolean
-  setCopyMode: (value: boolean) => void
+  /** Exit tmux copy-mode before input/paste reaches the pane (paired sites). */
+  exitCopyMode: (sessionId: string) => void
 }
 
 export class PasteChannel {
@@ -168,10 +168,7 @@ export class PasteChannel {
       this.deps.getAttachedSession() === expected &&
       this.deps.getReadySession() === expected
     ) {
-      if (this.deps.isInCopyMode()) {
-        this.deps.send({ type: 'tmux-cancel-copy-mode', sessionId: expected })
-        this.deps.setCopyMode(false)
-      }
+      this.deps.exitCopyMode(expected)
       this.deps.send({ type: 'terminal-input', sessionId: expected, data })
     }
   }
@@ -193,10 +190,7 @@ export class PasteChannel {
         this.deps.onPasteError('Use browser paste or choose a file from this device.')
         return false
       }
-      if (this.deps.isInCopyMode()) {
-        this.deps.send({ type: 'tmux-cancel-copy-mode', sessionId: attached })
-        this.deps.setCopyMode(false)
-      }
+      this.deps.exitCopyMode(attached)
       void (async () => {
         const data = await resolveImagePasteData(this.deps.getAgentType(), {})
         this.sendInputIfStillAttached(attached, data)
@@ -315,10 +309,7 @@ export class PasteChannel {
             // Exit tmux copy-mode first (as onData does for typed input):
             // paste-buffer into a pane still in copy-mode is swallowed by
             // the copy-mode key table instead of reaching the program.
-            if (this.deps.isInCopyMode()) {
-              this.deps.send({ type: 'tmux-cancel-copy-mode', sessionId: attached })
-              this.deps.setCopyMode(false)
-            }
+            this.deps.exitCopyMode(attached)
             this.deps.send({ type: 'terminal-paste', sessionId: attached, data: text })
           }
           return

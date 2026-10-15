@@ -32,7 +32,7 @@ tick the checkbox in the same commit. Implementation starts only after PR #96 (S
 
 ## 2. Dedupe duplicated blocks
 
-- [ ] 2.1 Collapse the now-adjacent duplicates onto the shared helpers: 3× WebGL-create →
+- [x] 2.1 Collapse the now-adjacent duplicates onto the shared helpers: 3× WebGL-create →
   `loadWebglAddon`, 4× detach-reset → `attachState.detachFrom`, the paired copy-mode-exit
   sites → `exitTmuxCopyMode`; suite green; commit
   (`refactor: dedupe webgl, detach, and copy-mode blocks in useTerminal`)
