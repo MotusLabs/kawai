@@ -53,14 +53,19 @@ const createManager = (): Harness => {
   return { manager, changed }
 }
 
+/** Team discovery shells out asynchronously; wait for the hook rather than a timer tick. */
+async function waitForRecordChange(changed: string[], sessionId: string): Promise<void> {
+  const deadline = Date.now() + 2_000
+  while (!changed.includes(sessionId) && Date.now() < deadline) await Bun.sleep(5)
+  expect(changed).toContain(sessionId)
+}
+
 test('a session created with a group reaches the hook once its team resolves', async () => {
   const { manager, changed } = createManager()
   try {
     const result = await manager.createAvailableSession({ projectPath: project, groupId: 'devs' })
     expect(result.ok).toBe(true)
-    // onResolved fires from the track promise; let it land.
-    await Bun.sleep(1)
-    if (result.ok) expect(changed).toContain(result.session.id)
+    if (result.ok) await waitForRecordChange(changed, result.session.id)
   } finally { manager.shutdown() }
 })
 
@@ -71,7 +76,7 @@ test('archive, restore, and kill each reach the hook', async () => {
     expect(result.ok).toBe(true)
     if (!result.ok) return
     const { id } = result.session
-    await Bun.sleep(1)
+    await waitForRecordChange(changed, id)
     changed.length = 0
     expect(manager.archive(id).ok).toBe(true)
     expect(changed).toEqual([id])
@@ -91,7 +96,7 @@ test('a status move reaches the hook; usage and activity stamps do not', async (
     expect(result.ok).toBe(true)
     if (!result.ok) return
     const { id } = result.session
-    await Bun.sleep(1)
+    await waitForRecordChange(changed, id)
     changed.length = 0
     const patcher = manager as unknown as {
       applyPatch(sessionId: string, patch: Partial<{ status: string; lastActivityAt: string }>): void
