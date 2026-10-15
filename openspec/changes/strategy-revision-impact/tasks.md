@@ -27,12 +27,12 @@ Implement after `durable-plans` has landed on master, then rebase this branch on
 
 ## 3. Impact service
 
-- [ ] 3.1 Implement `ImpactService.detail(teamId)` per D3 on `durable-plans`' plan reads. Verify with service tests:
+- [x] 3.1 Implement `ImpactService.detail(teamId)` per D3 on `durable-plans`' plan reads. Verify with service tests:
   - affected, unaffected, and historical grouping, with the unassessed mark;
   - an assessment only for the current review;
   - earlier reviews returned with their records and derived states;
   - no strategy record returns null without creating anything.
-- [ ] 3.2 Implement `decide` per D4: agent refusal, replay, current review, plan group, rationale rules, proposal match, the predecessor check, and the snapshot. Verify with service tests:
+- [x] 3.2 Implement `decide` per D4: agent refusal, replay, current review, plan group, rationale rules, proposal match, the predecessor check, and the snapshot. Verify with service tests:
   - each refusal writing nothing, with its named reason;
   - a same-payload retry returning the decision;
   - a changed payload refused naming the field;
@@ -40,21 +40,21 @@ Implement after `durable-plans` has landed on master, then rebase this branch on
   - a concurrent resend of the same command resolving as its replay, including when the chain index is the constraint reported;
   - a later decision superseding an earlier one, both readable;
   - row counts of plans, plan revisions, tasks, messages, and spawns unchanged.
-- [ ] 3.3 Implement `propose` per D5. Verify with service tests: a recorded proposal changing no gate, a stale review refused, an unaffected plan refused, another team's plan read as not found, and the rationale rules.
-- [ ] 3.4 Implement `gate`, `pinDisposition`, and `stateKey` per D6 and D11, and wire `pinDisposition` into `durable-plans`' approval context. Verify with tests through `PlanService.approve`:
+- [x] 3.3 Implement `propose` per D5. Verify with service tests: a recorded proposal changing no gate, a stale review refused, an unaffected plan refused, another team's plan read as not found, and the rationale rules.
+- [x] 3.4 Implement `gate`, `pinDisposition`, and `stateKey` per D6 and D11, and wire `pinDisposition` into `durable-plans`' approval context. Verify with tests through `PlanService.approve`:
   - `continue` lets a non-current pin pass;
   - `adapt`, `reconsider`, and no decision keep the `strategy-pin-current` refusal;
   - under `adapt` and under `reconsider`, a resubmitted revision passes and the plan stays open;
   - a withdrawn pinned revision is refused despite `continue`;
   - a newer strategy approval makes the old `continue` stop counting;
   - `stateKey` changing exactly when a gate result changes.
-- [ ] 3.5 Implement `requestAssessment` per D8. Verify with service tests:
+- [x] 3.5 Implement `requestAssessment` per D8. Verify with service tests:
   - exactly one human, normal-priority group message with no task, whose body names the review, the strategy revision, and each affected plan;
   - a retry returning the same message id;
   - a second request under a new command id sending a second message;
   - an unknown group and a stale review refused with no message;
   - an agent caller refused.
-- [ ] 3.6 Add the AGENTS.md How It Works bullet for impact reviews: groups, dispositions, the gate and withdrawn directions, idempotency and the chain index, the request, and "triggers nothing". Verify by reading it against D1–D8.
+- [x] 3.6 Add the AGENTS.md How It Works bullet for impact reviews: groups, dispositions, the gate and withdrawn directions, idempotency and the chain index, the request, and "triggers nothing". Verify by reading it against D1–D8.
 
 ## 4. Agent tools and prompt
 

@@ -88,6 +88,8 @@ import type { MailboxManagement } from '../team/mailboxManagement'
 import { StrategyService } from '../strategy/StrategyService'
 import { StrategyStore } from '../strategy/strategyStore'
 import { PlanService } from '../plans/PlanService'
+import { ImpactService } from '../strategy/ImpactService'
+import { ImpactStore } from '../strategy/impactStore'
 import type { TeamMessage, TeamWorktreeOccupancy, WaitingReason } from '../../shared/team'
 import { MailDispatcher } from '../team/dispatcher'
 import { receiptMessageId } from '../team/receipt'
@@ -954,11 +956,21 @@ export class ChatSessionManager {
       getSession: id => this.records.get(id),
       ...(options.profileCatalogHome ? { homeDir: options.profileCatalogHome } : {}),
     })
+    // Strategy impact (strategy-revision-impact): the owner's decisions over
+    // the same database; its gate is approval's `pinDisposition` (contract C-I1).
+    this.impact = new ImpactService(new ImpactStore(options.db.db), {
+      strategies: this.strategies.store,
+      plans: this.teamMail.plans,
+      mail: this.mailbox.store,
+      getSession: id => this.records.get(id),
+      ...(options.profileCatalogHome ? { homeDir: options.profileCatalogHome } : {}),
+    })
     // Durable plans: the service over the mailbox's plan store (the same one
     // the task link reads), pinning against the strategy store above.
     this.plans = new PlanService(this.teamMail.plans, {
       getSession: id => this.records.get(id),
       strategies: this.strategies.store,
+      pinDisposition: (planId, revision) => this.impact.pinDisposition(planId, revision),
       ...(options.profileCatalogHome ? { homeDir: options.profileCatalogHome } : {}),
     })
     this.plans.store.subscribe(plan => this.options.onPlanChange?.(plan.teamId, plan.id))
@@ -1115,6 +1127,8 @@ export class ChatSessionManager {
   readonly turnEnds: ChatTurnEndStore
   /** Durable plans (durable-plans); the plan tools and UI actions go through it. */
   readonly plans: PlanService
+  /** Strategy impact reviews (strategy-revision-impact); the impact tools and UI actions go through it. */
+  readonly impact: ImpactService
   readonly dispatcher: MailDispatcher
   private readonly teamMail: SessionMailbox
 
