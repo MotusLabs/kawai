@@ -377,7 +377,7 @@ No tool answers, accepts, resolves, excepts, authorizes, or approves.
 | V1 Validation identity | D2 `ValidationInputs` and `inputHash`; `prepareStanding` and `standing` | `plan-execution` (Start's atomic comparison, R06), `revision-control` (the standing of a published revision) |
 | V2 Reports and readiness | D1 report rows; D3 `Finding` and the finding-key builders (D3–D5); D7 `validationReadiness` and carried conditions | `plan-execution` (Start- and acceptance-gated conditions), `plan-supervision` (cards), `integration-candidates` (acceptance conditions) |
 | V3 Relations | D4 `PlanRelation` | `plan-execution` (serialized pairs order scheduling), `integration-candidates` (overlapping capabilities validated together) |
-| V4 OpenSpec adapter | D3 `probe`, capability names, `validate`, `showDeltas` | `plan-execution` (Apply and Archive operations), `execution-safety-recovery` (an adapter change during an attempt) |
+| V4 OpenSpec adapter | D3 `probe`, capability names, `validate`, `showDeltas` | `execution-safety-recovery` (an adapter change during an attempt). Apply and Archive have no consumer yet: `plan-execution` leaves applying to the implementer's own workflow and archiving to the Lead (its D20) |
 | V5 `validation-current` | D9 entry name and message format | `plan-execution` (Start reuses the entry) |
 
 ## Risks / Trade-offs
