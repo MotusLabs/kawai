@@ -349,7 +349,7 @@ test('submit and withdraw controls exist and every control disables while discon
   expect(textOf(find(renderer, 'revision-status-3')[0]!)).toContain('Withdrawn')
   // Still expanded from the withdraw click above: the withdrawn content stays accessible.
   expect(textOf(find(renderer, 'revision-content-3')[0]!)).toContain('v3')
-  expect(textOf(find(renderer, 'impact-review-row')[0]!)).toContain('pending')
+  expect(textOf(find(renderer, 'impact-review-row')[0]!)).toContain('Revision 2')
 })
 
 test('the closed default view renders nothing until opened', () => {

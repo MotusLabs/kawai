@@ -19,8 +19,8 @@ Implement after `durable-plans` has landed on master, then rebase this branch on
 
 ## 2. Impact store
 
-- [ ] 2.1 Add `src/server/strategy/impactSchema.ts` with the D1 DDL, including the expression chain index. Verify with migration tests on a fresh database and on one created by the current strategy schema: existing impact reviews read back unchanged, and a reopen round-trips every row.
-- [ ] 2.2 Implement `impactStore.ts`: inserts and reads for proposals, decisions (chain head, history), and requests, plus the lookup of a command id per strategy. Verify with store tests:
+- [x] 2.1 Add `src/server/strategy/impactSchema.ts` with the D1 DDL, including the expression chain index. Verify with migration tests on a fresh database and on one created by the current strategy schema: existing impact reviews read back unchanged, and a reopen round-trips every row.
+- [x] 2.2 Implement `impactStore.ts`: inserts and reads for proposals, decisions (chain head, history), and requests, plus the lookup of a command id per strategy. Verify with store tests:
   - the chain index refuses two first decisions for one plan and a forked successor;
   - a duplicate command id per strategy is refused at the database, across reviews;
   - every row survives a reopen.
@@ -58,34 +58,34 @@ Implement after `durable-plans` has landed on master, then rebase this branch on
 
 ## 4. Agent tools and prompt
 
-- [ ] 4.1 Add `impactTools.ts` per D10, joining `TEAM_ALLOWED_TOOLS`. Extend `STRATEGY_FORBIDDEN_TOOL_NAMES`, and update the `strategyTools.ts` header. Verify with tool tests:
+- [x] 4.1 Add `impactTools.ts` per D10, joining `TEAM_ALLOWED_TOOLS`. Extend `STRATEGY_FORBIDDEN_TOOL_NAMES`, and update the `strategyTools.ts` header. Verify with tool tests:
   - a get and propose round trip;
   - identity bound to the session, even with a forged actor in the input;
   - another team's ids read as not found;
   - no registered tool decides, approves, publishes, withdraws, or deletes.
-- [ ] 4.2 Extend the strategy note in `teamPrompt.ts` per D10. Verify with a prompt test asserting the tools, the owner-only decision, and that the note never claims an agent can decide.
-- [ ] 4.3 Update the AGENTS.md agent strategy tools bullet to name the two impact tools. Verify by reading it against D10.
+- [x] 4.2 Extend the strategy note in `teamPrompt.ts` per D10. Verify with a prompt test asserting the tools, the owner-only decision, and that the note never claims an agent can decide.
+- [x] 4.3 Update the AGENTS.md agent strategy tools bullet to name the two impact tools. Verify by reading it against D10.
 
 ## 5. Human protocol and pushes
 
-- [ ] 5.1 Add `strategy-impact-decide` and `strategy-impact-request` to `src/shared/types.ts` and `CHAT_CONNECTION_TYPES`, handle them in `StrategyConnections.act`, and add `impact` to `strategy-detail`. Verify with connection tests:
+- [x] 5.1 Add `strategy-impact-decide` and `strategy-impact-request` to `src/shared/types.ts` and `CHAT_CONNECTION_TYPES`, handle them in `StrategyConnections.act`, and add `impact` to `strategy-detail`. Verify with connection tests:
   - decide and request round trips by repository path and by worktree path;
   - an unknown path refused;
   - another team's review refused with no data;
   - a test asserting both types are listed in `CHAT_CONNECTION_TYPES`.
-- [ ] 5.2 Wire the D9 pushes: impact writes publish strategies and plans, plan writes publish strategies, and strategy changes publish plans. Add `impact` to the plans snapshot and detail, and to `team-plan-result` for a `strategy-pin-current` refusal. Verify with connection tests:
+- [x] 5.2 Wire the D9 pushes: impact writes publish strategies and plans, plan writes publish strategies, and strategy changes publish plans. Add `impact` to the plans snapshot and detail, and to `team-plan-result` for a `strategy-pin-current` refusal. Verify with connection tests:
   - an open Strategy view refreshing on a plan submission;
   - an open Plans view refreshing on a decision and on a strategy approval;
   - a refused approval's result carrying the same gate as the plan detail.
 
 ## 6. Client
 
-- [ ] 6.1 Extend `strategyStore.ts` with the impact detail, `focusImpactReview`, and the decide and request actions, with a WS dispatch caller for every method that applies server state (grep the join). Each dialog mints one command id, reuses it while the payload is unchanged, and re-mints after a payload change following a lost result. Verify with store tests:
+- [x] 6.1 Extend `strategyStore.ts` with the impact detail, `focusImpactReview`, and the decide and request actions, with a WS dispatch caller for every method that applies server state (grep the join). Each dialog mints one command id, reuses it while the payload is unchanged, and re-mints after a payload change following a lost result. (Per the 1.1 reconciliation, `focusImpactReview` is the Team page location `strategy/impact/<revision>`.) Verify with store tests:
   - detail application;
   - reconnect replacing state;
   - key reuse and re-mint;
   - a lost result never leaving `busy` set.
-- [ ] 6.2 Build `StrategyImpactReview.tsx` per D9, and list reviews with their states in `StrategyRevisionHistory`. Verify with component tests:
+- [x] 6.2 Build `StrategyImpactReview.tsx` per D9, and list reviews with their states in `StrategyRevisionHistory`. Verify with component tests:
   - each review state;
   - the groups with pins, gates, and the unassessed mark;
   - the decision history;
@@ -95,8 +95,8 @@ Implement after `durable-plans` has landed on master, then rebase this branch on
   - controls disabled while disconnected;
   - refusals inline;
   - keyboard focus and labels.
-- [ ] 6.3 Add `PlanImpactBadge` to the Plans list and detail, show the impact state beside a refused approval, and link to the review through the side slot. Verify with component tests: badge states, the link focusing the review, and the refusal showing the same state as the badge.
-- [ ] 6.4 Add the AGENTS.md Strategy UI and Plans view mentions and the Structure entries for the new files. Verify by reading them against D9.
+- [x] 6.3 Add `PlanImpactBadge` to the Plans list and detail, show the impact state beside a refused approval, and link to the review through the side slot. Verify with component tests: badge states, the link focusing the review, and the refusal showing the same state as the badge. (Per the 1.1 reconciliation, the link navigates the Team page to `#/team/<key>/strategy/impact/<revision>`; the side slot no longer hosts strategy.)
+- [x] 6.4 Add the AGENTS.md Strategy UI and Plans view mentions and the Structure entries for the new files. Verify by reading them against D9.
 
 ## 7. Integration walkthrough
 

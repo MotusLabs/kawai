@@ -3,7 +3,7 @@
 // (a repository's main-checkout path or a plain directory, URL-encoded —
 // it contains slashes), `<tab>` is the Team page tab, `<sub>` is the
 // Strategy sub-view, and `<id>` is a task id, thread id, plan id, or review
-// revision.
+// revision (a revision in review, or the impact review's strategy revision).
 // Parse/format are pure so the hook and its tests share one grammar; an
 // absent or unknown tab reads as the default tab (Tasks), never an error.
 export type WorkspaceTab = 'strategy' | 'tasks' | 'messages' | 'mailbox' | 'members' | 'plans'
@@ -24,8 +24,8 @@ export const RENDERED_WORKSPACE_TABS: readonly WorkspaceTab[] = ['strategy', 'pl
 /** The tab a team's page opens on when none was used yet (chat-header spec). */
 export const DEFAULT_WORKSPACE_TAB: WorkspaceTab = 'tasks'
 
-/** The Strategy sub-views (team-workspace-pages D5). */
-export const STRATEGY_SUB_VIEWS = ['overview', 'review', 'draft', 'history'] as const
+/** The Strategy sub-views (team-workspace-pages D5; `impact`: strategy-revision-impact D9). */
+export const STRATEGY_SUB_VIEWS = ['overview', 'review', 'impact', 'draft', 'history'] as const
 export type StrategySubView = (typeof STRATEGY_SUB_VIEWS)[number]
 
 export interface TeamLocation {

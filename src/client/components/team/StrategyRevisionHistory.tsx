@@ -1,18 +1,23 @@
 // The strategy revision history (product-strategy 5.3): every numbered
 // revision with its status, author, hash, and expandable content —
-// superseded and withdrawn revisions stay accessible — plus the drafts and
-// the recorded decisions.
+// superseded and withdrawn revisions stay accessible — plus the drafts, the
+// recorded decisions, and every impact review with its state and recorded
+// decisions (strategy-revision-impact D9), each opening the impact sub-view.
 import type { StrategyDecision, StrategyDetail, StrategyRevision } from '@shared/productStrategy'
+import { IMPACT_DISPOSITION_LABELS, IMPACT_REVIEW_STATE_LABELS, type StrategyImpactDetail } from '@shared/strategyImpact'
 import type { Session } from '@shared/types'
 import { useState } from 'react'
 import { REVISION_STATUS_LABELS, actorLabel, shortHash } from '../chat/strategyLabels'
 
-export default function StrategyRevisionHistory({ detail, sessions, onWithdrawRevision, connected, busy }: {
+export default function StrategyRevisionHistory({ detail, impact = null, sessions, onWithdrawRevision, onOpenImpact, connected, busy }: {
   detail: StrategyDetail
+  /** The impact reviews; null lists the stored review rows only. */
+  impact?: StrategyImpactDetail | null
   sessions: Session[]
   connected: boolean
   busy: boolean
   onWithdrawRevision: (revision: number) => void
+  onOpenImpact?: (revision: number) => void
 }) {
   const [expanded, setExpanded] = useState<number | null>(null)
   const revisions = [...detail.revisions].reverse()
@@ -68,10 +73,23 @@ export default function StrategyRevisionHistory({ detail, sessions, onWithdrawRe
         {decision.approvalScope ? ` · scope: ${decision.approvalScope}` : ''}{decision.openQuestions ? ` · open questions: ${decision.openQuestions}` : ''}
       </p>)}
     </div>}
-    {detail.impactReviews.length > 0 && <div className="mt-3">
-      <h5 className="font-medium text-chat-body">Impact review</h5>
+    {impact && impact.reviews.length > 0 && <div className="mt-3">
+      <h5 className="font-medium text-chat-body">Impact reviews</h5>
+      {impact.reviews.map(review => <div key={review.reviewId} className="text-chat-meta text-secondary" data-testid="impact-review-row">
+        <p>
+          Revision {review.revision} · {IMPACT_REVIEW_STATE_LABELS[review.state]} · {review.decisions.length} decision{review.decisions.length === 1 ? '' : 's'}
+          {onOpenImpact && <button type="button" className="btn ml-2 text-chat-meta" data-testid={`impact-review-open-${review.revision}`}
+            onClick={() => onOpenImpact(review.revision)}>Open review</button>}
+        </p>
+        {review.decisions.length > 0 && <ul className="pl-4">
+          {review.decisions.map(decision => <li key={decision.id}>Plan {decision.planId}: {IMPACT_DISPOSITION_LABELS[decision.disposition]} — {decision.rationale}</li>)}
+        </ul>}
+      </div>)}
+    </div>}
+    {!impact && detail.impactReviews.length > 0 && <div className="mt-3">
+      <h5 className="font-medium text-chat-body">Impact reviews</h5>
       {detail.impactReviews.map(review => <p key={review.id} className="text-chat-meta text-secondary" data-testid="impact-review-row">
-        Revision {review.revision} · {review.state} (created with the approval; reviewing live plans is a later step)
+        Revision {review.revision}
       </p>)}
     </div>}
   </section>

@@ -264,6 +264,7 @@ export default function TeamWorkspaceView({ teamKey, location, sendMessage, conn
         connectionEpoch={connectionEpoch} sessions={sessions}
         onOpenTask={taskId => navigate({ teamKey, tab: 'tasks', id: taskId })}
         onSelectedPlan={planId => navigate(planId ? { teamKey, tab: 'plans', id: planId } : { teamKey, tab: 'plans' })}
+        onOpenImpactReview={revision => navigate({ teamKey, tab: 'strategy', sub: 'impact', id: String(revision) })}
       />}
     </div>
   </main>
