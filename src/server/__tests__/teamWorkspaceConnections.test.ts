@@ -224,9 +224,12 @@ test('observeChatEvent maps request and turn events to workspace pushes (review 
   // A turn completion publishes, and the summary reads its bucket from the
   // durable chat_turn_ends table (written by the manager's event path, not
   // by the connection) — rows of this team's sessions only.
+  // The summary counts turn ends from the 24 hours before the read's real
+  // clock, so the rows are dated relative to now, never to a fixed day.
+  const endedAt = new Date(Date.now() - 5 * 60 * 1000).toISOString()
   turnEndRows = [
-    { sessionId: 'our-dev', taskId: task.id, endedAt: '2026-10-14T06:05:00Z' },
-    { sessionId: 'other-dev', taskId: task.id, endedAt: '2026-10-14T06:05:00Z' },
+    { sessionId: 'our-dev', taskId: task.id, endedAt },
+    { sessionId: 'other-dev', taskId: task.id, endedAt },
   ]
   connections.observeChatEvent('our-dev', {
     type: 'turn_completed', subtype: 'success',
