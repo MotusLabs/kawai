@@ -87,6 +87,8 @@ beforeEach(() => {
 })
 afterEach(() => { db.close(); fs.rmSync(dir, { recursive: true, force: true }) })
 
+// The morning summary's 24 h window reads the real clock, so fixtures must be relative to it.
+const recent = (minutesAgo: number) => new Date(Date.now() - minutesAgo * 60_000).toISOString()
 const send = (message: ClientMessage) => connections.handle(connection, message)
 const human = (teamId = 'team') => ({ kind: 'human' as const, team: { teamId, groupsRoot: dir } })
 const last = <T extends ServerMessage['type']>(type: T) =>
@@ -171,7 +173,7 @@ test('a second repository stays isolated: no tasks, mail, or attention of the ot
   ]
   pendingRequests.set('our-dev', [{
     kind: 'approval', requestId: 'req-1', tool: 'Bash', input: {},
-    at: '2026-10-14T06:00:00Z',
+    at: recent(65),
   }])
   mail.enqueue({ teamId: 'other', toKind: 'session', toId: 'their-dev', fromSession: 'x', fromGroup: null, originPath: dir, body: 'foreign', taskId: theirs.id })
   const ours_ = mail.enqueue({ teamId: 'team', toKind: 'session', toId: 'our-dev', fromSession: 'x', fromGroup: null, originPath: dir, body: 'ours', taskId: ours.id })
@@ -197,7 +199,7 @@ test('a pending approval appears live when the workspace is open', async () => {
   expect(last('team-workspace-snapshot')!.attention).toEqual([])
   pendingRequests.set('our-dev', [{
     kind: 'approval', requestId: 'req-1', tool: 'Bash', input: {},
-    at: '2026-10-14T06:00:00Z',
+    at: recent(65),
   }])
   connections.publishWorkspace('team')
   await connections.flushWorkspace()
@@ -213,34 +215,31 @@ test('observeChatEvent maps request and turn events to workspace pushes (review 
   // An approval event becomes a human-required attention item on the next push.
   pendingRequests.set('our-dev', [{
     kind: 'approval', requestId: 'req-1', tool: 'Bash', input: {},
-    at: '2026-10-14T06:00:00Z',
+    at: recent(65),
   }])
   connections.observeChatEvent('our-dev', {
     type: 'approval_request', requestId: 'req-1', tool: 'Bash', input: {},
-    id: 'evt-1', sequence: 1, turnId: 't-1', at: '2026-10-14T06:00:00Z',
+    id: 'evt-1', sequence: 1, turnId: 't-1', at: recent(65),
   })
   await connections.flushWorkspace()
   expect(last('team-workspace')!.attention.map(item => item.id)).toEqual(['approval:our-dev:req-1'])
   // A turn completion publishes, and the summary reads its bucket from the
   // durable chat_turn_ends table (written by the manager's event path, not
   // by the connection) — rows of this team's sessions only.
-  // The summary counts turn ends from the 24 hours before the read's real
-  // clock, so the rows are dated relative to now, never to a fixed day.
-  const endedAt = new Date(Date.now() - 5 * 60 * 1000).toISOString()
   turnEndRows = [
-    { sessionId: 'our-dev', taskId: task.id, endedAt },
-    { sessionId: 'other-dev', taskId: task.id, endedAt },
+    { sessionId: 'our-dev', taskId: task.id, endedAt: recent(60) },
+    { sessionId: 'other-dev', taskId: task.id, endedAt: recent(60) },
   ]
   connections.observeChatEvent('our-dev', {
     type: 'turn_completed', subtype: 'success',
-    id: 'evt-2', sequence: 2, turnId: 't-1', at: '2026-10-14T06:05:00Z',
+    id: 'evt-2', sequence: 2, turnId: 't-1', at: recent(60),
   })
   await connections.flushWorkspace()
   const push = last('team-workspace')!
   expect(push.summary.finishedTurnsWithoutResult.items.map(item => item.id)).toEqual(['finished-turn:our-dev'])
   // A foreign session's event never touches this team's views.
   const count = messages.length
-  connections.observeChatEvent('nobody', { type: 'turn_started', id: 'evt-3', sequence: 3, turnId: 't-2', at: '2026-10-14T06:06:00Z' })
+  connections.observeChatEvent('nobody', { type: 'turn_started', id: 'evt-3', sequence: 3, turnId: 't-2', at: recent(59) })
   await connections.flushWorkspace()
   expect(messages).toHaveLength(count)
 })
