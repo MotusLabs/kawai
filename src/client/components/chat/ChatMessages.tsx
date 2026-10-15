@@ -70,12 +70,12 @@ export default function ChatMessages({ events, projectPath, sessionId, sendMessa
     {toolEntries(events).map(({ event, result }) => {
       switch (event.type) {
         case 'user_message':
-          return <article key={event.id} data-chat-role="user" className="ml-8 border border-border bg-elevated p-3">
+          return <article key={event.id} data-anchor-id={event.id} data-chat-role="user" className="ml-8 border border-border bg-elevated p-3">
             <div className="mb-1 text-chat-meta text-secondary">You</div>
             <p className="whitespace-pre-wrap break-words text-chat-body">{event.text}</p>
           </article>
         case 'peer_message':
-          return <article key={event.id} data-chat-role="peer" className="border-l-2 border-primary bg-elevated p-3">
+          return <article key={event.id} data-anchor-id={event.id} data-chat-role="peer" className="border-l-2 border-primary bg-elevated p-3">
             <div className="mb-1 flex flex-wrap gap-2 text-chat-meta text-secondary">
               <span>Peer · {names(event.senderSession, event.senderKind)}</span>
               <span>{event.senderGroup ?? 'No group'}</span><span>{event.priority}</span>
@@ -102,13 +102,13 @@ export default function ChatMessages({ events, projectPath, sessionId, sendMessa
             </details>}
           </article>
         case 'assistant_text':
-          return <article key={event.id} data-chat-role="assistant" className="mr-8 p-3">
+          return <article key={event.id} data-anchor-id={event.id} data-chat-role="assistant" className="mr-8 p-3">
             <div className="mb-1 text-chat-meta text-secondary">Claude</div>
             <Markdown content={event.text} />
           </article>
         case 'tool_call': {
           const detail = toolCallDetail(event.tool, event.input, projectPath)
-          const card = <details key={`tool:${event.toolCallId}`} className="border-l-2 border-border px-3 text-chat-meta text-secondary">
+          const card = <details key={`tool:${event.toolCallId}`} data-anchor-id={`tool:${event.toolCallId}`} className="border-l-2 border-border px-3 text-chat-meta text-secondary">
             <SummaryLabel label={event.tool} detail={detail} failed={result?.isError} />
             <pre className="mt-2 overflow-auto whitespace-pre-wrap">{JSON.stringify(event.input, null, 2)}</pre>
             {result && <pre className="mt-2 overflow-auto whitespace-pre-wrap">{result.output}</pre>}
@@ -130,13 +130,13 @@ export default function ChatMessages({ events, projectPath, sessionId, sendMessa
             sendMessage={sendMessage} connected={connected} />
         }
         case 'tool_result': {
-          return <details key={event.id} className="px-3 text-chat-meta text-secondary">
+          return <details key={event.id} data-anchor-id={`tool:${event.toolCallId}`} className="px-3 text-chat-meta text-secondary">
             <SummaryLabel label="Tool result" detail={null} failed={event.isError} />
             <pre className="mt-2 overflow-auto whitespace-pre-wrap">{event.output}</pre>
           </details>
         }
         case 'command_output':
-          return <div key={event.id} data-testid="chat-command-output" data-chat-role="assistant"
+          return <div key={event.id} data-anchor-id={event.id} data-testid="chat-command-output" data-chat-role="assistant"
             className="mx-3 border-l-2 border-border px-3 py-2 font-mono text-xs text-secondary">
             <div className="mb-1 text-xs">Command output</div>
             <Markdown content={event.text} />
@@ -155,8 +155,8 @@ export default function ChatMessages({ events, projectPath, sessionId, sendMessa
             {lines.map((line, index) => <span key={index} className="block">{line}</span>)}
           </p>
         }
-        case 'notice': return <p key={event.id} className="text-chat-meta text-secondary">{event.text}</p>
-        case 'error': return <p key={event.id} role="alert" className="text-chat-body text-chat-danger">{event.message}</p>
+        case 'notice': return <p key={event.id} data-anchor-id={event.id} className="text-chat-meta text-secondary">{event.text}</p>
+        case 'error': return <p key={event.id} data-anchor-id={event.id} role="alert" className="text-chat-body text-chat-danger">{event.message}</p>
         case 'turn_interrupted': return <p key={event.id} className="text-chat-meta text-secondary">Turn stopped</p>
         case 'request_resolved': {
           // Who decided: policy grants stand apart from the user's own calls.

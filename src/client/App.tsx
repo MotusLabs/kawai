@@ -17,6 +17,7 @@ import SettingsModal from './components/SettingsModal'
 import UpdatePanel from './components/UpdatePanel'
 import { ToastViewport } from './components/Toast'
 import { useSessionStore } from './stores/sessionStore'
+import { useSessionSearchStore } from './stores/sessionSearchStore'
 import {
   useSettingsStore,
   useSettingsHasHydrated,
@@ -705,6 +706,13 @@ export default function App() {
         if (!isModalOpen && !isSettingsOpen && settingsHydrated) {
           setIsModalOpen(true)
         }
+        return
+      }
+
+      // Search chats: [mod]+K focuses the navigator's search box.
+      if (isShortcut && code === 'KeyK') {
+        event.preventDefault()
+        useSessionSearchStore.getState().requestFocus()
         return
       }
 

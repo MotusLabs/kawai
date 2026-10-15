@@ -4,6 +4,7 @@ import type { AgentSession, ServerMessage, Session, TerminalSession } from '@sha
 import SessionList from '../components/SessionList'
 import NewSessionModal from '../components/NewSessionModal'
 import { useSessionStore } from '../stores/sessionStore'
+import { useSessionSearchStore } from '../stores/sessionSearchStore'
 import { useSettingsStore } from '../stores/settingsStore'
 import { useThemeStore } from '../stores/themeStore'
 import { useUpdateStore } from '../stores/updateStore'
@@ -1220,6 +1221,32 @@ describe('App', () => {
     expect(useSessionStore.getState().exitingSessions.has('session-1')).toBe(true)
     // pendingKills ref holds rollback snapshot (not directly testable via store,
     // but kill-failed test below proves it works)
+  })
+
+  test('[mod]+K asks the navigator search box for focus and ignores other modifiers', () => {
+    useSessionStore.setState({ sessions: [baseSession], selectedSessionId: baseSession.id, hasLoaded: true })
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => { renderer = TestRenderer.create(<App />) })
+    activeRenderer = renderer
+    const keyHandler = getKeyHandler()
+    const press = (init: Partial<KeyboardEvent>) => {
+      let prevented = false
+      act(() => {
+        keyHandler({
+          key: 'k', code: 'KeyK', ctrlKey: true, shiftKey: true, altKey: false, metaKey: false,
+          defaultPrevented: false, preventDefault: () => { prevented = true }, ...init,
+        } as KeyboardEvent)
+      })
+      return prevented
+    }
+
+    const before = useSessionSearchStore.getState().focusToken
+    expect(press({})).toBe(true)
+    expect(useSessionSearchStore.getState().focusToken).toBe(before + 1)
+
+    // Plain Ctrl+K (no shift) is not the shortcut and stays with the browser/terminal.
+    expect(press({ shiftKey: false })).toBe(false)
+    expect(useSessionSearchStore.getState().focusToken).toBe(before + 1)
   })
 
   test('jumps to a visible session by index with the configured modifier', () => {

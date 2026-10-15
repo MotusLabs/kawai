@@ -122,6 +122,10 @@ afterEach(() => {
   })
 })
 
+/** The inline rename field(s): every input except the navigator's search box. */
+const renameInputs = (renderer: TestRenderer.ReactTestRenderer) =>
+  renderer.root.findAllByType('input').filter(input => input.props.role !== 'combobox')
+
 describe('SessionList component', () => {
   test('orders sessions by status and selects on click', () => {
     useSettingsStore.setState({
@@ -235,7 +239,7 @@ describe('SessionList component', () => {
     })
 
     // Now the input should appear for renaming
-    const input = renderer.root.findByType('input')
+    const input = renameInputs(renderer)[0]!
 
     act(() => {
       input.props.onChange({ target: { value: '  Beta  ' } })
@@ -314,7 +318,7 @@ describe('SessionList component', () => {
       renameButton.props.onClick({ stopPropagation: () => {} })
     })
 
-    const input = renderer.root.findByType('input')
+    const input = renameInputs(renderer)[0]!
     act(() => {
       input.props.onChange({ target: { value: '  renamed-hibernate  ' } })
     })
@@ -369,7 +373,7 @@ describe('SessionList component', () => {
       renameButton.props.onClick({ stopPropagation: () => {} })
     })
 
-    const input = renderer.root.findByType('input')
+    const input = renameInputs(renderer)[0]!
 
     act(() => {
       input.props.onChange({ target: { value: '  Gamma  ' } })
@@ -380,7 +384,7 @@ describe('SessionList component', () => {
     })
 
     expect(renameCalls).toEqual([])
-    expect(() => renderer.root.findByType('input')).toThrow()
+    expect(renameInputs(renderer)).toHaveLength(0)
 
     act(() => {
       renderer.unmount()

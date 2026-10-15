@@ -75,7 +75,7 @@ export default function ChatWorkerRow({ sessionId, workerId, tool, fallback, ren
   }
 
   return <details className="border-l-2 border-border px-3 text-chat-meta text-secondary"
-    data-testid="chat-worker-row" data-worker-id={workerId} data-status={worker.status}
+    data-anchor-id={`tool:${workerId}`} data-testid="chat-worker-row" data-worker-id={workerId} data-status={worker.status}
     onToggle={handleToggle}>
     <summary className="chat-summary gap-2">
       {worker.live && <span className="chat-activity-dot shrink-0" aria-hidden="true" />}

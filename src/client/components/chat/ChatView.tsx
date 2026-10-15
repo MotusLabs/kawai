@@ -34,6 +34,7 @@ import type { SendClientMessage, ServerMessage, Session } from '@shared/types'
 import type { ConnectionStatus } from '../../stores/sessionStore'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { emptyTranscript, useChatStore } from '../../stores/chatStore'
+import { useRevealRow } from './useRevealRow'
 import { closedDebugView, useChatDebugStore } from '../../stores/chatDebugStore'
 import ChatActivityRow from './ChatActivityRow'
 import ChatHeader from './ChatHeader'
@@ -222,7 +223,14 @@ export default function ChatView({ session, sendMessage, subscribe, connectionSt
     }
     sendMessage({ type: 'chat-send', sessionId: session.id, text: trimmed })
   }
-  useEffect(() => { end.current?.scrollIntoView?.({ block: 'end' }) }, [transcript.events.length, transcript.throughSequence])
+  // A pending search reveal owns the scroll position: stick-to-bottom yields
+  // to it (the reveal hook below runs after this effect in the same commit).
+  useEffect(() => {
+    if (useChatStore.getState().pendingReveal?.sessionId === session.id) return
+    end.current?.scrollIntoView?.({ block: 'end' })
+  }, [transcript.events.length, transcript.throughSequence, session.id])
+  const transcriptBox = useRef<HTMLDivElement>(null)
+  useRevealRow({ sessionId: session.id, loaded: transcript !== EMPTY, container: transcriptBox })
 
   // Slash-command menu: open while the caret is inside a `/` word anywhere in
   // the message (slash-command-autocomplete-anywhere design D2) and a list can
@@ -348,7 +356,7 @@ export default function ChatView({ session, sendMessage, subscribe, connectionSt
         {/* The live-workers strip (design D8): live rows only, hidden in
             archived chats and when nothing runs (the strip hides itself). */}
         {!archived && <ChatWorkersStrip sessionId={session.id} sendMessage={sendMessage} connected={connected} />}
-        <div className="min-h-0 flex-1 overflow-y-auto p-4">
+        <div ref={transcriptBox} className="min-h-0 flex-1 overflow-y-auto p-4">
           <div className="mx-auto max-w-3xl space-y-4">
             <ChatMessages events={transcript.events} projectPath={session.projectPath}
               sessionId={session.id} sendMessage={sendMessage} connected={connected}

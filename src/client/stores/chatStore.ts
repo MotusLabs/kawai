@@ -16,6 +16,8 @@
 // notices close through the server, and account notices close per browser
 // tab only — a hidden one returns when its text (the day count) changes.
 // Unsubmitted composer drafts are client-only state, keyed by session.
+// A search result asks the chat view to reveal one transcript row through
+// `pendingReveal` (chat-session-search D5); the view consumes it.
 import { create } from 'zustand'
 import type {
   ChatActivity,
@@ -171,6 +173,10 @@ interface ChatStore {
    * reload.
    */
   closedAccountNotices: Record<string, Set<string>>
+  /** Transcript row a search result asked to reveal; one at a time, consumed by ChatView. */
+  pendingReveal: { sessionId: string; anchorId: string } | null
+  requestReveal: (sessionId: string, anchorId: string) => void
+  clearReveal: () => void
   apply: (sessionId: string, events: ChatEvent[]) => void
   snapshot: (message: Extract<ServerMessage, { type: 'chat-snapshot' }>) => void
   /** Replace one session's command list (chat-commands push). */
@@ -225,6 +231,9 @@ export const useChatStore = create<ChatStore>((set) => ({
   workerBodies: {},
   taskOutputs: {},
   closedAccountNotices: {},
+  pendingReveal: null,
+  requestReveal: (sessionId, anchorId) => set({ pendingReveal: { sessionId, anchorId } }),
+  clearReveal: () => set({ pendingReveal: null }),
   apply: (sessionId, events) => set(state => ({ sessions: {
     ...state.sessions, [sessionId]: applyChatEvents(state.sessions[sessionId] ?? emptyTranscript(), events),
   } })),
@@ -425,6 +434,7 @@ export const useChatStore = create<ChatStore>((set) => ({
     delete taskOutputs[sessionId]
     const closedAccountNotices = { ...state.closedAccountNotices }
     delete closedAccountNotices[sessionId]
-    return { sessions, drafts, workerBodies, taskOutputs, closedAccountNotices }
+    const pendingReveal = state.pendingReveal?.sessionId === sessionId ? null : state.pendingReveal
+    return { sessions, drafts, workerBodies, taskOutputs, closedAccountNotices, pendingReveal }
   }),
 }))
