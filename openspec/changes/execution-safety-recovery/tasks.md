@@ -11,16 +11,16 @@ Group 7's matrix rows for plan execution, integration, supervision, and revision
 
 ## 1. Security note
 
-- [ ] 1.1 Add `SECURITY_NOTE_BODY` and `securityNote(input)` to `src/server/team/teamPrompt.ts`, append it after `strategyNote`, and extend `TeamPromptInput` with `outbound: OutboundPromptFacts` (D1). Update the header comment. Verify with unit tests:
+- [x] 1.1 Add `SECURITY_NOTE_BODY` and `securityNote(input)` to `src/server/team/teamPrompt.ts`, append it after `strategyNote`, and extend `TeamPromptInput` with `outbound: OutboundPromptFacts` (D1). Update the header comment. Verify with unit tests:
   - the section follows the strategy note, with a group and without;
   - configured entries render as written;
   - an empty configuration renders the "none beyond loopback and private network addresses" line.
-- [ ] 1.2 Pass the facts from `sessionTeams.promptFor` at spawn, read from the loader (group 2). Verify with a driver test: the append is rebuilt per spawn, so an edit reaches only the next start.
-- [ ] 1.3 Add the AGENTS.md bullet for the note and the E1 contract line for `codex-chat-sessions`; that is the docs for group 1. Verify by reading the bullet against D1.
+- [x] 1.2 Pass the facts from `sessionTeams.promptFor` at spawn, read from the loader (group 2). Verify with a driver test: the append is rebuilt per spawn, so an edit reaches only the next start.
+- [x] 1.3 Add the AGENTS.md bullet for the note and the E1 contract line for `codex-chat-sessions`; that is the docs for group 1. Verify by reading the bullet against D1.
 
 ## 2. Outbound destinations
 
-- [ ] 2.1 Implement `src/server/outbound/destinations.ts`: `OutboundDestinations` with the D2 shape, its defaults, the stamp re-read, and per-entry error reporting, copying `TeamCaps`. Verify with unit tests:
+- [x] 2.1 Implement `src/server/outbound/destinations.ts`: `OutboundDestinations` with the D2 shape, its defaults, the stamp re-read, and per-entry error reporting, copying `TeamCaps`. Verify with unit tests:
   - a missing file gives the defaults;
   - an unparsable file is reported and the defaults apply;
   - a malformed entry is dropped while its siblings apply;
@@ -29,7 +29,7 @@ Group 7's matrix rows for plan execution, integration, supervision, and revision
   - a project `.kawai/outbound.json` is never read;
   - profile base-URL hosts are model providers;
   - private and loopback addresses match as internal for IPv4 and IPv6.
-- [ ] 2.2 Document the file in AGENTS.md beside `teams.json`, with example names only; that is the docs for group 2. Verify by reading it against D2.
+- [x] 2.2 Document the file in AGENTS.md beside `teams.json`, with example names only; that is the docs for group 2. Verify by reading it against D2.
 
 ## 3. Capture, classification, and records
 
@@ -97,11 +97,11 @@ Group 7's matrix rows for plan execution, integration, supervision, and revision
 
 ## 5. Database safety documentation
 
-- [ ] 5.1 Write `docs/operations/database-backups.md` (D16): layout, schedule, rotation, the restore steps, what a restore does not bring back, the newer-database refusal, and the same-disk limitation. Verify by following the steps on a copy in a test home: restore a `pre-migration-2` backup and start an older build fixture.
+- [x] 5.1 Write `docs/operations/database-backups.md` (D16): layout, schedule, rotation, the restore steps, what a restore does not bring back, the newer-database refusal, and the same-disk limitation. Verify by following the steps on a copy in a test home: restore a `pre-migration-2` backup and start an older build fixture.
 
 ## 6. Schema version and backups
 
-- [ ] 6.1 Inventory every schema function (`db.ts` ensures, `migrateDatabase`, and each team, strategy, and plan store's schema), collect them into the baseline step, and add `schema_migrations` and the runner in `src/server/dbSafety/migrations.ts` (D13). Verify with tests:
+- [x] 6.1 Inventory every schema function (`db.ts` ensures, `migrateDatabase`, and each team, strategy, and plan store's schema), collect them into the baseline step, and add `schema_migrations` and the runner in `src/server/dbSafety/migrations.ts` (D13). Verify with tests:
   - the first start on a copy of a pre-change database leaves every table's rows and columns unchanged, and records version 1;
   - a fresh start records all versions;
   - `user_version` mirrors the highest version;
@@ -109,8 +109,8 @@ Group 7's matrix rows for plan execution, integration, supervision, and revision
   - the baseline runs only on a database with no recorded version: a migration that drops a baseline column stays applied across a restart;
   - a database with extra tables records version 1;
   - a failed or corrupt pre-migration backup refuses start before `up(db)` runs.
-- [ ] 6.2 Implement the newer-database refusal (D14), checked before any write. Verify with a test: version 3 against a build knowing 2 exits with the message, and the file's bytes and mtime are unchanged.
-- [ ] 6.3 Implement `DatabaseBackups` (D15): snapshot, atomic rename, integrity check on a separate connection, corrupt marking, the schedule with the `total_changes()` skip, and rotation. Verify with tests:
+- [x] 6.2 Implement the newer-database refusal (D14), checked before any write. Verify with a test: version 3 against a build knowing 2 exits with the message, and the file's bytes and mtime are unchanged.
+- [x] 6.3 Implement `DatabaseBackups` (D15): snapshot, atomic rename, integrity check on a separate connection, corrupt marking, the schedule with the `total_changes()` skip, and rotation. Verify with tests:
   - a snapshot taken while another connection writes under its busy timeout loses no commit;
   - the copy passes `integrity_check`;
   - a truncated copy is marked corrupt and stays out of rotation;
@@ -121,7 +121,7 @@ Group 7's matrix rows for plan execution, integration, supervision, and revision
   - a pre-migration backup precedes each migration, and its failure refuses start.
 
   Record the measured `serialize()` pause on a 5 MB fixture in the matrix.
-- [ ] 6.4 Add the AGENTS.md database bullet; together with 5.1 that is the docs for group 6. Verify by reading it against D13–D15.
+- [x] 6.4 Add the AGENTS.md database bullet; together with 5.1 that is the docs for group 6. Verify by reading it against D13–D15.
 
 ## 7. Recovery matrix and late writers
 

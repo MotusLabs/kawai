@@ -22,7 +22,7 @@ import type {
   PlanSummary,
 } from '../../shared/plans'
 import { planDisplayState, planProgress } from '../../shared/plans'
-import { CREATE_PLAN_TABLES_SQL, mapPlan, mapPlanDraft, mapPlanEvent, mapPlanRevision } from './planSchema'
+import { mapPlan, mapPlanDraft, mapPlanEvent, mapPlanRevision } from './planSchema'
 
 export interface NewPlanEvent {
   kind: string
@@ -68,9 +68,7 @@ const isUnique = (error: unknown) => String(error).includes('UNIQUE constraint f
 export class PlanStore {
   private readonly listeners = new Set<(plan: Plan) => void>()
 
-  constructor(private readonly db: Database) {
-    db.exec(CREATE_PLAN_TABLES_SQL)
-  }
+  constructor(private readonly db: Database) {}
 
   /** Every committed change, with the plan as it is now. */
   subscribe(listener: (plan: Plan) => void): () => void {

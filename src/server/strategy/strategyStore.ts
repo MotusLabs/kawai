@@ -27,7 +27,6 @@ import {
 } from '../../shared/productStrategy'
 import { hashStrategyContent } from './strategyHash'
 import {
-  CREATE_STRATEGY_TABLES_SQL,
   mapDecision,
   mapDraft,
   mapEvidence,
@@ -109,7 +108,6 @@ export class StrategyStore {
   private readonly listeners = new Set<(strategy: ProductStrategy) => void>()
 
   constructor(private readonly db: Database) {
-    db.exec(CREATE_STRATEGY_TABLES_SQL)
   }
 
   /** Every committed change, with the strategy as it is now. */

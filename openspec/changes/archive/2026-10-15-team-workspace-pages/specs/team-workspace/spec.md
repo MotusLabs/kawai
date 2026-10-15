@@ -153,6 +153,10 @@ The system SHALL open a full workspace view for a repository's team from its nav
 - **WHEN** the human selects a chat while the Team page is open on a selected task, then returns through the Team entry or the browser's Back
 - **THEN** the Team page reopens on the same team with the same tab and selection
 
+#### Scenario: The workspace survives its transport chat being killed
+- **WHEN** the chat session whose connection carries the Team page's requests is killed while the page is open
+- **THEN** the page stays open on its team, because it is addressed by the team's directory and not by any chat, and shows a disconnected state only when no connection is left
+
 #### Scenario: No placeholder Plans
 - **WHEN** no Plans view is registered and the workspace renders its tab strip
 - **THEN** no Plans tab content or placeholder row is shown, and the place a future Plans tab occupies is a documented extension point
@@ -167,6 +171,10 @@ Every Team page read and action SHALL be scoped to the team of the repository pa
 #### Scenario: Cross-team ids are refused (E14)
 - **WHEN** a workspace request names a task id belonging to another team
 - **THEN** the server refuses it and no data for that task is returned
+
+#### Scenario: Cross-team links are refused (E14)
+- **WHEN** a workspace link names a task, message, or strategy of another team
+- **THEN** the owning connection refuses it and the workspace shows no data for it
 
 #### Scenario: An unknown path is refused
 - **WHEN** a Team page request addresses a directory that is neither a discovered repository, a listed worktree, nor a chat session's project directory

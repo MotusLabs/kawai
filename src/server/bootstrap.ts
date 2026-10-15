@@ -17,6 +17,7 @@ import { logger, logLevel } from './logger'
 import { ensureTmux } from './prerequisites'
 import { checkPortAvailable, pruneOrphanedWsSessions } from './startupPreflight'
 import { initDatabase, resolveDataDir } from './db'
+import { DatabaseStartupError } from './dbSafety/migrations'
 import { SessionManager } from './SessionManager'
 import { SessionRegistry } from './SessionRegistry'
 import { SessionRefreshWorkerClient } from './sessionRefreshWorkerClient'
@@ -67,7 +68,9 @@ export function startServer(): void {
 
   // 2. Storage, persisted settings, and the tmux session manager.
   const app = new Hono()
-  const db = initDatabase()
+  const db = openDatabaseOrExit()
+  // Hourly online backups while the database changes (execution-safety-recovery D15).
+  db.backups?.start()
 
   // Persisted settings: mouse mode and history max age seed runtime state;
   // prefer-window-name and terminal colors fold into config (see routes/settings).
@@ -517,4 +520,20 @@ export function startServer(): void {
   process.on('SIGTERM', () => {
     void cleanupAllTerminals().finally(() => process.exit(0))
   })
+}
+
+/**
+ * Open the database, or exit with the owner's message when it must not start
+ * (execution-safety-recovery D13–D14): a database newer than this build, or a
+ * failed migration or pre-migration backup. There is no override.
+ */
+function openDatabaseOrExit(): ReturnType<typeof initDatabase> {
+  try {
+    return initDatabase()
+  } catch (error) {
+    if (!(error instanceof DatabaseStartupError)) throw error
+    logger.error('database_start_refused', { message: error.message })
+    console.error(error.message)
+    process.exit(1)
+  }
 }

@@ -7,7 +7,8 @@
 // status, api_retry) through the pure chatActivity reducer. Context-meter
 // state (per-request usage, compaction drops, threshold resolution) lives in
 // the pure contextUsage tracker; this module only maps frames onto its
-// inputs. All SDK types are confined to this module; the SDK itself is
+// inputs — per-request usage from message_start, message_delta, and assistant
+// frames, merged per message id. All SDK types are confined to this module; the SDK itself is
 // injected as a queryFactory (the manager does the dynamic import), mirroring
 // the SpawnFn convention in server/terminal/.
 import type {
@@ -83,6 +84,9 @@ import {
   ChatContextTracker,
   parsePositiveTokens,
   sumRequestUsage,
+  mergeRequestUsage,
+  EMPTY_REQUEST_USAGE,
+  type RequestUsage,
   type ChatContextStep,
 } from './contextUsage'
 import {
@@ -333,6 +337,15 @@ export class ChatSessionDriver {
   private readonly agentToolCallIds = new Set<string>()
   /** Context-meter state (context meter designs D1–D3); see contextUsage.ts. */
   private readonly context = new ChatContextTracker()
+  /**
+   * Running usage of the latest top-level model request (design E1), keyed by
+   * its message id. Separate from `streamingMessageId`, which only moves while
+   * a turn is active (design E3).
+   */
+  private requestUsage: { messageId: string | null; usage: RequestUsage } = {
+    messageId: null,
+    usage: EMPTY_REQUEST_USAGE,
+  }
   /** Reset time from the latest rejected rate_limit_event (design D6). */
   private limitResetsAt: string | null = null
   private dead = false
@@ -841,6 +854,7 @@ export class ChatSessionDriver {
         // rather than keeping the old window's occupancy (design D7). The
         // threshold sources stay — they describe the process/profile, not
         // the conversation.
+        this.requestUsage = { messageId: null, usage: EMPTY_REQUEST_USAGE }
         this.applyContextStep(this.context.resetConversation())
         return
       default:
@@ -915,13 +929,16 @@ export class ChatSessionDriver {
   }
 
   private handlePartial(message: SDKPartialAssistantMessage): void {
-    const turnId = this.activeTurnId
-    if (!turnId) return
     // Worker chatter stays out of the parent transcript (design D4): its
     // stream must neither leak deltas nor hijack the parent's streaming id —
     // filtering the completed assistant message cannot undo either.
     if (isSubagentContentFrame(message)) return
     const event = message.event
+    // Usage capture precedes the turn gate, like assistant-frame usage:
+    // trailing frames after an interrupt still measure the live context.
+    this.readStreamUsage(event)
+    const turnId = this.activeTurnId
+    if (!turnId) return
     if (event.type === 'message_start') this.streamingMessageId = event.message.id
     if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
       this.emit({
@@ -1396,13 +1413,41 @@ export class ChatSessionDriver {
    * Per-request context usage (design D1): an assistant frame carries the
    * latest request's usage — input plus cache reads/creations plus output —
    * which is exactly what the next request pays, never the session total.
-   * The latest frame wins; subagent frames are skipped (design D6) so a Task
-   * tool's own requests cannot move the parent's meter.
+   * Stream events (`readStreamUsage`) feed the same per-message total, for
+   * providers whose frames carry zeros. The latest request wins; subagent
+   * frames are skipped (design D6) so a Task tool's own requests cannot move
+   * the parent's meter.
    */
   private readContextUsage(message: SDKAssistantMessage): void {
     if (isSubagentContentFrame(message)) return
     const usage = message.message.usage
     if (!usage) return
+    this.noteRequestUsage(message.message.id ?? message.uuid, usage)
+  }
+
+  /**
+   * Stream usage (design E1): `message_start` opens a request's usage and the
+   * final `message_delta` completes it — GLM sends zeros at the start and the
+   * real counts only in the delta. A delta with no known start is ignored.
+   */
+  private readStreamUsage(event: SDKPartialAssistantMessage['event']): void {
+    if (event.type === 'message_start') {
+      const { id, usage } = event.message ?? {}
+      if (id && usage) this.noteRequestUsage(id, usage)
+    } else if (event.type === 'message_delta' && event.usage && this.requestUsage.messageId) {
+      this.noteRequestUsage(this.requestUsage.messageId, event.usage)
+    }
+  }
+
+  /** Merge a usage source into its request's running usage and publish the sum. */
+  private noteRequestUsage(
+    messageId: string,
+    incoming: Parameters<typeof mergeRequestUsage>[1]
+  ): void {
+    const base =
+      this.requestUsage.messageId === messageId ? this.requestUsage.usage : EMPTY_REQUEST_USAGE
+    const usage = mergeRequestUsage(base, incoming)
+    this.requestUsage = { messageId, usage }
     this.applyContextStep(
       this.context.readRequest(sumRequestUsage(usage), new Date().toISOString())
     )

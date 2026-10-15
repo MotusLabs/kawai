@@ -1,8 +1,9 @@
-// The Team page shell (team-workspace-pages §5): the tab strip's order with
-// the Members key reserved (no tab, no placeholder), the header's
+// The Team page shell (team-workspace-pages §5): the tab strip's order
+// (Strategy, Plans, Tasks, Messages, Mailbox, Members), the header's
 // one-line strategy status for approved, in-review, and no-record cases and
 // where it opens, the strategy subscription for the status line, and the
 // unknown-repository notice (D3).
+import { StrictMode } from 'react'
 import { afterEach, beforeEach, expect, test } from 'bun:test'
 import TestRenderer, { act } from 'react-test-renderer'
 import type { ClientMessage, SendClientMessage, Session } from '@shared/types'
@@ -13,7 +14,9 @@ import { resetTeamLocationForTests, useTeamLocationStore } from '../hooks/useTea
 import { useSessionStore } from '../stores/sessionStore'
 import { useTeamTaskStore } from '../stores/teamTaskStore'
 import { useStrategyStore } from '../stores/strategyStore'
+import { useTeamWorkspaceDataStore } from '../stores/teamWorkspaceDataStore'
 import { useTeamWorkspaceStore } from '../stores/teamWorkspaceStore'
+import type { TeamWorkspaceSnapshot } from '@shared/teamWorkspace'
 import { useWorkspaceStore } from '../stores/workspaceStore'
 import type { TeamLocation } from '../utils/teamLocation'
 
@@ -84,6 +87,7 @@ beforeEach(() => {
   useWorkspaceStore.setState({ snapshot: null, lastError: null, operationResults: [], collapsedSectionIds: [] })
   useStrategyStore.setState({ views: {} })
   useTeamWorkspaceStore.setState({ views: {} })
+  useTeamWorkspaceDataStore.setState({ views: {}, seen: new Set() })
   resetTeamLocationForTests()
 })
 
@@ -98,15 +102,49 @@ afterEach(() => {
   resetTeamLocationForTests()
 })
 
-test('the tab strip renders Strategy, Plans, Tasks, Messages, Mailbox — Members is reserved with no placeholder', () => {
+test('the tab strip renders Strategy, Plans, Tasks, Messages, Mailbox, Members in order', () => {
   const { renderer } = mountPage({ teamKey: '/repo', tab: 'tasks' })
   const strip = renderer.root.findByProps({ 'data-testid': 'team-tab-strip' })
   const tabs = strip.findAll(node => node.props.role === 'tab')
   expect(tabs.map(tab => tab.props['data-testid'])).toEqual([
-    'team-tab-strategy', 'team-tab-plans', 'team-tab-tasks', 'team-tab-messages', 'team-tab-mailbox',
+    'team-tab-strategy', 'team-tab-plans', 'team-tab-tasks', 'team-tab-messages', 'team-tab-mailbox', 'team-tab-members',
   ])
-  expect(tabs.map(tab => textOf(tab))).toEqual(['Strategy', 'Plans', 'Tasks', 'Messages', 'Mailbox'])
-  expect(renderer.root.findAll(node => String(node.props['data-testid'] ?? '').includes('members'))).toHaveLength(0)
+  expect(tabs.map(tab => textOf(tab))).toEqual(['Strategy', 'Plans', 'Tasks', 'Messages', 'Mailbox', 'Members'])
+})
+
+test('mounting opens the workspace read model; unmount closes it; a reconnect re-opens for a fresh snapshot', () => {
+  const page = mountPage({ teamKey: '/repo', tab: 'tasks' })
+  expect(sent.filter(message => message.type === 'team-workspace-open')).toEqual([{ type: 'team-workspace-open', teamPath: '/repo' }])
+  act(() => { page.renderer.unmount() })
+  expect(sent).toContainEqual({ type: 'team-workspace-close', teamPath: '/repo' })
+})
+
+test('an unknown repository key opens no workspace subscription', () => {
+  mountPage({ teamKey: '/not-a-repo', tab: 'tasks' })
+  expect(sent.filter(message => message.type === 'team-workspace-open')).toHaveLength(0)
+})
+
+test('a pushed approval appears in the attention queue on every tab without a refresh', () => {
+  const page = mountPage({ teamKey: '/repo', tab: 'mailbox' })
+  expect(textOf(find(page.renderer, 'attention-summary')[0]!)).toContain('loading')
+  const empty = { items: [] }
+  const push = (attention: TeamWorkspaceSnapshot['attention']) => act(() => {
+    useTeamWorkspaceDataStore.getState().apply({
+      teamPath: '/repo', teamId: 'team', tasks: [], attention, members: [], directory: [],
+      summary: { since: '2026-10-14T00:00:00.000Z', completedResults: empty, capacityWaits: empty, approvals: empty,
+        uncertainDeliveries: empty, finishedTurnsWithoutResult: empty },
+    })
+  })
+  push([])
+  expect(find(page.renderer, 'attention-empty')).toHaveLength(1)
+  push([{ id: 'approval:a', kind: 'approval', cause: 'Approval requested: Bash', owner: { kind: 'session', id: 's', label: 'dev' },
+    impact: {}, nextAction: 'Answer approval', link: { kind: 'chat', id: 's' }, requiresHuman: true }])
+  expect(find(page.renderer, 'attention-item')).toHaveLength(1)
+  // The queue sits above the tab strip, so it shows on Members too.
+  act(() => { useTeamLocationStore.getState().navigate({ teamKey: '/repo', tab: 'members' }) })
+  page.update()
+  expect(find(page.renderer, 'attention-item')).toHaveLength(1)
+  expect(find(page.renderer, 'team-members')).toHaveLength(1)
 })
 
 test('a tab click navigates the location and records the last-used tab', () => {
@@ -212,4 +250,54 @@ test('the Tasks tab mounts the view, follows the URL selection, and notices a mi
   update()
   expect(useTeamTaskStore.getState().views['/repo']?.selectedTaskId).toBeNull()
   expect(textOf(renderer.root.findByProps({ 'data-testid': 'team-workspace-notice' }))).toContain('Task gone-task was not found')
+})
+
+test('the selected task survives a visit to another tab; the browser Back to a list location still clears it', () => {
+  const view = { open: true, loading: false, tasks: [{
+    id: 't-1', teamId: 'team', title: 'Export', status: 'open', creator: { kind: 'human', sessionId: null }, parentId: null, worktree: null,
+    openspecChange: null, revision: 1, direction: 'Build it', acceptance: null, createdAt: '2026-10-11T00:00:00.000Z',
+    updatedAt: '2026-10-11T00:00:00.000Z', participants: [], assignment: null,
+  }], selectedTaskId: 't-1', detail: null, directory: [], pending: {}, error: null,
+    draft: { title: '', direction: '', acceptance: '', parentId: '', worktree: '', openspecChange: '', targetKind: '', targetId: '', instruction: '' },
+    flow: null, preview: null, previewPending: {}, targets: null, targetsLoading: false, commands: {}, commandRequests: {} }
+  act(() => { useTeamTaskStore.setState({ views: { '/repo': view as never } }) })
+  act(() => { useTeamLocationStore.getState().navigate({ teamKey: '/repo', tab: 'tasks', id: 't-1' }) })
+  const page = mountPage({ teamKey: '/repo', tab: 'tasks', id: 't-1' })
+  act(() => { useTeamLocationStore.getState().navigate({ teamKey: '/repo', tab: 'messages' }) })
+  page.update()
+  act(() => { useTeamLocationStore.getState().navigate({ teamKey: '/repo', tab: 'tasks' }) })
+  page.update()
+  // Entering Tasks put the held selection back in the URL, replacing the id-less entry.
+  expect(locationNow()).toEqual({ teamKey: '/repo', tab: 'tasks', id: 't-1' })
+  expect(useTeamTaskStore.getState().views['/repo']?.selectedTaskId).toBe('t-1')
+  // Back to an id-less Tasks location while the tab stays open asks for the list.
+  act(() => { useTeamLocationStore.getState().navigate({ teamKey: '/repo', tab: 'tasks' }) })
+  page.update()
+  expect(useTeamTaskStore.getState().views['/repo']?.selectedTaskId).toBeNull()
+})
+
+test('returning to a Tasks page with a held selection never clears it, under StrictMode too', () => {
+  const view = { open: true, loading: false, tasks: [{
+    id: 't-1', teamId: 'team', title: 'Export', status: 'open', creator: { kind: 'human', sessionId: null }, parentId: null, worktree: null,
+    openspecChange: null, revision: 1, direction: 'Build it', acceptance: null, createdAt: '2026-10-11T00:00:00.000Z',
+    updatedAt: '2026-10-11T00:00:00.000Z', participants: [], assignment: null,
+  }], selectedTaskId: 't-1', detail: null, directory: [], pending: {}, error: null,
+    draft: { title: '', direction: '', acceptance: '', parentId: '', worktree: '', openspecChange: '', targetKind: '', targetId: '', instruction: '' },
+    flow: null, preview: null, previewPending: {}, targets: null, targetsLoading: false, commands: {}, commandRequests: {} }
+  act(() => { useTeamTaskStore.setState({ views: { '/repo': view as never } }) })
+  // The Team entry reopens the page on the tab with no id in the URL.
+  act(() => { useTeamLocationStore.getState().navigate({ teamKey: '/repo', tab: 'tasks' }) })
+  const seen: Array<string | null> = []
+  const unsubscribe = useTeamTaskStore.subscribe(state => { seen.push(state.views['/repo']?.selectedTaskId ?? null) })
+  let renderer!: TestRenderer.ReactTestRenderer
+  act(() => {
+    renderer = TestRenderer.create(<StrictMode>
+      <TeamWorkspaceView teamKey="/repo" location={{ teamKey: '/repo', tab: 'tasks' }} sendMessage={sendMessage} connected connectionEpoch={0} />
+    </StrictMode>)
+  })
+  active.push(renderer)
+  unsubscribe()
+  expect(seen).not.toContain(null)
+  expect(locationNow()).toEqual({ teamKey: '/repo', tab: 'tasks', id: 't-1' })
+  expect(useTeamTaskStore.getState().views['/repo']?.selectedTaskId).toBe('t-1')
 })

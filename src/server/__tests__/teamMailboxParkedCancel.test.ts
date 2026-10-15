@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
+import { applyBaselineSchema } from '../dbSafety/baseline'
+import { schemaDb } from './schemaDb'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -15,7 +17,7 @@ describe('MailboxStore cancel and discard with actors (team-mailbox-management)'
 
   beforeEach(() => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kawai-mailbox-cancel-'))
-    db = new Database(path.join(dir, 'mail.db'))
+    db = schemaDb(path.join(dir, 'mail.db'))
     store = new MailboxStore(db)
   })
   afterEach(() => {
@@ -45,6 +47,7 @@ describe('MailboxStore cancel and discard with actors (team-mailbox-management)'
       const old = new Database(path.join(legacyDir, 'mail.db'))
       old.exec(`CREATE TABLE team_message_events (message_id TEXT NOT NULL, team_id TEXT NOT NULL, seq INTEGER NOT NULL, created_at TEXT NOT NULL, kind TEXT NOT NULL, actor TEXT NOT NULL, prev_state TEXT, prev_claimed_by TEXT, prev_recipient TEXT, prev_reason TEXT, reason TEXT, PRIMARY KEY (message_id, seq));
         INSERT INTO team_message_events VALUES ('m1', '${TEAM}', 1, '2026-01-01', 'sent', 'human', NULL, NULL, NULL, NULL, NULL);`)
+      applyBaselineSchema(old)
       const reopened = new MailboxStore(old)
       expect(reopened.eventsFor('m1')).toMatchObject([{ kind: 'sent', actor: 'human', actorSession: null }])
       old.close()
@@ -210,7 +213,7 @@ describe('MailboxStore cancel and discard with actors (team-mailbox-management)'
 describe('cancelResult typed outcomes', () => {
   test('ok, state-changed, resume-in-flight, and linked-resume', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kawai-cancel-result-'))
-    const db = new Database(path.join(dir, 'mail.db'))
+    const db = schemaDb(path.join(dir, 'mail.db'))
     try {
       const store = new MailboxStore(db)
       const base = { teamId: TEAM, toKind: 'group', toId: 'devs', fromSession: 'chat-lead', fromGroup: 'leads', originPath: '/repo', body: 'x' } as const
@@ -227,7 +230,7 @@ describe('cancelResult typed outcomes', () => {
 describe('enqueue actor typing', () => {
   test('a sessionless agent actor does not type-check on enqueue', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kawai-actor-typing-'))
-    const db = new Database(path.join(dir, 'mail.db'))
+    const db = schemaDb(path.join(dir, 'mail.db'))
     try {
       const store = new MailboxStore(db)
       const base = { teamId: TEAM, toKind: 'group', toId: 'devs', fromSession: 'chat-lead', fromGroup: 'leads', originPath: '/repo', body: 'x' } as const

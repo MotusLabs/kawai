@@ -5,6 +5,7 @@
 // amendment must not rewrite.
 import { beforeEach, describe, expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
+import { schemaDb } from './schemaDb'
 import { MailboxStore, type TeamMessage } from '../team/mailboxStore'
 import { MessageQuery, type MessageCursor, type MessageQueryFilters } from '../team/messageQuery'
 import { TaskStore } from '../team/taskStore'
@@ -21,7 +22,7 @@ let tasks: TaskStore
 let query: MessageQuery
 
 beforeEach(() => {
-  db = new Database(':memory:')
+  db = schemaDb(':memory:')
   store = new MailboxStore(db)
   tasks = new TaskStore(db)
   query = new MessageQuery(db)

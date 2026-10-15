@@ -36,6 +36,11 @@ const mapRow = (row: Record<string, unknown>): TurnEndRow => ({
   ok: Number(row.ok) === 1,
 })
 
+/** Create the table; part of the frozen baseline step (execution-safety-recovery D13): the baseline step calls this, never the store. */
+export function ensureTurnEndSchema(db: Database): void {
+  db.exec(CREATE_TURN_ENDS_SQL)
+}
+
 export class ChatTurnEndStore {
   private lastPruneAt: number
 
@@ -43,7 +48,6 @@ export class ChatTurnEndStore {
     private readonly db: Database,
     private readonly now: () => number = Date.now,
   ) {
-    this.db.exec(CREATE_TURN_ENDS_SQL)
     this.lastPruneAt = this.now()
     this.prune()
   }

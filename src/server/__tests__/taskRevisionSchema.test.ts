@@ -4,6 +4,7 @@
 // publication key, and `revision_notice` on mail rows across a reopen.
 import { afterEach, beforeEach, expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
+import { schemaDb } from './schemaDb'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -34,7 +35,7 @@ function legacyDatabase(): void {
 }
 
 const open = () => {
-  const db = new Database(dbPath)
+  const db = schemaDb(dbPath)
   const mail = new MailboxStore(db)
   return { db, mail, tasks: new TaskStore(db, mail) }
 }

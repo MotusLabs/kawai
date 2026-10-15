@@ -20,6 +20,7 @@ import { useStrategyStore } from './strategyStore'
 import { useTeamMailboxStore } from './teamMailboxStore'
 import { useTeamMessageStore } from './teamMessageStore'
 import { useTeamTaskStore } from './teamTaskStore'
+import { useTeamWorkspaceDataStore } from './teamWorkspaceDataStore'
 import { useTeamPlanStore } from './teamPlanStore'
 import { useTeamWorkspaceStore } from './teamWorkspaceStore'
 import { useWorkspaceStore } from './workspaceStore'
@@ -30,6 +31,7 @@ const viewKeys = () => new Set([
   ...Object.keys(useTeamMessageStore.getState().views),
   ...Object.keys(useStrategyStore.getState().views),
   ...Object.keys(useTeamWorkspaceStore.getState().views),
+  ...Object.keys(useTeamWorkspaceDataStore.getState().views),
   ...Object.keys(useTeamPlanStore.getState().views),
 ])
 
@@ -43,6 +45,7 @@ function rekeyTeamViews(from: string, to: string) {
   useTeamMessageStore.getState().rekey(from, to)
   useStrategyStore.getState().rekey(from, to)
   useTeamWorkspaceStore.getState().rekey(from, to)
+  useTeamWorkspaceDataStore.getState().rekey(from, to)
   // An open Team page on the old key follows (D3): same tab, selection, and
   // sub-view, replaced in place so no history entry appears for the move.
   const location = useTeamLocationStore.getState().location

@@ -5,6 +5,7 @@
 // longer holds.
 import { describe, expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
+import { schemaDb } from './schemaDb'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -14,7 +15,7 @@ const TEAM = '/repo/.git'
 const OTHER = '/other/.git'
 
 function open(): Database {
-  return new Database(':memory:')
+  return schemaDb(':memory:')
 }
 
 describe('SessionDirectory', () => {
@@ -62,11 +63,11 @@ describe('SessionDirectory', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentboard-directory-'))
     const file = path.join(dir, 'mail.db')
     try {
-      const db = new Database(file)
+      const db = schemaDb(file)
       new SessionDirectory(db).upsert(TEAM, { sessionId: 'chat-1', name: 'Kept', group: 'devs' })
       db.close()
 
-      const reopened = new SessionDirectory(new Database(file))
+      const reopened = new SessionDirectory(schemaDb(file))
       expect(reopened.get(TEAM, 'chat-1')).toEqual({ sessionId: 'chat-1', name: 'Kept', group: 'devs' })
     } finally {
       fs.rmSync(dir, { recursive: true, force: true })

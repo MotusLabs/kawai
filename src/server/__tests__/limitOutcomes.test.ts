@@ -1,6 +1,7 @@
 // Limit outcomes on claimed work: park / release / forward, resume, manual
 // hand off, recovery notes, and the claim commit.
 import { Database } from 'bun:sqlite'
+import { schemaDb } from './schemaDb'
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
@@ -55,7 +56,7 @@ function makeOutcomes() {
 
 beforeEach(() => {
   now = T0
-  db = new Database(':memory:')
+  db = schemaDb(':memory:')
   store = new MailboxStore(db)
   limits = new LimitEventStore(db, () => now)
   records = new Map([['dev', record('dev')], ['dev2', record('dev2', { claudeProfileId: 'claude' })], ['lead', record('lead', { groupId: 'leads' })]])

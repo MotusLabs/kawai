@@ -102,6 +102,7 @@ import type { AssignmentService } from '../team/AssignmentService'
 import type { TaskResultService } from '../team/TaskResultService'
 import type { SpawnRequest, SpawnResult } from '../team/staffing'
 import { TeamCaps } from '../team/teamCaps'
+import { OutboundDestinations } from '../outbound/destinations'
 import {
   findTranscriptPath,
   findTranscriptPathAsync,
@@ -878,10 +879,19 @@ export class ChatSessionManager {
     this.options = options
     this.directory = new SessionDirectory(options.db.db)
     this.providerUsageRefreshMs = options.providerUsageRefreshMs ?? 10 * 60 * 1000
+    // Outbound destinations (execution-safety-recovery D2): the security
+    // note's facts come from here at each spawn; the global provider env's
+    // base URL rides along as a model provider every profile may inherit.
+    this.outbound = new OutboundDestinations({
+      ...(options.profileCatalogHome ? { homeDir: options.profileCatalogHome } : {}),
+      onErrors: errors => logger.warn('outbound_destinations_errors', { errors }),
+      globalBaseUrl: () => this.providerEnv().ANTHROPIC_BASE_URL,
+    })
     // Team membership (agent-teams D6) resolves asynchronously; once a
     // session's team is known its group label/missing state is published.
     this.teams = new SessionTeams({
       ...(options.profileCatalogHome ? { homeDir: options.profileCatalogHome } : {}),
+      outbound: this.outbound,
       onResolved: (sessionId) => {
         this.dispatcher?.notify()
         const record = this.records.get(sessionId)
@@ -1126,6 +1136,8 @@ export class ChatSessionManager {
 
   /** Each session's team (agent-teams); shared with the mailbox dispatcher. */
   readonly teams: SessionTeams
+  /** The owner's outbound destinations (execution-safety-recovery D2); feeds every prompt's security note. */
+  readonly outbound: OutboundDestinations
   /** The team a human team view's `teamPath` addresses (team-workspace-pages D1). */
   readonly teamScopes: TeamScopes
   /** Last known name/group of each team's sessions, kept past kill (team-message-threads D3). */

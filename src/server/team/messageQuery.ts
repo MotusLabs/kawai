@@ -16,7 +16,6 @@ import type {
 import { messageSearchText } from '../../shared/team'
 import { MessageEventLog } from './messageEvents'
 import { mapRow } from './messageRow'
-import { ensureSessionDirectory } from './sessionDirectory'
 
 export type { MessageCursor, MessagePage, MessageQueryFilters, ThreadEntry }
 
@@ -30,8 +29,6 @@ export class MessageQuery {
 
   constructor(private readonly db: Database) {
     this.events = new MessageEventLog(db)
-    // Text search joins participants' recorded names (team-workspace-pages D7).
-    ensureSessionDirectory(db)
   }
 
   /**

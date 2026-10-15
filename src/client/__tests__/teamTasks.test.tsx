@@ -15,6 +15,7 @@ import { useTeamTaskStore, type TaskView } from '../stores/teamTaskStore'
 
 afterEach(() => {
   useTeamTaskStore.setState({ views: {} })
+  useTeamWorkspaceStore.setState({ views: {} })
   useSessionStore.setState({ sessions: [] })
   useChatStore.setState({ sessions: {} })
 })
@@ -134,6 +135,8 @@ test('detail shows direction, retained revisions, journal, subtasks, messages; c
   expect(renderer.root.findByProps({ 'data-testid': 'task-direction' }).children.join('')).toBe('Current plan')
   expect(renderer.root.findByProps({ 'data-testid': 'task-acceptance' }).children.join('')).toBe('Ships')
   expect(renderer.root.findByProps({ 'data-testid': 'task-creator' }).children.join('')).toBe('lead (gone)')
+  // Revision history starts collapsed (the once-per-team seed); open it to read the revisions.
+  act(() => { renderer.root.findByProps({ 'data-testid': 'task-section-toggle-Revision history' }).props.onClick() })
   const revisions = renderer.root.findByProps({ 'data-testid': 'task-revisions' })
   expect(revisions.findAll(node => node.props['data-revision'] !== undefined && node.type === 'div').map(node => node.props['data-revision'])).toEqual([1, 2])
   expect(textOf(revisions)).toContain('First plan')
@@ -246,24 +249,64 @@ describe('search and collapse (team-workspace-pages 5.5)', () => {
     act(() => { again.unmount() })
   })
 
+  test('opening the first detail preserves parents collapsed in the list', () => {
+    const renderer = mount()
+    act(() => { renderer.root.findAllByProps({ 'data-testid': 'task-parent-toggle' })[0]!.props.onClick() })
+    expect(rows(renderer)).toEqual(['parent', 'other'])
+    const selected = { ...view(), selectedTaskId: 'parent', detail: detail(parent) }
+    act(() => { renderer.update(<TeamTasksPanel teamPath="dev" projectPath="/repo" view={selected} sendMessage={() => {}} connected />) })
+    expect(renderer.root.findByProps({ 'data-testid': 'task-section-toggle-Revision history' }).props['aria-expanded']).toBe(false)
+    act(() => { renderer.update(<TeamTasksPanel teamPath="dev" projectPath="/repo" view={view()} sendMessage={() => {}} connected />) })
+    expect(rows(renderer)).toEqual(['parent', 'other'])
+    act(() => { renderer.unmount() })
+  })
+
   test('detail sections collapse independently and stay collapsed across tasks', () => {
     const first = { ...view(), selectedTaskId: 'parent', detail: detail(parent) }
     let renderer!: TestRenderer.ReactTestRenderer
     act(() => { renderer = TestRenderer.create(<TeamTasksPanel teamPath="dev" projectPath="/repo" view={first} sendMessage={() => {}} connected />) })
     expect(renderer.root.findByProps({ 'data-testid': 'task-section-toggle-Journal' }).props['aria-expanded']).toBe(true)
-    expect(renderer.root.findByProps({ 'data-testid': 'task-section-toggle-Revision history' }).props['aria-expanded']).toBe(true)
+    // Revision history starts collapsed: the once-per-team seed applied itself.
+    expect(renderer.root.findByProps({ 'data-testid': 'task-section-toggle-Revision history' }).props['aria-expanded']).toBe(false)
     act(() => { renderer.root.findByProps({ 'data-testid': 'task-section-toggle-Journal' }).props.onClick() })
     act(() => { renderer.root.findByProps({ 'data-testid': 'task-section-toggle-Revision history' }).props.onClick() })
     expect(renderer.root.findByProps({ 'data-testid': 'task-section-toggle-Journal' }).props['aria-expanded']).toBe(false)
-    expect(renderer.root.findByProps({ 'data-testid': 'task-section-toggle-Revision history' }).props['aria-expanded']).toBe(false)
+    expect(renderer.root.findByProps({ 'data-testid': 'task-section-toggle-Revision history' }).props['aria-expanded']).toBe(true)
     // Direction and Acceptance keep their own state while Journal stays collapsed…
     expect(renderer.root.findByProps({ 'data-testid': 'task-section-toggle-Direction' }).props['aria-expanded']).toBe(true)
     expect(renderer.root.findByProps({ 'data-testid': 'task-section-toggle-Acceptance' }).props['aria-expanded']).toBe(true)
-    // …and opening another task finds Journal collapsed there too (5.5).
+    // …and opening another task finds Journal collapsed and the user's
+    // expanded Revision history still expanded (5.5; the seed never re-applies).
     const second = { ...view(), selectedTaskId: 'other', detail: detail(other) }
     act(() => { renderer.update(<TeamTasksPanel teamPath="dev" projectPath="/repo" view={second} sendMessage={() => {}} connected />) })
     expect(renderer.root.findByProps({ 'data-testid': 'task-section-toggle-Journal' }).props['aria-expanded']).toBe(false)
-    expect(renderer.root.findByProps({ 'data-testid': 'task-section-toggle-Revision history' }).props['aria-expanded']).toBe(false)
+    expect(renderer.root.findByProps({ 'data-testid': 'task-section-toggle-Revision history' }).props['aria-expanded']).toBe(true)
+    act(() => { renderer.unmount() })
+  })
+
+  test('a collapsed parent\'s toggle is disabled while searching and keeps its state once the search clears', () => {
+    const renderer = mount()
+    const toggle = () => renderer.root.findAllByProps({ 'data-testid': 'task-parent-toggle' })[0]!
+    act(() => { toggle().props.onClick() })
+    expect(rows(renderer)).toEqual(['parent', 'other'])
+    act(() => { renderer.root.findByProps({ 'aria-label': 'Search tasks' }).props.onChange({ target: { value: 'usage bar' } }) })
+    act(() => { renderer.update(<TeamTasksPanel teamPath="dev" projectPath="/repo" view={view()} sendMessage={() => {}} connected />) })
+    // Searching shows the subtask anyway; the toggle is disabled with a hint
+    // and a click changes no stored state.
+    expect(toggle().props.disabled).toBe(true)
+    expect(toggle().props.title).toBe('Clear the search to collapse')
+    act(() => { toggle().props.onClick() })
+    // The ignored click left the stored collapse state exactly as it was
+    // (compared as a snapshot, so other sections' state never matters here).
+    const stored = useTeamWorkspaceStore.getState().views.dev!.tabs.tasks.collapsedSections
+    expect(stored).toContain('parent:parent')
+    act(() => { toggle().props.onClick() })
+    expect(useTeamWorkspaceStore.getState().views.dev!.tabs.tasks.collapsedSections).toEqual(stored)
+    // Clearing the search puts the parent back exactly as it was.
+    act(() => { renderer.root.findByProps({ 'aria-label': 'Search tasks' }).props.onChange({ target: { value: '' } }) })
+    act(() => { renderer.update(<TeamTasksPanel teamPath="dev" projectPath="/repo" view={view()} sendMessage={() => {}} connected />) })
+    expect(rows(renderer)).toEqual(['parent', 'other'])
+    expect(toggle().props.disabled).toBe(false)
     act(() => { renderer.unmount() })
   })
 })

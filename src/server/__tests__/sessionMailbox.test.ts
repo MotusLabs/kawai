@@ -2,6 +2,7 @@
 // snapshots share a team's catalog across startup and atomic claim rechecks.
 import { afterEach, beforeEach, expect, spyOn, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
+import { schemaDb } from './schemaDb'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -22,7 +23,7 @@ beforeEach(async () => {
   fs.mkdirSync(path.join(dir, '.kawai/groups'), { recursive: true })
   fs.writeFileSync(path.join(dir, '.kawai/groups/devs.md'), 'Build features')
   file = path.join(dir, 'transcript.jsonl'); fs.writeFileSync(file, '')
-  db = new Database(':memory:'); records = new Map(); teams = new SessionTeams({ homeDir: dir })
+  db = schemaDb(':memory:'); records = new Map(); teams = new SessionTeams({ homeDir: dir })
   for (let i = 0; i < 8; i++) {
     const id = `dev-${i}`
     records.set(id, { sessionId: id, groupId: 'devs', projectPath: dir, status: 'waiting' } as ChatSessionRecord)
