@@ -318,7 +318,7 @@ describe('morningSummary (4.3)', () => {
     ],
     nameOf: (id: string) => `Name of ${id}`,
     hasResult: () => false,
-    results: [] as Array<{ resultId: string; taskId: string; taskTitle: string | null; submittedBy: string; accepted: boolean }>,
+    results: [] as Array<{ resultId: string; taskId: string; taskTitle: string | null; submitter: string; accepted: boolean }>,
   })
 
   test('each bucket holds its items and capacity waits state their runtime bound', () => {
@@ -398,7 +398,7 @@ describe('Phase 2 sources (11.1, 11.2)', () => {
   test('a pending acceptance is a human-required item linking to the task', () => {
     const items = attentionItems({
       sessions: [], messages: [], waiting: {}, taskTitle: () => 'Build the thing', nameOf: id => `Name of ${id}`,
-      pendingAcceptance: [{ resultId: 'result-1', taskId: 'task-1', submittedBy: 'chat-3', needsReevaluation: false }],
+      pendingAcceptance: [{ resultId: 'result-1', taskId: 'task-1', submitter: 'Name of chat-3', needsReevaluation: false }],
     })
     expect(items).toEqual([{
       id: 'pending-acceptance:result-1', kind: 'pending-acceptance',
@@ -421,13 +421,13 @@ describe('completed results bucket (11.2)', () => {
     const sum = morningSummary({
       ...base, hasResult: () => false,
       results: [
-        { resultId: 'r1', taskId: 'task-1', taskTitle: 'Export', submittedBy: 'chat-2', accepted: false },
-        { resultId: 'r2', taskId: 'task-2', taskTitle: null, submittedBy: 'chat-2', accepted: true },
+        { resultId: 'r1', taskId: 'task-1', taskTitle: 'Export', submitter: 'Name of chat-2', accepted: false },
+        { resultId: 'r2', taskId: 'task-2', taskTitle: null, submitter: 'Human', accepted: true },
       ],
     })
     expect(sum.completedResults.items).toEqual([
       { id: 'result:r1', label: 'Export: result by Name of chat-2 — awaiting acceptance', link: { kind: 'task', id: 'task-1' } },
-      { id: 'result:r2', label: 'task-2: result by Name of chat-2 — accepted', link: { kind: 'task', id: 'task-2' } },
+      { id: 'result:r2', label: 'task-2: result by Human — accepted', link: { kind: 'task', id: 'task-2' } },
     ])
     // chat-1 finished a turn and submitted nothing: only its own bucket.
     expect(sum.finishedTurnsWithoutResult.items.map(item => item.id)).toEqual(['finished-turn:chat-1'])

@@ -190,7 +190,8 @@ export interface AttentionInput {
 export interface PendingAcceptance {
   resultId: string
   taskId: string
-  submittedBy: string
+  /** Who submitted it, already labelled: the session's name, or "Human". */
+  submitter: string
   needsReevaluation: boolean
 }
 
@@ -271,11 +272,11 @@ const staffingItems: AttentionSource = ({ messages, waiting, taskTitle, nameOf }
 }
 
 /** A submitted result awaiting **Accept result**: only the human closes it (task 11.2). */
-const acceptanceItems: AttentionSource = ({ pendingAcceptance, taskTitle, nameOf }) =>
+const acceptanceItems: AttentionSource = ({ pendingAcceptance, taskTitle }) =>
   pendingAcceptance.map(pending => ({
     id: attentionItemId('pending-acceptance', pending.resultId),
     kind: 'pending-acceptance' as const,
-    cause: `Result submitted by ${nameOf(pending.submittedBy)} awaits acceptance${pending.needsReevaluation ? ' (needs re-evaluation)' : ''}`,
+    cause: `Result submitted by ${pending.submitter} awaits acceptance${pending.needsReevaluation ? ' (needs re-evaluation)' : ''}`,
     owner: { kind: 'human' as const, id: null, label: 'Human' },
     impact: taskImpact(pending.taskId, taskTitle),
     nextAction: 'Accept result',
@@ -313,7 +314,7 @@ export interface SummaryInput {
   /** Whether a result row exists for a session's task; such a turn is not "without a result". */
   hasResult: (sessionId: string, taskId: string | null) => boolean
   /** Outstanding results submitted in the window, each with its accepted state. */
-  results: Array<{ resultId: string; taskId: string; taskTitle: string | null; submittedBy: string; accepted: boolean }>
+  results: Array<{ resultId: string; taskId: string; taskTitle: string | null; submitter: string; accepted: boolean }>
 }
 
 const bucket = (items: SummaryItem[], runtimeOnly = false): SummaryBucket =>
@@ -385,7 +386,7 @@ export function morningSummary(input: SummaryInput): MorningSummary {
   // Submitted, not accepted: each result states which (D8, Q5).
   const completedResults = results.map(result => ({
     id: `result:${result.resultId}`,
-    label: `${result.taskTitle ?? result.taskId}: result by ${nameOf(result.submittedBy)} — ${result.accepted ? 'accepted' : 'awaiting acceptance'}`,
+    label: `${result.taskTitle ?? result.taskId}: result by ${result.submitter} — ${result.accepted ? 'accepted' : 'awaiting acceptance'}`,
     link: { kind: 'task' as const, id: result.taskId },
   }))
 
@@ -423,14 +424,16 @@ export class WorkspaceRead {
       ?? directory.find(entry => entry.sessionId === sessionId)?.name
       ?? sessionId
     const taskTitle = (taskId: string) => store.get(taskId)?.title ?? null
+    // The same naming TaskResultCard's actorLabel uses: "Human", or the session's name.
+    const actorName = (actor: { sessionId: string | null }) => actor.sessionId === null ? 'Human' : nameOf(actor.sessionId)
     const sessions = records
       .filter(record => record.archivedAt == null)
       .map(record => ({ record, requests: manager.getPendingRequests(record.sessionId) }))
     const pendingAcceptance = summaries.flatMap(summary => {
       const result = summary.outstandingResult
       if (!result || result.accepted || summary.status === 'done' || summary.status === 'cancelled') return []
-      const submittedBy = store.results.get(result.id)?.submittedBy.sessionId
-      return [{ resultId: result.id, taskId: summary.id, submittedBy: submittedBy ?? '', needsReevaluation: result.needsReevaluation }]
+      const submittedBy = store.results.get(result.id)?.submittedBy
+      return [{ resultId: result.id, taskId: summary.id, submitter: submittedBy ? actorName(submittedBy) : 'Human', needsReevaluation: result.needsReevaluation }]
     })
     const attention = attentionItems({ sessions, messages, waiting, taskTitle, nameOf, pendingAcceptance })
     const now = new Date().toISOString()
@@ -462,7 +465,7 @@ export class WorkspaceRead {
           resultId: result.id,
           taskId: result.taskId,
           taskTitle: taskTitle(result.taskId),
-          submittedBy: result.submittedBy.sessionId ?? '',
+          submitter: actorName(result.submittedBy),
           accepted: result.acceptedAt !== null,
         })),
       }),
