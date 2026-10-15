@@ -7,7 +7,7 @@ Strategy revision 2 makes promises about safety and durability that Kawai does n
 - **P9:** durable records over chat memory.
 - **P10:** trustworthy results before throughput.
 
-The spike (`docs/spikes/execution-safety-recovery.md`, branch `docs/esr-spike`) measured where Kawai stands at master `bfe5004`:
+The spike (`docs/spikes/execution-safety-recovery.md`, branch `docs/esr-spike-report` at `de32e7a`) measured where Kawai stands at master `bfe5004`:
 - **No prompt carries the rules.** `buildTeamPrompt` (`src/server/team/teamPrompt.ts`) appends the role, mailbox, task, and strategy notes to every chat session, and nothing about outbound actions.
 - **Nothing records agent sends.** The wire log holds 10,310 tool uses across 129 sessions: 106 `git push`, 51 `gh pr create`, and 56 `curl` calls. Kawai's own git and `gh` calls are plan-execution effect rows (X3), but an agent's are only raw protocol lines. The UX doc's durability row "External API outcome unknown" is therefore covered for Kawai and absent for agents.
 - **A naive classifier is wrong.** A throwaway rule set found no true violation. An origin-naive `gh` rule raised 57 false positives, all `gh pr create` or `gh pr comment` on kawai's own repository, so the classifier must resolve gh's implicit repository and must never read a comment body as a target.

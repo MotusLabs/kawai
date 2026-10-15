@@ -3,7 +3,7 @@
 ## Context
 
 - **Strategy `kawai` revision 2.** P4 and its boundaries: the rules go in every agent prompt; nothing is sent or published except to model providers, the repository's GitHub remote, and internal cluster services; nothing is blocked; observable outbound actions are logged for the owner to audit afterwards; no host OS changes. P8 sets no budget. P9 prefers durable records. P10 puts trustworthy results before throughput.
-- **The spike** (`docs/spikes/execution-safety-recovery.md` on `docs/esr-spike`, measured at master `bfe5004`) sets the scope:
+- **The spike** (`docs/spikes/execution-safety-recovery.md` on `docs/esr-spike-report` at `de32e7a`, measured at master `bfe5004`) sets the scope:
   - Q1: the prompt carries no rules, and `buildTeamPrompt` is the insertion point;
   - Q2: what Kawai observes, and that the SDK hooks are available and unused for tools;
   - Q3: the rule set, with zero true violations in 7,276 commands and 57 false positives from an origin-naive `gh` rule;
