@@ -277,6 +277,8 @@ test('E08: release is refused while the developer is busy or awaiting approval, 
     await confirm.getByTestId('task-release-confirm-button').click()
     await expect(alert).toContainText('nothing was archived or dispatched')
     await expect(alert).toContainText('it is busy')
+    // The refusal kept the form's instructions exactly as entered.
+    await expect(page.getByTestId('task-release-confirm').getByLabel('Review instructions')).toHaveValue('Review the export')
     await expect(history).toHaveText('Assignment history (1)')
     await page.screenshot({ path: info.outputPath('task-release-refused-busy.png') })
     await page.locator(`[data-session-id="${dev}"]`).click()
@@ -288,6 +290,7 @@ test('E08: release is refused while the developer is busy or awaiting approval, 
     confirm = await openConfirm()
     await confirm.getByTestId('task-release-confirm-button').click()
     await expect(alert).toContainText('awaiting an approval or answer')
+    await expect(page.getByTestId('task-release-confirm').getByLabel('Review instructions')).toHaveValue('Review the export')
     await expect(history).toHaveText('Assignment history (1)')
 
     // Resolved and the turn ended: one release, one review dispatch. The

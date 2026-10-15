@@ -13,7 +13,7 @@ import { useTeamTaskStore } from '../stores/teamTaskStore'
 import { startTeamViewMigration } from '../stores/teamViewMigration'
 import { useWorkspaceStore } from '../stores/workspaceStore'
 import { clearTeamKeyAliases } from '../utils/teamKeyAliases'
-import { resetTeamLocationForTests } from '../hooks/useTeamLocation'
+import { resetTeamLocationForTests, useTeamLocationStore } from '../hooks/useTeamLocation'
 
 let stop: () => void
 beforeEach(() => { stop = startTeamViewMigration() })
@@ -109,4 +109,21 @@ test('keys outside every discovered repository, and keys already at the main che
   })
   discover(repository('/repo', '/repo/.worktrees/feature'))
   expect(Object.keys(useTeamTaskStore.getState().views).sort()).toEqual(['/repo', '/tmp/notes'])
+})
+
+test('an open Team page moves with its team when discovery maps the worktree to the main checkout', () => {
+  const sent: ClientMessage[] = []
+  act(() => { useSessionStore.setState({ sessions: [chat('/repo/.worktrees/feature')], hasLoaded: true }) })
+  // The page is open on the pre-discovery key, with a task selected.
+  act(() => { useTeamLocationStore.getState().navigate({ teamKey: '/repo/.worktrees/feature', tab: 'tasks', id: 'task-a' }) })
+  const renderer = mountPage('/repo/.worktrees/feature', sent)
+
+  discover(repository('/repo', '/repo/.worktrees/feature'))
+
+  // The location moved in place: same tab and selection, new key, no extra
+  // history entry, and the page renders rather than reading as unknown.
+  expect(useTeamLocationStore.getState().location).toEqual({ teamKey: '/repo', tab: 'tasks', id: 'task-a' })
+  expect(renderer.root.findAllByProps({ 'data-testid': 'team-workspace-notice' })).toHaveLength(0)
+  expect(useTeamTaskStore.getState().views['/repo/.worktrees/feature']).toBeUndefined()
+  act(() => renderer.unmount())
 })

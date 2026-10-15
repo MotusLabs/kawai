@@ -8,9 +8,14 @@
 // moves to its own repository's main checkout, so views never cross into a
 // different team: a chat whose directory moves to another repository keeps
 // the old team's view under the old key and finds its new team's own view.
+// An open Team page moves with its team too: its URL names the key, so the
+// location is rewritten (in place, no new history entry) alongside the views
+// — otherwise the page would sit on a key no view answers and read as
+// unknown (D2/D3).
 import type { WorkspaceRepository } from '@shared/workspace'
 import { teamKeyOf } from '../utils/teamKey'
 import { aliasTeamKey } from '../utils/teamKeyAliases'
+import { useTeamLocationStore } from '../hooks/useTeamLocation'
 import { useStrategyStore } from './strategyStore'
 import { useTeamMailboxStore } from './teamMailboxStore'
 import { useTeamMessageStore } from './teamMessageStore'
@@ -36,6 +41,12 @@ function rekeyTeamViews(from: string, to: string) {
   useTeamMessageStore.getState().rekey(from, to)
   useStrategyStore.getState().rekey(from, to)
   useTeamWorkspaceStore.getState().rekey(from, to)
+  // An open Team page on the old key follows (D3): same tab, selection, and
+  // sub-view, replaced in place so no history entry appears for the move.
+  const location = useTeamLocationStore.getState().location
+  if (location?.teamKey === from) {
+    useTeamLocationStore.getState().navigate({ ...location, teamKey: to }, { replace: true })
+  }
 }
 
 /** Move every team view whose key now maps elsewhere within its own team. */

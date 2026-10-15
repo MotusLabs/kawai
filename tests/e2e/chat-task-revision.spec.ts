@@ -90,7 +90,6 @@ test('E09: draft, publish, notify, an uncertain notice resolved in the Mailbox, 
     await detail.getByTestId('task-publish').click()
     await expect(detail.getByTestId('task-direction')).toHaveText('Ship CSV and JSON exports')
     await expect(detail.getByTestId('task-draft-status')).toHaveCount(0)
-    await detail.getByTestId('task-revisions').locator('summary').click()
     await expect(detail.getByTestId('revision-rationale')).toHaveText('Rationale: Customer asked for JSON')
     const publication = detail.locator('[data-testid="task-publication"][data-revision="2"]')
     const recipient = publication.getByTestId('task-publication-recipient')

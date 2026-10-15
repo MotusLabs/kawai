@@ -130,7 +130,7 @@ test('detail shows direction, retained revisions, journal, subtasks, messages; c
   let renderer!: TestRenderer.ReactTestRenderer
   const render = (connected: boolean) => <TeamTasksPanel teamPath="dev" projectPath="/repo" view={view} sendMessage={message => sent.push(message)} connected={connected} />
   act(() => { renderer = TestRenderer.create(render(true)) })
-  expect(renderer.root.findAllByType('section').map(section => section.props['aria-label'])).toEqual(['Assignment', 'Direction', 'Results', 'Release', 'Publications', 'Status', 'Journal', 'Subtasks', 'Messages'])
+  expect(renderer.root.findAllByType('section').map(section => section.props['aria-label'])).toEqual(['Assignment', 'Direction', 'Acceptance', 'Revision history', 'Results', 'Release', 'Publications', 'Status', 'Journal', 'Subtasks', 'Messages'])
   expect(renderer.root.findByProps({ 'data-testid': 'task-direction' }).children.join('')).toBe('Current plan')
   expect(renderer.root.findByProps({ 'data-testid': 'task-acceptance' }).children.join('')).toBe('Ships')
   expect(renderer.root.findByProps({ 'data-testid': 'task-creator' }).children.join('')).toBe('lead (gone)')
@@ -200,7 +200,7 @@ describe('search and collapse (team-workspace-pages 5.5)', () => {
     useTeamTaskStore.setState({ views: {} })
   })
 
-  const parent = summary('parent', { title: 'Export CSV', direction: 'Ship a CSV export' })
+  const parent = summary('parent', { title: 'Export CSV', direction: 'Ship a CSV export', acceptance: 'Exports every row' })
   const child = summary('child-1', { title: 'Usage bar polish', parentId: 'parent', direction: 'Polish the usage bar' })
   const other = summary('other', { title: 'Unrelated work', direction: 'Something else' })
   const view = (): TaskView => ({ ...openView(), loading: false, tasks: [parent, child, other] })
@@ -251,14 +251,52 @@ describe('search and collapse (team-workspace-pages 5.5)', () => {
     let renderer!: TestRenderer.ReactTestRenderer
     act(() => { renderer = TestRenderer.create(<TeamTasksPanel teamPath="dev" projectPath="/repo" view={first} sendMessage={() => {}} connected />) })
     expect(renderer.root.findByProps({ 'data-testid': 'task-section-toggle-Journal' }).props['aria-expanded']).toBe(true)
+    expect(renderer.root.findByProps({ 'data-testid': 'task-section-toggle-Revision history' }).props['aria-expanded']).toBe(true)
     act(() => { renderer.root.findByProps({ 'data-testid': 'task-section-toggle-Journal' }).props.onClick() })
+    act(() => { renderer.root.findByProps({ 'data-testid': 'task-section-toggle-Revision history' }).props.onClick() })
     expect(renderer.root.findByProps({ 'data-testid': 'task-section-toggle-Journal' }).props['aria-expanded']).toBe(false)
-    // Direction keeps its own state while Journal stays collapsed…
+    expect(renderer.root.findByProps({ 'data-testid': 'task-section-toggle-Revision history' }).props['aria-expanded']).toBe(false)
+    // Direction and Acceptance keep their own state while Journal stays collapsed…
     expect(renderer.root.findByProps({ 'data-testid': 'task-section-toggle-Direction' }).props['aria-expanded']).toBe(true)
+    expect(renderer.root.findByProps({ 'data-testid': 'task-section-toggle-Acceptance' }).props['aria-expanded']).toBe(true)
     // …and opening another task finds Journal collapsed there too (5.5).
     const second = { ...view(), selectedTaskId: 'other', detail: detail(other) }
     act(() => { renderer.update(<TeamTasksPanel teamPath="dev" projectPath="/repo" view={second} sendMessage={() => {}} connected />) })
     expect(renderer.root.findByProps({ 'data-testid': 'task-section-toggle-Journal' }).props['aria-expanded']).toBe(false)
+    expect(renderer.root.findByProps({ 'data-testid': 'task-section-toggle-Revision history' }).props['aria-expanded']).toBe(false)
     act(() => { renderer.unmount() })
   })
+})
+
+test('a search overrides a collapsed parent and shows a snippet around a deep match', () => {
+  const parent = summary('parent', { title: 'Export CSV', direction: 'Ship a CSV export' })
+  const child = summary('child-deep', { title: 'Polish', direction: 'first line here\nand later the usage bar polish', parentId: 'parent' })
+  const view = (): TaskView => ({ ...openView(), loading: false, tasks: [parent, child] })
+  const mount = () => {
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => { renderer = TestRenderer.create(<TeamTasksPanel teamPath="dev" projectPath="/repo" view={view()} sendMessage={() => {}} connected />) })
+    return renderer
+  }
+  const rows = (renderer: TestRenderer.ReactTestRenderer) =>
+    renderer.root.findAllByProps({ 'data-testid': 'task-row' }).map(row => row.props['data-task-id'])
+  // Collapse the parent without a search…
+  const renderer = mount()
+  act(() => { renderer.root.findByProps({ 'data-testid': 'task-parent-toggle' }).props.onClick() })
+  expect(rows(renderer)).toEqual(['parent'])
+  // …then search for the subtask's deep direction text: the parent's
+  // collapsed state is overridden and the subtask shows under it.
+  act(() => { renderer.root.findByProps({ 'aria-label': 'Search tasks' }).props.onChange({ target: { value: 'usage bar polish' } }) })
+  act(() => { renderer.update(<TeamTasksPanel teamPath="dev" projectPath="/repo" view={view()} sendMessage={() => {}} connected />) })
+  expect(rows(renderer)).toEqual(['parent', 'child-deep'])
+  expect(renderer.root.findAllByProps({ 'data-testid': 'task-match' }).map(mark => mark.children.join(''))).toContain('usage bar polish')
+  // The matched row shows a snippet around the deep match, not only the first line.
+  const line = renderer.root.findAllByProps({ 'data-testid': 'task-direction-line' })
+    .find(node => node.props.children.props.text.includes('usage bar polish'))!
+  expect(line.props.children.props.text).toContain('…')
+  expect(line.props.children.props.text).not.toContain('first line here')
+  // Clearing the search restores the parent's collapsed state.
+  act(() => { renderer.root.findByProps({ 'aria-label': 'Search tasks' }).props.onChange({ target: { value: '' } }) })
+  act(() => { renderer.update(<TeamTasksPanel teamPath="dev" projectPath="/repo" view={view()} sendMessage={() => {}} connected />) })
+  expect(rows(renderer)).toEqual(['parent'])
+  act(() => { renderer.unmount() })
 })

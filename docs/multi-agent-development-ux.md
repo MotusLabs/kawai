@@ -22,10 +22,10 @@ This remains a documentation and selected-mechanism review, not a comprehensive 
 
 Current implementation references:
 
-- [Task list and creation](../src/client/components/chat/TeamTasksPanel.tsx): title, direction, acceptance, parent, manually entered worktree and OpenSpec change; no dispatch action.
+- [Task list and creation](../src/client/components/team/TeamTasksView.tsx): title, direction, acceptance, parent, manually entered worktree and OpenSpec change; no dispatch action.
 - [Task detail](../src/client/components/chat/TeamTaskDetail.tsx): revisions, journal, subtasks, participants, messages, amendments, and status controls.
 - [Chat integration](../src/client/components/chat/ChatView.tsx): Tasks, Mailbox, and Debug share one side slot; on narrow screens the panel hides the chat.
-- [Mailbox](../src/client/components/chat/TeamMailboxPanel.tsx): delivery exceptions and pending mail; no delivered history or message composer.
+- [Mailbox](../src/client/components/team/TeamMailboxView.tsx): delivery exceptions and pending mail; no delivered history or message composer.
 - [Peer transcript](../src/client/components/chat/ChatMessages.tsx): sender IDs, priority, tags, origin, and expandable task context.
 - [Staffing](../src/server/team/staffing.ts): group/task/worktree mail may spawn an agent; caps include one live spawned member per worktree across all groups.
 - [Task permissions](../src/server/team/TaskService.ts): only creator or human amends direction; only creator or human closes; only human reopens.

@@ -35,7 +35,9 @@ function repositoryRoot() {
 
 /** The spec's own isolated server, so no other run's sessions pollute the navigator. */
 function useIsolatedServer(root: string) {
-  const port = process.env.KAWAI_TEAM_PAGE_PORT || '4193'
+  // Default to E2E_PORT + 100 so a run on the suite's own port family never
+  // collides; KAWAI_TEAM_PAGE_PORT still overrides.
+  const port = process.env.KAWAI_TEAM_PAGE_PORT || String((Number(process.env.E2E_PORT) || 4173) + 100)
   const url = `http://127.0.0.1:${port}`
   const dbPath = join(root, 'agentboard.db')
   let server: ChildProcess | null = null

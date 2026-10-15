@@ -74,6 +74,27 @@ export function MarkedText({ text, needle }: { text: string; needle: string }) {
   return <>{text.slice(0, at)}<mark data-testid="task-match">{text.slice(at, at + needle.length)}</mark>{text.slice(at + needle.length)}</>
 }
 
+/** Context kept around a marked match, in characters (5.5). */
+const SNIPPET_CONTEXT = 24
+
+/**
+ * The direction line a row shows under a search: a snippet around the match —
+ * so a match deep in the direction is shown and marked — falling back to the
+ * first line when the search does not name this task (an ancestor kept for
+ * its matching subtask).
+ */
+export function directionLine(direction: string, needle: string): { text: string; needle: string } {
+  if (!needle) return { text: direction.split('\n')[0] ?? '', needle: '' }
+  const at = direction.toLowerCase().indexOf(needle.toLowerCase())
+  if (at < 0) return { text: direction.split('\n')[0] ?? '', needle: '' }
+  const start = Math.max(0, at - SNIPPET_CONTEXT)
+  const end = Math.min(direction.length, at + needle.length + SNIPPET_CONTEXT)
+  return {
+    text: `${start > 0 ? '…' : ''}${direction.slice(start, end)}${end < direction.length ? '…' : ''}`.replace(/\n/g, ' '),
+    needle,
+  }
+}
+
 export default function TeamTasksView({ teamPath, projectPath, view, sendMessage, connected, onSelectedTask, onOpenThread, onCreateWorktree, onOpenMailbox, onOpenSession }: {
   teamPath: string
   projectPath: string
@@ -115,6 +136,9 @@ export default function TeamTasksView({ teamPath, projectPath, view, sendMessage
   const search = useTeamWorkspaceStore(state => state.views[teamPath]?.tabs.tasks.search) ?? ''
   const collapsedParents = useTeamWorkspaceStore(state => state.views[teamPath]?.tabs.tasks.collapsedSections) ?? NONE_COLLAPSED
   const collapsedSet = useMemo(() => new Set(collapsedParents), [collapsedParents])
+  // While a search is active it overrides a parent's collapsed state: a
+  // matching subtask is shown under its parent (5.5).
+  const searching = search.trim() !== ''
   const toggleParent = (taskId: string) => useTeamWorkspaceStore.getState().toggleSectionCollapsed(teamPath, 'tasks', `parent:${taskId}`)
   const tree = useMemo(() => filterTree(buildTaskTree(view.tasks), search.trim()), [view.tasks, search])
 
@@ -279,7 +303,7 @@ export default function TeamTasksView({ teamPath, projectPath, view, sendMessage
         {view.tasks.length === 0 && !view.loading && <p className="text-sm text-secondary">No tasks yet</p>}
         {tree.length === 0 && view.tasks.length > 0 && <p className="text-sm text-secondary" data-testid="task-no-matches">No tasks match the search</p>}
         {tree.map(node => <TaskRow key={node.task.id} node={node} needle={search.trim()} depth={0}
-          sessions={sessions} collapsedParents={collapsedSet} onToggleParent={toggleParent} onSelect={select} />)}
+          sessions={sessions} collapsedParents={collapsedSet} searching={searching} onToggleParent={toggleParent} onSelect={select} />)}
       </div>
     </>}
   </div>
@@ -289,17 +313,18 @@ export default function TeamTasksView({ teamPath, projectPath, view, sendMessage
 const NONE_COLLAPSED: string[] = []
 
 /** One tree row with its nested subtasks; a collapsed parent hides them and states their count. */
-function TaskRow({ node, needle, depth, sessions, collapsedParents, onToggleParent, onSelect }: {
+function TaskRow({ node, needle, depth, sessions, collapsedParents, searching, onToggleParent, onSelect }: {
   node: TaskNode
   needle: string
   depth: number
   sessions: Session[]
   collapsedParents: Set<string>
+  searching: boolean
   onToggleParent: (taskId: string) => void
   onSelect: (taskId: string) => void
 }) {
   const { task, children } = node
-  const collapsed = children.length > 0 && collapsedParents.has(`parent:${task.id}`)
+  const collapsed = !searching && children.length > 0 && collapsedParents.has(`parent:${task.id}`)
   return <>
     <article data-task-id={task.id} data-testid="task-row" className={`mb-2 border border-border p-2 ${depth > 0 ? 'ml-4' : ''}`}>
       <div className="flex items-start justify-between gap-2">
@@ -316,7 +341,7 @@ function TaskRow({ node, needle, depth, sessions, collapsedParents, onTogglePare
         {task.parentId ? ' · subtask' : ''}
       </p>
       <p className="text-sm text-secondary" data-testid="task-direction-line">
-        <MarkedText text={task.direction.split('\n')[0] ?? ''} needle={needle} />
+        <MarkedText {...directionLine(task.direction, needle)} />
       </p>
       <p className="text-sm text-secondary" data-testid="task-participants">
         Participants: {task.participants.length > 0 ? task.participants.map(id => sessionLabel(id, sessions)).join(', ') : 'none yet'}
@@ -328,6 +353,6 @@ function TaskRow({ node, needle, depth, sessions, collapsedParents, onTogglePare
       </p>}
     </article>
     {!collapsed && children.map(child => <TaskRow key={child.task.id} node={child} needle={needle} depth={depth + 1}
-      sessions={sessions} collapsedParents={collapsedParents} onToggleParent={onToggleParent} onSelect={onSelect} />)}
+      sessions={sessions} collapsedParents={collapsedParents} searching={searching} onToggleParent={onToggleParent} onSelect={onSelect} />)}
   </>
 }

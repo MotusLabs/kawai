@@ -187,17 +187,22 @@ export default function TeamTaskDetail({ teamPath, projectPath, view, sendMessag
 
     <Section teamPath={teamPath} name="Direction">
       <p className="mt-1 whitespace-pre-wrap text-chat-body" data-testid="task-direction">{task.direction}</p>
-      {task.acceptance && <><h5 className="mt-2 font-medium">Acceptance criteria</h5>
-        <p className="whitespace-pre-wrap text-chat-body" data-testid="task-acceptance">{task.acceptance}</p></>}
-      <details className="mt-2 text-chat-meta" data-testid="task-revisions"><summary>Revision history ({detail.revisions.length})</summary>
+      <TaskDirectionEditor task={task} draft={detail.draft} connected={connected} disabled={disabled} act={act} />
+    </Section>
+
+    {task.acceptance && <Section teamPath={teamPath} name="Acceptance">
+      <p className="mt-1 whitespace-pre-wrap text-chat-body" data-testid="task-acceptance">{task.acceptance}</p>
+    </Section>}
+
+    <Section teamPath={teamPath} name="Revision history">
+      <div className="mt-1 text-chat-meta" data-testid="task-revisions">
         {detail.revisions.map(revision => <div key={revision.revision} data-revision={revision.revision} className="mt-2 border-l-2 border-border pl-2">
           <p className="text-secondary">Revision {revision.revision} · {actorLabel(revision.author, sessions)} · {new Date(revision.createdAt).toLocaleString()}</p>
           {revision.rationale && <p className="italic" data-testid="revision-rationale">Rationale: {revision.rationale}</p>}
           <p className="whitespace-pre-wrap">{revision.direction}</p>
           {revision.acceptance && <p className="whitespace-pre-wrap text-secondary">Acceptance: {revision.acceptance}</p>}
         </div>)}
-      </details>
-      <TaskDirectionEditor task={task} draft={detail.draft} connected={connected} disabled={disabled} act={act} />
+      </div>
     </Section>
 
     <Section teamPath={teamPath} name="Results">
