@@ -5,6 +5,8 @@
 import { describe, expect, test } from 'bun:test'
 import {
   ChatContextTracker,
+  EMPTY_REQUEST_USAGE,
+  mergeRequestUsage,
   parsePositiveTokens,
   sumRequestUsage,
 } from '../chat/contextUsage'
@@ -266,5 +268,49 @@ describe('ChatContextTracker', () => {
     tracker.setProfileWindow(100_000)
     tracker.readRequest(120_000, AT)
     expect(tracker.currentReading()?.percentage).toBe(120)
+  })
+})
+
+describe('mergeRequestUsage', () => {
+  const merge = (...sources: object[]) =>
+    sumRequestUsage(sources.reduce<ReturnType<typeof mergeRequestUsage>>(mergeRequestUsage, EMPTY_REQUEST_USAGE))
+
+  test('GLM: a zero start then a complete delta gives the delta sum', () => {
+    expect(
+      merge(
+        { input_tokens: 0, output_tokens: 0 },
+        { input_tokens: 46_500, output_tokens: 118, cache_read_input_tokens: 0 }
+      )
+    ).toBe(46_618)
+  })
+
+  test('Anthropic: an output-only delta keeps the start input and cache counts', () => {
+    expect(
+      merge(
+        { input_tokens: 2, cache_creation_input_tokens: 22_456, cache_read_input_tokens: 12_059, output_tokens: 8 },
+        { input_tokens: null, cache_read_input_tokens: null, cache_creation_input_tokens: null, output_tokens: 300 }
+      )
+    ).toBe(2 + 22_456 + 12_059 + 300)
+  })
+
+  test('MiMo: a start then a complete delta', () => {
+    expect(
+      merge(
+        { input_tokens: 3_358, output_tokens: 0, cache_read_input_tokens: 131_072 },
+        { input_tokens: 3_358, output_tokens: 329, cache_read_input_tokens: 131_072 }
+      )
+    ).toBe(3_358 + 131_072 + 329)
+  })
+
+  test('a start re-sent after the delta does not lower the sum', () => {
+    const afterDelta = mergeRequestUsage(EMPTY_REQUEST_USAGE, { input_tokens: 46_500, output_tokens: 118 })
+    const again = mergeRequestUsage(afterDelta, { input_tokens: 0, output_tokens: 0 })
+    expect(again).toEqual(afterDelta)
+  })
+
+  test('ignores absent, null, NaN, and negative fields', () => {
+    expect(
+      merge({ input_tokens: Number.NaN, output_tokens: -4, cache_read_input_tokens: null })
+    ).toBe(0)
   })
 })

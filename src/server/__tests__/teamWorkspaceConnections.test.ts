@@ -396,5 +396,5 @@ describe('publishes coalesce and share one read per team', () => {
 
 const emptyRow = (): TeamTaskRow => ({
   id: 'task-1', title: 'T', status: 'open', stage: 'unstarted', accountable: null, groupId: null,
-  worktree: null, waitingReason: null, nextAction: null, requiresHuman: false,
+  worktree: null, waitingReason: null, needsReevaluation: false, acknowledgement: null, nextAction: null, requiresHuman: false,
 })

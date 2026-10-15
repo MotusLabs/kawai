@@ -7,7 +7,7 @@ import { buildTeamPrompt, SECURITY_NOTE_BODY } from '../team/teamPrompt'
 const outbound: OutboundPromptFacts = { internal: [], modelProviders: [] }
 
 const settings: Omit<GroupDefinition, 'id' | 'label' | 'description' | 'prompt'> = {
-  canCreateTasks: false, canManageMailbox: false, releaseOnTaskClose: true, worktreeScoped: true, canReleaseMembers: true,
+  canCreateTasks: false, canCreatePlans: false, canManageMailbox: false, releaseOnTaskClose: true, worktreeScoped: true, canReleaseMembers: true,
   max: 1, approval: 'manual', profiles: [], strategy: 'first-available',
   onLimit: { parkIfResetWithinMs: 3 * 3_600_000, otherwise: 'forward' }, warnings: [],
 }
@@ -155,6 +155,41 @@ describe('buildTeamPrompt mailbox management note (team-mailbox-management D8)',
   })
 })
 
+describe('buildTeamPrompt plan note (durable-plans 6.2)', () => {
+  const creator = buildTeamPrompt({ outbound, sessionId: 'chat-p1', group: { ...devs, canCreatePlans: true }, groups: [devs] })
+  const member = buildTeamPrompt({ outbound, sessionId: 'chat-p2', group: devs, groups: [devs] })
+  const groupless = buildTeamPrompt({ outbound, sessionId: 'chat-p3', groups: [devs] })
+
+  test('every session learns the plan tools, its draft id, the direction rule, and task links', () => {
+    for (const prompt of [creator, member, groupless]) {
+      expect(prompt).toContain('# Plans')
+      for (const name of ['plan_list', 'plan_get', 'plan_save_draft', 'plan_submit_for_review']) expect(prompt).toContain(`\`mcp__kawai-team__${name}\``)
+      expect(prompt).toContain('drafts and revisions in review are proposals, not direction')
+      expect(prompt).toContain('pass `plan_id` and `plan_change` together')
+      expect(prompt).not.toMatch(/plan_(approve|withdraw|close|reopen)/)
+    }
+    expect(creator).toContain('Draft ids default to your session id (`chat-p1`)')
+  })
+
+  test('the creation right follows canCreatePlans', () => {
+    expect(creator).toContain('Your group may create plans: `mcp__kawai-team__plan_create`')
+    for (const prompt of [member, groupless]) {
+      expect(prompt).toContain('You cannot create plans')
+      expect(prompt).not.toContain('plan_create')
+    }
+  })
+
+  test('the note states owner-only approval and never claims an agent can approve', () => {
+    for (const prompt of [creator, member, groupless]) {
+      expect(prompt).toContain("Only the human — every plan's owner — approves, withdraws, completes, cancels, or reopens a plan")
+      const note = prompt.slice(prompt.indexOf('# Plans'))
+      for (const line of note.split('\n')) {
+        if (/\bapprove/i.test(line)) expect(line).toMatch(/only the human|human reviews|no tool|grants nothing|never changes/i)
+      }
+    }
+  })
+})
+
 describe('buildTeamPrompt security note (execution-safety-recovery D1)', () => {
   const configured: OutboundPromptFacts = {
     internal: ['example.internal', '192.0.2.0/24'],
@@ -166,8 +201,9 @@ describe('buildTeamPrompt security note (execution-safety-recovery D1)', () => {
   test('every session ends with the Outbound actions section after the strategy note', () => {
     for (const prompt of [withGroup, groupless]) {
       expect(prompt).toContain('# Outbound actions')
-      // The note is the last section and follows the strategy note.
+      // The note is the last section and follows the strategy and plan notes.
       expect(prompt.indexOf('# Product strategy')).toBeLessThan(prompt.indexOf('# Outbound actions'))
+      expect(prompt.indexOf('# Plans')).toBeLessThan(prompt.indexOf('# Outbound actions'))
       expect(prompt.lastIndexOf('# ')).toBe(prompt.indexOf('# Outbound actions'))
       // The fixed body (contract E1) is carried verbatim.
       expect(prompt).toContain(SECURITY_NOTE_BODY)

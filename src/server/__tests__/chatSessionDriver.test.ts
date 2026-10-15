@@ -370,6 +370,17 @@ function result(subtype: string, extra: Record<string, unknown> = {}): SDKMessag
   } as unknown as SDKMessage
 }
 
+/** Top-level (or subagent, with a parent id) stream event for usage tests. */
+function streamEvent(event: Record<string, unknown>, parentToolUseId: string | null = null): SDKMessage {
+  return {
+    type: 'stream_event',
+    event,
+    parent_tool_use_id: parentToolUseId,
+    uuid: `se-${Math.random()}`,
+    session_id: 'sdk-1',
+  } as unknown as SDKMessage
+}
+
 /**
  * Assistant frame carrying per-request usage (design D1): input + cache_read
  * + cache_creation + output is the next request's cost, never a total. A
@@ -2407,6 +2418,102 @@ describe('ChatSessionDriver context usage', () => {
       usedTokens: 8_200,
       thresholdTokens: 167_000,
     })
+  })
+
+  test('GLM: zero start and assistant usage, real counts only in the final delta', async () => {
+    const harness = createHarness({
+      contextImpl: async () => contextReport({ autoCompactThreshold: 967_000 }),
+    })
+    harness.driver.send('hi')
+    const fake = harness.fakes[0]!
+    fake.push(streamEvent({ type: 'message_start', message: { id: 'msg_g', usage: { input_tokens: 0, output_tokens: 0 } } }))
+    fake.push(assistantUsage({}, 'msg_g'))
+    await flush()
+    expect(harness.contextUsage.filter(Boolean)).toHaveLength(0)
+
+    fake.push(streamEvent({ type: 'message_delta', delta: {}, usage: { input_tokens: 46_500, output_tokens: 118, cache_read_input_tokens: 0 } }))
+    await flush()
+    expect(harness.contextUsage.at(-1)).toMatchObject({ usedTokens: 46_618, thresholdTokens: 967_000 })
+
+    // A trailing zero-usage assistant frame does not lower the reading.
+    fake.push(assistantUsage({}, 'msg_g'))
+    await flush()
+    expect(harness.contextUsage.at(-1)).toMatchObject({ usedTokens: 46_618 })
+  })
+
+  test('an output-only final delta keeps the start input and cache counts', async () => {
+    const harness = createHarness({
+      contextImpl: async () => contextReport({ autoCompactThreshold: 167_000 }),
+    })
+    harness.driver.send('hi')
+    const fake = harness.fakes[0]!
+    fake.push(streamEvent({ type: 'message_start', message: { id: 'msg_a', usage: { input_tokens: 2, cache_creation_input_tokens: 22_456, cache_read_input_tokens: 12_059, output_tokens: 8 } } }))
+    fake.push(streamEvent({ type: 'message_delta', delta: {}, usage: { input_tokens: null, cache_read_input_tokens: null, cache_creation_input_tokens: null, output_tokens: 300 } }))
+    await flush()
+    expect(harness.contextUsage.at(-1)).toMatchObject({ usedTokens: 2 + 22_456 + 12_059 + 300 })
+  })
+
+  test("a subagent's stream usage does not move the meter", async () => {
+    const harness = createHarness({
+      contextImpl: async () => contextReport({ autoCompactThreshold: 200_000 }),
+    })
+    harness.driver.send('run a task')
+    const fake = harness.fakes[0]!
+    fake.push(streamEvent({ type: 'message_start', message: { id: 'msg_p', usage: { input_tokens: 0, output_tokens: 0 } } }))
+    fake.push(streamEvent({ type: 'message_delta', delta: {}, usage: { input_tokens: 40_000, output_tokens: 100 } }))
+    await flush()
+    const before = harness.contextUsage.length
+    fake.push(streamEvent({ type: 'message_start', message: { id: 'msg_s', usage: { input_tokens: 150_000, output_tokens: 0 } } }, 'toolu_task_1'))
+    fake.push(streamEvent({ type: 'message_delta', delta: {}, usage: { input_tokens: 150_000, output_tokens: 4_000 } }, 'toolu_task_1'))
+    await flush()
+    expect(harness.contextUsage).toHaveLength(before)
+    expect(harness.contextUsage.at(-1)).toMatchObject({ usedTokens: 40_100 })
+  })
+
+  test('a final delta after the turn ended still updates the reading', async () => {
+    const harness = createHarness({
+      contextImpl: async () => contextReport({ autoCompactThreshold: 200_000 }),
+    })
+    harness.driver.send('hi')
+    const fake = harness.fakes[0]!
+    fake.push(streamEvent({ type: 'message_start', message: { id: 'msg_t', usage: { input_tokens: 0, output_tokens: 0 } } }))
+    fake.push(result('success', { modelUsage: modelUsageWith(200_000) }))
+    await flush()
+    fake.push(streamEvent({ type: 'message_delta', delta: {}, usage: { input_tokens: 30_000, output_tokens: 50 } }))
+    await flush()
+    expect(harness.contextUsage.at(-1)).toMatchObject({ usedTokens: 30_050 })
+  })
+
+  test('a reset drops the request usage: a late delta publishes nothing', async () => {
+    const harness = createHarness({
+      contextImpl: async () => contextReport({ autoCompactThreshold: 167_000 }),
+    })
+    harness.driver.send('hello')
+    const fake = harness.fakes[0]!
+    fake.push(streamEvent({ type: 'message_start', message: { id: 'msg_old', usage: { input_tokens: 0, output_tokens: 0 } } }))
+    fake.push(streamEvent({ type: 'message_delta', delta: {}, usage: { input_tokens: 100_000, output_tokens: 10 } }))
+    await flush()
+    expect(harness.contextUsage.at(-1)).toMatchObject({ usedTokens: 100_010 })
+
+    fake.push({
+      type: 'conversation_reset',
+      trigger: 'plan_mode_exit',
+      new_conversation_id: 'fresh',
+      uuid: 'reset-uuid',
+      session_id: 'sdk-1',
+    } as unknown as SDKMessage)
+    await flush()
+    expect(harness.contextUsage.at(-1)).toBeNull()
+    const count = harness.contextUsage.length
+
+    fake.push(streamEvent({ type: 'message_delta', delta: {}, usage: { input_tokens: 100_000, output_tokens: 20 } }))
+    await flush()
+    expect(harness.contextUsage).toHaveLength(count)
+
+    fake.push(streamEvent({ type: 'message_start', message: { id: 'msg_new', usage: { input_tokens: 0, output_tokens: 0 } } }))
+    fake.push(streamEvent({ type: 'message_delta', delta: {}, usage: { input_tokens: 8_200, output_tokens: 5 } }))
+    await flush()
+    expect(harness.contextUsage.at(-1)).toMatchObject({ usedTokens: 8_205, thresholdTokens: 167_000 })
   })
 
   test('the model-window fallback is labelled as an approximation', async () => {

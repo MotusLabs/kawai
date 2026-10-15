@@ -365,7 +365,7 @@ test('targets list the team-scoped worktrees and changes', async () => {
   // A plain directory: no git worktrees to list.
   expect(targets.worktrees).toEqual([])
   await send({ type: 'team-task-targets', teamPath: '/other', requestId: 't2' })
-  expect(last('team-task-targets-result')!.targets).toEqual({ worktrees: [], changes: [{ name: 'add-x', locations: [dir] }] })
+  expect(last('team-task-targets-result')!.targets).toEqual({ worktrees: [], changes: [{ name: 'add-x', locations: [dir] }], plans: [] })
   // The change list narrows to the roots the chosen worktree validates for;
   // an unknown worktree errors inline.
   await send({ type: 'team-task-targets', teamPath: '/repo', requestId: 't3', worktree: '/nope' })

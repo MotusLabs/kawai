@@ -6,6 +6,7 @@ import { handleStrategyMessage } from '../protocol/strategyMessages'
 import { handleTeamMessage } from '../protocol/teamMessages'
 import type { MessageRouterDeps } from '../protocol/types'
 import { useStrategyStore } from '../stores/strategyStore'
+import { useTeamPlanStore } from '../stores/teamPlanStore'
 import { useTeamTaskStore } from '../stores/teamTaskStore'
 import { aliasTeamKey, clearTeamKeyAliases, routedTeamPath } from '../utils/teamKeyAliases'
 
@@ -15,6 +16,7 @@ afterEach(() => {
   clearTeamKeyAliases()
   useTeamTaskStore.setState({ views: {} })
   useStrategyStore.setState({ views: {} })
+  useTeamPlanStore.setState({ views: {} })
 })
 
 describe('routedTeamPath', () => {
@@ -54,4 +56,20 @@ test('a strategy action result sent before a rekey settles under the new key', (
   handleStrategyMessage({ type: 'strategy-result', teamPath: '/repo/wt', requestId: 'r1', error: 'stale' }, deps)
   const view = useStrategyStore.getState().views['/repo']!
   expect(Object.keys(view.pending)).toEqual([])
+})
+
+test('a plan command result sent before a rekey settles under the new key, keeping its selection and armed command', () => {
+  const plans = useTeamPlanStore.getState()
+  plans.open('/repo/wt', 'p1')
+  plans.arm('/repo/wt', 'approve:p1:2')
+  const commandId = plans.command('/repo/wt', 'approve:p1:2', 'x', 'r1')
+  plans.begin('/repo/wt', 'r1', 'approve')
+  rekeyTeamViewsForTests('/repo/wt', '/repo')
+  expect(useTeamPlanStore.getState().views['/repo/wt']).toBeUndefined()
+  expect(useTeamPlanStore.getState().views['/repo']).toMatchObject({ selected: 'p1', pending: { r1: 'approve' } })
+  handleTeamMessage({ type: 'team-plan-result', teamPath: '/repo/wt', requestId: 'r1', error: 'stale' }, deps)
+  const view = useTeamPlanStore.getState().views['/repo']!
+  expect(view.pending).toEqual({})
+  expect(view.error).toBe('stale')
+  expect(view.commands['approve:p1:2']).toEqual({ commandId, payload: 'x', refused: true })
 })

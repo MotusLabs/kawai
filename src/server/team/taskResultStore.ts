@@ -111,6 +111,19 @@ export class TaskResultStore {
     return id ? this.get(id) : null
   }
 
+  /** The team's outstanding results submitted at or after `since` (morning summary, D8). */
+  outstandingSince(teamId: string, since: string): TaskResult[] {
+    return (this.db.prepare(`SELECT * FROM team_task_results r WHERE team_id = ? AND created_at >= ?
+      AND NOT EXISTS (SELECT 1 FROM team_task_results s WHERE s.supersedes_result_id = r.id)
+      ORDER BY created_at, rowid`).all(teamId, since) as Record<string, unknown>[]).map(row => this.map(row))
+  }
+
+  /** Whether the session submitted a result for the task (the finished-turn bucket's test). */
+  submittedBy(taskId: string, sessionId: string): boolean {
+    return this.db.prepare('SELECT 1 FROM team_task_results WHERE task_id = ? AND submitted_by_kind = ? AND submitted_by_session = ? LIMIT 1')
+      .get(taskId, 'agent', sessionId) !== null
+  }
+
   findingsFor(resultId: string): TaskFindings[] {
     return (this.db.prepare('SELECT * FROM team_task_findings WHERE result_id = ? ORDER BY created_at, rowid')
       .all(resultId) as Record<string, unknown>[]).map(row => ({
