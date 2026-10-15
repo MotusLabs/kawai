@@ -49,7 +49,7 @@ Unloaded transcripts are replayed with bounded concurrency (4). Their ids match 
 
 For tool events, `anchorId` is `tool:<toolCallId>`; for other events it is the event id. That is how the client finds the rendered row.
 
-A snippet is about 60 characters either side of the first occurrence in the entry. Whitespace is collapsed, cuts are marked with `…`, and the match offsets inside the snippet are returned so the client highlights without re-matching. A query that matches `session.name` sets `nameMatch: true`.
+A snippet is about 60 characters either side of the first occurrence in the entry. Whitespace is collapsed and cuts are marked with `…`. The offsets of every occurrence inside the excerpt are returned as `ranges`, so the client highlights without re-matching. Each snippet also carries its `tool` name: `tool_call` and `approval_request` events have it directly, and a `tool_result` looks it up through a `toolCallId → tool` map built in the same pass. The client derives the label from `kind` and `tool`. A query that matches `session.name` sets `nameMatch: true`.
 
 A thin walker `searchActiveSessions(manager, query)` iterates the non-archived local chat records, sorts groups by their newest match's `at`, caps the list at 50 (`truncated: true` beyond that), and counts `unsearchable` chats whose replay returned the `hist-unavailable` notice or threw.
 
@@ -69,6 +69,36 @@ A small Zustand store (`sessionSearchStore.ts`) holds `query`, `status` (`idle`/
 Choosing a snippet selects the session as a normal selection would and sets `chatStore.pendingReveal = { sessionId, anchorId }`. Each transcript row gets `data-anchor-id` (the event id, or `tool:<toolCallId>` for tool rows). After a render with events, `ChatView` checks for a pending reveal on its session. It queries `[data-anchor-id="…"]` (escaped with `CSS.escape`), calls `scrollIntoView({ block: 'center' })`, adds a highlight class for about 2 s, and clears the reveal. The reveal suppresses ChatView's stick-to-bottom for that render.
 
 If the snapshot has arrived and the anchor is absent, the reveal is dropped silently. Rows grouped into a single tool card share the tool anchor, so a `tool_call` match and a `tool_result` match land on the same card.
+
+### D6. UI layout and interaction
+
+Navigator while a query is active (default width; `▸` marks the keyboard-active item; `┃` marks the selected chat's header):
+
+```
+┌──────────────────────────────────────────┐
+│ [Projects ▾]  [🔍 #147               ✕ ] │  ← filter bar (h-10)
+├──────────────────────────────────────────┤
+│ 3 chats match                            │  ← status line (also the live region text)
+│┃middle-dev fix-login        4 · 10m ago  │  ← group header: name, worktree, count, time
+│   Tool result · Bash                     │
+│   …Creating pull request… https://github │  ← excerpt, ≤2 lines, match in <mark>
+│   .com/acme/app/pull/[147]…              │
+│ ▸ You                                    │
+│   …please review [#147] before merging…  │
+│  lead  kawai                 1 · 1h ago  │
+│   Team message                           │
+│   …dev reports PR [#147] is open…        │
+│  reviewer  fix-login         name match  │  ← name-only match, no snippets
+│ 1 chat could not be fully searched       │  ← shown only when unsearchable > 0
+└──────────────────────────────────────────┘
+```
+
+- **Box.** `SessionSearchBox` is `flex-1 min-w-32` after the dropdowns. Its placeholder is `Search chats`. A muted `kbd` hint reading the configured modifier plus `K` shows while the box is empty and unfocused, and a ✕ clear button shows while it has text. The box acts as the combobox (`role="combobox"`, `aria-expanded`, `aria-controls` pointing at the list, `aria-activedescendant` naming the active option). Keys handled in the box: ↑/↓ (clamped, no wrap, `scrollIntoView({ block: 'nearest' })` on the active item), Enter (opens the active item; does nothing when none is active), Escape (clears). Focus never leaves the box on Enter, so the user can keep going down the list.
+- **List.** `role="listbox"`. Each header and snippet is a `role="option"` with a stable DOM id (`search-opt-<sessionId>` or `search-opt-<sessionId>-<anchorId>`). The active index is client state in the search store. It resets to none whenever results are replaced, and pointer hover never changes it; click opens directly.
+- **Header row.** A single line: the name (`truncate`, `flex-shrink` 3), then the worktree name (`truncate`, `flex-shrink` 1, `title` = full path), then `count · formatRelativeTime(lastMatchAt)` from `src/client/utils/time.ts` (`shrink-0 whitespace-nowrap`). A name-only match shows `name match` in place of the count. The worktree name comes from the client's workspace snapshot: the worktree whose root contains `projectPath`, matching the navigator's section placement, else the path's basename. The selected chat's header reuses the navigator's existing `session-row selected` CSS.
+- **Snippet row.** The label is muted on its own line. The excerpt sits below it in `line-clamp-2 break-words`, with `title` = absolute local time. Matches render as `<mark class="search-match">` from `ranges`. There is no horizontal scroll anywhere (`min-w-0`, `overflow-x-hidden` on the list).
+- **Colors.** Tailwind `/opacity` modifiers on `var()` colors emit nothing in this project, so highlights are plain CSS classes in `src/client/styles/index.css` with new per-theme variables: `--search-match-bg` and `--search-match-fg`, defined for `:root`, `[data-theme="light"]`, and the chat palette. `.search-match` uses them. `.search-active` is a 2 px inset `var(--accent)` outline for the keyboard-active item. `.chat-reveal` animates the revealed transcript row from `--search-match-bg` to transparent over about 2 s, and honors `prefers-reduced-motion` with a static 2 s highlight that is then removed. Contrast is checked by eye in both themes during the browser verification task.
+- **Status line and announcements.** A single `aria-live="polite"` element above the list renders `Searching…`, `N chats match` (`1 chat matches`), `No active chat matches`, or the error. Its text changes once per settled state, which gives the single announcement. Footer notes cover `truncated` ("Showing the 50 most recent chats") and `unsearchable`.
 
 ## Risks / Trade-offs
 

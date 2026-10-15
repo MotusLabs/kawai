@@ -50,7 +50,7 @@ The system SHALL search the chat's name and the text of these conversation entri
 - **THEN** searching `pull/148` finds it
 
 ### Requirement: Results are grouped by session with snippets
-The system SHALL group results by chat session. Each group SHALL show the chat's name, its project directory, its total match count, and up to three snippets from its most recent matching entries, newest first. Each snippet SHALL show the entry kind and the matched text with surrounding context, with the match highlighted. Groups SHALL be ordered by most recent matching entry, newest first, and at most 50 groups SHALL be returned. A result set that reached a limit SHALL say so.
+The system SHALL group results by chat session. A group header SHALL show the chat's name, its worktree name (full path on hover), its match count, and the relative time of its newest match. Below it SHALL be up to three snippets from its newest matching entries, newest first. Groups SHALL be ordered by newest match. At most 50 groups SHALL be returned, and the results SHALL say when that limit was reached.
 
 #### Scenario: Several matches in one chat
 - **WHEN** a chat has five entries containing `#147`
@@ -58,11 +58,30 @@ The system SHALL group results by chat session. Each group SHALL show the chat's
 
 #### Scenario: Ordering across chats
 - **WHEN** chat A last mentioned `#147` an hour ago and chat B ten minutes ago
-- **THEN** chat B's group is listed before chat A's
+- **THEN** chat B's group is listed before chat A's and its header reads `10m ago`
+
+#### Scenario: Worktree name
+- **WHEN** a matching chat runs in a subdirectory of the linked worktree `.worktrees/fix-login`
+- **THEN** its group header shows `fix-login`, and hovering it shows the chat's full path
 
 #### Scenario: Long entry
 - **WHEN** a match falls in the middle of a tool result 20,000 characters long
 - **THEN** the snippet shows a bounded excerpt around the match, not the whole output
+
+### Requirement: Snippets name their entry and highlight the match
+Each snippet SHALL start with a label naming the entry kind: `You`, `Assistant`, `Team message`, `Command output`, `Notice`, or `Error`. A tool entry's label SHALL add the tool name, as in `Tool input · Bash`, `Tool result · Bash`, or `Approval · Bash`. The excerpt SHALL be clamped to two lines, with every occurrence of the query visibly highlighted in every theme. Hovering a snippet SHALL show the entry's absolute time.
+
+#### Scenario: Tool result label
+- **WHEN** the match is in the result of a Bash tool call
+- **THEN** the snippet's label reads `Tool result · Bash`
+
+#### Scenario: Highlight visible in each theme
+- **WHEN** results are shown in the light theme and in the dark theme
+- **THEN** the matched text is distinguishable from the surrounding excerpt in each
+
+#### Scenario: Excerpt clamp
+- **WHEN** a snippet's excerpt would wrap to more than two lines in the navigator's width
+- **THEN** it is cut to two lines ending with an ellipsis
 
 ### Requirement: Results jump to the matched entry
 The system SHALL, when the user chooses a snippet, select that chat, open its chat view, scroll the matched entry into view, and highlight it briefly. When the matched entry is a tool input or result, the system SHALL scroll to that tool's entry. Choosing a group's header SHALL open the chat without scrolling to an entry. If the matched entry is no longer in the transcript, the system SHALL still open the chat.
@@ -70,6 +89,10 @@ The system SHALL, when the user chooses a snippet, select that chat, open its ch
 #### Scenario: Jump to a tool result
 - **WHEN** the user chooses the snippet for the `gh pr create` result in chat B
 - **THEN** chat B is selected, its view scrolls to that tool entry, and the entry is highlighted for a moment
+
+#### Scenario: Entry highlight in the chat palette
+- **WHEN** the revealed entry is highlighted in the chat view's reduced-glare palette or in the light theme
+- **THEN** the highlight is visible against the transcript background and fades out after about two seconds
 
 #### Scenario: Entry no longer present
 - **WHEN** the chosen entry cannot be found after the chat opens
