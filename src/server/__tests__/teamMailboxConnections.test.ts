@@ -1,6 +1,7 @@
 // Mailbox subscriptions enforce team scope and publish authoritative state.
 import { afterEach, beforeEach, expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
+import { schemaDb } from './schemaDb'
 import type { ChatSessionManager } from '../chat/ChatSessionManager'
 import { ChatConnections } from '../chat/ChatConnections'
 import { MailboxStore } from '../team/mailboxStore'
@@ -21,7 +22,7 @@ beforeEach(() => {
   handOffs = []
   roster = [{ worktree: '/repo/feat-x', sessions: [{ sessionId: 'dev', group: 'devs', profile: 'glm', status: 'waiting', spawned: true, taskId: 'task-1' }], pendingSpawns: [{ group: 'qa', profile: 'default' }] }]
   waiting = { m1: { blocker: { kind: 'group-cap', counts: { live: 2, cap: 2 } }, others: [] } }
-  db = new Database(':memory:'); store = new MailboxStore(db); messages = []
+  db = schemaDb(':memory:'); store = new MailboxStore(db); messages = []
   connection = { send: message => messages.push(message) }
   const manager = {
     has: (id: string) => id === 'dev',

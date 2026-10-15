@@ -2,6 +2,7 @@
 // events. Held group claims retry only to their original recipient.
 import { afterEach, beforeEach, expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
+import { schemaDb } from './schemaDb'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -16,7 +17,7 @@ let db: Database
 let store: MailboxStore
 beforeEach(() => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kawai-receipt-')); file = path.join(dir, 'transcript.jsonl')
-  db = new Database(':memory:'); store = new MailboxStore(db)
+  db = schemaDb(':memory:'); store = new MailboxStore(db)
 })
 afterEach(() => { db.close(); fs.rmSync(dir, { recursive: true, force: true }) })
 const claim = (push = true) => {

@@ -6,6 +6,7 @@
 // in a durable row.
 import { afterEach, beforeEach, expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
+import { schemaDb } from './schemaDb'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -52,7 +53,7 @@ beforeEach(async () => {
   })
   records = new Map([['dev', row('dev', project)], ['stranger', row('stranger', elsewhere)]])
   teams = new Map()
-  db = new Database(':memory:')
+  db = schemaDb(':memory:')
   // Task summaries join the session table for participants; the rest of the
   // schema this test needs is created by the stores themselves.
   db.run('CREATE TABLE IF NOT EXISTS chat_sessions (session_id TEXT PRIMARY KEY, task_id TEXT)')

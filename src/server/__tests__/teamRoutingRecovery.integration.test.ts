@@ -1,7 +1,7 @@
 // Real mailbox, rule Workers, team catalogs, and dispatcher exercise recovery
 // across a rule reload and a handoff to an archived recipient.
 import { expect, test } from 'bun:test'
-import { Database } from 'bun:sqlite'
+import { schemaDb } from './schemaDb'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -23,7 +23,7 @@ async function fixture() {
   })
   const teams = new SessionTeams({ homeDir: root })
   await Promise.all([...records.keys()].map(id => teams.track(id, repo)))
-  const db = new Database(':memory:')
+  const db = schemaDb(':memory:')
   const pushed: Array<{ session: string; message: string }> = []
   const errors: unknown[] = []
   const mailbox = new SessionMailbox(db, {

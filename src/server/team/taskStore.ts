@@ -27,7 +27,6 @@ import { TaskDraftStore } from './taskDrafts'
 import { TaskAcknowledgements } from './taskAcknowledgements'
 import { TaskNotices } from './taskNotices'
 import { TaskResultStore } from './taskResultStore'
-import { CREATE_PLAN_TABLES_SQL, migratePlanTaskLink } from '../plans/planSchema'
 
 const CREATE_TABLES_SQL = `
 CREATE TABLE IF NOT EXISTS team_tasks (
@@ -67,6 +66,16 @@ CREATE TABLE IF NOT EXISTS team_task_journal (
 );
 CREATE INDEX IF NOT EXISTS team_task_journal_task ON team_task_journal (task_id, created_at);
 `
+
+/**
+ * Create the task tables and their revision schema; part of the frozen
+ * baseline step (execution-safety-recovery D13): the baseline step calls this, never the store.
+ */
+export function ensureTaskSchema(db: Database): void {
+  db.exec(CREATE_TABLES_SQL)
+  migrateTable(db)
+  migrateRevisionSchema(db)
+}
 
 /** Columns added after the table first shipped (task-assignment D4). */
 function migrateTable(db: Database) {
@@ -137,13 +146,6 @@ export class TaskStore {
   readonly results: TaskResultStore
 
   constructor(private readonly db: Database, private readonly mail?: MailboxStore, private readonly assignments?: AssignmentStore) {
-    db.exec(CREATE_TABLES_SQL)
-    migrateTable(db)
-    migrateRevisionSchema(db)
-    // The plan-change link (durable-plans D9); the plan tables exist too so
-    // every task read can name its plan's title.
-    db.exec(CREATE_PLAN_TABLES_SQL)
-    migratePlanTaskLink(db)
     this.drafts = new TaskDraftStore(db)
     this.acknowledgements = new TaskAcknowledgements(db)
     this.notices = mail && assignments ? new TaskNotices(db, mail, assignments, this.acknowledgements) : null

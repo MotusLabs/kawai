@@ -38,6 +38,12 @@ CREATE TABLE IF NOT EXISTS team_spawns (
 );
 `
 
+/** Create the table; part of the frozen baseline step (execution-safety-recovery D13): the baseline step calls this, never the store. */
+export function ensureStaffingSchema(db: Database): void {
+  db.exec(CREATE_TABLE_SQL)
+  migrateTable(db)
+}
+
 /** Columns added after the table first shipped. */
 function migrateTable(db: Database) {
   const columns = db.prepare('PRAGMA table_info(team_spawns)').all() as Array<{ name: string }>
@@ -122,10 +128,7 @@ export class WorktreeStaffing {
     now?: () => number
     /** Failure backoff; overridable so tests can watch a retry happen. */
     retryAfterMs?: number
-  }) {
-    db.exec(CREATE_TABLE_SQL)
-    migrateTable(db)
-  }
+  }) {}
 
   /** The failure backoff duration (D5); tests may shorten it to observe retries. */
   private get retryAfterMs(): number { return this.options.retryAfterMs ?? RETRY_AFTER_MS }

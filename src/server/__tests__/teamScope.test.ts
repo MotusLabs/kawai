@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { Database } from 'bun:sqlite'
+import { schemaDb } from './schemaDb'
 import type { ChatSessionManager } from '../chat/ChatSessionManager'
 import { ChatConnections } from '../chat/ChatConnections'
 import { cleanGitEnv } from '../git/gitCommand'
@@ -89,7 +89,7 @@ describe('TeamScopes', () => {
   })
 
   test('over the connection: a repository with no chat opens by its checkout or a worktree, and changes reach both views', async () => {
-    const db = new Database(':memory:')
+    const db = schemaDb(':memory:')
     const store = new MailboxStore(db)
     const teamId = path.join(repo, '.git')
     const manager = {

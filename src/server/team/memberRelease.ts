@@ -85,13 +85,16 @@ const isClosed = (status: TaskStatus) => status === 'done' || status === 'cancel
 const actorText = (actor: JournalAuthor): string =>
   actor.kind === 'human' ? 'the human' : actor.kind === 'system' ? 'kawai' : actor.sessionId
 
+/** Create the table; part of the frozen baseline step (execution-safety-recovery D13): the baseline step calls this, never the store. */
+export function ensureMemberReleaseSchema(db: Database): void {
+  db.exec(CREATE_TABLE_SQL)
+}
+
 export class MemberRelease {
   /** Scheduled retries of failed late-spawn marks, by session id. */
   private readonly lateMarkRetries = new Map<string, ReturnType<typeof setTimeout>>()
 
-  constructor(private readonly db: Database, private readonly options: MemberReleaseOptions) {
-    db.exec(CREATE_TABLE_SQL)
-  }
+  constructor(private readonly db: Database, private readonly options: MemberReleaseOptions) {}
 
   /** Every pending row (the dispatcher's cycle seeds definitions for them). */
   pending(): PendingReleaseRow[] {

@@ -3,6 +3,7 @@
 // and re-park. Split from limitOutcomes.test.ts to stay under 500 lines; the
 // setup mirrors it.
 import { Database } from 'bun:sqlite'
+import { schemaDb } from './schemaDb'
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import type { ChatSessionRecord } from '../db'
 import { parseGroupFile, type GroupDefinition } from '../team/groupFile'
@@ -36,7 +37,7 @@ const record = (sessionId: string, extra: Partial<ChatSessionRecord> = {}): Chat
 
 beforeEach(() => {
   now = T0
-  db = new Database(':memory:')
+  db = schemaDb(':memory:')
   store = new MailboxStore(db)
   limits = new LimitEventStore(db, () => now)
   records = new Map([['dev', record('dev')], ['lead', record('lead', { groupId: 'leads' })]])

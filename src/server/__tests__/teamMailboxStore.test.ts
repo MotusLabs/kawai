@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
+import { schemaDb } from './schemaDb'
+import { applyBaselineSchema } from '../dbSafety/baseline'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -15,7 +17,7 @@ describe('MailboxStore', () => {
 
   beforeEach(() => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kawai-mailbox-'))
-    db = new Database(path.join(dir, 'mail.db'))
+    db = schemaDb(path.join(dir, 'mail.db'))
     store = new MailboxStore(db)
   })
   afterEach(() => {
@@ -49,7 +51,7 @@ describe('MailboxStore', () => {
     const message = send({ deliverAt: '2099-01-01T00:00:00.000Z' })
     store.claim(send().id, 'chat-dev')
     db.close()
-    db = new Database(path.join(dir, 'mail.db'))
+    db = schemaDb(path.join(dir, 'mail.db'))
     store = new MailboxStore(db)
     expect(store.get(message.id)?.deliverAt).toBe('2099-01-01T00:00:00.000Z')
     expect(store.unacknowledgedClaims()).toHaveLength(1)
@@ -179,7 +181,7 @@ describe('MailboxStore', () => {
 
 
 test('retry to a killed direct or uncertain recipient cannot leave a queue row', () => {
-  const db = new Database(':memory:')
+  const db = schemaDb(':memory:')
   const store = new MailboxStore(db, { recipientExists: id => id !== 'killed' })
   try {
     for (const state of ['dead', 'uncertain']) {
@@ -192,7 +194,7 @@ test('retry to a killed direct or uncertain recipient cannot leave a queue row',
   } finally { db.close() }
 })
 test('thread history includes confirmed delivery only, excluding queued, cancelled and dead siblings', () => {
-  const db = new Database(':memory:'); const store = new MailboxStore(db)
+  const db = schemaDb(':memory:'); const store = new MailboxStore(db)
   const base = { teamId: TEAM, toKind: 'group' as const, toId: 'devs', fromSession: 'lead', fromGroup: null, originPath: '/repo', body: 'Confirmed' }
   try {
     const original = store.enqueue(base); store.claim(original.id, 'dev'); store.markPushed(original.id); store.markDelivered(original.id)
@@ -206,7 +208,7 @@ test('thread history includes confirmed delivery only, excluding queued, cancell
 })
 
 test('fixed and dynamic SQL statements are compiled once and reused across calls', () => {
-  const db = new Database(':memory:'); const prepare = spyOn(db, 'prepare')
+  const db = schemaDb(':memory:'); const prepare = spyOn(db, 'prepare')
   try {
     const store = new MailboxStore(db)
     const initialized = prepare.mock.calls.length
@@ -217,7 +219,7 @@ test('fixed and dynamic SQL statements are compiled once and reused across calls
   } finally { prepare.mockRestore(); db.close() }
 })
 test('urgentDirectFor returns only due urgent direct mail for the recipient, oldest first', () => {
-  const db = new Database(':memory:'); const store = new MailboxStore(db)
+  const db = schemaDb(':memory:'); const store = new MailboxStore(db)
   try {
     const base = { teamId: TEAM, toKind: 'session' as const, toId: 'chat-dev', fromSession: 'lead', fromGroup: null, originPath: '/repo', body: '' }
     const urgentOld = store.enqueue({ ...base, body: 'old', priority: 'urgent' }, '2026-01-01T00:00:00.000Z')
@@ -234,7 +236,7 @@ test('urgentDirectFor returns only due urgent direct mail for the recipient, old
   } finally { db.close() }
 })
 test('claimsFor returns one session\'s unacknowledged claims only', () => {
-  const db = new Database(':memory:'); const store = new MailboxStore(db)
+  const db = schemaDb(':memory:'); const store = new MailboxStore(db)
   try {
     const base = { teamId: TEAM, toKind: 'group' as const, toId: 'devs', fromSession: 'lead', fromGroup: null, originPath: '/repo', body: '' }
     const mine = store.enqueue(base)
@@ -254,6 +256,7 @@ describe('profile routing columns', () => {
     const db = new Database(':memory:')
     db.exec(`CREATE TABLE team_messages (id TEXT PRIMARY KEY, team_id TEXT NOT NULL, to_kind TEXT NOT NULL, to_id TEXT NOT NULL, from_session TEXT NOT NULL, from_group TEXT, origin_path TEXT NOT NULL, priority TEXT NOT NULL DEFAULT 'normal', tags TEXT NOT NULL DEFAULT '[]', thread_id TEXT NOT NULL, in_reply_to TEXT, hop INTEGER NOT NULL DEFAULT 1, body TEXT NOT NULL, state TEXT NOT NULL, claimed_by TEXT, claimed_at TEXT, deliver_at TEXT, created_at TEXT NOT NULL, pushed_at TEXT, delivered_at TEXT, reason TEXT, possible_duplicate INTEGER NOT NULL DEFAULT 0, attach_thread INTEGER NOT NULL DEFAULT 0, task_id TEXT);
       INSERT INTO team_messages (id, team_id, to_kind, to_id, from_session, origin_path, thread_id, body, state, created_at) VALUES ('m1', '${TEAM}', 'group', 'devs', 'lead', '/repo', 'm1', 'hi', 'queued', '2026-01-01');`)
+    applyBaselineSchema(db)
     const store = new MailboxStore(db)
     expect(store.get('m1')).toMatchObject({
       body: 'hi', claimCommit: null, parkedUntil: null, parkCount: 0, resumeMessageId: null, handoff: null, excludedProfile: null,
@@ -262,7 +265,7 @@ describe('profile routing columns', () => {
   })
 
   test('park, unpark, release, and forward transitions', () => {
-    const db = new Database(':memory:')
+    const db = schemaDb(':memory:')
     const store = new MailboxStore(db)
     const send = () => store.enqueue({ teamId: TEAM, toKind: 'session', toId: 'dev', fromSession: 'lead', fromGroup: null, originPath: '/repo', body: 'b' })
     const m = send()
@@ -287,7 +290,7 @@ describe('profile routing columns', () => {
   })
 
   test('a corrupt handoff column reads as none', () => {
-    const db = new Database(':memory:')
+    const db = schemaDb(':memory:')
     const store = new MailboxStore(db)
     const m = store.enqueue({ teamId: TEAM, toKind: 'group', toId: 'devs', fromSession: 'lead', fromGroup: null, originPath: '/repo', body: 'b' })
     db.prepare("UPDATE team_messages SET handoff = '{not json' WHERE id = ?").run(m.id)
@@ -303,7 +306,7 @@ test.each([
   '{"fromSession":"dev","fromProfile":"glm","claimCommit":null,"lastError":null,"progress":{"toolCalls":1,"tools":[],"filesTouched":[1]}}',
   '{broken',
 ])('malformed stored handoff %s degrades to no package and remains deliverable', handoff => {
-  const db = new Database(':memory:')
+  const db = schemaDb(':memory:')
   try {
     const store = new MailboxStore(db)
     const message = store.enqueue({ teamId: TEAM, toKind: 'session', toId: 'dev', fromSession: 'lead',

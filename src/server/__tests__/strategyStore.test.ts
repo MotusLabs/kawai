@@ -4,7 +4,7 @@
 // validated-observation refusal, and the human decision transaction —
 // command-id idempotency, the CAS race, and the single impact-review item.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
-import { Database } from 'bun:sqlite'
+import { schemaDb } from './schemaDb'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -382,7 +382,7 @@ test('a decision insert that loses the command-id race replays the recorded row 
 describe('StrategyContent round-trip through the store', () => {
   test('a revision content object survives save, submit, reopen, and re-hash', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kawai-strategy-rt-'))
-    const db = new Database(path.join(dir, 'rt.db'))
+    const db = schemaDb(path.join(dir, 'rt.db'))
     const store = new StrategyStore(db)
     const strategy = store.create({ productId: 'p', title: 'P', owner: { kind: 'human', sessionId: null }, teamId: TEAM, worktrees: [] })
     const original: StrategyContent = normalizeStrategyContent(content({ successMeasures: [{ outcome: 'o', measure: 'm', baseline: '1', target: UNKNOWN }] }))
@@ -390,7 +390,7 @@ describe('StrategyContent round-trip through the store', () => {
     expect(saved.ok).toBe(true)
     const submitted = store.submitRevision(strategy.id, { author: { kind: 'human', sessionId: null }, content: saved.ok ? saved.draft.content : original })
     expect(submitted.ok && submitted.revision.content).toEqual(original)
-    const reopened = new StrategyStore(new Database(path.join(dir, 'rt.db')))
+    const reopened = new StrategyStore(schemaDb(path.join(dir, 'rt.db')))
     const round = reopened.revision(strategy.id, 1)!
     expect(round.content).toEqual(original)
     expect(round.contentHash).toBe(hashStrategyContent(original))

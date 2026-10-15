@@ -4,6 +4,7 @@
 // snapshot of its own filters. Another team's watchers hear nothing.
 import { beforeEach, describe, expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
+import { schemaDb } from './schemaDb'
 import type { TeamMessage } from '../../shared/team'
 import { MailboxStore } from '../team/mailboxStore'
 import { MessageFeed, type MessageFeedEvent } from '../team/messageFeed'
@@ -20,7 +21,7 @@ let events: MessageFeedEvent[]
 let release: () => void
 
 beforeEach(() => {
-  db = new Database(':memory:')
+  db = schemaDb(':memory:')
   store = new MailboxStore(db)
   feed = new MessageFeed(store, new MessageQuery(db))
   events = []

@@ -3,6 +3,7 @@
 // participants, and persistence across reopening the database.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
+import { schemaDb } from './schemaDb'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -113,7 +114,7 @@ describe('TaskStore', () => {
 
   test('a second store on the same file cannot lose a revision', () => {
     const task = create()
-    const otherConnection = new Database(dbPath)
+    const otherConnection = schemaDb(dbPath)
     const second = new TaskStore(otherConnection)
     second.publish(task.id, { direction: 'from connection two', notify: false }, human)
     tasks.publish(task.id, { direction: 'from connection one', notify: false }, human)
