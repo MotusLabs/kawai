@@ -117,6 +117,13 @@ describe('submit', () => {
     expect(await bench.service.submit(bench.agent('lead'), { plan_id: plan.id })).toMatchObject({ ok: false, reason: 'alignment' })
   })
 
+  test('an integration-branch landing survives save and submit', async () => {
+    const landing = { mode: 'integration-branch', branch: 'wave-c/integration' } as const
+    const { planId, revision } = await bench.draftInReview({ landing })
+    expect(bench.plans.detail(planId)!.drafts[0]!.content.landing).toEqual(landing)
+    expect(bench.plans.revision(planId, revision)!.content.landing).toEqual(landing)
+  })
+
   test('an unchanged resubmission returns the existing number and writes nothing', async () => {
     const { planId, revision } = await bench.draftInReview()
     const before = counts()

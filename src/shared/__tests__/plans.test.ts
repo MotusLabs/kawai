@@ -5,6 +5,7 @@
 import { describe, expect, test } from 'bun:test'
 import {
   PLAN_CHECK_FLOOR,
+  effectiveReviewGroup,
   normalizePlanContent,
   planDiffSummary,
   planDisplayState,
@@ -16,6 +17,19 @@ import {
 import { planInput } from './planFixtures'
 
 const task = (id: string, planChange: string, status: PlanLinkedTask['status']): PlanLinkedTask => ({ id, title: id, status, planChange })
+
+describe('effectiveReviewGroup', () => {
+  test('a change\'s own review group wins; otherwise the plan\'s applies', () => {
+    const content = normalizePlanContent(planInput({
+      reviewGroup: 'reviewers',
+      changes: [{ change: 'api', group: 'middle-devs', reviewGroup: 'senior-devs' }, { change: 'ui', group: 'middle-devs' }],
+    }))
+    expect(effectiveReviewGroup(content, content.changes[0]!)).toBe('senior-devs')
+    expect(effectiveReviewGroup(content, content.changes[1]!)).toBe('reviewers')
+    const none = normalizePlanContent(planInput({ reviewGroup: null }))
+    expect(effectiveReviewGroup(none, none.changes[0]!)).toBeNull()
+  })
+})
 
 describe('normalizePlanContent', () => {
   test('drops unknown fields, including one meant to skip the floor', () => {
