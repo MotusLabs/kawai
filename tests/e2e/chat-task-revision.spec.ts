@@ -41,9 +41,18 @@ async function makeIdle(page: Page, session: string) {
   await expect(page.getByTestId('chat-status')).toHaveText('waiting', { timeout: 15_000 })
 }
 
+/** Open the Tasks view through the Team button or the page's own tab (team-workspace-pages 4.1). */
 async function openTasks(page: Page) {
-  await page.getByRole('button', { name: 'Tasks', exact: true }).click()
+  const button = page.getByTestId('chat-team-button')
+  if (await button.isVisible().catch(() => false)) await button.click()
+  await page.getByTestId('team-tab-tasks').click()
   await expect(page.getByTestId('team-tasks')).toBeVisible()
+}
+
+/** Expand a Mailbox section if it is collapsed (idempotent). */
+async function expandSection(page: import('@playwright/test').Page, name: string) {
+  const toggle = page.getByTestId(`mailbox-section-toggle-${name}`)
+  if ((await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.click()
 }
 
 test('E09: draft, publish, notify, an uncertain notice resolved in the Mailbox, and a retry — one revision', async ({ page }, info) => {
@@ -99,6 +108,7 @@ test('E09: draft, publish, notify, an uncertain notice resolved in the Mailbox, 
     // Resolve it in the Mailbox: discard it there, and the detail shows the notice Failed.
     await recipient.getByTestId('recipient-open-mailbox').click()
     const mailbox = page.getByTestId('team-mailbox')
+    await expandSection(page, 'Queued')
     const notice = mailbox.locator('article').filter({ hasText: 'revision 2 published by the human' })
     await notice.getByRole('button', { name: 'Discard', exact: true }).click()
     await expect(notice).toHaveCount(0)

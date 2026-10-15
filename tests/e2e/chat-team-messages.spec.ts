@@ -180,9 +180,11 @@ test('E06: named senders, chronological threads, task filtering, and a killed se
     await thread.getByTestId('participant-name').first().click()
     await expect(page.getByTestId('chat-view')).toContainText('Browser team lead')
 
-    // Task detail (still the chat-side Tasks panel until 5.5 moves it) embeds
-    // the task-filtered subset: its own two rows, never the unrelated ping.
-    await page.getByRole('button', { name: 'Tasks', exact: true }).click()
+    // Task detail embeds the task-filtered subset: its own two rows, never
+    // the unrelated ping. Reach it through the chat header's Team button.
+    await page.getByTestId('chat-team-button').click()
+    await page.getByTestId('team-tab-tasks').click()
+    await expect(page.getByTestId('team-tasks')).toBeVisible()
     await page.locator('[data-task-id]').getByRole('button', { name: 'Export CSV' }).click()
     const detail = page.getByTestId('task-detail')
     await expect(detail.getByTestId('message-row')).toHaveCount(2)

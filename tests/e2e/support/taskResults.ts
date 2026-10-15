@@ -89,9 +89,9 @@ export async function createTask(page: Page, input: { title: string; direction: 
 }
 
 /** Reopen the Tasks view (a fresh list snapshot) and a task's detail, by id (`task-…`) or title. */
-export async function reopenTask(page: Page, key: string) {
+export async function reopenTask(page: Page, key: string, teamKey?: string) {
   const panel = page.getByTestId('team-tasks')
-  if (!(await panel.isVisible().catch(() => false))) await openTasks(page)
+  if (!(await panel.isVisible().catch(() => false))) await openTasks(page, teamKey)
   else {
     const back = panel.getByRole('button', { name: 'All tasks' })
     if (await back.isVisible().catch(() => false)) await back.click()

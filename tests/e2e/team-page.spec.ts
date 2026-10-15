@@ -16,8 +16,10 @@ import { join } from 'node:path'
 
 test.skip(process.env.AGENTBOARD_CHAT_FIXTURE !== '1', 'Requires development chat fixture')
 
-// Workspace discovery runs on its own cadence; the entry trails the session.
-const SNAPSHOT_TIMEOUT = 20_000
+// Workspace discovery runs on its own cadence; the entry trails the session,
+// and on hosts where fs.watch cannot be allocated it waits for the 30s
+// reconciliation, so the timeout must cover a full cycle.
+const SNAPSHOT_TIMEOUT = 45_000
 
 /** A throwaway git repository — a real one, so the navigator lists its Team entry. */
 function repositoryRoot() {
@@ -98,7 +100,7 @@ async function createTerminal(page: Page, root: string) {
 }
 
 test('a terminal-only repository opens its Team page; view state survives a chat visit and Back; a reload keeps the tab', async ({ page }, info) => {
-  test.setTimeout(120_000)
+  test.setTimeout(200_000)
   const root = repositoryRoot()
   mkdirSync(join(root, '.kawai/groups'), { recursive: true })
   writeFileSync(join(root, '.kawai/groups/devs.md'), '---\nlabel: Developers\n---\nBuild features')
