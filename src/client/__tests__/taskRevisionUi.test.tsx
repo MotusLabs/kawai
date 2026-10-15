@@ -8,7 +8,7 @@ import { afterEach, expect, test } from 'bun:test'
 import TestRenderer, { act } from 'react-test-renderer'
 import type { ClientMessage } from '@shared/types'
 import type { HumanTaskDetail, RevisionRecipient, TaskPublication, TeamTaskSummary } from '@shared/teamTasks'
-import TeamTaskDetail from '../components/chat/TeamTaskDetail'
+import TeamTaskDetail from '../components/team/TeamTaskDetail'
 import { useTeamTaskStore } from '../stores/teamTaskStore'
 
 afterEach(() => { useTeamTaskStore.setState({ views: {} }) })

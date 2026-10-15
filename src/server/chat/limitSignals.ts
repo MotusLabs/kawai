@@ -47,6 +47,61 @@ export function assistantLimitSignal(
   return { kind: error, final: true, status, message: text.trim() || null, resetsAt }
 }
 
+const FIXED_OFFSET = /^([+-])(\d{2}):(\d{2})$/
+
+/** Minutes east of UTC for a fixed `±HH:MM` offset or an IANA zone at an instant; null if unusable. */
+function offsetMinutes(timeZone: string, at: number): number | null {
+  const fixed = FIXED_OFFSET.exec(timeZone)
+  if (fixed) {
+    const minutes = Number(fixed[2]) * 60 + Number(fixed[3])
+    return Number(fixed[2]) > 23 || Number(fixed[3]) > 59 ? null : (fixed[1] === '-' ? -minutes : minutes)
+  }
+  try {
+    const name = new Intl.DateTimeFormat('en-US', { timeZone, timeZoneName: 'longOffset' })
+      .formatToParts(at).find(part => part.type === 'timeZoneName')?.value ?? ''
+    const match = /^GMT(?:([+-])(\d{2}):(\d{2}))?$/.exec(name)
+    if (!match) return null
+    const minutes = match[1] ? Number(match[2]) * 60 + Number(match[3]) : 0
+    return match[1] === '-' ? -minutes : minutes
+  } catch {
+    return null
+  }
+}
+
+/** Whether a profile's `limitResetTimeZone` is usable: an IANA zone or a fixed `±HH:MM` offset. */
+export function isResetTimeZone(timeZone: string): boolean {
+  return offsetMinutes(timeZone, Date.now()) !== null
+}
+
+/**
+ * A reset time a gateway writes into its error text without a zone (GLM:
+ * `Your limit will reset at 2026-10-13 17:17:00`), read in the profile's
+ * `limitResetTimeZone`. Null when the text has no such time or the zone is unusable.
+ */
+export function textResetsAt(text: string, timeZone: string): string | null {
+  const match = /\breset(?:s)?\s+at\s+(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?/i.exec(text)
+  if (!match) return null
+  const [year, month, day, hour, minute, second] = match.slice(1).map(part => Number(part ?? 0))
+  const wall = Date.UTC(year, month - 1, day, hour, minute, second)
+  // Out-of-range parts (month 13, day 45, hour 25) roll over in Date.UTC; refuse them.
+  const check = new Date(wall)
+  if (check.getUTCFullYear() !== year || check.getUTCMonth() !== month - 1 || check.getUTCDate() !== day
+    || check.getUTCHours() !== hour || check.getUTCMinutes() !== minute || check.getUTCSeconds() !== second) return null
+  // The offset depends on the instant (DST); one correction settles it.
+  const first = offsetMinutes(timeZone, wall)
+  if (first === null) return null
+  const guess = wall - first * 60_000
+  const offset = offsetMinutes(timeZone, guess) ?? first
+  return new Date(wall - offset * 60_000).toISOString()
+}
+
+/** An announced reset wins; otherwise the profile zone reads one from a final signal's error text. */
+export function withTextReset(signal: ChatLimitSignal, timeZone: string | undefined): ChatLimitSignal {
+  if (signal.resetsAt || !signal.final || !signal.message || !timeZone) return signal
+  const resetsAt = textResetsAt(signal.message, timeZone)
+  return resetsAt ? { ...signal, resetsAt } : signal
+}
+
 /** Structural slice of a `rate_limit_event`'s info, for the reset time. */
 export interface RejectedRateLimitSlice {
   status?: string

@@ -73,6 +73,22 @@ describe('MailboxStore', () => {
     expect(store.teamsWithQueuedMail(t(9))).toEqual([TEAM])
   })
 
+  test('a due resume of parked work goes before older direct mail', () => {
+    const t = (n: number) => `2026-10-11T00:00:0${n}.000Z`
+    const work = send({ toKind: 'session', toId: 'chat-dev' }, t(1))
+    store.claim(work.id, 'chat-dev')
+    store.markPushed(work.id)
+    store.markDelivered(work.id)
+    const older = send({ toKind: 'session', toId: 'chat-dev' }, t(2))
+    const resume = send({ toKind: 'session', toId: 'chat-dev', fromSession: 'chat-dev', tags: ['resume'], deliverAt: t(5) }, t(3))
+    expect(store.park(work.id, t(5), resume.id)).toBe(true)
+    expect(store.nextEligible(dev, t(4))?.id).toBe(older.id)
+    expect(store.nextEligible(dev, t(5))?.id).toBe(resume.id)
+    // Urgent mail still comes first.
+    const urgent = send({ toKind: 'session', toId: 'chat-dev', priority: 'urgent' }, t(4))
+    expect(store.nextEligible(dev, t(5))?.id).toBe(urgent.id)
+  })
+
   test('delivery records push then acknowledgement; requeue forgets the claim', () => {
     const message = send()
     expect(store.markPushed(message.id)).toBe(false) // not claimed yet

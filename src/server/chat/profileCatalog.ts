@@ -10,6 +10,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { isResetTimeZone } from './limitSignals'
 
 /**
  * The only environment variables a catalog file may set: provider routing,
@@ -31,7 +32,7 @@ export const PROFILE_ID_PATTERN = /^[a-z0-9][a-z0-9-]*$/
 
 const MAX_ENV_ENTRIES = 32
 const MAX_ENV_VALUE_LENGTH = 4096
-const ENTRY_FIELDS = new Set(['label', 'model', 'executable', 'env'])
+const ENTRY_FIELDS = new Set(['label', 'model', 'executable', 'env', 'limitResetTimeZone'])
 const CONTROLLED = new Set<string>(PROFILE_CONTROLLED_ENV)
 
 /** Shipped fallback catalog; ~/.kawai/profiles.json replaces it when present. */
@@ -53,6 +54,8 @@ export interface CatalogProfile {
   model?: string
   /** Operator-trusted wrapper; only user-level (or shipped) files can set it. */
   executable?: string
+  /** Zone of reset times the provider writes without one (IANA or ±HH:MM). */
+  limitResetTimeZone?: string
 }
 
 export interface ProfileCatalog {
@@ -66,6 +69,7 @@ interface PartialProfile {
   env: Record<string, string>
   model?: string
   executable?: string
+  limitResetTimeZone?: string
 }
 
 type FileParse =
@@ -120,6 +124,13 @@ function validateEntry(
         return `${file}: profile "${id}" executable must be an absolute path.`
       }
       profile.executable = value
+      continue
+    }
+    if (field === 'limitResetTimeZone') {
+      if (typeof value !== 'string' || !isResetTimeZone(value)) {
+        return `${file}: profile "${id}" limitResetTimeZone must be an IANA time zone (Asia/Shanghai) or a ±HH:MM offset.`
+      }
+      profile.limitResetTimeZone = value
       continue
     }
     if (typeof value !== 'string' || !value.trim()) {
@@ -246,6 +257,7 @@ export function resolveProfileCatalog(
         env: { ...current.env, ...entry.env },
         model: entry.model ?? current.model,
         executable: entry.executable ?? current.executable,
+        limitResetTimeZone: entry.limitResetTimeZone ?? current.limitResetTimeZone,
       })
     }
   }
@@ -257,6 +269,7 @@ export function resolveProfileCatalog(
       env: profile.env,
       ...(profile.model !== undefined ? { model: profile.model } : {}),
       ...(profile.executable !== undefined ? { executable: profile.executable } : {}),
+      ...(profile.limitResetTimeZone !== undefined ? { limitResetTimeZone: profile.limitResetTimeZone } : {}),
     })
   }
   // Omitted selections resolve to `default`; it always exists, empty when no

@@ -30,6 +30,7 @@ import GitBranch01Icon from '@untitledui-icons/react/line/esm/GitBranch01Icon'
 import HandIcon from '@untitledui-icons/react/line/esm/HandIcon'
 import Moon01Icon from '@untitledui-icons/react/line/esm/Moon01Icon'
 import PlusIcon from '@untitledui-icons/react/line/esm/PlusIcon'
+import Users01Icon from '@untitledui-icons/react/line/esm/Users01Icon'
 import type { AgentSession } from '@shared/types'
 import type { FallbackSectionData, GroupedSessionEntry, WorkspaceView } from '../utils/workspaceView'
 import { useStableValue, stringArraysEqual } from '../hooks/useStableValue'
@@ -97,6 +98,12 @@ interface WorkspaceSectionListProps extends GroupedRowContext {
   onCreateChangeWorktree?: (repositoryId: string, change: string) => void
   /** Opens the repository branch browser from a worktree section header. */
   onBrowseBranches?: (repositoryId: string) => void
+  /**
+   * Opens a repository's Team page (team-workspace D10): one entry per
+   * repository, above the sections; selecting it never changes the session
+   * selection.
+   */
+  onOpenTeam?: (teamKey: string) => void
 }
 
 export default function WorkspaceSectionList(props: WorkspaceSectionListProps) {
@@ -108,11 +115,28 @@ export default function WorkspaceSectionList(props: WorkspaceSectionListProps) {
     onNewSessionInWorktree,
     onCreateChangeWorktree,
     onBrowseBranches,
+    onOpenTeam,
     ...rowContext
   } = props
 
   return (
     <div data-testid="workspace-section-list">
+      {/* Team entries (team-workspace D10): above the change/worktree
+          sections, never filtered or reordered with session rows. */}
+      {view.teams.map((team) => (
+        <button
+          key={team.key}
+          type="button"
+          data-testid="team-entry"
+          data-team-key={team.teamKey}
+          className="flex w-full items-center gap-1.5 px-3 py-2 text-xs font-medium text-accent hover:bg-hover"
+          title={`Open the Team page for ${team.repositoryName} (${team.teamKey})`}
+          onClick={() => onOpenTeam?.(team.teamKey)}
+        >
+          <Users01Icon aria-hidden="true" className="h-3.5 w-3.5" />
+          Team · {team.repositoryName}
+        </button>
+      ))}
       {view.sections.map((section) => (
         <section
           key={section.key}

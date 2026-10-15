@@ -55,10 +55,14 @@ async function makeIdle(page: Page, session: string) {
   await expect(page.getByTestId('chat-status')).toHaveText('waiting', { timeout: 15_000 })
 }
 
+/** Open the Tasks view through the Team button or the page's own tab (team-workspace-pages 4.1). */
 async function openTasks(page: Page) {
-  await page.getByRole('button', { name: 'Tasks', exact: true }).click()
+  const button = page.getByTestId('chat-team-button')
+  if (await button.isVisible().catch(() => false)) await button.click()
+  await page.getByTestId('team-tab-tasks').click()
   await expect(page.getByTestId('team-tasks')).toBeVisible()
 }
+
 
 test('E01/E02: create and assign reaches one member; a refusal keeps the form; a replay cannot duplicate', async ({ page }, info) => {
   const root = teamRoot()
@@ -111,8 +115,9 @@ test('E01/E02: create and assign reaches one member; a refusal keeps the form; a
     await expect(peer).toBeVisible({ timeout: 20_000 })
     await expect(peer).toContainText('Human')
     await page.locator(`[data-session-id="${lead}"]`).click()
-    // Back on the list, the row shows the assignment too.
-    await panel.getByRole('button', { name: 'All tasks' }).click()
+    // Back on the Team page's list (the button's URL carries no selection,
+    // so the list is showing), the row shows the assignment too.
+    await openTasks(page)
     await expect(panel.getByTestId('task-assignment').first()).toContainText('Assigned: group devs')
 
     // E01's replay: after a reload (the reconnect stand-in) the task still

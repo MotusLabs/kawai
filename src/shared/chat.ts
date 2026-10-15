@@ -301,6 +301,12 @@ export interface ChatUsageWindow {
   percentUsed: number
   /** ISO timestamp when the window resets, when known. */
   resetsAt: string | null
+  /**
+   * Window length in milliseconds when the server knows it for the kind
+   * (5-hour, 7-day, per-model weekly); absent otherwise — never guessed.
+   * With resetsAt it places the usage bar's elapsed-time marker.
+   */
+  periodMs?: number
 }
 
 /**

@@ -1,18 +1,18 @@
-// The chat header (chat-header-layout): identity and status block, panel
-// switcher, the Auto-approve switch, the session menu, and the kill
-// confirmation. Opening the menu or dialog needs a DOM; those flows run in
-// tests/e2e/chat-header.spec.ts.
+// The chat header (chat-header-layout, team-workspace-pages 4.1): identity
+// and status block, the one **Team** button (the side slot hosts only the
+// debug panel; the team views live on the Team page), the Auto-approve
+// switch, the session menu, and the kill confirmation. Opening the menu or
+// dialog needs a DOM; those flows run in tests/e2e/chat-header.spec.ts.
 import { afterEach, describe, expect, test } from 'bun:test'
 import TestRenderer, { act } from 'react-test-renderer'
 import type { Session } from '@shared/types'
 import ChatHeader, { projectName, type ChatHeaderProps } from '../components/chat/ChatHeader'
 import ChatKillDialog, { KillConfirmBody } from '../components/chat/ChatKillDialog'
-import ChatPanelSwitcher from '../components/chat/ChatPanelSwitcher'
 import { sessionMenuEntries, type SessionMenuEntry } from '../components/chat/ChatSessionMenu'
 import ChatView from '../components/chat/ChatView'
 import { Switch } from '../components/Switch'
-import { useTeamMailboxStore } from '../stores/teamMailboxStore'
-import { useTeamTaskStore } from '../stores/teamTaskStore'
+import { useSessionStore } from '../stores/sessionStore'
+import { resetTeamLocationForTests, useTeamLocationStore } from '../hooks/useTeamLocation'
 import { chooseSessionMenuEntry, sessionMenuEntriesOf } from './support/sessionMenu'
 
 const session = {
@@ -26,8 +26,8 @@ const textOf = (node: TestRenderer.ReactTestInstance | string): string =>
 function renderHeader(overrides: Partial<ChatHeaderProps> = {}) {
   const props: ChatHeaderProps = {
     session, profileLabel: 'Default', model: 'claude-opus-5-5', contextUsage: null, connectionStatus: 'connected',
-    openSlot: null, onToggleSlot: () => {}, onOpenTask: () => {}, onRename: () => {}, onToggleApproval: () => {},
-    onArchive: () => {}, onKill: () => {}, onClose: () => {}, ...overrides,
+    debugOpen: false, onToggleDebug: () => {}, onOpenTeam: () => {}, onOpenTask: () => {}, onRename: () => {},
+    onToggleApproval: () => {}, onArchive: () => {}, onKill: () => {}, onClose: () => {}, ...overrides,
   }
   let renderer!: TestRenderer.ReactTestRenderer
   act(() => { renderer = TestRenderer.create(<ChatHeader {...props} />) })
@@ -102,49 +102,30 @@ describe('identity block', () => {
   })
 })
 
-const pressedOf = (button: TestRenderer.ReactTestInstance) => button.props['aria-pressed']
-
-describe('panel switcher', () => {
-  test('the group lists Tasks, Mailbox, Messages, and Strategy and presses the open one', () => {
-    const toggled: string[] = []
-    const { byId, update } = renderHeader({ openSlot: 'mailbox', onToggleSlot: slot => toggled.push(slot) })
-    const group = byId('chat-panel-switcher')
-    expect(group.props.role).toBe('group')
-    expect(group.props['aria-label']).toBe('Side panels')
-    const buttons = group.findAllByType('button')
-    expect(buttons.map(button => textOf(button))).toEqual(['Tasks', 'Mailbox', 'Messages', 'Strategy'])
-    expect(buttons.map(pressedOf)).toEqual([false, true, false, false])
-    act(() => byId('chat-panel-tasks').props.onClick())
-    expect(toggled).toEqual(['tasks'])
-    update({ openSlot: 'tasks' })
-    expect(byId('chat-panel-switcher').findAllByType('button').map(pressedOf)).toEqual([true, false, false, false])
+describe('Team button (4.1)', () => {
+  test('one Team button, no team switcher, present for archived and plain-directory chats', () => {
+    const opened: string[] = []
+    const { byId, renderer } = renderHeader({ onOpenTeam: () => opened.push('team') })
+    expect(textOf(byId('chat-team-button'))).toBe('Team')
+    expect(renderer.root.findAllByProps({ 'data-testid': 'chat-panel-switcher' })).toHaveLength(0)
+    for (const slot of ['chat-panel-tasks', 'chat-panel-mailbox', 'chat-panel-messages', 'chat-panel-strategy']) {
+      expect(renderer.root.findAllByProps({ 'data-testid': slot })).toHaveLength(0)
+    }
+    act(() => byId('chat-team-button').props.onClick())
+    expect(opened).toEqual(['team'])
+    // Archived chats and plain-directory teams keep the button.
+    const archived = renderHeader({ session: { ...session, archivedAt: '2026-10-01T00:00:00.000Z' } as Session })
+    expect(archived.byId('chat-team-button')).toBeTruthy()
+    const plain = renderHeader({ session: { ...session, projectPath: '/plain/project' } as Session })
+    expect(plain.byId('chat-team-button')).toBeTruthy()
   })
 
-  test('choosing the open entry toggles it; nothing is pressed when no panel is open', () => {
-    const toggled: string[] = []
-    const { byId, update } = renderHeader({ openSlot: 'strategy', onToggleSlot: slot => toggled.push(slot) })
-    act(() => byId('chat-panel-strategy').props.onClick())
-    expect(toggled).toEqual(['strategy'])
-    update({ openSlot: null })
-    expect(byId('chat-panel-switcher').findAllByType('button').map(pressedOf)).toEqual([false, false, false, false])
-  })
-
-  test('the debug panel presses no switcher entry', () => {
-    const { byId } = renderHeader({ openSlot: 'debug' })
-    expect(byId('chat-panel-switcher').findAllByType('button').map(pressedOf)).toEqual([false, false, false, false])
-  })
-})
-
-describe('icon-only switcher', () => {
-  test('icon entries keep the panel name as accessible name and tooltip, and their pressed state', () => {
-    let renderer!: TestRenderer.ReactTestRenderer
-    act(() => { renderer = TestRenderer.create(<ChatPanelSwitcher openSlot="messages" onToggle={() => {}} iconsOnly />) })
-    const buttons = renderer.root.findAllByType('button')
-    expect(buttons.map(button => button.props['aria-label'])).toEqual(['Tasks', 'Mailbox', 'Messages', 'Strategy'])
-    expect(buttons.map(button => button.props.title)).toEqual(['Tasks', 'Mailbox', 'Messages', 'Strategy'])
-    expect(buttons.map(pressedOf)).toEqual([false, false, true, false])
-    for (const button of buttons) expect(button.findAll(node => typeof node === 'string' || node.type === 'svg').length).toBeGreaterThan(0)
-    expect(buttons.map(button => textOf(button))).toEqual(['', '', '', ''])
+  test('icon-only Team keeps its accessible name and tooltip', () => {
+    const { byId } = renderHeader({ layout: 'icons' })
+    const button = byId('chat-team-button')
+    expect(button.props['aria-label']).toBe('Team')
+    expect(button.props.title).toBe('Team')
+    expect(textOf(button)).toBe('')
   })
 })
 
@@ -171,34 +152,49 @@ describe('approval switch', () => {
 
 describe('in ChatView', () => {
   afterEach(() => {
-    act(() => {
-      useTeamTaskStore.setState({ views: {} })
-      useTeamMailboxStore.setState({ views: {} })
-    })
+    useSessionStore.setState({ sessions: [], selectedSessionId: null, selectedHibernatingSessionId: null })
+    resetTeamLocationForTests()
   })
 
-  test('the task chip opens the Tasks panel and presses Tasks in the switcher', () => {
+  test('the Team button and the task chip open the Team page; no team view mounts in a chat', () => {
     const chat = { ...session, taskId: 'task-1', taskTitle: 'Export' } as Session
+    act(() => { useSessionStore.setState({ sessions: [chat], selectedSessionId: chat.id }) })
     let renderer!: TestRenderer.ReactTestRenderer
     act(() => {
       renderer = TestRenderer.create(<ChatView session={chat} sendMessage={() => {}} connectionStatus="connected"
+        connectionEpoch={0} error={null} onClose={() => {}} onKill={() => {}}
+        onOpenTeam={teamKey => useTeamLocationStore.getState().navigate({ teamKey, tab: 'tasks' })}
+        onOpenTask={(teamKey, taskId) => useTeamLocationStore.getState().navigate({ teamKey, tab: 'tasks', id: taskId })} />)
+    })
+    // No team view mounts in the chat: the side slot hosts only Debug.
+    expect(renderer.root.findAllByProps({ 'data-testid': 'team-tasks' })).toHaveLength(0)
+    expect(renderer.root.findAllByProps({ 'data-testid': 'chat-debug-panel' })).toHaveLength(0)
+    // The task chip opens the Team page's Tasks tab with that task.
+    act(() => renderer.root.findByProps({ 'data-testid': 'chat-task' }).props.onClick())
+    expect(useTeamLocationStore.getState().location).toEqual({ teamKey: '/home/coder/kawai', tab: 'tasks', id: 'task-1' })
+    // The Team button opens the page on the last-used tab without an id.
+    act(() => renderer.root.findByProps({ 'data-testid': 'chat-team-button' }).props.onClick())
+    expect(useTeamLocationStore.getState().location).toEqual({ teamKey: '/home/coder/kawai', tab: 'tasks' })
+    act(() => renderer.unmount())
+  })
+
+  test('Debug toggles from the session menu and mounts the only side-slot panel', () => {
+    let renderer!: TestRenderer.ReactTestRenderer
+    act(() => {
+      renderer = TestRenderer.create(<ChatView session={session} sendMessage={() => {}} connectionStatus="connected"
         connectionEpoch={0} error={null} onClose={() => {}} onKill={() => {}} />)
     })
-    const pressed = () => renderer.root.findByProps({ 'data-testid': 'chat-panel-switcher' }).findAllByType('button').map(pressedOf)
-    expect(pressed()).toEqual([false, false, false, false])
-    act(() => renderer.root.findByProps({ 'data-testid': 'chat-task' }).props.onClick())
-    expect(pressed()).toEqual([true, false, false, false])
-    expect(useTeamTaskStore.getState().views['/home/coder/kawai']?.selectedTaskId).toBe('task-1')
-    act(() => renderer.root.findByProps({ 'data-testid': 'chat-panel-mailbox' }).props.onClick())
-    expect(pressed()).toEqual([false, true, false, false])
-    expect(useTeamTaskStore.getState().views['/home/coder/kawai']?.open ?? false).toBe(false)
+    act(() => chooseSessionMenuEntry(renderer.root, 'debug'))
+    expect(renderer.root.findAllByProps({ 'data-testid': 'chat-debug-panel' })).toHaveLength(1)
+    act(() => chooseSessionMenuEntry(renderer.root, 'debug'))
+    expect(renderer.root.findAllByProps({ 'data-testid': 'chat-debug-panel' })).toHaveLength(0)
     act(() => renderer.unmount())
   })
 })
 
 describe('session menu entries', () => {
   const noop = () => {}
-  const base = { openSlot: null, foldPanels: false, onRename: noop, onToggleSlot: noop, onArchive: noop, onKill: noop }
+  const base = { debugOpen: false, foldTeam: false, onOpenTeam: noop, onRename: noop, onToggleDebug: noop, onArchive: noop, onKill: noop }
   const shape = (entries: SessionMenuEntry[]) =>
     entries.map(entry => entry.kind === 'separator' ? '---' : `${entry.label}${entry.kind === 'check' && entry.checked ? ' ✓' : ''}${entry.kind === 'item' && entry.danger ? ' !' : ''}`)
 
@@ -210,22 +206,22 @@ describe('session menu entries', () => {
     expect(shape(sessionMenuEntries({ ...base, archived: true }))).toEqual(['Rename', 'Debug', '---', 'Kill session !'])
   })
 
-  test('Debug is checked while the debug panel is open and toggles the debug slot', () => {
-    const toggled: string[] = []
-    const entries = sessionMenuEntries({ ...base, archived: false, openSlot: 'debug', onToggleSlot: slot => toggled.push(slot) })
+  test('Debug is checked while the debug panel is open and toggles it', () => {
+    const toggled: number[] = []
+    const entries = sessionMenuEntries({ ...base, archived: false, debugOpen: true, onToggleDebug: () => toggled.push(1) })
     const debug = entries.find(entry => entry.id === 'debug')!
     expect(debug).toMatchObject({ kind: 'check', checked: true })
     if (debug.kind === 'check') debug.onToggle()
-    expect(toggled).toEqual(['debug'])
+    expect(toggled).toEqual([1])
   })
 
-  test('folded panels come first with their selected state', () => {
-    const toggled: string[] = []
-    const entries = sessionMenuEntries({ ...base, archived: false, openSlot: 'messages', foldPanels: true, onToggleSlot: slot => toggled.push(slot) })
-    expect(shape(entries)).toEqual(['Tasks', 'Mailbox', 'Messages ✓', 'Strategy', '---', 'Rename', 'Debug', '---', 'Archive', 'Kill session !'])
-    const tasks = entries[0]!
-    if (tasks.kind === 'check') tasks.onToggle()
-    expect(toggled).toEqual(['tasks'])
+  test('the folded Team item comes first in the narrowest layout', () => {
+    const opened: string[] = []
+    const entries = sessionMenuEntries({ ...base, archived: false, foldTeam: true, onOpenTeam: () => opened.push('team') })
+    expect(shape(entries)).toEqual(['Team', '---', 'Rename', 'Debug', '---', 'Archive', 'Kill session !'])
+    const team = entries[0]!
+    if (team.kind === 'item') team.onSelect()
+    expect(opened).toEqual(['team'])
   })
 
   test('Rename keeps focus for the name field; other items return it to the trigger', () => {
@@ -286,30 +282,26 @@ describe('width layouts', () => {
   const usage = {
     usedTokens: 47_700, thresholdTokens: 967_000, percentage: 4.93, thresholdApproximate: false, at: '2026-10-13T10:00:00.000Z',
   } as unknown as NonNullable<ChatHeaderProps['contextUsage']>
-  const switcherButtons = (renderer: TestRenderer.ReactTestRenderer) =>
-    renderer.root.findAllByProps({ 'data-testid': 'chat-panel-switcher' }).flatMap(group => group.findAllByType('button'))
 
-  test('full: labelled entries and the full context meter', () => {
+  test('full: the labelled Team button and the full context meter', () => {
     const { renderer, byId } = renderHeader({ layout: 'full', contextUsage: usage })
-    expect(switcherButtons(renderer).map(button => textOf(button))).toEqual(['Tasks', 'Mailbox', 'Messages', 'Strategy'])
+    expect(textOf(byId('chat-team-button'))).toBe('Team')
     expect(textOf(byId('chat-context-meter'))).toBe('Context 4.9% · 47.7k / 967k')
-    expect(sessionMenuEntriesOf(renderer.root).some(entry => entry.id.startsWith('panel-'))).toBe(false)
+    expect(sessionMenuEntriesOf(renderer.root).some(entry => entry.id === 'team')).toBe(false)
   })
 
-  test('icons: icon entries named by their panel, full meter', () => {
-    const { renderer, byId } = renderHeader({ layout: 'icons', contextUsage: usage })
-    expect(switcherButtons(renderer).map(button => button.props['aria-label'])).toEqual(['Tasks', 'Mailbox', 'Messages', 'Strategy'])
-    expect(switcherButtons(renderer).map(button => textOf(button))).toEqual(['', '', '', ''])
+  test('icons: the icon Team button named Team, full meter', () => {
+    const { byId } = renderHeader({ layout: 'icons', contextUsage: usage })
+    expect(byId('chat-team-button').props['aria-label']).toBe('Team')
+    expect(textOf(byId('chat-team-button'))).toBe('')
     expect(textOf(byId('chat-context-meter'))).toBe('Context 4.9% · 47.7k / 967k')
   })
 
-  test('menu: panels fold into the session menu with their state, the meter shows its percentage, the rest stays', () => {
-    const { renderer, byId } = renderHeader({ layout: 'menu', contextUsage: usage, openSlot: 'tasks' })
-    expect(renderer.root.findAllByProps({ 'data-testid': 'chat-panel-switcher' })).toHaveLength(0)
-    const panels = sessionMenuEntriesOf(renderer.root).filter(entry => entry.id.startsWith('panel-'))
-    expect(panels.map(entry => entry.kind === 'check' && [entry.label, entry.checked])).toEqual([
-      ['Tasks', true], ['Mailbox', false], ['Messages', false], ['Strategy', false],
-    ])
+  test('menu: Team folds into the session menu, the meter shows its percentage, the rest stays', () => {
+    const { renderer, byId } = renderHeader({ layout: 'menu', contextUsage: usage })
+    expect(renderer.root.findAllByProps({ 'data-testid': 'chat-team-button' })).toHaveLength(0)
+    const team = sessionMenuEntriesOf(renderer.root).filter(entry => entry.id === 'team')
+    expect(team.map(entry => entry.kind === 'item' && entry.label)).toEqual(['Team'])
     const meter = byId('chat-context-meter')
     expect(textOf(meter)).toBe('4.9%')
     expect(meter.props.title).toContain('47700 of 967000 tokens')

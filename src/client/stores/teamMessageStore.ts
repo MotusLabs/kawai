@@ -26,6 +26,12 @@ export interface MessageView {
   filters: MessageQueryFilters
   /** Newest first, the order the pages arrive in. */
   messages: TeamMessage[]
+  /**
+   * Whole-thread counts for every thread on a loaded page, whatever the
+   * filters (team-workspace-pages D7); a collapsed thread row states its size
+   * without loading the thread. Merged across pages, never reset by a push.
+   */
+  threadSizes: Record<string, number>
   nextCursor: MessageCursor | null
   /** The thread shown in detail; null = just the list. */
   selectedThreadId: string | null
@@ -43,7 +49,7 @@ export interface MessageView {
 
 export const closedMessageView = (): MessageView => ({
   open: false, loading: false, loadingMore: false, teamId: null, filters: {},
-  messages: [], nextCursor: null, selectedThreadId: null, thread: null, directory: [],
+  messages: [], threadSizes: {}, nextCursor: null, selectedThreadId: null, thread: null, directory: [],
   tasks: [], pending: {}, error: null,
 })
 
@@ -132,7 +138,7 @@ export const useTeamMessageStore = create<MessageState>(set => ({
     return { views }
   }),
   setFilters: (teamKey, filters) => set(state => update(state, teamKey, {
-    filters, messages: [], nextCursor: null, loading: true, loadingMore: false, error: null,
+    filters, messages: [], threadSizes: {}, nextCursor: null, loading: true, loadingMore: false, error: null,
   })),
   beginMore: teamKey => set(state => update(state, teamKey, { loadingMore: true })),
   beginSend: (teamKey, requestId) => set(state => {
@@ -156,6 +162,7 @@ export const useTeamMessageStore = create<MessageState>(set => ({
     return update(state, message.teamPath, {
       loading: false, loadingMore: false, teamId: message.teamId,
       filters: message.filters, messages: rows, nextCursor: message.nextCursor,
+      threadSizes: append ? { ...view.threadSizes, ...message.threadSizes } : message.threadSizes,
       directory: message.directory, tasks: message.tasks,
     })
   }),

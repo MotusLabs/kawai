@@ -60,6 +60,13 @@ interface SessionState {
   exitingSessions: Map<string, Session>
   selectedSessionId: string | null
   selectedHibernatingSessionId: string | null
+  /**
+   * Bumped by every explicit selection action (even a re-selection of the
+   * same id), never persisted: the Team page (team-workspace-pages D3)
+   * leaves its route when a selection act happens after mount, while a
+   * reload's restored selection must not.
+   */
+  selectionEpoch: number
   hasLoaded: boolean
   connectionStatus: ConnectionStatus
   connectionError: string | null
@@ -110,6 +117,7 @@ export const useSessionStore = create<SessionState>()(
       exitingSessions: new Map(),
       selectedSessionId: null,
       selectedHibernatingSessionId: null,
+      selectionEpoch: 0,
       hasLoaded: false,
       connectionStatus: 'connecting',
       connectionError: null,
@@ -214,15 +222,15 @@ export const useSessionStore = create<SessionState>()(
           ),
         })),
       setSelectedSessionId: (sessionId) =>
-        set({
+        set((state) => ({
           selectedSessionId: sessionId,
-          ...(sessionId !== null ? { selectedHibernatingSessionId: null } : {}),
-        }),
+          ...(sessionId !== null ? { selectedHibernatingSessionId: null, selectionEpoch: state.selectionEpoch + 1 } : {}),
+        })),
       setSelectedHibernatingSessionId: (sessionId) =>
-        set({
+        set((state) => ({
           selectedHibernatingSessionId: sessionId,
-          ...(sessionId !== null ? { selectedSessionId: null } : {}),
-        }),
+          ...(sessionId !== null ? { selectedSessionId: null, selectionEpoch: state.selectionEpoch + 1 } : {}),
+        })),
       setConnectionStatus: (status) => set({ connectionStatus: status }),
       setConnectionError: (error) => set({ connectionError: error }),
       setConnectionState: (status, error, epoch) => set({ connectionStatus: status, connectionError: error, connectionEpoch: epoch }),

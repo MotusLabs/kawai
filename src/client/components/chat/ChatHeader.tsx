@@ -1,17 +1,20 @@
-// The chat view header (chat-header-layout D1): the session's identity and
-// status, the side-panel switcher, the Auto-approve switch (amber while on,
-// shown for live chats at every width), and the session menu (Rename, Debug,
-// Archive, and Kill session, which asks for confirmation first). As the
-// header narrows (measured in chat-font ems, D6) the switcher drops to icons,
-// then folds into the session menu while the context meter shows only its
-// percentage; the name, status, switch, and menu always stay visible. It renders from props only — the WebSocket subscription
-// effects for each side panel stay in ChatView, which owns the attach
-// lifecycle — and keeps the in-place rename state (chat-session-naming): a
-// blank submit just exits editing, and the draft follows broadcast renames
-// while not being edited, so another client's rename shows without a reload.
-// The context meter sits beside the session status, hidden until the first
-// model request; archived chats keep the stored reading and hide the
-// approval and archive controls.
+// The chat view header (chat-header-layout D1, team-workspace-pages 4.1):
+// the session's identity and status, one **Team** button that opens the Team
+// page for the chat's team on the tab last used (Tasks the first time), the
+// Auto-approve switch (amber while on, shown for live chats at every width),
+// and the session menu (Rename, Debug, Archive, and Kill session, which asks
+// for confirmation first). The side slot hosts only the debug panel; the
+// team views live on the Team page, and the task chip opens its task there.
+// As the header narrows (measured in chat-font ems, D6) the Team button
+// drops to an icon, then folds into the session menu while the context meter
+// shows only its percentage; the name, status, switch, and menu always stay
+// visible. It renders from props only — the WebSocket subscription effects
+// stay in ChatView, which owns the attach lifecycle — and keeps the in-place
+// rename state (chat-session-naming): a blank submit just exits editing,
+// and the draft follows broadcast renames while not being edited, so another
+// client's rename shows without a reload. The context meter sits beside the
+// session status, hidden until the first model request; archived chats keep
+// the stored reading and hide the approval and archive controls.
 import { useEffect, useRef, useState } from 'react'
 import type { ChatContextUsage } from '@shared/chat'
 import type { Session } from '@shared/types'
@@ -19,12 +22,11 @@ import type { ConnectionStatus } from '../../stores/sessionStore'
 import { parkedLabel } from '../../utils/parkedLabel'
 import { chatStatusIndicator } from '../../utils/sessionStatus'
 import { useHeaderLayout, type HeaderLayout } from '../../hooks/useHeaderLayout'
+import Users01Icon from '@untitledui-icons/react/line/esm/Users01Icon'
 import { Switch } from '../Switch'
 import ChatContextMeter from './ChatContextMeter'
 import ChatKillDialog from './ChatKillDialog'
-import ChatPanelSwitcher from './ChatPanelSwitcher'
 import ChatSessionMenu, { sessionMenuEntries } from './ChatSessionMenu'
-import type { SideSlot } from './sideSlot'
 
 export interface ChatHeaderProps {
   session: Session
@@ -32,8 +34,12 @@ export interface ChatHeaderProps {
   model: string | null
   contextUsage: ChatContextUsage | null
   connectionStatus: ConnectionStatus
-  openSlot: SideSlot | null
-  onToggleSlot: (slot: SideSlot) => void
+  /** Whether the debug panel occupies the side slot (the session menu shows it). */
+  debugOpen: boolean
+  onToggleDebug: () => void
+  /** Opens the Team page for the chat's team (the Team button). */
+  onOpenTeam: () => void
+  /** Opens the Team page's Tasks tab with one task (the task chip). */
   onOpenTask: (taskId: string) => void
   onRename: (name: string) => void
   onToggleApproval: () => void
@@ -52,8 +58,8 @@ export function projectName(projectPath: string): string {
 }
 
 export default function ChatHeader({
-  session, profileLabel, model, contextUsage, connectionStatus, openSlot,
-  onToggleSlot, onOpenTask, onRename, onToggleApproval, onArchive, onKill, onClose, fontSizePx = 15, layout: forcedLayout,
+  session, profileLabel, model, contextUsage, connectionStatus, debugOpen,
+  onToggleDebug, onOpenTeam, onOpenTask, onRename, onToggleApproval, onArchive, onKill, onClose, fontSizePx = 15, layout: forcedLayout,
 }: ChatHeaderProps) {
   const archived = session.archivedAt != null
   const autoApprove = session.approvalPolicy === 'auto'
@@ -87,7 +93,7 @@ export default function ChatHeader({
   useEffect(() => { setKillFor(null) }, [session.id])
   const killOpen = killFor === session.id
   const menuEntries = sessionMenuEntries({
-    archived, openSlot, foldPanels: layout === 'menu', onRename: () => setEditingName(true), onToggleSlot,
+    archived, debugOpen, foldTeam: layout === 'menu', onOpenTeam, onRename: () => setEditingName(true), onToggleDebug,
     onArchive, onKill: () => setKillFor(session.id),
   })
   return (
@@ -125,7 +131,15 @@ export default function ChatHeader({
         </p>
       </div>
       <ChatContextMeter usage={contextUsage} compact={layout === 'menu'} />
-      {layout !== 'menu' && <ChatPanelSwitcher openSlot={openSlot} onToggle={onToggleSlot} iconsOnly={layout === 'icons'} />}
+      {layout !== 'menu' && (
+        <button type="button" className={`btn text-chat-meta ${iconsOnly(layout) ? 'px-2' : ''}`}
+          data-testid="chat-team-button" onClick={onOpenTeam}
+          {...(iconsOnly(layout) ? { 'aria-label': 'Team', title: 'Team' } : {})}>
+          {iconsOnly(layout)
+            ? <Users01Icon aria-hidden="true" className="h-4 w-4" />
+            : <span className="flex items-center gap-1.5"><Users01Icon aria-hidden="true" className="h-4 w-4" />Team</span>}
+        </button>
+      )}
       {!archived && (
         <label className={`flex shrink-0 cursor-pointer items-center gap-1.5 whitespace-nowrap text-chat-meta ${autoApprove ? 'text-approval' : 'text-secondary'}`}>
           <Switch checked={autoApprove} onCheckedChange={onToggleApproval} ariaLabel="Auto-approve" testId="chat-approval-policy"
@@ -140,3 +154,5 @@ export default function ChatHeader({
     </header>
   )
 }
+
+const iconsOnly = (layout: HeaderLayout) => layout === 'icons'
