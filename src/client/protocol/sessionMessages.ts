@@ -3,27 +3,39 @@
 // Ordering-sensitive blocks (pendingKills epoch discard, pending-wake
 // matching) moved verbatim from App.tsx — see the inline comments.
 import { useSessionStore } from '../stores/sessionStore'
+import { useTeamLocationStore } from '../hooks/useTeamLocation'
 import { useSettingsStore } from '../stores/settingsStore'
 import { useChatStore } from '../stores/chatStore'
-import { invalidateSnapshotCache } from '../hooks/useTerminal'
+import { invalidateSnapshotCache } from '../terminal/snapshotCache'
 import { notifySpawnedAttention } from '../utils/teamTaskNotification'
 import { playIdleSound, playPermissionSound } from '../utils/sound'
+import { decideTransitionSounds, pageIsVisible } from '../utils/soundTransitions'
 import type { ServerMessage } from '@shared/types'
 import type { MessageRouterDeps } from './types'
 
-/** Play the configured sounds for a session's status transition (F7 dedupe). */
+/** Play the sounds a status transition decides on (F7 dedupe). The idle
+ * sound is suppressed only for the session the user is actually watching:
+ * selected, no Team page open, and a visible page
+ * (skip-idle-sound-for-selected-session). */
 function notifyStatusTransitions(
   prevStatus: string | undefined,
-  nextStatus: string
+  nextStatus: string,
+  isSelected: boolean,
+  pageVisible: boolean,
+  teamPageOpen: boolean
 ): void {
-  if (!prevStatus) return
   const { soundOnPermission, soundOnIdle } = useSettingsStore.getState()
-  if (prevStatus !== 'permission' && nextStatus === 'permission' && soundOnPermission) {
-    void playPermissionSound()
-  }
-  if (prevStatus === 'working' && nextStatus === 'waiting' && soundOnIdle) {
-    void playIdleSound()
-  }
+  const sounds = decideTransitionSounds(
+    prevStatus,
+    nextStatus,
+    isSelected,
+    pageVisible,
+    soundOnPermission,
+    soundOnIdle,
+    teamPageOpen
+  )
+  if (sounds.permission) void playPermissionSound()
+  if (sounds.idle) void playIdleSound()
 }
 
 export function handleSessions(
@@ -31,9 +43,14 @@ export function handleSessions(
   deps: MessageRouterDeps
 ): void {
   const session = useSessionStore.getState()
-  // Detect status transitions for sound notifications before updating
+  // Detect status transitions for sound notifications before updating;
+  // read selection/visibility/team location before the new list is applied
+  // (selection may be rewritten later in this handler, e.g. after a wake).
   const currentSessions = session.sessions
   const { soundOnPermission, soundOnIdle } = useSettingsStore.getState()
+  const selectedSessionId = session.selectedSessionId
+  const pageVisible = pageIsVisible()
+  const teamPageOpen = useTeamLocationStore.getState().location !== null
 
   for (const nextSession of message.sessions) {
     notifySpawnedAttention(currentSessions.find((s) => s.id === nextSession.id), nextSession)
@@ -42,7 +59,13 @@ export function handleSessions(
     for (const nextSession of message.sessions) {
       const prevSession = currentSessions.find((s) => s.id === nextSession.id)
       if (prevSession && prevSession.status !== nextSession.status) {
-        notifyStatusTransitions(prevSession.status, nextSession.status)
+        notifyStatusTransitions(
+          prevSession.status,
+          nextSession.status,
+          nextSession.id === selectedSessionId,
+          pageVisible,
+          teamPageOpen
+        )
       }
     }
   }
@@ -135,12 +158,22 @@ export function handleSessionUpdate(
   const prevSession = currentSessions.find((s) => s.id === message.session.id)
   const prevStatus = prevSession?.status
   const nextStatus = message.session.status
+  // Read selection/visibility/team location before the update is applied
+  const { selectedSessionId } = useSessionStore.getState()
+  const pageVisible = pageIsVisible()
+  const teamPageOpen = useTeamLocationStore.getState().location !== null
 
   useSessionStore.getState().updateSession(message.session)
   notifySpawnedAttention(prevSession, message.session)
 
   // Only play sounds for known sessions (skip new/unknown sessions)
-  notifyStatusTransitions(prevStatus, nextStatus)
+  notifyStatusTransitions(
+    prevStatus,
+    nextStatus,
+    message.session.id === selectedSessionId,
+    pageVisible,
+    teamPageOpen
+  )
 }
 
 export function handleSessionCreated(

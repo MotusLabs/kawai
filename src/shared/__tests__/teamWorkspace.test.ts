@@ -16,6 +16,8 @@ const row = (overrides: Partial<TeamTaskRow> = {}): TeamTaskRow => ({
   groupId: null,
   worktree: null,
   waitingReason: null,
+  needsReevaluation: false,
+  acknowledgement: null,
   nextAction: null,
   requiresHuman: false,
   ...overrides,
@@ -44,6 +46,10 @@ describe('filterTeamTaskRows', () => {
     expect(filterTeamTaskRows(rows, { search: 'shipped' }).map(r => r.id)).toEqual(['task-3'])
     // Search matches open rows too, case-insensitively.
     expect(filterTeamTaskRows(rows, { search: 'BLOCKED' }).map(r => r.id)).toEqual(['task-2'])
+  })
+
+  test('includeClosed keeps closed rows for a host whose own search is active', () => {
+    expect(filterTeamTaskRows(rows, { includeClosed: true }).map(r => r.id)).toEqual(['task-1', 'task-2', 'task-3', 'task-4', 'task-5'])
   })
 
   test('an explicit status filter surfaces that status, closed or not', () => {

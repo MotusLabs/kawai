@@ -442,15 +442,17 @@ details[open] > .chat-summary::before {
 }
 
 /* Chat usage bar: one thin meter per plan window under the chat header.
-   The fill's color follows the report status (working/warning/danger). */
+   The fill's color follows the report status (working/warning/danger). The
+   track does not clip, so the elapsed-time tick can overhang it; the fill
+   rounds itself and never exceeds the track's width. */
 .chat-usage-meter {
+  position: relative;
   display: block;
   flex: 1;
   min-width: 4rem;
   height: 4px;
   border-radius: 9999px;
   background: var(--border);
-  overflow: hidden;
 }
 
 .chat-usage-fill {
@@ -466,6 +468,20 @@ details[open] > .chat-summary::before {
 
 .chat-usage-limited .chat-usage-fill {
   background: var(--chat-danger);
+}
+
+/* Elapsed share of the window: a "now" line taller than the track, in the
+   text color so it never reads as a status tint. Centered on its position. */
+.chat-usage-time {
+  position: absolute;
+  top: 50%;
+  width: 2px;
+  height: 10px;
+  border-radius: 1px;
+  background: var(--text-primary);
+  opacity: 0.75;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
 }
 
 /* Terminal styles */

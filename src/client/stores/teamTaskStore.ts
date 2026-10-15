@@ -31,6 +31,9 @@ export interface TaskFormDraft {
   parentId: string
   worktree: string
   openspecChange: string
+  /** A plan change to link (durable-plans D9): both or neither; '' = no link. */
+  planId: string
+  planChange: string
   /** The assignment target's kind; '' = none chosen (plain Create task). */
   targetKind: '' | 'group' | 'session'
   targetId: string
@@ -38,7 +41,7 @@ export interface TaskFormDraft {
 }
 
 export const emptyDraft = (): TaskFormDraft => ({
-  title: '', direction: '', acceptance: '', parentId: '', worktree: '', openspecChange: '',
+  title: '', direction: '', acceptance: '', parentId: '', worktree: '', openspecChange: '', planId: '', planChange: '',
   targetKind: '', targetId: '', instruction: '',
 })
 
@@ -70,6 +73,8 @@ export interface TaskCreatePayload {
   parentId: string | null
   worktree: string | null
   openspecChange: string | null
+  planId: string | null
+  planChange: string | null
 }
 
 export interface TaskView {

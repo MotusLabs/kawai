@@ -42,8 +42,8 @@ test('project-level .kawai catalog extends the picker for that path', async ({ p
   try {
     await mkdir(path.join(project, '.kawai'), { recursive: true })
     await writeFile(path.join(project, '.kawai', 'profiles.json'), JSON.stringify({
-      'glm-flash': {
-        label: 'GLM Flash',
+      'e2e-project-only': {
+        label: 'E2E Project Only',
         model: 'glm-5.3-flash[1m]',
         env: { ANTHROPIC_BASE_URL: 'https://zai.ruslan.casa/api/anthropic' },
       },
@@ -53,16 +53,17 @@ test('project-level .kawai catalog extends the picker for that path', async ({ p
     const dialog = page.getByRole('dialog', { name: 'New Session' })
     await dialog.getByLabel('Session kind').selectOption('chat')
     const profile = dialog.getByLabel('Profile')
-    // The prefilled server cwd has no .kawai: the shipped catalog applies.
-    await expect(profile.locator('option', { hasText: 'GLM Flash' })).toHaveCount(0)
+    // The prefilled server cwd's catalogs (the repo's own .kawai included)
+    // never define this entry; only the temp project's file does.
+    await expect(profile.locator('option', { hasText: 'E2E Project Only' })).toHaveCount(0)
     // Entering the project path refetches the catalog and offers the entry.
     await dialog.getByLabel('Project Path').fill(project)
-    await expect(profile.locator('option', { hasText: 'GLM Flash' })).toHaveCount(1)
-    await profile.selectOption('glm-flash')
-    await dialog.getByLabel('Display Name').fill('GLM Flash project catalog check')
+    await expect(profile.locator('option', { hasText: 'E2E Project Only' })).toHaveCount(1)
+    await profile.selectOption('e2e-project-only')
+    await dialog.getByLabel('Display Name').fill('Project catalog check')
     await page.screenshot({ path: info.outputPath('project-catalog-picker.png') })
     await dialog.getByRole('button', { name: 'Create', exact: true }).click()
-    await expect(page.getByTestId('chat-profile')).toHaveText('GLM Flash')
+    await expect(page.getByTestId('chat-profile')).toHaveText('E2E Project Only')
     await page.getByLabel('Message Claude').fill('Hello flash')
     await page.getByRole('button', { name: 'Send', exact: true }).click()
     await page.screenshot({ path: info.outputPath('project-catalog-chat.png') })

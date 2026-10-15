@@ -27,6 +27,7 @@ import { AssignmentStore } from './assignmentStore'
 import { AssignmentService } from './AssignmentService'
 import { TaskResultService } from './TaskResultService'
 import { buildTaskContext } from './taskContext'
+import { PlanStore } from '../plans/planStore'
 import { WorktreeStaffing, type SpawnRequest, type SpawnResult } from './staffing'
 import { TeamCaps } from './teamCaps'
 import { worktreeRootOf } from './worktreeRoots'
@@ -47,6 +48,8 @@ export class SessionMailbox {
   readonly assignments: AssignmentService
   /** Results, findings, acceptance, handoffs, and release-and-hand-off (task-results-handoffs). */
   readonly results: TaskResultService
+  /** Durable plans (durable-plans): the one store tasks link against and PlanService writes through. */
+  readonly plans: PlanStore
   readonly dispatcher: MailDispatcher
   readonly staffing: WorktreeStaffing
   readonly limits: LimitEventStore
@@ -117,6 +120,7 @@ export class SessionMailbox {
     // and feeds the task summaries beside the derived participants.
     const assignments = new AssignmentStore(db, store)
     const taskStore = new TaskStore(db, store, assignments)
+    this.plans = new PlanStore(db)
     // Pending member releases (member-release D1/D2): durable rows the close
     // writes, evaluated inside the dispatch cycle before routing.
     this.releases = new MemberRelease(db, {
@@ -136,6 +140,7 @@ export class SessionMailbox {
       getSession: options.getRecord, homeDir: options.homeDir,
       onStatusTransition: (task, status, actor) => this.releases.transitionHook(task, status, actor),
       restoreSession: options.restore,
+      plans: this.plans,
     })
     this.management = new MailboxManagement(store, {
       getSession: options.getRecord, tasks: this.tasks, homeDir: options.homeDir,
@@ -169,6 +174,7 @@ export class SessionMailbox {
       caps,
       worktrees: this.tasks.worktrees,
       ...(options.homeDir ? { homeDir: options.homeDir } : {}),
+      plans: this.plans,
       cooldownUntil: profileId => this.limits.cooldownUntil(profileId),
     })
     this.results = new TaskResultService(this.tasks, { getSession: options.getRecord, assignments: this.assignments,
@@ -245,7 +251,7 @@ export class SessionMailbox {
         if (!driver) throw new Error('Recipient disappeared')
         driver.deliver(envelope)
       },
-      taskContext: taskId => buildTaskContext(taskStore, taskId),
+      taskContext: taskId => buildTaskContext(taskStore, taskId, this.plans),
       targetWorktree,
       router: this.router,
       associateTask: (id, taskId) => options.associateTask?.(id, taskId),

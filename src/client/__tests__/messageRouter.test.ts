@@ -2,7 +2,7 @@
 // dispatches without throwing, and the ordering-sensitive behaviors
 // (pendingKills epoch discard + rollback, pending-wake matching, worktree
 // launch, transient errors) behave as they did inline in App.tsx.
-import { beforeEach, describe, expect, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import type { MutableRefObject } from 'react'
 import type {
   AgentSession,
@@ -15,6 +15,8 @@ import type {
 import { createMessageRouter } from '../protocol/messageRouter'
 import type { MessageRouterDeps, SessionFormPrefill } from '../protocol/types'
 import { useSessionStore } from '../stores/sessionStore'
+import { useSettingsStore } from '../stores/settingsStore'
+import { useTeamLocationStore } from '../hooks/useTeamLocation'
 import { useChatStore } from '../stores/chatStore'
 import { useStrategyStore } from '../stores/strategyStore'
 import { useTeamMessageStore } from '../stores/teamMessageStore'
@@ -385,5 +387,138 @@ describe('team messages routing after extraction', () => {
     useTeamMessageStore.getState().close('chat-1')
     route({ type: 'team-messages-snapshot', teamPath: 'chat-1', teamId: 'team', filters: {}, messages: [], nextCursor: null, threadSizes: {}, directory: [], tasks: [] })
     expect(useTeamMessageStore.getState().views['chat-1']).toBeUndefined()
+  })
+})
+
+describe('status transition sounds', () => {
+  // Minimal Web Audio stub: sound.ts only needs enough to build the tone
+  // graph, and counting createOscillator calls proves a sound played (the
+  // idle chime creates exactly two oscillators, 440Hz + 550Hz).
+  let oscillatorCount = 0
+  // Seed the mocked clock far above any real timestamp: sound.ts's
+  // module-level lastPlayTime survives across files in the shared runner
+  // process, and a real stamp from an earlier file would mute these chimes.
+  const realDateNow = Date.now
+  let nowMs = realDateNow() + 1_000_000_000
+  // This file shares a process with every other non-isolated client test, so
+  // the window/document stubs must be restored or they leak into later files
+  // (the known motion-frame-callback leak class in scripts/test-runner.ts).
+  const realWindow = (globalThis as Record<string, unknown>).window
+  const realDocument = (globalThis as Record<string, unknown>).document
+
+  class FakeAudioContext {
+    state = 'running'
+    currentTime = 0
+    destination = {}
+    resume = async () => {}
+    createGain = () => ({
+      connect: () => {},
+      gain: { setValueAtTime: () => {}, linearRampToValueAtTime: () => {} },
+    })
+    createOscillator = () => {
+      oscillatorCount += 1
+      return {
+        connect: () => {},
+        start: () => {},
+        stop: () => {},
+        disconnect: () => {},
+        frequency: { setValueAtTime: () => {} },
+      }
+    }
+  }
+
+  // The sound path is async (playTone awaits before creating oscillators),
+  // so each test yields one macrotask before counting.
+  const flush = () => new Promise<void>((resolve) => setTimeout(resolve, 0))
+
+  const routeSessionUpdate = (session: TerminalSession) => {
+    const route = createMessageRouter(makeDeps().deps)
+    route({ type: 'session-update', session })
+  }
+
+  const routeSessions = (sessions: TerminalSession[]) => {
+    const route = createMessageRouter(makeDeps().deps)
+    route({ type: 'sessions', sessions })
+  }
+
+  beforeEach(() => {
+    oscillatorCount = 0
+    // Keep the mocked clock monotonic across tests — the sound module's
+    // 500 ms rate limit mutes a chime if Date.now() moves backwards.
+    nowMs += 1_000
+    Date.now = () => nowMs
+    ;(globalThis as Record<string, unknown>).window = { AudioContext: FakeAudioContext }
+    ;(globalThis as Record<string, unknown>).document = { visibilityState: 'visible' }
+    useSettingsStore.setState({ soundOnPermission: true, soundOnIdle: true })
+    useTeamLocationStore.setState({ location: null })
+    useSessionStore.setState({
+      sessions: [
+        baseSession,
+        { ...baseSession, id: 'session-2', name: 'beta', tmuxWindow: 'agentboard:2' },
+      ],
+    })
+  })
+
+  afterEach(() => {
+    Date.now = realDateNow
+    const globals = globalThis as Record<string, unknown>
+    if (realWindow === undefined) delete globals.window
+    else globals.window = realWindow
+    if (realDocument === undefined) delete globals.document
+    else globals.document = realDocument
+    useSettingsStore.setState({ soundOnPermission: false, soundOnIdle: false })
+  })
+
+  test('a selected, visible session-update plays no idle sound', async () => {
+    useSessionStore.setState({ selectedSessionId: 'session-1' })
+    nowMs += 1_000
+    routeSessionUpdate({ ...baseSession, status: 'waiting' })
+    await flush()
+    expect(oscillatorCount).toBe(0)
+  })
+
+  test('a sessions list moving only the selected session to waiting plays no idle sound', async () => {
+    useSessionStore.setState({ selectedSessionId: 'session-1' })
+    nowMs += 1_000
+    routeSessions([{ ...baseSession, status: 'waiting' }])
+    await flush()
+    expect(oscillatorCount).toBe(0)
+  })
+
+  test('a background session entering permission plays the permission sound', async () => {
+    useSessionStore.setState({ selectedSessionId: 'session-1' })
+    nowMs += 1_000
+    routeSessionUpdate({ ...baseSession, id: 'session-2', name: 'beta', tmuxWindow: 'agentboard:2', status: 'permission' })
+    await flush()
+    // The permission ping is a single oscillator (880Hz).
+    expect(oscillatorCount).toBe(1)
+  })
+
+  test('a non-selected session-update plays the idle chime', async () => {
+    useSessionStore.setState({ selectedSessionId: 'session-2' })
+    nowMs += 1_000
+    routeSessionUpdate({ ...baseSession, status: 'waiting' })
+    await flush()
+    expect(oscillatorCount).toBe(2)
+  })
+
+  test('a sessions list moving a selected and a background session to waiting plays exactly one chime', async () => {
+    useSessionStore.setState({ selectedSessionId: 'session-1' })
+    nowMs += 1_000
+    routeSessions([
+      { ...baseSession, status: 'waiting' },
+      { ...baseSession, id: 'session-2', name: 'beta', tmuxWindow: 'agentboard:2', status: 'waiting' },
+    ])
+    await flush()
+    expect(oscillatorCount).toBe(2)
+  })
+
+  test('a selected session finishing with the Team page open plays the idle chime', async () => {
+    useSessionStore.setState({ selectedSessionId: 'session-1' })
+    useTeamLocationStore.setState({ location: { teamKey: 'k', tab: 'tasks' } as never })
+    nowMs += 1_000
+    routeSessionUpdate({ ...baseSession, status: 'waiting' })
+    await flush()
+    expect(oscillatorCount).toBe(2)
   })
 })

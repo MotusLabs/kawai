@@ -2,6 +2,7 @@
 // transport, without spawning Claude Code or mutating repository git state.
 import { afterEach, beforeEach, expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
+import { schemaDb } from './schemaDb'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -27,7 +28,7 @@ beforeEach(() => {
     status: 'waiting', createdAt: '', lastActivityAt: '',
   })
   records = new Map([['lead', row('lead')], ['dev', row('dev')], ['other', row('other', path.join(dir, 'other'))]])
-  db = new Database(':memory:')
+  db = schemaDb(':memory:')
   store = new MailboxStore(db)
   mailbox = new TeamMailbox(store, { getSession: id => records.get(id), homeDir: dir,
     restoreSession: id => { records.get(id)!.archivedAt = null } })
@@ -131,7 +132,7 @@ import { RELEASE_TOOL_NAMES, TEAM_ALLOWED_TOOLS, releaseHandlers } from '../team
 import type { GroupDefinition } from '../team/groupFile'
 
 const groupDef = (overrides: Partial<GroupDefinition> = {}): GroupDefinition => ({
-  id: 'devs', label: 'devs', description: '', canCreateTasks: false, canManageMailbox: false,
+  id: 'devs', label: 'devs', description: '', canCreateTasks: false, canCreatePlans: false, canManageMailbox: false,
   releaseOnTaskClose: true, worktreeScoped: true, canReleaseMembers: true,
   max: 1, profiles: [], strategy: 'first-available',
   onLimit: { parkIfResetWithinMs: 3 * 3_600_000, otherwise: 'forward' }, approval: 'manual', warnings: [], prompt: '',

@@ -80,7 +80,9 @@ export default function GeneralSettings({
           <div className="flex-1">
             <div className="text-sm text-primary">Idle Sound</div>
             <div className="text-[10px] text-muted">
-              Play a chime when a session finishes working.
+              Play a chime when a session finishes working (skipped for the
+              chat you are viewing while this tab is visible and no Team page
+              is open).
             </div>
           </div>
           <div className="flex items-center gap-2">

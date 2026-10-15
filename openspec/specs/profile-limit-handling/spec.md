@@ -62,14 +62,14 @@ A group's frontmatter SHALL accept an `onLimit` map with `parkIfResetWithin` (a 
 - **THEN** the problem is reported and 3h is used
 
 ### Requirement: Parked work resumes on the same agent
-Parking SHALL keep the message with the agent and schedule a resume message to that agent at the reset time, delivered before older direct mail. A parked agent SHALL receive no group mail and SHALL be shown as paused with the reason and resume time. If the resume fails on a limit again, the message SHALL be resolved again; after 3 parks it SHALL be released.
+Parking SHALL keep the message with the agent and schedule a resume message to that agent at the reset time, delivered before other direct mail. A parked agent SHALL receive no group mail and SHALL be shown as paused with the reason and resume time. If the resume fails on a limit again, the message SHALL be resolved again; after 3 parks it SHALL be released.
 
 #### Scenario: Resume after reset
 - **WHEN** the parked agent's resume time arrives
 - **THEN** it receives a message to continue the task
 
 #### Scenario: Resume goes before other direct mail
-- **WHEN** the resume time arrives while older normal direct mail waits for the parked agent
+- **WHEN** the resume time arrives while other normal direct mail waits for the parked agent
 - **THEN** the agent receives the resume first, and the other mail after it
 
 #### Scenario: Parked agent skipped

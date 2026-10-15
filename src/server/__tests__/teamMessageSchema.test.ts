@@ -5,6 +5,7 @@
 // only that rows survived.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
+import { applyBaselineSchema } from '../dbSafety/baseline'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -47,7 +48,7 @@ CREATE INDEX team_messages_claimant ON team_messages (claimed_by, state);
 
 const INDEXES = [
   'team_messages_queue', 'team_messages_thread', 'team_messages_recipient',
-  'team_messages_claimant', 'team_messages_task',
+  'team_messages_claimant', 'team_messages_task', 'team_messages_resume',
 ]
 
 describe('team_messages schema migration', () => {
@@ -137,6 +138,7 @@ describe('team_messages schema migration', () => {
     db.exec(LEGACY_TABLE)
     db.exec(`INSERT INTO team_messages (id, team_id, to_kind, to_id, from_session, origin_path, thread_id, body, state, created_at)
       VALUES ('legacy', '/repo/.git', 'group', 'devs', 'lead', '/repo', 'legacy', 'hi', 'delivered', '2026-01-01T00:00:00.000Z')`)
+    applyBaselineSchema(db)
     const store = new MailboxStore(db)
     expect(store.get('legacy')).toMatchObject({ fromKind: 'agent', fromSession: 'lead', toId: 'devs', taskRevision: null })
 
@@ -149,7 +151,7 @@ describe('team_messages schema migration', () => {
   })
 
   test('the task revision a delivery carried is recorded at push and on send', () => {
-    createMessageTable(db)
+    applyBaselineSchema(db)
     const store = new MailboxStore(db)
     const pushed = store.enqueue({
       teamId: '/repo/.git', toKind: 'group', toId: 'devs', fromSession: 'lead', fromGroup: null,
@@ -179,7 +181,7 @@ describe('team_messages schema migration', () => {
     // A legacy table has no `task_id` yet, so the DDL block must not name it.
     db.exec(LEGACY_TABLE)
     db.exec(CREATE_TABLE_SQL)
-    expect(indexNames()).toEqual(INDEXES.filter(name => name !== 'team_messages_task').sort())
+    expect(indexNames()).toEqual(INDEXES.filter(name => name !== 'team_messages_task' && name !== 'team_messages_resume').sort())
     createMessageTable(db)
     expect(indexNames()).toEqual([...INDEXES].sort())
   })

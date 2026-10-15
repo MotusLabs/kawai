@@ -8,7 +8,6 @@
 // chain; a send past the limit is stored dead-lettered instead of queued.
 import type { Database } from 'bun:sqlite'
 import { mailboxSql, worktreeTaskMailSql } from './mailboxSql'
-import { createMessageTable } from './messageSchema'
 import { mapRow } from './messageRow'
 import { MessageEventLog, storeActor, type StoreActor } from './messageEvents'
 import { retryMessage } from './mailboxRetry'
@@ -52,7 +51,6 @@ export class MailboxStore {
   readonly events: MessageEventLog
   private readonly parkedCancel: ParkedCancel
   constructor(private readonly db: Database, private readonly options: { recipientExists?: (id: string) => boolean } = {}) {
-    createMessageTable(db)
     this.events = new MessageEventLog(db)
     this.parkedCancel = new ParkedCancel({
       transaction: run => db.transaction(run)(),

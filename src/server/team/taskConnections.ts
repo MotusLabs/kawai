@@ -130,6 +130,7 @@ export class TaskConnections {
           task = await tasks.create(caller, {
             title: message.title, direction: message.direction, acceptance: message.acceptance ?? null,
             parent_id: message.parentId || null, worktree: message.worktree || null, openspec_change: message.openspecChange || null,
+            plan_id: message.planId || null, plan_change: message.planChange || null,
             ...(message.requestKey ? { requestKey: message.requestKey } : {}),
           })
           break

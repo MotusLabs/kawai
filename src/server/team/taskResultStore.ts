@@ -11,7 +11,6 @@
 // The store is policy-free; TaskResultService decides who may do what.
 import type { Database } from 'bun:sqlite'
 import type { TaskActor, TaskFindings, TaskResult, TaskTestClaim } from '../../shared/teamTasks'
-import { migrateResultTables } from './taskResultSchema'
 
 export interface ResultInsert {
   teamId: string
@@ -55,9 +54,7 @@ function parseTests(value: unknown): TaskTestClaim[] {
 }
 
 export class TaskResultStore {
-  constructor(private readonly db: Database) {
-    migrateResultTables(db)
-  }
+  constructor(private readonly db: Database) {}
 
   /** Insert a result, superseding the task's outstanding one in the same transaction (D1). */
   insert(input: ResultInsert, now = nowIso()): TaskResult {
@@ -109,6 +106,19 @@ export class TaskResultStore {
   outstanding(taskId: string): TaskResult | null {
     const id = this.outstandingId(taskId)
     return id ? this.get(id) : null
+  }
+
+  /** The team's outstanding results submitted at or after `since` (morning summary, D8). */
+  outstandingSince(teamId: string, since: string): TaskResult[] {
+    return (this.db.prepare(`SELECT * FROM team_task_results r WHERE team_id = ? AND created_at >= ?
+      AND NOT EXISTS (SELECT 1 FROM team_task_results s WHERE s.supersedes_result_id = r.id)
+      ORDER BY created_at, rowid`).all(teamId, since) as Record<string, unknown>[]).map(row => this.map(row))
+  }
+
+  /** Whether the session submitted a result for the task (the finished-turn bucket's test). */
+  submittedBy(taskId: string, sessionId: string): boolean {
+    return this.db.prepare('SELECT 1 FROM team_task_results WHERE task_id = ? AND submitted_by_kind = ? AND submitted_by_session = ? LIMIT 1')
+      .get(taskId, 'agent', sessionId) !== null
   }
 
   findingsFor(resultId: string): TaskFindings[] {

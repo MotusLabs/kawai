@@ -1,4 +1,4 @@
-import { Database } from 'bun:sqlite'
+import { schemaDb } from './schemaDb'
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -23,7 +23,7 @@ describe('LimitEventStore', () => {
   afterEach(() => fs.rmSync(dir, { recursive: true, force: true }))
 
   test('records events per profile with every field and notifies listeners', () => {
-    const store = new LimitEventStore(new Database(file), () => now)
+    const store = new LimitEventStore(schemaDb(file), () => now)
     const seen: LimitEvent[] = []
     store.subscribe(event => seen.push(event))
     const event = store.record({ ...base, final: true, resetsAt: iso(T0 + 600_000) })
@@ -34,15 +34,15 @@ describe('LimitEventStore', () => {
   })
 
   test('survives reopening the database (server restart)', () => {
-    new LimitEventStore(new Database(file), () => now).record({ ...base, final: true })
+    new LimitEventStore(schemaDb(file), () => now).record({ ...base, final: true })
     now = T0 + 10 * 60_000
-    const reopened = new LimitEventStore(new Database(file), () => now)
+    const reopened = new LimitEventStore(schemaDb(file), () => now)
     expect(reopened.forProfile('glm')).toHaveLength(1)
     expect(reopened.cooldownUntil('glm')).toBe(iso(T0 + DEFAULT_COOLDOWN_MS))
   })
 
   test('prunes events older than 24 hours on write and at startup', () => {
-    const db = new Database(file)
+    const db = schemaDb(file)
     const store = new LimitEventStore(db, () => now)
     store.record({ ...base, final: false, at: iso(T0 - LIMIT_EVENT_RETENTION_MS - 1) })
     store.record({ ...base, final: false })

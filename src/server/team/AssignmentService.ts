@@ -38,6 +38,7 @@ import type { GroupDefinition } from './groupFile'
 import type { TeamCaps } from './teamCaps'
 import type { StaffingPreview, WorktreeStaffing } from './staffing'
 import { worktreeRootOf, type TeamWorktrees } from './worktreeRoots'
+import type { PlanStore } from '../plans/planStore'
 
 /** How an outstanding assignment is handled by a reassignment (D7). */
 export type ReassignHandling = 'notify' | 'stop'
@@ -90,6 +91,8 @@ export class AssignmentService {
       caps: TeamCaps
       worktrees: TeamWorktrees
       homeDir?: string
+      /** Plan records, for the task form's plan and change pickers. */
+      plans?: PlanStore
       /** Built-in cooldown end (ISO) of a profile, or null (preview skips cooling profiles). */
       cooldownUntil?: (profileId: string) => string | null
     }) {}
@@ -306,7 +309,18 @@ export class AssignmentService {
     return {
       worktrees,
       changes: [...changes.entries()].map(([name, locations]) => ({ name, locations })).sort((a, b) => a.name.localeCompare(b.name)),
+      plans: this.planTargets(team.teamId),
     }
+  }
+
+  /** Open plans with an approved revision, and the change names a task may link to (durable-plans D9). */
+  private planTargets(teamId: string): NonNullable<TaskTargetOptions['plans']> {
+    const plans = this.options.plans
+    if (!plans) return []
+    return plans.openPlans(teamId).flatMap(plan => {
+      const approved = plans.approvedRevision(plan.id)
+      return approved ? [{ id: plan.id, title: plan.title, revision: approved.revision, changes: approved.content.changes.map(change => change.change) }] : []
+    })
   }
 
   /** The caller's team: the human caller carries it; an agent resolves from its session. */

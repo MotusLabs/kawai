@@ -80,6 +80,8 @@ interface SessionListProps {
   onCreateChangeWorktree?: (repositoryId: string, change: string) => void
   /** Opens the repository branch browser from a worktree header. */
   onBrowseBranches?: (repositoryId: string) => void
+  /** Opens a repository's Team page from its navigator Team entry. */
+  onOpenTeam?: (teamKey: string) => void
 }
 
 /**
@@ -123,6 +125,7 @@ export default function SessionList({
   onNewSessionInWorktree,
   onCreateChangeWorktree,
   onBrowseBranches,
+  onOpenTeam,
 }: SessionListProps) {
   const nowTick = useTimestampRefresh()
   const isSafari = useMemo(() => {
@@ -711,6 +714,7 @@ export default function SessionList({
               onNewSessionInWorktree={onNewSessionInWorktree}
               onCreateChangeWorktree={onCreateChangeWorktree}
               onBrowseBranches={onBrowseBranches}
+              onOpenTeam={onOpenTeam}
               {...rowContext}
             />
           </div>

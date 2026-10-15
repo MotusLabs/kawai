@@ -14,7 +14,9 @@ import type {
 import type { RuleLoadReport, TeamRoutingState } from './routing'
 import type { HumanTaskDetail, TaskDispatchPreview, TaskHandoffKind, TaskStatus, TaskTargetOptions, TeamTask, TeamTaskAssignment, TeamTaskSummary } from './teamTasks'
 import type { ProductStrategy, StrategyDetail, StrategyDraft, StrategyRevision } from './productStrategy'
+import type { ImpactDecision, ImpactDisposition, StrategyImpactDetail } from './strategyImpact'
 import type { TeamWorkspaceSnapshot } from './teamWorkspace'
+import type { PlanClientMessage, PlanServerMessage } from './planMessages'
 import type {
   WorkspaceOperationResult,
   WorkspaceSnapshot,
@@ -235,6 +237,8 @@ export interface UpdateState {
 }
 
 export type ServerMessage =
+  // Durable plans (durable-plans D12): see planMessages.ts.
+  | PlanServerMessage
   | { type: 'sessions'; sessions: Session[] }
   | { type: 'session-update'; session: Session }
   | { type: 'session-created'; session: Session }
@@ -481,7 +485,9 @@ export type ServerMessage =
   // capture) and, when a record exists, its full detail. Re-sent whole on
   // every committed strategy change, so a reconnect needs no deltas.
   | { type: 'strategy-snapshot'; teamPath: string; teamId: string; strategy: ProductStrategy | null }
-  | { type: 'strategy-detail'; teamPath: string; teamId: string; detail: StrategyDetail }
+  // `impact` (strategy-revision-impact D9) is composed beside the stored
+  // detail: the reviews with their records and the current assessment.
+  | { type: 'strategy-detail'; teamPath: string; teamId: string; detail: StrategyDetail; impact?: StrategyImpactDetail | null }
   // Result of a human strategy action: the saved draft (its hash feeds the
   // next save's CAS) or the submitted revision on success; `error` on
   // refusal, with `conflict` carrying the stored draft when a CAS refusal
@@ -492,6 +498,12 @@ export type ServerMessage =
       requestId: string
       draft?: StrategyDraft
       revision?: StrategyRevision
+      /** An impact decision recorded (or replayed) by `strategy-impact-decide`. */
+      decision?: ImpactDecision
+      /** The assessment request's message id (`strategy-impact-request`). */
+      messageId?: string
+      /** True when a keyed impact command replayed its recorded result. */
+      replayed?: boolean
       error?: string
       conflict?: StrategyDraft | null
     }
@@ -556,6 +568,8 @@ export interface WakeError {
 }
 
 export type ClientMessage =
+  // Durable plans (durable-plans D12): see planMessages.ts.
+  | PlanClientMessage
   | {
       type: 'terminal-attach'
       sessionId: string
@@ -657,6 +671,9 @@ export type ClientMessage =
       parentId?: string
       worktree?: string
       openspecChange?: string
+      /** The plan-change link (durable-plans D9): both or neither. */
+      planId?: string
+      planChange?: string
       /** Stable per intent (task-assignment D4): a replay returns the prior task. */
       requestKey?: string
     }
@@ -813,6 +830,23 @@ export type ClientMessage =
       openQuestions?: string
     }
   | { type: 'strategy-withdraw'; teamPath: string; requestId: string; revision?: number; draftId?: string; commandId: string }
+  // The owner's impact decision (strategy-revision-impact D4): one
+  // disposition for an affected plan in the current review, CAS'd on the
+  // effective decision the dialog showed; one command id per dialog.
+  | {
+      type: 'strategy-impact-decide'
+      teamPath: string
+      requestId: string
+      reviewId: string
+      planId: string
+      disposition: ImpactDisposition
+      rationale: string
+      proposalId?: string
+      expectedDecisionId: string | null
+      commandId: string
+    }
+  // Ask a group to assess the current review (D8): one human message, keyed by command id.
+  | { type: 'strategy-impact-request'; teamPath: string; requestId: string; reviewId: string; group: string; commandId: string }
   | { type: 'chat-debug-open'; sessionId: string }
   | { type: 'chat-debug-page'; sessionId: string; beforeSeq: number }
   | { type: 'chat-debug-close'; sessionId: string }

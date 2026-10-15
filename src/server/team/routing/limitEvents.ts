@@ -59,11 +59,15 @@ const fromRow = (row: Row): LimitEvent => ({
   resetsAt: row.resets_at,
 })
 
+/** Create the table; part of the frozen baseline step (execution-safety-recovery D13): the baseline step calls this, never the store. */
+export function ensureLimitEventSchema(db: Database): void {
+  db.exec(CREATE_TABLE_SQL)
+}
+
 export class LimitEventStore {
   private readonly listeners = new Set<(event: LimitEvent) => void>()
 
   constructor(private readonly db: Database, private readonly now: () => number = Date.now) {
-    db.exec(CREATE_TABLE_SQL)
     this.prune()
   }
 

@@ -5,6 +5,7 @@
 // it — and inject a failing store or an archive that refuses.
 import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
+import { schemaDb } from './schemaDb'
 import type { ChatSessionRecord } from '../db'
 import { logger } from '../logger'
 import { MailboxStore, type EnqueueInput } from '../team/mailboxStore'
@@ -53,7 +54,7 @@ const pausedDefinitions = () => {
 }
 
 beforeEach(() => {
-  db = new Database(':memory:')
+  db = schemaDb(':memory:')
   store = new MailboxStore(db)
   tasks = new TaskStore(db, store)
   records = new Map()

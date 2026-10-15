@@ -67,6 +67,16 @@ CREATE TABLE IF NOT EXISTS team_task_journal (
 CREATE INDEX IF NOT EXISTS team_task_journal_task ON team_task_journal (task_id, created_at);
 `
 
+/**
+ * Create the task tables and their revision schema; part of the frozen
+ * baseline step (execution-safety-recovery D13): the baseline step calls this, never the store.
+ */
+export function ensureTaskSchema(db: Database): void {
+  db.exec(CREATE_TABLES_SQL)
+  migrateTable(db)
+  migrateRevisionSchema(db)
+}
+
 /** Columns added after the table first shipped (task-assignment D4). */
 function migrateTable(db: Database) {
   const columns = db.prepare('PRAGMA table_info(team_tasks)').all() as Array<{ name: string }>
@@ -87,6 +97,9 @@ export interface CreateTaskInput {
   parentId?: string | null
   worktree?: string | null
   openspecChange?: string | null
+  /** The plan-change link (durable-plans D9), validated by the caller; fixed at creation. */
+  planId?: string | null
+  planChange?: string | null
   /**
    * The client's request identity for this create (task-assignment D4): a
    * replay under the same key and payload returns the prior task instead of
@@ -133,9 +146,6 @@ export class TaskStore {
   readonly results: TaskResultStore
 
   constructor(private readonly db: Database, private readonly mail?: MailboxStore, private readonly assignments?: AssignmentStore) {
-    db.exec(CREATE_TABLES_SQL)
-    migrateTable(db)
-    migrateRevisionSchema(db)
     this.drafts = new TaskDraftStore(db)
     this.acknowledgements = new TaskAcknowledgements(db)
     this.notices = mail && assignments ? new TaskNotices(db, mail, assignments, this.acknowledgements) : null
@@ -170,10 +180,11 @@ export class TaskStore {
     const id = `task-${crypto.randomUUID()}`
     this.db.transaction(() => {
       this.db.prepare(`INSERT INTO team_tasks
-        (id, team_id, title, status, creator_kind, creator_session, parent_id, worktree, openspec_change, request_key, revision, created_at, updated_at)
-        VALUES (?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, 1, ?, ?)`).run(
+        (id, team_id, title, status, creator_kind, creator_session, parent_id, worktree, openspec_change, plan_id, plan_change, request_key, revision, created_at, updated_at)
+        VALUES (?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`).run(
         id, input.teamId, input.title, input.creator.kind, input.creator.sessionId,
-        input.parentId ?? null, input.worktree ?? null, input.openspecChange ?? null, input.requestKey ?? null, now, now,
+        input.parentId ?? null, input.worktree ?? null, input.openspecChange ?? null,
+        input.planId ?? null, input.planChange ?? null, input.requestKey ?? null, now, now,
       )
       this.insertRevision(id, 1, input.direction, input.acceptance ?? null, input.creator, now)
     })()
@@ -187,8 +198,9 @@ export class TaskStore {
   }
 
   get(id: string): TeamTask | null {
-    const row = this.db.prepare(`SELECT t.*, r.direction, r.acceptance FROM team_tasks t
-      JOIN team_task_revisions r ON r.task_id = t.id AND r.revision = t.revision WHERE t.id = ?`).get(id)
+    const row = this.db.prepare(`SELECT t.*, r.direction, r.acceptance, p.title AS plan_title FROM team_tasks t
+      JOIN team_task_revisions r ON r.task_id = t.id AND r.revision = t.revision
+      LEFT JOIN plans p ON p.id = t.plan_id WHERE t.id = ?`).get(id)
     return row ? mapTask(row as Record<string, unknown>) : null
   }
 
@@ -360,8 +372,9 @@ export class TaskStore {
   }
 
   private selectTasks(where: string, param: string): TeamTask[] {
-    return (this.db.prepare(`SELECT t.*, r.direction, r.acceptance FROM team_tasks t
+    return (this.db.prepare(`SELECT t.*, r.direction, r.acceptance, p.title AS plan_title FROM team_tasks t
       JOIN team_task_revisions r ON r.task_id = t.id AND r.revision = t.revision
+      LEFT JOIN plans p ON p.id = t.plan_id
       WHERE ${where} ORDER BY t.created_at, t.rowid`).all(param) as Record<string, unknown>[]).map(mapTask)
   }
 
@@ -400,6 +413,8 @@ function createPayloadDiff(existing: TeamTask, firstRevision: TaskRevision | und
   if ((existing.parentId ?? null) !== (input.parentId || null)) return 'parent'
   if ((existing.worktree ?? null) !== (input.worktree ?? null)) return 'worktree'
   if ((existing.openspecChange ?? null) !== (input.openspecChange ?? null)) return 'OpenSpec change'
+  if ((existing.planId ?? null) !== (input.planId ?? null)) return 'plan'
+  if ((existing.planChange ?? null) !== (input.planChange ?? null)) return 'plan change'
   return null
 }
 
@@ -441,6 +456,9 @@ function mapTask(row: Record<string, unknown>): TeamTask {
     parentId: text(row.parent_id),
     worktree: text(row.worktree),
     openspecChange: text(row.openspec_change),
+    planId: text(row.plan_id),
+    planChange: text(row.plan_change),
+    planTitle: text(row.plan_title),
     revision: Number(row.revision),
     direction: String(row.direction),
     acceptance: text(row.acceptance),

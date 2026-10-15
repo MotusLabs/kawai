@@ -5,6 +5,7 @@
 // the revision rows at read time — moved by nothing but the revision number.
 import { afterEach, beforeEach, expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
+import { schemaDb } from './schemaDb'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -51,7 +52,7 @@ test('a pre-existing database gains the result tables and handoff columns; plain
   legacy.close()
   for (let pass = 0; pass < 2; pass++) {
     // Twice: the migration is idempotent across a reopen.
-    const db = new Database(path.join(dir, 'legacy.db'))
+    const db = schemaDb(path.join(dir, 'legacy.db'))
     const assignments = new AssignmentStore(db, new MailboxStore(db))
     new TaskStore(db, undefined, assignments)
     expect(assignments.listByTask('task-1')).toMatchObject([{ id: 'assignment-old', handoffKind: null, resultId: null, expectedResponse: null }])
@@ -117,4 +118,26 @@ test('Needs re-evaluation is derived from the revision rows: a publication flags
   // Only the revision number moves it: the label is the row comparison itself.
   session.db.prepare('UPDATE team_tasks SET revision = 1 WHERE id = ?').run(task.id)
   expect(store.results.get(result.id)!.needsReevaluation).toBe(false)
+})
+
+test('outstandingSince lists the team’s outstanding results in the window; submittedBy tells a session’s result from none', () => {
+  const task = create()
+  const other = store.create({ teamId: '/other/.git', title: 'Elsewhere', direction: 'v1', creator: human })
+  submit(task.id)
+  const first = store.results.listByTask(task.id)[0]!
+  const second = store.results.insert({
+    teamId: TEAM, taskId: task.id, summary: 'v2', commit: null, diff: null, worktree: null, tests: [], limitations: null,
+    taskRevision: 1, submittedBy: dev,
+  })
+  store.results.insert({
+    teamId: '/other/.git', taskId: other.id, summary: 'x', commit: null, diff: null, worktree: null, tests: [], limitations: null,
+    taskRevision: 1, submittedBy: dev,
+  })
+  const since = new Date(Date.now() - 60_000).toISOString()
+  // The superseded result and the other team's result stay out.
+  expect(store.results.outstandingSince(TEAM, since).map(result => result.id)).toEqual([second.id])
+  expect(store.results.outstandingSince(TEAM, new Date(Date.now() + 60_000).toISOString())).toEqual([])
+  expect(first.id).not.toBe(second.id)
+  expect(store.results.submittedBy(task.id, 'dev')).toBe(true)
+  expect(store.results.submittedBy(task.id, 'someone-else')).toBe(false)
 })

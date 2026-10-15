@@ -7,8 +7,8 @@ import { afterEach, beforeEach, expect, test } from 'bun:test'
 import TestRenderer, { act } from 'react-test-renderer'
 import type { ClientMessage } from '@shared/types'
 import type { HumanTaskDetail, TaskResult, TeamTaskSummary } from '@shared/teamTasks'
-import TeamTaskDetail from '../components/chat/TeamTaskDetail'
-import TeamTasksPanel from '../components/chat/TeamTasksPanel'
+import TeamTaskDetail from '../components/team/TeamTaskDetail'
+import TeamTasksPanel from '../components/team/TeamTasksView'
 import { useTeamTaskStore } from '../stores/teamTaskStore'
 
 const originalFetch = globalThis.fetch
@@ -155,7 +155,7 @@ test('list rows badge a submitted, flagged, or accepted result, and nothing for 
     task({ id: 'd', outstandingResult: null }),
   ]
   act(() => { renderer = TestRenderer.create(<TeamTasksPanel teamPath="dev" projectPath="/repo"
-    view={{ ...useTeamTaskStore.getState().views.dev!, loading: false, tasks: rows }} sendMessage={() => {}} connected onClose={() => {}} />) })
+    view={{ ...useTeamTaskStore.getState().views.dev!, loading: false, tasks: rows }} sendMessage={() => {}} connected />) })
   const badges = byTestId('task-result-badge').map(node => [textOf(node).trim(), node.props['data-state']])
   expect(badges).toEqual([['Result submitted', 'submitted'], ['Result needs re-evaluation', 'flagged'], ['Result accepted', 'accepted']])
 })

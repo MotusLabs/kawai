@@ -4,7 +4,7 @@
 // open/focus, and the create-worktree link.
 import { afterEach, expect, test } from 'bun:test'
 import TestRenderer, { act } from 'react-test-renderer'
-import SearchablePicker from '../components/chat/SearchablePicker'
+import SearchablePicker from '../components/team/SearchablePicker'
 
 afterEach(() => {})
 

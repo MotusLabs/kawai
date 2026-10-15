@@ -606,3 +606,63 @@ describe('buildWorkspaceView chat worktree placement', () => {
     }
   })
 })
+
+describe('buildWorkspaceView team entries (team-workspace D10)', () => {
+  test('one entry per repository across several worktrees, keyed by the main checkout', () => {
+    const view = buildWorkspaceView(snapshot, [], [], [])
+    // The fixture repository has four worktrees; still exactly one entry.
+    expect(view.teams).toEqual([
+      {
+        kind: 'team',
+        key: 'team:/repo/.git',
+        repositoryId: '/repo/.git',
+        repositoryName: 'repo',
+        teamKey: '/repo',
+      },
+    ])
+    expect(snapshot.repositories[0]!.worktrees).toHaveLength(4)
+  })
+
+  test('two repositories list two entries in snapshot order', () => {
+    const second: WorkspaceSnapshot = {
+      ...snapshot,
+      repositories: [
+        ...snapshot.repositories,
+        {
+          id: '/other/.git',
+          name: 'other',
+          commonDir: '/other/.git',
+          stale: false,
+          worktrees: [
+            {
+              id: '/other/.git::/other',
+              repositoryId: '/other/.git',
+              path: '/other',
+              branch: 'main',
+              headRevision: 'eeeeeee5',
+              detached: false,
+              isMain: true,
+              dirty: false,
+              openspec: { changes: [], stale: false },
+            },
+          ],
+          branches: [],
+        },
+      ],
+    }
+    const view = buildWorkspaceView(second, [], [], [])
+    expect(view.teams.map((team) => team.teamKey)).toEqual(['/repo', '/other'])
+  })
+
+  test('the entry survives a filter that hides every session', () => {
+    const view = buildWorkspaceView(
+      snapshot,
+      [liveSession('s1', '/repo')],
+      [],
+      [],
+      { filter: { projectFilters: ['/nowhere'], hostFilters: [] } }
+    )
+    expect(view.visibleEntries).toHaveLength(0)
+    expect(view.teams.map((team) => team.teamKey)).toEqual(['/repo'])
+  })
+})

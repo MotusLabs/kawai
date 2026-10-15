@@ -31,14 +31,23 @@ describe('limit signals', () => {
     expect(textResetsAt('API Error: 429 slow down', '+08:00')).toBeNull()
   })
 
+  test('out-of-range date parts never invent a reset', () => {
+    for (const bad of ['2026-13-45 10:00:00', '2026-02-30 10:00:00', '2026-10-13 25:00:00', '2026-10-13 10:61:00', '2026-10-13 10:00:61']) {
+      expect(textResetsAt(`resets at ${bad}`, '+08:00')).toBeNull()
+    }
+    expect(textResetsAt('resets at 2028-02-29 10:00:00', '+08:00')).toBe('2028-02-29T02:00:00.000Z')
+  })
+
   test('an announced reset wins; the text is read only with a profile zone', () => {
     const signal = assistantLimitSignal('rate_limit', 'Your limit will reset at 2026-10-13 17:17:00', null)!
     expect(withTextReset(signal, '+08:00').resetsAt).toBe('2026-10-13T09:17:00.000Z')
     expect(withTextReset(signal, undefined)).toBe(signal)
     const announced = { ...signal, resetsAt: '2026-10-13T10:00:00.000Z' }
     expect(withTextReset(announced, '+08:00')).toBe(announced)
-    const retry = retryLimitSignal({ error: 'rate_limit' }, null)!
+    // A non-final retry never reads the text, even when it carries one.
+    const retry = { ...retryLimitSignal({ error: 'rate_limit' }, null)!, message: 'Your limit will reset at 2026-10-13 17:17:00' }
     expect(withTextReset(retry, '+08:00')).toBe(retry)
+    expect(withTextReset(retry, '+08:00').resetsAt).toBeNull()
     const noTime = assistantLimitSignal('rate_limit', 'API Error: 429', null)!
     expect(withTextReset(noTime, '+08:00')).toBe(noTime)
   })

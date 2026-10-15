@@ -1,17 +1,19 @@
 // Team views follow workspace discovery (team-workspace-pages D2): a view
 // keyed by an undiscovered worktree path moves to the repository's main
-// checkout when discovery reports it — whether or not its chat is on screen —
+// checkout when discovery reports it — whether or not anything is mounted —
 // and never into a different team when a chat's directory moves elsewhere.
+// The Team page, the views' only host (D4), re-subscribes under the new key.
 import { afterEach, beforeEach, expect, test } from 'bun:test'
 import TestRenderer, { act } from 'react-test-renderer'
 import type { ClientMessage, Session } from '@shared/types'
 import type { WorkspaceRepository, WorkspaceSnapshot } from '@shared/workspace'
-import ChatView from '../components/chat/ChatView'
-import { useChatStore } from '../stores/chatStore'
+import TeamWorkspaceView from '../components/team/TeamWorkspaceView'
+import { useSessionStore } from '../stores/sessionStore'
 import { useTeamTaskStore } from '../stores/teamTaskStore'
 import { startTeamViewMigration } from '../stores/teamViewMigration'
 import { useWorkspaceStore } from '../stores/workspaceStore'
 import { clearTeamKeyAliases } from '../utils/teamKeyAliases'
+import { resetTeamLocationForTests, useTeamLocationStore } from '../hooks/useTeamLocation'
 
 let stop: () => void
 beforeEach(() => { stop = startTeamViewMigration() })
@@ -20,9 +22,10 @@ afterEach(() => {
   act(() => {
     useTeamTaskStore.setState({ views: {} })
     useWorkspaceStore.setState({ snapshot: null })
-    useChatStore.setState({ sessions: {} })
+    useSessionStore.setState({ sessions: [], selectedSessionId: null, selectedHibernatingSessionId: null })
   })
   clearTeamKeyAliases()
+  resetTeamLocationForTests()
 })
 
 const chat = (projectPath: string) => ({
@@ -40,40 +43,39 @@ const discover = (...repositories: WorkspaceRepository[]) => act(() => {
   useWorkspaceStore.setState({ snapshot: { repositories, generatedAt: 'now' } as WorkspaceSnapshot })
 })
 
-const mount = (session: Session, sent: ClientMessage[]) => {
+const mountPage = (teamKey: string, sent: ClientMessage[]) => {
   let renderer!: TestRenderer.ReactTestRenderer
   act(() => {
-    renderer = TestRenderer.create(<ChatView
-      session={session} sendMessage={message => sent.push(message)}
-      connectionStatus="connected" connectionEpoch={0} error={null}
-      onClose={() => {}} onKill={() => {}} />)
+    renderer = TestRenderer.create(<TeamWorkspaceView
+      teamKey={teamKey} location={{ teamKey, tab: 'tasks' }}
+      sendMessage={message => sent.push(message)} connected connectionEpoch={0} />)
   })
   return renderer
 }
-const tasksPanels = (renderer: TestRenderer.ReactTestRenderer) => renderer.root.findAllByProps({ 'data-testid': 'team-tasks' })
+
 const subscriptions = (sent: ClientMessage[]) => sent.filter(message => message.type === 'team-tasks-open' || message.type === 'team-tasks-close')
 
-test('an open Tasks panel follows its chat when discovery maps the worktree to the main checkout', () => {
+test('an open Tasks view follows its team when discovery maps the worktree to the main checkout', () => {
   const sent: ClientMessage[] = []
-  const renderer = mount(chat('/repo/.worktrees/feature'), sent)
-  act(() => { useTeamTaskStore.getState().open('/repo/.worktrees/feature') })
-  expect(tasksPanels(renderer)).toHaveLength(1)
+  act(() => { useSessionStore.setState({ sessions: [chat('/repo/.worktrees/feature')], hasLoaded: true }) })
+  const renderer = mountPage('/repo/.worktrees/feature', sent)
+  expect(renderer.root.findAllByProps({ 'data-testid': 'team-tasks' })).toHaveLength(1)
 
   discover(repository('/repo', '/repo/.worktrees/feature'))
 
-  expect(tasksPanels(renderer)).toHaveLength(1)
+  expect(renderer.root.findAllByProps({ 'data-testid': 'team-tasks' })).toHaveLength(0)
   expect(useTeamTaskStore.getState().views['/repo']?.open).toBe(true)
   expect(useTeamTaskStore.getState().views['/repo/.worktrees/feature']).toBeUndefined()
   expect(subscriptions(sent)).toEqual([
     { type: 'team-tasks-open', teamPath: '/repo/.worktrees/feature' },
     { type: 'team-tasks-close', teamPath: '/repo/.worktrees/feature' },
-    { type: 'team-tasks-open', teamPath: '/repo' },
   ])
   act(() => renderer.unmount())
 })
 
-test('a chat that is not on screen finds its panel and draft after discovery lands', () => {
-  // Opened while the chat was selected, then the user switched away.
+test('a re-discovered team re-opens on the Team page under its main-checkout key', () => {
+  // Opened under the worktree key, then discovery lands: the view (and its
+  // draft) move, and a Team page mounted afterwards works from the new key.
   act(() => {
     useTeamTaskStore.getState().open('/repo/.worktrees/feature')
     useTeamTaskStore.getState().setDraft('/repo/.worktrees/feature', { title: 'Half-typed task' })
@@ -82,8 +84,9 @@ test('a chat that is not on screen finds its panel and draft after discovery lan
   expect(useTeamTaskStore.getState().views['/repo/.worktrees/feature']).toBeUndefined()
 
   const sent: ClientMessage[] = []
-  const renderer = mount(chat('/repo/.worktrees/feature'), sent)
-  expect(tasksPanels(renderer)).toHaveLength(1)
+  act(() => { useSessionStore.setState({ sessions: [chat('/repo/.worktrees/feature')], hasLoaded: true }) })
+  const renderer = mountPage('/repo', sent)
+  expect(renderer.root.findAllByProps({ 'data-testid': 'team-tasks' })).toHaveLength(1)
   expect(useTeamTaskStore.getState().views['/repo']!.draft.title).toBe('Half-typed task')
   expect(subscriptions(sent)).toEqual([{ type: 'team-tasks-open', teamPath: '/repo' }])
   act(() => renderer.unmount())
@@ -91,23 +94,12 @@ test('a chat that is not on screen finds its panel and draft after discovery lan
 
 test('a chat whose directory moves to another repository leaves the old team’s view where it is', () => {
   discover(repository('/alpha'), repository('/beta'))
-  const sent: ClientMessage[] = []
-  const renderer = mount(chat('/alpha'), sent)
   act(() => {
     useTeamTaskStore.getState().open('/alpha', 'task-a')
     useTeamTaskStore.getState().setDraft('/alpha', { title: 'Alpha draft' })
   })
-  act(() => renderer.update(<ChatView
-    session={chat('/beta')} sendMessage={message => sent.push(message)}
-    connectionStatus="connected" connectionEpoch={0} error={null}
-    onClose={() => {}} onKill={() => {}} />))
-
-  // Beta has no open view of its own, so nothing shows; alpha's view is untouched.
-  expect(tasksPanels(renderer)).toHaveLength(0)
-  const views = useTeamTaskStore.getState().views
-  expect(views['/beta']).toBeUndefined()
-  expect(views['/alpha']).toMatchObject({ open: true, selectedTaskId: 'task-a', draft: { title: 'Alpha draft' } })
-  act(() => renderer.unmount())
+  expect(useTeamTaskStore.getState().views['/alpha']).toMatchObject({ open: true, selectedTaskId: 'task-a', draft: { title: 'Alpha draft' } })
+  expect(useTeamTaskStore.getState().views['/beta']).toBeUndefined()
 })
 
 test('keys outside every discovered repository, and keys already at the main checkout, stay put', () => {
@@ -117,4 +109,21 @@ test('keys outside every discovered repository, and keys already at the main che
   })
   discover(repository('/repo', '/repo/.worktrees/feature'))
   expect(Object.keys(useTeamTaskStore.getState().views).sort()).toEqual(['/repo', '/tmp/notes'])
+})
+
+test('an open Team page moves with its team when discovery maps the worktree to the main checkout', () => {
+  const sent: ClientMessage[] = []
+  act(() => { useSessionStore.setState({ sessions: [chat('/repo/.worktrees/feature')], hasLoaded: true }) })
+  // The page is open on the pre-discovery key, with a task selected.
+  act(() => { useTeamLocationStore.getState().navigate({ teamKey: '/repo/.worktrees/feature', tab: 'tasks', id: 'task-a' }) })
+  const renderer = mountPage('/repo/.worktrees/feature', sent)
+
+  discover(repository('/repo', '/repo/.worktrees/feature'))
+
+  // The location moved in place: same tab and selection, new key, no extra
+  // history entry, and the page renders rather than reading as unknown.
+  expect(useTeamLocationStore.getState().location).toEqual({ teamKey: '/repo', tab: 'tasks', id: 'task-a' })
+  expect(renderer.root.findAllByProps({ 'data-testid': 'team-workspace-notice' })).toHaveLength(0)
+  expect(useTeamTaskStore.getState().views['/repo/.worktrees/feature']).toBeUndefined()
+  act(() => renderer.unmount())
 })

@@ -10,7 +10,8 @@
 // adds `profiles`, `strategy`, and `onLimit`; group effort adds `effort`, the
 // reasoning effort members' agents launch with; member release adds
 // `releaseOnTaskClose`, `worktreeScoped`, and `canReleaseMembers` (all strict
-// booleans, default true). `profiles` and `onLimit` take
+// booleans, default true); durable plans add `canCreatePlans` (a strict
+// boolean like `canCreateTasks`, default false). `profiles` and `onLimit` take
 // one single-line flow value (`[a, b]` or `{ k: v }`, scalars only — never
 // nested). Defaults are applied here so every reader sees the same effective
 // values. Bad `onLimit` and `effort` values are warnings (the defaults apply)
@@ -53,6 +54,8 @@ export interface GroupDefinition {
   hopLimit?: number
   /** Members may create team tasks (team-tasks); default false. */
   canCreateTasks: boolean
+  /** Members may create plans with `plan_create` (durable-plans D11); default false. */
+  canCreatePlans: boolean
   /** Spawned members are released when their task closes (member-release); default true. */
   releaseOnTaskClose: boolean
   /** Task mail is scoped to the task's worktree (member-release); default true. */
@@ -126,7 +129,7 @@ export function parseGroupFile(id: string, content: string): GroupFileParse {
 }
 
 type TaskSettings = Pick<GroupDefinition,
-  'canCreateTasks' | 'canManageMailbox' | 'releaseOnTaskClose' | 'worktreeScoped' | 'canReleaseMembers'
+  'canCreateTasks' | 'canCreatePlans' | 'canManageMailbox' | 'releaseOnTaskClose' | 'worktreeScoped' | 'canReleaseMembers'
   | 'max' | 'profiles' | 'strategy' | 'onLimit' | 'approval' | 'effort' | 'warnings'>
 
 type Parsed<T> = { ok: true; value: T } | { ok: false; error: string }
@@ -136,7 +139,7 @@ function parseTaskSettings(
 ): { ok: true; settings: TaskSettings } | { ok: false; error: string } {
   const warnings: string[] = []
   const settings: TaskSettings = {
-    canCreateTasks: false, canManageMailbox: false, releaseOnTaskClose: true, worktreeScoped: true, canReleaseMembers: true,
+    canCreateTasks: false, canCreatePlans: false, canManageMailbox: false, releaseOnTaskClose: true, worktreeScoped: true, canReleaseMembers: true,
     max: 1, profiles: [], strategy: 'first-available',
     onLimit: parseOnLimit(fields.get('onLimit'), warnings), approval: 'manual', warnings,
   }
@@ -148,7 +151,7 @@ function parseTaskSettings(
     settings.canCreateTasks = canCreate === 'true'
   }
   settings.canManageMailbox = parseCanManageMailbox(fields.get('canManageMailbox'), warnings)
-  for (const key of ['releaseOnTaskClose', 'worktreeScoped', 'canReleaseMembers'] as const) {
+  for (const key of ['canCreatePlans', 'releaseOnTaskClose', 'worktreeScoped', 'canReleaseMembers'] as const) {
     const raw = fields.get(key)?.trim()
     if (raw === undefined) continue
     if (raw !== 'true' && raw !== 'false') {

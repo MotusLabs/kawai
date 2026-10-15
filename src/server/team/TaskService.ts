@@ -9,7 +9,8 @@
 // - done/cancelled: the creator; every status (including reopening): the human.
 // References are validated before anything is written: parent tasks of the
 // same team, worktrees listed for the team's repository (stored as their
-// root), and OpenSpec changes that exist.
+// root), OpenSpec changes that exist, and a plan-change link to an open plan's
+// approved revision (durable-plans D9).
 import fs from 'node:fs'
 import path from 'node:path'
 import type { ChatSessionRecord } from '../db'
@@ -20,6 +21,8 @@ import type { TeamIdentity } from './teamIdentity'
 import type { PublishOutcome, TaskStore } from './taskStore'
 import type { NoticeSender, SentNotice } from './taskNotices'
 import { TeamWorktrees } from './worktreeRoots'
+import type { PlanStore } from '../plans/planStore'
+import { resolvePlanLink } from '../plans/planLink'
 
 export interface TaskCreateInput {
   title: string
@@ -28,6 +31,9 @@ export interface TaskCreateInput {
   parent_id?: string | null
   worktree?: string | null
   openspec_change?: string | null
+  /** The plan-change link (durable-plans D9): both or neither; fixed at creation. */
+  plan_id?: string | null
+  plan_change?: string | null
   /** Stable client request key (task-assignment D4): replays deduplicate. */
   requestKey?: string | null
 }
@@ -96,6 +102,8 @@ export class TaskService {
     onStatusTransition?: (task: TeamTask, status: TaskStatus, actor: TaskActor) => Promise<() => void>
     /** Restore an archived notice recipient after commit (direct mail resumes it, D3/Q8). */
     restoreSession?: (id: string) => void | Promise<void>
+    /** Plans a task may link to (durable-plans D9); without it every link is refused as unknown. */
+    plans?: PlanStore
   }) {
     this.worktrees = options.worktrees ?? new TeamWorktrees()
   }
@@ -117,9 +125,11 @@ export class TaskService {
       worktree = target.root
     }
     const openspecChange = input.openspec_change ? this.validateChange(team, input.openspec_change, worktree) : null
+    const link = resolvePlanLink(this.options.plans, team.teamId, input.plan_id, input.plan_change)
     return this.store.create({
       teamId: team.teamId, title, direction, acceptance: emptyToNull(input.acceptance), creator: actor,
       parentId: input.parent_id || null, worktree, openspecChange,
+      ...(link ? { planId: link.planId, planChange: link.planChange } : {}),
       ...(input.requestKey ? { requestKey: input.requestKey } : {}),
     })
   }
