@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { DEFAULT_PARK_IF_RESET_WITHIN_MS, parseDuration, parseGroupFile, type GroupDefinition, type GroupEffort } from '../team/groupFile'
 
 const ROUTING_DEFAULTS = {
+  canCreatePlans: false,
   canManageMailbox: false,
   profiles: [],
   strategy: 'first-available',
@@ -113,6 +114,16 @@ describe('parseGroupFile', () => {
     expect(parsed.ok && parsed.group).toMatchObject({
       releaseOnTaskClose: false, worktreeScoped: false, canReleaseMembers: false,
     })
+  })
+
+  test('canCreatePlans (durable-plans 3.3): true, false, missing, and an invalid value rejecting the file', () => {
+    const read = (frontmatter: string) => parseGroupFile('leads', `---\n${frontmatter}\n---\nLead.`)
+    expect(read('canCreatePlans: true')).toMatchObject({ ok: true, group: { canCreatePlans: true } })
+    expect(read('canCreatePlans: false')).toMatchObject({ ok: true, group: { canCreatePlans: false } })
+    expect(read('label: Leads')).toMatchObject({ ok: true, group: { canCreatePlans: false } })
+    const invalid = read('canCreatePlans: yes')
+    expect(invalid.ok).toBe(false)
+    if (!invalid.ok) expect(invalid.error).toContain('canCreatePlans must be true or false')
   })
 
   test('release settings reject values other than true or false', () => {

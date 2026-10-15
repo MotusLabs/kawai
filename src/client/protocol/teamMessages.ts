@@ -1,5 +1,6 @@
 // Store dispatches and notifications for the team mailbox/task message family
-// and the Messages read model (team-message-threads 5.2): one paged list, its
+// the Messages read model (team-message-threads 5.2), and the Plans view
+// (durable-plans D12): one paged list, its
 // thread replies, and the human composer's send result. The view is
 // host-agnostic and drives the wire itself; this is the host that feeds its
 // store. A reply for a team key whose views moved (a rekey) is routed to
@@ -7,6 +8,7 @@
 import { useTeamMailboxStore } from '../stores/teamMailboxStore'
 import { useTeamMessageStore } from '../stores/teamMessageStore'
 import { useTeamTaskStore } from '../stores/teamTaskStore'
+import { useTeamPlanStore } from '../stores/teamPlanStore'
 import { notifyDeliveredToHuman, notifyMailboxDeadLetter } from '../utils/teamMailboxNotification'
 import { routedTeamPath } from '../utils/teamKeyAliases'
 import type { ServerMessage } from '@shared/types'
@@ -23,6 +25,7 @@ export function handleTeamMessage(message: TeamMessage, _deps: MessageRouterDeps
   const mailbox = useTeamMailboxStore.getState()
   const messages = useTeamMessageStore.getState()
   const tasks = useTeamTaskStore.getState()
+  const plans = useTeamPlanStore.getState()
   switch (message.type) {
     case 'team-mailbox-snapshot': mailbox.apply(routed(message, mailbox.views)); return
     case 'team-mailbox-rules-result': mailbox.applyRulesResult(routed(message, mailbox.views)); return
@@ -38,5 +41,9 @@ export function handleTeamMessage(message: TeamMessage, _deps: MessageRouterDeps
     case 'team-messages': messages.applyPush(routed(message, messages.views)); return
     case 'team-thread': messages.applyThread(routed(message, messages.views)); return
     case 'team-message-send-result': messages.applyResult(routed(message, messages.views)); return
+    // Durable plans (durable-plans D12).
+    case 'team-plans-snapshot': plans.applySnapshot(routed(message, plans.views)); return
+    case 'team-plan-detail': plans.applyDetail(routed(message, plans.views)); return
+    case 'team-plan-result': plans.applyResult(routed(message, plans.views)); return
   }
 }

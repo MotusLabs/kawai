@@ -42,6 +42,7 @@ import { TaskConnections } from '../team/taskConnections'
 import { MessageConnections } from '../team/messageConnections'
 import { StrategyConnections } from '../strategy/strategyConnections'
 import { WorkspaceConnections } from '../team/workspaceConnections'
+import { PlanConnections } from '../plans/planConnections'
 import type { TeamMessage } from '../../shared/team'
 
 /** Frames per debug page reply. */
@@ -82,6 +83,7 @@ export class ChatConnections {
   private readonly messageConnections: MessageConnections
   private readonly strategyConnections: StrategyConnections
   private readonly workspaceConnections: WorkspaceConnections
+  private readonly planConnections: PlanConnections
 
   constructor(
     private readonly manager: ChatSessionManager,
@@ -93,6 +95,7 @@ export class ChatConnections {
     this.messageConnections = new MessageConnections(manager)
     this.strategyConnections = new StrategyConnections(manager)
     this.workspaceConnections = new WorkspaceConnections(manager)
+    this.planConnections = new PlanConnections(manager)
   }
 
   /**
@@ -142,6 +145,11 @@ export class ChatConnections {
     this.strategyConnections.publish(teamId)
   }
 
+  /** A committed plan write, or a change to a task linked to the plan: re-send its views. */
+  publishPlans(teamId: string, planId?: string): void {
+    this.planConnections.publish(teamId, planId)
+  }
+
   disconnect(connection: ChatConnection): void {
     this.epochs.set(connection, {})
     this.pendingAttach.delete(connection)
@@ -150,6 +158,7 @@ export class ChatConnections {
     this.messageConnections.disconnect(connection)
     this.strategyConnections.disconnect(connection)
     this.workspaceConnections.disconnect(connection)
+    this.planConnections.disconnect(connection)
     this.subscriptions.delete(connection)
     this.batches.delete(connection)
     this.activityBatches.delete(connection)
@@ -533,6 +542,7 @@ export class ChatConnections {
     }
     if (message.type.startsWith('strategy-')) return this.strategyConnections.handle(connection, message as Extract<ClientMessage, { type: `strategy-${string}` }>)
     if (message.type.startsWith('team-workspace-')) return this.workspaceConnections.handle(connection, message as Extract<ClientMessage, { type: `team-workspace-${string}` }>)
+    if (message.type.startsWith('team-plan')) return this.planConnections.handle(connection, message as Extract<ClientMessage, { type: `team-plan${string}` }>)
     if (!message.type.startsWith('chat-') || !('sessionId' in message)) return
     const { sessionId } = message
     if (!this.manager.has(sessionId)) {
@@ -670,5 +680,5 @@ function opensSubscription(type: ClientMessage['type']): boolean {
   return type === 'chat-attach' || type === 'chat-debug-open' ||
     type === 'team-mailbox-open' || type === 'team-tasks-open' || type === 'team-task-open' ||
     type === 'team-messages-open' || type === 'team-thread-open' ||
-    type === 'strategy-open' || type === 'team-workspace-open'
+    type === 'strategy-open' || type === 'team-workspace-open' || type === 'team-plans-open' || type === 'team-plan-open'
 }

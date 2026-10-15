@@ -9,9 +9,9 @@ import { useLayoutEffect, useState, type RefObject } from 'react'
 export type HeaderLayout = 'full' | 'icons' | 'menu'
 
 /** Minimum header width, in chat-font ems, for labelled panel entries. */
-export const FULL_MIN_EM = 68
+export const FULL_MIN_EM = 73
 /** Minimum header width, in chat-font ems, for icon-only panel entries. */
-export const ICONS_MIN_EM = 50
+export const ICONS_MIN_EM = 53
 
 export function headerLayoutForWidth(widthPx: number, fontSizePx: number): HeaderLayout {
   const em = widthPx / fontSizePx
