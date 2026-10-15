@@ -20,6 +20,7 @@ import { useStrategyStore } from './strategyStore'
 import { useTeamMailboxStore } from './teamMailboxStore'
 import { useTeamMessageStore } from './teamMessageStore'
 import { useTeamTaskStore } from './teamTaskStore'
+import { useTeamWorkspaceDataStore } from './teamWorkspaceDataStore'
 import { useTeamWorkspaceStore } from './teamWorkspaceStore'
 import { useWorkspaceStore } from './workspaceStore'
 
@@ -29,6 +30,7 @@ const viewKeys = () => new Set([
   ...Object.keys(useTeamMessageStore.getState().views),
   ...Object.keys(useStrategyStore.getState().views),
   ...Object.keys(useTeamWorkspaceStore.getState().views),
+  ...Object.keys(useTeamWorkspaceDataStore.getState().views),
 ])
 
 /** Move every team view from a chat's old team key to its new one. */
@@ -41,6 +43,7 @@ function rekeyTeamViews(from: string, to: string) {
   useTeamMessageStore.getState().rekey(from, to)
   useStrategyStore.getState().rekey(from, to)
   useTeamWorkspaceStore.getState().rekey(from, to)
+  useTeamWorkspaceDataStore.getState().rekey(from, to)
   // An open Team page on the old key follows (D3): same tab, selection, and
   // sub-view, replaced in place so no history entry appears for the move.
   const location = useTeamLocationStore.getState().location
