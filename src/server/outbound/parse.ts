@@ -91,6 +91,13 @@ export function tokenize(input: string): Token[] {
       i++
       continue
     }
+    // Grouping brackets split only where the shell reads them: `(` opens at a
+    // word start, `)` closes at a word end, and `{`/`}` stand alone — so
+    // `repos/{owner}/{repo}` keeps its braces inside the word.
+    const boundary = (text: string, at: number) => text[at] === undefined || /[\s;|&(){}]/.test(text[at]!)
+    if (char === '(' && atWordStart) { pushOp(char); i++; continue }
+    if (char === ')' && boundary(input, i + 1)) { pushOp(char); i++; continue }
+    if ((char === '{' || char === '}') && atWordStart && boundary(input, i + 1)) { pushOp(char); i++; continue }
     if (char === '<' || char === '>') {
       // A redirect is one word: an fd prefix, the arrows, maybe `&fd`, maybe
       // an attached target. `2>&1` stands alone; `>/dev/null` carries its
@@ -176,9 +183,9 @@ const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash'])
 const REDIRECT_ALONE = /^(?:\d*(?:>>?|<>)&\d*|>&\d+)$/
 const HEREDOC = /^<<-?$/
 
-function resolveDir(dir: string, cwd: string): string {
-  if (dir === '~') return process.env.HOME ?? '~'
-  if (dir.startsWith('~/')) return process.env.HOME ? dir.replace(/^~/, process.env.HOME) : dir
+/** A directory a segment can pin, or null when the shell would expand it (`~`). */
+function resolveDir(dir: string, cwd: string): string | null {
+  if (dir === '~' || dir.startsWith('~/')) return null
   if (dir.startsWith('/')) return dir
   return cwd.replace(/\/$/, '') + '/' + dir
 }
@@ -264,7 +271,8 @@ function buildSegment(
     if (cleared) for (const key of env.keys()) if (!envUpdates.has(key)) env.delete(key)
   }
   // `bash -c 'inner'` unwraps one level, with the prefix assignments overlaid.
-  if (depth === 0 && rest[0] !== undefined && SHELLS.has(rest[0]!.text) && rest[1]?.text === '-c' && rest[2] !== undefined && !rest[2]!.opaque) {
+  const flagIsC = /^-[a-qs-z]*c[a-qs-z]*$|^-[a-z]*c[a-z]*$/.test(rest[1]?.text ?? '')
+  if (depth === 0 && rest[0] !== undefined && SHELLS.has(rest[0]!.text) && (rest[1]?.text === '-c' || flagIsC) && rest[2] !== undefined && !rest[2]!.opaque) {
     const inner = parseSegments(rest[2]!.text, cwd, env, depth + 1)
     return {
       segments: inner.map(segment => ({ ...segment, env: mergeEnv(env, segment.env) })),
@@ -289,12 +297,14 @@ function buildSegment(
   let segmentCwd = cwd
   if (argv[0] === 'git') {
     const dashC = argv.findIndex((word, index) => index > 0 && (word === '-C') && argv.length > index + 1)
-    if (dashC > 0) segmentCwd = resolveDir(argv[dashC + 1]!, cwd)
+    const pinned = dashC > 0 ? resolveDir(argv[dashC + 1]!, cwd) : null
+    if (pinned !== null) segmentCwd = pinned
   }
   // `cd <dir>` moves every later segment.
   let chdir: string | undefined
   if (argv[0] === 'cd' && argv[1] !== undefined && !argv[1]!.startsWith('-') && !rest[1]!.opaque) {
-    chdir = resolveDir(argv[1]!, cwd)
+    const target = resolveDir(argv[1]!, cwd)
+    if (target !== null) chdir = target
   }
   return {
     segments: [{ argv, text: argv.join(' '), cwd: segmentCwd, env }],
@@ -333,6 +343,7 @@ function parseSegments(
   let heredocDelimiter: string | null = null
   let pendingBody = false
   let delimiter = ''
+  const cwdStack: string[] = []
   const finish = () => {
     const built = buildSegment(words, runningEnv, cwd, depth)
     words = []
@@ -353,6 +364,9 @@ function parseSegments(
         heredocDelimiter = delimiter
         pendingBody = false
       }
+      // A subshell or brace group keeps its own cwd; the parent's returns.
+      if (token.text === '(' || token.text === '{') cwdStack.push(cwd)
+      if ((token.text === ')' || token.text === '}') && cwdStack.length > 0) cwd = cwdStack.pop()!
       continue
     }
     if (expectDelimiter) {

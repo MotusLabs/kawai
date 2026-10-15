@@ -17,6 +17,7 @@ import { parseSends } from '../outbound/rules'
 const INTERNAL = new Set([
   'example.internal', 'npm.example.internal', 'registry.example.internal', 'build.example.internal',
   'git.example.internal', 'pypi.example.internal', 'charts.example.internal', 'host.example.internal',
+  'hook.example.internal',
 ])
 const MODEL_PROVIDER = new Set(['llm.example.com', 'api.anthropic.com'])
 const MCP_ALLOWED = new Set(['docs-search'])
@@ -337,5 +338,133 @@ describe('mcp-call and the whole-command reduction', () => {
       'unresolved:no repository at the cwd', 'github:origin',
     ])
     expect(strongest(both)!.destination).toBe('unresolved:no repository at the cwd')
+  })
+})
+
+describe('CC checkpoint findings: curl targets, clusters, and unwrapping', () => {
+  test('every URL argument is judged, scheme URLs preferred, values consumed (H2)', () => {
+    // The write-out flag's value is not a URL; the second URL is judged too.
+    expect(verdictOf('curl -w example.internal -d @f https://x.example.com')).toEqual({
+      rule: 'http-send', verdict: 'violation', destination: 'host:x.example.com',
+    })
+    const both = judged('curl -d x https://hook.example.internal https://x.example.com')
+    expect(both.map(match => match.destination)).toEqual(['internal:hook.example.internal', 'host:x.example.com'])
+    expect(strongest(both)).toMatchObject({ verdict: 'violation', destination: 'host:x.example.com' })
+    expect(verdictOf('curl -K config.cfg -D headers.txt -c jar.txt --resolve a.internal:443:127.0.0.1 -d x https://hook.example.internal')).toEqual({
+      rule: 'http-send', verdict: 'allowed', destination: 'internal:hook.example.internal',
+    })
+  })
+
+  test('short flag clusters walk every letter (H3)', () => {
+    expect(verdictOf('curl -sX POST https://example.internal/api')).toEqual({
+      rule: 'http-send', verdict: 'allowed', destination: 'internal:example.internal',
+    })
+    expect(verdictOf('curl -sd x https://example.internal/api')).toEqual({
+      rule: 'http-send', verdict: 'allowed', destination: 'internal:example.internal',
+    })
+    expect(verdictOf('curl -sfL https://example.internal/api')).toEqual(null)
+  })
+
+  test('a registry port splits from the host and pins the match (M4)', () => {
+    expect(verdictOf('docker push registry.example.internal:5000/team/app:2')).toEqual({
+      rule: 'registry-publish', verdict: 'allowed', destination: 'internal:registry.example.internal',
+    })
+  })
+
+  test('bash -lc unwraps; groups and subshells keep their cwd; brackets tokenize (M5)', () => {
+    expect(verdictOf('bash -lc "curl -d x https://example.internal/hook"')).toEqual({
+      rule: 'http-send', verdict: 'allowed', destination: 'internal:example.internal',
+    })
+    expect(verdictOf('(cd /repo && git push fork)')).toEqual({
+      rule: 'git-push', verdict: 'violation', destination: 'github:other/fork',
+    })
+    // A subshell's cd never moves the parent's cwd.
+    const both = judged('(cd /plain/dir && git push); git push')
+    expect(both.map(match => match.cwd)).toEqual(['/plain/dir', '/repo'])
+    // Wrapping prefixes fall away.
+    expect(verdictOf('sudo curl -d x https://example.internal/hook')).toEqual({
+      rule: 'http-send', verdict: 'allowed', destination: 'internal:example.internal',
+    })
+    expect(verdictOf('timeout 30 curl -d x https://example.internal/hook')).toEqual({
+      rule: 'http-send', verdict: 'allowed', destination: 'internal:example.internal',
+    })
+    expect(verdictOf('nohup npm publish >/dev/null 2>&1')).toEqual({
+      rule: 'registry-publish', verdict: 'violation', destination: 'registry:registry.npmjs.org',
+    })
+  })
+
+  test('git configuration pins read unknown (M6)', () => {
+    for (const command of [
+      'git --git-dir=/x/.git push',
+      'git -c remote.origin.url=https://github.com/other/r push',
+      'git -c url.https://github.com/.insteadOf=https://example.internal/ push',
+      'git --work-tree=/x --git-dir=/y/.git push',
+    ]) {
+      expect(verdictOf(command)).toMatchObject({
+        rule: 'git-push', verdict: 'unknown-destination',
+      })
+    }
+  })
+
+  test('publish forms with flags before the subcommand (M9)', () => {
+    expect(verdictOf('npm --registry https://npm.example.internal publish')).toEqual({
+      rule: 'registry-publish', verdict: 'allowed', destination: 'internal:npm.example.internal',
+    })
+    expect(verdictOf('pnpm -r publish')).toEqual({
+      rule: 'registry-publish', verdict: 'violation', destination: 'registry:registry.npmjs.org',
+    })
+    expect(verdictOf('yarn npm publish')).toEqual({
+      rule: 'registry-publish', verdict: 'violation', destination: 'registry:registry.yarnpkg.com',
+    })
+    expect(verdictOf('docker image push registry.example.internal/team/app')).toEqual({
+      rule: 'registry-publish', verdict: 'allowed', destination: 'internal:registry.example.internal',
+    })
+    expect(verdictOf('docker -H ssh://builder.example.internal push registry.example.internal/team/app')).toEqual({
+      rule: 'registry-publish', verdict: 'allowed', destination: 'internal:registry.example.internal',
+    })
+    expect(verdictOf('docker build --push -t registry.example.internal/team/app .')).toEqual({
+      rule: 'registry-publish', verdict: 'allowed', destination: 'internal:registry.example.internal',
+    })
+  })
+
+  test('low items: leading slash, case, httpie items, -G with a method (LOW)', () => {
+    expect(verdictOf('gh api -X POST /repos/other/repo/issues')).toEqual({
+      rule: 'gh-api-write', verdict: 'violation', destination: 'github:other/repo',
+    })
+    expect(verdictOf('gh issue create -R Acme/Kawai --title x')).toEqual({
+      rule: 'gh-write', verdict: 'allowed', destination: 'github:origin',
+    })
+    // Header and query items are not bodies.
+    expect(verdictOf('http example.internal/x Accept:application/json page==2')).toEqual(null)
+    expect(verdictOf('http example.internal/x name=value')).toEqual({
+      rule: 'http-send', verdict: 'allowed', destination: 'internal:example.internal',
+    })
+    expect(verdictOf('curl -G -X POST https://example.internal/api')).toEqual({
+      rule: 'http-send', verdict: 'allowed', destination: 'internal:example.internal',
+    })
+  })
+
+  test('repo creates, forks, and gists never fall back to origin (lead decision, D1)', () => {
+    expect(verdictOf('gh repo create acme/new-repo --private')).toEqual({
+      rule: 'gh-write', verdict: 'violation', destination: 'github:acme/new-repo',
+    })
+    expect(verdictOf('gh repo create new-repo')).toEqual({
+      rule: 'gh-write', verdict: 'violation', destination: 'github:new-repo',
+    })
+    expect(verdictOf('gh repo fork')).toEqual({
+      rule: 'gh-write', verdict: 'violation', destination: "github:the caller's account",
+    })
+    expect(verdictOf('gh repo fork --clone=false')).toEqual({
+      rule: 'gh-write', verdict: 'violation', destination: "github:the caller's account",
+    })
+    expect(verdictOf('gh repo fork other/repo')).toEqual({
+      rule: 'gh-write', verdict: 'violation', destination: 'github:other/repo',
+    })
+    expect(verdictOf('gh gist create notes.md')).toEqual({
+      rule: 'gh-write', verdict: 'violation', destination: 'host:gist.github.com',
+    })
+    expect(verdictOf('gh gist edit abc123 -f notes.md')).toEqual({
+      rule: 'gh-write', verdict: 'violation', destination: 'host:gist.github.com',
+    })
   })
 })

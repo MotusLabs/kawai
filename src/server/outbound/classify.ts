@@ -25,7 +25,7 @@ export type SendTarget =
   | { kind: 'remote'; name: string }
   | { kind: 'url'; url: string }
   | { kind: 'host'; host: string; port?: number }
-  | { kind: 'registry'; host: string }
+  | { kind: 'registry'; host: string; port?: number }
   | { kind: 'repo'; repo: string; host?: string }
   | { kind: 'mail' }
   | { kind: 'mcp'; server: string }
@@ -194,7 +194,7 @@ function judgeTarget(candidate: SendCandidate, facts: JudgeFacts): Judgement {
         ? { verdict: 'allowed', destination: `mcp:${target.server}` }
         : { verdict: 'violation', destination: `mcp:${target.server}` }
     case 'registry': {
-      const host = judgeHost(target.host, facts)
+      const host = judgeHost(target.host, facts, target.port)
       if (host.verdict === 'violation') return { ...host, destination: `registry:${target.host}` }
       return host
     }
@@ -230,8 +230,8 @@ function judgeTarget(candidate: SendCandidate, facts: JudgeFacts): Judgement {
       }
       // `{owner}`/`{repo}` mean origin; the gh default host follows origin's.
       const name = target.repo === '{owner}/{repo}' ? origin.repo : target.repo
-      const host = target.host ?? origin.host
-      if (name === origin.repo && host === origin.host) {
+      const host = (target.host ?? origin.host).toLowerCase()
+      if (name.toLowerCase() === origin.repo.toLowerCase() && host === origin.host.toLowerCase()) {
         return { verdict: 'allowed', destination: 'github:origin' }
       }
       return { verdict: 'violation', destination: `github:${name}` }

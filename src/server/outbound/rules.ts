@@ -4,37 +4,34 @@
 // flags — never by searching text. Message, title, and body values, and
 // anything a heredoc carried, are values and never targets; a `GH_REPO`,
 // `GH_HOST`, `GIT_DIR`, or `GIT_WORK_TREE` assignment — as a prefix, through
-// `env`, or set by an earlier segment — makes the affected target unresolved,
-// because the classifier does not evaluate shell variables. Pure like the
-// rest of `src/server/outbound/`.
+// `env`, or set by an earlier segment — and a `--git-dir`, `--work-tree`, or
+// `remote.*`/`url.*` `git -c` override each make the affected target
+// unresolved, because the classifier does not evaluate shell variables.
+// `gh repo create`/`fork` and `gh gist create`/`edit` never fall back to
+// origin: they publish somewhere new (D1). Pure like the rest of the module.
 import { parseCommand } from './parse'
 import type { SendCandidate, SendTarget } from './classify'
 
 /** Words that mean "unexpanded text": variables and command substitution. */
 const OPAQUE = /[$`]/
+const VARIABLE = (): SendTarget => ({ kind: 'unresolved', why: 'the target is a variable or command substitution' })
 
 const GH_WRITE_COMMANDS = new Set(['issue', 'pr', 'release', 'repo', 'gist', 'label', 'secret', 'variable', 'workflow', 'run'])
 const GH_WRITE_VERBS = new Set([
   'create', 'edit', 'close', 'reopen', 'comment', 'merge', 'delete', 'review',
   'upload', 'set', 'run', 'cancel', 'rerun', 'archive', 'restore', 'unarchive',
-  'enable', 'disable', 'add', 'remove', 'deploy', 'watch-run', 'transfer', 'rename',
+  'enable', 'disable', 'add', 'remove', 'deploy', 'watch-run', 'transfer', 'rename', 'fork',
 ])
 const REGISTRY_DEFAULTS: Record<string, string> = {
   npm: 'registry.npmjs.org', pnpm: 'registry.npmjs.org', yarn: 'registry.yarnpkg.com',
   bun: 'registry.npmjs.org', cargo: 'crates.io', twine: 'pypi.org', docker: 'docker.io',
   podman: 'docker.io', helm: 'docker.io', buildctl: 'docker.io',
 }
+/** Command prefixes that only wrap the command the classifier means. */
+const PREFIXES = new Set(['sudo', 'command', 'nohup', 'exec', 'time'])
 
 const URLISH = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//
 const SCPISH = /^[^@/\s]+@[^:\s]+:/
-
-/** The first component of an image or OCI reference, when it names a registry. */
-function registryOf(reference: string): string | null {
-  if (!reference.includes('/')) return null
-  const first = reference.split('/')[0] ?? ''
-  if (first === '.' || first === '..') return null
-  return first.includes('.') || first.includes(':') || first === 'localhost' ? first : null
-}
 
 interface Word {
   text: string
@@ -53,7 +50,9 @@ interface Scan {
 /**
  * Walk `argv` from `start`, splitting flag values from positionals. `value`
  * lists the long and short flags that consume a value; everything else
- * starting `-` is a boolean flag. `--` ends the flags.
+ * starting `-` is a boolean flag. A short cluster walks letter by letter
+ * (`-sX POST`, `-sd x`): the first value-flag letter takes the cluster's
+ * rest, or the next word, as its value. `--` ends the flags.
  */
 function scan(argv: string[], start: number, value: string[]): Scan {
   const positionals: Word[] = []
@@ -65,23 +64,35 @@ function scan(argv: string[], start: number, value: string[]): Scan {
     if (!onlyPositionals && text === '--') { onlyPositionals = true; continue }
     if (!onlyPositionals && text.startsWith('-') && text !== '-') {
       const eq = text.indexOf('=')
-      const attached = eq === -1 ? null : text.slice(eq + 1)
-      let name = (eq === -1 ? text : text.slice(0, eq))
-      // Short flags may carry their value attached: `-XPOST`, `-Rother/repo`.
-      if (!name.startsWith('--') && name.length > 2 && value.includes(name.slice(0, 2))) {
-        found.push({ name: name.slice(0, 2), value: { text: text.slice(2), opaque } })
-        continue
-      }
-      if (value.includes(name)) {
-        if (attached !== null) found.push({ name, value: { text: attached, opaque } })
-        else if (i + 1 < argv.length) {
-          const next = argv[i + 1]!
-          found.push({ name, value: { text: next, opaque: OPAQUE.test(next) } })
-          i++
+      if (text.startsWith('--')) {
+        const name = eq === -1 ? text : text.slice(0, eq)
+        const attached = eq === -1 ? null : text.slice(eq + 1)
+        if (value.includes(name)) {
+          if (attached !== null) found.push({ name, value: { text: attached, opaque } })
+          else if (i + 1 < argv.length) {
+            const next = argv[i + 1]!
+            found.push({ name, value: { text: next, opaque: OPAQUE.test(next) } })
+            i++
+          } else found.push({ name, value: null })
         } else found.push({ name, value: null })
         continue
       }
-      found.push({ name, value: null })
+      // A short cluster: every letter until one that takes a value.
+      const letters = text.slice(1)
+      const attached: string | null = eq === -1 ? null : text.slice(eq + 1)
+      for (let at = 0; at < letters.length; at++) {
+        const letter = `-${letters[at]!}`
+        if (!value.includes(letter)) { found.push({ name: letter, value: null }); continue }
+        const rest = letters.slice(at + 1)
+        if (rest !== '') found.push({ name: letter, value: { text: rest, opaque: opaque || OPAQUE.test(rest) } })
+        else if (attached !== null && attached !== '') found.push({ name: letter, value: { text: attached, opaque } })
+        else if (i + 1 < argv.length) {
+          const next = argv[i + 1]!
+          found.push({ name: letter, value: { text: next, opaque: OPAQUE.test(next) } })
+          i++
+        } else found.push({ name: letter, value: null })
+        break
+      }
       continue
     }
     positionals.push({ text, opaque })
@@ -97,7 +108,7 @@ function scan(argv: string[], start: number, value: string[]): Scan {
 function ghRepoTarget(scanned: Scan, positionals: Word[]): SendTarget {
   const value = scanned.values('-R', '--repo')[0]
   if (value !== undefined) {
-    if (value.opaque) return { kind: 'unresolved', why: 'the target is a variable or command substitution' }
+    if (value.opaque) return VARIABLE()
     const asUrl = URLISH.test(value.text) ? parseRepoUrl(value.text) : null
     if (asUrl !== null) return asUrl
     const parts = value.text.split('/')
@@ -110,6 +121,21 @@ function ghRepoTarget(scanned: Scan, positionals: Word[]): SendTarget {
     if (parts.length === 3) return { kind: 'repo', repo: `${parts[1]}/${parts[2]}`, host: 'github.com' }
   }
   return { kind: 'origin-implicit' }
+}
+
+/**
+ * `gh repo create`/`fork` never falls back to origin (D1): a create targets
+ * the new repository — a positional `owner/name`, a bare name reading as the
+ * caller's own account — and a fork targets its destination account.
+ */
+function ghRepoCreationTarget(scanned: Scan): SendTarget {
+  const flagged = scanned.values('-R', '--repo')[0]
+  const positional = flagged ?? scanned.positionals[0]
+  if (positional === undefined || positional.opaque) {
+    return { kind: 'repo', repo: "the caller's account" }
+  }
+  if (URLISH.test(positional.text)) return parseRepoUrl(positional.text) ?? VARIABLE()
+  return { kind: 'repo', repo: positional.text }
 }
 
 function parseRepoUrl(text: string): SendTarget | null {
@@ -125,26 +151,31 @@ function parseRepoUrl(text: string): SendTarget | null {
 
 const MAIL_TOOLS = new Set(['sendmail', 'msmtp', 'mailx', 'ssmtp'])
 
-/** The first positional that is the URL: one that parses, else the first opaque word. */
-function pickUrl(words: Word[]): Word | undefined {
-  for (const word of words) {
-    if (word.opaque) continue
+/** Every positional that is a URL, scheme forms first; none, then any opaque word. */
+function urlWords(words: Word[]): Word[] {
+  const scheme = words.filter(word => !word.opaque && (URLISH.test(word.text) || SCPISH.test(word.text)))
+  if (scheme.length > 0) return scheme
+  const parseable = words.filter(word => {
+    if (word.opaque) return false
     for (const text of [word.text, `http://${word.text}`]) {
       try {
         new URL(text)
-        return word
+        return true
       } catch {
         // Not a URL; keep looking.
       }
     }
-  }
-  return words.find(word => word.opaque) ?? words[0]
+    return false
+  })
+  if (parseable.length > 0) return parseable
+  const opaque = words.find(word => word.opaque)
+  return opaque === undefined ? [] : [opaque]
 }
 
 /** The URL's host and port; a bare host reads as http; smtp URLs are mail. */
 function httpUrlTarget(word: Word | undefined): SendTarget {
   if (word === undefined) return { kind: 'unresolved', why: 'no URL in the command' }
-  if (word.opaque) return { kind: 'unresolved', why: 'the target is a variable or command substitution' }
+  if (word.opaque) return VARIABLE()
   for (const text of [word.text, `http://${word.text}`]) {
     try {
       const url = new URL(text)
@@ -158,41 +189,70 @@ function httpUrlTarget(word: Word | undefined): SendTarget {
 }
 
 /** `git push` (D4): `--repo`, the named remote, a URL or scp target, else the push remote. */
-function gitPushTarget(argv: string[], subcommandAt: number, gitPinned: string | null): SendTarget {
-  if (gitPinned !== null) return { kind: 'unresolved', why: gitPinned }
+function gitPushTarget(argv: string[], subcommandAt: number, pinned: string | null): SendTarget {
+  if (pinned !== null) return { kind: 'unresolved', why: pinned }
   const scanned = scan(argv, subcommandAt + 1, ['--repo', '-o', '--push-option', '--receive-pack', '--exec'])
   const repo = scanned.values('--repo')[0]
   if (repo !== undefined) {
-    if (repo.opaque) return { kind: 'unresolved', why: 'the target is a variable or command substitution' }
+    if (repo.opaque) return VARIABLE()
     if (URLISH.test(repo.text) || SCPISH.test(repo.text)) return { kind: 'url', url: repo.text }
     return { kind: 'remote', name: repo.text }
   }
   const first = scanned.positionals[0]
   if (first === undefined) return { kind: 'origin-implicit' }
-  if (first.opaque) return { kind: 'unresolved', why: 'the target is a variable or command substitution' }
+  if (first.opaque) return VARIABLE()
   if (URLISH.test(first.text) || SCPISH.test(first.text)) return { kind: 'url', url: first.text }
   const refspec = first.text.includes(':') || first.text.startsWith('+') || first.text.startsWith('refs/') || first.text === 'HEAD'
   return refspec ? { kind: 'origin-implicit' } : { kind: 'remote', name: first.text }
 }
 
-/** The registry host a publish flags or its image names; the tool's public default otherwise. */
+/** The registry host (and port) a publish flags or its image names; the default otherwise. */
 function registryTarget(head: string, host: Word | undefined, reference: Word | undefined): SendTarget {
   if (host !== undefined) {
-    if (host.opaque) return { kind: 'unresolved', why: 'the target is a variable or command substitution' }
+    if (host.opaque) return VARIABLE()
     if (URLISH.test(host.text)) {
       try {
-        return { kind: 'registry', host: new URL(host.text).hostname.toLowerCase() }
+        const url = new URL(host.text)
+        return { kind: 'registry', host: url.hostname.toLowerCase(), ...(url.port ? { port: Number(url.port) } : {}) }
       } catch {
         return { kind: 'unresolved', why: 'the registry did not parse as a URL' }
       }
     }
-    return { kind: 'registry', host: host.text.toLowerCase() }
+    const [bareHost, port] = host.text.split(':')
+    return { kind: 'registry', host: bareHost!.toLowerCase(), ...(port !== undefined ? { port: Number(port) } : {}) }
   }
   if (reference !== undefined) {
-    if (reference.opaque) return { kind: 'unresolved', why: 'the target is a variable or command substitution' }
-    return { kind: 'registry', host: registryOf(reference.text) ?? REGISTRY_DEFAULTS[head] ?? 'docker.io' }
+    if (reference.opaque) return VARIABLE()
+    const registry = registryOf(reference.text)
+    if (registry === null) return { kind: 'registry', host: REGISTRY_DEFAULTS[head] ?? 'docker.io' }
+    const [bareHost, port] = registry.split(':')
+    return { kind: 'registry', host: bareHost!.toLowerCase(), ...(port !== undefined ? { port: Number(port) } : {}) }
   }
   return { kind: 'registry', host: REGISTRY_DEFAULTS[head] ?? 'docker.io' }
+}
+
+/** The first component of an image or OCI reference, when it names a registry. */
+function registryOf(reference: string): string | null {
+  if (!reference.includes('/')) return null
+  const first = reference.split('/')[0] ?? ''
+  if (first === '.' || first === '..') return null
+  return first.includes('.') || first.includes(':') || first === 'localhost' ? first : null
+}
+
+/** Drop the wrapping prefixes (`sudo`, `timeout 30`, …) that carry no target. */
+function unwrapPrefixes(argv: string[]): string[] {
+  let rest = argv
+  for (;;) {
+    const head = rest[0]
+    if (head !== undefined && PREFIXES.has(head)) { rest = rest.slice(1); continue }
+    if (head === 'timeout') {
+      let i = 1
+      while (i < rest.length && (rest[i]!.startsWith('-') || /^\d+$/.test(rest[i]!))) i++
+      rest = rest.slice(i)
+      continue
+    }
+    return rest
+  }
 }
 
 /** Parse a whole command into its send candidates (D4's rules table). */
@@ -201,21 +261,29 @@ export function parseSends(command: string, cwd: string): SendCandidate[] {
 }
 
 function candidatesOf(segment: { argv: string[]; text: string; cwd: string; env: ReadonlyMap<string, string | null> }): SendCandidate[] {
-  const { argv, text, cwd, env } = segment
+  const { text, cwd, env } = segment
+  const argv = unwrapPrefixes(segment.argv)
   if (argv.length === 0) return []
   const base = (rule: SendCandidate['rule'], target: SendTarget): SendCandidate => ({ rule, segment: text, cwd, target })
   const ghPinned = env.has('GH_REPO') ? 'GH_REPO is set' : env.has('GH_HOST') ? 'GH_HOST is set' : null
-  const gitPinned = env.has('GIT_DIR') ? 'GIT_DIR is set' : env.has('GIT_WORK_TREE') ? 'GIT_WORK_TREE is set' : null
   const head = argv[0]!.split('/').pop()!.toLowerCase()
-  const variable = { kind: 'unresolved', why: 'the target is a variable or command substitution' } as const
 
   if (head === 'git') {
-    // Skip the global flags to find the subcommand.
+    // Skip the global flags to the subcommand; a pinned target never resolves.
     let subcommandAt = -1
+    let pinned: string | null = env.has('GIT_DIR') ? 'GIT_DIR is set' : env.has('GIT_WORK_TREE') ? 'GIT_WORK_TREE is set' : null
     for (let i = 1; i < argv.length; i++) {
       const word = argv[i]!
-      if (word === '-C' || word === '-c') { i++; continue }
+      if (word === '-C' || word === '-c') {
+        if (word === '-c') {
+          const setting = argv[i + 1] ?? ''
+          if (/^(remote|url)\./.test(setting)) pinned = 'a git -c override pins the target'
+        }
+        i++
+        continue
+      }
       if (word.startsWith('--git-dir') || word.startsWith('--work-tree') || word.startsWith('--namespace')) {
+        pinned = 'git directory flags pin the target'
         if (!word.includes('=')) i++
         continue
       }
@@ -224,7 +292,7 @@ function candidatesOf(segment: { argv: string[]; text: string; cwd: string; env:
       break
     }
     if (subcommandAt !== -1 && argv[subcommandAt] === 'push') {
-      return [base('git-push', gitPushTarget(argv, subcommandAt, gitPinned))]
+      return [base('git-push', gitPushTarget(argv, subcommandAt, pinned))]
     }
     return []
   }
@@ -237,8 +305,8 @@ function candidatesOf(segment: { argv: string[]; text: string; cwd: string; env:
       if (!writes) return []
       if (ghPinned !== null) return [base('gh-api-write', { kind: 'unresolved', why: ghPinned })]
       const path = scanned.positionals[0]
-      if (path === undefined || path.opaque) return [base('gh-api-write', variable)]
-      const parts = path.text.split('/')
+      if (path === undefined || path.opaque) return [base('gh-api-write', VARIABLE())]
+      const parts = path.text.replace(/^\/+/, '').split('/')
       if (parts[0] !== 'repos' || parts.length < 3) {
         return [base('gh-api-write', { kind: 'unresolved', why: 'the API path names no repository' })]
       }
@@ -247,45 +315,72 @@ function candidatesOf(segment: { argv: string[]; text: string; cwd: string; env:
     if (GH_WRITE_COMMANDS.has(argv[1] ?? '') && GH_WRITE_VERBS.has(argv[2] ?? '')) {
       if (ghPinned !== null) return [base('gh-write', { kind: 'unresolved', why: ghPinned })]
       const scanned = scan(argv, 3, ['-R', '--repo', '--hostname', '--body', '--body-file', '--title', '--assignee', '--label', '--project', '--milestone', '--base', '--head', '--reviewer'])
+      // Creates and forks publish somewhere new; gists target gist.github.com
+      // (D1): none of them may fall back to the repository's origin.
+      if (argv[1] === 'repo' && (argv[2] === 'create' || argv[2] === 'fork')) {
+        return [base('gh-write', ghRepoCreationTarget(scanned))]
+      }
+      if (argv[1] === 'gist' && (argv[2] === 'create' || argv[2] === 'edit')) {
+        return [base('gh-write', { kind: 'host', host: 'gist.github.com' })]
+      }
       return [base('gh-write', ghRepoTarget(scanned, scanned.positionals))]
     }
     return []
   }
 
   if (head === 'npm' || head === 'pnpm' || head === 'yarn' || head === 'bun') {
-    if (argv[1] !== 'publish') return []
-    const scanned = scan(argv, 2, ['--registry', '--tag', '--access'])
+    // The subcommand may follow package-wide flags (`pnpm -r publish`).
+    const scanned = scan(argv, 1, ['--registry', '--tag', '--access', '--otp', '--otp', '--sso-type'])
+    const positionals = scanned.positionals.map(word => word.text)
+    const publishes =
+      positionals[0] === 'publish' ||
+      (head === 'yarn' && positionals[0] === 'npm' && positionals[1] === 'publish')
+    if (!publishes) return []
     return [base('registry-publish', registryTarget(head, scanned.values('--registry')[0], undefined))]
   }
   if (head === 'twine') {
-    if (argv[1] !== 'upload') return []
-    const scanned = scan(argv, 2, ['--repository-url', '--index-url', '-r', '--repository', '-i', '--user', '--password', '--verbose'])
+    const scanned = scan(argv, 1, ['--repository-url', '--index-url', '-r', '--repository', '-i', '--user', '--password', '--verbose'])
+    if (scanned.positionals[0]?.text !== 'upload') return []
     const named = scanned.values('--repository-url', '--index-url')[0]
     if (named !== undefined) return [base('registry-publish', registryTarget(head, named, undefined))]
     const short = scanned.values('-r', '--repository')[0]
     if (short !== undefined) {
-      if (short.opaque) return [base('registry-publish', variable)]
+      if (short.opaque) return [base('registry-publish', VARIABLE())]
       if (!URLISH.test(short.text)) return [base('registry-publish', { kind: 'unresolved', why: 'the twine repository is a name, not a URL' })]
       return [base('registry-publish', registryTarget(head, short, undefined))]
     }
     return [base('registry-publish', registryTarget(head, undefined, undefined))]
   }
   if (head === 'cargo') {
-    if (argv[1] !== 'publish') return []
-    const scanned = scan(argv, 2, ['--registry', '--index', '--token'])
+    const scanned = scan(argv, 1, ['--registry', '--index', '--token'])
+    if (scanned.positionals[0]?.text !== 'publish') return []
     return [base('registry-publish', registryTarget(head, scanned.values('--registry', '--index')[0], undefined))]
   }
   if (head === 'docker' || head === 'podman') {
-    if (argv[1] === 'push') {
-      return [base('registry-publish', registryTarget(head, undefined, { text: argv[2] ?? '', opaque: argv[2] === undefined ? true : OPAQUE.test(argv[2]!) }))]
+    // Global flags (`docker -H …`) may precede the subcommand.
+    const scanned = scan(argv, 1, ['-H', '--host', '--context', '-c', '--config', '--log-level'])
+    const sub = scanned.positionals[0]?.text
+    const positional = (index: number) => scanned.positionals[index]
+    if (sub === 'push') {
+      return [base('registry-publish', registryTarget(head, undefined, positional(1)))]
     }
-    if (head === 'docker' && argv[1] === 'buildx' && argv[2] === 'build') {
-      const scanned = scan(argv, 3, ['-t', '--tag', '--output', '--builder', '--file', '-f', '--target', '--platform'])
-      if (!scanned.has('--push') && !scanned.values('--output').some(word => word.text.includes('push=true'))) return []
-      const output = scanned.values('--output').find(word => word.text.includes('push=true'))
+    if (sub === 'image' && positional(1)?.text === 'push') {
+      return [base('registry-publish', registryTarget(head, undefined, positional(2)))]
+    }
+    if (sub === 'build') {
+      const buildAt = argv.indexOf('build', 1)
+      const buildScan = scan(argv, buildAt + 1, ['-t', '--tag', '--output', '--file', '-f', '--target', '--platform'])
+      if (!buildScan.has('--push') && !buildScan.values('--output').some(word => word.text.includes('push=true'))) return []
+      return [base('registry-publish', registryTarget(head, undefined, buildScan.values('-t', '--tag').at(-1)))]
+    }
+    if (head === 'docker' && sub === 'buildx' && positional(1)?.text === 'build') {
+      const buildAt = argv.indexOf('build', 2)
+      const buildScan = scan(argv, buildAt + 1, ['-t', '--tag', '--output', '--builder', '--file', '-f', '--target', '--platform'])
+      if (!buildScan.has('--push') && !buildScan.values('--output').some(word => word.text.includes('push=true'))) return []
+      const output = buildScan.values('--output').find(word => word.text.includes('push=true'))
       const named = output?.text.split(',').find(part => part.startsWith('name='))?.slice(5)
-      if (named !== undefined) return [base('registry-publish', registryTarget(head, undefined, { text: named, opaque: false }))]
-      return [base('registry-publish', registryTarget(head, undefined, scanned.values('-t', '--tag').at(-1)))]
+      if (named !== undefined) return [base('registry-publish', registryTarget(head, undefined, { text: named, opaque: OPAQUE.test(named) }))]
+      return [base('registry-publish', registryTarget(head, undefined, buildScan.values('-t', '--tag').at(-1)))]
     }
     return []
   }
@@ -298,15 +393,16 @@ function candidatesOf(segment: { argv: string[]; text: string; cwd: string; env:
     return [base('registry-publish', registryTarget(head, undefined, { text: named, opaque: OPAQUE.test(named) }))]
   }
   if (head === 'helm') {
-    if (argv[1] !== 'push') return []
-    const scanned = scan(argv, 2, ['--registry-config', '--plain-http', '--insecure', '--ca-file', '--cert-file', '--key-file', '--username', '--password'])
-    const repository = scanned.positionals[1]
-    if (repository === undefined || repository.opaque) return [base('registry-publish', variable)]
+    const scanned = scan(argv, 1, ['--registry-config', '--plain-http', '--insecure', '--ca-file', '--cert-file', '--key-file', '--username', '--password'])
+    if (scanned.positionals[0]?.text !== 'push') return []
+    // positionals: push, <chart>, <repository url>
+    const repository = scanned.positionals[2]
+    if (repository === undefined || repository.opaque) return [base('registry-publish', VARIABLE())]
     if (!URLISH.test(repository.text)) return [base('registry-publish', { kind: 'unresolved', why: 'the helm repository is not a URL' })]
     try {
       return [base('registry-publish', { kind: 'registry', host: new URL(repository.text).hostname.toLowerCase() })]
     } catch {
-      return [base('registry-publish', variable)]
+      return [base('registry-publish', VARIABLE())]
     }
   }
 
@@ -316,24 +412,32 @@ function candidatesOf(segment: { argv: string[]; text: string; cwd: string; env:
       '-F', '--form', '-T', '--upload-file', '--url', '-u', '--user', '-H', '--header', '-o', '--output',
       '-A', '--user-agent', '-b', '--cookie', '-e', '--referer', '-E', '--cert', '--key', '-x', '--proxy', '-U', '--proxy-user',
       '-m', '--max-time', '--connect-timeout', '--retry', '--retry-delay',
+      '-w', '--write-out', '-K', '--config', '-c', '--cookie-jar', '-D', '--dump-header', '--resolve', '--connect-to',
     ])
-    const target = httpUrlTarget(scanned.values('--url')[0] ?? pickUrl(scanned.positionals))
-    if (target.kind === 'mail') return [base('mail-send', target)]
+    // Every URL argument is judged — a second URL is not cover for the first.
+    const urls = [...scanned.values('--url'), ...urlWords(scanned.positionals)]
+    const targets = (urls.length > 0 ? urls : [undefined]).map(word => httpUrlTarget(word))
+    if (targets.some(target => target.kind === 'mail')) {
+      const mail = targets.map(target => target.kind === 'mail' ? target : null).find(target => target !== null)
+      return [base('mail-send', mail!)]
+    }
     const method = scanned.values('-X', '--request')[0]?.text.toUpperCase()
     const body = scanned.has('-d', '--data', '--data-raw', '--data-binary', '--data-ascii', '--data-urlencode', '-F', '--form', '-T', '--upload-file', '--json')
-    // `-G` moves any data into the URL's query: a read, not a send.
-    const sends = !scanned.has('-G') && (body || (method !== undefined && method !== 'GET' && method !== 'HEAD'))
+    // An explicit non-GET/HEAD method sends even with `-G`; `-G` alone moves
+    // any data into the URL's query, a read.
+    const sends = (method !== undefined && method !== 'GET' && method !== 'HEAD') || (body && !scanned.has('-G'))
     if (!sends) return []
-    return [base('http-send', target)]
+    return targets.map(target => base('http-send', target))
   }
   if (head === 'wget') {
     const scanned = scan(argv, 1, ['--post-data', '--post-file', '--method', '-O', '--output-document', '--header', '--user', '--password', '--timeout', '--tries'])
-    const target = httpUrlTarget(pickUrl(scanned.positionals))
-    if (target.kind === 'mail') return [base('mail-send', target)]
+    const urls = urlWords(scanned.positionals)
+    const targets = (urls.length > 0 ? urls : [undefined]).map(word => httpUrlTarget(word))
+    if (targets.some(target => target.kind === 'mail')) return [base('mail-send', { kind: 'mail' })]
     const method = scanned.values('--method')[0]
     const body = scanned.has('--post-data', '--post-file')
     if (!body && (method === undefined || ['GET', 'HEAD'].includes(method.text.toUpperCase()))) return []
-    return [base('http-send', target)]
+    return targets.map(target => base('http-send', target))
   }
   if (head === 'http' || head === 'https') {
     const scanned = scan(argv, 1, ['--auth', '--proxy', '--verify', '--timeout', '--session'])
@@ -344,7 +448,8 @@ function candidatesOf(segment: { argv: string[]; text: string; cwd: string; env:
     const items = positionals.slice(method === undefined ? 1 : 2)
     const target = httpUrlTarget(url)
     if (target.kind === 'mail') return [base('mail-send', target)]
-    const body = items.some(word => word.text.includes('=') || word.text.includes(':'))
+    // `:`-prefixed headers and `==` query items carry no body; `=` and `:=` do.
+    const body = items.some(word => /^[^:]+:=/.test(word.text) || (/=/.test(word.text) && !/==/.test(word.text)))
     if (!body && (method === undefined || method === 'GET' || method === 'HEAD')) return []
     return [base('http-send', target)]
   }
