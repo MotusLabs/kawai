@@ -7,9 +7,9 @@
 
 ## 2. Server walker and route
 
-- [ ] 2.1 Add a read-only `ChatSessionManager` accessor that yields the non-archived local chat records with their searchable events: memo plus live events when loaded, otherwise a transient `replayTranscriptFileAsync` result that is never stored in `snapshotHistory` and has no cwd catch-up; verify with a manager test that searching an unloaded session leaves `snapshotHistory`, its status, and its driver untouched, and that a missing transcript is reported as unsearchable
-- [ ] 2.2 Implement `searchActiveSessions` (concurrency 4, name match, ordering by newest match, 50-group cap with `truncated`, `unsearchable` count); verify with unit tests for ordering, cap, name-only match, and archived exclusion
-- [ ] 2.3 Add `src/server/routes/chatSearch.ts` (`GET /api/chat/search?q=`, 400 outside 2–200 characters) and register it in `src/server/bootstrap.ts`; verify with a route test (Hono `app.request`) for 200 and 400 responses
+- [x] 2.1 Add a read-only `ChatSessionManager` accessor that yields the non-archived local chat records with their searchable events: memo plus live events when loaded, otherwise a transient `replayTranscriptFileAsync` result that is never stored in `snapshotHistory` and has no cwd catch-up; verify with a manager test that searching an unloaded session leaves `snapshotHistory`, its status, and its driver untouched, and that a missing transcript is reported as unsearchable
+- [x] 2.2 Implement `searchActiveSessions` (concurrency 4, name match, ordering by newest match, 50-group cap with `truncated`, `unsearchable` count); verify with unit tests for ordering, cap, name-only match, and archived exclusion
+- [x] 2.3 Add `src/server/routes/chatSearch.ts` (`GET /api/chat/search?q=`, 400 outside 2–200 characters) and register it in `src/server/bootstrap.ts`; verify with a route test (Hono `app.request`) for 200 and 400 responses
 
 ## 3. Client search UI
 
