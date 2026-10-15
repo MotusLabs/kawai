@@ -60,7 +60,7 @@ Implement after `durable-plans` and `strategy-revision-impact` have landed on ma
 
 ## 4. Inputs and identity
 
-- [ ] 4.1 Implement `validationInputs.ts`, the file-held parts of D2. It resolves changes from fresh `discoverRepository` state with `changeRegistry`'s canonical rule, plus the archive lookup. It hashes `proposal.md`, `design.md`, `tasks.md`, and `specs/**/spec.md`, the base specs at `openspec/specs/<path>/spec.md` for the change's own capability paths, and the root's `openspec/config.yaml` (else `config.yml`). It computes the catalog digests over the named groups' parsed definitions and the known profile ids. Verify with tests on temporary git repositories:
+- [x] 4.1 Implement `validationInputs.ts`, the file-held parts of D2. It resolves changes from fresh `discoverRepository` state with `changeRegistry`'s canonical rule, plus the archive lookup. It hashes `proposal.md`, `design.md`, `tasks.md`, and `specs/**/spec.md`, the base specs at `openspec/specs/<path>/spec.md` for the change's own capability paths, and the root's `openspec/config.yaml` (else `config.yml`). It computes the catalog digests over the named groups' parsed definitions and the known profile ids. Verify with tests on temporary git repositories:
   - a registered change in the main checkout, and in its convention worktree;
   - a change only in another worktree;
   - an archived change;

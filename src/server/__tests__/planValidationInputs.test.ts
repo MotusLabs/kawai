@@ -1,0 +1,150 @@
+// The file-held validation inputs (plan-validation design D2) over temporary
+// git repositories with `cleanGitEnv`: change resolution follows the change
+// registry's canonical rule against fresh discovery, artifact and base-spec
+// digests cover exactly what the checks read, and catalog digests cover the
+// named groups and the known profile ids. The adapter is injected, and no
+// test spawns a CLI process: any validate/showDeltas call would throw.
+import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
+import { spawnSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import { cleanGitEnv } from '../git/gitCommand'
+import { readValidationFileInputs } from '../plans/validation/validationInputs'
+import type { OpenspecAdapter } from '../plans/validation/openspecAdapter'
+
+// cleanGitEnv: under the pre-commit hook git exports GIT_DIR/GIT_INDEX_FILE,
+// and a raw spawn would run these commands against the hook's repository.
+function git(args: string[], cwd: string) {
+  const result = spawnSync('git', args, { cwd, encoding: 'utf8', env: cleanGitEnv() })
+  if (result.status !== 0) throw new Error(`git ${args.join(' ')}: ${result.stderr}`)
+}
+
+/** An adapter that never spawns: the probe is fixed, every CLI call throws. */
+const injected = (): OpenspecAdapter => ({
+  probe: async () => ({ tool: 'openspec', version: '1.14.2', capabilities: ['validate-strict-json', 'show-deltas-json'], ok: true, error: null }),
+  validate: () => { throw new Error('no CLI process may be spawned by the inputs reader') },
+  showDeltas: () => { throw new Error('no CLI process may be spawned by the inputs reader') },
+}) as unknown as OpenspecAdapter
+
+function writeChange(root: string, change: string, files: Record<string, string>) {
+  const dir = path.join(root, 'openspec', 'changes', change)
+  for (const [file, body] of Object.entries(files)) {
+    const target = path.join(dir, file)
+    fs.mkdirSync(path.dirname(target), { recursive: true })
+    fs.writeFileSync(target, body)
+  }
+}
+
+let root: string
+let repo: string
+let convention: string
+let other: string
+let home: string
+
+beforeAll(() => {
+  root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kawai-plan-validation-inputs-')))
+  repo = path.join(root, 'repo')
+  home = path.join(root, 'home')
+  fs.mkdirSync(home, { recursive: true })
+  git(['init', '-q', repo], root)
+  // A registered change in the main checkout, with nested capability paths.
+  writeChange(repo, 'main-change', {
+    'proposal.md': '# Main change\n',
+    'design.md': '# Design\n',
+    'tasks.md': '# Tasks\n',
+    'specs/team/chat/spec.md': '## ADDED Requirements\n### Requirement: X\n',
+  })
+  // Its base spec exists for one capability and not the nested other.
+  fs.mkdirSync(path.join(repo, 'openspec', 'specs', 'team', 'chat'), { recursive: true })
+  fs.writeFileSync(path.join(repo, 'openspec', 'specs', 'team', 'chat', 'spec.md'), '# Team chat spec\n')
+  // An archived change.
+  writeChange(repo, 'old-change', { 'proposal.md': '# Old\n' })
+  fs.mkdirSync(path.join(repo, 'openspec', 'changes', 'archive'), { recursive: true })
+  git(['add', 'openspec'], repo)
+  git(['-c', 'user.email=t@e', '-c', 'user.name=T', 'commit', '-q', '-m', 'changes'], repo)
+  git(['mv', 'openspec/changes/old-change', 'openspec/changes/archive/2026-01-01-old-change'], repo)
+  git(['-c', 'user.email=t@e', '-c', 'user.name=T', 'commit', '-q', '-m', 'archive'], repo)
+  // The convention worktree for main-change, holding the same change content plus an edit.
+  convention = path.join(repo, '.worktrees', 'main-change')
+  git(['worktree', 'add', '-q', '-b', 'w-main-change', convention], repo)
+  writeChange(convention, 'main-change', { 'proposal.md': '# Main change (worktree)\n' })
+  // Another worktree holding a change the registry never saw.
+  other = path.join(root, 'other-worktree')
+  git(['worktree', 'add', '-q', '-b', 'w-other', other], repo)
+  writeChange(other, 'lone-change', { 'proposal.md': '# Lone\n' })
+})
+
+afterAll(() => fs.rmSync(root, { recursive: true, force: true }))
+
+const read = (changeNames: string[], groupNames: string[] = []) => readValidationFileInputs({
+  adapter: injected(), commonDir: path.join(repo, '.git'), changeNames, groupNames, groupsRoot: repo, homeDir: home,
+})
+
+describe('readValidationFileInputs (D2)', () => {
+  test('a registered change in the main checkout resolves there when no convention worktree holds it', async () => {
+    const inputs = await read(['plain-main'])
+    expect(inputs.changes[0]!.status).toBe('missing')
+  })
+
+  test('the convention worktree is canonical once it exists and contains the change', async () => {
+    const inputs = await read(['main-change'])
+    expect(inputs.changes[0]!.status).toBe('registered')
+    const artifacts = inputs.changes[0]!.artifacts
+    expect(Object.keys(artifacts).sort()).toEqual(['design.md', 'proposal.md', 'specs/team/chat/spec.md', 'tasks.md'])
+    // The worktree copy differs from the main checkout's: the hash follows content.
+    const inMain = fs.readFileSync(path.join(repo, 'openspec', 'changes', 'main-change', 'proposal.md'))
+    expect(artifacts['proposal.md']!.length).toBe(64)
+    expect(artifacts['proposal.md']).not.toBe(createHash('sha256').update(inMain).digest('hex'))
+    expect(inputs.evidence.changes['main-change']!.root).toBe(convention)
+    expect(inputs.evidence.changes['main-change']!.head).toBeTruthy()
+  })
+
+  test('a change only in another worktree is unregistered, naming that worktree', async () => {
+    const inputs = await read(['lone-change'])
+    expect(inputs.changes[0]!.status).toBe('unregistered')
+    expect(inputs.evidence.changes['lone-change']!.root).toBe(other)
+  })
+
+  test('an archived change resolves to its archive directory', async () => {
+    const inputs = await read(['old-change'])
+    expect(inputs.changes[0]!.status).toBe('archived')
+    expect(inputs.evidence.changes['old-change']!.root).toBe(repo)
+    expect(Object.keys(inputs.changes[0]!.artifacts)).toEqual(['proposal.md'])
+  })
+
+  test('a missing change has no digests', async () => {
+    const inputs = await read(['ghost'])
+    expect(inputs.changes[0]).toEqual({ change: 'ghost', status: 'missing', artifacts: {}, baseSpecs: {}, config: null })
+    expect(inputs.evidence.changes.ghost).toEqual({ root: null, head: null })
+  })
+
+  test('nested capability paths map to nested base specs; an absent base spec is null', async () => {
+    writeChange(convention, 'main-change', {
+      'proposal.md': '# Main change (worktree)\n',
+      'specs/team/chat/spec.md': '## ADDED Requirements\n### Requirement: X\n',
+      'specs/other/spec.md': '## ADDED Requirements\n### Requirement: Y\n',
+    })
+    const inputs = await read(['main-change'])
+    expect(inputs.changes[0]!.baseSpecs['team/chat']).toBeTruthy()
+    expect(inputs.changes[0]!.baseSpecs.other).toBeNull()
+  })
+
+  test('a known group hashes its definition; an unknown group is null; profiles hash the known ids', async () => {
+    fs.mkdirSync(path.join(repo, '.kawai', 'groups'), { recursive: true })
+    fs.writeFileSync(path.join(repo, '.kawai', 'groups', 'middle-devs.md'), '# Middle Dev\n\nBody text.\n')
+    const first = await read(['main-change'], ['middle-devs', 'ghosts'])
+    expect(first.catalog.groups['middle-devs']).toBeTruthy()
+    expect(first.catalog.groups.ghosts).toBeNull()
+    // Editing the group's parsed definition changes its digest.
+    fs.writeFileSync(path.join(repo, '.kawai', 'groups', 'middle-devs.md'), '# Middle Dev\n\nLonger body.\n')
+    const second = await read(['main-change'], ['middle-devs'])
+    expect(second.catalog.groups['middle-devs']).not.toBe(first.catalog.groups['middle-devs'])
+  })
+
+  test('the adapter probe feeds the inputs and no CLI process is spawned', async () => {
+    const inputs = await read(['main-change'])
+    expect(inputs.adapter).toEqual({ tool: 'openspec', version: '1.14.2', capabilities: ['validate-strict-json', 'show-deltas-json'] })
+  })
+})
