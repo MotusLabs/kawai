@@ -39,6 +39,9 @@ function mount(view: HumanTaskDetail, connected = true) {
   const element = (isConnected: boolean) => <TeamTaskDetail teamPath="dev" projectPath="/repo" view={useTeamTaskStore.getState().views.dev!}
     sendMessage={message => sent.push(message)} connected={isConnected} sessions={[]} onOpenMailbox={() => { mailboxOpened += 1 }} />
   act(() => { renderer = TestRenderer.create(element(connected)) })
+  // Revision history starts collapsed (the once-per-team seed); open it so
+  // the revision-content assertions below can read it.
+  act(() => { renderer.root.findByProps({ 'data-testid': 'task-section-toggle-Revision history' }).props.onClick() })
   return { rerender: (isConnected = connected) => act(() => renderer.update(element(isConnected))) }
 }
 const button = (label: string | RegExp) => renderer.root.find(node => node.type === 'button' &&

@@ -14,7 +14,7 @@
 // Messages view draws — named participants, killed ones marked `(gone)` —
 // with a link into that message's thread. Task *participants* below keep the
 // older label, per the design's directory scope note.
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { Session, SendClientMessage } from '@shared/types'
 import { TASK_STATUSES, type TaskStatus } from '@shared/teamTasks'
 import { useTeamTaskStore, type TaskAction, type TaskView } from '../../stores/teamTaskStore'
@@ -42,11 +42,17 @@ interface DetailAssignForm {
 
 const emptyAssignForm = (): DetailAssignForm => ({ kind: '', id: '', instruction: '', requestKey: null, preview: false })
 
+/** The section that starts collapsed once a team's Tasks tab first opens. */
+const DEFAULT_COLLAPSED = ['Revision history']
+/** Marks that the default collapsed set was applied, so it is never re-seeded. */
+const DEFAULTS_APPLIED = '#defaults'
+
 /**
  * A detail section that collapses on its own, keyed by name in the team's
  * kept view state so a collapsed section stays collapsed across tasks (5.5).
  */
 function Section({ teamPath, name, children }: { teamPath: string; name: string; children: React.ReactNode }) {
+
   const collapsed = useTeamWorkspaceStore(state => state.views[teamPath]?.tabs.tasks.collapsedSections.includes(name)) ?? false
   return <section aria-label={name} className="mt-3" data-testid="task-detail-section" data-section={name}>
     <button type="button" className="font-medium" data-testid={`task-section-toggle-${name}`}
@@ -77,6 +83,14 @@ export default function TeamTaskDetail({ teamPath, projectPath, view, sendMessag
   const [form, setForm] = useState<DetailAssignForm>(emptyAssignForm)
   const [choice, setChoice] = useState<'notify' | 'stop'>('notify')
   const [choosing, setChoosing] = useState(false)
+  // Seed the default collapsed sections once per team (the marker stays, so
+  // later opens never re-collapse a section the user expanded).
+  const collapsedSections = useTeamWorkspaceStore(state => state.views[teamPath]?.tabs.tasks.collapsedSections) ?? []
+  useEffect(() => {
+    if (!collapsedSections.includes(DEFAULTS_APPLIED)) {
+      useTeamWorkspaceStore.getState().setCollapsedSections(teamPath, 'tasks', [...new Set([...collapsedSections, DEFAULTS_APPLIED, ...DEFAULT_COLLAPSED])])
+    }
+  }, [teamPath, collapsedSections]) // eslint-disable-line react-hooks/exhaustive-deps
   // Every selection move goes through one place so the URL follows it.
   const go = (taskId: string | null) => {
     useTeamTaskStore.getState().select(teamPath, taskId)
