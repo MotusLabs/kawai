@@ -18,7 +18,7 @@ The human SHALL be able to apply the plan's current approved revision to its run
 - **THEN** no such tool exists and the direct call is refused with nothing written
 
 ### Requirement: Apply evaluates named preconditions
-Apply SHALL evaluate in order: `plan-open`, `execution-running`, `execution-revision-unchanged`, `revision-current`, `revision-newer`, `validation-current`, `start-conditions-resolved`, `strategy-impact`, `landing-unchanged`, `landed-unchanged`, `merge-quiet`, `choices-complete`, and, for the changes it adds or re-dispatches, `changes-unclaimed`, `changes-on-base`, and `roles-routable`. Any failure SHALL refuse, naming every failing entry, and write nothing.
+Apply SHALL evaluate in order `plan-open`, `execution-running`, `execution-revision-unchanged`, `revision-current`, `revision-newer`, `validation-current`, `start-conditions-resolved`, `strategy-impact`, `landing-unchanged`, `landed-unchanged`, `merge-quiet`, `choices-complete`, `changes-unclaimed` (added), `changes-on-base` (added, adapted, restarted), and `roles-routable` (unlanded changes under the target's roles). Any failure SHALL refuse, naming every failing entry, and write nothing.
 
 #### Scenario: A concurrent Apply wins
 - **WHEN** two Apply commands name the same execution revision and the first commits
@@ -29,7 +29,7 @@ Apply SHALL evaluate in order: `plan-open`, `execution-running`, `execution-revi
 - **THEN** Apply is refused as `validation-current` with V5's message
 
 ### Requirement: Kawai classifies every change against the running revision
-Apply SHALL classify each change, by name, as unchanged, changed (listing its differing fields among dependencies, groups, acceptance, extra checks, guidance, and the effective review group), added, or removed. Every changed change that has a task SHALL need a choice of continue, adapt, or restart. A changed change without a task SHALL take the new definition when provisioned.
+Apply SHALL classify each change, by name, as unchanged, changed (listing its differing fields among dependencies, `fixes`, groups, acceptance, extra checks, guidance, and the effective review group), metadata (a landed change differing only in dependencies or `fixes`, updated with no choice), added, or removed. Every changed change that has a task SHALL need a choice of continue, adapt, or restart. A changed change without a task SHALL take the new definition when provisioned.
 
 #### Scenario: The preview shows the delta
 - **WHEN** the owner opens Apply for revision 4 over an execution of revision 3
@@ -40,11 +40,15 @@ Apply SHALL classify each change, by name, as unchanged, changed (listing its di
 - **THEN** it is refused as `choices-complete`, naming the change
 
 ### Requirement: Landed work is never redefined
-Apply SHALL refuse as `landed-unchanged` a revision that removes a landed change, changes a landed change's definition other than its dependencies, or changes plan-wide acceptance rules or extra checks once any change has landed. It SHALL refuse as `landing-unchanged` a change of landing mode or integration branch. Each refusal SHALL name the changes and point to a forward fix change.
+Apply SHALL refuse as `landed-unchanged` a revision that removes a landed change, changes a landed change's definition other than its dependencies and `fixes`, or changes plan-wide acceptance rules or extra checks once any change has landed. It SHALL refuse as `landing-unchanged` a change of landing mode or integration branch. Each refusal SHALL name the changes and point to a forward fix change.
 
 #### Scenario: A landed change was edited
 - **WHEN** revision 4 changes the acceptance of change `api`, which already landed
 - **THEN** Apply is refused as `landed-unchanged`, naming `api` and suggesting a change that fixes it forward
+
+#### Scenario: A landed change gains a fix reference
+- **WHEN** revision 4 differs from revision 3 only in landed change `api`'s `fixes`
+- **THEN** `api` is classified metadata, Apply asks no choice for it, and the execution reads its new `fixes`
 
 #### Scenario: A forward fix is applied
 - **WHEN** revision 4 leaves landed changes as they were and adds change `api-fix` whose `fixes` names the override's fix task

@@ -99,7 +99,7 @@ CREATE TABLE plan_checkpoints (
   kind TEXT NOT NULL,                  -- commit | result | notes
   commit_sha TEXT, baseline_commit TEXT, manifest_hash TEXT, result_id TEXT,
   summary TEXT NOT NULL, unfinished TEXT, errors_tests TEXT, next_steps TEXT NOT NULL,
-  effect_id TEXT,                      -- the push-checkpoint effect (kind commit)
+  effect_id TEXT,                      -- the effect of kind push-checkpoint; set only for checkpoint kind commit
   superseded_by TEXT, created_at TEXT NOT NULL
 );
 
@@ -253,17 +253,19 @@ Urgent direct semantics are unchanged: the interrupt waits for pending approvals
 - an attempt target without a commit;
 - the commit is not the head of `refs/heads/<change>` in the change's worktree;
 - `git status --porcelain` there is not empty, listing the paths (ignored files are excluded, and the reply says so);
-- the commit does not contain the branch head on `origin`;
+- the commit does not contain the branch's head on `origin`;
 - Kawai is writing the branch (the D9 `updating` and `merging` steps of plan-execution).
 
 **On success, one transaction:**
 - inserts the checkpoint, with kind `commit`, the attempt's baseline, and its manifest hash;
 - supersedes the target's earlier checkpoint;
-- enqueues the `push-checkpoint` effect with key `<execution>:<change>:push-checkpoint:<checkpointId>:<generation>`.
+- enqueues the `push-checkpoint` effect with key `<execution>:<change>:push-checkpoint:<checkpointId>:<generation>`. The checkpoint id occupies the round-or-attempt slot of plan-execution D14's key shape, so each recorded checkpoint gets its own key.
 
 The effect runs `git push origin <commit>:refs/heads/<change>`, never forced. Its inspector is `ls-remote`: the head contains the commit means done, otherwise it runs again. Effect failures follow plan-execution D14's classes, except that a failed `push-checkpoint` never stops the change. The target reads Pausing with cause `checkpoint-push-failed`, and the holder may record again.
 
 A review target may call the tool without a commit to leave notes (kind `notes`). Notes are optional.
+
+**This modifies plan-execution D14 (X3).** X3's extension clause lets a mechanism add execution-level effect kinds; `push-checkpoint` is a change-level kind, so this change records it as an addition to D14's kind list: its key (above), its `ls-remote` inspector, and its failure rule (never a stop, no X8 entry). X3's bound-by gains `revision-control`. plan-execution archives first, so its design stays the record of D14 as written, and this decision records the addition.
 
 **Retrying a failed push.** Another `task_checkpoint` call records a new checkpoint, and so gets a new effect key. A failed `push-checkpoint` is never a stop reason (no X8 entry).
 
@@ -295,7 +297,7 @@ A review target may call the tool without a commit to leave notes (kind `notes`)
 - `holder-killed`: the holder session was killed before its work reached `origin`.
 - The readiness reasons that member release reports.
 
-Two causes mean the pause cannot complete without the owner: `holder-killed`, and `checkpoint-push-failed` after the pause deadline. They are named so, and the owner's Restart and Stop stay available (D9).
+Some causes mean the pause cannot complete without the owner: `holder-killed`, `checkpoint-push-failed`, and any cause still standing at the pause deadline (for example `no-checkpoint` from a holder that ignores the mail). They are named so. Restart and Stop are available from every Pausing state (D9), so the owner is never left with Stop alone.
 
 **Recording Paused.** The executor's tick records Paused in a guarded transaction (`WHERE paused_at IS NULL`) when both of these hold:
 - **The work is on `origin`.** The target is a review, or its newest checkpoint is a `result`, or it is a `commit` whose effect is done.
@@ -310,7 +312,7 @@ Nothing else records Paused. A pause is closed (`closed_at`) when every target i
 
 So a restart never resumes the holder blindly, and never shows a Paused state that was not recorded. A paused execution survives restart with its pause, targets, checkpoints, and attempts (R01).
 
-**Deadline.** A target still Pausing after the pause deadline raises attention (D13). Nothing is killed, and the pause stays open.
+**Deadline.** A target still Pausing after the pause deadline raises `plan-pause-overdue` (D13), whose next action offers unblocking the holder, Restart, or Stop. A Paused target, and a Pausing one as `holder-killed` or `checkpoint-push-failed`, raises `plan-checkpoint-decision`. Nothing is killed, and the pause stays open.
 
 ### D9. The owner's choices
 
@@ -320,15 +322,18 @@ So a restart never resumes the holder blindly, and never shows a Paused state th
 | --- | --- | --- | --- |
 | `continue` | Paused | Kawai enqueues normal direct system mail to the holder, tagged `plan-resume`. It names the checkpoint commit and the task's newest revision. An archived holder is restored by direct mail. No attempt is created. | The target was withdrawn, or is a review whose handoff was superseded; the holder was killed (`holder-gone`) |
 | `adapt` | Paused | The human publishes the task's next revision with notify (`TaskService` publication, `within`, request key `pause:<commandId>`), with the dialog's direction and acceptance and the rationale. Plan-execution D9 then supersedes the round and dispatches a fix attempt naming that revision. The attempt continues from the branch head, which includes the checkpoint. | A review target: Adapt applies to the change's work, and a review's direction is its result |
-| `restart` | Paused, or Pausing with `holder-killed` or `checkpoint-push-failed` | See **Restart** below. | — |
+| `restart` | Paused, or Pausing with any cause; without a checkpoint on `origin` the dialog carries the "may predate" note | See **Restart** below. | — |
 
 **Restart.**
-1. A spawned holder that is ready is released first, through member release's `releaseNow`, journaled as Kawai. The new attempt then starts in a fresh session.
+1. A spawned holder that is ready is released first, through member release's `releaseNow`, journaled as Kawai. The new attempt then starts in a fresh session. A spawned holder that is not ready (busy, awaiting a request, holding mail) is marked pending release under member release's durable pending row and released once ready.
 2. A human-created holder is never released. The dialog says the attempt may reach that session.
-3. Kawai supersedes the held assignment through the stop branch, which never cancels claimed work.
-4. Kawai dispatches a new attempt of the stage's kind (implement, fix, or update), or a new review handoff.
-5. The attempt starts from the newest checkpoint commit on `origin`, or else from the branch head on `origin`. In the second case the dialog and the instruction say that head may predate the holder's work.
-6. Its manifest carries the optional `checkpoint: { id, commit }` (X2, additive and omitted when absent), and its instruction carries the checkpoint package.
+3. The attempt's dispatch waits for the worktree like any dispatch (worktree staffing). A busy holder, or a human-created one, may keep the worktree meanwhile, and the dialog says so.
+4. Kawai supersedes the held assignment through the stop branch, which never cancels claimed work. From then on, D9's ownership checks refuse the old holder's submissions and checkpoints for the change.
+5. Kawai dispatches a new attempt of the stage's kind (implement, fix, or update), or a new review handoff.
+6. The attempt starts from the newest checkpoint commit on `origin`, or else from the branch head on `origin`. In the second case the dialog and the instruction say that head may predate the holder's work.
+7. Its manifest carries the optional `checkpoint: { id, commit }`, and its instruction carries the checkpoint package.
+
+**This modifies plan-execution D8 (X2).** `AttemptManifest` v1 gains an optional `checkpoint: { id, commit }`, omitted when absent, so the canonical serialization and hash of every manifest without it are unchanged and no version bump is needed. X2's bound-by gains `revision-control`. Continue stays Paused-only; Restart is the way forward from a Pausing target.
 
 **Cancel** is plan-execution's Stop, linked from the dialog. Stop decides every open target as `cancelled` in its own transaction and closes the pause. Stop stays available from every state, so a refused Continue always leaves Restart and Stop.
 
@@ -356,13 +361,15 @@ Every resolution therefore works from the newest revision, and nothing is dispat
 **Per change, by name:**
 - `added`: only in `to`.
 - `removed`: only in `from`.
-- `changed`: present in both, with the differing fields listed. The compared fields are `dependsOn`, the implementing and review groups, acceptance, extra checks, and guidance, and the effective review group when the plan's review group changes.
+- `changed`: present in both, with the differing fields listed. The compared fields are `dependsOn`, `fixes` (plan-supervision D2), the implementing and review groups, acceptance, extra checks, and guidance, and the effective review group when the plan's review group changes.
+- `metadata`: a landed change whose only differences are `dependsOn` or `fixes`. Apply updates them and offers no choice, so a forward fix can name a task on a change that already landed.
 - `unchanged`: otherwise.
 
 **Execution-wide findings (refusals, D11):**
 - `landing-changed`: the landing mode or integration branch differs;
 - `plan-rules-changed`: the plan-wide acceptance rules or extra checks differ and any change has landed;
-- `landed-changed`: a landed change is `changed` in a field other than `dependsOn`, or `removed`.
+- `landed-changed`: a landed change differs in a field other than `dependsOn` and `fixes`, or is `removed`;
+- `lead-changed`: `PlanContent.leadGroup` (plan-supervision D2) differs. It is informational, never a refusal: Apply takes it, and cards raised afterwards go to the new lead group.
 
 A change of roles or plan-wide rules with nothing landed marks every unlanded change `changed` through the effective fields.
 
@@ -402,6 +409,7 @@ A change of roles or plan-wide rules with nothing landed marks every unlanded ch
 
 **The transaction** inserts the next `plan_execution_revisions` row and updates the execution's revision columns. Then, per change:
 - **unchanged:** a publication row only;
+- **metadata:** the row, with the landed change's `dependsOn` and `fixes` read from the new revision;
 - **changed, `continue`:** the row; the running attempt keeps its manifest, and later attempts and handoffs read the execution's new revision;
 - **changed, `adapt`:** the human publishes the task's next revision with notify through the `within` publication (request key `apply:<commandId>:<change>`), recording the task revision. The shipped notice goes to the outstanding claimant, and plan-execution D9 follows after commit;
 - **changed, `restart`:** the row. The executor supersedes the assignment and dispatches a new attempt of the stage's kind under the new revision, as in D9 here;
@@ -412,7 +420,7 @@ Positions follow the target's content order. The `revision-applied` event closes
 
 **Atomicity and crashes (R17).** The revision row, the publication rows, the task revisions with their notices, the cancellations, and the event commit together. The command id replays the whole command, and each task publication's request key replays inside it, so a retry after a crash publishes nothing twice. The notices are mailbox rows, under shipped delivery and receipt recovery.
 
-**Forward fixes (S4, plan-supervision at 52657a0).** `PlanChange.fixes` names the fix or correction task (`task-<uuid>`, a `plan_fix_tasks` row). A revision that adds changes naming such a task joins the running execution through Apply, and `fixStatus` then reads running for that execution. S4 closes a fix task once a change naming it has landed and no change in the current approved revision naming it is unlanded. Each landing is judged by the revision it landed under (`plan_change_landings.execution_id`). Apply never removes a landed change (`landed-unchanged`), so it never strands a fix. A removed, unlanded fix change is cancelled like any other, and the fix task stays open until a change naming it lands.
+**Forward fixes (S4, plan-supervision at 645d02d).** `PlanChange.fixes` names the fix or correction task (`task-<uuid>`, a `plan_fix_tasks` row). A revision that adds changes naming such a task joins the running execution through Apply, and `fixStatus` then reads running for that execution. S4 closes a fix task once a change naming it has landed and no change in the current approved revision naming it is unlanded. Each landing is judged by the revision it landed under (`plan_change_landings.execution_id`). Apply never removes a landed change (`landed-unchanged`), so it never strands a fix. A removed, unlanded fix change is cancelled like any other, and the fix task stays open until a change naming it lands.
 
 ### D12. What a running execution's revision now means
 
@@ -424,17 +432,17 @@ Positions follow the target's content order. The `revision-applied` event closes
 
 ### D13. Supervision causes and attention
 
-**Causes (S2, append-only).** `changeSupervision` gains `paused` (naming the pause and the awaited decision), `pausing` (naming the pause and its D8 causes), and `hold` (naming the holds, their scope, and their deadlines). They append to S2's cause list. Among the running-stage named waits they are evaluated after the in-flight `effect` cause and before `uncertain-delivery`, in that order. S2's outcome order (plan-supervision at 52657a0) puts `repeating-failure` at position 5, ahead of every named wait, and that is unchanged: a held change whose last two rounds failed alike reads `repeating-failure`, with `hold` listed as also applying. The other applicable waits are listed as also applying. A change in one of these named waits is never a `no-progress` stall.
+**Causes (S2, append-only).** `changeSupervision` gains `paused` (naming the pause and the awaited decision), `pausing` (naming the pause and its D8 causes), and `hold` (naming the holds, their scope, and their deadlines). They join the running-stage named waits right after `effect`, in the order `paused`, `pausing`, `hold`, and before `uncertain-delivery`. With plan-supervision D10's order, the running-stage named waits read: effect, paused, pausing, hold, uncertain-delivery, staffing, parked/cooling, request, decision-card, ci, member-release, condition, landing-slot. S2's outcome order (plan-supervision at 645d02d) puts `repeating-failure` at position 5, ahead of every named wait, and that is unchanged: a held change whose last two rounds failed alike reads `repeating-failure`, with `hold` listed as also applying. The other applicable waits are listed as also applying. A change in one of these named waits is never a `no-progress` stall.
 
 **Attention sources** go in `ATTENTION_SOURCES` through `planAttention.ts`, with the `plan` link of plan-supervision D13:
 
 | Kind | Item id | Owner | Next action | Clears when |
 | --- | --- | --- | --- | --- |
 | `plan-hold-overdue` | `plan-hold-overdue:<holdId>:<deadline>` | human | Release or extend the hold | the hold is released or extended |
-| `plan-pause-overdue` | `plan-pause-overdue:<pauseId>:<change>` | human | Unblock the pausing holder | the target is Paused or decided |
-| `plan-checkpoint-decision` | `plan-checkpoint:<pauseId>:<change>` | human | Continue, adapt, restart, or stop (only restart or stop for a Pausing target that cannot complete) | a decision, or the execution finishes |
+| `plan-pause-overdue` | `plan-pause-overdue:<pauseId>:<change>` | human | Unblock the holder, or restart or stop | the target is Paused or decided |
+| `plan-checkpoint-decision` | `plan-checkpoint:<pauseId>:<change>` | human | Continue, adapt, restart, or stop for a Paused target; restart or stop for one Pausing as `holder-killed` or `checkpoint-push-failed` | a decision, or the execution finishes |
 
-Each is derived only while its plan is open. None changes state.
+Each is derived only while its plan is open. None changes state. A target past its deadline that is Pausing for another cause raises only `plan-pause-overdue`, which offers Restart and Stop as well, so one target never raises two items.
 
 ### D14. Human protocol and the view
 
@@ -479,32 +487,36 @@ Consumed:
 - **V2:** the target report's carried conditions.
 - **V5:** the `validation-current` entry.
 - **X1:** change states, steps, and owner rows; added and cancelled rows.
-- **X2:** manifests stay immutable; optional `checkpoint`.
-- **X3:** the new `push-checkpoint` kind and inspector.
+- **X2:** manifests stay immutable; the optional `checkpoint`, registered as a D8 addition (D9).
+- **X3:** the new change-level `push-checkpoint` kind and inspector, registered as a D14 addition (D7).
+- **X4:** CI evidence bound to a round's commit, which keeps checkpoint commits out of evidence (D7, Risks).
 - **X5:** `no-hold` appended.
 - **X6:** giving up the slot.
 - **X7:** landing facts decide `landed-changed`.
 - **X8:** no new stop reasons.
-- **plan-execution D9, D12, and D18:** new task revisions, Stop and supersession, and the reply guidance.
+- **plan-execution D9, D10, D12, D14, and D18:** new task revisions and the ownership checks; CI read per round commit (D7's "never round evidence"); Stop and supersession; the effect failure classes and the startup inspection of `unknown` effects (D7, D8); and the reply guidance.
 - **I1 and I2:** candidate fast-forwards and promotions gated, with `no-hold` appended to `PROMOTE_PRECONDITIONS`.
 - **C-I1 and C-I3:** the gate, and holds citing a review.
-- **S1, S2, and S4** (plan-supervision at 52657a0): cards cited by holds; the causes, appended after S2's outcome order, which keeps `repeating-failure` at position 5; and forward fixes whose `fixes` name fix or correction task ids, joining running work.
+- **S1** (plan-supervision at 645d02d): decision cards bind only as hold citations. Adapt publishes the dialog's text, never a card's.
+- **S2:** the three causes join the running-stage named waits after `effect` (D13); `repeating-failure` keeps position 5. plan-supervision D10 names only `hold` as an incoming cause; `paused` and `pausing` are added under S2's append rule.
+- **S4:** forward fixes whose `fixes` name fix or correction task ids, joining running work as added changes or through a `fixes` difference (D10).
 - **plan-supervision D13:** attention sources and the `plan` link.
+- **Modifications of plan-execution,** recorded here because plan-execution archives first: D14 gains the change-level `push-checkpoint` kind (X3, D7), and D8's `AttemptManifest` v1 gains the optional `checkpoint` (X2, D9). Both bound-by lists gain `revision-control`.
 - **Shipped:** task-revision-publication (publication `within`, notices, request keys); member release's readiness; the mailbox's urgent direct semantics, system mail, and receipt recovery; and task assignment's supersession through the stop branch.
 
 Published:
 
 | Contract | What it fixes | Bound by |
 | --- | --- | --- |
-| R1 Holds | D2 hold tables; D4 scope, narrowing, and deadline rules; D5 `holdGate` and the gated step list | `execution-safety-recovery` (fencing extends the gate; the fault matrix covers hold writes) |
-| R2 Pauses and checkpoints | D2 pause, target, and checkpoint tables; D8 `pauseTargetState` and the Paused rule; D7 `push-checkpoint` and its inspector; D9 choices | `execution-safety-recovery` (leases and epochs strengthen the stop proof; Recovering composes with Pausing) |
+| R1 Holds | D2 hold tables; D4 scope, narrowing, and deadline rules; D5 `holdGate` and the gated step list | `execution-safety-recovery` (the recovery matrix covers hold writes; no fencing, per its D11) |
+| R2 Pauses and checkpoints | D2 pause, target, and checkpoint tables; D8 `pauseTargetState` and the Paused rule; D7 `push-checkpoint` and its inspector; D9 choices | `execution-safety-recovery` (matrix rows for Paused across restart and the `push-checkpoint` inspector; `task_checkpoint` stays pause-only, per its D12) |
 | R3 Execution revisions and publications | D2 `plan_execution_revisions` and publication rows; D10 `revisionDelta`; D11 `APPLY_PRECONDITIONS`, append-only | `execution-safety-recovery` (audit and the crash matrix of Apply), later plan changes |
 | R4 Command events | D3 kinds and compared payloads | `execution-safety-recovery` (audit) |
 | R5 Causes and attention | D13 causes and their order, and attention kinds | `execution-safety-recovery` (recovery states beside them) |
 
 ## Risks / Trade-offs
 
-- **[A holder ignores the pause mail]** → The target stays Pausing with its cause, the deadline raises attention, and the owner can Restart elsewhere or Stop. Readiness without fencing proves only that the holder is idle, not that it cannot write later. Fencing is execution-safety-recovery's. Meanwhile the D9 submission checks and the hold gate keep a late write from landing.
+- **[A holder ignores the pause mail]** → The target stays Pausing with its cause, the deadline raises attention, and the owner can Restart from that Pausing state or Stop. Restart supersedes the attempt, so the old holder's later submissions are refused. Readiness without fencing proves only that the holder is idle, not that it cannot write later. execution-safety-recovery adds no fencing (its D11): the D9 submission checks and the hold gate keep a late write from landing.
 - **[Urgent pause mail interrupts a turn mid-edit]** → The holder is asked to commit whatever it has. A torn edit stays in the checkpoint commit and is visible to whoever continues. The pending-card rule is unchanged.
 - **[A checkpoint push triggers CI on the branch]** → CI evidence is bound to a round's commit (X4), so a checkpoint commit's CI is never a round's evidence.
 - **[Strict landed refusals block plan-wide rule edits after the first landing]** → The owner adds a forward fix or starts a new execution after Stop. Silent reinterpretation of landed evidence would break P10.

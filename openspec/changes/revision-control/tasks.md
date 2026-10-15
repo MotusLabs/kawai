@@ -8,11 +8,12 @@ Implement after these have landed on master: `plan-execution`, `integration-cand
   - plan-execution's D3, D4, D9, D12, D14, D18, and D20: `planSteps` and its decide/dispatch split, `START_PRECONDITIONS`, `plan_landing_slots`, the effect kinds and inspectors, `AttemptManifest`, `recordExecutionEvent`, and `TaskService.setStatus(…, alsoWithin)`;
   - integration-candidates' D5, D9, and I2: the fast-forward, `PROMOTE_PRECONDITIONS`, and the promotion steps;
   - plan-supervision's D10, D13, and S1–S4: the cause list and its order, `ATTENTION_SOURCES` kinds, the `plan` link, `fixStatus`, and the system caller's origins;
-  - the shipped `TaskService` publication path and `MemberRelease.readiness`.
+  - the shipped `TaskService` publication path, including the `within` variant the proposal's Impact names, `MemberRelease.readiness`, and member release's durable pending row for a Restart whose spawned holder is not yet ready.
 - [ ] 1.2 Create `src/shared/planRevisionControl.ts` with hold, pause, target, checkpoint, delta, and view types, and a header comment naming them. Verify with a typecheck.
 - [ ] 1.3 Implement the pure `holdGate` (D5), `pauseTargetState` (D8), and `revisionDelta` (D10). Verify with unit tests:
   - a change is held by a plan hold, by a changes hold, and no longer once its row is released;
   - every D8 cause and its precedence;
+  - `metadata` for a landed change differing only in `dependsOn` or `fixes`, `fixes` as a compared field, and `lead-changed` as informational;
   - Paused only from `paused_at`, and `holder-killed` only for a killed holder with nothing pushed;
   - each delta class and its changed fields;
   - `landing-changed`, `plan-rules-changed` only once something landed, and `landed-changed` ignoring `dependsOn`;
@@ -75,7 +76,8 @@ Implement after these have landed on master: `plan-execution`, `integration-cand
   - Restart supersedes without cancelling claimed work, and the manifest names the checkpoint;
   - Restart releases a ready spawned holder first and never a human-created one;
   - Restart starts from origin's head with the "may predate" note when no checkpoint reached origin;
-  - Restart is allowed from Pausing with `holder-killed` or `checkpoint-push-failed`;
+  - Restart is allowed from every Pausing state (including `no-checkpoint` for a holder that ignores the mail), with the "may predate" note when nothing reached `origin`, and the old holder's later submissions and checkpoints are refused;
+  - Restart of a busy spawned holder marks it pending release, and the attempt's dispatch waits for the worktree;
   - a refused Continue leaves Restart and Stop;
   - Adapt and Restart under an active hold record at once and dispatch only after release;
   - `releaseHold` releases the change in the same transaction, and is refused for a whole-plan hold with the narrowing guidance;
@@ -103,15 +105,16 @@ Implement after these have landed on master: `plan-execution`, `integration-cand
   - removed unlanded changes and their tasks are cancelled, with the slot given up;
   - the publication rows and `revision-applied` commit together;
   - completion reads the current revision (D12).
-- [ ] 5.3 Write the R17 integration test: a crash before commit leaves nothing; a retry after commit replays, with one task revision and one notice per adapted change. Add the S4 forward-fix test: a change whose `fixes` names a fix task is applied to a running execution and lands, `fixStatus` reads running, and the fix task closes once no change of the current approved revision naming it is unlanded. Add the AGENTS.md Apply bullet; that is the docs for group 5. Verify by the tests, and by reading the bullet against D10–D12.
+- [ ] 5.3 Write the R17 integration test: a crash before commit leaves nothing; a retry after commit replays, with one task revision and one notice per adapted change. Add the S4 forward-fix test: a change whose `fixes` names a fix task is applied to a running execution and lands, `fixStatus` reads running, and the fix task closes once no change of the current approved revision naming it is unlanded. Add the negative case (D11): a fix change removed before it lands is cancelled, and its fix task stays open. Add a `fixes`-only difference on a landed change, which applies as `metadata` with no choice. Add the AGENTS.md Apply bullet; that is the docs for group 5. Verify by the tests, and by reading the bullet against D10–D12.
 
 ## 6. Reading, supervision, and attention
 
 - [ ] 6.1 Add `holds`, `pauses`, and executions' `revisions` to `team-plan-detail` and `plan_get` (D14, D15). Verify with connection and tool tests: another team's ids read as not found, and pushes follow every write and every Paused recording.
 - [ ] 6.2 Add the `paused`, `pausing`, and `hold` causes in their D13 position, and the three attention sources. Verify with tests:
-  - each cause wins in its position, and the others are listed as also applying;
+  - each cause wins in its position (after `effect`, in the order `paused`, `pausing`, `hold`, before `uncertain-delivery`), and the others are listed as also applying;
   - none raises a `no-progress` stall, and `repeating-failure` keeps its S2 position ahead of them;
   - each item's id, owner, next action, and clearing rule, including after an extension;
+  - `plan-checkpoint-decision` for Paused, `holder-killed`, and `checkpoint-push-failed` targets, and only `plan-pause-overdue` for a target past its deadline for another cause;
   - nothing is raised for closed plans.
 
   Needs no docs beyond the AGENTS.md bullets of groups 3–5.

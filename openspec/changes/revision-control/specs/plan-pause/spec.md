@@ -29,7 +29,7 @@ When a target's instruction or review handoff is still queued or awaiting a requ
 - **THEN** the target reads Pausing as starting, and the pause mail is sent once the new member claims the instruction
 
 ### Requirement: Holders record checkpoints through task_checkpoint
-The `task_checkpoint` tool SHALL let the claimant of a Pausing attempt target record a checkpoint: a commit, summary, unfinished actions, errors and tests, and next steps. It SHALL refuse a commit that is not the change branch's head, a worktree with uncommitted or untracked files, a commit lacking the branch head on `origin`, and callers that are not a Pausing target's claimant. Kawai SHALL push the commit as a `push-checkpoint` effect, never forced.
+The `task_checkpoint` tool SHALL let a Pausing attempt target's claimant record a checkpoint: commit, summary, unfinished actions, errors and tests, and next steps. It SHALL refuse other callers, a commit that is not the head of `refs/heads/<change>` or does not contain the branch's head on `origin`, a worktree with uncommitted or untracked files, and a call while Kawai writes the branch (`updating`, `merging`). Kawai SHALL push the commit as a `push-checkpoint` effect, never forced.
 
 #### Scenario: A clean checkpoint
 - **WHEN** the paused developer commits everything and calls `task_checkpoint` with that commit and next steps
@@ -38,6 +38,10 @@ The `task_checkpoint` tool SHALL let the claimant of a Pausing attempt target re
 #### Scenario: Untracked files are refused
 - **WHEN** the developer calls `task_checkpoint` with an untracked file in the worktree
 - **THEN** the call is refused listing the file, and no checkpoint exists
+
+#### Scenario: Kawai is writing the branch
+- **WHEN** the paused developer calls `task_checkpoint` while the change is `updating`
+- **THEN** the call is refused naming the step, and no checkpoint exists
 
 #### Scenario: No pause, no checkpoint
 - **WHEN** a developer whose change is not being paused calls `task_checkpoint`
@@ -92,7 +96,7 @@ Pauses, targets, checkpoints, and recorded Paused states SHALL be durable. After
 - **THEN** the target reads Pausing with its causes, and no Paused is recorded and no resume mail is sent
 
 ### Requirement: The owner chooses how paused work goes on
-For a Paused target the human SHALL choose, under a command id: Continue, sending its holder resume mail and creating no attempt, refused once the holder is killed; Adapt, publishing the task's next revision with notify; or Restart. Restart SHALL also be allowed while Pausing as `holder-killed` or `checkpoint-push-failed`. Stop is the cancel and SHALL stay available.
+For a Paused target the human SHALL choose, under a command id: Continue, sending its holder resume mail and creating no attempt, refused once the holder is killed; Adapt, publishing the task's next revision with notify; or Restart. Restart SHALL also be allowed from every Pausing state; Continue SHALL stay Paused-only. Stop is the cancel and SHALL stay available.
 
 #### Scenario: Continue
 - **WHEN** the owner continues a Paused attempt target
@@ -106,8 +110,12 @@ For a Paused target the human SHALL choose, under a command id: Continue, sendin
 - **WHEN** the owner continues a target whose holder was killed after its checkpoint was pushed
 - **THEN** Continue is refused as `holder-gone`, and Restart and Stop remain available
 
+#### Scenario: The holder ignores the pause
+- **WHEN** a target is still Pausing as `no-checkpoint` at its deadline and the owner restarts it
+- **THEN** a new attempt is dispatched from the branch head on `origin` with the "may predate" note, and the old holder's later submissions are refused
+
 ### Requirement: Restart starts fresh from the newest safe commit
-Restart SHALL first release a ready spawned holder through member release, and SHALL never release a human-created one, saying the attempt may reach it. It SHALL supersede the held assignment without cancelling claimed work and dispatch a new attempt of the stage's kind from the newest checkpoint commit on `origin`, else the branch head on `origin`, saying that head may predate the holder's work. The manifest SHALL name the checkpoint.
+Restart SHALL release a spawned holder through member release once it is ready, and SHALL never release a human-created one, saying the attempt may reach it; the dispatch waits for the worktree. It SHALL supersede the held assignment without cancelling claimed work and dispatch a new attempt of the stage's kind from the newest checkpoint commit on `origin`, else the branch head on `origin`, saying that head may predate the holder's work. The manifest SHALL name the checkpoint.
 
 #### Scenario: Restart with a checkpoint
 - **WHEN** the owner restarts a Paused target whose spawned developer is idle
@@ -140,7 +148,7 @@ While a change has an undecided pause target, Kawai SHALL dispatch nothing for i
 - **THEN** the resume mail names the newest revision and no fix attempt is dispatched
 
 ### Requirement: Pauses are visible to the owner and agents
-The plan detail and `plan_get` SHALL list each pause with its deadline and targets: state, causes, holder, checkpoints, and decision. Supervision SHALL name `pausing` and `paused` as a target change's cause. A Paused target, or one Pausing as `holder-killed`, with no decision SHALL raise the `plan-checkpoint-decision` attention item until it is decided or the execution finishes.
+The plan detail and `plan_get` SHALL list each pause with its deadline and targets: state, causes, holder, checkpoints, and decision. Supervision SHALL name `pausing` and `paused` as a target change's cause. A Paused target, or one Pausing as `holder-killed` or `checkpoint-push-failed`, with no decision SHALL raise `plan-checkpoint-decision` until decided or the execution finishes.
 
 #### Scenario: A paused change's cause
 - **WHEN** a target is Paused and undecided
