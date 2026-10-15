@@ -8,7 +8,7 @@ The usage bar shows how much of each plan window is used and when it resets, but
 
 - Each usage window the server reports gains an optional period length (`periodMs`), set from the window's known kind: 5 hours for the session/5-hour window, 7 days for the 7-day and per-model weekly windows. Kinds whose length is not known (overage, provider quota rows, any new server kind) carry none. Additive: older clients ignore it.
 - Each meter in the usage bar draws a thin **time marker** on its existing track at the share of the window already elapsed (`1 − time left ÷ period`; e.g. a 5-hour window resetting in 2 h 30 m puts the marker at 50%). The fill is the usage; the marker is the time — fill past the marker means usage is ahead of pace, fill short of it means behind. No new row, column, or text is added to the bar; its height and layout stay the same.
-- The meter's hover text and accessible label state the comparison in words, e.g. "22% used · 50% of the 5-hour window elapsed · resets in 2h 30m".
+- The meter's hover text and accessible label state the comparison in words, e.g. "22% used · 50% of window elapsed · resets in 2h 30m".
 - The marker moves on its own: the bar re-renders on a slow client clock (once a minute) so the marker advances between usage updates.
 - No marker is drawn when the window has no reset time, no known period, or a reset time that has already passed (the held usage is stale until the next update).
 

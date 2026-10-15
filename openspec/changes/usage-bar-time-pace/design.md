@@ -49,7 +49,7 @@ The tick plus hover text gives the at-a-glance comparison (fill vs. line) with t
 
 ### D4. Words live in `title` and `aria-label`
 
-The row gets a `title`, and the track (currently `aria-hidden`) gets an `aria-label` carrying the same text when a marker exists; a full `role="meter"` treatment is not needed. Text: `22% used · 50% of the 5-hour window elapsed · resets in 2h 30m`, using the window's own label (lower-cased only if it is a known Claude label; provider/scoped labels verbatim). Without a marker: `22% used · resets <local time>`. Time-left formatting is a small helper (`2h 30m`, `3d 4h`, `45m`, `<1m`) — not `formatElapsed`, which is seconds-oriented.
+The row gets a `title`, and the track (currently `aria-hidden`) gets an `aria-label` carrying the same text when a marker exists; a full `role="meter"` treatment is not needed. Text: `22% used · 50% of window elapsed · resets in 2h 30m` (the row already names the window; the `aria-label` prefixes the label, `5-hour window: …`, since the track is read on its own). Without a marker: `22% used · resets <local time>`. Time-left formatting is a small helper (`2h 30m`, `3d 4h`, `45m`, `<1m`) — not `formatElapsed`, which is seconds-oriented.
 
 ### D5. A minute clock, owned by the bar
 
