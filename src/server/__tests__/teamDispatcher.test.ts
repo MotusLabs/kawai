@@ -5,6 +5,7 @@
 // reasons D2); the cause-reporter tests cover every reported exclusion.
 import { afterEach, beforeEach, expect, spyOn, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
+import { schemaDb } from './schemaDb'
 import { MailDispatcher, type GroupRouter, type MailRecipient, type PassOutcome, type RouteView } from '../team/dispatcher'
 import { MailboxStore, type EnqueueInput } from '../team/mailboxStore'
 
@@ -15,7 +16,7 @@ let recipients: MailRecipient[]
 let delivered: Array<{ recipient: string; id: string }>
 let actions: string[]
 beforeEach(() => {
-  db = new Database(':memory:'); store = new MailboxStore(db)
+  db = schemaDb(':memory:'); store = new MailboxStore(db)
   recipients = [{ sessionId: 'dev', teamId: 'team', groupId: 'devs', idle: false, pendingRequest: false, available: true }]
   delivered = []; actions = []
   dispatcher = new MailDispatcher(store, {

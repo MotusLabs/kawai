@@ -11,7 +11,6 @@
 // The store is policy-free; TaskResultService decides who may do what.
 import type { Database } from 'bun:sqlite'
 import type { TaskActor, TaskFindings, TaskResult, TaskTestClaim } from '../../shared/teamTasks'
-import { migrateResultTables } from './taskResultSchema'
 
 export interface ResultInsert {
   teamId: string
@@ -55,9 +54,7 @@ function parseTests(value: unknown): TaskTestClaim[] {
 }
 
 export class TaskResultStore {
-  constructor(private readonly db: Database) {
-    migrateResultTables(db)
-  }
+  constructor(private readonly db: Database) {}
 
   /** Insert a result, superseding the task's outstanding one in the same transaction (D1). */
   insert(input: ResultInsert, now = nowIso()): TaskResult {

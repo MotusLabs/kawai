@@ -60,6 +60,11 @@ export interface LimitOutcomesOptions {
   now?: () => number
 }
 
+/** Create the table; part of the frozen baseline step (execution-safety-recovery D13): the baseline step calls this, never the store. */
+export function ensureLimitOutcomeSchema(db: Database): void {
+  db.exec(CREATE_TABLE_SQL)
+}
+
 export class LimitOutcomes {
   /** Session → id of the message its current turn works on. */
   private readonly active = new Map<string, string>()
@@ -69,7 +74,6 @@ export class LimitOutcomes {
   private readonly pending = new Map<string, LimitEvent>()
 
   constructor(private readonly db: Database, private readonly options: LimitOutcomesOptions) {
-    db.exec(CREATE_TABLE_SQL)
     options.limits.subscribe(event => { if (event.final) this.pending.set(event.sessionId, event) })
   }
 

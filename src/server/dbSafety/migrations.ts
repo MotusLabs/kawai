@@ -1,0 +1,193 @@
+// Schema versions and the migration runner (execution-safety-recovery D13,
+// D14). `schema_migrations` records each applied version's number, name, time,
+// build, and pre-migration backup; `PRAGMA user_version` mirrors the highest
+// for outside tools and is never read for a decision. Startup order:
+// 1. read the version without writing (0 when the table is missing or empty);
+// 2. refuse a database newer than this build, before any write — no override;
+// 3. take the `startup` snapshot;
+// 4. only when no version is recorded, run the frozen baseline and record
+//    version 1 `baseline`;
+// 5. apply each pending migration in order, each gated on its checked
+//    `pre-migration-<n>` backup, its `up(db)` and version row committed in
+//    one `BEGIN IMMEDIATE` transaction.
+// A later schema change is the next entry in MIGRATIONS (versions dense from
+// 2), never an edit to the baseline (E5).
+import type { Database } from 'bun:sqlite'
+import { BUILD_VERSION } from '../version'
+import { applyBaselineSchema } from './baseline'
+import type { BackupFile } from './backupFiles'
+import type { BackupOutcome } from './backups'
+
+export interface Migration {
+  readonly version: number
+  readonly name: string
+  up(db: Database): void
+}
+
+export const BASELINE_VERSION = 1
+export const BASELINE_NAME = 'baseline'
+
+/** Every numbered migration after the baseline, in order; versions dense from 2. */
+export const MIGRATIONS: readonly Migration[] = []
+
+export const RESTORE_DOC = 'docs/operations/database-backups.md'
+
+const CREATE_SCHEMA_MIGRATIONS_SQL = `
+CREATE TABLE IF NOT EXISTS schema_migrations (
+  version INTEGER PRIMARY KEY,
+  name TEXT NOT NULL,
+  applied_at TEXT NOT NULL,
+  app_version TEXT NOT NULL,
+  backup_path TEXT
+);
+`
+
+/** What the runner needs from DatabaseBackups; null for an in-memory database. */
+export interface MigrationBackups {
+  dir: string
+  snapshotSync(reason: 'startup' | `pre-migration-${number}`): BackupOutcome
+  rotate(): void
+  /** The newest backup for a reason that passes its integrity check now. */
+  newestGood(reason: `pre-migration-${number}`): BackupFile | null
+}
+
+export interface MigrateOptions {
+  backups: MigrationBackups | null
+  migrations?: readonly Migration[]
+  appVersion?: string
+  now?: () => Date
+}
+
+/** A start this database must refuse; the message is for the owner, whole. */
+export class DatabaseStartupError extends Error {
+  override readonly name = 'DatabaseStartupError'
+}
+
+/** The newest version a set of migrations reaches (the baseline when empty). */
+export function newestVersion(migrations: readonly Migration[] = MIGRATIONS): number {
+  return Math.max(BASELINE_VERSION, ...migrations.map(migration => migration.version))
+}
+
+/** The recorded version, read without writing: 0 for a missing table or no rows. */
+export function readSchemaVersion(db: Database): number {
+  const table = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'").get()
+  if (!table) return 0
+  const row = db.prepare('SELECT max(version) AS version FROM schema_migrations').get() as { version: number | null }
+  return row.version ?? 0
+}
+
+/** Registry shape: dense versions from 2, unique names (a programming error, thrown before any write). */
+export function checkMigrations(migrations: readonly Migration[]): void {
+  migrations.forEach((migration, index) => {
+    if (migration.version !== BASELINE_VERSION + 1 + index) {
+      throw new Error(`migration ${migration.name} has version ${migration.version}; expected ${BASELINE_VERSION + 1 + index}`)
+    }
+  })
+}
+
+/** D14: the owner's message for a database a newer build migrated. */
+export function newerDatabaseMessage(input: {
+  dbPath: string
+  dbVersion: number
+  buildVersion: number
+  backupsDir: string | null
+  /** The newest checked `pre-migration-<buildVersion + 1>` backup, if any. */
+  backup: BackupFile | null
+}): string {
+  const reason = `pre-migration-${input.buildVersion + 1}` as const
+  const backup = input.backup
+  const where = input.backupsDir ?? 'the backups directory'
+  const named = backup
+    ? `The newest backup taken before version ${input.buildVersion + 1} is ${where}/${backup.name}.`
+    : `No ${reason} backup was found in ${where}.`
+  return [
+    `Database ${input.dbPath} is at schema version ${input.dbVersion}, but this build knows only up to version ${input.buildVersion}.`,
+    'A newer build migrated it, and this build refuses to write to it; nothing was changed.',
+    named,
+    `To go back to this build, restore that backup by following ${RESTORE_DOC}, or run a build that knows version ${input.dbVersion}.`,
+  ].join(' ')
+}
+
+/** Bring the database to the newest known version, or throw DatabaseStartupError (D13–D15). */
+export function migrateSchema(db: Database, dbPath: string, options: MigrateOptions): void {
+  const migrations = options.migrations ?? MIGRATIONS
+  checkMigrations(migrations)
+  const buildVersion = newestVersion(migrations)
+  const appVersion = options.appVersion ?? BUILD_VERSION
+  const now = options.now ?? (() => new Date())
+  const backups = options.backups
+
+  const dbVersion = readSchemaVersion(db)
+  if (dbVersion > buildVersion) {
+    throw new DatabaseStartupError(newerDatabaseMessage({
+      dbPath, dbVersion, buildVersion, backupsDir: backups?.dir ?? null,
+      backup: backups?.newestGood(`pre-migration-${buildVersion + 1}`) ?? null,
+    }))
+  }
+
+  if (backups) {
+    backups.rotate()
+    // A failed startup snapshot is logged and shown, never fatal: it gates nothing.
+    backups.snapshotSync('startup')
+  }
+
+  let version = dbVersion
+  if (version === 0) {
+    const baseline = () => {
+      applyBaselineSchema(db)
+      db.exec(CREATE_SCHEMA_MIGRATIONS_SQL)
+      record(db, { version: BASELINE_VERSION, name: BASELINE_NAME, appliedAt: now(), appVersion, backupPath: null })
+    }
+    // A database with no tables at all cannot reach the baseline's legacy
+    // paths that open their own transaction, so it runs as one transaction:
+    // atomic, and one commit instead of one per statement. A database written
+    // before versions runs the steps exactly as before, each committing alone.
+    if (isEmpty(db)) db.transaction(baseline).immediate()
+    else baseline()
+    version = BASELINE_VERSION
+  }
+
+  for (const migration of migrations) {
+    if (migration.version <= version) continue
+    const reason = `pre-migration-${migration.version}` as const
+    let backupPath: string | null = null
+    if (backups) {
+      const backup = backups.snapshotSync(reason)
+      if (!backup.ok) {
+        throw new DatabaseStartupError(
+          `Migration ${migration.version} (${migration.name}) did not start: its ${reason} backup ${backup.path ?? `in ${backups.dir}`} failed (${backup.error}). The database stays at version ${version}.`,
+        )
+      }
+      backupPath = backup.path
+    }
+    try {
+      db.transaction(() => {
+        migration.up(db)
+        record(db, { version: migration.version, name: migration.name, appliedAt: now(), appVersion, backupPath })
+      }).immediate()
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error)
+      throw new DatabaseStartupError(
+        `Migration ${migration.version} (${migration.name}) failed and was rolled back: ${detail}. The database stays at version ${version}; its backup is ${backupPath ?? 'none (in-memory database)'}.`,
+      )
+    }
+    version = migration.version
+  }
+}
+
+function isEmpty(db: Database): boolean {
+  return !db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' LIMIT 1").get()
+}
+
+function record(db: Database, row: { version: number; name: string; appliedAt: Date; appVersion: string; backupPath: string | null }): void {
+  db.prepare(`INSERT INTO schema_migrations (version, name, applied_at, app_version, backup_path)
+    VALUES ($version, $name, $appliedAt, $appVersion, $backupPath)`).run({
+    $version: row.version,
+    $name: row.name,
+    $appliedAt: row.appliedAt.toISOString(),
+    $appVersion: row.appVersion,
+    $backupPath: row.backupPath,
+  })
+  // A mirror for outside tools, written with the row (inside the migration's transaction).
+  db.exec(`PRAGMA user_version = ${Math.trunc(row.version)}`)
+}

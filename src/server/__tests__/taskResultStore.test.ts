@@ -5,6 +5,7 @@
 // the revision rows at read time — moved by nothing but the revision number.
 import { afterEach, beforeEach, expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
+import { schemaDb } from './schemaDb'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -51,7 +52,7 @@ test('a pre-existing database gains the result tables and handoff columns; plain
   legacy.close()
   for (let pass = 0; pass < 2; pass++) {
     // Twice: the migration is idempotent across a reopen.
-    const db = new Database(path.join(dir, 'legacy.db'))
+    const db = schemaDb(path.join(dir, 'legacy.db'))
     const assignments = new AssignmentStore(db, new MailboxStore(db))
     new TaskStore(db, undefined, assignments)
     expect(assignments.listByTask('task-1')).toMatchObject([{ id: 'assignment-old', handoffKind: null, resultId: null, expectedResponse: null }])

@@ -46,15 +46,18 @@ export interface EventFacts {
   reason: string | null
 }
 
-export class MessageEventLog {
-  constructor(private readonly db: Database) {
-    db.exec(CREATE_EVENTS_SQL)
-    // Additive column (team-mailbox-management D3): old rows keep it null.
-    const columns = db.prepare('PRAGMA table_info(team_message_events)').all() as Array<{ name: string }>
-    if (!columns.some(column => column.name === 'actor_session')) {
-      db.exec('ALTER TABLE team_message_events ADD COLUMN actor_session TEXT')
-    }
+/** Create the table; part of the frozen baseline step (execution-safety-recovery D13): the baseline step calls this, never the store. */
+export function ensureMessageEventSchema(db: Database): void {
+  db.exec(CREATE_EVENTS_SQL)
+  // Additive column (team-mailbox-management D3): old rows keep it null.
+  const columns = db.prepare('PRAGMA table_info(team_message_events)').all() as Array<{ name: string }>
+  if (!columns.some(column => column.name === 'actor_session')) {
+    db.exec('ALTER TABLE team_message_events ADD COLUMN actor_session TEXT')
   }
+}
+
+export class MessageEventLog {
+  constructor(private readonly db: Database) {}
 
   record(input: {
     messageId: string

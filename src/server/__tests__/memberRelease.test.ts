@@ -6,6 +6,7 @@
 // a git repo with worktrees, driven the production way (dispatch passes).
 import { afterAll, afterEach, beforeAll, beforeEach, expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
+import { schemaDb } from './schemaDb'
 import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -122,7 +123,7 @@ beforeEach(async () => {
   fs.rmSync(path.join(repo, '.kawai'), { recursive: true, force: true })
   writeGroup('devs')
   writeGroup('qa')
-  db = new Database(':memory:')
+  db = schemaDb(':memory:')
   records = new Map()
   teams = new SessionTeams({ homeDir: dir })
   archived = []; liveWorkers = new Set(); runningTasks = new Set(); pendingCards = new Set(); received = []; spawnCalls = []

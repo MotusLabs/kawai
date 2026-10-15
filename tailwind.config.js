@@ -1,6 +1,7 @@
 /** @type {import('tailwindcss').Config} */
 export default {
-  content: ['./index.html', './src/**/*.{ts,tsx}'],
+  // Scan rendered UI only: server strings and test fixtures can resemble CSS utilities.
+  content: ['./index.html', './src/client/**/*.{ts,tsx}', '!./src/client/**/__tests__/**'],
   theme: {
     extend: {
       fontFamily: {

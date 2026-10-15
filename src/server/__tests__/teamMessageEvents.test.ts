@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
+import { schemaDb } from './schemaDb'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -15,7 +16,7 @@ describe('team_message_events', () => {
 
   beforeEach(() => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kawai-events-'))
-    db = new Database(path.join(dir, 'mail.db'))
+    db = schemaDb(path.join(dir, 'mail.db'))
     store = new MailboxStore(db)
   })
   afterEach(() => {
@@ -38,7 +39,7 @@ describe('team_message_events', () => {
         INSERT INTO team_messages (id, team_id, to_kind, to_id, from_session, origin_path, thread_id, body, state, created_at)
         VALUES ('legacy', '${TEAM}', 'group', 'devs', 'lead', '/repo', 'legacy', 'hi', 'delivered', '2026-01-01');`)
       legacyDb.close()
-      const legacy = new Database(path.join(legacyDir, 'mail.db'))
+      const legacy = schemaDb(path.join(legacyDir, 'mail.db'))
       const legacyStore = new MailboxStore(legacy)
       const tables = (legacy.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as Array<{ name: string }>)
         .map(row => row.name)
@@ -165,7 +166,7 @@ describe('team_message_events', () => {
     expect(store.threadEvents(other.threadId).map(event => event.messageId)).toEqual([other.id])
 
     db.close()
-    db = new Database(path.join(dir, 'mail.db'))
+    db = schemaDb(path.join(dir, 'mail.db'))
     store = new MailboxStore(db)
     expect(store.threadEvents(first.threadId)).toEqual(before)
     expect(store.eventsFor(first.id)).toEqual(before.filter(event => event.messageId === first.id))

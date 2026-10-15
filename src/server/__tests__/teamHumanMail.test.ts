@@ -5,6 +5,7 @@
 // to every dispatcher query.
 import { afterEach, beforeEach, expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
+import { schemaDb } from './schemaDb'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -39,7 +40,7 @@ beforeEach(async () => {
     status: 'waiting', createdAt: '', lastActivityAt: '',
   })
   records = new Map([['dev', row('dev')], ['other', row('other', other)]])
-  db = new Database(':memory:')
+  db = schemaDb(':memory:')
   store = new MailboxStore(db)
   tasks = new TaskStore(db)
   mailbox = new TeamMailbox(store, { getSession: id => records.get(id), homeDir: dir, tasks })

@@ -115,11 +115,15 @@ export function outstandingOf(rows: TeamTaskAssignment[]): TeamTaskAssignment | 
   return rows.filter(row => row.supersededBy === null && row.state !== 'failed').at(-1) ?? null
 }
 
+/** Create the table; part of the frozen baseline step (execution-safety-recovery D13): the baseline step calls this, never the store. */
+export function ensureAssignmentSchema(db: Database): void {
+  db.exec(CREATE_TABLE_SQL)
+  // Handoff columns (task-results-handoffs D1): this store owns the table's reads.
+  migrateHandoffColumns(db)
+}
+
 export class AssignmentStore {
   constructor(private readonly db: Database, private readonly mail?: MailboxStore) {
-    db.exec(CREATE_TABLE_SQL)
-    // Handoff columns (task-results-handoffs D1): this store owns the table's reads.
-    migrateHandoffColumns(db)
     // Claim copies follow the mail wherever its claim moves (design D5):
     // set when the dispatcher claims, cleared again by release or requeue.
     this.mailSubscription = mail?.subscribe((_teamId, message) => { if (message) this.syncFromMail(message) })
