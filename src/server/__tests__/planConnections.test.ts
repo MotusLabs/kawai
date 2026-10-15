@@ -13,10 +13,11 @@ import { TaskService } from '../team/TaskService'
 import { TeamScopes } from '../team/teamScope'
 import type { SessionTeams } from '../team/sessionTeams'
 import type { ClientMessage, ServerMessage } from '../../shared/types'
-import { createPlanBench, createPlanWorld, writeGroup, type PlanBench, type PlanWorld } from './planHarness'
+import { createPlanWorld, writeGroup, type PlanWorld } from './planHarness'
+import { createImpactBench, type ImpactBench } from './impactHarness'
 
 let world: PlanWorld
-let bench: PlanBench
+let bench: ImpactBench
 let tasks: TaskService
 let connections: ChatConnections
 let messages: ServerMessage[]
@@ -27,12 +28,12 @@ afterAll(() => fs.rmSync(world.root, { recursive: true, force: true }))
 beforeEach(() => {
   bench?.db.close()
   writeGroup(world, 'leads', '---\ncanCreatePlans: true\ncanCreateTasks: true\n---\nLead.')
-  bench = createPlanBench(world)
+  bench = createImpactBench(world)
   tasks = new TaskService(bench.tasks, { getSession: id => bench.records.get(id), homeDir: world.home, plans: bench.plans })
   messages = []
   // Only this repository is discovered; the other one is no known team.
   const teamScopes = new TeamScopes({ teams: { hasTeam: async () => false } as unknown as SessionTeams, repositories: () => [world.team.teamId] })
-  const manager = { whenRestored: () => Promise.resolve(), teamScopes, plans: bench.service } as unknown as ChatSessionManager
+  const manager = { whenRestored: () => Promise.resolve(), teamScopes, plans: bench.service, impact: bench.impact } as unknown as ChatSessionManager
   connections = new ChatConnections(manager)
   // As ChatSessionManager wires it: plan writes and linked-task changes.
   bench.plans.subscribe(plan => connections.publishPlans(plan.teamId, plan.id))

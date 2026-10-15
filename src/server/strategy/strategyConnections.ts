@@ -5,7 +5,9 @@
 // authoritative and re-sent whole on every committed change, so a
 // reconnecting client needs no deltas. Human actions run through
 // StrategyService as the human caller and answer with `strategy-result`;
-// the changes they cause reach every subscriber.
+// the changes they cause reach every subscriber. The owner's impact
+// decisions and assessment requests (strategy-revision-impact D9) go the same
+// way through ImpactService, and every detail carries the composed impact.
 //
 // Draft B boundary (design D3b, ruled 2026-10-13): the forged-WS-client
 // vector is explicitly accepted, exactly as for `team-task-*` — human
@@ -46,7 +48,10 @@ export class StrategyConnections {
   private send(connection: ChatConnection, teamPath: string, subscription: Subscription) {
     const strategy = this.manager.strategies.store.forTeam(subscription.teamId)
     connection.send({ type: 'strategy-snapshot', teamPath, teamId: subscription.teamId, strategy })
-    if (strategy) connection.send({ type: 'strategy-detail', teamPath, teamId: subscription.teamId, detail: this.manager.strategies.store.detail(strategy.id)! })
+    if (!strategy) return
+    // Impact (strategy-revision-impact D9) is composed beside the stored detail, never part of it.
+    const impact = this.manager.impact.detail(subscription.teamId)
+    connection.send({ type: 'strategy-detail', teamPath, teamId: subscription.teamId, detail: this.manager.strategies.store.detail(strategy.id)!, impact })
   }
 
   async handle(connection: ChatConnection, message: StrategyClientMessage) {
@@ -132,6 +137,28 @@ export class StrategyConnections {
             return
           }
           connection.send({ type: 'strategy-result', teamPath, requestId })
+          return
+        }
+        case 'strategy-impact-decide': {
+          const outcome = await this.manager.impact.decide(caller, {
+            reviewId: message.reviewId, planId: message.planId, disposition: message.disposition, rationale: message.rationale,
+            expectedDecisionId: message.expectedDecisionId, commandId: message.commandId,
+            ...(message.proposalId !== undefined ? { proposalId: message.proposalId } : {}),
+          })
+          if (!outcome.ok) {
+            connection.send({ type: 'strategy-result', teamPath, requestId, error: outcome.message })
+            return
+          }
+          connection.send({ type: 'strategy-result', teamPath, requestId, decision: outcome.decision, replayed: outcome.replayed })
+          return
+        }
+        case 'strategy-impact-request': {
+          const outcome = await this.manager.impact.requestAssessment(caller, { reviewId: message.reviewId, group: message.group, commandId: message.commandId })
+          if (!outcome.ok) {
+            connection.send({ type: 'strategy-result', teamPath, requestId, error: outcome.message })
+            return
+          }
+          connection.send({ type: 'strategy-result', teamPath, requestId, messageId: outcome.messageId, replayed: outcome.replayed })
           return
         }
         case 'strategy-withdraw': {

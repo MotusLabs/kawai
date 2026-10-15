@@ -40,6 +40,12 @@ interface Harness {
   changed: string[]
 }
 
+/** Wait until `done` holds: team resolution spawns git, so its hook lands after an unknown delay. */
+async function until(done: () => boolean, timeoutMs = 5_000) {
+  const deadline = Date.now() + timeoutMs
+  while (!done() && Date.now() < deadline) await Bun.sleep(5)
+}
+
 const createManager = (): Harness => {
   const changed: string[] = []
   const manager = new ChatSessionManager({
@@ -58,9 +64,10 @@ test('a session created with a group reaches the hook once its team resolves', a
   try {
     const result = await manager.createAvailableSession({ projectPath: project, groupId: 'devs' })
     expect(result.ok).toBe(true)
-    // onResolved fires from the track promise; let it land.
-    await Bun.sleep(1)
-    if (result.ok) expect(changed).toContain(result.session.id)
+    if (!result.ok) return
+    // onResolved fires from the track promise once git answers; let it land.
+    await until(() => changed.includes(result.session.id))
+    expect(changed).toContain(result.session.id)
   } finally { manager.shutdown() }
 })
 
@@ -71,7 +78,7 @@ test('archive, restore, and kill each reach the hook', async () => {
     expect(result.ok).toBe(true)
     if (!result.ok) return
     const { id } = result.session
-    await Bun.sleep(1)
+    await until(() => changed.includes(id))
     changed.length = 0
     expect(manager.archive(id).ok).toBe(true)
     expect(changed).toEqual([id])
@@ -91,7 +98,7 @@ test('a status move reaches the hook; usage and activity stamps do not', async (
     expect(result.ok).toBe(true)
     if (!result.ok) return
     const { id } = result.session
-    await Bun.sleep(1)
+    await until(() => changed.includes(id))
     changed.length = 0
     const patcher = manager as unknown as {
       applyPatch(sessionId: string, patch: Partial<{ status: string; lastActivityAt: string }>): void
@@ -113,7 +120,7 @@ test('a task-bound turn end writes a durable row with its outcome; a taskless on
     const free = await manager.createAvailableSession({ projectPath: project, groupId: 'devs' })
     expect(bound.ok && free.ok).toBe(true)
     if (!bound.ok || !free.ok) return
-    await Bun.sleep(1) // team resolution lands
+    await until(() => manager.teams.teamOf(bound.session.id) !== undefined && manager.teams.teamOf(free.session.id) !== undefined)
     const feed = (manager as unknown as { handleDriverEvent: (sessionId: string, event: Record<string, unknown>) => void })
       .handleDriverEvent.bind(manager)
     const turnEnd = (id: string, at: string, subtype = 'success') => ({

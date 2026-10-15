@@ -134,8 +134,12 @@ export interface ChatSessionManagerOptions {
    * there because publishes coalesce per team.
    */
   onSessionRecordChange?: (sessionId: string) => void
-  /** Every committed plan write, and every change to a task linked to a plan (wired to the Plans view push in bootstrap.ts). */
-  onPlanChange?: (teamId: string, planId: string) => void
+  /**
+   * Every committed plan write, and every change to a task linked to a plan
+   * (wired to the Plans view push in bootstrap.ts); no plan id = every plan of
+   * the team (a strategy or impact change moves every plan's impact gate).
+   */
+  onPlanChange?: (teamId: string, planId?: string) => void
   /** Conversation-event sink (wired to the WS broadcast in index.ts). */
   onEvent: (sessionId: string, event: ChatEvent) => void
   /** Command-state sink (wired to the chat-commands push in index.ts). */
@@ -973,10 +977,26 @@ export class ChatSessionManager {
       pinDisposition: (planId, revision) => this.impact.pinDisposition(planId, revision),
       ...(options.profileCatalogHome ? { homeDir: options.profileCatalogHome } : {}),
     })
-    this.plans.store.subscribe(plan => this.options.onPlanChange?.(plan.teamId, plan.id))
+    // The impact assessment derives from plans, and every plan's impact gate
+    // from the strategy and the impact records (strategy-revision-impact D9):
+    // each of the three stores refreshes both views of its team.
+    const strategyTeam = (strategy: { repoBindings: Array<{ kind: string; root: string }> } | null) =>
+      strategy?.repoBindings.find(binding => binding.kind === 'team')?.root
+    this.plans.store.subscribe(plan => {
+      this.options.onPlanChange?.(plan.teamId, plan.id)
+      this.options.onStrategyChange?.(plan.teamId)
+    })
     this.strategies.store.subscribe(strategy => {
-      const teamId = strategy.repoBindings.find(binding => binding.kind === 'team')?.root
-      if (teamId) this.options.onStrategyChange?.(teamId)
+      const teamId = strategyTeam(strategy)
+      if (!teamId) return
+      this.options.onStrategyChange?.(teamId)
+      this.options.onPlanChange?.(teamId)
+    })
+    this.impact.store.subscribe(strategyId => {
+      const teamId = strategyTeam(this.strategies.store.get(strategyId))
+      if (!teamId) return
+      this.options.onStrategyChange?.(teamId)
+      this.options.onPlanChange?.(teamId)
     })
     // A retitled task re-labels the headers of the sessions working on it.
     this.tasks.store.subscribe(task => {

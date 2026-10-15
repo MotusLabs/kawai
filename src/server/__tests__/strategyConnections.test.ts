@@ -12,6 +12,10 @@ import { ChatConnections } from '../chat/ChatConnections'
 import { initDatabase, type SessionDatabase } from '../db'
 import { StrategyService } from '../strategy/StrategyService'
 import { StrategyStore } from '../strategy/strategyStore'
+import { ImpactService } from '../strategy/ImpactService'
+import { ImpactStore } from '../strategy/impactStore'
+import { PlanStore } from '../plans/planStore'
+import { MailboxStore } from '../team/mailboxStore'
 import type { TeamIdentity } from '../team/teamIdentity'
 import type { ClientMessage, ServerMessage } from '../../shared/types'
 
@@ -35,6 +39,9 @@ beforeEach(() => {
     whenRestored: () => Promise.resolve(),
     teamScopes: { resolve: async (teamPath: string) => teams.get(teamPath) },
     strategies,
+    impact: new ImpactService(new ImpactStore(db.db), {
+      strategies: strategies.store, plans: new PlanStore(db.db), mail: new MailboxStore(db.db), getSession: () => undefined,
+    }),
   } as unknown as ChatSessionManager
   connections = new ChatConnections(manager)
   strategies.store.subscribe(strategy => {
