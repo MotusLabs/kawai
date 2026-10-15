@@ -37,17 +37,22 @@ const CAPTURE = {
 }
 
 describe('zaiQuotaUrl', () => {
-  test('joins the path onto the base URL with exactly one slash', () => {
-    expect(zaiQuotaUrl('https://api.z.ai')).toBe('https://api.z.ai/api/monitor/usage/quota/limit')
-    expect(zaiQuotaUrl('https://api.z.ai/')).toBe('https://api.z.ai/api/monitor/usage/quota/limit')
-    expect(zaiQuotaUrl('https://api.z.ai//')).toBe('https://api.z.ai/api/monitor/usage/quota/limit')
+  test.each(['', '/', '//', '/api/anthropic', '/api/anthropic/', '/v4', '/api/anthropic/?route=glm#model'])(
+    'resolves the quota endpoint from the origin of a base ending in %s', suffix => {
+      expect(zaiQuotaUrl(`https://api.z.ai${suffix}`)).toBe('https://api.z.ai/api/monitor/usage/quota/limit')
+    }
+  )
+
+  test('keeps the scheme and port, but drops URL userinfo and model routing', () => {
+    expect(zaiQuotaUrl('http://user:password@gateway.test:8080/api/anthropic/?route=glm#model'))
+      .toBe('http://gateway.test:8080/api/monitor/usage/quota/limit')
   })
 })
 
 describe('fetchZaiUsage', () => {
   test('sends the raw token as Authorization and parses the capture', async () => {
     const { impl, calls } = fetchSaying(jsonResponse(CAPTURE))
-    const pull = await fetchZaiUsage(BASE, 'sk-glm-token', impl)
+    const pull = await fetchZaiUsage(`${BASE}/api/anthropic/?route=glm#model`, 'sk-glm-token', impl)
     expect(pull.ok).toBe(true)
     if (!pull.ok) return
     expect(pull.report.source).toBe('provider')
@@ -68,6 +73,13 @@ describe('fetchZaiUsage', () => {
     expect(headers.Authorization).toBeUndefined()
   })
 
+  test('an invalid base fails without making a request or exposing the input', async () => {
+    const { impl, calls } = fetchSaying(jsonResponse(CAPTURE))
+    const pull = await fetchZaiUsage('not-a-url?secret=hidden', 'sk-glm-token', impl)
+    expect(pull).toEqual({ ok: false, outcome: 'unreachable', reason: 'quota request failed for invalid base URL' })
+    expect(calls).toEqual([])
+  })
+
   test('a Z.AI-shaped refusal over HTTP 200 (success:false) is provider-refused', async () => {
     const { impl } = fetchSaying(
       jsonResponse({ code: 1001, msg: 'Authentication parameter not received', success: false })
@@ -76,14 +88,32 @@ describe('fetchZaiUsage', () => {
     expect(pull).toMatchObject({ ok: false, outcome: 'provider-refused' })
   })
 
-  test('HTTP 401 is provider-refused', async () => {
-    const { impl } = fetchSaying(jsonResponse({ code: 401, msg: 'token expired' }, 401))
+  test.each([
+    { body: { code: 401 }, outcome: 'provider-refused' },
+    { body: { code: 403 }, outcome: 'provider-refused' },
+    { body: { code: 1001 }, outcome: 'provider-refused' },
+    { body: { code: 404 }, outcome: 'not-provider' },
+    { body: { code: 405 }, outcome: 'not-provider' },
+    { body: { code: 500, msg: '404 NOT_FOUND' }, outcome: 'not-provider' },
+    { body: { code: 500, msg: ' 404 NOT_FOUND\n' }, outcome: 'not-provider' },
+    { body: { code: 500, msg: 'upstream unavailable' }, outcome: 'unreachable' },
+    { body: { code: 9999 }, outcome: 'unreachable' },
+    { body: {}, outcome: 'unreachable' },
+    { body: { code: '401' }, outcome: 'unreachable' },
+    { body: { code: 500, msg: 'unrelated text containing 404 NOT_FOUND' }, outcome: 'unreachable' },
+  ])('classifies HTTP 200 failure $body as $outcome', async ({ body, outcome }) => {
+    const { impl } = fetchSaying(jsonResponse({ success: false, ...body }))
+    expect(await fetchZaiUsage(BASE, 'sk-glm-token', impl)).toMatchObject({ ok: false, outcome })
+  })
+
+  test.each([401, 403])('HTTP %s is provider-refused', async status => {
+    const { impl } = fetchSaying(jsonResponse({ code: status, msg: 'token expired' }, status))
     const pull = await fetchZaiUsage(BASE, 'sk-glm-token', impl)
     expect(pull).toMatchObject({ ok: false, outcome: 'provider-refused' })
   })
 
-  test('HTTP 404 is not-provider (the endpoint does not exist there)', async () => {
-    const { impl } = fetchSaying(new Response('nope', { status: 404 }))
+  test.each([404, 405])('HTTP %s is not-provider (the endpoint does not exist there)', async status => {
+    const { impl } = fetchSaying(new Response('nope', { status }))
     const pull = await fetchZaiUsage(BASE, 'sk-glm-token', impl)
     expect(pull).toMatchObject({ ok: false, outcome: 'not-provider' })
   })
@@ -117,21 +147,28 @@ describe('fetchZaiUsage', () => {
   test('failure reasons name only the host, never the token', async () => {
     for (const response of [
       jsonResponse({ success: false }),
+      jsonResponse({ success: false, code: 1001, msg: 'response-secret' }),
+      jsonResponse({ success: false, code: 500, msg: '404 NOT_FOUND' }),
+      jsonResponse({ success: false, code: 500, msg: 'response-secret' }),
       new Response('nope', { status: 404 }),
       new Response('denied', { status: 403 }),
       new Response('busy', { status: 503 }),
       new Response('<html/>'),
     ]) {
       const { impl } = fetchSaying(response)
-      const pull = await fetchZaiUsage(BASE, 'sk-secret-glm-token', impl)
+      const pull = await fetchZaiUsage(`${BASE}/api/anthropic?query-secret=1#fragment-secret`, 'sk-secret-glm-token', impl)
       if (pull.ok) continue
       expect(pull.reason).not.toContain('sk-secret-glm-token')
+      expect(pull.reason).not.toMatch(/query-secret|fragment-secret|response-secret|404 NOT_FOUND/)
       expect(pull.reason).toContain('zai.ruslan.casa')
     }
     const impl = (async () => {
       throw new Error('boom with sk-secret-glm-token inside')
     }) as unknown as typeof fetch
     const pull = await fetchZaiUsage(BASE, 'sk-secret-glm-token', impl)
-    if (!pull.ok) expect(pull.reason).not.toContain('sk-secret-glm-token')
+    if (!pull.ok) {
+      expect(pull.reason).not.toContain('sk-secret-glm-token')
+      expect(pull.reason).not.toContain('boom')
+    }
   })
 })

@@ -48,9 +48,15 @@ already per-attach, not per-render.
 
 `snapshotCache` (Map + MAX entries + invalidate/clear) moves as a module singleton with
 its two existing exported functions — it is genuinely app-global today and its consumers
-(App, sessionMessages) import by function. `droppedOutputLog` and `iosRepaint` likewise
-move as module singletons preserving their test hooks
-(`resetDroppedOutputRateLimiterForTests`).
+(App, sessionMessages) import by function. `droppedOutputLog` likewise moves as a module
+singleton preserving its test hooks (`resetDroppedOutputRateLimiterForTests`).
+
+> Correction (post-review, 2026-10-15): the paragraph above originally said `iosRepaint`
+> also moves as a module singleton — that misdescribed the original code, whose repaint
+> timer/rAF/prevDisplay were per-hook refs (a41323f:476-478). A singleton would let one
+> hook instance cancel another's in-flight repaint. `iosRepaint` therefore exposes a
+> per-instance factory, `createIosRepaint(target)` returning `{ schedule, cancel }`,
+> created once per hook and held in a ref; the visibility handlers take the controller.
 
 ### D4: Browser-API seams stay injectable
 

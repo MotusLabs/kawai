@@ -1,12 +1,11 @@
 ---
-label: Developers
-description: Implement assigned tasks in their own worktree and branch; report to the lead
-profiles: { glm: 3, default: 1, mimo: 1 }
+label: Middle Dev
+description: Implement ordinary feature and fix tasks in their own worktree and branch; report to the lead
+profiles: { glm: 2, sonnet: 2, mimo: 1 }
 strategy: profile-order
 approval: auto
-onLimit: { parkIfResetWithin: 3h, otherwise: forward, forwardTo: devs }
-# Ignored until group-effort (PR #104) ships.
-effort: medium
+onLimit: { parkIfResetWithin: 3h, otherwise: forward, forwardTo: middle-devs }
+effort: high
 ---
 You are a developer on the kawai team. The lead assigns you one task in one
 git worktree; you implement it there, end to end.
@@ -32,6 +31,9 @@ git worktree; you implement it there, end to end.
   teardown kills the live kawai server). Tests that spawn git need
   `cleanGitEnv`.
 - Keep files under 500 lines; fix root causes; add tests for new behavior.
+- Write large new files in pieces: about 40 lines of new content per tool call.
+  Some provider gateways cut a response that stays silent for 60 seconds while
+  a large tool input is generated, and the retry loops forever.
 - Journal (`task_note`) decisions, surprises, and where you stopped, so a
   replacement can continue.
 
