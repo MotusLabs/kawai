@@ -2,12 +2,13 @@
 // copy that never fails a concurrent commit; corrupt copies marked and kept out
 // of rotation; the hourly interval skipped while nothing changed; leftovers
 // and per-reason rotation. Every file lives in a temporary directory.
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { Database } from 'bun:sqlite'
 import { initDatabase } from '../db'
+import { logger } from '../logger'
 import { DatabaseBackups, integrityCheck } from '../dbSafety/backups'
 import { RETENTION, backupFileName, formatStamp, parseBackupFile, rotationVictims, type BackupFile } from '../dbSafety/backupFiles'
 
@@ -97,19 +98,39 @@ describe('a snapshot', () => {
     expect(status.newest.find(entry => entry.reason === 'interval')?.name).toBe(path.basename(first.path))
   })
 
-  test('a copy that fails transiently is retried, and fails the snapshot only after three attempts', () => {
+  test('a spurious "Out of memory" copy is retried and logged, failing only after three attempts', () => {
     const session = initDatabase({ path: dbPath })
+    const warn = spyOn(logger, 'warn').mockImplementation(() => {})
     let calls = 0
-    const flaky = (failures: number) => () => {
+    const flaky = (failures: number, message = 'Out of memory') => () => {
       calls++
-      if (calls <= failures) throw new Error('Out of memory')
+      if (calls <= failures) throw new Error(message)
       return session.db.serialize()
     }
-    expect(new DatabaseBackups({ db: session.db, dbPath, serialize: flaky(2) }).snapshotSync('interval')).toMatchObject({ ok: true })
-    calls = 0
-    expect(new DatabaseBackups({ db: session.db, dbPath, serialize: flaky(3) }).snapshotSync('interval'))
-      .toMatchObject({ ok: false, error: 'Out of memory' })
-    session.close()
+    try {
+      expect(new DatabaseBackups({ db: session.db, dbPath, serialize: flaky(2) }).snapshotSync('interval')).toMatchObject({ ok: true })
+      expect(calls).toBe(3)
+      const retries = () => warn.mock.calls.filter(([event]) => event === 'db_backup_serialize_retry')
+      expect(retries().map(([, fields]) => fields)).toEqual([
+        { attempt: 1, error: 'Out of memory' },
+        { attempt: 2, error: 'Out of memory' },
+      ])
+      calls = 0
+      expect(new DatabaseBackups({ db: session.db, dbPath, serialize: flaky(3) }).snapshotSync('interval'))
+        .toMatchObject({ ok: false, error: 'Out of memory' })
+      expect(calls).toBe(3)
+
+      // Any other error fails on the first try, with no retry logged.
+      calls = 0
+      warn.mockClear()
+      expect(new DatabaseBackups({ db: session.db, dbPath, serialize: flaky(1, 'disk I/O error') }).snapshotSync('interval'))
+        .toMatchObject({ ok: false, error: 'disk I/O error' })
+      expect(calls).toBe(1)
+      expect(retries()).toEqual([])
+    } finally {
+      warn.mockRestore()
+      session.close()
+    }
   })
 
   test('refuses inside a transaction instead of copying mid-write', async () => {

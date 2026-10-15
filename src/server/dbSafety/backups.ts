@@ -175,7 +175,8 @@ export class DatabaseBackups {
   /**
    * `serialize()` waits on the busy handler, but under a concurrent outside
    * writer it rarely returns no copy (bun reports "Out of memory"); measured
-   * about once in 800 copies. Retry before reporting the snapshot failed.
+   * about once in 800 copies. Only that error is retried, each retry logged;
+   * any other error fails the snapshot on the first try.
    */
   private copy(): Uint8Array {
     const serialize = this.options.serialize ?? (() => this.options.db.serialize())
@@ -183,7 +184,8 @@ export class DatabaseBackups {
       try {
         return serialize()
       } catch (error) {
-        if (attempt >= SERIALIZE_ATTEMPTS) throw error
+        if (attempt >= SERIALIZE_ATTEMPTS || !isSpuriousSerializeError(error)) throw error
+        logger.warn('db_backup_serialize_retry', { attempt, error: errorText(error) })
       }
     }
   }
@@ -262,6 +264,11 @@ export function integrityCheck(file: string): string | null {
   } finally {
     copy?.close()
   }
+}
+
+/** bun's report for a `serialize()` that returned no copy under a concurrent writer. */
+function isSpuriousSerializeError(error: unknown): boolean {
+  return errorText(error) === 'Out of memory'
 }
 
 function errorText(error: unknown): string {
