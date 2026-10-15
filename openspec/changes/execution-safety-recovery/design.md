@@ -174,10 +174,10 @@ The allowlist is never derived from the CLI's MCP settings. `mcpServers` is the 
 
 *Alternative:* record no MCP calls. Rejected: P4 asks for every observable send, and an external MCP server is the most direct outward channel an agent has.
 
-### D6. Records: three append-only tables, added by migration 2
+### D6. Records: three append-only tables, added by migration 3
 
 ```sql
--- Migration 2 (`outbound-audit`). Append-only: no UPDATE or DELETE
+-- Migration 3 (`outbound-audit`, after migration 2 `strategy-impact`). Append-only: no UPDATE or DELETE
 -- statement exists for these tables (E3).
 CREATE TABLE outbound_calls (
   id TEXT PRIMARY KEY,                 -- 'obc-<uuid>'
@@ -472,9 +472,9 @@ AGENTS.md gains the rule that a change adding a recovery mechanism or exclusive 
 ## Migration Plan
 
 1. Land the baseline and backups first (task group 6). The first start records version 1 and takes a `startup` snapshot. Nothing else changes.
-2. Migration 2 creates the audit tables (task group 3) and takes `pre-migration-2` first.
+2. Migration 3 creates the audit tables (task group 3) and takes `pre-migration-3` first, after migration 2 `strategy-impact` (strategy-revision-impact).
 3. The prompt note and loader (groups 1–2) need no migration. They reach each agent at its next spawn.
-4. Rollback: an older build refuses the migrated database (D14). Restore `pre-migration-2` to go back.
+4. Rollback: an older build refuses the migrated database (D14). Restore `pre-migration-3` to go back.
 
 ## Open Questions
 

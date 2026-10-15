@@ -73,6 +73,8 @@ export const CHAT_CONNECTION_TYPES = [
   'strategy-submit',
   'strategy-approve',
   'strategy-withdraw',
+  'strategy-impact-decide',
+  'strategy-impact-request',
   'team-workspace-open',
   'team-workspace-close',
   'team-plans-open',

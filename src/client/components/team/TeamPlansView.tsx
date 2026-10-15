@@ -9,7 +9,9 @@
 // plan in its URL through `onSelectedPlan`).
 // List and detail are one column with a Back control, so the same flow
 // works on a phone. Every control disables while disconnected; refusals,
-// with each failing approval precondition, show inline.
+// with each failing approval precondition, show inline — a pin refusal with
+// its strategy impact (strategy-revision-impact D6) beside it, the same state
+// the plan's impact badge shows, linking to the impact review.
 import { useEffect, useRef } from 'react'
 import type { SendClientMessage, Session } from '@shared/types'
 import { PLAN_STATE_LABELS, type PlanDetail, type PlanSummary } from '@shared/plans'
@@ -20,8 +22,10 @@ import PlanPolicySection from './PlanPolicySection'
 import PlanRevisionsSection from './PlanRevisionsSection'
 import PlanLifecycleControls from './PlanLifecycleControls'
 import { pinLabel, planActorLabel } from './planLabels'
+import PlanImpactBadge, { ImpactGateText, OpenImpactReview } from './PlanImpactBadge'
+import type { PlanImpact } from '@shared/strategyImpact'
 
-export default function TeamPlansView({ teamPath, view, sendMessage, connected, connectionEpoch, sessions, onOpenTask, onSelectedPlan }: {
+export default function TeamPlansView({ teamPath, view, sendMessage, connected, connectionEpoch, sessions, onOpenTask, onSelectedPlan, onOpenImpactReview }: {
   teamPath: string
   view: PlanView
   sendMessage: SendClientMessage
@@ -32,6 +36,8 @@ export default function TeamPlansView({ teamPath, view, sendMessage, connected, 
   onOpenTask?: (taskId: string) => void
   /** The human opened a plan or went back to the list (the host's location follows). */
   onSelectedPlan?: (planId: string | null) => void
+  /** Open the impact review of a strategy revision (the Strategy tab's impact sub-view). */
+  onOpenImpactReview?: (revision: number) => void
 }) {
   const selected = view.selected
   useEffect(() => {
@@ -66,17 +72,28 @@ export default function TeamPlansView({ teamPath, view, sendMessage, connected, 
     {view.error && <div role="alert" data-testid="plan-error" className="border-b border-border p-3 text-chat-meta text-chat-danger">
       <p>{view.error}</p>
       {view.failures.length > 0 && <ul className="mt-1 list-disc pl-5">{view.failures.map(failure => <li key={failure.name}><code>{failure.name}</code>: {failure.message}</li>)}</ul>}
+      {view.refusalImpact && <p className="mt-1" data-testid="plan-refusal-impact">
+        <ImpactGateText gate={view.refusalImpact} />
+        <OpenImpactReview revision={(selected ? view.detailImpact ?? view.impact[selected] : null)?.reviewRevision ?? null} onOpen={onOpenImpactReview} />
+      </p>}
     </div>}
     <div className="min-h-0 flex-1 overflow-y-auto p-3">
       {selected
         ? <PlanDetailPane teamPath={teamPath} planId={selected} detail={view.detail} sessions={sessions} sendMessage={sendMessage}
-          connected={connected} busy={busy} onBack={() => select(null)} onOpenTask={onOpenTask} />
-        : <PlanList plans={view.plans} loading={view.loading} onSelect={select} />}
+          connected={connected} busy={busy} onBack={() => select(null)} onOpenTask={onOpenTask}
+          impact={view.detailImpact ?? view.impact[selected] ?? null} onOpenImpactReview={onOpenImpactReview} />
+        : <PlanList plans={view.plans} loading={view.loading} onSelect={select} impact={view.impact} onOpenImpactReview={onOpenImpactReview} />}
     </div>
   </div>
 }
 
-function PlanList({ plans, loading, onSelect }: { plans: PlanSummary[] | null; loading: boolean; onSelect: (planId: string) => void }) {
+function PlanList({ plans, loading, onSelect, impact, onOpenImpactReview }: {
+  plans: PlanSummary[] | null
+  loading: boolean
+  onSelect: (planId: string) => void
+  impact: Record<string, PlanImpact>
+  onOpenImpactReview?: (revision: number) => void
+}) {
   if (loading || plans === null) return <p role="status" className="text-chat-meta text-secondary">Loading plans…</p>
   if (plans.length === 0) {
     return <p className="text-chat-meta text-secondary" data-testid="plans-empty">No plans yet. A lead whose group sets <code>canCreatePlans: true</code> drafts one with the plan tools; you review and approve it here.</p>
@@ -93,12 +110,14 @@ function PlanList({ plans, loading, onSelect }: { plans: PlanSummary[] | null; l
           {' · '}{plan.currentApprovedRevision === null ? 'not pinned yet' : pinLabel(plan.pin)}
           {plan.linkedTaskCount > 0 ? ` · ${plan.linkedTaskCount} linked task${plan.linkedTaskCount === 1 ? '' : 's'}` : ''}
         </span>
+        <span className="block"><PlanImpactBadge impact={impact[plan.id]} link={false} /></span>
       </button>
+      {impact[plan.id]?.group === 'affected' && <OpenImpactReview revision={impact[plan.id]!.reviewRevision} onOpen={onOpenImpactReview} />}
     </li>)}
   </ul>
 }
 
-function PlanDetailPane({ teamPath, planId, detail, sessions, sendMessage, connected, busy, onBack, onOpenTask }: {
+function PlanDetailPane({ teamPath, planId, detail, sessions, sendMessage, connected, busy, onBack, onOpenTask, impact, onOpenImpactReview }: {
   teamPath: string
   planId: string
   detail: PlanDetail | null
@@ -108,6 +127,8 @@ function PlanDetailPane({ teamPath, planId, detail, sessions, sendMessage, conne
   busy: boolean
   onBack: () => void
   onOpenTask?: (taskId: string) => void
+  impact: PlanImpact | null
+  onOpenImpactReview?: (revision: number) => void
 }) {
   const heading = useRef<HTMLHeadingElement | null>(null)
   const loaded = detail?.plan.id === planId
@@ -125,6 +146,7 @@ function PlanDetailPane({ teamPath, planId, detail, sessions, sendMessage, conne
       {PLAN_STATE_LABELS[plan.state]} · created by {planActorLabel(plan.creator, sessions)} · owner Human
       {approved ? ` · approved revision ${approved.revision}` : ' · no approved revision'}
     </p>
+    <PlanImpactBadge impact={impact} onOpenReview={onOpenImpactReview} />
     {!shown && <p className="mt-2 text-chat-meta text-secondary">No revision has been submitted yet; the author's draft is listed under Revisions.</p>}
     {shown && <>
       {shown !== approved && <p className="mt-2 text-chat-meta text-approval" data-testid="plan-not-approved">Showing revision {shown.revision}, in review — not approved, so not yet the direction.</p>}

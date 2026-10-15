@@ -49,7 +49,7 @@ function overwriteDraftBehindServer(storedPurpose: string) {
     import { normalizeStrategyContent } from './src/shared/productStrategy';
     const [file, purpose] = JSON.parse(await Bun.stdin.text());
     const db = new Database(file); db.exec('PRAGMA busy_timeout = 5000');
-    const strategy = db.query('SELECT id FROM product_strategies').get();
+    const strategy = db.query('SELECT id FROM product_strategies WHERE product_id = \\'browser-product\\'').get();
     if (!strategy) throw new Error('no strategy record');
     const content = normalizeStrategyContent({ purpose });
     db.run('UPDATE strategy_drafts SET content_json = ?, content_hash = ?, updated_at = ? WHERE strategy_id = ? AND draft_id = \\'human\\'',

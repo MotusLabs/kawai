@@ -88,6 +88,8 @@ import type { MailboxManagement } from '../team/mailboxManagement'
 import { StrategyService } from '../strategy/StrategyService'
 import { StrategyStore } from '../strategy/strategyStore'
 import { PlanService } from '../plans/PlanService'
+import { ImpactService } from '../strategy/ImpactService'
+import { ImpactStore } from '../strategy/impactStore'
 import type { TeamMessage, TeamWorktreeOccupancy, WaitingReason } from '../../shared/team'
 import { MailDispatcher } from '../team/dispatcher'
 import { receiptMessageId } from '../team/receipt'
@@ -136,8 +138,12 @@ export interface ChatSessionManagerOptions {
    * there because publishes coalesce per team.
    */
   onSessionRecordChange?: (sessionId: string) => void
-  /** Every committed plan write, and every change to a task linked to a plan (wired to the Plans view push in bootstrap.ts). */
-  onPlanChange?: (teamId: string, planId: string) => void
+  /**
+   * Every committed plan write, and every change to a task linked to a plan
+   * (wired to the Plans view push in bootstrap.ts); no plan id = every plan of
+   * the team (a strategy or impact change moves every plan's impact gate).
+   */
+  onPlanChange?: (teamId: string, planId?: string) => void
   /** Conversation-event sink (wired to the WS broadcast in index.ts). */
   onEvent: (sessionId: string, event: ChatEvent) => void
   /** Command-state sink (wired to the chat-commands push in index.ts). */
@@ -971,17 +977,43 @@ export class ChatSessionManager {
       getSession: id => this.records.get(id),
       ...(options.profileCatalogHome ? { homeDir: options.profileCatalogHome } : {}),
     })
+    // Strategy impact (strategy-revision-impact): the owner's decisions over
+    // the same database; its gate is approval's `pinDisposition` (contract C-I1).
+    this.impact = new ImpactService(new ImpactStore(options.db.db), {
+      strategies: this.strategies.store,
+      plans: this.teamMail.plans,
+      mail: this.mailbox.store,
+      getSession: id => this.records.get(id),
+      ...(options.profileCatalogHome ? { homeDir: options.profileCatalogHome } : {}),
+    })
     // Durable plans: the service over the mailbox's plan store (the same one
     // the task link reads), pinning against the strategy store above.
     this.plans = new PlanService(this.teamMail.plans, {
       getSession: id => this.records.get(id),
       strategies: this.strategies.store,
+      pinDisposition: (planId, revision) => this.impact.pinDisposition(planId, revision),
       ...(options.profileCatalogHome ? { homeDir: options.profileCatalogHome } : {}),
     })
-    this.plans.store.subscribe(plan => this.options.onPlanChange?.(plan.teamId, plan.id))
+    // The impact assessment derives from plans, and every plan's impact gate
+    // from the strategy and the impact records (strategy-revision-impact D9):
+    // each of the three stores refreshes both views of its team.
+    const strategyTeam = (strategy: { repoBindings: Array<{ kind: string; root: string }> } | null) =>
+      strategy?.repoBindings.find(binding => binding.kind === 'team')?.root
+    this.plans.store.subscribe(plan => {
+      this.options.onPlanChange?.(plan.teamId, plan.id)
+      this.options.onStrategyChange?.(plan.teamId)
+    })
     this.strategies.store.subscribe(strategy => {
-      const teamId = strategy.repoBindings.find(binding => binding.kind === 'team')?.root
-      if (teamId) this.options.onStrategyChange?.(teamId)
+      const teamId = strategyTeam(strategy)
+      if (!teamId) return
+      this.options.onStrategyChange?.(teamId)
+      this.options.onPlanChange?.(teamId)
+    })
+    this.impact.store.subscribe(strategyId => {
+      const teamId = strategyTeam(this.strategies.store.get(strategyId))
+      if (!teamId) return
+      this.options.onStrategyChange?.(teamId)
+      this.options.onPlanChange?.(teamId)
     })
     // A retitled task re-labels the headers of the sessions working on it.
     this.tasks.store.subscribe(task => {
@@ -1138,6 +1170,8 @@ export class ChatSessionManager {
   readonly turnEnds: ChatTurnEndStore
   /** Durable plans (durable-plans); the plan tools and UI actions go through it. */
   readonly plans: PlanService
+  /** Strategy impact reviews (strategy-revision-impact); the impact tools and UI actions go through it. */
+  readonly impact: ImpactService
   readonly dispatcher: MailDispatcher
   private readonly teamMail: SessionMailbox
 

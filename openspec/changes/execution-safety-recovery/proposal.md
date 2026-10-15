@@ -76,7 +76,7 @@ None. No existing requirement changes:
 - **Client:** the Team page's **Audit** tab gets `TeamAuditView` and `teamAuditStore`.
 - **Records:**
   - `schema_migrations`;
-  - `outbound_calls`, `outbound_outcomes`, and `outbound_acknowledgements`, all append-only and added by migration 2;
+  - `outbound_calls`, `outbound_outcomes`, and `outbound_acknowledgements`, all append-only and added by migration 3 (after migration 2 `strategy-impact`);
   - `~/.agentboard/backups/`.
 - **Docs:** `docs/recovery-matrix.md`, `docs/operations/database-backups.md`, and AGENTS.md bullets.
 - **Depends on:**

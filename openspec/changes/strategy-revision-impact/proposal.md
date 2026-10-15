@@ -84,7 +84,7 @@ None. Strategy approval still creates exactly one impact-review row and nothing 
   - A `StrategyImpactReview.tsx` section in the Strategy view.
   - A badge and link in the Plans view.
   - Store wiring in `strategyStore.ts` and the plan store.
-- **Data.** An additive migration with three new tables. Existing impact-review rows are untouched.
+- **Data.** An additive schema migration (version 2, `strategy-impact`) with three new tables. Existing impact-review rows are untouched.
 - **Docs.** AGENTS.md How It Works bullets for impact review, dispositions, the gate, and the tools. The "exactly four strategy tools" wording is updated to name the two impact tools.
 - **Tests.**
   - Unit coverage of grouping, dispositions, idempotency, the gate (with durable-plans' approval), withdrawn directions, supersession, derived state, the request, cross-team refusals, and persistence.

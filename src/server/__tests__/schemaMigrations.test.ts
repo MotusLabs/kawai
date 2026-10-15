@@ -83,6 +83,9 @@ function userVersion(file: string): number {
   try { return (db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version } finally { db.close() }
 }
 
+/** A build that knows only the baseline: the runner's behaviour pinned apart from this build's own migrations. */
+const BASELINE_ONLY = { migrations: [] as readonly Migration[] }
+
 const addColumn = (version: number, table: string, column: string): Migration => ({
   version, name: `add-${column}`, up: db => db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} TEXT`),
 })
@@ -92,8 +95,7 @@ describe('baseline', () => {
     preChangeDatabase()
     const before = dump(dbPath)
     expect(Object.keys(before).length).toBeGreaterThan(20)
-    // The empty registry holds this test on the baseline step alone.
-    const db = initDatabase({ path: dbPath, appVersion: '9.9.9-test', migrations: [] })
+    const db = initDatabase({ path: dbPath, ...BASELINE_ONLY, appVersion: '9.9.9-test' })
     expect(db.getChatSession('chat-1')).toMatchObject({ name: 'one', groupId: 'devs' })
     db.close()
     expect(dump(dbPath)).toEqual(before)
@@ -109,18 +111,18 @@ describe('baseline', () => {
     expect(Object.keys(dump(dbPath))).toEqual(expect.arrayContaining(['agent_sessions', 'team_messages', 'plans', 'product_strategies', 'chat_turn_ends']))
   })
 
-  test('this build ships migration 2 outbound-audit, and a version-1 database opens applying it once', () => {
-    expect(MIGRATIONS.map(migration => [migration.version, migration.name])).toEqual([[2, 'outbound-audit']])
-    expect(newestVersion()).toBe(2)
-    initDatabase({ path: dbPath, migrations: [] }).close() // hold at version 1
-    const db = initDatabase({ path: dbPath })
-    db.close()
-    expect(versions(dbPath).map(row => [row.version, row.name])).toEqual([[1, 'baseline'], [2, 'outbound-audit']])
-    expect(Object.keys(dump(dbPath))).toEqual(expect.arrayContaining(['outbound_calls', 'outbound_outcomes', 'outbound_acknowledgements']))
-    // The second open applies nothing further.
+  test('this build ships migrations 2 and 3, and a second open applies nothing', () => {
+    expect(MIGRATIONS.map(migration => [migration.version, migration.name])).toEqual([[2, 'strategy-impact'], [3, 'outbound-audit']])
+    expect(newestVersion()).toBe(3)
+    initDatabase({ path: dbPath }).close()
+    expect(versions(dbPath).map(row => [row.version, row.name])).toEqual([[1, 'baseline'], [2, 'strategy-impact'], [3, 'outbound-audit']])
+    expect(Object.keys(dump(dbPath))).toEqual(expect.arrayContaining([
+      'strategy_impact_proposals', 'outbound_calls', 'outbound_outcomes', 'outbound_acknowledgements',
+    ]))
     const before = dump(dbPath)
     initDatabase({ path: dbPath }).close()
     expect(dump(dbPath)).toEqual(before)
+    expect(versions(dbPath).map(row => row.version)).toEqual([1, 2, 3])
   })
 
   test('a database with extra tables records version 1 and keeps them untouched', () => {
@@ -128,7 +130,7 @@ describe('baseline', () => {
     const raw = new Database(dbPath)
     raw.exec("CREATE TABLE branch_experiment (id INTEGER PRIMARY KEY, note TEXT); INSERT INTO branch_experiment (note) VALUES ('keep')")
     raw.close()
-    initDatabase({ path: dbPath, migrations: [] }).close()
+    initDatabase({ path: dbPath, ...BASELINE_ONLY }).close()
     expect(dump(dbPath).branch_experiment?.rows).toEqual([{ id: 1, note: 'keep' }])
     expect(versions(dbPath).map(row => row.version)).toEqual([1])
   })
@@ -145,7 +147,7 @@ describe('baseline', () => {
 
 describe('pending migrations', () => {
   test('apply in order, each after its own pre-migration backup, from version 1', () => {
-    initDatabase({ path: dbPath, migrations: [] }).close()
+    initDatabase({ path: dbPath, ...BASELINE_ONLY }).close()
     const db = initDatabase({ path: dbPath, migrations: [addColumn(2, 'chat_sessions', 'extra_a'), addColumn(3, 'chat_sessions', 'extra_b')] })
     db.close()
     const rows = versions(dbPath)
@@ -163,7 +165,7 @@ describe('pending migrations', () => {
   })
 
   test('a migration that throws midway rolls back, records nothing, and refuses start naming it and its backup', () => {
-    initDatabase({ path: dbPath, migrations: [] }).close()
+    initDatabase({ path: dbPath, ...BASELINE_ONLY }).close()
     const failing: Migration = {
       version: 2, name: 'half-done',
       up: db => { db.exec('ALTER TABLE chat_sessions ADD COLUMN partial TEXT'); throw new Error('boom') },
@@ -182,7 +184,7 @@ describe('pending migrations', () => {
   })
 
   test('a failed pre-migration backup refuses start before up() runs, naming the backup', () => {
-    initDatabase({ path: dbPath, migrations: [] }).close()
+    initDatabase({ path: dbPath, ...BASELINE_ONLY }).close()
     const db = new Database(dbPath)
     let ran = false
     const migration: Migration = { version: 2, name: 'gated', up: () => { ran = true } }
@@ -205,7 +207,7 @@ describe('pending migrations', () => {
   })
 
   test('a corrupt pre-migration copy is marked corrupt and refuses start before up() runs', () => {
-    initDatabase({ path: dbPath, migrations: [] }).close()
+    initDatabase({ path: dbPath, ...BASELINE_ONLY }).close()
     const db = new Database(dbPath)
     const real = new DatabaseBackups({ db, dbPath })
     let calls = 0
@@ -259,13 +261,13 @@ describe('a database newer than the build', () => {
     const torn = 'agentboard-29991231T235959999Z-pre-migration-2.db'
     fs.writeFileSync(path.join(backupsDir, torn), fs.readFileSync(path.join(backupsDir, good)).subarray(0, 1500))
     let error: unknown
-    try { initDatabase({ path: dbPath, migrations: [] }) } catch (caught) { error = caught }
+    try { initDatabase({ path: dbPath, ...BASELINE_ONLY }) } catch (caught) { error = caught }
     const message = (error as Error).message
     expect(message).toContain(good)
     expect(message).not.toContain(torn)
 
     fs.rmSync(path.join(backupsDir, good))
-    try { initDatabase({ path: dbPath, migrations: [] }) } catch (caught) { error = caught }
+    try { initDatabase({ path: dbPath, ...BASELINE_ONLY }) } catch (caught) { error = caught }
     expect((error as Error).message).toContain('No pre-migration-2 backup was found')
   })
 
@@ -273,7 +275,7 @@ describe('a database newer than the build', () => {
     initDatabase({ path: dbPath, migrations: [addColumn(2, 'chat_sessions', 'a')] }).close()
     fs.rmSync(path.join(dir, 'backups'), { recursive: true })
     let error: unknown
-    try { initDatabase({ path: dbPath, migrations: [] }) } catch (caught) { error = caught }
+    try { initDatabase({ path: dbPath, ...BASELINE_ONLY }) } catch (caught) { error = caught }
     expect((error as Error).message).toContain('No pre-migration-2 backup was found')
   })
 

@@ -58,13 +58,17 @@ export class PlanConnections {
   }
 
   private sendList(connection: ChatConnection, teamPath: string, subscription: Subscription) {
-    connection.send({ type: 'team-plans-snapshot', teamPath, teamId: subscription.teamId, plans: this.manager.plans.store.list(subscription.teamId) })
+    connection.send({
+      type: 'team-plans-snapshot', teamPath, teamId: subscription.teamId, plans: this.manager.plans.store.list(subscription.teamId),
+      impact: this.manager.impact.planImpacts(subscription.teamId),
+    })
   }
 
   private sendDetail(connection: ChatConnection, teamPath: string, subscription: Subscription, planId: string) {
     const detail = this.manager.plans.store.detail(planId)
     if (detail && detail.plan.teamId === subscription.teamId) {
-      connection.send({ type: 'team-plan-detail', teamPath, teamId: subscription.teamId, detail })
+      const impact = this.manager.impact.planImpact(subscription.teamId, planId)
+      connection.send({ type: 'team-plan-detail', teamPath, teamId: subscription.teamId, detail, ...(impact ? { impact } : {}) })
     }
   }
 
@@ -146,7 +150,10 @@ export class PlanConnections {
           break
       }
       if (!outcome.ok) {
-        answer({ error: outcome.message, reason: outcome.reason, ...(outcome.failures ? { failures: outcome.failures } : {}) })
+        // A pin refusal names its impact gate (strategy-revision-impact D6); the precondition message stays as shipped.
+        const pinRefused = message.type === 'team-plan-approve' && outcome.failures?.some(failure => failure.name === 'strategy-pin-current')
+        const impact = pinRefused ? this.manager.impact.gate(message.planId, message.revision) : null
+        answer({ error: outcome.message, reason: outcome.reason, ...(outcome.failures ? { failures: outcome.failures } : {}), ...(impact ? { impact } : {}) })
         return
       }
       answer({ plan: outcome.plan, event: outcome.event, replayed: outcome.replayed })

@@ -16,6 +16,7 @@ import type { Database } from 'bun:sqlite'
 import { BUILD_VERSION } from '../version'
 import { outboundAuditMigration } from '../outbound/migration'
 import { applyBaselineSchema } from './baseline'
+import { CREATE_IMPACT_TABLES_SQL } from '../strategy/impactSchema'
 import type { BackupFile } from './backupFiles'
 import type { BackupOutcome } from './backups'
 
@@ -29,7 +30,12 @@ export const BASELINE_VERSION = 1
 export const BASELINE_NAME = 'baseline'
 
 /** Every numbered migration after the baseline, in order; versions dense from 2. */
-export const MIGRATIONS: readonly Migration[] = [outboundAuditMigration]
+export const MIGRATIONS: readonly Migration[] = [
+  // strategy-revision-impact D1: the proposal, decision, and request tables
+  // beside the baseline's strategy_impact_reviews.
+  { version: 2, name: 'strategy-impact', up: db => db.exec(CREATE_IMPACT_TABLES_SQL) },
+  outboundAuditMigration,
+]
 
 export const RESTORE_DOC = 'docs/operations/database-backups.md'
 

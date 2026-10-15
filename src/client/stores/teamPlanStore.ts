@@ -9,10 +9,14 @@
 // slot. A refusal marks the armed command refused: the same command against
 // the same state would be refused again, so the dialog's Confirm stays off
 // until the dialog is reopened, which arms a new command. `reconnected` drops every pending request, so a result lost with the
-// connection never leaves the view busy.
+// connection never leaves the view busy. The impact fields
+// (strategy-revision-impact D6) ride beside the plans: each plan's badge
+// from the snapshot, the selected plan's from its detail, and the gate a
+// `strategy-pin-current` refusal names.
 import { create } from 'zustand'
 import type { ServerMessage } from '@shared/types'
 import type { PlanDetail, PlanSummary } from '@shared/plans'
+import type { ImpactGate, PlanImpact } from '@shared/strategyImpact'
 
 export type PlanAction = 'approve' | 'withdraw' | 'finish' | 'reopen'
 
@@ -36,6 +40,12 @@ export interface PlanView {
   /** The last refusal's message and failing preconditions, until the next command or reopen. */
   error: string | null
   failures: Array<{ name: string; message: string }>
+  /** The refused approval's impact gate, beside its failures. */
+  refusalImpact: ImpactGate | null
+  /** Each plan's impact, by plan id (the list's badges). */
+  impact: Record<string, PlanImpact>
+  /** The selected plan's impact, from its detail. */
+  detailImpact: PlanImpact | null
   /** Armed dialog command ids, by dialog slot (e.g. `approve:<plan>:<revision>`). */
   commands: Record<string, ArmedPlanCommand>
   /** Which slot each pending request was sent from. */
@@ -44,6 +54,7 @@ export interface PlanView {
 
 export const closedPlanView = (): PlanView => ({
   open: false, loading: false, plans: null, selected: null, detail: null, pending: {}, error: null, failures: [], commands: {}, commandRequests: {},
+  refusalImpact: null, impact: {}, detailImpact: null,
 })
 
 interface PlanState {
@@ -76,8 +87,10 @@ export const useTeamPlanStore = create<PlanState>(set => ({
   open: (teamKey, planId) => set(state => {
     const view = state.views[teamKey] ?? closedPlanView()
     return { views: { ...state.views, [teamKey]: {
-      ...view, open: true, loading: view.plans === null, error: null, failures: [],
-      ...(planId !== undefined ? { selected: planId, detail: view.detail?.plan.id === planId ? view.detail : null } : {}),
+      ...view, open: true, loading: view.plans === null, error: null, failures: [], refusalImpact: null,
+      ...(planId !== undefined ? {
+        selected: planId, detail: view.detail?.plan.id === planId ? view.detail : null, detailImpact: view.detail?.plan.id === planId ? view.detailImpact : null,
+      } : {}),
     } } }
   }),
   close: teamKey => set(state => {
@@ -96,7 +109,8 @@ export const useTeamPlanStore = create<PlanState>(set => ({
   select: (teamKey, planId) => set(state => update(state, teamKey, {
     selected: planId,
     detail: planId !== null && state.views[teamKey]?.detail?.plan.id === planId ? state.views[teamKey]!.detail : null,
-    error: null, failures: [],
+    detailImpact: planId !== null && state.views[teamKey]?.detail?.plan.id === planId ? state.views[teamKey]!.detailImpact : null,
+    error: null, failures: [], refusalImpact: null,
   })),
   arm: (teamKey, slot) => set(state => {
     const view = state.views[teamKey]
@@ -118,18 +132,18 @@ export const useTeamPlanStore = create<PlanState>(set => ({
     return commandId
   },
   begin: (teamKey, requestId, action) => set(state => update(state, teamKey, {
-    pending: { ...state.views[teamKey]?.pending, [requestId]: action }, error: null, failures: [],
+    pending: { ...state.views[teamKey]?.pending, [requestId]: action }, error: null, failures: [], refusalImpact: null,
   })),
   reconnected: teamKey => set(state => {
     const view = state.views[teamKey]
     if (!view?.open || Object.keys(view.pending).length === 0) return state
     return update(state, teamKey, { pending: {}, commandRequests: {} })
   }),
-  applySnapshot: message => set(state => update(state, message.teamPath, { loading: false, plans: message.plans })),
+  applySnapshot: message => set(state => update(state, message.teamPath, { loading: false, plans: message.plans, impact: message.impact ?? {} })),
   applyDetail: message => set(state => {
     const view = state.views[message.teamPath]
     if (!view?.open || view.selected !== message.detail.plan.id) return state
-    return update(state, message.teamPath, { detail: message.detail })
+    return update(state, message.teamPath, { detail: message.detail, detailImpact: message.impact ?? null })
   }),
   applyResult: message => set(state => {
     const view = state.views[message.teamPath]
@@ -142,11 +156,13 @@ export const useTeamPlanStore = create<PlanState>(set => ({
     if (message.error) {
       const armed = slot ? view.commands[slot] : undefined
       const commands = armed ? { ...view.commands, [slot!]: { ...armed, refused: true } } : view.commands
-      return update(state, message.teamPath, { pending, commandRequests, commands, error: message.error, failures: message.failures ?? [] })
+      return update(state, message.teamPath, {
+        pending, commandRequests, commands, error: message.error, failures: message.failures ?? [], refusalImpact: message.impact ?? null,
+      })
     }
     // Success retires the dialog's command: a later dialog is a new command.
     const commands = { ...view.commands }
     if (slot) delete commands[slot]
-    return update(state, message.teamPath, { pending, commandRequests, commands, error: null, failures: [] })
+    return update(state, message.teamPath, { pending, commandRequests, commands, error: null, failures: [], refusalImpact: null })
   }),
 }))

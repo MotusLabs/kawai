@@ -25,6 +25,12 @@ export function isMacOS(): boolean {
   return navigator.platform.toUpperCase().indexOf('MAC') >= 0
 }
 
+// Like isMacOS, but also matches iPhone/iPad/iPod platform strings — the
+// terminal's paste and link-modifier logic treats those as Mac-family.
+export function getIsMac(): boolean {
+  return typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/.test(navigator.platform)
+}
+
 // Keyboard shortcut display helpers
 
 export type EffectiveModifier = ShortcutModifier
