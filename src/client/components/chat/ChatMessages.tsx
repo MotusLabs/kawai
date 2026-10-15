@@ -1,9 +1,12 @@
 // Read-only transcript with one expandable entry per tool use. Calls and
-// results are paired in the view; approvals/questions render separately.
+// results are paired in the view; the interactive approval/question cards
+// render separately, while each approval entry also renders as a row so a
+// search snippet has a target to reveal (its anchor is the event id).
 // Agent/Task calls render as worker rows instead (workers design D8) when a
 // session context is given: the row joins the roster by workerId and falls
 // back to the plain paired card without one.
 import type { ChatEvent } from '@shared/chat'
+import { snippetLabel } from '@shared/sessionSearch'
 import type { SendClientMessage, Session } from '@shared/types'
 import type { SessionDirectoryEntry } from '@shared/team'
 import Markdown from '../Markdown'
@@ -135,6 +138,13 @@ export default function ChatMessages({ events, projectPath, sessionId, sendMessa
             <pre className="mt-2 overflow-auto whitespace-pre-wrap">{event.output}</pre>
           </details>
         }
+        case 'approval_request':
+          // The searchable approval entry (tool plus input, chat-session-search
+          // D2) rendered so its event-id anchor exists for the reveal.
+          return <details key={event.id} data-anchor-id={event.id} className="border-l-2 border-border px-3 text-chat-meta text-secondary">
+            <SummaryLabel label={snippetLabel('approval', event.tool)} detail={toolCallDetail(event.tool, event.input, projectPath)} />
+            <pre className="mt-2 overflow-auto whitespace-pre-wrap">{JSON.stringify(event.input, null, 2)}</pre>
+          </details>
         case 'command_output':
           return <div key={event.id} data-anchor-id={event.id} data-testid="chat-command-output" data-chat-role="assistant"
             className="mx-3 border-l-2 border-border px-3 py-2 font-mono text-xs text-secondary">

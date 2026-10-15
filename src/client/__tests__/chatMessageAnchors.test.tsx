@@ -1,11 +1,14 @@
 // Every transcript row a chat search can point at carries a stable
 // `data-anchor-id` (chat-session-search D5): the event id, or `tool:<callId>`
 // for tool rows — including the task and worker variants of a tool call.
+// The join test pins the contract end to end: every anchor the pure matcher
+// emits must exist in the rendered transcript.
 import { afterEach, describe, expect, test } from 'bun:test'
 import TestRenderer, { act } from 'react-test-renderer'
 import type { ChatBackgroundTask, ChatEvent, ChatWorker } from '@shared/chat'
 import ChatMessages from '../components/chat/ChatMessages'
 import { useChatStore } from '../stores/chatStore'
+import { searchEvents } from '../../server/chat/sessionSearch'
 
 const base = { sequence: 0, at: '2026-10-15T09:00:00.000Z', turnId: 't1' }
 const SESSION = 'chat-anchors'
@@ -30,9 +33,10 @@ describe('transcript anchors', () => {
       { ...base, id: 'c1', type: 'command_output', text: 'ctx' },
       { ...base, id: 'n1', type: 'notice', text: 'note' },
       { ...base, id: 'e1', type: 'error', message: 'boom' },
+      { ...base, id: 'ap1', type: 'approval_request', requestId: 'req-1', tool: 'Bash', input: { command: 'gh pr merge 147' } },
     ]
     const renderer = TestRenderer.create(<ChatMessages events={events} />)
-    expect(anchors(renderer)).toEqual(['u1', 'a1', 'p1', 'c1', 'n1', 'e1'])
+    expect(anchors(renderer)).toEqual(['u1', 'a1', 'p1', 'c1', 'n1', 'e1', 'ap1'])
     renderer.unmount()
   })
 
@@ -50,6 +54,37 @@ describe('transcript anchors', () => {
       { ...base, id: 'tr', type: 'tool_result', toolCallId: 'orphan', output: 'out' },
     ]} />)
     expect(anchors(renderer)).toEqual(['tool:orphan'])
+    renderer.unmount()
+  })
+
+  test('every search snippet anchor exists in the rendered transcript', () => {
+    // The reported regression: an approval snippet once had an anchor no row
+    // rendered, so choosing it silently opened the chat without revealing.
+    const needle = 'needle42'
+    const events: ChatEvent[] = [
+      { ...base, id: 'u1', type: 'user_message', text: `please run ${needle}` },
+      { ...base, id: 'a1', type: 'assistant_text', messageId: 'm1', text: `running ${needle} now` },
+      {
+        ...base, id: 'p1', type: 'peer_message', messageId: 'mid', senderSession: 's2', senderGroup: 'lead',
+        priority: 'normal', originPath: '/r', tags: [], threadId: 'th', body: `saw ${needle}`, possibleDuplicate: false,
+      },
+      { ...base, id: 'c1', type: 'command_output', text: `printed ${needle}` },
+      { ...base, id: 'tc1', type: 'tool_call', toolCallId: 'call_1', tool: 'Bash', input: { command: `echo ${needle}` } },
+      { ...base, id: 'tr1', type: 'tool_result', toolCallId: 'call_1', output: `result ${needle}` },
+      { ...base, id: 'n1', type: 'notice', text: `notice ${needle}` },
+      { ...base, id: 'e1', type: 'error', message: `failed at ${needle}` },
+      { ...base, id: 'ap1', type: 'approval_request', requestId: 'req-1', tool: 'Bash', input: { command: `gh pr merge ${needle}` } },
+    ]
+    const result = searchEvents(events, needle)
+    expect(result.matchCount).toBe(9)
+    const renderer = TestRenderer.create(<ChatMessages events={events} />)
+    const rendered = new Set(anchors(renderer))
+    expect(result.snippets.length).toBeGreaterThan(0)
+    for (const snippet of result.snippets) {
+      expect(rendered.has(snippet.anchorId)).toBe(true)
+    }
+    const approval = result.snippets.find(snippet => snippet.kind === 'approval')
+    expect(approval?.anchorId).toBe('ap1')
     renderer.unmount()
   })
 
