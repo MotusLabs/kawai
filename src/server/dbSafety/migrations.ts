@@ -14,6 +14,7 @@
 // 2), never an edit to the baseline (E5).
 import type { Database } from 'bun:sqlite'
 import { BUILD_VERSION } from '../version'
+import { outboundAuditMigration } from '../outbound/migration'
 import { applyBaselineSchema } from './baseline'
 import type { BackupFile } from './backupFiles'
 import type { BackupOutcome } from './backups'
@@ -28,7 +29,7 @@ export const BASELINE_VERSION = 1
 export const BASELINE_NAME = 'baseline'
 
 /** Every numbered migration after the baseline, in order; versions dense from 2. */
-export const MIGRATIONS: readonly Migration[] = []
+export const MIGRATIONS: readonly Migration[] = [outboundAuditMigration]
 
 export const RESTORE_DOC = 'docs/operations/database-backups.md'
 
