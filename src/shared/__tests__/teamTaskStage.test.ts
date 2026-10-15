@@ -1,4 +1,4 @@
-// D4's Phase 1 ladder (team-workspace 3.1): every stage it can produce, the
+// D4's ladder (team-workspace 3.1, 11.1): every stage it can produce, the
 // order that a closed task outranks its assignment history, and the rule that
 // a finished turn never yields a stage of done.
 import { describe, expect, test } from 'bun:test'
@@ -14,7 +14,7 @@ const assignment = (state: TeamTaskAssignment['state']): TeamTaskAssignment => (
 
 const OPEN: TaskStatus[] = ['open', 'active', 'blocked']
 
-describe('teamTaskStage (Phase 1 ladder)', () => {
+describe('teamTaskStage ladder', () => {
   test('a closed task shows no stage whatever its assignment says', () => {
     for (const status of ['done', 'cancelled'] as const) {
       expect(teamTaskStage({ status }, assignment('delivered'))).toBeNull()
@@ -43,5 +43,34 @@ describe('teamTaskStage (Phase 1 ladder)', () => {
   test('a failed or superseded assignment is not outstanding, so the task is Unstarted', () => {
     expect(teamTaskStage({ status: 'open' }, assignment('failed'))).toBe('unstarted')
     expect(teamTaskStage({ status: 'open' }, assignment('superseded'))).toBe('unstarted')
+  })
+})
+
+describe('teamTaskStage handoff and result orders (11.1)', () => {
+  const handoff = (kind: 'review' | 'qa' | 'fix', state: TeamTaskAssignment['state'] = 'queued'): TeamTaskAssignment => ({
+    ...assignment(state), handoffKind: kind, resultId: 'result-1', expectedResponse: 'findings',
+  })
+
+  test('each outstanding handoff kind names its stage, even while still queued', () => {
+    expect(teamTaskStage({ status: 'active' }, handoff('review'))).toBe('in-review')
+    expect(teamTaskStage({ status: 'active' }, handoff('qa', 'delivered'))).toBe('ready-for-qa')
+    expect(teamTaskStage({ status: 'active' }, handoff('fix', 'claimed'))).toBe('fixes-requested')
+  })
+
+  test('a queued review handoff beats Awaiting acceptance', () => {
+    expect(teamTaskStage({ status: 'active' }, handoff('review'), { accepted: false })).toBe('in-review')
+  })
+
+  test('an unaccepted outstanding result is Awaiting acceptance, over the assignment state', () => {
+    expect(teamTaskStage({ status: 'active' }, assignment('delivered'), { accepted: false })).toBe('awaiting-acceptance')
+    expect(teamTaskStage({ status: 'open' }, null, { accepted: false })).toBe('awaiting-acceptance')
+  })
+
+  test('an accepted result falls through to the assignment stage', () => {
+    expect(teamTaskStage({ status: 'active' }, assignment('delivered'), { accepted: true })).toBe('implementing')
+  })
+
+  test('a closed task shows no stage even with a handoff or an unaccepted result', () => {
+    expect(teamTaskStage({ status: 'done' }, handoff('review'), { accepted: false })).toBeNull()
   })
 })

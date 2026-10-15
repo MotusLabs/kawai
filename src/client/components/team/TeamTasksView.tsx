@@ -2,15 +2,16 @@
 // 5.5): a search over title and current direction with marked matches — a
 // matching subtask keeps its ancestors so the tree stays connected — a
 // collapsible parent/subtask tree, the New task form (searchable worktree
-// and OpenSpec-change pickers, an optional assignment with dispatch preview,
-// **Create task** / **Create and assign** armed with one stable client
-// request key whose draft lives in the store), and rows with status,
+// and OpenSpec-change pickers, plan and plan-change pickers listing only
+// open plans' approved changes (durable-plans D9), an optional assignment
+// with dispatch preview, **Create task** / **Create and assign** armed with
+// one stable client request key whose draft lives in the store), and rows with status,
 // creator, participants, the assignment target and state, and the result
 // badge (task-results-handoffs). Rows come from authoritative server
 // snapshots; actions disable while disconnected and refusals show inline.
-import { useEffect, useMemo, useRef } from 'react'
-import type { SendClientMessage, Session } from '@shared/types'
-import type { TeamTaskSummary } from '@shared/teamTasks'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import type { SendClientMessage } from '@shared/types'
+import { filterTeamTaskRows, type TeamTaskRow } from '@shared/teamWorkspace'
 import { useSessionStore } from '../../stores/sessionStore'
 import { useTeamTaskStore, type TaskCreatePayload, type TaskView } from '../../stores/teamTaskStore'
 import { useTeamWorkspaceStore } from '../../stores/teamWorkspaceStore'
@@ -19,88 +20,20 @@ import SearchablePicker from './SearchablePicker'
 import { TaskPreviewView, TaskTargetSelect } from './taskAssignFields'
 import { useTeamGroups } from '../chat/useTeamGroups'
 import { openParticipantChat } from '../chat/openParticipant'
-import { assignmentLabel } from './assignmentLabel'
-import { actorLabel, sessionLabel } from './teamTaskLabels'
+import TaskListFilters, { queryFromFilters } from './TaskListFilters'
+import { TaskRow, buildTaskTree, filterTree } from './TaskTree'
+import { usePlanTargetsRefresh } from './usePlanTargetsRefresh'
 
-/** One tree node: a task with the children whose parentId names it. */
-interface TaskNode {
-  task: TeamTaskSummary
-  children: TaskNode[]
-}
-
-/**
- * Build the roots-and-children forest; a task whose parent is absent from
- * the list (filtered out or gone) is a root itself, so no row disappears.
- */
-export function buildTaskTree(tasks: TeamTaskSummary[]): TaskNode[] {
-  const byParent = new Map<string, TeamTaskSummary[]>()
-  const ids = new Set(tasks.map(task => task.id))
-  const roots: TeamTaskSummary[] = []
-  for (const task of tasks) {
-    if (task.parentId && ids.has(task.parentId)) {
-      const list = byParent.get(task.parentId) ?? []
-      list.push(task)
-      byParent.set(task.parentId, list)
-    } else {
-      roots.push(task)
-    }
-  }
-  const nodeOf = (task: TeamTaskSummary): TaskNode => ({ task, children: (byParent.get(task.id) ?? []).map(nodeOf) })
-  return roots.map(nodeOf)
-}
-
-/** Whether a task's title or current direction contains the needle (D6). */
-function taskMatches(task: TeamTaskSummary, needle: string): boolean {
-  if (!needle) return true
-  const hay = `${task.title}\n${task.direction}`.toLowerCase()
-  return hay.includes(needle.toLowerCase())
-}
-
-/** The search keeps a matching task's ancestors, so the tree stays connected. */
-export function filterTree(nodes: TaskNode[], needle: string): TaskNode[] {
-  if (!needle) return nodes
-  const keep = (node: TaskNode): TaskNode | null => {
-    const children = node.children.map(child => keep(child)).filter((child): child is TaskNode => child !== null)
-    return children.length > 0 || taskMatches(node.task, needle) ? { task: node.task, children } : null
-  }
-  return nodes.map(keep).filter((node): node is TaskNode => node !== null)
-}
-
-/** Text with the needle's first occurrence marked (5.5). */
-export function MarkedText({ text, needle }: { text: string; needle: string }) {
-  if (!needle) return <>{text}</>
-  const at = text.toLowerCase().indexOf(needle.toLowerCase())
-  if (at < 0) return <>{text}</>
-  return <>{text.slice(0, at)}<mark data-testid="task-match">{text.slice(at, at + needle.length)}</mark>{text.slice(at + needle.length)}</>
-}
-
-/** Context kept around a marked match, in characters (5.5). */
-const SNIPPET_CONTEXT = 24
-
-/**
- * The direction line a row shows under a search: a snippet around the match —
- * so a match deep in the direction is shown and marked — falling back to the
- * first line when the search does not name this task (an ancestor kept for
- * its matching subtask).
- */
-export function directionLine(direction: string, needle: string): { text: string; needle: string } {
-  if (!needle) return { text: direction.split('\n')[0] ?? '', needle: '' }
-  const at = direction.toLowerCase().indexOf(needle.toLowerCase())
-  if (at < 0) return { text: direction.split('\n')[0] ?? '', needle: '' }
-  const start = Math.max(0, at - SNIPPET_CONTEXT)
-  const end = Math.min(direction.length, at + needle.length + SNIPPET_CONTEXT)
-  return {
-    text: `${start > 0 ? '…' : ''}${direction.slice(start, end)}${end < direction.length ? '…' : ''}`.replace(/\n/g, ' '),
-    needle,
-  }
-}
-
-export default function TeamTasksView({ teamPath, projectPath, view, sendMessage, connected, onSelectedTask, onOpenThread, onCreateWorktree, onOpenMailbox, onOpenSession }: {
+export default function TeamTasksView({ teamPath, projectPath, view, rows, sendMessage, connected, connectionEpoch = 0, onSelectedTask, onOpenThread, onCreateWorktree, onOpenMailbox, onOpenSession }: {
   teamPath: string
   projectPath: string
   view: TaskView
+  /** The workspace read model's task rows (stage, accountable, wait); absent until its snapshot. */
+  rows?: readonly TeamTaskRow[]
   sendMessage: SendClientMessage
   connected: boolean
+  /** Bumps on every reconnect, so the form's plan subscription is re-sent. */
+  connectionEpoch?: number
   /** Reports selection moves to the host (the Team page's URL, D3). */
   onSelectedTask?: (taskId: string | null) => void
   /** Open this message's thread in the Messages tab. */
@@ -140,7 +73,22 @@ export default function TeamTasksView({ teamPath, projectPath, view, sendMessage
   // matching subtask is shown under its parent (5.5).
   const searching = search.trim() !== ''
   const toggleParent = (taskId: string) => useTeamWorkspaceStore.getState().toggleSectionCollapsed(teamPath, 'tasks', `parent:${taskId}`)
-  const tree = useMemo(() => filterTree(buildTaskTree(view.tasks), search.trim()), [view.tasks, search])
+  // Filters apply to the read model's rows (stage, group, worktree, who must
+  // act); closed tasks leave the default list but stay searchable (spec). A
+  // task the read model has not described yet is kept rather than hidden.
+  const filters = useTeamWorkspaceStore(state => state.views[teamPath]?.tabs.tasks.filters) ?? NO_FILTERS
+  const rowsById = useMemo(() => new Map((rows ?? []).map(row => [row.id, row])), [rows])
+  const visibleTasks = useMemo(() => {
+    const query = queryFromFilters(filters)
+    // The closed-task default needs no read model: done/cancelled rows stay
+    // out unless a search is active or the Status filter names them.
+    const hiddenClosed = (task: { status: string }) =>
+      (task.status === 'done' || task.status === 'cancelled') && !searching && query.status !== task.status
+    if (!rows) return view.tasks.filter(task => !hiddenClosed(task))
+    const keep = new Set(filterTeamTaskRows([...rows], { ...query, ...(searching ? { includeClosed: true } : {}) }).map(row => row.id))
+    return view.tasks.filter(task => keep.has(task.id) || (!rowsById.has(task.id) && !hiddenClosed(task)))
+  }, [view.tasks, rows, rowsById, filters, searching])
+  const tree = useMemo(() => filterTree(buildTaskTree(visibleTasks), search.trim()), [visibleTasks, search])
 
   // The change list narrows to the roots the server validates for the chosen
   // worktree, so every request carries the draft's current worktree and the
@@ -162,6 +110,13 @@ export default function TeamTasksView({ teamPath, projectPath, view, sendMessage
     requestedTargets.current = signature
     requestTargets()
   }, [connected, teamPath, draft.worktree]) // eslint-disable-line react-hooks/exhaustive-deps
+  // While the New task form is open, a plan push (an approval, a close)
+  // re-requests the targets so the plan pickers follow it. The form stays an
+  // uncontrolled <details> that remounts closed whenever a detail replaces
+  // the list; that unmount fires no toggle, so the flag resets with it.
+  const [formOpen, setFormOpen] = useState(false)
+  useEffect(() => { if (view.selectedTaskId) setFormOpen(false) }, [view.selectedTaskId])
+  usePlanTargetsRefresh(teamPath, formOpen && !view.selectedTaskId, connected, connectionEpoch, sendMessage, requestTargets)
   // A reconnect drops the waiters for results lost with the connection: the
   // armed flow keeps its key, the dispatch effect re-sends the assign leg
   // under it, and a human resubmit of the create reuses it — either way the
@@ -195,6 +150,7 @@ export default function TeamTasksView({ teamPath, projectPath, view, sendMessage
       title: draft.title.trim(), direction: draft.direction.trim(),
       acceptance: draft.acceptance.trim() || null, parentId: draft.parentId || null,
       worktree: draft.worktree.trim() || null, openspecChange: draft.openspecChange.trim() || null,
+      planId: draft.planId || null, planChange: draft.planId ? draft.planChange || null : null,
     }
     const changed = flow?.sentCreatePayload &&
       JSON.stringify(flow.sentCreatePayload) !== JSON.stringify(payload)
@@ -212,6 +168,7 @@ export default function TeamTasksView({ teamPath, projectPath, view, sendMessage
       ...(draft.parentId ? { parentId: draft.parentId } : {}),
       ...(draft.worktree.trim() ? { worktree: draft.worktree.trim() } : {}),
       ...(draft.openspecChange.trim() ? { openspecChange: draft.openspecChange.trim() } : {}),
+      ...(payload.planId ? { planId: payload.planId, ...(payload.planChange ? { planChange: payload.planChange } : {}) } : {}),
     })
   }
   // The dispatch leg of an armed create-and-assign flow: sent as soon as the
@@ -233,6 +190,8 @@ export default function TeamTasksView({ teamPath, projectPath, view, sendMessage
     useTeamTaskStore.getState().retryAssign(teamPath)
   }
   const targetReady = draft.targetKind !== '' && draft.targetId !== ''
+  // A plan link names both halves; a chosen plan waits for its change.
+  const planIncomplete = draft.planId !== '' && draft.planChange === ''
   const createCommitted = flow?.taskId != null
   return <div data-testid="team-tasks" className="flex h-full min-h-0 flex-col">
     {!connected && <p role="status" className="p-3 text-secondary">Disconnected — reconnect to update tasks.</p>}
@@ -247,9 +206,11 @@ export default function TeamTasksView({ teamPath, projectPath, view, sendMessage
       <div className="border-b border-border p-3">
         <input className="input" type="search" aria-label="Search tasks" placeholder="Search title and direction"
           value={search} onChange={event => useTeamWorkspaceStore.getState().setSearch(teamPath, 'tasks', event.target.value)} />
+        {rows && <TaskListFilters teamPath={teamPath} rows={rows} filters={filters} />}
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto p-3">
-        <details className="mb-4 border border-border p-2" data-testid="task-create">
+        <details className="mb-4 border border-border p-2" data-testid="task-create"
+          onToggle={event => setFormOpen(event.currentTarget.open)}>
           <summary className="cursor-pointer font-medium">New task</summary>
           <form className="mt-2 flex flex-col gap-2" onSubmit={event => { event.preventDefault(); create(draft.targetKind !== '' && draft.instruction.trim() !== '') }}>
             <input className="input" aria-label="Task title" placeholder="Title" value={draft.title}
@@ -276,6 +237,17 @@ export default function TeamTasksView({ teamPath, projectPath, view, sendMessage
               options={(view.targets?.changes ?? []).map(change => ({
                 value: change.name, label: change.name, hint: change.locations.join(' and '),
               }))} />
+            {/* Plan link (durable-plans D9): only open plans' approved changes are offered. */}
+            <select className="input" aria-label="Plan" data-testid="task-plan-picker" value={draft.planId}
+              disabled={!connected} onFocus={requestTargets} onChange={event => setDraft({ planId: event.target.value, planChange: '' })}>
+              <option value="">No plan</option>
+              {(view.targets?.plans ?? []).map(plan => <option key={plan.id} value={plan.id}>{plan.title} (revision {plan.revision})</option>)}
+            </select>
+            {draft.planId && <select className="input" aria-label="Plan change" data-testid="task-plan-change-picker" value={draft.planChange}
+              disabled={!connected} onChange={event => setDraft({ planChange: event.target.value })}>
+              <option value="">Choose a change of the plan</option>
+              {(view.targets?.plans?.find(plan => plan.id === draft.planId)?.changes ?? []).map(change => <option key={change} value={change}>{change}</option>)}
+            </select>}
             <fieldset className="flex flex-col gap-2 border-t border-border pt-2" data-testid="task-assign-section">
               <legend>Assignment (optional)</legend>
               <TaskTargetSelect testId="task-assign-target" kind={draft.targetKind} id={draft.targetId}
@@ -293,17 +265,19 @@ export default function TeamTasksView({ teamPath, projectPath, view, sendMessage
               ? <button type="button" className="btn btn-primary self-start" disabled={!connected || busy || !flow.assignFailed || !draft.instruction.trim()}
                 onClick={retryAssign} data-testid="task-retry-assign">Retry assignment</button>
               : <>
-                <button type="submit" className="btn self-start" disabled={!connected || busy || !draft.title.trim() || !draft.direction.trim()}
+                <button type="submit" className="btn self-start" disabled={!connected || busy || !draft.title.trim() || !draft.direction.trim() || planIncomplete}
                   data-testid="task-create-button">Create task</button>
-                <button type="button" className="btn btn-primary self-start" disabled={!connected || busy || !draft.title.trim() || !draft.direction.trim() || !targetReady || !draft.instruction.trim()}
+                <button type="button" className="btn btn-primary self-start" disabled={!connected || busy || !draft.title.trim() || !draft.direction.trim() || planIncomplete || !targetReady || !draft.instruction.trim()}
                   onClick={() => create(true)} data-testid="task-create-assign-button">Create and assign</button>
               </>}
           </form>
         </details>
         {view.tasks.length === 0 && !view.loading && <p className="text-sm text-secondary">No tasks yet</p>}
-        {tree.length === 0 && view.tasks.length > 0 && <p className="text-sm text-secondary" data-testid="task-no-matches">No tasks match the search</p>}
+        {tree.length === 0 && view.tasks.length > 0 && <p className="text-sm text-secondary" data-testid="task-no-matches">
+          {searching ? 'No tasks match the search' : 'No tasks match the filters'}
+        </p>}
         {tree.map(node => <TaskRow key={node.task.id} node={node} needle={search.trim()} depth={0}
-          sessions={sessions} collapsedParents={collapsedSet} searching={searching} onToggleParent={toggleParent} onSelect={select} />)}
+          sessions={sessions} rows={rowsById} collapsedParents={collapsedSet} searching={searching} onToggleParent={toggleParent} onSelect={select} />)}
       </div>
     </>}
   </div>
@@ -311,49 +285,4 @@ export default function TeamTasksView({ teamPath, projectPath, view, sendMessage
 
 /** Stable empty list so absent view state never re-renders (getSnapshot caching). */
 const NONE_COLLAPSED: string[] = []
-
-/** One tree row with its nested subtasks; a collapsed parent hides them and states their count. */
-function TaskRow({ node, needle, depth, sessions, collapsedParents, searching, onToggleParent, onSelect }: {
-  node: TaskNode
-  needle: string
-  depth: number
-  sessions: Session[]
-  collapsedParents: Set<string>
-  searching: boolean
-  onToggleParent: (taskId: string) => void
-  onSelect: (taskId: string) => void
-}) {
-  const { task, children } = node
-  const collapsed = !searching && children.length > 0 && collapsedParents.has(`parent:${task.id}`)
-  return <>
-    <article data-task-id={task.id} data-testid="task-row" className={`mb-2 border border-border p-2 ${depth > 0 ? 'ml-4' : ''}`}>
-      <div className="flex items-start justify-between gap-2">
-        <button className="text-left font-medium hover:underline" onClick={() => onSelect(task.id)}>
-          <MarkedText text={task.title} needle={needle} />
-        </button>
-        {children.length > 0 && <button type="button" className="btn shrink-0" data-testid="task-parent-toggle"
-          disabled={searching} title={searching ? 'Clear the search to collapse' : undefined}
-          aria-expanded={!collapsed} onClick={() => { if (!searching) onToggleParent(task.id) }}>
-          {collapsed ? `▸ ${children.length} subtask${children.length === 1 ? '' : 's'}` : '▾'}
-        </button>}
-      </div>
-      <p className="text-sm text-secondary">
-        <span data-testid="task-status">{task.status}</span> · created by {actorLabel(task.creator, sessions)}
-        {task.parentId ? ' · subtask' : ''}
-      </p>
-      <p className="text-sm text-secondary" data-testid="task-direction-line">
-        <MarkedText {...directionLine(task.direction, needle)} />
-      </p>
-      <p className="text-sm text-secondary" data-testid="task-participants">
-        Participants: {task.participants.length > 0 ? task.participants.map(id => sessionLabel(id, sessions)).join(', ') : 'none yet'}
-      </p>
-      <p className="text-sm text-secondary" data-testid="task-assignment">{assignmentLabel(task.assignment, sessions)}</p>
-      {task.outstandingResult && <p className="text-sm" data-testid="task-result-badge"
-        data-state={task.outstandingResult.accepted ? 'accepted' : task.outstandingResult.needsReevaluation ? 'flagged' : 'submitted'}>
-        {task.outstandingResult.accepted ? 'Result accepted' : task.outstandingResult.needsReevaluation ? 'Result needs re-evaluation' : 'Result submitted'}
-      </p>}
-    </article>
-    {!collapsed && children.map(child => <TaskRow key={child.task.id} node={child} needle={needle} depth={depth + 1}
-      sessions={sessions} collapsedParents={collapsedParents} searching={searching} onToggleParent={onToggleParent} onSelect={onSelect} />)}
-  </>
-}
+const NO_FILTERS: Record<string, string | boolean> = {}

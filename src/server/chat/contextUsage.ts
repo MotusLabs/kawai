@@ -5,6 +5,10 @@
 // chatActivity.ts and usageLimits.ts), so tests pin shapes copied from real
 // wire captures and the driver only maps frames onto inputs.
 //
+// Per-request usage can arrive in pieces: some providers (GLM) report zeros
+// when a request starts and the real counts only in its final stream update,
+// so mergeRequestUsage folds every source for one request together.
+//
 // A reading exists only once both a used count and a threshold are known
 // (D7): nothing is published before the first model request, and a
 // conversation reset clears back to that state rather than leaving a stale
@@ -298,4 +302,49 @@ export function sumRequestUsage(usage: {
 export function parsePositiveTokens(value: string | undefined): number | null {
   if (!value) return null
   return positiveFinite(Number(value))
+}
+
+/** The four counted per-request usage fields (design D1). */
+export interface RequestUsage {
+  input_tokens: number
+  cache_read_input_tokens: number
+  cache_creation_input_tokens: number
+  output_tokens: number
+}
+
+export const EMPTY_REQUEST_USAGE: RequestUsage = {
+  input_tokens: 0,
+  cache_read_input_tokens: 0,
+  cache_creation_input_tokens: 0,
+  output_tokens: 0,
+}
+
+/**
+ * Fold one usage source (message_start, message_delta, assistant frame) into
+ * the request's running usage (design E1). Every counted field is cumulative
+ * within a request, so the field-wise maximum is right for a complete delta, a
+ * partial one (output only), and a start re-sent after the delta — in any
+ * order. Absent, null, non-finite, and non-positive values contribute nothing.
+ */
+export function mergeRequestUsage(
+  current: RequestUsage,
+  incoming: {
+    input_tokens?: unknown
+    cache_read_input_tokens?: unknown
+    cache_creation_input_tokens?: unknown
+    output_tokens?: unknown
+  }
+): RequestUsage {
+  const field = (key: keyof RequestUsage) => {
+    const value = incoming[key]
+    return typeof value === 'number' && Number.isFinite(value) && value > current[key]
+      ? value
+      : current[key]
+  }
+  return {
+    input_tokens: field('input_tokens'),
+    cache_read_input_tokens: field('cache_read_input_tokens'),
+    cache_creation_input_tokens: field('cache_creation_input_tokens'),
+    output_tokens: field('output_tokens'),
+  }
 }
