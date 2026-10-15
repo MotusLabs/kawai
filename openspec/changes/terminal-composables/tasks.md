@@ -25,7 +25,7 @@ tick the checkbox in the same commit. Implementation starts only after PR #96 (S
   `terminal/attachState.ts` (`detachFrom`, cancel-pending-attach), and
   `terminal/copyMode.ts` (`exitTmuxCopyMode(send, sessionId)`) as verbatim bodies the
   hook calls; suite green; commit (`refactor: move terminal concerns into terminal/ modules`)
-- [ ] 1.3 Extract `terminal/outputStream.ts` (buffer + flush timers + backpressure with
+- [x] 1.3 Extract `terminal/outputStream.ts` (buffer + flush timers + backpressure with
   generation token as a class) and `terminal/pasteChannel.ts` (resolver machinery +
   `resolveImagePasteData` + single `fetchClipboardImagePath`, deleting the inline copy);
   suite green; commit (`refactor: extract output stream and paste channel from useTerminal`)
