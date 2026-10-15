@@ -181,7 +181,7 @@ Each result an attempt produces SHALL be gated as one round: Kawai pushes its co
 - **THEN** A's round shows as superseded, a verdict on A no longer counts, and B is gated as a new round with its own CI and review
 
 ### Requirement: A new task revision returns the change for re-evaluation
-When the human publishes a new revision of a running change's task before its merge starts, the current round SHALL be superseded, and Kawai SHALL dispatch a fix attempt naming that revision. A change that was landing SHALL leave the landing slot, and the fix attempt's result SHALL be accepted and gated. A result pinned to an older task revision SHALL NOT pass a round.
+When the human publishes a new revision of a running change's task before its merge starts, the current round SHALL be superseded, and, after any in-flight branch update settles, Kawai SHALL dispatch a fix attempt naming that revision. A change that was landing SHALL leave the landing slot, and the fix attempt's result SHALL be accepted and gated. A result pinned to an older task revision SHALL NOT pass a round.
 
 #### Scenario: Direction changed during review
 - **WHEN** the human publishes revision 3 of a change's task while the round for a result pinned to revision 2 awaits review
@@ -240,7 +240,7 @@ Only a `pass` verdict on the round's result from the review handoff's claimant S
 - **THEN** the verdict is recorded and the round still waits for the review handoff's claimant
 
 #### Scenario: An author claims the review
-- **WHEN** the review handoff is claimed by a session that submitted one of the change's results, and that session submits no findings
+- **WHEN** a session that submitted one of the change's results claims the review handoff, before it submits any findings
 - **THEN** the change stops as `review-unavailable`, naming that session, and Retry dispatches the review again
 
 ### Requirement: A worktree-scoped review group gets the worktree
