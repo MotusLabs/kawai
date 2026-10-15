@@ -103,6 +103,9 @@ export const APPROVAL_PRECONDITIONS: readonly ApprovalPrecondition[] = [
 ]
 
 /** The pre-transaction gather step (pin 2 seam): awaited before approval's transaction; nothing to gather yet. */
+// A replay pays this gather too: the prior event is found only inside the
+// transaction. Free while it is empty; a real gather (plan-validation) should
+// first short-circuit on a command id that already stands.
 export async function prepareApproval(_deps: ApprovalDeps, _plan: Plan, _request: ApprovalRequest): Promise<ApprovalPrepared> {
   return {}
 }

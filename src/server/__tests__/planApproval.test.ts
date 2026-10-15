@@ -106,7 +106,7 @@ describe('PlanService.approve', () => {
     expect(bench.plans.revision(planId, 3)!.status).toBe('in_review')
   })
 
-  test('approval leaves tasks, assignments, messages, spawns, and links unchanged', async () => {
+  test('approval, withdraw, finish, and reopen leave tasks, assignments, messages, spawns, and links unchanged', async () => {
     const { planId, revision } = await bench.draftInReview()
     await bench.approve(planId, revision)
     const task = bench.tasks.create({ teamId: world.team.teamId, title: 'API', direction: 'Build', creator: { kind: 'agent', sessionId: 'lead' }, planId, planChange: 'api' })
@@ -118,6 +118,19 @@ describe('PlanService.approve', () => {
     const taskBefore = bench.tasks.get(task.id)
     expect((await bench.approve(planId, next.ok ? next.revision.revision : 0)).ok).toBe(true)
     expect(outsideCounts()).toEqual(before)
+    expect(bench.tasks.get(task.id)).toEqual(taskBefore)
+
+    // Every other human lifecycle command writes nothing outside the plan tables either.
+    const later = bench.plans.getDraft(planId, 'lead')!
+    await bench.service.saveDraft(bench.agent('lead'), { plan_id: planId, content: { ...later.content, goal: 'Later' }, expected_draft_hash: later.contentHash })
+    const pending = await bench.service.submit(bench.agent('lead'), { plan_id: planId })
+    const counted = outsideCounts()
+    expect((await bench.service.withdraw(bench.human, { planId, revision: pending.ok ? pending.revision.revision : 0, commandId: 'w' })).ok).toBe(true)
+    expect((await bench.service.withdraw(bench.human, { planId, draftId: 'lead', commandId: 'd' })).ok).toBe(true)
+    expect((await bench.service.close(bench.human, { planId, outcome: 'completed', reason: 'Shipped early', commandId: 'f1' })).ok).toBe(true)
+    expect((await bench.service.reopen(bench.human, { planId, commandId: 'r' })).ok).toBe(true)
+    expect((await bench.service.close(bench.human, { planId, outcome: 'cancelled', reason: 'Dropped', commandId: 'f2' })).ok).toBe(true)
+    expect(outsideCounts()).toEqual(counted)
     expect(bench.tasks.get(task.id)).toEqual(taskBefore)
   })
 })
