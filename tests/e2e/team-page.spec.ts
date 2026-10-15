@@ -92,13 +92,29 @@ async function expandSection(mailbox: ReturnType<Page['getByTestId']>, name: str
   if ((await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.click()
 }
 
+/**
+ * Create the terminal-only repository's one session. The command is set to
+ * `bash` explicitly: the dialog's default preset runs `claude`, which CI
+ * never installs, and a tmux window whose command is missing dies at once —
+ * the session never registers, the repository is never seeded, and no Team
+ * entry can appear (PR #142's failure; `bash` exists everywhere and keeps
+ * the pane alive).
+ */
 async function createTerminal(page: Page, root: string) {
   await page.getByRole('button', { name: 'New session', exact: true }).first().click()
   const dialog = page.getByRole('dialog', { name: 'New Session' })
   await dialog.getByLabel('Session kind').selectOption('terminal')
-  await dialog.getByLabel('Project Path').fill(root)
+  await dialog.getByPlaceholder('Enter command...').fill('bash')
+  const projectPath = dialog.getByLabel('Project Path')
+  await projectPath.fill(root)
+  // The dialog initializes its fields during the open render; guard the fill
+  // the way chat-teams.spec does so a late reset cannot send the wrong path.
+  await expect(projectPath).toHaveValue(root)
   await dialog.getByRole('button', { name: 'Create', exact: true }).click()
-  await expect(page.getByTestId('terminal-panel')).toBeVisible()
+  // `terminal-panel` renders for the empty state too, so the real signal is
+  // the session registering in the navigator under the repository's path.
+  const row = page.locator('[data-session-id]').filter({ has: page.locator(`[title="${root}"]`) })
+  await expect(row.first()).toBeVisible({ timeout: SNAPSHOT_TIMEOUT })
 }
 
 test('a terminal-only repository opens its Team page; view state survives a chat visit and Back; a reload keeps the tab', async ({ page }, info) => {
