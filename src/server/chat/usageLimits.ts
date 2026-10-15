@@ -5,12 +5,15 @@
 // the latest report (or a "no data" verdict) per Claude profile. Side-effect
 // free and SDK-free (sources are matched structurally, like chatActivity.ts),
 // so tests pin shapes copied from real wire captures and the direct-CLI
-// transport of replace-claude-sdk-with-cli can reuse the parsing.
+// transport of replace-claude-sdk-with-cli can reuse the parsing. Claude plan
+// windows carry their known period length (usageWindowPeriods.ts) for the
+// bar's elapsed-time marker; provider quota rows never do.
 import type {
   ChatUsageReport,
   ChatUsageStatus,
   ChatUsageWindow,
 } from '../../shared/chat'
+import { windowPeriodMs } from './usageWindowPeriods'
 
 /**
  * Display label for a meter kind. Unknown kinds label as themselves: the
@@ -32,6 +35,15 @@ const WINDOW_LABELS: Record<string, string> = {
 
 function windowLabel(key: string): string {
   return WINDOW_LABELS[key] ?? key
+}
+
+/**
+ * A Claude plan window, carrying its period length when the kind (or a
+ * /usage row's group) has a known one; never used for provider quota rows.
+ */
+function planWindow(window: ChatUsageWindow, group?: string): ChatUsageWindow {
+  const periodMs = windowPeriodMs(window.key, group)
+  return periodMs === undefined ? window : { ...window, periodMs }
 }
 
 /** Percent 0-100 from a source that reports 0-1 fractions; null when unusable. */
@@ -147,12 +159,12 @@ function fractionWindow(
   if (typeof key !== 'string' || key === '') return null
   const percentUsed = fractionToPercent(slice?.utilization)
   if (percentUsed === null) return null
-  return {
+  return planWindow({
     key,
     label: windowLabel(key),
     percentUsed,
     resetsAt: toIsoResetsAt(slice?.resetsAt),
-  }
+  })
 }
 
 // ----------------------------------------------------------------- push: /usage report
@@ -209,12 +221,17 @@ export function parseUsageReport(
     const scopeLabel =
       row.scope?.model?.display_name ?? row.scope?.surface?.display_name
     const key = scopeLabel ? `${row.kind}:${scopeLabel}` : row.kind
-    windows.push({
-      key,
-      label: scopeLabel ?? row.label ?? windowLabel(key),
-      percentUsed,
-      resetsAt: toIsoResetsAt(row.resets_at),
-    })
+    windows.push(
+      planWindow(
+        {
+          key,
+          label: scopeLabel ?? row.label ?? windowLabel(key),
+          percentUsed,
+          resetsAt: toIsoResetsAt(row.resets_at),
+        },
+        row.group
+      )
+    )
     status = worstStatus(status, severityStatus(row.severity))
   }
   return { status, windows, receivedAt, source: 'report' }
@@ -301,7 +318,7 @@ function percentWindow(
 ): ChatUsageWindow | null {
   const percentUsed = percentValue(slice?.utilization)
   if (percentUsed === null) return null
-  return { key, label, percentUsed, resetsAt: toIsoResetsAt(slice?.resets_at) }
+  return planWindow({ key, label, percentUsed, resetsAt: toIsoResetsAt(slice?.resets_at) })
 }
 
 // ----------------------------------------------------------------- pull: provider quota
