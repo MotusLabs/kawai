@@ -29,11 +29,15 @@ Apply SHALL evaluate in order `plan-open`, `execution-running`, `execution-revis
 - **THEN** Apply is refused as `validation-current` with V5's message
 
 ### Requirement: Kawai classifies every change against the running revision
-Apply SHALL classify each change, by name, as unchanged, changed (listing its differing fields among dependencies, `fixes`, groups, acceptance, extra checks, guidance, and the effective review group), metadata (a landed change differing only in dependencies or `fixes`, updated with no choice), added, or removed. Every changed change that has a task SHALL need a choice of continue, adapt, or restart. A changed change without a task SHALL take the new definition when provisioned.
+Apply SHALL classify each change by name: unchanged, changed (with its differing fields: dependencies, `fixes`, groups, acceptance, extra checks, guidance, effective review group), metadata (landed, differing only in dependencies or `fixes`; updated without a choice), added, or removed. A changed change with a task SHALL need a choice of continue, adapt, or restart; one without takes the new definition. A `leadGroup` change SHALL be the informational `lead-changed`, never a refusal.
 
 #### Scenario: The preview shows the delta
 - **WHEN** the owner opens Apply for revision 4 over an execution of revision 3
 - **THEN** the dialog lists each change's class and changed fields, and asks a choice only for changed changes that have tasks
+
+#### Scenario: Only the lead group changed
+- **WHEN** the owner applies a revision whose only difference is `leadGroup`
+- **THEN** every change reads unchanged, the preview shows `lead-changed`, Apply succeeds, and later cards go to the new lead group
 
 #### Scenario: A missing choice is refused
 - **WHEN** an Apply omits the choice for a changed change with a task

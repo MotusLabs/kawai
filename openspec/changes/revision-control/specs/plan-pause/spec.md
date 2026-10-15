@@ -74,7 +74,7 @@ Kawai's pause mail SHALL NOT be refused for a cooling profile. It SHALL wait unt
 - **THEN** that change is listed as landing in progress, no mail is sent for it, and it lands if the merge completes
 
 ### Requirement: Pausing never resolves a pending request
-A pause SHALL NOT approve, deny, or answer a holder's pending approval or question. The pause mail SHALL follow the shipped urgent direct semantics, interrupting only after pending requests resolve. A target whose holder has a pending request SHALL read Pausing with the cause `request`. A passed pause deadline SHALL raise the `plan-pause-overdue` attention item and SHALL NOT kill or archive anyone.
+A pause SHALL NOT approve, deny, or answer a holder's pending approval or question. The pause mail SHALL follow the shipped urgent direct semantics, interrupting only after pending requests resolve. A target whose holder has a pending request SHALL read Pausing with the cause `request`. A passed pause deadline on a target still Pausing for a cause other than `holder-killed` or `checkpoint-push-failed` SHALL raise `plan-pause-overdue`, and SHALL NOT kill or archive anyone.
 
 #### Scenario: Pause beside a pending approval
 - **WHEN** the owner pauses a change whose developer awaits a tool approval
@@ -83,6 +83,10 @@ A pause SHALL NOT approve, deny, or answer a holder's pending approval or questi
 #### Scenario: The pause deadline passes
 - **WHEN** a target is still Pausing at the pause deadline
 - **THEN** a `plan-pause-overdue` item asks the owner to unblock the holder, and the holder's session is untouched
+
+#### Scenario: A failed checkpoint push past the deadline
+- **WHEN** a target is Pausing as `checkpoint-push-failed` when the pause deadline passes
+- **THEN** exactly one item exists for it, `plan-checkpoint-decision`, and no `plan-pause-overdue`
 
 ### Requirement: Pause state survives restart
 Pauses, targets, checkpoints, and recorded Paused states SHALL be durable. After a restart Kawai SHALL re-derive Pausing from stored rows, inspect an unknown `push-checkpoint` effect before anything else for its change, and leave the pause mail to shipped receipt recovery. It SHALL NOT resume a holder or record Paused without the stored facts.
@@ -115,7 +119,7 @@ For a Paused target the human SHALL choose, under a command id: Continue, sendin
 - **THEN** a new attempt is dispatched from the branch head on `origin` with the "may predate" note, and the old holder's later submissions are refused
 
 ### Requirement: Restart starts fresh from the newest safe commit
-Restart SHALL release a spawned holder through member release once it is ready, and SHALL never release a human-created one, saying the attempt may reach it; the dispatch waits for the worktree. It SHALL supersede the held assignment without cancelling claimed work and dispatch a new attempt of the stage's kind from the newest checkpoint commit on `origin`, else the branch head on `origin`, saying that head may predate the holder's work. The manifest SHALL name the checkpoint.
+Restart SHALL release a spawned holder through member release once ready, never a human-created one, warning that the attempt may reach that human-created holder; the dispatch waits for the worktree. It SHALL supersede the held assignment, cancelling no claimed work, and dispatch a new attempt of the stage's kind from the newest checkpoint commit on `origin`, else the branch head there, which may predate the holder's work. The manifest SHALL name the checkpoint when one was recorded.
 
 #### Scenario: Restart with a checkpoint
 - **WHEN** the owner restarts a Paused target whose spawned developer is idle
@@ -148,7 +152,7 @@ While a change has an undecided pause target, Kawai SHALL dispatch nothing for i
 - **THEN** the resume mail names the newest revision and no fix attempt is dispatched
 
 ### Requirement: Pauses are visible to the owner and agents
-The plan detail and `plan_get` SHALL list each pause with its deadline and targets: state, causes, holder, checkpoints, and decision. Supervision SHALL name `pausing` and `paused` as a target change's cause. A Paused target, or one Pausing as `holder-killed` or `checkpoint-push-failed`, with no decision SHALL raise `plan-checkpoint-decision` until decided or the execution finishes.
+The plan detail and `plan_get` SHALL list each pause with its deadline and targets: state, causes, holder, checkpoints, and decision. Supervision SHALL name `pausing` and `paused` as a target change's cause. A Paused target, or one Pausing as `holder-killed` or `checkpoint-push-failed`, with no decision SHALL raise only `plan-checkpoint-decision`, never also `plan-pause-overdue`, until decided or the execution finishes.
 
 #### Scenario: A paused change's cause
 - **WHEN** a target is Paused and undecided

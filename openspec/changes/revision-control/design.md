@@ -312,7 +312,7 @@ Nothing else records Paused. A pause is closed (`closed_at`) when every target i
 
 So a restart never resumes the holder blindly, and never shows a Paused state that was not recorded. A paused execution survives restart with its pause, targets, checkpoints, and attempts (R01).
 
-**Deadline.** A target still Pausing after the pause deadline raises `plan-pause-overdue` (D13), whose next action offers unblocking the holder, Restart, or Stop. A Paused target, and a Pausing one as `holder-killed` or `checkpoint-push-failed`, raises `plan-checkpoint-decision`. Nothing is killed, and the pause stays open.
+**Deadline.** One target never raises two items. A target still Pausing after the pause deadline for a cause other than `holder-killed` or `checkpoint-push-failed` raises only `plan-pause-overdue` (D13), whose next action offers unblocking the holder, Restart, or Stop. A Paused target, or a Pausing one as `holder-killed` or `checkpoint-push-failed`, raises only `plan-checkpoint-decision`, before or after the deadline. Nothing is killed, and the pause stays open.
 
 ### D9. The owner's choices
 
