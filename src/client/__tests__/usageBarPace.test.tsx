@@ -188,9 +188,12 @@ describe('usage bar time marker', () => {
 
 describe('usage bar minute clock', () => {
   test('the tick advances each minute and disappears once the reset passes', () => {
+    // No setSystemTime here: Bun 1.3.x (CI's pinned version) drops a set
+    // system time on advanceTimersByTime and jumps back to the real clock, so
+    // the window is anchored on the fake clock's own start instead.
     jest.useFakeTimers()
-    jest.setSystemTime(NOW)
-    const renderer = renderBar(report([fiveHour({ resetsAt: at(NOW + 2 * MINUTE) })]))
+    const start = Date.now()
+    const renderer = renderBar(report([fiveHour({ resetsAt: at(start + 2 * MINUTE) })]))
     const left = () => percentOf(ticks(renderer)[0]!.props.style.left)
     const before = left()
     act(() => {
