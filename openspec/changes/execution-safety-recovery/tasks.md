@@ -1,6 +1,13 @@
 # Tasks
 
-Groups 1–3, 5, and 6 depend only on master. Group 6 lands first, because migration 2 (group 3) needs the runner. Group 4 waits for `team-workspace-pages` and the `durable-plans` Plans tab to be on master: its attention source and summary bucket need only `team-workspace`, but its tab needs both. Group 7's matrix rows for plan execution, integration, supervision, and revision control cite the tests those changes land, so write it after they merge, rebasing this branch onto master. Every file stays under 500 LOC. Tests that spawn git use `cleanGitEnv`. No test, fixture, or doc uses a concrete internal hostname or address, only reserved example names (`example.internal`, `192.0.2.0/24`, `2001:db8::/32`).
+Order:
+- group 6 (the migration runner and backups) lands first;
+- group 3 follows group 6, because migration 2 needs the runner;
+- groups 1, 2, and 5 are independent of the others;
+- group 4 waits until `team-workspace-pages` and `durable-plans` are on master: it needs the tab model and durable-plans' host-agnostic mount pattern (D12), not the Plans tab itself;
+- group 7 comes last, after `plan-execution`, `integration-candidates`, `plan-supervision`, and `revision-control` merge.
+
+Group 7's matrix rows for plan execution, integration, supervision, and revision control cite the tests those changes land, so write it after they merge, rebasing this branch onto master. Every file stays under 500 LOC. Tests that spawn git use `cleanGitEnv`. No test, fixture, or doc uses a concrete internal hostname or address, only reserved example names (`example.internal`, `192.0.2.0/24`, `2001:db8::/32`).
 
 ## 1. Security note
 
@@ -30,7 +37,8 @@ Groups 1–3, 5, and 6 depend only on master. Group 6 lands first, because migra
   - each rule's send and non-send forms;
   - origin-implicit and `-R` gh;
   - `--body`, `--body-file`, `-F body=@file`, and heredoc values never being targets;
-  - `GH_REPO` inline, by `env`, and by an earlier `export` segment; `git push --repo=`; and a URL `--repo`;
+  - `GH_REPO`/`GH_HOST` as a prefix, by `env`, and by an earlier `export` or assignment segment, each reading `unknown-destination`, never `allowed`;
+  - `git push --repo=<url>` and `-R https://github.com/o/r`;
   - a named remote, a URL, and scp push targets;
   - public and internal registries;
   - curl, wget, and httpie bodies against GETs;
@@ -107,7 +115,8 @@ Groups 1–3, 5, and 6 depend only on master. Group 6 lands first, because migra
   - the copy passes `integrity_check`;
   - a truncated copy is marked corrupt and stays out of rotation;
   - an idle hour takes nothing, including the first hour after a restart;
-  - a leftover `.partial` is deleted at startup, and only 3 `.corrupt` files are kept;
+  - each snapshot stores its `total_changes()` value, and the skip compares against the last snapshot's value;
+  - at startup and after each snapshot, only the newest 3 `.partial` and the newest 3 `.corrupt` files are kept, and the `.partial` being written is never deleted;
   - rotation keeps 24/7/3 by reason;
   - a pre-migration backup precedes each migration, and its failure refuses start.
 

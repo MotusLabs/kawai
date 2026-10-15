@@ -47,6 +47,10 @@ A pure classifier SHALL match the `git-push`, `gh-write`, `gh-api-write`, `regis
 - **WHEN** an agent runs `gh issue create -R other/repo --title x`
 - **THEN** the verdict is violation with destination `other/repo`
 
+#### Scenario: A repository set by variable
+- **WHEN** an agent runs `export GH_REPO=other/repo; gh pr create --title x`
+- **THEN** the verdict is unknown-destination, never allowed
+
 #### Scenario: A push through a named remote
 - **WHEN** an agent runs `git push fork main` where remote `fork` points to another GitHub repository
 - **THEN** the verdict is violation naming that repository

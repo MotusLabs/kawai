@@ -58,7 +58,10 @@ This change closes those gaps with rules, records, and backups. It adds no enfor
 
 ### Modified Capabilities
 
-None. No existing requirement changes. The prompt section, the audit hooks, the attention source and its `audit` link, and the summary bucket are new behavior, specified under the new capabilities above.
+None. No existing requirement changes:
+- the attention source, its `audit` link kind, and the `outbound` summary bucket use `team-workspace`'s source registry, its extension point; `team-workspace` is not yet a living spec under `openspec/specs/`, so `outbound-audit` specifies them;
+- the security note is this change's own requirement (`outbound-rules`);
+- the audit hooks are new: `chat-sessions` defines no hook extension point, so `outbound-audit` specifies them.
 
 ## Impact
 
@@ -79,6 +82,6 @@ None. No existing requirement changes. The prompt section, the audit hooks, the 
 - **Depends on:**
   - `team-workspace`, for the attention sources and the morning summary;
   - `team-workspace-pages`, for the tab model;
-  - `durable-plans`, for the Plans-tab extension point;
+  - `durable-plans`, for its host-agnostic tab mount pattern (D12), not the Plans tab itself;
   - `plan-execution`, `integration-candidates`, `plan-supervision`, and `revision-control`, for the contracts the matrix and the exclusions name.
   The prompt, the configuration, the audit, and the database safety work do not wait for the plan changes.

@@ -59,11 +59,15 @@ Kawai SHALL take backups from its own connection outside any transaction, write 
 - **THEN** it is renamed as corrupt, the failure is logged and shown, and the previous good backups stay
 
 ### Requirement: Backups run on a schedule and rotate
-Kawai SHALL take a backup at startup, hourly while the database has changed, and before each migration, in `~/.agentboard/backups/`. It SHALL keep the newest 24 interval and 7 startup backups and every pre-migration backup of the newest 3 migrations, deleting older ones. The newest backup per reason SHALL be shown read-only.
+Kawai SHALL take a backup at startup, hourly while the database has changed, and before each migration, in `~/.agentboard/backups/`. It SHALL keep the newest 24 interval and 7 startup backups, every pre-migration backup of the newest 3 migrations, and the newest 3 corrupt copies and 3 leftover temporary files, deleting older ones. The newest backup per reason SHALL be shown read-only.
 
 #### Scenario: An idle hour
 - **WHEN** an hour passes with no database change since the last backup
 - **THEN** no interval backup is taken
+
+#### Scenario: Leftover files
+- **WHEN** the server starts with five leftover temporary backup files and five corrupt copies
+- **THEN** only the newest 3 of each remain
 
 #### Scenario: Rotation
 - **WHEN** a 25th interval backup is written

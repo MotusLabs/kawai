@@ -141,14 +141,14 @@ Kawai's own git and `gh` calls (plan-execution effects, promotions) never pass t
   A candidate names its rule, its segment, its effective cwd, and a target spec: `origin-implicit`, `remote:<name>`, `url:<url>`, `host:<host>`, `registry:<host or default>`, `repo:<owner/name>`, `mail`, or `unresolved:<why>`.
 - **`judge(candidate, facts) → { verdict, destination }`**: `facts` holds the destination classes (D2) and the repository facts the resolver read for each effective cwd: the repository root, `origin`'s URL, every remote's URL, and the current branch's push remote.
 
-Arguments are read by position and flag, never by searching text. A `--body`, `--body-file`, `--title`, `-m`, `--notes`, `-f body=…` or `-F body=@file` value, or a heredoc is a value and never a target. Like `cd`, an `export VAR=…` or `VAR=…` segment carries into the later segments' environment, so `export GH_REPO=other/repo; gh pr create` targets `other/repo`; a variable set any other way leaves its target unresolved. That removes the spike's whole false-positive class.
+Arguments are read by position and flag, never by searching text. A `--body`, `--body-file`, `--title`, `-m`, `--notes`, `-f body=…` or `-F body=@file` value, or a heredoc is a value and never a target. A `GH_REPO`, `GH_HOST`, or `GIT_DIR`/`GIT_WORK_TREE` assignment — as a prefix (`GH_REPO=… gh …`), through `env`, or by an earlier `export` or assignment segment — makes the affected `gh` or `git` target unresolved, so the call reads `unknown-destination` and never `allowed`; the classifier does not evaluate shell variables. That removes the spike's whole false-positive class.
 
 The rules (ids are append-only, contract E3):
 
 | Rule | Send when | Target |
 | --- | --- | --- |
 | `git-push` | `git push` | `--repo=<remote or URL>`, the named remote's URL, a URL or `user@host:path` argument, else the branch's push remote, else `origin` |
-| `gh-write` | `gh <issue\|pr\|release\|repo\|gist\|label\|secret\|variable\|workflow\|run> <create\|edit\|close\|reopen\|comment\|merge\|delete\|review\|upload\|set\|run\|…>` | `-R`/`--repo` (`owner/repo`, `host/owner/repo`, or a URL), `GH_REPO` set inline, by `env`, or by an earlier `export` segment, a `github.com/<owner>/<repo>` positional argument, else the cwd's `origin` |
+| `gh-write` | `gh <issue\|pr\|release\|repo\|gist\|label\|secret\|variable\|workflow\|run> <create\|edit\|close\|reopen\|comment\|merge\|delete\|review\|upload\|set\|run\|…>` | `-R`/`--repo` (`owner/repo`, `host/owner/repo`, or a URL such as `-R https://github.com/o/r`), a `github.com/<owner>/<repo>` positional argument, else the cwd's `origin`; any `GH_REPO`/`GH_HOST` assignment before it makes the target unresolved |
 | `gh-api-write` | `gh api` with `-X`/`--method` other than GET, or with `-f`/`-F`/`--field`/`--raw-field`/`--input` | `repos/<owner>/<repo>/…` (with `{owner}`/`{repo}` meaning origin), else unresolved (for example `graphql`) |
 | `registry-publish` | `npm`/`bun`/`pnpm`/`yarn publish`, `twine upload`, `cargo publish`, `docker`/`podman push`, `helm push`, `buildctl … type=image,push=true`, `docker buildx … --push` | `--registry`, `--repository-url`, `--index`, the image or OCI reference's registry host, else that tool's public default registry |
 | `http-send` | `curl` with `-X`/`--request` other than GET or HEAD, `-d`/`--data*`, `-F`/`--form`, `-T`/`--upload-file`, or `--json`; `wget --post-data`/`--post-file`/`--method`; `http`/`https` (httpie) with a non-GET method or a body item | the URL's host |
@@ -371,7 +371,9 @@ Going back to an older build is therefore a restore, which is explicit and keeps
 1. Runs on the server's own connection, from a timer or a startup step, never inside a transaction. bun:sqlite transactions are synchronous, so a callback cannot interleave with one.
 2. Calls `db.serialize()`, which takes SQLite's shared lock for the copy, then writes the bytes asynchronously to `<name>.partial`, fsyncs, and renames to `agentboard-<UTC stamp>-<reason>.db` in `~/.agentboard/backups/`.
 3. Opens the file read-only on a separate connection, runs `PRAGMA integrity_check`, and closes it.
-4. A failed check renames the file to `.corrupt`, logs it, and keeps it out of rotation. A `.partial` file left by a crash is deleted at startup, and only the newest 3 `.corrupt` files are kept.
+4. A failed check renames the file to `.corrupt`, logs it, and keeps it out of rotation.
+
+Leftover files have their own retention, outside the reason rotation: at startup and after each snapshot, the newest 3 `.corrupt` and the newest 3 `.partial` files (never the one being written) are kept for diagnosis and older ones deleted, so neither kind grows without bound.
 
 **Measured** on a copy of the live 5.1 MB database (bun:sqlite, this host): `serialize()` took 2.4–5.0 ms, `VACUUM INTO` 15–52 ms, and the integrity check of the copy 4.8–5.6 ms. The event loop pauses for the `serialize()` only, under about 5 ms at today's size. The write and the check are off the hot path.
 
@@ -383,7 +385,7 @@ A snapshot can never fail a live commit:
 
 The schedule:
 - `startup`: after the version check and before the baseline and pending migrations (D13);
-- `interval`: hourly, skipped when the connection's `total_changes()` has not moved since the last snapshot. The counter is per connection and starts at zero on each start; because every start takes a `startup` snapshot, its counter value at that snapshot is the in-memory baseline the first interval compares against;
+- `interval`: hourly, skipped when the database has not changed since the last snapshot. Each snapshot stores the connection's `total_changes()` value at the moment it was taken, and the interval compares against the last snapshot's stored value. The counter is per connection and restarts at zero with each process, so only snapshots of the running process count: every start takes a `startup` snapshot, which stores the first value;
 - `pre-migration-<n>`: before migration n.
 
 The rotation, per reason, by name:
