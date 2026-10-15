@@ -202,6 +202,8 @@ export class DatabaseBackups {
     if (db.inTransaction) return { error: 'a transaction is open on the connection' }
     try {
       fs.mkdirSync(this.dir, { recursive: true, mode: 0o700 })
+      // mkdir's mode applies only to a directory it creates; tighten one that existed.
+      fs.chmodSync(this.dir, 0o700)
       const changes = this.totalChanges()
       const bytes = this.copy()
       const final = path.join(this.dir, backupFileName(this.stem, this.nextStamp(), reason))

@@ -133,6 +133,19 @@ describe('a snapshot', () => {
     }
   })
 
+  test('creates backups/ owner-only and tightens an existing one to 0700', () => {
+    const session = initDatabase({ path: dbPath })
+    try {
+      expect(new DatabaseBackups({ db: session.db, dbPath }).snapshotSync('interval')).toMatchObject({ ok: true })
+      expect(fs.statSync(backupsDir).mode & 0o777).toBe(0o700)
+      fs.chmodSync(backupsDir, 0o755)
+      expect(new DatabaseBackups({ db: session.db, dbPath }).snapshotSync('interval')).toMatchObject({ ok: true })
+      expect(fs.statSync(backupsDir).mode & 0o777).toBe(0o700)
+    } finally {
+      session.close()
+    }
+  })
+
   test('refuses inside a transaction instead of copying mid-write', async () => {
     const session = initDatabase({ path: dbPath })
     const backups = new DatabaseBackups({ db: session.db, dbPath })
