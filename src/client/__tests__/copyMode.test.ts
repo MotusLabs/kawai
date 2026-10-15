@@ -15,6 +15,7 @@ class TerminalMock {
   cols = 80
   rows = 24
   hasSelectionValue = false
+  buffer = { active: { viewportY: 0, baseY: 0 } }
 
   write(data: string) {
     this.writes.push(data)
@@ -31,7 +32,7 @@ interface Harness {
   sends: Array<Record<string, unknown>>
   modeChanges: boolean[]
   flushes: number[]
-  scrollChecks: number[]
+  scrollReports: boolean[]
   readySession: { current: string | null }
   attachedSession: { current: string | null }
   inCopyMode: { current: boolean }
@@ -44,7 +45,7 @@ function createHarness(): Harness {
   const sends: Array<Record<string, unknown>> = []
   const modeChanges: boolean[] = []
   const flushes: number[] = []
-  const scrollChecks: number[] = []
+  const scrollReports: boolean[] = []
   const readySession = { current: 'session-1' as string | null }
   const attachedSession = { current: 'session-1' as string | null }
   const inCopyMode = { current: false }
@@ -61,10 +62,10 @@ function createHarness(): Harness {
     altScreenRef: altScreen,
     flushOutputBeforeControl: () => { flushes.push(1) },
     onModeChange: (value) => { modeChanges.push(value) },
-    onScrollPositionChange: () => { scrollChecks.push(1) },
+    getOnScrollChange: () => (isAtBottom: boolean) => { scrollReports.push(isAtBottom) },
   })
 
-  return { state, terminal, sends, modeChanges, flushes, scrollChecks, readySession, attachedSession, inCopyMode, appMouse, altScreen }
+  return { state, terminal, sends, modeChanges, flushes, scrollReports, readySession, attachedSession, inCopyMode, appMouse, altScreen }
 }
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -90,7 +91,8 @@ describe('TmuxCopyModeState', () => {
     expect(h.terminal.writes).toEqual([DISABLE_MOUSE_TRACKING])
     // Backpressure order preserved: the disable follows a forced flush.
     expect(h.flushes.length).toBe(1)
-    expect(h.scrollChecks.length).toBe(1)
+    // The scroll report follows the copy-mode flip (never at-bottom inside copy-mode).
+    expect(h.scrollReports).toEqual([false])
   })
 
   test('exiting copy-mode writes nothing; tmux re-enables tracking itself', () => {

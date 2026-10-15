@@ -31,3 +31,23 @@ export function resetDroppedOutputRateLimiterForTests(now?: () => number): void 
   lastDroppedOutputLogAt = Number.NEGATIVE_INFINITY
   suppressedDroppedOutputReports = 0
 }
+
+/**
+ * Log the end-to-end time from attach-send to the first terminal output
+ * (server roundtrip plus parse diagnostics), then clear the switch start so
+ * only the first output after a switch is logged.
+ */
+export function logFirstOutputAfterSwitch(
+  message: { sessionId: string; data: string } & Record<string, unknown>,
+  switchStart: number,
+  clear: () => void
+): void {
+  clientLog('switch_first_output', {
+    sessionId: message.sessionId,
+    serverRoundtripMs: Math.round(performance.now() - switchStart),
+    bytes: message.data.length,
+    parseMs: (message as { _parseMs?: number })._parseMs ?? -1,
+    rawLength: (message as { _rawLength?: number })._rawLength ?? -1,
+  })
+  clear()
+}

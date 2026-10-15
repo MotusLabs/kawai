@@ -19,20 +19,21 @@ import { loadWebglAddon, disposeWebglAddon, type WebglAddonRef } from './webgl'
 import type { TmuxCopyModeState } from './copyMode'
 import type { PasteChannel } from './pasteChannel'
 
+export interface TerminalSetupRefs {
+  terminal: MutableRefObject<Terminal | null>
+  fitAddon: MutableRefObject<FitAddon | null>
+  searchAddon: MutableRefObject<SearchAddon | null>
+  serializeAddon: MutableRefObject<SerializeAddon | null>
+  progressAddon: MutableRefObject<ProgressAddon | null>
+  fitTimer: MutableRefObject<number | null>
+  resizeTimer: MutableRefObject<number | null>
+}
+
 export interface TerminalSetupDeps {
   getContainer: () => HTMLDivElement | null
-  /** True when a terminal instance already exists (skip re-init). */
-  isInitialized: () => boolean
   createOptions: CreateTerminalOptions
-  onAddonsLoaded: (addons: {
-    searchAddon: SearchAddon
-    serializeAddon: SerializeAddon
-    progressAddon: ProgressAddon
-  }) => void
-  /** Store the created terminal + fit addon (hook-owned refs). */
-  onTerminalCreated: (terminal: Terminal, fitAddon: FitAddon) => void
-  /** Clear the terminal/addon refs after teardown disposed them. */
-  onTerminalDisposed: () => void
+  /** Hook-owned refs this setup populates and clears (design D2). */
+  refs: TerminalSetupRefs
   useWebGLRef: { current: boolean }
   webglAddonRef: WebglAddonRef
   logWebglContextLoss: () => void
@@ -41,10 +42,8 @@ export interface TerminalSetupDeps {
   copyMode: TmuxCopyModeState
   pasteChannel: PasteChannel
   getReadySession: () => string | null
+  getAttachedSession: () => string | null
   send: SendClientMessage
-  fitTimerRef: MutableRefObject<number | null>
-  resizeTimerRef: MutableRefObject<number | null>
-  fitAndResize: () => void
 }
 
 /**
@@ -55,7 +54,7 @@ export function setupTerminal(deps: TerminalSetupDeps): () => void {
   if (!container) return () => {}
 
   // Already initialized
-  if (deps.isInitialized()) return () => {}
+  if (deps.refs.terminal.current) return () => {}
 
   // Track if effect has been cleaned up (for async font loading)
   let cancelled = false
@@ -65,7 +64,9 @@ export function setupTerminal(deps: TerminalSetupDeps): () => void {
 
   const { terminal, fitAddon, searchAddon, serializeAddon, progressAddon } =
     createTerminalWithAddons(deps.createOptions)
-  deps.onAddonsLoaded({ searchAddon, serializeAddon, progressAddon })
+  deps.refs.searchAddon.current = searchAddon
+  deps.refs.serializeAddon.current = serializeAddon
+  deps.refs.progressAddon.current = progressAddon
 
   // Function to complete terminal initialization after fonts are ready
   // This ensures the WebGL renderer builds its texture atlas with correct font metrics
@@ -191,17 +192,32 @@ export function setupTerminal(deps: TerminalSetupDeps): () => void {
   // This enters tmux copy-mode instead of using xterm.js local scrollback
   terminal.attachCustomWheelEventHandler((ev) => deps.copyMode.handleWheelEvent(ev, terminal))
 
-  deps.onTerminalCreated(terminal, fitAddon)
+  deps.refs.terminal.current = terminal
+  deps.refs.fitAddon.current = fitAddon
+
+  // Fit and notify the attached session of the new dimensions
+  const fitAndResize = () => {
+    fitAddon.fit()
+    const attached = deps.getAttachedSession()
+    if (attached) {
+      deps.send({
+        type: 'terminal-resize',
+        sessionId: attached,
+        cols: terminal.cols,
+        rows: terminal.rows,
+      })
+    }
+  }
 
   // Handle resize - with longer debounce to prevent flickering
   const handleResize = () => {
-    if (deps.resizeTimerRef.current) {
-      window.clearTimeout(deps.resizeTimerRef.current)
+    if (deps.refs.resizeTimer.current) {
+      window.clearTimeout(deps.refs.resizeTimer.current)
     }
 
     // Longer debounce to prevent rapid resize events
-    deps.resizeTimerRef.current = window.setTimeout(() => {
-      deps.fitAndResize()
+    deps.refs.resizeTimer.current = window.setTimeout(() => {
+      fitAndResize()
     }, 150)
   }
   const resizeObserver = new ResizeObserver(handleResize)
@@ -227,14 +243,18 @@ export function setupTerminal(deps: TerminalSetupDeps): () => void {
     if (container) {
       container.innerHTML = ''
     }
-    deps.onTerminalDisposed()
-    if (deps.fitTimerRef.current) {
-      window.clearTimeout(deps.fitTimerRef.current)
+    deps.refs.terminal.current = null
+    deps.refs.fitAddon.current = null
+    deps.refs.searchAddon.current = null
+    deps.refs.serializeAddon.current = null
+    deps.refs.progressAddon.current = null
+    if (deps.refs.fitTimer.current) {
+      window.clearTimeout(deps.refs.fitTimer.current)
     }
     deps.copyMode.clearCheckTimer()
     resizeObserver.disconnect()
-    if (deps.resizeTimerRef.current) {
-      window.clearTimeout(deps.resizeTimerRef.current)
+    if (deps.refs.resizeTimer.current) {
+      window.clearTimeout(deps.refs.resizeTimer.current)
     }
   }
 }

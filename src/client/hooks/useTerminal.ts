@@ -9,13 +9,15 @@ import type { WebglAddon } from '@xterm/addon-webgl'
 import type { SearchAddon } from '@xterm/addon-search'
 import type { SerializeAddon } from '@xterm/addon-serialize'
 import type { ProgressAddon } from '@xterm/addon-progress'
-import type { AgentType, ClipboardOfferSource, SendClientMessage, ServerMessageWithDiagnostics, SubscribeServerMessage } from '@shared/types'
+import type { AgentType, SendClientMessage, SubscribeServerMessage } from '@shared/types'
 import { clientLog } from '../utils/clientLog'
 import type { ConnectionStatus } from '../stores/sessionStore'
-import { copyText } from '../utils/copyText'
 import { clearSnapshotCache } from '../terminal/snapshotCache'
-import { logTerminalOutputDropped } from '../terminal/droppedOutputLog'
-import { cancelIosRepaint, installVisibilityHandlers, scheduleIosRepaint, type IosRepaintTarget } from '../terminal/iosRepaint'
+import { logFirstOutputAfterSwitch, logTerminalOutputDropped } from '../terminal/droppedOutputLog'
+import { cancelIosRepaint, installVisibilityHandlers, type IosRepaintTarget } from '../terminal/iosRepaint'
+import { handleTerminalReady, type TerminalReadyDeps } from '../terminal/terminalReady'
+import { usePendingClipboardOffer } from '../terminal/clipboardOffer'
+import { applyTheme, applyFontSettings } from '../terminal/appearance'
 import { syncWebglPreference } from '../terminal/webgl'
 import { TmuxCopyModeState } from '../terminal/copyMode'
 import { syncAttachment } from '../terminal/attachState'
@@ -35,12 +37,6 @@ export { resetDroppedOutputRateLimiterForTests } from '../terminal/droppedOutput
 export { sanitizeLink } from '../terminal/linkSanitize'
 export { forceTextPresentation } from '../terminal/textPresentation'
 
-
-interface PendingClipboardOffer {
-  id: number
-  text: string
-  source: ClipboardOfferSource
-}
 
 interface UseTerminalOptions {
   sessionId: string | null
@@ -103,32 +99,12 @@ export function useTerminal({
   const [isTmuxCopyMode, setIsTmuxCopyMode] = useState(false)
   const appMouseRef = useRef<boolean>(false)
   const altScreenRef = useRef<boolean>(false)
-  const clipboardOfferIdRef = useRef(0)
-  const [pendingClipboardOffer, setPendingClipboardOffer] = useState<PendingClipboardOffer | null>(null)
-
-  const offerClipboardCopy = useCallback((text: string, source: ClipboardOfferSource) => {
-    if (!text?.trim()) return
-    clipboardOfferIdRef.current += 1
-    setPendingClipboardOffer({
-      id: clipboardOfferIdRef.current,
-      text,
-      source,
-    })
-  }, [])
-
-  const copyPendingClipboardOffer = useCallback(() => {
-    if (!pendingClipboardOffer) return
-    copyText(pendingClipboardOffer.text)
-    clientLog('clipboard_manual_copy', {
-      source: pendingClipboardOffer.source,
-      chars: pendingClipboardOffer.text.length,
-    }, 'info')
-    setPendingClipboardOffer(null)
-  }, [pendingClipboardOffer])
-
-  const dismissPendingClipboardOffer = useCallback(() => {
-    setPendingClipboardOffer(null)
-  }, [])
+  const {
+    pending: pendingClipboardOffer,
+    offer: offerClipboardCopy,
+    copy: copyPendingClipboardOffer,
+    dismiss: dismissPendingClipboardOffer,
+  } = usePendingClipboardOffer()
 
   // Track the currently attached session to prevent race conditions
   const attachedSessionRef = useRef<string | null>(null)
@@ -173,27 +149,13 @@ export function useTerminal({
     getSessionId: () => attachedSessionRef.current,
   }
 
+  // Keep latest callbacks/options in refs for the stable module instances.
   useEffect(() => {
     sendMessageRef.current = sendMessage
-  }, [sendMessage])
-
-  useEffect(() => {
     agentTypeRef.current = agentType
-  }, [agentType])
-
-  useEffect(() => {
     onScrollChangeRef.current = onScrollChange
-  }, [onScrollChange])
+  }, [sendMessage, agentType, onScrollChange])
 
-  // Check if terminal is scrolled to bottom
-  const checkScrollPosition = useCallback(() => {
-    const terminal = terminalRef.current
-    if (!terminal || !onScrollChangeRef.current) return
-
-    const buffer = terminal.buffer.active
-    const isAtBottom = !inTmuxCopyModeRef.current && buffer.viewportY >= buffer.baseY
-    onScrollChangeRef.current(isAtBottom)
-  }, [])
 
   // tmux copy-mode tracking (terminal/copyMode.ts): the class owns the
   // debounce/poll timers and wheel accumulator; the hook owns the React
@@ -210,7 +172,7 @@ export function useTerminal({
       altScreenRef,
       flushOutputBeforeControl: () => flushOutputBeforeControlRef.current?.(),
       onModeChange: setIsTmuxCopyMode,
-      onScrollPositionChange: checkScrollPosition,
+      getOnScrollChange: () => onScrollChangeRef.current,
     })
   }
   const copyMode = copyModeRef.current
@@ -229,7 +191,7 @@ export function useTerminal({
       getSessionId: () => attachedSessionRef.current,
       isIOS: isiOS,
       needsResetRef,
-      onWriteSettled: checkScrollPosition,
+      onWriteSettled: () => copyMode.checkScrollPosition(),
     })
   }
   const output = outputStreamRef.current
@@ -256,23 +218,19 @@ export function useTerminal({
   // so acks from superseded writes become no-ops.
   const invalidateWriteBackpressure = useCallback(() => output.invalidate(), [output])
 
-  const fitAndResize = useCallback(() => {
-    const terminal = terminalRef.current
-    const fitAddon = fitAddonRef.current
-    if (!terminal || !fitAddon) return
-
-    fitAddon.fit()
-
-    const attached = attachedSessionRef.current
-    if (attached) {
-      sendMessageRef.current({
-        type: 'terminal-resize',
-        sessionId: attached,
-        cols: terminal.cols,
-        rows: terminal.rows,
-      })
-    }
-  }, [])
+  // terminal-ready handling deps (terminal/terminalReady.ts), reading live refs.
+  const terminalReadyDeps: TerminalReadyDeps = {
+    getTerminal: () => terminalRef.current,
+    output,
+    needsResetRef,
+    switchStartRef,
+    focusAfterAttachSessionRef,
+    updateReadySession,
+    setIsSwitching,
+    invalidateWriteBackpressure,
+    isIOS: isiOS,
+    repaintTarget: iosRepaintTarget,
+  }
 
   // Terminal initialization - only once on mount (terminal/setup.ts):
   // create + open after fonts, links, key routing, paste capture, input,
@@ -280,7 +238,6 @@ export function useTerminal({
   useEffect(() => {
     return setupTerminal({
       getContainer: () => containerRef.current,
-      isInitialized: () => !!terminalRef.current,
       createOptions: {
         fontFamily,
         fontSize,
@@ -290,21 +247,14 @@ export function useTerminal({
         screenReaderMode: isiOS,
         onClipboardWriteFailed: offerClipboardCopy,
       },
-      onAddonsLoaded: ({ searchAddon, serializeAddon, progressAddon }) => {
-        searchAddonRef.current = searchAddon
-        serializeAddonRef.current = serializeAddon
-        progressAddonRef.current = progressAddon
-      },
-      onTerminalCreated: (terminal, fitAddon) => {
-        terminalRef.current = terminal
-        fitAddonRef.current = fitAddon
-      },
-      onTerminalDisposed: () => {
-        terminalRef.current = null
-        fitAddonRef.current = null
-        searchAddonRef.current = null
-        serializeAddonRef.current = null
-        progressAddonRef.current = null
+      refs: {
+        terminal: terminalRef,
+        fitAddon: fitAddonRef,
+        searchAddon: searchAddonRef,
+        serializeAddon: serializeAddonRef,
+        progressAddon: progressAddonRef,
+        fitTimer,
+        resizeTimer,
       },
       useWebGLRef,
       webglAddonRef,
@@ -314,43 +264,36 @@ export function useTerminal({
       copyMode,
       pasteChannel,
       getReadySession: () => readySessionRef.current,
+      getAttachedSession: () => attachedSessionRef.current,
       send: (message) => sendMessageRef.current(message),
-      fitTimerRef: fitTimer,
-      resizeTimerRef: resizeTimer,
-      fitAndResize,
     })
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fitAndResize])
+  }, [])
 
   // Update theme
   useEffect(() => {
-    if (terminalRef.current) {
-      terminalRef.current.options.theme = theme
-    }
+    applyTheme(terminalRef.current, theme)
   }, [theme])
 
   // Update font size, lineHeight, letterSpacing, and fontFamily (maintaining integer cell height)
   useEffect(() => {
-    const terminal = terminalRef.current
-    const fitAddon = fitAddonRef.current
-    if (terminal && fitAddon) {
-      terminal.options.fontFamily = fontFamily
-      terminal.options.fontSize = fontSize
-      // Recalculate lineHeight for integer cell height
-      terminal.options.lineHeight = Math.round(fontSize * lineHeight) / fontSize
-      terminal.options.letterSpacing = letterSpacing
-      fitAddon.fit()
-      // Notify server of new dimensions
-      const attached = attachedSessionRef.current
-      if (attached) {
-        sendMessageRef.current({
-          type: 'terminal-resize',
-          sessionId: attached,
-          cols: terminal.cols,
-          rows: terminal.rows,
-        })
+    applyFontSettings(
+      terminalRef.current,
+      fitAddonRef.current,
+      { fontFamily, fontSize, lineHeight, letterSpacing },
+      (cols, rows) => {
+        // Notify server of new dimensions
+        const attached = attachedSessionRef.current
+        if (attached) {
+          sendMessageRef.current({
+            type: 'terminal-resize',
+            sessionId: attached,
+            cols,
+            rows,
+          })
+        }
       }
-    }
+    )
   }, [fontSize, lineHeight, letterSpacing, fontFamily])
 
   // Handle WebGL toggle at runtime
@@ -404,7 +347,7 @@ export function useTerminal({
         needsReset: needsResetRef,
       },
     })
-  }, [sessionId, tmuxTarget, allowAttach, connectionStatus, connectionEpoch, checkScrollPosition, setTmuxCopyMode, invalidateWriteBackpressure, updateReadySession])
+  }, [sessionId, tmuxTarget, allowAttach, connectionStatus, connectionEpoch, setTmuxCopyMode, invalidateWriteBackpressure, updateReadySession])
 
   useEffect(() => {
     copyMode.stopPoll()
@@ -449,15 +392,9 @@ export function useTerminal({
         // Log time from attach-send to first output (server roundtrip)
         const switchStart = switchStartRef.current
         if (switchStart) {
-          clientLog('switch_first_output', {
-            sessionId: message.sessionId,
-            serverRoundtripMs: Math.round(performance.now() - switchStart),
-            bytes: message.data.length,
-            parseMs: (message as ServerMessageWithDiagnostics)._parseMs ?? -1,
-            rawLength: (message as ServerMessageWithDiagnostics)._rawLength ?? -1,
+          logFirstOutputAfterSwitch(message, switchStart, () => {
+            switchStartRef.current = null
           })
-          // Clear so we only log for the first output after a switch
-          switchStartRef.current = null
         }
 
         output.push(
@@ -470,49 +407,7 @@ export function useTerminal({
         attachedSession &&
         message.sessionId === attachedSession
       ) {
-        updateReadySession(message.sessionId)
-        // If output is buffered but unflushed, flush now so reset+write
-        // stay atomic (avoids blank flash from resetting before flush fires).
-        // If no output arrived at all (empty pane or server dedup), reset
-        // to clear stale content from the previous session.
-        if (output.needsReset && output.bufferedLength > 0) {
-          // Bypass backpressure for the atomic reset+history write, and
-          // advance the generation first: acks from writes issued before
-          // this boundary (same terminal, prior lifecycle) must not consume
-          // the new accounting (design D7).
-          invalidateWriteBackpressure()
-          output.flush({ force: true })
-        } else if (output.needsReset) {
-          terminalRef.current?.reset()
-          needsResetRef.current = false
-        }
-        setIsSwitching(false)
-
-        const readySwitchStart = switchStartRef.current
-        // switchStartRef may already be cleared by terminal-output above; only log if still set
-        if (readySwitchStart) {
-          clientLog('switch_ready', {
-            sessionId: message.sessionId,
-            totalMs: Math.round(performance.now() - readySwitchStart),
-          })
-          switchStartRef.current = null
-        }
-
-        if (focusAfterAttachSessionRef.current === message.sessionId) {
-          terminalRef.current?.focus()
-          focusAfterAttachSessionRef.current = null
-        }
-
-        // Force iOS compositor repaint after reconnect data delivery.
-        // The visibilitychange repaint fires early and may only show stale
-        // content; this second repaint catches the fresh data from reconnect.
-        // Flush pending output first so the repaint captures fresh data.
-        // Uses shared scheduleIosRepaint so it coalesces with any pending
-        // visibility-triggered repaint (no double-flicker).
-        if (isiOS) {
-          output.flush()
-          scheduleIosRepaint(50, 'terminal-ready', iosRepaintTarget)
-        }
+        handleTerminalReady(message.sessionId, terminalReadyDeps)
       }
 
       // Clear switching state on terminal-error so spinner doesn't get stuck
@@ -559,7 +454,7 @@ export function useTerminal({
       invalidateWriteBackpressure()
       cancelIosRepaint(iosRepaintTarget)
     }
-  }, [subscribe, checkScrollPosition, setTmuxCopyMode, offerClipboardCopy, invalidateWriteBackpressure, updateReadySession])
+  }, [subscribe, setTmuxCopyMode, offerClipboardCopy, invalidateWriteBackpressure, updateReadySession])
 
   // Force iOS compositor repaint on visibility resume (terminal/iosRepaint.ts):
   // WKWebView shows a stale cached snapshot after background/foreground, and

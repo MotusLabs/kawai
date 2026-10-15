@@ -20,7 +20,7 @@ export interface TmuxCopyModeDeps {
   altScreenRef: MutableRefObject<boolean>
   flushOutputBeforeControl: () => void
   onModeChange: (inCopyMode: boolean) => void
-  onScrollPositionChange: () => void
+  getOnScrollChange: () => ((isAtBottom: boolean) => void) | undefined
 }
 
 export class TmuxCopyModeState {
@@ -50,7 +50,18 @@ export class TmuxCopyModeState {
       terminal.write(DISABLE_MOUSE_TRACKING)
     }
 
-    this.deps.onScrollPositionChange()
+    this.checkScrollPosition()
+  }
+
+  /** Report whether the terminal is scrolled to the bottom (never in copy-mode). */
+  checkScrollPosition(): void {
+    const terminal = this.deps.getTerminal()
+    const onScrollChange = this.deps.getOnScrollChange()
+    if (!terminal || !onScrollChange) return
+
+    const buffer = terminal.buffer.active
+    const isAtBottom = !this.deps.inCopyModeRef.current && buffer.viewportY >= buffer.baseY
+    onScrollChange(isAtBottom)
   }
 
   /** Exit copy-mode before input/paste reaches the pane (paired sites). */
