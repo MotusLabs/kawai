@@ -135,3 +135,55 @@ describe('redact: CC checkpoint findings (H1, M7, low)', () => {
     expect(redact('gh pr comment 62 --body "deploy done"')).toBe('gh pr comment 62 --body "deploy done"')
   })
 })
+
+describe('redact: CC round 3 (body forms, linear userinfo, over-redaction)', () => {
+  test('gh secret set -b/--body leaks in every flag order, one form per test line', () => {
+    expect(redact('gh secret set K -R acme/kawai -b hunter2')).toBe(`gh secret set K -R acme/kawai -b ${REDACTED}`)
+    expect(redact('gh secret set NAME -e prod -b hunter2')).toBe(`gh secret set NAME -e prod -b ${REDACTED}`)
+    expect(redact('gh secret set --body hunter2 NAME')).toBe(`gh secret set --body ${REDACTED} NAME`)
+    expect(redact('gh secret set -bhunter2 NAME')).toBe(`gh secret set -b${REDACTED} NAME`)
+    expect(redact('gh secret set --body=hunter2 NAME')).toBe(`gh secret set --body=${REDACTED} NAME`)
+    // Both bodies of a two-flag call, each in its own form.
+    expect(redact('gh secret set K -bhunter2 --body=second')).toBe(`gh secret set K -b${REDACTED} --body=${REDACTED}`)
+  })
+
+  test('userinfo stays linear and an @scope path segment survives', () => {
+    // A path @scope is not userinfo.
+    expect(redact('curl -d x https://registry.example.internal/@scope/pkg'))
+      .toBe('curl -d x https://registry.example.internal/@scope/pkg')
+    // 240k characters of scheme repetition redact in well under 100 ms.
+    const big = 'https://'.repeat(30_000)
+    const started = performance.now()
+    const out = redactForStore(big)
+    const elapsed = performance.now() - started
+    expect(out.text.length).toBe(4096)
+    expect(out.truncated).toBe(true)
+    expect(elapsed).toBeLessThan(100)
+  })
+
+  test('a 16 KiB read bound keeps every stored character redacted', () => {
+    // A secret at 10 KiB — past nothing: inside the read bound, redacted.
+    const command = `echo ${'x'.repeat(10_000)} ghp_ABCDEFghijklmnop0123456789`
+    const out = redactForStore(command)
+    expect(out.text).not.toContain('ghp_')
+    expect(out.text.slice(0, 4096)).toContain('x')
+  })
+
+  test('over-redaction undone: bare -u and author-shaped names stay as written', () => {
+    for (const text of [
+      'sort -u file.txt',
+      'tar -uvf out.tgz dir',
+      'git add -u',
+      'docker run -u 1000:1000 img',
+      'git commit --author=me -m x',
+      'AUTHORS=1 make docs',
+      'TOKEN_COUNT=5 curl -s https://example.internal',
+    ]) {
+      expect(redact(text)).toBe(text)
+    }
+    // Credentials still go: curl-like any shape, elsewhere user:pass shapes.
+    expect(redact('curl -u token https://example.internal')).toBe(`curl -u ${REDACTED} https://example.internal`)
+    expect(redact('curl -u 1000:1000 https://example.internal')).toBe(`curl -u ${REDACTED} https://example.internal`)
+    expect(redact('mytool -u admin:hunter2 https://example.internal')).toBe(`mytool -u ${REDACTED} https://example.internal`)
+  })
+})
