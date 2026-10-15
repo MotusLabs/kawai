@@ -18,7 +18,7 @@ Each change of a plan's newest execution SHALL show exactly one outcome, derived
 - **THEN** its outcome reads landed, flagged as not tree-verified, with its base-branch CI as the evidence
 
 ### Requirement: Waiting names its cause
-A change that cannot proceed SHALL name one immediate cause: a dependency (or a stopped one), the parallel limit, staffing capacity (with its mailbox waiting reason), a parked holder or cooling profile, a pending approval or question, an open decision card, pending CI, a Kawai effect pending or retrying, member release, an acceptance condition, the landing slot (naming its holder), or an uncertain delivery. A named wait SHALL never count as a stall.
+A change that cannot proceed SHALL name one immediate cause: a dependency (or a stopped one), the parallel limit, staffing capacity (with its mailbox waiting reason), a parked holder or cooling profile, a pending approval or question, an open decision card, pending CI, a Kawai effect pending or retrying, member release, an acceptance condition, the landing slot (naming its holder), or an uncertain delivery. A named wait SHALL never count as a `no-progress` stall.
 
 #### Scenario: Blocked by a stopped dependency
 - **WHEN** change `ui` depends on `api`, which stopped as `round-limit`
@@ -55,11 +55,11 @@ An implement, fix, update, or review stage held by an agent, with no named wait,
 - **THEN** it is not stalled, because its deadline counts from the end of the wait
 
 ### Requirement: Repeating failures stall
-A change whose two latest consecutive failed rounds have the same failure signature SHALL read stalled as `repeating-failure`, before the round limit stops it. The signature SHALL be the sorted names of the failing CI checks, or a failed review.
+A change whose two latest consecutive failed rounds have the same failure signature SHALL read stalled as `repeating-failure`, before the round limit stops it, whatever the change waits on. The signature SHALL be the sorted names of the failing CI checks, followed by `review:fail` when the round's review failed.
 
 #### Scenario: The same check fails twice
-- **WHEN** rounds 2 and 3 of `api` both fail only `ci / unit-tests`
-- **THEN** `api` reads stalled as `repeating-failure`, naming the check, while it still has a fix round left
+- **WHEN** rounds 2 and 3 of `api` both fail only `ci / unit-tests`, and round 4's CI is pending
+- **THEN** `api` reads stalled as `repeating-failure`, naming the check, with the CI wait listed as also applying, while it still has a fix round left
 
 #### Scenario: Different failures
 - **WHEN** round 2 fails `lint` and round 3 fails `unit-tests`
@@ -107,7 +107,7 @@ The report SHALL show each change's failed and superseded integration candidates
 - **THEN** the report shows `reconsider` with a link to that review
 
 ### Requirement: Plan stops, stalls, and conditions need attention
-The team attention queue SHALL hold one item for each stopped change, owned by the human with **Retry or stop execution**; for each stall, owned by the plan's Lead role, else the human; for each acceptance condition holding a change, owned by the human; and for each failed promotion without a correction task, owned by the human with **Promote again**. Each item SHALL link to its plan and change and clear when its cause clears.
+The team attention queue SHALL hold one item for each stopped change, owned by the human with **Retry or stop execution**; for each stall, owned by the plan's Lead role, else the human; for each acceptance condition holding a change, owned by the human; and for a plan's newest failed promotion while no later one has started and no correction task for it is open, owned by the human with **Promote again**. Each item SHALL link to its plan and change and clear when its cause clears.
 
 #### Scenario: A stop needs the owner
 - **WHEN** change `api` stops as `ci-timeout`
@@ -129,29 +129,33 @@ The team attention queue SHALL hold one item per open decision card, owned by th
 - **THEN** the queue shows it as needing the human, linked to the card
 
 ### Requirement: The morning summary covers plans
-The team's summary since the human's last visit SHALL add the changes landed, the changes stopped, the stall alerts raised, the decisions recorded, and the overrides made in that window, each linking to its plan. These buckets SHALL be read from durable records only.
+The team's summary SHALL add, over its window of the last 24 hours, the changes landed, the changes stopped, the stall alerts raised, the decisions recorded, and the overrides made, each linking to its plan. These buckets SHALL be read from durable records only.
 
 #### Scenario: After a night away
-- **WHEN** two changes landed, one stopped, and the Lead recorded three decisions overnight
+- **WHEN** two changes landed, one stopped, and the Lead recorded three decisions overnight, all within the last 24 hours
 - **THEN** the summary lists both landings, the stop, and the three decisions, each linked to its plan
 
 #### Scenario: Survives a restart
 - **WHEN** the server restarted during the night
-- **THEN** the plan buckets still list everything since the last visit
+- **THEN** the plan buckets still list everything in the last 24 hours
 
 ### Requirement: Kawai records usage per completed turn
-Each completed turn on a task SHALL be recorded with its session, group, profile, model, input, output, cache-read, and cache-creation tokens, the steps the turn took, and whether it succeeded. A turn started by mail SHALL belong to that mail's task; any other turn SHALL belong to the session's task. A turn on no task SHALL not be recorded, and nothing SHALL be backfilled.
+Each completed turn on a task SHALL be recorded with its session, group, profile, model, input, output, cache-read, and cache-creation tokens, the steps the turn took, and whether it succeeded. A turn started by mail SHALL belong to that mail's task, and to none when the mail has none; any other turn SHALL belong to the session's task. Mail delivered during a turn SHALL not change it. A turn on no task SHALL not be recorded, and nothing SHALL be backfilled.
 
 #### Scenario: A dev's turn
 - **WHEN** a dev spawned for change `api` completes a turn
 - **THEN** one usage record names its task, group, profile, model, token counts, and steps
 
 #### Scenario: The Lead answers a question
-- **WHEN** a Lead turn started by a task-less decision question completes
+- **WHEN** a Lead session bound to a task completes a turn started by a task-less decision question
 - **THEN** no usage record is written for it
 
+#### Scenario: Mail arrives mid-turn
+- **WHEN** task mail is delivered while a turn started by other task mail is still running
+- **THEN** that turn's usage record names the task of the mail that started it
+
 ### Requirement: The Plans view shows usage per role and profile
-A plan SHALL show the recorded usage of the tasks linked to it and of its fix and correction tasks, summed by group and profile and per change, as tokens and turns. It SHALL show no currency and set no budget, and SHALL state that turns outside the plan's tasks are not counted.
+A plan SHALL show the recorded usage of the tasks linked to it and of its fix and correction tasks, summed by group and profile and per change, as tokens and turns. It SHALL show no currency and set no budget, and SHALL state what is not counted: turns outside the plan's tasks, and Task subagent calls.
 
 #### Scenario: Two profiles in one role
 - **WHEN** `middle-devs` worked a plan on profiles `glm` and `mimo`
@@ -159,7 +163,7 @@ A plan SHALL show the recorded usage of the tasks linked to it and of its fix an
 
 #### Scenario: No cost or budget
 - **WHEN** the owner opens a plan's usage
-- **THEN** no currency amount or budget is shown, and a note says turns outside the plan's tasks are not counted
+- **THEN** no currency amount or budget is shown, and a note says turns outside the plan's tasks and Task subagent calls are not counted
 
 ### Requirement: Agents read supervision and cannot act on executions
 `plan_get` SHALL include each change's outcome, cause, progress, activity, and stalls, the report, and the plan's usage. No agent tool SHALL retry, stop, or dismiss anything in an execution, and stall alerts SHALL be answered by acting, never by replying to Kawai.

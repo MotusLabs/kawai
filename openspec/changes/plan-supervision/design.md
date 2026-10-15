@@ -5,11 +5,11 @@
 See proposal.md for the motivation. Current state and constraints:
 
 - **Plans and executions.** `durable-plans` stores plans, revisions, and `plan_events`, with `PlanService` the only writer of plan events (C3). `plan-execution` stores executions, change rows (state, step, stop reason, fix rounds), attempts, rounds, effects, the landing slot, and landing facts (X1, X3, X7, X8). Its D3 leaves "stalled" and "needs attention" to be derived here. `integration-candidates` adds candidates and promotions (I1, I2). None of the plan modules is implemented yet, so this change is written against their designs and contracts. It is implemented after them.
-- **Kawai as an actor.** plan-execution D2 adds `SystemActor` and a system `TaskCaller` that only `ExecutionService` constructs, with rights limited to an execution's own tasks.
+- **Kawai as an actor.** plan-execution D2 adds `SystemActor` and a system `TaskCaller` that only `ExecutionService` constructs, with rights limited to an execution's own tasks. D7 modifies that caller.
 - **Replies to Kawai.** plan-execution D18 refuses replies to Kawai's mail in the `reply` tool (`mailboxTools.ts`) and in the human composer's reply path (`messageConnections.ts`).
 - **The team workspace.** `team-workspace` (on master) registers attention sources in `ATTENTION_SOURCES` (`src/server/team/workspaceRead.ts`), each a pure function over existing state. Its `AttentionLink.kind` already reserves `card` for Lead decision cards (its D5). The morning summary is a fixed set of `SummaryBucket`s; `runtimeOnly` marks buckets a restart empties.
-- **Turn ends.** `ChatSessionManager` writes `chat_turn_ends` on `turn_completed` for task-bound sessions (`chatTurnEndStore.ts`). The driver's `handleResult` (`ChatSessionDriver.ts`) emits `turn_completed` with `subtype`, `totalCostUsd`, and `numTurns`. The SDK result's `usage` field (input, output, cache-read, and cache-creation tokens) is per turn, while `total_cost_usd` and `modelUsage` accumulate over the CLI process.
-- **The mail behind a turn.** `LimitOutcomes.delivered(sessionId, message)` (`src/server/team/routing/limitOutcomes.ts`) already tracks the mail pushed as a session's next turn, until that turn ends.
+- **Turn ends.** `ChatSessionManager` writes `chat_turn_ends` on `turn_completed` for task-bound sessions (`chatTurnEndStore.ts`). The driver's `handleResult` (`ChatSessionDriver.ts`) emits `turn_completed` with `subtype`, `totalCostUsd`, and `numTurns`. The SDK result's `usage` field (input, output, cache-read, and cache-creation tokens) is per turn and covers the main agent loop only: the SDK's type notes say it excludes Task subagent, sidechain, and auxiliary model calls. `total_cost_usd` and `modelUsage` are cumulative per `query()` call: a resumed or forked session continues from its saved total, and a mid-session `/clear` resets it.
+- **The mail behind a turn.** `LimitOutcomes.delivered(sessionId, message)` (`src/server/team/routing/limitOutcomes.ts`) already tracks the mail pushed as a session's next turn, until that turn ends. It is last-write-wins per session, so a later push replaces it; D14 therefore pins a turn's mail when the turn starts.
 - **Strategy boundaries.** Usage is shown, never capped. No agent approves anything the owner decides.
 
 ## Goals / Non-Goals
@@ -53,15 +53,17 @@ Every file stays under 500 lines. The pure functions own every rule, so the serv
 
 ### D2. Plan content: `leadGroup` and `fixes` (extends C1)
 
-- `PlanContent.leadGroup?: string` and `PlanChange.fixes?: string[]`.
-- **Normalization.** It keeps `leadGroup` only when it is a non-empty trimmed string, and `fixes` only when it is a non-empty list of trimmed strings. Otherwise it omits the key, never writing `null` or `[]`. The canonical serialization of every earlier revision is therefore byte-identical, and its hash is unchanged.
+- `PlanContent.leadGroup?: string` and `PlanChange.fixes?: string[]`. `fixes` names the fix and correction tasks (`plan_fix_tasks`, D7 and D8) that the change answers.
+- **Normalization.** It keeps `leadGroup` only when it is a non-empty trimmed string. It keeps `fixes` only when it is a non-empty list, with each entry trimmed and kept in order. An entry that is empty after trimming stays, so the structure check refuses it rather than normalization hiding it. Otherwise it omits the key, never writing `null` or `[]`. The canonical serialization of every earlier revision is therefore byte-identical, and its hash is unchanged.
 - **`planStructureErrors` gains three checks:**
   - `leadGroup` must be one of `roles[].group`;
-  - each `fixes` entry must match `decision-<uuid>`;
+  - each `fixes` entry must match `task-<uuid>`;
   - a change must not name an entry twice.
 
-  One override may be named by several changes, and its fix then spans them.
-- **References are not checked at save.** Whether an id names an override of this plan is checked when the plan is read, and a miss becomes a warning on the plan detail (`fixes names no override of this plan: <id>`). Checking at save would tie `PlanService`'s pure structure check to the decision store. A wrong reference costs only a warning, because fix completion considers only real overrides.
+  One fix task may be named by several changes, and its fix then spans them.
+- **References are not checked at save.** Whether an id names a fix or correction task of this plan is checked when the plan is read, and a miss becomes a warning on the plan detail (`fixes names no fix or correction task of this plan: <id>`). Checking at save would tie `PlanService`'s pure structure check to the decision store. A wrong reference costs only a warning, because completion considers only real fix and correction tasks.
+
+*Why `fixes` names the task rather than the override:* both an override and a failed promotion end in a `plan_fix_tasks` task. One reference therefore gives both the same phases (D13) and the same completion (D8), and a correction is answered exactly like a fix.
 
 *Alternative rejected:* a separate "fix plan" record. A fix is ordinary plan work, and approval, validation, Start, and the gate already exist for changes. A new record would need all of them again.
 
@@ -179,7 +181,8 @@ Input: `{ plan_id, card_id?, question?, options?, choice?, option_index?, ration
    - **The card is decided.** If the same session already decided it with the same choice, Kawai returns that decision. Otherwise it refuses, naming the decider.
    - **The card is open.** Kawai inserts `seq = 1` with kind `answer`, and the decider's session, group, and profile. It then enqueues the answer through the mailbox's reply path, with the guard bypassed (D9):
      - from the decider to the asker, in the question's thread;
-     - carrying the card's task and the tag `decision-answer`;
+     - with the card's task passed explicitly as `taskId`, because the question mail has none and a reply otherwise keeps its parent's;
+     - tagged `decision-answer`;
      - with the choice and the rationale in the body.
 
    Because the mail goes through the reply path, a killed asker's answer falls back to its group as any reply does.
@@ -229,12 +232,19 @@ The override sends no mail to the original asker. The fix task tells the Lead ro
 
 Only `ExecutionService` constructs the first. Only `fixTasks.ts` constructs the other two, through functions the module does not export. A test asserts that no tool or connection path yields a system caller.
 
+**This modifies plan-execution D2.** D2 fixes the system caller as `{ kind: 'system'; team; executionId }`, built only by `ExecutionService`, and lets it create tasks only with an execution link. This change:
+- widens the shape to `origin`;
+- scopes the rights per origin, keeping D2's rights for the execution origin unchanged;
+- extends every exhaustive switch D2 introduced over `origin`.
+
+plan-execution archives first, so its design stays the record of D2 as written, and this decision records the modification. The `team-tasks` delta records the same widening of who creates tasks as Kawai.
+
 **Rights of the decision origins.** Through them Kawai may only:
 - create a task with no plan link, inserting the `plan_fix_tasks` row in the same transaction;
 - dispatch it;
 - set `done` or `cancelled` on it as its creator.
 
-Execution rights such as handoffs, acceptance, and release stay with the execution origin. Every human-only path keeps refusing the system caller.
+Execution rights such as handoffs, acceptance, and release stay with the execution origin. Member release needs no right here: its close hook releases a task's spawned members on `done` or `cancelled`, whoever closes the task. Every human-only path keeps refusing the system caller.
 
 **The fix task:**
 - **Title:** `Forward fix: <question, cut to 80 characters> — <plan title>`.
@@ -243,8 +253,8 @@ Execution rights such as handoffs, acceptance, and release stay with the executi
   - the superseded decision (choice, rationale, decider) and the override (choice, rationale);
   - the affected tasks with their changes, the commits of their results, and their landing facts' merge commits since the superseded decision.
 
-  It then gives the instruction: write an OpenSpec change, and land its proposal on the base branch, as `changes-on-base` requires. Add it to the plan's next revision with `fixes: ["<decisionId>"]` and `dependsOn` the affected changes still in the revision, then call `plan_submit_for_review`. The owner approves and starts it, and Kawai gates and lands it like any change. If no change is needed, submit a result explaining why, and the owner accepts it.
-- **Acceptance:** "Every change naming the override in `fixes` has landed, and Kawai then closes this task; or the owner accepted a no-change result."
+  It then gives the instruction: write an OpenSpec change, and land its proposal on the base branch, as `changes-on-base` requires. Add it to the plan's next revision with `fixes: ["<this task's id>"]` and `dependsOn` the affected changes still in the revision, then call `plan_submit_for_review`. The owner approves and starts it, and Kawai gates and lands it like any change. If no change is needed, submit a result explaining why, and the owner accepts it.
+- **Acceptance:** "A change naming this task in `fixes` has landed and no change of the current approved revision naming it is unlanded, and Kawai then closes this task; or the owner accepted a no-change result."
 - **No worktree and no OpenSpec change.** The change does not exist yet. There is no parent task.
 
 **Dispatch.** `AssignmentService.dispatch(system, …)` sends it to `leadGroup` with the Lead role's `allowedProfiles`, the tag `plan-fix`, and the request key `fix:<decisionId>`. With no Lead role, nothing is dispatched, and the attention queue asks the owner to assign the task (D13).
@@ -255,22 +265,25 @@ Execution rights such as handoffs, acceptance, and release stay with the executi
 
 The monitor (D11) runs these on each sweep, each in its own idempotent transaction.
 
-**Fix completion.** For each open override fix task:
-1. Read the current approved revision's changes whose `fixes` name the decision.
-2. If there is at least one, and every one has a landing fact, Kawai sets the task `done` as its creator. The journal note names each change with its merge commit.
+**Completion, for fix and correction tasks alike.** For each open task in `plan_fix_tasks`:
+1. **Landed:** the changes with a landing fact (X7) whose definition, in the revision of the execution that landed them (`plan_change_landings.execution_id`), names the task in `fixes`.
+2. **Outstanding:** the changes of the current approved revision that name the task and have no landing fact.
+3. When at least one change has landed and none is outstanding, Kawai sets the task `done` as its creator. The journal note names each landed change with its merge commit.
 
-A no-change fix ends when the owner accepts its result through the existing acceptance path. A superseded fix was already cancelled (D6).
+Each landed change is judged by the revision it landed under, so a later revision that drops or renames a landed fix change cannot strand the task. A revision that adds another naming change keeps the task open until that change lands too. The current approved revision decides only what is still outstanding.
+
+**A no-change result.** The owner's **Accept result** closes the task as `done` through the shipped acceptance path. The human may set any status on any task, Kawai's included, so this needs no new right. Kawai writes nothing for it, the monitor only reads the closed task, and `fixStatus` reads no change. A superseded fix was already cancelled (D6).
 
 **Correction creation.**
-1. Find promotions of the team's plans that finished as `failed:promotion-conflict` or `failed:ci-failed` and have no `plan_fix_tasks` row.
+1. Find promotions of the team's plans that have no `plan_fix_tasks` row and whose stored outcome is `failed:<reason>`, with the reason `promotion-conflict` or `ci-failed`. That is integration-candidates' stored form; the specs name the bare reasons.
 2. Create a correction task for each, with the origin `promotion`:
    - **title:** `Correct failed promotion: <reason> — <plan title>`;
-   - **direction:** the promotion, its pull request (already closed by Kawai), its failure detail (the conflicting files, or the failing checks with links), and the instruction. The instruction is to resolve the cause on the integration line through the plan, adding or amending a change in a new revision so the owner can promote again. If nothing needs changing, as with a flaky check, submit a result saying so.
+   - **direction:** the promotion, its pull request (already closed by Kawai), its failure detail (the conflicting files, or the failing checks with links), and the instruction. The instruction is to resolve the cause on the integration line through the plan: add or amend a change with `fixes: ["<this task's id>"]` in a new revision, as for a fix, so the owner can promote again. If nothing needs changing, as with a flaky check, submit a result saying so.
 3. Dispatch it as fix tasks are dispatched, with the request key `correct:<promotionId>`.
 
 The other failures (`ci-missing`, `ci-timeout`, `target-moved`, `effect-failed`) create no task. They become an owner item, **Promote again** (D13). A cancelled promotion creates nothing.
 
-**Correction completion.** A later promotion of the same plan that finished `merged` closes the correction, with a journal note naming it. Otherwise the owner's acceptance of a result closes it.
+**Correction completion.** A correction closes by the completion rule above, or by an accepted no-change result. In addition, a later promotion of the same plan that finished `merged` closes it, with a journal note naming that promotion. Once the correction closes, the owner's **Promote again** item returns unless a later promotion has already started (D13).
 
 *Why the monitor rather than the promotion's finish transaction:* promotions belong to `integration-candidates`, which must not depend on decisions. The finished promotion row is the I2 contract, and the unique source makes the reaction exactly-once across restarts. An override is this change's own command, so its fix is created in its own transaction.
 
@@ -307,7 +320,8 @@ The guard covers replies only. An agent can still `send_message` its answer to t
 2. **cancelled.**
 3. **stopped:** with the reason and detail.
 4. **waiting** before provisioning: on a dependency (or a stopped one), or on the parallel limit.
-5. **running stages:** the first applicable named wait, in this order:
+5. **stalled as `repeating-failure`** (D11). This is a fact about decided rounds, not about the holder, so it is checked before the waits. A change in a fix round's CI wait therefore reads stalled, with the wait listed as also applying.
+6. **running stages:** the first applicable named wait, in this order:
    1. a Kawai effect that is pending, running, or unknown (`effect`, naming its kind, try, and next time);
    2. `uncertain-delivery`;
    3. staffing (`staffing`, with the mailbox reason's blocker);
@@ -319,7 +333,7 @@ The guard covers replies only. An agent can still `send_message` its answer to t
    9. `condition`;
    10. `landing-slot` (naming a change or a promotion).
 
-   The other applicable waits are listed as also applying, as `team-waiting-reasons` does. With no wait, an agent-held stage is checked for stalls (D11) and reads stalled or running. A step Kawai holds between ticks reads running.
+   The other applicable waits are listed as also applying, as `team-waiting-reasons` does. With no wait, an agent-held stage is checked for a `no-progress` stall (D11) and reads stalled or running. A step Kawai holds between ticks reads running.
 
 **Progress and activity.** `lastProgress` is the newest of:
 - a result row for the change's task (rows exist only once the submission check accepted them);
@@ -343,8 +357,8 @@ The guard covers replies only. An agent can still `send_message` its answer to t
 - **Idle holder.** The deadline becomes 15 minutes, counted from the later of that anchor and the holder's last turn end, when the holder is idle. Idle means no turn running, no pending request, no running background task or worker, and no due direct mail. An archived or killed holder counts as idle.
 - **The wait observation.** `waitEndedAt` lives in memory. At startup it is set to the startup time for every running change, so a restart can delay a stall by up to one deadline but never raise one early, or for a wait the server did not see.
 
-**`repeating-failure`.** The two newest decided rounds of the change are consecutive failures with an equal `failureSignature`, and the change is not stopped.
-- The signature is the sorted names of the failing CI checks, flaky ones excluded, or `review:fail`.
+**`repeating-failure`.** The two newest decided rounds of the change are consecutive failures with an equal `failureSignature`, and the change is not stopped. It applies whatever the change waits on (D10).
+- The signature is the sorted names of the failing CI checks, flaky ones excluded, followed by `review:fail` when the round's review failed. A round that failed only its review has the signature `review:fail`.
 - A carried round counts as its source does.
 - Superseded rounds are skipped.
 
@@ -384,14 +398,14 @@ With no Lead role, the row is written with a null `message_id` and no mail. Repl
 - **I1.** Failed and superseded candidates beside their change, with their checks and outside commits. A failed candidate is a failed round, so it raises no separate item.
 - **C-I3.** The plan's effective disposition in the current strategy impact review, shown when it is not `continue`, with a link to the review.
 - **M2.** "k of n Lead decisions overridden". *n* counts decisions of kind `answer` or `own-call` made by an agent of the card's addressed group, and *k* counts those a later override superseded.
-- **M4.** For each override whose fix landed: the time from the override to the newest landing among the changes naming it, flagged when any of those landings has `tree_verified = 0`.
+- **M4.** For each override whose fix landed: the time from the override to the newest landing among the changes that landed naming its fix task (D8), flagged when any of those landings has `tree_verified = 0`.
 
 M1, M3, M5, and M6 are not computed.
 
 ### D13. Attention sources and summary buckets
 
 **The types.**
-- `AttentionKind` gains `plan-stop`, `plan-stall`, `decision-question`, `plan-fix`, `plan-condition`, and `plan-promotion`.
+- `AttentionKind` gains `plan-stop`, `plan-stall`, `decision-question`, `plan-fix`, `plan-condition`, and `plan-promotion`. team-workspace D5's reserved comment (`'plan-hold' | 'stall' | 'lead-decision'`) is replaced by these six names when they land. The comment was a placeholder, never the contract.
 - `AttentionLink.kind` gains `plan`, with an optional `planId` and `change` on every link. A `card` link is a decision card, as team-workspace D5 reserved it, and carries `planId`.
 
 **The sources.** `planAttention.ts` registers one source per kind in `ATTENTION_SOURCES`, each pure over the supervision read:
@@ -403,17 +417,19 @@ M1, M3, M5, and M6 are not computed.
 | `decision-question` | `decision-question:<cardId>` | addressed group, else human | Answer the question | the card is decided |
 | `plan-fix` | `plan-fix:<taskId>` | Lead group while planning; human when unassigned, awaiting approval, or approved and not running | Plan the fix / Assign / Approve revision N / Start execution | the task closes |
 | `plan-condition` | `plan-condition:<execution>:<change>:<target>` | human | Resolve condition | the condition is resolved |
-| `plan-promotion` | `plan-promotion:<promotionId>` | human | Promote again | a later promotion starts |
+| `plan-promotion` | `plan-promotion:<promotionId>` | human | Promote again | a later promotion starts, or a correction task for it is open |
 
-**Fix-task phases.** A `plan-fix` item reads its phase from `fixStatus`:
-- planning: no submitted revision names the override;
+**The promotion item** is raised for a plan's newest failed promotion while no later promotion has started and no correction task for it is open. It therefore returns when a correction closes (D8), and it never sits beside an open correction.
+
+**Fix-task phases.** A `plan-fix` item, for a fix or a correction task alike, reads its phase from `fixStatus`:
+- planning: no submitted revision names the task;
 - in review: a revision in review names it;
 - approved: an approved revision names it and no execution of it runs;
 - running.
 
-A correction task's item stays with the Lead group until the task closes.
+Corrections share these phases because a correction's changes name it in `fixes` exactly as a fix's do (D2).
 
-**The summary.** `MorningSummary` gains five durable buckets, read over the window:
+**The summary.** `MorningSummary` gains five durable buckets, read over team-workspace's summary window, the last 24 hours (its D8):
 - `landings`: landing facts by `landed_at`;
 - `stops`: change rows stopped, by `updated_at`;
 - `stallAlerts`: alert rows by `raised_at`;
@@ -425,14 +441,18 @@ None is `runtimeOnly`.
 ### D14. Usage per turn
 
 - **The driver.** `turn_completed` gains an optional `usage: { inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens }`, mapped from the result frame's per-turn `usage`. Missing fields read 0. The event stays additive, and replayed history without it is unchanged.
-- **The task a turn belongs to.** `ChatSessionManager`'s `turn_completed` handler resolves it:
-  - for a turn started by mail, the task of that mail, from the session mailbox's delivered hook, the same one `LimitOutcomes` uses;
-  - otherwise, the session's task (`records.get(sessionId)?.taskId`).
+- **The source is pinned when the turn starts.** `ChatSessionManager` keeps, per session, the mail delivered while no turn ran. It reads this from the session mailbox's delivered hook, the same one `LimitOutcomes` uses. `turn_started` moves that mail onto the turn. A delivery during a running turn neither retargets that turn nor carries over to the next one.
+- **The task a turn belongs to.** At `turn_completed`, two exclusive branches decide it:
+  - a mail-started turn takes that mail's task. It writes nothing when the mail has none, even on a task-bound session;
+  - any other turn takes the session's task (`records.get(sessionId)?.taskId`).
 
   A turn with no task writes nothing. The Lead's turns on task-less questions and alerts are therefore not attributed, and the view says so.
+
+  *Why pin at turn start:* the delivered hook is last-write-wins per session. Reading it at `turn_completed` would hand the whole turn to an urgent or mid-turn delivery.
 - **The record.** One row per turn, keyed by `(session_id, turn_id)`, so a duplicate event writes once. It holds the group, `claudeProfileId`, `model`, the four token counts, `num_turns`, and `ok`, beside the existing `turnEnds.record`.
 - **The plan read.** It covers every task with `team_tasks.plan_id = P`, execution tasks included, plus P's `plan_fix_tasks`. Usage sums by `(group_id, profile_id)` and by change, where fix and correction tasks form their own rows. Turns are row counts, and steps are the sum of `num_turns`.
-- **No currency.** `total_cost_usd` accumulates over the process, and for gateway profiles it applies list prices that do not apply. Showing it would mislead, and the strategy forbids a budget.
+- **Coverage.** The result's `usage` covers the main agent loop only, so Task subagent and auxiliary calls are missing and plan usage understates subagent-heavy work. The view's note says so, beside the not-attributed note. Deriving per-turn deltas from the cumulative `modelUsage` would include them, but it inherits that field's resume and `/clear` lifecycle. It is an open question.
+- **No currency.** `total_cost_usd` is cumulative per `query()` call rather than per turn, and for gateway profiles it applies list prices that do not apply. Showing it would mislead, and the strategy forbids a budget.
 - **No pruning or backfill.** Usage starts when this ships.
 
 ### D15. Human protocol and the view
@@ -449,7 +469,7 @@ None is `runtimeOnly`.
   - `PlanDecisionCard.tsx`: inline in the execution's change rows, and in a plan-level Decisions list for cards with no change;
   - `PlanDecisionDialog.tsx`: Answer, or Override showing the decision it replaces. The override requires a rationale;
   - `PlanReportSection.tsx`;
-  - `PlanUsageSection.tsx`: a group × profile table, the per-change rows, and the not-attributed note.
+  - `PlanUsageSection.tsx`: a group × profile table, the per-change rows, and a note on what is not counted: task-less turns and Task subagent calls.
 
   Every control disables while disconnected, and refusals show inline.
 - **Links.** `plan` and `card` attention links navigate to the Plans tab's plan detail (`#/team/<key>/plans/<planId>`), scrolled to the change or card.
@@ -469,6 +489,7 @@ None is `runtimeOnly`.
 ### D17. Contracts consumed and published
 
 Consumed:
+- **plan-execution D2:** the system `TaskCaller`, modified by D7 (its `origin` and per-origin rights).
 - **C1:** `PlanContent`, extended additively (D2).
 - **C3:** `PlanService.reopen` gains its `within` variant.
 - **C5:** fix tasks carry no link.
@@ -493,15 +514,15 @@ Published:
 | --- | --- | --- |
 | S1 Decision records | D3 cards and decisions; `currentDecision`; card states | `revision-control` (publishing direction from a decision), `execution-safety-recovery` (audit) |
 | S2 Outcomes and causes | D10 `changeSupervision` and its append-only cause list | `revision-control` (`hold` as a cause), `execution-safety-recovery` (recovery states) |
-| S3 Usage records | D14 `chat_turn_usage` and its attribution rule | a later team usage view, `execution-safety-recovery` (budgets, if ever) |
-| S4 Forward fixes | D2 `fixes`, D7 `plan_fix_tasks`, `fixStatus` | `revision-control` (a fix published into running work) |
+| S3 Usage records | D14 `chat_turn_usage` and its attribution rule, pinned at turn start | a later team usage view, `execution-safety-recovery` (budgets, if ever) |
+| S4 Forward fixes | D2 `fixes` naming fix and correction tasks, D7 `plan_fix_tasks`, D8 completion by landed revision, `fixStatus` | `revision-control` (a fix published into running work) |
 
 ## Risks / Trade-offs
 
 - **[Agents bypass the record with `send_message` or AskUserQuestion]** → The prompt steers plan work to cards, the reply guard catches the natural path, and an undecided card stays in the attention queue. Intercepting AskUserQuestion is a non-goal; a spawned dev's question already flags `needs attention`.
 - **[Stall deadlines are fixed]** → An alert changes no state. A false alarm costs one message, and its dedupe keeps it to one per episode. Configurable deadlines are an open question.
 - **[A restart delays stall detection]** → This is conservative by design (D11), and it never alerts early.
-- **[Usage attribution is approximate]** → Turns follow the mail that started them, else the session's task. Human-typed turns on a bound session count toward its task. Task-less Lead turns are unattributed, and the view says so.
+- **[Usage attribution is approximate]** → A mail-started turn takes that mail's task, pinned at turn start, and nothing when the mail has none. Any other turn takes the session's task. Human-typed turns on a bound session count toward its task. Task-less Lead turns are unattributed, and Task subagent calls are missing from the result's usage. The view says both.
 - **[Gateway profiles may report zero or approximate tokens]** → Usage is shown as reported, labeled by profile, never priced.
 - **[The fix path is long: proposal, landing on base, revision, approval, Start]** → This is deliberate: the strategy requires fixes to pass the same checks. The fix status names the current phase and who owns it.
 - **[Overrides while the affected change is still running]** → The running execution keeps its revision, as plan-execution requires, so the change may land with the superseded decision and the fix lands after it. Publishing into running work is `revision-control`'s.
@@ -516,5 +537,6 @@ Published:
 ## Open Questions
 
 - Retention of `chat_turn_usage`. There is no pruning now.
+- Whether per-turn deltas of the cumulative `modelUsage` should replace `usage`, so that Task subagent calls are counted (D14).
 - Whether stall deadlines become per-team settings in `~/.kawai/teams.json`.
 - Whether plan validation should warn about a plan with a Lead-addressed workflow but no `leadGroup`.

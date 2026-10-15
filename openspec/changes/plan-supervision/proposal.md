@@ -31,14 +31,14 @@ The Wave C contracts left these to this change:
   - **Override** decides a card again: another option or new text, with a required rationale. It is guarded by compare-and-swap on the decision it replaces, and supersedes that decision while every earlier decision stays readable.
 - **Forward fixes.**
   - **The fix task.** An override makes Kawai create a fix task for the plan's Lead role. The task names the card, both decisions, and the affected tasks, changes, and commits. With no Lead role, the fix task is left for the owner to assign.
-  - **How the Lead fixes.** The Lead writes an OpenSpec change and adds it to a plan revision as a change whose new `fixes` field names the override. That revision then goes through the plan's normal approval, validation, Start, and gate. A fix is never a bypass.
-  - **Closing.** Kawai marks the fix task done once every change naming the override has landed. A fix needing no change ends when the owner accepts the Lead's result saying so.
+  - **How the Lead fixes.** The Lead writes an OpenSpec change and adds it to a plan revision as a change whose new `fixes` field names the fix task. That revision then goes through the plan's normal approval, validation, Start, and gate. A fix is never a bypass.
+  - **Closing.** Kawai marks the fix task done once a change naming it has landed and no change of the current approved revision naming it is still unlanded. Each landed change is judged by the revision it landed under, so a later revision cannot strand a landed fix. A fix needing no change ends when the owner accepts the Lead's result saying so.
   - **Status.** Each override shows a derived fix status: planning, in review, approved, running, landed, no change, or superseded. The time to landing is shown too, which is M4.
   - **Other effects.** A completed plan is reopened by the override. A later override cancels an earlier fix task that is still open.
-- **Correction tasks (I2).** A promotion that fails on a conflict or a CI failure makes Kawai create a correction task for the Lead role. The task is done when a later promotion of the plan merges, or when the owner accepts its result. Every other failure is an owner attention item: Promote again.
+- **Correction tasks (I2).** A promotion that fails on a conflict or a CI failure makes Kawai create a correction task for the Lead role. The Lead answers it like a fix, with a change whose `fixes` names the correction, and it closes the same way. A later promotion of the plan that merges also closes it. Every other failure, and a closed correction, leaves the owner an attention item: Promote again.
 - **Supervision, derived and never stored.**
   - **Outcome.** Each change has exactly one outcome with a named cause: landed (with its verification), running (stage and holder), waiting, stalled, stopped (reason and detail), cancelled, or not started. Plans show counts, never a percentage.
-  - **Named waits.** These are dependency, parallel slot, staffing capacity, provider limit, approval or question, open decision card, CI, member release, acceptance condition, landing slot, and uncertain delivery. A named wait is never a stall.
+  - **Named waits.** These are dependency, parallel slot, staffing capacity, provider limit, approval or question, open decision card, CI, member release, acceptance condition, landing slot, and uncertain delivery. A named wait is never a `no-progress` stall.
   - **Progress and activity.** Last meaningful progress (an accepted result, CI passing, a verdict, a round passing, a landing, or a candidate passing) is shown apart from last activity.
 - **Stalls.** Two kinds of stall exist:
   - `no-progress`: no meaningful progress within the stage's deadline, while no named wait applies. The deadline is shorter once the holder sits idle.
@@ -51,8 +51,8 @@ The Wave C contracts left these to this change:
   - M2 as counts: "k of n Lead decisions overridden".
 - **Team workspace.**
   - **Attention.** New sources join the queue: plan stops, stalls, decision questions, forward and correction fixes waiting on someone, acceptance conditions holding a change, and failed promotions. A new link kind `plan` joins `card`.
-  - **Morning summary.** It gains landings, stops, stall alerts, decisions, and overrides.
-- **Usage per role and profile.** `turn_completed` gains the result frame's per-turn token usage. Kawai records one usage row per completed turn of a task-bound session: group, profile, model, input, output, cache-read, and cache-creation tokens, and steps. Plan usage sums the tasks linked to the plan, its execution tasks included, plus its fix and correction tasks. It is shown by role and profile, and per change. It shows no currency and sets no budget. Turns outside any task, such as the Lead answering questions, are shown as not attributed.
+  - **Morning summary.** Over its last 24 hours, it gains landings, stops, stall alerts, decisions, and overrides.
+- **Usage per role and profile.** `turn_completed` gains the result frame's per-turn token usage, which covers the main agent loop only. Kawai records one usage row per completed turn on a task: group, profile, model, input, output, cache-read, and cache-creation tokens, and steps. A turn started by mail belongs to that mail's task, and to none when the mail has none, pinned when the turn starts. Any other turn belongs to the session's task. Plan usage sums the tasks linked to the plan, its execution tasks included, plus its fix and correction tasks. It is shown by role and profile, and per change. It shows no currency and sets no budget. Turns outside any task, such as the Lead answering questions, are shown as not attributed.
 - **Agents.** `plan_get` gains decisions, supervision, and usage. Any agent on plan work can call `decision_ask`. `decision_record` is refused outside the Lead role. The plan note explains both. No agent tool answers for the owner, overrides, retries, stops, or dismisses anything.
 
 Non-goals:
@@ -94,7 +94,7 @@ Non-goals:
   - New `src/server/chat/chatTurnUsageStore.ts`.
   - `ChatSessionDriver` reads the result frame's `usage`. `ChatSessionManager` records usage beside turn ends.
   - The reply paths gain the decision guard, `teamPrompt.ts` gains the decision note, and `workspaceRead.ts` registers the new sources and buckets.
-  - The `ExecutionService` system caller gains the decision origin.
+  - The system `TaskCaller` gains an `origin`, so Kawai creates fix and correction tasks through the decision origins. This modifies plan-execution's D2 caller shape and rights (design D7).
 - **Shared.**
   - New `src/shared/planDecisions.ts` and `src/shared/planSupervision.ts`, holding the types and the pure derivations.
   - `PlanContent` gains `leadGroup` and `PlanChange.fixes`.

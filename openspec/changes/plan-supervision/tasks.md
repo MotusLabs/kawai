@@ -13,10 +13,12 @@ Implement after `plan-execution` and `integration-candidates` have landed on mas
   - fix status walks planning, in review, approved, running, landed, no change, and superseded;
   - M2 counts only agent `answer` and `own-call` decisions of the addressed group, and the overridden ones among them;
   - M4 measures override to newest landing, flagged when a landing is not tree-verified;
-  - `fixes` entries must match `decision-<uuid>`, with no duplicates within a change.
+  - `fixes` entries must match `task-<uuid>`, with no duplicates within a change, and an entry that is empty after trimming is refused, not dropped.
 - [ ] 1.3 Create `src/shared/planSupervision.ts` with the outcome, cause, progress, activity, stall, and report types, and the cause and stop-reason labels (D10, D12). Verify with a typecheck, and with a test that an unknown cause or stop reason renders verbatim.
 - [ ] 1.4 Implement `changeSupervision(input, now)` (D10, D11). Verify with unit tests:
-  - the outcome precedence: landed, cancelled, stopped, waiting, then the running stages;
+  - the outcome precedence: landed, cancelled, stopped, waiting, a `repeating-failure` stall, then the running stages;
+  - a repeating failure reads stalled during a fix round's CI wait, with the wait listed as also applying;
+  - the failure signature of a round that fails CI and its review is the sorted check names followed by `review:fail`;
   - each of the ten named waits in order, with the others listed as also applying;
   - progress comes from results, CI passes, verdicts, passed rounds, landings, and passed candidates, never from turns or tokens;
   - `no-progress` uses 2 h for attempts and 1 h for reviews, counted from the latest of delivery, progress, and `waitEndedAt`, and 15 min from the last turn end for an idle, archived, or killed holder;
@@ -37,7 +39,7 @@ Implement after `plan-execution` and `integration-candidates` have landed on mas
   - a `leadGroup` outside the roles is refused;
   - a malformed or duplicate `fixes` entry is refused, naming it;
   - one override named by two changes passes.
-- [ ] 2.3 Add the read-time warning for a `fixes` entry that names no override of the plan (D2). Verify with a plan-detail test showing the warning, and an approval test that the warning does not refuse approval.
+- [ ] 2.3 Add the read-time warning for a `fixes` entry that names no fix or correction task of the plan (D2). Verify with a plan-detail test showing the warning, and an approval test that the warning does not refuse approval.
 - [ ] 2.4 Document `leadGroup` and `fixes` in the durable-plans AGENTS.md bullet, and the `plan_save_draft` tool description. Verify by reading both against D2.
 
 ## 3. Records
@@ -54,17 +56,27 @@ Implement after `plan-execution` and `integration-candidates` have landed on mas
 
 - [ ] 4.1 Map the result frame's per-turn `usage` into an optional `turn_completed.usage` in `ChatSessionDriver.handleResult` (D14). Verify with driver tests: missing fields read 0, and replayed history without the field is unchanged.
 - [ ] 4.2 Create `src/server/chat/chatTurnUsageStore.ts` with the `chat_turn_usage` migration and an idempotent `record`. Verify with tests that a duplicate `(session_id, turn_id)` writes once, and that the migration runs twice.
-- [ ] 4.3 Record usage in `ChatSessionManager`'s `turn_completed` handler, beside `turnEnds.record`. The task is the delivered mail's, from the session mailbox's delivered hook, else the session's (D14). Verify with tests:
+- [ ] 4.3 Record usage in `ChatSessionManager`'s `turn_completed` handler, beside `turnEnds.record` (D14).
+  - Pin each turn's source at `turn_started`: the mail the session mailbox's delivered hook reported while no turn ran.
+  - A mail-started turn takes that mail's task, and writes nothing when the mail has none.
+  - Any other turn takes the session's task.
+
+  Verify with tests:
   - a mail-started turn takes that mail's task even when the session's task differs;
+  - a turn started by task-less mail writes nothing, even on a task-bound session;
+  - a delivery during a running turn neither retargets that turn nor carries over to the next one;
   - a typed turn takes the session's task;
-  - a task-less turn writes nothing;
+  - a turn on a session with no task writes nothing;
   - the row names the group, `claudeProfileId`, and model.
 - [ ] 4.4 Implement the plan usage read: the plan's linked tasks plus its `plan_fix_tasks`, summed by `(group, profile)` and by change, with fix and correction tasks as their own rows (D14). Verify with a test across two profiles of one role, and with a test that another plan's tasks are excluded.
 - [ ] 4.5 Add the AGENTS.md usage bullet: the per-turn record, the attribution rule, no currency, and no backfill. Verify by reading it against D14.
 
 ## 5. Decisions and fix tasks
 
-- [ ] 5.1 Widen the system `TaskCaller` to `{ kind: 'system'; team; origin }` with the three origins, constructed only module-privately (D7). Verify with an exhaustive-switch typecheck, and with a test that no tool or connection path yields a system caller.
+- [ ] 5.1 Widen the system `TaskCaller` to `{ kind: 'system'; team; origin }` with the three origins, constructed only module-privately, extending plan-execution D2's exhaustive switches over `origin` (D7). Verify with:
+  - an exhaustive-switch typecheck;
+  - a test that no tool or connection path yields a system caller;
+  - a test that the execution origin keeps exactly D2's rights.
 - [ ] 5.2 Implement `DecisionService.ask` (D4). Verify with tests:
   - the plan resolves from the session's task, from a fix task, or from the Lead role with `plan_id`, and anything else is refused with D4's message;
   - a conflicting `plan_id` is refused, and another team's plan reads as not found;
@@ -74,7 +86,7 @@ Implement after `plan-execution` and `integration-candidates` have landed on mas
 - [ ] 5.3 Implement `DecisionService.record` for card answers and own calls (D5). Verify with tests:
   - only the addressed group answers, and owner-addressed cards are refused;
   - the same session and choice replays, and anything else is refused naming the decider;
-  - the answer goes through the reply path on the card's task, tagged `decision-answer`, and a killed asker's answer falls back to its group;
+  - the answer goes through the reply path with the card's task passed explicitly, tagged `decision-answer`, and a killed asker's answer falls back to its group;
   - an own call needs the Lead role and creates a decided card with no mail;
   - `affected_tasks` defaults to the card's task and refuses other teams' tasks.
 - [ ] 5.4 Implement `DecisionService.answer` (D6). Verify with tests:
@@ -85,7 +97,7 @@ Implement after `plan-execution` and `integration-candidates` have landed on mas
   - the answer mail goes to the asker in the question's thread;
   - a race with `decision_record` leaves one first decision.
 - [ ] 5.5 Implement `fixTasks.ts` creation and dispatch for overrides (D7). Verify with tests:
-  - the title, direction, and acceptance follow D7, with no worktree, change, or parent;
+  - the title, direction, and acceptance follow D7, with no worktree, change, or parent, and the instruction names `fixes: ["<the task's id>"]`;
   - the `plan_fix_tasks` row commits with the task;
   - dispatch goes to `leadGroup` with the role's profiles, the tag `plan-fix`, and the key `fix:<decisionId>`;
   - with no Lead role nothing is dispatched;
@@ -128,16 +140,19 @@ Implement after `plan-execution` and `integration-candidates` have landed on mas
   - new progress then a new stall sends a second alert;
   - with no Lead role, a row with a null message is written and no mail is sent;
   - a reply to the alert hits Kawai's reply guard.
-- [ ] 8.4 Complete override fixes in the sweep (D8). Verify with tests:
-  - the task closes once every change naming the override has landed, with a note naming the merge commits;
+- [ ] 8.4 Complete fix and correction tasks in the sweep by the D8 rule. A change counts as landed when it has a landing fact and its definition in the landing execution's revision names the task; it counts as outstanding when the current approved revision names the task and it has no landing fact. Verify with tests:
+  - the task closes once a naming change has landed and none is outstanding, with a note naming the merge commits;
   - one change landed of two keeps it open;
-  - a revision naming the override with nothing landed keeps it open;
-  - a superseded fix stays cancelled.
+  - a revision naming the task with nothing landed keeps it open;
+  - a change that landed from revision 5 still closes the task after revision 6, which no longer names it, is approved;
+  - a later revision that adds another naming change keeps the task open until that change lands;
+  - a superseded fix stays cancelled;
+  - an owner-accepted no-change result leaves the task done, Kawai writes nothing for it, and `fixStatus` reads no change.
 - [ ] 8.5 Create and complete correction tasks for failed promotions (D8). Verify with tests:
-  - a `promotion-conflict` or `ci-failed` promotion gets one correction task with the D8 title and evidence, also across a restart;
+  - a promotion stored as `failed:promotion-conflict` or `failed:ci-failed` gets one correction task with the D8 title and evidence, and its instruction names `fixes`, also across a restart;
   - the other failures and a cancellation create none;
-  - a later merged promotion closes it with a note;
-  - an accepted no-change result closes it.
+  - a landed change naming the correction closes it by the 8.4 rule;
+  - a later merged promotion closes it with a note.
 - [ ] 8.6 Push `team-plan-detail` after a sweep that changed a plan's derived view, and only then. Verify with a test that two sweeps with no change push once.
 - [ ] 8.7 Add the AGENTS.md supervision bullet: outcomes, named waits, progress versus activity, the two stalls and their deadlines, alerts, and the report. Verify by reading it against D10–D12.
 
@@ -148,8 +163,10 @@ Implement after `plan-execution` and `integration-candidates` have landed on mas
   - the owner, next action, and link follow the D13 table;
   - a fix task's owner follows its phase;
   - each item clears when its cause clears;
+  - a correction task's owner follows the same phases as a fix task's;
+  - the `plan-promotion` item is absent while a correction for it is open, and returns when that correction closes with no later promotion started;
   - another team's plans never appear.
-- [ ] 9.3 Add the five summary buckets to `MorningSummary` (D13). Verify with a test that they read only durable rows inside the window, and that they survive a restart.
+- [ ] 9.3 Add the five summary buckets to `MorningSummary` over team-workspace's 24-hour window (D13). Verify with a test that they read only durable rows inside the window, and that they survive a restart.
 - [ ] 9.4 Extend the team-workspace AGENTS.md bullet with the plan sources and buckets. Verify by reading it against D13.
 
 ## 10. Plans view
@@ -161,7 +178,7 @@ Implement after `plan-execution` and `integration-candidates` have landed on mas
   - Override names the decision it replaces and requires a rationale;
   - controls disable while disconnected, and refusals show inline.
 - [ ] 10.3 Build `PlanReportSection.tsx`: outcome counts, named waits, progress and activity with ticked elapsed times, stops with blocked dependents, partial delivery, candidates, the disposition, and M2/M4 (D12). Verify with component tests for a stopped, a stalled, and a fully landed plan.
-- [ ] 10.4 Build `PlanUsageSection.tsx`: the group × profile table, the per-change rows, and the not-attributed note, with no currency (D14). Verify with a component test.
+- [ ] 10.4 Build `PlanUsageSection.tsx`: the group × profile table, the per-change rows, and the note on what is not counted (task-less turns and Task subagent calls), with no currency (D14). Verify with a component test.
 - [ ] 10.5 Navigate `plan` and `card` attention links to the plan detail, scrolled to the change or card (D15). Verify with a navigation test from the attention queue.
 - [ ] 10.6 Describe the cards, the report, and the usage section in the Plans AGENTS.md bullet. Verify by reading it against D15.
 

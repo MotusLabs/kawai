@@ -141,22 +141,26 @@ An override on a completed plan SHALL reopen it in the same transaction, recorde
 - **THEN** the override is refused asking to reopen the plan first, and nothing is written
 
 ### Requirement: A forward fix runs as a plan change
-The fix task's instruction SHALL ask for an OpenSpec change, landed on the base branch and added to a plan revision as a change whose `fixes` names the override, so it passes the plan's approval, validation, Start, and gate. Plan content SHALL accept `fixes` on a change as a list of override ids, checked for format and uniqueness at save. An id naming no override of the plan SHALL show as a warning and complete nothing.
+The fix task's instruction SHALL ask for an OpenSpec change, landed on the base branch and added to a plan revision as a change whose `fixes` names the fix task, so it passes the plan's approval, validation, Start, and gate. Plan content SHALL accept `fixes` on a change as a list of fix or correction task ids, checked for format and uniqueness at save. An id naming no fix or correction task of the plan SHALL show as a warning and complete nothing.
 
-#### Scenario: Fix change names the override
-- **WHEN** the Lead adds change `api-v1-restore` with `fixes` naming the override and submits the revision
+#### Scenario: Fix change names the fix task
+- **WHEN** the Lead adds change `api-v1-restore` with `fixes` naming the fix task and submits the revision
 - **THEN** the revision shows `api-v1-restore` as the forward fix of that override, awaiting the owner's approval
 
 #### Scenario: Unknown reference warns
-- **WHEN** a change's `fixes` names an id that is not an override of the plan
+- **WHEN** a change's `fixes` names an id that is not a fix or correction task of the plan
 - **THEN** the plan shows a warning naming the id, and no fix status changes
 
 ### Requirement: Kawai closes a forward fix once its changes land
-Kawai SHALL mark a fix task done when the current approved revision has at least one change naming its override in `fixes` and every such change has a landing fact. A fix that needs no change SHALL end when the owner accepts the Lead's result saying so. A superseded fix SHALL never be completed by later landings.
+Kawai SHALL mark a fix task done once a change naming it in `fixes` has landed and no change of the current approved revision naming it is unlanded. Each landed change SHALL be judged by the revision it landed under. A fix that needs no change SHALL end when the owner accepts the Lead's result saying so. A superseded fix SHALL never be completed by later landings.
 
 #### Scenario: Fix lands
-- **WHEN** the only change naming the override lands
+- **WHEN** the only change naming the fix task lands
 - **THEN** Kawai marks the fix task done, journaled as Kawai with the landing
+
+#### Scenario: A later revision drops the landed fix change
+- **WHEN** the fix change lands from revision 5's execution after revision 6, which no longer names it, was approved
+- **THEN** Kawai marks the fix task done, naming that landing
 
 #### Scenario: No change needed
 - **WHEN** the Lead submits a result explaining that the code already matches the override, and the owner accepts it
@@ -174,11 +178,15 @@ Each override SHALL show a fix status derived when read: planning, in review, ap
 - **THEN** the fix status reads landed, with 26 hours from override to landing
 
 ### Requirement: A failed promotion gets a correction task
-For a promotion that fails as `promotion-conflict` or `ci-failed`, Kawai SHALL create one correction task naming the promotion, its failure, and its evidence, dispatched to the plan's Lead role, or unassigned for the owner without one. It SHALL be done when a later promotion of the plan merges, or when the owner accepts its result. Other failures SHALL create no task.
+For a promotion that fails as `promotion-conflict` or `ci-failed`, Kawai SHALL create one correction task naming the promotion, its failure, and its evidence, dispatched to the plan's Lead role, or unassigned for the owner without one. Changes SHALL answer it through `fixes` as for a fix task, and it SHALL close as a fix task does, or when a later promotion of the plan merges. Other failures SHALL create no task.
 
 #### Scenario: Conflict gets a correction
 - **WHEN** a promotion fails as `promotion-conflict` on two files
 - **THEN** one correction task created by Kawai names the promotion and both files, and is dispatched to `lead`
+
+#### Scenario: The correction's change lands
+- **WHEN** the change naming the correction task lands on the integration branch
+- **THEN** Kawai marks the correction task done, and the owner is asked to promote again
 
 #### Scenario: A later promotion closes it
 - **WHEN** the plan's next promotion merges
