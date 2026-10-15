@@ -55,7 +55,7 @@ tick the checkbox in the same commit. Implementation starts only after PR #96 (S
   ~9: createTerminal/linkHover/setup absorb the mount-effect residue and
   textPresentation the iOS emoji workaround, so the hook itself is
   composition-only. useTerminal.test.tsx (90 tests) unchanged throughout §1–2.
-- [ ] 3.3 Mark S4 done in `docs/refactor-analysis/synthesis.md` (status note with commit
+- [x] 3.3 Mark S4 done in `docs/refactor-analysis/synthesis.md` (status note with commit
   hashes, mirroring the earlier notes); commit
   (`docs: mark P1/S4 complete in refactor synthesis`); push and open the PR; wait for merge
 

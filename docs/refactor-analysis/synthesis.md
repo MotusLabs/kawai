@@ -107,6 +107,19 @@ resubscribe-on-selection-change effect in App.tsx. Effort: M. Risk: low-med. [cl
 attachState, copyMode, outputStream, pasteChannel, snapshotCache, iosRepaint); hook shrinks to
 ~400–500 LOC. Effort: M-L. Risk: med (attach/backpressure is the hardest correctness logic —
 lean on useTerminal.test.tsx, 5,046 LOC). [client-architecture.md §4]
+> **Status: DONE 2026-10-15** (branch `feat/terminal-composables`) — landed as `49602e1`
+> (1.1: snapshotCache/droppedOutputLog/linkSanitize/iosRepaint module moves, getIsMac to
+> utils/device, importers repointed), `3b13e8b` (1.2: webgl, attachState with the attach-effect
+> body as syncAttachment, copyMode as the TmuxCopyModeState class, createTerminal, linkHover,
+> iOS resume handlers), `dbe74d8` (1.3: TerminalOutputStream, PasteChannel with a single
+> /api/clipboard-file-path fetch seam deleting the inline duplicate, setupTerminal absorbing
+> the mount effect, textPresentation), `76668fa` (2.1: WebGL create/dispose and copy-mode-exit
+> dedupe onto the shared helpers), `edcf183` (3.1: 26 direct unit tests for outputStream and
+> copyMode), `342e92c` (3.2: size record). useTerminal.ts: 2,019 → 603 LOC — composition plus the
+> inline subscribe effect (~170 LOC; ex-subscribe composition ~430); 13 `terminal/` modules at
+> 30–426 LOC, each with a header comment. useTerminal.test.tsx (90 tests) passed unchanged
+> through every commit; refs stayed hook-owned (design D2) except the stream/channel state the
+> design exempted.
 
 **S5. Split `Terminal.tsx`; host the mobile drawer at App level.** Extract iOS
 selection/touch/resume hooks + mobile chrome; lifts SessionDrawer's 12-prop drill-through out of
