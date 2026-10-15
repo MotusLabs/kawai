@@ -2,9 +2,9 @@
 // sees it through `pinDisposition` — `continue` lets a non-current pin pass,
 // every other decision state keeps the `strategy-pin-current` refusal, a
 // resubmitted revision passes under `adapt` and `reconsider`, a withdrawn
-// direction and a newer strategy approval override `continue`, no strategy
-// record passes only an unpinned revision, and the state
-// key changes exactly when a gate result changes.
+// direction, a pin with a stale hash, and a newer strategy approval override
+// `continue`, no strategy record passes only an unpinned revision, and the
+// state key changes exactly when a gate result changes.
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import { createPlanWorld, type PlanWorld } from './planHarness'
@@ -84,6 +84,17 @@ describe('the impact gate through PlanService.approve', () => {
     const { planId, reviewId } = await pinnedInReview()
     await decide(planId, reviewId, 'continue')
     bench.withdrawStrategy(1)
+    expect(bench.impact.gate(planId, 1)?.state).toBe('withdrawn-direction')
+    expect(bench.impact.pinDisposition(planId, 1)).toBeNull()
+    expect(failureIds(await bench.approve(planId, 1))).toEqual(['strategy-pin-current'])
+  })
+
+  test('a pin whose hash no longer matches the superseded revision it names is refused despite continue', async () => {
+    const { planId, reviewId } = await pinnedInReview()
+    await decide(planId, reviewId, 'continue')
+    expect(bench.impact.gate(planId, 1)?.state).toBe('continue')
+    // The pin still names superseded revision 1, but not with its stored hash.
+    bench.db.db.run("UPDATE plan_revisions SET strategy_hash = 'hash-stale' WHERE plan_id = ? AND revision = 1", [planId])
     expect(bench.impact.gate(planId, 1)?.state).toBe('withdrawn-direction')
     expect(bench.impact.pinDisposition(planId, 1)).toBeNull()
     expect(failureIds(await bench.approve(planId, 1))).toEqual(['strategy-pin-current'])

@@ -233,7 +233,7 @@ describe('ImpactService.propose', () => {
     expect(recorded).toMatchObject({ ok: true, decision: { proposalId: proposal.id, rationale: 'Edited by the owner' } })
   })
 
-  test('a stale review, an unaffected plan, another team, the human, and bad rationales are refused with nothing recorded', async () => {
+  test('a stale review, an unaffected plan, a team without a strategy record, the human, and bad rationales are refused with nothing recorded', async () => {
     const { planId, reviewId } = await bench.affectedPlan()
     const { planId: unaffected } = await bench.draftInReview()
     const refused = async (call: Promise<unknown>, text: string) => {
