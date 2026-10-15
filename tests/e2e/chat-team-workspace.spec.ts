@@ -24,6 +24,12 @@ async function openTab(page: Page, teamKey: string, tab: string) {
   await expect(page.getByTestId('team-workspace')).toHaveAttribute('data-team-key', teamKey)
 }
 
+/** The Tasks tab keeps a selected task across tab visits; step back to the list when it is open. */
+async function toTaskList(page: Page) {
+  const back = page.getByTestId('team-tasks').getByRole('button', { name: 'All tasks' })
+  if (await back.isVisible().catch(() => false)) await back.click()
+}
+
 const peers = (page: Page) => page.locator('[data-chat-role="peer"]')
 
 /** A repository team with a lead chat and a developer spawned by an assigned task in its worktree. */
@@ -96,6 +102,7 @@ test('E13 + Phase 2: the morning summary fills each bucket, an accepted result i
     await say(page, lead, 'hello')
     await expect(page.getByTestId('chat-transcript')).toContainText('Fixture response')
     await openTab(page, team.root, 'tasks')
+    await toTaskList(page)
     await page.getByTestId('band-toggle-summary').click()
     const bucket = (name: string) => page.locator(`[data-testid="summary-bucket"][data-bucket="${name}"]`)
     await expect(bucket('Completed results')).toContainText('awaiting acceptance')
@@ -118,7 +125,7 @@ test('E13 + Phase 2: the morning summary fills each bucket, an accepted result i
     await page.getByTestId('task-accept').click()
     await page.getByTestId('task-accept-confirm-button').click()
     await expect(page.getByTestId('task-detail')).toContainText(/accepted/i)
-    await openTab(page, team.root, 'tasks')
+    await openTab(page, team.root, 'mailbox')
     await expect(queue(page).locator(`[data-item-id="pending-acceptance:${resultId}"]`)).toHaveCount(0)
     await expect(bucket('Completed results')).toContainText('— accepted')
     // Resolve the approval, drop the connection with a reload: counts converge, no toast.
