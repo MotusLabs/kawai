@@ -9,6 +9,12 @@ export interface SoundDecisions {
   idle: boolean
 }
 
+/** Whether the dashboard page is visible; when `document` is unavailable
+ * (tests, SSR) the page counts as hidden so sounds behave as before. */
+export function pageIsVisible(): boolean {
+  return typeof document !== 'undefined' && document.visibilityState === 'visible'
+}
+
 export function decideTransitionSounds(
   prevStatus: string | undefined,
   nextStatus: string,
