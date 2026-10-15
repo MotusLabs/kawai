@@ -188,7 +188,7 @@ describe('pending migrations', () => {
         ? { ok: true, reason, path: 'startup.db', bytes: 0, changes: 0 }
         : { ok: false, reason, path: path.join(dir, 'backups', 'x-pre-migration-2.db.corrupt'), error: 'integrity check failed: torn' },
       rotate: () => {},
-      files: () => [],
+      newestGood: () => null,
     }
     let error: unknown
     try { migrateSchema(db, dbPath, { backups, migrations: [migration] }) } catch (caught) { error = caught }
@@ -245,6 +245,24 @@ describe('a database newer than the build', () => {
     expect(fs.statSync(dbPath).mtimeMs).toBe(mtime)
     // No startup snapshot either: the refusal comes first.
     expect(fs.readdirSync(path.join(dir, 'backups')).sort()).toEqual(backupsBefore)
+  })
+
+  test('never names a torn copy left under a good name: the newest copy that passes its check is named', () => {
+    initDatabase({ path: dbPath, migrations: [addColumn(2, 'chat_sessions', 'a')] }).close()
+    const backupsDir = path.join(dir, 'backups')
+    const good = fs.readdirSync(backupsDir).find(name => name.endsWith('-pre-migration-2.db'))!
+    // A newer pre-migration-2 copy, torn mid-file, that an earlier process could neither rename nor remove.
+    const torn = 'agentboard-29991231T235959999Z-pre-migration-2.db'
+    fs.writeFileSync(path.join(backupsDir, torn), fs.readFileSync(path.join(backupsDir, good)).subarray(0, 1500))
+    let error: unknown
+    try { initDatabase({ path: dbPath }) } catch (caught) { error = caught }
+    const message = (error as Error).message
+    expect(message).toContain(good)
+    expect(message).not.toContain(torn)
+
+    fs.rmSync(path.join(backupsDir, good))
+    try { initDatabase({ path: dbPath }) } catch (caught) { error = caught }
+    expect((error as Error).message).toContain('No pre-migration-2 backup was found')
   })
 
   test('a newer database with no matching backup says none was found', () => {

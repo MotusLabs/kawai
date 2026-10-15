@@ -24,7 +24,7 @@ Each backup is named `agentboard-<UTC time>-<reason>.db`. The time is the moment
 - `interval`: taken hourly, but only when the database changed since the last snapshot this server process took.
 - `pre-migration-<n>`: taken before schema migration `n` runs. The migration starts only after this backup is in place and has passed its integrity check.
 
-A backup is written to `<name>.partial`, flushed to disk, and then renamed, so a file without a suffix is always complete. Each copy is then checked with `PRAGMA integrity_check` over a separate read-only connection. A copy that fails the check is renamed `<name>.corrupt`, logged as `db_backup_failed`, and never counted as a backup. A `.partial` file left over means the server stopped while writing it. Both kinds are kept only for diagnosis.
+A backup is written to `<name>.partial`, flushed to disk, and then renamed, so a file without a suffix is always complete. Each copy is then checked with `PRAGMA integrity_check` over a separate read-only connection. A copy that fails the check is renamed `<name>.corrupt` (or removed, if it cannot be renamed), logged as `db_backup_failed`, and never counted as a backup. When the server names a backup to restore, it checks that file again first. A `.partial` file left over means the server stopped while writing it. Both kinds are kept only for diagnosis.
 
 Kawai only reads, rotates, or deletes files that match this naming. Any other file you put in `backups/` stays untouched.
 

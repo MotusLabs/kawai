@@ -15,7 +15,7 @@
 import type { Database } from 'bun:sqlite'
 import { BUILD_VERSION } from '../version'
 import { applyBaselineSchema } from './baseline'
-import { newestBackup, type BackupFile } from './backupFiles'
+import type { BackupFile } from './backupFiles'
 import type { BackupOutcome } from './backups'
 
 export interface Migration {
@@ -47,7 +47,8 @@ export interface MigrationBackups {
   dir: string
   snapshotSync(reason: 'startup' | `pre-migration-${number}`): BackupOutcome
   rotate(): void
-  files(): BackupFile[]
+  /** The newest backup for a reason that passes its integrity check now. */
+  newestGood(reason: `pre-migration-${number}`): BackupFile | null
 }
 
 export interface MigrateOptions {
@@ -90,10 +91,11 @@ export function newerDatabaseMessage(input: {
   dbVersion: number
   buildVersion: number
   backupsDir: string | null
-  files: readonly BackupFile[]
+  /** The newest checked `pre-migration-<buildVersion + 1>` backup, if any. */
+  backup: BackupFile | null
 }): string {
   const reason = `pre-migration-${input.buildVersion + 1}` as const
-  const backup = newestBackup(input.files, reason)
+  const backup = input.backup
   const where = input.backupsDir ?? 'the backups directory'
   const named = backup
     ? `The newest backup taken before version ${input.buildVersion + 1} is ${where}/${backup.name}.`
@@ -118,7 +120,8 @@ export function migrateSchema(db: Database, dbPath: string, options: MigrateOpti
   const dbVersion = readSchemaVersion(db)
   if (dbVersion > buildVersion) {
     throw new DatabaseStartupError(newerDatabaseMessage({
-      dbPath, dbVersion, buildVersion, backupsDir: backups?.dir ?? null, files: backups?.files() ?? [],
+      dbPath, dbVersion, buildVersion, backupsDir: backups?.dir ?? null,
+      backup: backups?.newestGood(`pre-migration-${buildVersion + 1}`) ?? null,
     }))
   }
 

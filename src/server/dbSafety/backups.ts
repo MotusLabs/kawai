@@ -5,8 +5,9 @@
 // meanwhile, and an outside writer waits within its busy timeout), then the
 // bytes go to `<name>.partial`, are fsynced, and are renamed into place. The
 // copy is integrity-checked over a separate read-only connection; a copy that
-// fails is renamed `.corrupt`, logged, recorded for the status, and kept out
-// of rotation. Nothing is attached to the live connection and the live file
+// fails is renamed `.corrupt` (else removed, else remembered as known-bad),
+// logged, recorded for the status, and never counted as good; a message that
+// names a backup to restore re-checks it first (`newestGood`). Nothing is attached to the live connection and the live file
 // is never copied. Backups stay in the directory given here and are never
 // sent anywhere.
 //
@@ -52,6 +53,8 @@ export interface DatabaseBackupsOptions {
   now?: () => number
   /** The copy step; tests substitute a torn copy. Defaults to `db.serialize()`. */
   serialize?: () => Uint8Array
+  /** How a copy that failed its check is set aside; tests make these throw. Defaults to `fs`. */
+  fileOps?: Pick<typeof fs, 'renameSync' | 'unlinkSync'>
 }
 
 const MAX_FAILURES = 20
@@ -69,6 +72,8 @@ export class DatabaseBackups {
   private writing: string | null = null
   private timer: ReturnType<typeof setInterval> | null = null
   private readonly failures: BackupStatus['failures'] = []
+  /** Copies that failed their check but could be neither renamed nor removed: never good. */
+  private readonly knownBad = new Set<string>()
 
   constructor(private readonly options: DatabaseBackupsOptions) {
     this.dir = options.dir ?? path.join(path.dirname(options.dbPath), 'backups')
@@ -146,6 +151,21 @@ export class DatabaseBackups {
   /** Every backup file of this database, parsed; unrelated files are ignored. */
   files(): BackupFile[] {
     return listBackupFiles(this.dir, this.stem)
+      .map(file => this.knownBad.has(file.name) ? { ...file, kind: 'corrupt' as const } : file)
+  }
+
+  /**
+   * The newest backup for `reason` that passes its integrity check now, for a
+   * message that tells the owner to restore it (D14): a copy left torn under
+   * its good name by an earlier process is skipped, never named.
+   */
+  newestGood(reason: BackupReason): BackupFile | null {
+    const candidates = this.files()
+    for (let file = newestBackup(candidates, reason); file; file = newestBackup(candidates, reason)) {
+      if (integrityCheck(path.join(this.dir, file.name)) === null) return file
+      candidates.splice(candidates.indexOf(file), 1)
+    }
+    return null
   }
 
   /** Delete leftovers and rotated-out backups (startup and after each snapshot). */
@@ -217,9 +237,8 @@ export class DatabaseBackups {
   private finish(reason: BackupReason, taken: { final: string; bytes: Uint8Array; changes: number }): BackupOutcome {
     const check = integrityCheck(taken.final)
     if (check !== null) {
-      let corrupt: string | null = `${taken.final}.corrupt`
-      try { fs.renameSync(taken.final, corrupt) } catch { corrupt = taken.final }
-      const outcome = this.fail(reason, corrupt, `integrity check failed: ${check}`)
+      const { path: kept, note } = this.setAside(taken.final)
+      const outcome = this.fail(reason, kept, `integrity check failed: ${check}${note}`)
       this.rotate()
       return outcome
     }
@@ -227,6 +246,30 @@ export class DatabaseBackups {
     this.rotate()
     logger.info('db_backup_written', { reason, path: taken.final, bytes: taken.bytes.byteLength })
     return { ok: true, reason, path: taken.final, bytes: taken.bytes.byteLength, changes: taken.changes }
+  }
+
+  /**
+   * Take a copy that failed its check out of the good set: renamed `.corrupt`
+   * (kept for diagnosis), else removed, else remembered as known-bad so
+   * `files()`, `newestGood`, and `status()` never count it.
+   */
+  private setAside(file: string): { path: string | null; note: string } {
+    const ops = this.options.fileOps ?? fs
+    const corrupt = `${file}.corrupt`
+    let renameError: string
+    try {
+      ops.renameSync(file, corrupt)
+      return { path: corrupt, note: '' }
+    } catch (error) {
+      renameError = errorText(error)
+    }
+    try {
+      ops.unlinkSync(file)
+      return { path: null, note: `; renaming it .corrupt failed (${renameError}), so it was removed` }
+    } catch (error) {
+      this.knownBad.add(path.basename(file))
+      return { path: file, note: `; renaming it .corrupt failed (${renameError}) and removing it failed (${errorText(error)}), so it is kept out of the good backups` }
+    }
   }
 
   private fail(reason: BackupReason, file: string | null, error: string): BackupOutcome {

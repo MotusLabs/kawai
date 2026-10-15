@@ -9,7 +9,7 @@ import path from 'node:path'
 import { Database } from 'bun:sqlite'
 import { initDatabase } from '../db'
 import { logger } from '../logger'
-import { DatabaseBackups, integrityCheck } from '../dbSafety/backups'
+import { DatabaseBackups, integrityCheck, type DatabaseBackupsOptions } from '../dbSafety/backups'
 import { RETENTION, backupFileName, formatStamp, parseBackupFile, rotationVictims, type BackupFile } from '../dbSafety/backupFiles'
 
 let dir: string
@@ -96,6 +96,50 @@ describe('a snapshot', () => {
     expect(status.failures).toEqual([expect.objectContaining({ reason: 'interval', path: outcome.path })])
     // The newest good interval backup is still the earlier one.
     expect(status.newest.find(entry => entry.reason === 'interval')?.name).toBe(path.basename(first.path))
+  })
+
+  describe('a torn copy that cannot be renamed corrupt', () => {
+    const renameFails = () => { throw new Error('EACCES: rename refused') }
+    const intervals = () => names().filter(name => name.includes('-interval.db'))
+    const tornAfterGood = async (fileOps: DatabaseBackupsOptions['fileOps']) => {
+      const session = initDatabase({ path: dbPath })
+      const first = await new DatabaseBackups({ db: session.db, dbPath, now: steppingClock() }).snapshot('interval')
+      const torn = new DatabaseBackups({
+        db: session.db, dbPath, now: steppingClock(Date.parse('2026-02-01T00:00:00.000Z')), fileOps,
+        serialize: () => session.db.serialize().slice(0, 1500),
+      })
+      const outcome = torn.snapshotSync('interval')
+      session.close()
+      if (!first.ok || outcome.ok) throw new Error('unexpected outcomes')
+      return { first: path.basename(first.path), outcome, torn }
+    }
+
+    test('is removed, so only the earlier good copy remains', async () => {
+      const { first, outcome, torn } = await tornAfterGood({ renameSync: renameFails, unlinkSync: fs.unlinkSync })
+      expect(outcome.path).toBeNull()
+      expect(outcome.error).toMatch(/integrity check failed: .*renaming it \.corrupt failed \(EACCES: rename refused\), so it was removed/)
+      expect(intervals()).toEqual([first])
+      expect(torn.newestGood('interval')?.name).toBe(first)
+      expect(torn.status().newest.filter(entry => entry.reason === 'interval').map(entry => entry.name)).toEqual([first])
+    })
+
+    test('and cannot be removed is kept out of files(), newestGood, and the status', async () => {
+      const { first, outcome, torn } = await tornAfterGood({
+        renameSync: renameFails, unlinkSync: () => { throw new Error('EPERM: unlink refused') },
+      })
+      const tornName = path.basename(outcome.path!)
+      expect(tornName).toMatch(/-interval\.db$/)
+      expect(outcome.error).toMatch(/removing it failed \(EPERM: unlink refused\), so it is kept out of the good backups/)
+      expect(intervals()).toEqual([first, tornName])
+      expect(torn.files().find(file => file.name === tornName)?.kind).toBe('corrupt')
+      expect(torn.newestGood('interval')?.name).toBe(first)
+      expect(torn.status().newest.filter(entry => entry.reason === 'interval').map(entry => entry.name)).toEqual([first])
+      // A later process does not remember it, and still never names it as good.
+      initDatabase({ path: dbPath }).close()
+      const db = new Database(dbPath)
+      expect(new DatabaseBackups({ db, dbPath }).newestGood('interval')?.name).toBe(first)
+      db.close()
+    })
   })
 
   test('a spurious "Out of memory" copy is retried and logged, failing only after three attempts', () => {
