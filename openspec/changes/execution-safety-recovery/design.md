@@ -433,9 +433,9 @@ AGENTS.md gains the rule that a change adding a recovery mechanism or exclusive 
 | X6 `LandingMechanism` | `plan-execution` D13, with D3's slot-liveness rule (orphan holders cleared at startup and whenever the slot is found taken; a new holder kind supplies its own check) | D11 restates the liveness rule for every later holder kind. |
 | X8 Stop reasons | `plan-execution` D12 | Audit verdicts add no stop reason. The X8 table's "new reasons" entry for this change is empty. |
 | I2 Promotions | `integration-candidates` D3 | Promotion writes are effects, never audit rows (D3). The matrix cites promotion recovery. |
-| S2 Outcomes and causes | `plan-supervision` D10 (645d02d) | Audit adds no cause. The matrix names `changeSupervision` as the recovery-state reader. |
+| S2 Outcomes and causes | `plan-supervision` D10 | Audit adds no cause. The matrix names `changeSupervision` as the recovery-state reader. |
 | S3 Usage records | `plan-supervision` D14 | Cited only. No budget or cost column. |
-| R1 Holds | `revision-control` D2, D4–D5 (7e310d6) | Matrix rows for hold durability. Audit never places, releases, or gates a hold. |
+| R1 Holds | `revision-control` D2, D4–D5 | Matrix rows for hold durability. Audit never places, releases, or gates a hold. |
 | R2 Pauses and checkpoints | `revision-control` D6–D9 | `task_checkpoint` stays pause-only (D12). Matrix rows for Paused across restart, R18, and the `push-checkpoint` inspector. |
 | R3 Execution revisions and publications | `revision-control` D10–D11 | Matrix row for Apply's atomic commit, R17. |
 | R4 Command events | `revision-control` D3 | Cited as the command-replay pattern that D10's Acknowledge follows. |
