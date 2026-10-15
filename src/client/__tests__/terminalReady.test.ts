@@ -6,7 +6,7 @@
 // repaint is cancelled after each test (iosRepaint is a module singleton).
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
 import { handleTerminalReady, type TerminalReadyDeps } from '../terminal/terminalReady'
-import { cancelIosRepaint, type IosRepaintTarget } from '../terminal/iosRepaint'
+import { createIosRepaint, type IosRepaintController, type IosRepaintTarget } from '../terminal/iosRepaint'
 
 const globalAny = globalThis as unknown as {
   window?: unknown
@@ -34,7 +34,7 @@ interface OutputMock {
 /** Timer schedules made through the window shim (ms per schedule). */
 const scheduledTimers: number[] = []
 
-let lastRepaintTarget: IosRepaintTarget | null = null
+let lastRepaint: IosRepaintController | null = null
 
 function createDeps(output: OutputMock) {
   const terminal = new TerminalMock()
@@ -49,7 +49,8 @@ function createDeps(output: OutputMock) {
     getTerminal: () => null,
     getSessionId: () => 'session-1',
   }
-  lastRepaintTarget = repaintTarget
+  const repaint = createIosRepaint(repaintTarget)
+  lastRepaint = repaint
   const deps: TerminalReadyDeps = {
     getTerminal: () => terminal as unknown as import('@xterm/xterm').Terminal,
     output: {
@@ -64,7 +65,7 @@ function createDeps(output: OutputMock) {
     setIsSwitching: (value) => { switching.push(value) },
     invalidateWriteBackpressure: () => { invalidates.push(1) },
     isIOS: false,
-    repaintTarget,
+    repaint,
   }
   return { deps, terminal, readySessions, switching, invalidates, needsResetRef, switchStartRef, focusAfterAttachSessionRef }
 }
@@ -86,7 +87,7 @@ beforeEach(() => {
 
 afterEach(() => {
   // Cancel any pending singleton repaint before tearing down the shims.
-  if (lastRepaintTarget) cancelIosRepaint(lastRepaintTarget)
+  lastRepaint?.cancel()
   globalAny.window = originalWindow
   globalAny.requestAnimationFrame = originalRaf
   globalAny.cancelAnimationFrame = originalCancelRaf

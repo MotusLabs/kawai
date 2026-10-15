@@ -6,7 +6,7 @@
 import type { MutableRefObject } from 'react'
 import type { Terminal } from '@xterm/xterm'
 import { clientLog } from '../utils/clientLog'
-import { scheduleIosRepaint, type IosRepaintTarget } from './iosRepaint'
+import type { IosRepaintController } from './iosRepaint'
 import type { TerminalOutputStream } from './outputStream'
 
 export interface TerminalReadyDeps {
@@ -19,7 +19,7 @@ export interface TerminalReadyDeps {
   setIsSwitching: (value: boolean) => void
   invalidateWriteBackpressure: () => void
   isIOS: boolean
-  repaintTarget: IosRepaintTarget
+  repaint: IosRepaintController
 }
 
 /** Apply a terminal-ready report for the attached session. */
@@ -61,10 +61,10 @@ export function handleTerminalReady(sessionId: string, deps: TerminalReadyDeps):
   // The visibilitychange repaint fires early and may only show stale
   // content; this second repaint catches the fresh data from reconnect.
   // Flush pending output first so the repaint captures fresh data.
-  // Uses shared scheduleIosRepaint so it coalesces with any pending
+  // Uses the shared repaint controller so this coalesces with any pending
   // visibility-triggered repaint (no double-flicker).
   if (deps.isIOS) {
     deps.output.flush()
-    scheduleIosRepaint(50, 'terminal-ready', deps.repaintTarget)
+    deps.repaint.schedule(50, 'terminal-ready')
   }
 }
