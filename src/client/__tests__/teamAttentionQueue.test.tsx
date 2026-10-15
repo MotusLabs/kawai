@@ -5,7 +5,7 @@
 import { afterEach, beforeEach, expect, test } from 'bun:test'
 import TestRenderer, { act } from 'react-test-renderer'
 import type { AttentionItem, MorningSummary, TeamWorkspaceSnapshot } from '@shared/teamWorkspace'
-import TeamAttentionQueue from '../components/team/TeamAttentionQueue'
+import TeamAttentionQueue, { focusAfterRemoval } from '../components/team/TeamAttentionQueue'
 import TeamMorningSummary from '../components/team/TeamMorningSummary'
 import TeamWorkspaceBands from '../components/team/TeamWorkspaceBands'
 import { openAttentionLink } from '../components/team/attentionLinks'
@@ -121,4 +121,21 @@ test('bands collapse per team: attention starts open, the summary collapsed', ()
   act(() => { renderer.update(element('/other')) })
   expect(byId(renderer, 'team-attention-queue')).toHaveLength(1)
   expect(byId(renderer, 'team-morning-summary')).toHaveLength(0)
+})
+
+test('focus after a resolved item goes to the item now in its place, else the heading', () => {
+  expect(focusAfterRemoval(['a', 'b', 'c'], ['a', 'c'], 'b')).toBe('c')
+  expect(focusAfterRemoval(['a', 'b', 'c'], ['a', 'b'], 'c')).toBe('b')
+  expect(focusAfterRemoval(['a'], [], 'a')).toBeNull()
+  expect(focusAfterRemoval(['a', 'b'], ['a', 'b'], 'a')).toBeNull()
+  expect(focusAfterRemoval(['a', 'b'], ['b'], null)).toBeNull()
+})
+
+test('the counts line is a polite status region and every action has a name', () => {
+  let renderer!: TestRenderer.ReactTestRenderer
+  act(() => { renderer = TestRenderer.create(<TeamAttentionQueue loaded onOpen={() => {}} items={[item('approval:a')]} />) })
+  const summary = byId(renderer, 'attention-summary')[0]!
+  expect(summary.props.role).toBe('status')
+  expect(summary.props['aria-live']).toBe('polite')
+  expect(String(byId(renderer, 'attention-action')[0]!.props['aria-label'])).toContain('Answer approval')
 })

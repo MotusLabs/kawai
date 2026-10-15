@@ -211,7 +211,7 @@ export default function TeamWorkspaceView({ teamKey, location, sendMessage, conn
       {workspace?.notice && <p role="status" data-testid="team-workspace-notice" className="mt-1 text-sm text-secondary">{workspace.notice}</p>}
     </header>
     <TeamWorkspaceBands teamKey={teamKey} snapshot={workspaceData?.snapshot ?? null} navigate={navigate} />
-    <nav role="tablist" aria-label="Team views" className="flex gap-1 border-b border-border px-3 py-2" data-testid="team-tab-strip">
+    <nav role="tablist" aria-label="Team views" className="flex gap-1 overflow-x-auto border-b border-border px-3 py-2" data-testid="team-tab-strip">
       {RENDERED_WORKSPACE_TABS.map(tab => (
         <button key={tab} type="button" role="tab" aria-selected={currentLocation.tab === tab}
           data-testid={`team-tab-${tab}`}

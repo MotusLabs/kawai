@@ -4,6 +4,7 @@
 // owner, impact, and next action, never dropped. The next action is a link to
 // where the existing action lives; this view writes nothing. State words are
 // text, not color: the section titles and the owner's kind carry them.
+import { useEffect, useRef } from 'react'
 import type { AttentionItem } from '@shared/teamWorkspace'
 import { attentionCounts } from '../../stores/teamWorkspaceDataStore'
 import { attentionLinkLabel } from './attentionLinks'
@@ -30,6 +31,18 @@ function impactLabel(item: AttentionItem): string {
   ].filter(Boolean).join(' · ')
 }
 
+/**
+ * Where keyboard focus goes when the focused item leaves the queue (it was
+ * resolved): the item now at its place (the next one, or the last), else
+ * null — the queue heading. Null also when the focused item is still listed.
+ */
+export function focusAfterRemoval(previous: readonly string[], current: readonly string[], focusedId: string | null): string | null {
+  if (focusedId === null || current.includes(focusedId)) return null
+  const index = previous.indexOf(focusedId)
+  if (index < 0 || current.length === 0) return null
+  return current[Math.min(index, current.length - 1)] ?? null
+}
+
 function Item({ item, onOpen }: { item: AttentionItem; onOpen: (item: AttentionItem) => void }) {
   const impact = impactLabel(item)
   return <li className="border border-border p-2" data-testid="attention-item" data-item-id={item.id} data-kind={item.kind}>
@@ -53,10 +66,29 @@ export default function TeamAttentionQueue({ items, loaded, onOpen }: {
   onOpen: (item: AttentionItem) => void
 }) {
   const counts = attentionCounts(items)
+  const heading = useRef<HTMLHeadingElement>(null)
+  const root = useRef<HTMLElement>(null)
+  const order = useRef<string[]>([])
+  const focused = useRef<string | null>(null)
+  // A resolved item takes its focused button with it: hand focus to the item
+  // now in its place, else to the heading, so a keyboard user is not dropped
+  // to the page start (8.2).
+  useEffect(() => {
+    const ids = [...items.filter(item => item.requiresHuman), ...items.filter(item => !item.requiresHuman)].map(item => item.id)
+    const next = focusAfterRemoval(order.current, ids, focused.current)
+    if (focused.current !== null && !ids.includes(focused.current)) {
+      const target = next === null ? heading.current
+        : root.current?.querySelector<HTMLElement>(`[data-item-id="${CSS.escape(next)}"] button`) ?? heading.current
+      target?.focus()
+      focused.current = next
+    }
+    order.current = ids
+  }, [items])
   const human = items.filter(item => item.requiresHuman)
   const agent = items.filter(item => !item.requiresHuman)
-  return <section aria-label="Attention queue" data-testid="team-attention-queue">
-    <h3 className="font-medium" data-testid="attention-summary">
+  return <section ref={root} aria-label="Attention queue" data-testid="team-attention-queue"
+    onFocus={event => { focused.current = event.target.closest<HTMLElement>('[data-item-id]')?.dataset.itemId ?? focused.current }}>
+    <h3 ref={heading} tabIndex={-1} className="font-medium" data-testid="attention-summary" role="status" aria-live="polite">
       Attention · {loaded ? `${counts.human} need you · ${counts.agent} waiting on agents` : 'loading…'}
     </h3>
     {loaded && items.length === 0 && <p className="text-chat-meta text-secondary" data-testid="attention-empty">Nothing needs attention.</p>}

@@ -48,7 +48,7 @@ export async function say(page: Page, session: string, text: string) {
 }
 
 /** Open the Team page on a tab (team-workspace-pages 4.1): the chat header's Team button when a chat shows, else the navigator's Team entry. */
-export async function openTeamView(page: Page, tab: 'tasks' | 'mailbox' | 'messages' | 'strategy', teamKey?: string) {
+export async function openTeamView(page: Page, tab: 'tasks' | 'mailbox' | 'messages' | 'strategy' | 'members', teamKey?: string) {
   const button = page.getByTestId('chat-team-button')
   if (await button.isVisible().catch(() => false)) await button.click()
   else {

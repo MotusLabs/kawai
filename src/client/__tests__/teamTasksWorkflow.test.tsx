@@ -143,3 +143,27 @@ test('a filter that hides everything says so', () => {
   setFilter({ status: 'cancelled' })
   expect(textOf(byId(renderer, 'task-no-matches')[0]!)).toBe('No tasks match the filters')
 })
+
+// 8.1: the Tasks tab is a single pane at every width — the list, or one task
+// with an explicit Back (**All tasks**). Filters and the search live in the
+// per-team store, so Back returns the list exactly as it was left.
+function Host() {
+  const view = useTeamTaskStore(state => state.views.dev!)
+  return <TeamTasksView teamPath="dev" projectPath="/repo" view={{ ...view, loading: false, tasks }} rows={rows} sendMessage={() => {}} connected />
+}
+
+test('filter, open a task, Back: the filtered list and search are unchanged', () => {
+  useTeamTaskStore.getState().open('dev')
+  let renderer!: TestRenderer.ReactTestRenderer
+  act(() => { renderer = TestRenderer.create(<Host />) })
+  mounted.push(renderer)
+  setFilter({ group: 'devs' })
+  act(() => { useTeamWorkspaceStore.getState().setSearch('dev', 'tasks', 'Task') })
+  expect(visible(renderer)).toEqual(['a', 'b'])
+  act(() => { renderer.root.find(node => node.props['data-task-id'] === 'b').findAllByType('button')[0]!.props.onClick() })
+  expect(visible(renderer)).toEqual([])
+  const back = renderer.root.findAllByType('button').find(button => textOf(button) === 'All tasks')!
+  act(() => { back.props.onClick() })
+  expect(visible(renderer)).toEqual(['a', 'b'])
+  expect(useTeamWorkspaceStore.getState().views.dev!.tabs.tasks).toMatchObject({ search: 'Task', filters: { group: 'devs' } })
+})
