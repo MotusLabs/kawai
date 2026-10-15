@@ -66,7 +66,7 @@ Version 1, `baseline`, is the schema as it stood before versions existed. It is 
    ```sh
    mkdir -p ~/agentboard-aside
    mv ~/.agentboard/agentboard.db ~/agentboard-aside/
-   [ -e ~/.agentboard/agentboard.db-journal ] && mv ~/.agentboard/agentboard.db-journal ~/agentboard-aside/
+   if [ -e ~/.agentboard/agentboard.db-journal ]; then mv ~/.agentboard/agentboard.db-journal ~/agentboard-aside/; fi
    ```
 
 3. **Copy the chosen backup in** as `agentboard.db`. Copy it rather than moving it, so the backup itself stays in rotation.
@@ -79,7 +79,7 @@ Version 1, `baseline`, is the schema as it stood before versions existed. It is 
 
    ```sh
    sqlite3 ~/.agentboard/agentboard.db 'PRAGMA integrity_check'
-   bun -e "const { Database } = require('bun:sqlite'); console.log(new Database(process.argv[1], { readonly: true }).query('PRAGMA integrity_check').all())" ~/.agentboard/agentboard.db
+   bun -e "const { Database } = require('bun:sqlite'); for (const row of new Database(process.argv[1], { readonly: true }).query('PRAGMA integrity_check').all()) console.log(row.integrity_check)" ~/.agentboard/agentboard.db
    ```
 
 5. **Start the server.** It opens at the backup's schema version, takes a `startup` backup, and applies any migrations the build knows beyond that version, each after its own backup.
