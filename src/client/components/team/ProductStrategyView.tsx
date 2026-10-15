@@ -5,13 +5,16 @@
 // list beside it (unsaved text retained per team in strategyStore), and the
 // revision history. A team with no record offers capture in the overview
 // (S11). Every existing strategy action and its human-only approval rule
-// stays (product-strategy 5.1–5.3).
+// stays (product-strategy 5.1–5.3). The impact sub-view (strategy-revision-
+// impact D9) shows one impact review — the current one unless the URL names
+// a review's strategy revision — with the owner's decide and ask controls.
 import { useEffect, useMemo, useState } from 'react'
 import type { SendClientMessage, Session } from '@shared/types'
 import type { StrategyDetail, StrategyRevision } from '@shared/productStrategy'
 import { REVISION_STATUS_LABELS, actorLabel, shortHash } from '../chat/strategyLabels'
 import StrategyDraftEditor from './StrategyDraftEditor'
 import StrategyRevisionHistory from './StrategyRevisionHistory'
+import StrategyImpactReview from './StrategyImpactReview'
 import { useSessionStore } from '../../stores/sessionStore'
 import { useStrategyStore, type StrategyAction, type StrategyView } from '../../stores/strategyStore'
 import { useTeamWorkspaceStore } from '../../stores/teamWorkspaceStore'
@@ -75,6 +78,8 @@ export default function ProductStrategyView({ teamPath, view, sendMessage, conne
         className={`btn text-sm ${activeSub === 'review' && activeRevision === String(entry.revision) ? 'btn-primary' : ''}`}
         data-testid={`strategy-sub-review-${entry.revision}`}
         onClick={() => goto({ sub: 'review', revision: entry.revision })}>Review {entry.revision}</button>)}
+      {view.impact && view.impact.reviews.length > 0 && <button type="button" className={`btn text-sm ${activeSub === 'impact' ? 'btn-primary' : ''}`}
+        data-testid="strategy-sub-impact" onClick={() => goto({ sub: 'impact' })}>Impact review</button>}
       <button type="button" className={`btn text-sm ${activeSub === 'draft' ? 'btn-primary' : ''}`} data-testid="strategy-sub-draft"
         onClick={() => goto({ sub: 'draft' })}>Draft</button>
       <button type="button" className={`btn text-sm ${activeSub === 'history' ? 'btn-primary' : ''}`} data-testid="strategy-sub-history"
@@ -96,8 +101,14 @@ export default function ProductStrategyView({ teamPath, view, sendMessage, conne
         {activeSub === 'overview' && <Overview detail={detail} sessions={sessions} teamPath={teamPath} />}
         {activeSub === 'review' && <Review detail={detail} sessions={sessions} connected={connected} busy={busy}
           request={request} teamPath={teamPath} revisionNumber={activeRevision} onWithdrawRevision={withdrawRevision} />}
+        {activeSub === 'impact' && (view.impact
+          ? <StrategyImpactReview teamPath={teamPath} view={view} impact={view.impact} strategyId={detail.strategy.id} connected={connected}
+              sessions={sessions} sendMessage={sendMessage} {...(activeRevision !== undefined ? { revision: activeRevision } : {})}
+              onSelectRevision={next => goto({ sub: 'impact', revision: next })} />
+          : <p className="text-sm text-secondary">No impact review yet.</p>)}
         {activeSub === 'draft' && <DraftSubView detail={detail} view={view} teamPath={teamPath} connected={connected} busy={busy} request={request} />}
-        {activeSub === 'history' && <StrategyRevisionHistory detail={detail} sessions={sessions} connected={connected} busy={busy} onWithdrawRevision={withdrawRevision} />}
+        {activeSub === 'history' && <StrategyRevisionHistory detail={detail} impact={view.impact} sessions={sessions} connected={connected} busy={busy}
+          onWithdrawRevision={withdrawRevision} onOpenImpact={revision => goto({ sub: 'impact', revision })} />}
       </>}
     </div>
   </div>

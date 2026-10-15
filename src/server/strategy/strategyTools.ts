@@ -1,19 +1,24 @@
 // Strategy tools on the per-session `kawai-team` MCP server (product-
-// strategy design D3). The registered surface is EXACTLY the four tools
-// below — read and propose. There is no strategy_approve, strategy_publish,
-// strategy_withdraw, or strategy_delete handler, and none may be added "for
-// convenience": the spec's guarantee (S05/S09) is that no agent tool surface
-// can approve, publish, withdraw, or delete a revision, and StrategyService
-// refuses an agent caller on those paths as well. Handlers bind the calling
-// session id and strip unknown arguments, so a forged actor kind or team in
-// the input is never seen by the service.
+// strategy design D3). The registered strategy surface is the four tools
+// below — read and propose — plus the two impact tools in `impactTools.ts`
+// (strategy-revision-impact D10: read the impact review, propose a
+// disposition). There is no strategy_approve, strategy_publish,
+// strategy_withdraw, strategy_delete, strategy_impact_decide, or
+// strategy_impact_record handler, and none may be added "for convenience":
+// the spec's guarantee (S05/S09) is that no agent tool surface can approve,
+// publish, withdraw, or delete a revision, or decide an impact review, and
+// StrategyService and ImpactService refuse an agent caller on those paths.
+// Handlers bind the calling session id and strip unknown arguments, so a
+// forged actor kind or team in the input is never seen by the service.
 import { z } from 'zod'
 import type { StrategyService } from './StrategyService'
 
 export const STRATEGY_TOOL_NAMES = ['strategy_list', 'strategy_get', 'strategy_save_draft', 'strategy_submit_for_review'] as const
 
-/** Every name an agent might reach for that must NOT exist (S05/S09). */
-export const STRATEGY_FORBIDDEN_TOOL_NAMES = ['strategy_approve', 'strategy_publish', 'strategy_withdraw', 'strategy_delete'] as const
+/** Every name an agent might reach for that must NOT exist (S05/S09; impact D10). */
+export const STRATEGY_FORBIDDEN_TOOL_NAMES = [
+  'strategy_approve', 'strategy_publish', 'strategy_withdraw', 'strategy_delete', 'strategy_impact_decide', 'strategy_impact_record',
+] as const
 
 export const strategySchemas = {
   strategy_list: z.object({}),

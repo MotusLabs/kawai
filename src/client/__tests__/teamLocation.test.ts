@@ -50,6 +50,13 @@ test('a strategy review location carries sub and revision id', () => {
   expect(parseTeamHash(hashString)).toEqual({ teamKey: '/repo', tab: 'strategy', sub: 'review', id: '3' })
 })
 
+test('an impact review location carries the impact sub-view and the review\'s strategy revision (strategy-revision-impact D9)', () => {
+  const hashString = teamHashOf({ teamKey: '/repo', tab: 'strategy', sub: 'impact', id: '2' })
+  expect(hashString).toBe('#/team/%2Frepo/strategy/impact/2')
+  expect(parseTeamHash(hashString)).toEqual({ teamKey: '/repo', tab: 'strategy', sub: 'impact', id: '2' })
+  expect(parseTeamHash('#/team/%2Frepo/strategy/impact')).toEqual({ teamKey: '/repo', tab: 'strategy', sub: 'impact' })
+})
+
 test('a bare key opens the default tab and other hash content is not a team route', () => {
   expect(parseTeamHash('#/team/%2Frepo')).toEqual({ teamKey: '/repo', tab: DEFAULT_WORKSPACE_TAB })
   expect(parseTeamHash('#/team/')).toBeNull()

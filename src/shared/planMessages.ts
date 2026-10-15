@@ -7,12 +7,15 @@
 // human commands each carry a command id minted when their dialog opens
 // (D7), so a resend replays instead of repeating. Each type has one meaning:
 // `team-plan-close` only ends a detail subscription, and completing or
-// cancelling a plan is `team-plan-finish`.
+// cancelling a plan is `team-plan-finish`. The `impact` fields
+// (strategy-revision-impact D6) are additive and composed beside the plan
+// store's reads from the one impact gate, so a badge and a refusal agree.
 import type { PlanDetail, PlanEvent, PlanSummary } from './plans'
+import type { ImpactGate, PlanImpact } from './strategyImpact'
 
 export type PlanServerMessage =
-  | { type: 'team-plans-snapshot'; teamPath: string; teamId: string; plans: PlanSummary[] }
-  | { type: 'team-plan-detail'; teamPath: string; teamId: string; detail: PlanDetail }
+  | { type: 'team-plans-snapshot'; teamPath: string; teamId: string; plans: PlanSummary[]; impact?: Record<string, PlanImpact> }
+  | { type: 'team-plan-detail'; teamPath: string; teamId: string; detail: PlanDetail; impact?: PlanImpact }
   // Result of a human plan command: the plan after it and the recorded event
   // (`replayed` when the command id already stood); `error` on refusal, with
   // the failing preconditions named when approval was refused.
@@ -26,6 +29,8 @@ export type PlanServerMessage =
       error?: string
       reason?: string
       failures?: Array<{ name: string; message: string }>
+      /** The refused revision's impact gate, when `strategy-pin-current` is among the failures. */
+      impact?: ImpactGate
     }
 
 export type PlanClientMessage =

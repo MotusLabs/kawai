@@ -112,6 +112,21 @@ describe('buildTeamPrompt strategy note (product-strategy 3.3)', () => {
       }
     }
   })
+
+  test('the impact tools, the owner-only decision, and proposals that change nothing (strategy-revision-impact 4.2)', () => {
+    for (const prompt of [proposer, groupless]) {
+      for (const name of ['strategy_impact_get', 'strategy_impact_propose']) expect(prompt).toContain(`\`mcp__kawai-team__${name}\``)
+      expect(prompt).toContain('Each strategy approval opens an impact review')
+      expect(prompt).toContain('Only the human (the owner) decides it')
+      expect(prompt).toContain('A proposal changes nothing until the owner records a decision; you have no tool that records one.')
+      expect(prompt).toContain("grounded in what changed between the plan's pinned strategy revision and the current one")
+      // Every impact "decide"/"decision" mention is the owner's — never an agent right.
+      for (const line of prompt.split('\n')) {
+        if (/\bdecid|\bdecision/i.test(line) && /impact|proposal/i.test(line)) expect(line).toMatch(/only the human|the owner|no tool/i)
+      }
+      expect(prompt).not.toMatch(/strategy_impact_(decide|record)/)
+    }
+  })
 })
 
 describe('release_member note', () => {
