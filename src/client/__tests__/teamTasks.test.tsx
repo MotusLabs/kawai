@@ -249,6 +249,18 @@ describe('search and collapse (team-workspace-pages 5.5)', () => {
     act(() => { again.unmount() })
   })
 
+  test('opening the first detail preserves parents collapsed in the list', () => {
+    const renderer = mount()
+    act(() => { renderer.root.findAllByProps({ 'data-testid': 'task-parent-toggle' })[0]!.props.onClick() })
+    expect(rows(renderer)).toEqual(['parent', 'other'])
+    const selected = { ...view(), selectedTaskId: 'parent', detail: detail(parent) }
+    act(() => { renderer.update(<TeamTasksPanel teamPath="dev" projectPath="/repo" view={selected} sendMessage={() => {}} connected />) })
+    expect(renderer.root.findByProps({ 'data-testid': 'task-section-toggle-Revision history' }).props['aria-expanded']).toBe(false)
+    act(() => { renderer.update(<TeamTasksPanel teamPath="dev" projectPath="/repo" view={view()} sendMessage={() => {}} connected />) })
+    expect(rows(renderer)).toEqual(['parent', 'other'])
+    act(() => { renderer.unmount() })
+  })
+
   test('detail sections collapse independently and stay collapsed across tasks', () => {
     const first = { ...view(), selectedTaskId: 'parent', detail: detail(parent) }
     let renderer!: TestRenderer.ReactTestRenderer

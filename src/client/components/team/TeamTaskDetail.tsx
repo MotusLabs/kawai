@@ -88,7 +88,7 @@ export default function TeamTaskDetail({ teamPath, projectPath, view, sendMessag
   const collapsedSections = useTeamWorkspaceStore(state => state.views[teamPath]?.tabs.tasks.collapsedSections) ?? []
   useEffect(() => {
     if (!collapsedSections.includes(DEFAULTS_APPLIED)) {
-      useTeamWorkspaceStore.getState().setCollapsedSections(teamPath, 'tasks', [DEFAULTS_APPLIED, ...DEFAULT_COLLAPSED])
+      useTeamWorkspaceStore.getState().setCollapsedSections(teamPath, 'tasks', [...new Set([...collapsedSections, DEFAULTS_APPLIED, ...DEFAULT_COLLAPSED])])
     }
   }, [teamPath, collapsedSections]) // eslint-disable-line react-hooks/exhaustive-deps
   // Every selection move goes through one place so the URL follows it.
