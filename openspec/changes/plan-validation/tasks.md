@@ -9,11 +9,11 @@ Implement after `durable-plans` and `strategy-revision-impact` have landed on ma
   - from `strategy-revision-impact`: `ImpactService.gate` and `stateKey`.
 
   Verify by reading `durable-plans` D7 and D13 and `strategy-revision-impact` D11 against D2, D3, and D9 here.
-- [ ] 1.2 Create `src/shared/planValidation.ts` with the D2, D3, D5, and D7 types, `VALIDATION_CHECKS_VERSION = 1`, the finding-key builders, and `inputHash` over `canonicalJson`. Verify with unit tests:
+- [x] 1.2 Create `src/shared/planValidation.ts` with the D2, D3, D5, and D7 types, `VALIDATION_CHECKS_VERSION = 1`, the finding-key builders, and `inputHash` over `canonicalJson`. Verify with unit tests:
   - the hash is stable under key order, and under the order of every array except `changes` (capabilities, claims, records);
   - the hash changes with each top-level input part;
   - location and baseline evidence never enter it.
-- [ ] 1.3 Implement `deriveRelations(changes, deltas, dependsOn)` (D4). Verify with unit tests:
+- [x] 1.3 Implement `deriveRelations(changes, deltas, dependsOn)` (D4). Verify with unit tests:
   - a conflict on one requirement, unordered: an error;
   - the same pair ordered directly and transitively: serialized, with its order;
   - an overlap on one capability with different requirements: a warning;
@@ -24,7 +24,7 @@ Implement after `durable-plans` and `strategy-revision-impact` have landed on ma
   - three changes: one relation per pair;
   - no shared capability: no relation;
   - keys are sorted and stable.
-- [ ] 1.4 Implement `validationReadiness` (D7). Verify one test per alignment rule and per blocker kind:
+- [x] 1.4 Implement `validationReadiness` (D7). Verify one test per alignment rule and per blocker kind:
   - the empty pin, and both the sticky conflict and its exception;
   - a later `aligned` that does not lift the conflict;
   - no assessment;
