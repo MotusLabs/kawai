@@ -63,6 +63,11 @@ export default function TeamWorkspaceView({ teamKey, location, sendMessage, conn
   /** Opens the repository branch browser (the task pickers' worktree creation). */
   onCreateWorktree?: (projectPath: string) => void
 }) {
+  // The page follows the location store directly, so a navigation re-renders
+  // it even when a host's prop has not caught up; the prop seeds the first
+  // render (App already gates mounting on a location existing).
+  const storedLocation = useTeamLocationStore(state => state.location)
+  const currentLocation = storedLocation ?? location
   const sessions = useSessionStore(state => state.sessions)
   const hasLoaded = useSessionStore(state => state.hasLoaded)
   const repositories = useWorkspaceStore(state => state.snapshot?.repositories)
@@ -76,7 +81,7 @@ export default function TeamWorkspaceView({ teamKey, location, sendMessage, conn
     return () => useTeamWorkspaceStore.getState().close(teamKey)
   }, [teamKey])
   // The URL's tab is the last-used tab (the header Team button reopens it).
-  useEffect(() => { useTeamWorkspaceStore.getState().setTab(teamKey, location.tab) }, [teamKey, location.tab])
+  useEffect(() => { useTeamWorkspaceStore.getState().setTab(teamKey, currentLocation.tab) }, [teamKey, currentLocation.tab])
 
   // A key is known when it is a discovered repository's main checkout or a
   // chat's team key (the same population the server accepts, D1); anything
@@ -101,7 +106,7 @@ export default function TeamWorkspaceView({ teamKey, location, sendMessage, conn
   // Messages (5.4): the tab mounts the host-agnostic view, which owns its
   // wire subscription; the store view stays open across tab switches so the
   // selection and search survive. The URL names the selected thread (D3).
-  const messagesOpen = location.tab === 'messages' && !unknown
+  const messagesOpen = currentLocation.tab === 'messages' && !unknown
   const messages = useTeamMessageStore(state => state.views[teamKey])
   useEffect(() => {
     if (!messagesOpen) return
@@ -111,12 +116,12 @@ export default function TeamWorkspaceView({ teamKey, location, sendMessage, conn
     if (!messagesOpen) return
     // URL → store: a reloaded or linked location selects its thread.
     const store = useTeamMessageStore.getState()
-    if ((location.id ?? null) !== store.views[teamKey]?.selectedThreadId) {
-      store.select(teamKey, location.id ?? null)
+    if ((currentLocation.id ?? null) !== store.views[teamKey]?.selectedThreadId) {
+      store.select(teamKey, currentLocation.id ?? null)
     }
-  }, [messagesOpen, teamKey, location.id])
+  }, [messagesOpen, teamKey, currentLocation.id])
   // Mailbox (5.3): the tab's snapshot subscription, mirroring the chat host.
-  const mailboxOpen = location.tab === 'mailbox' && !unknown
+  const mailboxOpen = currentLocation.tab === 'mailbox' && !unknown
   const mailbox = useTeamMailboxStore(state => state.views[teamKey])
   useEffect(() => {
     if (!connected || !mailboxOpen) return
@@ -129,7 +134,7 @@ export default function TeamWorkspaceView({ teamKey, location, sendMessage, conn
   // the chat host had them. The URL names the selection (D3): a reload or a
   // link re-selects it, and a location naming a task the team does not have
   // opens the list with a notice instead.
-  const tasksOpen = location.tab === 'tasks' && !unknown
+  const tasksOpen = currentLocation.tab === 'tasks' && !unknown
   const tasks = useTeamTaskStore(state => state.views[teamKey])
   useEffect(() => {
     if (!connected || !tasksOpen) return
@@ -141,22 +146,22 @@ export default function TeamWorkspaceView({ teamKey, location, sendMessage, conn
     if (!connected || !tasksOpen) return
     const store = useTeamTaskStore.getState()
     const view = store.views[teamKey]
-    if (location.id === undefined) {
+    if (currentLocation.id === undefined) {
       if (view && view.selectedTaskId != null) store.select(teamKey, null)
       return
     }
     // Wait for the list before judging a named task: a reload's snapshot has
     // not arrived yet, and a task that exists must not read as missing.
     if (!view || view.loading) return
-    const known = view.tasks.some(task => task.id === location.id)
+    const known = view.tasks.some(task => task.id === currentLocation.id)
     if (known) {
-      if (view.selectedTaskId !== location.id) store.select(teamKey, location.id)
+      if (view.selectedTaskId !== currentLocation.id) store.select(teamKey, currentLocation.id)
     } else {
       // A missing task falls back to the list with a notice (D3).
-      useTeamWorkspaceStore.getState().setNotice(teamKey, `Task ${location.id} was not found`)
+      useTeamWorkspaceStore.getState().setNotice(teamKey, `Task ${currentLocation.id} was not found`)
       if (view.selectedTaskId != null) store.select(teamKey, null)
     }
-  }, [tasksOpen, teamKey, location.id, connected, tasks?.loading, tasks?.tasks]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [tasksOpen, teamKey, currentLocation.id, connected, tasks?.loading, tasks?.tasks]) // eslint-disable-line react-hooks/exhaustive-deps
   const selectedTaskId = tasks?.selectedTaskId ?? null
   useEffect(() => {
     if (!connected || !tasksOpen || !selectedTaskId) return
@@ -194,16 +199,16 @@ export default function TeamWorkspaceView({ teamKey, location, sendMessage, conn
     </header>
     <nav role="tablist" aria-label="Team views" className="flex gap-1 border-b border-border px-3 py-2" data-testid="team-tab-strip">
       {RENDERED_WORKSPACE_TABS.map(tab => (
-        <button key={tab} type="button" role="tab" aria-selected={location.tab === tab}
+        <button key={tab} type="button" role="tab" aria-selected={currentLocation.tab === tab}
           data-testid={`team-tab-${tab}`}
-          className={`btn text-sm ${location.tab === tab ? 'btn-primary' : ''}`}
+          className={`btn text-sm ${currentLocation.tab === tab ? 'btn-primary' : ''}`}
           onClick={() => openTab(tab)}>
           {TAB_LABELS[tab]}
         </button>
       ))}
     </nav>
     {/* The active tab's view; reserved keys render nothing (no placeholder). */}
-    <div className="flex min-h-0 flex-1 flex-col" data-testid={`team-tab-body-${location.tab}`}>
+    <div className="flex min-h-0 flex-1 flex-col" data-testid={`team-tab-body-${currentLocation.tab}`}>
       {messagesOpen && messages && <TeamMessagesView
         teamPath={teamKey} view={messages} sendMessage={sendMessage} connected={connected}
         connectionEpoch={connectionEpoch} sessions={liveSessions}
@@ -213,9 +218,9 @@ export default function TeamWorkspaceView({ teamKey, location, sendMessage, conn
           ? { teamKey, tab: 'messages', id: threadId }
           : { teamKey, tab: 'messages' })}
       />}
-      {location.tab === 'strategy' && !unknown && strategy && <ProductStrategyView
+      {currentLocation.tab === 'strategy' && !unknown && strategy && <ProductStrategyView
         teamPath={teamKey} view={strategy} sendMessage={sendMessage} connected={connected}
-        sub={location.sub ?? 'overview'} revision={location.id}
+        sub={currentLocation.sub ?? 'overview'} revision={currentLocation.id}
         onNavigate={next => navigate({
           teamKey, tab: 'strategy', sub: next.sub,
           ...(next.revision !== undefined ? { id: String(next.revision) } : {}),

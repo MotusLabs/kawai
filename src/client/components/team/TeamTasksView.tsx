@@ -101,6 +101,15 @@ export default function TeamTasksView({ teamPath, projectPath, view, sendMessage
     useTeamTaskStore.getState().select(teamPath, taskId)
     onSelectedTask?.(taskId)
   }
+  // Selections the store makes on its own — the created task auto-opens its
+  // detail — reach the URL too (D3), without echoing the mount's initial
+  // value (a reload's URL-driven selection already names itself).
+  const reportedSelection = useRef<string | null>(view.selectedTaskId)
+  useEffect(() => {
+    if (reportedSelection.current === view.selectedTaskId) return
+    reportedSelection.current = view.selectedTaskId
+    onSelectedTask?.(view.selectedTaskId)
+  }, [view.selectedTaskId]) // eslint-disable-line react-hooks/exhaustive-deps
   // Search and tree collapse are the team's kept view state (D8). Parents
   // render expanded by default; a collapsed one is recorded by name.
   const search = useTeamWorkspaceStore(state => state.views[teamPath]?.tabs.tasks.search) ?? ''

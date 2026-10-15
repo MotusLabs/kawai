@@ -210,7 +210,6 @@ test('the Tasks tab mounts the view, follows the URL selection, and notices a mi
   expect(useTeamTaskStore.getState().views['/repo']?.selectedTaskId).toBe('t-1')
   // A URL naming a task the team does not have opens the list with a notice.
   act(() => { useTeamLocationStore.getState().navigate({ teamKey: '/repo', tab: 'tasks', id: 'gone-task' }) })
-  act(() => { useTeamTaskStore.setState({ views: { '/repo': { ...selected, loading: false } as never } }) })
   update()
   expect(useTeamTaskStore.getState().views['/repo']?.selectedTaskId).toBeNull()
   expect(textOf(renderer.root.findByProps({ 'data-testid': 'team-workspace-notice' }))).toContain('Task gone-task was not found')
