@@ -270,7 +270,7 @@ The structural boundary is that no approve, withdraw, close, or reopen tool exis
 
 ### D12. Human protocol and the Plans view
 
-- **Messages.** `team-plans-open`/`close` (the list, pushed as `team-plans-snapshot`), `team-plan-open`/`close` (a detail, pushed as `team-plan-detail`), `team-plan-approve`, `team-plan-withdraw`, `team-plan-finish` (complete or cancel), and `team-plan-reopen`, each answered by `team-plan-result`. Every type has one meaning: `team-plan-close` only ends a detail subscription.
+- **Messages.** `team-plans-open`/`team-plans-close` (the list, pushed as `team-plans-snapshot`), `team-plan-open`/`team-plan-close` (a detail, pushed as `team-plan-detail`), `team-plan-approve`, `team-plan-withdraw`, `team-plan-finish` (complete or cancel), and `team-plan-reopen`, each answered by `team-plan-result`. Every type has one meaning: `team-plan-close` only ends a detail subscription.
 - **Addressing.** Every message carries `teamPath` and is resolved by the shared team-scope resolver. Every type is listed in `CHAT_CONNECTION_TYPES`.
 - **Pushes.** They follow every committed plan write and every change to a task linked to an open subscribed plan. The task service's existing change notification is the hook, filtered by `plan_id`.
 - **Client store.** `teamPlanStore.ts` is keyed by team key. Every store method that applies server state has a WS dispatch caller.
