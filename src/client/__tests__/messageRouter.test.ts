@@ -395,8 +395,11 @@ describe('status transition sounds', () => {
   // graph, and counting createOscillator calls proves a sound played (the
   // idle chime creates exactly two oscillators, 440Hz + 550Hz).
   let oscillatorCount = 0
-  let nowMs = 1_000_000
+  // Seed the mocked clock far above any real timestamp: sound.ts's
+  // module-level lastPlayTime survives across files in the shared runner
+  // process, and a real stamp from an earlier file would mute these chimes.
   const realDateNow = Date.now
+  let nowMs = realDateNow() + 1_000_000_000
   // This file shares a process with every other non-isolated client test, so
   // the window/document stubs must be restored or they leak into later files
   // (the known motion-frame-callback leak class in scripts/test-runner.ts).
@@ -466,10 +469,29 @@ describe('status transition sounds', () => {
     useSettingsStore.setState({ soundOnPermission: false, soundOnIdle: false })
   })
 
-  test('a selected, visible session-update plays no idle sound', () => {
+  test('a selected, visible session-update plays no idle sound', async () => {
     useSessionStore.setState({ selectedSessionId: 'session-1' })
+    nowMs += 1_000
     routeSessionUpdate({ ...baseSession, status: 'waiting' })
+    await flush()
     expect(oscillatorCount).toBe(0)
+  })
+
+  test('a sessions list moving only the selected session to waiting plays no idle sound', async () => {
+    useSessionStore.setState({ selectedSessionId: 'session-1' })
+    nowMs += 1_000
+    routeSessions([{ ...baseSession, status: 'waiting' }])
+    await flush()
+    expect(oscillatorCount).toBe(0)
+  })
+
+  test('a background session entering permission plays the permission sound', async () => {
+    useSessionStore.setState({ selectedSessionId: 'session-1' })
+    nowMs += 1_000
+    routeSessionUpdate({ ...baseSession, id: 'session-2', name: 'beta', tmuxWindow: 'agentboard:2', status: 'permission' })
+    await flush()
+    // The permission ping is a single oscillator (880Hz).
+    expect(oscillatorCount).toBe(1)
   })
 
   test('a non-selected session-update plays the idle chime', async () => {
