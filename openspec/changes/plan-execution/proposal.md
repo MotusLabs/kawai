@@ -42,6 +42,7 @@ Strategy revision 2 states how execution works:
   - `strategy-impact` (C-I1): `ImpactService.gate` passes.
   - `one-execution`: no running execution of this plan.
   - `changes-unclaimed`: no running execution of another plan owns one of this plan's unlanded changes.
+  - `changes-on-base`: each unlanded change's artifacts, and the base specs its deltas touch, are on the base branch on `origin` exactly as validated. Kawai provisions from there and never copies artifacts in.
   - `roles-routable`: every implementing group is worktree-scoped, and every role keeps at least one profile its group allows.
   - `landing-ready`, the landing probe:
     - git is available, and an authenticated `gh` reaches the `origin` GitHub repository and its default branch;
@@ -139,7 +140,7 @@ Non-goals:
   - `teamPrompt.ts` gains an execution note, and the plan connections gain the Start, Stop, and Retry messages.
 - **Shared.** New `src/shared/planExecution.ts` holds the types and pure functions: round evaluation, the flaky rule, and state derivation. The new messages go in `src/shared/types.ts` and `CHAT_CONNECTION_TYPES`.
 - **Client.** `PlanExecutionSection.tsx` with the Start dialog and change rows, plus `teamPlanStore` wiring.
-- **Data.** An additive migration with five tables and one nullable `team_messages` column. `system` becomes a creator, dispatcher, and sender kind in existing text columns. There is no backfill.
+- **Data.** An additive migration with six tables and one nullable `team_messages` column. `system` becomes a creator, dispatcher, and sender kind in existing text columns. There is no backfill.
 - **Docs.** AGENTS.md bullets, and the author-profile tags in `docs/routing/README.md`.
 - **Tests.**
   - Unit coverage of the preconditions, scheduling, manifests, rounds, the flaky rule, Stop and Retry, restart inspection, and cross-team refusals.

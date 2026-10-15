@@ -84,7 +84,7 @@ Before merging, the change's branch SHALL contain the base branch's current head
 - **THEN** the round fails, and the change gets a fix attempt continuing from the merge commit
 
 ### Requirement: A conflicting base merge returns the change as an update attempt
-When GitHub cannot merge the base into the change's branch, Kawai SHALL dispatch an update attempt to the implementing group, naming the base head to merge and the conflicting files GitHub reports. The update attempt's result SHALL be gated as a new fix round with its own CI and review. A verdict SHALL NOT carry over a merge the implementer resolved.
+When GitHub cannot merge the base into the change's branch, Kawai SHALL dispatch an update attempt to the implementing group, naming the base head to merge and the conflicting files. The update attempt's result SHALL be gated as a new fix round with its own CI and review. A verdict SHALL NOT carry over a merge the implementer resolved.
 
 #### Scenario: A conflict with a landed change
 - **WHEN** the base's new head conflicts with the change's branch

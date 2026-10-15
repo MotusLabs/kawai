@@ -18,7 +18,7 @@ The human SHALL be able to start an execution of an open plan's current approved
 - **THEN** no such tool exists and the direct call is refused with nothing written
 
 ### Requirement: Start evaluates named preconditions
-Start SHALL evaluate an ordered list of named preconditions: `plan-open`, `revision-current`, `validation-current`, `start-conditions-resolved`, `strategy-impact`, `one-execution`, `changes-unclaimed`, `roles-routable`, `landing-ready`, and `landing-mode-supported`. Every entry SHALL run. Any failure SHALL refuse Start, naming every failing entry with its message, and SHALL write nothing. Later capabilities MAY append entries but SHALL NOT change shipped ones.
+Start SHALL evaluate an ordered list of named preconditions: `plan-open`, `revision-current`, `validation-current`, `start-conditions-resolved`, `strategy-impact`, `one-execution`, `changes-unclaimed`, `changes-on-base`, `roles-routable`, `landing-ready`, and `landing-mode-supported`. Every entry SHALL run. Any failure SHALL refuse Start, naming every failing entry with its message, and SHALL write nothing. Later capabilities MAY append entries but SHALL NOT change shipped ones.
 
 #### Scenario: Every failing precondition is named
 - **WHEN** the human starts a revision whose report is out of date while another plan's running execution owns one of its changes
@@ -42,6 +42,17 @@ Start SHALL read the file-held validation inputs just before its transaction. In
 #### Scenario: A start condition must be resolved
 - **WHEN** the effective alignment assessment carries an unresolved `start` condition
 - **THEN** Start is refused as `start-conditions-resolved`, quoting the condition
+
+### Requirement: Changes start from artifacts on the base branch
+Start SHALL be refused as `changes-on-base` when an unlanded change's artifacts, or a base spec its deltas touch, differ between the validated files and the base branch's head on `origin`, naming the change and each differing file. Kawai SHALL NOT copy or commit artifacts into a change's worktree.
+
+#### Scenario: A proposal that was never pushed
+- **WHEN** a change's artifacts exist in the main checkout but not on the base branch on `origin`
+- **THEN** Start is refused as `changes-on-base`, naming the change and its files
+
+#### Scenario: The base branch changed after validation
+- **WHEN** the change's design on `origin`'s base branch was edited after the report, while the main checkout still holds the validated copy
+- **THEN** Start is refused as `changes-on-base`, naming that design file
 
 ### Requirement: An execution owns its changes exclusively
 At most one execution of a plan SHALL be running, and two racing Starts SHALL leave exactly one. A running execution SHALL own the unlanded changes of its revision. Start SHALL be refused as `changes-unclaimed` while another plan's running execution owns one of the plan's unlanded changes, naming that change and plan.
