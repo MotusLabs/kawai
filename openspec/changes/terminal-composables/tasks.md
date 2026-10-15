@@ -39,7 +39,7 @@ tick the checkbox in the same commit. Implementation starts only after PR #96 (S
 
 ## 3. Unit tests + close-out
 
-- [ ] 3.1 Add direct unit tests for `outputStream.ts` (buffer/flush/backpressure/
+- [x] 3.1 Add direct unit tests for `outputStream.ts` (buffer/flush/backpressure/
   generation-token discard) and `copyMode.ts` (optimistic set, debounce, poll, mouse-mode
   writes); suite green; commit (`test: unit-test output stream and copy mode modules`)
 - [ ] 3.2 Confirm `useTerminal.ts` is composition + subscribe (~400–500 LOC) and every
