@@ -25,6 +25,8 @@ import type {
 import type { SessionStatus } from '../../shared/types'
 import type { ChatWireRecorder } from '../chat/wireTap'
 import type { ChatLimitSignal } from '../chat/limitSignals'
+import { outboundFile } from '../outbound/destinations'
+import { SessionTeams } from '../team/sessionTeams'
 import { consumerMessages } from './fixtures/backgroundTasks'
 import {
   ChatSessionDriver,
@@ -637,6 +639,42 @@ describe('ChatSessionDriver', () => {
     expect(harness.fakes[1]!.options.systemPrompt).toMatchObject({ append: '# Your role: QA\n\nTest it twice.' })
     expect(reads).toBe(2)
     harness.driver.kill()
+  })
+
+  test('the outbound facts reach the append, re-read only at the next spawn', async () => {
+    // A real SessionTeams over a temporary home: promptFor reads the loader
+    // at each call (execution-safety-recovery D1/D2), and the driver reads
+    // the append only at spawn, so an edit reaches the next start alone.
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kawai-outbound-spawn-'))
+    try {
+      fs.mkdirSync(path.join(home, '.kawai'), { recursive: true })
+      fs.writeFileSync(outboundFile(home), JSON.stringify({ internal: ['one.example.internal'] }))
+      const teams = new SessionTeams({ homeDir: home })
+      const harness = createHarness({ getSystemPromptAppend: () => teams.promptFor('chat-test', null) })
+      const appendOf = (index: number): string =>
+        (harness.fakes[index]!.options.systemPrompt as { append?: string }).append ?? ''
+      harness.driver.send('hello')
+      expect(appendOf(0)).toContain(
+        'Internal destinations the owner configured: one.example.internal.'
+      )
+      // An edit while the process runs changes nothing for it.
+      const earlier = new Date('2026-01-01T00:00:00Z')
+      fs.writeFileSync(outboundFile(home), JSON.stringify({ internal: ['two.example.internal'] }))
+      fs.utimesSync(outboundFile(home), earlier, earlier)
+      harness.fakes[0]!.exit()
+      await flush()
+      harness.driver.send('after exit')
+      // The first process kept the append it was spawned with.
+      expect(appendOf(0)).toContain('one.example.internal')
+      expect(appendOf(0)).not.toContain('two.example.internal')
+      // The respawn rendered the edited destinations.
+      expect(appendOf(1)).toContain(
+        'Internal destinations the owner configured: two.example.internal.'
+      )
+      harness.driver.kill()
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true })
+    }
   })
 
   test('the group effort is a launch option, re-read only at the next spawn', async () => {

@@ -3,10 +3,15 @@
 // the agent is on the team, which groups exist, how mail arrives, and how to
 // send it — then a task note (team-tasks): the task tools, who owns a task's
 // direction, how others contribute, and that a linked OpenSpec change is the
-// authoritative direction, a strategy note, and (durable-plans D11) a plan
-// note: the plan tools, the creation right, owner-only approval, the
-// approved revision as the direction, and linking tasks. Pure: the caller supplies the catalog read at
-// spawn time, so an edited group file reaches only later spawns.
+// authoritative direction, a strategy note, a plan note (durable-plans D11):
+// the plan tools, the creation right, owner-only approval, the approved
+// revision as the direction, and linking tasks — and last the
+// outbound-actions security note (execution-safety-recovery D1): what an
+// agent may send or publish, with the internal destinations the owner
+// configured. Pure: the caller supplies the catalog and outbound facts read
+// at spawn time, so an edited group file or outbound configuration reaches
+// only later spawns.
+import type { OutboundPromptFacts } from '../outbound/destinations'
 import type { GroupDefinition } from './groupFile'
 
 /** The in-process MCP server name; tools surface as `mcp__kawai-team__*`. */
@@ -20,6 +25,8 @@ export interface TeamPromptInput {
   group?: GroupDefinition
   /** Every group of the team, in catalog order. */
   groups: GroupDefinition[]
+  /** The owner's configured outbound destinations (execution-safety-recovery D1). */
+  outbound: OutboundPromptFacts
 }
 
 export function buildTeamPrompt(input: TeamPromptInput): string {
@@ -31,7 +38,40 @@ export function buildTeamPrompt(input: TeamPromptInput): string {
   sections.push(taskNote(input))
   sections.push(strategyNote(input))
   sections.push(planNote(input))
+  sections.push(securityNote(input))
   return sections.join('\n\n')
+}
+
+/**
+ * The fixed security-note body (execution-safety-recovery D1, contract E1):
+ * exported so `codex-chat-sessions` passes the same text in
+ * `developerInstructions` — one constant both session kinds read.
+ */
+export const SECURITY_NOTE_BODY = [
+  '# Outbound actions',
+  '',
+  'Work stays inside the development environment. You may fetch anything from',
+  'outside, and you may change anything inside the workspace, but you send or',
+  'publish nothing except to: model providers, this repository\'s GitHub remote',
+  '(origin), and the workspace\'s internal services. That means no publishing to',
+  'public registries (npm/pypi/crates/containers), no posts or comments on forums',
+  'or social sites, no email or chat messages outward, and no changes to host OS',
+  'settings. Kawai records the outbound actions it can observe for the owner to',
+  'audit. When an action\'s destination is unclear, ask or choose the allowed',
+  'path.',
+].join('\n')
+
+/** The note's last line: the owner's configured destinations, as written. */
+function securityNote({ outbound }: TeamPromptInput): string {
+  const lines = [
+    `Internal destinations the owner configured: ${outbound.internal.length > 0
+      ? outbound.internal.join(', ')
+      : 'none beyond loopback and private network addresses'}.`,
+  ]
+  if (outbound.modelProviders.length > 0) {
+    lines.push(`Extra model-provider hosts: ${outbound.modelProviders.join(', ')}.`)
+  }
+  return `${SECURITY_NOTE_BODY}\n\n${lines.join('\n')}`
 }
 
 /** The product-strategy note (product-strategy 3.3): read/propose rights and the human-only approval rule. */

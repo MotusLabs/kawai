@@ -11,16 +11,16 @@ Group 7's matrix rows for plan execution, integration, supervision, and revision
 
 ## 1. Security note
 
-- [ ] 1.1 Add `SECURITY_NOTE_BODY` and `securityNote(input)` to `src/server/team/teamPrompt.ts`, append it after `strategyNote`, and extend `TeamPromptInput` with `outbound: OutboundPromptFacts` (D1). Update the header comment. Verify with unit tests:
+- [x] 1.1 Add `SECURITY_NOTE_BODY` and `securityNote(input)` to `src/server/team/teamPrompt.ts`, append it after `strategyNote`, and extend `TeamPromptInput` with `outbound: OutboundPromptFacts` (D1). Update the header comment. Verify with unit tests:
   - the section follows the strategy note, with a group and without;
   - configured entries render as written;
   - an empty configuration renders the "none beyond loopback and private network addresses" line.
-- [ ] 1.2 Pass the facts from `sessionTeams.promptFor` at spawn, read from the loader (group 2). Verify with a driver test: the append is rebuilt per spawn, so an edit reaches only the next start.
-- [ ] 1.3 Add the AGENTS.md bullet for the note and the E1 contract line for `codex-chat-sessions`; that is the docs for group 1. Verify by reading the bullet against D1.
+- [x] 1.2 Pass the facts from `sessionTeams.promptFor` at spawn, read from the loader (group 2). Verify with a driver test: the append is rebuilt per spawn, so an edit reaches only the next start.
+- [x] 1.3 Add the AGENTS.md bullet for the note and the E1 contract line for `codex-chat-sessions`; that is the docs for group 1. Verify by reading the bullet against D1.
 
 ## 2. Outbound destinations
 
-- [ ] 2.1 Implement `src/server/outbound/destinations.ts`: `OutboundDestinations` with the D2 shape, its defaults, the stamp re-read, and per-entry error reporting, copying `TeamCaps`. Verify with unit tests:
+- [x] 2.1 Implement `src/server/outbound/destinations.ts`: `OutboundDestinations` with the D2 shape, its defaults, the stamp re-read, and per-entry error reporting, copying `TeamCaps`. Verify with unit tests:
   - a missing file gives the defaults;
   - an unparsable file is reported and the defaults apply;
   - a malformed entry is dropped while its siblings apply;
@@ -29,7 +29,7 @@ Group 7's matrix rows for plan execution, integration, supervision, and revision
   - a project `.kawai/outbound.json` is never read;
   - profile base-URL hosts are model providers;
   - private and loopback addresses match as internal for IPv4 and IPv6.
-- [ ] 2.2 Document the file in AGENTS.md beside `teams.json`, with example names only; that is the docs for group 2. Verify by reading it against D2.
+- [x] 2.2 Document the file in AGENTS.md beside `teams.json`, with example names only; that is the docs for group 2. Verify by reading it against D2.
 
 ## 3. Capture, classification, and records
 
