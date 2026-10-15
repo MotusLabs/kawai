@@ -2,7 +2,8 @@
 // sees it through `pinDisposition` — `continue` lets a non-current pin pass,
 // every other decision state keeps the `strategy-pin-current` refusal, a
 // resubmitted revision passes under `adapt` and `reconsider`, a withdrawn
-// direction and a newer strategy approval override `continue`, and the state
+// direction and a newer strategy approval override `continue`, no strategy
+// record passes only an unpinned revision, and the state
 // key changes exactly when a gate result changes.
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
@@ -62,6 +63,22 @@ describe('the impact gate through PlanService.approve', () => {
       expect(bench.plans.get(planId)!.lifecycle).toBe('open')
     })
   }
+
+  test('without a strategy record, an unpinned revision passes and a pinned one keeps the refusal', async () => {
+    const { planId: unpinned } = await bench.draftInReview()
+    expect(bench.strategies.forTeam(world.team.teamId)).toBeNull()
+    expect(bench.plans.revision(unpinned, 1)!.pin).toBeNull()
+    expect(bench.impact.pinDisposition(unpinned, 1)).toBeNull()
+    expect((await bench.approve(unpinned, 1)).ok).toBe(true)
+    // A pin naming a strategy this team no longer has a record of (written
+    // directly: no supported path removes a record) never passes.
+    const { planId: pinned } = await bench.draftInReview()
+    bench.db.db.run("UPDATE plan_revisions SET strategy_id = 'strategy-gone', strategy_revision = 1, strategy_hash = 'hash-gone' WHERE plan_id = ? AND revision = 1", [pinned])
+    expect(bench.plans.revision(pinned, 1)!.pin).toEqual({ strategyId: 'strategy-gone', revision: 1, hash: 'hash-gone' })
+    expect(bench.impact.pinDisposition(pinned, 1)).toBeNull()
+    expect(failureIds(await bench.approve(pinned, 1))).toEqual(['strategy-pin-current'])
+    expect(bench.plans.get(pinned)!.currentApprovedRevision).toBeNull()
+  })
 
   test('a withdrawn pinned revision is refused despite continue', async () => {
     const { planId, reviewId } = await pinnedInReview()

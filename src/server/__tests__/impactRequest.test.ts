@@ -1,8 +1,8 @@
 // strategy-revision-impact 3.5: the owner's assessment request — exactly one
 // human, normal-priority group message with no task naming the review, the
 // strategy revision, and each affected plan; a retry replays its message, a
-// new command id sends again, and an unknown group, a stale review, and an
-// agent caller are refused with nothing sent.
+// new command id sends again, and no strategy record, an unknown review, an
+// unknown group, an agent caller, and a stale review are refused with nothing sent.
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import { createPlanWorld, type PlanWorld } from './planHarness'
@@ -53,10 +53,12 @@ describe('ImpactService.requestAssessment', () => {
     expect(messages()).toHaveLength(2)
   })
 
-  test('an unknown group, a stale review, an agent caller, and no strategy record are refused with no message', async () => {
+  test('no strategy record, an unknown review, an unknown group, an agent caller, and a stale review are refused with no message', async () => {
     expect(await bench.impact.requestAssessment(bench.human, { reviewId: 'impact-x', group: 'lead', commandId: 'r-0' }))
       .toMatchObject({ ok: false, reason: 'not-found' })
     const { reviewId } = await bench.affectedPlan()
+    expect(await bench.impact.requestAssessment(bench.human, { reviewId: 'impact-unknown', group: 'lead', commandId: 'r-unknown' }))
+      .toMatchObject({ ok: false, reason: 'not-found' })
     expect(await bench.impact.requestAssessment(bench.human, { reviewId, group: 'nobody', commandId: 'r-1' }))
       .toMatchObject({ ok: false, reason: 'invalid', message: expect.stringContaining('Unknown group: nobody') })
     expect(await bench.impact.requestAssessment(bench.agent('lead'), { reviewId, group: 'lead', commandId: 'r-2' }))

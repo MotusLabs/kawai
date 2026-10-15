@@ -205,6 +205,18 @@ describe('ImpactService.decide', () => {
     const other = { kind: 'human' as const, team: world.otherTeam }
     expect(await bench.impact.decide(other, decideInput(planId, reviewId))).toMatchObject({ ok: false, reason: 'not-found' })
   })
+
+  test("a team with its own strategy deciding on another team's plan reads it as not found and writes nothing", async () => {
+    const { planId } = await bench.affectedPlan()
+    const otherReview = bench.approveOtherStrategy()
+    const before = bench.counts()
+    const other = { kind: 'human' as const, team: world.otherTeam }
+    expect(await bench.impact.decide(other, decideInput(planId, otherReview)))
+      .toMatchObject({ ok: false, reason: 'not-found', message: expect.stringContaining('Plan not found') })
+    expect(bench.counts()).toEqual(before)
+    expect(bench.impact.detail(world.otherTeam.teamId)!.reviews[0]!.decisions).toEqual([])
+    expect(detail().reviews[0]!.decisions).toEqual([])
+  })
 })
 
 describe('ImpactService.propose', () => {
@@ -237,5 +249,16 @@ describe('ImpactService.propose', () => {
     bench.approveStrategy({ purpose: 'Newer' })
     await refused(bench.impact.propose(bench.agent('lead'), { planId, disposition: 'adapt', rationale: 'x', reviewId }), 'no longer current')
     expect(bench.impact.store.proposals(bench.strategies.forTeam(teamId())!.id)).toEqual([])
+  })
+
+  test("an agent whose team has its own strategy proposing on another team's plan reads it as not found", async () => {
+    const { planId } = await bench.affectedPlan()
+    bench.approveOtherStrategy()
+    let message = ''
+    try { await bench.impact.propose(bench.agent('stranger'), { planId, disposition: 'adapt', rationale: 'x' }) } catch (error) { message = String(error) }
+    expect(message).toContain('Plan not found')
+    for (const team of [world.team, world.otherTeam]) {
+      expect(bench.impact.store.proposals(bench.strategies.forTeam(team.teamId)!.id)).toEqual([])
+    }
   })
 })

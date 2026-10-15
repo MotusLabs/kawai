@@ -5,6 +5,8 @@
 import { MailboxStore } from '../team/mailboxStore'
 import { ImpactStore } from '../strategy/impactStore'
 import { ImpactService } from '../strategy/ImpactService'
+import { hashStrategyContent } from '../strategy/strategyHash'
+import { normalizeStrategyContent } from '../../shared/productStrategy'
 import { createPlanBench, writeGroup, type PlanBench, type PlanWorld } from './planHarness'
 
 export interface ImpactBench extends PlanBench {
@@ -18,6 +20,8 @@ export interface ImpactBench extends PlanBench {
   withdrawStrategy: (revision: number) => void
   /** Re-submit the lead's draft, pinning the plan to the current strategy; returns the new revision. */
   resubmit: (planId: string) => Promise<number>
+  /** Give the other team its own strategy with revision 1 approved and an open review; returns that review's id. */
+  approveOtherStrategy: () => string
   /** Row counts of the plan, task, mail, and spawn tables. */
   counts: () => Record<string, number>
 }
@@ -60,6 +64,21 @@ export function createImpactBench(world: PlanWorld): ImpactBench {
       const submitted = await bench.service.submit(bench.agent('lead'), { plan_id: planId })
       if (!submitted.ok) throw new Error(submitted.message)
       return submitted.revision.revision
+    },
+    approveOtherStrategy: () => {
+      const human = { kind: 'human' as const, sessionId: null }
+      const strategy = bench.strategies.create({ productId: 'other', title: 'Other', owner: human, teamId: world.otherTeam.teamId, worktrees: [world.other] })
+      const body = { purpose: 'Another product' }
+      const submitted = bench.strategies.submitRevision(strategy.id, { author: human, content: body })
+      if (!submitted.ok) throw new Error(submitted.message)
+      const approved = bench.strategies.approve(strategy.id, {
+        revision: submitted.revision.revision, contentHash: hashStrategyContent(normalizeStrategyContent(body)),
+        commandId: `other-strategy-${++commandCounter}`, expectedCurrentRevision: null, actor: human,
+      })
+      if (!approved.ok) throw new Error(approved.message)
+      const reviewId = service.detail(world.otherTeam.teamId)?.currentReviewId
+      if (!reviewId) throw new Error('no review for the other team')
+      return reviewId
     },
     counts: () => Object.fromEntries(['plans', 'plan_revisions', 'plan_events', 'team_tasks', 'team_messages', 'team_spawns'].map(table => [table, count(table)])),
   }
