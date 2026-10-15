@@ -286,3 +286,42 @@ describe('a database newer than the build', () => {
     expect(fs.statSync(dbPath).size).toBe(0)
   })
 })
+
+describe('a recorded migration name the registry disagrees with (CC round 3)', () => {
+  test('is refused before any write, both names and the backup named; the database is unchanged', () => {
+    // A database a different lineage migrated: its version 2 is recorded as
+    // `outbound-audit`, where this build's registry says `strategy-impact`.
+    const stray = (version: number, name: string): Migration => ({
+      version, name, up: db => db.exec(`ALTER TABLE chat_sessions ADD COLUMN stray_${version} TEXT`),
+    })
+    initDatabase({ path: dbPath, migrations: [stray(2, 'outbound-audit')] }).close()
+    const before = dump(dbPath)
+    const bytes = fs.readFileSync(dbPath)
+    const backupsBefore = fs.readdirSync(path.join(dir, 'backups')).sort()
+    const premigration2 = backupsBefore.find(name => name.endsWith('-pre-migration-2.db'))!
+    let error: unknown
+    try { initDatabase({ path: dbPath }) } catch (caught) { error = caught }
+    expect(error).toBeInstanceOf(DatabaseStartupError)
+    const message = (error as Error).message
+    expect(message).toContain('"outbound-audit"')
+    expect(message).toContain('"strategy-impact"')
+    expect(message).toContain(premigration2)
+    expect(message).toContain('docs/operations/database-backups.md')
+    // Nothing was written: same bytes, same tables, no new backup.
+    expect(fs.readFileSync(dbPath).equals(bytes)).toBe(true)
+    expect(dump(dbPath)).toEqual(before)
+    expect(fs.readdirSync(path.join(dir, 'backups')).sort()).toEqual(backupsBefore)
+  })
+
+  test('matching names proceed, and the guard reads an unversioned database as fine', () => {
+    // The real registry applied everything; opening again with it works.
+    initDatabase({ path: dbPath }).close()
+    expect(versions(dbPath).map(row => row.name)).toEqual(['baseline', 'strategy-impact', 'outbound-audit'])
+    initDatabase({ path: dbPath }).close()
+    // An unversioned database has no rows to disagree with.
+    preChangeDatabase()
+    const db = initDatabase({ path: dbPath })
+    expect(versions(dbPath).map(row => row.version)).toEqual([1, 2, 3])
+    db.close()
+  })
+})

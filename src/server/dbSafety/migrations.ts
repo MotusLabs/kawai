@@ -4,6 +4,8 @@
 // for outside tools and is never read for a decision. Startup order:
 // 1. read the version without writing (0 when the table is missing or empty);
 // 2. refuse a database newer than this build, before any write — no override;
+//    then refuse a recorded (version, name) the registry disagrees with: a
+//    database a different migration lineage wrote;
 // 3. take the `startup` snapshot;
 // 4. only when no version is recorded, run the frozen baseline and record
 //    version 1 `baseline`;
@@ -115,6 +117,47 @@ export function newerDatabaseMessage(input: {
   ].join(' ')
 }
 
+/** The first recorded (version, name) the registry disagrees with, if any. */
+export function recordedNameMismatch(
+  db: Database,
+  migrations: readonly Migration[] = MIGRATIONS,
+): { version: number; recorded: string; expected: string } | null {
+  const table = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'").get()
+  if (!table) return null
+  const expected = new Map<number, string>([[BASELINE_VERSION, BASELINE_NAME], ...migrations.map(m => [m.version, m.name] as const)])
+  const rows = db.prepare('SELECT version, name FROM schema_migrations').all() as Array<{ version: number; name: string }>
+  for (const row of rows) {
+    const name = expected.get(row.version)
+    // A recorded version above the build's newest was already refused; one
+    // the registry knows by a different name marks a different lineage.
+    if (name !== undefined && name !== row.name) return { version: row.version, recorded: row.name, expected: name }
+  }
+  return null
+}
+
+/** D14: the owner's message for a database a different migration lineage wrote. */
+export function nameMismatchMessage(input: {
+  dbPath: string
+  version: number
+  recorded: string
+  expected: string
+  backupsDir: string | null
+  /** The newest checked `pre-migration-<version>` backup, if any. */
+  backup: BackupFile | null
+}): string {
+  const reason = `pre-migration-${input.version}` as const
+  const where = input.backupsDir ?? 'the backups directory'
+  const named = input.backup
+    ? `The newest backup taken before version ${input.version} is ${where}/${input.backup.name}.`
+    : `No ${reason} backup was found in ${where}.`
+  return [
+    `Database ${input.dbPath} records schema version ${input.version} as "${input.recorded}", but this build knows that version as "${input.expected}".`,
+    'A different set of migrations wrote it, and this build refuses to write to it; nothing was changed.',
+    named,
+    `To recover, restore that backup by following ${RESTORE_DOC}, or run a build whose version ${input.version} is "${input.recorded}".`,
+  ].join(' ')
+}
+
 /** Bring the database to the newest known version, or throw DatabaseStartupError (D13–D15). */
 export function migrateSchema(db: Database, dbPath: string, options: MigrateOptions): void {
   const migrations = options.migrations ?? MIGRATIONS
@@ -129,6 +172,17 @@ export function migrateSchema(db: Database, dbPath: string, options: MigrateOpti
     throw new DatabaseStartupError(newerDatabaseMessage({
       dbPath, dbVersion, buildVersion, backupsDir: backups?.dir ?? null,
       backup: backups?.newestGood(`pre-migration-${buildVersion + 1}`) ?? null,
+    }))
+  }
+  const mismatch = recordedNameMismatch(db, migrations)
+  if (mismatch !== null) {
+    throw new DatabaseStartupError(nameMismatchMessage({
+      dbPath,
+      version: mismatch.version,
+      recorded: mismatch.recorded,
+      expected: mismatch.expected,
+      backupsDir: backups?.dir ?? null,
+      backup: backups?.newestGood(`pre-migration-${mismatch.version}`) ?? null,
     }))
   }
 
