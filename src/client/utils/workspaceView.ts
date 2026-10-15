@@ -17,6 +17,7 @@ import {
   type ChangeRegistryEntry,
   type WorkspaceSnapshot,
 } from '@shared/workspace'
+import { repositoryTeamKey } from './teamKey'
 
 export interface SessionFilter {
   projectFilters: string[]
@@ -115,12 +116,31 @@ export interface FallbackSectionData {
   hiddenAttentionCount: number
 }
 
+/**
+ * A navigator Team entry (team-workspace D10): one per discovered repository,
+ * rendered above the change/worktree sections. Not a session row — filters,
+ * drag-reorder, and session selection never apply to it, and opening it does
+ * not change `selectedSessionId`. Its team key is the repository's main
+ * checkout (team-workspace-pages D2).
+ */
+export interface TeamEntryRow {
+  kind: 'team'
+  /** Stable key (`team:<repositoryId>`). */
+  key: string
+  repositoryId: string
+  repositoryName: string
+  /** The Team page's team key: the main-checkout path. */
+  teamKey: string
+}
+
 export interface WorkspaceView {
   /**
    * Sections in render order: per repository (snapshot order) its change
    * sections first, then its unmatched worktrees (main worktree included).
    */
   sections: WorkspaceSection[]
+  /** Team entries, one per repository, above the sections (never filtered). */
+  teams: TeamEntryRow[]
   /** Local sessions outside any worktree. */
   workspace: FallbackSectionData
   remote: FallbackSectionData
@@ -181,11 +201,20 @@ export function buildWorkspaceView(
   const collapsed = new Set(options.collapsedSectionIds ?? [])
 
   const sections: WorkspaceSection[] = []
+  const teams: TeamEntryRow[] = []
   // Session placement: deepest worktree path -> owning section index.
   const sectionIndexByWorktreePath = new Map<string, number>()
 
   if (snapshot) {
     for (const repository of snapshot.repositories) {
+      // One Team entry per repository, never one per worktree (D10).
+      teams.push({
+        kind: 'team',
+        key: `team:${repository.id}`,
+        repositoryId: repository.id,
+        repositoryName: repository.name,
+        teamKey: repositoryTeamKey(repository),
+      })
       const registry = repository.changeRegistry ?? []
       const registryWorktreeIds = new Set(
         registry.flatMap((entry) => (entry.worktreeId !== undefined ? [entry.worktreeId] : []))
@@ -343,5 +372,5 @@ export function buildWorkspaceView(
     visibleEntries.push(...archive.entries)
   }
 
-  return { sections, workspace, remote, archive, visibleEntries }
+  return { sections, teams, workspace, remote, archive, visibleEntries }
 }

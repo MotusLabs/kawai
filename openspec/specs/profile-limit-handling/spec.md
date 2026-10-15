@@ -6,11 +6,15 @@ Keeps team work moving when a provider profile hits its limit: limit events are 
 ## Requirements
 
 ### Requirement: Limit events are recorded per profile
-The system SHALL record a limit event when a chat agent's request fails with a rate-limit, billing, or overload error, marking whether it was a retried attempt or the final failure, with the profile, session, group, time, HTTP status, error message, and provider reset time when given. Limit events SHALL persist across restart for at least 24 hours.
+The system SHALL record a limit event when a chat agent's request fails with a rate-limit, billing, or overload error, marking whether it was a retried attempt or the final failure, with the profile, session, group, time, HTTP status, error message, and provider reset time when given, read from error text in the profile's `limitResetTimeZone` when it has no zone. Limit events SHALL persist across restart for at least 24 hours.
 
 #### Scenario: Final rate-limit failure
 - **WHEN** a `glm` agent's turn ends with a rate-limit error after retries
 - **THEN** a final limit event for `glm` is recorded
+
+#### Scenario: Reset written in the error text
+- **WHEN** a `glm` agent's final error says its limit resets at `2026-10-13 17:17:00` and the `glm` profile sets `limitResetTimeZone: Asia/Shanghai`
+- **THEN** the event's reset time is 09:17 UTC that day; without the field the text sets no reset time
 
 #### Scenario: Survives restart
 - **WHEN** the server restarts 10 minutes after a final limit event
@@ -58,11 +62,15 @@ A group's frontmatter SHALL accept an `onLimit` map with `parkIfResetWithin` (a 
 - **THEN** the problem is reported and 3h is used
 
 ### Requirement: Parked work resumes on the same agent
-Parking SHALL keep the message with the agent and schedule a resume message to that agent at the reset time. A parked agent SHALL receive no group mail and SHALL be shown as paused with the reason and resume time. If the resume fails on a limit again, the message SHALL be resolved again; after 3 parks it SHALL be released.
+Parking SHALL keep the message with the agent and schedule a resume message to that agent at the reset time, delivered before other direct mail. A parked agent SHALL receive no group mail and SHALL be shown as paused with the reason and resume time. If the resume fails on a limit again, the message SHALL be resolved again; after 3 parks it SHALL be released.
 
 #### Scenario: Resume after reset
 - **WHEN** the parked agent's resume time arrives
 - **THEN** it receives a message to continue the task
+
+#### Scenario: Resume goes before other direct mail
+- **WHEN** the resume time arrives while other normal direct mail waits for the parked agent
+- **THEN** the agent receives the resume first, and the other mail after it
 
 #### Scenario: Parked agent skipped
 - **WHEN** a group message arrives while a member is parked

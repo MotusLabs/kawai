@@ -9,7 +9,7 @@ import type { SendClientMessage } from '@shared/types'
 import type { LiveParticipant } from '@shared/participants'
 import type { SessionDirectoryEntry } from '@shared/team'
 import { useTeamMessageStore, type MessageView } from '../../stores/teamMessageStore'
-import ParticipantName from './ParticipantName'
+import ParticipantName from '../chat/ParticipantName'
 
 export interface RecipientOption {
   id: string

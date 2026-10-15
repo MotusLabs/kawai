@@ -15,6 +15,7 @@ import { closedDebugView, useChatDebugStore, type ChatDebugView } from '../store
 import { emptyTranscript, useChatStore } from '../stores/chatStore'
 import { useSettingsStore } from '../stores/settingsStore'
 import { useTeamTaskStore } from '../stores/teamTaskStore'
+import { resetTeamLocationForTests, useTeamLocationStore } from '../hooks/useTeamLocation'
 import { Switch } from '../components/Switch'
 import { chooseSessionMenuEntry, sessionMenuEntry } from './support/sessionMenu'
 
@@ -2040,31 +2041,28 @@ describe('chat notification strip', () => {
   })
 })
 
-describe('chat task header and tasks panel', () => {
-  afterEach(() => useTeamTaskStore.setState({ views: {} }))
+describe('chat task header (the Team page owns the tasks view)', () => {
+  afterEach(() => {
+    useTeamTaskStore.setState({ views: {} })
+    resetTeamLocationForTests()
+  })
 
-  test('the header names the task; clicking opens the tasks panel on it and subscribes; reconnect resubscribes', () => {
+  test('the header names the task; clicking opens the Team page on it; no tasks view mounts in the chat', () => {
     const sent: ClientMessage[] = []
     const session = { ...chatSession, spawned: true, taskId: 'task-1', taskTitle: 'Export' } as Session
     const props = { session, sendMessage: (message: ClientMessage) => { sent.push(message) }, connectionStatus: 'connected' as const, error: null, onClose: () => {}, onKill: () => {} }
     let renderer!: TestRenderer.ReactTestRenderer
-    act(() => { renderer = TestRenderer.create(<ChatView {...props} connectionEpoch={0} />) })
+    act(() => { renderer = TestRenderer.create(<ChatView {...props} connectionEpoch={0}
+      onOpenTeam={teamKey => useTeamLocationStore.getState().navigate({ teamKey, tab: 'tasks' })}
+      onOpenTask={(teamKey, taskId) => useTeamLocationStore.getState().navigate({ teamKey, tab: 'tasks', id: taskId })} />) })
     const link = renderer.root.findByProps({ 'data-testid': 'chat-task' })
     expect(textOf(link.parent!)).toBe('Spawned for task Export')
     act(() => link.props.onClick())
-    expect(renderer.root.findAllByProps({ 'data-testid': 'team-tasks' })).toHaveLength(1)
-    expect(sent.filter(message => message.type.startsWith('team-task')).map(message => message.type)).toEqual([
-      // The pickers request the team's worktrees and changes on open (5.2).
-      'team-task-targets', 'team-tasks-open', 'team-task-open',
-    ])
-    sent.length = 0
-    act(() => renderer.update(<ChatView {...props} connectionEpoch={1} />))
-    expect(sent.filter(message => message.type.startsWith('team-task')).map(message => message.type)).toEqual([
-      'team-tasks-close', 'team-task-close', 'team-tasks-open', 'team-task-open',
-    ])
-    // Opening the mailbox replaces the tasks panel in the shared side slot.
-    act(() => renderer.root.find(node => node.type === 'button' && node.children.join('') === 'Mailbox').props.onClick())
+    // The chip routes to the Team page's Tasks tab with that task; the chat
+    // itself never mounts a team view (4.2) nor sends a team message.
+    expect(useTeamLocationStore.getState().location).toEqual({ teamKey: '/tmp/project', tab: 'tasks', id: 'task-1' })
     expect(renderer.root.findAllByProps({ 'data-testid': 'team-tasks' })).toHaveLength(0)
+    expect(sent.filter(message => message.type.startsWith('team-'))).toHaveLength(0)
     act(() => renderer.unmount())
   })
 

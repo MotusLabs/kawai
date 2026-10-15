@@ -1,13 +1,10 @@
 // Attach on selection and reconnect; detaching never stops the agent. The
 // header (ChatHeader, chat-header-layout D1) renders identity, status, and
-// controls from props; this view owns the side-slot subscriptions, which
-// follow the same reconnect rules. The side slot beside the transcript (in
-// place of it on narrow screens) holds one panel at a time — Debug, Mailbox,
-// Tasks, Messages, or Strategy — opened through `toggleSideSlot`. The team
-// panels are keyed by the chat's team key (team-workspace-pages D2) and
-// address the server by it, so every chat of one team shares them; a chat
-// working on a task opens that task from the header (team-tasks 7.3), and
-// the Mailbox panel keeps its delivery operations (team-message-threads 5.4).
+// controls from props. The side slot beside the transcript (in place of it
+// on narrow screens) hosts only the debug panel (team-workspace-pages D4):
+// the team views — Tasks, Messages, Mailbox, Strategy — live on the Team
+// page, which the header's Team button and the task chip open for the chat's
+// team key (D2), so every chat of one team shares them.
 // The approval policy renders from the broadcast Session, never local state.
 // During an in-flight turn an activity row (design D6) follows ChatMessages:
 // the live phase with a client-ticked timer, hidden while text streams, while
@@ -39,18 +36,9 @@ import ChatActivityRow from './ChatActivityRow'
 import ChatHeader from './ChatHeader'
 import ChatDebugPanel from './ChatDebugPanel'
 import ChatMessages from './ChatMessages'
-import TeamMailboxPanel from './TeamMailboxPanel'
-import { useTeamGroups } from './useTeamGroups'
-import { closedMailbox, useTeamMailboxStore } from '../../stores/teamMailboxStore'
-import TeamTasksPanel from './TeamTasksPanel'
-import { closedTaskView, useTeamTaskStore } from '../../stores/teamTaskStore'
-import TeamMessagesPanel from './TeamMessagesPanel'
-import { closedMessageView, useTeamMessageStore } from '../../stores/teamMessageStore'
-import { closeOtherSideSlots, toggleSideSlot, useOpenSideSlot } from './sideSlot'
 import { openParticipantChat } from './openParticipant'
 import { useSessionStore } from '../../stores/sessionStore'
-import ProductStrategyPanel from './ProductStrategyPanel'
-import { closedStrategyView, useStrategyStore } from '../../stores/strategyStore'
+import { useTeamMessageStore } from '../../stores/teamMessageStore'
 import ChatRequests from './ChatRequests'
 import ChatWorkersStrip from './ChatWorkersStrip'
 import NotificationStrip from './NotificationStrip'
@@ -63,20 +51,20 @@ import { useWorkspaceStore } from '../../stores/workspaceStore'
 
 const EMPTY = emptyTranscript()
 const CLOSED_DEBUG = closedDebugView()
-const CLOSED_MAILBOX = closedMailbox()
-const CLOSED_TASKS = closedTaskView()
-const CLOSED_MESSAGES = closedMessageView()
-const CLOSED_STRATEGY = closedStrategyView()
+/** Stable empty list so an absent directory never re-renders (getSnapshot caching). */
+const NO_DIRECTORY: never[] = []
 
 /** `/clear`, `/reset`, `/new` — optionally followed by the new chat's name. */
 const CLEAR_COMMAND = /^\/(clear|reset|new)(?:\s+(.*))?$/
 
-export default function ChatView({ session, sendMessage, subscribe, connectionStatus, connectionEpoch, error, onClose, onKill, onCreateWorktree }: {
+export default function ChatView({ session, sendMessage, subscribe, connectionStatus, connectionEpoch, error, onClose, onKill, onOpenTeam, onOpenTask }: {
   session: Session; sendMessage: SendClientMessage; connectionStatus: ConnectionStatus; connectionEpoch: number
   error: string | null; onClose: () => void; onKill: () => void
   subscribe?: (listener: (message: ServerMessage) => void) => () => void
-  /** Opens the worktree-creation flow for the session's repository (task pickers). */
-  onCreateWorktree?: () => void
+  /** Opens the Team page for the chat's team (the header's Team button). */
+  onOpenTeam?: (teamKey: string) => void
+  /** Opens the Team page's Tasks tab with one task (the task chip). */
+  onOpenTask?: (teamKey: string, taskId: string) => void
 }) {
   const catalog = useClaudeProfiles(true, session.projectPath)
   const profileId = session.claudeProfileId ?? 'default'
@@ -105,66 +93,19 @@ export default function ChatView({ session, sendMessage, subscribe, connectionSt
     sendMessage({ type: 'chat-debug-open', sessionId: session.id })
     return () => sendMessage({ type: 'chat-debug-close', sessionId: session.id })
   }, [session.id, connected, connectionEpoch, debugOpen, sendMessage])
-  // The team the side panels show and address (team-workspace-pages D2).
+  // The chat's team key (team-workspace-pages D2): the Team button and the
+  // task chip open the Team page for it, and every chat of one team agrees.
   const repositories = useWorkspaceStore(state => state.snapshot?.repositories)
   const teamKey = useMemo(() => teamKeyOf(session.projectPath, repositories), [session.projectPath, repositories])
-  const owner = useMemo(() => ({ sessionId: session.id, teamKey }), [session.id, teamKey])
-  // Views move with discovery on their own (teamViewMigration.ts), so a key
-  // change here only re-subscribes under the new key.
-  const toggleDebug = () => toggleSideSlot('debug', owner)
-  const mailbox = useTeamMailboxStore(state => state.views[teamKey]) ?? CLOSED_MAILBOX
-  const teamGroups = useTeamGroups(mailbox.open, session.projectPath)
-  useEffect(() => {
-    if (!connected || !mailbox.open) return
-    useTeamMailboxStore.getState().open(teamKey)
-    sendMessage({ type: 'team-mailbox-open', teamPath: teamKey })
-    return () => sendMessage({ type: 'team-mailbox-close', teamPath: teamKey })
-  }, [teamKey, connected, connectionEpoch, mailbox.open, sendMessage])
-  const toggleMailbox = () => toggleSideSlot('mailbox', owner)
-  const tasks = useTeamTaskStore(state => state.views[teamKey]) ?? CLOSED_TASKS
-  useEffect(() => {
-    if (!connected || !tasks.open) return
-    sendMessage({ type: 'team-tasks-open', teamPath: teamKey })
-    return () => sendMessage({ type: 'team-tasks-close', teamPath: teamKey })
-  }, [teamKey, connected, connectionEpoch, tasks.open, sendMessage])
-  const selectedTaskId = tasks.open ? tasks.selectedTaskId : null
-  useEffect(() => {
-    if (!connected || !selectedTaskId) return
-    sendMessage({ type: 'team-task-open', teamPath: teamKey, taskId: selectedTaskId })
-    return () => sendMessage({ type: 'team-task-close', teamPath: teamKey, taskId: selectedTaskId })
-  }, [teamKey, connected, connectionEpoch, selectedTaskId, sendMessage])
-  const openTasks = (taskId?: string) => {
-    closeOtherSideSlots('tasks', owner)
-    useTeamTaskStore.getState().open(teamKey, taskId)
-  }
-  const toggleTasks = () => toggleSideSlot('tasks', owner)
-  // Messages (team-message-threads 5.4): the host-agnostic feed in the same
-  // side slot. Its subscription is owned by the view itself, so this only
-  // decides whether the panel is mounted.
-  const messages = useTeamMessageStore(state => state.views[teamKey]) ?? CLOSED_MESSAGES
-  // Naming message participants (team-message-threads D3): live rows come from
-  // the session list, and whichever side panel has been open last supplies the
-  // team directory that names a killed one `Name (gone)`.
   const liveSessions = useSessionStore(state => state.sessions)
-  const participantDirectory = messages.directory.length > 0 ? messages.directory : tasks.directory
-  const toggleMessages = () => toggleSideSlot('messages', owner)
-  // A task's messages link into the thread in the Messages view (5.4): the
-  // side slot flips to Messages and the thread opens.
-  const openThread = (threadId: string) => {
-    closeOtherSideSlots('messages', owner)
-    const store = useTeamMessageStore.getState()
-    store.open(teamKey)
-    store.select(teamKey, threadId)
-  }
-  // Product strategy (product-strategy 5.1): same side slot, team-scoped.
-  const strategy = useStrategyStore(state => state.views[teamKey]) ?? CLOSED_STRATEGY
-  useEffect(() => {
-    if (!connected || !strategy.open) return
-    sendMessage({ type: 'strategy-open', teamPath: teamKey })
-    return () => sendMessage({ type: 'strategy-close', teamPath: teamKey })
-  }, [teamKey, connected, connectionEpoch, strategy.open, sendMessage])
-  const toggleStrategy = () => toggleSideSlot('strategy', owner)
-  const openSlot = useOpenSideSlot(owner)
+  // Killed participants keep their names when a Messages view has loaded the
+  // team directory (the Team page); a chat alone degrades to the raw id.
+  const participantDirectory = useTeamMessageStore(state => state.views[teamKey]?.directory) ?? NO_DIRECTORY
+  // Naming message participants (team-message-threads D3): live rows come
+  // from the session list.
+  const toggleDebug = () => useChatDebugStore.getState().views[session.id]?.open
+    ? useChatDebugStore.getState().close(session.id)
+    : useChatDebugStore.getState().beginOpen(session.id)
   const handleArchive = () => { requestChatArchive(session, sendMessage) }
   // Approval policy (chat-auto-approve-tools design D6): rendered from the
   // broadcast Session so every client agrees; archived chats hide the control.
@@ -324,8 +265,9 @@ export default function ChatView({ session, sendMessage, subscribe, connectionSt
   return <main className="chat-palette chat-root flex min-h-0 min-w-0 flex-1 flex-col bg-base text-primary" data-testid="chat-view"
     style={{ '--chat-font-size': `${chatFontSize}px` } as CSSProperties}>
     <ChatHeader session={session} profileLabel={profileLabel} model={transcript.model} contextUsage={transcript.contextUsage}
-      connectionStatus={connectionStatus} openSlot={openSlot} onToggleSlot={slot => toggleSideSlot(slot, owner)}
-      onOpenTask={openTasks} onRename={name => sendMessage({ type: 'session-rename', sessionId: session.id, newName: name })}
+      connectionStatus={connectionStatus} debugOpen={debugOpen} onToggleDebug={toggleDebug}
+      onOpenTeam={() => onOpenTeam?.(teamKey)} onOpenTask={taskId => onOpenTask?.(teamKey, taskId)}
+      onRename={name => sendMessage({ type: 'session-rename', sessionId: session.id, newName: name })}
       onToggleApproval={toggleApprovalPolicy} onArchive={handleArchive} onKill={onKill} onClose={onClose}
       fontSizePx={chatFontSize} />
     <UsageBar report={usage} />
@@ -344,7 +286,7 @@ export default function ChatView({ session, sendMessage, subscribe, connectionSt
     />
     {error && <p role="alert" className="border-b border-border p-3 text-chat-body text-chat-danger">{error}</p>}
     <div className="flex min-h-0 flex-1">
-      <div className={`min-h-0 min-w-0 flex-1 flex-col ${openSlot ? 'hidden md:flex' : 'flex'}`}>
+      <div className={`min-h-0 min-w-0 flex-1 flex-col ${debugOpen ? 'hidden md:flex' : 'flex'}`}>
         {/* The live-workers strip (design D8): live rows only, hidden in
             archived chats and when nothing runs (the strip hides itself). */}
         {!archived && <ChatWorkersStrip sessionId={session.id} sendMessage={sendMessage} connected={connected} />}
@@ -401,15 +343,8 @@ export default function ChatView({ session, sendMessage, subscribe, connectionSt
           </form>
         )}
       </div>
-      {/* One panel at a time: a team panel opened from another chat of the team can be open beside this chat's Debug. */}
-      {openSlot === 'mailbox' && <TeamMailboxPanel teamPath={teamKey} view={mailbox} sendMessage={sendMessage} connected={connected} onClose={toggleMailbox}
-        groups={teamGroups.groups.map(group => group.id)} sessions={liveSessions} onOpenSession={openParticipantChat} />}
-      {openSlot === 'tasks' && <TeamTasksPanel teamPath={teamKey} projectPath={session.projectPath} view={tasks} sendMessage={sendMessage}
-        connected={connected} onClose={toggleTasks} onOpenThread={openThread} onCreateWorktree={onCreateWorktree} onOpenMailbox={toggleMailbox} />}
-      {openSlot === 'messages' && <TeamMessagesPanel teamPath={teamKey} projectPath={session.projectPath} sendMessage={sendMessage}
-        connected={connected} connectionEpoch={connectionEpoch} onClose={toggleMessages} />}
-      {openSlot === 'strategy' && <ProductStrategyPanel teamPath={teamKey} view={strategy} sendMessage={sendMessage} connected={connected} onClose={toggleStrategy} />}
-      {openSlot === 'debug' && <ChatDebugPanel key={session.id} sessionId={session.id} view={debug} sendMessage={sendMessage}
+      {/* The side slot hosts only the debug panel (team-workspace-pages D4). */}
+      {debugOpen && <ChatDebugPanel key={session.id} sessionId={session.id} view={debug} sendMessage={sendMessage}
         connected={connected} onClose={toggleDebug} />}
     </div>
   </main>

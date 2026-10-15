@@ -40,6 +40,8 @@ interface SessionDrawerProps {
   onCreateChangeWorktree?: (repositoryId: string, change: string) => void
   /** Opens the repository branch browser from a worktree header. */
   onBrowseBranches?: (repositoryId: string) => void
+  /** Opens a repository's Team page from its navigator Team entry. */
+  onOpenTeam?: (teamKey: string) => void
 }
 
 export default function SessionDrawer({
@@ -66,6 +68,7 @@ export default function SessionDrawer({
   onNewSessionInWorktree,
   onCreateChangeWorktree,
   onBrowseBranches,
+  onOpenTeam,
 }: SessionDrawerProps) {
   const prefersReducedMotion = useReducedMotion()
   const drawerRef = useRef<HTMLDivElement>(null)
@@ -233,6 +236,14 @@ export default function SessionDrawer({
             onBrowseBranches
               ? (repositoryId) => {
                   onBrowseBranches(repositoryId)
+                  onClose()
+                }
+              : undefined
+          }
+          onOpenTeam={
+            onOpenTeam
+              ? (teamKey) => {
+                  onOpenTeam(teamKey)
                   onClose()
                 }
               : undefined

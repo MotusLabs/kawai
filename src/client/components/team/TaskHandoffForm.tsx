@@ -5,7 +5,7 @@
 // a refusal; its command key is armed per payload in the task store, so a
 // double click or a reconnect resend dispatches once.
 import type { TaskHandoffKind } from '@shared/teamTasks'
-import type { TeamGroupOption } from './useTeamGroups'
+import type { TeamGroupOption } from '../chat/useTeamGroups'
 
 export interface RoleRequest {
   target: string

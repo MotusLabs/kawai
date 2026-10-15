@@ -88,6 +88,8 @@ interface TerminalProps {
   onCreateChangeWorktree?: (repositoryId: string, change: string) => void
   /** Opens the repository branch browser (mobile drawer). */
   onBrowseBranches?: (repositoryId: string) => void
+  /** Opens a repository's Team page (mobile drawer). */
+  onOpenTeam?: (teamKey: string) => void
 }
 
 type IOSResumeInputState = 'idle' | 'focused' | 'interrupted' | 'armed'
@@ -155,6 +157,7 @@ export default function Terminal({
   onNewSessionInWorktree,
   onCreateChangeWorktree,
   onBrowseBranches,
+  onOpenTeam,
 }: TerminalProps) {
   void _onClose // Keep for interface compatibility
   const theme = useThemeStore((state) => state.theme)
@@ -1734,6 +1737,7 @@ export default function Terminal({
           onNewSessionInWorktree={onNewSessionInWorktree}
           onCreateChangeWorktree={onCreateChangeWorktree}
           onBrowseBranches={onBrowseBranches}
+          onOpenTeam={onOpenTeam}
         />
       )}
 

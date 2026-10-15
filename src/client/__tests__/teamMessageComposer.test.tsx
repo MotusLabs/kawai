@@ -6,8 +6,8 @@
 import { afterEach, expect, test } from 'bun:test'
 import TestRenderer, { act } from 'react-test-renderer'
 import type { ClientMessage } from '@shared/types'
-import TeamMessageComposer, { type ComposerMode } from '../components/chat/TeamMessageComposer'
-import TeamMessagesView from '../components/chat/TeamMessagesView'
+import TeamMessageComposer, { type ComposerMode } from '../components/team/TeamMessageComposer'
+import TeamMessagesView from '../components/team/TeamMessagesView'
 import { closedMessageView, useTeamMessageStore } from '../stores/teamMessageStore'
 
 afterEach(() => {
@@ -136,7 +136,7 @@ test('the view composes a new message from the list and replies to a thread row'
   const ViewHost = () => {
     const view = useTeamMessageStore(state => state.views.dev) ?? closedMessageView()
     return <TeamMessagesView teamPath="dev" view={view} sendMessage={message => sent.push(message)} connected
-      sessions={sessions} groups={groups} onClose={() => {}} />
+      sessions={sessions} groups={groups} />
   }
   act(() => {
     useTeamMessageStore.getState().open('dev')

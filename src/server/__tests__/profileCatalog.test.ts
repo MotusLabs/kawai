@@ -131,6 +131,18 @@ describe('catalog file parsing and validation', () => {
     expect(errors).toHaveLength(1)
     expect(errors[0]).toContain('absolute')
   })
+
+  test('limitResetTimeZone takes an IANA zone or offset and layers like other scalars', () => {
+    writeCatalog(homeDir, { glm: { label: 'GLM', limitResetTimeZone: 'Asia/Shanghai' } })
+    expect(resolveProfileCatalog({ homeDir }).profiles.get('glm')?.limitResetTimeZone).toBe('Asia/Shanghai')
+    writeCatalog(projectDir, { glm: { limitResetTimeZone: '+08:00' } })
+    const nearer = resolveProfileCatalog({ homeDir, projectPath: projectDir })
+    expect(nearer.profiles.get('glm')).toEqual({ label: 'GLM', env: {}, limitResetTimeZone: '+08:00' })
+    writeCatalog(projectDir, { glm: { limitResetTimeZone: 'UTC+8' } })
+    const { errors } = resolveProfileCatalog({ homeDir, projectPath: projectDir })
+    expect(errors).toHaveLength(1)
+    expect(errors[0]).toContain('limitResetTimeZone')
+  })
 })
 
 describe('layered resolution', () => {

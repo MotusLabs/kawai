@@ -1,7 +1,8 @@
 // The chat header in a real browser against the development fixture
-// (chat-header-layout): the session menu's entries, keyboard operation, and
-// focus return; Debug from the menu replacing an open panel; the archived
-// menu; and the kill confirmation (Cancel, Escape, confirm).
+// (chat-header-layout, team-workspace-pages 4.1): the session menu's
+// entries, keyboard operation, and focus return; the Team button opening
+// the Team page while the side slot hosts only Debug; the archived menu;
+// and the kill confirmation (Cancel, Escape, confirm).
 import { expect, test, type Page } from '@playwright/test'
 import { killChat, openSessionMenu } from './support/chatHeader'
 
@@ -63,18 +64,21 @@ test('the session menu lists its actions and works from the keyboard', async ({ 
   await killChat(page)
 })
 
-test('Debug from the menu replaces an open panel and shows as on', async ({ page }) => {
+test('the Team button opens the Team page; Debug from the menu is the only side-slot panel', async ({ page }) => {
   await createChat(page, 'Header debug')
-  const tasks = page.getByRole('group', { name: 'Side panels' }).getByRole('button', { name: 'Tasks', exact: true })
-  await tasks.click()
-  await expect(tasks).toHaveAttribute('aria-pressed', 'true')
+  const team = page.getByTestId('chat-team-button')
+  await team.click()
+  // The Team page replaces the chat pane; the chat stays selected.
+  await expect(page.getByTestId('team-workspace')).toBeVisible()
   await expect(page.getByTestId('team-tasks')).toBeVisible()
+  await page.locator('[data-session-id^="chat-"]').filter({ hasText: 'Header debug' }).click()
+  await expect(page.getByTestId('chat-view')).toBeVisible()
 
   await openSessionMenu(page)
   await page.getByRole('menuitemcheckbox', { name: 'Debug' }).click()
   await expect(page.getByTestId('team-tasks')).toHaveCount(0)
+  await expect(page.getByTestId('team-workspace')).toHaveCount(0)
   await expect(page.getByTestId('chat-debug-panel')).toBeVisible()
-  await expect(tasks).toHaveAttribute('aria-pressed', 'false')
   await openSessionMenu(page)
   await expect(page.getByRole('menuitemcheckbox', { name: 'Debug' })).toHaveAttribute('aria-checked', 'true')
   await page.keyboard.press('Escape')
@@ -152,9 +156,9 @@ test('the header steps down by its own width without clipping a control', async 
     expect(facts.name).toBeGreaterThan(40)
     await page.getByTestId('chat-view').locator('header').screenshot({ path: info.outputPath(`header-${width}.png`) })
   }
-  // In the menu layout the panels are menu entries.
+  // In the menu layout the Team button folds into the session menu.
   await openSessionMenu(page)
-  await expect(page.getByRole('menuitemcheckbox', { name: 'Tasks' })).toBeVisible()
+  await expect(page.getByRole('menuitem', { name: 'Team', exact: true })).toBeVisible()
   await page.keyboard.press('Escape')
 
   // Same window, wider navigator: the header narrows and steps down.

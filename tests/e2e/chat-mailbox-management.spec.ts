@@ -1,7 +1,9 @@
-// Browser walk of the Mailbox panel's parked-work controls against the
-// SDK-free fixture (team-mailbox-management 5.3): a parked row shows its short
-// id and Cancel beside Hand off; Cancel removes it from Parked and its resume
-// row from Scheduled; the holder's paused badge clears. Written for CI; run
+// Browser walk of the Mailbox tab's parked-work controls against the
+// SDK-free fixture (team-mailbox-management 5.3): a parked row shows its
+// short id and Cancel beside Hand off; Cancel removes it from Parked and its
+// resume row from Scheduled; the holder's paused badge clears. The view is
+// reached through the Team page's `#/team/<key>/mailbox` route
+// (team-workspace-pages 6.1), not a chat header panel. Written for CI; run
 // locally only on a spare E2E_PORT (the suite teardown must not touch a live
 // kawai).
 import { expect, test, type Page } from '@playwright/test'
@@ -22,6 +24,14 @@ async function createChat(page: Page, root: string, name: string, group: string)
   await dialog.getByRole('button', { name: 'Create', exact: true }).click()
   await expect(page.getByTestId('chat-view')).toContainText(name)
   return (await page.locator('[data-session-id^="chat-"]').filter({ hasText: name }).first().getAttribute('data-session-id'))!
+}
+
+/** Open the team's Mailbox tab through its URL route; the Team page replaces the chat pane. */
+async function openTeamMailbox(page: Page, root: string) {
+  await page.evaluate(teamKey => { window.location.hash = `#/team/${encodeURIComponent(teamKey)}/mailbox` }, root)
+  const view = page.getByTestId('team-mailbox')
+  await expect(view).toBeVisible()
+  return view
 }
 
 test('parked rows show a short id and Cancel; cancelling removes the work and its resume row', async ({ page }, info) => {
@@ -48,16 +58,18 @@ test('parked rows show a short id and Cancel; cancelling removes the work and it
     `], { cwd: process.cwd(), input: JSON.stringify([dbPath, root, dev]), encoding: 'utf8' })) as { work: string; resume: string }
 
     await page.reload()
-    await page.locator(`[data-session-id="${dev}"]`).click()
-    await page.getByRole('button', { name: 'Mailbox', exact: true }).click()
-    const panel = page.getByTestId('team-mailbox')
+    const panel = await openTeamMailbox(page, root)
     const work = panel.locator(`[data-message-id="${seeded.work}"]`)
     const resume = panel.locator(`[data-message-id="${seeded.resume}"]`)
     await expect(panel.getByRole('region', { name: 'Parked' })).toContainText('Parked browser work')
+    // Scheduled starts collapsed behind its count; expanding lists its rows.
+    await panel.getByTestId('mailbox-section-toggle-Scheduled').click()
     await expect(panel.getByRole('region', { name: 'Scheduled' })).toContainText('Resume browser work')
     // The short id matches the full id's prefix, which stays in the title.
     await expect(work.getByTestId('message-id')).toHaveText(seeded.work.slice(0, 8))
     await expect(work.getByTestId('message-id')).toHaveAttribute('title', seeded.work)
+    // Hand off lives in the row's expanded detail; Cancel is always offered.
+    await work.getByTestId('mailbox-row-toggle').click()
     await expect(work.getByRole('button', { name: 'Hand off' })).toBeVisible()
     await page.screenshot({ path: info.outputPath('parked-row.png') })
 

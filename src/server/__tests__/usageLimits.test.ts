@@ -11,10 +11,13 @@ import {
   type UsageReportSlice,
   type ZaiQuotaLimitSlice,
 } from '../chat/usageLimits'
+import { windowPeriodMs } from '../chat/usageWindowPeriods'
 
 const AT = '2026-10-07T13:00:00.000Z'
 const FIVE_HOUR_RESET = '2026-10-07T18:11:04.000Z'
 const SEVEN_DAY_RESET = '2026-10-12T09:00:00.000Z'
+const FIVE_HOURS_MS = 5 * 60 * 60 * 1000
+const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000
 
 /**
  * The 2026-10-07 probe payload: one event carrying both plan windows through
@@ -49,12 +52,14 @@ describe('parseRateLimitEvent', () => {
           label: '5-hour window',
           percentUsed: 22.37,
           resetsAt: FIVE_HOUR_RESET,
+          periodMs: FIVE_HOURS_MS,
         },
         {
           key: 'seven_day',
           label: '7-day window',
           percentUsed: 17.12,
           resetsAt: SEVEN_DAY_RESET,
+          periodMs: SEVEN_DAYS_MS,
         },
       ],
       receivedAt: AT,
@@ -98,6 +103,7 @@ describe('parseRateLimitEvent', () => {
           label: '5-hour window',
           percentUsed: 87,
           resetsAt: FIVE_HOUR_RESET,
+          periodMs: FIVE_HOURS_MS,
         },
       ],
       receivedAt: AT,
@@ -143,12 +149,14 @@ describe('parseRateLimitEvent', () => {
         label: '7-day Sonnet window',
         percentUsed: 31,
         resetsAt: null,
+        periodMs: SEVEN_DAYS_MS,
       },
       {
         key: 'seven_day_oauth_apps',
         label: '7-day OAuth apps window',
         percentUsed: 42,
         resetsAt: SEVEN_DAY_RESET,
+        periodMs: SEVEN_DAYS_MS,
       },
     ])
   })
@@ -211,18 +219,21 @@ describe('parseUsageReport', () => {
           label: '5-hour window',
           percentUsed: 22.4,
           resetsAt: FIVE_HOUR_RESET,
+          periodMs: FIVE_HOURS_MS,
         },
         {
           key: 'weekly_all',
           label: '7-day window',
           percentUsed: 17,
           resetsAt: null,
+          periodMs: SEVEN_DAYS_MS,
         },
         {
           key: 'weekly_scoped:Opus',
           label: 'Opus',
           percentUsed: 42.5,
           resetsAt: SEVEN_DAY_RESET,
+          periodMs: SEVEN_DAYS_MS,
         },
       ],
       receivedAt: AT,
@@ -288,7 +299,13 @@ describe('parseUsageReport', () => {
       AT
     )
     expect(report?.windows).toEqual([
-      { key: 'weekly_all', label: '7-day window', percentUsed: 17, resetsAt: null },
+      {
+        key: 'weekly_all',
+        label: '7-day window',
+        percentUsed: 17,
+        resetsAt: null,
+        periodMs: SEVEN_DAYS_MS,
+      },
     ])
     expect(report?.status).toBe('allowed')
   })
@@ -322,24 +339,28 @@ describe('parseUsagePull', () => {
           label: '5-hour window',
           percentUsed: 22.37,
           resetsAt: FIVE_HOUR_RESET,
+          periodMs: FIVE_HOURS_MS,
         },
         {
           key: 'seven_day',
           label: '7-day window',
           percentUsed: 17.12,
           resetsAt: SEVEN_DAY_RESET,
+          periodMs: SEVEN_DAYS_MS,
         },
         {
           key: 'seven_day_opus',
           label: '7-day Opus window',
           percentUsed: 42.5,
           resetsAt: SEVEN_DAY_RESET,
+          periodMs: SEVEN_DAYS_MS,
         },
         {
           key: 'model_scoped:Fable',
           label: 'Fable',
           percentUsed: 3.2,
           resetsAt: SEVEN_DAY_RESET,
+          periodMs: SEVEN_DAYS_MS,
         },
       ],
       receivedAt: AT,
@@ -554,5 +575,66 @@ describe('parseZaiQuotaLimit', () => {
       'zai:time_limit',
       'zai:time_limit#2',
     ])
+  })
+})
+
+describe('window period lengths', () => {
+  test('known kinds carry 5-hour and 7-day periods, scope and #n suffixes ignored', () => {
+    expect(windowPeriodMs('five_hour')).toBe(FIVE_HOURS_MS)
+    expect(windowPeriodMs('session')).toBe(FIVE_HOURS_MS)
+    expect(windowPeriodMs('seven_day_overage_included')).toBe(SEVEN_DAYS_MS)
+    expect(windowPeriodMs('weekly_scoped:Opus')).toBe(SEVEN_DAYS_MS)
+    expect(windowPeriodMs('model_scoped:Fable')).toBe(SEVEN_DAYS_MS)
+    expect(windowPeriodMs('weekly_all#2')).toBe(SEVEN_DAYS_MS)
+  })
+
+  test('overage and unknown kinds carry none unless a /usage group names it', () => {
+    expect(windowPeriodMs('overage')).toBeUndefined()
+    expect(windowPeriodMs('brand_new_meter')).toBeUndefined()
+    expect(windowPeriodMs('brand_new_meter', 'weekly')).toBe(SEVEN_DAYS_MS)
+    expect(windowPeriodMs('brand_new_meter', 'session')).toBe(FIVE_HOURS_MS)
+    expect(windowPeriodMs('brand_new_meter', 'monthly')).toBeUndefined()
+  })
+
+  test('push and report overage or unknown windows render without a period', () => {
+    const push = parseRateLimitEvent(
+      { status: 'allowed', rateLimitType: 'overage', utilization: 0.5 },
+      AT
+    )
+    expect(push.windows[0]?.periodMs).toBeUndefined()
+    const report = parseUsageReport(
+      {
+        rate_limits: {
+          limits: [
+            { kind: 'mystery', percent: 5 },
+            { kind: 'mystery_weekly', group: 'weekly', percent: 6 },
+          ],
+        },
+      },
+      AT
+    )
+    expect(report?.windows.map((window) => window.periodMs)).toEqual([
+      undefined,
+      SEVEN_DAYS_MS,
+    ])
+  })
+
+  test('provider quota rows never carry a period', () => {
+    const report = parseZaiQuotaLimit(
+      {
+        success: true,
+        data: {
+          limits: [
+            { type: 'TOKENS_LIMIT', percentage: 30, nextResetTime: Date.parse(SEVEN_DAY_RESET) },
+            { type: 'TIME_LIMIT', percentage: 2, nextResetTime: Date.parse(SEVEN_DAY_RESET) },
+          ],
+        },
+      },
+      AT
+    )
+    expect(report?.windows).toHaveLength(2)
+    for (const window of report?.windows ?? []) {
+      expect('periodMs' in window).toBe(false)
+    }
   })
 })

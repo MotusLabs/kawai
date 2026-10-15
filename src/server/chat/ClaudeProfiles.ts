@@ -95,6 +95,11 @@ export function resolveClaudeProfile(
   }
 }
 
+/** The zone a profile's provider writes zone-less reset times in, if configured. */
+export function profileLimitResetTimeZone(id: string = 'default', ctx: ProfileCatalogContext = {}): string | undefined {
+  return resolveProfileCatalog(ctx).profiles.get(id)?.limitResetTimeZone
+}
+
 /**
  * Verify an operator-named executable before any spawn. Errors are actionable
  * by construction: they name the profile, the path, and what is wrong.
