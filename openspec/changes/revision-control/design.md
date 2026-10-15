@@ -412,7 +412,7 @@ Positions follow the target's content order. The `revision-applied` event closes
 
 **Atomicity and crashes (R17).** The revision row, the publication rows, the task revisions with their notices, the cancellations, and the event commit together. The command id replays the whole command, and each task publication's request key replays inside it, so a retry after a crash publishes nothing twice. The notices are mailbox rows, under shipped delivery and receipt recovery.
 
-**Forward fixes (S4).** A revision that adds changes naming an override in `fixes` joins the running execution through Apply. `fixStatus` then reads running for that execution.
+**Forward fixes (S4, plan-supervision at 52657a0).** `PlanChange.fixes` names the fix or correction task (`task-<uuid>`, a `plan_fix_tasks` row). A revision that adds changes naming such a task joins the running execution through Apply, and `fixStatus` then reads running for that execution. S4 closes a fix task once a change naming it has landed and no change in the current approved revision naming it is unlanded. Each landing is judged by the revision it landed under (`plan_change_landings.execution_id`). Apply never removes a landed change (`landed-unchanged`), so it never strands a fix. A removed, unlanded fix change is cancelled like any other, and the fix task stays open until a change naming it lands.
 
 ### D12. What a running execution's revision now means
 
@@ -424,7 +424,7 @@ Positions follow the target's content order. The `revision-applied` event closes
 
 ### D13. Supervision causes and attention
 
-**Causes (S2, append-only).** `changeSupervision` gains `paused` (naming the pause and the awaited decision), `pausing` (naming the pause and its D8 causes), and `hold` (naming the holds, their scope, and their deadlines). They are evaluated after the in-flight `effect` cause and before `uncertain-delivery`, in that order. The other applicable waits are listed as also applying. A change in one of these named waits is never a stall.
+**Causes (S2, append-only).** `changeSupervision` gains `paused` (naming the pause and the awaited decision), `pausing` (naming the pause and its D8 causes), and `hold` (naming the holds, their scope, and their deadlines). They append to S2's cause list. Among the running-stage named waits they are evaluated after the in-flight `effect` cause and before `uncertain-delivery`, in that order. S2's outcome order (plan-supervision at 52657a0) puts `repeating-failure` at position 5, ahead of every named wait, and that is unchanged: a held change whose last two rounds failed alike reads `repeating-failure`, with `hold` listed as also applying. The other applicable waits are listed as also applying. A change in one of these named waits is never a `no-progress` stall.
 
 **Attention sources** go in `ATTENTION_SOURCES` through `planAttention.ts`, with the `plan` link of plan-supervision D13:
 
@@ -488,7 +488,7 @@ Consumed:
 - **plan-execution D9, D12, and D18:** new task revisions, Stop and supersession, and the reply guidance.
 - **I1 and I2:** candidate fast-forwards and promotions gated, with `no-hold` appended to `PROMOTE_PRECONDITIONS`.
 - **C-I1 and C-I3:** the gate, and holds citing a review.
-- **S1, S2, and S4:** cards cited by holds, the causes, and forward fixes joining running work.
+- **S1, S2, and S4** (plan-supervision at 52657a0): cards cited by holds; the causes, appended after S2's outcome order, which keeps `repeating-failure` at position 5; and forward fixes whose `fixes` name fix or correction task ids, joining running work.
 - **plan-supervision D13:** attention sources and the `plan` link.
 - **Shipped:** task-revision-publication (publication `within`, notices, request keys); member release's readiness; the mailbox's urgent direct semantics, system mail, and receipt recovery; and task assignment's supersession through the stop branch.
 

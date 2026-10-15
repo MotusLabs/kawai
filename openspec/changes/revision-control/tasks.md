@@ -103,14 +103,14 @@ Implement after these have landed on master: `plan-execution`, `integration-cand
   - removed unlanded changes and their tasks are cancelled, with the slot given up;
   - the publication rows and `revision-applied` commit together;
   - completion reads the current revision (D12).
-- [ ] 5.3 Write the R17 integration test: a crash before commit leaves nothing; a retry after commit replays, with one task revision and one notice per adapted change. Add the S4 forward-fix test: a fix change applied to a running execution lands, and `fixStatus` reads running. Add the AGENTS.md Apply bullet; that is the docs for group 5. Verify by the tests, and by reading the bullet against D10–D12.
+- [ ] 5.3 Write the R17 integration test: a crash before commit leaves nothing; a retry after commit replays, with one task revision and one notice per adapted change. Add the S4 forward-fix test: a change whose `fixes` names a fix task is applied to a running execution and lands, `fixStatus` reads running, and the fix task closes once no change of the current approved revision naming it is unlanded. Add the AGENTS.md Apply bullet; that is the docs for group 5. Verify by the tests, and by reading the bullet against D10–D12.
 
 ## 6. Reading, supervision, and attention
 
 - [ ] 6.1 Add `holds`, `pauses`, and executions' `revisions` to `team-plan-detail` and `plan_get` (D14, D15). Verify with connection and tool tests: another team's ids read as not found, and pushes follow every write and every Paused recording.
 - [ ] 6.2 Add the `paused`, `pausing`, and `hold` causes in their D13 position, and the three attention sources. Verify with tests:
   - each cause wins in its position, and the others are listed as also applying;
-  - none raises a stall;
+  - none raises a `no-progress` stall, and `repeating-failure` keeps its S2 position ahead of them;
   - each item's id, owner, next action, and clearing rule, including after an extension;
   - nothing is raised for closed plans.
 

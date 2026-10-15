@@ -47,7 +47,7 @@ Apply SHALL refuse as `landed-unchanged` a revision that removes a landed change
 - **THEN** Apply is refused as `landed-unchanged`, naming `api` and suggesting a change that fixes it forward
 
 #### Scenario: A forward fix is applied
-- **WHEN** revision 4 leaves landed changes as they were and adds change `api-fix` that names the override in `fixes`
+- **WHEN** revision 4 leaves landed changes as they were and adds change `api-fix` whose `fixes` names the override's fix task
 - **THEN** Apply succeeds and `api-fix` is scheduled in the running execution
 
 ### Requirement: Each choice publishes or dispatches as recorded

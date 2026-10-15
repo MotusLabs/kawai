@@ -81,7 +81,7 @@ The human SHALL be able to release a hold, with a reason, under a command id: wh
 - **THEN** the hold stays active and an attention item asks the owner to release or extend it
 
 ### Requirement: Holds are visible to the owner and agents
-The plan detail and `plan_get` SHALL list each hold with scope, changes, rationale, deadline, cite, and release. Supervision SHALL name `hold` as a held change's cause, with its holds and deadlines, so the change never reads as stalled. An overdue hold of an open plan SHALL raise the `plan-hold-overdue` attention item until it is released or extended.
+The plan detail and `plan_get` SHALL list each hold with scope, changes, rationale, deadline, cite, and release. Supervision SHALL name `hold` as a held change's cause, with its holds and deadlines, so the change never reads as a `no-progress` stall. An overdue hold of an open plan SHALL raise the `plan-hold-overdue` attention item until it is released or extended.
 
 #### Scenario: A held change's cause
 - **WHEN** a held change's CI has passed and its review waits for the release
