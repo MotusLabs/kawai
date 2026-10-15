@@ -1,9 +1,12 @@
 // Read-only transcript with one expandable entry per tool use. Calls and
-// results are paired in the view; approvals/questions render separately.
+// results are paired in the view; the interactive approval/question cards
+// render separately, while each approval entry also renders as a row so a
+// search snippet has a target to reveal (its anchor is the event id).
 // Agent/Task calls render as worker rows instead (workers design D8) when a
 // session context is given: the row joins the roster by workerId and falls
 // back to the plain paired card without one.
 import type { ChatEvent } from '@shared/chat'
+import { snippetLabel } from '@shared/sessionSearch'
 import type { SendClientMessage, Session } from '@shared/types'
 import type { SessionDirectoryEntry } from '@shared/team'
 import Markdown from '../Markdown'
@@ -70,12 +73,12 @@ export default function ChatMessages({ events, projectPath, sessionId, sendMessa
     {toolEntries(events).map(({ event, result }) => {
       switch (event.type) {
         case 'user_message':
-          return <article key={event.id} data-chat-role="user" className="ml-8 border border-border bg-elevated p-3">
+          return <article key={event.id} data-anchor-id={event.id} data-chat-role="user" className="ml-8 border border-border bg-elevated p-3">
             <div className="mb-1 text-chat-meta text-secondary">You</div>
             <p className="whitespace-pre-wrap break-words text-chat-body">{event.text}</p>
           </article>
         case 'peer_message':
-          return <article key={event.id} data-chat-role="peer" className="border-l-2 border-primary bg-elevated p-3">
+          return <article key={event.id} data-anchor-id={event.id} data-chat-role="peer" className="border-l-2 border-primary bg-elevated p-3">
             <div className="mb-1 flex flex-wrap gap-2 text-chat-meta text-secondary">
               <span>Peer · {names(event.senderSession, event.senderKind)}</span>
               <span>{event.senderGroup ?? 'No group'}</span><span>{event.priority}</span>
@@ -102,13 +105,13 @@ export default function ChatMessages({ events, projectPath, sessionId, sendMessa
             </details>}
           </article>
         case 'assistant_text':
-          return <article key={event.id} data-chat-role="assistant" className="mr-8 p-3">
+          return <article key={event.id} data-anchor-id={event.id} data-chat-role="assistant" className="mr-8 p-3">
             <div className="mb-1 text-chat-meta text-secondary">Claude</div>
             <Markdown content={event.text} />
           </article>
         case 'tool_call': {
           const detail = toolCallDetail(event.tool, event.input, projectPath)
-          const card = <details key={`tool:${event.toolCallId}`} className="border-l-2 border-border px-3 text-chat-meta text-secondary">
+          const card = <details key={`tool:${event.toolCallId}`} data-anchor-id={`tool:${event.toolCallId}`} className="border-l-2 border-border px-3 text-chat-meta text-secondary">
             <SummaryLabel label={event.tool} detail={detail} failed={result?.isError} />
             <pre className="mt-2 overflow-auto whitespace-pre-wrap">{JSON.stringify(event.input, null, 2)}</pre>
             {result && <pre className="mt-2 overflow-auto whitespace-pre-wrap">{result.output}</pre>}
@@ -130,13 +133,20 @@ export default function ChatMessages({ events, projectPath, sessionId, sendMessa
             sendMessage={sendMessage} connected={connected} />
         }
         case 'tool_result': {
-          return <details key={event.id} className="px-3 text-chat-meta text-secondary">
+          return <details key={event.id} data-anchor-id={`tool:${event.toolCallId}`} className="px-3 text-chat-meta text-secondary">
             <SummaryLabel label="Tool result" detail={null} failed={event.isError} />
             <pre className="mt-2 overflow-auto whitespace-pre-wrap">{event.output}</pre>
           </details>
         }
+        case 'approval_request':
+          // The searchable approval entry (tool plus input, chat-session-search
+          // D2) rendered so its event-id anchor exists for the reveal.
+          return <details key={event.id} data-anchor-id={event.id} className="border-l-2 border-border px-3 text-chat-meta text-secondary">
+            <SummaryLabel label={snippetLabel('approval', event.tool)} detail={toolCallDetail(event.tool, event.input, projectPath)} />
+            <pre className="mt-2 overflow-auto whitespace-pre-wrap">{JSON.stringify(event.input, null, 2)}</pre>
+          </details>
         case 'command_output':
-          return <div key={event.id} data-testid="chat-command-output" data-chat-role="assistant"
+          return <div key={event.id} data-anchor-id={event.id} data-testid="chat-command-output" data-chat-role="assistant"
             className="mx-3 border-l-2 border-border px-3 py-2 font-mono text-xs text-secondary">
             <div className="mb-1 text-xs">Command output</div>
             <Markdown content={event.text} />
@@ -155,8 +165,8 @@ export default function ChatMessages({ events, projectPath, sessionId, sendMessa
             {lines.map((line, index) => <span key={index} className="block">{line}</span>)}
           </p>
         }
-        case 'notice': return <p key={event.id} className="text-chat-meta text-secondary">{event.text}</p>
-        case 'error': return <p key={event.id} role="alert" className="text-chat-body text-chat-danger">{event.message}</p>
+        case 'notice': return <p key={event.id} data-anchor-id={event.id} className="text-chat-meta text-secondary">{event.text}</p>
+        case 'error': return <p key={event.id} data-anchor-id={event.id} role="alert" className="text-chat-body text-chat-danger">{event.message}</p>
         case 'turn_interrupted': return <p key={event.id} className="text-chat-meta text-secondary">Turn stopped</p>
         case 'request_resolved': {
           // Who decided: policy grants stand apart from the user's own calls.

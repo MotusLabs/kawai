@@ -39,6 +39,7 @@ import { RemoteSessionService } from './remote/RemoteSessionService'
 import type { SessionOpsContext } from './sessions/context'
 import { createClaudeProfileRoutes } from './routes/claudeProfiles'
 import { createTeamGroupRoutes } from './routes/teamGroups'
+import { createChatSearchRoutes } from './routes/chatSearch'
 import { createPasteFileRoutes } from './routes/pasteFile'
 import { createChatProviderEnvStore } from './routes/chatProviderEnv'
 import { createSettingsRoutes, loadStoredSettings } from './routes/settings'
@@ -404,6 +405,7 @@ export function startServer(): void {
   app.route('/api/chat/groups', createTeamGroupRoutes({
     groupProfileCounts: (teamId, groupId) => chatSessionManager.groupProfileCounts(teamId, groupId),
   }))
+  app.route('/api/chat/search', createChatSearchRoutes({ source: chatSessionManager }))
 
   app.route('/api/paste-file', createPasteFileRoutes())
 

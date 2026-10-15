@@ -119,7 +119,7 @@ export default function ChatTaskRow({ sessionId, toolCallId, tool, fallback, sen
   }
 
   return <details className="border-l-2 border-border px-3 text-chat-meta text-secondary"
-    data-testid="chat-task-row" data-task-id={task.taskId} data-status={task.status} data-kind={task.kind}
+    data-anchor-id={`tool:${toolCallId}`} data-testid="chat-task-row" data-task-id={task.taskId} data-status={task.status} data-kind={task.kind}
     onToggle={handleToggle}>
     <summary className="chat-summary gap-2">
       {live && <span className="chat-activity-dot shrink-0" aria-hidden="true" />}

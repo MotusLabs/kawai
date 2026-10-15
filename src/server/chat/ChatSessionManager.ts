@@ -1114,6 +1114,33 @@ export class ChatSessionManager {
     return [...this.records.values()].filter(record => this.teams.teamOf(record.sessionId)?.teamId === teamId)
   }
 
+  /** The chats a conversation search covers: every non-archived record. */
+  activeRecords(): ChatSessionRecord[] {
+    return [...this.records.values()].filter(record => record.archivedAt == null)
+  }
+
+  /**
+   * One chat's events for conversation search (chat-session-search D1).
+   * Read-only: a loaded chat reads its memo plus live events; an unloaded one
+   * is replayed transiently, so the result is never memoized, never moves the
+   * chat's cwd, and never starts an agent. `readable: false` = the transcript
+   * was missing or unparseable (the replay's placeholder notice is dropped).
+   */
+  async searchableEvents(sessionId: string): Promise<{ events: ChatEvent[]; readable: boolean }> {
+    const record = this.records.get(sessionId)
+    if (!record) return { events: [], readable: true }
+    const memo = this.snapshotHistory.get(sessionId)
+    if (memo) return { events: [...memo, ...(this.liveEvents.get(sessionId) ?? [])], readable: true }
+    if (!record.sdkSessionId) return { events: [...(this.liveEvents.get(sessionId) ?? [])], readable: true }
+    const replay = await replayTranscriptFileAsync(
+      await findTranscriptPathAsync(record.sdkSessionId),
+      { excludeToolCallIds: this.liveToolCallIds(sessionId) }
+    )
+    const live = this.liveEvents.get(sessionId) ?? []
+    if (replay.status !== 'ok') return { events: [...live], readable: false }
+    return { events: [...replay.events, ...live], readable: true }
+  }
+
   /** Paused state last pushed per session. */
   private readonly parkedShown = new Map<string, SessionParkedState>()
 
