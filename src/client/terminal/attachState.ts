@@ -91,8 +91,7 @@ export function syncAttachment(opts: SyncAttachmentParams): (() => void) | undef
     opts.updateReadySession(null)
     cancelPendingAttach(refs.attachDebounce)
     if (prevAttached) {
-      send({ type: 'terminal-detach', sessionId: prevAttached })
-      resetAttachRefs(refs)
+      detachFrom(send, prevAttached, refs)
       opts.setTmuxCopyMode(false)
     }
     terminal.reset()
@@ -132,8 +131,7 @@ export function syncAttachment(opts: SyncAttachmentParams): (() => void) | undef
     } catch {
       // serialize() can fail on a disposed terminal — ignore
     }
-    send({ type: 'terminal-detach', sessionId: prevAttached })
-    resetAttachRefs(refs)
+    detachFrom(send, prevAttached, refs)
     // Reset copy-mode state - each session has its own scroll position
     opts.setTmuxCopyMode(false)
   }
