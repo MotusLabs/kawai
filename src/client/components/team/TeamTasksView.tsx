@@ -9,7 +9,7 @@
 // creator, participants, the assignment target and state, and the result
 // badge (task-results-handoffs). Rows come from authoritative server
 // snapshots; actions disable while disconnected and refusals show inline.
-import { useEffect, useMemo, useRef } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { SendClientMessage, Session } from '@shared/types'
 import type { TeamTaskSummary } from '@shared/teamTasks'
 import { useSessionStore } from '../../stores/sessionStore'
@@ -22,6 +22,7 @@ import { useTeamGroups } from '../chat/useTeamGroups'
 import { openParticipantChat } from '../chat/openParticipant'
 import { assignmentLabel } from './assignmentLabel'
 import { actorLabel, sessionLabel } from './teamTaskLabels'
+import { usePlanTargetsRefresh } from './usePlanTargetsRefresh'
 
 /** One tree node: a task with the children whose parentId names it. */
 interface TaskNode {
@@ -163,6 +164,10 @@ export default function TeamTasksView({ teamPath, projectPath, view, sendMessage
     requestedTargets.current = signature
     requestTargets()
   }, [connected, teamPath, draft.worktree]) // eslint-disable-line react-hooks/exhaustive-deps
+  // While the New task form is open, a plan push (an approval, a close)
+  // re-requests the targets so the plan pickers follow it.
+  const [formOpen, setFormOpen] = useState(false)
+  usePlanTargetsRefresh(teamPath, formOpen && !view.selectedTaskId, connected, sendMessage, requestTargets)
   // A reconnect drops the waiters for results lost with the connection: the
   // armed flow keeps its key, the dispatch effect re-sends the assign leg
   // under it, and a human resubmit of the create reuses it — either way the
@@ -254,7 +259,8 @@ export default function TeamTasksView({ teamPath, projectPath, view, sendMessage
           value={search} onChange={event => useTeamWorkspaceStore.getState().setSearch(teamPath, 'tasks', event.target.value)} />
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto p-3">
-        <details className="mb-4 border border-border p-2" data-testid="task-create">
+        <details className="mb-4 border border-border p-2" data-testid="task-create" open={formOpen}
+          onToggle={event => setFormOpen(event.currentTarget.open)}>
           <summary className="cursor-pointer font-medium">New task</summary>
           <form className="mt-2 flex flex-col gap-2" onSubmit={event => { event.preventDefault(); create(draft.targetKind !== '' && draft.instruction.trim() !== '') }}>
             <input className="input" aria-label="Task title" placeholder="Title" value={draft.title}

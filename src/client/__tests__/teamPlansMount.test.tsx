@@ -2,8 +2,9 @@
 // the Team page's Plans tab mounts the view, which subscribes to the team's
 // plans, follows the URL's plan id, names a selection in the URL, and
 // unsubscribes when another tab opens; the task form's plan pickers offer
-// only open plans' approved changes (the server's `targets.plans`), and a
-// linked task is created with `planId` / `planChange`.
+// only open plans' approved changes (the server's `targets.plans`), follow a
+// plan push while the form is open, and a linked task is created with
+// `planId` / `planChange`.
 import { afterEach, beforeEach, expect, test } from 'bun:test'
 import TestRenderer, { act } from 'react-test-renderer'
 import type { ClientMessage, SendClientMessage, Session } from '@shared/types'
@@ -126,4 +127,31 @@ test('the plan pickers list only the approved changes the server offers, and a l
   act(() => renderer.root.findByType('form').props.onSubmit({ preventDefault: () => {} }))
   expect(sent.filter(message => message.type === 'team-task-create')).toEqual([{ type: 'team-task-create', teamPath: 'dev',
     requestId: expect.any(String), requestKey: expect.any(String), title: 'Build API', direction: 'Store and routes', planId: 'p1', planChange: 'api' }])
+})
+
+test('an approval arriving while the New task form is open updates the plan picker\'s revision and change list', () => {
+  const { byId, update } = mountTasks()
+  const targetRequests = () => sent.filter(message => message.type === 'team-task-targets').length
+  // Closed form: no plan subscription.
+  expect(sent.some(message => message.type === 'team-plans-open')).toBe(false)
+  act(() => byId('task-create').props.onToggle({ currentTarget: { open: true } }))
+  expect(sent).toContainEqual({ type: 'team-plans-open', teamPath: 'dev' })
+  // The subscription's first snapshot, then a push after an approval.
+  act(() => useTeamPlanStore.getState().applySnapshot({ type: 'team-plans-snapshot', teamPath: 'dev', teamId: 't', plans: [summary({ currentApprovedRevision: 2 })] }))
+  const before = targetRequests()
+  act(() => useTeamPlanStore.getState().applySnapshot({ type: 'team-plans-snapshot', teamPath: 'dev', teamId: 't', plans: [summary({ currentApprovedRevision: 3 })] }))
+  expect(targetRequests()).toBe(before + 1)
+  // The server answers with the newly approved revision's changes.
+  act(() => useTeamTaskStore.getState().applyTargetsResult(targets(3, ['api', 'ui', 'docs']) as never))
+  update()
+  expect(textOf(byId('task-plan-picker'))).toBe('No planWave C (revision 3)')
+  act(() => byId('task-plan-picker').props.onChange({ target: { value: 'p1' } }))
+  update()
+  expect(textOf(byId('task-plan-change-picker'))).toBe('Choose a change of the planapiuidocs')
+  // Closing the form ends the subscription; later pushes request nothing.
+  act(() => byId('task-create').props.onToggle({ currentTarget: { open: false } }))
+  expect(sent).toContainEqual({ type: 'team-plans-close', teamPath: 'dev' })
+  const after = targetRequests()
+  act(() => useTeamPlanStore.getState().applySnapshot({ type: 'team-plans-snapshot', teamPath: 'dev', teamId: 't', plans: [summary({ currentApprovedRevision: 4 })] }))
+  expect(targetRequests()).toBe(after)
 })
