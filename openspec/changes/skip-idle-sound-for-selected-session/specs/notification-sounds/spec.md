@@ -22,14 +22,18 @@ When the Idle Sound setting is enabled, the dashboard SHALL play the Idle sound 
 - **THEN** no Idle sound plays
 
 ### Requirement: No Idle sound for the watched session
-The dashboard SHALL NOT play the Idle sound for a `working` to `waiting` transition of the session that is currently selected while the dashboard page is visible. When the page is hidden, the selected session's transition SHALL play the Idle sound as for any other session.
+The dashboard SHALL NOT play the Idle sound for a `working` to `waiting` transition of the session that is currently selected, shown because no Team page is open, while the dashboard page is visible. When the page is hidden or a Team page is open, the selected session's transition SHALL play the Idle sound as for any other session.
 
 #### Scenario: Selected session finishes while the user is watching
-- **WHEN** Idle Sound is enabled, the dashboard page is visible, and the selected session changes from `working` to `waiting`
+- **WHEN** Idle Sound is enabled, the dashboard page is visible, no Team page is open, and the selected session changes from `working` to `waiting`
 - **THEN** no Idle sound plays
 
 #### Scenario: Selected session finishes in a background tab
 - **WHEN** Idle Sound is enabled, the dashboard page is hidden, and the selected session changes from `working` to `waiting`
+- **THEN** the Idle sound plays
+
+#### Scenario: Selected session finishes while the Team page is open
+- **WHEN** Idle Sound is enabled, the page is visible, and the Team page is open while the selected session changes from `working` to `waiting`
 - **THEN** the Idle sound plays
 
 #### Scenario: Selected and background sessions finish together
@@ -45,4 +49,8 @@ When the Permission Sound setting is enabled, the dashboard SHALL play the Permi
 
 #### Scenario: Selected session asks for permission
 - **WHEN** Permission Sound is enabled, the page is visible, and the selected session changes from `working` to `permission`
+- **THEN** the Permission sound plays
+
+#### Scenario: Background session asks for permission
+- **WHEN** Permission Sound is enabled and a session that is not selected changes from `working` to `permission`
 - **THEN** the Permission sound plays
