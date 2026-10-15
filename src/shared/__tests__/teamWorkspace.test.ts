@@ -46,6 +46,10 @@ describe('filterTeamTaskRows', () => {
     expect(filterTeamTaskRows(rows, { search: 'BLOCKED' }).map(r => r.id)).toEqual(['task-2'])
   })
 
+  test('includeClosed keeps closed rows for a host whose own search is active', () => {
+    expect(filterTeamTaskRows(rows, { includeClosed: true }).map(r => r.id)).toEqual(['task-1', 'task-2', 'task-3', 'task-4', 'task-5'])
+  })
+
   test('an explicit status filter surfaces that status, closed or not', () => {
     expect(filterTeamTaskRows(rows, { status: 'done' }).map(r => r.id)).toEqual(['task-3'])
     expect(filterTeamTaskRows(rows, { status: 'blocked' }).map(r => r.id)).toEqual(['task-2'])

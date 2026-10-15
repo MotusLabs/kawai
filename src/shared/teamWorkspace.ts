@@ -128,6 +128,12 @@ export interface TeamTaskRowQuery {
   worktree?: string | null
   /** Case-insensitive substring over the title. */
   search?: string
+  /**
+   * Keep done/cancelled rows in the list. A host that searches more than the
+   * title (the Tasks tab matches direction too) sets it while its own search
+   * is active, so closed tasks stay searchable there as well.
+   */
+  includeClosed?: boolean
 }
 
 /** Apply the task list's filters, including the closed-task default. */
@@ -138,7 +144,7 @@ export function filterTeamTaskRows(rows: TeamTaskRow[], query: TeamTaskRowQuery 
     // Closed tasks stay searchable but sit outside the default list; an
     // explicit status filter for their own status also surfaces them.
     const closed = row.status === 'done' || row.status === 'cancelled'
-    if (closed && !search && query.status !== row.status) return false
+    if (closed && !search && !query.includeClosed && query.status !== row.status) return false
     if (query.status && row.status !== query.status) return false
     if (query.awaitingHuman && !row.requiresHuman) return false
     if (query.awaitingAcceptance && row.stage !== 'awaiting-acceptance') return false

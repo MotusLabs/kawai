@@ -1,8 +1,8 @@
 // The Team page (team-workspace-pages §5): the team's full-width surface —
 // a header naming the repository with a one-line strategy status that opens
 // the Strategy tab (D5 replaces team-workspace's band), then the
-// Strategy | Tasks | Messages | Mailbox tab strip (Members and Plans are
-// reserved keys that render no tab and no placeholder), then the active
+// Strategy | Tasks | Messages | Mailbox | Members tab strip (Plans is a
+// reserved key that renders no tab and no placeholder), then the active
 // tab's view. The page is the team views' only eventual host (D4); each tab
 // view drives its own wire subscription, keyed by the team key. The URL
 // location (D3) names the tab, sub-view, and selection; navigation goes
@@ -13,6 +13,7 @@ import { useSessionStore } from '../../stores/sessionStore'
 import { useStrategyStore, type StrategyView } from '../../stores/strategyStore'
 import { useTeamMessageStore } from '../../stores/teamMessageStore'
 import { useTeamWorkspaceStore } from '../../stores/teamWorkspaceStore'
+import { useTeamWorkspaceDataStore } from '../../stores/teamWorkspaceDataStore'
 import { useTeamMailboxStore } from '../../stores/teamMailboxStore'
 import { useTeamTaskStore } from '../../stores/teamTaskStore'
 import { useWorkspaceStore } from '../../stores/workspaceStore'
@@ -23,7 +24,9 @@ import { useTeamGroups } from '../chat/useTeamGroups'
 import ProductStrategyView from './ProductStrategyView'
 import TeamMailboxView from './TeamMailboxView'
 import TeamMessagesView from './TeamMessagesView'
+import TeamMembersPanel from './TeamMembersPanel'
 import TeamTasksView from './TeamTasksView'
+import TeamWorkspaceBands from './TeamWorkspaceBands'
 import {
   RENDERED_WORKSPACE_TABS,
   type TeamLocation,
@@ -73,6 +76,7 @@ export default function TeamWorkspaceView({ teamKey, location, sendMessage, conn
   const repositories = useWorkspaceStore(state => state.snapshot?.repositories)
   const workspace = useTeamWorkspaceStore(state => state.views[teamKey])
   const strategy = useStrategyStore(state => state.views[teamKey])
+  const workspaceData = useTeamWorkspaceDataStore(state => state.views[teamKey])
   const navigate = useTeamLocationStore(state => state.navigate)
 
   // The page is open for this team; state stays across visits (D8).
@@ -101,6 +105,15 @@ export default function TeamWorkspaceView({ teamKey, location, sendMessage, conn
     useStrategyStore.getState().open(teamKey)
     sendMessage({ type: 'strategy-open', teamPath: teamKey })
     return () => sendMessage({ type: 'strategy-close', teamPath: teamKey })
+  }, [teamKey, connected, connectionEpoch, unknown, sendMessage])
+
+  // The attention queue and morning summary read the workspace snapshot: one
+  // authoritative snapshot on open and on every reconnect, then pushes (D6).
+  useEffect(() => {
+    if (!connected || unknown) return
+    useTeamWorkspaceDataStore.getState().open(teamKey)
+    sendMessage({ type: 'team-workspace-open', teamPath: teamKey })
+    return () => sendMessage({ type: 'team-workspace-close', teamPath: teamKey })
   }, [teamKey, connected, connectionEpoch, unknown, sendMessage])
 
   // Messages (5.4): the tab mounts the host-agnostic view, which owns its
@@ -197,6 +210,7 @@ export default function TeamWorkspaceView({ teamKey, location, sendMessage, conn
       {!connected && <p role="status" className="mt-1 text-sm text-secondary">Disconnected — reconnect to update this team.</p>}
       {workspace?.notice && <p role="status" data-testid="team-workspace-notice" className="mt-1 text-sm text-secondary">{workspace.notice}</p>}
     </header>
+    <TeamWorkspaceBands teamKey={teamKey} snapshot={workspaceData?.snapshot ?? null} navigate={navigate} />
     <nav role="tablist" aria-label="Team views" className="flex gap-1 border-b border-border px-3 py-2" data-testid="team-tab-strip">
       {RENDERED_WORKSPACE_TABS.map(tab => (
         <button key={tab} type="button" role="tab" aria-selected={currentLocation.tab === tab}
@@ -231,8 +245,11 @@ export default function TeamWorkspaceView({ teamKey, location, sendMessage, conn
         groups={groups.groups.map(group => group.id)} sessions={liveSessions}
         onOpenSession={openParticipantChat}
       />}
+      {currentLocation.tab === 'members' && !unknown && <TeamMembersPanel
+        members={workspaceData?.snapshot?.members ?? []} loaded={workspaceData?.snapshot != null}
+        onOpenSession={openParticipantChat} />}
       {tasksOpen && tasks && <TeamTasksView
-        teamPath={teamKey} projectPath={teamKey} view={tasks} sendMessage={sendMessage} connected={connected}
+        teamPath={teamKey} projectPath={teamKey} view={tasks} rows={workspaceData?.snapshot?.tasks} sendMessage={sendMessage} connected={connected}
         onSelectedTask={taskId => navigate(taskId
           ? { teamKey, tab: 'tasks', id: taskId }
           : { teamKey, tab: 'tasks' })}

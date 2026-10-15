@@ -13,11 +13,10 @@ export const WORKSPACE_TABS: readonly WorkspaceTab[] = [
 ]
 
 /**
- * The tabs the strip renders. Members and Plans are registered keys that
- * render no tab and no placeholder (team-workspace Q4; Members joins with
- * the workspace read model in a follow-up change).
+ * The tabs the strip renders. Plans is a registered key that renders no tab
+ * and no placeholder (team-workspace Q4); a Plans view joins by registering.
  */
-export const RENDERED_WORKSPACE_TABS: readonly WorkspaceTab[] = ['strategy', 'tasks', 'messages', 'mailbox']
+export const RENDERED_WORKSPACE_TABS: readonly WorkspaceTab[] = ['strategy', 'tasks', 'messages', 'mailbox', 'members']
 
 /** The tab a team's page opens on when none was used yet (chat-header spec). */
 export const DEFAULT_WORKSPACE_TAB: WorkspaceTab = 'tasks'

@@ -13,7 +13,9 @@ import { resetTeamLocationForTests, useTeamLocationStore } from '../hooks/useTea
 import { useSessionStore } from '../stores/sessionStore'
 import { useTeamTaskStore } from '../stores/teamTaskStore'
 import { useStrategyStore } from '../stores/strategyStore'
+import { useTeamWorkspaceDataStore } from '../stores/teamWorkspaceDataStore'
 import { useTeamWorkspaceStore } from '../stores/teamWorkspaceStore'
+import type { TeamWorkspaceSnapshot } from '@shared/teamWorkspace'
 import { useWorkspaceStore } from '../stores/workspaceStore'
 import type { TeamLocation } from '../utils/teamLocation'
 
@@ -84,6 +86,7 @@ beforeEach(() => {
   useWorkspaceStore.setState({ snapshot: null, lastError: null, operationResults: [], collapsedSectionIds: [] })
   useStrategyStore.setState({ views: {} })
   useTeamWorkspaceStore.setState({ views: {} })
+  useTeamWorkspaceDataStore.setState({ views: {}, seen: new Set() })
   resetTeamLocationForTests()
 })
 
@@ -98,16 +101,50 @@ afterEach(() => {
   resetTeamLocationForTests()
 })
 
-test('the tab strip renders Strategy, Tasks, Messages, Mailbox — Members and Plans are reserved with no placeholder', () => {
+test('the tab strip renders Strategy, Tasks, Messages, Mailbox, Members — Plans is reserved with no placeholder', () => {
   const { renderer } = mountPage({ teamKey: '/repo', tab: 'tasks' })
   const strip = renderer.root.findByProps({ 'data-testid': 'team-tab-strip' })
   const tabs = strip.findAll(node => node.props.role === 'tab')
   expect(tabs.map(tab => tab.props['data-testid'])).toEqual([
-    'team-tab-strategy', 'team-tab-tasks', 'team-tab-messages', 'team-tab-mailbox',
+    'team-tab-strategy', 'team-tab-tasks', 'team-tab-messages', 'team-tab-mailbox', 'team-tab-members',
   ])
-  expect(tabs.map(tab => textOf(tab))).toEqual(['Strategy', 'Tasks', 'Messages', 'Mailbox'])
+  expect(tabs.map(tab => textOf(tab))).toEqual(['Strategy', 'Tasks', 'Messages', 'Mailbox', 'Members'])
   expect(renderer.root.findAll(node => String(node.props['data-testid'] ?? '').includes('plans'))).toHaveLength(0)
-  expect(renderer.root.findAll(node => String(node.props['data-testid'] ?? '').includes('members'))).toHaveLength(0)
+})
+
+test('mounting opens the workspace read model; unmount closes it; a reconnect re-opens for a fresh snapshot', () => {
+  const page = mountPage({ teamKey: '/repo', tab: 'tasks' })
+  expect(sent.filter(message => message.type === 'team-workspace-open')).toEqual([{ type: 'team-workspace-open', teamPath: '/repo' }])
+  act(() => { page.renderer.unmount() })
+  expect(sent).toContainEqual({ type: 'team-workspace-close', teamPath: '/repo' })
+})
+
+test('an unknown repository key opens no workspace subscription', () => {
+  mountPage({ teamKey: '/not-a-repo', tab: 'tasks' })
+  expect(sent.filter(message => message.type === 'team-workspace-open')).toHaveLength(0)
+})
+
+test('a pushed approval appears in the attention queue on every tab without a refresh', () => {
+  const page = mountPage({ teamKey: '/repo', tab: 'mailbox' })
+  expect(textOf(find(page.renderer, 'attention-summary')[0]!)).toContain('loading')
+  const empty = { items: [] }
+  const push = (attention: TeamWorkspaceSnapshot['attention']) => act(() => {
+    useTeamWorkspaceDataStore.getState().apply({
+      teamPath: '/repo', teamId: 'team', tasks: [], attention, members: [], directory: [],
+      summary: { since: '2026-10-14T00:00:00.000Z', completedResults: empty, capacityWaits: empty, approvals: empty,
+        uncertainDeliveries: empty, finishedTurnsWithoutResult: empty },
+    })
+  })
+  push([])
+  expect(find(page.renderer, 'attention-empty')).toHaveLength(1)
+  push([{ id: 'approval:a', kind: 'approval', cause: 'Approval requested: Bash', owner: { kind: 'session', id: 's', label: 'dev' },
+    impact: {}, nextAction: 'Answer approval', link: { kind: 'chat', id: 's' }, requiresHuman: true }])
+  expect(find(page.renderer, 'attention-item')).toHaveLength(1)
+  // The queue sits above the tab strip, so it shows on Members too.
+  act(() => { useTeamLocationStore.getState().navigate({ teamKey: '/repo', tab: 'members' }) })
+  page.update()
+  expect(find(page.renderer, 'attention-item')).toHaveLength(1)
+  expect(find(page.renderer, 'team-members')).toHaveLength(1)
 })
 
 test('a tab click navigates the location and records the last-used tab', () => {
