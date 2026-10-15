@@ -1,0 +1,122 @@
+// Repository facts (execution-safety-recovery D4) over hand-built git
+// layouts in a temporary directory — no `git` process, only the text files
+// the resolver reads. Reserved example names throughout.
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import { RepoFactsResolver } from '../outbound/repoFacts'
+
+const CONFIG = `
+[remote "origin"]
+	url = https://github.com/acme/kawai.git
+	fetch = +refs/heads/*:refs/remotes/origin/*
+[remote "fork"]
+	url = https://github.com/other/kawai.git
+	pushurl = https://github.com/other/kawai-push.git
+[submodule "vendor/lib"]
+	url = https://github.com/acme/vendor-lib.git
+[branch "main"]
+	remote = origin
+	merge = refs/heads/main
+[branch "topic"]
+	remote = fork
+`
+
+describe('RepoFactsResolver', () => {
+  let root: string
+  let main: string
+  beforeEach(() => {
+    root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kawai-repofacts-')))
+    main = path.join(root, 'main')
+    fs.mkdirSync(path.join(main, '.git'), { recursive: true })
+    fs.writeFileSync(path.join(main, '.git', 'config'), CONFIG)
+    fs.writeFileSync(path.join(main, '.git', 'HEAD'), 'ref: refs/heads/main\n')
+  })
+  afterEach(() => fs.rmSync(root, { recursive: true, force: true }))
+
+  test('main repository: root, team id, remotes, and the branch push remote', () => {
+    const resolver = new RepoFactsResolver()
+    const facts = resolver.factsFor(path.join(main, 'src'))
+    expect(facts).toMatchObject({
+      root: main,
+      teamId: path.join(main, '.git'),
+      originUrl: 'https://github.com/acme/kawai.git',
+      pushRemote: 'origin',
+    })
+    // A push target prefers the remote's pushurl over its url.
+    expect(facts?.remotes.get('fork')).toBe('https://github.com/other/kawai-push.git')
+    // A [submodule] header closed the fork section: its url never overwrote it.
+    expect(facts?.remotes.get('fork')).not.toBe('https://github.com/acme/vendor-lib.git')
+    expect([...facts!.remotes.keys()].sort()).toEqual(['fork', 'origin'])
+  })
+
+  test('a linked worktree shares the parsed config but keeps its own root and HEAD', () => {
+    const worktree = path.join(root, 'wt')
+    const headDir = path.join(main, '.git', 'worktrees', 'wt')
+    fs.mkdirSync(path.join(worktree), { recursive: true })
+    fs.mkdirSync(headDir, { recursive: true })
+    fs.writeFileSync(path.join(worktree, '.git'), `gitdir: ${headDir}\n`)
+    // The worktree is on `topic`, whose push remote is origin.
+    fs.writeFileSync(path.join(headDir, 'HEAD'), 'ref: refs/heads/topic\n')
+    const resolver = new RepoFactsResolver()
+    const mainFacts = resolver.factsFor(main)
+    const wtFacts = resolver.factsFor(worktree)
+    // The config parse is cached once, shared — but each keeps its root.
+    expect(wtFacts?.root).toBe(worktree)
+    expect(wtFacts?.teamId).toBe(path.join(main, '.git'))
+    expect(wtFacts?.remotes).toEqual(mainFacts?.remotes)
+    expect(wtFacts?.originUrl).toBe('https://github.com/acme/kawai.git')
+    // main pushes to origin (its branch remote); topic pushes to fork.
+    expect(mainFacts?.pushRemote).toBe('origin')
+    expect(wtFacts?.pushRemote).toBe('fork')
+  })
+
+  test('a branch switch re-reads HEAD under an unchanged config stamp', () => {
+    const resolver = new RepoFactsResolver()
+    expect(resolver.factsFor(main)?.pushRemote).toBe('origin')
+    // Same config file, same stamp: only HEAD moved.
+    fs.writeFileSync(path.join(main, '.git', 'HEAD'), 'ref: refs/heads/topic\n')
+    const after = resolver.factsFor(main)
+    expect(after?.pushRemote).toBe('fork')
+    fs.writeFileSync(path.join(main, '.git', 'HEAD'), 'ref: refs/heads/main\n')
+    expect(resolver.factsFor(main)?.pushRemote).toBe('origin')
+  })
+
+  test('a config edit re-parses under a new stamp', () => {
+    const resolver = new RepoFactsResolver()
+    expect(resolver.factsFor(main)?.remotes.get('origin')).toBe('https://github.com/acme/kawai.git')
+    const edited = CONFIG.replace('acme/kawai.git', 'acme/kawai2.git')
+    fs.writeFileSync(path.join(main, '.git', 'config'), edited)
+    expect(resolver.factsFor(main)?.originUrl).toBe('https://github.com/acme/kawai2.git')
+  })
+
+  test('a relative gitdir resolves against the .git file\'s directory', () => {
+    const worktree = path.join(root, 'wt')
+    const headDir = path.join(main, '.git', 'worktrees', 'wt')
+    fs.mkdirSync(worktree, { recursive: true })
+    fs.mkdirSync(headDir, { recursive: true })
+    fs.writeFileSync(path.join(worktree, '.git'), 'gitdir: ../main/.git/worktrees/wt\n')
+    fs.writeFileSync(path.join(headDir, 'HEAD'), 'ref: refs/heads/main\n')
+    const facts = new RepoFactsResolver().factsFor(worktree)
+    expect(facts?.root).toBe(worktree)
+    expect(facts?.teamId).toBe(path.join(main, '.git'))
+  })
+
+  test('an unreadable .git file or a missing config reads unreadable, never throws', () => {
+    const broken = path.join(root, 'broken')
+    fs.mkdirSync(broken)
+    fs.writeFileSync(path.join(broken, '.git'), 'not a gitdir pointer')
+    const resolver = new RepoFactsResolver()
+    expect(resolver.factsFor(broken)).toBe(null)
+    // A .git directory with no config at all reads unreadable facts.
+    const empty = path.join(root, 'empty')
+    fs.mkdirSync(path.join(empty, '.git'), { recursive: true })
+    fs.writeFileSync(path.join(empty, '.git', 'HEAD'), 'ref: refs/heads/main\n')
+    const facts = resolver.factsFor(empty)
+    expect(facts).toMatchObject({ unreadable: true, originUrl: null, root: empty })
+    expect(facts?.remotes.size).toBe(0)
+    // No repository above the temp root.
+    expect(resolver.factsFor(path.join(root, 'nowhere'))).toBe(null)
+  })
+})
