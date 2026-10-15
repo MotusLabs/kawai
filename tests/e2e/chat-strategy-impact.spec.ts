@@ -57,7 +57,7 @@ function seedImpactPrerequisites(root: string, sessionId: string) {
     const strategies = new StrategyStore(sessions.db);
     const team = await resolveTeam(root);
     const strategy = strategies.create({
-      productId: 'kawai', title: 'Kawai', owner: human, teamId: team.teamId, worktrees: await new TeamWorktrees().list(team.teamId),
+      productId: 'impact-browser', title: 'Kawai', owner: human, teamId: team.teamId, worktrees: await new TeamWorktrees().list(team.teamId),
     });
     const submit = purpose => {
       const submitted = strategies.submitRevision(strategy.id, { author: human, content: { purpose } });
