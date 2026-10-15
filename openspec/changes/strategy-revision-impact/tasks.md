@@ -4,8 +4,8 @@ Implement after `durable-plans` has landed on master, then rebase this branch on
 
 ## 1. Shared model
 
-- [ ] 1.1 Reconcile names with the merged `durable-plans` design: the pin type, `PlanStore` reads, `pinDisposition`'s signature, the plan-change notification, and `team-plan-result`. Record any renames in this change's design before coding. Verify by reading the merged `durable-plans` design D7 and D13 against D2, D6, and D9 here.
-- [ ] 1.2 Create `src/shared/strategyImpact.ts` with the D2 types and `impactGate`, `impactGroup`, and `reviewState`. Verify with unit tests, one per rule:
+- [x] 1.1 Reconcile names with the merged `durable-plans` design: the pin type, `PlanStore` reads, `pinDisposition`'s signature, the plan-change notification, and `team-plan-result`. Record any renames in this change's design before coding. Verify by reading the merged `durable-plans` design D7 and D13 against D2, D6, and D9 here.
+- [x] 1.2 Create `src/shared/strategyImpact.ts` with the D2 types and `impactGate`, `impactGroup`, and `reviewState`. Verify with unit tests, one per rule:
   - current pin, and both pins empty;
   - no strategy record;
   - an older pin with each effective disposition and with none;

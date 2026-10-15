@@ -20,6 +20,18 @@ See proposal.md for the motivation. Facts that shape the approach:
   Submission always pins the current approved strategy revision, or nothing when none is approved. So every revision submitted after an approval is current, and every non-current revision predates the current review.
 - **Human mail.** `AssignmentService` sends human mail inside its own transaction with `MailboxStore.enqueue({ fromKind: 'human', fromSession: null, fromGroup: null, originPath: team.groupsRoot, priority: 'normal', actor: 'human', … })`, after checking the group against the team's catalog.
 
+### Reconciliation with the merged `durable-plans` (task 1.1)
+
+Read against the merged `durable-plans` design D7, D12, and D13 and its code on master. Where this design's names differ, the merged names below win, and the decisions that follow use them:
+
+- **Pin type.** `StrategyPin` is `PlanStrategyPin { strategyId, revision, hash }` from `src/shared/plans.ts`; an empty pin is `null`. Whole-pin equality is the shipped `samePin` (both null count as equal), which already compares `strategyId`.
+- **Plan reads.** `PlanStore.openPlans(teamId)` and `revisionsPinnedTo(strategyId)` exist as C2 promised. The assessment also needs closed plans (historical) and unpinned revisions, which `revisionsPinnedTo` cannot return, so `ImpactService` reads `PlanStore.list(teamId)` and `PlanStore.revisions(planId)`. `forTeam(teamId, planId)` scopes a plan id to the team.
+- **`pinDisposition`.** Its signature is `(planId: string, revision: number) => PinDisposition | null` with `PinDisposition = { kind: string }` (`planPreconditions.ts`), supplied through the `pinDisposition` option of the `PlanService` constructor in `ChatSessionManager`. `ImpactService.pinDisposition` returns `{ kind: 'continue', decisionId }`. The precondition reads the current strategy pin itself; the lookup is only consulted when the pin is not current.
+- **Plan-change notification.** C3's announcement is `PlanStore.subscribe(listener(plan))`, fed by `announce(planId)` after every committed `PlanService` write. `ChatSessionManager` forwards it as `onPlanChange(teamId, planId)`, which also fires for linked-task changes. The strategy push on plan writes subscribes to the plan store itself, so a task change does not re-send strategy detail. Strategy changes arrive through `StrategyStore.subscribe` as `onStrategyChange(teamId)`.
+- **Plan messages.** They live in `src/shared/planMessages.ts`, not `types.ts`. `team-plan-result` carries `failures: Array<{ name, message }>`; it gains `impact?: ImpactGate`. `team-plans-snapshot` entries and `team-plan-detail` gain an additive `impact: PlanImpact` (`{ group, gate, reviewId, revisions: [{ revision, gate }] }`); `PlanSummary` and `PlanDetail` stay untouched.
+- **Strategy view host.** `ProductStrategyPanel` and `sideSlot.ts` no longer host strategy: the Strategy view is the Team page's Strategy tab (`ProductStrategyView`, sub-views overview, review, draft, history), and the side slot hosts only the debug panel. The impact review is a new Strategy sub-view, `impact` (`#/team/<key>/strategy/impact[/<revision>]`, the id being the review's strategy revision). `strategyStore.focusImpactReview(teamKey, reviewId)` becomes that location: the Plans badge link navigates the Team page to it, and the URL is the focus, as for every other Team page selection.
+- **Human mail.** `TeamIdentity.groupsRoot` and `loadGroupCatalog` are the catalog check `AssignmentService.groupOf` uses; `MailboxStore.enqueue` notifies the dispatcher through its store subscription, so no extra notify is needed after commit.
+
 ## Goals / Non-Goals
 
 **Goals:**
@@ -99,7 +111,7 @@ type ImpactGate = {
   pass: boolean                    // true only for 'current' and 'continue'
   reviewId: string | null          // the current review, when one applies
   decisionId: string | null        // the effective decision it rests on
-  pin: StrategyPin | null          // durable-plans C2
+  pin: PlanStrategyPin | null      // durable-plans C2 (src/shared/plans.ts)
 }
 type ImpactGroup = 'affected' | 'unaffected' | 'historical'
 type ImpactReviewState = 'needs-decisions' | 'reviewed' | 'superseded' | 'withdrawn'
