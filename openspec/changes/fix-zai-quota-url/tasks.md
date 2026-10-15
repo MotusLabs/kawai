@@ -12,7 +12,7 @@
 
 ## 3. Integration checks
 
-- [ ] 3.1 Run `bun run lint && bun run typecheck && bun run test` and `openspec validate fix-zai-quota-url --strict`. Verify all pass and the implementation changes are limited to the quota helper and its affected tests/comments; inspect the diff for credentials or captured account values before committing.
+- [x] 3.1 Run `bun run lint && bun run typecheck && bun run test` and `openspec validate fix-zai-quota-url --strict`. Verify all pass and the implementation changes are limited to the quota helper and its affected tests/comments; inspect the diff for credentials or captured account values before committing.
 
 ## Workflow follow-up
 
