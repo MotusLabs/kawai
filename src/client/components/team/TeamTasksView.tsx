@@ -97,12 +97,14 @@ export function directionLine(direction: string, needle: string): { text: string
   }
 }
 
-export default function TeamTasksView({ teamPath, projectPath, view, sendMessage, connected, onSelectedTask, onOpenThread, onCreateWorktree, onOpenMailbox, onOpenSession }: {
+export default function TeamTasksView({ teamPath, projectPath, view, sendMessage, connected, connectionEpoch = 0, onSelectedTask, onOpenThread, onCreateWorktree, onOpenMailbox, onOpenSession }: {
   teamPath: string
   projectPath: string
   view: TaskView
   sendMessage: SendClientMessage
   connected: boolean
+  /** Bumps on every reconnect, so the form's plan subscription is re-sent. */
+  connectionEpoch?: number
   /** Reports selection moves to the host (the Team page's URL, D3). */
   onSelectedTask?: (taskId: string | null) => void
   /** Open this message's thread in the Messages tab. */
@@ -167,7 +169,7 @@ export default function TeamTasksView({ teamPath, projectPath, view, sendMessage
   // While the New task form is open, a plan push (an approval, a close)
   // re-requests the targets so the plan pickers follow it.
   const [formOpen, setFormOpen] = useState(false)
-  usePlanTargetsRefresh(teamPath, formOpen && !view.selectedTaskId, connected, sendMessage, requestTargets)
+  usePlanTargetsRefresh(teamPath, formOpen && !view.selectedTaskId, connected, connectionEpoch, sendMessage, requestTargets)
   // A reconnect drops the waiters for results lost with the connection: the
   // armed flow keeps its key, the dispatch effect re-sends the assign leg
   // under it, and a human resubmit of the create reuses it — either way the

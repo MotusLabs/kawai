@@ -94,13 +94,13 @@ test('a URL naming a plan opens its detail on mount', () => {
 const targets = (revision: number, changes: string[]) => ({ type: 'team-task-targets-result' as const, teamPath: 'dev', requestId: 'r',
   targets: { worktrees: [], changes: [], plans: [{ id: 'p1', title: 'Wave C', revision, changes }] } })
 
-const mountTasks = () => {
+const mountTasks = (epoch = { value: 0 }) => {
   useTeamTaskStore.getState().open('dev')
   act(() => useTeamTaskStore.getState().applyTargetsResult(targets(2, ['api', 'ui']) as never))
   let renderer!: TestRenderer.ReactTestRenderer
   const render = () => <TeamTasksView teamPath="dev" projectPath="/repo"
     view={{ ...useTeamTaskStore.getState().views.dev!, loading: false, tasks: [] }}
-    sendMessage={sendMessage} connected />
+    sendMessage={sendMessage} connected connectionEpoch={epoch.value} />
   act(() => { renderer = TestRenderer.create(render()) })
   active.push(renderer)
   const byId = (testId: string) => renderer.root.findByProps({ 'data-testid': testId })
@@ -154,4 +154,16 @@ test('an approval arriving while the New task form is open updates the plan pick
   const after = targetRequests()
   act(() => useTeamPlanStore.getState().applySnapshot({ type: 'team-plans-snapshot', teamPath: 'dev', teamId: 't', plans: [summary({ currentApprovedRevision: 4 })] }))
   expect(targetRequests()).toBe(after)
+})
+
+test('a reconnect re-sends the open form\'s plan subscription', () => {
+  const epoch = { value: 0 }
+  const { byId, update } = mountTasks(epoch)
+  const opens = () => sent.filter(message => message.type === 'team-plans-open').length
+  act(() => byId('task-create').props.onToggle({ currentTarget: { open: true } }))
+  expect(opens()).toBe(1)
+  epoch.value = 1
+  update()
+  expect(opens()).toBe(2)
+  expect(sent.filter(message => message.type === 'team-plans-close')).toHaveLength(1)
 })

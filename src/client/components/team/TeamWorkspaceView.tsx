@@ -250,6 +250,7 @@ export default function TeamWorkspaceView({ teamKey, location, sendMessage, conn
       />}
       {tasksOpen && tasks && <TeamTasksView
         teamPath={teamKey} projectPath={teamKey} view={tasks} sendMessage={sendMessage} connected={connected}
+        connectionEpoch={connectionEpoch}
         onSelectedTask={taskId => navigate(taskId
           ? { teamKey, tab: 'tasks', id: taskId }
           : { teamKey, tab: 'tasks' })}
