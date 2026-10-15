@@ -78,12 +78,14 @@ describe('OutboundStore (the only writer)', () => {
     return new OutboundStore(db.db)
   }
 
-  test('a duplicate call and a duplicate outcome write nothing', () => {
+  test('a duplicate call and a duplicate outcome write nothing, and inserts report whether they wrote', () => {
     const outbound = store()
-    outbound.insertCall(call())
-    outbound.insertCall(call({ id: 'obc-other' })) // same (session, tool use)
-    outbound.insertOutcome({ sessionId: 'chat-1', toolUseId: 'tu-1', outcome: 'completed', createdAt: NOW })
-    outbound.insertOutcome({ sessionId: 'chat-1', toolUseId: 'tu-1', outcome: 'completed', createdAt: NOW })
+    expect(outbound.insertCall(call())).toBe(true)
+    expect(outbound.insertCall(call({ id: 'obc-other' }))).toBe(false) // same (session, tool use)
+    expect(outbound.insertOutcome({ sessionId: 'chat-1', toolUseId: 'tu-1', outcome: 'completed', createdAt: NOW })).toBe(true)
+    expect(outbound.insertOutcome({ sessionId: 'chat-1', toolUseId: 'tu-1', outcome: 'completed', createdAt: NOW })).toBe(false)
+    // A broken row throws instead of vanishing: ON CONFLICT catches only the key.
+    expect(() => outbound.insertCall(call({ id: 'obc-bad', toolUseId: 'tu-bad', command: null as unknown as string }))).toThrow()
     const page = outbound.page({ teamId: '/repo/.git' })
     expect(page.rows).toHaveLength(1)
     expect(page.rows[0]!.id).toBe('obc-1')
@@ -132,6 +134,24 @@ describe('OutboundStore (the only writer)', () => {
     expect(ranged.rows.map(row => row.id)).toEqual(['obc-3', 'obc-2'])
     // Another team reads nothing.
     expect(outbound.page({ teamId: '/other/.git' }).rows).toEqual([])
+  })
+
+  test('same-timestamp rows page by the id tie-breaker alone (M11)', () => {
+    const outbound = store()
+    const at = '2026-01-01T00:00:00.000Z'
+    for (const id of ['obc-a', 'obc-b', 'obc-c', 'obc-d', 'obc-e']) {
+      outbound.insertCall(call({ id, toolUseId: `tu-${id}`, createdAt: at }))
+    }
+    const first = outbound.page({ teamId: '/repo/.git' }, 2)
+    expect(first.rows.map(row => row.id)).toEqual(['obc-e', 'obc-d'])
+    const second = outbound.page({ teamId: '/repo/.git' }, 2, first.cursor)
+    expect(second.rows.map(row => row.id)).toEqual(['obc-c', 'obc-b'])
+    const third = outbound.page({ teamId: '/repo/.git' }, 2, second.cursor)
+    expect(third.rows.map(row => row.id)).toEqual(['obc-a'])
+    expect(third.cursor).toBeNull()
+    // A cursor without its separator is refused, not silently mis-read.
+    expect(() => outbound.page({ teamId: '/repo/.git' }, 2, 'not-a-cursor')).toThrow(/invalid page cursor/)
+    expect(() => outbound.page({ teamId: '/repo/.git' }, 2, 'x\u0000')).toThrow(/invalid page cursor/)
   })
 
   test('an outcome before its call row is kept and joins once the row exists', () => {

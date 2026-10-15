@@ -227,8 +227,10 @@ export class OutboundDestinations {
     onErrors?: (errors: string[]) => void
     /** Base URL every profile without one inherits (the server's provider env). */
     globalBaseUrl?: () => string | undefined
-    /** The matching path's revalidation window; tests shrink it to zero. */
+    /** The matching path's revalidation window; tests shrink or advance it. */
     matchRevalidateMs?: number
+    /** The matching path's monotonic clock; tests advance a positive window. */
+    matchNow?: () => number
   } = {}) {
     // Startup read; later calls re-read only when the files changed.
     void this.current()
@@ -276,12 +278,20 @@ export class OutboundDestinations {
     return this.currentForMatch().mcpServers.has(server)
   }
 
-  private fileStamp(): string {
+  /**
+   * The file's stamp. Only a missing file (ENOENT) reads as `missing`; any
+   * other stat failure (EACCES, …) is an unreadable file whose error reports
+   * once per change while the defaults apply.
+   */
+  private fileStamp(): { stamp: string; error: string | null } {
+    const file = outboundFile(this.options.homeDir)
     try {
-      const stat = fs.statSync(outboundFile(this.options.homeDir))
-      return `${stat.mtimeMs}:${stat.size}`
-    } catch {
-      return 'missing'
+      const stat = fs.statSync(file)
+      return { stamp: `${stat.mtimeMs}:${stat.size}`, error: null }
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code
+      if (code === 'ENOENT') return { stamp: 'missing', error: null }
+      return { stamp: `unreadable:${code ?? 'unknown'}`, error: `${file}: cannot stat (${code ?? 'unknown error'})` }
     }
   }
 
@@ -302,8 +312,9 @@ export class OutboundDestinations {
 
   private current(): OutboundSnapshot {
     // The global base URL joins the stamp: a Settings change re-derives too.
-    const stamp = `${this.fileStamp()}\n${this.catalogStamp()}\n${this.options.globalBaseUrl?.() ?? ''}`
-    if (this.cache?.stamp !== stamp) this.cache = { stamp, snapshot: this.load(), matchedAt: this.cache?.matchedAt ?? 0 }
+    const file = this.fileStamp()
+    const stamp = `${file.stamp}\n${this.catalogStamp()}\n${this.options.globalBaseUrl?.() ?? ''}`
+    if (this.cache?.stamp !== stamp) this.cache = { stamp, snapshot: this.load(file.stamp, file.error), matchedAt: this.cache?.matchedAt ?? 0 }
     return this.cache.snapshot
   }
 
@@ -315,7 +326,7 @@ export class OutboundDestinations {
    * (each agent start) always reads exact.
    */
   private currentForMatch(): OutboundSnapshot {
-    const now = Date.now()
+    const now = this.options.matchNow?.() ?? performance.now()
     const window = this.options.matchRevalidateMs ?? MATCH_REVALIDATE_MS
     if (window > 0 && this.cache !== null && now - this.cache.matchedAt < window) return this.cache.snapshot
     const snapshot = this.current()
@@ -323,15 +334,15 @@ export class OutboundDestinations {
     return snapshot
   }
 
-  private load(): OutboundSnapshot {
+  private load(stamp: string, statError: string | null = null): OutboundSnapshot {
     const file = outboundFile(this.options.homeDir)
-    const errors: string[] = []
+    const errors: string[] = statError === null ? [] : [statError]
     const internal: string[] = []
     const modelProviders: string[] = []
     const mcpServers = new Set<string>()
     const entries: InternalEntry[] = []
     let parsed: unknown
-    if (this.fileStamp() !== 'missing') {
+    if (stamp !== 'missing' && statError === null) {
       try {
         parsed = JSON.parse(fs.readFileSync(file, 'utf8'))
       } catch (error) {

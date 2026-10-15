@@ -141,14 +141,14 @@ Kawai's own git and `gh` calls (plan-execution effects, promotions) never pass t
   A candidate names its rule, its segment, its effective cwd, and a target spec: `origin-implicit`, `remote:<name>`, `url:<url>`, `host:<host>`, `registry:<host or default>`, `repo:<owner/name>`, `mail`, or `unresolved:<why>`.
 - **`judge(candidate, facts) → { verdict, destination }`**: `facts` holds the destination classes (D2) and the repository facts the resolver read for each effective cwd: the repository root, `origin`'s URL, every remote's URL, and the current branch's push remote.
 
-Arguments are read by position and flag, never by searching text. A `--body`, `--body-file`, `--title`, `-m`, `--notes`, `-f body=…` or `-F body=@file` value, or a heredoc is a value and never a target. A `GH_REPO`, `GH_HOST`, or `GIT_DIR`/`GIT_WORK_TREE` assignment — as a prefix (`GH_REPO=… gh …`), through `env`, or by an earlier `export` or assignment segment — makes the affected `gh` or `git` target unresolved, so the call reads `unknown-destination` and never `allowed`; the classifier does not evaluate shell variables. That removes the spike's whole false-positive class.
+Arguments are read by position and flag, never by searching text. A `--git-dir`, `--work-tree`, or `remote.*`/`url.*` `git -c` override pins a push's target unresolved exactly like a `GIT_DIR` environment assignment. A `--body`, `--body-file`, `--title`, `-m`, `--notes`, `-f body=…` or `-F body=@file` value, or a heredoc is a value and never a target. A `GH_REPO`, `GH_HOST`, or `GIT_DIR`/`GIT_WORK_TREE` assignment — as a prefix (`GH_REPO=… gh …`), through `env`, or by an earlier `export` or assignment segment — makes the affected `gh` or `git` target unresolved, so the call reads `unknown-destination` and never `allowed`; the classifier does not evaluate shell variables. That removes the spike's whole false-positive class.
 
 The rules (ids are append-only, contract E3):
 
 | Rule | Send when | Target |
 | --- | --- | --- |
 | `git-push` | `git push` | `--repo=<remote or URL>`, the named remote's URL, a URL or `user@host:path` argument, else the branch's push remote, else `origin` |
-| `gh-write` | `gh <issue\|pr\|release\|repo\|gist\|label\|secret\|variable\|workflow\|run> <create\|edit\|close\|reopen\|comment\|merge\|delete\|review\|upload\|set\|run\|…>` | `-R`/`--repo` (`owner/repo`, `host/owner/repo`, or a URL such as `-R https://github.com/o/r`), a `github.com/<owner>/<repo>` positional argument, else the cwd's `origin`; any `GH_REPO`/`GH_HOST` assignment before it makes the target unresolved |
+| `gh-write` | `gh <issue\|pr\|release\|repo\|gist\|label\|secret\|variable\|workflow\|run> <create\|edit\|close\|reopen\|comment\|merge\|delete\|review\|upload\|set\|run\|fork\|…>` | `-R`/`--repo` (`owner/repo`, `host/owner/repo`, or a URL such as `-R https://github.com/o/r`), a `github.com/<owner>/<repo>` positional argument, else the cwd's `origin`; any `GH_REPO`/`GH_HOST` assignment before it makes the target unresolved. `gh repo create`/`fork` and `gh gist create`/`edit` never fall back to origin (D1): a create or fork targets the new repository — the positional `owner/name`, a bare name reading as the caller's own account — and a gist targets `gist.github.com`; each is a violation unless it equals origin's `owner/repo` |
 | `gh-api-write` | `gh api` with `-X`/`--method` other than GET, or with `-f`/`-F`/`--field`/`--raw-field`/`--input` | `repos/<owner>/<repo>/…` (with `{owner}`/`{repo}` meaning origin), else unresolved (for example `graphql`) |
 | `registry-publish` | `npm`/`bun`/`pnpm`/`yarn publish`, `twine upload`, `cargo publish`, `docker`/`podman push`, `helm push`, `buildctl … type=image,push=true`, `docker buildx … --push` | `--registry`, `--repository-url`, `--index`, the image or OCI reference's registry host, else that tool's public default registry |
 | `http-send` | `curl` with `-X`/`--request` other than GET or HEAD, `-d`/`--data*`, `-F`/`--form`, `-T`/`--upload-file`, or `--json`; `wget --post-data`/`--post-file`/`--method`; `http`/`https` (httpie) with a non-GET method or a body item | the URL's host |
@@ -249,7 +249,7 @@ The driver mints a `spawn_id` at each agent process start and drops it from `liv
 - the values of `Authorization:`, `Proxy-Authorization:`, `Cookie:`, `X-Api-Key:`, and `PRIVATE-TOKEN:` headers;
 - `-u`/`--user` credentials;
 - URL userinfo (`https://user:pass@`, and `https://token@`);
-- `--token`/`--password`/`--api-key` values;
+- `--token`/`--password`/`--api-key` values, and the `-b`/`--body` value of a `gh secret set` (a secret itself; `gh variable set` is unchanged);
 - query-string credentials: the values of `token`, `access_token`, `api_key`, `apikey`, `key`, `secret`, `password`, `sig`, and `signature` parameters;
 - body credentials in `-d`/`--data*`/`--json`/`-F`/`-f` values: JSON members and form fields whose name matches the inline-assignment pattern below;
 - inline assignments whose name matches `/(TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|AUTH)/i`.

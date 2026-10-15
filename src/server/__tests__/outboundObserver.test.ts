@@ -181,15 +181,26 @@ describe('OutboundObserver', () => {
     expect(outcomes[0]).toMatchObject({ outcome: 'denied', toolUseId: 'tu-d' })
   })
 
-  test('redaction runs before any write', async () => {
+  test('redaction runs before any write, on the command, the destination, and every match', async () => {
     const { observer, calls } = harness()
     observer.onPreToolUse({
       ...PRE,
-      toolInput: { command: 'curl -H "Authorization: Bearer abc123" -d x https://example.internal/hook' },
+      toolInput: { command: 'git push https://user:secret@github.com/other/repo.git' },
     })
     await flushWrites()
-    expect(calls[0]?.command).not.toContain('abc123')
-    expect(calls[0]?.command).toContain('‹redacted›')
+    expect(calls[0]?.command).not.toContain('secret')
+    expect(calls[0]?.destination).not.toContain('secret')
+    for (const match of JSON.parse(calls[0]!.matches) as Array<{ segment: string; destination: string }>) {
+      expect(match.segment).not.toContain('secret')
+      expect(match.destination).not.toContain('secret')
+    }
+    // An outcome detail redacts too (D8).
+    const { observer: second, outcomes } = harness()
+    second.onPreToolUse({ ...PRE, toolUseId: 'tu-err', toolInput: { command: 'curl -d x https://x.example.com' } })
+    second.onPostToolUseFailure({ ...PRE, toolUseId: 'tu-err', error: '401 token ghp_ABCDEFghijklmnop0123456789' })
+    await flushWrites()
+    expect(outcomes[0]?.detail).not.toContain('ghp_')
+    expect(outcomes[0]?.detail).toContain('‹redacted›')
   })
 
   test('spawn end retires the live set and drops that spawn\'s pending entries', async () => {

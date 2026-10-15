@@ -211,3 +211,50 @@ describe('OutboundDestinations matching path (CC #161 review)', () => {
     expect(errors).toHaveLength(3)
   })
 })
+
+describe('OutboundDestinations matching window and stat errors (CC)', () => {
+  let root: string
+  let home: string
+  beforeEach(() => {
+    root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kawai-outbound-window-')))
+    home = path.join(root, 'home')
+    fs.mkdirSync(path.join(home, '.kawai'), { recursive: true })
+  })
+  afterEach(() => fs.rmSync(root, { recursive: true, force: true }))
+
+  test('a positive window passes: the edit is seen once the clock advances', () => {
+    fs.writeFileSync(outboundFile(home), JSON.stringify({ internal: ['one.example.internal'] }))
+    let clock = 0
+    const loader = new OutboundDestinations({ homeDir: home, matchRevalidateMs: 5_000, matchNow: () => clock })
+    expect(loader.isInternal('one.example.internal')).toBe(true)
+    fs.writeFileSync(outboundFile(home), JSON.stringify({ internal: ['two.example.internal'] }))
+    expect(loader.isInternal('two.example.internal')).toBe(false)
+    clock = 6_000
+    expect(loader.isInternal('two.example.internal')).toBe(true)
+    expect(loader.isInternal('one.example.internal')).toBe(false)
+  })
+
+  test('a stat error other than a missing file reports once and the defaults apply', () => {
+    // ~/.kawai as a plain file makes the outbound path ENOTDIR, not ENOENT.
+    const brokenHome = path.join(root, 'broken')
+    fs.writeFileSync(path.join(brokenHome), 'not a directory')
+    const errors: string[] = []
+    let clock = 0
+    const loader = new OutboundDestinations({
+      homeDir: brokenHome,
+      matchRevalidateMs: 0,
+      matchNow: () => clock,
+      onErrors: lines => errors.push(...lines),
+    })
+    expect(loader.facts()).toEqual({ internal: [], modelProviders: [] })
+    expect(errors).toHaveLength(1)
+    expect(errors[0]).toContain('cannot stat')
+    // Re-reads through other stamp halves do not repeat it.
+    loader.facts()
+    expect(errors).toHaveLength(1)
+    // A good home beside it stays quiet.
+    const quiet = new OutboundDestinations({ homeDir: home, onErrors: lines => errors.push(...lines) })
+    expect(quiet.facts()).toEqual({ internal: [], modelProviders: [] })
+    expect(errors).toHaveLength(1)
+  })
+})

@@ -90,10 +90,14 @@ const toRow = (raw: Record<string, unknown>): OutboundCallRow => ({
 export class OutboundStore {
   constructor(private readonly db: Database) {}
 
-  /** Append one call; a repeat of the same tool use writes nothing. */
-  insertCall(row: OutboundCallInsert): void {
-    this.db
-      .prepare(`INSERT OR IGNORE INTO outbound_calls (${CALL_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+  /**
+   * Append one call. A repeat of the same tool use writes nothing
+   * (`changes` 0); anything else — a failed constraint, a null — throws,
+   * because `ON CONFLICT` catches only the key, never a broken row.
+   */
+  insertCall(row: OutboundCallInsert): boolean {
+    const result = this.db
+      .prepare(`INSERT INTO outbound_calls (${CALL_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(session_id, tool_use_id) DO NOTHING`)
       .run(
         row.id, row.teamId, row.sessionId, row.spawnId,
         row.groupId ?? null, row.profileId ?? null, row.taskId ?? null, row.agentId ?? null,
@@ -102,13 +106,15 @@ export class OutboundStore {
         row.rule, row.verdict, row.destination, row.matches, row.classifierVersion,
         row.cwd, row.createdAt,
       )
+    return result.changes === 1
   }
 
   /** Append one outcome; a repeat of the same outcome writes nothing. */
-  insertOutcome(row: OutboundOutcomeInsert): void {
-    this.db
-      .prepare('INSERT OR IGNORE INTO outbound_outcomes (session_id, tool_use_id, outcome, detail, duration_ms, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+  insertOutcome(row: OutboundOutcomeInsert): boolean {
+    const result = this.db
+      .prepare('INSERT INTO outbound_outcomes (session_id, tool_use_id, outcome, detail, duration_ms, created_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(session_id, tool_use_id, outcome) DO NOTHING')
       .run(row.sessionId, row.toolUseId, row.outcome, row.detail ?? null, row.durationMs ?? null, row.createdAt)
+    return result.changes === 1
   }
 
   /** One call by id, for the view's row link (D9). */
@@ -136,6 +142,7 @@ export class OutboundStore {
     if (filters.to !== undefined) { where.push('created_at < ?'); args.push(filters.to) }
     if (cursor !== undefined && cursor !== null && cursor !== '') {
       const split = cursor.indexOf('\u0000')
+      if (split === -1 || split === cursor.length - 1) throw new Error('invalid page cursor')
       const createdAt = cursor.slice(0, split)
       const id = cursor.slice(split + 1)
       where.push('(created_at < ? OR (created_at = ? AND id < ?))')
