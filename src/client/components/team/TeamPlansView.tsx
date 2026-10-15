@@ -5,7 +5,8 @@
 // checks, landing, roles, revisions with the diff summary and Approve /
 // Withdraw, drafts, history, and close/reopen. Host-agnostic: it owns its
 // list and detail subscriptions over `teamPath` and renders inside whatever
-// container mounts it (today the chat side slot, later a Team page tab).
+// container mounts it (the Team page's Plans tab, which names the selected
+// plan in its URL through `onSelectedPlan`).
 // List and detail are one column with a Back control, so the same flow
 // works on a phone. Every control disables while disconnected; refusals,
 // with each failing approval precondition, show inline.
@@ -20,7 +21,7 @@ import PlanRevisionsSection from './PlanRevisionsSection'
 import PlanLifecycleControls from './PlanLifecycleControls'
 import { pinLabel, planActorLabel } from './planLabels'
 
-export default function TeamPlansView({ teamPath, view, sendMessage, connected, connectionEpoch, sessions, onOpenTask }: {
+export default function TeamPlansView({ teamPath, view, sendMessage, connected, connectionEpoch, sessions, onOpenTask, onSelectedPlan }: {
   teamPath: string
   view: PlanView
   sendMessage: SendClientMessage
@@ -29,6 +30,8 @@ export default function TeamPlansView({ teamPath, view, sendMessage, connected, 
   connectionEpoch: number
   sessions: Session[]
   onOpenTask?: (taskId: string) => void
+  /** The human opened a plan or went back to the list (the host's location follows). */
+  onSelectedPlan?: (planId: string | null) => void
 }) {
   const selected = view.selected
   useEffect(() => {
@@ -49,7 +52,10 @@ export default function TeamPlansView({ teamPath, view, sendMessage, connected, 
   }, [connected, teamPath])
 
   const busy = Object.keys(view.pending).length > 0
-  const select = (planId: string | null) => useTeamPlanStore.getState().select(teamPath, planId)
+  const select = (planId: string | null) => {
+    useTeamPlanStore.getState().select(teamPath, planId)
+    onSelectedPlan?.(planId)
+  }
   return <div className="flex min-h-0 flex-1 flex-col" data-testid="team-plans">
     {!connected && <p role="status" className="p-3 text-secondary">Disconnected — reconnect to update plans.</p>}
     {view.error && <div role="alert" data-testid="plan-error" className="border-b border-border p-3 text-chat-meta text-chat-danger">

@@ -3,7 +3,7 @@
 // strategyLabels.
 import type { Session } from '@shared/types'
 import type { PlanActor, PlanChangeStatus, PlanEvent, PlanRevisionStatus, PlanStrategyPin } from '@shared/plans'
-import { sessionLabel, shortHash } from './strategyLabels'
+import { sessionLabel, shortHash } from '../chat/strategyLabels'
 
 export const PLAN_REVISION_LABELS: Record<PlanRevisionStatus, string> = {
   in_review: 'In review',

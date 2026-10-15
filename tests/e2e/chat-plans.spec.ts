@@ -7,7 +7,8 @@
 // and see Ready, a second tab's approval left open across that approval and
 // refused inline as stale, a linked task created from the form (In
 // progress), the task opened from the plan and marked done (the change
-// done), and the plan completed.
+// done), and the plan completed. The view is reached through the Team
+// page's `#/team/<key>/plans` route and its tab strip (durable-plans D12).
 // Local execution requires the fixture webServer (AGENTBOARD_CHAT_FIXTURE=1);
 // CI runs it — never run test:e2e against a live kawai server.
 import { expect, test, type Page } from '@playwright/test'
@@ -66,10 +67,11 @@ function seedPlanAsAgent(sessionId: string) {
   `], { cwd: process.cwd(), input: JSON.stringify([dbPath, sessionId]), encoding: 'utf8' })
 }
 
-async function openPlan(page: Page, session: string) {
-  await page.locator(`[data-session-id="${session}"]`).click()
-  await page.getByRole('button', { name: 'Plans', exact: true }).click()
-  const panel = page.getByTestId('team-plans-panel')
+/** Open the team's Plans tab through its URL route, then the plan from the list. */
+async function openPlan(page: Page, root: string) {
+  await page.evaluate(teamKey => { window.location.hash = `#/team/${encodeURIComponent(teamKey)}/plans` }, root)
+  await expect(page.getByTestId('team-workspace')).toBeVisible()
+  const panel = page.getByTestId('team-plans')
   await panel.getByTestId('plan-list').getByRole('button', { name: /Wave C/ }).click()
   await expect(panel.getByRole('heading', { name: 'Wave C' })).toBeFocused()
   return panel
@@ -87,7 +89,7 @@ test('inspect, approve, a stale second-tab approval, a linked task, and completi
     seedPlanAsAgent(lead)
 
     // 1. Inspect: the floor beside the extra checks, and no strategy pin.
-    const panel = await openPlan(page, lead)
+    const panel = await openPlan(page, root)
     await expect(panel.getByTestId('plan-detail-state')).toContainText('Draft')
     await expect(panel.getByTestId('plan-not-approved')).toContainText('Showing revision 2')
     await expect(panel.getByTestId('plan-floor')).toContainText('Mandatory floor')
@@ -98,7 +100,7 @@ test('inspect, approve, a stale second-tab approval, a linked task, and completi
     // A second tab opens the approval of revision 2 while nothing is approved.
     const other = await context.newPage()
     await other.goto('/')
-    const otherPanel = await openPlan(other, lead)
+    const otherPanel = await openPlan(other, root)
     await otherPanel.getByTestId('plan-approve-2').click()
     await expect(otherPanel.getByTestId('plan-approve-2-dialog')).toContainText('Approve exactly revision 2')
 
@@ -116,7 +118,7 @@ test('inspect, approve, a stale second-tab approval, a linked task, and completi
     await expect(panel.getByTestId('plan-revision-list')).toContainText('Revision 2 — In review')
 
     // 3. A linked task from the task form: In progress.
-    await page.getByRole('button', { name: 'Tasks', exact: true }).click()
+    await page.getByTestId('team-tab-tasks').click()
     const tasks = page.getByTestId('team-tasks')
     await tasks.locator('summary', { hasText: 'New task' }).click()
     await tasks.getByLabel('Task title').fill('Build the plan API')
@@ -127,9 +129,9 @@ test('inspect, approve, a stale second-tab approval, a linked task, and completi
     await tasks.getByLabel('Plan change').selectOption('plan-api')
     await tasks.getByTestId('task-create-button').click()
     await expect(tasks.getByRole('button', { name: 'Mark done' })).toBeVisible()
-    // Switching panels closes the Plans view, so it reopens on the list.
-    await page.getByRole('button', { name: 'Plans', exact: true }).click()
-    const plans = page.getByTestId('team-plans-panel')
+    // The Plans tab opens on its list (the URL names no plan).
+    await page.getByTestId('team-tab-plans').click()
+    const plans = page.getByTestId('team-plans')
     const row = plans.getByTestId('plan-list').getByRole('button', { name: /Wave C/ })
     await expect(row).toContainText('In progress')
     await expect(row).toContainText('1 linked task')
@@ -142,7 +144,7 @@ test('inspect, approve, a stale second-tab approval, a linked task, and completi
     await plans.getByTestId('plan-change-plan-api').getByRole('button', { name: 'Build the plan API' }).click()
     await page.getByTestId('team-tasks').getByRole('button', { name: 'Mark done' }).click()
     await expect(page.getByTestId('team-tasks').getByRole('button', { name: 'Reopen' })).toBeVisible()
-    await page.getByRole('button', { name: 'Plans', exact: true }).click()
+    await page.getByTestId('team-tab-plans').click()
     await row.click()
     await expect(plans.getByTestId('plan-change-plan-api').getByTestId('plan-change-status')).toHaveText('Done')
 

@@ -1,8 +1,8 @@
 // The Team page (team-workspace-pages §5): the team's full-width surface —
 // a header naming the repository with a one-line strategy status that opens
 // the Strategy tab (D5 replaces team-workspace's band), then the
-// Strategy | Tasks | Messages | Mailbox tab strip (Members and Plans are
-// reserved keys that render no tab and no placeholder), then the active
+// Strategy | Plans | Tasks | Messages | Mailbox tab strip (Members is a
+// reserved key that renders no tab and no placeholder), then the active
 // tab's view. The page is the team views' only eventual host (D4); each tab
 // view drives its own wire subscription, keyed by the team key. The URL
 // location (D3) names the tab, sub-view, and selection; navigation goes
@@ -14,6 +14,7 @@ import { useStrategyStore, type StrategyView } from '../../stores/strategyStore'
 import { useTeamMessageStore } from '../../stores/teamMessageStore'
 import { useTeamWorkspaceStore } from '../../stores/teamWorkspaceStore'
 import { useTeamMailboxStore } from '../../stores/teamMailboxStore'
+import { useTeamPlanStore } from '../../stores/teamPlanStore'
 import { useTeamTaskStore } from '../../stores/teamTaskStore'
 import { useWorkspaceStore } from '../../stores/workspaceStore'
 import { useTeamLocationStore } from '../../hooks/useTeamLocation'
@@ -23,6 +24,7 @@ import { useTeamGroups } from '../chat/useTeamGroups'
 import ProductStrategyView from './ProductStrategyView'
 import TeamMailboxView from './TeamMailboxView'
 import TeamMessagesView from './TeamMessagesView'
+import TeamPlansView from './TeamPlansView'
 import TeamTasksView from './TeamTasksView'
 import {
   RENDERED_WORKSPACE_TABS,
@@ -169,6 +171,21 @@ export default function TeamWorkspaceView({ teamKey, location, sendMessage, conn
     return () => sendMessage({ type: 'team-task-close', teamPath: teamKey, taskId: selectedTaskId })
   }, [teamKey, connected, connectionEpoch, tasksOpen, selectedTaskId, sendMessage])
 
+  // Plans (durable-plans 8.3): the host-agnostic view owns its list and
+  // detail subscriptions; the store view stays open across tab switches. The
+  // URL names the selected plan (D3), so a reload or a link reopens it.
+  const plansOpen = location.tab === 'plans' && !unknown
+  const plans = useTeamPlanStore(state => state.views[teamKey])
+  useEffect(() => {
+    if (!plansOpen) return
+    useTeamPlanStore.getState().open(teamKey)
+  }, [plansOpen, teamKey])
+  useEffect(() => {
+    if (!plansOpen) return
+    const store = useTeamPlanStore.getState()
+    if ((location.id ?? null) !== (store.views[teamKey]?.selected ?? null)) store.select(teamKey, location.id ?? null)
+  }, [plansOpen, teamKey, location.id])
+
   const liveSessions = useMemo(
     () => sessions.map(row => ({ id: row.id, name: row.name, groupId: row.groupId ?? null })),
     [sessions],
@@ -240,6 +257,12 @@ export default function TeamWorkspaceView({ teamKey, location, sendMessage, conn
         onOpenMailbox={() => navigate({ teamKey, tab: 'mailbox' })}
         onOpenSession={openParticipantChat}
         {...(onCreateWorktree ? { onCreateWorktree: () => onCreateWorktree(teamKey) } : {})}
+      />}
+      {plansOpen && plans && <TeamPlansView
+        teamPath={teamKey} view={plans} sendMessage={sendMessage} connected={connected}
+        connectionEpoch={connectionEpoch} sessions={sessions}
+        onOpenTask={taskId => navigate({ teamKey, tab: 'tasks', id: taskId })}
+        onSelectedPlan={planId => navigate(planId ? { teamKey, tab: 'plans', id: planId } : { teamKey, tab: 'plans' })}
       />}
     </div>
   </main>

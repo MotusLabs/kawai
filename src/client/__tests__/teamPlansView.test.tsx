@@ -10,7 +10,7 @@ import { afterEach, expect, test } from 'bun:test'
 import TestRenderer, { act } from 'react-test-renderer'
 import type { ClientMessage } from '@shared/types'
 import { normalizePlanContent, type PlanRevision } from '@shared/plans'
-import TeamPlansView from '../components/chat/TeamPlansView'
+import TeamPlansView from '../components/team/TeamPlansView'
 import { useTeamPlanStore } from '../stores/teamPlanStore'
 import { planDetail, planSummary } from './planViewFixtures'
 
