@@ -29,9 +29,9 @@ Promotion onto the target branch is a separate, authorized operation, rechecked 
   - The landing probe refuses Start if the branch name is the default branch, or matches one of the plan's changes.
   - It also refuses Start if a branch with that name already exists that no execution of this plan created, or if another plan's record already uses it.
   - Kawai never writes to the integration branch except to create it and to fast-forward it.
-- **Every integration head is an exact, verified candidate.** A passed change is brought up to date with the integration head, using the same update-branch and parent check as direct landing. Its CI then runs on that exact commit.
-  - Landing is a fast-forward push of the verified commit itself, never forced. The push succeeds only while the integration branch still contains nothing that commit lacks, so a landed candidate's tree is always exactly the tree CI passed.
-  - If the branch moved, nothing lands, and the change stops as `integration-moved`.
+- **Every integration head is an exact, verified candidate.** A passed change is brought up to date with the integration head, using the same update-branch and clean-merge check as direct landing. Its CI then runs on that exact commit.
+  - Landing fast-forwards the integration branch to the verified commit itself, through GitHub's ref API and never forced. GitHub refuses it unless the branch is still an ancestor of that commit, so a landed candidate's tree is always exactly the tree CI passed.
+  - If the branch moved, nothing lands: the candidate is superseded, and the change is brought up to date with the new head. If the branch no longer contains its last landed candidate, the change stops as `integration-rewritten`, and Kawai never forces it back.
   - A candidate that fails CI returns the change as a fix round, and the integration branch keeps its last good candidate.
   - Each candidate records:
     - its sequence number;
@@ -45,10 +45,10 @@ Promotion onto the target branch is a separate, authorized operation, rechecked 
   - The plan completes when every change has landed on the integration branch.
 - **Promotion, human only.** The owner promotes an integration branch onto the default branch from the Plans view.
   - The command is pinned to the integration head the owner reviewed, under a command id.
-  - Promotion runs under named preconditions: the plan has no running execution or promotion, the head is current, there is something to promote, the repository allows merge commits, and the landing probe passes.
-  - Kawai builds the promotion on its own branch, starting at that head, and opens a pull request into the default branch. It brings the pull request up to date with GitHub's update-branch, with the parent check, and runs the floor's CI on the exact head (one rerun; the flaky rule).
-  - Kawai merges with a merge commit, pinned to the verified head, after re-checking the default branch's head. It then fast-forwards the integration branch to the promoted head, so later work starts from it.
-  - A conflict, failing CI, or a default branch that keeps moving fails the promotion, keeps its evidence, and merges nothing. The owner can cancel a running promotion.
+  - Promotion runs under named preconditions: the branch is the plan's own, the plan has no running execution or promotion, the head is current, there is something to promote, the repository allows merge commits, the landing probe passes, and the promotion branch's name is free.
+  - Kawai builds the promotion on its own branch, starting at that head, and opens a pull request into the default branch. It brings the pull request up to date with GitHub's update-branch, with the clean-merge check, and runs the floor's CI on the exact head (one rerun; the flaky rule).
+  - Kawai merges with a merge commit, pinned to the verified head, after re-checking the default branch's head. A default branch that moved sends the promotion back to the up-to-date step, at most three times. Kawai then fast-forwards the integration branch to the promoted head, so later work starts from it.
+  - A conflict, failing CI, or a default branch that keeps moving fails the promotion. It merges nothing, closes its pull request, and keeps its evidence. The owner can cancel a running promotion.
 - **Start gains two preconditions**, appended to plan-execution's list:
   - `promotion-idle`: no promotion of the plan is running.
   - `landings-on-base`: every landing fact of the plan is reachable from the execution's base head. For example, a plan that switches from an unpromoted integration branch to `direct` must promote first.
@@ -74,7 +74,7 @@ Non-goals:
   - creating the integration branch;
   - the integration branch as base;
   - candidates and their chain;
-  - fast-forward landing and `integration-moved`;
+  - fast-forward landing, moved branches, and `integration-rewritten`;
   - outside commits;
   - the `promotion-idle` and `landings-on-base` preconditions;
   - progress and visibility.
@@ -86,7 +86,7 @@ Non-goals:
 
 ### Modified Capabilities
 
-None. The behaviour this change builds on belongs to `plan-execution` and `plan-landing`, both still in the unarchived `plan-execution` change. That change names the landing mechanism's base branch, pushes never to the default branch, re-checks the base before a merge, and keeps the landing slot and execution-level effects in shapes a mechanism can use.
+None. The behaviour this change builds on belongs to `plan-execution` and `plan-landing`, both still in the unarchived `plan-execution` change. That change defines the landing mechanism's base branch, never pushes to the default branch, and re-reads the base before a merge. It also keeps the landing slot and execution-level effects in shapes a mechanism can extend, and its Start preconditions and stop reasons are append-only lists. This change only appends to them: `promotion-idle`, `landings-on-base`, and `integration-rewritten`.
 
 ## Impact
 
@@ -97,7 +97,9 @@ None. The behaviour this change builds on belongs to `plan-execution` and `plan-
   - the pure promotion planner;
   - promotion connections.
 
-  The plan-execution executor drives promotions through the same effects runner, with new effect kinds: `create-integration`, `fast-forward`, and `create-promotion-branch`.
+  The plan-execution executor drives promotions through the same effects runner.
+  - Increments add two effect kinds: `create-integration`, which is execution-level, and `fast-forward`. Both are GitHub ref API writes.
+  - Promotions keep their own effects: `create-promotion-branch`, then the shared kinds `open-pr`, `update-branch`, `rerun`, `merge`, and `fast-forward`.
 - **Shared.** New `src/shared/planIntegration.ts`: types, the candidate chain, and `promotedThrough`. The new messages go in `src/shared/types.ts` and `CHAT_CONNECTION_TYPES`.
 - **Client.** `PlanIntegrationPanel.tsx`, `PlanPromoteDialog.tsx`, and `PlanPromotionRow.tsx`, plus `teamPlanStore` wiring.
 - **Data.** An additive migration with four tables: integration branches, candidates, promotions, and promotion effects. There is no backfill.

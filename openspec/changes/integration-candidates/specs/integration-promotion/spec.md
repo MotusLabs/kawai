@@ -101,7 +101,7 @@ After the merge, Kawai SHALL record the promotion's merge commit, verified head,
 - **THEN** the promotion is recorded as merged, the branch is left as it is, and the promotion says why it was not fast-forwarded
 
 ### Requirement: A failed promotion merges nothing and keeps its evidence
-A promotion that fails SHALL merge nothing, leave the integration branch unchanged, and keep its branch, pull request, CI, and steps. It SHALL record one outcome:
+A promotion that fails SHALL merge nothing and leave the integration branch unchanged. Kawai SHALL close its pull request and delete neither it nor the branch, so its CI and steps stay readable. It SHALL record one outcome:
 - `promotion-conflict`, `ci-failed`, `ci-missing`, or `ci-timeout`;
 - `target-moved`;
 - `effect-failed` or `effect-unknown`;
@@ -111,22 +111,26 @@ A later Promote SHALL build a new promotion.
 
 #### Scenario: A failure keeps its evidence
 - **WHEN** a promotion fails as `ci-failed`
-- **THEN** its pull request, CI runs, and steps stay readable in plan detail, and the integration branch is unchanged
+- **THEN** its pull request is closed, its pull request, CI runs, and steps stay readable in plan detail, and the integration branch is unchanged
 
 #### Scenario: Promoting again
 - **WHEN** the owner promotes again after a failed promotion
 - **THEN** Kawai creates `<integration branch>--promote-2` and a new pull request, and the failed promotion stays as it was
 
 ### Requirement: The owner cancels a running promotion
-The human SHALL be able to cancel a running promotion with a reason under a command id. No new step SHALL start. A running step SHALL settle and be recorded, and a merge that completed SHALL finish the promotion as merged. The promotion branch and pull request SHALL be kept.
+The human SHALL be able to cancel a running promotion with a reason under a command id, until its merge is recorded. No new step SHALL start, and a running step SHALL settle and be recorded. A merge that completed SHALL finish the promotion as merged, and its fast-forward SHALL still run. Otherwise the pull request SHALL be closed as for a failure, and the branch kept.
 
 #### Scenario: Cancel while CI runs
 - **WHEN** the owner cancels a promotion while its CI runs
-- **THEN** the promotion finishes as cancelled with the reason, nothing is merged, and its branch and pull request are kept
+- **THEN** the promotion finishes as cancelled with the reason, nothing is merged, its pull request is closed, and its branch is kept
 
 #### Scenario: Cancel during the merge
 - **WHEN** the owner cancels a promotion while its merge is running, and the merge completes
-- **THEN** the promotion finishes as merged, and the cancellation is recorded as having come too late
+- **THEN** the promotion finishes as merged, the integration branch is fast-forwarded, and the cancellation is recorded as having come too late
+
+#### Scenario: Cancel after the merge
+- **WHEN** the owner cancels a promotion whose merge is already recorded
+- **THEN** the cancel is refused naming the merge, and the promotion finishes as merged
 
 ### Requirement: A promotion holds the team's landing slot
 From its up-to-date step until it finishes, a promotion SHALL hold the team's landing slot. While it updates, verifies, or merges, no change of any plan SHALL land through it. A promotion waiting for the slot SHALL show which change holds it, and a change waiting for it SHALL show the promotion.
