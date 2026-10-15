@@ -3,6 +3,7 @@
 // one-line strategy status for approved, in-review, and no-record cases and
 // where it opens, the strategy subscription for the status line, and the
 // unknown-repository notice (D3).
+import { StrictMode } from 'react'
 import { afterEach, beforeEach, expect, test } from 'bun:test'
 import TestRenderer, { act } from 'react-test-renderer'
 import type { ClientMessage, SendClientMessage, Session } from '@shared/types'
@@ -273,4 +274,30 @@ test('the selected task survives a visit to another tab; the browser Back to a l
   act(() => { useTeamLocationStore.getState().navigate({ teamKey: '/repo', tab: 'tasks' }) })
   page.update()
   expect(useTeamTaskStore.getState().views['/repo']?.selectedTaskId).toBeNull()
+})
+
+test('returning to a Tasks page with a held selection never clears it, under StrictMode too', () => {
+  const view = { open: true, loading: false, tasks: [{
+    id: 't-1', teamId: 'team', title: 'Export', status: 'open', creator: { kind: 'human', sessionId: null }, parentId: null, worktree: null,
+    openspecChange: null, revision: 1, direction: 'Build it', acceptance: null, createdAt: '2026-10-11T00:00:00.000Z',
+    updatedAt: '2026-10-11T00:00:00.000Z', participants: [], assignment: null,
+  }], selectedTaskId: 't-1', detail: null, directory: [], pending: {}, error: null,
+    draft: { title: '', direction: '', acceptance: '', parentId: '', worktree: '', openspecChange: '', targetKind: '', targetId: '', instruction: '' },
+    flow: null, preview: null, previewPending: {}, targets: null, targetsLoading: false, commands: {}, commandRequests: {} }
+  act(() => { useTeamTaskStore.setState({ views: { '/repo': view as never } }) })
+  // The Team entry reopens the page on the tab with no id in the URL.
+  act(() => { useTeamLocationStore.getState().navigate({ teamKey: '/repo', tab: 'tasks' }) })
+  const seen: Array<string | null> = []
+  const unsubscribe = useTeamTaskStore.subscribe(state => { seen.push(state.views['/repo']?.selectedTaskId ?? null) })
+  let renderer!: TestRenderer.ReactTestRenderer
+  act(() => {
+    renderer = TestRenderer.create(<StrictMode>
+      <TeamWorkspaceView teamKey="/repo" location={{ teamKey: '/repo', tab: 'tasks' }} sendMessage={sendMessage} connected connectionEpoch={0} />
+    </StrictMode>)
+  })
+  active.push(renderer)
+  unsubscribe()
+  expect(seen).not.toContain(null)
+  expect(locationNow()).toEqual({ teamKey: '/repo', tab: 'tasks', id: 't-1' })
+  expect(useTeamTaskStore.getState().views['/repo']?.selectedTaskId).toBe('t-1')
 })
