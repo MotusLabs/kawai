@@ -7,9 +7,9 @@
 // copy is integrity-checked over a separate read-only connection; a copy that
 // fails is renamed `.corrupt` (else removed, else remembered as known-bad),
 // logged, recorded for the status, and never counted as good; a message that
-// names a backup to restore re-checks it first (`newestGood`). Nothing is attached to the live connection and the live file
-// is never copied. Backups stay in the directory given here and are never
-// sent anywhere.
+// names a backup to restore re-checks it first (`newestGood`). Nothing is
+// attached to the live connection and the live file is never copied. Backups
+// stay in the directory given here and are never sent anywhere.
 //
 // Schedule: `startup` and `pre-migration-<n>` are taken synchronously by
 // `migrateSchema` (nothing else runs yet, and a migration must wait for its
