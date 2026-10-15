@@ -54,7 +54,7 @@ function Item({ item, onOpen }: { item: AttentionItem; onOpen: (item: AttentionI
     <button type="button" className="btn mt-1 text-chat-meta" data-testid="attention-action"
       aria-label={`${item.nextAction} — ${attentionLinkLabel(item.link)}: ${item.cause}`}
       onClick={() => onOpen(item)}>
-      {item.nextAction}
+      {item.nextAction}<span className="text-secondary"> · {attentionLinkLabel(item.link)}</span>
     </button>
   </li>
 }

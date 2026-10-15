@@ -39,6 +39,7 @@ function Group({ row, onOpenSession }: { row: TeamMemberRow; onOpenSession: (ses
         <code>{source.file}</code> · {source.layer} file{source.inEffect ? ' · in effect' : ' · overridden'}
       </li>)}</ul>
     </div>
+    <p className="mt-1 text-chat-meta text-secondary" data-testid="member-prompt-note">{PROMPT_NOTE}</p>
     <dl className="mt-2 grid grid-cols-[max-content_1fr] gap-x-3 text-chat-meta" data-testid="member-settings">
       <dt className="text-secondary">Can create tasks</dt><dd>{row.canCreateTasks ? 'yes' : 'no'}</dd>
       <dt className="text-secondary">Approval</dt><dd>{row.approval}</dd>
@@ -68,7 +69,7 @@ export default function TeamMembersPanel({ members, loaded, onOpenSession }: {
 }) {
   return <div className="min-h-0 flex-1 space-y-2 overflow-auto p-3" data-testid="team-members">
     <p className="text-chat-meta text-secondary" data-testid="members-note">
-      Read-only. Edit a group by changing the file named on its row. {PROMPT_NOTE}
+      Read-only. Edit a group by changing the file named on its row.
     </p>
     {!loaded && <p role="status" className="text-chat-meta text-secondary">Loading members…</p>}
     {loaded && members.length === 0 && <p className="text-chat-meta text-secondary" data-testid="members-empty">This team has no groups.</p>}

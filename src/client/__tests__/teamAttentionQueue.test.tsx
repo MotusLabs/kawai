@@ -10,6 +10,7 @@ import TeamMorningSummary from '../components/team/TeamMorningSummary'
 import TeamWorkspaceBands from '../components/team/TeamWorkspaceBands'
 import { openAttentionLink } from '../components/team/attentionLinks'
 import { useSessionStore } from '../stores/sessionStore'
+import { useTeamTaskStore } from '../stores/teamTaskStore'
 import { useTeamWorkspaceStore } from '../stores/teamWorkspaceStore'
 import type { TeamLocation } from '../utils/teamLocation'
 
@@ -51,6 +52,8 @@ test('human-required items are separated from agent-owned waits, with counts', (
   expect(textOf(byId(renderer, 'attention-agent')[0]!)).toContain('Wait for capacity')
   act(() => { byId(renderer, 'attention-action')[0]!.props.onClick() })
   expect(opened).toEqual(['approval:a'])
+  // The link target is visible text, not only an accessible name.
+  expect(textOf(byId(renderer, 'attention-action')[0]!)).toBe('Answer approval · Open chat')
 })
 
 test('an unrecognized kind still renders with its cause, owner, impact, and action', () => {
@@ -138,4 +141,17 @@ test('the counts line is a polite status region and every action has a name', ()
   expect(summary.props.role).toBe('status')
   expect(summary.props['aria-live']).toBe('polite')
   expect(String(byId(renderer, 'attention-action')[0]!.props['aria-label'])).toContain('Answer approval')
+})
+
+test('opening a chat from an item leaves the Tasks tab’s selection and filters in place', () => {
+  const store = useTeamWorkspaceStore.getState()
+  store.setFilters('/repo', 'tasks', { worktree: '/repo/.wt', awaitingHuman: true })
+  store.setSearch('/repo', 'tasks', 'export')
+  useTeamTaskStore.getState().open('/repo')
+  useTeamTaskStore.getState().select('/repo', 't-1')
+  openAttentionLink('/repo', { kind: 'chat', id: 'chat-5' }, () => {})
+  expect(useSessionStore.getState().selectedSessionId).toBe('chat-5')
+  expect(useTeamWorkspaceStore.getState().views['/repo']!.tabs.tasks).toMatchObject({ search: 'export', filters: { worktree: '/repo/.wt', awaitingHuman: true } })
+  expect(useTeamTaskStore.getState().views['/repo']!.selectedTaskId).toBe('t-1')
+  useTeamTaskStore.setState({ views: {} })
 })

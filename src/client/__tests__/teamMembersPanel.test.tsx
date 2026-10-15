@@ -57,7 +57,13 @@ test('the panel is read-only: no inputs, and the only buttons open a member’s 
   expect(buttons).toHaveLength(1)
   act(() => { buttons[0]!.props.onClick() })
   expect(opened).toEqual(['chat-1'])
-  expect(textOf(byId(renderer, 'members-note')[0]!)).toContain('future agent starts only')
+  // Each group row states it, not just the panel.
+  expect(textOf(byId(renderer, 'member-prompt-note')[0]!)).toContain('future agent starts only')
+})
+
+test('every group row carries the prompt-change caveat', () => {
+  const renderer = mount([row(), row({ id: 'leads', label: 'Leads' })])
+  expect(byId(renderer, 'member-prompt-note')).toHaveLength(2)
 })
 
 test('loading and no-groups states are distinct', () => {

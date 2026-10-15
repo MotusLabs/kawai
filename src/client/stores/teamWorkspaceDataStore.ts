@@ -45,7 +45,8 @@ export const useTeamWorkspaceDataStore = create<TeamWorkspaceDataState>((set, ge
     const { teamPath, teamId, ...snapshot } = message
     const state = get()
     const view = state.views[teamPath]
-    // A snapshot for a page nobody has open is a late reply to a close.
+    // Only a team whose page opened has a slot: a reply for a team never
+    // opened here (or whose slot a rekey moved away) is dropped.
     if (!view) return []
     const humanIds = snapshot.attention.filter(item => item.requiresHuman).map(item => item.id)
     const fresh = view.snapshot === null
