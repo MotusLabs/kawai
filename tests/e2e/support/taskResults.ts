@@ -92,10 +92,9 @@ export async function createTask(page: Page, input: { title: string; direction: 
 export async function reopenTask(page: Page, key: string, teamKey?: string) {
   const panel = page.getByTestId('team-tasks')
   if (!(await panel.isVisible().catch(() => false))) await openTasks(page, teamKey)
-  else {
-    const back = panel.getByRole('button', { name: 'All tasks' })
-    if (await back.isVisible().catch(() => false)) await back.click()
-  }
+  // The tab keeps a selected task across visits; step back to the list either way.
+  const back = panel.getByRole('button', { name: 'All tasks' })
+  if (await back.isVisible().catch(() => false)) await back.click()
   const row = key.startsWith('task-') ? panel.locator(`[data-task-id="${key}"]`) : panel.locator('[data-task-id]').filter({ hasText: key })
   await row.first().locator('button').first().click()
   if (key.startsWith('task-')) await expect(page.getByTestId('task-detail')).toHaveAttribute('data-task-id', key)
