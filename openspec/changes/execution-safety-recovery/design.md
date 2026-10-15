@@ -168,7 +168,7 @@ The facts resolver is the one I/O step. It finds the repository with the same ne
 
 ### D5. External MCP calls are recorded as `mcp-call`
 
-Kawai cannot tell an MCP read from a send. So every call to an MCP server other than `kawai-team` is recorded: `allowed` when its server is in `mcpServers`, else `violation`. The spike's history has none, so the volume is zero today. Each call keeps its own violation row, but attention groups by rule and destination (D10): a stream of calls to one unlisted server raises one item, which stands until the owner acknowledges it or adds the server to `mcpServers`.
+Kawai cannot tell an MCP read from a send. So every call to an MCP server other than `kawai-team` is recorded: `allowed` when its server is in `mcpServers`, else `violation`. The spike's history has none, so the volume is zero today. Each call keeps its own violation row, but attention groups by rule and destination (D10): a stream of calls to one unlisted server raises one item, which stands until the owner acknowledges it. Adding the server to `mcpServers` records later calls as `allowed`; it never clears the standing item.
 
 The allowlist is never derived from the CLI's MCP settings. `mcpServers` is the owner's reviewed list in user-level configuration; deriving it from settings, which project files can also supply, would mark unreviewed servers allowed.
 
@@ -251,7 +251,7 @@ The driver mints a `spawn_id` at each agent process start and drops it from `liv
 - URL userinfo (`https://user:pass@`, and `https://token@`);
 - `--token`/`--password`/`--api-key` values;
 - query-string credentials: the values of `token`, `access_token`, `api_key`, `apikey`, `key`, `secret`, `password`, `sig`, and `signature` parameters;
-- body credentials in `-d`/`--data*`/`--json`/`-F`/`-f` values: JSON members and form fields whose name matches the secret-name pattern below;
+- body credentials in `-d`/`--data*`/`--json`/`-F`/`-f` values: JSON members and form fields whose name matches the inline-assignment pattern below;
 - inline assignments whose name matches `/(TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|AUTH)/i`.
 
 Redaction is pure and tested against a fixture corpus. It errs toward over-redaction. The classifier sees the unredacted command in memory only, and nothing unredacted is ever written.
@@ -342,7 +342,7 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 At startup, `initDatabase` does the following in order:
 1. **Reads the version without writing.** It checks `sqlite_master` for `schema_migrations` and reads `max(version)`, with 0 for a missing table or no rows.
 2. **Refuses a newer database** (D14) when that version is greater than the newest known one, before any statement that could write, so the file's bytes are unchanged.
-3. Takes the `startup` snapshot (D15) when the file existed.
+3. Takes the `startup` snapshot (D15).
 4. **Runs the baseline exactly once,** only when `schema_migrations` has no rows: today's schema functions unchanged — `db.ts`'s ensures, `migrateDatabase`, and every store schema function, which `initDatabase` collects into this step instead of stores calling them lazily (task 6.1 inventories them) — then creates `schema_migrations` and records version 1 `baseline`. The steps are idempotent today, so a crash before version 1 is recorded just runs them again. A database with extra tables, such as one a development branch created, still records version 1; the baseline never inspects or drops what it does not know.
 5. **Applies each pending migration in order,** gated on its backup: it takes the `pre-migration-<n>` snapshot and waits until that file is renamed into place and its integrity check has passed. A failed snapshot or check refuses startup, naming the backup, and `up(db)` never starts. Otherwise it runs `up(db)` and inserts the version row, with `backup_path`, in one `BEGIN IMMEDIATE` transaction. A throw rolls the transaction back and refuses startup, naming the migration and the backup.
 
