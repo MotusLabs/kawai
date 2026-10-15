@@ -119,7 +119,7 @@ For a Paused target the human SHALL choose, under a command id: Continue, sendin
 - **THEN** a new attempt is dispatched from the branch head on `origin` with the "may predate" note, and the old holder's later submissions are refused
 
 ### Requirement: Restart starts fresh from the newest safe commit
-Restart SHALL release a spawned holder through member release once ready, never a human-created one, warning that the attempt may reach that human-created holder; the dispatch waits for the worktree. It SHALL supersede the held assignment, cancelling no claimed work, and dispatch a new attempt of the stage's kind from the newest checkpoint commit on `origin`, else the branch head there, which may predate the holder's work. The manifest SHALL name the checkpoint when one was recorded.
+Restart SHALL release a spawned holder through member release once ready, never a human-created one, warning that the attempt may reach that human-created holder; the dispatch waits for the worktree. It SHALL supersede the held assignment, cancelling no claimed work, and dispatch a new attempt of the stage's kind from the newest checkpoint commit on `origin`, else the branch head there, warning it may predate the holder's work. The manifest SHALL name the checkpoint when one was recorded.
 
 #### Scenario: Restart with a checkpoint
 - **WHEN** the owner restarts a Paused target whose spawned developer is idle

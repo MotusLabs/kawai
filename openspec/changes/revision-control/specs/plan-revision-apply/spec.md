@@ -29,7 +29,7 @@ Apply SHALL evaluate in order `plan-open`, `execution-running`, `execution-revis
 - **THEN** Apply is refused as `validation-current` with V5's message
 
 ### Requirement: Kawai classifies every change against the running revision
-Apply SHALL classify each change by name: unchanged, changed (with its differing fields: dependencies, `fixes`, groups, acceptance, extra checks, guidance, effective review group), metadata (landed, differing only in dependencies or `fixes`; updated without a choice), added, or removed. A changed change with a task SHALL need a choice of continue, adapt, or restart; one without takes the new definition. A `leadGroup` change SHALL be the informational `lead-changed`, never a refusal.
+Apply SHALL classify each change by name: unchanged, changed (its differing fields: dependencies, `fixes`, groups, acceptance, extra checks, guidance, effective review group), metadata (landed, differing only in dependencies or `fixes`; updated without a choice), added, or removed. A changed change with a task SHALL need a choice of continue, adapt, or restart; one without takes the new definition when provisioned. A `leadGroup` change SHALL be the informational `lead-changed`, never a refusal.
 
 #### Scenario: The preview shows the delta
 - **WHEN** the owner opens Apply for revision 4 over an execution of revision 3
