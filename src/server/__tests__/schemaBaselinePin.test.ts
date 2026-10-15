@@ -10,7 +10,8 @@
 // changes. A later numbered migration changes the second test's expectation
 // on purpose: that migration's change applies its delta to `expected` there
 // (added tables, columns, indexes), and the fixture itself stays master's.
-// Migration 2 (`strategy-impact`) adds the three strategy impact tables below.
+// Migration 2 (`strategy-impact`) adds the three strategy impact tables and
+// migration 3 (`plan-validation`) the three validation tables below.
 import { expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
 import { initDatabase } from '../db'
@@ -23,6 +24,7 @@ const expected = master as SchemaShape
 const column = (name: string, notnull = 1, pk = 0) => ({ name, type: 'TEXT', notnull, dflt_value: null, pk })
 const id = column('id', 0, 1)
 const optional = (name: string) => column(name, 0)
+const integer = (name: string) => ({ name, type: 'INTEGER', notnull: 1, dflt_value: null, pk: 0 })
 
 /** Migration 2's delta: the impact proposal, decision, and request tables (strategy-revision-impact D1). */
 const migration2: SchemaShape['tables'] = {
@@ -52,10 +54,31 @@ test('a fresh baseline reproduces master bdc0131 schema exactly', () => {
   db.close()
 })
 
+/** Migration 3's delta: the report, assessment, and decision tables (plan-validation D1). */
+const migration3: SchemaShape['tables'] = {
+  plan_validation_reports: {
+    columns: [
+      id, column('plan_id'), integer('revision'), integer('seq'), column('input_hash'),
+      ...['inputs_json', 'findings_json', 'relations_json', 'evidence_json', 'readiness_json'].map(name => column(name)),
+      integer('ready'), column('requested_kind'), optional('requested_session'), column('created_at'),
+    ],
+    indexes: [{ name: 'plan_validation_reports_revision', unique: 0, columns: ['plan_id', 'revision', 'seq'] }],
+  },
+  plan_assessments: {
+    columns: [id, column('plan_id'), integer('revision'), column('kind'), column('payload_json'), column('author_kind'), optional('author_session'), optional('command_id'), column('created_at')],
+    indexes: [{ name: 'plan_assessments_revision', unique: 0, columns: ['plan_id', 'revision', 'created_at'] }],
+  },
+  plan_validation_decisions: {
+    columns: [id, column('plan_id'), integer('revision'), column('kind'), column('target'), column('text'), optional('scope'), column('actor_kind'), column('command_id'), column('payload_json'), column('created_at')],
+    indexes: [{ name: 'plan_validation_decisions_revision', unique: 0, columns: ['plan_id', 'revision', 'created_at'] }],
+  },
+}
+
 test('a fresh database opened by this build has the same shape plus each migration\'s delta and schema_migrations', () => {
   const session = initDatabase({ path: ':memory:' })
   expect(Object.keys(migration2).filter(table => table in expected.tables)).toEqual([])
-  expect(schemaShape(session.db)).toEqual({ tables: { ...expected.tables, ...migration2 } })
+  expect(Object.keys(migration3).filter(table => table in expected.tables)).toEqual([])
+  expect(schemaShape(session.db)).toEqual({ tables: { ...expected.tables, ...migration2, ...migration3 } })
   const extra = session.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'").get()
   expect(extra).toEqual({ name: 'schema_migrations' })
   session.close()
