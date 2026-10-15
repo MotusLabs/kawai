@@ -1,6 +1,6 @@
 // Per-team Plans views (durable-plans 8.1, design D12): the team's plan
 // list, the selected plan's detail, in-flight human commands, and the
-// command ids of the approve/withdraw/close/reopen dialogs. Server snapshots
+// command ids of the approve/withdraw/finish/reopen dialogs. Server snapshots
 // are authoritative and replace local state whole; closed views ignore late
 // pushes, and a detail push for a plan that is no longer selected is
 // dropped. A dialog mints its command id when it opens (`arm`) and keeps it
@@ -12,7 +12,7 @@ import { create } from 'zustand'
 import type { ServerMessage } from '@shared/types'
 import type { PlanDetail, PlanSummary } from '@shared/plans'
 
-export type PlanAction = 'approve' | 'withdraw' | 'close' | 'reopen'
+export type PlanAction = 'approve' | 'withdraw' | 'finish' | 'reopen'
 
 /** One dialog's command id and the payload it was last sent with (null = not sent yet). */
 export interface ArmedPlanCommand {

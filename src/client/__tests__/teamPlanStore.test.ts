@@ -50,21 +50,21 @@ test('a reconnect snapshot replaces the list whole and drops waiting requests', 
 
 test('a dialog keeps its command id while the payload is unchanged and re-mints after a change', () => {
   store().open('/repo')
-  store().arm('/repo', 'close:p1')
-  const armed = view().commands['close:p1']!.commandId
+  store().arm('/repo', 'finish:p1')
+  const armed = view().commands['finish:p1']!.commandId
   // The first send uses the id minted when the dialog opened.
-  expect(store().command('/repo', 'close:p1', '{"reason":"a"}', 'r1')).toBe(armed)
-  store().begin('/repo', 'r1', 'close')
+  expect(store().command('/repo', 'finish:p1', '{"reason":"a"}', 'r1')).toBe(armed)
+  store().begin('/repo', 'r1', 'finish')
   // The result is lost with the connection; the same payload replays.
   store().reconnected('/repo')
-  expect(store().command('/repo', 'close:p1', '{"reason":"a"}', 'r2')).toBe(armed)
+  expect(store().command('/repo', 'finish:p1', '{"reason":"a"}', 'r2')).toBe(armed)
   // The reason was edited after the lost result: a new command.
   store().reconnected('/repo')
-  const next = store().command('/repo', 'close:p1', '{"reason":"b"}', 'r3')
+  const next = store().command('/repo', 'finish:p1', '{"reason":"b"}', 'r3')
   expect(next).not.toBe(armed)
   // Reopening the dialog mints a fresh id.
-  store().arm('/repo', 'close:p1')
-  expect(view().commands['close:p1']!.commandId).not.toBe(next)
+  store().arm('/repo', 'finish:p1')
+  expect(view().commands['finish:p1']!.commandId).not.toBe(next)
 })
 
 test('success retires the slot, a refusal keeps it with the failures shown, and a lost result never wedges busy', () => {

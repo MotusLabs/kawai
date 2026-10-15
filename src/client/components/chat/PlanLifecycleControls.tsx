@@ -25,21 +25,21 @@ export default function PlanLifecycleControls({ teamPath, detail, sendMessage, c
     </div>
   }
   const unfinished = detail.progress?.changes.filter(change => change.status !== 'done').map(change => change.change) ?? []
-  const close = (outcome: 'completed' | 'cancelled') => (reason: string) => {
+  const finish = (outcome: 'completed' | 'cancelled') => (reason: string) => {
     const payload = { planId: plan.id, outcome, reason: reason || null }
-    sendPlanCommand(teamPath, sendMessage, 'close', `close:${plan.id}:${outcome}`, payload,
+    sendPlanCommand(teamPath, sendMessage, 'finish', `finish:${plan.id}:${outcome}`, payload,
       ids => ({ type: 'team-plan-finish', teamPath, ...ids, ...payload }))
   }
   return <div className="mt-3 flex flex-wrap gap-2" data-testid="plan-lifecycle">
-    <PlanCommandDialog teamPath={teamPath} slot={`close:${plan.id}:completed`} openLabel="Complete plan" confirmLabel="Complete" testId="plan-complete"
+    <PlanCommandDialog teamPath={teamPath} slot={`finish:${plan.id}:completed`} openLabel="Complete plan" confirmLabel="Complete" testId="plan-complete"
       connected={connected} busy={busy} disabled={plan.currentApprovedRevision === null}
-      reason={{ label: 'Reason', required: unfinished.length > 0 }} onConfirm={close('completed')}>
+      reason={{ label: 'Reason', required: unfinished.length > 0 }} onConfirm={finish('completed')}>
       {unfinished.length > 0
         ? <p className="text-chat-meta">Changes not done: {unfinished.join(', ')}. Completing anyway needs a reason.</p>
         : <p className="text-chat-meta">Every change is done.</p>}
     </PlanCommandDialog>
-    <PlanCommandDialog teamPath={teamPath} slot={`close:${plan.id}:cancelled`} openLabel="Cancel plan" confirmLabel="Cancel the plan" testId="plan-cancel"
-      connected={connected} busy={busy} reason={{ label: 'Reason', required: true }} onConfirm={close('cancelled')}>
+    <PlanCommandDialog teamPath={teamPath} slot={`finish:${plan.id}:cancelled`} openLabel="Cancel plan" confirmLabel="Cancel the plan" testId="plan-cancel"
+      connected={connected} busy={busy} reason={{ label: 'Reason', required: true }} onConfirm={finish('cancelled')}>
       <p className="text-chat-meta">Linked tasks keep their status; cancel or finish them separately.</p>
     </PlanCommandDialog>
   </div>
