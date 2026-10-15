@@ -6,11 +6,11 @@
 
 ## 2. App wiring
 
-- [ ] 2.1 Route the `sessions` handler in `src/client/protocol/sessionMessages.ts` through the decision function, using the pre-update `selectedSessionId` and `document.visibilityState`; verify the mixed-snapshot scenario (selected and background session idle together still chimes for the background one) via the unit tests and that the existing app tests pass
-- [ ] 2.2 Route the `session-update` handler in `src/client/protocol/sessionMessages.ts` through the same function with the same selection/visibility inputs; verify the inline transition conditions are gone (`grep -n "'waiting' && soundOnIdle" src/client/protocol/sessionMessages.ts` returns nothing) and app tests pass
-- [ ] 2.3 Note the selected-session exception in the Idle Sound description in `src/client/components/settings/GeneralSettings.tsx` and in the `CLAUDE.md` "How It Works" list; verify the settings test (if it asserts the description) is updated and passes
+- [x] 2.1 Route the `sessions` handler in `src/client/protocol/sessionMessages.ts` through the decision function, using the pre-update `selectedSessionId` and `document.visibilityState`; verify the mixed-snapshot scenario (selected and background session idle together still chimes for the background one) via the unit tests and that the existing app tests pass
+- [x] 2.2 Route the `session-update` handler in `src/client/protocol/sessionMessages.ts` through the same function with the same selection/visibility inputs; verify the inline transition conditions are gone (`grep -n "'waiting' && soundOnIdle" src/client/protocol/sessionMessages.ts` returns nothing) and app tests pass
+- [x] 2.3 Note the selected-session exception in the Idle Sound description in `src/client/components/settings/GeneralSettings.tsx` and in the `CLAUDE.md` "How It Works" list; verify the settings test (if it asserts the description) is updated and passes
 
 ## 3. Verification
 
-- [ ] 3.1 Run `bun run lint && bun run typecheck && bun run test` and confirm all pass
+- [x] 3.1 Run `bun run lint && bun run typecheck && bun run test` and confirm all pass
 - [ ] 3.2 In the running app with Idle Sound on, confirm no chime when the selected chat finishes a turn with the tab visible, and a chime when a non-selected session finishes or the tab is in the background
