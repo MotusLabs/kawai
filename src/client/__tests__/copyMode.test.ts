@@ -229,6 +229,24 @@ describe('TmuxCopyModeState', () => {
     expect(handled).toBe(false)
     expect(h.sends.filter((m) => m.type === 'terminal-input')).toHaveLength(1)
     expect(h.inCopyMode.current).toBe(false)
+    // The scroll armed the debounced status check; clear it for the next test.
+    h.state.clearCheckTimer()
+  })
+
+  test('scroll reports at-bottom when the viewport sits exactly at the base, outside copy-mode', () => {
+    const h = createHarness()
+    // Equal offsets are at-bottom (>=, not >): a one-line scroller that has
+    // not moved must not sprout a scroll button.
+    h.terminal.buffer.active.viewportY = 5
+    h.terminal.buffer.active.baseY = 5
+    h.state.checkScrollPosition()
+    expect(h.scrollReports).toEqual([true])
+
+    // The same position inside copy-mode still reports not-at-bottom.
+    h.state.set(true)
+    h.scrollReports.length = 0
+    h.state.checkScrollPosition()
+    expect(h.scrollReports).toEqual([false])
   })
 
   test('wheel with app mouse active forwards without copy-mode side effects', async () => {

@@ -192,6 +192,34 @@ describe('TerminalOutputStream', () => {
     // ...and a forced flush gets the new data through.
     stream.flush({ force: true })
     expect(current.writes).toEqual(['new-terminal'])
+    // The deferred flush() above armed the 50ms force cap; disarm it so the
+    // timer does not fire into a later test file.
+    stream.invalidate()
+  })
+
+  test('continuous writes do not restart the 50ms force cap', async () => {
+    const terminal = new TerminalMock()
+    const { stream } = createStream(() => terminal)
+
+    stream.push('first')
+    stream.flush()
+    stream.push('held-1')
+    stream.flush() // defers behind the pending write; cap armed now
+    const armedAt = Date.now()
+
+    // A later chunk defers again — it must extend the held data but NOT push
+    // the armed cap's deadline out (single non-restarting cap).
+    await sleep(20)
+    stream.push('held-2')
+    stream.flush()
+    expect(terminal.writes).toEqual(['first'])
+
+    // 65ms after arming: the cap fired once at 50ms with ALL held data
+    // joined — had it restarted at the second defer, nothing would have
+    // flushed yet (20+50=70ms) and the join would miss held-2.
+    await sleep(45)
+    expect(Date.now() - armedAt).toBeGreaterThanOrEqual(55)
+    expect(terminal.writes).toEqual(['first', 'held-1held-2'])
   })
 
   test('invalidate clears the deferred flag and force cap', async () => {

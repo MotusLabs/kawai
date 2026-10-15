@@ -41,6 +41,7 @@ function createDeps(output: OutputMock) {
   const readySessions: Array<string | null> = []
   const switching: boolean[] = []
   const invalidates: number[] = []
+  const events: string[] = []
   const needsResetRef = { current: output.needsReset }
   const switchStartRef = { current: null as number | null }
   const focusAfterAttachSessionRef = { current: 'session-1' as string | null }
@@ -56,18 +57,18 @@ function createDeps(output: OutputMock) {
     output: {
       get needsReset() { return output.needsReset },
       get bufferedLength() { return output.bufferedLength },
-      flush: (options?: { force?: boolean }) => { output.flushes.push(options) },
+      flush: (options?: { force?: boolean }) => { output.flushes.push(options); events.push(options?.force ? 'flush:force' : 'flush') },
     } as unknown as TerminalReadyDeps['output'],
     needsResetRef,
     switchStartRef,
     focusAfterAttachSessionRef,
     updateReadySession: (id) => { readySessions.push(id) },
     setIsSwitching: (value) => { switching.push(value) },
-    invalidateWriteBackpressure: () => { invalidates.push(1) },
+    invalidateWriteBackpressure: () => { invalidates.push(1); events.push('invalidate') },
     isIOS: false,
     repaint,
   }
-  return { deps, terminal, readySessions, switching, invalidates, needsResetRef, switchStartRef, focusAfterAttachSessionRef }
+  return { deps, terminal, readySessions, switching, invalidates, events, needsResetRef, switchStartRef, focusAfterAttachSessionRef }
 }
 
 beforeEach(() => {
@@ -99,7 +100,9 @@ describe('handleTerminalReady', () => {
     const h = createDeps(output)
 
     handleTerminalReady('session-1', h.deps)
-    // Atomic path: invalidate first, then a forced flush; no bare reset.
+    // Atomic path: the generation advance must happen BEFORE the forced
+    // flush, so the write's ack lands under the new accounting.
+    expect(h.events.slice(0, 2)).toEqual(['invalidate', 'flush:force'])
     expect(h.invalidates).toHaveLength(1)
     expect(output.flushes).toEqual([{ force: true }])
     expect(h.terminal.resets).toBe(0)
