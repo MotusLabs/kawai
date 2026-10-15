@@ -91,6 +91,7 @@ test('approval, questions, streaming reconnect, two-client resolution, and stop'
 })
 
 test('debug view shows protocol frames live, pages older frames, and survives reload', async ({ page }, info) => {
+  test.setTimeout(60_000) // Seventy completed turns plus frame pagination.
   await openFixture(page)
   const panel = page.getByTestId('chat-debug-panel')
   await expect(panel).toHaveCount(0)
@@ -125,6 +126,9 @@ test('debug view shows protocol frames live, pages older frames, and survives re
   for (let index = 0; index < 70; index += 1) {
     await composer.fill(`ping ${index}`)
     await composer.press('Enter')
+    // Generate completed turns, so pagination does not race queued prompts.
+    await expect(page.getByTestId('chat-transcript').getByText(`ping ${index}`, { exact: true })).toBeVisible()
+    await expect(page.getByTestId('chat-status')).toHaveText('waiting')
   }
   await expect(page.getByTestId('chat-transcript')).toContainText('ping 69')
   await expect(page.getByTestId('chat-view').getByText('waiting', { exact: true })).toBeVisible()
