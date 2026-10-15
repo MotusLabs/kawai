@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from 'bun:test'
-import type { ChatContextUsage, ChatEvent, ChatNotification, ChatWorker } from '../../shared/chat'
+import type { ChatBackgroundTask, ChatContextUsage, ChatEvent, ChatNotification, ChatWorker } from '../../shared/chat'
 import type { ServerMessage } from '../../shared/types'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -14,7 +14,7 @@ function harness(wireLogs?: ChatWireLogs) {
     type: 'chat-snapshot', sessionId: 'chat-1', profileId: 'default', events: [],
     pendingRequests: [{ kind: 'approval', requestId: 'approval-1', tool: 'Bash', input: {}, at: 'now' }],
     status: 'permission', throughSequence: 0,
-    commands: { status: 'unavailable', commands: [] }, activity: null, contextUsage: null, usage: null, workers: [], notifications: [],
+    commands: { status: 'unavailable', commands: [] }, activity: null, contextUsage: null, usage: null, workers: [], backgroundTasks: [], notifications: [], model: null,
   }
   let pending = true
   const manager = {
@@ -76,6 +76,18 @@ const worker = (status: 'running' | 'completed', live: boolean): ChatWorker => (
   status,
   live,
   lastTool: 'Grep',
+  elapsedMs: 4_000,
+})
+
+const bgTask = (status: 'running' | 'completed', live: boolean): ChatBackgroundTask => ({
+  taskId: 'b1',
+  toolCallId: 'call_1',
+  kind: 'shell',
+  description: 'Wait for CI',
+  status,
+  live,
+  startedAtMs: 1_000,
+  ...(status === 'completed' ? { endedAtMs: 5_000 } : {}),
   elapsedMs: 4_000,
 })
 
@@ -146,6 +158,24 @@ describe('chat WebSocket subscriptions', () => {
     // Detach stops the flow for that connection.
     await h.connections.handle(h.connection, { type: 'chat-detach', sessionId: 'chat-1' })
     h.connections.publishWorkers('chat-1', [worker('running', true)])
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(h.messages).toHaveLength(2)
+  })
+
+  test('background-task rosters coalesce to the latest and replace, never merge', async () => {
+    const h = harness()
+    await h.connections.handle(h.connection, { type: 'chat-attach', sessionId: 'chat-1' })
+    h.connections.publishBackgroundTasks('chat-1', [bgTask('running', true)])
+    h.connections.publishBackgroundTasks('chat-1', [bgTask('completed', false)])
+    // A roster for a session nobody subscribes to goes nowhere.
+    h.connections.publishBackgroundTasks('chat-3', [bgTask('running', true)])
+    await new Promise(resolve => setTimeout(resolve, 0))
+    // One message, the latest full set (background tasks D2).
+    expect(h.messages.slice(1)).toEqual([
+      { type: 'chat-background-tasks', sessionId: 'chat-1', tasks: [bgTask('completed', false)] },
+    ])
+    await h.connections.handle(h.connection, { type: 'chat-detach', sessionId: 'chat-1' })
+    h.connections.publishBackgroundTasks('chat-1', [bgTask('running', true)])
     await new Promise(resolve => setTimeout(resolve, 0))
     expect(h.messages).toHaveLength(2)
   })
@@ -334,6 +364,30 @@ describe('chat WebSocket subscriptions', () => {
     expect(h.messages.slice(2)).toEqual([
       { type: 'chat-context-usage', sessionId: 'chat-1', usage: reading(96_000) },
     ])
+  })
+
+  test('model pushes reach only subscribed connections, latest once per flush', async () => {
+    const h = harness()
+    const otherMessages: ServerMessage[] = []
+    const other = { send: (message: ServerMessage) => otherMessages.push(message) }
+    await h.connections.handle(h.connection, { type: 'chat-attach', sessionId: 'chat-1' })
+    await h.connections.handle(other, { type: 'chat-attach', sessionId: 'chat-2' })
+    // Two changes inside one tick: only the latest survives the flush, once.
+    h.connections.publishModel('chat-1', 'claude-sonnet-5-5')
+    h.connections.publishModel('chat-1', 'sonnet')
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(h.messages.slice(1)).toEqual([
+      { type: 'chat-model', sessionId: 'chat-1', model: 'sonnet' },
+    ])
+    expect(otherMessages).toEqual([])
+
+    // A later change arrives as its own message.
+    h.connections.publishModel('chat-1', 'opus')
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(h.messages.slice(2)).toEqual([
+      { type: 'chat-model', sessionId: 'chat-1', model: 'opus' },
+    ])
+    expect(otherMessages).toEqual([])
   })
 
   test('usage reaches a connection once for two sessions of one profile', async () => {

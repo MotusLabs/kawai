@@ -13,6 +13,7 @@ import { CornerDownLeftIcon } from '@untitledui-icons/react/line'
 import ArrowKeys from './ArrowKeys'
 import NumPad from './NumPad'
 import { isIOSDevice } from '../utils/device'
+import { sessionStatusDot } from '../utils/sessionStatus'
 import PasteStatus from './PasteStatus'
 import { useBrowserPaste } from '../hooks/useBrowserPaste'
 import { useKeyboardShift } from '../hooks/useKeyboardShift'
@@ -122,12 +123,6 @@ function applyCtrlModifier(
   return { output: input, consumeCtrl: true }
 }
 
-const statusDot: Record<Session['status'], string> = {
-  working: 'bg-working',
-  waiting: 'bg-waiting',
-  permission: 'bg-approval',
-  unknown: 'bg-muted',
-}
 
 // Memoized (design D6): every prop is a primitive or a stable callback from
 // Terminal, and the sessions strip array is value-stabilized by the caller,
@@ -315,7 +310,7 @@ function TerminalControls({
                   `}
                   onClick={() => handleSessionSelect(session.id)}
                 >
-                  <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${statusDot[session.status]}`} />
+                  <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${sessionStatusDot[session.status]}`} />
                   <span className="truncate">{index + 1}</span>
                 </button>
               )

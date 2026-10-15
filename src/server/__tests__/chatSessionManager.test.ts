@@ -16,12 +16,14 @@ import type {
   ChatNotification,
   ChatUsageReport,
   ChatWorker,
+  ChatBackgroundTask,
 } from '../../shared/chat'
 import type { ClaudeLaunchConfiguration } from '../chat/ClaudeProfiles'
 import { initDatabase, type SessionDatabase } from '../db'
 import { SessionRegistry } from '../SessionRegistry'
 import { ChatWireLogs } from '../chat/ChatWireLogs'
 import { ChatWorkerStore } from '../chat/chatWorkerStore'
+import { ChatTaskStore } from '../chat/chatTaskStore'
 import { ClaudeExecutableError } from '../chat/claudeExecutable'
 import type { ChatWireRecorder } from '../chat/wireTap'
 import {
@@ -58,7 +60,18 @@ type FakeContextControl = (opts: {
 
 const testManagers = new Set<ChatSessionManager>()
 async function managedManager(options: ConstructorParameters<typeof ChatSessionManager>[0]) {
-  const manager = new ChatSessionManager(options)
+  const manager = new ChatSessionManager({
+    // Provider usage pulls must never leave the tests: a harness that does
+    // not inject a fetch gets one that fails, so the claim falls back to the
+    // SDK pull exactly as an unreachable endpoint would — even when the
+    // machine's real environment exports a provider base URL.
+    providerUsageFetch:
+      options.providerUsageFetch ??
+      (async () => {
+        throw new Error('provider usage pull not expected in this harness')
+      }) as unknown as typeof fetch,
+    ...options,
+  })
   // Restore is async (async-transcript-parsing design D2): block until the
   // persisted rows are in, matching the pre-change synchronous constructor.
   await manager.whenRestored()
@@ -159,9 +172,13 @@ interface ManagerHarness {
   events: Array<{ sessionId: string; event: ChatEvent }>
   activities: Array<{ sessionId: string; activity: ChatActivity | null }>
   contextUsage: Array<{ sessionId: string; usage: ChatContextUsage | null }>
+  /** Model publishes (chat-session-model design D5), in order. */
+  models: Array<{ sessionId: string; model: string }>
   usage: Array<{ profileId: string; report: ChatUsageReport | null }>
   /** Worker-roster publishes, in order (workers design D2). */
   workers: Array<{ sessionId: string; workers: ChatWorker[] }>
+  /** Background-task roster publishes, in order (background tasks D2). */
+  backgroundTasks: Array<{ sessionId: string; tasks: ChatBackgroundTask[] }>
   /** Scoped workspace refreshes fired after cwd moves (worktree tracking D2). */
   refreshes: string[]
 }
@@ -180,8 +197,10 @@ async function createHarness(
   const events: Array<{ sessionId: string; event: ChatEvent }> = []
   const activities: Array<{ sessionId: string; activity: ChatActivity | null }> = []
   const contextUsage: Array<{ sessionId: string; usage: ChatContextUsage | null }> = []
+  const models: Array<{ sessionId: string; model: string }> = []
   const usage: Array<{ profileId: string; report: ChatUsageReport | null }> = []
   const workers: Array<{ sessionId: string; workers: ChatWorker[] }> = []
+  const backgroundTasks: Array<{ sessionId: string; tasks: ChatBackgroundTask[] }> = []
   const refreshes: string[] = []
   const manager = await managedManager({
     isDirectory,
@@ -190,15 +209,17 @@ async function createHarness(
     onEvent: (sessionId, event) => events.push({ sessionId, event }),
     onActivity: (sessionId, activity) => activities.push({ sessionId, activity }),
     onContextUsage: (sessionId, reading) => contextUsage.push({ sessionId, usage: reading }),
+    onModel: (sessionId, model) => models.push({ sessionId, model }),
     onUsage: (profileId, report) => usage.push({ profileId, report }),
     onWorkers: (sessionId, roster) => workers.push({ sessionId, workers: roster }),
+    onBackgroundTasks: (sessionId, tasks) => backgroundTasks.push({ sessionId, tasks }),
     queryFactory: fakeQueryFactory(handles, usageImpl, contextImpl),
     titleLocateIntervalMs,
     ...(cwdRefreshDebounceMs !== undefined ? { cwdRefreshDebounceMs } : {}),
     requestWorkspaceRefresh: (projectPath) => refreshes.push(projectPath),
     ...(workerStore !== undefined ? { workerStore } : {}),
   })
-  return { manager, registry, handles, events, activities, contextUsage, usage, workers, refreshes }
+  return { manager, registry, handles, events, activities, contextUsage, models, usage, workers, backgroundTasks, refreshes }
 }
 
 /** Let the driver's stream loop drain pushed messages. */
@@ -222,11 +243,12 @@ async function waitForCondition(
   }
 }
 
-function initMessage(sessionId: string): SDKMessage {
+function initMessage(sessionId: string, model?: string): SDKMessage {
   return {
     type: 'system',
     subtype: 'init',
     session_id: sessionId,
+    ...(model !== undefined ? { model } : {}),
   } as unknown as SDKMessage
 }
 
@@ -1051,6 +1073,14 @@ describe('ChatSessionManager', () => {
         error: 'This chat session is archived. Restore it to continue the conversation.',
       })
       expect(handles).toHaveLength(0)
+      // The refusal text is exposed read-only for the unavailable-recipient
+      // waiting reason (team-waiting-reasons D2): same text `available`
+      // rejects on, null for a session that may start.
+      const record = db.getChatSession(created.session.id)!
+      expect(manager.startBlockerFor(record)).toBe('This chat session is archived. Restore it to continue the conversation.')
+      const fresh = manager.createSession({ projectPath: '/tmp/proj' })
+      if (!fresh.ok) throw new Error('create failed')
+      expect(manager.startBlockerFor(db.getChatSession(fresh.session.id)!)).toBeNull()
     })
 
     test('start is refused when the project directory is missing', async () => {
@@ -2541,6 +2571,138 @@ describe('ChatSessionManager', () => {
   })
 })
 
+/**
+ * Last-known identity (team-message-threads D3): creation and every rename
+ * path keep `team_session_directory` current, and kill or archive never write
+ * there — the row is what still names a participant after the session is gone.
+ */
+describe('ChatSessionManager team session directory', () => {
+  let tempDir: string
+  let db: SessionDatabase
+  const originalApiKey = process.env.ANTHROPIC_API_KEY
+  const originalConfigDir = process.env.CLAUDE_CONFIG_DIR
+  const originalHome = process.env.HOME
+
+  beforeEach(() => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentboard-chatdir-'))
+    db = initDatabase({ path: path.join(tempDir, 'test.db') })
+    process.env.ANTHROPIC_API_KEY = 'sk-test-key'
+    process.env.CLAUDE_CONFIG_DIR = path.join(tempDir, 'claude-config')
+    process.env.HOME = tempDir
+  })
+
+  afterEach(() => {
+    if (originalApiKey !== undefined) process.env.ANTHROPIC_API_KEY = originalApiKey
+    else delete process.env.ANTHROPIC_API_KEY
+    if (originalConfigDir !== undefined) process.env.CLAUDE_CONFIG_DIR = originalConfigDir
+    else delete process.env.CLAUDE_CONFIG_DIR
+    if (originalHome !== undefined) process.env.HOME = originalHome
+    else delete process.env.HOME
+  })
+
+  /** The durable row, including the write timestamp a no-op must not move. */
+  function directoryRow(sessionId: string) {
+    return db.db.prepare(
+      'SELECT name, group_id, updated_at FROM team_session_directory WHERE session_id = ?'
+    ).get(sessionId) as { name: string; group_id: string | null; updated_at: string } | null
+  }
+
+  test('create records the session name and group once its team is known', async () => {
+    const { manager } = await createHarness(db)
+    const created = manager.createSession({ projectPath: '/tmp/proj', name: 'Export button', groupId: 'devs' })
+    if (!created.ok) throw new Error(created.error)
+    await waitForCondition(() => directoryRow(created.session.id) !== null)
+    expect(directoryRow(created.session.id)).toMatchObject({
+      name: 'Export button', group_id: 'devs',
+    })
+    manager.shutdown()
+  })
+
+  test('a generated title rename re-records the name', async () => {
+    const harness = await createHarness(db)
+    const created = harness.manager.createSession({ projectPath: '/tmp/proj' })
+    if (!created.ok) throw new Error(created.error)
+    const id = created.session.id
+    await waitForCondition(() => directoryRow(id) !== null)
+    expect(directoryRow(id)!.name).toBe(created.session.name)
+
+    writeTranscript(
+      'dir-title',
+      JSON.stringify({ type: 'ai-title', aiTitle: 'adopted title', sessionId: 'dir-title' }) + '\n'
+    )
+    await harness.manager.send(id, 'hello')
+    harness.handles[0]!.push(initMessage('dir-title'))
+    await waitForCondition(() => directoryRow(id)?.name === 'adopted title')
+    expect(directoryRow(id)!.group_id).toBeNull()
+    harness.manager.shutdown()
+  })
+
+  test('a manual rename re-records the name and pins it against later titles', async () => {
+    const harness = await createHarness(db)
+    const created = harness.manager.createSession({ projectPath: '/tmp/proj', name: 'Placeholder' })
+    if (!created.ok) throw new Error(created.error)
+    const id = created.session.id
+    await waitForCondition(() => directoryRow(id) !== null)
+
+    expect(harness.manager.rename(id, 'My own name').ok).toBe(true)
+    expect(directoryRow(id)!.name).toBe('My own name')
+
+    writeTranscript(
+      'dir-manual',
+      JSON.stringify({ type: 'ai-title', aiTitle: 'too late', sessionId: 'dir-manual' }) + '\n'
+    )
+    await harness.manager.send(id, 'hello')
+    harness.handles[0]!.push(initMessage('dir-manual'))
+    await flush(10)
+    expect(directoryRow(id)!.name).toBe('My own name')
+    harness.manager.shutdown()
+  })
+
+  test('repeated renames overwrite the recorded entry rather than adding rows', async () => {
+    const { manager } = await createHarness(db)
+    const created = manager.createSession({ projectPath: '/tmp/proj', name: 'First' })
+    if (!created.ok) throw new Error(created.error)
+    const id = created.session.id
+    await waitForCondition(() => directoryRow(id) !== null)
+    for (const name of ['Second', 'Third']) {
+      expect(manager.rename(id, name).ok).toBe(true)
+    }
+    expect(directoryRow(id)!.name).toBe('Third')
+    expect(db.db.prepare('SELECT COUNT(*) AS n FROM team_session_directory').get()).toEqual({ n: 1 })
+    manager.shutdown()
+  })
+
+  test('kill leaves the last known identity in place and writes nothing new', async () => {
+    const { manager } = await createHarness(db)
+    const created = manager.createSession({ projectPath: '/tmp/proj', name: 'Doomed helper', groupId: 'devs' })
+    if (!created.ok) throw new Error(created.error)
+    const id = created.session.id
+    await waitForCondition(() => directoryRow(id) !== null)
+    expect(manager.rename(id, 'Renamed helper').ok).toBe(true)
+    const before = directoryRow(id)!
+    expect(before.name).toBe('Renamed helper')
+
+    expect(manager.kill(id)).toBe(true)
+    await flush(6)
+    expect(directoryRow(id)).toEqual(before)
+    manager.shutdown()
+  })
+
+  test('archive leaves the last known identity in place and writes nothing new', async () => {
+    const { manager } = await createHarness(db)
+    const created = manager.createSession({ projectPath: '/tmp/proj', name: 'Parked work', groupId: 'qa' })
+    if (!created.ok) throw new Error(created.error)
+    const id = created.session.id
+    await waitForCondition(() => directoryRow(id) !== null)
+    const before = directoryRow(id)!
+
+    expect(manager.archive(id).ok).toBe(true)
+    await flush(6)
+    expect(directoryRow(id)).toEqual(before)
+    manager.shutdown()
+  })
+})
+
 describe('ChatSessionManager activity', () => {
   let tempDir: string
   let db: SessionDatabase
@@ -2767,6 +2929,36 @@ describe('ChatSessionManager usage', () => {
     expect(registry.get(id)?.parked).toEqual({ messageId: mail.id, until: '2099-01-01T00:00:00.000Z', profileId: 'glm', reason: 'Provider limit on glm' })
     store.unpark(mail.id)
     expect(registry.get(id)?.parked).toBeNull()
+  })
+
+  test('cancelling a holder\'s only parked message clears its paused state, and an archived holder stays archived', async () => {
+    const { manager, registry } = await createHarness(db)
+    const parkWork = (id: string) => {
+      const store = manager.mailbox.store
+      const mail = store.enqueue({ teamId: 't', toKind: 'session', toId: id, fromSession: id, fromGroup: null, originPath: '/tmp/proj', body: 'work' })
+      store.claim(mail.id, id); store.markPushed(mail.id); store.markDelivered(mail.id)
+      const resume = store.enqueue({ teamId: 't', toKind: 'session', toId: id, fromSession: id, fromGroup: null, originPath: '/tmp/proj', body: 'resume', deliverAt: '2099-01-01T00:00:00.000Z' })
+      store.park(mail.id, '2099-01-01T00:00:00.000Z', resume.id)
+      return { mail, resume }
+    }
+    const live = manager.createSession({ projectPath: '/tmp/proj', claudeProfileId: 'glm' })
+    const archived = manager.createSession({ projectPath: '/tmp/proj', claudeProfileId: 'glm' })
+    if (!live.ok || !archived.ok) throw new Error('create failed')
+    const liveWork = parkWork(live.session.id)
+    const archivedWork = parkWork(archived.session.id)
+    expect(manager.archive(archived.session.id).ok).toBe(true)
+    expect(registry.get(live.session.id)?.parked).not.toBeNull()
+
+    const store = manager.mailbox.store
+    expect(store.cancel(liveWork.mail.id, { kind: 'human' })).toBe(true)
+    expect(store.cancel(archivedWork.mail.id, { kind: 'human' })).toBe(true)
+    expect(registry.get(live.session.id)?.parked).toBeNull()
+    expect(registry.get(archived.session.id)?.parked).toBeNull()
+    expect(registry.get(archived.session.id)?.archivedAt).toBeTruthy()
+    expect(db.getChatSession(archived.session.id)?.archivedAt).toBeTruthy()
+    expect(store.get(archivedWork.resume.id)?.state).toBe('cancelled')
+    // Nothing pends for the live holder either, so group mail may reach it again.
+    expect(store.parkedBy(live.session.id)).toEqual([])
   })
 
   test('limit failures are recorded against the session profile and group', async () => {
@@ -3122,6 +3314,77 @@ describe('ChatSessionManager context usage', () => {
   })
 })
 
+describe('ChatSessionManager model', () => {
+  let tempDir: string
+  let db: SessionDatabase
+  const originalHome = process.env.HOME
+  beforeEach(() => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentboard-chatmgr-model-'))
+    db = initDatabase({ path: path.join(tempDir, 'test.db') })
+    process.env.ANTHROPIC_API_KEY = 'sk-test-key'
+    process.env.CLAUDE_CONFIG_DIR = path.join(tempDir, 'claude-config')
+    process.env.HOME = tempDir
+  })
+  afterEach(() => {
+    if (originalHome !== undefined) process.env.HOME = originalHome
+    else delete process.env.HOME
+    fs.rmSync(tempDir, { recursive: true, force: true })
+  })
+
+  test('a reported model persists immediately, snapshots, and pushes once', async () => {
+    const harness = await createHarness(db)
+    const created = harness.manager.createSession({ projectPath: '/tmp/proj' })
+    if (!created.ok) throw new Error('create failed')
+    const id = created.session.id
+    // Before the first report the snapshot carries an explicit null.
+    expect(harness.manager.getSnapshot(id)!.model).toBeNull()
+
+    await harness.manager.send(id, 'turn')
+    const fake = harness.handles[0]!
+    fake.push(initMessage('sdk-model-1', 'claude-sonnet-5-5'))
+    await flush()
+    // No turn boundary yet, but the write is immediate (design D5): model
+    // changes are rare, so they never wait for one.
+    expect(db.getChatSession(id)!.model).toBe('claude-sonnet-5-5')
+    expect(harness.manager.getSnapshot(id)!.model).toBe('claude-sonnet-5-5')
+    expect(harness.models).toEqual([{ sessionId: id, model: 'claude-sonnet-5-5' }])
+
+    // An unchanged model on the next turn never re-fires the sink.
+    fake.push(resultWithWindow())
+    await flush()
+    await harness.manager.send(id, 'second')
+    fake.push(initMessage('sdk-model-1', 'claude-sonnet-5-5'))
+    await flush()
+    expect(harness.models).toHaveLength(1)
+    harness.manager.shutdown()
+  })
+
+  test('the snapshot falls back to the stored column after a restart', async () => {
+    const seed = await createHarness(db)
+    const created = seed.manager.createSession({ projectPath: '/tmp/proj' })
+    if (!created.ok) throw new Error('create failed')
+    const id = created.session.id
+    await seed.manager.send(id, 'turn')
+    seed.handles[0]!.push(initMessage('sdk-model-1', 'claude-sonnet-5-5'))
+    seed.handles[0]!.push(resultWithWindow())
+    await flush()
+    // The restarted manager resumes from the SDK transcript, which must exist.
+    writeTranscript('sdk-model-1', '[]')
+    seed.manager.shutdown()
+
+    const harness = await createHarness(db)
+    expect(harness.manager.getSnapshot(id)!.model).toBe('claude-sonnet-5-5')
+
+    // A /model switch after the restart updates record, row, and snapshot.
+    await harness.manager.send(id, 'switched')
+    harness.handles[0]!.push(initMessage('sdk-model-1', 'sonnet'))
+    await flush()
+    expect(db.getChatSession(id)!.model).toBe('sonnet')
+    expect(harness.manager.getSnapshot(id)!.model).toBe('sonnet')
+    harness.manager.shutdown()
+  })
+})
+
 describe('ChatSessionManager worker sidecar', () => {
   let tempDir: string
   let db: SessionDatabase
@@ -3342,6 +3605,27 @@ describe('ChatSessionManager worker sidecar', () => {
     )
     restored.shutdown()
     expect(recovered).toEqual([])
+  })
+
+  test('a worker roster change on a pending release re-runs the dispatch cycle (member-release D2/D3)', async () => {
+    process.env.ANTHROPIC_API_KEY = 'test-key'
+    const harness = await createHarness(db, anyDirectory)
+    const created = harness.manager.createSession({ projectPath: '/tmp/proj' })
+    if (!created.ok) throw new Error(created.error)
+    const id = created.session.id
+    await harness.manager.send(id, 'research')
+    const handle = harness.handles[0]!
+    handle.push(initMessage('sdk-workers-release'))
+    await spawnWorker(handle, 'toolu_rel', 'task_rel', 'Map the workspace')
+    expect(harness.manager.hasLiveWorkers(id)).toBe(true)
+    db.db.prepare(`INSERT INTO team_member_releases (session_id, task_id, team_id, reason, requested_by_kind, requested_at)
+      VALUES (?, 'task-1', 'team-1', 'task done', 'human', ?)`).run(id, new Date().toISOString())
+    let notified = 0
+    harness.manager.dispatcher.notify = () => { notified += 1 }
+    await settleWorker(handle, 'toolu_rel', 'task_rel', 'completed', 'Mapped')
+    expect(harness.manager.hasLiveWorkers(id)).toBe(false)
+    expect(notified).toBeGreaterThan(0)
+    harness.manager.shutdown()
   })
 
   test('kill removes the sidecar with the session', async () => {
@@ -3697,5 +3981,714 @@ describe('ChatSessionManager notifications', () => {
     const keys = manager.getSnapshot(id)!.notifications.map((notice) => notice.key)
     // immediate agent, then the account notice (high), then the low agent.
     expect(keys).toEqual(['urgent-note', 'login-expiry', 'low-note'])
+  })
+})
+
+describe('ChatSessionManager background-task roster (background tasks D2)', () => {
+  let tempDir: string
+  let db: SessionDatabase
+  const originalApiKey = process.env.ANTHROPIC_API_KEY
+  const originalConfigDir = process.env.CLAUDE_CONFIG_DIR
+  const originalHome = process.env.HOME
+
+  beforeEach(() => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentboard-chatbgtasks-'))
+    db = initDatabase({ path: path.join(tempDir, 'test.db') })
+    delete process.env.ANTHROPIC_API_KEY
+    process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token'
+    process.env.CLAUDE_CONFIG_DIR = path.join(tempDir, 'claude-config')
+    process.env.HOME = tempDir
+  })
+  afterEach(() => {
+    if (originalApiKey !== undefined) process.env.ANTHROPIC_API_KEY = originalApiKey
+    else delete process.env.ANTHROPIC_API_KEY
+    if (originalConfigDir !== undefined) process.env.CLAUDE_CONFIG_DIR = originalConfigDir
+    else delete process.env.CLAUDE_CONFIG_DIR
+    if (originalHome !== undefined) process.env.HOME = originalHome
+    else delete process.env.HOME
+    delete process.env.CLAUDE_CODE_OAUTH_TOKEN
+  })
+
+  test('a live session publishes its roster and snapshots the fresh projection', async () => {
+    const { manager, handles, backgroundTasks } = await createHarness(db)
+    const created = manager.createSession({ projectPath: '/tmp/proj' })
+    if (!created.ok) throw new Error('create failed')
+    const id = created.session.id
+    await manager.send(id, 'run things')
+    const handle = handles[0]!
+    handle.push({
+      type: 'system', subtype: 'task_started', task_id: 'b1', tool_use_id: 'call_1',
+      task_type: 'local_bash', description: 'dev server', is_backgrounded: true, uuid: 'u', session_id: 's',
+    } as unknown as SDKMessage)
+    await flush()
+    // The sink saw the full-set publish...
+    expect(backgroundTasks.at(-1)?.tasks).toMatchObject([
+      { taskId: 'b1', kind: 'shell', description: 'dev server', status: 'running', live: true },
+    ])
+    // ...and a reconnecting client's snapshot carries the same roster.
+    expect(manager.getSnapshot(id)!.backgroundTasks).toMatchObject([
+      { taskId: 'b1', status: 'running', live: true },
+    ])
+    handle.push({
+      type: 'system', subtype: 'task_notification', task_id: 'b1', tool_use_id: 'call_1',
+      status: 'completed', summary: 'done (exit code 0)', uuid: 'u2', session_id: 's',
+    } as unknown as SDKMessage)
+    await flush()
+    expect(backgroundTasks.at(-1)?.tasks).toMatchObject([
+      { taskId: 'b1', status: 'completed', live: false, summary: 'done (exit code 0)' },
+    ])
+    expect(manager.getSnapshot(id)!.backgroundTasks).toMatchObject([
+      { taskId: 'b1', status: 'completed' },
+    ])
+  })
+
+  test('a settling task on a pending release re-runs the dispatch cycle (member-release D2/D3)', async () => {
+    const { manager, handles } = await createHarness(db)
+    const created = manager.createSession({ projectPath: '/tmp/proj' })
+    if (!created.ok) throw new Error('create failed')
+    const id = created.session.id
+    await manager.send(id, 'run things')
+    const handle = handles[0]!
+    handle.push({
+      type: 'system', subtype: 'task_started', task_id: 'b9', tool_use_id: 'call_9',
+      task_type: 'local_bash', description: 'dev server', is_backgrounded: true, uuid: 'u', session_id: 's',
+    } as unknown as SDKMessage)
+    await flush()
+    expect(manager.hasRunningBackgroundTasks(id)).toBe(true)
+    db.db.prepare(`INSERT INTO team_member_releases (session_id, task_id, team_id, reason, requested_by_kind, requested_at)
+      VALUES (?, 'task-1', 'team-1', 'task done', 'human', ?)`).run(id, new Date().toISOString())
+    let notified = 0
+    manager.dispatcher.notify = () => { notified += 1 }
+    handle.push({
+      type: 'system', subtype: 'task_notification', task_id: 'b9', tool_use_id: 'call_9',
+      status: 'completed', summary: 'done (exit code 0)', uuid: 'u2', session_id: 's',
+    } as unknown as SDKMessage)
+    await flush()
+    expect(manager.hasRunningBackgroundTasks(id)).toBe(false)
+    expect(notified).toBeGreaterThan(0)
+    manager.shutdown()
+  })
+
+  test('a member spawned for an already-closed task is marked pending release by its creation (member-release D1)', async () => {
+    const { manager } = await createHarness(db)
+    const t = manager.tasks.store.create({ teamId: 'team-1', title: 't', direction: 'd', creator: { kind: 'human', sessionId: null } })
+    manager.tasks.store.setStatus(t.id, 'done')
+    const created = manager.createSession({ projectPath: '/tmp/proj', spawned: true, taskId: t.id })
+    if (!created.ok) throw new Error('create failed')
+    // Same tick as the insert: no await sits between persisting the session and its mark.
+    const row = db.db.prepare('SELECT task_id FROM team_member_releases WHERE session_id = ?').get(created.session.id)
+    expect(row).toEqual({ task_id: t.id })
+    manager.shutdown()
+  })
+
+  test('process end frees a pending member: the stopped roster re-checks readiness and the next pass archives it (member-release D3)', async () => {
+    const { manager, handles } = await createHarness(db)
+    const created = manager.createSession({ projectPath: '/tmp/proj', spawned: true })
+    if (!created.ok) throw new Error('create failed')
+    const id = created.session.id
+    await manager.send(id, 'start a dev server')
+    const handle = handles[0]!
+    handle.push({
+      type: 'system', subtype: 'task_started', task_id: 'b-end', tool_use_id: 'call_end',
+      task_type: 'local_bash', description: 'dev server', is_backgrounded: true, uuid: 'u', session_id: 's',
+    } as unknown as SDKMessage)
+    // The turn ends; the shell keeps running, so only D3's task condition holds the member.
+    handle.push({ type: 'result', subtype: 'success', result: 'started', uuid: 'u2', session_id: 's' } as unknown as SDKMessage)
+    await flush()
+    db.db.prepare(`INSERT INTO team_member_releases (session_id, task_id, team_id, reason, requested_by_kind, requested_at)
+      VALUES (?, 'task-1', 'team-1', 'task done', 'human', ?)`).run(id, new Date().toISOString())
+    manager.dispatcher.release()
+    manager.dispatcher.notify()
+    await manager.dispatcher.settled()
+    expect(manager.isArchived(id)).toBe(false)
+    // The process ends (EOF): the driver settles the shell as stopped and
+    // publishes that roster; nothing else asks the dispatcher to look again.
+    handle.query.close()
+    await waitForCondition(() => manager.getSnapshot(id)!.backgroundTasks[0]?.status === 'stopped')
+    await manager.dispatcher.settled()
+    await waitForCondition(() => manager.isArchived(id))
+    manager.shutdown()
+  })
+
+  test('a turn ending while a shell is live leaves the session waiting (D7)', async () => {
+    const { manager, handles, registry } = await createHarness(db)
+    const created = manager.createSession({ projectPath: '/tmp/proj' })
+    if (!created.ok) throw new Error('create failed')
+    const id = created.session.id
+    await manager.send(id, 'start a dev server')
+    const handle = handles[0]!
+    handle.push({
+      type: 'system', subtype: 'task_started', task_id: 'b3', tool_use_id: 'call_3',
+      task_type: 'local_bash', description: 'dev server', is_backgrounded: true, uuid: 'u', session_id: 's',
+    } as unknown as SDKMessage)
+    handle.push({
+      type: 'system', subtype: 'background_tasks_changed', tasks: [{ task_id: 'b3' }], uuid: 'u4', session_id: 's',
+    } as unknown as SDKMessage)
+    // The turn completes; the shell keeps running.
+    handle.push({
+      type: 'result', subtype: 'success', result: 'started', uuid: 'u5', session_id: 's',
+    } as unknown as SDKMessage)
+    await flush()
+    expect(registry.get(id)?.status).toBe('waiting')
+    expect(manager.getSnapshot(id)!.backgroundTasks).toMatchObject([
+      { taskId: 'b3', status: 'running', live: true },
+    ])
+  })
+
+  test('an archived session keeps its last roster, settled as stopped', async () => {
+    const { manager, handles } = await createHarness(db)
+    const created = manager.createSession({ projectPath: '/tmp/proj' })
+    if (!created.ok) throw new Error('create failed')
+    const id = created.session.id
+    await manager.send(id, 'run things')
+    handles[0]!.push({
+      type: 'system', subtype: 'task_started', task_id: 'b2', task_type: 'local_bash',
+      description: 'sleep', is_backgrounded: true, uuid: 'u', session_id: 's',
+    } as unknown as SDKMessage)
+    await flush()
+    await manager.archive(id)
+    // Archived read-only: archiving ended the process, so the running task
+    // settles as stopped, and the last roster still answers the snapshot.
+    expect(manager.getSnapshot(id)!.backgroundTasks).toMatchObject([
+      { taskId: 'b2', status: 'stopped', live: false },
+    ])
+  })
+
+  test('a process crash persists stopped tasks through archive and restore', async () => {
+    const store = new ChatTaskStore({ dir: path.join(tempDir, 'chat-tasks-crash') })
+    const handles: FakeHandle[] = []
+    const manager = await managedManager({
+      isDirectory: anyDirectory, db, registry: new SessionRegistry(),
+      onEvent: () => {}, queryFactory: fakeQueryFactory(handles), taskStore: store,
+    })
+    const created = manager.createSession({ projectPath: '/tmp/proj' })
+    if (!created.ok) throw new Error('create failed')
+    const id = created.session.id
+    await manager.send(id, 'start a background task')
+    handles[0]!.push({
+      type: 'system', subtype: 'task_started', task_id: 'b-crash', tool_use_id: 'c1',
+      task_type: 'local_bash', is_backgrounded: true, uuid: 'u1', session_id: 's',
+    } as unknown as SDKMessage)
+    await waitForCondition(() => store.read(id).some(task => task.status === 'running'))
+
+    // An unexpected EOF marks the driver dead before it publishes process_end.
+    handles[0]!.query.close()
+    await waitForCondition(() => manager.getSnapshot(id)!.backgroundTasks[0]?.status === 'stopped')
+    const stopped = manager.getSnapshot(id)!.backgroundTasks[0]!
+    expect(stopped.live).toBe(false)
+    expect(stopped.endedAtMs).toBeDefined()
+    await waitForCondition(() => store.read(id)[0]?.status === 'stopped')
+    expect(store.read(id)[0]?.endedAtMs).toBe(stopped.endedAtMs)
+
+    // Recreating the driver must seed the stopped records, not the old running ones.
+    expect(manager.archive(id)).toEqual({ ok: true })
+    expect(manager.restore(id)).toEqual({ ok: true })
+    await manager.send(id, 'continue after the crash')
+    expect(manager.getSnapshot(id)!.backgroundTasks).toEqual([stopped])
+    manager.shutdown()
+  })
+
+  test('restart keeps a settled outcome and recovers a running task as stopped', async () => {
+    const taskDir = path.join(tempDir, 'chat-tasks')
+    const store = () => new ChatTaskStore({ dir: taskDir })
+    const handles: FakeHandle[] = []
+    const manager = await managedManager({
+      isDirectory: anyDirectory, db, registry: new SessionRegistry(),
+      onEvent: () => {}, queryFactory: fakeQueryFactory(handles), taskStore: store(),
+    })
+    const created = manager.createSession({ projectPath: '/tmp/proj' })
+    if (!created.ok) throw new Error('create failed')
+    const id = created.session.id
+    await manager.send(id, 'run two tasks')
+    const handle = handles[0]!
+    // One task settles before the restart; the other is still running.
+    handle.push({ type: 'system', subtype: 'task_started', task_id: 'b-done', tool_use_id: 'c1', task_type: 'local_bash', description: 'quick', is_backgrounded: true, uuid: 'u1', session_id: 's' } as unknown as SDKMessage)
+    handle.push({ type: 'system', subtype: 'task_notification', task_id: 'b-done', tool_use_id: 'c1', status: 'completed', summary: 'done (exit code 0)', output_file: '/tmp/claude-1000/x/tasks/b-done.output', uuid: 'u2', session_id: 's' } as unknown as SDKMessage)
+    handle.push({ type: 'system', subtype: 'task_started', task_id: 'b-live', tool_use_id: 'c2', task_type: 'local_bash', description: 'dev server', is_backgrounded: true, uuid: 'u3', session_id: 's' } as unknown as SDKMessage)
+    await waitForCondition(() => store().read(id).length === 2)
+    // Abrupt stop, as a crash would leave things.
+    const restored = await managedManager({
+      isDirectory: anyDirectory, db, registry: new SessionRegistry(),
+      onEvent: () => {}, queryFactory: fakeQueryFactory([]), taskStore: store(),
+    })
+    expect(restored.getSnapshot(id)!.backgroundTasks).toMatchObject([
+      { taskId: 'b-done', status: 'completed', summary: 'done (exit code 0)', live: false },
+      { taskId: 'b-live', status: 'stopped', live: false },
+    ])
+    // The corrected roster is rewritten so the file and the rows agree, and
+    // the recorded output path survives for the tail reader (D3).
+    await waitForCondition(() => store().read(id).every(task => task.status !== 'running'))
+    expect(store().read(id)).toMatchObject([
+      { taskId: 'b-done', outputFile: '/tmp/claude-1000/x/tasks/b-done.output' },
+      { taskId: 'b-live', status: 'stopped' },
+    ])
+    restored.shutdown()
+  })
+
+  test('kill removes the task sidecar with the session', async () => {
+    const taskDir = path.join(tempDir, 'chat-tasks-kill')
+    const store = () => new ChatTaskStore({ dir: taskDir })
+    const handles: FakeHandle[] = []
+    const manager = await managedManager({
+      isDirectory: anyDirectory, db, registry: new SessionRegistry(),
+      onEvent: () => {}, queryFactory: fakeQueryFactory(handles), taskStore: store(),
+    })
+    const created = manager.createSession({ projectPath: '/tmp/proj' })
+    if (!created.ok) throw new Error('create failed')
+    const id = created.session.id
+    await manager.send(id, 'run one task')
+    handles[0]!.push({ type: 'system', subtype: 'task_started', task_id: 'b-kill', task_type: 'local_bash', is_backgrounded: true, uuid: 'u', session_id: 's' } as unknown as SDKMessage)
+    await waitForCondition(() => store().read(id).length === 1)
+    manager.kill(id)
+    await waitForCondition(() => !fs.existsSync(path.join(taskDir, `${id}.json`)))
+    expect(store().read(id)).toEqual([])
+  })
+
+  test('a resume keeps recovered output paths through later roster writes', async () => {
+    const taskDir = path.join(tempDir, 'chat-tasks-resume')
+    const store = () => new ChatTaskStore({ dir: taskDir })
+    const first: FakeHandle[] = []
+    const managerA = await managedManager({
+      isDirectory: anyDirectory, db, registry: new SessionRegistry(),
+      onEvent: () => {}, queryFactory: fakeQueryFactory(first), taskStore: store(),
+    })
+    const created = managerA.createSession({ projectPath: '/tmp/proj' })
+    if (!created.ok) throw new Error('create failed')
+    const id = created.session.id
+    await managerA.send(id, 'run a task')
+    first[0]!.push({ type: 'system', subtype: 'task_started', task_id: 'b-old', tool_use_id: 'c1', task_type: 'local_bash', description: 'old task', is_backgrounded: true, uuid: 'u1', session_id: 's' } as unknown as SDKMessage)
+    first[0]!.push({ type: 'system', subtype: 'task_notification', task_id: 'b-old', tool_use_id: 'c1', status: 'completed', summary: 'done before restart', output_file: '/tmp/claude-1000/x/tasks/b-old.output', uuid: 'u2', session_id: 's' } as unknown as SDKMessage)
+    await waitForCondition(() => store().read(id).some(entry => entry.outputFile !== undefined))
+    // Restart: the persisted row recovers at boot...
+    const handles: FakeHandle[] = []
+    const manager = await managedManager({
+      isDirectory: anyDirectory, db, registry: new SessionRegistry(),
+      onEvent: () => {}, queryFactory: fakeQueryFactory(handles), taskStore: store(),
+    })
+    expect(manager.getSnapshot(id)!.backgroundTasks).toMatchObject([
+      { taskId: 'b-old', status: 'completed', summary: 'done before restart' },
+    ])
+    // ...and a resume spawns a driver seeded from the server-side records:
+    // a new task's roster publish must not rewrite the old one without its
+    // recorded output path.
+    await manager.send(id, 'another turn')
+    handles[0]!.push({ type: 'system', subtype: 'task_started', task_id: 'b-new', tool_use_id: 'c9', task_type: 'local_bash', description: 'new task', is_backgrounded: true, uuid: 'u9', session_id: 's' } as unknown as SDKMessage)
+    await waitForCondition(() => store().read(id).some(entry => entry.taskId === 'b-new'))
+    expect(store().read(id)).toMatchObject([
+      { taskId: 'b-old', outputFile: '/tmp/claude-1000/x/tasks/b-old.output', summary: 'done before restart' },
+      { taskId: 'b-new', description: 'new task' },
+    ])
+    manager.shutdown()
+  })
+
+  test('readTaskOutput prefers the live query and coalesces concurrent asks', async () => {
+    const handles: FakeHandle[] = []
+    const manager = await managedManager({
+      isDirectory: anyDirectory, db, registry: new SessionRegistry(),
+      onEvent: () => {}, queryFactory: fakeQueryFactory(handles),
+    })
+    const created = manager.createSession({ projectPath: '/tmp/proj' })
+    if (!created.ok) throw new Error('create failed')
+    const id = created.session.id
+    await manager.send(id, 'hi')
+    // The fake query grows the undeclared control (runtime shape only).
+    let calls = 0
+    let release: (() => void) | undefined
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    ;(handles[0]!.query as unknown as {
+      getTaskOutput?: (taskId: string) => Promise<{ output: string; total_bytes: number; truncated: boolean }>
+    }).getTaskOutput = async (taskId: string) => {
+      calls += 1
+      await gate
+      return { output: `tail of ${taskId}`, total_bytes: 42, truncated: false }
+    }
+    const first = manager.readTaskOutput(id, 'b1')
+    const second = manager.readTaskOutput(id, 'b1')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    release!()
+    const [a, b] = await Promise.all([first, second])
+    expect(calls).toBe(1)
+    expect(a).toEqual({ state: 'ok', output: 'tail of b1', totalBytes: 42, truncated: false })
+    expect(b).toEqual(a)
+    // A throwing control falls back (here: to unavailable — no file record).
+    ;(handles[0]!.query as unknown as { getTaskOutput?: unknown }).getTaskOutput = async () => {
+      throw new Error('control exploded')
+    }
+    await expect(manager.readTaskOutput(id, 'b2')).resolves.toEqual({ state: 'unavailable' })
+  })
+
+  test('readTaskOutput falls back to the recorded output file', async () => {
+    const taskDir = path.join(tempDir, 'chat-tasks-fallback')
+    fs.mkdirSync(path.join(taskDir, 'tasks'), { recursive: true })
+    const file = path.join(taskDir, 'tasks', 'b-file.output')
+    fs.writeFileSync(file, 'shell-a-done\n')
+    const store = () => new ChatTaskStore({ dir: path.join(tempDir, 'chat-tasks-store') })
+    await store().write('chat-fb', [{
+      taskId: 'b-file', kind: 'shell', status: 'completed', summary: 'done',
+      outputFile: file, startedAtMs: 1, endedAtMs: 2,
+    }])
+    // No session, no live driver: the sidecar record answers.
+    const manager = await managedManager({
+      isDirectory: anyDirectory, db, registry: new SessionRegistry(),
+      onEvent: () => {}, queryFactory: fakeQueryFactory([]), taskStore: store(),
+    })
+    await expect(manager.readTaskOutput('chat-fb', 'b-file')).resolves.toEqual({
+      state: 'ok', output: 'shell-a-done\n', totalBytes: 13, truncated: false,
+    })
+    // A record whose file is gone, and an unknown task: unavailable.
+    await store().write('chat-fb', [{ taskId: 'b-gone', kind: 'shell', status: 'completed', startedAtMs: 1, outputFile: path.join(taskDir, 'tasks', 'b-gone.output') }])
+    await expect(manager.readTaskOutput('chat-fb', 'b-gone')).resolves.toEqual({ state: 'unavailable' })
+    await expect(manager.readTaskOutput('chat-fb', 'b-unknown')).resolves.toEqual({ state: 'unavailable' })
+    // A path outside the recorded layout is never read, even if it exists.
+    const outside = path.join(tempDir, 'outside.output')
+    fs.writeFileSync(outside, 'secret')
+    await store().write('chat-fb', [{ taskId: 'b-bad', kind: 'shell', status: 'completed', startedAtMs: 1, outputFile: outside }])
+    await expect(manager.readTaskOutput('chat-fb', 'b-bad')).resolves.toEqual({ state: 'unavailable' })
+  })
+
+  test('stopBackgroundTask stops one live task; the settle rides the roster, the turn is untouched', async () => {
+    const handles: FakeHandle[] = []
+    const events: Array<{ sessionId: string; event: ChatEvent }> = []
+    const manager = await managedManager({
+      isDirectory: anyDirectory, db, registry: new SessionRegistry(),
+      onEvent: (sessionId, event) => events.push({ sessionId, event }),
+      queryFactory: fakeQueryFactory(handles),
+    })
+    const created = manager.createSession({ projectPath: '/tmp/proj' })
+    if (!created.ok) throw new Error('create failed')
+    const id = created.session.id
+    // A turn is in flight (no result yet) while two tasks run.
+    await manager.send(id, 'run two')
+    const handle = handles[0]!
+    handle.push({ type: 'system', subtype: 'task_started', task_id: 'b-stop', task_type: 'local_bash', is_backgrounded: true, uuid: 'u1', session_id: 's' } as unknown as SDKMessage)
+    handle.push({ type: 'system', subtype: 'task_started', task_id: 'b-keep', task_type: 'local_bash', is_backgrounded: true, uuid: 'u2', session_id: 's' } as unknown as SDKMessage)
+    await flush()
+    const stopped: string[] = []
+    ;(handle.query as unknown as { stopTask?: (taskId: string) => Promise<void> }).stopTask = async (taskId: string) => {
+      stopped.push(taskId)
+    }
+    await manager.stopBackgroundTask(id, 'b-stop')
+    expect(stopped).toEqual(['b-stop'])
+    // The CLI's settle: one notification, only for the stopped task.
+    handle.push({ type: 'system', subtype: 'task_notification', task_id: 'b-stop', status: 'stopped', summary: 'Sleep', uuid: 'u3', session_id: 's' } as unknown as SDKMessage)
+    await flush()
+    expect(manager.getSnapshot(id)!.backgroundTasks).toMatchObject([
+      { taskId: 'b-stop', status: 'stopped', live: false },
+      { taskId: 'b-keep', status: 'running', live: true },
+    ])
+    // No transcript error, and the in-flight turn never ended.
+    expect(events.some(({ event }) => event.type === 'error')).toBe(false)
+    expect(events.some(({ event }) => event.type === 'turn_completed')).toBe(false)
+  })
+
+  test('stopBackgroundTask refuses archived sessions and ended or unknown tasks, without a transcript error', async () => {
+    const handles: FakeHandle[] = []
+    const events: Array<{ sessionId: string; event: ChatEvent }> = []
+    const manager = await managedManager({
+      isDirectory: anyDirectory, db, registry: new SessionRegistry(),
+      onEvent: (sessionId, event) => events.push({ sessionId, event }),
+      queryFactory: fakeQueryFactory(handles),
+    })
+    const created = manager.createSession({ projectPath: '/tmp/proj' })
+    if (!created.ok) throw new Error('create failed')
+    const id = created.session.id
+    await manager.send(id, 'run one')
+    const handle = handles[0]!
+    handle.push({ type: 'system', subtype: 'task_started', task_id: 'b-done', task_type: 'local_bash', is_backgrounded: true, uuid: 'u1', session_id: 's' } as unknown as SDKMessage)
+    handle.push({ type: 'system', subtype: 'task_notification', task_id: 'b-done', status: 'completed', summary: 'done', uuid: 'u2', session_id: 's' } as unknown as SDKMessage)
+    await flush()
+    const stopped: string[] = []
+    ;(handle.query as unknown as { stopTask?: (taskId: string) => Promise<void> }).stopTask = async (taskId: string) => {
+      stopped.push(taskId)
+    }
+    // Ended task, and one the roster never knew.
+    await manager.stopBackgroundTask(id, 'b-done')
+    await manager.stopBackgroundTask(id, 'b-unknown')
+    expect(stopped).toEqual([])
+    // Archive ends the process: even a row the roster still holds as live
+    // (none here after settle) could not be stopped.
+    await manager.archive(id)
+    await manager.stopBackgroundTask(id, 'b-done')
+    expect(stopped).toEqual([])
+    expect(events.some(({ event }) => event.type === 'error')).toBe(false)
+  })
+})
+
+describe('ChatSessionManager provider usage pull', () => {
+  let tempDir: string
+  let db: SessionDatabase
+  const original = {
+    apiKey: process.env.ANTHROPIC_API_KEY,
+    configDir: process.env.CLAUDE_CONFIG_DIR,
+    home: process.env.HOME,
+    baseUrl: process.env.ANTHROPIC_BASE_URL,
+    authToken: process.env.ANTHROPIC_AUTH_TOKEN,
+  }
+
+  beforeEach(() => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentboard-chatmgr-zai-'))
+    db = initDatabase({ path: path.join(tempDir, 'test.db') })
+    process.env.ANTHROPIC_API_KEY = 'sk-test-key'
+    process.env.CLAUDE_CONFIG_DIR = path.join(tempDir, 'claude-config')
+    process.env.HOME = tempDir
+    // The provider routing comes from getProviderEnv per test, never from
+    // the machine's real environment.
+    delete process.env.ANTHROPIC_BASE_URL
+    delete process.env.ANTHROPIC_AUTH_TOKEN
+  })
+
+  afterEach(() => {
+    if (original.apiKey === undefined) delete process.env.ANTHROPIC_API_KEY
+    else process.env.ANTHROPIC_API_KEY = original.apiKey
+    if (original.configDir === undefined) delete process.env.CLAUDE_CONFIG_DIR
+    else process.env.CLAUDE_CONFIG_DIR = original.configDir
+    if (original.home === undefined) delete process.env.HOME
+    else process.env.HOME = original.home
+    if (original.baseUrl === undefined) delete process.env.ANTHROPIC_BASE_URL
+    else process.env.ANTHROPIC_BASE_URL = original.baseUrl
+    if (original.authToken === undefined) delete process.env.ANTHROPIC_AUTH_TOKEN
+    else process.env.ANTHROPIC_AUTH_TOKEN = original.authToken
+    closeDispatchers()
+    db.close()
+    fs.rmSync(tempDir, { recursive: true, force: true })
+  })
+
+  function jsonResponse(body: unknown, status = 200): Response {
+    return new Response(JSON.stringify(body), {
+      status,
+      headers: { 'Content-Type': 'application/json' },
+    })
+  }
+
+  /** The 2026-10-12 quota capture, first at 2% and then at 50% after a refresh. */
+  const CAPTURE = (percentage: number) => ({
+    code: 200,
+    msg: 'Operation successful',
+    data: {
+      limits: [{ type: 'TIME_LIMIT', percentage, nextResetTime: 1793701399997 }],
+      level: 'pro',
+    },
+    success: true,
+  })
+
+  const SDK_PULL = {
+    subscription_type: 'max',
+    rate_limits_available: true,
+    rate_limits: {
+      five_hour: { utilization: 22.37, resets_at: '2026-10-07T18:11:04.000Z' },
+    },
+  }
+
+  interface ProviderHarness {
+    manager: ChatSessionManager
+    handles: FakeHandle[]
+    usage: Array<{ profileId: string; report: ChatUsageReport | null }>
+    fetchCalls: Array<{ url: string; auth?: string }>
+  }
+
+  async function createProviderHarness(
+    providerEnv: Record<string, string>,
+    responses: Array<Response>
+  ): Promise<ProviderHarness> {
+    const fetchCalls: Array<{ url: string; auth?: string }> = []
+    const canned = [...responses]
+    const providerUsageFetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const headers = (init?.headers ?? {}) as Record<string, string>
+      fetchCalls.push({ url: String(input), auth: headers.Authorization })
+      const next = canned.shift() ?? canned[canned.length - 1]
+      if (!next) throw new Error('no canned response left')
+      return next
+    }) as unknown as typeof fetch
+    const handles: FakeHandle[] = []
+    const usage: Array<{ profileId: string; report: ChatUsageReport | null }> = []
+    const manager = await managedManager({
+      isDirectory: anyDirectory,
+      registry: new SessionRegistry(),
+      db,
+      onEvent: () => {},
+      onUsage: (profileId, report) => usage.push({ profileId, report }),
+      queryFactory: fakeQueryFactory(handles, () => Promise.resolve(SDK_PULL)),
+      ...(Object.keys(providerEnv).length > 0 ? { getProviderEnv: () => providerEnv } : {}),
+      providerUsageFetch,
+      providerUsageRefreshMs: 50,
+    })
+    return { manager, handles, usage, fetchCalls }
+  }
+
+  test('a profile with no base URL is never probed; the SDK pull answers', async () => {
+    const { manager, handles, usage, fetchCalls } = await createProviderHarness({}, [])
+    const created = manager.createSession({ projectPath: '/tmp/proj' })
+    if (!created.ok) throw new Error('create failed')
+    await manager.send(created.session.id, 'hello')
+    await flush()
+
+    expect(fetchCalls).toEqual([])
+    // The fake query's usage control answered; no provider request was made.
+    expect(handles[0]!.usageCalls).toHaveLength(1)
+    expect(usage.some((entry) => entry.report?.source === 'pull')).toBe(true)
+  })
+
+  test('a quota-shaped base URL records a provider report and suppresses the SDK pull', async () => {
+    const { manager, handles, usage, fetchCalls } = await createProviderHarness(
+      { ANTHROPIC_BASE_URL: 'https://zai.test', ANTHROPIC_AUTH_TOKEN: 'sk-glm-token' },
+      [jsonResponse(CAPTURE(2))]
+    )
+    const created = manager.createSession({ projectPath: '/tmp/proj' })
+    if (!created.ok) throw new Error('create failed')
+    await manager.send(created.session.id, 'hello')
+    await flush()
+
+    expect(fetchCalls).toEqual([
+      { url: 'https://zai.test/api/monitor/usage/quota/limit', auth: 'sk-glm-token' },
+    ])
+    // Exactly one broadcast — the provider report; the host-login SDK pull
+    // never ran.
+    expect(usage).toHaveLength(1)
+    expect(usage[0]!.report?.source).toBe('provider')
+    expect(usage[0]!.report?.windows[0]).toMatchObject({ key: 'zai:time_limit', percentUsed: 2 })
+    expect(handles[0]!.usageCalls).toEqual([])
+    expect(manager.getSnapshot(created.session.id)!.usage?.source).toBe('provider')
+  })
+
+  test('a provider refusal records the no-data verdict and skips the SDK pull', async () => {
+    const { manager, handles, usage } = await createProviderHarness(
+      { ANTHROPIC_BASE_URL: 'https://zai.test', ANTHROPIC_AUTH_TOKEN: 'sk-glm-token' },
+      [jsonResponse({ code: 1001, msg: 'Authentication parameter not received', success: false })]
+    )
+    const created = manager.createSession({ projectPath: '/tmp/proj' })
+    if (!created.ok) throw new Error('create failed')
+    await manager.send(created.session.id, 'hello')
+    await flush()
+
+    expect(usage).toEqual([{ profileId: 'default', report: null }])
+    expect(handles[0]!.usageCalls).toEqual([])
+    expect(manager.getSnapshot(created.session.id)!.usage).toBeNull()
+  })
+
+  test('a base URL without the endpoint falls back to the host-login SDK pull', async () => {
+    const { manager, handles, usage, fetchCalls } = await createProviderHarness(
+      { ANTHROPIC_BASE_URL: 'https://other-gateway.test' },
+      [new Response('nope', { status: 404 })]
+    )
+    const created = manager.createSession({ projectPath: '/tmp/proj' })
+    if (!created.ok) throw new Error('create failed')
+    await manager.send(created.session.id, 'hello')
+    await flush()
+
+    expect(fetchCalls).toHaveLength(1) // probed exactly once
+    expect(handles[0]!.usageCalls).toHaveLength(1) // then the SDK pull ran
+    expect(usage.some((entry) => entry.report?.source === 'pull')).toBe(true)
+  })
+
+  test('a routed profile refreshes on the cadence without a turn', async () => {
+    const { manager, usage } = await createProviderHarness(
+      { ANTHROPIC_BASE_URL: 'https://zai.test', ANTHROPIC_AUTH_TOKEN: 'sk-glm-token' },
+      [jsonResponse(CAPTURE(2)), jsonResponse(CAPTURE(50))]
+    )
+    const created = manager.createSession({ projectPath: '/tmp/proj' })
+    if (!created.ok) throw new Error('create failed')
+    await manager.send(created.session.id, 'hello')
+    await flush()
+    expect(usage[0]!.report?.windows[0]).toMatchObject({ percentUsed: 2 })
+
+    // No turn runs; the timer re-pulls and the new percentage replaces the old.
+    await waitForCondition(() => usage.length >= 2)
+    expect(usage[1]!.report?.windows[0]).toMatchObject({ percentUsed: 50 })
+    expect(manager.getSnapshot(created.session.id)!.usage?.windows[0]).toMatchObject({
+      percentUsed: 50,
+    })
+  })
+
+  test('archiving the last live session stops the pulls', async () => {
+    const { manager, usage, fetchCalls } = await createProviderHarness(
+      { ANTHROPIC_BASE_URL: 'https://zai.test', ANTHROPIC_AUTH_TOKEN: 'sk-glm-token' },
+      [jsonResponse(CAPTURE(2))]
+    )
+    const created = manager.createSession({ projectPath: '/tmp/proj' })
+    if (!created.ok) throw new Error('create failed')
+    await manager.send(created.session.id, 'hello')
+    await flush()
+    expect(fetchCalls).toHaveLength(1)
+
+    await manager.archive(created.session.id)
+    // Several cadences pass: the tick clears the timer without a request,
+    // and the held report stays visible.
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    expect(fetchCalls).toHaveLength(1)
+    expect(usage).toHaveLength(1)
+    expect(manager.getSnapshot(created.session.id)!.usage?.source).toBe('provider')
+  })
+
+  /** A fetch the test resolves manually, to hold a pull in flight. */
+  function deferredFetch(): {
+    impl: typeof fetch
+    deferreds: Array<(response: Response) => void>
+  } {
+    const deferreds: Array<(response: Response) => void> = []
+    const impl = (async () =>
+      new Promise<Response>((resolve) => {
+        deferreds.push(resolve)
+      })) as unknown as typeof fetch
+    return { impl, deferreds }
+  }
+
+  async function createManualHarness(providerUsageFetch: typeof fetch) {
+    const handles: FakeHandle[] = []
+    const usage: Array<{ profileId: string; report: ChatUsageReport | null }> = []
+    const manager = await managedManager({
+      isDirectory: anyDirectory,
+      registry: new SessionRegistry(),
+      db,
+      onEvent: () => {},
+      onUsage: (profileId, report) => usage.push({ profileId, report }),
+      queryFactory: fakeQueryFactory(handles, () => Promise.resolve(SDK_PULL)),
+      getProviderEnv: () => ({
+        ANTHROPIC_BASE_URL: 'https://zai.test',
+        ANTHROPIC_AUTH_TOKEN: 'sk-glm-token',
+      }),
+      providerUsageFetch,
+      providerUsageRefreshMs: 25,
+    })
+    return { manager, usage }
+  }
+
+  test('an in-flight first pull publishes nothing after shutdown', async () => {
+    const { impl, deferreds } = deferredFetch()
+    const { manager, usage } = await createManualHarness(impl)
+    const created = manager.createSession({ projectPath: '/tmp/proj' })
+    if (!created.ok) throw new Error('create failed')
+    await manager.send(created.session.id, 'hello')
+    await flush()
+    expect(deferreds.length).toBe(1) // the spawn pull is in flight
+
+    manager.shutdown()
+    deferreds[0]!(jsonResponse(CAPTURE(2)))
+    await flush()
+    // The late answer publishes nothing and arms no refresh timer.
+    expect(usage).toEqual([])
+    await new Promise((resolve) => setTimeout(resolve, 75))
+    expect(deferreds.length).toBe(1)
+  })
+
+  test('an in-flight refresh publishes nothing after shutdown', async () => {
+    const { impl, deferreds } = deferredFetch()
+    const { manager, usage } = await createManualHarness(impl)
+    const created = manager.createSession({ projectPath: '/tmp/proj' })
+    if (!created.ok) throw new Error('create failed')
+    await manager.send(created.session.id, 'hello')
+    await flush()
+    deferreds[0]!(jsonResponse(CAPTURE(2)))
+    await flush()
+    expect(usage).toHaveLength(1)
+
+    // The next tick's refresh is in flight when the server shuts down.
+    await waitForCondition(() => deferreds.length >= 2)
+    manager.shutdown()
+    deferreds[1]!(jsonResponse(CAPTURE(99)))
+    await flush()
+    expect(usage).toHaveLength(1)
+    expect(manager.getSnapshot(created.session.id)!.usage?.windows[0]).toMatchObject({
+      percentUsed: 2,
+    })
   })
 })

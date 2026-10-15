@@ -9,6 +9,7 @@ import AgentIcon from './AgentIcon'
 import { shortRevision } from '@shared/workspace'
 import { autoStartAgentFromToken, resolveAgentToken } from '@shared/agentToken'
 import { getPathLeaf } from '../utils/sessionLabel'
+import { restoreTerminalFocus } from '../utils/terminalFocus'
 import type { AutoStartAgent, ChatApprovalPolicy, HostStatus } from '@shared/types'
 
 /** A discovered local worktree offered by the picker. */
@@ -161,25 +162,28 @@ export default function NewSessionModal({
     createDisabled: true,
   })
   /**
-   * Whether the dialog is currently in its open state. State initialization
-   * must run only on the closed→open transition (and cleanup only on
-   * open→closed): this effect's dependencies include values that change while
-   * the dialog is open (server-info arriving, presets, active path), and
-   * re-initializing on those would silently wipe whatever the user typed.
+   * Whether the dialog is currently in its open state. Field initialization
+   * runs during render on the open/close transition (the block below), not in
+   * an effect: a passive effect fires only after the dialog has painted and
+   * become interactive, so input landing between paint and the effect — the
+   * CI e2e race — was silently overwritten by the late defaults. Render-phase
+   * initialization commits the defaults with the dialog itself, leaving no
+   * window after open where a field write can race the user. It also runs
+   * exactly once per transition, so values that change while the dialog is
+   * open (server-info arriving, presets, active path) never re-initialize
+   * anything under the user's hands.
    */
-  const wasOpenRef = useRef(false)
+  const [wasOpen, setWasOpen] = useState(false)
 
   const showHostPicker = kind === 'terminal' && remoteAllowControl && remoteHosts.length > 0
 
-  useEffect(() => {
-    // No open/closed transition: leave the form's live state alone.
-    if (isOpen === wasOpenRef.current) return
-    wasOpenRef.current = isOpen
-
+  if (isOpen !== wasOpen) {
+    setWasOpen(isOpen)
     if (!isOpen) {
       // `kind` is deliberately left alone: the next open re-derives it from its
       // own entry point (see `defaultKind`), so a reset here would only record
-      // the open that just ended.
+      // the open that just ended. `claudeProfileId` and `groupId` likewise come
+      // from their useState seeds plus this close reset, never the open block.
       setClaudeProfileId('default')
       setGroupId('')
       setProjectPath('')
@@ -191,17 +195,71 @@ export default function NewSessionModal({
       setSelectedHost(initialHost ?? '')
       setStartWith('none')
       setStartWithTouched(false)
+    } else {
+      setKind(defaultKind(initialAutoStartChange))
+      setAutoApprove(defaultApprovalPolicy === 'auto')
+      const basePath =
+        initialPath?.trim() ||
+        activeProjectPath?.trim() ||
+        lastProjectPath ||
+        defaultProjectDir ||
+        ''
+      setProjectPath(basePath)
+      setProjectPathError(null)
+      setName('')
+      setSelectedHost(initialHost ?? '')
+      setStartWith('none')
+      setStartWithTouched(false)
+      const trimmedInitialCommand = initialCommand?.trim()
+      if (trimmedInitialCommand) {
+        const matchingPreset = commandPresets.find((p) => getFullCommand(p) === trimmedInitialCommand)
+        if (matchingPreset) {
+          setSelectedPresetId(matchingPreset.id)
+          setCommand(getFullCommand(matchingPreset))
+        } else {
+          setSelectedPresetId(null)
+          setCommand(trimmedInitialCommand)
+        }
+      } else {
+        // Select default preset and set full command
+        const defaultPreset = commandPresets.find(p => p.id === defaultPresetId)
+        if (defaultPreset) {
+          setSelectedPresetId(defaultPresetId)
+          setCommand(getFullCommand(defaultPreset))
+        } else if (commandPresets.length > 0) {
+          setSelectedPresetId(commandPresets[0].id)
+          setCommand(getFullCommand(commandPresets[0]))
+        } else {
+          setSelectedPresetId(null)
+          setCommand('')
+        }
+      }
+    }
+  }
+
+  /**
+   * The open state this effect last saw. Its branches must run only on a real
+   * closed↔open transition: App mounts the modal with `isOpen=false`, so a
+   * mount-while-closed close branch would schedule the terminal-focus timeout
+   * on every page load, and a close→reopen within 300 ms would let that stale
+   * timeout re-enable the terminal textarea under the open dialog.
+   */
+  const prevOpenRef = useRef(false)
+
+  useEffect(() => {
+    // Imperative open/close side effects only; every field default is applied
+    // during render on the transition (see the block above), never here.
+    const wasOpen = prevOpenRef.current
+    prevOpenRef.current = isOpen
+    if (!isOpen) {
+      // A mount while closed is no transition: nothing to restore.
+      if (!wasOpen) return
       provisionalFocusRef.current = null
       // Focus terminal after modal closes
-      setTimeout(() => {
-        if (typeof document === 'undefined' || typeof document.querySelector !== 'function') return
-        const textarea = document.querySelector('.xterm-helper-textarea') as HTMLTextAreaElement | null
-        if (textarea) {
-          textarea.removeAttribute('disabled')
-          textarea.focus()
-        }
-      }, 300)
-      return
+      const closeTimer = setTimeout(restoreTerminalFocus, 300)
+      // Reopening before the timeout fires cancels it, so it can never
+      // re-enable the terminal textarea under the open dialog.
+      return () => clearTimeout(closeTimer)
     }
     // Disable terminal textarea when modal opens to prevent keyboard capture
     if (typeof document !== 'undefined' && typeof document.querySelector === 'function') {
@@ -211,52 +269,13 @@ export default function NewSessionModal({
         textarea.setAttribute('disabled', 'true')
       }
     }
-    // Initialize state when opening
-    setKind(defaultKind(initialAutoStartChange))
-    setAutoApprove(defaultApprovalPolicy === 'auto')
     provisionalFocusRef.current = null
-    const basePath =
-      initialPath?.trim() ||
-      activeProjectPath?.trim() ||
-      lastProjectPath ||
-      defaultProjectDir ||
-      ''
-    setProjectPath(basePath)
-    setProjectPathError(null)
-    setName('')
-    setSelectedHost(initialHost ?? '')
-    setStartWith('none')
-    setStartWithTouched(false)
-    const trimmedInitialCommand = initialCommand?.trim()
-    if (trimmedInitialCommand) {
-      const matchingPreset = commandPresets.find((p) => getFullCommand(p) === trimmedInitialCommand)
-      if (matchingPreset) {
-        setSelectedPresetId(matchingPreset.id)
-        setCommand(getFullCommand(matchingPreset))
-      } else {
-        setSelectedPresetId(null)
-        setCommand(trimmedInitialCommand)
-      }
-    } else {
-      // Select default preset and set full command
-      const defaultPreset = commandPresets.find(p => p.id === defaultPresetId)
-      if (defaultPreset) {
-        setSelectedPresetId(defaultPresetId)
-        setCommand(getFullCommand(defaultPreset))
-      } else if (commandPresets.length > 0) {
-        setSelectedPresetId(commandPresets[0].id)
-        setCommand(getFullCommand(commandPresets[0]))
-      } else {
-        setSelectedPresetId(null)
-        setCommand('')
-      }
-    }
     // Provisional focus after DOM update: the dialog's primary action (the
     // active command-preset chip for Terminal, Create for chat) when it can
     // take focus, otherwise the always-enabled session-kind select. Whichever
     // lands is recorded as provisional so the catalog catch-up can promote it.
     const focusBeforeAttempt = typeof document === 'undefined' ? null : document.activeElement
-    setTimeout(() => {
+    const focusTimer = setTimeout(() => {
       // This attempt is deferred, so it can arrive after the user has already
       // picked a control of their own — inside the form or out of it, such as
       // the directory browser that sits outside the form. Take focus only while
@@ -280,7 +299,8 @@ export default function NewSessionModal({
         input.scrollLeft = input.scrollWidth
       }
     }, 50)
-  }, [activeProjectPath, commandPresets, defaultPresetId, defaultProjectDir, defaultApprovalPolicy, isOpen, lastProjectPath, initialHost, initialPath, initialCommand, initialAutoStartChange])
+    return () => clearTimeout(focusTimer)
+  }, [isOpen])
 
   // Keep the deferred focus attempt's view of Create current; that attempt is
   // scheduled once per open and reads this after the catalog has moved on.
@@ -714,6 +734,7 @@ export default function NewSessionModal({
               Display Name
             </label>
             <input
+              aria-label="Display Name"
               value={name}
               onChange={(event) => setName(event.target.value)}
               placeholder="auto-generated"

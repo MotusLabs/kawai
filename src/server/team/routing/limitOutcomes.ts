@@ -40,6 +40,8 @@ CREATE TABLE IF NOT EXISTS team_handoff_notes (
 );
 `
 
+const SYSTEM = { kind: 'system' } as const
+
 export type HandoffTarget = { kind: 'group' | 'session'; id: string }
 
 export interface LimitOutcomesOptions {
@@ -77,9 +79,13 @@ export class LimitOutcomes {
   claimed(message: TeamMessage, sessionId: string): void {
     const cwd = this.options.getRecord(sessionId)?.projectPath
     if (!cwd || message.claimCommit) return
+    // A `.then` rejection handler does not see a throw from its own
+    // fulfillment handler, so the write that follows the git call has to hang
+    // off `.catch` — otherwise a store torn down before the call resolves
+    // surfaces as an unhandled rejection.
     void runGitAsync(['rev-parse', 'HEAD'], { cwd }).then(result => {
       if (result.ok && result.stdout.trim()) this.options.store.setClaimCommit(message.id, result.stdout.trim())
-    }, this.options.onError)
+    }).catch(this.options.onError)
   }
 
   /** Mail was pushed as the session's next turn. */
@@ -167,14 +173,16 @@ export class LimitOutcomes {
 
   private unpark(message: TeamMessage) {
     this.digests.delete(message.id)
-    if (message.resumeMessageId) this.options.store.cancel(message.resumeMessageId)
+    this.options.store.replaceResume(message.id)
     this.options.store.unpark(message.id)
   }
 
   private async resolve(workId: string, sessionId: string, event: LimitEvent): Promise<void> {
     const store = this.options.store
     const message = store.get(workId)
-    if (!message || !['delivered', 'parked'].includes(message.state)) return
+    // Work cancelled mid-resume (team-mailbox-management D2) is simply dropped:
+    // no park, release, or forward, and no digest left behind.
+    if (!message || !['delivered', 'parked'].includes(message.state)) { this.digests.delete(workId); return }
     const record = this.options.getRecord(sessionId)
     const groupId = message.toKind === 'group' ? message.toId : record?.groupId ?? null
     const group = groupId ? this.options.groupOf(sessionId, groupId) : undefined
@@ -190,8 +198,8 @@ export class LimitOutcomes {
       kind: event.kind, status: event.status, error: event.message, resetsAt, parkCount: message.parkCount,
       progress: { toolCalls: digest.toolCalls, filesTouched: [...digest.files] },
     })
-    // A manual handoff can settle parked work while an async rule is running.
-    if (!['delivered', 'parked'].includes(store.get(workId)?.state ?? '')) return
+    // A manual handoff or cancel can settle parked work while an async rule is running.
+    if (!['delivered', 'parked'].includes(store.get(workId)?.state ?? '')) { this.digests.delete(workId); return }
     const resolution: LimitResolution = resolveLimit({
       toolCalls: digest.toolCalls, resetInMs: Date.parse(resetsAt) - now, parkCount: message.parkCount, policy,
       ...(ruled ? { ruled } : {}),
@@ -224,7 +232,7 @@ export class LimitOutcomes {
 
   /** Without a group, retry direct work on its original session after recovery. */
   private release(message: TeamMessage, groupId: string | null, resetsAt: string) {
-    if (message.resumeMessageId) this.options.store.cancel(message.resumeMessageId)
+    this.options.store.replaceResume(message.id)
     this.options.store.release(message.id, groupId, groupId ? null : resetsAt)
     this.digests.delete(message.id)
   }
@@ -248,7 +256,7 @@ export class LimitOutcomes {
 
   private park(message: TeamMessage, sessionId: string, record: ChatSessionRecord | undefined, resetsAt: string) {
     const store = this.options.store
-    if (message.resumeMessageId) store.cancel(message.resumeMessageId)
+    store.replaceResume(message.id)
     const resume = store.enqueue({
       teamId: message.teamId, toKind: 'session', toId: sessionId, fromSession: sessionId,
       fromGroup: record?.groupId ?? null, originPath: record?.projectPath ?? message.originPath,
@@ -256,7 +264,7 @@ export class LimitOutcomes {
       body: `Your provider limit has reset. Continue the work from message ${message.id}` +
         `${message.taskId ? ` (task ${message.taskId})` : ''} where you left off; check \`git status\` first.`,
     })
-    if (!store.park(message.id, resetsAt, resume.id)) store.cancel(resume.id)
+    if (!store.park(message.id, resetsAt, resume.id)) store.cancel(resume.id, SYSTEM)
   }
 
   /** Resolve a frontmatter `forwardTo`: a team group, else a team session, else the same group. */
@@ -293,7 +301,7 @@ export class LimitOutcomes {
       body: message.body, inReplyTo: message, attachThread: true, taskId: message.taskId,
       handoff, excludedProfile: profileId,
     })
-    if (message.resumeMessageId) store.cancel(message.resumeMessageId)
+    store.replaceResume(message.id)
     store.markForwarded(message.id, `forwarded: ${forwarded.id}`)
     this.digests.delete(message.id)
     this.db.prepare(`INSERT INTO team_handoff_notes (id, team_id, from_session, profile_id, original_id, forwarded_id, created_at)

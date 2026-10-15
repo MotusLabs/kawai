@@ -105,15 +105,15 @@ describe('MailboxStore', () => {
 
   test('cancel, dead-letter, uncertain hold, retry, and discard follow their states', () => {
     const queued = send()
-    expect(store.cancel(queued.id)).toBe(true)
-    expect(store.cancel(queued.id)).toBe(false)
+    expect(store.cancel(queued.id, { kind: 'human' })).toBe(true)
+    expect(store.cancel(queued.id, { kind: 'human' })).toBe(false)
 
     const dead = send()
     expect(store.deadLetter(dead.id, 'killed')).toBe(true)
     expect(store.retry(dead.id)).toBe(true)
     expect(store.get(dead.id)).toMatchObject({ state: 'queued', reason: null, hop: 1 })
     store.deadLetter(dead.id, 'again')
-    expect(store.discard(dead.id)).toBe(true)
+    expect(store.discard(dead.id, { kind: 'human' })).toBe(true)
     expect(store.get(dead.id)?.state).toBe('discarded')
 
     // Uncertain: retried only to the same recipient, flagged as a duplicate.
@@ -198,7 +198,7 @@ test('thread history includes confirmed delivery only, excluding queued, cancell
     const original = store.enqueue(base); store.claim(original.id, 'dev'); store.markPushed(original.id); store.markDelivered(original.id)
     for (const state of ['queued', 'cancelled', 'dead']) {
       const sibling = store.enqueue({ ...base, body: state, inReplyTo: original })
-      if (state === 'cancelled') store.cancel(sibling.id)
+      if (state === 'cancelled') store.cancel(sibling.id, { kind: 'human' })
       if (state === 'dead') store.deadLetter(sibling.id, 'hop-limit')
     }
     expect(store.thread(original.threadId).map(row => row.body)).toEqual(['Confirmed'])

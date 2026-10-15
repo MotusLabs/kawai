@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test'
+import { killChat, toggleDebug } from './support/chatHeader'
 
 test.skip(process.env.AGENTBOARD_CHAT_FIXTURE !== '1', 'Requires the development chat fixture')
 
@@ -28,14 +29,14 @@ test('chat modal toggles local chat fields and creates a chat session', async ({
   await dialog.getByLabel('Session kind').selectOption('chat')
   await expect(dialog.getByTestId('command-select')).toHaveCount(0)
   await dialog.getByLabel('Project Path').fill(process.cwd())
-  await dialog.locator('input').last().fill('Browser chat')
+  await dialog.getByLabel('Display Name').fill('Browser chat')
   await dialog.getByRole('button', { name: 'Create', exact: true }).click()
   await expect.poll(() => creations).toEqual([{ kind: 'chat', name: 'Browser chat' }])
   await expect(page.getByTestId('chat-view')).toContainText('Browser chat')
   await page.getByLabel('Message Claude').fill('hello')
   await page.getByRole('button', { name: 'Send', exact: true }).click()
   await expect(page.getByTestId('chat-transcript')).toContainText('Fixture response')
-  await page.getByRole('button', { name: 'Kill session', exact: true }).click()
+  await killChat(page)
   await expect(page.locator('[data-session-id^="chat-"]').filter({ hasText: 'Browser chat' })).toHaveCount(0)
 })
 
@@ -91,11 +92,9 @@ test('approval, questions, streaming reconnect, two-client resolution, and stop'
 
 test('debug view shows protocol frames live, pages older frames, and survives reload', async ({ page }, info) => {
   await openFixture(page)
-  const debug = page.getByRole('button', { name: 'Debug', exact: true })
   const panel = page.getByTestId('chat-debug-panel')
-  await expect(debug).toHaveAttribute('aria-pressed', 'false')
-  await debug.click()
-  await expect(debug).toHaveAttribute('aria-pressed', 'true')
+  await expect(panel).toHaveCount(0)
+  await toggleDebug(page)
   await expect(panel).toBeVisible()
 
   // A fresh approval turn streams its permission request and response live.
@@ -132,8 +131,9 @@ test('debug view shows protocol frames live, pages older frames, and survives re
   const rows = panel.locator('[data-frame-seq]')
   // Live frames all stay loaded while the panel is open; re-opening fetches
   // only the newest page, leaving older frames to load on demand.
-  await debug.click()
-  await debug.click()
+  await toggleDebug(page)
+  await expect(panel).toHaveCount(0)
+  await toggleDebug(page)
   await expect(panel.getByRole('button', { name: 'Load older' })).toBeVisible()
   await expect(rows).toHaveCount(200)
   const before = await rows.count()
@@ -146,12 +146,12 @@ test('debug view shows protocol frames live, pages older frames, and survives re
   expect(seqs[0]).toBeLessThan(oldestBefore)
 
   // Toggling off keeps the conversation; frames persist across a reload.
-  await debug.click()
+  await toggleDebug(page)
   await expect(panel).toHaveCount(0)
   await expect(page.getByTestId('chat-transcript')).toContainText('Request accepted.')
   await page.reload()
-  await expect(page.getByRole('button', { name: 'Debug', exact: true })).toHaveAttribute('aria-pressed', 'false')
-  await page.getByRole('button', { name: 'Debug', exact: true }).click()
+  await expect(panel).toHaveCount(0)
+  await toggleDebug(page)
   await expect(rows.last()).toHaveAttribute('data-frame-seq', String(seqs.at(-1)))
   await expect(rows).toHaveCount(200)
 })

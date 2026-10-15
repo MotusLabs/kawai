@@ -25,6 +25,7 @@
 // A disconnect while a message waits drops any subscription it would open.
 import type {
   ChatActivity,
+  ChatBackgroundTask,
   ChatCommandState,
   ChatContextUsage,
   ChatEvent,
@@ -38,6 +39,9 @@ import type { ChatSessionManager } from './ChatSessionManager'
 import type { ChatWireLogs } from './ChatWireLogs'
 import { MailboxConnections } from '../team/mailboxConnections'
 import { TaskConnections } from '../team/taskConnections'
+import { MessageConnections } from '../team/messageConnections'
+import { StrategyConnections } from '../strategy/strategyConnections'
+import { WorkspaceConnections } from '../team/workspaceConnections'
 import type { TeamMessage } from '../../shared/team'
 
 /** Frames per debug page reply. */
@@ -55,10 +59,14 @@ export class ChatConnections {
   private readonly activityBatches = new Map<ChatConnection, Map<string, ChatActivity | null>>()
   /** Latest context-usage reading per connection and session (design D5). */
   private readonly contextBatches = new Map<ChatConnection, Map<string, ChatContextUsage | null>>()
+  /** Latest reported model per connection and session (chat-session-model D3). */
+  private readonly modelBatches = new Map<ChatConnection, Map<string, string>>()
   /** Latest usage report per connection and profile, sent by the next flush. */
   private readonly usageBatches = new Map<ChatConnection, Map<string, ChatUsageReport | null>>()
   /** Latest worker roster per connection and session (workers design D2). */
   private readonly workerBatches = new Map<ChatConnection, Map<string, ChatWorker[]>>()
+  /** Latest background-task roster per connection and session (background tasks D2). */
+  private readonly backgroundTaskBatches = new Map<ChatConnection, Map<string, ChatBackgroundTask[]>>()
   /** Latest notice list per connection and session (notification strip D5). */
   private readonly notificationBatches = new Map<ChatConnection, Map<string, ChatNotification[]>>()
   private readonly debugSubscriptions = new Map<ChatConnection, Map<string, () => void>>()
@@ -71,6 +79,9 @@ export class ChatConnections {
 
   private readonly mailboxConnections: MailboxConnections
   private readonly taskConnections: TaskConnections
+  private readonly messageConnections: MessageConnections
+  private readonly strategyConnections: StrategyConnections
+  private readonly workspaceConnections: WorkspaceConnections
 
   constructor(
     private readonly manager: ChatSessionManager,
@@ -79,11 +90,56 @@ export class ChatConnections {
   ) {
     this.mailboxConnections = new MailboxConnections(manager)
     this.taskConnections = new TaskConnections(manager)
+    this.messageConnections = new MessageConnections(manager)
+    this.strategyConnections = new StrategyConnections(manager)
+    this.workspaceConnections = new WorkspaceConnections(manager)
   }
 
-  /** A committed task change: re-send that team's task snapshots. */
+  /**
+   * A committed task change: re-send that team's task snapshots. The
+   * workspace read model derives its rows from tasks and mail, so it rides
+   * the same triggers (its own diff keeps an unchanged team quiet).
+   */
   publishTasks(teamId: string): void {
     this.taskConnections.publish(teamId)
+    this.workspaceConnections.publish(teamId)
+  }
+
+  /** A live workspace fact changed outside the task and mailbox paths. */
+  publishWorkspace(teamId: string): void {
+    this.workspaceConnections.publish(teamId)
+  }
+
+  /** Publish the workspace of whichever team the session belongs to. */
+  publishWorkspaceOf(sessionId: string): void {
+    const teamId = this.manager.teams.teamOf(sessionId)?.teamId
+    if (teamId) this.publishWorkspace(teamId)
+  }
+
+  /**
+   * A chat event that changes workspace facts (team-workspace), the one place
+   * the mapping lives so bootstrap's onEvent stays a forward: request and turn
+   * events refresh the team's open views — approvals and questions are the
+   * queue's human-required items, `request_resolved` removes one, and turn
+   * boundaries move the membership's working/waiting status. Turn-end rows
+   * themselves are written by the manager's event path (chat_turn_ends, D8).
+   */
+  observeChatEvent(sessionId: string, event: ChatEvent): void {
+    if (
+      event.type === 'approval_request' || event.type === 'question_request' ||
+      event.type === 'request_resolved' || event.type === 'turn_completed' ||
+      event.type === 'turn_started'
+    ) this.publishWorkspaceOf(sessionId)
+  }
+
+  /** Resolves once every scheduled workspace publish has run (test seam). */
+  flushWorkspace(): Promise<void> {
+    return this.workspaceConnections.settled()
+  }
+
+  /** A committed strategy change: re-send that team's strategy snapshots. */
+  publishStrategies(teamId: string): void {
+    this.strategyConnections.publish(teamId)
   }
 
   disconnect(connection: ChatConnection): void {
@@ -91,10 +147,14 @@ export class ChatConnections {
     this.pendingAttach.delete(connection)
     this.mailboxConnections.disconnect(connection)
     this.taskConnections.disconnect(connection)
+    this.messageConnections.disconnect(connection)
+    this.strategyConnections.disconnect(connection)
+    this.workspaceConnections.disconnect(connection)
     this.subscriptions.delete(connection)
     this.batches.delete(connection)
     this.activityBatches.delete(connection)
     this.contextBatches.delete(connection)
+    this.modelBatches.delete(connection)
     this.usageBatches.delete(connection)
     this.workerBatches.delete(connection)
     this.notificationBatches.delete(connection)
@@ -117,13 +177,27 @@ export class ChatConnections {
     this.mailboxConnections.publish(teamId)
     // Task detail lists its mail; a task message changing state changes it.
     if (message?.taskId) this.taskConnections.publish(teamId)
+    // The workspace reads mail state and waiting reasons; see publishTasks.
+    this.workspaceConnections.publish(teamId)
     if (message?.state === 'dead' && message.reason === 'hop-limit') {
-      const notice: ServerMessage = { type: 'team-mailbox-dead-letter', teamId, messageId: message.id, senderSession: message.fromSession }
-      if (this.broadcastMailboxNotice) { this.broadcastMailboxNotice(notice); return }
-      for (const [connection, sessions] of this.subscriptions) {
-        if ([...sessions].some(id => this.manager.teams.teamOf(id)?.teamId === teamId)) {
-          connection.send(notice)
-        }
+      this.notice(teamId, { type: 'team-mailbox-dead-letter', teamId, messageId: message.id, senderSession: message.fromSession })
+    }
+    // A reply reached the human (team-message-threads D5): settled on send,
+    // no agent turn to show it in, so every connected client gets a toast.
+    if (message?.state === 'delivered' && message.toKind === 'human') {
+      this.notice(teamId, {
+        type: 'team-mailbox-delivered-to-human', teamId, messageId: message.id,
+        senderSession: message.fromSession, senderKind: message.fromKind,
+      })
+    }
+  }
+
+  /** A one-off toast for every connection attached to the team's sessions. */
+  private notice(teamId: string, notice: ServerMessage): void {
+    if (this.broadcastMailboxNotice) { this.broadcastMailboxNotice(notice); return }
+    for (const [connection, sessions] of this.subscriptions) {
+      if ([...sessions].some(id => this.manager.teams.teamOf(id)?.teamId === teamId)) {
+        connection.send(notice)
       }
     }
   }
@@ -184,6 +258,22 @@ export class ChatConnections {
   }
 
   /**
+   * Queue the session's latest reported model (chat-session-model design D3):
+   * like context usage, only the latest value per connection and session
+   * survives until the flush. The manager sends only changes, and the value
+   * never clears, so each entry is a plain string.
+   */
+  publishModel(sessionId: string, model: string): void {
+    for (const [connection, sessions] of this.subscriptions) {
+      if (!sessions.has(sessionId)) continue
+      const latest = this.modelBatches.get(connection) ?? new Map<string, string>()
+      latest.set(sessionId, model)
+      this.modelBatches.set(connection, latest)
+    }
+    this.scheduleFlush()
+  }
+
+  /**
    * Queue the session's current worker roster (workers design D2): the full
    * projection replaces any earlier one per connection and session, and is
    * sent by the flush after that session's pending event batch. A level
@@ -195,6 +285,21 @@ export class ChatConnections {
       const latest = this.workerBatches.get(connection) ?? new Map<string, ChatWorker[]>()
       latest.set(sessionId, workers)
       this.workerBatches.set(connection, latest)
+    }
+    this.scheduleFlush()
+  }
+
+  /**
+   * Queue the session's current background-task roster (background tasks
+   * D2): the same replace-semantics level signal as the worker roster — the
+   * full set on every change, never a delta.
+   */
+  publishBackgroundTasks(sessionId: string, tasks: ChatBackgroundTask[]): void {
+    for (const [connection, sessions] of this.subscriptions) {
+      if (!sessions.has(sessionId)) continue
+      const latest = this.backgroundTaskBatches.get(connection) ?? new Map<string, ChatBackgroundTask[]>()
+      latest.set(sessionId, tasks)
+      this.backgroundTaskBatches.set(connection, latest)
     }
     this.scheduleFlush()
   }
@@ -299,6 +404,15 @@ export class ChatConnections {
         }
       }
     }
+    const modelBatches = new Map(this.modelBatches)
+    this.modelBatches.clear()
+    for (const [connection, sessions] of modelBatches) {
+      for (const [sessionId, model] of sessions) {
+        if (this.subscriptions.get(connection)?.has(sessionId)) {
+          connection.send({ type: 'chat-model', sessionId, model })
+        }
+      }
+    }
     const usageBatches = new Map(this.usageBatches)
     this.usageBatches.clear()
     for (const [connection, profiles] of usageBatches) {
@@ -316,6 +430,15 @@ export class ChatConnections {
       for (const [sessionId, workers] of sessions) {
         if (this.subscriptions.get(connection)?.has(sessionId)) {
           connection.send({ type: 'chat-workers', sessionId, workers })
+        }
+      }
+    }
+    const backgroundTaskBatches = new Map(this.backgroundTaskBatches)
+    this.backgroundTaskBatches.clear()
+    for (const [connection, sessions] of backgroundTaskBatches) {
+      for (const [sessionId, tasks] of sessions) {
+        if (this.subscriptions.get(connection)?.has(sessionId)) {
+          connection.send({ type: 'chat-background-tasks', sessionId, tasks })
         }
       }
     }
@@ -354,6 +477,7 @@ export class ChatConnections {
     this.batches.get(connection)?.delete(sessionId)
     this.activityBatches.get(connection)?.delete(sessionId)
     this.contextBatches.get(connection)?.delete(sessionId)
+    this.modelBatches.get(connection)?.delete(sessionId)
     this.workerBatches.get(connection)?.delete(sessionId)
     this.notificationBatches.get(connection)?.delete(sessionId)
   }
@@ -404,6 +528,11 @@ export class ChatConnections {
     if (this.epochs.get(connection) !== epoch && opensSubscription(message.type)) return
     if (message.type.startsWith('team-mailbox-')) return this.mailboxConnections.handle(connection, message)
     if (message.type.startsWith('team-task')) return this.taskConnections.handle(connection, message as Extract<ClientMessage, { type: `team-task${string}` }>)
+    if (message.type.startsWith('team-message') || message.type.startsWith('team-thread')) {
+      return this.messageConnections.handle(connection, message as Extract<ClientMessage, { type: `team-message${string}` | `team-thread${string}` }>)
+    }
+    if (message.type.startsWith('strategy-')) return this.strategyConnections.handle(connection, message as Extract<ClientMessage, { type: `strategy-${string}` }>)
+    if (message.type.startsWith('team-workspace-')) return this.workspaceConnections.handle(connection, message as Extract<ClientMessage, { type: `team-workspace-${string}` }>)
     if (!message.type.startsWith('chat-') || !('sessionId' in message)) return
     const { sessionId } = message
     if (!this.manager.has(sessionId)) {
@@ -426,6 +555,7 @@ export class ChatConnections {
         this.batches.get(connection)?.delete(sessionId)
         this.activityBatches.get(connection)?.delete(sessionId)
         this.contextBatches.get(connection)?.delete(sessionId)
+        this.modelBatches.get(connection)?.delete(sessionId)
         this.workerBatches.get(connection)?.delete(sessionId)
         this.notificationBatches.get(connection)?.delete(sessionId)
         const sessions = this.subscriptions.get(connection) ?? new Set<string>()
@@ -514,6 +644,23 @@ export class ChatConnections {
         })
         return
       }
+      case 'chat-task-output': {
+        // A read-only tail fetch (background tasks D3), answered to the
+        // asking connection only; concurrent asks coalesce server-side.
+        connection.send({
+          type: 'chat-task-output',
+          sessionId,
+          taskId: message.taskId,
+          ...await this.manager.readTaskOutput(sessionId, message.taskId),
+        })
+        return
+      }
+      case 'chat-task-stop': {
+        // Fire-and-forget by design (D4): the settle arrives through the
+        // roster channel, and refusals are logged, never surfaced.
+        await this.manager.stopBackgroundTask(sessionId, message.taskId)
+        return
+      }
     }
   }
 }
@@ -521,5 +668,7 @@ export class ChatConnections {
 /** Message types whose only effect is a subscription for the asking connection. */
 function opensSubscription(type: ClientMessage['type']): boolean {
   return type === 'chat-attach' || type === 'chat-debug-open' ||
-    type === 'team-mailbox-open' || type === 'team-tasks-open' || type === 'team-task-open'
+    type === 'team-mailbox-open' || type === 'team-tasks-open' || type === 'team-task-open' ||
+    type === 'team-messages-open' || type === 'team-thread-open' ||
+    type === 'strategy-open' || type === 'team-workspace-open'
 }

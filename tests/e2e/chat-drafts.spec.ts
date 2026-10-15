@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test'
+import { killChat, archiveChat } from './support/chatHeader'
 
 test.skip(process.env.AGENTBOARD_CHAT_FIXTURE !== '1', 'Requires the development chat fixture')
 
@@ -12,7 +13,7 @@ const composer = (page: import('@playwright/test').Page) => page.getByLabel('Mes
  * view's fate depends on which session the fallback selection picks.
  */
 async function killOpenChat(page: import('@playwright/test').Page) {
-  await page.getByRole('button', { name: 'Kill session', exact: true }).click()
+  await killChat(page)
 }
 
 async function openChat(page: import('@playwright/test').Page, name: string) {
@@ -25,7 +26,7 @@ async function createChat(page: import('@playwright/test').Page, name: string) {
   const dialog = page.getByRole('dialog', { name: 'New Session' })
   await dialog.getByLabel('Session kind').selectOption('chat')
   await dialog.getByLabel('Project Path').fill(process.cwd())
-  await dialog.locator('input').last().fill(name)
+  await dialog.getByLabel('Display Name').fill(name)
   await dialog.getByRole('button', { name: 'Create', exact: true }).click()
   await expect(page.getByTestId('chat-view')).toContainText(name)
 }
@@ -63,7 +64,7 @@ test('a draft survives archive and restore but not a page reload', async ({ page
   await composer(page).fill('draft after restore')
 
   // Archiving closes the view; the session collects in the docked Archive pane.
-  await page.getByTestId('chat-archive-button').click()
+  await archiveChat(page)
   await expect(page.getByTestId('chat-view')).toHaveCount(0)
   await page.getByRole('button', { name: 'Expand Archive section' }).click()
   // Archived rows drag-disable themselves (dnd-kit marks the wrapper

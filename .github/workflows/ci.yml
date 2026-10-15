@@ -49,7 +49,44 @@ jobs:
       - name: Build
         run: bun run build
 
+  # Pull requests whose every changed path is documentation (the same rule the
+  # pre-commit hook uses, scripts/docs-only-changes.sh) skip e2e: the suite
+  # cannot be affected by them, and its slow serial run only adds noise.
+  # Pushes to master/main always run it.
+  changes:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      docs_only: ${{ steps.classify.outputs.docs_only }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Classify changed paths
+        id: classify
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        # Exit 2 (paths could not be listed) fails this job; e2e then still
+        # runs, because only an explicit docs_only=true skips it.
+        run: |
+          set +e
+          scripts/docs-only-changes.sh "$BASE_SHA...$HEAD_SHA"
+          status=$?
+          set -e
+          case $status in
+            0) echo "docs_only=true" >> "$GITHUB_OUTPUT"; echo "Docs-only PR; e2e will be skipped." ;;
+            1) echo "docs_only=false" >> "$GITHUB_OUTPUT" ;;
+            *) echo "::error::could not list the PR's changed paths"; exit 1 ;;
+          esac
+
   e2e:
+    needs: changes
+    # Runs on pushes (changes skipped) and on PRs unless changes said
+    # docs-only; a failed or cancelled classification still runs e2e.
+    if: ${{ !cancelled() && needs.changes.outputs.docs_only != 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -125,7 +162,7 @@ jobs:
       # port so the fixture's seeded session never appears in the main suite's
       # session lists. workers=1: the fixture scripts one conversation state.
       - name: Run chat fixture e2e tests
-        run: NODE_ENV=development AGENTBOARD_CHAT_FIXTURE=1 E2E_PORT=4174 bunx playwright test tests/e2e/chat.spec.ts tests/e2e/chat-profiles.spec.ts tests/e2e/chat-font-size.spec.ts tests/e2e/chat-drafts.spec.ts tests/e2e/chat-teams.spec.ts tests/e2e/settings-tabs.spec.ts --workers=1
+        run: NODE_ENV=development AGENTBOARD_CHAT_FIXTURE=1 E2E_PORT=4174 bunx playwright test tests/e2e/chat.spec.ts tests/e2e/chat-background-tasks.spec.ts tests/e2e/chat-profiles.spec.ts tests/e2e/chat-font-size.spec.ts tests/e2e/chat-drafts.spec.ts tests/e2e/chat-teams.spec.ts tests/e2e/chat-team-messages.spec.ts tests/e2e/chat-mailbox-management.spec.ts tests/e2e/chat-task-assignment.spec.ts tests/e2e/chat-task-revision.spec.ts tests/e2e/strategy.spec.ts tests/e2e/settings-tabs.spec.ts tests/e2e/chat-header.spec.ts --workers=1
 
       - name: Upload test results
         if: failure()

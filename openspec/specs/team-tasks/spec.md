@@ -33,7 +33,7 @@ A task SHALL optionally reference a parent task of the same team, a target workt
 - **THEN** creation is refused with an error naming the path
 
 ### Requirement: Only the creator or the human amends direction
-The task's direction and acceptance criteria SHALL be changeable only by the task's creator or the human. Each change SHALL create a new numbered revision; earlier revisions SHALL remain viewable. Other agents' attempts SHALL be refused with an error suggesting a journal note or a message to the creator.
+The task's direction and acceptance criteria SHALL be changeable only by the task's creator or the human. A change SHALL become a new numbered revision only when published; the human's saved drafts are not revisions. Earlier revisions SHALL remain viewable. Other agents' attempts SHALL be refused with an error suggesting a journal note or a message to the creator.
 
 #### Scenario: Creator amends
 - **WHEN** the creating team lead amends the direction
@@ -43,12 +43,20 @@ The task's direction and acceptance criteria SHALL be changeable only by the tas
 - **WHEN** a dev agent tries to amend a task it did not create
 - **THEN** the tool returns an error and the direction is unchanged
 
+#### Scenario: Human draft is not a revision
+- **WHEN** the human saves a draft of a new direction without publishing it
+- **THEN** the task still shows revision 1 as its direction
+
 ### Requirement: Tasks have an append-only journal
-Any team member and the human SHALL be able to append journal entries to a task. Entries SHALL record author, time, and text and SHALL NOT be editable or deletable.
+Any team member and the human SHALL be able to append journal entries to a task. The system itself SHALL also append entries for actions it takes on a task's behalf, authored as kawai. Entries SHALL record author, time, and text and SHALL NOT be editable or deletable.
 
 #### Scenario: Agent notes a decision
 - **WHEN** a dev appends a note explaining a design choice
 - **THEN** the note appears in the task's journal with the dev as author
+
+#### Scenario: System entry
+- **WHEN** kawai releases a task's spawned member
+- **THEN** the task's journal shows the entry with kawai as author, and it cannot be edited or deleted
 
 ### Requirement: Task status and closing
 Any team member SHALL be able to set a task to `active` or `blocked`. Only the creator SHALL be able to set it to `done` or `cancelled`. The human SHALL be able to set any status, including reopening a closed task.
@@ -88,11 +96,15 @@ When a message referencing a task is delivered, the recipient SHALL receive with
 - **THEN** the delivered context names `add-x` and says its proposal, design, and tasks are the authoritative direction
 
 ### Requirement: Tasks are inspectable in the UI
-The UI SHALL list a team's tasks with title, status, creator, and participants, and SHALL show a task's direction with revision history, journal, subtasks, and messages. The human SHALL be able to change status and amend direction from the task detail. A chat session working on a task SHALL show the task in its header.
+The UI SHALL list a team's tasks with title, status, creator, and participants, and SHALL show a task's direction with revision history and rationale, journal, subtasks, and messages. The human SHALL be able to change status, and to change direction from the task detail through **Save draft**, **Publish revision**, and **Publish and notify**. A chat session working on a task SHALL show the task in its header.
 
 #### Scenario: Task detail
 - **WHEN** the user opens a task
 - **THEN** its direction, revisions, journal, subtasks, and messages are shown
+
+#### Scenario: Three direction actions
+- **WHEN** the user edits a task's direction in the detail
+- **THEN** **Save draft**, **Publish revision**, and **Publish and notify** are offered as separate actions
 
 ### Requirement: Tasks persist
 Tasks, revisions, and journal entries SHALL persist across server restart and SHALL remain after their participating sessions are archived or killed.

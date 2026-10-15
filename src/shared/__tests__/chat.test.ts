@@ -216,6 +216,7 @@ describe('chat wire messages', () => {
         percentage: 94.55,
         at: '2026-10-10T12:00:00.000Z',
       },
+      model: 'claude-sonnet-5-5',
       profileId: 'default',
       usage: {
         status: 'warning',
@@ -239,6 +240,7 @@ describe('chat wire messages', () => {
           elapsedMs: 4_000,
         },
       ],
+      backgroundTasks: [],
       notifications: [
         {
           key: 'login-expiry',
@@ -269,9 +271,11 @@ describe('chat wire messages', () => {
       commands: { status: 'loading', commands: [] },
       activity: null,
       contextUsage: null,
+      model: null,
       profileId: 'default',
       usage: null,
       workers: [],
+      backgroundTasks: [],
       notifications: [],
     }
 

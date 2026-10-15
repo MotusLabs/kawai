@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import type { ChatContextUsage, ChatEvent, ChatNotification } from '@shared/chat'
+import type { ChatBackgroundTask, ChatContextUsage, ChatEvent, ChatNotification } from '@shared/chat'
 import type { ClientMessage } from '@shared/types'
 import { applyChatEvents, emptyTranscript, useChatStore } from '../stores/chatStore'
 
@@ -63,7 +63,7 @@ describe('chat store', () => {
   test('a snapshot replaces stale state and its pending requests are authoritative', () => {
     const store = useChatStore.getState()
     store.apply('chat-1', [delta(1, 'old')])
-    store.snapshot({ type: 'chat-snapshot', sessionId: 'chat-1', profileId: 'default', events: [delta(2, 'restored')], pendingRequests: [], status: 'working', throughSequence: 2, commands: { status: 'ready', commands: [] }, activity: null, contextUsage: null, usage: null, workers: [], notifications: [] })
+    store.snapshot({ type: 'chat-snapshot', sessionId: 'chat-1', profileId: 'default', events: [delta(2, 'restored')], pendingRequests: [], status: 'working', throughSequence: 2, commands: { status: 'ready', commands: [] }, activity: null, contextUsage: null, usage: null, workers: [], backgroundTasks: [], notifications: [], model: null })
     const state = useChatStore.getState().sessions['chat-1']
     expect(state.events).toHaveLength(1)
     expect(state.events[0]).toMatchObject({ text: 'restored' })
@@ -94,7 +94,7 @@ describe('chat store', () => {
     // Reconnect: the snapshot's state is authoritative again.
     store.snapshot({
       type: 'chat-snapshot', sessionId: 'chat-1', profileId: 'default', events: [], pendingRequests: [],
-      status: 'waiting', throughSequence: 0, commands: { status: 'ready', commands: [usage] }, activity: null, contextUsage: null, usage: null, workers: [], notifications: [],
+      status: 'waiting', throughSequence: 0, commands: { status: 'ready', commands: [usage] }, activity: null, contextUsage: null, usage: null, workers: [], backgroundTasks: [], notifications: [], model: null,
     })
     expect(useChatStore.getState().sessions['chat-1'].commands).toEqual({ status: 'ready', commands: [usage] })
 
@@ -139,7 +139,7 @@ describe('chat store drafts', () => {
     const store = useChatStore.getState()
     store.setDraft('chat-1', 'in progress')
     store.apply('chat-1', [delta(1, 'streamed')])
-    store.snapshot({ type: 'chat-snapshot', sessionId: 'chat-1', profileId: 'default', events: [delta(2, 'restored')], pendingRequests: [], status: 'working', throughSequence: 2, activity: null, contextUsage: null, commands: { status: 'unavailable', commands: [] }, usage: null, workers: [], notifications: [] })
+    store.snapshot({ type: 'chat-snapshot', sessionId: 'chat-1', profileId: 'default', events: [delta(2, 'restored')], pendingRequests: [], status: 'working', throughSequence: 2, activity: null, contextUsage: null, commands: { status: 'unavailable', commands: [] }, usage: null, workers: [], backgroundTasks: [], notifications: [], model: null })
     expect(useChatStore.getState().drafts['chat-1']).toBe('in progress')
   })
 
@@ -177,7 +177,7 @@ describe('chat store activity', () => {
       commands: { status: 'ready', commands: [] },
       activity: { phase: 'running_tools', elapsedMs: 10_000, tool: 'Bash', count: 1 },
       contextUsage: null,
-      usage: null, workers: [], notifications: [],
+      usage: null, workers: [], backgroundTasks: [], notifications: [], model: null,
     })
     const activity = useChatStore.getState().sessions['chat-1'].activity!
     expect(activity.value.phase).toBe('running_tools')
@@ -185,7 +185,7 @@ describe('chat store activity', () => {
     // An idle snapshot carries no row.
     store.snapshot({
       type: 'chat-snapshot', sessionId: 'chat-2', profileId: 'default', events: [], pendingRequests: [],
-      status: 'waiting', throughSequence: 0, commands: { status: 'unavailable', commands: [] }, activity: null, contextUsage: null, usage: null, workers: [], notifications: [],
+      status: 'waiting', throughSequence: 0, commands: { status: 'unavailable', commands: [] }, activity: null, contextUsage: null, usage: null, workers: [], backgroundTasks: [], notifications: [], model: null,
     })
     expect(useChatStore.getState().sessions['chat-2'].activity).toBeNull()
   })
@@ -224,7 +224,7 @@ describe('chat store usage', () => {
       type: 'chat-snapshot', sessionId: 'chat-1', profileId: 'default',
       events: [], pendingRequests: [], status: 'waiting', throughSequence: 0,
       commands: { status: 'unavailable', commands: [] },
-      activity: null, contextUsage: null, usage: report, workers: [], notifications: [],
+      activity: null, contextUsage: null, usage: report, workers: [], backgroundTasks: [], notifications: [], model: null,
     })
     expect(useChatStore.getState().usage['default']).toEqual(report)
 
@@ -243,7 +243,7 @@ describe('chat store usage', () => {
       type: 'chat-snapshot', sessionId: 'chat-1', profileId: 'default',
       events: [], pendingRequests: [], status: 'waiting', throughSequence: 0,
       commands: { status: 'unavailable', commands: [] },
-      activity: null, contextUsage: null, usage: null, workers: [], notifications: [], // restart: the server held nothing
+      activity: null, contextUsage: null, usage: null, workers: [], backgroundTasks: [], notifications: [], model: null, // restart: the server held nothing
     })
     expect(useChatStore.getState().usage['default']).toBeNull()
   })
@@ -254,7 +254,7 @@ describe('chat store usage', () => {
       type: 'chat-snapshot', sessionId: 'chat-1', profileId: 'default',
       events: [], pendingRequests: [], status: 'waiting', throughSequence: 0,
       commands: { status: 'unavailable', commands: [] },
-      activity: null, contextUsage: null, usage: report, workers: [], notifications: [],
+      activity: null, contextUsage: null, usage: report, workers: [], backgroundTasks: [], notifications: [], model: null,
     })
     store.remove('chat-1')
     expect(useChatStore.getState().sessions['chat-1']).toBeUndefined()
@@ -278,7 +278,7 @@ describe('chat store context usage', () => {
       type: 'chat-snapshot', sessionId: 'chat-1', profileId: 'default',
       events: [], pendingRequests: [], status: 'working', throughSequence: 0,
       commands: { status: 'unavailable', commands: [] },
-      activity: null, contextUsage: reading(60_000), usage: null, workers: [], notifications: [],
+      activity: null, contextUsage: reading(60_000), usage: null, workers: [], backgroundTasks: [], notifications: [], model: null,
     })
     expect(useChatStore.getState().sessions['chat-1'].contextUsage).toEqual(reading(60_000))
 
@@ -296,7 +296,7 @@ describe('chat store context usage', () => {
       type: 'chat-snapshot', sessionId: 'chat-1', profileId: 'default',
       events: [], pendingRequests: [], status: 'waiting', throughSequence: 0,
       commands: { status: 'unavailable', commands: [] },
-      activity: null, contextUsage: null, usage: null, workers: [], notifications: [],
+      activity: null, contextUsage: null, usage: null, workers: [], backgroundTasks: [], notifications: [], model: null,
     })
     expect(useChatStore.getState().sessions['chat-1'].contextUsage).toBeNull()
   })
@@ -314,6 +314,48 @@ describe('chat store context usage', () => {
     store.setContextUsage('chat-1', reading(50_000))
     store.setContextUsage('chat-1', null)
     expect(useChatStore.getState().sessions['chat-1'].contextUsage).toBeNull()
+  })
+})
+
+describe('chat store model', () => {
+  afterEach(() => useChatStore.setState({ sessions: {}, usage: {}, closedAccountNotices: {} }))
+
+  test('a snapshot seeds the model and a push replaces it', () => {
+    const store = useChatStore.getState()
+    // Before any report: an explicit null, not undefined.
+    expect(emptyTranscript().model).toBeNull()
+    store.snapshot({
+      type: 'chat-snapshot', sessionId: 'chat-1', profileId: 'default',
+      events: [], pendingRequests: [], status: 'waiting', throughSequence: 0,
+      commands: { status: 'unavailable', commands: [] },
+      activity: null, contextUsage: null, usage: null, workers: [], backgroundTasks: [], notifications: [],
+      model: 'claude-sonnet-5-5',
+    })
+    expect(useChatStore.getState().sessions['chat-1'].model).toBe('claude-sonnet-5-5')
+
+    // A /model switch push replaces the snapshot's value.
+    store.setModel('chat-1', 'sonnet')
+    expect(useChatStore.getState().sessions['chat-1'].model).toBe('sonnet')
+  })
+
+  test('a push ahead of any snapshot materializes a transcript that a reconnect keeps current', () => {
+    const store = useChatStore.getState()
+    store.setModel('chat-2', 'claude-opus-5-5')
+    expect(useChatStore.getState().sessions['chat-2'].model).toBe('claude-opus-5-5')
+
+    // Reconnect: the snapshot is authoritative and carries the latest value.
+    store.snapshot({
+      type: 'chat-snapshot', sessionId: 'chat-2', profileId: 'default',
+      events: [], pendingRequests: [], status: 'waiting', throughSequence: 0,
+      commands: { status: 'unavailable', commands: [] },
+      activity: null, contextUsage: null, usage: null, workers: [], backgroundTasks: [], notifications: [],
+      model: 'claude-opus-5-5',
+    })
+    expect(useChatStore.getState().sessions['chat-2'].model).toBe('claude-opus-5-5')
+
+    // Transcript events never touch the model.
+    store.apply('chat-2', [delta(1, 'streaming')])
+    expect(useChatStore.getState().sessions['chat-2'].model).toBe('claude-opus-5-5')
   })
 })
 
@@ -340,7 +382,7 @@ describe('chat store workers', () => {
       events: [], pendingRequests: [], status: 'working', throughSequence: 0,
       commands: { status: 'unavailable', commands: [] },
       activity: null, contextUsage: null, usage: null,
-      workers: [rosterWorker(true, 4_000)], notifications: [],
+      workers: [rosterWorker(true, 4_000)], backgroundTasks: [], notifications: [], model: null,
     })
     const after = Date.now()
     const anchored = useChatStore.getState().sessions['chat-1'].workers[0]!
@@ -428,7 +470,9 @@ describe('chat store notifications', () => {
       type: 'chat-snapshot', sessionId: 'chat-1', profileId: 'default', events: [], pendingRequests: [],
       status: 'waiting', throughSequence: 0, commands: { status: 'unavailable', commands: [] },
       activity: null, contextUsage: null, usage: null, workers: [],
+      backgroundTasks: [],
       notifications: [accountNotice(), agentNotice()],
+      model: null,
     })
     expect(useChatStore.getState().sessions['chat-1']!.notifications).toHaveLength(2)
     store.setNotifications('chat-1', [agentNotice()])
@@ -454,7 +498,9 @@ describe('chat store notifications', () => {
       type: 'chat-snapshot', sessionId: 'chat-1', profileId: 'default', events: [], pendingRequests: [],
       status: 'waiting', throughSequence: 0, commands: { status: 'unavailable', commands: [] },
       activity: null, contextUsage: null, usage: null, workers: [],
+      backgroundTasks: [],
       notifications: [accountNotice(), agentNotice()],
+      model: null,
     })
     store.closeNotification('chat-1', accountNotice(), send)
     // Nothing was sent to the server; the visible list hides it right away,
@@ -476,5 +522,47 @@ describe('chat store notifications', () => {
     expect(useChatStore.getState().closedAccountNotices['chat-1']?.size).toBe(1)
     store.remove('chat-1')
     expect(useChatStore.getState().closedAccountNotices['chat-1']).toBeUndefined()
+  })
+})
+
+describe('chat store background tasks', () => {
+  const task = (overrides: Partial<ChatBackgroundTask> = {}): ChatBackgroundTask => ({
+    taskId: 'b1',
+    toolCallId: 'call_1',
+    kind: 'shell' as const,
+    description: 'Wait for CI',
+    status: 'running' as const,
+    live: true,
+    startedAtMs: 1_000,
+    elapsedMs: 4_000,
+    ...overrides,
+  })
+
+  afterEach(() => useChatStore.setState({ sessions: {}, workerBodies: {}, closedAccountNotices: {} }))
+
+  test('snapshots and pushes replace the roster wholesale; sessions are independent', () => {
+    const store = useChatStore.getState()
+    store.snapshot({
+      type: 'chat-snapshot', sessionId: 'chat-1', profileId: 'default',
+      events: [], pendingRequests: [], status: 'waiting', throughSequence: 0,
+      commands: { status: 'unavailable', commands: [] },
+      activity: null, contextUsage: null, usage: null,
+      workers: [], backgroundTasks: [task()], notifications: [], model: null,
+    })
+    // Epoch timestamps ride along for client-side ticking (D2).
+    expect(useChatStore.getState().sessions['chat-1'].backgroundTasks[0]).toMatchObject({
+      taskId: 'b1', startedAtMs: 1_000, live: true,
+    })
+
+    // A push replaces, never merges (level semantics).
+    store.setBackgroundTasks('chat-1', [task({ status: 'completed', live: false, endedAtMs: 5_000 })])
+    const roster = useChatStore.getState().sessions['chat-1'].backgroundTasks
+    expect(roster).toHaveLength(1)
+    expect(roster[0]).toMatchObject({ status: 'completed', live: false })
+
+    // Another session's roster stays its own.
+    store.setBackgroundTasks('chat-2', [task({ taskId: 'b2', description: 'dev server' })])
+    expect(useChatStore.getState().sessions['chat-2'].backgroundTasks[0]).toMatchObject({ taskId: 'b2' })
+    expect(useChatStore.getState().sessions['chat-1'].backgroundTasks[0]).toMatchObject({ taskId: 'b1' })
   })
 })

@@ -292,6 +292,91 @@ describe('SettingsModal', () => {
     })
   })
 
+  test('a store update while open does not overwrite unsaved edits', async () => {
+    let renderer!: TestRenderer.ReactTestRenderer
+    const onClose = () => {}
+
+    await act(async () => {
+      renderer = TestRenderer.create(
+        <SettingsModal isOpen onClose={onClose} />
+      )
+    })
+
+    const dirInput = renderer.root.findAllByType('input')[0]
+    await act(async () => {
+      dirInput.props.onChange({ target: { value: '/my-edits' } })
+    })
+
+    // A persisted setting (or server default) arriving mid-edit must never
+    // re-initialize the draft while the modal is open.
+    await act(async () => {
+      useSettingsStore.setState({
+        defaultProjectDir: '/changed-underneath',
+        sessionSortMode: 'status',
+      })
+    })
+
+    const inputs = renderer.root.findAllByType('input')
+    expect(inputs[0].props.value).toBe('/my-edits')
+
+    // The untouched field still picks up the new store value on the next open.
+    await act(async () => { renderer.update(<SettingsModal isOpen={false} onClose={onClose} />) })
+    await act(async () => { renderer.update(<SettingsModal isOpen onClose={onClose} />) })
+    expect(renderer.root.findAllByType('input')[0].props.value).toBe('/changed-underneath')
+
+    await act(async () => { renderer.unmount() })
+  })
+
+  test('a setting changing just after close does not cancel the terminal focus restore', async () => {
+    // Minimal DOM stub (same shape as terminalDom in terminalFocusSteal.test.tsx).
+    const calls: string[] = []
+    const textarea = {
+      setAttribute: () => void calls.push('disable'),
+      removeAttribute: () => void calls.push('enable'),
+      focus: () => void calls.push('terminal-focus'),
+      blur: () => {},
+    }
+    const originalDocument = (globalThis as { document?: unknown }).document
+    const originalWindow = (globalThis as { window?: unknown }).window
+    ;(globalThis as { document?: unknown }).document = {
+      querySelector: (selector: string) =>
+        selector.includes('dialog') ? null : textarea,
+    } as unknown as Document
+    ;(globalThis as { window?: unknown }).window = {
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    } as unknown as Window & typeof globalThis
+
+    let renderer!: TestRenderer.ReactTestRenderer
+    const onClose = () => {}
+    try {
+      await act(async () => {
+        renderer = TestRenderer.create(<SettingsModal isOpen onClose={onClose} />)
+      })
+      await act(async () => {
+        renderer.update(<SettingsModal isOpen={false} onClose={onClose} />)
+      })
+
+      // A pushed preset or server default lands within the 300 ms close-side
+      // window. Its cleanup must not cancel the pending focus restore.
+      await act(async () => {
+        useSettingsStore.setState({ defaultProjectDir: '/after-close' })
+      })
+
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 340))
+      })
+
+      expect(calls.filter((call) => call === 'enable')).toEqual(['enable'])
+      expect(calls.filter((call) => call === 'terminal-focus')).toEqual(['terminal-focus'])
+
+      await act(async () => { renderer.unmount() })
+    } finally {
+      ;(globalThis as { document?: unknown }).document = originalDocument
+      ;(globalThis as { window?: unknown }).window = originalWindow
+    }
+  })
+
   test('chat font size stepper stops at 12 and 20 and saves without touching the terminal size', async () => {
     useSettingsStore.setState({ chatFontSize: 13, fontSize: 13 })
     let renderer!: TestRenderer.ReactTestRenderer

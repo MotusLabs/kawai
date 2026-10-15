@@ -34,6 +34,7 @@ import type {
   ChatQuestionAnswer,
   ChatUsageReport,
   ChatWorker,
+  ChatBackgroundTask,
 } from '../../shared/chat'
 import type {
   ChatNameSource,
@@ -56,6 +57,7 @@ import {
 import { effectiveChatEnv, type ChatProviderEnv } from './chatProviderEnv'
 import type { ChatWireLogs } from './ChatWireLogs'
 import type { ChatWorkerStore } from './chatWorkerStore'
+import type { ChatTaskStore } from './chatTaskStore'
 import {
   resolveClaudeProfile,
   profileLimitResetTimeZone,
@@ -69,12 +71,23 @@ import { probeSdkAvailability } from './sdkAvailability'
 import { AccountNoticeStore, credentialsPathFor } from './accountNotices'
 import { UsageLimitStore } from './usageLimits'
 import { withTextReset } from './limitSignals'
+import { fetchZaiUsage } from './zaiUsage'
 import { readWorkerTranscript } from './chatWorkerTranscript'
+import { isTaskOutputFile, readTaskOutputTail } from './taskOutputFile'
+import type { BackgroundTaskRecord } from './chatBackgroundTasks'
 import { loadTeamGroups } from '../team/teamGroups'
 import { SessionTeams } from '../team/sessionTeams'
+import { TeamScopes } from '../team/teamScope'
+import { SessionDirectory } from '../team/sessionDirectory'
+import { MessageFeed } from '../team/messageFeed'
+import { MessageQuery } from '../team/messageQuery'
+import { ChatTurnEndStore } from './chatTurnEndStore'
 import { TeamMailbox } from '../team/TeamMailbox'
 import { createMailboxServer } from '../team/mailboxTools'
-import type { TeamMessage } from '../../shared/team'
+import type { MailboxManagement } from '../team/mailboxManagement'
+import { StrategyService } from '../strategy/StrategyService'
+import { StrategyStore } from '../strategy/strategyStore'
+import type { TeamMessage, TeamWorktreeOccupancy, WaitingReason } from '../../shared/team'
 import { MailDispatcher } from '../team/dispatcher'
 import { receiptMessageId } from '../team/receipt'
 import type { LimitEventStore } from '../team/routing/limitEvents'
@@ -82,6 +95,8 @@ import type { HandoffTarget } from '../team/routing/limitOutcomes'
 import type { RuleLoadReport, TeamRoutingState } from '../../shared/routing'
 import { SessionMailbox } from '../team/sessionMailbox'
 import type { TaskService } from '../team/TaskService'
+import type { AssignmentService } from '../team/AssignmentService'
+import type { TaskResultService } from '../team/TaskResultService'
 import type { SpawnRequest, SpawnResult } from '../team/staffing'
 import { TeamCaps } from '../team/teamCaps'
 import {
@@ -101,10 +116,21 @@ export interface ChatSessionManagerOptions {
   registry: SessionRegistry
   db: SessionDatabase
   onMailboxChange?: (teamId: string, message?: TeamMessage) => void
+  /** A team's waiting reasons structurally changed: re-publish its mailbox (team-waiting-reasons). */
+  onWaitingReasonsChange?: (teamId: string) => void
   /** Routing rules (re)loaded: every mailbox view refreshes its rule status. */
   onRoutingRulesLoaded?: () => void
   /** Every committed team-task change (wired to the task view push in index.ts). */
   onTaskChange?: (teamId: string) => void
+  /** Every committed strategy change (wired to the strategy view push in bootstrap.ts). */
+  onStrategyChange?: (teamId: string) => void
+  /**
+   * A chat session's record changed in a way a team view shows — created,
+   * archived, restored, killed, or its status/name/group/task moved
+   * (team-workspace: live membership). Wired to the workspace push; cheap
+   * there because publishes coalesce per team.
+   */
+  onSessionRecordChange?: (sessionId: string) => void
   /** Conversation-event sink (wired to the WS broadcast in index.ts). */
   onEvent: (sessionId: string, event: ChatEvent) => void
   /** Command-state sink (wired to the chat-commands push in index.ts). */
@@ -124,6 +150,12 @@ export interface ChatSessionManagerOptions {
    */
   onContextUsage?: (sessionId: string, usage: ChatContextUsage | null) => void
   /**
+   * Model sink (chat-session-model design D5): called only when the driver
+   * reports a model different from the last one. Wired to the coalesced WS
+   * broadcast in index.ts; the value itself persists with the session row.
+   */
+  onModel?: (sessionId: string, model: string) => void
+  /**
    * Plan-usage sink (usage bar design D4): called with the latest report
    * (or null) whenever a profile's held data changes. Wired to the WS
    * broadcast in index.ts; usage is ephemeral and never persisted.
@@ -136,6 +168,13 @@ export interface ChatSessionManagerOptions {
    */
   onWorkers?: (sessionId: string, workers: ChatWorker[]) => void
   /**
+   * Background-task roster sink (background tasks design D2): the full
+   * projection whenever a live session's task roster changes. Wired to the
+   * WS broadcast like onWorkers; ephemeral in transit, persisted through the
+   * sidecar (design D6).
+   */
+  onBackgroundTasks?: (sessionId: string, tasks: ChatBackgroundTask[]) => void
+  /**
    * Notification sink (notification strip design D5): the session's full
    * merged list (account notice first, then agent notices, sorted by
    * priority and newest) whenever either source changes for it. Wired to the
@@ -144,6 +183,8 @@ export interface ChatSessionManagerOptions {
   onNotifications?: (sessionId: string, notifications: ChatNotification[]) => void
   /** Sidecar store for restart recovery of worker outcomes (design D6). */
   workerStore?: ChatWorkerStore
+  /** Sidecar store for restart recovery of background-task outcomes (D6). */
+  taskStore?: ChatTaskStore
   /** Injected in tests; production resolves the SDK via dynamic import. */
   queryFactory?: ChatQueryFactory
   /** Receives the provider env so it probes the endpoint sessions will use. */
@@ -175,6 +216,13 @@ export interface ChatSessionManagerOptions {
    */
   profileCatalogHome?: string
   /**
+   * Injected in tests; production uses global fetch for the provider usage
+   * pull (the session provider's own quota endpoint).
+   */
+  providerUsageFetch?: typeof fetch
+  /** Provider usage refresh cadence (provider pull design D5); tests shrink it. */
+  providerUsageRefreshMs?: number
+  /**
    * Base delay between transcript-locate retries (chat-session-naming D4).
    * The locator runs until the session goes away — the transcript appears
    * with the first message, which can be much later than the SDK id. Tests
@@ -190,6 +238,13 @@ export interface ChatSessionManagerOptions {
    * Wired to the workspace coordinator in index.ts.
    */
   requestWorkspaceRefresh?: (projectPath: string) => void
+  /**
+   * Canonical common git dirs of the discovered workspace repositories
+   * (team-workspace-pages D1): a human team view may address any of them,
+   * even with no chat in it. Wired to the workspace coordinator in
+   * bootstrap.ts; absent means only chat sessions' teams are addressable.
+   */
+  workspaceRepositories?: () => readonly string[]
   /**
    * Debounce window for those refreshes (default 500ms): a fast cd chain
    * collapses into one discovery pass for its final directory.
@@ -239,6 +294,11 @@ function compareNotices(a: ChatNotification, b: ChatNotification): number {
   return Date.parse(b.receivedAt) - Date.parse(a.receivedAt)
 }
 
+/** The chat-task-output reply payload (background tasks D3). */
+export type ChatTaskOutputResult =
+  | { state: 'ok'; output: string; totalBytes: number; truncated: boolean }
+  | { state: 'unavailable' }
+
 export class ChatSessionManager {
   private readonly options: ChatSessionManagerOptions
   private readonly records = new Map<string, ChatSessionRecord>()
@@ -272,6 +332,19 @@ export class ChatSessionManager {
    */
   private readonly workerRows = new Map<string, ChatWorker[]>()
   /**
+   * Latest background-task roster per session (background tasks D2): the
+   * last publish of a live driver, or the recovered sidecar rows of a
+   * restarted one (design D6), mirroring the worker rows.
+   */
+  private readonly backgroundTaskRows = new Map<string, ChatBackgroundTask[]>()
+  /**
+   * Latest server-side task records per session (background tasks D6): the
+   * rows plus the recorded output-file paths the wire shape never carries.
+   * Recovery seeds the driver from these so the next roster write keeps the
+   * paths; a live driver's records replace them wholesale on every publish.
+   */
+  private readonly backgroundTaskRecords = new Map<string, BackgroundTaskRecord[]>()
+  /**
    * Availability probes for resolved provider configurations. Keyed so a provider
    * change in Settings re-probes the new endpoint; a failed probe is dropped so
    * a corrected configuration (or repaired install) recovers without a restart.
@@ -283,6 +356,16 @@ export class ChatSessionManager {
    * memory only (usage bar design D3): a restart begins with none.
    */
   private readonly usageLimits = new UsageLimitStore()
+  /**
+   * Profiles confirmed to serve the provider quota endpoint (provider usage
+   * pull): their usage comes from there, and the host-login SDK pull is
+   * skipped for the store lifetime. In memory only — a restart re-probes.
+   */
+  private readonly providerUsageProfiles = new Set<string>()
+  /** Refresh timer per routed profile (provider usage pull design D5). */
+  private readonly providerUsageTimers = new Map<string, ReturnType<typeof setInterval>>()
+  /** Provider usage refresh cadence (provider usage pull design D5). */
+  private readonly providerUsageRefreshMs: number
   /**
    * Latest login-expiry notice per credentials path (notification strip
    * design D2), in memory only: a restart begins with none until a check
@@ -405,10 +488,16 @@ export class ChatSessionManager {
         this.contextReadings.get(sessionId) ??
         this.records.get(sessionId)?.contextUsage ??
         null,
+      // Stored with the row (design D4): applyPatch keeps the record current,
+      // so this is the last reported model, null before the first one.
+      model: this.records.get(sessionId)?.model ?? null,
       usage: this.usageLimits.get(this.profileIdOf(sessionId) ?? 'default'),
       // The spawned-worker roster (workers design D2); live entries hold the
       // session at working, settled ones carry their persisted outcomes.
       workers: this.getWorkers(sessionId),
+      // The background-task roster (background tasks D2): running tasks
+      // fresh from the driver, settled ones from the last publish.
+      backgroundTasks: this.getBackgroundTasks(sessionId),
       // The notification strip's merged list (design D5): account notice
       // first, then agent notices, sorted by priority and newest.
       notifications: this.notificationsOf(sessionId),
@@ -424,6 +513,45 @@ export class ChatSessionManager {
     const driver = this.drivers.get(sessionId)
     if (driver && !driver.isDead) return driver.getWorkers()
     return this.workerRows.get(sessionId) ?? []
+  }
+
+  /**
+   * The session's background-task roster: a live driver's fresh projection,
+   * else the last publish (or the recovered sidecar rows, design D6).
+   */
+  private getBackgroundTasks(sessionId: string): ChatBackgroundTask[] {
+    const driver = this.drivers.get(sessionId)
+    if (driver && !driver.isDead) return driver.getBackgroundTasks()
+    return this.backgroundTaskRows.get(sessionId) ?? []
+  }
+
+  /**
+   * Whether the session has a live background worker (member-release D3):
+   * `idle` alone is only `status === 'waiting'`, and a worker keeps running
+   * — and writing to the worktree — after the turn that started it ends.
+   */
+  hasLiveWorkers(sessionId: string): boolean {
+    return this.getWorkers(sessionId).some(worker => worker.live)
+  }
+
+  /**
+   * Whether the session has a running background task (member-release D3):
+   * a `run_in_background` shell or Monitor keeps writing to the worktree
+   * after its turn ends, and archiving would end it. Process end settles
+   * every running entry as stopped, so a dead agent never holds this.
+   */
+  hasRunningBackgroundTasks(sessionId: string): boolean {
+    return this.getBackgroundTasks(sessionId).some(task => task.status === 'running')
+  }
+
+  /**
+   * A session's worker or background-task roster changed. A pending
+   * release's readiness includes both (member-release D3): a change on a
+   * pending member re-runs the dispatch cycle (D2), since no status change
+   * follows a worker or task that ends while the session is already idle.
+   */
+  private rosterChanged(sessionId: string): void {
+    if (this.teamMail.releases.pendingFor(sessionId)) this.dispatcher.notify()
   }
 
   /** Current activity with a live-computed elapsed time, or null when idle. */
@@ -446,6 +574,83 @@ export class ChatSessionManager {
       this.records.get(sessionId)?.sdkSessionId ?? null,
       workerId
     )
+  }
+
+  // ------------------------------------------------------- background tasks
+
+  /** In-flight output reads, so concurrent requests coalesce (design D3). */
+  private readonly taskOutputReads = new Map<string, Promise<ChatTaskOutputResult>>()
+
+  /**
+   * A background task's output tail (background tasks D3): the live query's
+   * `get_task_output` while it answers, else the last 8 KiB of the recorded
+   * output file, else `unavailable` — never an error. Concurrent reads for
+   * the same task share one request.
+   */
+  readTaskOutput(sessionId: string, taskId: string): Promise<ChatTaskOutputResult> {
+    const key = `${sessionId}:${taskId}`
+    const inFlight = this.taskOutputReads.get(key)
+    if (inFlight) return inFlight
+    const read = this.readTaskOutputOnce(sessionId, taskId).finally(() => {
+      this.taskOutputReads.delete(key)
+    })
+    this.taskOutputReads.set(key, read)
+    return read
+  }
+
+  private async readTaskOutputOnce(sessionId: string, taskId: string): Promise<ChatTaskOutputResult> {
+    const driver = this.drivers.get(sessionId)
+    if (driver && !driver.isDead) {
+      const live = await driver.getTaskOutput(taskId)
+      if (live && typeof live.output === 'string') {
+        return {
+          state: 'ok',
+          output: live.output,
+          totalBytes: live.total_bytes,
+          truncated: live.truncated === true,
+        }
+      }
+    }
+    // The process is gone (or predates the control request): the sidecar's
+    // recorded output file answers instead, while it still exists.
+    const record = this.options.taskStore
+      ?.read(sessionId)
+      .find((entry) => entry.taskId === taskId)
+    const file = record?.outputFile
+    if (file !== undefined && isTaskOutputFile(file, taskId)) {
+      const tail = readTaskOutputTail(file)
+      if (tail) return { state: 'ok', ...tail }
+    }
+    return { state: 'unavailable' }
+  }
+
+  /**
+   * Stop one background task (background tasks D4): accepted only for a
+   * live, non-archived session and a task the roster knows as live. The
+   * settle arrives as a normal notification through the roster channel, so
+   * there is no reply; a refusal (already ended, unknown, archived) is
+   * logged and dropped, never a transcript error.
+   */
+  async stopBackgroundTask(sessionId: string, taskId: string): Promise<void> {
+    const record = this.records.get(sessionId)
+    if (!record || record.archivedAt) {
+      logger.warn('chat_task_stop_refused', { sessionId, taskId, reason: 'not_live' })
+      return
+    }
+    const live = this.getBackgroundTasks(sessionId).some(
+      (task) => task.taskId === taskId && task.live
+    )
+    if (!live) {
+      logger.warn('chat_task_stop_refused', { sessionId, taskId, reason: 'not_live_task' })
+      return
+    }
+    const driver = this.drivers.get(sessionId)
+    if (!driver || driver.isDead) {
+      logger.warn('chat_task_stop_refused', { sessionId, taskId, reason: 'no_driver' })
+      return
+    }
+    const stopped = await driver.stopTask(taskId)
+    if (!stopped) logger.warn('chat_task_stop_rejected', { sessionId, taskId })
   }
 
   // ---------------------------------------------------------------- notifications
@@ -662,6 +867,8 @@ export class ChatSessionManager {
 
   constructor(options: ChatSessionManagerOptions) {
     this.options = options
+    this.directory = new SessionDirectory(options.db.db)
+    this.providerUsageRefreshMs = options.providerUsageRefreshMs ?? 10 * 60 * 1000
     // Team membership (agent-teams D6) resolves asynchronously; once a
     // session's team is known its group label/missing state is published.
     this.teams = new SessionTeams({
@@ -669,11 +876,20 @@ export class ChatSessionManager {
       onResolved: (sessionId) => {
         this.dispatcher?.notify()
         const record = this.records.get(sessionId)
+        // The directory keys by team, so it can only record once the team is known.
+        if (record) this.syncDirectory(sessionId)
+        // A session's team landing (creation, or a cwd move) is membership a
+        // team view shows (team-workspace); the team is resolvable from here on.
+        this.options.onSessionRecordChange?.(sessionId)
         // Group-less sessions have nothing to show; skip the broadcast.
         if (record?.groupId != null) {
           this.options.registry.updateSession(sessionId, this.groupFields(record))
         }
       },
+    })
+    this.teamScopes = new TeamScopes({
+      teams: this.teams,
+      repositories: () => options.workspaceRepositories?.() ?? [],
     })
     // Profile usage changes drive the chat-usage broadcast (design D4).
     this.usageLimits.subscribe((profileId, report) =>
@@ -690,9 +906,14 @@ export class ChatSessionManager {
       teams: this.teams, records: () => this.records.values(), getRecord: id => this.records.get(id),
       getDriver: id => this.drivers.get(id), homeDir: options.profileCatalogHome,
       available: record => record.archivedAt == null && !this.startBlocker(record) && (options.isDirectory ?? isExistingDirectory)(record.projectPath),
+      // The same refusal text `available` rejects on, read-only (team-waiting-reasons D2).
+      startBlocker: record => this.startBlockerFor(record),
       prepare: async id => { this.captureHistory(id); const driver = await this.ensureDriver(id); if (!driver) throw new Error('Recipient disappeared'); driver.start() },
       restore: id => { const result = this.restore(id); if (!result.ok) throw new Error(result.error) },
       watchReceipt: id => this.watchSessionTitle(id),
+      archive: id => this.archive(id),
+      hasLiveWorkers: id => this.hasLiveWorkers(id),
+      hasRunningBackgroundTasks: id => this.hasRunningBackgroundTasks(id),
       spawn: request => this.spawnMember(request),
       caps: new TeamCaps({
         ...(options.profileCatalogHome ? { homeDir: options.profileCatalogHome } : {}),
@@ -708,18 +929,44 @@ export class ChatSessionManager {
       // (async-transcript-parsing design D4).
       transcriptFor: id => { const sdkId = this.records.get(id)?.sdkSessionId; return sdkId ? findTranscriptPath(sdkId) : null },
       onChange: options.onMailboxChange,
+      onReasonsChange: options.onWaitingReasonsChange,
       usageOf: profileId => this.usageLimits.get(profileId),
       onRulesLoaded: () => options.onRoutingRulesLoaded?.(),
       onError: error => logger.warn('team_mailbox_dispatch_failed', { error: String(error) }),
     })
     this.mailbox = this.teamMail.mailbox
     this.tasks = this.teamMail.tasks
+    this.management = this.teamMail.management
+    this.assignments = this.teamMail.assignments
+    this.results = this.teamMail.results
+    this.messages = new MessageFeed(this.mailbox.store, new MessageQuery(options.db.db))
+    // Written from the event path below, independent of any open view; the
+    // workspace summary reads its window from this table (team-workspace D8).
+    this.turnEnds = new ChatTurnEndStore(options.db.db)
+    // Product strategy (product-strategy): constructed here, beside the
+    // task service, against the same database. The strategy store's changes
+    // fan out to the strategy view pushes; the team comes from the record's
+    // team binding (design D5).
+    this.strategies = new StrategyService(new StrategyStore(options.db.db), {
+      getSession: id => this.records.get(id),
+      ...(options.profileCatalogHome ? { homeDir: options.profileCatalogHome } : {}),
+    })
+    this.strategies.store.subscribe(strategy => {
+      const teamId = strategy.repoBindings.find(binding => binding.kind === 'team')?.root
+      if (teamId) this.options.onStrategyChange?.(teamId)
+    })
     // A retitled task re-labels the headers of the sessions working on it.
     this.tasks.store.subscribe(task => {
       this.options.onTaskChange?.(task.teamId)
       for (const record of this.records.values()) {
         if (record.taskId === task.id) this.options.registry.updateSession(record.sessionId, this.taskFields(record))
       }
+    })
+    // A draft save refreshes the human's task view only (task-revision-publication
+    // D1): never a task change, so nothing above or in the mailbox reacts to it.
+    this.tasks.store.drafts.subscribe(taskId => {
+      const teamId = this.tasks.store.get(taskId)?.teamId
+      if (teamId) this.options.onTaskChange?.(teamId)
     })
     // Parking pauses the session that holds the work; any change to a parked
     // message (or to one that was) re-derives its holder's paused state.
@@ -772,6 +1019,25 @@ export class ChatSessionManager {
     return { rules: this.teamMail.rules.lastReport(), decisions: this.teamMail.router.decisions(teamId) }
   }
 
+  /** The team's live sessions per worktree plus pending spawns (mailbox view). */
+  teamRoster(teamId: string): TeamWorktreeOccupancy[] {
+    return this.teamMail.roster(teamId)
+  }
+
+  /** The team's per-message waiting reasons (mailbox view, team-waiting-reasons D3). */
+  waitingFor(teamId: string): Record<string, WaitingReason> {
+    return this.teamMail.waitingFor(teamId)
+  }
+
+  /**
+   * The start guard's refusal text, read-only (team-waiting-reasons D2): the
+   * unavailable-recipient reason carries it; `available` keeps calling the
+   * guard itself, unchanged.
+   */
+  startBlockerFor(record: ChatSessionRecord): string | null {
+    return this.startBlocker(record)
+  }
+
   /** The human hands parked work to a group or session of its team. */
   handOff(messageId: string, target: HandoffTarget): TeamMessage {
     return this.teamMail.handOff(messageId, target)
@@ -786,6 +1052,11 @@ export class ChatSessionManager {
       counts[profileId] = (counts[profileId] ?? 0) + 1
     }
     return counts
+  }
+
+  /** Every record (live and archived) resolved to this team; the workspace reads it. */
+  teamRecords(teamId: string): ChatSessionRecord[] {
+    return [...this.records.values()].filter(record => this.teams.teamOf(record.sessionId)?.teamId === teamId)
   }
 
   /** Paused state last pushed per session. */
@@ -810,9 +1081,25 @@ export class ChatSessionManager {
 
   /** Each session's team (agent-teams); shared with the mailbox dispatcher. */
   readonly teams: SessionTeams
+  /** The team a human team view's `teamPath` addresses (team-workspace-pages D1). */
+  readonly teamScopes: TeamScopes
+  /** Last known name/group of each team's sessions, kept past kill (team-message-threads D3). */
+  readonly directory: SessionDirectory
   readonly mailbox: TeamMailbox
   /** Team tasks (team-tasks); the task tools and UI actions go through it. */
   readonly tasks: TaskService
+  /** Agent mailbox management (team-mailbox-management): rights, cancel, discard, list. */
+  readonly management: MailboxManagement
+  /** Task assignment (task-assignment); human dispatch, preview, and targets. */
+  readonly assignments: AssignmentService
+  /** Task results, findings, acceptance, handoffs, and release (task-results-handoffs). */
+  readonly results: TaskResultService
+  /** The Messages read model and its live feed (team-message-threads D1/4.3). */
+  readonly messages: MessageFeed
+  /** Product strategy (product-strategy); the strategy tools and UI actions go through it. */
+  readonly strategies: StrategyService
+  /** Completed turns of task-bound sessions (team-workspace D8): the summary's durable source. */
+  readonly turnEnds: ChatTurnEndStore
   readonly dispatcher: MailDispatcher
   private readonly teamMail: SessionMailbox
 
@@ -883,9 +1170,15 @@ export class ChatSessionManager {
     }
     this.records.set(sessionId, record)
     this.options.db.insertChatSession(record)
+    // Spawned for a task that already closed (member-release D1): its mail
+    // was dead-lettered, so it starts with no turn. Marked in the same tick
+    // that persists it, so no restart can leave it unmarked; it is released
+    // once it settles.
+    if (record.spawned && record.taskId) this.teamMail.markSpawnedForClosedTask(sessionId, record.taskId)
     const session = this.toSession(record)
     this.options.registry.setChatSession(session)
-    void this.teams.track(sessionId, projectPath)
+    // The directory keys by team, so it records once resolution lands.
+    void this.teams.track(sessionId, projectPath).then(() => this.syncDirectory(sessionId))
     return { ok: true, session }
   }
 
@@ -1048,6 +1341,9 @@ export class ChatSessionManager {
       archivedAt: new Date().toISOString(),
       status: 'waiting',
     })
+    // Archived by any path: a pending release is settled by the archive
+    // itself (member-release D1); a later restore starts clean.
+    this.teamMail.cancelPendingRelease(sessionId)
     return { ok: true }
   }
 
@@ -1062,6 +1358,9 @@ export class ChatSessionManager {
     }
     if (record.archivedAt == null) return { ok: true }
     this.applyPatch(sessionId, { archivedAt: null })
+    // A restored member stays live: it is never released again for the same
+    // close (member-release D1).
+    this.teamMail.cancelPendingRelease(sessionId)
     return { ok: true }
   }
 
@@ -1169,6 +1468,8 @@ export class ChatSessionManager {
     this.driverPromises.delete(sessionId)
     this.releaseTitleWatch(sessionId)
     this.cancelCwdRefresh(sessionId)
+    // A killed session never releases; its pending row is moot (member-release D1).
+    this.teamMail.cancelPendingRelease(sessionId)
     this.records.delete(sessionId)
     this.mailbox.store.deadLetterDirectTo(sessionId, 'killed-recipient')
     this.dispatcher.notify()
@@ -1177,14 +1478,19 @@ export class ChatSessionManager {
     this.activities.delete(sessionId)
     this.contextReadings.delete(sessionId)
     this.workerRows.delete(sessionId)
+    this.backgroundTaskRows.delete(sessionId)
+    this.backgroundTaskRecords.delete(sessionId)
     this.clearAgentNotices(sessionId)
     this.sessionCredentials.delete(sessionId)
+    // While the team entry still exists, so the callback can resolve it.
+    this.options.onSessionRecordChange?.(sessionId)
     this.teams.forget(sessionId)
     this.options.registry.removeChatSession(sessionId)
     this.options.db.deleteChatSession(sessionId)
     void this.options.wireLogs?.delete(sessionId).catch(() => {})
     // The session is gone for good; its worker rows go with it (D6).
     void this.options.workerStore?.delete(sessionId).catch(() => {})
+    void this.options.taskStore?.delete(sessionId).catch(() => {})
     return true
   }
 
@@ -1193,6 +1499,9 @@ export class ChatSessionManager {
     // A restore still in flight stops at its next row (design D2).
     this.isShutDown = true
     this.teamMail.close()
+    // Provider usage refreshes die with the server: timers stop now, and the
+    // in-flight continuations check isShutDown before publishing.
+    this.stopProviderUsageRefresh()
     for (const driver of this.drivers.values()) {
       driver.shutdown()
     }
@@ -1360,6 +1669,31 @@ export class ChatSessionManager {
           .catch(() => {})
       }
     }
+    // Background-task recovery (background tasks D6), same contract: a row
+    // still running recovers as stopped, and the corrected roster is
+    // rewritten so the file and the rows agree.
+    if (this.options.taskStore) {
+      const taskRecords = this.options.taskStore.read(record.sessionId)
+      if (taskRecords.length > 0) {
+        const corrected = taskRecords.map((entry) =>
+          entry.status === 'running' ? { ...entry, status: 'stopped' as const } : entry
+        )
+        this.backgroundTaskRecords.set(record.sessionId, corrected)
+        this.backgroundTaskRows.set(record.sessionId, corrected.map((entry) => ({
+          taskId: entry.taskId,
+          ...(entry.toolCallId !== undefined ? { toolCallId: entry.toolCallId } : {}),
+          kind: entry.kind,
+          ...(entry.description !== undefined ? { description: entry.description } : {}),
+          status: entry.status,
+          live: false,
+          startedAtMs: entry.startedAtMs,
+          ...(entry.endedAtMs !== undefined ? { endedAtMs: entry.endedAtMs } : {}),
+          elapsedMs: entry.endedAtMs !== undefined ? Math.max(0, entry.endedAtMs - entry.startedAtMs) : 0,
+          ...(entry.summary !== undefined ? { summary: entry.summary } : {}),
+        })))
+        void this.options.taskStore.write(record.sessionId, corrected).catch(() => {})
+      }
+    }
     this.records.set(record.sessionId, record)
     this.options.registry.setChatSession(this.toSession(record))
     void this.teams.track(record.sessionId, record.projectPath)
@@ -1469,13 +1803,19 @@ export class ChatSessionManager {
       const queryFactory = await this.resolveQueryFactory()
       // The team must be known before the first spawn reads its prompt.
       await this.teams.track(record.sessionId, this.records.get(record.sessionId)?.projectPath ?? record.projectPath)
-      const teamMcpServer = await createMailboxServer(this.mailbox, record.sessionId, this.tasks)
+      const teamMcpServer = await createMailboxServer(this.mailbox, record.sessionId, {
+        tasks: this.tasks, results: this.results, strategies: this.strategies, releases: this.teamMail.releases, management: this.management,
+      })
       const driver = new ChatSessionDriver({
         sessionId: record.sessionId,
         projectPath: record.projectPath,
         queryFactory,
         teamMcpServer,
         getSystemPromptAppend: () => this.teams.promptFor(
+          record.sessionId,
+          this.records.get(record.sessionId)?.groupId
+        ),
+        getEffort: () => this.teams.effortFor(
           record.sessionId,
           this.records.get(record.sessionId)?.groupId
         ),
@@ -1501,6 +1841,9 @@ export class ChatSessionManager {
         ...(this.workerRows.has(record.sessionId)
           ? { recoveredWorkers: this.workerRows.get(record.sessionId) ?? [] }
           : {}),
+        ...(this.backgroundTaskRecords.has(record.sessionId)
+          ? { recoveredBackgroundTasks: this.backgroundTaskRecords.get(record.sessionId) ?? [] }
+          : {}),
         onEvent: (event) => this.handleDriverEvent(record.sessionId, event),
         onCommandState: (state) =>
           this.options.onCommandState?.(record.sessionId, state),
@@ -1514,8 +1857,11 @@ export class ChatSessionManager {
         onProcessEnd: () => this.clearAgentNotices(record.sessionId, { emit: true }),
         onWorkers: (workers) =>
           this.handleDriverWorkers(record.sessionId, workers),
+        onBackgroundTasks: (tasks) =>
+          this.handleDriverBackgroundTasks(record.sessionId, tasks),
         onContextUsage: (usage, opts) =>
           this.handleDriverContextUsage(record.sessionId, usage, opts),
+        onModel: (model) => this.handleDriverModel(record.sessionId, model),
         // Plan usage is recorded against the session's profile (design D3);
         // the store's change listener drives the onUsage broadcast.
         onRateLimit: (report) =>
@@ -1523,7 +1869,7 @@ export class ChatSessionManager {
         onUsageReport: (report) =>
           this.usageLimits.record(record.claudeProfileId ?? 'default', report),
         claimUsagePull: () =>
-          this.usageLimits.claimPull(record.claudeProfileId ?? 'default'),
+          this.claimProfileUsagePull(record),
         onUsageNoData: () =>
           this.usageLimits.recordNoData(record.claudeProfileId ?? 'default'),
         onStatus: (status) => this.applyPatch(record.sessionId, { status }),
@@ -1671,6 +2017,121 @@ export class ChatSessionManager {
     )
   }
 
+  // ----------------------------------------------------------- provider usage pull
+
+  /**
+   * The gap-fill pull slot (usage bar design D1, provider pull design D4):
+   * the profile's one pull per store lifetime. A profile whose base URL
+   * serves the provider quota endpoint is pulled here, marked routed, and
+   * the host-login SDK pull is skipped — its data would only mislead. A
+   * provider refusal records the no-data verdict; anything else falls
+   * through to the SDK pull exactly as before. An already-routed profile
+   * just restarts its refresh timer.
+   */
+  private async claimProfileUsagePull(record: ChatSessionRecord): Promise<boolean> {
+    const profileId = record.claudeProfileId ?? 'default'
+    if (this.providerUsageProfiles.has(profileId)) {
+      this.ensureProviderUsageRefresh(profileId)
+      return false
+    }
+    if (!this.usageLimits.claimPull(profileId)) return false
+    const target = this.providerUsageTarget(record)
+    // No provider base URL: the endpoint is never contacted, and the SDK
+    // pull answers as before.
+    if (!target) return true
+    const pull = await this.fetchProviderUsage(target)
+    // Shutdown settles every callback: nothing publishes past it.
+    if (this.isShutDown) return false
+    if (pull.ok) {
+      this.providerUsageProfiles.add(profileId)
+      this.usageLimits.record(profileId, pull.report)
+      this.ensureProviderUsageRefresh(profileId)
+      return false
+    }
+    if (pull.outcome === 'provider-refused') {
+      this.usageLimits.recordNoData(profileId)
+      return false
+    }
+    // Not provider-shaped or unreachable: the host-login SDK pull applies.
+    return true
+  }
+
+  /**
+   * The quota pull target for a session's profile — the effective base URL
+   * and credentials its SDK spawns receive (the same resolution the auth
+   * gate and account notices read), or null when the profile has no
+   * provider base URL.
+   */
+  private providerUsageTarget(
+    record: ChatSessionRecord
+  ): { baseUrl: string; token?: string } | null {
+    const env = this.launchEnvOf(record.claudeProfileId, record.projectPath)
+    const baseUrl = env.ANTHROPIC_BASE_URL?.trim()
+    if (!baseUrl) return null
+    const token =
+      env.ANTHROPIC_AUTH_TOKEN?.trim() || env.ANTHROPIC_API_KEY?.trim() || undefined
+    return { baseUrl, token }
+  }
+
+  private fetchProviderUsage(target: { baseUrl: string; token?: string }) {
+    return fetchZaiUsage(target.baseUrl, target.token, this.options.providerUsageFetch ?? fetch)
+  }
+
+  /**
+   * Provider usage has no pushes (provider pull design D5): a timer per
+   * routed profile re-pulls on a fixed cadence while at least one of its
+   * sessions has a started agent. A tick without a qualifying session makes
+   * no request and stops the timer; the next spawn of a routed profile
+   * restarts it.
+   */
+  private ensureProviderUsageRefresh(profileId: string): void {
+    if (this.providerUsageTimers.has(profileId)) return
+    const timer = setInterval(
+      () => this.refreshProviderUsage(profileId),
+      this.providerUsageRefreshMs
+    )
+    timer.unref?.()
+    this.providerUsageTimers.set(profileId, timer)
+  }
+
+  private refreshProviderUsage(profileId: string): void {
+    if (!this.hasLiveSessionOf(profileId)) {
+      const timer = this.providerUsageTimers.get(profileId)
+      if (timer) clearInterval(timer)
+      this.providerUsageTimers.delete(profileId)
+      return
+    }
+    const record = [...this.records.values()].find(
+      (candidate) => (candidate.claudeProfileId ?? 'default') === profileId
+    )
+    if (!record) return
+    const target = this.providerUsageTarget(record)
+    if (!target) return
+    void this.fetchProviderUsage(target).then((pull) => {
+      // Shutdown settles every callback (an in-flight refresh dies with it);
+      // a failed refresh keeps the held report (store semantics); a lost
+      // routing just skips the tick.
+      if (this.isShutDown || !pull.ok) return
+      this.usageLimits.record(profileId, pull.report)
+    })
+  }
+
+  /** Any non-archived session of the profile with a live driver (started agent). */
+  private hasLiveSessionOf(profileId: string): boolean {
+    for (const record of this.records.values()) {
+      if ((record.claudeProfileId ?? 'default') !== profileId) continue
+      if (record.archivedAt) continue
+      if (this.drivers.has(record.sessionId)) return true
+    }
+    return false
+  }
+
+  /** Stop every provider usage refresh timer (server shutdown). */
+  private stopProviderUsageRefresh(): void {
+    for (const timer of this.providerUsageTimers.values()) clearInterval(timer)
+    this.providerUsageTimers.clear()
+  }
+
   /**
    * Resolve the SDK query() once per process. The import is dynamic so a
    * missing/broken install surfaces as a send-time error, not a crash; the
@@ -1702,6 +2163,27 @@ export class ChatSessionManager {
     // Profile routing: progress and limit outcomes for the mail a turn handles.
     if (event.type === 'tool_call') this.teamMail.toolCall(sessionId, event.tool, event.input)
     if (event.type === 'turn_completed') this.teamMail.turnEnded(sessionId, event.subtype === 'success')
+    // The morning summary's durable turn-end row (team-workspace D8): only a
+    // task-bound session's turn is summary material; the task is the one the
+    // session worked under at the moment the turn ended, and only a
+    // successful turn counts as finished work. A summary row is never worth
+    // a turn: a failing write is logged here and must not skip the
+    // bookkeeping below or escape into the driver's emit.
+    if (event.type === 'turn_completed') {
+      const taskId = this.records.get(sessionId)?.taskId
+      if (taskId) {
+        try {
+          this.turnEnds.record(sessionId, taskId, event.at, event.subtype === 'success')
+        } catch (error) {
+          logger.warn('chat_turn_end_record_failed', {
+            sessionId,
+            taskId,
+            error: error instanceof Error ? error.message : String(error),
+            ...(error instanceof Error && error.stack ? { stack: error.stack } : {}),
+          })
+        }
+      }
+    }
     if (
       event.type === 'turn_completed' ||
       event.type === 'approval_request' ||
@@ -1756,6 +2238,19 @@ export class ChatSessionManager {
     const usage = this.contextReadings.get(sessionId)
     if (!usage) return
     this.applyPatch(sessionId, { contextUsage: usage })
+  }
+
+  /**
+   * The driver reported a model different from the last one (chat-session-model
+   * design D5): record and persist it right away — model changes are rare (a
+   * /model switch), so there is no per-request churn to batch, and a crash
+   * before the next boundary must not lose the switch — then hand it to the
+   * broadcast sink. The driver already deduped, so this runs per change.
+   */
+  private handleDriverModel(sessionId: string, model: string): void {
+    if (!this.records.has(sessionId)) return
+    this.applyPatch(sessionId, { model })
+    this.options.onModel?.(sessionId, model)
   }
 
   /**
@@ -1833,10 +2328,39 @@ export class ChatSessionManager {
    * or outcome changed — spawn, fill, settle. Write failures are logged by
    * the store and never fail the session.
    */
+  /**
+   * Hold the latest background-task roster (design D2) and forward it to the
+   * broadcast sink. The sidecar write (design D6) is keyed on the persisted
+   * shape, so `live` toggles never touch the disk; write failures are
+   * logged by the store and never fail the session.
+   */
+  private handleDriverBackgroundTasks(sessionId: string, tasks: ChatBackgroundTask[]): void {
+    if (!this.records.has(sessionId)) return
+    this.backgroundTaskRows.set(sessionId, tasks)
+    this.options.onBackgroundTasks?.(sessionId, tasks)
+    this.rosterChanged(sessionId)
+    const store = this.options.taskStore
+    const driver = this.drivers.get(sessionId)
+    if (!driver) return
+    // A crashing driver is already dead when process_end publishes stopped
+    // tasks. Save those final records so archive/restore cannot revive them.
+    const records = driver.getBackgroundTaskRecords()
+    this.backgroundTaskRecords.set(sessionId, records)
+    if (store) {
+      store.write(sessionId, records).catch((error) => {
+        logger.warn('chat_task_sidecar_write_failed', {
+          sessionId,
+          error: error instanceof Error ? error.message : String(error),
+        })
+      })
+    }
+  }
+
   private handleDriverWorkers(sessionId: string, workers: ChatWorker[]): void {
     if (!this.records.has(sessionId)) return
     this.workerRows.set(sessionId, workers)
     this.options.onWorkers?.(sessionId, workers)
+    this.rosterChanged(sessionId)
     const store = this.options.workerStore
     if (store) {
       store.write(sessionId, workers).catch((error) => {
@@ -1853,6 +2377,29 @@ export class ChatSessionManager {
     this.applyPatch(sessionId, { lastActivityAt: new Date().toISOString() })
   }
 
+  /**
+   * Record the session's current name and group under its team. The team is
+   * resolved asynchronously, so this runs again from `onResolved`; with no
+   * team yet there is nothing to record. Called from detached callbacks that
+   * can land after teardown has closed the database — a lost last-known-name
+   * write is preferable to an unhandled rejection, so the write is best-effort.
+   */
+  private syncDirectory(sessionId: string): void {
+    if (this.isShutDown) return
+    const record = this.records.get(sessionId)
+    const teamId = this.teams.teamOf(sessionId)?.teamId
+    if (!record || !teamId) return
+    try {
+      this.directory.upsert(teamId, {
+        sessionId,
+        name: record.name,
+        group: record.groupId ?? null,
+      })
+    } catch {
+      // Teardown closed the database under an in-flight team resolution.
+    }
+  }
+
   private applyPatch(
     sessionId: string,
     patch: Partial<ChatSessionRecord>
@@ -1861,11 +2408,20 @@ export class ChatSessionManager {
     if (!record) return
     const next = { ...record, ...patch }
     this.records.set(sessionId, next)
+    // Keep the directory's last known name and group (team-message-threads
+    // D3); kill and archive deliberately never write here.
+    if (patch.name !== undefined || patch.groupId !== undefined) this.syncDirectory(sessionId)
     if (
       (patch.status !== undefined && patch.status !== record.status) ||
       patch.projectPath !== undefined || patch.archivedAt !== undefined ||
       (patch.sdkSessionId !== undefined && patch.sdkSessionId !== record.sdkSessionId)
     ) this.dispatcher?.notify()
+    // Fields a team view shows (team-workspace: live membership); other
+    // patches (usage, activity stamps) stay silent.
+    if (
+      patch.status !== undefined || patch.archivedAt !== undefined || patch.projectPath !== undefined ||
+      patch.name !== undefined || patch.groupId !== undefined || patch.taskId !== undefined
+    ) this.options.onSessionRecordChange?.(sessionId)
     this.options.db.updateChatSession(sessionId, patch)
     // The first SDK session id makes a transcript followable: start the
     // title tail for the now-live conversation (design D4).

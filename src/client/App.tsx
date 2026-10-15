@@ -1,18 +1,14 @@
 // Root component: app layout, keyboard shortcuts, and the WebSocket
 // subscription that routes every server message into stores and local state.
-import { useTeamMailboxStore } from './stores/teamMailboxStore'
-import { useTeamTaskStore } from './stores/teamTaskStore'
-import { notifyMailboxDeadLetter } from './utils/teamMailboxNotification'
-import { notifySpawnedAttention } from './utils/teamTaskNotification'
+import { createMessageRouter } from './protocol/messageRouter'
+import type { SessionFormPrefill } from './protocol/types'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { AgentSession, AutoStartAgent, ChatApprovalPolicy, ServerMessage, Session, SessionKillSource, UpdateState } from '@shared/types'
+import type { AgentSession, AutoStartAgent, ChatApprovalPolicy, Session, SessionKillSource, UpdateState } from '@shared/types'
 import { FALLBACK_ARCHIVE_SECTION_KEY, type WorkspaceBranch } from '@shared/workspace'
 import Header from './components/Header'
 import SessionList from './components/SessionList'
 import Terminal from './components/Terminal'
 import ChatView from './components/chat/ChatView'
-import { useChatStore } from './stores/chatStore'
-import { useChatDebugStore } from './stores/chatDebugStore'
 import { useUpdateStore } from './stores/updateStore'
 import NewSessionModal from './components/NewSessionModal'
 import BranchBrowserModal from './components/BranchBrowserModal'
@@ -36,9 +32,9 @@ import { sortSessions } from './utils/sessions'
 import { buildWorkspaceView } from './utils/workspaceView'
 import { requestChatArchive } from './utils/chatArchive'
 import { flushSync } from 'react-dom'
-import { setClientLogLevel } from './utils/clientLog'
+import { primeAudio, needsUserGesture } from './utils/sound'
 import { getEffectiveModifier, matchesModifier } from './utils/device'
-import { playPermissionSound, playIdleSound, primeAudio, needsUserGesture } from './utils/sound'
+import { startTeamViewMigration } from './stores/teamViewMigration'
 
 interface ServerInfo {
   port: number
@@ -92,12 +88,6 @@ export default function App() {
     (state) => state.selectedHibernatingSessionId
   )
   const setSessions = useSessionStore((state) => state.setSessions)
-  const setAgentSessions = useSessionStore((state) => state.setAgentSessions)
-  const setActiveAgentSessions = useSessionStore(
-    (state) => state.setActiveAgentSessions
-  )
-  const setHostStatuses = useSessionStore((state) => state.setHostStatuses)
-  const updateSession = useSessionStore((state) => state.updateSession)
   const setSelectedSessionId = useSessionStore(
     (state) => state.setSelectedSessionId
   )
@@ -109,12 +99,7 @@ export default function App() {
     (state) => state.connectionStatus
   )
   const connectionError = useSessionStore((state) => state.connectionError)
-  const clearExitingSession = useSessionStore((state) => state.clearExitingSession)
   const markSessionExiting = useSessionStore((state) => state.markSessionExiting)
-  const setRemoteAllowControl = useSessionStore((state) => state.setRemoteAllowControl)
-  const setRemoteAllowAttach = useSessionStore((state) => state.setRemoteAllowAttach)
-  const setHostLabel = useSessionStore((state) => state.setHostLabel)
-  const setPreferWindowName = useSessionStore((state) => state.setPreferWindowName)
   const hostStatuses = useSessionStore((state) => state.hostStatuses)
   const remoteAllowControl = useSessionStore((state) => state.remoteAllowControl)
   const hostLabel = useSessionStore((state) => state.hostLabel)
@@ -130,7 +115,6 @@ export default function App() {
   const setLastProjectPath = useSettingsStore(
     (state) => state.setLastProjectPath
   )
-  const addRecentPath = useSettingsStore((state) => state.addRecentPath)
   const shortcutModifier = useSettingsStore((state) => state.shortcutModifier)
   const sidebarWidth = useSettingsStore((state) => state.sidebarWidth)
   const setSidebarWidth = useSettingsStore((state) => state.setSidebarWidth)
@@ -149,8 +133,36 @@ export default function App() {
   const connectionEpoch = useSessionStore((state) => state.connectionEpoch)
   const { sendMessage, subscribe, getConnectionEpoch } = useWebSocket()
 
+  // Stable UI callbacks for the protocol router (see protocol/types.ts): the
+  // transient error banner owns one clearable timer, and the session-form
+  // prefill resets every field like the inline code did.
+  const transientErrorTimerRef = useRef<number | null>(null)
+  const setTransientError = useCallback((message: string) => {
+    setServerError(message)
+    if (transientErrorTimerRef.current !== null) window.clearTimeout(transientErrorTimerRef.current)
+    transientErrorTimerRef.current = window.setTimeout(() => setServerError(null), 6000)
+  }, [])
+  const clearTransientError = useCallback(() => {
+    if (transientErrorTimerRef.current !== null) {
+      window.clearTimeout(transientErrorTimerRef.current)
+      transientErrorTimerRef.current = null
+    }
+    setServerError(null)
+  }, [])
+  const openSessionFormPrefilled = useCallback((prefill: SessionFormPrefill) => {
+    setNewSessionInitialHost(prefill.host)
+    setNewSessionInitialPath(prefill.path)
+    setNewSessionInitialCommand(prefill.command)
+    setNewSessionInitialAutoStartChange(prefill.autoStartChange)
+    setIsModalOpen(true)
+  }, [])
+
   // Handle mobile keyboard viewport adjustments
   useVisualViewport()
+
+  // Team panel views follow workspace discovery to their team's key, for every
+  // chat — not only the selected one (team-workspace-pages D2).
+  useEffect(() => startTeamViewMigration(), [])
 
   // Prime audio on user interaction. Persistent listener (not once) because Safari
   // suspends AudioContext after sleep/wake and needs a fresh gesture to resume.
@@ -217,402 +229,33 @@ export default function App() {
     }
   }, [setSidebarWidth])
 
+  // Route every server message through the protocol router. Constructed
+  // inside the effect so the pending refs (declared below in the component
+  // body) are initialized; the deps are stable callbacks, so this subscribes
+  // once for the app's lifetime instead of re-subscribing on selection
+  // changes (which used to open a stale-closure window).
   useEffect(() => {
-    const unsubscribe = subscribe((message: ServerMessage) => {
-      if (message.type === 'terminal-output') {
-        return
-      }
-
-      if (message.type === 'sessions') {
-        // Detect status transitions for sound notifications before updating
-        const currentSessions = useSessionStore.getState().sessions
-        const { soundOnPermission, soundOnIdle } = useSettingsStore.getState()
-
-        for (const nextSession of message.sessions) {
-          notifySpawnedAttention(currentSessions.find((s) => s.id === nextSession.id), nextSession)
-        }
-        if (soundOnPermission || soundOnIdle) {
-          for (const nextSession of message.sessions) {
-            const prevSession = currentSessions.find((s) => s.id === nextSession.id)
-            if (prevSession && prevSession.status !== nextSession.status) {
-              if (prevSession.status !== 'permission' && nextSession.status === 'permission' && soundOnPermission) {
-                void playPermissionSound()
-              }
-              if (prevSession.status === 'working' && nextSession.status === 'waiting' && soundOnIdle) {
-                void playIdleSound()
-              }
-            }
-          }
-        }
-
-        // Discard pending kills from a previous connection — the first
-        // snapshot after reconnect is authoritative.  Uses getConnectionEpoch()
-        // (reads manager directly) instead of a render-dependent ref so the
-        // check is correct even if this message arrives before React re-renders.
-        if (pendingKills.current.size > 0) {
-          const currentEpoch = getConnectionEpoch()
-          for (const [id, entry] of pendingKills.current) {
-            if (entry.epoch !== currentEpoch) {
-              pendingKills.current.delete(id)
-            }
-          }
-        }
-
-        // Filter out sessions with pending kills so stale refresh snapshots
-        // don't re-add optimistically removed sessions (causes multi-second
-        // delay before the session card finally disappears).
-        // Note: we intentionally do NOT clear pendingKills here — only
-        // kill-failed clears entries (for rollback).  Entries persist until
-        // reconnect (epoch mismatch) so stale async refreshes can't
-        // resurrect the killed session even after session-removed arrives.
-        const nextSessions = pendingKills.current.size > 0
-          ? message.sessions.filter((session) => !pendingKills.current.has(session.id))
-          : message.sessions
-
-        const {
-          selectedSessionId: previousSelectedSessionId,
-          selectedHibernatingSessionId: previousSelectedHibernatingSessionId,
-        } = useSessionStore.getState()
-        const removedSelectedAgentSessionId =
-          previousSelectedSessionId !== null &&
-          previousSelectedHibernatingSessionId === null &&
-          !nextSessions.some((session) => session.id === previousSelectedSessionId)
-            ? currentSessions.find((session) => session.id === previousSelectedSessionId)?.agentSessionId?.trim() ?? null
-            : null
-
-        if (removedSelectedAgentSessionId) {
-          // Another client hibernates the live session before the hibernating bucket updates.
-          pendingHibernateSelectionRef.current = removedSelectedAgentSessionId
-        }
-
-        setSessions(nextSessions)
-
-        const pendingWakeSelectionId = pendingWakeSelectionRef.current
-        const {
-          selectedSessionId: currentSelectedSessionId,
-          selectedHibernatingSessionId: currentSelectedHibernatingSessionId,
-        } = useSessionStore.getState()
-        const { projectFilters, hostFilters } = useSettingsStore.getState()
-        if (
-          pendingWakeSelectionId &&
-          currentSelectedSessionId === null &&
-          currentSelectedHibernatingSessionId === null
-        ) {
-          const matchingSession = nextSessions.find((session) => {
-            if (session.agentSessionId?.trim() !== pendingWakeSelectionId) {
-              return false
-            }
-            if (
-              projectFilters.length > 0 &&
-              !projectFilters.includes(session.projectPath)
-            ) {
-              return false
-            }
-            if (
-              hostFilters.length > 0 &&
-              !hostFilters.includes(session.host ?? '')
-            ) {
-              return false
-            }
-            return true
-          })
-          if (matchingSession) {
-            pendingWakeSelectionRef.current = null
-            setSelectedSessionId(matchingSession.id)
-          }
-        }
-      }
-      if (message.type === 'host-status') {
-        setHostStatuses(message.hosts)
-      }
-      if (message.type === 'workspace-snapshot') {
-        // Malformed snapshots keep the last valid one (stale retention);
-        // reconnects resupply the latest snapshot on open.
-        useWorkspaceStore.getState().applySnapshot(message.snapshot)
-      }
-      if (message.type === 'workspace-operation-result') {
-        useWorkspaceStore.getState().recordOperationResult(message.result)
-        const result = message.result
-        if (result.operation === 'create-worktree') {
-          const pending = pendingWorktreeLaunchRef.current
-          if (result.ok) {
-            // Route a successful launch request through the normal session
-            // form — presets, names, and hosts stay in play (§8.4).
-            if (
-              pending &&
-              pending.repositoryId === result.repositoryId &&
-              pending.branch === result.branch
-            ) {
-              pendingWorktreeLaunchRef.current = null
-              setNewSessionInitialHost(undefined)
-              setNewSessionInitialPath(result.path)
-              setNewSessionInitialCommand(undefined)
-              setNewSessionInitialAutoStartChange(undefined)
-              setIsModalOpen(true)
-            }
-          } else {
-            // Every operation failure surfaces an actionable error.
-            if (pending) pendingWorktreeLaunchRef.current = null
-            setServerError(result.error)
-            window.setTimeout(() => setServerError(null), 6000)
-          }
-        }
-        if (result.operation === 'create-change-worktree') {
-          const pending = pendingChangeLaunchRef.current
-          if (result.ok) {
-            // Seeded creation succeeded: open the session form prefilled with
-            // the new worktree root and the apply auto-start offered (§7.4).
-            if (pending && pending.repositoryId === result.repositoryId && pending.change === result.change) {
-              pendingChangeLaunchRef.current = null
-              setNewSessionInitialHost(undefined)
-              setNewSessionInitialPath(result.path)
-              setNewSessionInitialCommand(undefined)
-              setNewSessionInitialAutoStartChange(result.change)
-              setIsModalOpen(true)
-            }
-          } else {
-            if (pending) pendingChangeLaunchRef.current = null
-            setServerError(result.error)
-            window.setTimeout(() => setServerError(null), 6000)
-          }
-        }
-      }
-      if (message.type === 'server-config') {
-        setRemoteAllowControl(message.remoteAllowControl)
-        setRemoteAllowAttach(message.remoteAllowAttach)
-        setHostLabel(message.hostLabel)
-        setPreferWindowName(message.preferWindowName)
-        if (message.clientLogLevel) {
-          setClientLogLevel(message.clientLogLevel)
-        }
-      }
-      if (message.type === 'session-update') {
-        // Detect status transitions for sound notifications
-        // Capture previous status BEFORE updating to ensure we have the old value
-        const currentSessions = useSessionStore.getState().sessions
-        const prevSession = currentSessions.find((s) => s.id === message.session.id)
-        const prevStatus = prevSession?.status
-        const nextStatus = message.session.status
-
-        updateSession(message.session)
-        notifySpawnedAttention(prevSession, message.session)
-
-        // Only play sounds for known sessions (skip new/unknown sessions)
-        if (prevStatus) {
-          const { soundOnPermission, soundOnIdle } = useSettingsStore.getState()
-
-          if (prevStatus !== 'permission' && nextStatus === 'permission' && soundOnPermission) {
-            void playPermissionSound()
-          }
-          if (prevStatus === 'working' && nextStatus === 'waiting' && soundOnIdle) {
-            void playIdleSound()
-          }
-        }
-      }
-      if (message.type === 'session-created') {
-        // Add session to list immediately (don't wait for async refresh)
-        const currentSessions = useSessionStore.getState().sessions
-        if (!currentSessions.some((s) => s.id === message.session.id)) {
-          setSessions([message.session, ...currentSessions])
-        }
-        setSelectedSessionId(message.session.id)
-        addRecentPath(message.session.projectPath)
-
-        // Auto-add to filter if filters are active and project isn't included
-        const { projectFilters, setProjectFilters } = useSettingsStore.getState()
-        if (projectFilters.length > 0 && !projectFilters.includes(message.session.projectPath)) {
-          setProjectFilters([...projectFilters, message.session.projectPath])
-        }
-      }
-      if (message.type === 'session-removed') {
-        useChatStore.getState().remove(message.sessionId)
-        // Do NOT clear pendingKills here — stale async refreshes (e.g. the
-        // periodic 2s refresh) can arrive AFTER session-removed and re-add
-        // the killed window if the tmux process hasn't fully exited yet.
-        // Keeping the entry in pendingKills filters
-        // those stale broadcasts.  Cleanup happens on reconnect (epoch mismatch)
-        // or kill-failed (rollback).
-        invalidateSnapshotCache(message.sessionId)
-        const currentSessions = useSessionStore.getState().sessions
-        const nextSessions = currentSessions.filter(
-          (session) => session.id !== message.sessionId
-        )
-        if (nextSessions.length !== currentSessions.length) {
-          setSessions(nextSessions)
-        }
-      }
-      if (message.type === 'agent-sessions') {
-        const active = Array.isArray(message.active) ? message.active : []
-        const hibernating = Array.isArray(message.hibernating) ? message.hibernating : []
-        const history = Array.isArray(message.history) ? message.history : []
-        const { selectedHibernatingSessionId: currentSelectedHibernatingSessionId } =
-          useSessionStore.getState()
-        const pendingHibernateSelectionId = pendingHibernateSelectionRef.current
-        if (
-          currentSelectedHibernatingSessionId &&
-          !hibernating.some(
-            (session) => session.sessionId === currentSelectedHibernatingSessionId
-          )
-        ) {
-          pendingWakeSelectionRef.current = currentSelectedHibernatingSessionId
-        }
-        setAgentSessions(active, hibernating, history)
-        setPendingHibernatingSession((current) =>
-          current &&
-          hibernating.some((session) => session.sessionId === current.sessionId)
-            ? null
-            : current
-        )
-        if (
-          pendingHibernateSelectionId &&
-          hibernating.some((session) => session.sessionId === pendingHibernateSelectionId)
-        ) {
-          pendingHibernateSelectionRef.current = null
-          setSelectedHibernatingSessionId(pendingHibernateSelectionId)
-        } else if (pendingHibernateSelectionId) {
-          pendingHibernateSelectionRef.current = null
-        }
-      }
-      if (message.type === 'agent-sessions-active') {
-        setActiveAgentSessions(Array.isArray(message.active) ? message.active : [])
-      }
-      if (message.type === 'session-orphaned') {
-        // When a session is superseded by slug (plan→execute transition),
-        // don't remove the card — session-activated will update it in place.
-        if (!message.supersededBy) {
-          const currentSessions = useSessionStore.getState().sessions
-          const nextSessions = currentSessions.filter(
-            (session) => session.agentSessionId?.trim() !== message.session.sessionId
-          )
-          if (nextSessions.length !== currentSessions.length) {
-            setSessions(nextSessions)
-          }
-        }
-      }
-      if (message.type === 'session-activated') {
-        // Update the session card's agent metadata in place (e.g., after slug supersede
-        // or orphan rematch). Merges onto existing card — no-op if no card matches.
-        const existing = useSessionStore.getState().sessions.find(
-          (s) => s.tmuxWindow === message.window
-        )
-        if (existing) {
-          updateSession({
-            ...existing,
-            agentSessionId: message.session.sessionId,
-            agentSessionName: message.session.displayName,
-            logFilePath: message.session.logFilePath,
-            isPinned: message.session.isPinned,
-            lastUserMessage: message.session.lastUserMessage ?? existing.lastUserMessage,
-          })
-        }
-      }
-      if (message.type === 'session-wake-result') {
-        if (message.ok && message.session) {
-          setPendingHibernatingSession((current) =>
-            current?.sessionId === message.sessionId ? null : current
-          )
-          // Add woken session to list immediately
-          const currentSessions = useSessionStore.getState().sessions
-          if (!currentSessions.some((s) => s.id === message.session!.id)) {
-            setSessions([message.session, ...currentSessions])
-          }
-          setSelectedSessionId(message.session.id)
-        } else if (!message.ok) {
-          setServerError(`${message.error?.code}: ${message.error?.message}`)
-          window.setTimeout(() => setServerError(null), 6000)
-        }
-      }
-      if (message.type === 'session-hibernate-result') {
-        if (message.ok) {
-          if (message.session) {
-            setPendingHibernatingSession(message.session)
-          }
-          setSelectedHibernatingSessionId(message.sessionId)
-        } else {
-          setServerError(message.error ?? 'Failed to hibernate session')
-          window.setTimeout(() => setServerError(null), 6000)
-        }
-      }
-      if (message.type === 'terminal-error') {
-        if (!message.sessionId || message.sessionId === selectedSessionId) {
-          setServerError(`${message.code}: ${message.message}`)
-          window.setTimeout(() => setServerError(null), 6000)
-        }
-      }
-      if (message.type === 'terminal-ready') {
-        if (message.sessionId === selectedSessionId) {
-          setServerError(null)
-        }
-      }
-      if (message.type === 'error') {
-        setServerError(message.message)
-        window.setTimeout(() => setServerError(null), 6000)
-      }
-      if (message.type === 'update-state') useUpdateStore.getState().apply(message)
-      if (message.type === 'chat-events') useChatStore.getState().apply(message.sessionId, message.events)
-      if (message.type === 'chat-snapshot') useChatStore.getState().snapshot(message)
-      if (message.type === 'chat-commands') useChatStore.getState().setCommands(message)
-      if (message.type === 'chat-activity') useChatStore.getState().setActivity(message.sessionId, message.activity)
-      if (message.type === 'chat-context-usage') useChatStore.getState().setContextUsage(message.sessionId, message.usage)
-      if (message.type === 'chat-usage') useChatStore.getState().setUsage(message.profileId, message.report)
-      if (message.type === 'chat-workers') useChatStore.getState().setWorkers(message.sessionId, message.workers)
-      if (message.type === 'chat-notifications') useChatStore.getState().setNotifications(message.sessionId, message.notifications)
-      if (message.type === 'chat-worker-transcript') useChatStore.getState().setWorkerBody(message)
-      if (message.type === 'team-mailbox-snapshot') useTeamMailboxStore.getState().apply(message)
-      if (message.type === 'team-mailbox-rules-result') useTeamMailboxStore.getState().applyRulesResult(message)
-      if (message.type === 'team-mailbox-hand-off-result') useTeamMailboxStore.getState().applyHandOffResult(message)
-      if (message.type === 'team-mailbox-dead-letter') notifyMailboxDeadLetter(message)
-      if (message.type === 'team-tasks-snapshot') useTeamTaskStore.getState().applySnapshot(message)
-      if (message.type === 'team-task-detail') useTeamTaskStore.getState().applyDetail(message)
-      if (message.type === 'team-task-result') useTeamTaskStore.getState().applyResult(message)
-      if (message.type === 'chat-debug-frames') useChatDebugStore.getState().apply(message)
-      if (message.type === 'kill-failed') {
-        // Restore optimistically removed session from pending-kill snapshot
-        // (not exitingSessions, which may have been cleared by animation timer)
-        const pending = pendingKills.current.get(message.sessionId)
-        if (pending) {
-          const currentSessions = useSessionStore.getState().sessions
-          // Guard: a `sessions` broadcast may have re-added the session already
-          if (!currentSessions.some(s => s.id === message.sessionId)) {
-            setSessions([pending.session, ...currentSessions])
-          }
-          if (pending.wasSelected) {
-            setSelectedSessionId(message.sessionId)
-          }
-          pendingKills.current.delete(message.sessionId)
-        }
-        clearExitingSession(message.sessionId)
-        setServerError(message.message)
-        window.setTimeout(() => setServerError(null), 6000)
-      }
-      if (message.type === 'session-move-to-history-result') {
-        if (!message.ok && message.error) {
-          setServerError(message.error)
-          window.setTimeout(() => setServerError(null), 6000)
-        }
-      }
+    const routeMessage = createMessageRouter({
+      getConnectionEpoch,
+      setTransientError,
+      clearTransientError,
+      openSessionFormPrefilled,
+      setPendingHibernatingSession,
+      pendingKills,
+      pendingHibernateSelection: pendingHibernateSelectionRef,
+      pendingWakeSelection: pendingWakeSelectionRef,
+      pendingWorktreeLaunch: pendingWorktreeLaunchRef,
+      pendingChangeLaunch: pendingChangeLaunchRef,
     })
-
+    const unsubscribe = subscribe(routeMessage)
     return () => { unsubscribe() }
   }, [
-    selectedSessionId,
-    selectedHibernatingSessionId,
-    addRecentPath,
-    clearExitingSession,
-    sendMessage,
-    setSelectedSessionId,
-    setSelectedHibernatingSessionId,
-    setPendingHibernatingSession,
-    setSessions,
-    setAgentSessions,
-    setActiveAgentSessions,
-    setHostStatuses,
-    setRemoteAllowControl,
-    setRemoteAllowAttach,
-    setHostLabel,
-    setPreferWindowName,
     subscribe,
-    updateSession,
+    getConnectionEpoch,
+    setTransientError,
+    clearTransientError,
+    openSessionFormPrefilled,
+    setPendingHibernatingSession,
   ])
 
   const selectedSession = useMemo(() => {
@@ -1058,7 +701,8 @@ export default function App() {
       // New session: [mod]+N
       if (isShortcut && code === 'KeyN') {
         event.preventDefault()
-        if (!isModalOpen && settingsHydrated) {
+        // Never stack over Settings: its close would restore terminal focus under this dialog.
+        if (!isModalOpen && !isSettingsOpen && settingsHydrated) {
           setIsModalOpen(true)
         }
         return
@@ -1078,6 +722,7 @@ export default function App() {
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [
     isModalOpen,
+    isSettingsOpen,
     selectedSessionId,
     selectedHibernatingSessionId,
     setSelectedSessionId,
@@ -1128,6 +773,14 @@ export default function App() {
     setBranchBrowserRepositoryId(repositoryId)
     setCreateWorktreeBranch(null)
   }, [])
+  // The task pickers' create-worktree link (task-assignment D8): opens the
+  // same branch-browser flow for the repository containing the project path;
+  // the pickers refresh their lists when they regain focus on return.
+  const handleBrowseBranchesForPath = useCallback((projectPath: string) => {
+    const repository = workspaceSnapshot?.repositories.find(row =>
+      row.worktrees.some(worktree => projectPath === worktree.path || projectPath.startsWith(`${worktree.path}/`)))
+    if (repository) handleBrowseBranches(repository.id)
+  }, [workspaceSnapshot, handleBrowseBranches])
   const handleCloseBranchBrowser = useCallback(() => {
     setBranchBrowserRepositoryId(null)
     setCreateWorktreeBranch(null)
@@ -1290,6 +943,7 @@ export default function App() {
         connectionStatus={connectionStatus} connectionEpoch={connectionEpoch}
         error={connectionError || serverError} onClose={() => setSelectedSessionId(null)}
         onKill={() => handleKillSession(selectedSession.id)}
+        onCreateWorktree={() => handleBrowseBranchesForPath(selectedSession.projectPath)}
       /> : <Terminal
         session={selectedSession}
         sessions={navigationLiveSessions}

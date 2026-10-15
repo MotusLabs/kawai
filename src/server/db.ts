@@ -55,7 +55,9 @@ export interface KnownSessionKey {
  * name was never attributed and is treated as manual so it cannot be lost.
  * `contextUsage` (add-chat-context-usage design D4) is the latest
  * context-usage reading, stored over five columns; null/absent means no
- * model request has been measured yet.
+ * model request has been measured yet. `model` (chat-session-model design
+ * D4) is the model the agent last reported in its init frame; null/absent
+ * means the session has not run a turn since it was created.
  */
 export interface ChatSessionRecord {
   sessionId: string
@@ -70,6 +72,8 @@ export interface ChatSessionRecord {
   approvalPolicy?: ChatApprovalPolicy
   nameSource?: ChatNameSource
   contextUsage?: ChatContextUsage | null
+  /** Model the agent last reported (init frame); null/absent = none yet. */
+  model?: string | null
   /** Team group (agent-teams): set at creation only; null/absent = none. */
   groupId?: string | null
   /** Team task the session works on (team-tasks); null/absent = none. */
@@ -249,6 +253,14 @@ export function initDatabase(options: { path?: string } = {}): SessionDatabase {
   ensureDataDir(dbPath)
 
   const db = new SQLiteDatabase(dbPath)
+  // Wait out a lock held by another connection (e2e seed children, manual
+  // sqlite3 inspection) instead of failing the statement at once with
+  // SQLITE_BUSY. While an outside process holds a lock — a sqlite3 shell
+  // with an open write transaction, or a second server on the same data
+  // dir — a statement now blocks the server's thread for up to 5 s. The
+  // journal mode stays rollback — WAL would add -wal/-shm files beside the
+  // DB and change copy/backup semantics.
+  db.exec('PRAGMA busy_timeout = 5000')
   migrateDatabase(db)
   db.exec(CREATE_TABLE_SQL)
   db.exec(CREATE_APP_SETTINGS_TABLE_SQL)
@@ -289,6 +301,11 @@ export function initDatabase(options: { path?: string } = {}): SessionDatabase {
   }
   if (!chatColumns.some(column => column.name === 'spawned')) {
     db.exec('ALTER TABLE chat_sessions ADD COLUMN spawned INTEGER NOT NULL DEFAULT 0')
+  }
+  // Latest reported model (chat-session-model design D4): nullable — NULL
+  // means the agent has not reported a model for this session yet.
+  if (!chatColumns.some(column => column.name === 'model')) {
+    db.exec('ALTER TABLE chat_sessions ADD COLUMN model TEXT')
   }
   migrateLastUserMessageColumn(db)
   migrateChatNameSourceColumn(db)
@@ -647,6 +664,7 @@ export function initDatabase(options: { path?: string } = {}): SessionDatabase {
         // group_id is deliberately absent: a session's group is fixed at
         // creation (agent-teams), so no patch can change it.
         taskId: 'task_id',
+        model: 'model',
       }
       const fields: string[] = []
       const params: Record<string, string | number | null> = {
@@ -751,6 +769,7 @@ function mapChatRow(row: Record<string, unknown>): ChatSessionRecord {
     approvalPolicy: parseApprovalPolicy(row.approval_policy),
     nameSource: parseChatNameSource(row.name_source),
     contextUsage: mapContextUsage(row),
+    model: row.model === null || row.model === undefined ? null : String(row.model),
     groupId: row.group_id === null || row.group_id === undefined ? null : String(row.group_id),
     taskId: row.task_id === null || row.task_id === undefined ? null : String(row.task_id),
     spawned: Number(row.spawned ?? 0) === 1,

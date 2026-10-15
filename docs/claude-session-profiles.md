@@ -28,7 +28,7 @@ deployments, mount the user-level file (ConfigMap) or bake an image default.
 
 Entries with the same id merge per environment key: the nearest file wins,
 and an empty value neutralizes an inherited value. Scalar fields (`label`,
-`model`) follow nearest-set-wins; `label` falls back to the profile id. The
+`model`, `limitResetTimeZone`) follow nearest-set-wins; `label` falls back to the profile id. The
 `default` profile is definable in files and always exists (implicit and empty
 when no file defines it — global provider configuration alone). Home-relative
 project paths (`~/work/app`, as typed in New Session) expand to the server
@@ -53,6 +53,19 @@ the rest of the catalog still resolves — the failure is never silent: the
 picker shows it as a warning next to the profile list, and every launch
 resolution logs it (`chat_profile_catalog_errors` in agentboard.log).
 
+## Provider reset time zone
+
+Some gateways put the limit reset in the error text without a zone (GLM:
+`Your limit will reset at 2026-10-13 17:17:00`). An entry's
+`limitResetTimeZone` — an IANA zone (`Asia/Shanghai`) or a fixed `±HH:MM`
+offset — says how to read it, so the profile's cooldown and parked work's
+resume use the real reset instead of the one-hour fallback. A reset the
+provider announces itself always wins; without the field the text is ignored.
+
+```json
+{ "glm": { "label": "GLM", "limitResetTimeZone": "Asia/Shanghai" } }
+```
+
 ## Operator-named executables
 
 A **user-level** catalog entry may name an `executable` launched in place of
@@ -74,19 +87,6 @@ an actionable error before any agent starts.
 
 Terminal commands are unaffected: kawai writes no executables, and existing
 `claude-*` wrapper scripts remain yours to maintain or delete.
-
-## Provider reset time zone
-
-Some gateways put the limit reset in the error text without a zone (GLM:
-`Your limit will reset at 2026-10-13 17:17:00`). An entry's
-`limitResetTimeZone` — an IANA zone (`Asia/Shanghai`) or a fixed `±HH:MM`
-offset — says how to read it, so the profile's cooldown and parked work's
-resume use the real reset instead of the one-hour fallback. A reset the
-provider announces itself always wins; without the field the text is ignored.
-
-```json
-{ "glm": { "label": "GLM", "limitResetTimeZone": "Asia/Shanghai" } }
-```
 
 Resolution starts with the server environment, applies global provider
 Settings (or AGENTBOARD_CHAT_ENV when no Settings override exists), then

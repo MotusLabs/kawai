@@ -139,6 +139,9 @@ describe('permission matrix', () => {
     const task = await service.create(agent('lead'), { title: 'x', direction: 'v1' })
     await expect(service.amend(agent('dev'), task.id, { direction: 'hijack' })).rejects.toThrow(/task_note.*message the creator \(lead\)/)
     await expect(service.amend(agent('lead2'), task.id, { direction: 'hijack' })).rejects.toThrow('creator')
+    // A refused amendment writes nothing (task-revision-publication 2.2).
+    expect(service.store.revisions(task.id)).toHaveLength(1)
+    expect(service.store.get(task.id)?.revision).toBe(1)
     expect((await service.amend(agent('lead'), task.id, { direction: 'v2' })).revision).toBe(2)
     expect((await service.amend(human(), task.id, { acceptance: 'ships' })).revision).toBe(3)
     expect((await service.get(human(), task.id)).revisions.map(revision => revision.direction)).toEqual(['v1', 'v2', 'v2'])
@@ -196,16 +199,130 @@ describe('task tools', () => {
   })
 })
 
+describe('task_acknowledge (task-revision-publication 4.2, D6)', () => {
+  test('records the calling session once; a repeat is a no-op and pushes nothing', async () => {
+    const task = await service.create(agent('lead'), { title: 'x', direction: 'v1' })
+    const changes: number[] = []
+    service.store.subscribe(changed => changes.push(changed.revision))
+    const dev = taskHandlers(service, 'dev')
+    expect(await dev.task_acknowledge({ task_id: task.id, revision: 1, session_id: 'lead' })).toEqual({ taskId: task.id, revision: 1, alreadyAcknowledged: false })
+    expect(await dev.task_acknowledge({ task_id: task.id, revision: 1 })).toMatchObject({ alreadyAcknowledged: true })
+    expect(service.store.acknowledgements.list(task.id)).toMatchObject([{ sessionId: 'dev', revision: 1, assignmentId: null }])
+    // The detail republishes on the new acknowledgement only.
+    expect(changes).toEqual([1])
+  })
+
+  test('refuses a revision that is not published, even while a draft of it exists, and another team\'s task', async () => {
+    const task = await service.create(agent('lead'), { title: 'x', direction: 'v1' })
+    await service.saveDraft(human(), task.id, { direction: 'draft of revision 2' })
+    await expect(taskHandlers(service, 'dev').task_acknowledge({ task_id: task.id, revision: 2 })).rejects.toThrow('Revision 2 of task')
+    await expect(taskHandlers(service, 'stranger').task_acknowledge({ task_id: task.id, revision: 1 })).rejects.toThrow('not found in this team')
+    await expect(service.acknowledge(human(), task.id, 1)).rejects.toThrow('Only agents')
+    expect(service.store.acknowledgements.list(task.id)).toEqual([])
+  })
+
+  test('task_acknowledge is a team tool allowed without an approval card', async () => {
+    const { TEAM_ALLOWED_TOOLS } = await import('../team/mailboxTools')
+    expect(TEAM_ALLOWED_TOOLS).toContain('mcp__kawai-team__task_acknowledge')
+  })
+})
+
+describe('task_amend publishes with rationale and notify (task-revision-publication 4.4, D7)', () => {
+  test('the creating lead publishes and notifies: the claimed developer gets one notice from the lead', async () => {
+    const { AssignmentStore } = await import('../team/assignmentStore')
+    const mail = new MailboxStore(db.db)
+    const assignments = new AssignmentStore(db.db, mail)
+    const notifying = new TaskService(new TaskStore(db.db, mail, assignments), { getSession: id => records.get(id), homeDir: home })
+    const lead = taskHandlers(notifying, 'lead')
+    const task = await lead.task_create({ title: 'Export', direction: 'CSV' })
+    const { assignment } = assignments.insert({ teamId: team.teamId, taskId: task.id, requestKey: 'assign-1', targetKind: 'session',
+      targetId: 'dev', role: 'devs', instruction: 'Build it', creator: { kind: 'human', sessionId: null } })
+    const instruction = mail.enqueue({ teamId: team.teamId, toKind: 'session', toId: 'dev', fromSession: null, fromGroup: null,
+      originPath: repo, body: 'Build it', taskId: task.id })
+    assignments.setMessage(assignment.id, instruction.id)
+    mail.claim(instruction.id, 'dev')
+    const published = await lead.task_amend({ task_id: task.id, direction: 'CSV and JSON', rationale: 'Customer asked', notify: true })
+    expect(published.revision).toBe(2)
+    expect(notifying.store.revisions(task.id).at(-1)).toMatchObject({ rationale: 'Customer asked', notify: true, author: agent('lead') })
+    const notices = mail.forTask(task.id).filter(message => message.tags.includes('task-revision'))
+    expect(notices).toMatchObject([{ toKind: 'session', toId: 'dev', fromKind: 'agent', fromSession: 'lead', fromGroup: 'leads', originPath: repo,
+      revisionNotice: { revision: 2, assignmentId: assignment.id, rationale: 'Customer asked' } }])
+    expect(notices[0]!.body).toContain('revision 2 published by lead: Customer asked')
+    // A non-creator still cannot: no revision, no notice.
+    await expect(taskHandlers(notifying, 'dev').task_amend({ task_id: task.id, direction: 'mine', notify: true })).rejects.toThrow('creator')
+    expect(notifying.store.revisions(task.id)).toHaveLength(2)
+    expect(mail.forTask(task.id).filter(message => message.tags.includes('task-revision'))).toHaveLength(1)
+    assignments.close()
+  })
+})
+
 describe('spawn-time registration', () => {
   test('the team MCP server carries mailbox and task tools, all allowed without cards', async () => {
     const { createMailboxServer, TEAM_ALLOWED_TOOLS } = await import('../team/mailboxTools')
     const { TeamMailbox } = await import('../team/TeamMailbox')
     const mailbox = new TeamMailbox(new MailboxStore(db.db), { getSession: id => records.get(id), homeDir: home })
-    const server = await createMailboxServer(mailbox, 'lead', service)
+    const { MailboxManagement } = await import('../team/mailboxManagement')
+    const management = new MailboxManagement(mailbox.store, { getSession: id => records.get(id), tasks: service, homeDir: home })
+    const server = await createMailboxServer(mailbox, 'lead', { tasks: service, management })
     const registered = Object.keys((server.instance as unknown as { _registeredTools: Record<string, unknown> })._registeredTools)
-    const expected = ['send_message', 'reply', 'schedule_message', 'list_groups', 'task_create', 'task_get', 'task_note', 'task_update_status', 'task_amend', 'task_list']
+    const expected = ['send_message', 'reply', 'schedule_message', 'list_groups', 'list_mailbox', 'cancel_message', 'discard_message', 'task_create', 'task_get', 'task_note', 'task_update_status', 'task_amend', 'task_list', 'task_acknowledge']
     expect(registered.sort()).toEqual([...expected].sort())
-    expect(TEAM_ALLOWED_TOOLS).toEqual(expected.map(name => `mcp__kawai-team__${name}`))
+    // Product strategy (product-strategy 3.2) rides the same allowed list —
+    // read/propose only, no approve/publish/withdraw tool anywhere — and so
+    // does release_member (member-release D6; registered when a MemberRelease
+    // is wired, always allowed).
+    // Result tools (task-results-handoffs) are allowed too, registered only with a result service.
+    const resultTools = ['task_submit_result', 'task_submit_findings', 'task_handoff']
+    expect(TEAM_ALLOWED_TOOLS).toEqual([...expected.slice(0, 7), 'release_member', ...expected.slice(7), ...resultTools, 'strategy_list', 'strategy_get', 'strategy_save_draft', 'strategy_submit_for_review']
+      .map(name => `mcp__kawai-team__${name}`))
     await server.instance.close()
+  })
+})
+
+describe('status boundary re-check (member-release, MM INFO 4)', () => {
+  /** A service whose transition hook pauses until `resume()`, recording each snapshot and closure run. */
+  const pausedService = (duringAwait: (store: TaskStore, taskId: string) => void) => {
+    const store = new TaskStore(db.db, new MailboxStore(db.db))
+    const prepared: string[] = []
+    const ran: string[] = []
+    const paused = new TaskService(store, {
+      getSession: id => records.get(id), homeDir: home,
+      onStatusTransition: async (task, status) => {
+        prepared.push(`${task.status}->${status}`)
+        await new Promise(resolve => setImmediate(resolve))
+        duringAwait(store, task.id)
+        return () => { ran.push(`${task.status}->${status}`) }
+      },
+    })
+    return { store, paused, prepared, ran }
+  }
+
+  test('a status change during the hook await is re-read: the boundary is decided on the fresh status', async () => {
+    let moved = false
+    const { store, paused, prepared, ran } = pausedService((s, id) => {
+      if (!moved) { moved = true; s.setStatus(id, 'cancelled') }
+    })
+    const task = store.create({ teamId: team.teamId, title: 't', direction: 'd', creator: { kind: 'human', sessionId: null } })
+    store.setStatus(task.id, 'active')
+    const done = await paused.setStatus(human(), task.id, 'done', 'shipped')
+    // The task was closed (cancelled) while the close hook prepared: cancelled -> done
+    // crosses no boundary, so the stale close closure never runs.
+    expect(prepared).toEqual(['active->done'])
+    expect(ran).toEqual([])
+    expect(done.status).toBe('done')
+    expect(store.journal(task.id).map(entry => entry.text)).toEqual(['shipped'])
+  })
+
+  test('a status that keeps moving is refused as stale, and nothing is written', async () => {
+    const { store, paused, ran } = pausedService((s, id) => {
+      s.setStatus(id, s.get(id)!.status === 'active' ? 'open' : 'active')
+    })
+    const task = store.create({ teamId: team.teamId, title: 't', direction: 'd', creator: { kind: 'human', sessionId: null } })
+    let refusal = ''
+    try { await paused.setStatus(human(), task.id, 'done', 'shipped') } catch (error) { refusal = String(error) }
+    expect(refusal).toContain('kept changing status')
+    expect(ran).toEqual([])
+    expect(store.get(task.id)!.status).not.toBe('done')
+    expect(store.journal(task.id)).toEqual([])
   })
 })

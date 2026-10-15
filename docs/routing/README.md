@@ -12,6 +12,11 @@ Group files (`.kawai/groups/<id>.md`) accept, besides the team-task settings:
 profiles: { glm: 2, mimo: 1, claude: 1 }   # or a list: [claude, glm]
 strategy: first-available                  # or profile-order
 onLimit: { parkIfResetWithin: 3h, otherwise: forward, forwardTo: architects }
+effort: medium                             # low, medium, high, xhigh, max
+releaseOnTaskClose: true                   # default; false keeps spawned members
+worktreeScoped: true                       # default; false takes task mail anywhere
+canReleaseMembers: true                    # default; false opts out of release_member
+canManageMailbox: true                     # default false
 ---
 ```
 
@@ -30,6 +35,41 @@ onLimit: { parkIfResetWithin: 3h, otherwise: forward, forwardTo: architects }
   otherwise `forward` (default) or `release`; with no progress, release.
   `forwardTo` is a group id or a team session id (default: the same group).
   Invalid values are reported and the defaults used.
+- `effort` is the reasoning effort every member's agent launches with (the
+  Claude Code `--effort` flag), whether a member was spawned or created by you.
+  It is read at each agent start, restart, or resume, so an edit reaches only
+  later starts. Without it, Claude Code's own settings decide. The flag beats a
+  saved `effortLevel` default, but `CLAUDE_CODE_EFFORT_LEVEL` in the server
+  environment overrides it and a settings maximum clamps it. `/effort` in a
+  chat still changes that running agent. An invalid value is reported and
+  ignored. Gateway models (GLM, MiMo, ...) may ignore effort.
+- `releaseOnTaskClose` (default `true`): when a task becomes `done` or
+  `cancelled`, its live spawned members are released — archived, never killed —
+  once each has settled (idle, no pending approval or answer, no live
+  background worker or running background task, no claimed or parked mail,
+  no due direct mail). The
+  pending release is durable across a restart, is cancelled by reopening the
+  task or restoring the member, and is journaled on the task by kawai. A group
+  setting `false` keeps its spawned members after their tasks close.
+- `worktreeScoped` (default `true`): task mail to a group setting `false` goes
+  to any idle member of the group wherever it runs, and never causes a spawn.
+  Use it for groups whose members never live in task worktrees (a lead or
+  reviewer group working in the main checkout), so reports and killed-sender
+  reply fallbacks reach them; the default keeps worktree routing and spawning.
+- `canReleaseMembers` (default `true`): members of the group may call the
+  `release_member` tool, archiving one settled spawned member of the team
+  immediately (never themselves, never human-created sessions; refused with
+  the reason when the member is busy, awaiting an answer, running a background
+  worker, or holding mail). A group setting `false` opts out.
+- `canManageMailbox` (`true`/`false`, default `false`) lets a group's members
+  cancel any team message that is still undelivered (queued, scheduled, or
+  awaiting a request) and parked work (its waiting resume mail is cancelled
+  with it), and discard dead or uncertain mail, through the `cancel_message` and
+  `discard_message` tools, each with a reason. Every agent can list the mail it
+  sent, received, or holds with `list_mailbox` (managers see the whole team) and
+  withdraw its own undelivered mail. Retry and hand-off stay with the human. It
+  is read from the group file at each call, so an edit applies to running
+  members. An invalid value is reported as a warning and treated as `false`.
 
 ## Routing rules
 

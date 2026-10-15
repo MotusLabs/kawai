@@ -1,7 +1,8 @@
 import { describe, expect, test } from 'bun:test'
-import { DEFAULT_PARK_IF_RESET_WITHIN_MS, parseDuration, parseGroupFile, type GroupDefinition } from '../team/groupFile'
+import { DEFAULT_PARK_IF_RESET_WITHIN_MS, parseDuration, parseGroupFile, type GroupDefinition, type GroupEffort } from '../team/groupFile'
 
 const ROUTING_DEFAULTS = {
+  canManageMailbox: false,
   profiles: [],
   strategy: 'first-available',
   onLimit: { parkIfResetWithinMs: DEFAULT_PARK_IF_RESET_WITHIN_MS, otherwise: 'forward' },
@@ -32,6 +33,9 @@ describe('parseGroupFile', () => {
         description: 'Owns system design',
         hopLimit: 8,
         canCreateTasks: false,
+        releaseOnTaskClose: true,
+        worktreeScoped: true,
+        canReleaseMembers: true,
         max: 1,
         approval: 'manual',
         ...ROUTING_DEFAULTS,
@@ -43,7 +47,7 @@ describe('parseGroupFile', () => {
   test('a body-only file defaults the label to the id', () => {
     expect(parseGroupFile('qa', 'Test everything.\n')).toEqual({
       ok: true,
-      group: { id: 'qa', label: 'qa', description: '', canCreateTasks: false, max: 1, approval: 'manual', ...ROUTING_DEFAULTS, prompt: 'Test everything.' },
+      group: { id: 'qa', label: 'qa', description: '', canCreateTasks: false, releaseOnTaskClose: true, worktreeScoped: true, canReleaseMembers: true, max: 1, approval: 'manual', ...ROUTING_DEFAULTS, prompt: 'Test everything.' },
     })
   })
 
@@ -100,8 +104,23 @@ describe('parseGroupFile', () => {
   test('task settings default to no creation right, one member, default profile, manual approval', () => {
     const parsed = parseGroupFile('devs', '---\ncanCreateTasks: false\n---\nBuild.')
     expect(parsed.ok && parsed.group).toEqual({
-      id: 'devs', label: 'devs', description: '', canCreateTasks: false, max: 1, approval: 'manual', ...ROUTING_DEFAULTS, prompt: 'Build.',
+      id: 'devs', label: 'devs', description: '', canCreateTasks: false, releaseOnTaskClose: true, worktreeScoped: true, canReleaseMembers: true, max: 1, approval: 'manual', ...ROUTING_DEFAULTS, prompt: 'Build.',
     })
+  })
+
+  test('release settings read explicit opt-outs', () => {
+    const parsed = parseGroupFile('qa', '---\nreleaseOnTaskClose: false\nworktreeScoped: false\ncanReleaseMembers: false\n---\nCheck.')
+    expect(parsed.ok && parsed.group).toMatchObject({
+      releaseOnTaskClose: false, worktreeScoped: false, canReleaseMembers: false,
+    })
+  })
+
+  test('release settings reject values other than true or false', () => {
+    for (const key of ['releaseOnTaskClose', 'worktreeScoped', 'canReleaseMembers']) {
+      const parsed = parseGroupFile('x', `---\n${key}: maybe\n---\nBody.`)
+      expect(parsed.ok).toBe(false)
+      if (!parsed.ok) expect(parsed.error).toContain(`${key} must be true or false`)
+    }
   })
 
   test('profiles list: preference order, no caps, max stays 1', () => {
@@ -155,9 +174,53 @@ describe('parseGroupFile', () => {
     }
   })
 
+  test('effort: every level is read, quoted or not; absent is unset', () => {
+    for (const level of ['low', 'medium', 'high', 'xhigh', 'max']) {
+      for (const raw of [level, `"${level}"`, `'${level}'`]) {
+        const parsed = parseGroupFile('devs', `---\neffort: ${raw}\n---\nBuild.`)
+        expect(parsed.ok).toBe(true)
+        if (!parsed.ok) return
+        expect(parsed.group.effort).toBe(level as GroupEffort)
+        expect(parsed.group.warnings).toEqual([])
+      }
+    }
+    const parsed = parseGroupFile('devs', '---\nlabel: Developers\n---\nBuild.')
+    expect(parsed.ok && 'effort' in parsed.group).toBe(false)
+  })
+
+  test('effort: an invalid level warns, stays unset, and the rest of the file applies', () => {
+    for (const raw of ['extreme', 'auto', 'ultracode', 'MAX', '']) {
+      const parsed = parseGroupFile('devs', `---\nlabel: Developers\neffort: ${raw}\napproval: auto\n---\nBuild.`)
+      expect(parsed.ok).toBe(true)
+      if (!parsed.ok) return
+      expect(parsed.group.effort).toBeUndefined()
+      expect(parsed.group).toMatchObject({ label: 'Developers', approval: 'auto', prompt: 'Build.' })
+      expect(parsed.group.warnings).toEqual([
+        `effort must be low, medium, high, xhigh, max, got "${raw}"; ignored`,
+      ])
+    }
+  })
+
   test('parseDuration', () => {
     expect(parseDuration('90m')).toBe(5_400_000)
     expect(parseDuration('3h')).toBe(10_800_000)
     for (const bad of ['0h', '1d', 'h', '1.5h', 'soon']) expect(parseDuration(bad)).toBeNull()
+  })
+})
+
+describe('canManageMailbox', () => {
+  const parse = (value?: string) => parseGroupFile('lead', `---\n${value === undefined ? '' : `canManageMailbox: ${value}\n`}---\nLead.`)
+
+  test('true, false, and absent', () => {
+    for (const [value, expected] of [['true', true], ['false', false], [undefined, false]] as const) {
+      const parsed = parse(value)
+      expect(parsed.ok && parsed.group).toMatchObject({ canManageMailbox: expected, warnings: [] })
+    }
+  })
+
+  test('an invalid value is a warning that keeps the group and the right off', () => {
+    const parsed = parse('maybe')
+    expect(parsed.ok && parsed.group).toMatchObject({ canManageMailbox: false, prompt: 'Lead.' })
+    expect(parsed.ok && parsed.group.warnings).toEqual(['canManageMailbox must be true or false, got "maybe"; ignored'])
   })
 })
