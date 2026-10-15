@@ -4,7 +4,7 @@ Implement after Wave B2 (`task-revision-publication`, `task-results-handoffs`) h
 
 ## 1. Shared content model
 
-- [x] 1.1 Create `src/shared/plans.ts` with the D2 types, `normalizePlanContent`, `PLAN_CHECK_FLOOR`, the draft hash, and the revision hash over canonical `{content, pin}`, reusing `canonicalJson` (or moving it to a small shared helper). Verify with unit tests:
+- [x] 1.1 Create `src/shared/plans.ts` with the D2 types, `normalizePlanContent`, and `PLAN_CHECK_FLOOR`. Put the draft hash and the revision hash over canonical `{content, pin}` server-side in `src/server/plans/planHash.ts`, reusing `canonicalJson`, as `strategyHash.ts` does: the browser never hashes. Verify with unit tests:
   - unknown fields are dropped;
   - missing fields are defaulted;
   - a new draft defaults to direct landing;
