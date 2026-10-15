@@ -38,7 +38,7 @@ Implement after `plan-execution` and `integration-candidates` have landed on mas
 - [ ] 2.2 Extend `planStructureErrors` with the three D2 checks. Verify with tests:
   - a `leadGroup` outside the roles is refused;
   - a malformed or duplicate `fixes` entry is refused, naming it;
-  - one override named by two changes passes.
+  - one fix task named by two changes passes.
 - [ ] 2.3 Add the read-time warning for a `fixes` entry that names no fix or correction task of the plan (D2). Verify with a plan-detail test showing the warning, and an approval test that the warning does not refuse approval.
 - [ ] 2.4 Document `leadGroup` and `fixes` in the durable-plans AGENTS.md bullet, and the `plan_save_draft` tool description. Verify by reading both against D2.
 
