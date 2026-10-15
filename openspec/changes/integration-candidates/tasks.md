@@ -94,7 +94,10 @@ Implement after `plan-execution` has landed on master, together with what it bui
   - the integration branch moves to P, and the next change is provisioned from P;
   - an integration branch moved during the promotion is left as it is, with the promotion merged and its note saying why;
   - `promotion-finished` is written once under `promo:<id>:finish`.
-- [ ] 6.4 Share the landing slot with `holder_kind = 'promotion'`, and document promotion in an AGENTS.md bullet. That bullet is the docs for groups 5 and 6. Verify with tests (another plan's direct change waits, showing the promotion; a promotion waits for a change holding the slot, showing that change) and by reading the bullet against D9–D10.
+- [ ] 6.4 Share the landing slot with `holder_kind = 'promotion'` and the promotion's id as `holder_id`, and give `executionStore`'s orphan clearing the promotion liveness check (D10 step 3). Document promotion in an AGENTS.md bullet. That bullet is the docs for groups 5 and 6. Verify with tests and by reading the bullet against D9–D10. The tests:
+  - another plan's direct change waits, showing the promotion;
+  - a promotion waits for a change holding the slot, showing that change;
+  - a promotion holder whose promotion finished, has a recorded merge, or is missing is cleared and logged at startup and when the slot is found taken, while a running promotion's holder stays.
 
 ## 7. Agent surface and protocol
 

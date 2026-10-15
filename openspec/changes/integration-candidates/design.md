@@ -239,7 +239,9 @@ Plan state is not a precondition. A completed plan is the usual one to promote, 
 `planPromotionSteps(snapshot, now)` is pure, over the promotion row, its effects, the slot, and CI reads. The executor applies its transitions as it does execution steps:
 1. **Branch.** `create-promotion-branch`: `gh api -X POST …/git/refs` creating `refs/heads/<promotion branch>` at `from_sha`.
 2. **Pull request.** `open-pr`: `gh pr create --base <target> --head <promotion branch>`, with a title and body naming the plan, the branch, `from_sha`, and the carried changes.
-3. **Slot.** Kawai inserts the `plan_landing_slots` row with `holder_kind = 'promotion'`. While the slot is taken, the step waits and shows the holder.
+3. **Slot.** Kawai inserts the `plan_landing_slots` row with `holder_kind = 'promotion'` and `holder_id` set to the promotion's id. While the slot is taken, the step waits and shows the holder.
+   - This is the liveness check X6 asks of a holder kind. A promotion's row is live while that promotion is `running` with no `merge_sha`.
+   - Any other promotion holder is an orphan: a finished promotion, one whose merge is recorded, or an id with no row. `executionStore` clears and logs it as it clears a change holder, at startup and whenever the slot is found taken.
 4. **Up to date.** This is direct landing's step 3, unchanged except for the outcome of a conflict. Kawai fetches the target, and checks whether the promotion head contains its head.
    - When it does not, `merge-tree` predicts conflicts. A conflict fails the promotion as `promotion-conflict` with the files.
    - Otherwise `update-branch` runs, pinned to the current head, and the clean-merge check applies. GitHub's 422 conflict also fails it as `promotion-conflict`. A head that fails the check fails the promotion as `effect-failed`, because nobody else should write a promotion branch.
@@ -309,8 +311,8 @@ Consumed:
 - **X8:** `integration-rewritten`.
 - **C1:** the landing mode and branch.
 - **C3:** `PlanService` stays the only writer of `plan_events`. This change adds `recordPromotionEvent` for the promotion kinds, and leaves plan-execution's `recordExecutionEvent` unchanged.
-- **C6:** the appended kinds `promotion-started`, `promotion-cancelled`, and `promotion-finished`.
 - **C5:** the link, unchanged.
+- **C6:** the appended kinds `promotion-started`, `promotion-cancelled`, and `promotion-finished`.
 - **V2:** acceptance conditions before each landing, through the shared steps.
 - **V3:** no extra input. Every candidate is verified on top of every earlier landing, so changes whose capabilities overlap are always verified together.
 

@@ -133,7 +133,7 @@ The human SHALL be able to cancel a running promotion with a reason under a comm
 - **THEN** the cancel is refused naming the merge, and the promotion finishes as merged
 
 ### Requirement: A promotion holds the team's landing slot
-From its up-to-date step until it finishes, a promotion SHALL hold the team's landing slot. While it updates, verifies, or merges, no change of any plan SHALL land through it. A promotion waiting for the slot SHALL show which change holds it, and a change waiting for it SHALL show the promotion.
+From its up-to-date step until its merge is recorded, a promotion SHALL hold the team's landing slot. While it updates, verifies, or merges, no change of any plan SHALL land through it. A promotion waiting for the slot SHALL show which change holds it, and a change waiting for it SHALL show the promotion.
 
 #### Scenario: A direct landing waits for the promotion
 - **WHEN** another plan's direct change passes while a promotion's CI runs
