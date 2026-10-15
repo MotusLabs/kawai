@@ -27,5 +27,5 @@
 ## 5. Docs and verification
 
 - [x] 5.1 Add a navigator search bullet to the `CLAUDE.md` "How It Works" list (scope, REST endpoint, `[mod]+K`, transient replay); verify by reading the diff
-- [ ] 5.2 Run `bun run lint && bun run typecheck && bun run test` and confirm all pass
-- [ ] 5.3 In the running app (dev-browser), search a PR number that an active chat printed, confirm the chat is found, and confirm that clicking the snippet opens the chat scrolled to the highlighted tool entry. Repeat the open with ↓/Enter from the box. Take screenshots in the dark and light themes and at the navigator's minimum width, and check that highlight contrast is visible and nothing scrolls horizontally
+- [x] 5.2 Run `bun run lint && bun run typecheck && bun run test` and confirm all pass
+- [x] 5.3 In the running app (dev-browser), search a PR number that an active chat printed, confirm the chat is found, and confirm that clicking the snippet opens the chat scrolled to the highlighted tool entry. Repeat the open with ↓/Enter from the box. Take screenshots in the dark and light themes and at the navigator's minimum width, and check that highlight contrast is visible and nothing scrolls horizontally

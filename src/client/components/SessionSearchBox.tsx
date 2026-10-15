@@ -54,7 +54,7 @@ export default function SessionSearchBox({ modDisplay }: SessionSearchBoxProps) 
   }
 
   return (
-    <div className="relative flex min-w-32 flex-1 items-center">
+    <div className="relative flex min-w-0 flex-1 basis-24 items-center">
       <input
         ref={inputRef}
         type="text"
