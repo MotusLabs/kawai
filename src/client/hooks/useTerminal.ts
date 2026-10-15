@@ -15,97 +15,25 @@ import { clientLog } from '../utils/clientLog'
 import type { ConnectionStatus } from '../stores/sessionStore'
 import { useSettingsStore } from '../stores/settingsStore'
 import { copyText } from '../utils/copyText'
-import { getEffectiveModifier, matchesModifier } from '../utils/device'
+import { getEffectiveModifier, getIsMac, matchesModifier } from '../utils/device'
 import { bracketedPaste, sanitizeImagePath } from '../utils/paste'
 import { clipboardFiles } from '../utils/browserFiles'
+import { cacheSnapshot, clearSnapshotCache, getCachedSnapshot } from '../terminal/snapshotCache'
+import { logTerminalOutputDropped } from '../terminal/droppedOutputLog'
+import { sanitizeLink } from '../terminal/linkSanitize'
+import { cancelIosRepaint, scheduleIosRepaint, type IosRepaintTarget } from '../terminal/iosRepaint'
 
-// Module-level snapshot cache: sessionId → serialized terminal content.
-// Survives component remounts and avoids stale-closure issues in effects.
-const snapshotCache = new Map<string, string>()
-const MAX_SNAPSHOT_ENTRIES = 20
-
-/** Remove a single session's cached terminal snapshot. */
-export function invalidateSnapshotCache(sessionId: string): void {
-  snapshotCache.delete(sessionId)
-}
-
-/** Clear all cached terminal snapshots (e.g. on reconnect). */
-export function clearSnapshotCache(): void {
-  snapshotCache.clear()
-}
-
-// Rate-limited terminal_output_dropped diagnostics (design D8): at most one
-// clientLog post per 5 s. Events suppressed inside the window fold into the
-// next emitted report's count; the first report carries zero and no trailing
-// report closes a burst. The clock is performance.now (monotonic) and can be
-// injected for tests.
-const DROPPED_OUTPUT_LOG_INTERVAL_MS = 5000
-let droppedOutputClock: () => number = () => performance.now()
-let lastDroppedOutputLogAt = Number.NEGATIVE_INFINITY
-let suppressedDroppedOutputReports = 0
-
-function logTerminalOutputDropped(fields: Record<string, unknown>): void {
-  const now = droppedOutputClock()
-  if (now - lastDroppedOutputLogAt < DROPPED_OUTPUT_LOG_INTERVAL_MS) {
-    suppressedDroppedOutputReports += 1
-    return
-  }
-  lastDroppedOutputLogAt = now
-  clientLog(
-    'terminal_output_dropped',
-    { ...fields, suppressed: suppressedDroppedOutputReports },
-    'info'
-  )
-  suppressedDroppedOutputReports = 0
-}
-
-/** Test-only: reset the dropped-output limiter, optionally injecting its clock. */
-export function resetDroppedOutputRateLimiterForTests(now?: () => number): void {
-  droppedOutputClock = now ?? (() => performance.now())
-  lastDroppedOutputLogAt = Number.NEGATIVE_INFINITY
-  suppressedDroppedOutputReports = 0
-}
+// Public helpers re-exported so existing importers keep their paths; the
+// implementations live in the terminal/ modules.
+export {
+  invalidateSnapshotCache,
+  clearSnapshotCache,
+} from '../terminal/snapshotCache'
+export { resetDroppedOutputRateLimiterForTests } from '../terminal/droppedOutputLog'
+export { sanitizeLink } from '../terminal/linkSanitize'
 
 // URL regex that matches standard URLs and IP:port patterns
 const URL_REGEX = /https?:\/\/[^\s"'<>]+|\b(?:localhost|\d{1,3}(?:\.\d{1,3}){3}):\d{1,5}(?:\/[^\s"'<>]*)?\b/
-const TRAILING_PUNCTUATION_REGEX = /[.,;:!?]+$/
-const BRACKET_PAIRS: Array<[string, string]> = [
-  ['(', ')'],
-  ['[', ']'],
-  ['{', '}'],
-]
-
-const countOccurrences = (text: string, char: string) => text.split(char).length - 1
-
-export function sanitizeLink(text: string): string {
-  let result = text.trim()
-  if (!result) return result
-
-  const stripTrailingPunctuation = () => {
-    result = result.replace(TRAILING_PUNCTUATION_REGEX, '')
-  }
-
-  stripTrailingPunctuation()
-
-  let trimmed = true
-  while (trimmed) {
-    trimmed = false
-    for (const [open, close] of BRACKET_PAIRS) {
-      if (!result.endsWith(close)) continue
-      const openCount = countOccurrences(result, open)
-      const closeCount = countOccurrences(result, close)
-      if (closeCount > openCount) {
-        result = result.slice(0, -1)
-        trimmed = true
-      }
-    }
-  }
-
-  stripTrailingPunctuation()
-  return result
-}
-
-const getIsMac = () => typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/.test(navigator.platform)
 
 /** Empty bracket paste sequence — signals a paste event without text content. */
 const BRACKET_PASTE_EMPTY = '\x1b[200~\x1b[201~'
@@ -471,66 +399,13 @@ export function useTerminal({
     }
   }, [])
 
-  // iOS compositor repaint state — shared by visibility and subscriber effects.
-  // Unified so only one repaint can be in-flight at a time.
-  const iosRepaintTimerRef = useRef<number | null>(null)
-  const iosRepaintRafRef = useRef<number | null>(null)
-  const iosRepaintPrevRef = useRef<string | null>(null) // non-null when mid-toggle
-
-  // Cancel any pending iOS repaint, restoring display if mid-toggle.
-  const cancelIosRepaint = () => {
-    if (iosRepaintTimerRef.current !== null) {
-      window.clearTimeout(iosRepaintTimerRef.current)
-      iosRepaintTimerRef.current = null
-    }
-    if (iosRepaintRafRef.current !== null) {
-      cancelAnimationFrame(iosRepaintRafRef.current)
-      iosRepaintRafRef.current = null
-    }
-    if (iosRepaintPrevRef.current !== null) {
-      const container = containerRef.current
-      if (container) container.style.display = iosRepaintPrevRef.current
-      iosRepaintPrevRef.current = null
-    }
-  }
-
-  // Schedule an iOS compositor repaint after delayMs.
-  // Cancels any in-flight repaint first (safely restoring display).
-  const scheduleIosRepaint = (delayMs: number, trigger?: string) => {
-    const container = containerRef.current
-    if (!container) return
-
-    cancelIosRepaint()
-
-    clientLog('ios_repaint_schedule', { delayMs, trigger, sessionId: attachedSessionRef.current })
-
-    iosRepaintTimerRef.current = window.setTimeout(() => {
-      iosRepaintTimerRef.current = null
-      // Force xterm.js to re-render all visible rows so the DOM has
-      // fresh content before the compositor is forced to repaint.
-      const terminal = terminalRef.current
-      if (terminal) terminal.refresh(0, terminal.rows - 1)
-
-      const hasContent = terminal ? terminal.buffer.active.length > 0 : false
-      clientLog('ios_repaint_exec', {
-        trigger,
-        hasContent,
-        bufferLines: terminal?.buffer.active.length ?? 0,
-        sessionId: attachedSessionRef.current,
-      })
-
-      iosRepaintPrevRef.current = container.style.display
-      container.style.display = 'none'
-      // Split restore across two animation frames so the compositor
-      // registers the removal before we restore.
-      iosRepaintRafRef.current = requestAnimationFrame(() => {
-        iosRepaintRafRef.current = requestAnimationFrame(() => {
-          iosRepaintRafRef.current = null
-          container.style.display = iosRepaintPrevRef.current ?? ''
-          iosRepaintPrevRef.current = null
-        })
-      })
-    }, delayMs)
+  // iOS compositor repaint — shared by visibility and subscriber effects,
+  // unified so only one repaint can be in-flight at a time. The module holds
+  // the timer/raf state; accessors read the hook's live refs (design D2).
+  const iosRepaintTarget: IosRepaintTarget = {
+    getContainer: () => containerRef.current,
+    getTerminal: () => terminalRef.current,
+    getSessionId: () => attachedSessionRef.current,
   }
 
   useEffect(() => {
@@ -1387,12 +1262,7 @@ export function useTerminal({
       try {
         const serialized = serializeAddonRef.current?.serialize()
         if (serialized) {
-          snapshotCache.set(prevAttached, serialized)
-          // Evict oldest entry if over limit
-          if (snapshotCache.size > MAX_SNAPSHOT_ENTRIES) {
-            const oldest = snapshotCache.keys().next().value
-            if (oldest) snapshotCache.delete(oldest)
-          }
+          cacheSnapshot(prevAttached, serialized)
         }
       } catch {
         // serialize() can fail on a disposed terminal — ignore
@@ -1444,7 +1314,7 @@ export function useTerminal({
       }
 
       // Instantly show cached snapshot for the target session (if available)
-      const cached = snapshotCache.get(sessionId)
+      const cached = getCachedSnapshot(sessionId)
       if (cached) {
         terminal.reset()
         // Isolated lifecycle boundary (design D7 audit): the snapshot restore
@@ -1785,7 +1655,7 @@ export function useTerminal({
         // visibility-triggered repaint (no double-flicker).
         if (isiOS) {
           flush()
-          scheduleIosRepaint(50, 'terminal-ready')
+          scheduleIosRepaint(50, 'terminal-ready', iosRepaintTarget)
         }
       }
 
@@ -1861,7 +1731,7 @@ export function useTerminal({
       // not touch accounting after the subscription is gone.
       flush({ force: true })
       invalidateWriteBackpressure()
-      cancelIosRepaint()
+      cancelIosRepaint(iosRepaintTarget)
     }
   }, [subscribe, checkScrollPosition, setTmuxCopyMode, offerClipboardCopy, invalidateWriteBackpressure, updateReadySession])
 
@@ -1961,7 +1831,7 @@ export function useTerminal({
       // visibilityState can be wrong in iOS PWA standalone (WebKit #202399).
       if (document.visibilityState === 'hidden') return
       recreateWebGLIfNeeded('visibilitychange')
-      scheduleIosRepaint(200, 'visibilitychange')
+      scheduleIosRepaint(200, 'visibilitychange', iosRepaintTarget)
     }
 
     const handlePageShow = (e: PageTransitionEvent) => {
@@ -1969,7 +1839,7 @@ export function useTerminal({
       // visibilitychange in iOS PWA standalone mode.
       if (!e.persisted) return
       recreateWebGLIfNeeded('pageshow')
-      scheduleIosRepaint(200, 'pageshow')
+      scheduleIosRepaint(200, 'pageshow', iosRepaintTarget)
     }
 
     const handleFocus = () => {
@@ -1977,7 +1847,7 @@ export function useTerminal({
       // to the foreground, even when visibilitychange doesn't fire
       // (WebKit #202399) and the WebSocket stays alive (no reconnect).
       recreateWebGLIfNeeded('focus')
-      scheduleIosRepaint(200, 'focus')
+      scheduleIosRepaint(200, 'focus', iosRepaintTarget)
     }
 
     document.addEventListener('visibilitychange', handleVisibility)
@@ -1988,7 +1858,7 @@ export function useTerminal({
       document.removeEventListener('visibilitychange', handleVisibility)
       window.removeEventListener('pageshow', handlePageShow)
       window.removeEventListener('focus', handleFocus)
-      cancelIosRepaint()
+      cancelIosRepaint(iosRepaintTarget)
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])

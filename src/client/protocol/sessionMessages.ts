@@ -5,7 +5,7 @@
 import { useSessionStore } from '../stores/sessionStore'
 import { useSettingsStore } from '../stores/settingsStore'
 import { useChatStore } from '../stores/chatStore'
-import { invalidateSnapshotCache } from '../hooks/useTerminal'
+import { invalidateSnapshotCache } from '../terminal/snapshotCache'
 import { notifySpawnedAttention } from '../utils/teamTaskNotification'
 import { playIdleSound, playPermissionSound } from '../utils/sound'
 import type { ServerMessage } from '@shared/types'

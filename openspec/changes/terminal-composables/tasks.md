@@ -3,9 +3,20 @@
 Each task ends with `bun run lint && bun run typecheck && bun run test` green and a commit;
 tick the checkbox in the same commit. Implementation starts only after PR #96 (S3) merges.
 
+> Pre-implementation check against master a41323f (standing in for the skipped
+> proposal review): the S3 prerequisite is met — synthesis.md §S3 marks it DONE
+> via da3bc48, 6ae4dc8, 45a8e43. Every named block is present as described:
+> 3 WebGL-create blocks (useTerminal.ts:676/1287/1944), 4 detach-reset blocks
+> (the attached-refs nulling at ~1346/1369/1401/1544), 4 paired copy-mode-exit
+> sites in the hook (854/903/1028/1116), the inline `fetchClipboardImagePath`
+> duplicate (990–1008), and the importers in App.tsx, sessionMessages.ts,
+> Terminal.tsx, and `src/client/__tests__/useTerminal.test.tsx`. The analysis's
+> "8 paired copy-mode sites" counts 4 more inside Terminal.tsx — those are S5
+> scope, not paired with the hook's state setter. No scope change.
+
 ## 1. Mechanical moves (verbatim)
 
-- [ ] 1.1 Move the module-level blocks: `terminal/snapshotCache.ts` (cache Map, limits,
+- [x] 1.1 Move the module-level blocks: `terminal/snapshotCache.ts` (cache Map, limits,
   `invalidateSnapshotCache`/`clearSnapshotCache`), `terminal/droppedOutputLog.ts`
   (rate limiter + `resetDroppedOutputRateLimiterForTests`), `terminal/iosRepaint.ts`, and
   the link-sanitize helpers; re-export/update importers (`App.tsx`, `sessionMessages.ts`,
