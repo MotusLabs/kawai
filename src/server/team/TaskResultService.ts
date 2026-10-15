@@ -1,0 +1,223 @@
+// Results, findings, and acceptance (task-results-handoffs design D2/D4/D5).
+// Identity comes from the calling session (agents) or the authenticated UI
+// connection (the human), resolved through TaskService exactly as every task
+// tool resolves it. Submission and findings are open to any member of the
+// task's team — the cooperative trust model — and change no task status; the
+// right that matters, closing the task, is TaskService.setStatus's own rule,
+// evaluated before acceptance writes anything. Test outcomes and verdicts are
+// claims: nothing here stores or implies verification.
+import type { ChatSessionRecord } from '../db'
+import type { AssignmentTarget, TaskFindings, TaskHandoffKind, TaskResult, TaskTestClaim, TeamTask, TeamTaskAssignment, TeamTaskSummary } from '../../shared/teamTasks'
+import { TASK_HANDOFF_KINDS } from '../../shared/teamTasks'
+import type { AssignmentService } from './AssignmentService'
+import type { MemberRelease } from './memberRelease'
+import { TaskRelease } from './taskRelease'
+import { statusRefusal, type TaskCaller, type TaskService } from './TaskService'
+import { worktreeRootOf } from './worktreeRoots'
+
+export interface ResultSubmission {
+  summary: string
+  commit?: string | null
+  diff?: string | null
+  tests?: TaskTestClaim[]
+  limitations?: string | null
+}
+
+export interface FindingsSubmission {
+  resultId: string
+  kind: TaskFindings['kind']
+  verdict: TaskFindings['verdict']
+  findings: string
+}
+
+const blankToNull = (value: string | null | undefined) => (value?.trim() ? value.trim() : null)
+
+export interface HandoffRequest {
+  kind: TaskHandoffKind
+  resultId: string
+  target: AssignmentTarget
+  instructions: string
+  expectedResponse?: string | null
+  /** The human's client request key; agents send none (D3). */
+  requestKey?: string
+}
+
+export interface HandoffOutcome {
+  assignment: TeamTaskAssignment
+  /** True when an equivalent handoff already stood (agent retry) or the key replayed. */
+  duplicate: boolean
+  /** Why nothing new was dispatched; null when this call dispatched. */
+  notice: string | null
+}
+
+const KIND_LABELS: Record<TaskHandoffKind, string> = { review: 'Review', qa: 'QA', fix: 'Fix' }
+const DEFAULT_RESPONSE: Record<TaskHandoffKind, string> = {
+  review: 'findings with task_submit_findings (kind review) on this result',
+  qa: 'findings with task_submit_findings (kind qa) on this result',
+  fix: 'a new result with task_submit_result',
+}
+
+/** The instruction a handoff carries: the request, the result it references, and what to send back (D3). */
+export function handoffInstruction(kind: TaskHandoffKind, result: TaskResult, instructions: string, expectedResponse: string | null): string {
+  const reference = [result.commit ? `commit ${result.commit}` : null, result.diff ? `diff ${result.diff}` : null].filter(Boolean).join(', ')
+  return `${instructions}\n\n${KIND_LABELS[kind]} of result ${result.id} (${reference}): ${result.summary}\n` +
+    `Expected response: ${expectedResponse ?? DEFAULT_RESPONSE[kind]}`
+}
+
+/** What an acceptance closed, with what the human was shown before it (D5). */
+export interface AcceptOutcome {
+  task: TeamTask
+  result: TaskResult
+  /** The task's acceptance criteria — free text the system shows, never resolves. */
+  acceptanceCriteria: string | null
+  /** Child tasks not done or cancelled at acceptance. */
+  openChildren: TeamTaskSummary[]
+}
+
+export class TaskResultService {
+  /** Release worktree and hand off (D7); null without team-member-release. */
+  readonly release: TaskRelease | null
+
+  constructor(readonly tasks: TaskService, private readonly options: {
+    getSession: (id: string) => ChatSessionRecord | null | undefined
+    /** Handoffs dispatch through task-assignment's transaction (D3). */
+    assignments?: AssignmentService
+    /** Release-and-hand-off composes team-member-release's readiness, archive, and journal (D7). */
+    releases?: MemberRelease
+    records?: () => Iterable<ChatSessionRecord>
+    homeDir?: string
+  }) {
+    this.release = options.releases && options.records
+      ? new TaskRelease(this, { releases: options.releases, records: options.records, ...(options.homeDir ? { homeDir: options.homeDir } : {}) })
+      : null
+  }
+
+  private get store() { return this.tasks.store }
+
+  /**
+   * Submit a result (D2): any agent of the task's team. The server pins the
+   * task's current revision and worktree (the task's, else the submitter's
+   * resolved worktree), journals one submitter-authored note — the result
+   * news every task-mail recipient's journal excerpt carries — and leaves
+   * the task's status alone: a submitted result is not a finished task.
+   */
+  async submit(caller: TaskCaller, taskId: string, input: ResultSubmission): Promise<TaskResult> {
+    const { team, actor } = await this.tasks.context(caller)
+    if (actor.kind !== 'agent') throw new Error('Results are submitted by the agent that did the work, with task_submit_result')
+    const task = this.tasks.sameTeamTask(team, taskId)
+    const summary = input.summary.trim()
+    if (!summary) throw new Error('A result needs a summary')
+    const commit = blankToNull(input.commit)
+    const diff = blankToNull(input.diff)
+    if (!commit && !diff) throw new Error('A result needs a commit or a diff reference')
+    const tests = (input.tests ?? []).map(row => ({ description: row.description.trim(), outcome: row.outcome.trim() }))
+    if (tests.some(row => !row.description || !row.outcome)) throw new Error('Each test needs a description and an outcome')
+    const session = this.options.getSession(actor.sessionId)
+    // The result and its journal note commit together, as a dispatch and its journal entry do.
+    const result = this.store.atomically(() => {
+      const inserted = this.store.results.insert({
+        teamId: team.teamId, taskId, summary, commit, diff,
+        worktree: task.worktree ?? (session ? worktreeRootOf(session.projectPath) : null),
+        tests, limitations: blankToNull(input.limitations), taskRevision: task.revision, submittedBy: actor,
+      })
+      this.store.appendJournal(taskId, actor, `Submitted result ${inserted.id}: ${summary}`)
+      return inserted
+    })
+    return this.store.results.get(result.id)!
+  }
+
+  /**
+   * Submit review or QA findings (D4), bound to the exact result examined —
+   * a result of this task — and never to a later one. Open to any agent of
+   * the team; the record names its author, so independence from the
+   * submitter is visible. Answering the caller's outstanding handoff for that
+   * result records its id (the attempt's identity).
+   */
+  async submitFindings(caller: TaskCaller, taskId: string, input: FindingsSubmission): Promise<TaskFindings> {
+    const { team, actor } = await this.tasks.context(caller)
+    if (actor.kind !== 'agent') throw new Error('Findings are submitted by the reviewing agent, with task_submit_findings')
+    this.tasks.sameTeamTask(team, taskId)
+    const result = this.store.results.get(input.resultId)
+    if (!result || result.taskId !== taskId) throw new Error(`Result ${input.resultId} is not a result of task ${taskId}`)
+    const findings = input.findings.trim()
+    if (!findings) throw new Error('Findings need text')
+    const handoff = this.store.outstandingAssignment(taskId)
+    const answers = handoff?.handoffKind && handoff.resultId === result.id && handoff.claimedBy === actor.sessionId
+    const stored = this.store.results.insertFindings({
+      teamId: team.teamId, taskId, resultId: result.id, handoffId: answers ? handoff.id : null,
+      kind: input.kind, verdict: input.verdict, findings, author: actor,
+    })
+    this.store.appendJournal(taskId, actor, `${input.kind === 'qa' ? 'QA' : 'Review'} findings on result ${result.id}: ${input.verdict}`)
+    return stored
+  }
+
+  /**
+   * Accept a result (D5): the human, or the task's creator agent — the exact
+   * closing rule TaskService.setStatus enforces, checked first, so a refusal
+   * writes nothing. A result labeled Needs re-evaluation, or child tasks
+   * still open, require a stated reason. Then the result's acceptance, the
+   * acceptor's journal entry, and the `done` status commit in one
+   * transaction (setStatus's own, with its transition hook). Acceptance is
+   * per task: no parent is touched.
+   */
+  async accept(caller: TaskCaller, taskId: string, resultId: string, reason?: string): Promise<AcceptOutcome> {
+    const { team, actor } = await this.tasks.context(caller)
+    const task = this.tasks.sameTeamTask(team, taskId)
+    const refusal = statusRefusal(actor, task, 'done')
+    if (refusal) throw new Error(refusal.replace(`set it to done`, 'accept its results and close it'))
+    const result = this.store.results.get(resultId)
+    if (!result || result.taskId !== taskId) throw new Error(`Result ${resultId} is not a result of task ${taskId}`)
+    const openChildren = this.store.list(team.teamId).filter(child =>
+      child.parentId === taskId && child.status !== 'done' && child.status !== 'cancelled')
+    const flags = [
+      ...(result.needsReevaluation ? [`needs re-evaluation (pinned at revision ${result.taskRevision}, task at ${task.revision})`] : []),
+      ...(openChildren.length > 0 ? [`${openChildren.length} open child task${openChildren.length === 1 ? '' : 's'}`] : []),
+    ]
+    const stated = reason?.trim()
+    if (flags.length > 0 && !stated) throw new Error(`Accepting despite ${flags.join(' and ')} needs a stated reason; nothing was accepted.`)
+    const entry = flags.length > 0 ? `Accepted result ${resultId} despite ${flags.join(' and ')}: ${stated}` : `Accepted result ${resultId}`
+    const closed = await this.tasks.setStatus(caller, taskId, 'done', undefined, () => {
+      this.store.results.markAccepted(resultId, actor)
+      this.store.appendJournal(taskId, actor, entry)
+    })
+    return { task: closed, result: this.store.results.get(resultId)!, acceptanceCriteria: task.acceptance, openChildren }
+  }
+
+  /**
+   * Hand a result off (D3): a review, QA, or fix assignment to a role,
+   * dispatched through task-assignment's transaction with the handoff fields
+   * in its payload identity. The human sends a client request key (a replay
+   * returns the prior handoff; another result under it is refused). Agents
+   * send none: while an equivalent handoff — same task, result, and kind —
+   * stands (not superseded, not failed), a retried call returns it with a
+   * notice instead of dispatching again; a failed one loses standing.
+   */
+  async handoff(caller: TaskCaller, taskId: string, request: HandoffRequest): Promise<HandoffOutcome> {
+    const { team } = await this.tasks.context(caller)
+    this.tasks.sameTeamTask(team, taskId)
+    if (!TASK_HANDOFF_KINDS.includes(request.kind)) throw new Error(`Unknown handoff kind: ${String(request.kind)}`)
+    const result = this.store.results.get(request.resultId)
+    if (!result || result.taskId !== taskId) throw new Error(`Result ${request.resultId} is not a result of task ${taskId}`)
+    const instructions = request.instructions.trim()
+    if (!instructions) throw new Error('A handoff needs instructions')
+    if (!this.options.assignments) throw new Error('Handoffs are not available')
+    const expectedResponse = request.expectedResponse?.trim() || null
+    if (caller.kind === 'agent') {
+      const standing = this.tasks.store.assignmentsOf(taskId).find(row => row.handoffKind === request.kind &&
+        row.resultId === result.id && row.supersededBy === null && row.state !== 'failed')
+      if (standing) {
+        return { assignment: standing, duplicate: true,
+          notice: `An equivalent ${request.kind} handoff of result ${result.id} is already outstanding (${standing.id}, dispatched by ` +
+            `${standing.createdBy.kind === 'human' ? 'the human' : standing.createdBy.sessionId}, ${standing.state}); nothing was dispatched again.` }
+      }
+    }
+    const outcome = await this.options.assignments.dispatch(caller, {
+      taskId, target: request.target,
+      instruction: handoffInstruction(request.kind, result, instructions, expectedResponse),
+      requestKey: request.requestKey?.trim() || `handoff-${crypto.randomUUID()}`,
+      handoff: { kind: request.kind, resultId: result.id, expectedResponse },
+    })
+    return { assignment: outcome.assignment, duplicate: outcome.replay,
+      notice: outcome.replay ? 'This request was already dispatched; the earlier handoff is returned.' : null }
+  }
+}

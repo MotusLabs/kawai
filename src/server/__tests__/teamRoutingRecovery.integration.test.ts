@@ -34,7 +34,7 @@ async function fixture() {
     } }) as unknown as ChatSessionDriver,
     available: record => record.archivedAt == null, prepare: async () => {},
     restore: id => { records.get(id)!.archivedAt = null },
-    watchReceipt: () => {}, transcriptFor: () => null, homeDir: root,
+    watchReceipt: () => {}, archive: id => { const row = records.get(id); if (row) row.archivedAt = new Date().toISOString(); return { ok: true } }, hasLiveWorkers: () => false, hasRunningBackgroundTasks: () => false, transcriptFor: () => null, homeDir: root,
     onError: error => errors.push(error),
   })
   // This fixture drives recovery and rule loading explicitly.
@@ -90,7 +90,7 @@ test('no-group direct work is retried automatically after the provider reset', a
   try {
     f.records.get('dev')!.groupId = null
     const seed = f.send()
-    f.store.cancel(seed.id)
+    f.store.cancel(seed.id, { kind: 'human' })
     const message = f.store.enqueue({ teamId: seed.teamId, toKind: 'session', toId: 'dev', fromSession: 'other',
       fromGroup: 'devs', originPath: seed.originPath, body: 'Build export' })
     f.store.claim(message.id, 'dev'); f.store.markPushed(message.id); f.store.markDelivered(message.id)

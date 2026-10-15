@@ -4,7 +4,7 @@
 // retained text on a CAS refusal (S12), the review/approve/submit/withdraw
 // controls and their disconnected states, and superseded/withdrawn
 // revisions staying accessible in history.
-import { afterEach, expect, test } from 'bun:test'
+import { afterEach, describe, expect, test } from 'bun:test'
 import TestRenderer, { act } from 'react-test-renderer'
 import type { ClientMessage, SendClientMessage, Session } from '@shared/types'
 import type { ProductStrategy, StrategyDetail, StrategyDraft } from '@shared/productStrategy'
@@ -12,9 +12,10 @@ import { UNKNOWN, normalizeStrategyContent } from '@shared/productStrategy'
 
 /** Opaque fixture hash — the components display and echo hashes, never compute them. */
 const hashOf = (seed: string): string => `h-${seed.replace(/[^a-z0-9]+/gi, '-').slice(0, 24)}`
-import ProductStrategyPanel from '../components/chat/ProductStrategyPanel'
+import ProductStrategyView from '../components/team/ProductStrategyView'
 import { useSessionStore } from '../stores/sessionStore'
 import { useStrategyStore, closedStrategyView } from '../stores/strategyStore'
+import { useTeamWorkspaceStore } from '../stores/teamWorkspaceStore'
 
 afterEach(() => {
   useStrategyStore.setState({ views: {} })
@@ -79,15 +80,21 @@ const sendMessage: SendClientMessage = message => { sent.push(message) }
 /** A fresh element from the store's current view; call `refresh` after store updates to re-render. */
 const mount = (connected = true) => {
   let view = openView()
-  const element = () => <ProductStrategyPanel sessionId="dev" view={view} sendMessage={sendMessage} connected={connected}
-    onClose={() => useStrategyStore.getState().close('dev')} />
+  const element = () => <ProductStrategyView teamPath="dev" view={view} sendMessage={sendMessage} connected={connected} />
   let renderer!: TestRenderer.ReactTestRenderer
   act(() => { renderer = TestRenderer.create(element()) })
   const refresh = () => {
     view = useStrategyStore.getState().views.dev ?? view
     act(() => { renderer.update(element()) })
   }
-  return { renderer, refresh }
+  /** Switch the Strategy sub-view the way its nav does (no host URL here). */
+  const go = (sub: 'overview' | 'draft' | 'history' | `review-${number}`) => {
+    const byTest = sub.startsWith('review-')
+      ? `strategy-sub-review-${sub.slice('review-'.length)}`
+      : `strategy-sub-${sub}`
+    act(() => { renderer.root.findByProps({ 'data-testid': byTest }).props.onClick() })
+  }
+  return { renderer, refresh, go }
 }
 const textOf = (node: TestRenderer.ReactTestInstance | string): string =>
   typeof node === 'string' ? node : node.children.map(textOf).join('')
@@ -97,25 +104,25 @@ const find = (root: TestRenderer.ReactTestRenderer, testId: string) =>
 test('store: snapshots set the record, null keeps capture, results track errors and conflicts', () => {
   const view = openView()
   expect(view.seen).toBe(false)
-  act(() => useStrategyStore.getState().applySnapshot({ type: 'strategy-snapshot', sessionId: 'dev', teamId: 'team', strategy: null }))
+  act(() => useStrategyStore.getState().applySnapshot({ type: 'strategy-snapshot', teamPath: 'dev', teamId: 'team', strategy: null }))
   expect(useStrategyStore.getState().views.dev).toMatchObject({ seen: true, strategy: null })
-  act(() => useStrategyStore.getState().applySnapshot({ type: 'strategy-snapshot', sessionId: 'dev', teamId: 'team', strategy: strategy() }))
-  act(() => useStrategyStore.getState().applyDetail({ type: 'strategy-detail', sessionId: 'dev', teamId: 'team', detail: detail() }))
+  act(() => useStrategyStore.getState().applySnapshot({ type: 'strategy-snapshot', teamPath: 'dev', teamId: 'team', strategy: strategy() }))
+  act(() => useStrategyStore.getState().applyDetail({ type: 'strategy-detail', teamPath: 'dev', teamId: 'team', detail: detail() }))
   expect(useStrategyStore.getState().views.dev!.detail!.strategy.productId).toBe('kawai')
   act(() => useStrategyStore.getState().begin('dev', 'r1', 'save'))
-  act(() => useStrategyStore.getState().applyResult({ type: 'strategy-result', sessionId: 'dev', requestId: 'r1', error: 'changed while you edited', conflict: draft() }))
+  act(() => useStrategyStore.getState().applyResult({ type: 'strategy-result', teamPath: 'dev', requestId: 'r1', error: 'changed while you edited', conflict: draft() }))
   const after = useStrategyStore.getState().views.dev!
   expect(after.error).toContain('changed while you edited')
   expect(after.conflict!.draftId).toBe('human')
   // A closed view ignores pushes.
   act(() => useStrategyStore.getState().close('dev'))
-  act(() => useStrategyStore.getState().applySnapshot({ type: 'strategy-snapshot', sessionId: 'dev', teamId: 'team', strategy: null }))
+  act(() => useStrategyStore.getState().applySnapshot({ type: 'strategy-snapshot', teamPath: 'dev', teamId: 'team', strategy: null }))
   expect(useStrategyStore.getState().views.dev).toBeUndefined()
 })
 
 test('a product with no record offers capture, never a forced wizard (S11)', () => {
   openView()
-  act(() => useStrategyStore.getState().applySnapshot({ type: 'strategy-snapshot', sessionId: 'dev', teamId: 'team', strategy: null }))
+  act(() => useStrategyStore.getState().applySnapshot({ type: 'strategy-snapshot', teamPath: 'dev', teamId: 'team', strategy: null }))
   const { renderer } = mount()
   const capture = find(renderer, 'strategy-capture')
   expect(capture).toHaveLength(1)
@@ -136,10 +143,9 @@ test('a product with no record offers capture, never a forced wizard (S11)', () 
 test('an approved product leads with direction; revision, hash, owner, and status sit in detail (S04 view)', () => {
   openView()
   act(() => useSessionStore.getState().setSessions([sessionRow('chat-dev', 'Dev')]))
-  act(() => useStrategyStore.getState().applySnapshot({ type: 'strategy-snapshot', sessionId: 'dev', teamId: 'team', strategy: strategy() }))
-  act(() => useStrategyStore.getState().applyDetail({ type: 'strategy-detail', sessionId: 'dev', teamId: 'team', detail: detail() }))
-  const { renderer } = mount()
-  const text = textOf(renderer.root)
+  act(() => useStrategyStore.getState().applySnapshot({ type: 'strategy-snapshot', teamPath: 'dev', teamId: 'team', strategy: strategy() }))
+  act(() => useStrategyStore.getState().applyDetail({ type: 'strategy-detail', teamPath: 'dev', teamId: 'team', detail: detail() }))
+  const { renderer, go } = mount()
   // Direction first: purpose, users, outcomes, use cases, trade-offs, boundaries.
   const direction = find(renderer, 'strategy-direction')[0]!
   const directionText = textOf(direction)
@@ -152,16 +158,18 @@ test('an approved product leads with direction; revision, hash, owner, and statu
   const status = textOf(find(renderer, 'strategy-status')[0]!)
   expect(status).toContain('Approved revision 2')
   expect(status).toContain('Dev')
-  // Revision history keeps superseded content accessible.
+  // Revision history keeps superseded content accessible, behind its sub-view.
+  go('history')
   act(() => { find(renderer, 'revision-status-1')[0]!.parent!.props.onClick() })
   expect(textOf(find(renderer, 'revision-content-1')[0]!)).toContain('v1')
 })
 
 test('the draft editor labels hypotheses, keeps Unknown measures, and refuses a sourceless validated observation before sending', () => {
   openView()
-  act(() => useStrategyStore.getState().applySnapshot({ type: 'strategy-snapshot', sessionId: 'dev', teamId: 'team', strategy: strategy() }))
-  act(() => useStrategyStore.getState().applyDetail({ type: 'strategy-detail', sessionId: 'dev', teamId: 'team', detail: detail() }))
-  const { renderer } = mount()
+  act(() => useStrategyStore.getState().applySnapshot({ type: 'strategy-snapshot', teamPath: 'dev', teamId: 'team', strategy: strategy() }))
+  act(() => useStrategyStore.getState().applyDetail({ type: 'strategy-detail', teamPath: 'dev', teamId: 'team', detail: detail() }))
+  const { renderer, go } = mount()
+  go('draft')
   // Claim kinds are labeled, hypotheses stay hypotheses.
   expect(textOf(find(renderer, 'claim-kind-1')[0]!)).toContain('Hypothesis')
   expect(textOf(find(renderer, 'claim-kind-2')[0]!)).toContain('Validated observation')
@@ -181,9 +189,10 @@ test('the draft editor labels hypotheses, keeps Unknown measures, and refuses a 
 
 test('a material draft keeps its unsaved text after a CAS refusal, with the stored draft beside it (S12)', () => {
   openView()
-  act(() => useStrategyStore.getState().applySnapshot({ type: 'strategy-snapshot', sessionId: 'dev', teamId: 'team', strategy: strategy() }))
-  act(() => useStrategyStore.getState().applyDetail({ type: 'strategy-detail', sessionId: 'dev', teamId: 'team', detail: detail() }))
-  const { renderer, refresh } = mount()
+  act(() => useStrategyStore.getState().applySnapshot({ type: 'strategy-snapshot', teamPath: 'dev', teamId: 'team', strategy: strategy() }))
+  act(() => useStrategyStore.getState().applyDetail({ type: 'strategy-detail', teamPath: 'dev', teamId: 'team', detail: detail() }))
+  const { renderer, refresh, go } = mount()
+  go('draft')
   const editor = find(renderer, 'strategy-draft-editor')[0]!
   // The human types a material change with an impact proposal.
   const purpose = editor.findAll(node => node.props['aria-label'] === 'Purpose')[0]!
@@ -196,7 +205,7 @@ test('a material draft keeps its unsaved text after a CAS refusal, with the stor
   // The server refuses with the stored draft; the editor's text survives
   // (its state is never re-seeded from the refusal).
   act(() => useStrategyStore.getState().applyResult({
-    type: 'strategy-result', sessionId: 'dev', requestId: (message as { requestId: string }).requestId,
+    type: 'strategy-result', teamPath: 'dev', requestId: (message as { requestId: string }).requestId,
     error: 'Draft human changed while you edited', conflict: draft(),
   }))
   refresh()
@@ -206,13 +215,78 @@ test('a material draft keeps its unsaved text after a CAS refusal, with the stor
   expect(textOf(find(renderer, 'draft-conflict')[0]!)).toContain('Stored draft')
 })
 
+test('reload after a CAS refusal adopts the stored draft the server returned, and the next save carries its hash (S12)', () => {
+  openView()
+  act(() => useStrategyStore.getState().applySnapshot({ type: 'strategy-snapshot', teamPath: 'dev', teamId: 'team', strategy: strategy() }))
+  act(() => useStrategyStore.getState().applyDetail({ type: 'strategy-detail', teamPath: 'dev', teamId: 'team', detail: detail() }))
+  const { renderer, refresh, go } = mount()
+  go('draft')
+  const purposeOf = () => find(renderer, 'strategy-draft-editor')[0]!.findAll(node => node.props['aria-label'] === 'Purpose')[0]!
+  act(() => { purposeOf().props.onChange({ target: { value: 'My unsaved edit' } }) })
+  sent.length = 0
+  act(() => { find(renderer, 'draft-save')[0]!.props.onClick() })
+  // Another editor wrote the stored draft behind this client: no detail
+  // push arrived, so only the refusal carries the stored version.
+  const stored = draft({ content: content({ purpose: 'Stored by another editor' }), contentHash: hashOf('Stored by another editor'), updatedAt: '2026-10-13T04:00:00.000Z' })
+  act(() => useStrategyStore.getState().applyResult({
+    type: 'strategy-result', teamPath: 'dev', requestId: (sent.at(-1) as { requestId: string }).requestId,
+    error: 'Draft human changed while you edited', conflict: stored,
+  }))
+  refresh()
+  expect(purposeOf().props.value).toBe('My unsaved edit')
+  const reload = find(renderer, 'strategy-draft-editor')[0]!.findAll(node => node.type === 'button' && textOf(node) === 'Reload stored draft')[0]!
+  act(() => { reload.props.onClick() })
+  refresh()
+  expect(purposeOf().props.value).toBe('Stored by another editor')
+  expect(find(renderer, 'draft-conflict')).toHaveLength(0)
+  expect(useStrategyStore.getState().views.dev!.error).toBeNull()
+  // Saving now is based on the adopted draft, not the stale one.
+  sent.length = 0
+  act(() => { find(renderer, 'draft-save')[0]!.props.onClick() })
+  expect(sent.at(-1)).toMatchObject({ type: 'strategy-save-draft', expectedDraftHash: stored.contentHash, expectedBaseRevision: stored.baseRevision })
+})
+
+test('a detail push after a CAS refusal supersedes its stored draft: the box and Reload follow the push', () => {
+  openView()
+  act(() => useStrategyStore.getState().applySnapshot({ type: 'strategy-snapshot', teamPath: 'dev', teamId: 'team', strategy: strategy() }))
+  act(() => useStrategyStore.getState().applyDetail({ type: 'strategy-detail', teamPath: 'dev', teamId: 'team', detail: detail() }))
+  const { renderer, refresh, go } = mount()
+  go('draft')
+  const purposeOf = () => find(renderer, 'strategy-draft-editor')[0]!.findAll(node => node.props['aria-label'] === 'Purpose')[0]!
+  act(() => { find(renderer, 'draft-save')[0]!.props.onClick() })
+  const refused = draft({ content: content({ purpose: 'Refusal snapshot C1' }), contentHash: hashOf('Refusal snapshot C1'), updatedAt: '2026-10-13T04:00:00.000Z' })
+  act(() => useStrategyStore.getState().applyResult({
+    type: 'strategy-result', teamPath: 'dev', requestId: (sent.at(-1) as { requestId: string }).requestId,
+    error: 'Draft human changed while you edited', conflict: refused,
+  }))
+  // Another writer saves through the server: its push carries C2.
+  const pushed = draft({ content: content({ purpose: 'Pushed later C2' }), contentHash: hashOf('Pushed later C2'), baseRevision: 3, updatedAt: '2026-10-13T05:00:00.000Z' })
+  act(() => useStrategyStore.getState().applyDetail({ type: 'strategy-detail', teamPath: 'dev', teamId: 'team', detail: detail({ drafts: [pushed] }) }))
+  refresh()
+  expect(textOf(find(renderer, 'draft-conflict')[0]!)).toContain('Pushed later C2')
+  const reload = find(renderer, 'strategy-draft-editor')[0]!.findAll(node => node.type === 'button' && textOf(node) === 'Reload stored draft')[0]!
+  act(() => { reload.props.onClick() })
+  refresh()
+  expect(purposeOf().props.value).toBe('Pushed later C2')
+  expect(useStrategyStore.getState().views.dev!.detail!.drafts.find(entry => entry.draftId === 'human')!.contentHash).toBe(pushed.contentHash)
+  // A push whose draft is gone (withdrawn elsewhere) drops the conflict with it.
+  act(() => { find(renderer, 'draft-save')[0]!.props.onClick() })
+  act(() => useStrategyStore.getState().applyResult({
+    type: 'strategy-result', teamPath: 'dev', requestId: (sent.at(-1) as { requestId: string }).requestId,
+    error: 'Draft human changed while you edited', conflict: refused,
+  }))
+  act(() => useStrategyStore.getState().applyDetail({ type: 'strategy-detail', teamPath: 'dev', teamId: 'team', detail: detail({ drafts: [] }) }))
+  expect(useStrategyStore.getState().views.dev!.conflict).toBeNull()
+})
+
 test('review separates known, assumed, and not decided; approve carries the exact revision and hash with scope and open questions', () => {
   openView()
   act(() => useSessionStore.getState().setSessions([sessionRow('chat-dev', 'Dev')]))
   const inReview = revision(3, 'in_review', content({ purpose: 'v3', openQuestions: ['who owns multi-team repos?'] }))
-  act(() => useStrategyStore.getState().applySnapshot({ type: 'strategy-snapshot', sessionId: 'dev', teamId: 'team', strategy: strategy({ currentApprovedRevision: 2 }) }))
-  act(() => useStrategyStore.getState().applyDetail({ type: 'strategy-detail', sessionId: 'dev', teamId: 'team', detail: detail({ revisions: [...detail().revisions, inReview] }) }))
-  const { renderer, refresh } = mount()
+  act(() => useStrategyStore.getState().applySnapshot({ type: 'strategy-snapshot', teamPath: 'dev', teamId: 'team', strategy: strategy({ currentApprovedRevision: 2 }) }))
+  act(() => useStrategyStore.getState().applyDetail({ type: 'strategy-detail', teamPath: 'dev', teamId: 'team', detail: detail({ revisions: [...detail().revisions, inReview] }) }))
+  const { renderer, refresh, go } = mount()
+  go('review-3')
   const review = find(renderer, 'strategy-review-3')[0]!
   expect(textOf(find(renderer, 'review-known')[0]!)).toContain('42% archived')
   expect(textOf(find(renderer, 'review-assumed')[0]!)).toContain('hypothesis')
@@ -228,7 +302,7 @@ test('review separates known, assumed, and not decided; approve carries the exac
   })
   // The same command id is reused on retry (idempotency, S17).
   act(() => useStrategyStore.getState().applyResult({
-    type: 'strategy-result', sessionId: 'dev', requestId: (sent.at(-1) as { requestId: string }).requestId, error: 'network hiccup',
+    type: 'strategy-result', teamPath: 'dev', requestId: (sent.at(-1) as { requestId: string }).requestId, error: 'network hiccup',
   }))
   refresh()
   // A stale approval error shows inline.
@@ -240,30 +314,35 @@ test('review separates known, assumed, and not decided; approve carries the exac
 test('submit and withdraw controls exist and every control disables while disconnected', () => {
   const inReview = revision(3, 'in_review')
   openView()
-  act(() => useStrategyStore.getState().applySnapshot({ type: 'strategy-snapshot', sessionId: 'dev', teamId: 'team', strategy: strategy() }))
-  act(() => useStrategyStore.getState().applyDetail({ type: 'strategy-detail', sessionId: 'dev', teamId: 'team', detail: detail({ revisions: [...detail().revisions, inReview] }) }))
-  let renderer = mount(false).renderer
-  expect(find(renderer, 'strategy-submit')[0]!.props.disabled).toBe(true)
-  expect(find(renderer, 'approve-3')[0]!.props.disabled).toBe(true)
-  expect(find(renderer, 'draft-save')[0]!.props.disabled).toBe(true)
-  expect(find(renderer, 'withdraw-revision-1')).toHaveLength(0)
-  act(() => { renderer.unmount() })
+  act(() => useStrategyStore.getState().applySnapshot({ type: 'strategy-snapshot', teamPath: 'dev', teamId: 'team', strategy: strategy() }))
+  act(() => useStrategyStore.getState().applyDetail({ type: 'strategy-detail', teamPath: 'dev', teamId: 'team', detail: detail({ revisions: [...detail().revisions, inReview] }) }))
+  const offline = mount(false)
+  const offlineRenderer = offline.renderer
+  expect(() => offlineRenderer.root.findByProps({ 'data-testid': 'strategy-submit' })).toThrow()
+  offline.go('draft')
+  expect(find(offlineRenderer, 'strategy-submit')[0]!.props.disabled).toBe(true)
+  expect(find(offlineRenderer, 'draft-save')[0]!.props.disabled).toBe(true)
+  offline.go('review-3')
+  expect(find(offlineRenderer, 'approve-3')[0]!.props.disabled).toBe(true)
+  act(() => { offlineRenderer.unmount() })
   // Connected: the controls act.
   const live = mount()
-  renderer = live.renderer
+  const renderer = live.renderer
+  live.go('draft')
   sent.length = 0
   act(() => { find(renderer, 'strategy-submit')[0]!.props.onClick() })
   expect(sent.at(-1)).toMatchObject({ type: 'strategy-submit' })
+  act(() => { find(renderer, 'strategy-withdraw-draft')[0]!.props.onClick() })
+  expect(sent.at(-1)).toMatchObject({ type: 'strategy-withdraw', draftId: 'human' })
   // Withdraw lives in the revision's expanded history row.
+  live.go('history')
   const status3 = find(renderer, 'revision-status-3')[0]!
   act(() => { status3.parent!.props.onClick() })
   act(() => { find(renderer, 'withdraw-revision-3')[0]!.props.onClick() })
   expect(sent.at(-1)).toMatchObject({ type: 'strategy-withdraw', revision: 3 })
-  act(() => { find(renderer, 'strategy-withdraw-draft')[0]!.props.onClick() })
-  expect(sent.at(-1)).toMatchObject({ type: 'strategy-withdraw', draftId: 'human' })
   // A withdrawn revision stays in history with its status label.
   act(() => useStrategyStore.getState().applyDetail({
-    type: 'strategy-detail', sessionId: 'dev', teamId: 'team',
+    type: 'strategy-detail', teamPath: 'dev', teamId: 'team',
     detail: detail({ revisions: [revision(1, 'superseded', content({ purpose: 'v1' })), revision(2, 'approved'), revision(3, 'withdrawn', content({ purpose: 'v3' }))] }),
   }))
   live.refresh()
@@ -275,4 +354,108 @@ test('submit and withdraw controls exist and every control disables while discon
 
 test('the closed default view renders nothing until opened', () => {
   expect(closedStrategyView()).toMatchObject({ open: false, seen: false, detail: null })
+})
+
+describe('Strategy sub-views (team-workspace-pages 5.2)', () => {
+  afterEach(() => {
+    useStrategyStore.setState({ views: {} })
+    useSessionStore.setState({ sessions: [] })
+    useTeamWorkspaceStore.setState({ views: {} })
+  })
+
+  const openRecorded = () => {
+    openView()
+    act(() => useStrategyStore.getState().applySnapshot({ type: 'strategy-snapshot', teamPath: 'dev', teamId: 'team', strategy: strategy() }))
+    act(() => useStrategyStore.getState().applyDetail({ type: 'strategy-detail', teamPath: 'dev', teamId: 'team', detail: detail() }))
+  }
+
+  test('the overview keeps direction open and every other section collapsed until expanded', () => {
+    openRecorded()
+    const { renderer } = mount()
+    // Direction renders without a toggle; the other sections start collapsed.
+    expect(find(renderer, 'strategy-direction')).toHaveLength(1)
+    for (const section of ['Success measures', 'Assumptions and evidence', 'Open questions', 'Decisions']) {
+      const toggle = renderer.root.findByProps({ 'data-testid': `strategy-section-toggle-${section}` })
+      expect(toggle.props['aria-expanded']).toBe(false)
+      expect(find(renderer, 'overview-claims')).toHaveLength(0)
+    }
+    act(() => { renderer.root.findByProps({ 'data-testid': 'strategy-section-toggle-Assumptions and evidence' }).props.onClick() })
+    expect(find(renderer, 'overview-claim').length).toBeGreaterThan(0)
+    // A collapsed state persists across a remount (per-team view state, D8).
+    act(() => { renderer.unmount() })
+    const again = mount()
+    expect(again.renderer.root.findByProps({ 'data-testid': 'strategy-section-toggle-Assumptions and evidence' }).props['aria-expanded']).toBe(true)
+    act(() => { again.renderer.unmount() })
+  })
+
+  test('the review shows the diff beside the findings with the approve footer underneath', () => {
+    openView()
+    const inReview = revision(3, 'in_review', content({ purpose: 'v3' }))
+    act(() => useStrategyStore.getState().applySnapshot({ type: 'strategy-snapshot', teamPath: 'dev', teamId: 'team', strategy: strategy({ currentApprovedRevision: 2 }) }))
+    act(() => useStrategyStore.getState().applyDetail({ type: 'strategy-detail', teamPath: 'dev', teamId: 'team', detail: detail({ revisions: [...detail().revisions, inReview] }) }))
+    const { renderer, go } = mount()
+    go('review-3')
+    expect(find(renderer, 'review-diff-column')).toHaveLength(1)
+    expect(renderer.root.findByProps({ 'data-testid': 'review-diff-column' }).parent!.props.className).toContain('md:grid-cols-2')
+    const footer = renderer.root.findByProps({ 'data-testid': 'review-footer' })
+    expect(footer.findByProps({ 'data-testid': 'approve-3' })).toBeDefined()
+    expect(footer.findByProps({ 'data-testid': 'withdraw-3' })).toBeDefined()
+    // The approve control binds the exact revision and hash it names.
+    sent.length = 0
+    act(() => { footer.findByProps({ 'data-testid': 'approve-3' }).props.onClick() })
+    expect(sent.at(-1)).toMatchObject({ type: 'strategy-approve', revision: 3, contentHash: inReview.contentHash })
+    act(() => { renderer.unmount() })
+  })
+
+  test('the draft keeps its unsaved text across a switch to History and back', () => {
+    openRecorded()
+    const { renderer, refresh, go } = mount()
+    go('draft')
+    const purposeOf = () => find(renderer, 'strategy-draft-editor')[0]!.findAll(node => node.props['aria-label'] === 'Purpose')[0]!
+    act(() => { purposeOf().props.onChange({ target: { value: 'Typed direction that must survive' } }) })
+    // The host re-renders from the store (retention rides the store, D5).
+    refresh()
+    go('history')
+    expect(find(renderer, 'strategy-draft-editor')).toHaveLength(0)
+    go('draft')
+    expect(purposeOf().props.value).toBe('Typed direction that must survive')
+    // The retention is per team in the store, so even a full remount keeps it.
+    act(() => { renderer.unmount() })
+    const again = mount()
+    again.go('draft')
+    expect(find(again.renderer, 'strategy-draft-editor')[0]!.findAll(node => node.props['aria-label'] === 'Purpose')[0]!.props.value).toBe('Typed direction that must survive')
+    act(() => { again.renderer.unmount() })
+  })
+})
+
+test('each review dialog keeps its own command id and starts with empty scope inputs', () => {
+  openView()
+  const rev3 = revision(3, 'in_review', content({ purpose: 'v3' }))
+  const rev4 = revision(4, 'in_review', content({ purpose: 'v4' }))
+  act(() => useStrategyStore.getState().applySnapshot({ type: 'strategy-snapshot', teamPath: 'dev', teamId: 'team', strategy: strategy({ currentApprovedRevision: 2 }) }))
+  act(() => useStrategyStore.getState().applyDetail({
+    type: 'strategy-detail', teamPath: 'dev', teamId: 'team',
+    detail: detail({ revisions: [revision(1, 'superseded', content({ purpose: 'v1' })), revision(2, 'approved'), rev3, rev4] }),
+  }))
+  const { renderer, go } = mount()
+  go('review-3')
+  const scopeOf = () => renderer.root.findByProps({ 'data-testid': 'strategy-review-3' })
+    .findAll(node => node.props['aria-label'] === 'Approval scope')[0]!
+  act(() => { scopeOf().props.onChange({ target: { value: 'Direction only' } }) })
+  sent.length = 0
+  act(() => { renderer.root.findByProps({ 'data-testid': 'approve-3' }).props.onClick() })
+  const firstCommand = (sent.at(-1) as { commandId: string }).commandId
+  // Moving to Review 4 is a new dialog: fresh inputs, a fresh command id.
+  go('review-4')
+  expect(renderer.root.findByProps({ 'data-testid': 'strategy-review-4' })
+    .findAll(node => node.props['aria-label'] === 'Approval scope')[0]!.props.value).toBe('')
+  act(() => { renderer.root.findByProps({ 'data-testid': 'approve-4' }).props.onClick() })
+  const secondCommand = (sent.at(-1) as { commandId: string }).commandId
+  expect(secondCommand).not.toBe(firstCommand)
+  expect((sent.at(-1) as { revision: number }).revision).toBe(4)
+  expect(sent.at(-1)).not.toMatchObject({ approvalScope: 'Direction only' })
+  // A retry within the same dialog still reuses its command id.
+  act(() => { renderer.root.findByProps({ 'data-testid': 'approve-4' }).props.onClick() })
+  expect((sent.at(-1) as { commandId: string }).commandId).toBe(secondCommand)
+  act(() => { renderer.unmount() })
 })

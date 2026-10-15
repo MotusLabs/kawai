@@ -13,11 +13,12 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import type { ChatSessionRecord } from '../db'
-import type { TaskActor, TaskStatus, TeamTask, TeamTaskDetail, TeamTaskSummary } from '../../shared/teamTasks'
+import type { TaskActor, TaskDraft, TaskStatus, TeamTask, TeamTaskDetail, TeamTaskSummary } from '../../shared/teamTasks'
 import { TASK_STATUSES } from '../../shared/teamTasks'
 import { loadTeamGroups } from './teamGroups'
 import type { TeamIdentity } from './teamIdentity'
-import type { TaskStore } from './taskStore'
+import type { PublishOutcome, TaskStore } from './taskStore'
+import type { NoticeSender, SentNotice } from './taskNotices'
 import { TeamWorktrees } from './worktreeRoots'
 
 export interface TaskCreateInput {
@@ -27,11 +28,49 @@ export interface TaskCreateInput {
   parent_id?: string | null
   worktree?: string | null
   openspec_change?: string | null
+  /** Stable client request key (task-assignment D4): replays deduplicate. */
+  requestKey?: string | null
 }
 
 export interface TaskAmendInput {
   direction?: string
   acceptance?: string | null
+  /** Why (task-revision-publication D2); required by the human form, optional for agents. */
+  rationale?: string | null
+  /** Publish and notify (D3): direct notices to the outstanding assignment's claimant. */
+  notify?: boolean
+}
+
+/** A publication (D2): an amendment plus the human UI's base revision and command key. */
+export interface TaskPublishInput extends TaskAmendInput {
+  baseRevision?: number
+  requestKey?: string
+  /** The human published their saved draft: it is discarded with the publication (D2). */
+  fromDraft?: boolean
+}
+
+/**
+ * The optional in-process revision-published announcement (D8), fired once
+ * after a new revision commits. It carries nothing the revision rows lack:
+ * consumers compare against `team_task_revisions` and `team_tasks.revision`.
+ */
+export interface RevisionPublishedEvent {
+  teamId: string
+  taskId: string
+  revision: number
+  previousRevision: number
+  author: TaskActor
+  rationale: string | null
+  publishedAt: string
+}
+
+/** The human's draft of a new direction (task-revision-publication D1). */
+export interface TaskDraftInput {
+  /** The published revision it edits; the current one when omitted. */
+  baseRevision?: number
+  direction: string
+  acceptance?: string | null
+  rationale?: string | null
 }
 
 /** Who is calling: an agent session (identity bound) or the human for a team. */
@@ -39,13 +78,24 @@ export type TaskCaller = { kind: 'agent'; sessionId: string } | { kind: 'human';
 
 const CHANGE_NAME = /^[a-z0-9][a-z0-9-]*$/
 
+/** How often setStatus re-prepares when the status moves during its hook's await. */
+const STATUS_ATTEMPTS = 3
+
 export class TaskService {
   readonly worktrees: TeamWorktrees
+  private readonly publishedListeners = new Set<(event: RevisionPublishedEvent) => void>()
 
   constructor(readonly store: TaskStore, private readonly options: {
     getSession: (id: string) => ChatSessionRecord | null | undefined
     homeDir?: string
     worktrees?: TeamWorktrees
+    /**
+     * A status transition into or out of `done`/`cancelled` (member-release
+     * D1/D8): resolved first, then run inside the status transaction.
+     */
+    onStatusTransition?: (task: TeamTask, status: TaskStatus, actor: TaskActor) => Promise<() => void>
+    /** Restore an archived notice recipient after commit (direct mail resumes it, D3/Q8). */
+    restoreSession?: (id: string) => void | Promise<void>
   }) {
     this.worktrees = options.worktrees ?? new TeamWorktrees()
   }
@@ -70,6 +120,7 @@ export class TaskService {
     return this.store.create({
       teamId: team.teamId, title, direction, acceptance: emptyToNull(input.acceptance), creator: actor,
       parentId: input.parent_id || null, worktree, openspecChange,
+      ...(input.requestKey ? { requestKey: input.requestKey } : {}),
     })
   }
 
@@ -84,18 +135,157 @@ export class TaskService {
     return this.store.list(team.teamId).filter(task => !status || task.status === status)
   }
 
+  /** The agent tool's path (D7): publish immediately, with optional rationale and notify. */
   async amend(caller: TaskCaller, taskId: string, change: TaskAmendInput): Promise<TeamTask> {
+    return (await this.publish(caller, taskId, change)).task
+  }
+
+  /**
+   * Publish the next revision (D2): the creator or the human only. The human
+   * UI sends the draft's base revision and a command key, so a resend is a
+   * replay and a stale base is refused; the agent tool sends neither. A
+   * human publication drops the draft it came from. Announced once after a
+   * new revision commits — never on a replay.
+   */
+  async publish(caller: TaskCaller, taskId: string, input: TaskPublishInput): Promise<PublishOutcome> {
     const { team, actor } = await this.context(caller)
     const task = this.sameTeamTask(team, taskId)
     if (actor.kind === 'agent' && task.creator.sessionId !== actor.sessionId) {
       throw new Error(`Only the task's creator or the human can amend its direction. Add a journal note with task_note, or message the creator${task.creator.sessionId ? ` (${task.creator.sessionId})` : ' (the human)'} instead.`)
     }
-    if (change.direction === undefined && change.acceptance === undefined) throw new Error('Nothing to amend: give a direction or acceptance criteria')
-    if (change.direction !== undefined && !change.direction.trim()) throw new Error('A task needs a direction')
-    return this.store.amend(taskId, {
-      ...(change.direction !== undefined ? { direction: change.direction.trim() } : {}),
-      ...(change.acceptance !== undefined ? { acceptance: emptyToNull(change.acceptance) } : {}),
-    }, actor)!
+    if (input.direction === undefined && input.acceptance === undefined) throw new Error('Nothing to amend: give a direction or acceptance criteria')
+    if (input.direction !== undefined && !input.direction.trim()) throw new Error('A task needs a direction')
+    // Refused before anything is written, as notify() refuses: never a notify revision without its notices.
+    if (input.notify && !this.store.notices) throw new Error('Revision notices are not available')
+    const sender = this.noticeSender(team, actor)
+    const requestKey = input.requestKey?.trim() || undefined
+    let sent: SentNotice[] = []
+    const outcome = this.store.publish(taskId, {
+      ...(input.direction !== undefined ? { direction: input.direction.trim() } : {}),
+      ...(input.acceptance !== undefined ? { acceptance: emptyToNull(input.acceptance) } : {}),
+      rationale: emptyToNull(input.rationale),
+      ...(input.baseRevision !== undefined ? { baseRevision: input.baseRevision } : {}),
+      ...(input.requestKey?.trim() ? { requestKey: input.requestKey.trim() } : {}),
+      notify: input.notify === true,
+      // Only the publication that came from the draft discards it (D2).
+      discardDraft: actor.kind === 'human' && input.fromDraft === true,
+      // Publish and notify (D3): the notices commit or roll back with the revision.
+      ...(input.notify && this.store.notices ? {
+        within: (revision, current) => {
+          sent = this.store.notices!.write(current, revision, {
+            sender, requestKey: requestKey ?? `publish-r${revision.revision}`, sessionExists: id => !!this.options.getSession(id),
+          })
+        },
+      } : {}),
+    }, actor)
+    if (!outcome) throw new Error(`Task not found in this team: ${taskId}`)
+    if (!outcome.replay) this.announce(outcome)
+    await this.restoreRecipients(sent)
+    return outcome
+  }
+
+  /**
+   * Notify, or retry a failed notice (D4): send the published revision to
+   * each assignment holder that has neither received it nor holds a pending
+   * notice for it, under the command's key; a replay sends nothing more.
+   * Never creates a revision. The creator or the human.
+   */
+  async notify(caller: TaskCaller, taskId: string, revision: number, requestKey: string): Promise<{ replay: boolean; notices: SentNotice[]; task: TeamTask }> {
+    const { team, actor } = await this.context(caller)
+    const task = this.sameTeamTask(team, taskId)
+    if (actor.kind === 'agent' && task.creator.sessionId !== actor.sessionId) {
+      throw new Error("Only the task's creator or the human can send revision notices.")
+    }
+    const key = requestKey.trim()
+    if (!key) throw new Error('A notification needs a request key')
+    const published = this.store.revisions(taskId).find(entry => entry.revision === revision)
+    if (!published) throw new Error(`Revision ${revision} of this task is not published`)
+    if (!this.store.notices) throw new Error('Revision notices are not available')
+    const outcome = this.store.notices.notify(task, published, {
+      sender: this.noticeSender(team, actor), requestKey: key, sessionExists: id => !!this.options.getSession(id),
+    })
+    if (!outcome.replay) await this.restoreRecipients(outcome.notices)
+    return { ...outcome, task: this.store.get(taskId)! }
+  }
+
+  /**
+   * An agent states the published revision it works from (D6): bound to the
+   * calling session, refused for another team's task and for any revision
+   * not yet published — so a draft can never be acknowledged. Recorded with
+   * the session's outstanding assignment, if it holds one; a repeat is a
+   * no-op. Older revisions are recorded too: that is true information.
+   */
+  async acknowledge(caller: TaskCaller, taskId: string, revision: number): Promise<{ taskId: string; revision: number; alreadyAcknowledged: boolean }> {
+    const { team, actor } = await this.context(caller)
+    if (actor.kind !== 'agent') throw new Error('Only agents acknowledge revisions')
+    const task = this.sameTeamTask(team, taskId)
+    if (!Number.isInteger(revision) || revision < 1 || revision > task.revision) {
+      throw new Error(`Revision ${revision} of task ${taskId} is not published; its current revision is ${task.revision}.`)
+    }
+    const holder = this.store.notices?.holders(taskId).find(entry => entry.sessionId === actor.sessionId)
+    const recorded = this.store.acknowledgements.record(taskId, actor.sessionId, revision, holder?.assignmentId ?? null)
+    // The publication detail shows acknowledgements live (D5).
+    if (recorded) this.store.touch(taskId)
+    return { taskId, revision, alreadyAcknowledged: !recorded }
+  }
+
+  /** The publisher as the notice's sender (D3): the human, or the creating agent from its session. */
+  private noticeSender(team: TeamIdentity, actor: TaskActor): NoticeSender {
+    if (actor.kind === 'human') return { actor, fromGroup: null, originPath: team.groupsRoot }
+    const session = this.options.getSession(actor.sessionId)
+    return { actor, fromGroup: session?.groupId ?? null, originPath: session?.projectPath ?? team.groupsRoot }
+  }
+
+  /** Direct mail resumes an archived recipient (agent-mailbox), after the notice committed. */
+  private async restoreRecipients(sent: SentNotice[]): Promise<void> {
+    for (const notice of sent) {
+      if (this.options.getSession(notice.sessionId)?.archivedAt) await this.options.restoreSession?.(notice.sessionId)
+    }
+  }
+
+  /** Subscribe to new revisions (D8); optional — no consumer may depend on it. */
+  onRevisionPublished(listener: (event: RevisionPublishedEvent) => void): () => void {
+    this.publishedListeners.add(listener)
+    return () => this.publishedListeners.delete(listener)
+  }
+
+  private announce({ task, revision }: PublishOutcome): void {
+    const event: RevisionPublishedEvent = {
+      teamId: task.teamId, taskId: task.id, revision: revision.revision, previousRevision: revision.revision - 1,
+      author: revision.author, rationale: revision.rationale ?? null, publishedAt: revision.createdAt,
+    }
+    for (const listener of this.publishedListeners) listener(event)
+  }
+
+  /**
+   * Save the human's draft (D1). Agents have none — their working context is
+   * already a draft, so they publish with task_amend. Nothing is published,
+   * mailed, or announced as a task change; only the human's view refreshes.
+   */
+  async saveDraft(caller: TaskCaller, taskId: string, input: TaskDraftInput): Promise<TaskDraft> {
+    const task = await this.humanTask(caller, taskId)
+    const direction = input.direction.trim()
+    if (!direction) throw new Error('A draft needs a direction')
+    const baseRevision = input.baseRevision ?? task.revision
+    if (!Number.isInteger(baseRevision) || baseRevision < 1 || baseRevision > task.revision) {
+      throw new Error(`A draft must be based on a published revision (1–${task.revision})`)
+    }
+    return this.store.drafts.save(taskId, {
+      baseRevision, direction, acceptance: emptyToNull(input.acceptance), rationale: emptyToNull(input.rationale),
+    })
+  }
+
+  /** Move the draft onto the current revision, keeping its text (D1). */
+  async rebaseDraft(caller: TaskCaller, taskId: string): Promise<TaskDraft> {
+    const task = await this.humanTask(caller, taskId)
+    const draft = this.store.drafts.rebase(taskId, task.revision)
+    if (!draft) throw new Error('This task has no draft to rebase')
+    return draft
+  }
+
+  async discardDraft(caller: TaskCaller, taskId: string): Promise<void> {
+    await this.humanTask(caller, taskId)
+    this.store.drafts.discard(taskId)
   }
 
   async note(caller: TaskCaller, taskId: string, text: string) {
@@ -105,23 +295,46 @@ export class TaskService {
     return this.store.appendJournal(taskId, actor, text.trim())!
   }
 
-  async setStatus(caller: TaskCaller, taskId: string, status: TaskStatus, note?: string): Promise<TeamTask> {
+  /**
+   * Set a task's status. `alsoWithin` runs inside the status transaction,
+   * after the transition hook's closure — acceptance (task-results-handoffs
+   * D5) commits its result mark and journal entry with the `done` status.
+   */
+  async setStatus(caller: TaskCaller, taskId: string, status: TaskStatus, note?: string, alsoWithin?: () => void): Promise<TeamTask> {
     const { team, actor } = await this.context(caller)
     const task = this.sameTeamTask(team, taskId)
     if (!TASK_STATUSES.includes(status)) throw new Error(`Unknown task status: ${String(status)}`)
-    if (actor.kind === 'agent') {
-      const isCreator = task.creator.sessionId === actor.sessionId
-      if (status === 'open') throw new Error('Only the human can reopen a task')
-      if ((status === 'done' || status === 'cancelled') && !isCreator) {
-        throw new Error(`Only the task's creator can set it to ${status}. Report your result in a journal note or a message to the creator instead.`)
+    const refusal = statusRefusal(actor, task, status)
+    if (refusal) throw new Error(refusal)
+    // The closed/open boundary is decided on a snapshot; preparing its hook
+    // awaits group definitions, so the status may move meanwhile. Re-read
+    // after the await and commit in the same tick only if it held; else
+    // prepare again on the fresh status, and refuse as stale after a few.
+    let current = task
+    for (let attempt = 0; attempt < STATUS_ATTEMPTS; attempt++) {
+      const hook = this.crossesBoundary(current.status, status)
+        ? await this.options.onStatusTransition!(current, status, actor)
+        : undefined
+      const within = hook && alsoWithin ? () => { hook(); alsoWithin() } : hook ?? alsoWithin
+      const fresh = this.store.get(taskId)
+      if (!fresh) throw new Error(`Unknown task: ${taskId}`)
+      if (fresh.status === current.status) {
+        if (note?.trim()) this.store.appendJournal(taskId, actor, note.trim())
+        return this.store.setStatus(taskId, status, within)!
       }
+      current = fresh
     }
-    if (note?.trim()) this.store.appendJournal(taskId, actor, note.trim())
-    return this.store.setStatus(taskId, status)!
+    throw new Error(`Task ${taskId} kept changing status while this update was prepared (now ${current.status}); nothing changed. Try again.`)
   }
 
-  /** The caller's team, actor identity, and current creation right. */
-  private async context(caller: TaskCaller) {
+  /** Whether moving from `from` to `to` crosses the closed/open boundary the transition hook handles. */
+  private crossesBoundary(from: TaskStatus, to: TaskStatus): boolean {
+    if (!this.options.onStatusTransition || from === to) return false
+    return (from === 'done' || from === 'cancelled') !== (to === 'done' || to === 'cancelled')
+  }
+
+  /** The caller's team, actor identity, and current creation right (TaskResultService resolves callers here too). */
+  async context(caller: TaskCaller) {
     if (caller.kind === 'human') {
       return { team: caller.team, actor: { kind: 'human', sessionId: null } as TaskActor, canCreate: true }
     }
@@ -129,7 +342,7 @@ export class TaskService {
     if (!session) throw new Error(`Unknown calling session: ${caller.sessionId}`)
     // Read at call time: an edited group file applies to the next call.
     const { team, catalog } = await loadTeamGroups(session.projectPath, this.options.homeDir)
-    const group = session.groupId ? catalog.groups.get(session.groupId) : undefined
+    const group = session.groupId ? catalog.groups.get(session.groupId)?.group : undefined
     return {
       team,
       actor: { kind: 'agent', sessionId: session.sessionId } as TaskActor,
@@ -137,8 +350,15 @@ export class TaskService {
     }
   }
 
+  /** A task of the human caller's team; agents are refused (drafts are the human's, D1/D7). */
+  private async humanTask(caller: TaskCaller, taskId: string): Promise<TeamTask> {
+    if (caller.kind !== 'human') throw new Error("Drafts are the human's; agents publish directly with task_amend")
+    const { team } = await this.context(caller)
+    return this.sameTeamTask(team, taskId)
+  }
+
   /** The task, if it belongs to the team; otherwise an error that leaks nothing. */
-  private sameTeamTask(team: TeamIdentity, taskId: string, label = 'Task'): TeamTask {
+  sameTeamTask(team: TeamIdentity, taskId: string, label = 'Task'): TeamTask {
     const task = this.store.get(taskId)
     if (!task || task.teamId !== team.teamId) throw new Error(`${label} not found in this team: ${taskId}`)
     return task
@@ -156,6 +376,20 @@ export class TaskService {
     }
     throw new Error(`OpenSpec change not found: ${name} (looked in ${roots.map(root => path.join(root, 'openspec', 'changes')).join(' and ')})`)
   }
+}
+
+/**
+ * The status rights (team-tasks D2): an agent sets `done`/`cancelled` only on
+ * a task it created and never reopens; the human sets anything. The one rule
+ * every closing path — status changes and result acceptance — checks first.
+ */
+export function statusRefusal(actor: TaskActor, task: TeamTask, status: TaskStatus): string | null {
+  if (actor.kind !== 'agent') return null
+  if (status === 'open') return 'Only the human can reopen a task'
+  if ((status === 'done' || status === 'cancelled') && task.creator.sessionId !== actor.sessionId) {
+    return `Only the task's creator can set it to ${status}. Report your result in a journal note or a message to the creator instead.`
+  }
+  return null
 }
 
 function emptyToNull(value: string | null | undefined): string | null {

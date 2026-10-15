@@ -40,6 +40,8 @@ interface SessionDrawerProps {
   onCreateChangeWorktree?: (repositoryId: string, change: string) => void
   /** Opens the repository branch browser from a worktree header. */
   onBrowseBranches?: (repositoryId: string) => void
+  /** Opens a repository's Team page from its navigator Team entry. */
+  onOpenTeam?: (teamKey: string) => void
 }
 
 export default function SessionDrawer({
@@ -66,6 +68,7 @@ export default function SessionDrawer({
   onNewSessionInWorktree,
   onCreateChangeWorktree,
   onBrowseBranches,
+  onOpenTeam,
 }: SessionDrawerProps) {
   const prefersReducedMotion = useReducedMotion()
   const drawerRef = useRef<HTMLDivElement>(null)
@@ -85,6 +88,18 @@ export default function SessionDrawer({
     document.addEventListener('keydown', handleEscape)
     return () => document.removeEventListener('keydown', handleEscape)
   }, [isOpen, onClose])
+
+  // While closed the panel stays mounted off-canvas: keep it `inert` as well as
+  // `aria-hidden`, so its session buttons also drop out of the tab order.
+  // Declared before the focus effect below, so `inert` is already false when
+  // the open drawer is focused (an inert element cannot take focus). React 18
+  // has no `inert` prop, so set it imperatively.
+  useEffect(() => {
+    const drawer = drawerRef.current
+    if (drawer) {
+      drawer.inert = !isOpen
+    }
+  }, [isOpen])
 
   // Focus management - focus drawer when open, return focus when closed
   useEffect(() => {
@@ -171,8 +186,12 @@ export default function SessionDrawer({
         ref={drawerRef}
         className={`session-drawer ${isOpen ? 'open' : ''}`}
         style={transitionStyle}
-        role="dialog"
-        aria-modal="true"
+        // Exposed as a modal dialog only while open: the panel stays mounted
+        // off-canvas when closed, and a closed drawer must neither be announced
+        // as a dialog nor make restoreTerminalFocus() think a dialog is open.
+        role={isOpen ? 'dialog' : undefined}
+        aria-modal={isOpen ? 'true' : undefined}
+        aria-hidden={isOpen ? undefined : 'true'}
         aria-label="Session list"
         tabIndex={-1}
       >
@@ -217,6 +236,14 @@ export default function SessionDrawer({
             onBrowseBranches
               ? (repositoryId) => {
                   onBrowseBranches(repositoryId)
+                  onClose()
+                }
+              : undefined
+          }
+          onOpenTeam={
+            onOpenTeam
+              ? (teamKey) => {
+                  onOpenTeam(teamKey)
                   onClose()
                 }
               : undefined

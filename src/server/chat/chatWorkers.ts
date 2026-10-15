@@ -110,6 +110,8 @@ export type ChatWorkersInput =
       toolUseId?: string
       status: 'completed' | 'failed' | 'stopped'
       summary?: string
+      /** Recorded output file (background tasks D3); the worker roster ignores it. */
+      outputFile?: string
     }
   | {
       /** The background level set: live membership, nothing else (D3). */
@@ -149,6 +151,8 @@ export interface ChatTaskFrameSlice {
   /** SDKTaskNotificationMessage.status ('completed' | 'failed' | 'stopped'). */
   status?: string | null
   summary?: string
+  /** SDKTaskNotificationMessage.output_file — the task's recorded output. */
+  output_file?: string
   /** SDKTaskUpdatedMessage.patch. */
   patch?: { status?: string; description?: string; is_backgrounded?: boolean }
   /** SDKBackgroundTasksChangedMessage.tasks. */
@@ -239,6 +243,9 @@ export function taskFrameToInput(
         status: frame.status,
         ...(typeof frame.summary === 'string' && frame.summary
           ? { summary: frame.summary }
+          : {}),
+        ...(typeof frame.output_file === 'string' && frame.output_file
+          ? { outputFile: frame.output_file }
           : {}),
       }
     }

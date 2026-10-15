@@ -30,7 +30,7 @@ Each chat agent SHALL have a tool to send a message to a group of its team or to
 - **THEN** the tool returns an error and nothing is queued
 
 ### Requirement: Messages carry sender context
-Every message SHALL record the sending session, the sender's group, the sender's project directory as `origin_path`, its priority, its tags, its thread, and its creation time. Sender fields SHALL be set by the system and SHALL NOT be settable by the sending agent.
+Every message SHALL record its sender — a chat session with its group and its project directory as `origin_path`, or the human — plus its priority, its tags, its thread, and its creation time. Sender fields SHALL be set by the system and SHALL NOT be settable by the sender.
 
 #### Scenario: Worktree sender path recorded
 - **WHEN** an agent running in a linked worktree sends a message
@@ -39,6 +39,10 @@ Every message SHALL record the sending session, the sender's group, the sender's
 #### Scenario: Sender identity cannot be forged
 - **WHEN** an agent's tool input claims a different sender or origin path
 - **THEN** the message records the actual sending session and its project directory
+
+#### Scenario: Human sender recorded
+- **WHEN** the human sends a message from the composer
+- **THEN** the message records the human as its sender, with no chat session, and delivered rows show it the same way agent senders are shown
 
 ### Requirement: Normal messages never interrupt
 A message that is not urgent SHALL be delivered only when the recipient is idle: its agent has no turn in flight, no pending approval or question, and no running background worker. It SHALL be delivered as a new turn and SHALL NOT be added to an in-flight turn.
@@ -104,7 +108,7 @@ A delivered message SHALL appear in the recipient's transcript as a peer-message
 - **THEN** the peer-message entries are shown as before
 
 ### Requirement: Agents can reply
-Each chat agent SHALL have a tool to reply to a message it received. A reply SHALL join the original message's thread and SHALL be sent as a direct message to the original sender, following the normal delivery rules.
+Each chat agent SHALL have a tool to reply to a message it received. A reply SHALL join the original message's thread and SHALL be sent as a direct message to the original sender, following the normal delivery rules. When the original sender is the human, the reply SHALL be recorded in the thread and delivered to the human directly — no agent session receives it — and connected clients SHALL be notified. An agent SHALL NOT be able to start a new thread to the human.
 
 #### Scenario: Reply reaches sender
 - **WHEN** a dev replies to a message from the team lead
@@ -113,6 +117,14 @@ Each chat agent SHALL have a tool to reply to a message it received. A reply SHA
 #### Scenario: Reply to busy sender
 - **WHEN** a reply arrives while the original sender's turn is in flight
 - **THEN** the reply waits until the sender is idle
+
+#### Scenario: Reply to a human message reaches the human
+- **WHEN** an agent replies to a message the human sent
+- **THEN** the reply is recorded in the thread as delivered to the human, connected clients are notified, and no agent session is started or claimed for it
+
+#### Scenario: Agents cannot start mail to the human
+- **WHEN** an agent sends a message addressed to the human rather than replying in a human-started thread
+- **THEN** the tool returns an error and nothing is queued
 
 ### Requirement: Replies reach archived or killed senders
 When the original sender is archived, the system SHALL restore it and deliver the reply. When the original sender was killed, the system SHALL deliver the reply to the sender's group mailbox with the full thread attached. A killed sender without a group SHALL have the reply dead-lettered.
@@ -144,7 +156,7 @@ Every thread SHALL count its messages. When sending would exceed the thread's ho
 - **THEN** the message over the limit is dead-lettered, the sender is told, and the UI shows a notification
 
 ### Requirement: Team mailbox is inspectable
-The UI SHALL show, per team, queued, scheduled, and dead-lettered messages with their sender, recipient, priority, and age. The user SHALL be able to cancel a queued or scheduled message and to retry or discard a dead-lettered one.
+The UI SHALL show, per team, every unsettled message state with its sender, recipient, priority, and age: queued due now, awaiting the recipient's approval or answer, scheduled, starting an agent, receiving, parked, held for review, and dead-lettered. A message reserved for an agent being spawned SHALL remain visible while its agent starts instead of disappearing from the view. The user SHALL be able to cancel a queued or scheduled message and to retry or discard a dead-lettered one.
 
 #### Scenario: Cancel a queued message
 - **WHEN** the user cancels a queued group message
@@ -153,6 +165,10 @@ The UI SHALL show, per team, queued, scheduled, and dead-lettered messages with 
 #### Scenario: Retry a dead letter
 - **WHEN** the user retries a dead-lettered message
 - **THEN** it is queued again with its thread's hop count reset
+
+#### Scenario: A message starting an agent stays visible
+- **WHEN** a message is reserved for an agent whose startup is held open
+- **THEN** the mailbox shows it under a Starting agent section for as long as the startup runs, and it never matches no category
 
 ### Requirement: Queued mail survives restart
 Queued, scheduled, and dead-lettered messages, and claims of messages not yet delivered, SHALL persist across server restart.
@@ -181,7 +197,7 @@ Every delivered envelope SHALL carry its message id. Delivery SHALL be acknowled
 - **THEN** on restart the message is returned to the queue and is later delivered exactly once
 
 ### Requirement: Uncertain receipt is held for the human
-When receipt can be neither confirmed nor refuted — the recipient's transcript is missing, unreadable, or ends in a malformed row — the message SHALL be held out of automatic delivery and reassignment and surfaced in the mailbox view. A human retry SHALL go to the same recipient with a possible-duplicate notice keyed by the message id, and discarding SHALL be an explicit action.
+When receipt can be neither confirmed nor refuted (the recipient's transcript is missing, unreadable, or ends in a malformed row), the message SHALL be held out of automatic delivery and reassignment and shown in the mailbox view. A human retry SHALL go to the same recipient with a possible-duplicate notice, after the possible duplication is explained; discarding SHALL be explicit. Every cancel, retry, or discard SHALL be recorded in the message's append-only history and kept in its thread.
 
 #### Scenario: Receipt without a confirmed durable record
 - **WHEN** a pushed message's recipient transcript ends in a torn row after a machine-level crash
@@ -194,3 +210,67 @@ When receipt can be neither confirmed nor refuted — the recipient's transcript
 #### Scenario: Human retry of an uncertain message
 - **WHEN** the user retries a held message to the same recipient
 - **THEN** the redelivered envelope tells the agent to treat an already-seen message id as a no-op
+
+#### Scenario: Duplication explained before retry
+- **WHEN** the user chooses to retry an uncertain message
+- **THEN** the action explains first that the recipient may already have seen the message and a retry may deliver it twice, and the retry can only target the original recipient
+
+### Requirement: The human can cancel parked mail
+The Mailbox view SHALL offer Cancel on a parked message beside Hand off. Cancelling SHALL cancel the parked message together with its waiting resume message, SHALL record the cancellation as the human's action, and SHALL neither restore nor resume the holder. While the resume turn is in flight, the cancel SHALL be refused with the holder named.
+
+#### Scenario: Cancel work parked on an archived agent
+- **WHEN** the user cancels a parked message whose holder is archived
+- **THEN** the message and its resume message are cancelled, the row leaves the Parked section, and the holder stays archived
+
+#### Scenario: Resume turn in flight
+- **WHEN** the user cancels a parked message while its holder is running the resume turn
+- **THEN** the view reports that the holder is resuming the work now, and both messages are unchanged
+
+#### Scenario: Parked state changed meanwhile
+- **WHEN** the user cancels a parked message that was unparked or handed off a moment earlier
+- **THEN** the view reports that the action is no longer available and the message keeps its new state
+
+### Requirement: Mailbox rows show their message id
+Each row of the Mailbox view SHALL show a short form of its message id that matches the id's prefix, and SHALL make the full id available to read and copy, so an id quoted by an agent can be matched to its row.
+
+#### Scenario: Match an id quoted by the lead
+- **WHEN** the lead names message `0e849a2e-5025-…` in a chat
+- **THEN** the user finds the Mailbox row showing `0e849a2e` and can copy its full id
+
+### Requirement: Waiting rows render their reason
+A waiting row — one queued due now, awaiting the recipient's approval or answer, or starting an agent — SHALL show its computed waiting reason's immediate blocker on one line, with the other constraints expandable. Scheduled rows SHALL show their due time, and parked, held-for-review, and dead-lettered rows keep their existing explanations. Named sessions SHALL link to their chats; dead letters SHALL show a readable label for known codes with the code visible.
+
+#### Scenario: A waiting row shows its blocker
+- **WHEN** a queued message's waiting reason has group capacity 2 of 2 as its immediate blocker
+- **THEN** the row shows that capacity line and can expand to the other constraints that also apply
+
+#### Scenario: A scheduled row keeps its due time
+- **WHEN** a queued message's delivery is scheduled for a future time
+- **THEN** the row shows when it is due rather than a waiting blocker
+
+#### Scenario: Occupants and worktrees are navigable
+- **WHEN** a waiting reason names the session occupying a worktree
+- **THEN** the session name links to its chat and the worktree shows a short name with its full path available
+
+#### Scenario: A dead letter reads as a sentence
+- **WHEN** a dead-lettered message's reason code is `worktree-missing: /path`
+- **THEN** the row shows a readable label such as "Target worktree is missing" with the raw code still visible
+
+### Requirement: The human can send and reply to team mail
+The human SHALL be able to send a message to a group of the team or to one of its chat sessions from the Messages view, with a body, an optional task reference, and a priority defaulting to normal. The composer SHALL explain urgent semantics: urgent direct mail interrupts the recipient after its pending requests resolve, while urgent group mail waits for an idle member. A human reply SHALL stay in its thread and keep its task unless explicitly changed.
+
+#### Scenario: Human sends to a group
+- **WHEN** the human composes a message to the `devs` group with normal priority
+- **THEN** it is queued in the group's mailbox and follows the normal delivery rules
+
+#### Scenario: Urgent semantics explained
+- **WHEN** the composer offers a priority choice
+- **THEN** it states that urgent direct mail interrupts the recipient after its pending requests resolve, while urgent group mail waits for an idle member
+
+#### Scenario: Human reply keeps thread and task
+- **WHEN** the human replies to a message of a task-linked thread without changing the task
+- **THEN** the reply joins that thread and references the same task
+
+#### Scenario: Invalid recipient refused
+- **WHEN** the human sends to a session of another team or an unknown group
+- **THEN** the composer shows an error and nothing is queued

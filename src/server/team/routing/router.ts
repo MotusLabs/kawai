@@ -6,14 +6,18 @@
 // a spawned member, a hold, or nothing. A held message is not re-asked
 // until its retry time passes or its candidates change. Every decision is
 // kept in a small per-group log for the mailbox view.
+// Waiting reasons (team-waiting-reasons D2): a `none` or `hold` carries a
+// diagnosis built from the same eligibility breakdown, live counts, spawn
+// facts, and cooldowns the decision used — never scraped from the log.
 import type { ChatUsageReport } from '../../../shared/chat'
 import type {
-  RouteCandidate, RouteContext, RouteDecisionLogEntry, RouteMessage, RouteProfileState,
+  RouteCandidate, RouteContext, RouteDecisionLogEntry, RouteGroup, RouteMessage, RouteProfileState,
 } from '../../../shared/routing'
-import type { EligibleMember, GroupRouter, RouteResult, RouteView } from '../dispatcher'
+import type { WaitingConstraint } from '../../../shared/team'
+import type { EligibleMember, GroupRouter, MemberExclusion, RouteResult, RouteView } from '../dispatcher'
 import type { GroupDefinition } from '../groupFile'
 import type { TeamMessage } from '../mailboxStore'
-import type { WorktreeStaffing } from '../staffing'
+import type { SpawnContext, WorktreeStaffing } from '../staffing'
 import { builtinPick } from './builtin'
 import { buildCandidates, DEFAULT_PROFILE_ID } from './candidates'
 import { cooldownUntil, type LimitEventStore } from './limitEvents'
@@ -46,7 +50,7 @@ export interface ProfileRouterOptions {
 }
 
 export class ProfileRouter implements GroupRouter {
-  private readonly holds = new Map<string, { until: number | null; signature: string }>()
+  private readonly holds = new Map<string, { until: number | null; signature: string; reason?: string }>()
   private readonly log = new Map<string, RouteDecisionLogEntry[]>()
 
   constructor(private readonly options: ProfileRouterOptions) {}
@@ -64,8 +68,11 @@ export class ProfileRouter implements GroupRouter {
     const now = this.options.now?.() ?? Date.now()
     const group = await this.options.groupOf(message)
     if (!group) {
-      // A group file that is gone keeps its members' mail flowing to them.
-      return view.eligible[0] ? { kind: 'member', sessionId: view.eligible[0].sessionId } : { kind: 'none' }
+      // A group file that is gone keeps its members' mail flowing to them;
+      // with no member to take it, the missing definition is the blocker.
+      return view.eligible[0]
+        ? { kind: 'member', sessionId: view.eligible[0].sessionId }
+        : { kind: 'none', diagnosis: [{ kind: 'group-missing' }, ...noEligible(view)] }
     }
     const worktree = this.options.targetWorktree(message)
     const spawn = await this.options.staffing.spawnContext(message, worktree)
@@ -82,12 +89,12 @@ export class ProfileRouter implements GroupRouter {
     })
     if (candidates.length === 0) {
       this.holds.delete(message.id)
-      return { kind: 'none' }
+      return { kind: 'none', diagnosis: diagnoseNone(routeGroup, spawn, view) }
     }
     const signature = candidates.map(candidate => candidate.id).sort().join(',')
     const held = this.holds.get(message.id)
     if (held && held.signature === signature && (held.until === null || held.until > now)) {
-      return { kind: 'hold', retryAt: held.until }
+      return { kind: 'hold', retryAt: held.until, diagnosis: [routingHold(held.until, held.reason)] }
     }
     this.holds.delete(message.id)
 
@@ -107,9 +114,9 @@ export class ProfileRouter implements GroupRouter {
         const decision = await rule.route(ctx)
         if (decision.type === 'hold') {
           const until = decision.retryAfterMs !== undefined ? now + decision.retryAfterMs : null
-          this.holds.set(message.id, { until, signature })
+          this.holds.set(message.id, { until, signature, ...(decision.reason ? { reason: decision.reason } : {}) })
           record('rule', 'hold', decision.reason)
-          return { kind: 'hold', retryAt: until }
+          return { kind: 'hold', retryAt: until, diagnosis: [routingHold(until, decision.reason)] }
         }
         if (decision.type === 'pick') {
           chosen = candidates.find(candidate => candidate.id === decision.candidateId) ?? null
@@ -128,7 +135,7 @@ export class ProfileRouter implements GroupRouter {
           .filter(Number.isFinite)
         const retryAt = ends.length > 0 ? Math.min(...ends) : null
         record('builtin', 'hold', 'every candidate profile is cooling')
-        return { kind: 'hold', retryAt }
+        return { kind: 'hold', retryAt, diagnosis: [{ kind: 'all-profiles-cooling', ...(retryAt !== null ? { retryAt: new Date(retryAt).toISOString() } : {}) }] }
       }
       record('builtin', chosen.id, view.attempt === 2 ? 'stale pick retried' : undefined)
     }
@@ -169,6 +176,75 @@ function memberState(member: GroupMemberRecord, eligible: EligibleMember | undef
     sessionId: member.sessionId, profileId: member.profileId, cwd: member.cwd, eligible: !!eligible,
     ...(eligible ? { idleForMs: eligible.idleForMs } : {}),
   }
+}
+
+/** A readable cause for the no-eligible-member breakdown line. */
+const CAUSE_LABELS: Record<MemberExclusion['kind'], string> = {
+  'busy': 'working',
+  'pending-card': 'awaiting an approval or answer',
+  'parked': 'parked',
+  'other-worktree': 'in another worktree',
+  'unavailable': 'unavailable',
+  'startup-failed': 'startup failed',
+  'excluded-profile': 'on the excluded profile',
+  'profile-cooling': 'cooling',
+}
+
+/** The no-eligible-member constraint from the dispatcher's member breakdown. */
+function noEligible(view: RouteView): WaitingConstraint[] {
+  const exclusions = view.exclusions ?? []
+  if (exclusions.length === 0) return [{ kind: 'no-eligible-member', detail: 'the group has no live members' }]
+  // Structured, not pre-joined: the client names and links each member (S1).
+  return [{
+    kind: 'no-eligible-member',
+    sessionIds: exclusions.map(entry => entry.sessionId),
+    members: exclusions.map(entry => ({
+      sessionId: entry.sessionId,
+      cause: CAUSE_LABELS[entry.kind],
+      ...(entry.kind === 'other-worktree' && entry.detail ? { detail: entry.detail } : {}),
+    })),
+  }]
+}
+
+/** A routing hold with the rule's reason and retry time. */
+function routingHold(until: number | null, reason?: string): WaitingConstraint {
+  return { kind: 'routing-hold', ...(reason ? { detail: reason } : {}), ...(until !== null ? { retryAt: new Date(until).toISOString() } : {}) }
+}
+
+/**
+ * The constraints behind a `none` (team-waiting-reasons D2/Q1): the same
+ * live counts the candidate builder tallied, the spawn facts staffing
+ * reported, and the dispatcher's member breakdown. Caps lead — group, then
+ * per-profile, then team spawn, then worktree occupancy — then member
+ * facts, then spawn specifics; `orderConstraints` fixes the final order.
+ */
+function diagnoseNone(group: RouteGroup, spawn: SpawnContext | null, view: RouteView): WaitingConstraint[] {
+  const constraints: WaitingConstraint[] = []
+  if (group.live >= group.max) constraints.push({ kind: 'group-cap', counts: { live: group.live, cap: group.max } })
+  for (const profile of group.profiles) {
+    if (profile.cap !== undefined && profile.live >= profile.cap) {
+      constraints.push({ kind: 'profile-cap', counts: { live: profile.live, cap: profile.cap }, detail: profile.profileId })
+    }
+  }
+  const facts = spawn?.facts
+  if (facts && facts.teamSpawned >= facts.teamCap) {
+    constraints.push({ kind: 'team-spawn-cap', counts: { live: facts.teamSpawned, cap: facts.teamCap } })
+  }
+  if (facts && facts.worktreeOccupants.length + facts.worktreePending >= 1) {
+    constraints.push({
+      kind: 'worktree-occupied',
+      counts: { live: facts.worktreeOccupants.length + facts.worktreePending, cap: 1 },
+      ...(facts.worktreeOccupants.length > 0 ? { sessionIds: facts.worktreeOccupants } : {}),
+      detail: spawn!.worktree,
+    })
+  }
+  const startup = (view.exclusions ?? []).find(entry => entry.kind === 'startup-failed')
+  if (startup) constraints.push({ kind: 'startup-failed', ...(startup.detail ? { detail: startup.detail } : {}) })
+  constraints.push(...noEligible(view))
+  if (facts?.backoffRetryAt != null) {
+    constraints.push({ kind: 'spawn-backoff', retryAt: new Date(facts.backoffRetryAt).toISOString() })
+  }
+  return constraints
 }
 
 function routeMessage(message: TeamMessage, worktree: string | null): RouteMessage {

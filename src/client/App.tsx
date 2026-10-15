@@ -9,6 +9,7 @@ import Header from './components/Header'
 import SessionList from './components/SessionList'
 import Terminal from './components/Terminal'
 import ChatView from './components/chat/ChatView'
+import TeamWorkspaceView from './components/team/TeamWorkspaceView'
 import { useUpdateStore } from './stores/updateStore'
 import NewSessionModal from './components/NewSessionModal'
 import BranchBrowserModal from './components/BranchBrowserModal'
@@ -34,6 +35,8 @@ import { requestChatArchive } from './utils/chatArchive'
 import { flushSync } from 'react-dom'
 import { primeAudio, needsUserGesture } from './utils/sound'
 import { getEffectiveModifier, matchesModifier } from './utils/device'
+import { startTeamViewMigration } from './stores/teamViewMigration'
+import { useTeamLocationStore, useTeamPageRoute } from './hooks/useTeamLocation'
 
 interface ServerInfo {
   port: number
@@ -158,6 +161,17 @@ export default function App() {
 
   // Handle mobile keyboard viewport adjustments
   useVisualViewport()
+
+  // The Team page route (team-workspace-pages D3): the URL hash names the
+  // team, tab, and selection, and the page replaces the chat/terminal pane
+  // while leaving `selectedSessionId` alone (team-workspace D10). A reload
+  // restores the location; a selection act after mount leaves it, so Back
+  // returns to the same tab and item.
+  const { teamLocation, openTeamPage: handleOpenTeamPage } = useTeamPageRoute()
+
+  // Team panel views follow workspace discovery to their team's key, for every
+  // chat — not only the selected one (team-workspace-pages D2).
+  useEffect(() => startTeamViewMigration(), [])
 
   // Prime audio on user interaction. Persistent listener (not once) because Safari
   // suspends AudioContext after sleep/wake and needs a fresh gesture to resume.
@@ -471,6 +485,9 @@ export default function App() {
   // Auto-select first visible session when current selection is filtered out
   useEffect(() => {
     if (!hasLoaded) return
+    // While the Team page is open, a filtered-out selection is corrected when
+    // the user returns to a chat — not by kicking them off the page.
+    if (teamLocation) return
     if (selectedHibernatingSessionId) return
     if (!selectedSessionId) return
     if (navigationLiveSessions.some((session) => session.id === selectedSessionId)) {
@@ -480,6 +497,7 @@ export default function App() {
     setSelectedSessionId(null)
   }, [
     hasLoaded,
+    teamLocation,
     selectedSessionId,
     selectedHibernatingSessionId,
     navigationLiveSessions,
@@ -489,6 +507,8 @@ export default function App() {
 
   useEffect(() => {
     if (!selectedHibernatingSessionId) return
+    // Corrected on return instead (see the filtered-out effect above).
+    if (teamLocation) return
     if (pendingHibernatingSession?.sessionId === selectedHibernatingSessionId) {
       return
     }
@@ -514,6 +534,7 @@ export default function App() {
     if (selectFirstVisibleTarget()) return
     setSelectedHibernatingSessionId(null)
   }, [
+    teamLocation,
     navigationHibernatingSessions,
     navigationLiveSessions,
     agentSessionsEpoch,
@@ -561,6 +582,8 @@ export default function App() {
   // Auto-select first session on mobile when sessions load
   useEffect(() => {
     const isMobile = window.matchMedia('(max-width: 767px)').matches
+    // The Team page may be the reload target; it stays until a selection act.
+    if (teamLocation) return
     if (
       isMobile &&
       hasLoaded &&
@@ -574,6 +597,7 @@ export default function App() {
     navigationHibernatingSessions.length,
     navigationLiveSessions.length,
     hasLoaded,
+    teamLocation,
     selectFirstVisibleTarget,
     selectedSessionId,
     selectedHibernatingSessionId,
@@ -696,7 +720,8 @@ export default function App() {
       // New session: [mod]+N
       if (isShortcut && code === 'KeyN') {
         event.preventDefault()
-        if (!isModalOpen && settingsHydrated) {
+        // Never stack over Settings: its close would restore terminal focus under this dialog.
+        if (!isModalOpen && !isSettingsOpen && settingsHydrated) {
           setIsModalOpen(true)
         }
         return
@@ -716,6 +741,7 @@ export default function App() {
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [
     isModalOpen,
+    isSettingsOpen,
     selectedSessionId,
     selectedHibernatingSessionId,
     setSelectedSessionId,
@@ -766,6 +792,14 @@ export default function App() {
     setBranchBrowserRepositoryId(repositoryId)
     setCreateWorktreeBranch(null)
   }, [])
+  // The task pickers' create-worktree link (task-assignment D8): opens the
+  // same branch-browser flow for the repository containing the project path;
+  // the pickers refresh their lists when they regain focus on return.
+  const handleBrowseBranchesForPath = useCallback((projectPath: string) => {
+    const repository = workspaceSnapshot?.repositories.find(row =>
+      row.worktrees.some(worktree => projectPath === worktree.path || projectPath.startsWith(`${worktree.path}/`)))
+    if (repository) handleBrowseBranches(repository.id)
+  }, [workspaceSnapshot, handleBrowseBranches])
   const handleCloseBranchBrowser = useCallback(() => {
     setBranchBrowserRepositoryId(null)
     setCreateWorktreeBranch(null)
@@ -913,6 +947,7 @@ export default function App() {
           onNewSessionInWorktree={handleNewSessionInWorktree}
           onCreateChangeWorktree={handleCreateChangeWorktree}
           onBrowseBranches={handleBrowseBranches}
+          onOpenTeam={handleOpenTeamPage}
         />
       </div>
 
@@ -922,12 +957,22 @@ export default function App() {
         onMouseDown={handleResizeStart}
       />
 
-      {/* Active session pane - full height on desktop */}
-      {selectedSession?.kind === 'chat' ? <ChatView
+      {/* Active session pane - full height on desktop. A team route replaces
+          the pane with the Team page; the selection is untouched (D10). */}
+      {teamLocation ? <TeamWorkspaceView
+        teamKey={teamLocation.teamKey}
+        location={teamLocation}
+        sendMessage={sendMessage}
+        connected={connectionStatus === 'connected'}
+        connectionEpoch={connectionEpoch}
+        onCreateWorktree={handleBrowseBranchesForPath}
+      /> : selectedSession?.kind === 'chat' ? <ChatView
         session={selectedSession} sendMessage={sendMessage} subscribe={subscribe}
         connectionStatus={connectionStatus} connectionEpoch={connectionEpoch}
         error={connectionError || serverError} onClose={() => setSelectedSessionId(null)}
         onKill={() => handleKillSession(selectedSession.id)}
+        onOpenTeam={handleOpenTeamPage}
+        onOpenTask={(teamKey, taskId) => useTeamLocationStore.getState().navigate({ teamKey, tab: 'tasks', id: taskId })}
       /> : <Terminal
         session={selectedSession}
         sessions={navigationLiveSessions}
@@ -957,6 +1002,7 @@ export default function App() {
         onNewSessionInWorktree={handleNewSessionInWorktree}
         onCreateChangeWorktree={handleCreateChangeWorktree}
         onBrowseBranches={handleBrowseBranches}
+        onOpenTeam={handleOpenTeamPage}
       />}
 
       <NewSessionModal

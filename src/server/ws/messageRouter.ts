@@ -15,6 +15,7 @@ import { profileRequestError } from '../routes/claudeProfiles'
 import { parseApprovalPolicy } from '../chat/approvalPolicy'
 import type { ChatSessionManager } from '../chat/ChatSessionManager'
 import type { ChatConnection, ChatConnections } from '../chat/ChatConnections'
+import { isChatConnectionMessage } from '../chat/chatConnectionTypes'
 import type { ClientMessage } from '../../shared/types'
 import {
   parseCreateChangeWorktreePayload,
@@ -158,37 +159,15 @@ export function handleMessage(
     return
   }
 
+  // Chat and team frames belong to ChatConnections. Membership — not a second
+  // hand-written case list — decides that, so a type added under one of its
+  // prefixes can never fall through to 'Unknown message type' again.
+  if (isChatConnectionMessage(message)) {
+    fireAndForget(chatConnections.handle(chatPeer(ws), message), 'chatMessage')
+    return
+  }
+
   switch (message.type) {
-    case 'chat-attach':
-    case 'chat-detach':
-    case 'chat-send':
-    case 'chat-interrupt':
-    case 'chat-archive':
-    case 'chat-restore':
-    case 'chat-approval':
-    case 'chat-answer':
-    case 'chat-set-approval-policy':
-    case 'chat-debug-open':
-    case 'chat-debug-page':
-    case 'chat-debug-close':
-    case 'team-mailbox-open':
-    case 'team-mailbox-close':
-    case 'team-mailbox-cancel':
-    case 'team-mailbox-retry':
-    case 'team-mailbox-discard':
-    case 'team-mailbox-reload-rules':
-    case 'team-mailbox-hand-off':
-    case 'team-tasks-open':
-    case 'team-tasks-close':
-    case 'team-task-open':
-    case 'team-task-close':
-    case 'team-task-create':
-    case 'team-task-amend':
-    case 'team-task-note':
-    case 'team-task-status':
-    case 'chat-worker-transcript':
-      fireAndForget(chatConnections.handle(chatPeer(ws), message), 'chatMessage')
-      return
     case 'ping':
       send(ws, message.seq != null ? { type: 'pong', seq: message.seq } : { type: 'pong' })
       return

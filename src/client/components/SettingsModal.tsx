@@ -14,6 +14,7 @@ import ChatSettings from './settings/ChatSettings'
 import type { ChatProviderSettingsHandle } from './ChatProviderSettings'
 import TerminalSettings from './settings/TerminalSettings'
 import GeneralSettings from './settings/GeneralSettings'
+import { restoreTerminalFocus } from '../utils/terminalFocus'
 
 interface SettingsChangeFlags {
   webglChanged: boolean
@@ -151,14 +152,17 @@ export default function SettingsModal({
   const [chatProviderBusy, setChatProviderBusy] = useState(true)
   const submittingRef = useRef(false)
 
-  const reenableTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  /**
+   * Whether the dialog is currently in its open state. The draft is
+   * initialized during render on the open/close transition (the block below),
+   * not in an effect: a dependency change while the modal is open — a pushed
+   * preset, a server default — must never re-initialize the draft and
+   * overwrite unsaved edits (the #112 fix, applied here too).
+   */
+  const [wasOpenState, setWasOpenState] = useState(false)
 
-  useEffect(() => {
-    if (reenableTimeoutRef.current) {
-      clearTimeout(reenableTimeoutRef.current)
-      reenableTimeoutRef.current = null
-    }
-
+  if (isOpen !== wasOpenState) {
+    setWasOpenState(isOpen)
     if (isOpen) {
       setDraftDir(defaultProjectDir)
       setDraftPresets(commandPresets)
@@ -181,6 +185,26 @@ export default function SettingsModal({
       setDraftSoundOnPermission(soundOnPermission)
       setDraftSoundOnIdle(soundOnIdle)
       setActiveTab('sessions')
+    }
+  }
+
+  /**
+   * The open state the imperative open/close effect below last saw. Handing
+   * focus back to the terminal belongs to a real open→close transition only:
+   * this modal is mounted closed on every page load, so a mount-while-closed
+   * close branch would schedule the terminal-focus timeout needlessly, and a
+   * close→reopen within 300 ms would let that stale timeout re-enable the
+   * xterm textarea under the open dialog. This effect stays keyed to
+   * `[isOpen]` alone: a wider dependency list would let React's cleanup
+   * cancel the pending restore when a setting changes just after close, and
+   * its re-run would see no transition to re-arm it.
+   */
+  const prevOpenRef = useRef(false)
+
+  useEffect(() => {
+    const wasOpen = prevOpenRef.current
+    prevOpenRef.current = isOpen
+    if (isOpen) {
       // Disable terminal textarea when modal opens to prevent keyboard capture
       if (typeof document !== 'undefined') {
         const textarea = document.querySelector('.xterm-helper-textarea') as HTMLTextAreaElement | null
@@ -189,50 +213,16 @@ export default function SettingsModal({
           textarea.setAttribute('disabled', 'true')
         }
       }
-    } else {
-      // Re-enable terminal textarea when modal closes
-      if (typeof document !== 'undefined') {
-        reenableTimeoutRef.current = setTimeout(() => {
-          if (typeof document === 'undefined') {
-            return
-          }
-          const textarea = document.querySelector('.xterm-helper-textarea') as HTMLTextAreaElement | null
-          if (textarea) {
-            textarea.removeAttribute('disabled')
-            textarea.focus()
-          }
-        }, 300)
-      }
+      return
     }
-    return () => {
-      if (reenableTimeoutRef.current) {
-        clearTimeout(reenableTimeoutRef.current)
-        reenableTimeoutRef.current = null
-      }
-    }
-  }, [
-    commandPresets,
-    defaultPresetId,
-    defaultProjectDir,
-    sessionSortMode,
-    sessionSortDirection,
-    useWebGL,
-    fontSize,
-    chatFontSize,
-    defaultApprovalPolicy,
-    lineHeight,
-    letterSpacing,
-    fontOption,
-    customFontFamily,
-    shortcutModifier,
-    showProjectName,
-    showLastUserMessage,
-    showSessionIdPrefix,
-    theme,
-    soundOnPermission,
-    soundOnIdle,
-    isOpen,
-  ])
+    // A mount while closed, or any rerun while closed, is no transition.
+    if (!wasOpen || typeof document === 'undefined') return
+    // Re-enable terminal textarea when modal closes
+    const timer = setTimeout(restoreTerminalFocus, 300)
+    // Reopening before it fires cancels it, so it never lands under the dialog;
+    // a different dialog opened meanwhile makes it a no-op.
+    return () => clearTimeout(timer)
+  }, [isOpen])
 
   // Handle Escape key to close modal
   useEffect(() => {
@@ -294,6 +284,9 @@ export default function SettingsModal({
 
   return (
     <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="settings-title"
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
       onClick={(event) => {
         if (event.target === event.currentTarget) onClose()
@@ -305,7 +298,7 @@ export default function SettingsModal({
       >
         <div className="p-6 pb-0">
           <div className="flex items-baseline justify-between gap-4">
-            <h2 className="text-sm font-semibold uppercase tracking-wider text-primary text-balance">
+            <h2 id="settings-title" className="text-sm font-semibold uppercase tracking-wider text-primary text-balance">
               Settings
             </h2>
             {version && (

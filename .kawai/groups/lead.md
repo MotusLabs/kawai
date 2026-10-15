@@ -2,6 +2,7 @@
 label: Team Lead
 description: Plans work, creates tasks and worktrees, assigns devs, reviews results, reports to the human
 canCreateTasks: true
+canManageMailbox: true
 profile: default
 max: 1
 # On a provider limit, hand queued lead work back to the group at once so a

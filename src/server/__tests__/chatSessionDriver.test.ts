@@ -14,6 +14,7 @@ import type {
 import type {
   ChatActivity,
   ChatApprovalPolicy,
+  ChatBackgroundTask,
   ChatCommandState,
   ChatContextUsage,
   ChatEvent,
@@ -24,6 +25,7 @@ import type {
 import type { SessionStatus } from '../../shared/types'
 import type { ChatWireRecorder } from '../chat/wireTap'
 import type { ChatLimitSignal } from '../chat/limitSignals'
+import { consumerMessages } from './fixtures/backgroundTasks'
 import {
   ChatSessionDriver,
   type ChatQueryFactory,
@@ -165,6 +167,8 @@ interface Harness {
   processEnds: number[]
   /** Each roster publish (workers design D2): the full projection. */
   workers: ChatWorker[][]
+  /** Each background-task roster publish (background tasks D2). */
+  backgroundTasks: ChatBackgroundTask[][]
   rateLimits: ChatUsageReport[]
   usageReports: ChatUsageReport[]
   contextUsage: Array<ChatContextUsage | null>
@@ -190,6 +194,7 @@ function createHarness(
     getApprovalPolicy?: () => ChatApprovalPolicy
     teamMcpServer?: NonNullable<Options['mcpServers']>[string]
     getSystemPromptAppend?: () => string | undefined
+    getEffort?: () => Options['effort']
     /** Replaces the harness's cwd capture (e.g. with a throwing observer). */
     onCwdChanged?: (newCwd: string) => void
     wire?: ChatWireRecorder
@@ -216,6 +221,7 @@ function createHarness(
   const notifications: Array<[ChatNotification, number | undefined]> = []
   const processEnds: number[] = []
   const workers: ChatWorker[][] = []
+  const backgroundTasks: ChatBackgroundTask[][] = []
   const rateLimits: ChatUsageReport[] = []
   const usageReports: ChatUsageReport[] = []
   const contextUsage: Array<ChatContextUsage | null> = []
@@ -250,6 +256,7 @@ function createHarness(
     onNotification: overrides.onNotification ?? ((notification, timeoutMs) => notifications.push([notification, timeoutMs])),
     onProcessEnd: overrides.onProcessEnd ?? (() => processEnds.push(1)),
     onWorkers: (list) => workers.push(list),
+    onBackgroundTasks: (tasks) => backgroundTasks.push(tasks),
     onRateLimit: (report) => rateLimits.push(report),
     onUsageReport: (report) => usageReports.push(report),
     onContextUsage: (usage, opts) => {
@@ -277,6 +284,7 @@ function createHarness(
     notifications,
     processEnds,
     workers,
+    backgroundTasks,
     rateLimits,
     usageReports,
     contextUsage,
@@ -617,6 +625,37 @@ describe('ChatSessionDriver', () => {
     harness.driver.send('after exit')
     expect(harness.fakes[1]!.options.systemPrompt).toMatchObject({ append: '# Your role: QA\n\nTest it twice.' })
     expect(reads).toBe(2)
+    harness.driver.kill()
+  })
+
+  test('the group effort is a launch option, re-read only at the next spawn', async () => {
+    let effort: Options['effort'] = 'medium'
+    let reads = 0
+    const harness = createHarness({ getEffort: () => { reads++; return effort } })
+    harness.driver.send('hello')
+    expect(harness.fakes[0]!.options.effort).toBe('medium')
+    // An edit while the process runs changes nothing for it.
+    effort = 'max'
+    harness.driver.send('again')
+    expect(reads).toBe(1)
+    harness.fakes[0]!.exit()
+    await flush()
+    harness.driver.send('after exit')
+    expect(harness.fakes[1]!.options.effort).toBe('max')
+    // Removing it leaves Claude Code's settings in force: no effort key.
+    effort = undefined
+    harness.fakes[1]!.exit()
+    await flush()
+    harness.driver.send('after removal')
+    expect('effort' in harness.fakes[2]!.options).toBe(false)
+    expect(reads).toBe(3)
+    harness.driver.kill()
+  })
+
+  test('without a getter no effort option is passed', () => {
+    const harness = createHarness()
+    harness.driver.send('hello')
+    expect('effort' in harness.fakes[0]!.options).toBe(false)
     harness.driver.kill()
   })
 
@@ -3046,5 +3085,202 @@ describe('ChatSessionDriver limit events', () => {
     harness.fakes[0]!.push(result('success'))
     await flush()
     expect(typesOf(harness.events)).toContain('turn_completed')
+  })
+})
+
+describe('ChatSessionDriver agent-started turns (background tasks D5)', () => {
+  /** A background task_notification arriving while no turn is active. */
+  function taskNotification(taskId: string, status = 'completed'): SDKMessage {
+    return {
+      type: 'system',
+      subtype: 'task_notification',
+      task_id: taskId,
+      tool_use_id: 'call_task_1',
+      status,
+      summary: `Background command "${taskId}" completed (exit code 0)`,
+      uuid: 'n-uuid',
+      session_id: 'sdk-1',
+    } as unknown as SDKMessage
+  }
+
+  /** The turn-opening frame: one `init` per turn, consumer-visible. */
+  function initFrame(): SDKMessage {
+    return {
+      type: 'system',
+      subtype: 'init',
+      cwd: '/tmp/project',
+      session_id: 'sdk-1',
+      model: 'glm-5.3',
+      permissionMode: 'default',
+      tools: [],
+      slash_commands: [],
+    } as unknown as SDKMessage
+  }
+
+  test('the captured monitor wake replays into a triggered turn', async () => {
+    const harness = createHarness()
+    harness.driver.start()
+    // Real captured sequence: late first-turn frames (dropped — no turn),
+    // the settle, then the wake turn (init → status → stream → assistant →
+    // result). The sdk_host_only state frames are already filtered out.
+    for (const message of consumerMessages('monitor')) {
+      harness.fakes[0]!.push(message)
+    }
+    await flush(10)
+    const started = harness.events.filter((event) => event.type === 'turn_started')
+    expect(started).toHaveLength(1)
+    expect(started[0]).toMatchObject({
+      trigger: {
+        kind: 'task',
+        tasks: [{ taskId: 'b9cx4spe1', toolCallId: 'call_8b6144525600423b96c9e216', status: 'completed' }],
+      },
+    })
+    expect(typesOf(harness.events)).toContain('assistant_text')
+    expect(typesOf(harness.events)).toContain('turn_completed')
+    expect(harness.statuses).toContain('working')
+    expect(harness.statuses.at(-1)).toBe('waiting')
+  })
+
+  test('interrupt ends an agent-started turn like a user one', async () => {
+    const harness = createHarness()
+    harness.driver.start()
+    harness.fakes[0]!.push(taskNotification('btask_1'))
+    harness.fakes[0]!.push(initFrame())
+    await flush()
+    expect(harness.events.some((event) => event.type === 'turn_started')).toBe(true)
+    await harness.driver.interrupt()
+    await flush()
+    expect(typesOf(harness.events)).toContain('turn_interrupted')
+    expect(harness.statuses.at(-1)).toBe('waiting')
+  })
+
+  test('a send racing the self-start joins the open turn', async () => {
+    const harness = createHarness()
+    harness.driver.start()
+    harness.fakes[0]!.push(taskNotification('btask_1'))
+    harness.fakes[0]!.push(initFrame())
+    await flush()
+    const started = harness.events.filter((event) => event.type === 'turn_started')
+    expect(started).toHaveLength(1)
+    harness.driver.send('while you are at it')
+    harness.fakes[0]!.push(assistantText('joined answer'))
+    harness.fakes[0]!.push(result('success'))
+    await flush()
+    const turnId = (started[0] as { turnId: string }).turnId
+    const firstTwo = harness.events.slice(0, 2).map((event) => ({ type: event.type, turnId: (event as { turnId: string }).turnId }))
+    expect(firstTwo).toEqual([
+      { type: 'turn_started', turnId },
+      { type: 'user_message', turnId },
+    ])
+    expect(harness.events.filter((event) => event.type === 'turn_started')).toHaveLength(1)
+    expect(typesOf(harness.events)).toContain('turn_completed')
+  })
+
+  test('a self-start with no preceding notification carries the resumed trigger', async () => {
+    const harness = createHarness()
+    harness.driver.start()
+    harness.fakes[0]!.push(initFrame())
+    await flush()
+    const started = harness.events.filter((event) => event.type === 'turn_started')
+    expect(started).toHaveLength(1)
+    expect(started[0]).toMatchObject({ trigger: { kind: 'resumed' } })
+    harness.fakes[0]!.push(assistantText('picked up on my own'))
+    harness.fakes[0]!.push(result('success'))
+    await flush()
+    expect(typesOf(harness.events)).toContain('turn_completed')
+    // No user message bubble for a self-started turn.
+    expect(typesOf(harness.events)).not.toContain('user_message')
+  })
+
+  test('a user send consumes buffered notifications without a trigger', async () => {
+    const harness = createHarness()
+    harness.driver.start()
+    harness.fakes[0]!.push(taskNotification('btask_1'))
+    await flush()
+    harness.driver.send('my turn now')
+    harness.fakes[0]!.push(assistantText('answer'))
+    harness.fakes[0]!.push(result('success'))
+    await flush()
+    const started = harness.events.filter((event) => event.type === 'turn_started')
+    expect(started).toHaveLength(1)
+    expect((started[0] as { trigger?: unknown }).trigger).toBeUndefined()
+    expect(typesOf(harness.events)).toContain('turn_completed')
+    // The stale buffer cannot leak into a later self-start.
+    harness.fakes[0]!.push(initFrame())
+    await flush()
+    const later = harness.events.filter((event) => event.type === 'turn_started')
+    expect(later).toHaveLength(2)
+    expect(later[1]).toMatchObject({ trigger: { kind: 'resumed' } })
+  })
+})
+
+describe('ChatSessionDriver background-task roster (background tasks D1/D7)', () => {
+  test('the captured shell fixture publishes a live Shell entry that settles', async () => {
+    const harness = createHarness()
+    harness.driver.send('launch the probe tasks')
+    for (const message of consumerMessages('shell')) {
+      harness.fakes[0]!.push(message)
+    }
+    await flush(10)
+    // Publishes fire on every roster change — the Bash tool-call join lands
+    // before task_started, so early publishes can be empty.
+    const rosters = harness.backgroundTasks
+    expect(rosters.length).toBeGreaterThanOrEqual(2)
+    const live = rosters.find(list => list.some(task => task.status === 'running'))
+    expect(live).toMatchObject([
+      { taskId: 'bnozyv5av', toolCallId: 'call_33dd57efbe6645178a8c9e6b', kind: 'shell', description: 'Sleep 6 seconds then print marker', status: 'running', live: true },
+    ])
+    expect(rosters.at(-1)).toMatchObject([
+      { taskId: 'bnozyv5av', kind: 'shell', status: 'completed', live: false, summary: expect.stringContaining('Sleep 6 seconds then print marker') },
+    ])
+    // The output-file path never rides the roster.
+    expect(JSON.stringify(rosters)).not.toContain('outputFile')
+    // D7: a settled task leaves the session waiting.
+    expect(harness.statuses.at(-1)).toBe('waiting')
+  })
+
+  test('the captured monitor fixture joins its task as a Monitor', async () => {
+    const harness = createHarness()
+    harness.driver.send('launch the probe tasks')
+    for (const message of consumerMessages('monitor')) {
+      harness.fakes[0]!.push(message)
+    }
+    await flush(10)
+    expect(harness.backgroundTasks.at(-1)).toMatchObject([
+      { taskId: 'b9cx4spe1', kind: 'monitor', description: 'Watch for trigger.txt', status: 'completed', live: false },
+    ])
+  })
+
+  test('a foreground task never publishes; the level set alone promotes nothing unseen', async () => {
+    const harness = createHarness()
+    harness.driver.send('run')
+    for (const message of consumerMessages('foreground')) {
+      harness.fakes[0]!.push(message)
+    }
+    await flush()
+    // Publishes can fire (the roster state changed) but stay empty: a
+    // foreground task is never visible, so nothing ever joins it.
+    expect(harness.backgroundTasks.flat()).toEqual([])
+  })
+
+  test('an interrupt keeps background tasks running; kill settles them stopped', async () => {
+    const harness = createHarness()
+    harness.driver.send('start a long task')
+    harness.fakes[0]!.push({
+      type: 'system', subtype: 'task_started', task_id: 'blong', tool_use_id: 'call_long',
+      task_type: 'local_bash', description: 'dev server', is_backgrounded: true, uuid: 'u', session_id: 's',
+    } as unknown as SDKMessage)
+    harness.fakes[0]!.push({
+      type: 'system', subtype: 'background_tasks_changed', tasks: [{ task_id: 'blong' }], uuid: 'u2', session_id: 's',
+    } as unknown as SDKMessage)
+    await flush()
+    expect(harness.backgroundTasks.at(-1)).toMatchObject([{ taskId: 'blong', status: 'running', live: true }])
+    await harness.driver.interrupt()
+    await flush()
+    // The turn aborted, but a background shell survives it (D1).
+    expect(harness.backgroundTasks.at(-1)).toMatchObject([{ taskId: 'blong', status: 'running', live: true }])
+    harness.driver.kill()
+    await flush()
+    expect(harness.backgroundTasks.at(-1)).toMatchObject([{ taskId: 'blong', status: 'stopped', live: false }])
   })
 })

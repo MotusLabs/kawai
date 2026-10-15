@@ -6,6 +6,7 @@
 // from the team's catalog on demand, so a removed or edited file shows up the
 // next time the session is published.
 import { groupCatalogStamp, loadGroupCatalog, type GroupCatalog } from './groupCatalog'
+import type { GroupEffort } from './groupFile'
 import { buildTeamPrompt } from './teamPrompt'
 import { resolveTeam, type TeamIdentity } from './teamIdentity'
 
@@ -88,9 +89,22 @@ export class SessionTeams {
     return [...this.entries].filter(([, entry]) => entry.team?.teamId === teamId).map(([id]) => id)
   }
 
+  /**
+   * Whether any tracked session (live or archived; killed ones are forgotten)
+   * belongs to `teamId`, once every in-flight resolution has settled — a view
+   * opened right after a restart must not be refused while teams resolve.
+   */
+  async hasTeam(teamId: string): Promise<boolean> {
+    if (this.membersOf(teamId).length > 0) return true
+    // One settle pass: a rejected resolution never clears its `pending`, so
+    // looping until none remain could spin forever.
+    await Promise.allSettled([...this.entries.values()].flatMap(entry => entry.pending ? [entry.pending] : []))
+    return this.membersOf(teamId).length > 0
+  }
+
   /** Display state of a session's group; undefined until its team is known. */
   groupInfo(sessionId: string, groupId: string, cache?: Map<string, GroupCatalog>): SessionGroupInfo | undefined {
-    const group = this.catalogOf(sessionId, cache)?.groups.get(groupId)
+    const group = this.catalogOf(sessionId, cache)?.groups.get(groupId)?.group
     if (!this.teamOf(sessionId)) return undefined
     return group ? { label: group.label, missing: false } : { label: groupId, missing: true }
   }
@@ -102,9 +116,18 @@ export class SessionTeams {
    */
   promptFor(sessionId: string, groupId: string | null | undefined): string {
     const catalog = this.catalogOf(sessionId)
-    const groups = [...(catalog?.groups.values() ?? [])]
-    const group = groupId ? catalog?.groups.get(groupId) : undefined
+    const groups = [...(catalog?.groups.values() ?? [])].map(entry => entry.group)
+    const group = groupId ? catalog?.groups.get(groupId)?.group : undefined
     return buildTeamPrompt({ sessionId, groups, ...(group ? { group } : {}) })
+  }
+
+  /**
+   * The launch effort for a spawn (group-effort D2), read from the files as
+   * they are now like `promptFor`; undefined without a group, team, or
+   * `effort`, leaving Claude Code's own settings to decide.
+   */
+  effortFor(sessionId: string, groupId: string | null | undefined): GroupEffort | undefined {
+    return groupId ? this.catalogOf(sessionId)?.groups.get(groupId)?.group.effort : undefined
   }
 
   /**
@@ -115,7 +138,11 @@ export class SessionTeams {
    */
   catalogOf(sessionId: string, cache?: Map<string, GroupCatalog>): GroupCatalog | undefined {
     const team = this.teamOf(sessionId)
-    if (!team) return undefined
+    return team ? this.catalogForTeam(team, cache) : undefined
+  }
+
+  /** A team's catalog, for callers that hold the team rather than a session. */
+  catalogForTeam(team: TeamIdentity, cache?: Map<string, GroupCatalog>): GroupCatalog {
     const cached = cache?.get(team.teamId)
     if (cached) return cached
     const context = {

@@ -1,8 +1,11 @@
 // Dispatcher tests exercise durable claims and recipient state transitions,
 // independent of SDK transport and timing of the manager's subscriptions.
-import { afterEach, beforeEach, expect, test } from 'bun:test'
+// The legacy delivery-order, claim, and interrupt tests below pin the exact
+// boolean shapes of `eligibleFor` and the claim predicate (team-waiting-
+// reasons D2); the cause-reporter tests cover every reported exclusion.
+import { afterEach, beforeEach, expect, spyOn, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
-import { MailDispatcher, type GroupRouter, type MailRecipient, type RouteView } from '../team/dispatcher'
+import { MailDispatcher, type GroupRouter, type MailRecipient, type PassOutcome, type RouteView } from '../team/dispatcher'
 import { MailboxStore, type EnqueueInput } from '../team/mailboxStore'
 
 let db: Database
@@ -43,7 +46,7 @@ test('urgent group precedes normal direct; direct precedes older group at equal 
     const direct = send({ toKind: 'session', toId: 'dev' })
     recipients[0]!.idle = true; await dispatch()
     expect(delivered.at(-1)?.id).toBe(urgent ? group.id : direct.id)
-    store.cancel(urgent ? direct.id : group.id)
+    store.cancel(urgent ? direct.id : group.id, { kind: 'human' })
   }
 })
 test('longest idle member wins once despite simultaneous notifications', async () => {
@@ -306,4 +309,166 @@ test('direct claims enforce the handoff profile exclusion', async () => {
   await dispatch()
   expect(delivered).toEqual([])
   expect(store.get(mail.id)?.state).toBe('queued')
+})
+
+// Cause reporter (team-waiting-reasons D2): every exclusion kind surfaces in
+// the routing view, beneath the predicates whose shapes the tests above pin.
+test('the routing view reports each member exclusion cause', async () => {
+  recipients = [
+    { sessionId: 'working', teamId: 'team', groupId: 'devs', idle: false, pendingRequest: false, available: true },
+    { sessionId: 'card', teamId: 'team', groupId: 'devs', idle: true, pendingRequest: true, available: true },
+    { sessionId: 'parked', teamId: 'team', groupId: 'devs', idle: true, pendingRequest: false, available: true, parked: true },
+    { sessionId: 'elsewhere', teamId: 'team', groupId: 'devs', idle: true, pendingRequest: false, available: true, worktree: '/other' },
+    { sessionId: 'sick', teamId: 'team', groupId: 'devs', idle: true, pendingRequest: false, available: false },
+    { sessionId: 'eligible', teamId: 'team', groupId: 'devs', idle: true, pendingRequest: false, available: true, worktree: '/wt' },
+  ]
+  let view: RouteView | undefined
+  dispatcher.close()
+  dispatcher = new MailDispatcher(store, {
+    recipients: () => recipients, prepare: async () => {}, interrupt: async () => {},
+    deliver: () => { throw new Error('no delivery') }, watchReceipt: () => {},
+    targetWorktree: () => '/wt',
+    router: { route: async (_message, routed) => { view = routed; return { kind: 'none' } } },
+    now: () => 1_000,
+  })
+  send(); await dispatch()
+  const byId = new Map((view!.exclusions ?? []).map(entry => [entry.sessionId, entry]))
+  expect(byId.get('working')?.kind).toBe('busy')
+  expect(byId.get('card')?.kind).toBe('pending-card')
+  expect(byId.get('parked')?.kind).toBe('parked')
+  expect(byId.get('elsewhere')).toMatchObject({ kind: 'other-worktree', detail: '/other' })
+  expect(byId.get('sick')?.kind).toBe('unavailable')
+  expect(byId.has('eligible')).toBe(false)
+})
+
+test('a member on the excluded profile reports excluded-profile though eligibleFor keeps it', async () => {
+  recipients = [
+    { sessionId: 'glm-member', teamId: 'team', groupId: 'devs', idle: true, pendingRequest: false, available: true, profileId: 'glm' },
+  ]
+  let view: RouteView | undefined
+  dispatcher.close()
+  dispatcher = new MailDispatcher(store, {
+    recipients: () => recipients, prepare: async () => {}, interrupt: async () => {},
+    deliver: () => { throw new Error('no delivery') }, watchReceipt: () => {},
+    router: { route: async (_message, routed) => { view = routed; return { kind: 'none' } } },
+  })
+  send({ excludedProfile: 'glm' }); await dispatch()
+  // eligibleFor itself does not reject the profile (the candidate builder
+  // does); the breakdown still names it.
+  expect(view!.eligible.map(row => row.sessionId)).toEqual(['glm-member'])
+  expect(view!.exclusions).toEqual([{ sessionId: 'glm-member', kind: 'excluded-profile' }])
+})
+
+test('a start failure is reported with its error text', async () => {
+  recipients = [
+    { sessionId: 'sick', teamId: 'team', groupId: 'devs', idle: true, pendingRequest: false, available: true },
+  ]
+  let view: RouteView | undefined
+  const errors: unknown[] = []
+  dispatcher.close()
+  dispatcher = new MailDispatcher(store, {
+    recipients: () => recipients,
+    prepare: async id => { if (id === 'sick') throw new Error('lost auth') },
+    interrupt: async () => {},
+    deliver: () => { throw new Error('no delivery') }, watchReceipt: () => {},
+    router: { route: async (_message, routed) => { view = routed; return { kind: 'member', sessionId: 'sick' } } },
+    onError: error => errors.push(error),
+  })
+  send(); await dispatch()
+  expect(view!.exclusions).toEqual([{ sessionId: 'sick', kind: 'startup-failed', detail: 'lost auth' }])
+  // One per routing attempt: the stale pick re-routes (attempts 1 and 2).
+  expect(errors).toHaveLength(3)
+})
+
+// Direct-mail waiting reasons (D2) and the pass outcome (D3).
+test('afterPass reports each direct-mail reason from the recipient view', async () => {
+  recipients = [
+    { sessionId: 'working', teamId: 'team', groupId: 'devs', idle: false, pendingRequest: false, available: true },
+    { sessionId: 'card', teamId: 'team', groupId: 'devs', idle: true, pendingRequest: false, available: false, blockedBy: 'Cannot start: directory gone' },
+    { sessionId: 'cooling', teamId: 'team', groupId: 'devs', idle: true, pendingRequest: false, available: true, cooldownUntil: new Date(2_000).toISOString() },
+  ]
+  const outcomes: PassOutcome[] = []
+  dispatcher.close()
+  dispatcher = new MailDispatcher(store, {
+    recipients: () => recipients, prepare: async () => {}, interrupt: async () => {},
+    deliver: () => { throw new Error('no delivery') }, watchReceipt: () => {},
+    afterPass: outcome => outcomes.push(outcome),
+    now: () => 1_000,
+  })
+  const busy = send({ toKind: 'session', toId: 'working' })
+  const blocked = send({ toKind: 'session', toId: 'card' })
+  const cooling = send({ toKind: 'session', toId: 'cooling' })
+  await dispatch()
+  const reasons = outcomes.at(-1)!.reasons
+  expect(reasons.get(busy.id)).toEqual([{ kind: 'recipient-busy' }])
+  expect(reasons.get(blocked.id)).toEqual([{ kind: 'recipient-unavailable', detail: 'Cannot start: directory gone' }])
+  expect(reasons.get(cooling.id)).toEqual([{ kind: 'profile-cooling', retryAt: new Date(2_000).toISOString() }])
+  expect(outcomes.at(-1)!.waiting.has(busy.id)).toBe(true)
+})
+
+test('an awaiting-request row reports its pending card and clears when delivered', async () => {
+  recipients[0]!.pendingRequest = true
+  const outcomes: PassOutcome[] = []
+  dispatcher.close()
+  dispatcher = new MailDispatcher(store, {
+    recipients: () => recipients, prepare: async () => {}, interrupt: async () => {},
+    deliver: (id, peer) => { delivered.push({ recipient: id, id: peer.messageId }); recipients.find(row => row.sessionId === id)!.idle = false },
+    watchReceipt: () => {}, afterPass: outcome => outcomes.push(outcome),
+  })
+  const mail = send({ toKind: 'session', toId: 'dev', priority: 'urgent' })
+  await dispatch()
+  expect(store.get(mail.id)?.state).toBe('awaiting-request')
+  expect(outcomes.at(-1)!.reasons.get(mail.id)).toEqual([{ kind: 'recipient-pending-request' }])
+  recipients[0]!.pendingRequest = false; recipients[0]!.idle = true
+  await dispatch()
+  expect(delivered).toEqual([{ recipient: 'dev', id: mail.id }])
+  expect(outcomes.at(-1)!.reasons.has(mail.id)).toBe(false)
+  expect(outcomes.at(-1)!.waiting.has(mail.id)).toBe(false)
+})
+
+test('a start failure persists across passes with its error until the message leaves the queue', async () => {
+  recipients[0]!.idle = true
+  const outcomes: PassOutcome[] = []
+  const errors: unknown[] = []
+  dispatcher.close()
+  dispatcher = new MailDispatcher(store, {
+    recipients: () => recipients,
+    prepare: async () => { throw new Error('lost auth') },
+    interrupt: async () => {}, deliver: () => { throw new Error('no delivery') }, watchReceipt: () => {},
+    afterPass: outcome => outcomes.push(outcome), onError: error => errors.push(error),
+  })
+  const mail = send({ toKind: 'session', toId: 'dev' })
+  await dispatch(); await dispatch()
+  for (const outcome of outcomes) expect(outcome.reasons.get(mail.id)).toEqual([{ kind: 'startup-failed', detail: 'lost auth' }])
+  // Cancelled: the failure leaves with the message.
+  store.cancel(mail.id, { kind: 'human' }); await dispatch()
+  expect(outcomes.at(-1)!.reasons.has(mail.id)).toBe(false)
+  expect(outcomes.at(-1)!.waiting.has(mail.id)).toBe(false)
+})
+
+test('armTimer fires no earlier than the earliest armed time', async () => {
+  dispatcher.close()
+  const base = Date.now()
+  const armed: number[] = []
+  const realSetTimeout = globalThis.setTimeout
+  const spy = spyOn(globalThis, 'setTimeout').mockImplementation(((handler: () => void, ms?: number) => {
+    armed.push(ms ?? 0)
+    return realSetTimeout(handler, ms)
+  }) as typeof globalThis.setTimeout)
+  try {
+    dispatcher = new MailDispatcher(store, {
+      recipients: () => [], prepare: async () => {}, interrupt: async () => {}, deliver: () => {}, watchReceipt: () => {},
+      // Armed sources: a scheduled row at +400, a hold at +300, wakeAt at +250.
+      wakeAt: () => base + 250,
+      router: { route: async () => ({ kind: 'hold', retryAt: base + 300 }) },
+    })
+    send({ deliverAt: new Date(base + 400).toISOString() })
+    const held = send()
+    dispatcher.notify(); await dispatcher.settled()
+    expect(store.get(held.id)?.state).toBe('queued')
+    // One arming so far; its delay is the minimum of every armed time.
+    expect(armed).toHaveLength(1)
+    expect(armed[0]).toBeGreaterThanOrEqual(240)
+    expect(armed[0]).toBeLessThanOrEqual(250)
+  } finally { spy.mockRestore() }
 })

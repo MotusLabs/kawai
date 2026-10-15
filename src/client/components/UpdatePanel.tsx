@@ -80,6 +80,7 @@ export default function UpdatePanel() {
     >
       <div
         role="dialog"
+        aria-modal="true"
         aria-label="Update available"
         className="w-full max-w-md rounded border border-border bg-elevated p-4"
         onClick={(event) => event.stopPropagation()}

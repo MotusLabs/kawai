@@ -708,3 +708,100 @@ describe('transcript cwd recovery', () => {
     expect(readTranscriptCwd(path.join(tempDir, 'gone.jsonl'))).toBeNull()
   })
 })
+
+describe('task-notification replay (background tasks D5)', () => {
+  /** The CLI's recorded wake-turn opener, copied from a real transcript. */
+  const NOTIFICATION_MARKUP = [
+    '<task-notification>',
+    '<task-id>bnozyv5av</task-id>',
+    '<tool-use-id>call_33dd57efbe6645178a8c9e6e6</tool-use-id>',
+    '<output-file>/tmp/claude-1000/-tmp-bg-probe-work/9da24b54/tasks/bnozyv5av.output</output-file>',
+    '<status>completed</status>',
+    '<summary>Background command "Sleep 6 seconds then print marker" completed (exit code 0)</summary>',
+    '</task-notification>',
+  ].join('\n')
+
+  const assistantLine = JSON.stringify({
+    type: 'assistant',
+    uuid: 'wake-a1',
+    timestamp: '2026-10-13T09:40:16.000Z',
+    message: { id: 'msg_wake', role: 'assistant', content: [{ type: 'text', text: 'The marker printed.' }] },
+  })
+
+  test('an origin-marked notification record opens a triggered turn, not a user bubble', () => {
+    const content = [
+      JSON.stringify({
+        type: 'user',
+        uuid: 'wake-u1',
+        timestamp: '2026-10-13T09:40:15.800Z',
+        message: { role: 'user', content: NOTIFICATION_MARKUP },
+        origin: { kind: 'task-notification', producer: 'session-task', runId: '0mv6946ta' },
+      }),
+      assistantLine,
+    ].join('\n')
+    const parsed = parseTranscriptContent(content)
+    expect(typesOf(parsed.events)).toEqual(['turn_started', 'assistant_text'])
+    expect(parsed.events[0]).toMatchObject({
+      type: 'turn_started',
+      turnId: 'hist-turn-1',
+      trigger: {
+        kind: 'task',
+        tasks: [
+          {
+            taskId: 'bnozyv5av',
+            toolCallId: 'call_33dd57efbe6645178a8c9e6e6',
+            status: 'completed',
+            summary: 'Background command "Sleep 6 seconds then print marker" completed (exit code 0)',
+          },
+        ],
+      },
+    })
+    // The woken turn's reply joins the trigger's turn.
+    expect(parsed.events[1]).toMatchObject({ type: 'assistant_text', turnId: 'hist-turn-1' })
+  })
+
+  test('wholly-markup content without the origin marker qualifies too', () => {
+    const content = [
+      JSON.stringify({
+        type: 'user',
+        uuid: 'wake-u2',
+        timestamp: '2026-10-13T09:40:15.800Z',
+        message: { role: 'user', content: NOTIFICATION_MARKUP },
+      }),
+      assistantLine,
+    ].join('\n')
+    const parsed = parseTranscriptContent(content)
+    expect(typesOf(parsed.events)).toEqual(['turn_started', 'assistant_text'])
+    expect(parsed.events[0]).toMatchObject({ trigger: { kind: 'task' } })
+  })
+
+  test('a markup text block in block content opens the same trigger', () => {
+    const content = [
+      JSON.stringify({
+        type: 'user',
+        uuid: 'wake-u3',
+        timestamp: '2026-10-13T09:40:15.800Z',
+        message: { role: 'user', content: [{ type: 'text', text: NOTIFICATION_MARKUP }] },
+      }),
+    ].join('\n')
+    const parsed = parseTranscriptContent(content)
+    expect(typesOf(parsed.events)).toEqual(['turn_started'])
+    expect(parsed.events[0]).toMatchObject({ trigger: { kind: 'task', tasks: [{ taskId: 'bnozyv5av' }] } })
+  })
+
+  test('an origin marker with unparseable content degrades to resumed', () => {
+    const content = [
+      JSON.stringify({
+        type: 'user',
+        uuid: 'wake-u4',
+        timestamp: '2026-10-13T09:40:15.800Z',
+        message: { role: 'user', content: '<task-notification>(torn' },
+        origin: { kind: 'task-notification' },
+      }),
+      assistantLine,
+    ].join('\n')
+    const parsed = parseTranscriptContent(content)
+    expect(typesOf(parsed.events)).toEqual(['turn_started', 'assistant_text'])
+    expect(parsed.events[0]).toMatchObject({ trigger: { kind: 'resumed' } })
+  })
+})

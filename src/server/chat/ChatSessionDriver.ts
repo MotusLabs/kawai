@@ -26,6 +26,7 @@ import type {
   ChatActivity,
   ChatApprovalDecision,
   ChatApprovalPolicy,
+  ChatBackgroundTask,
   ChatCommandState,
   ChatContextUsage,
   ChatEvent,
@@ -36,6 +37,8 @@ import type {
   ChatPeerMessage,
   ChatQuestion,
   ChatQuestionAnswer,
+  ChatTurnTrigger,
+  ChatTurnTriggerTask,
   ChatUsageReport,
   ChatWorker,
 } from '../../shared/chat'
@@ -65,6 +68,17 @@ import {
   type ChatWorkersInput,
   type ChatWorkersState,
 } from './chatWorkers'
+import {
+  backgroundInputFromWorkersInput,
+  initialChatBackgroundTasksState,
+  projectBackgroundTasks,
+  projectBackgroundTaskRecords,
+  recoveredBackgroundTasksState,
+  reduceBackgroundTasks,
+  type BackgroundTaskRecord,
+  type ChatBackgroundTasksInput,
+  type ChatBackgroundTasksState,
+} from './chatBackgroundTasks'
 import {
   ChatContextTracker,
   parsePositiveTokens,
@@ -137,6 +151,12 @@ export interface ChatSessionDriverOptions {
    * role + mailbox note, agent-teams D7). Omitted/empty = preset only.
    */
   getSystemPromptAppend?: () => string | undefined
+  /**
+   * Reasoning effort for the spawn, read at every spawn like the prompt
+   * (group-effort D2). Undefined = no `effort` option, so Claude Code's own
+   * settings decide.
+   */
+  getEffort?: () => Options['effort']
   teamMcpServer?: NonNullable<Options['mcpServers']>[string]
   /**
    * Recovered roster rows (workers design D6) seeding a fresh driver, so
@@ -144,6 +164,11 @@ export interface ChatSessionDriverOptions {
    * and the sidecar instead of being replaced by the first publish.
    */
   recoveredWorkers?: ChatWorker[]
+  /**
+   * Recovered background-task rows (background tasks D6) seeding a fresh
+   * driver, so settled outcomes survive a restart or an archive/restore.
+   */
+  recoveredBackgroundTasks?: BackgroundTaskRecord[]
   onEvent: (event: ChatEvent) => void
   /** Applied immediately on every derived status change. */
   onStatus: (status: SessionStatus) => void
@@ -179,6 +204,13 @@ export interface ChatSessionDriverOptions {
    */
   onWorkers?: (workers: ChatWorker[]) => void
   /**
+   * The background-task roster (background tasks design D2): the full
+   * projection, called whenever it changes. Like the worker roster it is
+   * ephemeral on the wire; settled outcomes persist through the sidecar
+   * (D6). Never consulted for status (D7).
+   */
+  onBackgroundTasks?: (tasks: ChatBackgroundTask[]) => void
+  /**
    * Context usage (context meter designs D1/D7): the latest reading, fired
    * when a new per-request usage lands, when compaction adopts a
    * post-compaction size, or when a threshold correction re-scales the
@@ -212,9 +244,13 @@ export interface ChatSessionDriverOptions {
   onUsageReport?: (report: ChatUsageReport) => void
   /**
    * Claims the profile's one usage pull after a spawn (design D1); when it
-   * returns false the pull is skipped for this driver's whole lifetime.
+   * resolves false the pull is skipped for this driver's whole lifetime. The
+   * claim may be async so the manager can route the pull to the session
+   * provider's own quota endpoint first (provider usage pull) and only fall
+   * back to this SDK pull when that endpoint does not answer for the
+   * profile.
    */
-  claimUsagePull?: () => boolean
+  claimUsagePull?: () => boolean | Promise<boolean>
   /** A pull that yielded no windows (or failed) records the no-data verdict. */
   onUsageNoData?: () => void
   /** Fired once when the SDK init message reveals the session id. */
@@ -265,6 +301,12 @@ export class ChatSessionDriver {
   private sequence = 0
   private turnCounter = 0
   private activeTurnId: string | null = null
+  /**
+   * Task notifications that arrived while no turn was active (background
+   * tasks D5): they become the next turn's trigger — user-started or
+   * agent-started alike — and are consumed when that turn opens.
+   */
+  private pendingTaskNotifications: ChatTurnTriggerTask[] = []
   private streamingMessageId: string | null = null
   private readonly pendingRequests = new Map<string, PendingRequest>()
   /** Tool use ids this live stream has seen (call or result). */
@@ -282,6 +324,7 @@ export class ChatSessionDriver {
    * edge stream and the background level set, projected on change.
    */
   private workersState: ChatWorkersState = initialChatWorkersState()
+  private backgroundTasksState: ChatBackgroundTasksState = initialChatBackgroundTasksState()
   /**
    * Agent/Task tool_use ids, parent and nested alike (design D4): the only
    * worker traffic kept in the parent transcript, and the join keys that say
@@ -307,6 +350,10 @@ export class ChatSessionDriver {
     // Workers design D6: carry the recovered outcomes into the fresh roster.
     if (options.recoveredWorkers?.length) {
       this.workersState = recoveredWorkersState(options.recoveredWorkers)
+    }
+    // Background tasks D6: same contract for the task roster.
+    if (options.recoveredBackgroundTasks?.length) {
+      this.backgroundTasksState = recoveredBackgroundTasksState(options.recoveredBackgroundTasks)
     }
   }
 
@@ -347,17 +394,28 @@ export class ChatSessionDriver {
     this.sessionProjectPath = path
   }
 
+  /**
+   * Open the next turn id and announce it, consuming any buffered task
+   * notifications as the trigger (background tasks D5). All three open
+   * paths — user send, peer delivery, agent self-start — funnel through
+   * here so the buffer can never outlive the turn it should name.
+   */
+  private startTurn(trigger?: ChatTurnTrigger): string {
+    this.turnCounter += 1
+    const turnId = `turn-${this.turnCounter}`
+    this.activeTurnId = turnId
+    this.pendingTaskNotifications = []
+    this.emit({ type: 'turn_started', turnId, ...(trigger ? { trigger } : {}) })
+    return turnId
+  }
+
   /** Submit a user turn. Spawns the SDK lazily on the first turn. */
   send(text: string): void {
     if (this.killed) return
     this.ensureQuery()
-    if (!this.activeTurnId) {
-      this.turnCounter += 1
-      this.activeTurnId = `turn-${this.turnCounter}`
-      this.emit({ type: 'turn_started', turnId: this.activeTurnId })
-    }
+    const turnId = this.activeTurnId ?? this.startTurn()
     this.trackEcho(text)
-    this.emit({ type: 'user_message', turnId: this.activeTurnId, text })
+    this.emit({ type: 'user_message', turnId, text })
     this.queue.push({
       type: 'user',
       message: { role: 'user', content: text },
@@ -373,16 +431,15 @@ export class ChatSessionDriver {
       throw new Error('Recipient is not idle')
     }
     this.ensureQuery()
-    this.turnCounter += 1
-    this.activeTurnId = `turn-${this.turnCounter}`
-    this.emit({ type: 'turn_started', turnId: this.activeTurnId })
+    const turnId = this.startTurn()
     const text = formatEnvelope(envelope)
     this.trackEcho(text)
-    this.emit({ type: 'peer_message', turnId: this.activeTurnId, ...envelope })
+    this.emit({ type: 'peer_message', turnId, ...envelope })
     this.queue.push({
       type: 'user', message: { role: 'user', content: text },
       parent_tool_use_id: null,
-      origin: { kind: 'peer', from: envelope.senderSession },
+      // A human sender has no session id; the envelope's senderKind says so.
+      origin: { kind: 'peer', from: envelope.senderSession ?? 'human' },
     })
     this.refreshStatus()
   }
@@ -420,8 +477,11 @@ export class ChatSessionDriver {
     this.cancelAllRequests('killed')
     this.activeTurnId = null
     // Archive and kill both end the process (design D3): every worker still
-    // without an outcome settles as stopped, nothing survives as live.
+    // without an outcome settles as stopped, nothing survives as live. The
+    // background tasks die with the process too (background tasks D1) — but
+    // not on a turn interrupt, which they survive by design.
     this.feedWorkers({ type: 'process_end' })
+    this.feedBackgroundTasks({ type: 'process_end' })
     this.commands.markUnavailable()
     const query = this.query
     this.query = null
@@ -599,6 +659,7 @@ export class ChatSessionDriver {
     const executablePath = profileExecutable ?? this.claudeExecutablePath
     const wire = this.options.wire
     const systemPromptAppend = this.options.getSystemPromptAppend?.()
+    const effort = this.options.getEffort?.()
     const options: Options = {
       cwd: this.sessionProjectPath,
       // Option parity with a terminal `claude` session in the project dir.
@@ -625,6 +686,9 @@ export class ChatSessionDriver {
         ? { pathToClaudeCodeExecutable: executablePath }
         : {}),
       ...(resume ? { resume } : {}),
+      // Before the profile's launch options, which carry no effort today, so
+      // any future override there is a deliberate choice (group-effort D3).
+      ...(effort ? { effort } : {}),
       ...launchOptions,
       ...(wire ? { spawnClaudeCodeProcess: createWireTappedSpawn(wire) } : {}),
     }
@@ -649,7 +713,7 @@ export class ChatSessionDriver {
     this.commands.beginLoading()
     void this.fetchInitializationCommands(query)
     void this.runQueryLoop(query)
-    this.maybePullUsage(query)
+    void this.maybePullUsage(query)
     // Attach-time threshold probe (design D2): the report can answer before
     // the first request does.
     this.refreshContextThreshold()
@@ -658,14 +722,15 @@ export class ChatSessionDriver {
   /**
    * The usage pull fallback (design D1): right after a spawn, when the
    * profile holds no data at all, ask the CLI for its plan windows so the
-   * bar can appear before the first turn reports anything. Everything is
-   * wrapped: the control API is explicitly unstable, and a throw, an absent
-   * method, or a shape change records the no-data verdict instead of
-   * disturbing the session.
+   * bar can appear before the first turn reports anything. The claim is
+   * awaited (it may route to the provider quota endpoint first, provider
+   * usage pull); everything else is wrapped: the control API is explicitly
+   * unstable, and a throw, an absent method, or a shape change records the
+   * no-data verdict instead of disturbing the session.
    */
-  private maybePullUsage(query: Query): void {
+  private async maybePullUsage(query: Query): Promise<void> {
     const { claimUsagePull, onUsageReport, onUsageNoData } = this.options
-    if (!claimUsagePull || !onUsageReport || !claimUsagePull()) return
+    if (!claimUsagePull || !onUsageReport || !(await claimUsagePull())) return
     const pull = query.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET
     if (typeof pull !== 'function') {
       onUsageNoData?.()
@@ -731,7 +796,9 @@ export class ChatSessionDriver {
     this.activeTurnId = null
     // The process is gone (design D3): workers cannot have outcomes any
     // more, so any still-open row settles as stopped rather than wedging.
+    // Background tasks settle the same way (D1) — the respawn starts clean.
     this.feedWorkers({ type: 'process_end' })
+    this.feedBackgroundTasks({ type: 'process_end' })
     this.feedActivity({ type: 'turn_end' })
     this.cancelAllRequests('killed')
     // Notification strip design D4: the notices this process emitted die
@@ -829,6 +896,11 @@ export class ChatSessionDriver {
           this.agentToolCallIds.add(block.id)
           // The row anchor (design D1): the spawning call's id is the workerId.
           this.feedWorkers({ type: 'spawn', toolCallId: block.id })
+        }
+        if (block.name === 'Bash' || block.name === 'Monitor') {
+          // The kind join (background tasks D1): the tool_use block streams
+          // before the task_started it will anchor.
+          this.feedBackgroundTasks({ type: 'tool_call', toolCallId: block.id, tool: block.name })
         }
         if (!subagent) {
           this.feedActivity({
@@ -961,6 +1033,20 @@ export class ChatSessionDriver {
       this.reportLimit(retryLimitSignal(message, this.currentResetsAt()))
     }
     if (message.subtype === 'init') {
+      // Agent-started turn (background tasks D5): `init` opens every turn
+      // and is the first frame of one that the SDK yields to consumers —
+      // `session_state_changed` is `sdk_host_only` and never reaches this
+      // loop. A spawn without a prompt emits no `init`, so an idle attach
+      // cannot open a phantom turn; a user `send()` has already set its turn
+      // id before the CLI gets the message.
+      if (!this.activeTurnId) {
+        this.startTurn(
+          this.pendingTaskNotifications.length > 0
+            ? { kind: 'task', tasks: this.pendingTaskNotifications.slice() }
+            : { kind: 'resumed' }
+        )
+        this.refreshStatus()
+      }
       if (!this.capturedSdkSessionId && message.session_id) {
         this.capturedSdkSessionId = message.session_id
         this.options.onSdkSessionId?.(message.session_id)
@@ -1034,9 +1120,30 @@ export class ChatSessionDriver {
     // The task_* edges and the background level set feed the worker roster
     // (design D3); they never reach the activity reducer, whose own inputs
     // are status and api_retry only.
+    if (
+      message.subtype === 'task_notification' &&
+      !this.activeTurnId &&
+      typeof message.task_id === 'string' &&
+      message.task_id
+    ) {
+      // No turn is running, so this notification is about to wake the agent
+      // (background tasks D5): hold it as the next turn's trigger.
+      this.pendingTaskNotifications.push({
+        taskId: message.task_id,
+        ...(typeof message.tool_use_id === 'string' && message.tool_use_id
+          ? { toolCallId: message.tool_use_id }
+          : {}),
+        status: typeof message.status === 'string' ? message.status : 'unknown',
+        ...(typeof message.summary === 'string' && message.summary
+          ? { summary: message.summary }
+          : {}),
+      })
+    }
     const rosterInput = taskFrameToInput(message)
     if (rosterInput) {
       this.feedWorkers(rosterInput)
+      const backgroundInput = backgroundInputFromWorkersInput(rosterInput)
+      if (backgroundInput) this.feedBackgroundTasks(backgroundInput)
       return
     }
     if (isSubagentContentFrame(message)) return
@@ -1219,9 +1326,70 @@ export class ChatSessionDriver {
     this.refreshStatus()
   }
 
+  /**
+   * Feed the background-task roster (background tasks D1). Unlike workers,
+   * a change never touches status (D7): a running dev server must not pin
+   * the session to working.
+   */
+  private feedBackgroundTasks(input: ChatBackgroundTasksInput): void {
+    const next = reduceBackgroundTasks(this.backgroundTasksState, input)
+    if (next === this.backgroundTasksState) return
+    this.backgroundTasksState = next
+    this.options.onBackgroundTasks?.(projectBackgroundTasks(this.backgroundTasksState))
+  }
+
   /** Current roster projection with elapsed times computed now (design D2). */
   getWorkers(): ChatWorker[] {
     return projectWorkers(this.workersState)
+  }
+
+  /** Current background-task projection with elapsed times computed now (D2). */
+  getBackgroundTasks(): ChatBackgroundTask[] {
+    return projectBackgroundTasks(this.backgroundTasksState)
+  }
+
+  /** Sidecar records for the task store (D6): identity and outcome, plus the
+   * server-only output-file path. */
+  getBackgroundTaskRecords(): BackgroundTaskRecord[] {
+    return projectBackgroundTaskRecords(this.backgroundTasksState)
+  }
+
+  /**
+   * A task's output tail through the SDK's `get_task_output` control
+   * (background tasks D3): at most the last 8 KiB, running or ended. The
+   * method exists at runtime but is not declared in sdk.d.ts (verified
+   * 2.1.296), so the call is structural; a missing method, a dead query, or
+   * a throw reads as null and the caller falls back to the output file.
+   */
+  async getTaskOutput(
+    taskId: string
+  ): Promise<{ output: string; total_bytes: number; truncated: boolean } | null> {
+    const query = this.query as {
+      getTaskOutput?: (id: string) => Promise<{ output: string; total_bytes: number; truncated: boolean }>
+    } | null
+    if (!query || typeof query.getTaskOutput !== 'function') return null
+    try {
+      return await query.getTaskOutput(taskId)
+    } catch {
+      return null
+    }
+  }
+
+  /**
+   * Stop one background task (background tasks D4): the settle arrives as a
+   * normal task_notification through the roster channel. False when there is
+   * no live query or the CLI refused (typically: the task just ended); both
+   * are logged and dropped by the caller, never a transcript error.
+   */
+  async stopTask(taskId: string): Promise<boolean> {
+    const query = this.query
+    if (!query) return false
+    try {
+      await query.stopTask(taskId)
+      return true
+    } catch {
+      return false
+    }
   }
 
   /**

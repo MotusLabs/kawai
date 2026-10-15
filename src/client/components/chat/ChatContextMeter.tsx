@@ -7,6 +7,8 @@
 // a distance to compaction the session does not know.
 // Archived chats render the stored reading as inert text — no refresh
 // affordance — because the agent that would refresh it is stopped.
+// The compact form (narrowest header, chat-header-layout D8) shows only the
+// percentage; the title still carries the counts.
 import type { ChatContextUsage } from '@shared/chat'
 
 /**
@@ -23,7 +25,7 @@ export function formatContextTokens(tokens: number): string {
   return String(Math.round(tokens))
 }
 
-export default function ChatContextMeter({ usage }: { usage: ChatContextUsage | null }) {
+export default function ChatContextMeter({ usage, compact = false }: { usage: ChatContextUsage | null; compact?: boolean }) {
   if (!usage) return null
   const percent = Math.round(usage.percentage * 10) / 10
   const title = usage.thresholdApproximate
@@ -35,8 +37,8 @@ export default function ChatContextMeter({ usage }: { usage: ChatContextUsage | 
       data-testid="chat-context-meter"
       title={title}
     >
-      Context {percent}% · {formatContextTokens(usage.usedTokens)} /{' '}
-      {formatContextTokens(usage.thresholdTokens)}
+      {compact ? `${percent}%` : <>Context {percent}% · {formatContextTokens(usage.usedTokens)} /{' '}
+        {formatContextTokens(usage.thresholdTokens)}</>}
       {usage.thresholdApproximate ? '~' : ''}
     </span>
   )

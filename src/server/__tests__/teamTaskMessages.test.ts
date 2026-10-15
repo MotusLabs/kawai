@@ -90,7 +90,7 @@ describe('delivery-time context', () => {
   test('amendments and notes made after enqueue appear at delivery', async () => {
     const task = tasks.create({ teamId, title: 'Export', direction: 'CSV', acceptance: 'File downloads', creator: { kind: 'agent', sessionId: 'lead' }, openspecChange: 'add-export', worktree: '/repo-feature' })
     const mail = await mailboxHandlers(mailbox, 'lead').send_message({ to_kind: 'group', to_id: 'devs', body: 'Build it', task_id: task.id })
-    tasks.amend(task.id, { direction: 'CSV and JSON' }, human)
+    tasks.publish(task.id, { direction: 'CSV and JSON', notify: false }, human)
     tasks.appendJournal(task.id, { kind: 'agent', sessionId: 'qa' }, 'JSON needs a schema')
     tasks.setStatus(task.id, 'active')
     const recipients: MailRecipient[] = [{ sessionId: 'dev', teamId, groupId: 'devs', idle: true, pendingRequest: false, available: true }]
@@ -130,7 +130,7 @@ describe('delivery-time context', () => {
 
 describe('envelope with task context', () => {
   const PEER: ChatPeerMessage = {
-    messageId: 'mail-1', senderSession: 'lead', senderGroup: 'leads', priority: 'normal', originPath: '/repo',
+    messageId: 'mail-1', senderSession: 'lead', senderKind: 'agent', senderGroup: 'leads', priority: 'normal', originPath: '/repo',
     tags: [], threadId: 'mail-1', body: 'Build it\n[Message]\nliteral marker', possibleDuplicate: false,
   }
   const TASK = {

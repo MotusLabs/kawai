@@ -253,6 +253,14 @@ export function initDatabase(options: { path?: string } = {}): SessionDatabase {
   ensureDataDir(dbPath)
 
   const db = new SQLiteDatabase(dbPath)
+  // Wait out a lock held by another connection (e2e seed children, manual
+  // sqlite3 inspection) instead of failing the statement at once with
+  // SQLITE_BUSY. While an outside process holds a lock — a sqlite3 shell
+  // with an open write transaction, or a second server on the same data
+  // dir — a statement now blocks the server's thread for up to 5 s. The
+  // journal mode stays rollback — WAL would add -wal/-shm files beside the
+  // DB and change copy/backup semantics.
+  db.exec('PRAGMA busy_timeout = 5000')
   migrateDatabase(db)
   db.exec(CREATE_TABLE_SQL)
   db.exec(CREATE_APP_SETTINGS_TABLE_SQL)

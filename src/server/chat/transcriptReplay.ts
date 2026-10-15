@@ -8,7 +8,7 @@ import { parseEnvelope } from '../team/envelope'
 import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
-import type { ChatEvent } from '../../shared/chat'
+import type { ChatEvent, ChatTurnTriggerTask } from '../../shared/chat'
 import { getClaudeConfigDir } from '../logDiscovery'
 import {
   ASK_USER_QUESTION_TOOL,
@@ -43,6 +43,50 @@ function parseCommandMarkup(text: string): string | null {
 function parseLocalCommandStdout(text: string): string | null {
   const inner = LOCAL_COMMAND_STDOUT_TAG.exec(text)?.[1]
   return inner && inner.trim() ? inner : null
+}
+
+/** One recorded `<task-notification>` block (background tasks D5 replay). */
+const TASK_NOTIFICATION_BLOCK = /<task-notification>([\s\S]*?)<\/task-notification>/g
+const TASK_TAG = (name: string) => new RegExp(`<${name}>\\s*([\\s\\S]*?)\\s*</${name}>`)
+
+/**
+ * The tasks a task-notification user record carries: every
+ * `<task-notification>` block parsed into the trigger shape. Empty when the
+ * text holds no complete block (an `origin` marker alone still names a
+ * self-started turn; the trigger then degrades to `resumed`).
+ */
+function parseTaskNotifications(text: string): ChatTurnTriggerTask[] {
+  const tasks: ChatTurnTriggerTask[] = []
+  for (const match of text.matchAll(TASK_NOTIFICATION_BLOCK)) {
+    const inner = match[1] ?? ''
+    const taskId = TASK_TAG('task-id').exec(inner)?.[1]
+    if (!taskId) continue
+    const toolCallId = TASK_TAG('tool-use-id').exec(inner)?.[1]
+    const status = TASK_TAG('status').exec(inner)?.[1]
+    const summary = TASK_TAG('summary').exec(inner)?.[1]
+    tasks.push({
+      taskId,
+      ...(toolCallId ? { toolCallId } : {}),
+      status: status ?? 'unknown',
+      ...(summary ? { summary } : {}),
+    })
+  }
+  return tasks
+}
+
+/**
+ * Whether a user record is the CLI's task-notification turn opener: the SDK
+ * stamps `origin.kind: "task-notification"`, and the content is wholly the
+ * markup. Either mark qualifies; the record never replays as a user message.
+ */
+function isTaskNotificationRecord(record: Record<string, unknown>, text: string): boolean {
+  const origin = record.origin
+  if (typeof origin === 'object' && origin !== null) {
+    const kind = (origin as Record<string, unknown>).kind
+    if (kind === 'task-notification') return true
+  }
+  const trimmed = text.trim()
+  return trimmed.startsWith('<task-notification>') && trimmed.endsWith('</task-notification>')
 }
 
 export interface TranscriptReplay {
@@ -272,6 +316,21 @@ export function parseTranscriptContent(
     if (type === 'user' || type === 'assistant') {
       if (typeof contentValue === 'string') {
         if (type === 'user') {
+          if (isTaskNotificationRecord(record, contentValue)) {
+            // The wake turn's opener (background tasks D5): a trigger line,
+            // never a user message bubble.
+            const tasks = parseTaskNotifications(contentValue)
+            turnCounter += 1
+            events.push({
+              id: `hist-${lineUuid}`,
+              sequence: 0,
+              at,
+              type: 'turn_started',
+              turnId: `hist-turn-${turnCounter}`,
+              trigger: tasks.length > 0 ? { kind: 'task', tasks } : { kind: 'resumed' },
+            })
+            continue
+          }
           const typed = parseCommandMarkup(contentValue) ?? contentValue
           const peer = parseEnvelope(typed)
           if (typed.length > 0) {
@@ -310,17 +369,30 @@ export function parseTranscriptContent(
         const blockType = blockRecord.type
         if (blockType === 'text' && typeof blockRecord.text === 'string') {
           if (type === 'user') {
-            const typed = parseCommandMarkup(blockRecord.text) ?? blockRecord.text
-            const peer = parseEnvelope(typed)
-            if (typed.length > 0) {
+            if (isTaskNotificationRecord(record, blockRecord.text)) {
+              const tasks = parseTaskNotifications(blockRecord.text)
               turnCounter += 1
               events.push({
                 id: blockId,
                 sequence: 0,
                 at,
+                type: 'turn_started',
                 turnId: `hist-turn-${turnCounter}`,
-                ...(peer ? { type: 'peer_message' as const, ...peer } : { type: 'user_message' as const, text: typed }),
+                trigger: tasks.length > 0 ? { kind: 'task', tasks } : { kind: 'resumed' },
               })
+            } else {
+              const typed = parseCommandMarkup(blockRecord.text) ?? blockRecord.text
+              const peer = parseEnvelope(typed)
+              if (typed.length > 0) {
+                turnCounter += 1
+                events.push({
+                  id: blockId,
+                  sequence: 0,
+                  at,
+                  turnId: `hist-turn-${turnCounter}`,
+                  ...(peer ? { type: 'peer_message' as const, ...peer } : { type: 'user_message' as const, text: typed }),
+                })
+              }
             }
           } else {
             events.push({

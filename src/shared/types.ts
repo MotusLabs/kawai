@@ -2,10 +2,19 @@
 export const HISTORY_MAX_AGE_MIN_HOURS = 1
 export const HISTORY_MAX_AGE_MAX_HOURS = 168 // 7 days
 
-import type { TeamMessage } from './team'
+import type {
+  MessageCursor,
+  MessageQueryFilters,
+  SessionDirectoryEntry,
+  TeamMessage,
+  TeamWorktreeOccupancy,
+  ThreadEntry,
+  WaitingReason,
+} from './team'
 import type { RuleLoadReport, TeamRoutingState } from './routing'
-import type { TaskStatus, TeamTask, TeamTaskDetail, TeamTaskSummary } from './teamTasks'
+import type { HumanTaskDetail, TaskDispatchPreview, TaskHandoffKind, TaskStatus, TaskTargetOptions, TeamTask, TeamTaskAssignment, TeamTaskSummary } from './teamTasks'
 import type { ProductStrategy, StrategyDetail, StrategyDraft, StrategyRevision } from './productStrategy'
+import type { TeamWorkspaceSnapshot } from './teamWorkspace'
 import type {
   WorkspaceOperationResult,
   WorkspaceSnapshot,
@@ -23,6 +32,7 @@ import type {
   ChatUsageReport,
   ChatWireFrame,
   ChatWorker,
+  ChatBackgroundTask,
 } from './chat'
 
 export type {
@@ -52,6 +62,7 @@ export type {
   ChatWireFrame,
   ChatWorker,
   ChatWorkerStatus,
+  ChatBackgroundTask,
 } from './chat'
 
 export type {
@@ -317,6 +328,11 @@ export type ServerMessage =
        */
       workers: ChatWorker[]
       /**
+       * Background shells and Monitors the agent started (background tasks
+       * D2): the full roster at snapshot time, running and settled alike.
+       */
+      backgroundTasks: ChatBackgroundTask[]
+      /**
        * The session's active notices (notification strip design D1): its
        * profile's account notices followed by its own agent notices, sorted by
        * priority and newest. Additive and ephemeral — never persisted,
@@ -353,39 +369,157 @@ export type ServerMessage =
   // not deltas — a missed bookend must not wedge a stale running worker. Sent
   // whenever the roster projection changes; additive and ephemeral like
   // chat-activity, while settled outcomes also ride the snapshot and persist.
-  | { type: 'team-mailbox-snapshot'; sessionId: string; teamId: string; messages: TeamMessage[]; routing?: TeamRoutingState }
-  | { type: 'team-mailbox-rules-result'; sessionId: string; ok: true; report: RuleLoadReport }
-  | { type: 'team-mailbox-rules-result'; sessionId: string; ok: false; error: string }
-  | { type: 'team-mailbox-hand-off-result'; sessionId: string; messageId: string; ok: true; forwardedId: string }
-  | { type: 'team-mailbox-hand-off-result'; sessionId: string; messageId: string; ok: false; error: string }
-  | { type: 'team-mailbox-dead-letter'; teamId: string; messageId: string; senderSession: string }
-  // Team tasks (team-tasks 6.1): authoritative snapshots for a session's
+  // Team mailbox snapshot. `waiting` and `worktrees` are additive optional
+  // fields (team-waiting-reasons D3): per-message waiting reasons and the
+  // worktree occupancy read model, ignored by older clients (the precedent
+  // is `routing`). Reasons are in-memory state — absent until the first
+  // dispatch pass after a restart rebuilds them.
+  | {
+      type: 'team-mailbox-snapshot'
+      teamPath: string
+      teamId: string
+      messages: TeamMessage[]
+      routing?: TeamRoutingState
+      waiting?: Record<string, WaitingReason>
+      worktrees?: TeamWorktreeOccupancy[]
+    }
+  | { type: 'team-mailbox-rules-result'; teamPath: string; ok: true; report: RuleLoadReport }
+  | { type: 'team-mailbox-rules-result'; teamPath: string; ok: false; error: string }
+  | { type: 'team-mailbox-hand-off-result'; teamPath: string; messageId: string; ok: true; forwardedId: string }
+  | { type: 'team-mailbox-hand-off-result'; teamPath: string; messageId: string; ok: false; error: string }
+  | { type: 'team-mailbox-dead-letter'; teamId: string; messageId: string; senderSession: string | null }
+  // A reply reached the human (team-message-threads D5): settled on send, so
+  // a toast is the only client-side signal. Additive and ephemeral.
+  | { type: 'team-mailbox-delivered-to-human'; teamId: string; messageId: string; senderSession: string | null; senderKind: 'agent' | 'human' }
+  // Team tasks (team-tasks 6.1): authoritative snapshots for an addressed
   // team — the list, and each task whose detail the connection has open.
-  | { type: 'team-tasks-snapshot'; sessionId: string; teamId: string; tasks: TeamTaskSummary[] }
-  | { type: 'team-task-detail'; sessionId: string; teamId: string; detail: TeamTaskDetail }
+  | { type: 'team-tasks-snapshot'; teamPath: string; teamId: string; tasks: TeamTaskSummary[] }
+  | {
+      type: 'team-task-detail'
+      teamPath: string
+      teamId: string
+      /** The human's view: the task detail plus its draft (task-revision-publication D1). */
+      detail: HumanTaskDetail
+      /** Last known identity of killed participants named by its messages. */
+      directory: SessionDirectoryEntry[]
+    }
   // Result of a human task action; `task` is set on success (a created
-  // task's id lets the view open it), `error` on refusal.
-  | { type: 'team-task-result'; sessionId: string; requestId: string; task?: TeamTask; error?: string }
+  // task's id lets the view open it), `error` on refusal. A dispatch
+  // additionally returns its assignment (task-assignment 4.1).
+  | {
+      type: 'team-task-result'
+      teamPath: string
+      requestId: string
+      task?: TeamTask
+      /** The assignment a `team-task-assign` created or replayed. */
+      assignment?: TeamTaskAssignment
+      /** The revision a `team-task-publish` published or replayed. */
+      revision?: number
+      /** True when a keyed publish or notify had already run: nothing new was written. */
+      replay?: boolean
+      error?: string
+    }
+  // Read-only dispatch preview (task-assignment 4.1): informational — the
+  // same request revalidated at dispatch.
+  | {
+      type: 'team-task-preview-result'
+      teamPath: string
+      requestId: string
+      preview?: TaskDispatchPreview
+      error?: string
+    }
+  // The pickers' team-scoped worktrees and OpenSpec changes (task-assignment 4.1).
+  | {
+      type: 'team-task-targets-result'
+      teamPath: string
+      requestId: string
+      targets?: TaskTargetOptions
+      error?: string
+    }
+  // Messages view (team-message-threads 5.1): the authoritative page of a
+  // subscription's filters on open and reconnect, then pushes of the rows
+  // that changed. Pushes are unfiltered — a watcher on `state:queued` has to
+  // hear about the claim that drops a row out of its list. Thread detail is
+  // its own replace-semantics reply, re-sent when its thread changes.
+  | {
+      type: 'team-messages-snapshot'
+      teamPath: string
+      teamId: string
+      filters: MessageQueryFilters
+      messages: TeamMessage[]
+      nextCursor: MessageCursor | null
+      /** Last known identity of killed participants named by these rows. */
+      directory: SessionDirectoryEntry[]
+      /** The team's tasks, so the composer can attach one without the Tasks panel. */
+      tasks: { id: string; title: string }[]
+      /** Whole-thread message counts for the threads on this page (team-workspace-pages D7). */
+      threadSizes: Record<string, number>
+    }
+  // Carries the team directory like the snapshot, so a text search names a
+  // participant recorded since the last snapshot (team-workspace-pages D7).
+  | { type: 'team-messages'; teamPath: string; teamId: string; messages: TeamMessage[]; directory: SessionDirectoryEntry[] }
+  | {
+      type: 'team-thread'
+      teamPath: string
+      teamId: string
+      threadId: string
+      entries: ThreadEntry[]
+      directory: SessionDirectoryEntry[]
+    }
+  // Result of a human send or reply; `message` is set on success (the row the
+  // composer's thread will show), `error` on refusal. `requestId` is the
+  // client's own and never lands in a durable row.
+  | {
+      type: 'team-message-send-result'
+      teamPath: string
+      requestId: string
+      message?: TeamMessage
+      error?: string
+    }
   // Product strategy (product-strategy 3.1/5.1): authoritative snapshots for
-  // a session's team — the summary (null = no record; the view offers
+  // the addressed team — the summary (null = no record; the view offers
   // capture) and, when a record exists, its full detail. Re-sent whole on
   // every committed strategy change, so a reconnect needs no deltas.
-  | { type: 'strategy-snapshot'; sessionId: string; teamId: string; strategy: ProductStrategy | null }
-  | { type: 'strategy-detail'; sessionId: string; teamId: string; detail: StrategyDetail }
+  | { type: 'strategy-snapshot'; teamPath: string; teamId: string; strategy: ProductStrategy | null }
+  | { type: 'strategy-detail'; teamPath: string; teamId: string; detail: StrategyDetail }
   // Result of a human strategy action: the saved draft (its hash feeds the
   // next save's CAS) or the submitted revision on success; `error` on
   // refusal, with `conflict` carrying the stored draft when a CAS refusal
   // leaves the caller's own text in place (S12).
   | {
       type: 'strategy-result'
-      sessionId: string
+      teamPath: string
       requestId: string
       draft?: StrategyDraft
       revision?: StrategyRevision
       error?: string
       conflict?: StrategyDraft | null
     }
+  // Team workspace (team-workspace 5.1): one authoritative snapshot on open
+  // and reconnect, then full-set replace pushes — unfiltered like the task
+  // snapshot, so the client applies its own filters. The read model owns no
+  // tables (design D1); every set is recomputed from the stores it reads.
+  | ({ type: 'team-workspace-snapshot'; teamPath: string; teamId: string } & TeamWorkspaceSnapshot)
+  | ({ type: 'team-workspace'; teamPath: string; teamId: string } & TeamWorkspaceSnapshot)
   | { type: 'chat-workers'; sessionId: string; workers: ChatWorker[] }
+  // Full background-task roster of a chat session (background tasks D2): a
+  // level signal like chat-workers — the whole set on every change, additive
+  // and ephemeral on the wire, while settled outcomes persist in the sidecar.
+  | { type: 'chat-background-tasks'; sessionId: string; tasks: ChatBackgroundTask[] }
+  // A background task's output tail (background tasks D3): the reply to
+  // chat-task-output. 'ok' carries at most the last 8 KiB as plain text
+  // (truncated notes that earlier output was cut); 'unavailable' covers a
+  // missing method, a throwing read, and a cleaned-up output file — the row
+  // shows the panel as unavailable, never an error.
+  | {
+      type: 'chat-task-output'
+      sessionId: string
+      taskId: string
+      state: 'ok' | 'unavailable'
+      output?: string
+      totalBytes?: number
+      truncated?: boolean
+    }
   // A chat session's active notices (notification strip design D5): the full
   // replace-semantics list, pushed to subscribed connections whenever it
   // changes — a missed push heals on the next one. Additive and ephemeral
@@ -500,17 +634,22 @@ export type ClientMessage =
       sessionId: string
       policy: ChatApprovalPolicy
     }
-  | { type: 'team-mailbox-open' | 'team-mailbox-close'; sessionId: string }
-  | { type: 'team-mailbox-cancel' | 'team-mailbox-retry' | 'team-mailbox-discard'; sessionId: string; messageId: string }
-  | { type: 'team-mailbox-reload-rules'; sessionId: string }
-  | { type: 'team-mailbox-hand-off'; sessionId: string; messageId: string; target: { kind: 'group' | 'session'; id: string } }
+  // Human team views (team-workspace-pages D1) address a team, not a chat:
+  // `teamPath` is a directory — a repository's main checkout, or a chat's
+  // project directory — that the server resolves to its team and accepts
+  // only for a discovered repository or an existing chat's team (refused as
+  // `unknown-team`). Replies echo the same `teamPath` beside the `teamId`.
+  | { type: 'team-mailbox-open' | 'team-mailbox-close'; teamPath: string }
+  | { type: 'team-mailbox-cancel' | 'team-mailbox-retry' | 'team-mailbox-discard'; teamPath: string; messageId: string }
+  | { type: 'team-mailbox-reload-rules'; teamPath: string }
+  | { type: 'team-mailbox-hand-off'; teamPath: string; messageId: string; target: { kind: 'group' | 'session'; id: string } }
   // Team tasks (team-tasks 6.1/6.2): list and detail subscriptions scoped by
-  // the session's team; human actions answer with team-task-result.
-  | { type: 'team-tasks-open' | 'team-tasks-close'; sessionId: string }
-  | { type: 'team-task-open' | 'team-task-close'; sessionId: string; taskId: string }
+  // the addressed team; human actions answer with team-task-result.
+  | { type: 'team-tasks-open' | 'team-tasks-close'; teamPath: string }
+  | { type: 'team-task-open' | 'team-task-close'; teamPath: string; taskId: string }
   | {
       type: 'team-task-create'
-      sessionId: string
+      teamPath: string
       requestId: string
       title: string
       direction: string
@@ -518,17 +657,136 @@ export type ClientMessage =
       parentId?: string
       worktree?: string
       openspecChange?: string
+      /** Stable per intent (task-assignment D4): a replay returns the prior task. */
+      requestKey?: string
     }
-  | { type: 'team-task-amend'; sessionId: string; requestId: string; taskId: string; direction?: string; acceptance?: string }
-  | { type: 'team-task-note'; sessionId: string; requestId: string; taskId: string; text: string }
-  | { type: 'team-task-status'; sessionId: string; requestId: string; taskId: string; status: TaskStatus }
+  // Task-revision publication (D1, D2, D4): the human's draft (save, rebase
+  // onto the current revision, discard), a keyed publication from a named
+  // base, and keyed notify/retry of a published revision.
+  | {
+      type: 'team-task-draft'
+      teamPath: string
+      requestId: string
+      taskId: string
+      action: 'save' | 'rebase' | 'discard'
+      baseRevision?: number
+      direction?: string
+      acceptance?: string
+      rationale?: string
+    }
+  | {
+      type: 'team-task-publish'
+      teamPath: string
+      requestId: string
+      taskId: string
+      baseRevision: number
+      /** Minted when the action arms; reused on every resend, so a replay returns the prior revision. */
+      requestKey: string
+      direction: string
+      acceptance?: string
+      rationale: string
+      notify: boolean
+      /** Published from the human's saved draft, which is discarded with it. */
+      fromDraft?: boolean
+    }
+  | { type: 'team-task-notify'; teamPath: string; requestId: string; taskId: string; revision: number; requestKey: string }
+  // Task results (task-results-handoffs D5): accept one result and close the
+  // task under the existing closing rights; a reason when it is flagged or
+  // child work is open.
+  | { type: 'team-task-accept-result'; teamPath: string; requestId: string; taskId: string; resultId: string; reason?: string }
+  // Request review / Request QA / Return for fixes (D3): a handoff of one
+  // result to a role, idempotent under the client's request key.
+  | {
+      type: 'team-task-handoff'
+      teamPath: string
+      requestId: string
+      taskId: string
+      kind: TaskHandoffKind
+      resultId: string
+      target: { kind: 'group' | 'session'; id: string }
+      instructions: string
+      expectedResponse?: string
+      requestKey: string
+    }
+  // Release worktree and hand off (D7): archive the task's ready spawned
+  // members, then dispatch the review handoff to a reviewer group.
+  | {
+      type: 'team-task-release'
+      teamPath: string
+      requestId: string
+      taskId: string
+      target: string
+      instructions: string
+      expectedResponse?: string
+      requestKey: string
+    }
+  | { type: 'team-task-note'; teamPath: string; requestId: string; taskId: string; text: string }
+  | { type: 'team-task-status'; teamPath: string; requestId: string; taskId: string; status: TaskStatus }
+  // Human dispatch of a task's instruction (task-assignment 4.1): idempotent
+  // under `requestKey`; `handling` is required when the task has an
+  // outstanding assignment (the refusal names it).
+  | {
+      type: 'team-task-assign'
+      teamPath: string
+      requestId: string
+      taskId: string
+      target: { kind: 'group' | 'session'; id: string }
+      instruction: string
+      requestKey: string
+      handling?: 'notify' | 'stop'
+    }
+  // Read-only preview of a dispatch: the task's stored worktree, or the
+  // worktree the create form has (resolved by the same server rules).
+  | {
+      type: 'team-task-preview'
+      teamPath: string
+      requestId: string
+      taskId?: string
+      worktree?: string
+      target: { kind: 'group' | 'session'; id: string }
+    }
+  // The pickers' data (worktrees with branches, changes with locations).
+  // `worktree` narrows the change list to the roots validateChange accepts
+  // for it (the main checkout plus that worktree); the worktree list stays
+  // team-wide.
+  | { type: 'team-task-targets'; teamPath: string; requestId: string; worktree?: string }
+  // Messages view (team-message-threads 5.1): a list subscription carries the
+  // filters (and optional page cursor) the view is on; a thread open carries
+  // the thread to keep live. Human sends and replies are one message — `to`
+  // starts mail, `inReplyTo` answers it — carrying a client request id the
+  // result echoes. Request ids live on the wire only.
+  | {
+      type: 'team-messages-open'
+      teamPath: string
+      filters?: MessageQueryFilters
+      cursor?: MessageCursor
+    }
+  | { type: 'team-messages-close'; teamPath: string }
+  | { type: 'team-thread-open'; teamPath: string; threadId: string }
+  | { type: 'team-thread-close'; teamPath: string; threadId: string }
+  | {
+      type: 'team-message-send'
+      teamPath: string
+      requestId: string
+      body: string
+      urgent?: boolean
+      tags?: string[]
+      taskId?: string
+      /** Recipient of new mail. Mutually exclusive with `inReplyTo`. */
+      to?: { kind: 'group' | 'session'; id: string }
+      /** Message to answer; the reply joins its thread. */
+      inReplyTo?: string
+    }
   // Product strategy (product-strategy 3.1/5.1): the view subscription
-  // scoped by the session's team, and the human actions. Approval and
+  // scoped by the addressed team, and the human actions. Approval and
   // withdrawal arrive only here — there is no agent tool for them (D3).
-  | { type: 'strategy-open' | 'strategy-close'; sessionId: string }
+  | { type: 'strategy-open' | 'strategy-close'; teamPath: string }
+  // Team workspace (team-workspace 5.1): the repository-level read model
+  // subscription, addressed like every human team view by `teamPath`.
+  | { type: 'team-workspace-open' | 'team-workspace-close'; teamPath: string }
   | {
       type: 'strategy-save-draft'
-      sessionId: string
+      teamPath: string
       requestId: string
       /** Capture (no record yet, human only): the product slug and title. */
       productId?: string
@@ -540,10 +798,10 @@ export type ClientMessage =
       expectedBaseRevision?: number | null
       expectedDraftHash?: string | null
     }
-  | { type: 'strategy-submit'; sessionId: string; requestId: string; draftId?: string }
+  | { type: 'strategy-submit'; teamPath: string; requestId: string; draftId?: string }
   | {
       type: 'strategy-approve'
-      sessionId: string
+      teamPath: string
       requestId: string
       revision: number
       contentHash: string
@@ -554,13 +812,22 @@ export type ClientMessage =
       approvalScope?: string
       openQuestions?: string
     }
-  | { type: 'strategy-withdraw'; sessionId: string; requestId: string; revision?: number; draftId?: string; commandId: string }
+  | { type: 'strategy-withdraw'; teamPath: string; requestId: string; revision?: number; draftId?: string; commandId: string }
   | { type: 'chat-debug-open'; sessionId: string }
   | { type: 'chat-debug-page'; sessionId: string; beforeSeq: number }
   | { type: 'chat-debug-close'; sessionId: string }
   // A worker's expanded body (workers design D5): read the worker's on-disk
   // transcript live or after settle; the reply is chat-worker-transcript.
   | { type: 'chat-worker-transcript'; sessionId: string; workerId: string }
+  // A background task's output tail (background tasks D3): at most the last
+  // 8 KiB, live via the SDK or from the recorded output file after the
+  // process ended; the reply is the chat-task-output server message.
+  | { type: 'chat-task-output'; sessionId: string; taskId: string }
+  // Stop one background task (background tasks D4): only that task ends; the
+  // in-flight turn and other tasks are untouched. Settle arrives through the
+  // normal roster channel, so there is no dedicated reply — a rejection for
+  // an already-ended task is logged and dropped server-side.
+  | { type: 'chat-task-stop'; sessionId: string; taskId: string }
   // Close an agent notice for its session on the server (notification strip
   // design D6): the manager drops the key and pushes the new list to every
   // attached client; unknown keys are a no-op. Account notices are closed

@@ -11,7 +11,6 @@
 // computed by the caller from the same view model.
 
 import { useCallback, useMemo, useState } from 'react'
-import { AnimatePresence } from 'motion/react'
 import {
   DndContext,
   closestCenter,
@@ -31,6 +30,7 @@ import GitBranch01Icon from '@untitledui-icons/react/line/esm/GitBranch01Icon'
 import HandIcon from '@untitledui-icons/react/line/esm/HandIcon'
 import Moon01Icon from '@untitledui-icons/react/line/esm/Moon01Icon'
 import PlusIcon from '@untitledui-icons/react/line/esm/PlusIcon'
+import Users01Icon from '@untitledui-icons/react/line/esm/Users01Icon'
 import type { AgentSession } from '@shared/types'
 import type { FallbackSectionData, GroupedSessionEntry, WorkspaceView } from '../utils/workspaceView'
 import { useStableValue, stringArraysEqual } from '../hooks/useStableValue'
@@ -82,7 +82,7 @@ export interface GroupedRowContext {
 interface WorkspaceSectionListProps extends GroupedRowContext {
   view: WorkspaceView
   onToggleCollapse: (sectionKey: string) => void
-  /** Remounts AnimatePresence children when filters change (entry animation). */
+  /** Remounts rows when filters change (entry animation). */
   remountKey: string
   onNewSession?: () => void
   /**
@@ -98,6 +98,12 @@ interface WorkspaceSectionListProps extends GroupedRowContext {
   onCreateChangeWorktree?: (repositoryId: string, change: string) => void
   /** Opens the repository branch browser from a worktree section header. */
   onBrowseBranches?: (repositoryId: string) => void
+  /**
+   * Opens a repository's Team page (team-workspace D10): one entry per
+   * repository, above the sections; selecting it never changes the session
+   * selection.
+   */
+  onOpenTeam?: (teamKey: string) => void
 }
 
 export default function WorkspaceSectionList(props: WorkspaceSectionListProps) {
@@ -109,11 +115,28 @@ export default function WorkspaceSectionList(props: WorkspaceSectionListProps) {
     onNewSessionInWorktree,
     onCreateChangeWorktree,
     onBrowseBranches,
+    onOpenTeam,
     ...rowContext
   } = props
 
   return (
     <div data-testid="workspace-section-list">
+      {/* Team entries (team-workspace D10): above the change/worktree
+          sections, never filtered or reordered with session rows. */}
+      {view.teams.map((team) => (
+        <button
+          key={team.key}
+          type="button"
+          data-testid="team-entry"
+          data-team-key={team.teamKey}
+          className="flex w-full items-center gap-1.5 px-3 py-2 text-xs font-medium text-accent hover:bg-hover"
+          title={`Open the Team page for ${team.repositoryName} (${team.teamKey})`}
+          onClick={() => onOpenTeam?.(team.teamKey)}
+        >
+          <Users01Icon aria-hidden="true" className="h-3.5 w-3.5" />
+          Team · {team.repositoryName}
+        </button>
+      ))}
       {view.sections.map((section) => (
         <section
           key={section.key}
@@ -240,7 +263,7 @@ export interface FallbackSectionPaneProps extends GroupedRowContext {
   onToggleCollapse: (sectionKey: string) => void
   /** Ref to the navigator body whose height the fraction resolves against. */
   containerRef: React.RefObject<HTMLElement | null>
-  /** Remounts AnimatePresence children when filters change (entry animation). */
+  /** Remounts rows when filters change (entry animation). */
   remountKey: string
   /** Global dormant-row visibility (persisted settings); toggled from the
    *  Archive header, the only section that holds dormant rows. */
@@ -542,46 +565,46 @@ function GroupedLiveRows({ entries, ctx, remountKey }: GroupedLiveRowsProps) {
     >
       <SortableContext items={sortableItemIds} strategy={verticalListSortingStrategy}>
         <div key={remountKey}>
-          {/* sync (not popLayout): without per-row layout animation,
-              popLayout would overlap an exiting row with the sibling
-              snapping into its place */}
-          <AnimatePresence initial={false} mode="sync">
-            {liveSessions.map((session, index) => {
-              const activeIndex = activeId
-                ? liveSessions.findIndex((s) => s.id === activeId)
-                : -1
-              const isOver = overId === session.id && activeId !== session.id
-              const showDropIndicator = isOver ? (activeIndex > index ? 'above' : 'below') : null
-              return (
-                <SortableSessionItem
-                  key={session.id}
-                  session={session}
-                  isNew={ctx.isNew(session.id)}
-                  exitDuration={ctx.exitDuration}
-                  prefersReducedMotion={ctx.prefersReducedMotion}
-                  useSafariLayoutFallback={ctx.useSafariLayoutFallback}
-                  isSelected={session.id === ctx.selectedSessionId}
-                  isEditing={session.id === ctx.editingSessionId}
-                  showSessionIdPrefix={ctx.showSessionIdPrefix}
-                  showProjectName={ctx.showProjectName}
-                  showLastUserMessage={ctx.showLastUserMessage}
-                  showHostInfo={ctx.showHostInfo}
-                  dropIndicator={showDropIndicator}
-                  nowTick={ctx.nowTick}
-                  remoteAllowControl={ctx.remoteAllowControl}
-                  onSelect={ctx.onSelect}
-                  onStartEdit={ctx.onStartEdit}
-                  onCancelEdit={ctx.onCancelEdit}
-                  onRename={ctx.onRename}
-                  onHibernate={ctx.onHibernate}
-                  onArchiveChat={ctx.onArchiveChat}
-                  onRestoreChat={ctx.onRestoreChat}
-                  onKill={ctx.onKill}
-                  onDuplicate={ctx.onDuplicate}
-                />
-              )
-            })}
-          </AnimatePresence>
+          {/* Removed rows are not re-rendered from `exitingSessions`: a killed
+              or externally-removed row unmounts with this map. Holding it for
+              an exit animation is what left ghost cards after a kill — the
+              node outlives the store. `exitingSessions` remains for
+              kill-failed rollback bookkeeping only (see SessionList). */}
+          {liveSessions.map((session, index) => {
+            const activeIndex = activeId
+              ? liveSessions.findIndex((s) => s.id === activeId)
+              : -1
+            const isOver = overId === session.id && activeId !== session.id
+            const showDropIndicator = isOver ? (activeIndex > index ? 'above' : 'below') : null
+            return (
+              <SortableSessionItem
+                key={session.id}
+                session={session}
+                isNew={ctx.isNew(session.id)}
+                exitDuration={ctx.exitDuration}
+                prefersReducedMotion={ctx.prefersReducedMotion}
+                useSafariLayoutFallback={ctx.useSafariLayoutFallback}
+                isSelected={session.id === ctx.selectedSessionId}
+                isEditing={session.id === ctx.editingSessionId}
+                showSessionIdPrefix={ctx.showSessionIdPrefix}
+                showProjectName={ctx.showProjectName}
+                showLastUserMessage={ctx.showLastUserMessage}
+                showHostInfo={ctx.showHostInfo}
+                dropIndicator={showDropIndicator}
+                nowTick={ctx.nowTick}
+                remoteAllowControl={ctx.remoteAllowControl}
+                onSelect={ctx.onSelect}
+                onStartEdit={ctx.onStartEdit}
+                onCancelEdit={ctx.onCancelEdit}
+                onRename={ctx.onRename}
+                onHibernate={ctx.onHibernate}
+                onArchiveChat={ctx.onArchiveChat}
+                onRestoreChat={ctx.onRestoreChat}
+                onKill={ctx.onKill}
+                onDuplicate={ctx.onDuplicate}
+              />
+            )
+          })}
         </div>
       </SortableContext>
     </DndContext>

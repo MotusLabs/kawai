@@ -5,7 +5,7 @@
 // stay in the driver; this file is SDK-agnostic so the client never imports
 // the agent SDK.
 
-import type { ChatPeerTaskContext } from './teamTasks'
+import type { ChatPeerTaskContext, RevisionNotice } from './teamTasks'
 import type { ChatHandoffPackage } from './team'
 
 /**
@@ -93,10 +93,29 @@ export interface ChatCommandState {
   commands: ChatCommand[]
 }
 
+/** One background-task notification that woke the agent (background tasks D5). */
+export interface ChatTurnTriggerTask {
+  taskId: string
+  toolCallId?: string
+  status: string
+  summary?: string
+}
+
+/** Why a turn the agent started on its own began. */
+export type ChatTurnTrigger =
+  | { kind: 'task'; tasks: ChatTurnTriggerTask[] }
+  | { kind: 'resumed' }
+
 /** Mail received from another chat agent; shared without SDK dependencies. */
 export interface ChatPeerMessage {
   messageId: string
-  senderSession: string
+  /** Sender session; null for a human sender (team-message-threads D4). */
+  senderSession: string | null
+  /**
+   * Actor kind of the sender (team-message-threads D4): the human composing
+   * mail, or an agent session. Absent on recorded envelopes = agent.
+   */
+  senderKind?: 'agent' | 'human'
   senderGroup: string | null
   priority: 'normal' | 'urgent'
   originPath: string
@@ -104,15 +123,28 @@ export interface ChatPeerMessage {
   threadId: string
   body: string
   possibleDuplicate: boolean
-  thread?: Array<{ messageId: string; senderSession: string; body: string }>
+  thread?: Array<{ messageId: string; senderSession: string | null; body: string; senderKind?: 'agent' | 'human' }>
   /** The referenced team task as it was at delivery (team-tasks D3); absent = none. */
   task?: ChatPeerTaskContext
   /** Work handed off after a provider limit (profile routing); absent = none. */
   handoff?: ChatHandoffPackage
+  /**
+   * A revision notice (task-revision-publication D3): the revision it
+   * announces, which may be older than `task.revision` built at delivery.
+   */
+  revisionNotice?: RevisionNotice
 }
 
 export type ChatEvent =
-  | (ChatTurnEventBase & { type: 'turn_started' })
+  | (ChatTurnEventBase & {
+      type: 'turn_started'
+      /**
+       * Why the turn began (background tasks D5). Absent on user-started
+       * turns; `task` lists the notifications that woke the agent, `resumed`
+       * marks a self-start with no known cause.
+       */
+      trigger?: ChatTurnTrigger
+    })
   | (ChatTurnEventBase & { type: 'user_message'; text: string })
   | (ChatTurnEventBase & ChatPeerMessage & { type: 'peer_message' })
   | (ChatTurnEventBase & {
@@ -269,6 +301,12 @@ export interface ChatUsageWindow {
   percentUsed: number
   /** ISO timestamp when the window resets, when known. */
   resetsAt: string | null
+  /**
+   * Window length in milliseconds when the server knows it for the kind
+   * (5-hour, 7-day, per-model weekly); absent otherwise — never guessed.
+   * With resetsAt it places the usage bar's elapsed-time marker.
+   */
+  periodMs?: number
 }
 
 /**
@@ -285,14 +323,20 @@ export interface ChatUsageReport {
   /** ISO timestamp of when the report was received. */
   receivedAt: string
   /**
-   * Which shape it came from: a pushed rate_limit_event, a /usage report, or
-   * the SDK usage pull (which follows the host claude.ai login, not the
-   * session's provider). Absent on reports from older servers.
+   * Which shape it came from: a pushed rate_limit_event, a /usage report, the
+   * SDK usage pull (which follows the host claude.ai login, not the session's
+   * provider), or a pull from the session provider's own quota endpoint.
+   * Absent on reports from older servers.
    */
   source?: ChatUsageSource
 }
 
-export type ChatUsageSource = 'push' | 'report' | 'pull'
+export type ChatUsageSource =
+  | 'push'
+  | 'report'
+  | 'pull'
+  /** Pulled from the session provider's own quota endpoint (provider usage pull). */
+  | 'provider'
 
 /** Where a chat notification came from. */
 export type ChatNotificationSource = 'account' | 'agent'
@@ -361,6 +405,44 @@ export interface ChatWorker {
   /** Milliseconds since the spawn when the message was sent. */
   elapsedMs: number
   /** Settled workers only. */
+  summary?: string
+}
+
+/** What started the task: a backgrounded shell command or a Monitor. */
+export type ChatBackgroundTaskKind = 'shell' | 'monitor'
+
+/** Lifecycle outcome of a background task (background tasks D1). */
+export type ChatBackgroundTaskStatus = 'running' | 'completed' | 'failed' | 'stopped'
+
+/**
+ * One background shell or Monitor the chat session's agent started, joined to
+ * its tool row by the starting call's id. Sibling of `ChatWorker`: a roster
+ * entry that rides the full-set `chat-background-tasks` message and
+ * `chat-snapshot.backgroundTasks`, never the sequenced event stream. The
+ * recorded output-file path stays server-side (design D3: a client can never
+ * supply or receive a path); reading the tail is the `chat-task-output`
+ * request. `elapsedMs` is the value when the message was sent, frozen once
+ * the task settles, so clients tick their own clock while it runs.
+ */
+export interface ChatBackgroundTask {
+  /** SDK task id; the handle for output reads and stop. */
+  taskId: string
+  /** The `Bash`/`Monitor` tool call that started the task. */
+  toolCallId?: string
+  kind: ChatBackgroundTaskKind
+  description?: string
+  status: ChatBackgroundTaskStatus
+  /**
+   * Whether the task is in the CLI's background set right now. Distinct from
+   * `status`: the level set and the settle notification arrive separately.
+   */
+  live: boolean
+  /** Epoch ms of task_started; the sidecar persists it (design D6). */
+  startedAtMs: number
+  /** Epoch ms of the settle; absent while running. */
+  endedAtMs?: number
+  elapsedMs: number
+  /** Settled tasks only: the one-line outcome the agent received. */
   summary?: string
 }
 

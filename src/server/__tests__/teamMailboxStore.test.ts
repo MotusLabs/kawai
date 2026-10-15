@@ -73,6 +73,22 @@ describe('MailboxStore', () => {
     expect(store.teamsWithQueuedMail(t(9))).toEqual([TEAM])
   })
 
+  test('a due resume of parked work goes before older direct mail', () => {
+    const t = (n: number) => `2026-10-11T00:00:0${n}.000Z`
+    const work = send({ toKind: 'session', toId: 'chat-dev' }, t(1))
+    store.claim(work.id, 'chat-dev')
+    store.markPushed(work.id)
+    store.markDelivered(work.id)
+    const older = send({ toKind: 'session', toId: 'chat-dev' }, t(2))
+    const resume = send({ toKind: 'session', toId: 'chat-dev', fromSession: 'chat-dev', tags: ['resume'], deliverAt: t(5) }, t(3))
+    expect(store.park(work.id, t(5), resume.id)).toBe(true)
+    expect(store.nextEligible(dev, t(4))?.id).toBe(older.id)
+    expect(store.nextEligible(dev, t(5))?.id).toBe(resume.id)
+    // Urgent mail still comes first.
+    const urgent = send({ toKind: 'session', toId: 'chat-dev', priority: 'urgent' }, t(4))
+    expect(store.nextEligible(dev, t(5))?.id).toBe(urgent.id)
+  })
+
   test('delivery records push then acknowledgement; requeue forgets the claim', () => {
     const message = send()
     expect(store.markPushed(message.id)).toBe(false) // not claimed yet
@@ -89,15 +105,15 @@ describe('MailboxStore', () => {
 
   test('cancel, dead-letter, uncertain hold, retry, and discard follow their states', () => {
     const queued = send()
-    expect(store.cancel(queued.id)).toBe(true)
-    expect(store.cancel(queued.id)).toBe(false)
+    expect(store.cancel(queued.id, { kind: 'human' })).toBe(true)
+    expect(store.cancel(queued.id, { kind: 'human' })).toBe(false)
 
     const dead = send()
     expect(store.deadLetter(dead.id, 'killed')).toBe(true)
     expect(store.retry(dead.id)).toBe(true)
     expect(store.get(dead.id)).toMatchObject({ state: 'queued', reason: null, hop: 1 })
     store.deadLetter(dead.id, 'again')
-    expect(store.discard(dead.id)).toBe(true)
+    expect(store.discard(dead.id, { kind: 'human' })).toBe(true)
     expect(store.get(dead.id)?.state).toBe('discarded')
 
     // Uncertain: retried only to the same recipient, flagged as a duplicate.
@@ -182,7 +198,7 @@ test('thread history includes confirmed delivery only, excluding queued, cancell
     const original = store.enqueue(base); store.claim(original.id, 'dev'); store.markPushed(original.id); store.markDelivered(original.id)
     for (const state of ['queued', 'cancelled', 'dead']) {
       const sibling = store.enqueue({ ...base, body: state, inReplyTo: original })
-      if (state === 'cancelled') store.cancel(sibling.id)
+      if (state === 'cancelled') store.cancel(sibling.id, { kind: 'human' })
       if (state === 'dead') store.deadLetter(sibling.id, 'hop-limit')
     }
     expect(store.thread(original.threadId).map(row => row.body)).toEqual(['Confirmed'])
