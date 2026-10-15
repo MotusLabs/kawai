@@ -3,7 +3,12 @@
 ## MODIFIED Requirements
 
 ### Requirement: Handoffs are explicit role assignments
-Task detail SHALL offer **Request review**, **Request QA**, and **Return for fixes** as handoffs: assignment records carrying the kind, requested role, instructions, referenced result, and expected response. Human handoffs dispatch under a client request key with task-assignment's idempotency and worktree routing. Agents dispatch with `task_handoff` to a group or an explicitly named session; while an equivalent handoff (same task, result, kind) is outstanding, a duplicate call returns it with a notice, not a second dispatch.
+Task detail SHALL offer **Request review**, **Request QA**, and **Return for
+fixes**, recording kind, role, instructions, result, and expected response.
+Human handoffs SHALL use keyed task-assignment dispatch with idempotency and
+worktree routing. Agents SHALL use `task_handoff` to a group or named session.
+A duplicate for the same task, result, and kind SHALL return the outstanding
+handoff with a notice and no new dispatch.
 
 #### Scenario: Human requests review
 - **WHEN** the human requests review of the outstanding result from task detail

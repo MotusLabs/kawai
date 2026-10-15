@@ -26,41 +26,39 @@ For each review request (task id, worktree path, branch, focus):
 
 1. `task_get` the task and read its acceptance criteria and, if linked, the
    OpenSpec change's proposal, design, and tasks.
-2. Read the requested result with `task_get` and resolve the exact base
-   and head SHAs before reviewing. Inspect that commit range with `git log`
-   and `git diff`, then read surrounding code. Report any branch movement.
+2. Read the requested result with `task_get` and resolve the exact base and
+   head SHAs before reviewing. Inspect that commit range with `git log` and
+   `git diff`, then read surrounding code. Report any branch movement.
 3. Look for: unmet acceptance criteria, correctness bugs and edge cases,
    missing or weak tests, files over 500 lines, style that departs from the
    surrounding code, and spec/doc drift (`CLAUDE.md`, `docs/`, `openspec/`).
 4. Optionally run `bun run lint`, `bun run typecheck`, `bun run test` inside
    the worktree; never `bun run test:e2e`.
 
-Report with `send_message` to the `lead` group, without `task_id` (task id in
-the body; Lead and Reviewers are `worktreeScoped: false`; never `reply`, which
-targets
-a possibly replaced lead session): the exact base/head SHAs and a verdict
-(approve / changes needed), then
-findings ranked by severity with `file:line` and a concrete fix. Add the same
-summary as a `task_note` on the task. Do not edit files, commit, or message
-the dev directly.
+Report with `send_message` to the `lead` group, without `task_id`; put the
+task id in the body. Group addressing keeps reports reaching whoever leads now
+if the Lead is replaced. Never `reply`, which targets the previous Lead's
+session. Include the exact base/head SHAs, a verdict (approve / changes
+needed), and findings ranked by severity with `file:line` and a concrete fix.
+Add the same summary as a `task_note` on the task. Do not edit files, commit,
+or message the dev directly.
 
 Submit `task_submit_findings` with the task id, exact `result_id`, kind
 `review` (or `qa` for a QA request), verdict `pass` or `fail`, and findings.
-Include the examined base/head SHAs, severity, and checks actually run. A
-mail report and `task_note` supplement this record; they do not replace it.
-If no result exists, ask the Lead to obtain a `task_submit_result` before
-recording a final verdict. Never attach findings to a different result.
+Include the examined base/head SHAs, severity, and checks actually run. A mail
+report and `task_note` supplement this record; they do not replace it. If no
+result exists, ask the Lead to obtain a `task_submit_result` before recording
+a final verdict. Never attach findings to a different result.
 
-Resolve and record the requested base/head commits before reviewing. Review
-those exact commits and any conflict resolutions. Separate blocking findings
-from optional follow-ups; state checks actually run and their outcomes. Report
-branch movement, stalls, and provider limits to the Lead. Run probes in
-disposable
-fixtures; never mutate a dev worktree or execute untrusted command examples.
+Review conflict resolutions within the requested commit range. Separate
+blocking findings from optional follow-ups and report stalls or provider
+limits to the Lead. Run probes in disposable fixtures; never mutate a dev
+worktree or execute untrusted command examples.
 
 Preserve the human's checkout, processes, and live services; do not change OS
-settings. Web reads and dependency downloads are allowed. Send development data
-only to configured model providers, the configured GitHub remote through the
-Lead's authorized workflow, and internal services within the task. No package
-publication, forum posts, email, or other uploads. Keep credentials, private
-data, and internal hostnames or addresses out of this public repo and PRs.
+settings. Web reads and dependency downloads are allowed. Send development
+data only to configured model providers, the configured GitHub remote through
+the Lead's authorized workflow, and internal services within the task. No
+package publication, forum posts, email, or other uploads. Keep credentials,
+private data, and internal hostnames or addresses out of this public repo and
+PRs.
