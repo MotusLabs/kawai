@@ -169,3 +169,29 @@ test('a reconnect re-sends the open form\'s plan subscription', () => {
   expect(opens()).toBe(2)
   expect(sent.filter(message => message.type === 'team-plans-close')).toHaveLength(1)
 })
+
+test('a form left open when a task detail replaces the list comes back closed, with no plan subscription left', () => {
+  useTeamTaskStore.getState().open('dev')
+  act(() => useTeamTaskStore.getState().applyTargetsResult(targets(2, ['api']) as never))
+  let selectedTaskId: string | null = null
+  let renderer!: TestRenderer.ReactTestRenderer
+  const render = () => <TeamTasksView teamPath="dev" projectPath="/repo"
+    view={{ ...useTeamTaskStore.getState().views.dev!, loading: false, tasks: [], selectedTaskId }}
+    sendMessage={sendMessage} connected connectionEpoch={0} />
+  act(() => { renderer = TestRenderer.create(render()) })
+  active.push(renderer)
+  const form = () => renderer.root.findByProps({ 'data-testid': 'task-create' })
+  act(() => form().props.onToggle({ currentTarget: { open: true } }))
+  expect(sent).toContainEqual({ type: 'team-plans-open', teamPath: 'dev' })
+  // A create lands on the new task's detail: the list and its form unmount without a toggle.
+  selectedTaskId = 't1'
+  act(() => renderer.update(render()))
+  expect(sent.at(-1)).toEqual({ type: 'team-plans-close', teamPath: 'dev' })
+  // Back on the list the form is an uncontrolled, closed <details>; opening it subscribes again.
+  selectedTaskId = null
+  act(() => renderer.update(render()))
+  expect(form().props.open).toBeUndefined()
+  expect(sent.filter(message => message.type === 'team-plans-open')).toHaveLength(1)
+  act(() => form().props.onToggle({ currentTarget: { open: true } }))
+  expect(sent.filter(message => message.type === 'team-plans-open')).toHaveLength(2)
+})

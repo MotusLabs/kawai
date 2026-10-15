@@ -167,8 +167,11 @@ export default function TeamTasksView({ teamPath, projectPath, view, sendMessage
     requestTargets()
   }, [connected, teamPath, draft.worktree]) // eslint-disable-line react-hooks/exhaustive-deps
   // While the New task form is open, a plan push (an approval, a close)
-  // re-requests the targets so the plan pickers follow it.
+  // re-requests the targets so the plan pickers follow it. The form stays an
+  // uncontrolled <details> that remounts closed whenever a detail replaces
+  // the list; that unmount fires no toggle, so the flag resets with it.
   const [formOpen, setFormOpen] = useState(false)
+  useEffect(() => { if (view.selectedTaskId) setFormOpen(false) }, [view.selectedTaskId])
   usePlanTargetsRefresh(teamPath, formOpen && !view.selectedTaskId, connected, connectionEpoch, sendMessage, requestTargets)
   // A reconnect drops the waiters for results lost with the connection: the
   // armed flow keeps its key, the dispatch effect re-sends the assign leg
@@ -261,7 +264,7 @@ export default function TeamTasksView({ teamPath, projectPath, view, sendMessage
           value={search} onChange={event => useTeamWorkspaceStore.getState().setSearch(teamPath, 'tasks', event.target.value)} />
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto p-3">
-        <details className="mb-4 border border-border p-2" data-testid="task-create" open={formOpen}
+        <details className="mb-4 border border-border p-2" data-testid="task-create"
           onToggle={event => setFormOpen(event.currentTarget.open)}>
           <summary className="cursor-pointer font-medium">New task</summary>
           <form className="mt-2 flex flex-col gap-2" onSubmit={event => { event.preventDefault(); create(draft.targetKind !== '' && draft.instruction.trim() !== '') }}>
