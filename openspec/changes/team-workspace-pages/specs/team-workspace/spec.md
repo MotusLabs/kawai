@@ -143,7 +143,7 @@ The URL SHALL identify the Team page's repository, tab, Strategy sub-view, and s
 ## MODIFIED Requirements
 
 ### Requirement: A Team workspace opens at repository level, independent of the selected chat
-The system SHALL open a full workspace view for a repository's team from its navigator **Team** entry, showing a **Strategy | Tasks | Messages | Mailbox | Members** tab strip under a header that shows the strategy status. The view SHALL NOT be tied to a chat selection. The Plans tab SHALL be a registered extension point that renders no content and no placeholder data. Selecting a chat SHALL show that chat in the main pane; returning to the Team page SHALL restore its team, tab, and selection.
+The system SHALL open a full workspace view for a repository's team from its navigator **Team** entry, showing a **Strategy | Tasks | Messages | Mailbox | Members** tab strip under a header that shows the strategy status. The view SHALL NOT be tied to a chat selection. The Plans tab SHALL be a registered extension point: until a Plans view registers there, it renders no tab content and no placeholder data. Selecting a chat SHALL show that chat in the main pane; returning to the Team page SHALL restore its team, tab, and selection.
 
 #### Scenario: Open the workspace from the navigator
 - **WHEN** the human opens the **Team** entry of a repository
@@ -154,7 +154,7 @@ The system SHALL open a full workspace view for a repository's team from its nav
 - **THEN** the Team page reopens on the same team with the same tab and selection
 
 #### Scenario: No placeholder Plans
-- **WHEN** the workspace renders its tab strip
+- **WHEN** no Plans view is registered and the workspace renders its tab strip
 - **THEN** no Plans tab content or placeholder row is shown, and the place a future Plans tab occupies is a documented extension point
 
 ### Requirement: Workspace reads are team-scoped and refuse cross-team access

@@ -14,7 +14,7 @@ import { TASK_HANDOFF_KINDS } from '@shared/teamTasks'
 import type { TaskActFn } from './TaskDirectionEditor'
 import TaskResultCard from './TaskResultCard'
 import { HANDOFF_ACTIONS, HANDOFF_ROLE_HINT, RoleRequestFields, emptyRoleRequest, requestPayload, requestReady, type RoleRequest } from './TaskHandoffForm'
-import type { TeamGroupOption } from './useTeamGroups'
+import type { TeamGroupOption } from '../chat/useTeamGroups'
 
 export default function TaskResultsSection({ detail, groups, sessions, connected, disabled, act }: {
   detail: HumanTaskDetail
@@ -73,7 +73,7 @@ export default function TaskResultsSection({ detail, groups, sessions, connected
     </div>
   </div>
 
-  return <section aria-label="Results" className="mt-3" data-testid="task-results">
+  return <div data-testid="task-results">
     <h5 className="font-medium">Results</h5>
     {results.length === 0 && <p className="text-chat-meta text-secondary">No result submitted yet</p>}
     {results.map(result => <TaskResultCard key={result.id} result={result} sessions={sessions}>
@@ -89,5 +89,5 @@ export default function TaskResultsSection({ detail, groups, sessions, connected
       {accepting === result.id && result.acceptedAt === null && acceptConfirm(result)}
       {result.supersededBy === null && handoff && handoffForm(result, handoff.kind, handoff.request)}
     </TaskResultCard>)}
-  </section>
+  </div>
 }

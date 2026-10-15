@@ -36,7 +36,7 @@
 
 ## 7. Navigator Team entry
 
-- [ ] 7.1 Add a `team` entry per discovered repository to `src/client/utils/workspaceView.ts` and render it in `WorkspaceSectionList.tsx`/`SessionList.tsx` above the change/worktree sections, outside `SessionRow` drag and filter behaviour; verify a test covers one entry per repository across several worktrees, the entry surviving a filter that hides every session, and selecting it not changing `selectedSessionId`.
+- [x] 7.1 Add a `team` entry per discovered repository to `src/client/utils/workspaceView.ts` and render it in `WorkspaceSectionList.tsx`/`SessionList.tsx` above the change/worktree sections, outside `SessionRow` drag and filter behaviour; verify a test covers one entry per repository across several worktrees, the entry surviving a filter that hides every session, and selecting it not changing `selectedSessionId`.
 
 ## 8. Mobile, keyboard, and accessibility
 

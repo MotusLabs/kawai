@@ -6,9 +6,20 @@
 // stored draft for display until the author explicitly adopts it (S12).
 import { create } from 'zustand'
 import type { ServerMessage } from '@shared/types'
-import type { ProductStrategy, StrategyDetail, StrategyDraft } from '@shared/productStrategy'
+import type { ProductStrategy, StrategyContent, StrategyDetail, StrategyDraft } from '@shared/productStrategy'
 
 export type StrategyAction = 'save' | 'submit' | 'approve' | 'withdraw'
+
+/**
+ * The draft editor's unsaved text, held per team (team-workspace-pages D5)
+ * so switching sub-views keeps it; a reload still drops it. `dirty` marks
+ * text newer than the stored draft, so a push refresh never wipes it.
+ */
+export interface RetainedDraft {
+  body: StrategyContent
+  impact: string
+  dirty: boolean
+}
 
 export interface StrategyView {
   open: boolean
@@ -26,10 +37,12 @@ export interface StrategyView {
   error: string | null
   /** The stored draft a CAS refusal returned, for reconciliation. */
   conflict: StrategyDraft | null
+  /** The editor's unsaved text, kept across sub-view switches (D5). */
+  retained: RetainedDraft | null
 }
 
 export const closedStrategyView = (): StrategyView => ({
-  open: false, loading: false, strategy: null, seen: false, detail: null, reviewing: null, pending: {}, error: null, conflict: null,
+  open: false, loading: false, strategy: null, seen: false, detail: null, reviewing: null, pending: {}, error: null, conflict: null, retained: null,
 })
 
 interface StrategyState {
@@ -43,6 +56,8 @@ interface StrategyState {
    */
   rekey: (from: string, to: string) => void
   review: (teamKey: string, revision: number | null) => void
+  /** Keep the editor's unsaved text (D5); `null` drops it (after a reload). */
+  retainDraft: (teamKey: string, retained: RetainedDraft | null) => void
   /** Reload after a CAS refusal: the stored draft it returned replaces the stale copy in detail. */
   adoptConflict: (teamKey: string) => void
   begin: (teamKey: string, requestId: string, action: StrategyAction) => void
@@ -77,6 +92,7 @@ export const useStrategyStore = create<StrategyState>(set => ({
     return { views }
   }),
   review: (teamKey, revision) => set(state => update(state, teamKey, { reviewing: revision })),
+  retainDraft: (teamKey, retained) => set(state => update(state, teamKey, { retained })),
   // A draft written behind this client (another editor, another tab) sends
   // no detail push, so the refusal's stored draft is the freshest server
   // copy; adopting it rebases the editor and its next save's CAS hash.

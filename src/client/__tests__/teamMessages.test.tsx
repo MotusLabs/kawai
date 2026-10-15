@@ -3,7 +3,7 @@
 // priority badges, paging from the keyset cursor, and a thread detail that
 // keeps chronological order, reply relations, the current recipient, the task
 // revision a delivery carried, and each message's history.
-import { afterEach, expect, test } from 'bun:test'
+import { afterEach, describe, expect, test } from 'bun:test'
 import TestRenderer, { act } from 'react-test-renderer'
 import type { ClientMessage, ServerMessage } from '@shared/types'
 import type {
@@ -14,8 +14,9 @@ import type {
   TeamMessage,
   ThreadEntry,
 } from '@shared/team'
-import TeamMessagesView from '../components/chat/TeamMessagesView'
+import TeamMessagesView from '../components/team/TeamMessagesView'
 import { closedMessageView, useTeamMessageStore } from '../stores/teamMessageStore'
+import { useTeamWorkspaceStore } from '../stores/teamWorkspaceStore'
 
 afterEach(() => {
   useTeamMessageStore.setState({ views: {} })
@@ -39,10 +40,12 @@ const snapshot = (
   messages: TeamMessage[], extra: {
     filters?: MessageQueryFilters; nextCursor?: MessageCursor | null
     directory?: SessionDirectoryEntry[]; tasks?: { id: string; title: string }[]
+    threadSizes?: Record<string, number>
   } = {},
 ): Extract<ServerMessage, { type: 'team-messages-snapshot' }> => ({
   type: 'team-messages-snapshot', teamPath: 'dev', teamId: 'team', filters: extra.filters ?? {},
-  messages, nextCursor: extra.nextCursor ?? null, directory: extra.directory ?? [], tasks: extra.tasks ?? [], threadSizes: {},
+  messages, nextCursor: extra.nextCursor ?? null, directory: extra.directory ?? [], tasks: extra.tasks ?? [],
+  threadSizes: extra.threadSizes ?? {},
 })
 const push = (messages: TeamMessage[], directory: SessionDirectoryEntry[] = []): Extract<ServerMessage, { type: 'team-messages' }> =>
   ({ type: 'team-messages', teamPath: 'dev', teamId: 'team', messages, directory })
@@ -55,15 +58,16 @@ const textOf = (node: TestRenderer.ReactTestInstance | string): string =>
   typeof node === 'string' ? node : node.children.map(textOf).join('')
 
 /** A host that feeds the store the way the chat side slot does. */
-function Host({ sent, connected = true, epoch = 0 }: {
-  sent: ClientMessage[]; connected?: boolean; epoch?: number
+function Host({ sent, connected = true, epoch = 0, onThreadSelected }: {
+  sent: ClientMessage[]; connected?: boolean; epoch?: number; onThreadSelected?: (threadId: string | null) => void
 }) {
   const view = useTeamMessageStore(state => state.views.dev) ?? closedMessageView()
   return <TeamMessagesView teamPath="dev" view={view} sendMessage={message => sent.push(message)}
-    connected={connected} connectionEpoch={epoch} sessions={sessions} directory={directory} onClose={() => {}} />
+    connected={connected} connectionEpoch={epoch} sessions={sessions} directory={directory}
+    onThreadSelected={onThreadSelected} />
 }
 
-const render = (sent: ClientMessage[], props: { connected?: boolean; epoch?: number } = {}) => {
+const render = (sent: ClientMessage[], props: { connected?: boolean; epoch?: number; onThreadSelected?: (threadId: string | null) => void } = {}) => {
   let renderer!: TestRenderer.ReactTestRenderer
   act(() => {
     useTeamMessageStore.getState().open('dev')
@@ -297,4 +301,131 @@ test('thread history labels agent actors by name, live or gone; human reads huma
   expect(line(4)).toContain('retried · human')
   expect(line(5)).toContain('requeued · system')
   act(() => renderer.unmount())
+})
+
+describe('thread grouping and search (team-workspace-pages 5.4)', () => {
+  afterEach(() => {
+    useTeamMessageStore.setState({ views: {} })
+    useTeamWorkspaceStore.setState({ views: {} })
+  })
+
+  const threadMessages = (count: number, threadId = 'big') =>
+    Array.from({ length: count }, (_, index) => message(`m${count - index}`, {
+      threadId, createdAt: at(count - index), body: `Body m${count - index}`,
+    }))
+
+  test('a six-message thread collapses to one row with its newest message and a count of 6, and expands in place', () => {
+    const sent: ClientMessage[] = []
+    const renderer = render(sent)
+    act(() => {
+      useTeamMessageStore.getState().applySnapshot(snapshot(threadMessages(6), {
+        threadSizes: { big: 6 },
+      }))
+    })
+    const rows = renderer.root.findAllByProps({ 'data-testid': 'thread-row' })
+    expect(rows).toHaveLength(1)
+    expect(rows[0]!.props['data-thread-id']).toBe('big')
+    expect(rows[0]!.props['data-size']).toBe(6)
+    // The collapsed row shows the newest message only, with its count.
+    expect(rows[0]!.findAllByProps({ 'data-testid': 'message-row' }).map(row => row.props['data-message-id'])).toEqual(['m6'])
+    expect(rows[0]!.findByProps({ 'data-testid': 'thread-count' }).children.join('')).toBe('6 messages')
+    // Expanding lists the six loaded messages, oldest first.
+    act(() => { rows[0]!.findByProps({ 'data-testid': 'thread-toggle' }).props.onClick() })
+    const expanded = renderer.root.findAllByProps({ 'data-testid': 'thread-row' })[0]!
+    expect(expanded.findAllByProps({ 'data-testid': 'message-row' }).map(row => row.props['data-message-id']))
+      .toEqual(['m1', 'm2', 'm3', 'm4', 'm5', 'm6'])
+    act(() => { expanded.findByProps({ 'data-testid': 'thread-toggle' }).props.onClick() })
+    expect(renderer.root.findAllByProps({ 'data-testid': 'thread-row' })[0]!
+      .findAllByProps({ 'data-testid': 'message-row' })).toHaveLength(1)
+    act(() => renderer.unmount())
+  })
+
+  test('a size beyond the loaded page states how much is loaded', () => {
+    const sent: ClientMessage[] = []
+    const renderer = render(sent)
+    act(() => {
+      useTeamMessageStore.getState().applySnapshot(snapshot(threadMessages(2), { threadSizes: { big: 9 } }))
+    })
+    const row = renderer.root.findByProps({ 'data-testid': 'thread-row' })
+    expect(row.props['data-size']).toBe(9)
+    expect(row.findByProps({ 'data-testid': 'thread-count' }).children.join('')).toBe('9 messages · 2 loaded')
+    act(() => renderer.unmount())
+  })
+
+  test('long bodies are clamped with a show-full toggle', () => {
+    const sent: ClientMessage[] = []
+    const renderer = render(sent)
+    const long = Array.from({ length: 12 }, (_, line) => `line ${line + 1}`).join('\n')
+    act(() => {
+      useTeamMessageStore.getState().applySnapshot(snapshot([message('long', { body: long })]))
+    })
+    const body = renderer.root.findByProps({ 'data-testid': 'message-body' })
+    expect(textOf(body)).toContain('line 1')
+    const toggle = renderer.root.findByProps({ 'data-testid': 'message-body-toggle' })
+    expect(toggle.props['aria-expanded']).toBe(false)
+    expect(toggle.children.join('')).toBe('Show full')
+    act(() => { toggle.props.onClick() })
+    expect(renderer.root.findByProps({ 'data-testid': 'message-body-toggle' }).props['aria-expanded']).toBe(true)
+    act(() => renderer.unmount())
+  })
+
+  test('Expand all and Collapse all act on every loaded thread', () => {
+    const sent: ClientMessage[] = []
+    const renderer = render(sent)
+    act(() => {
+      useTeamMessageStore.getState().applySnapshot(snapshot([
+        ...threadMessages(3, 'one'),
+        ...threadMessages(2, 'two'),
+        message('solo'),
+      ]))
+    })
+    expect(renderer.root.findAllByProps({ 'data-testid': 'thread-row' }).map(row => row.props['data-thread-id']))
+      .toEqual(['one', 'two', 'solo'])
+    act(() => { renderer.root.findByProps({ 'data-testid': 'messages-expand-all' }).props.onClick() })
+    const rows = renderer.root.findAllByProps({ 'data-testid': 'thread-row' })
+    expect(rows.map(row => row.findAllByProps({ 'data-testid': 'message-row' }).length)).toEqual([3, 2, 1])
+    // Expansion survives the component remounting (per-team view state, D8).
+    act(() => renderer.unmount())
+    const again = render(sent)
+    act(() => { useTeamMessageStore.getState().applySnapshot(snapshot([
+      ...threadMessages(3, 'one'),
+      ...threadMessages(2, 'two'),
+      message('solo'),
+    ])) })
+    expect(again.root.findAllByProps({ 'data-testid': 'thread-row' }).map(row => row.findAllByProps({ 'data-testid': 'message-row' }).length)).toEqual([3, 2, 1])
+    act(() => { again.root.findByProps({ 'data-testid': 'messages-collapse-all' }).props.onClick() })
+    expect(again.root.findAllByProps({ 'data-testid': 'thread-row' }).map(row => row.findAllByProps({ 'data-testid': 'message-row' }).length)).toEqual([1, 1, 1])
+    act(() => again.unmount())
+  })
+
+  test('search keeps its text across a remount and re-opens the list with `text`', async () => {
+    const sent: ClientMessage[] = []
+    const renderer = render(sent)
+    const box = () => renderer.root.findByProps({ 'aria-label': 'Search messages' })
+    act(() => { box().props.onChange({ target: { value: 'review please' } }) })
+    expect(useTeamWorkspaceStore.getState().views.dev?.tabs.messages.search).toBe('review please')
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 350)) })
+    expect(lastOpen(sent)!.filters).toEqual({ text: 'review please' })
+    // Clearing the search drops the filter again.
+    act(() => { renderer.root.findByProps({ 'aria-label': 'Search messages' }).props.onChange({ target: { value: '' } }) })
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 350)) })
+    expect(lastOpen(sent)!.filters).toEqual({})
+    // The text survives a remount (kept view state) and the box shows it.
+    act(() => { renderer.root.findByProps({ 'aria-label': 'Search messages' }).props.onChange({ target: { value: 'kept' } }) })
+    act(() => renderer.unmount())
+    const again = render(sent)
+    expect(again.root.findByProps({ 'aria-label': 'Search messages' }).props.value).toBe('kept')
+    act(() => again.unmount())
+  })
+
+  test('thread selection reports to the host (the Team page URL)', () => {
+    const selected: Array<string | null> = []
+    const renderer = render([], { onThreadSelected: threadId => selected.push(threadId) })
+    act(() => { useTeamMessageStore.getState().applySnapshot(snapshot(threadMessages(2))) })
+    act(() => { renderer.root.findByProps({ 'data-testid': 'message-open-thread' }).props.onClick() })
+    expect(selected).toEqual(['big'])
+    act(() => { renderer.root.findByProps({ 'data-testid': 'thread-back' }).props.onClick() })
+    expect(selected).toEqual(['big', null])
+    act(() => renderer.unmount())
+  })
 })

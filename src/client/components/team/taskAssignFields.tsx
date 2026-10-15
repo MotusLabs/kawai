@@ -4,7 +4,7 @@
 // two stay worded and behaved the same.
 import type { Session } from '@shared/types'
 import type { TaskDispatchPreview } from '@shared/teamTasks'
-import type { TeamGroupOption } from './useTeamGroups'
+import type { TeamGroupOption } from '../chat/useTeamGroups'
 import { sessionLabel } from './teamTaskLabels'
 
 export type AssignTargetKind = '' | 'group' | 'session'

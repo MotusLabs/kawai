@@ -36,7 +36,7 @@ export default function TaskPublications({ task, publications, acknowledgements,
   // the notice that failed). A double click of either still reuses its key.
   const notify = (revision: number, intent: 'notify' | 'retry') => act('notify', { type: 'team-task-notify', revision },
     { slot: `notify:${task.id}:${revision}`, payload: intent })
-  return <section aria-label="Publications" className="mt-3" data-testid="task-publications">
+  return <div data-testid="task-publications">
     <h5 className="font-medium">Publications</h5>
     {[...publications].reverse().map(publication => {
       const missing = publication.recipients.some(recipient => recipient.noticeState === 'not-notified')
@@ -70,5 +70,5 @@ export default function TaskPublications({ task, publications, acknowledgements,
         {sessionLabel(row.sessionId, sessions)} acknowledged revision {row.revision} · {new Date(row.createdAt).toLocaleString()}
       </p>)}
     </details>}
-  </section>
+  </div>
 }
