@@ -107,6 +107,59 @@ export const overlapKey = (changes: readonly string[], capability: string): stri
 /** An assessment finding's warning key (D5). */
 export const findingWarningKey = (id: string): string => `finding:${id}`
 
+// --- D1/D3: evidence and the report row ---
+
+/** One CLI issue; a change's issues are capped at 50, with a count (D3). */
+export interface CliIssue {
+  level: string
+  message: string
+}
+
+/** What a run read outside its identity (D2): evidence only — never hashed. */
+export interface ValidationEvidence {
+  /** Per change: its canonical root (null when unresolved), that root's `HEAD`, and its capped CLI issues when validate ran. */
+  changes: Record<string, { root: string | null; head: string | null; issues: CliIssue[] | null }>
+  /** Landing-branch facts, when the plan lands on an integration branch. */
+  branch: { exists: boolean; head: string | null; worktree: string | null } | null
+  /** Per role group (D3's `capacity` row); never a blocker. */
+  capacity: ValidationCapacityEvidence[]
+}
+
+/** Capacity facts as evidence (D3): caps, live members, and cooling profiles. */
+export interface ValidationCapacityEvidence {
+  group: string
+  /** The group's `max`, null when unset. */
+  max: number | null
+  /** Live members plus pending reservations. */
+  live: number
+  /** The group's declared profiles with cap and live count. */
+  profiles: Array<{ profile: string; cap: number | null; live: number }>
+  /** Profiles cooling, with their cooldown end. */
+  cooling: Array<{ profile: string; until: string }>
+}
+
+/** Who requested a run. */
+export type ValidationRequester = { kind: 'human' | 'agent'; sessionId: string | null }
+
+/** A stored validation report (D1): immutable; the newest per revision is `max(seq)`. */
+export interface PlanValidationReport {
+  id: string
+  planId: string
+  revision: number
+  seq: number
+  inputHash: string
+  inputs: ValidationInputs
+  findings: Finding[]
+  relations: PlanRelation[]
+  evidence: ValidationEvidence
+  readiness: Readiness
+  ready: boolean
+  requestedBy: ValidationRequester
+  createdAt: string
+  /** True only for a returned dry run, which is never stored and satisfies no gate (D8). */
+  dryRun: boolean
+}
+
 // --- D5: assessments ---
 
 export type AlignmentValue = 'aligned' | 'aligned-with-conditions' | 'exploratory' | 'conflicting' | 'insufficient-information'

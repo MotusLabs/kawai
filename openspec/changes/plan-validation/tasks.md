@@ -36,8 +36,8 @@ Implement after `durable-plans` and `strategy-revision-impact` have landed on ma
 
 ## 2. Store
 
-- [ ] 2.1 Add `src/server/plans/validation/validationSchema.ts` with the D1 DDL. Verify with migration tests on a fresh database and on one created by the `durable-plans` schema: plan rows read back unchanged, and a reopen round-trips every new row.
-- [ ] 2.2 Implement `validationStore.ts`: report insert with `seq = max + 1`, the newest report per revision, assessments and decisions per revision, and command-id lookups. Verify with store tests:
+- [x] 2.1 Add `src/server/plans/validation/validationSchema.ts` with the D1 DDL. Verify with migration tests on a fresh database and on one created by the `durable-plans` schema: plan rows read back unchanged, and a reopen round-trips every new row.
+- [x] 2.2 Implement `validationStore.ts`: report insert with `seq = max + 1`, the newest report per revision, assessments and decisions per revision, and command-id lookups. Verify with store tests:
   - `UNIQUE (plan_id, revision, seq)` and both `UNIQUE (plan_id, command_id)` constraints refuse duplicates at the database;
   - two assessment rows with a null `command_id` (two agent calls) are both accepted;
   - rows are never updated (there is no update path);

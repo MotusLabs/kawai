@@ -165,6 +165,7 @@ describe('deriveRelations (D4)', () => {
     const findings = relationFindings(relations)
     expect(findings).toHaveLength(1)
     expect(findings[0]!.severity).toBe('warning')
+    expect(findings[0]!.key).toBe(overlapKey(['alpha', 'beta'], 'chat'))
     expect(findings[0]!.key).toBe('relations:overlap:alpha+beta:chat')
   })
 
