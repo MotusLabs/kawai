@@ -14,7 +14,7 @@ import { clientLog } from '../utils/clientLog'
 import type { ConnectionStatus } from '../stores/sessionStore'
 import { clearSnapshotCache } from '../terminal/snapshotCache'
 import { logFirstOutputAfterSwitch, logTerminalOutputDropped } from '../terminal/droppedOutputLog'
-import { cancelIosRepaint, installVisibilityHandlers, type IosRepaintTarget } from '../terminal/iosRepaint'
+import { createIosRepaint, installVisibilityHandlers, type IosRepaintController } from '../terminal/iosRepaint'
 import { handleTerminalReady, type TerminalReadyDeps } from '../terminal/terminalReady'
 import { usePendingClipboardOffer } from '../terminal/clipboardOffer'
 import { applyTheme, applyFontSettings } from '../terminal/appearance'
@@ -29,10 +29,7 @@ import { isIOSDevice } from '../utils/device'
 
 // Public helpers re-exported so existing importers keep their paths; the
 // implementations live in the terminal/ modules.
-export {
-  invalidateSnapshotCache,
-  clearSnapshotCache,
-} from '../terminal/snapshotCache'
+export { invalidateSnapshotCache, clearSnapshotCache } from '../terminal/snapshotCache'
 export { resetDroppedOutputRateLimiterForTests } from '../terminal/droppedOutputLog'
 export { sanitizeLink } from '../terminal/linkSanitize'
 export { forceTextPresentation } from '../terminal/textPresentation'
@@ -140,14 +137,17 @@ export function useTerminal({
   const needsResetRef = useRef(false)
   const [isSwitching, setIsSwitching] = useState(false)
 
-  // iOS compositor repaint — shared by visibility and subscriber effects,
-  // unified so only one repaint can be in-flight at a time. The module holds
-  // the timer/raf state; accessors read the hook's live refs (design D2).
-  const iosRepaintTarget: IosRepaintTarget = {
-    getContainer: () => containerRef.current,
-    getTerminal: () => terminalRef.current,
-    getSessionId: () => attachedSessionRef.current,
+  // iOS compositor repaint — one controller per hook instance (the state
+  // was per-hook refs at a41323f), reading the live container/terminal refs.
+  const iosRepaintRef = useRef<IosRepaintController | null>(null)
+  if (!iosRepaintRef.current) {
+    iosRepaintRef.current = createIosRepaint({
+      getContainer: () => containerRef.current,
+      getTerminal: () => terminalRef.current,
+      getSessionId: () => attachedSessionRef.current,
+    })
   }
+  const iosRepaint = iosRepaintRef.current
 
   // Keep latest callbacks/options in refs for the stable module instances.
   useEffect(() => {
@@ -229,7 +229,7 @@ export function useTerminal({
     setIsSwitching,
     invalidateWriteBackpressure,
     isIOS: isiOS,
-    repaintTarget: iosRepaintTarget,
+    repaint: iosRepaint,
   }
 
   // Terminal initialization - only once on mount (terminal/setup.ts):
@@ -452,7 +452,7 @@ export function useTerminal({
       // not touch accounting after the subscription is gone.
       output.flush({ force: true })
       invalidateWriteBackpressure()
-      cancelIosRepaint(iosRepaintTarget)
+      iosRepaint.cancel()
     }
   }, [subscribe, setTmuxCopyMode, offerClipboardCopy, invalidateWriteBackpressure, updateReadySession])
 
@@ -467,7 +467,7 @@ export function useTerminal({
       webglAddonRef,
       useWebGLRef,
       getSessionId: () => attachedSessionRef.current,
-      repaintTarget: iosRepaintTarget,
+      repaint: iosRepaint,
     })
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])

@@ -278,19 +278,27 @@ export class PasteChannel {
           return
         }
         if ((!text || payload?.hasFiles) && getIsMac() && !this.deps.isIOS && this.deps.canReadHostClipboard()) {
-          const file = await fetchClipboardFile()
-          if (file && file.path) {
-            if (file.isImage) {
-              // Deliver the resolved image path as a bracketed paste.
-              const data = await resolveImagePasteData(this.deps.getAgentType(), { path: file.path as string })
-              this.sendInputIfStillAttached(attached, data)
+          // One guard around the whole lookup-and-deliver: any failure (bad
+          // fetch, malformed pasteboard payload, sanitizing throw) falls
+          // through to the text paste below, as the original inline block did.
+          // One guard around the whole lookup-and-deliver: any failure (bad
+          // fetch, malformed pasteboard payload, sanitizing throw) falls
+          // through to the text paste below, as the original inline block did.
+          try {
+            const file = await fetchClipboardFile()
+            if (file && file.path) {
+              if (file.isImage) {
+                // Deliver the resolved image path as a bracketed paste.
+                const data = await resolveImagePasteData(this.deps.getAgentType(), { path: file.path as string })
+                this.sendInputIfStillAttached(attached, data)
+                return
+              }
+              // Send as raw input (no bracket paste) so Claude Code
+              // doesn't detect a paste and read the system clipboard
+              this.sendInputIfStillAttached(attached, sanitizeImagePath(file.path as string))
               return
             }
-            // Send as raw input (no bracket paste) so Claude Code
-            // doesn't detect a paste and read the system clipboard
-            this.sendInputIfStillAttached(attached, sanitizeImagePath(file.path as string))
-            return
-          }
+          } catch { /* not on macOS or endpoint unavailable */ }
         }
 
         if (text && !isMacSharedPasteboardPathText(text)) {

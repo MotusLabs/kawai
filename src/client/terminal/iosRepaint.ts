@@ -1,8 +1,8 @@
 // iOS compositor repaint workaround: WKWebView shows a stale cached snapshot
 // after background/foreground or reconnect, so we blank the container for two
-// animation frames to force a fresh composite. Singleton state — one terminal
-// is live at a time; only one repaint can be in-flight and cancel() restores
-// the display value if caught mid-toggle.
+// animation frames to force a fresh composite. One controller per hook
+// instance (createIosRepaint) — the state was per-hook refs before the move,
+// and a module singleton would let one instance cancel another's repaint.
 import type { Terminal } from '@xterm/xterm'
 import { clientLog } from '../utils/clientLog'
 import { recreateWebglAddonIfLive, type WebglAddonRef } from './webgl'
@@ -14,68 +14,72 @@ export interface IosRepaintTarget {
   getSessionId(): string | null
 }
 
-let repaintTimer: number | null = null
-let repaintRaf: number | null = null
-let repaintPrevDisplay: string | null = null // non-null when mid-toggle
-
-// Cancel any pending iOS repaint, restoring display if mid-toggle.
-export function cancelIosRepaint(target: IosRepaintTarget): void {
-  if (repaintTimer !== null) {
-    window.clearTimeout(repaintTimer)
-    repaintTimer = null
-  }
-  if (repaintRaf !== null) {
-    cancelAnimationFrame(repaintRaf)
-    repaintRaf = null
-  }
-  if (repaintPrevDisplay !== null) {
-    const container = target.getContainer()
-    if (container) container.style.display = repaintPrevDisplay
-    repaintPrevDisplay = null
-  }
+export interface IosRepaintController {
+  /** Schedule a compositor repaint after delayMs; cancels any in-flight one. */
+  schedule(delayMs: number, trigger?: string): void
+  /** Cancel a pending repaint, restoring the display if caught mid-toggle. */
+  cancel(): void
 }
 
-// Schedule an iOS compositor repaint after delayMs.
-// Cancels any in-flight repaint first (safely restoring display).
-export function scheduleIosRepaint(
-  delayMs: number,
-  trigger: string | undefined,
-  target: IosRepaintTarget
-): void {
-  const container = target.getContainer()
-  if (!container) return
+export function createIosRepaint(target: IosRepaintTarget): IosRepaintController {
+  let repaintTimer: number | null = null
+  let repaintRaf: number | null = null
+  let repaintPrevDisplay: string | null = null // non-null when mid-toggle
 
-  cancelIosRepaint(target)
+  const cancel = () => {
+    if (repaintTimer !== null) {
+      window.clearTimeout(repaintTimer)
+      repaintTimer = null
+    }
+    if (repaintRaf !== null) {
+      cancelAnimationFrame(repaintRaf)
+      repaintRaf = null
+    }
+    if (repaintPrevDisplay !== null) {
+      const container = target.getContainer()
+      if (container) container.style.display = repaintPrevDisplay
+      repaintPrevDisplay = null
+    }
+  }
 
-  clientLog('ios_repaint_schedule', { delayMs, trigger, sessionId: target.getSessionId() })
+  const schedule = (delayMs: number, trigger?: string) => {
+    const container = target.getContainer()
+    if (!container) return
 
-  repaintTimer = window.setTimeout(() => {
-    repaintTimer = null
-    // Force xterm.js to re-render all visible rows so the DOM has
-    // fresh content before the compositor is forced to repaint.
-    const terminal = target.getTerminal()
-    if (terminal) terminal.refresh(0, terminal.rows - 1)
+    cancel()
 
-    const hasContent = terminal ? terminal.buffer.active.length > 0 : false
-    clientLog('ios_repaint_exec', {
-      trigger,
-      hasContent,
-      bufferLines: terminal?.buffer.active.length ?? 0,
-      sessionId: target.getSessionId(),
-    })
+    clientLog('ios_repaint_schedule', { delayMs, trigger, sessionId: target.getSessionId() })
 
-    repaintPrevDisplay = container.style.display
-    container.style.display = 'none'
-    // Split restore across two animation frames so the compositor
-    // registers the removal before we restore.
-    repaintRaf = requestAnimationFrame(() => {
-      repaintRaf = requestAnimationFrame(() => {
-        repaintRaf = null
-        container.style.display = repaintPrevDisplay ?? ''
-        repaintPrevDisplay = null
+    repaintTimer = window.setTimeout(() => {
+      repaintTimer = null
+      // Force xterm.js to re-render all visible rows so the DOM has
+      // fresh content before the compositor is forced to repaint.
+      const terminal = target.getTerminal()
+      if (terminal) terminal.refresh(0, terminal.rows - 1)
+
+      const hasContent = terminal ? terminal.buffer.active.length > 0 : false
+      clientLog('ios_repaint_exec', {
+        trigger,
+        hasContent,
+        bufferLines: terminal?.buffer.active.length ?? 0,
+        sessionId: target.getSessionId(),
       })
-    })
-  }, delayMs)
+
+      repaintPrevDisplay = container.style.display
+      container.style.display = 'none'
+      // Split restore across two animation frames so the compositor
+      // registers the removal before we restore.
+      repaintRaf = requestAnimationFrame(() => {
+        repaintRaf = requestAnimationFrame(() => {
+          repaintRaf = null
+          container.style.display = repaintPrevDisplay ?? ''
+          repaintPrevDisplay = null
+        })
+      })
+    }, delayMs)
+  }
+
+  return { schedule, cancel }
 }
 
 export interface VisibilityHandlerDeps {
@@ -84,7 +88,7 @@ export interface VisibilityHandlerDeps {
   webglAddonRef: WebglAddonRef
   useWebGLRef: { current: boolean }
   getSessionId: () => string | null
-  repaintTarget: IosRepaintTarget
+  repaint: IosRepaintController
 }
 
 /**
@@ -95,7 +99,7 @@ export interface VisibilityHandlerDeps {
  * only event. Returns the cleanup.
  */
 export function installVisibilityHandlers(deps: VisibilityHandlerDeps): () => void {
-  const { isIOS, repaintTarget } = deps
+  const { isIOS, repaint } = deps
   if (typeof document === 'undefined' || typeof document.addEventListener !== 'function') {
     return () => {}
   }
@@ -126,7 +130,7 @@ export function installVisibilityHandlers(deps: VisibilityHandlerDeps): () => vo
     // visibilityState can be wrong in iOS PWA standalone (WebKit #202399).
     if (document.visibilityState === 'hidden') return
     recreateWebglAddonIfLive(deps.getTerminal(), deps.webglAddonRef, deps.useWebGLRef, deps.getSessionId, 'visibilitychange')
-    scheduleIosRepaint(200, 'visibilitychange', repaintTarget)
+    repaint.schedule(200, 'visibilitychange')
   }
 
   const handlePageShow = (e: PageTransitionEvent) => {
@@ -134,7 +138,7 @@ export function installVisibilityHandlers(deps: VisibilityHandlerDeps): () => vo
     // visibilitychange in iOS PWA standalone mode.
     if (!e.persisted) return
     recreateWebglAddonIfLive(deps.getTerminal(), deps.webglAddonRef, deps.useWebGLRef, deps.getSessionId, 'pageshow')
-    scheduleIosRepaint(200, 'pageshow', repaintTarget)
+    repaint.schedule(200, 'pageshow')
   }
 
   const handleFocus = () => {
@@ -142,7 +146,7 @@ export function installVisibilityHandlers(deps: VisibilityHandlerDeps): () => vo
     // to the foreground, even when visibilitychange doesn't fire
     // (WebKit #202399) and the WebSocket stays alive (no reconnect).
     recreateWebglAddonIfLive(deps.getTerminal(), deps.webglAddonRef, deps.useWebGLRef, deps.getSessionId, 'focus')
-    scheduleIosRepaint(200, 'focus', repaintTarget)
+    repaint.schedule(200, 'focus')
   }
 
   document.addEventListener('visibilitychange', handleVisibility)
@@ -153,6 +157,6 @@ export function installVisibilityHandlers(deps: VisibilityHandlerDeps): () => vo
     document.removeEventListener('visibilitychange', handleVisibility)
     window.removeEventListener('pageshow', handlePageShow)
     window.removeEventListener('focus', handleFocus)
-    cancelIosRepaint(repaintTarget)
+    repaint.cancel()
   }
 }

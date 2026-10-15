@@ -6,7 +6,7 @@
 // repaint is cancelled after each test (iosRepaint is a module singleton).
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
 import { handleTerminalReady, type TerminalReadyDeps } from '../terminal/terminalReady'
-import { cancelIosRepaint, type IosRepaintTarget } from '../terminal/iosRepaint'
+import { createIosRepaint, type IosRepaintController, type IosRepaintTarget } from '../terminal/iosRepaint'
 
 const globalAny = globalThis as unknown as {
   window?: unknown
@@ -34,13 +34,14 @@ interface OutputMock {
 /** Timer schedules made through the window shim (ms per schedule). */
 const scheduledTimers: number[] = []
 
-let lastRepaintTarget: IosRepaintTarget | null = null
+let lastRepaint: IosRepaintController | null = null
 
 function createDeps(output: OutputMock) {
   const terminal = new TerminalMock()
   const readySessions: Array<string | null> = []
   const switching: boolean[] = []
   const invalidates: number[] = []
+  const events: string[] = []
   const needsResetRef = { current: output.needsReset }
   const switchStartRef = { current: null as number | null }
   const focusAfterAttachSessionRef = { current: 'session-1' as string | null }
@@ -49,24 +50,25 @@ function createDeps(output: OutputMock) {
     getTerminal: () => null,
     getSessionId: () => 'session-1',
   }
-  lastRepaintTarget = repaintTarget
+  const repaint = createIosRepaint(repaintTarget)
+  lastRepaint = repaint
   const deps: TerminalReadyDeps = {
     getTerminal: () => terminal as unknown as import('@xterm/xterm').Terminal,
     output: {
       get needsReset() { return output.needsReset },
       get bufferedLength() { return output.bufferedLength },
-      flush: (options?: { force?: boolean }) => { output.flushes.push(options) },
+      flush: (options?: { force?: boolean }) => { output.flushes.push(options); events.push(options?.force ? 'flush:force' : 'flush') },
     } as unknown as TerminalReadyDeps['output'],
     needsResetRef,
     switchStartRef,
     focusAfterAttachSessionRef,
     updateReadySession: (id) => { readySessions.push(id) },
     setIsSwitching: (value) => { switching.push(value) },
-    invalidateWriteBackpressure: () => { invalidates.push(1) },
+    invalidateWriteBackpressure: () => { invalidates.push(1); events.push('invalidate') },
     isIOS: false,
-    repaintTarget,
+    repaint,
   }
-  return { deps, terminal, readySessions, switching, invalidates, needsResetRef, switchStartRef, focusAfterAttachSessionRef }
+  return { deps, terminal, readySessions, switching, invalidates, events, needsResetRef, switchStartRef, focusAfterAttachSessionRef }
 }
 
 beforeEach(() => {
@@ -86,7 +88,7 @@ beforeEach(() => {
 
 afterEach(() => {
   // Cancel any pending singleton repaint before tearing down the shims.
-  if (lastRepaintTarget) cancelIosRepaint(lastRepaintTarget)
+  lastRepaint?.cancel()
   globalAny.window = originalWindow
   globalAny.requestAnimationFrame = originalRaf
   globalAny.cancelAnimationFrame = originalCancelRaf
@@ -98,7 +100,9 @@ describe('handleTerminalReady', () => {
     const h = createDeps(output)
 
     handleTerminalReady('session-1', h.deps)
-    // Atomic path: invalidate first, then a forced flush; no bare reset.
+    // Atomic path: the generation advance must happen BEFORE the forced
+    // flush, so the write's ack lands under the new accounting.
+    expect(h.events.slice(0, 2)).toEqual(['invalidate', 'flush:force'])
     expect(h.invalidates).toHaveLength(1)
     expect(output.flushes).toEqual([{ force: true }])
     expect(h.terminal.resets).toBe(0)
