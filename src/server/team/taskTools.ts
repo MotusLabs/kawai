@@ -15,6 +15,7 @@ export const taskSchemas = {
   task_create: z.object({
     title: z.string().min(1), direction: z.string().min(1), acceptance: z.string().optional(),
     parent_id: z.string().optional(), worktree: z.string().optional(), openspec_change: z.string().optional(),
+    plan_id: z.string().optional(), plan_change: z.string().optional(),
   }),
   task_get: z.object(taskId),
   task_note: z.object({ ...taskId, text: z.string().min(1) }),
@@ -40,7 +41,7 @@ export const taskSchemas = {
 }
 
 export const taskDescriptions: Record<(typeof TASK_TOOL_NAMES)[number], string> = {
-  task_create: 'Create a team task (only if your group may create tasks). Optional parent_id, worktree (a worktree root of this repository), and openspec_change. You become its creator.',
+  task_create: 'Create a team task (only if your group may create tasks). Optional parent_id, worktree (a worktree root of this repository), and openspec_change; plan_id with plan_change links the task to a change of an open plan\'s approved revision (both or neither; fixed afterwards). You become its creator.',
   task_get: 'Read a task in full: current direction and acceptance, every revision, the whole journal, subtasks, and its messages.',
   task_note: "Append a note to a task's journal (decisions, findings, progress). Notes are permanent.",
   task_update_status: 'Set a task to active or blocked (any member); done or cancelled (its creator only). Optional note is journaled.',

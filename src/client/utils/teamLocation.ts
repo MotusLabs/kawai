@@ -2,7 +2,8 @@
 // `#/team/<key>/<tab>[/<sub>][/<id>]`, where `<key>` is the team key
 // (a repository's main-checkout path or a plain directory, URL-encoded —
 // it contains slashes), `<tab>` is the Team page tab, `<sub>` is the
-// Strategy sub-view, and `<id>` is a task id, thread id, or review revision.
+// Strategy sub-view, and `<id>` is a task id, thread id, plan id, or review
+// revision.
 // Parse/format are pure so the hook and its tests share one grammar; an
 // absent or unknown tab reads as the default tab (Tasks), never an error.
 export type WorkspaceTab = 'strategy' | 'tasks' | 'messages' | 'mailbox' | 'members' | 'plans'
@@ -13,10 +14,10 @@ export const WORKSPACE_TABS: readonly WorkspaceTab[] = [
 ]
 
 /**
- * The tabs the strip renders. Plans is a registered key that renders no tab
- * and no placeholder (team-workspace Q4); a Plans view joins by registering.
+ * The tabs the strip renders. Plans is durable-plans' tab (D12), beside
+ * Strategy; Members is the read-only group inspection (team-workspace).
  */
-export const RENDERED_WORKSPACE_TABS: readonly WorkspaceTab[] = ['strategy', 'tasks', 'messages', 'mailbox', 'members']
+export const RENDERED_WORKSPACE_TABS: readonly WorkspaceTab[] = ['strategy', 'plans', 'tasks', 'messages', 'mailbox', 'members']
 
 /** The tab a team's page opens on when none was used yet (chat-header spec). */
 export const DEFAULT_WORKSPACE_TAB: WorkspaceTab = 'tasks'
@@ -30,7 +31,7 @@ export interface TeamLocation {
   tab: WorkspaceTab
   /** Present only on the Strategy tab. */
   sub?: StrategySubView
-  /** A task id, thread id, or review revision, per tab. */
+  /** A task id, thread id, plan id, or review revision, per tab. */
   id?: string
 }
 

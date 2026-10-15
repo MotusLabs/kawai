@@ -1,5 +1,5 @@
-// The Team page shell (team-workspace-pages §5): the tab strip's order with
-// the Members and Plans keys reserved (no tab, no placeholder), the header's
+// The Team page shell (team-workspace-pages §5): the tab strip's order
+// (Strategy, Plans, Tasks, Messages, Mailbox, Members), the header's
 // one-line strategy status for approved, in-review, and no-record cases and
 // where it opens, the strategy subscription for the status line, and the
 // unknown-repository notice (D3).
@@ -101,15 +101,14 @@ afterEach(() => {
   resetTeamLocationForTests()
 })
 
-test('the tab strip renders Strategy, Tasks, Messages, Mailbox, Members — Plans is reserved with no placeholder', () => {
+test('the tab strip renders Strategy, Plans, Tasks, Messages, Mailbox, Members in order', () => {
   const { renderer } = mountPage({ teamKey: '/repo', tab: 'tasks' })
   const strip = renderer.root.findByProps({ 'data-testid': 'team-tab-strip' })
   const tabs = strip.findAll(node => node.props.role === 'tab')
   expect(tabs.map(tab => tab.props['data-testid'])).toEqual([
-    'team-tab-strategy', 'team-tab-tasks', 'team-tab-messages', 'team-tab-mailbox', 'team-tab-members',
+    'team-tab-strategy', 'team-tab-plans', 'team-tab-tasks', 'team-tab-messages', 'team-tab-mailbox', 'team-tab-members',
   ])
-  expect(tabs.map(tab => textOf(tab))).toEqual(['Strategy', 'Tasks', 'Messages', 'Mailbox', 'Members'])
-  expect(renderer.root.findAll(node => String(node.props['data-testid'] ?? '').includes('plans'))).toHaveLength(0)
+  expect(tabs.map(tab => textOf(tab))).toEqual(['Strategy', 'Plans', 'Tasks', 'Messages', 'Mailbox', 'Members'])
 })
 
 test('mounting opens the workspace read model; unmount closes it; a reconnect re-opens for a fresh snapshot', () => {

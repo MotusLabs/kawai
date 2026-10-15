@@ -129,7 +129,7 @@ const catalog = (): GroupCatalog => ({
         { file: '/repo/.kawai/groups/devs.md', layer: 'project', inEffect: true },
       ],
       group: {
-        id: 'devs', label: 'Developers', description: 'Build features', canCreateTasks: true,
+        id: 'devs', label: 'Developers', description: 'Build features', canCreateTasks: true, canCreatePlans: false,
         releaseOnTaskClose: true, worktreeScoped: true, canReleaseMembers: true, canManageMailbox: false,
         max: 3, profiles: [{ profileId: 'glm', cap: 2 }, { profileId: 'default', cap: 1 }],
         strategy: 'first-available',
