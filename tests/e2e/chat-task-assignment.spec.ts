@@ -57,8 +57,8 @@ async function makeIdle(page: Page, session: string) {
 
 /** Open the Tasks view through the Team button or the page's own tab (team-workspace-pages 4.1). */
 async function openTasks(page: Page) {
-  const button = page.getByTestId('chat-team-button')
-  if (await button.isVisible().catch(() => false)) await button.click()
+  // From a chat, the Team button (it waits for the header to lay out); on the Team page there is none.
+  if (!(await page.getByTestId('team-workspace').isVisible().catch(() => false))) await page.getByTestId('chat-team-button').click()
   await page.getByTestId('team-tab-tasks').click()
   await expect(page.getByTestId('team-tasks')).toBeVisible()
 }

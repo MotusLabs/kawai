@@ -10,6 +10,7 @@ import { useTeamMessageStore } from '../stores/teamMessageStore'
 import { useTeamTaskStore } from '../stores/teamTaskStore'
 import { useTeamPlanStore } from '../stores/teamPlanStore'
 import { notifyDeliveredToHuman, notifyMailboxDeadLetter } from '../utils/teamMailboxNotification'
+import { handleTeamWorkspaceMessage } from './teamWorkspaceMessages'
 import { routedTeamPath } from '../utils/teamKeyAliases'
 import type { ServerMessage } from '@shared/types'
 import type { MessageRouterDeps } from './types'
@@ -37,6 +38,8 @@ export function handleTeamMessage(message: TeamMessage, _deps: MessageRouterDeps
     case 'team-task-result': tasks.applyResult(routed(message, tasks.views)); return
     case 'team-task-preview-result': tasks.applyPreviewResult(routed(message, tasks.views)); return
     case 'team-task-targets-result': tasks.applyTargetsResult(routed(message, tasks.views)); return
+    case 'team-workspace-snapshot':
+    case 'team-workspace': handleTeamWorkspaceMessage(message); return
     case 'team-messages-snapshot': messages.applySnapshot(routed(message, messages.views)); return
     case 'team-messages': messages.applyPush(routed(message, messages.views)); return
     case 'team-thread': messages.applyThread(routed(message, messages.views)); return

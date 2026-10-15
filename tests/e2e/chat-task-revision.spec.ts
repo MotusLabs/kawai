@@ -76,6 +76,7 @@ test('E09: draft, publish, notify, an uncertain notice resolved in the Mailbox, 
     await panel.getByTestId('task-create-assign-button').click()
     await expect(page.getByTestId('task-outstanding-assignment')).toContainText('claimed by Revision developer', { timeout: 20_000 })
     const detail = page.getByTestId('task-detail')
+    const taskId = (await detail.getAttribute('data-task-id'))!
 
     // Save draft: the shown direction and revision stay put.
     await detail.getByLabel('Draft direction').fill('Ship CSV and JSON exports')
@@ -111,9 +112,9 @@ test('E09: draft, publish, notify, an uncertain notice resolved in the Mailbox, 
     const notice = mailbox.locator('article').filter({ hasText: 'revision 2 published by the human' })
     await notice.getByRole('button', { name: 'Discard', exact: true }).click()
     await expect(notice).toHaveCount(0)
-    // Back to the task: the panel reopens on the list.
+    // Back to the task: the Tasks tab keeps its selection across tab visits.
     await openTasks(page)
-    await panel.locator('[data-task-id]').first().locator('button').first().click()
+    await expect(page.getByTestId('task-detail')).toHaveAttribute('data-task-id', taskId)
     await expect(recipient.getByTestId('recipient-notice')).toHaveText(/^Failed/, { timeout: 15_000 })
 
     // Retry notification: exactly one new notice, and still revision 2.

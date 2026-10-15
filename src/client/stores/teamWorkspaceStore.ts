@@ -22,6 +22,9 @@ export interface TeamTabViewState {
   collapsedSections: string[]
 }
 
+/** The bands open until the human changes them: attention yes, summary no. */
+export const DEFAULT_OPEN_BANDS: readonly string[] = ['attention']
+
 export const emptyTabViewState = (): TeamTabViewState => ({
   search: '',
   filters: {},
@@ -35,6 +38,8 @@ export interface TeamWorkspaceViewState {
   /** The last tab used for this team; the Team button reopens it. */
   tab: WorkspaceTab
   tabs: Record<WorkspaceTab, TeamTabViewState>
+  /** Page bands (attention, summary) the human expanded; attention starts open. */
+  openBands?: string[]
   /** The D3 fallback notice (unknown repository, missing item); null = none. */
   notice: string | null
 }
@@ -71,6 +76,8 @@ interface TeamWorkspaceState {
   toggleSectionCollapsed: (teamKey: string, tab: WorkspaceTab, section: string) => void
   /** Replace the collapsed set (a tab's default section state on first open). */
   setCollapsedSections: (teamKey: string, tab: WorkspaceTab, sections: string[]) => void
+  /** Expand or collapse one of the page's bands (attention, summary). */
+  toggleBand: (teamKey: string, band: string) => void
   setNotice: (teamKey: string, notice: string | null) => void
 }
 
@@ -134,6 +141,12 @@ export const useTeamWorkspaceStore = create<TeamWorkspaceState>(set => ({
   setCollapsedSections: (teamKey, tab, sections) => set(state => patchTab(state, teamKey, tab, view => ({
     ...view, collapsedSections: sections,
   }))),
+  toggleBand: (teamKey, band) => set(state => {
+    const view = state.views[teamKey] ?? closedWorkspaceView()
+    const current = view.openBands ?? DEFAULT_OPEN_BANDS
+    const openBands = current.includes(band) ? current.filter(entry => entry !== band) : [...current, band]
+    return { views: { ...state.views, [teamKey]: { ...view, openBands } } }
+  }),
   setNotice: (teamKey, notice) => set(state => {
     const view = state.views[teamKey]
     if (!view || view.notice === notice) return state

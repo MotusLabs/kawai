@@ -185,6 +185,7 @@ describe('taskRows (3.2)', () => {
       waiting: {},
       attention: [],
       nameOf: id => `Name of ${id}`,
+      revisionsOf: () => ({ delivered: null, acknowledged: null }),
     })
     expect(rows[0]).toMatchObject({
       stage: 'unstarted', groupId: 'devs',
@@ -209,6 +210,7 @@ describe('taskRows (3.2)', () => {
       waiting: { 'msg-1': reason({ kind: 'group-cap', counts: { live: 2, cap: 2 } }) },
       attention,
       nameOf: () => 'x',
+      revisionsOf: () => ({ delivered: null, acknowledged: null }),
     })
     expect(rows[0]!.waitingReason).toEqual({ blocker: { kind: 'group-cap', counts: { live: 2, cap: 2 } }, others: [] })
     expect(rows[0]!.requiresHuman).toBe(true)
@@ -229,6 +231,7 @@ describe('attentionItems (4.1)', () => {
     waiting: { 'wait-1': reason({ kind: 'group-cap', counts: { live: 1, cap: 1 } }) },
     taskTitle: id => (id === 'task-1' ? 'Build the thing' : null),
     nameOf: id => `Name of ${id}`,
+    pendingAcceptance: [],
   })
 
   test('one item per source kind with cause, owner, impact, next action, and link', () => {
@@ -315,6 +318,7 @@ describe('morningSummary (4.3)', () => {
     ],
     nameOf: (id: string) => `Name of ${id}`,
     hasResult: () => false,
+    results: [] as Array<{ resultId: string; taskId: string; taskTitle: string | null; submitter: string; accepted: boolean }>,
   })
 
   test('each bucket holds its items and capacity waits state their runtime bound', () => {
@@ -337,7 +341,7 @@ describe('morningSummary (4.3)', () => {
     expect(sum.approvals.items).toHaveLength(1)
   })
 
-  test('a turn with a result leaves the without-result bucket; completed results stay empty until Phase 2', () => {
+  test('a turn with a result leaves the without-result bucket; completed results come only from result rows', () => {
     const withResult = morningSummary({ ...input(), hasResult: (_session, _task) => true })
     expect(withResult.finishedTurnsWithoutResult.items).toEqual([])
     expect(withResult.completedResults.items).toEqual([])
@@ -360,5 +364,73 @@ describe('morningSummary (4.3)', () => {
     expect(oldHold.uncertainDeliveries.items).toEqual([])
     const resolved = morningSummary({ ...input(), messages: [message({ id: 'unc-1', state: 'delivered' })] })
     expect(resolved.uncertainDeliveries.items).toEqual([])
+  })
+})
+
+describe('Phase 2 sources (11.1, 11.2)', () => {
+  const resultOf = (extra: Partial<NonNullable<TeamTaskSummary['outstandingResult']>> = {}) =>
+    ({ id: 'result-1', needsReevaluation: false, accepted: false, ...extra })
+  const rowsFor = (summaries: TeamTaskSummary[], revisions = { delivered: 2 as number | null, acknowledged: 1 as number | null }) =>
+    taskRows({ summaries, waiting: {}, attention: [], nameOf: id => id, revisionsOf: () => revisions })
+
+  test('an unaccepted result shows Awaiting acceptance, flags re-evaluation, and the next action is Accept result', () => {
+    const [row] = rowsFor([summary({ outstandingResult: resultOf({ needsReevaluation: true }) })])
+    expect(row).toMatchObject({ stage: 'awaiting-acceptance', needsReevaluation: true, nextAction: 'Accept result' })
+  })
+
+  test('a queued review handoff outranks the unaccepted result it refers to', () => {
+    const handoff = assignment({ state: 'queued', handoffKind: 'review', resultId: 'result-1' })
+    const [row] = rowsFor([summary({ assignment: handoff, outstandingResult: resultOf() })])
+    expect(row!.stage).toBe('in-review')
+  })
+
+  test('Awaiting acknowledgement keeps delivered and acknowledged revisions apart', () => {
+    const claimed = assignment({ state: 'claimed', claimedBy: 'chat-7' })
+    const [row] = rowsFor([summary({ revision: 3, assignment: claimed })])
+    expect(row!.acknowledgement).toEqual({ revision: 3, deliveredRevision: 2, acknowledgedRevision: 1 })
+    const [acknowledged] = rowsFor([summary({ revision: 3, assignment: claimed })], { delivered: 3, acknowledged: 3 })
+    expect(acknowledged!.acknowledgement).toBeNull()
+    // No claimant to acknowledge, or a closed task: no badge.
+    expect(rowsFor([summary({ revision: 3, assignment: assignment({ state: 'queued' }) })])[0]!.acknowledgement).toBeNull()
+    expect(rowsFor([summary({ revision: 3, status: 'done', assignment: claimed })])[0]!.acknowledgement).toBeNull()
+  })
+
+  test('a pending acceptance is a human-required item linking to the task', () => {
+    const items = attentionItems({
+      sessions: [], messages: [], waiting: {}, taskTitle: () => 'Build the thing', nameOf: id => `Name of ${id}`,
+      pendingAcceptance: [{ resultId: 'result-1', taskId: 'task-1', submitter: 'Name of chat-3', needsReevaluation: false }],
+    })
+    expect(items).toEqual([{
+      id: 'pending-acceptance:result-1', kind: 'pending-acceptance',
+      cause: 'Result submitted by Name of chat-3 awaits acceptance',
+      owner: { kind: 'human', id: null, label: 'Human' },
+      impact: { taskId: 'task-1', taskTitle: 'Build the thing' },
+      nextAction: 'Accept result', link: { kind: 'task', id: 'task-1' }, requiresHuman: true,
+    }])
+  })
+})
+
+describe('completed results bucket (11.2)', () => {
+  const base = {
+    now: '2026-10-14T12:00:00Z', sessions: [], messages: [], messageEvents: () => [], waiting: {},
+    turnEnds: [{ sessionId: 'chat-1', taskId: 'task-1', at: '2026-10-14T09:00:00Z' }],
+    nameOf: (id: string) => `Name of ${id}`,
+  }
+
+  test('submitted results are listed with their accepted state; a finished turn with none is not completed', () => {
+    const sum = morningSummary({
+      ...base, hasResult: () => false,
+      results: [
+        { resultId: 'r1', taskId: 'task-1', taskTitle: 'Export', submitter: 'Name of chat-2', accepted: false },
+        { resultId: 'r2', taskId: 'task-2', taskTitle: null, submitter: 'Human', accepted: true },
+      ],
+    })
+    expect(sum.completedResults.items).toEqual([
+      { id: 'result:r1', label: 'Export: result by Name of chat-2 — awaiting acceptance', link: { kind: 'task', id: 'task-1' } },
+      { id: 'result:r2', label: 'task-2: result by Human — accepted', link: { kind: 'task', id: 'task-2' } },
+    ])
+    // chat-1 finished a turn and submitted nothing: only its own bucket.
+    expect(sum.finishedTurnsWithoutResult.items.map(item => item.id)).toEqual(['finished-turn:chat-1'])
+    expect(sum.completedResults.items.some(item => item.id.includes('chat-1'))).toBe(false)
   })
 })
