@@ -100,7 +100,7 @@ Implement after `durable-plans` has landed on master, then rebase this branch on
 
 ## 7. Integration walkthrough
 
-- [ ] 7.1 Add `tests/e2e/chat-strategy-impact.spec.ts` and name it in `.github/workflows/ci.yml`, in the `AGENTBOARD_CHAT_FIXTURE=1` fixture step's spec list beside `strategy.spec.ts`. Seed only prerequisites, written through the store and tool paths:
+- [x] 7.1 Add `tests/e2e/chat-strategy-impact.spec.ts` and name it in `.github/workflows/ci.yml`, in the `AGENTBOARD_CHAT_FIXTURE=1` fixture step's spec list beside `strategy.spec.ts`. Seed only prerequisites, written through the store and tool paths:
   - a `lead` group definition in the fixture team;
   - strategy revision 1 approved;
   - a plan approved under it;
@@ -114,4 +114,4 @@ Implement after `durable-plans` has landed on master, then rebase this branch on
   5. ask the `lead` group to assess and see the message in the Messages view.
 
   Also cover a concurrent decision from a second tab being refused inline. Run it locally as the only spec, after `bun run build`, on a spare `E2E_PORT`; never `bun run test:e2e`. Afterwards http://localhost:4040/ must still answer.
-- [ ] 7.2 Run `bun run lint && bun run typecheck && bun run test` and `openspec validate strategy-revision-impact --strict`. Verify all are green on the final head.
+- [x] 7.2 Run `bun run lint && bun run typecheck && bun run test` and `openspec validate strategy-revision-impact --strict`. Verify all are green on the final head.
