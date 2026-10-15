@@ -114,9 +114,13 @@ same worktree at once; reuse a worktree only for follow-up work on its branch.
   - Everything else (`glm`, `glm-flash`, `mimo`, …) goes to the Claude Code
     reviewer, the default.
   - The author's profile is on its session (`chat_sessions.profile_id`, or the
-    navigator badge). Send to the chosen reviewer's session directly, with the
-    task id in the body. Reviewers are `worktreeScoped: false`. Include the
-    worktree, branch, exact base/head SHAs, and acceptance criteria.
+    navigator badge). Send to the chosen reviewer's session directly with
+    `send_message` and `task_id` set. Only group mail is worktree-scoped, so
+    direct task mail reaches the reviewer wherever it runs, and its header
+    carries the task's direction, acceptance, revision, and latest journal.
+    Never send a review to the `reviewers` group: it cannot pick the model
+    family. Include the worktree, branch, exact base/head SHAs, `result_id`,
+    and focus.
 - Read the submitted result with `task_get`. Include its `result_id` in the
   review request and require `task_submit_findings` bound to that result. Send
   findings to the dev with the `task_id` and `result_id`; require a new
