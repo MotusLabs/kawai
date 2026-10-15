@@ -332,7 +332,8 @@ function TaskRow({ node, needle, depth, sessions, collapsedParents, searching, o
           <MarkedText text={task.title} needle={needle} />
         </button>
         {children.length > 0 && <button type="button" className="btn shrink-0" data-testid="task-parent-toggle"
-          aria-expanded={!collapsed} onClick={() => onToggleParent(task.id)}>
+          disabled={searching} title={searching ? 'Clear the search to collapse' : undefined}
+          aria-expanded={!collapsed} onClick={() => { if (!searching) onToggleParent(task.id) }}>
           {collapsed ? `▸ ${children.length} subtask${children.length === 1 ? '' : 's'}` : '▾'}
         </button>}
       </div>
