@@ -47,17 +47,19 @@ function sh(script: string): { exit: number; stdout: string; stderr: string } {
   return { exit: run.exitCode, stdout: run.stdout.toString(), stderr: run.stderr.toString() }
 }
 
+/** The older build knows only the baseline; the newer one knows the example version 2. */
+const OLDER: { migrations: readonly Migration[] } = { migrations: [] }
 const migration2: Migration = { version: 2, name: 'example-table', up: db => db.exec('CREATE TABLE example_rows (id TEXT PRIMARY KEY)') }
 
 /** An older build writes, a newer one migrates and writes after its snapshot; going back is refused. */
 function upgradeThenRefuse(): void {
-  const older = initDatabase({ path: dbPath })
+  const older = initDatabase({ path: dbPath, ...OLDER })
   older.setAppSetting('before-upgrade', 'v')
   older.close()
   const newer = initDatabase({ path: dbPath, migrations: [migration2] })
   newer.setAppSetting('after-upgrade', 'v')
   newer.close()
-  expect(() => initDatabase({ path: dbPath })).toThrow(DatabaseStartupError)
+  expect(() => initDatabase({ path: dbPath, ...OLDER })).toThrow(DatabaseStartupError)
 }
 
 describe('restoring a pre-migration-2 backup by the doc', () => {
@@ -91,7 +93,7 @@ describe('restoring a pre-migration-2 backup by the doc', () => {
       if (Bun.which('sqlite3')) expect(sh(sqlite3!)).toEqual({ exit: 0, stdout: 'ok\n', stderr: '' })
 
       // 5. Start the older build.
-      const restored = initDatabase({ path: dbPath })
+      const restored = initDatabase({ path: dbPath, ...OLDER })
       expect(readSchemaVersion(restored.db)).toBe(1)
       expect(restored.getAppSetting('before-upgrade')).toBe('v')
       expect(restored.getAppSetting('after-upgrade')).toBeNull()

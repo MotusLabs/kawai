@@ -8,10 +8,11 @@
 // hit (command id or chain) surfaces as `ImpactUniqueError`, so the service
 // can roll back and resolve the request as a replay or a stale predecessor
 // without branching on which index SQLite named. Change notifications go out
-// after commit through `announce`, never from inside a transaction.
+// after commit through `announce`, never from inside a transaction. The
+// tables come from schema migration 2; the store never creates them.
 import type { Database } from 'bun:sqlite'
 import type { ImpactDecision, ImpactDisposition, ImpactProposal, ImpactRequest, ImpactRevisionPin } from '../../shared/strategyImpact'
-import { CREATE_IMPACT_TABLES_SQL, mapDecision, mapProposal, mapRequest, rowPayload } from './impactSchema'
+import { mapDecision, mapProposal, mapRequest, rowPayload } from './impactSchema'
 
 /** A decision or request insert hit a unique constraint; the transaction rolls back. */
 export class ImpactUniqueError extends Error {
@@ -37,9 +38,7 @@ const isUnique = (error: unknown) => String(error).includes('UNIQUE constraint f
 export class ImpactStore {
   private readonly listeners = new Set<(strategyId: string) => void>()
 
-  constructor(private readonly db: Database) {
-    db.exec(CREATE_IMPACT_TABLES_SQL)
-  }
+  constructor(private readonly db: Database) {}
 
   /** Every committed impact write, by strategy id. */
   subscribe(listener: (strategyId: string) => void): () => void {

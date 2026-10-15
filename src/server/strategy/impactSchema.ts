@@ -6,7 +6,10 @@
 // once per strategy (decisions and requests each), and the chain index lets
 // only one decision name a given predecessor for a (review, plan), so a
 // forked chain — including two first decisions, whose null predecessor
-// `IFNULL` maps to one key — can never commit. Pure: no policy, no writes.
+// `IFNULL` maps to one key — can never commit. The DDL is schema migration 2
+// `strategy-impact` (`dbSafety/migrations.ts`) and frozen like every applied
+// migration: a later change to these tables is a new numbered migration.
+// Pure: no policy, no writes.
 import type { ImpactDecision, ImpactDisposition, ImpactProposal, ImpactRequest, ImpactRevisionPin } from '../../shared/strategyImpact'
 import { IMPACT_DISPOSITIONS } from '../../shared/strategyImpact'
 

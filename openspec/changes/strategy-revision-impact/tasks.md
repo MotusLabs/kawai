@@ -19,7 +19,7 @@ Implement after `durable-plans` has landed on master, then rebase this branch on
 
 ## 2. Impact store
 
-- [x] 2.1 Add `src/server/strategy/impactSchema.ts` with the D1 DDL, including the expression chain index. Verify with migration tests on a fresh database and on one created by the current strategy schema: existing impact reviews read back unchanged, and a reopen round-trips every row.
+- [x] 2.1 Add `src/server/strategy/impactSchema.ts` with the D1 DDL, including the expression chain index, run as schema migration 2 `strategy-impact`. Verify with migration tests: a fresh database ends at version 2, a version-1 database with impact reviews upgrades keeping every row, a newer database is still refused, and a reopen round-trips every row.
 - [x] 2.2 Implement `impactStore.ts`: inserts and reads for proposals, decisions (chain head, history), and requests, plus the lookup of a command id per strategy. Verify with store tests:
   - the chain index refuses two first decisions for one plan and a forked successor;
   - a duplicate command id per strategy is refused at the database, across reviews;

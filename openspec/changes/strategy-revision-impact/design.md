@@ -48,7 +48,7 @@ Read against the merged `durable-plans` design D7, D12, and D13 and its code on 
 
 ### D1. Three tables in new impact files
 
-`impactSchema.ts` adds the tables, `impactStore.ts` reads and writes them, `ImpactService.ts` holds the rules, and `impactTools.ts` holds the agent tools, all under `src/server/strategy/`. Each file stays under 500 lines.
+`impactSchema.ts` holds the tables' DDL, which schema migration 2 `strategy-impact` runs (`src/server/dbSafety/migrations.ts`, execution-safety-recovery D13; the store never creates tables), `impactStore.ts` reads and writes them, `ImpactService.ts` holds the rules, and `impactTools.ts` holds the agent tools, all under `src/server/strategy/`. Each file stays under 500 lines.
 
 ```sql
 strategy_impact_proposals (
@@ -289,11 +289,11 @@ The client preselects `lead` when the team defines that group and lets the owner
 
 ## Migration Plan
 
-The migration is additive. `CREATE TABLE IF NOT EXISTS` adds the three tables and the chain index. Existing `strategy_impact_reviews` rows are untouched and gain derived states when read:
+The tables arrive as schema migration 2 `strategy-impact` (execution-safety-recovery D13), the first numbered migration after the frozen baseline. It is additive: `CREATE TABLE IF NOT EXISTS` adds the three tables and the chain index, after the checked `pre-migration-2` backup and in one transaction with its version row. Existing `strategy_impact_reviews` rows are untouched and gain derived states when read:
 - the current review shows Needs decisions or Reviewed;
 - the others show Superseded or Withdrawn.
 
-There is no backfill: no decision is invented for an existing plan. Rollback leaves the new tables unread, and plan approval falls back to `durable-plans`' null `pinDisposition`, which is stricter but loses nothing.
+There is no backfill: no decision is invented for an existing plan. Rollback to a build without this change is the database-safety path (execution-safety-recovery D14): that build refuses a version-2 database before any write, so the owner restores the `pre-migration-2` backup by `docs/operations/database-backups.md`, losing only impact records written since. Plan approval then falls back to `durable-plans`' null `pinDisposition`, which is stricter.
 
 ## Open Questions
 

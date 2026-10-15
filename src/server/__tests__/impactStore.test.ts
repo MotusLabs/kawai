@@ -1,17 +1,13 @@
-// strategy-revision-impact 2.1/2.2: the additive impact tables on a fresh
-// database and on one the strategy schema already created, the chain index
-// and per-strategy command ids as database facts, and every row surviving a
+// strategy-revision-impact 2.1/2.2: the impact tables migration 2 creates
+// (its upgrade path is strategyImpactMigration.test.ts), the chain index and
+// per-strategy command ids as database facts, and every row surviving a
 // reopen.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { initDatabase, type SessionDatabase } from '../db'
-import { StrategyStore } from '../strategy/strategyStore'
 import { ImpactStore, ImpactUniqueError, type NewImpactDecision } from '../strategy/impactStore'
-import { normalizeStrategyContent } from '../../shared/productStrategy'
-
-const human = { kind: 'human' as const, sessionId: null }
 
 describe('ImpactStore', () => {
   let dir: string
@@ -39,34 +35,13 @@ describe('ImpactStore', () => {
     commandId: crypto.randomUUID(), payload: { disposition: 'continue' }, ...overrides,
   })
 
-  test('creates the three tables and the chain index on a fresh database', () => {
+  test('a fresh database has the three tables and the chain index', () => {
     const names = (db.db.prepare(`SELECT name FROM sqlite_master WHERE name LIKE 'strategy_impact_%' ORDER BY name`).all() as Array<{ name: string }>)
       .map(row => row.name)
     expect(names).toEqual(expect.arrayContaining([
       'strategy_impact_decisions', 'strategy_impact_decisions_chain', 'strategy_impact_proposals', 'strategy_impact_requests',
     ]))
     expect(impact.decisions('strategy-a')).toEqual([])
-  })
-
-  test('migrates a database the strategy schema created: existing impact reviews read back unchanged', () => {
-    db.close()
-    fs.rmSync(dbPath)
-    // The current strategy schema alone, with an approval's impact-review row.
-    db = initDatabase({ path: dbPath })
-    const strategies = new StrategyStore(db.db)
-    const strategy = strategies.create({ productId: 'kawai', title: 'Kawai', owner: human, teamId: '/repo/.git', worktrees: [] })
-    const submitted = strategies.submitRevision(strategy.id, { author: human, content: normalizeStrategyContent({ purpose: 'p' }) })
-    if (!submitted.ok) throw new Error('submit failed')
-    strategies.approve(strategy.id, {
-      revision: 1, contentHash: submitted.revision.contentHash, commandId: 'approve-1', expectedCurrentRevision: null, actor: human,
-    })
-    const before = strategies.impactReviews(strategy.id)
-    expect(before).toHaveLength(1)
-    db.close()
-    open()
-    expect(new StrategyStore(db.db).impactReviews(strategy.id)).toEqual(before)
-    impact.insertDecision(decision({ strategyId: strategy.id, reviewId: before[0]!.id }))
-    expect(new StrategyStore(db.db).impactReviews(strategy.id)).toEqual(before)
   })
 
   test('the chain index refuses two first decisions for one plan', () => {
