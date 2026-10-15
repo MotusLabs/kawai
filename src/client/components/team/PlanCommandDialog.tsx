@@ -4,7 +4,9 @@
 // after a lost result replays on the server — and the store re-mints when
 // the payload changes. The dialog closes itself once the store retires its
 // slot (the command succeeded); a refusal keeps it open with the entered
-// reason. Optional reason field; every control disables while disconnected.
+// reason but turns Confirm off for that command — retrying it would meet the
+// same state — until the human closes and reopens the dialog, which arms a
+// new command against the current state. Optional reason field; every control disables while disconnected.
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import type { ClientMessage, SendClientMessage } from '@shared/types'
 import { useTeamPlanStore, type PlanAction } from '../../stores/teamPlanStore'
@@ -59,7 +61,7 @@ export default function PlanCommandDialog({ teamPath, slot, openLabel, confirmLa
       setReturnFocus(false)
     }
   }, [open, returnFocus])
-  const dismiss = () => { setOpen(false); setReturnFocus(true) }
+  const dismiss = () => { setOpen(false); setSent(false); setReturnFocus(true) }
 
   if (!open) {
     return <button ref={opener} type="button" className={`btn text-chat-meta ${primary ? 'btn-primary' : ''}`} data-testid={testId}
@@ -69,7 +71,8 @@ export default function PlanCommandDialog({ teamPath, slot, openLabel, confirmLa
         setOpen(true)
       }}>{openLabel}</button>
   }
-  const blocked = !connected || busy || disabled || (reason?.required === true && !text.trim())
+  const refused = armed?.refused === true
+  const blocked = !connected || busy || disabled || refused || (reason?.required === true && !text.trim())
   return <div role="group" aria-label={openLabel} className="mt-2 w-full border border-border p-2" data-testid={`${testId}-dialog`}
     onKeyDown={event => { if (event.key === 'Escape') dismiss() }}>
     {children}
@@ -78,6 +81,9 @@ export default function PlanCommandDialog({ teamPath, slot, openLabel, confirmLa
       <textarea ref={node => { firstField.current = node }} className="input min-h-12 text-chat-body" value={text} disabled={!connected}
         onChange={event => setText(event.target.value)} />
     </label>}
+    {refused && <p className="mt-1 text-chat-meta text-secondary" data-testid={`${testId}-refused`}>
+      Refused. Close and reopen this dialog to try again against the current state.
+    </p>}
     <div className="mt-2 flex gap-2">
       <button ref={node => { if (!reason) firstField.current = node }} type="button" className={`btn text-chat-meta ${primary ? 'btn-primary' : ''}`}
         data-testid={`${testId}-confirm`} disabled={blocked} onClick={() => {

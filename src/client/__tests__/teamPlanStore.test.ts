@@ -67,7 +67,7 @@ test('a dialog keeps its command id while the payload is unchanged and re-mints 
   expect(view().commands['finish:p1']!.commandId).not.toBe(next)
 })
 
-test('success retires the slot, a refusal keeps it with the failures shown, and a lost result never wedges busy', () => {
+test('success retires the slot, a refusal keeps it marked refused with the failures shown, and a lost result never wedges busy', () => {
   store().open('/repo')
   store().arm('/repo', 'approve:p1:1')
   const id = store().command('/repo', 'approve:p1:1', 'x', 'r1')
@@ -75,7 +75,7 @@ test('success retires the slot, a refusal keeps it with the failures shown, and 
   store().applyResult({ type: 'team-plan-result', teamPath: '/repo', requestId: 'r1', error: 'Approval refused', reason: 'precondition',
     failures: [{ name: 'hash-matches', message: 'differs' }] })
   expect(view()).toMatchObject({ pending: {}, error: 'Approval refused', failures: [{ name: 'hash-matches' }] })
-  expect(view().commands['approve:p1:1']!.commandId).toBe(id)
+  expect(view().commands['approve:p1:1']).toEqual({ commandId: id, payload: 'x', refused: true })
   store().command('/repo', 'approve:p1:1', 'x', 'r2')
   store().begin('/repo', 'r2', 'approve')
   expect(view().error).toBeNull()

@@ -6,7 +6,9 @@
 // dropped. A dialog mints its command id when it opens (`arm`) and keeps it
 // while the payload it sends is unchanged, so a resend after a lost result
 // replays on the server; a changed payload re-mints, and success retires the
-// slot. `reconnected` drops every pending request, so a result lost with the
+// slot. A refusal marks the armed command refused: the same command against
+// the same state would be refused again, so the dialog's Confirm stays off
+// until the dialog is reopened, which arms a new command. `reconnected` drops every pending request, so a result lost with the
 // connection never leaves the view busy.
 import { create } from 'zustand'
 import type { ServerMessage } from '@shared/types'
@@ -18,6 +20,8 @@ export type PlanAction = 'approve' | 'withdraw' | 'finish' | 'reopen'
 export interface ArmedPlanCommand {
   commandId: string
   payload: string | null
+  /** The server refused it; only reopening the dialog (a new command) can try again. */
+  refused?: boolean
 }
 
 export interface PlanView {
@@ -136,7 +140,9 @@ export const useTeamPlanStore = create<PlanState>(set => ({
     const slot = commandRequests[message.requestId]
     delete commandRequests[message.requestId]
     if (message.error) {
-      return update(state, message.teamPath, { pending, commandRequests, error: message.error, failures: message.failures ?? [] })
+      const armed = slot ? view.commands[slot] : undefined
+      const commands = armed ? { ...view.commands, [slot!]: { ...armed, refused: true } } : view.commands
+      return update(state, message.teamPath, { pending, commandRequests, commands, error: message.error, failures: message.failures ?? [] })
     }
     // Success retires the dialog's command: a later dialog is a new command.
     const commands = { ...view.commands }

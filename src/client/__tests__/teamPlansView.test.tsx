@@ -161,8 +161,8 @@ const openDetail = () => mount(() => {
   useTeamPlanStore.getState().applyDetail({ type: 'team-plan-detail', teamPath: '/repo', teamId: 't', detail: approvedDetail() })
 })
 
-test('Approve names the exact revision, hash, and the approved revision seen, under the dialog\'s command id', () => {
-  const { sent, byId, rerender } = openDetail()
+test('Approve names the exact revision, hash, and the approved revision seen, under the dialog\'s command id; a refusal needs a reopen', () => {
+  const { sent, byId, has, rerender } = openDetail()
   act(() => byId('plan-approve-2').props.onClick())
   rerender()
   const dialog = byId('plan-approve-2-dialog')
@@ -182,9 +182,19 @@ test('Approve names the exact revision, hash, and the approved revision seen, un
     reason: 'precondition', failures: [{ name: 'strategy-pin-current', message: 'Ask the author to resubmit' }] }))
   rerender()
   expect(textOf(byId('plan-error'))).toContain('strategy-pin-current: Ask the author to resubmit')
+  // The refused command cannot be confirmed again: the same state would refuse it.
+  expect(byId('plan-approve-2-confirm').props.disabled).toBe(true)
+  expect(textOf(byId('plan-approve-2-refused'))).toContain('Close and reopen this dialog')
+  // Close and reopen: a new command against the current state, Confirm enabled.
+  act(() => byId('plan-approve-2-dialog').findAll(node => node.type === 'button' && textOf(node) === 'Cancel')[0]!.props.onClick())
+  rerender()
+  act(() => byId('plan-approve-2').props.onClick())
+  rerender()
+  expect(byId('plan-approve-2-confirm').props.disabled).toBe(false)
+  expect(has('plan-approve-2-refused')).toBe(false)
   act(() => byId('plan-approve-2-confirm').props.onClick())
   const retry = sent.filter(message => message.type === 'team-plan-approve').at(-1) as typeof approve
-  expect(retry.commandId).toBe(approve.commandId)
+  expect(retry.commandId).not.toBe(approve.commandId)
   expect(retry.requestId).not.toBe(approve.requestId)
   // Success retires the slot and closes the dialog.
   act(() => useTeamPlanStore.getState().applyResult({ type: 'team-plan-result', teamPath: '/repo', requestId: retry.requestId, replayed: false }))
