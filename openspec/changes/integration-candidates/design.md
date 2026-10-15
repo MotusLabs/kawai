@@ -23,6 +23,8 @@ What this change builds on:
   - A pull request whose head commit becomes reachable from its base branch is marked merged.
   - `allow_merge_commit` on the repository says whether merge commits are allowed.
 
+  Two more are plan-execution's own assumptions, inherited unchanged: `gh pr merge --match-head-commit` merges only the named head, and the update-branch API's `expected_head_sha` refuses a head that moved.
+
 ## Goals / Non-Goals
 
 **Goals:**
@@ -109,7 +111,8 @@ CREATE TABLE plan_promotions (
   merge_sha TEXT, tree_verified INTEGER,   -- 1 when merge_sha's tree is head_sha's tree
   fast_forwarded INTEGER, fast_forward_note TEXT,
   cancel_reason TEXT, started_at TEXT NOT NULL, finished_at TEXT,
-  UNIQUE (plan_id, number)
+  UNIQUE (plan_id, number),
+  UNIQUE (plan_id, command_id)          -- a Promote replay is a database fact (D9)
 );
 CREATE UNIQUE INDEX plan_promotions_one_running ON plan_promotions(plan_id) WHERE state = 'running';
 
@@ -129,12 +132,12 @@ Increments add two kinds to `plan_execution_effects` (X3): `create-integration`,
 
 ### D4. Creating the integration branch
 
-When an integration execution starts and the branch is missing on `origin`, the executor's first step is the execution-level `create-integration` effect: `gh api -X POST repos/{o}/{r}/git/refs -f ref=refs/heads/<branch> -f sha=<default head>`. Its key is `<execution>::create-integration:<generation>`. Provisioning waits until the effect is done.
+When an integration execution starts and the branch is missing on `origin`, the executor's first step is the execution-level `create-integration` effect: `gh api -X POST repos/{o}/{r}/git/refs -f ref=refs/heads/<branch> -f sha=<default head>`. Its key is X3's execution-level key, `<execution>::create-integration:<n>`, where `<n>` counts that kind's effects within the execution. Provisioning waits until the effect is done.
 - **Done.** One transaction inserts the `plan_integration_branches` row. When an earlier execution created the branch and it was deleted since, the row is kept, and its `created_sha`, `created_by`, and `created_at` take the new creation.
 - **422, the ref exists.** The branch is inspected. A ref at the requested commit is our own lost success. Anything else is a foreign branch: every waiting change stops as `effect-failed`, naming the branch.
 - **Transient failures** back off as in plan-execution's D14. After 3 tries, every waiting change stops as `effect-failed`.
 
-The key is `<execution>::create-integration:<n>`, where n counts the execution's creations. Retrying any change stopped this way first reads the branch. A branch present with this plan's record is reused. A missing one is created under the next n. A foreign one stops the change again. So the first Retry creates the branch, and the others find it.
+Retrying any change stopped this way first reads the branch. A branch present with this plan's record is reused. A missing one is created by a new effect under the next `<n>`. A foreign one stops the change again. So the first Retry creates the branch, and the others find it.
 
 An existing branch with this plan's record is reused at its head. A deleted branch whose plan has unpromoted landings never gets that far: `landings-on-base` (D8) refuses Start, because the default head cannot contain those landings.
 
@@ -195,7 +198,7 @@ A candidate's CI follows plan-execution's rules: one rerun, the flaky rule, and 
 | Entry | Reads | Refuses |
 | --- | --- | --- |
 | `promotion-idle` | `plan_promotions` running row of the plan | a running promotion, naming it and its step |
-| `landings-on-base` | after a fetch: `git merge-base --is-ancestor <merge_sha> <base head>` for each landing fact of the plan, in every mode | each fact whose landed commit the execution's base head lacks, naming the change and the branch it landed on |
+| `landings-on-base` | after a fetch: `git merge-base --is-ancestor <merge_sha> <base head>` for each landing fact of the plan, in every mode | each fact whose `merge_sha` the execution's base head lacks, naming the change and the branch it landed on |
 
 Both are pre-reads, like `changes-on-base`, and run in the same read phase. An integration plan's base head is the integration branch's head, or the default branch's head when the branch does not exist. A plan with no landing facts passes `landings-on-base` trivially.
 
@@ -210,10 +213,10 @@ Both are pre-reads, like `changes-on-base`, and run in the same read phase. An i
 
   `team-plan-result` answers each.
 - **`PromotionService.promote`** refuses non-human callers first. Then, like Start, it reads before it writes: `ls-remote` for the integration and promotion branches, `gh api repos/{o}/{r}` for `allow_merge_commit`, ancestry for `something-to-promote`, and the probe's repository checks. The preview sends the same reads. One transaction then:
-  - replays by `(plan_id, command_id)` with the compared payload `branch` and `fromSha`;
+  - replays by `(plan_id, command_id)` with the compared payload `branch` and `fromSha`. The pair is unique on `plan_promotions` as on `plan_events`, so two same-key Promotes that both passed the reads leave one promotion, and the second resolves as the replay;
   - runs every entry of `PROMOTE_PRECONDITIONS`;
   - inserts the promotion with the next `number`, the floor snapshot, and `through_seq`;
-  - records `promotion-started` through `PlanService.recordExecutionEvent`, which gains the promotion kinds.
+  - records `promotion-started`, carrying the promotion id, through `PlanService.recordPromotionEvent(planId, event, within)`. This change adds that method beside plan-execution's `recordExecutionEvent`, which writes inside an execution's transaction: a promotion belongs to no execution. `PlanService` stays the only writer of `plan_events` (C3), and the three promotion kinds are appended under C6.
 - **The list:**
 
   | Entry | Passes when |
@@ -227,7 +230,7 @@ Both are pre-reads, like `changes-on-base`, and run in the same read phase. An i
   | `landing-ready` | the probe's repository checks and floor map pass |
   | `promotion-name-free` | `<branch>--promote-<number>` is absent on `origin` |
 
-- **Cancel** refuses non-human callers, and is refused once the merge is recorded, naming the merge. Otherwise it records `promotion-cancelled` with the trimmed reason, which is the compared payload. It marks pending promotion effects `cancelled`, and finishes the promotion as `cancelled` unless a merge effect is running. In that case the merge settles first. A completed merge finishes the promotion as `merged`, with a note that the cancellation came too late, and its fast-forward still runs, because it belongs to recording the merge. A merge that did not happen finishes it as `cancelled`.
+- **Cancel** refuses non-human callers, and is refused once the merge is recorded, naming the merge. Otherwise it records `promotion-cancelled` through `recordPromotionEvent`, with the compared payload `promotionId` and the trimmed `reason`. It marks pending promotion effects `cancelled`, and finishes the promotion as `cancelled` unless a merge effect is running. In that case the merge settles first. A completed merge finishes the promotion as `merged`, with a note that the cancellation came too late, and its fast-forward still runs, because it belongs to recording the merge. A merge that did not happen finishes it as `cancelled`.
 
 Plan state is not a precondition. A completed plan is the usual one to promote, and a cancelled plan's landed work may still be wanted.
 
@@ -252,7 +255,7 @@ Plan state is not a precondition. A completed plan is the usual one to promote, 
 9. **Fast-forward.** The integration `fast-forward` (D5) moves the branch to `head_sha`, with the rewritten and moved reads of D6.
    - On success, the promotion candidate becomes `landed`.
    - If the integration branch moved, or it was rewritten, Kawai leaves the branch as it is. It records `fast_forwarded = 0` with the reason, and the promotion candidate becomes `superseded`. The next increment's outside commits then start from the last landed candidate, which is still the one before the promotion. That is correct, because the branch never received the promotion's head.
-10. **Finish.** `promotion-finished` with outcome `merged`, and actor `system`, under the command id `promo:<id>:finish`.
+10. **Finish.** `promotion-finished` with outcome `merged`, and actor `system`, under the command id `promo:<id>:finish`, through `recordPromotionEvent` like the human kinds.
 
 A failure at any step, and a Cancel that stops the promotion before its merge:
 - cancels its pending effects and releases the slot;
@@ -305,7 +308,8 @@ Consumed:
 - **X7:** the landing facts, written through the same insert.
 - **X8:** `integration-rewritten`.
 - **C1:** the landing mode and branch.
-- **C3:** `promotion-started`, `promotion-cancelled`, and `promotion-finished` through `PlanService.recordExecutionEvent`.
+- **C3:** `PlanService` stays the only writer of `plan_events`. This change adds `recordPromotionEvent` for the promotion kinds, and leaves plan-execution's `recordExecutionEvent` unchanged.
+- **C6:** the appended kinds `promotion-started`, `promotion-cancelled`, and `promotion-finished`.
 - **C5:** the link, unchanged.
 - **V2:** acceptance conditions before each landing, through the shared steps.
 - **V3:** no extra input. Every candidate is verified on top of every earlier landing, so changes whose capabilities overlap are always verified together.

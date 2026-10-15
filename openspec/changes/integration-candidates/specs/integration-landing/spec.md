@@ -157,7 +157,7 @@ Start SHALL evaluate the appended precondition `promotion-idle`. It SHALL refuse
 - **THEN** `promotion-idle` passes
 
 ### Requirement: Landing facts must be reachable from the base
-Start SHALL evaluate the appended precondition `landings-on-base`, in every landing mode. It SHALL refuse Start when the execution's base head on `origin` does not contain the landed commit of one of the plan's landing facts. The refusal names each such change and the branch it landed on.
+Start SHALL evaluate the appended precondition `landings-on-base`, in every landing mode. It SHALL refuse Start when the execution's base head on `origin` does not contain the recorded `merge_sha` of one of the plan's landing facts: the commit on the branch it landed on, never the pull request's head. The refusal names each such change and the branch it landed on.
 
 #### Scenario: Switching to direct before promotion
 - **WHEN** a plan's changes landed on its integration branch, and a new revision with landing mode `direct` is started before that branch is promoted
@@ -166,6 +166,10 @@ Start SHALL evaluate the appended precondition `landings-on-base`, in every land
 #### Scenario: Switching after promotion
 - **WHEN** the integration branch has been promoted onto the default branch, and the direct revision is started
 - **THEN** `landings-on-base` passes
+
+#### Scenario: A squash landing is on the base
+- **WHEN** a direct plan's change landed by squash, so its pull request's head is on no branch, and a later revision is started
+- **THEN** `landings-on-base` checks the squash commit recorded as `merge_sha` and passes
 
 ### Requirement: Progress and the Plans view show the integration branch
 For a plan with an integration branch, progress SHALL show each change's landing on that branch and whether a promotion has carried it onto the default branch. The Plans view SHALL show the branch and its head, plus the candidate chain. Each candidate shows its sequence, change, commit, CI, and state, plus any commits made outside Kawai.
