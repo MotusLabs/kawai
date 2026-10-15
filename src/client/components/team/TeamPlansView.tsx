@@ -44,12 +44,17 @@ export default function TeamPlansView({ teamPath, view, sendMessage, connected, 
     sendMessage({ type: 'team-plan-open', teamPath, planId: selected })
     return () => sendMessage({ type: 'team-plan-close', teamPath, planId: selected })
   }, [teamPath, connected, connectionEpoch, view.open, selected, sendMessage])
-  // A result lost with the connection never leaves the view busy.
+  // A result lost with the connection never leaves the view busy: a
+  // reconnect clears waiting requests, whether it shows as a connected edge
+  // or only as a new epoch (the socket came back between renders).
   const wasConnected = useRef(connected)
+  const lastEpoch = useRef(connectionEpoch)
   useEffect(() => {
-    if (!wasConnected.current && connected) useTeamPlanStore.getState().reconnected(teamPath)
+    const reconnected = (!wasConnected.current && connected) || (connected && lastEpoch.current !== connectionEpoch)
+    if (reconnected) useTeamPlanStore.getState().reconnected(teamPath)
     wasConnected.current = connected
-  }, [connected, teamPath])
+    lastEpoch.current = connectionEpoch
+  }, [connected, connectionEpoch, teamPath])
 
   const busy = Object.keys(view.pending).length > 0
   const select = (planId: string | null) => {

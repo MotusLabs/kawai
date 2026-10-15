@@ -130,8 +130,8 @@ test('the detail shows the claimed alignment, progress, waits, outside tasks, th
   expect(textOf(byId('plan-change-ui'))).toContain('Waits on api')
   expect(textOf(byId('plan-change-ui'))).toContain('review reviewers')
   expect(textOf(byId('plan-outside-revision'))).toContain('Old docs — Open (change docs)')
-  expect(textOf(byId('plan-floor'))).toContain('Lint')
-  expect(textOf(byId('plan-floor'))).toContain('Clean reviewer verdict')
+  for (const label of ['Lint', 'Typecheck', 'Unit tests', 'CI end-to-end', 'Clean reviewer verdict']) expect(textOf(byId('plan-floor'))).toContain(label)
+  expect(textOf(byId('plan-change-ui').findByProps({ 'data-testid': 'plan-change-checks' }))).toContain('a11y — Axe clean')
   expect(textOf(byId('plan-extra-checks'))).toContain('perf — Under 50 ms')
   expect(textOf(byId('plan-landing'))).toContain('Integration branch wave-c')
   expect(textOf(byId('plan-roles'))).toContain('middle-devs: default → glm')
@@ -142,6 +142,21 @@ test('the detail shows the claimed alignment, progress, waits, outside tasks, th
   expect(diff).toContain('changes reordered')
   expect(textOf(byId('plan-history'))).toContain('Approved revision 1 · Human')
   expect(textOf(byId('plan-revision-list'))).toContain('Revision 2 — In review')
+})
+
+test('a change with its own review group shows it; one without shows the plan\'s', () => {
+  const body = content({
+    changes: [{ ...content().changes[0]!, reviewGroup: 'senior-devs' }, content().changes[1]!],
+    roles: [{ group: 'middle-devs', profiles: [] }, { group: 'senior-devs', profiles: [] }, { group: 'reviewers', profiles: [] }],
+  })
+  const detail = approvedDetail()
+  detail.revisions = [revision(1, 'approved', body)]
+  const { byId } = mount(() => {
+    useTeamPlanStore.getState().select('/repo', 'p1')
+    useTeamPlanStore.getState().applyDetail({ type: 'team-plan-detail', teamPath: '/repo', teamId: 't', detail })
+  })
+  expect(textOf(byId('plan-change-api'))).toContain('review senior-devs')
+  expect(textOf(byId('plan-change-ui'))).toContain('review reviewers')
 })
 
 test('an unapproved plan shows the in-review revision as not the direction, with Alignment unassessed', () => {
@@ -260,6 +275,19 @@ test('every control disables while disconnected; reconnecting re-subscribes and 
   rerender({ connected: true, epoch: 1 })
   expect(sent.slice(before)).toEqual([{ type: 'team-plans-open', teamPath: '/repo' }, { type: 'team-plan-open', teamPath: '/repo', planId: 'p1' }])
   expect(useTeamPlanStore.getState().views['/repo']!.pending).toEqual({})
+})
+
+test('a reconnect seen only as a new epoch still drops waiting requests', () => {
+  const { sent, byId, rerender } = openDetail()
+  act(() => useTeamPlanStore.getState().begin('/repo', 'lost', 'approve'))
+  rerender()
+  expect(byId('plan-approve-2').props.disabled).toBe(true)
+  const before = sent.length
+  rerender({ epoch: 1 })
+  expect(sent.slice(before).filter(message => message.type.endsWith('-open'))).toEqual([{ type: 'team-plans-open', teamPath: '/repo' }, { type: 'team-plan-open', teamPath: '/repo', planId: 'p1' }])
+  expect(useTeamPlanStore.getState().views['/repo']!.pending).toEqual({})
+  rerender({ epoch: 1 })
+  expect(byId('plan-approve-2').props.disabled).toBe(false)
 })
 
 test('an open Approve dialog keeps the approved revision it was shown, so an approval landing meanwhile makes it stale', () => {

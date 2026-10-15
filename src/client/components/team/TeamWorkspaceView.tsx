@@ -174,7 +174,7 @@ export default function TeamWorkspaceView({ teamKey, location, sendMessage, conn
   // Plans (durable-plans 8.3): the host-agnostic view owns its list and
   // detail subscriptions; the store view stays open across tab switches. The
   // URL names the selected plan (D3), so a reload or a link reopens it.
-  const plansOpen = location.tab === 'plans' && !unknown
+  const plansOpen = currentLocation.tab === 'plans' && !unknown
   const plans = useTeamPlanStore(state => state.views[teamKey])
   useEffect(() => {
     if (!plansOpen) return
@@ -183,8 +183,8 @@ export default function TeamWorkspaceView({ teamKey, location, sendMessage, conn
   useEffect(() => {
     if (!plansOpen) return
     const store = useTeamPlanStore.getState()
-    if ((location.id ?? null) !== (store.views[teamKey]?.selected ?? null)) store.select(teamKey, location.id ?? null)
-  }, [plansOpen, teamKey, location.id])
+    if ((currentLocation.id ?? null) !== (store.views[teamKey]?.selected ?? null)) store.select(teamKey, currentLocation.id ?? null)
+  }, [plansOpen, teamKey, currentLocation.id])
 
   const liveSessions = useMemo(
     () => sessions.map(row => ({ id: row.id, name: row.name, groupId: row.groupId ?? null })),

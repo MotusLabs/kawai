@@ -68,8 +68,10 @@ test('the Team page Plans tab mounts the view: it subscribes, follows the URL pl
   update()
   expect(sent).toContainEqual({ type: 'team-plan-open', teamPath: '/repo', planId: 'p1' })
 
-  // A URL without an id (Back to the list) clears the selection.
-  act(() => { renderer.update(element({ teamKey: '/repo', tab: 'plans' })) })
+  // A URL without an id (Back to the list) clears the selection. The page
+  // follows the location store, as its sibling tabs do, even before the
+  // host's prop catches up.
+  act(() => useTeamLocationStore.getState().navigate({ teamKey: '/repo', tab: 'plans' }))
   expect(useTeamPlanStore.getState().views['/repo']?.selected).toBeNull()
   expect(sent).toContainEqual({ type: 'team-plan-close', teamPath: '/repo', planId: 'p1' })
 

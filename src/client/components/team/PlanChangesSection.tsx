@@ -32,7 +32,7 @@ export default function PlanChangesSection({ content, progress, onOpenTask }: {
           </p>
           {entry && entry.waitsOn.length > 0 && <p className="text-chat-meta text-approval" data-testid="plan-change-waits">Waits on {entry.waitsOn.join(', ')}</p>}
           {change.acceptance.length > 0 && <ul className="mt-1 list-disc pl-5 text-chat-body">{change.acceptance.map((rule, ruleIndex) => <li key={ruleIndex}>{rule}</li>)}</ul>}
-          {change.extraChecks.length > 0 && <div className="mt-1"><span className="text-chat-meta text-secondary">Extra checks</span><CheckList checks={change.extraChecks} /></div>}
+          {change.extraChecks.length > 0 && <div className="mt-1" data-testid="plan-change-checks"><span className="text-chat-meta text-secondary">Extra checks</span><CheckList checks={change.extraChecks} /></div>}
           {change.guidance && <p className="mt-1 whitespace-pre-wrap text-chat-meta text-secondary">Guidance: {change.guidance}</p>}
           {entry && <TaskList tasks={entry.tasks} onOpenTask={onOpenTask} />}
         </li>
