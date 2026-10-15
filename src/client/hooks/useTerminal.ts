@@ -1,15 +1,14 @@
 // Terminal ownership hook: xterm lifecycle and attach/detach, output
 // streaming with backpressure, paste and image handling, tmux copy-mode,
-// and iOS/WebGL renderer workarounds.
+// and iOS/WebGL renderer workarounds. The concerns live in sibling
+// terminal/ modules; the hook owns the refs and composes them.
 import { useEffect, useRef, useCallback, useLayoutEffect, useState } from 'react'
-import { Terminal } from '@xterm/xterm'
-import { FitAddon } from '@xterm/addon-fit'
-import { WebglAddon } from '@xterm/addon-webgl'
-import { WebLinksAddon } from '@xterm/addon-web-links'
-import { ClipboardAddon, type ClipboardSelectionType, type IClipboardProvider } from '@xterm/addon-clipboard'
-import { SearchAddon } from '@xterm/addon-search'
-import { SerializeAddon } from '@xterm/addon-serialize'
-import { ProgressAddon } from '@xterm/addon-progress'
+import type { Terminal, ITheme } from '@xterm/xterm'
+import type { FitAddon } from '@xterm/addon-fit'
+import type { WebglAddon } from '@xterm/addon-webgl'
+import type { SearchAddon } from '@xterm/addon-search'
+import type { SerializeAddon } from '@xterm/addon-serialize'
+import type { ProgressAddon } from '@xterm/addon-progress'
 import type { AgentType, ClipboardOfferSource, SendClientMessage, ServerMessageWithDiagnostics, SubscribeServerMessage } from '@shared/types'
 import { clientLog } from '../utils/clientLog'
 import type { ConnectionStatus } from '../stores/sessionStore'
@@ -18,10 +17,15 @@ import { copyText } from '../utils/copyText'
 import { getEffectiveModifier, getIsMac, matchesModifier } from '../utils/device'
 import { bracketedPaste, sanitizeImagePath } from '../utils/paste'
 import { clipboardFiles } from '../utils/browserFiles'
-import { cacheSnapshot, clearSnapshotCache, getCachedSnapshot } from '../terminal/snapshotCache'
+import { clearSnapshotCache } from '../terminal/snapshotCache'
 import { logTerminalOutputDropped } from '../terminal/droppedOutputLog'
-import { sanitizeLink } from '../terminal/linkSanitize'
-import { cancelIosRepaint, scheduleIosRepaint, type IosRepaintTarget } from '../terminal/iosRepaint'
+import { cancelIosRepaint, installVisibilityHandlers, scheduleIosRepaint, type IosRepaintTarget } from '../terminal/iosRepaint'
+import { disposeWebglAddon, loadWebglAddon, syncWebglPreference } from '../terminal/webgl'
+import { TmuxCopyModeState } from '../terminal/copyMode'
+import { syncAttachment } from '../terminal/attachState'
+import { createTerminalWithAddons } from '../terminal/createTerminal'
+import { createLinkTooltip, installLinkHandlers } from '../terminal/linkHover'
+import { isIOSDevice } from '../utils/device'
 
 // Public helpers re-exported so existing importers keep their paths; the
 // implementations live in the terminal/ modules.
@@ -32,14 +36,9 @@ export {
 export { resetDroppedOutputRateLimiterForTests } from '../terminal/droppedOutputLog'
 export { sanitizeLink } from '../terminal/linkSanitize'
 
-// URL regex that matches standard URLs and IP:port patterns
-const URL_REGEX = /https?:\/\/[^\s"'<>]+|\b(?:localhost|\d{1,3}(?:\.\d{1,3}){3}):\d{1,5}(?:\/[^\s"'<>]*)?\b/
-
 /** Empty bracket paste sequence — signals a paste event without text content. */
 const BRACKET_PASTE_EMPTY = '\x1b[200~\x1b[201~'
 const CTRL_V = '\x16'
-const ENABLE_MOUSE_TRACKING = '\x1b[?1000h\x1b[?1002h\x1b[?1006h'
-const DISABLE_MOUSE_TRACKING = '\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l'
 
 /**
  * Upload an image blob to the server and return the stored file path.
@@ -124,10 +123,6 @@ interface PendingClipboardOffer {
   source: ClipboardOfferSource
 }
 
-interface SafeClipboardCallbacks {
-  onWriteFailed?: (text: string, source: ClipboardOfferSource) => void
-}
-
 function clipboardHasImage(clipboardData: DataTransfer | null | undefined): boolean {
   if (!clipboardData) return false
 
@@ -164,51 +159,6 @@ function getClipboardImageBlob(
   }
   return null
 }
-
-/**
- * Custom clipboard provider that prevents empty writes (matching Ghostty's behavior).
- * OSC 52 with empty base64 data clears clipboard in reference xterm, but this can
- * accidentally wipe images or other non-text content the user has copied.
- */
-class SafeClipboardProvider implements IClipboardProvider {
-  constructor(private callbacks: SafeClipboardCallbacks = {}) {}
-
-  async readText(selection: ClipboardSelectionType): Promise<string> {
-    if (selection !== 'c') return ''
-    try {
-      return await navigator.clipboard.readText()
-    } catch {
-      return ''
-    }
-  }
-
-  async writeText(selection: ClipboardSelectionType, text: string): Promise<void> {
-    // Only write to system clipboard, and only if there's actual non-whitespace content
-    // This prevents OSC 52 sequences from clearing images/rich content from the clipboard
-    if (selection !== 'c' || !text?.trim()) return
-    const startedAt = performance.now()
-    try {
-      if (!navigator.clipboard?.writeText) {
-        throw new Error('navigator.clipboard.writeText unavailable')
-      }
-      await navigator.clipboard.writeText(text)
-      clientLog('clipboard_write_success', {
-        source: 'osc52',
-        chars: text.length,
-        durationMs: Math.round(performance.now() - startedAt),
-      })
-    } catch (error) {
-      clientLog('clipboard_write_failed', {
-        source: 'osc52',
-        chars: text.length,
-        error: error instanceof Error ? error.message : String(error),
-      }, 'warn')
-      this.callbacks.onWriteFailed?.(text, 'osc52')
-    }
-  }
-}
-import type { ITheme } from '@xterm/xterm'
-import { isIOSDevice } from '../utils/device'
 
 // Text presentation selector - forces text rendering instead of emoji
 const TEXT_VS = '\uFE0E'
@@ -291,8 +241,6 @@ export function useTerminal({
   const hasLoggedInitRef = useRef(false)
   const fitAddonRef = useRef<FitAddon | null>(null)
   const webglAddonRef = useRef<WebglAddon | null>(null)
-  const webLinksAddonRef = useRef<WebLinksAddon | null>(null)
-  const linkTooltipRef = useRef<HTMLDivElement | null>(null)
   const searchAddonRef = useRef<SearchAddon | null>(null)
   const serializeAddonRef = useRef<SerializeAddon | null>(null)
   const progressAddonRef = useRef<ProgressAddon | null>(null)
@@ -300,13 +248,10 @@ export function useTerminal({
   const fitTimer = useRef<number | null>(null)
   const attachDebounceRef = useRef<number | null>(null)
 
-  // Wheel event handling for tmux scrollback
-  const wheelAccumRef = useRef<number>(0)
   const inTmuxCopyModeRef = useRef<boolean>(false)
   const [isTmuxCopyMode, setIsTmuxCopyMode] = useState(false)
   const appMouseRef = useRef<boolean>(false)
   const altScreenRef = useRef<boolean>(false)
-  const copyModeCheckTimer = useRef<number | null>(null)
   const clipboardOfferIdRef = useRef(0)
   const [pendingClipboardOffer, setPendingClipboardOffer] = useState<PendingClipboardOffer | null>(null)
 
@@ -333,7 +278,6 @@ export function useTerminal({
   const dismissPendingClipboardOffer = useCallback(() => {
     setPendingClipboardOffer(null)
   }, [])
-  const copyModePollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   // Track the currently attached session to prevent race conditions
   const attachedSessionRef = useRef<string | null>(null)
@@ -430,40 +374,30 @@ export function useTerminal({
     onScrollChangeRef.current(isAtBottom)
   }, [])
 
-  const setTmuxCopyMode = useCallback((nextValue: boolean) => {
-    if (inTmuxCopyModeRef.current === nextValue) return
-    inTmuxCopyModeRef.current = nextValue
-    setIsTmuxCopyMode(nextValue)
+  // tmux copy-mode tracking (terminal/copyMode.ts): the class owns the
+  // debounce/poll timers and wheel accumulator; the hook owns the React
+  // refs and state it is handed (design D2).
+  const copyModeRef = useRef<TmuxCopyModeState | null>(null)
+  if (!copyModeRef.current) {
+    copyModeRef.current = new TmuxCopyModeState({
+      send: (message) => sendMessageRef.current(message),
+      getTerminal: () => terminalRef.current,
+      getReadySession: () => readySessionRef.current,
+      getAttachedSession: () => attachedSessionRef.current,
+      inCopyModeRef: inTmuxCopyModeRef,
+      appMouseRef,
+      altScreenRef,
+      flushOutputBeforeControl: () => flushOutputBeforeControlRef.current?.(),
+      onModeChange: setIsTmuxCopyMode,
+      onScrollPositionChange: checkScrollPosition,
+    })
+  }
+  const copyMode = copyModeRef.current
 
-    // Disable mouse tracking when entering copy-mode so xterm.js does local selection
-    // instead of generating mouse sequences. When exiting copy-mode, tmux will refresh
-    // and re-enable mouse tracking automatically via its output.
-    const terminal = terminalRef.current
-    if (terminal && nextValue) {
-      // Disable all mouse tracking modes (1000=X10, 1002=button-event, 1003=any-event, 1006=SGR)
-      // Preserve order with older output held by backpressure; otherwise a
-      // buffered enable sequence could undo this disable after entering copy-mode.
-      flushOutputBeforeControlRef.current?.()
-      terminal.write(DISABLE_MOUSE_TRACKING)
-    }
-
-    checkScrollPosition()
-  }, [checkScrollPosition])
-
-  // Request tmux copy-mode status from server (debounced)
-  const requestCopyModeCheck = useCallback(() => {
-    const attached = readySessionRef.current
-    if (!attached) return
-
-    // Debounce: clear existing timer and set a new one
-    if (copyModeCheckTimer.current !== null) {
-      window.clearTimeout(copyModeCheckTimer.current)
-    }
-    copyModeCheckTimer.current = window.setTimeout(() => {
-      copyModeCheckTimer.current = null
-      sendMessageRef.current({ type: 'tmux-check-copy-mode', sessionId: attached })
-    }, 150) // Check 150ms after last scroll
-  }, [])
+  const setTmuxCopyMode = useCallback(
+    (nextValue: boolean) => copyMode.set(nextValue),
+    [copyMode]
+  )
 
   const fitAndResize = useCallback(() => {
     const terminal = terminalRef.current
@@ -497,48 +431,18 @@ export function useTerminal({
     // Clear container
     container.innerHTML = ''
 
-    // Calculate lineHeight that produces integer cell height for any fontSize
-    // This keeps cell sizing stable across fractional line-height rendering
-    const calcLineHeight = (size: number, lh: number) => Math.round(size * lh) / size
-    const computedLineHeight = calcLineHeight(fontSize, lineHeight)
-
-    const terminal = new Terminal({
-      fontFamily,
-      fontSize,
-      lineHeight: computedLineHeight,
-      letterSpacing,
-      scrollback: 0, // Disabled - we use tmux scrollback instead
-      cursorBlink: false,
-      cursorStyle: 'underline',
-      // PTY/tmux output already carries cursor movement. Rewriting LF as CRLF
-      // corrupts cursor-column state for fullscreen applications.
-      convertEol: false,
-      theme,
-      screenReaderMode: isiOS,
-      // Ensure text is readable even when apps use true color (24-bit RGB) sequences
-      // that bypass our theme colors (e.g., Pi using black text on dark backgrounds)
-      minimumContrastRatio: 4.5,
-    })
-
-    const fitAddon = new FitAddon()
-    terminal.loadAddon(fitAddon)
-    terminal.loadAddon(new ClipboardAddon(undefined, new SafeClipboardProvider({
-      onWriteFailed: offerClipboardCopy,
-    })))
-
-    // Load search addon for terminal buffer search
-    const searchAddon = new SearchAddon()
-    terminal.loadAddon(searchAddon)
+    const { terminal, fitAddon, searchAddon, serializeAddon, progressAddon } =
+      createTerminalWithAddons({
+        fontFamily,
+        fontSize,
+        lineHeight,
+        letterSpacing,
+        theme,
+        screenReaderMode: isiOS,
+        onClipboardWriteFailed: offerClipboardCopy,
+      })
     searchAddonRef.current = searchAddon
-
-    // Load serialize addon for exporting terminal state
-    const serializeAddon = new SerializeAddon()
-    terminal.loadAddon(serializeAddon)
     serializeAddonRef.current = serializeAddon
-
-    // Load progress addon for OSC 9;4 progress sequences
-    const progressAddon = new ProgressAddon()
-    terminal.loadAddon(progressAddon)
     progressAddonRef.current = progressAddon
 
     // Function to complete terminal initialization after fonts are ready
@@ -547,20 +451,9 @@ export function useTerminal({
       if (cancelled) return
 
       if (useWebGLRef.current) {
-        try {
-          const webglAddon = new WebglAddon()
-          // Dispose on context loss so xterm falls back to canvas renderer
-          // instead of trying to render through a dead WebGL context (causes artifacts)
-          webglAddon.onContextLoss(() => {
-            clientLog('webgl_context_loss', { sessionId }, 'info')
-            try { webglAddon.dispose() } catch { /* ignore */ }
-            webglAddonRef.current = null
-          })
-          terminal.loadAddon(webglAddon)
-          webglAddonRef.current = webglAddon
-        } catch {
-          // WebGL addon is optional
-        }
+        loadWebglAddon(terminal, webglAddonRef, () => {
+          clientLog('webgl_context_loss', { sessionId }, 'info')
+        })
       }
 
       terminal.open(container)
@@ -580,7 +473,7 @@ export function useTerminal({
 
       // Append tooltip after terminal.open() sets terminal.element
       if (tooltip && terminal.element) {
-        terminal.element.appendChild(tooltip)
+        terminal.element.appendChild(tooltip.root)
       }
     }
 
@@ -594,117 +487,10 @@ export function useTerminal({
     }
 
     // Create tooltip element inside terminal (with xterm-hover class to prevent interference)
-    // Guard for test environments where document.createElement may not be available
-    let tooltip: HTMLDivElement | null = null
-    let tooltipUrl: HTMLDivElement | null = null
-    let tooltipHint: HTMLDivElement | null = null
-    if (typeof document !== 'undefined' && document.createElement) {
-      tooltip = document.createElement('div')
-      tooltip.className = 'xterm-hover'
-      tooltip.style.cssText = `
-        position: absolute;
-        display: none;
-        z-index: 20;
-        padding: 4px 8px;
-        font-size: 12px;
-        border-radius: 4px;
-        background: var(--bg-surface);
-        border: 1px solid var(--border);
-        box-shadow: 0 2px 8px rgba(0,0,0,0.15);
-        color: var(--text-primary);
-        pointer-events: none;
-        max-width: 400px;
-        word-break: break-all;
-      `
-      tooltipUrl = document.createElement('div')
-      tooltip.appendChild(tooltipUrl)
+    // and wire link hover/activation (terminal/linkHover.ts)
+    const tooltip = createLinkTooltip()
+    const removeLinkHandling = installLinkHandlers(terminal, container, tooltip)
 
-      tooltipHint = document.createElement('div')
-      tooltipHint.style.color = 'var(--text-muted)'
-      tooltipHint.style.marginTop = '2px'
-      tooltipHint.style.fontSize = '11px'
-      tooltip.appendChild(tooltipHint)
-
-      linkTooltipRef.current = tooltip
-    }
-
-    const showTooltip = (event: MouseEvent, text: string) => {
-      if (!terminal.element || !tooltip || !tooltipUrl || !tooltipHint) return
-      const sanitized = sanitizeLink(text)
-      if (!sanitized) return
-      const rect = terminal.element.getBoundingClientRect()
-      // Truncate long URLs
-      const displayUrl = sanitized.length > 60 ? sanitized.slice(0, 57) + '...' : sanitized
-      tooltipUrl.textContent = displayUrl
-      tooltipHint.textContent = `${getIsMac() ? '⌘' : 'Ctrl'}+click to open`
-      tooltip.style.left = `${event.clientX - rect.left + 10}px`
-      tooltip.style.top = `${event.clientY - rect.top + 10}px`
-      tooltip.style.display = 'block'
-    }
-
-    const hideTooltip = () => {
-      if (tooltip) tooltip.style.display = 'none'
-    }
-
-    // Track the currently hovered link URL so we can open it on mousedown
-    // before xterm.js sends mouse sequences to tmux that exit copy-mode
-    let hoveredLinkUrl: string | null = null
-    let linkOpenedOnMouseDown = false
-    let linkOpenedResetTimer: ReturnType<typeof setTimeout> | null = null
-
-    // Link handler with hover/leave callbacks - used for both OSC 8 and WebLinksAddon
-    const linkHandler = {
-      activate: (event: MouseEvent, text: string) => {
-        // Skip if already opened by mousedown handler (prevents double-open)
-        if (linkOpenedOnMouseDown) return
-        // Fallback for cases where mousedown didn't intercept
-        if (event.metaKey || event.ctrlKey) {
-          const sanitized = sanitizeLink(text)
-          if (!sanitized) return
-          window.open(sanitized, '_blank', 'noopener')
-        }
-      },
-      hover: (event: MouseEvent, text: string) => {
-        const sanitized = sanitizeLink(text)
-        hoveredLinkUrl = sanitized || null
-        showTooltip(event, text)
-      },
-      leave: () => {
-        hoveredLinkUrl = null
-        hideTooltip()
-      },
-    }
-
-    // Open links on mousedown instead of click to beat the race condition where
-    // xterm.js sends mouse sequences to tmux (exiting copy-mode) before the
-    // link addon's click handler fires
-    const handleLinkMouseDown = (e: MouseEvent) => {
-      if (hoveredLinkUrl && (e.metaKey || e.ctrlKey)) {
-        e.preventDefault()
-        e.stopPropagation()
-        linkOpenedOnMouseDown = true
-        window.open(hoveredLinkUrl, '_blank', 'noopener')
-        // Reset flag after a short delay (in case click event still fires)
-        if (linkOpenedResetTimer) clearTimeout(linkOpenedResetTimer)
-        linkOpenedResetTimer = setTimeout(() => { linkOpenedOnMouseDown = false }, 100)
-      }
-    }
-    container.addEventListener('mousedown', handleLinkMouseDown, true)
-
-    // Set linkHandler for OSC 8 hyperlinks
-    terminal.options.linkHandler = linkHandler
-
-    // WebLinksAddon for auto-detected URLs (pass linkHandler for hover/leave)
-    const webLinksAddon = new WebLinksAddon(
-      (event, uri) => linkHandler.activate(event, uri),
-      {
-        urlRegex: URL_REGEX,
-        hover: (event, text) => linkHandler.hover(event, text),
-        leave: () => linkHandler.leave(),
-      }
-    )
-    terminal.loadAddon(webLinksAddon)
-    webLinksAddonRef.current = webLinksAddon
 
     // Paste interception state: each keydown creates a resolver that the
     // capture-phase paste listener fulfills with clipboardData text/metadata.
@@ -973,83 +759,21 @@ export function useTerminal({
     // Handle input - only send to attached session
     terminal.onData((data) => {
       const attached = readySessionRef.current
-      if (attached) {
-        // When in copy-mode, filter out mouse sequences so clicks don't exit copy-mode
-        // This prevents accidental copy-mode exit when clicking in scrollback (Safari desktop)
-        // Mouse sequence formats:
-        // - SGR extended: ESC [ < Ps ; Ps ; Ps M/m (most common with tmux)
-        // - URXVT: ESC [ Ps ; Ps ; Ps M
-        // - Normal/UTF-8: ESC [ M followed by exactly 3 encoded bytes
-        // eslint-disable-next-line no-control-regex
-        const isMouseSequence = /^\x1b\[(<[\d;]+[Mm]|[\d;]+M|M[\x20-\xff]{3})$/.test(data)
-        if (inTmuxCopyModeRef.current && isMouseSequence) {
-          return // Drop mouse event, let xterm handle selection locally
-        }
-
-        // If we scrolled in tmux copy-mode, exit it before sending keyboard input
-        if (inTmuxCopyModeRef.current) {
-          sendMessageRef.current({ type: 'tmux-cancel-copy-mode', sessionId: attached })
-          setTmuxCopyMode(false)
-        }
-        sendMessageRef.current({ type: 'terminal-input', sessionId: attached, data })
+      if (!attached) return
+      // When in copy-mode, drop mouse sequences so clicks don't exit
+      // copy-mode; xterm then handles selection locally (Safari desktop).
+      if (copyMode.shouldDropInputData(data)) {
+        return // Drop mouse event, let xterm handle selection locally
       }
+
+      // If we scrolled in tmux copy-mode, exit it before sending keyboard input
+      copyMode.exit(attached)
+      sendMessageRef.current({ type: 'terminal-input', sessionId: attached, data })
     })
 
     // Forward wheel events to tmux for scrollback (like Blink terminal)
     // This enters tmux copy-mode instead of using xterm.js local scrollback
-    terminal.attachCustomWheelEventHandler((ev) => {
-      const attached = readySessionRef.current
-      if (!attached) return true // Let xterm handle it
-
-      // Don't intercept wheel over HTML inputs (like Claude Code's text box)
-      const target = ev.target as HTMLElement | null
-      if (target?.closest('input, textarea, [contenteditable="true"], .xterm-hover')) {
-        return true
-      }
-
-      // If user has active selection, let them scroll to extend it
-      if (terminal.hasSelection()) return true
-
-      // Shift+scroll = horizontal scroll intent, let browser handle
-      if (ev.shiftKey) return true
-
-      // Accumulate wheel delta to avoid spamming on trackpads
-      const STEP = 30
-      wheelAccumRef.current += ev.deltaY
-
-      // Get approximate cell position for SGR mouse event
-      const cols = terminal.cols
-      const rows = terminal.rows
-      const col = Math.floor(cols / 2)
-      const row = Math.floor(rows / 2)
-
-      let scrolledUp = false
-      let didScroll = false
-      while (Math.abs(wheelAccumRef.current) >= STEP) {
-        didScroll = true
-        const down = wheelAccumRef.current > 0
-        wheelAccumRef.current += down ? -STEP : STEP
-
-        // SGR mouse wheel: button 64 = scroll up, 65 = scroll down
-        const button = down ? 65 : 64
-        if (!down) scrolledUp = true
-        sendMessageRef.current({
-          type: 'terminal-input',
-          sessionId: attached,
-          data: `\x1b[<${button};${col};${row}M`
-        })
-      }
-
-      // Optimistically show button when scrolling up
-      if (scrolledUp && !appMouseRef.current) {
-        setTmuxCopyMode(true)
-      }
-      // Request actual copy-mode status from tmux (debounced) - only if we sent scroll
-      if (didScroll && !appMouseRef.current) {
-        requestCopyModeCheck()
-      }
-      return false // We handled it, prevent xterm local scroll
-    })
+    terminal.attachCustomWheelEventHandler((ev) => copyMode.handleWheelEvent(ev, terminal))
 
     terminalRef.current = terminal
     fitAddonRef.current = fitAddon
@@ -1057,11 +781,8 @@ export function useTerminal({
     return () => {
       // Cancel any pending async operations (font loading)
       cancelled = true
-      // Clean up link handling state
-      if (linkOpenedResetTimer) clearTimeout(linkOpenedResetTimer)
-      hoveredLinkUrl = null
-      // Remove link mousedown handler
-      container.removeEventListener('mousedown', handleLinkMouseDown, true)
+      // Clean up link handling state (mousedown listener, tooltip, addon)
+      removeLinkHandling()
       // Remove paste intercept handler
       container.removeEventListener('paste', handlePaste, true)
       if (pasteTimeoutId !== null) {
@@ -1069,27 +790,7 @@ export function useTerminal({
         pasteTimeoutId = null
       }
       pasteResolver = null
-      // Remove tooltip element
-      if (linkTooltipRef.current) {
-        linkTooltipRef.current.remove()
-        linkTooltipRef.current = null
-      }
-      if (webLinksAddonRef.current) {
-        try {
-          webLinksAddonRef.current.dispose()
-        } catch {
-          // Ignore
-        }
-        webLinksAddonRef.current = null
-      }
-      if (webglAddonRef.current) {
-        try {
-          webglAddonRef.current.dispose()
-        } catch {
-          // Ignore
-        }
-        webglAddonRef.current = null
-      }
+      disposeWebglAddon(webglAddonRef)
       try {
         terminal.dispose()
       } catch {
@@ -1106,9 +807,7 @@ export function useTerminal({
       if (fitTimer.current) {
         window.clearTimeout(fitTimer.current)
       }
-      if (copyModeCheckTimer.current !== null) {
-        window.clearTimeout(copyModeCheckTimer.current)
-      }
+      copyMode.clearCheckTimer()
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fitAndResize])
@@ -1146,41 +845,7 @@ export function useTerminal({
 
   // Handle WebGL toggle at runtime
   useEffect(() => {
-    const terminal = terminalRef.current
-    if (!terminal) return
-
-    const wasEnabled = useWebGLRef.current
-    useWebGLRef.current = useWebGL
-
-    // Skip on first render (initialization handles it)
-    if (wasEnabled === useWebGL) return
-
-    if (useWebGL) {
-      // Enable WebGL
-      if (!webglAddonRef.current) {
-        try {
-          const webglAddon = new WebglAddon()
-          webglAddon.onContextLoss(() => {
-            try { webglAddon.dispose() } catch { /* ignore */ }
-            webglAddonRef.current = null
-          })
-          terminal.loadAddon(webglAddon)
-          webglAddonRef.current = webglAddon
-        } catch {
-          // WebGL addon is optional
-        }
-      }
-    } else {
-      // Disable WebGL - dispose addon to fall back to canvas
-      if (webglAddonRef.current) {
-        try {
-          webglAddonRef.current.dispose()
-        } catch {
-          // Ignore disposal errors
-        }
-        webglAddonRef.current = null
-      }
-    }
+    syncWebglPreference(terminalRef.current, webglAddonRef, useWebGLRef, useWebGL)
   }, [useWebGL])
 
   // Revoke input synchronously when selection or connection intent changes.
@@ -1204,253 +869,52 @@ export function useTerminal({
 
   // Handle session changes and websocket reconnects - attach/detach.
   useEffect(() => {
-    const terminal = terminalRef.current
-    if (!terminal) return
-
-    const prevAttached = attachedSessionRef.current
-    const prevTarget = attachedTargetRef.current
-
-    if (!allowAttach) {
-      updateReadySession(null)
-      if (attachDebounceRef.current !== null) {
-        window.clearTimeout(attachDebounceRef.current)
-        attachDebounceRef.current = null
-      }
-      if (prevAttached) {
-        sendMessageRef.current({ type: 'terminal-detach', sessionId: prevAttached })
-        attachedSessionRef.current = null
-        attachedTargetRef.current = null
-        attachedConnectionEpochRef.current = -1
-        focusAfterAttachSessionRef.current = null
-        setTmuxCopyMode(false)
-      }
-      terminal.reset()
-      needsResetRef.current = false
-      invalidateWriteBackpressure()
-      setIsSwitching(false)
-      return
-    }
-
-    // Reattach when websocket comes back: server-side ws.currentSessionId is
-    // cleared on disconnect, so input is ignored until a fresh terminal-attach.
-    if (connectionStatus !== 'connected') {
-      updateReadySession(null)
-      if (attachDebounceRef.current !== null) {
-        window.clearTimeout(attachDebounceRef.current)
-        attachDebounceRef.current = null
-      }
-      if (prevAttached) {
-        clientLog('terminal_detach_on_disconnect', { connectionStatus, prevAttached })
-        attachedSessionRef.current = null
-        attachedTargetRef.current = null
-        attachedConnectionEpochRef.current = -1
-        focusAfterAttachSessionRef.current = null
-        setTmuxCopyMode(false)
-      }
-      // Server state may have changed — all snapshots are potentially stale
-      clearSnapshotCache()
-      needsResetRef.current = false
-      invalidateWriteBackpressure()
-      setIsSwitching(false)
-      return
-    }
-
-    // Detach from previous session first
-    if (prevAttached && prevAttached !== sessionId) {
-      updateReadySession(null)
-      // Capture terminal snapshot before detach for instant restore on switch-back
-      try {
-        const serialized = serializeAddonRef.current?.serialize()
-        if (serialized) {
-          cacheSnapshot(prevAttached, serialized)
+    return syncAttachment({
+      sessionId,
+      tmuxTarget,
+      allowAttach,
+      connectionStatus,
+      connectionEpoch,
+      send: (message) => sendMessageRef.current(message),
+      getTerminal: () => terminalRef.current,
+      getFitAddon: () => fitAddonRef.current,
+      serialize: () => serializeAddonRef.current?.serialize(),
+      drainOutputBuffer: () => {
+        outputBufferRef.current = []
+        if (idleTimerRef.current !== null) {
+          window.clearTimeout(idleTimerRef.current)
+          idleTimerRef.current = null
         }
-      } catch {
-        // serialize() can fail on a disposed terminal — ignore
-      }
-      sendMessageRef.current({ type: 'terminal-detach', sessionId: prevAttached })
-      attachedSessionRef.current = null
-      attachedTargetRef.current = null
-      attachedConnectionEpochRef.current = -1
-      focusAfterAttachSessionRef.current = null
-      // Reset copy-mode state - each session has its own scroll position
-      setTmuxCopyMode(false)
-    }
-
-    // Attach to new session
-    const attachedEpoch = attachedConnectionEpochRef.current
-    const needsReattachForConnection = connectionEpoch !== attachedEpoch
-
-    if (sessionId && (sessionId !== prevAttached || tmuxTarget !== prevTarget || needsReattachForConnection)) {
-      clientLog('terminal_attach', {
-        sessionId,
-        tmuxTarget,
-        prevAttached,
-        prevTarget,
-        connectionStatus,
-        connectionEpoch,
-        attachedEpoch,
-      })
-      const switchStart = performance.now()
-
-      // Defer reset until history arrives (no blank flash).
-      // Drain stale output buffer first — prevents old session's data
-      // from consuming the one-shot reset meant for new session's history.
-      outputBufferRef.current = []
-      if (idleTimerRef.current !== null) {
-        window.clearTimeout(idleTimerRef.current)
-        idleTimerRef.current = null
-      }
-      if (maxTimerRef.current !== null) {
-        window.clearTimeout(maxTimerRef.current)
-        maxTimerRef.current = null
-      }
-      // Supersede pending writes from the previous session: their acks must
-      // not touch the new attachment's accounting (design D7).
-      invalidateWriteBackpressure()
-      needsResetRef.current = true
-      setIsSwitching(true)
-      if (prevAttached !== null) {
-        updateReadySession(null)
-      }
-
-      // Instantly show cached snapshot for the target session (if available)
-      const cached = getCachedSnapshot(sessionId)
-      if (cached) {
-        terminal.reset()
-        // Isolated lifecycle boundary (design D7 audit): the snapshot restore
-        // runs right after backpressure invalidation above, unaccounted —
-        // pre-switch acks are already stale and the streaming path starts
-        // clean at count zero when live history flushes.
-        terminal.write(cached)
-        // needsResetRef stays true — live history will replace the snapshot
-      }
-
-      // Fit terminal first to get accurate dimensions
-      const fitAddon = fitAddonRef.current
-      if (fitAddon) {
-        fitAddon.fit()
-      }
-      const fitDone = performance.now()
-
-      // Mark refs before sending so the output subscriber can match
-      // incoming messages to the correct session. Input is naturally suppressed
-      // because terminal-input uses attachedSessionRef which won't reach the
-      // server until ws.data.currentSessionId is set by the server's handler.
-      attachedSessionRef.current = sessionId
-      attachedTargetRef.current = tmuxTarget ?? null
-      attachedConnectionEpochRef.current = connectionEpoch
-      focusAfterAttachSessionRef.current = sessionId
-
-      // Store the start time so the output subscriber can measure end-to-end
-      switchStartRef.current = switchStart
-
-      // Cancel any pending attach from a rapid epoch change
-      if (attachDebounceRef.current !== null) {
-        window.clearTimeout(attachDebounceRef.current)
-        attachDebounceRef.current = null
-      }
-
-      const attachMsg = {
-        type: 'terminal-attach' as const,
-        sessionId,
-        tmuxTarget: tmuxTarget ?? undefined,
-        cols: terminal.cols,
-        rows: terminal.rows,
-      }
-
-      const isSessionSwitch = prevAttached !== null && prevAttached !== sessionId
-
-      // Session switch (e.g. after kill): use microtask so the message is sent
-      // after the current React commit phase but before the browser yields to
-      // new tasks — cannot be cancelled by effect cleanup unlike setTimeout.
-      // Reconnection / epoch change: use 50ms debounce to deduplicate rapid
-      // re-attaches from rapid epoch changes.
-      if (isSessionSwitch) {
-        const attachTarget = sessionId
-        queueMicrotask(() => {
-          // Guard: skip if a newer switch already changed the target
-          if (attachedSessionRef.current !== attachTarget) return
-          sendMessageRef.current(attachMsg)
-          sendMessageRef.current({ type: 'tmux-check-copy-mode', sessionId })
-        })
-      } else {
-        attachDebounceRef.current = window.setTimeout(() => {
-          attachDebounceRef.current = null
-          sendMessageRef.current(attachMsg)
-          sendMessageRef.current({ type: 'tmux-check-copy-mode', sessionId })
-        }, 50)
-      }
-
-      clientLog('switch_attach_sent', {
-        sessionId,
-        fitMs: Math.round(fitDone - switchStart),
-        totalMs: Math.round(performance.now() - switchStart),
-        from: prevAttached ?? null,
-        immediate: isSessionSwitch,
-      })
-    }
-
-    // No attach needed — already attached to this session+target
-    if (
-      sessionId &&
-      sessionId === prevAttached &&
-      tmuxTarget === prevTarget &&
-      !needsReattachForConnection
-    ) {
-      clientLog('terminal_attach_skip', {
-        sessionId,
-        prevAttached,
-        connectionStatus,
-        connectionEpoch,
-        attachedEpoch,
-      })
-    }
-    // Handle deselection — cancel any pending debounced attach
-    if (!sessionId && prevAttached) {
-      if (attachDebounceRef.current !== null) {
-        window.clearTimeout(attachDebounceRef.current)
-        attachDebounceRef.current = null
-      }
-      attachedSessionRef.current = null
-      attachedTargetRef.current = null
-      attachedConnectionEpochRef.current = -1
-      focusAfterAttachSessionRef.current = null
-      updateReadySession(null)
-      // Detach boundary: old acks must not touch later accounting (design D7)
-      invalidateWriteBackpressure()
-    }
-
-    // Cancel pending debounced attach on effect re-run or unmount
-    return () => {
-      if (attachDebounceRef.current !== null) {
-        clientLog('attach_debounce_cancelled', {
-          sessionId,
-          attachedSession: attachedSessionRef.current,
-        }, 'info')
-        window.clearTimeout(attachDebounceRef.current)
-        attachDebounceRef.current = null
-      }
-    }
+        if (maxTimerRef.current !== null) {
+          window.clearTimeout(maxTimerRef.current)
+          maxTimerRef.current = null
+        }
+      },
+      updateReadySession,
+      setTmuxCopyMode,
+      invalidateWriteBackpressure,
+      setIsSwitching,
+      refs: {
+        attachedSession: attachedSessionRef,
+        attachedTarget: attachedTargetRef,
+        attachedConnectionEpoch: attachedConnectionEpochRef,
+        focusAfterAttachSession: focusAfterAttachSessionRef,
+        attachDebounce: attachDebounceRef,
+        switchStart: switchStartRef,
+        needsReset: needsResetRef,
+      },
+    })
   }, [sessionId, tmuxTarget, allowAttach, connectionStatus, connectionEpoch, checkScrollPosition, setTmuxCopyMode, invalidateWriteBackpressure, updateReadySession])
 
   useEffect(() => {
-    if (copyModePollIntervalRef.current !== null) {
-      globalThis.clearInterval(copyModePollIntervalRef.current)
-      copyModePollIntervalRef.current = null
-    }
+    copyMode.stopPoll()
 
     if (!sessionId || !allowAttach || connectionStatus !== 'connected') return
 
-    copyModePollIntervalRef.current = globalThis.setInterval(() => {
-      if (attachedSessionRef.current !== sessionId) return
-      sendMessageRef.current({ type: 'tmux-check-copy-mode', sessionId })
-    }, 750)
+    copyMode.startPoll(sessionId)
 
     return () => {
-      if (copyModePollIntervalRef.current !== null) {
-        globalThis.clearInterval(copyModePollIntervalRef.current)
-        copyModePollIntervalRef.current = null
-      }
+      copyMode.stopPoll()
     }
   }, [sessionId, allowAttach, connectionStatus])
 
@@ -1707,17 +1171,7 @@ export function useTerminal({
         attachedSession &&
         message.sessionId === attachedSession
       ) {
-        const nextAppMouse = message.appMouse === true && !message.inCopyMode
-        const wasAppMouse = appMouseRef.current
-        appMouseRef.current = nextAppMouse
-        altScreenRef.current = message.altScreen === true
-
-        if (!wasAppMouse && nextAppMouse) {
-          flushOutputBeforeControlRef.current?.()
-          terminalRef.current?.write(ENABLE_MOUSE_TRACKING)
-        }
-
-        setTmuxCopyMode(message.inCopyMode)
+        copyMode.handleStatus(message)
       }
     })
 
@@ -1768,98 +1222,19 @@ export function useTerminal({
     }
   }, [])
 
-  // Force iOS compositor repaint on visibility resume.
-  // iOS WKWebView shows a stale cached snapshot after background/foreground.
-  // Uses shared scheduleIosRepaint/cancelIosRepaint so the visibility and
-  // terminal-ready repaint paths can't interfere with each other.
-  //
-  // Also recreate WebGL context — iOS can silently kill it during background.
+  // Force iOS compositor repaint on visibility resume (terminal/iosRepaint.ts):
+  // WKWebView shows a stale cached snapshot after background/foreground, and
+  // iOS can silently kill the WebGL context — visibility/pageshow/focus each
+  // trigger a recreate + repaint, coalesced through the shared scheduler.
   useEffect(() => {
-    if (typeof document === 'undefined' || typeof document.addEventListener !== 'function') return
-
-    // Log visibility changes unconditionally for diagnostics
-    const handleVisibilityDiag = () => {
-      if (document.visibilityState !== 'hidden') {
-        clientLog('terminal_visibility_resume', {
-          isiOS,
-          hasWebGL: !!webglAddonRef.current,
-          useWebGL: useWebGLRef.current,
-          hasTerminal: !!terminalRef.current,
-          bufferLines: terminalRef.current?.buffer.active.length ?? 0,
-          sessionId: attachedSessionRef.current,
-        }, 'info')
-      }
-    }
-    document.addEventListener('visibilitychange', handleVisibilityDiag)
-
-    if (!isiOS) {
-      return () => {
-        document.removeEventListener('visibilitychange', handleVisibilityDiag)
-      }
-    }
-
-    // iOS can silently kill the WebGL context during background without
-    // firing onContextLoss. Force-recreate the addon to get a fresh context.
-    // Without this, xterm renders through a dead WebGL context → blank screen.
-    // Called from multiple resume handlers because iOS doesn't reliably fire
-    // visibilitychange (WebKit #202399) — focus is often the only event.
-    const recreateWebGLIfNeeded = (trigger: string) => {
-      const terminal = terminalRef.current
-      if (terminal && webglAddonRef.current && useWebGLRef.current) {
-        try {
-          webglAddonRef.current.dispose()
-        } catch { /* ignore */ }
-        webglAddonRef.current = null
-        try {
-          const webglAddon = new WebglAddon()
-          webglAddon.onContextLoss(() => {
-            clientLog('webgl_context_loss', { sessionId: attachedSessionRef.current }, 'info')
-            try { webglAddon.dispose() } catch { /* ignore */ }
-            webglAddonRef.current = null
-          })
-          terminal.loadAddon(webglAddon)
-          webglAddonRef.current = webglAddon
-          clientLog('ios_webgl_recreated', { trigger }, 'info')
-        } catch {
-          clientLog('ios_webgl_recreate_failed', { trigger }, 'info')
-        }
-      }
-    }
-
-    const handleVisibility = () => {
-      // Skip hidden transitions. Don't require 'visible' specifically —
-      // visibilityState can be wrong in iOS PWA standalone (WebKit #202399).
-      if (document.visibilityState === 'hidden') return
-      recreateWebGLIfNeeded('visibilitychange')
-      scheduleIosRepaint(200, 'visibilitychange', iosRepaintTarget)
-    }
-
-    const handlePageShow = (e: PageTransitionEvent) => {
-      // pageshow fires on BFCache/freeze restore — more reliable than
-      // visibilitychange in iOS PWA standalone mode.
-      if (!e.persisted) return
-      recreateWebGLIfNeeded('pageshow')
-      scheduleIosRepaint(200, 'pageshow', iosRepaintTarget)
-    }
-
-    const handleFocus = () => {
-      // Fallback: window 'focus' reliably fires when an iOS PWA returns
-      // to the foreground, even when visibilitychange doesn't fire
-      // (WebKit #202399) and the WebSocket stays alive (no reconnect).
-      recreateWebGLIfNeeded('focus')
-      scheduleIosRepaint(200, 'focus', iosRepaintTarget)
-    }
-
-    document.addEventListener('visibilitychange', handleVisibility)
-    window.addEventListener('pageshow', handlePageShow)
-    window.addEventListener('focus', handleFocus)
-    return () => {
-      document.removeEventListener('visibilitychange', handleVisibilityDiag)
-      document.removeEventListener('visibilitychange', handleVisibility)
-      window.removeEventListener('pageshow', handlePageShow)
-      window.removeEventListener('focus', handleFocus)
-      cancelIosRepaint(iosRepaintTarget)
-    }
+    return installVisibilityHandlers({
+      isIOS: isiOS,
+      getTerminal: () => terminalRef.current,
+      webglAddonRef,
+      useWebGLRef,
+      getSessionId: () => attachedSessionRef.current,
+      repaintTarget: iosRepaintTarget,
+    })
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 

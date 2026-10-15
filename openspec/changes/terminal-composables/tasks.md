@@ -21,7 +21,7 @@ tick the checkbox in the same commit. Implementation starts only after PR #96 (S
   (rate limiter + `resetDroppedOutputRateLimiterForTests`), `terminal/iosRepaint.ts`, and
   the link-sanitize helpers; re-export/update importers (`App.tsx`, `sessionMessages.ts`,
   tests) so the public functions keep their paths or move cleanly
-- [ ] 1.2 Extract `terminal/webgl.ts` (`loadWebglAddon(terminal, onContextLoss)`),
+- [x] 1.2 Extract `terminal/webgl.ts` (`loadWebglAddon(terminal, onContextLoss)`),
   `terminal/attachState.ts` (`detachFrom`, cancel-pending-attach), and
   `terminal/copyMode.ts` (`exitTmuxCopyMode(send, sessionId)`) as verbatim bodies the
   hook calls; suite green; commit (`refactor: move terminal concerns into terminal/ modules`)

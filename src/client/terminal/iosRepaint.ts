@@ -5,6 +5,7 @@
 // the display value if caught mid-toggle.
 import type { Terminal } from '@xterm/xterm'
 import { clientLog } from '../utils/clientLog'
+import { recreateWebglAddonIfLive, type WebglAddonRef } from './webgl'
 
 /** Live accessors for the owning hook's refs (design D2: refs stay hook-owned). */
 export interface IosRepaintTarget {
@@ -75,4 +76,83 @@ export function scheduleIosRepaint(
       })
     })
   }, delayMs)
+}
+
+export interface VisibilityHandlerDeps {
+  isIOS: boolean
+  getTerminal: () => Terminal | null
+  webglAddonRef: WebglAddonRef
+  useWebGLRef: { current: boolean }
+  getSessionId: () => string | null
+  repaintTarget: IosRepaintTarget
+}
+
+/**
+ * Install the visibility resume handling: a visibilitychange diagnostic log
+ * on every platform, plus (iOS only) WebGL context force-recreate and a
+ * compositor repaint on visibilitychange/pageshow/focus — iOS doesn't
+ * reliably fire visibilitychange (WebKit #202399), so focus is often the
+ * only event. Returns the cleanup.
+ */
+export function installVisibilityHandlers(deps: VisibilityHandlerDeps): () => void {
+  const { isIOS, repaintTarget } = deps
+  if (typeof document === 'undefined' || typeof document.addEventListener !== 'function') {
+    return () => {}
+  }
+
+  // Log visibility changes unconditionally for diagnostics
+  const handleVisibilityDiag = () => {
+    if (document.visibilityState !== 'hidden') {
+      clientLog('terminal_visibility_resume', {
+        isiOS: isIOS,
+        hasWebGL: !!deps.webglAddonRef.current,
+        useWebGL: deps.useWebGLRef.current,
+        hasTerminal: !!deps.getTerminal(),
+        bufferLines: deps.getTerminal()?.buffer.active.length ?? 0,
+        sessionId: deps.getSessionId(),
+      }, 'info')
+    }
+  }
+  document.addEventListener('visibilitychange', handleVisibilityDiag)
+
+  if (!isIOS) {
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityDiag)
+    }
+  }
+
+  const handleVisibility = () => {
+    // Skip hidden transitions. Don't require 'visible' specifically —
+    // visibilityState can be wrong in iOS PWA standalone (WebKit #202399).
+    if (document.visibilityState === 'hidden') return
+    recreateWebglAddonIfLive(deps.getTerminal(), deps.webglAddonRef, deps.useWebGLRef, deps.getSessionId, 'visibilitychange')
+    scheduleIosRepaint(200, 'visibilitychange', repaintTarget)
+  }
+
+  const handlePageShow = (e: PageTransitionEvent) => {
+    // pageshow fires on BFCache/freeze restore — more reliable than
+    // visibilitychange in iOS PWA standalone mode.
+    if (!e.persisted) return
+    recreateWebglAddonIfLive(deps.getTerminal(), deps.webglAddonRef, deps.useWebGLRef, deps.getSessionId, 'pageshow')
+    scheduleIosRepaint(200, 'pageshow', repaintTarget)
+  }
+
+  const handleFocus = () => {
+    // Fallback: window 'focus' reliably fires when an iOS PWA returns
+    // to the foreground, even when visibilitychange doesn't fire
+    // (WebKit #202399) and the WebSocket stays alive (no reconnect).
+    recreateWebglAddonIfLive(deps.getTerminal(), deps.webglAddonRef, deps.useWebGLRef, deps.getSessionId, 'focus')
+    scheduleIosRepaint(200, 'focus', repaintTarget)
+  }
+
+  document.addEventListener('visibilitychange', handleVisibility)
+  window.addEventListener('pageshow', handlePageShow)
+  window.addEventListener('focus', handleFocus)
+  return () => {
+    document.removeEventListener('visibilitychange', handleVisibilityDiag)
+    document.removeEventListener('visibilitychange', handleVisibility)
+    window.removeEventListener('pageshow', handlePageShow)
+    window.removeEventListener('focus', handleFocus)
+    cancelIosRepaint(repaintTarget)
+  }
 }
