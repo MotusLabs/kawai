@@ -137,11 +137,15 @@ After provisioning, the execution SHALL create one task for the change. Its crea
 - **THEN** each unlanded change gets a new task created by Kawai, and the stopped execution's cancelled tasks stay as they were
 
 ### Requirement: A failed instruction stops the change
-When an instruction Kawai dispatched for a change fails, because its mail was dead-lettered, cancelled, or discarded, the change SHALL stop as `instruction-failed`, naming the instruction and the mail's reason. Kawai SHALL NOT dispatch a replacement on its own.
+When an instruction Kawai dispatched for a change fails, because its mail was dead-lettered, cancelled, or discarded, the change SHALL stop as `instruction-failed`, naming the instruction and the mail's reason. Kawai SHALL NOT dispatch a replacement on its own. An instruction that Kawai itself superseded with a later stage SHALL NOT count as failed.
 
 #### Scenario: The human cancels Kawai's instruction
 - **WHEN** the human cancels a queued fix instruction in the Mailbox
 - **THEN** the change stops as `instruction-failed`, naming that instruction and the cancellation, and no other instruction is dispatched for it
+
+#### Scenario: Kawai supersedes a queued stage
+- **WHEN** the human publishes a new task revision while the change's review handoff is still queued
+- **THEN** Kawai's fix attempt supersedes the review handoff and its mail is cancelled, and the change does not stop
 
 #### Scenario: The worktree disappears under queued mail
 - **WHEN** the change's worktree is removed by hand while its fix instruction is queued
@@ -187,6 +191,10 @@ When the human publishes a new revision of a running change's task before its me
 - **WHEN** the human publishes a new task revision while the change holds the landing slot and waits for CI on its base merge
 - **THEN** the round is superseded, the change leaves the landing slot, and the fix attempt's result is gated as a new round
 
+#### Scenario: Direction changed while Kawai updates the branch
+- **WHEN** the human publishes a new task revision while GitHub merges the base into the change's branch, and that update conflicts
+- **THEN** once the update settles, one fix attempt is dispatched, naming the revision, the base head, and the conflicting files, and no update attempt is dispatched
+
 #### Scenario: Direction changed while implementing
 - **WHEN** the human publishes a new task revision while the implementer is still working and no round is gating
 - **THEN** no attempt is dispatched, the implementer receives the revision notice, and its next result pins the new revision
@@ -225,14 +233,14 @@ Once a round's CI passes, Kawai SHALL hand the result to the change's review gro
 - **THEN** the round fails and its findings go into the fix attempt's instruction
 
 ### Requirement: Only an independent claimant's verdict counts
-Only a `pass` verdict on the round's result from the review handoff's claimant SHALL satisfy the review, and only if the claimant authored none of the change's results in the execution. Other findings SHALL be recorded but SHALL NOT count. When the claimant, following forwards, is such an author, the change SHALL stop as `review-unavailable`, naming the claimant.
+Only a `pass` verdict on the round's result from the review handoff's claimant SHALL satisfy the review, and only if the claimant authored none of the change's results in the execution. Other findings SHALL be recorded but SHALL NOT count. When the claimant, following forwards, is such an author, the change SHALL stop as `review-unavailable` as soon as the claim is known, before any findings, naming the claimant.
 
 #### Scenario: The author cannot pass its own work
-- **WHEN** the session that submitted a change's result also submits a `pass` verdict on it
+- **WHEN** a session that submitted one of the change's results, and is not the review handoff's claimant, submits a `pass` verdict on the round's result
 - **THEN** the verdict is recorded and the round still waits for the review handoff's claimant
 
 #### Scenario: An author claims the review
-- **WHEN** the review handoff is claimed by a session that submitted one of the change's results
+- **WHEN** the review handoff is claimed by a session that submitted one of the change's results, and that session submits no findings
 - **THEN** the change stops as `review-unavailable`, naming that session, and Retry dispatches the review again
 
 ### Requirement: A worktree-scoped review group gets the worktree

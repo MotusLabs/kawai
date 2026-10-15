@@ -150,4 +150,4 @@ Non-goals:
 - **Sequencing.**
   - Implement after `durable-plans`, `strategy-revision-impact`, and `plan-validation`.
   - `integration-candidates` follows and implements the landing contract.
-  - `plan-supervision`, `revision-control`, and `execution-safety-recovery` build on this change's contracts (design D14).
+  - `plan-supervision`, `revision-control`, and `execution-safety-recovery` build on this change's contracts (design D20).

@@ -47,7 +47,7 @@ Implement after `durable-plans`, `strategy-revision-impact`, and `plan-validatio
 ## 3. Records
 
 - [ ] 3.1 Add the D3 migration: seven tables including `plan_landing_slots`, the partial unique indexes, the nullable effect `change`, and `team_messages.allowed_profiles`. Verify with a migration test on an existing database: tables created, old rows intact, rerun idempotent.
-- [ ] 3.2 Implement `executionStore.ts`: inserts, transitions guarded by `state` and `generation`, owned-change lookups, taking and releasing the slot row in the transitions that enter and leave landing, and constraint errors mapped to `one-execution`, `changes-unclaimed`, and slot taken. Verify with unit tests, including two racing inserts per index and two racing slot takes.
+- [ ] 3.2 Implement `executionStore.ts`: inserts, transitions guarded by `state` and `generation`, owned-change lookups, taking and releasing the slot row in the transitions that enter and leave landing, clearing an orphan slot row (D3), and constraint errors mapped to `one-execution`, `changes-unclaimed`, and slot taken. Verify with unit tests, including two racing inserts per index, two racing slot takes, and a slot row held by a change outside `landing` cleared at startup and when the slot is found taken.
 - [ ] 3.3 Add `PlanService.recordExecutionEvent` for the kinds `execution-started`, `execution-stopped`, and `change-retried`, with the D3 compared payloads, and `completed` with actor `system` under the command id `exec:<id>:complete`. Verify with replay tests: same payload returns the prior result; a different payload is refused naming the field; a repeated completion writes one event. Verify with a grep test that only `PlanService`'s store writes `plan_events`.
 
 ## 4. Settings
@@ -107,7 +107,11 @@ Implement after `durable-plans`, `strategy-revision-impact`, and `plan-validatio
 
 ## 12. Rounds and the gate
 
-- [ ] 12.1 Create rounds from new results, superseding the current round, passed or not, unless its merge started, and releasing the slot when the change held it. Supersede on a new task revision and dispatch a fix attempt naming it, after any running `update-branch` effect settles. Verify with the round-supersession scenarios, including a revision published while the change holds the slot and waits for CI on its base merge.
+- [ ] 12.1 Create rounds from new results, superseding the current round, passed or not, unless its merge started, and releasing the slot when the change held it. Supersede on a new task revision and dispatch a fix attempt naming it, after any running `update-branch` effect settles (D9). Verify with the round-supersession scenarios, including:
+  - a revision published while the change holds the slot and waits for CI on its base merge;
+  - a revision published during an update that then conflicts dispatches one fix attempt, naming the revision, the base head, and the files, and no update attempt;
+  - a revision published during an update that then passes the clean-merge check continues from the updated head;
+  - the superseded review handoff's cancelled mail does not stop the change as `instruction-failed`.
 - [ ] 12.2 Run the push and open-pr effects for each round (plan-landing push and PR rules). Verify against a bare `origin` and the stub `gh`: reuse across rounds; an implementer's own push accepted; a moved branch stops as `effect-failed`; a closed PR stops as `pr-closed`.
 - [ ] 12.3 Poll CI and request the single rerun (D10). Record checks, flaky marks, and stops. Verify with tests driving the stub `gh` through pending, failed, rerun, and passed states, and through both timeouts.
 - [ ] 12.4 Release before review for worktree-scoped review groups, then dispatch the review handoff with the instruction, allowed profiles, and author tags (D11). Verify with tests: a not-ready member holds the step with its reason; an unscoped group leaves the implementer; human sessions are never released.
@@ -117,7 +121,7 @@ Implement after `durable-plans`, `strategy-revision-impact`, and `plan-validatio
 
 - [ ] 13.1 Dispatch fix attempts with the failing checks, findings, count, and continue-from commit. Apply the round limit. Verify with the fix-round and round-limit scenarios.
 - [ ] 13.2 Detect failed instructions and human task closes. Verify with the `instruction-failed` and `task-closed` scenarios, including a hand acceptance that merges nothing.
-- [ ] 13.3 Implement Retry for every stop reason with a new generation (D12), and the wait for a free slot. Implement the `review-unavailable` stop when an author claims the review. Verify with one test per reason, that Retry is refused while the task is closed, and that a `name-taken` change, which has no task, can be retried.
+- [ ] 13.3 Implement Retry for every stop reason with a new generation (D12), and the wait for a free slot. Implement the `review-unavailable` stop when an author claims the review, checked on the claim before any findings (D11). Verify with one test per reason, that Retry is refused while the task is closed, that a `name-taken` change, which has no task, can be retried, and that an author's claim stops the change with no findings submitted.
 - [ ] 13.4 Implement Stop and the plan-close hook (D12, D19): cancel tasks as Kawai with member release, cancel pending effects, and settle a running merge first. Verify with the Stop scenarios, including Stop during a merge.
 
 ## 14. Direct landing and completion
@@ -132,7 +136,7 @@ Implement after `durable-plans`, `strategy-revision-impact`, and `plan-validatio
 - [ ] 14.3 Implement the pre-merge base re-read, the pinned merge, the landing fact with `base_sha` and `tree_verified`, Kawai's acceptance, worktree removal when safe, and post-landing CI as evidence. Verify with tests:
   - a base that moved before the merge returns the change to the up-to-date step;
   - a moved head is refused and nothing merged;
-  - the fact is written once, and `tree_verified` is 0 when the base moved between the re-read and the merge;
+  - the fact is written once, and `tree_verified` is 1 for a landing whose base held still under each of `merge`, `squash`, and `rebase`, and 0 when the base moved between the re-read and the merge;
   - the task is done and its members are released once ready;
   - a live session keeps the worktree;
   - a failing base branch keeps the change landed.
