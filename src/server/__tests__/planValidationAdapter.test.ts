@@ -1,0 +1,198 @@
+// The OpenSpec adapter (plan-validation design D3) against a stub CLI on a
+// private PATH and an injected runner. No test spawns the real OpenSpec CLI
+// or reaches the network. The stub is a bash script in a temporary directory
+// prepended to PATH for the duration of each spawn test.
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import { OpenspecAdapter, type OpenspecCall, type OpenspecRunner } from '../plans/validation/openspecAdapter'
+
+const STUB = `#!/usr/bin/env bash
+# Concurrency accounting under flock: count and peak, exact across processes.
+enter() {
+  exec 9>>"$STUB_LOCK"
+  flock 9
+  local count peak
+  count=$(cat "$STUB_COUNT" 2>/dev/null || echo 0); count=$((count + 1)); echo "$count" > "$STUB_COUNT"
+  peak=$(cat "$STUB_PEAK" 2>/dev/null || echo 0); [ "$count" -gt "$peak" ] && echo "$count" > "$STUB_PEAK"
+  flock -u 9
+}
+leave() {
+  exec 9>>"$STUB_LOCK"
+  flock 9
+  local count; count=$(cat "$STUB_COUNT" 2>/dev/null || echo 1); echo "$((count - 1))" > "$STUB_COUNT"
+  flock -u 9
+}
+case "$1" in
+  --version)
+    echo "$STUB_VERSION"
+    exit 0
+    ;;
+  validate)
+    enter
+    trap leave EXIT
+    case "$2" in
+      broken)
+        printf '{"items":[{"id":"broken","type":"change","valid":false,"issues":[{"level":"ERROR","path":"spec.md","message":"No deltas"}]}]}'
+        exit 1
+        ;;
+      sleeper) sleep 2; printf '{}'; exit 0 ;;
+      *) printf '{"items":[{"id":"%s","type":"change","valid":true,"issues":[]}],"summary":{}}' "$2"; exit 0 ;;
+    esac
+    ;;
+  show)
+    case "$2" in
+      rename-change)
+        printf '{"deltas":[{"spec":"chat","operation":"RENAMED","description":"renames","rename":{"from":"Old","to":"New"}}]}'
+        ;;
+      broken-rename)
+        printf '{"deltas":[{"spec":"chat","operation":"RENAMED","rename":{"from":"Old"}}]}'
+        ;;
+      no-requirement)
+        printf '{"deltas":[{"spec":"chat","operation":"ADDED","description":"no requirement"}]}'
+        ;;
+      alpha)
+        printf '{"deltas":[{"spec":"chat","operation":"MODIFIED","requirement":{"name":"Presence"}}]}'
+        ;;
+      *)
+        printf '{"deltas":[]}'
+        ;;
+    esac
+    exit 0
+    ;;
+esac
+printf 'unknown command'; exit 2
+`
+
+const runner = (result: Partial<OpenspecCall>): OpenspecRunner => async () => ({ ok: true, exitCode: 0, stdout: '', stderr: '', timedOut: false, ...result })
+
+describe('OpenspecAdapter probe', () => {
+  test('a valid version grants both capabilities', async () => {
+    const probe = await new OpenspecAdapter(runner({ stdout: '1.14.2\n' })).probe(true)
+    expect(probe).toEqual({ tool: 'openspec', version: '1.14.2', capabilities: ['validate-strict-json', 'show-deltas-json'], ok: true, error: null })
+  })
+
+  test('an unparsable version and a below-floor version are unavailable, never success', async () => {
+    const unparsable = await new OpenspecAdapter(runner({ stdout: 'openspec tomorrow\n' })).probe(true)
+    expect(unparsable.ok).toBe(false)
+    expect(unparsable.version).toBeNull()
+    expect(unparsable.capabilities).toEqual([])
+    const old = await new OpenspecAdapter(runner({ stdout: '1.12.0\n' })).probe(true)
+    expect(old.ok).toBe(false)
+    expect(old.error).toContain('below the supported floor')
+    // A missing executable (the spawn failed) is unavailable too.
+    const missing = await new OpenspecAdapter(async () => ({ ok: false, exitCode: null, stdout: '', stderr: 'openspec spawn failed', timedOut: false })).probe(true)
+    expect(missing.ok).toBe(false)
+    expect(missing.error).toBe('openspec executable not found')
+  })
+
+  test('caches the probe for ten minutes and re-probes on force', async () => {
+    let calls = 0
+    const counting: OpenspecRunner = async () => { calls += 1; return { ok: true, exitCode: 0, stdout: '1.14.2', stderr: '', timedOut: false } }
+    const adapter = new OpenspecAdapter(counting)
+    await adapter.probe(true)
+    await adapter.probe()
+    await adapter.probe()
+    expect(calls).toBe(1)
+    await adapter.probe(true)
+    expect(calls).toBe(2)
+  })
+})
+
+describe('OpenspecAdapter validate and showDeltas through a stub CLI', () => {
+  const originalPath = process.env.PATH
+  let dir: string
+  let log: string
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kawai-openspec-stub-'))
+    log = path.join(dir, 'calls.log')
+    fs.writeFileSync(path.join(dir, 'openspec'), STUB, { mode: 0o755 })
+    process.env.PATH = `${dir}:${originalPath}`
+    process.env.STUB_LOG = log
+    process.env.STUB_LOCK = path.join(dir, 'stub.lock')
+    process.env.STUB_COUNT = path.join(dir, 'stub.count')
+    process.env.STUB_PEAK = path.join(dir, 'stub.peak')
+    process.env.STUB_VERSION = '1.14.2'
+  })
+
+  afterEach(() => {
+    process.env.PATH = originalPath
+    delete process.env.STUB_LOG
+    delete process.env.STUB_LOCK
+    delete process.env.STUB_COUNT
+    delete process.env.STUB_PEAK
+    delete process.env.STUB_VERSION
+    fs.rmSync(dir, { recursive: true, force: true })
+  })
+
+  test('a missing executable is unavailable', async () => {
+    process.env.PATH = dir.replace(/^[^:]+:/, '') // drop the stub dir; keep the rest
+    fs.rmSync(path.join(dir, 'openspec'))
+    const probe = await new OpenspecAdapter(undefined, 2_000).probe(true)
+    expect(probe.ok).toBe(false)
+    expect(probe.error).toBe('openspec executable not found')
+  })
+
+  test('a valid and an invalid change', async () => {
+    const adapter = new OpenspecAdapter(undefined, 5_000)
+    const valid = await adapter.validate(dir, 'good-change')
+    expect(valid).toEqual({ ok: true, error: null, valid: true, issues: [], issueCount: 0 })
+    const invalid = await adapter.validate(dir, 'broken')
+    expect(invalid.ok).toBe(true)
+    expect(invalid.valid).toBe(false)
+    expect(invalid.issues).toEqual([{ level: 'ERROR', message: 'No deltas' }])
+  })
+
+  test('a timeout is an error for that change', async () => {
+    const adapter = new OpenspecAdapter(undefined, 200)
+    const outcome = await adapter.validate(dir, 'sleeper')
+    expect(outcome.ok).toBe(false)
+    expect(outcome.error).toContain('timed out')
+  })
+
+  test('unknown JSON shapes are errors', async () => {
+    const adapter = new OpenspecAdapter(runner({ stdout: '{"summary":{}}' }), 5_000)
+    const validate = await adapter.validate(dir, 'good-change')
+    expect(validate.ok).toBe(false)
+    expect(validate.error).toContain('unknown shape')
+    const show = await new OpenspecAdapter(runner({ stdout: '{"deltas":"no"}' }), 5_000).showDeltas(dir, 'good-change')
+    expect(show.ok).toBe(false)
+    expect(show.error).toContain('unknown shape')
+    const noJson = await new OpenspecAdapter(runner({ stdout: 'plain text', ok: false, exitCode: 1 }), 5_000).validate(dir, 'good-change')
+    expect(noJson.ok).toBe(false)
+    expect(noJson.error).toContain('no JSON')
+  })
+
+  test('a RENAMED delta yields two touches; a rename missing a name is an error', async () => {
+    const adapter = new OpenspecAdapter(undefined, 5_000)
+    const renamed = await adapter.showDeltas(dir, 'rename-change')
+    expect(renamed).toEqual({
+      ok: true, error: null,
+      touches: [
+        { capability: 'chat', operation: 'RENAMED', requirement: 'Old' },
+        { capability: 'chat', operation: 'RENAMED', requirement: 'New' },
+      ],
+    })
+    const broken = await adapter.showDeltas(dir, 'broken-rename')
+    expect(broken.ok).toBe(false)
+    expect(broken.error).toContain('RENAMED delta without both names')
+    const noRequirement = await adapter.showDeltas(dir, 'no-requirement')
+    expect(noRequirement.ok).toBe(false)
+    expect(noRequirement.error).toContain('without requirement.name')
+    const modified = await adapter.showDeltas(dir, 'alpha')
+    expect(modified.touches).toEqual([{ capability: 'chat', operation: 'MODIFIED', requirement: 'Presence' }])
+  })
+
+  test('more than four calls at once wait for the pool', async () => {
+    const adapter = new OpenspecAdapter(undefined, 5_000)
+    const changes = ['alpha', 'beta', 'gamma', 'delta', 'epsilon', 'zeta']
+    const outcomes = await Promise.all(changes.map(change => adapter.validate(dir, change)))
+    expect(outcomes.every(outcome => outcome.ok)).toBe(true)
+    // The stub keeps an exact concurrency peak under flock (STUB_PEAK).
+    const peak = Number(fs.readFileSync(process.env.STUB_PEAK!, 'utf8').trim())
+    expect(peak).toBeLessThanOrEqual(4)
+    expect(peak).toBeGreaterThan(1)
+  })
+})

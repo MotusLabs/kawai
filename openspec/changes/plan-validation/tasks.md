@@ -45,7 +45,7 @@ Implement after `durable-plans` and `strategy-revision-impact` have landed on ma
 
 ## 3. OpenSpec adapter
 
-- [ ] 3.1 Implement `openspecAdapter.ts` (D3):
+- [x] 3.1 Implement `openspecAdapter.ts` (D3):
   - `probe()`: the version floor 1.14 and the capability names, cached for ten minutes;
   - `validate(root, change)` and `showDeltas(root, change)`: normalized JSON, the 15 s timeout, issues capped at 50 with a count;
   - a pool of four concurrent calls.
