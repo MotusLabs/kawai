@@ -11,12 +11,12 @@ Group 7's matrix rows for plan execution, integration, supervision, and revision
 
 ## 1. Security note
 
-- [ ] 1.1 Add `SECURITY_NOTE_BODY` and `securityNote(input)` to `src/server/team/teamPrompt.ts`, append it after `strategyNote`, and extend `TeamPromptInput` with `outbound: OutboundPromptFacts` (D1). Update the header comment. Verify with unit tests:
+- [x] 1.1 Add `SECURITY_NOTE_BODY` and `securityNote(input)` to `src/server/team/teamPrompt.ts`, append it after `strategyNote`, and extend `TeamPromptInput` with `outbound: OutboundPromptFacts` (D1). Update the header comment. Verify with unit tests:
   - the section follows the strategy note, with a group and without;
   - configured entries render as written;
   - an empty configuration renders the "none beyond loopback and private network addresses" line.
-- [ ] 1.2 Pass the facts from `sessionTeams.promptFor` at spawn, read from the loader (group 2). Verify with a driver test: the append is rebuilt per spawn, so an edit reaches only the next start.
-- [ ] 1.3 Add the AGENTS.md bullet for the note and the E1 contract line for `codex-chat-sessions`; that is the docs for group 1. Verify by reading the bullet against D1.
+- [x] 1.2 Pass the facts from `sessionTeams.promptFor` at spawn, read from the loader (group 2). Verify with a driver test: the append is rebuilt per spawn, so an edit reaches only the next start.
+- [x] 1.3 Add the AGENTS.md bullet for the note and the E1 contract line for `codex-chat-sessions`; that is the docs for group 1. Verify by reading the bullet against D1.
 
 ## 2. Outbound destinations
 

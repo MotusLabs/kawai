@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { outboundFile } from '../outbound/destinations'
 import { SessionTeams } from '../team/sessionTeams'
 
 describe('SessionTeams', () => {
@@ -52,6 +53,22 @@ describe('SessionTeams', () => {
     expect(teams.promptFor('s1', 'devs')).toContain('# Your role: Builders\n\nShip it.')
     expect(teams.promptFor('s1', 'gone')).not.toContain('# Your role')
     expect(teams.promptFor('s1', null)).toContain('You belong to no group')
+  })
+
+  test('promptFor carries the outbound facts read from the loader at call time', async () => {
+    fs.mkdirSync(path.join(home, '.kawai'), { recursive: true })
+    fs.writeFileSync(outboundFile(home), JSON.stringify({ internal: ['example.internal'] }))
+    const teams = new SessionTeams({ homeDir: home })
+    await teams.track('s1', a)
+    // With and without a group: the section and the configured entry ride along.
+    expect(teams.promptFor('s1', 'devs')).toContain('Internal destinations the owner configured: example.internal.')
+    expect(teams.promptFor('s1', null)).toContain('Internal destinations the owner configured: example.internal.')
+    expect(teams.promptFor('s1', 'devs')).toContain('# Outbound actions')
+    // The empty configuration renders the none line instead.
+    fs.rmSync(outboundFile(home))
+    expect(teams.promptFor('s1', 'devs')).toContain(
+      'Internal destinations the owner configured: none beyond loopback and private network addresses.'
+    )
   })
 
   test('effortFor reads the group effort at call time and is unset otherwise', async () => {

@@ -9,6 +9,7 @@ import { groupCatalogStamp, loadGroupCatalog, type GroupCatalog } from './groupC
 import type { GroupEffort } from './groupFile'
 import { buildTeamPrompt } from './teamPrompt'
 import { resolveTeam, type TeamIdentity } from './teamIdentity'
+import { OutboundDestinations } from '../outbound/destinations'
 
 export interface SessionGroupInfo {
   /** The group's label, or its id when the group is missing. */
@@ -39,14 +40,22 @@ export class SessionTeams {
    */
   private readonly catalogCache = new Map<string, CachedCatalog>()
 
+  /** Reads `~/.kawai/outbound.json` the same home-scoped way as the catalogs. */
+  private readonly outbound: OutboundDestinations
+
   constructor(
     private readonly options: {
       /** Home holding the user-level `.kawai/groups/`; tests inject it. */
       homeDir?: string
       /** A session's team became known or changed. */
       onResolved?: (sessionId: string) => void
+      /** The destinations loader (execution-safety-recovery D2); defaults to one on `homeDir`. */
+      outbound?: OutboundDestinations
     } = {}
-  ) {}
+  ) {
+    this.outbound = options.outbound
+      ?? new OutboundDestinations(this.options.homeDir ? { homeDir: this.options.homeDir } : {})
+  }
 
   /** Start (or redo, when the path changed) team resolution for a session. */
   track(sessionId: string, projectPath: string): Promise<void> {
@@ -112,13 +121,15 @@ export class SessionTeams {
   /**
    * The system-prompt addition for a spawn (design D7), read from the files
    * as they are now. A missing group gets the note without a role; a team
-   * not resolved yet gets the note with no group list.
+   * not resolved yet gets the note with no group list. The outbound facts
+   * ride along (execution-safety-recovery D1), read from the loader at each
+   * call so an edit reaches only the next spawn.
    */
   promptFor(sessionId: string, groupId: string | null | undefined): string {
     const catalog = this.catalogOf(sessionId)
     const groups = [...(catalog?.groups.values() ?? [])].map(entry => entry.group)
     const group = groupId ? catalog?.groups.get(groupId)?.group : undefined
-    return buildTeamPrompt({ sessionId, groups, ...(group ? { group } : {}) })
+    return buildTeamPrompt({ sessionId, groups, ...(group ? { group } : {}), outbound: this.outbound.facts() })
   }
 
   /**
