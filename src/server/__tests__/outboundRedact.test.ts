@@ -83,3 +83,55 @@ describe('redact', () => {
     expect(clip('short', 4096).truncated).toBe(false)
   })
 })
+
+describe('redact: CC checkpoint findings (H1, M7, low)', () => {
+  test('quoted flag and assignment values, spaces and separators inside', () => {
+    expect(redact("curl -u 'user:p w' https://example.internal")).toBe(`curl -u ${REDACTED} https://example.internal`)
+    expect(redact('curl -u "u:pa;ss" https://example.internal')).toBe(`curl -u ${REDACTED} https://example.internal`)
+    expect(redact('cargo publish --token "abc def"')).toBe(`cargo publish --token ${REDACTED}`)
+    expect(redact("twine upload --password='hunter 2' dist/*")).toBe(`twine upload --password=${REDACTED} dist/*`)
+    expect(redact('GITHUB_TOKEN="abc def" gh pr create')).toBe(`GITHUB_TOKEN=${REDACTED} gh pr create`)
+    expect(redact('curl -uuser:pass https://example.internal')).toBe(`curl -u${REDACTED} https://example.internal`)
+  })
+
+  test('an unterminated private key block is redacted to the end of input', () => {
+    expect(redact('echo -----BEGIN OPENSSH PRIVATE KEY-----\nMIIEpA nosie')).toBe(`echo ${REDACTED}`)
+  })
+
+  test('userinfo edge shapes: empty user, slashed password, repeated separators', () => {
+    expect(redact('curl -d x https://:token@hook.example.internal/notify')).toBe(`curl -d x https://${REDACTED}@hook.example.internal/notify`)
+    expect(redact('curl -d x https://user:pa/ss@hook.example.internal/notify')).toBe(`curl -d x https://${REDACTED}@hook.example.internal/notify`)
+    expect(redact('curl -d x https://user:p@ss@hook.example.internal/notify')).not.toContain('ss@')
+    expect(redact('curl -d x https://user:p@ss@hook.example.internal/notify')).not.toContain(':p@')
+  })
+
+  test('JSON numbers and escaped quotes in values', () => {
+    expect(redact(`curl -d '{"password":12345}' https://example.internal`)).toBe(`curl -d '{"password":"${REDACTED}"}' https://example.internal`)
+    expect(redact(`curl -d '{"secret":"a\\"b"}' https://example.internal`)).toBe(`curl -d '{"secret":"${REDACTED}"}' https://example.internal`)
+  })
+
+  test('a quoted form body with spaces loses the whole value', () => {
+    expect(redact('curl --data-urlencode "api_key=a b" https://example.internal'))
+      .toBe(`curl --data-urlencode "api_key=${REDACTED}" https://example.internal`)
+  })
+
+  test('the remaining listed header names, tokens, and query credentials', () => {
+    expect(redact('curl -H "X-Api-Key: abc123" https://example.internal')).toBe(`curl -H "X-Api-Key: ${REDACTED}" https://example.internal`)
+    expect(redact('curl -H "Proxy-Authorization: Basic abc" https://example.internal')).toBe(`curl -H "Proxy-Authorization: ${REDACTED}" https://example.internal`)
+    for (const token of ['ghu_ABCDEFghijklmnop0123456789', 'ghr_ABCDEFghijklmnop0123456789', 'xoxa-123456789012-ABCDEFghijklmn', 'xoxp-123456789012-ABCDEFghijklmn', 'xoxr-123456789012-ABCDEFghijklmn']) {
+      expect(redact(`echo ${token}`)).toBe(`echo ${REDACTED}`)
+    }
+    for (const name of ['key', 'sig', 'signature', 'access_token']) {
+      const redacted = redact(`curl "https://example.internal/hook?${name}=abc"`)
+      expect(redacted).not.toContain('=abc')
+      expect(redacted).toContain(`${name}=${REDACTED}`)
+    }
+  })
+
+  test('gh secret set body values, and only those bodies', () => {
+    expect(redact('gh secret set DEPLOY_KEY --body hunter2')).toBe(`gh secret set DEPLOY_KEY --body ${REDACTED}`)
+    expect(redact("gh secret set DEPLOY_KEY --body 'a secret value'")).toBe(`gh secret set DEPLOY_KEY --body ${REDACTED}`)
+    // A comment body is a message, not a secret.
+    expect(redact('gh pr comment 62 --body "deploy done"')).toBe('gh pr comment 62 --body "deploy done"')
+  })
+})
