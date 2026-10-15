@@ -4,7 +4,7 @@ Implement after `durable-plans` and `strategy-revision-impact` have landed on ma
 
 ## 1. Shared model
 
-- [ ] 1.1 Reconcile names with the merged designs and record any renames in this change's design before coding:
+- [x] 1.1 Reconcile names with the merged designs and record any renames in this change's design before coding:
   - from `durable-plans`: `PlanContent`, the pin type, `PlanStore.openPlans`, `APPROVAL_PRECONDITIONS` and its `ctx`, the plan-change notification, and `team-plan-result`;
   - from `strategy-revision-impact`: `ImpactService.gate` and `stateKey`.
 
