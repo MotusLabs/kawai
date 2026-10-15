@@ -7,7 +7,7 @@ Defines how Kawai lands a plan's changes. Before Start it probes the repository 
 ## ADDED Requirements
 
 ### Requirement: The landing probe checks the repository before Start
-Start's `landing-ready` entry SHALL pass only when `git` runs in the main checkout, `origin` is a GitHub repository that an authenticated `gh` can read, the repository's default branch exists there as the base branch, and every floor check run in CI is mapped. It SHALL also need that no worktree, local branch, or `origin` branch carries a change's name unless an execution of the plan created it. The probe SHALL change nothing.
+Start's `landing-ready` entry SHALL pass only when `git` runs in the main checkout, `origin` is a GitHub repository that an authenticated `gh` can read, the base branch the landing mechanism names can be landed on there, and every floor check run in CI is mapped. It SHALL also need that no worktree, local branch, or `origin` branch carries a change's name unless an execution of the plan created it. The probe SHALL change nothing.
 
 #### Scenario: No GitHub origin
 - **WHEN** the main checkout's `origin` is not a GitHub repository
@@ -17,8 +17,8 @@ Start's `landing-ready` entry SHALL pass only when `git` runs in the main checko
 - **WHEN** `origin` has a branch named like one of the plan's changes that no execution of the plan created
 - **THEN** Start is refused as `landing-ready`, naming the branch, and the branch is left untouched
 
-### Requirement: Kawai pushes without force, only to change branches
-Kawai SHALL push a round's commit to the change's branch on `origin` as a fast-forward. It SHALL never force a push, and SHALL push only to branches an execution of the plan created, never to the base branch. A push that `origin` rejects because the branch moved SHALL stop the change as `effect-failed`, naming the remote head.
+### Requirement: Kawai pushes without force, only to branches its executions created
+Kawai SHALL push a round's commit to the change's branch on `origin` as a fast-forward. It SHALL never force a push, and SHALL push only to branches an execution of the plan created, never to the repository's default branch. A push that `origin` rejects because the branch moved SHALL stop the change as `effect-failed`, naming the remote head.
 
 #### Scenario: A moved branch is never overwritten
 - **WHEN** the change's branch on `origin` has a commit that the round's commit does not contain
@@ -62,7 +62,7 @@ For a round's single rerun, Kawai SHALL ask GitHub to rerun the failed jobs of e
 - **THEN** the round fails without a rerun, naming that status
 
 ### Requirement: Changes land one at a time per team
-Kawai SHALL land at most one change per team at a time, in the order their rounds passed. A change waiting to land SHALL show which change holds the landing slot. A change that leaves landing without merging SHALL free the slot.
+Kawai SHALL land at most one change per team at a time. Among the changes ready to merge, the slot SHALL go to them in the order their rounds passed. A change waiting to land SHALL show which change holds the landing slot. A change that leaves landing without merging, for any reason, SHALL free the slot.
 
 #### Scenario: Two changes pass together
 - **WHEN** two changes' rounds pass a minute apart
@@ -73,7 +73,7 @@ Kawai SHALL land at most one change per team at a time, in the order their round
 - **THEN** the change leaves the landing slot, and the next waiting change takes it
 
 ### Requirement: A landing change is brought up to date with its base
-Before merging, the change's branch SHALL contain the base branch's current head. If it does not, Kawai SHALL have GitHub merge the base into the pull request's branch, pinned to the head whose round passed. The update SHALL carry the review verdict only when the new head's parents are exactly that head and the base head, recorded as carried over a clean base merge. CI SHALL then run on the new head under the CI rules.
+Before merging, the change's branch SHALL contain the base branch's current head. If it does not, Kawai SHALL have GitHub merge the base into the pull request's branch, pinned to the head whose round passed. The new head SHALL carry the review verdict only as a clean base merge: its parents are that head and a commit of the base branch, and its tree is their clean merge. CI SHALL then run on the new head. Any other new head SHALL return the change as an update attempt.
 
 #### Scenario: A clean base merge keeps the review
 - **WHEN** another change landed after this change's review passed, and the base merges cleanly
@@ -82,6 +82,10 @@ Before merging, the change's branch SHALL contain the base branch's current head
 #### Scenario: CI fails after the base merge
 - **WHEN** CI fails on the merge commit, and fails again when rerun
 - **THEN** the round fails, and the change gets a fix attempt continuing from the merge commit
+
+#### Scenario: The branch moves during the update
+- **WHEN** someone pushes another commit to the change's branch while GitHub updates it, so its new head is not a clean base merge
+- **THEN** no verdict is carried, the change leaves the landing slot, and an update attempt continuing from the branch's head is dispatched
 
 ### Requirement: A conflicting base merge returns the change as an update attempt
 When GitHub cannot merge the base into the change's branch, Kawai SHALL dispatch an update attempt to the implementing group, naming the base head to merge and the conflicting files. The update attempt's result SHALL be gated as a new fix round with its own CI and review. A verdict SHALL NOT carry over a merge the implementer resolved.
@@ -106,7 +110,7 @@ Before merging a change, each `acceptance` condition carried in the validation r
 - **THEN** the waiting change takes the next landing slot
 
 ### Requirement: Kawai merges with the reviewed head pinned
-Kawai SHALL merge the change's pull request with the team's merge method, pinned to the head whose round passed or was carried, so GitHub refuses the merge if the branch moved. A refused merge SHALL stop the change as `effect-failed` with GitHub's message, and nothing SHALL be merged.
+Immediately before merging, Kawai SHALL read the base head again and return the change to the up-to-date step when the branch no longer contains it. Kawai SHALL merge the change's pull request with the team's merge method, pinned to the head whose round passed or was carried, so GitHub refuses the merge if the branch moved. A refused merge SHALL stop the change as `effect-failed` with GitHub's message, and nothing SHALL be merged.
 
 #### Scenario: The reviewed head is merged
 - **WHEN** a change's round passed on commit C and its branch is up to date
@@ -116,8 +120,12 @@ Kawai SHALL merge the change's pull request with the team's merge method, pinned
 - **WHEN** someone pushes to the change's branch after its round passed
 - **THEN** GitHub refuses the pinned merge, nothing is merged, and the change stops as `effect-failed`, naming both heads
 
+#### Scenario: The base moves before the merge
+- **WHEN** a pull request outside the plan merges into the base branch after the change's round passed on an up-to-date head
+- **THEN** Kawai does not merge yet, brings the branch up to date again, and merges only after CI passes on the new head
+
 ### Requirement: A landing fact records each merge
-Each merged change SHALL get exactly one landing fact for the plan, with the execution, the pull request, the merged head, the base commit it merged onto, the merge commit, and the time. Landing facts SHALL be immutable and outlive later revisions and executions. Kawai SHALL then accept the landed result as the task's creator, which closes the task. Base-branch CI after the merge SHALL be evidence only.
+Each merged change SHALL get exactly one landing fact for the plan. It records the execution, the pull request, the merged head, the base head it was verified against, the merge commit, whether the merge commit's tree is the merged head's tree, and the time. Landing facts SHALL be immutable and outlive later revisions and executions. Kawai SHALL then accept the landed result as the task's creator, which closes the task. Base-branch CI after the merge SHALL be evidence only.
 
 #### Scenario: Landing closes the task
 - **WHEN** a change's merge completes
@@ -126,6 +134,10 @@ Each merged change SHALL get exactly one landing fact for the plan, with the exe
 #### Scenario: The base branch fails after landing
 - **WHEN** the base branch's CI fails on the merge commit
 - **THEN** the failure is shown beside the landing fact, and the change stays landed
+
+#### Scenario: A merge onto a base that moved at the last moment
+- **WHEN** the base branch moves between Kawai's last read and GitHub's merge
+- **THEN** the landing fact records that the merge commit's tree is not the verified head's tree, and plan detail flags the landing
 
 ### Requirement: A landed change's worktree is removed only when safe
 After a change lands, Kawai SHALL remove its worktree only when the worktree is clean and no live session's resolved worktree is it. It SHALL never force the removal, and SHALL keep the branch. Otherwise it SHALL keep the worktree, show why, and try again when that changes.
@@ -150,7 +162,7 @@ Each worktree creation, push, pull request opening, rerun, branch update, merge,
 - **THEN** each of its effects shows with its step, command, outcome, and time
 
 ### Requirement: An unknown outcome is inspected, never repeated blindly
-When an effect's outcome was not recorded, Kawai SHALL inspect before acting: the remote branch for a push, the pull requests from the change's branch for opening one, the pull request's state and merge commit for a merge, and the worktree list for worktree steps. A step found done SHALL be recorded done, one found not done SHALL run again, and one that cannot be decided SHALL stop the change as `effect-unknown`.
+When an effect's outcome was not recorded, Kawai SHALL inspect before acting: the remote branch for a push, the pull requests from the change's branch for opening one, the run's attempts for a rerun, the pull request's head for a branch update, its state and merge commit for a merge, and the worktree list for worktree steps. A step found done SHALL be recorded done, one found not done SHALL run again, and one that cannot be decided SHALL stop the change as `effect-unknown`.
 
 #### Scenario: A merge that completed during a restart
 - **WHEN** the server restarts after a merge was requested but before its outcome was recorded
@@ -161,7 +173,7 @@ When an effect's outcome was not recorded, Kawai SHALL inspect before acting: th
 - **THEN** the change stops as `effect-unknown`, naming the merge, and nothing is repeated until Retry
 
 ### Requirement: Integration-branch landing waits for its mechanism
-Start SHALL be refused as `landing-mode-supported` for a plan whose landing mode is `integration-branch` while no landing mechanism for that mode exists. A landing mechanism SHALL probe the repository, name the base a change provisions from and merges onto, and land a passed change, producing a landing fact. Direct landing SHALL be the one mechanism this capability provides.
+Start SHALL be refused as `landing-mode-supported` for a plan whose landing mode is `integration-branch` while no landing mechanism for that mode exists. A landing mechanism SHALL probe the repository, name the base a change provisions from and merges onto, and land a passed change, producing a landing fact. A change's base branch SHALL be the one its mechanism names. Direct landing SHALL be the one mechanism this capability provides, with the repository's default branch as base.
 
 #### Scenario: Integration-branch refused
 - **WHEN** the human starts a plan whose landing mode is `integration-branch`

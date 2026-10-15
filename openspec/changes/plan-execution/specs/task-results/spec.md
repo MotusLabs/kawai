@@ -3,13 +3,13 @@
 ## ADDED Requirements
 
 ### Requirement: Results for execution tasks are checked at submission
-For a task of a change a running execution owns, `task_submit_result` SHALL refuse, writing nothing and naming the fix, in these cases:
+For a task of a change a running execution owns, `task_submit_result` SHALL refuse, writing nothing and naming the fix:
 - a result without a commit;
-- a commit not on the change's branch in its worktree;
+- a commit not on the change's branch;
 - a commit that does not contain the branch's head on `origin`, with guidance to merge `origin/<branch>` first;
-- any result while the change is landing.
+- any result while Kawai is updating or merging the branch.
 
-A refused result SHALL cost no round.
+Every other stage, including landing, SHALL accept results. A refused result SHALL cost no round.
 
 #### Scenario: A diff-only result
 - **WHEN** a dev submits a result with only a diff for an execution task
@@ -18,6 +18,10 @@ A refused result SHALL cost no round.
 #### Scenario: A commit behind the published head
 - **WHEN** the branch on `origin` has a base-merge commit that the submitted commit does not contain
 - **THEN** the result is refused with guidance to merge `origin/<branch>` first, and no round is counted
+
+#### Scenario: A result during the merge
+- **WHEN** a dev submits a result while Kawai's merge of the change is running
+- **THEN** the result is refused naming the merge, and no round is counted
 
 ### Requirement: Kawai owns the handoffs of a running change
 While a running execution owns a change, `task_handoff`, the human's handoffs, and **Release worktree and hand off** on its task SHALL be refused, naming the execution and pointing to `task_submit_findings`. Kawai SHALL request reviews and return fixes itself. Findings SHALL still be accepted and recorded.

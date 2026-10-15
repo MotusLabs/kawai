@@ -97,18 +97,23 @@ CREATE UNIQUE INDEX plan_executions_one_running ON plan_executions(plan_id) WHER
 CREATE TABLE plan_execution_changes (
   execution_id TEXT NOT NULL, change TEXT NOT NULL, team_id TEXT NOT NULL, position INTEGER NOT NULL,
   state TEXT NOT NULL,   -- waiting | provisioning | implementing | gating | landing | landed | stopped | cancelled
-  step TEXT,             -- sub-step of gating or landing, e.g. awaiting-ci, releasing, conditions, merging
+  step TEXT,             -- sub-step of gating or landing, e.g. awaiting-ci, releasing, conditions, updating, merging
   stop_reason TEXT, stop_detail_json TEXT,
   task_id TEXT, worktree TEXT, branch TEXT, baseline_commit TEXT,
   pr_number INTEGER, pr_url TEXT, pr_opened_by_kawai INTEGER,
   fix_rounds INTEGER NOT NULL DEFAULT 0,  -- consecutive failed fix rounds
   owns INTEGER NOT NULL DEFAULT 1,        -- cleared once landed, cancelled, or the execution finishes
-  landing_slot INTEGER NOT NULL DEFAULT 0,
   passed_at TEXT, generation INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL,
   PRIMARY KEY (execution_id, change)
 );
 CREATE UNIQUE INDEX plan_execution_changes_owner ON plan_execution_changes(team_id, change) WHERE owns = 1;
-CREATE UNIQUE INDEX plan_execution_changes_slot ON plan_execution_changes(team_id) WHERE landing_slot = 1;
+
+CREATE TABLE plan_landing_slots (     -- one row while the team's landing slot is held
+  team_id TEXT PRIMARY KEY,
+  holder_kind TEXT NOT NULL,          -- change; a landing mechanism may add kinds (X6)
+  holder_id TEXT NOT NULL,            -- for a change: '<execution_id>:<change>'
+  since TEXT NOT NULL
+);
 
 CREATE TABLE plan_execution_attempts (
   id TEXT PRIMARY KEY, execution_id TEXT NOT NULL, change TEXT NOT NULL, number INTEGER NOT NULL,
@@ -120,7 +125,8 @@ CREATE TABLE plan_execution_attempts (
 CREATE TABLE plan_execution_rounds (
   id TEXT PRIMARY KEY, execution_id TEXT NOT NULL, change TEXT NOT NULL, attempt_id TEXT NOT NULL,
   number INTEGER NOT NULL, result_id TEXT NOT NULL, commit_sha TEXT NOT NULL,
-  fix_round INTEGER NOT NULL, carried_from TEXT,   -- the round a clean base merge carried
+  fix_round INTEGER NOT NULL, carried_from TEXT,   -- the round a clean base merge carried; a carried round
+                                                   -- keeps that round's attempt, result, and fix_round
   pushed_at TEXT, ci_window_from TEXT, ci_json TEXT, rerun_at TEXT,
   review_assignment_id TEXT, verdict_findings_id TEXT, extra_json TEXT,
   outcome TEXT, outcome_detail_json TEXT, decided_at TEXT,  -- pass | fail | superseded
@@ -128,7 +134,9 @@ CREATE TABLE plan_execution_rounds (
 );
 
 CREATE TABLE plan_execution_effects (
-  id TEXT PRIMARY KEY, execution_id TEXT NOT NULL, change TEXT NOT NULL, round_id TEXT,
+  id TEXT PRIMARY KEY, execution_id TEXT NOT NULL,
+  change TEXT,          -- null for an execution-level effect; direct landing has none (X3)
+  round_id TEXT,
   kind TEXT NOT NULL,   -- provision | push | open-pr | rerun | update-branch | merge | remove-worktree
   effect_key TEXT NOT NULL UNIQUE, command_json TEXT NOT NULL,
   state TEXT NOT NULL,  -- pending | running | done | failed | unknown | cancelled
@@ -139,7 +147,10 @@ CREATE TABLE plan_execution_effects (
 CREATE TABLE plan_change_landings (
   plan_id TEXT NOT NULL, change TEXT NOT NULL, execution_id TEXT NOT NULL, team_id TEXT NOT NULL,
   mechanism TEXT NOT NULL, pr_number INTEGER, pr_url TEXT,
-  head_sha TEXT NOT NULL, base_sha TEXT NOT NULL, merge_sha TEXT NOT NULL, landed_at TEXT NOT NULL,
+  head_sha TEXT NOT NULL,      -- the head whose round passed or was carried
+  base_sha TEXT NOT NULL,      -- the base head that head was verified against
+  merge_sha TEXT NOT NULL, landed_at TEXT NOT NULL,
+  tree_verified INTEGER NOT NULL,  -- 1 when merge_sha's tree is head_sha's tree
   post_ci_json TEXT,    -- base-branch CI on the merge commit: evidence only
   PRIMARY KEY (plan_id, change)
 );
@@ -147,17 +158,17 @@ CREATE TABLE plan_change_landings (
 ALTER TABLE team_messages ADD COLUMN allowed_profiles TEXT;  -- JSON array in the role's order (D15)
 ```
 
-The human commands are `plan_events` kinds under C6: `execution-started`, `execution-stopped`, and `change-retried`. Each replays by `(plan_id, command_id)` with durable-plans' compared-payload rule:
+The human commands are `plan_events` kinds under C6: `execution-started`, `execution-stopped`, and `change-retried`. `PlanService` stays the only writer of `plan_events` (C3): `PlanService.recordExecutionEvent(planId, event, within)` appends these kinds inside the execution's transaction, and `ExecutionService` never writes that table itself. Each kind replays by `(plan_id, command_id)` with durable-plans' compared-payload rule:
 - Start compares `revision` and `contentHash`.
 - Stop compares `executionId` and the trimmed `reason`.
 - Retry compares `executionId` and `change`.
 
-System completion writes `completed` with actor `system` and the payload `{ executionId }` (D19).
+System completion writes `completed` with actor `system`, the payload `{ executionId }`, and the command id `exec:<executionId>:complete`, so a completion retried after a restart replays instead of writing twice (D19).
 
-The database arbitrates the races. Three partial unique indexes back them:
-- one running execution per plan;
-- one owner per team and change, even across plans;
-- one landing slot per team.
+The database arbitrates the races:
+- one running execution per plan, a partial unique index;
+- one owner per team and change, even across plans, a partial unique index;
+- one landing slot per team, the `plan_landing_slots` primary key. Taking the slot inserts the row; every transition that leaves landing deletes it in the same transaction.
 
 A constraint error maps to the named refusal (`one-execution` or `changes-unclaimed`) or to "the slot is taken". It never reaches a client raw.
 
@@ -274,14 +285,15 @@ The manifest is serialized with `canonicalJson` and hashed with sha256. Artifact
   - the submission has no commit;
   - the commit is not on the change's branch (`git merge-base --is-ancestor <commit> refs/heads/<change>` in the worktree);
   - the commit does not contain the branch's head on `origin` (`ls-remote`, then the ancestry check);
-  - the change is landing.
+  - Kawai is writing the branch: the change's step is `updating` (its `update-branch` effect exists and the carried round does not yet) or `merging` (its merge effect exists).
 
-  The git calls run before the insert. A push that slips in between is caught by the push effect, as non-fast-forward (D14).
+  Every other stage accepts a result, including a change that is landing, so a fix attempt dispatched for a new task revision can always submit. The git calls run before the insert. A push that slips in between is caught by the push effect, as non-fast-forward (D14).
 - **Rounds.** The executor sees a result newer than the change's current round. In one transaction it:
-  - supersedes that round, unless its merge has started;
+  - supersedes that round, passed or not, unless its merge has started;
+  - returns the change to `gating`, deleting its `plan_landing_slots` row if it held the slot;
   - inserts the next round, where `fix_round` is true when the attempt is `fix` or `update`;
   - enqueues the push.
-- **New task revision.** `TaskService.onRevisionPublished` for an owned task wakes the executor. Before a merge starts, that supersedes the current round and dispatches a fix attempt naming the revision. A round whose result is pinned to an older task revision can never pass.
+- **New task revision.** `TaskService.onRevisionPublished` for an owned task wakes the executor. Before a merge starts, that supersedes the current round, releases the slot if the change held it, and dispatches a fix attempt naming the revision. The change returns to `implementing`. A revision published while the change's `update-branch` effect runs is applied once that effect settles, and the fix attempt continues from the updated head. A round whose result is pinned to an older task revision can never pass.
 
 ### D10. CI evidence, the floor map, and the flaky rule
 
@@ -304,7 +316,7 @@ The manifest is serialized with `canonicalJson` and hashed with sha256. Artifact
 
 ### D11. Review and extra checks
 
-After CI passes, the review stage runs in three steps:
+After CI passes, the review stage runs in these steps:
 1. **Release.** When the review group's current file is worktree-scoped, each live spawned member in the worktree is checked with `MemberRelease.readiness`. A ready member is archived with `releaseNow`, journaled as Kawai. One that is not ready holds the step at `releasing`, with that member and reason shown, and is re-checked on member events. Human-created sessions are never released. Staffing's occupancy rules then decide where the review lands.
 2. **Handoff.** The review handoff is dispatched to the review group with the role's `allowedProfiles` and `author-profile:<id>` tags (D15). The instruction lists:
    - the result id, commit, and pull-request link;
@@ -316,8 +328,11 @@ After CI passes, the review stage runs in three steps:
    - it records the review assignment as its handoff;
    - it was written by that assignment's current claimant, following a forward to its successor;
    - its author is not in the change's result authors.
+4. **An author claims the review.** When the review assignment's current claimant, following forwards, is one of the change's result authors, no verdict from it can count. `reviewVerdict` returns `author-claimant`, and the change stops as `review-unavailable`, naming the session. Retry dispatches the review handoff again. That supersedes the claimed one through the stop branch, and the review group's routing picks again.
 
 `splitExtraChecks(extra, reportedNames)` separates the checks CI decides from the ones the reviewer attests. The view labels each accordingly.
+
+*Why stop rather than route around authors:* excluding authors in routing would need a session list on the mail, and a forward to a named session would still bypass it. Authors claim reviews only in unusual setups, such as a human-created session in a group that both implements and reviews. A named stop that the owner can clear by archiving that session or changing the group covers the case without new routing state.
 
 ### D12. Fix rounds, stop reasons, Retry, and Stop
 
@@ -326,17 +341,18 @@ After CI passes, the review stage runs in three steps:
   - the findings;
   - the count, shown as `n/3`;
   - the commit to continue from: the round's commit, or the merge commit when the round was carried.
-- **Count.** `fix_rounds` rises on a failed fix round and resets on a pass and on Retry. At 3, the change stops as `round-limit`. Superseded rounds and CI stops never count.
-- **Stop reasons (X8):** `round-limit`, `name-taken`, `instruction-failed`, `task-closed`, `effect-failed`, `effect-unknown`, `ci-missing`, `ci-timeout`, and `pr-closed`. Each one carries a detail record. A stage instruction fails when its assignment derives as failed, meaning its mail settled dead, cancelled, or discarded.
+- **Count.** `fix_rounds` rises on a failed fix round and resets on a pass and on Retry. At 3, the change stops as `round-limit`. Superseded rounds and CI stops never count. A carried round keeps the `fix_round` value of the round it carries, so a carried round that fails counts exactly as its source would have.
+- **Stop reasons (X8):** `round-limit`, `name-taken`, `instruction-failed`, `task-closed`, `review-unavailable`, `effect-failed`, `effect-unknown`, `ci-missing`, `ci-timeout`, and `pr-closed`. Each one carries a detail record. A stage instruction fails when its assignment derives as failed, meaning its mail settled dead, cancelled, or discarded. A stop releases the landing slot if the change held it.
 - **Retry** bumps the change's `generation`, so its request keys and effect keys are new, and records `change-retried`. Then, by reason:
   - `round-limit` dispatches a fix attempt;
   - `effect-unknown` inspects first;
   - `effect-failed` and `pr-closed` run the effect again;
   - the CI stops reopen the CI window;
   - `instruction-failed` and `task-closed` dispatch the stage's instruction again (`task-closed` needs the reopened task);
+  - `review-unavailable` dispatches the review handoff again;
   - `name-taken` checks the names again.
 
-  A retried change waits for a slot under the parallel limit.
+  Retry is refused while the change's task is closed. A change stopped as `name-taken` has no task yet, so the refusal never applies to it. A retried change waits for a slot under the parallel limit.
 - **Stop** runs one transaction:
   - The execution becomes finished and stopped, with `execution-stopped` recorded.
   - Pending effects become `cancelled`.
@@ -357,18 +373,32 @@ interface LandingMechanism {
 
 The registry holds only `direct`. `integration-candidates` registers `integration-branch`, which is what lifts `landing-mode-supported`.
 
+**Base branch.** Throughout the specs and this design, a change's base branch is the branch `baseFor` names: where the change provisions from, where its pull request points, and what it lands on. For `direct`, that is the repository's default branch. Pushes are bounded separately: Kawai pushes only to branches an execution of the plan created, never to the default branch, so a mechanism whose base is a branch Kawai created may write it.
+
 The direct steps after a passing round:
 1. **Conditions.** Each `acceptance`-gated condition carried in the execution's report is checked against the `resolve-condition` decisions, read live. Any unresolved condition holds the change at `conditions` without taking the slot.
-2. **Slot.** The change takes the team's slot (D3 index), in `passed_at` order.
+2. **Slot.** Among the changes ready to merge, the change with the earliest `passed_at` takes the team's slot (the `plan_landing_slots` row).
 3. **Up to date.** After a fetch, Kawai checks `git merge-base --is-ancestor origin/<base> <head>`.
    - If the base is missing from the head, `git merge-tree --write-tree --name-only <head> origin/<base>` predicts conflicts without touching any worktree or index.
    - A conflict releases the slot and dispatches an update attempt that names the files.
-   - A clean prediction runs the `update-branch` effect: `gh api -X PUT repos/{o}/{r}/pulls/{n}/update-branch -f expected_head_sha=<H>`. Kawai then polls the pull request until its head moves and checks that the new head's parents are exactly `[H, base head]`. That inserts a carried round (`carried_from`) whose CI runs on the new head. A 422 conflict from GitHub falls back to the update attempt.
-4. **Merge.** The `merge` effect runs `gh pr merge <n> --merge|--squash|--rebase --match-head-commit <sha>`, then `gh pr view <n> --json state,mergeCommit,headRefOid`.
-5. **Fact.** One transaction inserts the landing fact, sets the change to `landed`, and clears `owns` and the slot. `TaskResultService.accept(system, task, result)` follows, keyed on the landing so a retry is idempotent. Its reason names the landing when the result needs re-evaluation.
+   - A clean prediction runs the `update-branch` effect: `gh api -X PUT repos/{o}/{r}/pulls/{n}/update-branch -f expected_head_sha=<H>`. Kawai then polls the pull request until its head moves, for at most 10 minutes, after which the effect counts as a transient failure.
+   - **The clean-merge check.** The new head H' carries the verdict only when it is a clean base merge. It must meet all three conditions:
+     - its parents are exactly `[H, B']`;
+     - `origin/<base>` contains B', which may be newer than the base head Kawai read before the update;
+     - its tree equals `git merge-tree --write-tree H B'`.
+
+     A passing check inserts a carried round (`carried_from`) whose CI runs on H'. A 422 conflict from GitHub, or a new head that fails the check, releases the slot and dispatches an update attempt that continues from the branch's head on `origin`.
+4. **Merge.** Immediately before the merge, Kawai re-reads the base head with `ls-remote`. If the head no longer contains it, the change returns to step 3 while keeping the slot. Otherwise the `merge` effect runs `gh pr merge <n> --merge|--squash|--rebase --match-head-commit <sha>`, then `gh pr view <n> --json state,mergeCommit,headRefOid`.
+5. **Fact.** One transaction inserts the landing fact, sets the change to `landed`, and clears `owns` and the slot. The fact records:
+   - `base_sha`: the base head re-read in step 4;
+   - `tree_verified`: whether the merge commit's tree is the merged head's tree (`git rev-parse <sha>^{tree}`, for both commits).
+
+   A base that moves between the re-read and GitHub's merge leaves `tree_verified = 0`, and the view flags the landing. Base-branch CI on the merge commit is then its only evidence. Branch protection's "require branches to be up to date" setting closes that window entirely. `TaskResultService.accept(system, task, result)` follows, keyed on the landing so a retry is idempotent. Its reason names the landing when the result needs re-evaluation. Accepting closes the task, and member release's close hook marks its spawned members for release; they are archived once ready.
 6. **Cleanup.** `remove-worktree` runs only when `git -C <path> status --porcelain` is empty and no live session resolves there. It never forces. Base-branch CI on the merge commit is then polled until it finishes and recorded as evidence.
 
-*Why GitHub's branch update rather than a local merge and push:* Kawai authors no commit and writes to no worktree. The parent check proves the update was a clean base merge, which is the only condition that carries a verdict.
+*Why GitHub's branch update rather than a local merge and push:* Kawai authors no commit and writes to no worktree. The clean-merge check proves the update was a clean base merge, which is the only condition that carries a verdict. The tree comparison closes the gap the parents alone leave: a hand-made merge with the same parents but edited content.
+
+*Why no bound on base moves:* each move costs one branch update and one CI run while the change holds the slot. Kawai's own landings are serialized per team, so only pushes made outside Kawai move the base. Stopping after a few moves would need the owner, which is what an unattended execution avoids. `ci-timeout` and Stop remain the exits.
 
 ### D14. Effects: recorded before they run, inspected before they repeat
 
@@ -388,11 +418,11 @@ At startup, every `running` effect becomes `unknown`. An unknown effect is inspe
 | `push` | `ls-remote` head contains the commit | done | run again |
 | `open-pr` | `gh pr list --head <change> --base <base> --state all` | record the open PR; a closed one stops as `pr-closed` | run again |
 | `rerun` | the run's attempt number | done | run again; GitHub refuses a duplicate harmlessly |
-| `update-branch` | PR head moved, with the parent check | carried round | run again, still pinned |
+| `update-branch` | PR head moved, with the clean-merge check | carried round; a head that fails the check dispatches the update attempt | run again, still pinned |
 | `merge` | PR state and merge commit | landing fact | run again, still pinned |
 | `remove-worktree` | worktree list | done | run again |
 
-An inspection that cannot run is retried the same way, and then stops the change as `effect-unknown`. Effect keys are `<execution>:<change>:<kind>:<round or attempt>:<generation>`.
+An inspection that cannot run is retried the same way, and then stops the change as `effect-unknown`. Effect keys are `<execution>:<change>:<kind>:<round or attempt>:<generation>`. An execution-level effect has no change, and its key is `<execution>::<kind>:<n>`. Direct landing records none, but X3 lets a landing mechanism add such kinds, together with their inspectors and the stop rule for a failure.
 
 Every outbound call Kawai makes is a git or `gh` call to `origin`, and each is an effect row. Each row holds the argument vector, with tokens redacted from output, the outcome, and timestamps. That is the audit source `execution-safety-recovery` builds on (X3).
 
@@ -438,6 +468,7 @@ Every outbound call Kawai makes is a git or `gh` call to `origin`, and each is a
   - `PlanExecutionStartDialog.tsx`: the standing, landing, base, floor map, limit, and role profiles.
   - `PlanExecutionChangeRow.tsx`: state and waiting reason, task, instruction holder, PR, counts, CI with flaky marks, verdict, extra checks, landing fact, and expandable effects.
   - `PlanExecutionStopDialog.tsx`: what it cancels and keeps, and the required reason.
+  - The task view's **Accept result** dialog says, for a task an execution owns, that accepting stops the change as `task-closed` and merges nothing. The rule itself is unchanged.
 - **Progress.** `executionProgress(content, landings, newestExecution)` replaces durable-plans' `planProgress` for any plan with an execution.
 
 ### D18. Agent surface
@@ -453,8 +484,8 @@ Every outbound call Kawai makes is a git or `gh` call to `origin`, and each is a
 
 ### D19. Completion and closing
 
-- **Completion.** When the last change lands, the execution finishes as completed. If its revision is still the plan's current approved revision and the plan is open, `PlanService.completeBySystem(planId, executionId)` writes `completed` with actor `system`. It refuses otherwise, and then the plan stays open.
-- **Plan closed.** When the human completes or cancels the plan, an after-commit hook of `PlanService` calls `ExecutionService.stopForPlan` with the reason `plan-closed`. This keeps durable-plans' D8, because closing a plan still never touches tasks. Kawai, as their creator, cancels its own.
+- **Completion.** When the last change lands, the execution finishes as completed. If its revision is still the plan's current approved revision and the plan is open, `PlanService.completeBySystem(planId, executionId)` writes `completed` with actor `system` under the command id `exec:<executionId>:complete` (D3). It refuses otherwise, and then the plan stays open.
+- **Plan closed.** When the human completes or cancels the plan, an after-commit hook of `PlanService` calls `ExecutionService.stopForPlan` with the reason `plan-closed`. The plan-close transaction writes no task rows, as durable-plans' D8 requires. The hook then runs as Kawai, the tasks' creator, and cancels Kawai's own tasks.
 - **Task closed.** A human close of an owned task that Kawai did not make stops the change as `task-closed`. A reopened task enables Retry.
 
 ### D20. Contracts published for later changes
@@ -463,23 +494,23 @@ Every outbound call Kawai makes is a git or `gh` call to `origin`, and each is a
 | --- | --- | --- |
 | X1 Records and states | D3 tables; change states and steps; `executionProgress` | `plan-supervision` (cards, progress), `revision-control` (the revision a run keeps, holds per change), `execution-safety-recovery` (recovery from stored state) |
 | X2 Attempts and manifests | D8 `AttemptManifest` v1; the attempt kinds | `revision-control` (what a published revision means for running attempts) |
-| X3 Effects | D14 kinds, keys, states, and the command and outcome record | `execution-safety-recovery` (audit view, crash matrix) |
-| X4 Gate evaluation | D10 `evaluateCi` and the flaky rule; D11 `reviewVerdict` and `splitExtraChecks` | `integration-candidates` (gating candidates), `plan-supervision` (evidence, overrides) |
-| X5 Start preconditions | D4 `START_PRECONDITIONS`, append-only | `revision-control` (`no-hold`), `integration-candidates` (registers its mechanism) |
-| X6 `LandingMechanism` | D13 interface and registry | `integration-candidates` (`integration-branch`) |
+| X3 Effects | D14 kinds, keys, states, and the command and outcome record; kinds are append-only, and `change` is null for an execution-level kind | `execution-safety-recovery` (audit view, crash matrix), `integration-candidates` (its branch writes as effects) |
+| X4 Gate evaluation | D10 `evaluateCi` and the flaky rule; D11 `reviewVerdict` and `splitExtraChecks`; D13's clean-merge check | `integration-candidates` (gating candidates), `plan-supervision` (evidence, overrides) |
+| X5 Start preconditions | D4 `START_PRECONDITIONS`, append-only | `revision-control` (`no-hold`), `integration-candidates` (registers its mechanism, appends entries) |
+| X6 `LandingMechanism` | D13 interface, registry, and the base-branch meaning; the `plan_landing_slots` row, whose `holder_kind` a mechanism may extend | `integration-candidates` (`integration-branch`, promotions holding the slot) |
 | X7 Landing facts | D3 `plan_change_landings`, one per plan and change | `integration-candidates` (writes them through the same path), `plan-supervision`, `revision-control` |
-| X8 Rounds and stop reasons | D12 count rules and reason list, append-only | `plan-supervision` (a card per stop), `execution-safety-recovery` (new reasons) |
+| X8 Rounds and stop reasons | D12 count rules and reason list, append-only | `plan-supervision` (a card per stop), `execution-safety-recovery` (new reasons), `integration-candidates` (`integration-moved`) |
 
 Bindings consumed:
 - **C1:** the changes, dependencies, groups, checks, landing, and roles.
-- **C3:** `completeBySystem` and the plan-close hook.
+- **C3:** `PlanService` stays the only plan writer. It appends the execution kinds through `recordExecutionEvent`, completes the plan under the deterministic command id through `completeBySystem`, and runs the plan-close hook (D3, D19). Executions are keyed by plan and revision.
 - **C5:** the link, checked at the execution's revision, and progress replaced.
 - **C6:** the event kinds.
 - **C7:** the floor names.
 - **V1:** Start's comparison.
 - **V2:** `start` and `acceptance` conditions.
 - **V3:** no extra input, because serialized pairs are exactly the pairs `dependsOn` already orders.
-- **V4:** not used (see Non-Goals).
+- **V4:** not used. Its row in `plan-validation` named this change for Apply and Archive. Applying is the implementer's own workflow, from its instruction, and archiving stays with the Lead. This change amends that row to name no consumer for those operations.
 - **V5:** the entry, reused.
 - **C-I1:** the gate.
 
@@ -488,8 +519,10 @@ Bindings consumed:
 - [A binary actor branch records Kawai as the human] → D2 converts every such branch in the touched services to an exhaustive switch. The type widening makes the compiler flag each one, and each service gets a test with a system caller.
 - [GitHub rate limits from polling] → Kawai makes one checks read per gating round per minute, uses conditional requests where `gh api` passes ETags, and treats 403 and 429 as transient with backoff.
 - [`gh` lacks a scope, or branch protection requires a human review] → The probe checks `gh auth status` and the viewer's write permission. A refused merge or rerun stops the change as `effect-failed` with GitHub's message. If the owner then merges by hand, Retry's inspection finds the pull request merged and records the landing fact.
-- [The flaky rule hides an intermittent real failure] → Both runs are recorded and shown, and `plan-supervision` may add policy. The rule is P7's, applied mechanically.
+- [The flaky rule hides an intermittent real failure] → Both runs are recorded and shown, and `plan-supervision` may add policy. The rule is P7's, applied mechanically. "Flaky" is recorded only for that round, never as a property of the check.
 - [The landing slot is held while CI reruns on a base merge] → Only updating and merging hold the slot. Conditions wait outside it, and `ci-timeout` frees a stuck one. Serializing landings per team is the point.
+- [The base moves between the pre-merge re-read and GitHub's merge] → The window is seconds wide. The landing fact's `tree_verified` flag shows it afterwards, and branch protection's strict up-to-date setting closes it for teams that enable it.
+- [GitHub's merge and `git merge-tree` disagree on a clean merge's tree] → The two use the same ort strategy, so this should not happen. If it does, the change only takes an update attempt, which is safe.
 - [A new worktree lacks dependencies] → Kawai runs no project commands. The plan note and the instruction tell the implementer to run setup.
 - [The owner's local base branch is behind] → Kawai reads only `origin` (`changes-on-base`, provisioning, landing), never the local branch.
 - [An implementer pushes on its own] → That is harmless while it fast-forwards. The submission check and the push effect catch any divergence and stop the change, without forcing.
@@ -497,7 +530,7 @@ Bindings consumed:
 
 ## Migration Plan
 
-- The migration is additive: six tables and one nullable column, with no backfill.
+- The migration is additive: seven tables and one nullable column, with no backfill.
 - The feature stays dormant until the human starts an execution, and Start is refused until `planExecution.floorChecks` is configured.
 - **Rollback:** stop running executions. Older builds ignore the new tables and column. Tasks Kawai created stay readable, and an older build renders their creator as unknown.
 

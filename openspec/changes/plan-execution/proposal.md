@@ -59,24 +59,25 @@ Strategy revision 2 states how execution works:
   - Each dispatch is an **attempt** (implement, fix, or update) with an immutable input manifest. It records the plan revision and hash, the task revision, the report and input hash, the baseline, and the change's artifact digests. A fix attempt also records the result and findings it answers.
   - Execution mail routes only to profiles that both the group and the plan role allow, in the role's order (P8). Review mail is tagged with the result authors' profiles, so a routing rule can pick another model family.
   - While an execution owns a change, only Kawai links tasks to it, dispatches its task, and hands it off. The human steers through Stop, Retry, and closing the task, and an instruction that fails stops the change rather than being replaced silently.
-- **Results.** For an execution task, `task_submit_result` refuses three kinds of result, so a malformed result costs no round:
+- **Results.** For an execution task, `task_submit_result` refuses four kinds of result, so a malformed or ill-timed result costs no round:
   - a result without a commit;
   - a commit that is not on the change's branch;
-  - a commit that does not extend the branch's published head.
+  - a commit that does not extend the branch's published head;
+  - a result sent while Kawai is updating or merging the branch. Every other stage accepts results, including landing.
 - **The gate, one round per result.**
   - Kawai pushes the commit to `origin`, never forcing, and opens or reuses the change's PR.
   - **CI.** Every check reported for the head must pass or be skipped. Each floor check (lint, typecheck, unit tests, CI end-to-end) must be covered by a mapped check. Failed checks are rerun once on the same commit. A check that then passes is recorded as flaky and fails nothing; this is how Kawai applies P7's "known flaky tests".
-  - **Review.** Once CI passes, Kawai hands the result to the change's review group. The floor's clean reviewer verdict requires a `pass` on that exact result from the handoff's claimant, and the claimant must not be an author of the change's results. A worktree-scoped review group first gets the worktree through member release.
+  - **Review.** Once CI passes, Kawai hands the result to the change's review group. The floor's clean reviewer verdict requires a `pass` on that exact result from the handoff's claimant, and the claimant must not be an author of the change's results. If an author claims the review anyway, the change stops as `review-unavailable` so it never waits on a verdict that cannot count. A worktree-scoped review group first gets the worktree through member release.
   - **Extra checks.** An extra check named like a reported CI check is satisfied by that check. Any other extra check is listed for the reviewer, along with the acceptance rules, and is shown as attested.
-  - A verdict never transfers to another commit, except over Kawai's clean base merge (below). A newer result, or a task revision the human publishes before the merge, supersedes the round.
+  - A verdict never transfers to another commit, except over Kawai's clean base merge (below). A newer result, or a task revision the human publishes before the merge, supersedes the round, and a landing change gives up the landing slot.
 - **Fix rounds and the stop.** A failed round returns the change to its group with the failing checks and findings. When three consecutive fix rounds fail, the change stops and reports. Dependents wait, and independent changes continue. The owner can **Retry** a stopped change, which starts a new count, or **Stop** the execution.
-- **Direct landing.** Passed changes land one at a time per team.
+- **Direct landing.** Passed changes land one at a time per team. For direct landing, a change's base branch is the repository's default branch. The landing contract lets another mechanism name a different base, and Kawai never pushes to the default branch.
   - **Up to date.** The branch must contain the base branch's current commit. If it does not, Kawai updates the branch on GitHub with a base merge.
-    - A clean update reruns CI and keeps the review verdict, recorded as carried over a clean base merge.
-    - A conflicting update returns the change as an update attempt.
+    - A clean update reruns CI and keeps the review verdict, recorded as carried over a clean base merge. "Clean" is checked: the new head's parents are the reviewed head and a base commit, and its tree is their clean merge.
+    - A conflicting update, or a new head that fails that check, returns the change as an update attempt.
   - **Conditions.** Carried `acceptance` conditions (V2) must be resolved first, because each landing is acceptance (P5).
-  - **Merge.** Kawai merges with the reviewed head pinned, using the team's merge method (merge commits by default).
-  - **Landing fact.** It records the PR, head, base, and merge commit. Kawai accepts the landed result as the task's creator, which closes the task and releases its spawned members.
+  - **Merge.** Kawai reads the base head again just before merging, and brings the branch up to date again if the base moved. It merges with the reviewed head pinned, using the team's merge method (merge commits by default).
+  - **Landing fact.** It records the PR, the head, the base head it was verified against, the merge commit, and whether the merged tree is exactly the verified one. Kawai accepts the landed result as the task's creator, which closes the task. Member release then archives its spawned members once they are ready.
   - **Worktree.** Kawai removes it when it is clean and no session lives there.
   - **Plan completion.** When every change of the revision has landed, Kawai completes the plan as `system`, provided that revision is still the approved one.
 - **Effects recorded before they run.** Each external step is a durable effect row with its command and outcome: worktree add, push, PR, rerun, branch update, merge, and worktree removal. A restart resumes from stored state. An unknown outcome is inspected (the remote ref, the PR state, the worktree list) and never blindly repeated. When inspection cannot decide, the change stops with the reason.
@@ -140,7 +141,7 @@ Non-goals:
   - `teamPrompt.ts` gains an execution note, and the plan connections gain the Start, Stop, and Retry messages.
 - **Shared.** New `src/shared/planExecution.ts` holds the types and pure functions: round evaluation, the flaky rule, and state derivation. The new messages go in `src/shared/types.ts` and `CHAT_CONNECTION_TYPES`.
 - **Client.** `PlanExecutionSection.tsx` with the Start dialog and change rows, plus `teamPlanStore` wiring.
-- **Data.** An additive migration with six tables and one nullable `team_messages` column. `system` becomes a creator, dispatcher, and sender kind in existing text columns. There is no backfill.
+- **Data.** An additive migration with seven tables (one of them the team's landing slot) and one nullable `team_messages` column. `system` becomes a creator, dispatcher, and sender kind in existing text columns. There is no backfill.
 - **Docs.** AGENTS.md bullets, and the author-profile tags in `docs/routing/README.md`.
 - **Tests.**
   - Unit coverage of the preconditions, scheduling, manifests, rounds, the flaky rule, Stop and Retry, restart inspection, and cross-team refusals.

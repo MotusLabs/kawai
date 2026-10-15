@@ -177,11 +177,15 @@ Each result an attempt produces SHALL be gated as one round: Kawai pushes its co
 - **THEN** A's round shows as superseded, a verdict on A no longer counts, and B is gated as a new round with its own CI and review
 
 ### Requirement: A new task revision returns the change for re-evaluation
-When the human publishes a new revision of a running change's task before its merge starts, the current round SHALL be superseded, and Kawai SHALL dispatch a fix attempt naming that revision. A result pinned to an older task revision SHALL NOT pass a round.
+When the human publishes a new revision of a running change's task before its merge starts, the current round SHALL be superseded, and Kawai SHALL dispatch a fix attempt naming that revision. A change that was landing SHALL leave the landing slot, and the fix attempt's result SHALL be accepted and gated. A result pinned to an older task revision SHALL NOT pass a round.
 
 #### Scenario: Direction changed during review
 - **WHEN** the human publishes revision 3 of a change's task while the round for a result pinned to revision 2 awaits review
 - **THEN** the round is superseded, a verdict on it no longer counts, and a fix attempt naming revision 3 is dispatched
+
+#### Scenario: Direction changed while landing
+- **WHEN** the human publishes a new task revision while the change holds the landing slot and waits for CI on its base merge
+- **THEN** the round is superseded, the change leaves the landing slot, and the fix attempt's result is gated as a new round
 
 #### Scenario: Direction changed while implementing
 - **WHEN** the human publishes a new task revision while the implementer is still working and no round is gating
@@ -198,8 +202,8 @@ CI for a round SHALL pass only when every check reported for the commit has pass
 - **WHEN** every mapped floor check passes but another reported check fails, and fails again when rerun
 - **THEN** the round fails, naming that check
 
-### Requirement: A check that passes on one rerun is flaky
-When a round's CI has failed checks, Kawai SHALL rerun the failed checks once on the same commit. Checks that then pass SHALL be recorded as flaky with both outcomes, and SHALL NOT fail the round. A check that fails again SHALL fail the round. A round SHALL get at most one rerun.
+### Requirement: A check that passes on its one rerun is flaky for that round
+When a round's CI has failed checks, Kawai SHALL rerun the failed checks once on the same commit. Checks that then pass SHALL be recorded as flaky for that round, with both outcomes, and SHALL NOT fail the round. Flaky SHALL describe the round's evidence, not the check. A check that fails again SHALL fail the round. A round SHALL get at most one rerun.
 
 #### Scenario: A flaky test does not cost a round
 - **WHEN** the unit-test check fails, and passes when rerun on the same commit
@@ -209,16 +213,27 @@ When a round's CI has failed checks, Kawai SHALL rerun the failed checks once on
 - **WHEN** the end-to-end check fails, and fails again when rerun
 - **THEN** the round fails with both runs of the check shown, and no further rerun is requested
 
-### Requirement: The review follows green CI and must be independent
-Once a round's CI passes, Kawai SHALL hand the result to the change's review group as a review handoff. The handoff SHALL name the result, commit, pull request, acceptance rules, and the extra checks to attest. Only a `pass` verdict on that result from the handoff's claimant SHALL satisfy the review, and only if the claimant authored none of the change's results in the execution. Other findings SHALL be recorded but SHALL NOT count.
+### Requirement: The review follows green CI
+Once a round's CI passes, Kawai SHALL hand the result to the change's review group as a review handoff. The handoff SHALL name the result, commit, pull request, acceptance rules, and the extra checks to attest, and SHALL ask for a verdict on that result through the findings tool.
+
+#### Scenario: The review names what to check
+- **WHEN** a round's CI passes
+- **THEN** the review group receives a handoff naming the result, its commit, the pull request, the acceptance rules, and the extra checks to attest
+
+#### Scenario: Changes requested fail the round
+- **WHEN** the review handoff's claimant submits a `fail` verdict on the result
+- **THEN** the round fails and its findings go into the fix attempt's instruction
+
+### Requirement: Only an independent claimant's verdict counts
+Only a `pass` verdict on the round's result from the review handoff's claimant SHALL satisfy the review, and only if the claimant authored none of the change's results in the execution. Other findings SHALL be recorded but SHALL NOT count. When the claimant, following forwards, is such an author, the change SHALL stop as `review-unavailable`, naming the claimant.
 
 #### Scenario: The author cannot pass its own work
 - **WHEN** the session that submitted a change's result also submits a `pass` verdict on it
 - **THEN** the verdict is recorded and the round still waits for the review handoff's claimant
 
-#### Scenario: Changes requested fail the round
-- **WHEN** the review handoff's claimant submits a `fail` verdict on the result
-- **THEN** the round fails and its findings go into the fix attempt's instruction
+#### Scenario: An author claims the review
+- **WHEN** the review handoff is claimed by a session that submitted one of the change's results
+- **THEN** the change stops as `review-unavailable`, naming that session, and Retry dispatches the review again
 
 ### Requirement: A worktree-scoped review group gets the worktree
 When the change's review group is worktree-scoped, Kawai SHALL release the worktree's live spawned members before dispatching the review handoff. It SHALL use member release's readiness rules, never killing anyone, and SHALL wait while a member is not ready. Human-created sessions SHALL never be released, and an unscoped review group SHALL leave the implementer in place.
@@ -265,15 +280,33 @@ When three consecutive fix rounds of a change fail, the change SHALL stop as `ro
 - **THEN** the change shows one failed fix round of three and gets another fix attempt
 
 ### Requirement: The owner retries a stopped change
-The human SHALL be able to retry a stopped change of a running execution under a command id. Retry SHALL run the stage the change stopped in again: after the round limit, as a fix attempt with a new count; after an unknown effect outcome, inspecting it first; after a CI stop, with new CI timeouts. Retry SHALL be refused while the change's task is closed, and a retried change SHALL wait for a slot under the parallel limit.
+The human SHALL be able to retry a stopped change of a running execution under a command id, which replays like Start's. Retry SHALL be refused while the change has a task and that task is closed. A retried change SHALL wait for a slot under the parallel limit.
+
+#### Scenario: Retry needs an open task
+- **WHEN** the human retries a change whose task they cancelled
+- **THEN** Retry is refused naming the closed task, and once the task is reopened, Retry dispatches the stage's instruction again
+
+#### Scenario: Retry before a task exists
+- **WHEN** the human retries a change that stopped as `name-taken` after the foreign branch was removed
+- **THEN** Retry is accepted, the names are checked again, and the change is provisioned
+
+### Requirement: Retry runs again the stage the change stopped in
+Retry SHALL run the stage of the change's stop reason:
+- `round-limit`: a fix attempt, with a new fix-round count;
+- `instruction-failed` and `task-closed`: that stage's instruction;
+- `review-unavailable`: the review handoff;
+- `name-taken`: the name check, then provisioning;
+- `effect-failed` and `pr-closed`: the effect;
+- `effect-unknown`: the effect's inspection first;
+- `ci-missing` and `ci-timeout`: CI, with new timeouts.
 
 #### Scenario: Retry after the round limit
 - **WHEN** the human retries a change stopped after three failed fix rounds
 - **THEN** a fix attempt is dispatched, its fix-round count starts again at one, and the retry is recorded with the owner as actor
 
-#### Scenario: Retry needs an open task
-- **WHEN** the human retries a change whose task they cancelled
-- **THEN** Retry is refused naming the closed task, and once the task is reopened, Retry dispatches the stage's instruction again
+#### Scenario: Retry after an unknown outcome
+- **WHEN** the human retries a change stopped as `effect-unknown` on its merge
+- **THEN** Kawai inspects the pull request first, and records the landing if the merge had completed instead of merging again
 
 ### Requirement: The owner stops an execution
 The human SHALL be able to stop a running execution with a reason under a command id. Nothing more SHALL be scheduled or dispatched for it, and no new effect SHALL start; a running effect SHALL settle and be recorded. Kawai SHALL cancel the execution's unlanded tasks, withdrawing their undelivered instructions and releasing their spawned members. Worktrees, branches, pull requests, results, and landing facts SHALL be kept. Closing the plan SHALL stop its execution the same way.

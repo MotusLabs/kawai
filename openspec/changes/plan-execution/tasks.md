@@ -24,6 +24,7 @@ Implement after `durable-plans`, `strategy-revision-impact`, and `plan-validatio
   - an author's own `pass` ignored;
   - a non-claimant's findings ignored;
   - a forwarded claimant counts;
+  - a claimant who authored a result, directly or as a forward successor, yields `author-claimant`;
   - a `fail` fails;
   - findings on another result ignored;
   - extra checks split by reported names.
@@ -31,22 +32,23 @@ Implement after `durable-plans`, `strategy-revision-impact`, and `plan-validatio
   - the implementation round does not count;
   - three failed fix rounds stop;
   - a pass resets the count;
+  - a carried round counts as the round it carries;
   - superseded rounds and CI stops never count;
   - landed changes come from facts while done tasks without a fact are not landed;
   - every state and waiting reason is rendered.
 
 ## 2. Kawai as a system actor
 
-- [ ] 2.1 Add `SystemActor` and widen the task creator, assignment dispatcher, and message sender types, with `from_kind = 'system'`. Add the system `TaskCaller` minted only inside `src/server/plans/execution/`. Verify with a typecheck, and with a test that no tool handler or WebSocket connection path can construct a system caller.
+- [ ] 2.1 Add `SystemActor` and widen the task creator, assignment dispatcher, and message sender types, with `from_kind = 'system'`. Add the system `TaskCaller` minted only inside `src/server/plans/execution/`. Rewrite the comment in `src/shared/teamTasks.ts` that records member-release D4 ("the system is never a sender or task creator"), so it states D2's rights instead. Verify with a typecheck, and with a test that no tool handler or WebSocket connection path can construct a system caller.
 - [ ] 2.2 Convert every two-way actor branch in `TaskService`, `AssignmentService`, `TaskResultService`, `MemberRelease`, `TaskRelease`, the mailbox enqueue and sender paths, and the row mappers (`taskStore`, `assignmentStore`, `messageRow`) to exhaustive switches. Verify with tests that call each service with a system caller and read back `system` as creator, dispatcher, and sender, never the human.
 - [ ] 2.3 Keep the human-only paths refusing `system`: publish, notify, Release, plan approve, withdraw, close, and reopen, strategy actions, and validation decisions. Verify with one refusal test per path.
 - [ ] 2.4 Render "Kawai" as creator, dispatcher, sender, and journal author in the task list and detail, the assignment history, the Mailbox, the Messages view, and peer-message rows. It is never a link. Verify with component tests.
 
 ## 3. Records
 
-- [ ] 3.1 Add the D3 migration: six tables, the partial unique indexes, and `team_messages.allowed_profiles`. Verify with a migration test on an existing database: tables created, old rows intact, rerun idempotent.
-- [ ] 3.2 Implement `executionStore.ts`: inserts, transitions guarded by `state` and `generation`, owned-change and slot lookups, and constraint errors mapped to `one-execution`, `changes-unclaimed`, and slot taken. Verify with unit tests, including two racing inserts per index.
-- [ ] 3.3 Add the `plan_events` kinds `execution-started`, `execution-stopped`, and `change-retried`, with the D3 compared payloads, and `completed` with actor `system`. Verify with replay tests: same payload returns the prior result; a different payload is refused naming the field.
+- [ ] 3.1 Add the D3 migration: seven tables including `plan_landing_slots`, the partial unique indexes, the nullable effect `change`, and `team_messages.allowed_profiles`. Verify with a migration test on an existing database: tables created, old rows intact, rerun idempotent.
+- [ ] 3.2 Implement `executionStore.ts`: inserts, transitions guarded by `state` and `generation`, owned-change lookups, taking and releasing the slot row in the transitions that enter and leave landing, and constraint errors mapped to `one-execution`, `changes-unclaimed`, and slot taken. Verify with unit tests, including two racing inserts per index and two racing slot takes.
+- [ ] 3.3 Add `PlanService.recordExecutionEvent` for the kinds `execution-started`, `execution-stopped`, and `change-retried`, with the D3 compared payloads, and `completed` with actor `system` under the command id `exec:<id>:complete`. Verify with replay tests: same payload returns the prior result; a different payload is refused naming the field; a repeated completion writes one event. Verify with a grep test that only `PlanService`'s store writes `plan_events`.
 
 ## 4. Settings
 
@@ -80,7 +82,7 @@ Implement after `durable-plans`, `strategy-revision-impact`, and `plan-validatio
 - [ ] 8.1 Add `ExecutionOwnership` and its null implementation. Wire it into `TaskService.create`, `AssignmentService.dispatch`, `TaskResultService.handoff` and `submit`, `TaskRelease.release`, and the reply paths. Verify with tests that the team services build and pass without the plans module.
 - [ ] 8.2 Make the system create path link to the execution's revision. Refuse other links to an owned change, for the human and for agents. Verify with the `team-tasks` delta scenarios.
 - [ ] 8.3 Refuse non-system dispatch and reassignment onto an owned task. Accept `allowedProfiles` and `tags` from the system caller only. Verify with the `task-assignment` delta scenarios, and that an agent cannot pass `allowedProfiles`.
-- [ ] 8.4 Refuse non-system handoffs and Release on owned tasks, while still accepting findings. Add the result submission checks (D9). Verify with the `task-results` delta scenarios, and that a refused result writes nothing.
+- [ ] 8.4 Refuse non-system handoffs and Release on owned tasks, while still accepting findings. Add the result submission checks (D9), refusing results only while the change is `updating` or `merging`. Verify with the `task-results` delta scenarios, that a refused result writes nothing, and that a result submitted while the change waits at `conditions` is accepted.
 - [ ] 8.5 Refuse replies to Kawai's mail with `KAWAI_REPLY_GUIDANCE`, in the `reply` tool and the human composer. Verify with the `agent-mailbox` delta scenarios.
 - [ ] 8.6 Add `execution: { id, revision }` to the task envelope for owned tasks (`taskContext.ts`). Verify with tests: the execution's revision differs from the current approved one, and unowned tasks keep their shape.
 
@@ -105,7 +107,7 @@ Implement after `durable-plans`, `strategy-revision-impact`, and `plan-validatio
 
 ## 12. Rounds and the gate
 
-- [ ] 12.1 Create rounds from new results, superseding the current round unless its merge started. Supersede on a new task revision and dispatch a fix attempt naming it. Verify with the round-supersession scenarios.
+- [ ] 12.1 Create rounds from new results, superseding the current round, passed or not, unless its merge started, and releasing the slot when the change held it. Supersede on a new task revision and dispatch a fix attempt naming it, after any running `update-branch` effect settles. Verify with the round-supersession scenarios, including a revision published while the change holds the slot and waits for CI on its base merge.
 - [ ] 12.2 Run the push and open-pr effects for each round (plan-landing push and PR rules). Verify against a bare `origin` and the stub `gh`: reuse across rounds; an implementer's own push accepted; a moved branch stops as `effect-failed`; a closed PR stops as `pr-closed`.
 - [ ] 12.3 Poll CI and request the single rerun (D10). Record checks, flaky marks, and stops. Verify with tests driving the stub `gh` through pending, failed, rerun, and passed states, and through both timeouts.
 - [ ] 12.4 Release before review for worktree-scoped review groups, then dispatch the review handoff with the instruction, allowed profiles, and author tags (D11). Verify with tests: a not-ready member holds the step with its reason; an unscoped group leaves the implementer; human sessions are never released.
@@ -115,14 +117,25 @@ Implement after `durable-plans`, `strategy-revision-impact`, and `plan-validatio
 
 - [ ] 13.1 Dispatch fix attempts with the failing checks, findings, count, and continue-from commit. Apply the round limit. Verify with the fix-round and round-limit scenarios.
 - [ ] 13.2 Detect failed instructions and human task closes. Verify with the `instruction-failed` and `task-closed` scenarios, including a hand acceptance that merges nothing.
-- [ ] 13.3 Implement Retry for every stop reason with a new generation (D12), and the wait for a free slot. Verify with one test per reason, and that Retry is refused while the task is closed.
+- [ ] 13.3 Implement Retry for every stop reason with a new generation (D12), and the wait for a free slot. Implement the `review-unavailable` stop when an author claims the review. Verify with one test per reason, that Retry is refused while the task is closed, and that a `name-taken` change, which has no task, can be retried.
 - [ ] 13.4 Implement Stop and the plan-close hook (D12, D19): cancel tasks as Kawai with member release, cancel pending effects, and settle a running merge first. Verify with the Stop scenarios, including Stop during a merge.
 
 ## 14. Direct landing and completion
 
-- [ ] 14.1 Implement the conditions check and the landing slot (D13). Verify with tests: an unresolved acceptance condition holds the change outside the slot, and resolving it lets the change land; two passing changes land in order.
-- [ ] 14.2 Implement up to date: the ancestry check, the `merge-tree` conflict prediction, the update attempt on conflict, `update-branch` with the parent check, and the carried round with CI on the new head. Verify against a bare `origin` and the stub `gh`: a clean update keeps the review; a conflict dispatches an update attempt naming the files; failed CI after the update dispatches a fix from the merge commit.
-- [ ] 14.3 Implement the pinned merge, the landing fact, Kawai's acceptance, worktree removal when safe, and post-landing CI as evidence. Verify with tests: a moved head is refused and nothing merged; the fact is written once; the task is done and its members are released; a live session keeps the worktree; a failing base branch keeps the change landed.
+- [ ] 14.1 Implement the conditions check and the landing slot (D13). Verify with tests: an unresolved acceptance condition holds the change outside the slot, and resolving it lets the change land; two passing changes land in order among those ready to merge; every stop releases the slot.
+- [ ] 14.2 Implement up to date: the ancestry check, the `merge-tree` conflict prediction, the update attempt on conflict, `update-branch` with the clean-merge check (parents, base containment, and tree), and the carried round with CI on the new head. Verify against a bare `origin` and the stub `gh`:
+  - a clean update keeps the review;
+  - a base that moved during the update still passes when the merge is clean;
+  - a hand-made merge with the right parents but another tree, and a head moved by a push, each release the slot and dispatch an update attempt;
+  - a conflict dispatches an update attempt naming the files;
+  - failed CI after the update dispatches a fix from the merge commit.
+- [ ] 14.3 Implement the pre-merge base re-read, the pinned merge, the landing fact with `base_sha` and `tree_verified`, Kawai's acceptance, worktree removal when safe, and post-landing CI as evidence. Verify with tests:
+  - a base that moved before the merge returns the change to the up-to-date step;
+  - a moved head is refused and nothing merged;
+  - the fact is written once, and `tree_verified` is 0 when the base moved between the re-read and the merge;
+  - the task is done and its members are released once ready;
+  - a live session keeps the worktree;
+  - a failing base branch keeps the change landed.
 - [ ] 14.4 Add `PlanService.completeBySystem` and the execution's completion (D19). Verify with tests: the last landing completes the plan as `system`, while a newer approved revision leaves it open.
 - [ ] 14.5 Register `direct` in the mechanism registry, and refuse `integration-branch` as `landing-mode-supported`. Verify with the integration-branch scenarios.
 
@@ -131,7 +144,7 @@ Implement after `durable-plans`, `strategy-revision-impact`, and `plan-validatio
 - [ ] 15.1 Add the D17 messages to `src/shared/types.ts` and `CHAT_CONNECTION_TYPES`, plus `executionConnections.ts` with team-scope resolution and cross-team refusals. Verify with connection tests for each message, and a refusal for another team's plan.
 - [ ] 15.2 Push `executions` in `team-plan-detail` after execution writes and owned task or mail changes. Verify with a test that a CI transition and a mail claim each push once.
 - [ ] 15.3 Wire `teamPlanStore`: executions, and the dialogs' command ids minted at open and re-minted only on a payload change. Verify with store tests, and a grep test that every applying method has a dispatch caller.
-- [ ] 15.4 Build `PlanExecutionSection`, `PlanExecutionStartDialog`, `PlanExecutionChangeRow`, and `PlanExecutionStopDialog`, and replace progress with `executionProgress` for executed plans. Verify with component tests for the Plans-view scenarios: Start standing and refusal, waiting explained, flaky and attested labels, disconnected controls, and Stop listing what it cancels and keeps.
+- [ ] 15.4 Build `PlanExecutionSection`, `PlanExecutionStartDialog`, `PlanExecutionChangeRow`, and `PlanExecutionStopDialog`, and replace progress with `executionProgress` for executed plans. Add the owned-task note to the task view's **Accept result** dialog (D17). Verify with component tests for the Plans-view scenarios: Start standing and refusal, waiting explained, flaky and attested labels, a landing flagged for an unverified tree, disconnected controls, Stop listing what it cancels and keeps, and the Accept note on an owned task only.
 
 ## 16. Agent surface
 
