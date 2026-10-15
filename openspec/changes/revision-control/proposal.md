@@ -28,13 +28,15 @@ Barriers keep stale work from passing integration. Its tests R01, R10, R11, R17,
 - **Pause with a durable checkpoint.** On an active hold, the owner chooses **Pause affected work** with a pause deadline:
   - In the same transaction, Kawai sends each holder of a held change's current agent stage an urgent direct system mail. The mail asks the holder to stop at a safe point, commit the work in progress with a clean worktree, and call the new agent tool `task_checkpoint`.
   - `task_checkpoint` records the commit, summary, unfinished actions, errors and tests, and next steps. Kawai checks that the commit is on the change branch and pushes it as the new `push-checkpoint` effect. Kawai stays the only writer of change branches (plan-execution D18, X3).
-  - A target reads **Pausing**, with its cause, until its checkpoint commit is on `origin` and its holder is ready under member release's readiness. Only then does Kawai record **Paused**. A result whose round push landed counts as the checkpoint. A review holder needs readiness only. A holder that was killed without a checkpoint reads **Checkpoint lost**.
+  - A target reads **Pausing**, with its cause, until its checkpoint commit is on `origin` and its holder is ready under member release's readiness. Only then does Kawai record **Paused**. A result whose round push landed counts as the checkpoint. A review holder needs readiness only. A Pausing that cannot complete, because the holder was killed or the checkpoint push failed, names that cause, and Restart and Stop stay available. A parked or cooling holder receives the pause mail once it can take it, and Pausing names the provider limit and its reset.
   - Pending approvals and questions stay unresolved, and urgent-direct semantics are unchanged (R11). A passed pause deadline raises attention. Nothing is ever killed.
   - Per paused change, the owner chooses:
     - **Continue**: the same attempt, with a resume mail to the same holder and no new attempt (R01);
     - **Adapt**: publish a new task revision with notify through the shipped publication path, which returns the change for re-evaluation (plan-execution D9);
-    - **Restart**: a new attempt from the checkpoint commit, carrying the checkpoint package;
+    - **Restart**: a new attempt from the checkpoint commit (else the branch head on `origin`), carrying the checkpoint package, in a fresh session once a spawned holder is released;
     - **Cancel**: the existing execution Stop.
+
+    Adapt and Restart under a standing hold are recorded at once and wait on `hold`; their dialog can release the change from a changes-scoped hold in the same command. Continue resumes under the hold. While a target is undecided, a task revision published outside Adapt dispatches nothing, and the resolution names the newest revision.
 - **Apply an approved plan revision to a running execution.** An owner command under a command id, compare-and-swapped on the execution's current revision:
   - Kawai classifies every change as unchanged, changed, added, or removed against the execution's revision (C1).
   - For each changed change the owner picks continue, adapt, or restart. Adapt publishes a task revision with notify.
@@ -74,7 +76,7 @@ Non-goals:
 - `plan-pause`:
   - Pause on a hold, and the pause mail;
   - the `task_checkpoint` tool and the `push-checkpoint` effect;
-  - Pausing, Paused, and Checkpoint lost, and their recovery after restart;
+  - Pausing with its causes, Paused, and their recovery after restart;
   - the four choices;
   - the `pausing` and `paused` causes and their attention items.
 - `plan-revision-apply`:

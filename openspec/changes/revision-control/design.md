@@ -26,6 +26,7 @@ What is missing is the owner's way to change course without throwing work away. 
 - **Owned by `execution-safety-recovery`:** the outbound-action audit log, the crash and fault matrix, leases, epochs and fencing, backups, and budgets. This change publishes R1–R5 for it.
 - **Contract work:** typed relations, contract registries, and archive automation.
 - **Agent-side controls:** no agent places, releases, or extends a hold, pauses, resolves a pause, or applies a revision.
+- **Voluntary checkpoints** outside a requested pause belong to `execution-safety-recovery`.
 - **Holds and pauses outside plans**, and forced termination of holders.
 
 ## Decisions
@@ -125,7 +126,7 @@ CREATE TABLE plan_execution_publication_changes (
 - `plan_executions.revision`, `content_hash`, `report_id`, and `input_hash` always equal the newest `plan_execution_revisions` row. Apply updates both in one transaction.
 - Hold activity is stored: a release has a row.
 - Paused is stored (`paused_at`).
-- Pausing, Checkpoint lost, and the overdue items are derived (D8, D13).
+- Pausing, its causes, and the overdue items are derived (D8, D13).
 
 **The database arbitrates the races:**
 - `UNIQUE (plan_id, command_id)` on holds and pauses, and on `plan_events`, replays commands;
@@ -144,7 +145,7 @@ The backfill inserts `seq = 1` for every execution from its row.
 | `hold-released` | `holdId`, sorted `changes`, sorted `retain`, trimmed `reason` |
 | `hold-extended` | `holdId`, `deadline`, trimmed `reason` |
 | `pause-requested` | `holdId`, `deadline`, trimmed `note` |
-| `pause-resolved` | `pauseId`, `change`, `choice`, `adapt` text, trimmed `rationale` |
+| `pause-resolved` | `pauseId`, `change`, `choice`, `adapt` text, trimmed `rationale`, `releaseHold` |
 | `revision-applied` | `executionId`, `expectedRevision`, `revision`, `contentHash`, `choices`, `adaptations`, trimmed `rationale` |
 
 Every command follows one shape, as plan-execution's Start does:
@@ -183,7 +184,7 @@ The deadline never releases anything (D13).
 
 ### D5. The hold gate
 
-`holdGate(activeHolds, change) → { holdIds, scope } | null` is pure. It is consulted at every step that would advance held work:
+`holdGate(activeHolds, openTargets, change) → { holdIds, scope, pauseId } | null` is pure. It closes for a change covered by an active hold, and also for a change with an open pause target that is undecided (Pausing or Paused, D8). The pause part is what keeps a task revision published outside Adapt from dispatching D9's fix attempt while the change is paused (D9). The gate is consulted at every step that would advance held work:
 
 | Where | What waits |
 | --- | --- |
@@ -220,7 +221,8 @@ Its targets are the held changes of the running execution whose current stage is
 | review handoff claimed or delivered | `stage: review`; holder likewise |
 | instruction or handoff `queued` or `awaiting-request` | `withdrawn`: Kawai supersedes it through reassignment's stop branch, which cancels the mail. The assignment derives `superseded`, never `instruction-failed` (plan-execution D12). The target is recorded Paused at once, with no checkpoint. |
 | instruction `spawning` | `stage` as above; its pause mail is sent once the spawn's claim is recorded |
-| Kawai-held steps (CI, conditions, slot, landing) and `waiting` changes | not targets; the pause lists them as "no active work" |
+| Kawai-held steps (CI, conditions, slot, the up-to-date step) and `waiting` changes | not targets; the pause lists them as "no active work" |
+| a merge or fast-forward effect has started | not a target; listed as "landing in progress" and left to settle per plan-execution D12 (landed if the merge completed) |
 
 **The pause mail.** In the same transaction, for each target with a holder, Kawai enqueues one urgent direct system mail (`from_kind: 'system'`) on the change's task, tagged `plan-pause`. Its body:
 - names the hold's rationale and the pause deadline;
@@ -232,6 +234,14 @@ Its targets are the held changes of the running execution whose current stage is
 Urgent direct semantics are unchanged: the interrupt waits for pending approvals and questions, which stay unresolved (R11), and a parked holder receives the mail when its resume arrives.
 
 *Why urgent:* a safe stop needs the holder to read the request during its turn, not after it. The interrupt is the shipped, confirmed path, and it never touches a pending card.
+
+**Parked and cooling holders.**
+- The cooling refusal for urgent direct mail is a rule of the agent `send_message`/`reply` paths. Kawai's system mail is enqueued by `PauseService`, not through those tools, so it is never refused for a cooling profile.
+- Like any mail, it reaches a holder only when that holder can take it. A parked holder receives it after its parked work's resume delivers, so the pause mail never jumps ahead of the work it pauses.
+- Meanwhile the target reads Pausing with the cause `provider-limit`, naming the profile and its reset time (the cooldown computed from `profile_limit_events`).
+- The pause deadline still applies, and Restart stays available (D9).
+
+*Why not deliver to a parked holder at once:* parked work is held by the provider limit. An interrupting turn would hit the same limit and could add a park to the same work, so the pause would only add risk.
 
 ### D7. `task_checkpoint` and the `push-checkpoint` effect
 
@@ -255,56 +265,89 @@ The effect runs `git push origin <commit>:refs/heads/<change>`, never forced. It
 
 A review target may call the tool without a commit to leave notes (kind `notes`). Notes are optional.
 
+**Retrying a failed push.** Another `task_checkpoint` call records a new checkpoint, and so gets a new effect key. A failed `push-checkpoint` is never a stop reason (no X8 entry).
+
+**Never round evidence.** A checkpoint commit is not a round. Plan-execution D10 reads CI only for a round's commit, so CI that a checkpoint push starts on the branch never counts as any round's evidence. A later round includes the checkpoint and is evaluated on its own commit.
+
+**Outside a pause.** Without a requested pause for the caller's change, the refusal guides the caller to keep working and submit with `task_submit_result`.
+
 **A result counts.** A result submitted while its target is Pausing is a round as usual. Once that round's push effect is done, Kawai records a `result` checkpoint pointing at the result. The holder does not need to call the tool as well.
 
 *Why Kawai pushes:* plan-execution tells agents not to push change branches (D18), and every outbound write is an audited effect (X3). The agent commits and Kawai pushes, so both rules hold, and execution-safety-recovery's audit sees the checkpoint push like any other.
 
-### D8. Pausing, Paused, and Checkpoint lost
+### D8. Pausing and Paused
 
-`pauseTargetState(target, facts)` is pure:
-- **Paused:** `paused_at` is set (a recorded fact).
-- **Checkpoint lost:** the holder session was killed and no checkpoint of the target reached `origin`.
-- **Pausing:** everything else. It always carries its causes:
-  - `awaiting-delivery`: the pause mail is not delivered yet;
-  - `starting`: the spawn has not claimed;
-  - `request`: a pending approval or question;
-  - `busy`: a turn or background work is running;
-  - `parked`;
-  - `no-checkpoint`;
-  - `checkpoint-pushing`;
-  - `checkpoint-push-failed`;
-  - and the readiness reasons member release reports.
+`pauseTargetState(target, facts)` is pure and returns one of three states.
 
-**Recording Paused.** The executor's tick records Paused in a guarded transaction (`WHERE paused_at IS NULL`) when both hold:
-- **the work is on `origin`:** the target is a review, or its newest checkpoint is a `result` or a `commit` whose effect is done;
-- **the holder is ready:** `MemberRelease.readiness(holder)` is ready. An archived holder counts as ready; a killed one counts as lost rather than ready, unless its checkpoint reached `origin`.
+**Paused**: `paused_at` is set, a recorded fact.
+
+**Decided**: a decision is recorded, or the execution finished, in which case the decision reads `cancelled`.
+
+**Pausing**: everything else. A Pausing target always carries its causes:
+- `awaiting-delivery`: the pause mail is not delivered yet.
+- `starting`: the spawn has not claimed.
+- `request`: a pending approval or question.
+- `busy`: a turn or background work is running.
+- `provider-limit`: the holder is parked or its profile is cooling; names the profile and the reset (D6).
+- `no-checkpoint`: no checkpoint is recorded yet.
+- `checkpoint-pushing`: the checkpoint's push effect has not settled.
+- `checkpoint-push-failed`: the push failed; the holder may record again (D7).
+- `holder-killed`: the holder session was killed before its work reached `origin`.
+- The readiness reasons that member release reports.
+
+Two causes mean the pause cannot complete without the owner: `holder-killed`, and `checkpoint-push-failed` after the pause deadline. They are named so, and the owner's Restart and Stop stay available (D9).
+
+**Recording Paused.** The executor's tick records Paused in a guarded transaction (`WHERE paused_at IS NULL`) when both of these hold:
+- **The work is on `origin`.** The target is a review, or its newest checkpoint is a `result`, or it is a `commit` whose effect is done.
+- **The holder is ready.** `MemberRelease.readiness(holder)` reports ready. An archived holder counts as ready. A killed holder counts as ready only once its checkpoint reached `origin`; otherwise it is `holder-killed`.
 
 Nothing else records Paused. A pause is closed (`closed_at`) when every target is decided or the execution finished.
 
 **Restart (R18).** Nothing about a pause lives only in memory:
-- the pause mail is a mailbox row under shipped receipt recovery;
-- an unknown `push-checkpoint` effect is inspected before anything else for its change;
+- The pause mail is a mailbox row under shipped receipt recovery.
+- An unknown `push-checkpoint` effect is inspected before anything else for its change.
 - Pausing is re-derived from stored rows.
 
-A restart therefore never resumes the holder blindly and never shows a Paused state that was not recorded. A paused execution survives restart with its pause, targets, checkpoints, and attempts (R01).
+So a restart never resumes the holder blindly, and never shows a Paused state that was not recorded. A paused execution survives restart with its pause, targets, checkpoints, and attempts (R01).
 
 **Deadline.** A target still Pausing after the pause deadline raises attention (D13). Nothing is killed, and the pause stays open.
 
 ### D9. The owner's choices
 
-`team-plan-pause-resolve { planId, pauseId, change, choice, adapt?, rationale?, commandId }` acts on a target that is Paused or Checkpoint lost. Pausing is refused, naming its causes. One transaction records the decision and its event, then:
+`team-plan-pause-resolve { planId, pauseId, change, choice, adapt?, rationale?, releaseHold?, commandId }`. One transaction records the decision and its event, then applies the choice:
 
-| Choice | Effect | Refused when |
-| --- | --- | --- |
-| `continue` | Kawai enqueues normal direct system mail to the holder, tagged `plan-resume`, naming the checkpoint commit and that inputs are unchanged. An archived holder is restored by direct mail. No attempt is created. | the target is withdrawn, lost, or a review whose handoff was superseded; the holder was killed (`holder-gone`) |
-| `adapt` | The human publishes the task's next revision with notify (`TaskService` publication, `within`, request key `pause:<commandId>`), with the dialog's direction and acceptance and the rationale. Plan-execution D9 then supersedes the round and dispatches a fix attempt naming the revision, continuing from the branch head, which includes the checkpoint. | a review target: Adapt applies to the change's work, and a review's direction is its result |
-| `restart` | Kawai supersedes the held assignment through the stop branch (claimed work is never cancelled) and dispatches a new attempt of the stage's kind (implement, fix, or update), or a new review handoff. Its manifest carries the optional `checkpoint: { id, commit }` (X2, additive and omitted when absent), and its instruction carries the checkpoint package. | — |
+| Choice | Allowed from | Effect | Refused when |
+| --- | --- | --- | --- |
+| `continue` | Paused | Kawai enqueues normal direct system mail to the holder, tagged `plan-resume`. It names the checkpoint commit and the task's newest revision. An archived holder is restored by direct mail. No attempt is created. | The target was withdrawn, or is a review whose handoff was superseded; the holder was killed (`holder-gone`) |
+| `adapt` | Paused | The human publishes the task's next revision with notify (`TaskService` publication, `within`, request key `pause:<commandId>`), with the dialog's direction and acceptance and the rationale. Plan-execution D9 then supersedes the round and dispatches a fix attempt naming that revision. The attempt continues from the branch head, which includes the checkpoint. | A review target: Adapt applies to the change's work, and a review's direction is its result |
+| `restart` | Paused, or Pausing with `holder-killed` or `checkpoint-push-failed` | See **Restart** below. | — |
 
-**Cancel** is plan-execution's Stop, which the dialog links to. Stop resolves every open target as `cancelled` in its own transaction and closes the pause.
+**Restart.**
+1. A spawned holder that is ready is released first, through member release's `releaseNow`, journaled as Kawai. The new attempt then starts in a fresh session.
+2. A human-created holder is never released. The dialog says the attempt may reach that session.
+3. Kawai supersedes the held assignment through the stop branch, which never cancels claimed work.
+4. Kawai dispatches a new attempt of the stage's kind (implement, fix, or update), or a new review handoff.
+5. The attempt starts from the newest checkpoint commit on `origin`, or else from the branch head on `origin`. In the second case the dialog and the instruction say that head may predate the holder's work.
+6. Its manifest carries the optional `checkpoint: { id, commit }` (X2, additive and omitted when absent), and its instruction carries the checkpoint package.
 
-A dispatch these choices cause goes through the hold gate (D5), like every other dispatch. A choice made while the hold is still active is recorded, and its attempt starts when the hold is released. Releasing a hold never resolves a pause, and resolving a pause never releases a hold.
+**Cancel** is plan-execution's Stop, linked from the dialog. Stop decides every open target as `cancelled` in its own transaction and closes the pause. Stop stays available from every state, so a refused Continue always leaves Restart and Stop.
 
-*Why Restart continues from the checkpoint commit:* Kawai never forces a branch. A restart from the baseline would need a rewrite. The new holder gets the checkpoint as history and decides what to keep, which is the design's "new attempt linked to history".
+**Under a standing hold.**
+- Continue resumes the same attempt, so the hold does not block it. The hold still blocks the next handoff and landing (D5).
+- Adapt and Restart dispatch new attempts, which the hold blocks. The resolution is recorded at once, and its dispatch shows as waiting on `hold`.
+- The dialog therefore offers **Also release this change from hold <id>** (`releaseHold`). It writes the `hold-released` event for that change in the same transaction, under the compared payload.
+- `releaseHold` applies only to a changes-scoped hold. For a whole-plan hold the dialog points to narrowing first, because that hold also refuses Start and covers changes the plan may add, and dropping one change from it is a deliberate narrowing (D4).
+- Other active holds that cover the change stay, and the dialog names them.
+- Releasing a hold on its own never resolves a pause.
+
+**A task revision published outside Adapt.** The owner may publish a task revision on a paused change from the task view. While the target is undecided, the pause closes the gate (D5), so plan-execution D9's fix dispatch waits. When the decision is recorded, the pending D9 dispatch is dropped if the resolution covers it:
+- Continue's resume mail names the newest revision, and the holder already has its notice.
+- Adapt publishes its own, newer revision.
+- Restart's attempt names the newest revision.
+
+Every resolution therefore works from the newest revision, and nothing is dispatched twice.
+
+*Why Restart continues from the checkpoint commit:* Kawai never forces a branch, and a restart from the baseline would need a rewrite. The new holder gets the checkpoint as history and decides what to keep. That is the UX design's "new attempt linked to history".
 
 ### D10. The revision delta
 
@@ -388,8 +431,8 @@ Positions follow the target's content order. The `revision-applied` event closes
 | Kind | Item id | Owner | Next action | Clears when |
 | --- | --- | --- | --- | --- |
 | `plan-hold-overdue` | `plan-hold-overdue:<holdId>:<deadline>` | human | Release or extend the hold | the hold is released or extended |
-| `plan-pause-overdue` | `plan-pause-overdue:<pauseId>:<change>` | human | Unblock the pausing holder | the target is Paused, lost, or decided |
-| `plan-checkpoint-decision` | `plan-checkpoint:<pauseId>:<change>` | human | Continue, adapt, restart, or stop | a decision, or the execution finishes |
+| `plan-pause-overdue` | `plan-pause-overdue:<pauseId>:<change>` | human | Unblock the pausing holder | the target is Paused or decided |
+| `plan-checkpoint-decision` | `plan-checkpoint:<pauseId>:<change>` | human | Continue, adapt, restart, or stop (only restart or stop for a Pausing target that cannot complete) | a decision, or the execution finishes |
 
 Each is derived only while its plan is open. None changes state.
 

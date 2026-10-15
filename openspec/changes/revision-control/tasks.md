@@ -13,7 +13,7 @@ Implement after these have landed on master: `plan-execution`, `integration-cand
 - [ ] 1.3 Implement the pure `holdGate` (D5), `pauseTargetState` (D8), and `revisionDelta` (D10). Verify with unit tests:
   - a change is held by a plan hold, by a changes hold, and no longer once its row is released;
   - every D8 cause and its precedence;
-  - Paused only from `paused_at`, and Checkpoint lost only for a killed holder with nothing pushed;
+  - Paused only from `paused_at`, and `holder-killed` only for a killed holder with nothing pushed;
   - each delta class and its changed fields;
   - `landing-changed`, `plan-rules-changed` only once something landed, and `landed-changed` ignoring `dependsOn`;
   - a waiting changed change gets choice `none`.
@@ -65,13 +65,22 @@ Implement after these have landed on master: `plan-execution`, `integration-cand
 - [ ] 4.3 Record Paused in the executor tick (D8). Verify with tests:
   - checkpoint pushed but the holder busy stays Pausing;
   - a pending approval stays pending and reads Pausing as `request` (R11);
-  - an archived holder counts as ready, and a killed holder with nothing pushed reads lost;
+  - an archived holder counts as ready, and a killed holder with nothing pushed reads Pausing as `holder-killed`;
+  - a parked or cooling holder reads `provider-limit` with its reset, and the pause mail is never refused for cooling;
+  - a change whose merge started lists as landing in progress;
   - Paused is recorded once.
 - [ ] 4.4 Implement `PauseService.resolve` (D9): Continue, Adapt through the `within` task publication, and Restart with the manifest's optional `checkpoint`. Stop closes the pause. Verify with tests:
   - Continue sends one `plan-resume` mail and creates no attempt, and is refused for a killed holder (`holder-gone`) and a withdrawn target;
   - Adapt publishes one revision with its notice, and D9's fix attempt follows;
   - Restart supersedes without cancelling claimed work, and the manifest names the checkpoint;
-  - choices under an active hold dispatch only after release;
+  - Restart releases a ready spawned holder first and never a human-created one;
+  - Restart starts from origin's head with the "may predate" note when no checkpoint reached origin;
+  - Restart is allowed from Pausing with `holder-killed` or `checkpoint-push-failed`;
+  - a refused Continue leaves Restart and Stop;
+  - Adapt and Restart under an active hold record at once and dispatch only after release;
+  - `releaseHold` releases the change in the same transaction, and is refused for a whole-plan hold with the narrowing guidance;
+  - Continue resumes under a hold;
+  - a task revision published while the target is undecided dispatches nothing, and the following resolution names the newest revision with no second dispatch;
   - an old manifest's hash is unchanged by the optional field.
 - [ ] 4.5 Write the R01 and R18 integration tests:
   - R01: restart with a Paused target keeps the execution, attempt, and checkpoint, and Continue creates no attempt;
