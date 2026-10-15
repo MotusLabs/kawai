@@ -1,6 +1,6 @@
 # Tasks
 
-Groups 1–6 depend only on master. Group 6 lands first, because migration 2 (group 3) needs the runner. Group 4's tab needs `team-workspace-pages` and the `durable-plans` Plans tab on master. Group 7's matrix rows for plan execution, integration, supervision, and revision control cite the tests those changes land, so write it after they merge, rebasing this branch onto master. Every file stays under 500 LOC. Tests that spawn git use `cleanGitEnv`. No test, fixture, or doc uses a concrete internal hostname or address, only reserved example names (`example.internal`, `192.0.2.0/24`, `2001:db8::/32`).
+Groups 1–3, 5, and 6 depend only on master. Group 6 lands first, because migration 2 (group 3) needs the runner. Group 4 waits for `team-workspace-pages` and the `durable-plans` Plans tab to be on master: its attention source and summary bucket need only `team-workspace`, but its tab needs both. Group 7's matrix rows for plan execution, integration, supervision, and revision control cite the tests those changes land, so write it after they merge, rebasing this branch onto master. Every file stays under 500 LOC. Tests that spawn git use `cleanGitEnv`. No test, fixture, or doc uses a concrete internal hostname or address, only reserved example names (`example.internal`, `192.0.2.0/24`, `2001:db8::/32`).
 
 ## 1. Security note
 
@@ -29,14 +29,15 @@ Groups 1–6 depend only on master. Group 6 lands first, because migration 2 (gr
 - [ ] 3.1 Implement the pure `src/server/outbound/parse.ts` (tokenizer, segments, one-level `-c` unwrap, `cd`/`-C` tracking) and `classify.ts` (`parseSends`, `judge`, the D4 rules, verdicts, and `CLASSIFIER_VERSION`). Verify with unit tests over a corpus from the spike's command shapes, rewritten with example names:
   - each rule's send and non-send forms;
   - origin-implicit and `-R` gh;
-  - `--body` and heredoc values never being targets;
+  - `--body`, `--body-file`, `-F body=@file`, and heredoc values never being targets;
+  - `GH_REPO` inline, by `env`, and by an earlier `export` segment; `git push --repo=`; and a URL `--repo`;
   - a named remote, a URL, and scp push targets;
   - public and internal registries;
   - curl, wget, and httpie bodies against GETs;
   - mail;
   - variables and `$(…)` reading unknown;
   - the strongest verdict and the match list of compound commands.
-- [ ] 3.2 Implement `redact.ts` (D8). Verify with a fixture corpus: every listed secret shape is redacted in commands and details, a non-secret command is unchanged, and truncation at 4096 characters is marked.
+- [ ] 3.2 Implement `redact.ts` (D8). Verify with a fixture corpus: every listed secret shape, including query-string credentials and JSON and form body fields, is redacted in the command, each match segment, the destination, and outcome details; a non-secret command is unchanged; and truncation at 4096 characters is marked.
 - [ ] 3.3 Add migration 2 `outbound-audit` (D6) to `MIGRATIONS`, and `OutboundStore` as the only writer, with header comments saying so. Verify with tests:
   - migration on a fresh database and on a baseline copy, run twice;
   - the duplicate `(session_id, tool_use_id)` call and duplicate outcome are no-ops;
@@ -49,7 +50,8 @@ Groups 1–6 depend only on master. Group 6 lands first, because migration 2 (gr
   - subagent calls record `agent_id`;
   - `canUseTool` deny and `PermissionDenied` record one `denied`;
   - background calls record `started-background`;
-  - a facts read error records `unknown-destination` and never throws.
+  - a facts read error records `unknown-destination` and never throws;
+  - an outcome that lands before its queued call row is recorded and joins the row once written.
 
   Measure the added per-call hook round trip with the fixture adapter and record it in the recovery matrix.
 - [ ] 3.5 Implement `outcomeState` (D7). Verify with unit tests: the precedence of every outcome, pending while the spawn lives, and outcome unknown once it ends. Add the AGENTS.md audit bullet; that is the docs for group 3.
@@ -63,10 +65,13 @@ Groups 1–6 depend only on master. Group 6 lands first, because migration 2 (gr
 - [ ] 4.2 Implement `OutboundService.acknowledge` (D10). Verify with unit tests:
   - human only, with an agent refused and nothing written;
   - replay and different-payload refusal naming the field;
+  - the acknowledgement covers its group through the named call and no later call;
   - a non-violation or another team's call refused;
   - one row written, with the call unchanged.
 - [ ] 4.3 Add `outboundItems` to `ATTENTION_SOURCES`, the `audit` link kind, and the `outbound` summary bucket. Verify with workspace read tests:
-  - one item per unacknowledged violation, with its id, owner, cause, next action, and link;
+  - one item per `(rule, destination)` group with unacknowledged violations, with its id, owner, cause and count, next action, and link;
+  - repeated calls to one unlisted MCP server raise one item;
+  - a violation after the group's acknowledgement raises it again;
   - none for unknown or allowed rows;
   - clearing after acknowledgement;
   - the bucket's counts over the window.
@@ -92,13 +97,17 @@ Groups 1–6 depend only on master. Group 6 lands first, because migration 2 (gr
   - the first start on a copy of a pre-change database leaves every table's rows and columns unchanged, and records version 1;
   - a fresh start records all versions;
   - `user_version` mirrors the highest version;
-  - a migration that throws rolls back, records nothing, and refuses start naming it.
-- [ ] 6.2 Implement the newer-database refusal (D14). Verify with a test: version 3 against a build knowing 2 exits with the message, and the file's bytes are unchanged.
+  - a migration that throws rolls back, records nothing, and refuses start naming it;
+  - the baseline runs only on a database with no recorded version: a migration that drops a baseline column stays applied across a restart;
+  - a database with extra tables records version 1;
+  - a failed or corrupt pre-migration backup refuses start before `up(db)` runs.
+- [ ] 6.2 Implement the newer-database refusal (D14), checked before any write. Verify with a test: version 3 against a build knowing 2 exits with the message, and the file's bytes and mtime are unchanged.
 - [ ] 6.3 Implement `DatabaseBackups` (D15): snapshot, atomic rename, integrity check on a separate connection, corrupt marking, the schedule with the `total_changes()` skip, and rotation. Verify with tests:
   - a snapshot taken while another connection writes under its busy timeout loses no commit;
   - the copy passes `integrity_check`;
   - a truncated copy is marked corrupt and stays out of rotation;
-  - an idle hour takes nothing;
+  - an idle hour takes nothing, including the first hour after a restart;
+  - a leftover `.partial` is deleted at startup, and only 3 `.corrupt` files are kept;
   - rotation keeps 24/7/3 by reason;
   - a pre-migration backup precedes each migration, and its failure refuses start.
 

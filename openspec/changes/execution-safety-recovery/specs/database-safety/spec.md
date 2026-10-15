@@ -7,29 +7,37 @@ Keeps Kawai's SQLite database recoverable. The schema carries a version, and lat
 ## ADDED Requirements
 
 ### Requirement: The database records its schema version
-Kawai SHALL keep a `schema_migrations` table with each applied version's number, name, time, build version, and pre-migration backup. On first start of this build it SHALL run the existing schema steps unchanged and record version 1 as the baseline. Every later schema change SHALL be a numbered migration.
+Kawai SHALL keep a `schema_migrations` table with each applied version's number, name, time, build version, and pre-migration backup. Only when no version is recorded SHALL it run the existing schema steps unchanged and record version 1 as the baseline, extra tables included; later starts SHALL skip them. Every later schema change SHALL be a numbered migration.
 
 #### Scenario: First start records the baseline
 - **WHEN** this build starts on a database with no `schema_migrations` table
 - **THEN** the existing tables and rows are unchanged, and version 1 `baseline` is recorded
+
+#### Scenario: A later migration is not undone
+- **WHEN** migration 3 dropped a baseline column and the server restarts
+- **THEN** the baseline steps do not run and the column stays dropped
 
 #### Scenario: A fresh database
 - **WHEN** this build starts with no database file
 - **THEN** the full schema exists and every known migration is recorded
 
 ### Requirement: Migrations apply whole after a backup
-Before each pending migration Kawai SHALL take a pre-migration backup, then apply the migration and record its version in one transaction. A failed backup or a failed migration SHALL roll back, leave the database at its previous version, and refuse to start, naming the migration and the backup.
+Before each pending migration Kawai SHALL take a pre-migration backup and SHALL start the migration only once that backup is in place and has passed its integrity check, then apply the migration and record its version in one transaction. A failed backup or a failed migration SHALL roll back, leave the database at its previous version, and refuse to start, naming the migration and the backup.
 
 #### Scenario: A migration throws
 - **WHEN** migration 3's statements fail midway
 - **THEN** none of its changes remain, version 3 is not recorded, and the server exits naming migration 3 and its backup
+
+#### Scenario: A corrupt pre-migration backup
+- **WHEN** the `pre-migration-3` backup fails its integrity check
+- **THEN** migration 3 does not start, and the server exits naming the backup
 
 #### Scenario: Migrations apply in order
 - **WHEN** the database is at version 1 and the build knows versions 2 and 3
 - **THEN** a backup precedes each, and both are recorded in order
 
 ### Requirement: A database newer than the build refuses to start
-When the database's highest version is greater than the build's newest migration, Kawai SHALL refuse to start without writing anything, naming both versions, the newest backup taken before that version, and the restore procedure. No override SHALL exist.
+When the database's highest version is greater than the build's newest migration, Kawai SHALL refuse to start before any write, the baseline included, naming both versions, the newest backup taken before that version, and the restore procedure. No override SHALL exist.
 
 #### Scenario: Running an older build
 - **WHEN** a build that knows version 2 starts on a database at version 3

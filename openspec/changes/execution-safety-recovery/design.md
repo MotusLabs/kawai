@@ -113,8 +113,8 @@ It never sets `decision`, `hookSpecificOutput`, `permissionDecision`, `updatedIn
 
 The observer:
 - **Ignores `mcp__kawai-team__*`.** The mailbox already records that traffic.
-- **On `PreToolUse`,** parses the command. Bash and Monitor read `tool_input.command`. An external MCP call is a candidate by itself (D5). When the parse finds a send candidate, it resolves facts and appends one `outbound_calls` row (D6). Non-send tool use writes nothing.
-- **On `PostToolUse`, `PostToolUseFailure`, and `PermissionDenied`,** appends an `outbound_outcomes` row only when the session has a call row for that `tool_use_id`. The outcome is:
+- **On `PreToolUse`,** parses the command. Bash and Monitor read `tool_input.command`. An external MCP call is a candidate by itself (D5). When the parse finds a send candidate, it adds `(session_id, tool_use_id)` to the in-memory `pendingSends` set synchronously, before the hook returns, then queues the facts read and the `outbound_calls` insert (D6). Non-send tool use writes nothing.
+- **On `PostToolUse`, `PostToolUseFailure`, and `PermissionDenied`,** appends an `outbound_outcomes` row when `(session_id, tool_use_id)` is in `pendingSends`, whether or not the queued call row has been written yet. The set is filled before any outcome hook can fire, because `PreToolUse` precedes the permission decision and the run, so an outcome that lands before its call row is never dropped. An entry leaves the set when its terminal outcome is written or its spawn ends. The outcome is:
   - `started-background` for a `PostToolUse` whose input ran in the background (`run_in_background`, or any Monitor);
   - `completed` for any other `PostToolUse`;
   - `failed` for `PostToolUseFailure` (with `is_interrupt` in the detail);
@@ -141,14 +141,14 @@ Kawai's own git and `gh` calls (plan-execution effects, promotions) never pass t
   A candidate names its rule, its segment, its effective cwd, and a target spec: `origin-implicit`, `remote:<name>`, `url:<url>`, `host:<host>`, `registry:<host or default>`, `repo:<owner/name>`, `mail`, or `unresolved:<why>`.
 - **`judge(candidate, facts) → { verdict, destination }`**: `facts` holds the destination classes (D2) and the repository facts the resolver read for each effective cwd: the repository root, `origin`'s URL, every remote's URL, and the current branch's push remote.
 
-Arguments are read by position and flag, never by searching text. A `--body`, `--title`, `-m`, `--notes`, `-f body=…` value, or a heredoc is a value and never a target. That removes the spike's whole false-positive class.
+Arguments are read by position and flag, never by searching text. A `--body`, `--body-file`, `--title`, `-m`, `--notes`, `-f body=…` or `-F body=@file` value, or a heredoc is a value and never a target. Like `cd`, an `export VAR=…` or `VAR=…` segment carries into the later segments' environment, so `export GH_REPO=other/repo; gh pr create` targets `other/repo`; a variable set any other way leaves its target unresolved. That removes the spike's whole false-positive class.
 
 The rules (ids are append-only, contract E3):
 
 | Rule | Send when | Target |
 | --- | --- | --- |
-| `git-push` | `git push` | the named remote's URL, a URL or `user@host:path` argument, else the branch's push remote, else `origin` |
-| `gh-write` | `gh <issue\|pr\|release\|repo\|gist\|label\|secret\|variable\|workflow\|run> <create\|edit\|close\|reopen\|comment\|merge\|delete\|review\|upload\|set\|run\|…>` | `-R`/`--repo`, an inline `GH_REPO=`, a `github.com/<owner>/<repo>` positional argument, else the cwd's `origin` |
+| `git-push` | `git push` | `--repo=<remote or URL>`, the named remote's URL, a URL or `user@host:path` argument, else the branch's push remote, else `origin` |
+| `gh-write` | `gh <issue\|pr\|release\|repo\|gist\|label\|secret\|variable\|workflow\|run> <create\|edit\|close\|reopen\|comment\|merge\|delete\|review\|upload\|set\|run\|…>` | `-R`/`--repo` (`owner/repo`, `host/owner/repo`, or a URL), `GH_REPO` set inline, by `env`, or by an earlier `export` segment, a `github.com/<owner>/<repo>` positional argument, else the cwd's `origin` |
 | `gh-api-write` | `gh api` with `-X`/`--method` other than GET, or with `-f`/`-F`/`--field`/`--raw-field`/`--input` | `repos/<owner>/<repo>/…` (with `{owner}`/`{repo}` meaning origin), else unresolved (for example `graphql`) |
 | `registry-publish` | `npm`/`bun`/`pnpm`/`yarn publish`, `twine upload`, `cargo publish`, `docker`/`podman push`, `helm push`, `buildctl … type=image,push=true`, `docker buildx … --push` | `--registry`, `--repository-url`, `--index`, the image or OCI reference's registry host, else that tool's public default registry |
 | `http-send` | `curl` with `-X`/`--request` other than GET or HEAD, `-d`/`--data*`, `-F`/`--form`, `-T`/`--upload-file`, or `--json`; `wget --post-data`/`--post-file`/`--method`; `http`/`https` (httpie) with a non-GET method or a body item | the URL's host |
@@ -168,7 +168,9 @@ The facts resolver is the one I/O step. It finds the repository with the same ne
 
 ### D5. External MCP calls are recorded as `mcp-call`
 
-Kawai cannot tell an MCP read from a send. So every call to an MCP server other than `kawai-team` is recorded: `allowed` when its server is in `mcpServers`, else `violation`. The spike's history has none, so the volume is zero today. An owner who adds a read-only server to `mcpServers` sees its calls counted as allowed and raising no attention.
+Kawai cannot tell an MCP read from a send. So every call to an MCP server other than `kawai-team` is recorded: `allowed` when its server is in `mcpServers`, else `violation`. The spike's history has none, so the volume is zero today. Each call keeps its own violation row, but attention groups by rule and destination (D10): a stream of calls to one unlisted server raises one item, which stands until the owner acknowledges it or adds the server to `mcpServers`.
+
+The allowlist is never derived from the CLI's MCP settings. `mcpServers` is the owner's reviewed list in user-level configuration; deriving it from settings, which project files can also supply, would mark unreviewed servers allowed.
 
 *Alternative:* record no MCP calls. Rejected: P4 asks for every observable send, and an external MCP server is the most direct outward channel an agent has.
 
@@ -213,16 +215,20 @@ CREATE TABLE outbound_outcomes (
 );
 
 CREATE TABLE outbound_acknowledgements (
-  call_id TEXT PRIMARY KEY REFERENCES outbound_calls(id),
+  id TEXT PRIMARY KEY,                 -- 'oba-<uuid>'
   team_id TEXT NOT NULL,
   command_id TEXT NOT NULL,
+  rule TEXT NOT NULL,                  -- the violation group (D10): rule and destination
+  destination TEXT NOT NULL,
+  through_created_at TEXT NOT NULL,    -- covers the group's violations up to this call
+  through_call_id TEXT NOT NULL REFERENCES outbound_calls(id),
   note TEXT,                           -- optional, at most 300 characters
   acknowledged_at TEXT NOT NULL,
   UNIQUE (team_id, command_id)
 );
 ```
 
-`OutboundStore` is the only SQL writer of these tables. An outcome may arrive before its call row is written, because the call insert is queued (D3). Outcomes therefore key on `(session_id, tool_use_id)`, not on the call id, and the read joins them.
+`OutboundStore` is the only SQL writer of these tables. An outcome may be written before its call row, because the call insert is queued (D3). Outcomes therefore key on `(session_id, tool_use_id)`, not on the call id; the read joins them, and `UNIQUE (session_id, tool_use_id, outcome)` is the dedupe. An outcome row whose call row never arrives (a crash in between) is kept and joins nothing.
 
 Rows are never pruned. At about 200 sends a month, a row of at most 5 KiB costs about 1 MB a month at worst. A later change may add retention, and the view and the summary read nothing that pruning would break.
 
@@ -238,12 +244,14 @@ The driver mints a `spawn_id` at each agent process start and drops it from `liv
 
 ### D8. Redaction runs before any write
 
-`redact(text)` runs on the command and on outcome details before they reach the store, the log, or the view. It replaces each of the following with `‹redacted›`:
+`redact(text)` runs on every field written from the command or the tool's output before it reaches the store, the log, or the view: the command, each `matches[].segment`, `destination`, and the outcome detail. `destination` is built from the redacted target, so a credential in a URL never reaches it. It replaces each of the following with `‹redacted›`:
 - known token shapes: `ghp_`/`gho_`/`ghu_`/`ghs_`/`ghr_`/`github_pat_`, `sk-…`, `xox[abpr]-…`, AWS `AKIA…`, JWT-shaped triples, and `-----BEGIN … PRIVATE KEY-----` blocks;
 - the values of `Authorization:`, `Proxy-Authorization:`, `Cookie:`, `X-Api-Key:`, and `PRIVATE-TOKEN:` headers;
 - `-u`/`--user` credentials;
 - URL userinfo (`https://user:pass@`, and `https://token@`);
 - `--token`/`--password`/`--api-key` values;
+- query-string credentials: the values of `token`, `access_token`, `api_key`, `apikey`, `key`, `secret`, `password`, `sig`, and `signature` parameters;
+- body credentials in `-d`/`--data*`/`--json`/`-F`/`-f` values: JSON members and form fields whose name matches the secret-name pattern below;
 - inline assignments whose name matches `/(TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|AUTH)/i`.
 
 Redaction is pure and tested against a fixture corpus. It errs toward over-redaction. The classifier sees the unredacted command in memory only, and nothing unredacted is ever written.
@@ -258,7 +266,7 @@ The view shows:
 - **Header counts** for the chosen time range: allowed sends per rule (for example `git-push 106`, `gh-write 51`), unknown destinations, violations, and unacknowledged violations.
 - **Rows,** newest first: time, verdict, rule, destination, the session (named, `Name (gone)` through `team_session_directory` for a killed one, linking only live or archived sessions), group, profile, task, subagent, tool, the redacted command (one line, expandable), cwd, and the outcome state (D7) with its detail.
 - **Filters:** verdict, rule, session, and a time range. These are server filters with keyset paging over `(created_at, id)` and **Load more**, as in the Messages view.
-- **Acknowledge** on a violation row, with an optional note.
+- **Acknowledge** on a violation row, with an optional note. It acknowledges the row's group (rule and destination) through that row (D10).
 
 The protocol, addressed by `teamPath` through the shared team-scope resolver:
 - `team-audit-open { teamPath, filters }` answers `team-audit-page { rows, counts, cursor }`, and `team-audit-more { teamPath, filters, cursor }` answers the next page.
@@ -270,23 +278,24 @@ Every type joins `CHAT_CONNECTION_TYPES`. Every control disables while disconnec
 
 ### D10. Violations raise a human-owned informational attention item
 
-`ATTENTION_SOURCES` gains `outboundItems`, pure over the team's unacknowledged violation rows:
-- kind `outbound-violation`, with id `outbound-violation:<callId>`;
+`ATTENTION_SOURCES` gains `outboundItems`, pure over the team's unacknowledged violation rows, grouped by `(rule, destination)`. A violation is unacknowledged when no acknowledgement of its group covers it (`through_created_at`, `through_call_id` at or after the call's `(created_at, id)`), so a later violation of an acknowledged group raises the item again. One item per group:
+- kind `outbound-violation`, with id `outbound-violation:<rule>:<destination>`;
 - owner `{ kind: 'human' }`, with `requiresHuman: true`;
 - the impact is informational: nothing waits on the item;
-- the cause is "<session> ran <rule> to <destination>";
+- the cause is "<rule> to <destination>: <n> unacknowledged, latest by <session>";
 - the next action is "Review and acknowledge";
-- the link is the new `AttentionLink` kind `audit`, with the call id, which opens the Audit tab on that row.
+- the link is the new `AttentionLink` kind `audit`, with the newest call id, which opens the Audit tab on that row filtered to the group.
 
 Unknown-destination and allowed rows raise nothing. The `MorningSummary` gains the bucket `outbound`, counting the window's violations, unknown destinations, and allowed sends. It is durable, not `runtimeOnly`.
 
 Acknowledgement:
 - `OutboundService.acknowledge` refuses a non-human caller first.
+- The command names one violation call (`callId`, the newest the dialog showed) and an optional note. It acknowledges that call's group through that call.
 - It replays by `(team_id, command_id)`: the same call and note return the prior result, and a different payload is refused naming the field.
 - It refuses a call that is not a violation or belongs to another team (read as not found).
 - It inserts one row.
 
-An acknowledged call keeps its row and verdict, and the item clears.
+Acknowledged calls keep their rows and verdicts, and the item clears until the group's next violation.
 
 No agent tool reads or writes audit rows, and no `kawai-team` tool is added. A verdict never stops anything: it is not an X8 stop reason, not an S2 cause, not an R5 attention kind, and not a dispatch, routing, or staffing input.
 
@@ -331,16 +340,19 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 `src/server/dbSafety/migrations.ts` holds `MIGRATIONS: readonly Migration[]`, each `{ version, name, up(db) }`, versions dense from 2.
 
 At startup, `initDatabase` does the following in order:
-1. Runs today's schema functions unchanged: `db.ts`'s ensures and `migrateDatabase`, and every store schema function, which `initDatabase` collects into one baseline step instead of stores calling them lazily (task 6.1 inventories them).
-2. Inserts version 1 `baseline` if absent.
-3. Reads `max(version)`. When it is greater than the newest known version, startup refuses (D14).
-4. For each pending migration, in order: takes a pre-migration backup (D15). If that fails, startup refuses. Otherwise it runs `up(db)` and inserts its version row in one `BEGIN IMMEDIATE` transaction. A throw rolls the transaction back and refuses startup, naming the migration and the backup.
+1. **Reads the version without writing.** It checks `sqlite_master` for `schema_migrations` and reads `max(version)`, with 0 for a missing table or no rows.
+2. **Refuses a newer database** (D14) when that version is greater than the newest known one, before any statement that could write, so the file's bytes are unchanged.
+3. Takes the `startup` snapshot (D15) when the file existed.
+4. **Runs the baseline exactly once,** only when `schema_migrations` has no rows: today's schema functions unchanged — `db.ts`'s ensures, `migrateDatabase`, and every store schema function, which `initDatabase` collects into this step instead of stores calling them lazily (task 6.1 inventories them) — then creates `schema_migrations` and records version 1 `baseline`. The steps are idempotent today, so a crash before version 1 is recorded just runs them again. A database with extra tables, such as one a development branch created, still records version 1; the baseline never inspects or drops what it does not know.
+5. **Applies each pending migration in order,** gated on its backup: it takes the `pre-migration-<n>` snapshot and waits until that file is renamed into place and its integrity check has passed. A failed snapshot or check refuses startup, naming the backup, and `up(db)` never starts. Otherwise it runs `up(db)` and inserts the version row, with `backup_path`, in one `BEGIN IMMEDIATE` transaction. A throw rolls the transaction back and refuses startup, naming the migration and the backup.
+
+On every later start, step 4 is skipped, so a migration that drops or renames a baseline column is never undone by the frozen ensures.
 
 `PRAGMA user_version` mirrors `max(version)` for outside tools and is never read for a decision.
 
 *Alternative:* `user_version` alone. Rejected: it records no names, times, or backups, and a mirror costs nothing.
 
-Rule for later changes (E5): a schema change after this one is a numbered migration. The baseline ensures stay frozen, apart from bug fixes.
+Rule for later changes (E5): a schema change after this one is a numbered migration. The baseline ensures stay frozen, apart from bug fixes, and run only on a database with no recorded version.
 
 ### D14. A database newer than the build refuses to start
 
@@ -359,7 +371,7 @@ Going back to an older build is therefore a restore, which is explicit and keeps
 1. Runs on the server's own connection, from a timer or a startup step, never inside a transaction. bun:sqlite transactions are synchronous, so a callback cannot interleave with one.
 2. Calls `db.serialize()`, which takes SQLite's shared lock for the copy, then writes the bytes asynchronously to `<name>.partial`, fsyncs, and renames to `agentboard-<UTC stamp>-<reason>.db` in `~/.agentboard/backups/`.
 3. Opens the file read-only on a separate connection, runs `PRAGMA integrity_check`, and closes it.
-4. A failed check renames the file to `.corrupt`, logs it, and keeps it out of rotation.
+4. A failed check renames the file to `.corrupt`, logs it, and keeps it out of rotation. A `.partial` file left by a crash is deleted at startup, and only the newest 3 `.corrupt` files are kept.
 
 **Measured** on a copy of the live 5.1 MB database (bun:sqlite, this host): `serialize()` took 2.4–5.0 ms, `VACUUM INTO` 15–52 ms, and the integrity check of the copy 4.8–5.6 ms. The event loop pauses for the `serialize()` only, under about 5 ms at today's size. The write and the check are off the hot path.
 
@@ -370,8 +382,8 @@ A snapshot can never fail a live commit:
 - the live file is never copied with `cp`.
 
 The schedule:
-- `startup`: after the baseline step and before pending migrations;
-- `interval`: hourly, skipped when the connection's `total_changes()` has not moved since the last snapshot;
+- `startup`: after the version check and before the baseline and pending migrations (D13);
+- `interval`: hourly, skipped when the connection's `total_changes()` has not moved since the last snapshot. The counter is per connection and starts at zero on each start; because every start takes a `startup` snapshot, its counter value at that snapshot is the in-memory baseline the first interval compares against;
 - `pre-migration-<n>`: before migration n.
 
 The rotation, per reason, by name:
@@ -416,7 +428,7 @@ AGENTS.md gains the rule that a change adding a recovery mechanism or exclusive 
 | Contract | From | Used for |
 | --- | --- | --- |
 | X3 Effects | `plan-execution` D14 | Kawai's own git and `gh` calls stay effect rows. The audit is a separate table and id space, and adds no effect kind. The view may link an effect, and never writes one. The matrix cites the `running` → `unknown` inspection. |
-| X6 Landing slot and holder liveness | `plan-execution` D13 | D11 restates the liveness rule for every later holder kind. |
+| X6 `LandingMechanism` | `plan-execution` D13, with D3's slot-liveness rule (orphan holders cleared at startup and whenever the slot is found taken; a new holder kind supplies its own check) | D11 restates the liveness rule for every later holder kind. |
 | X8 Stop reasons | `plan-execution` D12 | Audit verdicts add no stop reason. The X8 table's "new reasons" entry for this change is empty. |
 | I2 Promotions | `integration-candidates` D3 | Promotion writes are effects, never audit rows (D3). The matrix cites promotion recovery. |
 | S2 Outcomes and causes | `plan-supervision` D10 (645d02d) | Audit adds no cause. The matrix names `changeSupervision` as the recovery-state reader. |
@@ -429,6 +441,7 @@ AGENTS.md gains the rule that a change adding a recovery mechanism or exclusive 
 | Attention sources and summary | `team-workspace` D5, D8 (`workspaceRead.ts`) | `outboundItems` source, `AttentionLink` kind `audit`, `outbound` summary bucket. |
 | Tab model | `team-workspace-pages` D3 | The `#/team/<key>/audit` tab. |
 | Host-agnostic team view | `durable-plans` D12 | `TeamAuditView` owns its subscription over `teamPath`, as `TeamPlansView` does. |
+| C3 / C6 | `durable-plans` | Not consumed. durable-plans' contract table lists this change under them, but it writes no plan events and no plan records. |
 | Team-scope resolver | `team-message-history`, shipped | `teamPath` addressing and the `unknown-team` refusal. |
 | Background task roster | `chat-session-background-tasks` | The `started-background` link by tool-call id. |
 | `developerInstructions` | `codex-chat-sessions` | Carries E1's text. |

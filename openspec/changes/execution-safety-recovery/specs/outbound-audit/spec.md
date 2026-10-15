@@ -67,11 +67,15 @@ A send SHALL be `allowed` when its target resolves to origin, an internal destin
 - **THEN** the verdict is allowed
 
 ### Requirement: Secrets are redacted before anything is written
-Kawai SHALL redact tokens of known shapes, authorization and cookie header values, `-u` credentials, credentials in URLs, token and password flag values, and secret-named inline variables from the command and outcome detail before storing, logging, or showing them. Commands SHALL be stored up to 4096 characters, with truncation marked.
+Kawai SHALL redact tokens of known shapes, authorization and cookie header values, `-u` credentials, credentials in URLs, token and password flag values, and secret-named inline variables and credential query and body fields from the command, each match segment, the destination, and outcome detail before storing, logging, or showing them. Commands SHALL be stored up to 4096 characters, with truncation marked.
 
 #### Scenario: A token in a header
 - **WHEN** an agent runs `curl -H "Authorization: Bearer abc123" -d x https://host.example.internal`
 - **THEN** the stored command shows the header value as redacted
+
+#### Scenario: Credentials in a query string and a body
+- **WHEN** an agent runs `curl -d '{"token":"abc"}' "https://host.example.internal/hook?api_key=xyz"`
+- **THEN** the stored command, match segments, and destination contain neither `abc` nor `xyz`
 
 #### Scenario: Credentials in a push URL
 - **WHEN** an agent runs `git push https://user:secret@github.com/o/r.git`
@@ -95,6 +99,10 @@ Outcomes SHALL be `completed`, `failed`, `denied` (a permission denial or a decl
 - **WHEN** the human denies the approval card for a recorded `git push`
 - **THEN** the call's outcome is denied
 
+#### Scenario: The outcome lands first
+- **WHEN** a recorded send completes before its queued call row is written
+- **THEN** the outcome is kept, and the call reads completed once its row exists
+
 #### Scenario: The process ends first
 - **WHEN** an agent's process is killed after a recorded send and before any outcome
 - **THEN** the call reads outcome unknown
@@ -115,18 +123,22 @@ The Team page SHALL have an Audit tab listing the team's recorded calls newest f
 - **THEN** the row appears at the top without a reload
 
 ### Requirement: Violations raise an informational attention item
-Each violation not yet acknowledged SHALL raise a team attention item of kind `outbound-violation`, owned by the human, naming the session, rule, and destination and linking to the row. Unknown destinations and allowed sends SHALL raise none. A verdict SHALL NOT become a stop reason, supervision cause, or dispatch, routing, or staffing input.
+Unacknowledged violations SHALL raise one team attention item of kind `outbound-violation` per rule and destination, owned by the human, naming the count and latest session, and linking (kind `audit`) to the newest row. Unknown destinations and allowed sends SHALL raise none. A verdict SHALL NOT become a stop reason, supervision cause, or dispatch, routing, or staffing input.
 
 #### Scenario: A violation is raised
 - **WHEN** a send is judged a violation
 - **THEN** the attention queue shows an `outbound-violation` item for the human that opens the row in the Audit tab
+
+#### Scenario: A stream to one server
+- **WHEN** an agent calls an unlisted MCP server's tools five times
+- **THEN** five violation rows exist and one attention item names that server with a count of five
 
 #### Scenario: Execution continues
 - **WHEN** a plan change's developer's send is judged a violation
 - **THEN** the change's execution, supervision cause, and dispatch are unchanged
 
 ### Requirement: Only the human acknowledges a violation
-The human SHALL acknowledge a violation, with an optional note, under a command id: the item clears and the row and verdict stay. A replay SHALL return the prior result; a different payload SHALL be refused naming the field. Non-violations and other teams' calls SHALL be refused. No agent tool SHALL read or write audit records.
+The human SHALL acknowledge a violation, with an optional note, under a command id, covering its rule and destination group through that call: the item clears, rows and verdicts stay, and a later violation raises it again. A replay SHALL return the prior result; a different payload SHALL be refused naming the field. Non-violations and other teams' calls SHALL be refused. No agent tool SHALL read or write audit records.
 
 #### Scenario: Acknowledge clears the item
 - **WHEN** the owner acknowledges a violation and the result is lost, so the dialog resends it
@@ -135,3 +147,14 @@ The human SHALL acknowledge a violation, with an optional note, under a command 
 #### Scenario: Agents have no audit tool
 - **WHEN** an agent looks for a tool to read, acknowledge, or delete audit records, or calls the service directly
 - **THEN** no such tool exists and the direct call is refused with nothing written
+
+### Requirement: The morning summary counts outbound sends
+The team's morning summary SHALL carry a durable `outbound` bucket counting the window's violations, unknown destinations, and allowed sends, read from the audit records, so a restart never empties it. It SHALL count rows only and never change a session's status or any task.
+
+#### Scenario: Counts for the window
+- **WHEN** the window holds two allowed pushes, one unknown destination, and one violation
+- **THEN** the `outbound` bucket shows 2 allowed, 1 unknown, and 1 violation
+
+#### Scenario: After a restart
+- **WHEN** the server restarts within the window
+- **THEN** the `outbound` bucket shows the same counts

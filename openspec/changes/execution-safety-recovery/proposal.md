@@ -29,7 +29,7 @@ This change closes those gaps with rules, records, and backups. It adds no enfor
   - comment bodies are never targets;
   - each observed send gets one verdict: violation, allowed, or unknown destination.
 - **Append-only audit records.** One row per observed publish or send, allowed ones included, with secrets redacted. A second append-only table holds outcomes: completed, failed, denied, or started in background. A call with no outcome whose agent process has ended reads "outcome unknown". `kawai-team` tools and Kawai's own git and `gh` effects are excluded. Rows are never pruned.
-- **Owner audit view.** A read-only **Audit** tab on the Team page lists sends newest first, with filters by verdict, rule, session, and time, and counts of allowed sends. Each violation raises an informational attention item owned by the human. It clears through a human-only **Acknowledge** command with a command id, and the row stays. No agent tool reads or writes audit rows. Verdicts never become stop reasons or supervision causes.
+- **Owner audit view.** A read-only **Audit** tab on the Team page lists sends newest first, with filters by verdict, rule, session, and time, and counts of allowed sends. Violations raise informational attention items owned by the human, one per rule and destination. An item clears through a human-only **Acknowledge** command with a command id, and the rows stay. No agent tool reads or writes audit rows. Verdicts never become stop reasons or supervision causes.
 - **Versioned migrations.** A `schema_migrations` table records numbered migrations. Today's ad-hoc schema becomes the baseline, version 1. Each later migration runs in a transaction after a pre-migration backup. A database newer than the build refuses to start.
 - **Online backups.** Same-connection `serialize()` snapshots run at startup, hourly while the database changes, and before each migration. Each is integrity-checked and kept in a rotating set beside the database. A restore procedure is documented. Backups stay on the host.
 - **Recovery matrix.** A maintained `docs/recovery-matrix.md` maps each fault to its mechanism and test. It adds an R19-style test for an audit call whose outcome is unknown across a restart. It restates X6: every future exclusive-slot holder ships a liveness check, and results keep their revision pins.
@@ -58,7 +58,7 @@ This change closes those gaps with rules, records, and backups. It adds no enfor
 
 ### Modified Capabilities
 
-None. The prompt, the hooks, and the attention registry gain entries through extension points that `agent-teams`, `chat-sessions`, and `team-workspace` already define.
+None. No existing requirement changes. The prompt section, the audit hooks, the attention source and its `audit` link, and the summary bucket are new behavior, specified under the new capabilities above.
 
 ## Impact
 
@@ -77,6 +77,7 @@ None. The prompt, the hooks, and the attention registry gain entries through ext
   - `~/.agentboard/backups/`.
 - **Docs:** `docs/recovery-matrix.md`, `docs/operations/database-backups.md`, and AGENTS.md bullets.
 - **Depends on:**
+  - `team-workspace`, for the attention sources and the morning summary;
   - `team-workspace-pages`, for the tab model;
   - `durable-plans`, for the Plans-tab extension point;
   - `plan-execution`, `integration-candidates`, `plan-supervision`, and `revision-control`, for the contracts the matrix and the exclusions name.
