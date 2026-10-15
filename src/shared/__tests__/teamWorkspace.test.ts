@@ -16,6 +16,8 @@ const row = (overrides: Partial<TeamTaskRow> = {}): TeamTaskRow => ({
   groupId: null,
   worktree: null,
   waitingReason: null,
+  needsReevaluation: false,
+  acknowledgement: null,
   nextAction: null,
   requiresHuman: false,
   ...overrides,

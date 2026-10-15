@@ -66,11 +66,11 @@ export interface AttentionItem {
 export const attentionItemId = (kind: AttentionKind, sourceId: string): string => `${kind}:${sourceId}`
 
 /**
- * D4's workflow stage, projected — never stored. Phase 1 produces only
- * `implementing`, `unstarted`, and no stage for closed tasks; the
- * sibling-dependent orders (`in-review`, `ready-for-qa`, `fixes-requested`,
- * `awaiting-acceptance`) join with `task-results-handoffs`. The stage is
- * never `done`: a finished agent turn never moves it.
+ * D4's workflow stage, projected — never stored: handoff stages
+ * (`in-review`, `ready-for-qa`, `fixes-requested`), then
+ * `awaiting-acceptance`, then the assignment's own `implementing` /
+ * `unstarted`; closed tasks have none. The stage is never `done`: a finished
+ * agent turn never moves it.
  */
 export type TeamTaskStage =
   | 'in-review'
@@ -85,6 +85,18 @@ export interface TaskAccountable {
   kind: 'session' | 'group' | 'human'
   id: string | null
   label: string
+}
+
+/**
+ * "Delivered rev 2 · Acknowledged rev 1" (task-revision-publication D5): the
+ * outstanding claimant has not acknowledged the task's current revision. The
+ * delivered and acknowledged revisions stay separate facts; null = none yet.
+ */
+export interface TaskAcknowledgementBadge {
+  /** The task's current revision. */
+  revision: number
+  deliveredRevision: number | null
+  acknowledgedRevision: number | null
 }
 
 export interface TeamTaskRow {
@@ -103,6 +115,10 @@ export interface TeamTaskRow {
    * labels it with the same helper the mailbox uses; null when none applies.
    */
   waitingReason: WaitingReason | null
+  /** Badge (D4): the outstanding result predates the task's current revision. */
+  needsReevaluation: boolean
+  /** Badge (D4): set while the outstanding claimant lacks the current revision's acknowledgement. */
+  acknowledgement: TaskAcknowledgementBadge | null
   /** D11 verb phrase; null when no next action is derivable. */
   nextAction: string | null
   /** Whether some human-required attention item blocks this task. */
@@ -232,8 +248,8 @@ export interface MorningSummary {
   /** Window start (read time minus 24 h), ISO. */
   since: string
   /**
-   * Submitted results in the window. Empty until `task-results-handoffs`
-   * lands (Phase 2 task 11.2) — there is no result table to read yet.
+   * Outstanding results submitted in the window, each stating whether it was
+   * accepted (D8, Q5): a submitted result is completed work, not accepted work.
    */
   completedResults: SummaryBucket
   capacityWaits: SummaryBucket

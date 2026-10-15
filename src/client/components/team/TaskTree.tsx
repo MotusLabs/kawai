@@ -84,6 +84,10 @@ export function directionLine(direction: string, needle: string): { text: string
   }
 }
 
+/** "Delivered rev 2" / "Acknowledged none": delivery and acknowledgement stay two facts. */
+const revisionLabel = (what: string, revision: number | null): string =>
+  revision === null ? `${what} none` : `${what} rev ${revision}`
+
 const basename = (path: string): string => path.split('/').filter(Boolean).at(-1) ?? path
 
 /** Stage, accountable party, worktree, wait, and next action from the read model. */
@@ -94,6 +98,13 @@ function WorkflowLines({ row, sessions }: { row: TeamTaskRow; sessions: Session[
       {row.accountable && <> · accountable: <span data-testid="task-accountable">{row.accountable.label}</span></>}
       {row.worktree && <> · worktree <span title={row.worktree}>{basename(row.worktree)}</span></>}
     </p>
+    {(row.needsReevaluation || row.acknowledgement) && <p className="text-sm" data-testid="task-badges">
+      {row.needsReevaluation && <span data-testid="task-badge-reevaluation">Needs re-evaluation</span>}
+      {row.needsReevaluation && row.acknowledgement && ' · '}
+      {row.acknowledgement && <span data-testid="task-badge-acknowledgement">
+        Awaiting acknowledgement of revision {row.acknowledgement.revision} · {revisionLabel('Delivered', row.acknowledgement.deliveredRevision)} · {revisionLabel('Acknowledged', row.acknowledgement.acknowledgedRevision)}
+      </span>}
+    </p>}
     {row.waitingReason && <p className="text-sm text-secondary" data-testid="task-waiting">
       Waiting: {constraintLabel(row.waitingReason.blocker, id => sessionLabel(id, sessions))}
     </p>}

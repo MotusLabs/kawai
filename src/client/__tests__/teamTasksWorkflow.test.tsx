@@ -17,7 +17,7 @@ const summary = (id: string, extra: Partial<TeamTaskSummary> = {}): TeamTaskSumm
 })
 const row = (id: string, extra: Partial<TeamTaskRow> = {}): TeamTaskRow => ({
   id, title: `Task ${id}`, status: 'open', stage: 'unstarted', accountable: null, groupId: null, worktree: null,
-  waitingReason: null, nextAction: null, requiresHuman: false, ...extra,
+  waitingReason: null, needsReevaluation: false, acknowledgement: null, nextAction: null, requiresHuman: false, ...extra,
 })
 
 const tasks = [summary('a'), summary('b', { status: 'blocked' }), summary('c', { status: 'done' }), summary('d')]
@@ -73,6 +73,20 @@ test('a row shows its stage apart from its status, the accountable party, and th
   expect(textOf(b.findByProps({ 'data-testid': 'task-accountable' }))).toBe('devs')
   expect(textOf(b.findByProps({ 'data-testid': 'task-waiting' }))).toContain('Group is at capacity (1/1)')
   expect(textOf(b.findByProps({ 'data-testid': 'task-next-action' }))).toContain('Wait for capacity (needs you)')
+})
+
+test('Phase 2 stages and badges: Awaiting acceptance, Needs re-evaluation, and Delivered rev 2 · Acknowledged rev 1', () => {
+  rows[3] = row('d', { stage: 'awaiting-acceptance', worktree: '/repo', needsReevaluation: true,
+    acknowledgement: { revision: 3, deliveredRevision: 2, acknowledgedRevision: 1 }, nextAction: 'Accept result', requiresHuman: true })
+  const renderer = mount()
+  const d = renderer.root.find(node => node.props['data-task-id'] === 'd')
+  expect(textOf(d.findByProps({ 'data-testid': 'task-stage' }))).toBe('Awaiting acceptance')
+  expect(textOf(d.findByProps({ 'data-testid': 'task-badge-reevaluation' }))).toBe('Needs re-evaluation')
+  expect(textOf(d.findByProps({ 'data-testid': 'task-badge-acknowledgement' })))
+    .toBe('Awaiting acknowledgement of revision 3 · Delivered rev 2 · Acknowledged rev 1')
+  // A task without badges shows none.
+  expect(renderer.root.find(node => node.props['data-task-id'] === 'a').findAllByProps({ 'data-testid': 'task-badges' })).toHaveLength(0)
+  rows[3] = row('d', { stage: 'awaiting-acceptance', worktree: '/repo' })
 })
 
 test('before the read model arrives rows show without workflow lines and nothing is filtered', () => {

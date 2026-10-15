@@ -13,6 +13,7 @@ import type {
   SummaryItem,
   TeamMemberRow,
   TeamMemberSession,
+  TaskAcknowledgementBadge,
   TeamTaskRow,
   TeamWorkspaceSnapshot,
 } from '../../shared/teamWorkspace'
@@ -95,8 +96,29 @@ export function memberRows(
   })
 }
 
-/** D11's next action for a row, derived from the assignment it already read. */
-function taskNextAction(assignment: TeamTaskSummary['assignment']): string {
+/**
+ * Awaiting acknowledgement (task-revision-publication D5): the outstanding
+ * claimant of a live task has acknowledged an older revision than the
+ * current one. Delivery and acknowledgement stay two facts. Closed tasks and
+ * unclaimed assignments (nobody to acknowledge) show no badge.
+ */
+function acknowledgementBadge(
+  summary: TeamTaskSummary,
+  revisionsOf: (taskId: string, sessionId: string) => { delivered: number | null; acknowledged: number | null },
+): TaskAcknowledgementBadge | null {
+  const claimant = summary.assignment?.claimedBy
+  if (!claimant || summary.status === 'done' || summary.status === 'cancelled') return null
+  const { delivered, acknowledged } = revisionsOf(summary.id, claimant)
+  if ((acknowledged ?? 0) >= summary.revision) return null
+  return { revision: summary.revision, deliveredRevision: delivered, acknowledgedRevision: acknowledged }
+}
+
+/** D11's next action for a row, derived from the assignment and result it already read. */
+function taskNextAction(summary: TeamTaskSummary): string {
+  const assignment = summary.assignment
+  if (summary.outstandingResult && !summary.outstandingResult.accepted && summary.status !== 'done' && summary.status !== 'cancelled') {
+    return 'Accept result'
+  }
   if (!assignment) return 'Assign a dev'
   switch (assignment.state) {
     case 'queued': return 'Wait for capacity'
@@ -118,8 +140,10 @@ export function taskRows(input: {
   waiting: Record<string, WaitingReason>
   attention: AttentionItem[]
   nameOf: (sessionId: string) => string
+  /** A claimant's delivered and acknowledged revisions of a task (task-revision-publication D5). */
+  revisionsOf: (taskId: string, sessionId: string) => { delivered: number | null; acknowledged: number | null }
 }): TeamTaskRow[] {
-  const { summaries, waiting, attention, nameOf } = input
+  const { summaries, waiting, attention, nameOf, revisionsOf } = input
   const humanBlocked = new Set(
     attention.filter(item => item.requiresHuman && item.impact.taskId).map(item => item.impact.taskId!)
   )
@@ -130,16 +154,19 @@ export function taskRows(input: {
       : assignment.targetKind === 'group'
         ? { kind: 'group' as const, id: assignment.targetId, label: assignment.role ?? assignment.targetId }
         : { kind: 'session' as const, id: assignment.targetId, label: nameOf(assignment.targetId) }
+    const result = summary.outstandingResult ?? null
     return {
       id: summary.id,
       title: summary.title,
       status: summary.status,
-      stage: teamTaskStage(summary, assignment),
+      stage: teamTaskStage(summary, assignment, result),
       accountable,
       groupId: assignment?.targetKind === 'group' ? assignment.targetId : null,
       worktree: summary.worktree,
       waitingReason: assignment?.messageId ? waiting[assignment.messageId] ?? null : null,
-      nextAction: taskNextAction(assignment),
+      needsReevaluation: result?.needsReevaluation === true,
+      acknowledgement: acknowledgementBadge(summary, revisionsOf),
+      nextAction: taskNextAction(summary),
       requiresHuman: humanBlocked.has(summary.id),
     }
   })
@@ -155,6 +182,16 @@ export interface AttentionInput {
   waiting: Record<string, WaitingReason>
   taskTitle: (taskId: string) => string | null
   nameOf: (sessionId: string) => string
+  /** Open tasks whose outstanding result awaits **Accept result**. */
+  pendingAcceptance: PendingAcceptance[]
+}
+
+/** A submitted, unaccepted outstanding result of a live task. */
+export interface PendingAcceptance {
+  resultId: string
+  taskId: string
+  submittedBy: string
+  needsReevaluation: boolean
 }
 
 /** One attention source: a pure function over the input (D5's registry). */
@@ -233,13 +270,25 @@ const staffingItems: AttentionSource = ({ messages, waiting, taskTitle, nameOf }
     })
 }
 
+/** A submitted result awaiting **Accept result**: only the human closes it (task 11.2). */
+const acceptanceItems: AttentionSource = ({ pendingAcceptance, taskTitle, nameOf }) =>
+  pendingAcceptance.map(pending => ({
+    id: attentionItemId('pending-acceptance', pending.resultId),
+    kind: 'pending-acceptance' as const,
+    cause: `Result submitted by ${nameOf(pending.submittedBy)} awaits acceptance${pending.needsReevaluation ? ' (needs re-evaluation)' : ''}`,
+    owner: { kind: 'human' as const, id: null, label: 'Human' },
+    impact: taskImpact(pending.taskId, taskTitle),
+    nextAction: 'Accept result',
+    link: { kind: 'task' as const, id: pending.taskId },
+    requiresHuman: true,
+  }))
+
 /**
- * The Phase 1 source registry (task 4.1). `pending-acceptance` joins with
- * `task-results-handoffs` (Phase 2 task 11.2) as one more entry; Wave C
- * sources (plan holds, stalls, Lead decision cards) add entries the same way
- * — an item of an unrecognized kind is data like any other and never dropped.
+ * The source registry (task 4.1). Wave C sources (plan holds, stalls, Lead
+ * decision cards) add entries the same way — an item of an unrecognized kind
+ * is data like any other and never dropped.
  */
-export const ATTENTION_SOURCES: readonly AttentionSource[] = [requestItems, uncertainItems, staffingItems]
+export const ATTENTION_SOURCES: readonly AttentionSource[] = [requestItems, uncertainItems, staffingItems, acceptanceItems]
 
 /** Every attention item the current state yields, in a stable order. */
 export function attentionItems(
@@ -258,16 +307,13 @@ export interface SummaryInput {
   /** One message's recorded events, oldest first (for the hold time). */
   messageEvents: (messageId: string) => Array<{ kind: string; createdAt: string }>
   waiting: Record<string, WaitingReason>
-  /** Persisted turn-end events of the team's task-bound sessions. */
   /** Persisted turn-end rows of the team's task-bound sessions (D8). */
   turnEnds: Array<{ sessionId: string; taskId: string | null; at: string }>
   nameOf: (sessionId: string) => string
-  /**
-   * Whether a result row exists for a session's task (task-results-handoffs).
-   * Phase 1 has no result table, so the caller passes `() => false`; a turn
-   * with a result never lands in the without-result bucket either way.
-   */
+  /** Whether a result row exists for a session's task; such a turn is not "without a result". */
   hasResult: (sessionId: string, taskId: string | null) => boolean
+  /** Outstanding results submitted in the window, each with its accepted state. */
+  results: Array<{ resultId: string; taskId: string; taskTitle: string | null; submittedBy: string; accepted: boolean }>
 }
 
 const bucket = (items: SummaryItem[], runtimeOnly = false): SummaryBucket =>
@@ -279,11 +325,10 @@ const bucket = (items: SummaryItem[], runtimeOnly = false): SummaryBucket =>
  * restart that bucket lists waits the running server has observed, which its
  * `runtimeOnly` label states; the other buckets read durable rows. A
  * finished turn with no submitted result never lands in a completion bucket
- * (E13): completed results are a Phase 2 bucket over `task-results-handoffs`
- * result rows, which do not exist yet, so it stays empty here.
+ * (E13): completed results come from result rows only.
  */
 export function morningSummary(input: SummaryInput): MorningSummary {
-  const { now, sessions, messages, messageEvents, waiting, turnEnds, nameOf, hasResult } = input
+  const { now, sessions, messages, messageEvents, waiting, turnEnds, nameOf, hasResult, results } = input
   const since = new Date(Date.parse(now) - 24 * 60 * 60 * 1000).toISOString()
   const inWindow = (at: string) => Date.parse(at) >= Date.parse(since)
 
@@ -337,11 +382,16 @@ export function morningSummary(input: SummaryInput): MorningSummary {
     link: { kind: 'chat' as const, id: sessionId },
   }))
 
+  // Submitted, not accepted: each result states which (D8, Q5).
+  const completedResults = results.map(result => ({
+    id: `result:${result.resultId}`,
+    label: `${result.taskTitle ?? result.taskId}: result by ${nameOf(result.submittedBy)} — ${result.accepted ? 'accepted' : 'awaiting acceptance'}`,
+    link: { kind: 'task' as const, id: result.taskId },
+  }))
+
   return {
     since,
-    // Phase 2 (task 11.2) fills this from result rows; nothing reads a result
-    // table today, so an honest empty bucket is the whole Phase 1 story.
-    completedResults: bucket([]),
+    completedResults: bucket(completedResults),
     capacityWaits: bucket(capacityWaits, true),
     approvals: bucket(approvals),
     uncertainDeliveries: bucket(uncertainDeliveries),
@@ -376,10 +426,21 @@ export class WorkspaceRead {
     const sessions = records
       .filter(record => record.archivedAt == null)
       .map(record => ({ record, requests: manager.getPendingRequests(record.sessionId) }))
-    const attention = attentionItems({ sessions, messages, waiting, taskTitle, nameOf })
+    const pendingAcceptance = summaries.flatMap(summary => {
+      const result = summary.outstandingResult
+      if (!result || result.accepted || summary.status === 'done' || summary.status === 'cancelled') return []
+      const submittedBy = store.results.get(result.id)?.submittedBy.sessionId
+      return [{ resultId: result.id, taskId: summary.id, submittedBy: submittedBy ?? '', needsReevaluation: result.needsReevaluation }]
+    })
+    const attention = attentionItems({ sessions, messages, waiting, taskTitle, nameOf, pendingAcceptance })
     const now = new Date().toISOString()
+    const since = new Date(Date.parse(now) - 24 * 60 * 60 * 1000).toISOString()
+    const revisionsOf = (taskId: string, sessionId: string) => ({
+      delivered: store.notices?.deliveredRevision(taskId, sessionId) ?? null,
+      acknowledged: store.acknowledgements.highest(taskId, sessionId),
+    })
     return {
-      tasks: taskRows({ summaries, waiting, attention, nameOf }),
+      tasks: taskRows({ summaries, waiting, attention, nameOf, revisionsOf }),
       attention,
       members: memberRows(manager.teams.catalogForTeam(team), records, groupId =>
         manager.groupProfileCounts(teamId, groupId)),
@@ -393,11 +454,17 @@ export class WorkspaceRead {
         // The store's join keeps a killed agent's turns in the team's window
         // and reads only this team's rows; ok = 1 is built into the query.
         turnEnds: manager.turnEnds
-          .finishedForTeam(teamId, new Date(Date.parse(now) - 24 * 60 * 60 * 1000).toISOString())
+          .finishedForTeam(teamId, since)
           .map(row => ({ sessionId: row.sessionId, taskId: row.taskId, at: row.endedAt })),
         nameOf,
-        // Phase 1 has no result rows; task 11.2 replaces this with the real read.
-        hasResult: () => false,
+        hasResult: (sessionId, taskId) => taskId !== null && store.results.submittedBy(taskId, sessionId),
+        results: store.results.outstandingSince(teamId, since).map(result => ({
+          resultId: result.id,
+          taskId: result.taskId,
+          taskTitle: taskTitle(result.taskId),
+          submittedBy: result.submittedBy.sessionId ?? '',
+          accepted: result.acceptedAt !== null,
+        })),
       }),
       directory,
     }
