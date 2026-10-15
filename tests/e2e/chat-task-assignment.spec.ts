@@ -63,11 +63,6 @@ async function openTasks(page: Page) {
   await expect(page.getByTestId('team-tasks')).toBeVisible()
 }
 
-/** Expand a Mailbox section if it is collapsed (idempotent). */
-async function expandSection(page: import('@playwright/test').Page, name: string) {
-  const toggle = page.getByTestId(`mailbox-section-toggle-${name}`)
-  if ((await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.click()
-}
 
 test('E01/E02: create and assign reaches one member; a refusal keeps the form; a replay cannot duplicate', async ({ page }, info) => {
   const root = teamRoot()

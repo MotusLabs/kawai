@@ -279,7 +279,7 @@ test('E11 slice: uncertain retry keeps its recipient, history, and survives a re
     // dispatch re-holds an unconfirmed receipt — so disappearance is not the
     // signal; the possible-duplicate flag and the unchanged recipient are.
     await held.getByRole('button', { name: 'Retry' }).click()
-    const panel = await openTeamMessages(page, root)
+    await openTeamMessages(page, root)
     const retried = row(page, ids.held!)
     await expect(retried).toBeVisible()
     await expect(retried.getByTestId('message-to')).toContainText('Recovery developer')

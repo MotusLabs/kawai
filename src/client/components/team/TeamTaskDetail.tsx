@@ -82,7 +82,7 @@ export default function TeamTaskDetail({ teamPath, projectPath, view, sendMessag
     useTeamTaskStore.getState().select(teamPath, taskId)
     onNavigate?.(taskId)
   }
-  const back = () => go(null)
+  const back = () => { if (onBack) onBack(); else go(null) }
   if (!detail || !task) {
     return <div><button className="btn mb-3" onClick={back}>All tasks</button><p role="status">Loading task…</p></div>
   }
