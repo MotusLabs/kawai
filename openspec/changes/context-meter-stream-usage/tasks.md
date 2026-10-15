@@ -13,7 +13,7 @@
 
 ## 3. Integration check
 
-- [ ] 3.1 Run `bun run lint && bun run typecheck && bun run test` and verify all pass.
+- [x] 3.1 Run `bun run lint && bun run typecheck && bun run test` and verify all pass.
 - [ ] 3.2 On a dev server, run one turn in a GLM-profile chat. Verify that the header's context meter appears after the first model request and that the session's `context_tokens` column is non-null after the turn (read from a copy of the DB). Also run one turn on the default profile and verify its meter still reads within about 1% of the CLI's `/context` total.
 
 ## Workflow follow-up
