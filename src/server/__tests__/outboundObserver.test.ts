@@ -1,18 +1,19 @@
 // The outbound observer (execution-safety-recovery D3, D5, D7) over injected
 // fakes: pending sends fill synchronously before the Pre hook returns, writes
-// queue behind a catch-all, kawai-team calls and non-sends write nothing,
-// subagent calls record their agent id, background calls start non-terminal,
-// an unreadable repository read records unknown-destination, outcomes land
-// join even when they beat the queued call row, and spawn end retires the
-// live set. Reserved example names throughout.
+// defer past the microtask queue behind a catch-all, kawai-team calls and
+// non-sends write nothing, subagent calls record their agent id, background
+// calls start non-terminal, an unreadable repository read records
+// unknown-destination, outcomes land and join even when they beat the
+// deferred call row, and spawn end retires the live set. Reserved example
+// names throughout.
 import { describe, expect, test } from 'bun:test'
 import { OutboundObserver, type OutboundObserverOptions } from '../outbound/observer'
 import type { ResolvedRepoFacts } from '../outbound/repoFacts'
 import type { OutboundCallInsert, OutboundOutcomeInsert } from '../outbound/store'
 
-/** Let queued microtasks (the observer's writes) run. */
+/** Let the observer's deferred writes (setImmediate, after every microtask) run. */
 const flushWrites = async (): Promise<void> => {
-  for (let i = 0; i < 4; i++) await Promise.resolve()
+  for (let i = 0; i < 2; i++) await new Promise<void>(resolve => setImmediate(resolve))
 }
 
 const REPO: ResolvedRepoFacts = {
@@ -204,14 +205,17 @@ describe('OutboundObserver', () => {
   })
 
   test('spawn end retires the live set and drops that spawn\'s pending entries', async () => {
-    const { observer } = harness()
+    const { observer, calls, outcomes } = harness()
     observer.onPreToolUse({ ...PRE })
     expect(observer.spawnIsLive('ob-s-1')).toBe(true)
     observer.onSpawnEnd('ob-s-1')
     expect(observer.spawnIsLive('ob-s-1')).toBe(false)
-    // A late outcome for the dropped entry writes nothing.
+    // A late outcome for the dropped entry writes nothing; the call row its
+    // Pre event had already deferred still lands.
     observer.onPostToolUse({ ...PRE, toolInput: PRE.toolInput, background: false })
     await flushWrites()
+    expect(calls).toHaveLength(1)
+    expect(outcomes).toEqual([])
   })
 
   test('a call outside every repository falls back to the session team id', async () => {
@@ -219,5 +223,47 @@ describe('OutboundObserver', () => {
     observer.onPreToolUse({ ...PRE, cwd: '/plain/dir', toolInput: { command: 'curl -d x https://example.internal/hook' } })
     await flushWrites()
     expect(calls[0]?.teamId).toBe('/repo/.git')
+  })
+
+  test('an observer with no id generator mints row ids itself (CC round 3)', async () => {
+    // Production passes no `id`; a detached `crypto.randomUUID` reference
+    // would throw in Bun and no call row would ever be written.
+    const { observer, calls } = harness({ id: undefined })
+    observer.onPreToolUse({ ...PRE })
+    await flushWrites()
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.id).toMatch(/^obc-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/)
+  })
+
+  test('a failure detail is capped before redaction and marks an interrupt (CC round 3)', async () => {
+    const { observer, outcomes } = harness()
+    observer.onPreToolUse({ ...PRE, toolUseId: 'tu-err', toolInput: { command: 'curl -d x https://x.example.com' } })
+    // A token inside the read cap, then padding far past it: the stored
+    // detail is bounded either way, and the capped prefix still redacts.
+    const tail = `${'x'.repeat(500)} ghp_ABCDEFghijklmnop0123456789 ${'y'.repeat(4000)}`
+    observer.onPostToolUseFailure({
+      ...PRE,
+      toolUseId: 'tu-err',
+      error: `401 ${tail}`,
+      isInterrupt: true,
+    })
+    await flushWrites()
+    const detail = outcomes[0]?.detail ?? ''
+    expect(detail.length).toBeLessThanOrEqual(1024)
+    expect(detail).not.toContain('ghp_')
+    expect(detail).toContain('‹redacted›')
+    expect(detail.startsWith('(interrupt) ')).toBe(true)
+  })
+
+  test('nothing is written while only microtasks run: writes defer past the turn', async () => {
+    const { observer, calls, outcomes } = harness()
+    observer.onPreToolUse({ ...PRE })
+    observer.onPostToolUse({ ...PRE, toolInput: PRE.toolInput, background: false })
+    for (let i = 0; i < 8; i++) await Promise.resolve()
+    expect(calls).toEqual([])
+    expect(outcomes).toEqual([])
+    await flushWrites()
+    expect(calls).toHaveLength(1)
+    expect(outcomes).toHaveLength(1)
   })
 })

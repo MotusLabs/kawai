@@ -688,22 +688,28 @@ describe('ChatSessionDriver', () => {
     harness.driver.kill()
   })
 
-  test('the hook returns before the store write: the sink sees the call only after a microtask', async () => {
+  test('the hook returns before the store write: an async sink cannot delay it', async () => {
+    // A sink that writes off the microtask queue (as the observer does): if
+    // the driver ever awaited the sink, or the observer wrote inline, the
+    // push would land before the hook's promise resolved and this fails.
     const seen: string[] = []
+    const defer = (line: string): void => { setImmediate(() => seen.push(line)) }
     const sink: OutboundAuditSink = {
-      onPreToolUse: use => { seen.push(`pre:${use.toolName}`) },
-      onPostToolUse: use => { seen.push(`post:${use.toolName}`) },
-      onPostToolUseFailure: use => { seen.push(`fail:${use.toolName}`) },
-      onPermissionDenied: use => { seen.push(`denied:${use.toolName}`) },
-      onDeniedCard: use => { seen.push(`card:${use.toolUseId}`) },
-      onSpawnEnd: () => { seen.push('spawn-end') },
+      onPreToolUse: use => defer(`pre:${use.toolName}`),
+      onPostToolUse: use => defer(`post:${use.toolName}`),
+      onPostToolUseFailure: use => defer(`fail:${use.toolName}`),
+      onPermissionDenied: use => defer(`denied:${use.toolName}`),
+      onDeniedCard: use => defer(`card:${use.toolUseId}`),
+      onSpawnEnd: () => defer('spawn-end'),
     }
     const harness = createHarness({ outbound: sink })
     harness.driver.send('hello')
     const hooks = harness.fakes[0]!.options.hooks as { PreToolUse: Array<{ hooks: Array<(input: unknown) => Promise<unknown>> }> }
     const input = { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'git push' }, tool_use_id: 'tu-9' }
     await hooks.PreToolUse[0]!.hooks[0]!(input)
-    // The hook resolved before any queued write of the observer ran.
+    // The hook resolved before the sink's deferred write ran.
+    expect(seen).toEqual([])
+    await flush()
     expect(seen).toEqual(['pre:Bash'])
     harness.driver.kill()
   })

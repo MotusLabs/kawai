@@ -2,11 +2,13 @@
 // driver's four audit hooks hand each audited tool use to. Its synchronous
 // part is pure parsing — a send candidate lands in the in-memory
 // `pendingSends` map before the Pre hook returns, so an outcome that beats
-// the queued call row is never dropped — and every file read or database
-// write is queued behind a catch-all, because an uncaught microtask throw
-// would exit Bun. Purely observational: nothing here blocks, delays, or
-// denies a tool call, and an observer failure never fails the call. Team
-// mail (`mcp__kawai-team__*`) is never recorded — the mailbox already is.
+// the deferred call row is never dropped — and every later step (facts
+// walk, judging, redaction, database write) is deferred with `setImmediate`
+// behind a catch-all, so it never runs on the hook path or delays the SDK's
+// own continuation, and an uncaught throw never exits Bun. Purely
+// observational: nothing here blocks or denies a tool call, and an observer
+// failure never fails the call. Team mail (`mcp__kawai-team__*`) is never
+// recorded — the mailbox already is.
 import {
   CLASSIFIER_VERSION,
   judge,
@@ -44,6 +46,11 @@ interface PendingSend {
   candidates: SendCandidate[]
 }
 
+/** How much of an error or reason is read at all before redacting it. */
+const DETAIL_READ_CAP = 2048
+/** What an outcome's stored detail is clipped to after redaction. */
+const DETAIL_STORE_CAP = 1024
+
 export interface OutboundObserverOptions {
   sessionId: string
   store: { insertCall(row: OutboundCallInsert): void; insertOutcome(row: OutboundOutcomeInsert): void }
@@ -62,11 +69,26 @@ export class OutboundObserver implements OutboundAuditSink {
   private readonly pendingSends = new Map<string, PendingSend>()
   /** Spawn ids the observer has seen live; a call with no outcome reads pending while its spawn lives (D7). */
   private readonly liveSpawns = new Set<string>()
+  /** Bound once: a detached `crypto.randomUUID` reference throws in Bun. */
+  private readonly newId: () => string
 
-  constructor(private readonly options: OutboundObserverOptions) {}
+  constructor(private readonly options: OutboundObserverOptions) {
+    this.newId = options.id ?? (() => crypto.randomUUID())
+  }
 
   spawnIsLive(spawnId: string): boolean {
     return this.liveSpawns.has(spawnId)
+  }
+
+  /** Run after the current continuation and every microtask, never failing the process. */
+  private defer(work: () => void): void {
+    setImmediate(() => {
+      try {
+        work()
+      } catch {
+        // A failed write is a lost audit row, never a failed tool call.
+      }
+    })
   }
 
   onPreToolUse(use: Parameters<OutboundAuditSink['onPreToolUse']>[0]): void {
@@ -86,13 +108,7 @@ export class OutboundObserver implements OutboundAuditSink {
     })
     this.liveSpawns.add(use.spawnId)
     const entry = this.pendingSends.get(use.toolUseId)!
-    queueMicrotask(() => {
-      try {
-        this.writeCall(use.toolUseId, entry)
-      } catch {
-        // A failed write is a lost audit row, never a failed tool call.
-      }
-    })
+    this.defer(() => this.writeCall(use.toolUseId, entry))
   }
 
   onPostToolUse(use: Parameters<OutboundAuditSink['onPostToolUse']>[0]): void {
@@ -101,17 +117,23 @@ export class OutboundObserver implements OutboundAuditSink {
   }
 
   onPostToolUseFailure(use: Parameters<OutboundAuditSink['onPostToolUseFailure']>[0]): void {
-    const detail = use.isInterrupt === true ? `${redact(use.error)} (interrupt)` : redact(use.error)
-    this.outcome(use.toolUseId, 'failed', use.durationMs, detail.slice(0, 1024))
+    // The pending lookup runs before any redaction: an unknown tool use
+    // costs one map read, and the error text is capped before it is read.
+    this.outcome(use.toolUseId, 'failed', use.durationMs, () => {
+      // The interrupt marker leads, so the store cap can never cut it off.
+      const text = redact(use.error.slice(0, DETAIL_READ_CAP))
+      return (use.isInterrupt === true ? `(interrupt) ${text}` : text).slice(0, DETAIL_STORE_CAP)
+    })
   }
 
   onPermissionDenied(use: Parameters<OutboundAuditSink['onPermissionDenied']>[0]): void {
-    this.outcome(use.toolUseId, 'denied', undefined, redact(use.reason).slice(0, 1024))
+    this.outcome(use.toolUseId, 'denied', undefined, () => redact(use.reason.slice(0, DETAIL_READ_CAP)).slice(0, DETAIL_STORE_CAP))
   }
 
   onDeniedCard(use: Parameters<OutboundAuditSink['onDeniedCard']>[0]): void {
-    const detail = use.reason === undefined ? undefined : redact(use.reason).slice(0, 1024)
-    this.outcome(use.toolUseId, 'denied', undefined, detail)
+    const reason = use.reason
+    this.outcome(use.toolUseId, 'denied', undefined, reason === undefined ? undefined : () =>
+      redact(reason.slice(0, DETAIL_READ_CAP)).slice(0, DETAIL_STORE_CAP))
   }
 
   onSpawnEnd(spawnId: string): void {
@@ -142,28 +164,29 @@ export class OutboundObserver implements OutboundAuditSink {
     return `${toolName} ${JSON.stringify(toolInput ?? {})}`
   }
 
-  private outcome(toolUseId: string, outcome: OutboundOutcomeInsert['outcome'], durationMs?: number, detail?: string): void {
+  private outcome(
+    toolUseId: string,
+    outcome: OutboundOutcomeInsert['outcome'],
+    durationMs?: number,
+    detail?: () => string,
+  ): void {
     const entry = this.pendingSends.get(toolUseId)
     if (entry === undefined) return
     if (outcome !== 'started-background') this.pendingSends.delete(toolUseId)
     const createdAt = (this.options.now ?? (() => new Date().toISOString()))()
-    queueMicrotask(() => {
-      try {
-        this.options.store.insertOutcome({
-          sessionId: this.options.sessionId,
-          toolUseId,
-          outcome,
-          ...(detail === undefined ? {} : { detail }),
-          ...(durationMs === undefined ? {} : { durationMs }),
-          createdAt,
-        })
-      } catch {
-        // Observational only.
-      }
+    this.defer(() => {
+      this.options.store.insertOutcome({
+        sessionId: this.options.sessionId,
+        toolUseId,
+        outcome,
+        ...(detail === undefined ? {} : { detail: detail() }),
+        ...(durationMs === undefined ? {} : { durationMs }),
+        createdAt,
+      })
     })
   }
 
-  /** Judge, redact, and append the call row (queued, never on the hook path). */
+  /** Judge, redact, and append the call row (deferred, never on the hook path). */
   private writeCall(toolUseId: string, entry: PendingSend): void {
     const repos = new Map<string, ResolvedRepoFacts>()
     for (const candidate of entry.candidates) {
@@ -177,7 +200,7 @@ export class OutboundObserver implements OutboundAuditSink {
     const command = redactForStore(entry.command)
     const context = this.options.context()
     this.options.store.insertCall({
-      id: `obc-${(this.options.id ?? crypto.randomUUID)()}`,
+      id: `obc-${this.newId()}`,
       teamId: cwdFacts?.teamId ?? this.options.teamIdFallback(),
       sessionId: this.options.sessionId,
       spawnId: entry.spawnId,

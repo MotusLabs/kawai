@@ -20,6 +20,7 @@ import type {
 } from '../../shared/chat'
 import type { ClaudeLaunchConfiguration } from '../chat/ClaudeProfiles'
 import { initDatabase, type SessionDatabase } from '../db'
+import { OutboundStore } from '../outbound/store'
 import { SessionRegistry } from '../SessionRegistry'
 import { ChatWireLogs } from '../chat/ChatWireLogs'
 import { ChatWorkerStore } from '../chat/chatWorkerStore'
@@ -2568,6 +2569,50 @@ describe('ChatSessionManager', () => {
     )
     expect(dormant.registry.get('chat-dormant')?.nameSource).toBe('auto')
     dormant.manager.shutdown()
+  })
+
+  test('outbound audit rows land over the real store, id minted, outcome joined (CC round 3)', async () => {
+    process.env.ANTHROPIC_API_KEY = 'test-key'
+    const { manager, handles } = await createHarness(db)
+    const created = manager.createSession({ projectPath: '/tmp/proj' })
+    if (!created.ok) throw new Error(created.error)
+    expect((await manager.send(created.session.id, 'go')).ok).toBe(true)
+    handles[0]!.push(initMessage('sdk-audit'))
+    await flush()
+    // Fire the driver's registered audit hooks as the SDK process would.
+    const pre = handles[0]!.options.hooks?.PreToolUse?.[0]?.hooks[0]
+    const post = handles[0]!.options.hooks?.PostToolUse?.[0]?.hooks[0]
+    if (!pre || !post) throw new Error('audit hooks not registered')
+    const hookInput = {
+      tool_name: 'Bash',
+      tool_input: { command: 'curl -d x https://example.internal/hook' },
+      tool_use_id: 'tu-audit-1',
+    }
+    await pre({ ...hookInput, hook_event_name: 'PreToolUse' } as never, undefined, { signal: new AbortController().signal })
+    await post({ ...hookInput, tool_response: 'ok', duration_ms: 9, hook_event_name: 'PostToolUse' } as never, undefined, { signal: new AbortController().signal })
+    // The deferred writes (setImmediate) run before the next timer tick.
+    await flush()
+    const store = new OutboundStore(db.db)
+    // /tmp/proj is no repository, so the row carries its plain-directory team.
+    const page = store.page({ teamId: '/tmp/proj' })
+    expect(page.rows).toHaveLength(1)
+    const row = page.rows[0]!
+    expect(row).toMatchObject({
+      sessionId: created.session.id,
+      tool: 'Bash',
+      toolUseId: 'tu-audit-1',
+      command: 'curl -d x https://example.internal/hook',
+      rule: 'http-send',
+      verdict: 'violation',
+      destination: 'host:example.internal',
+      classifierVersion: 1,
+      cwd: '/tmp/proj',
+    })
+    // No injected id generator: the row id is minted, not 'obc-undefined'.
+    expect(row.id).toMatch(/^obc-[0-9a-f-]{36}$/)
+    const outcomes = store.outcomesOf(created.session.id, 'tu-audit-1')
+    expect(outcomes).toEqual([{ outcome: 'completed', detail: null }])
+    manager.shutdown()
   })
 })
 
