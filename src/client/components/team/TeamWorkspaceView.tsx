@@ -7,7 +7,7 @@
 // view drives its own wire subscription, keyed by the team key. The URL
 // location (D3) names the tab, sub-view, and selection; navigation goes
 // through `useTeamLocationStore` so Back and Forward move with it.
-import { useEffect, useMemo } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import type { SendClientMessage } from '@shared/types'
 import { useSessionStore } from '../../stores/sessionStore'
 import { useStrategyStore, type StrategyView } from '../../stores/strategyStore'
@@ -155,12 +155,22 @@ export default function TeamWorkspaceView({ teamKey, location, sendMessage, conn
     sendMessage({ type: 'team-tasks-open', teamPath: teamKey })
     return () => sendMessage({ type: 'team-tasks-close', teamPath: teamKey })
   }, [teamKey, connected, connectionEpoch, tasksOpen, sendMessage])
+  // Entering the tab with a task still selected (Messages, then Tasks) puts
+  // the selection back in the URL instead of dropping it (spec: the selected
+  // task survives navigation); a URL that loses its id while the tab stays
+  // open — the browser's Back — is a request for the list.
+  const wasTasksOpen = useRef(false)
   useEffect(() => {
-    if (!connected || !tasksOpen) return
+    if (!connected || !tasksOpen) { wasTasksOpen.current = false; return }
+    const entering = !wasTasksOpen.current
+    wasTasksOpen.current = true
     const store = useTeamTaskStore.getState()
     const view = store.views[teamKey]
     if (currentLocation.id === undefined) {
-      if (view && view.selectedTaskId != null) store.select(teamKey, null)
+      if (view && view.selectedTaskId != null) {
+        if (entering) navigate({ teamKey, tab: 'tasks', id: view.selectedTaskId }, { replace: true })
+        else store.select(teamKey, null)
+      }
       return
     }
     // Wait for the list before judging a named task: a reload's snapshot has

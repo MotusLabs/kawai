@@ -75,9 +75,14 @@ export default function TeamTasksView({ teamPath, projectPath, view, rows, sendM
   const filters = useTeamWorkspaceStore(state => state.views[teamPath]?.tabs.tasks.filters) ?? NO_FILTERS
   const rowsById = useMemo(() => new Map((rows ?? []).map(row => [row.id, row])), [rows])
   const visibleTasks = useMemo(() => {
-    if (!rows) return view.tasks
-    const keep = new Set(filterTeamTaskRows([...rows], { ...queryFromFilters(filters), ...(searching ? { includeClosed: true } : {}) }).map(row => row.id))
-    return view.tasks.filter(task => keep.has(task.id) || !rowsById.has(task.id))
+    const query = queryFromFilters(filters)
+    // The closed-task default needs no read model: done/cancelled rows stay
+    // out unless a search is active or the Status filter names them.
+    const hiddenClosed = (task: { status: string }) =>
+      (task.status === 'done' || task.status === 'cancelled') && !searching && query.status !== task.status
+    if (!rows) return view.tasks.filter(task => !hiddenClosed(task))
+    const keep = new Set(filterTeamTaskRows([...rows], { ...query, ...(searching ? { includeClosed: true } : {}) }).map(row => row.id))
+    return view.tasks.filter(task => keep.has(task.id) || (!rowsById.has(task.id) && !hiddenClosed(task)))
   }, [view.tasks, rows, rowsById, filters, searching])
   const tree = useMemo(() => filterTree(buildTaskTree(visibleTasks), search.trim()), [visibleTasks, search])
 

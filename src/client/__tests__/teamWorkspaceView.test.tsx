@@ -251,3 +251,27 @@ test('the Tasks tab mounts the view, follows the URL selection, and notices a mi
   expect(useTeamTaskStore.getState().views['/repo']?.selectedTaskId).toBeNull()
   expect(textOf(renderer.root.findByProps({ 'data-testid': 'team-workspace-notice' }))).toContain('Task gone-task was not found')
 })
+
+test('the selected task survives a visit to another tab; the browser Back to a list location still clears it', () => {
+  const view = { open: true, loading: false, tasks: [{
+    id: 't-1', teamId: 'team', title: 'Export', status: 'open', creator: { kind: 'human', sessionId: null }, parentId: null, worktree: null,
+    openspecChange: null, revision: 1, direction: 'Build it', acceptance: null, createdAt: '2026-10-11T00:00:00.000Z',
+    updatedAt: '2026-10-11T00:00:00.000Z', participants: [], assignment: null,
+  }], selectedTaskId: 't-1', detail: null, directory: [], pending: {}, error: null,
+    draft: { title: '', direction: '', acceptance: '', parentId: '', worktree: '', openspecChange: '', targetKind: '', targetId: '', instruction: '' },
+    flow: null, preview: null, previewPending: {}, targets: null, targetsLoading: false, commands: {}, commandRequests: {} }
+  act(() => { useTeamTaskStore.setState({ views: { '/repo': view as never } }) })
+  act(() => { useTeamLocationStore.getState().navigate({ teamKey: '/repo', tab: 'tasks', id: 't-1' }) })
+  const page = mountPage({ teamKey: '/repo', tab: 'tasks', id: 't-1' })
+  act(() => { useTeamLocationStore.getState().navigate({ teamKey: '/repo', tab: 'messages' }) })
+  page.update()
+  act(() => { useTeamLocationStore.getState().navigate({ teamKey: '/repo', tab: 'tasks' }) })
+  page.update()
+  // Entering Tasks put the held selection back in the URL, replacing the id-less entry.
+  expect(locationNow()).toEqual({ teamKey: '/repo', tab: 'tasks', id: 't-1' })
+  expect(useTeamTaskStore.getState().views['/repo']?.selectedTaskId).toBe('t-1')
+  // Back to an id-less Tasks location while the tab stays open asks for the list.
+  act(() => { useTeamLocationStore.getState().navigate({ teamKey: '/repo', tab: 'tasks' }) })
+  page.update()
+  expect(useTeamTaskStore.getState().views['/repo']?.selectedTaskId).toBeNull()
+})

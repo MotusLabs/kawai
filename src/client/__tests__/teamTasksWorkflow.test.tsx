@@ -89,11 +89,14 @@ test('Phase 2 stages and badges: Awaiting acceptance, Needs re-evaluation, and D
   rows[3] = row('d', { stage: 'awaiting-acceptance', worktree: '/repo' })
 })
 
-test('before the read model arrives rows show without workflow lines and nothing is filtered', () => {
+test('before the read model arrives rows show without workflow lines, and closed tasks are still absent', () => {
   const renderer = mount(false)
-  expect(visible(renderer)).toEqual(['a', 'b', 'c', 'd'])
+  // Done tasks never flash into the default list while the snapshot is in flight.
+  expect(visible(renderer)).toEqual(['a', 'b', 'd'])
   expect(byId(renderer, 'task-stage')).toHaveLength(0)
   expect(byId(renderer, 'task-filters')).toHaveLength(0)
+  act(() => { useTeamWorkspaceStore.getState().setSearch('dev', 'tasks', 'Direction of c') })
+  expect(visible(renderer)).toEqual(['c'])
 })
 
 test('closed tasks are absent by default and found by search', () => {
