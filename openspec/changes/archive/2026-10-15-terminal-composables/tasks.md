@@ -45,16 +45,21 @@ tick the checkbox in the same commit. Implementation starts only after PR #96 (S
 - [x] 3.2 Confirm `useTerminal.ts` is composition + subscribe (~400–500 LOC) and every
   new module is under 500 LOC with a header comment; record actual numbers in this file
 
-  Actuals (2026-10-15): `useTerminal.ts` **603 LOC** — composition plus the
-  inline subscribe effect (~170 LOC), which the proposal keeps in the hook;
-  the composition ex-subscribe is ~430, inside the band. `src/client/terminal/`
-  modules, all under 500 with header comments: pasteChannel 426, attachState
-  279, setup 240, outputStream 204, copyMode 186, iosRepaint 158, linkHover
-  157, createTerminal 134, webgl 103, linkSanitize 39, textPresentation 34,
-  droppedOutputLog 33, snapshotCache 30 — 13 modules where the proposal named
-  ~9: createTerminal/linkHover/setup absorb the mount-effect residue and
-  textPresentation the iOS emoji workaround, so the hook itself is
-  composition-only. useTerminal.test.tsx (90 tests) unchanged throughout §1–2.
+  Actuals (2026-10-15, after the lead's under-500 rework): `useTerminal.ts`
+  **498 LOC** — composition plus the inline subscribe effect, as the proposal
+  directs. `src/client/terminal/` modules, all under 500 with header
+  comments: pasteChannel 426, attachState 279, setup 260, outputStream 204,
+  copyMode 197 (absorbed checkScrollPosition), iosRepaint 158, linkHover 157,
+  createTerminal 134, webgl 103, terminalReady 70 (the terminal-ready branch,
+  with direct unit tests), droppedOutputLog 53 (absorbed first-output
+  logging), clipboardOffer 45 (the pending-offer card state), linkSanitize
+  39, appearance 39 (theme/font application), textPresentation 34,
+  snapshotCache 30 — 16 modules where the proposal named ~9:
+  createTerminal/linkHover/setup absorb the mount-effect residue,
+  textPresentation the iOS emoji workaround, and terminalReady/
+  clipboardOffer/appearance carry the follow-up extraction so the hook lands
+  under the 500-LOC norm. useTerminal.test.tsx (90 tests) unchanged
+  throughout §1–2 and the rework; terminalReady.test.ts adds 6 direct tests.
 - [x] 3.3 Mark S4 done in `docs/refactor-analysis/synthesis.md` (status note with commit
   hashes, mirroring the earlier notes); commit
   (`docs: mark P1/S4 complete in refactor synthesis`); push and open the PR; wait for merge
