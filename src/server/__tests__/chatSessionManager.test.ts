@@ -4528,14 +4528,14 @@ describe('ChatSessionManager provider usage pull', () => {
     expect(usage.some((entry) => entry.report?.source === 'pull')).toBe(true)
   })
 
-  test('a quota-shaped base URL records a provider report and suppresses the SDK pull', async () => {
+  test('a path-prefixed provider records usage on attach without a prompt or SDK pull', async () => {
     const { manager, handles, usage, fetchCalls } = await createProviderHarness(
-      { ANTHROPIC_BASE_URL: 'https://zai.test', ANTHROPIC_AUTH_TOKEN: 'sk-glm-token' },
+      { ANTHROPIC_BASE_URL: 'https://zai.test/api/anthropic', ANTHROPIC_AUTH_TOKEN: 'sk-glm-token' },
       [jsonResponse(CAPTURE(2))]
     )
     const created = manager.createSession({ projectPath: '/tmp/proj' })
     if (!created.ok) throw new Error('create failed')
-    await manager.send(created.session.id, 'hello')
+    expect(await manager.start(created.session.id)).toEqual({ ok: true })
     await flush()
 
     expect(fetchCalls).toEqual([
@@ -4548,12 +4548,14 @@ describe('ChatSessionManager provider usage pull', () => {
     expect(usage[0]!.report?.windows[0]).toMatchObject({ key: 'zai:time_limit', percentUsed: 2 })
     expect(handles[0]!.usageCalls).toEqual([])
     expect(manager.getSnapshot(created.session.id)!.usage?.source).toBe('provider')
+    expect(manager.getSnapshot(created.session.id)!.usage?.windows[0]).toMatchObject({ key: 'zai:time_limit', percentUsed: 2 })
+    expect(manager.getSnapshot(created.session.id)!.status).toBe('waiting')
   })
 
-  test('a provider refusal records the no-data verdict and skips the SDK pull', async () => {
+  test.each([401, 403, 1001])('a provider auth code %s records no data and skips the SDK pull', async code => {
     const { manager, handles, usage } = await createProviderHarness(
-      { ANTHROPIC_BASE_URL: 'https://zai.test', ANTHROPIC_AUTH_TOKEN: 'sk-glm-token' },
-      [jsonResponse({ code: 1001, msg: 'Authentication parameter not received', success: false })]
+      { ANTHROPIC_BASE_URL: 'https://zai.test/api/anthropic', ANTHROPIC_AUTH_TOKEN: 'sk-glm-token' },
+      [jsonResponse({ code, msg: 'Authentication refused', success: false })]
     )
     const created = manager.createSession({ projectPath: '/tmp/proj' })
     if (!created.ok) throw new Error('create failed')
@@ -4580,14 +4582,40 @@ describe('ChatSessionManager provider usage pull', () => {
     expect(usage.some((entry) => entry.report?.source === 'pull')).toBe(true)
   })
 
+  test.each([
+    { code: 500, msg: '404 NOT_FOUND' },
+    { code: 500, msg: 'upstream unavailable' },
+    { code: 9999, msg: 'unknown failure' },
+  ])('a non-auth quota envelope $code/$msg permits the SDK pull without retrying the probe', async body => {
+    const { manager, handles, usage, fetchCalls } = await createProviderHarness(
+      { ANTHROPIC_BASE_URL: 'https://zai.test/api/anthropic' },
+      [jsonResponse({ success: false, ...body })]
+    )
+    const created = manager.createSession({ projectPath: '/tmp/proj' })
+    if (!created.ok) throw new Error('create failed')
+    expect(await manager.start(created.session.id)).toEqual({ ok: true })
+    await flush()
+
+    expect(fetchCalls).toHaveLength(1)
+    expect(fetchCalls[0]!.url).toBe('https://zai.test/api/monitor/usage/quota/limit')
+    expect(handles[0]!.usageCalls).toHaveLength(1)
+    expect(usage.some(entry => entry.report?.source === 'provider')).toBe(false)
+    expect(manager.getSnapshot(created.session.id)!.usage?.source).toBe('pull')
+
+    expect(await manager.start(created.session.id)).toEqual({ ok: true })
+    await flush()
+    expect(fetchCalls).toHaveLength(1)
+    expect(handles[0]!.usageCalls).toHaveLength(1)
+  })
+
   test('a routed profile refreshes on the cadence without a turn', async () => {
-    const { manager, usage } = await createProviderHarness(
-      { ANTHROPIC_BASE_URL: 'https://zai.test', ANTHROPIC_AUTH_TOKEN: 'sk-glm-token' },
+    const { manager, handles, usage, fetchCalls } = await createProviderHarness(
+      { ANTHROPIC_BASE_URL: 'https://zai.test/api/anthropic', ANTHROPIC_AUTH_TOKEN: 'sk-glm-token' },
       [jsonResponse(CAPTURE(2)), jsonResponse(CAPTURE(50))]
     )
     const created = manager.createSession({ projectPath: '/tmp/proj' })
     if (!created.ok) throw new Error('create failed')
-    await manager.send(created.session.id, 'hello')
+    expect(await manager.start(created.session.id)).toEqual({ ok: true })
     await flush()
     expect(usage[0]!.report?.windows[0]).toMatchObject({ percentUsed: 2 })
 
@@ -4597,6 +4625,32 @@ describe('ChatSessionManager provider usage pull', () => {
     expect(manager.getSnapshot(created.session.id)!.usage?.windows[0]).toMatchObject({
       percentUsed: 50,
     })
+    expect(fetchCalls.length).toBeGreaterThanOrEqual(2)
+    expect(fetchCalls.every(call => call.url === 'https://zai.test/api/monitor/usage/quota/limit' && call.auth === 'sk-glm-token')).toBe(true)
+    expect(handles[0]!.usageCalls).toEqual([])
+  })
+
+  test.each([
+    { code: 500, msg: '404 NOT_FOUND' },
+    { code: 1001, msg: 'Authentication refused' },
+    { code: 500, msg: 'upstream unavailable' },
+  ])('a failed provider refresh $code/$msg keeps the held report and never pulls the SDK', async body => {
+    const { manager, handles, usage, fetchCalls } = await createProviderHarness(
+      { ANTHROPIC_BASE_URL: 'https://zai.test/api/anthropic' },
+      [jsonResponse(CAPTURE(2)), jsonResponse({ success: false, ...body })]
+    )
+    const created = manager.createSession({ projectPath: '/tmp/proj' })
+    if (!created.ok) throw new Error('create failed')
+    expect(await manager.start(created.session.id)).toEqual({ ok: true })
+    await flush()
+    const held = manager.getSnapshot(created.session.id)!.usage
+    expect(held?.source).toBe('provider')
+
+    await waitForCondition(() => fetchCalls.length >= 2)
+    await flush()
+    expect(manager.getSnapshot(created.session.id)!.usage).toEqual(held)
+    expect(usage).toHaveLength(1)
+    expect(handles[0]!.usageCalls).toEqual([])
   })
 
   test('archiving the last live session stops the pulls', async () => {
