@@ -13,7 +13,8 @@
 // Migration 2 (`strategy-impact`) adds the three strategy impact tables below;
 // migration 3 (`task-status-events`) adds the task transition table;
 // migration 4 (`agent-starts`) adds agent starts and memory manifests;
-// migration 5 (`chat-turn-usage`) adds per-turn usage.
+// migration 5 (`chat-turn-usage`) adds per-turn usage;
+// migration 6 (`process-reports`) adds the process report tables.
 import { expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
 import { initDatabase } from '../db'
@@ -98,6 +99,39 @@ const migration5: SchemaShape['tables'] = {
   },
 }
 
+/** Migration 6's delta: process reports, proposals, decisions, link events, and commands (team-process-metrics D6). */
+const migration6: SchemaShape['tables'] = {
+  process_reports: {
+    columns: [id, ...['team_id', 'author_session', 'window', 'period_start', 'period_end', 'summary', 'snapshot', 'created_at'].map(name => column(name))],
+    indexes: [{ name: 'process_reports_team', unique: 0, columns: ['team_id', 'created_at'] }],
+  },
+  process_proposals: {
+    columns: [
+      id, column('report_id'), column('team_id'), integer('position'),
+      ...['kind', 'target_kind', 'target', 'edit', 'rationale', 'expected'].map(name => column(name)), optional('revert_to_hash'),
+    ],
+    indexes: [
+      { name: 'process_proposals_report', unique: 0, columns: ['report_id', 'position'] },
+      { name: 'process_proposals_team', unique: 0, columns: ['team_id'] },
+    ],
+  },
+  process_proposal_decisions: {
+    columns: [column('proposal_id', 0, 1), column('team_id'), column('decision'), optional('reason'), optional('target_hash_at_decision'), column('decided_at')],
+    indexes: [],
+  },
+  process_proposal_link_events: {
+    columns: [
+      { name: 'id', type: 'INTEGER', notnull: 0, dflt_value: null, pk: 1 }, column('proposal_id'), column('team_id'), column('action'),
+      ...['change_start_id', 'change_hash', 'change_at'].map(optional), column('actor_kind'), optional('actor_session'), column('at'),
+    ],
+    indexes: [{ name: 'process_proposal_link_events_proposal', unique: 0, columns: ['proposal_id', 'id'] }],
+  },
+  process_commands: {
+    columns: [column('team_id', 1, 1), column('command_id', 1, 2), column('kind'), column('payload'), column('outcome'), column('at')],
+    indexes: [],
+  },
+}
+
 test('a fresh baseline reproduces master bdc0131 schema exactly', () => {
   const db = new Database(':memory:')
   applyBaselineSchema(db)
@@ -107,8 +141,8 @@ test('a fresh baseline reproduces master bdc0131 schema exactly', () => {
 
 test('a fresh database opened by this build has the same shape plus each migration\'s delta and schema_migrations', () => {
   const session = initDatabase({ path: ':memory:' })
-  expect(Object.keys({ ...migration2, ...migration3, ...migration4, ...migration5 }).filter(table => table in expected.tables)).toEqual([])
-  expect(schemaShape(session.db)).toEqual({ tables: { ...expected.tables, ...migration2, ...migration3, ...migration4, ...migration5 } })
+  expect(Object.keys({ ...migration2, ...migration3, ...migration4, ...migration5, ...migration6 }).filter(table => table in expected.tables)).toEqual([])
+  expect(schemaShape(session.db)).toEqual({ tables: { ...expected.tables, ...migration2, ...migration3, ...migration4, ...migration5, ...migration6 } })
   const extra = session.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'").get()
   expect(extra).toEqual({ name: 'schema_migrations' })
   session.close()
