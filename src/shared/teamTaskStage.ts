@@ -13,22 +13,25 @@ import type { TaskStatus, TeamTaskAssignment } from './teamTasks'
  *    assignment history says.
  * 2. An outstanding review/QA/fix handoff — In review, Ready for QA, Fixes
  *    requested — even while still queued and even over an unaccepted result.
- * 3. An unaccepted outstanding result is Awaiting acceptance.
- * 4. An outstanding assignment the holder is working — `claimed`,
+ * 3. An unaccepted outstanding result whose newest findings fail is Fixes
+ *    requested: the work goes back to its submitter, not to acceptance.
+ * 4. Any other unaccepted outstanding result is Awaiting acceptance.
+ * 5. An outstanding assignment the holder is working — `claimed`,
  *    `delivered`, `parked`, `forwarded`, or `uncertain` — is Implementing.
- * 5. Otherwise (no outstanding assignment, or one still queued) Unstarted.
+ * 6. Otherwise (no outstanding assignment, or one still queued) Unstarted.
  *    Failed and superseded assignments are never outstanding, so they land
  *    here through their absence.
  */
 export function teamTaskStage(
   task: { status: TaskStatus },
   assignment: TeamTaskAssignment | null,
-  result: { accepted: boolean } | null = null,
+  result: { accepted: boolean; reviewVerdict?: 'pass' | 'fail' | null } | null = null,
 ): TeamTaskStage | null {
   if (task.status === 'done' || task.status === 'cancelled') return null
   if (assignment?.handoffKind === 'review') return 'in-review'
   if (assignment?.handoffKind === 'qa') return 'ready-for-qa'
   if (assignment?.handoffKind === 'fix') return 'fixes-requested'
+  if (result && !result.accepted && result.reviewVerdict === 'fail') return 'fixes-requested'
   if (result && !result.accepted) return 'awaiting-acceptance'
   const state = assignment?.state
   if (state === 'claimed' || state === 'delivered' || state === 'parked' || state === 'forwarded' || state === 'uncertain') {

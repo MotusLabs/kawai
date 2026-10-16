@@ -23,6 +23,7 @@ import type { TeamMessage, WaitingConstraint, WaitingReason } from '../../shared
 import type { TeamTaskSummary } from '../../shared/teamTasks'
 import type { ChatSessionRecord } from '../db'
 import type { ChatSessionManager } from '../chat/ChatSessionManager'
+import { acceptanceItems, taskImpact, type PendingAcceptance } from './attentionAcceptance'
 import type { GroupCatalog } from './groupCatalog'
 import type { TeamIdentity } from './teamIdentity'
 
@@ -117,7 +118,7 @@ function acknowledgementBadge(
 function taskNextAction(summary: TeamTaskSummary): string {
   const assignment = summary.assignment
   if (summary.outstandingResult && !summary.outstandingResult.accepted && summary.status !== 'done' && summary.status !== 'cancelled') {
-    return 'Accept result'
+    return summary.outstandingResult.reviewVerdict === 'fail' ? 'Wait for fixes' : 'Accept result'
   }
   if (!assignment) return 'Assign a dev'
   switch (assignment.state) {
@@ -186,24 +187,8 @@ export interface AttentionInput {
   pendingAcceptance: PendingAcceptance[]
 }
 
-/** A submitted, unaccepted outstanding result of a live task. */
-export interface PendingAcceptance {
-  resultId: string
-  taskId: string
-  /** Who submitted it, already labelled: the session's name, or "Human". */
-  submitter: string
-  needsReevaluation: boolean
-}
-
 /** One attention source: a pure function over the input (D5's registry). */
 export type AttentionSource = (input: AttentionInput) => AttentionItem[]
-
-/** The task scope an item carries: the id, plus the title when it is known. */
-const taskImpact = (taskId: string | null, taskTitle: (taskId: string) => string | null) => {
-  if (!taskId) return {}
-  const title = taskTitle(taskId)
-  return title === null ? { taskId } : { taskId, taskTitle: title }
-}
 
 /** Pending approvals and questions of the team's live sessions (E05). */
 const requestItems: AttentionSource = ({ sessions, taskTitle }) =>
@@ -270,19 +255,6 @@ const staffingItems: AttentionSource = ({ messages, waiting, taskTitle, nameOf }
       }]
     })
 }
-
-/** A submitted result awaiting **Accept result**: only the human closes it (task 11.2). */
-const acceptanceItems: AttentionSource = ({ pendingAcceptance, taskTitle }) =>
-  pendingAcceptance.map(pending => ({
-    id: attentionItemId('pending-acceptance', pending.resultId),
-    kind: 'pending-acceptance' as const,
-    cause: `Result submitted by ${pending.submitter} awaits acceptance${pending.needsReevaluation ? ' (needs re-evaluation)' : ''}`,
-    owner: { kind: 'human' as const, id: null, label: 'Human' },
-    impact: taskImpact(pending.taskId, taskTitle),
-    nextAction: 'Accept result',
-    link: { kind: 'task' as const, id: pending.taskId },
-    requiresHuman: true,
-  }))
 
 /**
  * The source registry (task 4.1). Wave C sources (plan holds, stalls, Lead
@@ -429,11 +401,17 @@ export class WorkspaceRead {
     const sessions = records
       .filter(record => record.archivedAt == null)
       .map(record => ({ record, requests: manager.getPendingRequests(record.sessionId) }))
-    const pendingAcceptance = summaries.flatMap(summary => {
+    const pendingAcceptance: PendingAcceptance[] = summaries.flatMap(summary => {
       const result = summary.outstandingResult
       if (!result || result.accepted || summary.status === 'done' || summary.status === 'cancelled') return []
       const submittedBy = store.results.get(result.id)?.submittedBy
-      return [{ resultId: result.id, taskId: summary.id, submitter: submittedBy ? actorName(submittedBy) : 'Human', needsReevaluation: result.needsReevaluation }]
+      const creatorId = summary.creator.sessionId
+      const creator = creatorId ? records.find(record => record.sessionId === creatorId && record.archivedAt == null) : undefined
+      return [{
+        resultId: result.id, taskId: summary.id, submitter: submittedBy ? actorName(submittedBy) : 'Human',
+        submitterId: submittedBy?.sessionId ?? null, needsReevaluation: result.needsReevaluation,
+        reviewVerdict: result.reviewVerdict, liveCreator: creator ? { sessionId: creator.sessionId, name: creator.name } : null,
+      }]
     })
     const attention = attentionItems({ sessions, messages, waiting, taskTitle, nameOf, pendingAcceptance })
     const now = new Date().toISOString()
