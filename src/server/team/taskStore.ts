@@ -393,9 +393,13 @@ export class TaskStore {
       .all({ $id: task.id }) as Array<{ id: string }>
     for (const row of rows) ids.add(row.id)
     const result = this.results.outstanding(task.id)
+    const findings = result ? this.results.findingsFor(result.id) : []
     return {
       ...task, participants: [...ids], assignment: this.assignments ? outstandingOf(this.assignments.listByTask(task.id)) : null,
-      outstandingResult: result ? { id: result.id, needsReevaluation: result.needsReevaluation, accepted: result.acceptedAt !== null } : null,
+      outstandingResult: result ? {
+        id: result.id, needsReevaluation: result.needsReevaluation, accepted: result.acceptedAt !== null,
+        reviewVerdict: findings.at(-1)?.verdict ?? null,
+      } : null,
     }
   }
 }

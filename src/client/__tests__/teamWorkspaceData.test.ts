@@ -67,6 +67,16 @@ test('a new human-required item toasts once; agent-owned waits never do', () => 
   expect(toasts).toHaveLength(1)
 })
 
+test('agent-owned acceptance and fixes-requested items raise no toast', () => {
+  useTeamWorkspaceDataStore.getState().open('/repo')
+  route(snapshotMessage([]))
+  route(snapshotMessage([item('pending-acceptance:r-1', false), item('fixes-requested:r-2', false)], 'team-workspace'))
+  expect(toasts).toHaveLength(0)
+  // The same acceptance turning human-required (its creator went away) toasts once.
+  route(snapshotMessage([item('pending-acceptance:r-1', true), item('fixes-requested:r-2', false)], 'team-workspace'))
+  expect(toasts).toHaveLength(1)
+})
+
 test('a replayed snapshot after a reconnect converges the counts with no toast', () => {
   const store = useTeamWorkspaceDataStore.getState()
   store.open('/repo')

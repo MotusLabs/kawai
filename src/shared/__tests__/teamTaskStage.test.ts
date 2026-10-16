@@ -66,6 +66,25 @@ describe('teamTaskStage handoff and result orders (11.1)', () => {
     expect(teamTaskStage({ status: 'open' }, null, { accepted: false })).toBe('awaiting-acceptance')
   })
 
+  test('an unaccepted result whose newest findings fail is Fixes requested', () => {
+    const failing = { accepted: false, reviewVerdict: 'fail' as const }
+    expect(teamTaskStage({ status: 'active' }, assignment('delivered'), failing)).toBe('fixes-requested')
+    expect(teamTaskStage({ status: 'open' }, null, failing)).toBe('fixes-requested')
+  })
+
+  test('passing findings or none leave the result Awaiting acceptance', () => {
+    expect(teamTaskStage({ status: 'active' }, null, { accepted: false, reviewVerdict: 'pass' })).toBe('awaiting-acceptance')
+    expect(teamTaskStage({ status: 'active' }, null, { accepted: false, reviewVerdict: null })).toBe('awaiting-acceptance')
+  })
+
+  test('an outstanding handoff outranks failing findings, and an accepted or closed result ignores them', () => {
+    const failing = { accepted: false, reviewVerdict: 'fail' as const }
+    expect(teamTaskStage({ status: 'active' }, handoff('review'), failing)).toBe('in-review')
+    expect(teamTaskStage({ status: 'active' }, handoff('qa'), failing)).toBe('ready-for-qa')
+    expect(teamTaskStage({ status: 'active' }, assignment('delivered'), { accepted: true, reviewVerdict: 'fail' })).toBe('implementing')
+    expect(teamTaskStage({ status: 'done' }, null, failing)).toBeNull()
+  })
+
   test('an accepted result falls through to the assignment stage', () => {
     expect(teamTaskStage({ status: 'active' }, assignment('delivered'), { accepted: true })).toBe('implementing')
   })

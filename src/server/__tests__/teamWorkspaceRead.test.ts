@@ -16,6 +16,8 @@ import {
   taskRows,
   type AttentionInput,
 } from '../team/workspaceRead'
+import type { PendingAcceptance } from '../team/attentionAcceptance'
+import { filterTeamTaskRows } from '../../shared/teamWorkspace'
 
 const record = (overrides: Partial<ChatSessionRecord> = {}): ChatSessionRecord => ({
   sessionId: 'chat-1',
@@ -370,7 +372,7 @@ describe('morningSummary (4.3)', () => {
 
 describe('Phase 2 sources (11.1, 11.2)', () => {
   const resultOf = (extra: Partial<NonNullable<TeamTaskSummary['outstandingResult']>> = {}) =>
-    ({ id: 'result-1', needsReevaluation: false, accepted: false, ...extra })
+    ({ id: 'result-1', needsReevaluation: false, accepted: false, reviewVerdict: null, ...extra })
   const rowsFor = (summaries: TeamTaskSummary[], revisions = { delivered: 2 as number | null, acknowledged: 1 as number | null }) =>
     taskRows({ summaries, waiting: {}, attention: [], nameOf: id => id, revisionsOf: () => revisions })
 
@@ -396,10 +398,53 @@ describe('Phase 2 sources (11.1, 11.2)', () => {
     expect(rowsFor([summary({ revision: 3, status: 'done', assignment: claimed })])[0]!.acknowledgement).toBeNull()
   })
 
+  const pending = (extra: Partial<PendingAcceptance> = {}): PendingAcceptance => ({
+    resultId: 'result-1', taskId: 'task-1', submitter: 'Name of chat-3', submitterId: 'chat-3', needsReevaluation: false,
+    reviewVerdict: null, liveCreator: null, ...extra,
+  })
+  const itemsFor = (extra: Partial<PendingAcceptance>) => attentionItems({
+    sessions: [], messages: [], waiting: {}, taskTitle: () => 'Build the thing', nameOf: id => `Name of ${id}`,
+    pendingAcceptance: [pending(extra)],
+  })
+
+  test('failing findings: Fixes requested stage, Wait for fixes, and the awaiting-human filter drops the row', () => {
+    const failing = summary({ outstandingResult: resultOf({ reviewVerdict: 'fail' }) })
+    const [item] = itemsFor({ reviewVerdict: 'fail' })
+    const [row] = taskRows({ summaries: [failing], waiting: {}, attention: [item!], nameOf: id => id, revisionsOf: () => ({ delivered: null, acknowledged: null }) })
+    expect(row).toMatchObject({ stage: 'fixes-requested', nextAction: 'Wait for fixes', requiresHuman: false })
+    const rows = [row!]
+    expect(filterTeamTaskRows(rows, { awaitingHuman: true })).toEqual([])
+    expect(filterTeamTaskRows(rows, { awaitingAcceptance: true })).toEqual([])
+    // Passing findings keep it a normal acceptance row.
+    const [passing] = rowsFor([summary({ outstandingResult: resultOf({ reviewVerdict: 'pass' }) })])
+    expect(passing).toMatchObject({ stage: 'awaiting-acceptance', nextAction: 'Accept result' })
+  })
+
+  test('failing findings yield one agent-owned fixes-requested item owned by the submitter, and no pending acceptance', () => {
+    const items = itemsFor({ reviewVerdict: 'fail', liveCreator: { sessionId: 'chat-lead', name: 'Lead' } })
+    expect(items).toEqual([{
+      id: 'fixes-requested:result-1', kind: 'fixes-requested',
+      cause: 'Review of the result submitted by Name of chat-3 requested fixes',
+      owner: { kind: 'session', id: 'chat-3', label: 'Name of chat-3' },
+      impact: { taskId: 'task-1', taskTitle: 'Build the thing' },
+      nextAction: 'Wait for fixes', link: { kind: 'task', id: 'task-1' }, requiresHuman: false,
+    }])
+  })
+
+  test('a task created by a live agent session waits on that session, not the human', () => {
+    const [item] = itemsFor({ liveCreator: { sessionId: 'chat-lead', name: 'Lead' } })
+    expect(item).toMatchObject({
+      id: 'pending-acceptance:result-1', kind: 'pending-acceptance',
+      cause: 'Result submitted by Name of chat-3 awaits acceptance by Lead',
+      owner: { kind: 'session', id: 'chat-lead', label: 'Lead' }, requiresHuman: false,
+      impact: { taskId: 'task-1' }, link: { kind: 'task', id: 'task-1' },
+    })
+  })
+
   test('a pending acceptance is a human-required item linking to the task', () => {
     const items = attentionItems({
       sessions: [], messages: [], waiting: {}, taskTitle: () => 'Build the thing', nameOf: id => `Name of ${id}`,
-      pendingAcceptance: [{ resultId: 'result-1', taskId: 'task-1', submitter: 'Name of chat-3', needsReevaluation: false }],
+      pendingAcceptance: [pending()],
     })
     expect(items).toEqual([{
       id: 'pending-acceptance:result-1', kind: 'pending-acceptance',
@@ -450,12 +495,12 @@ describe('WorkspaceRead.snapshot labelling (bc0a329 follow-up)', () => {
     ...humanResult, id: 'r-agent', taskId: 'task-2',
     submittedBy: { kind: 'agent', sessionId: 'chat-9' } as const,
   }
-  const summaryOf = (taskId: string, resultId: string): TeamTaskSummary => ({
+  const summaryOf = (taskId: string, resultId: string, reviewVerdict: 'pass' | 'fail' | null = null, creator: TeamTaskSummary['creator'] = { kind: 'human', sessionId: null }): TeamTaskSummary => ({
     id: taskId, teamId: 'team', title: taskId === 'task-1' ? 'Export' : 'Import', status: 'active',
-    creator: { kind: 'human', sessionId: null }, parentId: null, worktree: null, openspecChange: null,
+    creator, parentId: null, worktree: null, openspecChange: null,
     revision: 1, direction: 'Do it', acceptance: null, createdAt: '2026-10-15T00:00:00Z', updatedAt: '2026-10-15T00:00:00Z',
     participants: [], assignment: null,
-    outstandingResult: { id: resultId, needsReevaluation: false, accepted: false },
+    outstandingResult: { id: resultId, needsReevaluation: false, accepted: false, reviewVerdict },
   })
 
   test('a human-submitted result is labelled Human in attention and summary', () => {
@@ -490,5 +535,72 @@ describe('WorkspaceRead.snapshot labelling (bc0a329 follow-up)', () => {
       'Export: result by Human — awaiting acceptance',
       'Import: result by Agent nine — awaiting acceptance',
     ])
+  })
+})
+
+describe('WorkspaceRead.snapshot acceptance ownership (attention-acceptance-ownership)', () => {
+  const result = (reviewVerdict: 'pass' | 'fail' | null) => ({
+    id: 'r-1', taskId: 'task-1', summary: 'CSV export', commit: 'abc', diff: null, worktree: null, tests: [],
+    limitations: null, taskRevision: 1, submittedBy: { kind: 'agent', sessionId: 'chat-dev' } as const,
+    supersedesResultId: null, supersededBy: null, acceptedBy: null, acceptedAt: null, needsReevaluation: false, reviewVerdict,
+  })
+  const snapshotFor = (creator: TeamTaskSummary['creator'], records: ChatSessionRecord[], verdict: 'pass' | 'fail' | null = null) => {
+    const task = summary({
+      id: 'task-1', teamId: 'team', title: 'Export', status: 'active', creator,
+      outstandingResult: { id: 'r-1', needsReevaluation: false, accepted: false, reviewVerdict: verdict },
+    })
+    const manager = {
+      tasks: { store: {
+        list: () => [task], get: () => task,
+        results: { get: () => result(verdict), outstandingSince: () => [], submittedBy: () => false },
+        acknowledgements: { highest: () => null },
+      } },
+      mailbox: { store: { listForTeam: () => [], eventsFor: () => [] } },
+      waitingFor: () => ({}),
+      teamRecords: () => records,
+      directory: { list: () => [] },
+      getPendingRequests: () => [],
+      teams: { catalogForTeam: () => ({ groups: new Map() }) },
+      groupProfileCounts: () => ({}),
+      turnEnds: { finishedForTeam: () => [] },
+    }
+    return new WorkspaceRead(manager as never).snapshot({ teamId: 'team' } as never)
+  }
+  const lead = { kind: 'agent', sessionId: 'chat-lead' } as const
+  const dev = record({ sessionId: 'chat-dev', name: 'Dev' })
+
+  test('a human-created task stays human-required', () => {
+    const { attention, tasks } = snapshotFor({ kind: 'human', sessionId: null }, [dev])
+    expect(attention).toMatchObject([{ kind: 'pending-acceptance', owner: { kind: 'human' }, requiresHuman: true }])
+    expect(tasks[0]!.requiresHuman).toBe(true)
+  })
+
+  test('a live agent creator owns the acceptance wait and the row is not human-blocked', () => {
+    const { attention, tasks } = snapshotFor(lead, [dev, record({ sessionId: 'chat-lead', name: 'Lead' })])
+    expect(attention).toMatchObject([{
+      kind: 'pending-acceptance', owner: { kind: 'session', id: 'chat-lead', label: 'Lead' }, requiresHuman: false,
+      cause: 'Result submitted by Dev awaits acceptance by Lead',
+    }])
+    expect(tasks[0]).toMatchObject({ requiresHuman: false, stage: 'awaiting-acceptance', nextAction: 'Accept result' })
+  })
+
+  test('an archived creator hands acceptance back to the human', () => {
+    const archived = record({ sessionId: 'chat-lead', name: 'Lead', archivedAt: '2026-10-15T05:00:00Z' })
+    const { attention } = snapshotFor(lead, [dev, archived])
+    expect(attention).toMatchObject([{ kind: 'pending-acceptance', owner: { kind: 'human' }, requiresHuman: true }])
+  })
+
+  test('a killed creator (no session record) hands acceptance back to the human', () => {
+    const { attention } = snapshotFor(lead, [dev])
+    expect(attention).toMatchObject([{ kind: 'pending-acceptance', owner: { kind: 'human' }, requiresHuman: true }])
+  })
+
+  test('failing findings list one agent-owned wait owned by the submitter, even for a human-created task', () => {
+    const { attention, tasks } = snapshotFor({ kind: 'human', sessionId: null }, [dev], 'fail')
+    expect(attention).toMatchObject([{
+      id: 'fixes-requested:r-1', kind: 'fixes-requested', owner: { kind: 'session', id: 'chat-dev', label: 'Dev' },
+      nextAction: 'Wait for fixes', requiresHuman: false,
+    }])
+    expect(tasks[0]).toMatchObject({ stage: 'fixes-requested', nextAction: 'Wait for fixes', requiresHuman: false })
   })
 })

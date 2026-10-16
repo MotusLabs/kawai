@@ -140,8 +140,11 @@ export interface TeamTaskSummary extends TeamTask {
    * is neither superseded nor failed; null when the task is unassigned.
    */
   assignment: TeamTaskAssignment | null
-  /** The outstanding result's presence (task-results-handoffs D8); null when none was submitted. */
-  outstandingResult?: { id: string; needsReevaluation: boolean; accepted: boolean } | null
+  /**
+   * The outstanding result's presence (task-results-handoffs D8); null when none was submitted.
+   * `reviewVerdict` is the verdict of the newest findings bound to it (attention-acceptance-ownership), null without findings.
+   */
+  outstandingResult?: { id: string; needsReevaluation: boolean; accepted: boolean; reviewVerdict: 'pass' | 'fail' | null } | null
 }
 
 /**
