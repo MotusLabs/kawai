@@ -96,8 +96,6 @@ function PlanList({ plans, loading, onSelect, impact, onOpenImpactReview }: {
   onSelect: (planId: string) => void
   impact: Record<string, PlanImpact>
   onOpenImpactReview?: (revision: number) => void
-  /** Opens the Strategy tab's capture affordance, from the Unassessed note (plan-validation D11). */
-  onCaptureStrategy?: () => void
 }) {
   if (loading || plans === null) return <p role="status" className="text-chat-meta text-secondary">Loading plans…</p>
   if (plans.length === 0) {

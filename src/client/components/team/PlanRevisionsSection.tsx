@@ -42,7 +42,7 @@ export default function PlanRevisionsSection({ teamPath, detail, sessions, sendM
       <DiffSummary base={approved} next={revision} />
       <ApproveStanding teamPath={teamPath} planId={plan.id} revision={revision}
         entry={validation?.find(item => item.revision === revision.revision) ?? null}
-        sendMessage={sendMessage} connected={connected} />
+        sendMessage={sendMessage} connected={connected} busy={busy} />
       <PlanValidationSection teamPath={teamPath} planId={plan.id} revision={revision.revision} pin={revision.pin}
         validation={validation?.find(entry => entry.revision === revision.revision) ?? null}
         earlierRevisions={(validation ?? []).filter(entry => entry.revision < revision.revision)}
@@ -130,13 +130,14 @@ function DiffSummary({ base, next }: { base: PlanRevision | null; next: PlanRevi
  * validation standing beside Approve, and a `validation-current` refusal
  * rendered inline with its blocking counts and a **Validate** control.
  */
-function ApproveStanding({ teamPath, planId, revision, entry, sendMessage, connected }: {
+function ApproveStanding({ teamPath, planId, revision, entry, sendMessage, connected, busy }: {
   teamPath: string
   planId: string
   revision: PlanRevision
   entry: PlanRevisionValidation | null
   sendMessage: SendClientMessage
   connected: boolean
+  busy: boolean
 }) {
   const view = useTeamPlanStore(state => state.views[teamPath])
   const failure = view?.failures.find(item => item.name === 'validation-current') ?? null
@@ -149,7 +150,7 @@ function ApproveStanding({ teamPath, planId, revision, entry, sendMessage, conne
       {failure.message}
       {readiness && standing.state === 'blocked' ? ` — ${readiness.errors.length} errors, ${readiness.unansweredQuestions.length} unanswered questions, ${readiness.unacceptedWarnings.length} unaccepted warnings` : ''}
       {' '}<button type="button" className="btn text-chat-meta" data-testid={`plan-approve-refused-${revision.revision}-validate`}
-        disabled={!connected}
+        disabled={!connected || busy}
         onClick={() => {
           const requestId = crypto.randomUUID()
           useTeamPlanStore.getState().begin(teamPath, requestId, 'validate')

@@ -225,4 +225,9 @@ test('the approve dialog shows the standing and an inline validation-current ref
   expect(textOf(byId('plan-approve-refused-1'))).toContain('1 errors, 0 unanswered questions, 1 unaccepted warnings')
   act(() => { byId('plan-approve-refused-1-validate').props.onClick() })
   expect(sent.at(-1)).toMatchObject({ type: 'team-plan-validate', planId: 'p1', revision: 1 })
+  // L-2's disabled-while-busy is wired like every other control but is not
+  // reachable through the store flow to assert here: `begin` (what makes the
+  // view busy) also clears `failures`, and the failures are what render the
+  // refusal line and its Validate button — the two states are mutually
+  // exclusive by the store's design, so the wiring is defensive.
 })
