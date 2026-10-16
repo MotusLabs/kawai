@@ -7,6 +7,8 @@
 // name already carried by a worktree, a local branch, or an origin branch
 // is a finding unless an execution of this plan provisioned it.
 import type { FloorMap } from '../../../shared/planExecution'
+import fs from 'node:fs'
+import path from 'node:path'
 import { runGitAsync } from '../../git/gitCommand'
 import { parseWorktreePorcelain } from '../../git/worktreeList'
 import { ghAuthStatus, ghCommitTree, ghRepo } from './github'
@@ -29,6 +31,8 @@ export interface ProbeBase {
 
 export interface ProbeResult {
   findings: ProbeFinding[]
+  /** origin as owner/repo when it parses as GitHub; what the tree reads use. */
+  repo: string | null
   /** Set whenever the base branch, head, and tree could be read, whatever else failed. */
   base: ProbeBase | null
 }
@@ -116,7 +120,37 @@ export async function probeLanding(input: ProbeInput, options: GhCommandOptions 
     if (taken !== null) findings.push({ code: 'name-taken', message: taken })
   }
 
-  return { findings, base }
+  return { findings, repo, base }
+}
+
+/**
+ * A change's validated files and the base specs its deltas touch (D4's
+ * changes-on-base input): everything under `openspec/changes/<change>/`,
+ * plus `openspec/specs/<capability>/spec.md` for each capability the change
+ * carries a spec delta for (kept only while it exists locally — a delta for
+ * a new capability has no base spec to compare).
+ */
+export function validatedFilesOf(main: string, change: string): string[] {
+  const changeDir = path.join(main, 'openspec', 'changes', change)
+  if (!fs.existsSync(changeDir)) return []
+  const files: string[] = []
+  const walk = (dir: string): void => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name)
+      if (entry.isDirectory()) walk(full)
+      else if (entry.isFile()) files.push(path.relative(main, full).split(path.sep).join('/'))
+    }
+  }
+  walk(changeDir)
+  const specs = path.join(changeDir, 'specs')
+  if (fs.existsSync(specs)) {
+    for (const capability of fs.readdirSync(specs, { withFileTypes: true })) {
+      if (!capability.isDirectory()) continue
+      const baseSpec = path.join(main, 'openspec', 'specs', capability.name, 'spec.md')
+      if (fs.existsSync(baseSpec)) files.push(path.relative(main, baseSpec).split(path.sep).join('/'))
+    }
+  }
+  return files.sort()
 }
 
 /** Where a change's name already exists: a worktree, a local branch, or an origin branch (D6's checks, read-only). */
