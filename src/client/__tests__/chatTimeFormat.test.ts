@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test'
+import { describe, expect, spyOn, test } from 'bun:test'
 import { chatDayKey, chatDayLabel, chatTimeLabels } from '../utils/chatTimeFormat'
 
 describe('chat time labels (chat-transcript-layout D2)', () => {
@@ -23,4 +23,28 @@ describe('chat time labels (chat-transcript-layout D2)', () => {
       expect(chatDayLabel(at)).toBeNull()
     }
   })
+})
+
+
+test('formatter construction stays bounded by contexts, not history length', () => {
+  const Original = Intl.DateTimeFormat
+  const construct = spyOn(Intl, 'DateTimeFormat').mockImplementation(new Proxy(Original, { construct: (target, args) => Reflect.construct(target, args) }))
+  try {
+    for (let i = 0; i < 500; i++) {
+      const at = new Date(Date.UTC(2026, 9, 15, 10, i)).toISOString()
+      chatTimeLabels(at, 'Pacific/Auckland')
+      chatDayKey(at, 'Pacific/Auckland')
+      chatDayLabel(at, 'Pacific/Auckland')
+    }
+    expect(construct.mock.calls.length).toBe(4)
+    const defaultLabels = chatTimeLabels('2026-10-15T23:30:00Z')
+    chatTimeLabels('2026-10-15T23:30:00Z', 'America/New_York')
+    expect(chatTimeLabels('2026-10-15T23:30:00Z')).toEqual(defaultLabels)
+    // Arbitrary explicit zones cannot grow the cache indefinitely.
+    for (const zone of Intl.supportedValuesOf('timeZone').slice(0, 40)) chatDayKey('2026-10-15T23:30:00Z', zone)
+    const before = construct.mock.calls.length
+    chatDayKey('2026-10-15T23:30:00Z', 'Pacific/Auckland')
+    expect(construct.mock.calls.length).toBe(before + 1)
+    expect(chatDayKey('2026-10-15T23:30:00Z', 'Pacific/Auckland')).toBe('2026-10-16')
+  } finally { construct.mockRestore() }
 })
