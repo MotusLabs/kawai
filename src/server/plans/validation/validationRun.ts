@@ -18,7 +18,7 @@ import type {
   ValidationInputs,
 } from '../../../shared/planValidation'
 import { deriveRelations, validationReadiness, VALIDATION_CHECKS_VERSION } from '../../../shared/planValidation'
-import { computeClaims, runValidationChecks, type ResolvedChange, type ValidationCheckContext } from './validationChecks'
+import { computeClaims, deltaTouches, runValidationChecks, type ResolvedChange, type ValidationCheckContext } from './validationChecks'
 import { hashValidationInputs, readValidationFileInputs, type ValidationFileInputs } from './validationInputs'
 import type { OpenspecAdapter, ShowDeltasOutcome, ValidateOutcome } from './openspecAdapter'
 
@@ -115,9 +115,10 @@ export function buildRecordPhase(parts: {
     branch: parts.file.file.evidence.branch,
   }
   const findings = runValidationChecks(ctx)
+  const { byChange } = deltaTouches(ctx)
   const relations = deriveRelations(
-    parts.content.changes.map(change => change.change).filter(name => parts.file.resolved[name]?.status === 'registered'),
-    Object.fromEntries(parts.content.changes.map(change => [change.change, parts.file.cli[change.change]?.deltas.touches ?? []])),
+    Object.keys(byChange),
+    byChange,
     Object.fromEntries(parts.content.changes.map(change => [change.change, change.dependsOn])),
   )
   const evidence: ValidationEvidence = {

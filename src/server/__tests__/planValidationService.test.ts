@@ -92,7 +92,7 @@ const use = (adapter?: OpenspecAdapter): ValidationBench => {
 }
 
 /** A fake adapter whose verdicts are canned per change; `gate` holds every validate until released, for single-flight tests. */
-function fakeAdapter(options: { deltas?: Record<string, Array<{ capability: string; operation: string; requirement: string }>>; invalid?: string[]; unavailable?: boolean; gate?: Promise<void> } = {}): OpenspecAdapter {
+function fakeAdapter(options: { deltas?: Record<string, Array<{ capability: string; operation: string; requirement: string }>>; deltasFail?: string[]; invalid?: string[]; unavailable?: boolean; gate?: Promise<void> } = {}): OpenspecAdapter {
   return {
     probe: async () => (options.unavailable
       ? { tool: 'openspec', version: null, capabilities: [], ok: false, error: 'openspec executable not found' }
@@ -103,7 +103,9 @@ function fakeAdapter(options: { deltas?: Record<string, Array<{ capability: stri
         ? { ok: true, error: null, valid: false, issues: [{ level: 'ERROR', message: 'No deltas' }], issueCount: 1 }
         : { ok: true, error: null, valid: true, issues: [], issueCount: 0 }
     },
-    showDeltas: async (_root: string, change: string) => ({ ok: true, error: null, touches: options.deltas?.[change] ?? [] }),
+    showDeltas: async (_root: string, change: string) => (options.deltasFail?.includes(change)
+      ? { ok: false, error: `show ${change} timed out after 15000ms`, touches: [] }
+      : { ok: true, error: null, touches: options.deltas?.[change] ?? [] }),
   } as unknown as OpenspecAdapter
 }
 
@@ -428,6 +430,23 @@ describe('ValidationService.validate (D8)', () => {
     expect(keys).toContain('adapter-available:openspec')
     expect(keys).toContain('openspec-valid:openspec')
     expect(keys).toContain('relations:openspec')
+  })
+
+  test('a failed delta read blocks the report even when the surviving pairs conflict with nothing', async () => {
+    // api and ui would conflict, but api's deltas cannot be read: the
+    // failure is the error, and the report is not ready.
+    const b = use(fakeAdapter({ deltas: { api: [touching], ui: [touching] }, deltasFail: ['api'] }))
+    const { planId, revision } = await b.draftInReview({
+      changes: [
+        { change: 'api', dependsOn: [], group: 'middle-devs', acceptance: [], extraChecks: [], guidance: '' },
+        { change: 'ui', dependsOn: [], group: 'middle-devs', acceptance: [], extraChecks: [], guidance: '' },
+      ],
+    })
+    const outcome = await b.validation.validate(b.human, { planId, revision })
+    expect(outcome.ok && outcome.report.ready).toBe(false)
+    const keys = outcome.ok ? outcome.report.findings.map(finding => finding.key) : []
+    expect(keys).toContain('relations:api')
+    expect(keys.some(key => key.startsWith('relations:conflict'))).toBe(false)
   })
 
   test('a dry run is computed as if submitted, marked dryRun, and stores nothing', async () => {

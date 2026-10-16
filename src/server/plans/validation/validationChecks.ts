@@ -152,11 +152,16 @@ export const VALIDATION_CHECKS: readonly ValidationCheck[] = [
     row: 'scope',
     run: (ctx) => {
       if (!ctx.adapter.ok) return [{ ...notChecked('relations'), row: 'scope' as const }]
-      const names = ctx.content.changes.map(change => change.change).filter(name => ctx.resolved[name]?.status === 'registered')
-      const deltas: Record<string, readonly SpecTouch[]> = {}
-      for (const name of names) deltas[name] = ctx.cli[name]?.deltas.touches ?? []
+      // A delta read that failed or returned an unknown shape is an error
+      // for that change (D3: a missing operation never yields success), and
+      // the change is excluded from pairing — its touches are unknown.
+      const { byChange, failed } = deltaTouches(ctx)
+      const findings: Finding[] = failed.map(entry => ({
+        check: 'relations', key: findingKey('relations', entry.change), severity: 'error', row: 'scope',
+        subject: entry.change, message: `the spec deltas of ${entry.change} could not be read: ${entry.error}`,
+      }))
       const dependsOn = Object.fromEntries(ctx.content.changes.map(change => [change.change, change.dependsOn]))
-      return relationFindings(deriveRelations(names, deltas, dependsOn))
+      return [...findings, ...relationFindings(deriveRelations(Object.keys(byChange), byChange, dependsOn))]
     },
   },
   {
@@ -244,6 +249,23 @@ export const VALIDATION_CHECKS: readonly ValidationCheck[] = [
     })),
   },
 ]
+
+/** The touches the relations check pairs, per change, and the changes whose delta read failed (D3). */
+export function deltaTouches(ctx: Pick<ValidationCheckContext, 'content' | 'resolved' | 'cli'>): {
+  byChange: Record<string, readonly SpecTouch[]>
+  failed: Array<{ change: string; error: string }>
+} {
+  const byChange: Record<string, readonly SpecTouch[]> = {}
+  const failed: Array<{ change: string; error: string }> = []
+  for (const change of ctx.content.changes) {
+    if (ctx.resolved[change.change]?.status !== 'registered') continue
+    const deltas = ctx.cli[change.change]?.deltas
+    if (!deltas) continue
+    if (!deltas.ok) failed.push({ change: change.change, error: deltas.error ?? 'unknown error' })
+    else byChange[change.change] = deltas.touches
+  }
+  return { byChange, failed }
+}
 
 /** Run every check in order; the findings, in list order (D3). */
 export function runValidationChecks(ctx: ValidationCheckContext): Finding[] {

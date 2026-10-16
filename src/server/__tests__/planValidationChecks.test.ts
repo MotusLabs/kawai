@@ -14,7 +14,7 @@ const probe = (ok = true): AdapterProbe => ok
   ? { tool: 'openspec', version: '1.14.2', capabilities: ['validate-strict-json', 'show-deltas-json'], ok: true, error: null }
   : { tool: 'openspec', version: null, capabilities: [], ok: false, error: 'openspec executable not found' }
 
-const valid = (touchList: ShowDeltasOutcome['touches'] = []): ValidateOutcome => ({ ok: true, error: null, valid: true, issues: [], issueCount: 0 })
+const valid = (): ValidateOutcome => ({ ok: true, error: null, valid: true, issues: [], issueCount: 0 })
 const deltas = (touches: ShowDeltasOutcome['touches'] = []): ShowDeltasOutcome => ({ ok: true, error: null, touches })
 const registered = (change: string): ResolvedChange => ({ change, status: 'registered', dir: `/repo/openspec/changes/${change}`, root: '/repo', head: 'aaaa' })
 
@@ -122,6 +122,14 @@ describe('relations', () => {
     expect(run('relations', ctx({ adapter: probe(false) }))).toEqual([expect.objectContaining({ severity: 'error', key: 'relations:openspec', message: 'not checked: OpenSpec adapter unavailable' })])
     const skipped = run('relations', ctx({ resolved: { alpha: { ...registered('alpha'), status: 'archived' }, beta: registered('beta') }, cli: { beta: { validate: valid(), deltas: deltas(touchBeta) } } }))
     expect(skipped).toEqual([])
+  })
+
+  test('a failed delta read is an error for that change, which is excluded from pairing', () => {
+    // alpha's deltas timed out; beta conflicts with alpha's requirement, but
+    // alpha cannot be paired — the failure itself is the error.
+    const failedDeltas: ShowDeltasOutcome = { ok: false, error: 'show alpha timed out after 15000ms', touches: [] }
+    const findings = run('relations', ctx({ cli: { alpha: { validate: valid(), deltas: failedDeltas }, beta: { validate: valid(), deltas: deltas(touchBeta) } } }))
+    expect(findings).toEqual([expect.objectContaining({ severity: 'error', key: 'relations:alpha', message: expect.stringContaining('timed out') })])
   })
 })
 
