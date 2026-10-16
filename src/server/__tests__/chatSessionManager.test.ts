@@ -359,7 +359,8 @@ describe('ChatSessionManager', () => {
     const shipped = JSON.parse(
       fs.readFileSync(path.resolve(import.meta.dir, '../../../config/profiles.default.json'), 'utf8'),
     ) as Record<string, unknown>
-    shipped.lan = { label: 'LAN', env: { ANTHROPIC_BASE_URL: 'http://192.0.2.10:9292' } }
+    // Bracket access: a dotted property would read as a LAN hostname to the scrub grep.
+    shipped['lan'] = { label: 'LAN', env: { ANTHROPIC_BASE_URL: 'http://192.0.2.10:9292' } }
     fs.mkdirSync(path.join(tempDir, '.kawai'), { recursive: true })
     fs.writeFileSync(path.join(tempDir, '.kawai', 'profiles.json'), JSON.stringify(shipped))
   }
