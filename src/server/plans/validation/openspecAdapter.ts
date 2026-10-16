@@ -70,6 +70,19 @@ export const KILL_GRACE_MS = 250
  * awaiting the streams: a grandchild keeping them open never holds the
  * caller, and the pool slot is always freed.
  */
+/** Live CLI process groups, so a shutdown can kill detached children mid-run. */
+const liveChildren = new Set<ReturnType<typeof spawn>>()
+
+/** Kill every live CLI process group (best effort; used by adapter disposal). */
+function killLiveChildren(): void {
+  for (const child of liveChildren) {
+    try {
+      if (child.pid != null) process.kill(-child.pid, 'SIGKILL')
+    } catch { /* already gone */ }
+  }
+  liveChildren.clear()
+}
+
 export const spawnOpenspec: OpenspecRunner = (args, { cwd, timeoutMs }) =>
   new Promise<OpenspecCall>(resolve => {
     let child: ReturnType<typeof spawn>
@@ -79,6 +92,8 @@ export const spawnOpenspec: OpenspecRunner = (args, { cwd, timeoutMs }) =>
       resolve({ ok: false, exitCode: null, stdout: '', stderr: 'openspec spawn failed', timedOut: false })
       return
     }
+    liveChildren.add(child)
+    child.on('close', () => liveChildren.delete(child))
     let stdout = ''
     let stderr = ''
     let settled = false
@@ -88,9 +103,11 @@ export const spawnOpenspec: OpenspecRunner = (args, { cwd, timeoutMs }) =>
       if (settled) return
       settled = true
       clearTimeout(timer)
-      // The grace timer outlives a timeout's settle on purpose: a child that
-      // ignores SIGTERM must still get SIGKILL after the grace. Only the
-      // child's own exit cancels it.
+      // The grace timer outlives a timeout's settle on purpose: after a
+      // timeout the settle is final, so the SIGKILL always fires 250 ms
+      // later — a child that ignored SIGTERM, or a grandchild holding its
+      // pipes, must still die. Only the child's own exit before the timeout
+      // cancels a grace that was never armed.
       if (!fromTimeout && graceTimer) clearTimeout(graceTimer)
       resolve(result)
     }
@@ -152,6 +169,11 @@ export class OpenspecAdapter {
   private cached: { probe: AdapterProbe; at: number } | null = null
 
   constructor(private readonly run: OpenspecRunner = spawnOpenspec, private readonly timeoutMs = ADAPTER_TIMEOUT_MS) {}
+
+  /** Shutdown: kill any live CLI process group this process spawned (best effort). */
+  dispose(): void {
+    if (this.run === spawnOpenspec) killLiveChildren()
+  }
 
   /** The version and capabilities; a successful probe is cached ten minutes (D3), a failed one re-probes next call. */
   async probe(force = false): Promise<AdapterProbe> {

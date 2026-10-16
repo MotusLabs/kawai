@@ -1605,6 +1605,8 @@ export class ChatSessionManager {
 
   /** Server shutdown: settle every driver (callbacks cannot survive it). */
   shutdown(): void {
+    // Any CLI process group the adapter left running dies with us otherwise.
+    this.validationAdapter.dispose()
     // A restore still in flight stops at its next row (design D2).
     this.isShutDown = true
     this.teamMail.close()

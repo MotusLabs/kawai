@@ -424,8 +424,10 @@ export class ValidationService {
 
   /**
    * The file-held identity parts of one revision, gathered before the
-   * approval transaction: hashes only, the cached adapter probe, and no CLI
-   * process. Null when the plan or revision does not exist.
+   * approval transaction: hashes and the adapter's cached probe — after the
+   * probe cache expires (ten minutes) this spawns `openspec --version` and
+   * nothing else; no validate or show runs. Null when the plan or revision
+   * does not exist.
    */
   async prepareStanding(planId: string, revision: number): Promise<PreparedValidation | null> {
     const plan = this.options.plans.get(planId)

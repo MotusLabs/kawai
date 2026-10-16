@@ -82,7 +82,12 @@ export class PlanService {
     getSession: (id: string) => ChatSessionRecord | null | undefined
     strategies: StrategyStore
     homeDir?: string
-    /** The ordered approval preconditions (D7); the shipped list plus validation's by default. */
+    /**
+     * The ordered approval preconditions (D7). Absent means the shipped list
+     * with validation's entry appended last; an explicit list REPLACES the
+     * whole thing — tests that pin the shipped entries pass exactly those
+     * and deliberately drop `validation-current`.
+     */
     preconditions?: readonly ApprovalPrecondition[]
     /** strategy-revision-impact's disposition lookup; always null in this change. */
     pinDisposition?: (planId: string, revision: number) => PinDisposition | null
