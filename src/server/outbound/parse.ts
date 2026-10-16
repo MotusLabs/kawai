@@ -262,9 +262,28 @@ function buildSegment(
   let note: string | undefined
   // Leading `NAME=value` words prefix their command alone; assignment-only
   // segments (no command left) persist, exactly as the shell runs them.
+  let assignmentsOnly = true
   for (;;) {
     while (rest.length > 0 && RESERVED.has(rest[0]!.text)) rest = rest.slice(1)
     if (rest.length === 0) break
+    // Leading `NAME=value` words prefix whatever follows — a wrapper, a
+    // shell, or the command — so they strip inside the loop (round 5 R1).
+    while (rest.length > 0 && ASSIGNMENT.test(rest[0]!.text)) {
+      const [, name, value] = ASSIGNMENT.exec(rest[0]!.text)!
+      env.set(name, rest[0]!.opaque ? null : value)
+      rest = rest.slice(1)
+    }
+    if (rest.length === 0) {
+      // An assignment-only segment persists, exactly as the shell runs it.
+      for (const word of cleaned) {
+        if (ASSIGNMENT.test(word.text)) {
+          const [, name, value] = ASSIGNMENT.exec(word.text)!
+          envUpdates.set(name, word.opaque ? null : value)
+        }
+      }
+      break
+    }
+    assignmentsOnly = false
     // A wrapping command (`sudo -u bob`, `timeout 5`, …) drops off with its
     // options; a flag the arity table does not know leaves the whole segment
     // unreadable, never a guessed position.
@@ -326,25 +345,8 @@ function buildSegment(
     }
     break
   }
-  if (rest.length > 0 && ASSIGNMENT.test(rest[0]!.text)) {
-    while (rest.length > 0 && ASSIGNMENT.test(rest[0]!.text)) {
-      const [, name, value] = ASSIGNMENT.exec(rest[0]!.text)!
-      const literal = rest[0]!.opaque ? null : value
-      env.set(name, literal)
-      rest = rest.slice(1)
-    }
-    if (rest.length === 0) {
-      for (const word of cleaned) {
-        if (ASSIGNMENT.test(word.text)) {
-          const [, name, value] = ASSIGNMENT.exec(word.text)!
-          envUpdates.set(name, word.opaque ? null : value)
-        }
-      }
-    }
-  }
-
-  // `export NAME=value…` and bare assignments persist; neither is a command.
-  if (rest[0]?.text === 'export' || rest.length === 0) {
+  // `export NAME=value…` persists; neither is a command.
+  if (rest[0]?.text === 'export' || assignmentsOnly && rest.length === 0) {
     if (rest[0]?.text === 'export') {
       for (const word of rest.slice(1)) {
         if (!word.opaque && ASSIGNMENT.test(word.text)) {
