@@ -277,10 +277,11 @@ describe('ValidationService.decide (D6)', () => {
     expect(await b.validation.decide(b.human, answer(planId, revision, 'relations:overlap:ghost:chat', { kind: 'accept-warning' }))).toMatchObject({ ok: false, reason: 'target' })
     expect(await b.validation.decide(b.human, answer(planId, revision, 'relations:overlap:a+b:chat', { kind: 'accept-warning', text: 'they stay independent' }))).toMatchObject({ ok: true })
     expect(await b.validation.decide(b.human, answer(planId, revision, `finding:${findingId}`, { kind: 'accept-warning' }))).toMatchObject({ ok: true, replayed: false })
-    // A finding assessment recorded after the report is not raised by it yet.
+    // Since N6, every finding assessment of the revision is acceptable,
+    // even one recorded after the report (its acceptance supersedes later).
     const later = await b.validation.assess(b.agent('dev'), { plan_id: planId, revision, findings: [{ text: 'later finding', subject: null }] })
     const laterId = later.ok ? later.ids.findings[0]! : ''
-    expect(await b.validation.decide(b.human, answer(planId, revision, `finding:${laterId}`, { kind: 'accept-warning' }))).toMatchObject({ ok: false, reason: 'target' })
+    expect(await b.validation.decide(b.human, answer(planId, revision, `finding:${laterId}`, { kind: 'accept-warning' }))).toMatchObject({ ok: true })
     // resolve-condition: <assessment id>#<n> in range.
     expect(await b.validation.decide(b.human, answer(planId, revision, `${alignmentId}#1`, { kind: 'resolve-condition' }))).toMatchObject({ ok: false, reason: 'target' })
     expect(await b.validation.decide(b.human, answer(planId, revision, `${alignmentId}#0`, { kind: 'resolve-condition' }))).toMatchObject({ ok: true })
@@ -298,6 +299,35 @@ describe('ValidationService.decide (D6)', () => {
     expect(await b.validation.decide(b.human, answer(planId, revision, conflictId, { kind: 'authorize-exploration' }))).toMatchObject({ ok: false, reason: 'target' })
     expect(await b.validation.decide(b.human, answer(planId, revision, exploratoryId, { kind: 'authorize-exploration', scope: 'bounded to the chat capability' }))).toMatchObject({ ok: true })
     expect(report.seq).toBe(1)
+  })
+
+  test('an already-accepted finding can be re-accepted, superseding the earlier decision (N6)', async () => {
+    const b = use(fakeAdapter())
+    const { planId, revision } = await b.draftInReview()
+    const assessed = await b.validation.assess(b.agent('dev'), { plan_id: planId, revision, findings: [{ text: 'watch the overlap', subject: null }] })
+    const findingId = assessed.ok ? assessed.ids.findings[0]! : ''
+    await b.validation.validate(b.human, { planId, revision })
+    const first = await b.validation.decide(b.human, answer(planId, revision, `finding:${findingId}`, { kind: 'accept-warning', text: 'fine' }))
+    expect(first).toMatchObject({ ok: true, replayed: false })
+    // The next report counts the warning accepted; a superseding acceptance
+    // with a corrected rationale is still allowed.
+    await b.validation.validate(b.human, { planId, revision })
+    const superseding = await b.validation.decide(b.human, answer(planId, revision, `finding:${findingId}`, { kind: 'accept-warning', text: 'fine, and here is why' }))
+    expect(superseding).toMatchObject({ ok: true, replayed: false })
+    const decisions = b.validationStore.decisions(planId, revision)
+    expect(decisions.filter(decision => decision.target === `finding:${findingId}`)).toHaveLength(2)
+    // A warning the revision never raised is still refused.
+    const ghost = await b.validation.decide(b.human, answer(planId, revision, 'finding:pas-ghost', { kind: 'accept-warning' }))
+    expect(ghost).toMatchObject({ ok: false, reason: 'target' })
+  })
+
+  test('an unknown decision kind is refused and nothing is inserted (N7)', async () => {
+    const b = use()
+    const { planId, revision } = await b.draftInReview()
+    const outcome = await b.validation.decide(b.human, answer(planId, revision, 'pas-1', { kind: 'approve' as never }))
+    expect(outcome).toMatchObject({ ok: false, reason: 'target' })
+    expect(outcome.ok === false && outcome.message).toContain('Unknown decision kind')
+    expect(b.validationStore.decisions(planId, revision)).toEqual([])
   })
 
   test('text and scope limits', async () => {

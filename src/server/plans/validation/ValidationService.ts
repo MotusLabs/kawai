@@ -180,16 +180,23 @@ export class ValidationService {
         refuse(`Revision ${revision} has no report to accept warnings from; validate it first.`)
       }
       const newest = report!
-      const raised = new Set([...newest.findings.filter(finding => finding.severity === 'warning').map(finding => finding.key), ...newest.readiness.unacceptedWarnings])
+      // Every warning the report raised, plus every finding assessment of
+      // the revision — an already-accepted finding stays acceptable, so a
+      // later decision on it supersedes the earlier one (D6).
+      const raised = new Set([
+        ...newest.findings.filter(finding => finding.severity === 'warning').map(finding => finding.key),
+        ...newest.readiness.unacceptedWarnings,
+        ...assessments.filter((row): row is Extract<AssessmentRow, { kind: 'finding' }> => row.kind === 'finding').map(row => `finding:${row.id}`),
+      ])
       if (!raised.has(target)) refuse(`Warning key "${target}" is not raised by revision ${revision}'s newest report (report ${newest.seq}).`)
       return
     }
     const alignments = assessments.filter((row): row is Extract<AssessmentRow, { kind: 'alignment' }> => row.kind === 'alignment')
     if (kind === 'resolve-condition') {
-      const [id, index] = target.split('#')
-      const assessed = alignments.find(row => row.id === id)
-      const position = Number(index)
-      if (!assessed || !Number.isInteger(position) || position < 0 || position >= assessed.payload.conditions.length) {
+      const match = /^(.+)#(0|[1-9]\d*)$/.exec(target)
+      const assessed = match ? alignments.find(row => row.id === match[1]) : undefined
+      const position = match ? Number(match[2]) : NaN
+      if (!assessed || !Number.isInteger(position) || position >= assessed.payload.conditions.length) {
         refuse(`Resolve-condition targets "<assessment id>#<n>" of revision ${revision}'s alignment conditions; "${target}" is not one.`)
       }
       return
@@ -206,6 +213,7 @@ export class ValidationService {
       if (!scope) refuse('An exploration authorization needs its scope.')
       return
     }
+    refuse(`Unknown decision kind "${kind}"; nothing was written.`)
   }
 
   /** D10: the revision a tool call defaults to — the newest in review, else the approved one. */
