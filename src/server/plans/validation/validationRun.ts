@@ -17,7 +17,7 @@ import type {
   ValidationEvidence,
   ValidationInputs,
 } from '../../../shared/planValidation'
-import { deriveRelations, validationReadiness } from '../../../shared/planValidation'
+import { deriveRelations, validationReadiness, VALIDATION_CHECKS_VERSION } from '../../../shared/planValidation'
 import { computeClaims, runValidationChecks, type ResolvedChange, type ValidationCheckContext } from './validationChecks'
 import { hashValidationInputs, readValidationFileInputs, type ValidationFileInputs } from './validationInputs'
 import type { OpenspecAdapter, ShowDeltasOutcome, ValidateOutcome } from './openspecAdapter'
@@ -129,7 +129,7 @@ export function buildRecordPhase(parts: {
     capacity: parts.file.capacity,
   }
   const inputs: ValidationInputs = {
-    checksVersion: 1,
+    checksVersion: VALIDATION_CHECKS_VERSION,
     plan: parts.plan,
     impactStateKey: parts.impactStateKey,
     adapter: parts.file.file.adapter,

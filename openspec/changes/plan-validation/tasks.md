@@ -117,7 +117,7 @@ Implement after `durable-plans` and `strategy-revision-impact` have landed on ma
 
 ## 8. Approval precondition
 
-- [ ] 8.1 Add `prepareStanding` and `standing` (D9). Have `PlanService.approve` await `prepareStanding` before its transaction, and append `validation-current` to `APPROVAL_PRECONDITIONS`. Verify with `durable-plans`' approval:
+- [x] 8.1 Add `prepareStanding` and `standing` (D9). Have `PlanService.approve` await `prepareStanding` before its transaction, and append `validation-current` to `APPROVAL_PRECONDITIONS`. Verify with `durable-plans`' approval:
   - not validated;
   - blocked (the message carries the counts and the alignment reason);
   - each changed input part, named: a change's artifacts, a base spec, an OpenSpec config, a group, profiles, the adapter, the strategy impact, claims, records, and the checks version;

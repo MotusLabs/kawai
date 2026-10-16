@@ -8,11 +8,9 @@
 // transaction, writes only the three validation tables, and pushes the plan
 // detail after commit through `PlanStore.announce`. Nothing here approves,
 // grants, or clears a mechanical error.
+import path from 'node:path'
 import type { ChatSessionRecord } from '../../db'
 import type { TeamIdentity } from '../../team/teamIdentity'
-import { loadTeamGroups } from '../../team/teamGroups'
-import type { StrategyStore } from '../../strategy/strategyStore'
-import { strategyAlignmentRefs } from '../../../shared/planChecks'
 import type { Plan, PlanContent, PlanRevision, PlanStrategyPin } from '../../../shared/plans'
 import { hashPlanRevision } from '../planHash'
 import type { ImpactGate } from '../../../shared/strategyImpact'
@@ -22,8 +20,21 @@ import type { PlanStore } from '../planStore'
 import { payloadDifference } from '../planCommands'
 import type { ImpactService } from '../../strategy/ImpactService'
 import type { OpenspecAdapter } from './openspecAdapter'
-import { buildRecordPhase, dryRunReport, runFilePhase } from './validationRun'
+import { buildRecordPhase, dryRunReport, runFilePhase, type ClaimedPlan } from './validationRun'
+import { computeStanding, validationCurrentPrecondition, type PreparedValidation, type ValidationStanding } from './validationStanding'
 import { ValidationCommandRaceError, type ValidationStore } from './validationStore'
+import {
+  ASSESS_TEXT_LIMIT,
+  ValidationRefusal,
+  assessValidation,
+  trimmed,
+  validationContext,
+  validationTarget,
+  type ValidationDeps,
+} from './validationAssess'
+import { resolveTeam } from '../../team/teamIdentity'
+import { computeClaims } from './validationChecks'
+import { readValidationFileInputs } from './validationInputs'
 
 export type ValidationCaller = { kind: 'agent'; sessionId: string } | { kind: 'human'; team: TeamIdentity }
 
@@ -65,22 +76,14 @@ export type ValidateOutcome =
   | { ok: true; report: PlanValidationReport; reportId: string | null; stored: boolean; dryRun: boolean }
   | { ok: false; reason: 'not-found' | 'target'; message: string }
 
-export const ASSESS_TEXT_LIMIT = 2_000
-export const DECISION_SCOPE_LIMIT = 500
-export const AGENT_RECORD_LIMIT = 20
+export { ASSESS_TEXT_LIMIT, AGENT_RECORD_LIMIT } from './validationAssess'
 
-const trimmed = (value: string): string => value.trim()
-const overLimit = (value: string, limit: number): boolean => trimmed(value).length > limit
-
-/** An assessment or decision refused inside its transaction; nothing is written. */
-class ValidationRefusal extends Error {
-  constructor(readonly outcome: { ok: false; reason: string; message: string }) { super(outcome.message) }
-}
+const DECISION_SCOPE_LIMIT = 500
 
 export class ValidationService {
   constructor(readonly store: ValidationStore, private readonly options: {
     plans: PlanStore
-    strategies: StrategyStore
+    strategies: import('../../strategy/strategyStore').StrategyStore
     impact: ImpactService
     adapter: OpenspecAdapter
     getSession: (id: string) => ChatSessionRecord | null | undefined
@@ -89,164 +92,22 @@ export class ValidationService {
     homeDir?: string
   }) {}
 
-  /** The caller's team, bound like PlanService's context. */
+  /** The assessment-path deps: this service's own options plus its store. */
+  private deps(): ValidationDeps {
+    return { store: this.store, plans: this.options.plans, strategies: this.options.strategies, getSession: this.options.getSession, ...(this.options.homeDir ? { homeDir: this.options.homeDir } : {}) }
+  }
+
   private async context(caller: ValidationCaller): Promise<TeamIdentity> {
-    if (caller.kind === 'human') return caller.team
-    const session = this.options.getSession(caller.sessionId)
-    if (!session) throw new Error(`Unknown calling session: ${caller.sessionId}`)
-    const { team } = await loadTeamGroups(session.projectPath, this.options.homeDir)
-    return team
+    return validationContext(this.deps(), caller)
   }
 
-  /** The plan and revision an assessment or decision targets; refuses by throwing otherwise. */
   private target(team: TeamIdentity, planId: string, revision: number): { plan: Plan; revision: PlanRevision } {
-    const plan = this.options.plans.forTeam(team.teamId, planId)
-    if (!plan) throw new ValidationRefusal({ ok: false, reason: 'not-found', message: `Plan not found in this team: ${planId}` })
-    if (plan.lifecycle !== 'open') {
-      throw new ValidationRefusal({ ok: false, reason: 'target', message: `The plan is ${plan.lifecycle}; only an open plan's revisions can be assessed or decided.` })
-    }
-    const row = this.options.plans.revision(plan.id, revision)
-    if (!row || (row.status !== 'in_review' && row.status !== 'approved')) {
-      const status = row ? row.status : 'missing'
-      throw new ValidationRefusal({ ok: false, reason: 'target', message: `Revision ${revision} is ${status}, not in review or approved; validation binds to a standing revision.` })
-    }
-    return { plan, revision: row }
+    return validationTarget(this.deps(), team, planId, revision)
   }
 
-  /**
-   * D5: append assessments in one transaction. The owner's form (a command
-   * id) records exactly one alignment assessment and replays by payload;
-   * agent calls carry no command id, so a retry appends.
-   */
-  async assess(caller: ValidationCaller, input: AssessInput): Promise<AssessOutcome> {
-    const team = await this.context(caller)
-    const commandId = caller.kind === 'human' ? trimmed(input.command_id ?? '') : ''
-    if (caller.kind === 'human') {
-      if (!commandId) {
-        return { ok: false, reason: 'payload', message: 'The assessment form needs a stable command id so a resend replays instead of repeating.' }
-      }
-      // D5: the owner's form records exactly one alignment assessment;
-      // questions and findings come only from agents.
-      if (!input.alignment) {
-        return { ok: false, reason: 'payload', message: 'The assessment form records one alignment assessment; questions and findings come from agents.' }
-      }
-      if ((input.questions?.length ?? 0) > 0 || (input.findings?.length ?? 0) > 0) {
-        return { ok: false, reason: 'payload', message: 'The assessment form records only an alignment assessment; questions and findings come from agents.' }
-      }
-    }
-    try {
-      const outcome = this.store.atomically((): AssessOutcome => {
-        const { revision: row } = this.target(team, input.plan_id, input.revision)
-        if (input.alignment) this.checkAlignment(team.teamId, row, input.alignment)
-        const questions = input.questions ?? []
-        const findings = input.findings ?? []
-        if (caller.kind === 'agent' && (questions.length > AGENT_RECORD_LIMIT || findings.length > AGENT_RECORD_LIMIT)) {
-          throw new ValidationRefusal({ ok: false, reason: 'limit', message: `An assessment call carries at most ${AGENT_RECORD_LIMIT} questions and ${AGENT_RECORD_LIMIT} findings (got ${questions.length} and ${findings.length}).` })
-        }
-        for (const question of questions) {
-          if (!trimmed(question.text)) throw new ValidationRefusal({ ok: false, reason: 'shape', message: 'Every question needs its text.' })
-          if (overLimit(question.text, ASSESS_TEXT_LIMIT)) throw new ValidationRefusal({ ok: false, reason: 'limit', message: 'Question text is over the 2,000-character limit; refused, never cut.' })
-        }
-        for (const finding of findings) {
-          if (!trimmed(finding.text)) throw new ValidationRefusal({ ok: false, reason: 'shape', message: 'Every finding needs its text.' })
-          if (overLimit(finding.text, ASSESS_TEXT_LIMIT)) throw new ValidationRefusal({ ok: false, reason: 'limit', message: 'Finding text is over the 2,000-character limit; refused, never cut.' })
-        }
-        if (commandId && input.alignment) {
-          const recorded = this.store.assessmentByCommand(input.plan_id, commandId)
-          if (recorded) {
-            // The row's own payload_json is the assessment itself, so the
-            // compared payload is rebuilt from the row (D5 replay).
-            const stored: Record<string, unknown> = { revision: recorded.row.revision, alignment: recorded.row.payload }
-            const payload: Record<string, unknown> = { revision: input.revision, alignment: input.alignment }
-            const field = payloadDifference(stored as never, payload as never)
-            if (field) {
-              throw new ValidationRefusal({ ok: false, reason: 'payload', message: `command_id ${commandId} was already used with a different ${field}; the recorded assessment stands and nothing was written.` })
-            }
-            return { ok: true, replayed: true, ids: { alignment: recorded.row.id, questions: [], findings: [] } }
-          }
-        }
-        if (!input.alignment && questions.length === 0 && findings.length === 0) {
-          throw new ValidationRefusal({ ok: false, reason: 'shape', message: 'The assessment carries nothing: an alignment, questions, or findings are required.' })
-        }
-        const ids = { alignment: null as string | null, questions: [] as string[], findings: [] as string[] }
-        const author = caller.kind === 'human' ? { kind: 'human' as const, sessionId: null } : { kind: 'agent' as const, sessionId: caller.sessionId }
-        if (input.alignment) {
-          const row = this.store.insertAssessment({
-            planId: input.plan_id, revision: input.revision, kind: 'alignment', payload: input.alignment as unknown as Record<string, unknown>,
-            author, commandId: commandId || null,
-          })
-          ids.alignment = row.id
-        }
-        for (const question of questions) {
-          ids.questions.push(this.store.insertAssessment({ planId: input.plan_id, revision: input.revision, kind: 'question', payload: question as unknown as Record<string, unknown>, author, commandId: null }).id)
-        }
-        for (const finding of findings) {
-          ids.findings.push(this.store.insertAssessment({ planId: input.plan_id, revision: input.revision, kind: 'finding', payload: finding as unknown as Record<string, unknown>, author, commandId: null }).id)
-        }
-        return { ok: true, replayed: false, ids }
-      })
-      if (outcome.ok && !outcome.replayed) this.options.plans.announce(input.plan_id)
-      return outcome
-    } catch (error) {
-      if (error instanceof ValidationRefusal) return error.outcome as AssessOutcome
-      if (error instanceof ValidationCommandRaceError && commandId) {
-        const recorded = this.store.assessmentByCommand(input.plan_id, commandId)
-        if (recorded && input.alignment) {
-          const stored: Record<string, unknown> = { revision: recorded.row.revision, alignment: recorded.row.payload }
-          const payload: Record<string, unknown> = { revision: input.revision, alignment: input.alignment }
-          const field = payloadDifference(stored as never, payload as never)
-          if (!field) return { ok: true, replayed: true, ids: { alignment: recorded.row.id, questions: [], findings: [] } }
-        }
-      }
-      throw error
-    }
-  }
-
-  /** The pinned revision's ref set, or null when the revision has no pin (D5). */
-  private pinnedRefs(teamId: string, row: PlanRevision): Set<string> | null {
-    if (!row.pin) return null
-    const strategy = this.options.strategies.forTeam(teamId)
-    const revision = strategy ? this.options.strategies.revision(row.pin.strategyId, row.pin.revision) : null
-    return revision ? strategyAlignmentRefs(revision.content) : null
-  }
-
-  /** D5's shape and limit rules for one alignment assessment. */
-  private checkAlignment(teamId: string, row: PlanRevision, alignment: AlignmentAssessment): void {
-    if (!row.pin) {
-      throw new ValidationRefusal({ ok: false, reason: 'target', message: 'no approved strategy: alignment is unassessed' })
-    }
-    if (!trimmed(alignment.rationale)) {
-      throw new ValidationRefusal({ ok: false, reason: 'shape', message: 'An alignment assessment needs its rationale.' })
-    }
-    if (overLimit(alignment.rationale, ASSESS_TEXT_LIMIT)) {
-      throw new ValidationRefusal({ ok: false, reason: 'limit', message: 'The rationale is over the 2,000-character limit; refused, never cut.' })
-    }
-    const value = alignment.assessment
-    if (value === 'aligned-with-conditions' && alignment.conditions.length === 0) {
-      throw new ValidationRefusal({ ok: false, reason: 'shape', message: 'An aligned-with-conditions assessment needs at least one condition.' })
-    }
-    if (value === 'exploratory' && (!alignment.experiment || !trimmed(alignment.experiment.criteria) || !trimmed(alignment.experiment.scope))) {
-      throw new ValidationRefusal({ ok: false, reason: 'shape', message: 'An exploratory assessment needs experiment criteria and scope.' })
-    }
-    if (value === 'conflicting' && alignment.conflicts.length === 0) {
-      throw new ValidationRefusal({ ok: false, reason: 'shape', message: 'A conflicting assessment needs at least one conflict.' })
-    }
-    for (const [index, condition] of alignment.conditions.entries()) {
-      if (!trimmed(condition.text)) throw new ValidationRefusal({ ok: false, reason: 'shape', message: `Condition ${index + 1} needs its text.` })
-      if (!['ready', 'start', 'acceptance'].includes(condition.gate)) throw new ValidationRefusal({ ok: false, reason: 'shape', message: `Condition ${index + 1} gates at ready, start, or acceptance.` })
-      if (overLimit(condition.text, ASSESS_TEXT_LIMIT)) throw new ValidationRefusal({ ok: false, reason: 'limit', message: `Condition ${index + 1} is over the 2,000-character limit; refused, never cut.` })
-    }
-    for (const conflict of alignment.conflicts) {
-      if (!trimmed(conflict)) throw new ValidationRefusal({ ok: false, reason: 'shape', message: 'Every conflict needs its text.' })
-      if (overLimit(conflict, ASSESS_TEXT_LIMIT)) throw new ValidationRefusal({ ok: false, reason: 'limit', message: 'A conflict is over the 2,000-character limit; refused, never cut.' })
-    }
-    const defined = this.pinnedRefs(teamId, row)
-    if (defined) {
-      const unknown = alignment.outcomes.filter(ref => !defined.has(ref))
-      if (unknown.length > 0) {
-        throw new ValidationRefusal({ ok: false, reason: 'shape', message: `Alignment reference "${unknown[0]}" is not defined by strategy revision ${row.pin.revision}.` })
-      }
-    }
+  /** D5: assessments (validationAssess.ts), one transaction per call. */
+  assess(caller: ValidationCaller, input: AssessInput): Promise<AssessOutcome> {
+    return assessValidation(this.deps(), caller, input)
   }
 
   /**
@@ -272,7 +133,7 @@ export class ValidationService {
         }
         return { ok: true, replayed: true, decision: recorded.decision }
       }
-      const { revision: row } = this.target(team, input.planId, input.revision)
+      this.target(team, input.planId, input.revision)
       const text = trimmed(input.text)
       if (!text) return { ok: false, reason: 'limit', message: 'The decision needs its answer or rationale; an empty rationale is refused and nothing is written.' }
       if (text.length > ASSESS_TEXT_LIMIT) return { ok: false, reason: 'limit', message: 'The text is over the 2,000-character limit; refused, never cut.' }
@@ -379,7 +240,7 @@ export class ValidationService {
         const revision = input.revision as number
         const checked = await this.revisionScope(team, plan.id, revision)
         if ('refused' in checked) return checked.refused
-        const { plan: open, revision: row, groupsRoot } = checked
+        const { revision: row, groupsRoot } = checked
         const file = await this.filePhase(team, row.content, groupsRoot)
         const record = this.store.atomically(() => {
           const fresh = this.target(team, plan.id, revision)
@@ -481,4 +342,75 @@ export class ValidationService {
       content, capacity: group => this.options.capacity?.(team.teamId, group) ?? null,
     })
   }
+
+  /** The other open plans as claims read them (D2), for the identity and the checks. */
+  private claimedPlans(teamId: string, planId: string): ClaimedPlan[] {
+    return this.options.plans.openPlans(teamId)
+      .filter(other => other.id !== planId)
+      .map(other => ({
+        planId: other.id, lifecycle: other.lifecycle,
+        revisions: this.options.plans.revisions(other.id).map(entry => ({ status: entry.status, content: entry.content })),
+      }))
+  }
+
+  // --- D9: the `validation-current` approval precondition ---
+
+  /**
+   * The file-held identity parts of one revision, gathered before the
+   * approval transaction: hashes only, the cached adapter probe, and no CLI
+   * process. Null when the plan or revision does not exist.
+   */
+  async prepareStanding(planId: string, revision: number): Promise<PreparedValidation | null> {
+    const plan = this.options.plans.get(planId)
+    const row = plan ? this.options.plans.revision(planId, revision) : null
+    if (!plan || !row) return null
+    // `plan.teamId` is the common git dir; the groups live in the main tree
+    // (teamIdentity's own rule), so resolve from there.
+    const identity = await resolveTeam(path.basename(plan.teamId) === '.git' ? path.dirname(plan.teamId) : plan.teamId)
+    const branch = row.content.landing.mode === 'integration-branch' ? row.content.landing.branch : null
+    const file = await readValidationFileInputs({
+      adapter: this.options.adapter, commonDir: plan.teamId,
+      changeNames: row.content.changes.map(change => change.change),
+      groupNames: [...new Set([
+        ...row.content.roles.map(role => role.group),
+        ...row.content.changes.flatMap(change => [change.group, change.reviewGroup].filter((group): group is string => group !== null)),
+        ...(row.content.reviewGroup ? [row.content.reviewGroup] : []),
+      ])],
+      groupsRoot: identity.groupsRoot, branch,
+      ...(this.options.homeDir ? { homeDir: this.options.homeDir } : {}),
+    })
+    return { planId, revision, file }
+  }
+
+  /**
+   * The revision's standing from the prepared file parts and the DB parts
+   * read now (D9). Called inside the approval transaction; also the read-only
+   * standing for the view and the tools.
+   */
+  standing(prepared: PreparedValidation): ValidationStanding {
+    const row = this.options.plans.revision(prepared.planId, prepared.revision)
+    if (!row) return { state: 'not-validated' }
+    const branch = row.content.landing.mode === 'integration-branch' ? row.content.landing.branch : null
+    const claims = computeClaims(
+      prepared.planId,
+      this.claimedPlans(this.options.plans.get(prepared.planId)!.teamId, prepared.planId),
+      branch,
+      row.content.changes.map(change => change.change),
+    )
+    return computeStanding(
+      prepared,
+      {
+        contentHash: row.contentHash,
+        impactStateKey: this.options.impact.stateKey(prepared.planId),
+        claimedPlans: [],
+        assessments: this.store.assessments(prepared.planId, prepared.revision),
+        decisions: this.store.decisions(prepared.planId, prepared.revision),
+      },
+      claims,
+      this.store.newestReport(prepared.planId, prepared.revision),
+    )
+  }
+
+  /** D9's precondition entry, appended after the shipped entries (V5). */
+  static validationCurrentPrecondition = validationCurrentPrecondition
 }

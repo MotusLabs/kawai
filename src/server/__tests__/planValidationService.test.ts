@@ -9,10 +9,12 @@ import { createPlanBench, createPlanWorld, type PlanBench, type PlanWorld } from
 import { ImpactService } from '../strategy/ImpactService'
 import { ImpactStore } from '../strategy/impactStore'
 import { MailboxStore } from '../team/mailboxStore'
+import { PlanService } from '../plans/PlanService'
 import { ValidationService } from '../plans/validation/ValidationService'
 import { ValidationStore } from '../plans/validation/validationStore'
+import { changedInputParts, validationCurrentPrecondition } from '../plans/validation/validationStanding'
 import type { OpenspecAdapter } from '../plans/validation/openspecAdapter'
-import type { AlignmentAssessment, AssessmentRow } from '../../shared/planValidation'
+import type { AlignmentAssessment } from '../../shared/planValidation'
 import type { DecisionRecord, Finding, PlanValidationReport } from '../../shared/planValidation'
 
 let world: PlanWorld
@@ -52,8 +54,30 @@ function bench(adapter: OpenspecAdapter = stubAdapter()): ValidationBench {
     plans: base.plans, strategies: base.strategies, impact, adapter,
     getSession: id => base.records.get(id), homeDir: world.home,
   })
-  return { ...base, validation, validationStore }
+  // The production shape: PlanService with the validation seam wired and
+  // `validation-current` appended after the shipped entries.
+  const service = new PlanService(base.plans, {
+    getSession: id => base.records.get(id), strategies: base.strategies, homeDir: world.home,
+    pinDisposition: (planId, revision) => impact.pinDisposition(planId, revision),
+    validation: {
+      prepareStanding: (planId, revision) => validation.prepareStanding(planId, revision),
+      standing: prepared => validation.standing(prepared as Parameters<typeof validation.standing>[0]),
+      precondition: validationCurrentPrecondition(),
+    },
+  })
+  return {
+    ...base, service, validation, validationStore,
+    // Rebind the harness's approve helper to the wired service (its closure
+    // otherwise keeps the unwired one).
+    approve: (planId: string, revision: number, commandId = `approve-${++counter}`) => service.approve(benchHuman(world), {
+      planId, revision, contentHash: base.plans.revision(planId, revision)!.contentHash,
+      expectedApprovedRevision: base.plans.get(planId)!.currentApprovedRevision, commandId,
+    }),
+  }
 }
+
+/** The human caller for this world, matching the harness's. */
+const benchHuman = (world: PlanWorld) => ({ kind: 'human' as const, team: world.team })
 
 let current: ValidationBench | null = null
 let currentAdapter: OpenspecAdapter | undefined
@@ -426,3 +450,117 @@ describe('ValidationService.validate (D8)', () => {
     expect(fresh.ok && fresh.report.seq).toBe(1)
   })
 })
+
+describe('the validation-current approval precondition (D9)', () => {
+  test('not validated: approval is refused as validation-current', async () => {
+    const b = use(fakeAdapter())
+    const { planId, revision } = await b.draftInReview()
+    const outcome = await b.approve(planId, revision)
+    expect(outcome).toMatchObject({ ok: false, reason: 'precondition' })
+    expect(outcome.ok === false && outcome.failures?.map(failure => failure.name)).toContain('validation-current')
+    expect(outcome.ok === false && outcome.failures?.find(failure => failure.name === 'validation-current')?.message).toBe('not validated: run Validate')
+  })
+
+  test('blocked: the refusal carries the counts and the alignment reason', async () => {
+    const b = use(fakeAdapter({ invalid: ['api'] }))
+    b.approveStrategy({ useCases: [{ ref: 'UC1' }] })
+    const { planId, revision } = await b.draftInReview()
+    await b.validation.validate(b.human, { planId, revision })
+    const outcome = await b.approve(planId, revision)
+    const message = outcome.ok === false ? outcome.failures?.find(failure => failure.name === 'validation-current')?.message : ''
+    expect(message).toContain('report 1 not ready: 1 errors, 0 unanswered questions, 0 unaccepted warnings, alignment not assessed')
+  })
+
+  test('current and ready: approval commits, the shipped preconditions still run, and no validation row is written', async () => {
+    const b = use(fakeAdapter())
+    const { planId, revision } = await b.draftInReview()
+    await b.validation.validate(b.human, { planId, revision })
+    // A shipped precondition still refuses while validation-current passes: a wrong content hash.
+    const refused = await b.service.approve(b.human, {
+      planId, revision, contentHash: 'wrong-hash',
+      expectedApprovedRevision: null, commandId: 'approve-wrong-hash',
+    })
+    expect(refused).toMatchObject({ ok: false, reason: 'precondition' })
+    const names = refused.ok === false ? refused.failures?.map(failure => failure.name) : []
+    expect(names).toContain('hash-matches')
+    expect(names).not.toContain('validation-current')
+    // With the hash right, the current, ready report lets approval commit.
+    const approved = await b.approve(planId, revision)
+    expect(approved).toMatchObject({ ok: true })
+    expect((b.db.db.prepare('SELECT COUNT(*) AS n FROM plan_validation_reports').get() as { n: number }).n).toBe(1)
+  })
+
+  test('prepareStanding spawns no CLI process', async () => {
+    const b = use(stubAdapter()) // its validate/showDeltas throw
+    const { planId, revision } = await b.draftInReview()
+    const prepared = await b.validation.prepareStanding(planId, revision)
+    expect(prepared).not.toBeNull()
+    expect(prepared!.file.changes.map(change => change.status)).toEqual(['registered', 'registered'])
+  })
+
+  test('each changed input part is named in the refusal', async () => {
+    const b = use(fakeAdapter())
+    const { planId, revision } = await b.draftInReview()
+    await b.validation.validate(b.human, { planId, revision })
+
+    // A changed artifact names that change's artifacts.
+    fs.writeFileSync(path.join(world.repo, 'openspec', 'changes', 'api', 'proposal.md'), '# api (moved on)\n')
+    const artifact = await approveRefusal(b, planId, revision)
+    expect(artifact).toContain("inputs changed since report 1: api's artifacts")
+
+    // Revalidate with no base spec yet, then create it: the report hashed null.
+    await b.validation.validate(b.human, { planId, revision })
+    fs.mkdirSync(path.join(world.repo, 'openspec', 'specs', 'chat'), { recursive: true })
+    fs.writeFileSync(path.join(world.repo, 'openspec', 'specs', 'chat', 'spec.md'), '# chat\n')
+    const base = await approveRefusal(b, planId, revision)
+    expect(base).toContain('base spec chat')
+
+    // Revalidate, then a changed group definition.
+    await b.validation.validate(b.human, { planId, revision })
+    fs.writeFileSync(path.join(world.repo, '.kawai', 'groups', 'reviewers.md'), 'Review. Longer now.\n')
+    const group = await approveRefusal(b, planId, revision)
+    expect(group).toContain('the group reviewers')
+    fs.writeFileSync(path.join(world.repo, '.kawai', 'groups', 'reviewers.md'), 'Review.\n')
+
+    // Revalidate, then another open plan claiming a change (claims).
+    await b.validation.validate(b.human, { planId, revision })
+    await b.draftInReview()
+    const claims = await approveRefusal(b, planId, revision)
+    expect(claims).toContain('claims by other open plans')
+
+    // Revalidate, then a recorded assessment (records).
+    await b.validation.validate(b.human, { planId, revision })
+    await b.validation.assess(b.agent('dev'), { plan_id: planId, revision, questions: [{ text: 'which?', mandatory: false, subject: null }] })
+    const records = await approveRefusal(b, planId, revision)
+    expect(records).toContain('assessments or decisions')
+  })
+
+  test('the strategy impact state and the adapter are named parts too (unit)', () => {
+    const base: Parameters<typeof changedInputParts>[0] = {
+      checksVersion: 1,
+      plan: { planId: 'p', revision: 1, contentHash: 'h' },
+      impactStateKey: 'impact-1',
+      adapter: { tool: 'openspec', version: '1.14.2', capabilities: ['show-deltas-json', 'validate-strict-json'] },
+      changes: [{ change: 'alpha', status: 'registered', artifacts: { 'proposal.md': 'a' }, baseSpecs: {}, config: 'c' }],
+      catalog: { groups: { 'middle-devs': 'g1' }, profiles: 'p1' },
+      claims: { branch: [], changes: {} },
+      records: { assessments: [], decisions: [] },
+    }
+    expect(changedInputParts(base, { ...base, checksVersion: 2 })).toEqual(['the checks version'])
+    expect(changedInputParts(base, { ...base, impactStateKey: 'impact-2' })).toEqual(['the strategy impact state'])
+    expect(changedInputParts(base, { ...base, adapter: { ...base.adapter, version: '1.15.0' } })).toEqual(['the OpenSpec adapter'])
+    expect(changedInputParts(base, { ...base, catalog: { ...base.catalog, profiles: 'p2' } })).toEqual(['the known profiles'])
+    expect(changedInputParts(base, { ...base, catalog: { groups: { 'middle-devs': 'g2' }, profiles: 'p1' } })).toEqual(['the group middle-devs'])
+    expect(changedInputParts(base, { ...base, changes: [{ ...base.changes[0]!, config: 'c2' }] })).toEqual(["alpha's OpenSpec config"])
+    expect(changedInputParts(base, { ...base, changes: [{ ...base.changes[0]!, baseSpecs: { chat: 'b' } }] })).toEqual(['the base spec chat'])
+    expect(changedInputParts(base, { ...base, changes: [{ ...base.changes[0]!, status: 'archived' }] })).toEqual(["alpha's registration"])
+  })
+})
+
+/** The validation-current refusal message of an otherwise-valid approval attempt. */
+async function approveRefusal(b: ValidationBench, planId: string, revision: number): Promise<string> {
+  const outcome = await b.approve(planId, revision, `approve-${++counter}`)
+  const failure = outcome.ok === false ? outcome.failures?.find(entry => entry.name === 'validation-current') : undefined
+  if (!failure) throw new Error(`expected a validation-current refusal, got ${JSON.stringify(outcome).slice(0, 300)}`)
+  return failure.message
+}

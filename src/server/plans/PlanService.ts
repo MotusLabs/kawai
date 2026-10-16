@@ -75,21 +75,35 @@ const forbidden = (verb: string): PlanCommandOutcome => ({
 
 export class PlanService {
   private readonly approval: ApprovalDeps
+  /** The shipped preconditions with plan-validation's entry appended last (D9). */
+  private readonly preconditions: readonly ApprovalPrecondition[]
 
   constructor(readonly store: PlanStore, private readonly options: {
     getSession: (id: string) => ChatSessionRecord | null | undefined
     strategies: StrategyStore
     homeDir?: string
-    /** The ordered approval preconditions (D7); the shipped list by default. */
+    /** The ordered approval preconditions (D7); the shipped list plus validation's by default. */
     preconditions?: readonly ApprovalPrecondition[]
     /** strategy-revision-impact's disposition lookup; always null in this change. */
     pinDisposition?: (planId: string, revision: number) => PinDisposition | null
+    /** plan-validation D9: approval's pre-transaction gather and in-transaction standing, and its appended precondition. */
+    validation?: {
+      prepareStanding: (planId: string, revision: number) => Promise<unknown> | null
+      standing: (prepared: unknown) => unknown
+      precondition: ApprovalPrecondition
+    }
   }) {
     this.approval = {
       store,
       currentStrategyPin: teamId => this.strategyPin(teamId)?.pin ?? null,
       pinDisposition: options.pinDisposition ?? (() => null),
+      ...(options.validation ? {
+        prepareStanding: (planId: string, revision: number) => options.validation!.prepareStanding(planId, revision),
+        standing: (prepared: unknown) => options.validation!.standing(prepared),
+      } : {}),
     }
+    this.preconditions = options.preconditions
+      ?? [...APPROVAL_PRECONDITIONS, ...(options.validation ? [options.validation.precondition] : [])]
   }
 
   async list(caller: PlanCaller, status?: string): Promise<PlanSummary[]> {
@@ -202,7 +216,7 @@ export class PlanService {
     const payload = { command: 'approve' as const, revision: input.revision, contentHash: input.contentHash, expectedApprovedRevision: input.expectedApprovedRevision }
     return runPlanCommand(this.store, plan.id, commandId, payload, () => {
       const ctx = buildApprovalContext(this.approval, prepared, this.store.get(plan.id)!, request)
-      const failures = evaluatePreconditions(this.options.preconditions ?? APPROVAL_PRECONDITIONS, ctx)
+      const failures = evaluatePreconditions(this.preconditions, ctx)
       if (failures.length > 0) {
         throw new PlanRefusal('precondition', `Approval refused: ${failures.map(failure => `${failure.name}: ${failure.message}`).join(' ')}`, failures)
       }
