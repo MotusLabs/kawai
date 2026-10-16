@@ -81,7 +81,8 @@ afterEach(() => {
   fs.rmSync(tempDir, { recursive: true, force: true })
 })
 
-test('urgent mail that interrupts a busy agent is parked when its delivered turn hits a final limit', async () => {
+/** A manager on fake CLIs with one session in a plain-directory team. */
+async function setup() {
   const clis: FakeCli[] = []
   const project = path.join(tempDir, 'proj')
   fs.mkdirSync(project)
@@ -95,26 +96,42 @@ test('urgent mail that interrupts a busy agent is parked when its delivered turn
   if (!created.ok) throw new Error(created.error)
   const id = created.session.id
   await waitFor(() => manager!.teams.teamOf(id) !== undefined)
-  const teamId = manager.teams.teamOf(id)!.teamId
+  return { clis, project, id, teamId: manager.teams.teamOf(id)!.teamId }
+}
 
+/** The CLI records the delivered envelope (its `index`th prompt) in its transcript: the receipt. */
+async function receipt(cli: FakeCli, index: number) {
+  await waitFor(() => cli.prompts.length > index)
+  const transcript = path.join(process.env.CLAUDE_CONFIG_DIR!, 'projects', 'proj', 'sdk-1.jsonl')
+  fs.mkdirSync(path.dirname(transcript), { recursive: true })
+  fs.appendFileSync(transcript, JSON.stringify({ type: 'user', message: cli.prompts[index]!.message }) + '\n')
+}
+
+/** A rejected window resetting in an hour, then the final limit error; returns the reset (epoch s). */
+function finalLimit(cli: FakeCli): number {
+  const resetsAt = Math.floor((Date.now() + 60 * 60_000) / 1000)
+  cli.push(frame({ type: 'rate_limit_event', rate_limit_info: { status: 'rejected', resetsAt } }))
+  cli.push(frame({ type: 'assistant', error: 'rate_limit', parent_tool_use_id: null,
+    message: { id: 'msg_err', role: 'assistant', content: [{ type: 'text', text: 'API Error: 429 limit reached' }] } }))
+  return resetsAt
+}
+
+test('urgent mail that interrupts a busy agent is parked when its delivered turn hits a final limit', async () => {
+  const { clis, project, id, teamId } = await setup()
   // A busy turn-1.
-  expect((await manager.send(id, 'long job')).ok).toBe(true)
+  expect((await manager!.send(id, 'long job')).ok).toBe(true)
   clis[0]!.push(init())
   await waitFor(() => manager!.getSnapshot(id)?.status === 'working')
 
-  const store = manager.mailbox.store
+  const store = manager!.mailbox.store
   const mail = store.enqueue({ teamId, toKind: 'session', toId: id, fromSession: null, fromGroup: null,
     originPath: project, priority: 'urgent', body: 'Drop that and fix the build' })
-  manager.dispatcher.notify()
-  await manager.dispatcher.settled()
+  manager!.dispatcher.notify()
+  await manager!.dispatcher.settled()
   expect(clis[0]!.interrupts).toBe(1)
   expect(store.get(mail.id)).toMatchObject({ claimedBy: id })
 
-  // The CLI records the delivered envelope in its transcript (the receipt).
-  await waitFor(() => clis[0]!.prompts.length === 2)
-  const transcript = path.join(process.env.CLAUDE_CONFIG_DIR!, 'projects', 'proj', 'sdk-1.jsonl')
-  fs.mkdirSync(path.dirname(transcript), { recursive: true })
-  fs.writeFileSync(transcript, JSON.stringify({ type: 'user', message: clis[0]!.prompts[1]!.message }) + '\n')
+  await receipt(clis[0]!, 1)
 
   // The aborted turn's trailing result lands after the delivery, then the
   // delivered turn makes progress and fails at a final limit resetting
@@ -125,10 +142,7 @@ test('urgent mail that interrupts a busy agent is parked when its delivered turn
     message: { id: 'msg_tool', role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_1', name: 'Edit', input: { file_path: path.join(project, 'build.ts') } }] } }))
   clis[0]!.push(frame({ type: 'user', parent_tool_use_id: null,
     message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'ok' }] } }))
-  const resetsAt = Math.floor((Date.now() + 60 * 60_000) / 1000)
-  clis[0]!.push(frame({ type: 'rate_limit_event', rate_limit_info: { status: 'rejected', resetsAt } }))
-  clis[0]!.push(frame({ type: 'assistant', error: 'rate_limit', parent_tool_use_id: null,
-    message: { id: 'msg_err', role: 'assistant', content: [{ type: 'text', text: 'API Error: 429 limit reached' }] } }))
+  const resetsAt = finalLimit(clis[0]!)
   clis[0]!.push(result('error_during_execution', 5))
   await waitFor(() => store.get(mail.id)?.state === 'parked')
 
@@ -141,4 +155,28 @@ test('urgent mail that interrupts a busy agent is parked when its delivered turn
   // never recorded, and the delivered turn-2 carries only its own tokens.
   const usage = db.db.prepare('SELECT turn_id, input_tokens FROM chat_turn_usage WHERE session_id = ? ORDER BY turn_id').all(id)
   expect(usage).toEqual([{ turn_id: 'turn-2', input_tokens: 5 }])
+})
+
+test('a final limit in an agent-started turn parks the work the agent last held (limit-outcomes-agent-turns)', async () => {
+  const { clis, project, id, teamId } = await setup()
+  const store = manager!.mailbox.store
+  const mail = store.enqueue({ teamId, toKind: 'session', toId: id, fromSession: null, fromGroup: null,
+    originPath: project, body: 'Build the export and watch CI' })
+  manager!.dispatcher.notify()
+  await manager!.dispatcher.settled()
+  await receipt(clis[0]!, 0)
+  clis[0]!.push(init())
+  clis[0]!.push(result('success', 3))
+  await waitFor(() => store.get(mail.id)?.state === 'delivered' && manager!.getSnapshot(id)?.status === 'waiting')
+
+  // A Monitor fires: the agent starts a turn itself, which ends at a final
+  // limit although the CLI reports the result as success.
+  clis[0]!.push(frame({ type: 'system', subtype: 'task_notification', task_id: 'mon_1', status: 'completed' }))
+  clis[0]!.push(init())
+  const resetsAt = finalLimit(clis[0]!)
+  clis[0]!.push(result('success', 4))
+  await waitFor(() => store.get(mail.id)?.state === 'parked')
+  const parked = store.get(mail.id)!
+  expect(parked).toMatchObject({ claimedBy: id, parkCount: 1 })
+  expect(store.get(parked.resumeMessageId!)).toMatchObject({ state: 'queued', toId: id, deliverAt: new Date(resetsAt * 1000).toISOString() })
 })
