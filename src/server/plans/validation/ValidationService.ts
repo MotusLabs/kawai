@@ -281,6 +281,9 @@ export class ValidationService {
    * is pushed. A dry run is computed as if submitted and never stored.
    */
   async validate(caller: ValidationCaller, input: ValidateInput): Promise<ValidateOutcome> {
+    if ('revision' in input && input.revision !== undefined && 'draftId' in input && input.draftId !== undefined) {
+      return { ok: false, reason: 'not-found', message: 'Pass revision or draft_id, not both: a revision validates what was submitted, a draft dry-runs it.' }
+    }
     const team = await this.context(caller)
     const plan = this.options.plans.forTeam(team.teamId, input.planId)
     if (!plan) return { ok: false, reason: 'not-found', message: `Plan not found in this team: ${input.planId}` }

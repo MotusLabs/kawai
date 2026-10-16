@@ -52,8 +52,10 @@ export const validationSchemas = {
   plan_validate: z.object({
     plan_id: z.string().min(1),
     revision: z.number().int().optional(),
-    /** A dry run of this draft instead of a stored revision. */
+    /** A dry run of this draft instead of a stored revision; never both. */
     draft_id: z.string().optional(),
+  }).refine(input => input.revision === undefined || input.draft_id === undefined, {
+    message: 'Pass revision or draft_id, not both: a revision validates what was submitted, a draft dry-runs it.',
   }),
   plan_validation_get: z.object({
     plan_id: z.string().min(1),
@@ -130,7 +132,9 @@ async function resolveRevision(validation: ValidationService, caller: { kind: 'a
   if (parsed.revision !== undefined) return parsed.revision
   if (parsed.draft_id !== undefined) return -1
   const defaulted = await validation.defaultRevisionFor(caller, parsed.plan_id)
-  return defaulted.ok
-    ? defaulted.revision!
-    : { ok: false, reason: defaulted.reason, message: defaulted.message }
+  if (!defaulted.ok) return { ok: false, reason: defaulted.reason, message: defaulted.message }
+  if (defaulted.revision === null) {
+    return { ok: false, reason: 'not-found', message: 'The plan has no revision in review or approved; pass a revision, or draft_id to dry-run a draft.' }
+  }
+  return defaulted.revision
 }

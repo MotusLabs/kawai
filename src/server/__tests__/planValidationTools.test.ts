@@ -110,6 +110,17 @@ test('plan_validation_get returns the report, its standing computed now, and the
   expect(bench.validationStore.reports(planId, revision)).toHaveLength(1)
 })
 
+test('revision and draft_id together are refused; a plan without a standing revision refuses clearly', async () => {
+  const { handlers, bench } = handlersFor('dev')
+  const { planId, revision } = await bench.draftInReview()
+  await expect(handlers.plan_validate!({ plan_id: planId, revision, draft_id: 'dev' })).rejects.toThrow(/not both/)
+  // A plan with no revision in review or approved (draft only, withdrawn).
+  const draft = await bench.service.create(bench.agent('lead'), { title: 'Only a draft' })
+  const empty = await handlers.plan_validate!({ plan_id: draft.plan.id }) as { ok: boolean; message?: string }
+  expect(empty).toMatchObject({ ok: false })
+  expect(empty.message).toContain('no revision in review or approved')
+})
+
 test("another team's plan reads as not found for every tool", async () => {
   const { handlers, bench } = handlersFor('stranger')
   const own = await bench.draftInReview()

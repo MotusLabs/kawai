@@ -1,9 +1,10 @@
 // One in-process MCP server per agent start, carrying the mailbox tools,
 // (team-tasks) the task tools, (member-release) the release tool, and
 // (product-strategy) the strategy tools, (strategy-revision-impact) the impact
-// tools, and (durable-plans) the plan tools. Handlers bind the actual session
-// id and strip unknown arguments before passing content to the mailbox, task,
-// release, strategy, impact, or plan service.
+// tools, (durable-plans) the plan tools, and (plan-validation) the validation
+// tools. Handlers bind the actual session id and strip unknown arguments
+// before passing content to the mailbox, task, release, strategy, impact,
+// plan, or validation service.
 import { z } from 'zod'
 import type { TeamMailbox } from './TeamMailbox'
 import type { TaskService } from './TaskService'
