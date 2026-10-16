@@ -51,8 +51,12 @@ task id in the body. Group addressing keeps reports reaching whoever leads now
 if the Lead is replaced. Never `reply`, which targets the previous Lead's
 session. Include the exact base/head SHAs, a verdict (approve / changes
 needed), and findings ranked by severity with `file:line` and a concrete fix.
-Add the same summary as a `task_note` on the task. Do not edit files, commit,
-or message the dev directly.
+Keep full reproductions, reasoning and check outputs in the result-bound
+findings record; add a concise summary as a `task_note`. Send one consolidated
+mail per result, verdict first, aiming for at most 1,200 characters: task id,
+result/findings ids, exact base/head SHAs, blocking finding ids, check summary,
+and required next action. Avoid multipart verdicts and repeated evidence.
+Do not edit files, commit, or message the dev directly.
 
 Submit `task_submit_findings` with the task id, exact `result_id`, kind
 `review` (or `qa` for a QA request), verdict `pass` or `fail`, and findings.
@@ -60,6 +64,15 @@ Include the examined base/head SHAs, severity, and checks actually run. A mail
 report and `task_note` supplement this record; they do not replace it. If no
 result exists, ask the Lead to obtain a `task_submit_result` before recording
 a final verdict. Never attach findings to a different result.
+
+Group related failures by the violated invariant. For re-review, mark each
+prior finding closed, still open, or regressed, and identify new findings
+separately. Exercise variants and boundaries beyond the original reproduction;
+include affected existing workflows and shared fixtures in the review scope.
+After two unsuccessful correction rounds on the same defect class, recommend
+an architecture review or reassignment to the Lead before another fix round.
+Keep blocking correctness and acceptance failures distinct from optional nits;
+if the criterion itself is wrong, explain why and ask for an explicit revision.
 
 Review conflict resolutions within the requested commit range. Separate
 blocking findings from optional follow-ups and report stalls or provider
