@@ -60,9 +60,14 @@ const inputs = (planId: string, revision: number): ValidationInputs => ({
   records: { assessments: [], decisions: [] },
 })
 
+// The build that introduced plan-validation: every migration through it.
+// Later migrations have their own tests.
+const AT = MIGRATIONS.findIndex(migration => migration.name === 'plan-validation')
+const THROUGH_VALIDATION = MIGRATIONS.slice(0, AT + 1)
+
 /** A database as the build before this change leaves it: a plan with a submitted revision. */
 function planAtPreviousVersion(): string {
-  const session = initDatabase({ path: dbPath, migrations: MIGRATIONS.slice(0, -1) })
+  const session = initDatabase({ path: dbPath, migrations: MIGRATIONS.slice(0, AT) })
   const store = new PlanStore(session.db)
   const planId = store.insertPlan({ teamId: '/repo/.git', title: 'Plan', creator: human })
   store.insertRevision(planId, { content: normalizePlanContent({ goal: 'g', changes: [{ change: 'alpha' }] }), contentHash: hashPlanDraft(normalizePlanContent({ goal: 'g' })), pin: null, author: human })
@@ -71,9 +76,8 @@ function planAtPreviousVersion(): string {
 }
 
 test('the registry holds plan-validation as the dense next numbered migration', () => {
-  const last = MIGRATIONS.at(-1)!
-  expect(last.name).toBe('plan-validation')
-  expect(last.version).toBe((MIGRATIONS.at(-2)?.version ?? 1) + 1)
+  const migration = MIGRATIONS[AT]!
+  expect(migration.version).toBe((MIGRATIONS[AT - 1]?.version ?? 1) + 1)
   expect(checkDense(MIGRATIONS)).toBe(true)
 })
 
@@ -89,7 +93,7 @@ test('a database written by the build before plan-validation upgrades keeping ev
   expect(VALIDATION_TABLES.filter(table => table in before)).toEqual([])
   const previous = versions(dbPath)
 
-  const session = initDatabase({ path: dbPath })
+  const session = initDatabase({ path: dbPath, migrations: THROUGH_VALIDATION })
   // The new tables are usable at once: a report, an assessment, a decision.
   const validation = new ValidationStore(session.db)
   validation.insertReport({

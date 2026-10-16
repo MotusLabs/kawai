@@ -1,10 +1,11 @@
 // One in-process MCP server per agent start, carrying the mailbox tools,
 // (team-tasks) the task tools, (member-release) the release tool, and
 // (product-strategy) the strategy tools, (strategy-revision-impact) the impact
-// tools, (durable-plans) the plan tools, and (plan-validation) the validation
-// tools. Handlers bind the actual session id and strip unknown arguments
-// before passing content to the mailbox, task, release, strategy, impact,
-// plan, or validation service.
+// tools, (durable-plans) the plan tools, (plan-validation) the validation
+// tools, and (team-process-metrics) the read-only metrics tool and the
+// process report tools. Handlers bind the actual session id and strip
+// unknown arguments before passing content to the mailbox, task, release,
+// strategy, impact, plan, validation, metrics, or report service.
 import { z } from 'zod'
 import type { TeamMailbox } from './TeamMailbox'
 import type { TaskService } from './TaskService'
@@ -20,6 +21,8 @@ import { VALIDATION_TOOL_NAMES, validationDescriptions, validationHandlers, vali
 import type { ImpactService } from '../strategy/ImpactService'
 import { IMPACT_TOOL_NAMES, impactDescriptions, impactHandlers, impactSchemas } from '../strategy/impactTools'
 import type { MailboxManagement } from './mailboxManagement'
+import { METRICS_TOOL_NAMES, metricsDescriptions, metricsHandlers, metricsSchemas, type MetricsToolDeps } from '../metrics/metricsTools'
+import { REPORT_TOOL_NAMES, reportDescriptions, reportHandlers, reportSchemas, type ReportToolDeps } from '../metrics/reportTools'
 import { TEAM_MCP_SERVER } from './teamPrompt'
 
 export const MAILBOX_TOOL_NAMES = ['send_message', 'reply', 'schedule_message', 'list_groups'] as const
@@ -27,7 +30,7 @@ export const RELEASE_TOOL_NAMES = ['release_member'] as const
 /** Mailbox management (team-mailbox-management): always registered, refused by right. */
 export const MANAGEMENT_TOOL_NAMES = ['list_mailbox', 'cancel_message', 'discard_message'] as const
 /** Every team tool, allowed without approval cards under either policy. */
-export const TEAM_ALLOWED_TOOLS = [...MAILBOX_TOOL_NAMES, ...MANAGEMENT_TOOL_NAMES, ...RELEASE_TOOL_NAMES, ...TASK_TOOL_NAMES, ...STRATEGY_TOOL_NAMES, ...IMPACT_TOOL_NAMES, ...PLAN_TOOL_NAMES, ...VALIDATION_TOOL_NAMES].map(name => `mcp__${TEAM_MCP_SERVER}__${name}`)
+export const TEAM_ALLOWED_TOOLS = [...MAILBOX_TOOL_NAMES, ...MANAGEMENT_TOOL_NAMES, ...RELEASE_TOOL_NAMES, ...TASK_TOOL_NAMES, ...STRATEGY_TOOL_NAMES, ...IMPACT_TOOL_NAMES, ...PLAN_TOOL_NAMES, ...VALIDATION_TOOL_NAMES, ...METRICS_TOOL_NAMES, ...REPORT_TOOL_NAMES].map(name => `mcp__${TEAM_MCP_SERVER}__${name}`)
 
 const content = { body: z.string().min(1), urgent: z.boolean().optional(), tags: z.array(z.string()).optional(), task_id: z.string().min(1).optional() }
 // `human` is accepted so the service can refuse it with the reply path,
@@ -106,10 +109,14 @@ export interface MailboxServerServices {
   impact?: ImpactService
   releases?: MemberRelease
   management?: MailboxManagement
+  /** The read-only `team_metrics` tool (team-process-metrics D5). */
+  metrics?: MetricsToolDeps
+  /** Process report submit/list/get/link (team-process-metrics D6); never decide or unlink. */
+  reports?: ReportToolDeps
 }
 
 export async function createMailboxServer(mailbox: TeamMailbox, sessionId: string, services: MailboxServerServices = {}) {
-  const { tasks, results, strategies, plans, validation, impact, releases, management } = services
+  const { tasks, results, strategies, plans, validation, impact, releases, management, metrics, reports } = services
   const { createSdkMcpServer, tool } = await import('@anthropic-ai/claude-agent-sdk')
   const handlers: Record<string, (input: unknown) => Promise<unknown>> = {
     ...mailboxHandlers(mailbox, sessionId),
@@ -126,11 +133,15 @@ export async function createMailboxServer(mailbox: TeamMailbox, sessionId: strin
     // Validation: no answer, accept, resolve, except, authorize, or approve
     // tool exists (D10); only the owner decides.
     ...(validation ? validationHandlers(validation, sessionId) : {}),
+    // Metrics: read-only, bound to the caller's team (D5).
+    ...(metrics ? metricsHandlers(metrics, sessionId) : {}),
+    // Reports: submit, read, and link only — no decide, apply, or unlink tool (D6).
+    ...(reports ? reportHandlers(reports, sessionId) : {}),
   }
   const schemas: Record<string, z.ZodObject> = {
     ...mailboxSchemas, ...(management ? managementSchemas : {}), ...(tasks ? taskSchemas : {}),
     ...(releases ? releaseSchemas : {}), ...(strategies ? strategySchemas : {}), ...(impact ? impactSchemas : {}), ...(plans ? planSchemas : {}),
-    ...(validation ? validationSchemas : {}),
+    ...(validation ? validationSchemas : {}), ...(metrics ? metricsSchemas : {}), ...(reports ? reportSchemas : {}),
   }
   const descriptions: Record<string, string> = {
     send_message: 'Send to a team group or session. Returns immediately with the message id. Optional task_id puts the message under a team task. Mail to the human is refused: reply to a message they sent instead.',
@@ -144,6 +155,8 @@ export async function createMailboxServer(mailbox: TeamMailbox, sessionId: strin
     ...(impact ? impactDescriptions : {}),
     ...(plans ? planDescriptions : {}),
     ...(validation ? validationDescriptions : {}),
+    ...(metrics ? metricsDescriptions : {}),
+    ...(reports ? reportDescriptions : {}),
   }
   return createSdkMcpServer({ name: TEAM_MCP_SERVER, version: '1.0.0', tools: Object.keys(handlers).map(name =>
     tool(name, descriptions[name]!, schemas[name]!.shape, async (input) => {

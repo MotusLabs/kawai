@@ -3,8 +3,11 @@
 // profile, session, group, HTTP status, raw message, and the provider's reset
 // time when known — retried attempts as `final: false`, the turn's failure as
 // `final: true`. Rows persist (routing must still see them after a restart)
-// and are pruned after 24 hours. Cooldown is computed from them on read and
-// never stored, so changing the policy needs no migration.
+// and are pruned after 15 days, so process metrics (team-process-metrics D8)
+// can read a 7-day window with its 7-day baseline; routing still reads only
+// the last 24 hours. Cooldown is computed from them on read and never
+// stored, so changing the policy needs no migration; `coolingTimeline`
+// reconstructs past cooling by the same rule.
 import type { Database } from 'bun:sqlite'
 import type { LimitEvent } from '../../../shared/routing'
 
@@ -26,8 +29,10 @@ CREATE TABLE IF NOT EXISTS profile_limit_events (
 CREATE INDEX IF NOT EXISTS profile_limit_events_profile ON profile_limit_events (profile_id, at);
 `
 
-/** How long events are kept. */
-export const LIMIT_EVENT_RETENTION_MS = 24 * 60 * 60 * 1000
+/** How far back routing reads: `forProfile` and `cooldownUntil` see only this window. */
+export const LIMIT_EVENT_READ_WINDOW_MS = 24 * 60 * 60 * 1000
+/** How long events are kept (process metrics read 14 days plus the read window). */
+export const LIMIT_EVENT_RETENTION_MS = 15 * 24 * 60 * 60 * 1000
 /** Built-in cooldown when the provider gave no reset time. */
 export const DEFAULT_COOLDOWN_MS = 60 * 60 * 1000
 
@@ -106,9 +111,9 @@ export class LimitEventStore {
     this.db.prepare('DELETE FROM profile_limit_events WHERE at < ?').run(cutoff)
   }
 
-  /** A profile's retained events, oldest first. */
+  /** A profile's events within routing's 24-hour read window, oldest first. */
   forProfile(profileId: string): LimitEvent[] {
-    const cutoff = new Date(this.now() - LIMIT_EVENT_RETENTION_MS).toISOString()
+    const cutoff = new Date(this.now() - LIMIT_EVENT_READ_WINDOW_MS).toISOString()
     return (this.db.prepare('SELECT * FROM profile_limit_events WHERE profile_id = ? AND at >= ? ORDER BY at, rowid')
       .all(profileId, cutoff) as Row[]).map(fromRow)
   }
@@ -132,4 +137,45 @@ export function cooldownUntil(events: readonly LimitEvent[], now: number): strin
   const reset = latest.resetsAt ? Date.parse(latest.resetsAt) : NaN
   const until = Number.isFinite(reset) ? reset : Date.parse(latest.at) + DEFAULT_COOLDOWN_MS
   return Number.isFinite(until) && until > now ? new Date(until).toISOString() : null
+}
+
+/** One interval during which the router saw a profile as cooling, epoch ms, half-open. */
+export interface CoolingInterval {
+  start: number
+  end: number
+}
+
+/**
+ * The router's cooling timeline for one profile (team-process-metrics D4),
+ * from its events in `(at, rowid)` order — the store's order. Each final
+ * event decides from its `at` until the earliest of the next final event's
+ * `at`, its own cooldown end (`cooldownUntil`'s rule), and `at + 24 h`, when
+ * routing's read window drops it (no older event can take over then: older
+ * events left the window first). Retried attempts never cool. Intervals are
+ * returned in order, non-overlapping, with empty ones dropped.
+ */
+export function coolingTimeline(events: readonly LimitEvent[]): CoolingInterval[] {
+  const finals = events
+    .map((event, index) => ({ event, index, at: Date.parse(event.at) }))
+    .filter(entry => entry.event.final && Number.isFinite(entry.at))
+    .sort((a, b) => a.at - b.at || a.index - b.index)
+  const intervals: CoolingInterval[] = []
+  finals.forEach((entry, i) => {
+    const reset = entry.event.resetsAt ? Date.parse(entry.event.resetsAt) : NaN
+    const until = Number.isFinite(reset) ? reset : entry.at + DEFAULT_COOLDOWN_MS
+    const next = finals[i + 1]?.at ?? Infinity
+    const end = Math.min(next, until, entry.at + LIMIT_EVENT_READ_WINDOW_MS)
+    if (end <= entry.at) return
+    const last = intervals.at(-1)
+    if (last && last.end >= entry.at) last.end = Math.max(last.end, end)
+    else intervals.push({ start: entry.at, end })
+  })
+  return intervals
+}
+
+/** Milliseconds of `intervals` inside `[from, to)`. */
+export function coolingMsWithin(intervals: readonly CoolingInterval[], from: number, to: number): number {
+  let total = 0
+  for (const interval of intervals) total += Math.max(0, Math.min(interval.end, to) - Math.max(interval.start, from))
+  return total
 }

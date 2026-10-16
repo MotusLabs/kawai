@@ -7,7 +7,7 @@ import { buildTeamPrompt, SECURITY_NOTE_BODY } from '../team/teamPrompt'
 const outbound: OutboundPromptFacts = { internal: [], modelProviders: [] }
 
 const settings: Omit<GroupDefinition, 'id' | 'label' | 'description' | 'prompt'> = {
-  canCreateTasks: false, canCreatePlans: false, canManageMailbox: false, releaseOnTaskClose: true, worktreeScoped: true, canReleaseMembers: true,
+  canCreateTasks: false, canCreatePlans: false, canManageMailbox: false, releaseOnTaskClose: true, worktreeScoped: true, canReleaseMembers: true, canReportProcess: false,
   max: 1, approval: 'manual', profiles: [], strategy: 'first-available',
   onLimit: { parkIfResetWithinMs: 3 * 3_600_000, otherwise: 'forward' }, warnings: [],
 }

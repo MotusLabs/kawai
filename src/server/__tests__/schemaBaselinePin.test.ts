@@ -10,8 +10,12 @@
 // changes. A later numbered migration changes the second test's expectation
 // on purpose: that migration's change applies its delta to `expected` there
 // (added tables, columns, indexes), and the fixture itself stays master's.
-// Migration 2 (`strategy-impact`) adds the three strategy impact tables and
-// migration 3 (`plan-validation`) the three validation tables below.
+// Migration 2 (`strategy-impact`) adds the three strategy impact tables,
+// migration 3 (`plan-validation`) the three validation tables;
+// migration 4 (`task-status-events`) adds the task transition table;
+// migration 5 (`agent-starts`) adds agent starts and memory manifests;
+// migration 6 (`chat-turn-usage`) adds per-turn usage;
+// migration 7 (`process-reports`) adds the process report tables.
 import { expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
 import { initDatabase } from '../db'
@@ -47,6 +51,87 @@ const migration2: SchemaShape['tables'] = {
   },
 }
 
+/** Migration 4's delta: task status transitions (team-process-metrics D3). */
+const migration4: SchemaShape['tables'] = {
+  team_task_status_events: {
+    columns: [
+      { name: 'id', type: 'INTEGER', notnull: 0, dflt_value: null, pk: 1 },
+      column('task_id'), column('team_id'), optional('from_status'), column('to_status'),
+      column('actor_kind'), optional('actor_session'), column('at'),
+    ],
+    indexes: [
+      { name: 'team_task_status_events_task', unique: 0, columns: ['task_id', 'id'] },
+      { name: 'team_task_status_events_team', unique: 0, columns: ['team_id', 'at'] },
+    ],
+  },
+}
+
+/** Migration 5's delta: agent-start provenance (team-process-metrics D2). */
+const migration5: SchemaShape['tables'] = {
+  agent_starts: {
+    columns: [
+      id, column('session_id'), ...['team_id', 'group_id', 'profile_id', 'model', 'effort'].map(optional), column('cwd'),
+      ...['group_file_hash', 'prompt_append_hash', 'memory_hash'].map(optional),
+      { name: 'memory_files', type: 'INTEGER', notnull: 0, dflt_value: null, pk: 0 },
+      optional('instructions_hash'), optional('unavailable'), column('started_at'),
+    ],
+    indexes: [
+      { name: 'agent_starts_session', unique: 0, columns: ['session_id', 'started_at'] },
+      { name: 'agent_starts_team', unique: 0, columns: ['team_id', 'started_at'] },
+    ],
+  },
+  memory_manifests: { columns: [column('memory_hash', 0, 1), column('files')], indexes: [] },
+}
+
+/** Migration 6's delta: per-turn usage (team-process-metrics D1). */
+const migration6: SchemaShape['tables'] = {
+  chat_turn_usage: {
+    columns: [
+      column('session_id', 1, 1), column('turn_id', 1, 2),
+      ...['team_id', 'group_id', 'profile_id', 'model', 'task_id', 'start_id'].map(optional),
+      ...['ok', 'input_tokens', 'output_tokens', 'cache_read_tokens', 'cache_creation_tokens', 'num_turns'].map(integer),
+      column('ended_at'),
+    ],
+    indexes: [
+      { name: 'chat_turn_usage_task', unique: 0, columns: ['task_id'] },
+      { name: 'chat_turn_usage_team', unique: 0, columns: ['team_id', 'ended_at'] },
+    ],
+  },
+}
+
+/** Migration 7's delta: process reports, proposals, decisions, link events, and commands (team-process-metrics D6). */
+const migration7: SchemaShape['tables'] = {
+  process_reports: {
+    columns: [id, ...['team_id', 'author_session', 'window', 'period_start', 'period_end', 'summary', 'snapshot', 'created_at'].map(name => column(name))],
+    indexes: [{ name: 'process_reports_team', unique: 0, columns: ['team_id', 'created_at'] }],
+  },
+  process_proposals: {
+    columns: [
+      id, column('report_id'), column('team_id'), integer('position'),
+      ...['kind', 'target_kind', 'target', 'edit', 'rationale', 'expected'].map(name => column(name)), optional('revert_to_hash'),
+    ],
+    indexes: [
+      { name: 'process_proposals_report', unique: 0, columns: ['report_id', 'position'] },
+      { name: 'process_proposals_team', unique: 0, columns: ['team_id'] },
+    ],
+  },
+  process_proposal_decisions: {
+    columns: [column('proposal_id', 0, 1), column('team_id'), column('decision'), optional('reason'), optional('target_hash_at_decision'), column('decided_at')],
+    indexes: [],
+  },
+  process_proposal_link_events: {
+    columns: [
+      { name: 'id', type: 'INTEGER', notnull: 0, dflt_value: null, pk: 1 }, column('proposal_id'), column('team_id'), column('action'),
+      ...['change_start_id', 'change_hash', 'change_at'].map(optional), column('actor_kind'), optional('actor_session'), column('at'),
+    ],
+    indexes: [{ name: 'process_proposal_link_events_proposal', unique: 0, columns: ['proposal_id', 'id'] }],
+  },
+  process_commands: {
+    columns: [column('team_id', 1, 1), column('command_id', 1, 2), column('kind'), column('payload'), column('outcome'), column('at')],
+    indexes: [],
+  },
+}
+
 test('a fresh baseline reproduces master bdc0131 schema exactly', () => {
   const db = new Database(':memory:')
   applyBaselineSchema(db)
@@ -76,9 +161,9 @@ const migration3: SchemaShape['tables'] = {
 
 test('a fresh database opened by this build has the same shape plus each migration\'s delta and schema_migrations', () => {
   const session = initDatabase({ path: ':memory:' })
-  expect(Object.keys(migration2).filter(table => table in expected.tables)).toEqual([])
-  expect(Object.keys(migration3).filter(table => table in expected.tables)).toEqual([])
-  expect(schemaShape(session.db)).toEqual({ tables: { ...expected.tables, ...migration2, ...migration3 } })
+  const added = { ...migration2, ...migration3, ...migration4, ...migration5, ...migration6, ...migration7 }
+  expect(Object.keys(added).filter(table => table in expected.tables)).toEqual([])
+  expect(schemaShape(session.db)).toEqual({ tables: { ...expected.tables, ...added } })
   const extra = session.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'").get()
   expect(extra).toEqual({ name: 'schema_migrations' })
   session.close()

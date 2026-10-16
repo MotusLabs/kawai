@@ -351,14 +351,33 @@ export class TaskStore {
    * Set a task's status. `within` runs inside the same transaction as the
    * update (member-release D1/D8): a transition into `done`/`cancelled`
    * records pending releases and dead-letters waiting mail atomically with
-   * the new status, and a transition out cancels them.
+   * the new status, and a transition out cancels them. An actual change
+   * also appends a `team_task_status_events` row (team-process-metrics D3)
+   * naming `actor`; a same-status update records nothing.
    */
-  setStatus(id: string, status: TaskStatus, within?: () => void, now = nowIso()): TeamTask | null {
+  setStatus(id: string, status: TaskStatus, within?: () => void, actor: JournalAuthor = SYSTEM_AUTHOR, now = nowIso()): TeamTask | null {
     const changes = this.db.transaction(() => {
       if (within) within()
+      const before = this.db.prepare('SELECT status, team_id FROM team_tasks WHERE id = ?').get(id) as { status: string; team_id: string } | null
+      if (!before) return 0
+      if (before.status !== status) {
+        this.db.prepare(`INSERT INTO team_task_status_events (task_id, team_id, from_status, to_status, actor_kind, actor_session, at)
+          VALUES (?, ?, ?, ?, ?, ?, ?)`).run(id, before.team_id, before.status, status, actor.kind, actor.sessionId, now)
+      }
       return this.db.prepare('UPDATE team_tasks SET status = ?, updated_at = ? WHERE id = ?').run(status, now, id).changes
     })()
     return changes === 1 ? this.changed(id) : null
+  }
+
+  /** A task's recorded status transitions, oldest first (D3). */
+  statusEvents(id: string): TaskStatusEvent[] {
+    const rows = this.db.prepare('SELECT * FROM team_task_status_events WHERE task_id = ? ORDER BY id').all(id) as Record<string, unknown>[]
+    return rows.map(row => ({
+      fromStatus: row.from_status === null ? null : String(row.from_status) as TaskStatus,
+      toStatus: String(row.to_status) as TaskStatus,
+      actor: journalAuthor(row.actor_kind, row.actor_session),
+      at: String(row.at),
+    }))
   }
 
   /** Re-announce a task whose derived data (participants, messages) changed. */
@@ -438,6 +457,16 @@ function publishPayloadDiff(revision: TaskRevision, input: PublishInput): string
 
 function text(value: unknown): string | null {
   return value === null || value === undefined ? null : String(value)
+}
+
+const SYSTEM_AUTHOR: JournalAuthor = { kind: 'system', sessionId: null }
+
+/** One recorded status transition; a null `fromStatus` marks a backfilled row. */
+export interface TaskStatusEvent {
+  fromStatus: TaskStatus | null
+  toStatus: TaskStatus
+  actor: JournalAuthor
+  at: string
 }
 
 function actor(kind: unknown, session: unknown): TaskActor {

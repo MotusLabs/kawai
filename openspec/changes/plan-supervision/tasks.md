@@ -54,21 +54,8 @@ Implement after `plan-execution` and `integration-candidates` have landed on mas
 
 ## 4. Usage capture
 
-- [ ] 4.1 Map the result frame's per-turn `usage` into an optional `turn_completed.usage` in `ChatSessionDriver.handleResult` (D14). Verify with driver tests: missing fields read 0, and replayed history without the field is unchanged.
-- [ ] 4.2 Create `src/server/chat/chatTurnUsageStore.ts` with the `chat_turn_usage` migration and an idempotent `record`. Verify with tests that a duplicate `(session_id, turn_id)` writes once, and that the migration runs twice.
-- [ ] 4.3 Record usage in `ChatSessionManager`'s `turn_completed` handler, beside `turnEnds.record` (D14).
-  - Pin each turn's source at `turn_started`: the mail the session mailbox's delivered hook reported while no turn ran.
-  - A mail-started turn takes that mail's task, and writes nothing when the mail has none.
-  - Any other turn takes the session's task.
-
-  Verify with tests:
-  - a mail-started turn takes that mail's task even when the session's task differs;
-  - a turn started by task-less mail writes nothing, even on a task-bound session;
-  - a delivery during a running turn neither retargets that turn nor carries over to the next one;
-  - a typed turn takes the session's task;
-  - a turn on a session with no task writes nothing;
-  - the row names the group, `claudeProfileId`, and model.
-- [ ] 4.4 Implement the plan usage read: the plan's linked tasks plus its `plan_fix_tasks`, summed by `(group, profile)` and by change, with fix and correction tasks as their own rows (D14). Verify with a test across two profiles of one role, and with a test that another plan's tasks are excluded.
+- [ ] 4.1 Confirm `team-process-metrics` has shipped the `turn_completed.usage` mapping, the `chat_turn_usage` table, and its turn-start-pinned writer (D14); this change adds none of them. Verify by reading `chatTurnUsageStore.ts` against D14's attribution rule.
+- [ ] 4.4 Implement the plan usage read: the plan's linked tasks plus its `plan_fix_tasks`, summed by `(group, profile)` and by change, with fix and correction tasks as their own rows (D14). Verify with a test across two profiles of one role, and with tests that another plan's tasks and rows with a null `task_id` are excluded.
 - [ ] 4.5 Add the AGENTS.md usage bullet: the per-turn record, the attribution rule, no currency, and no backfill. Verify by reading it against D14.
 
 ## 5. Decisions and fix tasks

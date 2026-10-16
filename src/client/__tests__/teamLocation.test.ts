@@ -116,3 +116,24 @@ test('navigating to the location already shown pushes no history entry', () => {
   store.navigate({ teamKey: '/repo', tab: 'mailbox', id: 'm-1' })
   expect(pushed).toEqual(['#/team/%2Frepo/mailbox', '#/team/%2Frepo/mailbox/m-1'])
 })
+
+test('a metrics location carries its window, then a report id (team-process-metrics D5)', () => {
+  expect(teamHashOf({ teamKey: '/repo', tab: 'metrics', window: '3d' })).toBe('#/team/%2Frepo/metrics/3d')
+  expect(parseTeamHash('#/team/%2Frepo/metrics/3d')).toEqual({ teamKey: '/repo', tab: 'metrics', window: '3d' })
+  const withReport = teamHashOf({ teamKey: '/repo', tab: 'metrics', window: '7d', id: 'rep-1' })
+  expect(withReport).toBe('#/team/%2Frepo/metrics/7d/rep-1')
+  expect(parseTeamHash(withReport)).toEqual({ teamKey: '/repo', tab: 'metrics', window: '7d', id: 'rep-1' })
+  // The window segment is kept raw: the view validates it and falls back with a notice.
+  expect(parseTeamHash('#/team/%2Frepo/metrics/30d')).toEqual({ teamKey: '/repo', tab: 'metrics', window: '30d' })
+  expect(parseTeamHash('#/team/%2Frepo/metrics')).toEqual({ teamKey: '/repo', tab: 'metrics' })
+  // Only the Metrics tab has a window segment.
+  expect(parseTeamHash('#/team/%2Frepo/tasks/7d')).toEqual({ teamKey: '/repo', tab: 'tasks', id: '7d' })
+})
+
+test('a window change pushes a history entry; the same window pushes nothing', () => {
+  const store = useTeamLocationStore.getState()
+  store.navigate({ teamKey: '/repo', tab: 'metrics', window: '7d' })
+  store.navigate({ teamKey: '/repo', tab: 'metrics', window: '1d' })
+  store.navigate({ teamKey: '/repo', tab: 'metrics', window: '1d' })
+  expect(pushed).toEqual(['#/team/%2Frepo/metrics/7d', '#/team/%2Frepo/metrics/1d'])
+})
