@@ -57,7 +57,7 @@ describe('RepoFactsResolver', () => {
     fs.mkdirSync(path.join(worktree), { recursive: true })
     fs.mkdirSync(headDir, { recursive: true })
     fs.writeFileSync(path.join(worktree, '.git'), `gitdir: ${headDir}\n`)
-    // The worktree is on `topic`, whose push remote is origin.
+    // The worktree is on `topic`, whose push remote is fork.
     fs.writeFileSync(path.join(headDir, 'HEAD'), 'ref: refs/heads/topic\n')
     const resolver = new RepoFactsResolver()
     const mainFacts = resolver.factsFor(main)

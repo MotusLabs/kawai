@@ -1236,7 +1236,6 @@ export class ChatSessionDriver {
     return { continue: true }
   }
 
-
   private readonly canUseTool: CanUseTool = (toolName, input, toolOptions) => {
     if (this.options.teamMcpServer && TEAM_ALLOWED_TOOLS.includes(toolName)) {
       return Promise.resolve({ behavior: 'allow' } as PermissionResult)

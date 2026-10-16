@@ -58,7 +58,7 @@ Group 7's matrix rows for plan execution, integration, supervision, and revision
   - subagent calls record `agent_id`;
   - `canUseTool` deny and `PermissionDenied` record one `denied`;
   - background calls record `started-background`;
-  - **Round-trip measurement (after the round-3 `setImmediate` deferral):** the synchronous part of the Pre hook — tokenizing, parsing, and filling `pendingSends`, with every later step (facts walk, judging, redaction, SQLite) deferred — measured **~10.3 µs per call** averaged over 20,000 calls across five representative commands (git push, a cd-chain, curl, npm publish, gh pr comment) on the dev host; a non-send call parses in the same range. For group 7's recovery matrix.
+  - **Round-trip measurement (after the round-3 `setImmediate` deferral):** the synchronous part of the Pre hook — tokenizing, parsing, and filling `pendingSends`, with every later step (facts walk, judging, redaction, SQLite) deferred — measured **~10.3 µs per call** averaged over 20,000 calls across five representative commands (git push, a cd-chain, curl, npm publish, gh pr comment) on the dev host; a non-send call parses in the same range. This is the observer's synchronous work only — it does not include the fixture adapter's control-protocol round trip, which task 7.1 measures against the live driver. For group 7's recovery matrix.
   - a facts read error records `unknown-destination` and never throws;
   - an outcome that lands before its queued call row is recorded and joins the row once written.
 
