@@ -22,6 +22,7 @@ import { mapTurnUsage, TURN_USAGE_RETENTION_MS, type TurnUsageRow } from '../cha
 
 export interface MetricTask {
   id: string
+  title: string
   createdAt: string
   status: string
 }
@@ -54,6 +55,7 @@ export interface MetricFinding {
 
 export interface MetricMessage {
   id: string
+  threadId: string
   fromKind: string
   fromGroup: string | null
   fromSession: string | null
@@ -117,7 +119,9 @@ function byIds<T>(
   return out
 }
 
-const mapTask = (row: Record<string, unknown>): MetricTask => ({ id: String(row.id), createdAt: String(row.created_at), status: String(row.status) })
+const mapTask = (row: Record<string, unknown>): MetricTask => ({
+  id: String(row.id), title: String(row.title), createdAt: String(row.created_at), status: String(row.status),
+})
 const mapStatus = (row: Record<string, unknown>): MetricStatusEvent => ({
   taskId: String(row.task_id), fromStatus: text(row.from_status), toStatus: String(row.to_status), at: String(row.at),
 })
@@ -130,7 +134,7 @@ const mapFinding = (row: Record<string, unknown>): MetricFinding => ({
   authorKind: String(row.author_kind), authorSession: String(row.author_session), createdAt: String(row.created_at),
 })
 const mapMessage = (row: Record<string, unknown>): MetricMessage => ({
-  id: String(row.id), fromKind: String(row.from_kind), fromGroup: text(row.from_group), fromSession: text(row.from_session),
+  id: String(row.id), threadId: String(row.thread_id), fromKind: String(row.from_kind), fromGroup: text(row.from_group), fromSession: text(row.from_session),
   priority: String(row.priority), taskId: text(row.task_id), createdAt: String(row.created_at), deliverAt: text(row.deliver_at),
   deliveredAt: text(row.delivered_at), claimedBy: text(row.claimed_by),
 })
@@ -194,8 +198,10 @@ export function loadMetricsInputs(db: Database, teamId: string, loadFrom: number
     const eventKey = (event: MetricMessageEvent) => `${event.messageId}\0${event.kind}\0${event.at}`
     const events = new Map(rangeEvents.map(event => [eventKey(event), event]))
     for (const event of byIds(db, p => `SELECT * FROM team_message_events WHERE message_id IN (${p})`, parkedIds, mapEvent)) events.set(eventKey(event), event)
-    for (const message of byIds(db, p => `SELECT * FROM team_messages WHERE id IN (${p})`, parkedIds, mapMessage)) {
-      if (!messages.has(message.id)) messages.set(message.id, message)
+    // Every message an in-range or park event names, so drill-down can open its thread.
+    const eventMessageIds = [...parkedIds, ...rangeEvents.map(event => event.messageId)].filter(id => !messages.has(id))
+    for (const message of byIds(db, p => `SELECT * FROM team_messages WHERE team_id = ? AND id IN (${p})`, eventMessageIds, mapMessage, [teamId])) {
+      messages.set(message.id, message)
     }
     const messageEvents = [...events.values()].sort((a, b) => a.at.localeCompare(b.at))
 

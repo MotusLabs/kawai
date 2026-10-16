@@ -136,6 +136,16 @@ export interface MetricRow extends MetricStat {
   mixed?: number
 }
 
+export interface MetricDrillTask {
+  id: string
+  title: string
+}
+
+export interface MetricDrillMessage {
+  id: string
+  threadId: string
+}
+
 export interface MetricValue extends MetricStat {
   id: MetricId
   baseline: MetricStat
@@ -143,8 +153,8 @@ export interface MetricValue extends MetricStat {
   approximate: boolean
   /** Some cohort history predates usage retention, so token values are incomplete. */
   partial: boolean
-  /** The tasks and messages behind the value, for drill-down. */
-  drill: { tasks: string[]; messages: string[] }
+  /** The tasks and messages behind the value, for drill-down: each opens its task or its message's thread. */
+  drill: { tasks: MetricDrillTask[]; messages: MetricDrillMessage[] }
   breakdown?: MetricRow[]
   /** Present when a slice was requested and the metric supports it. */
   slices?: MetricRow[]

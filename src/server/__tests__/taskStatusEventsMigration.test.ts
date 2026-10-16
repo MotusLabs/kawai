@@ -28,12 +28,12 @@ afterEach(() => { fs.rmSync(dir, { recursive: true, force: true }) })
 /** A version-2 database as the build before this change leaves it: done, cancelled, and open tasks. */
 function versionTwoWithTasks(): Record<'done' | 'cancelled' | 'open', string> {
   const session = initDatabase({ path: dbPath, migrations: THROUGH_2 })
-  const create = (title: string) => session.db.prepare(`INSERT INTO team_tasks
+  const insert = session.db.prepare(`INSERT INTO team_tasks
     (id, team_id, title, status, creator_kind, creator_session, revision, created_at, updated_at)
     VALUES (?, ?, ?, ?, 'human', NULL, 1, '2026-10-01T00:00:00.000Z', ?)`)
-  create('Done').run('task-done', TEAM, 'Done', 'done', '2026-10-05T00:00:00.000Z')
-  create('Cancelled').run('task-cancelled', TEAM, 'Cancelled', 'cancelled', '2026-10-06T00:00:00.000Z')
-  create('Open').run('task-open', TEAM, 'Open', 'active', '2026-10-07T00:00:00.000Z')
+  insert.run('task-done', TEAM, 'Done', 'done', '2026-10-05T00:00:00.000Z')
+  insert.run('task-cancelled', TEAM, 'Cancelled', 'cancelled', '2026-10-06T00:00:00.000Z')
+  insert.run('task-open', TEAM, 'Open', 'active', '2026-10-07T00:00:00.000Z')
   expect(session.db.prepare("SELECT name FROM sqlite_master WHERE name = 'team_task_status_events'").get()).toBeNull()
   session.close()
   return { done: 'task-done', cancelled: 'task-cancelled', open: 'task-open' }

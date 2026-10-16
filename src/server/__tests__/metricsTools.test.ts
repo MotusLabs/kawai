@@ -29,7 +29,7 @@ test('the tool returns the caller team\'s computeMetrics result and never anothe
   const result = await tool.team_metrics({ window: '7d', team_id: OTHER, teamId: OTHER })
   expect(result).toEqual(readMetrics(s.db, TEAM, '7d', null, END))
   expect(result.teamId).toBe(TEAM)
-  expect(result.metrics.find(m => m.id === 'lead_time_p50')!.drill.tasks).toEqual(['mine'])
+  expect(result.metrics.find(m => m.id === 'lead_time_p50')!.drill.tasks).toEqual([{ id: 'mine', title: 'mine' }])
   expect(result.usageCaveat).toContain('Task subagents')
   const sliced = await tool.team_metrics({ window: '3d', slice: { kind: 'memoryFile', file: ' MEMORY.md ' } })
   expect(sliced.slice).toEqual({ kind: 'memoryFile', file: 'MEMORY.md' })

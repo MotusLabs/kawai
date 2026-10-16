@@ -79,10 +79,14 @@ test('mail sent or delivered in range and park episodes opened before it load', 
   s.event(parked, 'parked', 15 * 24)
   s.event(parked, 'unparked', 13 * 24)
   s.message({ createdHoursAgo: 2, team: '/other/.git' })
+  // Old mail dead-lettered in range loads too, so its friction drill-down can open the thread.
+  const old = s.message({ createdHoursAgo: 30 * 24 })
+  s.event(old, 'dead-lettered', 2)
 
   const inputs = loadMetricsInputs(s.db, TEAM, FROM, END)
-  expect([...inputs.messages.keys()].sort()).toEqual([inRange, parked].sort())
-  expect(inputs.messageEvents.map(e => e.kind)).toEqual(['parked', 'unparked'])
+  expect([...inputs.messages.keys()].sort()).toEqual([inRange, parked, old].sort())
+  expect(inputs.messages.get(old)!.threadId).toBe(old)
+  expect(inputs.messageEvents.map(e => e.kind)).toEqual(['parked', 'unparked', 'dead-lettered'])
   s.db.close()
 })
 

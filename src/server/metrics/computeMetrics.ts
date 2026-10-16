@@ -31,14 +31,18 @@ function observations(ctx: MetricsContext): Map<string, Observation[]> {
   return byMetric
 }
 
-function metricValue(def: MetricDef, current: Observation[], baseline: Observation[], slice: MetricSlice | null, manifests: MetricsInputs['manifests']): MetricValue {
+function metricValue(def: MetricDef, current: Observation[], baseline: Observation[], slice: MetricSlice | null, inputs: MetricsInputs): MetricValue {
+  const manifests = inputs.manifests
   const now = aggregate(def, current)
   const before = aggregate(def, baseline)
   const value: MetricValue = {
     id: def.id, value: now.value, n: now.n, insufficient: now.insufficient,
     baseline: { value: before.value, n: before.n, insufficient: before.insufficient },
     approximate: now.approximate, partial: now.partial,
-    drill: { tasks: now.tasks, messages: now.messages },
+    drill: {
+      tasks: now.tasks.map(id => ({ id, title: inputs.tasks.get(id)?.title ?? id })),
+      messages: now.messages.map(id => ({ id, threadId: inputs.messages.get(id)?.threadId ?? id })),
+    },
   }
   if (def.breakdown) value.breakdown = rows(def, current, baseline, o => o.key)
   if (slice) {
@@ -66,7 +70,7 @@ export function computeMetrics(inputs: MetricsInputs, window: MetricWindow, slic
     baselineStart: new Date(inputs.end - 2 * span).toISOString(),
     computedAt: new Date(computedAt).toISOString(),
     minSample: MIN_SAMPLE,
-    metrics: METRIC_DEFS.map(def => metricValue(def, current.get(def.id) ?? [], baseline.get(def.id) ?? [], slice, inputs.manifests)),
+    metrics: METRIC_DEFS.map(def => metricValue(def, current.get(def.id) ?? [], baseline.get(def.id) ?? [], slice, inputs)),
     usageCaveat: USAGE_CAVEAT,
     coverageCaveat: COVERAGE_CAVEAT,
   }
