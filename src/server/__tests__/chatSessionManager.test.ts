@@ -348,6 +348,22 @@ function writeTranscript(sdkSessionId: string, content: string): string {
 describe('ChatSessionManager', () => {
   let tempDir: string
   let db: SessionDatabase
+
+  /**
+   * The shipped catalog has no LAN profile; tests that exercise one write a
+   * user-level fixture (reserved documentation address) into the pinned HOME.
+   * A user file replaces the shipped default wholesale, so the shipped
+   * profiles ride along.
+   */
+  function writeLanCatalog(): void {
+    const shipped = JSON.parse(
+      fs.readFileSync(path.resolve(import.meta.dir, '../../../config/profiles.default.json'), 'utf8'),
+    ) as Record<string, unknown>
+    shipped.lan = { label: 'LAN', env: { ANTHROPIC_BASE_URL: 'http://192.0.2.10:9292' } }
+    fs.mkdirSync(path.join(tempDir, '.kawai'), { recursive: true })
+    fs.writeFileSync(path.join(tempDir, '.kawai', 'profiles.json'), JSON.stringify(shipped))
+  }
+
   const originalApiKey = process.env.ANTHROPIC_API_KEY
   const originalOAuthToken = process.env.CLAUDE_CODE_OAUTH_TOKEN
   const originalAuthToken = process.env.ANTHROPIC_AUTH_TOKEN
@@ -419,7 +435,7 @@ describe('ChatSessionManager', () => {
     expect((await restored.manager.send(id, 'resume')).ok).toBe(true)
     expect(restored.handles[0]!.options.resume).toBe('profile-conversation')
     expect(restored.handles[0]!.options.model).toBe('sonnet')
-    expect(restored.handles[0]!.options.env?.ANTHROPIC_BASE_URL).toBe('https://zai.ruslan.casa/api/anthropic')
+    expect(restored.handles[0]!.options.env?.ANTHROPIC_BASE_URL).toBe('https://api.z.ai/api/anthropic')
     restored.manager.shutdown()
     db.updateChatSession(id, { claudeProfileId: 'removed-profile' })
     const unknown = await createHarness(db)
@@ -511,6 +527,7 @@ describe('ChatSessionManager', () => {
   })
 
   test('profile auth uses global credentials and refuses unauthenticated launch without side effects', async () => {
+    writeLanCatalog()
     let globalEnv = { ANTHROPIC_AUTH_TOKEN: 'global-token' }
     const registry = new SessionRegistry()
     const handles: FakeHandle[] = []
@@ -534,6 +551,7 @@ describe('ChatSessionManager', () => {
   })
 
   test('availability caches complete profile configuration and retries failures', async () => {
+    writeLanCatalog()
     let globalEnv = { ANTHROPIC_AUTH_TOKEN: 'global-token' }
     const launches: ClaudeLaunchConfiguration[] = []
     let fail = false

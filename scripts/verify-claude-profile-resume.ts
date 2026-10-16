@@ -9,6 +9,15 @@ import { SessionRegistry } from '../src/server/SessionRegistry'
 import { initDatabase } from '../src/server/db'
 import type { ChatEvent } from '../src/shared/chat'
 import { mockMessageResponse } from './lib/claudeProfileMock'
+import { resolveClaudeProfile } from '../src/server/chat/ClaudeProfiles'
+
+/** The GLM base URL comes from the resolved catalog instead of a hardcoded copy. */
+function glmBaseUrl(): string {
+  const launch = resolveClaudeProfile('glm', {})
+  const url = launch.env?.ANTHROPIC_BASE_URL
+  if (!url) throw new Error('Catalog does not define a glm base URL')
+  return url
+}
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'profile-resume-'))
 const oldConfigDir = process.env.CLAUDE_CONFIG_DIR
@@ -31,7 +40,7 @@ const events: { sessionId: string; event: ChatEvent }[] = []
 const secret = 'synthetic-profile-resume-key'
 const factory: ChatQueryFactory = ({ prompt, options }) => {
   const route = options.model === 'sonnet' ? 'glm' : 'minimax'
-  const expected = route === 'glm' ? 'https://zai.ruslan.casa/api/anthropic' : 'https://api.minimax.io/anthropic'
+  const expected = route === 'glm' ? glmBaseUrl() : 'https://api.minimax.io/anthropic'
   if (options.env?.ANTHROPIC_BASE_URL !== expected) throw new Error('Incorrect selected catalog routing')
   const baseUrl = `http://127.0.0.1:${server.port}/${route}`
   const settings = typeof options.settings === 'object' ? options.settings : {}

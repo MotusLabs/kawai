@@ -20,12 +20,39 @@ afterEach(() => {
   fs.rmSync(tempHome, { recursive: true, force: true })
 })
 
+/** Writes a temp user-level catalog; the shipped catalog never defines LAN. */
+function userCatalog(entries: Record<string, unknown>): void {
+  const dir = path.join(tempHome, '.kawai')
+  fs.mkdirSync(dir, { recursive: true })
+  fs.writeFileSync(path.join(dir, 'profiles.json'), JSON.stringify(entries))
+}
+
+/** A LAN-like fixture entry (reserved documentation address, no shipped twin). */
+function lanEntry(extra: { label?: string; executable?: string; env?: Record<string, string> } = {}): Record<string, unknown> {
+  return {
+    label: 'LAN',
+    ...extra,
+    env: { ANTHROPIC_BASE_URL: 'http://192.0.2.10:9292', ...extra.env },
+  }
+}
+
+/**
+ * A user-level catalog that keeps the shipped profiles (a user file replaces
+ * the shipped default wholesale) and adds the LAN entry the tests exercise.
+ */
+function catalogWithLan(): void {
+  const shipped = JSON.parse(
+    fs.readFileSync(path.resolve(import.meta.dir, '../../../config/profiles.default.json'), 'utf8'),
+  ) as Record<string, unknown>
+  userCatalog({ ...shipped, lan: lanEntry({ env: { CLAUDE_CODE_ATTRIBUTION_HEADER: '0' } }) })
+}
+
 describe('Claude profile resolution', () => {
   test('catalog metadata has stable order and contains only identifiers and labels', () => {
     expect(claudeProfileMetadata({ homeDir: tempHome })).toEqual([
       { id: 'default', label: 'Default' }, { id: 'glm', label: 'GLM' },
       { id: 'minimax', label: 'MiniMax' }, { id: 'mimo', label: 'MiMo' },
-      { id: 'kimi', label: 'Kimi' }, { id: 'lan', label: 'LAN' },
+      { id: 'kimi', label: 'Kimi' },
     ])
   })
   test('documentation matches catalog labels and effective mappings', () => {
@@ -52,19 +79,24 @@ describe('Claude profile resolution', () => {
     const ctx = { homeDir: tempHome }
     const glm = resolveClaudeProfile('glm', {}, ctx)
     expect(glm.model).toBe('sonnet')
-    expect(glm.env).toMatchObject({ ANTHROPIC_BASE_URL: 'https://zai.ruslan.casa/api/anthropic', ANTHROPIC_DEFAULT_SONNET_MODEL: 'glm-5.3-flash[1m]', ANTHROPIC_DEFAULT_OPUS_MODEL: 'glm-5.3[1m]', CLAUDE_CODE_AUTO_COMPACT_WINDOW: '1000000' })
+    expect(glm.env).toMatchObject({ ANTHROPIC_BASE_URL: 'https://api.z.ai/api/anthropic', ANTHROPIC_DEFAULT_SONNET_MODEL: 'glm-5.3-flash[1m]', ANTHROPIC_DEFAULT_OPUS_MODEL: 'glm-5.3[1m]', CLAUDE_CODE_AUTO_COMPACT_WINDOW: '1000000' })
     const minimax = resolveClaudeProfile('minimax', {}, ctx)
     expect(minimax.model).toBe('MiniMax-M3')
     expect(minimax.env).toMatchObject({ ANTHROPIC_BASE_URL: 'https://api.minimax.io/anthropic', ANTHROPIC_MODEL: 'MiniMax-M3' })
     const mimo = resolveClaudeProfile('mimo', {}, ctx)
     expect(mimo.model).toBe('mimo-v2.6-pro')
-    expect(mimo.env).toMatchObject({ ANTHROPIC_BASE_URL: 'https://xiaomi.ruslan.casa/anthropic', ANTHROPIC_MODEL: 'mimo-v2.6-pro', ANTHROPIC_DEFAULT_SONNET_MODEL: 'mimo-v2.6-flash', ANTHROPIC_DEFAULT_OPUS_MODEL: 'mimo-v2.6-pro' })
-    expect(resolveClaudeProfile('kimi', {}, ctx).env?.ANTHROPIC_BASE_URL).toBe('https://kimi.ruslan.casa/')
-    expect(resolveClaudeProfile('lan', {}, ctx).env).toMatchObject({ ANTHROPIC_BASE_URL: 'http://ai.lan:9292', CLAUDE_CODE_ATTRIBUTION_HEADER: '0' })
+    expect(mimo.env).toMatchObject({ ANTHROPIC_BASE_URL: 'https://api.xiaomimimo.com/anthropic', ANTHROPIC_MODEL: 'mimo-v2.6-pro', ANTHROPIC_DEFAULT_SONNET_MODEL: 'mimo-v2.6-flash', ANTHROPIC_DEFAULT_OPUS_MODEL: 'mimo-v2.6-pro' })
+    expect(resolveClaudeProfile('kimi', {}, ctx).env?.ANTHROPIC_BASE_URL).toBe('https://api.moonshot.ai/anthropic')
     expect(resolveClaudeProfile('kimi', {}, ctx).model).toBeUndefined()
+  })
+  test('a user-catalog LAN entry resolves like a shipped profile would', () => {
+    catalogWithLan()
+    const ctx = { homeDir: tempHome }
+    expect(resolveClaudeProfile('lan', {}, ctx).env).toMatchObject({ ANTHROPIC_BASE_URL: 'http://192.0.2.10:9292', CLAUDE_CODE_ATTRIBUTION_HEADER: '0' })
     expect(resolveClaudeProfile('lan', {}, ctx).model).toBeUndefined()
   })
   test('named profiles clean controlled variables, keep runtime and credentials, and never mutate inputs', () => {
+    catalogWithLan()
     const ctx = { homeDir: tempHome }
     const input = Object.fromEntries(PROFILE_CONTROLLED_ENV.map((name) => [name, 'conflict']))
     Object.assign(input, { ANTHROPIC_AUTH_TOKEN: 'test-secret', PATH: '/test/path', HOME: '/test/home', CLAUDE_CONFIG_DIR: '/test/config', UNRELATED: 'yes' })
@@ -84,18 +116,12 @@ describe('Claude profile resolution', () => {
 })
 
 describe('executable-backed profiles', () => {
-  function userCatalog(entries: Record<string, unknown>): void {
-    const dir = path.join(tempHome, '.kawai')
-    fs.mkdirSync(dir, { recursive: true })
-    fs.writeFileSync(path.join(dir, 'profiles.json'), JSON.stringify(entries))
-  }
-
   test('launch hands off the merged base environment with no inline settings', () => {
-    userCatalog({ lan: { label: 'LAN', executable: '/usr/local/bin/claude-lan', env: { ANTHROPIC_BASE_URL: 'http://ai.lan:9292' } } })
+    userCatalog({ lan: { ...lanEntry(), executable: '/usr/local/bin/claude-lan' } })
     const launch = resolveClaudeProfile('lan', { ANTHROPIC_AUTH_TOKEN: 'secret', ANTHROPIC_MODEL: 'global-model' }, { homeDir: tempHome })
     expect(launch.executable).toBe('/usr/local/bin/claude-lan')
     // Credentials and inherited routing pass through; entry values win over them.
-    expect(launch.env).toMatchObject({ ANTHROPIC_AUTH_TOKEN: 'secret', ANTHROPIC_BASE_URL: 'http://ai.lan:9292' })
+    expect(launch.env).toMatchObject({ ANTHROPIC_AUTH_TOKEN: 'secret', ANTHROPIC_BASE_URL: 'http://192.0.2.10:9292' })
     expect(launch.env?.ANTHROPIC_MODEL).toBe('global-model')
     // No inline controlled settings: the wrapper owns its provider config.
     expect(launch.settings).toBeUndefined()

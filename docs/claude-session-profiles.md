@@ -11,11 +11,10 @@ The shipped default catalog:
 | ID | Label | Routing and models |
 | --- | --- | --- |
 | default | Default | Existing server environment and global provider Settings |
-| glm | GLM | `https://zai.ruslan.casa/api/anthropic`; starts on Sonnet, mapped to `glm-5.3-flash[1m]`; Opus maps to `glm-5.3[1m]`; auto-compact window `1000000` |
+| glm | GLM | `https://api.z.ai/api/anthropic`; starts on Sonnet, mapped to `glm-5.3-flash[1m]`; Opus maps to `glm-5.3[1m]`; auto-compact window `1000000` |
 | minimax | MiniMax | `https://api.minimax.io/anthropic`; `MiniMax-M3` |
-| mimo | MiMo | `https://xiaomi.ruslan.casa/anthropic`; starts on `mimo-v2.6-pro`; Sonnet maps to `mimo-v2.6-flash`, Opus to `mimo-v2.6-pro` |
-| kimi | Kimi | `https://kimi.ruslan.casa/`; no prescribed model |
-| lan | LAN | `http://ai.lan:9292`; attribution header disabled; no prescribed model |
+| mimo | MiMo | `https://api.xiaomimimo.com/anthropic`; starts on `mimo-v2.6-pro`; Sonnet maps to `mimo-v2.6-flash`, Opus to `mimo-v2.6-pro` |
+| kimi | Kimi | `https://api.moonshot.ai/anthropic`; no prescribed model |
 
 ## Catalog files
 
@@ -25,6 +24,16 @@ every `.kawai/profiles.json` from the session's project path up to the
 filesystem root, above a user-level `~/.kawai/profiles.json` that replaces the
 shipped default (`config/profiles.default.json`) when present — in container
 deployments, mount the user-level file (ConfigMap) or bake an image default.
+
+The shipped catalog lists public provider endpoints only. Private gateways —
+an internal proxy that injects API keys, or a LAN relay — belong in a catalog
+kawai does not ship: the user-level `~/.kawai/profiles.json`, or an untracked
+project `.kawai/profiles.json` (keep it out of version control). For example:
+
+```json
+{ "internal-glm": { "label": "GLM (internal)",
+    "env": { "ANTHROPIC_BASE_URL": "https://glm.example.internal/api/anthropic" } } }
+```
 
 Entries with the same id merge per environment key: the nearest file wins,
 and an empty value neutralizes an inherited value. Scalar fields (`label`,
@@ -39,7 +48,7 @@ home before discovery, so the picker and creation read the same files.
   "glm-flash": {
     "label": "GLM Flash",
     "model": "glm-5.3-flash[1m]",
-    "env": { "ANTHROPIC_BASE_URL": "https://zai.ruslan.casa/api/anthropic" }
+    "env": { "ANTHROPIC_BASE_URL": "https://glm.example.internal/api/anthropic" }
   }
 }
 ```
@@ -94,7 +103,7 @@ cleans and applies named-profile controlled variables. Controlled variables
 are routing, model and model aliases, attribution, and auto-compaction fields
 listed in PROFILE_CONTROLLED_ENV. Named profiles neutralize conflicting
 user/project/local environment settings through the SDK flag settings layer.
-Prescribed startup models use options.model. Kimi and LAN retain normal model
+Prescribed startup models use options.model. Kimi retains normal model
 selection from Claude settings. Unrelated project settings and instructions
 still load. Managed organization policies retain their authority.
 
