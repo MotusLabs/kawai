@@ -15,13 +15,35 @@ export interface ChatTimeLabels {
   full: string
 }
 
+// A formatter is expensive to construct. Cache formatting contexts, never
+// message timestamps; explicit-zone callers cannot replace browser defaults.
+const formatters = new Map<string, Intl.DateTimeFormat>()
+const styles = {
+  clock: { hour: '2-digit', minute: '2-digit' },
+  full: { dateStyle: 'full', timeStyle: 'long' },
+  day: { year: 'numeric', month: '2-digit', day: '2-digit' },
+  dayLabel: { dateStyle: 'full' },
+} as const
+
+function formatter(kind: keyof typeof styles, timeZone?: string): Intl.DateTimeFormat {
+  const key = JSON.stringify([kind, timeZone ?? null])
+  let value = formatters.get(key)
+  if (!value) {
+    value = new Intl.DateTimeFormat(kind === 'day' ? 'en-CA' : undefined, { ...styles[kind], timeZone })
+    // Bounded even if explicit-zone callers supply many different zones.
+    if (formatters.size >= 32) formatters.delete(formatters.keys().next().value!)
+    formatters.set(key, value)
+  }
+  return value
+}
+
 export function chatTimeLabels(at: string, timeZone?: string): ChatTimeLabels | null {
   const date = validTime(at)
   if (!date) return null
   return {
     iso: date.toISOString(),
-    clock: new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit', timeZone }).format(date),
-    full: new Intl.DateTimeFormat(undefined, { dateStyle: 'full', timeStyle: 'long', timeZone }).format(date),
+    clock: formatter('clock', timeZone).format(date),
+    full: formatter('full', timeZone).format(date),
   }
 }
 
@@ -29,12 +51,12 @@ export function chatTimeLabels(at: string, timeZone?: string): ChatTimeLabels | 
 export function chatDayKey(at: string, timeZone?: string): string | null {
   const date = validTime(at)
   if (!date) return null
-  return new Intl.DateTimeFormat('en-CA', { year: 'numeric', month: '2-digit', day: '2-digit', timeZone }).format(date)
+  return formatter('day', timeZone).format(date)
 }
 
 /** A day separator's label, e.g. `Thursday, October 15, 2026`. */
 export function chatDayLabel(at: string, timeZone?: string): string | null {
   const date = validTime(at)
   if (!date) return null
-  return new Intl.DateTimeFormat(undefined, { dateStyle: 'full', timeZone }).format(date)
+  return formatter('dayLabel', timeZone).format(date)
 }
