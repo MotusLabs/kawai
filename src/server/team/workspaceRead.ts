@@ -89,6 +89,7 @@ export function memberRows(
         ? { parkIfResetWithinMs: group.onLimit.parkIfResetWithinMs, otherwise: group.onLimit.otherwise, forwardTo: group.onLimit.forwardTo }
         : { parkIfResetWithinMs: group.onLimit.parkIfResetWithinMs, otherwise: group.onLimit.otherwise },
       ...(group.effort !== undefined ? { effort: group.effort } : {}),
+      ...(group.profileEffort !== undefined ? { profileEffort: { ...group.profileEffort } } : {}),
       warnings: [...group.warnings],
       sources: sources.map(({ file, layer, inEffect }) => ({ file, layer, inEffect })),
       members,

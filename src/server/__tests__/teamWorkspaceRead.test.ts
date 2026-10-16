@@ -162,6 +162,19 @@ describe('memberRows (2.2)', () => {
     })
   })
 
+  test('effort and profileEffort are projected as copies, and only when set', () => {
+    const cat = catalog()
+    const entry = cat.groups.get('devs')!
+    const bare = memberRows(cat, [], () => ({}))[0]!
+    expect('effort' in bare || 'profileEffort' in bare).toBe(false)
+    entry.group.effort = 'low'
+    entry.group.profileEffort = { haiku: 'xhigh' }
+    const row = memberRows(cat, [], () => ({}))[0]!
+    expect(row.effort).toBe('low')
+    expect(row.profileEffort).toEqual({ haiku: 'xhigh' })
+    expect(row.profileEffort).not.toBe(entry.group.profileEffort)
+  })
+
   test('membership lists only live members of the group; archived and other groups stay out', () => {
     const rows = memberRows(
       catalog(),
