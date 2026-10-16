@@ -75,7 +75,7 @@ export type ValidateInput =
 
 export type ValidateOutcome =
   | { ok: true; report: PlanValidationReport; reportId: string | null; stored: boolean; dryRun: boolean }
-  | { ok: false; reason: 'not-found' | 'target'; message: string }
+  | { ok: false; reason: 'not-found' | 'target' | 'payload'; message: string }
 
 export { ASSESS_TEXT_LIMIT, AGENT_RECORD_LIMIT } from './validationAssess'
 
@@ -282,7 +282,7 @@ export class ValidationService {
    */
   async validate(caller: ValidationCaller, input: ValidateInput): Promise<ValidateOutcome> {
     if ('revision' in input && input.revision !== undefined && 'draftId' in input && input.draftId !== undefined) {
-      return { ok: false, reason: 'not-found', message: 'Pass revision or draft_id, not both: a revision validates what was submitted, a draft dry-runs it.' }
+      return { ok: false, reason: 'payload', message: 'Pass revision or draft_id, not both: a revision validates what was submitted, a draft dry-runs it.' }
     }
     const team = await this.context(caller)
     const plan = this.options.plans.forTeam(team.teamId, input.planId)

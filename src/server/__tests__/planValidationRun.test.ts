@@ -100,6 +100,14 @@ function fakeAdapter(options: { deltas?: Record<string, Array<{ capability: stri
 }
 
 describe('ValidationService.validate (D8)', () => {
+  test('revision plus draft_id is refused with the payload reason, not not-found (L-4)', async () => {
+    const b = use(fakeAdapter())
+    const { planId, revision } = await b.draftInReview()
+    const outcome = await b.validation.validate(b.agent('dev'), { planId, revision, draftId: 'dev' } as never)
+    expect(outcome).toMatchObject({ ok: false, reason: 'payload' })
+    expect(outcome.ok === false && outcome.message).toContain('not both')
+  })
+
   const touching = { capability: 'chat', operation: 'MODIFIED', requirement: 'Presence' } as const
 
   test('two concurrent requests run once and both receive its report', async () => {
