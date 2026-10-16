@@ -70,7 +70,12 @@ export class ValidationStore {
     return this.db.transaction(write)()
   }
 
-  /** Insert with `seq = max(seq) + 1` (D1); the newest report is `max(seq)`. */
+  /**
+   * Insert with `seq = max(seq) + 1` (D1); the newest report is `max(seq)`.
+   * Runs inside `atomically` on this single connection (SQLite serializes
+   * the read and the insert), so a `seq` unique violation reaching a caller
+   * means a second writer — never an expected race to resolve here.
+   */
   insertReport(input: NewValidationReport, now = nowIso()): PlanValidationReport {
     const seq = this.nextSeq(input.planId, input.revision)
     const id = `pvr-${crypto.randomUUID()}`

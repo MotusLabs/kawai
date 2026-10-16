@@ -39,7 +39,6 @@ CREATE TABLE IF NOT EXISTS plan_validation_reports (
   created_at TEXT NOT NULL,
   UNIQUE (plan_id, revision, seq)
 );
-CREATE INDEX IF NOT EXISTS plan_validation_reports_revision ON plan_validation_reports (plan_id, revision, seq);
 CREATE TABLE IF NOT EXISTS plan_assessments (
   id TEXT PRIMARY KEY,
   plan_id TEXT NOT NULL,

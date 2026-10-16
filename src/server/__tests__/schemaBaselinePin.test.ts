@@ -62,7 +62,7 @@ const migration3: SchemaShape['tables'] = {
       ...['inputs_json', 'findings_json', 'relations_json', 'evidence_json', 'readiness_json'].map(name => column(name)),
       integer('ready'), column('requested_kind'), optional('requested_session'), column('created_at'),
     ],
-    indexes: [{ name: 'plan_validation_reports_revision', unique: 0, columns: ['plan_id', 'revision', 'seq'] }],
+    indexes: [],
   },
   plan_assessments: {
     columns: [id, column('plan_id'), integer('revision'), column('kind'), column('payload_json'), column('author_kind'), optional('author_session'), optional('command_id'), column('created_at')],
