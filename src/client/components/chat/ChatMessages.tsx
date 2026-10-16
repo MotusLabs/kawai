@@ -14,7 +14,7 @@ import type { ChatEvent } from '@shared/chat'
 import { snippetLabel } from '@shared/sessionSearch'
 import type { SendClientMessage, Session } from '@shared/types'
 import type { SessionDirectoryEntry } from '@shared/team'
-import { Fragment, type ReactNode } from 'react'
+import { Fragment, memo, useMemo, type ReactNode } from 'react'
 import Markdown from '../Markdown'
 import { AsideRow, DaySeparator, MessageRow, rowSpacing } from './ChatRow'
 import ChatTaskRow from './ChatTaskRow'
@@ -43,7 +43,7 @@ function SummaryLabel({ label, detail, failed = false }: { label: string; detail
   </summary>
 }
 
-export default function ChatMessages({ events, projectPath, sessionId, sendMessage, connected, archived, sessions, directory, onOpenParticipant, agentLabel = 'Claude' }: {
+function ChatMessagesView({ events, projectPath, sessionId, sendMessage, connected, archived, sessions, directory, onOpenParticipant, agentLabel = 'Claude' }: {
   events: ChatEvent[]; projectPath?: string
   /** The session's agent identity (from its agent kind, never the model string). */
   agentLabel?: string
@@ -60,8 +60,9 @@ export default function ChatMessages({ events, projectPath, sessionId, sendMessa
     <ParticipantName sessionId={id} senderKind={senderKind} sessions={sessions} directory={directory}
       {...(onOpenParticipant ? { onOpen: onOpenParticipant } : {})} />
 
-  const entries = toolEntries(events).filter(isVisibleEntry)
-  const layouts = layoutRows(entries, { today: chatDayKey(new Date().toISOString()) })
+  const entries = useMemo(() => toolEntries(events).filter(isVisibleEntry), [events])
+  const today = chatDayKey(new Date().toISOString())
+  const layouts = useMemo(() => layoutRows(entries, { today }), [entries, today])
 
   /** A message row's author, body, and body surface; null for aside rows. */
   const message = (event: ChatEvent): { author: ReactNode; role: 'user' | 'assistant' | 'peer'; body: ReactNode; bodyClassName?: string } | null => {
@@ -216,3 +217,7 @@ export default function ChatMessages({ events, projectPath, sessionId, sendMessa
     }
   }
 }
+
+// Normal prop comparison retains updates to names, archive state, and paths.
+const ChatMessages = memo(ChatMessagesView)
+export default ChatMessages

@@ -5,7 +5,7 @@
 import { afterEach, beforeEach, expect, test } from 'bun:test'
 import TestRenderer, { act } from 'react-test-renderer'
 import type { AttentionItem, MorningSummary, TeamWorkspaceSnapshot } from '@shared/teamWorkspace'
-import TeamAttentionQueue, { focusAfterRemoval } from '../components/team/TeamAttentionQueue'
+import TeamAttentionQueue, { attentionKindLabel, focusAfterRemoval } from '../components/team/TeamAttentionQueue'
 import TeamMorningSummary from '../components/team/TeamMorningSummary'
 import TeamWorkspaceBands from '../components/team/TeamWorkspaceBands'
 import { openAttentionLink } from '../components/team/attentionLinks'
@@ -154,4 +154,21 @@ test('opening a chat from an item leaves the Tasks tab’s selection and filters
   expect(useTeamWorkspaceStore.getState().views['/repo']!.tabs.tasks).toMatchObject({ search: 'export', filters: { worktree: '/repo/.wt', awaitingHuman: true } })
   expect(useTeamTaskStore.getState().views['/repo']!.selectedTaskId).toBe('t-1')
   useTeamTaskStore.setState({ views: {} })
+})
+
+test('pending acceptance and fixes requested have labels; an unknown kind reads as itself', () => {
+  expect(attentionKindLabel('pending-acceptance')).toBe('Pending acceptance')
+  expect(attentionKindLabel('fixes-requested')).toBe('Fixes requested')
+  expect(attentionKindLabel('plan-hold')).toBe('plan-hold')
+})
+
+test('a fixes-requested item renders under agent-owned waits with its label and next action', () => {
+  let renderer!: TestRenderer.ReactTestRenderer
+  act(() => {
+    renderer = TestRenderer.create(<TeamAttentionQueue loaded onOpen={() => {}}
+      items={[item('fixes-requested:r-1', { requiresHuman: false, nextAction: 'Wait for fixes', link: { kind: 'task', id: 't-1' } })]} />)
+  })
+  const kinds = byId(renderer, 'attention-kind').map(textOf)
+  expect(kinds).toEqual(['Fixes requested'])
+  expect(textOf(renderer.root)).toContain('Wait for fixes')
 })

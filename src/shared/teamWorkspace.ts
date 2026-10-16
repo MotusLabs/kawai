@@ -8,7 +8,9 @@ import type { TaskStatus } from './teamTasks'
 /**
  * What an attention item is about (D5). The Phase 1 registry produces
  * approvals, questions, uncertain deliveries, and staffing waits;
- * `pending-acceptance` joins with `task-results-handoffs`. Wave C kinds
+ * `pending-acceptance` joins with `task-results-handoffs`, and
+ * `fixes-requested` (a failing review awaiting its submitter's fixes) with
+ * `attention-acceptance-ownership`. Wave C kinds
  * (plan holds, stalls, Lead decision cards) extend this list — the type
  * stays open to plain strings so an unrecognized kind renders instead of
  * being dropped.
@@ -19,6 +21,7 @@ export type AttentionKind =
   | 'uncertain-delivery'
   | 'staffing-wait'
   | 'pending-acceptance'
+  | 'fixes-requested'
   | (string & {})
 
 /** Who an attention item is waiting on: the human, one session, or a group. */
@@ -216,6 +219,8 @@ export interface TeamMemberRow {
   onLimit: { parkIfResetWithinMs: number; otherwise: 'forward' | 'release'; forwardTo?: string }
   /** Unset = Claude Code settings decide (group effort). */
   effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+  /** Valid per-profile overrides of `effort` (group-profile-effort); absent when none. */
+  profileEffort?: Record<string, 'low' | 'medium' | 'high' | 'xhigh' | 'max'>
   /** Problems that fell back to defaults, naming what fell back. */
   warnings: string[]
   /** Every layer's file for this group; exactly one is in effect. */

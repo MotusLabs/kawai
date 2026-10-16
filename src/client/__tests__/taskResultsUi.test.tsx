@@ -149,9 +149,9 @@ test('the release dialog closes once its listed members are released, even when 
 test('list rows badge a submitted, flagged, or accepted result, and nothing for an unsubmitted task', () => {
   useTeamTaskStore.getState().open('dev')
   const rows = [
-    task({ id: 'a', outstandingResult: { id: 'r', needsReevaluation: false, accepted: false } }),
-    task({ id: 'b', outstandingResult: { id: 'r', needsReevaluation: true, accepted: false } }),
-    task({ id: 'c', outstandingResult: { id: 'r', needsReevaluation: false, accepted: true } }),
+    task({ id: 'a', outstandingResult: { id: 'r', needsReevaluation: false, accepted: false, reviewVerdict: null } }),
+    task({ id: 'b', outstandingResult: { id: 'r', needsReevaluation: true, accepted: false, reviewVerdict: null } }),
+    task({ id: 'c', outstandingResult: { id: 'r', needsReevaluation: false, accepted: true, reviewVerdict: null } }),
     task({ id: 'd', outstandingResult: null }),
   ]
   act(() => { renderer = TestRenderer.create(<TeamTasksPanel teamPath="dev" projectPath="/repo"

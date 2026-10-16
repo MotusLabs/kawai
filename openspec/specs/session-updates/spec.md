@@ -11,12 +11,17 @@ flood clients or trigger re-render storms.
 ### Requirement: Session broadcasts fire only on meaningful changes
 The server SHALL detect session-list changes against activity timestamps
 quantized to 30-second buckets, and SHALL NOT broadcast a session-list update
-when only sub-quantum activity changed. Stored and emitted activity timestamps SHALL retain full precision and
-SHALL never regress during replacement. Creation timestamps SHALL be unaffected.
-Only change detection SHALL use buckets; invalid timestamps SHALL retain raw
-comparison behavior. Activity-only recency and label updates may be delayed
-until a bucket crossing, but emitted timestamps SHALL preserve precise
-status-sort tie-breakers.
+when only sub-quantum activity changed. Only change detection SHALL use
+buckets; creation timestamps and invalid timestamps SHALL keep their existing
+behavior.
+
+#### Scenario: Timestamp precision is preserved
+- **WHEN** activity timestamps are stored, replaced, or emitted
+- **THEN** they retain full precision and never regress during replacement, creation timestamps are unaffected, and invalid timestamps retain raw comparison behavior
+
+#### Scenario: Delayed recency with precise tie-breakers
+- **WHEN** only activity recency and label updates wait for a bucket crossing
+- **THEN** the delay is allowed, and emitted timestamps still preserve precise status-sort tie-breakers
 
 #### Scenario: Sub-quantum churn produces no broadcast
 - **WHEN** a window's content changes repeatedly within one 30-second bucket

@@ -77,7 +77,7 @@ test('the first result is outstanding; a new one supersedes it and every earlier
     [second.id, first.id, third.id],
     [first.id, null, second.id],
   ])
-  expect(store.list(TEAM).find(row => row.id === task.id)?.outstandingResult).toEqual({ id: third.id, needsReevaluation: false, accepted: false })
+  expect(store.list(TEAM).find(row => row.id === task.id)?.outstandingResult).toEqual({ id: third.id, needsReevaluation: false, accepted: false, reviewVerdict: null })
 })
 
 test('findings bind to their result; a newer result has none; acceptance marks exactly one row; all of it survives a reopen', () => {
@@ -96,6 +96,24 @@ test('findings bind to their result; a newer result has none; acceptance marks e
   expect(outstanding!.acceptedAt).toEqual(expect.any(String))
   expect(earlier).toMatchObject({ id: first.id, acceptedBy: null, acceptedAt: null, findings: [{ findings: 'Missing header row' }] })
   expect(store.detail(task.id)!.results!.map(row => row.id)).toEqual([second.id, first.id])
+})
+
+test('reviewVerdict is the verdict of the newest findings bound to the outstanding result', () => {
+  const task = create()
+  const result = submit(task.id)
+  const verdictOf = () => store.list(TEAM).find(row => row.id === task.id)?.outstandingResult?.reviewVerdict
+  const findings = (verdict: 'pass' | 'fail') => store.results.insertFindings({ teamId: TEAM, taskId: task.id, resultId: result.id,
+    handoffId: null, kind: 'review', verdict, findings: 'notes', author: { kind: 'agent', sessionId: 'reviewer' } })
+  expect(verdictOf()).toBeNull()
+  findings('fail')
+  expect(verdictOf()).toBe('fail')
+  findings('pass')
+  expect(verdictOf()).toBe('pass')
+  findings('fail')
+  expect(verdictOf()).toBe('fail')
+  // A newer result inherits no findings.
+  submit(task.id)
+  expect(verdictOf()).toBeNull()
 })
 
 test('Needs re-evaluation is derived from the revision rows: a publication flags, nothing else does, and it never clears', () => {

@@ -1928,7 +1928,8 @@ export class ChatSessionManager {
         ),
         getEffort: () => this.teams.effortFor(
           record.sessionId,
-          this.records.get(record.sessionId)?.groupId
+          this.records.get(record.sessionId)?.groupId,
+          this.records.get(record.sessionId)?.claudeProfileId ?? 'default'
         ),
         getProviderEnv: () => this.providerEnv(),
         // Read per request so a live policy switch reaches the next

@@ -44,6 +44,16 @@ test('a single-layer group names one file; both layers name both with the winner
   expect(textOf(items[1]!)).toContain('/home/u/.kawai/groups/devs.md · user file · overridden')
 })
 
+test('the Effort row shows the group level, then per-profile levels: listed in group order, unlisted alphabetically', () => {
+  const effort = (extra: Partial<TeamMemberRow>) => textOf(byId(mount([row(extra)]), 'member-effort')[0]!)
+  expect(effort({})).toBe('Claude Code settings decide')
+  expect(effort({ effort: 'low' })).toBe('low')
+  expect(effort({ effort: 'low', profileEffort: { glm: 'max', claude: 'xhigh' } })).toBe('low · claude: xhigh · glm: max')
+  expect(effort({ effort: 'low', profileEffort: { zed: 'high', haiku: 'xhigh', glm: 'medium' } }))
+    .toBe('low · glm: medium · haiku: xhigh · zed: high')
+  expect(effort({ profileEffort: { haiku: 'xhigh' } })).toBe('Claude Code settings decide · haiku: xhigh')
+})
+
 test('warnings are shown beside the settings that took effect', () => {
   const renderer = mount([row({ warnings: ['profile "nope" is not defined; dropped'] })])
   expect(textOf(byId(renderer, 'member-warnings')[0]!)).toContain('profile "nope" is not defined; dropped')

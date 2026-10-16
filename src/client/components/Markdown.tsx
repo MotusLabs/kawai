@@ -3,6 +3,7 @@
 // so both render assistant text with the same elements and styling. Sizes are
 // em-relative and the wrapper sets none, so the renderer inherits its base
 // size: the chat's --chat-font-size, or the preview's own text-sm.
+import { memo } from 'react'
 import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import remarkBreaks from 'remark-breaks'
@@ -75,7 +76,7 @@ const markdownComponents: Components = {
   td: ({ children, style }) => <td style={style} className="border border-border px-2 py-1 align-top">{children}</td>,
 }
 
-export default function Markdown({ content }: { content: string }) {
+function Markdown({ content }: { content: string }) {
   return (
     <div className="min-w-0 break-words leading-[1.6] text-primary [overflow-wrap:anywhere]">
       <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]} components={markdownComponents}>
@@ -84,3 +85,6 @@ export default function Markdown({ content }: { content: string }) {
     </div>
   )
 }
+
+// Unchanged history and preview bodies keep their parsed Markdown tree.
+export default memo(Markdown)
