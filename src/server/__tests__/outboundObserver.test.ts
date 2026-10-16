@@ -285,7 +285,9 @@ describe('OutboundObserver', () => {
     expect(performance.now() - started).toBeLessThan(1_000)
     expect(calls).toHaveLength(1)
     const row = calls[0]!
-    // Every stored field, the matches JSON included, stays within 4096.
+    // Every stored field stays within 4096. The matches guard is the
+    // post-serialization shrink loop (its removal is caught); the per-field
+    // cap is belt (CC round 6 L2: raising it alone is not observable).
     expect(row.command.length).toBeLessThanOrEqual(4096)
     expect(row.destination.length).toBeLessThanOrEqual(4096)
     expect(row.matches.length).toBeLessThanOrEqual(4096)

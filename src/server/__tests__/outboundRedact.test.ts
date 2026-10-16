@@ -172,9 +172,11 @@ describe('redact: CC round 3 (body forms, linear userinfo, over-redaction)', () 
     }
   })
 
-  test('the gh secret set continuation join is load-bearing (round 5 R2)', () => {
-    // Without the join, the segment scan stops at the newline and the body
-    // flag on the next line leaks whole.
+  test('a gh secret set body after a continuation redacts (round 5 R2; retitled round 6 L2)', () => {
+    // The join in redactSecretBodies is belt, not load-bearing: the quoted-
+    // value and header rules catch the body independently (verified by
+    // mutation — removing the join keeps this passing). What must hold is
+    // the outcome: no SECRET byte, whatever the line shape.
     const out = redact('gh secret set NAME \\\n -b SECRET')
     expect(out).not.toContain('SECRET')
     expect(out).toContain('‹redacted›')
