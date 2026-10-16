@@ -111,6 +111,54 @@ export async function ghPrMerge(repo: string, prNumber: number, method: MergeMet
 
 // --- CI reads (D10) ---
 
+/** `gh auth status`: exit 0 when the CLI is logged in (the probe's auth check). */
+export async function ghAuthStatus(options: GhCommandOptions = {}): Promise<GithubOutcome<null>> {
+  const result = await call(['auth', 'status'], options)
+  return result.ok ? { ok: true, data: null } : result
+}
+
+/** The repository as gh reads it: its default branch (the direct mechanism's base) and the viewer's write permission. */
+export async function ghRepo(repo: string, options: GhCommandOptions = {}): Promise<GithubOutcome<{ defaultBranch: string | null; canPush: boolean }>> {
+  const args = ['api', `repos/${repo}`]
+  const result = await call(args, options)
+  if (!result.ok) return result
+  const parsed = json<{ default_branch?: unknown; permissions?: { push?: unknown } }>(result.stdout)
+  if (!parsed.ok) return { ok: false, error: { argv: ['gh', ...args], exitCode: 0, httpStatus: null, message: parsed.error } }
+  return {
+    ok: true,
+    data: {
+      defaultBranch: typeof parsed.data.default_branch === 'string' && parsed.data.default_branch !== '' ? parsed.data.default_branch : null,
+      canPush: parsed.data.permissions?.push === true,
+    },
+  }
+}
+
+/** A commit's tree sha — the probe's base tree, read without touching local refs. */
+export async function ghCommitTree(repo: string, sha: string, options: GhCommandOptions = {}): Promise<GithubOutcome<string>> {
+  const args = ['api', `repos/${repo}/git/commits/${sha}`]
+  const result = await call(args, options)
+  if (!result.ok) return result
+  const parsed = json<{ tree?: { sha?: unknown } }>(result.stdout)
+  if (!parsed.ok || typeof parsed.data.tree?.sha !== 'string') {
+    return { ok: false, error: { argv: ['gh', ...args], exitCode: 0, httpStatus: null, message: parsed.ok ? 'the commit carries no tree' : parsed.error } }
+  }
+  return { ok: true, data: parsed.data.tree.sha }
+}
+
+/** A tree's blob entries, recursive: path → blob sha (the changes-on-base comparison's other side). */
+export async function ghTreeEntries(repo: string, treeSha: string, options: GhCommandOptions = {}): Promise<GithubOutcome<Array<{ path: string; sha: string }>>> {
+  const args = ['api', `repos/${repo}/git/trees/${treeSha}?recursive=1`]
+  const result = await call(args, options)
+  if (!result.ok) return result
+  const parsed = json<{ tree?: unknown }>(result.stdout)
+  if (!parsed.ok) return { ok: false, error: { argv: ['gh', ...args], exitCode: 0, httpStatus: null, message: parsed.error } }
+  const entries = (Array.isArray(parsed.data.tree) ? parsed.data.tree : []).flatMap((entry) => {
+    const typed = entry as { path?: unknown; sha?: unknown; type?: unknown }
+    return typed.type === 'blob' && typeof typed.path === 'string' && typeof typed.sha === 'string' ? [{ path: typed.path, sha: typed.sha }] : []
+  })
+  return { ok: true, data: entries }
+}
+
 interface RawCheckRun {
   name?: unknown
   conclusion?: unknown

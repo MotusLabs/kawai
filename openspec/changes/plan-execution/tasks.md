@@ -63,8 +63,8 @@ Implement after `durable-plans`, `strategy-revision-impact`, and `plan-validatio
 
 ## 6. Probe and base checks
 
-- [ ] 6.1 Implement `landingProbe.ts` (plan-landing "landing probe"). It checks git, a GitHub `origin`, `gh auth status`, write permission, the default branch, the floor map, and names taken locally, on `origin`, or as worktrees, unless provisioned by the plan. Verify with tests for each finding, and that the probe writes nothing (refs and worktree list unchanged).
-- [ ] 6.2 Implement the `changes-on-base` comparison (D4). Compare `git hash-object` blob ids of the validated files and touched base specs with `origin`'s tree. Verify with tests: a change only in the main checkout, a design edited on `origin`, and equal content.
+- [x] 6.1 Implement `landingProbe.ts` (plan-landing "landing probe"). It checks git, a GitHub `origin`, `gh auth status`, write permission, the default branch, the floor map, and names taken locally, on `origin`, or as worktrees, unless provisioned by the plan. Verify with tests for each finding, and that the probe writes nothing (refs and worktree list unchanged).
+- [x] 6.2 Implement the `changes-on-base` comparison (D4). Compare `git hash-object` blob ids of the validated files and touched base specs with `origin`'s tree. Verify with tests: a change only in the main checkout, a design edited on `origin`, and equal content.
 
 ## 7. Start, preview, and the preconditions
 
