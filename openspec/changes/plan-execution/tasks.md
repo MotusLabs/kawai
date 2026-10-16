@@ -68,7 +68,7 @@ Implement after `durable-plans`, `strategy-revision-impact`, and `plan-validatio
 
 ## 7. Start, preview, and the preconditions
 
-- [ ] 7.1 Implement `START_PRECONDITIONS` (D4) with every entry. Verify with one test per entry passing and failing, and with a test that every failing entry is reported at once.
+- [x] 7.1 Implement `START_PRECONDITIONS` (D4) with every entry. Verify with one test per entry passing and failing, and with a test that every failing entry is reported at once.
 - [ ] 7.2 Implement `ExecutionService.preview` and `start`: agent refusal, pre-reads, then one transaction for replay, preconditions, rows, and the event, followed by an executor wake. Verify with tests:
   - a lost result replays;
   - a different payload under the same command id is refused naming the field;
