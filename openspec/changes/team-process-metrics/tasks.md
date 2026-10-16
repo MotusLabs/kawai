@@ -37,7 +37,7 @@ Stage 1 is groups 1–7. Stage 2 (groups 8–10) can land separately once stage 
 
 ## 6. Metrics surfaces
 
-- [ ] 6.1 Add `team_metrics` in `src/server/metrics/metricsTools.ts`, bound to the caller's team, joined to `TEAM_ALLOWED_TOOLS`, returning `ProcessMetrics` plus the usage caveat; verify tool tests cover the result matching `computeMetrics` for the same inputs, an unknown window refused naming the allowed ones, and another team's data never returned.
+- [x] 6.1 Add `team_metrics` in `src/server/metrics/metricsTools.ts`, bound to the caller's team, joined to `TEAM_ALLOWED_TOOLS`, returning `ProcessMetrics` plus the usage caveat; verify tool tests cover the result matching `computeMetrics` for the same inputs, an unknown window refused naming the allowed ones, and another team's data never returned.
 - [ ] 6.2 Add `process-metrics-open`/`close`/`refresh` and `process-metrics-snapshot` in `src/server/metrics/metricsConnections.ts` (team addressed by `teamPath`, `unknown-team` refusal) and list them in `CHAT_CONNECTION_TYPES`; verify connection tests cover open, refresh, close, unknown team, and no push on mail changes.
 - [ ] 6.3 Add a CLAUDE.md bullet for the metrics core, cohorts, attribution sides, the tool, and the WS messages; verify it names the window roles, `MIN_SAMPLE`, the guard pairs, and that cooling follows the router's rule.
 

@@ -105,6 +105,7 @@ import { TeamCaps } from '../team/teamCaps'
 import { worktreeRootOf } from '../team/worktreeRoots'
 import { ProvenanceRecorder } from '../metrics/provenanceRecorder'
 import { ChatTurnUsageStore, TurnUsageTracker } from './chatTurnUsageStore'
+import { MetricsReader } from '../metrics/computeMetrics'
 import type { ChatSpawnInfo } from './ChatSessionDriver'
 import { OutboundDestinations } from '../outbound/destinations'
 import {
@@ -968,6 +969,7 @@ export class ChatSessionManager {
     this.turnEnds = new ChatTurnEndStore(options.db.db)
     this.provenance = new ProvenanceRecorder(options.db.db)
     this.turnUsage = new ChatTurnUsageStore(options.db.db)
+    this.metrics = new MetricsReader(options.db.db)
     this.turnUsageTracker = new TurnUsageTracker(this.turnUsage, {
       sessionTask: id => this.records.get(id)?.taskId ?? null,
       latestStart: id => this.provenance.latestStart(id),
@@ -1235,6 +1237,8 @@ export class ChatSessionManager {
   readonly provenance: ProvenanceRecorder
   /** Per-turn token usage of every chat turn (team-process-metrics D1). */
   readonly turnUsage: ChatTurnUsageStore
+  /** Process metrics (team-process-metrics D4/D5), shared by the `team_metrics` tool and the Metrics tab. */
+  readonly metrics: MetricsReader
   private readonly turnUsageTracker: TurnUsageTracker
   /** Durable plans (durable-plans); the plan tools and UI actions go through it. */
   readonly plans: PlanService
@@ -1945,6 +1949,7 @@ export class ChatSessionManager {
       await this.teams.track(record.sessionId, this.records.get(record.sessionId)?.projectPath ?? record.projectPath)
       const teamMcpServer = await createMailboxServer(this.mailbox, record.sessionId, {
         tasks: this.tasks, results: this.results, strategies: this.strategies, plans: this.plans, releases: this.teamMail.releases, management: this.management,
+        metrics: { teamOf: id => this.teams.teamOf(id)?.teamId ?? null, reader: this.metrics },
       })
       const driver = new ChatSessionDriver({
         sessionId: record.sessionId,
