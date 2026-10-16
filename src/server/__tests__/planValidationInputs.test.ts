@@ -169,4 +169,26 @@ describe('readValidationFileInputs (D2)', () => {
     const inputs = await read(['main-change'])
     expect(inputs.adapter).toEqual({ tool: 'openspec', version: '1.14.2', capabilities: ['validate-strict-json', 'show-deltas-json'] })
   })
+
+  test('a moved proposal with unchanged content keeps identical digests', async () => {
+    const files = { 'proposal.md': '# Twin\n', 'specs/chat/spec.md': '## ADDED Requirements\n### Requirement: T\n' }
+    writeChange(repo, 'twin', files)
+    const worktree = path.join(repo, '.worktrees', 'twin')
+    git(['worktree', 'add', '-q', '-b', 'w-twin', worktree], repo)
+    writeChange(worktree, 'twin', files)
+    const fromWorktree = await read(['twin'])
+    expect(fromWorktree.evidence.changes.twin!.root).toBe(worktree)
+    git(['worktree', 'remove', '--force', worktree], repo)
+    const fromMain = await read(['twin'])
+    expect(fromMain.evidence.changes.twin!.root).toBe(repo)
+    // Identical content: the digests — and so the identity — did not move.
+    expect(fromMain.changes[0]).toEqual(fromWorktree.changes[0])
+  })
+
+  test('a symlinked artifact is skipped, never followed', async () => {
+    const changeDir = path.join(repo, 'openspec', 'changes', 'main-change')
+    fs.symlinkSync(path.join(changeDir, 'proposal.md'), path.join(changeDir, 'linked.md'))
+    const inputs = await read(['main-change'])
+    expect(Object.keys(inputs.changes[0]!.artifacts)).not.toContain('linked.md')
+  })
 })

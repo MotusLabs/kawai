@@ -18,7 +18,7 @@ import { conventionWorktreePath } from '../../workspace/changeRegistry'
 import { loadGroupCatalog } from '../../team/groupCatalog'
 import { resolveProfileCatalog } from '../../chat/profileCatalog'
 import { canonicalJson } from '../../../shared/productStrategy'
-import type { ValidationChangeInput, ValidationChangeStatus, ValidationInputs } from '../../../shared/planValidation'
+import { validationInputsHashInput, type ValidationChangeInput, type ValidationChangeStatus, type ValidationInputs } from '../../../shared/planValidation'
 import type { OpenspecAdapter } from './openspecAdapter'
 
 export interface ValidationFileOptions {
@@ -46,20 +46,40 @@ export interface ValidationFileInputs {
 
 const sha256 = (input: string | Buffer) => createHash('sha256').update(input).digest('hex')
 
-/** The file's sha256, or null when absent or unreadable. */
+/** The input identity's digest: sha256 over the shared canonicalizer (D2). The one place both validate and standing hash. */
+export const hashValidationInputs = (inputs: ValidationInputs): string => sha256(validationInputsHashInput(inputs))
+
+/** Spec artifacts are markdown; a file past this cap hashes its first bytes only (a bound, not a verdict). */
+const MAX_DIGEST_BYTES = 4 * 1024 * 1024
+
+/**
+ * A file's sha256 under one policy everywhere: regular files only — a
+ * symlink is skipped, never followed — read via lstat's own size, capped at
+ * `MAX_DIGEST_BYTES`; null when absent or unreadable.
+ */
 function hashFile(file: string): string | null {
   try {
-    return sha256(fs.readFileSync(file))
+    const stat = fs.lstatSync(file)
+    if (!stat.isFile()) return null
+    const length = Math.min(stat.size, MAX_DIGEST_BYTES)
+    const fd = fs.openSync(file, 'r')
+    try {
+      const buffer = Buffer.alloc(length)
+      const bytes = fs.readSync(fd, buffer, 0, length, 0)
+      return sha256(buffer.subarray(0, bytes))
+    } finally {
+      fs.closeSync(fd)
+    }
   } catch {
     return null
   }
 }
 
-/** Whether a change directory exists in this root (a proposal makes it a change). */
+/** Whether a change directory exists in this root (a proposal makes it a change); a symlinked proposal does not. */
 const changeExists = (root: string, change: string): string | null => {
   const dir = path.join(root, 'openspec', 'changes', change)
   try {
-    if (fs.statSync(path.join(dir, 'proposal.md')).isFile()) return dir
+    if (fs.lstatSync(path.join(dir, 'proposal.md')).isFile()) return dir
   } catch { /* absent */ }
   return null
 }
@@ -73,7 +93,7 @@ function archiveDir(mainRoot: string, change: string): string | null {
       if (entry.name !== change && !/^\d{4}-\d{2}-\d{2}-[a-z0-9-]+$/.test(entry.name)) continue
       if (entry.name !== change && !entry.name.endsWith(`-${change}`)) continue
       const dir = path.join(archive, entry.name)
-      if (fs.statSync(path.join(dir, 'proposal.md')).isFile()) return dir
+      if (fs.lstatSync(path.join(dir, 'proposal.md')).isFile()) return dir
     }
   } catch { /* no archive */ }
   return null

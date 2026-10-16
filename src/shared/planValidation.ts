@@ -77,7 +77,11 @@ export type FindingSeverity = 'error' | 'warning' | 'evidence'
 
 export interface Finding {
   check: string
-  /** `${check}:${subject}`, stable within a revision. */
+  /**
+   * Stable within a revision: `${check}:${subject}` for most checks, with
+   * the relation keys embedding their parts (`relations:conflict:a+b:cap/R`,
+   * `relations:overlap:a+b+c:cap`) and findings keyed `finding:<id>`.
+   */
   key: string
   severity: FindingSeverity
   row: ValidationRow
@@ -88,7 +92,7 @@ export interface Finding {
   detail?: unknown
 }
 
-/** `${check}:${subject}` (D3). */
+/** `${check}:${subject}` (D3), the shape most finding keys take. */
 export const findingKey = (check: string, subject: string): string => `${check}:${subject}`
 
 /** D4's conflict error key: `relations:conflict:<a>+<b>:<capability>/<requirement>`. */
@@ -276,7 +280,7 @@ export function validationReadiness(
   const alignments = assessments
     .filter((row): row is Extract<AssessmentRow, { kind: 'alignment' }> => row.kind === 'alignment')
     // Stable sort: ties keep store order (created_at, rowid), which is insert order.
-    .sort((x, y) => x.createdAt.localeCompare(y.createdAt))
+    .sort((x, y) => byCodePoint(x.createdAt, y.createdAt))
   const newest = alignments.at(-1) ?? null
   const alignment = validationAlignment(pin, alignments, newest, decisions)
   const ready = errors.length === 0 && unansweredQuestions.length === 0 && unacceptedWarnings.length === 0
@@ -351,6 +355,9 @@ export interface SpecTouch {
   requirement: string
 }
 
+/** Code-point comparison, so keys and pairs sort identically on every ICU. */
+const byCodePoint = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0)
+
 /** Whether `earlier` reaches `later` through `dependsOn`, transitively. */
 function reaches(dependsOn: Readonly<Record<string, readonly string[]>>, earlier: string, later: string): boolean {
   const seen = new Set<string>()
@@ -405,8 +412,8 @@ export function deriveRelations(
     }
   }
   return relations.sort((x, y) => (x.changes.join('+') === y.changes.join('+')
-    ? x.capability.localeCompare(y.capability)
-    : x.changes.join('+').localeCompare(y.changes.join('+'))))
+    ? byCodePoint(x.capability, y.capability)
+    : byCodePoint(x.changes.join('+'), y.changes.join('+'))))
 }
 
 /**
@@ -446,9 +453,9 @@ export function relationFindings(relations: readonly PlanRelation[]): Finding[] 
     findings.push({
       check: 'relations', key: overlapKey(list, capability), severity: 'warning', row: 'scope',
       subject: capability, message: `${list.join(' and ')} touch ${capability} without a shared requirement or an order between them; confirm they stay independent.`,
-      detail: { changes: list, pairs: pairs.map(pair => [...pair].sort()).sort((x, y) => x.join('+').localeCompare(y.join('+'))) },
+      detail: { changes: list, pairs: pairs.map(pair => [...pair].sort()).sort((x, y) => byCodePoint(x.join('+'), y.join('+'))) },
     })
   }
-  return findings.sort((x, y) => x.key.localeCompare(y.key))
+  return findings.sort((x, y) => byCodePoint(x.key, y.key))
 }
 
