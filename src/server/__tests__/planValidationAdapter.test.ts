@@ -39,6 +39,8 @@ case "$1" in
         ;;
       sleeper) sleep 2; printf '{}'; exit 0 ;;
       stubborn) trap '' TERM; sleep 2 & wait; printf '{}'; exit 0 ;;
+      wrong-id) printf '{"items":[{"id":"another-change","type":"change","valid":true,"issues":[]}]}'; exit 0 ;;
+      bad-issue) printf '{"items":[{"id":"bad-issue","type":"change","valid":false,"issues":["nope"]}]}'; exit 1 ;;
       *) printf '{"items":[{"id":"%s","type":"change","valid":true,"issues":[]}],"summary":{}}' "$2"; exit 0 ;;
     esac
     ;;
@@ -52,6 +54,9 @@ case "$1" in
         ;;
       no-requirement)
         printf '{"deltas":[{"spec":"chat","operation":"ADDED","description":"no requirement"}]}'
+        ;;
+      bogus-op)
+        printf '{"deltas":[{"spec":"chat","operation":"BOGUS","requirement":{"name":"X"}}]}'
         ;;
       alpha)
         printf '{"deltas":[{"spec":"chat","operation":"MODIFIED","requirement":{"name":"Presence"}}]}'
@@ -202,6 +207,40 @@ describe('OpenspecAdapter validate and showDeltas through a stub CLI', () => {
     const noJson = await new OpenspecAdapter(runner({ stdout: 'plain text', ok: false, exitCode: 1 }), 5_000).validate(dir, 'good-change')
     expect(noJson.ok).toBe(false)
     expect(noJson.error).toContain('no JSON')
+  })
+
+  test('a mismatched item id, a bogus operation, and a non-object issue are errors, not verdicts', async () => {
+    const stub = new OpenspecAdapter(undefined, 5_000)
+    expect((await stub.validate(dir, 'wrong-id')).error).toContain('unknown shape')
+    expect((await stub.validate(dir, 'bad-issue')).error).toContain('unknown issue shape')
+    expect((await stub.showDeltas(dir, 'bogus-op')).error).toContain('unknown operation BOGUS')
+  })
+
+  test('the exit code must agree with the verdict', async () => {
+    const json = (valid: boolean) => `{"items":[{"id":"good-change","type":"change","valid":${valid},"issues":[]}]}`
+    // Exit 0 while reporting invalid.
+    const mismatched = await new OpenspecAdapter(runner({ stdout: json(false), exitCode: 0 }), 5_000).validate(dir, 'good-change')
+    expect(mismatched.ok).toBe(false)
+    expect(mismatched.error).toContain('reports valid=false')
+    // Exit 1 while reporting valid.
+    const reverse = await new OpenspecAdapter(runner({ stdout: json(true), ok: false, exitCode: 1 }), 5_000).validate(dir, 'good-change')
+    expect(reverse.ok).toBe(false)
+    expect(reverse.error).toContain('reports valid=true')
+    // Exit 2 is a hard CLI failure even when the output parses.
+    const crashed = await new OpenspecAdapter(runner({ stdout: json(false), ok: false, exitCode: 2 }), 5_000).validate(dir, 'good-change')
+    expect(crashed.ok).toBe(false)
+    expect(crashed.error).toContain('exited 2')
+  })
+
+  test('issues are capped at 50 with the full count kept', async () => {
+    const issues = Array.from({ length: 60 }, (_, index) => ({ level: 'ERROR', message: `issue ${index}` }))
+    const stdout = JSON.stringify({ items: [{ id: 'many-issues', type: 'change', valid: false, issues }] })
+    const outcome = await new OpenspecAdapter(runner({ stdout, ok: false, exitCode: 1 }), 5_000).validate(dir, 'many-issues')
+    expect(outcome.ok).toBe(true)
+    expect(outcome.valid).toBe(false)
+    expect(outcome.issues).toHaveLength(50)
+    expect(outcome.issues.at(-1)!.message).toBe('issue 49')
+    expect(outcome.issueCount).toBe(60)
   })
 
   test('a RENAMED delta yields two touches; a rename missing a name is an error', async () => {

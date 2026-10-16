@@ -18,6 +18,8 @@ export const SHOW_DELTAS_JSON = 'show-deltas-json'
 export const ADAPTER_ISSUE_CAP = 50
 export const ADAPTER_POOL_SIZE = 4
 export const ADAPTER_TIMEOUT_MS = 15_000
+/** The delta operations the adapter knows (D3); any other operation is an unknown shape. */
+const DELTA_OPERATIONS = ['ADDED', 'MODIFIED', 'REMOVED', 'RENAMED'] as const
 const PROBE_CACHE_MS = 10 * 60 * 1000
 
 export interface AdapterProbe {
@@ -178,10 +180,23 @@ export class OpenspecAdapter {
     if (!item || typeof item.valid !== 'boolean' || !Array.isArray(item.issues)) {
       return { ok: false, error: `validate ${change} returned an unknown shape`, valid: false, issues: [], issueCount: 0 }
     }
-    const issues = (item.issues as unknown[])
-      .filter((entry): entry is Record<string, unknown> => typeof entry === 'object' && entry !== null)
-      .map(entry => ({ level: text(entry.level) ?? 'ERROR', message: text(entry.message) ?? String(entry) }))
-    return { ok: true, error: null, valid: item.valid === true, issues: issues.slice(0, ADAPTER_ISSUE_CAP), issueCount: issues.length }
+    // The CLI exits 0 exactly when every item is valid; anything else, or an
+    // exit code outside 0/1, is an unknown outcome rather than a verdict.
+    const valid = item.valid === true
+    if (call.exitCode !== 0 && call.exitCode !== 1) {
+      return { ok: false, error: `validate ${change} exited ${call.exitCode} with JSON output`, valid: false, issues: [], issueCount: 0 }
+    }
+    if ((call.exitCode === 0) !== valid) {
+      return { ok: false, error: `validate ${change} exited ${call.exitCode} but reports valid=${valid}`, valid: false, issues: [], issueCount: 0 }
+    }
+    const issues: CliIssue[] = []
+    for (const entry of item.issues as unknown[]) {
+      if (typeof entry !== 'object' || entry === null || text((entry as Record<string, unknown>).message) === null) {
+        return { ok: false, error: `validate ${change} returned an unknown issue shape`, valid: false, issues: [], issueCount: 0 }
+      }
+      issues.push({ level: text((entry as Record<string, unknown>).level) ?? 'ERROR', message: text((entry as Record<string, unknown>).message)! })
+    }
+    return { ok: true, error: null, valid, issues: issues.slice(0, ADAPTER_ISSUE_CAP), issueCount: issues.length }
   }
 
   /**
@@ -203,6 +218,9 @@ export class OpenspecAdapter {
       const capability = text((delta as Record<string, unknown>).spec)
       const operation = text((delta as Record<string, unknown>).operation)
       if (!capability || !operation) return { ok: false, error: `show ${change} returned a delta without spec or operation`, touches: [] }
+      if (!DELTA_OPERATIONS.includes(operation)) {
+        return { ok: false, error: `show ${change} returned a delta with unknown operation ${operation}`, touches: [] }
+      }
       const rename = (delta as Record<string, unknown>).rename as Record<string, unknown> | undefined
       if (rename !== undefined) {
         const from = text(rename.from)
@@ -239,11 +257,10 @@ function parseJson(stdout: string): Record<string, unknown> | null {
   }
 }
 
-/** The validate wrapper's item for this change: matching id, else the only item. */
+/** The validate wrapper's item for this change: the item whose id names it, and nothing else. */
 function itemFor(parsed: Record<string, unknown>, change: string): Record<string, unknown> | null {
   const items = parsed.items
   if (!Array.isArray(items)) return null
-  const match = items.find((entry): entry is Record<string, unknown> =>
-    typeof entry === 'object' && entry !== null && (entry as Record<string, unknown>).id === change)
-  return match ?? (items.length === 1 && typeof items[0] === 'object' && items[0] !== null ? items[0] as Record<string, unknown> : null)
+  return items.find((entry): entry is Record<string, unknown> =>
+    typeof entry === 'object' && entry !== null && (entry as Record<string, unknown>).id === change) ?? null
 }
