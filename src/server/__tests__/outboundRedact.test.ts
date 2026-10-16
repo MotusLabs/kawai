@@ -180,6 +180,17 @@ describe('redact: CC round 3 (body forms, linear userinfo, over-redaction)', () 
     expect(out).toContain('‹redacted›')
   })
 
+  test('round 5 R5: cookies, escaped-quote headers, escaped words, and the parse-cut tail', () => {
+    expect(redact('curl -b session=abc123 https://example.internal/hook')).toBe(`curl -b ${REDACTED} https://example.internal/hook`)
+    expect(redact('curl -b "session id with spaces" https://example.internal/hook')).toBe(`curl -b ${REDACTED} https://example.internal/hook`)
+    expect(redact('curl -H "Authorization: Bearer AA\\"BB CC" -d x https://example.internal/hook')).toBe(`curl -H "Authorization: ${REDACTED}" -d x https://example.internal/hook`)
+    expect(redact('curl -H Authorization:\\ Bearer\\ X https://example.internal/hook')).toBe(`curl -H Authorization:${REDACTED} https://example.internal/hook`)
+    // A secret straddling the read cap drops with its whole tail word.
+    const straddle = 'x'.repeat(16_380) + ' ghp_ABCDEFghijklmnop0123456789 tail'
+    const out = redactForStore(straddle)
+    expect(out.text).not.toMatch(/ghp_[A-Za-z0-9]*/)
+  })
+
   test('a 16 KiB read bound keeps every stored character redacted', () => {
     // A secret at 10 KiB — past nothing: inside the read bound, redacted.
     const command = `echo ${'x'.repeat(10_000)} ghp_ABCDEFghijklmnop0123456789`

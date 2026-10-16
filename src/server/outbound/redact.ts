@@ -71,12 +71,15 @@ const RULES: Array<{ pattern: RegExp; replacement: string | ((substring: string,
   { pattern: /\beyJ[A-Za-z0-9_-]{4,}\.eyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\b/g, replacement: REDACTED },
 
   // Header values: quoted (the value runs to the closing quote) and bare.
-  { pattern: new RegExp(`(["'])(${HEADERS})[ \\t]*:[ \\t]*[^"']*\\1`, 'gi'), replacement: `$1$2: ${REDACTED}$1` },
-  { pattern: new RegExp(`\\b(${HEADERS})([ \\t]*:)[ \\t]*[A-Za-z0-9_.+=-]+`, 'gi'), replacement: `$1$2${REDACTED}` },
+  { pattern: new RegExp(`(")(${HEADERS})[ \\t]*:[ \\t]*(?:[^"\\\\]|\\\\.)*"`, 'gi'), replacement: `$1$2: ${REDACTED}"` },
+  { pattern: new RegExp(`(')(${HEADERS})[ \\t]*:[ \\t]*[^']*'`, 'gi'), replacement: `$1$2: ${REDACTED}'` },
+  // A bare value keeps backslash-escaped spaces and colons to itself
+  // (`Authorization:\\ Bearer\\ X`) and stops at the first bare space.
+  { pattern: new RegExp(`\\b(${HEADERS})([ \\t]*:)[ \\t]*(?:[A-Za-z0-9_.+=-]|\\\\[ \\t\\\\])+`, 'gi'), replacement: `$1$2${REDACTED}` },
   // Token, password, and API key flags — quoted values with spaces included.
   // `-u`/`--user` is handled after the loop: whether it is a credential
   // depends on the command (`sort -u` is not `curl -u`).
-  { pattern: new RegExp(`(^|[\\s;|&])(--token|--password|--api-key)(=|[ \\t]+)(${VALUE})`, 'g'), replacement: `$1$2$3${REDACTED}` },
+  { pattern: new RegExp(`(^|[\\s;|&])(--token|--password|--api-key|--cookie)(=|[ \\t]+)(${VALUE})`, 'g'), replacement: `$1$2$3${REDACTED}` },
   // URL userinfo: from the scheme to the last `@` before the authority's
   // end — `user:pass@`, `token@`, `:token@`, and passwords holding `@` — and
   // never past the first `/`, `?`, or `#`, so an `@scope` path segment stays.
@@ -125,7 +128,7 @@ export function redact(text: string): string {
   // -uvf`, `git add -u`, and `docker run -u 1000:1000` stay as written.
   const curlish = CURL_LIKE.test(result)
   return result.replace(
-    new RegExp(`(^|[\\s;|&])(-u|--user)(=|[ \\t]+)?(${VALUE})`, 'g'),
+    new RegExp(`(^|[\\s;|&])(-u|--user|-b)(=|[ \\t]+)?(${VALUE})`, 'g'),
     (match: string, pre: string, flag: string, sep: string, value: string) =>
       curlish || USER_PASS(value) ? `${pre}${flag}${sep ?? ''}${REDACTED}` : match,
   )
@@ -145,5 +148,10 @@ export function clip(text: string, max = 4096): { text: string; truncated: boole
  */
 const REDACT_READ_MAX = 16_384
 export function redactForStore(text: string, max = 4096): { text: string; truncated: boolean } {
-  return clip(redact(text.slice(0, REDACT_READ_MAX)), max)
+  if (text.length <= REDACT_READ_MAX) return clip(redact(text), max)
+  // The read cap could split a secret mid-token; the partial tail word
+  // drops entirely instead (round 5 R5).
+  const head = text.slice(0, REDACT_READ_MAX)
+  const cut = Math.max(head.lastIndexOf(' '), head.lastIndexOf('\t'), head.lastIndexOf('\n'))
+  return clip(redact(cut === -1 ? head : head.slice(0, cut + 1)), max)
 }
