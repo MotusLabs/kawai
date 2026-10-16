@@ -150,3 +150,13 @@ test('the human link command runs over the WebSocket and replays by key', async 
   expect((await link('rev-a2')).error).toBe('Command key k was already used with a different version change.')
   s.db.close()
 })
+
+test('the hash at decision is the latest one recorded at or before the decision, never a later start\'s', () => {
+  const s = new Seed()
+  s.start('chat-rev', 50, { group: 'reviewers', groupFileHash: 'h-a' })
+  s.start('chat-rev', -5, { id: 'later', group: 'reviewers', groupFileHash: 'h-b' })
+  const service = new ProcessReportService(s.db, new MetricsReader(s.db, () => END), { now: () => END })
+  const id = service.submit(lead(), { window: '7d', summary: 'S.', proposals: [change()] }).proposals[0]!.id
+  expect(service.decide(TEAM, { proposalId: id, decision: 'accepted', commandId: 'd' }).outcome.targetHashAtDecision).toBe('h-a')
+  s.db.close()
+})

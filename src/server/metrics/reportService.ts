@@ -6,8 +6,9 @@
 // granularity); Kawai computes the snapshot and period and inserts the report
 // with its proposals in one transaction — any refusal writes nothing. Decide
 // is the human's alone, once per proposal, through the command protocol, and
-// records the target's latest hash. Links name one qualifying version change
-// after the decision; the human links, replaces, and unlinks by command key,
+// records the target's latest hash recorded at or before the decision. Links
+// name one qualifying version change after the decision; the human links,
+// replaces, and unlinks by command key,
 // a reporting agent only links an accepted proposal that has no link yet.
 // Every commit announces itself through `onCommit` so the tab re-reads.
 import type { Database } from 'bun:sqlite'
@@ -180,9 +181,10 @@ export class ProcessReportService {
     const reason = input.reason?.trim() || null
     const result = this.store.command(teamId, input.commandId, 'decide', { proposal: input.proposalId, decision: input.decision, reason }, () => {
       const proposal = this.proposalOf(teamId, input.proposalId)
-      const hash = latestHash(targetStarts(this.db, teamId, proposal.targetKind, proposal.target)) ?? null
+      const decidedAt = new Date(this.now()).toISOString()
+      const recorded = targetStarts(this.db, teamId, proposal.targetKind, proposal.target).filter(start => start.at <= decidedAt)
       return this.store.decide(teamId, proposal.id, {
-        decision: input.decision, reason, targetHashAtDecision: hash, decidedAt: new Date(this.now()).toISOString(),
+        decision: input.decision, reason, targetHashAtDecision: latestHash(recorded) ?? null, decidedAt,
       })
     })
     if (!result.replay) this.options.onCommit?.(teamId)
