@@ -283,7 +283,7 @@ describe('mcp-call and the whole-command reduction', () => {
     expect(strongest(mixed)!.destination).toBe('unresolved:the target is a variable or command substitution')
     // The plain GET sent nothing: only the push and the gh api call matched.
     expect(mixed.map(match => match.rule)).toEqual(['git-push', 'gh-api-write'])
-    expect(CLASSIFIER_VERSION).toBe(1)
+    expect(CLASSIFIER_VERSION).toBe(2)
   })
 
   test('cd and git -C carry the effective cwd into the repository facts', () => {

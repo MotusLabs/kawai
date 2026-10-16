@@ -88,7 +88,7 @@ describe('OutboundObserver', () => {
       rule: 'git-push',
       verdict: 'allowed',
       destination: 'github:origin',
-      classifierVersion: 1,
+      classifierVersion: 2,
       cwd: '/repo',
     })
     expect(JSON.parse(row.matches)).toEqual([

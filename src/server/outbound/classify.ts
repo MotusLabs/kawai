@@ -8,7 +8,7 @@
 // `CLASSIFIER_VERSION` pins the rule set that judged a row, so a later rule
 // change never rewrites history.
 
-export const CLASSIFIER_VERSION = 1
+export const CLASSIFIER_VERSION = 2
 
 export type OutboundRule =
   | 'git-push' | 'gh-write' | 'gh-api-write'

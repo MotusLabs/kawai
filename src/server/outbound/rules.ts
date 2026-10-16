@@ -104,8 +104,12 @@ function scan(argv: string[], start: number, value: string[]): Scan {
   }
 }
 
-/** The gh repository target: `-R`/`--repo`, a URL positional, else origin. */
-function ghRepoTarget(scanned: Scan, positionals: Word[]): SendTarget {
+/**
+ * The gh repository target: `-R`/`--repo`, a URL positional
+ * (`https://github.com/o/r/pull/1`, `github.com/o/r`), a repo-subcommand's
+ * positional (`gh repo delete o/r`), else the cwd's origin.
+ */
+function ghRepoTarget(scanned: Scan, positionals: Word[], repoPositional = false): SendTarget {
   const value = scanned.values('-R', '--repo')[0]
   if (value !== undefined) {
     if (value.opaque) return VARIABLE()
@@ -115,10 +119,21 @@ function ghRepoTarget(scanned: Scan, positionals: Word[]): SendTarget {
     if (parts.length === 3) return { kind: 'repo', repo: `${parts[1]}/${parts[2]}`, host: parts[0]!.toLowerCase() }
     return { kind: 'repo', repo: value.text }
   }
-  const positional = positionals.find(word => word.text.startsWith('github.com/')) ?? null
-  if (positional !== null && !positional.opaque) {
-    const parts = positional.text.replace(/\.git$/, '').split('/')
+  // A positional URL names its repository, whatever it points at.
+  const url = positionals.find(word => !word.opaque && URLISH.test(word.text))
+  if (url !== undefined) return parseRepoUrl(url.text) ?? VARIABLE()
+  const github = positionals.find(word => !word.opaque && word.text.startsWith('github.com/'))
+  if (github !== undefined) {
+    const parts = github.text.replace(/\.git$/, '').split('/')
     if (parts.length === 3) return { kind: 'repo', repo: `${parts[1]}/${parts[2]}`, host: 'github.com' }
+  }
+  // `gh repo <verb> <repo>`: the positional is the target; a bare name
+  // reads as the caller's own account, judged against origin.
+  if (repoPositional) {
+    const first = positionals.find(word => !word.opaque)
+    if (first === undefined) return { kind: 'origin-implicit' }
+    if (first.text.includes('/')) return { kind: 'repo', repo: first.text.replace(/\.git$/, '') }
+    return { kind: 'repo', repo: `the caller's account/${first.text}` }
   }
   return { kind: 'origin-implicit' }
 }
@@ -353,7 +368,16 @@ function candidatesOf(segment: { argv: string[]; text: string; cwd: string; env:
       if (argv[1] === 'gist' && (argv[2] === 'create' || argv[2] === 'edit')) {
         return [base('gh-write', { kind: 'host', host: 'gist.github.com' })]
       }
-      return [base('gh-write', ghRepoTarget(scanned, scanned.positionals))]
+      // `gh issue transfer <n> <repo>`: the destination is the send.
+      if (argv[1] === 'issue' && argv[2] === 'transfer') {
+        const dest = scanned.positionals[1]
+        if (dest === undefined || dest.opaque) return [base('gh-write', VARIABLE())]
+        return [base('gh-write', { kind: 'repo', repo: dest.text.replace(/\.git$/, '') })]
+      }
+      // An explicit --org is the destination account, never implicit origin.
+      const org = scanned.values('--org')[0]
+      if (org !== undefined && !org.opaque) return [base('gh-write', { kind: 'repo', repo: org.text })]
+      return [base('gh-write', ghRepoTarget(scanned, scanned.positionals, argv[1] === 'repo'))]
     }
     return []
   }

