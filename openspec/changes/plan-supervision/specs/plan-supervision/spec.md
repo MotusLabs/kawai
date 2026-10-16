@@ -140,7 +140,7 @@ The team's summary SHALL add, over its window of the last 24 hours, the changes 
 - **THEN** the plan buckets still list everything in the last 24 hours
 
 ### Requirement: Kawai records usage per completed turn
-Each completed turn on a task SHALL be recorded with its session, group, profile, model, input, output, cache-read, and cache-creation tokens, the steps the turn took, and whether it succeeded. A turn started by mail SHALL belong to that mail's task, and to none when the mail has none; any other turn SHALL belong to the session's task. Mail delivered during a turn SHALL not change it. A turn on no task SHALL not be recorded, and nothing SHALL be backfilled.
+Plan usage SHALL read the per-turn `chat_turn_usage` record that `team-process-metrics` writes: session, group, profile, model, input, output, cache-read, and cache-creation tokens, steps, and success. A mail-started turn SHALL belong to that mail's task, none when it has none; any other turn to the session's task. Mail delivered during a turn SHALL not change it. A turn on no task SHALL have a null task and be outside every plan read; nothing SHALL be backfilled.
 
 #### Scenario: A dev's turn
 - **WHEN** a dev spawned for change `api` completes a turn
@@ -148,7 +148,7 @@ Each completed turn on a task SHALL be recorded with its session, group, profile
 
 #### Scenario: The Lead answers a question
 - **WHEN** a Lead session bound to a task completes a turn started by a task-less decision question
-- **THEN** no usage record is written for it
+- **THEN** its usage record names no task, and no plan's usage counts it
 
 #### Scenario: Mail arrives mid-turn
 - **WHEN** task mail is delivered while a turn started by other task mail is still running

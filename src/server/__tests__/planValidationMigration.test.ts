@@ -23,8 +23,6 @@ import { VALIDATION_CHECKS_VERSION, type ValidationInputs } from '../../shared/p
 
 const VALIDATION_TABLES = ['plan_assessments', 'plan_validation_decisions', 'plan_validation_reports']
 const human = { kind: 'human' as const, sessionId: null }
-const AT = MIGRATIONS.findIndex(migration => migration.name === 'plan-validation')
-const THROUGH = MIGRATIONS.slice(0, AT + 1)
 
 let dir: string
 let dbPath: string
@@ -62,6 +60,11 @@ const inputs = (planId: string, revision: number): ValidationInputs => ({
   records: { assessments: [], decisions: [] },
 })
 
+// The build that introduced plan-validation: every migration through it.
+// Later migrations have their own tests.
+const AT = MIGRATIONS.findIndex(migration => migration.name === 'plan-validation')
+const THROUGH_VALIDATION = MIGRATIONS.slice(0, AT + 1)
+
 /** A database as the build before this change leaves it: a plan with a submitted revision. */
 function planAtPreviousVersion(): string {
   const session = initDatabase({ path: dbPath, migrations: MIGRATIONS.slice(0, AT) })
@@ -72,8 +75,9 @@ function planAtPreviousVersion(): string {
   return planId
 }
 
-test('the registry holds plan-validation as a dense numbered migration', () => {
-  expect(MIGRATIONS[AT]!.version).toBe(3)
+test('the registry holds plan-validation as the dense next numbered migration', () => {
+  const migration = MIGRATIONS[AT]!
+  expect(migration.version).toBe((MIGRATIONS[AT - 1]?.version ?? 1) + 1)
   expect(checkDense(MIGRATIONS)).toBe(true)
 })
 
@@ -89,7 +93,7 @@ test('a database written by the build before plan-validation upgrades keeping ev
   expect(VALIDATION_TABLES.filter(table => table in before)).toEqual([])
   const previous = versions(dbPath)
 
-  const session = initDatabase({ path: dbPath, migrations: THROUGH })
+  const session = initDatabase({ path: dbPath, migrations: THROUGH_VALIDATION })
   // The new tables are usable at once: a report, an assessment, a decision.
   const validation = new ValidationStore(session.db)
   validation.insertReport({

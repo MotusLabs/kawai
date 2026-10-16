@@ -65,6 +65,14 @@ export interface ChatQuestionAnswer {
   text?: string
 }
 
+/** One turn's token counts (SDK result.usage); a missing field reads 0. */
+export interface ChatTurnUsage {
+  inputTokens: number
+  outputTokens: number
+  cacheReadTokens: number
+  cacheCreationTokens: number
+}
+
 /** Result subtype reported by turn_completed (SDK result.subtype). */
 export type ChatTurnResultSubtype = string
 
@@ -189,6 +197,8 @@ export type ChatEvent =
       subtype: ChatTurnResultSubtype
       totalCostUsd?: number
       numTurns?: number
+      /** The turn's token counts from the SDK result (team-process-metrics D1); absent in older history. */
+      usage?: ChatTurnUsage
       /** Final assistant text; only present on a success subtype. */
       finalText?: string
     })

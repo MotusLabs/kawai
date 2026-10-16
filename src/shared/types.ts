@@ -17,6 +17,7 @@ import type { ProductStrategy, StrategyDetail, StrategyDraft, StrategyRevision }
 import type { ImpactDecision, ImpactDisposition, StrategyImpactDetail } from './strategyImpact'
 import type { TeamWorkspaceSnapshot } from './teamWorkspace'
 import type { PlanClientMessage, PlanServerMessage } from './planMessages'
+import type { MetricsClientMessage, MetricsServerMessage } from './metricsMessages'
 import type {
   WorkspaceOperationResult,
   WorkspaceSnapshot,
@@ -239,6 +240,8 @@ export interface UpdateState {
 export type ServerMessage =
   // Durable plans (durable-plans D12): see planMessages.ts.
   | PlanServerMessage
+  // Process metrics (team-process-metrics D5): see metricsMessages.ts.
+  | MetricsServerMessage
   | { type: 'sessions'; sessions: Session[] }
   | { type: 'session-update'; session: Session }
   | { type: 'session-created'; session: Session }
@@ -570,6 +573,8 @@ export interface WakeError {
 export type ClientMessage =
   // Durable plans (durable-plans D12): see planMessages.ts.
   | PlanClientMessage
+  // Process metrics (team-process-metrics D5): see metricsMessages.ts.
+  | MetricsClientMessage
   | {
       type: 'terminal-attach'
       sessionId: string

@@ -47,7 +47,7 @@ See proposal.md for the motivation. Current state and constraints:
   - `supervisionRead.ts`, the snapshot loader that feeds the pure functions;
   - `SupervisionMonitor.ts`;
   - `planAttention.ts`, the attention sources and summary buckets.
-- **`src/server/chat/chatTurnUsageStore.ts`.**
+- The plan usage read over `chat_turn_usage` (D14); the table and its writer belong to `team-process-metrics`.
 
 Every file stays under 500 lines. The pure functions own every rule, so the server, `plan_get`, and the client agree, and tests need no database.
 
@@ -69,7 +69,7 @@ Every file stays under 500 lines. The pure functions own every rule, so the serv
 
 ### D3. Records
 
-An additive migration in `decisionSchema.ts`, `supervisionSchema.ts`, and `chatTurnUsageStore.ts`:
+An additive migration in `decisionSchema.ts` and `supervisionSchema.ts`. Usage reads `chat_turn_usage`, which `team-process-metrics` creates (D14).
 
 ```sql
 CREATE TABLE plan_decision_cards (
@@ -118,16 +118,6 @@ CREATE TABLE plan_stall_alerts (
   detail_json TEXT NOT NULL, message_id TEXT, raised_at TEXT NOT NULL,
   UNIQUE (execution_id, change, kind, episode_key)
 );
-
-CREATE TABLE chat_turn_usage (
-  session_id TEXT NOT NULL, turn_id TEXT NOT NULL, task_id TEXT NOT NULL,
-  group_id TEXT, profile_id TEXT, model TEXT,
-  input_tokens INTEGER NOT NULL, output_tokens INTEGER NOT NULL,
-  cache_read_tokens INTEGER NOT NULL, cache_creation_tokens INTEGER NOT NULL,
-  num_turns INTEGER, ok INTEGER NOT NULL, ended_at TEXT NOT NULL,
-  PRIMARY KEY (session_id, turn_id)
-);
-CREATE INDEX chat_turn_usage_task ON chat_turn_usage(task_id);
 ```
 
 **Card state is derived, never stored:**
@@ -440,20 +430,18 @@ None is `runtimeOnly`.
 
 ### D14. Usage per turn
 
-- **The driver.** `turn_completed` gains an optional `usage: { inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens }`, mapped from the result frame's per-turn `usage`. Missing fields read 0. The event stays additive, and replayed history without it is unchanged.
-- **The source is pinned when the turn starts.** `ChatSessionManager` keeps, per session, the mail delivered while no turn ran. It reads this from the session mailbox's delivered hook, the same one `LimitOutcomes` uses. `turn_started` moves that mail onto the turn. A delivery during a running turn neither retargets that turn nor carries over to the next one.
-- **The task a turn belongs to.** At `turn_completed`, two exclusive branches decide it:
-  - a mail-started turn takes that mail's task. It writes nothing when the mail has none, even on a task-bound session;
-  - any other turn takes the session's task (`records.get(sessionId)?.taskId`).
+`team-process-metrics` (its D1 and D9) owns the per-turn usage record: the `chat_turn_usage` table, the driver's `turn_completed.usage` mapping, the turn-start pinning, and the write beside `turnEnds.record`. This change only reads it.
 
-  A turn with no task writes nothing. The Lead's turns on task-less questions and alerts are therefore not attributed, and the view says so.
+- **What the record holds.** One row per completed turn, keyed by `(session_id, turn_id)`: the team, task, group, `claudeProfileId`, `model`, the four token counts, `num_turns`, and `ok`.
+- **The task a turn belongs to** (pinned when the turn starts, the rule this design first stated and `team-process-metrics` D1 now owns):
+  - a mail-started turn takes that mail's task, and none when the mail has none, even on a task-bound session;
+  - any other turn takes the session's task.
 
-  *Why pin at turn start:* the delivered hook is last-write-wins per session. Reading it at `turn_completed` would hand the whole turn to an urgent or mid-turn delivery.
-- **The record.** One row per turn, keyed by `(session_id, turn_id)`, so a duplicate event writes once. It holds the group, `claudeProfileId`, `model`, the four token counts, `num_turns`, and `ok`, beside the existing `turnEnds.record`.
-- **The plan read.** It covers every task with `team_tasks.plan_id = P`, execution tasks included, plus P's `plan_fix_tasks`. Usage sums by `(group_id, profile_id)` and by change, where fix and correction tasks form their own rows. Turns are row counts, and steps are the sum of `num_turns`.
-- **Coverage.** The result's `usage` covers the main agent loop only, so Task subagent and auxiliary calls are missing and plan usage understates subagent-heavy work. The view's note says so, beside the not-attributed note. Deriving per-turn deltas from the cumulative `modelUsage` would include them, but it inherits that field's resume and `/clear` lifecycle. It is an open question.
+  Mail delivered during a running turn neither retargets it nor carries over to the next one. A turn with no task has a null `task_id` and is outside every plan read, so the Lead's turns on task-less questions and alerts are not attributed, and the view says so.
+- **The plan read.** It reads `chat_turn_usage` rows whose `task_id` is a task with `team_tasks.plan_id = P`, execution tasks included, or one of P's `plan_fix_tasks`. Usage sums by `(group_id, profile_id)` and by change, where fix and correction tasks form their own rows. Turns are row counts, and steps are the sum of `num_turns`.
+- **Coverage.** The result's `usage` covers the main agent loop only, so Task subagent and auxiliary calls are missing and plan usage understates subagent-heavy work. The view's note says so, beside the not-attributed note.
 - **No currency.** `total_cost_usd` is cumulative per `query()` call rather than per turn, and for gateway profiles it applies list prices that do not apply. Showing it would mislead, and the strategy forbids a budget.
-- **No pruning or backfill.** Usage starts when this ships.
+- **No backfill.** Usage starts when `team-process-metrics` ships.
 
 ### D15. Human protocol and the view
 
@@ -514,7 +502,7 @@ Published:
 | --- | --- | --- |
 | S1 Decision records | D3 cards and decisions; `currentDecision`; card states | `revision-control` (publishing direction from a decision), `execution-safety-recovery` (audit) |
 | S2 Outcomes and causes | D10 `changeSupervision` and its append-only cause list | `revision-control` (`hold` as a cause), `execution-safety-recovery` (recovery states) |
-| S3 Usage records | D14 `chat_turn_usage` and its attribution rule, pinned at turn start | a later team usage view, `execution-safety-recovery` (budgets, if ever) |
+| S3 Usage records | D14's plan read over `chat_turn_usage` (written by `team-process-metrics`, attribution pinned at turn start) | a later team usage view, `execution-safety-recovery` (budgets, if ever) |
 | S4 Forward fixes | D2 `fixes` naming fix and correction tasks, D7 `plan_fix_tasks`, D8 completion by landed revision, `fixStatus` | `revision-control` (a fix published into running work) |
 
 ## Risks / Trade-offs
@@ -536,7 +524,6 @@ Published:
 
 ## Open Questions
 
-- Retention of `chat_turn_usage`. There is no pruning now.
-- Whether per-turn deltas of the cumulative `modelUsage` should replace `usage`, so that Task subagent calls are counted (D14).
+- Whether per-turn deltas of the cumulative `modelUsage` should replace `usage`, so that Task subagent calls are counted. That is now `team-process-metrics`' question (D14).
 - Whether stall deadlines become per-team settings in `~/.kawai/teams.json`.
 - Whether plan validation should warn about a plan with a Lead-addressed workflow but no `leadGroup`.

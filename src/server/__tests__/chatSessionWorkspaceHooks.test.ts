@@ -213,3 +213,50 @@ test('a failing teamMail.turnEnded is contained: the turn bookkeeping still runs
     expect(activityAt()).not.toBe(before)
   } finally { manager.shutdown() }
 })
+
+test('every completed turn writes a usage row: task-bound, task-less, and group-less; a kill keeps them', async () => {
+  const { manager } = createManager()
+  try {
+    const bound = await manager.createAvailableSession({ projectPath: project, groupId: 'devs', taskId: 'task-1' })
+    const free = await manager.createAvailableSession({ projectPath: project, groupId: 'devs' })
+    const loose = await manager.createAvailableSession({ projectPath: project })
+    if (!bound.ok || !free.ok || !loose.ok) throw new Error('create failed')
+    await until(() => [bound, free, loose].every(r => manager.teams.teamOf(r.session.id) !== undefined))
+    const feed = (manager as unknown as { handleDriverEvent: (sessionId: string, event: Record<string, unknown>) => void })
+      .handleDriverEvent.bind(manager)
+    const turn = (id: string, turnId: string) => {
+      feed(id, { type: 'turn_started', id: `s-${turnId}`, sequence: 1, turnId, at: '2026-10-14T08:00:00Z' })
+      feed(id, { type: 'turn_completed', subtype: 'success', id: `e-${turnId}`, sequence: 2, turnId, at: '2026-10-14T08:01:00Z', numTurns: 4,
+        usage: { inputTokens: 1, outputTokens: 2, cacheReadTokens: 3, cacheCreationTokens: 4 } })
+    }
+    turn(bound.session.id, 't-bound')
+    turn(free.session.id, 't-free')
+    turn(loose.session.id, 't-loose')
+    const teamId = manager.teams.teamOf(bound.session.id)!.teamId
+    expect(manager.turnUsage.forSession(bound.session.id)).toEqual([expect.objectContaining({ taskId: 'task-1', groupId: 'devs', teamId, profileId: 'default', numTurns: 4 })])
+    expect(manager.turnUsage.forSession(free.session.id)).toEqual([expect.objectContaining({ taskId: null, groupId: 'devs', teamId })])
+    expect(manager.turnUsage.forSession(loose.session.id)).toEqual([expect.objectContaining({ taskId: null, groupId: null, teamId })])
+    expect(manager.kill(bound.session.id)).toBe(true)
+    expect(manager.turnUsage.forSession(bound.session.id)).toHaveLength(1)
+  } finally { manager.shutdown() }
+})
+
+test('a failing usage write is logged and leaves mail settlement intact', async () => {
+  const { manager } = createManager()
+  try {
+    const bound = await manager.createAvailableSession({ projectPath: project, groupId: 'devs' })
+    if (!bound.ok) throw new Error(bound.error)
+    const { id } = bound.session
+    const record = spyOn(manager.turnUsage, 'record').mockImplementation(() => { throw new Error('disk full') })
+    const settle = spyOn((manager as unknown as { teamMail: { settleRecipient: (id: string) => void } }).teamMail, 'settleRecipient')
+    const warn = spyOn(logger, 'warn').mockImplementation(() => {})
+    try {
+      const feed = (manager as unknown as { handleDriverEvent: (sessionId: string, event: Record<string, unknown>) => void })
+        .handleDriverEvent.bind(manager)
+      feed(id, { type: 'turn_completed', subtype: 'success', id: 'evt-1', sequence: 1, turnId: 't-1', at: '2026-10-14T08:00:00Z' })
+      expect(record).toHaveBeenCalledTimes(1)
+      expect(settle).toHaveBeenCalledWith(id)
+      expect(warn.mock.calls.filter(([event]) => event === 'chat_turn_usage_record_failed')).toHaveLength(1)
+    } finally { record.mockRestore(); settle.mockRestore(); warn.mockRestore() }
+  } finally { manager.shutdown() }
+})

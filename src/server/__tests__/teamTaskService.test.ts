@@ -273,12 +273,15 @@ describe('spawn-time registration', () => {
     // is wired, always allowed).
     // Result tools (task-results-handoffs) are allowed too, registered only with a result service;
     // so are the plan tools (durable-plans D11; no approve/withdraw/close/reopen) and the
-    // impact tools (strategy-revision-impact D10; read and propose, no decide).
+    // impact tools (strategy-revision-impact D10; read and propose, no decide), and the
+    // read-only metrics tool (team-process-metrics D5), and the report tools
+    // (team-process-metrics D6; no decide/apply/withdraw/relink/unlink).
     const resultTools = ['task_submit_result', 'task_submit_findings', 'task_handoff']
     const planTools = ['plan_list', 'plan_get', 'plan_create', 'plan_save_draft', 'plan_submit_for_review']
     // Validation tools (plan-validation D10; validate, read, assess — no decide or approve).
     const validationTools = ['plan_validate', 'plan_validation_get', 'plan_assess']
-    expect(TEAM_ALLOWED_TOOLS).toEqual([...expected.slice(0, 7), 'release_member', ...expected.slice(7), ...resultTools, 'strategy_list', 'strategy_get', 'strategy_save_draft', 'strategy_submit_for_review', 'strategy_impact_get', 'strategy_impact_propose', ...planTools, ...validationTools]
+    expect(TEAM_ALLOWED_TOOLS).toEqual([...expected.slice(0, 7), 'release_member', ...expected.slice(7), ...resultTools, 'strategy_list', 'strategy_get', 'strategy_save_draft', 'strategy_submit_for_review', 'strategy_impact_get', 'strategy_impact_propose', ...planTools, ...validationTools, 'team_metrics',
+      'process_report_submit', 'process_reports_list', 'process_report_get', 'process_proposal_link']
       .map(name => `mcp__kawai-team__${name}`))
     await server.instance.close()
   })

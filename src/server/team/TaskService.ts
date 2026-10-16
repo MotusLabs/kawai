@@ -342,7 +342,7 @@ export class TaskService {
       if (!fresh) throw new Error(`Unknown task: ${taskId}`)
       if (fresh.status === current.status) {
         if (note?.trim()) this.store.appendJournal(taskId, actor, note.trim())
-        return this.store.setStatus(taskId, status, within)!
+        return this.store.setStatus(taskId, status, within, actor)!
       }
       current = fresh
     }
