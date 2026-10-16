@@ -58,6 +58,37 @@ process.env.PI_HOME = piDir
 const remoteHost = 'e2e-fake-box'
 const stubBinDir = join(tmuxTmpDir, 'stub-bin')
 mkdirSync(stubBinDir, { recursive: true })
+// plan-validation e2e: a stub OpenSpec CLI the SERVER's adapter spawns. It
+// answers the probe and strict validation, and serves canned deltas per
+// change from a JSON file the spec rewrites between steps — never the real
+// CLI, never the network.
+writeFileSync(
+  join(stubBinDir, 'openspec'),
+  [
+    '#!/bin/sh',
+    '# e2e stub: the OpenSpec CLI as plan-validation sees it',
+    'case "$1" in',
+    '  --version)',
+    '    echo "1.14.2"',
+    '    exit 0',
+    '    ;;',
+    '  validate)',
+    `    change="$2"`,
+    `    printf '{"items":[{"id":"%s","type":"change","valid":true,"issues":[]}],"summary":{}}' "$change"`,
+    '    exit 0',
+    '    ;;',
+    '  show)',
+    `    change="$2"`,
+    `    deltas="$(cat '${join(tmuxTmpDir, 'openspec-deltas')}'/"$change".json 2>/dev/null || echo '[]')"`,
+    `    printf '{"id":"%s","deltas":%s}' "$change" "$deltas"`,
+    '    exit 0',
+    '    ;;',
+    'esac',
+    'printf "unknown command" >&2',
+    'exit 2',
+  ].join('\n'),
+  { mode: 0o755 },
+)
 writeFileSync(
   join(stubBinDir, 'ssh'),
   [

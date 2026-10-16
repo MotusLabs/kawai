@@ -159,7 +159,7 @@ Implement after `durable-plans` and `strategy-revision-impact` have landed on ma
 ## 12. Docs and walkthrough
 
 - [x] 12.1 Add an AGENTS.md How It Works bullet covering validation reports, identity, checks, relations, readiness, alignment, owner decisions, `validation-current` (approvals now require a validation), and the tools. Verify by reading it against D1–D11.
-- [ ] 12.2 Add one browser walkthrough, `tests/e2e/plan-validation.spec.ts`, named in `.github/workflows/ci.yml`, using the fixture and a stub CLI. It runs this sequence:
+- [x] 12.2 Add one browser walkthrough, `tests/e2e/plan-validation.spec.ts`, named in `.github/workflows/ci.yml`, using the fixture and a stub CLI. It runs this sequence:
   1. Validate a plan with a conflicting pair: Blocked.
   2. Resubmit with `dependsOn`, answer a mandatory question, and accept an overlap warning: Ready.
   3. Edit an artifact: Out of date, and approval is refused naming it.
