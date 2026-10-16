@@ -38,6 +38,7 @@ case "$1" in
         exit 1
         ;;
       sleeper) sleep 2; printf '{}'; exit 0 ;;
+      stubborn) trap '' TERM; sleep 2 & wait; printf '{}'; exit 0 ;;
       *) printf '{"items":[{"id":"%s","type":"change","valid":true,"issues":[]}],"summary":{}}' "$2"; exit 0 ;;
     esac
     ;;
@@ -171,6 +172,23 @@ describe('OpenspecAdapter validate and showDeltas through a stub CLI', () => {
     const outcome = await adapter.validate(dir, 'sleeper')
     expect(outcome.ok).toBe(false)
     expect(outcome.error).toContain('timed out')
+  })
+
+  test('a timeout kills the process group and returns within the grace, freeing the pool slot', async () => {
+    const adapter = new OpenspecAdapter(undefined, 200)
+    // `sleeper` blocks on a `sleep` grandchild; `stubborn` ignores SIGTERM.
+    for (const change of ['sleeper', 'stubborn']) {
+      const started = Date.now()
+      const outcome = await adapter.validate(dir, change)
+      const elapsed = Date.now() - started
+      expect(outcome.ok).toBe(false)
+      expect(outcome.error).toContain('timed out')
+      // 200 ms timeout + 250 ms grace + spawn slack — not the 2 s the stub sleeps.
+      expect(elapsed).toBeLessThan(1_500)
+    }
+    // The pool slots freed: later calls still run.
+    const after = await adapter.validate(dir, 'alpha')
+    expect(after.ok).toBe(true)
   })
 
   test('unknown JSON shapes are errors', async () => {

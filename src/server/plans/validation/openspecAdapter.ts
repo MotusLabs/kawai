@@ -8,6 +8,8 @@
 // version, a failed or timed-out call, and an unknown JSON shape are errors —
 // a missing operation never yields success. Tests drive a stub executable on
 // a private PATH or an injected runner; nothing here reaches the network.
+import { spawn } from 'node:child_process'
+import { cleanGitEnv } from '../../git/gitCommand'
 import type { CliIssue, SpecTouch } from '../../../shared/planValidation'
 
 export const OPENSPEC_VERSION_FLOOR = [1, 14] as const
@@ -56,29 +58,55 @@ export interface OpenspecCall {
 
 export type OpenspecRunner = (args: readonly string[], options: { cwd: string; timeoutMs: number }) => Promise<OpenspecCall>
 
-/** The default runner: spawn `openspec` from the PATH, killing it at the timeout. */
-export const spawnOpenspec: OpenspecRunner = async (args, { cwd, timeoutMs }) => {
-  let proc: ReturnType<typeof Bun.spawn>
-  try {
-    proc = Bun.spawn(['openspec', ...args], { cwd, env: process.env, stdout: 'pipe', stderr: 'pipe' })
-  } catch {
-    return { ok: false, exitCode: null, stdout: '', stderr: 'openspec spawn failed', timedOut: false }
-  }
-  let timedOut = false
-  const timer = setTimeout(() => { timedOut = true; proc.kill() }, timeoutMs)
-  try {
-    const [stdout, stderr, exitCode] = await Promise.all([
-      new Response(proc.stdout as ReadableStream<Uint8Array>).text(),
-      new Response(proc.stderr as ReadableStream<Uint8Array>).text(),
-      proc.exited,
-    ])
-    return { ok: exitCode === 0, exitCode, stdout, stderr, timedOut }
-  } catch {
-    return { ok: false, exitCode: null, stdout: '', stderr: 'openspec spawn failed', timedOut }
-  } finally {
-    clearTimeout(timer)
-  }
-}
+/** After a timeout's SIGTERM, the group gets SIGKILL (H2: a child that ignores the signal must not hold a pool slot). */
+const KILL_GRACE_MS = 250
+
+/**
+ * The default runner: spawn `openspec` from the PATH in its own process
+ * group (`detached`), so a timeout can kill the whole tree — the CLI may
+ * leave children holding the pipes. The call resolves at the timeout without
+ * awaiting the streams: a grandchild keeping them open never holds the
+ * caller, and the pool slot is always freed.
+ */
+export const spawnOpenspec: OpenspecRunner = (args, { cwd, timeoutMs }) =>
+  new Promise<OpenspecCall>(resolve => {
+    let child: ReturnType<typeof spawn>
+    try {
+      child = spawn('openspec', [...args], { cwd, env: cleanGitEnv(), stdio: ['ignore', 'pipe', 'pipe'], detached: true })
+    } catch {
+      resolve({ ok: false, exitCode: null, stdout: '', stderr: 'openspec spawn failed', timedOut: false })
+      return
+    }
+    let stdout = ''
+    let stderr = ''
+    let settled = false
+    let timedOut = false
+    let graceTimer: ReturnType<typeof setTimeout> | null = null
+    const settle = (result: OpenspecCall) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      if (graceTimer) clearTimeout(graceTimer)
+      resolve(result)
+    }
+    child.stdout?.on('data', (chunk: Buffer) => { stdout += chunk.toString('utf8') })
+    child.stderr?.on('data', (chunk: Buffer) => { stderr += chunk.toString('utf8') })
+    // A spawn failure (ENOENT) arrives here, not at the call site.
+    child.on('error', () => settle({ ok: false, exitCode: null, stdout: '', stderr: 'openspec spawn failed', timedOut: false }))
+    child.on('close', code => settle({ ok: code === 0, exitCode: code, stdout, stderr, timedOut }))
+    const killGroup = (signal: NodeJS.Signals) => {
+      try {
+        process.kill(-child.pid!, signal)
+      } catch { /* the group is already gone */ }
+    }
+    const timer = setTimeout(() => {
+      timedOut = true
+      killGroup('SIGTERM')
+      graceTimer = setTimeout(() => killGroup('SIGKILL'), KILL_GRACE_MS)
+      // Resolve now: the pipes may stay open however the kill lands.
+      settle({ ok: false, exitCode: child.exitCode, stdout, stderr, timedOut })
+    }, timeoutMs)
+  })
 
 /** At most `limit` concurrent callers; a released slot transfers to the next waiter. */
 class Pool {
