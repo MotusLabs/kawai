@@ -28,8 +28,15 @@ export class PlanRefusal extends Error {
   }
 }
 
-/** The compared payload: the command name first, then its own fields (D7). */
-export type CommandPayload = { command: 'approve' | 'withdraw' | 'close' | 'reopen' } & Record<string, unknown>
+/**
+ * The compared payload: the command name first, then its own fields (D7).
+ * The execution names (plan-execution D3) belong to the human execution
+ * commands and the system completion, all replayed the same way.
+ */
+export type CommandPayload = {
+  command: 'approve' | 'withdraw' | 'close' | 'reopen'
+    | 'execution-start' | 'execution-stop' | 'change-retry' | 'complete-by-system'
+} & Record<string, unknown>
 
 /** The first field whose value differs between a recorded payload and a resend; null when they match. */
 export function payloadDifference(recorded: Record<string, unknown>, payload: CommandPayload): string | null {
