@@ -117,6 +117,14 @@ export function newerDatabaseMessage(input: {
   ].join(' ')
 }
 
+/** The recorded versions, ascending — dense from 1 when healthy. */
+function recordedVersions(db: Database): number[] {
+  const table = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'").get()
+  if (!table) return []
+  return (db.prepare('SELECT version FROM schema_migrations ORDER BY version').all() as Array<{ version: number }>)
+    .map(row => row.version)
+}
+
 /** The first recorded (version, name) the registry disagrees with, if any. */
 export function recordedNameMismatch(
   db: Database,
@@ -173,6 +181,16 @@ export function migrateSchema(db: Database, dbPath: string, options: MigrateOpti
       dbPath, dbVersion, buildVersion, backupsDir: backups?.dir ?? null,
       backup: backups?.newestGood(`pre-migration-${buildVersion + 1}`) ?? null,
     }))
+  }
+  // A gap in the recorded versions (1 and 3, no 2) would silently skip the
+  // missing migration — the runner starts from the newest recorded version —
+  // so it refuses before any write, like a mismatched name.
+  const recorded = recordedVersions(db)
+  const gapAt = recorded.findIndex((version, index) => version !== index + 1)
+  if (gapAt !== -1) {
+    throw new DatabaseStartupError(
+      `Database ${dbPath} records schema versions [${recorded.join(', ')}] with a gap: version ${gapAt + 1} is missing. The runner starts from the newest recorded version, so the missing migration would be skipped, never applied; this build refuses to write to it and nothing was changed. Restore a backup by following ${RESTORE_DOC}, or run the build that recorded these versions.`,
+    )
   }
   const mismatch = recordedNameMismatch(db, migrations)
   if (mismatch !== null) {

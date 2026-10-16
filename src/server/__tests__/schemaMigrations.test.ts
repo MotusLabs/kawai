@@ -325,6 +325,31 @@ describe('a recorded migration name the registry disagrees with (CC round 3)', (
     db.close()
   })
 
+  test('a gap in the recorded versions is refused before any write (CC round 4 G)', () => {
+    // Migrate to 3 with the real registry, then remove the version-2 row to
+    // simulate a torn or hand-edited history: 1 and 3 recorded, 2 missing.
+    initDatabase({ path: dbPath }).close()
+    const db = new Database(dbPath)
+    db.exec('DELETE FROM schema_migrations WHERE version = 2')
+    db.exec('DROP TABLE strategy_impact_proposals')
+    db.close()
+    const bytes = fs.readFileSync(dbPath)
+    let error: unknown
+    try { initDatabase({ path: dbPath }) } catch (caught) { error = caught }
+    expect(error).toBeInstanceOf(DatabaseStartupError)
+    const message = (error as Error).message
+    expect(message).toContain('version 2 is missing')
+    expect(message).toContain('skipped, never applied')
+    expect(message).toContain('docs/operations/database-backups.md')
+    // Refused before any write: same bytes, the strategy table stays gone
+    // (the gap was not "healed" by re-applying migration 2).
+    expect(fs.readFileSync(dbPath).equals(bytes)).toBe(true)
+    const check = new Database(dbPath, { readonly: true })
+    const tables = (check.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as Array<{ name: string }>).map(row => row.name)
+    check.close()
+    expect(tables).not.toContain('strategy_impact_proposals')
+  })
+
   test('the pre-migration-3 backup predates the audit tables (CC round 3)', () => {
     // A database at version 2 (strategy-impact) upgrades to 3; the backup
     // taken before migration 3 must not contain the outbound tables.
