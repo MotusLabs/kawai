@@ -69,6 +69,15 @@ const fakeAdapter = (): OpenspecAdapter => ({
   showDeltas: async () => ({ ok: true, error: null, touches: [] }),
 }) as unknown as OpenspecAdapter
 
+/** Wait a few ticks for an async detail push (its validation build is awaited inside). */
+async function untilDetail(probe: (message: Extract<ServerMessage, { type: 'team-plan-detail' }>) => boolean, tries = 100): Promise<void> {
+  for (let attempt = 0; attempt < tries; attempt += 1) {
+    const arrived = all('team-plan-detail').filter(probe)
+    if (arrived.length > 0) return
+    await new Promise(resolve => setTimeout(resolve, 10))
+  }
+}
+
 const send = (message: ClientMessage) => connections.handle(connection, message)
 const all = <T extends ServerMessage['type']>(type: T) =>
   messages.filter((message): message is Extract<ServerMessage, { type: T }> => message.type === type)
@@ -109,8 +118,10 @@ describe('subscriptions', () => {
     await send({ type: 'team-plan-open', teamPath: world.repo, planId })
     expect(last('team-plan-detail')!.detail.progress!.changes[0]!.status).toBe('not-started')
     const task = await tasks.create(bench.agent('lead'), { title: 'API', direction: 'Build', plan_id: planId, plan_change: 'api' })
+    await untilDetail(message => message.detail.progress!.changes[0]!.status === 'in-progress')
     expect(last('team-plan-detail')!.detail.progress!.changes[0]!.status).toBe('in-progress')
     await tasks.setStatus(bench.agent('lead'), task.id, 'done')
+    await untilDetail(message => message.detail.progress!.changes[0]!.status === 'done')
     expect(last('team-plan-detail')!.detail.progress!.changes[0]!.status).toBe('done')
     await send({ type: 'team-plan-close', teamPath: world.repo, planId })
     messages = []
@@ -134,6 +145,7 @@ describe('human commands', () => {
     await send(approve)
     expect(last('team-plan-result')).toMatchObject({ requestId: 'a1', replayed: false, plan: { currentApprovedRevision: 1, state: 'ready' }, event: { kind: 'approved', revision: 1 } })
     expect(last('team-plans-snapshot')!.plans[0]!.state).toBe('ready')
+    await untilDetail(message => message.detail.revisions[0]!.status === 'approved')
     expect(last('team-plan-detail')!.detail.revisions[0]!.status).toBe('approved')
     const pushes = messages.length
     await send({ ...approve, requestId: 'a2' })
