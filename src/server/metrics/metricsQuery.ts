@@ -211,6 +211,8 @@ export function loadMetricsInputs(db: Database, teamId: string, loadFrom: number
     for (const finding of findings) sessions.add(finding.authorSession)
     for (const row of usage) sessions.add(row.sessionId)
     for (const message of messages.values()) if (message.claimedBy) sessions.add(message.claimedBy)
+    // Holders an event recorded: a release or requeue clears the message's claim, never the event's.
+    for (const event of messageEvents) if (event.prevClaimedBy) sessions.add(event.prevClaimedBy)
     const starts = byIds(db, p => `SELECT * FROM agent_starts WHERE session_id IN (${p})`, sessions, mapStart)
       .sort((a, b) => a.startedAt.localeCompare(b.startedAt) || a.id.localeCompare(b.id))
     const manifests = new Map(byIds(db, p => `SELECT * FROM memory_manifests WHERE memory_hash IN (${p})`,

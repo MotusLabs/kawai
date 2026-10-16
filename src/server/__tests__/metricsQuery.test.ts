@@ -5,6 +5,7 @@
 // a limit event before the range still cools into it, and another team's
 // rows never load.
 import { expect, test } from 'bun:test'
+import { computeMetrics } from '../metrics/computeMetrics'
 import { loadMetricsInputs } from '../metrics/metricsQuery'
 import { DAY, END, Seed, TEAM, ago } from './metricsSeed'
 
@@ -100,5 +101,20 @@ test('limit events of profiles the team hit load from 24 h before the range', ()
   const inputs = loadMetricsInputs(s.db, TEAM, FROM, END)
   expect([...inputs.limitEvents.keys()]).toEqual(['glm'])
   expect(inputs.limitEvents.get('glm')!.map(e => e.sessionId)).toEqual(['chat-dev'])
+  s.db.close()
+})
+
+test('a released park keeps its holder: starts load for event holders, so parked hours carry the holder profile', () => {
+  const s = new Seed()
+  // The holder did nothing else in range, and release cleared the message's claim.
+  const released = s.message({ createdHoursAgo: 10 * 24, state: 'queued', claimedBy: null })
+  s.event(released, 'parked', 8 * 24, { prevClaimedBy: 'chat-holder' })
+  s.event(released, 'released', 24, { prevClaimedBy: 'chat-holder' })
+  s.start('chat-holder', 20 * 24, { id: 'start-holder', profile: 'profile-a' })
+
+  const inputs = loadMetricsInputs(s.db, TEAM, FROM, END)
+  expect(inputs.starts.map(st => st.id)).toEqual(['start-holder'])
+  const tax = computeMetrics(inputs, '7d', null, END).metrics.find(metric => metric.id === 'limit_tax_hours')!
+  expect(tax.breakdown?.map(row => row.key)).toEqual(['profile-a'])
   s.db.close()
 })
