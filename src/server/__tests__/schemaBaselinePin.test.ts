@@ -10,7 +10,8 @@
 // changes. A later numbered migration changes the second test's expectation
 // on purpose: that migration's change applies its delta to `expected` there
 // (added tables, columns, indexes), and the fixture itself stays master's.
-// Migration 2 (`strategy-impact`) adds the three strategy impact tables below.
+// Migration 2 (`strategy-impact`) adds the three strategy impact tables below;
+// migration 3 (`task-status-events`) adds the task transition table.
 import { expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
 import { initDatabase } from '../db'
@@ -45,6 +46,21 @@ const migration2: SchemaShape['tables'] = {
   },
 }
 
+/** Migration 3's delta: task status transitions (team-process-metrics D3). */
+const migration3: SchemaShape['tables'] = {
+  team_task_status_events: {
+    columns: [
+      { name: 'id', type: 'INTEGER', notnull: 0, dflt_value: null, pk: 1 },
+      column('task_id'), column('team_id'), optional('from_status'), column('to_status'),
+      column('actor_kind'), optional('actor_session'), column('at'),
+    ],
+    indexes: [
+      { name: 'team_task_status_events_task', unique: 0, columns: ['task_id', 'id'] },
+      { name: 'team_task_status_events_team', unique: 0, columns: ['team_id', 'at'] },
+    ],
+  },
+}
+
 test('a fresh baseline reproduces master bdc0131 schema exactly', () => {
   const db = new Database(':memory:')
   applyBaselineSchema(db)
@@ -54,8 +70,8 @@ test('a fresh baseline reproduces master bdc0131 schema exactly', () => {
 
 test('a fresh database opened by this build has the same shape plus each migration\'s delta and schema_migrations', () => {
   const session = initDatabase({ path: ':memory:' })
-  expect(Object.keys(migration2).filter(table => table in expected.tables)).toEqual([])
-  expect(schemaShape(session.db)).toEqual({ tables: { ...expected.tables, ...migration2 } })
+  expect(Object.keys({ ...migration2, ...migration3 }).filter(table => table in expected.tables)).toEqual([])
+  expect(schemaShape(session.db)).toEqual({ tables: { ...expected.tables, ...migration2, ...migration3 } })
   const extra = session.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'").get()
   expect(extra).toEqual({ name: 'schema_migrations' })
   session.close()

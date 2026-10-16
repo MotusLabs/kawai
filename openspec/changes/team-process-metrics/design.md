@@ -231,7 +231,7 @@ Its D14 and its "Kawai records usage per completed turn" requirement become a re
 
 ## Migration Plan
 
-Every table is additive and created `IF NOT EXISTS` by its store. The status backfill runs once, guarded by an empty-table check. Older builds ignore the new tables. Rollback means deploying the previous build; the tables stay unused.
+Every table is additive and created by a numbered migration in `src/server/dbSafety/migrations.ts`, never by its store and never by a baseline edit: each DDL lives in a frozen `CREATE_…_SQL` export beside its store (the `strategy/impactSchema.ts` pattern), stores only read and write, and store tests open `schemaDb()`. Stage 1 adds one migration per table group as it lands (task status events with the backfill, agent starts with memory manifests, turn usage); stage 2 adds one for the report tables. Version numbers are the next free ones when each lands — a concurrent branch claiming the same number renumbers on rebase, since versions must stay dense. The status backfill runs inside its migration's `up`, so the framework's version row (committed in the same transaction) guarantees it runs once; the pre-migration backup covers it. Older builds refuse a database whose schema version is newer than they know, per the framework; rollback means restoring that backup.
 
 ## Open Questions
 

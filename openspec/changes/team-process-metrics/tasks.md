@@ -4,8 +4,8 @@ Stage 1 is groups 1–7. Stage 2 (groups 8–10) can land separately once stage 
 
 ## 1. Task status transitions
 
-- [ ] 1.1 Add `team_task_status_events` (design D3) and write a row inside `TaskStore`'s status update transaction only when the status changes, with the actor (`human`, `agent` + session, or `system`); verify store tests cover a change, a same-status no-op, a refused contributor `done` writing nothing, acceptance through `TaskResultService` recording its actor, and rows surviving reopen of the database and the actor's kill.
-- [ ] 1.2 Backfill one `system` row (`from_status` null, `at = updated_at`) per task currently `done` or `cancelled`, guarded to run once on an empty table; verify migration tests cover a pre-existing database, a second start not re-backfilling, and open tasks receiving no row.
+- [x] 1.1 Add `team_task_status_events` (design D3) and write a row inside `TaskStore`'s status update transaction only when the status changes, with the actor (`human`, `agent` + session, or `system`); verify store tests cover a change, a same-status no-op, a refused contributor `done` writing nothing, acceptance through `TaskResultService` recording its actor, and rows surviving reopen of the database and the actor's kill.
+- [x] 1.2 Backfill one `system` row (`from_status` null, `at = updated_at`) per task currently `done` or `cancelled` inside the numbered migration's `up` (design Migration Plan), so the version row makes it run once; verify migration tests cover a pre-existing database, a second start not re-backfilling, and open tasks receiving no row.
 
 ## 2. Agent-start provenance
 

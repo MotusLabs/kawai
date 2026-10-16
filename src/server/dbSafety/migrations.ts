@@ -16,6 +16,7 @@ import type { Database } from 'bun:sqlite'
 import { BUILD_VERSION } from '../version'
 import { applyBaselineSchema } from './baseline'
 import { CREATE_IMPACT_TABLES_SQL } from '../strategy/impactSchema'
+import { migrateTaskStatusEvents } from '../team/taskStatusEventsSchema'
 import type { BackupFile } from './backupFiles'
 import type { BackupOutcome } from './backups'
 
@@ -33,6 +34,8 @@ export const MIGRATIONS: readonly Migration[] = [
   // strategy-revision-impact D1: the proposal, decision, and request tables
   // beside the baseline's strategy_impact_reviews.
   { version: 2, name: 'strategy-impact', up: db => db.exec(CREATE_IMPACT_TABLES_SQL) },
+  // team-process-metrics D3: task status transitions, backfilled for closed tasks.
+  { version: 3, name: 'task-status-events', up: migrateTaskStatusEvents },
 ]
 
 export const RESTORE_DOC = 'docs/operations/database-backups.md'
