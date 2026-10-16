@@ -195,6 +195,24 @@ describe('RepoFactsResolver: push remote chain and config pinning (CC round 4 C)
     expect(resolver.factsFor(main)?.remotes.get('fork')).toEqual(['https://github.com/other/fork.git'])
   })
 
+  test('git booleans, comments, and quoted subsection case (round 6 B4, L1)', () => {
+    const resolver = new RepoFactsResolver()
+    // Every git boolean form, and the bare key, pins.
+    for (const value of [' = true', ' = 1', ' = yes', ' = on', '']) {
+      writeConfig(`[remote "origin"]\n\turl = https://github.com/acme/kawai.git\n[extensions]\n\tworktreeConfig${value}\n`)
+      expect(resolver.factsFor(main)?.pinned).toBe('worktree config is not read')
+    }
+    // A ; comment ends at the newline: the backslash inside it continues
+    // nothing, and the pushurl on the next line stays a push target.
+    writeConfig('[remote "origin"]\n\turl = https://github.com/acme/kawai.git ; c \\\n\tpushurl = https://github.com/other/fork.git\n')
+    const facts = resolver.factsFor(main)
+    expect(facts?.pinned).toBeUndefined()
+    expect(facts?.remotes.get('origin')).toEqual(['https://github.com/other/fork.git'])
+    // A quoted subsection keeps its case: [branch "Main"] never hijacks main.
+    writeConfig('[remote "origin"]\n\turl = https://github.com/acme/kawai.git\n[branch "Main"]\n\tremote = fork\n[remote.fork]\n\turl = https://github.com/other/fork.git\n')
+    expect(resolver.factsFor(main)?.pushRemote).toBe('origin')
+  })
+
   test('insteadOf pins explicit URLs, legacy subsections lowercase, continuations fold, worktreeConfig pins (round 5 R4)', () => {
     const resolver = new RepoFactsResolver()
     // [branch.Main] and [remote.ORIGIN] (any case) resolve like lowercase.

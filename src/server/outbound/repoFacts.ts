@@ -133,25 +133,38 @@ export class RepoFactsResolver {
     const pin = (why: string): void => { if (pinned === null) pinned = why }
     type Section = { kind: 'remote'; name: string } | { kind: 'remote-global' } | { kind: 'branch'; name: string } | { kind: 'ignored' }
     let section: Section | null = null
-    const headerOf = (line: string): [string, string | null] | null => {
-      const body = line.replace(/\s*#.*$/, '')
+    const stripComment = (line: string): string => {
+      let quote: '' | "'" | '"' = ''
+      for (let i = 0; i < line.length; i++) {
+        const char = line[i]!
+        if (quote !== '') { if (char === quote && line[i - 1] !== '\\') quote = '' }
+        else if (char === "'" || char === '"') quote = char
+        else if (char === '#' || char === ';') return line.slice(0, i).trimEnd()
+      }
+      return line
+    }
+    const headerOf = (line: string): [string, string | null, boolean] | null => {
+      const body = stripComment(line)
       const quoted = /^\[\s*([A-Za-z0-9-]+)\s+"((?:[^"\\]|\\.)*)"\s*\]$/.exec(body)
-      if (quoted !== null) return [quoted[1]!.toLowerCase(), quoted[2]!]
+      if (quoted !== null) return [quoted[1]!.toLowerCase(), quoted[2]!, true]
       const dotted = /^\[\s*([A-Za-z0-9-]+)\.([A-Za-z0-9.-]+)\s*\]$/.exec(body)
-      if (dotted !== null) return [dotted[1]!.toLowerCase(), dotted[2]!]
+      if (dotted !== null) return [dotted[1]!.toLowerCase(), dotted[2]!, false]
       const bare = /^\[\s*([A-Za-z0-9-]+)\s*\]$/.exec(body)
-      if (bare !== null) return [bare[1]!.toLowerCase(), null]
+      if (bare !== null) return [bare[1]!.toLowerCase(), null, false]
       return null
     }
-    const unquote = (value: string): string => {
+    const unquote = (value: string | undefined): string => {
+      if (value === undefined) return ''
       const quoted = /^"((?:[^"\\]|\\.)*)"$/.exec(value.trim())
       if (quoted === null) return value.trim()
       return quoted[1]!.replace(/\\(["\\])/g, '$1')
     }
-    // A trailing backslash continues the value onto the next line (R4).
+    // A # or ; comment runs to the END OF THE LINE (round 6 B4): a
+    // backslash inside a comment continues nothing, so comments strip before
+    // any folding; a trailing backslash then continues the value.
     const folded: string[] = []
     for (const raw of text.split(/\r?\n/)) {
-      const line = raw.trim()
+      const line = stripComment(raw.trim())
       if (folded.length > 0 && folded[folded.length - 1]!.endsWith('\\')) {
         folded[folded.length - 1] = folded[folded.length - 1]!.slice(0, -1) + line
       } else {
@@ -163,18 +176,19 @@ export class RepoFactsResolver {
       if (line.startsWith('[')) {
         const header = headerOf(line)
         if (header === null) { pin('a config header was not understood'); section = null; continue }
-        const [word, name] = header
+        const [word, name, quoted] = header
         if (word === 'include' || word.startsWith('includeif')) { pin('an include directive could change this config'); section = null; continue }
         if (word === 'url') { pin('an insteadOf rewrite could change this target'); section = { kind: 'ignored' }; continue }
-        // Legacy dotted and capitalized subsections match case-insensitively
-        // (round 5 R4): [branch.Main] and [remote.ORIGIN] alike.
-        const lower = name?.toLowerCase() ?? null
+        // A quoted subsection is case-sensitive as git reads it; only the
+        // legacy dotted form lowercases (round 6 L1).
+        const dotted = quoted === null && name !== null
+        const key = dotted ? name.toLowerCase() : name
         section = word === 'remote'
-          ? lower === null ? { kind: 'remote-global' } : { kind: 'remote', name: lower }
-          : word === 'branch' && lower !== null ? { kind: 'branch', name: lower } : { kind: 'ignored' }
+          ? key === null ? { kind: 'remote-global' } : { kind: 'remote', name: key }
+          : word === 'branch' && key !== null ? { kind: 'branch', name: key } : { kind: 'ignored' }
         continue
       }
-      const pair = /^([A-Za-z][A-Za-z0-9-]*)\s*=\s*(.*)$/.exec(line.replace(/\s+#.*$/, ''))
+      const pair = /^([A-Za-z][A-Za-z0-9-]*)\s*(?:=\s*(.*))?$/.exec(line)
       if (pair === null || section === null) continue
       const key = pair[1]!.toLowerCase()
       const value = unquote(pair[2]!)
@@ -187,7 +201,7 @@ export class RepoFactsResolver {
       } else if (section.kind === 'ignored') {
         // extensions.worktreeConfig moves config into an unread per-worktree
         // file: nothing may resolve (round 5 R4).
-        if (key === 'worktreeconfig' && value.toLowerCase() === 'true') pin('worktree config is not read')
+        if (key === 'worktreeconfig' && (value === '' || value === undefined || /^(true|1|yes|on)$/i.test(value))) pin('worktree config is not read')
       } else if (section.kind === 'branch') {
         const branch = branches.get(section.name) ?? {}
         if (key === 'remote') branch.remote = value
