@@ -61,13 +61,21 @@ beforeAll(() => {
   // Its base spec exists for one capability and not the nested other.
   fs.mkdirSync(path.join(repo, 'openspec', 'specs', 'team', 'chat'), { recursive: true })
   fs.writeFileSync(path.join(repo, 'openspec', 'specs', 'team', 'chat', 'spec.md'), '# Team chat spec\n')
-  // An archived change.
+  // An archived change, archived twice (a later re-archive), and a suffix
+  // near-miss that must never match the change `validation`.
   writeChange(repo, 'old-change', { 'proposal.md': '# Old\n' })
+  writeChange(repo, 'validation', { 'proposal.md': '# Suffix trap\n' })
   fs.mkdirSync(path.join(repo, 'openspec', 'changes', 'archive'), { recursive: true })
   git(['add', 'openspec'], repo)
   git(['-c', 'user.email=t@e', '-c', 'user.name=T', 'commit', '-q', '-m', 'changes'], repo)
   git(['mv', 'openspec/changes/old-change', 'openspec/changes/archive/2026-01-01-old-change'], repo)
+  git(['mv', 'openspec/changes/validation', 'openspec/changes/archive/2026-01-01-plan-validation'], repo)
   git(['-c', 'user.email=t@e', '-c', 'user.name=T', 'commit', '-q', '-m', 'archive'], repo)
+  // A second, newer archive of old-change: the newest date resolves.
+  git(['-c', 'user.email=t@e', '-c', 'user.name=T', 'commit', '-q', '--allow-empty', '-m', 'placeholder'], repo)
+  fs.mkdirSync(path.join(repo, 'openspec', 'changes', 'archive', '2026-02-02-old-change'), { recursive: true })
+  fs.writeFileSync(path.join(repo, 'openspec', 'changes', 'archive', '2026-02-02-old-change', 'proposal.md'), '# Old again\n')
+
   // The convention worktree for main-change, holding the same change content plus an edit.
   convention = path.join(repo, '.worktrees', 'main-change')
   git(['worktree', 'add', '-q', '-b', 'w-main-change', convention], repo)
@@ -129,11 +137,24 @@ describe('readValidationFileInputs (D2)', () => {
     expect(inputs.evidence.changes['lone-change']!.root).toBe(other)
   })
 
-  test('an archived change resolves to its archive directory', async () => {
+  test('an archived change resolves to its newest archive directory', async () => {
     const inputs = await read(['old-change'])
     expect(inputs.changes[0]!.status).toBe('archived')
     expect(inputs.evidence.changes['old-change']!.root).toBe(repo)
+    expect(inputs.evidence.changes['old-change']!.dir).toBe(path.join(repo, 'openspec', 'changes', 'archive', '2026-02-02-old-change'))
     expect(Object.keys(inputs.changes[0]!.artifacts)).toEqual(['proposal.md'])
+  })
+
+  test('a suffix near-miss in the archive never matches: plan-validation is not the change validation', async () => {
+    const inputs = await read(['validation'])
+    expect(inputs.changes[0]!.status).toBe('missing')
+  })
+
+  test('a stale convention copy does not un-archive an archived change', async () => {
+    writeChange(path.join(repo, '.worktrees', 'old-change'), 'old-change', { 'proposal.md': '# Stale\n' })
+    const inputs = await read(['old-change'])
+    expect(inputs.changes[0]!.status).toBe('archived')
+    expect(inputs.evidence.changes['old-change']!.dir).toContain('2026-02-02-old-change')
   })
 
   test('a missing change has no digests', async () => {

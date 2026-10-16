@@ -90,18 +90,31 @@ const changeExists = (root: string, change: string): string | null => {
   return null
 }
 
-/** The archive directory holding this change, if any: exactly `<date>-<change>` (D3 names it in the error). */
+/**
+ * The archive directory holding this change, if any: the directory named
+ * exactly `<change>` or `<YYYY-MM-DD>-<change>` — never a suffix near-miss —
+ * newest first when several dates archived it (D3 names it in the error).
+ */
 function archiveDir(mainRoot: string, change: string): string | null {
   const archive = path.join(mainRoot, 'openspec', 'changes', 'archive')
+  const exact = new RegExp(`^\\d{4}-\\d{2}-\\d{2}-${change.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`)
+  let entries: fs.Dirent[]
   try {
-    for (const entry of fs.readdirSync(archive, { withFileTypes: true })) {
-      if (!entry.isDirectory()) continue
-      if (entry.name !== change && !/^\d{4}-\d{2}-\d{2}-[a-z0-9-]+$/.test(entry.name)) continue
-      if (entry.name !== change && !entry.name.endsWith(`-${change}`)) continue
-      const dir = path.join(archive, entry.name)
+    entries = fs.readdirSync(archive, { withFileTypes: true })
+  } catch {
+    return null
+  }
+  const names = entries
+    .filter(entry => entry.isDirectory() && (entry.name === change || exact.test(entry.name)))
+    .map(entry => entry.name)
+    .sort()
+    .reverse()
+  for (const name of names) {
+    const dir = path.join(archive, name)
+    try {
       if (fs.lstatSync(path.join(dir, 'proposal.md')).isFile()) return dir
-    }
-  } catch { /* no archive */ }
+    } catch { /* archived without a proposal: keep looking */ }
+  }
   return null
 }
 
