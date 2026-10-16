@@ -500,13 +500,31 @@ describe('the validation-current approval precondition (D9)', () => {
       expectedApprovedRevision: null, commandId: 'approve-wrong-hash',
     })
     expect(refused).toMatchObject({ ok: false, reason: 'precondition' })
-    const names = refused.ok === false ? refused.failures?.map(failure => failure.name) : []
-    expect(names).toContain('hash-matches')
-    expect(names).not.toContain('validation-current')
+    // The full order, pinned: the shipped entries first, validation-current
+    // last (N8). Moving validation-current ahead fails here.
+    expect(refused.ok === false && refused.failures?.map(failure => failure.name)).toEqual(['hash-matches'])
     // With the hash right, the current, ready report lets approval commit.
     const approved = await b.approve(planId, revision)
     expect(approved).toMatchObject({ ok: true })
     expect((b.db.db.prepare('SELECT COUNT(*) AS n FROM plan_validation_reports').get() as { n: number }).n).toBe(1)
+  })
+
+  test('the production default list is the shipped five with validation-current last (N4, N8)', async () => {
+    const b = use(fakeAdapter())
+    const { planId, revision } = await b.draftInReview()
+    // A never-validated revision is refused by the production-shaped
+    // service (validation wired, no preconditions override), and the
+    // refusal's failures put validation-current after every shipped entry.
+    const outcome = await b.approve(planId, revision)
+    expect(outcome).toMatchObject({ ok: false, reason: 'precondition' })
+    expect(outcome.ok === false && outcome.failures?.map(failure => failure.name)).toEqual(['validation-current'])
+    // A multi-failure refusal keeps the shipped order and appends ours.
+    const mixed = await b.service.approve(b.human, {
+      planId, revision, contentHash: 'wrong', expectedApprovedRevision: 99, commandId: 'approve-mixed',
+    })
+    expect(mixed.ok === false && mixed.failures?.map(failure => failure.name)).toEqual([
+      'hash-matches', 'approved-revision-unchanged', 'validation-current',
+    ])
   })
 
   test('prepareStanding spawns no CLI process', async () => {
