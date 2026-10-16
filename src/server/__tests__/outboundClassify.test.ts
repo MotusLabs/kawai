@@ -431,6 +431,28 @@ describe('CC checkpoint findings: curl targets, clusters, and unwrapping', () =>
     })
   })
 
+  test('each repo.pinned check is load-bearing: all four target kinds (round 6 L2)', () => {
+    const pinned = {
+      ...facts,
+      repos: new Map([['/repo', {
+        root: '/repo',
+        originUrls: ['https://github.com/acme/kawai.git'],
+        remotes: new Map([
+          ['origin', ['https://github.com/acme/kawai.git']],
+          ['fork', ['https://github.com/other/fork.git']],
+        ]),
+        pushRemote: 'origin',
+        pinned: 'an insteadOf rewrite could change this target',
+      }]]),
+    }
+    expect(judge(parseSends('git push https://github.com/other/fork.git', '/repo')[0]!, pinned)).toMatchObject({
+      verdict: 'unknown-destination', destination: 'unresolved:an insteadOf rewrite could change this target',
+    })
+    expect(judge(parseSends('git push', '/repo')[0]!, pinned)).toMatchObject({ verdict: 'unknown-destination' })
+    expect(judge(parseSends('git push fork', '/repo')[0]!, pinned)).toMatchObject({ verdict: 'unknown-destination' })
+    expect(judge(parseSends('gh pr create --title x', '/repo')[0]!, pinned)).toMatchObject({ verdict: 'unknown-destination' })
+  })
+
   test('a push to a remote with several urls judges every one, strongest wins (CC round 4 C)', () => {
     const multiUrl = {
       ...facts,

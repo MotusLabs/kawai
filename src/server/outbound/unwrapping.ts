@@ -34,6 +34,7 @@ const WRAPPERS: Record<string, { booleans: string[]; values: string[]; skipDurat
   stdbuf: { booleans: ['--'], values: ['-o', '-e', '-i', '--output', '--error', '--input'] },
   ionice: { booleans: ['-t', '--'], values: ['-c', '-n', '-p', '--class', '--classdata', '--pid'] },
   doas: { booleans: ['-n', '-s', '-v', '-V', '--'], values: ['-u', '-C', '-a'] },
+  builtin: { booleans: ['--'], values: [] },
 }
 
 /** What unwrapping left: the command, or why its position is unknowable. */
@@ -89,6 +90,15 @@ export function unwrapWrappers(argv: string[]): Unwrapped {
       continue
     }
     if (unknown) return { argv: [], unknown: `the ${rest[0]!.split('/').pop()} options were not understood` }
+    // An xargs replacement token rewrites the wrapped command's arguments:
+    // its targets are whatever the input feeds it (round 6 L4).
+    if (rest[0] === 'xargs') {
+      for (let j = 1; j < i && j < rest.length; j++) {
+        if (/^-I/.test(rest[j]!) || /^-J/.test(rest[j]!) || /^--replace/.test(rest[j]!)) {
+          return { argv: [], unknown: 'xargs replacement rewrites the command' }
+        }
+      }
+    }
     rest = rest.slice(i)
     if (spec.skipDuration === true && rest.length > 0 && /^[\d.]+(ms|[smhd])?$/.test(rest[0]!)) rest = rest.slice(1)
   }

