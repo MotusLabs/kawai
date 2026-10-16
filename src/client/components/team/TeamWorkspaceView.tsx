@@ -1,7 +1,7 @@
 // The Team page (team-workspace-pages §5): the team's full-width surface —
 // a header naming the repository with a one-line strategy status that opens
 // the Strategy tab (D5 replaces team-workspace's band), then the
-// Strategy | Plans | Tasks | Messages | Mailbox | Members tab strip, then the
+// Strategy | Plans | Tasks | Messages | Mailbox | Members | Metrics tab strip, then the
 // active tab's view. The page is the team views' only eventual host (D4); each tab
 // view drives its own wire subscription, keyed by the team key. The URL
 // location (D3) names the tab, sub-view, and selection; navigation goes
@@ -29,6 +29,8 @@ import TeamMembersPanel from './TeamMembersPanel'
 import TeamPlansView from './TeamPlansView'
 import TeamTasksView from './TeamTasksView'
 import TeamWorkspaceBands from './TeamWorkspaceBands'
+import MetricsView, { resolveMetricsWindow } from './metrics/MetricsView'
+import { useMetricsStore } from '../../stores/metricsStore'
 import {
   RENDERED_WORKSPACE_TABS,
   type TeamLocation,
@@ -42,6 +44,7 @@ const TAB_LABELS: Record<WorkspaceTab, string> = {
   mailbox: 'Mailbox',
   members: 'Members',
   plans: 'Plans',
+  metrics: 'Metrics',
 }
 
 /** The one-line strategy status: approved revision or none, and reviews open. */
@@ -189,6 +192,15 @@ export default function TeamWorkspaceView({ teamKey, location, sendMessage, conn
     if ((currentLocation.id ?? null) !== (store.views[teamKey]?.selected ?? null)) store.select(teamKey, currentLocation.id ?? null)
   }, [plansOpen, teamKey, currentLocation.id])
 
+  // Metrics (team-process-metrics 7.2): the view owns its subscription; the
+  // URL names the window (D5).
+  const metricsOpen = currentLocation.tab === 'metrics' && !unknown
+  const metrics = useMetricsStore(state => state.views[teamKey])
+  useEffect(() => {
+    if (!metricsOpen) return
+    resolveMetricsWindow(teamKey, currentLocation.window, window => navigate({ teamKey, tab: 'metrics', window }, { replace: true }))
+  }, [metricsOpen, teamKey, currentLocation.window, navigate])
+
   const liveSessions = useMemo(
     () => sessions.map(row => ({ id: row.id, name: row.name, groupId: row.groupId ?? null })),
     [sessions],
@@ -272,6 +284,13 @@ export default function TeamWorkspaceView({ teamKey, location, sendMessage, conn
         onOpenTask={taskId => navigate({ teamKey, tab: 'tasks', id: taskId })}
         onSelectedPlan={planId => navigate(planId ? { teamKey, tab: 'plans', id: planId } : { teamKey, tab: 'plans' })}
         onOpenImpactReview={revision => navigate({ teamKey, tab: 'strategy', sub: 'impact', id: String(revision) })}
+      />}
+      {metricsOpen && <MetricsView
+        teamPath={teamKey} view={metrics} locationWindow={currentLocation.window} sendMessage={sendMessage}
+        connected={connected} connectionEpoch={connectionEpoch}
+        onWindow={(window, options) => navigate({ teamKey, tab: 'metrics', window }, options)}
+        onOpenTask={taskId => navigate({ teamKey, tab: 'tasks', id: taskId })}
+        onOpenThread={threadId => navigate({ teamKey, tab: 'messages', id: threadId })}
       />}
     </div>
   </main>

@@ -30,7 +30,7 @@ interface TeamLocationState {
 const historyApi = () => (typeof window === 'undefined' ? undefined : window.history)
 
 const sameLocation = (a: TeamLocation | null, b: TeamLocation | null): boolean =>
-  a?.teamKey === b?.teamKey && a?.tab === b?.tab && a?.sub === b?.sub && a?.id === b?.id
+  a?.teamKey === b?.teamKey && a?.tab === b?.tab && a?.sub === b?.sub && a?.window === b?.window && a?.id === b?.id
 
 export const useTeamLocationStore = create<TeamLocationState>(() => ({
   // The mount effect of `useTeamLocation` reads the URL (a reload restores
