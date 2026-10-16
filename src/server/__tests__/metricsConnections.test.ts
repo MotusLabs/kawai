@@ -8,6 +8,7 @@ import type { ChatSessionManager } from '../chat/ChatSessionManager'
 import { ChatConnections } from '../chat/ChatConnections'
 import { CHAT_CONNECTION_TYPES } from '../chat/chatConnectionTypes'
 import { MetricsReader } from '../metrics/computeMetrics'
+import { ProcessReportService } from '../metrics/reportService'
 import type { ClientMessage, ServerMessage } from '../../shared/types'
 import { END, Seed, TEAM } from './metricsSeed'
 
@@ -18,7 +19,8 @@ function setup() {
   let now = END
   const metrics = new MetricsReader(s.db, () => now)
   const teamScopes = { resolve: async (path: string) => (path === '/repo' || path === '/repo/.worktrees/x' ? { teamId: TEAM } : null) }
-  const manager = { whenRestored: () => Promise.resolve(), teamScopes, metrics } as unknown as ChatSessionManager
+  const reports = new ProcessReportService(s.db, metrics, { now: () => now })
+  const manager = { whenRestored: () => Promise.resolve(), teamScopes, metrics, reports } as unknown as ChatSessionManager
   const connections = new ChatConnections(manager)
   const messages: ServerMessage[] = []
   const connection = { send: (message: ServerMessage) => messages.push(message) }

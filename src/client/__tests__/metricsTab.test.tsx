@@ -46,7 +46,7 @@ function snapshot(window: '1d' | '3d' | '7d', overrides: Partial<Record<MetricId
 const push = (message: ProcessMetrics, teamPath = '/repo') => act(() => {
   handleMetricsMessage({
     type: 'process-metrics-snapshot', teamPath, teamId: message.teamId, window: message.window,
-    slice: message.slice, computedAt: message.computedAt, metrics: message,
+    slice: message.slice, computedAt: message.computedAt, metrics: message, reports: [], freshness: [], unproposed: [],
   })
 })
 

@@ -5,8 +5,13 @@
 // a snapshot is sent on open, on refresh (a fresh computation), and on every
 // report or decision commit — never on mail changes, so the tab shows its
 // `computedAt` and offers Refresh. One subscription per connection and team
-// path; a later open replaces its window and slice.
+// path; a later open replaces its window and slice. The snapshot also
+// carries the team's newest reports (with each proposal's derived state),
+// per-window freshness, and the window's unproposed version changes. The
+// human's proposal commands (team-process-metrics D6) carry a command key and
+// answer `process-proposal-result`; a committed one re-sends the snapshots.
 import type { MetricSlice, MetricWindow, ProcessMetrics } from './processMetrics'
+import type { ProcessReport, ProposalDecision, ProposalLinkEvent, ReportFreshness, VersionChange } from './processReports'
 
 export type MetricsServerMessage = {
   type: 'process-metrics-snapshot'
@@ -16,8 +21,28 @@ export type MetricsServerMessage = {
   slice: MetricSlice | null
   computedAt: string
   metrics: ProcessMetrics
+  /** The newest reports, at most `REPORTS_IN_SNAPSHOT`. */
+  reports: ProcessReport[]
+  freshness: ReportFreshness[]
+  /** Version changes in the subscribed window that no accepted proposal's current link names. */
+  unproposed: VersionChange[]
+} | {
+  type: 'process-proposal-result'
+  teamPath: string
+  commandId: string
+  kind: 'decide' | 'link'
+  /** True when the command key had already committed and its stored outcome was returned. */
+  replayed?: boolean
+  decision?: ProposalDecision
+  link?: ProposalLinkEvent
+  error?: string
 }
+
+export const REPORTS_IN_SNAPSHOT = 20
 
 export type MetricsClientMessage =
   | { type: 'process-metrics-open' | 'process-metrics-refresh'; teamPath: string; window: MetricWindow; slice: MetricSlice | null }
   | { type: 'process-metrics-close'; teamPath: string }
+  | { type: 'process-proposal-decide'; teamPath: string; proposalId: string; decision: 'accepted' | 'rejected'; reason?: string | null; commandId: string }
+  /** `changeStartId: null` unlinks. */
+  | { type: 'process-proposal-link'; teamPath: string; proposalId: string; changeStartId: string | null; commandId: string }
