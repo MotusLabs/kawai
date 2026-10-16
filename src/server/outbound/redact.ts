@@ -70,13 +70,6 @@ const RULES: Array<{ pattern: RegExp; replacement: string | ((substring: string,
   { pattern: /\bAKIA[0-9A-Z]{16}\b/g, replacement: REDACTED },
   { pattern: /\beyJ[A-Za-z0-9_-]{4,}\.eyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\b/g, replacement: REDACTED },
 
-  // Header values: quoted (the value runs to the closing quote) and bare.
-  { pattern: new RegExp(`(")(${HEADERS})[ \\t]*:[ \\t]*(?:[^"\\\\]|\\\\.)*"`, 'gi'), replacement: `$1$2: ${REDACTED}"` },
-  { pattern: new RegExp(`(')(${HEADERS})[ \\t]*:[ \\t]*(?:[^'\\\\]|\\\\.)*'`, 'gi'), replacement: `$1$2: ${REDACTED}'` },
-  { pattern: new RegExp(`(\\$')(${HEADERS})[ \\t]*:[ \\t]*(?:[^'\\\\]|\\\\.)*'`, 'gi'), replacement: `$1$2: ${REDACTED}'` },
-  // A bare value keeps backslash-escaped spaces and colons to itself
-  // (`Authorization:\\ Bearer\\ X`) and stops at the first bare space.
-  { pattern: new RegExp(`\\b(${HEADERS})([ \\t]*:)[ \\t]*(?:[A-Za-z0-9_.+=-]|\\\\[ \\t\\\\])+`, 'gi'), replacement: `$1$2${REDACTED}` },
   // Token, password, and API key flags — quoted values with spaces included.
   // `-u`/`--user` is handled after the loop: whether it is a credential
   // depends on the command (`sort -u` is not `curl -u`).
@@ -91,8 +84,6 @@ const RULES: Array<{ pattern: RegExp; replacement: string | ((substring: string,
   // `@` after that slash is still the separator (`user:pa/ss@host`). A path
   // `@scope` never matches — its pre-slash part has no colon.
   { pattern: /([a-z][a-z0-9+.-]{0,31}:\/\/)[^\s'"?#/:]+:[^\s'"?#/]*\/[^\s'"?#]{0,255}@/gi, replacement: `$1${REDACTED}@` },
-  // httpie items: `Header:Value` positionals, quoted values included (round 6 B6).
-  { pattern: new RegExp(`(^|[\\s;|&])(Authorization|Proxy-Authorization|Cookie|X-Api-Key|PRIVATE-TOKEN):(?:[^\\s;|&'"]+|"(?:[^"\\\\]|\\\\.)*"|'(?:[^'\\\\]|\\\\.)*'|\\\\$'(?:[^'\\\\]|\\\\.)*')`, 'gi'), replacement: `$1$2:‹redacted›` },
   // Credential query parameters.
   { pattern: /([?&])([a-z0-9_]+)=([^&\s'"]+)/gi, replacement: (match: string, sep: string, name: string) =>
     QUERY_CREDENTIALS.test(name) ? `${sep}${name}=${REDACTED}` : match },
@@ -116,11 +107,66 @@ const CURL_LIKE = /(?:^|[\s;|&])(?:curl|wget|http|https|httpie|aria2c)(?=[\s;|&]
 const USER_PASS = (value: string): boolean =>
   /^[A-Za-z0-9._%+-]+:[^\s]+$/.test(value) && !/^\d+(?::\d+)?$/.test(value)
 
+
+/**
+ * One header-value boundary (round 7 S1/N1): a header or httpie item's value
+ * is the WHOLE shell word after the colon — adjacent bare, quoted, and $'…'
+ * runs glued together (`Authorization:$'…'`, `"…Bearer "$'X'`, `"…Bearer "X`),
+ * backslash escapes included — never just the first quoted piece. Runs before
+ * every other rule, so nothing downstream re-collapses a partial value.
+ */
+const HEADER_AT = new RegExp(`(^|[^A-Za-z-])(${HEADERS})([ \\t]*):`, 'gi')
+
+export function redactHeaderWords(text: string): string {
+  // Word spans, quote-aware: a word ends at unquoted whitespace or an
+  // operator; an unterminated quote runs to the end of input (safe side).
+  const spans: Array<[number, number]> = []
+  let i = 0
+  while (i < text.length) {
+    if (/\s|[;|&]/.test(text[i]!)) { i++; continue }
+    const start = i
+    while (i < text.length && !/\s|[;|&]/.test(text[i]!)) {
+      const char = text[i]!
+      if (char === '\\' && i + 1 < text.length) { i += 2; continue }
+      if (char === '$' && text[i + 1] === "'") { i++; continue }
+      if (text[i] === "'" || text[i] === '"') {
+        const close = text[i]!
+        i++
+        while (i < text.length) {
+          if (text[i] === '\\' && i + 1 < text.length) { i += 2; continue }
+          if (text[i] === close) { i++; break }
+          i++
+        }
+        continue
+      }
+      i++
+    }
+    spans.push([start, i])
+  }
+  let out = ''
+  let at = 0
+  HEADER_AT.lastIndex = 0
+  for (;;) {
+    const found = HEADER_AT.exec(text)
+    if (found === null) { out += text.slice(at); return out }
+    const colonEnd = found.index + found[0].length
+    const span = spans.find(([start, end]) => colonEnd >= start && colonEnd <= end && end > colonEnd)
+    if (span === undefined) continue
+    // Keep the word's own closing quote (`-H "Authorization: …"`), so the
+    // stored command stays readable; anything else in the value collapses.
+    const opener = text[span[0]]!
+    const keepsClosing = (opener === '"' || opener === "'") && text[span[1] - 1] === opener
+    out += text.slice(at, colonEnd) + REDACTED + (keepsClosing ? opener : '')
+    at = span[1]
+    HEADER_AT.lastIndex = at
+  }
+}
+
 /** Redact every secret shape D8 lists; over-redaction beats a leak. */
 export function redact(text: string): string {
   // The gh secret set scan joins continuations and returns that text, so
   // every later rule — and the stored field — sees the shell-equivalent form.
-  let result = redactSecretBodies(text)
+  let result = redactHeaderWords(redactSecretBodies(text))
   for (const rule of RULES) {
     result = typeof rule.replacement === 'string'
       ? result.replace(rule.pattern, rule.replacement)
@@ -144,17 +190,29 @@ export function clip(text: string, max = 4096): { text: string; truncated: boole
 }
 
 /**
- * Redact, then clip: the one path every stored command takes. Only the first
- * `REDACT_READ_MAX` characters are read — everything past them falls outside
- * the 4096 store cap too, and the bound keeps pathological inputs linear
- * (a 240k-character command redacts in well under a millisecond).
+ * Redact, then clip: the one path every stored command and match segment
+ * takes. Redaction runs FIRST on the whole text (every secret shape
+ * collapses before any boundary), and only then does the read cap cut —
+ * backed off past a partial word or an unterminated quote — so no secret
+ * byte can straddle the cut and no partial value survives (round 7 S1).
  */
 const REDACT_READ_MAX = 16_384
 export function redactForStore(text: string, max = 4096): { text: string; truncated: boolean } {
-  if (text.length <= REDACT_READ_MAX) return clip(redact(text), max)
-  // The read cap could split a secret mid-token; the partial tail word
-  // drops entirely instead (round 5 R5).
-  const head = text.slice(0, REDACT_READ_MAX)
-  const cut = Math.max(head.lastIndexOf(' '), head.lastIndexOf('\t'), head.lastIndexOf('\n'))
-  return clip(redact(cut === -1 ? head : head.slice(0, cut + 1)), max)
+  const red = redact(text)
+  if (red.length <= REDACT_READ_MAX) return clip(red, max)
+  let cut = red.lastIndexOf(' ', REDACT_READ_MAX)
+  cut = Math.max(cut, red.lastIndexOf('\t', REDACT_READ_MAX), red.lastIndexOf('\n', REDACT_READ_MAX))
+  let end = cut === -1 ? REDACT_READ_MAX : cut + 1
+  let quote: '' | "'" | '"' = ''
+  for (let i = 0; i < end; i++) {
+    const char = red[i]!
+    if (quote !== '') { if (char === quote && red[i - 1] !== '\\') quote = '' }
+    else if (char === "'" || char === '"') quote = char
+    else if (char === '\\' && i + 1 < end) i++
+  }
+  if (quote !== '') {
+    const open = red.lastIndexOf(quote, end)
+    if (open !== -1) end = open
+  }
+  return clip(red.slice(0, end), max)
 }

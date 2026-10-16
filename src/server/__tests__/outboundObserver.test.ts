@@ -276,6 +276,36 @@ describe('OutboundObserver', () => {
     expect(calls).toEqual([])
   })
 
+  test('no probe-secret byte reaches any stored field, across shift and quoting (round 7 S1)', async () => {
+    const PROBE = /QZTOKEN[A-Z0-9]*/
+    // Quote forms and concatenations, each padded across the 16 KiB cut.
+    const forms = [
+      '-H "Authorization: Bearer QZTOKENQQQZZZ"',
+      "-H 'Authorization: Bearer QZTOKENQQQZZZ'",
+      '-H Authorization:QZTOKENQQQZZZ',
+      '-H $' + "'Authorization: Bearer QZTOKENQQQZZZ'",
+      '-H "Authorization: Bearer QZTOK' + 'ENQQQZZZ"',
+      '-H "Authorization: Bearer "$' + "'QZTOKENQQQZZZ'",
+    ]
+    for (let shift = 0; shift <= 64; shift += 8) {
+      for (const form of forms) {
+        const { observer, calls } = harness()
+        const padding = 'x'.repeat(16_384 - 24 + shift)
+        const command = `curl -d x https://host.example.org/hook; echo ${padding}; curl -d y https://host.example.org/h ${form}`
+        observer.onPreToolUse({ ...PRE, toolUseId: form + shift, toolInput: { command } })
+        await flushWrites()
+        for (const row of calls) {
+          expect(PROBE.test(row.command)).toBe(false)
+          expect(PROBE.test(row.destination)).toBe(false)
+          for (const match of JSON.parse(row.matches) as Array<{ segment?: string; destination?: string }>) {
+            if (match.segment !== undefined) expect(PROBE.test(match.segment)).toBe(false)
+            if (match.destination !== undefined) expect(PROBE.test(match.destination)).toBe(false)
+          }
+        }
+      }
+    }
+  })
+
   test('a 120k-character command completes fast and every stored field is capped (CC round 4 B)', async () => {
     const { observer, calls } = harness()
     const command = `curl -d x https://host.example.org/hook ${'https://'.repeat(14_000)}`

@@ -198,7 +198,9 @@ describe('RepoFactsResolver: push remote chain and config pinning (CC round 4 C)
   test('git booleans, comments, and quoted subsection case (round 6 B4, L1)', () => {
     const resolver = new RepoFactsResolver()
     // Every git boolean form, and the bare key, pins.
-    for (const value of [' = true', ' = 1', ' = yes', ' = on', '']) {
+    // Anything but false/no/off/0 pins (round 7 L-a): git reads every
+    // other value — including bare integers and unknown words — as true.
+    for (const value of [' = true', ' = 1', ' = yes', ' = on', ' = 2', ' = garbage', '']) {
       writeConfig(`[remote "origin"]\n\turl = https://github.com/acme/kawai.git\n[extensions]\n\tworktreeConfig${value}\n`)
       expect(resolver.factsFor(main)?.pinned).toBe('worktree config is not read')
     }

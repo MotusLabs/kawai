@@ -201,7 +201,7 @@ export class RepoFactsResolver {
       } else if (section.kind === 'ignored') {
         // extensions.worktreeConfig moves config into an unread per-worktree
         // file: nothing may resolve (round 5 R4).
-        if (key === 'worktreeconfig' && (value === '' || value === undefined || /^(true|1|yes|on)$/i.test(value))) pin('worktree config is not read')
+        if (key === 'worktreeconfig' && !( /^(false|no|off|0)$/i.test(value) )) pin('worktree config is not read')
       } else if (section.kind === 'branch') {
         const branch = branches.get(section.name) ?? {}
         if (key === 'remote') branch.remote = value

@@ -27,13 +27,13 @@ describe('redact', () => {
 
   test('authorization, cookie, and key header values', () => {
     expect(redact('curl -H "Authorization: Bearer abc123" -d x https://host.example.internal'))
-      .toBe(`curl -H "Authorization: ${REDACTED}" -d x https://host.example.internal`)
+      .toBe(`curl -H "Authorization:${REDACTED}" -d x https://host.example.internal`)
     expect(redact('curl -H Authorization:abc123 https://example.internal'))
       .toBe(`curl -H Authorization:${REDACTED} https://example.internal`)
     expect(redact("curl -H 'Cookie: session=abc; other=1' https://example.internal"))
-      .toBe(`curl -H 'Cookie: ${REDACTED}' https://example.internal`)
+      .toBe(`curl -H 'Cookie:${REDACTED}' https://example.internal`)
     expect(redact('curl -H "PRIVATE-TOKEN: abc123" https://git.example.internal/api'))
-      .toBe(`curl -H "PRIVATE-TOKEN: ${REDACTED}" https://git.example.internal/api`)
+      .toBe(`curl -H "PRIVATE-TOKEN:${REDACTED}" https://git.example.internal/api`)
   })
 
   test('-u credentials and token, password, API key flags', () => {
@@ -116,8 +116,8 @@ describe('redact: CC checkpoint findings (H1, M7, low)', () => {
   })
 
   test('the remaining listed header names, tokens, and query credentials', () => {
-    expect(redact('curl -H "X-Api-Key: abc123" https://example.internal')).toBe(`curl -H "X-Api-Key: ${REDACTED}" https://example.internal`)
-    expect(redact('curl -H "Proxy-Authorization: Basic abc" https://example.internal')).toBe(`curl -H "Proxy-Authorization: ${REDACTED}" https://example.internal`)
+    expect(redact('curl -H "X-Api-Key: abc123" https://example.internal')).toBe(`curl -H "X-Api-Key:${REDACTED}" https://example.internal`)
+    expect(redact('curl -H "Proxy-Authorization: Basic abc" https://example.internal')).toBe(`curl -H "Proxy-Authorization:${REDACTED}" https://example.internal`)
     for (const token of ['ghu_ABCDEFghijklmnop0123456789', 'ghr_ABCDEFghijklmnop0123456789', 'xoxa-123456789012-ABCDEFghijklmn', 'xoxp-123456789012-ABCDEFghijklmn', 'xoxr-123456789012-ABCDEFghijklmn']) {
       expect(redact(`echo ${token}`)).toBe(`echo ${REDACTED}`)
     }
@@ -185,7 +185,7 @@ describe('redact: CC round 3 (body forms, linear userinfo, over-redaction)', () 
   test('round 5 R5: cookies, escaped-quote headers, escaped words, and the parse-cut tail', () => {
     expect(redact('curl -b session=abc123 https://example.internal/hook')).toBe(`curl -b ${REDACTED} https://example.internal/hook`)
     expect(redact('curl -b "session id with spaces" https://example.internal/hook')).toBe(`curl -b ${REDACTED} https://example.internal/hook`)
-    expect(redact('curl -H "Authorization: Bearer AA\\"BB CC" -d x https://example.internal/hook')).toBe(`curl -H "Authorization: ${REDACTED}" -d x https://example.internal/hook`)
+    expect(redact('curl -H "Authorization: Bearer AA\\"BB CC" -d x https://example.internal/hook')).toBe(`curl -H "Authorization:${REDACTED}" -d x https://example.internal/hook`)
     expect(redact('curl -H Authorization:\\ Bearer\\ X https://example.internal/hook')).toBe(`curl -H Authorization:${REDACTED} https://example.internal/hook`)
     // A secret straddling the read cap drops with its whole tail word.
     const straddle = 'x'.repeat(16_380) + ' ghp_ABCDEFghijklmnop0123456789 tail'

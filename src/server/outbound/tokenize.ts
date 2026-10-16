@@ -13,6 +13,7 @@ export interface Token {
   opaque?: boolean
 }
 
+/** Tokenize one command string; operators stand alone, quoting is unwound. */
 export function tokenize(input: string): Token[] {
   const tokens: Token[] = []
   let word = ''

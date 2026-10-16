@@ -11,8 +11,10 @@ import {
   parseGitUrl,
   strongest,
 } from '../outbound/classify'
+import { parseCommand } from '../outbound/parse'
 import { parseSends } from '../outbound/rules'
 import { facts, judged, verdictOf } from './outboundClassifyFacts'
+import { redact } from '../outbound/redact'
 
 describe('parseGitUrl', () => {
   test('https, ssh, and scp forms normalize to one host and owner/repo', () => {
@@ -450,6 +452,15 @@ describe('CC checkpoint findings: curl targets, clusters, and unwrapping', () =>
     expect(judge(parseSends('git push', '/repo')[0]!, pinned)).toMatchObject({ verdict: 'unknown-destination' })
     expect(judge(parseSends('git push fork', '/repo')[0]!, pinned)).toMatchObject({ verdict: 'unknown-destination' })
     expect(judge(parseSends('gh pr create --title x', '/repo')[0]!, pinned)).toMatchObject({ verdict: 'unknown-destination' })
+  })
+
+  test('the tokenizer reads ANSI-C strings as one word with escapes (round 7 L-b)', () => {
+    // Removing the ANSI-C branch retokenizes: the escaped quote ends the
+    // single-quoted run early and the word splits, failing these pins.
+    const segments = parseCommand("echo $'A\\'B' C", '/repo')
+    expect(segments[0]!.argv).toEqual(["echo", "$'A\\'B'", 'C'])
+    // A secret inside $'…' survives as one span, so redaction sees it whole.
+    expect(redact("curl -H $'Authorization: Bearer S7X' https://example.internal")).not.toContain('S7X')
   })
 
   test('a push to a remote with several urls judges every one, strongest wins (CC round 4 C)', () => {

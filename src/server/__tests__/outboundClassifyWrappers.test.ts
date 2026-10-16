@@ -243,6 +243,22 @@ describe('CC round 3: wrappers, reserved words, and git pinning', () => {
     expect(verdictOf('builtin command git push fork')).toMatchObject({ rule: 'git-push', verdict: 'violation', destination: 'github:other/fork' })
   })
 
+  test('option failures always record; a stuck cwd only overrides real sends (round 7 S2, S4)', () => {
+    for (const command of [
+      'sudo -Z "$CMD"', 'sudo --weird $X', 'env --weird "$CMD"', 'nice --weird "$CMD"', 'doas -Z "$CMD"',
+    ]) {
+      expect(verdictOf(command)).toMatchObject({ rule: 'shell-call', verdict: 'unknown-destination' })
+    }
+    // A wrapped script is never labeled http-send (L-d).
+    expect(verdictOf('sudo -Z ./deploy.sh')).toMatchObject({ rule: 'shell-call', verdict: 'unknown-destination' })
+    // +o takes its argument too (N4).
+    expect(verdictOf('bash +o pipefail -c "git push fork"')).toMatchObject({ rule: 'git-push', verdict: 'violation', destination: 'github:other/fork' })
+    // Benign commands after a stuck cwd record nothing (N5).
+    for (const command of ['cd ~/x && ls -la', 'cd ~ && npm test', 'cd - ; pwd', 'cd "$D" && echo hi && make']) {
+      expect(parseSends(command, '/repo')).toEqual([])
+    }
+  })
+
   test('a wrapped shell is never labeled http-send (round 5 R6)', () => {
     expect(verdictOf('sudo -Z bash -c "git push https://github.com/evil/x"')).toEqual({
       rule: 'git-push', verdict: 'unknown-destination', destination: 'unresolved:the sudo options were not understood',
@@ -262,15 +278,19 @@ describe('CC round 3: wrappers, reserved words, and git pinning', () => {
         rule: 'gh-write', verdict: 'unknown-destination', destination: 'unresolved:the working directory does not resolve',
       })
     }
-    // env -C and git -C pin the command they wrap.
-    for (const pin of ['env -C ~', 'env -C "$D"', 'git -C ~', 'git -C "$D"']) {
-      expect(verdictOf(pin + ' git push')).toMatchObject({
+    // env -C and git -C pin the command they wrap (round 7 S3 adds the
+    // attached and repeated forms).
+    for (const pin of ['env -C ~', 'env -C "$D"', 'git -C ~', 'git -C "$D"', 'git -C$D', 'git -C~', 'git -C /repo -C "$D"', 'git -C sub -C ~', '/usr/bin/git -C ~']) {
+      const command = pin.startsWith('git') || pin.startsWith('/usr/bin/git') ? pin + ' push' : pin + ' git push'
+      expect(verdictOf(command)).toMatchObject({
         rule: 'git-push', verdict: 'unknown-destination', destination: 'unresolved:the working directory does not resolve',
       })
     }
     expect(verdictOf('env -C ~ gh pr create --title x')).toMatchObject({
       rule: 'gh-write', verdict: 'unknown-destination', destination: 'unresolved:the working directory does not resolve',
     })
+    // pushd -n never moves: the push judges from the original cwd.
+    expect(verdictOf('pushd -n ~/x && git push')).toEqual({ rule: 'git-push', verdict: 'allowed', destination: 'github:origin' })
     // A resolving move keeps judging from the new cwd.
     expect(verdictOf('cd /repo && git push')).toEqual({ rule: 'git-push', verdict: 'allowed', destination: 'github:origin' })
   })

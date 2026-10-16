@@ -11,7 +11,7 @@
 // origin: they publish somewhere new (D1). Reserved words, wrapping
 // commands, and git config pinning are stripped by the sibling
 // `unwrapping.ts` before these rules see a segment. Pure like the rest.
-import { parseCommand } from './parse'
+import { CWD_UNRESOLVED, parseCommand } from './parse'
 import { ghRepoCreationTarget, ghRepoForkTarget, ghRepoTarget } from './ghTargets'
 import { gitSubcommandAndPin, WRAPPED_RULE_HEADS } from './unwrapping'
 import type { SendCandidate, SendTarget } from './classify'
@@ -228,43 +228,40 @@ function segmentConfigTouched(argv: readonly string[], env: ReadonlyMap<string, 
   return sub === 'remote' && ['add', 'set-url', 'rename', 'remove'].includes(rest[0] ?? '')
 }
 
-/** The shell words themselves (round 6 L3). */
-const SHELL_WORDS = new Set(['bash', 'sh', 'zsh', 'dash'])
-
-/** Wrapper and shell words: alone, they name no send (round 6 B1). */
-const WRAPPER_WORDS = new Set(['env', 'sudo', 'doas', 'timeout', 'nice', 'xargs', 'command', 'exec', 'nohup', 'stdbuf', 'ionice', 'builtin'])
-
 /** The first word's basename, lowercase. */
 const argv0 = (argv: readonly string[]): string => argv[0]?.split('/').pop()?.toLowerCase() ?? ''
 
 function candidatesOf(segment: { argv: string[]; text: string; cwd: string; env: ReadonlyMap<string, string | null>; note?: string }, configTouched = false): SendCandidate[] {
-  const { text, cwd, env } = segment
+  const { text, cwd } = segment
   const base = (rule: SendCandidate['rule'], target: SendTarget): SendCandidate => ({ rule, segment: text, cwd, target })
   const bare = argv0(segment.argv)
   if (bare === 'cd' || bare === 'pushd' || bare === 'popd' || bare === 'export') return []
-  if (segment.note !== undefined) {
-    // The unwrap could not complete (an unknown wrapper flag, a second -c
-    // level, an env option not understood): the segment may send anywhere,
-    // so it records unknown-destination under the wrapped command's rule —
-    // the wrapper word itself is never the head.
+  if (segment.note !== undefined && segment.note !== CWD_UNRESOLVED) {
+    // An option failure always records (round 7 S2): label by the wrapped
+    // command's rule when one is visible, else shell-call — never http-send
+    // for something that is not an HTTP send (L-d).
     const head = (segment.argv.slice(1).find(word => !word.startsWith('-')) ?? segment.argv[0] ?? '')
       .split(/[\s/]/)[0]!.toLowerCase()
-    // A shell or wrapper word names no rule: the first send-tool token
-    // anywhere in the segment does (a wrapped `bash -c "git push…"` labels
-    // git-push), and only a command naming none falls back to http-send.
     const inner = segment.argv.map(word => word.split(/[\s/]/)[0]!.toLowerCase()).find(token => WRAPPED_RULE_HEADS[token] !== undefined)
-    let rule = WRAPPED_RULE_HEADS[head] ?? (inner === undefined ? undefined : WRAPPED_RULE_HEADS[inner])
-    if (rule === undefined) {
-      // A shell whose -c string or options were opaque records as a
-      // shell-call (round 6 L3); a wrapper or leftover path names no send.
-      if (/-c string|shell options/.test(segment.note) || SHELL_WORDS.has(head)) rule = 'shell-call'
-      else if (WRAPPER_WORDS.has(head) || /^[-~$]/.test(head)) return []
-    }
-    return [base(rule ?? 'http-send', { kind: 'unresolved', why: segment.note })]
+    const rule = WRAPPED_RULE_HEADS[head] ?? (inner === undefined ? undefined : WRAPPED_RULE_HEADS[inner]) ?? 'shell-call'
+    return [base(rule, { kind: 'unresolved', why: segment.note })]
   }
+  // The cwd note overrides only segments that are already sends (round 7
+  // S4): a non-send after `cd ~` records nothing.
+  const matched = matchSends(segment, configTouched)
+  if (segment.note === CWD_UNRESOLVED) {
+    return matched.map(candidate => ({ ...candidate, target: { kind: 'unresolved' as const, why: CWD_UNRESOLVED } }))
+  }
+  return matched
+}
+
+/** The rules table proper, on one already-unwrapped segment. */
+function matchSends(segment: { argv: string[]; text: string; cwd: string; env: ReadonlyMap<string, string | null> }, configTouched: boolean): SendCandidate[] {
+  const { text, cwd, env } = segment
+  const base = (rule: SendCandidate['rule'], target: SendTarget): SendCandidate => ({ rule, segment: text, cwd, target })
   const argv = segment.argv
   if (argv.length === 0) return []
-    const ghPinned = env.has('GH_REPO') ? 'GH_REPO is set' : env.has('GH_HOST') ? 'GH_HOST is set' : null
+  const ghPinned = env.has('GH_REPO') ? 'GH_REPO is set' : env.has('GH_HOST') ? 'GH_HOST is set' : null
   const head = argv0(argv)
 
   if (head === 'git') {

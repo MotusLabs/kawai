@@ -40,7 +40,7 @@ const REDIRECT_ALONE = /^(?:\d*(?:>>?|<>)&\d*|>&\d+)$/
 const HEREDOC = /^<<-?$/
 
 /** Why a directory change cannot be resolved (I1: never silently kept). */
-const CWD_UNRESOLVED = 'the working directory does not resolve'
+export const CWD_UNRESOLVED = 'the working directory does not resolve'
 
 /** A directory a segment can pin, or null when the shell would expand it. */
 function resolveDir(dir: string, cwd: string): string | null {
@@ -147,13 +147,22 @@ function buildSegment(
           at++
           continue
         }
-        if (word.text === '-C' || word.text === '--chdir') {
-          const target = rest[at + 1]
-          if (target === undefined || target.opaque) { note = CWD_UNRESOLVED; break }
+        if (word.text.startsWith('-C') || word.text === '--chdir') {
+          const attached = word.text.length > 2 ? { text: word.text.slice(2), opaque: word.opaque } : null
+          const target = attached ?? rest[at + 1]
+          if (target === undefined || target.opaque || (attached === null && at + 1 >= rest.length)) {
+            note = CWD_UNRESOLVED
+            at += attached === null ? 2 : 1
+            break
+          }
           const dir = resolveDir(target.text, segmentCwd)
-          if (dir === null) { note = CWD_UNRESOLVED; break }
+          if (dir === null) {
+            note = CWD_UNRESOLVED
+            at += attached === null ? 2 : 1
+            break
+          }
           segmentCwd = dir
-          at += 2
+          at += attached === null ? 2 : 1
           continue
         }
         if (word.text === '-i' || word.text === '--ignore-environment') { cleared = true; at++; continue }
@@ -180,7 +189,7 @@ function buildSegment(
       let at = 1
       let hasC = false
       let shellNote: string | undefined
-      while (at < rest.length && rest[at]!.text.startsWith('-') && rest[at]!.text !== '--' && rest[at]!.text !== '-') {
+      while (at < rest.length && /^[-+]/.test(rest[at]!.text) && rest[at]!.text !== '--' && rest[at]!.text !== '-') {
         const flag = rest[at]!.text
         if (/^-[a-qs-z]*c[a-qs-z]*$|^-[a-z]*c[a-z]*$/.test(flag)) { hasC = true; break }
         // -o/+o and -O/+O take an argument; any other option letter or an
@@ -228,20 +237,35 @@ function buildSegment(
   // `git -C <dir>` pins this segment alone.
   let gitCwdNote: string | undefined
   if (argv[0]?.split('/').pop() === 'git') {
-    const dashC = argv.findIndex((word, index) => index > 0 && (word === '-C') && argv.length > index + 1)
-    if (dashC > 0) {
-      const targetWord = rest[dashC + 1]
-      const pinned = targetWord?.opaque === true ? null : resolveDir(argv[dashC + 1]!, cwd)
-      if (pinned === null) gitCwdNote = CWD_UNRESOLVED
-      else segmentCwd = pinned
+    // Every -C applies in order (git chdirs through them all): any opaque or
+    // unresolvable one pins the whole chain; else the last directory wins.
+    let pinnedDir: string | null = null
+    for (let i = 1; i < argv.length; i++) {
+      const word = argv[i]!
+      if (word === '--') break
+      const attached = word.startsWith('-C') && word.length > 2
+      if (word !== '-C' && !attached) {
+        if (word.startsWith('-') && !word.startsWith('--')) continue
+        if (word.startsWith('--') && word !== '--git-dir' && word !== '--work-tree' && word !== '--namespace' && word !== '--config-env') continue
+        break
+      }
+      const target = attached ? word.slice(2) : argv[i + 1]
+      if (target === undefined || (attached ? rest[i]!.opaque : rest[i + 1]?.opaque === true)) { gitCwdNote = CWD_UNRESOLVED; continue }
+      const dir = resolveDir(target, cwd)
+      if (dir === null) { gitCwdNote = CWD_UNRESOLVED; continue }
+      pinnedDir = dir
+      if (!attached) i++
     }
+    if (gitCwdNote === undefined && pinnedDir !== null) segmentCwd = pinnedDir
   }
   // cd/pushd move every later segment; popd returns to a dir the parser
   // never tracked. An unresolvable target sticks the whole rest of the call
   // unresolved (round 6 B1).
   let chdir: string | undefined
   let chdirStuck = false
-  if (argv[0] === 'cd' || argv[0] === 'pushd') {
+  if (argv[0] === 'pushd' && (argv[1] === '-n' || argv[1] === '--no-cd')) {
+    // pushd -n only manipulates the stack: the cwd never moves.
+  } else if (argv[0] === 'cd' || argv[0] === 'pushd') {
     const target = rest[1]
     if (argv[0] === 'cd' && target === undefined) chdirStuck = true
     else if (target === undefined || target.opaque || target.text.startsWith('-')) chdirStuck = argv[0] === 'cd' ? true : target?.text === '-' ? true : false
