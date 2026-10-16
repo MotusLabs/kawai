@@ -63,7 +63,14 @@ export const validationSchemas = {
   plan_assess: z.object({
     plan_id: z.string().min(1),
     revision: z.number().int(),
-    alignment: z.record(z.string(), z.unknown()).optional(),
+    alignment: z.object({
+      assessment: z.enum(['aligned', 'aligned-with-conditions', 'exploratory', 'conflicting', 'insufficient-information']),
+      outcomes: z.array(z.string()).optional(),
+      conditions: z.array(z.object({ text: z.string(), gate: z.enum(['ready', 'start', 'acceptance']) })).optional(),
+      experiment: z.object({ criteria: z.string(), scope: z.string() }).nullable().optional(),
+      conflicts: z.array(z.string()).optional(),
+      rationale: z.string().optional(),
+    }).optional(),
     questions: z.array(z.object({ text: z.string().min(1), mandatory: z.boolean(), subject: z.string().nullable().optional() })).max(20).optional(),
     findings: z.array(z.object({ text: z.string().min(1), subject: z.string().nullable().optional() })).max(20).optional(),
   }),
@@ -101,7 +108,16 @@ export function validationHandlers(validation: ValidationService, sessionId: str
       return validation.assess(caller, {
         plan_id: parsed.plan_id,
         revision: parsed.revision,
-        ...(parsed.alignment !== undefined ? { alignment: parsed.alignment as never } : {}),
+        ...(parsed.alignment !== undefined ? {
+          alignment: {
+            assessment: parsed.alignment.assessment,
+            outcomes: parsed.alignment.outcomes ?? [],
+            conditions: parsed.alignment.conditions ?? [],
+            experiment: parsed.alignment.experiment ?? null,
+            conflicts: parsed.alignment.conflicts ?? [],
+            rationale: parsed.alignment.rationale ?? '',
+          },
+        } : {}),
         ...(parsed.questions !== undefined ? { questions: parsed.questions.map(question => ({ text: question.text, mandatory: question.mandatory, subject: question.subject ?? null })) } : {}),
         ...(parsed.findings !== undefined ? { findings: parsed.findings.map(finding => ({ text: finding.text, subject: finding.subject ?? null })) } : {}),
       })

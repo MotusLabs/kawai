@@ -11,7 +11,7 @@ import { loadTeamGroups } from '../../team/teamGroups'
 import type { StrategyStore } from '../../strategy/strategyStore'
 import { strategyAlignmentRefs } from '../../../shared/planChecks'
 import type { Plan, PlanRevision } from '../../../shared/plans'
-import type { AlignmentAssessment } from '../../../shared/planValidation'
+import { ALIGNMENT_VALUES, type AlignmentAssessment } from '../../../shared/planValidation'
 import type { PlanStore } from '../planStore'
 import { payloadDifference } from '../planCommands'
 import type { ValidationCaller, AssessInput, AssessOutcome } from './ValidationService'
@@ -91,10 +91,16 @@ export async function assessValidation(deps: ValidationDeps, caller: ValidationC
         throw new ValidationRefusal({ ok: false, reason: 'limit', message: `An assessment call carries at most ${AGENT_RECORD_LIMIT} questions and ${AGENT_RECORD_LIMIT} findings (got ${questions.length} and ${findings.length}).` })
       }
       for (const question of questions) {
+        if (question === null || typeof question !== 'object' || typeof question.text !== 'string' || typeof question.mandatory !== 'boolean' || (question.subject !== null && question.subject !== undefined && typeof question.subject !== 'string')) {
+          throw new ValidationRefusal({ ok: false, reason: 'shape', message: 'Every question must be { text, mandatory, subject? }.' })
+        }
         if (!trimmed(question.text)) throw new ValidationRefusal({ ok: false, reason: 'shape', message: 'Every question needs its text.' })
         if (overLimit(question.text, ASSESS_TEXT_LIMIT)) throw new ValidationRefusal({ ok: false, reason: 'limit', message: 'Question text is over the 2,000-character limit; refused, never cut.' })
       }
       for (const finding of findings) {
+        if (finding === null || typeof finding !== 'object' || typeof finding.text !== 'string' || (finding.subject !== null && finding.subject !== undefined && typeof finding.subject !== 'string')) {
+          throw new ValidationRefusal({ ok: false, reason: 'shape', message: 'Every finding must be { text, subject? }.' })
+        }
         if (!trimmed(finding.text)) throw new ValidationRefusal({ ok: false, reason: 'shape', message: 'Every finding needs its text.' })
         if (overLimit(finding.text, ASSESS_TEXT_LIMIT)) throw new ValidationRefusal({ ok: false, reason: 'limit', message: 'Finding text is over the 2,000-character limit; refused, never cut.' })
       }
@@ -157,11 +163,26 @@ function pinnedRefs(deps: ValidationDeps, teamId: string, row: PlanRevision): Se
   return revision ? strategyAlignmentRefs(revision.content) : null
 }
 
+/** The write-time shape guard: every field must be the type the record stores (D5), before any rule reads it. */
+function checkAlignmentShape(alignment: AlignmentAssessment): void {
+  const bad = (message: string): never => { throw new ValidationRefusal({ ok: false, reason: 'shape', message }) }
+  if (typeof alignment !== 'object' || alignment === null) bad('The alignment assessment must be an object.')
+  if (typeof alignment.assessment !== 'string' || !(ALIGNMENT_VALUES as readonly string[]).includes(alignment.assessment)) {
+    bad(`The assessment must be one of ${ALIGNMENT_VALUES.join(', ')}.`)
+  }
+  if (!Array.isArray(alignment.outcomes) || alignment.outcomes.some(ref => typeof ref !== 'string')) bad('The outcomes must be an array of reference strings.')
+  if (!Array.isArray(alignment.conditions) || alignment.conditions.some(condition => condition === null || typeof condition !== 'object' || typeof condition.text !== 'string' || typeof condition.gate !== 'string')) bad('The conditions must be an array of { text, gate }.')
+  if (alignment.experiment !== null && alignment.experiment !== undefined && (typeof alignment.experiment !== 'object' || alignment.experiment === null || typeof alignment.experiment.criteria !== 'string' || typeof alignment.experiment.scope !== 'string')) bad('The experiment must be null or { criteria, scope }.')
+  if (!Array.isArray(alignment.conflicts) || alignment.conflicts.some(conflict => typeof conflict !== 'string')) bad('The conflicts must be an array of strings.')
+  if (typeof alignment.rationale !== 'string') bad('The rationale must be a string.')
+}
+
 /** D5's shape and limit rules for one alignment assessment. */
 function checkAlignment(deps: ValidationDeps, teamId: string, row: PlanRevision, alignment: AlignmentAssessment): void {
   if (!row.pin) {
     throw new ValidationRefusal({ ok: false, reason: 'target', message: 'no approved strategy: alignment is unassessed' })
   }
+  checkAlignmentShape(alignment)
   if (!trimmed(alignment.rationale)) {
     throw new ValidationRefusal({ ok: false, reason: 'shape', message: 'An alignment assessment needs its rationale.' })
   }

@@ -202,6 +202,25 @@ describe('ValidationService.assess (D5)', () => {
     expect(b.validationStore.assessments(planId, revision)).toHaveLength(1)
   })
 
+  test('a malformed alignment is refused at write time, never crashed on', async () => {
+    const b = use()
+    b.approveStrategy()
+    const { planId, revision } = await b.draftInReview()
+    const malformed = await b.validation.assess(b.agent('dev'), {
+      plan_id: planId, revision,
+      alignment: { assessment: 'aligned', outcomes: 'UC1-not-an-array' } as never,
+    })
+    expect(malformed).toMatchObject({ ok: false, reason: 'shape' })
+    expect(malformed.ok === false && malformed.message).toContain('array of reference strings')
+    const bogusValue = await b.validation.assess(b.agent('dev'), {
+      plan_id: planId, revision,
+      alignment: aligned({ assessment: 'bogus' as never }),
+    })
+    expect(bogusValue.ok === false && bogusValue.message).toContain('aligned-with-conditions')
+    const badQuestion = await b.validation.assess(b.agent('dev'), { plan_id: planId, revision, questions: [{ text: 42 as never, mandatory: true, subject: null }] })
+    expect(badQuestion).toMatchObject({ ok: false, reason: 'shape' })
+  })
+
   test('an agent retry appends', async () => {
     const b = use()
     const { planId, revision } = await b.draftInReview()

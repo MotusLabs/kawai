@@ -171,6 +171,7 @@ export interface PlanValidationReport {
 // --- D5: assessments ---
 
 export type AlignmentValue = 'aligned' | 'aligned-with-conditions' | 'exploratory' | 'conflicting' | 'insufficient-information'
+export const ALIGNMENT_VALUES: readonly AlignmentValue[] = ['aligned', 'aligned-with-conditions', 'exploratory', 'conflicting', 'insufficient-information']
 
 export type ConditionGate = 'ready' | 'start' | 'acceptance'
 
