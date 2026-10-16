@@ -72,7 +72,7 @@ Implement after `durable-plans` and `strategy-revision-impact` have landed on ma
 
 ## 5. Checks
 
-- [ ] 5.1 Implement `validationChecks.ts` with `VALIDATION_CHECKS` in the D3 order and rows. Verify one test per check outcome in the D3 table, including:
+- [x] 5.1 Implement `validationChecks.ts` with `VALIDATION_CHECKS` in the D3 order and rows. Verify one test per check outcome in the D3 table, including:
   - the adapter-unavailable errors on `openspec-valid` and `relations`;
   - unregistered changes skipped by both;
   - `change-claimed-elsewhere` ignores the plan's own revisions and closed plans;
