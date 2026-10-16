@@ -67,7 +67,7 @@ Stage 1 is groups 1–7. Stage 2 (groups 8–10) can land separately once stage 
 
 ## 11. Integration
 
-- [ ] 11.1 End-to-end on a fixture team: run turns under two reviewer prompt versions, submit and review results, close tasks, then read `team_metrics` 7d sliced by reviewer version and confirm it matches the Metrics tab; verify with a fixture e2e spec named in `ci.yml` and `bun run lint && bun run typecheck && bun run test` passing.
+- [x] 11.1 End-to-end on a fixture team: run turns under two reviewer prompt versions, submit and review results, close tasks, then read `team_metrics` 7d sliced by reviewer version and confirm it matches the Metrics tab; verify with a fixture e2e spec named in `ci.yml` and `bun run lint && bun run typecheck && bun run test` passing.
 - [ ] 11.2 Run `openspec validate team-process-metrics --strict`; verify it reports the change valid.
 
 ## Workflow follow-up
