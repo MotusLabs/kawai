@@ -1,7 +1,7 @@
 import { defineConfig } from '@playwright/test'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { accessSync, constants as fsConstants, mkdirSync, realpathSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { delimiter, join } from 'node:path'
 
 const port = Number(process.env.E2E_PORT) || 4173
 const tmuxSession =
@@ -59,14 +59,35 @@ const remoteHost = 'e2e-fake-box'
 const stubBinDir = join(tmuxTmpDir, 'stub-bin')
 mkdirSync(stubBinDir, { recursive: true })
 // plan-validation e2e: a stub OpenSpec CLI the SERVER's adapter spawns. It
-// answers the probe and strict validation, and serves canned deltas per
-// change from a JSON file the spec rewrites between steps — never the real
-// CLI, never the network.
+// answers ONLY the calls the validation adapter makes — the probe
+// (--version), strict validate, and show-deltas, the last serving canned
+// deltas per change from a JSON file the spec rewrites between steps. Every
+// other invocation execs the REAL openspec with the original args: the
+// stub-bin dir is first on the SERVER's PATH for every spec, so workspace
+// discovery (`openspec list --json`) and anything else must keep working,
+// or change sections vanish from every e2e (CI caught exactly that). The
+// real executable is resolved from PATH as it is BEFORE stubBinDir is
+// prefixed; with no real CLI installed, the fallback keeps today's
+// unknown-command failure rather than looping back into the stub.
+const realOpenspec = (() => {
+  for (const dir of (process.env.PATH ?? '').split(delimiter).filter(Boolean)) {
+    if (dir === stubBinDir) continue
+    const candidate = join(dir, 'openspec')
+    try {
+      accessSync(candidate, fsConstants.X_OK)
+      return realpathSync(candidate)
+    } catch {
+      // not present or not executable in this directory
+    }
+  }
+  return null
+})()
 writeFileSync(
   join(stubBinDir, 'openspec'),
   [
     '#!/bin/sh',
-    '# e2e stub: the OpenSpec CLI as plan-validation sees it',
+    '# e2e stub: only the validation adapter calls are canned; everything',
+    '# else must reach the real openspec (workspace discovery depends on it).',
     'case "$1" in',
     '  --version)',
     '    echo "1.14.2"',
@@ -84,8 +105,12 @@ writeFileSync(
     '    exit 0',
     '    ;;',
     'esac',
-    'printf "unknown command" >&2',
-    'exit 2',
+    realOpenspec
+      ? `exec '${realOpenspec}' "$@"`
+      : [
+          'printf "unknown command" >&2',
+          'exit 2',
+        ].join('\n'),
   ].join('\n'),
   { mode: 0o755 },
 )
