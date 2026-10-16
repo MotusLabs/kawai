@@ -136,6 +136,20 @@ export interface ChatSpawnInfo {
   resumed: boolean
 }
 
+/** How long prompts wait for an interrupted turn's tail (see `tail`). */
+export const INTERRUPT_TAIL_TIMEOUT_MS = 5_000
+
+interface InterruptTail {
+  /** Prompts sent while the tail is in flight, pushed once it settles. */
+  held: SDKUserMessage[]
+  /** Past the bound: prompts flow again, the next `init` closes the window. */
+  expired: boolean
+  /** Resolves when prompts flow again (tail, death, kill, or the bound). */
+  settled: Promise<void>
+  settle: () => void
+  timer: ReturnType<typeof setTimeout>
+}
+
 export interface ChatSessionDriverOptions {
   /** Agentboard session id (chat-<uuid>); used for logging context only. */
   sessionId: string
@@ -175,6 +189,8 @@ export interface ChatSessionDriverOptions {
    * settings decide.
    */
   getEffort?: () => Options['effort']
+  /** Bound on an interrupted turn's tail (default `INTERRUPT_TAIL_TIMEOUT_MS`). */
+  interruptTailTimeoutMs?: number
   /**
    * Called once per constructed query with what this spawn launched with
    * (team-process-metrics D2: agent-start provenance). Observational: a
@@ -330,12 +346,23 @@ export class ChatSessionDriver {
    * interrupt with its acknowledgement first and only then flushes the
    * aborted turn's frames and its `result` (observed on the wire:
    * ack → [user] → result/error_during_execution → system/init of the next
-   * turn), so a turn opened in between (an urgent peer delivery) must not
-   * receive them. Exactly one result is consumed; the next turn's `init`
-   * closes the window, so a CLI that sends no trailing result can never
-   * swallow the next turn's own one. Process death clears it too.
+   * turn). Results carry no turn id, so the invariant is kept by ordering:
+   * while the window is open no prompt reaches the CLI — sends and
+   * deliveries are held in `held` — so the next turn cannot begin, and every
+   * content frame and the one result that arrive are the aborted turn's
+   * (attributed to no turn, consumed). An `init` inside the window does not
+   * close it. The window closes on that result, on kill, or on process
+   * death, flushing `held` to the CLI; `interrupt()` resolves only then, so
+   * mail delivery always starts after the tail.
+   *
+   * Bound: a CLI that never sends the tail would hold prompts forever, so
+   * after `interruptTailTimeoutMs` the window expires — held prompts are
+   * released and `interrupt()` resolves — but still consumes a result
+   * arriving before the next `init`. Failure mode: a tail later than both
+   * the bound and the released turn's `init` completes that turn with the
+   * aborted turn's result (logged as `chat_interrupt_tail_timeout`).
    */
-  private interruptedTail = false
+  private tail: InterruptTail | null = null
   /**
    * Task notifications that arrived while no turn was active (background
    * tasks D5): they become the next turn's trigger — user-started or
@@ -459,7 +486,40 @@ export class ChatSessionDriver {
    * turn opened since.
    */
   private frameTurnId(): string | null {
-    return this.interruptedTail ? null : this.activeTurnId
+    return this.tail ? null : this.activeTurnId
+  }
+
+  /** Hand a prompt to the CLI, or hold it while an interrupted tail is in flight. */
+  private enqueue(message: SDKUserMessage): void {
+    if (this.tail && !this.tail.expired) this.tail.held.push(message)
+    else this.queue.push(message)
+  }
+
+  private openTail(): void {
+    let settle!: () => void
+    const settled = new Promise<void>(resolve => { settle = resolve })
+    const timeoutMs = this.options.interruptTailTimeoutMs ?? INTERRUPT_TAIL_TIMEOUT_MS
+    const tail: InterruptTail = { held: [], expired: false, settled, settle, timer: setTimeout(() => {
+      if (this.tail !== tail) return
+      logger.warn('chat_interrupt_tail_timeout', { sessionId: this.options.sessionId, timeoutMs })
+      tail.expired = true
+      this.releaseHeld(tail)
+    }, timeoutMs) }
+    this.tail = tail
+  }
+
+  private releaseHeld(tail: InterruptTail): void {
+    for (const message of tail.held.splice(0)) this.queue.push(message)
+    tail.settle()
+  }
+
+  /** The tail arrived, or never will (kill, death, an init past the bound). */
+  private closeTail(): void {
+    const tail = this.tail
+    if (!tail) return
+    this.tail = null
+    clearTimeout(tail.timer)
+    this.releaseHeld(tail)
   }
 
   /** Submit a user turn. Spawns the SDK lazily on the first turn. */
@@ -469,7 +529,7 @@ export class ChatSessionDriver {
     const turnId = this.activeTurnId ?? this.startTurn()
     this.trackEcho(text)
     this.emit({ type: 'user_message', turnId, text })
-    this.queue.push({
+    this.enqueue({
       type: 'user',
       message: { role: 'user', content: text },
       parent_tool_use_id: null,
@@ -488,7 +548,7 @@ export class ChatSessionDriver {
     const text = formatEnvelope(envelope)
     this.trackEcho(text)
     this.emit({ type: 'peer_message', turnId, ...envelope })
-    this.queue.push({
+    this.enqueue({
       type: 'user', message: { role: 'user', content: text },
       parent_tool_use_id: null,
       // A human sender has no session id; the envelope's senderKind says so.
@@ -497,14 +557,22 @@ export class ChatSessionDriver {
     this.refreshStatus()
   }
 
-  /** Stop button: abort the in-flight turn, drop queued sends, cancel asks. */
+  /**
+   * Stop button: abort the in-flight turn, drop queued sends, cancel asks.
+   * turn_interrupted is emitted at once; the promise resolves once the CLI
+   * acknowledged and the aborted turn's tail settled (see `tail`), so a
+   * delivery awaiting it starts after the tail.
+   */
   interrupt(): Promise<void> {
     this.queue.clearPending()
+    if (this.tail) this.tail.held = []
     this.cancelAllRequests('interrupted')
     if (this.activeTurnId) {
       const turnId = this.activeTurnId
       this.activeTurnId = null
-      if (this.query) this.interruptedTail = true
+      // A turn held behind an open tail never reached the CLI: the open
+      // window already covers the one tail the CLI owes.
+      if (this.query && !this.tail) this.openTail()
       this.emit({ type: 'turn_interrupted', turnId })
       // Turn boundary: re-resolve the threshold for the next turn (design D2).
       this.refreshContextThreshold()
@@ -514,11 +582,12 @@ export class ChatSessionDriver {
     this.feedWorkers({ type: 'process_end' })
     const query = this.query
     if (query) {
-      const completed = query.interrupt().then(() => {}).catch(() => {
+      const acknowledged = query.interrupt().then(() => {}).catch(() => {
         // The process may already be gone; the stream loop handles death.
       })
+      const tail = this.tail?.settled
       this.refreshStatus()
-      return completed
+      return tail ? Promise.all([acknowledged, tail]).then(() => {}) : acknowledged
     }
     this.refreshStatus()
     return Promise.resolve()
@@ -530,7 +599,7 @@ export class ChatSessionDriver {
     this.queue.end()
     this.cancelAllRequests('killed')
     this.activeTurnId = null
-    this.interruptedTail = false
+    this.closeTail()
     // Archive and kill both end the process (design D3): every worker still
     // without an outcome settles as stopped, nothing survives as live. The
     // background tasks die with the process too (background tasks D1) — but
@@ -866,7 +935,7 @@ export class ChatSessionDriver {
     this.dead = true
     this.query = null
     this.activeTurnId = null
-    this.interruptedTail = false
+    this.closeTail()
     // The process is gone (design D3): workers cannot have outcomes any
     // more, so any still-open row settles as stopped rather than wedging.
     // Background tasks settle the same way (D1) — the respawn starts clean.
@@ -1075,11 +1144,11 @@ export class ChatSessionDriver {
     // modelUsage arrives on every result whatever the turn state; its
     // contextWindow is the threshold fallback (design D2 step 3).
     this.readModelContextWindow(message)
-    if (this.interruptedTail) {
-      // The interrupted turn's own result (see `interruptedTail`): it was
-      // already reported as turn_interrupted and must not close the turn
-      // that opened since — its usage and outcome are not that turn's.
-      this.interruptedTail = false
+    if (this.tail) {
+      // The interrupted turn's own result (see `tail`): it was already
+      // reported as turn_interrupted and must not close a turn opened since —
+      // its usage and outcome are not that turn's.
+      this.closeTail()
       return
     }
     const turnId = this.activeTurnId
@@ -1118,9 +1187,10 @@ export class ChatSessionDriver {
       this.reportLimit(retryLimitSignal(message, this.currentResetsAt()))
     }
     if (message.subtype === 'init') {
-      // A new turn begins: whatever the interrupted turn still owed has
-      // been sent or never will be (see `interruptedTail`).
-      this.interruptedTail = false
+      // Inside the window no prompt reached the CLI, so this init is not a
+      // turn of ours and the tail is still owed; past the bound it opens the
+      // released turn, and a tail that never came never will (see `tail`).
+      if (this.tail?.expired) this.closeTail()
       // Agent-started turn (background tasks D5): `init` opens every turn
       // and is the first frame of one that the SDK yields to consumers —
       // `session_state_changed` is `sdk_host_only` and never reaches this

@@ -29,6 +29,8 @@ export const fixtureQueryFactory: ChatQueryFactory = ({ prompt, options, wire })
   let wake: (() => void) | null = null
   let closed = false
   let generation = 0
+  /** A run is in flight: an interrupt owes its trailing result, like the CLI. */
+  let running = false
   const controller = new AbortController()
   /** The background scenario's tasks, answering getTaskOutput/stopTask. */
   const backgroundTasks = new Map<string, { output: string; lines: string[]; stopped?: boolean }>()
@@ -273,7 +275,8 @@ export const fixtureQueryFactory: ChatQueryFactory = ({ prompt, options, wire })
       if (closed) break
       frame('out', message)
       const content = message.message.content
-      await run(typeof content === 'string' ? content : '')
+      running = true
+      try { await run(typeof content === 'string' ? content : '') } finally { running = false }
     }
   })()
   const stream = (async function* () {
@@ -307,6 +310,11 @@ export const fixtureQueryFactory: ChatQueryFactory = ({ prompt, options, wire })
     interrupt: async () => {
       frame('out', { type: 'control_request', request_id: crypto.randomUUID(), request: { subtype: 'interrupt' } })
       generation++
+      // The real CLI flushes the aborted turn's result after the ack.
+      if (running) {
+        running = false
+        setTimeout(() => push({ type: 'result', subtype: 'error_during_execution', is_error: true, errors: [], total_cost_usd: 0, num_turns: 1 }), 0)
+      }
     },
     // The background-task controls (background tasks D3/D4), shaped like the
     // real CLI's runtime surface: getTaskOutput reads the scenario's real

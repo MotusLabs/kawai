@@ -1,6 +1,6 @@
 // Real manager, driver, mailbox, dispatcher, and limit outcomes: urgent
-// direct mail interrupts a busy agent, the CLI's trailing result for the
-// aborted turn arrives after the delivery, and the delivered turn then ends
+// direct mail interrupts a busy agent, the delivery waits for the CLI's
+// trailing result for the aborted turn, and the delivered turn then ends
 // at a final provider limit — the message must be parked on its holder.
 import { afterEach, beforeEach, expect, test } from 'bun:test'
 import fs from 'node:fs'
@@ -127,16 +127,19 @@ test('urgent mail that interrupts a busy agent is parked when its delivered turn
   const mail = store.enqueue({ teamId, toKind: 'session', toId: id, fromSession: null, fromGroup: null,
     originPath: project, priority: 'urgent', body: 'Drop that and fix the build' })
   manager!.dispatcher.notify()
+  await waitFor(() => clis[0]!.interrupts === 1)
+  // Acknowledged: the dispatcher holds the claim until the aborted turn's
+  // trailing result arrives, and only then delivers.
+  await Bun.sleep(20)
+  expect(store.get(mail.id)).toMatchObject({ state: 'claimed', claimedBy: id, pushedAt: null })
+  clis[0]!.push(result('error_during_execution', 900))
   await manager!.dispatcher.settled()
-  expect(clis[0]!.interrupts).toBe(1)
   expect(store.get(mail.id)).toMatchObject({ claimedBy: id })
 
   await receipt(clis[0]!, 1)
 
-  // The aborted turn's trailing result lands after the delivery, then the
-  // delivered turn makes progress and fails at a final limit resetting
+  // The delivered turn makes progress and fails at a final limit resetting
   // within 3h (parkIfResetWithin's default).
-  clis[0]!.push(result('error_during_execution', 900))
   clis[0]!.push(init())
   clis[0]!.push(frame({ type: 'assistant', parent_tool_use_id: null,
     message: { id: 'msg_tool', role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_1', name: 'Edit', input: { file_path: path.join(project, 'build.ts') } }] } }))

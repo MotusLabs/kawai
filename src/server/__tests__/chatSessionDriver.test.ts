@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -26,6 +26,7 @@ import type { SessionStatus } from '../../shared/types'
 import type { ChatWireRecorder } from '../chat/wireTap'
 import type { ChatLimitSignal } from '../chat/limitSignals'
 import { outboundFile } from '../outbound/destinations'
+import { logger } from '../logger'
 import { applyChatEvents, emptyTranscript } from '../../client/stores/chatStore'
 import { SessionTeams } from '../team/sessionTeams'
 import { consumerMessages } from './fixtures/backgroundTasks'
@@ -48,6 +49,8 @@ interface FakeQueryHandle {
   push: (message: SDKMessage) => void
   /** Pull the next user turn the driver submitted (null when none waiting). */
   pullPrompt: () => Promise<SDKUserMessage | null>
+  /** The prompt stream the driver feeds (for an unbounded pull). */
+  prompt: AsyncIterable<SDKUserMessage>
   interrupts: number
   closed: boolean
   /** End the stream as the real process would on exit/crash. */
@@ -145,6 +148,7 @@ function createFakeQuery(
       messages.push(message)
     }
   }
+  handle.prompt = prompt
   handle.pullPrompt = async () => {
     const iterator = prompt[Symbol.asyncIterator]()
     const result = await Promise.race([
@@ -218,6 +222,8 @@ function createHarness(
     onNotification?: (notification: ChatNotification, timeoutMs?: number) => void
     /** Replaces the harness's process-end capture. */
     onProcessEnd?: () => void
+    /** The interrupted-tail bound (default INTERRUPT_TAIL_TIMEOUT_MS). */
+    interruptTailTimeoutMs?: number
   } = {}
 ): Harness {
   const events: ChatEvent[] = []
@@ -3372,7 +3378,10 @@ describe('ChatSessionDriver agent-started turns (background tasks D5)', () => {
     harness.fakes[0]!.push(initFrame())
     await flush()
     expect(harness.events.some((event) => event.type === 'turn_started')).toBe(true)
-    await harness.driver.interrupt()
+    const interrupted = harness.driver.interrupt()
+    // The interrupt settles once the aborted turn's trailing result arrives.
+    harness.fakes[0]!.push(result('error_during_execution'))
+    await interrupted
     await flush()
     expect(typesOf(harness.events)).toContain('turn_interrupted')
     expect(harness.statuses.at(-1)).toBe('waiting')
@@ -3499,7 +3508,9 @@ describe('ChatSessionDriver background-task roster (background tasks D1/D7)', ()
     } as unknown as SDKMessage)
     await flush()
     expect(harness.backgroundTasks.at(-1)).toMatchObject([{ taskId: 'blong', status: 'running', live: true }])
-    await harness.driver.interrupt()
+    const interrupted = harness.driver.interrupt()
+    harness.fakes[0]!.push(result('error_during_execution'))
+    await interrupted
     await flush()
     // The turn aborted, but a background shell survives it (D1).
     expect(harness.backgroundTasks.at(-1)).toMatchObject([{ taskId: 'blong', status: 'running', live: true }])
@@ -3509,96 +3520,129 @@ describe('ChatSessionDriver background-task roster (background tasks D1/D7)', ()
   })
 })
 
+// The aborted turn's tail (see ChatSessionDriver `tail`): no frame or result
+// of an interrupted turn may complete or feed a later turn, in any order.
+// GUARD = fails on a base named in the test name; NIT = preserves behaviour
+// (passes on 2b1f56bf too).
 describe('ChatSessionDriver interrupted-turn tail', () => {
   const PEER = { messageId: 'mail-urgent', senderSession: 'lead', senderGroup: null, priority: 'urgent' as const, originPath: '/repo', tags: [], threadId: 'mail-urgent', body: 'Stop and do this', possibleDuplicate: false }
   const init = () => ({ type: 'system', subtype: 'init', session_id: 'sdk-1' }) as unknown as SDKMessage
   const interruptedEcho = () => ({ type: 'user', message: { role: 'user', content: '[Request interrupted by user]' }, parent_tool_use_id: null }) as unknown as SDKMessage
-  const completed = (h: Harness) => h.events.filter((event): event is Extract<ChatEvent, { type: 'turn_completed' }> => event.type === 'turn_completed')
-  const started = (h: Harness) => h.events.filter(event => event.type === 'turn_started').map(event => (event as { turnId: string }).turnId)
+  const aborted = () => result('error_during_execution', { usage: { input_tokens: 900, output_tokens: 90 } })
+  const own = () => result('success', { usage: { input_tokens: 5, output_tokens: 3 } })
+  const completed = (h: Harness) => h.events
+    .filter((event): event is Extract<ChatEvent, { type: 'turn_completed' }> => event.type === 'turn_completed')
+    .map(event => ({ turnId: event.turnId, subtype: event.subtype, input: event.usage?.inputTokens }))
+  const OWN_TURN_2 = [{ turnId: 'turn-2', subtype: 'success', input: 5 }]
+  const tracked = (promise: Promise<void>) => {
+    const state = { done: false }
+    void promise.then(() => { state.done = true })
+    return state
+  }
 
   /** A busy turn-1 the CLI is working on. */
-  async function busy() {
-    const h = createHarness()
+  async function busy(interruptTailTimeoutMs?: number) {
+    const h = createHarness(interruptTailTimeoutMs ? { interruptTailTimeoutMs } : {})
     h.driver.send('long job')
+    expect(await h.fakes[0]!.pullPrompt()).not.toBeNull()
     h.fakes[0]!.push(init())
     h.fakes[0]!.push(assistantText('working on it'))
     await flush()
     return h
   }
 
-  test('a delivery after the acknowledgement keeps its turn until its own result (frame order ack → result → init)', async () => {
+  /** The delivered turn runs on its own frames and result. */
+  async function deliveredTurnRuns(h: Harness) {
+    h.fakes[0]!.push(init())
+    h.fakes[0]!.push(assistantText('on it', 'msg_2'))
+    h.fakes[0]!.push(own())
+    await flush()
+    expect(completed(h)).toEqual(OWN_TURN_2)
+    expect(h.events.find(event => event.type === 'assistant_text' && event.turnId === 'turn-2')).toMatchObject({ text: 'on it' })
+    expect(h.events.some(event => event.type === 'error')).toBe(false)
+    expect(h.statuses.at(-1)).toBe('waiting')
+  }
+
+  test('GUARD (2b1f56bf, c04c8eee) ack → result → init: delivery waits for the tail, then the turn ends on its own result', async () => {
     const h = await busy()
-    await h.driver.interrupt()
-    h.driver.deliver(PEER)
-    // The aborted turn's tail arrives after the delivery opened turn-2.
+    const interrupted = tracked(h.driver.interrupt())
+    expect(h.events.at(-1)).toMatchObject({ type: 'turn_interrupted', turnId: 'turn-1' })
+    await flush()
+    // Acknowledged, but the tail is still owed: the dispatcher keeps waiting.
+    expect(interrupted.done).toBe(false)
     h.fakes[0]!.push(interruptedEcho())
-    h.fakes[0]!.push(result('error_during_execution', { usage: { input_tokens: 900, output_tokens: 90 } }))
+    h.fakes[0]!.push(aborted())
+    await flush()
+    expect(interrupted.done).toBe(true)
+    expect(completed(h)).toEqual([])
+    h.driver.deliver(PEER)
+    expect(await h.fakes[0]!.pullPrompt()).toMatchObject({ origin: { kind: 'peer' } })
+    await deliveredTurnRuns(h)
+    h.driver.kill()
+  })
+
+  test('GUARD (2b1f56bf, c04c8eee) ack → init → result: an init before the tail neither closes the window nor lets the tail close the delivered turn', async () => {
+    const h = await busy()
+    void h.driver.interrupt()
+    h.driver.deliver(PEER)
+    // MiMo's probe order: an init, then the aborted turn's echo and result.
+    h.fakes[0]!.push(init())
+    h.fakes[0]!.push(interruptedEcho())
+    h.fakes[0]!.push(aborted())
     await flush()
     expect(completed(h)).toEqual([])
     expect(h.statuses.at(-1)).toBe('working')
     expect(h.events.some(event => event.type === 'user_message' && event.turnId === 'turn-2')).toBe(false)
-    expect(h.events.some(event => event.type === 'error')).toBe(false)
-    // The delivered turn's own frames and result.
-    h.fakes[0]!.push(init())
-    h.fakes[0]!.push(assistantText('on it', 'msg_2'))
-    h.fakes[0]!.push(result('success', { usage: { input_tokens: 5, output_tokens: 3 } }))
-    await flush()
-    expect(started(h)).toEqual(['turn-1', 'turn-2'])
-    expect(h.events.find(event => event.type === 'turn_interrupted')).toMatchObject({ turnId: 'turn-1' })
-    expect(completed(h).map(event => ({ turnId: event.turnId, subtype: event.subtype, input: event.usage?.inputTokens }))).toEqual([
-      { turnId: 'turn-2', subtype: 'success', input: 5 },
-    ])
-    expect(h.events.find(event => event.type === 'assistant_text' && event.turnId === 'turn-2')).toMatchObject({ text: 'on it' })
-    expect(h.statuses.at(-1)).toBe('waiting')
+    await deliveredTurnRuns(h)
     h.driver.kill()
   })
 
-  test('Stop reports the interrupt at once and the late trailing result changes nothing', async () => {
+  test('GUARD (c04c8eee) a prompt sent while the tail is owed reaches the CLI only after it', async () => {
     const h = await busy()
     void h.driver.interrupt()
-    expect(h.events.at(-1)).toMatchObject({ type: 'turn_interrupted', turnId: 'turn-1' })
-    expect(h.statuses.at(-1)).toBe('waiting')
-    const before = h.events.length
-    h.fakes[0]!.push(interruptedEcho())
-    h.fakes[0]!.push(result('error_during_execution'))
-    await flush()
-    expect(h.events.slice(before)).toEqual([])
-    // The next user turn completes with its own result.
-    h.driver.send('next')
-    h.fakes[0]!.push(init())
-    h.fakes[0]!.push(result('success'))
-    await flush()
-    expect(completed(h).map(event => event.turnId)).toEqual(['turn-2'])
-    h.driver.kill()
-  })
-
-  test('an interrupt with no active turn consumes nothing', async () => {
-    const h = createHarness()
-    h.driver.start()
-    await h.driver.interrupt()
     h.driver.deliver(PEER)
-    // No init in between: the turn's own result must still close it.
-    h.fakes[0]!.push(result('success'))
+    let pulled: SDKUserMessage | null = null
+    void h.fakes[0]!.prompt[Symbol.asyncIterator]().next().then(next => { pulled = next.value ?? null })
     await flush()
-    expect(completed(h).map(event => event.turnId)).toEqual(['turn-1'])
-    expect(h.statuses.at(-1)).toBe('waiting')
+    expect(pulled).toBeNull()
+    h.fakes[0]!.push(aborted())
+    await flush()
+    expect(pulled).toMatchObject({ origin: { kind: 'peer' } })
     h.driver.kill()
   })
 
-  test('a missing trailing result never swallows the next turn\'s result', async () => {
-    const h = await busy()
-    await h.driver.interrupt()
-    h.driver.deliver(PEER)
-    // The CLI sent no tail: the delivered turn's init closes the window.
-    h.fakes[0]!.push(init())
-    h.fakes[0]!.push(result('success'))
-    await flush()
-    expect(completed(h).map(event => event.turnId)).toEqual(['turn-2'])
-    expect(h.statuses.at(-1)).toBe('waiting')
-    h.driver.kill()
+  test('NIT (fails on both bases only by the new warning) no tail: the bound releases the delivery, and its own result completes it', async () => {
+    const warn = spyOn(logger, 'warn')
+    try {
+      const h = await busy(30)
+      await h.driver.interrupt()
+      expect(warn).toHaveBeenCalledWith('chat_interrupt_tail_timeout', { sessionId: 'chat-test', timeoutMs: 30 })
+      h.driver.deliver(PEER)
+      expect(await h.fakes[0]!.pullPrompt()).toMatchObject({ origin: { kind: 'peer' } })
+      await deliveredTurnRuns(h)
+      h.driver.kill()
+    } finally { warn.mockRestore() }
   })
 
-  test('process death during an interrupt clears the tail for the respawned process', async () => {
+  test('GUARD (2b1f56bf) a tail later than the bound, before the next init, is still consumed', async () => {
+    const warn = spyOn(logger, 'warn')
+    try {
+      const h = await busy(30)
+      await h.driver.interrupt()
+      h.driver.deliver(PEER)
+      expect(await h.fakes[0]!.pullPrompt()).toMatchObject({ origin: { kind: 'peer' } })
+      h.fakes[0]!.push(interruptedEcho())
+      h.fakes[0]!.push(aborted())
+      await flush()
+      expect(completed(h)).toEqual([])
+      // Documented failure mode: a tail later than both the bound and this
+      // init would complete turn-2 with the aborted turn's result.
+      await deliveredTurnRuns(h)
+      h.driver.kill()
+    } finally { warn.mockRestore() }
+  })
+
+  test('NIT process death settles the tail; the respawned process\'s result closes the next turn', async () => {
     const h = await busy()
     const interrupted = h.driver.interrupt()
     h.fakes[0]!.exit()
@@ -3607,10 +3651,58 @@ describe('ChatSessionDriver interrupted-turn tail', () => {
     expect(h.events.some(event => event.type === 'error')).toBe(true)
     h.driver.send('again')
     expect(h.fakes).toHaveLength(2)
-    // The new process's result closes the new turn even without an init.
-    h.fakes[1]!.push(result('success'))
+    h.fakes[1]!.push(own())
     await flush()
-    expect(completed(h).map(event => event.turnId)).toEqual(['turn-2'])
+    expect(completed(h)).toEqual(OWN_TURN_2)
+    expect(h.statuses.at(-1)).toBe('waiting')
+    h.driver.kill()
+  })
+
+  test('GUARD (2b1f56bf) an interrupt during a pending approval denies it and the tail still closes no later turn', async () => {
+    const h = await busy()
+    const approval = sendApproval(h.fakes[0]!)
+    await flush()
+    expect(h.statuses.at(-1)).toBe('permission')
+    const interrupted = h.driver.interrupt()
+    expect(await approval).toMatchObject({ behavior: 'deny' })
+    expect(h.statuses.at(-1)).toBe('waiting')
+    h.fakes[0]!.push(interruptedEcho())
+    h.fakes[0]!.push(aborted())
+    await interrupted
+    h.driver.deliver(PEER)
+    await deliveredTurnRuns(h)
+    h.driver.kill()
+  })
+
+  test('GUARD (2b1f56bf) Stop reports the interrupt at once; the late tail changes nothing and a send waits for it', async () => {
+    const h = await busy()
+    void h.driver.interrupt()
+    expect(h.events.at(-1)).toMatchObject({ type: 'turn_interrupted', turnId: 'turn-1' })
+    expect(h.statuses.at(-1)).toBe('waiting')
+    h.driver.send('next')
+    expect(h.statuses.at(-1)).toBe('working')
+    const before = h.events.length
+    h.fakes[0]!.push(interruptedEcho())
+    h.fakes[0]!.push(aborted())
+    await flush()
+    expect(h.events.slice(before)).toEqual([])
+    expect(await h.fakes[0]!.pullPrompt()).toMatchObject({ message: { content: 'next' } })
+    h.fakes[0]!.push(init())
+    h.fakes[0]!.push(own())
+    await flush()
+    expect(completed(h)).toEqual(OWN_TURN_2)
+    h.driver.kill()
+  })
+
+  test('NIT an interrupt with no active turn opens no window', async () => {
+    const h = createHarness()
+    h.driver.start()
+    await h.driver.interrupt()
+    h.driver.deliver(PEER)
+    expect(await h.fakes[0]!.pullPrompt()).toMatchObject({ origin: { kind: 'peer' } })
+    h.fakes[0]!.push(own())
+    await flush()
+    expect(completed(h).map(event => event.turnId)).toEqual(['turn-1'])
     expect(h.statuses.at(-1)).toBe('waiting')
     h.driver.kill()
   })
