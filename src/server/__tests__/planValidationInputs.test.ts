@@ -82,15 +82,15 @@ beforeAll(() => {
 
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }))
 
-const read = (changeNames: string[], groupNames: string[] = []) => readValidationFileInputs({
-  adapter: injected(), commonDir: path.join(repo, '.git'), changeNames, groupNames, groupsRoot: repo, homeDir: home,
+const read = (changeNames: string[], groupNames: string[] = [], branch: string | null = null) => readValidationFileInputs({
+  adapter: injected(), commonDir: path.join(repo, '.git'), changeNames, groupNames, groupsRoot: repo, branch, homeDir: home,
 })
 
 describe('readValidationFileInputs (D2)', () => {
   test('a change registered only in the main checkout resolves in the main checkout', async () => {
     const inputs = await read(['main-only'])
     expect(inputs.changes[0]!.status).toBe('registered')
-    expect(inputs.evidence.changes['main-only']).toEqual({ root: repo, head: expect.any(String) })
+    expect(inputs.evidence.changes['main-only']).toEqual({ root: repo, dir: path.join(repo, 'openspec', 'changes', 'main-only'), head: expect.any(String) })
   })
 
   test('a change found only in the convention worktree is unregistered, naming it', async () => {
@@ -139,7 +139,7 @@ describe('readValidationFileInputs (D2)', () => {
   test('a missing change has no digests', async () => {
     const inputs = await read(['ghost'])
     expect(inputs.changes[0]).toEqual({ change: 'ghost', status: 'missing', artifacts: {}, baseSpecs: {}, config: null })
-    expect(inputs.evidence.changes.ghost).toEqual({ root: null, head: null })
+    expect(inputs.evidence.changes.ghost).toEqual({ root: null, dir: null, head: null })
   })
 
   test('nested capability paths map to nested base specs; an absent base spec is null', async () => {

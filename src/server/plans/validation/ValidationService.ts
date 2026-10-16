@@ -13,12 +13,16 @@ import type { TeamIdentity } from '../../team/teamIdentity'
 import { loadTeamGroups } from '../../team/teamGroups'
 import type { StrategyStore } from '../../strategy/strategyStore'
 import { strategyAlignmentRefs } from '../../../shared/planChecks'
-import type { Plan, PlanRevision } from '../../../shared/plans'
-import type { AlignmentAssessment, AssessmentFinding, AssessmentRow, DecisionRecord, Question } from '../../../shared/planValidation'
+import type { Plan, PlanContent, PlanRevision, PlanStrategyPin } from '../../../shared/plans'
+import { hashPlanRevision } from '../planHash'
+import type { ImpactGate } from '../../../shared/strategyImpact'
+import { impactGate } from '../../../shared/strategyImpact'
+import type { AlignmentAssessment, AssessmentFinding, AssessmentRow, DecisionRecord, PlanValidationReport, Question, ValidationCapacityEvidence } from '../../../shared/planValidation'
 import type { PlanStore } from '../planStore'
 import { payloadDifference } from '../planCommands'
 import type { ImpactService } from '../../strategy/ImpactService'
 import type { OpenspecAdapter } from './openspecAdapter'
+import { buildRecordPhase, dryRunReport, runFilePhase } from './validationRun'
 import { ValidationCommandRaceError, type ValidationStore } from './validationStore'
 
 export type ValidationCaller = { kind: 'agent'; sessionId: string } | { kind: 'human'; team: TeamIdentity }
@@ -52,6 +56,15 @@ export type DecideOutcome =
   | { ok: true; replayed: boolean; decision: DecisionRecord }
   | { ok: false; reason: 'forbidden' | 'not-found' | 'target' | 'limit' | 'payload'; message: string }
 
+/** D8: a standing revision to validate, or a draft to dry-run. */
+export type ValidateInput =
+  | { planId: string; revision: number }
+  | { planId: string; draftId?: string; revision?: never }
+
+export type ValidateOutcome =
+  | { ok: true; report: PlanValidationReport; reportId: string | null; stored: boolean; dryRun: boolean }
+  | { ok: false; reason: 'not-found' | 'target'; message: string }
+
 export const ASSESS_TEXT_LIMIT = 2_000
 export const DECISION_SCOPE_LIMIT = 500
 export const AGENT_RECORD_LIMIT = 20
@@ -71,6 +84,8 @@ export class ValidationService {
     impact: ImpactService
     adapter: OpenspecAdapter
     getSession: (id: string) => ChatSessionRecord | null | undefined
+    /** Capacity evidence per role group (D3's `capacity` row); absent here means no evidence row. */
+    capacity?: (teamId: string, group: string) => ValidationCapacityEvidence | null
     homeDir?: string
   }) {}
 
@@ -92,7 +107,8 @@ export class ValidationService {
     }
     const row = this.options.plans.revision(plan.id, revision)
     if (!row || (row.status !== 'in_review' && row.status !== 'approved')) {
-      throw new ValidationRefusal({ ok: false, reason: 'target', message: `Revision ${revision} is not in review or approved; assessments and decisions bind to a standing revision.` })
+      const status = row ? row.status : 'missing'
+      throw new ValidationRefusal({ ok: false, reason: 'target', message: `Revision ${revision} is ${status}, not in review or approved; validation binds to a standing revision.` })
     }
     return { plan, revision: row }
   }
@@ -329,5 +345,140 @@ export class ValidationService {
       if (!scope) refuse('An exploration authorization needs its scope.')
       return
     }
+  }
+
+  // --- D8: running a validation ---
+
+  private readonly running = new Map<string, Promise<ValidateOutcome>>()
+
+  /**
+   * D8: validate a standing revision, or dry-run a draft. One run per plan
+   * and revision (or draft) — a concurrent request joins the running one.
+   * The file phase reads outside any transaction; the record phase runs in
+   * one, recomputes the DB-held parts, dedupes on an unchanged input hash,
+   * and otherwise inserts `seq = max + 1`. After a commit, the plan detail
+   * is pushed. A dry run is computed as if submitted and never stored.
+   */
+  async validate(caller: ValidationCaller, input: ValidateInput): Promise<ValidateOutcome> {
+    const team = await this.context(caller)
+    const plan = this.options.plans.forTeam(team.teamId, input.planId)
+    if (!plan) return { ok: false, reason: 'not-found', message: `Plan not found in this team: ${input.planId}` }
+    const key = 'revision' in input && input.revision !== undefined
+      ? `${plan.id}:r${input.revision}`
+      : `${plan.id}:d${'draftId' in input && input.draftId !== undefined ? input.draftId : ''}`
+    const running = this.running.get(key)
+    if (running) return running
+    const outcome = (async (): Promise<ValidateOutcome> => {
+      try {
+        const dryRun = !('revision' in input && input.revision !== undefined)
+        if (dryRun) {
+          const checked = await this.dryRunScope(team, plan.id, 'draftId' in input ? input.draftId : undefined, caller)
+          if ('refused' in checked) return checked.refused
+          return { ok: true, report: checked.report, reportId: null, stored: false, dryRun: true }
+        }
+        const revision = input.revision as number
+        const checked = await this.revisionScope(team, plan.id, revision)
+        if ('refused' in checked) return checked.refused
+        const { plan: open, revision: row, groupsRoot } = checked
+        const file = await this.filePhase(team, row.content, groupsRoot)
+        const record = this.store.atomically(() => {
+          const fresh = this.target(team, plan.id, revision)
+          const gate = this.options.impact.gate(plan.id, revision)
+          if (!gate) throw new ValidationRefusal({ ok: false, reason: 'target', message: `Revision ${revision} lost its impact gate mid-run; validate again.` })
+          const assessments = this.store.assessments(plan.id, revision)
+          const decisions = this.store.decisions(plan.id, revision)
+          return buildRecordPhase({
+            file, content: row.content, pin: row.pin,
+            plan: { planId: plan.id, revision, contentHash: fresh.revision.contentHash },
+            gate, impactStateKey: this.options.impact.stateKey(plan.id),
+            claimedPlans: this.options.plans.openPlans(team.teamId).map(other => ({
+              planId: other.id, lifecycle: other.lifecycle,
+              revisions: this.options.plans.revisions(other.id).map(entry => ({ status: entry.status, content: entry.content })),
+            })),
+            assessments, decisions,
+          })
+        })
+        const newest = this.store.newestReport(plan.id, revision)
+        if (newest && newest.inputHash === record.inputHash) {
+          return { ok: true, report: newest, reportId: newest.id, stored: false, dryRun: false }
+        }
+        const report = this.store.atomically(() => this.store.insertReport({
+          planId: plan.id, revision, inputHash: record.inputHash, inputs: record.inputs,
+          findings: record.findings, relations: record.relations, evidence: record.evidence,
+          readiness: record.readiness, ready: record.ready,
+          requestedBy: caller.kind === 'human' ? { kind: 'human', sessionId: null } : { kind: 'agent', sessionId: caller.sessionId },
+        }))
+        this.options.plans.announce(plan.id)
+        return { ok: true, report, reportId: report.id, stored: true, dryRun: false }
+      } catch (error) {
+        if (error instanceof ValidationRefusal) return error.outcome as ValidateOutcome
+        throw error
+      }
+    })()
+    this.running.set(key, outcome)
+    try {
+      return await outcome
+    } finally {
+      this.running.delete(key)
+    }
+  }
+
+  /** D8 step 1 for a revision: the plan is open and the revision stands; the file phase needs the team's groups root. */
+  private async revisionScope(team: TeamIdentity, planId: string, revision: number): Promise<{ plan: Plan; revision: PlanRevision; groupsRoot: string } | { refused: ValidateOutcome }> {
+    try {
+      const { plan, revision: row } = this.target(team, planId, revision)
+      return { plan, revision: row, groupsRoot: team.groupsRoot }
+    } catch (error) {
+      if (error instanceof ValidationRefusal) return { refused: error.outcome as ValidateOutcome }
+      throw error
+    }
+  }
+
+  /** D8 step 1 for a dry run: the plan is open and the draft exists; computed as if submitted. */
+  private async dryRunScope(team: TeamIdentity, planId: string, draftId: string | undefined, caller: ValidationCaller): Promise<{ report: PlanValidationReport } | { refused: ValidateOutcome }> {
+    const plan = this.options.plans.forTeam(team.teamId, planId)!
+    if (plan.lifecycle !== 'open') {
+      return { refused: { ok: false, reason: 'target', message: `The plan is ${plan.lifecycle}; the human must reopen it before a revision can be validated.` } }
+    }
+    const author = caller.kind === 'agent' ? caller.sessionId : 'human'
+    const draft = this.options.plans.getDraft(planId, draftId ?? author)
+    if (!draft) {
+      return { refused: { ok: false, reason: 'not-found', message: `No draft "${draftId ?? author}" on this plan. Save one first with plan_save_draft.` } }
+    }
+    // As if submitted: the pin submission would take, and the content hash it would record.
+    const strategy = this.options.strategies.forTeam(team.teamId)
+    const approved = strategy && strategy.currentApprovedRevision !== null ? this.options.strategies.revision(strategy.id, strategy.currentApprovedRevision) : null
+    const pin = approved ? { strategyId: strategy!.id, revision: approved.revision, hash: approved.contentHash } : null
+    const max = this.options.plans.revisions(planId).at(-1)?.revision ?? 0
+    const file = await this.filePhase(team, draft.content, team.groupsRoot)
+    const record = this.store.atomically(() => buildRecordPhase({
+      file, content: draft.content, pin,
+      plan: { planId, revision: max + 1, contentHash: hashPlanRevision(draft.content, pin) },
+      gate: this.dryRunGate(team.teamId, planId, pin),
+      impactStateKey: this.options.impact.stateKey(planId),
+      claimedPlans: this.options.plans.openPlans(team.teamId).map(other => ({
+        planId: other.id, lifecycle: other.lifecycle,
+        revisions: this.options.plans.revisions(other.id).map(entry => ({ status: entry.status, content: entry.content })),
+      })),
+      assessments: [], decisions: [],
+    }))
+    return { report: dryRunReport(record, planId, caller.kind === 'human' ? { kind: 'human', sessionId: null } : { kind: 'agent', sessionId: caller.sessionId }, new Date().toISOString()) }
+  }
+
+  /** The gate of the pin a submission would take (C-I1's rules on the current review's decision for this plan). */
+  private dryRunGate(teamId: string, planId: string, pin: PlanStrategyPin | null): ImpactGate {
+    const context = this.options.impact.reads.context(teamId)
+    const current = context?.current ?? null
+    const decision = current ? this.options.impact.store.chainHead(current.id, planId) : null
+    return impactGate(pin, context?.view ?? null, current, decision)
+  }
+
+  /** The file phase (D8 step 3) over the team's repository. */
+  private async filePhase(team: TeamIdentity, content: PlanContent, groupsRoot: string) {
+    return runFilePhase({
+      adapter: this.options.adapter, commonDir: team.teamId, groupsRoot,
+      ...(this.options.homeDir ? { homeDir: this.options.homeDir } : {}),
+      content, capacity: group => this.options.capacity?.(team.teamId, group) ?? null,
+    })
   }
 }

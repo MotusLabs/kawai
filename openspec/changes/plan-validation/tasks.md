@@ -102,7 +102,7 @@ Implement after `durable-plans` and `strategy-revision-impact` have landed on ma
 
 ## 7. Running a validation
 
-- [ ] 7.1 Implement `ValidationService.validate` (D8), with its single flight, the file phase, the record phase, the dedupe on an unchanged hash, and the after-commit push. Verify:
+- [x] 7.1 Implement `ValidationService.validate` (D8), with its single flight, the file phase, the record phase, the dedupe on an unchanged hash, and the after-commit push. Verify:
   - two concurrent requests run once;
   - unchanged inputs write nothing and return the newest report;
   - a changed artifact writes `seq + 1`;
@@ -110,7 +110,7 @@ Implement after `durable-plans` and `strategy-revision-impact` have landed on ma
   - another team's plan reads as not found;
   - nothing outside the three tables is written (no mail, task, or plan event);
   - a recorded decision makes the newest report out of date.
-- [ ] 7.2 Implement the dry run on a draft. Verify:
+- [x] 7.2 Implement the dry run on a draft. Verify:
   - it computes as if submitted (the submission pin for `strategy-impact`, alignment not assessable);
   - it is marked `dryRun`;
   - it stores nothing.

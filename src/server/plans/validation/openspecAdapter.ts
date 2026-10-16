@@ -218,7 +218,7 @@ export class OpenspecAdapter {
       const capability = text((delta as Record<string, unknown>).spec)
       const operation = text((delta as Record<string, unknown>).operation)
       if (!capability || !operation) return { ok: false, error: `show ${change} returned a delta without spec or operation`, touches: [] }
-      if (!DELTA_OPERATIONS.includes(operation)) {
+      if (!(DELTA_OPERATIONS as readonly string[]).includes(operation)) {
         return { ok: false, error: `show ${change} returned a delta with unknown operation ${operation}`, touches: [] }
       }
       const rename = (delta as Record<string, unknown>).rename as Record<string, unknown> | undefined

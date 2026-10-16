@@ -56,7 +56,7 @@ describe('ValidationStore reports', () => {
       ...report('plan-1', 1, 'h1'),
       findings: [{ check: 'relations', key: 'relations:conflict:a+b:c/R', severity: 'error', row: 'scope', subject: 'a+b:c', message: 'conflict' }],
       relations: [{ kind: 'conflict', changes: ['a', 'b'], capability: 'c', requirements: ['R'], order: null }],
-      evidence: { changes: { a: { root: '/repo', head: 'deadbee', issues: [{ level: 'error', message: 'bad' }] } }, branch: { exists: true, head: 'abc', worktree: '/repo/.worktrees/x' }, capacity: [{ group: 'middle-devs', max: 2, live: 1, profiles: [{ profile: 'default', cap: 2, live: 1 }], cooling: [] }] },
+      evidence: { changes: { a: { root: '/repo', dir: '/repo/openspec/changes/a', head: 'deadbee', issues: [{ level: 'error', message: 'bad' }] } }, branch: { exists: true, head: 'abc', worktree: '/repo/.worktrees/x' }, capacity: [{ group: 'middle-devs', max: 2, live: 1, profiles: [{ profile: 'default', cap: 2, live: 1 }], cooling: [] }] },
       readiness: { ready: false, errors: ['relations:conflict:a+b:c/R'], unansweredQuestions: ['pas-1'], unacceptedWarnings: [], alignment: { state: 'blocked', reason: 'not assessed', effective: null }, carriedConditions: [] },
       requestedBy: { kind: 'agent', sessionId: 'chat-9' },
     }, '2026-01-01T00:00:00Z')

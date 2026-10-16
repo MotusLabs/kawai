@@ -121,8 +121,12 @@ export interface CliIssue {
 
 /** What a run read outside its identity (D2): evidence only — never hashed. */
 export interface ValidationEvidence {
-  /** Per change: its canonical root (null when unresolved), that root's `HEAD`, and its capped CLI issues when validate ran. */
-  changes: Record<string, { root: string | null; head: string | null; issues: CliIssue[] | null }>
+  /**
+   * Per change: its canonical root (null when unresolved), the change
+   * directory itself (the archive directory when archived), that root's
+   * `HEAD`, and its capped CLI issues when validate ran.
+   */
+  changes: Record<string, { root: string | null; dir: string | null; head: string | null; issues: CliIssue[] | null }>
   /** Landing-branch facts, when the plan lands on an integration branch. */
   branch: { exists: boolean; head: string | null; worktree: string | null } | null
   /** Per role group (D3's `capacity` row); never a blocker. */

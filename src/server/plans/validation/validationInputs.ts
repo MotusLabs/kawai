@@ -18,8 +18,8 @@ import { conventionWorktreePath } from '../../workspace/changeRegistry'
 import { loadGroupCatalog } from '../../team/groupCatalog'
 import { resolveProfileCatalog } from '../../chat/profileCatalog'
 import { canonicalJson } from '../../../shared/productStrategy'
-import { validationInputsHashInput, type ValidationChangeInput, type ValidationChangeStatus, type ValidationInputs } from '../../../shared/planValidation'
-import type { OpenspecAdapter } from './openspecAdapter'
+import { validationInputsHashInput, type ValidationChangeInput, type ValidationChangeStatus, type ValidationEvidence, type ValidationInputs } from '../../../shared/planValidation'
+import type { AdapterProbe, OpenspecAdapter } from './openspecAdapter'
 
 export interface ValidationFileOptions {
   /** Injected so tests (and `prepareStanding`) never spawn a CLI here. */
@@ -32,16 +32,22 @@ export interface ValidationFileOptions {
   groupNames: readonly string[]
   /** Where the team's groups are read (`TeamIdentity.groupsRoot`). */
   groupsRoot: string
+  /** The landing branch, when the plan lands on an integration branch (branch evidence). */
+  branch: string | null
   homeDir?: string
 }
 
 export interface ValidationFileInputs {
+  /** The probe itself (ok/error are not identity); `adapter` below is what hashes. */
+  probe: AdapterProbe
   adapter: ValidationInputs['adapter']
   /** In plan order. */
   changes: ValidationChangeInput[]
   catalog: { groups: Record<string, string | null>; profiles: string }
+  /** The team's groups and known profile ids, for the checks (never hashed). */
+  catalogs: { groups: ReadonlyMap<string, { profiles: readonly string[] }>; profiles: ReadonlySet<string> }
   /** Location and baseline evidence only (D2). */
-  evidence: { changes: Record<string, { root: string | null; head: string | null }> }
+  evidence: { changes: Record<string, { root: string | null; dir: string | null; head: string | null }>; branch: ValidationEvidence['branch'] }
 }
 
 const sha256 = (input: string | Buffer) => createHash('sha256').update(input).digest('hex')
@@ -177,7 +183,8 @@ function configDigest(root: string): string | null {
 /**
  * Read the file-held inputs (D2): the probe, each change in plan order, and
  * the catalog digests. No CLI process is spawned (the injected adapter's
- * probe is cached), and nothing here opens a transaction.
+ * probe is cached), and nothing here opens a transaction. Branch facts are
+ * evidence from the same discovery pass.
  */
 export async function readValidationFileInputs(options: ValidationFileOptions): Promise<ValidationFileInputs> {
   const probe = await options.adapter.probe()
@@ -188,7 +195,7 @@ export async function readValidationFileInputs(options: ValidationFileOptions): 
   const heads = new Map(worktrees.map(worktree => [worktree.path, worktree.headRevision]))
   const listedRoots = new Set(worktrees.map(worktree => worktree.path))
   const changes: ValidationChangeInput[] = []
-  const evidence: ValidationFileInputs['evidence'] = { changes: {} }
+  const evidence: ValidationFileInputs['evidence'] = { changes: {}, branch: null }
   for (const change of options.changeNames) {
     const resolved = resolveChange(mainRoot, listedRoots, change)
     const { artifacts, capabilities } = resolved.dir ? artifactDigests(resolved.dir) : { artifacts: {}, capabilities: [] }
@@ -199,14 +206,28 @@ export async function readValidationFileInputs(options: ValidationFileOptions): 
       baseSpecs: resolved.root ? baseSpecDigests(resolved.root, capabilities) : {},
       config: resolved.root ? configDigest(resolved.root) : null,
     })
-    evidence.changes[change] = { root: resolved.root, head: resolved.root ? heads.get(resolved.root) ?? null : null }
+    evidence.changes[change] = { root: resolved.root, dir: resolved.dir, head: resolved.root ? heads.get(resolved.root) ?? null : null }
   }
-  return { adapter: { tool: 'openspec', version: probe.version, capabilities: probe.capabilities }, changes, catalog: catalogDigests(options), evidence }
+  if (options.branch) {
+    const branch = repository?.branches.find(entry => entry.name === options.branch) ?? null
+    evidence.branch = branch
+      ? { exists: true, head: branch.revision, worktree: branch.assignedWorktreePath ?? null }
+      : { exists: false, head: null, worktree: null }
+  }
+  const catalog = loadGroupCatalog({ groupsRoot: options.groupsRoot, ...(options.homeDir ? { homeDir: options.homeDir } : {}) })
+  return {
+    probe,
+    adapter: { tool: 'openspec', version: probe.version, capabilities: probe.capabilities },
+    changes, catalog: catalogDigests(options, catalog), catalogs: {
+      groups: new Map([...catalog.groups.values()].map(entry => [entry.group.id, { profiles: entry.group.profiles.map(profile => profile.profileId) }])),
+      profiles: new Set(resolveProfileCatalog(options.homeDir ? { homeDir: options.homeDir } : {}).profiles.keys()),
+    },
+    evidence,
+  }
 }
 
 /** The named groups' parsed-definition digests (null when unknown) and the known profile ids' digest (D2). */
-function catalogDigests(options: ValidationFileOptions): ValidationFileInputs['catalog'] {
-  const catalog = loadGroupCatalog({ groupsRoot: options.groupsRoot, ...(options.homeDir ? { homeDir: options.homeDir } : {}) })
+function catalogDigests(options: ValidationFileOptions, catalog: ReturnType<typeof loadGroupCatalog>): ValidationFileInputs['catalog'] {
   const groups: Record<string, string | null> = {}
   for (const name of options.groupNames) {
     const entry = catalog.groups.get(name)
