@@ -97,7 +97,7 @@ export function mapAssessment(row: Record<string, unknown>): AssessmentRow {
     kind: String(row.author_kind) === 'human' ? 'human' : 'agent',
     sessionId: optText(row.author_session),
   }
-  const base = { id: String(row.id), author, createdAt: String(row.created_at) }
+  const base = { id: String(row.id), revision: Number(row.revision), author, createdAt: String(row.created_at) }
   if (kind === 'alignment') return { ...base, kind, payload }
   if (kind === 'question') return { ...base, kind, payload }
   return { ...base, kind: 'finding', payload }

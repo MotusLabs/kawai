@@ -28,7 +28,7 @@ const finding = (key: string, severity: Finding['severity'], row: Finding['row']
 })
 
 const alignment = (id: string, createdAt: string, payload: Partial<AlignmentAssessment> = {}): AssessmentRow => ({
-  id, kind: 'alignment', createdAt, author: { kind: 'agent', sessionId: 'chat-1' },
+  id, revision: 1, kind: 'alignment', createdAt, author: { kind: 'agent', sessionId: 'chat-1' },
   payload: {
     assessment: 'aligned', outcomes: [], conditions: [], experiment: null, conflicts: [], rationale: 'r',
     ...payload,
@@ -36,12 +36,12 @@ const alignment = (id: string, createdAt: string, payload: Partial<AlignmentAsse
 })
 
 const question = (id: string, mandatory: boolean): AssessmentRow => ({
-  id, kind: 'question', createdAt: '2026-01-01T00:00:00Z', author: { kind: 'agent', sessionId: 'chat-1' },
+  id, revision: 1, kind: 'question', createdAt: '2026-01-01T00:00:00Z', author: { kind: 'agent', sessionId: 'chat-1' },
   payload: { text: 'q', mandatory, subject: null },
 })
 
 const warning = (id: string): AssessmentRow => ({
-  id, kind: 'finding', createdAt: '2026-01-01T00:00:00Z', author: { kind: 'agent', sessionId: 'chat-1' },
+  id, revision: 1, kind: 'finding', createdAt: '2026-01-01T00:00:00Z', author: { kind: 'agent', sessionId: 'chat-1' },
   payload: { text: 'w', subject: null },
 })
 

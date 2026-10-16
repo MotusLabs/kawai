@@ -203,11 +203,11 @@ export interface AssessmentFinding {
 
 export type AssessmentAuthor = { kind: 'human' | 'agent'; sessionId: string | null }
 
-/** An assessment row as readiness and the view read it: identity, kind, payload, author. */
+/** An assessment row as readiness and the view read it: identity, revision, kind, payload, author. */
 export type AssessmentRow =
-  | { id: string; kind: 'alignment'; payload: AlignmentAssessment; author: AssessmentAuthor; createdAt: string }
-  | { id: string; kind: 'question'; payload: Question; author: AssessmentAuthor; createdAt: string }
-  | { id: string; kind: 'finding'; payload: AssessmentFinding; author: AssessmentAuthor; createdAt: string }
+  | { id: string; revision: number; kind: 'alignment'; payload: AlignmentAssessment; author: AssessmentAuthor; createdAt: string }
+  | { id: string; revision: number; kind: 'question'; payload: Question; author: AssessmentAuthor; createdAt: string }
+  | { id: string; revision: number; kind: 'finding'; payload: AssessmentFinding; author: AssessmentAuthor; createdAt: string }
 
 // --- D6/D7: decisions and readiness ---
 

@@ -83,7 +83,7 @@ Implement after `durable-plans` and `strategy-revision-impact` have landed on ma
 
 ## 6. Assessments and decisions
 
-- [ ] 6.1 Implement assessment writes in `ValidationService.ts` (D5). Verify:
+- [x] 6.1 Implement assessment writes in `ValidationService.ts` (D5). Verify:
   - the target rules (an open plan, the revision status, the caller's team);
   - an empty pin refuses alignment;
   - the per-value shape rules;
@@ -92,7 +92,7 @@ Implement after `durable-plans` and `strategy-revision-impact` have landed on ma
   - the 20-item caps on agent calls;
   - the owner's form writes exactly one alignment assessment per command id and replays by it;
   - an agent retry appends.
-- [ ] 6.2 Implement `ValidationService.decide` (D6). Verify:
+- [x] 6.2 Implement `ValidationService.decide` (D6). Verify:
   - an agent actor is refused before any read;
   - a replay returns the stored decision, and a different payload is refused naming the first differing field;
   - a unique-constraint hit re-runs replay (simulate a concurrent resend);
