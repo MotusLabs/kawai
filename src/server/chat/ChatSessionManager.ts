@@ -106,6 +106,12 @@ import type { AssignmentService } from '../team/AssignmentService'
 import type { TaskResultService } from '../team/TaskResultService'
 import type { SpawnRequest, SpawnResult } from '../team/staffing'
 import { TeamCaps } from '../team/teamCaps'
+import { worktreeRootOf } from '../team/worktreeRoots'
+import { ProvenanceRecorder } from '../metrics/provenanceRecorder'
+import { ChatTurnUsageStore, TurnUsageTracker } from './chatTurnUsageStore'
+import { MetricsReader } from '../metrics/computeMetrics'
+import { ProcessReportService, type ReportCaller } from '../metrics/reportService'
+import type { ChatSpawnInfo } from './ChatSessionDriver'
 import { OutboundDestinations } from '../outbound/destinations'
 import { sessionObserver } from '../outbound/auditHooks'
 import { RepoFactsResolver } from '../outbound/repoFacts'
@@ -135,6 +141,8 @@ export interface ChatSessionManagerOptions {
   onTaskChange?: (teamId: string) => void
   /** Every committed strategy change (wired to the strategy view push in bootstrap.ts). */
   onStrategyChange?: (teamId: string) => void
+  /** Every committed process report, decision, or link (team-process-metrics D6; wired to the Metrics tab push). */
+  onProcessReportChange?: (teamId: string) => void
   /**
    * A chat session's record changed in a way a team view shows — created,
    * archived, restored, killed, or its status/name/group/task moved
@@ -973,6 +981,25 @@ export class ChatSessionManager {
     // Written from the event path below, independent of any open view; the
     // workspace summary reads its window from this table (team-workspace D8).
     this.turnEnds = new ChatTurnEndStore(options.db.db)
+    this.provenance = new ProvenanceRecorder(options.db.db)
+    this.turnUsage = new ChatTurnUsageStore(options.db.db)
+    this.metrics = new MetricsReader(options.db.db)
+    this.reports = new ProcessReportService(options.db.db, this.metrics, {
+      onCommit: teamId => this.options.onProcessReportChange?.(teamId),
+    })
+    this.turnUsageTracker = new TurnUsageTracker(this.turnUsage, {
+      sessionTask: id => this.records.get(id)?.taskId ?? null,
+      latestStart: id => this.provenance.latestStart(id),
+      context: id => {
+        const record = this.records.get(id)
+        return {
+          teamId: this.teams.teamOf(id)?.teamId ?? null,
+          groupId: record?.groupId ?? null,
+          profileId: record?.claudeProfileId ?? 'default',
+          model: record?.model ?? null,
+        }
+      },
+    })
     // Product strategy (product-strategy): constructed here, beside the
     // task service, against the same database. The strategy store's changes
     // fan out to the strategy view pushes; the team comes from the record's
@@ -1142,6 +1169,24 @@ export class ChatSessionManager {
   }
 
   /**
+   * The calling session as the report tools see it (team-process-metrics D6):
+   * its team and its group as the current group files define them, re-read
+   * at each call so a `canReportProcess` edit applies at once.
+   */
+  private async reportCaller(sessionId: string): Promise<ReportCaller | null> {
+    const record = this.records.get(sessionId)
+    const teamId = this.teams.teamOf(sessionId)?.teamId
+    if (!record || !teamId) return null
+    const { catalog } = await loadTeamGroups(record.projectPath, this.options.profileCatalogHome)
+    return {
+      teamId,
+      sessionId,
+      group: record.groupId ? catalog.groups.get(record.groupId)?.group : undefined,
+      groupIds: new Set(catalog.groups.keys()),
+    }
+  }
+
+  /**
    * One chat's events for conversation search (chat-session-search D1).
    * Read-only: a loaded chat reads its memo plus live events; an unloaded one
    * is replayed transiently, so the result is never memoized, never moves the
@@ -1183,6 +1228,34 @@ export class ChatSessionManager {
     this.options.registry.updateSession(sessionId, { parked: next })
   }
 
+  /**
+   * Agent-start provenance (team-process-metrics D2): hash what this spawn
+   * launched with. Observational — a failure is logged, never thrown.
+   */
+  private recordAgentStart(sessionId: string, info: ChatSpawnInfo): void {
+    try {
+      const record = this.records.get(sessionId)
+      const team = this.teams.teamOf(sessionId)
+      const groupId = record?.groupId ?? null
+      this.provenance.record({
+        sessionId,
+        teamId: team?.teamId ?? null,
+        groupId,
+        profileId: record?.claudeProfileId ?? 'default',
+        model: info.model ?? record?.model ?? null,
+        effort: info.effort ?? null,
+        cwd: info.cwd,
+        groupFile: groupId ? this.teams.catalogOf(sessionId)?.groups.get(groupId)?.file ?? null : null,
+        promptAppend: info.systemPromptAppend,
+        mainCheckout: team?.groupsRoot ?? worktreeRootOf(info.cwd),
+        worktreeRoot: worktreeRootOf(info.cwd),
+        env: info.env,
+      })
+    } catch (error) {
+      logger.warn('agent_start_record_failed', { sessionId, error: error instanceof Error ? error.message : String(error) })
+    }
+  }
+
   /** Each session's team (agent-teams); shared with the mailbox dispatcher. */
   readonly teams: SessionTeams
   /** The owner's outbound destinations (execution-safety-recovery D2); feeds every prompt's security note. */
@@ -1210,6 +1283,15 @@ export class ChatSessionManager {
   readonly strategies: StrategyService
   /** Completed turns of task-bound sessions (team-workspace D8): the summary's durable source. */
   readonly turnEnds: ChatTurnEndStore
+  /** Agent starts and their input hashes (team-process-metrics D2). */
+  readonly provenance: ProvenanceRecorder
+  /** Per-turn token usage of every chat turn (team-process-metrics D1). */
+  readonly turnUsage: ChatTurnUsageStore
+  /** Process metrics (team-process-metrics D4/D5), shared by the `team_metrics` tool and the Metrics tab. */
+  readonly metrics: MetricsReader
+  /** Process reports and proposals (team-process-metrics D6): the report tools and the human's decide/link commands. */
+  readonly reports: ProcessReportService
+  private readonly turnUsageTracker: TurnUsageTracker
   /** Durable plans (durable-plans); the plan tools and UI actions go through it. */
   readonly plans: PlanService
   /** Plan validation (plan-validation): reports, assessments, decisions, and the approval standing. */
@@ -1927,6 +2009,8 @@ export class ChatSessionManager {
       await this.teams.track(record.sessionId, this.records.get(record.sessionId)?.projectPath ?? record.projectPath)
       const teamMcpServer = await createMailboxServer(this.mailbox, record.sessionId, {
         tasks: this.tasks, results: this.results, strategies: this.strategies, plans: this.plans, validation: this.validation, releases: this.teamMail.releases, management: this.management,
+        metrics: { teamOf: id => this.teams.teamOf(id)?.teamId ?? null, reader: this.metrics },
+        reports: { caller: id => this.reportCaller(id), service: this.reports },
       })
       const driver = new ChatSessionDriver({
         sessionId: record.sessionId,
@@ -1959,6 +2043,7 @@ export class ChatSessionManager {
           this.records.get(record.sessionId)?.groupId,
           this.records.get(record.sessionId)?.claudeProfileId ?? 'default'
         ),
+        onSpawn: info => this.recordAgentStart(record.sessionId, info),
         getProviderEnv: () => this.providerEnv(),
         // Read per request so a live policy switch reaches the next
         // canUseTool call without a respawn (design D2).
@@ -2299,6 +2384,16 @@ export class ChatSessionManager {
     this.liveEvents.set(sessionId, events)
     this.options.onEvent(sessionId, event)
     if (event.type === 'request_resolved') this.dispatcher.notify()
+    // Per-turn usage (team-process-metrics D1): pinned at turn start, written
+    // at completion. Never worth a turn: a failure is logged and the
+    // settlement and bookkeeping below still run.
+    if (event.type === 'turn_started' || event.type === 'peer_message' || event.type === 'turn_interrupted' || event.type === 'turn_completed') {
+      try {
+        this.turnUsageTracker.onEvent(sessionId, event)
+      } catch (error) {
+        logger.warn('chat_turn_usage_record_failed', { sessionId, error: error instanceof Error ? error.message : String(error) })
+      }
+    }
     if (event.type === 'error' || event.type === 'turn_completed') this.teamMail.settleRecipient(sessionId)
     // Profile routing: progress and limit outcomes for the mail a turn handles.
     if (event.type === 'tool_call') this.teamMail.toolCall(sessionId, event.tool, event.input)

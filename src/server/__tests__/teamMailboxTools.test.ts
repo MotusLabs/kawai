@@ -133,7 +133,7 @@ import type { GroupDefinition } from '../team/groupFile'
 
 const groupDef = (overrides: Partial<GroupDefinition> = {}): GroupDefinition => ({
   id: 'devs', label: 'devs', description: '', canCreateTasks: false, canCreatePlans: false, canManageMailbox: false,
-  releaseOnTaskClose: true, worktreeScoped: true, canReleaseMembers: true,
+  releaseOnTaskClose: true, worktreeScoped: true, canReleaseMembers: true, canReportProcess: false,
   max: 1, profiles: [], strategy: 'first-available',
   onLimit: { parkIfResetWithinMs: 3 * 3_600_000, otherwise: 'forward' }, approval: 'manual', warnings: [], prompt: '',
   ...overrides,

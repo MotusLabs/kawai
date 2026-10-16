@@ -33,6 +33,7 @@ import { consumerMessages } from './fixtures/backgroundTasks'
 import {
   ChatSessionDriver,
   type ChatQueryFactory,
+  type ChatSpawnInfo,
 } from '../chat/ChatSessionDriver'
 
 /**
@@ -200,6 +201,7 @@ function createHarness(
     getSystemPromptAppend?: () => string | undefined
     outbound?: OutboundAuditSink
     getEffort?: () => Options['effort']
+    onSpawn?: (info: ChatSpawnInfo) => void
     /** Replaces the harness's cwd capture (e.g. with a throwing observer). */
     onCwdChanged?: (newCwd: string) => void
     wire?: ChatWireRecorder
@@ -833,6 +835,34 @@ describe('ChatSessionDriver', () => {
     }
   })
 
+  test('onSpawn reports each constructed query: first start, resume, and the respawn after a crash', async () => {
+    const spawns: ChatSpawnInfo[] = []
+    const harness = createHarness({
+      resumeSessionId: 'sdk-prev',
+      getSystemPromptAppend: () => 'role text',
+      getEffort: () => 'high',
+      onSpawn: info => spawns.push(info),
+    })
+    harness.driver.send('hello')
+    expect(spawns).toHaveLength(1)
+    expect(spawns[0]).toMatchObject({ cwd: '/tmp/project', systemPromptAppend: 'role text', effort: 'high', model: null, resumed: true })
+    expect(spawns[0]!.env).toBeDefined()
+    harness.driver.send('again')
+    expect(spawns).toHaveLength(1)
+    harness.fakes[0]!.exit()
+    await flush()
+    harness.driver.send('after crash')
+    expect(spawns).toHaveLength(2)
+  })
+
+  test('a throwing onSpawn never fails the spawn', async () => {
+    const harness = createHarness({ onSpawn: () => { throw new Error('recorder broke') } })
+    harness.driver.send('hello')
+    expect(harness.fakes).toHaveLength(1)
+    expect(harness.driver.isDead).toBe(false)
+    expect(harness.statuses.at(-1)).toBe('working')
+  })
+
   test('the group effort is a launch option, re-read only at the next spawn', async () => {
     let effort: Options['effort'] = 'medium'
     let reads = 0
@@ -1094,6 +1124,27 @@ describe('ChatSessionDriver', () => {
     // The queued user turn was delivered to the SDK prompt stream.
     const pulled = await fake.pullPrompt()
     expect(pulled?.message).toMatchObject({ role: 'user', content: 'hello' })
+  })
+
+  test('turn_completed carries the result usage: full, partial (missing fields read 0), and absent', async () => {
+    const harness = createHarness()
+    const fake = () => harness.fakes.at(-1)!
+    const completions = () => harness.events.filter(event => event.type === 'turn_completed')
+    harness.driver.send('one')
+    fake().push(result('success', { usage: { input_tokens: 10, output_tokens: 20, cache_read_input_tokens: 300, cache_creation_input_tokens: 40 } }))
+    await flush()
+    harness.driver.send('two')
+    fake().push(result('success', { usage: { output_tokens: 5 } }))
+    await flush()
+    harness.driver.send('three')
+    fake().push(result('success', { usage: undefined }))
+    await flush()
+    expect(completions().map(event => (event as { usage?: unknown }).usage)).toEqual([
+      { inputTokens: 10, outputTokens: 20, cacheReadTokens: 300, cacheCreationTokens: 40 },
+      { inputTokens: 0, outputTokens: 5, cacheReadTokens: 0, cacheCreationTokens: 0 },
+      undefined,
+    ])
+    expect('usage' in completions()[2]!).toBe(false)
   })
 
   test('assistant deltas map from partial stream events', async () => {

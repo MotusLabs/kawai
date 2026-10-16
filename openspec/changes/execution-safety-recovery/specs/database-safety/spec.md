@@ -14,7 +14,7 @@ Kawai SHALL keep a `schema_migrations` table with each applied version's number,
 - **THEN** the existing tables and rows are unchanged, and version 1 `baseline` is recorded
 
 #### Scenario: A later migration is not undone
-- **WHEN** migration 4 dropped a baseline column and the server restarts
+- **WHEN** migration 8 dropped a baseline column and the server restarts
 - **THEN** the baseline steps do not run and the column stays dropped
 
 #### Scenario: A fresh database
@@ -25,12 +25,12 @@ Kawai SHALL keep a `schema_migrations` table with each applied version's number,
 Before each pending migration Kawai SHALL take a pre-migration backup and SHALL start the migration only once that backup is in place and has passed its integrity check, then apply the migration and record its version in one transaction. A failed backup or a failed migration SHALL roll back, leave the database at its previous version, and refuse to start, naming the migration and the backup.
 
 #### Scenario: A migration throws
-- **WHEN** migration 4's statements fail midway
-- **THEN** none of its changes remain, version 3 is not recorded, and the server exits naming migration 4 and its backup
+- **WHEN** migration 8's statements fail midway
+- **THEN** none of its changes remain, version 3 is not recorded, and the server exits naming migration 8 and its backup
 
 #### Scenario: A corrupt pre-migration backup
 - **WHEN** the `pre-migration-3` backup fails its integrity check
-- **THEN** migration 4 does not start, and the server exits naming the backup
+- **THEN** migration 8 does not start, and the server exits naming the backup
 
 #### Scenario: Migrations apply in order
 - **WHEN** the database is at version 1 and the build knows versions 2 and 3

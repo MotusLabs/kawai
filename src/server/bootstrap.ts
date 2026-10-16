@@ -159,6 +159,7 @@ export function startServer(): void {
     onRoutingRulesLoaded: () => chatConnections.publishRoutingRules(),
     onTaskChange: teamId => chatConnections.publishTasks(teamId),
     onStrategyChange: teamId => chatConnections.publishStrategies(teamId),
+    onProcessReportChange: teamId => chatConnections.publishMetrics(teamId),
     onPlanChange: (teamId, planId) => chatConnections.publishPlans(teamId, planId),
     onCommandState: (sessionId, state) => chatConnections.publishCommandState(sessionId, state),
     onActivity: (sessionId, activity) => chatConnections.publishActivity(sessionId, activity),

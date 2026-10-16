@@ -475,7 +475,7 @@ AGENTS.md gains the rule that a change adding a recovery mechanism or exclusive 
 ## Migration Plan
 
 1. Land the baseline and backups first (task group 6). The first start records version 1 and takes a `startup` snapshot. Nothing else changes.
-2. Migration 4 creates the audit tables (task group 3) and takes `pre-migration-3` first, after migration 2 `strategy-impact` (strategy-revision-impact).
+2. Migration 8 creates the audit tables (task group 3) and takes `pre-migration-3` first, after migration 2 `strategy-impact` (strategy-revision-impact).
 3. The prompt note and loader (groups 1–2) need no migration. They reach each agent at its next spawn.
 4. Rollback: an older build refuses the migrated database (D14). Restore `pre-migration-3` to go back.
 

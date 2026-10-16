@@ -8,6 +8,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { Database } from 'bun:sqlite'
 import { initDatabase } from '../db'
+import { newestVersion } from '../dbSafety/migrations'
 import { logger } from '../logger'
 import { DatabaseBackups, integrityCheck, type DatabaseBackupsOptions } from '../dbSafety/backups'
 import { RETENTION, backupFileName, formatStamp, parseBackupFile, rotationVictims, type BackupFile } from '../dbSafety/backupFiles'
@@ -296,7 +297,8 @@ describe('rotation', () => {
   test('a 25th interval backup deletes the oldest interval and leaves startup and pre-migration backups', async () => {
     const session = initDatabase({ path: dbPath })
     const backups = new DatabaseBackups({ db: session.db, dbPath, now: steppingClock() })
-    const premigration = backups.snapshotSync('pre-migration-2')
+    // The newest migration's: rotation keeps only the newest three migrations' backups.
+    const premigration = backups.snapshotSync(`pre-migration-${newestVersion()}`)
     const intervals = []
     for (let i = 0; i < 25; i++) intervals.push(await backups.snapshot('interval'))
     session.close()

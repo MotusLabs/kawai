@@ -20,6 +20,10 @@ import { outboundAuditMigration } from '../outbound/migration'
 import { applyBaselineSchema } from './baseline'
 import { CREATE_IMPACT_TABLES_SQL } from '../strategy/impactSchema'
 import { CREATE_VALIDATION_TABLES_SQL } from '../plans/validation/validationSchema'
+import { migrateTaskStatusEvents } from '../team/taskStatusEventsSchema'
+import { CREATE_AGENT_START_TABLES_SQL } from '../metrics/provenanceSchema'
+import { CREATE_TURN_USAGE_SQL } from '../chat/chatTurnUsageStore'
+import { CREATE_PROCESS_REPORT_TABLES_SQL } from '../metrics/reportSchema'
 import type { BackupFile } from './backupFiles'
 import type { BackupOutcome } from './backups'
 
@@ -40,6 +44,14 @@ export const MIGRATIONS: readonly Migration[] = [
   // plan-validation D1: the report, assessment, and decision tables. Additive,
   // no backfill: existing revisions start as Not validated.
   { version: 3, name: 'plan-validation', up: db => db.exec(CREATE_VALIDATION_TABLES_SQL) },
+  // team-process-metrics D3: task status transitions, backfilled for closed tasks.
+  { version: 4, name: 'task-status-events', up: migrateTaskStatusEvents },
+  // team-process-metrics D2: agent-start provenance and memory manifests.
+  { version: 5, name: 'agent-starts', up: db => db.exec(CREATE_AGENT_START_TABLES_SQL) },
+  // team-process-metrics D1: per-turn token usage of every chat turn.
+  { version: 6, name: 'chat-turn-usage', up: db => db.exec(CREATE_TURN_USAGE_SQL) },
+  // team-process-metrics D6: process reports, proposals, decisions, links, and commands.
+  { version: 7, name: 'process-reports', up: db => db.exec(CREATE_PROCESS_REPORT_TABLES_SQL) },
   outboundAuditMigration,
 ]
 

@@ -1,12 +1,12 @@
 // The Team page (team-workspace-pages §5): the team's full-width surface —
 // a header naming the repository with a one-line strategy status that opens
 // the Strategy tab (D5 replaces team-workspace's band), then the
-// Strategy | Plans | Tasks | Messages | Mailbox | Members tab strip, then the
+// Strategy | Plans | Tasks | Messages | Mailbox | Members | Metrics tab strip, then the
 // active tab's view. The page is the team views' only eventual host (D4); each tab
 // view drives its own wire subscription, keyed by the team key. The URL
 // location (D3) names the tab, sub-view, and selection; navigation goes
 // through `useTeamLocationStore` so Back and Forward move with it.
-import { useEffect, useMemo, useRef } from 'react'
+import { useCallback, useEffect, useMemo, useRef } from 'react'
 import type { SendClientMessage } from '@shared/types'
 import { useSessionStore } from '../../stores/sessionStore'
 import { useStrategyStore, type StrategyView } from '../../stores/strategyStore'
@@ -29,6 +29,8 @@ import TeamMembersPanel from './TeamMembersPanel'
 import TeamPlansView from './TeamPlansView'
 import TeamTasksView from './TeamTasksView'
 import TeamWorkspaceBands from './TeamWorkspaceBands'
+import MetricsView, { resolveMetricsWindow } from './metrics/MetricsView'
+import { useMetricsStore } from '../../stores/metricsStore'
 import {
   RENDERED_WORKSPACE_TABS,
   type TeamLocation,
@@ -42,6 +44,7 @@ const TAB_LABELS: Record<WorkspaceTab, string> = {
   mailbox: 'Mailbox',
   members: 'Members',
   plans: 'Plans',
+  metrics: 'Metrics',
 }
 
 /** The one-line strategy status: approved revision or none, and reviews open. */
@@ -189,6 +192,17 @@ export default function TeamWorkspaceView({ teamKey, location, sendMessage, conn
     if ((currentLocation.id ?? null) !== (store.views[teamKey]?.selected ?? null)) store.select(teamKey, currentLocation.id ?? null)
   }, [plansOpen, teamKey, currentLocation.id])
 
+  // Metrics (team-process-metrics 7.2): the view owns its subscription; the
+  // URL names the window (D5).
+  const metricsOpen = currentLocation.tab === 'metrics' && !unknown
+  const metrics = useMetricsStore(state => state.views[teamKey])
+  useEffect(() => {
+    if (!metricsOpen) return
+    resolveMetricsWindow(teamKey, currentLocation.window, window => navigate({ teamKey, tab: 'metrics', window }, { replace: true }))
+  }, [metricsOpen, teamKey, currentLocation.window, navigate])
+  // Report authors and link actors by name; a killed session shows its id.
+  const sessionName = useCallback((sessionId: string) => sessions.find(row => row.id === sessionId)?.name ?? sessionId, [sessions])
+
   const liveSessions = useMemo(
     () => sessions.map(row => ({ id: row.id, name: row.name, groupId: row.groupId ?? null })),
     [sessions],
@@ -273,6 +287,14 @@ export default function TeamWorkspaceView({ teamKey, location, sendMessage, conn
         onSelectedPlan={planId => navigate(planId ? { teamKey, tab: 'plans', id: planId } : { teamKey, tab: 'plans' })}
         onOpenImpactReview={revision => navigate({ teamKey, tab: 'strategy', sub: 'impact', id: String(revision) })}
         onCaptureStrategy={() => navigate({ teamKey, tab: 'strategy', sub: 'overview' })}
+      />}
+      {metricsOpen && <MetricsView
+        teamPath={teamKey} view={metrics} locationWindow={currentLocation.window} reportId={currentLocation.id} sendMessage={sendMessage}
+        connected={connected} connectionEpoch={connectionEpoch} nameOf={sessionName}
+        onWindow={(window, options) => navigate({ teamKey, tab: 'metrics', window }, options)}
+        onOpenReport={reportId => navigate({ teamKey, tab: 'metrics', window: currentLocation.window, ...(reportId ? { id: reportId } : {}) })}
+        onOpenTask={taskId => navigate({ teamKey, tab: 'tasks', id: taskId })}
+        onOpenThread={threadId => navigate({ teamKey, tab: 'messages', id: threadId })}
       />}
     </div>
   </main>

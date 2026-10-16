@@ -157,6 +157,40 @@ describe('TaskStore', () => {
     expect(tasks.setStatus('task-missing', 'done')).toBeNull()
   })
 
+  test('each status change appends a transition row with its actor; a same-status update records nothing', () => {
+    const task = create()
+    tasks.setStatus(task.id, 'active', undefined, agent('chat-dev'), '2026-10-11T01:00:00.000Z')
+    tasks.setStatus(task.id, 'active', undefined, human, '2026-10-11T02:00:00.000Z')
+    tasks.setStatus(task.id, 'done', undefined, human, '2026-10-11T03:00:00.000Z')
+    tasks.setStatus(task.id, 'open', undefined, undefined, '2026-10-11T04:00:00.000Z')
+    expect(tasks.setStatus('task-missing', 'done', undefined, human)).toBeNull()
+    expect(tasks.statusEvents(task.id)).toEqual([
+      { fromStatus: 'open', toStatus: 'active', actor: agent('chat-dev'), at: '2026-10-11T01:00:00.000Z' },
+      { fromStatus: 'active', toStatus: 'done', actor: human, at: '2026-10-11T03:00:00.000Z' },
+      { fromStatus: 'done', toStatus: 'open', actor: { kind: 'system', sessionId: null }, at: '2026-10-11T04:00:00.000Z' },
+    ])
+    expect(db.db.prepare('SELECT COUNT(*) AS n FROM team_task_status_events WHERE task_id = ?').get('task-missing')).toEqual({ n: 0 })
+  })
+
+  test('a failing transition hook writes no transition row', () => {
+    const task = create()
+    expect(() => tasks.setStatus(task.id, 'done', () => { throw new Error('hook failed') }, human)).toThrow('hook failed')
+    expect(tasks.get(task.id)?.status).toBe('open')
+    expect(tasks.statusEvents(task.id)).toEqual([])
+  })
+
+  test('transition rows survive reopening the database and the actor\'s kill', () => {
+    const task = create()
+    db.insertChatSession(chatRow('chat-dev', { taskId: task.id }))
+    tasks.setStatus(task.id, 'blocked', undefined, agent('chat-dev'))
+    db.deleteChatSession('chat-dev')
+    reopen()
+    expect(tasks.statusEvents(task.id)).toEqual([
+      { fromStatus: 'open', toStatus: 'blocked', actor: agent('chat-dev'), at: expect.any(String) },
+    ])
+    expect(db.db.prepare('SELECT team_id FROM team_task_status_events').all()).toEqual([{ team_id: TEAM }])
+  })
+
   test('tasks, revisions, and journal persist across reopening and outlive their sessions', () => {
     const task = create({ parentId: null, worktree: '/repo-feature', openspecChange: 'add-export' })
     db.insertChatSession(chatRow('chat-lead', { taskId: task.id }))

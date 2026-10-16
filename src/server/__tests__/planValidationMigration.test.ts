@@ -60,9 +60,14 @@ const inputs = (planId: string, revision: number): ValidationInputs => ({
   records: { assessments: [], decisions: [] },
 })
 
+// The build that introduced plan-validation: every migration through it.
+// Later migrations have their own tests.
+const AT = MIGRATIONS.findIndex(migration => migration.name === 'plan-validation')
+const THROUGH_VALIDATION = MIGRATIONS.slice(0, AT + 1)
+
 /** A database as the build before this change leaves it: a plan with a submitted revision. */
 function planAtPreviousVersion(): string {
-  const session = initDatabase({ path: dbPath, migrations: MIGRATIONS.filter(migration => migration.name !== 'plan-validation' && migration.name !== 'outbound-audit') })
+  const session = initDatabase({ path: dbPath, migrations: MIGRATIONS.slice(0, AT) })
   const store = new PlanStore(session.db)
   const planId = store.insertPlan({ teamId: '/repo/.git', title: 'Plan', creator: human })
   store.insertRevision(planId, { content: normalizePlanContent({ goal: 'g', changes: [{ change: 'alpha' }] }), contentHash: hashPlanDraft(normalizePlanContent({ goal: 'g' })), pin: null, author: human })
@@ -70,9 +75,9 @@ function planAtPreviousVersion(): string {
   return planId
 }
 
-test('the registry holds plan-validation as a dense numbered migration', () => {
-  const mine = MIGRATIONS.filter(migration => migration.name === 'plan-validation')
-  expect(mine.map(migration => migration.version)).toEqual([3])
+test('the registry holds plan-validation as the dense next numbered migration', () => {
+  const migration = MIGRATIONS[AT]!
+  expect(migration.version).toBe((MIGRATIONS[AT - 1]?.version ?? 1) + 1)
   expect(checkDense(MIGRATIONS)).toBe(true)
 })
 
@@ -87,7 +92,7 @@ test('a database written by the build before plan-validation upgrades keeping ev
   expect(before.plan_revisions).toHaveLength(1)
   expect(VALIDATION_TABLES.filter(table => table in before)).toEqual([])
 
-  const session = initDatabase({ path: dbPath })
+  const session = initDatabase({ path: dbPath, migrations: THROUGH_VALIDATION })
   // The new tables are usable at once: a report, an assessment, a decision.
   const validation = new ValidationStore(session.db)
   validation.insertReport({
@@ -104,7 +109,7 @@ test('a database written by the build before plan-validation upgrades keeping ev
   for (const [table, tableRows] of Object.entries(before)) expect(after[table]).toEqual(tableRows)
   expect(Object.keys(after).filter(table => !(table in before) && !table.startsWith('outbound_')).sort()).toEqual(VALIDATION_TABLES)
   const recorded = versions(dbPath)
-  expect(recorded.map(row => row.version)).toEqual([1, ...MIGRATIONS.map(migration => migration.version)])
+  expect(recorded.map(row => row.version)).toEqual([1, ...THROUGH_VALIDATION.map(migration => migration.version)])
   expect(recorded.find(row => row.name === 'plan-validation')).toMatchObject({ version: 3 })
   const mine = recorded.find(row => row.name === 'plan-validation')!
   const backup = mine.backup_path!
