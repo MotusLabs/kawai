@@ -15,6 +15,8 @@ import type { SessionTeams } from '../team/sessionTeams'
 import type { ClientMessage, ServerMessage } from '../../shared/types'
 import { createPlanWorld, type PlanWorld } from './planHarness'
 import { createImpactBench, type ImpactBench } from './impactHarness'
+import { composePlanServices } from '../plans/planComposition'
+import type { OpenspecAdapter } from '../plans/validation/openspecAdapter'
 
 let world: PlanWorld
 let bench: ImpactBench
@@ -24,13 +26,31 @@ const connection = { send: (message: ServerMessage) => messages.push(message) }
 
 beforeAll(async () => { world = await createPlanWorld('kawai-impact-connections-') })
 afterAll(() => fs.rmSync(world.root, { recursive: true, force: true }))
+/** Wait a few ticks for an async detail push (its Validation build is awaited). */
+async function until(probe: () => boolean, tries = 100): Promise<void> {
+  for (let attempt = 0; attempt < tries && !probe(); attempt += 1) await new Promise(resolve => setTimeout(resolve, 10))
+}
+
+/** A canned adapter: the probe answers, both CLI calls succeed with nothing. */
+const cannedAdapter = (): OpenspecAdapter => ({
+  probe: async () => ({ tool: 'openspec', version: '1.14.2', capabilities: ['validate-strict-json', 'show-deltas-json'], ok: true, error: null }),
+  validate: async () => ({ ok: true, error: null, valid: true, issues: [], issueCount: 0 }),
+  showDeltas: async () => ({ ok: true, error: null, touches: [] }),
+}) as unknown as OpenspecAdapter
+
 beforeEach(() => {
   bench?.db.close()
   bench = createImpactBench(world)
   messages = []
   const teamScopes = new TeamScopes({ teams: { hasTeam: async () => false } as unknown as SessionTeams, repositories: () => [world.team.teamId, world.otherTeam.teamId] })
   const strategies = new StrategyService(bench.strategies, { getSession: id => bench.records.get(id), homeDir: world.home })
-  const manager = { whenRestored: () => Promise.resolve(), teamScopes, strategies, plans: bench.service, impact: bench.impact } as unknown as ChatSessionManager
+  // The production plan composition (plan-validation M1): the detail pushes
+  // carry the Validation section, so the manager needs it like the server has it.
+  const planServices = composePlanServices({
+    db: bench.db.db, plans: bench.plans, strategies: bench.strategies, impact: bench.impact, adapter: cannedAdapter(),
+    getSession: id => bench.records.get(id), homeDir: world.home,
+  })
+  const manager = { whenRestored: () => Promise.resolve(), teamScopes, strategies, plans: planServices.plans, validation: planServices.validation, validationDetail: planServices.validationDetail, impact: bench.impact } as unknown as ChatSessionManager
   connections = new ChatConnections(manager)
   // As ChatSessionManager wires them (D9): each store refreshes both views of its team.
   const teamOf = (strategyId: string) => bench.strategies.get(strategyId)?.repoBindings.find(binding => binding.kind === 'team')?.root
@@ -119,6 +139,8 @@ describe('pushes (D9)', () => {
     messages = []
     bench.approveStrategy({ purpose: 'Third direction' })
     expect(last('team-plans-snapshot')!.impact![planId]!.gate).toMatchObject({ state: 'decision-required', decisionId: null })
+    // The detail push carries the Validation section now, so it lands a tick later.
+    await until(() => last('team-plan-detail') !== undefined)
     expect(last('team-plan-detail')!.impact!.reviewRevision).toBe(3)
   })
 
@@ -129,7 +151,8 @@ describe('pushes (D9)', () => {
     await send({ type: 'team-plan-open', teamPath: world.repo, planId })
     await send({ type: 'team-plan-approve', teamPath: world.repo, requestId: 'approve-1', planId, revision, contentHash: hash, expectedApprovedRevision: null, commandId: 'approve-cmd' })
     const result = last('team-plan-result')!
-    expect(result.failures!.map(failure => failure.name)).toEqual(['strategy-pin-current'])
+    expect(result.failures!.map(failure => failure.name)).toEqual(['strategy-pin-current', 'validation-current'])
+    await until(() => last('team-plan-detail') !== undefined)
     const detailGate = last('team-plan-detail')!.impact!.revisions.find(entry => entry.revision === revision)!.gate
     expect(result.impact).toEqual(detailGate)
     expect(result.impact!.state).toBe('decision-required')
