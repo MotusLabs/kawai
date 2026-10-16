@@ -14,6 +14,7 @@ export function mapRow(row: Record<string, unknown>): TeamMessage {
   } catch {
     // A corrupt tag list reads as none; the message itself stays usable.
   }
+  const allowedProfiles = parseAllowedProfiles(row.allowed_profiles)
   return {
     id: String(row.id),
     teamId: String(row.team_id),
@@ -48,11 +49,24 @@ export function mapRow(row: Record<string, unknown>): TeamMessage {
     handoff: parseHandoff(row.handoff),
     excludedProfile: text(row.excluded_profile),
     revisionNotice: parseRevisionNotice(row.revision_notice),
+    allowedProfiles,
   }
 }
 
-/** A notice row's announced revision (task-revision-publication D3); null for every other row. */
-function parseRevisionNotice(value: unknown): RevisionNotice | null {
+/** The role's profiles execution mail may route to (plan-execution D15); null on every other row. */
+function parseAllowedProfiles(value: unknown): string[] | null {
+  if (typeof value !== 'string') return null
+  try {
+    const parsed: unknown = JSON.parse(value)
+    if (!Array.isArray(parsed)) return null
+    const profiles = parsed.filter((profile): profile is string => typeof profile === 'string')
+    return profiles.length > 0 ? profiles : null
+  } catch {
+    return null
+  }
+}
+
+/** A notice row's announced revision (task-revision-publication D3); null for every other row. */function parseRevisionNotice(value: unknown): RevisionNotice | null {
   if (typeof value !== 'string') return null
   try {
     const parsed = JSON.parse(value) as Record<string, unknown> | null

@@ -103,6 +103,8 @@ export interface TeamMessage {
   handoff: ChatHandoffPackage | null
   /** Forwarded work never goes back to the profile that hit the limit. */
   excludedProfile: string | null
+  /** The role's profiles this mail may route to, in the role's order (plan-execution D15); absent on ordinary mail. */
+  allowedProfiles?: string[] | null
   /** A revision notice (task-revision-publication D3): the revision it announces; absent = not a notice. */
   revisionNotice?: RevisionNotice | null
 }
@@ -247,6 +249,7 @@ export type WaitingConstraintKind =
   | 'recipient-busy'
   | 'recipient-pending-request'
   | 'recipient-unavailable'
+  | 'outside-role'
   | 'profile-cooling'
   | 'startup-failed'
   | 'no-eligible-member'

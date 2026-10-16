@@ -29,6 +29,12 @@ export interface EnqueueInput {
   /** Forwarded work after a limit (profile routing). */
   handoff?: ChatHandoffPackage | null
   excludedProfile?: string | null
+  /**
+   * The role's profiles this mail may route to, in the role's order
+   * (plan-execution D15). System mail only; a forward keeps the list
+   * without the limited profile.
+   */
+  allowedProfiles?: string[] | null
   /** Who caused the send (event log): the human through a composer, else the system. */
   actor?: 'system' | 'human'
   /** The revision a notice announces (task-revision-publication D3); absent for every other row. */

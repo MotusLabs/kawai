@@ -106,6 +106,7 @@ export class MailboxStore {
       $handoff: input.handoff ? JSON.stringify(input.handoff) : null,
       $excludedProfile: input.excludedProfile ?? null,
       $revisionNotice: input.revisionNotice ? JSON.stringify(input.revisionNotice) : null,
+      $allowedProfiles: input.allowedProfiles ? JSON.stringify(input.allowedProfiles) : null,
     })
     this.changed(id, true)
     const message = this.get(id)!

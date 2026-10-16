@@ -13,6 +13,7 @@ export type MemberExclusionKind =
   | 'unavailable'
   | 'startup-failed'
   | 'excluded-profile'
+  | 'outside-role'
   | 'profile-cooling'
 
 export interface MemberExclusion {
@@ -51,6 +52,9 @@ export function memberExclusions(
     add('other-worktree', recipient.worktree)
   }
   if (message.excludedProfile && (recipient.profileId ?? 'default') === message.excludedProfile) add('excluded-profile')
+  if (message.allowedProfiles && !message.allowedProfiles.includes(recipient.profileId ?? 'default')) {
+    add('outside-role', `plan role allows only ${message.allowedProfiles.join(', ')}`)
+  }
   if (Date.parse(recipient.cooldownUntil ?? '') > options.now) add('profile-cooling')
   return causes
 }

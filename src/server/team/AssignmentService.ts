@@ -164,6 +164,8 @@ export class AssignmentService {
       const enqueued = this.mail.enqueue({
         teamId: team.teamId, toKind: input.target.kind, toId: input.target.id,
         ...sender, priority: 'normal', body: instruction, taskId: task.id,
+        ...(input.allowedProfiles ? { allowedProfiles: input.allowedProfiles } : {}),
+        ...(input.tags ? { tags: [...new Set(input.tags)] } : {}),
       })
       this.store.setMessage(inserted.assignment.id, enqueued.id)
       const by = creator.kind === 'human' ? 'human' : partyName(creator)

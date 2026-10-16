@@ -88,10 +88,10 @@ Implement after `durable-plans`, `strategy-revision-impact`, and `plan-validatio
 
 ## 9. Routing
 
-- [ ] 9.1 Carry `allowed_profiles` through `EnqueueInput`, the store, and forwarding (`routing/handoff.ts`). Verify with tests: stored on system mail; copied on forward with the limited profile excluded.
-- [ ] 9.2 Filter `buildCandidates` by `allowedProfiles`: the `outside-role` exclusion, spawn slots only for allowed profiles in the role's order, and `profile-order` by the role's order. Verify with the `team-routing-rules` delta scenarios and the existing routing suite.
-- [ ] 9.3 Add the `outside-role` waiting reason. Verify with a waiting-reasons test: a message with every role profile cooling names the role's profiles.
-- [ ] 9.4 Tag review handoffs with `author-profile:<id>`, and document the tags and `allowed_profiles` in `docs/routing/README.md`. Verify with a router test in which a rule reads the tag and picks another profile.
+- [x] 9.1 Carry `allowed_profiles` through `EnqueueInput`, the store, and forwarding (`routing/handoff.ts`). Verify with tests: stored on system mail; copied on forward with the limited profile excluded.
+- [x] 9.2 Filter `buildCandidates` by `allowedProfiles`: the `outside-role` exclusion, spawn slots only for allowed profiles in the role's order, and `profile-order` by the role's order. Verify with the `team-routing-rules` delta scenarios and the existing routing suite.
+- [x] 9.3 Add the `outside-role` waiting reason. Verify with a waiting-reasons test: a message with every role profile cooling names the role's profiles.
+- [x] 9.4 Tag review handoffs with `author-profile:<id>`, and document the tags and `allowed_profiles` in `docs/routing/README.md`. Verify with a router test in which a rule reads the tag and picks another profile.
 
 ## 10. Effects runner
 

@@ -171,6 +171,7 @@ describe('8.3 only Kawai dispatches a running change\'s task', () => {
       allowedProfiles: ['default'], tags: ['author-profile:default'],
     })
     expect(outcome.assignment.createdBy).toEqual({ kind: 'system', sessionId: null })
+    expect(outcome.message).toMatchObject({ allowedProfiles: ['default'], tags: ['author-profile:default'] })
   })
 
   test('an agent cannot pass allowedProfiles or tags', async () => {

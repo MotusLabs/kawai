@@ -45,6 +45,8 @@ export interface ProfileRouterOptions {
   usageOf: (profileId: string) => ChatUsageReport | null
   /** The profile a forwarded message must not go back to. */
   excludedProfile?: (message: TeamMessage) => string | undefined
+  /** The role's profiles execution mail may route to, in the role's order (plan-execution D15). */
+  allowedProfiles?: (message: TeamMessage) => string[] | null
   onDecision?: (entry: RouteDecisionLogEntry) => void
   now?: () => number
 }
@@ -86,6 +88,7 @@ export class ProfileRouter implements GroupRouter {
       spawnAllowed: spawn?.allowed ?? false,
       spawnCwd: spawn?.worktree ?? null,
       ...(this.options.excludedProfile?.(message) ? { excludeProfile: this.options.excludedProfile(message)! } : {}),
+      ...(this.options.allowedProfiles?.(message) ? { allowedProfiles: this.options.allowedProfiles(message)! } : {}),
     })
     if (candidates.length === 0) {
       this.holds.delete(message.id)
@@ -100,7 +103,9 @@ export class ProfileRouter implements GroupRouter {
 
     const profiles = this.profileStates(group, candidates, now)
     const cooling = (profileId: string) => profiles[profileId]?.cooldownUntil != null
-    const order = routeGroup.profiles.map(entry => entry.profileId)
+    // With a role, profile-order ranks by the role's order (D15); the
+    // candidates outside it are already filtered out.
+    const order = this.options.allowedProfiles?.(message) ?? routeGroup.profiles.map(entry => entry.profileId)
     const record = (source: RouteDecisionLogEntry['source'], decision: string, reason?: string) =>
       this.record({ at: new Date(now).toISOString(), teamId: message.teamId, groupId: group.id, messageId: message.id, source, decision, ...(reason ? { reason } : {}) })
 
@@ -187,6 +192,7 @@ const CAUSE_LABELS: Record<MemberExclusion['kind'], string> = {
   'unavailable': 'unavailable',
   'startup-failed': 'startup failed',
   'excluded-profile': 'on the excluded profile',
+  'outside-role': 'outside the plan role\'s profiles',
   'profile-cooling': 'cooling',
 }
 

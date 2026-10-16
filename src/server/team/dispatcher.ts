@@ -278,6 +278,8 @@ export class MailDispatcher {
           else if (cause.kind === 'busy') constraints.push({ kind: 'recipient-busy' })
           else if (cause.kind === 'excluded-profile') {
             constraints.push({ kind: 'recipient-unavailable', detail: `the recipient is on the excluded profile ${message.excludedProfile}` })
+          } else if (cause.kind === 'outside-role') {
+            constraints.push({ kind: 'outside-role', ...(cause.detail ? { detail: cause.detail } : {}) })
           } else if (cause.kind === 'profile-cooling') {
             constraints.push({ kind: 'profile-cooling', ...(row.cooldownUntil ? { retryAt: row.cooldownUntil } : {}) })
           }
@@ -362,6 +364,9 @@ export class MailDispatcher {
       if (eligible.has(row.sessionId)) {
         if (message.excludedProfile && (row.profileId ?? 'default') === message.excludedProfile) {
           out.push({ sessionId: row.sessionId, kind: 'excluded-profile' })
+        }
+        if (message.allowedProfiles && !message.allowedProfiles.includes(row.profileId ?? 'default')) {
+          out.push({ sessionId: row.sessionId, kind: 'outside-role', detail: `plan role allows only ${message.allowedProfiles.join(', ')}` })
         }
         continue
       }

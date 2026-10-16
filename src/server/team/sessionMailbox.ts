@@ -209,6 +209,7 @@ export class SessionMailbox {
       limits: this.limits,
       usageOf: profileId => options.usageOf?.(profileId) ?? null,
       excludedProfile: message => message.excludedProfile ?? undefined,
+      allowedProfiles: message => message.allowedProfiles ?? null,
       ...(options.onRouteDecision ? { onDecision: options.onRouteDecision } : {}),
     })
     this.outcomes = new LimitOutcomes(db, {
