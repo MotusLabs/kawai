@@ -191,6 +191,24 @@ describe('redact: CC round 3 (body forms, linear userinfo, over-redaction)', () 
     expect(out.text).not.toMatch(/ghp_[A-Za-z0-9]*/)
   })
 
+  test('nothing partial leaks at the read cap, at every shift 0-64 (round 6 B2/B3/B6)', () => {
+    // ANSI-C strings with escaped quotes leak nothing, in both scanners.
+    expect(redact("curl -H $'Authorization: Bearer S3C\\'RETZZ' https://example.internal"))
+      .not.toMatch(/S3C|RETZZ/)
+    expect(redact("gh secret set N -b $'SEC\\'RETV7 tail'")).not.toMatch(/SEC|RETV7/)
+    // httpie items, quoted either way.
+    expect(redact('http POST host.example.org Authorization:"Bearer X"')).toBe('http POST host.example.org Authorization:\u2039redacted\u203a')
+    expect(redact("http POST host.example.org Cookie:'a b c'")).not.toContain('a b c')
+    // A token straddling the 16 KiB cap stores no partial byte, at any shift.
+    for (let shift = 0; shift <= 64; shift++) {
+      const padding = 'x'.repeat(16_384 - 20 + shift)
+      const out = redactForStore(padding + ' \'Authorization: Bearer QZTOKEN0123456789\'')
+      expect(out.text).not.toMatch(/QZTOKEN[0-9]*/)
+      // An always-slice mutant (cut -1 slices to empty) also fails here.
+      if (shift === 0) expect(out.text.length).toBeGreaterThan(0)
+    }
+  })
+
   test('a 16 KiB read bound keeps every stored character redacted', () => {
     // A secret at 10 KiB — past nothing: inside the read bound, redacted.
     const command = `echo ${'x'.repeat(10_000)} ghp_ABCDEFghijklmnop0123456789`

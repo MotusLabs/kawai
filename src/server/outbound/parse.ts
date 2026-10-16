@@ -81,6 +81,21 @@ export function tokenize(input: string): Token[] {
       i++
       continue
     }
+    if (char === '$' && input[i + 1] === "'") {
+      // ANSI-C quoting: read to the first unescaped quote, verbatim.
+      let at = i + 2
+      let text = "$'"
+      while (at < input.length) {
+        if (input[at] === '\\' && at + 1 < input.length) { text += input.slice(at, at + 2); at += 2; continue }
+        if (input[at] === "'") { text += "'"; at++; break }
+        text += input[at]!
+        at++
+      }
+      word += text
+      i = at
+      atWordStart = false
+      continue
+    }
     if (char === '$' || char === '`') {
       const expansion = readExpansion(input, i)
       if (expansion) { word += expansion.text; opaque = true; i = expansion.next; atWordStart = false; continue }
@@ -202,12 +217,19 @@ export interface CommandSegment {
 
 const ASSIGNMENT = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/
 const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash'])
+/** Shell options the parser knows as booleans (round 6 B5). */
+const SHELL_FLAG_LETTERS = /^[abcefhiklmnprstuvxBCDEHILMPRSTUVWX]*$/
+const SHELL_LONG_FLAGS = new Set(['--noprofile', '--norc', '--posix', '--restricted', '--login', '--interactive', '--help', '--version', '--'])
 const REDIRECT_ALONE = /^(?:\d*(?:>>?|<>)&\d*|>&\d+)$/
 const HEREDOC = /^<<-?$/
 
-/** A directory a segment can pin, or null when the shell would expand it (`~`). */
+/** Why a directory change cannot be resolved (I1: never silently kept). */
+const CWD_UNRESOLVED = 'the working directory does not resolve'
+
+/** A directory a segment can pin, or null when the shell would expand it. */
 function resolveDir(dir: string, cwd: string): string | null {
-  if (dir === '~' || dir.startsWith('~/')) return null
+  // ~, ~user, and `cd -` all depend on state or names the parser never sees.
+  if (dir === '~' || dir.startsWith('~/') || dir.startsWith('~') || dir === '-') return null
   if (dir.startsWith('/')) return dir
   return cwd.replace(/\/$/, '') + '/' + dir
 }
@@ -236,6 +258,8 @@ interface Built {
   envDeletes: string[]
   /** A persistent cwd change (`cd`); a subshell never moves the parent. */
   chdir?: string
+  /** The cwd stopped resolving (`cd ~`, `cd -`, popd): later sends read unresolved. */
+  chdirStuck?: boolean
 }
 
 /** The segment's original source span, when the words carry one. */
@@ -307,9 +331,12 @@ function buildSegment(
           at++
           continue
         }
-        if (word.text === '-C' && rest[at + 1] !== undefined) {
-          const dir = resolveDir(rest[at + 1]!.text, segmentCwd)
-          if (dir !== null) segmentCwd = dir
+        if (word.text === '-C' || word.text === '--chdir') {
+          const target = rest[at + 1]
+          if (target === undefined || target.opaque) { note = CWD_UNRESOLVED; break }
+          const dir = resolveDir(target.text, segmentCwd)
+          if (dir === null) { note = CWD_UNRESOLVED; break }
+          segmentCwd = dir
           at += 2
           continue
         }
@@ -336,10 +363,22 @@ function buildSegment(
     if (SHELLS.has(rest[0]!.text.split('/').pop()!)) {
       let at = 1
       let hasC = false
+      let shellNote: string | undefined
       while (at < rest.length && rest[at]!.text.startsWith('-') && rest[at]!.text !== '--' && rest[at]!.text !== '-') {
-        if (/^-[a-qs-z]*c[a-qs-z]*$|^-[a-z]*c[a-z]*$/.test(rest[at]!.text)) { hasC = true; break }
+        const flag = rest[at]!.text
+        if (/^-[a-qs-z]*c[a-qs-z]*$|^-[a-z]*c[a-z]*$/.test(flag)) { hasC = true; break }
+        // -o/+o and -O/+O take an argument; any other option letter or an
+        // unknown long flag leaves the shell call unresolved (round 6 B5).
+        if (/^[-+]o$/.test(flag) || /^[-+]O$/.test(flag)) { at += 2; continue }
+        if (flag.startsWith('--')) {
+          if (!SHELL_LONG_FLAGS.has(flag)) shellNote = 'the shell options were not understood'
+          at++
+          continue
+        }
+        if (!SHELL_FLAG_LETTERS.test(flag.slice(1))) shellNote = 'the shell options were not understood'
         at++
       }
+      if (shellNote !== undefined) { note = shellNote; break }
       if (hasC) {
         let innerAt = at + 1
         if (rest[innerAt]?.text === '--') innerAt++
@@ -371,22 +410,40 @@ function buildSegment(
   }
   const argv = rest.map(word => word.text)
   // `git -C <dir>` pins this segment alone.
-  if (argv[0] === 'git') {
+  let gitCwdNote: string | undefined
+  if (argv[0]?.split('/').pop() === 'git') {
     const dashC = argv.findIndex((word, index) => index > 0 && (word === '-C') && argv.length > index + 1)
-    const pinned = dashC > 0 ? resolveDir(argv[dashC + 1]!, cwd) : null
-    if (pinned !== null) segmentCwd = pinned
+    if (dashC > 0) {
+      const targetWord = rest[dashC + 1]
+      const pinned = targetWord?.opaque === true ? null : resolveDir(argv[dashC + 1]!, cwd)
+      if (pinned === null) gitCwdNote = CWD_UNRESOLVED
+      else segmentCwd = pinned
+    }
   }
-  // `cd <dir>` moves every later segment.
+  // cd/pushd move every later segment; popd returns to a dir the parser
+  // never tracked. An unresolvable target sticks the whole rest of the call
+  // unresolved (round 6 B1).
   let chdir: string | undefined
-  if (argv[0] === 'cd' && argv[1] !== undefined && !argv[1]!.startsWith('-') && !rest[1]!.opaque) {
-    const target = resolveDir(argv[1]!, cwd)
-    if (target !== null) chdir = target
+  let chdirStuck = false
+  if (argv[0] === 'cd' || argv[0] === 'pushd') {
+    const target = rest[1]
+    if (argv[0] === 'cd' && target === undefined) chdirStuck = true
+    else if (target === undefined || target.opaque || target.text.startsWith('-')) chdirStuck = argv[0] === 'cd' ? true : target?.text === '-' ? true : false
+    if (target !== undefined && !target.opaque) {
+      const dir = resolveDir(target.text, cwd)
+      if (dir === null) chdirStuck = true
+      else if (argv[0] === 'pushd' && target.text === '-') chdirStuck = true
+      else chdir = dir
+    }
   }
+  if (argv[0] === 'popd') chdirStuck = true
+  const segmentNote = note ?? gitCwdNote
   return {
-    segments: [{ argv, text: span === null ? argv.join(' ') : span.command.slice(span.start, span.end), cwd: segmentCwd, env, ...(note === undefined ? {} : { note }) }],
+    segments: [{ argv, text: span === null ? argv.join(' ') : span.command.slice(span.start, span.end), cwd: segmentCwd, env, ...(segmentNote === undefined ? {} : { note: segmentNote }) }],
     envUpdates,
     envDeletes,
     ...(chdir === undefined ? {} : { chdir }),
+    ...(chdirStuck ? { chdirStuck: true } : {}),
   }
 }
 
@@ -448,6 +505,7 @@ function parseSegments(
   let delimiter = ''
   const cwdStack: string[] = []
   let span: SourceSpan | null = null
+  let cwdStuck = false
   const finish = () => {
     const built = buildSegment(words, runningEnv, cwd, depth, span)
     words = []
@@ -455,6 +513,12 @@ function parseSegments(
     for (const name of built.envDeletes) runningEnv.delete(name)
     for (const [name, value] of built.envUpdates) runningEnv.set(name, value)
     if (built.chdir !== undefined) cwd = built.chdir
+    if (built.chdirStuck === true) cwdStuck = true
+    if (cwdStuck) {
+      for (const segment of built.segments) {
+        if (segment.note === undefined) segment.note = CWD_UNRESOLVED
+      }
+    }
     segments.push(...built.segments)
   }
   for (const token of tokens) {

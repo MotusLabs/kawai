@@ -18,7 +18,7 @@ const HEADERS = 'Authorization|Proxy-Authorization|Cookie|X-Api-Key|PRIVATE-TOKE
 /** A flag or assignment value: quoted (any content up to its close) or bare. */
 // In the template literal below every regex backslash doubles (`\\s`), because
 // a template literal collapses a single `\s` to plain `s`.
-const VALUE = `\\$'[^']*'|'[^']*'|"([^"\\\\]|\\\\.)*"|[^\\s;|&'"]+`
+const VALUE = `\\$'(?:[^'\\\\]|\\\\.)*'|'(?:[^'\\\\]|\\\\.)*'|"([^"\\\\]|\\\\.)*"|[^\\s;|&'"]+`
 
 /**
  * `gh secret set … -b/--body <secret>` (D8): the secret value itself, in
@@ -72,7 +72,8 @@ const RULES: Array<{ pattern: RegExp; replacement: string | ((substring: string,
 
   // Header values: quoted (the value runs to the closing quote) and bare.
   { pattern: new RegExp(`(")(${HEADERS})[ \\t]*:[ \\t]*(?:[^"\\\\]|\\\\.)*"`, 'gi'), replacement: `$1$2: ${REDACTED}"` },
-  { pattern: new RegExp(`(')(${HEADERS})[ \\t]*:[ \\t]*[^']*'`, 'gi'), replacement: `$1$2: ${REDACTED}'` },
+  { pattern: new RegExp(`(')(${HEADERS})[ \\t]*:[ \\t]*(?:[^'\\\\]|\\\\.)*'`, 'gi'), replacement: `$1$2: ${REDACTED}'` },
+  { pattern: new RegExp(`(\\$')(${HEADERS})[ \\t]*:[ \\t]*(?:[^'\\\\]|\\\\.)*'`, 'gi'), replacement: `$1$2: ${REDACTED}'` },
   // A bare value keeps backslash-escaped spaces and colons to itself
   // (`Authorization:\\ Bearer\\ X`) and stops at the first bare space.
   { pattern: new RegExp(`\\b(${HEADERS})([ \\t]*:)[ \\t]*(?:[A-Za-z0-9_.+=-]|\\\\[ \\t\\\\])+`, 'gi'), replacement: `$1$2${REDACTED}` },
@@ -90,6 +91,8 @@ const RULES: Array<{ pattern: RegExp; replacement: string | ((substring: string,
   // `@` after that slash is still the separator (`user:pa/ss@host`). A path
   // `@scope` never matches — its pre-slash part has no colon.
   { pattern: /([a-z][a-z0-9+.-]{0,31}:\/\/)[^\s'"?#/:]+:[^\s'"?#/]*\/[^\s'"?#]{0,255}@/gi, replacement: `$1${REDACTED}@` },
+  // httpie items: `Header:Value` positionals, quoted values included (round 6 B6).
+  { pattern: new RegExp(`(^|[\\s;|&])(Authorization|Proxy-Authorization|Cookie|X-Api-Key|PRIVATE-TOKEN):(?:[^\\s;|&'"]+|"(?:[^"\\\\]|\\\\.)*"|'(?:[^'\\\\]|\\\\.)*'|\\\\$'(?:[^'\\\\]|\\\\.)*')`, 'gi'), replacement: `$1$2:‹redacted›` },
   // Credential query parameters.
   { pattern: /([?&])([a-z0-9_]+)=([^&\s'"]+)/gi, replacement: (match: string, sep: string, name: string) =>
     QUERY_CREDENTIALS.test(name) ? `${sep}${name}=${REDACTED}` : match },

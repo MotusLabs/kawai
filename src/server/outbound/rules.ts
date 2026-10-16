@@ -228,9 +228,20 @@ function segmentConfigTouched(argv: readonly string[], env: ReadonlyMap<string, 
   return sub === 'remote' && ['add', 'set-url', 'rename', 'remove'].includes(rest[0] ?? '')
 }
 
+/** The shell words themselves (round 6 L3). */
+const SHELL_WORDS = new Set(['bash', 'sh', 'zsh', 'dash'])
+
+/** Wrapper and shell words: alone, they name no send (round 6 B1). */
+const WRAPPER_WORDS = new Set(['env', 'sudo', 'doas', 'timeout', 'nice', 'xargs', 'command', 'exec', 'nohup', 'stdbuf', 'ionice', 'builtin'])
+
+/** The first word's basename, lowercase. */
+const argv0 = (argv: readonly string[]): string => argv[0]?.split('/').pop()?.toLowerCase() ?? ''
+
 function candidatesOf(segment: { argv: string[]; text: string; cwd: string; env: ReadonlyMap<string, string | null>; note?: string }, configTouched = false): SendCandidate[] {
   const { text, cwd, env } = segment
   const base = (rule: SendCandidate['rule'], target: SendTarget): SendCandidate => ({ rule, segment: text, cwd, target })
+  const bare = argv0(segment.argv)
+  if (bare === 'cd' || bare === 'pushd' || bare === 'popd' || bare === 'export') return []
   if (segment.note !== undefined) {
     // The unwrap could not complete (an unknown wrapper flag, a second -c
     // level, an env option not understood): the segment may send anywhere,
@@ -242,13 +253,19 @@ function candidatesOf(segment: { argv: string[]; text: string; cwd: string; env:
     // anywhere in the segment does (a wrapped `bash -c "git push…"` labels
     // git-push), and only a command naming none falls back to http-send.
     const inner = segment.argv.map(word => word.split(/[\s/]/)[0]!.toLowerCase()).find(token => WRAPPED_RULE_HEADS[token] !== undefined)
-    const rule = WRAPPED_RULE_HEADS[head] ?? (inner === undefined ? undefined : WRAPPED_RULE_HEADS[inner]) ?? 'http-send'
-    return [base(rule, { kind: 'unresolved', why: segment.note })]
+    let rule = WRAPPED_RULE_HEADS[head] ?? (inner === undefined ? undefined : WRAPPED_RULE_HEADS[inner])
+    if (rule === undefined) {
+      // A shell whose -c string or options were opaque records as a
+      // shell-call (round 6 L3); a wrapper or leftover path names no send.
+      if (/-c string|shell options/.test(segment.note) || SHELL_WORDS.has(head)) rule = 'shell-call'
+      else if (WRAPPER_WORDS.has(head) || /^[-~$]/.test(head)) return []
+    }
+    return [base(rule ?? 'http-send', { kind: 'unresolved', why: segment.note })]
   }
   const argv = segment.argv
   if (argv.length === 0) return []
-  const ghPinned = env.has('GH_REPO') ? 'GH_REPO is set' : env.has('GH_HOST') ? 'GH_HOST is set' : null
-  const head = argv[0]!.split('/').pop()!.toLowerCase()
+    const ghPinned = env.has('GH_REPO') ? 'GH_REPO is set' : env.has('GH_HOST') ? 'GH_HOST is set' : null
+  const head = argv0(argv)
 
   if (head === 'git') {
     const { subcommandAt, pinned } = gitSubcommandAndPin(argv, env)
