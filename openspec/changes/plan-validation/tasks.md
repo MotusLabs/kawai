@@ -147,14 +147,14 @@ Implement after `durable-plans` and `strategy-revision-impact` have landed on ma
 
 ## 11. Client
 
-- [ ] 11.1 Add `PlanValidationSection.tsx` and its dialogs (Answer, Accept warning, Resolve condition, Record exception, Authorize exploration, Assess alignment), mounted in the Plans view's revision section, with plan-store wiring. Every store method that applies server state needs a WS dispatch caller. Dialogs mint one command id when they open and re-mint it when the payload changes. Verify with component tests:
+- [x] 11.1 Add `PlanValidationSection.tsx` and its dialogs (Answer, Accept warning, Resolve condition, Record exception, Authorize exploration, Assess alignment), mounted in the Plans view's revision section, with plan-store wiring. Every store method that applies server state needs a WS dispatch caller. Dialogs mint one command id when they open and re-mint it when the payload changes. Verify with component tests:
   - each standing badge;
   - the report grouped by the four rows;
   - each dialog's validation, refusal, and replay;
   - the "reuse answer from revision N" prefill;
   - Unassessed with the capture link;
   - every control disabled while disconnected.
-- [ ] 11.2 Show the standing and `validation-current` refusals in the approve dialog. Verify with a component test: a blocked report shows its counts and **Validate**, and a refusal renders inline.
+- [x] 11.2 Show the standing and `validation-current` refusals in the approve dialog. Verify with a component test: a blocked report shows its counts and **Validate**, and a refusal renders inline.
 
 ## 12. Docs and walkthrough
 

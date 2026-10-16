@@ -15,6 +15,7 @@
 import { useEffect, useRef } from 'react'
 import type { SendClientMessage, Session } from '@shared/types'
 import { PLAN_STATE_LABELS, type PlanDetail, type PlanSummary } from '@shared/plans'
+import type { PlanRevisionValidation } from '@shared/planValidation'
 import { useTeamPlanStore, type PlanView } from '../../stores/teamPlanStore'
 import PlanIntentSection from './PlanIntentSection'
 import PlanChangesSection from './PlanChangesSection'
@@ -25,7 +26,7 @@ import { pinLabel, planActorLabel } from './planLabels'
 import PlanImpactBadge, { ImpactGateText, OpenImpactReview } from './PlanImpactBadge'
 import type { PlanImpact } from '@shared/strategyImpact'
 
-export default function TeamPlansView({ teamPath, view, sendMessage, connected, connectionEpoch, sessions, onOpenTask, onSelectedPlan, onOpenImpactReview }: {
+export default function TeamPlansView({ teamPath, view, sendMessage, connected, connectionEpoch, sessions, onOpenTask, onSelectedPlan, onOpenImpactReview, onCaptureStrategy }: {
   teamPath: string
   view: PlanView
   sendMessage: SendClientMessage
@@ -38,6 +39,8 @@ export default function TeamPlansView({ teamPath, view, sendMessage, connected, 
   onSelectedPlan?: (planId: string | null) => void
   /** Open the impact review of a strategy revision (the Strategy tab's impact sub-view). */
   onOpenImpactReview?: (revision: number) => void
+  /** Opens the Strategy tab's capture affordance, from the Unassessed note (plan-validation D11). */
+  onCaptureStrategy?: () => void
 }) {
   const selected = view.selected
   useEffect(() => {
@@ -79,7 +82,7 @@ export default function TeamPlansView({ teamPath, view, sendMessage, connected, 
     </div>}
     <div className="min-h-0 flex-1 overflow-y-auto p-3">
       {selected
-        ? <PlanDetailPane teamPath={teamPath} planId={selected} detail={view.detail} sessions={sessions} sendMessage={sendMessage}
+        ? <PlanDetailPane teamPath={teamPath} planId={selected} detail={view.detail} validation={view.detailValidation} onCaptureStrategy={onCaptureStrategy} sessions={sessions} sendMessage={sendMessage}
           connected={connected} busy={busy} onBack={() => select(null)} onOpenTask={onOpenTask}
           impact={view.detailImpact ?? view.impact[selected] ?? null} onOpenImpactReview={onOpenImpactReview} />
         : <PlanList plans={view.plans} loading={view.loading} onSelect={select} impact={view.impact} onOpenImpactReview={onOpenImpactReview} />}
@@ -93,6 +96,8 @@ function PlanList({ plans, loading, onSelect, impact, onOpenImpactReview }: {
   onSelect: (planId: string) => void
   impact: Record<string, PlanImpact>
   onOpenImpactReview?: (revision: number) => void
+  /** Opens the Strategy tab's capture affordance, from the Unassessed note (plan-validation D11). */
+  onCaptureStrategy?: () => void
 }) {
   if (loading || plans === null) return <p role="status" className="text-chat-meta text-secondary">Loading plans…</p>
   if (plans.length === 0) {
@@ -117,7 +122,7 @@ function PlanList({ plans, loading, onSelect, impact, onOpenImpactReview }: {
   </ul>
 }
 
-function PlanDetailPane({ teamPath, planId, detail, sessions, sendMessage, connected, busy, onBack, onOpenTask, impact, onOpenImpactReview }: {
+function PlanDetailPane({ teamPath, planId, detail, sessions, sendMessage, connected, busy, onBack, onOpenTask, impact, onOpenImpactReview, validation, onCaptureStrategy }: {
   teamPath: string
   planId: string
   detail: PlanDetail | null
@@ -129,6 +134,10 @@ function PlanDetailPane({ teamPath, planId, detail, sessions, sendMessage, conne
   onOpenTask?: (taskId: string) => void
   impact: PlanImpact | null
   onOpenImpactReview?: (revision: number) => void
+  /** The pushed Validation sections, per standing revision (plan-validation D11). */
+  validation: PlanRevisionValidation[] | null
+  /** Opens the Strategy tab's capture affordance, from the Unassessed note (plan-validation D11). */
+  onCaptureStrategy?: () => void
 }) {
   const heading = useRef<HTMLHeadingElement | null>(null)
   const loaded = detail?.plan.id === planId
@@ -154,7 +163,8 @@ function PlanDetailPane({ teamPath, planId, detail, sessions, sendMessage, conne
       <PlanChangesSection content={shown.content} progress={shown === approved ? detail.progress : null} onOpenTask={onOpenTask} />
       <PlanPolicySection content={shown.content} />
     </>}
-    <PlanRevisionsSection teamPath={teamPath} detail={detail} sessions={sessions} sendMessage={sendMessage} connected={connected} busy={busy} />
+    <PlanRevisionsSection teamPath={teamPath} detail={detail} sessions={sessions} sendMessage={sendMessage} connected={connected} busy={busy}
+      validation={validation} onCaptureStrategy={onCaptureStrategy} />
     <PlanLifecycleControls teamPath={teamPath} detail={detail} sendMessage={sendMessage} connected={connected} busy={busy} />
   </article>
 }
