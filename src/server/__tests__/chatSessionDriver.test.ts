@@ -715,13 +715,13 @@ describe('ChatSessionDriver', () => {
   })
 
   test('a declined card reports one denied outcome (D3)', async () => {
-    const denied: string[] = []
+    const denied: Array<{ toolUseId: string; reason?: string }> = []
     const sink: OutboundAuditSink = {
       onPreToolUse: () => {},
       onPostToolUse: () => {},
       onPostToolUseFailure: () => {},
       onPermissionDenied: () => {},
-      onDeniedCard: use => { denied.push(use.toolUseId) },
+      onDeniedCard: use => { denied.push({ toolUseId: use.toolUseId, ...(use.reason === undefined ? {} : { reason: use.reason }) }) },
       onSpawnEnd: () => {},
     }
     const harness = createHarness({ outbound: sink })
@@ -734,6 +734,56 @@ describe('ChatSessionDriver', () => {
     await expect(approval).resolves.toMatchObject({ behavior: 'deny' })
     await flush()
     expect(denied).toHaveLength(1)
+    // A declined card carries no interrupt reason.
+    expect(denied[0]?.reason).toBeUndefined()
+    harness.driver.kill()
+  })
+
+  test('an interrupt-cancelled card stays denied, with detail interrupted (CC round 3)', async () => {
+    const denied: Array<{ toolUseId: string; reason?: string }> = []
+    const sink: OutboundAuditSink = {
+      onPreToolUse: () => {},
+      onPostToolUse: () => {},
+      onPostToolUseFailure: () => {},
+      onPermissionDenied: () => {},
+      onDeniedCard: use => { denied.push({ toolUseId: use.toolUseId, reason: use.reason }) },
+      onSpawnEnd: () => {},
+    }
+    const harness = createHarness({ outbound: sink })
+    harness.driver.send('go')
+    const fake = harness.fakes[0]!
+    const controller = new AbortController()
+    const cancelled = fake.options.canUseTool!('Bash', { command: 'git push' }, {
+      signal: controller.signal,
+      toolUseID: 'toolu_cancel',
+      requestId: 'sdk-req-cancel',
+    })
+    await flush()
+    controller.abort()
+    const result = await cancelled
+    expect(result).toMatchObject({ behavior: 'deny', interrupt: true })
+    await flush()
+    expect(denied).toEqual([{ toolUseId: 'toolu_cancel', reason: 'interrupted' }])
+    harness.driver.kill()
+  })
+
+  test('a foreground Bash the harness moved to the background records started-background (CC round 3)', async () => {
+    const backgrounds: boolean[] = []
+    const sink: OutboundAuditSink = {
+      onPreToolUse: () => {},
+      onPostToolUse: use => { backgrounds.push(use.background) },
+      onPostToolUseFailure: () => {},
+      onPermissionDenied: () => {},
+      onDeniedCard: () => {},
+      onSpawnEnd: () => {},
+    }
+    const harness = createHarness({ outbound: sink })
+    harness.driver.send('hello')
+    const hooks = harness.fakes[0]!.options.hooks as { PostToolUse: Array<{ hooks: Array<(input: unknown) => Promise<unknown>> }> }
+    const moved = 'Command did not complete within its 120s timeout and was moved to the background (ID: b0usjmoay). Output is being written to: /tmp/claude-1000/tasks/b0usjmoay.output.'
+    await hooks.PostToolUse[0]!.hooks[0]!({ tool_name: 'Bash', tool_input: { command: 'bun run test' }, tool_response: moved, tool_use_id: 'tu-bg' })
+    await hooks.PostToolUse[0]!.hooks[0]!({ tool_name: 'Bash', tool_input: { command: 'echo done' }, tool_response: 'done', tool_use_id: 'tu-fg' })
+    expect(backgrounds).toEqual([true, false])
     harness.driver.kill()
   })
 

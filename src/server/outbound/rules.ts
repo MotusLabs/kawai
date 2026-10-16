@@ -219,20 +219,28 @@ function urlWords(words: Word[]): Word[] {
   return opaque === undefined ? [] : [opaque]
 }
 
-/** The URL's host and port; a bare host reads as http; smtp URLs are mail. */
+/**
+ * The URL's host and port. A `scheme://` text parses as a URL (smtp ones are
+ * mail); a bare text is read as `host[:port]` — `new URL('localhost:8080')`
+ * would take `localhost:` for a scheme and leave no host at all — and
+ * anything that is neither reads unresolved.
+ */
 function httpUrlTarget(word: Word | undefined): SendTarget {
   if (word === undefined) return { kind: 'unresolved', why: 'no URL in the command' }
   if (word.opaque) return VARIABLE()
-  for (const text of [word.text, `http://${word.text}`]) {
+  if (URLISH.test(word.text)) {
     try {
-      const url = new URL(text)
+      const url = new URL(word.text)
       if (url.protocol === 'smtp:' || url.protocol === 'smtps:') return { kind: 'mail' }
       return { kind: 'host', host: url.hostname, ...(url.port ? { port: Number(url.port) } : {}) }
     } catch {
-      // Try the bare-host form once, then read it unresolved.
+      return { kind: 'unresolved', why: 'no URL in the command' }
     }
   }
-  return { kind: 'unresolved', why: 'no URL in the command' }
+  const authority = word.text.split(/[/?#]/, 1)[0] ?? ''
+  const bare = /^([A-Za-z0-9._-]+|\[[0-9a-fA-F:.]+\])(?::(\d{1,5}))?$/.exec(authority)
+  if (bare === null) return { kind: 'unresolved', why: 'no URL in the command' }
+  return { kind: 'host', host: bare[1]!.replace(/^\[|\]$/g, ''), ...(bare[2] !== undefined ? { port: Number(bare[2]) } : {}) }
 }
 
 /** `git push` (D4): `--repo`, the named remote, a URL or scp target, else the push remote. */

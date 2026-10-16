@@ -532,4 +532,18 @@ describe('CC round 3: wrappers, reserved words, and git pinning', () => {
       rule: 'gh-write', verdict: 'violation', destination: "github:the caller's account/kawai-two",
     })
   })
+
+  test('a bare host:port URL reads as host and port, never an empty host', () => {
+    // The harness's classes leave localhost external; the host must read.
+    expect(verdictOf('curl -d x localhost:8080/hook')).toEqual({
+      rule: 'http-send', verdict: 'violation', destination: 'host:localhost',
+    })
+    expect(verdictOf('curl -d x host.example.org:9292/hook')).toEqual({
+      rule: 'http-send', verdict: 'violation', destination: 'host:host.example.org',
+    })
+    // scp-shaped text is no http URL: it reads unresolved, not guessed.
+    expect(verdictOf('curl -d x git@github.com:acme/x.git')).toEqual({
+      rule: 'http-send', verdict: 'unknown-destination', destination: 'unresolved:no URL in the command',
+    })
+  })
 })

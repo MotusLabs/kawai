@@ -1271,7 +1271,7 @@ export class ChatSessionDriver {
             sink.onPostToolUse({
               ...common,
               toolInput,
-              background: this.callRanInBackground(use.tool_name, use.tool_input),
+              background: this.callRanInBackground(use.tool_name, use.tool_input, (input as { tool_response?: unknown }).tool_response),
               ...(use.duration_ms === undefined ? {} : { durationMs: use.duration_ms }),
             })
           } else if (event === 'PostToolUseFailure') {
@@ -1291,10 +1291,17 @@ export class ChatSessionDriver {
       return { continue: true }
     }
 
-  /** D3: a `run_in_background` Bash or any Monitor starts in the background. */
-  private callRanInBackground(toolName: string, toolInput: unknown): boolean {
+  /**
+   * D3: a `run_in_background` Bash or any Monitor starts in the background,
+   * and a foreground Bash the harness moved to the background says so in its
+   * response ("…was moved to the background (ID: …)"), so its call records
+   * `started-background`, not `completed` while it still runs.
+   */
+  private callRanInBackground(toolName: string, toolInput: unknown, response: unknown): boolean {
     if (toolName === 'Monitor') return true
-    return toolName === 'Bash' && (toolInput as { run_in_background?: unknown } | null)?.run_in_background === true
+    if (toolName !== 'Bash') return false
+    if ((toolInput as { run_in_background?: unknown } | null)?.run_in_background === true) return true
+    return typeof response === 'string' && /(?:was moved to the background|running in background with ID:)/.test(response)
   }
 
   private readonly canUseTool: CanUseTool = (toolName, input, toolOptions) => {
@@ -1376,6 +1383,8 @@ export class ChatSessionDriver {
             spawnId: this.currentSpawnId,
             ...(toolOptions.agentID === undefined ? {} : { agentId: toolOptions.agentID }),
             cwd: this.sessionProjectPath,
+            // An interrupt-cancelled ask stays denied; the row says why.
+            ...(result.interrupt === true ? { reason: 'interrupted' } : {}),
           })
         } catch {
           // Observational only.
