@@ -22,8 +22,8 @@ Stage 1 is groups 1–7. Stage 2 (groups 8–10) can land separately once stage 
 
 ## 4. Retention and the cooling timeline
 
-- [ ] 4.1 Split `LIMIT_EVENT_RETENTION_MS` in `limitEvents.ts` into a 15-day prune horizon and the unchanged 24-hour read cutoff (design D8); verify tests cover a 10-day-old event retained, a 16-day-old event pruned, and `cooldownUntil`/`forProfile` ignoring events older than 24 hours exactly as before.
-- [ ] 4.2 Add the pure `coolingTimeline(events)` beside `cooldownUntil` (design D4): each final event decides from its `at` until the next final event, its own cooldown end, or `at + 24 h`, whichever is first, in `(at, rowid)` order; verify unit tests cover a five-hour reset superseded a minute later by a one-minute reset (about two minutes counted), a later event extending a cooldown, a 30-hour reset cut at 24 hours, and a property test that sampled instants are cooling exactly when `cooldownUntil` over that instant's 24-hour read window is non-null.
+- [x] 4.1 Split `LIMIT_EVENT_RETENTION_MS` in `limitEvents.ts` into a 15-day prune horizon and the unchanged 24-hour read cutoff (design D8); verify tests cover a 10-day-old event retained, a 16-day-old event pruned, and `cooldownUntil`/`forProfile` ignoring events older than 24 hours exactly as before.
+- [x] 4.2 Add the pure `coolingTimeline(events)` beside `cooldownUntil` (design D4): each final event decides from its `at` until the next final event, its own cooldown end, or `at + 24 h`, whichever is first, in `(at, rowid)` order; verify unit tests cover a five-hour reset superseded a minute later by a one-minute reset (about two minutes counted), a later event extending a cooldown, a 30-hour reset cut at 24 hours, and a property test that sampled instants are cooling exactly when `cooldownUntil` over that instant's 24-hour read window is non-null.
 
 ## 5. Metrics core
 

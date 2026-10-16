@@ -4,7 +4,8 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import {
-  cooldownUntil, DEFAULT_COOLDOWN_MS, LIMIT_EVENT_RETENTION_MS, LimitEventStore, type LimitEvent,
+  cooldownUntil, coolingMsWithin, coolingTimeline, DEFAULT_COOLDOWN_MS, LIMIT_EVENT_READ_WINDOW_MS, LIMIT_EVENT_RETENTION_MS,
+  LimitEventStore, type LimitEvent,
 } from '../team/routing/limitEvents'
 
 const T0 = Date.parse('2026-10-12T12:00:00.000Z')
@@ -41,16 +42,26 @@ describe('LimitEventStore', () => {
     expect(reopened.cooldownUntil('glm')).toBe(iso(T0 + DEFAULT_COOLDOWN_MS))
   })
 
-  test('prunes events older than 24 hours on write and at startup', () => {
+  test('prunes events older than 15 days on write and at startup; routing still reads only 24 hours', () => {
+    const DAY = 24 * 60 * 60 * 1000
+    expect(LIMIT_EVENT_RETENTION_MS).toBe(15 * DAY)
+    expect(LIMIT_EVENT_READ_WINDOW_MS).toBe(DAY)
     const db = schemaDb(file)
     const store = new LimitEventStore(db, () => now)
-    store.record({ ...base, final: false, at: iso(T0 - LIMIT_EVENT_RETENTION_MS - 1) })
+    store.record({ ...base, final: true, at: iso(T0 - 16 * DAY) })
+    store.record({ ...base, final: true, at: iso(T0 - 10 * DAY) })
+    store.record({ ...base, final: true, at: iso(T0 - DAY - 1), resetsAt: iso(T0 + DAY) })
+    const count = () => (db.prepare('SELECT COUNT(*) AS n FROM profile_limit_events').get() as { n: number }).n
+    // The 16-day-old event is pruned; the 10-day-old one is kept for metrics.
+    expect(count()).toBe(2)
+    // Routing ignores everything older than 24 hours exactly as before, even a reset still in the future.
+    expect(store.forProfile('glm')).toEqual([])
+    expect(store.cooldownUntil('glm')).toBeNull()
     store.record({ ...base, final: false })
     expect(store.forProfile('glm')).toHaveLength(1)
-    now = T0 + LIMIT_EVENT_RETENTION_MS + 1
+    now = T0 + 15 * DAY + 1
     new LimitEventStore(db, () => now)
-    const count = db.prepare('SELECT COUNT(*) AS n FROM profile_limit_events').get() as { n: number }
-    expect(count.n).toBe(0)
+    expect(count()).toBe(0)
   })
 })
 
@@ -81,5 +92,57 @@ describe('cooldownUntil', () => {
   test('expires', () => {
     expect(cooldownUntil([event({})], T0 + DEFAULT_COOLDOWN_MS)).toBeNull()
     expect(cooldownUntil([event({ resetsAt: 'garbage' })], T0)).toBe(iso(T0 + DEFAULT_COOLDOWN_MS))
+  })
+})
+
+describe('coolingTimeline', () => {
+  const MIN = 60_000
+  const HOUR = 60 * MIN
+  let n = 0
+  const event = (at: number, resetsAt: number | null, final = true): LimitEvent =>
+    ({ id: `e${++n}`, ...base, at: iso(at), final, resetsAt: resetsAt === null ? null : iso(resetsAt) })
+
+  test('a five-hour reset superseded a minute later by a one-minute reset counts about two minutes', () => {
+    const events = [event(T0, T0 + 5 * HOUR), event(T0 + MIN, T0 + 2 * MIN)]
+    expect(coolingTimeline(events)).toEqual([{ start: T0, end: T0 + 2 * MIN }])
+    expect(coolingMsWithin(coolingTimeline(events), T0 - HOUR, T0 + 10 * HOUR)).toBe(2 * MIN)
+  })
+
+  test('a later event extends a cooldown; retried attempts never cool', () => {
+    const events = [event(T0, null), event(T0 + 30 * MIN, T0 + 3 * HOUR), event(T0 + 4 * HOUR, null, false)]
+    expect(coolingTimeline(events)).toEqual([{ start: T0, end: T0 + 3 * HOUR }])
+  })
+
+  test('a 30-hour reset is cut when the router read window drops it, and clipping to a window', () => {
+    const intervals = coolingTimeline([event(T0, T0 + 30 * HOUR)])
+    expect(intervals).toEqual([{ start: T0, end: T0 + 24 * HOUR }])
+    expect(coolingMsWithin(intervals, T0 + 20 * HOUR, T0 + 48 * HOUR)).toBe(4 * HOUR)
+  })
+
+  test('a reset before the event itself and same-instant ties follow the router (later row wins)', () => {
+    expect(coolingTimeline([event(T0, T0 - MIN)])).toEqual([])
+    expect(coolingTimeline([event(T0, T0 + 5 * HOUR), event(T0, T0 + MIN)])).toEqual([{ start: T0, end: T0 + MIN }])
+  })
+
+  test('property: an instant is cooling exactly when cooldownUntil over its 24-hour read window says so', () => {
+    // A deterministic generator: events on whole seconds, samples half a second off them.
+    let seed = 42
+    const rand = () => (seed = (seed * 1_103_515_245 + 12_345) % 2_147_483_648) / 2_147_483_648
+    for (let round = 0; round < 40; round++) {
+      const events: LimitEvent[] = []
+      let at = T0
+      for (let k = 0; k < 8; k++) {
+        at += Math.floor(rand() * 20 * HOUR / 1000) * 1000
+        const reset = rand() < 0.25 ? null : at + Math.floor((rand() * 40 * HOUR - 2 * HOUR) / 1000) * 1000
+        events.push(event(at, reset, rand() < 0.8))
+      }
+      const intervals = coolingTimeline(events)
+      for (let s = 0; s < 200; s++) {
+        const t = T0 + Math.floor(rand() * 200 * HOUR / 1000) * 1000 + 500
+        const visible = events.filter(e => Date.parse(e.at) >= t - LIMIT_EVENT_READ_WINDOW_MS && Date.parse(e.at) <= t)
+        const inside = intervals.some(i => i.start <= t && t < i.end)
+        expect({ t, inside }).toEqual({ t, inside: cooldownUntil(visible, t) !== null })
+      }
+    }
   })
 })
