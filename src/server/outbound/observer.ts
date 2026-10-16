@@ -122,12 +122,15 @@ export class OutboundObserver implements OutboundAuditSink {
     this.outcome(use.toolUseId, 'failed', use.durationMs, () => {
       // The interrupt marker leads, so the store cap can never cut it off.
       const text = redact(use.error.slice(0, DETAIL_READ_CAP))
-      return (use.isInterrupt === true ? `(interrupt) ${text}` : text).slice(0, DETAIL_STORE_CAP)
+      const cut = (use.isInterrupt === true ? `(interrupt) ${text}` : text).slice(0, DETAIL_STORE_CAP)
+      // Redaction shrinks text, so the cut can slide unredacted tail under
+      // the window; a second pass over the stored slice collapses it.
+      return redact(cut).slice(0, DETAIL_STORE_CAP)
     })
   }
 
   onPermissionDenied(use: Parameters<OutboundAuditSink['onPermissionDenied']>[0]): void {
-    this.outcome(use.toolUseId, 'denied', undefined, () => redact(use.reason.slice(0, DETAIL_READ_CAP)).slice(0, DETAIL_STORE_CAP))
+    this.outcome(use.toolUseId, 'denied', undefined, () => redact(redact(use.reason.slice(0, DETAIL_READ_CAP)).slice(0, DETAIL_STORE_CAP)).slice(0, DETAIL_STORE_CAP))
   }
 
   onDeniedCard(use: Parameters<OutboundAuditSink['onDeniedCard']>[0]): void {
@@ -144,10 +147,14 @@ export class OutboundObserver implements OutboundAuditSink {
   }
 
   /** Candidates for one tool use: parsed shell command, or one external MCP call (D5). */
+  /** How much of a command the synchronous parse reads (the rest is a
+   *  documented limitation: a 77 KB command would otherwise block the turn). */
+  private static readonly PARSE_READ_MAX = 16_384
+
   private candidatesOf(toolName: string, toolInput: unknown, cwd: string): SendCandidate[] {
     if (toolName === 'Bash' || toolName === 'Monitor') {
       const command = (toolInput as { command?: unknown } | null)?.command
-      return typeof command === 'string' ? parseSends(command, cwd) : []
+      return typeof command === 'string' ? parseSends(command.slice(0, OutboundObserver.PARSE_READ_MAX), cwd) : []
     }
     if (toolName.startsWith('mcp__')) {
       const server = toolName.split('__')[1] ?? ''
@@ -198,6 +205,7 @@ export class OutboundObserver implements OutboundAuditSink {
     if (best === null) return
     const cwdFacts = [...repos.values()].find(facts => entry.cwd === facts.root || entry.cwd.startsWith(`${facts.root}/`))
     const command = redactForStore(entry.command)
+    const field = (text: string): string => redactForStore(text, 4096).text
     const context = this.options.context()
     this.options.store.insertCall({
       id: `obc-${this.newId()}`,
@@ -215,16 +223,35 @@ export class OutboundObserver implements OutboundAuditSink {
       truncated: command.truncated,
       rule: best.rule,
       verdict: best.verdict,
-      destination: redact(best.destination),
-      matches: JSON.stringify(judged.map((candidate: JudgedCandidate) => ({
-        rule: candidate.rule,
-        segment: redact(candidate.segment),
-        verdict: candidate.verdict,
-        destination: redact(candidate.destination),
-      }))),
+      destination: field(best.destination),
+      matches: this.cappedMatches(judged, field, best),
       classifierVersion: CLASSIFIER_VERSION,
       cwd: entry.cwd,
       createdAt: (this.options.now ?? (() => new Date().toISOString()))(),
     })
+  }
+
+  /**
+   * The match list as JSON, every field capped at 4096 and the whole string
+   * kept under 4096: the strongest match leads, trailing matches drop when
+   * they do not fit, and a final `truncated` entry marks the cut (D6 rows
+   * stay bounded whatever the command).
+   */
+  private cappedMatches(judged: JudgedCandidate[], field: (text: string) => string, best: JudgedCandidate | null): string {
+    const ordered = judged.slice().sort((a, b) => (a === best ? -1 : b === best ? 1 : 0))
+    const entries = ordered.map(candidate => ({
+      rule: candidate.rule,
+      segment: field(candidate.segment),
+      verdict: candidate.verdict,
+      destination: field(candidate.destination),
+    }))
+    let kept = entries
+    let truncated = false
+    while (JSON.stringify(kept).length > 4096 && kept.length > 1) { kept = kept.slice(0, -1); truncated = true }
+    if (JSON.stringify(kept).length > 4096 && kept.length === 1) {
+      kept = [{ rule: kept[0]!.rule, segment: kept[0]!.segment.slice(0, 3800), verdict: kept[0]!.verdict, destination: kept[0]!.destination }]
+      truncated = true
+    }
+    return JSON.stringify(truncated ? [...kept, { truncated: true }] : kept)
   }
 }

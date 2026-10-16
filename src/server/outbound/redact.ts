@@ -81,12 +81,12 @@ const RULES: Array<{ pattern: RegExp; replacement: string | ((substring: string,
   // end — `user:pass@`, `token@`, `:token@`, and passwords holding `@` — and
   // never past the first `/`, `?`, or `#`, so an `@scope` path segment stays.
   // The class cannot cross those terminators, which keeps the scan linear.
-  { pattern: /([a-z][a-z0-9+.-]*:\/\/)[^\s'"/?#]*@/gi, replacement: `$1${REDACTED}@` },
+  { pattern: /([a-z][a-z0-9+.-]{0,31}:\/\/)[^\s'"/?#]*@/gi, replacement: `$1${REDACTED}@` },
   // A password holding `/` puts its `@` past the authority's end: an
   // authority whose pre-slash part carries a `:` reads as `user:pass`, so an
   // `@` after that slash is still the separator (`user:pa/ss@host`). A path
   // `@scope` never matches — its pre-slash part has no colon.
-  { pattern: /([a-z][a-z0-9+.-]*:\/\/)[^\s'"?#/]+:[^\s'"?#/]*\/[^\s'"?#]*@/gi, replacement: `$1${REDACTED}@` },
+  { pattern: /([a-z][a-z0-9+.-]{0,31}:\/\/)[^\s'"?#/:]+:[^\s'"?#/]*\/[^\s'"?#]{0,255}@/gi, replacement: `$1${REDACTED}@` },
   // Credential query parameters.
   { pattern: /([?&])([a-z0-9_]+)=([^&\s'"]+)/gi, replacement: (match: string, sep: string, name: string) =>
     QUERY_CREDENTIALS.test(name) ? `${sep}${name}=${REDACTED}` : match },

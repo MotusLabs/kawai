@@ -267,6 +267,26 @@ describe('OutboundObserver', () => {
     expect(outcomes).toHaveLength(1)
   })
 
+  test('a 120k-character command completes fast and every stored field is capped (CC round 4 B)', async () => {
+    const { observer, calls } = harness()
+    const command = `curl -d x https://host.example.org/hook ${'https://'.repeat(14_000)}`
+    const started = performance.now()
+    observer.onPreToolUse({ ...PRE, toolUseId: 'tu-big', toolInput: { command } })
+    await flushWrites()
+    expect(performance.now() - started).toBeLessThan(1_000)
+    expect(calls).toHaveLength(1)
+    const row = calls[0]!
+    // Every stored field, the matches JSON included, stays within 4096.
+    expect(row.command.length).toBeLessThanOrEqual(4096)
+    expect(row.destination.length).toBeLessThanOrEqual(4096)
+    expect(row.matches.length).toBeLessThanOrEqual(4096)
+    const matches = JSON.parse(row.matches) as Array<{ segment?: string; truncated?: boolean }>
+    for (const match of matches) {
+      if (match.segment !== undefined) expect(match.segment.length).toBeLessThanOrEqual(4096)
+    }
+    expect(matches.some(match => match.truncated === true)).toBe(true)
+  })
+
   test('quoted secrets never reach any stored field — segment included (CC round 4 A)', async () => {
     // Each command hides its secret inside quotes; the stored segment is the
     // ORIGINAL source span (quotes intact), so redaction sees the quoting.

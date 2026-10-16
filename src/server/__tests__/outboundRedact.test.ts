@@ -163,6 +163,15 @@ describe('redact: CC round 3 (body forms, linear userinfo, over-redaction)', () 
     expect(elapsed).toBeLessThan(1_000)
   })
 
+  test('raw redact is linear on CC round 4\'s two probes (M4 remainder)', () => {
+    // No read cap helps here: redact() itself must stay linear.
+    for (const input of ['https://'.repeat(15_000), `http://a:${'a'.repeat(100_000)}/${'b'.repeat(100_000)}`]) {
+      const started = performance.now()
+      redact(input)
+      expect(performance.now() - started).toBeLessThan(1_000)
+    }
+  })
+
   test('a 16 KiB read bound keeps every stored character redacted', () => {
     // A secret at 10 KiB — past nothing: inside the read bound, redacted.
     const command = `echo ${'x'.repeat(10_000)} ghp_ABCDEFghijklmnop0123456789`
