@@ -150,6 +150,8 @@ function originsOf(repo: RepoFacts): ParsedGitUrl[] {
 
 /** A git URL judged: origin equality, then the host classes, else a violation. */
 function judgeGitUrl(url: string, repo: RepoFacts | undefined, facts: JudgeFacts): Judgement {
+  // An insteadOf rewrite can retarget even an explicit URL (round 5 R4).
+  if (repo?.pinned !== undefined) return { verdict: 'unknown-destination', destination: `unresolved:${repo.pinned}` }
   const parsed = parseGitUrl(url)
   if (parsed === null) return { verdict: 'unknown-destination', destination: 'unresolved:the target did not parse as a URL' }
   const origins = repo === undefined ? [] : originsOf(repo)

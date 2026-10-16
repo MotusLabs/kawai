@@ -211,18 +211,21 @@ export function parseSends(command: string, cwd: string): SendCandidate[] {
   const candidates: SendCandidate[] = []
   for (const segment of parseCommand(command, cwd)) {
     candidates.push(...candidatesOf(segment, configTouched))
-    if (segmentConfigTouched(segment.argv)) configTouched = true
+    if (segmentConfigTouched(segment.argv, segment.env)) configTouched = true
   }
   return candidates
 }
 
-/** Whether a segment rewrites remote/url/branch config (D4, CC round 4). */
-function segmentConfigTouched(argv: readonly string[]): boolean {
-  if (argv[0] !== 'git') return false
-  if (argv[1] === 'config') {
-    return argv.slice(2).some(word => /^(remote|url|branch)\./i.test(word))
-  }
-  return argv[1] === 'remote' && ['add', 'set-url', 'rename', 'remove'].includes(argv[2] ?? '')
+/** Whether a segment rewrites remote/url/branch config (D4, round 5 R4). */
+function segmentConfigTouched(argv: readonly string[], env: ReadonlyMap<string, string | null>): boolean {
+  const head = argv[0]?.split('/').pop()?.toLowerCase()
+  if (head !== 'git') return false
+  // The subcommand may sit behind global options (`git -C /x config …`).
+  const { subcommandAt } = gitSubcommandAndPin(argv, env)
+  const sub = subcommandAt === -1 ? '' : argv[subcommandAt]!
+  const rest: readonly string[] = subcommandAt === -1 ? [] : argv.slice(subcommandAt + 1)
+  if (sub === 'config') return rest.some(word => /^(remote|url|branch)\./i.test(word))
+  return sub === 'remote' && ['add', 'set-url', 'rename', 'remove'].includes(rest[0] ?? '')
 }
 
 function candidatesOf(segment: { argv: string[]; text: string; cwd: string; env: ReadonlyMap<string, string | null>; note?: string }, configTouched = false): SendCandidate[] {

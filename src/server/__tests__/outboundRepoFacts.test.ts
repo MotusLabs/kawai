@@ -194,4 +194,22 @@ describe('RepoFactsResolver: push remote chain and config pinning (CC round 4 C)
     writeConfig(`${BASE}[remote "fork"]\n\turl = https://github.com/other/fork.git\n[submodule "vendor/lib"]\n\turl = https://github.com/acme/vendor-lib.git\n`)
     expect(resolver.factsFor(main)?.remotes.get('fork')).toEqual(['https://github.com/other/fork.git'])
   })
+
+  test('insteadOf pins explicit URLs, legacy subsections lowercase, continuations fold, worktreeConfig pins (round 5 R4)', () => {
+    const resolver = new RepoFactsResolver()
+    // [branch.Main] and [remote.ORIGIN] (any case) resolve like lowercase.
+    writeConfig('[remote "origin"]\n\turl = https://github.com/acme/kawai.git\n[remote.ORIGIN2]\n\turl = https://github.com/other/x.git\n[branch.Main]\n\tremote = origin\n')
+    const facts = resolver.factsFor(main)
+    expect(facts?.pushRemote).toBe('origin')
+    expect(facts?.pinned).toBeUndefined()
+    // insteadOf pins every push, explicit URLs included (classify covers that
+    // via RepoFacts.pinned); a folded value line reads as one value.
+    writeConfig('[remote "origin"]\n\turl = https://github.com/acme/kawai.git\n[url "https://github.com/"]\n\tinsteadOf = https://git.example.internal/\n')
+    expect(resolver.factsFor(main)?.pinned).toContain('insteadOf')
+    writeConfig('[remote "origin"]\n\turl = https://github.com/acme/kawai.\\\n\tgit\n')
+    expect(resolver.factsFor(main)?.originUrls).toEqual(['https://github.com/acme/kawai.git'])
+    // extensions.worktreeConfig=true pins: the per-worktree file is unread.
+    writeConfig('[remote "origin"]\n\turl = https://github.com/acme/kawai.git\n[extensions]\n\tworktreeConfig = true\n')
+    expect(resolver.factsFor(main)?.pinned).toBe('worktree config is not read')
+  })
 })

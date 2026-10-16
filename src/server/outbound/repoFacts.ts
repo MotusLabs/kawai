@@ -148,8 +148,17 @@ export class RepoFactsResolver {
       if (quoted === null) return value.trim()
       return quoted[1]!.replace(/\\(["\\])/g, '$1')
     }
+    // A trailing backslash continues the value onto the next line (R4).
+    const folded: string[] = []
     for (const raw of text.split(/\r?\n/)) {
       const line = raw.trim()
+      if (folded.length > 0 && folded[folded.length - 1]!.endsWith('\\')) {
+        folded[folded.length - 1] = folded[folded.length - 1]!.slice(0, -1) + line
+      } else {
+        folded.push(line)
+      }
+    }
+    for (const line of folded) {
       if (line === '' || line.startsWith('#') || line.startsWith(';')) continue
       if (line.startsWith('[')) {
         const header = headerOf(line)
@@ -157,9 +166,12 @@ export class RepoFactsResolver {
         const [word, name] = header
         if (word === 'include' || word.startsWith('includeif')) { pin('an include directive could change this config'); section = null; continue }
         if (word === 'url') { pin('an insteadOf rewrite could change this target'); section = { kind: 'ignored' }; continue }
+        // Legacy dotted and capitalized subsections match case-insensitively
+        // (round 5 R4): [branch.Main] and [remote.ORIGIN] alike.
+        const lower = name?.toLowerCase() ?? null
         section = word === 'remote'
-          ? name === null ? { kind: 'remote-global' } : { kind: 'remote', name }
-          : word === 'branch' && name !== null ? { kind: 'branch', name } : { kind: 'ignored' }
+          ? lower === null ? { kind: 'remote-global' } : { kind: 'remote', name: lower }
+          : word === 'branch' && lower !== null ? { kind: 'branch', name: lower } : { kind: 'ignored' }
         continue
       }
       const pair = /^([A-Za-z][A-Za-z0-9-]*)\s*=\s*(.*)$/.exec(line.replace(/\s+#.*$/, ''))
@@ -172,6 +184,10 @@ export class RepoFactsResolver {
         if (key === 'insteadof' || key === 'pushinsteadof') pin('an insteadOf rewrite could change this target')
       } else if (section.kind === 'remote-global') {
         if (key === 'pushdefault') pushDefault = value
+      } else if (section.kind === 'ignored') {
+        // extensions.worktreeConfig moves config into an unread per-worktree
+        // file: nothing may resolve (round 5 R4).
+        if (key === 'worktreeconfig' && value.toLowerCase() === 'true') pin('worktree config is not read')
       } else if (section.kind === 'branch') {
         const branch = branches.get(section.name) ?? {}
         if (key === 'remote') branch.remote = value

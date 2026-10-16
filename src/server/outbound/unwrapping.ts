@@ -110,7 +110,7 @@ export const WRAPPED_RULE_HEADS: Record<string, SendCandidate['rule']> = {
  * whose key starts `remote.`, `url.`, or `branch.` (git keys are
  * case-insensitive). The classifier does not evaluate shell variables.
  */
-export function gitSubcommandAndPin(argv: string[], env: ReadonlyMap<string, string | null>): { subcommandAt: number; pinned: string | null } {
+export function gitSubcommandAndPin(argv: readonly string[], env: ReadonlyMap<string, string | null>): { subcommandAt: number; pinned: string | null } {
   let subcommandAt = -1
   let pinned: string | null = null
   for (const key of env.keys()) {
