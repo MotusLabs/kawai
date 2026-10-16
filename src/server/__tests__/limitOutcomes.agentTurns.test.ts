@@ -162,6 +162,31 @@ describe('final limits in agent-started turns', () => {
     expect(store.get(work.id)?.state).toBe('delivered')
   })
 
+  test('work of an interrupted turn is never released or forwarded by a later agent-started limit', async () => {
+    const message = store.enqueue({ teamId: 'team', toKind: 'group', toId: 'devs', fromSession: 'lead', fromGroup: 'leads', originPath: '/repo', body: 'Build it' })
+    store.claim(message.id, 'dev'); store.markPushed(message.id); store.markDelivered(message.id)
+    outcomes.turnStarted('dev', false)
+    outcomes.delivered('dev', store.get(message.id)!)
+    outcomes.toolCall('dev', 'Edit', { file_path: '/repo/a.ts' })
+    // Interrupted: no turnEnded. A self-started turn then hits a far reset.
+    await limitedTurn(true, 5 * HOUR)
+    expect(store.get(message.id)).toMatchObject({ state: 'parked', claimedBy: 'dev', parkedUntil: iso(now + 5 * HOUR) })
+    expect(mailCount()).toBe(2) // the work and its resume; no forward
+  })
+
+  test('an interrupted resume turn does not let a successful agent-started turn unpark', async () => {
+    const work = await deliveredAndDone()
+    await limitedTurn(true, HOUR)
+    const resume = resumeOf(work.id)
+    store.claim(resume.id, 'dev'); store.markPushed(resume.id); store.markDelivered(resume.id)
+    outcomes.turnStarted('dev', false)
+    outcomes.delivered('dev', store.get(resume.id)!)
+    // Interrupted: no turnEnded. A successful self-started turn follows.
+    outcomes.turnStarted('dev', true)
+    await outcomes.turnEnded('dev', true)
+    expect(store.get(work.id)).toMatchObject({ state: 'parked', resumeMessageId: resume.id })
+  })
+
   test('after a restart the current work is derived from the store', async () => {
     const work = await deliveredAndDone()
     outcomes = outcomesFor()

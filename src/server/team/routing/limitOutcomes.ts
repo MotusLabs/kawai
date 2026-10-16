@@ -115,8 +115,13 @@ export class LimitOutcomes {
     if (workId) this.digests.get(workId)?.record(tool, input)
   }
 
-  /** A turn opened; every start resets the kind, so none leaks past an interrupt. */
+  /**
+   * A turn opened; every start resets the kind and the delivered work, so
+   * neither leaks past an interrupted turn (which never reaches turnEnded).
+   * A delivery opens its turn before `delivered()` records the work.
+   */
   turnStarted(sessionId: string, agentStarted: boolean): void {
+    this.active.delete(sessionId)
     if (agentStarted) this.agentTurns.add(sessionId)
     else this.agentTurns.delete(sessionId)
   }
