@@ -70,7 +70,7 @@ describe('git-push', () => {
     expect(verdictOf('GIT_DIR=/x/.git git push')).toEqual({
       rule: 'git-push', verdict: 'unknown-destination', destination: 'unresolved:GIT_DIR is set',
     })
-    const unreadable = { ...facts, repos: new Map([['/repo', { root: '/repo', originUrl: null, remotes: new Map(), pushRemote: null, unreadable: true }]]) }
+    const unreadable = { ...facts, repos: new Map([['/repo', { root: '/repo', originUrls: [], remotes: new Map(), pushRemote: null, unreadable: true }]]) }
     const candidate = parseSends('git push', '/repo')[0]!
     expect(judge(candidate, unreadable).destination).toBe('unresolved:the facts read failed')
   })
@@ -428,6 +428,39 @@ describe('CC checkpoint findings: curl targets, clusters, and unwrapping', () =>
     })
     expect(verdictOf('gh gist edit abc123 -f notes.md')).toEqual({
       rule: 'gh-write', verdict: 'violation', destination: 'host:gist.github.com',
+    })
+  })
+
+  test('a push to a remote with several urls judges every one, strongest wins (CC round 4 C)', () => {
+    const multiUrl = {
+      ...facts,
+      repos: new Map([['/repo', {
+        root: '/repo',
+        originUrls: ['https://github.com/acme/kawai.git'],
+        remotes: new Map([
+          ['origin', ['https://github.com/acme/kawai.git']],
+          ['fork', ['https://git.example.internal/kawai.git', 'https://github.com/other/fork.git']],
+        ]),
+        pushRemote: 'origin',
+      }]]),
+    }
+    const candidate = parseSends('git push fork main', '/repo')[0]!
+    expect(judge(candidate, multiUrl)).toMatchObject({
+      rule: 'git-push', verdict: 'violation', destination: 'github:other/fork',
+    })
+    // The internal mirror alone stays allowed.
+    const forkOnly = {
+      root: '/repo',
+      originUrls: ['https://github.com/acme/kawai.git'],
+      remotes: new Map([
+        ['origin', ['https://github.com/acme/kawai.git']],
+        ['fork', ['https://git.example.internal/kawai.git']],
+      ]),
+      pushRemote: 'origin',
+    }
+    const internalOnly = { ...facts, repos: new Map([['/repo', forkOnly]]) }
+    expect(judge(parseSends('git push fork main', '/repo')[0]!, internalOnly)).toMatchObject({
+      verdict: 'allowed', destination: 'internal:git.example.internal',
     })
   })
 })

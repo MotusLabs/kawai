@@ -19,8 +19,8 @@ const flushWrites = async (): Promise<void> => {
 const REPO: ResolvedRepoFacts = {
   root: '/repo',
   teamId: '/repo/.git',
-  originUrl: 'https://github.com/acme/kawai.git',
-  remotes: new Map([['origin', 'https://github.com/acme/kawai.git']]),
+  originUrls: ['https://github.com/acme/kawai.git'],
+  remotes: new Map([['origin', ['https://github.com/acme/kawai.git']]]),
   pushRemote: null,
 }
 
@@ -140,7 +140,7 @@ describe('OutboundObserver', () => {
   })
 
   test('an unreadable repository read records unknown-destination and never throws', async () => {
-    const unreadable = new Map([['/repo', { ...REPO, originUrl: null, remotes: new Map(), pushRemote: null, unreadable: true }]])
+    const unreadable = new Map([['/repo', { ...REPO, originUrls: [], remotes: new Map(), pushRemote: null, unreadable: true }]])
     const { observer, calls } = harness({ repos: { factsFor: cwd => unreadable.get(cwd) ?? null } })
     observer.onPreToolUse({ ...PRE })
     await flushWrites()

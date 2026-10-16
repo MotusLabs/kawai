@@ -42,10 +42,17 @@ export interface SendCandidate {
 /** Repository facts the resolver read for one repository root (D4). */
 export interface RepoFacts {
   root: string
-  originUrl: string | null
-  remotes: ReadonlyMap<string, string>
+  /** origin's url lines, for repository equality. */
+  originUrls: readonly string[]
+  /** Every remote's push targets: pushurl lines when present, else url lines. */
+  remotes: ReadonlyMap<string, readonly string[]>
   /** The current branch's push remote: a name in `remotes`, or a URL. */
   pushRemote: string | null
+  /**
+   * The config holds something the parser will not follow — an include, an
+   * insteadOf rewrite, a header it does not read exactly: no push resolves.
+   */
+  pinned?: string
   /** The config read failed; every git/gh target reads unknown-destination. */
   unreadable?: boolean
 }
@@ -136,18 +143,17 @@ export function parseGitUrl(text: string): ParsedGitUrl | null {
   return null
 }
 
-/** The origin's GitHub owner/repo, for equality against a target URL. */
-function originOf(repo: RepoFacts): ParsedGitUrl | null {
-  if (repo.originUrl === null) return null
-  return parseGitUrl(repo.originUrl)
+/** The origin's parsed URLs, for equality against a target URL. */
+function originsOf(repo: RepoFacts): ParsedGitUrl[] {
+  return repo.originUrls.map(originUrl => parseGitUrl(originUrl)).filter((parsed): parsed is ParsedGitUrl => parsed !== null)
 }
 
 /** A git URL judged: origin equality, then the host classes, else a violation. */
 function judgeGitUrl(url: string, repo: RepoFacts | undefined, facts: JudgeFacts): Judgement {
   const parsed = parseGitUrl(url)
   if (parsed === null) return { verdict: 'unknown-destination', destination: 'unresolved:the target did not parse as a URL' }
-  const origin = repo === undefined ? null : originOf(repo)
-  if (parsed.repo !== null && origin?.repo === parsed.repo && origin.host === parsed.host) {
+  const origins = repo === undefined ? [] : originsOf(repo)
+  if (parsed.repo !== null && origins.some(origin => origin.repo === parsed.repo && origin.host === parsed.host)) {
     return { verdict: 'allowed', destination: 'github:origin' }
   }
   if (parsed.repo !== null && (parsed.host === 'github.com' || parsed.host === 'www.github.com')) {
@@ -168,11 +174,20 @@ function judgeHost(host: string, facts: JudgeFacts, port?: number): Judgement {
   return { verdict: 'violation', destination: `host:${host}` }
 }
 
-/** The URL a push remote name or the branch's push remote resolves to. */
-function pushUrlFor(name: string, repo: RepoFacts): string | null {
-  const direct = parseGitUrl(name)
-  if (direct !== null) return name
+/** The URLs a push remote name resolves to (git pushes to every line). */
+function pushUrlsFor(name: string, repo: RepoFacts): readonly string[] | null {
+  if (parseGitUrl(name) !== null) return [name]
   return repo.remotes.get(name) ?? null
+}
+
+/** The strongest of several judgements — the worst target a push reaches. */
+function strongestJudgement(judgements: Judgement[]): Judgement {
+  return judgements.reduce((worst, next) => STRENGTH[next.verdict] > STRENGTH[worst.verdict] ? next : worst)
+}
+
+/** A push whose remote carries several URLs judges every one of them. */
+function judgePushUrls(urls: readonly string[], repo: RepoFacts | undefined, facts: JudgeFacts): Judgement {
+  return strongestJudgement(urls.map(url => judgeGitUrl(url, repo, facts)))
 }
 
 /** Judge one parsed candidate against the facts (D4). */
@@ -205,38 +220,42 @@ function judgeTarget(candidate: SendCandidate, facts: JudgeFacts): Judgement {
     case 'origin-implicit': {
       if (repo === undefined) return { verdict: 'unknown-destination', destination: 'unresolved:no repository at the cwd' }
       if (repo.unreadable) return { verdict: 'unknown-destination', destination: 'unresolved:the facts read failed' }
+      if (repo.pinned !== undefined) return { verdict: 'unknown-destination', destination: `unresolved:${repo.pinned}` }
       const name = repo.pushRemote ?? 'origin'
-      const url = pushUrlFor(name, repo)
-      if (url === null) {
+      const urls = pushUrlsFor(name, repo)
+      if (urls === null || urls.length === 0) {
         return { verdict: 'unknown-destination', destination: `unresolved:remote ${name} is not configured` }
       }
-      return judgeGitUrl(url, repo, facts)
+      return judgePushUrls(urls, repo, facts)
     }
     case 'remote': {
       if (repo === undefined) return { verdict: 'unknown-destination', destination: 'unresolved:no repository at the cwd' }
       if (repo.unreadable) return { verdict: 'unknown-destination', destination: 'unresolved:the facts read failed' }
-      const url = repo.remotes.get(target.name) ?? null
-      if (url === null) {
+      if (repo.pinned !== undefined) return { verdict: 'unknown-destination', destination: `unresolved:${repo.pinned}` }
+      const urls = repo.remotes.get(target.name) ?? null
+      if (urls === null || urls.length === 0) {
         return { verdict: 'unknown-destination', destination: `unresolved:remote ${target.name} is not configured` }
       }
-      return judgeGitUrl(url, repo, facts)
+      return judgePushUrls(urls, repo, facts)
     }
     case 'repo': {
       if (repo === undefined) return { verdict: 'unknown-destination', destination: 'unresolved:no repository at the cwd' }
       if (repo.unreadable) return { verdict: 'unknown-destination', destination: 'unresolved:the facts read failed' }
+      if (repo.pinned !== undefined) return { verdict: 'unknown-destination', destination: `unresolved:${repo.pinned}` }
       // A fork publishes somewhere new: never origin, whatever it names (D1).
       if (target.fork === true) return { verdict: 'violation', destination: `github:${target.repo}` }
-      const origin = originOf(repo)
-      if (origin?.repo == null) {
+      const origins = originsOf(repo)
+      if (origins.length === 0) {
         return { verdict: 'unknown-destination', destination: 'unresolved:origin is not configured' }
       }
       // `{owner}`/`{repo}` mean origin; the gh default host follows origin's.
-      const name = target.repo === '{owner}/{repo}' ? origin.repo : target.repo
-      const host = (target.host ?? origin.host).toLowerCase()
-      if (name.toLowerCase() === origin.repo.toLowerCase() && host === origin.host.toLowerCase()) {
+      const match = origins.find(origin => target.repo === '{owner}/{repo}' || origin.repo !== null)
+      const named = target.repo === '{owner}/{repo}' ? match?.repo : target.repo
+      const host = (target.host ?? match?.host ?? 'github.com').toLowerCase()
+      if (named != null && origins.some(origin => named.toLowerCase() === origin.repo?.toLowerCase() && host === origin.host.toLowerCase())) {
         return { verdict: 'allowed', destination: 'github:origin' }
       }
-      return { verdict: 'violation', destination: `github:${name}` }
+      return { verdict: 'violation', destination: `github:${named ?? target.repo}` }
     }
   }
 }

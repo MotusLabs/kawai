@@ -40,11 +40,22 @@ const IO: RepoFactsIo = {
 
 /** One parsed config, shared by every worktree whose common dir holds it. */
 interface ParsedConfig {
-  originUrl: string | null
-  /** Every remote, as a push resolves it: `pushurl` when set, else `url`. */
-  remotes: ReadonlyMap<string, string>
+  /** origin's `url` lines, for repository equality. */
+  originUrls: readonly string[]
+  /**
+   * Every remote as a push resolves it: its `pushurl` lines when it has any,
+   * else its `url` lines — git pushes to every line, so all are kept.
+   */
+  remotes: ReadonlyMap<string, readonly string[]>
   /** Per branch: `remote` and `pushRemote` settings. */
   branches: ReadonlyMap<string, { remote?: string; pushRemote?: string }>
+  /** `remote.pushDefault`, the fallback push remote for every branch. */
+  pushDefault: string | null
+  /**
+   * Why no target may resolve from this config: an include, an insteadOf
+   * rewrite, or a header form the parser does not read exactly.
+   */
+  pinned: string | null
 }
 
 interface CachedConfig {
@@ -53,7 +64,7 @@ interface CachedConfig {
 }
 
 /** The unreadable stand-in: every git/gh target reads unknown-destination. */
-const UNREADABLE: ParsedConfig = { originUrl: null, remotes: new Map(), branches: new Map() }
+const UNREADABLE: ParsedConfig = { originUrls: [], remotes: new Map(), branches: new Map(), pushDefault: null, pinned: 'the config read failed' }
 
 export class RepoFactsResolver {
   /** Parsed config by config path, kept while the file's stamp holds. */
@@ -71,12 +82,16 @@ export class RepoFactsResolver {
     // uses; it is read per call, never cached with the shared config.
     const headBranch = this.headBranchOf(found.headDir)
     const current = headBranch === null ? undefined : parsed.branches.get(headBranch)
+    // The branch's push remote chain (git's precedence): branch pushRemote,
+    // remote.pushDefault, branch remote, origin.
+    const chain = current?.pushRemote ?? parsed.pushDefault ?? current?.remote ?? 'origin'
     return {
       root: found.root,
       teamId: found.commonDir,
-      originUrl: parsed.originUrl,
+      originUrls: parsed.originUrls,
       remotes: parsed.remotes,
-      pushRemote: current?.pushRemote ?? current?.remote ?? null,
+      pushRemote: chain,
+      ...(parsed.pinned !== null ? { pinned: parsed.pinned } : {}),
       ...(parsed === UNREADABLE ? { unreadable: true } : {}),
     }
   }
@@ -100,54 +115,78 @@ export class RepoFactsResolver {
   }
 
   /**
-   * Git config text: a `[section "name"]` header opens a section and closes
-   * the last, whatever the section is — a `[submodule] url` after a
-   * `[remote "fork"]` never touches fork's. A remote's push target prefers
-   * `pushurl` over `url`.
+   * Git config text (D4, CC round 4): any `[` line is a section header —
+   * quoted `[remote "x"]`, dotted `[remote.x]`, either with a trailing
+   * comment, names case-insensitively — and a header the parser cannot read
+   * exactly pins the facts unresolved rather than silently skipping. Values
+   * lose their comment and quoting; CRLF lines read like LF; duplicate
+   * sections merge. An `[include]`/`[includeIf]` or an `insteadOf` rewrite
+   * pins too, because the parser cannot follow what they change.
    */
   private parseConfig(text: string | null): ParsedConfig {
     if (text === null) return UNREADABLE
-    const remotes = new Map<string, string>()
+    const urls = new Map<string, string[]>()
+    const pushurls = new Map<string, string[]>()
     const branches = new Map<string, { remote?: string; pushRemote?: string }>()
-    type Section =
-      | { kind: 'remote'; name: string; url?: string; pushurl?: string }
-      | { kind: 'branch'; name: string; remote?: string; pushRemote?: string }
+    let pushDefault: string | null = null
+    let pinned: string | null = null
+    const pin = (why: string): void => { if (pinned === null) pinned = why }
+    type Section = { kind: 'remote'; name: string } | { kind: 'remote-global' } | { kind: 'branch'; name: string } | { kind: 'ignored' }
     let section: Section | null = null
-    const commitSection = () => {
-      if (section === null) return
-      if (section.kind === 'remote') remotes.set(section.name, section.pushurl ?? section.url ?? '')
-      else {
-        const branch = branches.get(section.name) ?? {}
-        if (section.remote !== undefined) branch.remote = section.remote
-        if (section.pushRemote !== undefined) branch.pushRemote = section.pushRemote
-        branches.set(section.name, branch)
-      }
-      section = null
+    const headerOf = (line: string): [string, string | null] | null => {
+      const body = line.replace(/\s*#.*$/, '')
+      const quoted = /^\[\s*([A-Za-z0-9-]+)\s+"((?:[^"\\]|\\.)*)"\s*\]$/.exec(body)
+      if (quoted !== null) return [quoted[1]!.toLowerCase(), quoted[2]!]
+      const dotted = /^\[\s*([A-Za-z0-9-]+)\.([A-Za-z0-9.-]+)\s*\]$/.exec(body)
+      if (dotted !== null) return [dotted[1]!.toLowerCase(), dotted[2]!]
+      const bare = /^\[\s*([A-Za-z0-9-]+)\s*\]$/.exec(body)
+      if (bare !== null) return [bare[1]!.toLowerCase(), null]
+      return null
     }
-    for (const line of text.split('\n')) {
-      const header = /^\s*\[\s*([A-Za-z0-9-]+)(?:\s+"([^"]+)")?\s*\]\s*$/.exec(line)
-      if (header !== null) {
-        commitSection()
-        if (header[2] === undefined) continue
-        section = header[1] === 'remote'
-          ? { kind: 'remote', name: header[2] }
-          : header[1] === 'branch' ? { kind: 'branch', name: header[2] } : null
+    const unquote = (value: string): string => {
+      const quoted = /^"((?:[^"\\]|\\.)*)"$/.exec(value.trim())
+      if (quoted === null) return value.trim()
+      return quoted[1]!.replace(/\\(["\\])/g, '$1')
+    }
+    for (const raw of text.split(/\r?\n/)) {
+      const line = raw.trim()
+      if (line === '' || line.startsWith('#') || line.startsWith(';')) continue
+      if (line.startsWith('[')) {
+        const header = headerOf(line)
+        if (header === null) { pin('a config header was not understood'); section = null; continue }
+        const [word, name] = header
+        if (word === 'include' || word.startsWith('includeif')) { pin('an include directive could change this config'); section = null; continue }
+        if (word === 'url') { pin('an insteadOf rewrite could change this target'); section = { kind: 'ignored' }; continue }
+        section = word === 'remote'
+          ? name === null ? { kind: 'remote-global' } : { kind: 'remote', name }
+          : word === 'branch' && name !== null ? { kind: 'branch', name } : { kind: 'ignored' }
         continue
       }
-      const pair = /^\s*([A-Za-z][A-Za-z0-9-]*)\s*=\s*(.*)$/.exec(line)
+      const pair = /^([A-Za-z][A-Za-z0-9-]*)\s*=\s*(.*)$/.exec(line.replace(/\s+#.*$/, ''))
       if (pair === null || section === null) continue
       const key = pair[1]!.toLowerCase()
-      const value = pair[2]!.trim()
+      const value = unquote(pair[2]!)
       if (section.kind === 'remote') {
-        if (key === 'url') section.url = value
-        if (key === 'pushurl') section.pushurl = value
-      } else {
-        if (key === 'remote') section.remote = value
-        if (key === 'pushremote') section.pushRemote = value
+        if (key === 'url') { const list = urls.get(section.name) ?? []; list.push(value); urls.set(section.name, list) }
+        if (key === 'pushurl') { const list = pushurls.get(section.name) ?? []; list.push(value); pushurls.set(section.name, list) }
+        if (key === 'insteadof' || key === 'pushinsteadof') pin('an insteadOf rewrite could change this target')
+      } else if (section.kind === 'remote-global') {
+        if (key === 'pushdefault') pushDefault = value
+      } else if (section.kind === 'branch') {
+        const branch = branches.get(section.name) ?? {}
+        if (key === 'remote') branch.remote = value
+        if (key === 'pushremote') branch.pushRemote = value
+        branches.set(section.name, branch)
       }
     }
-    commitSection()
-    return { originUrl: remotes.get('origin') ?? null, remotes, branches }
+    const remotes = new Map<string, readonly string[]>()
+    for (const name of new Set([...urls.keys(), ...pushurls.keys()])) {
+      const push = pushurls.get(name)
+      const plain = urls.get(name) ?? []
+      // A pushurl replaces the urls; without one, git pushes to every url.
+      remotes.set(name, push !== undefined && push.length > 0 ? push : plain)
+    }
+    return { originUrls: urls.get('origin') ?? [], remotes, branches, pushDefault, pinned }
   }
 
   /** The walk: nearest `.git` (directory, or a worktree's `gitdir:` file), its common dir and HEAD dir. */

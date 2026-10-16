@@ -23,11 +23,11 @@ export const facts = {
   repos: new Map([
     ['/repo', {
       root: '/repo',
-      originUrl: 'https://github.com/acme/kawai.git',
+      originUrls: ['https://github.com/acme/kawai.git'],
       remotes: new Map([
-        ['origin', 'https://github.com/acme/kawai.git'],
-        ['fork', 'https://github.com/other/fork.git'],
-        ['mirror', 'https://git.example.internal/kawai.git'],
+        ['origin', ['https://github.com/acme/kawai.git']],
+        ['fork', ['https://github.com/other/fork.git']],
+        ['mirror', ['https://git.example.internal/kawai.git']],
       ]),
       pushRemote: null,
     }],

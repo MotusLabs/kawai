@@ -270,10 +270,27 @@ function registryOf(reference: string): string | null {
 
 /** Parse a whole command into its send candidates (D4's rules table). */
 export function parseSends(command: string, cwd: string): SendCandidate[] {
-  return parseCommand(command, cwd).flatMap(segment => candidatesOf(segment))
+  // An earlier segment that rewrites git's remote/url/branch config pins
+  // every later push in the same call: the facts the resolver read are stale.
+  let configTouched = false
+  const candidates: SendCandidate[] = []
+  for (const segment of parseCommand(command, cwd)) {
+    candidates.push(...candidatesOf(segment, configTouched))
+    if (segmentConfigTouched(segment.argv)) configTouched = true
+  }
+  return candidates
 }
 
-function candidatesOf(segment: { argv: string[]; text: string; cwd: string; env: ReadonlyMap<string, string | null> }): SendCandidate[] {
+/** Whether a segment rewrites remote/url/branch config (D4, CC round 4). */
+function segmentConfigTouched(argv: readonly string[]): boolean {
+  if (argv[0] !== 'git') return false
+  if (argv[1] === 'config') {
+    return argv.slice(2).some(word => /^(remote|url|branch)\./i.test(word))
+  }
+  return argv[1] === 'remote' && ['add', 'set-url', 'rename', 'remove'].includes(argv[2] ?? '')
+}
+
+function candidatesOf(segment: { argv: string[]; text: string; cwd: string; env: ReadonlyMap<string, string | null> }, configTouched = false): SendCandidate[] {
   const { text, cwd, env } = segment
   const base = (rule: SendCandidate['rule'], target: SendTarget): SendCandidate => ({ rule, segment: text, cwd, target })
   const unwrapped = unwrapWrappers(segment.argv)
@@ -292,8 +309,9 @@ function candidatesOf(segment: { argv: string[]; text: string; cwd: string; env:
 
   if (head === 'git') {
     const { subcommandAt, pinned } = gitSubcommandAndPin(argv, env)
+    const stale = pinned ?? (configTouched ? 'an earlier git config or remote command pins the target' : null)
     if (subcommandAt !== -1 && argv[subcommandAt] === 'push') {
-      return [base('git-push', gitPushTarget(argv, subcommandAt, pinned))]
+      return [base('git-push', gitPushTarget(argv, subcommandAt, stale))]
     }
     return []
   }
