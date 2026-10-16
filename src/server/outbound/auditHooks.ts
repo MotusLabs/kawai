@@ -17,10 +17,12 @@ export const AUDITED_TOOLS = '^(Bash|Monitor|mcp__.+)$'
 type AuditEvent = 'PreToolUse' | 'PostToolUse' | 'PostToolUseFailure' | 'PermissionDenied'
 
 /**
- * D3: whether a call runs in the background — a `run_in_background` Bash or
- * any Monitor starts there, and a foreground Bash the harness moved to the
- * background says so in its response ("…was moved to the background (ID: …)"),
- * so its call records `started-background`, not `completed` while it runs.
+ * D3: whether a call runs in the background. A `run_in_background` Bash or
+ * any Monitor starts there. A foreground Bash the harness moved there says
+ * so in its structured response — the typed BashOutput fields
+ * `backgroundTaskId`, `backgroundedByUser`, `timedOutAfterMs` — with the
+ * model-facing text marker kept as a fallback for older builds; the call
+ * then records `started-background`, never `completed` while it still runs.
  */
 export function callRanInBackground(toolName: string, toolInput: unknown, response: unknown): boolean {
   if (toolName === 'Monitor') return true

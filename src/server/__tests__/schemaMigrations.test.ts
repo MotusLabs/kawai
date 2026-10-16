@@ -339,7 +339,7 @@ describe('a recorded migration name the registry disagrees with (CC round 3)', (
     expect(error).toBeInstanceOf(DatabaseStartupError)
     const message = (error as Error).message
     expect(message).toContain('version 2 is missing')
-    expect(message).toContain('skipped, never applied')
+    expect(message).toContain('not dense from version 1')
     expect(message).toContain('docs/operations/database-backups.md')
     // Refused before any write: same bytes, the strategy table stays gone
     // (the gap was not "healed" by re-applying migration 2).

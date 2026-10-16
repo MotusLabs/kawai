@@ -189,7 +189,7 @@ export function migrateSchema(db: Database, dbPath: string, options: MigrateOpti
   const gapAt = recorded.findIndex((version, index) => version !== index + 1)
   if (gapAt !== -1) {
     throw new DatabaseStartupError(
-      `Database ${dbPath} records schema versions [${recorded.join(', ')}] with a gap: version ${gapAt + 1} is missing. The runner starts from the newest recorded version, so the missing migration would be skipped, never applied; this build refuses to write to it and nothing was changed. Restore a backup by following ${RESTORE_DOC}, or run the build that recorded these versions.`,
+      `Database ${dbPath} records schema versions [${recorded.join(', ')}], not dense from version 1: version ${gapAt + 1} is missing. This build refuses to write to it; nothing was changed. Restore a backup by following ${RESTORE_DOC}, or run the build that recorded these versions.`,
     )
   }
   const mismatch = recordedNameMismatch(db, migrations)

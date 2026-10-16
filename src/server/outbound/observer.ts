@@ -248,9 +248,14 @@ export class OutboundObserver implements OutboundAuditSink {
     let kept = entries
     let truncated = false
     while (JSON.stringify(kept).length > 4096 && kept.length > 1) { kept = kept.slice(0, -1); truncated = true }
-    if (JSON.stringify(kept).length > 4096 && kept.length === 1) {
-      kept = [{ rule: kept[0]!.rule, segment: kept[0]!.segment.slice(0, 3800), verdict: kept[0]!.verdict, destination: kept[0]!.destination }]
+    // One entry can still overflow: shrink its longest field after
+    // serialization until the whole string fits (round 5 R6).
+    while (JSON.stringify(kept).length > 4096) {
+      const widest = kept.reduce((a, b) => (b.segment.length > a.segment.length || b.destination.length > a.destination.length ? b : a), kept[0]!)
+      if (widest.segment.length >= widest.destination.length) widest.segment = widest.segment.slice(0, Math.ceil(widest.segment.length / 2))
+      else widest.destination = widest.destination.slice(0, Math.ceil(widest.destination.length / 2))
       truncated = true
+      if (widest.segment.length === 0 && widest.destination.length === 0) break
     }
     return JSON.stringify(truncated ? [...kept, { truncated: true }] : kept)
   }

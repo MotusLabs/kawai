@@ -238,7 +238,11 @@ function candidatesOf(segment: { argv: string[]; text: string; cwd: string; env:
     // the wrapper word itself is never the head.
     const head = (segment.argv.slice(1).find(word => !word.startsWith('-')) ?? segment.argv[0] ?? '')
       .split(/[\s/]/)[0]!.toLowerCase()
-    const rule = WRAPPED_RULE_HEADS[head] ?? 'http-send'
+    // A shell or wrapper word names no rule: the first send-tool token
+    // anywhere in the segment does (a wrapped `bash -c "git push…"` labels
+    // git-push), and only a command naming none falls back to http-send.
+    const inner = segment.argv.map(word => word.split(/[\s/]/)[0]!.toLowerCase()).find(token => WRAPPED_RULE_HEADS[token] !== undefined)
+    const rule = WRAPPED_RULE_HEADS[head] ?? (inner === undefined ? undefined : WRAPPED_RULE_HEADS[inner]) ?? 'http-send'
     return [base(rule, { kind: 'unresolved', why: segment.note })]
   }
   const argv = segment.argv

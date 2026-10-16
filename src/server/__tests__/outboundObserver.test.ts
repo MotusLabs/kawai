@@ -267,6 +267,15 @@ describe('OutboundObserver', () => {
     expect(outcomes).toHaveLength(1)
   })
 
+  test('the parse prefix is load-bearing: sends past 16 KiB never record (round 5 R6)', async () => {
+    // Dropping the cap would find the tail send and fail this test.
+    const { observer, calls } = harness()
+    const command = 'true ' + 'x'.repeat(16_400) + '; curl -d x https://host.example.org/hook'
+    observer.onPreToolUse({ ...PRE, toolUseId: 'tu-past', toolInput: { command } })
+    await flushWrites()
+    expect(calls).toEqual([])
+  })
+
   test('a 120k-character command completes fast and every stored field is capped (CC round 4 B)', async () => {
     const { observer, calls } = harness()
     const command = `curl -d x https://host.example.org/hook ${'https://'.repeat(14_000)}`
