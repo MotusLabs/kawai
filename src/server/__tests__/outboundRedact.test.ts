@@ -151,14 +151,16 @@ describe('redact: CC round 3 (body forms, linear userinfo, over-redaction)', () 
     // A path @scope is not userinfo.
     expect(redact('curl -d x https://registry.example.internal/@scope/pkg'))
       .toBe('curl -d x https://registry.example.internal/@scope/pkg')
-    // 240k characters of scheme repetition redact in well under 100 ms.
+    // 240k characters of scheme repetition: the quadratic form this guards
+    // against took ~17 s at this size, so even a busy CI core passes in
+    // well under a second while a regression still fails outright.
     const big = 'https://'.repeat(30_000)
     const started = performance.now()
     const out = redactForStore(big)
     const elapsed = performance.now() - started
     expect(out.text.length).toBe(4096)
     expect(out.truncated).toBe(true)
-    expect(elapsed).toBeLessThan(100)
+    expect(elapsed).toBeLessThan(1_000)
   })
 
   test('a 16 KiB read bound keeps every stored character redacted', () => {

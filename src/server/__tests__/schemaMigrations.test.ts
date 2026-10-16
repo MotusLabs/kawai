@@ -324,4 +324,24 @@ describe('a recorded migration name the registry disagrees with (CC round 3)', (
     expect(versions(dbPath).map(row => row.version)).toEqual([1, 2, 3])
     db.close()
   })
+
+  test('the pre-migration-3 backup predates the audit tables (CC round 3)', () => {
+    // A database at version 2 (strategy-impact) upgrades to 3; the backup
+    // taken before migration 3 must not contain the outbound tables.
+    initDatabase({ path: dbPath, migrations: MIGRATIONS.slice(0, 1) }).close()
+    initDatabase({ path: dbPath }).close()
+    const backup = fs.readdirSync(path.join(dir, 'backups')).find(name => name.endsWith('-pre-migration-3.db'))!
+    const backupPath = path.join(dir, 'backups', backup)
+    const snapshot = new Database(backupPath, { readonly: true })
+    const tables = (snapshot.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as Array<{ name: string }>).map(row => row.name)
+    snapshot.close()
+    expect(tables).not.toContain('outbound_calls')
+    expect(tables).not.toContain('outbound_outcomes')
+    expect(tables).not.toContain('outbound_acknowledgements')
+    // The live database now has them, and running 3 again writes nothing.
+    const live = new Database(dbPath, { readonly: true })
+    const liveTables = (live.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as Array<{ name: string }>).map(row => row.name)
+    live.close()
+    expect(liveTables).toContain('outbound_calls')
+  })
 })

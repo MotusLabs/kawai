@@ -234,6 +234,24 @@ describe('OutboundDestinations matching window and stat errors (CC)', () => {
     expect(loader.isInternal('one.example.internal')).toBe(false)
   })
 
+  test('the window is stamped per pass: no revalidation while it holds (CC round 3)', () => {
+    // A clock far from zero: if matchedAt were never stamped, every call
+    // would read as outside the window and re-read the file — the edit would
+    // show through immediately and this test fails.
+    fs.writeFileSync(outboundFile(home), JSON.stringify({ internal: ['one.example.internal'] }))
+    let clock = 60_000
+    const loader = new OutboundDestinations({ homeDir: home, matchRevalidateMs: 5_000, matchNow: () => clock })
+    expect(loader.isInternal('one.example.internal')).toBe(true)
+    fs.writeFileSync(outboundFile(home), JSON.stringify({ internal: ['two.example.internal'] }))
+    for (let call = 0; call < 5; call++) {
+      expect(loader.isInternal('two.example.internal')).toBe(false)
+      expect(loader.isInternal('one.example.internal')).toBe(true)
+    }
+    clock = 66_000
+    expect(loader.isInternal('two.example.internal')).toBe(true)
+    expect(loader.isInternal('one.example.internal')).toBe(false)
+  })
+
   test('a stat error other than a missing file reports once and the defaults apply', () => {
     // ~/.kawai as a plain file makes the outbound path ENOTDIR, not ENOENT.
     const brokenHome = path.join(root, 'broken')

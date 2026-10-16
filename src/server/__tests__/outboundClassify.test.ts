@@ -546,4 +546,12 @@ describe('CC round 3: wrappers, reserved words, and git pinning', () => {
       rule: 'http-send', verdict: 'unknown-destination', destination: 'unresolved:no URL in the command',
     })
   })
+
+  test('a value flag consumes its value: -w never contributes a target (CC round 3)', () => {
+    // If -w stopped being a value flag, its URL-shaped value would become a
+    // positional and a second http-send candidate would appear.
+    const candidates = parseSends('curl -w https://host.example.org/marker -d x https://api.example.org/hook', '/repo')
+    expect(candidates).toHaveLength(1)
+    expect(candidates[0]?.target).toEqual({ kind: 'host', host: 'api.example.org' })
+  })
 })

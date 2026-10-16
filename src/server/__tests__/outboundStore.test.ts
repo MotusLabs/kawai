@@ -139,7 +139,10 @@ describe('OutboundStore (the only writer)', () => {
   test('same-timestamp rows page by the id tie-breaker alone (M11)', () => {
     const outbound = store()
     const at = '2026-01-01T00:00:00.000Z'
-    for (const id of ['obc-a', 'obc-b', 'obc-c', 'obc-d', 'obc-e']) {
+    // Insertion order differs from both id directions, so only an explicit
+    // `id DESC` tie-break — never the engine's unspecified equal-key order —
+    // can produce the expected pages.
+    for (const id of ['obc-c', 'obc-a', 'obc-e', 'obc-b', 'obc-d']) {
       outbound.insertCall(call({ id, toolUseId: `tu-${id}`, createdAt: at }))
     }
     const first = outbound.page({ teamId: '/repo/.git' }, 2)
@@ -152,6 +155,15 @@ describe('OutboundStore (the only writer)', () => {
     // A cursor without its separator is refused, not silently mis-read.
     expect(() => outbound.page({ teamId: '/repo/.git' }, 2, 'not-a-cursor')).toThrow(/invalid page cursor/)
     expect(() => outbound.page({ teamId: '/repo/.git' }, 2, 'x\u0000')).toThrow(/invalid page cursor/)
+  })
+
+  test('a broken outcome row is refused, never silently dropped (CC round 3)', () => {
+    const outbound = store()
+    // A null key or outcome violates the table: the store throws it, because
+    // ON CONFLICT catches only the dedup key, never a broken row.
+    expect(() => outbound.insertOutcome({ sessionId: null as unknown as string, toolUseId: 'tu-x', outcome: 'completed', createdAt: NOW })).toThrow()
+    expect(() => outbound.insertOutcome({ sessionId: 'chat-1', toolUseId: 'tu-x', outcome: undefined as unknown as 'completed', createdAt: NOW })).toThrow()
+    expect(outbound.outcomesOf('chat-1', 'tu-x')).toEqual([])
   })
 
   test('an outcome before its call row is kept and joins once the row exists', () => {
