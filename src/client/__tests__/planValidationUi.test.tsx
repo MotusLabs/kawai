@@ -211,7 +211,7 @@ test('a warning finding carries its Accept control; unaccepted keys only', () =>
 
 test('the approve dialog shows the standing and an inline validation-current refusal with Validate', () => {
   const asked = section({ standing: { state: 'blocked', reportSeq: 1 }, report: report([finding('openspec-valid:api', 'error', 'intent')]) })
-  const { sent, byId } = mount([asked])
+  const { sent, byId, rerender } = mount([asked])
   expect(textOf(byId('plan-approve-standing-1'))).toContain('Validation: Blocked')
   // A stored refusal lands in the view's failures: it renders inline.
   act(() => {
@@ -225,9 +225,19 @@ test('the approve dialog shows the standing and an inline validation-current ref
   expect(textOf(byId('plan-approve-refused-1'))).toContain('1 errors, 0 unanswered questions, 1 unaccepted warnings')
   act(() => { byId('plan-approve-refused-1-validate').props.onClick() })
   expect(sent.at(-1)).toMatchObject({ type: 'team-plan-validate', planId: 'p1', revision: 1 })
-  // L-2's disabled-while-busy is wired like every other control but is not
-  // reachable through the store flow to assert here: `begin` (what makes the
-  // view busy) also clears `failures`, and the failures are what render the
-  // refusal line and its Validate button — the two states are mutually
-  // exclusive by the store's design, so the wiring is defensive.
+  // L-2: the refusal's Validate disables while another command is pending.
+  // begin(B) alone would clear the failures that render the button, so the
+  // reachable sequence is begin(A: approve), begin(B: validate), then A's
+  // refused result — applyResult deletes only its own request id, so B keeps
+  // the view busy while A's failures show the refusal and its Validate.
+  const approveId = 'req-approve'
+  act(() => {
+    useTeamPlanStore.getState().begin('/repo', approveId, 'approve')
+    useTeamPlanStore.getState().begin('/repo', 'req-validate', 'validate')
+    useTeamPlanStore.getState().applyResult({ type: 'team-plan-result', teamPath: '/repo', requestId: approveId,
+      error: 'Approval refused: validation-current', failures: [{ name: 'validation-current', message: 'not ready' }] })
+  })
+  // The view object rides a prop, so hand the tree the updated store state.
+  rerender()
+  expect(byId('plan-approve-refused-1-validate').props.disabled).toBe(true)
 })
