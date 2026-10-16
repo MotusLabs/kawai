@@ -102,6 +102,9 @@ import type { AssignmentService } from '../team/AssignmentService'
 import type { TaskResultService } from '../team/TaskResultService'
 import type { SpawnRequest, SpawnResult } from '../team/staffing'
 import { TeamCaps } from '../team/teamCaps'
+import { worktreeRootOf } from '../team/worktreeRoots'
+import { ProvenanceRecorder } from '../metrics/provenanceRecorder'
+import type { ChatSpawnInfo } from './ChatSessionDriver'
 import { OutboundDestinations } from '../outbound/destinations'
 import {
   findTranscriptPath,
@@ -962,6 +965,7 @@ export class ChatSessionManager {
     // Written from the event path below, independent of any open view; the
     // workspace summary reads its window from this table (team-workspace D8).
     this.turnEnds = new ChatTurnEndStore(options.db.db)
+    this.provenance = new ProvenanceRecorder(options.db.db)
     // Product strategy (product-strategy): constructed here, beside the
     // task service, against the same database. The strategy store's changes
     // fan out to the strategy view pushes; the team comes from the record's
@@ -1161,6 +1165,34 @@ export class ChatSessionManager {
     this.options.registry.updateSession(sessionId, { parked: next })
   }
 
+  /**
+   * Agent-start provenance (team-process-metrics D2): hash what this spawn
+   * launched with. Observational — a failure is logged, never thrown.
+   */
+  private recordAgentStart(sessionId: string, info: ChatSpawnInfo): void {
+    try {
+      const record = this.records.get(sessionId)
+      const team = this.teams.teamOf(sessionId)
+      const groupId = record?.groupId ?? null
+      this.provenance.record({
+        sessionId,
+        teamId: team?.teamId ?? null,
+        groupId,
+        profileId: record?.claudeProfileId ?? 'default',
+        model: info.model ?? record?.model ?? null,
+        effort: info.effort ?? null,
+        cwd: info.cwd,
+        groupFile: groupId ? this.teams.catalogOf(sessionId)?.groups.get(groupId)?.file ?? null : null,
+        promptAppend: info.systemPromptAppend,
+        mainCheckout: team?.groupsRoot ?? worktreeRootOf(info.cwd),
+        worktreeRoot: worktreeRootOf(info.cwd),
+        env: info.env,
+      })
+    } catch (error) {
+      logger.warn('agent_start_record_failed', { sessionId, error: error instanceof Error ? error.message : String(error) })
+    }
+  }
+
   /** Each session's team (agent-teams); shared with the mailbox dispatcher. */
   readonly teams: SessionTeams
   /** The owner's outbound destinations (execution-safety-recovery D2); feeds every prompt's security note. */
@@ -1184,6 +1216,8 @@ export class ChatSessionManager {
   readonly strategies: StrategyService
   /** Completed turns of task-bound sessions (team-workspace D8): the summary's durable source. */
   readonly turnEnds: ChatTurnEndStore
+  /** Agent starts and their input hashes (team-process-metrics D2). */
+  readonly provenance: ProvenanceRecorder
   /** Durable plans (durable-plans); the plan tools and UI actions go through it. */
   readonly plans: PlanService
   /** Strategy impact reviews (strategy-revision-impact); the impact tools and UI actions go through it. */
@@ -1908,6 +1942,7 @@ export class ChatSessionManager {
           this.records.get(record.sessionId)?.groupId,
           this.records.get(record.sessionId)?.claudeProfileId ?? 'default'
         ),
+        onSpawn: info => this.recordAgentStart(record.sessionId, info),
         getProviderEnv: () => this.providerEnv(),
         // Read per request so a live policy switch reaches the next
         // canUseTool call without a respawn (design D2).

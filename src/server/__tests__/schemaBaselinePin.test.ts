@@ -11,7 +11,8 @@
 // on purpose: that migration's change applies its delta to `expected` there
 // (added tables, columns, indexes), and the fixture itself stays master's.
 // Migration 2 (`strategy-impact`) adds the three strategy impact tables below;
-// migration 3 (`task-status-events`) adds the task transition table.
+// migration 3 (`task-status-events`) adds the task transition table;
+// migration 4 (`agent-starts`) adds agent starts and memory manifests.
 import { expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
 import { initDatabase } from '../db'
@@ -61,6 +62,23 @@ const migration3: SchemaShape['tables'] = {
   },
 }
 
+/** Migration 4's delta: agent-start provenance (team-process-metrics D2). */
+const migration4: SchemaShape['tables'] = {
+  agent_starts: {
+    columns: [
+      id, column('session_id'), ...['team_id', 'group_id', 'profile_id', 'model', 'effort'].map(optional), column('cwd'),
+      ...['group_file_hash', 'prompt_append_hash', 'memory_hash'].map(optional),
+      { name: 'memory_files', type: 'INTEGER', notnull: 0, dflt_value: null, pk: 0 },
+      optional('instructions_hash'), optional('unavailable'), column('started_at'),
+    ],
+    indexes: [
+      { name: 'agent_starts_session', unique: 0, columns: ['session_id', 'started_at'] },
+      { name: 'agent_starts_team', unique: 0, columns: ['team_id', 'started_at'] },
+    ],
+  },
+  memory_manifests: { columns: [column('memory_hash', 0, 1), column('files')], indexes: [] },
+}
+
 test('a fresh baseline reproduces master bdc0131 schema exactly', () => {
   const db = new Database(':memory:')
   applyBaselineSchema(db)
@@ -70,8 +88,8 @@ test('a fresh baseline reproduces master bdc0131 schema exactly', () => {
 
 test('a fresh database opened by this build has the same shape plus each migration\'s delta and schema_migrations', () => {
   const session = initDatabase({ path: ':memory:' })
-  expect(Object.keys({ ...migration2, ...migration3 }).filter(table => table in expected.tables)).toEqual([])
-  expect(schemaShape(session.db)).toEqual({ tables: { ...expected.tables, ...migration2, ...migration3 } })
+  expect(Object.keys({ ...migration2, ...migration3, ...migration4 }).filter(table => table in expected.tables)).toEqual([])
+  expect(schemaShape(session.db)).toEqual({ tables: { ...expected.tables, ...migration2, ...migration3, ...migration4 } })
   const extra = session.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'").get()
   expect(extra).toEqual({ name: 'schema_migrations' })
   session.close()

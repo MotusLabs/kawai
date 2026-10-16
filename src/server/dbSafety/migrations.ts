@@ -17,6 +17,7 @@ import { BUILD_VERSION } from '../version'
 import { applyBaselineSchema } from './baseline'
 import { CREATE_IMPACT_TABLES_SQL } from '../strategy/impactSchema'
 import { migrateTaskStatusEvents } from '../team/taskStatusEventsSchema'
+import { CREATE_AGENT_START_TABLES_SQL } from '../metrics/provenanceSchema'
 import type { BackupFile } from './backupFiles'
 import type { BackupOutcome } from './backups'
 
@@ -36,6 +37,8 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 2, name: 'strategy-impact', up: db => db.exec(CREATE_IMPACT_TABLES_SQL) },
   // team-process-metrics D3: task status transitions, backfilled for closed tasks.
   { version: 3, name: 'task-status-events', up: migrateTaskStatusEvents },
+  // team-process-metrics D2: agent-start provenance and memory manifests.
+  { version: 4, name: 'agent-starts', up: db => db.exec(CREATE_AGENT_START_TABLES_SQL) },
 ]
 
 export const RESTORE_DOC = 'docs/operations/database-backups.md'

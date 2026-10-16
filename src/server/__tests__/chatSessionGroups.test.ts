@@ -10,6 +10,7 @@ import { ChatSessionManager } from '../chat/ChatSessionManager'
 import { fixtureQueryFactory } from '../chat/developmentFixture'
 import { initDatabase, type SessionDatabase } from '../db'
 import { SessionRegistry } from '../SessionRegistry'
+import { sha256 } from '../metrics/provenanceHash'
 
 describe('chat session groups', () => {
   let tempDir: string
@@ -177,6 +178,36 @@ describe('chat session groups', () => {
       expect(await manager.start(loose.session.id)).toEqual({ ok: true })
       expect(spawned).toHaveLength(2)
       expect('effort' in spawned[1]!).toBe(false)
+    } finally {
+      manager.shutdown()
+    }
+  })
+
+  test('each agent start is recorded with its group file hash; a failing recorder never fails the start', async () => {
+    fs.writeFileSync(path.join(project, '.kawai', 'groups', 'lead.md'), '---\neffort: max\n---\nLead.')
+    const manager = new ChatSessionManager({
+      db, registry: new SessionRegistry(), onEvent: () => {}, profileCatalogHome: home,
+      availabilityProbe: async () => {}, queryFactory: fixtureQueryFactory,
+    })
+    try {
+      const lead = await manager.createAvailableSession({ projectPath: project, groupId: 'lead' })
+      if (!lead.ok) throw new Error(lead.error)
+      expect(await manager.start(lead.session.id)).toEqual({ ok: true })
+      const [start] = manager.provenance.starts(lead.session.id)
+      expect(start).toMatchObject({
+        groupId: 'lead', effort: 'max', profileId: 'default', cwd: project,
+        groupFileHash: sha256('---\neffort: max\n---\nLead.'), teamId: expect.any(String),
+      })
+      expect(start!.promptAppendHash).toMatch(/^[0-9a-f]{64}$/)
+      expect(manager.provenance.latestStart(lead.session.id)).toBe(start!.id)
+
+      const record = spyOn(manager.provenance, 'record').mockImplementation(() => { throw new Error('disk full') })
+      try {
+        const loose = await manager.createAvailableSession({ projectPath: project })
+        if (!loose.ok) throw new Error(loose.error)
+        expect(await manager.start(loose.session.id)).toEqual({ ok: true })
+        expect(record).toHaveBeenCalledTimes(1)
+      } finally { record.mockRestore() }
     } finally {
       manager.shutdown()
     }
