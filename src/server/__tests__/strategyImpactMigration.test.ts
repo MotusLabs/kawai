@@ -71,7 +71,9 @@ test('a version-1 database upgrades to 2 after its pre-migration-2 backup and ke
   expect(IMPACT_TABLES.filter(table => table in before)).toEqual([])
   expect(before.strategy_impact_reviews).toHaveLength(1)
 
-  const session = initDatabase({ path: dbPath })
+  // Isolate the upgrade to exactly version 2: later migrations (this build's
+  // plan-validation, later builds' entries) have their own tests.
+  const session = initDatabase({ path: dbPath, migrations: MIGRATIONS.filter(migration => migration.version <= 2) })
   const reviews = new StrategyStore(session.db).impactReviews(strategyId)
   // The new tables are usable at once: a decision on the existing review.
   new ImpactStore(session.db).insertDecision({
@@ -82,14 +84,10 @@ test('a version-1 database upgrades to 2 after its pre-migration-2 backup and ke
 
   const after = rows(dbPath)
   for (const [table, tableRows] of Object.entries(before)) expect(after[table]).toEqual(tableRows)
-  // The upgrade applies every later migration: this build's plan-validation
-  // tables arrive beside the impact tables.
-  expect(Object.keys(after).filter(table => !(table in before)).sort()).toEqual(
-    [...IMPACT_TABLES, 'plan_assessments', 'plan_validation_decisions', 'plan_validation_reports'].sort(),
-  )
+  expect(Object.keys(after).filter(table => !(table in before)).sort()).toEqual(IMPACT_TABLES)
   expect(after.strategy_impact_decisions).toHaveLength(1)
   const recorded = versions(dbPath)
-  expect(recorded.map(row => [row.version, row.name])).toEqual([[1, 'baseline'], ...MIGRATIONS.map(migration => [migration.version, migration.name])])
+  expect(recorded.map(row => [row.version, row.name])).toEqual([[1, 'baseline'], [2, 'strategy-impact']])
   // The backup is the database as version 1 left it: no impact tables.
   const backup = recorded[1]!.backup_path!
   expect(path.basename(backup)).toMatch(/-pre-migration-2\.db$/)
