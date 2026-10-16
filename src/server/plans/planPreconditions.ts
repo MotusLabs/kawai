@@ -38,10 +38,14 @@ export interface ApprovalDeps {
   currentStrategyPin: (teamId: string) => PlanStrategyPin | null
   /** A disposition that keeps this revision's older pin; always null in this change. */
   pinDisposition: (planId: string, revision: number) => PinDisposition | null
+  /** plan-validation D9's pre-transaction gather: the file-held identity parts, no CLI. */
+  prepareStanding?: (planId: string, revision: number) => Promise<unknown> | null
+  /** plan-validation D9's in-transaction standing, from the prepared parts. */
+  standing?: (prepared: unknown) => unknown
 }
 
 /** Gathered before the transaction (async). Empty in this change; later checks add their inputs here. */
-export type ApprovalPrepared = Record<never, never>
+export type ApprovalPrepared = Record<never, never> | { validation?: unknown }
 
 /** Everything a precondition may read, built inside the approval transaction. */
 export interface ApprovalContext {
@@ -52,6 +56,12 @@ export interface ApprovalContext {
   /** The team's current approved strategy pin at commit time. */
   strategyPin: PlanStrategyPin | null
   pinDisposition: (planId: string, revision: number) => PinDisposition | null
+  /**
+   * The validation standing of the requested revision (plan-validation D9),
+   * computed inside the transaction from the prepared file parts. Undefined
+   * when no validation service is wired; the shipped entries never read it.
+   */
+  validation?: unknown
 }
 
 export interface ApprovalPrecondition {
@@ -102,22 +112,27 @@ export const APPROVAL_PRECONDITIONS: readonly ApprovalPrecondition[] = [
   },
 ]
 
-/** The pre-transaction gather step (pin 2 seam): awaited before approval's transaction; nothing to gather yet. */
+/** The pre-transaction gather step (pin 2 seam): awaited before approval's transaction. */
 // A replay pays this gather too: the prior event is found only inside the
-// transaction. Free while it is empty; a real gather (plan-validation) should
-// first short-circuit on a command id that already stands.
-export async function prepareApproval(_deps: ApprovalDeps, _plan: Plan, _request: ApprovalRequest): Promise<ApprovalPrepared> {
-  return {}
+// transaction, so a standing command id short-circuits before any file read.
+export async function prepareApproval(deps: ApprovalDeps, plan: Plan, request: ApprovalRequest): Promise<ApprovalPrepared> {
+  if (!deps.prepareStanding) return {}
+  if (deps.store.eventByCommand(plan.id, request.commandId)) return {}
+  const prepared = await deps.prepareStanding(plan.id, request.revision)
+  return prepared ? { validation: prepared } : {}
 }
 
 /** The one place the context is built, inside the transaction, from fresh rows and the prepared inputs. */
-export function buildApprovalContext(deps: ApprovalDeps, _prepared: ApprovalPrepared, plan: Plan, request: ApprovalRequest): ApprovalContext {
+export function buildApprovalContext(deps: ApprovalDeps, prepared: ApprovalPrepared, plan: Plan, request: ApprovalRequest): ApprovalContext {
   return {
     plan,
     revision: deps.store.revision(plan.id, request.revision),
     request,
     strategyPin: deps.currentStrategyPin(plan.teamId),
     pinDisposition: deps.pinDisposition,
+    ...(prepared !== null && typeof prepared === 'object' && 'validation' in prepared && prepared.validation !== undefined && deps.standing
+      ? { validation: deps.standing(prepared.validation) }
+      : {}),
   }
 }
 

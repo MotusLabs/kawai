@@ -111,15 +111,16 @@ describe('baseline', () => {
     expect(Object.keys(dump(dbPath))).toEqual(expect.arrayContaining(['agent_sessions', 'team_messages', 'plans', 'product_strategies', 'chat_turn_ends']))
   })
 
-  test('this build ships migration 2, and a version-2 database opens applying nothing', () => {
-    expect(MIGRATIONS.map(migration => [migration.version, migration.name])).toEqual([[2, 'strategy-impact']])
-    expect(newestVersion()).toBe(2)
+  test('this build ships its migrations, and a database at the newest version opens applying nothing', () => {
+    const newest = MIGRATIONS.at(-1)!
+    expect(MIGRATIONS.map(migration => migration.name)).toEqual(['strategy-impact', 'plan-validation'])
+    expect(newestVersion()).toBe(newest.version)
     initDatabase({ path: dbPath }).close()
     const before = dump(dbPath)
     const db = initDatabase({ path: dbPath })
     db.close()
     expect(dump(dbPath)).toEqual(before)
-    expect(versions(dbPath).map(row => row.version)).toEqual([1, 2])
+    expect(versions(dbPath).map(row => row.version)).toEqual([1, ...MIGRATIONS.map(migration => migration.version)])
   })
 
   test('a database with extra tables records version 1 and keeps them untouched', () => {

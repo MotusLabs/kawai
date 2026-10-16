@@ -16,6 +16,7 @@ import type { Database } from 'bun:sqlite'
 import { BUILD_VERSION } from '../version'
 import { applyBaselineSchema } from './baseline'
 import { CREATE_IMPACT_TABLES_SQL } from '../strategy/impactSchema'
+import { CREATE_VALIDATION_TABLES_SQL } from '../plans/validation/validationSchema'
 import type { BackupFile } from './backupFiles'
 import type { BackupOutcome } from './backups'
 
@@ -33,6 +34,9 @@ export const MIGRATIONS: readonly Migration[] = [
   // strategy-revision-impact D1: the proposal, decision, and request tables
   // beside the baseline's strategy_impact_reviews.
   { version: 2, name: 'strategy-impact', up: db => db.exec(CREATE_IMPACT_TABLES_SQL) },
+  // plan-validation D1: the report, assessment, and decision tables. Additive,
+  // no backfill: existing revisions start as Not validated.
+  { version: 3, name: 'plan-validation', up: db => db.exec(CREATE_VALIDATION_TABLES_SQL) },
 ]
 
 export const RESTORE_DOC = 'docs/operations/database-backups.md'

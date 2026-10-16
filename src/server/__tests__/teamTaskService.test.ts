@@ -276,7 +276,9 @@ describe('spawn-time registration', () => {
     // impact tools (strategy-revision-impact D10; read and propose, no decide).
     const resultTools = ['task_submit_result', 'task_submit_findings', 'task_handoff']
     const planTools = ['plan_list', 'plan_get', 'plan_create', 'plan_save_draft', 'plan_submit_for_review']
-    expect(TEAM_ALLOWED_TOOLS).toEqual([...expected.slice(0, 7), 'release_member', ...expected.slice(7), ...resultTools, 'strategy_list', 'strategy_get', 'strategy_save_draft', 'strategy_submit_for_review', 'strategy_impact_get', 'strategy_impact_propose', ...planTools]
+    // Validation tools (plan-validation D10; validate, read, assess — no decide or approve).
+    const validationTools = ['plan_validate', 'plan_validation_get', 'plan_assess']
+    expect(TEAM_ALLOWED_TOOLS).toEqual([...expected.slice(0, 7), 'release_member', ...expected.slice(7), ...resultTools, 'strategy_list', 'strategy_get', 'strategy_save_draft', 'strategy_submit_for_review', 'strategy_impact_get', 'strategy_impact_propose', ...planTools, ...validationTools]
       .map(name => `mcp__kawai-team__${name}`))
     await server.instance.close()
   })

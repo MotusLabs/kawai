@@ -85,6 +85,9 @@ export const CHAT_CONNECTION_TYPES = [
   'team-plan-withdraw',
   'team-plan-finish',
   'team-plan-reopen',
+  'team-plan-validate',
+  'team-plan-assess',
+  'team-plan-validation-decide',
 ] as const satisfies readonly ChatConnectionMessage['type'][]
 
 // Compile-time completeness: every handled type is listed above. The alias

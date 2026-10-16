@@ -21,6 +21,21 @@ Code facts this design relies on:
 - **Capacity reads.** `staffing.ts` `capacity()` and `routing/limitEvents.ts` `cooldownUntil` already answer caps and cooling.
 - **Hashing.** `canonicalJson` (`src/shared/productStrategy.ts`) is the hashing serializer that `durable-plans` reuses.
 
+### Reconciliation with the merged code (task 1.1)
+
+Names verified against master 5cc1690; no rename changes a contract above, and the facts below fix the concrete spellings this implementation uses:
+
+- `PlanContent`, `PlanStrategyPin` (`src/shared/plans.ts`), and `PlanStore.openPlans(teamId)` (`src/server/plans/planStore.ts`) are the merged spellings of C1/C2; the pin is `PlanRevision.pin: PlanStrategyPin | null`.
+- `APPROVAL_PRECONDITIONS` lives in `src/server/plans/planPreconditions.ts`. Its ctx is `ApprovalContext`, built in one place by `buildApprovalContext(deps, prepared, plan, request)`; the pre-transaction gather D9 adds is the shipped seam `prepareApproval(deps, plan, request): Promise<ApprovalPrepared>` (empty today), already awaited in `PlanService.approve`. Extending it keeps the shipped entries untouched and must short-circuit a command id that already stands (the seam's own comment). `PlanService` also takes a `preconditions` option that overrides the list wholesale (tests pin it); the append point is the default the service uses, which becomes the shipped list plus `validation-current` last.
+- The plan-change notification is `PlanStore.subscribe`/`announce(planId)` feeding `onPlanChange(teamId, planId?)` in `ChatSessionManager` and `PlanConnections.publish`; validation, assessment, and decision pushes ride the same path (D11).
+- `team-plan-result` is the `PlanServerMessage` member in `src/shared/planMessages.ts`; D11's additive fields extend it.
+- `ImpactService.gate(planId, revision)` and `stateKey(planId)` exist verbatim (`src/server/strategy/ImpactService.ts`, contracts C-I1/C-I2); `ImpactGate` is `{ state, pass, reviewId, decisionId, pin }` and `stateKey` hashes the plan's `approved`/`in_review` revisions' gates.
+- The pinned revision's ref set (D5) is `strategyAlignmentRefs(content)` in `src/shared/planChecks.ts`, the same set `PlanService.submit` checks alignment refs against.
+- Schema changes go through `MIGRATIONS` in `src/server/dbSafety/migrations.ts` (versions dense from 2; master holds 2 `strategy-impact`). The three tables register as migration `plan-validation`, version 3 provisionally — renumbered if `outbound-audit` lands first.
+- Change resolution uses `discoverRepository(commonDir)` (`src/server/git/worktreeList.ts`) plus `resolveChangeRegistry` and `conventionWorktreePath` (`src/server/workspace/changeRegistry.ts`); catalogs are `loadGroupCatalog`/`groupCatalogStamp` (`src/server/team/groupCatalog.ts`) and `resolveProfileCatalog` (`src/server/chat/profileCatalog.ts`); capacity is `WorktreeStaffing.capacity(teamId, groupId, worktree)` and cooling is `LimitEventStore` with `cooldownUntil(events, now)` (`src/server/team/routing/limitEvents.ts`).
+- Agent tool names join `TEAM_ALLOWED_TOOLS` through a name list in `src/server/team/mailboxTools.ts` (as `PLAN_TOOL_NAMES` does); new client message types join the explicit `CHAT_CONNECTION_TYPES` list in `src/server/chat/chatConnectionTypes.ts` (the `team-plan${string}` extraction prefix already exists).
+- The installed OpenSpec CLI is 1.14.2 (floor 1.14); CI installs 1.12.0, so no test may depend on a real CLI — the adapter tests and the walkthrough use a stub executable, and a below-floor or missing CLI is itself a check outcome.
+
 ## Goals / Non-Goals
 
 **Goals:**
@@ -163,7 +178,7 @@ type Finding = {
 | `change-claimed-elsewhere` | scope | — | another open plan's `in_review` or `approved` revision names the change | — |
 | `strategy-impact` | alignment | C-I1 gate does not pass (the state is named) | — | gate state |
 | `groups-known` | readiness | a role, change, or review group is not in the team's catalog | — | — |
-| `profiles-known` | readiness | a role profile is not a known profile | the group declares `profiles` and the role profile is not among them | — |
+| `profiles-known` | readiness | a role profile is not a known profile | the group declares `profiles` and the role profile is not among them (only a *known* profile warns — an unknown one already errors, and keys never collide across severities) | — |
 | `branch-free` | readiness | another open plan's `in_review` or `approved` revision lands on the same integration branch | — | whether the branch exists, its head, its worktree |
 | `capacity` | readiness | — | — | per role group: caps, live members, cooling profiles with their cooldown end |
 
