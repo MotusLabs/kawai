@@ -45,11 +45,11 @@ function call(overrides: Partial<OutboundCallInsert> = {}): OutboundCallInsert {
 }
 
 describe('the outbound-audit migration (3.3)', () => {
-  test('a fresh database records versions 1, 2, 3 and creates the tables, twice over', () => {
-    expect(MIGRATIONS[1]).toMatchObject({ version: 3, name: 'outbound-audit' })
+  test('a fresh database records versions 1 through 4 and creates the tables, twice over', () => {
+    expect(MIGRATIONS.at(-1)).toMatchObject({ version: 4, name: 'outbound-audit' })
     for (let i = 0; i < 2; i++) {
       const db = initDatabase({ path: dbPath })
-      expect(readSchemaVersion(db.db)).toBe(3)
+      expect(readSchemaVersion(db.db)).toBe(4)
       const tables = (db.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'outbound_%' ORDER BY name").all() as Array<{ name: string }>).map(row => row.name)
       expect(tables).toEqual(['outbound_acknowledgements', 'outbound_calls', 'outbound_outcomes'])
       db.close()
@@ -62,7 +62,7 @@ describe('the outbound-audit migration (3.3)', () => {
     before.exec(`INSERT INTO app_settings (key, value) VALUES ('theme', 'dark')`)
     before.close()
     const db = initDatabase({ path: dbPath })
-    expect(readSchemaVersion(db.db)).toBe(3)
+    expect(readSchemaVersion(db.db)).toBe(4)
     expect((db.db.prepare("SELECT value FROM app_settings WHERE key = 'theme'").get() as { value: string }).value).toBe('dark')
     db.close()
   })

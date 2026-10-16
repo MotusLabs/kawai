@@ -13,9 +13,10 @@
 // CI runs it — never run test:e2e against a live kawai server.
 import { expect, test, type Page } from '@playwright/test'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { initPlanRepository, serveDeltas, validateUntilReady } from './fixtures/planWalkthrough'
 
 test.skip(process.env.AGENTBOARD_CHAT_FIXTURE !== '1', 'Requires development chat fixture')
 
@@ -79,10 +80,16 @@ async function openPlan(page: Page, root: string) {
 
 test('inspect, approve, a stale second-tab approval, a linked task, and completion', async ({ page, context }, info) => {
   const root = mkdtempSync(join(tmpdir(), 'kawai-plans-browser-'))
-  mkdirSync(join(root, '.kawai/groups'), { recursive: true })
-  writeFileSync(join(root, '.kawai/groups/leads.md'), '---\nlabel: Leads\ncanCreatePlans: true\n---\nPlan the work')
-  writeFileSync(join(root, '.kawai/groups/devs.md'), '---\nlabel: Developers\n---\nBuild features')
-  writeFileSync(join(root, '.kawai/groups/reviewers.md'), '---\nlabel: Reviewers\n---\nReview')
+  // A validatable repository (plan-validation): a git root whose OpenSpec
+  // registry lists plan-api, the team's groups, and one canned delta — so
+  // the plan's revisions can reach a Ready report through Validate before
+  // approval, which the `validation-current` precondition now requires.
+  initPlanRepository(root, ['plan-api'], {
+    leads: '---\nlabel: Leads\ncanCreatePlans: true\n---\nPlan the work',
+    devs: '---\nlabel: Developers\n---\nBuild features',
+    reviewers: '---\nlabel: Reviewers\n---\nReview',
+  })
+  serveDeltas({ 'plan-api': [{ capability: 'chat', operation: 'ADDED', requirement: 'Presence' }] })
   try {
     await page.goto('/')
     const lead = await createChat(page, root, 'Plan lead', 'leads')
@@ -104,14 +111,20 @@ test('inspect, approve, a stale second-tab approval, a linked task, and completi
     await otherPanel.getByTestId('plan-approve-2').click()
     await expect(otherPanel.getByTestId('plan-approve-2-dialog')).toContainText('Approve exactly revision 2')
 
-    // 2. Approve revision 1 here: Ready.
+    // 2. Validate revision 1 to Ready, then approve it here: the plan reads
+    // Ready with an approved revision 1.
+    await validateUntilReady(panel, 1)
     await panel.getByTestId('plan-approve-1').click()
     await panel.getByTestId('plan-approve-1-confirm').click()
     await expect(panel.getByTestId('plan-detail-state')).toContainText('Ready')
     await expect(panel.getByTestId('plan-detail-state')).toContainText('approved revision 1')
 
-    // The other tab's open approval saw no approved revision: refused inline as stale.
+    // The other tab's open approval saw no approved revision: refused inline
+    // as stale. Revision 2 was never validated, so the refusal also names
+    // validation-current — assert the stale precondition itself, not the
+    // exact failure list.
     await otherPanel.getByTestId('plan-approve-2-confirm').click()
+    await expect(otherPanel.getByTestId('plan-error')).toContainText('approved-revision-unchanged')
     await expect(otherPanel.getByTestId('plan-error')).toContainText('changed while this approval was open')
     await other.screenshot({ path: info.outputPath('plans-stale-approval.png') })
     await other.close()

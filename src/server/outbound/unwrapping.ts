@@ -94,7 +94,7 @@ export function unwrapWrappers(argv: string[]): Unwrapped {
     // its targets are whatever the input feeds it (round 6 L4).
     if (rest[0] === 'xargs') {
       for (let j = 1; j < i && j < rest.length; j++) {
-        if (/^-I/.test(rest[j]!) || /^-J/.test(rest[j]!) || /^--replace/.test(rest[j]!)) {
+        if (rest[j]!.startsWith('-I') || rest[j]!.startsWith('-J') || rest[j]!.startsWith('--replace')) {
           return { argv: [], unknown: 'xargs replacement rewrites the command' }
         }
       }

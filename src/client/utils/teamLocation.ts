@@ -8,7 +8,7 @@
 // absent or unknown tab reads as the default tab (Tasks), never an error.
 export type WorkspaceTab = 'strategy' | 'tasks' | 'messages' | 'mailbox' | 'members' | 'plans'
 
-/** Every tab key, including the reserved extension points. */
+/** Every tab key. */
 export const WORKSPACE_TABS: readonly WorkspaceTab[] = [
   'strategy', 'tasks', 'messages', 'mailbox', 'members', 'plans',
 ]

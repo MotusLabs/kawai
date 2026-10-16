@@ -84,6 +84,10 @@ import { MessageQuery } from '../team/messageQuery'
 import { ChatTurnEndStore } from './chatTurnEndStore'
 import { TeamMailbox } from '../team/TeamMailbox'
 import { createMailboxServer } from '../team/mailboxTools'
+import { composePlanServices } from '../plans/planComposition'
+import type { ValidationService } from '../plans/validation/ValidationService'
+import type { OpenspecAdapter } from '../plans/validation/openspecAdapter'
+import type { ValidationDetailCache } from '../plans/validation/validationDetail'
 import type { MailboxManagement } from '../team/mailboxManagement'
 import { StrategyService } from '../strategy/StrategyService'
 import { StrategyStore } from '../strategy/strategyStore'
@@ -986,14 +990,25 @@ export class ChatSessionManager {
       getSession: id => this.records.get(id),
       ...(options.profileCatalogHome ? { homeDir: options.profileCatalogHome } : {}),
     })
-    // Durable plans: the service over the mailbox's plan store (the same one
-    // the task link reads), pinning against the strategy store above.
-    this.plans = new PlanService(this.teamMail.plans, {
-      getSession: id => this.records.get(id),
+    // Plans and their validation (durable-plans + plan-validation), composed
+    // the one way anything may compose them: the ValidationService over the
+    // same plan store, capacity evidence from staffing and the limit events
+    // through the team's own groups root, and the PlanService with
+    // validation's `validation-current` appended after the shipped approval
+    // preconditions.
+    const planServices = composePlanServices({
+      db: options.db.db,
+      plans: this.teamMail.plans,
       strategies: this.strategies.store,
-      pinDisposition: (planId, revision) => this.impact.pinDisposition(planId, revision),
+      impact: this.impact,
+      getSession: id => this.records.get(id),
+      capacityReads: { capacity: (teamId, group, worktree) => this.teamMail.staffing.capacity(teamId, group, worktree), cooldownUntil: profileId => this.teamMail.limits.cooldownUntil(profileId) },
       ...(options.profileCatalogHome ? { homeDir: options.profileCatalogHome } : {}),
     })
+    this.validation = planServices.validation
+    this.plans = planServices.plans
+    this.validationDetail = planServices.validationDetail
+    this.validationAdapter = planServices.adapter
     // The impact assessment derives from plans, and every plan's impact gate
     // from the strategy and the impact records (strategy-revision-impact D9):
     // each of the three stores refreshes both views of its team.
@@ -1121,6 +1136,33 @@ export class ChatSessionManager {
     return [...this.records.values()].filter(record => this.teams.teamOf(record.sessionId)?.teamId === teamId)
   }
 
+  /** The chats a conversation search covers: every non-archived record. */
+  activeRecords(): ChatSessionRecord[] {
+    return [...this.records.values()].filter(record => record.archivedAt == null)
+  }
+
+  /**
+   * One chat's events for conversation search (chat-session-search D1).
+   * Read-only: a loaded chat reads its memo plus live events; an unloaded one
+   * is replayed transiently, so the result is never memoized, never moves the
+   * chat's cwd, and never starts an agent. `readable: false` = the transcript
+   * was missing or unparseable (the replay's placeholder notice is dropped).
+   */
+  async searchableEvents(sessionId: string): Promise<{ events: ChatEvent[]; readable: boolean }> {
+    const record = this.records.get(sessionId)
+    if (!record) return { events: [], readable: true }
+    const memo = this.snapshotHistory.get(sessionId)
+    if (memo) return { events: [...memo, ...(this.liveEvents.get(sessionId) ?? [])], readable: true }
+    if (!record.sdkSessionId) return { events: [...(this.liveEvents.get(sessionId) ?? [])], readable: true }
+    const replay = await replayTranscriptFileAsync(
+      await findTranscriptPathAsync(record.sdkSessionId),
+      { excludeToolCallIds: this.liveToolCallIds(sessionId) }
+    )
+    const live = this.liveEvents.get(sessionId) ?? []
+    if (replay.status !== 'ok') return { events: [...live], readable: false }
+    return { events: [...replay.events, ...live], readable: true }
+  }
+
   /** Paused state last pushed per session. */
   private readonly parkedShown = new Map<string, SessionParkedState>()
 
@@ -1170,6 +1212,12 @@ export class ChatSessionManager {
   readonly turnEnds: ChatTurnEndStore
   /** Durable plans (durable-plans); the plan tools and UI actions go through it. */
   readonly plans: PlanService
+  /** Plan validation (plan-validation): reports, assessments, decisions, and the approval standing. */
+  readonly validation: ValidationService
+  /** The coalesced validation view for the Plans page pushes (plan-validation D11). */
+  readonly validationDetail: ValidationDetailCache
+  /** The one OpenSpec adapter (plan-validation D3); its probe is cached in-process. */
+  private readonly validationAdapter: OpenspecAdapter
   /** Strategy impact reviews (strategy-revision-impact); the impact tools and UI actions go through it. */
   readonly impact: ImpactService
   readonly dispatcher: MailDispatcher
@@ -1568,6 +1616,8 @@ export class ChatSessionManager {
 
   /** Server shutdown: settle every driver (callbacks cannot survive it). */
   shutdown(): void {
+    // Any CLI process group the adapter left running dies with us otherwise.
+    this.validationAdapter.dispose()
     // A restore still in flight stops at its next row (design D2).
     this.isShutDown = true
     this.teamMail.close()
@@ -1876,7 +1926,7 @@ export class ChatSessionManager {
       // The team must be known before the first spawn reads its prompt.
       await this.teams.track(record.sessionId, this.records.get(record.sessionId)?.projectPath ?? record.projectPath)
       const teamMcpServer = await createMailboxServer(this.mailbox, record.sessionId, {
-        tasks: this.tasks, results: this.results, strategies: this.strategies, plans: this.plans, releases: this.teamMail.releases, management: this.management,
+        tasks: this.tasks, results: this.results, strategies: this.strategies, plans: this.plans, validation: this.validation, releases: this.teamMail.releases, management: this.management,
       })
       const driver = new ChatSessionDriver({
         sessionId: record.sessionId,
@@ -1906,7 +1956,8 @@ export class ChatSessionManager {
         ),
         getEffort: () => this.teams.effortFor(
           record.sessionId,
-          this.records.get(record.sessionId)?.groupId
+          this.records.get(record.sessionId)?.groupId,
+          this.records.get(record.sessionId)?.claudeProfileId ?? 'default'
         ),
         getProviderEnv: () => this.providerEnv(),
         // Read per request so a live policy switch reaches the next
@@ -2251,7 +2302,17 @@ export class ChatSessionManager {
     if (event.type === 'error' || event.type === 'turn_completed') this.teamMail.settleRecipient(sessionId)
     // Profile routing: progress and limit outcomes for the mail a turn handles.
     if (event.type === 'tool_call') this.teamMail.toolCall(sessionId, event.tool, event.input)
-    if (event.type === 'turn_completed') this.teamMail.turnEnded(sessionId, event.subtype === 'success')
+    if (event.type === 'turn_completed') {
+      try {
+        this.teamMail.turnEnded(sessionId, event.subtype === 'success')
+      } catch (error) {
+        logger.warn('chat_turn_mail_ended_failed', {
+          sessionId,
+          error: error instanceof Error ? error.message : String(error),
+          ...(error instanceof Error && error.stack ? { stack: error.stack } : {}),
+        })
+      }
+    }
     // The morning summary's durable turn-end row (team-workspace D8): only a
     // task-bound session's turn is summary material; the task is the one the
     // session worked under at the moment the turn ended, and only a

@@ -212,6 +212,91 @@ describe('parseGroupFile', () => {
     }
   })
 
+  describe('profileEffort (group-profile-effort D3)', () => {
+    const parse = (frontmatter: string) => {
+      const parsed = parseGroupFile('juniors', `---\n${frontmatter}\n---\nJunior.`)
+      if (!parsed.ok) throw new Error(parsed.error)
+      return parsed.group
+    }
+
+    test('valid entries are read, quoted or not, beside the group effort', () => {
+      const group = parse("effort: low\nprofileEffort: { haiku: 'xhigh', glm-flash: max }\nprofiles: [haiku, glm-flash]")
+      expect(group.effort).toBe('low')
+      expect(group.profileEffort).toEqual({ haiku: 'xhigh', 'glm-flash': 'max' })
+      expect(group.warnings).toEqual([])
+    })
+
+    test('absent or empty is unset, without a group effort too', () => {
+      expect('profileEffort' in parse('label: A')).toBe(false)
+      expect('profileEffort' in parse('profileEffort: {}')).toBe(false)
+      const group = parse('profileEffort: { default: high }')
+      expect(group.profileEffort).toEqual({ default: 'high' })
+      expect(group.effort).toBeUndefined()
+    })
+
+    test('an unknown level is ignored alone', () => {
+      const group = parse('effort: low\nprofileEffort: { haiku: extreme, sonnet: high }\nprofiles: [haiku, sonnet]')
+      expect(group.profileEffort).toEqual({ sonnet: 'high' })
+      expect(group.warnings).toEqual([
+        'profileEffort.haiku must be low, medium, high, xhigh, max, got "extreme"; ignored',
+      ])
+    })
+
+    test('a key that is not a profile id is ignored alone', () => {
+      const group = parse('profileEffort: { Haiku: high, sonnet: low }\nprofile: sonnet')
+      expect(group.profileEffort).toEqual({ sonnet: 'low' })
+      expect(group.warnings).toEqual(['profileEffort: "Haiku" is not a valid profile id; ignored'])
+    })
+
+    test('a repeated profile keeps the first and the file still parses', () => {
+      const group = parse('profileEffort: { haiku: xhigh, haiku: low }\nprofile: haiku')
+      expect(group.profileEffort).toEqual({ haiku: 'xhigh' })
+      expect(group.warnings).toEqual(['profileEffort: "haiku" is listed twice; the later entry is ignored'])
+    })
+
+    test('the first occurrence decides: an invalid first entry is not replaced by a later valid one', () => {
+      const group = parse('effort: low\nprofileEffort: { haiku: extreme, haiku: high }\nprofile: haiku')
+      expect('profileEffort' in group).toBe(false)
+      expect(group.effort).toBe('low')
+      expect(group.warnings).toEqual([
+        'profileEffort.haiku must be low, medium, high, xhigh, max, got "extreme"; ignored',
+        'profileEffort: "haiku" is listed twice; the later entry is ignored',
+      ])
+    })
+
+    test('a list, a bare scalar, or a malformed map ignores the whole key', () => {
+      for (const raw of ['[haiku]', 'haiku', '{ haiku }', '{ haiku: high', '{ a: { b: high } }']) {
+        const group = parse(`effort: low\nprofileEffort: ${raw}`)
+        expect('profileEffort' in group).toBe(false)
+        expect(group.effort).toBe('low')
+        expect(group.warnings).toHaveLength(1)
+        expect(group.warnings[0]).toStartWith('profileEffort: ')
+        expect(group.warnings[0]).toEndWith('; ignored')
+      }
+    })
+
+    test('an unlisted profile warns but is kept; no listed profiles means default', () => {
+      const group = parse('profiles: { glm-flash: 3 }\nprofileEffort: { haiku: xhigh }')
+      expect(group.profileEffort).toEqual({ haiku: 'xhigh' })
+      expect(group.warnings).toEqual([
+        'profileEffort: "haiku" is not one of the group\'s profiles; it applies only to members on that profile',
+      ])
+      const noProfiles = parse('profileEffort: { default: high, haiku: low }')
+      expect(noProfiles.profileEffort).toEqual({ default: 'high', haiku: 'low' })
+      expect(noProfiles.warnings).toHaveLength(1)
+      expect(noProfiles.warnings[0]).toContain('"haiku"')
+    })
+  })
+
+  test('profiles and onLimit still refuse a repeated map key (only profileEffort allows repeats)', () => {
+    expect(parseGroupFile('g', '---\nprofiles: { glm: 2, glm: 1 }\n---\nx')).toEqual({
+      ok: false, error: 'profiles: key "glm" is repeated',
+    })
+    const parsed = parseGroupFile('g', '---\nonLimit: { otherwise: forward, otherwise: release }\n---\nx')
+    expect(parsed.ok && parsed.group.warnings).toEqual(['onLimit: key "otherwise" is repeated; using defaults'])
+    expect(parsed.ok && parsed.group.onLimit.otherwise).toBe('forward')
+  })
+
   test('parseDuration', () => {
     expect(parseDuration('90m')).toBe(5_400_000)
     expect(parseDuration('3h')).toBe(10_800_000)

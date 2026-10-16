@@ -46,7 +46,7 @@ Group 7's matrix rows for plan execution, integration, supervision, and revision
   - variables and `$(…)` reading unknown;
   - the strongest verdict and the match list of compound commands.
 - [x] 3.2 Implement `redact.ts` (D8). Verify with a fixture corpus: every listed secret shape, including query-string credentials and JSON and form body fields, is redacted in the command, each match segment, the destination, and outcome details; a non-secret command is unchanged; and truncation at 4096 characters is marked.
-- [x] 3.3 Add migration 3 `outbound-audit` (D6) to `MIGRATIONS` (after migration 2 `strategy-impact`), and `OutboundStore` as the only writer, with header comments saying so. Verify with tests:
+- [x] 3.3 Add migration 4 `outbound-audit` (D6) to `MIGRATIONS` (after migration 2 `strategy-impact` and migration 3 `plan-validation`), and `OutboundStore` as the only writer, with header comments saying so. Verify with tests:
   - migration on a fresh database and on a baseline copy, run twice;
   - the duplicate `(session_id, tool_use_id)` call and duplicate outcome are no-ops;
   - the store exposes no update or delete;

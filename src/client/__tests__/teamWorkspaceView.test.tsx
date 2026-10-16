@@ -10,6 +10,7 @@ import type { ClientMessage, SendClientMessage, Session } from '@shared/types'
 import type { ProductStrategy, StrategyDetail } from '@shared/productStrategy'
 import { normalizeStrategyContent } from '@shared/productStrategy'
 import TeamWorkspaceView from '../components/team/TeamWorkspaceView'
+import { runTasksEntrySelection } from '../components/team/tasksEntrySelection'
 import { resetTeamLocationForTests, useTeamLocationStore } from '../hooks/useTeamLocation'
 import { useSessionStore } from '../stores/sessionStore'
 import { useTeamTaskStore } from '../stores/teamTaskStore'
@@ -277,6 +278,8 @@ test('the selected task survives a visit to another tab; the browser Back to a l
 })
 
 test('returning to a Tasks page with a held selection never clears it, under StrictMode too', () => {
+  // End-state check only: react-test-renderer doesn't replay effects, so this
+  // cannot pin the replay itself — the replay test below drives it directly.
   const view = { open: true, loading: false, tasks: [{
     id: 't-1', teamId: 'team', title: 'Export', status: 'open', creator: { kind: 'human', sessionId: null }, parentId: null, worktree: null,
     openspecChange: null, revision: 1, direction: 'Build it', acceptance: null, createdAt: '2026-10-11T00:00:00.000Z',
@@ -298,6 +301,30 @@ test('returning to a Tasks page with a held selection never clears it, under Str
   active.push(renderer)
   unsubscribe()
   expect(seen).not.toContain(null)
+  expect(locationNow()).toEqual({ teamKey: '/repo', tab: 'tasks', id: 't-1' })
+  expect(useTeamTaskStore.getState().views['/repo']?.selectedTaskId).toBe('t-1')
+})
+
+test('the entry selection replay keeps a restored selection the stale closure cannot see', () => {
+  const view = { open: true, loading: false, tasks: [{
+    id: 't-1', teamId: 'team', title: 'Export', status: 'open', creator: { kind: 'human', sessionId: null }, parentId: null, worktree: null,
+    openspecChange: null, revision: 1, direction: 'Build it', acceptance: null, createdAt: '2026-10-11T00:00:00.000Z',
+    updatedAt: '2026-10-11T00:00:00.000Z', participants: [], assignment: null,
+  }], selectedTaskId: 't-1', detail: null, directory: [], pending: {}, error: null,
+    draft: { title: '', direction: '', acceptance: '', parentId: '', worktree: '', openspecChange: '', targetKind: '', targetId: '', instruction: '' },
+    flow: null, preview: null, previewPending: {}, targets: null, targetsLoading: false, commands: {}, commandRequests: {} }
+  act(() => { useTeamTaskStore.setState({ views: { '/repo': view as never } }) })
+  act(() => { useTeamLocationStore.getState().navigate({ teamKey: '/repo', tab: 'tasks', id: 't-1' }, { replace: true }) })
+  const navigate = useTeamLocationStore.getState().navigate
+  // StrictMode's replay: the entering run's closure (no id) runs again after
+  // the entry navigation restored the URL. The live read must win.
+  runTasksEntrySelection({ entering: false, closureLocationId: undefined, teamKey: '/repo', navigate })
+  expect(useTeamTaskStore.getState().views['/repo']?.selectedTaskId).toBe('t-1')
+  expect(locationNow()).toEqual({ teamKey: '/repo', tab: 'tasks', id: 't-1' })
+
+  // The entering run itself: no id anywhere, a held selection goes to the URL.
+  act(() => { useTeamLocationStore.getState().navigate({ teamKey: '/repo', tab: 'tasks' }, { replace: true }) })
+  runTasksEntrySelection({ entering: true, closureLocationId: undefined, teamKey: '/repo', navigate })
   expect(locationNow()).toEqual({ teamKey: '/repo', tab: 'tasks', id: 't-1' })
   expect(useTeamTaskStore.getState().views['/repo']?.selectedTaskId).toBe('t-1')
 })

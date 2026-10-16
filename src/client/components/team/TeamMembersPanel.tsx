@@ -21,6 +21,18 @@ export function profileCountLabel(profile: TeamMemberProfile): string {
     : `${profile.profileId} · ${profile.live} of ${profile.cap}`
 }
 
+/**
+ * The group level, then each per-profile override (group-profile-effort D4):
+ * listed profiles in the group's order, unlisted ones alphabetically.
+ */
+export function effortLabel(row: TeamMemberRow): string {
+  const group = row.effort ?? 'Claude Code settings decide'
+  const overrides = row.profileEffort ?? {}
+  const listed = row.profiles.map(profile => profile.profileId).filter(id => id in overrides)
+  const unlisted = Object.keys(overrides).filter(id => !listed.includes(id)).sort()
+  return [group, ...[...listed, ...unlisted].map(id => `${id}: ${overrides[id]}`)].join(' · ')
+}
+
 function Member({ member, onOpenSession }: { member: TeamMemberSession; onOpenSession: (sessionId: string) => void }) {
   return <li data-testid="member-session" data-session-id={member.sessionId}>
     <button type="button" className="hover:underline" onClick={() => onOpenSession(member.sessionId)}>{member.name}</button>
@@ -49,7 +61,7 @@ function Group({ row, onOpenSession }: { row: TeamMemberRow; onOpenSession: (ses
       <dt className="text-secondary">Routing strategy</dt><dd>{row.strategy}</dd>
       <dt className="text-secondary">On limit</dt>
       <dd>park if reset within {durationLabel(limit.parkIfResetWithinMs)}, otherwise {limit.otherwise}{limit.forwardTo ? ` to ${limit.forwardTo}` : ''}</dd>
-      <dt className="text-secondary">Effort</dt><dd>{row.effort ?? 'Claude Code settings decide'}</dd>
+      <dt className="text-secondary">Effort</dt><dd data-testid="member-effort">{effortLabel(row)}</dd>
     </dl>
     {row.warnings.length > 0 && <ul className="mt-2 text-chat-meta" data-testid="member-warnings">
       {row.warnings.map(warning => <li key={warning}>Warning: {warning}</li>)}

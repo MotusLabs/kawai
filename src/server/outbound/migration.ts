@@ -1,4 +1,4 @@
-// Migration 3 `outbound-audit` (execution-safety-recovery D6): the three
+// Migration 4 `outbound-audit` (execution-safety-recovery D6): the three
 // append-only audit tables — `outbound_calls`, `outbound_outcomes`,
 // `outbound_acknowledgements`. No UPDATE or DELETE statement for them exists
 // anywhere (E3); rows are never pruned. `OutboundStore`
@@ -66,7 +66,7 @@ CREATE TABLE IF NOT EXISTS outbound_acknowledgements (
  * on an existing file for store-level tests.
  */
 export const outboundAuditMigration: Migration = {
-  version: 3,
+  version: 4,
   name: 'outbound-audit',
   up(db: Database): void {
     db.exec(OUTBOUND_AUDIT_SQL)

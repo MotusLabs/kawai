@@ -111,18 +111,19 @@ describe('baseline', () => {
     expect(Object.keys(dump(dbPath))).toEqual(expect.arrayContaining(['agent_sessions', 'team_messages', 'plans', 'product_strategies', 'chat_turn_ends']))
   })
 
-  test('this build ships migrations 2 and 3, and a second open applies nothing', () => {
-    expect(MIGRATIONS.map(migration => [migration.version, migration.name])).toEqual([[2, 'strategy-impact'], [3, 'outbound-audit']])
-    expect(newestVersion()).toBe(3)
+  test('this build ships its migrations, and a database at the newest version opens applying nothing', () => {
+    const newest = MIGRATIONS.at(-1)!
+    expect(MIGRATIONS.map(migration => migration.name)).toEqual(['strategy-impact', 'plan-validation', 'outbound-audit'])
+    expect(newestVersion()).toBe(newest.version)
     initDatabase({ path: dbPath }).close()
-    expect(versions(dbPath).map(row => [row.version, row.name])).toEqual([[1, 'baseline'], [2, 'strategy-impact'], [3, 'outbound-audit']])
+    expect(versions(dbPath).map(row => [row.version, row.name])).toEqual([[1, 'baseline'], [2, 'strategy-impact'], [3, 'plan-validation'], [4, 'outbound-audit']])
     expect(Object.keys(dump(dbPath))).toEqual(expect.arrayContaining([
       'strategy_impact_proposals', 'outbound_calls', 'outbound_outcomes', 'outbound_acknowledgements',
     ]))
     const before = dump(dbPath)
     initDatabase({ path: dbPath }).close()
     expect(dump(dbPath)).toEqual(before)
-    expect(versions(dbPath).map(row => row.version)).toEqual([1, 2, 3])
+    expect(versions(dbPath).map(row => row.version)).toEqual([1, ...MIGRATIONS.map(migration => migration.version)])
   })
 
   test('a database with extra tables records version 1 and keeps them untouched', () => {
@@ -316,12 +317,12 @@ describe('a recorded migration name the registry disagrees with (CC round 3)', (
   test('matching names proceed, and the guard reads an unversioned database as fine', () => {
     // The real registry applied everything; opening again with it works.
     initDatabase({ path: dbPath }).close()
-    expect(versions(dbPath).map(row => row.name)).toEqual(['baseline', 'strategy-impact', 'outbound-audit'])
+    expect(versions(dbPath).map(row => row.name)).toEqual(['baseline', 'strategy-impact', 'plan-validation', 'outbound-audit'])
     initDatabase({ path: dbPath }).close()
     // An unversioned database has no rows to disagree with.
     preChangeDatabase()
     const db = initDatabase({ path: dbPath })
-    expect(versions(dbPath).map(row => row.version)).toEqual([1, 2, 3])
+    expect(versions(dbPath).map(row => row.version)).toEqual([1, 2, 3, 4])
     db.close()
   })
 
@@ -350,12 +351,12 @@ describe('a recorded migration name the registry disagrees with (CC round 3)', (
     expect(tables).not.toContain('strategy_impact_proposals')
   })
 
-  test('the pre-migration-3 backup predates the audit tables (CC round 3)', () => {
-    // A database at version 2 (strategy-impact) upgrades to 3; the backup
-    // taken before migration 3 must not contain the outbound tables.
-    initDatabase({ path: dbPath, migrations: MIGRATIONS.slice(0, 1) }).close()
+  test('the pre-migration-4 backup predates the audit tables (CC round 3)', () => {
+    // A database at version 3 (plan-validation) upgrades to 4; the backup
+    // taken before migration 4 must not contain the outbound tables.
+    initDatabase({ path: dbPath, migrations: MIGRATIONS.filter(migration => migration.version <= 3) }).close()
     initDatabase({ path: dbPath }).close()
-    const backup = fs.readdirSync(path.join(dir, 'backups')).find(name => name.endsWith('-pre-migration-3.db'))!
+    const backup = fs.readdirSync(path.join(dir, 'backups')).find(name => name.endsWith('-pre-migration-4.db'))!
     const backupPath = path.join(dir, 'backups', backup)
     const snapshot = new Database(backupPath, { readonly: true })
     const tables = (snapshot.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as Array<{ name: string }>).map(row => row.name)

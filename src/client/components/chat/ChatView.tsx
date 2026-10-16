@@ -26,25 +26,27 @@
 // and `chat-root`, whose --chat-font-size (Settings "Chat Font Size") sizes
 // chat text through the em-based text-chat-body / text-chat-meta utilities.
 import { useClaudeProfiles } from './useClaudeProfiles'
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import { useEffect, useMemo, useRef, type CSSProperties } from 'react'
 import type { SendClientMessage, ServerMessage, Session } from '@shared/types'
 import type { ConnectionStatus } from '../../stores/sessionStore'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { emptyTranscript, useChatStore } from '../../stores/chatStore'
+import { useRevealRow } from './useRevealRow'
 import { closedDebugView, useChatDebugStore } from '../../stores/chatDebugStore'
 import ChatActivityRow from './ChatActivityRow'
 import ChatHeader from './ChatHeader'
 import ChatDebugPanel from './ChatDebugPanel'
 import ChatMessages from './ChatMessages'
+import { AsideRow } from './ChatRow'
+import { agentLabelOf } from './transcriptLayout'
 import { openParticipantChat } from './openParticipant'
 import { useSessionStore } from '../../stores/sessionStore'
 import { useTeamMessageStore } from '../../stores/teamMessageStore'
 import ChatRequests from './ChatRequests'
 import ChatWorkersStrip from './ChatWorkersStrip'
 import NotificationStrip from './NotificationStrip'
-import SlashCommandMenu from './SlashCommandMenu'
+import ChatComposer from './ChatComposer'
 import UsageBar from './UsageBar'
-import { filterChatCommands, insertCommand, slashTokenAt } from './slashCommandFilter'
 import { requestChatArchive } from '../../utils/chatArchive'
 import { teamKeyOf } from '../../utils/teamKey'
 import { useWorkspaceStore } from '../../stores/workspaceStore'
@@ -74,9 +76,6 @@ export default function ChatView({ session, sendMessage, subscribe, connectionSt
   // Plan usage is per profile (usage bar design D4): every session of the
   // profile renders the same shared report.
   const usage = useChatStore(state => state.usage[profileId]) ?? null
-  const text = useChatStore(state => state.drafts[session.id] ?? '')
-  const setDraft = useChatStore(state => state.setDraft)
-  const setText = (value: string) => setDraft(session.id, value)
   const end = useRef<HTMLDivElement>(null)
   const connected = connectionStatus === 'connected'
   const archived = session.archivedAt != null
@@ -163,96 +162,15 @@ export default function ChatView({ session, sendMessage, subscribe, connectionSt
     }
     sendMessage({ type: 'chat-send', sessionId: session.id, text: trimmed })
   }
-  useEffect(() => { end.current?.scrollIntoView?.({ block: 'end' }) }, [transcript.events.length, transcript.throughSequence])
+  // A pending search reveal owns the scroll position: stick-to-bottom yields
+  // to it (the reveal hook below runs after this effect in the same commit).
+  useEffect(() => {
+    if (useChatStore.getState().pendingReveal?.sessionId === session.id) return
+    end.current?.scrollIntoView?.({ block: 'end' })
+  }, [transcript.events.length, transcript.throughSequence, session.id])
+  const transcriptBox = useRef<HTMLDivElement>(null)
+  useRevealRow({ sessionId: session.id, loaded: transcript !== EMPTY, container: transcriptBox })
 
-  // Slash-command menu: open while the caret is inside a `/` word anywhere in
-  // the message (slash-command-autocomplete-anywhere design D2) and a list can
-  // exist. Escape dismisses until the token changes; Enter/Tab choose only with
-  // a highlighted match, so unknown commands still send as typed.
-  const commandState = transcript.commands
-  const [highlighted, setHighlighted] = useState(0)
-  const [menuDismissed, setMenuDismissed] = useState(false)
-  const [caret, setCaret] = useState<number | null>(null)
-  const token = useMemo(() => (caret == null ? null : slashTokenAt(text, caret)), [text, caret])
-  useEffect(() => { setHighlighted(0); setMenuDismissed(false) }, [token?.start, token?.query])
-  const menuOpen =
-    token !== null && !menuDismissed && commandState.status !== 'unavailable'
-  const matches = useMemo(
-    () => (menuOpen && token ? filterChatCommands(commandState.commands, token.query) : []),
-    [menuOpen, commandState.commands, token]
-  )
-  // Choosing replaces only the token's word, in place (design D3): the caret
-  // state lands just after the inserted `/name `, and the layout effect below
-  // restores the DOM caret there after the choice commits. The restore is
-  // keyed on a fresh object per choice, not on the text: choosing a command
-  // that is already spelled out in the word leaves the value unchanged, so a
-  // text-keyed effect would never fire — the DOM caret would stay mid-word and
-  // the stale restore would land on the next keystroke instead.
-  const composerRef = useRef<HTMLTextAreaElement>(null)
-  const [caretRestore, setCaretRestore] = useState<{ caret: number } | null>(null)
-  useLayoutEffect(() => {
-    if (caretRestore) composerRef.current?.setSelectionRange(caretRestore.caret, caretRestore.caret)
-  }, [caretRestore])
-  const chooseCommand = (name: string) => {
-    if (!token) return
-    const next = insertCommand(text, token, name)
-    setText(next.text)
-    setCaret(next.caret)
-    setCaretRestore({ caret: next.caret })
-  }
-  const handleComposerKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (matches.length > 0) {
-      if (event.key === 'ArrowDown') {
-        event.preventDefault()
-        setHighlighted((highlighted + 1) % matches.length)
-        return
-      }
-      if (event.key === 'ArrowUp') {
-        event.preventDefault()
-        setHighlighted((highlighted - 1 + matches.length) % matches.length)
-        return
-      }
-      if (event.key === 'Enter' || event.key === 'Tab') {
-        event.preventDefault()
-        const chosen = matches[highlighted] ?? matches[0]!
-        chooseCommand(chosen.name)
-        return
-      }
-      if (event.key === 'Escape') {
-        event.preventDefault()
-        setMenuDismissed(true)
-        return
-      }
-    }
-    if (event.key === 'Enter' && !event.shiftKey) {
-      event.preventDefault()
-      event.currentTarget.form?.requestSubmit()
-    }
-  }
-  // The caret drives the slash menu (design D2). A non-collapsed selection has
-  // no single caret and keeps the menu closed; when the event carries no
-  // selectionStart (the test renderer), typing left the caret at the end.
-  const handleComposerChange = (event: React.ChangeEvent<HTMLTextAreaElement>) => {
-    const { value, selectionStart, selectionEnd } = event.target
-    setText(value)
-    if (selectionStart == null) setCaret(value.length)
-    else setCaret(selectionStart === selectionEnd ? selectionStart : null)
-  }
-  // onSelect covers caret moves that never type: arrows, clicks, selections.
-  const handleComposerSelect = (event: React.SyntheticEvent<HTMLTextAreaElement>) => {
-    const { selectionStart, selectionEnd } = event.target as HTMLTextAreaElement
-    if (selectionStart == null) return
-    setCaret(selectionStart === selectionEnd ? selectionStart : null)
-  }
-  // The argument hint of a just-inserted or typed `/<name> ` directly before
-  // the caret (design D4) shows until the user types arguments (the
-  // trailing-space match stops matching then).
-  const hintName = caret == null ? null : /(?:^|\s)\/(\S+) $/.exec(text.slice(0, caret))?.[1]
-  const hintCommand = hintName
-    ? commandState.commands.find(
-        (command) => command.name === hintName || command.aliases.includes(hintName)
-      )
-    : undefined
   // Activity row hiding rules (design D4): text streaming is its own visible
   // progress, a pending approval/question owns the footer, and archived chats
   // are read-only — none of them also show the live phase row.
@@ -290,15 +208,18 @@ export default function ChatView({ session, sendMessage, subscribe, connectionSt
         {/* The live-workers strip (design D8): live rows only, hidden in
             archived chats and when nothing runs (the strip hides itself). */}
         {!archived && <ChatWorkersStrip sessionId={session.id} sendMessage={sendMessage} connected={connected} />}
-        <div className="min-h-0 flex-1 overflow-y-auto p-4">
+        <div ref={transcriptBox} className="min-h-0 flex-1 overflow-y-auto p-4">
           <div className="mx-auto max-w-4xl space-y-4">
             <ChatMessages events={transcript.events} projectPath={session.projectPath}
               sessionId={session.id} sendMessage={sendMessage} connected={connected}
-              archived={archived}
+              archived={archived} agentLabel={agentLabelOf(session.agentType)}
               sessions={liveSessions} directory={participantDirectory} onOpenParticipant={openParticipantChat} />
-            {showActivity && (
-              <ChatActivityRow activity={activity.value} phaseStartedAt={activity.phaseStartedAt} />
-            )}
+            {/* The activity row keeps to the transcript's body column (chat-transcript-layout D3). */}
+            {showActivity && <div className="chat-transcript">
+              <AsideRow spacing="">
+                <ChatActivityRow activity={activity.value} phaseStartedAt={activity.phaseStartedAt} />
+              </AsideRow>
+            </div>}
             {!archived && <ChatRequests requests={transcript.pendingRequests} sessionId={session.id} sendMessage={sendMessage} disabled={!connected} />}
             <div ref={end} />
           </div>
@@ -312,35 +233,9 @@ export default function ChatView({ session, sendMessage, subscribe, connectionSt
             </div>
           </div>
         ) : (
-          <form className="border-t border-border p-3" onSubmit={event => {
-            event.preventDefault()
-            if (!connected || !text.trim()) return
-            submitText(text.trim())
-            setText('')
-          }}>
-            <div className="mx-auto max-w-4xl">
-              {menuOpen && (
-                <div className="mb-2">
-                  <SlashCommandMenu matches={matches} loading={commandState.status === 'loading'}
-                    highlightedIndex={highlighted} onHighlight={setHighlighted}
-                    onChoose={command => chooseCommand(command.name)} />
-                </div>
-              )}
-              <div className="flex items-end gap-2">
-                <textarea ref={composerRef} aria-label="Message Claude" className="input chat-composer min-h-20 flex-1 resize-y text-chat-body" value={text}
-                  disabled={!connected} placeholder="Message Claude…" onChange={handleComposerChange}
-                  onSelect={handleComposerSelect} onKeyDown={handleComposerKeyDown} />
-                <button className="btn btn-primary text-chat-meta" disabled={!connected || !text.trim()}>Send</button>
-                <button type="button" className="btn text-chat-meta" disabled={!connected || session.status === 'waiting'}
-                  onClick={() => sendMessage({ type: 'chat-interrupt', sessionId: session.id })}>Stop</button>
-              </div>
-              {hintCommand?.argumentHint && (
-                <p className="mt-1 font-mono text-xs text-muted" data-testid="command-argument-hint">
-                  /{hintCommand.name} {hintCommand.argumentHint}
-                </p>
-              )}
-            </div>
-          </form>
+          <ChatComposer key={session.id} sessionId={session.id} status={session.status}
+            connected={connected} commandState={transcript.commands} onSubmit={submitText}
+            onInterrupt={() => sendMessage({ type: 'chat-interrupt', sessionId: session.id })} />
         )}
       </div>
       {/* The side slot hosts only the debug panel (team-workspace-pages D4). */}

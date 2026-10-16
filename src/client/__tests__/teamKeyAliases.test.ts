@@ -58,6 +58,13 @@ test('a strategy action result sent before a rekey settles under the new key', (
   expect(Object.keys(view.pending)).toEqual([])
 })
 
+test('the view migration moves the plan views with their team', () => {
+  useTeamPlanStore.getState().open('/repo/wt', 'p1')
+  rekeyTeamViewsForTests('/repo/wt', '/repo')
+  expect(useTeamPlanStore.getState().views['/repo/wt']).toBeUndefined()
+  expect(useTeamPlanStore.getState().views['/repo']?.selected).toBe('p1')
+})
+
 test('a plan command result sent before a rekey settles under the new key, keeping its selection and armed command', () => {
   const plans = useTeamPlanStore.getState()
   plans.open('/repo/wt', 'p1')

@@ -8,7 +8,7 @@
 // Archived chats render the stored reading as inert text — no refresh
 // affordance — because the agent that would refresh it is stopped.
 // The compact form (narrowest header, chat-header-layout D8) shows only the
-// percentage; the title still carries the counts.
+// percentage; the title and a screen-reader label still carry the counts.
 import type { ChatContextUsage } from '@shared/chat'
 
 /**
@@ -37,7 +37,10 @@ export default function ChatContextMeter({ usage, compact = false }: { usage: Ch
       data-testid="chat-context-meter"
       title={title}
     >
-      {compact ? `${percent}%` : <>Context {percent}% · {formatContextTokens(usage.usedTokens)} /{' '}
+      {compact ? <>
+        <span aria-hidden="true">{percent}%</span>
+        <span className="sr-only">Context {percent}% · {usage.usedTokens} of {usage.thresholdTokens} tokens</span>
+      </> : <>Context {percent}% · {formatContextTokens(usage.usedTokens)} /{' '}
         {formatContextTokens(usage.thresholdTokens)}</>}
       {usage.thresholdApproximate ? '~' : ''}
     </span>

@@ -24,6 +24,8 @@ import { getSessionOrderKey, getUniqueHosts, getUniqueProjects, sortSessions } f
 import { formatRelativeTime } from '../utils/time'
 import { useSettingsStore } from '../stores/settingsStore'
 import { useSessionStore } from '../stores/sessionStore'
+import { useSessionSearchStore } from '../stores/sessionSearchStore'
+import { normalizeSearchQuery } from '@shared/sessionSearch'
 import { getEffectiveModifier, getModifierDisplay } from '../utils/device'
 import { useCounterBump } from '../hooks/useCounterBump'
 import { useExitCleanup } from '../hooks/useExitCleanup'
@@ -31,6 +33,8 @@ import { useStableValue, stringArraysEqual } from '../hooks/useStableValue'
 import HostFilterDropdown from './HostFilterDropdown'
 import ProjectFilterDropdown from './ProjectFilterDropdown'
 import SessionPreviewModal from './SessionPreviewModal'
+import SessionSearchBox from './SessionSearchBox'
+import SessionSearchResults from './SessionSearchResults'
 import HibernatingSessionItem from './HibernatingSessionItem'
 import HistorySessionItem from './HistorySessionItem'
 import { SortableSessionItem } from './SessionRow'
@@ -207,6 +211,9 @@ export default function SessionList({
 
   const shortcutModifier = useSettingsStore((state) => state.shortcutModifier)
   const modDisplay = getModifierDisplay(getEffectiveModifier(shortcutModifier))
+  // A searchable query replaces the sections with chat search results; the
+  // sections' own state (filters, collapse) lives above and is untouched.
+  const searching = useSessionSearchStore(state => normalizeSearchQuery(state.query) !== null)
   const sessionSortMode = useSettingsStore((state) => state.sessionSortMode)
   const setSessionSortMode = useSettingsStore((state) => state.setSessionSortMode)
   const sessionSortDirection = useSettingsStore(
@@ -680,9 +687,12 @@ export default function SessionList({
           onSelect={setProjectFilters}
           hasHiddenPermissions={hiddenPermissionCount > 0}
         />
+        <SessionSearchBox modDisplay={modDisplay} />
       </div>
 
-      {workspaceView && !loading ? (
+      {searching ? (
+        <SessionSearchResults selectedSessionId={selectedSessionId} now={nowTick} />
+      ) : workspaceView && !loading ? (
         <div
           ref={navigatorBodyRef}
           className="flex min-h-0 flex-1 flex-col"

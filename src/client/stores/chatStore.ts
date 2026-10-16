@@ -1,5 +1,6 @@
 // Chat transcripts are replaced on attach and advanced by ordered live events.
-// Final assistant text replaces its streamed preview; request state is shared
+// Final assistant text replaces its streamed preview — one entry per text
+// block, keeping the block's first time; request state is shared
 // through server resolution events rather than optimistic local answers. The
 // live-turn activity is a single current value (not an event): it is anchored
 // on the client clock from the server's elapsedMs and cleared on turn end.
@@ -16,6 +17,8 @@
 // notices close through the server, and account notices close per browser
 // tab only — a hidden one returns when its text (the day count) changes.
 // Unsubmitted composer drafts are client-only state, keyed by session.
+// A search result asks the chat view to reveal one transcript row through
+// `pendingReveal` (chat-session-search D5); the view consumes it.
 import { create } from 'zustand'
 import type {
   ChatActivity,
@@ -28,6 +31,7 @@ import type {
   ChatWorker,
   ChatBackgroundTask,
 } from '@shared/chat'
+import { earliestTime } from '@shared/chatTime'
 import type { SendClientMessage, ServerMessage, SessionStatus } from '@shared/types'
 
 /** The live activity plus its client-clock anchor (design D6). */
@@ -121,14 +125,20 @@ export function applyChatEvents(state: ChatTranscript, incoming: ChatEvent[]): C
     next.seen.add(event.id)
     next.throughSequence = Math.max(next.throughSequence, event.sequence)
     if (event.type === 'assistant_delta' || event.type === 'assistant_text') {
-      const index = next.events.findIndex(candidate =>
-        (candidate.type === 'assistant_text' || candidate.type === 'assistant_delta') &&
-        candidate.messageId === event.messageId && candidate.turnId === event.turnId)
+      // One entry per text block (chat-transcript-layout D5): merge only into
+      // the newest entry of this message when nothing followed it, so text
+      // after a tool call becomes its own entry in order. The entry keeps its
+      // earliest valid time (D2) so the clock never moves while it streams.
+      const index = next.events.length - 1
       const previous = next.events[index]
-      const previousText = previous?.type === 'assistant_text' ? previous.text : previous?.type === 'assistant_delta' ? previous.delta : ''
+      const merges = previous !== undefined &&
+        (previous.type === 'assistant_text' || previous.type === 'assistant_delta') &&
+        previous.messageId === event.messageId && previous.turnId === event.turnId
+      const previousText = !merges ? '' : previous.type === 'assistant_text' ? previous.text : previous.delta
       const text = event.type === 'assistant_text' ? event.text : previousText + event.delta
-      const normalized: ChatEvent = { ...event, type: 'assistant_text', text }
-      if (index >= 0) next.events[index] = normalized
+      const at = merges ? earliestTime(previous.at, event.at) : event.at
+      const normalized: ChatEvent = { ...event, type: 'assistant_text', text, at }
+      if (merges) next.events[index] = normalized
       else next.events.push(normalized)
     } else {
       next.events.push(event)
@@ -171,6 +181,10 @@ interface ChatStore {
    * reload.
    */
   closedAccountNotices: Record<string, Set<string>>
+  /** Transcript row a search result asked to reveal; one at a time, consumed by ChatView. */
+  pendingReveal: { sessionId: string; anchorId: string } | null
+  requestReveal: (sessionId: string, anchorId: string) => void
+  clearReveal: () => void
   apply: (sessionId: string, events: ChatEvent[]) => void
   snapshot: (message: Extract<ServerMessage, { type: 'chat-snapshot' }>) => void
   /** Replace one session's command list (chat-commands push). */
@@ -225,6 +239,9 @@ export const useChatStore = create<ChatStore>((set) => ({
   workerBodies: {},
   taskOutputs: {},
   closedAccountNotices: {},
+  pendingReveal: null,
+  requestReveal: (sessionId, anchorId) => set({ pendingReveal: { sessionId, anchorId } }),
+  clearReveal: () => set({ pendingReveal: null }),
   apply: (sessionId, events) => set(state => ({ sessions: {
     ...state.sessions, [sessionId]: applyChatEvents(state.sessions[sessionId] ?? emptyTranscript(), events),
   } })),
@@ -425,6 +442,7 @@ export const useChatStore = create<ChatStore>((set) => ({
     delete taskOutputs[sessionId]
     const closedAccountNotices = { ...state.closedAccountNotices }
     delete closedAccountNotices[sessionId]
-    return { sessions, drafts, workerBodies, taskOutputs, closedAccountNotices }
+    const pendingReveal = state.pendingReveal?.sessionId === sessionId ? null : state.pendingReveal
+    return { sessions, drafts, workerBodies, taskOutputs, closedAccountNotices, pendingReveal }
   }),
 }))

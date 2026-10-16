@@ -13,6 +13,7 @@ profiles: { glm: 2, mimo: 1, claude: 1 }   # or a list: [claude, glm]
 strategy: first-available                  # or profile-order
 onLimit: { parkIfResetWithin: 3h, otherwise: forward, forwardTo: architects }
 effort: medium                             # low, medium, high, xhigh, max
+profileEffort: { haiku: xhigh }            # per-profile effort; beats effort
 releaseOnTaskClose: true                   # default; false keeps spawned members
 worktreeScoped: true                       # default; false takes task mail anywhere
 canReleaseMembers: true                    # default; false opts out of release_member
@@ -43,6 +44,15 @@ canManageMailbox: true                     # default false
   environment overrides it and a settings maximum clamps it. `/effort` in a
   chat still changes that running agent. An invalid value is reported and
   ignored. Gateway models (GLM, MiMo, ...) may ignore effort.
+- `profileEffort` is a single-line map from profile id to an effort level. A
+  member whose session profile has an entry launches at that level instead of
+  `effort`, spawned or created by you; members on other profiles keep
+  `effort`, and with neither they get no effort from kawai. It is read at each
+  agent start like `effort`. A bad entry never rejects the file: a value that
+  is not a map is ignored whole; a bad profile id, a bad level, or a repeat of
+  a profile already listed (the later entry is ignored, even if the first was
+  invalid) is ignored alone; and an entry for a profile the group does not list
+  is reported but still applies. The Members tab shows the group level followed by each override.
 - `releaseOnTaskClose` (default `true`): when a task becomes `done` or
   `cancelled`, its live spawned members are released — archived, never killed —
   once each has settled (idle, no pending approval or answer, no live

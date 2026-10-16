@@ -10,7 +10,6 @@ import {
   mcpCallCandidate,
   parseGitUrl,
   strongest,
-  type JudgedCandidate,
 } from '../outbound/classify'
 import { parseSends } from '../outbound/rules'
 import { facts, judged, verdictOf } from './outboundClassifyFacts'
