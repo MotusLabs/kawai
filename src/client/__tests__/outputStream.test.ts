@@ -2,7 +2,7 @@
 // buffering, idle/max flush, the backpressure hold with its 50ms force cap,
 // and the generation token that discards stale write acks across lifecycle
 // boundaries. Previously this logic was only reachable through useTerminal.
-import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
+import { describe, test, expect, beforeEach, afterEach, jest } from 'bun:test'
 import { TerminalOutputStream } from '../terminal/outputStream'
 
 const globalAny = globalThis as unknown as { window?: unknown }
@@ -197,29 +197,36 @@ describe('TerminalOutputStream', () => {
     stream.invalidate()
   })
 
-  test('continuous writes do not restart the 50ms force cap', async () => {
+  test('continuous writes do not restart the 50ms force cap', () => {
     const terminal = new TerminalMock()
     const { stream } = createStream(() => terminal)
 
-    stream.push('first')
-    stream.flush()
-    stream.push('held-1')
-    stream.flush() // defers behind the pending write; cap armed now
-    const armedAt = Date.now()
+    jest.useFakeTimers()
+    try {
+      stream.push('first')
+      stream.flush()
+      stream.push('held-1')
+      stream.flush() // defers behind the pending write; cap armed now
+      // Anchor on Date.now() after useFakeTimers: CI's Bun 1.3 drops
+      // setSystemTime on advanceTimersByTime.
+      const armedAt = Date.now()
 
-    // A later chunk defers again — it must extend the held data but NOT push
-    // the armed cap's deadline out (single non-restarting cap).
-    await sleep(20)
-    stream.push('held-2')
-    stream.flush()
-    expect(terminal.writes).toEqual(['first'])
+      // A later chunk defers again — it must extend the held data but NOT push
+      // the armed cap's deadline out (single non-restarting cap).
+      jest.advanceTimersByTime(20)
+      stream.push('held-2')
+      stream.flush()
+      expect(terminal.writes).toEqual(['first'])
 
-    // 65ms after arming: the cap fired once at 50ms with ALL held data
-    // joined — had it restarted at the second defer, nothing would have
-    // flushed yet (20+50=70ms) and the join would miss held-2.
-    await sleep(45)
-    expect(Date.now() - armedAt).toBeGreaterThanOrEqual(55)
-    expect(terminal.writes).toEqual(['first', 'held-1held-2'])
+      // 65ms after arming: the cap fired once at 50ms with ALL held data
+      // joined — had it restarted at the second defer, nothing would have
+      // flushed yet (20+50=70ms) and the join would miss held-2.
+      jest.advanceTimersByTime(45)
+      expect(Date.now() - armedAt).toBeGreaterThanOrEqual(55)
+      expect(terminal.writes).toEqual(['first', 'held-1held-2'])
+    } finally {
+      jest.useRealTimers()
+    }
   })
 
   test('invalidate clears the deferred flag and force cap', async () => {
