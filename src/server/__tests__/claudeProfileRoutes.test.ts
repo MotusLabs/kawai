@@ -23,7 +23,7 @@ test('catalog returns identifiers and labels only', async () => {
   expect(response.status).toBe(200)
   const data = await response.json()
   expect(data.errors).toEqual([])
-  expect(data.profiles).toHaveLength(5)
+  expect(data.profiles).toHaveLength(9)
   for (const item of data.profiles) expect(Object.keys(item).sort()).toEqual(['id', 'label'])
 })
 
@@ -33,21 +33,21 @@ test('catalog resolves per requested project path', async () => {
     // Unknown before the file exists; known after .kawai defines it.
     const before = await createClaudeProfileRoutes().request(`/?projectPath=${encodeURIComponent(project)}`)
     const beforeData = await before.json()
-    expect(beforeData.profiles.some((profile: { id: string }) => profile.id === 'glm-flash')).toBe(false)
+    expect(beforeData.profiles.some((profile: { id: string }) => profile.id === 'glm-turbo')).toBe(false)
 
     fs.mkdirSync(path.join(project, '.kawai'), { recursive: true })
     fs.writeFileSync(path.join(project, '.kawai', 'profiles.json'), JSON.stringify({
-      'glm-flash': { label: 'GLM Flash', model: 'glm-5.3-flash[1m]' },
+      'glm-turbo': { label: 'GLM Flash', model: 'glm-5.3-flash[1m]' },
     }))
     const after = await createClaudeProfileRoutes().request(`/?projectPath=${encodeURIComponent(project)}`)
     const afterData = await after.json()
-    const entry = afterData.profiles.find((profile: { id: string }) => profile.id === 'glm-flash')
-    expect(entry).toEqual({ id: 'glm-flash', label: 'GLM Flash' })
+    const entry = afterData.profiles.find((profile: { id: string }) => profile.id === 'glm-turbo')
+    expect(entry).toEqual({ id: 'glm-turbo', label: 'GLM Flash' })
     // Credentials and environment maps never cross the boundary.
     for (const item of afterData.profiles) expect(Object.keys(item).sort()).toEqual(['id', 'label'])
 
     // Session-create validation uses the same per-path catalog.
-    expect(profileRequestError({ kind: 'chat', projectPath: project, claudeProfileId: 'glm-flash' })).toBeNull()
+    expect(profileRequestError({ kind: 'chat', projectPath: project, claudeProfileId: 'glm-turbo' })).toBeNull()
     expect(profileRequestError({ kind: 'chat', projectPath: project, claudeProfileId: 'unknown' })).toContain('Unknown')
   } finally {
     fs.rmSync(project, { recursive: true, force: true })

@@ -11,10 +11,14 @@ The shipped default catalog:
 | ID | Label | Routing and models |
 | --- | --- | --- |
 | default | Default | Existing server environment and global provider Settings |
-| glm | GLM | `https://api.z.ai/api/anthropic`; starts on Sonnet, mapped to `glm-5.3-flash[1m]`; Opus maps to `glm-5.3[1m]`; auto-compact window `1000000` |
+| glm | GLM | `https://api.z.ai/api/anthropic`; starts on Opus, mapped to `glm-5.3[1m]`; Sonnet maps to `glm-5.3-flash[1m]`; auto-compact window `1000000`; reset zone `Asia/Shanghai` |
+| glm-flash | GLM Flash | `https://api.z.ai/api/anthropic`; starts on Sonnet, mapped to `glm-5.3-flash[1m]`; Opus maps to `glm-5.3[1m]`; auto-compact window `1000000`; reset zone `Asia/Shanghai` |
 | minimax | MiniMax | `https://api.minimax.io/anthropic`; `MiniMax-M3` |
 | mimo | MiMo | `https://api.xiaomimimo.com/anthropic`; starts on `mimo-v2.6-pro`; Sonnet maps to `mimo-v2.6-flash`, Opus to `mimo-v2.6-pro` |
 | kimi | Kimi | `https://api.moonshot.ai/anthropic`; no prescribed model |
+| opus | Claude Opus | prescribed model `claude-opus-5-5` |
+| sonnet | Claude Sonnet | prescribed model `claude-sonnet-5-5` |
+| haiku | Claude Haiku | prescribed model `claude-haiku-5-5` |
 
 ## Catalog files
 

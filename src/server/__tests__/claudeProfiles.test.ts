@@ -51,8 +51,11 @@ describe('Claude profile resolution', () => {
   test('catalog metadata has stable order and contains only identifiers and labels', () => {
     expect(claudeProfileMetadata({ homeDir: tempHome })).toEqual([
       { id: 'default', label: 'Default' }, { id: 'glm', label: 'GLM' },
+      { id: 'glm-flash', label: 'GLM Flash' },
       { id: 'minimax', label: 'MiniMax' }, { id: 'mimo', label: 'MiMo' },
       { id: 'kimi', label: 'Kimi' },
+      { id: 'opus', label: 'Claude Opus' }, { id: 'sonnet', label: 'Claude Sonnet' },
+      { id: 'haiku', label: 'Claude Haiku' },
     ])
   })
   test('documentation matches catalog labels and effective mappings', () => {
@@ -71,14 +74,14 @@ describe('Claude profile resolution', () => {
   test('omitted profile preserves existing Default behavior and unknown IDs fail', () => {
     expect(resolveClaudeProfile(undefined, {}, { homeDir: tempHome })).toEqual({})
     expect(resolveClaudeProfile('default', { ANTHROPIC_MODEL: 'global' }, { homeDir: tempHome }).env?.ANTHROPIC_MODEL).toBe('global')
-    for (const id of ['unknown', 'glm-flash', '__proto__']) {
+    for (const id of ['unknown', 'glm-turbo', '__proto__']) {
       expect(() => resolveClaudeProfile(id, {}, { homeDir: tempHome })).toThrow('Unknown Claude profile')
     }
   })
   test('all effective wrapper assignments and prescribed models match', () => {
     const ctx = { homeDir: tempHome }
     const glm = resolveClaudeProfile('glm', {}, ctx)
-    expect(glm.model).toBe('sonnet')
+    expect(glm.model).toBe('opus')
     expect(glm.env).toMatchObject({ ANTHROPIC_BASE_URL: 'https://api.z.ai/api/anthropic', ANTHROPIC_DEFAULT_SONNET_MODEL: 'glm-5.3-flash[1m]', ANTHROPIC_DEFAULT_OPUS_MODEL: 'glm-5.3[1m]', CLAUDE_CODE_AUTO_COMPACT_WINDOW: '1000000' })
     const minimax = resolveClaudeProfile('minimax', {}, ctx)
     expect(minimax.model).toBe('MiniMax-M3')

@@ -173,3 +173,23 @@ describe('loadGroupCatalog', () => {
     expect(leads?.sources.some(source => source.file === projectFile)).toBe(false)
   })
 })
+
+describe('tracked groups against the shipped profile catalog', () => {
+  test('every profile a tracked group file references is defined by the shipped catalog alone', () => {
+    // A fresh clone has no project catalog (the root .kawai/profiles.json is
+    // untracked), so the groups are loaded from a copy of the tracked files
+    // with an empty temp HOME — exactly CI's resolution.
+    const trackedGroups = path.resolve(import.meta.dir, '../../../.kawai/groups')
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kawai-groups-shipped-'))
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kawai-groups-home-'))
+    try {
+      fs.cpSync(trackedGroups, path.join(root, '.kawai', 'groups'), { recursive: true })
+      const catalog = loadGroupCatalog({ groupsRoot: root, homeDir: home })
+      const unknown = catalog.warnings.filter(warning => warning.includes('is not defined'))
+      expect(unknown).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+      fs.rmSync(home, { recursive: true, force: true })
+    }
+  })
+})

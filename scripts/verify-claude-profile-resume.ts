@@ -39,7 +39,7 @@ const db = initDatabase({ path: path.join(dir, 'sessions.db') })
 const events: { sessionId: string; event: ChatEvent }[] = []
 const secret = 'synthetic-profile-resume-key'
 const factory: ChatQueryFactory = ({ prompt, options }) => {
-  const route = options.model === 'sonnet' ? 'glm' : 'minimax'
+  const route = options.model === 'opus' ? 'glm' : 'minimax'
   const expected = route === 'glm' ? glmBaseUrl() : 'https://api.minimax.io/anthropic'
   if (options.env?.ANTHROPIC_BASE_URL !== expected) throw new Error('Incorrect selected catalog routing')
   const baseUrl = `http://127.0.0.1:${server.port}/${route}`

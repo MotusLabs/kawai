@@ -435,7 +435,7 @@ describe('ChatSessionManager', () => {
     expect(restored.registry.get(id)?.claudeProfileId).toBe('glm')
     expect((await restored.manager.send(id, 'resume')).ok).toBe(true)
     expect(restored.handles[0]!.options.resume).toBe('profile-conversation')
-    expect(restored.handles[0]!.options.model).toBe('sonnet')
+    expect(restored.handles[0]!.options.model).toBe('opus')
     expect(restored.handles[0]!.options.env?.ANTHROPIC_BASE_URL).toBe('https://api.z.ai/api/anthropic')
     restored.manager.shutdown()
     db.updateChatSession(id, { claudeProfileId: 'removed-profile' })
@@ -484,10 +484,10 @@ describe('ChatSessionManager', () => {
     fs.mkdirSync(path.join(project, '.kawai'), { recursive: true })
     const catalogFile = path.join(project, '.kawai', 'profiles.json')
     fs.writeFileSync(catalogFile, JSON.stringify({
-      'glm-flash': { label: 'GLM Flash', model: 'glm-5.3-flash[1m]' },
+      'glm-turbo': { label: 'GLM Turbo', model: 'glm-5.3-flash[1m]' },
     }))
     const first = await createHarness(db)
-    const created = first.manager.createSession({ projectPath: project, claudeProfileId: 'glm-flash' })
+    const created = first.manager.createSession({ projectPath: project, claudeProfileId: 'glm-turbo' })
     expect(created.ok).toBe(true)
     await first.manager.send(created.ok ? created.session.id : '', 'first turn')
     expect(first.handles[0]!.options.model).toBe('glm-5.3-flash[1m]')
@@ -499,8 +499,8 @@ describe('ChatSessionManager', () => {
     const restored = await createHarness(db)
     const result = await restored.manager.send(created.ok ? created.session.id : '', 'resume')
     expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.error).toContain('glm-flash')
-    expect(restored.registry.get(created.ok ? created.session.id : '')?.claudeProfileId).toBe('glm-flash')
+    if (!result.ok) expect(result.error).toContain('glm-turbo')
+    expect(restored.registry.get(created.ok ? created.session.id : '')?.claudeProfileId).toBe('glm-turbo')
     expect(restored.handles).toHaveLength(0)
   })
 
@@ -564,7 +564,7 @@ describe('ChatSessionManager', () => {
     await create('minimax')
     await create('glm')
     expect(launches).toHaveLength(2)
-    expect(launches[0]?.model).toBe('sonnet')
+    expect(launches[0]?.model).toBe('opus')
     expect(launches[1]?.model).toBe('MiniMax-M3')
     expect(launches[0]?.settings).toMatchObject({ env: { ANTHROPIC_DEFAULT_OPUS_MODEL: 'glm-5.3[1m]' } })
     globalEnv = { ANTHROPIC_AUTH_TOKEN: 'changed-token' }

@@ -533,7 +533,7 @@ describe('ChatSessionDriver', () => {
     minimax.driver.send('minimax turn')
     const first = glm.fakes[0]!
     const other = minimax.fakes[0]!
-    expect(first.options.model).toBe('sonnet')
+    expect(first.options.model).toBe('opus')
     expect(other.options.model).toBe('MiniMax-M3')
     expect(first.options.env?.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBe('1000000')
     expect(other.options.env?.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBeUndefined()
@@ -548,7 +548,7 @@ describe('ChatSessionDriver', () => {
     first.exit()
     await flush()
     glm.driver.send('respawn')
-    expect(glm.fakes[1]!.options.model).toBe('sonnet')
+    expect(glm.fakes[1]!.options.model).toBe('opus')
     expect(glm.fakes[1]!.options.env?.ANTHROPIC_BASE_URL).toBe(first.options.env?.ANTHROPIC_BASE_URL)
     glm.driver.kill()
     minimax.driver.kill()
