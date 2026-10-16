@@ -56,6 +56,8 @@ beforeAll(() => {
     'tasks.md': '# Tasks\n',
     'specs/team/chat/spec.md': '## ADDED Requirements\n### Requirement: X\n',
   })
+  // A change registered only in the main checkout, with no convention worktree.
+  writeChange(repo, 'main-only', { 'proposal.md': '# Main only\n' })
   // Its base spec exists for one capability and not the nested other.
   fs.mkdirSync(path.join(repo, 'openspec', 'specs', 'team', 'chat'), { recursive: true })
   fs.writeFileSync(path.join(repo, 'openspec', 'specs', 'team', 'chat', 'spec.md'), '# Team chat spec\n')
@@ -74,6 +76,8 @@ beforeAll(() => {
   other = path.join(root, 'other-worktree')
   git(['worktree', 'add', '-q', '-b', 'w-other', other], repo)
   writeChange(other, 'lone-change', { 'proposal.md': '# Lone\n' })
+  // A stray directory at a convention path that is not a listed worktree.
+  writeChange(path.join(repo, '.worktrees', 'stray'), 'stray', { 'proposal.md': '# Stray\n' })
 })
 
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }))
@@ -83,9 +87,27 @@ const read = (changeNames: string[], groupNames: string[] = []) => readValidatio
 })
 
 describe('readValidationFileInputs (D2)', () => {
-  test('a registered change in the main checkout resolves there when no convention worktree holds it', async () => {
-    const inputs = await read(['plain-main'])
-    expect(inputs.changes[0]!.status).toBe('missing')
+  test('a change registered only in the main checkout resolves in the main checkout', async () => {
+    const inputs = await read(['main-only'])
+    expect(inputs.changes[0]!.status).toBe('registered')
+    expect(inputs.evidence.changes['main-only']).toEqual({ root: repo, head: expect.any(String) })
+  })
+
+  test('a change found only in the convention worktree is unregistered, naming it', async () => {
+    // The convention worktree for `convention-loner` exists as a listed
+    // worktree, but the main registry never listed the change.
+    const worktree = path.join(repo, '.worktrees', 'convention-loner')
+    git(['worktree', 'add', '-q', '-b', 'w-convention-loner', worktree], repo)
+    writeChange(worktree, 'convention-loner', { 'proposal.md': '# Convention only\n' })
+    const inputs = await read(['convention-loner'])
+    expect(inputs.changes[0]!.status).toBe('unregistered')
+    expect(inputs.evidence.changes['convention-loner']!.root).toBe(worktree)
+  })
+
+  test('a stray directory at the convention path is not a worktree and never registers', async () => {
+    const inputs = await read(['stray'])
+    expect(inputs.changes[0]!.status).toBe('unregistered')
+    expect(inputs.evidence.changes.stray!.root).toBe(path.join(repo, '.worktrees', 'stray'))
   })
 
   test('the convention worktree is canonical once it exists and contains the change', async () => {

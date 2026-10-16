@@ -64,32 +64,45 @@ const changeExists = (root: string, change: string): string | null => {
   return null
 }
 
-/** The archive directory holding this change, if any (`*-<change>`; D3 names it in the error). */
+/** The archive directory holding this change, if any: exactly `<date>-<change>` (D3 names it in the error). */
 function archiveDir(mainRoot: string, change: string): string | null {
   const archive = path.join(mainRoot, 'openspec', 'changes', 'archive')
   try {
     for (const entry of fs.readdirSync(archive, { withFileTypes: true })) {
       if (!entry.isDirectory()) continue
-      if (entry.name === change || entry.name.endsWith(`-${change}`)) {
-        const dir = path.join(archive, entry.name)
-        if (fs.statSync(path.join(dir, 'proposal.md')).isFile()) return dir
-      }
+      if (entry.name !== change && !/^\d{4}-\d{2}-\d{2}-[a-z0-9-]+$/.test(entry.name)) continue
+      if (entry.name !== change && !entry.name.endsWith(`-${change}`)) continue
+      const dir = path.join(archive, entry.name)
+      if (fs.statSync(path.join(dir, 'proposal.md')).isFile()) return dir
     }
   } catch { /* no archive */ }
   return null
 }
 
-/** One change's resolution: status, the directory its artifacts hash in, and the root it sits in. */
-function resolveChange(mainRoot: string, worktreePaths: Map<string, string>, change: string): { status: ValidationChangeStatus; dir: string | null; root: string | null } {
+/**
+ * One change's resolution: status, the directory its artifacts hash in, and
+ * the root it sits in. Registration requires the change in the main root's
+ * registry (unarchived), as `changeRegistry` does; the convention worktree
+ * redirects the canonical copy only for a change already registered there,
+ * and only when that path is a listed worktree. A change found only in a
+ * worktree — or in a stray directory at the convention path that is not a
+ * listed worktree — is `unregistered`, and a change archived in main stays
+ * `archived` even if a stale convention copy remains.
+ */
+function resolveChange(mainRoot: string, listedRoots: ReadonlySet<string>, change: string): { status: ValidationChangeStatus; dir: string | null; root: string | null } {
   const convention = conventionWorktreePath(mainRoot, change)
-  const inConvention = changeExists(convention, change)
-  if (inConvention) return { status: 'registered', dir: inConvention, root: convention }
   const inMain = changeExists(mainRoot, change)
-  if (inMain) return { status: 'registered', dir: inMain, root: mainRoot }
+  if (inMain) {
+    if (listedRoots.has(convention)) {
+      const inConvention = changeExists(convention, change)
+      if (inConvention) return { status: 'registered', dir: inConvention, root: convention }
+    }
+    return { status: 'registered', dir: inMain, root: mainRoot }
+  }
   const archived = archiveDir(mainRoot, change)
   if (archived) return { status: 'archived', dir: archived, root: mainRoot }
-  for (const [root] of worktreePaths) {
-    if (root === mainRoot || root === convention) continue
+  const outside = [convention, ...listedRoots].filter(root => root !== mainRoot)
+  for (const root of outside) {
     const found = changeExists(root, change)
     if (found) return { status: 'unregistered', dir: found, root }
   }
@@ -153,10 +166,11 @@ export async function readValidationFileInputs(options: ValidationFileOptions): 
   const main = worktrees.find(worktree => worktree.isMain)
   const mainRoot = main?.path ?? options.commonDir.replace(/\.git$/, '')
   const heads = new Map(worktrees.map(worktree => [worktree.path, worktree.headRevision]))
+  const listedRoots = new Set(worktrees.map(worktree => worktree.path))
   const changes: ValidationChangeInput[] = []
   const evidence: ValidationFileInputs['evidence'] = { changes: {} }
   for (const change of options.changeNames) {
-    const resolved = resolveChange(mainRoot, heads, change)
+    const resolved = resolveChange(mainRoot, listedRoots, change)
     const { artifacts, capabilities } = resolved.dir ? artifactDigests(resolved.dir) : { artifacts: {}, capabilities: [] }
     changes.push({
       change,
