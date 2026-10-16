@@ -14,9 +14,10 @@
 // booleans, default true); durable plans add `canCreatePlans` (a strict
 // boolean like `canCreateTasks`, default false). `profiles` and `onLimit` take
 // one single-line flow value (`[a, b]` or `{ k: v }`, scalars only — never
-// nested), as does `profileEffort`. Defaults are applied here so every reader sees the same effective
-// values. Bad `onLimit`, `effort`, and `profileEffort` values are warnings (the defaults apply)
-// rather than a rejected file, as the profile-routing spec asks.
+// nested), as does `profileEffort`. Defaults are applied here so every reader
+// sees the same effective values. Bad `onLimit`, `effort`, and `profileEffort`
+// values are warnings (the defaults apply) rather than a rejected file, as the
+// profile-routing spec asks.
 import type { ChatApprovalPolicy } from '../../shared/chat'
 import { PROFILE_ID_PATTERN } from '../chat/profileCatalog'
 
