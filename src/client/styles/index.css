@@ -427,6 +427,78 @@ details[open] > .chat-summary::before {
   transform: rotate(90deg);
 }
 
+/* Chat transcript rows (chat-transcript-layout D1): an inline-size container,
+   so the author/time gutter follows the transcript's own width and chat font
+   (em in a container query resolves against the container). Narrow: metadata
+   stacks above the body. Wide: an em gutter beside a minmax(0, 1fr) body;
+   aside rows (tools, notices) keep to the body column. */
+.chat-transcript {
+  container-type: inline-size;
+}
+
+.chat-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  row-gap: 0.15em;
+}
+
+.chat-row-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: 0.6em;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.chat-row-turn {
+  margin-top: 1.5em;
+  padding-top: 1em;
+  border-top: 1px solid var(--border);
+}
+
+.chat-row-author {
+  margin-top: 0.9em;
+  padding-top: 0.75em;
+  border-top: 1px dashed var(--border);
+}
+
+.chat-row-continue {
+  margin-top: 0.4em;
+}
+
+.chat-day {
+  display: flex;
+  align-items: center;
+  gap: 0.75em;
+  margin: 1.5em 0 0.5em;
+}
+
+.chat-day::before,
+.chat-day::after {
+  content: '';
+  flex: 1;
+  border-top: 1px solid var(--border);
+}
+
+@container (min-width: 34em) {
+  .chat-row {
+    grid-template-columns: 6.5em minmax(0, 1fr);
+    column-gap: 1em;
+  }
+
+  .chat-row-meta {
+    flex-direction: column;
+    align-items: flex-end;
+    text-align: right;
+    padding-top: 0.15em;
+  }
+
+  .chat-row-aside > .chat-row-body {
+    grid-column: 2;
+  }
+}
+
 /* Chat activity row's live dot: a quiet breathing pulse in the working color */
 @keyframes pulse-activity {
   0%, 100% { opacity: 1; }

@@ -26,6 +26,7 @@ import type { SessionStatus } from '../../shared/types'
 import type { ChatWireRecorder } from '../chat/wireTap'
 import type { ChatLimitSignal } from '../chat/limitSignals'
 import { outboundFile } from '../outbound/destinations'
+import { applyChatEvents, emptyTranscript } from '../../client/stores/chatStore'
 import { SessionTeams } from '../team/sessionTeams'
 import { consumerMessages } from './fixtures/backgroundTasks'
 import {
@@ -967,6 +968,33 @@ describe('ChatSessionDriver', () => {
     const deltas = harness.events.filter((e) => e.type === 'assistant_delta')
     expect(deltas).toHaveLength(1)
     expect(deltas[0]).toMatchObject({ delta: 'part-', messageId: 'p-1' })
+  })
+
+  test('text, tool, text of one SDK message apply as three ordered entries (chat-transcript-layout D5)', async () => {
+    const harness = createHarness()
+    harness.driver.send('go')
+    const fake = harness.fakes[0]!
+    const stream = (uuid: string, event: unknown) => fake.push({
+      type: 'stream_event', event, parent_tool_use_id: null, uuid, session_id: 'sdk-1',
+    } as unknown as SDKMessage)
+    // The CLI emits one assistant frame per content block, all with one id.
+    const block = (uuid: string, content: unknown) => fake.push({
+      type: 'assistant', message: { id: 'msg_split', role: 'assistant', content: [content] },
+      parent_tool_use_id: null, uuid, session_id: 'sdk-1',
+    } as unknown as SDKMessage)
+    stream('s-0', { type: 'message_start', message: { id: 'msg_split' } })
+    stream('s-1', { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'Look' } })
+    block('b-1', { type: 'text', text: 'Looking' })
+    block('b-2', { type: 'tool_use', id: 'toolu_split', name: 'Read', input: {} })
+    stream('s-2', { type: 'content_block_delta', index: 2, delta: { type: 'text_delta', text: 'Do' } })
+    block('b-3', { type: 'text', text: 'Done' })
+    await flush()
+
+    const applied = applyChatEvents(emptyTranscript(), harness.events)
+    const shape = applied.events
+      .filter((event) => event.type === 'assistant_text' || event.type === 'tool_call')
+      .map((event) => event.type === 'assistant_text' ? event.text : event.type)
+    expect(shape).toEqual(['Looking', 'tool_call', 'Done'])
   })
 
   test('user echo from the SDK is suppressed, foreign user text is kept', async () => {

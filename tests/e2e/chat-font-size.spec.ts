@@ -47,7 +47,7 @@ test('chat text defaults to 15px and follows the Chat Font Size setting', async 
   await sendMarkdown(page)
   const transcript = page.getByTestId('chat-transcript')
   const userBody = transcript.locator('[data-chat-role="user"] p').last()
-  const userLabel = transcript.locator('[data-chat-role="user"] > div').last()
+  const userLabel = transcript.locator('[data-chat-role="user"] [data-testid="chat-row-meta"]').last()
   const assistant = transcript.locator('[data-chat-role="assistant"]').last()
   const footer = transcript.getByText(/Turn complete/).last()
 

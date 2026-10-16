@@ -20,6 +20,48 @@ describe('chat store', () => {
     expect(first.events[0]).toMatchObject({ text: 'Hello' })
   })
 
+  test('text after a tool call in one message is its own entry, in order (D5)', () => {
+    const text = (sequence: number, value: string): ChatEvent => ({ ...delta(sequence, ''), type: 'assistant_text', text: value })
+    const tool: ChatEvent = { id: 'tool', sequence: 4, at: 'now', type: 'tool_call', turnId: 'turn-1', toolCallId: 'c1', tool: 'Read', input: {} }
+    const state = applyChatEvents(emptyTranscript(), [
+      delta(1, 'Look'), delta(2, 'ing'), text(3, 'Looking'), tool, delta(5, 'Fo'), delta(6, 'und'), text(7, 'Found'),
+    ])
+    expect(state.events.map(event => event.type === 'assistant_text' ? event.text : event.type)).toEqual(['Looking', 'tool_call', 'Found'])
+  })
+
+  test('replayed blocks of one message keep their order around a tool call (D5)', () => {
+    const block = (id: string, value: string): ChatEvent =>
+      ({ id, sequence: 0, at: '2026-10-16T10:00:00.000Z', type: 'assistant_text', turnId: 'hist-turn-1', messageId: 'msg', text: value })
+    const tool: ChatEvent = { id: 'hist-tool', sequence: 0, at: '2026-10-16T10:00:01.000Z', type: 'tool_call', turnId: 'hist-turn-1', toolCallId: 'c1', tool: 'Read', input: {} }
+    const state = applyChatEvents(emptyTranscript(), [block('a', 'First'), tool, block('b', 'Second')])
+    expect(state.events.map(event => event.type === 'assistant_text' ? event.text : event.type)).toEqual(['First', 'tool_call', 'Second'])
+  })
+
+  test('adjacent text blocks of one message still merge: events carry no block index (D5 limitation)', () => {
+    const state = applyChatEvents(emptyTranscript(), [delta(1, 'One'), { ...delta(2, ''), type: 'assistant_text', text: 'Two' }])
+    expect(state.events).toHaveLength(1)
+  })
+
+  test('an entry keeps its first valid time through deltas, its final text, and a replay of the same ids (D2)', () => {
+    const at = (sequence: number, time: string) => ({ ...delta(sequence, `${sequence}`), at: time })
+    const streamed = applyChatEvents(emptyTranscript(), [
+      at(1, '2026-10-16T10:00:00.000Z'), at(2, '2026-10-16T10:00:03.000Z'),
+    ])
+    const final = applyChatEvents(streamed, [{ ...delta(3, ''), type: 'assistant_text', text: '12', at: '2026-10-16T10:00:09.000Z' }])
+    expect(final.events[0]?.at).toBe('2026-10-16T10:00:00.000Z')
+    // Reattach: the snapshot replays the same events into a fresh transcript.
+    const reattached = applyChatEvents(emptyTranscript(), [
+      at(1, '2026-10-16T10:00:00.000Z'), at(2, '2026-10-16T10:00:03.000Z'),
+      { ...delta(3, ''), type: 'assistant_text', text: '12', at: '2026-10-16T10:00:09.000Z' },
+    ])
+    expect(reattached.events[0]?.at).toBe('2026-10-16T10:00:00.000Z')
+  })
+
+  test('an unknown first time gives way to the first valid one', () => {
+    const state = applyChatEvents(emptyTranscript(), [{ ...delta(1, 'a'), at: '' }, { ...delta(2, 'b'), at: '2026-10-16T10:00:03.000Z' }])
+    expect(state.events[0]?.at).toBe('2026-10-16T10:00:03.000Z')
+  })
+
   test('duplicate ids and old sequences are ignored', () => {
     const first = applyChatEvents(emptyTranscript(), [delta(1, 'Hello')])
     const next = applyChatEvents(first, [delta(1, 'Hello'), { ...delta(1, 'duplicate'), id: 'other-id' }])

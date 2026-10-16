@@ -45,15 +45,17 @@ describe('identity block', () => {
     expect(textOf(byId('chat-profile'))).toBe('Default')
     expect(byId('chat-profile').props.title).toBe('Profile: Default')
     expect(textOf(byId('chat-model'))).toBe('claude-opus-5-5')
-    expect(textOf(byId('chat-project'))).toBe('kawai')
+    // The basename shows; the full path is on hover and read by assistive technology.
+    expect(textOf(byId('chat-project'))).toBe('kawai (/home/coder/kawai)')
+    expect(textOf(byId('chat-project').findByProps({ className: 'sr-only' }))).toBe(' (/home/coder/kawai)')
     expect(byId('chat-project').props.title).toBe('/home/coder/kawai')
-    expect(textOf(byId('chat-identity'))).toBe('Default·claude-opus-5-5·kawai')
+    expect(textOf(byId('chat-identity'))).toBe('Default·claude-opus-5-5·kawai (/home/coder/kawai)')
   })
 
   test('no model segment before the agent reports one', () => {
     const { allById, byId } = renderHeader({ model: null })
     expect(allById('chat-model')).toHaveLength(0)
-    expect(textOf(byId('chat-identity'))).toBe('Default·kawai')
+    expect(textOf(byId('chat-identity'))).toBe('Default·kawai (/home/coder/kawai)')
   })
 
   test('the status indicator follows the session, the connection, and archiving', () => {
@@ -69,19 +71,45 @@ describe('identity block', () => {
     expect(textOf(byId('chat-status'))).toBe('archived')
   })
 
-  test('task and paused chips sit on the second line; the task chip opens the task', () => {
+  test('task and paused context get their own wrapping row; the task chip opens the task', () => {
     const opened: string[] = []
     const until = new Date(Date.now() + 40 * 60_000).toISOString()
     const { byId } = renderHeader({
       session: { ...session, taskId: 'task-1', taskTitle: 'Export', parked: { messageId: 'm1', until, profileId: 'glm', reason: 'Provider limit on glm' } } as Session,
       onOpenTask: taskId => opened.push(taskId),
     })
-    const identity = byId('chat-identity')
-    expect(identity.findByProps({ 'data-testid': 'chat-task-chip' })).toBeTruthy()
+    const context = byId('chat-context-row')
+    expect(byId('chat-identity').findAllByProps({ 'data-testid': 'chat-task-chip' })).toHaveLength(0)
+    expect(context.findByProps({ 'data-testid': 'chat-task-chip' })).toBeTruthy()
     expect(textOf(byId('chat-task-chip'))).toBe('Task Export')
-    expect(textOf(identity.findByProps({ 'data-testid': 'chat-paused' }))).toStartWith('Paused: Provider limit on glm')
+    expect(textOf(context.findByProps({ 'data-testid': 'chat-paused' }))).toStartWith('Paused: Provider limit on glm')
     act(() => byId('chat-task').props.onClick())
     expect(opened).toEqual(['task-1'])
+  })
+
+  test('no task or pause: no empty context row', () => {
+    const { allById } = renderHeader()
+    expect(allById('chat-context-row')).toHaveLength(0)
+  })
+
+  test('a spawned member keeps its provenance in the context row', () => {
+    const { byId } = renderHeader({ session: { ...session, taskId: 'task-1', taskTitle: 'Export', spawned: true } as Session })
+    expect(textOf(byId('chat-task-chip'))).toBe('Spawned for task Export')
+  })
+
+  test('long metadata and task labels break inside themselves instead of clipping', () => {
+    const long = 'x'.repeat(120)
+    const { byId } = renderHeader({
+      profileLabel: long, model: long,
+      session: { ...session, projectPath: `/home/${long}`, taskId: 'task-1', taskTitle: long } as Session,
+    })
+    for (const id of ['chat-profile', 'chat-model', 'chat-project', 'chat-task-chip']) {
+      expect(byId(id).props.className).toContain('[overflow-wrap:anywhere]')
+      expect(byId(id).props.className).not.toContain('truncate')
+    }
+    // Rows wrap; nothing in the metadata forbids it.
+    expect(byId('chat-identity').props.className).toContain('flex-wrap')
+    expect(byId('chat-context-row').props.className).toContain('flex-wrap')
   })
 
   test('clicking the name opens the rename field with the existing rename behavior', () => {
@@ -303,8 +331,10 @@ describe('width layouts', () => {
     const team = sessionMenuEntriesOf(renderer.root).filter(entry => entry.id === 'team')
     expect(team.map(entry => entry.kind === 'item' && entry.label)).toEqual(['Team'])
     const meter = byId('chat-context-meter')
-    expect(textOf(meter)).toBe('4.9%')
+    expect(textOf(meter.findByProps({ 'aria-hidden': 'true' }))).toBe('4.9%')
     expect(meter.props.title).toContain('47700 of 967000 tokens')
+    // The full counts stay available to assistive technology, not only on hover.
+    expect(textOf(meter.findByProps({ className: 'sr-only' }))).toBe('Context 4.9% · 47700 of 967000 tokens')
     // Name, status, the Auto-approve switch, and the menu stay in the header.
     expect(textOf(byId('chat-name'))).toBe('Kawai Chat header buttons')
     expect(textOf(byId('chat-status'))).toBe('working')
@@ -314,6 +344,8 @@ describe('width layouts', () => {
 
   test('an approximate threshold keeps its marker in the compact meter', () => {
     const { byId } = renderHeader({ layout: 'menu', contextUsage: { ...usage, thresholdApproximate: true } })
-    expect(textOf(byId('chat-context-meter'))).toBe('4.9%~')
+    const meter = byId('chat-context-meter')
+    expect(textOf(meter.findByProps({ 'aria-hidden': 'true' }))).toBe('4.9%')
+    expect(textOf(meter)).toEndWith('~')
   })
 })

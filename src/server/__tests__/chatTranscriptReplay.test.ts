@@ -12,6 +12,7 @@ import {
   replayTranscriptFile,
   withCancelledRequests,
 } from '../chat/transcriptReplay'
+import { applyChatEvents, emptyTranscript } from '../../client/stores/chatStore'
 
 /**
  * A miniature SDK transcript: one user turn, an assistant reply, a tool that
@@ -803,5 +804,37 @@ describe('task-notification replay (background tasks D5)', () => {
     const parsed = parseTranscriptContent(content)
     expect(typesOf(parsed.events)).toEqual(['turn_started', 'assistant_text'])
     expect(parsed.events[0]).toMatchObject({ trigger: { kind: 'resumed' } })
+  })
+})
+
+describe('replayed times and text-block order (chat-transcript-layout D2, D5)', () => {
+  const assistantLine = (uuid: string, timestamp: string | undefined, block: unknown) => JSON.stringify({
+    type: 'assistant', uuid, ...(timestamp === undefined ? {} : { timestamp }),
+    message: { id: 'msg_split', role: 'assistant', content: [block] },
+  })
+
+  test('undated and malformed records replay with an empty time, never the replay time', () => {
+    const content = [
+      JSON.stringify({ type: 'user', uuid: 'u1', message: { role: 'user', content: 'no stamp' } }),
+      JSON.stringify({ type: 'user', uuid: 'u2', timestamp: 'garbage', message: { role: 'user', content: 'bad stamp' } }),
+      JSON.stringify({ type: 'user', uuid: 'u3', timestamp: '2026-10-04T10:00:00.000Z', message: { role: 'user', content: 'dated' } }),
+    ].join('\n')
+    const events = parseTranscriptContent(content).events
+    expect(events.map(event => event.at)).toEqual(['', '', '2026-10-04T10:00:00.000Z'])
+  })
+
+  test('one message split around a tool call keeps both texts in order once applied', () => {
+    const content = [
+      JSON.stringify({ type: 'user', uuid: 'u1', timestamp: '2026-10-04T10:00:00.000Z', message: { role: 'user', content: 'go' } }),
+      assistantLine('a1', '2026-10-04T10:00:01.000Z', { type: 'text', text: 'Checking' }),
+      assistantLine('a2', '2026-10-04T10:00:02.000Z', { type: 'tool_use', id: 'call_split', name: 'Read', input: {} }),
+      JSON.stringify({ type: 'user', uuid: 'u2', timestamp: '2026-10-04T10:00:03.000Z', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'call_split', content: 'ok' }] } }),
+      assistantLine('a3', '2026-10-04T10:00:04.000Z', { type: 'text', text: 'Done' }),
+    ].join('\n')
+    const applied = applyChatEvents(emptyTranscript(), parseTranscriptContent(content).events)
+    const shape = applied.events.map(event => event.type === 'assistant_text' ? `${event.text}@${event.at}` : event.type)
+    expect(shape).toEqual([
+      'user_message', 'Checking@2026-10-04T10:00:01.000Z', 'tool_call', 'tool_result', 'Done@2026-10-04T10:00:04.000Z',
+    ])
   })
 })

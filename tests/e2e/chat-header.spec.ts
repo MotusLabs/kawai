@@ -147,7 +147,9 @@ async function headerFacts(page: Page) {
 test('the header steps down by its own width without clipping a control', async ({ page }, info) => {
   await page.setViewportSize({ width: 1440, height: 800 })
   await createChat(page, 'Header widths')
-  const expected: Array<[number, string]> = [[1440, 'full'], [1100, 'icons'], [768, 'menu'], [390, 'menu']]
+  // Header widths at the default navigator: 1440 → ~1197px, 900 → ~657px,
+  // 820 → ~577px, 768 → ~525px (FULL_MIN_EM 42, ICONS_MIN_EM 34 at 15px).
+  const expected: Array<[number, string]> = [[1440, 'full'], [900, 'full'], [820, 'icons'], [768, 'menu'], [390, 'menu']]
   for (const [width, layout] of expected) {
     await page.setViewportSize({ width, height: 800 })
     await expect(page.getByTestId('chat-view').locator('header')).toHaveAttribute('data-layout', layout)
@@ -162,7 +164,7 @@ test('the header steps down by its own width without clipping a control', async 
   await page.keyboard.press('Escape')
 
   // Same window, wider navigator: the header narrows and steps down.
-  await page.setViewportSize({ width: 1440, height: 800 })
+  await page.setViewportSize({ width: 1000, height: 800 })
   await expect(page.getByTestId('chat-view').locator('header')).toHaveAttribute('data-layout', 'full')
   await page.evaluate(() => {
     const raw = JSON.parse(localStorage.getItem('agentboard-settings') ?? '{"state":{},"version":7}')

@@ -37,6 +37,8 @@ import ChatActivityRow from './ChatActivityRow'
 import ChatHeader from './ChatHeader'
 import ChatDebugPanel from './ChatDebugPanel'
 import ChatMessages from './ChatMessages'
+import { AsideRow } from './ChatRow'
+import { agentLabelOf } from './transcriptLayout'
 import { openParticipantChat } from './openParticipant'
 import { useSessionStore } from '../../stores/sessionStore'
 import { useTeamMessageStore } from '../../stores/teamMessageStore'
@@ -302,11 +304,14 @@ export default function ChatView({ session, sendMessage, subscribe, connectionSt
           <div className="mx-auto max-w-4xl space-y-4">
             <ChatMessages events={transcript.events} projectPath={session.projectPath}
               sessionId={session.id} sendMessage={sendMessage} connected={connected}
-              archived={archived}
+              archived={archived} agentLabel={agentLabelOf(session.agentType)}
               sessions={liveSessions} directory={participantDirectory} onOpenParticipant={openParticipantChat} />
-            {showActivity && (
-              <ChatActivityRow activity={activity.value} phaseStartedAt={activity.phaseStartedAt} />
-            )}
+            {/* The activity row keeps to the transcript's body column (chat-transcript-layout D3). */}
+            {showActivity && <div className="chat-transcript">
+              <AsideRow spacing="">
+                <ChatActivityRow activity={activity.value} phaseStartedAt={activity.phaseStartedAt} />
+              </AsideRow>
+            </div>}
             {!archived && <ChatRequests requests={transcript.pendingRequests} sessionId={session.id} sendMessage={sendMessage} disabled={!connected} />}
             <div ref={end} />
           </div>
