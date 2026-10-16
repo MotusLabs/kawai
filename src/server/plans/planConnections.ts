@@ -52,6 +52,9 @@ export class PlanConnections {
 
   /** A committed change of the team's plans: the list, and the named plan's detail (every detail when none is named). */
   publish(teamId: string, planId?: string) {
+    // A plan write changes which revisions stand: drop the cached validation
+    // view first (plan-validation M-1), so the push below builds fresh.
+    this.manager.validationDetail.invalidate(planId)
     for (const [connection, views] of this.subscriptions) {
       for (const [teamPath, subscription] of views) {
         if (subscription.teamId !== teamId) continue
