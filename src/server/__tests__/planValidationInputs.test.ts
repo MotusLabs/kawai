@@ -206,10 +206,13 @@ describe('readValidationFileInputs (D2)', () => {
     expect(fromMain.changes[0]).toEqual(fromWorktree.changes[0])
   })
 
-  test('a symlinked artifact is skipped, never followed', async () => {
+  test('a symlinked spec is skipped, never followed or hashed', async () => {
     const changeDir = path.join(repo, 'openspec', 'changes', 'main-change')
-    fs.symlinkSync(path.join(changeDir, 'proposal.md'), path.join(changeDir, 'linked.md'))
+    const specs = path.join(changeDir, 'specs', 'extra')
+    fs.mkdirSync(specs, { recursive: true })
+    fs.symlinkSync(path.join(changeDir, 'proposal.md'), path.join(specs, 'spec.md'))
     const inputs = await read(['main-change'])
-    expect(Object.keys(inputs.changes[0]!.artifacts)).not.toContain('linked.md')
+    expect(Object.keys(inputs.changes[0]!.artifacts)).not.toContain('specs/extra/spec.md')
+    expect(inputs.changes[0]!.baseSpecs.extra).toBeUndefined()
   })
 })

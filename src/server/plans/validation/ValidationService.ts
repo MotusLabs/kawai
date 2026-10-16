@@ -1,5 +1,6 @@
-// The validation service (plan-validation design D5, D6, D8): rights and
-// single flight over the store. Agents and the owner append assessments —
+// The validation service (plan-validation design D5, D6, D8, D9): rights and
+// single flight over the store, the approval standing's gather and compare,
+// and the tools' reads. Agents and the owner append assessments —
 // alignment with its five values, questions, warning findings — bound to an
 // `in_review` or `approved` revision of their own team; only the human
 // decides (answers, acceptances, condition resolutions, exceptions,

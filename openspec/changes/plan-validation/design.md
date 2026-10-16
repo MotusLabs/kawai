@@ -178,7 +178,7 @@ type Finding = {
 | `change-claimed-elsewhere` | scope | — | another open plan's `in_review` or `approved` revision names the change | — |
 | `strategy-impact` | alignment | C-I1 gate does not pass (the state is named) | — | gate state |
 | `groups-known` | readiness | a role, change, or review group is not in the team's catalog | — | — |
-| `profiles-known` | readiness | a role profile is not a known profile | the group declares `profiles` and the role profile is not among them | — |
+| `profiles-known` | readiness | a role profile is not a known profile | the group declares `profiles` and the role profile is not among them (only a *known* profile warns — an unknown one already errors, and keys never collide across severities) | — |
 | `branch-free` | readiness | another open plan's `in_review` or `approved` revision lands on the same integration branch | — | whether the branch exists, its head, its worktree |
 | `capacity` | readiness | — | — | per role group: caps, live members, cooling profiles with their cooldown end |
 

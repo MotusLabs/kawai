@@ -2,11 +2,14 @@
 // the adapter probe, each change's resolution and digests, and the catalog
 // digests — read without a transaction and without the CLI (the probe excepted,
 // and it is cached). Resolution follows `changeRegistry`'s canonical rule
-// against fresh `discoverRepository` state: the convention worktree
-// `<main>/.worktrees/<change>` is canonical once it exists and contains the
-// change, the main checkout's registry otherwise, `openspec/changes/archive/
-// *-<change>` marks an archived change, and a change found only in another
-// worktree is unregistered. Locations and each root's `HEAD` are returned as
+// against fresh `discoverRepository` state: registration requires the change
+// in the main root (unarchived); only then does the convention worktree
+// `<main>/.worktrees/<change>` redirect the canonical copy, and only when
+// that path is a listed worktree. The archive matches exactly `<change>` or
+// `<YYYY-MM-DD>-<change>` (never a suffix near-miss), newest date first. A
+// change found only in a worktree — or in a stray, unlisted directory at the
+// convention path — is `unregistered`, hashed and evidenced where it was
+// found (the checks read it there). Locations and each root's `HEAD` are
 // evidence, never identity, so a proposal that moves between roots with
 // unchanged content leaves a report current. Tests use temporary git
 // repositories and an injected adapter.
