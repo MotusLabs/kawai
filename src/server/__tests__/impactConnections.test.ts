@@ -135,6 +135,7 @@ describe('pushes (D9)', () => {
     messages = []
     await decide(world.repo, planId, reviewId)
     expect(last('team-plans-snapshot')!.impact![planId]!.gate!.state).toBe('continue')
+    await until(() => last('team-plan-detail')?.impact?.gate?.state === 'continue')
     expect(last('team-plan-detail')!.impact!.gate!.state).toBe('continue')
     messages = []
     bench.approveStrategy({ purpose: 'Third direction' })
