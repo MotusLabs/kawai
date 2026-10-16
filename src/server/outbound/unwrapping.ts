@@ -7,7 +7,7 @@
 import type { SendCandidate } from './classify'
 
 /** Shell reserved words that only precede the command the rules mean. */
-const RESERVED = new Set(['!', 'if', 'then', 'elif', 'else', 'while', 'until', 'do', 'time'])
+export const RESERVED = new Set(['!', 'if', 'then', 'elif', 'else', 'while', 'until', 'do', 'time'])
 /**
  * Wrappers that only carry the command, with the flags the classifier knows
  * the arity of. A flag outside both lists is not understood: the segment

@@ -8,6 +8,8 @@
 // command substitution — stays opaque for the classifier to read as
 // unresolved. Redirects are dropped from argv; rule matching reads argument
 // positions and flags, never raw text.
+import { RESERVED, unwrapWrappers } from './unwrapping'
+
 export interface Token {
   kind: 'word' | 'op'
   text: string
@@ -193,6 +195,9 @@ export interface CommandSegment {
   cwd: string
   /** Literal environment assignments in effect (`NAME` → value; null = set to unexpanded text). */
   env: ReadonlyMap<string, string | null>
+  /** Why this segment's positions cannot be trusted (D4): an unknown wrapper
+   *  flag, a second `-c` level, an unreadable `env` option. */
+  note?: string
 }
 
 const ASSIGNMENT = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/
@@ -253,58 +258,91 @@ function buildSegment(
   const envUpdates = new Map<string, string | null>()
   const envDeletes: string[] = []
   let rest = cleaned
+  let segmentCwd = cwd
+  let note: string | undefined
   // Leading `NAME=value` words prefix their command alone; assignment-only
   // segments (no command left) persist, exactly as the shell runs them.
-  while (rest.length > 0 && ASSIGNMENT.test(rest[0]!.text)) {
-    const [, name, value] = ASSIGNMENT.exec(rest[0]!.text)!
-    const literal = rest[0]!.opaque ? null : value
-    env.set(name, literal)
-    rest = rest.slice(1)
+  for (;;) {
+    while (rest.length > 0 && RESERVED.has(rest[0]!.text)) rest = rest.slice(1)
+    if (rest.length === 0) break
+    // A wrapping command (`sudo -u bob`, `timeout 5`, …) drops off with its
+    // options; a flag the arity table does not know leaves the whole segment
+    // unreadable, never a guessed position.
+    const wrapper = unwrapWrappers(rest.map(word => word.text))
+    if (wrapper.unknown !== null) { note = wrapper.unknown; break }
+    if (wrapper.argv.length < rest.length) {
+      rest = rest.slice(rest.length - wrapper.argv.length)
+      continue
+    }
+    // `env [-C dir] [-i] [-u NAME] [NAME=value…] cmd…` unwraps one level.
+    if (rest[0]!.text === 'env') {
+      let at = 1
+      let cleared = false
+      let envUnreadable = false
+      while (at < rest.length) {
+        const word = rest[at]!
+        if (word.text === '--') { at++; break }
+        if (!word.opaque && ASSIGNMENT.test(word.text)) {
+          const [, name, value] = ASSIGNMENT.exec(word.text)!
+          env.set(name, value)
+          at++
+          continue
+        }
+        if (word.text === '-C' && rest[at + 1] !== undefined) {
+          const dir = resolveDir(rest[at + 1]!.text, segmentCwd)
+          if (dir !== null) segmentCwd = dir
+          at += 2
+          continue
+        }
+        if (word.text === '-i' || word.text === '--ignore-environment') { cleared = true; at++; continue }
+        if (word.text === '-u' || word.text === '--unset') {
+          if (rest[at + 1] !== undefined) { env.delete(rest[at + 1]!.text); envDeletes.push(rest[at + 1]!.text) }
+          at += 2
+          continue
+        }
+        if (word.text.startsWith('-') && word.text !== '-') {
+          // `-S` splits strings; anything else unknown: unreadable.
+          envUnreadable = true
+        }
+        break
+      }
+      if (envUnreadable) { note = 'the env options were not understood'; break }
+      if (cleared) for (const key of env.keys()) if (!envUpdates.has(key)) env.delete(key)
+      rest = rest.slice(at)
+      continue
+    }
+    // `bash -c 'inner'` unwraps exactly one level; a deeper level is noted.
+    const flagIsC = /^-[a-qs-z]*c[a-qs-z]*$|^-[a-z]*c[a-z]*$/.test(rest[1]?.text ?? '')
+    if (SHELLS.has(rest[0]!.text) && (rest[1]?.text === '-c' || flagIsC) && rest[2] !== undefined) {
+      if (depth > 0) { note = 'a second -c level is never unwrapped'; break }
+      if (!rest[2]!.opaque) {
+        const inner = parseSegments(rest[2]!.text, segmentCwd, env, depth + 1)
+        return {
+          segments: inner.map(segment => ({ ...segment, env: mergeEnv(env, segment.env) })),
+          envUpdates: new Map(),
+          envDeletes: [],
+        }
+      }
+    }
+    break
   }
-  if (rest.length === 0) {
-    for (const word of cleaned) {
-      if (ASSIGNMENT.test(word.text)) {
-        const [, name, value] = ASSIGNMENT.exec(word.text)!
-        envUpdates.set(name, word.opaque ? null : value)
+  if (rest.length > 0 && ASSIGNMENT.test(rest[0]!.text)) {
+    while (rest.length > 0 && ASSIGNMENT.test(rest[0]!.text)) {
+      const [, name, value] = ASSIGNMENT.exec(rest[0]!.text)!
+      const literal = rest[0]!.opaque ? null : value
+      env.set(name, literal)
+      rest = rest.slice(1)
+    }
+    if (rest.length === 0) {
+      for (const word of cleaned) {
+        if (ASSIGNMENT.test(word.text)) {
+          const [, name, value] = ASSIGNMENT.exec(word.text)!
+          envUpdates.set(name, word.opaque ? null : value)
+        }
       }
     }
   }
-  // `env [-i] [-u NAME] [NAME=value…] cmd…` unwraps one level.
-  if (rest[0]?.text === 'env') {
-    rest = rest.slice(1)
-    let cleared = false
-    while (rest.length > 0) {
-      const word = rest[0]!
-      if (!word.opaque && ASSIGNMENT.test(word.text)) {
-        const [, name, value] = ASSIGNMENT.exec(word.text)!
-        env.set(name, value)
-        rest = rest.slice(1)
-        continue
-      }
-      if (word.text === '-i' || word.text === '--ignore-environment') {
-        cleared = true
-        rest = rest.slice(1)
-        continue
-      }
-      if (word.text === '-u' || word.text === '--unset') {
-        if (rest[1] !== undefined) { env.delete(rest[1]!.text); envDeletes.push(rest[1]!.text) }
-        rest = rest.slice(2)
-        continue
-      }
-      break
-    }
-    if (cleared) for (const key of env.keys()) if (!envUpdates.has(key)) env.delete(key)
-  }
-  // `bash -c 'inner'` unwraps one level, with the prefix assignments overlaid.
-  const flagIsC = /^-[a-qs-z]*c[a-qs-z]*$|^-[a-z]*c[a-z]*$/.test(rest[1]?.text ?? '')
-  if (depth === 0 && rest[0] !== undefined && SHELLS.has(rest[0]!.text) && (rest[1]?.text === '-c' || flagIsC) && rest[2] !== undefined && !rest[2]!.opaque) {
-    const inner = parseSegments(rest[2]!.text, cwd, env, depth + 1)
-    return {
-      segments: inner.map(segment => ({ ...segment, env: mergeEnv(env, segment.env) })),
-      envUpdates: new Map(),
-      envDeletes: [],
-    }
-  }
+
   // `export NAME=value…` and bare assignments persist; neither is a command.
   if (rest[0]?.text === 'export' || rest.length === 0) {
     if (rest[0]?.text === 'export') {
@@ -319,7 +357,6 @@ function buildSegment(
   }
   const argv = rest.map(word => word.text)
   // `git -C <dir>` pins this segment alone.
-  let segmentCwd = cwd
   if (argv[0] === 'git') {
     const dashC = argv.findIndex((word, index) => index > 0 && (word === '-C') && argv.length > index + 1)
     const pinned = dashC > 0 ? resolveDir(argv[dashC + 1]!, cwd) : null
@@ -332,7 +369,7 @@ function buildSegment(
     if (target !== null) chdir = target
   }
   return {
-    segments: [{ argv, text: span === null ? argv.join(' ') : span.command.slice(span.start, span.end), cwd: segmentCwd, env }],
+    segments: [{ argv, text: span === null ? argv.join(' ') : span.command.slice(span.start, span.end), cwd: segmentCwd, env, ...(note === undefined ? {} : { note }) }],
     envUpdates,
     envDeletes,
     ...(chdir === undefined ? {} : { chdir }),

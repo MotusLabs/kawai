@@ -12,7 +12,7 @@
 // commands, and git config pinning are stripped by the sibling
 // `unwrapping.ts` before these rules see a segment. Pure like the rest.
 import { parseCommand } from './parse'
-import { gitSubcommandAndPin, unwrapWrappers, WRAPPED_RULE_HEADS } from './unwrapping'
+import { gitSubcommandAndPin, WRAPPED_RULE_HEADS } from './unwrapping'
 import type { SendCandidate, SendTarget } from './classify'
 
 /** Words that mean "unexpanded text": variables and command substitution. */
@@ -290,19 +290,20 @@ function segmentConfigTouched(argv: readonly string[]): boolean {
   return argv[1] === 'remote' && ['add', 'set-url', 'rename', 'remove'].includes(argv[2] ?? '')
 }
 
-function candidatesOf(segment: { argv: string[]; text: string; cwd: string; env: ReadonlyMap<string, string | null> }, configTouched = false): SendCandidate[] {
+function candidatesOf(segment: { argv: string[]; text: string; cwd: string; env: ReadonlyMap<string, string | null>; note?: string }, configTouched = false): SendCandidate[] {
   const { text, cwd, env } = segment
   const base = (rule: SendCandidate['rule'], target: SendTarget): SendCandidate => ({ rule, segment: text, cwd, target })
-  const unwrapped = unwrapWrappers(segment.argv)
-  if (unwrapped.unknown !== null) {
-    // A wrapper flag the table does not know: the segment may send anywhere,
-    // so it records unknown-destination under its most plausible rule.
-    const argv = unwrapped.argv.length > 0 ? unwrapped.argv : segment.argv
-    const head = argv.find(word => !word.startsWith('-'))?.split('/').pop()?.toLowerCase() ?? ''
+  if (segment.note !== undefined) {
+    // The unwrap could not complete (an unknown wrapper flag, a second -c
+    // level, an env option not understood): the segment may send anywhere,
+    // so it records unknown-destination under the wrapped command's rule —
+    // the wrapper word itself is never the head.
+    const head = (segment.argv.slice(1).find(word => !word.startsWith('-')) ?? segment.argv[0] ?? '')
+      .split(/[\s/]/)[0]!.toLowerCase()
     const rule = WRAPPED_RULE_HEADS[head] ?? 'http-send'
-    return [base(rule, { kind: 'unresolved', why: unwrapped.unknown })]
+    return [base(rule, { kind: 'unresolved', why: segment.note })]
   }
-  const argv = unwrapped.argv
+  const argv = segment.argv
   if (argv.length === 0) return []
   const ghPinned = env.has('GH_REPO') ? 'GH_REPO is set' : env.has('GH_HOST') ? 'GH_HOST is set' : null
   const head = argv[0]!.split('/').pop()!.toLowerCase()

