@@ -9,6 +9,7 @@ import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import type { ChatEvent, ChatTurnTriggerTask } from '../../shared/chat'
+import { validTime } from '../../shared/chatTime'
 import { getClaudeConfigDir } from '../logDiscovery'
 import {
   ASK_USER_QUESTION_TOOL,
@@ -278,10 +279,12 @@ export function parseTranscriptContent(
       typeof record.uuid === 'string' && record.uuid
         ? record.uuid
         : `line-${lineIndex}`
+    // An undated record stays undated (chat-transcript-layout D2): an empty
+    // `at` means unknown, never the replay time presented as recorded.
     const at =
-      typeof record.timestamp === 'string' && record.timestamp
+      typeof record.timestamp === 'string' && validTime(record.timestamp)
         ? record.timestamp
-        : new Date().toISOString()
+        : ''
     const message = asRecord(record.message)
     const contentValue = message?.content
 

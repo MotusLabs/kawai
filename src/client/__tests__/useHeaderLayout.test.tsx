@@ -1,5 +1,6 @@
-// The header layout hook (chat-header-layout D6): steps from the header's own
-// width in chat-font ems, observed with ResizeObserver.
+// The header layout hook (chat-header-layout D6, chat-transcript-layout D4):
+// steps from the header's own width in chat-font ems, observed with
+// ResizeObserver, sized for the identity/actions row.
 import { afterEach, expect, test } from 'bun:test'
 import { useRef } from 'react'
 import TestRenderer, { act } from 'react-test-renderer'
@@ -15,8 +16,15 @@ test('the steps follow width in ems on each side of both thresholds', () => {
   expect(headerLayoutForWidth(ICONS_MIN_EM * 15 - 1, 15)).toBe('menu')
 })
 
+test('the steps are sized for the identity/actions row, not the former panel switcher', () => {
+  // A 640px header at the default 15px font fits the labelled Team button.
+  expect(headerLayoutForWidth(640, 15)).toBe('full')
+  expect(headerLayoutForWidth(520, 15)).toBe('icons')
+  expect(headerLayoutForWidth(480, 15)).toBe('menu')
+})
+
 test('a larger chat font needs a wider header for the same layout', () => {
-  const width = 900 // 75 ems at 12px, 45 ems at 20px
+  const width = 600 // 50 ems at 12px, 30 ems at 20px
   expect(headerLayoutForWidth(width, 12)).toBe('full')
   expect(headerLayoutForWidth(width, 20)).toBe('menu')
 })
@@ -53,7 +61,7 @@ test('the hook reads the observed width, follows resizes and font size, and disc
   act(() => observer.resize(FULL_MIN_EM * 15))
   expect(seen.at(-1)).toBe('full')
   act(() => renderer.update(<Probe fontSize={20} seen={seen} />))
-  expect(seen.at(-1)).toBe('icons')
+  expect(seen.at(-1)).toBe('menu')
   act(() => renderer.unmount())
   expect(observer.disconnected).toBe(true)
 })

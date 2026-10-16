@@ -13,4 +13,4 @@
 ## 3. Verification
 
 - [x] 3.1 Run `bun run lint && bun run typecheck && bun run test` and confirm all pass
-- [ ] 3.2 In the running app with Idle Sound on, confirm no chime when the selected chat finishes a turn with the tab visible, and a chime when a non-selected session finishes or the tab is in the background
+- [x] 3.2 In the running app with Idle Sound on, confirm no chime when the selected chat finishes a turn with the tab visible, and a chime when a non-selected session finishes or the tab is in the background

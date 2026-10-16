@@ -2273,7 +2273,17 @@ export class ChatSessionManager {
     if (event.type === 'error' || event.type === 'turn_completed') this.teamMail.settleRecipient(sessionId)
     // Profile routing: progress and limit outcomes for the mail a turn handles.
     if (event.type === 'tool_call') this.teamMail.toolCall(sessionId, event.tool, event.input)
-    if (event.type === 'turn_completed') this.teamMail.turnEnded(sessionId, event.subtype === 'success')
+    if (event.type === 'turn_completed') {
+      try {
+        this.teamMail.turnEnded(sessionId, event.subtype === 'success')
+      } catch (error) {
+        logger.warn('chat_turn_mail_ended_failed', {
+          sessionId,
+          error: error instanceof Error ? error.message : String(error),
+          ...(error instanceof Error && error.stack ? { stack: error.stack } : {}),
+        })
+      }
+    }
     // The morning summary's durable turn-end row (team-workspace D8): only a
     // task-bound session's turn is summary material; the task is the one the
     // session worked under at the moment the turn ended, and only a

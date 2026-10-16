@@ -4,6 +4,7 @@
 // walker in sessionSearchWalker.ts feeds it each session's events.
 
 import type { ChatEvent } from '../../shared/chat'
+import { validTime } from '../../shared/chatTime'
 import {
   SEARCH_SNIPPETS_PER_SESSION,
   type SearchEntryKind,
@@ -127,7 +128,8 @@ export function searchEvents(events: readonly ChatEvent[], query: string): Event
     const first = matcher.exec(searchable.text)
     if (!first) continue
     matchCount++
-    lastMatchAt ??= event.at
+    // Undated history rows (empty `at`) never stand in as the match time.
+    if (validTime(event.at)) lastMatchAt ??= event.at
     if (snippets.length >= SEARCH_SNIPPETS_PER_SESSION) continue
     snippets.push({
       eventId: event.id,

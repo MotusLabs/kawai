@@ -58,11 +58,13 @@ export function formatUsageTimeLeft(ms: number): string {
 }
 
 export default function UsageBar({ report }: { report: ChatUsageReport | null }) {
-  // Tick only while some window could carry a marker; the render reads the
-  // clock itself so a newly eligible window is placed at once.
-  const markable = report?.windows.some((window) => window.resetsAt && window.periodMs) ?? false
-  useTickingClock(markable, MINUTE_MS)
   const now = Date.now()
+  // Tick only while some window actually carries a marker (a usable period
+  // and a future reset): once every reset has passed the clock stops until a
+  // new report arrives. The render reads the clock itself so a newly
+  // eligible window is placed at once.
+  const markable = report?.windows.some((window) => usageElapsedShare(window, now) !== null) ?? false
+  useTickingClock(markable, MINUTE_MS)
   if (!report || report.windows.length === 0) return null
   const statusClass =
     report.status === 'warning'

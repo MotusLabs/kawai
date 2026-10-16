@@ -2,13 +2,16 @@
 // session's creation, archive, restore, and kill each reach
 // `onSessionRecordChange`, which bootstrap wires to the team workspace's
 // live-membership push — so Members moves without waiting for unrelated
-// task or mail activity.
-import { afterEach, beforeEach, expect, test } from 'bun:test'
+// task or mail activity. The same handler's turn-end bookkeeping is pinned
+// here too: a failing turn-end write or a failing teamMail.turnEnded is
+// contained, so the rest of the turn bookkeeping still runs.
+import { afterEach, beforeEach, expect, spyOn, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { ChatSessionManager } from '../chat/ChatSessionManager'
 import { initDatabase, type SessionDatabase } from '../db'
+import { logger } from '../logger'
 import { SessionRegistry } from '../SessionRegistry'
 import { resolveTeam } from '../team/teamIdentity'
 
@@ -172,5 +175,41 @@ test('a failing turn-end write is contained: the turn bookkeeping still runs, no
     // touch() ran after the failing write: the activity stamp moved.
     expect(activityAt()).not.toBe(before)
     expect(Date.parse(activityAt())).toBeGreaterThan(Date.UTC(2021, 0, 1))
+  } finally { manager.shutdown() }
+})
+
+test('a failing teamMail.turnEnded is contained: the turn bookkeeping still runs, nothing escapes', async () => {
+  const { manager } = createManager()
+  try {
+    const bound = await manager.createAvailableSession({ projectPath: project, groupId: 'devs', taskId: 'task-1' })
+    expect(bound.ok).toBe(true)
+    if (!bound.ok) return
+    const { id } = bound.session
+    // A mailbox whose turn-end hook blows up; every other method stays the
+    // real one (the manager's background paths keep using it).
+    const real = (manager as unknown as { teamMail: Record<string, unknown> }).teamMail
+    const stub: Record<string, unknown> = Object.create(real)
+    stub.turnEnded = () => { throw new Error('mailbox store closed') }
+    ;(manager as unknown as { teamMail: unknown }).teamMail = stub
+    const feed = (manager as unknown as { handleDriverEvent: (sessionId: string, event: Record<string, unknown>) => void })
+      .handleDriverEvent.bind(manager)
+    const activityAt = () =>
+      (manager as unknown as { records: Map<string, { lastActivityAt: string }> }).records.get(id)!.lastActivityAt
+    ;(manager as unknown as { applyPatch: (sessionId: string, patch: Record<string, unknown>) => void })
+      .applyPatch(id, { lastActivityAt: '2020-01-01T00:00:00Z' })
+    const before = activityAt()
+    const warn = spyOn(logger, 'warn').mockImplementation(() => {})
+    let escaped: unknown = null
+    try {
+      feed(id, { type: 'turn_completed', subtype: 'success', id: 'evt-1', sequence: 1, turnId: 't-1', at: '2026-10-14T08:00:00Z' })
+    } catch (error) { escaped = error }
+    expect(escaped).toBeNull()
+    expect(warn.mock.calls.filter(([event]) => event === 'chat_turn_mail_ended_failed')).toHaveLength(1)
+    warn.mockRestore()
+    // The durable turn-end row and the activity stamp both landed.
+    expect(manager.turnEnds.since('2026-10-13T00:00:00Z')).toEqual([
+      { sessionId: id, taskId: 'task-1', endedAt: '2026-10-14T08:00:00Z', ok: true },
+    ])
+    expect(activityAt()).not.toBe(before)
   } finally { manager.shutdown() }
 })

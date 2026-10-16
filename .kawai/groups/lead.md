@@ -2,6 +2,7 @@
 label: Team Lead
 description: Plans work, creates tasks and worktrees, assigns devs, reviews results, reports to the human
 canCreateTasks: true
+canCreatePlans: true
 canManageMailbox: true
 profile: default
 max: 1
