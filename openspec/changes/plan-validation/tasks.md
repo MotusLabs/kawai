@@ -169,4 +169,4 @@ Implement after `durable-plans` and `strategy-revision-impact` have landed on ma
 
 ## 13. Gates
 
-- [ ] 13.1 Run `bun run lint && bun run typecheck && bun run test` and `openspec validate plan-validation --strict`, and record the results in the task journal.
+- [x] 13.1 Run `bun run lint && bun run typecheck && bun run test` and `openspec validate plan-validation --strict`, and record the results in the task journal.
