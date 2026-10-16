@@ -106,6 +106,7 @@ import { worktreeRootOf } from '../team/worktreeRoots'
 import { ProvenanceRecorder } from '../metrics/provenanceRecorder'
 import { ChatTurnUsageStore, TurnUsageTracker } from './chatTurnUsageStore'
 import { MetricsReader } from '../metrics/computeMetrics'
+import { ProcessReportService, type ReportCaller } from '../metrics/reportService'
 import type { ChatSpawnInfo } from './ChatSessionDriver'
 import { OutboundDestinations } from '../outbound/destinations'
 import {
@@ -133,6 +134,8 @@ export interface ChatSessionManagerOptions {
   onTaskChange?: (teamId: string) => void
   /** Every committed strategy change (wired to the strategy view push in bootstrap.ts). */
   onStrategyChange?: (teamId: string) => void
+  /** Every committed process report, decision, or link (team-process-metrics D6; wired to the Metrics tab push). */
+  onProcessReportChange?: (teamId: string) => void
   /**
    * A chat session's record changed in a way a team view shows — created,
    * archived, restored, killed, or its status/name/group/task moved
@@ -970,6 +973,9 @@ export class ChatSessionManager {
     this.provenance = new ProvenanceRecorder(options.db.db)
     this.turnUsage = new ChatTurnUsageStore(options.db.db)
     this.metrics = new MetricsReader(options.db.db)
+    this.reports = new ProcessReportService(options.db.db, this.metrics, {
+      onCommit: teamId => this.options.onProcessReportChange?.(teamId),
+    })
     this.turnUsageTracker = new TurnUsageTracker(this.turnUsage, {
       sessionTask: id => this.records.get(id)?.taskId ?? null,
       latestStart: id => this.provenance.latestStart(id),
@@ -1141,6 +1147,24 @@ export class ChatSessionManager {
   }
 
   /**
+   * The calling session as the report tools see it (team-process-metrics D6):
+   * its team and its group as the current group files define them, re-read
+   * at each call so a `canReportProcess` edit applies at once.
+   */
+  private async reportCaller(sessionId: string): Promise<ReportCaller | null> {
+    const record = this.records.get(sessionId)
+    const teamId = this.teams.teamOf(sessionId)?.teamId
+    if (!record || !teamId) return null
+    const { catalog } = await loadTeamGroups(record.projectPath, this.options.profileCatalogHome)
+    return {
+      teamId,
+      sessionId,
+      group: record.groupId ? catalog.groups.get(record.groupId)?.group : undefined,
+      groupIds: new Set(catalog.groups.keys()),
+    }
+  }
+
+  /**
    * One chat's events for conversation search (chat-session-search D1).
    * Read-only: a loaded chat reads its memo plus live events; an unloaded one
    * is replayed transiently, so the result is never memoized, never moves the
@@ -1239,6 +1263,8 @@ export class ChatSessionManager {
   readonly turnUsage: ChatTurnUsageStore
   /** Process metrics (team-process-metrics D4/D5), shared by the `team_metrics` tool and the Metrics tab. */
   readonly metrics: MetricsReader
+  /** Process reports and proposals (team-process-metrics D6): the report tools and the human's decide/link commands. */
+  readonly reports: ProcessReportService
   private readonly turnUsageTracker: TurnUsageTracker
   /** Durable plans (durable-plans); the plan tools and UI actions go through it. */
   readonly plans: PlanService
@@ -1950,6 +1976,7 @@ export class ChatSessionManager {
       const teamMcpServer = await createMailboxServer(this.mailbox, record.sessionId, {
         tasks: this.tasks, results: this.results, strategies: this.strategies, plans: this.plans, releases: this.teamMail.releases, management: this.management,
         metrics: { teamOf: id => this.teams.teamOf(id)?.teamId ?? null, reader: this.metrics },
+        reports: { caller: id => this.reportCaller(id), service: this.reports },
       })
       const driver = new ChatSessionDriver({
         sessionId: record.sessionId,

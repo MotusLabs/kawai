@@ -22,7 +22,7 @@ import { StartResolver, aggregate, rows, sliceKey, type Observation } from './sl
 
 export const METRICS_CACHE_MS = 30_000
 
-function observations(ctx: MetricsContext): Map<string, Observation[]> {
+export function observations(ctx: MetricsContext): Map<string, Observation[]> {
   const byMetric = new Map<string, Observation[]>()
   for (const o of [
     ...flowObservations(ctx), ...qualityObservations(ctx), ...coverageObservations(ctx),
