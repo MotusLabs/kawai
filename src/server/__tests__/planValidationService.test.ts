@@ -9,8 +9,7 @@ import { createPlanBench, createPlanWorld, type PlanBench, type PlanWorld } from
 import { ImpactService } from '../strategy/ImpactService'
 import { ImpactStore } from '../strategy/impactStore'
 import { MailboxStore } from '../team/mailboxStore'
-import { PlanService } from '../plans/PlanService'
-import { validationCurrentPrecondition } from '../plans/validation/validationStanding'
+import { composePlanServices } from '../plans/planComposition'
 import { ValidationService } from '../plans/validation/ValidationService'
 import { ValidationStore } from '../plans/validation/validationStore'
 import type { OpenspecAdapter } from '../plans/validation/openspecAdapter'
@@ -49,24 +48,15 @@ function bench(adapter: OpenspecAdapter = stubAdapter()): ValidationBench {
   const impact = new ImpactService(new ImpactStore(base.db.db), {
     strategies: base.strategies, plans: base.plans, mail, getSession: id => base.records.get(id), homeDir: world.home,
   })
-  const validationStore = new ValidationStore(base.db.db)
-  const validation = new ValidationService(validationStore, {
-    plans: base.plans, strategies: base.strategies, impact, adapter,
+  // The production composition (plan-validation M1): the same helper the
+  // manager calls, so every assertion exercises the wiring the server runs.
+  const composed = composePlanServices({
+    db: base.db.db, plans: base.plans, strategies: base.strategies, impact, adapter,
     getSession: id => base.records.get(id), homeDir: world.home,
   })
-  // The production shape: PlanService with the validation seam wired and
-  // `validation-current` appended after the shipped entries.
-  const service = new PlanService(base.plans, {
-    getSession: id => base.records.get(id), strategies: base.strategies, homeDir: world.home,
-    pinDisposition: (planId, revision) => impact.pinDisposition(planId, revision),
-    validation: {
-      prepareStanding: (planId, revision) => validation.prepareStanding(planId, revision),
-      standing: prepared => validation.standing(prepared as Parameters<typeof validation.standing>[0]),
-      precondition: validationCurrentPrecondition(),
-    },
-  })
+  const service = composed.plans
   return {
-    ...base, service, validation, validationStore,
+    ...base, service, validation: composed.validation, validationStore: composed.validationStore,
     // Rebind the harness's approve helper to the wired service (its closure
     // otherwise keeps the unwired one).
     approve: (planId: string, revision: number, commandId = `approve-${++counter}`) => service.approve(benchHuman(world), {

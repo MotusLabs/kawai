@@ -88,8 +88,8 @@ export class ValidationService {
     impact: ImpactService
     adapter: OpenspecAdapter
     getSession: (id: string) => ChatSessionRecord | null | undefined
-    /** Capacity evidence per role group (D3's `capacity` row); absent here means no evidence row. */
-    capacity?: (teamId: string, group: string) => Promise<ValidationCapacityEvidence | null> | ValidationCapacityEvidence | null
+    /** Capacity evidence per role group from the team's own identity (D3's `capacity` row); absent means no evidence row. */
+    capacity?: (team: TeamIdentity, group: string) => Promise<ValidationCapacityEvidence | null> | ValidationCapacityEvidence | null
     homeDir?: string
   }) {}
 
@@ -215,6 +215,15 @@ export class ValidationService {
       return
     }
     refuse(`Unknown decision kind "${kind}"; nothing was written.`)
+  }
+
+  /** The plan's standing revisions (`in_review` or `approved`), oldest first (D11's view input). */
+  standingRevisions(planId: string): number[] {
+    const plan = this.options.plans.get(planId)
+    if (!plan) return []
+    return this.options.plans.revisions(planId)
+      .filter(row => row.status === 'in_review' || row.status === 'approved')
+      .map(row => row.revision)
   }
 
   /** D10: the revision a tool call defaults to — the newest in review, else the approved one. */
@@ -397,7 +406,7 @@ export class ValidationService {
     return runFilePhase({
       adapter: this.options.adapter, commonDir: team.teamId, groupsRoot,
       ...(this.options.homeDir ? { homeDir: this.options.homeDir } : {}),
-      content, capacity: group => this.options.capacity?.(team.teamId, group) ?? null,
+      content, capacity: group => this.options.capacity?.(team, group) ?? null,
     })
   }
 

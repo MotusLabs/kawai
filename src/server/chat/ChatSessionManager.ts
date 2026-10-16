@@ -84,12 +84,10 @@ import { MessageQuery } from '../team/messageQuery'
 import { ChatTurnEndStore } from './chatTurnEndStore'
 import { TeamMailbox } from '../team/TeamMailbox'
 import { createMailboxServer } from '../team/mailboxTools'
-import { ValidationService } from '../plans/validation/ValidationService'
-import { ValidationStore } from '../plans/validation/validationStore'
-import { OpenspecAdapter } from '../plans/validation/openspecAdapter'
-import type { ValidationCapacityEvidence } from '../../shared/planValidation'
-import { loadGroupCatalog } from '../team/groupCatalog'
-import { resolveTeam } from '../team/teamIdentity'
+import { composePlanServices } from '../plans/planComposition'
+import type { ValidationService } from '../plans/validation/ValidationService'
+import type { OpenspecAdapter } from '../plans/validation/openspecAdapter'
+import type { ValidationDetailCache } from '../plans/validation/validationDetail'
 import type { MailboxManagement } from '../team/mailboxManagement'
 import { StrategyService } from '../strategy/StrategyService'
 import { StrategyStore } from '../strategy/strategyStore'
@@ -985,33 +983,25 @@ export class ChatSessionManager {
       getSession: id => this.records.get(id),
       ...(options.profileCatalogHome ? { homeDir: options.profileCatalogHome } : {}),
     })
-    // Plan validation (plan-validation): the service over the same plan
-    // store and strategy/impact reads, with the adapter's cached CLI probe
-    // and capacity evidence from staffing and the limit events.
-    this.validation = new ValidationService(new ValidationStore(options.db.db), {
+    // Plans and their validation (durable-plans + plan-validation), composed
+    // the one way anything may compose them: the ValidationService over the
+    // same plan store, capacity evidence from staffing and the limit events
+    // through the team's own groups root, and the PlanService with
+    // validation's `validation-current` appended after the shipped approval
+    // preconditions.
+    const planServices = composePlanServices({
+      db: options.db.db,
       plans: this.teamMail.plans,
       strategies: this.strategies.store,
       impact: this.impact,
-      adapter: this.validationAdapter,
       getSession: id => this.records.get(id),
-      capacity: (teamId, group) => this.capacityEvidence(teamId, group),
+      capacityReads: { capacity: (teamId, group, worktree) => this.teamMail.staffing.capacity(teamId, group, worktree), cooldownUntil: profileId => this.teamMail.limits.cooldownUntil(profileId) },
       ...(options.profileCatalogHome ? { homeDir: options.profileCatalogHome } : {}),
     })
-    // Durable plans: the service over the mailbox's plan store (the same one
-    // the task link reads), pinning against the strategy store above, with
-    // validation's `validation-current` appended after the shipped approval
-    // preconditions (plan-validation D9).
-    this.plans = new PlanService(this.teamMail.plans, {
-      getSession: id => this.records.get(id),
-      strategies: this.strategies.store,
-      pinDisposition: (planId, revision) => this.impact.pinDisposition(planId, revision),
-      validation: {
-        prepareStanding: (planId, revision) => this.validation.prepareStanding(planId, revision),
-        standing: prepared => this.validation.standing(prepared as Parameters<ValidationService['standing']>[0]),
-        precondition: ValidationService.validationCurrentPrecondition(),
-      },
-      ...(options.profileCatalogHome ? { homeDir: options.profileCatalogHome } : {}),
-    })
+    this.validation = planServices.validation
+    this.plans = planServices.plans
+    this.validationDetail = planServices.validationDetail
+    this.validationAdapter = planServices.adapter
     // The impact assessment derives from plans, and every plan's impact gate
     // from the strategy and the impact records (strategy-revision-impact D9):
     // each of the three stores refreshes both views of its team.
@@ -1087,29 +1077,6 @@ export class ChatSessionManager {
   /** Recorded per-profile limit events (profile routing). */
   get limitEvents(): LimitEventStore {
     return this.teamMail.limits
-  }
-
-  /**
-   * Capacity evidence for one role group (plan-validation D3): caps, live
-   * members, and cooling profiles with their cooldown end. Evidence only —
-   * never a blocker.
-   */
-  private async capacityEvidence(teamId: string, group: string): Promise<ValidationCapacityEvidence | null> {
-    const identity = await resolveTeam(teamId)
-    const entry = loadGroupCatalog({ groupsRoot: identity.groupsRoot, ...(this.options.profileCatalogHome ? { homeDir: this.options.profileCatalogHome } : {}) }).groups.get(group)
-    if (!entry) return null
-    const capacity = this.teamMail.staffing.capacity(teamId, group, identity.groupsRoot)
-    const profiles = entry.group.profiles.map(profile => ({
-      profile: profile.profileId,
-      cap: profile.cap ?? null,
-      live: capacity.onProfile[profile.profileId] ?? 0,
-    }))
-    const cooling = entry.group.profiles
-      .flatMap(profile => {
-        const until = this.teamMail.limits.cooldownUntil(profile.profileId)
-        return until === null ? [] : [{ profile: profile.profileId, until }]
-      })
-    return { group, max: entry.group.max, live: capacity.groupMembers, profiles, cooling }
   }
 
   /** Reload every user-level routing rule (Reload routing rules). */
@@ -1236,8 +1203,10 @@ export class ChatSessionManager {
   readonly plans: PlanService
   /** Plan validation (plan-validation): reports, assessments, decisions, and the approval standing. */
   readonly validation: ValidationService
+  /** The coalesced validation view for the Plans page pushes (plan-validation D11). */
+  readonly validationDetail: ValidationDetailCache
   /** The one OpenSpec adapter (plan-validation D3); its probe is cached in-process. */
-  private readonly validationAdapter = new OpenspecAdapter()
+  private readonly validationAdapter: OpenspecAdapter
   /** Strategy impact reviews (strategy-revision-impact); the impact tools and UI actions go through it. */
   readonly impact: ImpactService
   readonly dispatcher: MailDispatcher
