@@ -24,7 +24,7 @@ export default function ReportDetail({ teamPath, report, sendMessage, connected,
     <p className="text-chat-meta text-secondary">Period {timeLabel(report.periodStart)} – {timeLabel(report.periodEnd)}</p>
     <p className="whitespace-pre-wrap text-sm" data-testid="report-summary">{report.summary}</p>
     <div>
-      <button type="button" className="text-sm hover:underline" aria-expanded={snapshotOpen} data-testid="report-snapshot-toggle"
+      <button type="button" className="text-left text-sm hover:underline" aria-expanded={snapshotOpen} data-testid="report-snapshot-toggle"
         onClick={() => setSnapshotOpen(open => !open)}>
         {snapshotOpen ? '▾' : '▸'} Snapshot computed by Kawai at {timeLabel(report.snapshot.computedAt)}
       </button>
@@ -34,7 +34,7 @@ export default function ReportDetail({ teamPath, report, sendMessage, connected,
           return <tr key={metric.id}>
             <td className="pr-2">{def?.label ?? metric.id}</td>
             <td className="pr-2">{def ? formatValue(metric.value, def.unit) : metric.value ?? '—'}</td>
-            <td className="pr-2 text-secondary">n {metric.n}</td>
+            <td className="whitespace-nowrap pr-2 text-secondary">n {metric.n}</td>
             <td className="text-secondary">{insufficientLabel(metric) ?? ''}</td>
           </tr>
         })}</tbody>
