@@ -33,7 +33,7 @@ When a setting's value comes from a legacy `AGENTBOARD_<NAME>`, the server SHALL
 - **THEN** the deprecation warning does not contain the token
 
 ### Requirement: Default data lives in the Kawai home directory
-With no database-path or log-file override, the server SHALL keep its database at `~/.kawai/kawai.db`, its log at `~/.kawai/kawai.log`, and its sibling data (chat wire logs, chat worker state, the tmux server PID file) in `~/.kawai/`. That directory also holds the existing `groups/`, `routing/`, and `teams.json` files. An explicit path override SHALL be used as given.
+With no database-path or log-file override, the server SHALL keep its database at `~/.kawai/kawai.db`, its log at `~/.kawai/kawai.log`, and its sibling data (chat wire logs, chat worker and background-task state, database backups, the tmux server PID file) in `~/.kawai/`. That directory also holds the existing `groups/`, `routing/`, `teams.json`, `outbound.json`, and `profiles.json` files. An explicit path override SHALL be used as given.
 
 #### Scenario: Fresh install uses the Kawai home
 - **WHEN** the server starts for the first time with neither `~/.kawai/kawai.db` nor `~/.agentboard/` present
@@ -44,7 +44,7 @@ With no database-path or log-file override, the server SHALL keep its database a
 - **THEN** it opens `/tmp/x/k.db` and migrates no data
 
 ### Requirement: Legacy data directory is migrated on first start
-When default paths apply, `~/.kawai/kawai.db` is missing, and `~/.agentboard/agentboard.db` exists, the server SHALL move the legacy database (with its journal files), log, chat wire logs, chat worker state, tmux PID file, and dev TLS files into `~/.kawai/`, renaming `agentboard.db` and `agentboard.log` to their Kawai names. It SHALL do this before opening the database. It SHALL NOT move `~/.agentboard/app`, `~/.agentboard/bin`, or files it does not recognize.
+When default paths apply, `~/.kawai/kawai.db` is missing, and `~/.agentboard/agentboard.db` exists, the server SHALL, before opening the database, move the legacy database with its journal, log, chat wire logs, chat worker and background-task state, backups, tmux PID file, and dev TLS files into `~/.kawai/`, renaming `agentboard.db` and `agentboard.log` to their Kawai names. It SHALL NOT move `~/.agentboard/app`, `~/.agentboard/bin`, or files it does not recognize.
 
 #### Scenario: Existing sessions survive the move
 - **WHEN** a server with chat sessions in `~/.agentboard/agentboard.db` restarts on the renamed build
@@ -58,9 +58,42 @@ When default paths apply, `~/.kawai/kawai.db` is missing, and `~/.agentboard/age
 - **WHEN** `~/.kawai/teams.json` and `~/.kawai/groups/` exist before the migration
 - **THEN** they are unchanged after it
 
+#### Scenario: Background-task outcomes survive the move
+- **WHEN** a chat had recorded background-task outcomes in `~/.agentboard/chat-tasks/` before the upgrade
+- **THEN** the chat's tool rows show the same outcomes after the move
+
 #### Scenario: Already migrated
 - **WHEN** `~/.kawai/kawai.db` exists
 - **THEN** nothing under `~/.agentboard/` is moved, even if `~/.agentboard/agentboard.db` also exists
+
+### Requirement: The legacy database is backed up before it moves
+Before moving any legacy entry, the server SHALL take a verified backup of the legacy database through the same copy and integrity check the database backups use, named with the `pre-rename` reason. If the backup fails or does not pass its check, the server SHALL move nothing and run this process on the legacy paths. Pre-rename backups SHALL be kept by rotation for the whole transition.
+
+#### Scenario: Backup precedes the move
+- **WHEN** the migration runs on a host with `~/.agentboard/agentboard.db`
+- **THEN** a `pre-rename` backup that passes the integrity check exists before any entry moves, and it is under `~/.kawai/backups/` afterwards
+
+#### Scenario: Failed backup stops the migration
+- **WHEN** the pre-rename backup cannot be written or fails its integrity check
+- **THEN** nothing under `~/.agentboard/` is moved and the server serves from `~/.agentboard/agentboard.db`
+
+### Requirement: Existing database backups keep their rotation and recovery role
+The migration SHALL rename each backup file that the database backups wrote under the legacy stem (`agentboard-<stamp>-<reason>.db`, including corrupt and partial copies) to the `kawai` stem, keeping stamp and reason, so rotation and recovery still find it. Files in the backups directory that the backups did not write SHALL keep their names.
+
+#### Scenario: Migration backups stay findable
+- **WHEN** `~/.agentboard/backups/` holds `agentboard-<stamp>-pre-migration-2.db` before the upgrade
+- **THEN** `~/.kawai/backups/` holds `kawai-<stamp>-pre-migration-2.db`, and rotation counts it among the newest migrations' backups
+
+#### Scenario: Owner files are untouched
+- **WHEN** the backups directory holds a file the owner copied there under another name
+- **THEN** it moves with the directory and keeps its name
+
+### Requirement: The migration never runs while another process holds the legacy database
+Before backing up or moving anything, the server SHALL check whether another process has the legacy database open. If one does, or if the check cannot be performed, it SHALL skip the migration, run this process on the legacy paths, and log why. A later start SHALL try again.
+
+#### Scenario: Old instance still running
+- **WHEN** a legacy dev server on another port has `~/.agentboard/agentboard.db` open while the renamed build starts
+- **THEN** nothing is moved, the renamed build serves from the legacy paths, and the log names the reason
 
 ### Requirement: A data migration that cannot complete leaves the legacy data usable
 If any legacy entry cannot be moved, the server SHALL put back every entry it already moved, log an error naming the entry and the cause, and run this process with the legacy `~/.agentboard/` paths. A partly migrated state SHALL NOT be left behind.
