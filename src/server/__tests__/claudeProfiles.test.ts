@@ -82,7 +82,10 @@ describe('Claude profile resolution', () => {
     const ctx = { homeDir: tempHome }
     const glm = resolveClaudeProfile('glm', {}, ctx)
     expect(glm.model).toBe('opus')
-    expect(glm.env).toMatchObject({ ANTHROPIC_BASE_URL: 'https://api.z.ai/api/anthropic', ANTHROPIC_DEFAULT_SONNET_MODEL: 'glm-5.3-flash[1m]', ANTHROPIC_DEFAULT_OPUS_MODEL: 'glm-5.3[1m]', CLAUDE_CODE_AUTO_COMPACT_WINDOW: '1000000' })
+    expect(glm.env).toMatchObject({ ANTHROPIC_BASE_URL: 'https://api.z.ai/api/anthropic', ANTHROPIC_DEFAULT_SONNET_MODEL: 'glm-5.3-flash[1m]', ANTHROPIC_DEFAULT_OPUS_MODEL: 'glm-5.3[1m]', ANTHROPIC_DEFAULT_HAIKU_MODEL: 'glm-5.3-flash[1m]', ANTHROPIC_DEFAULT_FABLE_MODEL: 'glm-5.3[1m]', CLAUDE_CODE_AUTO_COMPACT_WINDOW: '1000000' })
+    const glmFlash = resolveClaudeProfile('glm-flash', {}, ctx)
+    expect(glmFlash.model).toBe('sonnet')
+    expect(glmFlash.env).toMatchObject({ ANTHROPIC_DEFAULT_HAIKU_MODEL: 'glm-5.3-flash[1m]', ANTHROPIC_DEFAULT_FABLE_MODEL: 'glm-5.3[1m]' })
     const minimax = resolveClaudeProfile('minimax', {}, ctx)
     expect(minimax.model).toBe('MiniMax-M3')
     expect(minimax.env).toMatchObject({ ANTHROPIC_BASE_URL: 'https://api.minimax.io/anthropic', ANTHROPIC_MODEL: 'MiniMax-M3', ANTHROPIC_DEFAULT_OPUS_MODEL: 'MiniMax-M3', ANTHROPIC_DEFAULT_SONNET_MODEL: 'MiniMax-M3', ANTHROPIC_DEFAULT_HAIKU_MODEL: 'MiniMax-M3', ANTHROPIC_DEFAULT_FABLE_MODEL: 'MiniMax-M3' })
@@ -104,7 +107,7 @@ describe('Claude profile resolution', () => {
       CLAUDE_CODE_AUTO_COMPACT_WINDOW: '1000000',
     })
   })
-  test('shipped profiles off api.z.ai map every Claude tier to a provider model', () => {
+  test('every shipped profile with a base URL maps every Claude tier to a provider model', () => {
     // resolveClaudeProfile() clears inherited profile-controlled variables, so
     // an unmapped tier would send a Claude model name to the provider.
     const catalog = JSON.parse(
@@ -112,8 +115,7 @@ describe('Claude profile resolution', () => {
     ) as Record<string, { model?: string; env?: Record<string, string> }>
     const tiers = ['ANTHROPIC_DEFAULT_OPUS_MODEL', 'ANTHROPIC_DEFAULT_SONNET_MODEL', 'ANTHROPIC_DEFAULT_HAIKU_MODEL', 'ANTHROPIC_DEFAULT_FABLE_MODEL']
     for (const [id, entry] of Object.entries(catalog)) {
-      const base = entry.env?.ANTHROPIC_BASE_URL
-      if (!base || new URL(base).host === 'api.z.ai') continue
+      if (!entry.env?.ANTHROPIC_BASE_URL) continue
       expect(entry.model, `${id} startup model`).toBeTruthy()
       for (const tier of tiers) expect(entry.env?.[tier], `${id} ${tier}`).toBeTruthy()
     }

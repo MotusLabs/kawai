@@ -11,8 +11,8 @@ The shipped default catalog:
 | ID | Label | Routing and models |
 | --- | --- | --- |
 | default | Default | Existing server environment and global provider Settings |
-| glm | GLM | `https://api.z.ai/api/anthropic`; starts on Opus, mapped to `glm-5.3[1m]`; Sonnet maps to `glm-5.3-flash[1m]`; auto-compact window `1000000`; reset zone `Asia/Shanghai` |
-| glm-flash | GLM Flash | `https://api.z.ai/api/anthropic`; starts on Sonnet, mapped to `glm-5.3-flash[1m]`; Opus maps to `glm-5.3[1m]`; auto-compact window `1000000`; reset zone `Asia/Shanghai` |
+| glm | GLM | `https://api.z.ai/api/anthropic`; starts on Opus, mapped to `glm-5.3[1m]`; Sonnet and Haiku map to `glm-5.3-flash[1m]`, Fable to `glm-5.3[1m]`; auto-compact window `1000000`; reset zone `Asia/Shanghai` |
+| glm-flash | GLM Flash | `https://api.z.ai/api/anthropic`; starts on Sonnet, mapped to `glm-5.3-flash[1m]`; Opus and Fable map to `glm-5.3[1m]`, Haiku to `glm-5.3-flash[1m]`; auto-compact window `1000000`; reset zone `Asia/Shanghai` |
 | minimax | MiniMax | `https://api.minimax.io/anthropic`; starts on `MiniMax-M3`; every Claude tier maps to `MiniMax-M3` ([reference](https://platform.minimax.io/docs/token-plan/claude-code)) |
 | mimo | MiMo | `https://api.xiaomimimo.com/anthropic`; starts on `mimo-v2.6-pro`; Sonnet maps to `mimo-v2.6-flash`, Opus/Haiku/Fable to `mimo-v2.6-pro` ([reference](https://mimo.mi.com/docs/en-US/tokenplan/integration/claudecode)) |
 | kimi | Kimi | `https://api.moonshot.ai/anthropic`; starts on `kimi-k3[1m]`; every Claude tier maps to `kimi-k3[1m]`; auto-compact window `1000000` ([reference](https://platform.kimi.ai/docs/guide/claude-code-kimi#configuration-reference)) |
@@ -118,8 +118,11 @@ catalog files accept only profile-controlled variable names and any other
 name rejects the whole file, while fully mapped tiers already resolve
 subagents to `kimi-k3[1m]`. `CLAUDE_CODE_EFFORT_LEVEL` is never set: it is
 not profile-controlled and would override kawai's group effort. The GLM
-profiles need no tier mapping: [Z.AI maps unmapped Claude tiers to GLM
-models on its own servers](https://docs.z.ai/scenario-example/develop-tools/claude).
+profiles map all four tiers explicitly: [Z.AI documents server-side
+defaults only for Opus and Sonnet](https://docs.z.ai/scenario-example/develop-tools/claude),
+so Haiku and Fable are pinned here too. MiMo's own page maps Sonnet to
+`mimo-v2.6-pro`; kawai keeps Sonnet on `mimo-v2.6-flash`, its existing
+mapping.
 
 Default retains global provider configuration unchanged. Named profiles retain
 credentials and unrelated runtime variables from it. Provide suitable API keys,

@@ -49,7 +49,7 @@ Each named profile SHALL apply its predefined environment configuration to its a
 
 #### Scenario: GLM configuration
 - **WHEN** a GLM chat session starts
-- **THEN** it uses https://api.z.ai/api/anthropic, maps Sonnet to glm-5.3-flash[1m] and Opus to glm-5.3[1m], starts on Opus, and requests a 1000000-token auto-compact window
+- **THEN** it uses https://api.z.ai/api/anthropic, starts on Opus, maps Sonnet and Haiku to glm-5.3-flash[1m] and Opus and Fable to glm-5.3[1m], and requests a 1000000-token auto-compact window
 
 #### Scenario: MiniMax and MiMo configuration
 - **WHEN** MiniMax or MiMo sessions start
