@@ -17,6 +17,7 @@ import { BUILD_VERSION } from '../version'
 import { applyBaselineSchema } from './baseline'
 import { CREATE_IMPACT_TABLES_SQL } from '../strategy/impactSchema'
 import { CREATE_VALIDATION_TABLES_SQL } from '../plans/validation/validationSchema'
+import { applyExecutionSchema } from '../plans/execution/executionSchema'
 import type { BackupFile } from './backupFiles'
 import type { BackupOutcome } from './backups'
 
@@ -37,6 +38,10 @@ export const MIGRATIONS: readonly Migration[] = [
   // plan-validation D1: the report, assessment, and decision tables. Additive,
   // no backfill: existing revisions start as Not validated.
   { version: 3, name: 'plan-validation', up: db => db.exec(CREATE_VALIDATION_TABLES_SQL) },
+  // plan-execution D3: executions, their changes, the landing slot, attempts,
+  // rounds, effects, and landing facts, plus team_messages.allowed_profiles.
+  // Additive, no backfill.
+  { version: 4, name: 'plan-execution', up: applyExecutionSchema },
 ]
 
 export const RESTORE_DOC = 'docs/operations/database-backups.md'

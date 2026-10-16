@@ -113,7 +113,7 @@ describe('baseline', () => {
 
   test('this build ships its migrations, and a database at the newest version opens applying nothing', () => {
     const newest = MIGRATIONS.at(-1)!
-    expect(MIGRATIONS.map(migration => migration.name)).toEqual(['strategy-impact', 'plan-validation'])
+    expect(MIGRATIONS.map(migration => migration.name)).toEqual(['strategy-impact', 'plan-validation', 'plan-execution'])
     expect(newestVersion()).toBe(newest.version)
     initDatabase({ path: dbPath }).close()
     const before = dump(dbPath)
