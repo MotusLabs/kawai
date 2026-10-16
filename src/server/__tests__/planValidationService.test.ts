@@ -6,6 +6,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, test } from 'bun:test
 import fs from 'node:fs'
 import path from 'node:path'
 import { createPlanBench, createPlanWorld, type PlanBench, type PlanWorld } from './planHarness'
+import { planInput } from '../../shared/__tests__/planFixtures'
 import { ImpactService } from '../strategy/ImpactService'
 import { ImpactStore } from '../strategy/impactStore'
 import { MailboxStore } from '../team/mailboxStore'
@@ -447,6 +448,27 @@ describe('ValidationService.validate (D8)', () => {
     const keys = outcome.ok ? outcome.report.findings.map(finding => finding.key) : []
     expect(keys).toContain('relations:api')
     expect(keys.some(key => key.startsWith('relations:conflict'))).toBe(false)
+  })
+
+  test("two agents' concurrent dry runs of their own drafts never share one run (N5)", async () => {
+    let release: () => void = () => {}
+    const gate = new Promise<void>(resolve => { release = resolve })
+    const b = use(fakeAdapter({ gate }))
+    const { planId } = await b.draftInReview()
+    // Each agent saves a different draft; neither names a draft id, so the
+    // default is the caller's own session id.
+    await b.service.saveDraft(b.agent('lead'), { plan_id: planId, draft_id: 'lead', content: planInput({ goal: 'Lead goal' }), expected_draft_hash: null })
+    await b.service.saveDraft(b.agent('dev'), { plan_id: planId, draft_id: 'dev', content: planInput({ goal: 'Dev goal', changes: [{ change: 'ui', dependsOn: [], group: 'middle-devs', acceptance: [], extraChecks: [], guidance: '' }] }), expected_draft_hash: null })
+    const lead = b.validation.validate(b.agent('lead'), { planId })
+    const dev = b.validation.validate(b.agent('dev'), { planId })
+    release()
+    const [leadOutcome, devOutcome] = await Promise.all([lead, dev])
+    expect(leadOutcome).toMatchObject({ ok: true, dryRun: true })
+    expect(devOutcome).toMatchObject({ ok: true, dryRun: true })
+    // Each computed its own draft: two changes for lead, one for dev.
+    expect(leadOutcome.ok && leadOutcome.report.inputs.changes.map(change => change.change)).toEqual(['api', 'ui'])
+    expect(devOutcome.ok && devOutcome.report.inputs.changes.map(change => change.change)).toEqual(['ui'])
+    expect(leadOutcome.ok && leadOutcome.report.inputHash).not.toBe(devOutcome.ok && devOutcome.report.inputHash)
   })
 
   test('a dry run is computed as if submitted, marked dryRun, and stores nothing', async () => {

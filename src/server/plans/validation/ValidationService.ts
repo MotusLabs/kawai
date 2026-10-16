@@ -266,20 +266,23 @@ export class ValidationService {
     const team = await this.context(caller)
     const plan = this.options.plans.forTeam(team.teamId, input.planId)
     if (!plan) return { ok: false, reason: 'not-found', message: `Plan not found in this team: ${input.planId}` }
-    const key = 'revision' in input && input.revision !== undefined
-      ? `${plan.id}:r${input.revision}`
-      : `${plan.id}:d${'draftId' in input && input.draftId !== undefined ? input.draftId : ''}`
+    const revisionInput = 'revision' in input && input.revision !== undefined ? input.revision : undefined
+    // The draft id defaults to the caller's BEFORE the single-flight key is
+    // built, so two agents' concurrent dry runs never share one run (N5).
+    const draftId = revisionInput === undefined
+      ? ('draftId' in input && input.draftId !== undefined ? input.draftId : caller.kind === 'agent' ? caller.sessionId : 'human')
+      : undefined
+    const key = revisionInput !== undefined ? `${plan.id}:r${revisionInput}` : `${plan.id}:d${draftId}`
     const running = this.running.get(key)
     if (running) return running
     const outcome = (async (): Promise<ValidateOutcome> => {
       try {
-        const dryRun = !('revision' in input && input.revision !== undefined)
-        if (dryRun) {
-          const checked = await this.dryRunScope(team, plan.id, 'draftId' in input ? input.draftId : undefined, caller)
+        if (revisionInput === undefined) {
+          const checked = await this.dryRunScope(team, plan.id, draftId, caller)
           if ('refused' in checked) return checked.refused
           return { ok: true, report: checked.report, reportId: null, stored: false, dryRun: true }
         }
-        const revision = input.revision as number
+        const revision = revisionInput
         const checked = await this.revisionScope(team, plan.id, revision)
         if ('refused' in checked) return checked.refused
         const { revision: row, groupsRoot } = checked
