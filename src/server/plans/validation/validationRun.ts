@@ -40,7 +40,7 @@ export async function runFilePhase(options: {
   groupsRoot: string
   homeDir?: string
   content: PlanContent
-  capacity: (group: string) => ValidationCapacityEvidence | null
+  capacity: (group: string) => Promise<ValidationCapacityEvidence | null> | ValidationCapacityEvidence | null
 }): Promise<ValidationFilePhase> {
   const named = [...new Set([
     ...options.content.roles.map(role => role.group),
@@ -65,8 +65,8 @@ export async function runFilePhase(options: {
     ])
     cli[change.change] = { validate, deltas }
   }))
-  const capacity = [...new Set(options.content.roles.map(role => role.group))]
-    .map(group => options.capacity(group))
+  const capacity = (await Promise.all([...new Set(options.content.roles.map(role => role.group))]
+    .map(async group => await options.capacity(group))))
     .filter((entry): entry is ValidationCapacityEvidence => entry !== null)
   return { file, cli, resolved, capacity }
 }

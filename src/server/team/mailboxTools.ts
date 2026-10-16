@@ -14,6 +14,8 @@ import type { StrategyService } from '../strategy/StrategyService'
 import { STRATEGY_TOOL_NAMES, strategyDescriptions, strategyHandlers, strategySchemas } from '../strategy/strategyTools'
 import type { PlanService } from '../plans/PlanService'
 import { PLAN_TOOL_NAMES, planDescriptions, planHandlers, planSchemas } from '../plans/planTools'
+import type { ValidationService } from '../plans/validation/ValidationService'
+import { VALIDATION_TOOL_NAMES, validationDescriptions, validationHandlers, validationSchemas } from '../plans/validation/validationTools'
 import type { ImpactService } from '../strategy/ImpactService'
 import { IMPACT_TOOL_NAMES, impactDescriptions, impactHandlers, impactSchemas } from '../strategy/impactTools'
 import type { MailboxManagement } from './mailboxManagement'
@@ -24,7 +26,7 @@ export const RELEASE_TOOL_NAMES = ['release_member'] as const
 /** Mailbox management (team-mailbox-management): always registered, refused by right. */
 export const MANAGEMENT_TOOL_NAMES = ['list_mailbox', 'cancel_message', 'discard_message'] as const
 /** Every team tool, allowed without approval cards under either policy. */
-export const TEAM_ALLOWED_TOOLS = [...MAILBOX_TOOL_NAMES, ...MANAGEMENT_TOOL_NAMES, ...RELEASE_TOOL_NAMES, ...TASK_TOOL_NAMES, ...STRATEGY_TOOL_NAMES, ...IMPACT_TOOL_NAMES, ...PLAN_TOOL_NAMES].map(name => `mcp__${TEAM_MCP_SERVER}__${name}`)
+export const TEAM_ALLOWED_TOOLS = [...MAILBOX_TOOL_NAMES, ...MANAGEMENT_TOOL_NAMES, ...RELEASE_TOOL_NAMES, ...TASK_TOOL_NAMES, ...STRATEGY_TOOL_NAMES, ...IMPACT_TOOL_NAMES, ...PLAN_TOOL_NAMES, ...VALIDATION_TOOL_NAMES].map(name => `mcp__${TEAM_MCP_SERVER}__${name}`)
 
 const content = { body: z.string().min(1), urgent: z.boolean().optional(), tags: z.array(z.string()).optional(), task_id: z.string().min(1).optional() }
 // `human` is accepted so the service can refuse it with the reply path,
@@ -97,6 +99,8 @@ export interface MailboxServerServices {
   strategies?: StrategyService
   /** Plan read/create/draft/submit tools (durable-plans D11); never approve or lifecycle. */
   plans?: PlanService
+  /** Validation tools (plan-validation D10): validate, read, assess; never decide or approve. */
+  validation?: ValidationService
   /** Impact read/propose tools (strategy-revision-impact D10); never decide or request. */
   impact?: ImpactService
   releases?: MemberRelease
@@ -104,7 +108,7 @@ export interface MailboxServerServices {
 }
 
 export async function createMailboxServer(mailbox: TeamMailbox, sessionId: string, services: MailboxServerServices = {}) {
-  const { tasks, results, strategies, plans, impact, releases, management } = services
+  const { tasks, results, strategies, plans, validation, impact, releases, management } = services
   const { createSdkMcpServer, tool } = await import('@anthropic-ai/claude-agent-sdk')
   const handlers: Record<string, (input: unknown) => Promise<unknown>> = {
     ...mailboxHandlers(mailbox, sessionId),
@@ -118,10 +122,14 @@ export async function createMailboxServer(mailbox: TeamMailbox, sessionId: strin
     ...(impact ? impactHandlers(impact, sessionId) : {}),
     // Plans: no approve, withdraw, close, or reopen tool exists (D11).
     ...(plans ? planHandlers(plans, sessionId) : {}),
+    // Validation: no answer, accept, resolve, except, authorize, or approve
+    // tool exists (D10); only the owner decides.
+    ...(validation ? validationHandlers(validation, sessionId) : {}),
   }
   const schemas: Record<string, z.ZodObject> = {
     ...mailboxSchemas, ...(management ? managementSchemas : {}), ...(tasks ? taskSchemas : {}),
     ...(releases ? releaseSchemas : {}), ...(strategies ? strategySchemas : {}), ...(impact ? impactSchemas : {}), ...(plans ? planSchemas : {}),
+    ...(validation ? validationSchemas : {}),
   }
   const descriptions: Record<string, string> = {
     send_message: 'Send to a team group or session. Returns immediately with the message id. Optional task_id puts the message under a team task. Mail to the human is refused: reply to a message they sent instead.',
@@ -134,6 +142,7 @@ export async function createMailboxServer(mailbox: TeamMailbox, sessionId: strin
     ...(strategies ? strategyDescriptions : {}),
     ...(impact ? impactDescriptions : {}),
     ...(plans ? planDescriptions : {}),
+    ...(validation ? validationDescriptions : {}),
   }
   return createSdkMcpServer({ name: TEAM_MCP_SERVER, version: '1.0.0', tools: Object.keys(handlers).map(name =>
     tool(name, descriptions[name]!, schemas[name]!.shape, async (input) => {

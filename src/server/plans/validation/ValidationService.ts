@@ -88,7 +88,7 @@ export class ValidationService {
     adapter: OpenspecAdapter
     getSession: (id: string) => ChatSessionRecord | null | undefined
     /** Capacity evidence per role group (D3's `capacity` row); absent here means no evidence row. */
-    capacity?: (teamId: string, group: string) => ValidationCapacityEvidence | null
+    capacity?: (teamId: string, group: string) => Promise<ValidationCapacityEvidence | null> | ValidationCapacityEvidence | null
     homeDir?: string
   }) {}
 
@@ -205,6 +205,48 @@ export class ValidationService {
       if (!exploratory) refuse(`An exploration authorization targets an exploratory or insufficient-information assessment of revision ${revision}; "${target}" is not one.`)
       if (!scope) refuse('An exploration authorization needs its scope.')
       return
+    }
+  }
+
+  /** D10: the revision a tool call defaults to — the newest in review, else the approved one. */
+  async defaultRevisionFor(caller: ValidationCaller, planId: string): Promise<{ ok: true; revision: number | null } | { ok: false; reason: 'not-found'; message: string }> {
+    const team = await this.context(caller)
+    const plan = this.options.plans.forTeam(team.teamId, planId)
+    if (!plan) return { ok: false, reason: 'not-found', message: `Plan not found in this team: ${planId}` }
+    const inReview = [...this.options.plans.revisions(plan.id)].reverse().find(row => row.status === 'in_review')
+    const approved = this.options.plans.approvedRevision(plan.id)
+    return { ok: true, revision: inReview?.revision ?? approved?.revision ?? null }
+  }
+
+  /**
+   * D10's read: one report of the caller's team's plan — the newest of a
+   * standing revision (the default revision when none is named), or the
+   * named report row — with its standing computed now and the revision's
+   * assessments and decisions. Read-only.
+   */
+  async validationGet(caller: ValidationCaller, input: { planId: string; revision?: number; reportId?: string }): Promise<
+    | { ok: true; report: PlanValidationReport; standing: ReturnType<ValidationService['standing']>; assessments: AssessmentRow[]; decisions: DecisionRecord[] }
+    | { ok: false; reason: 'not-found'; message: string }
+  > {
+    const team = await this.context(caller)
+    const plan = this.options.plans.forTeam(team.teamId, input.planId)
+    if (!plan) return { ok: false, reason: 'not-found', message: `Plan not found in this team: ${input.planId}` }
+    const defaulted = input.revision !== undefined
+      ? { ok: true as const, revision: input.revision }
+      : await this.defaultRevisionFor(caller, input.planId)
+    const report = input.reportId
+      ? (() => {
+        const row = this.store.report(input.reportId!)
+        return row && row.planId === plan.id ? row : null
+      })()
+      : defaulted.ok && defaulted.revision !== null ? this.store.newestReport(plan.id, defaulted.revision) : null
+    if (!report) return { ok: false, reason: 'not-found', message: input.reportId ? `Report not found for this plan: ${input.reportId}` : 'No validation report for that revision; run plan_validate first.' }
+    const prepared = await this.prepareStanding(plan.id, report.revision)
+    const standing = prepared ? this.standing(prepared) : { state: 'not-validated' as const }
+    return {
+      ok: true, report, standing,
+      assessments: this.store.assessments(plan.id, report.revision),
+      decisions: this.store.decisions(plan.id, report.revision),
     }
   }
 
