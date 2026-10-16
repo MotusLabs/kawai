@@ -34,6 +34,10 @@ After a final limit event, its provider SHALL be in cooldown until the provider'
 - **WHEN** `opus` and `sonnet` are profiles of provider `claude` with idle members, and an `opus` agent's final limit event names window `seven_day_opus`
 - **THEN** only `opus` cools, and group mail goes to the `sonnet` member
 
+#### Scenario: A short later window does not release a weekly one
+- **WHEN** `opus` and `sonnet` are profiles of provider `claude`, `opus` has a final limit event for window `seven_day` that resets in three days, and `sonnet` later has one for window `five_hour` that resets in two hours
+- **THEN** both stay cooling until the `seven_day` reset
+
 #### Scenario: Events recorded before providers
 - **WHEN** a final limit event recorded without a provider is still within its cooldown
 - **THEN** only the profile that recorded it is cooling
