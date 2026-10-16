@@ -100,6 +100,7 @@ import { decideApproval } from './approvalPolicy'
 import { resolveClaudeProfile } from './ClaudeProfiles'
 import { TurnQueue } from './TurnQueue'
 import { TEAM_ALLOWED_TOOLS } from '../team/mailboxTools'
+import { outboundAuditHooks } from '../outbound/auditHooks'
 import type { OutboundAuditSink } from '../outbound/observer'
 import { TEAM_MCP_SERVER } from '../team/teamPrompt'
 import { formatEnvelope } from '../team/envelope'
@@ -303,9 +304,6 @@ type DistributiveOmit<T, K extends PropertyKey> = T extends unknown
   ? Omit<T, K>
   : never
 type ChatEventDraft = DistributiveOmit<ChatEvent, 'id' | 'sequence' | 'at'>
-
-/** The audited tools (execution-safety-recovery D3): shells, monitors, MCP. */
-const AUDITED_TOOLS = '^(Bash|Monitor|mcp__.+)$'
 
 export class ChatSessionDriver {
   private readonly options: ChatSessionDriverOptions
@@ -713,10 +711,13 @@ export class ChatSessionDriver {
       // new working directory. Observational only; never blocks the agent.
       hooks: {
         CwdChanged: [{ hooks: [this.cwdChangedHook] }],
-        PreToolUse: [{ matcher: AUDITED_TOOLS, hooks: [this.auditHook('PreToolUse')] }],
-        PostToolUse: [{ matcher: AUDITED_TOOLS, hooks: [this.auditHook('PostToolUse')] }],
-        PostToolUseFailure: [{ matcher: AUDITED_TOOLS, hooks: [this.auditHook('PostToolUseFailure')] }],
-        PermissionDenied: [{ matcher: AUDITED_TOOLS, hooks: [this.auditHook('PermissionDenied')] }],
+        // The four audit hooks (D3) construct in src/server/outbound/; the
+        // driver only registers them, observational exactly as built there.
+        ...outboundAuditHooks({
+          sink: this.options.outbound,
+          spawnId: () => this.currentSpawnId,
+          cwd: () => this.sessionProjectPath,
+        }),
       },
       ...(executablePath
         ? { pathToClaudeCodeExecutable: executablePath }
@@ -1235,74 +1236,6 @@ export class ChatSessionDriver {
     return { continue: true }
   }
 
-  /**
-   * One observational audit hook per event (execution-safety-recovery D3):
-   * it hands the use to the sink inside try/catch and returns exactly
-   * `{ continue: true }` — no decision, no input update, no retry, no
-   * message — before any file read or database write the sink queued.
-   */
-  private readonly auditHook = (event: 'PreToolUse' | 'PostToolUse' | 'PostToolUseFailure' | 'PermissionDenied'): HookCallback =>
-    async (input) => {
-      const sink = this.options.outbound
-      if (sink !== undefined) {
-        try {
-          const use = input as {
-            tool_name: string
-            tool_input?: unknown
-            tool_use_id?: string
-            agent_id?: string
-            error?: string
-            is_interrupt?: boolean
-            reason?: string
-            duration_ms?: number
-          }
-          const common = {
-            toolName: use.tool_name,
-            toolInput: use.tool_input,
-            toolUseId: use.tool_use_id ?? '',
-            spawnId: this.currentSpawnId,
-            ...(use.agent_id === undefined ? {} : { agentId: use.agent_id }),
-            cwd: this.sessionProjectPath,
-          }
-          const toolInput = use.tool_input
-          if (event === 'PreToolUse') {
-            sink.onPreToolUse({ ...common, toolInput })
-          } else if (event === 'PostToolUse') {
-            sink.onPostToolUse({
-              ...common,
-              toolInput,
-              background: this.callRanInBackground(use.tool_name, use.tool_input, (input as { tool_response?: unknown }).tool_response),
-              ...(use.duration_ms === undefined ? {} : { durationMs: use.duration_ms }),
-            })
-          } else if (event === 'PostToolUseFailure') {
-            sink.onPostToolUseFailure({
-              ...common,
-              error: use.error ?? '',
-              ...(use.is_interrupt === undefined ? {} : { isInterrupt: use.is_interrupt }),
-              ...(use.duration_ms === undefined ? {} : { durationMs: use.duration_ms }),
-            })
-          } else {
-            sink.onPermissionDenied({ ...common, reason: use.reason ?? '' })
-          }
-        } catch {
-          // Observational only: an audit failure never fails the tool call.
-        }
-      }
-      return { continue: true }
-    }
-
-  /**
-   * D3: a `run_in_background` Bash or any Monitor starts in the background,
-   * and a foreground Bash the harness moved to the background says so in its
-   * response ("…was moved to the background (ID: …)"), so its call records
-   * `started-background`, not `completed` while it still runs.
-   */
-  private callRanInBackground(toolName: string, toolInput: unknown, response: unknown): boolean {
-    if (toolName === 'Monitor') return true
-    if (toolName !== 'Bash') return false
-    if ((toolInput as { run_in_background?: unknown } | null)?.run_in_background === true) return true
-    return typeof response === 'string' && /(?:was moved to the background|running in background with ID:)/.test(response)
-  }
 
   private readonly canUseTool: CanUseTool = (toolName, input, toolOptions) => {
     if (this.options.teamMcpServer && TEAM_ALLOWED_TOOLS.includes(toolName)) {

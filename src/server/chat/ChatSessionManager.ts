@@ -103,7 +103,7 @@ import type { TaskResultService } from '../team/TaskResultService'
 import type { SpawnRequest, SpawnResult } from '../team/staffing'
 import { TeamCaps } from '../team/teamCaps'
 import { OutboundDestinations } from '../outbound/destinations'
-import { OutboundObserver } from '../outbound/observer'
+import { sessionObserver } from '../outbound/auditHooks'
 import { RepoFactsResolver } from '../outbound/repoFacts'
 import { OutboundStore } from '../outbound/store'
 import {
@@ -1883,7 +1883,9 @@ export class ChatSessionManager {
         projectPath: record.projectPath,
         queryFactory,
         teamMcpServer,
-        outbound: new OutboundObserver({
+        // The session's observer (D7) constructs in src/server/outbound/;
+        // the manager registers it with its own live context getters.
+        outbound: sessionObserver({
           sessionId: record.sessionId,
           store: this.outboundStore,
           destinations: this.outbound,
