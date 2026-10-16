@@ -27,8 +27,34 @@ const REGISTRY_DEFAULTS: Record<string, string> = {
   bun: 'registry.npmjs.org', cargo: 'crates.io', twine: 'pypi.org', docker: 'docker.io',
   podman: 'docker.io', helm: 'docker.io', buildctl: 'docker.io',
 }
-/** Command prefixes that only wrap the command the classifier means. */
-const PREFIXES = new Set(['sudo', 'command', 'nohup', 'exec', 'time'])
+/** Shell reserved words that only precede the command the rules mean. */
+const RESERVED = new Set(['!', 'if', 'then', 'elif', 'else', 'while', 'until', 'do', 'time'])
+/**
+ * Wrappers that only carry the command, with the flags the classifier knows
+ * the arity of. A flag outside both lists is not understood: the segment
+ * records unknown-destination rather than a guessed position (CC M5).
+ */
+const WRAPPERS: Record<string, { booleans: string[]; values: string[]; skipDuration?: boolean }> = {
+  sudo: {
+    booleans: ['-E', '-e', '-i', '-k', '-K', '-l', '-n', '-S', '-s', '-v', '-H', '-P', '-V', '--'],
+    values: ['-u', '-g', '-p', '-r', '-t', '-C', '--user', '--group', '--prompt', '--host', '--role', '--type', '--other-user', '--close-from', '--askpass'],
+  },
+  timeout: {
+    booleans: ['--foreground', '--preserve-status', '-v', '-l', '--help', '--version'],
+    values: ['-s', '-k', '--signal', '--kill-after'],
+    skipDuration: true,
+  },
+  nice: { booleans: ['--'], values: ['-n', '--adjustment'] },
+  xargs: {
+    booleans: ['-r', '-t', '--no-run-if-empty', '--verbose', '--trace', '--exit', '--help', '--version'],
+    values: ['-d', '-I', '-J', '-s', '-j', '-P', '-L', '-l', '-n', '-E', '-a', '-o', '--delimiter', '--arg-file', '--max-args', '--max-chars', '--max-procs', '--max-lines', '--replace', '--eof'],
+  },
+  command: { booleans: ['-p', '-v', '-V', '--'], values: [] },
+  exec: { booleans: ['-l', '--'], values: ['-a'] },
+  nohup: { booleans: ['--'], values: [] },
+  stdbuf: { booleans: ['--'], values: ['-o', '-e', '-i', '--output', '--error', '--input'] },
+  ionice: { booleans: ['-t', '--'], values: ['-c', '-n', '-p', '--class', '--classdata', '--pid'] },
+}
 
 const URLISH = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//
 const SCPISH = /^[^@/\s]+@[^:\s]+:/
@@ -124,18 +150,39 @@ function ghRepoTarget(scanned: Scan, positionals: Word[]): SendTarget {
 }
 
 /**
- * `gh repo create`/`fork` never falls back to origin (D1): a create targets
- * the new repository — a positional `owner/name`, a bare name reading as the
- * caller's own account — and a fork targets its destination account.
+ * `gh repo create` never falls back to origin (D1): the new repository is a
+ * positional `owner/name` — a bare name reads as the caller's own account,
+ * which can never be shown equal to origin, so it is a violation.
  */
 function ghRepoCreationTarget(scanned: Scan): SendTarget {
   const flagged = scanned.values('-R', '--repo')[0]
   const positional = flagged ?? scanned.positionals[0]
   if (positional === undefined || positional.opaque) {
-    return { kind: 'repo', repo: "the caller's account" }
+    return { kind: 'repo', repo: "the caller's account/…" }
   }
   if (URLISH.test(positional.text)) return parseRepoUrl(positional.text) ?? VARIABLE()
-  return { kind: 'repo', repo: positional.text }
+  const name = positional.text.replace(/\.git$/, '')
+  // A name with no owner means the caller's own account.
+  return { kind: 'repo', repo: name.includes('/') ? name : `the caller's account/${name}` }
+}
+
+/**
+ * `gh repo fork` never targets origin (D1): the destination is the `--org`
+ * (else the caller's own account) over the `--fork-name` (else the source
+ * repository's name). The source stays in the segment; it is never the
+ * target. Opaque values leave the destination unresolved.
+ */
+function ghRepoForkTarget(scanned: Scan): SendTarget {
+  const org = scanned.values('--org')[0]
+  const forkName = scanned.values('--fork-name')[0]
+  if (org?.opaque === true || forkName?.opaque === true) return VARIABLE()
+  const positional = scanned.positionals[0]
+  const sourceName = positional !== undefined && !positional.opaque
+    ? positional.text.replace(/\.git$/, '').split('/').pop() ?? null
+    : null
+  const owner = org?.text ?? "the caller's account"
+  const name = forkName?.text ?? sourceName ?? 'the source name'
+  return { kind: 'repo', repo: `${owner}/${name}`, fork: true }
 }
 
 function parseRepoUrl(text: string): SendTarget | null {
@@ -239,20 +286,72 @@ function registryOf(reference: string): string | null {
   return first.includes('.') || first.includes(':') || first === 'localhost' ? first : null
 }
 
-/** Drop the wrapping prefixes (`sudo`, `timeout 30`, …) that carry no target. */
-function unwrapPrefixes(argv: string[]): string[] {
+/** What unwrapping left: the command, or why its position is unknowable. */
+interface Unwrapped {
+  argv: string[]
+  /** A wrapper flag the table does not know: the segment reads unknown. */
+  unknown: string | null
+}
+
+/**
+ * Drop the leading reserved words and wrapping commands (`sudo -u bob`,
+ * `timeout -s KILL 5`, `nice -n 5`, `xargs`, `stdbuf -oL`, …), each flag
+ * consumed by its arity. `timeout`'s duration positional is skipped too.
+ */
+function unwrapWrappers(argv: string[]): Unwrapped {
   let rest = argv
   for (;;) {
-    const head = rest[0]
-    if (head !== undefined && PREFIXES.has(head)) { rest = rest.slice(1); continue }
-    if (head === 'timeout') {
-      let i = 1
-      while (i < rest.length && (rest[i]!.startsWith('-') || /^\d+$/.test(rest[i]!))) i++
-      rest = rest.slice(i)
+    while (rest.length > 0 && RESERVED.has(rest[0]!)) rest = rest.slice(1)
+    const spec = rest[0] === undefined ? undefined : WRAPPERS[rest[0]!]
+    if (spec === undefined) return { argv: rest, unknown: null }
+    let i = 1
+    let unknown = false
+    while (i < rest.length) {
+      const word = rest[i]!
+      if (word === '--') { i++; break }
+      if (word === '-' || !word.startsWith('-')) break
+      const eq = word.indexOf('=')
+      if (word.startsWith('--')) {
+        const name = eq === -1 ? word : word.slice(0, eq)
+        if (spec.values.includes(name)) { if (eq === -1) i++; i++; continue }
+        if (spec.booleans.includes(name)) { i++; continue }
+        unknown = true
+        break
+      }
+      // A short cluster walks letter by letter, exactly as `scan` does: the
+      // first value letter takes the cluster's rest (or `=` value, or the
+      // next word) as its value (`sudo -Eu x`, `stdbuf -oL`, `ionice -c3`).
+      const letters = word.slice(1)
+      const attached = eq === -1 ? null : word.slice(eq + 1)
+      let valueTakesNext = false
+      let understood = true
+      for (let at = 0; at < letters.length; at++) {
+        const letter = `-${letters[at]!}`
+        if (spec.values.includes(letter)) {
+          valueTakesNext = at === letters.length - 1 && attached === null
+          break
+        }
+        if (!spec.booleans.includes(letter)) { understood = false; break }
+      }
+      if (!understood) { unknown = true; break }
+      i++
+      if (valueTakesNext) i++
       continue
     }
-    return rest
+    if (unknown) return { argv: [], unknown: `the ${rest[0]} options were not understood` }
+    rest = rest.slice(i)
+    if (spec.skipDuration === true && rest.length > 0 && /^[\d.]+(ms|[smhd])?$/.test(rest[0]!)) rest = rest.slice(1)
   }
+}
+
+/** The rule an unknown-wrapped segment most plausibly sends under. */
+const WRAPPED_RULE_HEADS: Record<string, SendCandidate['rule']> = {
+  git: 'git-push', gh: 'gh-write', curl: 'http-send', wget: 'http-send',
+  http: 'http-send', https: 'http-send', npm: 'registry-publish',
+  pnpm: 'registry-publish', yarn: 'registry-publish', bun: 'registry-publish',
+  cargo: 'registry-publish', twine: 'registry-publish', docker: 'registry-publish',
+  podman: 'registry-publish', helm: 'registry-publish', buildctl: 'registry-publish',
+  sendmail: 'mail-send', msmtp: 'mail-send', mailx: 'mail-send', ssmtp: 'mail-send', mail: 'mail-send',
 }
 
 /** Parse a whole command into its send candidates (D4's rules table). */
@@ -262,28 +361,43 @@ export function parseSends(command: string, cwd: string): SendCandidate[] {
 
 function candidatesOf(segment: { argv: string[]; text: string; cwd: string; env: ReadonlyMap<string, string | null> }): SendCandidate[] {
   const { text, cwd, env } = segment
-  const argv = unwrapPrefixes(segment.argv)
-  if (argv.length === 0) return []
   const base = (rule: SendCandidate['rule'], target: SendTarget): SendCandidate => ({ rule, segment: text, cwd, target })
+  const unwrapped = unwrapWrappers(segment.argv)
+  if (unwrapped.unknown !== null) {
+    // A wrapper flag the table does not know: the segment may send anywhere,
+    // so it records unknown-destination under its most plausible rule.
+    const argv = unwrapped.argv.length > 0 ? unwrapped.argv : segment.argv
+    const head = argv.find(word => !word.startsWith('-'))?.split('/').pop()?.toLowerCase() ?? ''
+    const rule = WRAPPED_RULE_HEADS[head] ?? 'http-send'
+    return [base(rule, { kind: 'unresolved', why: unwrapped.unknown })]
+  }
+  const argv = unwrapped.argv
+  if (argv.length === 0) return []
   const ghPinned = env.has('GH_REPO') ? 'GH_REPO is set' : env.has('GH_HOST') ? 'GH_HOST is set' : null
   const head = argv[0]!.split('/').pop()!.toLowerCase()
 
   if (head === 'git') {
     // Skip the global flags to the subcommand; a pinned target never resolves.
     let subcommandAt = -1
-    let pinned: string | null = env.has('GIT_DIR') ? 'GIT_DIR is set' : env.has('GIT_WORK_TREE') ? 'GIT_WORK_TREE is set' : null
+    let pinned: string | null = null
+    for (const key of env.keys()) {
+      if (key === 'GIT_DIR') pinned = 'GIT_DIR is set'
+      else if (key === 'GIT_WORK_TREE') pinned = 'GIT_WORK_TREE is set'
+      else if (key.startsWith('GIT_CONFIG')) pinned = `${key} is set`
+    }
     for (let i = 1; i < argv.length; i++) {
       const word = argv[i]!
       if (word === '-C' || word === '-c') {
         if (word === '-c') {
           const setting = argv[i + 1] ?? ''
-          if (/^(remote|url)\./.test(setting)) pinned = 'a git -c override pins the target'
+          // git keys are case-insensitive: Remote., URL., Branch. alike.
+          if (/^(remote|url|branch)\./i.test(setting)) pinned = 'a git -c override pins the target'
         }
         i++
         continue
       }
-      if (word.startsWith('--git-dir') || word.startsWith('--work-tree') || word.startsWith('--namespace')) {
-        pinned = 'git directory flags pin the target'
+      if (word.startsWith('--git-dir') || word.startsWith('--work-tree') || word.startsWith('--namespace') || word.startsWith('--config-env')) {
+        pinned = word.startsWith('--config-env') ? 'git --config-env pins the target' : 'git directory flags pin the target'
         if (!word.includes('=')) i++
         continue
       }
@@ -314,10 +428,20 @@ function candidatesOf(segment: { argv: string[]; text: string; cwd: string; env:
     }
     if (GH_WRITE_COMMANDS.has(argv[1] ?? '') && GH_WRITE_VERBS.has(argv[2] ?? '')) {
       if (ghPinned !== null) return [base('gh-write', { kind: 'unresolved', why: ghPinned })]
-      const scanned = scan(argv, 3, ['-R', '--repo', '--hostname', '--body', '--body-file', '--title', '--assignee', '--label', '--project', '--milestone', '--base', '--head', '--reviewer'])
+      // `gh repo create`/`fork` value flags are listed so their values are
+      // never misread as the repository name.
+      const scanned = scan(argv, 3, [
+        '-R', '--repo', '--hostname', '--body', '--body-file', '--title', '--assignee', '--label', '--project', '--milestone', '--base', '--head', '--reviewer',
+        '-d', '--description', '-h', '--homepage', '-t', '--team', '-p', '--template', '-g', '--gitignore', '-l', '--license', '-s', '--source', '-r', '--remote',
+        '--org', '--fork-name', '--remote-name',
+      ])
       // Creates and forks publish somewhere new; gists target gist.github.com
-      // (D1): none of them may fall back to the repository's origin.
-      if (argv[1] === 'repo' && (argv[2] === 'create' || argv[2] === 'fork')) {
+      // (D1): none of them may fall back to the repository's origin, and a
+      // fork's destination account never reads from the source.
+      if (argv[1] === 'repo' && argv[2] === 'fork') {
+        return [base('gh-write', ghRepoForkTarget(scanned))]
+      }
+      if (argv[1] === 'repo' && argv[2] === 'create') {
         return [base('gh-write', ghRepoCreationTarget(scanned))]
       }
       if (argv[1] === 'gist' && (argv[2] === 'create' || argv[2] === 'edit')) {

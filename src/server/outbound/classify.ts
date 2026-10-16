@@ -26,7 +26,7 @@ export type SendTarget =
   | { kind: 'url'; url: string }
   | { kind: 'host'; host: string; port?: number }
   | { kind: 'registry'; host: string; port?: number }
-  | { kind: 'repo'; repo: string; host?: string }
+  | { kind: 'repo'; repo: string; host?: string; /** A fork destination: never origin, always out. */ fork?: true }
   | { kind: 'mail' }
   | { kind: 'mcp'; server: string }
   | { kind: 'unresolved'; why: string }
@@ -224,6 +224,8 @@ function judgeTarget(candidate: SendCandidate, facts: JudgeFacts): Judgement {
     case 'repo': {
       if (repo === undefined) return { verdict: 'unknown-destination', destination: 'unresolved:no repository at the cwd' }
       if (repo.unreadable) return { verdict: 'unknown-destination', destination: 'unresolved:the facts read failed' }
+      // A fork publishes somewhere new: never origin, whatever it names (D1).
+      if (target.fork === true) return { verdict: 'violation', destination: `github:${target.repo}` }
       const origin = originOf(repo)
       if (origin?.repo == null) {
         return { verdict: 'unknown-destination', destination: 'unresolved:origin is not configured' }
