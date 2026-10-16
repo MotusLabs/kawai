@@ -2,6 +2,12 @@
 
 Baseline: `dda00698` (master), containing deployed `v1.0.0-1769` transcript layout. Implementation worktree: `/home/coder/kawai/.worktrees/fix-chat-typing-performance`, branch `fix/chat-typing-performance`. Original checkout and unrelated edits preserved.
 
+## Evidence retention and CI coverage
+
+Paths under `/tmp/kawai-typing-*` below identify temporary local run outputs, not durable evidence links. A workspace restart or cleanup can remove their logs, traces, and screenshots. The committed measurement tables, fixture, and reproduction command remain available; regenerating the traces requires another run.
+
+The chat fixture step in `.github/workflows/ci.yml` includes `chat-typing-performance.spec.ts`, so CI exercises focus/selection during streaming, slash-command insertion, per-session drafts, submission, and expanded disclosures. Latency is reported rather than checked against a machine-dependent threshold. The existing CI report upload runs on failure with seven-day retention; it is not a permanent archive of the local before/after traces.
+
 ## Browser baseline
 
 Fresh production client from dda00698; Chromium 143 (Playwright build 1200), 49 per-character keydown-to-two-animation-frame samples per case, default 1280x720 viewport, same workspace. Long fixture contains 500 dated messages plus 25 paired tools. Synthetic streaming updates one assistant message at 10 Hz.
@@ -42,3 +48,11 @@ Measurements use keydown to two animation frames as a paint-opportunity proxy, n
 - Implementation commit: `1acfb10c` (`fix: keep chat typing independent of transcript history`).
 
 The repository requests a dev-browser skill which is unavailable in the installed skill locations. Used the existing Playwright harness instead, including a real isolated server, DOM assertions, screenshots, and traces. No deployment or external publication performed.
+
+## Review follow-up verification
+
+- Extracted the actual chat fixture invocation from `.github/workflows/ci.yml` and ran it with `--list`: all four `chat-typing-performance.spec.ts` cases are selected.
+- The formatter reuse assertion now warms contexts, clears the constructor spy, and requires zero further constructions over 500 messages; it no longer assumes four initially uncached formatters. Removed the duplicate blank line.
+- Time-format tests passed normally, with Pacific/Auckland contexts prewarmed, and with a full FIFO cache containing only some of those contexts. The preload scripts were temporary local verification fixtures.
+- Participant subscription narrowing remains a follow-up; the bounded FIFO cache and reload-based locale behavior are unchanged.
+- Follow-up `bun run lint && bun run typecheck && bun run test`: exited 0; 4,255 tests passed, zero failures, and the same three existing lint warnings. Log: `/tmp/kawai-typing-review-tests.log`. Strict OpenSpec validation and `git diff --check` also passed.

@@ -25,18 +25,25 @@ describe('chat time labels (chat-transcript-layout D2)', () => {
   })
 })
 
-
 test('formatter construction stays bounded by contexts, not history length', () => {
   const Original = Intl.DateTimeFormat
   const construct = spyOn(Intl, 'DateTimeFormat').mockImplementation(new Proxy(Original, { construct: (target, args) => Reflect.construct(target, args) }))
   try {
+    // Two passes also settle partially cached contexts at FIFO capacity.
+    const warmAt = '2026-10-15T23:30:00Z'
+    for (let pass = 0; pass < 2; pass++) {
+      chatTimeLabels(warmAt, 'Pacific/Auckland')
+      chatDayKey(warmAt, 'Pacific/Auckland')
+      chatDayLabel(warmAt, 'Pacific/Auckland')
+    }
+    construct.mockClear()
     for (let i = 0; i < 500; i++) {
       const at = new Date(Date.UTC(2026, 9, 15, 10, i)).toISOString()
       chatTimeLabels(at, 'Pacific/Auckland')
       chatDayKey(at, 'Pacific/Auckland')
       chatDayLabel(at, 'Pacific/Auckland')
     }
-    expect(construct.mock.calls.length).toBe(4)
+    expect(construct.mock.calls.length).toBe(0)
     const defaultLabels = chatTimeLabels('2026-10-15T23:30:00Z')
     chatTimeLabels('2026-10-15T23:30:00Z', 'America/New_York')
     expect(chatTimeLabels('2026-10-15T23:30:00Z')).toEqual(defaultLabels)
