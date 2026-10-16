@@ -4,12 +4,12 @@ Implement after `durable-plans`, `strategy-revision-impact`, and `plan-validatio
 
 ## 1. Shared model
 
-- [ ] 1.1 Reconcile names with the merged designs and record any renames in this design before coding. Verify by reading the merged `durable-plans` D7–D13, `plan-validation` D2/D7/D9/D12, and `strategy-revision-impact` D11 against D3, D4, D13, and D19 here:
+- [x] 1.1 Reconcile names with the merged designs and record any renames in this design before coding. Verify by reading the merged `durable-plans` D7–D13, `plan-validation` D2/D7/D9/D12, and `strategy-revision-impact` D11 against D3, D4, D13, and D19 here:
   - `durable-plans`: `PlanContent`, `PlanService`, `plan_events`, `planProgress`, `PLAN_CHECK_FLOOR`, and `team-plan-result`/`team-plan-detail`;
   - `plan-validation`: `prepareStanding`, `carriedConditions`, `resolve-condition`, and the `validation-current` entry;
   - `strategy-revision-impact`: `ImpactService.gate`.
-- [ ] 1.2 Create `src/shared/planExecution.ts` with the D3 state and stop-reason unions, `CiCheck`, `AttemptManifest` (D8), the view types, and `FLOOR_VERSION = 1`. Verify with a typecheck and a unit test that the manifest hash is stable under key order.
-- [ ] 1.3 Implement `evaluateCi` (D10). Verify with unit tests:
+- [x] 1.2 Create `src/shared/planExecution.ts` with the D3 state and stop-reason unions, `CiCheck`, `AttemptManifest` (D8), the view types, and `FLOOR_VERSION = 1`. Verify with a typecheck and a unit test that the manifest hash is stable under key order.
+- [x] 1.3 Implement `evaluateCi` (D10). Verify with unit tests:
   - all pass, and pass with `neutral` and `skipped`;
   - pending inside the window;
   - `ci-missing` with no checks after 30 minutes, and with an uncovered floor check after everything finished;
@@ -19,7 +19,7 @@ Implement after `durable-plans`, `strategy-revision-impact`, and `plan-validatio
   - flaky after a passing rerun, and fail after a second failure;
   - the newest run of a name decides;
   - a non-floor check counts.
-- [ ] 1.4 Implement `reviewVerdict` and `splitExtraChecks` (D11). Verify with unit tests:
+- [x] 1.4 Implement `reviewVerdict` and `splitExtraChecks` (D11). Verify with unit tests:
   - a claimant `pass`;
   - an author's own `pass` ignored;
   - a non-claimant's findings ignored;
@@ -28,7 +28,7 @@ Implement after `durable-plans`, `strategy-revision-impact`, and `plan-validatio
   - a `fail` fails;
   - findings on another result ignored;
   - extra checks split by reported names.
-- [ ] 1.5 Implement `fixRoundOutcome` (D12) and `executionProgress` (D17). Verify with unit tests:
+- [x] 1.5 Implement `fixRoundOutcome` (D12) and `executionProgress` (D17). Verify with unit tests:
   - the implementation round does not count;
   - three failed fix rounds stop;
   - a pass resets the count;
@@ -39,14 +39,14 @@ Implement after `durable-plans`, `strategy-revision-impact`, and `plan-validatio
 
 ## 2. Kawai as a system actor
 
-- [ ] 2.1 Add `SystemActor` and widen the task creator, assignment dispatcher, and message sender types, with `from_kind = 'system'`. Add the system `TaskCaller` minted only inside `src/server/plans/execution/`. Rewrite the comment in `src/shared/teamTasks.ts` that records member-release D4 ("the system is never a sender or task creator"), so it states D2's rights instead. Verify with a typecheck, and with a test that no tool handler or WebSocket connection path can construct a system caller.
-- [ ] 2.2 Convert every two-way actor branch in `TaskService`, `AssignmentService`, `TaskResultService`, `MemberRelease`, `TaskRelease`, the mailbox enqueue and sender paths, and the row mappers (`taskStore`, `assignmentStore`, `messageRow`) to exhaustive switches. Verify with tests that call each service with a system caller and read back `system` as creator, dispatcher, and sender, never the human.
-- [ ] 2.3 Keep the human-only paths refusing `system`: publish, notify, Release, plan approve, withdraw, close, and reopen, strategy actions, and validation decisions. Verify with one refusal test per path.
-- [ ] 2.4 Render "Kawai" as creator, dispatcher, sender, and journal author in the task list and detail, the assignment history, the Mailbox, the Messages view, and peer-message rows. It is never a link. Verify with component tests.
+- [x] 2.1 Add `SystemActor` and widen the task creator, assignment dispatcher, and message sender types, with `from_kind = 'system'`. Add the system `TaskCaller` minted only inside `src/server/plans/execution/`. Rewrite the comment in `src/shared/teamTasks.ts` that records member-release D4 ("the system is never a sender or task creator"), so it states D2's rights instead. Verify with a typecheck, and with a test that no tool handler or WebSocket connection path can construct a system caller.
+- [x] 2.2 Convert every two-way actor branch in `TaskService`, `AssignmentService`, `TaskResultService`, `MemberRelease`, `TaskRelease`, the mailbox enqueue and sender paths, and the row mappers (`taskStore`, `assignmentStore`, `messageRow`) to exhaustive switches. Verify with tests that call each service with a system caller and read back `system` as creator, dispatcher, and sender, never the human.
+- [x] 2.3 Keep the human-only paths refusing `system`: publish, notify, Release, plan approve, withdraw, close, and reopen, strategy actions, and validation decisions. Verify with one refusal test per path.
+- [x] 2.4 Render "Kawai" as creator, dispatcher, sender, and journal author in the task list and detail, the assignment history, the Mailbox, the Messages view, and peer-message rows. It is never a link. Verify with component tests.
 
 ## 3. Records
 
-- [ ] 3.1 Add the D3 migration: seven tables including `plan_landing_slots`, the partial unique indexes, the nullable effect `change`, and `team_messages.allowed_profiles`. Verify with a migration test on an existing database: tables created, old rows intact, rerun idempotent.
+- [x] 3.1 Add the D3 migration: seven tables including `plan_landing_slots`, the partial unique indexes, the nullable effect `change`, and `team_messages.allowed_profiles`. Verify with a migration test on an existing database: tables created, old rows intact, rerun idempotent.
 - [ ] 3.2 Implement `executionStore.ts`: inserts, transitions guarded by `state` and `generation`, owned-change lookups, taking and releasing the slot row in the transitions that enter and leave landing, clearing an orphan slot row (D3), and constraint errors mapped to `one-execution`, `changes-unclaimed`, and slot taken. Verify with unit tests, including two racing inserts per index, two racing slot takes, and a slot row held by a change outside `landing` cleared at startup and when the slot is found taken.
 - [ ] 3.3 Add `PlanService.recordExecutionEvent` for the kinds `execution-started`, `execution-stopped`, and `change-retried`, with the D3 compared payloads, and `completed` with actor `system` under the command id `exec:<id>:complete`. Verify with replay tests: same payload returns the prior result; a different payload is refused naming the field; a repeated completion writes one event. Verify with a grep test that only `PlanService`'s store writes `plan_events`.
 
