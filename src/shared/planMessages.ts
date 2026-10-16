@@ -12,10 +12,11 @@
 // store's reads from the one impact gate, so a badge and a refusal agree.
 import type { PlanDetail, PlanEvent, PlanSummary } from './plans'
 import type { ImpactGate, PlanImpact } from './strategyImpact'
+import type { AlignmentAssessment, AssessmentFinding, PlanRevisionValidation, PlanValidationReport, Question } from './planValidation'
 
 export type PlanServerMessage =
   | { type: 'team-plans-snapshot'; teamPath: string; teamId: string; plans: PlanSummary[]; impact?: Record<string, PlanImpact> }
-  | { type: 'team-plan-detail'; teamPath: string; teamId: string; detail: PlanDetail; impact?: PlanImpact }
+  | { type: 'team-plan-detail'; teamPath: string; teamId: string; detail: PlanDetail; impact?: PlanImpact; validation?: PlanRevisionValidation[] }
   // Result of a human plan command: the plan after it and the recorded event
   // (`replayed` when the command id already stood); `error` on refusal, with
   // the failing preconditions named when approval was refused.
@@ -31,7 +32,14 @@ export type PlanServerMessage =
       failures?: Array<{ name: string; message: string }>
       /** The refused revision's impact gate, when `strategy-pin-current` is among the failures. */
       impact?: ImpactGate
+      /** plan-validation: the outcome of `team-plan-validate`. */
+      validation?: { report: PlanValidationRecord; stored: boolean; dryRun: boolean }
+      /** plan-validation: new record ids from `team-plan-assess`. */
+      assessment?: { ids: { alignment: string | null; questions: string[]; findings: string[] }; replayed: boolean }
     }
+
+/** The report a `team-plan-result` carries (plan-validation D11): the stored row, or a dry run with a null id. */
+export type PlanValidationRecord = PlanValidationReport
 
 export type PlanClientMessage =
   | { type: 'team-plans-open' | 'team-plans-close'; teamPath: string }
@@ -51,3 +59,14 @@ export type PlanClientMessage =
   | { type: 'team-plan-withdraw'; teamPath: string; requestId: string; planId: string; revision?: number; draftId?: string; commandId: string }
   | { type: 'team-plan-finish'; teamPath: string; requestId: string; planId: string; outcome: 'completed' | 'cancelled'; reason?: string | null; commandId: string }
   | { type: 'team-plan-reopen'; teamPath: string; requestId: string; planId: string; commandId: string }
+  // plan-validation D11: the human actions. `team-plan-validate` takes no
+  // command id — a repeat with unchanged inputs writes nothing — while the
+  // assessment form and every decision carry one, so a resend replays.
+  | { type: 'team-plan-validate'; teamPath: string; requestId: string; planId: string; revision: number }
+  | { type: 'team-plan-assess'; teamPath: string; requestId: string; planId: string; revision: number; alignment: AlignmentAssessment; commandId: string }
+  | { type: 'team-plan-validation-decide'; teamPath: string; requestId: string; planId: string; revision: number; kind: 'answer' | 'accept-warning' | 'resolve-condition' | 'alignment-exception' | 'authorize-exploration'; target: string; text: string; scope?: string | null; commandId: string }
+
+/** plan-validation D11: the shape `team-plan-assess` alignment takes (questions and findings are the agents' tools'). */
+export type PlanAssessAlignment = AlignmentAssessment
+export type PlanAssessQuestion = Question
+export type PlanAssessFinding = AssessmentFinding

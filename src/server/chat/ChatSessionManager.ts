@@ -84,6 +84,10 @@ import { MessageQuery } from '../team/messageQuery'
 import { ChatTurnEndStore } from './chatTurnEndStore'
 import { TeamMailbox } from '../team/TeamMailbox'
 import { createMailboxServer } from '../team/mailboxTools'
+import { composePlanServices } from '../plans/planComposition'
+import type { ValidationService } from '../plans/validation/ValidationService'
+import type { OpenspecAdapter } from '../plans/validation/openspecAdapter'
+import type { ValidationDetailCache } from '../plans/validation/validationDetail'
 import type { MailboxManagement } from '../team/mailboxManagement'
 import { StrategyService } from '../strategy/StrategyService'
 import { StrategyStore } from '../strategy/strategyStore'
@@ -1006,14 +1010,25 @@ export class ChatSessionManager {
       getSession: id => this.records.get(id),
       ...(options.profileCatalogHome ? { homeDir: options.profileCatalogHome } : {}),
     })
-    // Durable plans: the service over the mailbox's plan store (the same one
-    // the task link reads), pinning against the strategy store above.
-    this.plans = new PlanService(this.teamMail.plans, {
-      getSession: id => this.records.get(id),
+    // Plans and their validation (durable-plans + plan-validation), composed
+    // the one way anything may compose them: the ValidationService over the
+    // same plan store, capacity evidence from staffing and the limit events
+    // through the team's own groups root, and the PlanService with
+    // validation's `validation-current` appended after the shipped approval
+    // preconditions.
+    const planServices = composePlanServices({
+      db: options.db.db,
+      plans: this.teamMail.plans,
       strategies: this.strategies.store,
-      pinDisposition: (planId, revision) => this.impact.pinDisposition(planId, revision),
+      impact: this.impact,
+      getSession: id => this.records.get(id),
+      capacityReads: { capacity: (teamId, group, worktree) => this.teamMail.staffing.capacity(teamId, group, worktree), cooldownUntil: profileId => this.teamMail.limits.cooldownUntil(profileId) },
       ...(options.profileCatalogHome ? { homeDir: options.profileCatalogHome } : {}),
     })
+    this.validation = planServices.validation
+    this.plans = planServices.plans
+    this.validationDetail = planServices.validationDetail
+    this.validationAdapter = planServices.adapter
     // The impact assessment derives from plans, and every plan's impact gate
     // from the strategy and the impact records (strategy-revision-impact D9):
     // each of the three stores refreshes both views of its team.
@@ -1268,6 +1283,12 @@ export class ChatSessionManager {
   private readonly turnUsageTracker: TurnUsageTracker
   /** Durable plans (durable-plans); the plan tools and UI actions go through it. */
   readonly plans: PlanService
+  /** Plan validation (plan-validation): reports, assessments, decisions, and the approval standing. */
+  readonly validation: ValidationService
+  /** The coalesced validation view for the Plans page pushes (plan-validation D11). */
+  readonly validationDetail: ValidationDetailCache
+  /** The one OpenSpec adapter (plan-validation D3); its probe is cached in-process. */
+  private readonly validationAdapter: OpenspecAdapter
   /** Strategy impact reviews (strategy-revision-impact); the impact tools and UI actions go through it. */
   readonly impact: ImpactService
   readonly dispatcher: MailDispatcher
@@ -1666,6 +1687,8 @@ export class ChatSessionManager {
 
   /** Server shutdown: settle every driver (callbacks cannot survive it). */
   shutdown(): void {
+    // Any CLI process group the adapter left running dies with us otherwise.
+    this.validationAdapter.dispose()
     // A restore still in flight stops at its next row (design D2).
     this.isShutDown = true
     this.teamMail.close()
@@ -1974,7 +1997,7 @@ export class ChatSessionManager {
       // The team must be known before the first spawn reads its prompt.
       await this.teams.track(record.sessionId, this.records.get(record.sessionId)?.projectPath ?? record.projectPath)
       const teamMcpServer = await createMailboxServer(this.mailbox, record.sessionId, {
-        tasks: this.tasks, results: this.results, strategies: this.strategies, plans: this.plans, releases: this.teamMail.releases, management: this.management,
+        tasks: this.tasks, results: this.results, strategies: this.strategies, plans: this.plans, validation: this.validation, releases: this.teamMail.releases, management: this.management,
         metrics: { teamOf: id => this.teams.teamOf(id)?.teamId ?? null, reader: this.metrics },
         reports: { caller: id => this.reportCaller(id), service: this.reports },
       })

@@ -1,4 +1,4 @@
-// Schema migration 3 `task-status-events` (team-process-metrics D3 and the
+// Schema migration 4 `task-status-events` (team-process-metrics D3 and the
 // Migration Plan): a version-2 database gains the transition table with one
 // backfilled `system` row per task already done or cancelled (`from_status`
 // null, `at` = the task's `updated_at`), open tasks get none, a second start
@@ -39,9 +39,9 @@ function versionTwoWithTasks(): Record<'done' | 'cancelled' | 'open', string> {
   return { done: 'task-done', cancelled: 'task-cancelled', open: 'task-open' }
 }
 
-test('this build registers migration 3 task-status-events after strategy-impact', () => {
-  expect(MIGRATIONS.map(migration => [migration.version, migration.name]).slice(0, 2))
-    .toEqual([[2, 'strategy-impact'], [3, 'task-status-events']])
+test('this build registers migration 4 task-status-events after plan-validation', () => {
+  expect(MIGRATIONS.map(migration => [migration.version, migration.name]).slice(0, 3))
+    .toEqual([[2, 'strategy-impact'], [3, 'plan-validation'], [4, 'task-status-events']])
 })
 
 test('a version-2 database backfills one system row per closed task and none for open ones', () => {

@@ -4,7 +4,7 @@
 // The backfill gives every task already closed when the table appears one
 // `system` row (`from_status` null, `at` = the task's `updated_at`); metrics
 // read a null `from_status` as approximate. The DDL and backfill are schema
-// migration 3 `task-status-events` (`dbSafety/migrations.ts`) and frozen like
+// migration 4 `task-status-events` (`dbSafety/migrations.ts`) and frozen like
 // every applied migration: a later change is a new numbered migration.
 import type { Database } from 'bun:sqlite'
 

@@ -7,7 +7,7 @@
 // delivered mail's task (or none) for a mail-started turn, else the session's
 // task at that moment; nothing that happens mid-turn moves it. Rows outlive
 // kill/archive and age out after 60 days, pruned at startup and at most
-// hourly on write. The DDL is schema migration 5 `chat-turn-usage`
+// hourly on write. The DDL is schema migration 6 `chat-turn-usage`
 // (`dbSafety/migrations.ts`), frozen like every applied migration.
 import type { Database } from 'bun:sqlite'
 import type { ChatEvent, ChatTurnUsage } from '../../shared/chat'

@@ -194,6 +194,22 @@ describe('buildTeamPrompt plan note (durable-plans 6.2)', () => {
     }
   })
 
+  test('the note teaches validation without ever claiming an agent decides or approves (plan-validation 9.2)', () => {
+    for (const prompt of [creator, member, groupless]) {
+      const note = prompt.slice(prompt.indexOf('# Plans'))
+      for (const name of ['plan_validate', 'plan_validation_get', 'plan_assess']) expect(note).toContain(`\`mcp__kawai-team__${name}\``)
+      expect(note).toContain('never approves it')
+      for (const value of ['aligned-with-conditions', 'exploratory', 'insufficient-information']) expect(note).toContain(value)
+      expect(note).toContain('ready/start/acceptance')
+      expect(note).toContain('Mandatory questions block until the owner answers them')
+      expect(note).toContain('agents never decide')
+      // No decision, acceptance, or approval tool is ever offered.
+      for (const forbidden of ['plan_decide', 'plan_accept', 'plan_authorize', 'plan_approve', 'plan_resolve']) {
+        expect(note).not.toContain(`mcp__kawai-team__${forbidden}`)
+      }
+    }
+  })
+
   test('the note states owner-only approval and never claims an agent can approve', () => {
     for (const prompt of [creator, member, groupless]) {
       expect(prompt).toContain("Only the human — every plan's owner — approves, withdraws, completes, cancels, or reopens a plan")

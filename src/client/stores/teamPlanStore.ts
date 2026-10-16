@@ -17,8 +17,9 @@ import { create } from 'zustand'
 import type { ServerMessage } from '@shared/types'
 import type { PlanDetail, PlanSummary } from '@shared/plans'
 import type { ImpactGate, PlanImpact } from '@shared/strategyImpact'
+import type { PlanRevisionValidation } from '@shared/planValidation'
 
-export type PlanAction = 'approve' | 'withdraw' | 'finish' | 'reopen'
+export type PlanAction = 'approve' | 'withdraw' | 'finish' | 'reopen' | 'validate' | 'assess' | 'decide'
 
 /** One dialog's command id and the payload it was last sent with (null = not sent yet). */
 export interface ArmedPlanCommand {
@@ -46,6 +47,8 @@ export interface PlanView {
   impact: Record<string, PlanImpact>
   /** The selected plan's impact, from its detail. */
   detailImpact: PlanImpact | null
+  /** The selected plan's Validation sections, per standing revision (plan-validation D11). */
+  detailValidation: PlanRevisionValidation[] | null
   /** Armed dialog command ids, by dialog slot (e.g. `approve:<plan>:<revision>`). */
   commands: Record<string, ArmedPlanCommand>
   /** Which slot each pending request was sent from. */
@@ -54,7 +57,7 @@ export interface PlanView {
 
 export const closedPlanView = (): PlanView => ({
   open: false, loading: false, plans: null, selected: null, detail: null, pending: {}, error: null, failures: [], commands: {}, commandRequests: {},
-  refusalImpact: null, impact: {}, detailImpact: null,
+  refusalImpact: null, impact: {}, detailImpact: null, detailValidation: null,
 })
 
 interface PlanState {
@@ -89,7 +92,9 @@ export const useTeamPlanStore = create<PlanState>(set => ({
     return { views: { ...state.views, [teamKey]: {
       ...view, open: true, loading: view.plans === null, error: null, failures: [], refusalImpact: null,
       ...(planId !== undefined ? {
-        selected: planId, detail: view.detail?.plan.id === planId ? view.detail : null, detailImpact: view.detail?.plan.id === planId ? view.detailImpact : null,
+        selected: planId, detail: view.detail?.plan.id === planId ? view.detail : null,
+        detailImpact: view.detail?.plan.id === planId ? view.detailImpact : null,
+        detailValidation: view.detail?.plan.id === planId ? view.detailValidation : null,
       } : {}),
     } } }
   }),
@@ -110,6 +115,7 @@ export const useTeamPlanStore = create<PlanState>(set => ({
     selected: planId,
     detail: planId !== null && state.views[teamKey]?.detail?.plan.id === planId ? state.views[teamKey]!.detail : null,
     detailImpact: planId !== null && state.views[teamKey]?.detail?.plan.id === planId ? state.views[teamKey]!.detailImpact : null,
+    detailValidation: planId !== null && state.views[teamKey]?.detail?.plan.id === planId ? state.views[teamKey]!.detailValidation : null,
     error: null, failures: [], refusalImpact: null,
   })),
   arm: (teamKey, slot) => set(state => {
@@ -143,7 +149,7 @@ export const useTeamPlanStore = create<PlanState>(set => ({
   applyDetail: message => set(state => {
     const view = state.views[message.teamPath]
     if (!view?.open || view.selected !== message.detail.plan.id) return state
-    return update(state, message.teamPath, { detail: message.detail, detailImpact: message.impact ?? null })
+    return update(state, message.teamPath, { detail: message.detail, detailImpact: message.impact ?? null, detailValidation: message.validation ?? null })
   }),
   applyResult: message => set(state => {
     const view = state.views[message.teamPath]

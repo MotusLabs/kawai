@@ -3,7 +3,7 @@
 // proposal, the append-only link history (link, replace, unlink), and the
 // command rows that keep each human command's outcome apart from what it
 // produced, so a replayed key returns its stored outcome even after a later
-// command replaced or removed it. The DDL is schema migration 6
+// command replaced or removed it. The DDL is schema migration 7
 // `process-reports` (`dbSafety/migrations.ts`) and frozen like every applied
 // migration.
 export const CREATE_PROCESS_REPORT_TABLES_SQL = `

@@ -60,12 +60,8 @@ function versionOneWithReview(): { strategyId: string } {
   return { strategyId: strategy.id }
 }
 
-// Later migrations are covered by their own tests; these pin the build that
-// stopped at version 2 by running only its migration.
-const THROUGH_2 = MIGRATIONS.filter(migration => migration.version <= 2)
-
 test('this build registers migration 2 strategy-impact', () => {
-  expect(THROUGH_2.map(migration => [migration.version, migration.name])).toEqual([[2, 'strategy-impact']])
+  expect(MIGRATIONS.filter(migration => migration.name === 'strategy-impact').map(migration => migration.version)).toEqual([2])
 })
 
 test('a version-1 database upgrades to 2 after its pre-migration-2 backup and keeps every row', () => {
@@ -75,7 +71,9 @@ test('a version-1 database upgrades to 2 after its pre-migration-2 backup and ke
   expect(IMPACT_TABLES.filter(table => table in before)).toEqual([])
   expect(before.strategy_impact_reviews).toHaveLength(1)
 
-  const session = initDatabase({ path: dbPath, migrations: THROUGH_2 })
+  // Isolate the upgrade to exactly version 2: later migrations (this build's
+  // plan-validation, later builds' entries) have their own tests.
+  const session = initDatabase({ path: dbPath, migrations: MIGRATIONS.filter(migration => migration.version <= 2) })
   const reviews = new StrategyStore(session.db).impactReviews(strategyId)
   // The new tables are usable at once: a decision on the existing review.
   new ImpactStore(session.db).insertDecision({
@@ -97,24 +95,25 @@ test('a version-1 database upgrades to 2 after its pre-migration-2 backup and ke
   expect(versions(backup).map(row => row.version)).toEqual([1])
 })
 
-test('a fresh database ends at version 2 with the impact tables', () => {
-  initDatabase({ path: dbPath, migrations: THROUGH_2 }).close()
-  expect(versions(dbPath).map(row => [row.version, row.name])).toEqual([[1, 'baseline'], [2, 'strategy-impact']])
+test('a fresh database ends at the newest version with the impact tables', () => {
+  initDatabase({ path: dbPath }).close()
+  expect(versions(dbPath).map(row => row.name)).toEqual(['baseline', ...MIGRATIONS.map(migration => migration.name)])
   expect(Object.keys(rows(dbPath))).toEqual(expect.arrayContaining([...IMPACT_TABLES, 'strategy_impact_reviews']))
   const db = new Database(dbPath, { readonly: true })
-  expect(db.prepare('PRAGMA user_version').get()).toEqual({ user_version: 2 })
+  expect(db.prepare('PRAGMA user_version').get()).toEqual({ user_version: MIGRATIONS.at(-1)!.version })
   db.close()
 })
 
-test('a database a newer build migrated past version 2 is still refused before any write', () => {
-  const migration3: Migration = { version: 3, name: 'later', up: db => db.exec('CREATE TABLE later_rows (id TEXT PRIMARY KEY)') }
-  initDatabase({ path: dbPath, migrations: [...THROUGH_2, migration3] }).close()
+test('a database a newer build migrated past this version is still refused before any write', () => {
+  const next = MIGRATIONS.at(-1)!.version + 1
+  const later: Migration = { version: next, name: 'later', up: db => db.exec('CREATE TABLE later_rows (id TEXT PRIMARY KEY)') }
+  initDatabase({ path: dbPath, migrations: [...MIGRATIONS, later] }).close()
   const bytes = fs.readFileSync(dbPath)
   let error: unknown
-  try { initDatabase({ path: dbPath, migrations: THROUGH_2 }) } catch (caught) { error = caught }
+  try { initDatabase({ path: dbPath }) } catch (caught) { error = caught }
   expect(error).toBeInstanceOf(DatabaseStartupError)
-  expect((error as Error).message).toContain('schema version 3')
-  expect((error as Error).message).toContain('only up to version 2')
-  expect((error as Error).message).toMatch(/-pre-migration-3\.db/)
+  expect((error as Error).message).toContain(`schema version ${next}`)
+  expect((error as Error).message).toContain(`only up to version ${MIGRATIONS.at(-1)!.version}`)
+  expect((error as Error).message).toMatch(new RegExp(`-pre-migration-${next}\\.db`))
   expect(fs.readFileSync(dbPath).equals(bytes)).toBe(true)
 })

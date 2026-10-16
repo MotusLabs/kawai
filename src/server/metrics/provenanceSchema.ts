@@ -2,7 +2,7 @@
 // row per spawned agent process, naming what it launched with, and one
 // `memory_manifests` row per distinct memory-directory state (its per-file
 // hashes), shared by every start that saw it. Never pruned: starts are small
-// and turns name them. The DDL is schema migration 4 `agent-starts`
+// and turns name them. The DDL is schema migration 5 `agent-starts`
 // (`dbSafety/migrations.ts`) and frozen like every applied migration.
 export const CREATE_AGENT_START_TABLES_SQL = `
 CREATE TABLE IF NOT EXISTS agent_starts (
