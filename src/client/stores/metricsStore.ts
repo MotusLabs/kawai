@@ -10,7 +10,8 @@
 // (a resend after a lost result replays), re-minted after a payload change,
 // and retired on success; a refusal stays on the slot. Closing the view (its
 // cleanup runs on every reconnect) clears waiting slots, so a lost result
-// never leaves a card busy.
+// never leaves a card busy. A report outside the snapshot, opened by id,
+// lands in `opened` (null when the team has none) and is dropped on close.
 import { create } from 'zustand'
 import type { ServerMessage } from '@shared/types'
 import type { MetricSlice, MetricWindow, ProcessMetrics } from '@shared/processMetrics'
@@ -28,13 +29,15 @@ export interface MetricsView {
   requested: MetricsRequest | null
   /** The newest snapshot for `requested`; an earlier request's stays shown while loading. */
   metrics: ProcessMetrics | null
-  /** The newest reports with their proposals' derived state. */
+  /** The newest reports plus older ones with work left, with their proposals' derived state. */
   reports: ProcessReport[]
   freshness: ReportFreshness[]
   /** Version changes in the requested window no accepted proposal's link names. */
   unproposed: VersionChange[]
   /** Armed proposal commands by slot (`decide:<id>`, `link:<id>`). */
   commands: Record<string, ProposalCommand>
+  /** Reports opened by id; null when the team has no such report, absent while loading. */
+  opened: Record<string, ProcessReport | null>
 }
 
 export interface ProposalCommand {
@@ -46,7 +49,7 @@ export interface ProposalCommand {
 }
 
 export const closedMetricsView = (): MetricsView => ({
-  open: false, loading: false, requested: null, metrics: null, reports: [], freshness: [], unproposed: [], commands: {},
+  open: false, loading: false, requested: null, metrics: null, reports: [], freshness: [], unproposed: [], commands: {}, opened: {},
 })
 
 const mintCommandId = () => (typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `cmd-${Date.now()}-${Math.random()}`)
@@ -65,6 +68,9 @@ interface MetricsState {
   /** Arm (or reuse) the slot's command key for `payload` and mark it busy; returns the key. */
   arm: (teamKey: string, slot: string, payload: unknown) => string
   applyResult: (message: Extract<ServerMessage, { type: 'process-proposal-result' }>) => void
+  applyReport: (message: Extract<ServerMessage, { type: 'process-report-detail' }>) => void
+  /** Drop a report opened by id (the view closed it). */
+  forgetReport: (teamKey: string, reportId: string) => void
 }
 
 export const useMetricsStore = create<MetricsState>((set, get) => ({
@@ -115,5 +121,16 @@ export const useMetricsStore = create<MetricsState>((set, get) => ({
     if (message.error) commands[slot] = { ...commands[slot]!, busy: false, error: message.error }
     else delete commands[slot]
     return { views: { ...state.views, [message.teamPath]: { ...view, commands } } }
+  }),
+  applyReport: message => set(state => {
+    const view = state.views[message.teamPath] ?? closedMetricsView()
+    return { views: { ...state.views, [message.teamPath]: { ...view, opened: { ...view.opened, [message.reportId]: message.report } } } }
+  }),
+  forgetReport: (teamKey, reportId) => set(state => {
+    const view = state.views[teamKey]
+    if (!view || !(reportId in view.opened)) return state
+    const opened = { ...view.opened }
+    delete opened[reportId]
+    return { views: { ...state.views, [teamKey]: { ...view, opened } } }
   }),
 }))

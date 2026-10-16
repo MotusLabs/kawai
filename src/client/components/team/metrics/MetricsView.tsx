@@ -147,7 +147,7 @@ export default function MetricsView({
     {view && (snapshot || reportId !== undefined) && <div className="mt-2">
       <MetricsReports teamPath={teamPath} view={view} reportId={reportId} collapsed={tab.collapsedSections}
         onToggleSection={id => store.toggleSectionCollapsed(teamPath, 'metrics', id)}
-        sendMessage={sendMessage} connected={connected} nameOf={nameOf} onOpenReport={onOpenReport} />
+        sendMessage={sendMessage} connected={connected} connectionEpoch={connectionEpoch} nameOf={nameOf} onOpenReport={onOpenReport} />
     </div>}
     {snapshot && reportId === undefined && <div className="mt-2 flex flex-col gap-2">
       {METRIC_FAMILIES.map(family => <MetricFamily key={family} family={family} metrics={byId} caveat={caveatOf(family)}

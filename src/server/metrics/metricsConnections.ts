@@ -6,6 +6,9 @@
 // shared 30 s read cache, so a tool call in the same moment shares it),
 // refresh answers with a fresh computation, close ends it, and `publish`
 // re-sends every subscriber of a team after a report or decision commit.
+// A report outside the snapshot is opened by id (`process-report-open`):
+// the connection holds it until `process-report-close` and gets it again,
+// through `process-report-detail`, on every commit of its team.
 // Nothing here listens to mail: values change only when asked or published.
 // The human's proposal commands (D6) — decide, and link/replace/unlink — run
 // through the report service as the human for the resolved team, answered by
@@ -17,6 +20,12 @@ import type { ChatConnection } from '../chat/ChatConnections'
 import type { ChatSessionManager } from '../chat/ChatSessionManager'
 import { parseSlice } from './metricsTools'
 
+interface OpenReport {
+  teamId: string
+  teamPath: string
+  reportId: string
+}
+
 interface Subscription {
   teamId: string
   window: MetricWindow
@@ -27,12 +36,15 @@ export class MetricsConnections {
   private readonly subscriptions = new Map<ChatConnection, Map<string, Subscription>>()
   /** Latest request per connection and team path; a later one supersedes a pending open. */
   private readonly pending = new Map<ChatConnection, Map<string, object>>()
+  /** Reports each connection opened by id, keyed by team path and report id. */
+  private readonly openReports = new Map<ChatConnection, Map<string, OpenReport>>()
 
   constructor(private readonly manager: Pick<ChatSessionManager, 'teamScopes' | 'metrics' | 'reports'>) {}
 
   disconnect(connection: ChatConnection) {
     this.subscriptions.delete(connection)
     this.pending.delete(connection)
+    this.openReports.delete(connection)
   }
 
   /** A committed report or decision of the team: every subscriber gets a fresh snapshot. */
@@ -42,12 +54,41 @@ export class MetricsConnections {
         if (subscription.teamId === teamId) this.send(connection, teamPath, subscription, true)
       }
     }
+    for (const [connection, reports] of this.openReports) {
+      for (const open of reports.values()) if (open.teamId === teamId) this.sendReport(connection, open)
+    }
+  }
+
+  private sendReport(connection: ChatConnection, open: OpenReport) {
+    connection.send({
+      type: 'process-report-detail', teamPath: open.teamPath, teamId: open.teamId, reportId: open.reportId,
+      report: this.manager.reports.report(open.teamId, open.reportId),
+    })
+  }
+
+  /** Open (or close) one report by id: answered now and after every commit of its team. */
+  async handleReport(connection: ChatConnection, message: Extract<MetricsClientMessage, { type: `process-report-${string}` }>) {
+    const key = `${message.teamPath}\0${message.reportId}`
+    if (message.type === 'process-report-close') {
+      this.openReports.get(connection)?.delete(key)
+      return
+    }
+    const team = await this.manager.teamScopes.resolve(message.teamPath)
+    if (!team) {
+      connection.send({ type: 'error', message: unknownTeamError(message.teamPath) })
+      return
+    }
+    const open = { teamId: team.teamId, teamPath: message.teamPath, reportId: message.reportId }
+    const reports = this.openReports.get(connection) ?? new Map<string, OpenReport>()
+    this.openReports.set(connection, reports)
+    reports.set(key, open)
+    this.sendReport(connection, open)
   }
 
   private send(connection: ChatConnection, teamPath: string, subscription: Subscription, fresh: boolean) {
     const { teamId, window } = subscription
     const metrics = this.manager.metrics.read(teamId, window, subscription.slice, { fresh })
-    const { reports, freshness } = this.manager.reports.list(teamId, REPORTS_IN_SNAPSHOT)
+    const { reports, freshness } = this.manager.reports.list(teamId, REPORTS_IN_SNAPSHOT, { keepActionable: true })
     connection.send({
       type: 'process-metrics-snapshot', teamPath, teamId, window, slice: subscription.slice, computedAt: metrics.computedAt, metrics,
       reports, freshness, unproposed: this.manager.reports.unproposed(teamId, window),

@@ -4,7 +4,8 @@
 // link picker over candidates, Replace link and Unlink, linker, shared
 // marker, and outcome; command keys reused per payload and retired on
 // success, refusals shown on the card, and every control disabled while
-// disconnected.
+// disconnected. A report the snapshot lacks opens by id, stays actionable,
+// and closes when the view leaves it; an id the team lacks says so.
 import { afterEach, beforeEach, expect, test } from 'bun:test'
 import TestRenderer, { act } from 'react-test-renderer'
 import type { ClientMessage, SendClientMessage, Session } from '@shared/types'
@@ -192,7 +193,7 @@ test('an accepted proposal links through its candidates; a linked one shows link
   expect(button(card(page, 'p-done'), 'Replace link').props.disabled).toBe(true)
 })
 
-test('every proposal control disables while disconnected; an unknown report says so', () => {
+test('every proposal control disables while disconnected; a report outside the snapshot waits for a connection', () => {
   const page = mountPage({ teamKey: '/repo', tab: 'metrics', window: '7d', id: 'r-1' }, false)
   act(() => { useMetricsStore.getState().request('/repo', { window: '7d', slice: null }) })
   push()
@@ -204,5 +205,29 @@ test('every proposal control disables while disconnected; an unknown report says
   act(() => { useTeamLocationStore.setState({ location: { teamKey: '/repo', tab: 'metrics', window: '7d', id: 'r-gone' } }) })
   act(() => { page.update(<TeamWorkspaceView teamKey="/repo" location={{ teamKey: '/repo', tab: 'metrics', window: '7d', id: 'r-gone' }}
     sendMessage={sendMessage} connected={false} connectionEpoch={0} />) })
-  expect(textOf(find(page, 'report-missing')[0]!)).toContain('Report r-gone is not among the team\'s newest 20 reports.')
+  expect(textOf(find(page, 'report-loading')[0]!)).toBe('Disconnected — reconnect to load report r-gone.')
+  expect(sent.filter(message => message.type === 'process-report-open')).toEqual([])
+})
+
+test('a report outside the snapshot opens by id, stays actionable, and closes when the view leaves; an unknown id says so', () => {
+  const older: ProcessReport = { ...report, id: 'r-old', proposals: [proposal('p-old', { reportId: 'r-old' })] }
+  const page = mountPage({ teamKey: '/repo', tab: 'metrics', window: '7d', id: 'r-old' })
+  push([])
+  expect(sent.filter(message => message.type.startsWith('process-report-'))).toEqual([{ type: 'process-report-open', teamPath: '/repo', reportId: 'r-old' }])
+  expect(textOf(find(page, 'report-loading')[0]!)).toBe('Loading report r-old…')
+  act(() => { handleMetricsMessage({ type: 'process-report-detail', teamPath: '/repo', teamId: '/repo/.git', reportId: 'r-old', report: older }) })
+  const old = card(page, 'p-old')
+  act(() => { old.find(node => node.props['aria-label'] === 'Decision reason').props.onChange({ target: { value: 'Still right.' } }) })
+  act(() => { button(card(page, 'p-old'), 'Accept').props.onClick() })
+  expect(commands().at(-1)).toMatchObject({ type: 'process-proposal-decide', proposalId: 'p-old', decision: 'accepted', reason: 'Still right.' })
+
+  act(() => { button(page.root, '← All reports').props.onClick() })
+  expect(sent.filter(message => message.type === 'process-report-close')).toEqual([{ type: 'process-report-close', teamPath: '/repo', reportId: 'r-old' }])
+  expect(useMetricsStore.getState().views['/repo']!.opened).toEqual({})
+
+  act(() => { useTeamLocationStore.setState({ location: { teamKey: '/repo', tab: 'metrics', window: '7d', id: 'r-none' } }) })
+  act(() => { page.update(<TeamWorkspaceView teamKey="/repo" location={{ teamKey: '/repo', tab: 'metrics', window: '7d', id: 'r-none' }}
+    sendMessage={sendMessage} connected connectionEpoch={0} />) })
+  act(() => { handleMetricsMessage({ type: 'process-report-detail', teamPath: '/repo', teamId: '/repo/.git', reportId: 'r-none', report: null }) })
+  expect(textOf(find(page, 'report-missing')[0]!)).toContain('This team has no report r-none.')
 })

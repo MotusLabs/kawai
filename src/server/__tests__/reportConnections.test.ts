@@ -5,7 +5,9 @@
 // naming the field; a second decision under a new key is refused; another
 // team's proposal and an unknown team path are refused; a committed decision
 // re-sends subscribers' snapshots, which carry reports, freshness, and the
-// window's unproposed changes.
+// window's unproposed changes. Older reports still holding an undecided or
+// unlinked accepted proposal stay in the snapshot past the newest 20; any
+// other report opens by id and is re-sent on every commit until closed.
 import { expect, test } from 'bun:test'
 import type { ChatSessionManager } from '../chat/ChatSessionManager'
 import { ChatConnections } from '../chat/ChatConnections'
@@ -49,7 +51,7 @@ function reportSetup() {
   const results = () => messages.filter((m): m is Result => m.type === 'process-proposal-result')
   const snapshots = () => messages.filter((m): m is Snapshot => m.type === 'process-metrics-snapshot')
   const rows = (table: string) => (s.db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n
-  return { s, reports, send, submit, results, snapshots, rows, tick: (ms: number) => { now += ms } }
+  return { s, reports, send, submit, caller, messages, results, snapshots, rows, tick: (ms: number) => { now += ms } }
 }
 
 const decide = (proposalId: string, decision: 'accepted' | 'rejected', commandId: string, reason?: string, teamPath = '/repo'): ClientMessage =>
@@ -113,4 +115,48 @@ test('another team\'s proposal and an unknown team path are refused with nothing
 
 test('the proposal commands are listed for the WS router', () => {
   for (const type of ['process-proposal-decide', 'process-proposal-link']) expect(CHAT_CONNECTION_TYPES).toContain(type as never)
+})
+
+type Detail = Extract<ServerMessage, { type: 'process-report-detail' }>
+
+test('older reports with work left stay in the snapshot; any other report opens by id and stays current', async () => {
+  const { s, reports, send, submit, caller, messages, snapshots, tick } = reportSetup()
+  const reportOf = (proposalId: string) => reports.list(TEAM).reports.find(r => r.proposals.some(p => p.id === proposalId))!.id
+  const undecided = submit()
+  tick(HOUR)
+  const rejected = submit()
+  await send(decide(rejected, 'rejected', 'k-r', 'Not now.'))
+  tick(HOUR)
+  const accepted = submit()
+  await send(decide(accepted, 'accepted', 'k-a'))
+  for (let i = 0; i < 20; i++) {
+    tick(HOUR)
+    reports.submit(caller(TEAM), { window: '1d', summary: `Day ${i}.` })
+  }
+  const newest = reports.list(TEAM, 20).reports.map(r => r.id)
+  await send({ type: 'process-metrics-open', teamPath: '/repo', window: '7d', slice: null })
+  expect(snapshots().at(-1)!.reports.map(r => r.id)).toEqual([...newest, reportOf(accepted), reportOf(undecided)])
+
+  // The rejected proposal's report left the snapshot; opened by id, it arrives and follows commits.
+  const details = () => messages.filter((m): m is Detail => m.type === 'process-report-detail')
+  await send({ type: 'process-report-open', teamPath: '/repo', reportId: reportOf(rejected) })
+  expect(details().at(-1)).toMatchObject({ teamPath: '/repo', teamId: TEAM, reportId: reportOf(rejected) })
+  expect(details().at(-1)!.report!.proposals[0]!.decision!.reason).toBe('Not now.')
+  await send(decide(undecided, 'rejected', 'k-u'))
+  expect(details()).toHaveLength(2)
+  await send({ type: 'process-report-close', teamPath: '/repo', reportId: reportOf(rejected) })
+  await send(decide(accepted, 'accepted', 'k-a2'))
+  expect(details()).toHaveLength(2)
+  s.db.close()
+})
+
+test('a report id the team does not have answers null; an unknown team path is refused', async () => {
+  const { s, send, submit, reports } = reportSetup()
+  submit(OTHER)
+  const otherReport = reports.list(OTHER).reports[0]!.id
+  expect(await send({ type: 'process-report-open', teamPath: '/repo', reportId: otherReport })).toMatchObject({ type: 'process-report-detail', report: null })
+  expect(await send({ type: 'process-report-open', teamPath: '/repo', reportId: 'report-missing' })).toMatchObject({ report: null })
+  expect(await send({ type: 'process-report-open', teamPath: '/nowhere', reportId: otherReport })).toMatchObject({ type: 'error' })
+  expect(CHAT_CONNECTION_TYPES).toEqual(expect.arrayContaining(['process-report-open', 'process-report-close']))
+  s.db.close()
 })

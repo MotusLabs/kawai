@@ -554,6 +554,7 @@ export class ChatConnections {
     if (message.type.startsWith('team-plan')) return this.planConnections.handle(connection, message as Extract<ClientMessage, { type: `team-plan${string}` }>)
     if (message.type.startsWith('process-metrics-')) return this.metricsConnections.handle(connection, message as Extract<ClientMessage, { type: `process-metrics-${string}` }>)
     if (message.type.startsWith('process-proposal-')) return this.metricsConnections.handleCommand(connection, message as Extract<ClientMessage, { type: `process-proposal-${string}` }>)
+    if (message.type.startsWith('process-report-')) return this.metricsConnections.handleReport(connection, message as Extract<ClientMessage, { type: `process-report-${string}` }>)
     if (!message.type.startsWith('chat-') || !('sessionId' in message)) return
     const { sessionId } = message
     if (!this.manager.has(sessionId)) {
@@ -692,5 +693,5 @@ function opensSubscription(type: ClientMessage['type']): boolean {
     type === 'team-mailbox-open' || type === 'team-tasks-open' || type === 'team-task-open' ||
     type === 'team-messages-open' || type === 'team-thread-open' ||
     type === 'strategy-open' || type === 'team-workspace-open' || type === 'team-plans-open' || type === 'team-plan-open' ||
-    type === 'process-metrics-open'
+    type === 'process-metrics-open' || type === 'process-report-open'
 }

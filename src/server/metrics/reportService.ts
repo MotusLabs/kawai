@@ -76,6 +76,9 @@ export interface CommandResult<T> {
 const HUMAN: ProposalActor = { kind: 'human', sessionId: null }
 const MEMORY_FILE = /^(?!\/)(?!.*(?:^|\/)\.\.(?:\/|$)).+$/
 
+/** A proposal still waiting on the human: undecided, or accepted with no current link. */
+const actionable = (proposal: ProcessProposal) => !proposal.decision || (proposal.decision.decision === 'accepted' && !proposal.link)
+
 export class ProcessReportService {
   readonly store: ReportStore
 
@@ -146,12 +149,23 @@ export class ProcessReportService {
     return { kind: input.kind, targetKind: input.target_kind, target, edit: input.edit.trim(), rationale: input.rationale.trim(), expected, revertToHash }
   }
 
-  /** The team's reports newest first (at most `limit`), with per-window freshness. */
-  list(teamId: string, limit?: number): ReportList {
+  /**
+   * The team's reports newest first (at most `limit`), with per-window
+   * freshness. With `keepActionable`, older reports still holding a proposal
+   * the human can act on — undecided, or accepted without a current link —
+   * follow, so no such proposal drops out of the human's view.
+   */
+  list(teamId: string, limit?: number, options: { keepActionable?: boolean } = {}): ReportList {
     const stored = this.store.reports(teamId)
     const context = reportReadContext(this.db, teamId, this.store.proposals(teamId), this.now())
-    const shown = limit === undefined ? stored : stored.slice(0, limit)
-    return { reports: shown.map(report => readReport(context, report)), freshness: reportFreshness(stored, this.now()) }
+    const read = (limit === undefined ? stored : stored.slice(0, limit)).map(report => readReport(context, report))
+    if (options.keepActionable && limit !== undefined) {
+      for (const report of stored.slice(limit)) {
+        const full = readReport(context, report)
+        if (full.proposals.some(actionable)) read.push(full)
+      }
+    }
+    return { reports: read, freshness: reportFreshness(stored, this.now()) }
   }
 
   report(teamId: string, id: string): ProcessReport | null {
