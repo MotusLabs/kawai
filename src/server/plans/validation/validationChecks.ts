@@ -52,7 +52,9 @@ export interface ValidationCheck {
   run: (ctx: ValidationCheckContext) => Finding[]
 }
 
-const ADAPTER_SUBJECT = 'openspec'
+// The subject contains a space, so no kebab-case change name can collide
+// with a change-scoped key like `relations:<change>`.
+const ADAPTER_SUBJECT = 'openspec adapter'
 const notChecked = (check: string): Finding => ({
   check, key: findingKey(check, ADAPTER_SUBJECT), severity: 'error', row: 'intent',
   subject: ADAPTER_SUBJECT, message: 'not checked: OpenSpec adapter unavailable',

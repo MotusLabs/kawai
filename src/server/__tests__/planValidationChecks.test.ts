@@ -48,7 +48,7 @@ const names = (findings: readonly Finding[]): string[] => findings.map(finding =
 
 describe('adapter-available', () => {
   test('an available adapter is evidence; a missing one is an error', () => {
-    expect(run('adapter-available', ctx())).toEqual([expect.objectContaining({ severity: 'evidence', key: 'adapter-available:openspec', detail: { version: '1.14.2', capabilities: ['validate-strict-json', 'show-deltas-json'] } })])
+    expect(run('adapter-available', ctx())).toEqual([expect.objectContaining({ severity: 'evidence', key: 'adapter-available:openspec adapter', detail: { version: '1.14.2', capabilities: ['validate-strict-json', 'show-deltas-json'] } })])
     const unavailable = run('adapter-available', ctx({ adapter: probe(false) }))
     expect(unavailable[0]!.severity).toBe('error')
     expect(unavailable[0]!.message).toContain('unavailable')
@@ -96,7 +96,7 @@ describe('openspec-valid', () => {
 
   test('an unavailable adapter is one not-checked error; unregistered changes are skipped', () => {
     const findings = run('openspec-valid', ctx({ adapter: probe(false) }))
-    expect(findings).toEqual([expect.objectContaining({ severity: 'error', key: 'openspec-valid:openspec', message: 'not checked: OpenSpec adapter unavailable' })])
+    expect(findings).toEqual([expect.objectContaining({ severity: 'error', key: 'openspec-valid:openspec adapter', message: 'not checked: OpenSpec adapter unavailable' })])
     // alpha is unregistered (skipped even though its validate failed); beta
     // is registered and invalid, so only beta reports.
     const failedAlpha: ValidateOutcome = { ok: false, error: 'call failed', valid: false, issues: [], issueCount: 0 }
@@ -119,7 +119,7 @@ describe('relations', () => {
   })
 
   test('an unavailable adapter is one not-checked error; unregistered changes are skipped', () => {
-    expect(run('relations', ctx({ adapter: probe(false) }))).toEqual([expect.objectContaining({ severity: 'error', key: 'relations:openspec', message: 'not checked: OpenSpec adapter unavailable' })])
+    expect(run('relations', ctx({ adapter: probe(false) }))).toEqual([expect.objectContaining({ severity: 'error', key: 'relations:openspec adapter', message: 'not checked: OpenSpec adapter unavailable' })])
     const skipped = run('relations', ctx({ resolved: { alpha: { ...registered('alpha'), status: 'archived' }, beta: registered('beta') }, cli: { beta: { validate: valid(), deltas: deltas(touchBeta) } } }))
     expect(skipped).toEqual([])
   })
@@ -137,6 +137,24 @@ describe('change-claimed-elsewhere', () => {
   test('another open plan naming a change is a warning', () => {
     const findings = run('change-claimed-elsewhere', ctx({ claims: { branch: [], changes: { alpha: ['plan-9'] } } }))
     expect(findings).toEqual([expect.objectContaining({ severity: 'warning', key: 'change-claimed-elsewhere:alpha:plan-9', detail: { plans: ['plan-9'] } })])
+  })
+
+  test('branch-free lists every claimant in one error; change-claimed-elsewhere keys the claimant set', () => {
+    const landing = { mode: 'integration-branch' as const, branch: 'release/1' }
+    const claimed = ctx({
+      content: content({ changes: [], landing }),
+      claims: { branch: ['plan-9', 'plan-8'], changes: {} },
+    })
+    const branchFindings = run('branch-free', claimed)
+    expect(branchFindings.filter(finding => finding.severity === 'error')).toHaveLength(1)
+    expect(branchFindings[0]!.message).toContain('plan-8, plan-9')
+    // A new claimant is a new key, so an earlier acceptance covers only the
+    // claimants it named.
+    const oneClaimant = run('change-claimed-elsewhere', ctx({ claims: { branch: [], changes: { alpha: ['plan-9'] } } }))[0]!
+    const twoClaimants = run('change-claimed-elsewhere', ctx({ claims: { branch: [], changes: { alpha: ['plan-9', 'plan-8'] } } }))[0]!
+    expect(oneClaimant.key).toBe('change-claimed-elsewhere:alpha:plan-9')
+    expect(twoClaimants.key).toBe('change-claimed-elsewhere:alpha:plan-8+plan-9')
+    expect(oneClaimant.key).not.toBe(twoClaimants.key)
   })
 
   test('claims computation ignores this plan and closed plans, and only standing revisions claim', () => {

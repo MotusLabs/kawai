@@ -187,9 +187,9 @@ describe('ValidationService.validate (D8)', () => {
     const outcome = await b.validation.validate(b.human, { planId, revision })
     expect(outcome.ok && outcome.report.ready).toBe(false)
     const keys = outcome.ok ? outcome.report.findings.map(finding => finding.key) : []
-    expect(keys).toContain('adapter-available:openspec')
-    expect(keys).toContain('openspec-valid:openspec')
-    expect(keys).toContain('relations:openspec')
+    expect(keys).toContain('adapter-available:openspec adapter')
+    expect(keys).toContain('openspec-valid:openspec adapter')
+    expect(keys).toContain('relations:openspec adapter')
   })
 
   test('a failed delta read blocks the report even when the surviving pairs conflict with nothing', async () => {
