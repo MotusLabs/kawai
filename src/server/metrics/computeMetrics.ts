@@ -5,7 +5,8 @@
 // and — when a slice is asked — rows by that slice on the metric's own side,
 // or `notSliceable`. Identical inputs give identical results. `MetricsReader`
 // caches a read per (team, window, slice) for 30 s so the tab and a tool call
-// in the same moment share one computation.
+// in the same moment share one computation; a `fresh` read (the tab's
+// Refresh) recomputes and replaces the cached entry.
 import type { Database } from 'bun:sqlite'
 import {
   COVERAGE_CAVEAT, METRIC_DEFS, MIN_SAMPLE, USAGE_CAVEAT, WINDOW_MS, sliceAllowed,
@@ -84,11 +85,11 @@ export class MetricsReader {
     private readonly now: () => number = Date.now,
   ) {}
 
-  read(teamId: string, window: MetricWindow, slice: MetricSlice | null): ProcessMetrics {
+  read(teamId: string, window: MetricWindow, slice: MetricSlice | null, options: { fresh?: boolean } = {}): ProcessMetrics {
     const key = JSON.stringify([teamId, window, slice])
     const at = this.now()
     const hit = this.cache.get(key)
-    if (hit && at - hit.at < METRICS_CACHE_MS) return hit.metrics
+    if (hit && !options.fresh && at - hit.at < METRICS_CACHE_MS) return hit.metrics
     for (const [k, v] of this.cache) if (at - v.at >= METRICS_CACHE_MS) this.cache.delete(k)
     const metrics = readMetrics(this.db, teamId, window, slice, at)
     this.cache.set(key, { at, metrics })
