@@ -79,12 +79,12 @@ Implement after `durable-plans`, `strategy-revision-impact`, and `plan-validatio
 
 ## 8. Ownership guards and the agent surface in team services
 
-- [ ] 8.1 Add `ExecutionOwnership` and its null implementation. Wire it into `TaskService.create`, `AssignmentService.dispatch`, `TaskResultService.handoff` and `submit`, `TaskRelease.release`, and the reply paths. Verify with tests that the team services build and pass without the plans module.
-- [ ] 8.2 Make the system create path link to the execution's revision. Refuse other links to an owned change, for the human and for agents. Verify with the `team-tasks` delta scenarios.
-- [ ] 8.3 Refuse non-system dispatch and reassignment onto an owned task. Accept `allowedProfiles` and `tags` from the system caller only. Verify with the `task-assignment` delta scenarios, and that an agent cannot pass `allowedProfiles`.
-- [ ] 8.4 Refuse non-system handoffs and Release on owned tasks, while still accepting findings. Add the result submission checks (D9), refusing results only while the change is `updating` or `merging`. Verify with the `task-results` delta scenarios, that a refused result writes nothing, and that a result submitted while the change waits at `conditions` is accepted.
-- [ ] 8.5 Refuse replies to Kawai's mail with `KAWAI_REPLY_GUIDANCE`, in the `reply` tool and the human composer. Verify with the `agent-mailbox` delta scenarios.
-- [ ] 8.6 Add `execution: { id, revision }` to the task envelope for owned tasks (`taskContext.ts`). Verify with tests: the execution's revision differs from the current approved one, and unowned tasks keep their shape.
+- [x] 8.1 Add `ExecutionOwnership` and its null implementation. Wire it into `TaskService.create`, `AssignmentService.dispatch`, `TaskResultService.handoff` and `submit`, `TaskRelease.release`, and the reply paths. Verify with tests that the team services build and pass without the plans module.
+- [x] 8.2 Make the system create path link to the execution's revision. Refuse other links to an owned change, for the human and for agents. Verify with the `team-tasks` delta scenarios.
+- [x] 8.3 Refuse non-system dispatch and reassignment onto an owned task. Accept `allowedProfiles` and `tags` from the system caller only. Verify with the `task-assignment` delta scenarios, and that an agent cannot pass `allowedProfiles`.
+- [x] 8.4 Refuse non-system handoffs and Release on owned tasks, while still accepting findings. Add the result submission checks (D9), refusing results only while the change is `updating` or `merging`. Verify with the `task-results` delta scenarios, that a refused result writes nothing, and that a result submitted while the change waits at `conditions` is accepted.
+- [x] 8.5 Refuse replies to Kawai's mail with `KAWAI_REPLY_GUIDANCE`, in the `reply` tool and the human composer. Verify with the `agent-mailbox` delta scenarios.
+- [x] 8.6 Add `execution: { id, revision }` to the task envelope for owned tasks (`taskContext.ts`). Verify with tests: the execution's revision differs from the current approved one, and unowned tasks keep their shape.
 
 ## 9. Routing
 

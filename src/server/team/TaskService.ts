@@ -25,6 +25,7 @@ import type { NoticeSender, SentNotice } from './taskNotices'
 import { TeamWorktrees } from './worktreeRoots'
 import type { PlanStore } from '../plans/planStore'
 import { resolvePlanLink } from '../plans/planLink'
+import { NULL_OWNERSHIP, type ExecutionOwnership } from '../plans/execution/executionOwnership'
 
 export interface TaskCreateInput {
   title: string
@@ -113,6 +114,8 @@ export class TaskService {
     restoreSession?: (id: string) => void | Promise<void>
     /** Plans a task may link to (durable-plans D9); without it every link is refused as unknown. */
     plans?: PlanStore
+    /** What a running execution owns (plan-execution D7); the default owns nothing. */
+    ownership?: ExecutionOwnership
   }) {
     this.worktrees = options.worktrees ?? new TeamWorktrees()
   }
@@ -137,7 +140,29 @@ export class TaskService {
       worktree = target.root
     }
     const openspecChange = input.openspec_change ? this.validateChange(team, input.openspec_change, worktree) : null
-    const link = resolvePlanLink(this.options.plans, team.teamId, input.plan_id, input.plan_change)
+    const ownership = this.options.ownership ?? NULL_OWNERSHIP
+    let linkRevision: number | null | undefined
+    if (caller.kind === 'system') {
+      // Kawai links to the revision its execution runs, which a later
+      // approved revision may have left behind (plan-execution D7). Without
+      // a wiring (the team services alone) there is no execution to read,
+      // and the link resolves against the current approved revision.
+      const execution = ownership.revisionOf(caller.executionId)
+      if (execution) {
+        if (input.plan_id && execution.planId !== input.plan_id.trim()) {
+          throw new Error(`Kawai's tasks link to the plan of their execution (${execution.planId}), not ${input.plan_id}.`)
+        }
+        linkRevision = execution.revision
+      }
+    } else if (input.plan_change) {
+      // The ownership guard runs before the link resolution so the refusal
+      // names the execution, whatever the plan's current revision lists.
+      const owner = ownership.ownerOfChange(team.teamId, input.plan_change.trim())
+      if (owner) {
+        throw new Error(`Change "${input.plan_change.trim()}" is owned by a running execution (${owner.executionId}); another task for it must wait until the execution finishes.`)
+      }
+    }
+    const link = resolvePlanLink(this.options.plans, team.teamId, input.plan_id, input.plan_change, linkRevision)
     return this.store.create({
       teamId: team.teamId, title, direction, acceptance: emptyToNull(input.acceptance), creator: actor,
       parentId: input.parent_id || null, worktree, openspecChange,

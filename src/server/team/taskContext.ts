@@ -4,19 +4,23 @@
 // journal is bounded — the last five entries, each truncated — to keep peer
 // turns small; `task_get` returns the full record. A task linked to a plan
 // change (durable-plans D9) adds `plan` with the plan's approved revision at
-// delivery; an unlinked task's context keeps exactly the old shape.
+// delivery; a task a running execution owns adds `execution` with the
+// revision it runs (plan-execution D7), which may differ from the approved
+// one; an unowned task's context keeps exactly the old shape.
 import type { ChatPeerTaskContext } from '../../shared/teamTasks'
 import type { PlanStore } from '../plans/planStore'
+import { NULL_OWNERSHIP, type ExecutionOwnership } from '../plans/execution/executionOwnership'
 import type { TaskStore } from './taskStore'
 
 export const TASK_CONTEXT_JOURNAL_ENTRIES = 5
 export const TASK_CONTEXT_ENTRY_CHARS = 500
 
-export function buildTaskContext(store: TaskStore, taskId: string | null, plans?: PlanStore): ChatPeerTaskContext | null {
+export function buildTaskContext(store: TaskStore, taskId: string | null, plans?: PlanStore, ownership?: ExecutionOwnership): ChatPeerTaskContext | null {
   if (!taskId) return null
   const task = store.get(taskId)
   if (!task) return null
   const plan = task.planId && task.planChange ? plans?.get(task.planId) : null
+  const owned = (ownership ?? NULL_OWNERSHIP).ownerOfTask(taskId)
   return {
     id: task.id,
     title: task.title,
@@ -32,6 +36,7 @@ export function buildTaskContext(store: TaskStore, taskId: string | null, plans?
       createdAt: entry.createdAt,
     })),
     ...(plan && task.planChange ? { plan: { id: plan.id, title: plan.title, revision: plan.currentApprovedRevision, change: task.planChange } } : {}),
+    ...(owned ? { execution: { id: owned.executionId, revision: owned.revision } } : {}),
   }
 }
 
@@ -44,6 +49,7 @@ export function formatTaskHeader(task: ChatPeerTaskContext): string {
     `[Task ${task.id}: ${task.title}] status ${task.status}, revision ${task.revision}`,
     ...(task.worktree ? [`Worktree: ${task.worktree}`] : []),
     ...(task.plan ? [`Plan: ${task.plan.title} (revision ${task.plan.revision ?? 'none'}), change ${task.plan.change}`] : []),
+    ...(task.execution ? [`Execution: ${task.execution.id} running plan revision ${task.execution.revision}`] : []),
     ...(task.openspecChange
       ? [`Linked OpenSpec change: ${task.openspecChange}. Its proposal, design, and tasks are the authoritative direction; the text below summarizes them.`]
       : []),

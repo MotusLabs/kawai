@@ -40,6 +40,7 @@ import type { TeamCaps } from './teamCaps'
 import type { StaffingPreview, WorktreeStaffing } from './staffing'
 import { worktreeRootOf, type TeamWorktrees } from './worktreeRoots'
 import type { PlanStore } from '../plans/planStore'
+import { NULL_OWNERSHIP, type ExecutionOwnership } from '../plans/execution/executionOwnership'
 
 /** How an outstanding assignment is handled by a reassignment (D7). */
 export type ReassignHandling = 'notify' | 'stop'
@@ -59,6 +60,14 @@ export interface DispatchInput {
    * outstanding assignment through the **stop** branch, with no choice asked.
    */
   handoff?: DispatchHandoff
+  /**
+   * The role's profiles the dispatch may route to (plan-execution D15),
+   * carried on the instruction mail. Honored for the system caller only;
+   * anyone else passing them is refused.
+   */
+  allowedProfiles?: string[]
+  /** Tags on the instruction mail (plan-execution D7); the system caller only. */
+  tags?: string[]
 }
 
 
@@ -96,6 +105,8 @@ export class AssignmentService {
       plans?: PlanStore
       /** Built-in cooldown end (ISO) of a profile, or null (preview skips cooling profiles). */
       cooldownUntil?: (profileId: string) => string | null
+      /** What a running execution owns (plan-execution D7); the default owns nothing. */
+      ownership?: ExecutionOwnership
     }) {}
 
   /**
@@ -109,6 +120,15 @@ export class AssignmentService {
     const team = await this.teamOf(caller)
     const task = this.tasks.get(input.taskId)
     if (!task || task.teamId !== team.teamId) throw new Error(`Task not found in this team: ${input.taskId}`)
+    // Only Kawai dispatches a running change's task (plan-execution D7): the
+    // human and agents are refused naming the execution, with the way out.
+    const owner = (this.options.ownership ?? NULL_OWNERSHIP).ownerOfTask(input.taskId)
+    if (owner !== null && caller.kind !== 'system') {
+      throw new Error(`The task is owned by a running execution (${owner.executionId}); close the task or stop the execution instead. Nothing was written.`)
+    }
+    if (caller.kind !== 'system' && (input.allowedProfiles !== undefined || input.tags !== undefined)) {
+      throw new Error('Only Kawai restricts a dispatch to role profiles or tags it; drop allowedProfiles and tags.')
+    }
     const instruction = input.instruction.trim()
     if (!instruction) throw new Error('An assignment instruction is needed')
     const requestKey = input.requestKey.trim()

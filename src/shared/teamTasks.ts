@@ -313,6 +313,8 @@ export interface ChatPeerTaskContext {
    * approved revision at delivery; absent for an unlinked task.
    */
   plan?: { id: string; title: string; revision: number | null; change: string }
+  /** The running execution that owns the task, with the revision it runs (plan-execution D7); absent for an unowned task. */
+  execution?: { id: string; revision: number }
 }
 
 /** An assignment's addressee: a group (its role) or one named session. */
