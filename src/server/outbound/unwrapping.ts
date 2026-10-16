@@ -33,6 +33,7 @@ const WRAPPERS: Record<string, { booleans: string[]; values: string[]; skipDurat
   nohup: { booleans: ['--'], values: [] },
   stdbuf: { booleans: ['--'], values: ['-o', '-e', '-i', '--output', '--error', '--input'] },
   ionice: { booleans: ['-t', '--'], values: ['-c', '-n', '-p', '--class', '--classdata', '--pid'] },
+  doas: { booleans: ['-n', '-s', '-v', '-V', '--'], values: ['-u', '-C', '-a'] },
 }
 
 /** What unwrapping left: the command, or why its position is unknowable. */
@@ -50,8 +51,8 @@ export interface Unwrapped {
 export function unwrapWrappers(argv: string[]): Unwrapped {
   let rest = argv
   for (;;) {
-    while (rest.length > 0 && RESERVED.has(rest[0]!)) rest = rest.slice(1)
-    const spec = rest[0] === undefined ? undefined : WRAPPERS[rest[0]!]
+    while (rest.length > 0 && RESERVED.has(rest[0]!.split('/').pop()!)) rest = rest.slice(1)
+    const spec = rest[0] === undefined ? undefined : WRAPPERS[rest[0]!.split('/').pop()!]
     if (spec === undefined) return { argv: rest, unknown: null }
     let i = 1
     let unknown = false
@@ -87,7 +88,7 @@ export function unwrapWrappers(argv: string[]): Unwrapped {
       if (valueTakesNext) i++
       continue
     }
-    if (unknown) return { argv: [], unknown: `the ${rest[0]} options were not understood` }
+    if (unknown) return { argv: [], unknown: `the ${rest[0]!.split('/').pop()} options were not understood` }
     rest = rest.slice(i)
     if (spec.skipDuration === true && rest.length > 0 && /^[\d.]+(ms|[smhd])?$/.test(rest[0]!)) rest = rest.slice(1)
   }

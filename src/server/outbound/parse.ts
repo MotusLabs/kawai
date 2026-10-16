@@ -294,7 +294,7 @@ function buildSegment(
       continue
     }
     // `env [-C dir] [-i] [-u NAME] [NAME=value…] cmd…` unwraps one level.
-    if (rest[0]!.text === 'env') {
+    if (rest[0]!.text.split('/').pop() === 'env') {
       let at = 1
       let cleared = false
       let envUnreadable = false
@@ -331,11 +331,23 @@ function buildSegment(
       continue
     }
     // `bash -c 'inner'` unwraps exactly one level; a deeper level is noted.
-    const flagIsC = /^-[a-qs-z]*c[a-qs-z]*$|^-[a-z]*c[a-z]*$/.test(rest[1]?.text ?? '')
-    if (SHELLS.has(rest[0]!.text) && (rest[1]?.text === '-c' || flagIsC) && rest[2] !== undefined) {
-      if (depth > 0) { note = 'a second -c level is never unwrapped'; break }
-      if (!rest[2]!.opaque) {
-        const inner = parseSegments(rest[2]!.text, segmentCwd, env, depth + 1)
+    // Flags may precede -c (`sh -x -c …`), `--` may follow it, and an
+    // absolute path names the same shell (round 5 R7).
+    if (SHELLS.has(rest[0]!.text.split('/').pop()!)) {
+      let at = 1
+      let hasC = false
+      while (at < rest.length && rest[at]!.text.startsWith('-') && rest[at]!.text !== '--' && rest[at]!.text !== '-') {
+        if (/^-[a-qs-z]*c[a-qs-z]*$|^-[a-z]*c[a-z]*$/.test(rest[at]!.text)) { hasC = true; break }
+        at++
+      }
+      if (hasC) {
+        let innerAt = at + 1
+        if (rest[innerAt]?.text === '--') innerAt++
+        const innerWord = rest[innerAt]
+        if (innerWord === undefined) { note = 'the -c string is missing'; break }
+        if (depth > 0) { note = 'a second -c level is never unwrapped'; break }
+        if (innerWord.opaque) { note = 'the -c string is a variable or command substitution'; break }
+        const inner = parseSegments(innerWord.text, segmentCwd, env, depth + 1)
         return {
           segments: inner.map(segment => ({ ...segment, env: mergeEnv(env, segment.env) })),
           envUpdates: new Map(),
