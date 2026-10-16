@@ -31,14 +31,28 @@ journal. The body names the worktree, branch, base/head SHAs, `result_id`, and
 focus. For each request:
 
 1. `task_get` the task and read its acceptance criteria and, if linked, the
-   OpenSpec change's proposal, design, and tasks.
+   OpenSpec change's proposal, design, delta specs, and tasks.
 2. Read the requested result with `task_get` and resolve the exact base and
    head SHAs before reviewing. Inspect that commit range with `git log` and
    `git diff`, then read surrounding code. Report any branch movement.
 3. Look for: unmet acceptance criteria, correctness bugs and edge cases,
    missing or weak tests, files over 500 lines, style that departs from the
    surrounding code, and spec/doc drift (`CLAUDE.md`, `docs/`, `openspec/`).
-4. Optionally run checks (`bun run lint`, `bun run typecheck`,
+4. Establish the Lead's assigned tasks or checkpoint scope from the task
+   revision and review request. Map each delta-spec requirement and behavioral
+   scenario in that scope to tests asserting its observable outcome; existing
+   tests count when they cover it. For tasks without delta specs, use the task's
+   direction and acceptance criteria. Record the coverage mapping in the
+   result-bound findings. For subset submissions, list requirements explicitly
+   deferred to later tasks separately; their missing implementation or tests do
+   not block this stage. Still check regressions caused by the submitted subset
+   in affected existing behavior. If the stage boundary is ambiguous or conflicts
+   with task acceptance, ask the Lead to clarify or amend it before approval.
+   Report missing or ineffective coverage as blocking. Tests for changed
+   behavior must detect its absence; tests for preserved behavior must detect
+   regressions. Document justified exceptions, such as requirements that cannot
+   be meaningfully automated, for the Lead to resolve before approval.
+5. Optionally run checks (`bun run lint`, `bun run typecheck`,
    `bun run test`) and probes, but only in a disposable checkout of the head
    SHA: `git worktree add --detach /tmp/kawai-review-<sha7> <head-sha>`, then
    `bun install` there. Remove it with `git worktree remove` once your

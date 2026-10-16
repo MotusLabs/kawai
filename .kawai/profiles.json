@@ -49,7 +49,9 @@
   },
   "kimi": {
     "label": "Kimi",
-    "env": { "ANTHROPIC_BASE_URL": "https://kimi.ruslan.casa/" }
+    "env": {
+      "ANTHROPIC_BASE_URL": "https://kimi.ruslan.casa/"
+    }
   },
   "lan": {
     "label": "LAN",
@@ -57,5 +59,9 @@
       "ANTHROPIC_BASE_URL": "http://ai.lan:9292",
       "CLAUDE_CODE_ATTRIBUTION_HEADER": "0"
     }
+  },
+  "haiku": {
+    "label": "Claude Haiku",
+    "model": "claude-haiku-5-5"
   }
 }
