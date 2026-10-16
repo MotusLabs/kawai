@@ -26,8 +26,8 @@ Forwarded, released, and cancelled messages are not held, so they never count.
 `turnEnded` takes the agent-turn path when a final event is pending, the turn has no delivered work, and the turn was agent-started. The result subtype is ignored, because the CLI has reported `success` after a final limit. Given the current work W:
 
 - If W is `delivered` and has fewer than `MAX_PARKS` (3) parks, it is parked through the existing `park()`. That replaces any resume, enqueues the `resume`-tagged message at the reset, and increments the count. The policy, the rule's `onLimit`, and progress are not consulted, and W is never released or forwarded.
-- If W is already `parked`, the resume is replaced by one at the later of the two reset times, and the park count stays the same. The store gets `park(id, until, resume, { count: false })`.
-- If W is `delivered` with `MAX_PARKS` parks, nothing is done. It is not released, because the instruction may be complete. The resume-turn path keeps its existing rule: a resume turn that hits a limit again with 3 parks releases the work.
+- If W is already `parked`, the resume is replaced by one at the later of the two reset times, and the park count stays the same. The store gets `park(id, until, resume, false)` (count unchanged).
+- If W is `delivered` with `MAX_PARKS` parks, nothing is done except a `limit_agent_turn_park_cap` warning naming the session and the message. It is not released, because the instruction may be complete. The resume-turn path keeps its existing rule: a resume turn that hits a limit again with 3 parks releases the work.
 - If there is no current work, nothing is resolved.
 
 When the reset has already passed, `park()` is skipped, as in the existing path. The agent is not paused for a limit that has already recovered.

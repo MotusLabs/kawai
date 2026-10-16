@@ -7,7 +7,7 @@
 
 ## 2. Agent-started limit resolution
 
-- [x] 2.1 In `turnEnded`, when a final event is pending, no delivered work is active, and the turn was agent-started, park the current work: `delivered` under `MAX_PARKS` → `park()`; already `parked` → resume replaced at the later reset with the count unchanged (`park(..., { count: false })`); `MAX_PARKS` reached or no current work → nothing. The result subtype is ignored. Verify with `limitOutcomes` tests for each branch, including a `success` result after a final limit and a 5-hour reset with `otherwise: forward`.
+- [x] 2.1 In `turnEnded`, when a final event is pending, no delivered work is active, and the turn was agent-started, park the current work: `delivered` under `MAX_PARKS` → `park()`; already `parked` → resume replaced at the later reset with the count unchanged (`park(id, until, resume, false)`); `MAX_PARKS` reached or no current work → nothing. The result subtype is ignored. Verify with `limitOutcomes` tests for each branch, including a `success` result after a final limit and a 5-hour reset with `otherwise: forward`.
 - [x] 2.2 Restrict the success unpark to human turns and the work's own resume. Verify a successful agent-started turn leaves the parked work and its resume, a successful human turn still unparks, and a successful resume turn unparks.
 - [x] 2.3 Integration test (real manager, driver, mailbox): delivered work completes, then a self-started (task notification) turn ends after a final limit → the work is parked with a resume at the reset; with no held work nothing changes.
 
