@@ -8,13 +8,14 @@
 // `max`, `profile`, and `approval` (team-tasks design D2/D6); team mailbox
 // management adds `canManageMailbox`; profile routing
 // adds `profiles`, `strategy`, and `onLimit`; group effort adds `effort`, the
-// reasoning effort members' agents launch with; member release adds
+// reasoning effort members' agents launch with, and `profileEffort` (a flow
+// map from profile id to level) overrides it per profile; member release adds
 // `releaseOnTaskClose`, `worktreeScoped`, and `canReleaseMembers` (all strict
 // booleans, default true); durable plans add `canCreatePlans` (a strict
 // boolean like `canCreateTasks`, default false). `profiles` and `onLimit` take
 // one single-line flow value (`[a, b]` or `{ k: v }`, scalars only — never
-// nested). Defaults are applied here so every reader sees the same effective
-// values. Bad `onLimit` and `effort` values are warnings (the defaults apply)
+// nested), as does `profileEffort`. Defaults are applied here so every reader sees the same effective
+// values. Bad `onLimit`, `effort`, and `profileEffort` values are warnings (the defaults apply)
 // rather than a rejected file, as the profile-routing spec asks.
 import type { ChatApprovalPolicy } from '../../shared/chat'
 import { PROFILE_ID_PATTERN } from '../chat/profileCatalog'
@@ -76,6 +77,8 @@ export interface GroupDefinition {
   approval: ChatApprovalPolicy
   /** Effort every member's agent launches with; unset = Claude Code settings decide. */
   effort?: GroupEffort
+  /** Per-profile effort overriding `effort` for members on that profile; valid entries only. */
+  profileEffort?: Record<string, GroupEffort>
   /** Problems that fell back to defaults instead of rejecting the file. */
   warnings: string[]
   /** The role prompt appended to members' system prompts. */
@@ -130,7 +133,7 @@ export function parseGroupFile(id: string, content: string): GroupFileParse {
 
 type TaskSettings = Pick<GroupDefinition,
   'canCreateTasks' | 'canCreatePlans' | 'canManageMailbox' | 'releaseOnTaskClose' | 'worktreeScoped' | 'canReleaseMembers'
-  | 'max' | 'profiles' | 'strategy' | 'onLimit' | 'approval' | 'effort' | 'warnings'>
+  | 'max' | 'profiles' | 'strategy' | 'onLimit' | 'approval' | 'effort' | 'profileEffort' | 'warnings'>
 
 type Parsed<T> = { ok: true; value: T } | { ok: false; error: string }
 
@@ -201,7 +204,47 @@ function parseTaskSettings(
     if (GROUP_EFFORTS.includes(effort as GroupEffort)) settings.effort = effort as GroupEffort
     else warnings.push(`effort must be ${GROUP_EFFORTS.join(', ')}, got "${effort}"; ignored`)
   }
+  const profileEffort = parseProfileEffort(fields.get('profileEffort'), settings.profiles, warnings)
+  if (profileEffort) settings.profileEffort = profileEffort
   return { ok: true, settings }
+}
+
+/**
+ * `profileEffort: { haiku: xhigh }`. Every problem is a warning that drops
+ * only the bad entry (or the whole key when it is not a map); an entry for a
+ * profile the group does not list is kept, since a human-created member can
+ * run on any profile.
+ */
+function parseProfileEffort(
+  raw: string | undefined, listed: GroupProfile[], warnings: string[]
+): Record<string, GroupEffort> | undefined {
+  if (raw === undefined) return undefined
+  const flow = parseFlow(raw.trim(), true)
+  if (!flow.ok || flow.value.kind !== 'map') {
+    warnings.push(`profileEffort: ${flow.ok ? 'expected { profile: level, ... }' : flow.error}; ignored`)
+    return undefined
+  }
+  const groupProfiles = new Set(listed.length > 0 ? listed.map(entry => entry.profileId) : ['default'])
+  const result: Record<string, GroupEffort> = {}
+  const seen = new Set<string>()
+  for (const [profileId, level] of flow.value.entries) {
+    if (seen.has(profileId)) {
+      warnings.push(`profileEffort: "${profileId}" is listed twice; the first entry is kept`)
+      continue
+    }
+    seen.add(profileId)
+    if (!PROFILE_ID_PATTERN.test(profileId)) {
+      warnings.push(`profileEffort: "${profileId}" is not a valid profile id; ignored`)
+    } else if (!GROUP_EFFORTS.includes(level as GroupEffort)) {
+      warnings.push(`profileEffort.${profileId} must be ${GROUP_EFFORTS.join(', ')}, got "${level}"; ignored`)
+    } else {
+      result[profileId] = level as GroupEffort
+      if (!groupProfiles.has(profileId)) {
+        warnings.push(`profileEffort: "${profileId}" is not one of the group's profiles; it applies only to members on that profile`)
+      }
+    }
+  }
+  return Object.keys(result).length > 0 ? result : undefined
 }
 
 /**
@@ -287,9 +330,10 @@ type Flow = { kind: 'list' | 'map'; entries: Array<[string, string]> }
 /**
  * One single-line flow collection of scalars: `[a, 'b']` or `{ k: v }`.
  * List entries carry their index as key. Nesting, empty items, and stray
- * brackets are errors — the frontmatter stays a flat, scalar-only format.
+ * brackets are errors — the frontmatter stays a flat, scalar-only format. A
+ * repeated map key is an error unless `allowRepeats` (the caller handles it).
  */
-function parseFlow(raw: string): Parsed<Flow> {
+function parseFlow(raw: string, allowRepeats = false): Parsed<Flow> {
   const open = raw[0]
   const close = open === '[' ? ']' : open === '{' ? '}' : null
   if (!close) return { ok: false, error: `expected [ ... ] or { ... }, got "${raw}"` }
@@ -311,7 +355,7 @@ function parseFlow(raw: string): Parsed<Flow> {
     const match = /^([A-Za-z0-9][A-Za-z0-9_-]*)\s*:\s*(.+)$/.exec(text)
     const value = match ? unquote(match[2]!.trim()) : null
     if (!match || value === null || value === '') return { ok: false, error: `"${text}" is not "key: value"` }
-    if (entries.some(([key]) => key === match[1])) return { ok: false, error: `key "${match[1]}" is repeated` }
+    if (!allowRepeats && entries.some(([key]) => key === match[1])) return { ok: false, error: `key "${match[1]}" is repeated` }
     entries.push([match[1]!, value])
   }
   return { ok: true, value: { kind, entries } }

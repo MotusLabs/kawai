@@ -134,11 +134,16 @@ export class SessionTeams {
 
   /**
    * The launch effort for a spawn (group-effort D2), read from the files as
-   * they are now like `promptFor`; undefined without a group, team, or
-   * `effort`, leaving Claude Code's own settings to decide.
+   * they are now like `promptFor`: the group's `profileEffort` entry for the
+   * member's profile (group-profile-effort D2), else its `effort`; undefined
+   * without a group, team, or either, leaving Claude Code's own settings to
+   * decide.
    */
-  effortFor(sessionId: string, groupId: string | null | undefined): GroupEffort | undefined {
-    return groupId ? this.catalogOf(sessionId)?.groups.get(groupId)?.group.effort : undefined
+  effortFor(
+    sessionId: string, groupId: string | null | undefined, profileId: string
+  ): GroupEffort | undefined {
+    const group = groupId ? this.catalogOf(sessionId)?.groups.get(groupId)?.group : undefined
+    return group?.profileEffort?.[profileId] ?? group?.effort
   }
 
   /**
