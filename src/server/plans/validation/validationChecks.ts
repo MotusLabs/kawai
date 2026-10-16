@@ -168,10 +168,14 @@ export const VALIDATION_CHECKS: readonly ValidationCheck[] = [
     name: 'change-claimed-elsewhere',
     row: 'scope',
     run: ({ content, claims }) => content.changes.flatMap((change): Finding[] => {
-      const plans = claims.changes[change.change] ?? []
+      const plans = (claims.changes[change.change] ?? []).slice().sort()
       if (plans.length === 0) return []
+      // The claimant set is part of the key, so an earlier acceptance never
+      // covers a claimant it did not name (the D4 overlap rule).
       return [{
-        check: 'change-claimed-elsewhere', key: findingKey('change-claimed-elsewhere', change.change), severity: 'warning', row: 'scope',
+        check: 'change-claimed-elsewhere',
+        key: findingKey('change-claimed-elsewhere', `${change.change}:${plans.join('+')}`),
+        severity: 'warning', row: 'scope',
         subject: change.change, message: `${change.change} is also named by open plan${plans.length === 1 ? '' : 's'} ${plans.join(', ')}.`,
         detail: { plans },
       }]
@@ -202,7 +206,7 @@ export const VALIDATION_CHECKS: readonly ValidationCheck[] = [
       const unknown = role.profiles.filter(profile => !knownProfiles.has(profile))
       const findings: Finding[] = unknown.map(profile => ({
         check: 'profiles-known', key: findingKey('profiles-known', `${role.group}/${profile}`), severity: 'error', row: 'readiness',
-        subject: profile, message: `Profile ${profile} (role ${role.group}) is not a known profile.`,
+        subject: `${role.group}/${profile}`, message: `Profile ${profile} (role ${role.group}) is not a known profile.`,
       }))
       const declared = groups.get(role.group)?.profiles ?? []
       if (declared.length > 0) {
@@ -212,7 +216,7 @@ export const VALIDATION_CHECKS: readonly ValidationCheck[] = [
           if (declared.includes(profile) || !knownProfiles.has(profile)) continue
           findings.push({
             check: 'profiles-known', key: findingKey('profiles-known', `${role.group}/${profile}`), severity: 'warning', row: 'readiness',
-            subject: profile, message: `Group ${role.group} declares profiles [${declared.join(', ')}]; role profile ${profile} is outside them.`,
+            subject: `${role.group}/${profile}`, message: `Group ${role.group} declares profiles [${declared.join(', ')}]; role profile ${profile} is outside them.`,
           })
         }
       }
@@ -225,11 +229,16 @@ export const VALIDATION_CHECKS: readonly ValidationCheck[] = [
     run: ({ content, claims, branch }) => {
       const landing = content.landing
       if (landing.mode !== 'integration-branch') return []
-      const findings: Finding[] = claims.branch.map(planId => ({
-        check: 'branch-free', key: findingKey('branch-free', landing.branch), severity: 'error', row: 'readiness',
-        subject: landing.branch, message: `Another open plan (${planId}) lands on branch ${landing.branch}.`,
-        detail: { planId },
-      }))
+      // One error listing every claimant: they share one key, so one
+      // resolution — not one error per plan that must each be cleared.
+      const claimants = claims.branch.slice().sort()
+      const findings: Finding[] = claimants.length > 0
+        ? [{
+            check: 'branch-free', key: findingKey('branch-free', landing.branch), severity: 'error', row: 'readiness',
+            subject: landing.branch, message: `Another open plan${claimants.length === 1 ? '' : 's'} (${claimants.join(', ')}) land${claimants.length === 1 ? 's' : ''} on branch ${landing.branch}.`,
+            detail: { plans: claimants },
+          }]
+        : []
       findings.push({
         check: 'branch-free', key: findingKey('branch-free', `${landing.branch}:state`), severity: 'evidence', row: 'readiness',
         subject: landing.branch, message: `Branch ${landing.branch} ${branch ? `exists at ${branch.head}` : 'was not found'}${branch?.worktree ? ` (checked out in ${branch.worktree})` : ''}.`,

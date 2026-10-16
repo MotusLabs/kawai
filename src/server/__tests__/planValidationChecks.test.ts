@@ -136,7 +136,7 @@ describe('relations', () => {
 describe('change-claimed-elsewhere', () => {
   test('another open plan naming a change is a warning', () => {
     const findings = run('change-claimed-elsewhere', ctx({ claims: { branch: [], changes: { alpha: ['plan-9'] } } }))
-    expect(findings).toEqual([expect.objectContaining({ severity: 'warning', key: 'change-claimed-elsewhere:alpha', detail: { plans: ['plan-9'] } })])
+    expect(findings).toEqual([expect.objectContaining({ severity: 'warning', key: 'change-claimed-elsewhere:alpha:plan-9', detail: { plans: ['plan-9'] } })])
   })
 
   test('claims computation ignores this plan and closed plans, and only standing revisions claim', () => {
