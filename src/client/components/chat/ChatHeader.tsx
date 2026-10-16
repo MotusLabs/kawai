@@ -1,20 +1,24 @@
-// The chat view header (chat-header-layout D1, team-workspace-pages 4.1):
-// the session's identity and status, one **Team** button that opens the Team
-// page for the chat's team on the tab last used (Tasks the first time), the
-// Auto-approve switch (amber while on, shown for live chats at every width),
-// and the session menu (Rename, Debug, Archive, and Kill session, which asks
-// for confirmation first). The side slot hosts only the debug panel; the
-// team views live on the Team page, and the task chip opens its task there.
-// As the header narrows (measured in chat-font ems, D6) the Team button
-// drops to an icon, then folds into the session menu while the context meter
-// shows only its percentage; the name, status, switch, and menu always stay
-// visible. It renders from props only — the WebSocket subscription effects
-// stay in ChatView, which owns the attach lifecycle — and keeps the in-place
-// rename state (chat-session-naming): a blank submit just exits editing,
-// and the draft follows broadcast renames while not being edited, so another
-// client's rename shows without a reload. The context meter sits beside the
-// session status, hidden until the first model request; archived chats keep
-// the stored reading and hide the approval and archive controls.
+// The chat view header (chat-header-layout D1, team-workspace-pages 4.1,
+// chat-transcript-layout D4), in up to three rows: identity and actions (status,
+// the click-to-rename name, one **Team** button that opens the Team page for
+// the chat's team on the tab last used — Tasks the first time — the
+// Auto-approve switch, amber while on and shown for live chats at every width,
+// and the session menu: Rename, Debug, Archive, and Kill session, which asks
+// first); supporting metadata (profile, reported model, project basename with
+// the full path on hover and to assistive technology, and the context meter at
+// the trailing edge); and, only when present, the task and paused context. Every
+// row wraps instead of clipping: long values break inside themselves and a very
+// narrow header moves the action group below the name. The side slot hosts only
+// the debug panel; the task chip opens its task on the Team page. As the header
+// narrows (measured in chat-font ems, useHeaderLayout) the Team button drops to
+// an icon, then folds into the session menu while the context meter shows only
+// its percentage. It renders from props only — the WebSocket subscription
+// effects stay in ChatView, which owns the attach lifecycle — and keeps the
+// in-place rename state (chat-session-naming): a blank submit just exits
+// editing, and the draft follows broadcast renames while not being edited, so
+// another client's rename shows without a reload. The context meter is hidden
+// until the first model request; archived chats keep the stored reading and
+// hide the approval and archive controls.
 import { useEffect, useRef, useState } from 'react'
 import type { ChatContextUsage } from '@shared/chat'
 import type { Session } from '@shared/types'
@@ -97,10 +101,13 @@ export default function ChatHeader({
     onArchive, onKill: () => setKillFor(session.id),
   })
   return (
-    <header ref={headerRef} className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-border p-3" data-layout={layout}>
-      <button className="btn text-chat-meta md:hidden" onClick={onClose}>Sessions</button>
-      <div className="min-w-[8em] flex-1">
-        <div className="flex min-w-0 items-center gap-2">
+    <header ref={headerRef} className="flex flex-col gap-y-1.5 border-b border-border p-3" data-layout={layout}>
+      {/* Row 1, identity and actions (chat-transcript-layout D4): the name takes
+          the flexible space; on a very narrow header the action group wraps
+          below it rather than squeezing it. */}
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2" data-testid="chat-identity-row">
+        <button className="btn text-chat-meta md:hidden" onClick={onClose}>Sessions</button>
+        <div className="flex min-w-[12em] flex-1 items-center gap-2">
           <span className="flex shrink-0 items-center gap-1.5 text-chat-meta text-secondary">
             <span aria-hidden="true" className={`h-2 w-2 shrink-0 rounded-full ${status.dot}`} data-testid="chat-status-dot" />
             <span data-testid="chat-status">{status.word}</span>
@@ -115,40 +122,54 @@ export default function ChatHeader({
               data-testid="chat-name" onClick={() => setEditingName(true)}>{session.name}</h2>
           )}
         </div>
-        <p className="flex min-w-0 items-center gap-1.5 whitespace-nowrap text-chat-meta text-secondary" data-testid="chat-identity">
-          <span className="shrink-0" data-testid="chat-profile" title={`Profile: ${profileLabel}`}>{profileLabel}</span>
+        <div className="ml-auto flex shrink-0 items-center gap-x-3" data-testid="chat-actions">
+          {layout !== 'menu' && (
+            <button type="button" className={`btn text-chat-meta ${iconsOnly(layout) ? 'px-2' : ''}`}
+              data-testid="chat-team-button" onClick={onOpenTeam}
+              {...(iconsOnly(layout) ? { 'aria-label': 'Team', title: 'Team' } : {})}>
+              {iconsOnly(layout)
+                ? <Users01Icon aria-hidden="true" className="h-4 w-4" />
+                : <span className="flex items-center gap-1.5"><Users01Icon aria-hidden="true" className="h-4 w-4" />Team</span>}
+            </button>
+          )}
+          {!archived && (
+            <label className={`flex shrink-0 cursor-pointer items-center gap-1.5 whitespace-nowrap text-chat-meta ${autoApprove ? 'text-approval' : 'text-secondary'}`}>
+              <Switch checked={autoApprove} onCheckedChange={onToggleApproval} ariaLabel="Auto-approve" testId="chat-approval-policy"
+                className="data-[checked]:bg-approval" />
+              <span aria-hidden="true">Auto-approve</span>
+            </label>
+          )}
+          {/* Keyed by session so an open menu closes on a chat switch. */}
+          <ChatSessionMenu key={session.id} entries={menuEntries} container={headerRef} />
+        </div>
+      </div>
+      {/* Row 2, supporting metadata: each field wraps and long tokens break
+          inside themselves; the context meter takes the trailing edge when it
+          fits, else its own line. */}
+      <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 text-chat-meta text-secondary">
+        <p className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-1.5" data-testid="chat-identity">
+          <span className="min-w-0 [overflow-wrap:anywhere]" data-testid="chat-profile" title={`Profile: ${profileLabel}`}>{profileLabel}</span>
           {model && <>
             <span aria-hidden="true">·</span>
-            <span className="min-w-0 truncate" data-testid="chat-model" title={`Model reported by the agent: ${model}`}>{model}</span>
+            <span className="min-w-0 [overflow-wrap:anywhere]" data-testid="chat-model" title={`Model reported by the agent: ${model}`}>{model}</span>
           </>}
           <span aria-hidden="true">·</span>
-          <span className="min-w-0 truncate" data-testid="chat-project" title={session.projectPath}>{projectName(session.projectPath)}</span>
-          {session.taskId && <span className="min-w-0 truncate rounded border border-border px-1.5" data-testid="chat-task-chip">
-            {session.spawned ? 'Spawned for task ' : 'Task '}
-            <button className="hover:underline" data-testid="chat-task" onClick={() => onOpenTask(session.taskId!)}>{session.taskTitle ?? session.taskId}</button>
-          </span>}
-          {session.parked && <span className="min-w-0 truncate rounded border border-border px-1.5 text-amber-600" data-testid="chat-paused">{parkedLabel(session.parked)}</span>}
+          <span className="min-w-0 [overflow-wrap:anywhere]" data-testid="chat-project" title={session.projectPath}>
+            {projectName(session.projectPath)}<span className="sr-only"> ({session.projectPath})</span>
+          </span>
         </p>
+        <span className="ml-auto"><ChatContextMeter usage={contextUsage} compact={layout === 'menu'} /></span>
       </div>
-      <ChatContextMeter usage={contextUsage} compact={layout === 'menu'} />
-      {layout !== 'menu' && (
-        <button type="button" className={`btn text-chat-meta ${iconsOnly(layout) ? 'px-2' : ''}`}
-          data-testid="chat-team-button" onClick={onOpenTeam}
-          {...(iconsOnly(layout) ? { 'aria-label': 'Team', title: 'Team' } : {})}>
-          {iconsOnly(layout)
-            ? <Users01Icon aria-hidden="true" className="h-4 w-4" />
-            : <span className="flex items-center gap-1.5"><Users01Icon aria-hidden="true" className="h-4 w-4" />Team</span>}
-        </button>
+      {/* Row 3, task and paused context: only when present, wrapping in full. */}
+      {(session.taskId || session.parked) && (
+        <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1 text-chat-meta" data-testid="chat-context-row">
+          {session.taskId && <span className="min-w-0 rounded border border-border px-1.5 [overflow-wrap:anywhere]" data-testid="chat-task-chip">
+            {session.spawned ? 'Spawned for task ' : 'Task '}
+            <button className="text-left hover:underline" data-testid="chat-task" onClick={() => onOpenTask(session.taskId!)}>{session.taskTitle ?? session.taskId}</button>
+          </span>}
+          {session.parked && <span className="min-w-0 rounded border border-border px-1.5 text-amber-600 [overflow-wrap:anywhere]" data-testid="chat-paused">{parkedLabel(session.parked)}</span>}
+        </div>
       )}
-      {!archived && (
-        <label className={`flex shrink-0 cursor-pointer items-center gap-1.5 whitespace-nowrap text-chat-meta ${autoApprove ? 'text-approval' : 'text-secondary'}`}>
-          <Switch checked={autoApprove} onCheckedChange={onToggleApproval} ariaLabel="Auto-approve" testId="chat-approval-policy"
-            className="data-[checked]:bg-approval" />
-          <span aria-hidden="true">Auto-approve</span>
-        </label>
-      )}
-      {/* Keyed by session so an open menu closes on a chat switch. */}
-      <ChatSessionMenu key={session.id} entries={menuEntries} container={headerRef} />
       <ChatKillDialog open={killOpen} name={session.name} container={headerRef}
         onOpenChange={open => setKillFor(open ? session.id : null)} onConfirm={() => { if (killOpen) onKill() }} />
     </header>
