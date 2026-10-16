@@ -30,10 +30,12 @@ export function ghRepoTarget(scanned: Scan, positionals: Word[], repoPositional 
     if (parts.length === 3) return { kind: 'repo', repo: `${parts[1]}/${parts[2]}`, host: 'github.com' }
   }
   // `gh repo <verb> <repo>`: the positional is the target; a bare name
-  // reads as the caller's own account, judged against origin.
+  // reads as the caller's own account, judged against origin. An opaque
+  // positional is an unknown repository, never implicit origin.
   if (repoPositional) {
-    const first = positionals.find(word => !word.opaque)
+    const first = positionals[0]
     if (first === undefined) return { kind: 'origin-implicit' }
+    if (first.opaque) return VARIABLE()
     if (first.text.includes('/')) return { kind: 'repo', repo: first.text.replace(/\.git$/, '') }
     return { kind: 'repo', repo: `the caller's account/${first.text}` }
   }

@@ -199,4 +199,30 @@ describe('CC round 3: wrappers, reserved words, and git pinning', () => {
       rule: 'git-push', verdict: 'violation', destination: 'github:evil/x',
     })
   })
+
+  test('gh value flags, opaque targets, attached bodies, and rename (round 5 R3)', () => {
+    // A URL inside a value flag is never a target.
+    expect(verdictOf('gh release create v1 -n "notes with https://github.com/evil/x URL"')).toEqual({
+      rule: 'gh-write', verdict: 'allowed', destination: 'github:origin',
+    })
+    expect(verdictOf('gh pr edit 5 -t "title https://github.com/evil/x"')).toEqual({
+      rule: 'gh-write', verdict: 'allowed', destination: 'github:origin',
+    })
+    // An opaque positional or -R target reads unresolved, never origin.
+    expect(verdictOf('gh repo edit $REPO --visibility public')).toEqual({
+      rule: 'gh-write', verdict: 'unknown-destination', destination: 'unresolved:the target is a variable or command substitution',
+    })
+    // An attached -b value is the flag's value: the target stays origin and
+    // the stored fields never hold the secret.
+    expect(verdictOf('gh secret set N -b"SECRET V7"')).toEqual({
+      rule: 'gh-write', verdict: 'allowed', destination: 'github:origin',
+    })
+    // rename targets -R, else origin — its positional is the new name.
+    expect(verdictOf('gh repo rename new-name -R evil/x')).toEqual({
+      rule: 'gh-write', verdict: 'violation', destination: 'github:evil/x',
+    })
+    expect(verdictOf('gh repo rename new-name')).toEqual({
+      rule: 'gh-write', verdict: 'allowed', destination: 'github:origin',
+    })
+  })
 })

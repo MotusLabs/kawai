@@ -273,6 +273,7 @@ function candidatesOf(segment: { argv: string[]; text: string; cwd: string; env:
       // never misread as the repository name.
       const scanned = scan(argv, 3, [
         '-R', '--repo', '--hostname', '--body', '--body-file', '--title', '--assignee', '--label', '--project', '--milestone', '--base', '--head', '--reviewer',
+        '-b', '-t', '-n', '-F', '--notes', '--subject',
         '-d', '--description', '-h', '--homepage', '-t', '--team', '-p', '--template', '-g', '--gitignore', '-l', '--license', '-s', '--source', '-r', '--remote',
         '--org', '--fork-name', '--remote-name',
       ])
@@ -297,7 +298,10 @@ function candidatesOf(segment: { argv: string[]; text: string; cwd: string; env:
       // An explicit --org is the destination account, never implicit origin.
       const org = scanned.values('--org')[0]
       if (org !== undefined && !org.opaque) return [base('gh-write', { kind: 'repo', repo: org.text })]
-      return [base('gh-write', ghRepoTarget(scanned, scanned.positionals, argv[1] === 'repo'))]
+      // `gh repo rename`'s positional is the NEW name: the target is -R, else
+      // origin (round 5 R3).
+      const repoPositional = argv[1] === 'repo' && argv[2] !== 'rename'
+      return [base('gh-write', ghRepoTarget(scanned, scanned.positionals, repoPositional))]
     }
     return []
   }
