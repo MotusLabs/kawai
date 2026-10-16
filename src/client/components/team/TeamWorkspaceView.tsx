@@ -22,6 +22,7 @@ import { knownTeamKeys } from '../../utils/teamKey'
 import { openParticipantChat } from '../chat/openParticipant'
 import { useTeamGroups } from '../chat/useTeamGroups'
 import ProductStrategyView from './ProductStrategyView'
+import { runTasksEntrySelection } from './tasksEntrySelection'
 import TeamMailboxView from './TeamMailboxView'
 import TeamMessagesView from './TeamMessagesView'
 import TeamMembersPanel from './TeamMembersPanel'
@@ -156,40 +157,15 @@ export default function TeamWorkspaceView({ teamKey, location, sendMessage, conn
     sendMessage({ type: 'team-tasks-open', teamPath: teamKey })
     return () => sendMessage({ type: 'team-tasks-close', teamPath: teamKey })
   }, [teamKey, connected, connectionEpoch, tasksOpen, sendMessage])
-  // Entering the tab with a task still selected (Messages, then Tasks, or a
-  // return through the Team entry) puts the selection back in the URL instead
-  // of dropping it (spec: the selected task survives navigation); a URL that
-  // loses its id while the tab stays open — the browser's Back — is a request
-  // for the list. Entering is told apart by the tab having just opened, and
-  // the effect reads the live location, so StrictMode's replay (same closure,
-  // location already restored) finds the id and does nothing.
+  // Entering is told apart here (the tab having just opened); the body lives
+  // in tasksEntrySelection.ts so tests can drive StrictMode's same-closure
+  // replay directly.
   const wasTasksOpen = useRef(false)
   useEffect(() => {
     if (!connected || !tasksOpen) { wasTasksOpen.current = false; return }
     const entering = !wasTasksOpen.current
     wasTasksOpen.current = true
-    const store = useTeamTaskStore.getState()
-    const view = store.views[teamKey]
-    const live = useTeamLocationStore.getState().location
-    const locationId = live ? live.id : currentLocation.id
-    if (locationId === undefined) {
-      if (view && view.selectedTaskId != null) {
-        if (entering) navigate({ teamKey, tab: 'tasks', id: view.selectedTaskId }, { replace: true })
-        else store.select(teamKey, null)
-      }
-      return
-    }
-    // Wait for the list before judging a named task: a reload's snapshot has
-    // not arrived yet, and a task that exists must not read as missing.
-    if (!view || view.loading) return
-    const known = view.tasks.some(task => task.id === locationId)
-    if (known) {
-      if (view.selectedTaskId !== locationId) store.select(teamKey, locationId)
-    } else {
-      // A missing task falls back to the list with a notice (D3).
-      useTeamWorkspaceStore.getState().setNotice(teamKey, `Task ${locationId} was not found`)
-      if (view.selectedTaskId != null) store.select(teamKey, null)
-    }
+    runTasksEntrySelection({ entering, closureLocationId: currentLocation.id, teamKey, navigate })
   }, [tasksOpen, teamKey, currentLocation.id, connected, tasks?.loading, tasks?.tasks]) // eslint-disable-line react-hooks/exhaustive-deps
   const selectedTaskId = tasks?.selectedTaskId ?? null
   useEffect(() => {
