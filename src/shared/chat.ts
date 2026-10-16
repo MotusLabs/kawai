@@ -20,7 +20,11 @@ import type { ChatHandoffPackage } from './team'
 export interface ChatEventBase {
   id: string
   sequence: number
-  /** ISO timestamp of when the event was produced. */
+  /**
+   * ISO timestamp of when the event was produced, or empty when the source
+   * recorded none (undated history rows). Read it through `validTime`
+   * (`chatTime.ts`), never `new Date(at)` directly.
+   */
   at: string
 }
 

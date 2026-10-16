@@ -7,6 +7,7 @@
 // time stay whole, excerpts clamp to two lines.
 import { useEffect, useMemo } from 'react'
 import { snippetLabel, type SessionSearchResult, type SessionSearchSnippet } from '@shared/sessionSearch'
+import { validTime } from '@shared/chatTime'
 import {
   SEARCH_LISTBOX_ID,
   flattenSearchItems,
@@ -40,7 +41,7 @@ function Snippet({ snippet, id, active, onOpen }: {
       id={id}
       role="option"
       aria-selected={active}
-      title={new Date(snippet.at).toLocaleString()}
+      title={validTime(snippet.at)?.toLocaleString()}
       onClick={onOpen}
       className={`cursor-pointer py-1 pl-6 pr-3 hover:bg-hover ${active ? 'search-active' : ''}`}
     >

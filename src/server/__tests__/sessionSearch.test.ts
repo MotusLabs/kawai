@@ -126,3 +126,12 @@ describe('searchEvents', () => {
     expect(searchEvents([call('c6', 'Bash', 'echo needle')], 'needle').matchCount).toBe(1)
   })
 })
+
+describe('undated history (chat-transcript-layout D2)', () => {
+  test('an undated match never stands in as the match time', () => {
+    const undated: ChatEvent = { id: 'u', sequence: 0, at: '', type: 'user_message', turnId: 't', text: 'needle undated' }
+    expect(searchEvents([undated], 'needle').lastMatchAt).toBeNull()
+    const dated: ChatEvent = { ...undated, id: 'd', at: '2026-10-04T10:00:00.000Z' }
+    expect(searchEvents([dated, undated], 'needle').lastMatchAt).toBe('2026-10-04T10:00:00.000Z')
+  })
+})
