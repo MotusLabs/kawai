@@ -74,7 +74,8 @@ export function createMessageRouter(
       case 'strategy-snapshot':
       case 'strategy-detail':
       case 'strategy-result': return handleStrategyMessage(message, deps)
-      case 'process-metrics-snapshot': return handleMetricsMessage(message)
+      case 'process-metrics-snapshot':
+      case 'process-proposal-result': return handleMetricsMessage(message)
       case 'error': return handleError(message, deps)
       case 'terminal-error': return handleTerminalError(message, deps)
       case 'terminal-ready': return handleTerminalReady(message, deps)

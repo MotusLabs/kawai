@@ -6,7 +6,7 @@
 // view drives its own wire subscription, keyed by the team key. The URL
 // location (D3) names the tab, sub-view, and selection; navigation goes
 // through `useTeamLocationStore` so Back and Forward move with it.
-import { useEffect, useMemo, useRef } from 'react'
+import { useCallback, useEffect, useMemo, useRef } from 'react'
 import type { SendClientMessage } from '@shared/types'
 import { useSessionStore } from '../../stores/sessionStore'
 import { useStrategyStore, type StrategyView } from '../../stores/strategyStore'
@@ -200,6 +200,8 @@ export default function TeamWorkspaceView({ teamKey, location, sendMessage, conn
     if (!metricsOpen) return
     resolveMetricsWindow(teamKey, currentLocation.window, window => navigate({ teamKey, tab: 'metrics', window }, { replace: true }))
   }, [metricsOpen, teamKey, currentLocation.window, navigate])
+  // Report authors and link actors by name; a killed session shows its id.
+  const sessionName = useCallback((sessionId: string) => sessions.find(row => row.id === sessionId)?.name ?? sessionId, [sessions])
 
   const liveSessions = useMemo(
     () => sessions.map(row => ({ id: row.id, name: row.name, groupId: row.groupId ?? null })),
@@ -286,9 +288,10 @@ export default function TeamWorkspaceView({ teamKey, location, sendMessage, conn
         onOpenImpactReview={revision => navigate({ teamKey, tab: 'strategy', sub: 'impact', id: String(revision) })}
       />}
       {metricsOpen && <MetricsView
-        teamPath={teamKey} view={metrics} locationWindow={currentLocation.window} sendMessage={sendMessage}
-        connected={connected} connectionEpoch={connectionEpoch}
+        teamPath={teamKey} view={metrics} locationWindow={currentLocation.window} reportId={currentLocation.id} sendMessage={sendMessage}
+        connected={connected} connectionEpoch={connectionEpoch} nameOf={sessionName}
         onWindow={(window, options) => navigate({ teamKey, tab: 'metrics', window }, options)}
+        onOpenReport={reportId => navigate({ teamKey, tab: 'metrics', window: currentLocation.window, ...(reportId ? { id: reportId } : {}) })}
         onOpenTask={taskId => navigate({ teamKey, tab: 'tasks', id: taskId })}
         onOpenThread={threadId => navigate({ teamKey, tab: 'messages', id: threadId })}
       />}

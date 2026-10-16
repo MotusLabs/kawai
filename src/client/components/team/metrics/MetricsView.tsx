@@ -4,7 +4,9 @@
 // memory-file name, collapsed families, and open drill-downs are per-team
 // tab state in `teamWorkspaceStore`. The view owns its subscription: one
 // open per window and slice (a cached server read), Refresh recomputes, and
-// close ends it. Every control disables while disconnected.
+// close ends it. Every control disables while disconnected. The report
+// sections (D6) sit above the families; a location naming a report
+// (`metrics/<window>/<report id>`) shows that report in their place.
 import { useEffect, useMemo, useState } from 'react'
 import type { SendClientMessage } from '@shared/types'
 import {
@@ -14,6 +16,8 @@ import {
 import { useMetricsStore, type MetricsView as MetricsViewData } from '../../../stores/metricsStore'
 import { emptyTabViewState, useTeamWorkspaceStore } from '../../../stores/teamWorkspaceStore'
 import MetricFamily from './MetricFamily'
+import MetricsReports from './MetricsReports'
+import type { NameOf } from './reportLabels'
 
 export const DEFAULT_METRICS_WINDOW: MetricWindow = '7d'
 
@@ -50,11 +54,17 @@ export function resolveMetricsWindow(teamKey: string, locationWindow: string | u
   navigate(fallback)
 }
 
-export default function MetricsView({ teamPath, view, locationWindow, sendMessage, connected, connectionEpoch, onWindow, onOpenTask, onOpenThread }: {
+export default function MetricsView({
+  teamPath, view, locationWindow, reportId, sendMessage, connected, connectionEpoch, nameOf, onWindow, onOpenReport, onOpenTask, onOpenThread,
+}: {
   teamPath: string
   view: MetricsViewData | undefined
   /** The location's raw window segment. */
   locationWindow: string | undefined
+  /** The location's report id, when it names one. */
+  reportId: string | undefined
+  nameOf: NameOf
+  onOpenReport: (reportId: string | null) => void
   sendMessage: SendClientMessage
   connected: boolean
   connectionEpoch: number
@@ -134,7 +144,12 @@ export default function MetricsView({ teamPath, view, locationWindow, sendMessag
     {!snapshot && !view?.loading && <p className="mt-2 text-sm text-secondary" data-testid="metrics-empty">
       {connected ? 'No metrics loaded.' : 'Disconnected — reconnect to load metrics.'}
     </p>}
-    {snapshot && <div className="mt-2 flex flex-col gap-2">
+    {view && (snapshot || reportId !== undefined) && <div className="mt-2">
+      <MetricsReports teamPath={teamPath} view={view} reportId={reportId} collapsed={tab.collapsedSections}
+        onToggleSection={id => store.toggleSectionCollapsed(teamPath, 'metrics', id)}
+        sendMessage={sendMessage} connected={connected} nameOf={nameOf} onOpenReport={onOpenReport} />
+    </div>}
+    {snapshot && reportId === undefined && <div className="mt-2 flex flex-col gap-2">
       {METRIC_FAMILIES.map(family => <MetricFamily key={family} family={family} metrics={byId} caveat={caveatOf(family)}
         collapsed={tab.collapsedSections.includes(family)} expanded={tab.expanded}
         onToggleCollapsed={() => store.toggleSectionCollapsed(teamPath, 'metrics', family)}
