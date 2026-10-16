@@ -288,6 +288,15 @@ describe('parseGroupFile', () => {
     })
   })
 
+  test('profiles and onLimit still refuse a repeated map key (only profileEffort allows repeats)', () => {
+    expect(parseGroupFile('g', '---\nprofiles: { glm: 2, glm: 1 }\n---\nx')).toEqual({
+      ok: false, error: 'profiles: key "glm" is repeated',
+    })
+    const parsed = parseGroupFile('g', '---\nonLimit: { otherwise: forward, otherwise: release }\n---\nx')
+    expect(parsed.ok && parsed.group.warnings).toEqual(['onLimit: key "otherwise" is repeated; using defaults'])
+    expect(parsed.ok && parsed.group.onLimit.otherwise).toBe('forward')
+  })
+
   test('parseDuration', () => {
     expect(parseDuration('90m')).toBe(5_400_000)
     expect(parseDuration('3h')).toBe(10_800_000)
