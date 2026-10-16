@@ -253,6 +253,21 @@ describe('plan validation commands and pushes (plan-validation 10.1/10.2)', () =
     expect(afterDecide.validation![0].standing).toMatchObject({ state: 'out-of-date', reportSeq: 1 })
   })
 
+  test('a withdraw inside the window pushes a detail whose validation is gone (M-1 wiring)', async () => {
+    const { planId, revision } = await bench.draftInReview()
+    await send({ type: 'team-plan-open', teamPath: world.repo, planId })
+    // Validate so the pushed detail carries a validation section, then
+    // withdraw inside the 2 s window: the push must drop it, which only
+    // happens because publish invalidates the view cache first — removing
+    // that line (planConnections.ts) leaves this test failing on the stale
+    // cached section.
+    await send({ type: 'team-plan-validate', teamPath: world.repo, requestId: 'v1', planId, revision })
+    await waitForPush()
+    await send({ type: 'team-plan-withdraw', teamPath: world.repo, requestId: 'w1', planId, revision, commandId: 'withdraw-m1' })
+    await untilDetail(message => message.detail.revisions[0]!.status === 'withdrawn')
+    expect(last('team-plan-detail')!.validation).toBeUndefined()
+  })
+
   test('the standing names the changed parts after an artifact edit', async () => {
     const { planId, revision } = await bench.draftInReview()
     await send({ type: 'team-plan-validate', teamPath: world.repo, requestId: 'v1', planId, revision })
