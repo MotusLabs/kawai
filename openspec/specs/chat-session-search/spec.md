@@ -2,7 +2,7 @@
 
 ## Purpose
 
-TBD - Update Purpose after archive.
+This spec covers searching the conversation content of all active chat sessions at once from the navigator: literal, case-insensitive matching over user, peer, assistant, tool, command-output, notice, and error text, grouped into per-chat results with labelled, highlighted snippets. Choosing a snippet opens the chat and reveals the matched entry, and searching never starts an agent or otherwise changes session state.
 
 ## Requirements
 

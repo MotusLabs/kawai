@@ -37,7 +37,15 @@ The system SHALL accept only profile identifiers present in the catalog resolved
 - **THEN** the request is rejected and no session is created
 
 ### Requirement: Named profiles configure independent provider sessions
-Each named profile SHALL apply its predefined environment configuration to its agent session without changing the backend environment or other sessions. The system SHALL first merge the backend environment with the effective global provider overrides (the persisted Settings override when present, otherwise AGENTBOARD_CHAT_ENV). Default SHALL preserve that existing configuration. Named profiles SHALL retain credentials and unrelated variables from the merged environment and SHALL replace inherited values for profile-controlled routing, model, attribution, and compaction variables. Profile settings SHALL take precedence over conflicting user, project, or local Claude settings for those variables.
+Each named profile SHALL apply its predefined environment configuration to its agent session without changing the backend environment or other sessions. The session's environment SHALL be the backend environment merged with the effective global provider overrides, with profile settings taking precedence over conflicting user, project, or local Claude settings for the profile-controlled variables.
+
+#### Scenario: Effective global provider overrides
+- **WHEN** the system assembles a session's environment
+- **THEN** the effective global provider overrides are the persisted Settings override when present, otherwise AGENTBOARD_CHAT_ENV, merged over the backend environment
+
+#### Scenario: Default and named profiles over the merged environment
+- **WHEN** Default and a named profile session start from the merged environment
+- **THEN** Default preserves that merged configuration, while the named profile retains credentials and unrelated variables and replaces inherited values for profile-controlled routing, model, attribution, and compaction variables
 
 #### Scenario: GLM configuration
 - **WHEN** a GLM chat session starts
@@ -104,7 +112,15 @@ executable SHALL NOT cause a session to start with the auto policy.
 - **THEN** both sessions start with the auto policy and grant tool uses without cards
 
 ### Requirement: Profiles preserve chat permissions and credential privacy
-Selecting a profile SHALL preserve the chat approval flow for server-configured profiles: a profile SHALL NOT change a session's approval policy, and only a user-chosen approval policy — a settings default, a creation-time value, or a later per-session switch — SHALL let tool uses run without approval cards. Profile discovery and session metadata SHALL expose identifiers and labels without credentials. An executable named by a user-level catalog entry is trusted operator configuration; its flags are the operator's responsibility and SHALL remain unreachable from the client API. Authentication checks SHALL use the effective server-side environment, accepting configured API-key or auth-token credentials or existing CLI login credentials, and SHALL refuse creation without configured authentication.
+Selecting a profile SHALL preserve the chat approval flow for server-configured profiles: a profile SHALL NOT change a session's approval policy, and only a user-chosen approval policy SHALL let tool uses run without approval cards. Profile discovery and session metadata SHALL expose identifiers and labels without credentials. An executable named by a user-level catalog entry is trusted operator configuration whose flags SHALL remain unreachable from the client API.
+
+#### Scenario: User-chosen policy sources
+- **WHEN** a user-chosen approval policy applies to a session
+- **THEN** the policy is a settings default, a creation-time value, or a later per-session switch
+
+#### Scenario: Authentication without configured credentials
+- **WHEN** authentication is checked against the effective server-side environment
+- **THEN** configured API-key or auth-token credentials or existing CLI login credentials are accepted, and creation is refused without configured authentication
 
 #### Scenario: Wrapper permission flag is not imported
 - **WHEN** a user-level catalog entry names an executable that launches Claude with a permission-skipping flag

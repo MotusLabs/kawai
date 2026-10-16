@@ -22,7 +22,11 @@ The system SHALL discover the Git repository and worktree containing each known 
 - **THEN** the navigator identifies it as detached and displays a shortened HEAD revision instead of a branch name
 
 ### Requirement: Group sessions by OpenSpec change section
-The system SHALL visually group active sessions under collapsible sections for unarchived OpenSpec changes listed by each discovered repository, while preserving their existing lifecycle controls and status indicators. A change's sessions are those whose resolved worktree is the repository-local path `.worktrees/<change-name>`. Sections SHALL be ordered: change sections first (with or without worktrees), then worktrees with no matching change (including the main worktree), then `Workspace` for local sessions outside any worktree, then the remote section, then `Archive`.
+The system SHALL visually group active sessions under collapsible sections for unarchived OpenSpec changes listed by each discovered repository, while preserving their existing lifecycle controls and status indicators. Sections SHALL be ordered: change sections first (with or without worktrees), then worktrees with no matching change, then `Workspace` for local sessions outside any worktree, then the remote section, then `Archive`.
+
+#### Scenario: Change membership and the main worktree
+- **WHEN** a session's resolved worktree is the repository-local path `.worktrees/<change-name>`, or a worktree matches no listed change
+- **THEN** the former session is grouped under that change's section, and the latter worktree — including the main worktree — is ordered after all change sections
 
 #### Scenario: Change has a matching worktree with multiple sessions
 - **WHEN** multiple sessions have project paths within `.worktrees/<change-name>` of a repository listing that change
@@ -73,7 +77,11 @@ session to the section for the new directory without a page reload.
 - **THEN** the navigator moves the session to the `Workspace` section
 
 ### Requirement: Navigate workspace sections
-The system SHALL provide collapsible sections whose headers identify the change name and progress for change sections, the worktree name and checked-out branch or detached revision when available for other worktree sections, and the fixed label for the `Workspace`, `Remote`, and `Archive` sections. Every displayed section, including `Workspace`, `Remote`, and `Archive`, SHALL expose the same collapse affordance, expansion state, and session count on its header. Collapsed state SHALL be retained locally across reloads by stable section identity, and the identities of the `Workspace`, `Remote`, and `Archive` sections MUST NOT collide with any change or worktree section identity.
+The system SHALL provide collapsible sections whose headers identify the change name and progress for change sections, the worktree name and checked-out branch or detached revision when available for other worktree sections, and the fixed label for the `Workspace`, `Remote`, and `Archive` sections. Every displayed section SHALL expose the same collapse affordance, expansion state, and session count on its header, and collapsed state SHALL be retained locally across reloads.
+
+#### Scenario: Fixed sections keep unique stable identities
+- **WHEN** the `Workspace`, `Remote`, or `Archive` section is displayed and its collapsed state is stored across reloads
+- **THEN** the section exposes the same collapse affordance, expansion state, and session count as any other section, keeps its state by stable section identity, and its identity MUST NOT collide with any change or worktree section identity
 
 #### Scenario: User collapses a section
 - **WHEN** the user collapses a change or worktree section
@@ -126,7 +134,11 @@ The system SHALL allow a user to start a managed tmux session in any discovered 
 - **THEN** the system rejects creation with an actionable error and refreshes workspace metadata
 
 ### Requirement: Create a change worktree from its section
-The system SHALL, when the user invokes the new-session action on a change section whose worktree does not exist, create the worktree before opening the session form: on branch `<change-name>` — the existing local branch when present, otherwise a new branch from the repository's current HEAD — copying `openspec/changes/<change-name>/` from the main worktree into it and committing the copy on the new branch. The system MUST NOT overwrite an existing path, check out a branch already assigned elsewhere, or modify the main worktree's checkout or index.
+The system SHALL, when the user invokes the new-session action on a change section whose worktree does not exist, create the worktree before opening the session form: on branch `<change-name>`, copying `openspec/changes/<change-name>/` from the main worktree into it and committing the copy on the new branch. The system MUST NOT overwrite an existing path, check out a branch already assigned elsewhere, or modify the main worktree's checkout or index.
+
+#### Scenario: Branch selection for the new worktree
+- **WHEN** the change worktree is created
+- **THEN** the existing local branch `<change-name>` is used when present, otherwise a new branch is created from the repository's current HEAD
 
 #### Scenario: Successful seeded creation
 - **WHEN** the user invokes the new-session action on a change section without a worktree
@@ -149,11 +161,15 @@ The system SHALL, when the user invokes the new-session action on a change secti
 - **THEN** the creation operation appends the entry and reports it in the operation result
 
 ### Requirement: Auto-start the change's apply command
-The system SHALL offer, in the session form opened from a change section, a selector for the change's apply command — `/opsx:apply <change>` for Claude, the equivalent for Codex, or no prompt at all — and SHALL start the session with the selected command as the agent's first prompt by passing it to the agent as a launch argument. The selector SHALL be offered for every command and every host, and SHALL show the literal prompt each option would send. Nothing SHALL be sent when no agent is selected.
+The system SHALL offer, in the session form opened from a change section, a selector for the change's apply command — `/opsx:apply <change>` for Claude, the equivalent for Codex, or no prompt at all — and SHALL start the session with the selected command as the agent's first prompt by passing it to the agent as a launch argument. The selector SHALL be offered for every command and every host, and SHALL show the literal prompt each option would send.
 
-The selector's initial value SHALL be the selected command preset's declared agent type when it declares one, otherwise Claude or Codex when the command's agent token begins with `claude` or `codex`, otherwise no prompt. It SHALL follow changes to the command until the user selects a value explicitly, after which the user's selection SHALL persist for the remainder of the form.
+#### Scenario: Selector follows the command until an explicit choice
+- **WHEN** the selector's value is initialized, or the selected command changes, before the user picks a value explicitly
+- **THEN** the value is the selected command preset's declared agent type when it declares one, otherwise Claude or Codex when the command's agent token begins with `claude` or `codex`, otherwise no prompt, and an explicit user selection persists for the remainder of the form
 
-The system SHALL NOT send the apply command as terminal input, and SHALL NOT replay it when a session started this way is later resumed.
+#### Scenario: Delivery and replay of the apply command
+- **WHEN** a session is started with a selected apply command, no agent is selected, or a session started this way is later resumed
+- **THEN** the command is passed as a launch argument and never as terminal input, nothing is sent when no agent is selected, and resumption does not replay the command
 
 #### Scenario: Auto-start enabled
 - **WHEN** the user submits the session form with Claude or Codex selected in the first-prompt selector
@@ -236,7 +252,11 @@ The system SHALL automatically publish updated repository, branch, and worktree 
 - **THEN** the last successful snapshot remains visible with a stale or error indication and later reconciliation retries discovery
 
 ### Requirement: Size the Workspace and Remote sections independently
-The system SHALL display the `Workspace`, `Remote`, and `Archive` sections as panes docked at the bottom of the workspace navigator, in that order from top to bottom, each occupying a user-adjustable share of the navigator's height and scrolling its own rows independently of the change and worktree sections above it. Each pane SHALL default to 25% of the navigator height. The change and worktree sections SHALL keep a minimum visible height, and when the navigator is too short to honor every default the panes SHALL be reduced proportionally rather than displacing that minimum. A section with no rows SHALL NOT be displayed and SHALL NOT reserve height.
+The system SHALL display the `Workspace`, `Remote`, and `Archive` sections as panes docked at the bottom of the workspace navigator, in that order from top to bottom, each occupying a user-adjustable share of the navigator's height and scrolling its own rows independently of the change and worktree sections above it. Each pane SHALL default to 25% of the navigator height.
+
+#### Scenario: Short navigators and empty panes
+- **WHEN** the navigator is too short to honor every default, or a pane has no rows
+- **THEN** the change and worktree sections keep a minimum visible height and the panes are reduced proportionally rather than displacing that minimum, and a section with no rows is not displayed and reserves no height
 
 #### Scenario: Default sizing
 - **WHEN** the navigator is displayed with no stored pane sizes and the `Workspace` and `Remote` sections have rows while `Archive` has none
@@ -259,7 +279,11 @@ The system SHALL display the `Workspace`, `Remote`, and `Archive` sections as pa
 - **THEN** neither its header nor a pane is displayed and the other sections use the full navigator height
 
 ### Requirement: Resize the Workspace and Remote panes
-The system SHALL provide a resize control on the top edge of each displayed `Workspace`, `Remote`, and `Archive` pane that adjusts that pane's height by pointer drag and by keyboard when the control is focused. A pane MUST NOT be resized below the height of its own header nor above a size that would take the change and worktree region below its minimum height. Resulting sizes SHALL be stored as a share of the navigator height, retained locally across reloads, and applied to both the desktop sidebar and the mobile navigator.
+The system SHALL provide a resize control on the top edge of each displayed `Workspace`, `Remote`, and `Archive` pane that adjusts that pane's height by pointer drag and by keyboard when the control is focused. Resulting sizes SHALL be stored as a share of the navigator height, retained locally across reloads, and applied to both the desktop sidebar and the mobile navigator.
+
+#### Scenario: Resize bounds
+- **WHEN** a pane is resized by drag or keyboard
+- **THEN** it is not resized below the height of its own header nor above a size that would take the change and worktree region below its minimum height
 
 #### Scenario: Drag to resize
 - **WHEN** the user drags a pane's resize control upward or downward

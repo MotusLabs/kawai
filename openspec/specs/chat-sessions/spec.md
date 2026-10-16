@@ -11,13 +11,10 @@ interruption, and event-derived status for chat sessions.
 ### Requirement: Users can start a Claude Code chat session
 The system SHALL let a user start a chat session for a chosen project
 directory, driven by the Claude Agent SDK, as an alternative to a terminal
-(tmux) session. A chat session SHALL appear in the session list alongside
-terminal sessions and SHALL NOT require a tmux window. If agent
-authentication is not configured server-side, session creation SHALL be
-refused with an actionable error rather than starting a session that cannot
-run. The project path SHALL be resolved as for terminal sessions (`~`
-expanded, made absolute), and creation SHALL be refused unless it names an
-existing directory.
+(tmux) session, listed and selectable alongside terminal sessions without
+requiring a tmux window. Creation SHALL be refused with an actionable error
+when agent authentication is not configured server-side or the resolved
+project path does not name an existing directory.
 
 #### Scenario: Chat session created from the new-session form
 - **WHEN** the user submits the new-session form with the chat kind selected and a project directory
@@ -29,14 +26,14 @@ existing directory.
 
 #### Scenario: Chat sessions coexist with terminal sessions
 - **WHEN** chat sessions and terminal sessions exist at the same time
-- **THEN** both are listed, selectable, and killable, and terminal session behavior is unchanged
+- **THEN** both are listed, selectable, and killable, chat sessions appear in the session list without a tmux window, and terminal session behavior is unchanged
 
 #### Scenario: Nonexistent project directory is refused
 - **WHEN** the user submits the new-session form with the chat kind selected and a project path that does not exist, is not a directory, or carries tmux's ` (deleted)` suffix for a removed directory
 - **THEN** no session is created and the user receives an error naming the path and saying it is not an existing directory
 
 #### Scenario: Home-relative project path is resolved
-- **WHEN** the user creates a chat session with a project path such as `~/work/app` that names an existing directory
+- **WHEN** the user creates a chat session with a project path such as `~/work/app`, resolved as for terminal sessions (`~` expanded, made absolute), that names an existing directory
 - **THEN** the session is created with the absolute path of that directory as its project directory
 
 #### Scenario: Project directory removed after creation
@@ -70,14 +67,14 @@ existing chat session SHALL receive the session's prior conversation.
 When the agent requests a tool use that requires approval and the session's
 approval policy is manual, the system SHALL present an approval card in the
 chat view showing the tool and its arguments, and SHALL hold the agent until
-the user answers. Allowing SHALL
-let the tool run; denying SHALL return the denial to the agent so the turn
-continues. A pending approval SHALL survive browser disconnects until answered, cancelled
-by the SDK, interrupted, granted by switching the session to the auto policy,
-or killed. Server restart SHALL cancel outstanding
-requests rather than restore callbacks that no longer exist. Resolution and
-cancellation SHALL update every attached client; only the first valid answer
-SHALL take effect.
+the user answers. Allowing SHALL let the tool run; denying SHALL return the
+denial to the agent so the turn continues. Resolution and cancellation SHALL
+update every attached client, and only the first valid answer SHALL take
+effect.
+
+#### Scenario: Pending approvals survive disconnects, not restarts
+- **WHEN** an approval stays pending across a browser disconnect, or across a server restart
+- **THEN** the pending approval survives the disconnect until it is answered, cancelled by the SDK, interrupted, granted by switching the session to the auto policy, or the session is killed, while a server restart cancels outstanding requests rather than restoring callbacks that no longer exist
 
 #### Scenario: Approval card with allow and deny
 - **WHEN** the agent requests a tool use that requires approval in a session with the manual policy
