@@ -228,7 +228,7 @@ export default function TeamWorkspaceView({ teamKey, location, sendMessage, conn
         </button>
       ))}
     </nav>
-    {/* The active tab's view; reserved keys render nothing (no placeholder). */}
+    {/* The active tab's view; an unknown tab reads as the default, so the body always has a view. */}
     <div className="flex min-h-0 flex-1 flex-col" data-testid={`team-tab-body-${currentLocation.tab}`}>
       {messagesOpen && messages && <TeamMessagesView
         teamPath={teamKey} view={messages} sendMessage={sendMessage} connected={connected}
