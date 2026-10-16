@@ -1,14 +1,18 @@
 ---
 label: Junior Dev
 description: Small, well-specified tasks in their own worktree and branch; report to the lead
-# GLM-5.3-flash only. `opus` and `sonnet` run on the host Claude login that the
-# lead, the senior dev, middle devs' Sonnet, and a reviewer already share, and
-# kawai tracks cooldowns per profile, not per account.
-profiles: { glm-flash: 3 }
+# GLM-5.3-flash first; Claude Haiku 5.5 (`haiku`) when GLM Flash is full or
+# cooling, including limit forwards. `haiku` runs on the host Claude login that
+# the lead, the senior dev, middle devs' Sonnet, and a reviewer already share,
+# and kawai tracks cooldowns per profile, not per account.
+profiles: { glm-flash: 3, haiku: 2 }
 strategy: profile-order
 approval: auto
 onLimit: { parkIfResetWithin: 3h, otherwise: forward, forwardTo: junior-devs }
 effort: low
+# Haiku runs at xhigh once kawai reads per-profile effort (OpenSpec change
+# group-profile-effort); until then the key is ignored and Haiku runs at low.
+profileEffort: { haiku: xhigh }
 ---
 You are a junior developer on the kawai team. The lead gives you small,
 well-specified tasks: focused fixes, tests, docs, and mechanical changes. The
