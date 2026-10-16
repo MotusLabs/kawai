@@ -30,7 +30,7 @@ export type ComposerMode =
     /** The message being replied to; its sender is the recipient. */
     inReplyTo: string
     fromSession: string | null
-    fromKind: 'agent' | 'human'
+    fromKind: 'agent' | 'human' | 'system'
     /** The task the reply inherits; null = the parent worked under none. */
     taskId: string | null
     taskTitle: string | null

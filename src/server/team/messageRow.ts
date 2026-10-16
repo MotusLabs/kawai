@@ -19,7 +19,7 @@ export function mapRow(row: Record<string, unknown>): TeamMessage {
     teamId: String(row.team_id),
     toKind: row.to_kind === 'group' || row.to_kind === 'session' ? row.to_kind : 'human',
     toId: text(row.to_id),
-    fromKind: row.from_kind === 'human' ? 'human' : 'agent',
+    fromKind: row.from_kind === 'human' || row.from_kind === 'system' ? row.from_kind : 'agent',
     fromSession: text(row.from_session),
     fromGroup: text(row.from_group),
     originPath: String(row.origin_path),

@@ -56,7 +56,7 @@ function ChatMessagesView({ events, projectPath, sessionId, sendMessage, connect
   /** Open a participant's chat; omit to disable click-through. */
   onOpenParticipant?: (sessionId: string) => void
 }) {
-  const names = (id: string | null, senderKind?: 'agent' | 'human') =>
+  const names = (id: string | null, senderKind?: 'agent' | 'human' | 'system') =>
     <ParticipantName sessionId={id} senderKind={senderKind} sessions={sessions} directory={directory}
       {...(onOpenParticipant ? { onOpen: onOpenParticipant } : {})} />
 

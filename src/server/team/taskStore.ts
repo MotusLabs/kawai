@@ -10,6 +10,7 @@ import type { Database } from 'bun:sqlite'
 import type {
   JournalAuthor,
   TaskActor,
+  TaskCreator,
   TaskJournalEntry,
   TaskRevision,
   TaskStatus,
@@ -19,6 +20,7 @@ import type {
   TeamTaskDetail,
   TeamTaskSummary,
 } from '../../shared/teamTasks'
+import { partyFromRow } from './actorRow'
 import { TASK_STATUSES } from '../../shared/teamTasks'
 import { outstandingOf, type AssignmentStore } from './assignmentStore'
 import type { MailboxStore } from './mailboxStore'
@@ -93,7 +95,7 @@ export interface CreateTaskInput {
   title: string
   direction: string
   acceptance?: string | null
-  creator: TaskActor
+  creator: TaskCreator
   parentId?: string | null
   worktree?: string | null
   openspecChange?: string | null
@@ -248,7 +250,7 @@ export class TaskStore {
         revision: Number(row.revision),
         direction: String(row.direction),
         acceptance: text(row.acceptance),
-        author: actor(row.author_kind, row.author_session),
+        author: partyFromRow(row.author_kind, row.author_session),
         createdAt: String(row.created_at),
         rationale: text(row.rationale),
         notify: row.notify === null || row.notify === undefined ? null : Number(row.notify) === 1,
@@ -366,7 +368,7 @@ export class TaskStore {
     if (this.get(id)) this.changed(id)
   }
 
-  private insertRevision(id: string, revision: number, direction: string, acceptance: string | null, author: TaskActor, now: string) {
+  private insertRevision(id: string, revision: number, direction: string, acceptance: string | null, author: TaskCreator, now: string) {
     this.db.prepare(`INSERT INTO team_task_revisions (task_id, revision, direction, acceptance, author_kind, author_session, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?)`).run(id, revision, direction, acceptance, author.kind, author.sessionId, now)
   }
@@ -440,14 +442,8 @@ function text(value: unknown): string | null {
   return value === null || value === undefined ? null : String(value)
 }
 
-function actor(kind: unknown, session: unknown): TaskActor {
-  return kind === 'agent' && typeof session === 'string' ? { kind: 'agent', sessionId: session } : { kind: 'human', sessionId: null }
-}
-
-/** A journal row's author: like `actor`, but `system` stays itself (D4). */
-function journalAuthor(kind: unknown, session: unknown): JournalAuthor {
-  return kind === 'system' ? { kind: 'system', sessionId: null } : actor(kind, session)
-}
+/** A journal row's author or a task's creator: `system` stays Kawai (plan-execution D2). */
+const journalAuthor: (kind: unknown, session: unknown) => JournalAuthor = partyFromRow
 
 function mapTask(row: Record<string, unknown>): TeamTask {
   const status = String(row.status) as TaskStatus
@@ -456,7 +452,7 @@ function mapTask(row: Record<string, unknown>): TeamTask {
     teamId: String(row.team_id),
     title: String(row.title),
     status: TASK_STATUSES.includes(status) ? status : 'open',
-    creator: actor(row.creator_kind, row.creator_session),
+    creator: partyFromRow(row.creator_kind, row.creator_session),
     parentId: text(row.parent_id),
     worktree: text(row.worktree),
     openspecChange: text(row.openspec_change),

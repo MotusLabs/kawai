@@ -14,6 +14,8 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import type { ChatSessionRecord } from '../db'
+import type { ActingParty } from '../../shared/team'
+import { SYSTEM_ACTOR } from '../../shared/team'
 import type { TaskActor, TaskDraft, TaskStatus, TeamTask, TeamTaskDetail, TeamTaskSummary } from '../../shared/teamTasks'
 import { TASK_STATUSES } from '../../shared/teamTasks'
 import { loadTeamGroups } from './teamGroups'
@@ -65,7 +67,7 @@ export interface RevisionPublishedEvent {
   taskId: string
   revision: number
   previousRevision: number
-  author: TaskActor
+  author: ActingParty
   rationale: string | null
   publishedAt: string
 }
@@ -79,8 +81,15 @@ export interface TaskDraftInput {
   rationale?: string | null
 }
 
-/** Who is calling: an agent session (identity bound) or the human for a team. */
-export type TaskCaller = { kind: 'agent'; sessionId: string } | { kind: 'human'; team: TeamIdentity }
+/**
+ * Who is calling: an agent session (identity bound), the human for a team, or
+ * Kawai for a plan execution (plan-execution D2). Only the execution module
+ * mints the system caller; tools and connections build `agent` and `human`.
+ */
+export type TaskCaller =
+  | { kind: 'agent'; sessionId: string }
+  | { kind: 'human'; team: TeamIdentity }
+  | { kind: 'system'; team: TeamIdentity; executionId: string }
 
 const CHANGE_NAME = /^[a-z0-9][a-z0-9-]*$/
 
@@ -99,7 +108,7 @@ export class TaskService {
      * A status transition into or out of `done`/`cancelled` (member-release
      * D1/D8): resolved first, then run inside the status transaction.
      */
-    onStatusTransition?: (task: TeamTask, status: TaskStatus, actor: TaskActor) => Promise<() => void>
+    onStatusTransition?: (task: TeamTask, status: TaskStatus, actor: ActingParty) => Promise<() => void>
     /** Restore an archived notice recipient after commit (direct mail resumes it, D3/Q8). */
     restoreSession?: (id: string) => void | Promise<void>
     /** Plans a task may link to (durable-plans D9); without it every link is refused as unknown. */
@@ -110,6 +119,9 @@ export class TaskService {
 
   async create(caller: TaskCaller, input: TaskCreateInput): Promise<TeamTask> {
     const { team, actor, canCreate } = await this.context(caller)
+    if (actor.kind === 'system' && !(input.plan_id && input.plan_change)) {
+      throw new Error('Kawai creates a task only with its execution\'s plan-change link')
+    }
     if (!canCreate) {
       throw new Error("Your group cannot create tasks (its group file does not set canCreateTasks: true). Ask a team lead or the human to create one.")
     }
@@ -158,7 +170,7 @@ export class TaskService {
    * new revision commits — never on a replay.
    */
   async publish(caller: TaskCaller, taskId: string, input: TaskPublishInput): Promise<PublishOutcome> {
-    const { team, actor } = await this.context(caller)
+    const { team, actor } = await this.revisionPublisher(caller)
     const task = this.sameTeamTask(team, taskId)
     if (actor.kind === 'agent' && task.creator.sessionId !== actor.sessionId) {
       throw new Error(`Only the task's creator or the human can amend its direction. Add a journal note with task_note, or message the creator${task.creator.sessionId ? ` (${task.creator.sessionId})` : ' (the human)'} instead.`)
@@ -201,7 +213,7 @@ export class TaskService {
    * Never creates a revision. The creator or the human.
    */
   async notify(caller: TaskCaller, taskId: string, revision: number, requestKey: string): Promise<{ replay: boolean; notices: SentNotice[]; task: TeamTask }> {
-    const { team, actor } = await this.context(caller)
+    const { team, actor } = await this.revisionPublisher(caller)
     const task = this.sameTeamTask(team, taskId)
     if (actor.kind === 'agent' && task.creator.sessionId !== actor.sessionId) {
       throw new Error("Only the task's creator or the human can send revision notices.")
@@ -344,20 +356,32 @@ export class TaskService {
   }
 
   /** The caller's team, actor identity, and current creation right (TaskResultService resolves callers here too). */
-  async context(caller: TaskCaller) {
-    if (caller.kind === 'human') {
-      return { team: caller.team, actor: { kind: 'human', sessionId: null } as TaskActor, canCreate: true }
+  async context(caller: TaskCaller): Promise<{ team: TeamIdentity; actor: ActingParty; canCreate: boolean }> {
+    switch (caller.kind) {
+      case 'human':
+        return { team: caller.team, actor: { kind: 'human', sessionId: null }, canCreate: true }
+      case 'system':
+        return { team: caller.team, actor: SYSTEM_ACTOR, canCreate: true }
+      case 'agent': {
+        const session = this.options.getSession(caller.sessionId)
+        if (!session) throw new Error(`Unknown calling session: ${caller.sessionId}`)
+        // Read at call time: an edited group file applies to the next call.
+        const { team, catalog } = await loadTeamGroups(session.projectPath, this.options.homeDir)
+        const group = session.groupId ? catalog.groups.get(session.groupId)?.group : undefined
+        return { team, actor: { kind: 'agent', sessionId: session.sessionId }, canCreate: group?.canCreateTasks === true }
+      }
+      default: {
+        const never: never = caller
+        throw new Error(`Unknown caller: ${JSON.stringify(never)}`)
+      }
     }
-    const session = this.options.getSession(caller.sessionId)
-    if (!session) throw new Error(`Unknown calling session: ${caller.sessionId}`)
-    // Read at call time: an edited group file applies to the next call.
-    const { team, catalog } = await loadTeamGroups(session.projectPath, this.options.homeDir)
-    const group = session.groupId ? catalog.groups.get(session.groupId)?.group : undefined
-    return {
-      team,
-      actor: { kind: 'agent', sessionId: session.sessionId } as TaskActor,
-      canCreate: group?.canCreateTasks === true,
-    }
+  }
+
+  /** Publishing a revision and sending notices: the creator agent or the human, never Kawai (D2). */
+  private async revisionPublisher(caller: TaskCaller): Promise<{ team: TeamIdentity; actor: TaskActor }> {
+    const { team, actor } = await this.context(caller)
+    if (actor.kind === 'system') throw new Error('Kawai never publishes a task revision or sends its notices; only the creator or the human does.')
+    return { team, actor }
   }
 
   /** A task of the human caller's team; agents are refused (drafts are the human's, D1/D7). */
@@ -393,13 +417,26 @@ export class TaskService {
  * a task it created and never reopens; the human sets anything. The one rule
  * every closing path — status changes and result acceptance — checks first.
  */
-export function statusRefusal(actor: TaskActor, task: TeamTask, status: TaskStatus): string | null {
-  if (actor.kind !== 'agent') return null
-  if (status === 'open') return 'Only the human can reopen a task'
-  if ((status === 'done' || status === 'cancelled') && task.creator.sessionId !== actor.sessionId) {
-    return `Only the task's creator can set it to ${status}. Report your result in a journal note or a message to the creator instead.`
+export function statusRefusal(actor: ActingParty, task: TeamTask, status: TaskStatus): string | null {
+  const closing = status === 'done' || status === 'cancelled'
+  switch (actor.kind) {
+    case 'human':
+      return null
+    case 'system':
+      // Kawai closes only its own tasks, as their creator (plan-execution D2).
+      if (status === 'open') return 'Only the human can reopen a task'
+      return closing && task.creator.kind !== 'system' ? `Kawai sets ${status} only on the tasks it created.` : null
+    case 'agent':
+      if (status === 'open') return 'Only the human can reopen a task'
+      if (closing && task.creator.sessionId !== actor.sessionId) {
+        return `Only the task's creator can set it to ${status}. Report your result in a journal note or a message to the creator instead.`
+      }
+      return null
+    default: {
+      const never: never = actor
+      return String(never)
+    }
   }
-  return null
 }
 
 function emptyToNull(value: string | null | undefined): string | null {

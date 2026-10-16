@@ -11,6 +11,23 @@ export type TeamActor =
   | { kind: 'human'; sessionId: null }
   | { kind: 'agent'; sessionId: string }
 
+/**
+ * Kawai itself (plan-execution D2): the author of a plan execution's tasks,
+ * dispatches, and mail. Kept out of `TeamActor`, so every human-only or
+ * agent-only path still refuses it at the type level; only the task
+ * creator, the assignment dispatcher, and the message sender widen to
+ * `ActingParty`. Rendered "Kawai", never as a link.
+ */
+export type SystemActor = { kind: 'system'; sessionId: null }
+export type ActingParty = TeamActor | SystemActor
+export const SYSTEM_ACTOR: SystemActor = { kind: 'system', sessionId: null }
+
+/** The refusal of a reply to Kawai's mail (plan-execution D18), for agents and the human alike. */
+export const KAWAI_REPLY_GUIDANCE =
+  'This message is from Kawai, which runs the plan execution; replies to it are refused. ' +
+  "Submit your work with task_submit_result (a commit on the change's branch: Kawai pushes and merges it, so do not push the branch yourself), " +
+  'a review verdict with task_submit_findings on the named result, and anything else as a task_note on the task.'
+
 export type MessageState =
   | 'queued'
   | 'claimed'
@@ -39,9 +56,9 @@ export interface TeamMessage {
   toKind: 'group' | 'session' | 'human'
   /** Recipient id; null for `toKind: 'human'`. */
   toId: string | null
-  /** Actor vocabulary (D4): who sent it. Alias of `TeamActor['kind']`. */
-  fromKind: 'agent' | 'human'
-  /** Sender session; null for a human sender. */
+  /** Actor vocabulary (D4): who sent it. `ActingParty['kind']`: `system` is Kawai (plan-execution D2). */
+  fromKind: ActingParty['kind']
+  /** Sender session; null for a human or system sender. */
   fromSession: string | null
   fromGroup: string | null
   originPath: string

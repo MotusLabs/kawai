@@ -6,6 +6,7 @@
 // right that matters, closing the task, is TaskService.setStatus's own rule,
 // evaluated before acceptance writes anything. Test outcomes and verdicts are
 // claims: nothing here stores or implies verification.
+import { partyName } from './actorRow'
 import type { ChatSessionRecord } from '../db'
 import type { AssignmentTarget, TaskFindings, TaskHandoffKind, TaskResult, TaskTestClaim, TeamTask, TeamTaskAssignment, TeamTaskSummary } from '../../shared/teamTasks'
 import { TASK_HANDOFF_KINDS } from '../../shared/teamTasks'
@@ -208,7 +209,7 @@ export class TaskResultService {
       if (standing) {
         return { assignment: standing, duplicate: true,
           notice: `An equivalent ${request.kind} handoff of result ${result.id} is already outstanding (${standing.id}, dispatched by ` +
-            `${standing.createdBy.kind === 'human' ? 'the human' : standing.createdBy.sessionId}, ${standing.state}); nothing was dispatched again.` }
+            `${partyName(standing.createdBy)}, ${standing.state}); nothing was dispatched again.` }
       }
     }
     const outcome = await this.options.assignments.dispatch(caller, {

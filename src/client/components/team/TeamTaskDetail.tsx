@@ -192,6 +192,7 @@ export default function TeamTaskDetail({ teamPath, projectPath, view, sendMessag
         <summary>Assignment history ({detail.assignments.length})</summary>
         {detail.assignments.map(row => <p key={row.id} data-assignment-id={row.id} className="mt-1 border-l-2 border-border pl-2">
           {new Date(row.createdAt).toLocaleString()} · {row.targetKind === 'group' ? `group ${row.targetId}` : sessionLabel(row.targetId, sessions)} · {row.state}
+          <span data-testid="assignment-dispatcher"> · by {actorLabel(row.createdBy, sessions)}</span>
           {row.claimedBy ? ` · claimed by ${sessionLabel(row.claimedBy, sessions)}` : ''}
           {row.reason ? ` · ${row.reason}` : ''}
         </p>)}

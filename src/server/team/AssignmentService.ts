@@ -25,8 +25,9 @@ import type {
   TeamTask,
   TeamTaskAssignment,
 } from '../../shared/teamTasks'
-import type { TaskActor } from '../../shared/teamTasks'
+import type { TaskCreator } from '../../shared/teamTasks'
 import { loadGroupCatalog } from './groupCatalog'
+import { partyName } from './actorRow'
 import { resolveTeam, type TeamIdentity } from './teamIdentity'
 import type { AssignmentStore } from './assignmentStore'
 import { handoffDiff, outstandingOf, type DispatchHandoff } from './assignmentStore'
@@ -128,12 +129,8 @@ export class AssignmentService {
       return { replay: true, assignment: existing, message: existing.messageId ? this.mail.get(existing.messageId) : null }
     }
 
-    // The dispatcher: the human, or an agent (task_handoff) sending as itself.
-    const caller_ = caller.kind === 'agent' ? this.options.getSession(caller.sessionId) : null
-    const creator: TaskActor = caller_ ? { kind: 'agent', sessionId: caller_.sessionId } : { kind: 'human', sessionId: null }
-    const sender = caller_
-      ? { fromKind: 'agent' as const, fromSession: caller_.sessionId, fromGroup: caller_.groupId ?? null, originPath: caller_.projectPath }
-      : { fromKind: 'human' as const, fromSession: null, fromGroup: null, originPath: team.groupsRoot, actor: 'human' as const }
+    // The dispatcher: the human, an agent (task_handoff) sending as itself, or Kawai.
+    const { creator, sender } = this.dispatcher(caller, team)
     const message = this.db.transaction(() => {
       const outstanding = outstandingOf(this.store.listByTask(task.id))
       if (outstanding && !input.handling && !input.handoff) {
@@ -149,7 +146,7 @@ export class AssignmentService {
         ...sender, priority: 'normal', body: instruction, taskId: task.id,
       })
       this.store.setMessage(inserted.assignment.id, enqueued.id)
-      const by = creator.kind === 'human' ? 'human' : creator.sessionId
+      const by = creator.kind === 'human' ? 'human' : partyName(creator)
       this.tasks.appendJournal(task.id, creator, input.handoff
         ? `${HANDOFF_LABELS[input.handoff.kind]} handoff of result ${input.handoff.resultId} to ${targetLabel(input.target)} by ${by}`
         : `Assigned to ${targetLabel(input.target)} by ${by}`)
@@ -177,12 +174,12 @@ export class AssignmentService {
    * agent a fixed normal-priority direct note.
    */
   private replace(outstanding: TeamTaskAssignment, handling: ReassignHandling, task: TeamTask, target: AssignmentTarget, team: TeamIdentity,
-    newId: string, actor: TaskActor, supersededBy: string): void {
+    newId: string, actor: TaskCreator, supersededBy: string): void {
     const previous = { kind: outstanding.targetKind as 'group' | 'session', id: outstanding.targetId }
     if (handling === 'stop') {
       // Only while queued or awaiting a request: the store's cancel also takes parked work, which stop never touches.
       const state = outstanding.messageId ? this.mail.get(outstanding.messageId)?.state : undefined
-      if (state === 'queued' || state === 'awaiting-request') this.mail.cancel(outstanding.messageId!, actor.kind === 'agent' ? { kind: 'agent', sessionId: actor.sessionId! } : { kind: 'human' })
+      if (state === 'queued' || state === 'awaiting-request') this.mail.cancel(outstanding.messageId!, actor.kind === 'agent' ? { kind: 'agent', sessionId: actor.sessionId } : { kind: actor.kind })
     } else if (outstanding.claimedBy && this.options.getSession(outstanding.claimedBy)) {
       this.mail.enqueue({
         teamId: task.teamId, toKind: 'session', toId: outstanding.claimedBy,
@@ -323,9 +320,44 @@ export class AssignmentService {
     })
   }
 
-  /** The caller's team: the human caller carries it; an agent resolves from its session. */
+  /**
+   * The dispatch's creator and mail sender (plan-execution D2): one arm per
+   * caller kind, so Kawai is never recorded as the human. Kawai's mail has no
+   * sender session or group and originates at the team's main checkout.
+   */
+  private dispatcher(caller: TaskCaller, team: TeamIdentity): {
+    creator: TaskCreator
+    sender: { fromKind: TaskCreator['kind']; fromSession: string | null; fromGroup: string | null; originPath: string; actor?: 'system' | 'human' }
+  } {
+    switch (caller.kind) {
+      case 'agent': {
+        const session = this.options.getSession(caller.sessionId)
+        if (!session) throw new Error(`Unknown calling session: ${caller.sessionId}`)
+        return {
+          creator: { kind: 'agent', sessionId: session.sessionId },
+          sender: { fromKind: 'agent', fromSession: session.sessionId, fromGroup: session.groupId ?? null, originPath: session.projectPath },
+        }
+      }
+      case 'human':
+        return {
+          creator: { kind: 'human', sessionId: null },
+          sender: { fromKind: 'human', fromSession: null, fromGroup: null, originPath: team.groupsRoot, actor: 'human' },
+        }
+      case 'system':
+        return {
+          creator: { kind: 'system', sessionId: null },
+          sender: { fromKind: 'system', fromSession: null, fromGroup: null, originPath: team.groupsRoot, actor: 'system' },
+        }
+      default: {
+        const never: never = caller
+        throw new Error(`Unknown caller: ${JSON.stringify(never)}`)
+      }
+    }
+  }
+
+  /** The caller's team: the human and Kawai carry it; an agent resolves from its session. */
   private async teamOf(caller: TaskCaller): Promise<TeamIdentity> {
-    if (caller.kind === 'human') return caller.team
+    if (caller.kind !== 'agent') return caller.team
     const session = this.options.getSession(caller.sessionId)
     if (!session) throw new Error(`Unknown calling session: ${caller.sessionId}`)
     return resolveTeam(session.projectPath)

@@ -1,6 +1,6 @@
 // What a sender gives `MailboxStore.enqueue`: one new `team_messages` row.
 // Kept apart from the store so its 500-line budget goes to behavior.
-import type { ChatHandoffPackage, MessagePriority, TeamActor, TeamMessage } from '../../shared/team'
+import type { ActingParty, ChatHandoffPackage, MessagePriority, TeamMessage } from '../../shared/team'
 import type { RevisionNotice } from '../../shared/teamTasks'
 
 export interface EnqueueInput {
@@ -9,9 +9,9 @@ export interface EnqueueInput {
   toKind: 'group' | 'session' | 'human'
   /** Recipient id; null for `toKind: 'human'`. */
   toId: string | null
-  /** Actor vocabulary (D4). Absent on agent sends; never merged with `toKind`. */
-  fromKind?: TeamActor['kind']
-  /** Sender session; null for a human sender. */
+  /** Actor vocabulary (D4). Absent on agent sends; never merged with `toKind`; `system` is Kawai (plan-execution D2). */
+  fromKind?: ActingParty['kind']
+  /** Sender session; null for a human or Kawai sender. */
   fromSession: string | null
   fromGroup: string | null
   originPath: string
