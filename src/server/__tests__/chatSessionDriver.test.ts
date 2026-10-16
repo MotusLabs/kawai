@@ -560,7 +560,7 @@ describe('ChatSessionDriver', () => {
       lan: {
         label: 'LAN',
         executable: '/usr/local/bin/claude-lan',
-        env: { ANTHROPIC_BASE_URL: 'http://ai.lan:9292' },
+        env: { ANTHROPIC_BASE_URL: 'http://192.0.2.10:9292' },
       },
     }))
     const lan = createHarness({ claudeProfileId: 'lan', claudeExecutablePath: '/opt/claude/bin/claude' })
@@ -569,7 +569,7 @@ describe('ChatSessionDriver', () => {
     // The wrapper replaces the checked Claude Code binary...
     expect(options.pathToClaudeCodeExecutable).toBe('/usr/local/bin/claude-lan')
     // ...receives the entry environment pre-applied on the merged base...
-    expect(options.env?.ANTHROPIC_BASE_URL).toBe('http://ai.lan:9292')
+    expect(options.env?.ANTHROPIC_BASE_URL).toBe('http://192.0.2.10:9292')
     // ...and no inline controlled settings exist to override its exports.
     expect(options.settings).toBeUndefined()
     expect('executable' in options).toBe(false)

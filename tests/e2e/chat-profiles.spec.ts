@@ -45,7 +45,7 @@ test('project-level .kawai catalog extends the picker for that path', async ({ p
       'e2e-project-only': {
         label: 'E2E Project Only',
         model: 'glm-5.3-flash[1m]',
-        env: { ANTHROPIC_BASE_URL: 'https://zai.ruslan.casa/api/anthropic' },
+        env: { ANTHROPIC_BASE_URL: 'https://glm.example.internal/api/anthropic' },
       },
     }))
     await page.goto('/')
