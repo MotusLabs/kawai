@@ -63,7 +63,7 @@ Stage 1 is groups 1–7. Stage 2 (groups 8–10) can land separately once stage 
 ## 10. Team configuration and coordination
 
 - [x] 10.1 Update `.kawai/groups/lead.md`: `canReportProcess: true`, self-scheduled 1d/3d/7d reports via `schedule_message`, read `team_metrics` first, window roles, cite `n`, leave insufficient samples undetermined, propose rather than edit group or memory files, and link the proposals it carries out; verify the group catalog loads the file without warnings.
-- [ ] 10.2 Amend `openspec/changes/plan-supervision` design D14 and its usage requirement to read `chat_turn_usage` (design D9), keeping its turn-start pinning rule as now owned here and its plan totals unchanged; verify `openspec validate plan-supervision --strict` passes.
+- [x] 10.2 Amend `openspec/changes/plan-supervision` design D14 and its usage requirement to read `chat_turn_usage` (design D9), keeping its turn-start pinning rule as now owned here and its plan totals unchanged; verify `openspec validate plan-supervision --strict` passes.
 
 ## 11. Integration
 
