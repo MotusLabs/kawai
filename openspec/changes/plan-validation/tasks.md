@@ -128,14 +128,14 @@ Implement after `durable-plans` and `strategy-revision-impact` have landed on ma
 
 ## 9. Agent tools and prompt
 
-- [ ] 9.1 Implement `validationTools.ts`: `plan_validate`, `plan_validation_get`, and `plan_assess`, added to `TEAM_ALLOWED_TOOLS`. Verify:
+- [x] 9.1 Implement `validationTools.ts`: `plan_validate`, `plan_validation_get`, and `plan_assess`, added to `TEAM_ALLOWED_TOOLS`. Verify:
   - identity binding;
   - other teams' ids read as not found;
   - the revision default (newest `in_review`, else approved);
   - capped findings with a count;
   - the read-only standing in `plan_validation_get`;
   - the tool list has no decide, accept, or approve tool.
-- [ ] 9.2 Extend `teamPrompt.ts`'s plan note (D10). Verify with a prompt snapshot test that it never claims agents decide or approve.
+- [x] 9.2 Extend `teamPrompt.ts`'s plan note (D10). Verify with a prompt snapshot test that it never claims agents decide or approve.
 
 ## 10. Protocol and pushes
 
