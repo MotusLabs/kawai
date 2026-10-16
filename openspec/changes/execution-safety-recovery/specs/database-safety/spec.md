@@ -26,10 +26,10 @@ Before each pending migration Kawai SHALL take a pre-migration backup and SHALL 
 
 #### Scenario: A migration throws
 - **WHEN** migration 8's statements fail midway
-- **THEN** none of its changes remain, version 3 is not recorded, and the server exits naming migration 8 and its backup
+- **THEN** none of its changes remain, version 8 is not recorded, and the server exits naming migration 8 and its backup
 
 #### Scenario: A corrupt pre-migration backup
-- **WHEN** the `pre-migration-3` backup fails its integrity check
+- **WHEN** the `pre-migration-8` backup fails its integrity check
 - **THEN** migration 8 does not start, and the server exits naming the backup
 
 #### Scenario: Migrations apply in order

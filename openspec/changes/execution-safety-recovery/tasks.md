@@ -2,7 +2,7 @@
 
 Order:
 - group 6 (the migration runner and backups) lands first;
-- group 3 follows group 6, because migration 3 needs the runner;
+- group 3 follows group 6, because migration 8 needs the runner;
 - groups 1, 2, and 5 are independent of the others;
 - group 4 waits until `team-workspace-pages` and `durable-plans` are on master: it needs the tab model and durable-plans' host-agnostic mount pattern (D12), not the Plans tab itself;
 - group 7 comes last, after `plan-execution`, `integration-candidates`, `plan-supervision`, and `revision-control` merge.
@@ -64,6 +64,16 @@ Group 7's matrix rows for plan execution, integration, supervision, and revision
 
   Measure the added per-call hook round trip with the fixture adapter and record it in the recovery matrix.
 - [x] 3.5 Implement `outcomeState` (D7). Verify with unit tests: the precedence of every outcome, pending while the spawn lives, and outcome unknown once it ends. Add the AGENTS.md audit bullet; that is the docs for group 3.
+- [ ] 3.6 Make `allowed` fail-closed, and add the backstop and withholding (D4's four checks and backstop, D8's withholding; task revision 3). Fix the invariants, not the spellings: `allowed` comes only from the four checks, and stored text only through the withholding gate. Bump `CLASSIFIER_VERSION`. Verify with tests:
+  - the golden corpus re-baselined, listing every changed verdict and why;
+  - round 7's cases as named regressions: `env --chdir /tmp git push fork` records a row that is not allowed; `git -c a=b -C "$D" push` reads unknown-destination; a heredoc header, unquoted `-H Authorization: Bearer X` words, and attached `-HAuthorization:X` store no secret byte;
+  - noise controls stay allowed: `git push origin x`, `cd <repo> && git push`, `git -C <repo> push`, `gh pr create --body-file f`, `gh pr merge 1`;
+  - reads stay unrecorded: `git status`, a plain `curl` GET, `grep -rn "git push" docs`;
+  - generated variants, not only listed cases: from each allowed corpus send, mutations that replace one word with a variable, a substitution, or a glob; insert an unknown option or wrapper; respell a known option (`-Cdir`, `--chdir=dir`, `--chdir dir`, clustered flags); or put an unevaluated builtin, a subshell, or a brace group before it. No mutation reads allowed, and every one records a row;
+  - generated secret spellings (each header option spelling and quoting, heredoc and here-string bodies, `-u`, URL userinfo, token flags, token shapes) carrying one marker secret: no stored field of the call, its matches, or its outcomes contains the marker;
+  - the backstop: each list entry in an unmodeled segment adds one `unclassified-send` row naming the entry, and a proven non-send adds none;
+  - withholding and redaction are linear: 40,000 headers take at most about twice the time of 20,000, asserted as a ratio, never a wall-clock bound;
+  - the existing paths stay green: the driver's hook tests, the shared fixtures and PATH stubs, and one chat fixture e2e spec run alone on a spare `E2E_PORT` after `bun run build`.
 
 ## 4. Audit view and attention
 

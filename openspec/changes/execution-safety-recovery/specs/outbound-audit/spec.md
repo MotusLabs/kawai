@@ -22,11 +22,19 @@ Kawai SHALL register `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, and `Per
 - **THEN** the call is recorded with the subagent's id
 
 ### Requirement: Only observed sends are recorded
-Kawai SHALL record each tool call that a classifier rule matches as a publish or send, allowed ones included, and SHALL record nothing for other tool use. Calls to `kawai-team` tools SHALL NOT be recorded. Kawai's own git and `gh` calls SHALL stay plan-execution effect rows and SHALL NOT be audit rows. Every external MCP tool call SHALL be recorded.
+Kawai SHALL record each tool call that a classifier rule matches as a publish or send, allowed ones included. It SHALL also record each call where a segment that is neither classified nor a proven non-send names a listed outbound command or URL; that is the backstop. It SHALL record nothing for other tool use. `kawai-team` tool calls SHALL NOT be recorded, and Kawai's own git and `gh` calls SHALL stay plan-execution effect rows. Every external MCP tool call SHALL be recorded.
 
 #### Scenario: A read is not recorded
-- **WHEN** an agent runs `curl` with a plain GET, or `git status`
+- **WHEN** an agent runs `curl` with a plain GET, `git status`, or `grep -rn "git push" docs`
 - **THEN** no audit row exists for the call
+
+#### Scenario: A misread wrapper still records
+- **WHEN** an agent runs `env --chdir /tmp git push fork`
+- **THEN** a row exists for the call, and its verdict is not allowed
+
+#### Scenario: An unmodeled sender is caught by the backstop
+- **WHEN** an agent runs `ssh build.example.internal 'git push'`
+- **THEN** a row exists with rule `unclassified-send`, verdict unknown-destination, and a destination naming the list entry, not command text
 
 #### Scenario: Team mail is not recorded
 - **WHEN** an agent calls `mcp__kawai-team__send_message`
@@ -37,7 +45,7 @@ Kawai SHALL record each tool call that a classifier rule matches as a publish or
 - **THEN** the call is recorded with rule `mcp-call` and the server's name
 
 ### Requirement: Sends are classified by rule and resolved target
-A pure classifier SHALL match the `git-push`, `gh-write`, `gh-api-write`, `registry-publish`, `http-send`, `mail-send`, and `mcp-call` rules by argument position and flag, never by text search. gh's implicit repository and git's push remote SHALL resolve from the repository's configuration. A message, title, body, or heredoc value SHALL never be a target.
+A pure classifier SHALL match the `git-push`, `gh-write`, `gh-api-write`, `registry-publish`, `http-send`, `mail-send`, and `mcp-call` rules by argument position and flag. Text search SHALL only add `unclassified-send` rows, which are always unknown-destination. gh's implicit repository and git's push remote SHALL resolve from the repository's configuration. A message, title, body, or heredoc value SHALL never be a target.
 
 #### Scenario: Origin-targeted gh is allowed
 - **WHEN** an agent runs `gh pr comment 62 --body "see https://github.com/other/repo"` in a repository whose origin is the kawai repository
@@ -56,7 +64,19 @@ A pure classifier SHALL match the `git-push`, `gh-write`, `gh-api-write`, `regis
 - **THEN** the verdict is violation naming that repository
 
 ### Requirement: Each send gets one verdict
-A send SHALL be `allowed` when its target resolves to origin, an internal destination, a model provider, or a configured MCP server; `violation` when it resolves to anything else, any mail target included; and `unknown-destination` when it does not resolve. A call SHALL keep its strongest verdict, list every match, and record the classifier version.
+A send SHALL be `allowed` only when every word of its segment is literal, every option and wrapper is known, the call's earlier segments are external commands or exactly evaluated builtins, and its target resolves to origin, an internal destination, a model provider, or a configured MCP server. It SHALL be `violation` when the target resolves elsewhere, mail included, else `unknown-destination`. A call SHALL keep its strongest verdict, list every match, and record the classifier version.
+
+#### Scenario: An opaque directory is never allowed
+- **WHEN** an agent runs `git -c a=b -C "$D" push`
+- **THEN** the verdict is unknown-destination, never allowed
+
+#### Scenario: A substitution anywhere blocks allowed
+- **WHEN** an agent runs `gh pr comment 62 --body "$(cat notes.md)"` in a repository whose origin is the kawai repository
+- **THEN** the verdict is unknown-destination, never allowed
+
+#### Scenario: A plain push stays allowed
+- **WHEN** an agent runs `cd /work/kawai && git push -u origin feat/x`, where `/work/kawai` is a repository whose origin is the kawai repository
+- **THEN** the verdict is allowed
 
 #### Scenario: An unresolved target
 - **WHEN** an agent runs `curl -d @data.json "$TARGET"`
@@ -70,12 +90,20 @@ A send SHALL be `allowed` when its target resolves to origin, an internal destin
 - **WHEN** an agent pushes an image to a registry under a configured internal domain
 - **THEN** the verdict is allowed
 
-### Requirement: Secrets are redacted before anything is written
-Kawai SHALL redact tokens of known shapes, authorization and cookie header values, `-u` credentials, credentials in URLs, token and password flag values, and secret-named inline variables and credential query and body fields from the command, each match segment, the destination, and outcome detail before storing, logging, or showing them. Commands SHALL be stored up to 4096 characters, with truncation marked.
+### Requirement: Secrets are withheld or redacted before anything is written
+Kawai SHALL store a fixed `‹withheld: <reason>›` placeholder for a command and its match segments when the command has a heredoc or here-string, sets a header, passes credentials, or contains a credential-like word or token shape; outcome detail likewise. Other text SHALL be redacted of known secret shapes before storing, logging, or showing. Destinations SHALL hold only a class with a host or `owner/repo`, or a reason code. Commands SHALL be stored up to 4096 characters, truncation marked.
 
 #### Scenario: A token in a header
 - **WHEN** an agent runs `curl -H "Authorization: Bearer abc123" -d x https://host.example.internal`
-- **THEN** the stored command shows the header value as redacted
+- **THEN** the stored command and match segments are the withheld placeholder, and no field of the row contains `abc123`
+
+#### Scenario: Every header spelling is withheld
+- **WHEN** an agent sends a header carrying `s3cr3tvalue` as curl's attached `-HAuthorization:s3cr3tvalue`, as unquoted `-H Authorization: Bearer s3cr3tvalue` words, or from a heredoc
+- **THEN** no stored field of the call row, its matches, or its outcomes contains `s3cr3tvalue`
+
+#### Scenario: A withheld command keeps its verdict
+- **WHEN** an agent runs `gh pr comment 62 --body-file - <<'EOF'` with a literal body, in a repository whose origin is the kawai repository
+- **THEN** the stored command is the withheld placeholder, and the rule, verdict, and destination are recorded as usual
 
 #### Scenario: Credentials in a query string and a body
 - **WHEN** an agent runs `curl -d '{"token":"abc"}' "https://host.example.internal/hook?api_key=xyz"`
@@ -86,7 +114,7 @@ Kawai SHALL redact tokens of known shapes, authorization and cookie header value
 - **THEN** the stored command and destination contain no `secret`
 
 ### Requirement: Audit records are append-only
-Each recorded call SHALL store team, session, agent process, group, profile, task, subagent id, tool, MCP server, tool use id, redacted command, rule, verdict, destination, matches, classifier version, cwd, and time. Outcomes SHALL be separate append-only rows. No path SHALL update or delete either, and rows SHALL NOT be pruned.
+Each recorded call SHALL store team, session, agent process, group, profile, task, subagent id, tool, MCP server, tool use id, withheld or redacted command, rule, verdict, destination, matches, classifier version, cwd, and time. Outcomes SHALL be separate append-only rows. No path SHALL update or delete either, and rows SHALL NOT be pruned.
 
 #### Scenario: Configuration changes keep history
 - **WHEN** the owner adds a domain after a send to it was judged a violation
