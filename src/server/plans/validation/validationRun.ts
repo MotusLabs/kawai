@@ -71,6 +71,33 @@ export async function runFilePhase(options: {
   return { file, cli, resolved, capacity }
 }
 
+/**
+ * Assemble the full `ValidationInputs` (D2) from the file parts and the
+ * record parts — the one builder both a run and the standing comparison use,
+ * so the identity and the recomputation cannot drift (V1).
+ */
+export function assembleValidationInputs(parts: {
+  file: ValidationFileInputs
+  plan: { planId: string; revision: number; contentHash: string }
+  impactStateKey: string
+  claims: ValidationInputs['claims']
+  records: { assessments: readonly AssessmentRow[]; decisions: readonly DecisionRecord[] }
+}): ValidationInputs {
+  return {
+    checksVersion: VALIDATION_CHECKS_VERSION,
+    plan: parts.plan,
+    impactStateKey: parts.impactStateKey,
+    adapter: parts.file.adapter,
+    changes: parts.file.changes,
+    catalog: parts.file.catalog,
+    claims: parts.claims,
+    records: {
+      assessments: parts.records.assessments.map(row => row.id).sort(),
+      decisions: parts.records.decisions.map(row => row.id).sort(),
+    },
+  }
+}
+
 /** Everything the record phase computed for one report (D8 step 4). */
 export interface ValidationRecordPhase {
   inputs: ValidationInputs
@@ -129,19 +156,13 @@ export function buildRecordPhase(parts: {
     branch: parts.file.file.evidence.branch,
     capacity: parts.file.capacity,
   }
-  const inputs: ValidationInputs = {
-    checksVersion: VALIDATION_CHECKS_VERSION,
+  const inputs = assembleValidationInputs({
+    file: parts.file.file,
     plan: parts.plan,
     impactStateKey: parts.impactStateKey,
-    adapter: parts.file.file.adapter,
-    changes: parts.file.file.changes,
-    catalog: parts.file.file.catalog,
     claims,
-    records: {
-      assessments: parts.assessments.map(row => row.id).sort(),
-      decisions: parts.decisions.map(row => row.id).sort(),
-    },
-  }
+    records: { assessments: parts.assessments, decisions: parts.decisions },
+  })
   const readiness = validationReadiness(findings, parts.pin, parts.assessments, parts.decisions)
   return { inputs, inputHash: hashValidationInputs(inputs), findings, relations, evidence, readiness, ready: readiness.ready }
 }

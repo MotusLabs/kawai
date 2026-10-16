@@ -295,13 +295,13 @@ export class ValidationService {
         if ('refused' in checked) return checked.refused
         const { revision: row, groupsRoot } = checked
         const file = await this.filePhase(team, row.content, groupsRoot)
-        const record = this.store.atomically(() => {
+        // D8 step 4 in one transaction: compute, dedupe on an unchanged
+        // input hash, and insert — no window between the check and the write.
+        const stored = this.store.atomically((): { ok: true; report: PlanValidationReport; stored: boolean } => {
           const fresh = this.target(team, plan.id, revision)
           const gate = this.options.impact.gate(plan.id, revision)
           if (!gate) throw new ValidationRefusal({ ok: false, reason: 'target', message: `Revision ${revision} lost its impact gate mid-run; validate again.` })
-          const assessments = this.store.assessments(plan.id, revision)
-          const decisions = this.store.decisions(plan.id, revision)
-          return buildRecordPhase({
+          const record = buildRecordPhase({
             file, content: row.content, pin: row.pin,
             plan: { planId: plan.id, revision, contentHash: fresh.revision.contentHash },
             gate, impactStateKey: this.options.impact.stateKey(plan.id),
@@ -309,21 +309,25 @@ export class ValidationService {
               planId: other.id, lifecycle: other.lifecycle,
               revisions: this.options.plans.revisions(other.id).map(entry => ({ status: entry.status, content: entry.content })),
             })),
-            assessments, decisions,
+            assessments: this.store.assessments(plan.id, revision),
+            decisions: this.store.decisions(plan.id, revision),
           })
+          const newest = this.store.newestReport(plan.id, revision)
+          if (newest && newest.inputHash === record.inputHash) {
+            return { ok: true, report: newest, stored: false }
+          }
+          return {
+            ok: true, stored: true,
+            report: this.store.insertReport({
+              planId: plan.id, revision, inputHash: record.inputHash, inputs: record.inputs,
+              findings: record.findings, relations: record.relations, evidence: record.evidence,
+              readiness: record.readiness, ready: record.ready,
+              requestedBy: caller.kind === 'human' ? { kind: 'human', sessionId: null } : { kind: 'agent', sessionId: caller.sessionId },
+            }),
+          }
         })
-        const newest = this.store.newestReport(plan.id, revision)
-        if (newest && newest.inputHash === record.inputHash) {
-          return { ok: true, report: newest, reportId: newest.id, stored: false, dryRun: false }
-        }
-        const report = this.store.atomically(() => this.store.insertReport({
-          planId: plan.id, revision, inputHash: record.inputHash, inputs: record.inputs,
-          findings: record.findings, relations: record.relations, evidence: record.evidence,
-          readiness: record.readiness, ready: record.ready,
-          requestedBy: caller.kind === 'human' ? { kind: 'human', sessionId: null } : { kind: 'agent', sessionId: caller.sessionId },
-        }))
-        this.options.plans.announce(plan.id)
-        return { ok: true, report, reportId: report.id, stored: true, dryRun: false }
+        if (stored.stored) this.options.plans.announce(plan.id)
+        return { ok: true, report: stored.report, reportId: stored.report.id, stored: stored.stored, dryRun: false }
       } catch (error) {
         if (error instanceof ValidationRefusal) return error.outcome as ValidateOutcome
         throw error
@@ -455,7 +459,6 @@ export class ValidationService {
       {
         contentHash: row.contentHash,
         impactStateKey: this.options.impact.stateKey(prepared.planId),
-        claimedPlans: [],
         assessments: this.store.assessments(prepared.planId, prepared.revision),
         decisions: this.store.decisions(prepared.planId, prepared.revision),
       },

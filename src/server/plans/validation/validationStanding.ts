@@ -7,9 +7,8 @@
 // transaction. Only the precondition entry decides; the shipped entries
 // never read `ctx.validation`.
 import type { AssessmentRow, DecisionRecord, PlanValidationReport, ValidationInputs } from '../../../shared/planValidation'
-import { VALIDATION_CHECKS_VERSION } from '../../../shared/planValidation'
 import { hashValidationInputs, type ValidationFileInputs } from './validationInputs'
-import type { ClaimedPlan } from './validationRun'
+import { assembleValidationInputs } from './validationRun'
 import type { ApprovalPrecondition } from '../planPreconditions'
 
 /** What `prepareStanding` gathered (D9): the file-held parts, bound to one revision. */
@@ -34,7 +33,6 @@ export type ValidationStanding =
 export interface StandingRecordParts {
   contentHash: string
   impactStateKey: string
-  claimedPlans: readonly ClaimedPlan[]
   assessments: readonly AssessmentRow[]
   decisions: readonly DecisionRecord[]
 }
@@ -89,21 +87,15 @@ export function changedInputParts(before: ValidationInputs, now: ValidationInput
 const changedKeys = (before: Record<string, string | null>, now: Record<string, string | null>): string[] =>
   [...new Set([...Object.keys(before), ...Object.keys(now)])].filter(key => before[key] !== now[key])
 
-/** Assemble the full inputs from the prepared file parts and the record parts read now. */
+/** Assemble the full inputs from the prepared file parts and the record parts read now (the shared builder, D2/V1). */
 export function standingInputs(prepared: PreparedValidation, records: StandingRecordParts, claims: ValidationInputs['claims']): ValidationInputs {
-  return {
-    checksVersion: VALIDATION_CHECKS_VERSION,
+  return assembleValidationInputs({
+    file: prepared.file,
     plan: { planId: prepared.planId, revision: prepared.revision, contentHash: records.contentHash },
     impactStateKey: records.impactStateKey,
-    adapter: prepared.file.adapter,
-    changes: prepared.file.changes,
-    catalog: prepared.file.catalog,
     claims,
-    records: {
-      assessments: records.assessments.map(row => row.id).sort(),
-      decisions: records.decisions.map(row => row.id).sort(),
-    },
-  }
+    records: { assessments: records.assessments, decisions: records.decisions },
+  })
 }
 
 /**
