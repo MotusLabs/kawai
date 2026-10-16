@@ -95,8 +95,8 @@ Implement after `durable-plans`, `strategy-revision-impact`, and `plan-validatio
 
 ## 10. Effects runner
 
-- [ ] 10.1 Implement `effects.ts` (D14): mark running, call with a timeout, commit the outcome with its follow-on transition, back off transient failures 3 times, fail permanent ones, and cancel effects on Stop. Verify with unit tests over a fake adapter: success, transient then success, three transients, permanent, and a cancelled effect never run.
-- [ ] 10.2 Implement startup recovery and the per-kind inspectors in the D14 table. Verify with one test per kind for found done, not done, and an undecidable inspection (`effect-unknown`), including a merge that completed before the restart.
+- [x] 10.1 Implement `effects.ts` (D14): mark running, call with a timeout, commit the outcome with its follow-on transition, back off transient failures 3 times, fail permanent ones, and cancel effects on Stop. Verify with unit tests over a fake adapter: success, transient then success, three transients, permanent, and a cancelled effect never run.
+- [x] 10.2 Implement startup recovery and the per-kind inspectors in the D14 table. Verify with one test per kind for found done, not done, and an undecidable inspection (`effect-unknown`), including a merge that completed before the restart.
 
 ## 11. Executor, provisioning, and the first dispatch
 

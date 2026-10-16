@@ -91,6 +91,18 @@ export async function ghRerunFailed(repo: string, runId: number, options: GhComm
   return result.ok ? { ok: true, data: null } : result
 }
 
+/** A workflow run's attempt number — above 1 once a rerun landed (D14's rerun inspection). */
+export async function ghRunAttempt(repo: string, runId: number, options: GhCommandOptions = {}): Promise<GithubOutcome<number>> {
+  const args = ['api', `repos/${repo}/actions/runs/${runId}`]
+  const result = await call(args, options)
+  if (!result.ok) return result
+  const parsed = json<{ attempt?: unknown }>(result.stdout)
+  if (!parsed.ok || typeof parsed.data.attempt !== 'number') {
+    return { ok: false, error: { argv: ['gh', ...args], exitCode: 0, httpStatus: null, message: parsed.ok ? 'the run carries no attempt number' : parsed.error } }
+  }
+  return { ok: true, data: parsed.data.attempt }
+}
+
 /**
  * Update a pull request's branch from its base, pinned to the head whose
  * round passed (D13): `expected_head_sha` makes GitHub refuse the update

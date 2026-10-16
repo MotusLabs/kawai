@@ -7,6 +7,8 @@ import type {
   ChangeState,
   ChangeStep,
   CiCheck,
+  EffectKind,
+  EffectState,
   ExecutionOutcome,
   ExecutionState,
   FloorMap,
@@ -95,6 +97,25 @@ export interface LandingRow {
   landedAt: string
   treeVerified: boolean
   postCi: CiCheck[] | null
+}
+
+/** One recorded external step (D14): written before it runs, inspected before it repeats. */
+export interface EffectRow {
+  id: string
+  executionId: string
+  change: string | null
+  roundId: string | null
+  kind: EffectKind
+  effectKey: string
+  command: Record<string, unknown>
+  state: EffectState
+  tries: number
+  nextAt: string | null
+  outcome: unknown
+  error: string | null
+  createdAt: string
+  startedAt: string | null
+  finishedAt: string | null
 }
 
 type Row = Record<string, unknown>
@@ -189,3 +210,23 @@ export function mapLanding(row: Row): LandingRow {
 
 /** The slot holder id of a change (D3). */
 export const changeHolderId = (executionId: string, change: string) => `${executionId}:${change}`
+
+export function mapEffect(row: Row): EffectRow {
+  return {
+    id: String(row.id),
+    executionId: String(row.execution_id),
+    change: text(row.change),
+    roundId: text(row.round_id),
+    kind: String(row.kind) as EffectKind,
+    effectKey: String(row.effect_key),
+    command: json<Record<string, unknown>>(row.command_json) ?? {},
+    state: String(row.state) as EffectState,
+    tries: Number(row.tries ?? 0),
+    nextAt: text(row.next_at),
+    outcome: json<unknown>(row.outcome_json),
+    error: text(row.error),
+    createdAt: String(row.created_at),
+    startedAt: text(row.started_at),
+    finishedAt: text(row.finished_at),
+  }
+}
