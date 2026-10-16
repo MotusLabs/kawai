@@ -971,6 +971,27 @@ describe('ChatSessionDriver', () => {
     expect(pulled?.message).toMatchObject({ role: 'user', content: 'hello' })
   })
 
+  test('turn_completed carries the result usage: full, partial (missing fields read 0), and absent', async () => {
+    const harness = createHarness()
+    const fake = () => harness.fakes.at(-1)!
+    const completions = () => harness.events.filter(event => event.type === 'turn_completed')
+    harness.driver.send('one')
+    fake().push(result('success', { usage: { input_tokens: 10, output_tokens: 20, cache_read_input_tokens: 300, cache_creation_input_tokens: 40 } }))
+    await flush()
+    harness.driver.send('two')
+    fake().push(result('success', { usage: { output_tokens: 5 } }))
+    await flush()
+    harness.driver.send('three')
+    fake().push(result('success', { usage: undefined }))
+    await flush()
+    expect(completions().map(event => (event as { usage?: unknown }).usage)).toEqual([
+      { inputTokens: 10, outputTokens: 20, cacheReadTokens: 300, cacheCreationTokens: 40 },
+      { inputTokens: 0, outputTokens: 5, cacheReadTokens: 0, cacheCreationTokens: 0 },
+      undefined,
+    ])
+    expect('usage' in completions()[2]!).toBe(false)
+  })
+
   test('assistant deltas map from partial stream events', async () => {
     const harness = createHarness()
     harness.driver.send('hi')

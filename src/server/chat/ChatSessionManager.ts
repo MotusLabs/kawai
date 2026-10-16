@@ -104,6 +104,7 @@ import type { SpawnRequest, SpawnResult } from '../team/staffing'
 import { TeamCaps } from '../team/teamCaps'
 import { worktreeRootOf } from '../team/worktreeRoots'
 import { ProvenanceRecorder } from '../metrics/provenanceRecorder'
+import { ChatTurnUsageStore, TurnUsageTracker } from './chatTurnUsageStore'
 import type { ChatSpawnInfo } from './ChatSessionDriver'
 import { OutboundDestinations } from '../outbound/destinations'
 import {
@@ -966,6 +967,20 @@ export class ChatSessionManager {
     // workspace summary reads its window from this table (team-workspace D8).
     this.turnEnds = new ChatTurnEndStore(options.db.db)
     this.provenance = new ProvenanceRecorder(options.db.db)
+    this.turnUsage = new ChatTurnUsageStore(options.db.db)
+    this.turnUsageTracker = new TurnUsageTracker(this.turnUsage, {
+      sessionTask: id => this.records.get(id)?.taskId ?? null,
+      latestStart: id => this.provenance.latestStart(id),
+      context: id => {
+        const record = this.records.get(id)
+        return {
+          teamId: this.teams.teamOf(id)?.teamId ?? null,
+          groupId: record?.groupId ?? null,
+          profileId: record?.claudeProfileId ?? 'default',
+          model: record?.model ?? null,
+        }
+      },
+    })
     // Product strategy (product-strategy): constructed here, beside the
     // task service, against the same database. The strategy store's changes
     // fan out to the strategy view pushes; the team comes from the record's
@@ -1218,6 +1233,9 @@ export class ChatSessionManager {
   readonly turnEnds: ChatTurnEndStore
   /** Agent starts and their input hashes (team-process-metrics D2). */
   readonly provenance: ProvenanceRecorder
+  /** Per-turn token usage of every chat turn (team-process-metrics D1). */
+  readonly turnUsage: ChatTurnUsageStore
+  private readonly turnUsageTracker: TurnUsageTracker
   /** Durable plans (durable-plans); the plan tools and UI actions go through it. */
   readonly plans: PlanService
   /** Strategy impact reviews (strategy-revision-impact); the impact tools and UI actions go through it. */
@@ -2283,6 +2301,16 @@ export class ChatSessionManager {
     this.liveEvents.set(sessionId, events)
     this.options.onEvent(sessionId, event)
     if (event.type === 'request_resolved') this.dispatcher.notify()
+    // Per-turn usage (team-process-metrics D1): pinned at turn start, written
+    // at completion. Never worth a turn: a failure is logged and the
+    // settlement and bookkeeping below still run.
+    if (event.type === 'turn_started' || event.type === 'peer_message' || event.type === 'turn_interrupted' || event.type === 'turn_completed') {
+      try {
+        this.turnUsageTracker.onEvent(sessionId, event)
+      } catch (error) {
+        logger.warn('chat_turn_usage_record_failed', { sessionId, error: error instanceof Error ? error.message : String(error) })
+      }
+    }
     if (event.type === 'error' || event.type === 'turn_completed') this.teamMail.settleRecipient(sessionId)
     // Profile routing: progress and limit outcomes for the mail a turn handles.
     if (event.type === 'tool_call') this.teamMail.toolCall(sessionId, event.tool, event.input)

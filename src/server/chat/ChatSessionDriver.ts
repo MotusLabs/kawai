@@ -27,6 +27,7 @@ import type {
   ChatActivity,
   ChatApprovalDecision,
   ChatApprovalPolicy,
+  ChatTurnUsage,
   ChatBackgroundTask,
   ChatCommandState,
   ChatContextUsage,
@@ -1064,6 +1065,7 @@ export class ChatSessionDriver {
       subtype: message.subtype,
       totalCostUsd: message.total_cost_usd,
       numTurns: message.num_turns,
+      ...turnUsageOf(message),
       // Final text only on a success subtype.
       ...(message.subtype === 'success' ? { finalText: message.result } : {}),
     })
@@ -1638,5 +1640,23 @@ function validateAnswers(
     ok: true,
     answers: result,
     ...(response !== undefined ? { response } : {}),
+  }
+}
+
+/** The result's per-turn token counts (team-process-metrics D1); absent when the result carries none. */
+export function turnUsageOf(message: { usage?: unknown }): { usage?: ChatTurnUsage } {
+  const usage = message.usage
+  if (!usage || typeof usage !== 'object') return {}
+  const count = (key: string) => {
+    const value = (usage as Record<string, unknown>)[key]
+    return typeof value === 'number' && Number.isFinite(value) ? value : 0
+  }
+  return {
+    usage: {
+      inputTokens: count('input_tokens'),
+      outputTokens: count('output_tokens'),
+      cacheReadTokens: count('cache_read_input_tokens'),
+      cacheCreationTokens: count('cache_creation_input_tokens'),
+    },
   }
 }

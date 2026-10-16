@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, test, mock } from 'bun:test'
-import { Database } from 'bun:sqlite'
-import { applyBaselineSchema } from '../../dbSafety/baseline'
+import type { Database } from 'bun:sqlite'
+import { schemaDb } from '../schemaDb'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
@@ -678,8 +678,8 @@ async function loadIndex() {
 }
 
 beforeEach(() => {
-  mailboxDb = new Database(':memory:')
-  applyBaselineSchema(mailboxDb)
+  // The full schema (baseline plus every migration), as initDatabase leaves it.
+  mailboxDb = schemaDb()
   serveOptions = null
   replaceSessionsCalls = []
   logEntries = []

@@ -18,6 +18,7 @@ import { applyBaselineSchema } from './baseline'
 import { CREATE_IMPACT_TABLES_SQL } from '../strategy/impactSchema'
 import { migrateTaskStatusEvents } from '../team/taskStatusEventsSchema'
 import { CREATE_AGENT_START_TABLES_SQL } from '../metrics/provenanceSchema'
+import { CREATE_TURN_USAGE_SQL } from '../chat/chatTurnUsageStore'
 import type { BackupFile } from './backupFiles'
 import type { BackupOutcome } from './backups'
 
@@ -39,6 +40,8 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 3, name: 'task-status-events', up: migrateTaskStatusEvents },
   // team-process-metrics D2: agent-start provenance and memory manifests.
   { version: 4, name: 'agent-starts', up: db => db.exec(CREATE_AGENT_START_TABLES_SQL) },
+  // team-process-metrics D1: per-turn token usage of every chat turn.
+  { version: 5, name: 'chat-turn-usage', up: db => db.exec(CREATE_TURN_USAGE_SQL) },
 ]
 
 export const RESTORE_DOC = 'docs/operations/database-backups.md'
