@@ -100,4 +100,65 @@ describe('TeamCaps', () => {
     expect(teamCapsFile(home)).toBe(path.join(home, '.kawai', 'teams.json'))
     fs.rmSync(path.join(repo, '.kawai'), { recursive: true, force: true })
   })
+
+  describe('planExecution settings (plan-execution D16)', () => {
+    const floor = { lint: ['ci'], typecheck: ['ci'], 'unit-tests': ['ci'], 'ci-e2e': ['e2e'] }
+    const readErrors = async (content: unknown): Promise<string[]> => {
+      writeCaps(content)
+      const errors: string[] = []
+      const caps = new TeamCaps({ homeDir: home, onErrors: e => errors.push(...e) })
+      await caps.planExecution(teamId)
+      return errors
+    }
+
+    test('a valid file: the team overrides the top-level default field by field', async () => {
+      writeCaps({
+        planExecution: { floorChecks: floor, maxParallelChanges: 5, mergeMethod: 'squash' },
+        teams: { [repo]: { planExecution: { maxParallelChanges: 2, mergeMethod: 'rebase' } } },
+      })
+      const caps = new TeamCaps({ homeDir: home })
+      expect(await caps.planExecution(teamId)).toEqual({ floorChecks: floor, maxParallelChanges: 2, mergeMethod: 'rebase' })
+      expect(await caps.planExecution(path.join(other, '.git'))).toEqual({ floorChecks: floor, maxParallelChanges: 5, mergeMethod: 'squash' })
+    })
+
+    test('no file, and a file without planExecution: no floor map, and the built-in defaults', async () => {
+      const caps = new TeamCaps({ homeDir: home })
+      expect(await caps.planExecution(teamId)).toEqual({ floorChecks: null, maxParallelChanges: 3, mergeMethod: 'merge' })
+      writeCaps({ maxSpawnedSessions: 7, teams: { [repo]: { maxSpawnedSessions: 2 } } })
+      const errors: string[] = []
+      const reloaded = new TeamCaps({ homeDir: home, onErrors: e => errors.push(...e) })
+      expect(await reloaded.planExecution(teamId)).toEqual({ floorChecks: null, maxParallelChanges: 3, mergeMethod: 'merge' })
+      expect(errors).toEqual([])
+    })
+
+    test('malformed values are reported; a valid top-level floor map survives an invalid team one', async () => {
+      writeCaps({
+        planExecution: { floorChecks: floor, maxParallelChanges: 5 },
+        teams: { [repo]: { planExecution: { floorChecks: { lint: ['ci'] }, maxParallelChanges: 0, mergeMethod: 'bogus' } } },
+      })
+      const errors: string[] = []
+      const caps = new TeamCaps({ homeDir: home, onErrors: e => errors.push(...e) })
+      expect(await caps.planExecution(teamId)).toEqual({ floorChecks: floor, maxParallelChanges: 5, mergeMethod: 'merge' })
+      expect(errors.some(e => e.includes('typecheck must be a non-empty list'))).toBe(true)
+      expect(errors.some(e => e.includes('maxParallelChanges must be a positive integer'))).toBe(true)
+      expect(errors.some(e => e.includes('mergeMethod must be one of'))).toBe(true)
+    })
+
+    test('an unknown floor-check key refuses the map', async () => {
+      const errors = await readErrors({ planExecution: { floorChecks: { ...floor, review: ['review'] } } })
+      const caps = new TeamCaps({ homeDir: home })
+      expect(await caps.planExecution(teamId)).toMatchObject({ floorChecks: null })
+      expect(errors.some(e => e.includes('unknown check "review"'))).toBe(true)
+    })
+
+    test('a floor list must be non-empty strings; the map shape must be an object', async () => {
+      expect((await readErrors({ planExecution: { floorChecks: { ...floor, 'ci-e2e': [] } } }))
+        .some(e => e.includes('ci-e2e must be a non-empty list'))).toBe(true)
+      expect((await readErrors({ planExecution: { floorChecks: { ...floor, lint: ['ci', 3] } } }))
+        .some(e => e.includes('lint must be a non-empty list'))).toBe(true)
+      expect((await readErrors({ planExecution: { floorChecks: ['ci'] } }))
+        .some(e => e.includes('floorChecks must map the CI floor checks'))).toBe(true)
+      expect((await readErrors({ planExecution: 'fast' })).some(e => e.includes('planExecution must be an object'))).toBe(true)
+    })
+  })
 })

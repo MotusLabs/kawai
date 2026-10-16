@@ -52,7 +52,7 @@ Implement after `durable-plans`, `strategy-revision-impact`, and `plan-validatio
 
 ## 4. Settings
 
-- [ ] 4.1 Extend `TeamCaps` with `planExecution(teamId)` (D16): top-level default, per-team override, the floor-name and value checks, and errors through the existing log. Verify with unit tests for valid, missing, malformed, and unknown-key files, and that a missing floor map yields no default.
+- [x] 4.1 Extend `TeamCaps` with `planExecution(teamId)` (D16): top-level default, per-team override, the floor-name and value checks, and errors through the existing log. Verify with unit tests for valid, missing, malformed, and unknown-key files, and that a missing floor map yields no default.
 
 ## 5. Git and GitHub adapters
 
