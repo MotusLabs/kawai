@@ -9,6 +9,7 @@ import type { TeamTaskSummary } from '../../shared/teamTasks'
 import type { ChatSessionRecord } from '../db'
 import type { GroupCatalog } from '../team/groupCatalog'
 import {
+  WorkspaceRead,
   attentionItems,
   memberRows,
   morningSummary,
@@ -432,5 +433,62 @@ describe('completed results bucket (11.2)', () => {
     // chat-1 finished a turn and submitted nothing: only its own bucket.
     expect(sum.finishedTurnsWithoutResult.items.map(item => item.id)).toEqual(['finished-turn:chat-1'])
     expect(sum.completedResults.items.some(item => item.id.includes('chat-1'))).toBe(false)
+  })
+})
+
+describe('WorkspaceRead.snapshot labelling (bc0a329 follow-up)', () => {
+  // A real human actor: no submitter session, the way a human-submitted
+  // result is stored. The label must come from the actor, not from a
+  // pre-labelled string the caller happened to pass.
+  const humanResult = {
+    id: 'r-human', taskId: 'task-1', summary: 'CSV export', commit: 'abc', diff: null,
+    worktree: null, tests: [], limitations: null, taskRevision: 1,
+    submittedBy: { kind: 'human', sessionId: null } as const,
+    supersedesResultId: null, supersededBy: null, acceptedBy: null, acceptedAt: null, needsReevaluation: false,
+  }
+  const agentResult = {
+    ...humanResult, id: 'r-agent', taskId: 'task-2',
+    submittedBy: { kind: 'agent', sessionId: 'chat-9' } as const,
+  }
+  const summaryOf = (taskId: string, resultId: string): TeamTaskSummary => ({
+    id: taskId, teamId: 'team', title: taskId === 'task-1' ? 'Export' : 'Import', status: 'active',
+    creator: { kind: 'human', sessionId: null }, parentId: null, worktree: null, openspecChange: null,
+    revision: 1, direction: 'Do it', acceptance: null, createdAt: '2026-10-15T00:00:00Z', updatedAt: '2026-10-15T00:00:00Z',
+    participants: [], assignment: null,
+    outstandingResult: { id: resultId, needsReevaluation: false, accepted: false },
+  })
+
+  test('a human-submitted result is labelled Human in attention and summary', () => {
+    const results = [humanResult, agentResult]
+    const manager = {
+      tasks: {
+        store: {
+          list: () => [summaryOf('task-1', 'r-human'), summaryOf('task-2', 'r-agent')],
+          get: (taskId: string) => summaryOf(taskId, taskId === 'task-1' ? 'r-human' : 'r-agent'),
+          results: {
+            get: (id: string) => results.find(result => result.id === id) ?? null,
+            outstandingSince: () => results,
+            submittedBy: () => false,
+          },
+          acknowledgements: { highest: () => null },
+        },
+      },
+      mailbox: { store: { listForTeam: () => [], eventsFor: () => [] } },
+      waitingFor: () => ({}),
+      teamRecords: () => [record({ sessionId: 'chat-9', name: 'Agent nine' })],
+      directory: { list: () => [] },
+      getPendingRequests: () => [],
+      teams: { catalogForTeam: () => ({ groups: new Map() }) },
+      groupProfileCounts: () => ({}),
+      turnEnds: { finishedForTeam: () => [] },
+    }
+    const snapshot = new WorkspaceRead(manager as never).snapshot({ teamId: 'team' } as never)
+
+    const pending = snapshot.attention.find(item => item.id === 'pending-acceptance:r-human')
+    expect(pending?.cause).toBe('Result submitted by Human awaits acceptance')
+    expect(snapshot.summary.completedResults.items.map(item => item.label)).toEqual([
+      'Export: result by Human — awaiting acceptance',
+      'Import: result by Agent nine — awaiting acceptance',
+    ])
   })
 })

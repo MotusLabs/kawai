@@ -190,6 +190,24 @@ describe('a snapshot', () => {
     }
   })
 
+  test('a chmod refusal is logged and skipped, not failed', () => {
+    const session = initDatabase({ path: dbPath })
+    const warn = spyOn(logger, 'warn').mockImplementation(() => {})
+    try {
+      const backups = new DatabaseBackups({
+        db: session.db, dbPath,
+        chmod: () => { throw new Error('operation not permitted') },
+      })
+      const outcome = backups.snapshotSync('interval')
+      expect(outcome).toMatchObject({ ok: true })
+      expect(path.dirname(outcome.ok ? outcome.path : '')).toBe(backupsDir)
+      expect(warn.mock.calls.filter(([event]) => event === 'db_backup_chmod_skipped')).toHaveLength(1)
+    } finally {
+      warn.mockRestore()
+      session.close()
+    }
+  })
+
   test('refuses inside a transaction instead of copying mid-write', async () => {
     const session = initDatabase({ path: dbPath })
     const backups = new DatabaseBackups({ db: session.db, dbPath })

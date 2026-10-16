@@ -281,9 +281,6 @@ export class PasteChannel {
           // One guard around the whole lookup-and-deliver: any failure (bad
           // fetch, malformed pasteboard payload, sanitizing throw) falls
           // through to the text paste below, as the original inline block did.
-          // One guard around the whole lookup-and-deliver: any failure (bad
-          // fetch, malformed pasteboard payload, sanitizing throw) falls
-          // through to the text paste below, as the original inline block did.
           try {
             const file = await fetchClipboardFile()
             if (file && file.path) {

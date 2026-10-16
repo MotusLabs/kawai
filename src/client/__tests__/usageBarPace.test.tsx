@@ -207,6 +207,19 @@ describe('usage bar minute clock', () => {
     renderer.unmount()
   })
 
+  test('the clock stops once every window’s reset has passed', () => {
+    jest.useFakeTimers()
+    jest.setSystemTime(NOW)
+    const renderer = renderBar(report([fiveHour({ resetsAt: at(NOW + MINUTE) })]))
+    expect(jest.getTimerCount()).toBe(1)
+    act(() => {
+      jest.advanceTimersByTime(MINUTE + 1)
+    })
+    expect(ticks(renderer)).toHaveLength(0)
+    expect(jest.getTimerCount()).toBe(0)
+    renderer.unmount()
+  })
+
   test('no clock runs when no window can carry a tick', () => {
     jest.useFakeTimers()
     jest.setSystemTime(NOW)

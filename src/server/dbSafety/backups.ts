@@ -55,6 +55,8 @@ export interface DatabaseBackupsOptions {
   serialize?: () => Uint8Array
   /** How a copy that failed its check is set aside; tests make these throw. Defaults to `fs`. */
   fileOps?: Pick<typeof fs, 'renameSync' | 'unlinkSync'>
+  /** The backups-dir tightening step; tests make it throw. Defaults to `fs.chmodSync`. */
+  chmod?: (path: string, mode: number) => void
 }
 
 const MAX_FAILURES = 20
@@ -222,8 +224,14 @@ export class DatabaseBackups {
     if (db.inTransaction) return { error: 'a transaction is open on the connection' }
     try {
       fs.mkdirSync(this.dir, { recursive: true, mode: 0o700 })
-      // mkdir's mode applies only to a directory it creates; tighten one that existed.
-      fs.chmodSync(this.dir, 0o700)
+      // mkdir's mode applies only to a directory it creates; tighten one that
+      // existed. A refusal here (an odd mount, an outside owner) must not fail
+      // a backup the directory can still hold: log it and go on.
+      try {
+        ;(this.options.chmod ?? fs.chmodSync)(this.dir, 0o700)
+      } catch (error) {
+        logger.warn('db_backup_chmod_skipped', { dir: this.dir, error: errorText(error) })
+      }
       const changes = this.totalChanges()
       const bytes = this.copy()
       const final = path.join(this.dir, backupFileName(this.stem, this.nextStamp(), reason))
