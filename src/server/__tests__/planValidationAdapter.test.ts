@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { OpenspecAdapter, type OpenspecCall, type OpenspecRunner } from '../plans/validation/openspecAdapter'
+import { KILL_GRACE_MS, OpenspecAdapter, type OpenspecCall, type OpenspecRunner } from '../plans/validation/openspecAdapter'
 
 const STUB = `#!/usr/bin/env bash
 # Concurrency accounting under flock: count and peak, exact across processes.
@@ -33,6 +33,14 @@ case "$1" in
     enter
     trap leave EXIT
     case "$2" in
+      immortal)
+        # Records its own pid and a grandchild's, traps TERM, and loops.
+        trap '' TERM
+        echo $$ > "$STUB_CHILD"
+        sleep 30 &
+        echo $! > "$STUB_GRANDCHILD"
+        while :; do sleep 0.2; done
+        ;;
       broken)
         printf '{"items":[{"id":"broken","type":"change","valid":false,"issues":[{"level":"ERROR","path":"spec.md","message":"No deltas"}]}]}'
         exit 1
@@ -127,6 +135,8 @@ describe('OpenspecAdapter validate and showDeltas through a stub CLI', () => {
     process.env.STUB_LOCK = path.join(dir, 'stub.lock')
     process.env.STUB_COUNT = path.join(dir, 'stub.count')
     process.env.STUB_PEAK = path.join(dir, 'stub.peak')
+    process.env.STUB_CHILD = path.join(dir, 'stub.child')
+    process.env.STUB_GRANDCHILD = path.join(dir, 'stub.grandchild')
     process.env.STUB_VERSION = '1.14.2'
   })
 
@@ -136,6 +146,8 @@ describe('OpenspecAdapter validate and showDeltas through a stub CLI', () => {
     delete process.env.STUB_LOCK
     delete process.env.STUB_COUNT
     delete process.env.STUB_PEAK
+    delete process.env.STUB_CHILD
+    delete process.env.STUB_GRANDCHILD
     delete process.env.STUB_VERSION
     fs.rmSync(dir, { recursive: true, force: true })
   })
@@ -194,6 +206,22 @@ describe('OpenspecAdapter validate and showDeltas through a stub CLI', () => {
     // The pool slots freed: later calls still run.
     const after = await adapter.validate(dir, 'alpha')
     expect(after.ok).toBe(true)
+  })
+
+  test('a child that ignores SIGTERM is dead after the grace, with its grandchild (group SIGKILL)', async () => {
+    const adapter = new OpenspecAdapter(undefined, 150)
+    const outcome = await adapter.validate(dir, 'immortal')
+    expect(outcome.error).toContain('timed out')
+    // Wait out the grace, then both recorded pids must be gone: this fails
+    // if the group kill or the SIGKILL escalation is removed.
+    await new Promise(resolve => setTimeout(resolve, KILL_GRACE_MS + 500))
+    const dead = (pid: string) => {
+      let alive = true
+      try { process.kill(Number(pid), 0) } catch { alive = false }
+      return !alive
+    }
+    expect(dead(fs.readFileSync(process.env.STUB_CHILD!, 'utf8').trim())).toBe(true)
+    expect(dead(fs.readFileSync(process.env.STUB_GRANDCHILD!, 'utf8').trim())).toBe(true)
   })
 
   test('unknown JSON shapes are errors', async () => {

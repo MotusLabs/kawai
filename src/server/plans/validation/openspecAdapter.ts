@@ -60,8 +60,8 @@ export interface OpenspecCall {
 
 export type OpenspecRunner = (args: readonly string[], options: { cwd: string; timeoutMs: number }) => Promise<OpenspecCall>
 
-/** After a timeout's SIGTERM, the group gets SIGKILL (H2: a child that ignores the signal must not hold a pool slot). */
-const KILL_GRACE_MS = 250
+/** After a timeout's SIGTERM, the group gets SIGKILL (H2/N1: a child that ignores the signal must still die). */
+export const KILL_GRACE_MS = 250
 
 /**
  * The default runner: spawn `openspec` from the PATH in its own process
@@ -84,18 +84,21 @@ export const spawnOpenspec: OpenspecRunner = (args, { cwd, timeoutMs }) =>
     let settled = false
     let timedOut = false
     let graceTimer: ReturnType<typeof setTimeout> | null = null
-    const settle = (result: OpenspecCall) => {
+    const settle = (result: OpenspecCall, fromTimeout: boolean) => {
       if (settled) return
       settled = true
       clearTimeout(timer)
-      if (graceTimer) clearTimeout(graceTimer)
+      // The grace timer outlives a timeout's settle on purpose: a child that
+      // ignores SIGTERM must still get SIGKILL after the grace. Only the
+      // child's own exit cancels it.
+      if (!fromTimeout && graceTimer) clearTimeout(graceTimer)
       resolve(result)
     }
     child.stdout?.on('data', (chunk: Buffer) => { stdout += chunk.toString('utf8') })
     child.stderr?.on('data', (chunk: Buffer) => { stderr += chunk.toString('utf8') })
     // A spawn failure (ENOENT) arrives here, not at the call site.
-    child.on('error', () => settle({ ok: false, exitCode: null, stdout: '', stderr: 'openspec spawn failed', timedOut: false }))
-    child.on('close', code => settle({ ok: code === 0, exitCode: code, stdout, stderr, timedOut }))
+    child.on('error', () => settle({ ok: false, exitCode: null, stdout: '', stderr: 'openspec spawn failed', timedOut: false }, false))
+    child.on('close', code => settle({ ok: code === 0, exitCode: code, stdout, stderr, timedOut }, false))
     const killGroup = (signal: NodeJS.Signals) => {
       try {
         process.kill(-child.pid!, signal)
@@ -104,10 +107,13 @@ export const spawnOpenspec: OpenspecRunner = (args, { cwd, timeoutMs }) =>
     const timer = setTimeout(() => {
       timedOut = true
       killGroup('SIGTERM')
-      graceTimer = setTimeout(() => killGroup('SIGKILL'), KILL_GRACE_MS)
+      graceTimer = setTimeout(() => { graceTimer = null; killGroup('SIGKILL') }, KILL_GRACE_MS)
+      // Neither timer keeps the process alive, and the pipes are not awaited.
+      graceTimer.unref?.()
       // Resolve now: the pipes may stay open however the kill lands.
-      settle({ ok: false, exitCode: child.exitCode, stdout, stderr, timedOut })
+      settle({ ok: false, exitCode: child.exitCode, stdout, stderr, timedOut }, true)
     }, timeoutMs)
+    timer.unref?.()
   })
 
 /** At most `limit` concurrent callers; a released slot transfers to the next waiter. */
