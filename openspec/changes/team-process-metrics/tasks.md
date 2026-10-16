@@ -44,7 +44,7 @@ Stage 1 is groups 1–7. Stage 2 (groups 8–10) can land separately once stage 
 ## 7. Metrics tab
 
 - [x] 7.1 Add `metrics` to `WorkspaceTab`/`RENDERED_WORKSPACE_TABS` with `#/team/<key>/metrics/<window>[/<report id>]`, a `metricsStore`, and per-team window/slice/collapsed-family state in `teamWorkspaceStore`; verify location tests cover parsing, history pushes, reload restoring the window, and unknown ids falling back with a notice.
-- [ ] 7.2 Build `MetricsView`, `MetricFamily`, and `MetricRow` (value, `n`, baseline delta, insufficient flag with the threshold, guard beside it, approximate and partial markers, not-sliceable marker, usage caveat, `computedAt` and Refresh), with drill-down into the Tasks and Messages tabs and controls disabled while disconnected; verify component tests cover each state and a `dev-browser` walkthrough screenshots the tab against a seeded fixture on desktop and narrow widths.
+- [x] 7.2 Build `MetricsView`, `MetricFamily`, and `MetricRow` (value, `n`, baseline delta, insufficient flag with the threshold, guard beside it, approximate and partial markers, not-sliceable marker, usage caveat, `computedAt` and Refresh), with drill-down into the Tasks and Messages tabs and controls disabled while disconnected; verify component tests cover each state and a `dev-browser` walkthrough screenshots the tab against a seeded fixture on desktop and narrow widths.
 
 ## 8. Reports and proposals (stage 2)
 

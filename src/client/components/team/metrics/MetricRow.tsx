@@ -3,8 +3,12 @@
 // guard it is read beside, the approximate/partial/not-sliceable markers,
 // the fixed breakdown and requested slice rows, and a drill-down listing the
 // tasks (opening the Tasks tab) and messages (opening their thread).
-import { METRIC_DEF_BY_ID, type MetricRow as MetricRowData, type MetricValue } from '@shared/processMetrics'
+import { METRIC_DEF_BY_ID, type MetricBreakdown, type MetricRow as MetricRowData, type MetricValue } from '@shared/processMetrics'
 import { baselineLabel, formatDelta, formatValue, insufficientLabel } from './metricFormat'
+
+const BREAKDOWN_LABELS: Record<MetricBreakdown, string> = {
+  senderGroup: 'By sender group', frictionKind: 'By friction kind', profile: 'By profile', groupProfile: 'By group · profile',
+}
 
 function Rows({ title, rows, metric, testId }: { title: string; rows: MetricRowData[]; metric: MetricValue; testId: string }) {
   const def = METRIC_DEF_BY_ID.get(metric.id)!
@@ -55,7 +59,7 @@ export default function MetricRow({ metric, guard, expanded, onToggleDrill, onOp
     {guardDef && <p className="text-chat-meta text-secondary" data-testid="metric-guard">
       Guard: {guardDef.label} {guard ? `${formatValue(guard.value, guardDef.unit)} (n=${guard.n})` : '—'}
     </p>}
-    {metric.breakdown && metric.breakdown.length > 0 && <Rows title={`By ${def.breakdown}`} rows={metric.breakdown} metric={metric} testId="metric-breakdown" />}
+    {metric.breakdown && metric.breakdown.length > 0 && <Rows title={BREAKDOWN_LABELS[def.breakdown!]} rows={metric.breakdown} metric={metric} testId="metric-breakdown" />}
     {metric.slices && <Rows title="By slice" rows={metric.slices} metric={metric} testId="metric-slices" />}
     {drillCount > 0 && <div className="mt-1">
       <button type="button" className="text-chat-meta text-secondary hover:text-primary hover:underline" aria-expanded={expanded}
