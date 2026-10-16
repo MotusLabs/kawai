@@ -13,9 +13,11 @@ The server SHALL handle copy-mode status queries, copy-mode cancellation, and
 attach-time history capture without blocking terminal input dispatch or
 terminal output delivery. A copy-mode status query that is still in flight
 SHALL cause subsequent status polls on the same connection to be skipped until
-it completes, so replies cannot arrive out of order and stale-flip state.
-A response SHALL be discarded when its attachment generation or target has
-changed while the query was pending, or when the socket has closed.
+it completes.
+
+#### Scenario: Stale status responses are discarded
+- **WHEN** a copy-mode status query completes after its attachment generation or target changed while it was pending, or after the socket has closed
+- **THEN** the response is discarded, so replies cannot arrive out of order and stale-flip state
 
 #### Scenario: Keystrokes forwarded while a status query is in flight
 - **WHEN** a copy-mode status query is in flight and the user types
@@ -52,10 +54,11 @@ stream.
 The server SHALL send all pending coalesced terminal output before any other
 message on the same connection, including attach history chunks relative to
 the terminal-ready acknowledgement and live output relative to terminal-error
-notifications. A frame SHALL carry output for at most one session. A session-id change
-SHALL drain the old buffer even without an intervening control message.
-Terminal cleanup SHALL clear pending output without disabling later attaches
-on the same open socket; socket close SHALL dispose the coalescer.
+notifications. A frame SHALL carry output for at most one session.
+
+#### Scenario: Session-id change and terminal cleanup
+- **WHEN** a connection's session-id changes, or terminal cleanup runs while output is pending
+- **THEN** a session-id change drains the old buffer even without an intervening control message, cleanup clears pending output without disabling later attaches on the same open socket, and socket close disposes the coalescer
 
 #### Scenario: History chunks precede terminal-ready
 - **WHEN** a session attach replays history and then acknowledges readiness
@@ -79,13 +82,15 @@ SHALL enable it only when `AGENTBOARD_WS_DEFLATE` is set to `true`.
 
 ### Requirement: Log-match captures yield to interactive traffic
 Log matching SHALL capture window scrollbacks sequentially with a configurable
-pause between windows (`AGENTBOARD_LOG_MATCH_YIELD_MS`, default 25, clamped to
-0–250), including the session-wake path, so match bursts interleave with
-interactive terminal traffic instead of monopolizing the tmux server.
-Match-worker requests SHALL be serialized within that worker, and a failed
-request SHALL NOT prevent later queued requests from running. The session-wake
-path SHALL use sequential captures; no global exclusion across worker and
-wake-path requests is implied.
+pause between windows (`AGENTBOARD_LOG_MATCH_YIELD_MS`), including the
+session-wake path, so match bursts interleave with interactive terminal
+traffic instead of monopolizing the tmux server. Match-worker requests SHALL
+be serialized within that worker, and a failed request SHALL NOT prevent later
+queued requests from running.
+
+#### Scenario: Yield pause configuration
+- **WHEN** `AGENTBOARD_LOG_MATCH_YIELD_MS` is unset or set
+- **THEN** the pause defaults to 25 and is clamped to 0–250, the session-wake path uses sequential captures, and no global exclusion across worker and wake-path requests is implied
 
 #### Scenario: Match burst paced between windows
 - **WHEN** several unmatched windows are matched in one pass
@@ -99,14 +104,15 @@ wake-path requests is implied.
 ### Requirement: Client defers flushes behind unconsumed writes
 The web terminal SHALL hold newly buffered output while a previous terminal
 write has not been consumed by the renderer, and SHALL force a flush after a
-bounded interval (50 ms) so the pipeline always progresses. Deferral SHALL NOT
+bounded interval so the pipeline always progresses. Deferral SHALL NOT
 apply across session switches, and backpressure state SHALL reset when the
-terminal is cleaned up or a session becomes ready. Each forced write SHALL
-remain pending until its own callback completes. Callbacks from earlier
-attachment generations SHALL NOT affect current write accounting, even when
-the terminal object is reused. Terminal-ready SHALL force the existing atomic
-reset+history flush. This requirement preserves stream order and does not
-prioritize key echo ahead of previously received output.
+terminal is cleaned up or a session becomes ready. This requirement preserves
+stream order and does not prioritize key echo ahead of previously received
+output.
+
+#### Scenario: Forced flushes and write accounting
+- **WHEN** the flush interval elapses, a terminal write's callback completes, a callback from an earlier attachment generation arrives on a reused terminal object, or the terminal becomes ready
+- **THEN** the forced interval is 50 ms, each forced write remains pending until its own callback completes, earlier-generation callbacks do not affect current write accounting, and terminal-ready forces the existing atomic reset+history flush
 
 #### Scenario: Flush waits for the renderer
 - **WHEN** output arrives while a prior write is still being parsed
