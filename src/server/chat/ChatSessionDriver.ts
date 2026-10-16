@@ -326,6 +326,17 @@ export class ChatSessionDriver {
   private turnCounter = 0
   private activeTurnId: string | null = null
   /**
+   * An interrupted turn's tail is still in flight. The CLI answers an
+   * interrupt with its acknowledgement first and only then flushes the
+   * aborted turn's frames and its `result` (observed on the wire:
+   * ack → [user] → result/error_during_execution → system/init of the next
+   * turn), so a turn opened in between (an urgent peer delivery) must not
+   * receive them. Exactly one result is consumed; the next turn's `init`
+   * closes the window, so a CLI that sends no trailing result can never
+   * swallow the next turn's own one. Process death clears it too.
+   */
+  private interruptedTail = false
+  /**
    * Task notifications that arrived while no turn was active (background
    * tasks D5): they become the next turn's trigger — user-started or
    * agent-started alike — and are consumed when that turn opens.
@@ -442,6 +453,15 @@ export class ChatSessionDriver {
     return turnId
   }
 
+  /**
+   * The turn content frames belong to, or null while an interrupted turn's
+   * tail is still arriving — those frames are the aborted turn's, never the
+   * turn opened since.
+   */
+  private frameTurnId(): string | null {
+    return this.interruptedTail ? null : this.activeTurnId
+  }
+
   /** Submit a user turn. Spawns the SDK lazily on the first turn. */
   send(text: string): void {
     if (this.killed) return
@@ -484,6 +504,7 @@ export class ChatSessionDriver {
     if (this.activeTurnId) {
       const turnId = this.activeTurnId
       this.activeTurnId = null
+      if (this.query) this.interruptedTail = true
       this.emit({ type: 'turn_interrupted', turnId })
       // Turn boundary: re-resolve the threshold for the next turn (design D2).
       this.refreshContextThreshold()
@@ -509,6 +530,7 @@ export class ChatSessionDriver {
     this.queue.end()
     this.cancelAllRequests('killed')
     this.activeTurnId = null
+    this.interruptedTail = false
     // Archive and kill both end the process (design D3): every worker still
     // without an outcome settles as stopped, nothing survives as live. The
     // background tasks die with the process too (background tasks D1) — but
@@ -844,6 +866,7 @@ export class ChatSessionDriver {
     this.dead = true
     this.query = null
     this.activeTurnId = null
+    this.interruptedTail = false
     // The process is gone (design D3): workers cannot have outcomes any
     // more, so any still-open row settles as stopped rather than wedging.
     // Background tasks settle the same way (D1) — the respawn starts clean.
@@ -912,7 +935,7 @@ export class ChatSessionDriver {
     // Context usage rides the same wrapper level, whatever the turn state —
     // trailing frames after an interrupt still measure the live context.
     this.readContextUsage(message)
-    const turnId = this.activeTurnId
+    const turnId = this.frameTurnId()
     if (!turnId) return
     const messageId = message.message.id ?? message.uuid
     const subagent = isSubagentContentFrame(message)
@@ -974,7 +997,7 @@ export class ChatSessionDriver {
     // Usage capture precedes the turn gate, like assistant-frame usage:
     // trailing frames after an interrupt still measure the live context.
     this.readStreamUsage(event)
-    const turnId = this.activeTurnId
+    const turnId = this.frameTurnId()
     if (!turnId) return
     if (event.type === 'message_start') this.streamingMessageId = event.message.id
     if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
@@ -992,7 +1015,7 @@ export class ChatSessionDriver {
   }
 
   private handleUser(message: SDKUserMessage): void {
-    const turnId = this.activeTurnId
+    const turnId = this.frameTurnId()
     if (!turnId) return
     const content = message.message.content
     if (typeof content === 'string') {
@@ -1052,6 +1075,13 @@ export class ChatSessionDriver {
     // modelUsage arrives on every result whatever the turn state; its
     // contextWindow is the threshold fallback (design D2 step 3).
     this.readModelContextWindow(message)
+    if (this.interruptedTail) {
+      // The interrupted turn's own result (see `interruptedTail`): it was
+      // already reported as turn_interrupted and must not close the turn
+      // that opened since — its usage and outcome are not that turn's.
+      this.interruptedTail = false
+      return
+    }
     const turnId = this.activeTurnId
     if (!turnId) {
       // Already reported via turn_interrupted (or no turn ran); a trailing
@@ -1088,6 +1118,9 @@ export class ChatSessionDriver {
       this.reportLimit(retryLimitSignal(message, this.currentResetsAt()))
     }
     if (message.subtype === 'init') {
+      // A new turn begins: whatever the interrupted turn still owed has
+      // been sent or never will be (see `interruptedTail`).
+      this.interruptedTail = false
       // Agent-started turn (background tasks D5): `init` opens every turn
       // and is the first frame of one that the SDK yields to consumers —
       // `session_state_changed` is `sdk_host_only` and never reaches this
@@ -1129,7 +1162,7 @@ export class ChatSessionDriver {
       return
     }
     if (message.subtype === 'local_command_output') {
-      const turnId = this.activeTurnId
+      const turnId = this.frameTurnId()
       if (turnId) {
         this.emit({ type: 'command_output', turnId, text: message.content })
       }

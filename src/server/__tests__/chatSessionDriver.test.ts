@@ -3508,3 +3508,110 @@ describe('ChatSessionDriver background-task roster (background tasks D1/D7)', ()
     expect(harness.backgroundTasks.at(-1)).toMatchObject([{ taskId: 'blong', status: 'stopped', live: false }])
   })
 })
+
+describe('ChatSessionDriver interrupted-turn tail', () => {
+  const PEER = { messageId: 'mail-urgent', senderSession: 'lead', senderGroup: null, priority: 'urgent' as const, originPath: '/repo', tags: [], threadId: 'mail-urgent', body: 'Stop and do this', possibleDuplicate: false }
+  const init = () => ({ type: 'system', subtype: 'init', session_id: 'sdk-1' }) as unknown as SDKMessage
+  const interruptedEcho = () => ({ type: 'user', message: { role: 'user', content: '[Request interrupted by user]' }, parent_tool_use_id: null }) as unknown as SDKMessage
+  const completed = (h: Harness) => h.events.filter((event): event is Extract<ChatEvent, { type: 'turn_completed' }> => event.type === 'turn_completed')
+  const started = (h: Harness) => h.events.filter(event => event.type === 'turn_started').map(event => (event as { turnId: string }).turnId)
+
+  /** A busy turn-1 the CLI is working on. */
+  async function busy() {
+    const h = createHarness()
+    h.driver.send('long job')
+    h.fakes[0]!.push(init())
+    h.fakes[0]!.push(assistantText('working on it'))
+    await flush()
+    return h
+  }
+
+  test('a delivery after the acknowledgement keeps its turn until its own result (frame order ack → result → init)', async () => {
+    const h = await busy()
+    await h.driver.interrupt()
+    h.driver.deliver(PEER)
+    // The aborted turn's tail arrives after the delivery opened turn-2.
+    h.fakes[0]!.push(interruptedEcho())
+    h.fakes[0]!.push(result('error_during_execution', { usage: { input_tokens: 900, output_tokens: 90 } }))
+    await flush()
+    expect(completed(h)).toEqual([])
+    expect(h.statuses.at(-1)).toBe('working')
+    expect(h.events.some(event => event.type === 'user_message' && event.turnId === 'turn-2')).toBe(false)
+    expect(h.events.some(event => event.type === 'error')).toBe(false)
+    // The delivered turn's own frames and result.
+    h.fakes[0]!.push(init())
+    h.fakes[0]!.push(assistantText('on it', 'msg_2'))
+    h.fakes[0]!.push(result('success', { usage: { input_tokens: 5, output_tokens: 3 } }))
+    await flush()
+    expect(started(h)).toEqual(['turn-1', 'turn-2'])
+    expect(h.events.find(event => event.type === 'turn_interrupted')).toMatchObject({ turnId: 'turn-1' })
+    expect(completed(h).map(event => ({ turnId: event.turnId, subtype: event.subtype, input: event.usage?.inputTokens }))).toEqual([
+      { turnId: 'turn-2', subtype: 'success', input: 5 },
+    ])
+    expect(h.events.find(event => event.type === 'assistant_text' && event.turnId === 'turn-2')).toMatchObject({ text: 'on it' })
+    expect(h.statuses.at(-1)).toBe('waiting')
+    h.driver.kill()
+  })
+
+  test('Stop reports the interrupt at once and the late trailing result changes nothing', async () => {
+    const h = await busy()
+    void h.driver.interrupt()
+    expect(h.events.at(-1)).toMatchObject({ type: 'turn_interrupted', turnId: 'turn-1' })
+    expect(h.statuses.at(-1)).toBe('waiting')
+    const before = h.events.length
+    h.fakes[0]!.push(interruptedEcho())
+    h.fakes[0]!.push(result('error_during_execution'))
+    await flush()
+    expect(h.events.slice(before)).toEqual([])
+    // The next user turn completes with its own result.
+    h.driver.send('next')
+    h.fakes[0]!.push(init())
+    h.fakes[0]!.push(result('success'))
+    await flush()
+    expect(completed(h).map(event => event.turnId)).toEqual(['turn-2'])
+    h.driver.kill()
+  })
+
+  test('an interrupt with no active turn consumes nothing', async () => {
+    const h = createHarness()
+    h.driver.start()
+    await h.driver.interrupt()
+    h.driver.deliver(PEER)
+    // No init in between: the turn's own result must still close it.
+    h.fakes[0]!.push(result('success'))
+    await flush()
+    expect(completed(h).map(event => event.turnId)).toEqual(['turn-1'])
+    expect(h.statuses.at(-1)).toBe('waiting')
+    h.driver.kill()
+  })
+
+  test('a missing trailing result never swallows the next turn\'s result', async () => {
+    const h = await busy()
+    await h.driver.interrupt()
+    h.driver.deliver(PEER)
+    // The CLI sent no tail: the delivered turn's init closes the window.
+    h.fakes[0]!.push(init())
+    h.fakes[0]!.push(result('success'))
+    await flush()
+    expect(completed(h).map(event => event.turnId)).toEqual(['turn-2'])
+    expect(h.statuses.at(-1)).toBe('waiting')
+    h.driver.kill()
+  })
+
+  test('process death during an interrupt clears the tail for the respawned process', async () => {
+    const h = await busy()
+    const interrupted = h.driver.interrupt()
+    h.fakes[0]!.exit()
+    await interrupted
+    await flush()
+    expect(h.events.some(event => event.type === 'error')).toBe(true)
+    h.driver.send('again')
+    expect(h.fakes).toHaveLength(2)
+    // The new process's result closes the new turn even without an init.
+    h.fakes[1]!.push(result('success'))
+    await flush()
+    expect(completed(h).map(event => event.turnId)).toEqual(['turn-2'])
+    expect(h.statuses.at(-1)).toBe('waiting')
+    h.driver.kill()
+  })
+})
