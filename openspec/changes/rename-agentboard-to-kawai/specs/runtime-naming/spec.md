@@ -96,11 +96,15 @@ Before backing up or moving anything, the server SHALL check whether another pro
 - **THEN** nothing is moved, the renamed build serves from the legacy paths, and the log names the reason
 
 ### Requirement: A data migration that cannot complete leaves the legacy data usable
-If any legacy entry cannot be moved, the server SHALL put back every entry it already moved, log an error naming the entry and the cause, and run this process with the legacy `~/.agentboard/` paths. A partly migrated state SHALL NOT be left behind.
+If any legacy entry cannot be moved, the server SHALL put back every entry it already moved, log an error naming the entry and the cause, and run this process with the legacy `~/.agentboard/` paths. A partly migrated state SHALL NOT be left behind. If putting an entry back fails, the server SHALL log both its paths, run on the legacy paths only if the legacy database is back in place, and otherwise exit naming the pre-rename backup. It SHALL NOT delete any entry.
 
 #### Scenario: Cross-device move fails
 - **WHEN** `~/.kawai` is on a different filesystem and moving `agentboard.db` fails
 - **THEN** the server logs the failure, keeps every legacy entry in `~/.agentboard/`, and serves from `~/.agentboard/agentboard.db`
+
+#### Scenario: Undo fails with the database still moved
+- **WHEN** moving a later entry fails and moving `kawai.db` back to `agentboard.db` also fails
+- **THEN** the server logs both paths of each entry not put back, exits with an error naming the pre-rename backup, and both the database and the backup still exist
 
 ### Requirement: The managed tmux session is named kawai
 With no `TMUX_SESSION` override, the managed tmux session SHALL be `kawai`, and per-connection sessions SHALL be `kawai-ws-<connection>`. At startup, if a session named exactly `agentboard` exists and none named `kawai` does, the server SHALL rename `agentboard` to `kawai`. Before the first session refresh, it SHALL rewrite stored window targets from `agentboard:` to `kawai:`, so tracked sessions stay attached to their windows.
