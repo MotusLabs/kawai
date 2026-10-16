@@ -85,12 +85,43 @@ describe('Claude profile resolution', () => {
     expect(glm.env).toMatchObject({ ANTHROPIC_BASE_URL: 'https://api.z.ai/api/anthropic', ANTHROPIC_DEFAULT_SONNET_MODEL: 'glm-5.3-flash[1m]', ANTHROPIC_DEFAULT_OPUS_MODEL: 'glm-5.3[1m]', CLAUDE_CODE_AUTO_COMPACT_WINDOW: '1000000' })
     const minimax = resolveClaudeProfile('minimax', {}, ctx)
     expect(minimax.model).toBe('MiniMax-M3')
-    expect(minimax.env).toMatchObject({ ANTHROPIC_BASE_URL: 'https://api.minimax.io/anthropic', ANTHROPIC_MODEL: 'MiniMax-M3' })
+    expect(minimax.env).toMatchObject({ ANTHROPIC_BASE_URL: 'https://api.minimax.io/anthropic', ANTHROPIC_MODEL: 'MiniMax-M3', ANTHROPIC_DEFAULT_OPUS_MODEL: 'MiniMax-M3', ANTHROPIC_DEFAULT_SONNET_MODEL: 'MiniMax-M3', ANTHROPIC_DEFAULT_HAIKU_MODEL: 'MiniMax-M3', ANTHROPIC_DEFAULT_FABLE_MODEL: 'MiniMax-M3' })
     const mimo = resolveClaudeProfile('mimo', {}, ctx)
     expect(mimo.model).toBe('mimo-v2.6-pro')
-    expect(mimo.env).toMatchObject({ ANTHROPIC_BASE_URL: 'https://api.xiaomimimo.com/anthropic', ANTHROPIC_MODEL: 'mimo-v2.6-pro', ANTHROPIC_DEFAULT_SONNET_MODEL: 'mimo-v2.6-flash', ANTHROPIC_DEFAULT_OPUS_MODEL: 'mimo-v2.6-pro' })
-    expect(resolveClaudeProfile('kimi', {}, ctx).env?.ANTHROPIC_BASE_URL).toBe('https://api.moonshot.ai/anthropic')
-    expect(resolveClaudeProfile('kimi', {}, ctx).model).toBeUndefined()
+    expect(mimo.env).toMatchObject({ ANTHROPIC_BASE_URL: 'https://api.xiaomimimo.com/anthropic', ANTHROPIC_MODEL: 'mimo-v2.6-pro', ANTHROPIC_DEFAULT_SONNET_MODEL: 'mimo-v2.6-flash', ANTHROPIC_DEFAULT_OPUS_MODEL: 'mimo-v2.6-pro', ANTHROPIC_DEFAULT_HAIKU_MODEL: 'mimo-v2.6-pro', ANTHROPIC_DEFAULT_FABLE_MODEL: 'mimo-v2.6-pro' })
+    const kimi = resolveClaudeProfile('kimi', {}, ctx)
+    expect(kimi.model).toBe('kimi-k3[1m]')
+    // Extracted: asymmetric matchers mutate the received object, and the env
+    // also carries the merged backend environment's unrelated variables.
+    const kimiEnv = { ...kimi.env }
+    expect(kimiEnv).toMatchObject({
+      ANTHROPIC_BASE_URL: 'https://api.moonshot.ai/anthropic',
+      ANTHROPIC_MODEL: 'kimi-k3[1m]',
+      ANTHROPIC_DEFAULT_OPUS_MODEL: 'kimi-k3[1m]',
+      ANTHROPIC_DEFAULT_SONNET_MODEL: 'kimi-k3[1m]',
+      ANTHROPIC_DEFAULT_HAIKU_MODEL: 'kimi-k3[1m]',
+      ANTHROPIC_DEFAULT_FABLE_MODEL: 'kimi-k3[1m]',
+      CLAUDE_CODE_AUTO_COMPACT_WINDOW: '1000000',
+    })
+  })
+  test('shipped profiles off api.z.ai map every Claude tier to a provider model', () => {
+    // resolveClaudeProfile() clears inherited profile-controlled variables, so
+    // an unmapped tier would send a Claude model name to the provider.
+    const catalog = JSON.parse(
+      fs.readFileSync(path.resolve(import.meta.dir, '../../../config/profiles.default.json'), 'utf8'),
+    ) as Record<string, { model?: string; env?: Record<string, string> }>
+    const tiers = ['ANTHROPIC_DEFAULT_OPUS_MODEL', 'ANTHROPIC_DEFAULT_SONNET_MODEL', 'ANTHROPIC_DEFAULT_HAIKU_MODEL', 'ANTHROPIC_DEFAULT_FABLE_MODEL']
+    for (const [id, entry] of Object.entries(catalog)) {
+      const base = entry.env?.ANTHROPIC_BASE_URL
+      if (!base || new URL(base).host === 'api.z.ai') continue
+      expect(entry.model, `${id} startup model`).toBeTruthy()
+      for (const tier of tiers) expect(entry.env?.[tier], `${id} ${tier}`).toBeTruthy()
+    }
+    // And the shipped catalog resolves cleanly (every env name is
+    // profile-controlled, no file failures).
+    const reported: string[][] = []
+    resolveClaudeProfile('default', {}, { homeDir: tempHome }, errors => reported.push(errors))
+    expect(reported).toEqual([])
   })
   test('a user-catalog LAN entry resolves like a shipped profile would', () => {
     catalogWithLan()

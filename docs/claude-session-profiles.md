@@ -13,9 +13,9 @@ The shipped default catalog:
 | default | Default | Existing server environment and global provider Settings |
 | glm | GLM | `https://api.z.ai/api/anthropic`; starts on Opus, mapped to `glm-5.3[1m]`; Sonnet maps to `glm-5.3-flash[1m]`; auto-compact window `1000000`; reset zone `Asia/Shanghai` |
 | glm-flash | GLM Flash | `https://api.z.ai/api/anthropic`; starts on Sonnet, mapped to `glm-5.3-flash[1m]`; Opus maps to `glm-5.3[1m]`; auto-compact window `1000000`; reset zone `Asia/Shanghai` |
-| minimax | MiniMax | `https://api.minimax.io/anthropic`; `MiniMax-M3` |
-| mimo | MiMo | `https://api.xiaomimimo.com/anthropic`; starts on `mimo-v2.6-pro`; Sonnet maps to `mimo-v2.6-flash`, Opus to `mimo-v2.6-pro` |
-| kimi | Kimi | `https://api.moonshot.ai/anthropic`; no prescribed model |
+| minimax | MiniMax | `https://api.minimax.io/anthropic`; starts on `MiniMax-M3`; every Claude tier maps to `MiniMax-M3` ([reference](https://platform.minimax.io/docs/token-plan/claude-code)) |
+| mimo | MiMo | `https://api.xiaomimimo.com/anthropic`; starts on `mimo-v2.6-pro`; Sonnet maps to `mimo-v2.6-flash`, Opus/Haiku/Fable to `mimo-v2.6-pro` ([reference](https://mimo.mi.com/docs/en-US/tokenplan/integration/claudecode)) |
+| kimi | Kimi | `https://api.moonshot.ai/anthropic`; starts on `kimi-k3[1m]`; every Claude tier maps to `kimi-k3[1m]`; auto-compact window `1000000` ([reference](https://platform.kimi.ai/docs/guide/claude-code-kimi#configuration-reference)) |
 | opus | Claude Opus | prescribed model `claude-opus-5-5` |
 | sonnet | Claude Sonnet | prescribed model `claude-sonnet-5-5` |
 | haiku | Claude Haiku | prescribed model `claude-haiku-5-5` |
@@ -107,9 +107,19 @@ cleans and applies named-profile controlled variables. Controlled variables
 are routing, model and model aliases, attribution, and auto-compaction fields
 listed in PROFILE_CONTROLLED_ENV. Named profiles neutralize conflicting
 user/project/local environment settings through the SDK flag settings layer.
-Prescribed startup models use options.model. Kimi retains normal model
-selection from Claude settings. Unrelated project settings and instructions
-still load. Managed organization policies retain their authority.
+Prescribed startup models use options.model. Unrelated project settings and
+instructions still load. Managed organization policies retain their authority.
+
+Two deliberate Kimi deviations from [Moonshot's example](https://platform.kimi.ai/docs/guide/claude-code-kimi#configuration-reference):
+Haiku stays on `kimi-k3[1m]`, not `kimi-k2.7-code`, which rejects requests
+with thinking off (`400 invalid thinking`) while Haiku-tier background calls
+can run with thinking off; and there is no `CLAUDE_CODE_SUBAGENT_MODEL` —
+catalog files accept only profile-controlled variable names and any other
+name rejects the whole file, while fully mapped tiers already resolve
+subagents to `kimi-k3[1m]`. `CLAUDE_CODE_EFFORT_LEVEL` is never set: it is
+not profile-controlled and would override kawai's group effort. The GLM
+profiles need no tier mapping: [Z.AI maps unmapped Claude tiers to GLM
+models on its own servers](https://docs.z.ai/scenario-example/develop-tools/claude).
 
 Default retains global provider configuration unchanged. Named profiles retain
 credentials and unrelated runtime variables from it. Provide suitable API keys,

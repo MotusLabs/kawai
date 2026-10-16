@@ -53,11 +53,11 @@ Each named profile SHALL apply its predefined environment configuration to its a
 
 #### Scenario: MiniMax and MiMo configuration
 - **WHEN** MiniMax or MiMo sessions start
-- **THEN** MiniMax uses https://api.minimax.io/anthropic with MiniMax-M3, and MiMo uses https://api.xiaomimimo.com/anthropic with mimo-v2.6-pro while mapping Sonnet to mimo-v2.6-flash and Opus to mimo-v2.6-pro
+- **THEN** MiniMax uses https://api.minimax.io/anthropic starting on MiniMax-M3 with every Claude tier mapped to MiniMax-M3, and MiMo uses https://api.xiaomimimo.com/anthropic starting on mimo-v2.6-pro while mapping Sonnet to mimo-v2.6-flash and Opus, Haiku, and Fable to mimo-v2.6-pro
 
 #### Scenario: Kimi configuration
 - **WHEN** a Kimi chat session starts
-- **THEN** it uses https://api.moonshot.ai/anthropic and imposes no model override absent from its predefined configuration
+- **THEN** it uses https://api.moonshot.ai/anthropic starting on kimi-k3[1m] with every Claude tier mapped to kimi-k3[1m] and a 1000000-token auto-compact window
 
 #### Scenario: Profiles do not leak between sessions
 - **WHEN** GLM and MiniMax sessions run concurrently on a backend with MiMo model and compaction variables
