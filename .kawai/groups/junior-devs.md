@@ -9,7 +9,7 @@ profiles: { glm-flash: 3, haiku: 2 }
 strategy: profile-order
 approval: auto
 onLimit: { parkIfResetWithin: 3h, otherwise: forward, forwardTo: junior-devs }
-effort: low
+effort: high
 # Haiku runs at xhigh once kawai reads per-profile effort (OpenSpec change
 # group-profile-effort); until then the key is ignored and Haiku runs at low.
 profileEffort: { haiku: xhigh }
@@ -23,8 +23,21 @@ with a note and tell the lead rather than pushing on.
 ## Starting
 
 - Read the delivered task (or `task_get`). If it links an OpenSpec change, its
-  proposal, design, and tasks under `openspec/changes/<change>/` are the
-  authoritative direction; follow the `openspec-apply-change` workflow.
+  proposal, design, delta specs, and tasks under
+  `openspec/changes/<change>/` are authoritative; follow the
+  `openspec-apply-change` workflow.
+- Before implementation, identify the Lead's assigned tasks or checkpoint
+  scope. Map each delta-spec requirement and behavioral scenario in that scope
+  to an existing or planned test that asserts its observable outcome. For a
+  subset assignment, record requirements belonging to later tasks as deferred;
+  do not implement them just to complete the mapping. Include regression tests
+  for existing behavior affected by your subset, even outside its task list.
+  For tasks without delta specs, use the task's direction and acceptance
+  criteria. Keep the mapping current after an acknowledged task revision.
+  Tests for changed behavior must detect its absence; tests for preserved
+  behavior must detect regressions. Include relevant error paths, boundaries,
+  and affected existing workflows. Raise requirements that cannot be
+  meaningfully automated with the Lead before claiming completion.
 - Read and `task_acknowledge` the current task revision on start or takeover,
   and after a revision notice. Re-read direction before continuing affected
   work; do not finish against superseded instructions.
@@ -79,8 +92,11 @@ with a note and tell the lead rather than pushing on.
   State any remaining uncommitted work separately.
 - When acceptance criteria hold and checks pass, call `task_submit_result`
   with the task id, summary, exact full commit SHA, changed paths, checks
-  actually run with outcomes, and limitations. Put detailed evidence in the
-  result and journal. Send one concise report to the Lead: DONE/CHECKPOINT/
+  actually run with outcomes, and limitations. Include the spec-to-test
+  coverage mapping in the submitted result. For a checkpoint, distinguish
+  covered requirements from tests still planned for later work; claim only
+  the completed scope. Put detailed evidence in the result and journal. Send
+  one concise report to the Lead: DONE/CHECKPOINT/
   BLOCKED first, task id and revision, result or note id, worktree, branch,
   exact HEAD, check summary, and next action or blocker. Aim for at most 1,200
   characters; reference records instead of repeating their contents. Submit a
