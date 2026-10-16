@@ -87,16 +87,23 @@ describe('OpenspecAdapter probe', () => {
     expect(missing.error).toBe('openspec executable not found')
   })
 
-  test('caches the probe for ten minutes and re-probes on force', async () => {
+  test('caches only a successful probe; a failed one re-probes next call', async () => {
     let calls = 0
-    const counting: OpenspecRunner = async () => { calls += 1; return { ok: true, exitCode: 0, stdout: '1.14.2', stderr: '', timedOut: false } }
+    const counting: OpenspecRunner = async () => {
+      calls += 1
+      return { ok: calls === 1, exitCode: calls === 1 ? 0 : 1, stdout: calls === 1 ? 'openspec tomorrow' : '1.14.2', stderr: '', timedOut: false }
+    }
     const adapter = new OpenspecAdapter(counting)
-    await adapter.probe(true)
-    await adapter.probe()
-    await adapter.probe()
-    expect(calls).toBe(1)
-    await adapter.probe(true)
+    const failed = await adapter.probe(true)
+    expect(failed.ok).toBe(false)
+    const retry = await adapter.probe()
+    expect(retry.ok).toBe(true)
     expect(calls).toBe(2)
+    // A success is cached: no further call.
+    await adapter.probe()
+    expect(calls).toBe(2)
+    await adapter.probe(true)
+    expect(calls).toBe(3)
   })
 })
 
@@ -128,11 +135,25 @@ describe('OpenspecAdapter validate and showDeltas through a stub CLI', () => {
   })
 
   test('a missing executable is unavailable', async () => {
-    process.env.PATH = dir.replace(/^[^:]+:/, '') // drop the stub dir; keep the rest
-    fs.rmSync(path.join(dir, 'openspec'))
-    const probe = await new OpenspecAdapter(undefined, 2_000).probe(true)
-    expect(probe.ok).toBe(false)
-    expect(probe.error).toBe('openspec executable not found')
+    // An isolated PATH with no openspec anywhere: the spawn itself fails.
+    const empty = fs.mkdtempSync(path.join(os.tmpdir(), 'kawai-empty-path-'))
+    const previous = process.env.PATH
+    process.env.PATH = empty
+    try {
+      const probe = await new OpenspecAdapter(undefined, 2_000).probe(true)
+      expect(probe.ok).toBe(false)
+      expect(probe.error).toBe('openspec executable not found')
+    } finally {
+      process.env.PATH = previous
+      fs.rmSync(empty, { recursive: true, force: true })
+    }
+  })
+
+  test('the probe passes --version, verified through the stub', async () => {
+    // The stub answers --version only; a bare `openspec` reaches its
+    // fallthrough, so this fails if the argument is dropped.
+    const probe = await new OpenspecAdapter(undefined, 5_000).probe(true)
+    expect(probe).toEqual({ tool: 'openspec', version: '1.14.2', capabilities: ['validate-strict-json', 'show-deltas-json'], ok: true, error: null })
   })
 
   test('a valid and an invalid change', async () => {

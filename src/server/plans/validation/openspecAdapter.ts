@@ -117,20 +117,20 @@ export class OpenspecAdapter {
 
   constructor(private readonly run: OpenspecRunner = spawnOpenspec, private readonly timeoutMs = ADAPTER_TIMEOUT_MS) {}
 
-  /** The version and capabilities, cached ten minutes (D3). */
+  /** The version and capabilities; a successful probe is cached ten minutes (D3), a failed one re-probes next call. */
   async probe(force = false): Promise<AdapterProbe> {
     if (!force && this.cached && Date.now() - this.cached.at < PROBE_CACHE_MS) return this.cached.probe
-    const call = await this.call([], { cwd: process.cwd() })
+    const call = await this.call(['--version'], { cwd: process.cwd() })
     if (!call.ok && call.exitCode === null && call.stderr === 'openspec spawn failed') {
-      return this.remember({ tool: 'openspec', version: null, capabilities: [], ok: false, error: 'openspec executable not found' })
+      return { tool: 'openspec', version: null, capabilities: [], ok: false, error: 'openspec executable not found' }
     }
     const version = call.stdout.trim()
     const parts = parseVersion(version)
     if (!parts) {
-      return this.remember({ tool: 'openspec', version: null, capabilities: [], ok: false, error: `openspec version unparsable: ${JSON.stringify(version)}` })
+      return { tool: 'openspec', version: null, capabilities: [], ok: false, error: `openspec version unparsable: ${JSON.stringify(version)}` }
     }
     if (!atFloor(parts)) {
-      return this.remember({ tool: 'openspec', version, capabilities: [], ok: false, error: `openspec ${version} is below the supported floor 1.14` })
+      return { tool: 'openspec', version, capabilities: [], ok: false, error: `openspec ${version} is below the supported floor 1.14` }
     }
     return this.remember({ tool: 'openspec', version, capabilities: [VALIDATE_STRICT_JSON, SHOW_DELTAS_JSON], ok: true, error: null })
   }
