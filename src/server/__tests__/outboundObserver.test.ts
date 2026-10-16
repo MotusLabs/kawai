@@ -266,4 +266,31 @@ describe('OutboundObserver', () => {
     expect(calls).toHaveLength(1)
     expect(outcomes).toHaveLength(1)
   })
+
+  test('quoted secrets never reach any stored field — segment included (CC round 4 A)', async () => {
+    // Each command hides its secret inside quotes; the stored segment is the
+    // ORIGINAL source span (quotes intact), so redaction sees the quoting.
+    const commands = [
+      { command: 'gh secret set NAME -b"SECRET V7"', rule: 'gh-write' },
+      { command: 'curl -H "Authorization: Bearer AAA BBB" -d x https://example.internal/hook', rule: 'http-send' },
+      { command: 'gh secret set NAME -b "SEC;RET" && echo pushed', rule: 'gh-write' },
+      { command: 'gh secret set NAME \\\n -b SECRET', rule: 'gh-write' },
+    ]
+    for (const { command, rule } of commands) {
+      const { observer, calls } = harness()
+      observer.onPreToolUse({ ...PRE, toolUseId: command, toolInput: { command } })
+      await flushWrites()
+      expect(calls).toHaveLength(1)
+      const row = calls[0]!
+      expect(row.rule).toBe(rule)
+      for (const field of [row.command, row.destination]) {
+        expect(field).not.toMatch(/SECRET|SEC;RET|AAA BBB/)
+      }
+      const matches = JSON.parse(row.matches) as Array<{ segment: string; destination: string }>
+      for (const match of matches) {
+        expect(match.segment).not.toMatch(/SECRET|SEC;RET|AAA BBB/)
+        expect(match.destination).not.toMatch(/SECRET|SEC;RET|AAA BBB/)
+      }
+    }
+  })
 })

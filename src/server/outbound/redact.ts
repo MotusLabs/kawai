@@ -18,7 +18,44 @@ const HEADERS = 'Authorization|Proxy-Authorization|Cookie|X-Api-Key|PRIVATE-TOKE
 /** A flag or assignment value: quoted (any content up to its close) or bare. */
 // In the template literal below every regex backslash doubles (`\\s`), because
 // a template literal collapses a single `\s` to plain `s`.
-const VALUE = `'[^']*'|"([^"\\\\]|\\\\.)*"|[^\\s;|&'"]+`
+const VALUE = `\\$'[^']*'|'[^']*'|"([^"\\\\]|\\\\.)*"|[^\\s;|&'"]+`
+
+/**
+ * `gh secret set … -b/--body <secret>` (D8): the secret value itself, in
+ * every flag order and quoting. The scan is quote-aware — a `;`, `|`, or
+ * `&` inside quotes never ends the command, so a body like `-b "SEC;RET"`
+ * stays whole — and a backslash-newline continuation is joined before
+ * matching, exactly as the shell reads it.
+ */
+const SECRET_SET = /gh[ \t]+secret[ \t]+set\b/g
+const BODY_FLAG = new RegExp(`(^|[ \t])(-b|--body)(=|[ \t]+)?(${VALUE})`, 'g')
+
+function redactSecretBodies(text: string): string {
+  let joined = text.replace(/\\\n/g, '')
+  SECRET_SET.lastIndex = 0
+  for (;;) {
+    const found = SECRET_SET.exec(joined)
+    if (found === null) return joined
+    // Scan to the command's end: the first unquoted ;, |, &, or newline.
+    let quote: '' | '\'' | '"' | '$' = ''
+    let at = found.index + found[0].length
+    let end = joined.length
+    while (at < joined.length) {
+      const char = joined[at]!
+      if (quote !== '') {
+        if (quote === '$' ? char === '\'' && joined[at - 1] !== '\\' : char === quote && joined[at - 1] !== '\\') quote = ''
+      } else if (char === '\'' || char === '"') quote = char
+      else if (char === '$' && joined[at + 1] === '\'') { quote = '$'; at++ }
+      else if (char === '\\' && at + 1 < joined.length) at++
+      else if (char === ';' || char === '|' || char === '&' || char === '\n') { end = at; break }
+      at++
+    }
+    const segment = joined.slice(found.index, end)
+    const rewritten = segment.replace(BODY_FLAG, `$1$2$3${REDACTED}`)
+    joined = joined.slice(0, found.index) + rewritten + joined.slice(end)
+    SECRET_SET.lastIndex = found.index + rewritten.length
+  }
+}
 
 /** Ordered, eager replaces; each is inert on text already redacted. */
 const RULES: Array<{ pattern: RegExp; replacement: string | ((substring: string, ...groups: string[]) => string) }> = [
@@ -32,15 +69,7 @@ const RULES: Array<{ pattern: RegExp; replacement: string | ((substring: string,
   { pattern: /\bxox[abpr]-[A-Za-z0-9-]{10,}\b/g, replacement: REDACTED },
   { pattern: /\bAKIA[0-9A-Z]{16}\b/g, replacement: REDACTED },
   { pattern: /\beyJ[A-Za-z0-9_-]{4,}\.eyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\b/g, replacement: REDACTED },
-  // `gh secret set … -b/--body <secret>`: the secret value itself (D8), in
-  // every flag order — the whole `gh secret set` segment is rewritten, so
-  // flags-first, `--body` before NAME, and attached forms are covered alike.
-  {
-    pattern: /(?:^|[\n;|&])([^;\n|&]*\bgh[ \t]+secret[ \t]+set\b[^;\n|&]*)/g,
-    replacement: (segment: string) => segment.replace(
-      new RegExp(`(^|[ \t])(-b|--body)(=|[ \t]+)?(${VALUE})`, 'g'),
-      `$1$2$3${REDACTED}`),
-  },
+
   // Header values: quoted (the value runs to the closing quote) and bare.
   { pattern: new RegExp(`(["'])(${HEADERS})[ \\t]*:[ \\t]*[^"']*\\1`, 'gi'), replacement: `$1$2: ${REDACTED}$1` },
   { pattern: new RegExp(`\\b(${HEADERS})([ \\t]*:)[ \\t]*[A-Za-z0-9_.+=-]+`, 'gi'), replacement: `$1$2${REDACTED}` },
@@ -83,7 +112,9 @@ const USER_PASS = (value: string): boolean =>
 
 /** Redact every secret shape D8 lists; over-redaction beats a leak. */
 export function redact(text: string): string {
-  let result = text
+  // The gh secret set scan joins continuations and returns that text, so
+  // every later rule — and the stored field — sees the shell-equivalent form.
+  let result = redactSecretBodies(text)
   for (const rule of RULES) {
     result = typeof rule.replacement === 'string'
       ? result.replace(rule.pattern, rule.replacement)

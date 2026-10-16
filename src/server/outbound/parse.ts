@@ -11,6 +11,9 @@
 export interface Token {
   kind: 'word' | 'op'
   text: string
+  /** Where the token sits in the source: its span keeps quotes intact (D4). */
+  start: number
+  end: number
   /** A word holding unexpanded shell text (`$VAR`, `$(…)`, backticks). */
   opaque?: boolean
 }
@@ -21,18 +24,26 @@ export function tokenize(input: string): Token[] {
   let word = ''
   let opaque = false
   let atWordStart = true
+  let wordStart = -1
   const flush = () => {
     if (word !== '' || opaque) {
-      tokens.push({ kind: 'word', text: word, ...(opaque ? { opaque: true } : {}) })
+      tokens.push({ kind: 'word', text: word, start: wordStart === -1 ? i : wordStart, end: i, ...(opaque ? { opaque: true } : {}) })
     }
     word = ''
     opaque = false
     atWordStart = true
+    wordStart = -1
   }
-  const pushOp = (text: string) => { flush(); tokens.push({ kind: 'op', text }) }
+  const pushOp = (text: string) => {
+    const opStart = i
+    flush()
+    tokens.push({ kind: 'op', text, start: opStart, end: opStart + text.length })
+  }
   let i = 0
   while (i < input.length) {
     const char = input[i]!
+    // A word starts here: its span keeps the quotes it opens (D4).
+    if (wordStart === -1 && word === '' && !/\s/.test(char)) wordStart = i
     if (char === "'") {
       // Literal until the closing quote; a word made only of it stays one.
       const end = input.indexOf("'", i + 1)
@@ -105,6 +116,7 @@ export function tokenize(input: string): Token[] {
       const fd = /^\d+$/.test(word) ? word : ''
       if (fd === '') flush()
       else word = ''
+      wordStart = i
       let blob = fd + char
       i++
       if ((char === '<' || char === '>') && (input[i] === '<' || input[i] === '>' || input[i] === '&')) {
@@ -117,10 +129,11 @@ export function tokenize(input: string): Token[] {
       if (blob.endsWith('<<')) {
         if (input[i] === '-') { blob += '-'; i++ }
         flush()
-        tokens.push({ kind: 'word', text: blob })
+        tokens.push({ kind: 'word', text: blob, start: wordStart === -1 ? i : wordStart, end: i })
         let delimiter = ''
+        const delimiterStart = i
         while (i < input.length && !/[\s;|&<>"']/.test(input[i]!)) { delimiter += input[i]!; i++ }
-        if (delimiter !== '') tokens.push({ kind: 'word', text: delimiter })
+        if (delimiter !== '') tokens.push({ kind: 'word', text: delimiter, start: delimiterStart, end: i })
         atWordStart = false
         continue
       }
@@ -170,7 +183,11 @@ function readExpansion(input: string, i: number): { text: string; next: number }
 export interface CommandSegment {
   /** The command words after one-level unwrap and redirect removal. */
   argv: string[]
-  /** The segment as reconstructed words, for the audit record. */
+  /**
+   * The segment's original source span, quotes and whitespace intact — the
+   * audit record stores this (D8: redaction sees the quoting), never
+   * rejoined words.
+   */
   text: string
   /** The effective cwd: the initial one, moved by `cd`, pinned by `git -C`. */
   cwd: string
@@ -216,12 +233,20 @@ interface Built {
   chdir?: string
 }
 
+/** The segment's original source span, when the words carry one. */
+interface SourceSpan {
+  command: string
+  start: number
+  end: number
+}
+
 /** Build one segment (or a subshell's segments) from its raw words. */
 function buildSegment(
   words: Array<{ text: string; opaque: boolean }>,
   runningEnv: ReadonlyMap<string, string | null>,
   cwd: string,
-  depth: number
+  depth: number,
+  span: SourceSpan | null
 ): Built {
   const cleaned = withoutRedirects(words)
   const env = new Map(runningEnv)
@@ -307,7 +332,7 @@ function buildSegment(
     if (target !== null) chdir = target
   }
   return {
-    segments: [{ argv, text: argv.join(' '), cwd: segmentCwd, env }],
+    segments: [{ argv, text: span === null ? argv.join(' ') : span.command.slice(span.start, span.end), cwd: segmentCwd, env }],
     envUpdates,
     envDeletes,
     ...(chdir === undefined ? {} : { chdir }),
@@ -344,9 +369,11 @@ function parseSegments(
   let pendingBody = false
   let delimiter = ''
   const cwdStack: string[] = []
+  let span: SourceSpan | null = null
   const finish = () => {
-    const built = buildSegment(words, runningEnv, cwd, depth)
+    const built = buildSegment(words, runningEnv, cwd, depth, span)
     words = []
+    span = null
     for (const name of built.envDeletes) runningEnv.delete(name)
     for (const [name, value] of built.envUpdates) runningEnv.set(name, value)
     if (built.chdir !== undefined) cwd = built.chdir
@@ -359,6 +386,7 @@ function parseSegments(
     }
     if (token.kind === 'op') {
       finish()
+      span = null
       // A heredoc body starts at the newline that ends its command line.
       if (token.text === '\n' && pendingBody) {
         heredocDelimiter = delimiter
@@ -380,6 +408,10 @@ function parseSegments(
       continue
     }
     words.push({ text: token.text, opaque: token.opaque ?? false })
+    // The segment's span grows to cover every word token, in source order.
+    span = span === null
+      ? { command, start: token.start, end: token.end }
+      : { command, start: Math.min(span.start, token.start), end: Math.max(span.end, token.end) }
   }
   finish()
   return segments
