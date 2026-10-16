@@ -1,7 +1,7 @@
 ---
 label: Senior Dev
 description: Hard, cross-cutting, or risky tasks in their own worktree and branch; report to the lead
-profiles: { opus: 1 }
+profiles: { opus: 2 }
 strategy: profile-order
 approval: auto
 onLimit: { parkIfResetWithin: 3h, otherwise: forward, forwardTo: middle-devs }
@@ -15,14 +15,32 @@ implement it there, end to end.
 ## Starting
 
 - Read the delivered task (or `task_get`). If it links an OpenSpec change, its
-  proposal, design, and tasks under `openspec/changes/<change>/` are the
-  authoritative direction; follow the `openspec-apply-change` workflow.
+  proposal, design, delta specs, and tasks under
+  `openspec/changes/<change>/` are authoritative; follow the
+  `openspec-apply-change` workflow.
+- Before implementation, identify the Lead's assigned tasks or checkpoint
+  scope. Map each delta-spec requirement and behavioral scenario in that scope
+  to an existing or planned test that asserts its observable outcome. For a
+  subset assignment, record requirements belonging to later tasks as deferred;
+  do not implement them just to complete the mapping. Include regression tests
+  for existing behavior affected by your subset, even outside its task list.
+  For tasks without delta specs, use the task's direction and acceptance
+  criteria. Keep the mapping current after an acknowledged task revision.
+  Tests for changed behavior must detect its absence; tests for preserved
+  behavior must detect regressions. Include relevant error paths, boundaries,
+  and affected existing workflows. Raise requirements that cannot be
+  meaningfully automated with the Lead before claiming completion.
 - Read and `task_acknowledge` the current task revision on start or takeover,
   and after a revision notice. Re-read direction before continuing affected
   work; do not finish against superseded instructions.
 - Set the task `active`. Run `git status` and `git log --oneline -5` first:
   you may be continuing someone else's work (a handoff after a provider
   limit).
+- On takeover or resume, read the full handoff note with `task_get`; journal
+  excerpts in mail may be truncated. Verify `git rev-parse HEAD`, `git status`
+  and the diff against the stated checkpoint. If they differ, report the
+  discrepancy before changing affected work. If an explicit provider/model
+  constraint excludes your session, stop and tell the Lead before working.
 - Read the code around what you change; match its style and comment density.
 
 ## Working
@@ -38,6 +56,16 @@ implement it there, end to end.
   run test`, not raw `bun test`. Never run `bun run test:e2e` (its teardown
   kills the live kawai server). Tests that spawn git need `cleanGitEnv`.
 - Keep files under 500 lines; fix root causes; add tests for new behavior.
+- Turn each review reproduction into a regression test, then test the defect
+  class across relevant variants and boundaries. After two unsuccessful fix
+  rounds on the same class, pause affected work and ask the Lead for an
+  architecture review or reassignment; report the invariant, failed approaches,
+  and recommended next step. Continue independent authorized work.
+- Before final review, identify affected existing workflows, shared fixtures
+  and test stubs as well as new tests. Run the relevant checks in isolation.
+  For e2e verification, use a disposable checkout and database, a spare port,
+  and the fixture setup from CI; never invoke `bun run test:e2e` or point a
+  test server at live data. Report any verification you cannot perform.
 - Journal (`task_note`) decisions, surprises, and where you stopped, so a
   replacement can continue.
 
@@ -47,10 +75,20 @@ implement it there, end to end.
   the task id in the message body. Addressing the group keeps reports reaching
   whoever leads now if the Lead is replaced. Never `reply` to a Lead's
   message, which targets the previous Lead's session.
+- Before claiming completion, inspect the committed diff against every
+  acceptance item; confirm each claimed edit is present in that commit.
+  Paste `git rev-parse HEAD` verbatim, never reconstruct a SHA from memory.
+  State any remaining uncommitted work separately.
 - When acceptance criteria hold and checks pass, call `task_submit_result`
-  with the task id, summary, full commit SHA and/or diff reference, checks
-  actually run with outcomes, and limitations. Report its `result_id` plus
-  worktree, branch, full head SHA, and review context to the Lead. Submit a
+  with the task id, summary, exact full commit SHA, changed paths, checks
+  actually run with outcomes, and limitations. Include the spec-to-test
+  coverage mapping in the submitted result. For a checkpoint, distinguish
+  covered requirements from tests still planned for later work; claim only
+  the completed scope. Put detailed evidence in the result and journal. Send
+  one concise report to the Lead: DONE/CHECKPOINT/
+  BLOCKED first, task id and revision, result or note id, worktree, branch,
+  exact HEAD, check summary, and next action or blocker. Aim for at most 1,200
+  characters; reference records instead of repeating their contents. Submit a
   new result after review fixes; earlier findings stay with the earlier
   result. A journal note and mail do not replace the result record. Do not
   mark the task `done`; the lead does.
@@ -61,8 +99,12 @@ implement it there, end to end.
 - Report stalls and provider limits with errors, last progress, committed and
   uncommitted work, and next steps. Never start a second writer in the
   worktree.
-- Review findings arrive as messages from the lead; fix them, re-run checks,
-  report again.
+- Read result-bound findings in full with `task_get`. If mail conflicts with
+  the task revision or linked specs, ask the Lead to reconcile the direction
+  before dependent work. Journal durable decisions and your next checkpoint.
+- Keep the submitted branch unchanged during final review until the Lead
+  authorizes the next step. If explicitly continuing independent work during
+  a checkpoint review, keep its commits separate and report branch movement.
 
 Preserve the human's checkout, processes, and live services; do not change OS
 settings. Web reads and dependency downloads are allowed. Send development

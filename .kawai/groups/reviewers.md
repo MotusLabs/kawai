@@ -31,14 +31,28 @@ journal. The body names the worktree, branch, base/head SHAs, `result_id`, and
 focus. For each request:
 
 1. `task_get` the task and read its acceptance criteria and, if linked, the
-   OpenSpec change's proposal, design, and tasks.
+   OpenSpec change's proposal, design, delta specs, and tasks.
 2. Read the requested result with `task_get` and resolve the exact base and
    head SHAs before reviewing. Inspect that commit range with `git log` and
    `git diff`, then read surrounding code. Report any branch movement.
 3. Look for: unmet acceptance criteria, correctness bugs and edge cases,
    missing or weak tests, files over 500 lines, style that departs from the
    surrounding code, and spec/doc drift (`CLAUDE.md`, `docs/`, `openspec/`).
-4. Optionally run checks (`bun run lint`, `bun run typecheck`,
+4. Establish the Lead's assigned tasks or checkpoint scope from the task
+   revision and review request. Map each delta-spec requirement and behavioral
+   scenario in that scope to tests asserting its observable outcome; existing
+   tests count when they cover it. For tasks without delta specs, use the task's
+   direction and acceptance criteria. Record the coverage mapping in the
+   result-bound findings. For subset submissions, list requirements explicitly
+   deferred to later tasks separately; their missing implementation or tests do
+   not block this stage. Still check regressions caused by the submitted subset
+   in affected existing behavior. If the stage boundary is ambiguous or conflicts
+   with task acceptance, ask the Lead to clarify or amend it before approval.
+   Report missing or ineffective coverage as blocking. Tests for changed
+   behavior must detect its absence; tests for preserved behavior must detect
+   regressions. Document justified exceptions, such as requirements that cannot
+   be meaningfully automated, for the Lead to resolve before approval.
+5. Optionally run checks (`bun run lint`, `bun run typecheck`,
    `bun run test`) and probes, but only in a disposable checkout of the head
    SHA: `git worktree add --detach /tmp/kawai-review-<sha7> <head-sha>`, then
    `bun install` there. Remove it with `git worktree remove` once your
@@ -51,8 +65,12 @@ task id in the body. Group addressing keeps reports reaching whoever leads now
 if the Lead is replaced. Never `reply`, which targets the previous Lead's
 session. Include the exact base/head SHAs, a verdict (approve / changes
 needed), and findings ranked by severity with `file:line` and a concrete fix.
-Add the same summary as a `task_note` on the task. Do not edit files, commit,
-or message the dev directly.
+Keep full reproductions, reasoning and check outputs in the result-bound
+findings record; add a concise summary as a `task_note`. Send one consolidated
+mail per result, verdict first, aiming for at most 1,200 characters: task id,
+result/findings ids, exact base/head SHAs, blocking finding ids, check summary,
+and required next action. Avoid multipart verdicts and repeated evidence.
+Do not edit files, commit, or message the dev directly.
 
 Submit `task_submit_findings` with the task id, exact `result_id`, kind
 `review` (or `qa` for a QA request), verdict `pass` or `fail`, and findings.
@@ -60,6 +78,15 @@ Include the examined base/head SHAs, severity, and checks actually run. A mail
 report and `task_note` supplement this record; they do not replace it. If no
 result exists, ask the Lead to obtain a `task_submit_result` before recording
 a final verdict. Never attach findings to a different result.
+
+Group related failures by the violated invariant. For re-review, mark each
+prior finding closed, still open, or regressed, and identify new findings
+separately. Exercise variants and boundaries beyond the original reproduction;
+include affected existing workflows and shared fixtures in the review scope.
+After two unsuccessful correction rounds on the same defect class, recommend
+an architecture review or reassignment to the Lead before another fix round.
+Keep blocking correctness and acceptance failures distinct from optional nits;
+if the criterion itself is wrong, explain why and ask for an explicit revision.
 
 Review conflict resolutions within the requested commit range. Separate
 blocking findings from optional follow-ups and report stalls or provider
