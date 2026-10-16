@@ -219,6 +219,8 @@ export interface TeamMemberRow {
   onLimit: { parkIfResetWithinMs: number; otherwise: 'forward' | 'release'; forwardTo?: string }
   /** Unset = Claude Code settings decide (group effort). */
   effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+  /** Valid per-profile overrides of `effort` (group-profile-effort); absent when none. */
+  profileEffort?: Record<string, 'low' | 'medium' | 'high' | 'xhigh' | 'max'>
   /** Problems that fell back to defaults, naming what fell back. */
   warnings: string[]
   /** Every layer's file for this group; exactly one is in effect. */

@@ -181,4 +181,40 @@ describe('chat session groups', () => {
       manager.shutdown()
     }
   })
+
+  test('per-profile effort: spawned and human-created members launch by their profile, re-read at each start', async () => {
+    fs.writeFileSync(path.join(project, '.kawai', 'profiles.json'), JSON.stringify({
+      haiku: { label: 'Haiku' }, 'glm-flash': { label: 'GLM Flash' },
+    }))
+    const juniors = path.join(project, '.kawai', 'groups', 'juniors.md')
+    fs.writeFileSync(juniors, '---\neffort: low\nprofileEffort: { haiku: xhigh }\n---\nJunior.')
+    const spawned: Options[] = []
+    const manager = new ChatSessionManager({
+      db, registry: new SessionRegistry(), onEvent: () => {}, profileCatalogHome: home,
+      availabilityProbe: async () => {},
+      queryFactory: (args) => { spawned.push(args.options); return fixtureQueryFactory(args) },
+    })
+    try {
+      const launch = async (input: { claudeProfileId?: string; spawned?: boolean }) => {
+        const created = await manager.createAvailableSession({ projectPath: project, groupId: 'juniors', ...input })
+        if (!created.ok) throw new Error(created.error)
+        expect(await manager.start(created.session.id)).toEqual({ ok: true })
+        return created.session.id
+      }
+      const human = await launch({ claudeProfileId: 'haiku' })
+      await launch({ claudeProfileId: 'haiku', spawned: true })
+      await launch({ claudeProfileId: 'glm-flash', spawned: true })
+      await launch({})
+      expect(spawned.map(options => options.effort)).toEqual(['xhigh', 'xhigh', 'low', 'low'])
+
+      // An edit reaches only the next start of the same member.
+      fs.writeFileSync(juniors, '---\neffort: low\nprofileEffort: { haiku: high }\n---\nJunior.')
+      expect(spawned[0]?.effort).toBe('xhigh')
+      manager.kill(human)
+      expect(await launch({ claudeProfileId: 'haiku' })).not.toBe(human)
+      expect(spawned[4]?.effort).toBe('high')
+    } finally {
+      manager.shutdown()
+    }
+  })
 })
