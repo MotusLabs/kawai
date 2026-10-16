@@ -92,8 +92,8 @@ the earlier ones are full or cooling:
 - `senior-devs` (1 Claude Opus, medium effort): cross-cutting or risky
   changes, concurrency and protocol code, work others could not land. Scarce:
   save it for tasks that need it.
-- `middle-devs` (2 GLM-5.3, then 2 Claude Sonnet at high effort, then 1 MiMo):
-  the default for ordinary features and fixes.
+- `middle-devs` (2 GLM-5.3-flash, then 2 Claude Sonnet, then 1 MiMo, all at
+  high effort): the default for ordinary features and fixes.
 - `junior-devs` (3 GLM-5.3-flash at low effort): small, well-specified fixes,
   tests, docs, and mechanical changes.
 
