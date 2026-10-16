@@ -388,8 +388,35 @@ function mergeEnv(base: ReadonlyMap<string, string | null>, overlay: ReadonlyMap
  * `bash -c` unwrapped, and each segment carrying the literal assignments that
  * precede it or that an earlier assignment or `export` segment set.
  */
+/**
+ * A backslash-newline continuation joins the lines, except inside single
+ * quotes where both characters are literal (round 5 R2): `git \⏎push …`
+ * tokenizes as one `git push` segment.
+ */
+function joinContinuations(command: string): string {
+  let quoted = false
+  let out = ''
+  for (let i = 0; i < command.length; i++) {
+    const char = command[i]!
+    if (quoted) {
+      out += char
+      if (char === "'") quoted = false
+      continue
+    }
+    if (char === '\\') {
+      if (command[i + 1] === '\n') { i++; continue }
+      if (command[i + 1] !== undefined) { out += char + command[i + 1]!; i++; continue }
+      out += char
+      continue
+    }
+    if (char === "'") quoted = true
+    out += char
+  }
+  return out
+}
+
 export function parseCommand(command: string, initialCwd: string): CommandSegment[] {
-  return parseSegments(command, initialCwd, new Map(), 0)
+  return parseSegments(joinContinuations(command), initialCwd, new Map(), 0)
 }
 
 function parseSegments(

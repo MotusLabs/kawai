@@ -172,6 +172,14 @@ describe('redact: CC round 3 (body forms, linear userinfo, over-redaction)', () 
     }
   })
 
+  test('the gh secret set continuation join is load-bearing (round 5 R2)', () => {
+    // Without the join, the segment scan stops at the newline and the body
+    // flag on the next line leaks whole.
+    const out = redact('gh secret set NAME \\\n -b SECRET')
+    expect(out).not.toContain('SECRET')
+    expect(out).toContain('‹redacted›')
+  })
+
   test('a 16 KiB read bound keeps every stored character redacted', () => {
     // A secret at 10 KiB — past nothing: inside the read bound, redacted.
     const command = `echo ${'x'.repeat(10_000)} ghp_ABCDEFghijklmnop0123456789`

