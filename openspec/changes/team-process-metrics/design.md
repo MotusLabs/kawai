@@ -101,7 +101,7 @@ CREATE INDEX team_task_status_events_team ON team_task_status_events (team_id, a
   2. **Their history, by id, with no time bound:** each cohort task's row and full status history, every result and finding of those tasks, every usage row with those task ids, and for every session that did attributed work, its agent starts (the latest at or before each piece of work is chosen in memory).
 
   Intervals crossing the range's start are loaded by overlap. That covers limit events from `end − 2w − 24 h` (routing's read cutoff, so an event before the range can still cool into it) and park episodes whose `parked` event precedes the range but whose end does not.
-  Retention bounds what history exists: a cohort task created before the usage horizon (60 d) gets its tokens marked partial.
+  Retention and recording bound what history exists: a cohort task created before the usage horizon gets its tokens marked partial. The horizon is the later of `end − 60 d` (retention) and the team's first recorded turn (recording began then; `end` when none exists), so tasks predating this change read partial rather than zero.
 - Pure modules compute each family: `flow.ts`, `quality.ts`, `overhead.ts`, `capacity.ts`, `coverage.ts`.
 - `slices.ts` handles attribution.
 - `computeMetrics.ts` assembles `ProcessMetrics` (`src/shared/processMetrics.ts`): per metric its `id`, `family`, `unit`, `value | null`, `n`, `baseline { value, n }`, `insufficient`, `guard` id, and drill-down ids (task ids or message ids).
