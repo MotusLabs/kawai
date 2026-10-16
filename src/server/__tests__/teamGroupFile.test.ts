@@ -251,7 +251,17 @@ describe('parseGroupFile', () => {
     test('a repeated profile keeps the first and the file still parses', () => {
       const group = parse('profileEffort: { haiku: xhigh, haiku: low }\nprofile: haiku')
       expect(group.profileEffort).toEqual({ haiku: 'xhigh' })
-      expect(group.warnings).toEqual(['profileEffort: "haiku" is listed twice; the first entry is kept'])
+      expect(group.warnings).toEqual(['profileEffort: "haiku" is listed twice; the later entry is ignored'])
+    })
+
+    test('the first occurrence decides: an invalid first entry is not replaced by a later valid one', () => {
+      const group = parse('effort: low\nprofileEffort: { haiku: extreme, haiku: high }\nprofile: haiku')
+      expect('profileEffort' in group).toBe(false)
+      expect(group.effort).toBe('low')
+      expect(group.warnings).toEqual([
+        'profileEffort.haiku must be low, medium, high, xhigh, max, got "extreme"; ignored',
+        'profileEffort: "haiku" is listed twice; the later entry is ignored',
+      ])
     })
 
     test('a list, a bare scalar, or a malformed map ignores the whole key', () => {

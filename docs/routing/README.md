@@ -48,11 +48,11 @@ canManageMailbox: true                     # default false
   member whose session profile has an entry launches at that level instead of
   `effort`, spawned or created by you; members on other profiles keep
   `effort`, and with neither they get no effort from kawai. It is read at each
-  agent start like `effort`. A bad entry never
-  rejects the file: a value that is not a map is ignored whole, a bad profile
-  id, a bad level, or a repeated profile (the first is kept) is ignored alone,
-  and an entry for a profile the group does not list is reported but still
-  applies. The Members tab shows the group level followed by each override.
+  agent start like `effort`. A bad entry never rejects the file: a value that
+  is not a map is ignored whole; a bad profile id, a bad level, or a repeat of
+  a profile already listed (the later entry is ignored, even if the first was
+  invalid) is ignored alone; and an entry for a profile the group does not list
+  is reported but still applies. The Members tab shows the group level followed by each override.
 - `releaseOnTaskClose` (default `true`): when a task becomes `done` or
   `cancelled`, its live spawned members are released — archived, never killed —
   once each has settled (idle, no pending approval or answer, no live

@@ -230,7 +230,7 @@ function parseProfileEffort(
   const seen = new Set<string>()
   for (const [profileId, level] of flow.value.entries) {
     if (seen.has(profileId)) {
-      warnings.push(`profileEffort: "${profileId}" is listed twice; the first entry is kept`)
+      warnings.push(`profileEffort: "${profileId}" is listed twice; the later entry is ignored`)
       continue
     }
     seen.add(profileId)
