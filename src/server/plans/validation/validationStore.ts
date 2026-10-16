@@ -63,7 +63,15 @@ export interface NewDecision {
 }
 
 export class ValidationStore {
+  /** Bumped by every insert, so a coalesced view knows when its snapshot aged (D11). */
+  private writes = 0
+
   constructor(private readonly db: Database) {}
+
+  /** The write stamp: changes only when a report, assessment, or decision was inserted. */
+  get writeStamp(): number {
+    return this.writes
+  }
 
   /** Run writes as one transaction. */
   atomically<T>(write: () => T): T {
@@ -78,6 +86,7 @@ export class ValidationStore {
    */
   insertReport(input: NewValidationReport, now = nowIso()): PlanValidationReport {
     const seq = this.nextSeq(input.planId, input.revision)
+    this.writes += 1
     const id = `pvr-${crypto.randomUUID()}`
     this.db.prepare(`INSERT INTO plan_validation_reports
       (id, plan_id, revision, seq, input_hash, inputs_json, findings_json, relations_json, evidence_json, readiness_json, ready, requested_kind, requested_session, created_at)
@@ -114,6 +123,7 @@ export class ValidationStore {
 
   /** Append an assessment; a used command id raises ValidationCommandRaceError. */
   insertAssessment(input: NewAssessment, now = nowIso()): AssessmentRow {
+    this.writes += 1
     const id = `pas-${crypto.randomUUID()}`
     try {
       this.db.prepare(`INSERT INTO plan_assessments (id, plan_id, revision, kind, payload_json, author_kind, author_session, command_id, created_at)
@@ -147,6 +157,7 @@ export class ValidationStore {
 
   /** Append a decision; a used command id raises ValidationCommandRaceError. */
   insertDecision(input: NewDecision, now = nowIso()): DecisionRecord {
+    this.writes += 1
     const id = `pvd-${crypto.randomUUID()}`
     try {
       this.db.prepare(`INSERT INTO plan_validation_decisions (id, plan_id, revision, kind, target, text, scope, actor_kind, command_id, payload_json, created_at)

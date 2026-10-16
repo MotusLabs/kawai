@@ -146,6 +146,23 @@ export interface ValidationCapacityEvidence {
   cooling: Array<{ profile: string; until: string }>
 }
 
+/** A revision's validation standing at read time, as the wire carries it (D9/D11): derived, never stored. */
+export type PlanValidationStanding =
+  | { state: 'not-validated' }
+  | { state: 'blocked'; reportSeq: number }
+  | { state: 'out-of-date'; reportSeq: number; changedParts: string[] }
+  | { state: 'current'; reportSeq: number }
+
+/** The Plans view's Validation section per standing revision (D11). */
+export interface PlanRevisionValidation {
+  revision: number
+  standing: PlanValidationStanding
+  /** The revision's newest report; null when none was stored. */
+  report: PlanValidationReport | null
+  assessments: AssessmentRow[]
+  decisions: DecisionRecord[]
+}
+
 /** Who requested a run. */
 export type ValidationRequester = { kind: 'human' | 'agent'; sessionId: string | null }
 

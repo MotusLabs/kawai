@@ -139,8 +139,8 @@ Implement after `durable-plans` and `strategy-revision-impact` have landed on ma
 
 ## 10. Protocol and pushes
 
-- [ ] 10.1 Add `team-plan-validate`, `team-plan-assess`, and `team-plan-validation-decide` to `src/shared/types.ts` and `CHAT_CONNECTION_TYPES`, answered by `team-plan-result` with additive fields. Verify with routing tests: an unknown team path is refused as `unknown-team`, and another team's plan is refused.
-- [ ] 10.2 Add `validation` to `team-plan-detail` per `in_review` or `approved` revision. Its standing is coalesced per plan every 2 s, and pushes follow validation, assessment, and decision writes. Verify:
+- [x] 10.1 Add `team-plan-validate`, `team-plan-assess`, and `team-plan-validation-decide` to `src/shared/types.ts` and `CHAT_CONNECTION_TYPES`, answered by `team-plan-result` with additive fields. Verify with routing tests: an unknown team path is refused as `unknown-team`, and another team's plan is refused.
+- [x] 10.2 Add `validation` to `team-plan-detail` per `in_review` or `approved` revision. Its standing is coalesced per plan every 2 s, and pushes follow validation, assessment, and decision writes. Verify:
   - a push after each write;
   - coalescing under a burst of linked-task changes;
   - the standing names the changed parts.

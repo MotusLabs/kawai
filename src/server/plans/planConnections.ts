@@ -20,11 +20,17 @@ import type { PlanCommandOutcome } from './planCommands'
 
 type PlanClientMessage = Extract<ClientMessage, { type: `team-plan${string}` }>
 type PlanCommandMessage = Extract<PlanClientMessage, { type: (typeof PLAN_COMMAND_TYPES)[number] }>
+/** plan-validation D11's human actions (team-plan-result answers them too). */
+type PlanValidationCommandMessage = Extract<PlanClientMessage, { type: (typeof VALIDATION_COMMAND_TYPES)[number] }>
 
-/** The human commands; every other plan type opens or closes a subscription. */
+/** The human plan lifecycle commands. */
 const PLAN_COMMAND_TYPES = ['team-plan-approve', 'team-plan-withdraw', 'team-plan-finish', 'team-plan-reopen'] as const
+/** The plan-validation human actions; every other plan type opens or closes a subscription. */
+const VALIDATION_COMMAND_TYPES = ['team-plan-validate', 'team-plan-assess', 'team-plan-validation-decide'] as const
 const isCommand = (message: PlanClientMessage): message is PlanCommandMessage =>
   (PLAN_COMMAND_TYPES as readonly string[]).includes(message.type)
+const isValidationCommand = (message: PlanClientMessage): message is PlanValidationCommandMessage =>
+  (VALIDATION_COMMAND_TYPES as readonly string[]).includes(message.type)
 
 interface Subscription {
   teamId: string
@@ -51,7 +57,9 @@ export class PlanConnections {
         if (subscription.teamId !== teamId) continue
         if (subscription.list) this.sendList(connection, teamPath, subscription)
         for (const id of subscription.details) {
-          if (planId === undefined || id === planId) this.sendDetail(connection, teamPath, subscription, id)
+          // Fire and forget: pushes are a view refresh, and a build racing a
+          // shutdown (the bench's closed database) must not surface anywhere.
+          if (planId === undefined || id === planId) void this.sendDetail(connection, teamPath, subscription, id).catch(() => {})
         }
       }
     }
@@ -64,16 +72,27 @@ export class PlanConnections {
     })
   }
 
-  private sendDetail(connection: ChatConnection, teamPath: string, subscription: Subscription, planId: string) {
-    const detail = this.manager.plans.store.detail(planId)
-    if (detail && detail.plan.teamId === subscription.teamId) {
-      const impact = this.manager.impact.planImpact(subscription.teamId, planId)
-      connection.send({ type: 'team-plan-detail', teamPath, teamId: subscription.teamId, detail, ...(impact ? { impact } : {}) })
+  private async sendDetail(connection: ChatConnection, teamPath: string, subscription: Subscription, planId: string) {
+    try {
+      const detail = this.manager.plans.store.detail(planId)
+      if (detail && detail.plan.teamId === subscription.teamId) {
+        const impact = this.manager.impact.planImpact(subscription.teamId, planId)
+        // plan-validation D11: the Validation section rides the detail, built
+        // through the coalesced cache so bursts of task changes pay once.
+        const validation = await this.manager.validationDetail.detail(planId)
+        connection.send({
+          type: 'team-plan-detail', teamPath, teamId: subscription.teamId, detail,
+          ...(impact ? { impact } : {}), ...(validation.length > 0 ? { validation } : {}),
+        })
+      }
+    } catch {
+      // A view refresh that raced a shutdown or a vanished row is dropped.
     }
   }
 
   async handle(connection: ChatConnection, message: PlanClientMessage) {
     if (isCommand(message)) return this.act(connection, message)
+    if (isValidationCommand(message)) return this.actValidation(connection, message)
     const { teamPath } = message
     const planId = 'planId' in message ? message.planId : undefined
     const target = `${teamPath}\0${planId ?? ''}`
@@ -111,7 +130,8 @@ export class PlanConnections {
       this.sendList(connection, teamPath, subscription)
     } else {
       subscription.details.add(planId)
-      this.sendDetail(connection, teamPath, subscription, planId)
+      // The open's first detail is authoritative: awaited, not pushed.
+      await this.sendDetail(connection, teamPath, subscription, planId)
     }
   }
 
@@ -157,6 +177,58 @@ export class PlanConnections {
         return
       }
       answer({ plan: outcome.plan, event: outcome.event, replayed: outcome.replayed })
+      return
+    } catch (error) {
+      answer({ error: error instanceof Error ? error.message : String(error) })
+    }
+  }
+
+  /** The plan-validation human actions (D11), answered by `team-plan-result` too. */
+  private async actValidation(connection: ChatConnection, message: PlanValidationCommandMessage) {
+    const { teamPath, requestId } = message
+    const answer = (payload: Record<string, unknown>) => connection.send({ type: 'team-plan-result', teamPath, requestId, ...payload })
+    const team = await this.manager.teamScopes.resolve(teamPath)
+    if (!team) {
+      answer({ error: unknownTeamError(teamPath) })
+      return
+    }
+    const caller = { kind: 'human' as const, team }
+    const validation = this.manager.validation
+    try {
+      switch (message.type) {
+        case 'team-plan-validate': {
+          const outcome = await validation.validate(caller, { planId: message.planId, revision: message.revision })
+          if (!outcome.ok) {
+            answer({ error: outcome.message, reason: outcome.reason })
+            return
+          }
+          answer({ validation: { report: outcome.report, stored: outcome.stored, dryRun: outcome.dryRun } })
+          return
+        }
+        case 'team-plan-assess': {
+          const outcome = await validation.assess(caller, {
+            plan_id: message.planId, revision: message.revision, alignment: message.alignment, command_id: message.commandId,
+          })
+          if (!outcome.ok) {
+            answer({ error: outcome.message, reason: outcome.reason })
+            return
+          }
+          answer({ assessment: { ids: outcome.ids, replayed: outcome.replayed } })
+          return
+        }
+        case 'team-plan-validation-decide': {
+          const outcome = await validation.decide(caller, {
+            planId: message.planId, revision: message.revision, kind: message.kind, target: message.target,
+            text: message.text, ...(message.scope !== undefined ? { scope: message.scope } : {}), commandId: message.commandId,
+          })
+          if (!outcome.ok) {
+            answer({ error: outcome.message, reason: outcome.reason })
+            return
+          }
+          answer({ replayed: outcome.replayed })
+          return
+        }
+      }
     } catch (error) {
       answer({ error: error instanceof Error ? error.message : String(error) })
     }
