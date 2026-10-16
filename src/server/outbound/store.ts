@@ -1,11 +1,12 @@
-// The only SQL writer of the audit tables (execution-safety-recovery D6):
-// append-only — this class exposes no update or delete, and no other module
-// writes them. Calls dedupe on `(session_id, tool_use_id)` and outcomes on
-// `(session_id, tool_use_id, outcome)` (both `INSERT OR IGNORE`), so the
-// second report of one tool use is a no-op and an outcome that lands before
-// its queued call row is kept and joins once the row exists. Rows are never
-// pruned. Reads keyset-page newest first with the verdict, rule, session,
-// and time filters the Audit view layers on (D9).
+// The only SQL writer of the audit calls and outcomes (execution-safety-recovery
+// D6): append-only — this class exposes no update or delete, and no other
+// module writes them. Calls dedupe on `(session_id, tool_use_id)` and
+// outcomes on `(session_id, tool_use_id, outcome)` (both
+// `INSERT … ON CONFLICT DO NOTHING`), so the second report of one tool use
+// is a no-op and an outcome that lands before its deferred call row is kept
+// and joins once the row exists. Rows are never pruned. Reads keyset-page
+// newest first with the verdict, rule, session, and time filters the Audit
+// view layers on (D9).
 import type { Database, SQLQueryBindings } from 'bun:sqlite'
 
 /** One recorded send (D6 columns; `matches` stays its JSON string here). */

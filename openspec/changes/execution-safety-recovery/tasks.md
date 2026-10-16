@@ -2,7 +2,7 @@
 
 Order:
 - group 6 (the migration runner and backups) lands first;
-- group 3 follows group 6, because migration 2 needs the runner;
+- group 3 follows group 6, because migration 3 needs the runner;
 - groups 1, 2, and 5 are independent of the others;
 - group 4 waits until `team-workspace-pages` and `durable-plans` are on master: it needs the tab model and durable-plans' host-agnostic mount pattern (D12), not the Plans tab itself;
 - group 7 comes last, after `plan-execution`, `integration-candidates`, `plan-supervision`, and `revision-control` merge.

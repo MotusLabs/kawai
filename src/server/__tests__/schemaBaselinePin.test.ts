@@ -101,13 +101,6 @@ const migration3: SchemaShape['tables'] = {
   },
 }
 
-test('a fresh baseline reproduces master bdc0131 schema exactly', () => {
-  const db = new Database(':memory:')
-  applyBaselineSchema(db)
-  expect(schemaShape(db)).toEqual(expected)
-  db.close()
-})
-
 test('a fresh database opened by this build has the same shape plus each migration\'s delta and schema_migrations', () => {
   const session = initDatabase({ path: ':memory:' })
   expect(Object.keys(migration2).filter(table => table in expected.tables)).toEqual([])

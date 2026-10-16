@@ -2,9 +2,10 @@
 // append-only audit tables — `outbound_calls`, `outbound_outcomes`,
 // `outbound_acknowledgements`. No UPDATE or DELETE statement for them exists
 // anywhere (E3); rows are never pruned. `OutboundStore`
-// (`src/server/outbound/store.ts`) is their only SQL writer. An outcome may
-// be written before its call row (the call insert is queued, D3), so
-// outcomes key on `(session_id, tool_use_id)` and the read joins.
+// (`src/server/outbound/store.ts`) is the only writer of the calls and
+// outcomes tables. An outcome may be written before its call row (the call
+// insert is deferred, D3), so outcomes key on
+// `(session_id, tool_use_id, outcome)` and the read joins.
 import type { Database } from 'bun:sqlite'
 import type { Migration } from '../dbSafety/migrations'
 

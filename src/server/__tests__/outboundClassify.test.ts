@@ -350,7 +350,7 @@ describe('CC checkpoint findings: curl targets, clusters, and unwrapping', () =>
     const both = judged('curl -d x https://hook.example.internal https://x.example.com')
     expect(both.map(match => match.destination)).toEqual(['internal:hook.example.internal', 'host:x.example.com'])
     expect(strongest(both)).toMatchObject({ verdict: 'violation', destination: 'host:x.example.com' })
-    expect(verdictOf('curl -K config.cfg -D headers.txt -c jar.txt --resolve a.internal:443:127.0.0.1 -d x https://hook.example.internal')).toEqual({
+    expect(verdictOf('curl -K config.cfg -D headers.txt -c jar.txt --resolve a.example.internal:443:192.0.2.1 -d x https://hook.example.internal')).toEqual({
       rule: 'http-send', verdict: 'allowed', destination: 'internal:hook.example.internal',
     })
   })
