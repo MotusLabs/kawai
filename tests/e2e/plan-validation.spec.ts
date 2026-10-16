@@ -15,26 +15,12 @@
 // test:e2e against a live kawai server.
 import { expect, test, type Page } from '@playwright/test'
 import { execFileSync } from 'node:child_process'
-import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { initPlanRepository, serveDeltas } from './fixtures/planWalkthrough'
 
 test.skip(process.env.AGENTBOARD_CHAT_FIXTURE !== '1', 'Requires development chat fixture')
-
-/** The canned deltas the stub CLI serves, one file per change: `<change>.json` holds its delta array. */
-function serveDeltas(deltas: Record<string, Array<{ capability: string; operation: string; requirement: string }>>) {
-  const dir = join(process.env.E2E_TMUX_TMPDIR!, 'openspec-deltas')
-  mkdirSync(dir, { recursive: true })
-  for (const [change, touches] of Object.entries(deltas)) {
-    writeFileSync(
-      join(dir, `${change}.json`),
-      JSON.stringify(touches.map(touch => ({
-        spec: touch.capability, operation: touch.operation,
-        requirement: { name: touch.requirement }, description: `${change} ${touch.requirement}`,
-      }))),
-    )
-  }
-}
 
 async function createChat(page: Page, root: string, name: string, group: string) {
   await page.getByRole('button', { name: 'New session', exact: true }).first().click()
@@ -170,19 +156,14 @@ async function openPlan(page: Page, root: string) {
 test('blocked by a conflict, ordered and answered to Ready, stale after an edit, then approved', async ({ page }, info) => {
   const root = mkdtempSync(join(tmpdir(), 'kawai-plan-validation-e2e-'))
   try {
-    // A git repository with two registered changes, the team's groups, and
+    // A git repository with three registered changes, the team's groups, and
     // the stub deltas: an unordered pair sharing chat/Presence (a conflict)
     // and overlapping on mail with different requirements.
-    execFileSync('git', ['init', '-q', root])
-    for (const change of ['conflict-a', 'conflict-b', 'overlap-c']) {
-      mkdirSync(join(root, 'openspec', 'changes', change, 'specs', 'chat'), { recursive: true })
-      writeFileSync(join(root, 'openspec', 'changes', change, 'proposal.md'), `# ${change}\n`)
-      writeFileSync(join(root, 'openspec', 'changes', change, 'specs', 'chat', 'spec.md'), '## MODIFIED Requirements\n### Requirement: Presence\n')
-    }
-    mkdirSync(join(root, '.kawai', 'groups'), { recursive: true })
-    writeFileSync(join(root, '.kawai', 'groups', 'leads.md'), '---\nlabel: Leads\ncanCreatePlans: true\n---\nPlan the work')
-    writeFileSync(join(root, '.kawai', 'groups', 'devs.md'), '---\nlabel: Developers\n---\nBuild features')
-    writeFileSync(join(root, '.kawai', 'groups', 'reviewers.md'), '---\nlabel: Reviewers\n---\nReview')
+    initPlanRepository(root, ['conflict-a', 'conflict-b', 'overlap-c'], {
+      leads: '---\nlabel: Leads\ncanCreatePlans: true\n---\nPlan the work',
+      devs: '---\nlabel: Developers\n---\nBuild features',
+      reviewers: '---\nlabel: Reviewers\n---\nReview',
+    })
     serveDeltas({
       'conflict-a': [
         { capability: 'chat', operation: 'MODIFIED', requirement: 'Presence' },
