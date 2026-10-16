@@ -767,7 +767,7 @@ describe('ChatSessionDriver', () => {
     harness.driver.kill()
   })
 
-  test('a foreground Bash the harness moved to the background records started-background (CC round 3)', async () => {
+  test('a foreground Bash the harness moved to the background records started-background (CC round 3, round 4 F)', async () => {
     const backgrounds: boolean[] = []
     const sink: OutboundAuditSink = {
       onPreToolUse: () => {},
@@ -780,10 +780,19 @@ describe('ChatSessionDriver', () => {
     const harness = createHarness({ outbound: sink })
     harness.driver.send('hello')
     const hooks = harness.fakes[0]!.options.hooks as { PostToolUse: Array<{ hooks: Array<(input: unknown) => Promise<unknown>> }> }
-    const moved = 'Command did not complete within its 120s timeout and was moved to the background (ID: b0usjmoay). Output is being written to: /tmp/claude-1000/tasks/b0usjmoay.output.'
-    await hooks.PostToolUse[0]!.hooks[0]!({ tool_name: 'Bash', tool_input: { command: 'bun run test' }, tool_response: moved, tool_use_id: 'tu-bg' })
-    await hooks.PostToolUse[0]!.hooks[0]!({ tool_name: 'Bash', tool_input: { command: 'echo done' }, tool_response: 'done', tool_use_id: 'tu-fg' })
-    expect(backgrounds).toEqual([true, false])
+    const post = (response: unknown, id: string): Promise<unknown> =>
+      hooks.PostToolUse[0]!.hooks[0]!({ tool_name: 'Bash', tool_input: { command: 'bun run test' }, tool_response: response, tool_use_id: id })
+    // The SDK's typed shape (BashOutput): a backgroundTaskId, a user move,
+    // and a timeout move all mark the call backgrounded.
+    await post({ type: 'text', backgroundTaskId: 'bash_1' }, 'tu-bg-1')
+    await post({ type: 'text', backgroundedByUser: true }, 'tu-bg-2')
+    await post({ type: 'text', timedOutAfterMs: 120_000 }, 'tu-bg-3')
+    // A plain structured output and a plain string stay foreground.
+    await post({ type: 'text', text: 'done' }, 'tu-fg-1')
+    await post('done', 'tu-fg-2')
+    // The older text marker stays as a fallback for older builds.
+    await post('Command did not complete within its 120s timeout and was moved to the background (ID: b0usjmoay).', 'tu-bg-4')
+    expect(backgrounds).toEqual([true, true, true, false, false, true])
     harness.driver.kill()
   })
 

@@ -26,6 +26,16 @@ export function callRanInBackground(toolName: string, toolInput: unknown, respon
   if (toolName === 'Monitor') return true
   if (toolName !== 'Bash') return false
   if ((toolInput as { run_in_background?: unknown } | null)?.run_in_background === true) return true
+  // The SDK types Bash output as a structured BashOutput: a backgrounded
+  // call carries backgroundTaskId, and a user- or timeout-move carries
+  // backgroundedByUser / timedOutAfterMs.
+  const typed = response as { backgroundTaskId?: unknown; backgroundedByUser?: unknown; timedOutAfterMs?: unknown } | string | null
+  if (typeof typed === 'object' && typed !== null) {
+    if (typeof typed.backgroundTaskId === 'string') return true
+    if (typed.backgroundedByUser === true || typeof typed.timedOutAfterMs === 'number') return true
+    return false
+  }
+  // The model-facing text marker stays as a fallback for older builds.
   return typeof response === 'string' && /(?:was moved to the background|running in background with ID:)/.test(response)
 }
 
