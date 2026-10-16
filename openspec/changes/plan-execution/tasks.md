@@ -56,8 +56,8 @@ Implement after `durable-plans`, `strategy-revision-impact`, and `plan-validatio
 
 ## 5. Git and GitHub adapters
 
-- [ ] 5.1 Implement `ghCommand.ts`: argument-array `gh` with a timeout, bounded output, and token redaction in recorded output. Verify with tests against a stub `gh`: timeout, output cap, exit codes, and redaction.
-- [ ] 5.2 Implement `gitRemote.ts`: fetch, `ls-remote`, fast-forward push (never `--force`), worktree add and remove (never `--force`), ancestry, and `merge-tree --name-only`. Verify against a local bare `origin`: a non-fast-forward push is rejected and left as it was; conflicting files are listed; the main checkout's HEAD and index are untouched.
+- [x] 5.1 Implement `ghCommand.ts`: argument-array `gh` with a timeout, bounded output, and token redaction in recorded output. Verify with tests against a stub `gh`: timeout, output cap, exit codes, and redaction.
+- [x] 5.2 Implement `gitRemote.ts`: fetch, `ls-remote`, fast-forward push (never `--force`), worktree add and remove (never `--force`), ancestry, and `merge-tree --name-only`. Verify against a local bare `origin`: a non-fast-forward push is rejected and left as it was; conflicting files are listed; the main checkout's HEAD and index are untouched.
 - [ ] 5.3 Implement `github.ts`: PR list, create, and view; check-runs and statuses for a commit; `run rerun --failed`; `update-branch` with `expected_head_sha`; and `pr merge --match-head-commit`. Verify with the stub `gh` replaying recorded API responses for every call, including 202, 422, 403, and 5xx.
 - [ ] 5.4 Classify outcomes as success, transient, or permanent (D14). Verify with a table test over the adapters' error shapes.
 
