@@ -132,7 +132,9 @@ describe('OutboundDestinations', () => {
         models: { glm: { label: 'GLM' }, 'glm-flash': { label: 'GLM Flash' } },
       },
     }))
-    const loader = new OutboundDestinations({ homeDir: home })
+    // matchRevalidateMs 0: every call revalidates its stamp, so the rewrite
+    // below is seen immediately (the hot path otherwise throttles at 1 s).
+    const loader = new OutboundDestinations({ homeDir: home, matchRevalidateMs: 0 })
     // The provider's env reaches every flattened model entry (design D1).
     expect(loader.isModelProvider('zai.example.internal')).toBe(true)
     // The stamp covers providers.json, so a change re-derives.
