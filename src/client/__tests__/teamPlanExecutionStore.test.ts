@@ -18,7 +18,7 @@ beforeEach(() => {
 })
 afterEach(() => useTeamPlanStore.getState().close(teamKey))
 
-const executionSummary = (id: string) => ({ id, revision: 1, state: 'running' as const, outcome: null, stopReason: null, startedAt: '', finishedAt: null, changes: [] })
+const executionSummary = (id: string) => ({ id, planId: 'plan-1', revision: 1, contentHash: 'h', reportId: 'r', inputHash: 'i', landingMode: 'direct' as const, baseBranch: 'master', baseCommit: 'abc', floor: { version: 1, map: { lint: ['ci'], typecheck: ['ci'], 'unit-tests': ['ci'], 'ci-e2e': ['e2e'] } }, maxParallel: 2, mergeMethod: 'merge' as const, state: 'running' as const, outcome: null, stopReason: null, startedAt: '', finishedAt: null, changes: [] })
 
 const detail = (executions: PlanDetail['executions']): PlanDetail => ({
   plan: { id: 'plan-1', teamId: 't', title: 'P', lifecycle: 'open' as const, createdAt: '', updatedAt: '', state: 'in-progress' as const, creator: { kind: 'human' as const, sessionId: null }, currentApprovedRevision: 1, pin: null, linkedTaskCount: 0 },

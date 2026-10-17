@@ -10,6 +10,7 @@ import { PlanStore } from '../plans/planStore'
 import { PlanService } from '../plans/PlanService'
 import { planHandlers } from '../plans/planTools'
 import { ExecutionStore } from '../plans/execution/executionStore'
+import { executionViews } from '../plans/execution/executionView'
 import { buildTeamPrompt } from '../team/teamPrompt'
 import { createPlanBench, createPlanWorld, type PlanBench, type PlanWorld } from './planHarness'
 
@@ -30,18 +31,7 @@ beforeEach(async () => {
     getSession: id => bench.records.get(id),
     strategies: new StrategyStore(bench.db.db),
     homeDir: world.home,
-    executionsOf: planId => executions.executionsOf(planId).map(execution => ({
-      id: execution.id,
-      revision: execution.revision,
-      state: execution.state,
-      outcome: execution.outcome,
-      stopReason: execution.stopReason,
-      startedAt: execution.startedAt,
-      finishedAt: execution.finishedAt,
-      changes: executions.changes(execution.id).map(row => ({
-        change: row.change, state: row.state, step: row.step, stopReason: row.stopReason, fixRounds: row.fixRounds,
-      })),
-    })),
+    executionsOf: planId => executionViews(executions, planId),
   })
 })
 
@@ -66,9 +56,9 @@ describe('plan_get executions (16.1)', () => {
     const detail = await planHandlers(service, 'lead').plan_get({ plan_id: planId })
     expect(detail.executions).toHaveLength(1)
     expect(detail.executions![0]).toMatchObject({ id: execution.id, revision, state: 'running' })
-    expect(detail.executions![0]!.changes).toEqual([
-      { change: 'api', state: 'implementing', step: null, stopReason: null, fixRounds: 0 },
-      { change: 'ui', state: 'waiting', step: null, stopReason: null, fixRounds: 0 },
+    expect(detail.executions![0]!.changes.map(row => [row.change, row.state, row.step, row.stopReason, row.fixRounds])).toEqual([
+      ['api', 'implementing', null, null, 0],
+      ['ui', 'waiting', null, null, 0],
     ])
     expect(executions.attempts(execution.id, 'api')).toHaveLength(1)
     expect(executions.rounds(execution.id, 'api')).toHaveLength(1)

@@ -198,7 +198,7 @@ export interface PlanDetail {
   /** Every task linked to the plan, oldest first. */
   linkedTasks: PlanLinkedTask[]
   /** The plan's executions, newest first (plan-execution D18); absent when the plans module runs without executions. */
-  executions?: PlanExecutionSummary[]
+  executions?: import('./planExecution').PlanExecutionView[]
   /** Progress over the current approved revision; null without one. */
   progress: PlanProgress | null
 }

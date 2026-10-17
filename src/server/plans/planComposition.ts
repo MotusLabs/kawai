@@ -22,6 +22,7 @@ import { ValidationDetailCache } from './validation/validationDetail'
 import { ExecutionStore } from './execution/executionStore'
 import { ExecutionService } from './execution/ExecutionService'
 import { executionOwnership } from './execution/executionOwnership'
+import { executionViews } from './execution/executionView'
 import { REGISTERED_LANDING_MODES } from './landing/landingMechanisms'
 import type { PlanExecutionSettings } from '../team/teamCaps'
 
@@ -128,18 +129,7 @@ export function composePlanServices(options: PlanServicesOptions): {
       const execution = executionStore.execution(executionId)
       return execution ? { planId: execution.planId, revision: execution.revision } : null
     },
-    executionsOf: planId => executionStore.executionsOf(planId).map(execution => ({
-      id: execution.id,
-      revision: execution.revision,
-      state: execution.state,
-      outcome: execution.outcome,
-      stopReason: execution.stopReason,
-      startedAt: execution.startedAt,
-      finishedAt: execution.finishedAt,
-      changes: executionStore.changes(execution.id).map(row => ({
-        change: row.change, state: row.state, step: row.step, stopReason: row.stopReason, fixRounds: row.fixRounds,
-      })),
-    })),
+    executionsOf: planId => executionViews(executionStore, planId),
     ...(options.homeDir ? { homeDir: options.homeDir } : {}),
   })
   const executions = new ExecutionService({

@@ -115,7 +115,7 @@ export class PlanService {
      * plan-execution D18: the plan's executions for `plan_get` (and the
      * Plans view's detail pushes); absent when no execution module is wired.
      */
-    executionsOf?: (planId: string) => import('../../shared/plans').PlanExecutionSummary[]
+    executionsOf?: (planId: string) => import('../../shared/planExecution').PlanExecutionView[]
     /** plan-validation D9: approval's pre-transaction gather and in-transaction standing, and its appended precondition. */
     validation?: {
       prepareStanding: (planId: string, revision: number) => Promise<unknown> | null
