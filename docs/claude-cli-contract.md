@@ -32,6 +32,11 @@ which holds for the floor version and every newer CLI.
    option, but its type declaration omits it, so `interruptQuery` is the one
    typed call site. The receipt's `cancelled` list says which prompts will
    never run.
+   Until the driver's first `system/init`, the capability counts as present,
+   so every interrupt sends `cancel_queued` (older CLIs ignore the field);
+   each later init replaces the answer, including the init after a respawn.
+   After an init without the capability, interrupts are plain and log
+   `chat_cli_contract_violation` with `interrupt-cancel-queued-unsupported`.
 5. `command_lifecycle` frames are logged at debug level only. No rule reads
    them.
 
