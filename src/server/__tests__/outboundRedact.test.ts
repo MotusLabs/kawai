@@ -77,10 +77,21 @@ describe('redact', () => {
   test('truncation at 4096 characters is marked, and short text is not', () => {
     const short = redactForStore('git push origin main')
     expect(short).toEqual({ text: 'git push origin main', truncated: false })
-    const long = redactForStore(`curl -d ${'x'.repeat(5000)} https://example.internal`)
-    expect(long.truncated).toBe(true)
-    expect(long.text.length).toBe(4096)
+    const words = redactForStore(`curl -d ${'word '.repeat(1000)}https://example.internal`)
+    expect(words.truncated).toBe(true)
+    expect(words.text.length).toBeGreaterThan(4090)
+    expect(words.text.length).toBeLessThanOrEqual(4096)
     expect(clip('short', 4096).truncated).toBe(false)
+  })
+
+  test('the cut backs off before a partial word and an open quote (D8)', () => {
+    // A word crossing the cut drops whole: no part of it is stored.
+    const long = redactForStore(`curl -d ${'x'.repeat(5000)} https://example.internal`)
+    expect(long).toEqual({ text: 'curl -d', truncated: true })
+    // A quote still open at the cut drops from its opening quote.
+    const quoted = clip(`echo ${'a '.repeat(100)}'${'b '.repeat(3000)}'`, 4096)
+    expect(quoted.text).toBe(`echo ${'a '.repeat(100)}`)
+    expect(quoted.text).not.toContain("'")
   })
 })
 
@@ -158,8 +169,8 @@ describe('redact: CC round 3 (body forms, linear userinfo, over-redaction)', () 
     const started = performance.now()
     const out = redactForStore(big)
     const elapsed = performance.now() - started
-    expect(out.text.length).toBe(4096)
-    expect(out.truncated).toBe(true)
+    // One 240k-character word: the cut backs off to nothing.
+    expect(out).toEqual({ text: '', truncated: true })
     expect(elapsed).toBeLessThan(1_000)
   })
 
@@ -187,13 +198,13 @@ describe('redact: CC round 3 (body forms, linear userinfo, over-redaction)', () 
     expect(redact('curl -b "session id with spaces" https://example.internal/hook')).toBe(`curl -b ${REDACTED} https://example.internal/hook`)
     expect(redact('curl -H "Authorization: Bearer AA\\"BB CC" -d x https://example.internal/hook')).toBe(`curl -H "Authorization:${REDACTED}" -d x https://example.internal/hook`)
     expect(redact('curl -H Authorization:\\ Bearer\\ X https://example.internal/hook')).toBe(`curl -H Authorization:${REDACTED} https://example.internal/hook`)
-    // A secret straddling the read cap drops with its whole tail word.
+    // A secret straddling an old read cap drops with its whole tail word.
     const straddle = 'x'.repeat(16_380) + ' ghp_ABCDEFghijklmnop0123456789 tail'
     const out = redactForStore(straddle)
     expect(out.text).not.toMatch(/ghp_[A-Za-z0-9]*/)
   })
 
-  test('nothing partial leaks at the read cap, at every shift 0-64 (round 6 B2/B3/B6)', () => {
+  test('nothing partial leaks around a cut, at every shift 0-64 (round 6 B2/B3/B6)', () => {
     // ANSI-C strings with escaped quotes leak nothing, in both scanners.
     expect(redact("curl -H $'Authorization: Bearer S3C\\'RETZZ' https://example.internal"))
       .not.toMatch(/S3C|RETZZ/)
@@ -201,22 +212,22 @@ describe('redact: CC round 3 (body forms, linear userinfo, over-redaction)', () 
     // httpie items, quoted either way.
     expect(redact('http POST host.example.org Authorization:"Bearer X"')).toBe('http POST host.example.org Authorization:\u2039redacted\u203a')
     expect(redact("http POST host.example.org Cookie:'a b c'")).not.toContain('a b c')
-    // A token straddling the 16 KiB cap stores no partial byte, at any shift.
+    // A token around the 4096 cut stores no partial byte, at any shift.
     for (let shift = 0; shift <= 64; shift++) {
-      const padding = 'x'.repeat(16_384 - 20 + shift)
-      const out = redactForStore(padding + ' \'Authorization: Bearer QZTOKEN0123456789\'')
+      const padding = 'x '.repeat((4096 - 40 + shift) / 2)
+      const out = redactForStore(padding + ' \'Authorization: Bearer QZTOKEN0123456789\' tail')
       expect(out.text).not.toMatch(/QZTOKEN[0-9]*/)
       // An always-slice mutant (cut -1 slices to empty) also fails here.
-      if (shift === 0) expect(out.text.length).toBeGreaterThan(0)
+      expect(out.text.length).toBeGreaterThan(4000)
     }
   })
 
-  test('a 16 KiB read bound keeps every stored character redacted', () => {
-    // A secret at 10 KiB — past nothing: inside the read bound, redacted.
-    const command = `echo ${'x'.repeat(10_000)} ghp_ABCDEFghijklmnop0123456789`
+  test('redaction reads the whole text: a secret past 4096 characters never decides the cut', () => {
+    const command = `echo ${'x '.repeat(5_000)} ghp_ABCDEFghijklmnop0123456789`
     const out = redactForStore(command)
     expect(out.text).not.toContain('ghp_')
-    expect(out.text.slice(0, 4096)).toContain('x')
+    expect(out.text).toContain('x')
+    expect(redact(command)).toContain(REDACTED)
   })
 
   test('over-redaction undone: bare -u and author-shaped names stay as written', () => {

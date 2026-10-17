@@ -4,7 +4,7 @@
 // `outboundClassify*.test.ts` judges against the same world. Reserved
 // example names throughout.
 import { judge, strongest, type JudgedCandidate } from '../outbound/classify'
-import { parseSends } from '../outbound/rules'
+import { parseSends } from '../outbound/sends'
 
 const INTERNAL = new Set([
   'example.internal', 'npm.example.internal', 'registry.example.internal', 'build.example.internal',
@@ -36,7 +36,7 @@ export const facts = {
 
 /** The judged candidates of a command, newest rule first as parsed. */
 export function judged(command: string, cwd = '/repo'): JudgedCandidate[] {
-  return parseSends(command, cwd).map(candidate => judge(candidate, facts))
+  return parseSends(command, cwd, { home: '/home/agent' }).map(candidate => judge(candidate, facts))
 }
 
 /** The single strongest judgement of a command, with its rule and destination. */

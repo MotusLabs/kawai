@@ -2605,7 +2605,7 @@ describe('ChatSessionManager', () => {
       rule: 'http-send',
       verdict: 'violation',
       destination: 'host:example.internal',
-      classifierVersion: 2,
+      classifierVersion: 3,
       cwd: '/tmp/proj',
     })
     // No injected id generator: the row id is minted, not 'obc-undefined'.

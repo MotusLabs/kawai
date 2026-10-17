@@ -1,153 +1,164 @@
-// Unwrapping before rule matching (execution-safety-recovery D4): strip the
-// shell reserved words and wrapping commands that only precede the command
-// the rules mean, each wrapper flag consumed by its arity, and find where
-// git's subcommand sits and what config pins its target. Split out of
-// `rules.ts` when that file outgrew the 500-LOC rule; the rules table
-// itself stays there. Pure, like the rest of the classifier.
-import type { SendCandidate } from './classify'
+// Unwrapping before rule matching (execution-safety-recovery D4): leading
+// `NAME=value` assignments and wrapping commands (`sudo -u bob`, `timeout -s
+// KILL 5`, `nice -n 5`, `env -C dir NAME=v`, `xargs -t`, `stdbuf -oL`, …)
+// drop off with their options, read by the shared scanner against each
+// wrapper's arity table, and one `bash -c` / `sh -c` level yields its script.
+// A wrapper option outside its table, `env -S`, or an option a wrapper reads
+// files or shells through leaves the segment unmodeled — the backstop then
+// searches it — never a guessed position. Pure.
+import { scanOptions, table, type OptionTable } from './options'
+import type { Word } from './tokenize'
 
-/** Shell reserved words that only precede the command the rules mean. */
-export const RESERVED = new Set(['!', 'if', 'then', 'elif', 'else', 'while', 'until', 'do', 'time'])
-/**
- * Wrappers that only carry the command, with the flags the classifier knows
- * the arity of. A flag outside both lists is not understood: the segment
- * records unknown-destination rather than a guessed position (CC M5).
- */
-const WRAPPERS: Record<string, { booleans: string[]; values: string[]; skipDuration?: boolean }> = {
-  sudo: {
-    booleans: ['-E', '-e', '-i', '-k', '-K', '-l', '-n', '-S', '-s', '-v', '-H', '-P', '-V', '--'],
-    values: ['-u', '-g', '-p', '-r', '-t', '-C', '--user', '--group', '--prompt', '--host', '--role', '--type', '--other-user', '--close-from', '--askpass'],
-  },
-  timeout: {
-    booleans: ['--foreground', '--preserve-status', '-v', '-l', '--help', '--version'],
-    values: ['-s', '-k', '--signal', '--kill-after'],
-    skipDuration: true,
-  },
-  nice: { booleans: ['--'], values: ['-n', '--adjustment'] },
-  xargs: {
-    booleans: ['-r', '-t', '--no-run-if-empty', '--verbose', '--trace', '--exit', '--help', '--version'],
-    values: ['-d', '-I', '-J', '-s', '-j', '-P', '-L', '-l', '-n', '-E', '-a', '-o', '--delimiter', '--arg-file', '--max-args', '--max-chars', '--max-procs', '--max-lines', '--replace', '--eof'],
-  },
-  command: { booleans: ['-p', '-v', '-V', '--'], values: [] },
-  exec: { booleans: ['-l', '--'], values: ['-a'] },
-  nohup: { booleans: ['--'], values: [] },
-  stdbuf: { booleans: ['--'], values: ['-o', '-e', '-i', '--output', '--error', '--input'] },
-  ionice: { booleans: ['-t', '--'], values: ['-c', '-n', '-p', '--class', '--classdata', '--pid'] },
-  doas: { booleans: ['-n', '-s', '-v', '-V', '--'], values: ['-u', '-C', '-a'] },
-  builtin: { booleans: ['--'], values: [] },
+export interface Wrapped {
+  /** Environment names this segment sets for its command (prefix, `env NAME=v`). */
+  assigned: Set<string>
+  /** `env -i`: the inherited and earlier environment is dropped. */
+  cleared: boolean
+  /** Names `env -u` removed for the command. */
+  unset: string[]
+  /** Directory changes (`env -C`, `sudo -D`), applied in order. */
+  chdir: Word[]
+  /** The wrappers that ran, outermost first (basenames). */
+  wrappers: string[]
 }
 
-/** What unwrapping left: the command, or why its position is unknowable. */
-export interface Unwrapped {
-  argv: string[]
-  /** A wrapper flag the table does not know: the segment reads unknown. */
-  unknown: string | null
-}
+export type Unwrapped =
+  | ({ kind: 'command'; head: Word; args: Word[] } & Wrapped)
+  | ({ kind: 'shell'; shell: string; script: Word } & Wrapped)
+  /** Only assignments: they persist in the calling shell. */
+  | ({ kind: 'assignments' } & Wrapped)
+  /** A wrapper that runs nothing (`env` alone, `command -v x`): a read. */
+  | ({ kind: 'query' } & Wrapped)
+  | { kind: 'unmodeled' }
 
-/**
- * Drop the leading reserved words and wrapping commands (`sudo -u bob`,
- * `timeout -s KILL 5`, `nice -n 5`, `xargs`, `stdbuf -oL`, …), each flag
- * consumed by its arity. `timeout`'s duration positional is skipped too.
- */
-export function unwrapWrappers(argv: string[]): Unwrapped {
-  let rest = argv
+const ASSIGNMENT = /^([A-Za-z_][A-Za-z0-9_]*)\+?=/
+
+/** Wrapper option tables; an option outside them leaves the segment unmodeled. */
+const WRAPPERS: Record<string, OptionTable> = {
+  sudo: table(
+    '-A -b -E -H -k -n -P -S --askpass --background --preserve-groups --non-interactive --set-home --stdin',
+    '-u -g -p -r -t -C -U -h -T -D --user --group --prompt --role --type --other-user --close-from --host --command-timeout --chdir',
+    '--preserve-env',
+  ),
+  doas: table('-n', '-u -a'),
+  timeout: table('-v --verbose --foreground --preserve-status', '-s -k --signal --kill-after'),
+  nice: table('', '-n --adjustment'),
+  nohup: table(''),
+  stdbuf: table('', '-i -o -e --input --output --error'),
+  ionice: table('-t --ignore', '-c -n -p -P -u --class --classdata --pid --pgid --uid'),
+  command: table('-p -v -V'),
+  exec: table('-c -l', '-a'),
+  builtin: table(''),
+  xargs: table(
+    '-0 -r -t -x --null --no-run-if-empty --verbose --exit',
+    '-a -d -E -I -L -n -P -s --arg-file --delimiter --max-args --max-procs --max-chars --process-slot-var',
+    '-e -i -l --eof --replace --max-lines',
+  ),
+}
+const ENV = table(
+  '-i -0 -v --ignore-environment --null --debug --list-signal-handling',
+  '-u -C --unset --chdir',
+  '--default-signal --ignore-signal --block-signal',
+)
+const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh'])
+/** Shell option letters that are plain flags; `o`/`O` take a name; `c` names the script. */
+const SHELL_FLAGS = new Set('abefhiklmnprstuvxBCDEHILMPRSTUVWX'.split(''))
+const SHELL_LONG = new Set(['--noprofile', '--norc', '--posix', '--restricted', '--login', '--noediting', '--verbose', '--debugger'])
+const SHELL_LONG_VALUES = new Set(['--rcfile', '--init-file'])
+
+export const basename = (text: string): string => text.split('/').pop() ?? text
+
+/** Unwrap one simple command's words (reserved words already stripped). */
+export function unwrap(words: readonly Word[]): Unwrapped {
+  const wrapped: Wrapped = { assigned: new Set(), cleared: false, unset: [], chdir: [], wrappers: [] }
+  let at = 0
   for (;;) {
-    while (rest.length > 0 && RESERVED.has(rest[0]!.split('/').pop()!)) rest = rest.slice(1)
-    const spec = rest[0] === undefined ? undefined : WRAPPERS[rest[0]!.split('/').pop()!]
-    if (spec === undefined) return { argv: rest, unknown: null }
-    let i = 1
-    let unknown = false
-    while (i < rest.length) {
-      const word = rest[i]!
-      if (word === '--') { i++; break }
-      if (word === '-' || !word.startsWith('-')) break
-      const eq = word.indexOf('=')
-      if (word.startsWith('--')) {
-        const name = eq === -1 ? word : word.slice(0, eq)
-        if (spec.values.includes(name)) { if (eq === -1) i++; i++; continue }
-        if (spec.booleans.includes(name)) { i++; continue }
-        unknown = true
-        break
-      }
-      // A short cluster walks letter by letter, exactly as `scan` does: the
-      // first value letter takes the cluster's rest (or `=` value, or the
-      // next word) as its value (`sudo -Eu x`, `stdbuf -oL`, `ionice -c3`).
-      const letters = word.slice(1)
-      const attached = eq === -1 ? null : word.slice(eq + 1)
-      let valueTakesNext = false
-      let understood = true
-      for (let at = 0; at < letters.length; at++) {
-        const letter = `-${letters[at]!}`
-        if (spec.values.includes(letter)) {
-          valueTakesNext = at === letters.length - 1 && attached === null
-          break
+    while (at < words.length && ASSIGNMENT.test(words[at]!.text)) {
+      wrapped.assigned.add(ASSIGNMENT.exec(words[at]!.text)![1]!)
+      at++
+    }
+    if (at >= words.length) return { kind: wrapped.wrappers.length === 0 ? 'assignments' : 'query', ...wrapped }
+    const head = words[at]!
+    if (!head.literal) return { kind: 'command', head, args: words.slice(at + 1), ...wrapped }
+    const name = basename(head.text)
+    if (name === 'env') {
+      const scanned = scanOptions(words, at + 1, ENV, true)
+      if (scanned.unknown !== null) return { kind: 'unmodeled' }
+      for (const option of scanned.options) {
+        if (option.name === '-i' || option.name === '--ignore-environment') { wrapped.cleared = true; wrapped.assigned.clear() }
+        if (option.name === '-u' || option.name === '--unset') {
+          if (option.value === null) return { kind: 'unmodeled' }
+          wrapped.unset.push(option.value.text)
+          wrapped.assigned.delete(option.value.text)
         }
-        if (!spec.booleans.includes(letter)) { understood = false; break }
+        if (option.name === '-C' || option.name === '--chdir') {
+          if (option.value === null) return { kind: 'unmodeled' }
+          wrapped.chdir.push(option.value)
+        }
       }
-      if (!understood) { unknown = true; break }
-      i++
-      if (valueTakesNext) i++
+      at = scanned.end
+      // A lone `-` means -i.
+      if (words[at]?.text === '-') { wrapped.cleared = true; wrapped.assigned.clear(); at++ }
+      wrapped.wrappers.push(name)
       continue
     }
-    if (unknown) return { argv: [], unknown: `the ${rest[0]!.split('/').pop()} options were not understood` }
-    // An xargs replacement token rewrites the wrapped command's arguments:
-    // its targets are whatever the input feeds it (round 6 L4).
-    if (rest[0] === 'xargs') {
-      for (let j = 1; j < i && j < rest.length; j++) {
-        if (rest[j]!.startsWith('-I') || rest[j]!.startsWith('-J') || rest[j]!.startsWith('--replace')) {
-          return { argv: [], unknown: 'xargs replacement rewrites the command' }
+    const options = WRAPPERS[name]
+    if (options !== undefined) {
+      const scanned = scanOptions(words, at + 1, options, true)
+      if (scanned.unknown !== null) return { kind: 'unmodeled' }
+      if (name === 'command' && scanned.options.some(option => option.name === '-v' || option.name === '-V')) {
+        return { kind: 'query', ...wrapped }
+      }
+      for (const option of scanned.options) {
+        if (option.name === '-D' || option.name === '--chdir') {
+          if (option.value === null) return { kind: 'unmodeled' }
+          wrapped.chdir.push(option.value)
         }
       }
+      at = scanned.end
+      if (name === 'timeout') {
+        // The duration is timeout's own positional.
+        const duration = words[at]
+        if (duration === undefined || !duration.literal || !/^[\d.]+[smhd]?$/.test(duration.text)) return { kind: 'unmodeled' }
+        at++
+      }
+      wrapped.wrappers.push(name)
+      continue
     }
-    rest = rest.slice(i)
-    if (spec.skipDuration === true && rest.length > 0 && /^[\d.]+(ms|[smhd])?$/.test(rest[0]!)) rest = rest.slice(1)
+    if (SHELLS.has(name)) return unwrapShell(words, at, name, wrapped)
+    return { kind: 'command', head, args: words.slice(at + 1), ...wrapped }
   }
 }
 
-/** The rule an unknown-wrapped segment most plausibly sends under. */
-export const WRAPPED_RULE_HEADS: Record<string, SendCandidate['rule']> = {
-  git: 'git-push', gh: 'gh-write', curl: 'http-send', wget: 'http-send',
-  http: 'http-send', https: 'http-send', npm: 'registry-publish',
-  pnpm: 'registry-publish', yarn: 'registry-publish', bun: 'registry-publish',
-  cargo: 'registry-publish', twine: 'registry-publish', docker: 'registry-publish',
-  podman: 'registry-publish', helm: 'registry-publish', buildctl: 'registry-publish',
-  sendmail: 'mail-send', msmtp: 'mail-send', mailx: 'mail-send', ssmtp: 'mail-send', mail: 'mail-send',
-}
-
-/**
- * Where git's subcommand sits, and what pins its push target unresolved if
- * anything does: a `GIT_DIR`, `GIT_WORK_TREE`, or `GIT_CONFIG*` assignment,
- * a `--git-dir`/`--work-tree`/`--config-env` flag, or a `git -c` override
- * whose key starts `remote.`, `url.`, or `branch.` (git keys are
- * case-insensitive). The classifier does not evaluate shell variables.
- */
-export function gitSubcommandAndPin(argv: readonly string[], env: ReadonlyMap<string, string | null>): { subcommandAt: number; pinned: string | null } {
-  let subcommandAt = -1
-  let pinned: string | null = null
-  for (const key of env.keys()) {
-    if (key === 'GIT_DIR') pinned = 'GIT_DIR is set'
-    else if (key === 'GIT_WORK_TREE') pinned = 'GIT_WORK_TREE is set'
-    else if (key.startsWith('GIT_CONFIG')) pinned = `${key} is set`
-  }
-  for (let i = 1; i < argv.length; i++) {
-    const word = argv[i]!
-    if (word === '-C' || word === '-c') {
-      if (word === '-c') {
-        const setting = argv[i + 1] ?? ''
-        // git keys are case-insensitive: Remote., URL., Branch. alike.
-        if (/^(remote|url|branch)\./i.test(setting)) pinned = 'a git -c override pins the target'
+/** `bash [options] -c 'script' [args…]` yields its script; any other shell call is a command. */
+function unwrapShell(words: readonly Word[], at: number, shell: string, wrapped: Wrapped): Unwrapped {
+  let i = at + 1
+  let hasC = false
+  while (i < words.length) {
+    const word = words[i]!
+    const text = word.text
+    // After `-c`, the first operand is the script, literal or not.
+    if (!word.literal) {
+      if (hasC) break
+      return { kind: 'unmodeled' }
+    }
+    if (text === '--' || text === '-') { i++; break }
+    if (SHELL_LONG.has(text)) { i++; continue }
+    if (SHELL_LONG_VALUES.has(text)) { i += 2; continue }
+    if (/^[-+][oO]$/.test(text)) { i += 2; continue }
+    if (/^[-+][A-Za-z]+$/.test(text)) {
+      for (const letter of text.slice(1)) {
+        if (letter === 'c' && text.startsWith('-')) hasC = true
+        else if (!SHELL_FLAGS.has(letter)) return { kind: 'unmodeled' }
       }
       i++
       continue
     }
-    if (word.startsWith('--git-dir') || word.startsWith('--work-tree') || word.startsWith('--namespace') || word.startsWith('--config-env')) {
-      pinned = word.startsWith('--config-env') ? 'git --config-env pins the target' : 'git directory flags pin the target'
-      if (!word.includes('=')) i++
-      continue
-    }
-    if (word.startsWith('-')) continue
-    subcommandAt = i
+    if (text.startsWith('-') || text.startsWith('+')) return { kind: 'unmodeled' }
     break
   }
-  return { subcommandAt, pinned }
+  if (!hasC) return { kind: 'command', head: words[at]!, args: words.slice(at + 1), ...wrapped }
+  const script = words[i]
+  if (script === undefined) return { kind: 'unmodeled' }
+  return { kind: 'shell', shell, script, ...wrapped, wrappers: [...wrapped.wrappers, shell] }
 }

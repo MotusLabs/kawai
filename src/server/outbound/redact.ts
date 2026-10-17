@@ -1,8 +1,9 @@
-// Redaction before any write (execution-safety-recovery D8): every field
+// Redaction, the second line of D8 (execution-safety-recovery): every field
 // built from a command or a tool's output — the command, each match segment,
-// the destination, and outcome details — passes `redact` before it reaches
-// the store, the log, or a view, and the observer then clips commands to
-// 4096 characters with truncation marked (`redactForStore`). Pure, and
+// the destination, and outcome details — that the withholding gate
+// (`withhold.ts`) lets through passes `redact` before it reaches the store,
+// the log, or a view, then the backed-off 4096 cut (`redactForStore`). Every
+// scan is linear in the text (round 7 L2). Pure, and
 // deliberately eager: known token shapes, authorization and cookie header
 // values, `-u` credentials, URL userinfo, token and password flag values,
 // credential query parameters, and secret-named inline assignments, JSON
@@ -31,11 +32,14 @@ const SECRET_SET = /gh[ \t]+secret[ \t]+set\b/g
 const BODY_FLAG = new RegExp(`(^|[ \t])(-b|--body)(=|[ \t]+)?(${VALUE})`, 'g')
 
 function redactSecretBodies(text: string): string {
-  let joined = text.replace(/\\\n/g, '')
+  const joined = text.replace(/\\\n/g, '')
   SECRET_SET.lastIndex = 0
+  // Built in chunks: each command is scanned once, never re-sliced (linear).
+  let out = ''
+  let copied = 0
   for (;;) {
     const found = SECRET_SET.exec(joined)
-    if (found === null) return joined
+    if (found === null) return out + joined.slice(copied)
     // Scan to the command's end: the first unquoted ;, |, &, or newline.
     let quote: '' | '\'' | '"' | '$' = ''
     let at = found.index + found[0].length
@@ -50,10 +54,9 @@ function redactSecretBodies(text: string): string {
       else if (char === ';' || char === '|' || char === '&' || char === '\n') { end = at; break }
       at++
     }
-    const segment = joined.slice(found.index, end)
-    const rewritten = segment.replace(BODY_FLAG, `$1$2$3${REDACTED}`)
-    joined = joined.slice(0, found.index) + rewritten + joined.slice(end)
-    SECRET_SET.lastIndex = found.index + rewritten.length
+    out += joined.slice(copied, found.index) + joined.slice(found.index, end).replace(BODY_FLAG, `$1$2$3${REDACTED}`)
+    copied = end
+    SECRET_SET.lastIndex = end
   }
 }
 
@@ -115,6 +118,7 @@ const USER_PASS = (value: string): boolean =>
  * backslash escapes included — never just the first quoted piece. Runs before
  * every other rule, so nothing downstream re-collapses a partial value.
  */
+const BREAKS = new Set([' ', '\t', '\n', '\r', '\f', '\v', ';', '|', '&'])
 const HEADER_AT = new RegExp(`(^|[^A-Za-z-])(${HEADERS})([ \\t]*):`, 'gi')
 
 export function redactHeaderWords(text: string): string {
@@ -123,9 +127,9 @@ export function redactHeaderWords(text: string): string {
   const spans: Array<[number, number]> = []
   let i = 0
   while (i < text.length) {
-    if (/\s|[;|&]/.test(text[i]!)) { i++; continue }
+    if (BREAKS.has(text[i]!)) { i++; continue }
     const start = i
-    while (i < text.length && !/\s|[;|&]/.test(text[i]!)) {
+    while (i < text.length && !BREAKS.has(text[i]!)) {
       const char = text[i]!
       if (char === '\\' && i + 1 < text.length) { i += 2; continue }
       if (char === '$' && text[i + 1] === "'") { i++; continue }
@@ -145,13 +149,17 @@ export function redactHeaderWords(text: string): string {
   }
   let out = ''
   let at = 0
+  let next = 0
   HEADER_AT.lastIndex = 0
   for (;;) {
     const found = HEADER_AT.exec(text)
     if (found === null) { out += text.slice(at); return out }
     const colonEnd = found.index + found[0].length
-    const span = spans.find(([start, end]) => colonEnd >= start && colonEnd <= end && end > colonEnd)
-    if (span === undefined) continue
+    // Matches come in increasing order, so the span pointer only moves
+    // forward: the lookup is linear over the whole text (L2).
+    while (next < spans.length && spans[next]![1] <= colonEnd) next++
+    const span = spans[next]
+    if (span === undefined || span[0] > colonEnd) continue
     // Keep the word's own closing quote (`-H "Authorization: …"`), so the
     // stored command stays readable; anything else in the value collapses.
     const opener = text[span[0]]!
@@ -161,6 +169,8 @@ export function redactHeaderWords(text: string): string {
     HEADER_AT.lastIndex = at
   }
 }
+
+const USER_FLAG = new RegExp(`(^|[\\s;|&])(-u|--user|-b)(=|[ \\t]+)?(${VALUE})`, 'g')
 
 /** Redact every secret shape D8 lists; over-redaction beats a leak. */
 export function redact(text: string): string {
@@ -177,42 +187,43 @@ export function redact(text: string): string {
   // -uvf`, `git add -u`, and `docker run -u 1000:1000` stay as written.
   const curlish = CURL_LIKE.test(result)
   return result.replace(
-    new RegExp(`(^|[\\s;|&])(-u|--user|-b)(=|[ \\t]+)?(${VALUE})`, 'g'),
+    USER_FLAG,
     (match: string, pre: string, flag: string, sep: string, value: string) =>
       curlish || USER_PASS(value) ? `${pre}${flag}${sep ?? ''}${REDACTED}` : match,
   )
 }
 
-/** Clip for storage, marking the cut (D6): commands cap at 4096 characters. */
+/**
+ * Clip for storage, marking the cut (D6, D8): the cut backs off to the last
+ * whitespace at or before `max` — never leaving part of a word — and then
+ * before any quote still open there, so no partial value survives. Linear.
+ */
 export function clip(text: string, max = 4096): { text: string; truncated: boolean } {
   if (text.length <= max) return { text, truncated: false }
-  return { text: text.slice(0, max), truncated: true }
+  let end = 0
+  for (let i = max; i > 0; i--) {
+    if (/\s/.test(text[i]!)) { end = i; break }
+  }
+  let quote = ''
+  let open = -1
+  for (let i = 0; i < end; i++) {
+    const char = text[i]!
+    if (quote !== '') {
+      if (char === '\\' && quote === '"') i++
+      else if (char === quote) quote = ''
+    } else if (char === "'" || char === '"') { quote = char; open = i }
+    else if (char === '\\') i++
+  }
+  if (quote !== '') end = open
+  return { text: text.slice(0, end), truncated: true }
 }
 
 /**
- * Redact, then clip: the one path every stored command and match segment
- * takes. Redaction runs FIRST on the whole text (every secret shape
- * collapses before any boundary), and only then does the read cap cut —
- * backed off past a partial word or an unterminated quote — so no secret
- * byte can straddle the cut and no partial value survives (round 7 S1).
+ * Redact, then clip: the path every stored text takes after the withholding
+ * gate (`withhold.ts`). Redaction runs first on the whole text, so every
+ * secret shape collapses before any boundary, and only then does the cut
+ * back off — no secret byte can straddle it.
  */
-const REDACT_READ_MAX = 16_384
 export function redactForStore(text: string, max = 4096): { text: string; truncated: boolean } {
-  const red = redact(text)
-  if (red.length <= REDACT_READ_MAX) return clip(red, max)
-  let cut = red.lastIndexOf(' ', REDACT_READ_MAX)
-  cut = Math.max(cut, red.lastIndexOf('\t', REDACT_READ_MAX), red.lastIndexOf('\n', REDACT_READ_MAX))
-  let end = cut === -1 ? REDACT_READ_MAX : cut + 1
-  let quote: '' | "'" | '"' = ''
-  for (let i = 0; i < end; i++) {
-    const char = red[i]!
-    if (quote !== '') { if (char === quote && red[i - 1] !== '\\') quote = '' }
-    else if (char === "'" || char === '"') quote = char
-    else if (char === '\\' && i + 1 < end) i++
-  }
-  if (quote !== '') {
-    const open = red.lastIndexOf(quote, end)
-    if (open !== -1) end = open
-  }
-  return clip(red.slice(0, end), max)
+  return clip(redact(text), max)
 }

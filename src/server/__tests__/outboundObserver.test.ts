@@ -8,6 +8,7 @@
 // names throughout.
 import { describe, expect, test } from 'bun:test'
 import { OutboundObserver, type OutboundObserverOptions } from '../outbound/observer'
+import { PRECISE_MAX } from '../outbound/sends'
 import type { ResolvedRepoFacts } from '../outbound/repoFacts'
 import type { OutboundCallInsert, OutboundOutcomeInsert } from '../outbound/store'
 
@@ -88,7 +89,7 @@ describe('OutboundObserver', () => {
       rule: 'git-push',
       verdict: 'allowed',
       destination: 'github:origin',
-      classifierVersion: 2,
+      classifierVersion: 3,
       cwd: '/repo',
     })
     expect(JSON.parse(row.matches)).toEqual([
@@ -144,7 +145,7 @@ describe('OutboundObserver', () => {
     const { observer, calls } = harness({ repos: { factsFor: cwd => unreadable.get(cwd) ?? null } })
     observer.onPreToolUse({ ...PRE })
     await flushWrites()
-    expect(calls[0]).toMatchObject({ verdict: 'unknown-destination', destination: 'unresolved:the facts read failed' })
+    expect(calls[0]).toMatchObject({ verdict: 'unknown-destination', destination: 'unresolved:facts-unreadable' })
   })
 
   test('a failed call write is swallowed; the outcome still lands and joins nothing', async () => {
@@ -195,13 +196,20 @@ describe('OutboundObserver', () => {
       expect(match.segment).not.toContain('secret')
       expect(match.destination).not.toContain('secret')
     }
-    // An outcome detail redacts too (D8).
+    // An outcome detail goes through the same gate on its own text (D8):
+    // a credential word or token shape withholds it whole.
     const { observer: second, outcomes } = harness()
     second.onPreToolUse({ ...PRE, toolUseId: 'tu-err', toolInput: { command: 'curl -d x https://x.example.com' } })
     second.onPostToolUseFailure({ ...PRE, toolUseId: 'tu-err', error: '401 token ghp_ABCDEFghijklmnop0123456789' })
     await flushWrites()
     expect(outcomes[0]?.detail).not.toContain('ghp_')
-    expect(outcomes[0]?.detail).toContain('‹redacted›')
+    expect(outcomes[0]?.detail).toBe('‹withheld: credential›')
+    // A plain detail stores as written.
+    const { observer: third, outcomes: plain } = harness()
+    third.onPreToolUse({ ...PRE, toolUseId: 'tu-plain', toolInput: { command: 'curl -d x https://x.example.com' } })
+    third.onPostToolUseFailure({ ...PRE, toolUseId: 'tu-plain', error: 'exit 7: connection refused' })
+    await flushWrites()
+    expect(plain[0]?.detail).toBe('exit 7: connection refused')
   })
 
   test('spawn end retires the live set and drops that spawn\'s pending entries', async () => {
@@ -235,11 +243,11 @@ describe('OutboundObserver', () => {
     expect(calls[0]!.id).toMatch(/^obc-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/)
   })
 
-  test('a failure detail is capped before redaction and marks an interrupt (CC round 3)', async () => {
+  test('a failure detail is capped and gated, and marks an interrupt (CC round 3)', async () => {
     const { observer, outcomes } = harness()
     observer.onPreToolUse({ ...PRE, toolUseId: 'tu-err', toolInput: { command: 'curl -d x https://x.example.com' } })
     // A token inside the read cap, then padding far past it: the stored
-    // detail is bounded either way, and the capped prefix still redacts.
+    // detail is bounded either way, and the token shape withholds it.
     const tail = `${'x'.repeat(500)} ghp_ABCDEFghijklmnop0123456789 ${'y'.repeat(4000)}`
     observer.onPostToolUseFailure({
       ...PRE,
@@ -251,8 +259,15 @@ describe('OutboundObserver', () => {
     const detail = outcomes[0]?.detail ?? ''
     expect(detail.length).toBeLessThanOrEqual(1024)
     expect(detail).not.toContain('ghp_')
-    expect(detail).toContain('‹redacted›')
-    expect(detail.startsWith('(interrupt) ')).toBe(true)
+    expect(detail).toBe('(interrupt) ‹withheld: token›')
+    // Without a secret, a long detail is cut at 1024, backing off a word.
+    const { observer: long, outcomes: cut } = harness()
+    long.onPreToolUse({ ...PRE, toolUseId: 'tu-long', toolInput: { command: 'curl -d x https://x.example.com' } })
+    long.onPostToolUseFailure({ ...PRE, toolUseId: 'tu-long', error: 'word '.repeat(1000) })
+    await flushWrites()
+    expect(cut[0]?.detail?.length).toBeLessThanOrEqual(1024)
+    expect(cut[0]?.detail?.length).toBeGreaterThan(1000)
+    expect(cut[0]?.detail?.endsWith('word')).toBe(true)
   })
 
   test('nothing is written while only microtasks run: writes defer past the turn', async () => {
@@ -267,13 +282,21 @@ describe('OutboundObserver', () => {
     expect(outcomes).toHaveLength(1)
   })
 
-  test('the parse prefix is load-bearing: sends past 16 KiB never record (round 5 R6)', async () => {
-    // Dropping the cap would find the tail send and fail this test.
+  test('a send past 16 KiB records; past the precise bound the backstop records it (task 3.6)', async () => {
+    // Version 2 never read past 16 KiB, so a tail send recorded nothing.
     const { observer, calls } = harness()
     const command = 'true ' + 'x'.repeat(16_400) + '; curl -d x https://host.example.org/hook'
     observer.onPreToolUse({ ...PRE, toolUseId: 'tu-past', toolInput: { command } })
     await flushWrites()
-    expect(calls).toEqual([])
+    expect(calls).toHaveLength(1)
+    expect(calls[0]).toMatchObject({ rule: 'http-send', verdict: 'violation', destination: 'host:host.example.org', truncated: true })
+    // Past PRECISE_MAX only the backstop reads: still a row, never allowed.
+    const huge = harness()
+    const beyond = 'true ' + 'x '.repeat(PRECISE_MAX) + '; curl -d x https://example.internal/hook'
+    huge.observer.onPreToolUse({ ...PRE, toolUseId: 'tu-huge', toolInput: { command: beyond } })
+    await flushWrites()
+    expect(huge.calls).toHaveLength(1)
+    expect(huge.calls[0]).toMatchObject({ rule: 'unclassified-send', verdict: 'unknown-destination' })
   })
 
   test('no probe-secret byte reaches any stored field, across shift and quoting (round 7 S1)', async () => {

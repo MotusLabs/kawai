@@ -11,8 +11,8 @@ import {
   parseGitUrl,
   strongest,
 } from '../outbound/classify'
-import { parseCommand } from '../outbound/parse'
-import { parseSends } from '../outbound/rules'
+import { parseCall } from '../outbound/segments'
+import { parseSends } from '../outbound/sends'
 import { facts, judged, verdictOf } from './outboundClassifyFacts'
 import { redact } from '../outbound/redact'
 
@@ -54,26 +54,26 @@ describe('git-push', () => {
 
   test('a variable target and an unknown remote read unknown, never allowed', () => {
     expect(verdictOf('git push "$REMOTE" main')).toEqual({
-      rule: 'git-push', verdict: 'unknown-destination', destination: 'unresolved:the target is a variable or command substitution',
+      rule: 'git-push', verdict: 'unknown-destination', destination: 'unresolved:not-literal',
     })
     expect(verdictOf('git push $(remote-name)')).toEqual({
-      rule: 'git-push', verdict: 'unknown-destination', destination: 'unresolved:the target is a variable or command substitution',
+      rule: 'git-push', verdict: 'unknown-destination', destination: 'unresolved:not-literal',
     })
     expect(verdictOf('git push upstream main')).toEqual({
-      rule: 'git-push', verdict: 'unknown-destination', destination: 'unresolved:remote upstream is not configured',
+      rule: 'git-push', verdict: 'unknown-destination', destination: 'unresolved:unknown-remote',
     })
   })
 
   test('no repository at the cwd, a failed read, and GIT_DIR each read unknown', () => {
     expect(verdictOf('git push', '/plain/dir')).toEqual({
-      rule: 'git-push', verdict: 'unknown-destination', destination: 'unresolved:no repository at the cwd',
+      rule: 'git-push', verdict: 'unknown-destination', destination: 'unresolved:no-repository',
     })
     expect(verdictOf('GIT_DIR=/x/.git git push')).toEqual({
-      rule: 'git-push', verdict: 'unknown-destination', destination: 'unresolved:GIT_DIR is set',
+      rule: 'git-push', verdict: 'unknown-destination', destination: 'unresolved:environment-pin',
     })
     const unreadable = { ...facts, repos: new Map([['/repo', { root: '/repo', originUrls: [], remotes: new Map(), pushRemote: null, unreadable: true }]]) }
     const candidate = parseSends('git push', '/repo')[0]!
-    expect(judge(candidate, unreadable).destination).toBe('unresolved:the facts read failed')
+    expect(judge(candidate, unreadable).destination).toBe('unresolved:facts-unreadable')
   })
 })
 
@@ -113,7 +113,11 @@ describe('gh-write and gh-api-write', () => {
     expect(verdictOf('gh pr create --title "github.com/other/repo"')).toEqual({
       rule: 'gh-write', verdict: 'allowed', destination: 'github:origin',
     })
+    // An unquoted heredoc expands its body, so the call is not all literal (v3).
     expect(verdictOf('gh pr comment 62 --body-file - <<NOTES\nsee github.com/other/repo\nNOTES')).toEqual({
+      rule: 'gh-write', verdict: 'unknown-destination', destination: 'unresolved:not-literal',
+    })
+    expect(verdictOf("gh pr comment 62 --body-file - <<'NOTES'\nsee github.com/other/repo\nNOTES")).toEqual({
       rule: 'gh-write', verdict: 'allowed', destination: 'github:origin',
     })
   })
@@ -126,11 +130,11 @@ describe('gh-write and gh-api-write', () => {
       'GH_REPO=; gh pr create --title x',
     ]) {
       expect(verdictOf(command)).toEqual({
-        rule: 'gh-write', verdict: 'unknown-destination', destination: 'unresolved:GH_REPO is set',
+        rule: 'gh-write', verdict: 'unknown-destination', destination: 'unresolved:environment-pin',
       })
     }
     expect(verdictOf('export GH_HOST=example.com; gh issue create --title x')).toEqual({
-      rule: 'gh-write', verdict: 'unknown-destination', destination: 'unresolved:GH_HOST is set',
+      rule: 'gh-write', verdict: 'unknown-destination', destination: 'unresolved:environment-pin',
     })
     // The pin dies with the segment that set it.
     expect(verdictOf('GH_REPO=other/repo true; gh pr create --title x')).toEqual({
@@ -152,10 +156,10 @@ describe('gh-write and gh-api-write', () => {
       rule: 'gh-api-write', verdict: 'allowed', destination: 'github:origin',
     })
     expect(verdictOf('gh api graphql -f query="{viewer{login}}"')).toEqual({
-      rule: 'gh-api-write', verdict: 'unknown-destination', destination: 'unresolved:the API path names no repository',
+      rule: 'gh-api-write', verdict: 'unknown-destination', destination: 'unresolved:api-path-not-repo',
     })
     expect(verdictOf('GH_REPO=other/repo gh api -X POST repos/acme/kawai/issues')).toEqual({
-      rule: 'gh-api-write', verdict: 'unknown-destination', destination: 'unresolved:GH_REPO is set',
+      rule: 'gh-api-write', verdict: 'unknown-destination', destination: 'unresolved:environment-pin',
     })
   })
 })
@@ -167,16 +171,19 @@ describe('registry-publish', () => {
       rule: 'registry-publish', verdict: 'allowed', destination: 'internal:npm.example.internal',
     })
     expect(verdictOf('yarn publish')).toEqual({ rule: 'registry-publish', verdict: 'violation', destination: 'registry:registry.yarnpkg.com' })
-    expect(verdictOf('twine upload dist/*')).toEqual({ rule: 'registry-publish', verdict: 'violation', destination: 'registry:pypi.org' })
-    expect(verdictOf('twine upload --repository-url https://pypi.example.internal dist/*')).toEqual({
+    // A glob is not a literal word (v3); a literal file keeps the registry.
+    expect(verdictOf('twine upload dist/*')).toEqual({ rule: 'registry-publish', verdict: 'unknown-destination', destination: 'unresolved:not-literal' })
+    expect(verdictOf('twine upload dist/pkg.whl')).toEqual({ rule: 'registry-publish', verdict: 'violation', destination: 'registry:pypi.org' })
+    expect(verdictOf('twine upload --repository-url https://pypi.example.internal dist/pkg.whl')).toEqual({
       rule: 'registry-publish', verdict: 'allowed', destination: 'internal:pypi.example.internal',
     })
-    expect(verdictOf('twine upload -r internal-name dist/*')).toEqual({
-      rule: 'registry-publish', verdict: 'unknown-destination', destination: 'unresolved:the twine repository is a name, not a URL',
+    expect(verdictOf('twine upload -r internal-name dist/pkg.whl')).toEqual({
+      rule: 'registry-publish', verdict: 'unknown-destination', destination: 'unresolved:registry-name',
     })
     expect(verdictOf('cargo publish')).toEqual({ rule: 'registry-publish', verdict: 'violation', destination: 'registry:crates.io' })
+    // A registry name resolves through cargo config the parser never reads (v3).
     expect(verdictOf('cargo publish --registry example-registry')).toEqual({
-      rule: 'registry-publish', verdict: 'violation', destination: 'registry:example-registry',
+      rule: 'registry-publish', verdict: 'unknown-destination', destination: 'unresolved:registry-name',
     })
     expect(verdictOf('docker push registry.example.internal/team/app:2')).toEqual({
       rule: 'registry-publish', verdict: 'allowed', destination: 'internal:registry.example.internal',
@@ -255,10 +262,10 @@ describe('http-send and mail-send', () => {
 
   test('variables and command substitution read unknown', () => {
     expect(verdictOf('curl -d @data.json "$TARGET"')).toEqual({
-      rule: 'http-send', verdict: 'unknown-destination', destination: 'unresolved:the target is a variable or command substitution',
+      rule: 'http-send', verdict: 'unknown-destination', destination: 'unresolved:not-literal',
     })
     expect(verdictOf('curl -X POST $(endpoint)')).toEqual({
-      rule: 'http-send', verdict: 'unknown-destination', destination: 'unresolved:the target is a variable or command substitution',
+      rule: 'http-send', verdict: 'unknown-destination', destination: 'unresolved:not-literal',
     })
   })
 })
@@ -281,15 +288,15 @@ describe('mcp-call and the whole-command reduction', () => {
     expect(best.destination).toBe('registry:registry.npmjs.org')
     // violation > unknown-destination > allowed, then rule order.
     const mixed = judged('git push "$REMOTE" main; curl https://example.internal/x; gh api graphql -f q=x')
-    expect(strongest(mixed)!.destination).toBe('unresolved:the target is a variable or command substitution')
+    expect(strongest(mixed)!.destination).toBe('unresolved:not-literal')
     // The plain GET sent nothing: only the push and the gh api call matched.
     expect(mixed.map(match => match.rule)).toEqual(['git-push', 'gh-api-write'])
-    expect(CLASSIFIER_VERSION).toBe(2)
+    expect(CLASSIFIER_VERSION).toBe(3)
   })
 
   test('cd and git -C carry the effective cwd into the repository facts', () => {
     expect(verdictOf('cd /plain/dir && git push')).toEqual({
-      rule: 'git-push', verdict: 'unknown-destination', destination: 'unresolved:no repository at the cwd',
+      rule: 'git-push', verdict: 'unknown-destination', destination: 'unresolved:no-repository',
     })
     expect(verdictOf('git -C /repo push')).toEqual({
       rule: 'git-push', verdict: 'allowed', destination: 'github:origin',
@@ -298,9 +305,9 @@ describe('mcp-call and the whole-command reduction', () => {
     // compound call keeps its strongest verdict (the subshell's unknown).
     const both = judged('bash -c "cd /plain/dir && git push"; git push')
     expect(both.map(match => match.destination)).toEqual([
-      'unresolved:no repository at the cwd', 'github:origin',
+      'unresolved:no-repository', 'github:origin',
     ])
-    expect(strongest(both)!.destination).toBe('unresolved:no repository at the cwd')
+    expect(strongest(both)!.destination).toBe('unresolved:no-repository')
   })
 })
 
@@ -314,6 +321,10 @@ describe('CC checkpoint findings: curl targets, clusters, and unwrapping', () =>
     expect(both.map(match => match.destination)).toEqual(['internal:hook.example.internal', 'host:x.example.com'])
     expect(strongest(both)).toMatchObject({ verdict: 'violation', destination: 'host:x.example.com' })
     expect(verdictOf('curl -K config.cfg -D headers.txt -c jar.txt --resolve a.example.internal:443:192.0.2.1 -d x https://hook.example.internal')).toEqual({
+      // -K reads options from a file the parser never sees (v3).
+      rule: 'http-send', verdict: 'unknown-destination', destination: 'unresolved:options-file',
+    })
+    expect(verdictOf('curl -D headers.txt -c jar.txt -d x https://hook.example.internal')).toEqual({
       rule: 'http-send', verdict: 'allowed', destination: 'internal:hook.example.internal',
     })
   })
@@ -338,8 +349,9 @@ describe('CC checkpoint findings: curl targets, clusters, and unwrapping', () =>
     expect(verdictOf('bash -lc "curl -d x https://example.internal/hook"')).toEqual({
       rule: 'http-send', verdict: 'allowed', destination: 'internal:example.internal',
     })
+    // A subshell or group is unproven context (v3).
     expect(verdictOf('(cd /repo && git push fork)')).toEqual({
-      rule: 'git-push', verdict: 'violation', destination: 'github:other/fork',
+      rule: 'git-push', verdict: 'unknown-destination', destination: 'unresolved:subshell-or-group',
     })
     // A subshell's cd never moves the parent's cwd.
     const both = judged('(cd /plain/dir && git push); git push')
@@ -412,17 +424,17 @@ describe('CC checkpoint findings: curl targets, clusters, and unwrapping', () =>
       rule: 'gh-write', verdict: 'violation', destination: 'github:acme/new-repo',
     })
     expect(verdictOf('gh repo create new-repo')).toEqual({
-      rule: 'gh-write', verdict: 'violation', destination: "github:the caller's account/new-repo",
+      rule: 'gh-write', verdict: 'violation', destination: "github:@me/new-repo",
     })
     expect(verdictOf('gh repo fork')).toEqual({
-      rule: 'gh-write', verdict: 'violation', destination: "github:the caller's account/the source name",
+      rule: 'gh-write', verdict: 'violation', destination: "github:@me/unnamed",
     })
     expect(verdictOf('gh repo fork --clone=false')).toEqual({
-      rule: 'gh-write', verdict: 'violation', destination: "github:the caller's account/the source name",
+      rule: 'gh-write', verdict: 'violation', destination: "github:@me/unnamed",
     })
     // The source's owner never carries over: only its name, as the fork's.
     expect(verdictOf('gh repo fork other/repo')).toEqual({
-      rule: 'gh-write', verdict: 'violation', destination: "github:the caller's account/repo",
+      rule: 'gh-write', verdict: 'violation', destination: "github:@me/repo",
     })
     expect(verdictOf('gh gist create notes.md')).toEqual({
       rule: 'gh-write', verdict: 'violation', destination: 'host:gist.github.com',
@@ -447,7 +459,7 @@ describe('CC checkpoint findings: curl targets, clusters, and unwrapping', () =>
       }]]),
     }
     expect(judge(parseSends('git push https://github.com/other/fork.git', '/repo')[0]!, pinned)).toMatchObject({
-      verdict: 'unknown-destination', destination: 'unresolved:an insteadOf rewrite could change this target',
+      verdict: 'unknown-destination', destination: 'unresolved:repo-config-pinned',
     })
     expect(judge(parseSends('git push', '/repo')[0]!, pinned)).toMatchObject({ verdict: 'unknown-destination' })
     expect(judge(parseSends('git push fork', '/repo')[0]!, pinned)).toMatchObject({ verdict: 'unknown-destination' })
@@ -455,10 +467,10 @@ describe('CC checkpoint findings: curl targets, clusters, and unwrapping', () =>
   })
 
   test('the tokenizer reads ANSI-C strings as one word with escapes (round 7 L-b)', () => {
-    // Removing the ANSI-C branch retokenizes: the escaped quote ends the
+    // ANSI-C text is kept raw and never literal (v3). Removing the ANSI-C branch retokenizes: the escaped quote ends the
     // single-quoted run early and the word splits, failing these pins.
-    const segments = parseCommand("echo $'A\\'B' C", '/repo')
-    expect(segments[0]!.argv).toEqual(["echo", "$'A\\'B'", 'C'])
+    const call = parseCall("echo $'A\\'B' C")
+    expect(call.commands[0]!.words.map(word => [word.text, word.literal])).toEqual([['echo', true], ["$'A\\'B'", false], ['C', true]])
     // A secret inside $'…' survives as one span, so redaction sees it whole.
     expect(redact("curl -H $'Authorization: Bearer S7X' https://example.internal")).not.toContain('S7X')
   })
