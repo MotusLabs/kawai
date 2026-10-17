@@ -1012,6 +1012,10 @@ export class ChatSessionManager {
     })
     // Plans and their validation (durable-plans + plan-validation), composed
     // the one way anything may compose them: the ValidationService over the
+    this.caps = new TeamCaps({
+      ...(options.profileCatalogHome ? { homeDir: options.profileCatalogHome } : {}),
+      onErrors: errors => logger.warn('team_caps_file_errors', { errors }),
+    })
     // same plan store, capacity evidence from staffing and the limit events
     // through the team's own groups root, and the PlanService with
     // validation's `validation-current` appended after the shipped approval
@@ -1023,10 +1027,12 @@ export class ChatSessionManager {
       impact: this.impact,
       getSession: id => this.records.get(id),
       capacityReads: { capacity: (teamId, group, worktree) => this.teamMail.staffing.capacity(teamId, group, worktree), cooldownUntil: profileId => this.teamMail.limits.cooldownUntil(profileId) },
+      caps: this.caps,
       ...(options.profileCatalogHome ? { homeDir: options.profileCatalogHome } : {}),
     })
     this.validation = planServices.validation
     this.plans = planServices.plans
+    this.executions = planServices.executions
     this.validationDetail = planServices.validationDetail
     this.validationAdapter = planServices.adapter
     // The impact assessment derives from plans, and every plan's impact gate
@@ -1037,6 +1043,12 @@ export class ChatSessionManager {
     this.plans.store.subscribe(plan => {
       this.options.onPlanChange?.(plan.teamId, plan.id)
       this.options.onStrategyChange?.(plan.teamId)
+    })
+    // Every committed execution write re-pushes the plan's detail (D17):
+    // the changes carry the execution's view, and owned-task changes ride
+    // the task store's own plan flow above.
+    planServices.executionStore.subscribe(teamId => {
+      this.options.onPlanChange?.(teamId)
     })
     this.strategies.store.subscribe(strategy => {
       const teamId = strategyTeam(strategy)
@@ -1283,6 +1295,10 @@ export class ChatSessionManager {
   private readonly turnUsageTracker: TurnUsageTracker
   /** Durable plans (durable-plans); the plan tools and UI actions go through it. */
   readonly plans: PlanService
+  /** Plan executions (plan-execution): the human Start/Stop/Retry commands. */
+  readonly executions: import('../plans/execution/ExecutionService').ExecutionService
+  /** The user-level team settings (plan-execution D16's floor map lives here). */
+  readonly caps: TeamCaps
   /** Plan validation (plan-validation): reports, assessments, decisions, and the approval standing. */
   readonly validation: ValidationService
   /** The coalesced validation view for the Plans page pushes (plan-validation D11). */

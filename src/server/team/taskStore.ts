@@ -148,6 +148,12 @@ export class TaskStore {
   readonly results: TaskResultStore
 
   constructor(private readonly db: Database, private readonly mail?: MailboxStore, private readonly assignments?: AssignmentStore) {
+    // A claim or release of a task's instruction mail changes what the task
+    // views show (the assignment's holder); announce the task so the plan
+    // views of an owned change re-push (plan-execution D17).
+    this.mail?.subscribe((_teamId, message) => {
+      if (message?.taskId && (message.state === 'claimed' || message.state === 'queued')) this.changed(message.taskId)
+    })
     this.drafts = new TaskDraftStore(db)
     this.acknowledgements = new TaskAcknowledgements(db)
     this.notices = mail && assignments ? new TaskNotices(db, mail, assignments, this.acknowledgements) : null

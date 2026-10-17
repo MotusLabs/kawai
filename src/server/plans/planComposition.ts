@@ -19,6 +19,11 @@ import { OpenspecAdapter } from './validation/openspecAdapter'
 import { ValidationService } from './validation/ValidationService'
 import { ValidationStore } from './validation/validationStore'
 import { ValidationDetailCache } from './validation/validationDetail'
+import { ExecutionStore } from './execution/executionStore'
+import { ExecutionService } from './execution/ExecutionService'
+import { executionOwnership } from './execution/executionOwnership'
+import { REGISTERED_LANDING_MODES } from './landing/landingMechanisms'
+import type { PlanExecutionSettings } from '../team/teamCaps'
 
 /** What capacity evidence reads: staffing's counts and the cooldown ends (D3). */
 export interface CapacityReads {
@@ -33,6 +38,15 @@ export interface PlanServicesOptions {
   strategies: StrategyStore
   impact: ImpactService
   getSession: (id: string) => ChatSessionRecord | null | undefined
+  /** The user-level settings (plan-execution D16); without it Start refuses on the missing floor map. */
+  caps?: { planExecution: (teamId: string) => Promise<PlanExecutionSettings> }
+  /** Test seam: replace the execution pre-reads' validation standing (defaults to the composed service). */
+  executionValidation?: {
+    prepareStanding: (planId: string, revision: number) => Promise<unknown> | null
+    standing: (prepared: unknown) => unknown
+  }
+  /** Test seam: replace the landing probe (defaults to the real one). */
+  executionProbe?: (input: import('./landing/landingProbe').ProbeInput, options?: import('./landing/ghCommand').GhCommandOptions) => Promise<import('./landing/landingProbe').ProbeResult>
   /** One adapter per manager by default (one 4-slot CLI pool per process). */
   adapter?: OpenspecAdapter
   /** Without staffing or limit reads, the capacity check shows no evidence row. */
@@ -75,6 +89,8 @@ export function composePlanServices(options: PlanServicesOptions): {
   plans: PlanService
   validationDetail: ValidationDetailCache
   adapter: OpenspecAdapter
+  executions: ExecutionService
+  executionStore: ExecutionStore
 } {
   const adapter = options.adapter ?? new OpenspecAdapter()
   const validationStore = new ValidationStore(options.db)
@@ -89,6 +105,16 @@ export function composePlanServices(options: PlanServicesOptions): {
       : undefined,
     ...(options.homeDir ? { homeDir: options.homeDir } : {}),
   })
+  const executionStore = new ExecutionStore(options.db)
+  // The real ownership (plan-execution D7/D9): the store reads, and the git
+  // checks run over the real remote reads.
+  const ownership = executionOwnership(executionStore, {
+    isAncestor: (...args) => import('./landing/gitRemote').then(module => module.isAncestor(...args)),
+    lsRemoteHead: (...args) => import('./landing/gitRemote').then(module => module.lsRemoteHead(...args)),
+  }, messageId => {
+    const row = options.db.prepare('SELECT from_kind FROM team_messages WHERE id = ?').get(messageId) as { from_kind?: string } | undefined
+    return row?.from_kind === 'system' ? 'system' : row === undefined ? null : row.from_kind === 'human' ? 'human' : 'agent'
+  })
   const plans = new PlanService(options.plans, {
     getSession: options.getSession,
     strategies: options.strategies,
@@ -98,7 +124,39 @@ export function composePlanServices(options: PlanServicesOptions): {
       standing: prepared => validation.standing(prepared as Parameters<ValidationService['standing']>[0]),
       precondition: ValidationService.validationCurrentPrecondition(),
     },
+    executionOf: executionId => {
+      const execution = executionStore.execution(executionId)
+      return execution ? { planId: execution.planId, revision: execution.revision } : null
+    },
+    executionsOf: planId => executionStore.executionsOf(planId).map(execution => ({
+      id: execution.id,
+      revision: execution.revision,
+      state: execution.state,
+      outcome: execution.outcome,
+      stopReason: execution.stopReason,
+      startedAt: execution.startedAt,
+      finishedAt: execution.finishedAt,
+      changes: executionStore.changes(execution.id).map(row => ({
+        change: row.change, state: row.state, step: row.step, stopReason: row.stopReason, fixRounds: row.fixRounds,
+      })),
+    })),
     ...(options.homeDir ? { homeDir: options.homeDir } : {}),
   })
-  return { validation, validationStore, plans, validationDetail: new ValidationDetailCache(validation), adapter }
+  const executions = new ExecutionService({
+    store: executionStore,
+    plansStore: options.plans,
+    plans,
+    validation: options.executionValidation ?? {
+      prepareStanding: (planId: string, revision: number) => validation.prepareStanding(planId, revision),
+      standing: (prepared: unknown) => validation.standing(prepared as Parameters<ValidationService['standing']>[0]),
+    },
+    impact: { gate: (planId, revision) => options.impact.gate(planId, revision) },
+    settings: options.caps ?? { planExecution: async () => ({ floorChecks: null, maxParallelChanges: 3, mergeMethod: 'merge' }) },
+    getSession: options.getSession,
+    landingModes: () => new Set(REGISTERED_LANDING_MODES),
+    ...(options.executionProbe ? { probe: options.executionProbe } : {}),
+    ...(options.homeDir ? { homeDir: options.homeDir } : {}),
+  })
+  void ownership
+  return { validation, validationStore, plans, validationDetail: new ValidationDetailCache(validation), adapter, executions, executionStore }
 }

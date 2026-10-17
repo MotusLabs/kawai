@@ -57,13 +57,15 @@ export class ExecutionService {
     plans: PlanService
     validation: {
       prepareStanding: (planId: string, revision: number) => Promise<unknown> | null
-      standing: (prepared: unknown) => ValidationStanding | null
+      standing: (prepared: unknown) => unknown
     }
     impact: { gate: (planId: string, revision: number) => ImpactGate | null }
     settings: { planExecution: (teamId: string) => Promise<PlanExecutionSettings> }
     getSession: (id: string) => ChatSessionRecord | null | undefined
     /** The registered landing mechanism modes (D13's registry; the wiring arrives with the landing sections). */
     landingModes: () => ReadonlySet<string>
+    /** The landing probe (D13); tests stub it. */
+    probe?: typeof probeLanding
     /** Kawai cancels its tasks on Stop through the task service (D12). */
     tasks?: import('../../team/TaskService').TaskService
     /** Woken after a Start commits (the executor, D5); never on a replay or refusal. */
@@ -148,7 +150,7 @@ export class ExecutionService {
       }
     })
     const landed = new Set(this.deps.store.landings(planId).map(landing => landing.change))
-    const probe = await probeLanding({ main: team.groupsRoot, floorChecks: settings.floorChecks, changes: names, provisioned: landed }, this.deps.ghOptions ?? {})
+    const probe = await (this.deps.probe ?? probeLanding)({ main: team.groupsRoot, floorChecks: settings.floorChecks, changes: names, provisioned: landed }, this.deps.ghOptions ?? {})
     let baseDiffs: Array<{ change: string; files: string[] }> = []
     if (probe.base !== null && probe.repo !== null) {
       const tree = await ghTreeEntries(probe.repo, probe.base.tree, this.deps.ghOptions ?? {})
@@ -169,7 +171,8 @@ export class ExecutionService {
   } {
     const plan = this.deps.plansStore.get(request.planId)!
     const revisionRow = this.deps.plansStore.revision(request.planId, request.revision)
-    const standing = prepared !== null && prepared !== undefined ? this.deps.validation.standing(prepared) : null
+    const standingRaw = prepared !== null && prepared !== undefined ? this.deps.validation.standing(prepared) : null
+    const standing = standingRaw as ValidationStanding | null
     const report = standing !== null && 'report' in standing ? standing.report : null
     const content = revisionRow?.content
     const names = content?.changes.map(entry => entry.change) ?? []

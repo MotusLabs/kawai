@@ -98,10 +98,21 @@ export function mapConstraint(error: unknown): never {
 
 export class ExecutionStore {
   private readonly holderChecks = new Map<string, SlotHolderCheck>()
+  private readonly listeners = new Set<(teamId: string) => void>()
 
   constructor(readonly db: Database, private readonly now: () => Date = () => new Date()) {}
 
   private iso(): string { return this.now().toISOString() }
+
+  /** A committed execution write (D17): the team's plan views re-push. */
+  subscribe(listener: (teamId: string) => void): () => void {
+    this.listeners.add(listener)
+    return () => this.listeners.delete(listener)
+  }
+
+  private changed(teamId: string): void {
+    for (const listener of this.listeners) listener(teamId)
+  }
 
   /** Register a mechanism's slot holder kind (X6); `change` is built in. */
   registerHolderKind(kind: string, check: SlotHolderCheck): void {
@@ -128,6 +139,7 @@ export class ExecutionStore {
           change.run(id, entry.change, input.teamId, position, entry.landed ? 'landed' : 'waiting', entry.landed ? 0 : 1, at)
         })
       })()
+      this.changed(input.teamId)
     } catch (error) {
       mapConstraint(error)
     }
@@ -166,9 +178,11 @@ export class ExecutionStore {
       const finished = this.db.prepare(`UPDATE plan_executions SET state = 'finished', outcome = ?, stop_reason = ?, finished_at = ?
         WHERE id = ? AND state = 'running'`).run(outcome, stopReason, at, id)
       if (finished.changes === 0) return false
+      const teamId = String((this.db.prepare('SELECT team_id FROM plan_executions WHERE id = ?').get(id) as { team_id: string }).team_id)
       this.db.prepare('UPDATE plan_execution_changes SET owns = 0, updated_at = ? WHERE execution_id = ? AND owns = 1').run(at, id)
       this.db.prepare("DELETE FROM plan_landing_slots WHERE holder_kind = 'change' AND holder_id LIKE ? ESCAPE '\\'")
         .run(`${id.replace(/[\\%_]/g, char => `\\${char}`)}:%`)
+      this.changed(teamId)
       return true
     })()
   }
@@ -227,7 +241,9 @@ export class ExecutionStore {
         .run(...values, executionId, change)
       if (current.state !== 'landing' && next === 'landing') this.takeSlot(current.teamId, changeHolderId(executionId, change), at)
       if (current.state === 'landing' && next !== 'landing') this.releaseSlot(current.teamId, changeHolderId(executionId, change))
-      return this.change(executionId, change)
+      const updated = this.change(executionId, change)
+      if (updated !== null) this.changed(current.teamId)
+      return updated
     })()
   }
 
