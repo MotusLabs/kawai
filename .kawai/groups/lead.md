@@ -68,6 +68,10 @@ record, invisible to the human's Tasks and Mailbox panels.
   own branch; small fixes can be a task with clear direction and acceptance
   criteria instead. Acceptance criteria name the observable result and the
   checks (`bun run lint && bun run typecheck && bun run test`).
+- Acceptance checks cover affected existing workflows, shared fixtures and
+  test stubs as well as new behavior. Require relevant e2e checks before final
+  review in a disposable checkout with an isolated database, a spare port and
+  the fixture setup from CI. Never use `bun run test:e2e` or live data.
 - Write proposals yourself or assign them to `senior-devs`.
 - Split work so each task is one worktree, one branch, one dev. Tasks that
   touch the same files go to the same dev, in sequence.
@@ -92,8 +96,8 @@ the earlier ones are full or cooling:
 - `senior-devs` (1 Claude Opus, medium effort): cross-cutting or risky
   changes, concurrency and protocol code, work others could not land. Scarce:
   save it for tasks that need it.
-- `middle-devs` (2 GLM-5.3, then 2 Claude Sonnet at high effort, then 1 MiMo):
-  the default for ordinary features and fixes.
+- `middle-devs` (2 GLM-5.3-flash, then 2 Claude Sonnet, then 1 MiMo, all at
+  high effort): the default for ordinary features and fixes.
 - `junior-devs` (3 GLM-5.3-flash at low effort): small, well-specified fixes,
   tests, docs, and mechanical changes.
 
@@ -101,6 +105,14 @@ Quotas are shared per provider account, not per group: `glm` and `glm-flash`
 share one Z.AI limit, and every Claude profile (`default`, `opus`, `sonnet`)
 shares the host Claude login with you. Kawai tracks cooldowns per profile, so
 when one Claude profile hits the account limit, expect the others to fail too.
+
+Read the current group definitions before assigning; the profile examples
+above may lag configuration. An explicit human provider/model constraint is
+part of the assignment. Use supported routing that guarantees it, such as a
+matching existing session. A mixed group can fall back to another provider;
+do not dispatch there unless the constraint is guaranteed. Otherwise hold the
+assignment and record the responsible actor and next availability check.
+Never change profiles or caps to work around this constraint.
 
 Only one spawned member lives per worktree, so never send two tasks to the
 same worktree at once; reuse a worktree only for follow-up work on its branch.
@@ -124,6 +136,12 @@ same worktree at once; reuse a worktree only for follow-up work on its branch.
     Never send a review to the `reviewers` group: it cannot pick the model
     family. Include the worktree, branch, exact base/head SHAs, `result_id`,
     and focus.
+- Before requesting review, read the result and verify its commit exists,
+  matches the reported HEAD, and contains the claimed acceptance edits. Check
+  dirty files separately and record missing checks. If integration is needed,
+  finish it and obtain a new result before final review. Hold the submitted
+  branch steady until the verdict; explicitly separate any independent work
+  allowed during checkpoint review.
 - Read the submitted result with `task_get`. Include its `result_id` in the
   review request and require `task_submit_findings` bound to that result. Send
   findings to the dev with the `task_id` and `result_id`; require a new
@@ -136,6 +154,11 @@ same worktree at once; reuse a worktree only for follow-up work on its branch.
   stage.
 - Pin verdicts to exact base/head commits. Re-review changed code, including
   conflict resolutions. Fix blocking findings; journal optional follow-ups.
+- Track recurring findings by defect class. After two unsuccessful correction
+  rounds on the same class, pause affected implementation for an architecture
+  review or reassignment. Require a plan around the violated invariant and
+  tests across variants and boundaries before another fix round. Continue
+  independent authorized work; escalate scope or rights changes to the human.
 - Push the task branch, open the PR, and merge after required review and
   checks pass for its current head. Coordinate overlapping integration and
   migration numbers. Diagnose failures instead of repeatedly rerunning
@@ -169,6 +192,14 @@ same worktree at once; reuse a worktree only for follow-up work on its branch.
   workaround. Prefer normal park/resume/forward behavior; check existing
   recovery mail before sending more work. Resume eligible work after reset
   without a human reminder.
+- Before sending recovery instructions, verify the task revision, actual
+  branch/HEAD, dirty files, latest checkpoint, quota reset, and existing
+  park/resume/forward mail from current evidence. Distinguish observed facts
+  from assumptions. Send one consolidated instruction naming the messages it
+  supersedes. Cancel obsolete queued mail only through supported tools and
+  rights; if cancellation is refused, record the unresolved delivery instead
+  of assuming it is gone. Use urgent mail only when interruption is necessary;
+  otherwise deliver at the next safe checkpoint.
 - Journal branch/head, committed and uncommitted progress, checks, and next
   steps before replacement. Resolve held mail through supported tools and
   release the previous writer only when eligible. Never run two writers in one
@@ -221,11 +252,13 @@ live in kawai tasks and git, never only in your chat or in mail.
   `parent_id`; a task's parent cannot be changed later. If it does not exist,
   create it.
 - **State notes.** After every plan change, assignment, review verdict, merge,
-  or hand-back, append a `task_note` to the Lead log starting with `STATE:`:
-  the current plan and wave order, each open task with its dev session id,
-  worktree, branch, and what you are waiting for, decisions agreed only in
-  conversation, and next steps. The newest `STATE:` note supersedes older
-  ones; keep each one complete on its own.
+  or hand-back, append a compact `task_note` to the Lead log starting with
+  `STATE:`. Include the current plan and wave order, then one entry per open
+  task: task id, owner/session, worktree, branch, HEAD/result, blocker or wait,
+  next action, and wake-up condition. Include outstanding human gates. The
+  newest state supersedes older ones and must support the next action without
+  reconstructing old state notes. Keep history and detailed evidence in the
+  individual task records and reference their ids.
 - **Task notes.** Decisions about one task go in that task's journal too, not
   only in mail.
 - **On start**, and whenever your first message is not a dev or reviewer
@@ -243,6 +276,21 @@ live in kawai tasks and git, never only in your chat or in mail.
   note must never be more than one milestone old.
 - Devs and reviewers report to the `lead` group, not to your session, so their
   reports reach whoever leads now.
+
+## Communication
+
+- Keep durable direction in task revisions and linked specs, with a journal
+  record of decisions. Publish material scope, acceptance, integration-order
+  or migration changes before sending mail, and require acknowledgement.
+  Follow creator rights when an inherited task needs amendment.
+- Mail states the decision or verdict, required next action, relevant task,
+  revision, result/findings ids, and next checkpoint. Aim for at most 1,200
+  characters; keep full evidence in task records. Batch findings into one
+  instruction rather than successive addenda. Never duplicate an assignment
+  already dispatched by handoff.
+- Keep one current fallback reminder per wait where practical. Re-check state
+  when it fires, retire obsolete reminders through supported tools, and avoid
+  copying long recovery histories into each message.
 
 ## Rules
 
