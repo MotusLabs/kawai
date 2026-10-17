@@ -71,6 +71,7 @@ export interface ExecutorDeps {
 export class ExecutionExecutor {
   private readonly ticking = new Set<string>()
   private readonly timers = new Map<string, ReturnType<typeof setTimeout>>()
+  private closed = false
 
   constructor(private readonly deps: ExecutorDeps) {}
 
@@ -147,8 +148,9 @@ export class ExecutionExecutor {
     }
   }
 
-  /** Stop the timers (tests, shutdown). */
+  /** Stop the timers (tests, shutdown); a wake's trailing schedule arms none. */
   close(): void {
+    this.closed = true
     for (const timer of this.timers.values()) clearTimeout(timer)
     this.timers.clear()
   }
@@ -160,6 +162,7 @@ export class ExecutionExecutor {
     // A settled step makes the next due: the tick loops until a pass owes
     // nothing, bounded so a pathological loop cannot spin forever.
     for (let pass = 0; pass < 10; pass++) {
+      if (this.closed) return
       const snapshot = executionSnapshot(teamId, team.groupsRoot, this.deps.store, this.deps.plans,
         taskId => this.deps.tasks.store.results.listByTask(taskId)
           .map(result => ({ id: result.id, commit: result.commit, taskRevision: result.taskRevision, submittedBySession: result.submittedBy.kind === 'agent' ? result.submittedBy.sessionId : null }))
@@ -176,7 +179,12 @@ export class ExecutionExecutor {
         })
       if (snapshot.executions.length === 0) return
       const steps = planSteps(snapshot, this.deps.now?.().toISOString() ?? new Date().toISOString())
-      if (steps.transitions.length === 0 && steps.effects.length === 0 && steps.dispatches.length === 0 && steps.stages.length === 0 && steps.fixes.length === 0) return
+      if (steps.transitions.length === 0 && steps.effects.length === 0 && steps.dispatches.length === 0 && steps.stages.length === 0 && steps.fixes.length === 0) {
+        // Nothing new is due, but an effect the restart left pending still
+        // runs (its follow-on transition lands with its outcome, D14).
+        await this.settledRunDue(teamId)
+        return
+      }
 
       for (const step of steps.transitions) {
         this.deps.store.transition(step.executionId, step.change, step.guard, step.patch)
@@ -206,11 +214,10 @@ export class ExecutionExecutor {
       for (const fix of steps.fixes) {
         await this.applyFix(team, fix)
       }
-      if (steps.effects.length > 0 || steps.fixes.length > 0 || steps.stages.length > 0) {
-        // A done effect's follow-on transition lands with its outcome (D14),
-        // so the next pass sees the state it implies.
-        await this.runner(teamId).runDue(teamId)
-      }
+      // A done effect's follow-on transition lands with its outcome (D14),
+      // so the next pass sees the state it implies — and an effect the
+      // restart left due runs even when the planner owes no new step.
+      await this.settledRunDue(teamId)
     }
   }
 
@@ -241,6 +248,18 @@ export class ExecutionExecutor {
     const repo = remote.ok ? githubRepoOf(remote.stdout) ?? '' : ''
     this.repoCache.set(team.teamId, repo)
     return repo
+  }
+
+  /** runDue, with a tick abandoned by `close` swallowing its late writes. */
+  private async settledRunDue(teamId: string): Promise<void> {
+    if (this.closed) return
+    try {
+      await this.runner(teamId).runDue(teamId)
+    } catch (error) {
+      // A test or shutdown closed the database under an in-flight effect:
+      // the tick is abandoned, not failed — the next executor resumes.
+      if (!this.closed) throw error
+    }
   }
 
   private runner(teamId: string): EffectRunner {
@@ -411,6 +430,7 @@ export class ExecutionExecutor {
 
   /** While the team runs an execution, the 60-second timer keeps the loop alive (D5). */
   private scheduleTimer(teamId: string): void {
+    if (this.closed) return
     clearTimeout(this.timers.get(teamId))
     this.timers.delete(teamId)
     if (this.deps.store.runningForTeam(teamId).length === 0) return
