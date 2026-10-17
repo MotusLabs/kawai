@@ -9,6 +9,7 @@ import {
   resolveClaudeProfile,
   verifyProfileExecutable,
 } from '../chat/ClaudeProfiles'
+import { resolveProfileCatalog } from '../chat/profileCatalog'
 
 // Catalog reads are pinned to an empty temp home so a real ~/.kawai can never
 // leak into these tests; the shipped default catalog provides the profiles.
@@ -38,12 +39,27 @@ function lanEntry(extra: { label?: string; executable?: string; env?: Record<str
 
 /**
  * A user-level catalog that keeps the shipped profiles (a user file replaces
- * the shipped default wholesale) and adds the LAN entry the tests exercise.
+ * both shipped defaults wholesale) and adds the LAN entry the tests exercise.
+ * The GLM pair lives in the shipped providers default; these resolution tests
+ * read it flattened into legacy entries, with the same launch settings.
  */
 function catalogWithLan(): void {
   const shipped = JSON.parse(
     fs.readFileSync(path.resolve(import.meta.dir, '../../../config/profiles.default.json'), 'utf8'),
   ) as Record<string, unknown>
+  const providers = JSON.parse(
+    fs.readFileSync(path.resolve(import.meta.dir, '../../../config/providers.default.json'), 'utf8'),
+  ) as Record<string, { env?: Record<string, string>; limitResetTimeZone?: string; models?: Record<string, { label?: string; model?: string }> }>
+  for (const provider of Object.values(providers)) {
+    for (const [key, model] of Object.entries(provider.models ?? {})) {
+      shipped[key] = {
+        ...(model.label ? { label: model.label } : {}),
+        ...(model.model ? { model: model.model } : {}),
+        ...(provider.limitResetTimeZone ? { limitResetTimeZone: provider.limitResetTimeZone } : {}),
+        env: { ...provider.env },
+      }
+    }
+  }
   userCatalog({ ...shipped, lan: lanEntry({ env: { CLAUDE_CODE_ATTRIBUTION_HEADER: '0' } }) })
 }
 
@@ -52,10 +68,10 @@ describe('Claude profile resolution', () => {
     expect(claudeProfileMetadata({ homeDir: tempHome })).toEqual([
       { id: 'default', label: 'Default' }, { id: 'glm', label: 'GLM' },
       { id: 'glm-flash', label: 'GLM Flash' },
-      { id: 'minimax', label: 'MiniMax' }, { id: 'mimo', label: 'MiMo' },
-      { id: 'kimi', label: 'Kimi' },
       { id: 'opus', label: 'Claude Opus' }, { id: 'sonnet', label: 'Claude Sonnet' },
       { id: 'haiku', label: 'Claude Haiku' },
+      { id: 'minimax', label: 'MiniMax' }, { id: 'mimo', label: 'MiMo' },
+      { id: 'kimi', label: 'Kimi' },
     ])
   })
   test('documentation matches catalog labels and effective mappings', () => {
@@ -69,6 +85,25 @@ describe('Claude profile resolution', () => {
         if (value && value !== '0') expect(doc).toContain(value)
       }
       if (launch.model && launch.model !== 'sonnet') expect(doc).toContain(launch.model)
+    }
+  })
+  test('every fenced catalog example in the docs resolves through the real parser', () => {
+    const doc = fs.readFileSync(path.resolve(import.meta.dir, '../../../docs/claude-session-profiles.md'), 'utf8')
+    const blocks = [...doc.matchAll(/```json\n([\s\S]*?)```/g)].map(match => match[1])
+    expect(blocks.length).toBeGreaterThan(2)
+    for (const block of blocks) {
+      const value = JSON.parse(block) as Record<string, unknown>
+      // A wire-message example is not a catalog file.
+      if ('type' in value) continue
+      const isProviders = Object.values(value).some(
+        entry => typeof entry === 'object' && entry !== null && 'models' in entry,
+      )
+      const dir = path.join(tempHome, '.kawai')
+      fs.mkdirSync(dir, { recursive: true })
+      fs.writeFileSync(path.join(dir, 'profiles.json'), JSON.stringify(isProviders ? {} : value))
+      fs.writeFileSync(path.join(dir, 'providers.json'), JSON.stringify(isProviders ? value : {}))
+      const { errors } = resolveProfileCatalog({ homeDir: tempHome })
+      expect(errors, block.slice(0, 60)).toEqual([])
     }
   })
   test('omitted profile preserves existing Default behavior and unknown IDs fail', () => {
@@ -109,15 +144,27 @@ describe('Claude profile resolution', () => {
   })
   test('every shipped profile with a base URL maps every Claude tier to a provider model', () => {
     // resolveClaudeProfile() clears inherited profile-controlled variables, so
-    // an unmapped tier would send a Claude model name to the provider.
+    // an unmapped tier would send a Claude model name to the provider. The
+    // shipped checks read both defaults: legacy entries and provider models,
+    // whose tier maps sit at the provider level.
+    const tiers = ['ANTHROPIC_DEFAULT_OPUS_MODEL', 'ANTHROPIC_DEFAULT_SONNET_MODEL', 'ANTHROPIC_DEFAULT_HAIKU_MODEL', 'ANTHROPIC_DEFAULT_FABLE_MODEL']
     const catalog = JSON.parse(
       fs.readFileSync(path.resolve(import.meta.dir, '../../../config/profiles.default.json'), 'utf8'),
     ) as Record<string, { model?: string; env?: Record<string, string> }>
-    const tiers = ['ANTHROPIC_DEFAULT_OPUS_MODEL', 'ANTHROPIC_DEFAULT_SONNET_MODEL', 'ANTHROPIC_DEFAULT_HAIKU_MODEL', 'ANTHROPIC_DEFAULT_FABLE_MODEL']
     for (const [id, entry] of Object.entries(catalog)) {
       if (!entry.env?.ANTHROPIC_BASE_URL) continue
       expect(entry.model, `${id} startup model`).toBeTruthy()
       for (const tier of tiers) expect(entry.env?.[tier], `${id} ${tier}`).toBeTruthy()
+    }
+    const providers = JSON.parse(
+      fs.readFileSync(path.resolve(import.meta.dir, '../../../config/providers.default.json'), 'utf8'),
+    ) as Record<string, { env?: Record<string, string>; models?: Record<string, { model?: string }> }>
+    for (const [id, provider] of Object.entries(providers)) {
+      if (!provider.env?.ANTHROPIC_BASE_URL) continue
+      for (const tier of tiers) expect(provider.env?.[tier], `${id} ${tier}`).toBeTruthy()
+      for (const [key, model] of Object.entries(provider.models ?? {})) {
+        expect(model.model, `${id}/${key} startup model`).toBeTruthy()
+      }
     }
     // And the shipped catalog resolves cleanly (every env name is
     // profile-controlled, no file failures).

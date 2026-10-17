@@ -359,6 +359,21 @@ describe('ChatSessionManager', () => {
     const shipped = JSON.parse(
       fs.readFileSync(path.resolve(import.meta.dir, '../../../config/profiles.default.json'), 'utf8'),
     ) as Record<string, unknown>
+    // The GLM pair lives in the shipped providers default; flatten it into
+    // legacy entries so these launch tests read the same settings.
+    const providers = JSON.parse(
+      fs.readFileSync(path.resolve(import.meta.dir, '../../../config/providers.default.json'), 'utf8'),
+    ) as Record<string, { env?: Record<string, string>; limitResetTimeZone?: string; models?: Record<string, { label?: string; model?: string }> }>
+    for (const provider of Object.values(providers)) {
+      for (const [key, model] of Object.entries(provider.models ?? {})) {
+        shipped[key] = {
+          ...(model.label ? { label: model.label } : {}),
+          ...(model.model ? { model: model.model } : {}),
+          ...(provider.limitResetTimeZone ? { limitResetTimeZone: provider.limitResetTimeZone } : {}),
+          env: { ...provider.env },
+        }
+      }
+    }
     // Bracket access: a dotted property would read as a LAN hostname to the scrub grep.
     shipped['lan'] = { label: 'LAN', env: { ANTHROPIC_BASE_URL: 'http://192.0.2.10:9292' } }
     fs.mkdirSync(path.join(tempDir, '.kawai'), { recursive: true })
