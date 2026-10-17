@@ -35,6 +35,11 @@ export function humanParticipant(): ParticipantLabel {
   return { id: null, name: 'Human', group: null, gone: false }
 }
 
+/** Kawai itself (plan-execution D2): no session, never a link. */
+export function kawaiParticipant(): ParticipantLabel {
+  return { id: null, name: 'Kawai', group: null, gone: false }
+}
+
 /** Display text: a gone participant keeps its name with the unavailable mark. */
 export function participantName(label: ParticipantLabel): string {
   return label.gone ? `${label.name} (gone)` : label.name

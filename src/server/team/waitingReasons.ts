@@ -25,11 +25,12 @@ const KIND_ORDER: Record<WaitingConstraintKind, number> = {
   'recipient-busy': 7,
   'recipient-pending-request': 8,
   'recipient-unavailable': 9,
-  'profile-cooling': 10,
-  'spawn-backoff': 11,
-  'routing-hold': 12,
-  'all-profiles-cooling': 13,
-  'starting-agent': 14,
+  'outside-role': 10,
+  'profile-cooling': 11,
+  'spawn-backoff': 12,
+  'routing-hold': 13,
+  'all-profiles-cooling': 14,
+  'starting-agent': 15,
 }
 
 /** Constraints in blocker-first order; the sort is stable within a kind. */

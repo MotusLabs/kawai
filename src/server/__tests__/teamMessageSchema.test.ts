@@ -6,6 +6,7 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
 import { applyBaselineSchema } from '../dbSafety/baseline'
+import { applyExecutionSchema } from '../plans/execution/executionSchema'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -139,6 +140,9 @@ describe('team_messages schema migration', () => {
     db.exec(`INSERT INTO team_messages (id, team_id, to_kind, to_id, from_session, origin_path, thread_id, body, state, created_at)
       VALUES ('legacy', '/repo/.git', 'group', 'devs', 'lead', '/repo', 'legacy', 'hi', 'delivered', '2026-01-01T00:00:00.000Z')`)
     applyBaselineSchema(db)
+    // A version-0 database runs every migration after the baseline; migration 8
+    // adds team_messages.allowed_profiles (plan-execution D15).
+    applyExecutionSchema(db)
     const store = new MailboxStore(db)
     expect(store.get('legacy')).toMatchObject({ fromKind: 'agent', fromSession: 'lead', toId: 'devs', taskRevision: null })
 
@@ -152,6 +156,7 @@ describe('team_messages schema migration', () => {
 
   test('the task revision a delivery carried is recorded at push and on send', () => {
     applyBaselineSchema(db)
+    applyExecutionSchema(db)
     const store = new MailboxStore(db)
     const pushed = store.enqueue({
       teamId: '/repo/.git', toKind: 'group', toId: 'devs', fromSession: 'lead', fromGroup: null,

@@ -6,7 +6,9 @@
 // right that matters, closing the task, is TaskService.setStatus's own rule,
 // evaluated before acceptance writes anything. Test outcomes and verdicts are
 // claims: nothing here stores or implies verification.
+import { partyName } from './actorRow'
 import type { ChatSessionRecord } from '../db'
+import { NULL_OWNERSHIP, type ExecutionOwnership } from '../plans/execution/executionOwnership'
 import type { AssignmentTarget, TaskFindings, TaskHandoffKind, TaskResult, TaskTestClaim, TeamTask, TeamTaskAssignment, TeamTaskSummary } from '../../shared/teamTasks'
 import { TASK_HANDOFF_KINDS } from '../../shared/teamTasks'
 import type { AssignmentService } from './AssignmentService'
@@ -86,9 +88,15 @@ export class TaskResultService {
     releases?: MemberRelease
     records?: () => Iterable<ChatSessionRecord>
     homeDir?: string
+    /** What a running execution owns (plan-execution D7/D9); the default owns nothing. */
+    ownership?: ExecutionOwnership
   }) {
     this.release = options.releases && options.records
-      ? new TaskRelease(this, { releases: options.releases, records: options.records, ...(options.homeDir ? { homeDir: options.homeDir } : {}) })
+      ? new TaskRelease(this, {
+        releases: options.releases, records: options.records,
+        ...(options.homeDir ? { homeDir: options.homeDir } : {}),
+        ...(options.ownership ? { ownership: options.ownership } : {}),
+      })
       : null
   }
 
@@ -112,6 +120,11 @@ export class TaskResultService {
     if (!commit && !diff) throw new Error('A result needs a commit or a diff reference')
     const tests = (input.tests ?? []).map(row => ({ description: row.description.trim(), outcome: row.outcome.trim() }))
     if (tests.some(row => !row.description || !row.outcome)) throw new Error('Each test needs a description and an outcome')
+    // plan-execution D9: for an owned change, the commit must be on its
+    // branch and contain origin's head of it, checked before anything is
+    // written. Every other stage accepts a result, findings included.
+    const refusal = await (this.options.ownership ?? NULL_OWNERSHIP).checkResult(taskId, { commit })
+    if (refusal !== null) throw new Error(refusal)
     const session = this.options.getSession(actor.sessionId)
     // The result and its journal note commit together, as a dispatch and its journal entry do.
     const result = this.store.atomically(() => {
@@ -195,6 +208,11 @@ export class TaskResultService {
   async handoff(caller: TaskCaller, taskId: string, request: HandoffRequest): Promise<HandoffOutcome> {
     const { team } = await this.tasks.context(caller)
     this.tasks.sameTeamTask(team, taskId)
+    // Only Kawai hands a running change's task to its next stage (plan-execution D7).
+    const owner = (this.options.ownership ?? NULL_OWNERSHIP).ownerOfTask(taskId)
+    if (owner !== null && caller.kind !== 'system') {
+      throw new Error(`The task is owned by a running execution (${owner.executionId}); close the task or stop the execution instead. Nothing was dispatched.`)
+    }
     if (!TASK_HANDOFF_KINDS.includes(request.kind)) throw new Error(`Unknown handoff kind: ${String(request.kind)}`)
     const result = this.store.results.get(request.resultId)
     if (!result || result.taskId !== taskId) throw new Error(`Result ${request.resultId} is not a result of task ${taskId}`)
@@ -208,7 +226,7 @@ export class TaskResultService {
       if (standing) {
         return { assignment: standing, duplicate: true,
           notice: `An equivalent ${request.kind} handoff of result ${result.id} is already outstanding (${standing.id}, dispatched by ` +
-            `${standing.createdBy.kind === 'human' ? 'the human' : standing.createdBy.sessionId}, ${standing.state}); nothing was dispatched again.` }
+            `${partyName(standing.createdBy)}, ${standing.state}); nothing was dispatched again.` }
       }
     }
     const outcome = await this.options.assignments.dispatch(caller, {

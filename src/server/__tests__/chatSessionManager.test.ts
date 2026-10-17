@@ -349,6 +349,23 @@ function writeTranscript(sdkSessionId: string, content: string): string {
 describe('ChatSessionManager', () => {
   let tempDir: string
   let db: SessionDatabase
+
+  /**
+   * The shipped catalog has no LAN profile; tests that exercise one write a
+   * user-level fixture (reserved documentation address) into the pinned HOME.
+   * A user file replaces the shipped default wholesale, so the shipped
+   * profiles ride along.
+   */
+  function writeLanCatalog(): void {
+    const shipped = JSON.parse(
+      fs.readFileSync(path.resolve(import.meta.dir, '../../../config/profiles.default.json'), 'utf8'),
+    ) as Record<string, unknown>
+    // Bracket access: a dotted property would read as a LAN hostname to the scrub grep.
+    shipped['lan'] = { label: 'LAN', env: { ANTHROPIC_BASE_URL: 'http://192.0.2.10:9292' } }
+    fs.mkdirSync(path.join(tempDir, '.kawai'), { recursive: true })
+    fs.writeFileSync(path.join(tempDir, '.kawai', 'profiles.json'), JSON.stringify(shipped))
+  }
+
   const originalApiKey = process.env.ANTHROPIC_API_KEY
   const originalOAuthToken = process.env.CLAUDE_CODE_OAUTH_TOKEN
   const originalAuthToken = process.env.ANTHROPIC_AUTH_TOKEN
@@ -419,8 +436,8 @@ describe('ChatSessionManager', () => {
     expect(restored.registry.get(id)?.claudeProfileId).toBe('glm')
     expect((await restored.manager.send(id, 'resume')).ok).toBe(true)
     expect(restored.handles[0]!.options.resume).toBe('profile-conversation')
-    expect(restored.handles[0]!.options.model).toBe('sonnet')
-    expect(restored.handles[0]!.options.env?.ANTHROPIC_BASE_URL).toBe('https://zai.ruslan.casa/api/anthropic')
+    expect(restored.handles[0]!.options.model).toBe('opus')
+    expect(restored.handles[0]!.options.env?.ANTHROPIC_BASE_URL).toBe('https://api.z.ai/api/anthropic')
     restored.manager.shutdown()
     db.updateChatSession(id, { claudeProfileId: 'removed-profile' })
     const unknown = await createHarness(db)
@@ -468,10 +485,10 @@ describe('ChatSessionManager', () => {
     fs.mkdirSync(path.join(project, '.kawai'), { recursive: true })
     const catalogFile = path.join(project, '.kawai', 'profiles.json')
     fs.writeFileSync(catalogFile, JSON.stringify({
-      'glm-flash': { label: 'GLM Flash', model: 'glm-5.3-flash[1m]' },
+      'glm-turbo': { label: 'GLM Turbo', model: 'glm-5.3-flash[1m]' },
     }))
     const first = await createHarness(db)
-    const created = first.manager.createSession({ projectPath: project, claudeProfileId: 'glm-flash' })
+    const created = first.manager.createSession({ projectPath: project, claudeProfileId: 'glm-turbo' })
     expect(created.ok).toBe(true)
     await first.manager.send(created.ok ? created.session.id : '', 'first turn')
     expect(first.handles[0]!.options.model).toBe('glm-5.3-flash[1m]')
@@ -483,8 +500,8 @@ describe('ChatSessionManager', () => {
     const restored = await createHarness(db)
     const result = await restored.manager.send(created.ok ? created.session.id : '', 'resume')
     expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.error).toContain('glm-flash')
-    expect(restored.registry.get(created.ok ? created.session.id : '')?.claudeProfileId).toBe('glm-flash')
+    if (!result.ok) expect(result.error).toContain('glm-turbo')
+    expect(restored.registry.get(created.ok ? created.session.id : '')?.claudeProfileId).toBe('glm-turbo')
     expect(restored.handles).toHaveLength(0)
   })
 
@@ -512,6 +529,7 @@ describe('ChatSessionManager', () => {
   })
 
   test('profile auth uses global credentials and refuses unauthenticated launch without side effects', async () => {
+    writeLanCatalog()
     let globalEnv = { ANTHROPIC_AUTH_TOKEN: 'global-token' }
     const registry = new SessionRegistry()
     const handles: FakeHandle[] = []
@@ -535,6 +553,7 @@ describe('ChatSessionManager', () => {
   })
 
   test('availability caches complete profile configuration and retries failures', async () => {
+    writeLanCatalog()
     let globalEnv = { ANTHROPIC_AUTH_TOKEN: 'global-token' }
     const launches: ClaudeLaunchConfiguration[] = []
     let fail = false
@@ -546,7 +565,7 @@ describe('ChatSessionManager', () => {
     await create('minimax')
     await create('glm')
     expect(launches).toHaveLength(2)
-    expect(launches[0]?.model).toBe('sonnet')
+    expect(launches[0]?.model).toBe('opus')
     expect(launches[1]?.model).toBe('MiniMax-M3')
     expect(launches[0]?.settings).toMatchObject({ env: { ANTHROPIC_DEFAULT_OPUS_MODEL: 'glm-5.3[1m]' } })
     globalEnv = { ANTHROPIC_AUTH_TOKEN: 'changed-token' }

@@ -2,7 +2,7 @@
 
 Order:
 - group 6 (the migration runner and backups) lands first;
-- group 3 follows group 6, because migration 8 needs the runner;
+- group 3 follows group 6, because migration 9 needs the runner;
 - groups 1, 2, and 5 are independent of the others;
 - group 4 waits until `team-workspace-pages` and `durable-plans` are on master: it needs the tab model and durable-plans' host-agnostic mount pattern (D12), not the Plans tab itself;
 - group 7 comes last, after `plan-execution`, `integration-candidates`, `plan-supervision`, and `revision-control` merge.
@@ -46,7 +46,7 @@ Group 7's matrix rows for plan execution, integration, supervision, and revision
   - variables and `$(…)` reading unknown;
   - the strongest verdict and the match list of compound commands.
 - [x] 3.2 Implement `redact.ts` (D8). Verify with a fixture corpus: every listed secret shape, including query-string credentials and JSON and form body fields, is redacted in the command, each match segment, the destination, and outcome details; a non-secret command is unchanged; and truncation at 4096 characters is marked.
-- [x] 3.3 Add migration 8 `outbound-audit` (D6) to `MIGRATIONS` (after migrations 2–7: strategy-impact, plan-validation, task-status-events, agent-starts, chat-turn-usage, process-reports), and `OutboundStore` as the only writer, with header comments saying so. Verify with tests:
+- [x] 3.3 Add migration 9 `outbound-audit` (D6) to `MIGRATIONS` (after migrations 2–8: strategy-impact, plan-validation, task-status-events, agent-starts, chat-turn-usage, process-reports, plan-execution), and `OutboundStore` as the only writer, with header comments saying so. Verify with tests:
   - migration on a fresh database and on a baseline copy, run twice;
   - the duplicate `(session_id, tool_use_id)` call and duplicate outcome are no-ops;
   - the store exposes no update or delete;

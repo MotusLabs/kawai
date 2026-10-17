@@ -25,11 +25,11 @@ Add `src/server/chat/ClaudeProfiles.ts` with stable IDs, labels, environment ove
 | ID | Label | Environment overrides | Startup model |
 | --- | --- | --- | --- |
 | default | Default | None; preserve current inherited behavior | Unset |
-| glm | GLM | ANTHROPIC_BASE_URL=https://zai.ruslan.casa/api/anthropic; ANTHROPIC_DEFAULT_SONNET_MODEL=glm-5.3-flash[1m]; ANTHROPIC_DEFAULT_OPUS_MODEL=glm-5.3[1m]; CLAUDE_CODE_AUTO_COMPACT_WINDOW=1000000 | sonnet |
+| glm | GLM | ANTHROPIC_BASE_URL=https://glm.example.internal/api/anthropic; ANTHROPIC_DEFAULT_SONNET_MODEL=glm-5.3-flash[1m]; ANTHROPIC_DEFAULT_OPUS_MODEL=glm-5.3[1m]; CLAUDE_CODE_AUTO_COMPACT_WINDOW=1000000 | sonnet |
 | minimax | MiniMax | ANTHROPIC_BASE_URL=https://api.minimax.io/anthropic; ANTHROPIC_MODEL=MiniMax-M3 | MiniMax-M3 |
-| mimo | MiMo | ANTHROPIC_BASE_URL=https://xiaomi.ruslan.casa/anthropic; ANTHROPIC_MODEL=mimo-v2.6-pro; ANTHROPIC_DEFAULT_SONNET_MODEL=mimo-v2.6-flash; ANTHROPIC_DEFAULT_OPUS_MODEL=mimo-v2.6-pro | mimo-v2.6-pro |
-| kimi | Kimi | ANTHROPIC_BASE_URL=https://kimi.ruslan.casa/ | Unset |
-| lan | LAN | ANTHROPIC_BASE_URL=http://ai.lan:9292; CLAUDE_CODE_ATTRIBUTION_HEADER=0 | Unset |
+| mimo | MiMo | ANTHROPIC_BASE_URL=https://mimo.example.internal/anthropic; ANTHROPIC_MODEL=mimo-v2.6-pro; ANTHROPIC_DEFAULT_SONNET_MODEL=mimo-v2.6-flash; ANTHROPIC_DEFAULT_OPUS_MODEL=mimo-v2.6-pro | mimo-v2.6-pro |
+| kimi | Kimi | ANTHROPIC_BASE_URL=https://kimi.example.internal/ | Unset |
+| lan | LAN | ANTHROPIC_BASE_URL=http://192.0.2.10:9292; CLAUDE_CODE_ATTRIBUTION_HEADER=0 | Unset |
 
 GLM's explicit Sonnet startup is a proposed deterministic default, not an assignment in the wrapper. Kimi and LAN lack model assignments, so inventing a provider model would be incorrect. Exclude the broken GLM Flash alias and the provider helper from the initial catalog; do not infer model choices from filenames.
 

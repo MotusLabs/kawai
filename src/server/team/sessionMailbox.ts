@@ -209,6 +209,7 @@ export class SessionMailbox {
       limits: this.limits,
       usageOf: profileId => options.usageOf?.(profileId) ?? null,
       excludedProfile: message => message.excludedProfile ?? undefined,
+      allowedProfiles: message => message.allowedProfiles ?? null,
       ...(options.onRouteDecision ? { onDecision: options.onRouteDecision } : {}),
     })
     this.outcomes = new LimitOutcomes(db, {
@@ -432,6 +433,9 @@ export class SessionMailbox {
   toolCall(sessionId: string, tool: string, input: unknown) {
     this.outcomes.toolCall(sessionId, tool, input)
   }
+
+  /** A session's turn opened; `agentStarted` when the agent started it itself. */
+  turnStarted(sessionId: string, agentStarted: boolean) { this.outcomes.turnStarted(sessionId, agentStarted) }
 
   /** A session's turn ended; its mail was settled first. */
   turnEnded(sessionId: string, success: boolean) {

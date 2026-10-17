@@ -2,7 +2,14 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { DEFAULT_PROFILE_CATALOG_PATH, PROFILE_CONTROLLED_ENV, resolveProfileCatalog } from '../chat/profileCatalog'
+import {
+  DEFAULT_PROFILE_CATALOG_PATH,
+  EMBEDDED_PROFILE_CATALOG,
+  EMBEDDED_PROFILE_CATALOG_SOURCE,
+  parseCatalogValue,
+  PROFILE_CONTROLLED_ENV,
+  resolveProfileCatalog,
+} from '../chat/profileCatalog'
 
 let tempRoot: string
 let homeDir: string
@@ -259,5 +266,61 @@ describe('layered resolution', () => {
     // Absolute paths are unchanged by expansion.
     const absolute = resolveProfileCatalog({ homeDir, projectPath: project })
     expect(absolute.profiles.get('home-proj')?.label).toBe('Home Proj')
+  })
+})
+
+describe('embedded shipped catalog', () => {
+  // A default path that never exists: the compiled-binary situation, where
+  // config/ is not shipped beside the executable.
+  const missingDefault = () => path.join(tempRoot, 'absent', 'profiles.default.json')
+  const isolatedHome = () => path.join(tempRoot, 'no-home')
+
+  test('a missing default file resolves the embedded shipped catalog', () => {
+    const embedded = resolveProfileCatalog({
+      homeDir: isolatedHome(),
+      imageDefaultPath: missingDefault(),
+    })
+    const fromFile = resolveProfileCatalog({
+      homeDir: isolatedHome(),
+      imageDefaultPath: DEFAULT_PROFILE_CATALOG_PATH,
+    })
+    expect(embedded.errors).toEqual([])
+    expect([...embedded.profiles.keys()].sort()).toEqual([...fromFile.profiles.keys()].sort())
+    for (const [id, profile] of fromFile.profiles) {
+      expect(embedded.profiles.get(id)).toEqual(profile)
+    }
+  })
+
+  test('the user-level file still replaces the shipped default entirely', () => {
+    writeCatalog(homeDir, { only: { label: 'Only' } })
+    const replaced = resolveProfileCatalog({ homeDir, imageDefaultPath: missingDefault() })
+    expect(replaced.errors).toEqual([])
+    expect([...replaced.profiles.keys()]).toEqual(['only', 'default'])
+  })
+
+  test('project files still layer above the embedded base', () => {
+    writeCatalog(projectDir, { glm: { label: 'Project GLM' } })
+    const { profiles, errors } = resolveProfileCatalog({
+      homeDir: isolatedHome(),
+      projectPath: projectDir,
+      imageDefaultPath: missingDefault(),
+    })
+    expect(errors).toEqual([])
+    expect(profiles.get('glm')?.label).toBe('Project GLM')
+    expect(profiles.get('mimo')).toBeTruthy()
+  })
+
+  test('embedded entries pass through the shared value parser', () => {
+    // A rejected entry is reported under the embedded source name — the same
+    // parser file reads go through, never a second validator.
+    const rejected = parseCatalogValue({ Bad_ID: { label: 'X' } }, EMBEDDED_PROFILE_CATALOG_SOURCE, true)
+    expect(rejected.ok).toBe(false)
+    if (!rejected.ok) {
+      expect(rejected.error).toContain(EMBEDDED_PROFILE_CATALOG_SOURCE)
+      expect(rejected.error).toContain('Bad_ID')
+    }
+    // The shipped value itself validates as operator-owned.
+    const embedded = parseCatalogValue(EMBEDDED_PROFILE_CATALOG, EMBEDDED_PROFILE_CATALOG_SOURCE, true)
+    expect(embedded.ok).toBe(true)
   })
 })

@@ -132,3 +132,38 @@ receiving a handoff. Handoffs continue the original thread without consuming
 another reply hop. Invalid automatic targets fall back to the same group.
 Urgent direct mail to an agent whose profile is cooling is refused with the
 cooldown end time; normal direct mail waits in the queue until recovery.
+
+## Plan roles and author tags
+
+Mail Kawai dispatches for a plan execution carries the plan role's profiles
+in the row's `allowed_profiles` (JSON, in the role's order — the system
+sender only; an agent or the human cannot set it). While the list is set:
+
+- members and spawn slots on a profile outside the list are never candidates
+  (the waiting reason names the cause `outside-role`, reading "plan role
+  allows only …");
+- spawn slots are offered only for profiles that are both on the list and
+  allowed by the group, in the role's order;
+- `profile-order` ranks candidates by the role's order, not the group's;
+- a forward keeps the list without the profile that hit the limit, so the
+  replacement stays inside the role.
+
+Review handoffs Kawai dispatches carry one `author-profile:<id>` tag per
+profile that authored a result of the change, so a rule can send the review
+to another model family — e.g. pick the first candidate whose profile is
+not in the tags' authors:
+
+```ts
+export default {
+  async route(ctx) {
+    const authors = new Set((ctx.message.tags ?? [])
+      .filter(tag => tag.startsWith('author-profile:'))
+      .map(tag => tag.replace('author-profile:', '')))
+    const pick = ctx.candidates.find(c => !authors.has(c.profileId))
+    return pick ? { type: 'pick', candidateId: pick.id } : { type: 'default' }
+  },
+}
+```
+
+Without a rule the tags are metadata only: the built-in strategy routes the
+review as usual and the tags show on the mailbox row.

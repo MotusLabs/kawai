@@ -48,6 +48,8 @@ export function constraintLabel(constraint: WaitingConstraint, nameOf: (sessionI
       return 'Recipient is awaiting an approval or answer'
     case 'recipient-unavailable':
       return constraint.detail ? `Recipient cannot start: ${constraint.detail}` : 'Recipient is unavailable'
+    case 'outside-role':
+      return constraint.detail ?? 'Outside the plan role\'s profiles'
     case 'profile-cooling':
       return `Recipient's provider is cooling${constraint.retryAt ? ` until ${new Date(constraint.retryAt).toLocaleTimeString()}` : ''}`
     case 'startup-failed':

@@ -2397,6 +2397,8 @@ export class ChatSessionManager {
     if (event.type === 'error' || event.type === 'turn_completed') this.teamMail.settleRecipient(sessionId)
     // Profile routing: progress and limit outcomes for the mail a turn handles.
     if (event.type === 'tool_call') this.teamMail.toolCall(sessionId, event.tool, event.input)
+    // A trigger marks a turn the agent started itself (limit-outcomes-agent-turns D1).
+    if (event.type === 'turn_started') this.teamMail.turnStarted(sessionId, event.trigger !== undefined)
     if (event.type === 'turn_completed') {
       try {
         this.teamMail.turnEnded(sessionId, event.subtype === 'success')

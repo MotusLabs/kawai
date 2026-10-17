@@ -6,6 +6,7 @@
 import type { ParticipantLabel, SessionDirectoryEntry } from '@shared/team'
 import {
   humanParticipant,
+  kawaiParticipant,
   participantName,
   resolveParticipant,
   type LiveParticipant,
@@ -13,8 +14,8 @@ import {
 
 export interface ParticipantNameProps {
   sessionId: string | null
-  /** Human senders have no session and label as `Human`. */
-  senderKind?: 'agent' | 'human'
+  /** Human senders have no session and label as `Human`; Kawai's mail labels as `Kawai`. */
+  senderKind?: 'agent' | 'human' | 'system'
   sessions?: ReadonlyArray<LiveParticipant>
   directory?: ReadonlyArray<SessionDirectoryEntry>
   /** Present for live or archived sessions; omit to disable navigation. */
@@ -22,6 +23,7 @@ export interface ParticipantNameProps {
 }
 
 export function participantLabelFor(props: Pick<ParticipantNameProps, 'sessionId' | 'senderKind' | 'sessions' | 'directory'>): ParticipantLabel {
+  if (props.senderKind === 'system') return kawaiParticipant()
   if (props.senderKind === 'human' || props.sessionId === null) return humanParticipant()
   return resolveParticipant(props.sessionId, props.sessions ?? [], props.directory ?? [])
 }
@@ -37,7 +39,7 @@ export default function ParticipantName(props: ParticipantNameProps) {
     {label.group !== null && <span className="shrink-0" data-testid="participant-group">{label.group}</span>}
     <details className="shrink-0" data-testid="participant-id">
       <summary className="cursor-pointer select-none">id</summary>
-      <span className="break-all">{label.id ?? 'human'}</span>
+      <span className="break-all">{label.id ?? (props.senderKind === 'system' ? 'kawai' : 'human')}</span>
     </details>
   </span>
 }

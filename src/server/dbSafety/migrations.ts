@@ -20,6 +20,7 @@ import { outboundAuditMigration } from '../outbound/migration'
 import { applyBaselineSchema } from './baseline'
 import { CREATE_IMPACT_TABLES_SQL } from '../strategy/impactSchema'
 import { CREATE_VALIDATION_TABLES_SQL } from '../plans/validation/validationSchema'
+import { applyExecutionSchema } from '../plans/execution/executionSchema'
 import { migrateTaskStatusEvents } from '../team/taskStatusEventsSchema'
 import { CREATE_AGENT_START_TABLES_SQL } from '../metrics/provenanceSchema'
 import { CREATE_TURN_USAGE_SQL } from '../chat/chatTurnUsageStore'
@@ -52,6 +53,11 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 6, name: 'chat-turn-usage', up: db => db.exec(CREATE_TURN_USAGE_SQL) },
   // team-process-metrics D6: process reports, proposals, decisions, links, and commands.
   { version: 7, name: 'process-reports', up: db => db.exec(CREATE_PROCESS_REPORT_TABLES_SQL) },
+  // plan-execution D3: executions, their changes, the landing slot, attempts,
+  // rounds, effects, and landing facts, plus team_messages.allowed_profiles.
+  // Additive, no backfill.
+  { version: 8, name: 'plan-execution', up: applyExecutionSchema },
+  // execution-safety-recovery D6: the append-only outbound audit tables.
   outboundAuditMigration,
 ]
 

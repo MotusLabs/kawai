@@ -15,7 +15,10 @@
 // migration 4 (`task-status-events`) adds the task transition table;
 // migration 5 (`agent-starts`) adds agent starts and memory manifests;
 // migration 6 (`chat-turn-usage`) adds per-turn usage;
-// migration 7 (`process-reports`) adds the process report tables.
+// migration 7 (`process-reports`) adds the process report tables;
+// migration 8 (`plan-execution`) the seven execution tables and
+// `team_messages.allowed_profiles`; migration 9 (`outbound-audit`) the three
+// outbound audit tables below.
 import { expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
 import { initDatabase } from '../db'
@@ -29,6 +32,9 @@ const column = (name: string, notnull = 1, pk = 0) => ({ name, type: 'TEXT', not
 const id = column('id', 0, 1)
 const optional = (name: string) => column(name, 0)
 const integer = (name: string) => ({ name, type: 'INTEGER', notnull: 1, dflt_value: null, pk: 0 })
+const optionalInteger = (name: string) => ({ ...integer(name), notnull: 0 })
+const counter = (name: string, value: string) => ({ ...integer(name), dflt_value: value })
+const keyPart = (name: string, pk: number) => ({ ...column(name), pk })
 
 /** Migration 2's delta: the impact proposal, decision, and request tables (strategy-revision-impact D1). */
 const migration2: SchemaShape['tables'] = {
@@ -159,10 +165,72 @@ const migration3: SchemaShape['tables'] = {
   },
 }
 
-// Migration 2 (`strategy-impact`) adds the strategy impact tables; migration 8
-// (`outbound-audit`, execution-safety-recovery D6) adds the three append-only
-// audit tables below. Each keeps its own delta; the fixture stays master's.
+/** Migration 8's delta: the execution tables and the routing column (plan-execution D3, D15). */
 const migration8: SchemaShape['tables'] = {
+  plan_executions: {
+    columns: [
+      id, ...['team_id', 'plan_id'].map(name => column(name)), integer('revision'),
+      ...['content_hash', 'report_id', 'input_hash', 'landing_mode', 'base_branch', 'base_commit', 'floor_json'].map(name => column(name)),
+      integer('max_parallel'), column('merge_method'), column('state'), optional('outcome'), optional('stop_reason'),
+      column('started_at'), optional('finished_at'),
+    ],
+    indexes: [
+      { name: 'plan_executions_one_running', unique: 1, columns: ['plan_id'] },
+      { name: 'plan_executions_team', unique: 0, columns: ['team_id', 'state'] },
+    ],
+  },
+  plan_execution_changes: {
+    columns: [
+      keyPart('execution_id', 1), keyPart('change', 2), column('team_id'), integer('position'), column('state'),
+      ...['step', 'stop_reason', 'stop_detail_json', 'task_id', 'worktree', 'branch', 'baseline_commit'].map(optional),
+      optionalInteger('pr_number'), optional('pr_url'), optionalInteger('pr_opened_by_kawai'),
+      counter('fix_rounds', '0'), counter('owns', '1'), optional('passed_at'), counter('generation', '0'), column('updated_at'),
+    ],
+    indexes: [
+      { name: 'plan_execution_changes_owner', unique: 1, columns: ['team_id', 'change'] },
+      { name: 'plan_execution_changes_task', unique: 0, columns: ['task_id'] },
+    ],
+  },
+  plan_landing_slots: {
+    columns: [{ ...column('team_id', 0), pk: 1 }, ...['holder_kind', 'holder_id', 'since'].map(name => column(name))],
+    indexes: [],
+  },
+  plan_execution_attempts: {
+    columns: [
+      id, column('execution_id'), column('change'), integer('number'), column('kind'), optional('assignment_id'),
+      column('manifest_json'), column('manifest_hash'), column('created_at'),
+    ],
+    indexes: [],
+  },
+  plan_execution_rounds: {
+    columns: [
+      id, ...['execution_id', 'change', 'attempt_id'].map(name => column(name)), integer('number'), column('result_id'), column('commit_sha'),
+      integer('fix_round'),
+      ...['carried_from', 'pushed_at', 'ci_window_from', 'ci_json', 'rerun_at', 'review_assignment_id', 'verdict_findings_id', 'extra_json',
+        'outcome', 'outcome_detail_json', 'decided_at'].map(optional),
+    ],
+    indexes: [],
+  },
+  plan_execution_effects: {
+    columns: [
+      id, column('execution_id'), optional('change'), optional('round_id'), column('kind'), column('effect_key'), column('command_json'),
+      column('state'), counter('tries', '0'), optional('next_at'), optional('outcome_json'), optional('error'),
+      column('created_at'), optional('started_at'), optional('finished_at'),
+    ],
+    indexes: [{ name: 'plan_execution_effects_execution', unique: 0, columns: ['execution_id', 'state'] }],
+  },
+  plan_change_landings: {
+    columns: [
+      keyPart('plan_id', 1), keyPart('change', 2), column('execution_id'), column('team_id'), column('mechanism'),
+      optionalInteger('pr_number'), optional('pr_url'), ...['head_sha', 'base_sha', 'merge_sha', 'landed_at'].map(name => column(name)),
+      integer('tree_verified'), optional('post_ci_json'),
+    ],
+    indexes: [],
+  },
+}
+
+/** Migration 9's delta: the three append-only outbound audit tables (execution-safety-recovery D6). */
+const migration9: SchemaShape['tables'] = {
   outbound_calls: {
     columns: [
       { name: 'id', type: 'TEXT', notnull: 0, dflt_value: null, pk: 1 },
@@ -210,9 +278,11 @@ const migration8: SchemaShape['tables'] = {
 
 test('a fresh database opened by this build has the same shape plus each migration\'s delta and schema_migrations', () => {
   const session = initDatabase({ path: ':memory:' })
-  const added = { ...migration2, ...migration3, ...migration4, ...migration5, ...migration6, ...migration7, ...migration8 }
+  const added = { ...migration2, ...migration3, ...migration4, ...migration5, ...migration6, ...migration7, ...migration8, ...migration9 }
   expect(Object.keys(added).filter(table => table in expected.tables)).toEqual([])
-  expect(schemaShape(session.db)).toEqual({ tables: { ...expected.tables, ...added } })
+  const messages = expected.tables.team_messages!
+  const withProfiles = { ...messages, columns: [...messages.columns, optional('allowed_profiles')] }
+  expect(schemaShape(session.db)).toEqual({ tables: { ...expected.tables, ...added, team_messages: withProfiles } })
   const extra = session.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'").get()
   expect(extra).toEqual({ name: 'schema_migrations' })
   session.close()

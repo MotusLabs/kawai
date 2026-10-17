@@ -1,7 +1,7 @@
 // SDK-free team task records (team-tasks design D1) shared by server and
 // client views. A task's direction and acceptance criteria live in numbered,
 // immutable revisions; `TeamTask` carries the latest one inline.
-import type { TeamActor, TeamMessage } from './team'
+import type { ActingParty, TeamActor, TeamMessage } from './team'
 
 export type TaskStatus = 'open' | 'active' | 'blocked' | 'done' | 'cancelled'
 export const TASK_STATUSES: readonly TaskStatus[] = ['open', 'active', 'blocked', 'done', 'cancelled']
@@ -14,19 +14,27 @@ export const TASK_STATUSES: readonly TaskStatus[] = ['open', 'active', 'blocked'
 export type TaskActor = TeamActor
 
 /**
- * A journal entry's author: a team actor, or kawai itself for actions the
- * system takes on a task's behalf (member release). Journal-only — creators
- * and revision authors stay `TaskActor`, so the system is never a sender or
- * task creator (member-release design D4).
+ * A journal entry's author: a team actor, or Kawai itself for actions the
+ * system takes (member release, plan execution).
  */
-export type JournalAuthor = TaskActor | { kind: 'system'; sessionId: null }
+export type JournalAuthor = ActingParty
+
+/**
+ * Who created a task or dispatched an assignment. plan-execution D2 reverses
+ * member-release D4: Kawai (`system`) creates, dispatches, sends, hands off,
+ * and accepts for a plan execution's tasks, as their creator, and so
+ * authors their first revision. Every later revision's author is a
+ * `TaskActor`: every human-only path (publish, notify, Release, plan and
+ * strategy actions, validation decisions) still refuses `system`.
+ */
+export type TaskCreator = ActingParty
 
 export interface TeamTask {
   id: string
   teamId: string
   title: string
   status: TaskStatus
-  creator: TaskActor
+  creator: TaskCreator
   parentId: string | null
   /** Target worktree root (normalized to `git worktree list`); null = none. */
   worktree: string | null
@@ -50,7 +58,8 @@ export interface TaskRevision {
   revision: number
   direction: string
   acceptance: string | null
-  author: TaskActor
+  /** Revision 1's author is the task's creator, so Kawai for an execution task. */
+  author: TaskCreator
   createdAt: string
   /** Why it was published (task-revision-publication D2); null for agents without one and older rows. */
   rationale?: string | null
@@ -117,7 +126,7 @@ export interface RevisionRecipient {
 export interface TaskPublication {
   revision: number
   previousRevision: number
-  author: TaskActor
+  author: TaskCreator
   rationale: string | null
   notify: boolean | null
   publishedAt: string
@@ -165,7 +174,7 @@ export interface TeamTaskAssignment {
   role: string | null
   /** The initial instruction, kept verbatim. */
   instruction: string
-  createdBy: TaskActor
+  createdBy: TaskCreator
   /** The enqueued instruction mail; null until dispatch committed it. */
   messageId: string | null
   /** Copied from the mail's claim; null while nobody has taken it. */
@@ -234,7 +243,7 @@ export interface TaskResult {
   supersedesResultId: string | null
   /** The result that superseded this one; null while it is outstanding. */
   supersededBy: string | null
-  acceptedBy: TaskActor | null
+  acceptedBy: ActingParty | null
   acceptedAt: string | null
   /** Derived at read time (D6): pinned revision older than the task's current one. */
   needsReevaluation: boolean
@@ -304,6 +313,8 @@ export interface ChatPeerTaskContext {
    * approved revision at delivery; absent for an unlinked task.
    */
   plan?: { id: string; title: string; revision: number | null; change: string }
+  /** The running execution that owns the task, with the revision it runs (plan-execution D7); absent for an unowned task. */
+  execution?: { id: string; revision: number }
 }
 
 /** An assignment's addressee: a group (its role) or one named session. */

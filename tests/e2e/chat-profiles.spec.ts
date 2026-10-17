@@ -45,7 +45,7 @@ test('project-level .kawai catalog extends the picker for that path', async ({ p
       'e2e-project-only': {
         label: 'E2E Project Only',
         model: 'glm-5.3-flash[1m]',
-        env: { ANTHROPIC_BASE_URL: 'https://zai.ruslan.casa/api/anthropic' },
+        env: { ANTHROPIC_BASE_URL: 'https://glm.example.internal/api/anthropic' },
       },
     }))
     await page.goto('/')
@@ -83,7 +83,8 @@ test('invalid project catalog file warns without blocking creation', async ({ pa
     await dialog.getByLabel('Session kind').selectOption('chat')
     await dialog.getByLabel('Project Path').fill(project)
     // The invalid file is reported by path...
-    await expect(dialog.getByRole('status')).toContainText('profiles.json')
+    // Unrelated group warnings share the status role; match by content.
+    await expect(dialog.getByRole('status').filter({ hasText: 'profiles.json' })).toContainText('profiles.json')
     // ...while the rest of the catalog resolves: creation still works.
     await expect(dialog.getByLabel('Profile')).toHaveValue('default')
     await expect(dialog.getByRole('button', { name: 'Create', exact: true })).toBeEnabled()

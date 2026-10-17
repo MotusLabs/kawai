@@ -13,6 +13,7 @@
 // release frees the slot it waits for. Release is immediate — it refuses
 // rather than defers, unlike the pending release a task close records.
 import type { ChatSessionRecord } from '../db'
+import { NULL_OWNERSHIP, type ExecutionOwnership } from '../plans/execution/executionOwnership'
 import type { TaskReleasePreview } from '../../shared/teamTasks'
 import { loadGroupCatalog } from './groupCatalog'
 import type { MemberRelease } from './memberRelease'
@@ -42,6 +43,8 @@ export class TaskRelease {
     releases: MemberRelease
     records: () => Iterable<ChatSessionRecord>
     homeDir?: string
+    /** What a running execution owns (plan-execution D7); the default owns nothing. */
+    ownership?: ExecutionOwnership
   }) {}
 
   /** The confirmation's data (D7): members to archive with their readiness, and the worktree's other live sessions. */
@@ -70,6 +73,14 @@ export class TaskRelease {
   async release(caller: TaskCaller, taskId: string, request: ReleaseRequest): Promise<ReleaseOutcome> {
     if (caller.kind !== 'human') throw new Error("Release worktree and hand off is the human's; agents use release_member and task_handoff")
     const { team } = await this.results.tasks.context(caller)
+    // While a running execution owns the change, its worktree is released
+    // only through the execution's own landing — the human's release-and-hand-off
+    // is refused too (plan-execution D7; the caller check above already keeps
+    // agents and Kawai off this human-only path).
+    const owner = (this.options.ownership ?? NULL_OWNERSHIP).ownerOfTask(taskId)
+    if (owner !== null) {
+      throw new Error(`The task is owned by a running execution (${owner.executionId}); close the task or stop the execution instead. Nothing was released.`)
+    }
     const task = this.results.tasks.sameTeamTask(team, taskId)
     const outstanding = this.results.tasks.store.results.outstanding(taskId)
     const handoff = {

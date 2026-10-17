@@ -33,7 +33,7 @@ export interface MailboxListEntry {
   id: string
   state: MessageState
   priority: string
-  from: { kind: 'agent' | 'human'; session: string | null; group: string | null }
+  from: { kind: 'agent' | 'human' | 'system'; session: string | null; group: string | null }
   to: { kind: 'group' | 'session' | 'human'; id: string | null }
   claimedBy: string | null
   taskId: string | null
