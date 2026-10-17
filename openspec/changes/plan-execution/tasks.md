@@ -159,5 +159,5 @@ Implement after `durable-plans`, `strategy-revision-impact`, and `plan-validatio
 
 - [x] 17.1 Add an integration test with a bare `origin`, the stub `gh`, and fake members submitting results and findings. Two changes have a dependency. One gets a flaky check and one a failed review with a fix round. Both land, and the plan completes as `system`. The server restarts once mid-merge. Verify that the test passes and records one landing fact per change, with no duplicate dispatch, push, or merge.
 - [x] 17.2 Add one fixture browser walkthrough of the Execution section, using a fixture landing adapter, and name it in `.github/workflows/ci.yml`. Verify by running that one spec on a spare `E2E_PORT` after `bun run build`, never the whole e2e suite.
-- [ ] 17.3 Add AGENTS.md How It Works bullets for execution, landing, the system actor, the ownership guards, routing roles, and the settings. Verify by reading them against the specs.
-- [ ] 17.4 Run `bun run lint && bun run typecheck && bun run test` and `openspec validate plan-execution --strict`. Verify that both pass.
+- [x] 17.3 Add AGENTS.md How It Works bullets for execution, landing, the system actor, the ownership guards, routing roles, and the settings. Verify by reading them against the specs.
+- [x] 17.4 Run `bun run lint && bun run typecheck && bun run test` and `openspec validate plan-execution --strict`. Verify that both pass.

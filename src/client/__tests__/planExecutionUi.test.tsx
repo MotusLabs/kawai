@@ -22,11 +22,6 @@ const render = (node: ReturnType<typeof createElement>) => {
   renderer = TestRenderer.create(node)
 }
 const text = () => JSON.stringify(renderer?.toJSON() ?? null)
-const dom = () => {
-  const element = document.createElement('div')
-  element.innerHTML = JSON.stringify(renderer?.toJSON()) ?? '[]'
-  return element
-}
 
 beforeEach(() => {})
 afterEach(() => {
