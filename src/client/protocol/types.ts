@@ -3,7 +3,7 @@
 // read from stores via getState()) plus the pending-operation state that
 // survives across messages.
 import type { Dispatch, MutableRefObject, SetStateAction } from 'react'
-import type { AgentSession, Session } from '@shared/types'
+import type { AgentSession, SendClientMessage, Session } from '@shared/types'
 
 /** Snapshot + selection state kept for kill-failed rollback. */
 export interface PendingKillEntry {
@@ -35,6 +35,8 @@ export interface SessionFormPrefill {
 export interface MessageRouterDeps {
   /** Current connection epoch straight from the WS manager (never a render value). */
   getConnectionEpoch(): number
+  /** Send a client message (the app's stable WS sender, chat-history-window D3). */
+  sendClient: SendClientMessage
   /** Show the transient error banner (auto-clears after its timeout). */
   setTransientError(message: string): void
   /** Hide the transient error banner immediately (terminal-ready). */

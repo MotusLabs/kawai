@@ -12,7 +12,7 @@
 
 ## 3. Client store and protocol
 
-- [ ] 3.1 Add `historyHasOlder`, `historyLoading`, `historyStartId`, `historyExpanded` to `ChatTranscript`; `snapshot` adopts the first three; add `requestOlder(sessionId, throughId?)` and `applyHistoryPage(message)` that folds the page alone, prepends it de-duplicated by `seen`, and sets `historyExpanded` (design D3); route `chat-history-page` in `src/client/protocol/chatMessages.ts`; verify with `chatStore` tests: prepend order, a page containing live (sequence > 0) events is not dropped, `stale` triggers a plain re-attach, loading flag clears on reply and on disconnect.
+- [x] 3.1 Add `historyHasOlder`, `historyLoading`, `historyStartId`, `historyExpanded` to `ChatTranscript`; `snapshot` adopts the first three; add `requestOlder(sessionId, throughId?)` and `applyHistoryPage(message)` that folds the page alone, prepends it de-duplicated by `seen`, and sets `historyExpanded` (design D3); route `chat-history-page` in `src/client/protocol/chatMessages.ts`; verify with `chatStore` tests: prepend order, a page containing live (sequence > 0) events is not dropped, `stale` triggers a plain re-attach, loading flag clears on reply and on disconnect.
 - [ ] 3.2 In `ChatView`'s attach effect, send `historyFrom = historyStartId` on a re-run for the same session (reconnect) and on a new session only when `historyExpanded` is set (design D3); verify with `ChatView` tests: reconnect sends `historyFrom`, reopening an unexpanded chat sends none, reopening an expanded one sends it, and live events appended while shown are never trimmed.
 
 ## 4. Load-earlier control

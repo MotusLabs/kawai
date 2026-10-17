@@ -32,7 +32,7 @@ import type {
   ChatBackgroundTask,
 } from '@shared/chat'
 import { earliestTime } from '@shared/chatTime'
-import type { SendClientMessage, ServerMessage, SessionStatus } from '@shared/types'
+import type { ClientMessage, SendClientMessage, ServerMessage, SessionStatus } from '@shared/types'
 
 /** The live activity plus its client-clock anchor (design D6). */
 export interface ChatTranscriptActivity {
@@ -81,12 +81,25 @@ export interface ChatTranscript {
   backgroundTasks: ChatBackgroundTask[]
   /** Active notices (notification strip design D6), closed account ones filtered. */
   notifications: ChatNotification[]
+  /** Older history exists above the window (chat-history-window D2); absent on older servers reads false. */
+  historyHasOlder: boolean
+  /** A page request is in flight; the load-earlier control and reveals claim it. */
+  historyLoading: boolean
+  /** The window's first event id: pages resume here, reconnects widen from here. */
+  historyStartId: string | null
+  /**
+   * The user loaded earlier history in this page load (design D3): memory
+   * only, never sent to the server, gone after a reload — a reopen of the
+   * chat resumes from the oldest loaded turn until then.
+   */
+  historyExpanded: boolean
 }
 
 export const emptyTranscript = (): ChatTranscript => ({
   events: [], pendingRequests: [], status: 'waiting', throughSequence: 0,
   commands: { status: 'unavailable', commands: [] }, seen: new Set(), activity: null, contextUsage: null,
   model: null, workers: [], backgroundTasks: [], notifications: [],
+  historyHasOlder: false, historyLoading: false, historyStartId: null, historyExpanded: false,
 })
 
 /** Anchor a server-reported activity on the client's clock (design D2). */
@@ -187,6 +200,29 @@ interface ChatStore {
   clearReveal: () => void
   apply: (sessionId: string, events: ChatEvent[]) => void
   snapshot: (message: Extract<ServerMessage, { type: 'chat-snapshot' }>) => void
+  /**
+   * Claim the next load-earlier request (chat-history-window D3): true only
+   * for the first caller while none is in flight and older history exists,
+   * with the wire request composed from the window's start — send it exactly
+   * when non-null.
+   */
+  requestOlder: (
+    sessionId: string,
+    throughId?: string
+  ) => Extract<ClientMessage, { type: 'chat-history-page' }> | null
+  /**
+   * Adopt a page reply (chat-history-window D3): the page is folded alone —
+   * older live events must not move `throughSequence` — de-duplicated by
+   * `seen`, and prepended. `historyExpanded` marks the user's expansion for
+   * this page load. A `stale` reply drops the expansion and re-attaches
+   * plain, so the fresh snapshot rebuilds the window.
+   */
+  applyHistoryPage: (
+    message: Extract<ServerMessage, { type: 'chat-history-page' }>,
+    send?: SendClientMessage
+  ) => void
+  /** Strand-clear every in-flight page (the socket died; a fresh attach reloads). */
+  clearHistoryLoading: () => void
   /** Replace one session's command list (chat-commands push). */
   setCommands: (message: Extract<ServerMessage, { type: 'chat-commands' }>) => void
   /** Adopt the latest server activity (chat-activity) or clear it (null). */
@@ -269,11 +305,73 @@ export const useChatStore = create<ChatStore>((set) => ({
           state.closedAccountNotices[message.sessionId],
           message.notifications
         ),
+        // The recent history window (chat-history-window D2/D3): the
+        // snapshot owns the span and resolves any stranded page load. The
+        // user's expansion survives it — a reconnect keeps what was loaded.
+        historyHasOlder: message.historyHasOlder === true,
+        historyStartId: message.historyStartId ?? null,
+        historyLoading: false,
+        historyExpanded: state.sessions[message.sessionId]?.historyExpanded === true,
       },
     },
     // The snapshot's usage is authoritative for the profile at attach time.
     usage: { ...state.usage, [message.profileId]: message.usage },
   })),
+  requestOlder: (sessionId, throughId) => {
+    let request: Extract<ClientMessage, { type: 'chat-history-page' }> | null = null
+    set(state => {
+      const current = state.sessions[sessionId]
+      // One page in flight per session, only while older history exists:
+      // the claim doubles as the load-earlier control's disabled state.
+      if (!current || current.historyLoading || !current.historyHasOlder || current.historyStartId === null) return state
+      request = {
+        type: 'chat-history-page',
+        sessionId,
+        beforeId: current.historyStartId,
+        ...(throughId !== undefined ? { throughId } : {}),
+      }
+      return { sessions: { ...state.sessions, [sessionId]: { ...current, historyLoading: true } } }
+    })
+    return request
+  },
+  applyHistoryPage: (message, send) => set(state => {
+    const current = state.sessions[message.sessionId] ?? emptyTranscript()
+    if (message.stale === true) {
+      // The server no longer holds the client's oldest event (chat-history-
+      // window D2): the expansion is lost once — drop it and re-attach
+      // plain, so the fresh snapshot rebuilds the recent window.
+      send?.({ type: 'chat-attach', sessionId: message.sessionId })
+      return { sessions: { ...state.sessions, [message.sessionId]: {
+        ...current, historyLoading: false, historyExpanded: false,
+      } } }
+    }
+    // Fold the page alone: its older live events (sequence > 0) must not
+    // move `throughSequence`, or later live events would read as seen.
+    const folded = applyChatEvents(emptyTranscript(), message.events).events
+    const fresh = folded.filter(event => !current.seen.has(event.id))
+    const seen = new Set(current.seen)
+    for (const event of fresh) seen.add(event.id)
+    return { sessions: { ...state.sessions, [message.sessionId]: {
+      ...current,
+      events: [...fresh, ...current.events],
+      seen,
+      historyHasOlder: message.hasOlder,
+      historyStartId: fresh[0]?.id ?? current.historyStartId,
+      historyLoading: false,
+      historyExpanded: true,
+    } } }
+  }),
+  clearHistoryLoading: () => set(state => {
+    const sessions = { ...state.sessions }
+    let changed = false
+    for (const [sessionId, transcript] of Object.entries(sessions)) {
+      if (transcript.historyLoading) {
+        sessions[sessionId] = { ...transcript, historyLoading: false }
+        changed = true
+      }
+    }
+    return changed ? { sessions } : state
+  }),
   setCommands: message => set(state => ({ sessions: {
     ...state.sessions,
     [message.sessionId]: {
