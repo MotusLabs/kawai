@@ -167,3 +167,37 @@ describe('the router whitelist', () => {
     ]))
   })
 })
+
+describe('the group open (findings-bee1aa24 B1)', () => {
+  test('a destination filter rides the request and the page', async () => {
+    store.insertCall(call({ id: 'obc-a', destination: 'github:origin', rule: 'git-push', verdict: 'allowed' }))
+    store.insertCall(call({ id: 'obc-b', destination: 'github:other/repo', rule: 'gh-write', verdict: 'violation' }))
+    await send({ type: 'team-audit-open', teamPath: world.repo, requestId: 'rd', filters: { destination: 'github:other/repo' } })
+    expect(last('team-audit-page')!.page.rows.map(row => row.id)).toEqual(['obc-b'])
+  })
+
+  test("an open naming a call id answers the group's page with the applied filters", async () => {
+    store.insertCall(call({ id: 'obc-link', verdict: 'violation', rule: 'gh-write', destination: 'github:other/repo' }))
+    store.insertCall(call({ id: 'obc-other', verdict: 'allowed', rule: 'git-push', destination: 'github:origin' }))
+    await send({ type: 'team-audit-open', teamPath: world.repo, requestId: 'rlink', filters: {}, callId: 'obc-link' })
+    const page = last('team-audit-page')!
+    expect(page.page.rows.map(row => row.id)).toEqual(['obc-link'])
+    expect(page.appliedFilters).toEqual({ rule: 'gh-write', destination: 'github:other/repo' })
+    expect(page.notice).toBeUndefined()
+  })
+
+  test('an unknown or other-team call id answers the default view with a notice, leaking nothing', async () => {
+    store.insertCall(call({ id: 'obc-theirs', teamId: world.otherTeam.teamId, verdict: 'violation', rule: 'gh-write', destination: 'github:other/repo' }))
+    store.insertCall(call({ id: 'obc-mine', verdict: 'allowed', rule: 'git-push', destination: 'github:origin' }))
+    await send({ type: 'team-audit-open', teamPath: world.repo, requestId: 'rmiss', filters: {}, callId: 'obc-nope' })
+    let page = last('team-audit-page')!
+    expect(page.page.rows.map(row => row.id)).toEqual(['obc-mine'])
+    expect(page.notice).toContain('obc-nope')
+    expect(page.appliedFilters).toBeUndefined()
+    await send({ type: 'team-audit-open', teamPath: world.repo, requestId: 'rforeign', filters: {}, callId: 'obc-theirs' })
+    page = last('team-audit-page')!
+    expect(page.notice).toContain('obc-theirs')
+    // No fact of the foreign call (rule or destination) leaks.
+    expect(JSON.stringify(page)).not.toContain('gh-write')
+  })
+})

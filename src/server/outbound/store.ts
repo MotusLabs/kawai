@@ -51,6 +51,7 @@ export interface OutboundCallFilters {
   teamId: string
   verdict?: string
   rule?: string
+  destination?: string
   sessionId?: string
   /** Inclusive ISO stamp the time range starts at. */
   from?: string
@@ -185,6 +186,7 @@ export class OutboundStore {
     const args: SQLQueryBindings[] = [filters.teamId]
     if (filters.verdict !== undefined) { where.push('verdict = ?'); args.push(filters.verdict) }
     if (filters.rule !== undefined) { where.push('rule = ?'); args.push(filters.rule) }
+    if (filters.destination !== undefined) { where.push('destination = ?'); args.push(filters.destination) }
     if (filters.sessionId !== undefined) { where.push('session_id = ?'); args.push(filters.sessionId) }
     if (filters.from !== undefined) { where.push('created_at >= ?'); args.push(filters.from) }
     if (filters.to !== undefined) { where.push('created_at < ?'); args.push(filters.to) }

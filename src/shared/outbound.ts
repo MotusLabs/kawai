@@ -53,10 +53,11 @@ export interface OutboundAuditRow {
   session: { id: string; name: string; clickable: boolean }
 }
 
-/** The view's server filters (D9): verdict, rule, session, and a time range. */
+/** The view's server filters (D9): verdict, rule, destination, session, and a time range. */
 export interface OutboundAuditFilters {
   verdict?: string
   rule?: string
+  destination?: string
   sessionId?: string
   /** Inclusive ISO stamp the range starts at. */
   from?: string
@@ -75,12 +76,13 @@ export interface OutboundAuditCounts {
 }
 
 /**
- * The backup status footer (database-safety: the newest backup per reason,
- * read-only; failures are shown, never actionable here).
+ * The backup status footer (database-safety: the newest backup per reason
+ * with its size and integrity-check result, read-only; failures are shown,
+ * never actionable here). Server-wide: one database serves every team.
  */
 export interface OutboundAuditBackups {
   dir: string
-  newest: Array<{ reason: string; name: string; bytes: number }>
+  newest: Array<{ reason: string; name: string; bytes: number; checked: string }>
   failures: Array<{ reason: string; error: string; at: string }>
 }
 
@@ -94,7 +96,21 @@ export interface OutboundAuditPage {
 }
 
 export type OutboundAuditServerMessage =
-  | { type: 'team-audit-page'; teamPath: string; teamId: string; requestId: string; page: OutboundAuditPage }
+  | {
+      type: 'team-audit-page'
+      teamPath: string
+      teamId: string
+      requestId: string
+      page: OutboundAuditPage
+      /** An open naming an unknown or other-team call id answers the default view with this notice (D10). */
+      notice?: string
+      /**
+       * The filters actually applied, when the open named a call id and its
+       * (rule, destination) group was resolved server-side — the store adopts
+       * them, so a changed push re-requests the same group.
+       */
+      appliedFilters?: OutboundAuditFilters
+    }
   // Every committed call, outcome, or acknowledgement of the team (D9):
   // replace semantics — the client re-requests its first page.
   | { type: 'team-audit-changed'; teamPath: string; teamId: string }
@@ -102,8 +118,11 @@ export type OutboundAuditServerMessage =
 
 export type OutboundAuditClientMessage =
   // Page requests carry a request id so a slow reply of a superseded
-  // request (a filter change while one loads) never lands twice.
-  | { type: 'team-audit-open'; teamPath: string; requestId: string; filters: OutboundAuditFilters }
+  // request (a filter change while one loads) never lands twice. An open
+  // may name a call id (D10): its (rule, destination) group is resolved
+  // server-side — an unknown or other-team id answers the default view
+  // with a notice.
+  | { type: 'team-audit-open'; teamPath: string; requestId: string; filters: OutboundAuditFilters; callId?: string }
   | { type: 'team-audit-more'; teamPath: string; requestId: string; filters: OutboundAuditFilters; cursor: string }
   | { type: 'team-audit-close'; teamPath: string }
   // The one edit (D10): acknowledges the call's (rule, destination) group

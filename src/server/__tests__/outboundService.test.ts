@@ -218,3 +218,62 @@ describe('the view projection', () => {
       .toEqual({ allowed: 1, unknown: 0, violations: 0 })
   })
 })
+
+describe('violation groups against the real store (B2 mutants)', () => {
+  test('five unacknowledged calls to one server group with count 5', () => {
+    const h = harness()
+    for (let i = 0; i < 5; i++) {
+      h.store.insertCall(h.call({ id: `obc-mcp-${i}`, rule: 'mcp-call', destination: 'mcp:docs-search', tool: 'mcp__docs-search__find', createdAt: '2026-01-01T00:00:0' + i + '.000Z' }))
+    }
+    const groups = h.service.violationGroups(team.teamId)
+    expect(groups).toHaveLength(1)
+    expect(groups[0]).toMatchObject({ rule: 'mcp-call', destination: 'mcp:docs-search', count: 5, latestCallId: 'obc-mcp-4' })
+  })
+
+  test("the summary window's bounds: from inclusive, to exclusive", () => {
+    const h = harness()
+    h.store.insertCall(h.call({ id: 'obc-before', verdict: 'allowed', createdAt: '2026-10-13T11:59:59.999Z' }))
+    h.store.insertCall(h.call({ id: 'obc-at-from', verdict: 'violation', createdAt: '2026-10-13T12:00:00.000Z' }))
+    h.store.insertCall(h.call({ id: 'obc-at-to', verdict: 'violation', createdAt: '2026-10-14T12:00:00.000Z' }))
+    const from = '2026-10-13T12:00:00.000Z'
+    const to = '2026-10-14T12:00:00.000Z'
+    expect(h.service.windowCounts(team.teamId, from, to)).toEqual({ allowed: 0, unknown: 0, violations: 1 })
+    expect(h.service.page(team.teamId, { from, to }).rows.map(row => row.id)).toEqual(['obc-at-from'])
+  })
+
+  test('after a restart, a fresh reader reads the same groups and counts', () => {
+    const h = harness()
+    for (let i = 0; i < 3; i++) {
+      h.store.insertCall(h.call({ id: `obc-r-${i}`, destination: 'github:other/repo', createdAt: `2026-01-0${i + 1}T00:00:00.000Z` }))
+    }
+    h.store.insertOutcome({ sessionId: 'chat-1', toolUseId: 'tu-1', outcome: 'completed', createdAt: '2026-01-01T00:00:01.000Z' })
+    const before = { groups: h.service.violationGroups(team.teamId), counts: h.service.windowCounts(team.teamId, '2026-01-01T00:00:00.000Z', '2026-01-04T00:00:00.000Z') }
+    // A restart: a fresh database connection and service, no in-memory state.
+    const db2 = initDatabase({ path: dbPath })
+    opened.push(db2)
+    const fresh = new OutboundService({
+      store: new OutboundStore(db2.db),
+      sessionOf: (_t, id) => ({ name: id, clickable: false }),
+      spawnLive: () => false,
+    })
+    expect(fresh.violationGroups(team.teamId)).toEqual(before.groups)
+    expect(fresh.windowCounts(team.teamId, '2026-01-01T00:00:00.000Z', '2026-01-04T00:00:00.000Z')).toEqual(before.counts)
+    // The completed outcome survives; with no live spawn the other rows read outcome-unknown.
+    const page = fresh.page(team.teamId, {})
+    expect(page.rows.find(row => row.id === 'obc-r-0')).toMatchObject({ outcome: { state: 'completed' } })
+    expect(page.rows.find(row => row.id === 'obc-r-1')).toMatchObject({ outcome: { state: 'outcome-unknown' } })
+  })
+
+  test('coverage needs both rule and destination: the same destination under another rule stays unacknowledged', () => {
+    const h = harness()
+    h.store.insertCall(h.call({ id: 'obc-gh', rule: 'gh-write', destination: 'github:other/repo' }))
+    h.store.insertCall(h.call({ id: 'obc-ghapi', rule: 'gh-api-write', destination: 'github:other/repo' }))
+    h.store.insertCall(h.call({ id: 'obc-mcp', rule: 'mcp-call', destination: 'mcp:docs-search' }))
+    expect(h.service.acknowledge(h.human, { callId: 'obc-gh', commandId: 'cmd-1' })).toEqual({ ok: true, replayed: false })
+    const groups = new Map(h.service.violationGroups(team.teamId).map(group => [group.rule, group]))
+    // Same destination, different rule: not covered.
+    expect(groups.get('gh-api-write')).toMatchObject({ count: 1 })
+    // Different rule and destination: not covered.
+    expect(groups.get('mcp-call')).toMatchObject({ count: 1 })
+  })
+})

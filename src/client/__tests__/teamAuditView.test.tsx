@@ -3,7 +3,7 @@
 // state's label, gone sessions named and not clickable, Acknowledge arming
 // one command id that survives an unchanged resend, and every control
 // disabled while disconnected.
-import { afterEach, expect, test } from 'bun:test'
+import { afterEach, describe, expect, test } from 'bun:test'
 import TestRenderer, { act } from 'react-test-renderer'
 import type { ClientMessage } from '@shared/types'
 import type { OutboundAuditRow } from '@shared/outbound'
@@ -27,7 +27,7 @@ const pageOf = (rows: OutboundAuditRow[], cursor: string | null = null) => ({
   page: {
     rows, cursor,
     counts: { allowedPerRule: { 'git-push': 2, 'gh-write': 1 }, unknown: 1, violations: 3, unacknowledgedViolations: 1 },
-    backups: { dir: '/h/.agentboard/backups', newest: [{ reason: 'interval' as const, name: 'db-1.db', bytes: 2048 }], failures: [{ reason: 'interval' as const, path: null, error: 'integrity failed', at: '2026-01-01T00:00:00Z' }] },
+    backups: { dir: '/h/.agentboard/backups', newest: [{ reason: 'interval' as const, name: 'db-1.db', bytes: 2048, checked: 'ok' }], failures: [{ reason: 'interval' as const, path: null, error: 'integrity failed', at: '2026-01-01T00:00:00Z' }] },
   },
 })
 
@@ -97,8 +97,8 @@ test('filters commit as one page request; Load more sends the cursor; the footer
   expect(sent.at(-1)).toMatchObject({ type: 'team-audit-more', teamPath: '/repo', cursor: 'cur-1', filters: {} })
   const footer = textOf(byId('audit-backups'))
   expect(footer).toContain('/h/.agentboard/backups')
-  expect(footer).toContain('interval db-1.db (2 KB)')
-  expect(footer).toContain('1 failed backup: integrity failed')
+  expect(footer).toContain('interval db-1.db (2 KB, check ok)')
+  expect(footer).toContain('1 failed backup: interval integrity failed')
   act(() => renderer.unmount())
 })
 
@@ -131,4 +131,45 @@ test('every control disables while disconnected', () => {
   expect(textOf(byId('team-audit'))).toContain('Disconnected')
   // The acknowledge buttons, including the armed dialog's, disable too.
   for (const button of allBy('audit-acknowledge')) expect(button.props.disabled).toBe(true)
+})
+
+describe('the fix round (findings-bee1aa24)', () => {
+  test("the linked call's row is marked selected and the dialog closes on success", () => {
+    const { renderer, sent, byId, allBy } = mount(() => {
+      useTeamAuditStore.setState({ views: { '/repo': { ...useTeamAuditStore.getState().views['/repo']!, selected: 'obc-new' } } })
+      useTeamAuditStore.getState().begin('/repo', 'r1', 'page')
+      useTeamAuditStore.getState().applyPage(pageOf([
+        row('obc-new', { createdAt: '2026-01-02T03:04:05.000Z', verdict: 'violation', rule: 'gh-write', destination: 'github:other/repo' }),
+      ]))
+    })
+    const selectedRow = renderer.root.findAll(node => node.props['data-testid'] === 'audit-row-obc-new')[0]!
+    expect(selectedRow.props['data-selected']).toBe(true)
+    // Acknowledge: one command, and success closes the dialog.
+    act(() => byId('audit-acknowledge').props.onClick())
+    const confirm = renderer.root.findAll(node => node.props['data-testid'] === 'audit-ack-confirm')[0]!
+    act(() => confirm.props.onClick())
+    expect(sent.at(-1)).toMatchObject({ type: 'team-audit-acknowledge', callId: 'obc-new' })
+    act(() => useTeamAuditStore.getState().applyResult({
+      type: 'team-audit-result', teamPath: '/repo',
+      requestId: (sent.at(-1) as { requestId: string }).requestId,
+    }))
+    expect(renderer.root.findAll(node => node.props['data-testid'] === 'audit-ack-dialog')).toHaveLength(0)
+    act(() => renderer.unmount())
+  })
+
+  test('the destination filter rides the committed request; the footer is server-wide with the check result', () => {
+    const { sent, byId, renderer } = mount(() => {
+      useTeamAuditStore.getState().begin('/repo', 'r1', 'page')
+      useTeamAuditStore.getState().applyPage(pageOf([row('a', { destination: 'github:origin' })]))
+    })
+    sent.length = 0
+    const destination = renderer.root.findAllByProps({ 'aria-label': 'Filter by destination' })[0]!
+    act(() => destination.props.onChange({ target: { value: 'github:origin' } }))
+    byId('audit-apply-filters').props.onClick()
+    expect(sent.at(-1)).toMatchObject({ type: 'team-audit-open', filters: { destination: 'github:origin' } })
+    const footer = textOf(byId('audit-backups'))
+    expect(footer).toContain('Server-wide database backups')
+    expect(footer).toContain('check ok')
+    act(() => renderer.unmount())
+  })
 })

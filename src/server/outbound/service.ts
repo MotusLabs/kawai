@@ -72,6 +72,7 @@ export class OutboundService {
         teamId,
         ...(filters.verdict !== undefined ? { verdict: filters.verdict } : {}),
         ...(filters.rule !== undefined ? { rule: filters.rule } : {}),
+        ...(filters.destination !== undefined ? { destination: filters.destination } : {}),
         ...(filters.sessionId !== undefined ? { sessionId: filters.sessionId } : {}),
         ...(filters.from !== undefined ? { from: filters.from } : {}),
         ...(filters.to !== undefined ? { to: filters.to } : {}),
@@ -85,6 +86,16 @@ export class OutboundService {
       cursor: rows.cursor,
       backups: this.options.backups?.() ?? null,
     }
+  }
+
+  /**
+   * The (rule, destination) group of one of the team's calls (D10's link):
+   * null when the id is unknown or another team's — no facts about a
+   * foreign call leak through the refusal.
+   */
+  callGroup(teamId: string, callId: string): { rule: string; destination: string } | null {
+    const call = this.options.store.callById(callId)
+    return call === null || call.teamId !== teamId ? null : { rule: call.rule, destination: call.destination }
   }
 
   /** One row enriched for the view: matches, outcome state, named session. */

@@ -29,6 +29,7 @@ interface Subscription {
 const filtersOf = (message: Extract<AuditClientMessage, { filters: OutboundAuditFilters }>): OutboundAuditFilters => ({
   ...(message.filters.verdict !== undefined ? { verdict: message.filters.verdict } : {}),
   ...(message.filters.rule !== undefined ? { rule: message.filters.rule } : {}),
+  ...(message.filters.destination !== undefined ? { destination: message.filters.destination } : {}),
   ...(message.filters.sessionId !== undefined ? { sessionId: message.filters.sessionId } : {}),
   ...(message.filters.from !== undefined ? { from: message.filters.from } : {}),
   ...(message.filters.to !== undefined ? { to: message.filters.to } : {}),
@@ -88,12 +89,30 @@ export class OutboundConnections {
       return
     }
     // team-audit-open: (re)subscribe with the request's filters, then answer.
+    // An open naming a call id (D10's link) resolves that call's
+    // (rule, destination) group server-side and answers the group's page; an
+    // unknown or other-team id answers the default view with a notice.
     const views = this.subscriptions.get(connection) ?? new Map<string, Subscription>()
     this.subscriptions.set(connection, views)
-    views.set(teamPath, { teamId: team.teamId, filters: filtersOf(message) })
+    const requested = filtersOf(message)
+    let filters = requested
+    let notice: string | undefined
+    let appliedFilters: OutboundAuditFilters | undefined
+    if (message.type === 'team-audit-open' && message.callId !== undefined) {
+      const group = service.callGroup(team.teamId, message.callId)
+      if (group === null) {
+        notice = `Call ${message.callId} was not found in this team.`
+      } else {
+        filters = { ...requested, rule: group.rule, destination: group.destination }
+        appliedFilters = filters
+      }
+    }
+    views.set(teamPath, { teamId: team.teamId, filters })
     connection.send({
       type: 'team-audit-page', teamPath, teamId: team.teamId, requestId,
-      page: service.page(team.teamId, filtersOf(message)),
+      page: service.page(team.teamId, filters),
+      ...(notice !== undefined ? { notice } : {}),
+      ...(appliedFilters !== undefined ? { appliedFilters } : {}),
     })
   }
 

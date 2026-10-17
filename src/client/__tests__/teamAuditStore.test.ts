@@ -8,7 +8,7 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 import type { ServerMessage } from '@shared/types'
 import type { OutboundAuditRow } from '@shared/outbound'
-import { useTeamAuditStore } from '../stores/teamAuditStore'
+import { useTeamAuditStore, closedAuditView } from '../stores/teamAuditStore'
 import { handleTeamMessage } from '../protocol/teamMessages'
 
 afterEach(() => { useTeamAuditStore.setState({ views: {} }) })
@@ -93,5 +93,49 @@ describe('every apply method has a dispatch caller', () => {
     fire({ type: 'team-audit-page', teamPath: '/repo', teamId: 't', requestId: 'x', page: page([row('a')]) })
     expect(useTeamAuditStore.getState().views['/repo']!.rows!.map(r => r.id)).toEqual(['a'])
     void sent
+  })
+})
+
+describe('page generations, notices, and applied filters (findings-bee1aa24)', () => {
+  test('a new page supersedes a pending more: its reply appends to nothing', () => {
+    open()
+    useTeamAuditStore.setState({ views: { '/repo': { ...closedAuditView(), open: true } } })
+    useTeamAuditStore.getState().begin('/repo', 'm1', 'more')
+    useTeamAuditStore.getState().begin('/repo', 'p2', 'page')
+    // The new page resolves, clearing the orphaned more's spinner…
+    useTeamAuditStore.getState().applyPage({ type: 'team-audit-page', teamPath: '/repo', teamId: 't', requestId: 'p2', page: page([row('a')], 'cur-2') })
+    // …and the stale more's reply, arriving after, lands nowhere.
+    useTeamAuditStore.getState().applyPage({ type: 'team-audit-page', teamPath: '/repo', teamId: 't', requestId: 'm1', page: page([row('z')], 'cur-z') })
+    const view = useTeamAuditStore.getState().views['/repo']!
+    expect(view.rows!.map(r => r.id)).toEqual(['a'])
+    expect(view.cursor).toBe('cur-2')
+    expect(view.loadingMore).toBe(false)
+    expect(view.pending).toEqual({})
+  })
+
+  test('a more whose generation matches still appends; acknowledge entries survive a new page', () => {
+    open()
+    useTeamAuditStore.setState({ views: { '/repo': { ...closedAuditView(), open: true, rows: [row('a')] } } })
+    useTeamAuditStore.getState().begin('/repo', 'ack1', 'acknowledge')
+    useTeamAuditStore.getState().begin('/repo', 'm1', 'more')
+    useTeamAuditStore.getState().applyPage({ type: 'team-audit-page', teamPath: '/repo', teamId: 't', requestId: 'm1', page: page([row('b')]) })
+    expect(useTeamAuditStore.getState().views['/repo']!.rows!.map(r => r.id)).toEqual(['a', 'b'])
+    expect(useTeamAuditStore.getState().views['/repo']!.pending).toEqual({ ack1: 'acknowledge' })
+  })
+
+  test('a notice rides the page and clears on the next request; applied filters are adopted', () => {
+    open()
+    useTeamAuditStore.getState().begin('/repo', 'p1', 'page')
+    useTeamAuditStore.getState().applyPage({
+      type: 'team-audit-page', teamPath: '/repo', teamId: 't', requestId: 'p1',
+      page: page([row('a')]), notice: 'Call obc-x was not found in this team.',
+      appliedFilters: { rule: 'gh-write', destination: 'github:other/repo' },
+    })
+    const view = useTeamAuditStore.getState().views['/repo']!
+    expect(view.notice).toContain('obc-x')
+    // The store adopts the group filters, so a changed push re-requests the group.
+    expect(view.filters).toEqual({ rule: 'gh-write', destination: 'github:other/repo' })
+    useTeamAuditStore.getState().begin('/repo', 'p2', 'page')
+    expect(useTeamAuditStore.getState().views['/repo']!.notice).toBeNull()
   })
 })

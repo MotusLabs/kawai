@@ -42,10 +42,13 @@ export default function TeamAuditView({ teamPath, view, sendMessage, connected, 
   connectionEpoch: number
 }) {
   const requestSeq = useRef(0)
-  const request = (filters: OutboundAuditFilters) => {
+  // `callId` rides only the automatic opens (mount, reconnect, changed):
+  // the server resolves that call's group and the store adopts the filters.
+  // The Apply-filters path deliberately drops it — the owner chose new filters.
+  const request = (filters: OutboundAuditFilters, callId?: string) => {
     const requestId = `audit-page-${++requestSeq.current}`
     useTeamAuditStore.getState().begin(teamPath, requestId, 'page')
-    sendMessage({ type: 'team-audit-open', teamPath, requestId, filters })
+    sendMessage({ type: 'team-audit-open', teamPath, requestId, filters, ...(callId !== undefined ? { callId } : {}) })
   }
   // The tab's subscription: one authoritative page on open and every
   // reconnect; close ends it. A reconnect also drops its lost requests.
@@ -57,13 +60,14 @@ export default function TeamAuditView({ teamPath, view, sendMessage, connected, 
     wasConnected.current = connected
     lastEpoch.current = connectionEpoch
     if (reconnected) useTeamAuditStore.getState().reconnected(teamPath)
-    request(useTeamAuditStore.getState().views[teamPath]?.filters ?? {})
+    const current = useTeamAuditStore.getState().views[teamPath]
+    request(current?.filters ?? {}, current?.selected ?? undefined)
     return () => sendMessage({ type: 'team-audit-close', teamPath })
   }, [teamPath, connected, connectionEpoch, view.open, sendMessage]) // eslint-disable-line react-hooks/exhaustive-deps
   // A committed row of the team: re-request the first page (D9's replace
   // semantics) — the push itself carries no data.
   useEffect(() => {
-    if (view.changed > 0 && connected && view.open) request(view.filters)
+    if (view.changed > 0 && connected && view.open) request(view.filters, view.selected ?? undefined)
   }, [view.changed]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadMore = () => {
@@ -91,7 +95,8 @@ export default function TeamAuditView({ teamPath, view, sendMessage, connected, 
     <AuditFilters teamPath={teamPath} view={view} connected={connected} onRequest={request} />
     {view.error && <p role="alert" className="border-b border-border px-3 py-2 text-chat-meta text-chat-danger">{view.error}</p>}
     <div className="flex flex-col" data-testid="audit-rows">
-      {view.rows?.map(row => <AuditRow key={row.id} row={row} teamPath={teamPath} connected={connected} sendMessage={sendMessage} />)}
+      {view.rows?.map(row => <AuditRow key={row.id} row={row} teamPath={teamPath} connected={connected}
+        sendMessage={sendMessage} selected={view.selected === row.id} />)}
       {view.rows !== null && view.rows.length === 0 && <p className="px-3 py-2 text-secondary">No recorded sends match.</p>}
     </div>
     {view.cursor !== null && <div className="border-t border-border p-3">
@@ -101,6 +106,12 @@ export default function TeamAuditView({ teamPath, view, sendMessage, connected, 
     </div>}
     <BackupFooter view={view} />
   </div>
+}
+
+/** The local YYYY-MM-DD of an ISO stamp (the date inputs' value). */
+const isoDayOf = (stamp: string): string => {
+  const [date] = stamp.split('T')
+  return date ?? ''
 }
 
 /** The filters are committed as one edit — one page request per Apply. */
@@ -134,6 +145,15 @@ function AuditFilters({ teamPath, view, connected, onRequest }: {
       <datalist id="audit-rule-options">{rules.map(rule => <option key={rule} value={rule} />)}</datalist>
     </label>
     <label className="flex flex-col text-chat-meta">
+      Destination
+      <input aria-label="Filter by destination" className="input" value={draft.destination ?? ''} disabled={!connected}
+        placeholder="github:origin" list="audit-destination-options"
+        onChange={event => setDraft({ ...draft, destination: event.target.value === '' ? undefined : event.target.value })} />
+      <datalist id="audit-destination-options">
+        {[...new Set((view.rows ?? []).map(row => row.destination))].map(destination => <option key={destination} value={destination} />)}
+      </datalist>
+    </label>
+    <label className="flex flex-col text-chat-meta">
       Session
       <input aria-label="Filter by session" className="input" value={draft.sessionId ?? ''} disabled={!connected}
         placeholder="session id"
@@ -142,31 +162,54 @@ function AuditFilters({ teamPath, view, connected, onRequest }: {
     <label className="flex flex-col text-chat-meta">
       From
       <input aria-label="From date" type="date" className="input" disabled={!connected}
-        value={draft.from ? draft.from.slice(0, 10) : ''}
-        onChange={event => setDraft({ ...draft, from: event.target.value === '' ? undefined : new Date(`${event.target.value}T00:00:00.000Z`).toISOString() })} />
+        value={draft.from ? isoDayOf(draft.from) : ''}
+        onChange={event => {
+          if (event.target.value === '') { setDraft({ ...draft, from: undefined }); return }
+          const [y, m, d] = event.target.value.split('-').map(Number)
+          setDraft({ ...draft, from: new Date(y!, m! - 1, d!).toISOString() })
+        }} />
     </label>
     <label className="flex flex-col text-chat-meta">
       To
       <input aria-label="To date" type="date" className="input" disabled={!connected}
-        value={draft.to ? draft.to.slice(0, 10) : ''}
-        onChange={event => setDraft({ ...draft, to: event.target.value === '' ? undefined : new Date(`${event.target.value}T00:00:00.000Z`).toISOString() })} />
+        value={draft.to ? isoDayOf(draft.to) : ''}
+        onChange={event => {
+          // Inclusive for the owner: the day named is kept, so the store's
+          // exclusive bound is local midnight of the next day (D9's range).
+          if (event.target.value === '') { setDraft({ ...draft, to: undefined }); return }
+          const [y, m, d] = event.target.value.split('-').map(Number)
+          setDraft({ ...draft, to: new Date(y!, m! - 1, d! + 1).toISOString() })
+        }} />
     </label>
     <button type="button" className="btn" data-testid="audit-apply-filters" disabled={!connected} onClick={apply}>Apply filters</button>
   </div>
 }
 
-function AuditRow({ row, teamPath, connected, sendMessage }: {
+function AuditRow({ row, teamPath, connected, sendMessage, selected }: {
   row: OutboundAuditRow
   teamPath: string
   connected: boolean
   sendMessage: SendClientMessage
+  /** The URL's or the attention link's call: marked and scrolled into view (D10). */
+  selected: boolean
 }) {
   const [expanded, setExpanded] = useState(false)
   const [dialog, setDialog] = useState(false)
   const [note, setNote] = useState('')
+  const rowRef = useRef<HTMLElement | null>(null)
+  useEffect(() => {
+    if (selected) rowRef.current?.scrollIntoView({ block: 'center' })
+  }, [selected])
   // The dialog reads the view it acks in: the armed command, the refusal,
-  // and the settled request all live there.
+  // and the settled request all live there. A success clears the armed
+  // command — the dialog closes, so a second click cannot write a second
+  // acknowledgement.
   const command = useTeamAuditStore(state => state.views[teamPath]?.command ?? null)
+  const dialogOpen = useRef(false)
+  dialogOpen.current = dialog
+  useEffect(() => {
+    if (dialogOpen.current && command === null) setDialog(false)
+  }, [command])
   const openDialog = () => {
     useTeamAuditStore.getState().arm(teamPath)
     setDialog(true)
@@ -190,7 +233,8 @@ function AuditRow({ row, teamPath, connected, sendMessage }: {
     row.mcpServer !== undefined && `server ${row.mcpServer}`,
     `tool ${row.tool}`,
   ].filter(Boolean).join(' · ')
-  return <article className="border-b border-border px-3 py-2" data-testid={`audit-row-${row.id}`} data-verdict={row.verdict}>
+  return <article ref={rowRef} className={`border-b border-border px-3 py-2 ${selected ? 'bg-surface' : ''}`}
+    data-testid={`audit-row-${row.id}`} data-verdict={row.verdict} data-selected={selected || undefined}>
     <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
       <span className="text-chat-meta text-secondary"><time dateTime={row.createdAt}>{row.createdAt.replace('T', ' ').slice(0, 19)}</time></span>
       <span className="font-medium" data-testid="audit-verdict">{VERDICT_LABELS[row.verdict] ?? row.verdict}</span>
@@ -236,14 +280,14 @@ function BackupFooter({ view }: { view: AuditView }) {
   const backups = view.backups
   return <footer className="border-t border-border px-3 py-2 text-chat-meta text-secondary" data-testid="audit-backups">
     {backups === null
-      ? <span>Backups: no status available.</span>
+      ? <span>Server-wide database backups: no status available.</span>
       : <>
-        <span>Backups in {backups.dir}: </span>
+        <span>Server-wide database backups in {backups.dir}: </span>
         {backups.newest.length === 0
           ? <span>none yet.</span>
-          : <span>{backups.newest.map(file => `${file.reason} ${file.name} (${Math.round(file.bytes / 1024)} KB)`).join(' · ')}</span>}
+          : <span>{backups.newest.map(file => `${file.reason} ${file.name} (${Math.round(file.bytes / 1024)} KB, check ${file.checked})`).join(' · ')}</span>}
         {backups.failures.length > 0 && <span data-testid="audit-backup-failures">
-          {' · '}{backups.failures.length} failed backup{backups.failures.length === 1 ? '' : 's'}: {backups.failures.map(failure => failure.error).join('; ')}
+          {' · '}{backups.failures.length} failed backup{backups.failures.length === 1 ? '' : 's'}: {backups.failures.map(failure => `${failure.reason} ${failure.error}`).join('; ')}
         </span>}
       </>
     }

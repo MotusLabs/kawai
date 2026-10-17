@@ -38,8 +38,18 @@ export interface AuditView {
   selected: string | null
   /** Requests awaiting their reply, by request id. */
   pending: Record<string, AuditAction>
+  /** The page generation each request was minted at, by request id. */
+  requestGenerations: Record<string, number>
   /** Bumped on every team-audit-changed; the host re-requests the first page. */
   changed: number
+  /**
+   * The latest first-page request's generation: a `more` appends only while
+   * its own generation still matches, so a stale more of a superseded page
+   * never lands in the new one.
+   */
+  pageGeneration: number
+  /** A page-level notice (an unknown or other-team call id in the URL), until the next request. */
+  notice: string | null
   error: string | null
   /** The acknowledge dialog's armed command (single slot). */
   command: ArmedAuditCommand | null
@@ -48,7 +58,8 @@ export interface AuditView {
 
 export const closedAuditView = (): AuditView => ({
   open: false, loading: false, rows: null, counts: null, cursor: null, backups: null, loadingMore: false,
-  filters: {}, selected: null, pending: {}, changed: 0, error: null, command: null, commandRequest: null,
+  filters: {}, selected: null, pending: {}, requestGenerations: {}, changed: 0, pageGeneration: 0,
+  notice: null, error: null, command: null, commandRequest: null,
 })
 
 interface AuditState {
@@ -120,17 +131,32 @@ export const useTeamAuditStore = create<AuditState>(set => ({
     })
     return commandId
   },
-  begin: (teamKey, requestId, action) => set(state => update(state, teamKey, {
-    pending: { ...state.views[teamKey]?.pending, [requestId]: action },
-    ...(action === 'page' ? { loading: true, error: null } : {}),
-    ...(action === 'more' ? { loadingMore: true } : {}),
-    ...(action === 'acknowledge' ? { error: null } : {}),
-  })),
+  begin: (teamKey, requestId, action) => set(state => {
+    const view = state.views[teamKey]
+    if (!view?.open) return state
+    // A new first page supersedes every page or more in flight: their
+    // replies land nowhere (the generations no longer match). Acknowledge
+    // requests are independent of paging and survive it.
+    const surviving = Object.fromEntries(Object.entries(view.pending).filter(([, kind]) => kind === 'acknowledge'))
+    const pending = action === 'page'
+      ? { ...surviving, [requestId]: action }
+      : { ...view.pending, [requestId]: action }
+    const generations = action === 'page'
+      ? { ...view.requestGenerations, [requestId]: view.pageGeneration + 1 }
+      : { ...view.requestGenerations, [requestId]: view.pageGeneration }
+    return update(state, teamKey, {
+      pending,
+      requestGenerations: generations,
+      ...(action === 'page' ? { pageGeneration: view.pageGeneration + 1, loading: true, error: null, notice: null } : {}),
+      ...(action === 'more' ? { loadingMore: true } : {}),
+      ...(action === 'acknowledge' ? { error: null } : {}),
+    })
+  }),
   reconnected: teamKey => set(state => {
     const view = state.views[teamKey]
     if (!view?.open || Object.keys(view.pending).length === 0) return state
     return update(state, teamKey, {
-      pending: {},
+      pending: {}, requestGenerations: {},
       loadingMore: false,
       ...(view.rows === null ? { loading: true } : {}),
     })
@@ -140,19 +166,32 @@ export const useTeamAuditStore = create<AuditState>(set => ({
     if (!view?.open) return state
     const action = view.pending[message.requestId]
     if (action === undefined) return state
+    // A more whose page was superseded meanwhile appends to nothing.
+    if (action === 'more' && view.requestGenerations[message.requestId] !== view.pageGeneration) {
+      const pending = { ...view.pending }
+      delete pending[message.requestId]
+      return update(state, message.teamPath, { pending, loadingMore: false })
+    }
     const pending = { ...view.pending }
     delete pending[message.requestId]
+    const requestGenerations = { ...view.requestGenerations }
+    delete requestGenerations[message.requestId]
     if (action === 'more') {
-      // A stale more (its page was replaced meanwhile) appends to nothing.
       const rows = view.rows === null ? message.page.rows : [...view.rows, ...message.page.rows]
       return update(state, message.teamPath, {
-        pending, rows, counts: message.page.counts, cursor: message.page.cursor, backups: message.page.backups,
-        loading: false, loadingMore: false,
+        pending, requestGenerations, rows, counts: message.page.counts, cursor: message.page.cursor,
+        backups: message.page.backups, loading: false, loadingMore: false,
       })
     }
+    // A group open adopts the server-applied filters, so a changed push
+    // re-requests the same group.
     return update(state, message.teamPath, {
-      pending, rows: message.page.rows, counts: message.page.counts, cursor: message.page.cursor,
+      pending, requestGenerations, rows: message.page.rows, counts: message.page.counts, cursor: message.page.cursor,
       backups: message.page.backups, loading: false,
+      // The new page superseded any more in flight: its spinner is gone.
+      loadingMore: false,
+      ...(message.appliedFilters !== undefined ? { filters: message.appliedFilters } : {}),
+      notice: message.notice ?? null,
     })
   }),
   applyChanged: message => set(state => {

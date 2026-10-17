@@ -80,14 +80,24 @@ test('a fixture agent\'s sends are recorded, the violation raises one item, and 
     await expect(item).toContainText('gh-write to github:other/repo: 1 unacknowledged')
     await expect(item).toContainText('Review and acknowledge')
 
-    // The owner filters to violations: one row, counts still over the range.
-    await page.getByLabel('Filter by verdict').selectOption('violation')
-    await page.getByTestId('audit-apply-filters').click()
-    await expect(rows).toHaveCount(1)
+    // The item's link opens the tab on the group: the rows are filtered by
+    // rule and destination, and the linked row is selected (D10).
+    await item.getByTestId('attention-action').click()
+    await expect(page.getByTestId('team-audit')).toBeVisible()
+    await expect(rows).toHaveCount(1, { timeout: 30_000 })
     await expect(rows.first()).toContainText('gh-write')
+    await expect(rows.first()).toHaveAttribute('data-selected', 'true')
     await expect(counts).toContainText('git-push 1')
+    await expect(counts).toContainText('Violations 1')
+    await page.screenshot({ path: info.outputPath('audit-linked-row.png') })
 
-    // Acknowledge through the row: the item clears, the verdict stays.
+    // The unfiltered tab still lists both sends.
+    await openTab(page, root, 'audit')
+    await expect(rows).toHaveCount(2, { timeout: 30_000 })
+
+    // Acknowledge through the group view: the item clears, the verdict stays.
+    await item.getByTestId('attention-action').click()
+    await expect(rows).toHaveCount(1, { timeout: 30_000 })
     await page.getByTestId('audit-acknowledge').click()
     const dialog = page.getByTestId('audit-ack-dialog')
     await expect(dialog).toBeVisible()
