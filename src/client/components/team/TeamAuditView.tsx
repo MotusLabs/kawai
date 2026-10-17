@@ -50,6 +50,8 @@ export default function TeamAuditView({ teamPath, view, sendMessage, connected, 
     useTeamAuditStore.getState().begin(teamPath, requestId, 'page')
     sendMessage({ type: 'team-audit-open', teamPath, requestId, filters, ...(callId !== undefined ? { callId } : {}) })
   }
+  // The selection the last sent request carried (dedups the URL effect).
+  const lastSelectionRequested = useRef<string | null | undefined>(undefined)
   // The tab's subscription: one authoritative page on open and every
   // reconnect; close ends it. A reconnect also drops its lost requests.
   const wasConnected = useRef(connected)
@@ -61,13 +63,25 @@ export default function TeamAuditView({ teamPath, view, sendMessage, connected, 
     lastEpoch.current = connectionEpoch
     if (reconnected) useTeamAuditStore.getState().reconnected(teamPath)
     const current = useTeamAuditStore.getState().views[teamPath]
+    lastSelectionRequested.current = current?.selected ?? undefined
     request(current?.filters ?? {}, current?.selected ?? undefined)
     return () => sendMessage({ type: 'team-audit-close', teamPath })
   }, [teamPath, connected, connectionEpoch, view.open, sendMessage]) // eslint-disable-line react-hooks/exhaustive-deps
+  // A call id arriving while the tab is open (the attention link, or a
+  // pasted URL) re-requests with it, so the group's rows replace the view.
+  useEffect(() => {
+    if (!connected || !view.open) return
+    if (lastSelectionRequested.current === view.selected) return
+    lastSelectionRequested.current = view.selected
+    request(view.filters, view.selected ?? undefined)
+  }, [view.selected, connected, view.open]) // eslint-disable-line react-hooks/exhaustive-deps
   // A committed row of the team: re-request the first page (D9's replace
   // semantics) — the push itself carries no data.
   useEffect(() => {
-    if (view.changed > 0 && connected && view.open) request(view.filters, view.selected ?? undefined)
+    if (view.changed > 0 && connected && view.open) {
+      lastSelectionRequested.current = view.selected ?? undefined
+      request(view.filters, view.selected ?? undefined)
+    }
   }, [view.changed]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadMore = () => {

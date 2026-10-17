@@ -173,3 +173,20 @@ describe('the fix round (findings-bee1aa24)', () => {
     act(() => renderer.unmount())
   })
 })
+
+test('a call id arriving while the tab is open re-requests with it (the attention link)', () => {
+  const { sent, renderer, rerender } = mount(() => {
+    useTeamAuditStore.getState().begin('/repo', 'r1', 'page')
+    useTeamAuditStore.getState().applyPage(pageOf([row('a'), row('b')]))
+  })
+  sent.length = 0
+  // The URL's call id lands (the WorkspaceView syncs the store's selection).
+  act(() => useTeamAuditStore.getState().select('/repo', 'b'))
+  rerender()
+  expect(sent.at(-1)).toMatchObject({ type: 'team-audit-open', teamPath: '/repo', callId: 'b' })
+  // The same selection again does not re-request.
+  sent.length = 0
+  rerender()
+  expect(sent).toEqual([])
+  act(() => renderer.unmount())
+})
