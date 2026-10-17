@@ -42,6 +42,10 @@ export interface HandoffRequest {
   expectedResponse?: string | null
   /** The human's client request key; agents send none (D3). */
   requestKey?: string
+  /** The role's profiles the review may route to (plan-execution D11/D15); honored for the system caller only. */
+  allowedProfiles?: string[]
+  /** Tags on the instruction mail (plan-execution D15: author-profile); the system caller only. */
+  tags?: string[]
 }
 
 export interface HandoffOutcome {
@@ -234,6 +238,8 @@ export class TaskResultService {
       instruction: handoffInstruction(request.kind, result, instructions, expectedResponse),
       requestKey: request.requestKey?.trim() || `handoff-${crypto.randomUUID()}`,
       handoff: { kind: request.kind, resultId: result.id, expectedResponse },
+      ...(request.allowedProfiles ? { allowedProfiles: request.allowedProfiles } : {}),
+      ...(request.tags ? { tags: request.tags } : {}),
     })
     return { assignment: outcome.assignment, duplicate: outcome.replay,
       notice: outcome.replay ? 'This request was already dispatched; the earlier handoff is returned.' : null }

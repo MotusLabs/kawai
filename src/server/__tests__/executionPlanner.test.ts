@@ -10,7 +10,8 @@ import type { ExecutionSnapshot, PlannedChange } from '../plans/execution/execut
 
 const change = (name: string, state: ChangeState, over: Partial<PlannedChange> = {}): PlannedChange => ({
   executionId: 'e1', change: name, state, step: null, generation: 0, taskId: null,
-  worktree: null, branch: null, baselineCommit: null, dependsOn: [], group: 'devs', ...over,
+  worktree: null, branch: null, baselineCommit: null, prNumber: null, dependsOn: [], group: 'devs',
+  task: null, round: null, ...over,
 })
 
 const snapshot = (changes: PlannedChange[], over: Partial<ExecutionSnapshot> = {}): ExecutionSnapshot => ({

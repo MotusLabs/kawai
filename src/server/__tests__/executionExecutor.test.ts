@@ -188,7 +188,7 @@ describe('provisioning (§11.3)', () => {
     const effect = executions.effectsOf(executionId)[0]!
     expect(effect).toMatchObject({ kind: 'provision', state: 'failed' })
     expect(effect.error).toContain('name-taken')
-    expect(executions.change(executionId, 'taken-b')!.state).toBe('provisioning')
+    expect(executions.change(executionId, 'taken-b')).toMatchObject({ state: 'stopped', stopReason: 'name-taken' })
   })
 
   test('a later execution of the same plan reuses the worktree and branch', async () => {

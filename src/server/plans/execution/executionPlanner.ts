@@ -34,17 +34,27 @@ export interface PlannedDispatch {
   group: string
 }
 
+/** One round-pipeline stage (D9-D11), performed by the executor in order. */
+export interface PlannedStage {
+  executionId: string
+  change: string
+  kind: 'result' | 'push' | 'open-pr' | 'ci' | 'review' | 'verdict'
+  roundId: string | null
+  resultId: string | null
+}
+
 export interface PlanSteps {
   transitions: PlannedTransition[]
   effects: PlannedEffect[]
   dispatches: PlannedDispatch[]
+  stages: PlannedStage[]
 }
 
 /** The states that occupy the execution's parallel-limit slots. */
 const IN_PROGRESS: ReadonlySet<ChangeState> = new Set(['provisioning', 'implementing', 'gating', 'landing'])
 
 export function planSteps(snapshot: ExecutionSnapshot, _now: string): PlanSteps {
-  const steps: PlanSteps = { transitions: [], effects: [], dispatches: [] }
+  const steps: PlanSteps = { transitions: [], effects: [], dispatches: [], stages: [] }
   const standing = new Set(snapshot.effects.map(effect => effect.effectKey))
   for (const execution of snapshot.executions) {
     const states = new Map(execution.changes.map(change => [change.change, change.state]))
@@ -84,6 +94,35 @@ export function planSteps(snapshot: ExecutionSnapshot, _now: string): PlanSteps 
       }
       if (change.state === 'implementing' && change.taskId === null && change.group !== null) {
         steps.dispatches.push({ executionId: change.executionId, change: change.change, group: change.group })
+      }
+      // The round pipeline (D9-D11): a result becomes a round, a round is
+      // pushed, PR'd, CI-read, reviewed, and decided. A landing change's
+      // merge has started, so no newer result supersedes its round.
+      if (change.task === null || change.state === 'landing') continue
+      const newest = change.task.results.at(-1) ?? null
+      if (newest !== null && (change.round === null || change.round.resultId !== newest.id)) {
+        steps.stages.push({ executionId: change.executionId, change: change.change, kind: 'result', roundId: null, resultId: newest.id })
+        continue
+      }
+      const round = change.round
+      if (change.state !== 'gating' || round === null || round.outcome !== null) continue
+      const pushKey = `${change.executionId}:${change.change}:push:${round.number}:${change.generation}`
+      if (round.pushedAt === null) {
+        if (!standing.has(pushKey)) steps.stages.push({ executionId: change.executionId, change: change.change, kind: 'push', roundId: round.id, resultId: null })
+        continue
+      }
+      // The change's one pull request: each round re-lists (reusing an open
+      // one, stopping on a closed one — plan-landing); the per-round effect
+      // key bounds it to once per round.
+      const prKey = `${change.executionId}:${change.change}:open-pr:${round.number}:${change.generation}`
+      if (change.branch !== null && !standing.has(prKey)) {
+        steps.stages.push({ executionId: change.executionId, change: change.change, kind: 'open-pr', roundId: round.id, resultId: null })
+      }
+      if (round.reviewAssignmentId !== null) {
+        steps.stages.push({ executionId: change.executionId, change: change.change, kind: 'verdict', roundId: round.id, resultId: null })
+      } else {
+        const rerunKey = `${change.executionId}:${change.change}:rerun:${round.number}:${change.generation}`
+        if (!standing.has(rerunKey)) steps.stages.push({ executionId: change.executionId, change: change.change, kind: 'ci', roundId: round.id, resultId: null })
       }
     }
   }

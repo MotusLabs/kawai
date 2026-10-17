@@ -6,9 +6,17 @@
 // exactly these rows.
 import type { ChangeState, ChangeStep } from '../../../shared/planExecution'
 import type { PlanContent } from '../../../shared/plans'
-import type { EffectRow, ExecutionRow } from './executionRows'
+import type { EffectRow, ExecutionRow, RoundRow } from './executionRows'
 import type { ExecutionStore } from './executionStore'
 import type { PlanStore } from '../planStore'
+
+/** What the round pipeline reads of one result of a change's task. */
+export interface ResultFact {
+  id: string
+  commit: string | null
+  taskRevision: number
+  submittedBySession: string | null
+}
 
 export interface PlannedChange {
   executionId: string
@@ -20,10 +28,16 @@ export interface PlannedChange {
   worktree: string | null
   branch: string | null
   baselineCommit: string | null
+  /** The change's one pull request, once recorded (reused across rounds). */
+  prNumber: number | null
   /** The revision's `dependsOn` for this change, in content order. */
   dependsOn: string[]
   /** The implementing group, from the execution's revision. */
   group: string | null
+  /** The change's task, when created: its current revision and results. */
+  task: { revision: number; results: ResultFact[] } | null
+  /** The change's newest round, decided or open. */
+  round: RoundRow | null
 }
 
 export interface PlannedExecution {
@@ -44,7 +58,8 @@ export interface ExecutionSnapshot {
 }
 
 /** Load the team's running-execution snapshot: rows, plan facts, effects, attempt counts. */
-export function executionSnapshot(teamId: string, main: string, executions: ExecutionStore, plans: PlanStore): ExecutionSnapshot {
+export function executionSnapshot(teamId: string, main: string, executions: ExecutionStore, plans: PlanStore,
+  resultsOf: (taskId: string) => ResultFact[] = () => [], taskRevisionOf: (taskId: string) => number = () => 1): ExecutionSnapshot {
   const running = executions.runningForTeam(teamId)
   const contentOf = new Map<string, PlanContent>()
   const planned: PlannedExecution[] = running.map(execution => {
@@ -66,8 +81,11 @@ export function executionSnapshot(teamId: string, main: string, executions: Exec
         worktree: row.worktree,
         branch: row.branch,
         baselineCommit: row.baselineCommit,
+        prNumber: row.prNumber,
         dependsOn: facts.get(row.change)?.dependsOn ?? [],
         group: facts.get(row.change)?.group ?? null,
+        task: row.taskId === null ? null : { revision: taskRevisionOf(row.taskId), results: resultsOf(row.taskId) },
+        round: executions.rounds(row.executionId, row.change).at(-1) ?? null,
       })),
     }
   })

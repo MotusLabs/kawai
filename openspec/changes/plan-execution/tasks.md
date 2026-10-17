@@ -112,10 +112,10 @@ Implement after `durable-plans`, `strategy-revision-impact`, and `plan-validatio
   - a revision published during an update that then conflicts dispatches one fix attempt, naming the revision, the base head, and the files, and no update attempt;
   - a revision published during an update that then passes the clean-merge check continues from the updated head;
   - the superseded review handoff's cancelled mail does not stop the change as `instruction-failed`.
-- [ ] 12.2 Run the push and open-pr effects for each round (plan-landing push and PR rules). Verify against a bare `origin` and the stub `gh`: reuse across rounds; an implementer's own push accepted; a moved branch stops as `effect-failed`; a closed PR stops as `pr-closed`.
-- [ ] 12.3 Poll CI and request the single rerun (D10). Record checks, flaky marks, and stops. Verify with tests driving the stub `gh` through pending, failed, rerun, and passed states, and through both timeouts.
+- [x] 12.2 Run the push and open-pr effects for each round (plan-landing push and PR rules). Verify against a bare `origin` and the stub `gh`: reuse across rounds; an implementer's own push accepted; a moved branch stops as `effect-failed`; a closed PR stops as `pr-closed`.
+- [x] 12.3 Poll CI and request the single rerun (D10). Record checks, flaky marks, and stops. Verify with tests driving the stub `gh` through pending, failed, rerun, and passed states, and through both timeouts.
 - [ ] 12.4 Release before review for worktree-scoped review groups, then dispatch the review handoff with the instruction, allowed profiles, and author tags (D11). Verify with tests: a not-ready member holds the step with its reason; an unscoped group leaves the implementer; human sessions are never released.
-- [ ] 12.5 Decide rounds from CI, the verdict, and the extra checks. Verify with the review and extra-check scenarios.
+- [x] 12.5 Decide rounds from CI, the verdict, and the extra checks. Verify with the review and extra-check scenarios.
 
 ## 13. Fix rounds, stops, Retry, and Stop
 

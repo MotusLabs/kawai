@@ -18,8 +18,8 @@ import type { Database } from 'bun:sqlite'
 import { logger } from '../../logger'
 import type { AttemptKind, AttemptManifest, ChangeState, ChangeStep, CiCheck, EffectKind, ExecutionOutcome, FloorMap, MergeMethod, StopDetail, StopReason } from '../../../shared/planExecution'
 import {
-  changeHolderId, mapAttempt, mapChange, mapEffect, mapExecution, mapLanding, mapSlot,
-  type AttemptRow, type ChangeRow, type EffectRow, type ExecutionRow, type LandingRow, type SlotRow,
+  changeHolderId, mapAttempt, mapChange, mapEffect, mapExecution, mapLanding, mapRound, mapSlot,
+  type AttemptRow, type ChangeRow, type EffectRow, type ExecutionRow, type LandingRow, type RoundRow, type SlotRow,
 } from './executionRows'
 
 export type ExecutionConflictKind = 'one-execution' | 'changes-unclaimed' | 'slot-taken'
@@ -306,6 +306,71 @@ export class ExecutionStore {
   landings(planId: string): LandingRow[] {
     return (this.db.prepare('SELECT * FROM plan_change_landings WHERE plan_id = ? ORDER BY landed_at, rowid').all(planId) as Array<Record<string, unknown>>)
       .map(mapLanding)
+  }
+
+  // --- rounds (D9/D10/D11) ---
+
+  /**
+   * Insert a round for a new result (D9): the previous round, open or not,
+   * is superseded unless its merge has started (a `landing` change); the
+   * change returns to `gating` and any slot it held is released — the
+   * transition out of `landing` releases it. Returns the round and whether
+   * the change moved.
+   */
+  insertRound(input: { executionId: string; change: string; attemptId: string; resultId: string; commitSha: string; fixRound: boolean }): { round: RoundRow; changeMoved: boolean } {
+    return this.db.transaction(() => {
+      const at = this.iso()
+      const prior = this.rounds(input.executionId, input.change).at(-1) ?? null
+      const number = (prior?.number ?? 0) + 1
+      const id = `round-${crypto.randomUUID()}`
+      this.db.prepare(`INSERT INTO plan_execution_rounds (id, execution_id, change, attempt_id, number, result_id, commit_sha, fix_round, ci_window_from)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+        id, input.executionId, input.change, input.attemptId, number, input.resultId, input.commitSha, input.fixRound ? 1 : 0, at,
+      )
+      if (prior && prior.outcome === null) {
+        this.db.prepare(`UPDATE plan_execution_rounds SET outcome = 'superseded', decided_at = ? WHERE id = ? AND outcome IS NULL`).run(at, prior.id)
+      }
+      // Back to gating (D9); leaving `landing` releases the slot (D3).
+      const row = this.change(input.executionId, input.change)!
+      const patch: ChangePatch = { state: 'gating', step: null }
+      let changeMoved = false
+      if (row.state === 'implementing' || row.state === 'gating' || row.state === 'landing') {
+        changeMoved = this.transition(input.executionId, input.change, row, patch) !== null
+      }
+      return { round: this.round(id)!, changeMoved }
+    })()
+  }
+
+  round(id: string): RoundRow | null {
+    const row = this.db.prepare('SELECT * FROM plan_execution_rounds WHERE id = ?').get(id) as Record<string, unknown> | null
+    return row ? mapRound(row) : null
+  }
+
+  rounds(executionId: string, change: string): RoundRow[] {
+    return (this.db.prepare('SELECT * FROM plan_execution_rounds WHERE execution_id = ? AND change = ? ORDER BY number').all(executionId, change) as Array<Record<string, unknown>>)
+      .map(mapRound)
+  }
+
+  /** Record the push and open the CI window (D10). */
+  markRoundPushed(id: string, at: string | null = null): void {
+    this.db.prepare('UPDATE plan_execution_rounds SET pushed_at = ?, ci_window_from = COALESCE(ci_window_from, ?) WHERE id = ?')
+      .run(at ?? this.iso(), at ?? this.iso(), id)
+  }
+
+  /** Record the CI read of the round's commit (D10). */
+  setRoundCi(id: string, ci: CiCheck[], rerunAt: string | null): void {
+    this.db.prepare('UPDATE plan_execution_rounds SET ci_json = ?, rerun_at = ? WHERE id = ?').run(JSON.stringify(ci), rerunAt, id)
+  }
+
+  /** Record the review assignment the round awaits (D11). */
+  setRoundReview(id: string, assignmentId: string): void {
+    this.db.prepare('UPDATE plan_execution_rounds SET review_assignment_id = ? WHERE id = ?').run(assignmentId, id)
+  }
+
+  /** Decide the round (D11/D12): outcome, verdict findings, extra checks, time. */
+  decideRound(id: string, outcome: 'pass' | 'fail', detail: { verdictFindingsId?: string; extra?: RoundRow['extra'] } = {}): void {
+    this.db.prepare(`UPDATE plan_execution_rounds SET outcome = ?, verdict_findings_id = ?, extra_json = ?, decided_at = ? WHERE id = ?`)
+      .run(outcome, detail.verdictFindingsId ?? null, detail.extra ? JSON.stringify(detail.extra) : null, this.iso(), id)
   }
 
   // --- effects (D14): recorded before they run, inspected before they repeat ---
