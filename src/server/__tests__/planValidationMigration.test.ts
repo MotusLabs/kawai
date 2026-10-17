@@ -4,8 +4,8 @@
 // keeping every row after its pre-migration backup, a fresh database ends at
 // the newest version with the three validation tables, and a database a
 // newer build migrated is still refused before any write. Number-agnostic
-// where easy: the last migration is `plan-validation`, and the build before
-// it is `MIGRATIONS` without the last entry. Every database lives in a
+// where easy: the build before it is `MIGRATIONS` up to `plan-validation`,
+// and the upgrade stops at `plan-validation` so later tables stay out. Every database lives in a
 // temporary directory.
 import { afterEach, beforeEach, expect, test } from 'bun:test'
 import fs from 'node:fs'

@@ -370,6 +370,8 @@ export class LimitOutcomes {
       fromGroup: message.fromGroup, originPath: message.originPath, priority: message.priority, tags: message.tags,
       body: message.body, inReplyTo: message, attachThread: true, taskId: message.taskId,
       handoff, excludedProfile: profileId,
+      // The role keeps narrowing the forward, without the limited profile (plan-execution D15).
+      allowedProfiles: message.allowedProfiles?.filter(profile => profile !== profileId) ?? null,
     })
     store.replaceResume(message.id)
     store.markForwarded(message.id, `forwarded: ${forwarded.id}`)

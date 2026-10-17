@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
 import { schemaDb } from './schemaDb'
 import { applyBaselineSchema } from '../dbSafety/baseline'
+import { applyExecutionSchema } from '../plans/execution/executionSchema'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -257,6 +258,9 @@ describe('profile routing columns', () => {
     db.exec(`CREATE TABLE team_messages (id TEXT PRIMARY KEY, team_id TEXT NOT NULL, to_kind TEXT NOT NULL, to_id TEXT NOT NULL, from_session TEXT NOT NULL, from_group TEXT, origin_path TEXT NOT NULL, priority TEXT NOT NULL DEFAULT 'normal', tags TEXT NOT NULL DEFAULT '[]', thread_id TEXT NOT NULL, in_reply_to TEXT, hop INTEGER NOT NULL DEFAULT 1, body TEXT NOT NULL, state TEXT NOT NULL, claimed_by TEXT, claimed_at TEXT, deliver_at TEXT, created_at TEXT NOT NULL, pushed_at TEXT, delivered_at TEXT, reason TEXT, possible_duplicate INTEGER NOT NULL DEFAULT 0, attach_thread INTEGER NOT NULL DEFAULT 0, task_id TEXT);
       INSERT INTO team_messages (id, team_id, to_kind, to_id, from_session, origin_path, thread_id, body, state, created_at) VALUES ('m1', '${TEAM}', 'group', 'devs', 'lead', '/repo', 'm1', 'hi', 'queued', '2026-01-01');`)
     applyBaselineSchema(db)
+    // Migration 8 owns team_messages.allowed_profiles (plan-execution D15); a
+    // version-0 database runs it right after the baseline.
+    applyExecutionSchema(db)
     const store = new MailboxStore(db)
     expect(store.get('m1')).toMatchObject({
       body: 'hi', claimCommit: null, parkedUntil: null, parkCount: 0, resumeMessageId: null, handoff: null, excludedProfile: null,

@@ -12,6 +12,7 @@ import { loadGroupCatalog } from './groupCatalog'
 import { loadTeamGroups } from './teamGroups'
 import { resolveTeam, type TeamIdentity } from './teamIdentity'
 import { MailboxStore, type TeamMessage } from './mailboxStore'
+import { KAWAI_REPLY_GUIDANCE } from '../../shared/team'
 import type { TaskStore } from './taskStore'
 
 /** Who is sending: an agent session (identity bound) or the human for a team. */
@@ -148,7 +149,8 @@ export class TeamMailbox {
     }
     // A human sender has no session to claim or push the reply (D5): it is
     // addressed to the human and settled on send. Never a "killed sender".
-    const toHuman = original.fromKind === 'human' || original.fromSession === null
+    // Kawai's mail takes no replies (plan-execution D18).
+    const toHuman = replyGoesToHuman(original)
     const recipient = toHuman ? null
       : original.fromSession ? this.options.getSession(original.fromSession) : null
     if (recipient && (await resolveTeam(recipient.projectPath)).teamId !== sender.team.teamId) {
@@ -197,5 +199,18 @@ export class TeamMailbox {
   private publish(message: TeamMessage) {
     this.options.onChange?.(message)
     return message
+  }
+}
+
+/** Whether a reply to `original` is addressed to the human; a reply to Kawai's mail is refused. */
+function replyGoesToHuman(original: TeamMessage): boolean {
+  switch (original.fromKind) {
+    case 'system': throw new Error(KAWAI_REPLY_GUIDANCE)
+    case 'human': return true
+    case 'agent': return original.fromSession === null
+    default: {
+      const never: never = original.fromKind
+      throw new Error(`Unknown sender kind: ${String(never)}`)
+    }
   }
 }

@@ -20,7 +20,7 @@ import { loadTeamGroups } from '../team/teamGroups'
 import type { StrategyStore } from '../strategy/strategyStore'
 import { hashPlanDraft, hashPlanRevision } from './planHash'
 import { PlanApprovedRaceError, type PlanStore } from './planStore'
-import { PlanRefusal, requireCommandId, runPlanCommand, type PlanCommandOutcome } from './planCommands'
+import { PlanRefusal, requireCommandId, runPlanCommand, type CommandPayload, type PlanCommandOutcome } from './planCommands'
 import {
   APPROVAL_PRECONDITIONS,
   buildApprovalContext,
@@ -59,6 +59,15 @@ export interface PlanApproveInput {
   commandId: string
 }
 
+/** plan-execution D3: one human execution command's event; the payload's compared fields are its own. */
+export type ExecutionEventInput =
+  | { kind: 'execution-started'; commandId: string; revision: number; contentHash: string }
+  | { kind: 'execution-stopped'; commandId: string; executionId: string; reason: string }
+  | { kind: 'change-retried'; commandId: string; executionId: string; change: string }
+
+/** `recordExecutionEvent`'s outcome: the command's, plus `within`'s result when it ran. */
+export type ExecutionEventOutcome<T> = PlanCommandOutcome & { result: T | undefined }
+
 export type PlanSaveOutcome =
   | { ok: true; draft: PlanDraft }
   | { ok: false; reason: 'structure'; message: string; errors: string[]; stored: PlanDraft | null }
@@ -91,6 +100,12 @@ export class PlanService {
     preconditions?: readonly ApprovalPrecondition[]
     /** strategy-revision-impact's disposition lookup; always null in this change. */
     pinDisposition?: (planId: string, revision: number) => PinDisposition | null
+    /**
+     * plan-execution D3: an execution row's plan and revision, read for the
+     * system completion's currency check. The execution composition wires the
+     * store read; without it every completion refuses as not found.
+     */
+    executionOf?: (executionId: string) => { planId: string; revision: number } | null
     /** plan-validation D9: approval's pre-transaction gather and in-transaction standing, and its appended precondition. */
     validation?: {
       prepareStanding: (planId: string, revision: number) => Promise<unknown> | null
@@ -259,6 +274,62 @@ export class PlanService {
     return reopenPlan(this.store, caller.team.teamId, input)
   }
 
+  /**
+   * plan-execution D3: append one of the human execution kinds together with
+   * the execution's own writes (`within`), as one transaction that replays by
+   * `(plan_id, command_id)` over the compared payload — Start `revision` and
+   * `contentHash`, Stop the trimmed `reason`, Retry `change`. A replay
+   * returns the prior outcome without writing and never runs `within`, so
+   * its result reads undefined. PlanService stays the only writer of
+   * `plan_events` (C3): ExecutionService composes this and never writes that
+   * table itself. The actor is the human — Start, Stop, and Retry are the
+   * human commands, and the plan-close hook's stop follows the human's close.
+   */
+  recordExecutionEvent<T>(planId: string, event: ExecutionEventInput, within: () => T): ExecutionEventOutcome<T> {
+    const commandId = event.commandId.trim()
+    if (!commandId) {
+      return { ok: false, reason: 'invalid', result: undefined, message: 'An execution command needs a stable command id so a resend replays instead of repeating.' }
+    }
+    const payload = executionCommandPayload(event)
+    let result: T | undefined
+    let ran = false
+    const outcome = runPlanCommand(this.store, planId, commandId, payload, () => {
+      result = within()
+      ran = true
+      return this.store.insertEvent(planId, {
+        kind: event.kind, actor: HUMAN, commandId, payload,
+        ...(event.kind === 'execution-started' ? { revision: event.revision, contentHash: event.contentHash } : {}),
+        ...(event.kind === 'execution-stopped' ? { reason: event.reason.trim() || null } : {}),
+      })
+    })
+    return { ...outcome, result: ran ? result : undefined }
+  }
+
+  /**
+   * plan-execution D19: Kawai completes the plan when an execution's last
+   * change landed and its revision is still the plan's current approved one.
+   * The deterministic command id makes a completion retried after a restart
+   * replay instead of writing twice. Any other state refuses and the plan
+   * stays open; finishing the execution itself is the execution store's
+   * write, never this one's.
+   */
+  completeBySystem(planId: string, executionId: string): PlanCommandOutcome {
+    const commandId = `exec:${executionId}:complete`
+    const payload = { command: 'complete-by-system' as const, executionId }
+    return runPlanCommand(this.store, planId, commandId, payload, () => {
+      const plan = this.store.get(planId)
+      if (!plan) throw new PlanRefusal('not-found', `Plan not found in this team: ${planId}`)
+      if (plan.lifecycle !== 'open') throw new PlanRefusal('state', `The plan is ${plan.lifecycle}; the system completes only an open plan.`)
+      const execution = this.options.executionOf?.(executionId) ?? null
+      if (!execution || execution.planId !== planId) throw new PlanRefusal('not-found', `Execution not found on this plan: ${executionId}`)
+      if (execution.revision !== plan.currentApprovedRevision) {
+        throw new PlanRefusal('state', `The execution ran revision ${execution.revision}, not the current approved revision ${plan.currentApprovedRevision ?? 'none'}; the plan stays open.`)
+      }
+      this.store.setLifecycle(planId, 'completed')
+      return this.store.insertEvent(planId, { kind: 'completed', actor: { kind: 'system', sessionId: null }, commandId, payload })
+    })
+  }
+
   /** The caller's team, bound actor, and current creation right (read at call time). */
   async context(caller: PlanCaller): Promise<{ team: TeamIdentity; actor: PlanActor; canCreate: boolean }> {
     if (caller.kind === 'human') return { team: caller.team, actor: HUMAN, canCreate: true }
@@ -287,6 +358,18 @@ export class PlanService {
 }
 
 const HUMAN: PlanActor = { kind: 'human', sessionId: null }
+
+/** The compared payload of one execution kind (plan-execution D3): the command name plus its own fields. */
+function executionCommandPayload(event: ExecutionEventInput): CommandPayload {
+  switch (event.kind) {
+    case 'execution-started':
+      return { command: 'execution-start', revision: event.revision, contentHash: event.contentHash }
+    case 'execution-stopped':
+      return { command: 'execution-stop', executionId: event.executionId, reason: event.reason.trim() }
+    case 'change-retried':
+      return { command: 'change-retry', executionId: event.executionId, change: event.change }
+  }
+}
 
 function defaultDraftId(actor: PlanActor): string {
   return actor.kind === 'agent' ? actor.sessionId : 'human'

@@ -34,6 +34,8 @@ export interface CandidateInput {
   spawnCwd: string | null
   /** A forwarded message never goes back to the limited profile. */
   excludeProfile?: string
+  /** The role's profiles this mail may route to, in the role's order (plan-execution D15); null narrows nothing. */
+  allowedProfiles?: string[] | null
 }
 
 export interface CandidateSet {
@@ -56,10 +58,12 @@ export function buildCandidates(input: CandidateInput): CandidateSet {
   const live = input.members.length + input.pendingSpawnProfiles.length
   const allowed = group.profiles.length > 0 ? group.profiles : [{ profileId: DEFAULT_PROFILE_ID }]
   const usable = (profileId: string) => profileId !== input.excludeProfile
+  // A role narrows the mail: only its profiles may take it (D15).
+  const inRole = (profileId: string) => input.allowedProfiles === null || input.allowedProfiles === undefined || input.allowedProfiles.includes(profileId)
 
   const candidates: RouteCandidate[] = []
   for (const member of input.members) {
-    if (!member.eligible || !usable(member.profileId)) continue
+    if (!member.eligible || !usable(member.profileId) || !inRole(member.profileId)) continue
     candidates.push({
       id: memberCandidateId(member.sessionId), kind: 'member', profileId: member.profileId,
       sessionId: member.sessionId, cwd: member.cwd,
@@ -67,10 +71,17 @@ export function buildCandidates(input: CandidateInput): CandidateSet {
     })
   }
   if (input.spawnAllowed && input.spawnCwd !== null && live < group.max) {
-    for (const entry of allowed) {
-      if (!usable(entry.profileId)) continue
-      if (entry.cap !== undefined && (liveOn.get(entry.profileId) ?? 0) >= entry.cap) continue
-      candidates.push({ id: spawnCandidateId(entry.profileId), kind: 'spawn', profileId: entry.profileId, cwd: input.spawnCwd })
+    // Spawn slots are offered only for allowed profiles the group also
+    // allows, in the role's order (D15).
+    const byId = new Map(allowed.map(entry => [entry.profileId, entry]))
+    const spawnOrder = input.allowedProfiles
+      ? input.allowedProfiles.flatMap(profileId => (byId.has(profileId) ? [profileId] : []))
+      : allowed.map(entry => entry.profileId)
+    for (const profileId of spawnOrder) {
+      const entry = byId.get(profileId)!
+      if (!usable(profileId)) continue
+      if (entry.cap !== undefined && (liveOn.get(profileId) ?? 0) >= entry.cap) continue
+      candidates.push({ id: spawnCandidateId(profileId), kind: 'spawn', profileId, cwd: input.spawnCwd })
     }
   }
   return {

@@ -108,3 +108,36 @@ describe('builtinPick', () => {
     expect(builtinPick('first-available', [], [])).toBeNull()
   })
 })
+
+describe('a plan role narrows the candidates (plan-execution D15)', () => {
+  test('members outside the role are excluded; spawns come in the role\'s order over the group\'s', () => {
+    const set = build({
+      members: [member('a', 'mimo'), member('b', 'glm')],
+      allowedProfiles: ['claude', 'glm'],
+    })
+    expect(ids(set.candidates)).toEqual(['member:b', 'spawn:claude', 'spawn:glm'])
+  })
+
+  test('spawn slots only for role profiles the group also allows; caps still apply', () => {
+    const set = build({
+      members: [member('a', 'glm', { eligible: false }), member('b', 'glm', { eligible: false })],
+      allowedProfiles: ['sonnet', 'glm', 'mimo'],
+    })
+    // glm is capped out; sonnet is not a group profile; so mimo only.
+    expect(ids(set.candidates)).toEqual(['spawn:mimo'])
+  })
+
+  test('no narrowing without a role', () => {
+    // The mimo member stays a candidate and every group profile spawns;
+    // mimo's own slot is out only because its cap of 1 is taken by the member.
+    const set = build({ members: [member('a', 'mimo')], allowedProfiles: null })
+    expect(ids(set.candidates)).toEqual(['member:a', 'spawn:glm', 'spawn:claude'])
+  })
+
+  test('builtin profile-order ranks by the role\'s order', () => {
+    const glm = { id: 'member:g', kind: 'member' as const, profileId: 'glm', sessionId: 'g', cwd: '/w', idleForMs: 5 }
+    const claude = { id: 'member:c', kind: 'member' as const, profileId: 'claude', sessionId: 'c', cwd: '/w', idleForMs: 99 }
+    expect(builtinPick('profile-order', [glm, claude], ['glm', 'mimo', 'claude'])).toMatchObject({ id: 'member:g' })
+    expect(builtinPick('profile-order', [glm, claude], ['claude', 'glm'])).toMatchObject({ id: 'member:c' })
+  })
+})

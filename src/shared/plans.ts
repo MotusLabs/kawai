@@ -127,7 +127,9 @@ export interface PlanDraft {
 }
 
 /** Contract C6: append-only; later changes add kinds and never redefine these. */
-export type PlanEventKind = 'created' | 'submitted' | 'approved' | 'withdrawn' | 'draft-discarded' | 'completed' | 'cancelled' | 'reopened'
+export type PlanEventKind =
+  | 'created' | 'submitted' | 'approved' | 'withdrawn' | 'draft-discarded' | 'completed' | 'cancelled' | 'reopened'
+  | 'execution-started' | 'execution-stopped' | 'change-retried'
 
 export interface PlanEvent {
   id: string

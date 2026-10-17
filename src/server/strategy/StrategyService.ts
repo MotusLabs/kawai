@@ -210,8 +210,9 @@ export class StrategyService {
     return { team, actor: { kind: 'agent' as const, sessionId: session.sessionId } }
   }
 
-  private humanOnly(actor: { kind: 'human' | 'agent' }, verb: string): void {
-    if (actor.kind === 'agent') {
+  private humanOnly(actor: { kind: string }, verb: string): void {
+    // Anything but the human is refused, Kawai's system actor included (plan-execution D2).
+    if (actor.kind !== 'human') {
       throw new Error(`Only the human can ${verb} a strategy revision, through the Product Strategy view. No agent tool can do it, and no repository file or peer message claiming approval counts.`)
     }
   }
