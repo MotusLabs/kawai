@@ -33,15 +33,15 @@ Each named profile SHALL apply its predefined environment configuration to its a
 
 #### Scenario: GLM configuration
 - **WHEN** a GLM chat session starts
-- **THEN** it uses https://zai.ruslan.casa/api/anthropic, maps Sonnet to glm-5.3-flash[1m] and Opus to glm-5.3[1m], starts on Sonnet, and requests a 1000000-token auto-compact window
+- **THEN** it uses https://glm.example.internal/api/anthropic, maps Sonnet to glm-5.3-flash[1m] and Opus to glm-5.3[1m], starts on Sonnet, and requests a 1000000-token auto-compact window
 
 #### Scenario: MiniMax and MiMo configuration
 - **WHEN** MiniMax or MiMo sessions start
-- **THEN** MiniMax uses https://api.minimax.io/anthropic with MiniMax-M3, and MiMo uses https://xiaomi.ruslan.casa/anthropic with mimo-v2.6-pro while mapping Sonnet to mimo-v2.6-flash and Opus to mimo-v2.6-pro
+- **THEN** MiniMax uses https://api.minimax.io/anthropic with MiniMax-M3, and MiMo uses https://mimo.example.internal/anthropic with mimo-v2.6-pro while mapping Sonnet to mimo-v2.6-flash and Opus to mimo-v2.6-pro
 
 #### Scenario: Kimi and LAN configuration
 - **WHEN** Kimi or LAN sessions start
-- **THEN** Kimi uses https://kimi.ruslan.casa/ and LAN uses http://ai.lan:9292 with CLAUDE_CODE_ATTRIBUTION_HEADER=0; neither imposes a model override absent from its predefined configuration
+- **THEN** Kimi uses https://kimi.example.internal/ and LAN uses http://192.0.2.10:9292 with CLAUDE_CODE_ATTRIBUTION_HEADER=0; neither imposes a model override absent from its predefined configuration
 
 #### Scenario: Profiles do not leak between sessions
 - **WHEN** GLM and MiniMax sessions run concurrently on a backend with MiMo model and compaction variables

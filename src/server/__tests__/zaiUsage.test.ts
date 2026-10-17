@@ -22,7 +22,7 @@ function fetchSaying(response: Response): {
   return { impl, calls }
 }
 
-const BASE = 'https://zai.ruslan.casa'
+const BASE = 'https://glm.example.internal'
 const CAPTURE = {
   code: 200,
   msg: 'Operation successful',
@@ -160,7 +160,7 @@ describe('fetchZaiUsage', () => {
       if (pull.ok) continue
       expect(pull.reason).not.toContain('sk-secret-glm-token')
       expect(pull.reason).not.toMatch(/query-secret|fragment-secret|response-secret|404 NOT_FOUND/)
-      expect(pull.reason).toContain('zai.ruslan.casa')
+      expect(pull.reason).toContain('glm.example.internal')
     }
     const impl = (async () => {
       throw new Error('boom with sk-secret-glm-token inside')

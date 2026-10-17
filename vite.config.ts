@@ -19,12 +19,9 @@ function createDevLogger() {
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '')
-  const allowedHosts = [
-    '5173--main--kawai--shakirov-ruslan.dev.ruslan.casa',
-    ...(env.VITE_ALLOWED_HOSTS
-      ? env.VITE_ALLOWED_HOSTS.split(',').map((h) => h.trim())
-      : []),
-  ]
+  const allowedHosts = env.VITE_ALLOWED_HOSTS
+    ? env.VITE_ALLOWED_HOSTS.split(',').map((h) => h.trim())
+    : []
   const backendPort = env.PORT || '4040'
 
   return {
