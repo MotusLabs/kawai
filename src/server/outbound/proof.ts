@@ -54,6 +54,9 @@ export type BackstopEntry = typeof BACKSTOP_ENTRIES[number]
 /** What `unresolved:` carries: a failure code, or a backstop entry. */
 export type UnresolvedCode = FailureCode | `unclassified:${BackstopEntry}`
 
+/** The check (1–4) a failure code belongs to. */
+export const checkOf = (code: FailureCode): number => CHECKS[code]
+
 /** The first failing check's code (lowest check; the earlier code within one). */
 export function firstFailure(codes: readonly FailureCode[]): FailureCode | undefined {
   let best: FailureCode | undefined

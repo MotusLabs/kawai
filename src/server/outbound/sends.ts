@@ -10,8 +10,8 @@
 // nesting is the backstop's. Pure.
 import { backstopEntries, toolEntry } from './backstop'
 import { BUILTINS, childState, evaluateBuiltin, initialState, pinsEnvironment, resolveDir, type CallState, type Cwd } from './callState'
-import type { SendCandidate } from './classify'
-import { firstFailure, unresolved, type BackstopEntry, type FailureCode, type RuleResult } from './proof'
+import type { SendCandidate, SendTarget } from './classify'
+import { checkOf, firstFailure, unresolved, type BackstopEntry, type FailureCode, type RuleResult } from './proof'
 import { ruleFor } from './rules'
 import { parseCall, type SimpleCommand } from './segments'
 import { basename, unwrap, type Wrapped } from './unwrapping'
@@ -75,6 +75,22 @@ function walk(script: string, state: CallState, inherited: Inherited, depth: num
   return candidates
 }
 
+/**
+ * Whether a target resolves although the send failed a check (spec "Each
+ * send gets one verdict"): no shape failure, and a host or registry a
+ * literal word names and no non-literal word touches, or mail. git and gh
+ * targets read the repository at the cwd, and a default registry the cwd's
+ * config, so they never resolve past a failure.
+ */
+function resolvesDespite(failures: FailureCode[], target: SendTarget, words: Word[]): boolean {
+  if (failures.some(code => checkOf(code) === 2)) return false
+  if (target.kind === 'mail') return true
+  if (target.kind !== 'host' && target.kind !== 'registry') return false
+  const host = target.host.toLowerCase()
+  const names = (word: Word) => word.text.toLowerCase().includes(host)
+  return words.some(word => word.literal && names(word)) && !words.some(word => !word.literal && names(word))
+}
+
 const unclassified = (entry: BackstopEntry, segment: string, cwd: string): SendCandidate =>
   ({ rule: 'unclassified-send', segment, cwd, target: unresolved(`unclassified:${entry}`) })
 
@@ -103,11 +119,13 @@ class Segment {
     }
     // `exec` replaces the shell; anything it does is unevaluated for later commands.
     if (unwrapped.wrappers.includes('exec')) state.context.add('unevaluated-builtin')
+    // A non-literal word (a `$(…)` body in a value position too) is never part of a proven non-send.
+    const opaque = networkRedirect || this.hasNonLiteral()
     if (unwrapped.kind === 'assignments') {
       for (const name of unwrapped.assigned) state.assigned.add(name)
-      return networkRedirect ? this.backstop() : []
+      return opaque ? this.backstop() : []
     }
-    if (unwrapped.kind === 'query') return networkRedirect ? this.backstop() : []
+    if (unwrapped.kind === 'query') return opaque ? this.backstop() : []
     const cwd = this.effectiveCwd(state.cwd, unwrapped.chdir)
     if (unwrapped.kind === 'shell') {
       if (depth > 0 || !unwrapped.script.literal) return this.backstop(unwrapped.script.literal ? [] : ['command-not-literal'])
@@ -129,7 +147,7 @@ class Segment {
     const builtin = inShell && !head.text.includes('/') ? evaluateBuiltin(state, name, unwrapped.args, this.counts) : null
     // An unevaluated builtin (`eval`, `source`, …) may run anything its words name.
     if (builtin === 'unevaluated') return this.backstop()
-    if (builtin === 'exact') return networkRedirect ? this.backstop() : []
+    if (builtin === 'exact') return opaque ? this.backstop() : []
     const result = ruleFor({ name, args: unwrapped.args, stdin: this.stdin })
     this.noteChanges(name, unwrapped.args, result)
     // A send tool the rule could not prove may be sending: a non-literal word can hide its verb.
@@ -149,9 +167,19 @@ class Segment {
       if (gitOrGh && state.remotesChanged) pins.push('config-changed')
       if (found.rule === 'git-push' && found.target.kind === 'origin-implicit' && state.branchChanged) pins.push('config-changed')
       if (!sendCwd.certain) pins.push('inexact-cwd')
-      const failure = firstFailure([...failures, ...this.callFailures, ...state.context, ...found.failures, ...pins])
-      return { rule: found.rule, segment: cmd.text, cwd: sendCwd.dir, target: found.target, ...(failure === undefined ? {} : { failure }) }
+      const all = [...failures, ...this.callFailures, ...state.context, ...found.failures, ...pins]
+      const failure = firstFailure(all)
+      const resolved = failure !== undefined && resolvesDespite(all, found.target, cmd.words)
+      return {
+        rule: found.rule, segment: cmd.text, cwd: sendCwd.dir, target: found.target,
+        ...(failure === undefined ? {} : { failure }), ...(resolved ? { resolved: true as const } : {}),
+      }
     })
+  }
+
+  /** Any word of the command, or a redirection target, that is not literal. */
+  private hasNonLiteral(): boolean {
+    return this.cmd.words.some(word => !word.literal) || this.cmd.redirects.some(redirect => redirect.target !== null && !redirect.target.literal)
   }
 
   /** The literal, shape, and environment checks one command's own words decide. */
