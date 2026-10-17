@@ -123,6 +123,26 @@ describe('OutboundDestinations', () => {
     expect(loader.isModelProvider('gw.example.org')).toBe(true)
   })
 
+  test('a provider-level base URL is a model provider; providers.json changes re-derive', () => {
+    const providersFile = path.join(home, '.kawai', 'providers.json')
+    fs.writeFileSync(providersFile, JSON.stringify({
+      zai: {
+        label: 'Z.AI',
+        env: { ANTHROPIC_BASE_URL: 'https://zai.example.internal/api/anthropic' },
+        models: { glm: { label: 'GLM' }, 'glm-flash': { label: 'GLM Flash' } },
+      },
+    }))
+    const loader = new OutboundDestinations({ homeDir: home })
+    // The provider's env reaches every flattened model entry (design D1).
+    expect(loader.isModelProvider('zai.example.internal')).toBe(true)
+    // The stamp covers providers.json, so a change re-derives.
+    fs.writeFileSync(providersFile, JSON.stringify({
+      zai: { env: { ANTHROPIC_BASE_URL: 'https://other.example.internal/api' }, models: { glm: {} } },
+    }))
+    expect(loader.isModelProvider('zai.example.internal')).toBe(false)
+    expect(loader.isModelProvider('other.example.internal')).toBe(true)
+  })
+
   test('entry forms: domains match subdomains, ports restrict, CIDRs and brackets contain', () => {
     write({
       internal: ['example.internal', 'svc.example.com:8443', '192.0.2.0/24', '2001:db8::/32', '198.51.100.7:8443'],
