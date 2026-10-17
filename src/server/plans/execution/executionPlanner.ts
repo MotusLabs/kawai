@@ -38,7 +38,7 @@ export interface PlannedDispatch {
 export interface PlannedStage {
   executionId: string
   change: string
-  kind: 'result' | 'push' | 'open-pr' | 'ci' | 'review' | 'verdict' | 'revision'
+  kind: 'result' | 'push' | 'open-pr' | 'ci' | 'review' | 'verdict' | 'revision' | 'landing' | 'post-ci'
   roundId: string | null
   resultId: string | null
 }
@@ -68,7 +68,15 @@ export function planSteps(snapshot: ExecutionSnapshot, _now: string): PlanSteps 
     const states = new Map(execution.changes.map(change => [change.change, change.state]))
     let inProgress = execution.changes.filter(change => IN_PROGRESS.has(change.state)).length
     for (const change of execution.changes) {
-      if (change.state === 'landed' || change.state === 'stopped' || change.state === 'cancelled') continue
+      if (change.state === 'landed') {
+        // D13 step 6: base-branch CI on the merge commit is polled until it
+        // finishes and lands as the landing fact's evidence.
+        if (change.landing !== null && change.landing.postCi === null) {
+          steps.stages.push({ executionId: change.executionId, change: change.change, kind: 'post-ci', roundId: null, resultId: null })
+        }
+        continue
+      }
+      if (change.state === 'stopped' || change.state === 'cancelled') continue
       if (change.state === 'waiting') {
         // A dependency that has not landed holds the change — stopped ones
         // included; independent changes elsewhere in the plan continue.
@@ -150,6 +158,11 @@ export function planSteps(snapshot: ExecutionSnapshot, _now: string): PlanSteps 
         continue
       }
       if (change.state !== 'gating' || round === null) continue
+      if (round.outcome === 'pass' && change.passedAt !== null) {
+        // D13: a passed change lands — conditions first, then the slot.
+        steps.stages.push({ executionId: change.executionId, change: change.change, kind: 'landing', roundId: round.id, resultId: null })
+        continue
+      }
       if (round.outcome === 'fail') {
         // A failed round returns the change for fixes under the count rule
         // (D12); the executor decides stop versus dispatch.

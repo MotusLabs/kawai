@@ -37,6 +37,8 @@ export interface PlannedChange {
   baselineCommit: string | null
   /** The change's one pull request, once recorded (reused across rounds). */
   prNumber: number | null
+  /** When the change's round passed (D13's landing readiness). */
+  passedAt: string | null
   /** The revision's `dependsOn` for this change, in content order. */
   dependsOn: string[]
   /** The implementing group, from the execution's revision. */
@@ -45,6 +47,8 @@ export interface PlannedChange {
   task: { status: string; revision: number; results: ResultFact[]; assignment: AssignmentFact | null } | null
   /** The change's newest round, decided or open. */
   round: RoundRow | null
+  /** The change's landing fact, once it landed (D13). */
+  landing: { mergeSha: string; postCi: unknown } | null
 }
 
 export interface PlannedExecution {
@@ -90,10 +94,15 @@ export function executionSnapshot(teamId: string, main: string, executions: Exec
         branch: row.branch,
         baselineCommit: row.baselineCommit,
         prNumber: row.prNumber,
+        passedAt: row.passedAt,
         dependsOn: facts.get(row.change)?.dependsOn ?? [],
         group: facts.get(row.change)?.group ?? null,
         task: row.taskId === null ? null : { status: taskStatusOf(row.taskId), revision: taskRevisionOf(row.taskId), results: resultsOf(row.taskId), assignment: assignmentOf(row.taskId) },
         round: executions.rounds(row.executionId, row.change).at(-1) ?? null,
+        landing: (() => {
+          const fact = executions.landings(execution.planId).find(entry => entry.change === row.change)
+          return fact ? { mergeSha: fact.mergeSha, postCi: fact.postCi as unknown } : null
+        })(),
       })),
     }
   })

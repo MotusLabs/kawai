@@ -383,6 +383,30 @@ export class ExecutionStore {
       .run(this.iso(), id)
   }
 
+  /** D13's carried round: a clean base merge carries the verdict; CI runs on the new head. */
+  insertCarriedRound(input: { executionId: string; change: string; attemptId: string; resultId: string; commitSha: string; carriedFrom: string; ciWindowFrom: string }): RoundRow {
+    return this.db.transaction(() => {
+      const prior = this.rounds(input.executionId, input.change).at(-1) ?? null
+      const number = (prior?.number ?? 0) + 1
+      const id = `round-${crypto.randomUUID()}`
+      this.db.prepare(`INSERT INTO plan_execution_rounds (id, execution_id, change, attempt_id, number, result_id, commit_sha, fix_round, carried_from, ci_window_from)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+        id, input.executionId, input.change, input.attemptId, number, input.resultId, input.commitSha,
+        prior?.fixRound === true ? 1 : 0, input.carriedFrom, input.ciWindowFrom,
+      )
+      if (prior && prior.outcome === null) {
+        this.db.prepare(`UPDATE plan_execution_rounds SET outcome = 'superseded', decided_at = ? WHERE id = ? AND outcome IS NULL`).run(this.iso(), prior.id)
+      }
+      return this.round(id)!
+    })()
+  }
+
+  /** Record base-branch CI on the landing fact as evidence (D13 step 6). */
+  setLandingPostCi(planId: string, change: string, postCi: CiCheck[]): void {
+    this.db.prepare('UPDATE plan_change_landings SET post_ci_json = ? WHERE plan_id = ? AND change = ?')
+      .run(JSON.stringify(postCi), planId, change)
+  }
+
   /** Decide the round (D11/D12): outcome, verdict findings, extra checks, time. */
   decideRound(id: string, outcome: 'pass' | 'fail', detail: { verdictFindingsId?: string; extra?: RoundRow['extra'] } = {}): void {
     this.db.prepare(`UPDATE plan_execution_rounds SET outcome = ?, verdict_findings_id = ?, extra_json = ?, decided_at = ? WHERE id = ?`)
@@ -421,11 +445,16 @@ export class ExecutionStore {
       .map(mapEffect)
   }
 
-  /** The team's due pending effects, oldest first, across its running executions (D5: one at a time per team). */
+  /**
+   * The team's due pending effects, oldest first, across its running
+   * executions (D5: one at a time per team). A finished execution's cleanup
+   * (`remove-worktree`) stays due: the completion must not strand it.
+   */
   dueEffects(teamId: string, now: string): EffectRow[] {
     return (this.db.prepare(`SELECT e.* FROM plan_execution_effects e
       JOIN plan_executions x ON x.id = e.execution_id
-      WHERE x.team_id = ? AND x.state = 'running' AND e.state = 'pending' AND (e.next_at IS NULL OR e.next_at <= ?)
+      WHERE x.team_id = ? AND (x.state = 'running' OR e.kind = 'remove-worktree')
+        AND e.state = 'pending' AND (e.next_at IS NULL OR e.next_at <= ?)
       ORDER BY e.created_at, e.rowid`).all(teamId, now) as Array<Record<string, unknown>>)
       .map(mapEffect)
   }

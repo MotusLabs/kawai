@@ -126,22 +126,22 @@ Implement after `durable-plans`, `strategy-revision-impact`, and `plan-validatio
 
 ## 14. Direct landing and completion
 
-- [ ] 14.1 Implement the conditions check and the landing slot (D13). Verify with tests: an unresolved acceptance condition holds the change outside the slot, and resolving it lets the change land; two passing changes land in order among those ready to merge; every stop releases the slot.
-- [ ] 14.2 Implement up to date: the ancestry check, the `merge-tree` conflict prediction, the update attempt on conflict, `update-branch` with the clean-merge check (parents, base containment, and tree), and the carried round with CI on the new head. Verify against a bare `origin` and the stub `gh`:
+- [x] 14.1 Implement the conditions check and the landing slot (D13). Verify with tests: an unresolved acceptance condition holds the change outside the slot, and resolving it lets the change land; two passing changes land in order among those ready to merge; every stop releases the slot.
+- [x] 14.2 Implement up to date: the ancestry check, the `merge-tree` conflict prediction, the update attempt on conflict, `update-branch` with the clean-merge check (parents, base containment, and tree), and the carried round with CI on the new head. Verify against a bare `origin` and the stub `gh`:
   - a clean update keeps the review;
   - a base that moved during the update still passes when the merge is clean;
   - a hand-made merge with the right parents but another tree, and a head moved by a push, each release the slot and dispatch an update attempt;
   - a conflict dispatches an update attempt naming the files;
   - failed CI after the update dispatches a fix from the merge commit.
-- [ ] 14.3 Implement the pre-merge base re-read, the pinned merge, the landing fact with `base_sha` and `tree_verified`, Kawai's acceptance, worktree removal when safe, and post-landing CI as evidence. Verify with tests:
+- [x] 14.3 Implement the pre-merge base re-read, the pinned merge, the landing fact with `base_sha` and `tree_verified`, Kawai's acceptance, worktree removal when safe, and post-landing CI as evidence. Verify with tests:
   - a base that moved before the merge returns the change to the up-to-date step;
   - a moved head is refused and nothing merged;
   - the fact is written once, and `tree_verified` is 1 for a landing whose base held still under each of `merge`, `squash`, and `rebase`, and 0 when the base moved between the re-read and the merge;
   - the task is done and its members are released once ready;
   - a live session keeps the worktree;
   - a failing base branch keeps the change landed.
-- [ ] 14.4 Add `PlanService.completeBySystem` and the execution's completion (D19). Verify with tests: the last landing completes the plan as `system`, while a newer approved revision leaves it open.
-- [ ] 14.5 Register `direct` in the mechanism registry, and refuse `integration-branch` as `landing-mode-supported`. Verify with the integration-branch scenarios.
+- [x] 14.4 Add `PlanService.completeBySystem` and the execution's completion (D19). Verify with tests: the last landing completes the plan as `system`, while a newer approved revision leaves it open.
+- [x] 14.5 Register `direct` in the mechanism registry, and refuse `integration-branch` as `landing-mode-supported`. Verify with the integration-branch scenarios.
 
 ## 15. Human protocol and the Execution section
 

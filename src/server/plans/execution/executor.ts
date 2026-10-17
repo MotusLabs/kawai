@@ -19,8 +19,10 @@ import { assignmentState } from '../../team/assignmentStore'
 import type { MailboxStore } from '../../team/mailboxStore'
 import { githubRepoOf } from '../landing/landingProbe'
 import { lsRemoteHead } from '../landing/gitRemote'
-import { ghPrList, ghPrView, ghRunAttempt } from '../landing/github'
+import { ghCheckRuns, ghPrList, ghPrView, ghRunAttempt, ghStatuses } from '../landing/github'
 import { inspectUnknownEffects } from './effectInspectors'
+import { applyLanding, applyLandingOutcome, landingAdapters, mergeAdapter, removeWorktreeAdapter, updateBranchAdapter } from './executionLanding'
+import type { CiCheck } from '../../../shared/planExecution'
 import type { GhCommandOptions } from '../landing/ghCommand'
 import { executionSnapshot } from './executionSnapshot'
 import { planSteps } from './executionPlanner'
@@ -47,6 +49,12 @@ export interface ExecutorDeps {
   mailbox?: MailboxStore
   /** D11's release step, wired to member-release by the composition. */
   releases?: { readiness: (sessionId: string) => { ready: boolean; reason: string | null }; release: (sessionId: string) => void }
+  /** The plan service, for the system completion when everything landed (D19). */
+  plansService?: import('../PlanService').PlanService
+  /** D13's live condition read: unresolved acceptance-gated conditions per change. */
+  conditionsOf?: (change: string) => string[]
+  /** The landing adapters (defaults to the real git/gh). */
+  landingAdapters?: import('./executionLanding').LandingAdapters
   /** Whether a group's current file is worktree-scoped (default true). */
   groupScoped?: (teamId: string, groupId: string) => boolean
   /** The team's identity; without it (unknown team) a tick does nothing. */
@@ -189,12 +197,16 @@ export class ExecutionExecutor {
       for (const stage of steps.stages) {
         const row = this.deps.store.change(stage.executionId, stage.change)
         if (row === null) continue
+        if (stage.kind === 'landing' || stage.kind === 'post-ci') {
+          await this.applyLandingStage(team, row, stage)
+          continue
+        }
         await applyRoundStage(this.roundDeps(team), row, stage)
       }
       for (const fix of steps.fixes) {
         await this.applyFix(team, fix)
       }
-      if (steps.effects.length > 0 || steps.fixes.length > 0 || steps.stages.some(stage => stage.kind === 'push' || stage.kind === 'open-pr')) {
+      if (steps.effects.length > 0 || steps.fixes.length > 0 || steps.stages.length > 0) {
         // A done effect's follow-on transition lands with its outcome (D14),
         // so the next pass sees the state it implies.
         await this.runner(teamId).runDue(teamId)
@@ -238,21 +250,77 @@ export class ExecutionExecutor {
         call: async effect => {
           const adapters = this.deps.adapters ?? {}
           const rounds = this.deps.roundAdapters ?? roundAdapters
+          const landing = this.deps.landingAdapters ?? landingAdapters
           const adapter = adapters[effect.kind]
             ?? (effect.kind === 'push' ? pushAdapter(rounds)
               : effect.kind === 'open-pr' ? openPrAdapter(rounds, this.deps.ghOptions)
                 : effect.kind === 'rerun' ? rerunAdapter(rounds, this.deps.ghOptions)
-                  : undefined)
+                  : effect.kind === 'update-branch' ? updateBranchAdapter(landing, this.deps.ghOptions)
+                    : effect.kind === 'merge' ? mergeAdapter(landing, this.deps.ghOptions)
+                    : effect.kind === 'remove-worktree' ? removeWorktreeAdapter()
+                      : undefined)
           if (adapter === undefined) {
             return { ok: false, error: { argv: ['executor', effect.kind], exitCode: 1, stderr: `no adapter for kind ${effect.kind}` } }
           }
           return adapter.call(effect)
         },
       },
-      onDone: effect => this.applyEffectOutcome(effect),
+      onDone: effect => {
+        this.applyEffectOutcome(effect)
+        if (effect.kind === 'merge' || effect.kind === 'update-branch') {
+          const execution = this.deps.store.execution(effect.executionId)
+          const team = execution === null ? undefined : this.deps.teamOf(execution.teamId)
+          if (team !== undefined && effect.change !== null) {
+            void applyLandingOutcome({
+              team,
+              repo: this.repoOf(team),
+              executions: this.deps.store,
+              plans: this.deps.plans,
+              ...(this.deps.results ? { results: this.deps.results } : {}),
+              ...(this.deps.plansService ? { plansService: this.deps.plansService } : {}),
+              ...(this.deps.ghOptions ? { ghOptions: this.deps.ghOptions } : {}),
+              ...(this.deps.records ? { records: this.deps.records } : {}),
+              now: () => (this.deps.now?.() ?? new Date()).toISOString(),
+            }, effect).then(() => this.wake(team.teamId)).catch(() => undefined)
+          }
+        }
+      },
       onFailed: effect => this.applyEffectFailure(effect),
       ...(this.deps.now ? { now: this.deps.now } : {}),
     })
+  }
+
+  /** The landing stages (D13): a passed change lands; a landed change's base CI lands as evidence. */
+  private async applyLandingStage(team: import('../../team/teamIdentity').TeamIdentity, row: import('./executionRows').ChangeRow, stage: { kind: string; roundId: string | null }): Promise<void> {
+    if (stage.kind === 'landing' && stage.roundId !== null) {
+      const round = this.deps.store.round(stage.roundId)
+      if (row.branch === null || round === null) return
+      await applyLanding({
+        team,
+        repo: this.repoOf(team),
+        executions: this.deps.store,
+        plans: this.deps.plans,
+        ...(this.deps.results ? { results: this.deps.results } : {}),
+        ...(this.deps.plansService ? { plansService: this.deps.plansService } : {}),
+        ...(this.deps.ghOptions ? { ghOptions: this.deps.ghOptions } : {}),
+        ...(this.deps.conditionsOf ? { conditionsOf: this.deps.conditionsOf } : {}),
+        ...(this.deps.records ? { records: this.deps.records } : {}),
+        now: () => (this.deps.now?.() ?? new Date()).toISOString(),
+      }, this.deps.landingAdapters ?? landingAdapters, row, round)
+      return
+    }
+    if (stage.kind === 'post-ci') {
+      // D13 step 6: base-branch CI on the merge commit, polled until done.
+      const execution = this.deps.store.execution(row.executionId)
+      const fact = execution === null ? null : this.deps.store.landings(execution.planId).find(entry => entry.change === row.change)
+      if (execution === null || fact === null || fact === undefined) return
+      const runs = await ghCheckRuns(this.repoOf(team), fact.mergeSha, this.deps.ghOptions)
+      const statuses = await ghStatuses(this.repoOf(team), fact.mergeSha, this.deps.ghOptions)
+      if (!runs.ok || !statuses.ok) return
+      const checks: CiCheck[] = [...runs.data, ...statuses.data]
+      const pending = checks.some(check => ['queued', 'in_progress', 'waiting', 'requested', 'pending'].includes(check.conclusion.toLowerCase()))
+      if (!pending) this.deps.store.setLandingPostCi(execution.planId, row.change, checks)
+    }
   }
 
   /**
