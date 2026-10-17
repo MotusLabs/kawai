@@ -572,7 +572,12 @@ export class ChatConnections {
         const pending = this.pendingAttach.get(connection)
         if (!pending || pending.get(sessionId) !== token) return
         pending.delete(sessionId)
-        const snapshot = this.manager.getSnapshot(sessionId)
+        // historyFrom (chat-history-window D2): a reconnecting client names
+        // the oldest event it holds, so its snapshot covers the same span.
+        const snapshot = this.manager.getSnapshot(
+          sessionId,
+          message.historyFrom !== undefined ? { historyFrom: message.historyFrom } : {}
+        )
         if (!snapshot) return
         this.batches.get(connection)?.delete(sessionId)
         this.activityBatches.get(connection)?.delete(sessionId)
@@ -595,6 +600,26 @@ export class ChatConnections {
       case 'chat-detach':
         // Already unsubscribed before the restore await.
         return
+      case 'chat-history-page': {
+        // A read-only page (chat-history-window D2): answered to the asking
+        // connection only, and only while it subscribes to the session —
+        // paging follows an attach, never replaces one. History loads off
+        // the event loop exactly as attach does, and no agent starts:
+        // archived chats page too.
+        if (!this.subscriptions.get(connection)?.has(sessionId)) {
+          connection.send({ type: 'error', message: `chat-history-page needs an active subscription to ${sessionId}` })
+          return
+        }
+        await this.manager.loadHistory(sessionId)
+        if (!this.subscriptions.get(connection)?.has(sessionId)) return
+        const page = this.manager.getHistoryPage(sessionId, message.beforeId, message.throughId)
+        if (!page) return
+        connection.send({
+          type: 'chat-history-page', sessionId, beforeId: message.beforeId,
+          events: page.events, hasOlder: page.hasOlder, ...(page.stale ? { stale: true } : {}),
+        })
+        return
+      }
       case 'chat-send': {
         const result = await this.manager.send(sessionId, message.text)
         if (!result.ok) connection.send({ type: 'error', message: result.error })

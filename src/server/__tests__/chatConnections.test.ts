@@ -10,21 +10,33 @@ import type { ChatActionResult, ChatSessionManager } from '../chat/ChatSessionMa
 
 function harness(wireLogs?: ChatWireLogs) {
   const calls: unknown[] = []
+  /** Windowed-snapshot and history-page wiring, kept out of `calls` (attach tests assert it exactly). */
+  const snapshotCalls: Array<{ id: string; options: unknown }> = []
+  const pageCalls: Array<{ id: string; beforeId: string; throughId?: string }> = []
+  const loadHistoryCalls: string[] = []
+  let page: { events: ChatEvent[]; hasOlder: boolean; stale: boolean } | null = null
   const snapshot: Extract<ServerMessage, { type: 'chat-snapshot' }> = {
     type: 'chat-snapshot', sessionId: 'chat-1', profileId: 'default', events: [],
     pendingRequests: [{ kind: 'approval', requestId: 'approval-1', tool: 'Bash', input: {}, at: 'now' }],
     status: 'permission', throughSequence: 0,
     commands: { status: 'unavailable', commands: [] }, activity: null, contextUsage: null, usage: null, workers: [], backgroundTasks: [], notifications: [], model: null,
+    historyHasOlder: true, historyStartId: 'hist-start',
   }
   let pending = true
   const manager = {
     isArchived: (_id: string) => false,
     whenRestored: () => Promise.resolve(),
-    loadHistory: async () => {},
+    loadHistory: async (id: string) => { loadHistoryCalls.push(id) },
     has: (id: string) => id === 'chat-1' || id === 'chat-2' || id === 'chat-3',
     profileIdOf: (id: string) => (id === 'chat-2' ? 'glm' : 'default'),
-    getSnapshot: (id: string) =>
-      id === 'chat-2' ? null : { ...snapshot, sessionId: id },
+    getSnapshot: (id: string, options: { historyFrom?: string } = {}) => {
+      snapshotCalls.push({ id, options })
+      return id === 'chat-2' ? null : { ...snapshot, sessionId: id }
+    },
+    getHistoryPage: (id: string, beforeId: string, throughId?: string) => {
+      pageCalls.push({ id, beforeId, ...(throughId !== undefined ? { throughId } : {}) })
+      return page
+    },
     send: async (...args: unknown[]) => { calls.push(['send', ...args]); return { ok: true } },
     start: (...args: unknown[]) => { calls.push(['start', ...args]); return Promise.resolve<ChatActionResult>({ ok: true }) },
     interrupt: (...args: unknown[]) => { calls.push(['interrupt', ...args]); return { ok: true } },
@@ -60,7 +72,7 @@ function harness(wireLogs?: ChatWireLogs) {
   const connections = new ChatConnections(manager, wireLogs)
   const messages: ServerMessage[] = []
   const connection = { send: (message: ServerMessage) => messages.push(message) }
-  return { connections, connection, messages, calls, snapshot, manager }
+  return { connections, connection, messages, calls, snapshot, manager, snapshotCalls, pageCalls, loadHistoryCalls, setPage: (next: typeof page) => { page = next } }
 }
 
 const delta = (sequence: number, turnId = 'turn-1'): ChatEvent => ({
@@ -234,6 +246,65 @@ describe('chat WebSocket subscriptions', () => {
     await h.connections.handle(h.connection, { type: 'chat-attach', sessionId: 'chat-1' })
     expect(h.messages).toEqual([h.snapshot])
     expect(h.calls).toEqual([])
+  })
+
+  test('attach asks for the window and passes historyFrom through', async () => {
+    const h = harness()
+    await h.connections.handle(h.connection, { type: 'chat-attach', sessionId: 'chat-1' })
+    expect(h.snapshotCalls).toEqual([{ id: 'chat-1', options: {} }])
+    expect(h.messages[0]).toMatchObject({
+      type: 'chat-snapshot', sessionId: 'chat-1', historyHasOlder: true, historyStartId: 'hist-start',
+    })
+    // A reconnecting client names its oldest held event; the snapshot
+    // covers the same span (the manager widens, tested there).
+    await h.connections.handle(h.connection, { type: 'chat-detach', sessionId: 'chat-1' })
+    await h.connections.handle(h.connection, { type: 'chat-attach', sessionId: 'chat-1', historyFrom: 'hist-start' })
+    expect(h.snapshotCalls[1]).toEqual({ id: 'chat-1', options: { historyFrom: 'hist-start' } })
+    h.connections.publish('chat-1', delta(7))
+    await new Promise(resolve => setTimeout(resolve, 0))
+    // Live events after the re-attach are neither lost nor duplicated.
+    expect(h.messages.at(-1)).toEqual({ type: 'chat-events', sessionId: 'chat-1', events: [delta(7)] })
+  })
+
+  test('chat-history-page replies to the asking connection only, with throughId', async () => {
+    const h = harness()
+    h.setPage({ events: [delta(9)], hasOlder: true, stale: false })
+    await h.connections.handle(h.connection, { type: 'chat-attach', sessionId: 'chat-1' })
+    const otherMessages: ServerMessage[] = []
+    const other = { send: (message: ServerMessage) => otherMessages.push(message) }
+    await h.connections.handle(h.connection, { type: 'chat-history-page', sessionId: 'chat-1', beforeId: 'hist-start', throughId: 'tool:call-9' })
+    expect(h.loadHistoryCalls).toEqual(['chat-1', 'chat-1'])
+    expect(h.pageCalls).toEqual([{ id: 'chat-1', beforeId: 'hist-start', throughId: 'tool:call-9' }])
+    expect(h.messages[1]).toEqual({ type: 'chat-history-page', sessionId: 'chat-1', beforeId: 'hist-start', events: [delta(9)], hasOlder: true })
+    expect(otherMessages).toEqual([])
+  })
+
+  test('a stale page reply carries the stale flag', async () => {
+    const h = harness()
+    h.setPage({ events: [], hasOlder: false, stale: true })
+    await h.connections.handle(h.connection, { type: 'chat-attach', sessionId: 'chat-1' })
+    await h.connections.handle(h.connection, { type: 'chat-history-page', sessionId: 'chat-1', beforeId: 'hist-drifted' })
+    expect(h.messages[1]).toEqual({ type: 'chat-history-page', sessionId: 'chat-1', beforeId: 'hist-drifted', events: [], hasOlder: false, stale: true })
+  })
+
+  test('a page without a subscription is refused before loading history', async () => {
+    const h = harness()
+    h.setPage({ events: [delta(1)], hasOlder: true, stale: false })
+    await h.connections.handle(h.connection, { type: 'chat-history-page', sessionId: 'chat-1', beforeId: 'hist-x' })
+    expect(h.messages).toEqual([{ type: 'error', message: 'chat-history-page needs an active subscription to chat-1' }])
+    expect(h.loadHistoryCalls).toEqual([])
+    expect(h.pageCalls).toEqual([])
+  })
+
+  test('paging an archived chat starts no agent', async () => {
+    const h = harness()
+    h.manager.isArchived = () => true
+    h.setPage({ events: [delta(5)], hasOlder: false, stale: false })
+    await h.connections.handle(h.connection, { type: 'chat-attach', sessionId: 'chat-1' })
+    await h.connections.handle(h.connection, { type: 'chat-history-page', sessionId: 'chat-1', beforeId: 'hist-start' })
+    expect(h.calls).toEqual([])
+    expect(h.messages).toHaveLength(2)
+    expect(h.messages[1]).toMatchObject({ type: 'chat-history-page', hasOlder: false })
   })
 
   test('command-state pushes reach only subscribed connections, unbatched', async () => {

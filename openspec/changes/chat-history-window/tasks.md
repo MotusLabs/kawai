@@ -8,7 +8,7 @@
 
 - [x] 2.1 Extend `src/shared/types.ts`: optional `historyFrom` on `chat-attach`, `historyHasOlder` on `chat-snapshot`, `chat-history-page` client and server messages (design D2); add the client type to `CHAT_CONNECTION_TYPES` in `src/server/chat/chatConnectionTypes.ts`; verify with `bun run typecheck` and the whitelist test.
 - [x] 2.2 Make `ChatSessionManager.getSnapshot(sessionId, { historyFrom })` apply `historyWindow` to `memo + live` (pending requests, activity, rosters, notices, `throughSequence` unchanged) and add `getHistoryPage(sessionId, beforeId, throughId)` returning `{ events, hasOlder, stale }`; verify with manager tests that a snapshot carries only the window, an old pending approval still appears in `pendingRequests`, and archived sessions window too.
-- [ ] 2.3 In `ChatConnections`, pass `historyFrom` from `chat-attach` and handle `chat-history-page` (await `loadHistory`, require a subscription, never start an agent, reply `stale` when `beforeId` is unknown); verify in `src/server/__tests__/chatConnections.test.ts`: attach → window + `historyHasOlder`, page → preceding day, reconnect with `historyFrom` → same span with live events neither lost nor duplicated, page on an archived chat starts nothing.
+- [x] 2.3 In `ChatConnections`, pass `historyFrom` from `chat-attach` and handle `chat-history-page` (await `loadHistory`, require a subscription, never start an agent, reply `stale` when `beforeId` is unknown); verify in `src/server/__tests__/chatConnections.test.ts`: attach → window + `historyHasOlder`, page → preceding day, reconnect with `historyFrom` → same span with live events neither lost nor duplicated, page on an archived chat starts nothing.
 
 ## 3. Client store and protocol
 
