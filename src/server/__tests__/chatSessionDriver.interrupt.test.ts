@@ -137,11 +137,12 @@ describe('ChatSessionDriver CLI turn identity across interrupts', () => {
     await turnTwoRuns(h, b)
   })
 
-  test('GUARD (2b1f56bf) an interrupt before the turn\'s init: that init opens nothing, the next turn runs on its own', async () => {
+  test('GUARD (2b1f56bf) an interrupt before the turn\'s init: pins the pre-init cancel_queued default; that init opens nothing, the next turn runs on its own', async () => {
     const h = createHarness()
     h.driver.send('long job')
     const a = await h.fakes[0]!.pullPrompt()
     await h.driver.interrupt()
+    expect(h.fakes[0]!.interruptOptions).toEqual([{ cancelQueued: true }])
     h.driver.deliver(PEER)
     const b = await h.fakes[0]!.pullPrompt()
     h.fakes[0]!.push(init())
