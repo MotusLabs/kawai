@@ -27,6 +27,7 @@ export type ChatConnectionMessage = Extract<
 
 export const CHAT_CONNECTION_TYPES = [
   'chat-attach',
+  'chat-history-page',
   'chat-detach',
   'chat-send',
   'chat-interrupt',

@@ -346,6 +346,27 @@ export type ServerMessage =
        * sequenced, or replayed.
        */
       notifications: ChatNotification[]
+      /**
+       * The recent history window (chat-history-window D2): `events` is the
+       * window, everything older is pageable through chat-history-page.
+       * `historyHasOlder` is absent from older servers and reads false;
+       * `historyStartId` names the window's first event — the client's
+       * reconnect `historyFrom` and page `beforeId`.
+       */
+      historyHasOlder?: boolean
+      historyStartId?: string | null
+    }
+  // One history page (chat-history-window D2): the 24 hours before the unit
+  // holding beforeId, at least one turn, sent to the asking connection only.
+  // `stale` with no events means beforeId is not in the server's list and
+  // the client must re-attach without historyFrom.
+  | {
+      type: 'chat-history-page'
+      sessionId: string
+      beforeId: string
+      events: ChatEvent[]
+      hasOlder: boolean
+      stale?: boolean
     }
   // Replaced command list pushed to subscribed connections whenever the
   // agent reports a changed list (or the state changes). Additive: older
@@ -624,8 +645,15 @@ export type ClientMessage =
   | { type: 'session-hibernate'; sessionId: string }
   | { type: 'session-move-to-history'; sessionId: string }
   // Chat messages are additive: existing clients never send them.
-  | { type: 'chat-attach'; sessionId: string }
+  // historyFrom (chat-history-window D2): the oldest event id the client
+  // holds, so a reconnect's snapshot covers the span it already showed.
+  // Absent (older clients) = the recent window.
+  | { type: 'chat-attach'; sessionId: string; historyFrom?: string }
   | { type: 'chat-detach'; sessionId: string }
+  // Load earlier history (chat-history-window D2): the 24 hours before the
+  // oldest held event, widened back to throughId when a search reveal needs
+  // an older entry (an event id or a tool:<callId> anchor).
+  | { type: 'chat-history-page'; sessionId: string; beforeId: string; throughId?: string }
   | { type: 'chat-send'; sessionId: string; text: string }
   | { type: 'chat-interrupt'; sessionId: string }
   // Archive stops the agent process but keeps the record, conversation, and
